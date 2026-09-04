@@ -1,0 +1,276 @@
+@container (max-width: 680px) {
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1199px) {
+  .workspace {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    width: 76px;
+    padding: 18px 10px;
+  }
+
+  .sidebar-file,
+  .nav-label,
+  .nav-button {
+    font-size: 0;
+  }
+
+  .sidebar-file {
+    display: grid;
+    min-height: 41px;
+    margin: 0 1px 21px;
+    padding: 0;
+    place-items: center;
+  }
+
+  .sidebar-file::before {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--success);
+    content: "";
+  }
+
+  .sidebar-file * {
+    display: none;
+  }
+
+  .nav-button {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .nav-button::before,
+  .nav-button:not(.is-active)::before {
+    width: 8px;
+    height: 8px;
+    margin: 0;
+  }
+
+  .local-status {
+    padding: 9px;
+    text-align: center;
+  }
+
+  .local-status span {
+    display: none;
+  }
+
+  .clear-session {
+    font-size: 0;
+    text-align: center;
+  }
+
+  .clear-session::before {
+    content: "×";
+    font-size: 21px;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .landing-main {
+    grid-template-columns: 1fr;
+    gap: 45px;
+    min-height: auto;
+    padding-top: 56px;
+  }
+
+  .landing-copy {
+    max-width: 720px;
+  }
+
+  .landing-copy h1 {
+    max-width: 600px;
+  }
+
+  .landing-panel {
+    max-width: 650px;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .landing-header {
+    width: min(100% - 32px, 1280px);
+    height: 64px;
+  }
+
+  .header-actions .text-button {
+    display: none;
+  }
+
+  .local-chip {
+    min-height: 29px;
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+
+  .landing-main {
+    width: min(100% - 32px, 1180px);
+    padding: 49px 0 45px;
+  }
+
+  .landing-copy h1 {
+    font-size: clamp(42px, 13vw, 61px);
+  }
+
+  .landing-lede {
+    font-size: 17px;
+  }
+
+  .file-card-inner {
+    min-height: auto;
+    padding: 20px;
+  }
+
+  .file-card-header {
+    margin-bottom: 20px;
+  }
+
+  .dropzone {
+    min-height: 260px;
+  }
+
+  .workspace {
+    display: block;
+  }
+
+  .workspace-header {
+    min-height: 58px;
+    padding: 0 15px;
+  }
+
+  .workspace-header .brand-subtitle,
+  .header-file,
+  .workspace-header .local-chip {
+    display: none;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .workspace-main {
+    padding: 84px 16px 93px;
+  }
+
+  .page-heading {
+    display: block;
+    margin-bottom: 22px;
+  }
+
+  .page-heading .button {
+    margin-top: 16px;
+  }
+
+  .overview-callout {
+    display: block;
+  }
+
+  .overview-callout .quiet-button {
+    margin-top: 12px;
+  }
+
+  .metric-grid {
+    gap: 10px;
+  }
+
+  .metric-card {
+    min-height: 128px;
+    padding: 15px;
+  }
+
+  .metric-value {
+    margin-top: 16px;
+    font-size: 25px;
+  }
+
+  .data-card,
+  .placeholder-card,
+  .validation-card {
+    padding: 17px;
+  }
+
+  .quality-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .quality-stat + .quality-stat {
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .mobile-nav {
+    position: fixed;
+    z-index: 12;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 8px 12px;
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    backdrop-filter: blur(14px);
+  }
+
+  .mobile-nav .nav-button {
+    width: auto;
+    min-width: max-content;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+
+  .mobile-nav .nav-button::before,
+  .mobile-nav .nav-button:not(.is-active)::before {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-card {
+    min-height: auto;
+  }
+
+  .validation-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .file-card-header {
+    display: block;
+  }
+
+  .v0-chip {
+    margin-top: 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .001ms !important;
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

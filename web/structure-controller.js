@@ -1,0 +1,350 @@
+(function () {
+  "use strict";
+
+  const MAX_SEQUENCE_LENGTH = 3000;
+  const ADVANCED_SEQUENCE_LENGTH = 2000;
+
+  function predict(state, api) {
+    const structure = state.structure;
+    const sequenceInfo = window.Hyb2Pages.getStructureSequence(state);
+    const hybGuided = structure && structure.constraintMode === "hyb-guided";
+
+    if (!structure || !sequenceInfo.sequence || sequenceInfo.error) {
+      api.showToast(sequenceInfo.error || "Choose a valid RNA sequence first.");
+      return false;
+    }
+
+    const lengthIssue = validateLength(sequenceInfo.sequence.length, structure.allowLarge);
+    if (lengthIssue) {
+      api.showToast(lengthIssue);
+      return false;
+    }
+
+    let minimumLoop;
+    let temperature;
+
+    try {
+      minimumLoop = parseMinimumLoop(structure.minimumLoop);
+      temperature = parseTemperature(structure.temperature);
+    } catch (error) {
+      return rejectInput(structure, api, error, "The ViennaRNA folding parameters are invalid.");
+    }
+    let constraints = [];
+    let randomFoldCount = 0;
+    let constraintLimit = 75;
+
+    if (structure.constraintMode === "manual-hard-base-pairs") {
+      try {
+        constraints = parseManualConstraints(structure.constraintText, sequenceInfo.sequence, minimumLoop);
+        if (!constraints.length) {
+          throw new Error("Enter at least one base pair, or switch the folding mode back to plain MFE.");
+        }
+      } catch (error) {
+        return rejectInput(structure, api, error, "The manual base-pair constraints are invalid.");
+      }
+    }
+    if (hybGuided) {
+      try {
+        if (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length) {
+          throw new Error("No eligible forward-strand HYB records are fully contained in the selected region layout.");
+        }
+        constraintLimit = parseWholeNumber(structure.constraintLimit, 1, 75, "Evidence stem constraints");
+        randomFoldCount = parseWholeNumber(structure.randomFoldCount, 0, 1000, "Randomised folds");
+        if (randomFoldCount > 100 && !structure.allowLargeEnsemble) {
+          throw new Error("Confirm the large-ensemble warning before running more than 100 randomised folds.");
+        }
+        if (!String(structure.randomSeed || "").trim()) {
+          throw new Error("Enter a reproducibility seed for randomised constraint ordering.");
+        }
+      } catch (error) {
+        return rejectInput(structure, api, error, "The HYB-guided folding parameters are invalid.");
+      }
+    }
+
+    cancel(state);
+
+    const runId = (structure.runId || 0) + 1;
+    structure.runId = runId;
+    structure.status = "running";
+    structure.progress = 2;
+    structure.message = hybGuided ? "Starting the local RNAcofold evidence pipeline…" : "Starting ViennaRNA WebAssembly…";
+    structure.result = null;
+    structure.runningSequenceInfo = sequenceInfo;
+    api.render();
+
+    try {
+      const worker = new Worker("./structure.worker.js");
+      state.structureWorker = worker;
+
+      worker.onmessage = function (event) {
+        const message = event.data || {};
+        if (!state.structure || state.structure.runId !== runId) {
+          return;
+        }
+
+        if (message.type === "progress") {
+          structure.progress = Math.max(0, Math.min(99, Number(message.percent) || 0));
+          structure.message = message.stage || "Predicting minimum-free-energy structure…";
+          api.render();
+          return;
+        }
+
+        if (message.type === "complete") {
+          finishWorker(state, worker);
+          structure.runningSequenceInfo = null;
+          const constraintCount = Math.max(0, Number(message.result && message.result.constraintCount) || 0);
+          structure.status = "complete";
+          structure.progress = 100;
+          structure.message = message.result && message.result.constraintMode === "hyb-guided"
+            ? "HYB-guided structure ensemble completed locally from " + (message.result.evidence ? message.result.evidence.inputRecords : 0) + " eligible HYB record" + ((message.result.evidence && message.result.evidence.inputRecords === 1) ? "." : "s.")
+            : (constraintCount
+              ? "ViennaRNA MFE structure predicted locally with " + constraintCount + " manual hard base-pair constraint" + (constraintCount === 1 ? "." : "s.")
+              : "ViennaRNA MFE structure predicted locally.");
+          structure.result = Object.assign({}, message.result || {}, {
+            sequence: sequenceInfo.sequence,
+            label: sequenceInfo.label,
+            source: structure.source,
+            sourceRna: structure.source === "reference" ? sequenceInfo.sourceRna : "",
+            sourceStart: structure.source === "reference" ? sequenceInfo.sourceStart : null,
+            sourceEnd: structure.source === "reference" ? sequenceInfo.sourceEnd : null,
+            sourceSegments: sequenceInfo.sourceSegments || null,
+            assembly: sequenceInfo.assembly ? {
+              segments: sequenceInfo.assembly.segments,
+              linker: sequenceInfo.assembly.linker,
+              inputRecordCount: sequenceInfo.assembly.inputRecordCount,
+              eligibleRecordCount: sequenceInfo.assembly.eligibleRecordCount,
+              skipped: sequenceInfo.assembly.skipped,
+              homodimerOnly: sequenceInfo.assembly.homodimerOnly
+            } : null
+          });
+          api.render();
+          api.showToast(structure.message);
+          return;
+        }
+
+        if (message.type === "error") {
+          finishWorker(state, worker);
+          structure.runningSequenceInfo = null;
+          structure.status = "error";
+          structure.progress = 0;
+          structure.message = message.message || "ViennaRNA WebAssembly could not finish the structure prediction.";
+          api.render();
+        }
+      };
+
+      worker.onerror = function () {
+        if (!state.structure || state.structure.runId !== runId) {
+          return;
+        }
+        finishWorker(state, worker);
+        structure.runningSequenceInfo = null;
+        structure.status = "error";
+        structure.progress = 0;
+        structure.message = "The ViennaRNA structure worker stopped unexpectedly.";
+        api.render();
+      };
+
+      worker.postMessage(hybGuided ? {
+        type: "comrades-fold",
+        sequence: sequenceInfo.sequence,
+        minimumLoop: minimumLoop,
+        temperature: temperature,
+        evidenceArms: sequenceInfo.assembly.evidenceArms,
+        constraintLimit: constraintLimit,
+        randomFoldCount: randomFoldCount,
+        seed: String(structure.randomSeed).trim()
+      } : {
+        type: "fold",
+        sequence: sequenceInfo.sequence,
+        minimumLoop: minimumLoop,
+        temperature: temperature,
+        constraints: constraints
+      });
+      return true;
+    } catch (error) {
+      structure.status = "error";
+      structure.progress = 0;
+      structure.runningSequenceInfo = null;
+      structure.message = error && error.message ? error.message : "This browser cannot start the ViennaRNA structure worker.";
+      api.render();
+      return false;
+    }
+  }
+
+  function parseMinimumLoop(value) {
+    if (value === undefined) {
+      return 3;
+    }
+    if ((typeof value !== "string" && typeof value !== "number") ||
+        (typeof value === "string" && value.trim() === "")) {
+      throw new Error("Minimum hairpin loop must be a whole number from 0 to 12.");
+    }
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 12) {
+      throw new Error("Minimum hairpin loop must be a whole number from 0 to 12.");
+    }
+    return parsed;
+  }
+
+  function parseTemperature(value) {
+    if (value === undefined) {
+      return 37;
+    }
+    if ((typeof value !== "string" && typeof value !== "number") ||
+        (typeof value === "string" && value.trim() === "")) {
+      throw new Error("Folding temperature must be a number from 0 to 100 °C.");
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      throw new Error("Folding temperature must be a number from 0 to 100 °C.");
+    }
+    return parsed;
+  }
+
+  function parseWholeNumber(value, minimum, maximum, label) {
+    if ((typeof value !== "string" && typeof value !== "number") ||
+        (typeof value === "string" && value.trim() === "")) {
+      throw new Error(label + " must be a whole number from " + minimum + " to " + maximum + ".");
+    }
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+      throw new Error(label + " must be a whole number from " + minimum + " to " + maximum + ".");
+    }
+    return parsed;
+  }
+
+  function rejectInput(structure, api, error, fallback) {
+    structure.status = "error";
+    structure.progress = 0;
+    structure.message = error && error.message ? error.message : fallback;
+    api.render();
+    api.showToast(structure.message);
+    return false;
+  }
+
+  function parseManualConstraints(value, sequence, minimumLoop) {
+    const text = String(value || "");
+    const rna = String(sequence || "");
+    const loop = parseMinimumLoop(minimumLoop);
+
+    if (text.length > 100000) {
+      throw new Error("The manual constraint input is too large.");
+    }
+
+    const entries = text.split(/\r?\n/).map(function (line, index) {
+      return { text: line.trim(), line: index + 1 };
+    }).filter(function (entry) {
+      return entry.text.length > 0;
+    });
+
+    if (entries.length > Math.floor(rna.length / 2)) {
+      throw new Error("There cannot be more constrained pairs than half the sequence length.");
+    }
+
+    const endpoints = new Set();
+    const constraints = entries.map(function (entry) {
+      const match = entry.text.match(/^([1-9][0-9]*)\s*-\s*([1-9][0-9]*)$/);
+      if (!match) {
+        throw new Error("Constraint line " + entry.line + " must contain exactly one pair in i-j format, for example 4-18.");
+      }
+
+      const left = Number(match[1]);
+      const right = Number(match[2]);
+      if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right)) {
+        throw new Error("Constraint line " + entry.line + " contains a coordinate outside JavaScript's safe integer range.");
+      }
+      if (left >= right || right > rna.length) {
+        throw new Error("Constraint line " + entry.line + " must satisfy 1 <= i < j <= " + rna.length + ".");
+      }
+      if (right - left - 1 < loop) {
+        throw new Error("Constraint line " + entry.line + " violates the selected minimum hairpin loop of " + loop + ".");
+      }
+      if (endpoints.has(left) || endpoints.has(right)) {
+        throw new Error("Constraint line " + entry.line + " reuses a nucleotide that already has a constrained partner.");
+      }
+
+      const pairType = rna.charAt(left - 1) + rna.charAt(right - 1);
+      if (["AU", "UA", "CG", "GC", "GU", "UG"].indexOf(pairType) === -1) {
+        throw new Error("Constraint line " + entry.line + " is not an A-U, G-C or G-U base pair in the prepared sequence.");
+      }
+
+      endpoints.add(left);
+      endpoints.add(right);
+      return { left: left, right: right };
+    }).sort(function (first, second) {
+      return first.left - second.left;
+    });
+
+    for (let first = 0; first < constraints.length; first += 1) {
+      for (let second = first + 1; second < constraints.length; second += 1) {
+        if (constraints[first].left < constraints[second].left &&
+            constraints[second].left < constraints[first].right &&
+            constraints[first].right < constraints[second].right) {
+          throw new Error("Manual base-pair constraints must not cross because ViennaRNA returns a non-pseudoknotted dot-bracket structure.");
+        }
+      }
+    }
+
+    return constraints;
+  }
+
+  function validateLength(length, allowLarge) {
+    if (length > MAX_SEQUENCE_LENGTH) {
+      return "ViennaRNA WebAssembly is limited to " + MAX_SEQUENCE_LENGTH + " nt in HYB2 Web Lite. Reduce this region before folding.";
+    }
+    if (length > ADVANCED_SEQUENCE_LENGTH && !allowLarge) {
+      return "This " + length + " nt sequence can use substantial browser memory. Enable the advanced large-region option before continuing.";
+    }
+    return "";
+  }
+
+  function reset(state, options) {
+    cancel(state);
+    if (!state.structure) {
+      return;
+    }
+    const settings = options || {};
+    state.structure.status = "idle";
+    state.structure.progress = 0;
+    state.structure.message = "";
+    state.structure.result = null;
+    state.structure.runningSequenceInfo = null;
+    state.structure.selectedNucleotide = null;
+    if (settings.clearConstraints) {
+      state.structure.constraintText = "";
+      state.structure.allowLarge = false;
+    }
+  }
+
+  function cancel(state) {
+    if (state.structureWorker) {
+      state.structureWorker.terminate();
+      state.structureWorker = null;
+    }
+    if (state.structure && state.structure.status === "running") {
+      state.structure.runId = (state.structure.runId || 0) + 1;
+      state.structure.status = "idle";
+      state.structure.progress = 0;
+      state.structure.message = "";
+      state.structure.runningSequenceInfo = null;
+    }
+  }
+
+  function finishWorker(state, worker) {
+    worker.terminate();
+    if (state.structureWorker === worker) {
+      state.structureWorker = null;
+    }
+  }
+
+  window.Hyb2Structure = {
+    maxSequenceLength: MAX_SEQUENCE_LENGTH,
+    advancedSequenceLength: ADVANCED_SEQUENCE_LENGTH,
+    validateLength: validateLength,
+    parseManualConstraints: parseManualConstraints,
+    predict: predict,
+    reset: reset,
+    cancel: cancel,
+    terminate: cancel
+  };
+}());

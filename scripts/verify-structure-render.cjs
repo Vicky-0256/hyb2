@@ -1,0 +1,590 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+const repository = path.resolve(__dirname, "..");
+const workerInstances = [];
+
+function FakeWorker(url) {
+  this.url = url;
+  this.message = null;
+  this.terminated = false;
+  workerInstances.push(this);
+}
+
+FakeWorker.prototype.postMessage = function (message) {
+  this.message = message;
+};
+
+FakeWorker.prototype.terminate = function () {
+  this.terminated = true;
+};
+
+const context = vm.createContext({
+  Intl,
+  Number,
+  String,
+  Boolean,
+  Object,
+  Array,
+  Math,
+  RegExp,
+  Set,
+  Map,
+  Worker: FakeWorker,
+  window: {
+    Hyb2Data: {
+      normaliseFoldSequence: function (sequence) {
+        return { sequence: String(sequence || "").toUpperCase(), invalid: [] };
+      }
+    }
+  }
+});
+
+vm.runInContext(
+  fs.readFileSync(path.join(repository, "web", "comrades-analysis.js"), "utf8"),
+  context,
+  { filename: "comrades-analysis.js" }
+);
+
+vm.runInContext(
+  fs.readFileSync(path.join(repository, "web", "analysis-pages.js"), "utf8"),
+  context,
+  { filename: "analysis-pages.js" }
+);
+
+vm.runInContext(
+  fs.readFileSync(path.join(repository, "web", "structure-controller.js"), "utf8"),
+  context,
+  { filename: "structure-controller.js" }
+);
+
+vm.runInContext(
+  fs.readFileSync(path.join(repository, "web", "structure-ui.js"), "utf8"),
+  context,
+  { filename: "structure-ui.js" }
+);
+
+const state = {
+  summary: { rnaNames: [] },
+  records: [],
+  structure: {
+    source: "paste",
+    pastedSequence: "GGGAAACCCC",
+    selectedRecordIndex: null,
+    minimumLoop: "3",
+    temperature: "37",
+    constraintMode: "none",
+    constraintText: "",
+    allowLarge: false,
+    selectedNucleotide: null,
+    status: "idle",
+    progress: 0,
+    message: "",
+    result: null
+  }
+};
+
+const setupHtml = context.window.Hyb2Pages.renderStructure(state);
+assert.match(setupHtml, /ViennaRNA MFE · Browser/);
+assert.match(setupHtml, /Temperature/);
+assert.match(setupHtml, /Predict MFE structure/);
+assert.match(setupHtml, /Plain MFE \(default\)/);
+assert.match(setupHtml, /Manual hard base pairs \(expert\)/);
+assert.doesNotMatch(setupHtml, /id="structure-constraint-text"/);
+assert.doesNotMatch(setupHtml, /Nussinov|Pairing score/);
+
+const largeRnaState = {
+  summary: { rnaNames: Array.from({ length: 2000 }, function (_, index) { return "RNA_" + index; }) },
+  records: [],
+  fasta: null,
+  structure: Object.assign({}, state.structure, { source: "reference", rna: "RNA_1999" })
+};
+const largeRnaHtml = context.window.Hyb2Pages.renderStructure(largeRnaState);
+assert.match(largeRnaHtml, /type="search" list="options-structure-control-rna" value="RNA_1999"/,
+  "large RNA collections should use a searchable exact-value control and retain a selected value beyond the suggestion cap");
+assert.ok((largeRnaHtml.match(/<option/g) || []).length < 800,
+  "a large RNA selector must cap rendered suggestions rather than materialise every RNA in the DOM");
+
+const fileDialogRnas = Array.from({ length: 2000 }, function (_, index) { return "RNA_" + index; });
+const largeFilesHtml = context.window.Hyb2Pages.getFilesDialogBody({
+  summary: { fileName: "large.hyb", fileSize: 1, validRecords: 1, rnaNames: fileDialogRnas, sha256Unavailable: true },
+  fasta: {
+    fileName: "large.fa", fileSize: 1, sha256Unavailable: true, mapping: {},
+    sequences: fileDialogRnas.map(function (rna) { return { id: rna, header: rna, sequence: "ACGU" }; })
+  }
+});
+assert.equal((largeFilesHtml.match(/<option/g) || []).length, 1000,
+  "the FASTA mapping editor must cap both RNA and reference suggestions at 500");
+assert.equal((largeFilesHtml.match(/class="mapping-row"/g) || []).length, 100,
+  "the FASTA mapping preview must remain bounded for large files");
+
+state.records = Array.from({ length: 501 }, function (_, index) {
+  return { index: index, id: "record_" + index, sequence: "GCGCUUCGCC", rnaOne: "RNA_A", rnaTwo: "RNA_B" };
+});
+state.structure.source = "record";
+state.structure.selectedRecordIndex = 500;
+const distantRecordHtml = context.window.Hyb2Pages.renderStructure(state);
+assert.match(distantRecordHtml, /value="500" selected>record_500/,
+  "a record opened from beyond the first 500 rows must remain visible in the selector");
+assert.match(distantRecordHtml, /Hybrid-read sequence/);
+assert.match(distantRecordHtml, /not necessarily a complete reference RNA/);
+state.records = [];
+state.structure.source = "paste";
+state.structure.selectedRecordIndex = null;
+
+state.structure.constraintMode = "manual-hard-base-pairs";
+state.structure.constraintText = "3-8";
+const manualSetupHtml = context.window.Hyb2Pages.renderStructure(state);
+assert.match(manualSetupHtml, /Manual hard-pair mode/);
+assert.match(manualSetupHtml, /id="structure-constraint-text"/);
+assert.match(manualSetupHtml, />3-8<\/textarea>/);
+assert.match(manualSetupHtml, /does not infer these pairs from HYB or RNAcofold evidence/);
+assert.match(manualSetupHtml, /Predict constrained MFE/);
+
+state.structure.selectedNucleotide = 1;
+state.structure.result = {
+  algorithm: "ViennaRNA constrained global MFE",
+  sequence: "GGGAAACCCC",
+  dotBracket: "(((....)))",
+  energy: -2.5,
+  energyUnit: "kcal/mol",
+  elapsedMs: 12,
+  unpaired: 4,
+  constraintMode: "hard-base-pairs",
+  constraintCount: 1,
+  constraints: [{ left: 3, right: 8 }],
+  pairs: [
+    { left: 1, right: 10, leftBase: "G", rightBase: "C", type: "G–C" },
+    { left: 2, right: 9, leftBase: "G", rightBase: "C", type: "G–C" },
+    { left: 3, right: 8, leftBase: "G", rightBase: "C", type: "G–C" }
+  ],
+  label: "Pasted sequence"
+};
+
+const resultHtml = context.window.Hyb2Pages.renderStructure(state);
+assert.match(resultHtml, /-2\.50/);
+assert.match(resultHtml, /Download DBN/);
+assert.match(resultHtml, /Download CT/);
+assert.match(resultHtml, /data-feature-action="download-structure-png">Download PNG/);
+assert.match(resultHtml, /Nucleotide 1/);
+assert.match(resultHtml, /Paired with 10 C · G–C/);
+assert.match(resultHtml, /Constraint mode/);
+assert.match(resultHtml, /Manual hard/);
+assert.match(resultHtml, /1 enforced pair/);
+assert.match(resultHtml, /Manual hard-pair result/);
+assert.match(resultHtml, /class="hard-constraint-pair"/);
+assert.match(resultHtml, /Hard pair/);
+assert.match(resultHtml, /not generated from HYB interaction evidence/);
+assert.doesNotMatch(resultHtml, /undefined/);
+const longResultHtml = context.window.Hyb2Pages.renderStructureResult
+  ? context.window.Hyb2Pages.renderStructureResult(Object.assign({}, state.structure.result, { sequence: "A".repeat(701) }), null)
+  : "";
+if (longResultHtml) {
+  assert.match(longResultHtml, /sequence baseline/);
+  assert.doesNotMatch(longResultHtml, /Click a nucleotide marker/);
+}
+
+const report = context.window.Hyb2StructureUI.structureReport(state, state.structure.result);
+assert.equal(report.prediction.constraintMode, "hard-base-pairs");
+assert.equal(report.prediction.constraintSource, "manual-user-input");
+assert.equal(report.prediction.constraintCount, 1);
+assert.equal(report.methodScope.manualHardBasePairsApplied, true);
+assert.equal(report.methodScope.automaticHybEvidenceConstraintGeneration, false);
+assert.equal(report.methodScope.automaticRnaCofoldEvidenceSelection, false);
+assert.match(report.methodScope.note, /entered manually/);
+const referenceReport = context.window.Hyb2StructureUI.structureReport({
+  summary: { fileName: "primary.hyb", fileSize: 111, sha256: "hyb-sha" },
+  fasta: { fileName: "reference.fa", fileSize: 222, sha256: "fasta-sha" }
+}, Object.assign({}, state.structure.result, {
+  source: "reference",
+  sourceRna: "RNA_A",
+  sourceStart: 5,
+  sourceEnd: 14
+}));
+assert.equal(referenceReport.sourceHyb.fileSize, 111);
+assert.equal(referenceReport.sourceFasta.sha256, "fasta-sha");
+assert.equal(referenceReport.sourceFasta.fileSize, 222);
+assert.deepEqual(
+  JSON.parse(JSON.stringify({ rna: referenceReport.source.rna, start: referenceReport.source.start, end: referenceReport.source.end })),
+  { rna: "RNA_A", start: 5, end: 14 }
+);
+const pairsTsv = context.window.Hyb2StructureUI.basePairTsv(state.structure.result);
+assert.match(pairsTsv, /hard_constraint/);
+assert.match(pairsTsv, /3\tG\t8\tC\tG–C\tyes/);
+
+const guidedState = structureState("hyb-guided", "");
+guidedState.summary = { rnaNames: ["RNA_A"], fileName: "guided.hyb", fileSize: 42, sha256: "guided-sha" };
+guidedState.records = [
+  {
+    id: "read-1", index: 0, rnaOne: "RNA_A", rnaOneStart: 1, rnaOneEnd: 6,
+    rnaTwo: "RNA_A", rnaTwoStart: 11, rnaTwoEnd: 16, isHomodimer: false
+  }
+];
+guidedState.fasta = {
+  fileName: "guided.fa", fileSize: 17, sha256: "fasta-sha",
+  mapping: { RNA_A: "RNA_A" },
+  sequences: [{ id: "RNA_A", sequence: "GGGGGGAAAACCCCCC" }]
+};
+Object.assign(guidedState.structure, {
+  source: "reference",
+  rna: "RNA_A",
+  start: "1",
+  end: "16",
+  evidenceLayout: "single",
+  secondRna: "RNA_A",
+  secondStart: "1",
+  secondEnd: "16",
+  homodimerOnly: false,
+  constraintLimit: "75",
+  randomFoldCount: "10",
+  randomSeed: "guided-contract",
+  allowLargeEnsemble: false
+});
+const guidedSequence = context.window.Hyb2Pages.getStructureSequence(guidedState);
+assert.equal(guidedSequence.sequence, "GGGGGGAAAACCCCCC");
+assert.equal(guidedSequence.assembly.evidenceArms.length, 1);
+const guidedSetupHtml = context.window.Hyb2Pages.renderStructure(guidedState);
+assert.match(guidedSetupHtml, /HYB-guided COMRADES mode/);
+assert.match(guidedSetupHtml, /RNAcofold \+ constrained RNAfold · Browser/);
+assert.match(guidedSetupHtml, /1 eligible HYB row/);
+assert.match(guidedSetupHtml, /Run HYB-guided ensemble/);
+assert.match(guidedSetupHtml, /1,000 · original cluster scale/);
+assert.match(guidedSetupHtml, /Randomisation seed/);
+
+const guidedWorkersBefore = workerInstances.length;
+assert.equal(context.window.Hyb2Structure.predict(guidedState, {
+  render: function () {},
+  showToast: function () {}
+}), true);
+assert.equal(workerInstances.length, guidedWorkersBefore + 1);
+assert.equal(workerInstances.at(-1).message.type, "comrades-fold");
+assert.equal(workerInstances.at(-1).message.evidenceArms.length, 1);
+assert.equal(workerInstances.at(-1).message.randomFoldCount, 10);
+assert.equal(workerInstances.at(-1).message.seed, "guided-contract");
+context.window.Hyb2Structure.cancel(guidedState);
+
+guidedState.structure.status = "complete";
+guidedState.structure.result = {
+  algorithm: "HYB-guided COMRADES constraint ensemble",
+  model: "RNAcofold evidence",
+  engine: "ViennaRNA",
+  engineVersion: "2.7.2",
+  sequence: "GGGGGGAAAACCCCCC",
+  dotBracket: "((((((....))))))",
+  energy: -8.2,
+  energyUnit: "kcal/mol",
+  elapsedMs: 44,
+  unpaired: 4,
+  temperature: 37,
+  minimumLoop: 3,
+  constraintMode: "hyb-guided",
+  constraintSource: "hyb-rna-cofold-evidence",
+  constraintCount: 1,
+  constraints: [{ left: 1, right: 16 }],
+  acceptedStemConstraints: [{ id: "F1", rank: 1, left: 1, right: 16, length: 1, support: 2 }],
+  rejectedStemConstraints: [{ id: "F2", rank: 2, reason: "crossing-pairs" }],
+  comradesScore: 4,
+  matchedEvidencePairs: 1,
+  maximumNucleotideSupport: 2,
+  nucleotideSupport: [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+  pairs: [{ left: 1, right: 16, leftBase: "G", rightBase: "C", type: "G–C", evidenceSupport: 2 }],
+  evidence: {
+    inputRecords: 1,
+    uniqueBasePairs: 1,
+    selectedBasePairs: [{ one: 1, two: 16, count: 2, recordIds: ["read-1"] }],
+    rankedStems: [{ rank: 1 }],
+    requestedStemConstraints: 1
+  },
+  randomisation: {
+    completedFolds: 1,
+    seed: "guided-contract",
+    selectedRun: 1,
+    structures: [{ run: 0, randomised: false, energy: -7, comradesScore: 0, matchedEvidencePairs: 0, acceptedStemConstraints: [], rejectedStemConstraints: 1, dotBracket: "................" }, { run: 1, randomised: true, energy: -8.2, comradesScore: 4, matchedEvidencePairs: 1, acceptedStemConstraints: ["F1"], rejectedStemConstraints: 1, dotBracket: "((((((....))))))" }]
+  },
+  label: "RNA_A:1-16",
+  source: "reference",
+  sourceRna: "RNA_A",
+  sourceStart: 1,
+  sourceEnd: 16,
+  sourceSegments: guidedSequence.assembly.segments,
+  assembly: { segments: guidedSequence.assembly.segments, linker: null, eligibleRecordCount: 1 }
+};
+const guidedResultHtml = context.window.Hyb2Pages.renderStructure(guidedState);
+assert.match(guidedResultHtml, /HYB-evidence-selected structure/);
+assert.match(guidedResultHtml, /COMRADES score/);
+assert.match(guidedResultHtml, /RNAcofold evidence/);
+assert.match(guidedResultHtml, /Accepted stem constraints/);
+assert.match(guidedResultHtml, /Download evidence/);
+assert.match(guidedResultHtml, /Download ensemble/);
+assert.match(guidedResultHtml, /evidence 2/);
+const guidedReport = context.window.Hyb2StructureUI.structureReport(guidedState, guidedState.structure.result);
+assert.equal(guidedReport.prediction.constraintSource, "hyb-rna-cofold-evidence");
+assert.equal(guidedReport.methodScope.automaticHybEvidenceConstraintGeneration, true);
+assert.equal(guidedReport.methodScope.automaticRnaCofoldEvidenceSelection, true);
+assert.equal(guidedReport.methodScope.iterativeCompatibleConstraintFitting, true);
+assert.equal(guidedReport.methodScope.supportBasedStructureScoring, true);
+assert.equal(guidedReport.methodScope.unafoldExecution, "external-cli-only");
+assert.match(context.window.Hyb2StructureUI.evidenceTsv(guidedState.structure.result), /1\t16\t2\tread-1/);
+assert.match(context.window.Hyb2StructureUI.constraintsTsv(guidedState.structure.result), /F 1 16 1/);
+assert.match(context.window.Hyb2StructureUI.ensembleTsv(guidedState.structure.result), /1\tyes\tyes\t-8\.2\t4/);
+
+const pngEvents = { downloads: [], toasts: [], revoked: [] };
+const exportSvg = {
+  attributes: { viewBox: "0 0 920 300", width: "100%", height: "300" },
+  getAttribute: function (name) { return this.attributes[name] || ""; },
+  setAttribute: function (name, value) { this.attributes[name] = value; },
+  cloneNode: function () {
+    return {
+      attributes: Object.assign({}, this.attributes),
+      getAttribute: this.getAttribute,
+      setAttribute: this.setAttribute
+    };
+  }
+};
+let drawCall = null;
+const pngBlob = new Blob(["png"], { type: "image/png" });
+context.document = {
+  querySelector: function () { return exportSvg; },
+  createElement: function (name) {
+    assert.equal(name, "canvas");
+    return {
+      width: 0,
+      height: 0,
+      getContext: function (kind) {
+        assert.equal(kind, "2d");
+        return {
+          drawImage: function () { drawCall = Array.from(arguments); }
+        };
+      },
+      toBlob: function (callback, type) {
+        assert.equal(type, "image/png");
+        callback(pngBlob);
+      }
+    };
+  }
+};
+context.XMLSerializer = function () {};
+context.XMLSerializer.prototype.serializeToString = function (svg) {
+  assert.equal(svg.attributes.width, "1840");
+  assert.equal(svg.attributes.height, "600");
+  return '<svg viewBox="0 0 920 300"></svg>';
+};
+context.Blob = Blob;
+context.URL = {
+  createObjectURL: function (blob) {
+    assert.equal(blob.type, "image/svg+xml;charset=utf-8");
+    return "blob:structure-svg";
+  },
+  revokeObjectURL: function (url) { pngEvents.revoked.push(url); }
+};
+context.Image = function () {};
+Object.defineProperty(context.Image.prototype, "src", {
+  set: function (value) {
+    assert.equal(value, "blob:structure-svg");
+    this.onload();
+  }
+});
+const pngApi = {
+  downloadBlob: function (fileName, blob) { pngEvents.downloads.push({ fileName: fileName, blob: blob }); },
+  showToast: function (message) { pngEvents.toasts.push(message); }
+};
+assert.equal(context.window.Hyb2StructureUI.handleAction("download-structure-png", state, pngApi), true);
+assert.equal(pngEvents.downloads.length, 1);
+assert.equal(pngEvents.downloads[0].fileName, "rna-secondary-structure-arcs.png");
+assert.equal(pngEvents.downloads[0].blob, pngBlob);
+assert.equal(drawCall[3], 1840);
+assert.equal(drawCall[4], 600);
+assert.deepEqual(pngEvents.revoked, ["blob:structure-svg"]);
+assert.match(pngEvents.toasts.at(-1), /Structure PNG downloaded locally/);
+
+context.document.querySelector = function () { return null; };
+const missingPngEvents = { downloads: 0, toasts: [] };
+assert.equal(context.window.Hyb2StructureUI.handleAction("download-structure-png", state, {
+  downloadBlob: function () { missingPngEvents.downloads += 1; },
+  showToast: function (message) { missingPngEvents.toasts.push(message); }
+}), true);
+assert.equal(missingPngEvents.downloads, 0);
+assert.match(missingPngEvents.toasts.at(-1), /not ready to export/);
+
+context.document.querySelector = function () { return exportSvg; };
+context.document.createElement = function () {
+  return {
+    width: 0,
+    height: 0,
+    getContext: function () { return { drawImage: function () {} }; },
+    toBlob: function (callback) { callback(null); }
+  };
+};
+const failedPngEvents = { downloads: 0, toasts: [] };
+assert.equal(context.window.Hyb2StructureUI.handleAction("download-structure-png", state, {
+  downloadBlob: function () { failedPngEvents.downloads += 1; },
+  showToast: function (message) { failedPngEvents.toasts.push(message); }
+}), true);
+assert.equal(failedPngEvents.downloads, 0, "a null canvas blob must not start a download");
+assert.match(failedPngEvents.toasts.at(-1), /could not create the structure PNG/);
+
+const parsed = context.window.Hyb2Structure.parseManualConstraints("4-8\n3-9", "GCGCUUCGCC", 3);
+assert.deepEqual(JSON.parse(JSON.stringify(parsed)), [{ left: 3, right: 9 }, { left: 4, right: 8 }]);
+assert.throws(function () {
+  context.window.Hyb2Structure.parseManualConstraints("4,8", "GCGCUUCGCC", 3);
+}, /i-j format/);
+assert.throws(function () {
+  context.window.Hyb2Structure.parseManualConstraints("3-9\n3-10", "GCGCUUCGCC", 3);
+}, /reuses a nucleotide/);
+assert.throws(function () {
+  context.window.Hyb2Structure.parseManualConstraints("1-7\n3-9", "GCGCUUCGCC", 3);
+}, /must not cross/);
+
+const controllerApi = {
+  renders: 0,
+  toasts: [],
+  render: function () { this.renders += 1; },
+  showToast: function (message) { this.toasts.push(message); }
+};
+const controllerWorkerBaseline = workerInstances.length;
+const constrainedState = structureState("manual-hard-base-pairs", "4-8");
+assert.equal(context.window.Hyb2Structure.predict(constrainedState, controllerApi), true);
+assert.equal(workerInstances.length, controllerWorkerBaseline + 1);
+assert.equal(workerInstances.at(-1).url, "./structure.worker.js");
+assert.deepEqual(JSON.parse(JSON.stringify(workerInstances.at(-1).message.constraints)), [{ left: 4, right: 8 }]);
+
+const plainState = structureState("none", "not parsed in plain mode");
+assert.equal(context.window.Hyb2Structure.predict(plainState, controllerApi), true);
+assert.equal(workerInstances.length, controllerWorkerBaseline + 2);
+assert.deepEqual(JSON.parse(JSON.stringify(workerInstances.at(-1).message.constraints)), []);
+
+context.window.Hyb2Data.extractReference = function () {
+  return { id: "ref_A", start: 1, end: 10, sequence: "GCGCUUCGCC" };
+};
+const referenceState = structureState("none", "");
+referenceState.fasta = { mapping: { RNA_A: "ref_A" } };
+referenceState.structure.source = "reference";
+referenceState.structure.rna = "RNA_A";
+referenceState.structure.start = "";
+referenceState.structure.end = "999";
+const effectiveReference = context.window.Hyb2Pages.getStructureSequence(referenceState);
+assert.equal(effectiveReference.sourceStart, 1);
+assert.equal(effectiveReference.sourceEnd, 10);
+assert.equal(context.window.Hyb2Structure.predict(referenceState, controllerApi), true);
+const referenceWorker = workerInstances.at(-1);
+referenceWorker.onmessage({ data: { type: "complete", result: {
+  algorithm: "ViennaRNA MFE", sequence: "GCGCUUCGCC", dotBracket: "..........", pairs: []
+} } });
+assert.equal(referenceState.structure.result.sourceRna, "RNA_A");
+assert.equal(referenceState.structure.result.sourceStart, 1,
+  "reference provenance must use the effective extracted start rather than Number(blank)");
+assert.equal(referenceState.structure.result.sourceEnd, 10,
+  "reference provenance must use the clamped extracted end rather than the raw control value");
+
+const invalidState = structureState("manual-hard-base-pairs", "4,8");
+const workersBeforeInvalidSyntax = workerInstances.length;
+assert.equal(context.window.Hyb2Structure.predict(invalidState, controllerApi), false);
+assert.equal(workerInstances.length, workersBeforeInvalidSyntax, "Invalid manual syntax must not start a Worker");
+assert.equal(invalidState.structure.status, "error");
+assert.match(controllerApi.toasts.at(-1), /i-j format/);
+
+const zeroBoundaryState = structureState("none", "");
+zeroBoundaryState.structure.minimumLoop = "0";
+zeroBoundaryState.structure.temperature = "0";
+assert.equal(context.window.Hyb2Structure.predict(zeroBoundaryState, controllerApi), true);
+assert.equal(workerInstances.at(-1).message.minimumLoop, 0, "A zero-nucleotide minimum loop is a valid explicit boundary");
+assert.equal(workerInstances.at(-1).message.temperature, 0, "0 °C is a valid explicit boundary");
+
+const upperBoundaryState = structureState("none", "");
+upperBoundaryState.structure.minimumLoop = "12";
+upperBoundaryState.structure.temperature = "100";
+assert.equal(context.window.Hyb2Structure.predict(upperBoundaryState, controllerApi), true);
+assert.equal(workerInstances.at(-1).message.minimumLoop, 12);
+assert.equal(workerInstances.at(-1).message.temperature, 100);
+
+const legacyState = structureState("none", "");
+delete legacyState.structure.minimumLoop;
+delete legacyState.structure.temperature;
+assert.equal(context.window.Hyb2Structure.predict(legacyState, controllerApi), true);
+assert.equal(workerInstances.at(-1).message.minimumLoop, 3, "A missing legacy minimumLoop field should use the default");
+assert.equal(workerInstances.at(-1).message.temperature, 37, "A missing legacy temperature field should use the default");
+
+const resetState = structureState("manual-hard-base-pairs", "2-9");
+resetState.structure.selectedNucleotide = 7;
+resetState.structure.result = { stale: true };
+resetState.structure.allowLarge = true;
+context.window.Hyb2Structure.reset(resetState, { clearConstraints: true });
+assert.equal(resetState.structure.result, null);
+assert.equal(resetState.structure.selectedNucleotide, null,
+  "invalidating a fold must not carry a nucleotide selection into another result");
+assert.equal(resetState.structure.constraintMode, "manual-hard-base-pairs",
+  "clearing sequence-specific pairs may keep the user in explicit constraint-entry mode");
+assert.equal(resetState.structure.constraintText, "",
+  "sequence-provenance changes must not apply hard pairs authored for a different sequence");
+assert.equal(resetState.structure.allowLarge, false,
+  "large-sequence consent must be renewed after changing sequence provenance");
+const parameterResetState = structureState("manual-hard-base-pairs", "2-9");
+parameterResetState.structure.selectedNucleotide = 2;
+context.window.Hyb2Structure.reset(parameterResetState);
+assert.equal(parameterResetState.structure.constraintText, "2-9",
+  "parameter-only invalidation may retain explicitly authored hard pairs for the same sequence");
+assert.equal(parameterResetState.structure.selectedNucleotide, null);
+
+[
+  { field: "minimumLoop", value: "", pattern: /whole number from 0 to 12/ },
+  { field: "minimumLoop", value: "three", pattern: /whole number from 0 to 12/ },
+  { field: "minimumLoop", value: "3.5", pattern: /whole number from 0 to 12/ },
+  { field: "minimumLoop", value: "-1", pattern: /whole number from 0 to 12/ },
+  { field: "minimumLoop", value: "13", pattern: /whole number from 0 to 12/ },
+  { field: "minimumLoop", value: null, pattern: /whole number from 0 to 12/ },
+  { field: "temperature", value: "", pattern: /number from 0 to 100 °C/ },
+  { field: "temperature", value: "cold", pattern: /number from 0 to 100 °C/ },
+  { field: "temperature", value: "-0.1", pattern: /number from 0 to 100 °C/ },
+  { field: "temperature", value: "100.1", pattern: /number from 0 to 100 °C/ },
+  { field: "temperature", value: null, pattern: /number from 0 to 100 °C/ }
+].forEach(function (fixture) {
+  const parameterState = structureState("none", "");
+  const workersBefore = workerInstances.length;
+  parameterState.structure[fixture.field] = fixture.value;
+  assert.equal(context.window.Hyb2Structure.predict(parameterState, controllerApi), false,
+    fixture.field + "=" + String(fixture.value) + " should be rejected");
+  assert.equal(workerInstances.length, workersBefore, "Invalid parameters must not start a Worker");
+  assert.equal(parameterState.structure.status, "error");
+  assert.match(parameterState.structure.message, fixture.pattern);
+  assert.equal(controllerApi.toasts.at(-1), parameterState.structure.message,
+    "The actionable parameter error should also be shown as a toast");
+});
+
+function structureState(constraintMode, constraintText) {
+  return {
+    summary: { rnaNames: [], fileName: "fixture.hyb", sha256: "fixture" },
+    records: [],
+    structureWorker: null,
+    structure: {
+      source: "paste",
+      pastedSequence: "GCGCUUCGCC",
+      selectedRecordIndex: null,
+      minimumLoop: "3",
+      temperature: "37",
+      constraintMode: constraintMode,
+      constraintText: constraintText,
+      evidenceLayout: "single",
+      secondRna: "",
+      secondStart: "",
+      secondEnd: "",
+      homodimerOnly: false,
+      constraintLimit: "75",
+      randomFoldCount: "0",
+      randomSeed: "HYB2-Web",
+      allowLargeEnsemble: false,
+      allowLarge: false,
+      selectedNucleotide: null,
+      status: "idle",
+      progress: 0,
+      message: "",
+      result: null,
+      runId: 0
+    }
+  };
+}
+
+process.stdout.write("structure-render-controller-contract: ok\n");

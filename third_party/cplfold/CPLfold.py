@@ -626,12 +626,9 @@ Beta Parameter:
         beta=args.beta
     )
 
-    # Return exit code based on whether pseudoknots were found
-    pk_count = sum(1 for r in results if r['type'] == 'pseudoknot')
-    if pk_count > 0:
-        return 0
-    else:
-        return 1
+    # A completed fold is successful even when no pseudoknot candidate wins.
+    # Keep a non-zero status only for the unexpected empty-result case.
+    return 0 if results else 1
 
 
 if __name__ == '__main__':

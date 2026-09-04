@@ -73,6 +73,14 @@ cd hyb2/
 bin/hyb2_install_macOS-arm
 ```
 
+### Experimental Python CPLfold branch
+
+The `feature/cplfold-python` branch vendors the audited CPLfold Python source
+and provides `bin/cplfold` as a guarded local CLI. Its core predictor requires
+NumPy and Numba but does not require a native HotKnots executable. See
+[`docs/cplfold-python.md`](docs/cplfold-python.md) for installation, verification,
+runtime limits, browser boundaries, and third-party licensing notes.
+
 ## Getting Started
 To run hyb2 using SAM input file, type in the command line:
 ```bash

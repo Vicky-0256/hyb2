@@ -1,0 +1,6 @@
+# Local CPLfold environments and generated Python/Numba caches.
+.venv-cplfold/
+__pycache__/
+*.py[cod]
+*.nbc
+*.nbi

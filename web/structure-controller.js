@@ -3,37 +3,62 @@
 
   const MAX_SEQUENCE_LENGTH = 3000;
   const ADVANCED_SEQUENCE_LENGTH = 2000;
+  const CPLFOLD_MAX_SEQUENCE_LENGTH = 75;
 
   function predict(state, api) {
     const structure = state.structure;
     const sequenceInfo = window.Hyb2Pages.getStructureSequence(state);
     const hybGuided = structure && structure.constraintMode === "hyb-guided";
+    const cplfold = structure && structure.engine === "cplfold";
+    const cplfoldGuided = cplfold && structure.cplfoldEvidence === "hyb-blocks";
 
     if (!structure || !sequenceInfo.sequence || sequenceInfo.error) {
       api.showToast(sequenceInfo.error || "Choose a valid RNA sequence first.");
       return false;
     }
 
-    const lengthIssue = validateLength(sequenceInfo.sequence.length, structure.allowLarge);
+    const lengthIssue = validateLength(sequenceInfo.sequence.length, structure.allowLarge, cplfold ? "cplfold" : "viennarna");
     if (lengthIssue) {
       api.showToast(lengthIssue);
       return false;
     }
 
-    let minimumLoop;
-    let temperature;
+    let minimumLoop = null;
+    let temperature = null;
+    let cplfoldParameters = null;
 
-    try {
-      minimumLoop = parseMinimumLoop(structure.minimumLoop);
-      temperature = parseTemperature(structure.temperature);
-    } catch (error) {
-      return rejectInput(structure, api, error, "The ViennaRNA folding parameters are invalid.");
+    if (cplfold) {
+      try {
+        if (cplfoldGuided && (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length)) {
+          throw new Error("No eligible forward-strand HYB records are fully contained in the selected reference region.");
+        }
+        cplfoldParameters = {
+          beamSize: parseWholeNumber(structure.cplfoldBeam, 1, 200, "CPLfold beam size"),
+          maxPhase1: parseWholeNumber(structure.cplfoldMaxPhase1, 1, 20, "Phase-1 candidate count"),
+          energyDelta: parseBoundedNumber(structure.cplfoldEnergyDelta, 0, 50, "Energy delta"),
+          alpha: parseBoundedNumber(structure.cplfoldAlpha, 0, 1, "Evidence alpha"),
+          beta: parseBoundedNumber(structure.cplfoldBeta, 0, 1, "Pseudoknot beta"),
+          energyModel: String(structure.cplfoldEnergyModel || "DP09").toUpperCase()
+        };
+        if (["DP03", "DP09", "CC06", "CC09", "RE"].indexOf(cplfoldParameters.energyModel) === -1) {
+          throw new Error("Choose a supported CPLfold energy model.");
+        }
+      } catch (error) {
+        return rejectInput(structure, api, error, "The CPLfold parameters are invalid.");
+      }
+    } else {
+      try {
+        minimumLoop = parseMinimumLoop(structure.minimumLoop);
+        temperature = parseTemperature(structure.temperature);
+      } catch (error) {
+        return rejectInput(structure, api, error, "The ViennaRNA folding parameters are invalid.");
+      }
     }
     let constraints = [];
     let randomFoldCount = 0;
     let constraintLimit = 75;
 
-    if (structure.constraintMode === "manual-hard-base-pairs") {
+    if (!cplfold && structure.constraintMode === "manual-hard-base-pairs") {
       try {
         constraints = parseManualConstraints(structure.constraintText, sequenceInfo.sequence, minimumLoop);
         if (!constraints.length) {
@@ -43,7 +68,7 @@
         return rejectInput(structure, api, error, "The manual base-pair constraints are invalid.");
       }
     }
-    if (hybGuided) {
+    if (!cplfold && hybGuided) {
       try {
         if (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length) {
           throw new Error("No eligible forward-strand HYB records are fully contained in the selected region layout.");
@@ -67,13 +92,17 @@
     structure.runId = runId;
     structure.status = "running";
     structure.progress = 2;
-    structure.message = hybGuided ? "Starting the local RNAcofold evidence pipeline…" : "Starting ViennaRNA WebAssembly…";
+    structure.message = cplfold
+      ? "Starting pure-Python CPLfold in a local Pyodide worker…"
+      : (hybGuided ? "Starting the local RNAcofold evidence pipeline…" : "Starting ViennaRNA WebAssembly…");
     structure.result = null;
     structure.runningSequenceInfo = sequenceInfo;
     api.render();
 
     try {
-      const worker = new Worker("./structure.worker.js");
+      const worker = cplfold
+        ? new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" })
+        : new Worker("./structure.worker.js");
       state.structureWorker = worker;
 
       worker.onmessage = function (event) {
@@ -95,7 +124,9 @@
           const constraintCount = Math.max(0, Number(message.result && message.result.constraintCount) || 0);
           structure.status = "complete";
           structure.progress = 100;
-          structure.message = message.result && message.result.constraintMode === "hyb-guided"
+          structure.message = message.result && message.result.engine === "CPLfold"
+            ? "CPLfold completed locally with " + ((message.result.candidates || []).length) + " ranked candidate" + ((message.result.candidates || []).length === 1 ? "." : "s.")
+            : message.result && message.result.constraintMode === "hyb-guided"
             ? "HYB-guided structure ensemble completed locally from " + (message.result.evidence ? message.result.evidence.inputRecords : 0) + " eligible HYB record" + ((message.result.evidence && message.result.evidence.inputRecords === 1) ? "." : "s.")
             : (constraintCount
               ? "ViennaRNA MFE structure predicted locally with " + constraintCount + " manual hard base-pair constraint" + (constraintCount === 1 ? "." : "s.")
@@ -127,7 +158,9 @@
           structure.runningSequenceInfo = null;
           structure.status = "error";
           structure.progress = 0;
-          structure.message = message.message || "ViennaRNA WebAssembly could not finish the structure prediction.";
+          structure.message = message.message || (cplfold
+            ? "Browser CPLfold could not finish the structure prediction."
+            : "ViennaRNA WebAssembly could not finish the structure prediction.");
           api.render();
         }
       };
@@ -140,11 +173,24 @@
         structure.runningSequenceInfo = null;
         structure.status = "error";
         structure.progress = 0;
-        structure.message = "The ViennaRNA structure worker stopped unexpectedly.";
+        structure.message = cplfold
+          ? "The browser CPLfold worker stopped unexpectedly. Confirm that the generated Pyodide assets are available."
+          : "The ViennaRNA structure worker stopped unexpectedly.";
         api.render();
       };
 
-      worker.postMessage(hybGuided ? {
+      worker.postMessage(cplfold ? {
+        type: "cplfold",
+        sequence: sequenceInfo.sequence,
+        evidenceMode: cplfoldGuided ? "hyb-blocks" : "none",
+        evidenceArms: cplfoldGuided ? sequenceInfo.assembly.evidenceArms : [],
+        beamSize: cplfoldParameters.beamSize,
+        maxPhase1: cplfoldParameters.maxPhase1,
+        energyDelta: cplfoldParameters.energyDelta,
+        energyModel: cplfoldParameters.energyModel,
+        alpha: cplfoldParameters.alpha,
+        beta: cplfoldParameters.beta
+      } : hybGuided ? {
         type: "comrades-fold",
         sequence: sequenceInfo.sequence,
         minimumLoop: minimumLoop,
@@ -165,7 +211,9 @@
       structure.status = "error";
       structure.progress = 0;
       structure.runningSequenceInfo = null;
-      structure.message = error && error.message ? error.message : "This browser cannot start the ViennaRNA structure worker.";
+      structure.message = error && error.message ? error.message : (cplfold
+        ? "This browser cannot start the CPLfold module worker."
+        : "This browser cannot start the ViennaRNA structure worker.");
       api.render();
       return false;
     }
@@ -209,6 +257,18 @@
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
       throw new Error(label + " must be a whole number from " + minimum + " to " + maximum + ".");
+    }
+    return parsed;
+  }
+
+  function parseBoundedNumber(value, minimum, maximum, label) {
+    if ((typeof value !== "string" && typeof value !== "number") ||
+        (typeof value === "string" && value.trim() === "")) {
+      throw new Error(label + " must be a number from " + minimum + " to " + maximum + ".");
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
+      throw new Error(label + " must be a number from " + minimum + " to " + maximum + ".");
     }
     return parsed;
   }
@@ -288,7 +348,12 @@
     return constraints;
   }
 
-  function validateLength(length, allowLarge) {
+  function validateLength(length, allowLarge, engine) {
+    if (engine === "cplfold") {
+      return length > CPLFOLD_MAX_SEQUENCE_LENGTH
+        ? "Browser CPLfold is limited to " + CPLFOLD_MAX_SEQUENCE_LENGTH + " nt because Pyodide runs the pure-Python parser without Numba JIT. Select a shorter region or use bin/cplfold locally."
+        : "";
+    }
     if (length > MAX_SEQUENCE_LENGTH) {
       return "ViennaRNA WebAssembly is limited to " + MAX_SEQUENCE_LENGTH + " nt in HYB2 Web Lite. Reduce this region before folding.";
     }
@@ -340,6 +405,7 @@
   window.Hyb2Structure = {
     maxSequenceLength: MAX_SEQUENCE_LENGTH,
     advancedSequenceLength: ADVANCED_SEQUENCE_LENGTH,
+    cplfoldMaxSequenceLength: CPLFOLD_MAX_SEQUENCE_LENGTH,
     validateLength: validateLength,
     parseManualConstraints: parseManualConstraints,
     predict: predict,

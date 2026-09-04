@@ -81,6 +81,15 @@ NumPy and Numba but does not require a native HotKnots executable. See
 [`docs/cplfold-python.md`](docs/cplfold-python.md) for installation, verification,
 runtime limits, browser boundaries, and third-party licensing notes.
 
+The separate `feature/cplfold-web` branch adds this predictor to the static
+GitHub Pages application. It runs through a same-origin Pyodide worker, accepts
+an optional HYB-derived block bonus matrix, and visualises/ranks nested and
+pseudoknotted candidates. The browser path is capped at 75 nt without Numba;
+the local CLI remains the route for longer sequences. Resolve the licensing
+boundary in `third_party/cplfold/THIRD_PARTY_NOTICES.md` before public release.
+The Pages workflow enforces that decision through the repository Actions
+variable `CPLFOLD_DISTRIBUTION_APPROVED=true`; leave it unset until approval.
+
 ## Getting Started
 To run hyb2 using SAM input file, type in the command line:
 ```bash

@@ -330,7 +330,8 @@ const navigationApi = {
   chooseHybCalls: 0,
   removeFastaCalls: 0,
   toasts: [],
-  navigate: function () {},
+  lastNavigation: null,
+  navigate: function (page) { this.lastNavigation = page; },
   render: function () {},
   showToast: function (message) { this.toasts.push(message); },
   chooseHyb: function () { this.chooseHybCalls += 1; },
@@ -495,6 +496,51 @@ assert.equal(structureControlState.structure.constraintText, "",
   "changing the folded sequence must clear constraints authored for its predecessor");
 assert.equal(structureControlState.structure.selectedNucleotide, null);
 
+Object.assign(structureControlState.structure, {
+  engine: "viennarna",
+  source: "paste",
+  cplfoldEvidence: "hyb-blocks",
+  constraintText: "4-18"
+});
+context.window.Hyb2UI.handleChange(
+  structureControlState,
+  { dataset: { feature: "structure-control", key: "engine" }, type: "select-one", value: "cplfold" },
+  navigationApi
+);
+assert.equal(structureControlState.structure.engine, "cplfold");
+assert.equal(structureControlState.structure.source, "reference",
+  "HYB-guided CPLfold must use a mapped reference region");
+assert.equal(structureControlState.structure.constraintText, "",
+  "switching engines must clear coordinate-specific ViennaRNA hard pairs");
+context.window.Hyb2UI.handleChange(
+  structureControlState,
+  { dataset: { feature: "structure-control", key: "source" }, type: "select-one", value: "paste" },
+  navigationApi
+);
+assert.equal(structureControlState.structure.cplfoldEvidence, "none",
+  "a non-reference CPLfold source must switch to sequence-only evidence semantics");
+
+Object.assign(structureControlState.structure, {
+  engine: "cplfold",
+  source: "reference",
+  selectedRecordIndex: null,
+  constraintMode: "hyb-guided",
+  cplfoldEvidence: "hyb-blocks",
+  result: { stale: true }
+});
+context.window.Hyb2UI.handleAction(
+  structureControlState,
+  { dataset: { featureAction: "record-fold", recordIndex: "7" } },
+  navigationApi
+);
+assert.equal(structureControlState.structure.source, "record");
+assert.equal(structureControlState.structure.selectedRecordIndex, 7);
+assert.equal(structureControlState.structure.constraintMode, "none",
+  "folding a read must not retain reference-coordinate ViennaRNA evidence");
+assert.equal(structureControlState.structure.cplfoldEvidence, "none",
+  "folding a read must not retain reference-coordinate CPLfold evidence");
+assert.equal(navigationApi.lastNavigation, "structure");
+
 assert.match(appSource, /addEventListener\("hashchange", handleHashChange\)/);
 assert.match(appSource, /addEventListener\("input", handleInput\)/,
   "text controls must synchronise state before blur so asynchronous renders cannot erase typing");
@@ -555,6 +601,12 @@ assert.match(analysisPagesSource, /sha256Unavailable \? "Unavailable" : "Calcula
 assert.match(indexSource, /<script src="\.\/build-info\.js" defer><\/script>/);
 assert.match(workflowSource, /GITHUB_SHA[\s\S]*?> web\/build-info\.js/,
   "the Pages artifact must record the exact deployed Git commit");
+assert.match(workflowSource, /Configure GitHub Pages[\s\S]*?if: \$\{\{ vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true' \}\}/,
+  "Pages configuration must remain behind the CPLfold redistribution approval gate");
+assert.match(workflowSource, /Upload GitHub Pages artifact[\s\S]*?if: \$\{\{ vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true' \}\}/,
+  "the browser CPLfold artifact must not be published without explicit licence approval");
+assert.match(workflowSource, /deploy:\s*\n\s*if: \$\{\{ vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true' \}\}/,
+  "the deploy job must remain behind the CPLfold redistribution approval gate");
 assert.match(analysisPagesSource, /Git commit:/,
   "the Files drawer must display deployed build provenance");
 assert.match(appSource, /removeFasta: removeFasta/,

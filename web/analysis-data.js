@@ -114,6 +114,7 @@
 
   function defaultStructureState() {
     return {
+      engine: "viennarna",
       source: "reference",
       rna: "",
       start: "",
@@ -134,6 +135,13 @@
       randomSeed: "HYB2-Web",
       allowLargeEnsemble: false,
       allowLarge: false,
+      cplfoldEvidence: "hyb-blocks",
+      cplfoldBeam: "20",
+      cplfoldMaxPhase1: "3",
+      cplfoldEnergyDelta: "5",
+      cplfoldEnergyModel: "DP09",
+      cplfoldAlpha: "0.5",
+      cplfoldBeta: "0",
       selectedNucleotide: null,
       status: "idle",
       progress: 0,

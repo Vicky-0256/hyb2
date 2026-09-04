@@ -14,7 +14,7 @@
     bindNucleotideMarkers(target, state, api);
   }
 
-  function handleAction(action, state, api) {
+  function handleAction(action, state, api, element) {
     if (action === "predict-structure") {
       if (!window.Hyb2Structure) {
         api.showToast("The local structure predictor is unavailable in this browser.");
@@ -34,6 +34,17 @@
     }
 
     const result = state.structure && state.structure.result;
+    if (action === "select-cplfold-candidate") {
+      const candidateIndex = Number(element && element.dataset && element.dataset.candidateIndex);
+      if (!result || result.engine !== "CPLfold" || !selectCplfoldCandidate(result, candidateIndex)) {
+        api.showToast("That CPLfold candidate is unavailable.");
+        return true;
+      }
+      state.structure.selectedNucleotide = null;
+      api.render();
+      api.showToast("CPLfold candidate " + (candidateIndex + 1) + " selected.");
+      return true;
+    }
     if (!result || [
       "copy-structure-dot-bracket",
       "download-structure-dot-bracket",
@@ -42,6 +53,8 @@
       "download-structure-evidence",
       "download-structure-constraints",
       "download-structure-ensemble",
+      "download-cplfold-evidence",
+      "download-cplfold-candidates",
       "download-structure-svg",
       "download-structure-png",
       "download-structure-report"
@@ -90,6 +103,18 @@
       return true;
     }
 
+    if (action === "download-cplfold-evidence") {
+      api.download("cplfold-hyb-bonus-matrix.tsv", cplfoldEvidenceTsv(result), "text/tab-separated-values");
+      api.showToast("CPLfold HYB bonus matrix downloaded locally.");
+      return true;
+    }
+
+    if (action === "download-cplfold-candidates") {
+      api.download("cplfold-candidates.tsv", cplfoldCandidatesTsv(result), "text/tab-separated-values");
+      api.showToast("CPLfold candidates downloaded locally.");
+      return true;
+    }
+
     if (action === "download-structure-svg") {
       const svg = document.querySelector("[data-structure-diagram] svg");
       if (!svg) {
@@ -111,9 +136,33 @@
     return true;
   }
 
+  function selectCplfoldCandidate(result, index) {
+    const candidates = result.candidates || [];
+    if (!Number.isInteger(index) || index < 0 || index >= candidates.length) {
+      return false;
+    }
+    const candidate = candidates[index];
+    result.selectedCandidate = index;
+    result.dotBracket = candidate.dotBracket;
+    result.pairs = candidate.pairs || [];
+    result.unpaired = candidate.unpaired;
+    result.energy = candidate.energy;
+    result.effectiveEnergy = candidate.effectiveEnergy;
+    result.phase1Energy = candidate.phase1Energy;
+    result.phase1Structure = candidate.phase1Structure;
+    result.phase2Structure = candidate.phase2Structure;
+    result.score = candidate.score;
+    result.structureType = candidate.type;
+    result.topology = candidate.topology;
+    result.crossingPairs = candidate.crossingPairs;
+    return true;
+  }
+
   function structureReport(state, result) {
     const constraintCount = Math.max(0, Number(result.constraintCount) || 0);
     const guided = result.constraintMode === "hyb-guided";
+    const cplfold = result.engine === "CPLfold";
+    const selectedCandidateIndex = cplfold ? Math.max(0, Number(result.selectedCandidate) || 0) : null;
     return {
       application: "HYB2 Web Lite",
       version: "0.5.0",
@@ -150,9 +199,17 @@
         model: result.model,
         engine: result.engine,
         engineVersion: result.engineVersion,
+        bridgeVersion: cplfold ? result.bridgeVersion : null,
+        runtime: cplfold ? result.runtime : null,
         temperatureCelsius: result.temperature,
         minimumLoop: result.minimumLoop,
-        mfe: result.energy,
+        mfe: cplfold ? null : result.energy,
+        energy: result.energy,
+        effectiveEnergy: cplfold ? result.effectiveEnergy : null,
+        phase1Energy: cplfold ? result.phase1Energy : null,
+        phase1Structure: cplfold ? result.phase1Structure : null,
+        phase2Structure: cplfold ? result.phase2Structure : null,
+        linearFoldScore: cplfold ? result.score : null,
         energyUnit: result.energyUnit || "kcal/mol",
         constraintMode: result.constraintMode || "none",
         constraintSource: result.constraintSource || (constraintCount ? "manual-user-input" : "none"),
@@ -161,22 +218,41 @@
         dotBracket: result.dotBracket,
         pairs: result.pairs,
         elapsedMs: result.elapsedMs,
+        runtimeLoadMs: cplfold ? result.runtimeLoadMs : null,
+        foldElapsedMs: cplfold ? result.foldElapsedMs : null,
         comradesScore: guided ? result.comradesScore : null,
-        matchedEvidencePairs: guided ? result.matchedEvidencePairs : null
+        matchedEvidencePairs: guided ? result.matchedEvidencePairs : null,
+        structureType: cplfold ? result.structureType : null,
+        topology: cplfold ? result.topology : "nested",
+        crossingPairs: cplfold ? result.crossingPairs : 0,
+        selectedCandidateIndex: selectedCandidateIndex,
+        selectedCandidateRank: cplfold ? selectedCandidateIndex + 1 : null,
+        evidenceMode: cplfold ? result.evidenceMode : null,
+        evidenceSource: cplfold ? result.evidenceSource : null
       },
       hybGuidedEvidence: guided ? result.evidence : null,
+      cplfoldEvidence: cplfold ? result.evidence : null,
+      cplfoldParameters: cplfold ? result.parameters : null,
+      cplfoldCandidates: cplfold ? result.candidates : null,
       randomisation: guided ? result.randomisation : null,
       acceptedStemConstraints: guided ? result.acceptedStemConstraints : null,
       rejectedStemConstraints: guided ? result.rejectedStemConstraints : null,
       methodScope: {
-        manualHardBasePairsApplied: !guided && constraintCount > 0,
+        manualHardBasePairsApplied: !guided && !cplfold && constraintCount > 0,
         automaticHybEvidenceConstraintGeneration: guided,
         automaticRnaCofoldEvidenceSelection: guided,
         iterativeCompatibleConstraintFitting: guided,
         randomisedConstraintOrderFolding: guided && !!(result.randomisation && result.randomisation.completedFolds),
         supportBasedStructureScoring: guided,
+        cplfoldPurePythonBrowserExecution: cplfold,
+        cplfoldPseudoknotPrediction: cplfold,
+        cplfoldHybBlockBonusMatrix: cplfold && result.evidenceSource === "hyb-block-bonus-matrix",
+        numbaJitAvailable: cplfold ? false : null,
+        browserCplfoldMaximumLength: cplfold ? 75 : null,
         unafoldExecution: "external-cli-only",
-        note: guided
+        note: cplfold
+          ? "The browser ran the vendored pure-Python CPLfold two-phase algorithm in Pyodide. HYB-guided runs transform prepared arm intervals with the CPLfold IRIS-style Gaussian, symmetric outer-product and log1p bonus pipeline. Numba JIT is unavailable in this runtime, so sequences are limited to 75 nt."
+          : guided
           ? "The browser reproduced the ViennaRNA HYB2 post-HYB chain: per-row RNAcofold evidence, ranked stem construction, greedy compatible hard-constraint fitting, optional seeded randomised folds, and COMRADES support scoring."
           : constraintCount
           ? "The listed hard base pairs were entered manually by the user and enforced by ViennaRNA before MFE folding. They were not inferred from HYB or RNAcofold evidence."
@@ -196,6 +272,8 @@
     const colors = colorTokens();
     const maximumEvidence = Math.max(0, Number(result.maximumNucleotideSupport) || 0);
     const guided = result.constraintMode === "hyb-guided";
+    const cplfold = result.engine === "CPLfold";
+    const cplfoldEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
     const hardPairs = new Set((result.constraints || []).map(function (pair) {
       return pair.left + ":" + pair.right;
     }));
@@ -208,7 +286,7 @@
       "aria-label": "Arc diagram for " + length + " nucleotide RNA secondary structure"
     });
 
-    svg.appendChild(element("title", {}, "Predicted non-crossing RNA base pairs"));
+    svg.appendChild(element("title", {}, cplfold ? "Selected CPLfold RNA structure with pseudoknot layers" : "Predicted non-crossing RNA base pairs"));
     svg.appendChild(element("rect", { x: 0, y: 0, width: width, height: height, rx: 8, fill: colors.surface }));
     svg.appendChild(element("line", { x1: left, y1: baseline, x2: right, y2: baseline, stroke: colors.line, "stroke-width": 1.5 }));
 
@@ -222,17 +300,21 @@
       const path = element("path", {
         d: "M " + start.toFixed(2) + " " + baseline + " Q " + center.toFixed(2) + " " + (baseline - lift).toFixed(2) + " " + end.toFixed(2) + " " + baseline,
         fill: "none",
-        stroke: guided ? evidenceColor(Number(pair.evidenceSupport) || 0, maximumEvidence, colors) : pairColor(pair.type, colors),
-        "stroke-width": hardConstraint ? 3.7 : (guided && Number(pair.evidenceSupport) > 0 ? 2.5 : (pair.type === "G–C" || pair.type === "C–G" ? 2.1 : 1.6)),
+        stroke: cplfold ? cplfoldPairColor(pair, colors) : (guided ? evidenceColor(Number(pair.evidenceSupport) || 0, maximumEvidence, colors) : pairColor(pair.type, colors)),
+        "stroke-width": cplfold && pair.layer !== "primary" ? 3 : (hardConstraint ? 3.7 : (guided && Number(pair.evidenceSupport) > 0 ? 2.5 : (pair.type === "G–C" || pair.type === "C–G" ? 2.1 : 1.6))),
         "stroke-linecap": "round",
-        opacity: guided && !Number(pair.evidenceSupport) ? 0.34 : 0.9
+        opacity: cplfoldEvidence
+          ? Math.max(0.32, Math.min(0.96, 0.32 + (Number(pair.evidenceSupport) || 0) / Math.max(maximumEvidence, 1e-12) * 0.64))
+          : (guided && !Number(pair.evidenceSupport) ? 0.34 : 0.9)
       });
-      path.appendChild(element("title", {}, (hardConstraint ? (guided ? "HYB-fitted hard pair: " : "Manual hard pair: ") : "MFE pair: ") + pair.left + " " + pair.leftBase + " paired with " + pair.right + " " + pair.rightBase + " (" + pair.type + ")" + (guided ? "; RNAcofold evidence " + (Number(pair.evidenceSupport) || 0) : "")));
+      path.appendChild(element("title", {}, (cplfold
+        ? (pair.layer || "primary") + " CPLfold pair: "
+        : (hardConstraint ? (guided ? "HYB-fitted hard pair: " : "Manual hard pair: ") : "MFE pair: ")) + pair.left + " " + pair.leftBase + " paired with " + pair.right + " " + pair.rightBase + " (" + pair.type + ")" + (guided ? "; RNAcofold evidence " + (Number(pair.evidenceSupport) || 0) : (cplfoldEvidence ? "; HYB bonus " + (Number(pair.evidenceSupport) || 0).toFixed(4) : ""))));
       svg.appendChild(path);
     });
 
     markerTicks(svg, result, length, left, right, baseline, colors, selectedNucleotide);
-    legend(svg, colors, guided);
+    legend(svg, colors, result);
     return svg;
   }
 
@@ -340,7 +422,7 @@
           cx: x.toFixed(2),
           cy: baseline,
           r: length <= 120 ? 4.5 : 3.2,
-          fill: selected ? colors.accent : (result.constraintMode === "hyb-guided" ? nucleotideEvidenceColor(result, position, colors) : colors.surface),
+          fill: selected ? colors.accent : ((result.constraintMode === "hyb-guided" || (result.engine === "CPLfold" && result.evidence && result.evidence.source === "hyb-block-intervals")) ? nucleotideEvidenceColor(result, position, colors) : colors.surface),
           stroke: selected ? colors.accent : colors.muted,
           "stroke-width": selected ? 2.3 : 1.1,
           "data-structure-position": position,
@@ -441,12 +523,16 @@
     return position + " " + base + ": paired with " + partner + " (" + pair.type + ")";
   }
 
-  function legend(svg, colors, guided) {
-    const items = guided
+  function legend(svg, colors, result) {
+    const guided = result.constraintMode === "hyb-guided";
+    const cplfold = result.engine === "CPLfold";
+    const items = cplfold
+      ? [{ label: "phase 1", color: colors.primary }, { label: "pseudoknot", color: colors.accent }, { label: "deeper layer", color: colors.warning }]
+      : guided
       ? [{ label: "high evidence", color: colors.warning }, { label: "low evidence", color: colors.primary }, { label: "MFE only", color: colors.lineStrong }]
       : [{ label: "G–C", color: colors.primary }, { label: "A–U", color: colors.accent }, { label: "G–U", color: colors.muted }];
     items.forEach(function (item, index) {
-      const x = 44 + index * (guided ? 132 : 98);
+      const x = 44 + index * ((guided || cplfold) ? 132 : 98);
       svg.appendChild(element("line", { x1: x, y1: 24, x2: x + 17, y2: 24, stroke: item.color, "stroke-width": 2.5, "stroke-linecap": "round" }));
       svg.appendChild(element("text", { x: x + 24, y: 28, fill: colors.muted, "font-size": 11, "font-family": "ui-monospace, monospace" }, item.label));
     });
@@ -488,6 +574,16 @@
     return colors.muted;
   }
 
+  function cplfoldPairColor(pair, colors) {
+    if (pair.layer === "pseudoknot-1") {
+      return colors.accent;
+    }
+    if (pair.layer && pair.layer !== "primary") {
+      return colors.warning;
+    }
+    return colors.primary;
+  }
+
   function evidenceColor(support, maximum, colors) {
     if (!(support > 0) || !(maximum > 0)) {
       return colors.lineStrong;
@@ -502,16 +598,38 @@
 
   function dotBracketFile(result) {
     const energy = Number.isFinite(Number(result.energy)) ? " (" + Number(result.energy).toFixed(2) + ")" : "";
-    return ">" + (result.label || "HYB2_Web_ViennaRNA_MFE") + "\n" + result.sequence + "\n" + result.dotBracket + energy + "\n";
+    return ">" + (result.label || (result.engine === "CPLfold" ? "HYB2_Web_CPLfold" : "HYB2_Web_ViennaRNA_MFE")) + "\n" + result.sequence + "\n" + result.dotBracket + energy + "\n";
   }
 
   function basePairTsv(result) {
     const hardPairs = new Set((result.constraints || []).map(function (pair) {
       return pair.left + ":" + pair.right;
     }));
-    const rows = [["left_position", "left_base", "right_position", "right_base", "pair_type", "hard_constraint", "rna_cofold_evidence", "mfe_kcal_per_mol"]];
+    const cplfold = result.engine === "CPLfold";
+    const guided = result.constraintMode === "hyb-guided";
+    const evidenceKind = cplfold
+      ? (result.evidence && result.evidence.source === "hyb-block-intervals" ? "log1p_hyb_bonus" : "none")
+      : (guided ? "rna_cofold_observations" : "none");
+    // Keep the original ViennaRNA columns first for downstream compatibility,
+    // then add engine-neutral, explicitly typed fields.
+    const rows = [["left_position", "left_base", "right_position", "right_base", "pair_type", "hard_constraint", "rna_cofold_evidence", "mfe_kcal_per_mol", "evidence_kind", "evidence_support", "pair_layer", "selected_energy_kcal_per_mol", "engine"]];
     (result.pairs || []).forEach(function (pair) {
-      rows.push([pair.left, pair.leftBase, pair.right, pair.rightBase, pair.type, hardPairs.has(pair.left + ":" + pair.right) ? "yes" : "no", Number(pair.evidenceSupport) || 0, Number.isFinite(Number(result.energy)) ? Number(result.energy).toFixed(2) : ""]);
+      const support = Number(pair.evidenceSupport) || 0;
+      rows.push([
+        pair.left,
+        pair.leftBase,
+        pair.right,
+        pair.rightBase,
+        pair.type,
+        hardPairs.has(pair.left + ":" + pair.right) ? "yes" : "no",
+        cplfold ? "" : support,
+        cplfold ? "" : (Number.isFinite(Number(result.energy)) ? Number(result.energy).toFixed(2) : ""),
+        evidenceKind,
+        support,
+        pair.layer || "nested",
+        Number.isFinite(Number(result.energy)) ? Number(result.energy).toFixed(2) : "",
+        result.engine || "ViennaRNA"
+      ]);
     });
     return rows.map(function (row) { return row.join("\t"); }).join("\n") + "\n";
   }
@@ -555,6 +673,35 @@
     return rows.map(function (row) { return row.join("\t"); }).join("\n") + "\n";
   }
 
+  function cplfoldEvidenceTsv(result) {
+    const rows = [["prepared_position_1", "prepared_position_2", "log1p_gaussian_hyb_bonus"]];
+    const evidence = result.evidence || {};
+    (evidence.bonusEntries || []).forEach(function (entry) {
+      rows.push([entry.one, entry.two, Number(entry.value).toFixed(6)]);
+    });
+    return rows.map(function (row) { return row.join("\t"); }).join("\n") + "\n";
+  }
+
+  function cplfoldCandidatesTsv(result) {
+    const rows = [["rank", "selected", "type", "topology", "energy_kcal_per_mol", "effective_energy_kcal_per_mol", "phase1_energy_kcal_per_mol", "linear_fold_score", "base_pairs", "crossing_pairs", "dot_bracket"]];
+    (result.candidates || []).forEach(function (candidate, index) {
+      rows.push([
+        index + 1,
+        index === Number(result.selectedCandidate || 0) ? "yes" : "no",
+        candidate.type,
+        candidate.topology,
+        candidate.energy == null ? "" : candidate.energy,
+        candidate.effectiveEnergy == null ? "" : candidate.effectiveEnergy,
+        candidate.phase1Energy == null ? "" : candidate.phase1Energy,
+        candidate.score == null ? "" : candidate.score,
+        (candidate.pairs || []).length,
+        candidate.crossingPairs || 0,
+        candidate.dotBracket
+      ]);
+    });
+    return rows.map(function (row) { return row.join("\t"); }).join("\n") + "\n";
+  }
+
   function ctFile(result) {
     const sequence = result.sequence || "";
     const pairLookup = new Map();
@@ -563,7 +710,7 @@
       pairLookup.set(pair.right, pair.left);
     });
     const energy = Number.isFinite(Number(result.energy)) ? Number(result.energy).toFixed(2) : "NA";
-    const rows = [sequence.length + " ENERGY = " + energy + " " + (result.label || "HYB2_Web_ViennaRNA_MFE")];
+    const rows = [sequence.length + " ENERGY = " + energy + " " + (result.label || (result.engine === "CPLfold" ? "HYB2_Web_CPLfold" : "HYB2_Web_ViennaRNA_MFE"))];
     for (let position = 1; position <= sequence.length; position += 1) {
       rows.push([
         position,
@@ -584,6 +731,9 @@
     basePairTsv: basePairTsv,
     evidenceTsv: evidenceTsv,
     constraintsTsv: constraintsTsv,
-    ensembleTsv: ensembleTsv
+    ensembleTsv: ensembleTsv,
+    cplfoldEvidenceTsv: cplfoldEvidenceTsv,
+    cplfoldCandidatesTsv: cplfoldCandidatesTsv,
+    selectCplfoldCandidate: selectCplfoldCandidate
   };
 }());

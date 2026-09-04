@@ -1128,7 +1128,7 @@
   }
 
   function structureControlChangesSequence(key) {
-    return ["source", "rna", "start", "end", "pastedSequence", "selectedRecordIndex", "evidenceLayout", "secondRna", "secondStart", "secondEnd", "homodimerOnly"].indexOf(key) !== -1;
+    return ["engine", "source", "rna", "start", "end", "pastedSequence", "selectedRecordIndex", "evidenceLayout", "secondRna", "secondStart", "secondEnd", "homodimerOnly", "cplfoldEvidence"].indexOf(key) !== -1;
   }
 
   function resetStructureForControl(state, key) {
@@ -1228,8 +1228,18 @@
       if (key === "constraintMode" && value === "hyb-guided") {
         state.structure.source = "reference";
       }
+      if ((key === "engine" && value === "cplfold" && state.structure.cplfoldEvidence === "hyb-blocks") ||
+          (key === "cplfoldEvidence" && value === "hyb-blocks")) {
+        state.structure.source = "reference";
+      }
+      if (key === "engine" && value === "viennarna" && state.structure.constraintMode === "hyb-guided") {
+        state.structure.source = "reference";
+      }
       if (key === "source" && value !== "reference" && state.structure.constraintMode === "hyb-guided") {
         state.structure.constraintMode = "none";
+      }
+      if (key === "source" && value !== "reference" && state.structure.engine === "cplfold") {
+        state.structure.cplfoldEvidence = "none";
       }
       api.render();
       return true;
@@ -1325,8 +1335,18 @@
       if (key === "constraintMode" && element.value === "hyb-guided") {
         state.structure.source = "reference";
       }
+      if ((key === "engine" && element.value === "cplfold" && state.structure.cplfoldEvidence === "hyb-blocks") ||
+          (key === "cplfoldEvidence" && element.value === "hyb-blocks")) {
+        state.structure.source = "reference";
+      }
+      if (key === "engine" && element.value === "viennarna" && state.structure.constraintMode === "hyb-guided") {
+        state.structure.source = "reference";
+      }
       if (key === "source" && element.value !== "reference" && state.structure.constraintMode === "hyb-guided") {
         state.structure.constraintMode = "none";
+      }
+      if (key === "source" && element.value !== "reference" && state.structure.engine === "cplfold") {
+        state.structure.cplfoldEvidence = "none";
       }
       return true;
     }
@@ -1343,7 +1363,7 @@
       return false;
     }
 
-    if (window.Hyb2StructureUI && window.Hyb2StructureUI.handleAction(action, state, api)) {
+    if (window.Hyb2StructureUI && window.Hyb2StructureUI.handleAction(action, state, api, element)) {
       return true;
     }
 
@@ -1415,6 +1435,14 @@
       }
       state.structure.source = "record";
       state.structure.selectedRecordIndex = Number(element.dataset.recordIndex);
+      // A raw HYB record supplies its read sequence, not a mapped reference
+      // interval. Reference-coordinate evidence must therefore be disabled.
+      if (state.structure.constraintMode === "hyb-guided") {
+        state.structure.constraintMode = "none";
+      }
+      if (state.structure.engine === "cplfold" && state.structure.cplfoldEvidence === "hyb-blocks") {
+        state.structure.cplfoldEvidence = "none";
+      }
       api.navigate("structure");
       return true;
     }

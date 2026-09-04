@@ -922,11 +922,13 @@ Y start/end
 
 ## 页面定位
 
-当前结构预测明确使用：
+当前结构预测提供两个独立引擎：
 
-> **浏览器中的 ViennaRNA MFE folding 引擎。**
+> **浏览器中的 ViennaRNA WebAssembly folding 与 CPLfold pure-Python/Pyodide pseudoknot 引擎。**
 
 浏览器当前提供 plain global MFE、手动 hard pairs，以及 HYB-guided RNAcofold evidence 三种模式。第三种模式实现 `.hyb` 之后的 ViennaRNA 路径：每条满足区域条件的 HYB row 独立 RNAcofold、base-pair-frequency 聚合、touching stem 合并与排序、逐条兼容性约束拟合、可复现的随机约束顺序、COMRADES support scoring 和 evidence colouring。UNAFold 保留为可选外部 CLI 兼容路径。
+
+CPLfold 是独立 engine，不复用 ViennaRNA 的 `constraintMode` 语义。它可做 sequence-only 预测，也可把单个 mapped reference region 内每条 eligible HYB row 的两个区间按 CPLfold/IRIS 方法转换为 Gaussian arm support、symmetric outer product、1e-6 threshold 和 `log1p` bonus matrix，再运行 two-phase pseudoknot search。结果显示完整 bonus matrix、nested/pseudoknot candidates、phase-1 与 crossing phase-2 arc layers，并提供 DBN、CT、SVG、PNG、base-pair、bonus、candidate 和 provenance exports。
 
 页面根据 folding mode 显示方法标签：
 
@@ -934,6 +936,7 @@ Y start/end
 Plain MFE: ViennaRNA MFE · Browser
 Manual constraints: ViennaRNA hard pairs · Browser
 HYB-guided: RNAcofold + constrained RNAfold · Browser
+CPLfold: CPLfold + Pyodide · Browser
 ```
 
 以及限制：
@@ -941,6 +944,9 @@ HYB-guided: RNAcofold + constrained RNAfold · Browser
 ```text
 HYB-guided mode reproduces HYB2's post-HYB ViennaRNA evidence and constraint
 workflow. General pseudoknots remain outside ViennaRNA dot-bracket output.
+CPLfold supports pseudoknot dot-bracket layers, but the pure-Python Pyodide
+runtime has no Numba JIT and is therefore capped at 75 nt. Longer runs use the
+local bin/cplfold command.
 ```
 
 ## 页面整体布局
@@ -1776,11 +1782,11 @@ src/
 12. 系统完成 RNA 名称匹配
 13. 选择 U6:100–300
 14. 点击 Send to RNA Structure
-15. 保持默认 Plain MFE、由 expert 手动输入 hard pairs，或选择 HYB-guided RNAcofold evidence
-16. HYB-guided 时选择 single/paired reference layout、constraint 数量、随机 fold 数量和 seed
-17. 浏览器 Worker 执行 RNAcofold evidence、约束拟合、RNAfold ensemble 和 COMRADES scoring
-18. 显示结构、dot-bracket、MFE、constraint/evidence 来源和 ensemble ranking
-19. 用户下载 SVG、CT、FASTA、evidence/constraints/ensemble TSV 和 report JSON
+15. 选择 ViennaRNA Plain MFE / manual hard pairs / HYB-guided RNAcofold，或 CPLfold pseudoknot engine
+16. CPLfold HYB-guided 时选择不超过 75 nt 的 single reference region、beam、phase-1 candidate 数、energy model、alpha 和 beta
+17. 独立 Worker 执行 ViennaRNA evidence chain，或 Pyodide 内执行 HYB block bonus matrix 与 two-phase CPLfold
+18. 显示结构、dot-bracket、energy、evidence 来源、bonus matrix 和可切换 candidate ranking
+19. 用户下载 SVG、PNG、CT、DBN、base-pair/evidence/bonus/candidate TSV 和 report JSON
 20. 可选加载多个 `.hyb`，查看 descriptive comparison map，并导出兼容现有 HYB2 R 入口的 count/names 表及独立扩展 metadata
 21. 点击 Clear session
 ```
@@ -1808,6 +1814,8 @@ src/
 ✓ HYB-guided RNAcofold evidence 和 ranked constraints
 ✓ seeded randomized folding（最多 1,000 folds）
 ✓ COMRADES score 和 evidence-coloured structure
+✓ CPLfold pure-Python/Pyodide pseudoknot candidates（浏览器上限 75 nt）
+✓ HYB interval-block bonus matrix 可视化与导出
 ✓ HYB2 `DESeq_run.R`-compatible count / headerless names table 导出
 ✓ 独立扩展 sample metadata 导出
 ✓ SVG / PNG / CSV / HYB / DBN 导出
@@ -1820,7 +1828,7 @@ src/
 ✗ Bowtie2 mapping
 ✗ FASTQ/SAM 输入
 ✗ 浏览器内 DESeq2 significance（等待 pinned DESeq2 1.52.0 WASM closure、静态加载和数值门禁）
-✗ 通用 pseudoknot prediction
+✗ 超过 75 nt 的浏览器内 CPLfold（保留本地 CLI）
 ✗ 云端保存
 ✗ 用户账户
 ✗ 分享链接

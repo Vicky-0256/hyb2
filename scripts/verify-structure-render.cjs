@@ -8,8 +8,9 @@ const vm = require("node:vm");
 const repository = path.resolve(__dirname, "..");
 const workerInstances = [];
 
-function FakeWorker(url) {
+function FakeWorker(url, options) {
   this.url = url;
+  this.options = options || null;
   this.message = null;
   this.terminated = false;
   workerInstances.push(this);
@@ -332,6 +333,179 @@ assert.match(context.window.Hyb2StructureUI.evidenceTsv(guidedState.structure.re
 assert.match(context.window.Hyb2StructureUI.constraintsTsv(guidedState.structure.result), /F 1 16 1/);
 assert.match(context.window.Hyb2StructureUI.ensembleTsv(guidedState.structure.result), /1\tyes\tyes\t-8\.2\t4/);
 
+const cplfoldState = structureState("none", "");
+cplfoldState.summary = { rnaNames: ["RNA_A"], fileName: "cplfold.hyb", fileSize: 84, sha256: "cplfold-sha" };
+cplfoldState.records = [
+  {
+    id: "block-1", index: 0, rnaOne: "RNA_A", rnaOneStart: 103, rnaOneEnd: 108,
+    rnaTwo: "RNA_A", rnaTwoStart: 120, rnaTwoEnd: 125, isHomodimer: false
+  }
+];
+cplfoldState.fasta = {
+  fileName: "cplfold.fa", fileSize: 40, sha256: "cplfold-fasta-sha",
+  mapping: { RNA_A: "RNA_A" },
+  sequences: [{ id: "RNA_A", sequence: "A".repeat(100) + "GGCGCGGCACCGUCCGCGGAACAAACGG" }]
+};
+Object.assign(cplfoldState.structure, {
+  engine: "cplfold",
+  source: "reference",
+  rna: "RNA_A",
+  start: "101",
+  end: "128",
+  cplfoldEvidence: "hyb-blocks",
+  cplfoldBeam: "20",
+  cplfoldMaxPhase1: "2",
+  cplfoldEnergyDelta: "5",
+  cplfoldEnergyModel: "DP09",
+  cplfoldAlpha: "0.5",
+  cplfoldBeta: "0"
+});
+const cplfoldSetup = context.window.Hyb2Pages.renderStructure(cplfoldState);
+assert.match(cplfoldSetup, /CPLfold \+ Pyodide · Browser/);
+assert.match(cplfoldSetup, /HYB block bonus matrix/);
+assert.match(cplfoldSetup, /1 eligible HYB row/);
+assert.match(cplfoldSetup, /Predict CPLfold candidates/);
+assert.match(cplfoldSetup, /capped at 75 nt/);
+assert.doesNotMatch(cplfoldSetup, /Minimum hairpin loop/);
+const cplfoldPrepared = context.window.Hyb2Pages.getStructureSequence(cplfoldState);
+assert.equal(cplfoldPrepared.sequence, "GGCGCGGCACCGUCCGCGGAACAAACGG");
+assert.deepEqual(JSON.parse(JSON.stringify(cplfoldPrepared.assembly.evidenceArms.map(function (arm) {
+  return {
+    oneStart: arm.oneStart,
+    oneEnd: arm.oneEnd,
+    twoStart: arm.twoStart,
+    twoEnd: arm.twoEnd,
+    recordId: arm.recordId
+  };
+}))), [
+  { oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25, recordId: "block-1" }
+], "a non-1 reference window must map HYB coordinates to 1-based prepared-sequence coordinates");
+const cplfoldWorkersBefore = workerInstances.length;
+assert.equal(context.window.Hyb2Structure.predict(cplfoldState, {
+  render: function () {},
+  showToast: function () {}
+}), true);
+assert.equal(workerInstances.length, cplfoldWorkersBefore + 1);
+const cplfoldWorker = workerInstances.at(-1);
+assert.equal(cplfoldWorker.url, "./cplfold.worker.mjs?build=local");
+assert.deepEqual(JSON.parse(JSON.stringify(cplfoldWorker.options)), { type: "module" });
+assert.equal(cplfoldWorker.message.type, "cplfold");
+assert.equal(cplfoldWorker.message.evidenceMode, "hyb-blocks");
+assert.equal(cplfoldWorker.message.evidenceArms.length, 1);
+assert.equal(cplfoldWorker.message.energyModel, "DP09");
+assert.match(context.window.Hyb2Pages.renderStructure(cplfoldState), /aria-label="CPLfold structure prediction progress"/);
+cplfoldWorker.onmessage({ data: { type: "complete", result: {
+  algorithm: "CPLfold two-phase pseudoknot prediction",
+  model: "LinearFold Vienna-mode scoring with CPLfold/HotKnots DP09 energy ranking",
+  engine: "CPLfold",
+  engineVersion: "af49f8e",
+  bridgeVersion: "2",
+  runtime: "Pyodide test runtime",
+  dotBracket: "..(((((..[[[[)))))......]]]]",
+  energy: -8.0204,
+  effectiveEnergy: -8.0204,
+  phase1Energy: -3.2,
+  score: -100,
+  energyUnit: "kcal/mol",
+  elapsedMs: 900,
+  runtimeLoadMs: 600,
+  foldElapsedMs: 300,
+  unpaired: 11,
+  structureType: "pseudoknot",
+  topology: "pseudoknotted",
+  crossingPairs: 8,
+  constraintMode: "none",
+  constraintSource: "none",
+  constraintCount: 0,
+  constraints: [],
+  evidenceMode: "hyb-blocks",
+  evidenceSource: "hyb-block-bonus-matrix",
+  selectedCandidate: 0,
+  parameters: { beamSize: 20, maxPhase1: 2, energyDelta: 5, energyModel: "DP09", alpha: 0.5, beta: 0 },
+  evidence: {
+    source: "hyb-block-intervals", inputRecords: 1, uniqueBlocks: 1,
+    nonzeroBonusCells: 4, nonzeroUpperTriangleCells: 2, maximumBonus: 0.8,
+    bonusEntries: [{ one: 3, two: 20, value: 0.8 }, { one: 4, two: 19, value: 0.4 }]
+  },
+  maximumNucleotideSupport: 0.8,
+  nucleotideSupport: Array(28).fill(0),
+  pairs: [
+    { left: 3, right: 18, leftBase: "C", rightBase: "G", type: "C–G", layer: "primary", evidenceSupport: 0.2 },
+    { left: 10, right: 28, leftBase: "C", rightBase: "G", type: "C–G", layer: "pseudoknot-1", evidenceSupport: 0.3 }
+  ],
+  candidates: [
+    {
+      index: 0, dotBracket: "..(((((..[[[[)))))......]]]]", type: "pseudoknot", topology: "pseudoknotted",
+      energy: -8.0204, effectiveEnergy: -8.0204, phase1Energy: -3.2, score: -100, crossingPairs: 8,
+      unpaired: 11,
+      pairs: [
+        { left: 3, right: 18, leftBase: "C", rightBase: "G", type: "C–G", layer: "primary", evidenceSupport: 0.2 },
+        { left: 10, right: 28, leftBase: "C", rightBase: "G", type: "C–G", layer: "pseudoknot-1", evidenceSupport: 0.3 }
+      ]
+    },
+    {
+      index: 1, dotBracket: "..(((((......)))))..........", type: "phase1", topology: "nested",
+      energy: -4.1, effectiveEnergy: -4.1, phase1Energy: -4.1, score: -80, crossingPairs: 0,
+      unpaired: 17,
+      pairs: [{ left: 3, right: 18, leftBase: "C", rightBase: "G", type: "C–G", layer: "primary", evidenceSupport: 0.2 }]
+    }
+  ]
+} } });
+const cplfoldResultHtml = context.window.Hyb2Pages.renderStructure(cplfoldState);
+assert.match(cplfoldResultHtml, /Pseudoknot candidate/);
+assert.match(cplfoldResultHtml, /HYB-derived CPLfold bonus matrix/);
+assert.match(cplfoldResultHtml, /data-feature-action="select-cplfold-candidate"/);
+assert.match(cplfoldResultHtml, /Download bonus matrix/);
+assert.match(cplfoldResultHtml, /pseudoknot-1/);
+const cplfoldApi = { renders: 0, toasts: [], render: function () { this.renders += 1; }, showToast: function (message) { this.toasts.push(message); } };
+assert.equal(context.window.Hyb2StructureUI.handleAction("select-cplfold-candidate", cplfoldState, cplfoldApi, { dataset: { candidateIndex: "1" } }), true);
+assert.equal(cplfoldState.structure.result.selectedCandidate, 1);
+assert.equal(cplfoldState.structure.result.topology, "nested");
+assert.equal(cplfoldState.structure.result.dotBracket, "..(((((......)))))..........");
+const cplfoldReport = context.window.Hyb2StructureUI.structureReport(cplfoldState, cplfoldState.structure.result);
+assert.equal(cplfoldReport.methodScope.cplfoldPurePythonBrowserExecution, true);
+assert.equal(cplfoldReport.methodScope.cplfoldHybBlockBonusMatrix, true);
+assert.equal(cplfoldReport.methodScope.numbaJitAvailable, false);
+assert.equal(cplfoldReport.prediction.selectedCandidateIndex, 1);
+assert.equal(cplfoldReport.prediction.selectedCandidateRank, 2);
+assert.equal(cplfoldReport.prediction.runtimeLoadMs, 600);
+assert.equal(cplfoldReport.prediction.foldElapsedMs, 300);
+assert.equal(cplfoldReport.prediction.evidenceMode, "hyb-blocks");
+assert.match(context.window.Hyb2StructureUI.cplfoldEvidenceTsv(cplfoldState.structure.result), /3\t20\t0\.800000/);
+assert.match(context.window.Hyb2StructureUI.cplfoldCandidatesTsv(cplfoldState.structure.result), /2\tyes\tphase1\tnested/);
+const cplfoldPairsTsv = context.window.Hyb2StructureUI.basePairTsv(cplfoldState.structure.result);
+assert.match(cplfoldPairsTsv, /rna_cofold_evidence\tmfe_kcal_per_mol\tevidence_kind\tevidence_support/);
+assert.match(cplfoldPairsTsv, /\t\tlog1p_hyb_bonus\t0\.2\tprimary\t-4\.10\tCPLfold/);
+const sequenceOnlyCplfoldHtml = context.window.Hyb2Pages.renderStructureResult(Object.assign({}, cplfoldState.structure.result, {
+  evidenceMode: "none",
+  evidenceSource: "none",
+  evidence: { source: "none", inputRecords: 0, bonusEntries: [] }
+}), null);
+assert.doesNotMatch(sequenceOnlyCplfoldHtml, /Download bonus matrix/,
+  "sequence-only CPLfold must not offer an empty HYB bonus export");
+assert.match(sequenceOnlyCplfoldHtml, /Download candidates/);
+
+const oversizedCplfoldState = structureState("none", "");
+Object.assign(oversizedCplfoldState.structure, {
+  engine: "cplfold",
+  source: "paste",
+  pastedSequence: "A".repeat(76),
+  cplfoldEvidence: "none",
+  cplfoldBeam: "20",
+  cplfoldMaxPhase1: "1",
+  cplfoldEnergyDelta: "5",
+  cplfoldEnergyModel: "DP09",
+  cplfoldAlpha: "0.5",
+  cplfoldBeta: "0"
+});
+const workersBeforeOversizedCplfold = workerInstances.length;
+assert.equal(context.window.Hyb2Structure.predict(oversizedCplfoldState, controllerApiForCplfold()), false);
+assert.equal(workerInstances.length, workersBeforeOversizedCplfold);
+
+function controllerApiForCplfold() {
+  return { render: function () {}, showToast: function (message) { assert.match(message, /limited to 75 nt/); } };
+}
+
 const pngEvents = { downloads: [], toasts: [], revoked: [] };
 const exportSvg = {
   attributes: { viewBox: "0 0 920 300", width: "100%", height: "300" },
@@ -561,6 +735,7 @@ function structureState(constraintMode, constraintText) {
     structureWorker: null,
     structure: {
       source: "paste",
+      engine: "viennarna",
       pastedSequence: "GCGCUUCGCC",
       selectedRecordIndex: null,
       minimumLoop: "3",

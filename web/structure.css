@@ -48,6 +48,15 @@
   color: var(--success);
 }
 
+.fold-status-cplfold {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: var(--accent-soft);
+}
+
+.fold-status-cplfold strong {
+  color: var(--accent);
+}
+
 .guided-fold-controls {
   display: grid;
   gap: 12px;
@@ -87,6 +96,22 @@
 .guided-input-summary strong {
   color: var(--success);
   font-size: 13px;
+}
+
+.cplfold-controls {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+}
+
+.cplfold-controls .structure-check input {
+  accent-color: var(--accent);
+}
+
+.cplfold-runtime-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .assembly-preview {
@@ -213,6 +238,15 @@
   color: var(--success);
 }
 
+.structure-cplfold-summary {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: var(--accent-soft);
+}
+
+.structure-cplfold-summary strong {
+  color: var(--accent);
+}
+
 .comrades-result {
   display: grid;
   gap: 14px;
@@ -296,6 +330,61 @@
 
 .compact-table {
   font-size: 11px;
+}
+
+.cplfold-bonus-visual {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 220px;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.cplfold-bonus-visual p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.cplfold-bonus-visual svg {
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.cplfold-candidate-table code {
+  display: block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cplfold-candidate-table tr.is-selected td {
+  background: var(--accent-soft);
+}
+
+.candidate-type {
+  display: inline-flex;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.candidate-type-pseudoknot {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .structure-metric {
@@ -509,6 +598,14 @@
 
   .comrades-stage-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cplfold-bonus-visual {
+    grid-template-columns: 1fr;
+  }
+
+  .cplfold-bonus-visual svg {
+    justify-self: center;
   }
 }
 

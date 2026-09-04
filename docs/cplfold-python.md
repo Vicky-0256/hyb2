@@ -14,11 +14,17 @@ a standard-library-only implementation: the complete predictor requires NumPy
 and Numba, and Numba uses LLVM JIT compilation. ViennaRNA is optional. SciPy
 and pysam are needed only by the optional PARIS BAM extraction script.
 
-The GitHub Pages workflow publishes only `web/`. GitHub Pages does not execute
-CPython or Numba, so this branch adds a reproducible local CLI layer; it does
-not silently present CPLfold as a browser folding engine. A separate browser
-port or a server-side execution layer would be required before CPLfold can be
-selected in the web interface.
+The `feature/cplfold-python` branch adds the reproducible local CLI layer. The
+separate `feature/cplfold-web` branch packages the same pure-Python sources,
+parameters, Pyodide 0.29.4, and NumPy 2.2.5 as a static GitHub Pages artifact.
+Pyodide does not provide Numba, so the browser bridge uses identity `njit`
+decorators and enforces a 75-nt maximum. The local CLI remains the supported
+route for longer workloads. No server-side execution layer is required.
+
+For HYB-guided browser runs, each eligible row contributes its two prepared
+reference intervals once to the original CPLfold/IRIS-style Gaussian,
+symmetric outer-product and `log1p` bonus transform. The browser does not use
+HYB overlap score or collapsed source-read count as matrix weights.
 
 ## Install and run
 

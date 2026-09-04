@@ -30,8 +30,13 @@ vm.runInContext(
 
 const data = context.window.Hyb2Data;
 const defaultStructure = data.defaultStructureState();
+assert.equal(defaultStructure.engine, "viennarna", "ViennaRNA should remain the default structure engine");
 assert.equal(defaultStructure.constraintMode, "none", "Structure folding should default to plain MFE mode");
 assert.equal(defaultStructure.constraintText, "", "Manual structure constraints should default to empty input");
+assert.equal(defaultStructure.cplfoldEvidence, "hyb-blocks", "CPLfold should default to the post-HYB evidence path when selected");
+assert.equal(defaultStructure.cplfoldBeam, "20");
+assert.equal(defaultStructure.cplfoldMaxPhase1, "3");
+assert.equal(defaultStructure.cplfoldEnergyModel, "DP09");
 
 const gappedFasta = data.parseFasta(">RNA_gap\nAC-G 1U\n");
 assert.equal(gappedFasta[0].sequence, "AC-G1U",

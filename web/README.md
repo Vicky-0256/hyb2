@@ -20,9 +20,10 @@ The repository workflow at `.github/workflows/deploy-pages.yml` builds and
 verifies this directory. Public artifact upload and deployment stay disabled
 unless the repository Actions variable `CPLFOLD_DISTRIBUTION_APPROVED` is set
 to `true`. Set it only after the CPLfold combined-distribution boundary below
-has qualified licence review or the required permission. Then choose **GitHub
-Actions** as the publishing source in **Settings → Pages** after the workflow
-is merged into `main`.
+has qualified licence review or the required permission. The published source
+is the dedicated `feature/cplfold-web` branch; `main` remains unchanged. Choose
+**GitHub Actions** as the publishing source in **Settings → Pages** before the
+first deployment.
 
 ## Privacy model
 

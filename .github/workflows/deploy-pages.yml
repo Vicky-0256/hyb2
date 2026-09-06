@@ -3,7 +3,7 @@ name: Deploy HYB2 Web Lite
 on:
   push:
     branches:
-      - main
+      - feature/cplfold-web
     paths:
       - "web/**"
       - "scripts/build-vienna-wasm.sh"

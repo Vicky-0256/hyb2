@@ -108,6 +108,10 @@
     app.innerHTML = state.summary ? renderWorkspace() : renderLanding();
     document.documentElement.dataset.theme = state.theme;
     app.dataset.density = state.density;
+    const themeColor = document.querySelector('meta[name="theme-color"]');
+    if (themeColor) {
+      themeColor.setAttribute("content", state.theme === "dark" ? "#132c47" : "#f5f8fa");
+    }
     document.title = state.summary
       ? pageTitle(state.activePage) + " · HYB2 Web Lite"
       : "HYB2 Web Lite";
@@ -150,12 +154,15 @@
   }
 
   function renderBrand() {
+    const logoAsset = state.theme === "dark"
+      ? "./assets/hyb2-logo-dark.png"
+      : "./assets/hyb2-logo.png";
     return [
       '<a class="brand" href="#/" aria-label="HYB2 Web Lite home">',
-      '  <span class="brand-mark"><img src="./assets/hyb2-logo-placeholder.svg" alt="Reserved HYB2 logo space"></span>',
+      '  <span class="brand-mark"><img src="' + logoAsset + '" alt="HYB2"></span>',
       "  <span>",
-      '    <span class="brand-name">HYB2 Web</span>',
-      '    <span class="brand-subtitle">Web Lite</span>',
+      '    <span class="brand-name">Web</span>',
+      '    <span class="brand-subtitle">Lite</span>',
       "  </span>",
       "</a>"
     ].join("");

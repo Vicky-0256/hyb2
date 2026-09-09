@@ -3,7 +3,7 @@
 ## Current asset state
 
 - **Product:** HYB2 Web Lite, a browser-local workspace for HYB RNA interaction files.
-- **Logo:** \`assets/hyb2-logo-placeholder.svg\` is an intentionally blank, local placeholder approved by the project owner on 2026-09-02. It must be replaced with the official HYB2 logo before a public brand launch.
+- **Logo:** \`assets/hyb2-logo.png\` is the light-theme HYB2 wordmark; \`assets/hyb2-logo-dark.png\` is used automatically for the dark theme.
 - **External network assets:** none at runtime. The deployed artifact self-hosts pinned ViennaRNA, Pyodide, NumPy, and CPLfold files; it deliberately loads no remote images, fonts, scripts, analytics, or CDN resources after deployment.
 
 ## Design system
@@ -12,7 +12,7 @@
 - **Primary viewport:** desktop research workflows at laptop distance; tablet and phone layouts preserve loading and summary reading.
 - **Visual temperature:** restrained, precise, and trustworthy.
 - **Capacity:** dense analysis controls after a file is loaded; generous whitespace before loading.
-- **Palette:** background \`#F6F8FB\`, surface \`#FFFFFF\`, ink \`#172033\`, muted \`#5F6B7A\`, border \`#DDE3EC\`, primary \`#176B87\`, primary-hover \`#12556C\`, accent \`#6D5BD0\`, success \`#167A5A\`, warning \`#A96614\`, error \`#B42318\`.
+- **Palette:** Teal \`#00A09D\`, Violet \`#6A4FF2\`, Navy \`#132C47\`; light canvas \`#F5F8FA\`, white surface, teal-soft surfaces, violet-soft analysis accents, and Navy text. Dark mode uses Navy surfaces with bright Teal and Violet controls.
 - **Typography:** locally available system sans for interface copy; locally available monospace for sequence, coordinates, and data values.
 - **Spacing:** 8 px base unit.
 - **Radius:** 12 px content surfaces; 8 px controls; compact status pills.

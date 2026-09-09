@@ -21,10 +21,9 @@
 }
 
 .workspace-header .brand-mark {
-  width: 30px;
-  height: 30px;
-  flex-basis: 30px;
-  border-radius: 8px;
+  width: 82px;
+  height: 38px;
+  flex-basis: 82px;
   box-shadow: none;
 }
 
@@ -612,7 +611,7 @@
   display: grid;
   padding: 20px;
   place-items: center;
-  background: rgb(20 30 44 / 35%);
+  background: rgb(19 44 71 / 42%);
 }
 
 .dialog {
@@ -621,7 +620,7 @@
   border: 1px solid var(--line);
   border-radius: calc(var(--radius-lg) + 2px);
   background: var(--surface);
-  box-shadow: 0 30px 70px rgb(20 30 44 / 24%);
+  box-shadow: 0 30px 70px rgb(19 44 71 / 24%);
 }
 
 .dialog h2 {
@@ -686,9 +685,9 @@
   width: min(700px, calc(100% - 40px));
   margin: 18vh auto;
   padding: 32px;
-  border: 1px solid #dde3ec;
+  border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fff;
-  color: #172033;
+  background: var(--surface);
+  color: var(--ink);
   font-family: var(--font-sans);
 }

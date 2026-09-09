@@ -1,12 +1,10 @@
 (function () {
   "use strict";
 
-  const VIRIDIS = [
-    [68, 1, 84],
-    [59, 82, 139],
-    [33, 145, 140],
-    [94, 201, 98],
-    [253, 231, 37]
+  const BRAND_SCALE = [
+    [19, 44, 71],
+    [0, 160, 157],
+    [106, 79, 242]
   ];
 
   function afterRender(state, api) {
@@ -1026,7 +1024,7 @@
     context.textAlign = "left";
     context.fillText(state.comparison.rnaX + " (X) × " + state.comparison.rnaY + " (Y)", geometry.left, 15);
     if (kind === "effect") {
-      context.fillText(state.comparison.conditionALabel + " enriched: red · " + state.comparison.conditionBLabel + " enriched: blue", geometry.left, 29);
+      context.fillText(state.comparison.conditionALabel + " enriched: violet · " + state.comparison.conditionBLabel + " enriched: teal", geometry.left, 29);
     }
     context.strokeStyle = line;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
@@ -1909,6 +1907,7 @@
     if (!visualExportReady(state, "contact")) {
       return "";
     }
+    const colors = exportColors();
     const matrix = state.contact.matrix;
     const width = 900;
     const height = 720;
@@ -1926,15 +1925,15 @@
     return [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + " " + height + '">',
-      '<rect width="100%" height="100%" fill="#ffffff"/>',
-      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="#dde3ec"/>',
+      '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
+      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.line + '"/>',
       rects,
-      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="#172033" stroke-width="1"/>',
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" font-family="monospace" font-size="12" fill="#5f6b7a">' + geometry.xStart + "</text>",
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" text-anchor="end" font-family="monospace" font-size="12" fill="#5f6b7a">' + (geometry.xEnd + matrix.binSize - 1) + "</text>",
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="12" fill="#5f6b7a">' + geometry.yStart + "</text>",
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="12" fill="#5f6b7a">' + (geometry.yEnd + matrix.binSize - 1) + "</text>",
-      '<text x="' + geometry.left + '" y="16" font-family="system-ui, sans-serif" font-size="15" fill="#172033">' + escapeXml(state.contact.rnaX) + " × " + escapeXml(state.contact.rnaY) + "</text>",
+      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '" stroke-width="1"/>',
+      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.xStart + "</text>",
+      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + (geometry.xEnd + matrix.binSize - 1) + "</text>",
+      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.yStart + "</text>",
+      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + (geometry.yEnd + matrix.binSize - 1) + "</text>",
+      '<text x="' + geometry.left + '" y="16" font-family="system-ui, sans-serif" font-size="15" fill="' + colors.ink + '">' + escapeXml(state.contact.rnaX) + " × " + escapeXml(state.contact.rnaY) + "</text>",
       "</svg>"
     ].join("");
   }
@@ -1944,23 +1943,24 @@
     if (!visualExportReady(state, "viewpoint")) {
       return "";
     }
+    const colors = exportColors();
     const width = 1040;
     const height = 300;
     const geometry = getViewpointGeometry(results, width, height);
     const bars = results.bins.map(function (bin, index) {
       const barHeight = geometry.max ? (bin.value / geometry.scaleMax) * geometry.plotHeight : 0;
       const selected = state.viewpoint.selection && state.viewpoint.selection.start === bin.start;
-      return '<rect x="' + (geometry.left + index * geometry.barWidth).toFixed(2) + '" y="' + (geometry.top + geometry.plotHeight - barHeight).toFixed(2) + '" width="' + Math.max(1, geometry.barWidth - .35).toFixed(2) + '" height="' + barHeight.toFixed(2) + '" fill="' + (selected ? "#6d5bd0" : "#176b87") + '"/>';
+      return '<rect x="' + (geometry.left + index * geometry.barWidth).toFixed(2) + '" y="' + (geometry.top + geometry.plotHeight - barHeight).toFixed(2) + '" width="' + Math.max(1, geometry.barWidth - .35).toFixed(2) + '" height="' + barHeight.toFixed(2) + '" fill="' + (selected ? colors.accent : colors.primary) + '"/>';
     }).join("");
     return [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">',
-      '<rect width="100%" height="100%" fill="#ffffff"/>',
-      '<line x1="' + geometry.left + '" y1="' + (geometry.top + geometry.plotHeight) + '" x2="' + (geometry.left + geometry.plotWidth) + '" y2="' + (geometry.top + geometry.plotHeight) + '" stroke="#dde3ec"/>',
+      '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
+      '<line x1="' + geometry.left + '" y1="' + (geometry.top + geometry.plotHeight) + '" x2="' + (geometry.left + geometry.plotWidth) + '" y2="' + (geometry.top + geometry.plotHeight) + '" stroke="' + colors.line + '"/>',
       bars,
-      '<text x="' + geometry.left + '" y="12" font-family="system-ui, sans-serif" font-size="14" fill="#172033">' + escapeXml(results.rna) + ' viewpoint</text>',
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 24) + '" font-family="monospace" font-size="11" fill="#5f6b7a">' + results.start + '</text>',
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#5f6b7a">' + results.end + '</text>',
+      '<text x="' + geometry.left + '" y="12" font-family="system-ui, sans-serif" font-size="14" fill="' + colors.ink + '">' + escapeXml(results.rna) + ' viewpoint</text>',
+      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 24) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + results.start + '</text>',
+      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + results.end + '</text>',
       '</svg>'
     ].join("");
   }
@@ -1970,6 +1970,7 @@
     if (!visualExportReady(state, "comparison")) {
       return "";
     }
+    const colors = exportColors();
     const width = 720;
     const height = 520;
     const geometry = getComparisonGeometry(result, width, height);
@@ -1981,16 +1982,16 @@
     return [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">',
-      '<rect width="100%" height="100%" fill="#ffffff"/>',
-      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="#dde3ec"/>',
+      '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
+      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.line + '"/>',
       cells,
-      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="#172033"/>',
-      '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" fill="#172033">' + escapeXml(state.comparison.rnaX) + ' (X) × ' + escapeXml(state.comparison.rnaY) + ' (Y) · Mean log2 effect</text>',
-      '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="#5f6b7a">' + escapeXml(state.comparison.conditionALabel) + ' enriched: red · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: blue</text>',
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="#5f6b7a">' + geometry.xStart + '</text>',
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#5f6b7a">' + (geometry.xEnd + result.binSize - 1) + '</text>',
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#5f6b7a">' + geometry.yStart + '</text>',
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#5f6b7a">' + (geometry.yEnd + result.binSize - 1) + '</text>',
+      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '"/>',
+      '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" fill="' + colors.ink + '">' + escapeXml(state.comparison.rnaX) + ' (X) × ' + escapeXml(state.comparison.rnaY) + ' (Y) · Mean log2 effect</text>',
+      '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal</text>',
+      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.xStart + '</text>',
+      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.xEnd + result.binSize - 1) + '</text>',
+      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.yStart + '</text>',
+      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.yEnd + result.binSize - 1) + '</text>',
       '</svg>'
     ].join("");
   }
@@ -2278,11 +2279,11 @@
 
   function viridis(ratio) {
     const bounded = Math.max(0, Math.min(1, ratio));
-    const scaled = bounded * (VIRIDIS.length - 1);
-    const index = Math.min(VIRIDIS.length - 2, Math.floor(scaled));
+    const scaled = bounded * (BRAND_SCALE.length - 1);
+    const index = Math.min(BRAND_SCALE.length - 2, Math.floor(scaled));
     const t = scaled - index;
-    const from = VIRIDIS[index];
-    const to = VIRIDIS[index + 1];
+    const from = BRAND_SCALE[index];
+    const to = BRAND_SCALE[index + 1];
     const red = Math.round(from[0] + (to[0] - from[0]) * t);
     const green = Math.round(from[1] + (to[1] - from[1]) * t);
     const blue = Math.round(from[2] + (to[2] - from[2]) * t);
@@ -2291,8 +2292,11 @@
 
   function effectColor(value) {
     const bounded = Math.max(-1, Math.min(1, value));
-    const center = [247, 249, 252];
-    const target = bounded >= 0 ? [193, 55, 62] : [39, 106, 181];
+    const dark = isDarkTheme();
+    const center = dark ? [19, 44, 71] : [245, 248, 250];
+    const target = bounded >= 0
+      ? (dark ? [154, 136, 255] : [106, 79, 242])
+      : [0, 160, 157];
     const ratio = Math.abs(bounded);
     const red = Math.round(center[0] + (target[0] - center[0]) * ratio);
     const green = Math.round(center[1] + (target[1] - center[1]) * ratio);
@@ -2302,12 +2306,50 @@
 
   function conservedColor(ratio) {
     const bounded = Math.max(0, Math.min(1, ratio));
-    const from = [243, 249, 245];
-    const to = [22, 122, 90];
+    const dark = isDarkTheme();
+    const from = dark ? [24, 54, 80] : [237, 249, 248];
+    const to = [0, 160, 157];
     const red = Math.round(from[0] + (to[0] - from[0]) * bounded);
     const green = Math.round(from[1] + (to[1] - from[1]) * bounded);
     const blue = Math.round(from[2] + (to[2] - from[2]) * bounded);
     return "rgb(" + red + ", " + green + ", " + blue + ")";
+  }
+
+  function exportColors() {
+    const dark = isDarkTheme();
+    const fallback = dark
+      ? {
+        surface: "#132c47",
+        line: "#2e4b66",
+        ink: "#ecf1f8",
+        muted: "#9eb1c3",
+        primary: "#00a09d",
+        accent: "#9a88ff"
+      }
+      : {
+        surface: "#ffffff",
+        line: "#dce7ec",
+        ink: "#132c47",
+        muted: "#607286",
+        primary: "#00a09d",
+        accent: "#6a4ff2"
+      };
+    if (typeof document === "undefined" || typeof getComputedStyle !== "function" || !document.documentElement) {
+      return fallback;
+    }
+    const style = getComputedStyle(document.documentElement);
+    return {
+      surface: style.getPropertyValue("--surface").trim() || fallback.surface,
+      line: style.getPropertyValue("--line").trim() || fallback.line,
+      ink: style.getPropertyValue("--ink").trim() || fallback.ink,
+      muted: style.getPropertyValue("--muted").trim() || fallback.muted,
+      primary: style.getPropertyValue("--primary").trim() || fallback.primary,
+      accent: style.getPropertyValue("--accent").trim() || fallback.accent
+    };
+  }
+
+  function isDarkTheme() {
+    return typeof document !== "undefined" && document.documentElement && document.documentElement.dataset.theme === "dark";
   }
 
   function clampBin(value, minimum, maximum, binSize) {

@@ -256,7 +256,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: 0 26px 66px rgb(28 45 67 / 20%);
+  box-shadow: 0 26px 66px rgb(19 44 71 / 20%);
 }
 
 .drawer-heading {

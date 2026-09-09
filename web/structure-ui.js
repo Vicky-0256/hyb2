@@ -24,12 +24,22 @@
       return true;
     }
 
+    if (action === "probe-cplfold-capacity") {
+      if (!window.Hyb2Structure || typeof window.Hyb2Structure.probeCplfoldCapacity !== "function") {
+        api.showToast("The local CPLfold capacity test is unavailable in this browser.");
+        return true;
+      }
+      window.Hyb2Structure.probeCplfoldCapacity(state, api);
+      return true;
+    }
+
     if (action === "cancel-structure") {
+      const capacityProbe = state.structure && state.structure.operation === "capacity";
       if (window.Hyb2Structure) {
         window.Hyb2Structure.cancel(state);
       }
       api.render();
-      api.showToast("Local structure prediction cancelled.");
+      api.showToast(capacityProbe ? "Browser CPLfold capacity test cancelled." : "Local structure prediction cancelled.");
       return true;
     }
 
@@ -162,6 +172,19 @@
     const constraintCount = Math.max(0, Number(result.constraintCount) || 0);
     const guided = result.constraintMode === "hyb-guided";
     const cplfold = result.engine === "CPLfold";
+    const capacity = cplfold && state.structure && state.structure.cplfoldCapacity
+      ? state.structure.cplfoldCapacity
+      : null;
+    const baselineLength = capacity && Number.isInteger(Number(capacity.baselineLength))
+      ? Number(capacity.baselineLength)
+      : 75;
+    const hardCeiling = capacity && Number.isInteger(Number(capacity.hardCeiling))
+      ? Number(capacity.hardCeiling)
+      : 500;
+    const capacityMatches = capacity && capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(state.structure);
+    const recommendedLength = capacityMatches
+      ? Math.max(baselineLength, Math.min(hardCeiling, Number(capacity.recommendedLength) || baselineLength))
+      : (result.maxSequenceLength || baselineLength);
     const selectedCandidateIndex = cplfold ? Math.max(0, Number(result.selectedCandidate) || 0) : null;
     return {
       application: "HYB2 Web Lite",
@@ -220,6 +243,7 @@
         elapsedMs: result.elapsedMs,
         runtimeLoadMs: cplfold ? result.runtimeLoadMs : null,
         foldElapsedMs: cplfold ? result.foldElapsedMs : null,
+        browserRequestMaximumLength: cplfold ? result.maxSequenceLength || null : null,
         comradesScore: guided ? result.comradesScore : null,
         matchedEvidencePairs: guided ? result.matchedEvidencePairs : null,
         structureType: cplfold ? result.structureType : null,
@@ -248,10 +272,13 @@
         cplfoldPseudoknotPrediction: cplfold,
         cplfoldHybBlockBonusMatrix: cplfold && result.evidenceSource === "hyb-block-bonus-matrix",
         numbaJitAvailable: cplfold ? false : null,
-        browserCplfoldMaximumLength: cplfold ? 75 : null,
+        browserCplfoldMaximumLength: cplfold ? recommendedLength : null,
+        browserCplfoldBaselineLength: cplfold ? baselineLength : null,
+        browserCplfoldHardCeiling: cplfold ? hardCeiling : null,
+        browserCplfoldCapacity: cplfold ? capacity : null,
         unafoldExecution: "external-cli-only",
         note: cplfold
-          ? "The browser ran the vendored pure-Python CPLfold two-phase algorithm in Pyodide. HYB-guided runs transform prepared arm intervals with the CPLfold IRIS-style Gaussian, symmetric outer-product and log1p bonus pipeline. Numba JIT is unavailable in this runtime, so sequences are limited to 75 nt."
+          ? "The browser ran the vendored pure-Python CPLfold two-phase algorithm in Pyodide. HYB-guided runs transform prepared arm intervals with the CPLfold IRIS-style Gaussian, symmetric outer-product and log1p bonus pipeline. Numba JIT is unavailable; the browser uses a local capacity probe to estimate a session-specific length up to its hard safety ceiling."
           : guided
           ? "The browser reproduced the ViennaRNA HYB2 post-HYB chain: per-row RNAcofold evidence, ranked stem construction, greedy compatible hard-constraint fitting, optional seeded randomised folds, and COMRADES support scoring."
           : constraintCount
@@ -259,6 +286,22 @@
           : "This is an unconstrained ViennaRNA global MFE fold. No HYB or RNAcofold evidence-derived constraints were generated."
       }
     };
+  }
+
+  function cplfoldProfileKey(structure) {
+    return [
+      profileValue(structure && structure.cplfoldEvidence, "hyb-blocks"),
+      profileValue(structure && structure.cplfoldBeam, "20"),
+      profileValue(structure && structure.cplfoldMaxPhase1, "3"),
+      profileValue(structure && structure.cplfoldEnergyDelta, "5"),
+      profileValue(structure && structure.cplfoldEnergyModel, "DP09").toUpperCase(),
+      profileValue(structure && structure.cplfoldAlpha, "0.5"),
+      profileValue(structure && structure.cplfoldBeta, "0")
+    ].join("|");
+  }
+
+  function profileValue(value, fallback) {
+    return value === undefined || value === null || value === "" ? fallback : String(value);
   }
 
   function buildArcDiagram(result, selectedNucleotide) {

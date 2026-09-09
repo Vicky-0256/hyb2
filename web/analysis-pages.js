@@ -631,11 +631,12 @@
       selectableRecords.push(selectedStructureRecord);
     }
     const length = sequenceInfo.sequence ? sequenceInfo.sequence.length : 0;
-    const lengthNotice = structureLengthNotice(length, structure.allowLarge, cplfold ? "cplfold" : "viennarna");
+    const lengthNotice = structureLengthNotice(length, structure.allowLarge, cplfold ? "cplfold" : "viennarna", structure);
     const running = structure.status === "running";
     const largeEnsembleNeedsConsent = guidedConstraintMode && Number(structure.randomFoldCount) > 100 && !structure.allowLargeEnsemble;
+    const cplfoldLengthUnavailable = cplfold && cplfoldCannotRun(length, structure);
     const unavailable = !sequenceInfo.sequence || !!sequenceInfo.error ||
-      (cplfold ? length > 75 : (length > 3000 || (length > 2000 && !structure.allowLarge))) ||
+      (cplfold ? cplfoldLengthUnavailable : (length > 3000 || (length > 2000 && !structure.allowLarge))) ||
       largeEnsembleNeedsConsent;
     const methodBadge = cplfold
       ? "CPLfold + Pyodide · Browser"
@@ -676,7 +677,7 @@
         : '<div class="fold-status fold-status-mfe"><strong>Plain minimum-free-energy mode</strong><p>Runs the deployed ViennaRNA WebAssembly engine in a dedicated worker without base-pair constraints.</p></div>',
       !cplfold && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : "",
       running ? renderStructureProgress(structure) : "",
-      running ? '<button class="button button-secondary" type="button" data-feature-action="cancel-structure">Cancel prediction</button>' : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable ? " disabled" : "") + ">" + actionLabel + "</button>",
+      running ? '<button class="button button-secondary" type="button" data-feature-action="cancel-structure">' + (structure.operation === "capacity" ? "Cancel capacity test" : "Cancel prediction") + '</button>' : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable ? " disabled" : "") + ">" + actionLabel + "</button>",
       "</section>",
       '<section class="structure-result data-card">',
       '<div class="card-title-row"><div><h2>' + (structure.result ? "Structure result" : "Sequence preparation") + '</h2><span class="card-note">' + (structure.result && structure.result.label ? escape(structure.result.label) : (sequenceInfo.label ? escape(sequenceInfo.label) : "Choose a source")) + '</span></div><span class="card-kicker">' + format(structure.result && structure.result.sequence ? structure.result.sequence.length : length) + " nt</span></div>",
@@ -685,7 +686,7 @@
       structure.status === "error" ? '<div class="notice notice-error">' + escape(structure.message || (cplfold ? "Browser CPLfold could not finish the structure prediction." : "ViennaRNA WebAssembly could not finish the structure prediction.")) + "</div>" : "",
       structure.result ? renderStructureResult(structure.result, structure.selectedNucleotide) : renderStructurePreparation(sequenceInfo),
       cplfold
-        ? '<div class="method-limit"><strong>Browser execution boundary</strong><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. It is capped at 75 nt. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. Longer runs remain available through the local <code>bin/cplfold</code> command. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span></div>'
+        ? '<div class="method-limit"><strong>Browser execution boundary</strong><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. Longer or Numba-accelerated runs remain available through the local <code>bin/cplfold</code> command. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span></div>'
         : guidedConstraintMode
         ? '<div class="method-limit"><strong>Compatibility boundary</strong><span>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. UNAFold remains an optional external CLI compatibility path, and pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</span></div>'
         : '<div class="method-limit"><strong>Scope</strong><span>Choose HYB-guided RNAcofold evidence to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</span></div>',
@@ -724,8 +725,39 @@
         { value: "RE", label: "Rivas–Eddy" }
       ], "structure-control") + "</div>",
       '<div class="control-grid">' + renderTextControl("Evidence alpha", "cplfoldAlpha", structure.cplfoldAlpha || "0.5", "0.5", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + renderTextControl("Pseudoknot beta", "cplfoldBeta", structure.cplfoldBeta || "0", "0", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + "</div>",
+      renderCplfoldCapacity(structure),
       '<p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p>',
       "</section>"
+    ].join("");
+  }
+
+  function renderCplfoldCapacity(structure) {
+    const capacity = cplfoldCapacity(structure);
+    const profileMatches = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
+    let headline = "Baseline " + format(capacity.baselineLength) + " nt";
+    let detail = "Run a short local benchmark to estimate a longer limit for this browser.";
+    if (capacity.status === "probing") {
+      headline = "Measuring local capacity…";
+      detail = "The Pyodide worker is running a representative " + format(capacity.probeLength || 75) + " nt CPLfold fold.";
+    } else if (capacity.status === "ready" && profileMatches) {
+      headline = "Recommended up to " + format(capacity.recommendedLength) + " nt";
+      detail = "Estimated from a " + format(capacity.probeLength || 75) + " nt run in " + formatDuration(capacity.foldElapsedMs) + ". Retest after changing CPLfold settings.";
+    } else if (capacity.status === "ready") {
+      headline = "Retest required";
+      detail = "CPLfold settings changed after the last capacity measurement.";
+    } else if (capacity.status === "error") {
+      headline = "Baseline " + format(capacity.baselineLength) + " nt";
+      detail = capacity.message || "The capacity test could not finish; the conservative baseline remains available.";
+    } else if (capacity.status === "cancelled") {
+      detail = capacity.message || "The capacity test was cancelled; the conservative baseline remains available.";
+    }
+    const buttonLabel = capacity.status === "ready" ? "Measure again" : "Measure browser capacity";
+    return [
+      '<div class="cplfold-capacity" aria-live="polite">',
+      '<div class="cplfold-capacity-row"><div><span class="drawer-kicker">Browser capacity</span><strong>' + escape(headline) + '</strong><small>' + escape(detail) + '</small></div>',
+      '<button class="button button-secondary" type="button" data-feature-action="probe-cplfold-capacity"' + (structure.status === "running" ? " disabled" : "") + '>' + buttonLabel + '</button></div>',
+      '<small class="cplfold-capacity-footnote">The recommendation is session-specific and conservative. It is an estimate, not a guarantee; the absolute browser ceiling is ' + format(capacity.hardCeiling) + ' nt.</small>',
+      '</div>'
     ].join("");
   }
 
@@ -761,10 +793,11 @@
   function renderStructureProgress(structure) {
     const progress = Math.max(0, Math.min(100, Number(structure.progress) || 0));
     const cplfold = structure.engine === "cplfold";
+    const capacity = structure.operation === "capacity";
     return [
       '<div class="structure-progress" role="status" aria-live="polite">',
-      '<div><strong>Predicting locally</strong><span>' + escape(structure.message || (cplfold ? "Preparing CPLfold calculation…" : "Preparing ViennaRNA MFE calculation…")) + "</span></div>",
-      '<div class="progress-bar" role="progressbar" aria-label="' + (cplfold ? "CPLfold" : "ViennaRNA") + ' structure prediction progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + progress + '"><span style="width:' + progress + '%"></span></div>',
+      '<div><strong>' + (capacity ? "Measuring browser capacity" : "Predicting locally") + '</strong><span>' + escape(structure.message || (capacity ? "Preparing the local CPLfold capacity test…" : (cplfold ? "Preparing CPLfold calculation…" : "Preparing ViennaRNA MFE calculation…"))) + "</span></div>",
+      '<div class="progress-bar" role="progressbar" aria-label="' + (capacity ? "CPLfold browser capacity test" : (cplfold ? "CPLfold" : "ViennaRNA") + ' structure prediction') + ' progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + progress + '"><span style="width:' + progress + '%"></span></div>',
       "</div>"
     ].join("");
   }
@@ -1106,10 +1139,83 @@
     return (state.records || []).find(function (record) { return String(record.index) === String(index); }) || null;
   }
 
-  function structureLengthNotice(length, allowLarge, engine) {
+  function cplfoldCapacity(structure) {
+    const raw = structure && structure.cplfoldCapacity && typeof structure.cplfoldCapacity === "object"
+      ? structure.cplfoldCapacity
+      : {};
+    const baseline = Math.min(500, positiveInteger(raw.baselineLength, 75));
+    const hardCeiling = Math.max(baseline, Math.min(500, positiveInteger(raw.hardCeiling, 500)));
+    return {
+      status: ["unknown", "probing", "ready", "error", "cancelled"].indexOf(raw.status) === -1 ? "unknown" : raw.status,
+      baselineLength: baseline,
+      hardCeiling: hardCeiling,
+      recommendedLength: Math.max(baseline, Math.min(hardCeiling, positiveInteger(raw.recommendedLength, baseline))),
+      probeLength: positiveInteger(raw.probeLength, baseline),
+      foldElapsedMs: Number(raw.foldElapsedMs),
+      profileKey: String(raw.profileKey || ""),
+      message: String(raw.message || "")
+    };
+  }
+
+  function positiveInteger(value, fallback) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  function cplfoldProfileKey(structure) {
+    return [
+      profileValue(structure && structure.cplfoldEvidence, "hyb-blocks"),
+      profileValue(structure && structure.cplfoldBeam, "20"),
+      profileValue(structure && structure.cplfoldMaxPhase1, "3"),
+      profileValue(structure && structure.cplfoldEnergyDelta, "5"),
+      profileValue(structure && structure.cplfoldEnergyModel, "DP09").toUpperCase(),
+      profileValue(structure && structure.cplfoldAlpha, "0.5"),
+      profileValue(structure && structure.cplfoldBeta, "0")
+    ].join("|");
+  }
+
+  function profileValue(value, fallback) {
+    return value === undefined || value === null || value === "" ? fallback : String(value);
+  }
+
+  function cplfoldCannotRun(length, structure) {
+    const capacity = cplfoldCapacity(structure);
+    if (length > capacity.hardCeiling || length <= capacity.baselineLength) {
+      return length > capacity.hardCeiling;
+    }
+    return capacity.status !== "ready" ||
+      capacity.profileKey !== cplfoldProfileKey(structure) ||
+      length > capacity.recommendedLength;
+  }
+
+  function formatDuration(value) {
+    const milliseconds = Number(value);
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) {
+      return "an unknown time";
+    }
+    if (milliseconds < 1000) {
+      return Math.round(milliseconds) + " ms";
+    }
+    return (milliseconds / 1000).toFixed(1) + " s";
+  }
+
+  function structureLengthNotice(length, allowLarge, engine, structure) {
     if (engine === "cplfold") {
-      if (length > 75) {
-        return "Browser CPLfold is capped at 75 nt because Pyodide runs this pure-Python implementation without Numba JIT. Select a shorter region or use bin/cplfold locally.";
+      const capacity = cplfoldCapacity(structure);
+      if (length > capacity.hardCeiling) {
+        return "Browser CPLfold has a hard safety ceiling of " + format(capacity.hardCeiling) + " nt in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";
+      }
+      if (length > capacity.baselineLength && capacity.status === "probing") {
+        return "The browser CPLfold capacity test is running. Wait for it to finish before predicting this " + format(length) + " nt sequence.";
+      }
+      if (length > capacity.baselineLength && capacity.status !== "ready") {
+        return "This " + format(length) + " nt sequence is above the browser baseline of " + format(capacity.baselineLength) + " nt. Run the local capacity test before predicting.";
+      }
+      if (length > capacity.baselineLength && capacity.profileKey !== cplfoldProfileKey(structure)) {
+        return "CPLfold settings changed after the last browser capacity test. Measure capacity again before predicting this sequence.";
+      }
+      if (length > capacity.recommendedLength) {
+        return "This browser capacity test recommends up to " + format(capacity.recommendedLength) + " nt for the current settings. Select a shorter region, reduce the search settings, or retest this browser.";
       }
       if (length > 50) {
         return "This " + format(length) + " nt CPLfold search may take tens of seconds in Pyodide. It runs in a worker and can be cancelled safely.";

@@ -19,8 +19,9 @@ from typing import Any
 
 
 CPLFOLD_SOURCE_REVISION = "af49f8e"
-BRIDGE_VERSION = "2"
-MAX_SEQUENCE_LENGTH = 75
+BRIDGE_VERSION = "3"
+DEFAULT_MAX_SEQUENCE_LENGTH = 75
+BROWSER_HARD_MAX_SEQUENCE_LENGTH = 500
 MAX_EVIDENCE_RECORDS = 50_000
 ENERGY_MODELS = {"DP03", "DP09", "CC06", "CC09", "RE"}
 BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">"}
@@ -84,17 +85,30 @@ def _integer(value: Any, minimum: int, maximum: int, label: str) -> int:
     return int(parsed)
 
 
-def _sequence(value: Any) -> str:
+def _sequence(value: Any, maximum: int = DEFAULT_MAX_SEQUENCE_LENGTH) -> str:
     sequence = re.sub(r"\s+", "", str(value or "")).upper().replace("T", "U")
     if not sequence:
         raise ValueError("CPLfold requires an RNA sequence.")
     if re.search(r"[^ACGU]", sequence):
         raise ValueError("CPLfold accepts only A, C, G and U.")
-    if len(sequence) > MAX_SEQUENCE_LENGTH:
+    if len(sequence) > BROWSER_HARD_MAX_SEQUENCE_LENGTH:
         raise ValueError(
-            f"Browser CPLfold is limited to {MAX_SEQUENCE_LENGTH} nt because Pyodide runs this pure-Python build without Numba JIT."
+            f"Browser CPLfold has a hard safety ceiling of {BROWSER_HARD_MAX_SEQUENCE_LENGTH} nt in this pure-Python Pyodide build."
+        )
+    if len(sequence) > maximum:
+        raise ValueError(
+            f"Browser CPLfold is limited to {maximum} nt for this capacity-tested request."
         )
     return sequence
+
+
+def _request_maximum(value: Any) -> int:
+    return _integer(
+        DEFAULT_MAX_SEQUENCE_LENGTH if value is None else value,
+        1,
+        BROWSER_HARD_MAX_SEQUENCE_LENGTH,
+        "Browser CPLfold maximum sequence length",
+    )
 
 
 def _normalise_arms(raw_arms: Any, sequence_length: int) -> list[tuple[int, int, int, int]]:
@@ -273,7 +287,8 @@ def _candidate(
 
 
 def fold(payload: dict[str, Any]) -> dict[str, Any]:
-    sequence = _sequence(payload.get("sequence"))
+    maximum_sequence_length = _request_maximum(payload.get("maxSequenceLength"))
+    sequence = _sequence(payload.get("sequence"), maximum_sequence_length)
     beam_size = _integer(payload.get("beamSize", 20), 1, 200, "Beam size")
     max_phase1 = _integer(payload.get("maxPhase1", 3), 1, 20, "Phase-1 candidate count")
     energy_delta = _number(payload.get("energyDelta", 5), 0.0, 50.0, "Energy delta")
@@ -321,6 +336,7 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
         "engineVersion": CPLFOLD_SOURCE_REVISION,
         "bridgeVersion": BRIDGE_VERSION,
         "runtime": "Pyodide 0.29.4; Python 3.13.2; NumPy 2.2.5; Numba identity fallback",
+        "maxSequenceLength": maximum_sequence_length,
         "sequence": sequence,
         "dotBracket": best["dotBracket"],
         "pairs": best["pairs"],

@@ -558,6 +558,8 @@ assert.match(analysisPagesSource, /available\.length > 750/,
   "large RNA collections must switch away from an unbounded native select");
 assert.match(analysisPagesSource, /rnas\.slice\(0, 500\)/);
 assert.match(analysisPagesSource, /fasta\.sequences\.slice\(0, 500\)/);
+assert.match(analysisPagesSource, /data-feature-action="probe-cplfold-capacity"/);
+assert.match(fs.readFileSync(path.join(repository, "web", "cplfold.worker.mjs"), "utf8"), /cplfold-capacity/);
 assert.doesNotMatch(analysisPagesSource, /rnas\.map[\s\S]{0,300}fasta\.sequences\.map/,
   "FASTA mapping controls must not build an RNA-by-reference Cartesian option set");
 assert.match(appSource, /function handleHashChange\(\)\s*{\s*const previousPage = state\.activePage;\s*syncRoute\(\);\s*render\(\);[\s\S]*?previousPage !== state\.activePage[\s\S]*?window\.scrollTo\(0, 0\)/,

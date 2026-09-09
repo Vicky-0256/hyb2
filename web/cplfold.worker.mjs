@@ -6,24 +6,31 @@
  * worker or the browser tab.
  */
 
-const MAX_SEQUENCE_LENGTH = 75;
+const BASELINE_SEQUENCE_LENGTH = 75;
+const HARD_MAX_SEQUENCE_LENGTH = 500;
+const CAPACITY_PROBE_LENGTH = 75;
 const RUNTIME_DIRECTORY = new URL("./vendor/pyodide-cplfold/", self.location.href);
 const PYODIDE_MODULE_URL = new URL("pyodide.mjs", RUNTIME_DIRECTORY);
 const EXPECTED_CPLFOLD_REVISION = "af49f8e";
-const EXPECTED_BRIDGE_VERSION = "2";
+const EXPECTED_BRIDGE_VERSION = "3";
 const WORKER_BUILD = new URL(self.location.href).searchParams.get("build") || "local";
 
 let runtimePromise = null;
 
 self.onmessage = async function (event) {
   const message = event.data || {};
+  if (message.type === "cplfold-capacity") {
+    await runCapacityProbe(message);
+    return;
+  }
   if (message.type !== "cplfold") {
     return;
   }
 
   try {
     const sequence = String(message.sequence || "").toUpperCase().replace(/T/g, "U");
-    validateSequence(sequence);
+    const maximumSequenceLength = requestedMaximum(message.maxSequenceLength);
+    validateSequence(sequence, maximumSequenceLength);
     const requestStartedAt = Date.now();
     postProgress("Loading the local Python WebAssembly runtime", 5, { phase: "runtime" });
     const runtimeStartedAt = Date.now();
@@ -50,7 +57,8 @@ self.onmessage = async function (event) {
       maxPhase1: message.maxPhase1,
       energyModel: message.energyModel,
       alpha: message.alpha,
-      beta: message.beta
+      beta: message.beta,
+      maxSequenceLength: maximumSequenceLength
     }));
     const result = JSON.parse(String(response));
     result.foldElapsedMs = Date.now() - startedAt;
@@ -73,6 +81,87 @@ self.onmessage = async function (event) {
     });
   }
 };
+
+async function runCapacityProbe(message) {
+  try {
+    const requestStartedAt = Date.now();
+    const probeLength = probeLengthValue(message.probeLength);
+    const sequence = buildProbeSequence(probeLength);
+    const evidenceMode = message.evidenceMode === "hyb-blocks" ? "hyb-blocks" : "none";
+    const evidenceArms = evidenceMode === "hyb-blocks" ? buildProbeEvidenceArms(probeLength) : [];
+    postProgress("Loading the local Python WebAssembly runtime", 5, {
+      phase: "runtime",
+      operation: "capacity"
+    });
+    const runtimeStartedAt = Date.now();
+    const runtime = await getRuntime();
+    const runtimeLoadMs = Date.now() - runtimeStartedAt;
+
+    postProgress("Preparing a representative " + probeLength + " nt sequence", 46, {
+      phase: "capacity",
+      operation: "capacity"
+    });
+    await yieldToEventLoop();
+    postProgress("Running the local CPLfold capacity probe", 56, {
+      phase: "capacity",
+      operation: "capacity"
+    });
+
+    const startedAt = Date.now();
+    const response = runtime.bridge.fold_json(JSON.stringify({
+      sequence: sequence,
+      evidenceMode: evidenceMode,
+      evidenceArms: evidenceArms,
+      beamSize: message.beamSize,
+      maxPhase1: message.maxPhase1,
+      energyDelta: message.energyDelta,
+      energyModel: message.energyModel,
+      alpha: message.alpha,
+      beta: message.beta,
+      maxSequenceLength: HARD_MAX_SEQUENCE_LENGTH
+    }));
+    const result = JSON.parse(String(response));
+    if (result.engineVersion !== EXPECTED_CPLFOLD_REVISION || result.bridgeVersion !== EXPECTED_BRIDGE_VERSION) {
+      throw new Error("The loaded CPLfold source does not match this web worker build.");
+    }
+    const foldElapsedMs = Date.now() - startedAt;
+    postProgress("Recording the browser capacity estimate", 96, {
+      phase: "capacity",
+      operation: "capacity"
+    });
+    self.postMessage({
+      type: "capacity-complete",
+      sample: {
+        length: probeLength,
+        foldElapsedMs: foldElapsedMs,
+        elapsedMs: Date.now() - requestStartedAt,
+        candidateCount: (result.candidates || []).length
+      },
+      runtimeLoadMs: runtimeLoadMs,
+      elapsedMs: Date.now() - requestStartedAt,
+      runtimeManifest: {
+        buildCommit: runtime.manifest.buildCommit,
+        archiveSha256: runtime.manifest.cplfoldArchiveSha256
+      },
+      hardware: browserHardwareProfile(),
+      parameters: {
+        beamSize: result.parameters && result.parameters.beamSize,
+        maxPhase1: result.parameters && result.parameters.maxPhase1,
+        energyDelta: result.parameters && result.parameters.energyDelta,
+        energyModel: result.parameters && result.parameters.energyModel,
+        alpha: result.parameters && result.parameters.alpha,
+        beta: result.parameters && result.parameters.beta,
+        evidenceMode: evidenceMode
+      }
+    });
+  } catch (error) {
+    self.postMessage({
+      type: "error",
+      operation: "capacity",
+      message: readableError(error)
+    });
+  }
+}
 
 function getRuntime() {
   if (!runtimePromise) {
@@ -178,19 +267,81 @@ async function sha256Hex(bytes) {
   return Array.from(digest).map(function (value) { return value.toString(16).padStart(2, "0"); }).join("");
 }
 
-function validateSequence(sequence) {
+function requestedMaximum(value) {
+  if (value === undefined || value === null || value === "") {
+    return BASELINE_SEQUENCE_LENGTH;
+  }
+  const maximum = Number(value);
+  if (!Number.isInteger(maximum) || maximum < 1) {
+    throw new Error("Browser CPLfold maximum sequence length must be a positive whole number.");
+  }
+  if (maximum > HARD_MAX_SEQUENCE_LENGTH) {
+    throw new Error("Browser CPLfold has a hard safety ceiling of " + HARD_MAX_SEQUENCE_LENGTH + " nt.");
+  }
+  return maximum;
+}
+
+function validateSequence(sequence, maximum) {
   if (!sequence) {
     throw new Error("Choose a valid RNA sequence first.");
   }
   if (/[^ACGU]/.test(sequence)) {
     throw new Error("CPLfold accepts only A, C, G and U.");
   }
-  if (sequence.length > MAX_SEQUENCE_LENGTH) {
+  if (sequence.length > HARD_MAX_SEQUENCE_LENGTH) {
     throw new Error(
-      "Browser CPLfold is limited to " + MAX_SEQUENCE_LENGTH +
-      " nt because this Pyodide build runs without Numba JIT. Select a shorter reference region."
+      "Browser CPLfold has a hard safety ceiling of " + HARD_MAX_SEQUENCE_LENGTH +
+      " nt in this pure-Python Pyodide build. Select a shorter reference region."
     );
   }
+  if (sequence.length > maximum) {
+    throw new Error(
+      "Browser CPLfold is limited to " + maximum +
+      " nt for this capacity-tested request. Run the browser capacity test again or select a shorter region."
+    );
+  }
+}
+
+function probeLengthValue(value) {
+  if (value === undefined || value === null || value === "") {
+    return CAPACITY_PROBE_LENGTH;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 25 || parsed > CAPACITY_PROBE_LENGTH) {
+    throw new Error("The browser CPLfold capacity probe length must be a whole number from 25 to " + CAPACITY_PROBE_LENGTH + ".");
+  }
+  return parsed;
+}
+
+function buildProbeSequence(length) {
+  const motif = "GCAU";
+  let sequence = "";
+  while (sequence.length < length) {
+    sequence += motif;
+  }
+  return sequence.slice(0, length);
+}
+
+function buildProbeEvidenceArms(length) {
+  const armLength = Math.min(8, Math.max(4, Math.floor(length / 8)));
+  return [{
+    oneStart: 2,
+    oneEnd: 1 + armLength,
+    twoStart: length - armLength,
+    twoEnd: length - 1
+  }];
+}
+
+function browserHardwareProfile() {
+  const browserNavigator = typeof navigator === "object" ? navigator : null;
+  return {
+    hardwareConcurrency: browserNavigator && Number.isInteger(browserNavigator.hardwareConcurrency)
+      ? browserNavigator.hardwareConcurrency
+      : null,
+    deviceMemory: browserNavigator && Number.isFinite(Number(browserNavigator.deviceMemory))
+      ? Number(browserNavigator.deviceMemory)
+      : null
+  };
 }
 
 function postProgress(stage, percent, detail) {

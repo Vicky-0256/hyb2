@@ -53,12 +53,15 @@ Manual pairs must be in range, non-crossing canonical or G–U pairs, satisfy th
 
 **CPLfold pseudoknot candidates** run the vendored pure-Python two-phase
 algorithm in Pyodide 0.29.4 with NumPy 2.2.5. Pyodide does not ship Numba, so
-the browser bridge replaces `numba.njit` with an identity decorator and caps
-the selected sequence at 75 nt. CPLfold uses its bundled 37 °C energy tables;
+the browser bridge replaces `numba.njit` with an identity decorator. The
+structure page measures a representative local run when a longer request is
+needed and derives a conservative session-specific length recommendation. The
+bridge and worker retain a 500-nt hard safety ceiling because CPLfold allocates
+quadratic sequence-state arrays. CPLfold uses its bundled 37 °C energy tables;
 the separate ViennaRNA temperature control does not apply. HYB block evidence is currently restricted to
 one mapped reference region; this avoids the original Vienna workflow's 100-nt
-artificial spacer becoming foldable CPLfold sequence. Longer CPLfold jobs use
-the local `bin/cplfold` command.
+artificial spacer becoming foldable CPLfold sequence. Longer or Numba-accelerated
+CPLfold jobs use the local `bin/cplfold` command.
 
 The vendored CPLfold snapshot has an unresolved combined-distribution licence
 boundary. Review `third_party/cplfold/THIRD_PARTY_NOTICES.md` and obtain the

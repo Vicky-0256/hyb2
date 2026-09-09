@@ -37,6 +37,10 @@ assert.equal(defaultStructure.cplfoldEvidence, "hyb-blocks", "CPLfold should def
 assert.equal(defaultStructure.cplfoldBeam, "20");
 assert.equal(defaultStructure.cplfoldMaxPhase1, "3");
 assert.equal(defaultStructure.cplfoldEnergyModel, "DP09");
+assert.equal(defaultStructure.cplfoldCapacity.status, "unknown");
+assert.equal(defaultStructure.cplfoldCapacity.baselineLength, 75);
+assert.equal(defaultStructure.cplfoldCapacity.recommendedLength, 75);
+assert.equal(defaultStructure.cplfoldCapacity.hardCeiling, 500);
 
 const gappedFasta = data.parseFasta(">RNA_gap\nAC-G 1U\n");
 assert.equal(gappedFasta[0].sequence, "AC-G1U",

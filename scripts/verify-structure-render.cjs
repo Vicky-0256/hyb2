@@ -365,7 +365,8 @@ assert.match(cplfoldSetup, /CPLfold \+ Pyodide · Browser/);
 assert.match(cplfoldSetup, /HYB block bonus matrix/);
 assert.match(cplfoldSetup, /1 eligible HYB row/);
 assert.match(cplfoldSetup, /Predict CPLfold candidates/);
-assert.match(cplfoldSetup, /capped at 75 nt/);
+assert.match(cplfoldSetup, /Baseline 75 nt/);
+assert.match(cplfoldSetup, /data-feature-action="probe-cplfold-capacity"/);
 assert.doesNotMatch(cplfoldSetup, /Minimum hairpin loop/);
 const cplfoldPrepared = context.window.Hyb2Pages.getStructureSequence(cplfoldState);
 assert.equal(cplfoldPrepared.sequence, "GGCGCGGCACCGUCCGCGGAACAAACGG");
@@ -399,7 +400,7 @@ cplfoldWorker.onmessage({ data: { type: "complete", result: {
   model: "LinearFold Vienna-mode scoring with CPLfold/HotKnots DP09 energy ranking",
   engine: "CPLfold",
   engineVersion: "af49f8e",
-  bridgeVersion: "2",
+  bridgeVersion: "3",
   runtime: "Pyodide test runtime",
   dotBracket: "..(((((..[[[[)))))......]]]]",
   energy: -8.0204,
@@ -466,6 +467,8 @@ const cplfoldReport = context.window.Hyb2StructureUI.structureReport(cplfoldStat
 assert.equal(cplfoldReport.methodScope.cplfoldPurePythonBrowserExecution, true);
 assert.equal(cplfoldReport.methodScope.cplfoldHybBlockBonusMatrix, true);
 assert.equal(cplfoldReport.methodScope.numbaJitAvailable, false);
+assert.equal(cplfoldReport.methodScope.browserCplfoldBaselineLength, 75);
+assert.equal(cplfoldReport.methodScope.browserCplfoldHardCeiling, 500);
 assert.equal(cplfoldReport.prediction.selectedCandidateIndex, 1);
 assert.equal(cplfoldReport.prediction.selectedCandidateRank, 2);
 assert.equal(cplfoldReport.prediction.runtimeLoadMs, 600);
@@ -503,7 +506,7 @@ assert.equal(context.window.Hyb2Structure.predict(oversizedCplfoldState, control
 assert.equal(workerInstances.length, workersBeforeOversizedCplfold);
 
 function controllerApiForCplfold() {
-  return { render: function () {}, showToast: function (message) { assert.match(message, /limited to 75 nt/); } };
+  return { render: function () {}, showToast: function (message) { assert.match(message, /capacity test/); } };
 }
 
 const pngEvents = { downloads: [], toasts: [], revoked: [] };

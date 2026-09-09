@@ -114,6 +114,49 @@
   line-height: 1.5;
 }
 
+.cplfold-capacity {
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.cplfold-capacity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cplfold-capacity-row > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cplfold-capacity-row strong {
+  color: var(--primary);
+  font-size: 13px;
+}
+
+.cplfold-capacity-row small,
+.cplfold-capacity-footnote {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.cplfold-capacity-row .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cplfold-capacity-footnote {
+  margin: 0;
+}
+
 .assembly-preview {
   display: grid;
   gap: 8px;
@@ -617,6 +660,15 @@
   .structure-setup .card-title-row {
     align-items: flex-start;
     flex-wrap: wrap;
+  }
+
+  .cplfold-capacity-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .cplfold-capacity-row .button {
+    width: 100%;
   }
 
   .structure-setup .card-title-row .method-badge {

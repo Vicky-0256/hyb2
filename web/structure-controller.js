@@ -3,7 +3,124 @@
 
   const MAX_SEQUENCE_LENGTH = 3000;
   const ADVANCED_SEQUENCE_LENGTH = 2000;
-  const CPLFOLD_MAX_SEQUENCE_LENGTH = 75;
+  const CPLFOLD_BASELINE_SEQUENCE_LENGTH = 75;
+  const CPLFOLD_HARD_MAX_SEQUENCE_LENGTH = 500;
+  const CPLFOLD_CAPACITY_PROBE_LENGTH = 75;
+  const CPLFOLD_CAPACITY_TARGET_MS = 45000;
+  const CPLFOLD_CAPACITY_SAFETY_FACTOR = 0.65;
+  const CPLFOLD_CAPACITY_TIMEOUT_MS = 60000;
+
+  function ensureCplfoldCapacity(structure) {
+    if (!structure.cplfoldCapacity || typeof structure.cplfoldCapacity !== "object") {
+      structure.cplfoldCapacity = {};
+    }
+    const capacity = structure.cplfoldCapacity;
+    capacity.status = ["unknown", "probing", "ready", "error", "cancelled"].indexOf(capacity.status) === -1
+      ? "unknown"
+      : capacity.status;
+    capacity.baselineLength = Math.min(
+      CPLFOLD_HARD_MAX_SEQUENCE_LENGTH,
+      positiveIntegerOrDefault(capacity.baselineLength, CPLFOLD_BASELINE_SEQUENCE_LENGTH)
+    );
+    capacity.hardCeiling = Math.max(
+      capacity.baselineLength,
+      Math.min(CPLFOLD_HARD_MAX_SEQUENCE_LENGTH, positiveIntegerOrDefault(capacity.hardCeiling, CPLFOLD_HARD_MAX_SEQUENCE_LENGTH))
+    );
+    capacity.recommendedLength = Math.max(
+      capacity.baselineLength,
+      Math.min(capacity.hardCeiling, positiveIntegerOrDefault(capacity.recommendedLength, capacity.baselineLength))
+    );
+    return capacity;
+  }
+
+  function positiveIntegerOrDefault(value, fallback) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  function cplfoldProfileKey(structure) {
+    return [
+      profileValue(structure.cplfoldEvidence, "hyb-blocks"),
+      profileValue(structure.cplfoldBeam, "20"),
+      profileValue(structure.cplfoldMaxPhase1, "3"),
+      profileValue(structure.cplfoldEnergyDelta, "5"),
+      profileValue(structure.cplfoldEnergyModel, "DP09").toUpperCase(),
+      profileValue(structure.cplfoldAlpha, "0.5"),
+      profileValue(structure.cplfoldBeta, "0")
+    ].join("|");
+  }
+
+  function profileValue(value, fallback) {
+    return value === undefined || value === null || value === "" ? fallback : String(value);
+  }
+
+  function cplfoldCapacityMatches(structure) {
+    const capacity = ensureCplfoldCapacity(structure);
+    return capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
+  }
+
+  function cplfoldMaximumLength(structure) {
+    const capacity = ensureCplfoldCapacity(structure);
+    return cplfoldCapacityMatches(structure)
+      ? capacity.recommendedLength
+      : capacity.baselineLength;
+  }
+
+  function estimateCplfoldCapacity(sample) {
+    const probeLength = Math.max(
+      CPLFOLD_BASELINE_SEQUENCE_LENGTH,
+      positiveIntegerOrDefault(sample && sample.length, CPLFOLD_CAPACITY_PROBE_LENGTH)
+    );
+    const foldElapsedMs = Number(sample && sample.foldElapsedMs);
+    if (!Number.isFinite(foldElapsedMs) || foldElapsedMs <= 0) {
+      return CPLFOLD_HARD_MAX_SEQUENCE_LENGTH;
+    }
+    const interactiveBudget = CPLFOLD_CAPACITY_TARGET_MS * CPLFOLD_CAPACITY_SAFETY_FACTOR;
+    const estimate = probeLength * Math.sqrt(interactiveBudget / foldElapsedMs);
+    const rounded = Math.floor(estimate / 25) * 25;
+    return Math.max(
+      CPLFOLD_BASELINE_SEQUENCE_LENGTH,
+      Math.min(CPLFOLD_HARD_MAX_SEQUENCE_LENGTH, rounded)
+    );
+  }
+
+  function cplfoldLengthIssue(length, structure) {
+    const capacity = ensureCplfoldCapacity(structure || {});
+    if (length > CPLFOLD_HARD_MAX_SEQUENCE_LENGTH) {
+      return "Browser CPLfold has a hard safety ceiling of " + CPLFOLD_HARD_MAX_SEQUENCE_LENGTH + " nt in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";
+    }
+    if (length <= capacity.baselineLength) {
+      return "";
+    }
+    if (capacity.status === "probing") {
+      return "The browser CPLfold capacity test is still running. Wait for it to finish or cancel it before predicting.";
+    }
+    if (capacity.status !== "ready") {
+      return "This " + length + " nt CPLfold request is above the " + capacity.baselineLength + " nt browser baseline. Run the local browser capacity test first.";
+    }
+    if (!cplfoldCapacityMatches(structure)) {
+      return "CPLfold settings changed after the last browser capacity test. Run the capacity test again before using a sequence longer than " + capacity.baselineLength + " nt.";
+    }
+    if (length > capacity.recommendedLength) {
+      return "This browser capacity test recommends up to " + capacity.recommendedLength + " nt for the current CPLfold settings. Select a shorter region, reduce the search settings, or retest this browser.";
+    }
+    return "";
+  }
+
+  function readCplfoldParameters(structure) {
+    const parameters = {
+      beamSize: parseWholeNumber(structure.cplfoldBeam, 1, 200, "CPLfold beam size"),
+      maxPhase1: parseWholeNumber(structure.cplfoldMaxPhase1, 1, 20, "Phase-1 candidate count"),
+      energyDelta: parseBoundedNumber(structure.cplfoldEnergyDelta, 0, 50, "Energy delta"),
+      alpha: parseBoundedNumber(structure.cplfoldAlpha, 0, 1, "Evidence alpha"),
+      beta: parseBoundedNumber(structure.cplfoldBeta, 0, 1, "Pseudoknot beta"),
+      energyModel: String(structure.cplfoldEnergyModel || "DP09").toUpperCase()
+    };
+    if (["DP03", "DP09", "CC06", "CC09", "RE"].indexOf(parameters.energyModel) === -1) {
+      throw new Error("Choose a supported CPLfold energy model.");
+    }
+    return parameters;
+  }
 
   function predict(state, api) {
     const structure = state.structure;
@@ -17,7 +134,7 @@
       return false;
     }
 
-    const lengthIssue = validateLength(sequenceInfo.sequence.length, structure.allowLarge, cplfold ? "cplfold" : "viennarna");
+    const lengthIssue = validateLength(sequenceInfo.sequence.length, structure.allowLarge, cplfold ? "cplfold" : "viennarna", structure);
     if (lengthIssue) {
       api.showToast(lengthIssue);
       return false;
@@ -32,17 +149,7 @@
         if (cplfoldGuided && (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length)) {
           throw new Error("No eligible forward-strand HYB records are fully contained in the selected reference region.");
         }
-        cplfoldParameters = {
-          beamSize: parseWholeNumber(structure.cplfoldBeam, 1, 200, "CPLfold beam size"),
-          maxPhase1: parseWholeNumber(structure.cplfoldMaxPhase1, 1, 20, "Phase-1 candidate count"),
-          energyDelta: parseBoundedNumber(structure.cplfoldEnergyDelta, 0, 50, "Energy delta"),
-          alpha: parseBoundedNumber(structure.cplfoldAlpha, 0, 1, "Evidence alpha"),
-          beta: parseBoundedNumber(structure.cplfoldBeta, 0, 1, "Pseudoknot beta"),
-          energyModel: String(structure.cplfoldEnergyModel || "DP09").toUpperCase()
-        };
-        if (["DP03", "DP09", "CC06", "CC09", "RE"].indexOf(cplfoldParameters.energyModel) === -1) {
-          throw new Error("Choose a supported CPLfold energy model.");
-        }
+        cplfoldParameters = readCplfoldParameters(structure);
       } catch (error) {
         return rejectInput(structure, api, error, "The CPLfold parameters are invalid.");
       }
@@ -91,6 +198,7 @@
     const runId = (structure.runId || 0) + 1;
     structure.runId = runId;
     structure.status = "running";
+    structure.operation = "prediction";
     structure.progress = 2;
     structure.message = cplfold
       ? "Starting pure-Python CPLfold in a local Pyodide worker…"
@@ -121,6 +229,7 @@
         if (message.type === "complete") {
           finishWorker(state, worker);
           structure.runningSequenceInfo = null;
+          structure.operation = null;
           const constraintCount = Math.max(0, Number(message.result && message.result.constraintCount) || 0);
           structure.status = "complete";
           structure.progress = 100;
@@ -156,6 +265,7 @@
         if (message.type === "error") {
           finishWorker(state, worker);
           structure.runningSequenceInfo = null;
+          structure.operation = null;
           structure.status = "error";
           structure.progress = 0;
           structure.message = message.message || (cplfold
@@ -171,6 +281,7 @@
         }
         finishWorker(state, worker);
         structure.runningSequenceInfo = null;
+        structure.operation = null;
         structure.status = "error";
         structure.progress = 0;
         structure.message = cplfold
@@ -189,7 +300,8 @@
         energyDelta: cplfoldParameters.energyDelta,
         energyModel: cplfoldParameters.energyModel,
         alpha: cplfoldParameters.alpha,
-        beta: cplfoldParameters.beta
+        beta: cplfoldParameters.beta,
+        maxSequenceLength: cplfold ? cplfoldMaximumLength(structure) : undefined
       } : hybGuided ? {
         type: "comrades-fold",
         sequence: sequenceInfo.sequence,
@@ -210,6 +322,7 @@
     } catch (error) {
       structure.status = "error";
       structure.progress = 0;
+      structure.operation = null;
       structure.runningSequenceInfo = null;
       structure.message = error && error.message ? error.message : (cplfold
         ? "This browser cannot start the CPLfold module worker."
@@ -217,6 +330,164 @@
       api.render();
       return false;
     }
+  }
+
+  function probeCplfoldCapacity(state, api) {
+    const structure = state.structure;
+    if (!structure || structure.engine !== "cplfold") {
+      api.showToast("Select CPLfold before measuring browser capacity.");
+      return false;
+    }
+
+    let parameters;
+    try {
+      parameters = readCplfoldParameters(structure);
+    } catch (error) {
+      return rejectInput(structure, api, error, "The CPLfold parameters are invalid.");
+    }
+
+    cancel(state);
+    const capacity = ensureCplfoldCapacity(structure);
+    const runId = (structure.runId || 0) + 1;
+    const profileKey = cplfoldProfileKey(structure);
+    structure.runId = runId;
+    structure.status = "running";
+    structure.operation = "capacity";
+    structure.progress = 2;
+    structure.message = "Measuring this browser's local CPLfold capacity…";
+    capacity.status = "probing";
+    capacity.profileKey = profileKey;
+    capacity.probeLength = CPLFOLD_CAPACITY_PROBE_LENGTH;
+    capacity.foldElapsedMs = null;
+    capacity.elapsedMs = null;
+    capacity.runtimeLoadMs = null;
+    capacity.testedAt = null;
+    capacity.hardware = null;
+    capacity.message = "";
+    api.render();
+
+    let worker;
+    try {
+      worker = new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
+      state.structureWorker = worker;
+    } catch (error) {
+      return failCapacityProbe(state, null, runId, api, error && error.message
+        ? error.message
+        : "This browser cannot start the CPLfold capacity worker.");
+    }
+
+    worker.onmessage = function (event) {
+      const message = event.data || {};
+      if (!state.structure || state.structure.runId !== runId) {
+        return;
+      }
+      if (message.type === "progress") {
+        const progress = Math.max(0, Math.min(99, Number(message.percent) || 0));
+        structure.progress = progress;
+        capacity.progress = progress;
+        structure.message = message.stage || "Measuring browser CPLfold capacity…";
+        api.render();
+        return;
+      }
+      if (message.type === "capacity-complete") {
+        clearCapacityTimeout(state);
+        finishWorker(state, worker);
+        const sample = message.sample || {};
+        const recommendedLength = estimateCplfoldCapacity(sample);
+        capacity.status = "ready";
+        capacity.recommendedLength = recommendedLength;
+        capacity.probeLength = positiveIntegerOrDefault(sample.length, CPLFOLD_CAPACITY_PROBE_LENGTH);
+        capacity.foldElapsedMs = Number(sample.foldElapsedMs) || null;
+        capacity.elapsedMs = Number(message.elapsedMs || sample.elapsedMs) || null;
+        capacity.runtimeLoadMs = Number(message.runtimeLoadMs) || null;
+        capacity.testedAt = new Date().toISOString();
+        capacity.hardware = message.hardware || null;
+        capacity.runtimeManifest = message.runtimeManifest || null;
+        capacity.parameters = message.parameters || null;
+        capacity.message = "Estimated up to " + recommendedLength + " nt for the current browser and CPLfold settings.";
+        structure.status = "idle";
+        structure.operation = null;
+        structure.progress = 0;
+        structure.message = capacity.message;
+        api.render();
+        api.showToast(capacity.message);
+        return;
+      }
+      if (message.type === "error") {
+        failCapacityProbe(state, worker, runId, api, message.message || "The browser CPLfold capacity test could not finish.");
+      }
+    };
+
+    worker.onerror = function () {
+      failCapacityProbe(state, worker, runId, api, "The browser CPLfold capacity worker stopped unexpectedly. Confirm that the generated Pyodide assets are available.");
+    };
+
+    const schedule = typeof window.setTimeout === "function"
+      ? window.setTimeout.bind(window)
+      : (typeof setTimeout === "function" ? setTimeout : null);
+    if (schedule) {
+      capacity.timeoutId = schedule(function () {
+        if (state.structure && state.structure.runId === runId) {
+          failCapacityProbe(state, worker, runId, api, "The browser CPLfold capacity test exceeded 60 seconds and was stopped. The 75 nt baseline remains available.");
+        }
+      }, CPLFOLD_CAPACITY_TIMEOUT_MS);
+    }
+
+    try {
+      worker.postMessage({
+        type: "cplfold-capacity",
+        probeLength: CPLFOLD_CAPACITY_PROBE_LENGTH,
+        evidenceMode: structure.cplfoldEvidence === "hyb-blocks" ? "hyb-blocks" : "none",
+        beamSize: parameters.beamSize,
+        maxPhase1: parameters.maxPhase1,
+        energyDelta: parameters.energyDelta,
+        energyModel: parameters.energyModel,
+        alpha: parameters.alpha,
+        beta: parameters.beta
+      });
+    } catch (error) {
+      return failCapacityProbe(state, worker, runId, api, error && error.message
+        ? error.message
+        : "The browser CPLfold capacity worker could not receive the probe request.");
+    }
+    return true;
+  }
+
+  function failCapacityProbe(state, worker, runId, api, message) {
+    if (!state.structure || state.structure.runId !== runId) {
+      return false;
+    }
+    clearCapacityTimeout(state);
+    if (worker) {
+      finishWorker(state, worker);
+    }
+    const structure = state.structure;
+    const capacity = ensureCplfoldCapacity(structure);
+    structure.runId = (structure.runId || 0) + 1;
+    capacity.status = "error";
+    capacity.recommendedLength = capacity.baselineLength;
+    capacity.message = message;
+    structure.status = "idle";
+    structure.operation = null;
+    structure.progress = 0;
+    structure.message = message;
+    api.render();
+    api.showToast(message);
+    return false;
+  }
+
+  function clearCapacityTimeout(state) {
+    const structure = state.structure;
+    const capacity = structure && structure.cplfoldCapacity;
+    if (!capacity || capacity.timeoutId == null) {
+      return;
+    }
+    if (typeof window.clearTimeout === "function") {
+      window.clearTimeout(capacity.timeoutId);
+    } else if (typeof clearTimeout === "function") {
+      clearTimeout(capacity.timeoutId);
+    }
+    capacity.timeoutId = null;
   }
 
   function parseMinimumLoop(value) {
@@ -348,11 +619,9 @@
     return constraints;
   }
 
-  function validateLength(length, allowLarge, engine) {
+  function validateLength(length, allowLarge, engine, structure) {
     if (engine === "cplfold") {
-      return length > CPLFOLD_MAX_SEQUENCE_LENGTH
-        ? "Browser CPLfold is limited to " + CPLFOLD_MAX_SEQUENCE_LENGTH + " nt because Pyodide runs the pure-Python parser without Numba JIT. Select a shorter region or use bin/cplfold locally."
-        : "";
+      return cplfoldLengthIssue(length, structure || {});
     }
     if (length > MAX_SEQUENCE_LENGTH) {
       return "ViennaRNA WebAssembly is limited to " + MAX_SEQUENCE_LENGTH + " nt in HYB2 Web Lite. Reduce this region before folding.";
@@ -370,6 +639,7 @@
     }
     const settings = options || {};
     state.structure.status = "idle";
+    state.structure.operation = null;
     state.structure.progress = 0;
     state.structure.message = "";
     state.structure.result = null;
@@ -382,16 +652,26 @@
   }
 
   function cancel(state) {
+    const structure = state.structure;
+    const capacity = structure && structure.cplfoldCapacity;
+    const wasCapacityProbe = structure && structure.status === "running" && structure.operation === "capacity";
+    clearCapacityTimeout(state);
     if (state.structureWorker) {
       state.structureWorker.terminate();
       state.structureWorker = null;
     }
-    if (state.structure && state.structure.status === "running") {
-      state.structure.runId = (state.structure.runId || 0) + 1;
-      state.structure.status = "idle";
-      state.structure.progress = 0;
-      state.structure.message = "";
-      state.structure.runningSequenceInfo = null;
+    if (structure && structure.status === "running") {
+      structure.runId = (structure.runId || 0) + 1;
+      structure.status = "idle";
+      structure.operation = null;
+      structure.progress = 0;
+      structure.message = "";
+      structure.runningSequenceInfo = null;
+      if (wasCapacityProbe && capacity) {
+        capacity.status = "cancelled";
+        capacity.recommendedLength = capacity.baselineLength || CPLFOLD_BASELINE_SEQUENCE_LENGTH;
+        capacity.message = "Browser capacity test cancelled. The " + (capacity.baselineLength || CPLFOLD_BASELINE_SEQUENCE_LENGTH) + " nt baseline remains available.";
+      }
     }
   }
 
@@ -405,10 +685,14 @@
   window.Hyb2Structure = {
     maxSequenceLength: MAX_SEQUENCE_LENGTH,
     advancedSequenceLength: ADVANCED_SEQUENCE_LENGTH,
-    cplfoldMaxSequenceLength: CPLFOLD_MAX_SEQUENCE_LENGTH,
+    cplfoldBaselineSequenceLength: CPLFOLD_BASELINE_SEQUENCE_LENGTH,
+    cplfoldHardSequenceLength: CPLFOLD_HARD_MAX_SEQUENCE_LENGTH,
+    cplfoldMaxSequenceLength: CPLFOLD_HARD_MAX_SEQUENCE_LENGTH,
     validateLength: validateLength,
+    estimateCplfoldCapacity: estimateCplfoldCapacity,
     parseManualConstraints: parseManualConstraints,
     predict: predict,
+    probeCplfoldCapacity: probeCplfoldCapacity,
     reset: reset,
     cancel: cancel,
     terminate: cancel

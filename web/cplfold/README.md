@@ -10,7 +10,9 @@ The browser runtime is intentionally conservative:
   `scripts/build-cplfold-web.sh`.
 - Pyodide does not provide Numba. The bridge replaces `numba.njit` with an
   identity decorator, so the same Python algorithm runs without JIT.
-- The UI and bridge therefore enforce a 75-nt maximum. Longer production
+- The UI keeps a 75-nt baseline, measures a representative local run for
+  longer requests, and derives a conservative session recommendation. The
+  bridge and worker enforce a 500-nt hard safety ceiling; longer production
   workloads should use the local `bin/cplfold` command.
 - Build output is generated into `web/vendor/pyodide-cplfold/` and is not
   committed. The Python source bundle has a content-addressed filename and is

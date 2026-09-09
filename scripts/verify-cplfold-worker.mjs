@@ -56,12 +56,58 @@ assert.equal(failure, undefined, failure && failure.message);
 assert.ok(messages.some(function (message) { return message.type === "progress" && message.phase === "source"; }));
 const completion = messages.find(function (message) { return message.type === "complete"; });
 assert.ok(completion, "the actual worker message path must return a completed fold");
-assert.equal(completion.result.bridgeVersion, "2");
+assert.equal(completion.result.bridgeVersion, "3");
 assert.equal(completion.result.engineVersion, "af49f8e");
 assert.equal(completion.result.dotBracket, "..(((((..[[[[)))))......]]]]");
+assert.equal(completion.result.maxSequenceLength, 75);
 assert.match(completion.result.runtimeManifest.archiveSha256, /^[a-f0-9]{64}$/);
 assert.ok(completion.result.elapsedMs >= completion.result.foldElapsedMs);
 assert.ok(completion.result.elapsedMs >= completion.result.runtimeLoadMs);
+
+messages.length = 0;
+await self.onmessage({
+  data: {
+    type: "cplfold-capacity",
+    probeLength: 25,
+    evidenceMode: "none",
+    beamSize: 1,
+    maxPhase1: 1,
+    energyDelta: 0,
+    energyModel: "DP09",
+    alpha: 0,
+    beta: 0
+  }
+});
+const capacityFailure = messages.find(function (message) { return message.type === "error"; });
+assert.equal(capacityFailure, undefined, capacityFailure && capacityFailure.message);
+const capacityCompletion = messages.find(function (message) { return message.type === "capacity-complete"; });
+assert.ok(capacityCompletion, "the worker capacity probe must return a completed sample");
+assert.equal(capacityCompletion.sample.length, 25);
+assert.ok(capacityCompletion.sample.foldElapsedMs >= 0);
+assert.equal(capacityCompletion.parameters.beamSize, 1);
+assert.match(capacityCompletion.runtimeManifest.archiveSha256, /^[a-f0-9]{64}$/);
+
+messages.length = 0;
+await self.onmessage({
+  data: {
+    type: "cplfold",
+    sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG" + "GCAU".repeat(12),
+    maxSequenceLength: 125,
+    evidenceMode: "none",
+    beamSize: 1,
+    maxPhase1: 1,
+    energyDelta: 0,
+    energyModel: "DP09",
+    alpha: 0,
+    beta: 0
+  }
+});
+const extendedFailure = messages.find(function (message) { return message.type === "error"; });
+assert.equal(extendedFailure, undefined, extendedFailure && extendedFailure.message);
+const extendedCompletion = messages.find(function (message) { return message.type === "complete"; });
+assert.ok(extendedCompletion, "the worker must execute a sequence above the baseline when the request is within the tested capacity");
+assert.equal(extendedCompletion.result.sequence.length, 76);
+assert.equal(extendedCompletion.result.maxSequenceLength, 125);
 
 globalThis.fetch = nativeFetch;
 delete globalThis.self;

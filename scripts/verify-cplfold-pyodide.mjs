@@ -29,7 +29,7 @@ assert.equal(manifest.pyodide, "0.29.4");
 assert.equal(manifest.python, "3.13.2");
 assert.equal(manifest.numpy, "2.2.5");
 assert.equal(manifest.cplfoldRevision, "af49f8e");
-assert.equal(manifest.bridgeVersion, "2");
+assert.equal(manifest.bridgeVersion, "3");
 assert.match(manifest.cplfoldArchiveFile, /^cplfold-python-[a-f0-9]{64}\.zip$/);
 const archivePath = path.join(runtimeDirectory, manifest.cplfoldArchiveFile);
 assert.ok(fs.statSync(archivePath).size > 0);
@@ -102,6 +102,28 @@ assert.throws(function () {
     evidenceMode: "none"
   }));
 }, /limited to 75 nt/);
+
+const extendedResult = JSON.parse(String(bridge.fold_json(JSON.stringify({
+  sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG" + "GCAU".repeat(12),
+  maxSequenceLength: 125,
+  beamSize: 1,
+  maxPhase1: 1,
+  energyDelta: 0,
+  energyModel: "DP09",
+  alpha: 0,
+  beta: 0,
+  evidenceMode: "none"
+}))));
+assert.equal(extendedResult.sequence.length, 76);
+assert.equal(extendedResult.maxSequenceLength, 125);
+
+assert.throws(function () {
+  bridge.fold_json(JSON.stringify({
+    sequence: "A".repeat(501),
+    maxSequenceLength: 500,
+    evidenceMode: "none"
+  }));
+}, /hard safety ceiling of 500 nt/);
 
 bridge.destroy();
 process.stdout.write("cplfold-pyodide-smoke: ok\n");

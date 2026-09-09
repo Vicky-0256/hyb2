@@ -4,6 +4,18 @@
   const app = document.getElementById("app");
   const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
+  const exampleAssets = {
+    hyb: {
+      url: "./assets/examples/testData_example.hyb",
+      fileName: "testData_example.hyb",
+      type: "text/plain"
+    },
+    fasta: {
+      url: "./assets/examples/Zika_18S.fasta",
+      fileName: "Zika_18S.fasta",
+      type: "text/plain"
+    }
+  };
 
   const state = {
     activePage: "landing",
@@ -27,6 +39,8 @@
     comparisonLoadSession: null,
     parseSession: null,
     fastaLoadSession: null,
+    exampleLoadSession: null,
+    landingFastaFile: null,
     loading: null,
     error: null,
     theme: window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
@@ -184,6 +198,7 @@
       ].join("");
     }
 
+    const landingFastaFile = state.landingFastaFile;
     return [
       '<div class="file-card"><div class="file-card-inner">',
       '  <div class="file-card-header">',
@@ -193,7 +208,24 @@
       "    </div>",
       '    <span class="v0-chip">Local-only</span>',
       "  </div>",
+      '  <section class="example-strip" aria-labelledby="example-title">',
+      '    <div class="example-strip-heading">',
+      '      <div><span class="example-kicker">Included example</span><h3 id="example-title">Try the Zika interaction dataset</h3></div>',
+      '      <span class="example-badge">10,411 records</span>',
+      "    </div>",
+      '    <p class="example-copy">Load a generated HYB file and its matching reference FASTA from the repository test data.</p>',
+      '    <div class="example-files" aria-label="Included example files">',
+      '      <div class="example-file"><span class="example-file-kind">HYB</span><code>testData_example.hyb</code></div>',
+      '      <div class="example-file"><span class="example-file-kind">FASTA</span><code>Zika_18S.fasta</code></div>',
+      "    </div>",
+      '    <div class="example-actions">',
+      '      <button class="button" type="button" data-action="load-example">Try example</button>',
+      '      <a class="quiet-button example-link" href="./assets/examples/testData_example.hyb" download>Download HYB</a>',
+      '      <a class="quiet-button example-link" href="./assets/examples/Zika_18S.fasta" download>Download FASTA</a>',
+      "    </div>",
+      "  </section>",
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Choose a HYB file">',
+      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
       '  <div class="dropzone" data-dropzone role="button" tabindex="0" aria-describedby="file-input-hint">',
       '    <div class="dropzone-content">',
       '      <span class="dropzone-kicker">HYB input</span>',
@@ -203,6 +235,18 @@
       '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files</span>',
       "    </div>",
       "  </div>",
+      '  <section class="reference-upload" aria-labelledby="reference-upload-title">',
+      '    <div class="reference-upload-copy">',
+      '      <span class="reference-upload-kicker">Optional reference</span>',
+      '      <h3 id="reference-upload-title">Add a FASTA for RNA structure</h3>',
+      '      <p>Choose it now or add it later from the workspace.</p>',
+      "    </div>",
+      '    <div class="reference-upload-actions">',
+      '      <span class="reference-file-name' + (landingFastaFile ? "" : " is-empty") + '" title="' + escapeAttribute(landingFastaFile ? landingFastaFile.name : "No FASTA selected") + '">' + escapeHtml(landingFastaFile ? landingFastaFile.name : "No FASTA selected") + "</span>",
+      '      <button class="quiet-button" type="button" data-action="choose-fasta">' + (landingFastaFile ? "Replace FASTA" : "Choose FASTA") + "</button>",
+      landingFastaFile ? '      <button class="quiet-button" type="button" data-action="remove-landing-fasta">Remove</button>' : "",
+      "    </div>",
+      "  </section>",
       '  <p class="privacy-note">Files are read and processed locally in this browser. This page has no upload endpoint.</p>',
       '  <p class="card-footnote">Recommended working size: up to 50 MB. Larger files are streamed to a dedicated worker to keep the interface responsive.</p>',
       "</div></div>"
@@ -213,12 +257,13 @@
     const load = state.loading;
     const percent = Math.max(0, Math.min(100, load.percent || 0));
     const stages = [
+      "Loading example files",
       "Reading file",
       "Detecting format",
       "Parsing HYB records",
       "Building summary"
     ];
-    const stageIndex = load.stage === "Reading file" ? 0 : load.stage === "Detecting format" ? 1 : load.stage === "Building summary" ? 3 : 2;
+    const stageIndex = load.stage === "Loading example files" ? 0 : load.stage === "Reading file" ? 1 : load.stage === "Detecting format" ? 2 : load.stage === "Building summary" ? 4 : 3;
 
     return [
       '<div class="file-card"><div class="file-card-inner load-state">',
@@ -231,7 +276,7 @@
         return '<li class="parse-step' + className + '">' + stage + "</li>";
       }).join(""),
       "  </ol>",
-      '  <p class="card-footnote" aria-live="polite">' + formatBytes(load.processedBytes || 0) + " of " + formatBytes(load.totalBytes || 0) + " read locally</p>",
+      '  <p class="card-footnote" aria-live="polite">' + (load.totalBytes ? formatBytes(load.processedBytes || 0) + " of " + formatBytes(load.totalBytes || 0) + " read locally" : "Preparing the included example locally") + "</p>",
       "</div></div>"
     ].join("");
   }
@@ -467,6 +512,25 @@
       return;
     }
 
+    if (action === "load-example") {
+      loadExample();
+      return;
+    }
+
+    if (action === "choose-fasta") {
+      const input = document.getElementById("fasta-file-input");
+      if (input) {
+        input.click();
+      }
+      return;
+    }
+
+    if (action === "remove-landing-fasta") {
+      state.landingFastaFile = null;
+      render();
+      return;
+    }
+
     if (action === "open-privacy") {
       state.dialog = "privacy";
       render();
@@ -591,7 +655,13 @@
     if (event.target.id === "fasta-file-input") {
       const file = event.target.files && event.target.files[0];
       if (file) {
-        loadFasta(file);
+        if (state.summary) {
+          loadFasta(file);
+        } else {
+          state.landingFastaFile = file;
+          state.error = null;
+          render();
+        }
       }
       event.target.value = "";
       return;
@@ -721,11 +791,76 @@
     }
   }
 
-  function startParsing(file) {
+  async function loadExample() {
+    const session = {};
+    state.exampleLoadSession = session;
+    state.dialog = null;
+    state.error = null;
+    state.loading = {
+      fileName: "Zika interaction example",
+      totalBytes: 0,
+      processedBytes: 0,
+      parsedRecords: 0,
+      percent: 0,
+      stage: "Loading example files"
+    };
+    render();
+
+    try {
+      const responses = await Promise.all([
+        fetch(exampleAssets.hyb.url, { cache: "no-store" }),
+        fetch(exampleAssets.fasta.url, { cache: "no-store" })
+      ]);
+      if (state.exampleLoadSession !== session) {
+        return;
+      }
+      responses.forEach(function (response) {
+        if (!response.ok) {
+          throw new Error("The example asset could not be read (HTTP " + response.status + ").");
+        }
+      });
+      const blobs = await Promise.all(responses.map(function (response) { return response.blob(); }));
+      if (state.exampleLoadSession !== session) {
+        return;
+      }
+      const hybFile = createExampleFile(blobs[0], exampleAssets.hyb);
+      const fastaFile = createExampleFile(blobs[1], exampleAssets.fasta);
+      state.exampleLoadSession = null;
+      startParsing(hybFile, { referenceFile: fastaFile });
+    } catch (error) {
+      if (state.exampleLoadSession !== session) {
+        return;
+      }
+      state.exampleLoadSession = null;
+      state.loading = null;
+      state.error = {
+        title: "The example could not be loaded",
+        message: error && error.message ? error.message : "The included example files are unavailable."
+      };
+      render();
+    }
+  }
+
+  function createExampleFile(blob, asset) {
+    if (typeof File === "function") {
+      return new File([blob], asset.fileName, { type: asset.type });
+    }
+    Object.defineProperty(blob, "name", { value: asset.fileName });
+    return blob;
+  }
+
+  function startParsing(file, options) {
     terminateWorker();
     cancelComparisonLoads();
     invalidateFastaLoad();
-    const parseSession = { file: file };
+    const parseOptions = options || {};
+    const referenceFile = parseOptions.referenceFile || state.landingFastaFile || null;
+    state.landingFastaFile = null;
+    state.exampleLoadSession = null;
+    const parseSession = {
+      file: file,
+      referenceFile: referenceFile
+    };
     state.parseSession = parseSession;
     state.dialog = null;
     state.file = file;
@@ -835,6 +970,9 @@
               : state.region.end;
             state.loading = null;
             navigate("overview");
+            if (parseSession.referenceFile) {
+              loadFasta(parseSession.referenceFile);
+            }
             digestFile(file).then(function (hash) {
               if (state.summary === summary) {
                 state.summary.sha256 = hash;
@@ -1304,6 +1442,8 @@
     terminateWorker();
     cancelComparisonLoads();
     invalidateFastaLoad();
+    state.exampleLoadSession = null;
+    state.landingFastaFile = null;
     state.parseSession = null;
     state.dialog = null;
     state.file = null;
@@ -1328,6 +1468,8 @@
     terminateWorker();
     cancelComparisonLoads();
     invalidateFastaLoad();
+    state.exampleLoadSession = null;
+    state.landingFastaFile = null;
     state.parseSession = null;
     state.file = null;
     state.summary = null;

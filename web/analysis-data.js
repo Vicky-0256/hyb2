@@ -1149,6 +1149,12 @@
     const mapping = Object.create(null);
     const byHeader = Object.create(null);
     const byId = Object.create(null);
+    const byLooseHeader = Object.create(null);
+    const byLooseId = Object.create(null);
+
+    function looseName(value) {
+      return String(value || "").replace(/\|/g, "_");
+    }
 
     (sequences || []).forEach(function (entry) {
       if (entry.header && byHeader[entry.header] === undefined) {
@@ -1157,11 +1163,22 @@
       if (entry.id && byId[entry.id] === undefined) {
         byId[entry.id] = entry.id;
       }
+      if (entry.header && looseName(entry.header) && byLooseHeader[looseName(entry.header)] === undefined) {
+        byLooseHeader[looseName(entry.header)] = entry.id;
+      }
+      if (entry.id && looseName(entry.id) && byLooseId[looseName(entry.id)] === undefined) {
+        byLooseId[looseName(entry.id)] = entry.id;
+      }
     });
 
     (rnaNames || []).forEach(function (rna) {
       if (byHeader[rna] !== undefined || byId[rna] !== undefined) {
         mapping[rna] = byHeader[rna] !== undefined ? byHeader[rna] : byId[rna];
+        return;
+      }
+      const alias = looseName(rna);
+      if (byLooseHeader[alias] !== undefined || byLooseId[alias] !== undefined) {
+        mapping[rna] = byLooseHeader[alias] !== undefined ? byLooseHeader[alias] : byLooseId[alias];
       }
     });
 

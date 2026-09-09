@@ -11,6 +11,10 @@ const analysisPagesSource = fs.readFileSync(path.join(repository, "web", "analys
 const overviewPageSource = fs.readFileSync(path.join(repository, "web", "overview-page.js"), "utf8");
 const indexSource = fs.readFileSync(path.join(repository, "web", "index.html"), "utf8");
 const workflowSource = fs.readFileSync(path.join(repository, ".github", "workflows", "deploy-pages.yml"), "utf8");
+const exampleHybPath = path.join(repository, "web", "assets", "examples", "testData_example.hyb");
+const exampleFastaPath = path.join(repository, "web", "assets", "examples", "Zika_18S.fasta");
+assert.ok(fs.statSync(exampleHybPath).size > 0, "the landing-page HYB example must be present");
+assert.ok(fs.statSync(exampleFastaPath).size > 0, "the landing-page FASTA example must be present");
 const context = vm.createContext({
   Intl,
   Number,
@@ -609,9 +613,21 @@ assert.match(workflowSource, /deploy:\s*\n\s*if: \$\{\{ vars\.CPLFOLD_DISTRIBUTI
   "the deploy job must remain behind the CPLfold redistribution approval gate");
 assert.match(analysisPagesSource, /Git commit:/,
   "the Files drawer must display deployed build provenance");
+assert.match(appSource, /data-action="load-example"/,
+  "the landing page must expose the included example action");
+assert.match(appSource, /fetch\(exampleAssets\.hyb\.url[\s\S]*?fetch\(exampleAssets\.fasta\.url/,
+  "the included example must load both HYB and FASTA assets");
+assert.match(appSource, /id="fasta-file-input"[^>]*accept="\.fa,\.fasta,\.fna,\.fas,text\/plain"/,
+  "the landing page must expose an optional FASTA file input");
+assert.match(appSource, /state\.landingFastaFile = file;[\s\S]*?render\(\);/,
+  "a FASTA selected before the primary HYB must be retained on the landing page");
+assert.match(appSource, /const referenceFile = parseOptions\.referenceFile \|\| state\.landingFastaFile \|\| null;/,
+  "primary HYB parsing must carry a landing-page FASTA into the workspace");
+assert.match(appSource, /if \(parseSession\.referenceFile\) \{\s*loadFasta\(parseSession\.referenceFile\);\s*\}/,
+  "a retained example or landing-page FASTA must load after HYB parsing");
 assert.match(appSource, /removeFasta: removeFasta/,
   "the feature UI must delegate FASTA removal to the app session owner");
-assert.match(appSource, /function startParsing\(file\)\s*{\s*terminateWorker\(\);\s*cancelComparisonLoads\(\);\s*invalidateFastaLoad\(\);/,
+assert.match(appSource, /function startParsing\(file(?:,\s*options)?\)\s*{\s*terminateWorker\(\);\s*cancelComparisonLoads\(\);\s*invalidateFastaLoad\(\);/,
   "starting a replacement primary HYB must cancel pending parser and FASTA work");
 assert.match(appSource, /function removeFasta\(\)\s*{\s*invalidateFastaLoad\(\);/,
   "removing the reference must cancel pending FASTA work");

@@ -240,6 +240,21 @@
   .mobile-nav .nav-button:not(.is-active)::before {
     display: none;
   }
+
+  .reference-upload {
+    display: block;
+  }
+
+  .reference-upload-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+
+  .reference-file-name {
+    flex: 1 1 auto;
+    max-width: none;
+  }
 }
 
 @media (max-width: 420px) {
@@ -261,6 +276,33 @@
 
   .v0-chip {
     margin-top: 11px;
+  }
+
+  .example-strip-heading {
+    display: block;
+  }
+
+  .example-badge {
+    display: inline-flex;
+    margin-top: 10px;
+  }
+
+  .example-actions {
+    align-items: stretch;
+  }
+
+  .example-actions .button,
+  .example-actions .example-link {
+    flex: 1 1 100%;
+  }
+
+  .reference-upload-actions {
+    flex-wrap: wrap;
+  }
+
+  .reference-file-name {
+    flex: 1 1 100%;
+    max-width: none;
   }
 }
 

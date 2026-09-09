@@ -49,6 +49,11 @@ const duplicateNameMapping = data.buildFastaMapping(["RNA_A"], [
 ]);
 assert.equal(duplicateNameMapping.RNA_A, "header_match",
   "an exact full-header match must retain precedence over a later identifier-only match");
+const pipeNameMapping = data.buildFastaMapping(["Zika_virusRNA"], [
+  { id: "Zika|virusRNA", header: "Zika|virusRNA", sequence: "ACGU" }
+]);
+assert.equal(pipeNameMapping.Zika_virusRNA, "Zika|virusRNA",
+  "pipe-delimited FASTA IDs should match underscore-delimited HYB names");
 const mappingSize = 20000;
 const mappingRnas = Array.from({ length: mappingSize }, function (_, index) { return "RNA_" + index; });
 const mappingSequences = mappingRnas.map(function (rna) { return { id: rna, header: rna + " description" }; });

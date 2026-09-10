@@ -1,6 +1,6 @@
 .workspace {
   display: grid;
-  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -13,8 +13,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 64px;
-  padding: 0 22px;
+  min-height: 60px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   backdrop-filter: blur(16px);
@@ -75,13 +75,13 @@
 .sidebar {
   position: fixed;
   z-index: 5;
-  top: 64px;
+  top: 60px;
   bottom: 0;
   left: 0;
   display: flex;
-  width: 252px;
+  width: 240px;
   flex-direction: column;
-  padding: 23px 14px 18px;
+  padding: 20px 13px 18px;
   border-right: 1px solid var(--line);
   background: var(--surface);
 }
@@ -141,8 +141,8 @@
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: 38px;
-  padding: 0 10px;
+  min-height: 37px;
+  padding: 0 9px;
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
@@ -166,21 +166,40 @@
 }
 
 .nav-button.is-active::before {
-  width: 6px;
-  height: 6px;
+  width: 3px;
+  height: 18px;
   margin-right: 9px;
-  border-radius: 50%;
+  border-radius: 2px;
   background: currentColor;
   content: "";
 }
 
 .nav-button:not(.is-active)::before {
-  width: 6px;
-  height: 6px;
+  width: 3px;
+  height: 18px;
   margin-right: 9px;
-  border: 1px solid var(--line-strong);
   border-radius: 2px;
+  background: var(--line);
   content: "";
+}
+
+.nav-button-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-button-short {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  color: currentColor;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: .04em;
 }
 
 .sidebar-footer {
@@ -220,7 +239,7 @@
 .workspace-main {
   grid-column: 2;
   min-width: 0;
-  padding: 104px clamp(24px, 4vw, 54px) 56px;
+  padding: 96px clamp(24px, 4vw, 54px) 56px;
 }
 
 .content-wrap {
@@ -239,9 +258,9 @@
 .page-heading h1 {
   margin: 0;
   color: var(--ink);
-  font-size: clamp(31px, 3vw, 42px);
+  font-size: 38px;
   font-weight: 755;
-  letter-spacing: -.053em;
+  letter-spacing: 0;
   line-height: 1;
 }
 
@@ -279,8 +298,8 @@
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .metric-card,
@@ -294,8 +313,8 @@
 }
 
 .metric-card {
-  min-height: 150px;
-  padding: 20px;
+  min-height: 142px;
+  padding: 18px;
 }
 
 .metric-label {
@@ -310,9 +329,9 @@
   margin-top: 22px;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: clamp(25px, 2.5vw, 34px);
+  font-size: 30px;
   font-weight: 700;
-  letter-spacing: -.06em;
+  letter-spacing: 0;
   line-height: 1;
 }
 
@@ -326,14 +345,14 @@
 .overview-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(280px, .8fr);
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .data-card,
 .placeholder-card,
 .validation-card {
-  padding: 22px;
+  padding: 20px;
 }
 
 .card-title-row {
@@ -341,7 +360,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 19px;
+  margin-bottom: 16px;
 }
 
 .card-title-row h2,
@@ -350,7 +369,7 @@
   color: var(--ink);
   font-size: 16px;
   font-weight: 735;
-  letter-spacing: -.025em;
+  letter-spacing: 0;
 }
 
 .card-kicker {
@@ -497,7 +516,7 @@
   color: var(--ink);
   font-family: var(--font-mono);
   font-size: 20px;
-  letter-spacing: -.05em;
+  letter-spacing: 0;
 }
 
 .quality-stat span {
@@ -534,7 +553,7 @@
   color: var(--ink);
   font-size: 23px;
   font-weight: 745;
-  letter-spacing: -.04em;
+  letter-spacing: 0;
 }
 
 .placeholder-card p {
@@ -573,7 +592,7 @@
   color: var(--ink);
   font-family: var(--font-mono);
   font-size: 19px;
-  letter-spacing: -.04em;
+  letter-spacing: 0;
 }
 
 .validation-item span {
@@ -628,7 +647,7 @@
   color: var(--ink);
   font-size: 20px;
   font-weight: 750;
-  letter-spacing: -.04em;
+  letter-spacing: 0;
 }
 
 .dialog p {

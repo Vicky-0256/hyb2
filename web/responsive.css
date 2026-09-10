@@ -6,18 +6,21 @@
 
 @media (max-width: 1199px) {
   .workspace {
-    grid-template-columns: 76px minmax(0, 1fr);
+    grid-template-columns: 68px minmax(0, 1fr);
   }
 
   .sidebar {
-    width: 76px;
-    padding: 18px 10px;
+    width: 68px;
+    padding: 16px 8px;
   }
 
   .sidebar-file,
-  .nav-label,
-  .nav-button {
+  .nav-label {
     font-size: 0;
+  }
+
+  .nav-label {
+    display: none;
   }
 
   .sidebar-file {
@@ -47,9 +50,25 @@
 
   .nav-button::before,
   .nav-button:not(.is-active)::before {
-    width: 8px;
-    height: 8px;
-    margin: 0;
+    display: none;
+  }
+
+  .nav-button-label {
+    display: none;
+  }
+
+  .nav-button-short {
+    display: inline-flex;
+    min-width: 34px;
+    min-height: 28px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface-subtle);
+  }
+
+  .nav-button.is-active .nav-button-short {
+    border-color: color-mix(in srgb, var(--primary) 35%, var(--line));
+    background: var(--surface);
   }
 
   .local-status {
@@ -123,11 +142,15 @@
   }
 
   .landing-copy h1 {
-    font-size: clamp(42px, 13vw, 61px);
+    font-size: 48px;
   }
 
   .landing-lede {
     font-size: 17px;
+  }
+
+  .page-heading h1 {
+    font-size: 30px;
   }
 
   .file-card-inner {
@@ -236,6 +259,14 @@
     font-size: 11px;
   }
 
+  .mobile-nav .nav-button-label {
+    display: inline;
+  }
+
+  .mobile-nav .nav-button-short {
+    display: none;
+  }
+
   .mobile-nav .nav-button::before,
   .mobile-nav .nav-button:not(.is-active)::before {
     display: none;
@@ -272,6 +303,10 @@
 
   .file-card-header {
     display: block;
+  }
+
+  .landing-copy h1 {
+    font-size: 42px;
   }
 
   .v0-chip {

@@ -52,13 +52,13 @@
   };
 
   const analysisPages = [
-    { id: "overview", label: "Overview" },
-    { id: "interactions", label: "Interactions" },
-    { id: "contact-map", label: "Contact Map" },
-    { id: "viewpoint", label: "Viewpoint" },
-    { id: "region", label: "Region Explorer" },
-    { id: "compare", label: "Compare" },
-    { id: "structure", label: "RNA Structure" }
+    { id: "overview", label: "Overview", shortLabel: "OV" },
+    { id: "interactions", label: "Interactions", shortLabel: "IX" },
+    { id: "contact-map", label: "Contact Map", shortLabel: "CM" },
+    { id: "viewpoint", label: "Viewpoint", shortLabel: "VP" },
+    { id: "region", label: "Region Explorer", shortLabel: "RX" },
+    { id: "compare", label: "Compare", shortLabel: "CP" },
+    { id: "structure", label: "RNA Structure", shortLabel: "RS" }
   ];
 
   app.addEventListener("pointerdown", handlePointerDown);
@@ -124,7 +124,7 @@
     app.dataset.density = state.density;
     const themeColor = document.querySelector('meta[name="theme-color"]');
     if (themeColor) {
-      themeColor.setAttribute("content", state.theme === "dark" ? "#132c47" : "#f5f8fa");
+      themeColor.setAttribute("content", state.theme === "dark" ? "#132c47" : "#f3f7f8");
     }
     document.title = state.summary
       ? pageTitle(state.activePage) + " · HYB2 Web Lite"
@@ -149,7 +149,7 @@
       '  <main id="main-content" class="landing-main">',
       '    <section class="landing-copy" aria-labelledby="landing-title">',
       '      <span class="eyebrow">RNA interaction analysis · browser-local</span>',
-      '      <h1 id="landing-title">Open your HYB file.<br><span>Explore locally.</span></h1>',
+      '      <h1 id="landing-title">HYB2 Web Lite.<br><span>Explore locally.</span></h1>',
       '      <p class="landing-lede">Inspect RNA–RNA interactions, validate records, and prepare contact-map analysis without sending your research data to a server.</p>',
       '      <ul class="promise-list">',
       "        <li>No account or server upload required</li>",
@@ -226,7 +226,7 @@
       "  </section>",
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Choose a HYB file">',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
-      '  <div class="dropzone" data-dropzone role="button" tabindex="0" aria-describedby="file-input-hint">',
+      '  <div class="dropzone" data-dropzone tabindex="0" aria-label="HYB input drop zone" aria-describedby="file-input-hint">',
       '    <div class="dropzone-content">',
       '      <span class="dropzone-kicker">HYB input</span>',
       '      <h3 class="dropzone-title">Drop a .hyb file here</h3>',
@@ -352,11 +352,11 @@
       "    </nav>",
       '    <nav class="sidebar-nav" aria-label="Data management">',
       '      <span class="nav-label">Data management</span>',
-      '      <button class="nav-button" type="button" data-action="open-files">Files</button>',
-      renderNavButton({ id: "validation", label: "Validation" }),
-      renderNavButton({ id: "methods", label: "Methods" }),
-      renderNavButton({ id: "file-format", label: "File format" }),
-      renderNavButton({ id: "privacy", label: "Privacy" }),
+      renderActionNavButton("open-files", "Files", "FI"),
+      renderNavButton({ id: "validation", label: "Validation", shortLabel: "VA" }),
+      renderNavButton({ id: "methods", label: "Methods", shortLabel: "MT" }),
+      renderNavButton({ id: "file-format", label: "File format", shortLabel: "FF" }),
+      renderNavButton({ id: "privacy", label: "Privacy", shortLabel: "PR" }),
       "    </nav>",
       '    <div class="sidebar-footer">',
       '      <div class="local-status"><strong>Files stay local</strong><span>Stored only in this tab’s memory.</span></div>',
@@ -376,7 +376,13 @@
 
   function renderNavButton(page) {
     const active = state.activePage === page.id ? " is-active" : "";
-    return '<button class="nav-button' + active + '" type="button" data-action="navigate" data-page="' + page.id + '">' + escapeHtml(page.label) + "</button>";
+    const shortLabel = page.shortLabel || page.label.slice(0, 2).toUpperCase();
+    const current = active ? ' aria-current="page"' : "";
+    return '<button class="nav-button' + active + '" type="button" data-action="navigate" data-page="' + page.id + '" aria-label="' + escapeAttribute(page.label) + '" title="' + escapeAttribute(page.label) + '"' + current + '><span class="nav-button-label">' + escapeHtml(page.label) + '</span><span class="nav-button-short" aria-hidden="true">' + escapeHtml(shortLabel) + "</span></button>";
+  }
+
+  function renderActionNavButton(action, label, shortLabel) {
+    return '<button class="nav-button" type="button" data-action="' + action + '" aria-label="' + escapeAttribute(label) + '" title="' + escapeAttribute(label) + '"><span class="nav-button-label">' + escapeHtml(label) + '</span><span class="nav-button-short" aria-hidden="true">' + escapeHtml(shortLabel) + "</span></button>";
   }
 
   function renderPage() {

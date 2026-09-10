@@ -15,6 +15,7 @@
 .analysis-controls {
   margin-bottom: 16px;
   padding: 20px 22px;
+  border-left: 3px solid var(--primary);
 }
 
 .control-grid,
@@ -275,7 +276,7 @@
   color: var(--ink);
   font-size: 18px;
   font-weight: 740;
-  letter-spacing: -.03em;
+  letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -459,7 +460,7 @@
   color: var(--ink);
   font-size: 14px;
   font-weight: 730;
-  letter-spacing: -.025em;
+  letter-spacing: 0;
 }
 
 .contact-stage-heading .card-kicker {
@@ -550,7 +551,7 @@
   font-family: var(--font-mono);
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: -.04em;
+  letter-spacing: 0;
 }
 
 .selection-card p {

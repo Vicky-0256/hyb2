@@ -12,11 +12,11 @@
 - **Primary viewport:** desktop research workflows at laptop distance; tablet and phone layouts preserve loading and summary reading.
 - **Visual temperature:** restrained, precise, and trustworthy.
 - **Capacity:** dense analysis controls after a file is loaded; generous whitespace before loading.
-- **Palette:** Teal \`#00A09D\`, Violet \`#6A4FF2\`, Navy \`#132C47\`; light canvas \`#F5F8FA\`, white surface, teal-soft surfaces, violet-soft analysis accents, and Navy text. Dark mode uses Navy surfaces with bright Teal and Violet controls.
+- **Palette:** Teal \`#00A09D\`, Violet \`#6A4FF2\`, Navy \`#132C47\`; light canvas \`#F3F7F8\`, white surface, teal-soft surfaces, violet-soft analysis accents, and Navy text. Dark mode uses Navy surfaces with bright Teal and Violet controls.
 - **Typography:** locally available system sans for interface copy; locally available monospace for sequence, coordinates, and data values.
-- **Spacing:** 8 px base unit.
-- **Radius:** 12 px content surfaces; 8 px controls; compact status pills.
-- **Elevation:** hairline borders and a single, diffuse low-contrast shadow level.
+- **Spacing:** 8 px base unit, with primary layout gaps at 8/16/24/32 px.
+- **Radius:** 8 px content surfaces; 6 px controls; compact status pills.
+- **Elevation:** hairline borders and a single, tight low-contrast shadow level; no decorative gradient surfaces.
 - **Motion:** 140–220 ms opacity/position feedback; disabled under \`prefers-reduced-motion\`.
 
 ## Current implementation scope

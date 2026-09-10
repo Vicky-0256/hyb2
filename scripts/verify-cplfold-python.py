@@ -42,12 +42,15 @@ def main() -> None:
         environment.pop("NUMBA_DISABLE_JIT", None)
 
         oversized_sequence = "A" * 1001
+        oversized_file = Path(cache) / "oversized-input.fasta"
+        oversized_file.write_text(">oversized\n" + oversized_sequence + "\n", encoding="utf-8")
         guard_cases = [
             ["--sequence", oversized_sequence],
             [f"--sequence={oversized_sequence}"],
             [f"-s{oversized_sequence}"],
             [f"-s={oversized_sequence}"],
             ["--sequence", "A", "--sequence", oversized_sequence],
+            ["--sequence-file", str(oversized_file)],
         ]
         for arguments in guard_cases:
             oversized = subprocess.run(
@@ -105,6 +108,11 @@ def main() -> None:
 
         environment["NUMBA_CACHE_DIR"] = str(Path(cache) / "jit-cache")
 
+        sequence_file = Path(cache) / "cplfold-input.fasta"
+        sequence_file.write_text(
+            ">HYB2_Web_prepared_sequence\n" + SEQUENCE + "\n", encoding="utf-8"
+        )
+
         unit_output = run(
             [
                 sys.executable,
@@ -128,8 +136,8 @@ def main() -> None:
             [
                 sys.executable,
                 str(wrapper),
-                "--sequence",
-                SEQUENCE,
+                "--sequence-file",
+                str(sequence_file),
                 "--beam",
                 "20",
                 "--max-phase1",
@@ -149,7 +157,7 @@ def main() -> None:
     print(
         "CPLfold Python verification passed: length guard, secure cache, "
         "28 unit tests, "
-        "and real-JIT smoke."
+        "FASTA file input, and real-JIT smoke."
     )
     print(f"Reference structure: {EXPECTED_STRUCTURE}")
     print("Reference DP09 energy: -8.0204 kcal/mol (CLI rounded to -8.02).")

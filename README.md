@@ -84,9 +84,13 @@ runtime limits, browser boundaries, and third-party licensing notes.
 The separate `feature/cplfold-web` branch adds this predictor to the static
 GitHub Pages application. It runs through a same-origin Pyodide worker, accepts
 an optional HYB-derived block bonus matrix, and visualises/ranks nested and
-pseudoknotted candidates. The browser path is capped at 75 nt without Numba;
-the local CLI remains the route for longer sequences. Resolve the licensing
-boundary in `third_party/cplfold/THIRD_PARTY_NOTICES.md` before public release.
+pseudoknotted candidates. The browser path uses a measured session-specific
+recommendation above a 75 nt baseline, with a 500 nt hard safety ceiling
+without Numba; use the structure page's local-input download and run
+`bin/cplfold --sequence-file cplfold-input.fasta` for longer sequences. The
+download contains the prepared sequence only, not the browser-only HYB bonus
+matrix. Resolve the licensing boundary in
+`third_party/cplfold/THIRD_PARTY_NOTICES.md` before public release.
 The Pages workflow enforces that decision through the repository Actions
 variable `CPLFOLD_DISTRIBUTION_APPROVED=true`; leave it unset until approval.
 

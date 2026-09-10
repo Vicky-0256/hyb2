@@ -12,11 +12,62 @@ import sys
 DEFAULT_MAX_SEQUENCE_LENGTH = 1000
 
 
-def _sequence_from_args(arguments: list[str]) -> str | None:
+def _read_sequence_file(path: Path) -> str:
+    try:
+        contents = path.expanduser().read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise SystemExit(f"CPLfold sequence file was not found: {path}") from error
+    except UnicodeError as error:
+        raise SystemExit(f"CPLfold sequence file is not valid UTF-8: {path}") from error
+    except OSError as error:
+        raise SystemExit(f"Could not read CPLfold sequence file {path}: {error}") from error
+
+    header_count = 0
+    sequence_parts = []
+    for line in contents.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(">"):
+            header_count += 1
+            if header_count > 1:
+                raise SystemExit(
+                    "CPLfold sequence files must contain exactly one FASTA record"
+                )
+            continue
+        sequence_parts.append("".join(stripped.split()))
+
+    sequence = "".join(sequence_parts)
+    if not sequence:
+        raise SystemExit(f"CPLfold sequence file contains no sequence: {path}")
+    return sequence
+
+
+def _sequence_arguments(arguments: list[str]) -> tuple[str | None, list[str]]:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("-s", "--sequence")
+    parser.add_argument("--sequence-file", type=Path)
     parsed, _ = parser.parse_known_args(arguments)
-    return parsed.sequence
+    if parsed.sequence is not None and parsed.sequence_file is not None:
+        raise SystemExit("Use either --sequence or --sequence-file, not both")
+    if parsed.sequence_file is None:
+        return parsed.sequence, list(arguments)
+
+    sequence = _read_sequence_file(parsed.sequence_file)
+    forwarded = []
+    skip_next = False
+    for argument in arguments:
+        if skip_next:
+            skip_next = False
+            continue
+        if argument == "--sequence-file":
+            skip_next = True
+            continue
+        if argument.startswith("--sequence-file="):
+            continue
+        forwarded.append(argument)
+    forwarded.extend(["--sequence", sequence])
+    return sequence, forwarded
 
 
 def _maximum_sequence_length() -> int:
@@ -57,7 +108,7 @@ def main() -> None:
     if not entrypoint.is_file():
         raise SystemExit(f"Vendored CPLfold entry point is missing: {entrypoint}")
 
-    sequence = _sequence_from_args(sys.argv[1:])
+    sequence, forwarded_arguments = _sequence_arguments(sys.argv[1:])
     maximum = _maximum_sequence_length()
     if sequence is not None and len(sequence.strip()) > maximum:
         raise SystemExit(
@@ -70,7 +121,7 @@ def main() -> None:
 
     os.execv(
         sys.executable,
-        [sys.executable, str(entrypoint), *sys.argv[1:]],
+        [sys.executable, str(entrypoint), *forwarded_arguments],
     )
 
 

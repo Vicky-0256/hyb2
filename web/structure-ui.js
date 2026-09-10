@@ -43,6 +43,10 @@
       return true;
     }
 
+    if (action === "download-local-cplfold-input") {
+      return downloadLocalCplfoldInput(state, api);
+    }
+
     const result = state.structure && state.structure.result;
     if (action === "select-cplfold-candidate") {
       const candidateIndex = Number(element && element.dataset && element.dataset.candidateIndex);
@@ -143,6 +147,33 @@
 
     api.download("rna-secondary-structure-report.json", JSON.stringify(structureReport(state, result), null, 2), "application/json");
     api.showToast("Structure report downloaded locally.");
+    return true;
+  }
+
+  function downloadLocalCplfoldInput(state, api) {
+    if (!state.structure || state.structure.engine !== "cplfold") {
+      api.showToast("Select CPLfold before downloading a local input.");
+      return true;
+    }
+
+    const result = state.structure.result;
+    const prepared = window.Hyb2Pages && typeof window.Hyb2Pages.getStructureSequence === "function"
+      ? window.Hyb2Pages.getStructureSequence(state)
+      : null;
+    const sequence = prepared && prepared.sequence
+      ? prepared.sequence
+      : (result && result.sequence ? result.sequence : "");
+    if (!sequence) {
+      api.showToast("Choose a valid sequence first.");
+      return true;
+    }
+
+    api.download(
+      "cplfold-input.fasta",
+      ">HYB2_Web_prepared_sequence\n" + sequence + "\n",
+      "text/plain"
+    );
+    api.showToast("CPLfold input downloaded. Run: bin/cplfold --sequence-file cplfold-input.fasta");
     return true;
   }
 

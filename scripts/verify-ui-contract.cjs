@@ -559,6 +559,8 @@ assert.match(analysisPagesSource, /available\.length > 750/,
 assert.match(analysisPagesSource, /rnas\.slice\(0, 500\)/);
 assert.match(analysisPagesSource, /fasta\.sequences\.slice\(0, 500\)/);
 assert.match(analysisPagesSource, /data-feature-action="probe-cplfold-capacity"/);
+assert.match(analysisPagesSource, /data-feature-action="download-local-cplfold-input"/);
+assert.match(fs.readFileSync(path.join(repository, "bin", "cplfold"), "utf8"), /--sequence-file/);
 assert.match(fs.readFileSync(path.join(repository, "web", "cplfold.worker.mjs"), "utf8"), /cplfold-capacity/);
 assert.doesNotMatch(analysisPagesSource, /rnas\.map[\s\S]{0,300}fasta\.sequences\.map/,
   "FASTA mapping controls must not build an RNA-by-reference Cartesian option set");

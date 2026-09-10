@@ -367,6 +367,7 @@ assert.match(cplfoldSetup, /1 eligible HYB row/);
 assert.match(cplfoldSetup, /Predict CPLfold candidates/);
 assert.match(cplfoldSetup, /Baseline 75 nt/);
 assert.match(cplfoldSetup, /data-feature-action="probe-cplfold-capacity"/);
+assert.match(cplfoldSetup, /data-feature-action="download-local-cplfold-input">Download local input/);
 assert.doesNotMatch(cplfoldSetup, /Minimum hairpin loop/);
 const cplfoldPrepared = context.window.Hyb2Pages.getStructureSequence(cplfoldState);
 assert.equal(cplfoldPrepared.sequence, "GGCGCGGCACCGUCCGCGGAACAAACGG");
@@ -457,8 +458,23 @@ assert.match(cplfoldResultHtml, /Pseudoknot candidate/);
 assert.match(cplfoldResultHtml, /HYB-derived CPLfold bonus matrix/);
 assert.match(cplfoldResultHtml, /data-feature-action="select-cplfold-candidate"/);
 assert.match(cplfoldResultHtml, /Download bonus matrix/);
+assert.match(cplfoldResultHtml, /data-feature-action="download-local-cplfold-input">Download local input/);
 assert.match(cplfoldResultHtml, /pseudoknot-1/);
 const cplfoldApi = { renders: 0, toasts: [], render: function () { this.renders += 1; }, showToast: function (message) { this.toasts.push(message); } };
+const localInputEvents = { downloads: [], toasts: [] };
+const localInputApi = {
+  download: function (name, contents, mediaType) {
+    localInputEvents.downloads.push({ name: name, contents: contents, mediaType: mediaType });
+  },
+  showToast: function (message) { localInputEvents.toasts.push(message); }
+};
+assert.equal(context.window.Hyb2StructureUI.handleAction("download-local-cplfold-input", cplfoldState, localInputApi), true);
+assert.deepEqual(localInputEvents.downloads, [{
+  name: "cplfold-input.fasta",
+  contents: ">HYB2_Web_prepared_sequence\nGGCGCGGCACCGUCCGCGGAACAAACGG\n",
+  mediaType: "text/plain"
+}]);
+assert.match(localInputEvents.toasts[0], /bin\/cplfold --sequence-file cplfold-input\.fasta/);
 assert.equal(context.window.Hyb2StructureUI.handleAction("select-cplfold-candidate", cplfoldState, cplfoldApi, { dataset: { candidateIndex: "1" } }), true);
 assert.equal(cplfoldState.structure.result.selectedCandidate, 1);
 assert.equal(cplfoldState.structure.result.topology, "nested");

@@ -6,13 +6,13 @@
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
   const exampleAssets = {
     hyb: {
-      url: "./assets/examples/testData_example.hyb",
-      fileName: "testData_example.hyb",
+      url: "./assets/examples/ZIKV_1-10807_example.hyb",
+      fileName: "ZIKV_1-10807_example.hyb",
       type: "text/plain"
     },
     fasta: {
-      url: "./assets/examples/Zika_18S.fasta",
-      fileName: "Zika_18S.fasta",
+      url: "./assets/examples/ZIKV_1-10807.fasta",
+      fileName: "ZIKV_1-10807.fasta",
       type: "text/plain"
     }
   };
@@ -210,18 +210,18 @@
       "  </div>",
       '  <section class="example-strip" aria-labelledby="example-title">',
       '    <div class="example-strip-heading">',
-      '      <div><span class="example-kicker">Included example</span><h3 id="example-title">Try the Zika interaction dataset</h3></div>',
-      '      <span class="example-badge">10,411 records</span>',
+      '      <div><span class="example-kicker">Included example</span><h3 id="example-title">Try the ZIKV interaction dataset</h3></div>',
+      '      <span class="example-badge">10,000-record subset</span>',
       "    </div>",
-      '    <p class="example-copy">Load a generated HYB file and its matching reference FASTA from the repository test data.</p>',
+      '    <p class="example-copy">Load a browser-sized subset of 1-Livefire1_virus-virus.hyb and the matching ZIKV_1-10807 reference FASTA.</p>',
       '    <div class="example-files" aria-label="Included example files">',
-      '      <div class="example-file"><span class="example-file-kind">HYB</span><code>testData_example.hyb</code></div>',
-      '      <div class="example-file"><span class="example-file-kind">FASTA</span><code>Zika_18S.fasta</code></div>',
+      '      <div class="example-file"><span class="example-file-kind">HYB</span><code>ZIKV_1-10807_example.hyb</code></div>',
+      '      <div class="example-file"><span class="example-file-kind">FASTA</span><code>ZIKV_1-10807.fasta</code></div>',
       "    </div>",
       '    <div class="example-actions">',
       '      <button class="button" type="button" data-action="load-example">Try example</button>',
-      '      <a class="quiet-button example-link" href="./assets/examples/testData_example.hyb" download>Download HYB</a>',
-      '      <a class="quiet-button example-link" href="./assets/examples/Zika_18S.fasta" download>Download FASTA</a>',
+      '      <a class="quiet-button example-link" href="./assets/examples/ZIKV_1-10807_example.hyb" download>Download HYB</a>',
+      '      <a class="quiet-button example-link" href="./assets/examples/ZIKV_1-10807.fasta" download>Download FASTA</a>',
       "    </div>",
       "  </section>",
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Choose a HYB file">',

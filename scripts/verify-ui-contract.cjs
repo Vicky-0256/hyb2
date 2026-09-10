@@ -11,10 +11,20 @@ const analysisPagesSource = fs.readFileSync(path.join(repository, "web", "analys
 const overviewPageSource = fs.readFileSync(path.join(repository, "web", "overview-page.js"), "utf8");
 const indexSource = fs.readFileSync(path.join(repository, "web", "index.html"), "utf8");
 const workflowSource = fs.readFileSync(path.join(repository, ".github", "workflows", "deploy-pages.yml"), "utf8");
-const exampleHybPath = path.join(repository, "web", "assets", "examples", "testData_example.hyb");
-const exampleFastaPath = path.join(repository, "web", "assets", "examples", "Zika_18S.fasta");
+const exampleHybPath = path.join(repository, "web", "assets", "examples", "ZIKV_1-10807_example.hyb");
+const exampleFastaPath = path.join(repository, "web", "assets", "examples", "ZIKV_1-10807.fasta");
 assert.ok(fs.statSync(exampleHybPath).size > 0, "the landing-page HYB example must be present");
 assert.ok(fs.statSync(exampleFastaPath).size > 0, "the landing-page FASTA example must be present");
+assert.ok(fs.statSync(exampleHybPath).size < 100 * 1024 * 1024,
+  "the landing-page HYB example must remain below GitHub's single-file limit");
+const exampleHybLines = fs.readFileSync(exampleHybPath, "utf8").trimEnd().split(/\r?\n/);
+const exampleFastaSource = fs.readFileSync(exampleFastaPath, "utf8");
+assert.equal(exampleHybLines.length, 10000,
+  "the landing-page HYB example must be the checked-in browser-sized ZIKV subset");
+assert.match(exampleHybLines[0], /ENSG_ENST_ZIKV-PE243-2015_virusRNA/,
+  "the landing-page HYB example must use the ZIKV reference name");
+assert.equal(exampleFastaSource.split(/\r?\n/, 1)[0], ">ENSG_ENST_ZIKV-PE243-2015_virusRNA",
+  "the landing-page FASTA example must match the ZIKV reference name used in the HYB file");
 const context = vm.createContext({
   Intl,
   Number,
@@ -623,6 +633,10 @@ assert.match(analysisPagesSource, /Git commit:/,
   "the Files drawer must display deployed build provenance");
 assert.match(appSource, /data-action="load-example"/,
   "the landing page must expose the included example action");
+assert.match(appSource, /ZIKV_1-10807_example\.hyb/,
+  "the included HYB example must visibly use the ZIKV dataset name");
+assert.match(appSource, /ZIKV_1-10807\.fasta/,
+  "the included FASTA example must visibly use the matching ZIKV reference name");
 assert.match(appSource, /fetch\(exampleAssets\.hyb\.url[\s\S]*?fetch\(exampleAssets\.fasta\.url/,
   "the included example must load both HYB and FASTA assets");
 assert.match(appSource, /id="fasta-file-input"[^>]*accept="\.fa,\.fasta,\.fna,\.fas,text\/plain"/,

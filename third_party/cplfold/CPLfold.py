@@ -29,7 +29,11 @@ Author: Ke Wang
 import sys
 import os
 import argparse
+import math
+from pathlib import Path
 from typing import List, Dict, Tuple, Optional
+
+import numpy as np
 
 # Add current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -555,6 +559,99 @@ def two_phase_pseudoknot_fold(seq: str,
     return all_structures
 
 
+def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
+    """Load Hyb2's sparse, upper-triangle bonus-matrix TSV export.
+
+    The web export stores 1-based prepared-sequence coordinates and only one
+    value for each upper-triangle cell.  CPLfold consumes a dense symmetric
+    NumPy matrix, so reconstruct that representation here before folding.
+    Comment lines beginning with ``#`` carry optional metadata such as the
+    declared sequence length.
+    """
+
+    matrix_path = Path(path).expanduser()
+    try:
+        contents = matrix_path.read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise SystemExit(f"CPLfold bonus matrix file was not found: {matrix_path}") from error
+    except UnicodeError as error:
+        raise SystemExit(f"CPLfold bonus matrix file is not valid UTF-8: {matrix_path}") from error
+    except OSError as error:
+        raise SystemExit(f"Could not read CPLfold bonus matrix file {matrix_path}: {error}") from error
+
+    matrix = np.zeros((sequence_length, sequence_length), dtype=np.float32)
+    declared_length = None
+    seen_pairs = set()
+    data_rows = 0
+
+    for line_number, raw_line in enumerate(contents.splitlines(), 1):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            metadata = stripped[1:].strip()
+            if metadata.startswith("sequence_length="):
+                raw_length = metadata.split("=", 1)[1].strip()
+                try:
+                    declared_length = int(raw_length)
+                except ValueError as error:
+                    raise SystemExit(
+                        f"CPLfold bonus matrix line {line_number} has an invalid sequence_length"
+                    ) from error
+            continue
+
+        fields = raw_line.rstrip("\r\n").split("\t")
+        if len(fields) == 1:
+            fields = stripped.split()
+        if fields[0].strip().lower() == "prepared_position_1":
+            if len(fields) < 3:
+                raise SystemExit(
+                    f"CPLfold bonus matrix header on line {line_number} must contain three columns"
+                )
+            continue
+        if len(fields) != 3:
+            raise SystemExit(
+                f"CPLfold bonus matrix line {line_number} must contain three tab-separated columns"
+            )
+
+        try:
+            one = int(fields[0])
+            two = int(fields[1])
+            value = float(fields[2])
+        except ValueError as error:
+            raise SystemExit(
+                f"CPLfold bonus matrix line {line_number} contains an invalid coordinate or score"
+            ) from error
+
+        if not 1 <= one <= sequence_length or not 1 <= two <= sequence_length:
+            raise SystemExit(
+                f"CPLfold bonus matrix line {line_number} must use coordinates from 1 to {sequence_length}"
+            )
+        if not math.isfinite(value):
+            raise SystemExit(f"CPLfold bonus matrix line {line_number} contains a non-finite score")
+
+        left, right = sorted((one, two))
+        pair = (left, right)
+        if pair in seen_pairs:
+            raise SystemExit(
+                f"CPLfold bonus matrix line {line_number} repeats coordinate pair {left}-{right}"
+            )
+        seen_pairs.add(pair)
+        matrix[left - 1, right - 1] = np.float32(value)
+        matrix[right - 1, left - 1] = np.float32(value)
+        data_rows += 1
+
+    if declared_length is not None and declared_length != sequence_length:
+        raise SystemExit(
+            "CPLfold bonus matrix sequence_length="
+            f"{declared_length} does not match the sequence length {sequence_length}"
+        )
+    if data_rows == 0 and declared_length is None:
+        raise SystemExit(
+            "CPLfold bonus matrix contains no data rows and does not declare sequence_length"
+        )
+    return matrix
+
 def main():
     """Command line interface."""
     parser = argparse.ArgumentParser(
@@ -565,6 +662,8 @@ Examples:
   python CPLfold.py -s GGCGCGGCACCGUCCGCGGAACAAACGG
   python CPLfold.py -s GGCGCGGCACCGUCCGCGGAACAAACGG -o results.txt
   python CPLfold.py -s GGCGCGGCACCGUCCGCGGAACAAACGG -b 200 -d 10.0
+  python CPLfold.py --sequence-file cplfold-input.fasta \
+    --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5
 
 Energy Models:
   DP03 - Dirks & Pierce 2003
@@ -591,6 +690,11 @@ Beta Parameter:
 
     parser.add_argument('-s', '--sequence', required=True,
                         help='RNA sequence (ACGU or ACGT)')
+    parser.add_argument('--bonus-matrix-file', type=str, default=None,
+                        help='Sparse upper-triangle bonus matrix TSV file '
+                             '(1-based prepared-sequence coordinates)')
+    parser.add_argument('--alpha', type=float, default=0.5,
+                        help='Bonus matrix scaling factor (default: 0.5)')
     parser.add_argument('-b', '--beam', type=int, default=100,
                         help='Beam size for LinearFold (default: 100)')
     parser.add_argument('-d', '--delta', type=float, default=5.0,
@@ -613,6 +717,11 @@ Beta Parameter:
 
     args = parser.parse_args()
 
+    bonus_matrix = None
+    if args.bonus_matrix_file:
+        sequence = args.sequence.upper().replace('T', 'U')
+        bonus_matrix = load_bonus_matrix_file(args.bonus_matrix_file, len(sequence))
+
     # Run algorithm
     results = two_phase_pseudoknot_fold(
         seq=args.sequence,
@@ -623,6 +732,8 @@ Beta Parameter:
         energy_model=args.model,
         output_file=args.output,
         verbose=not args.quiet,
+        bonus_matrix=bonus_matrix,
+        alpha=args.alpha,
         beta=args.beta
     )
 

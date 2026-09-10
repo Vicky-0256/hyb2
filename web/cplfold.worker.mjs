@@ -12,7 +12,7 @@ const CAPACITY_PROBE_LENGTH = 75;
 const RUNTIME_DIRECTORY = new URL("./vendor/pyodide-cplfold/", self.location.href);
 const PYODIDE_MODULE_URL = new URL("pyodide.mjs", RUNTIME_DIRECTORY);
 const EXPECTED_CPLFOLD_REVISION = "af49f8e";
-const EXPECTED_BRIDGE_VERSION = "3";
+const EXPECTED_BRIDGE_VERSION = "4";
 const WORKER_BUILD = new URL(self.location.href).searchParams.get("build") || "local";
 
 let runtimePromise = null;
@@ -21,6 +21,10 @@ self.onmessage = async function (event) {
   const message = event.data || {};
   if (message.type === "cplfold-capacity") {
     await runCapacityProbe(message);
+    return;
+  }
+  if (message.type === "cplfold-bonus-matrix") {
+    await runBonusMatrixExport(message);
     return;
   }
   if (message.type !== "cplfold") {
@@ -163,6 +167,53 @@ async function runCapacityProbe(message) {
   }
 }
 
+async function runBonusMatrixExport(message) {
+  try {
+    const sequence = String(message.sequence || "").toUpperCase().replace(/T/g, "U");
+    const requestStartedAt = Date.now();
+    postProgress("Loading the local Python WebAssembly runtime", 5, {
+      phase: "runtime",
+      operation: "bonus-matrix"
+    });
+    const runtimeStartedAt = Date.now();
+    const runtime = await getRuntime();
+    const runtimeLoadMs = Date.now() - runtimeStartedAt;
+
+    postProgress("Building the HYB block bonus matrix for local download", 58, {
+      phase: "evidence",
+      operation: "bonus-matrix"
+    });
+    await yieldToEventLoop();
+    const response = runtime.bridge.bonus_matrix_json(JSON.stringify({
+      sequence: sequence,
+      evidenceMode: message.evidenceMode === "hyb-blocks" ? "hyb-blocks" : "none",
+      evidenceArms: message.evidenceArms || []
+    }));
+    const result = JSON.parse(String(response));
+    result.runtimeLoadMs = runtimeLoadMs;
+    result.elapsedMs = Date.now() - requestStartedAt;
+    result.runtimeManifest = {
+      buildCommit: runtime.manifest.buildCommit,
+      archiveSha256: runtime.manifest.cplfoldArchiveSha256
+    };
+    if (result.engineVersion !== EXPECTED_CPLFOLD_REVISION || result.bridgeVersion !== EXPECTED_BRIDGE_VERSION) {
+      throw new Error("The loaded CPLfold source does not match this web worker build.");
+    }
+
+    postProgress("Preparing the downloadable FASTA and bonus matrix", 96, {
+      phase: "result",
+      operation: "bonus-matrix"
+    });
+    self.postMessage({ type: "bonus-matrix-complete", result: result });
+  } catch (error) {
+    self.postMessage({
+      type: "error",
+      operation: "bonus-matrix",
+      message: readableError(error)
+    });
+  }
+}
+
 function getRuntime() {
   if (!runtimePromise) {
     runtimePromise = initialiseRuntime();
@@ -217,8 +268,8 @@ async function initialiseRuntime() {
       "    sys.path.insert(0, source)"
     ].join("\n"));
     const bridge = pyodide.pyimport("cplfold_web");
-    if (!bridge || typeof bridge.fold_json !== "function") {
-      throw new Error("Missing fold_json");
+    if (!bridge || typeof bridge.fold_json !== "function" || typeof bridge.bonus_matrix_json !== "function") {
+      throw new Error("Missing CPLfold bridge functions");
     }
     return { pyodide: pyodide, bridge: bridge, manifest: sourceBundle.manifest };
   } catch (error) {

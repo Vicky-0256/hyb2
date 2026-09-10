@@ -149,15 +149,48 @@ def main() -> None:
             environment=environment,
         )
 
+        bonus_matrix_file = Path(cache) / "cplfold-bonus-matrix.tsv"
+        bonus_matrix_file.write_text(
+            "# HYB2 CPLfold bonus matrix\n"
+            "# sequence_length=28\n"
+            "# coordinate_system=prepared-sequence-1-based-inclusive\n"
+            "prepared_position_1\tprepared_position_2\tlog1p_gaussian_hyb_bonus\n"
+            "3\t20\t0.80000000\n"
+            "4\t19\t0.40000000\n",
+            encoding="utf-8",
+        )
+        guided_output = run(
+            [
+                sys.executable,
+                str(wrapper),
+                "--sequence-file",
+                str(sequence_file),
+                "--bonus-matrix-file",
+                str(bonus_matrix_file),
+                "--alpha",
+                "0.5",
+                "--beam",
+                "20",
+                "--max-phase1",
+                "2",
+                "--max-phase2",
+                "1",
+            ],
+            cwd=repository,
+            environment=environment,
+        )
+
     if EXPECTED_STRUCTURE not in smoke_output:
         raise SystemExit("CPLfold smoke test did not reproduce the reference structure")
     if EXPECTED_ENERGY_LINE not in smoke_output:
         raise SystemExit("CPLfold smoke test did not reproduce the reference energy")
+    if "Using bonus matrix with alpha: 0.5" not in guided_output:
+        raise SystemExit("CPLfold CLI did not apply the downloaded bonus matrix")
 
     print(
         "CPLfold Python verification passed: length guard, secure cache, "
         "28 unit tests, "
-        "FASTA file input, and real-JIT smoke."
+        "FASTA and bonus-matrix file input, and real-JIT smoke."
     )
     print(f"Reference structure: {EXPECTED_STRUCTURE}")
     print("Reference DP09 energy: -8.0204 kcal/mol (CLI rounded to -8.02).")

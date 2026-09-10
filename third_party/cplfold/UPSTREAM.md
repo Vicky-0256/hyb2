@@ -14,6 +14,8 @@ other ignored local artifacts.
 
 - `CPLfold.py` treats a completed Phase-1-only prediction as CLI success.
 - `tests/test_cli_exit_status.py` locks that exit-status behavior.
+- `CPLfold.py` accepts Hyb2's sparse bonus-matrix TSV export through
+  `--bonus-matrix-file` and applies it with `--alpha`.
 - `LICENSES/`, `THIRD_PARTY_NOTICES.md`, and this file record provenance and
   distribution constraints; they do not supply a missing upstream license.
 

@@ -41,18 +41,28 @@ bin/cplfold --sequence GGCGCGGCACCGUCCGCGGAACAAACGG \
   --beam 20 --max-phase1 3 --max-phase2 2
 ```
 
-HYB2 Web Lite can download the prepared sequence as a single-record FASTA.
-Run that file locally with the same wrapper:
+HYB2 Web Lite can download the prepared sequence as a single-record FASTA. In
+HYB-guided CPLfold mode it also downloads the sparse upper-triangle bonus
+matrix used by the browser, as `cplfold-bonus-matrix.tsv`. The local CLI
+reconstructs the symmetric dense NumPy matrix before folding:
 
 ```bash
 bin/cplfold --sequence-file cplfold-input.fasta \
-  --beam 20 --max-phase1 3 --max-phase2 2
+  --bonus-matrix-file cplfold-bonus-matrix.tsv \
+  --beam 20 --delta 5 --max-phase1 3 --max-phase2 1 \
+  --model DP09 --alpha 0.5 --beta 0
 ```
 
 `--sequence-file` also accepts a plain sequence text file. FASTA headers and
-line wrapping are removed, and multiple FASTA records are rejected. The web
-download contains the prepared RNA sequence only; browser-only HYB bonus
-evidence is not passed to the local sequence-based CLI.
+line wrapping are removed, and multiple FASTA records are rejected. The bonus
+matrix uses 1-based prepared-sequence coordinates, includes a declared
+`sequence_length`, and is symmetric when loaded. Sequence-only CPLfold mode
+does not need the matrix file.
+
+The browser can export the matrix for local handoff independently of whether
+the pure-Python browser fold fits its 500-nt prediction ceiling. Matrix export
+is capped at 5,000 nt because the HYB transform is inherently quadratic; the
+local predictor has its separate machine-dependent guard below.
 
 The Hyb2 wrapper starts CPLfold as an isolated Python process, assigns a
 private mode-`0700` Numba cache below the user's cache directory, and rejects

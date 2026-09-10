@@ -56,7 +56,7 @@ assert.equal(failure, undefined, failure && failure.message);
 assert.ok(messages.some(function (message) { return message.type === "progress" && message.phase === "source"; }));
 const completion = messages.find(function (message) { return message.type === "complete"; });
 assert.ok(completion, "the actual worker message path must return a completed fold");
-assert.equal(completion.result.bridgeVersion, "3");
+assert.equal(completion.result.bridgeVersion, "4");
 assert.equal(completion.result.engineVersion, "af49f8e");
 assert.equal(completion.result.dotBracket, "..(((((..[[[[)))))......]]]]");
 assert.equal(completion.result.maxSequenceLength, 75);
@@ -86,6 +86,25 @@ assert.equal(capacityCompletion.sample.length, 25);
 assert.ok(capacityCompletion.sample.foldElapsedMs >= 0);
 assert.equal(capacityCompletion.parameters.beamSize, 1);
 assert.match(capacityCompletion.runtimeManifest.archiveSha256, /^[a-f0-9]{64}$/);
+
+messages.length = 0;
+await self.onmessage({
+  data: {
+    type: "cplfold-bonus-matrix",
+    sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+    evidenceMode: "hyb-blocks",
+    evidenceArms: [
+      { oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }
+    ]
+  }
+});
+const matrixFailure = messages.find(function (message) { return message.type === "error"; });
+assert.equal(matrixFailure, undefined, matrixFailure && matrixFailure.message);
+const matrixCompletion = messages.find(function (message) { return message.type === "bonus-matrix-complete"; });
+assert.ok(matrixCompletion, "the worker must export the HYB bonus matrix independently of a fold");
+assert.equal(matrixCompletion.result.bridgeVersion, "4");
+assert.equal(matrixCompletion.result.evidence.inputRecords, 1);
+assert.ok(matrixCompletion.result.evidence.bonusEntries.length > 0);
 
 messages.length = 0;
 await self.onmessage({

@@ -453,6 +453,124 @@
     return true;
   }
 
+  function downloadCplfoldBonusMatrix(state, api, sequenceInfo, onComplete) {
+    const structure = state.structure;
+    if (!structure || structure.engine !== "cplfold") {
+      api.showToast("Select CPLfold before downloading a bonus matrix.");
+      return false;
+    }
+    if (structure.status === "running") {
+      api.showToast("Wait for the current CPLfold operation to finish or cancel it first.");
+      return false;
+    }
+
+    const prepared = sequenceInfo || window.Hyb2Pages.getStructureSequence(state);
+    if (!prepared || prepared.error || !prepared.sequence) {
+      api.showToast(prepared && prepared.error ? prepared.error : "Choose a valid sequence first.");
+      return false;
+    }
+    if (!prepared.assembly || !Array.isArray(prepared.assembly.evidenceArms) || !prepared.assembly.evidenceArms.length) {
+      api.showToast("No eligible HYB rows are available for a CPLfold bonus matrix.");
+      return false;
+    }
+
+    const previousStatus = structure.result ? "complete" : "idle";
+    const previousMessage = structure.message;
+    const runId = (structure.runId || 0) + 1;
+    structure.runId = runId;
+    structure.status = "running";
+    structure.operation = "bonus-matrix";
+    structure.progress = 2;
+    structure.message = "Preparing the CPLfold HYB bonus matrix for download…";
+    structure.runningSequenceInfo = prepared;
+    api.render();
+
+    let worker;
+    try {
+      worker = new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
+      state.structureWorker = worker;
+    } catch (error) {
+      structure.status = "error";
+      structure.operation = null;
+      structure.progress = 0;
+      structure.runningSequenceInfo = null;
+      structure.message = error && error.message ? error.message : "This browser cannot start the CPLfold bonus-matrix worker.";
+      api.render();
+      api.showToast(structure.message);
+      return false;
+    }
+
+    worker.onmessage = function (event) {
+      const message = event.data || {};
+      if (!state.structure || state.structure.runId !== runId) {
+        return;
+      }
+      if (message.type === "progress") {
+        structure.progress = Math.max(0, Math.min(99, Number(message.percent) || 0));
+        structure.message = message.stage || "Preparing the CPLfold bonus matrix…";
+        api.render();
+        return;
+      }
+      if (message.type === "bonus-matrix-complete") {
+        finishWorker(state, worker);
+        structure.status = previousStatus;
+        structure.operation = null;
+        structure.progress = 0;
+        structure.message = previousMessage;
+        structure.runningSequenceInfo = null;
+        api.render();
+        if (typeof onComplete === "function") {
+          onComplete(message.result);
+        }
+        return;
+      }
+      if (message.type === "error") {
+        finishWorker(state, worker);
+        structure.status = "error";
+        structure.operation = null;
+        structure.progress = 0;
+        structure.runningSequenceInfo = null;
+        structure.message = message.message || "The CPLfold bonus matrix could not be prepared.";
+        api.render();
+        api.showToast(structure.message);
+      }
+    };
+
+    worker.onerror = function () {
+      if (!state.structure || state.structure.runId !== runId) {
+        return;
+      }
+      finishWorker(state, worker);
+      structure.status = "error";
+      structure.operation = null;
+      structure.progress = 0;
+      structure.runningSequenceInfo = null;
+      structure.message = "The CPLfold bonus-matrix worker stopped unexpectedly. Confirm that the generated Pyodide assets are available.";
+      api.render();
+      api.showToast(structure.message);
+    };
+
+    try {
+      worker.postMessage({
+        type: "cplfold-bonus-matrix",
+        sequence: prepared.sequence,
+        evidenceMode: "hyb-blocks",
+        evidenceArms: prepared.assembly.evidenceArms
+      });
+    } catch (error) {
+      finishWorker(state, worker);
+      structure.status = "error";
+      structure.operation = null;
+      structure.progress = 0;
+      structure.runningSequenceInfo = null;
+      structure.message = error && error.message ? error.message : "The CPLfold bonus-matrix worker could not receive the request.";
+      api.render();
+      api.showToast(structure.message);
+      return false;
+    }
+    return true;
+  }
+
   function failCapacityProbe(state, worker, runId, api, message) {
     if (!state.structure || state.structure.runId !== runId) {
       return false;
@@ -693,6 +811,7 @@
     parseManualConstraints: parseManualConstraints,
     predict: predict,
     probeCplfoldCapacity: probeCplfoldCapacity,
+    downloadCplfoldBonusMatrix: downloadCplfoldBonusMatrix,
     reset: reset,
     cancel: cancel,
     terminate: cancel

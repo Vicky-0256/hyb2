@@ -367,8 +367,8 @@ assert.match(cplfoldSetup, /1 eligible HYB row/);
 assert.match(cplfoldSetup, /Predict CPLfold candidates/);
 assert.match(cplfoldSetup, /Baseline 75 nt/);
 assert.match(cplfoldSetup, /data-feature-action="probe-cplfold-capacity"/);
-assert.match(cplfoldSetup, /data-feature-action="download-local-cplfold-input"[^>]*>Download local FASTA/);
-assert.match(cplfoldSetup, /title="Download prepared sequence for local bin\/cplfold"/);
+assert.match(cplfoldSetup, /data-feature-action="download-local-cplfold-input"[^>]*>Download local inputs/);
+assert.match(cplfoldSetup, /title="Download prepared FASTA and HYB bonus matrix for local bin\/cplfold"/);
 assert.doesNotMatch(cplfoldSetup, /Minimum hairpin loop/);
 const cplfoldPrepared = context.window.Hyb2Pages.getStructureSequence(cplfoldState);
 assert.equal(cplfoldPrepared.sequence, "GGCGCGGCACCGUCCGCGGAACAAACGG");
@@ -402,7 +402,7 @@ cplfoldWorker.onmessage({ data: { type: "complete", result: {
   model: "LinearFold Vienna-mode scoring with CPLfold/HotKnots DP09 energy ranking",
   engine: "CPLfold",
   engineVersion: "af49f8e",
-  bridgeVersion: "3",
+  bridgeVersion: "4",
   runtime: "Pyodide test runtime",
   dotBracket: "..(((((..[[[[)))))......]]]]",
   energy: -8.0204,
@@ -459,7 +459,7 @@ assert.match(cplfoldResultHtml, /Pseudoknot candidate/);
 assert.match(cplfoldResultHtml, /HYB-derived CPLfold bonus matrix/);
 assert.match(cplfoldResultHtml, /data-feature-action="select-cplfold-candidate"/);
 assert.match(cplfoldResultHtml, /Download bonus matrix/);
-assert.match(cplfoldResultHtml, /data-feature-action="download-local-cplfold-input"[^>]*>Download local FASTA/);
+assert.match(cplfoldResultHtml, /data-feature-action="download-local-cplfold-input"[^>]*>Download local inputs/);
 assert.match(cplfoldResultHtml, /pseudoknot-1/);
 const cplfoldApi = { renders: 0, toasts: [], render: function () { this.renders += 1; }, showToast: function (message) { this.toasts.push(message); } };
 const localInputEvents = { downloads: [], toasts: [] };
@@ -474,8 +474,56 @@ assert.deepEqual(localInputEvents.downloads, [{
   name: "cplfold-input.fasta",
   contents: ">HYB2_Web_prepared_sequence\nGGCGCGGCACCGUCCGCGGAACAAACGG\n",
   mediaType: "text/plain"
+}, {
+  name: "cplfold-bonus-matrix.tsv",
+  contents: "# HYB2 CPLfold bonus matrix\n# sequence_length=28\n# coordinate_system=prepared-sequence-1-based-inclusive\n# transform=IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p\nprepared_position_1\tprepared_position_2\tlog1p_gaussian_hyb_bonus\n3\t20\t0.80000000\n4\t19\t0.40000000\n",
+  mediaType: "text/tab-separated-values"
 }]);
-assert.match(localInputEvents.toasts[0], /bin\/cplfold --sequence-file cplfold-input\.fasta/);
+assert.match(localInputEvents.toasts[0], /bin\/cplfold --sequence-file cplfold-input\.fasta --bonus-matrix-file cplfold-bonus-matrix\.tsv/);
+
+const preResultCplfoldState = Object.assign({}, cplfoldState, {
+  structure: Object.assign({}, cplfoldState.structure, {
+    status: "idle",
+    operation: null,
+    progress: 0,
+    message: "",
+    result: null,
+    runId: 0,
+    runningSequenceInfo: null
+  })
+});
+const preResultInputEvents = { downloads: [], toasts: [], renders: 0 };
+const preResultInputApi = {
+  download: function (name, contents, mediaType) {
+    preResultInputEvents.downloads.push({ name: name, contents: contents, mediaType: mediaType });
+  },
+  render: function () { preResultInputEvents.renders += 1; },
+  showToast: function (message) { preResultInputEvents.toasts.push(message); }
+};
+const preResultWorkersBefore = workerInstances.length;
+assert.equal(context.window.Hyb2StructureUI.handleAction("download-local-cplfold-input", preResultCplfoldState, preResultInputApi), true);
+assert.equal(workerInstances.length, preResultWorkersBefore + 1);
+const bonusMatrixWorker = workerInstances.at(-1);
+assert.equal(bonusMatrixWorker.message.type, "cplfold-bonus-matrix");
+assert.equal(bonusMatrixWorker.message.evidenceArms.length, 1);
+bonusMatrixWorker.onmessage({ data: { type: "bonus-matrix-complete", result: {
+  engine: "CPLfold",
+  engineVersion: "af49f8e",
+  bridgeVersion: "4",
+  sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+  evidenceMode: "hyb-blocks",
+  evidence: {
+    source: "hyb-block-intervals",
+    inputRecords: 1,
+    bonusEntries: [{ one: 3, two: 20, value: 0.8 }]
+  }
+} } });
+assert.equal(preResultInputEvents.downloads.length, 2);
+assert.equal(preResultInputEvents.downloads[0].name, "cplfold-input.fasta");
+assert.equal(preResultInputEvents.downloads[1].name, "cplfold-bonus-matrix.tsv");
+assert.match(preResultInputEvents.downloads[1].contents, /sequence_length=28/);
+assert.match(preResultInputEvents.toasts.at(-1), /--bonus-matrix-file cplfold-bonus-matrix\.tsv/);
+assert.equal(preResultCplfoldState.structure.status, "idle");
 assert.equal(context.window.Hyb2StructureUI.handleAction("select-cplfold-candidate", cplfoldState, cplfoldApi, { dataset: { candidateIndex: "1" } }), true);
 assert.equal(cplfoldState.structure.result.selectedCandidate, 1);
 assert.equal(cplfoldState.structure.result.topology, "nested");

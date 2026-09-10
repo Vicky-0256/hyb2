@@ -3,6 +3,9 @@
 `cplfold_web.py` adapts the vendored pure-Python CPLfold source to a small JSON
 API used by `cplfold.worker.mjs`. It also reproduces CPLfold's IRIS-style
 HYB/PARIS interval-to-bonus transform directly from the prepared HYB arms.
+The `bonus_matrix_json` operation exports that same transform as sparse
+upper-triangle entries for local `bin/cplfold` handoff without running a
+browser fold.
 
 The browser runtime is intentionally conservative:
 

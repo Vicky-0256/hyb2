@@ -29,7 +29,7 @@ assert.equal(manifest.pyodide, "0.29.4");
 assert.equal(manifest.python, "3.13.2");
 assert.equal(manifest.numpy, "2.2.5");
 assert.equal(manifest.cplfoldRevision, "af49f8e");
-assert.equal(manifest.bridgeVersion, "3");
+assert.equal(manifest.bridgeVersion, "4");
 assert.match(manifest.cplfoldArchiveFile, /^cplfold-python-[a-f0-9]{64}\.zip$/);
 const archivePath = path.join(runtimeDirectory, manifest.cplfoldArchiveFile);
 assert.ok(fs.statSync(archivePath).size > 0);
@@ -62,6 +62,24 @@ assert.equal(matrixContract.symmetric, true);
 assert.equal(matrixContract.rows, 1);
 assert.ok(Math.abs(matrixContract.maximum - Math.log(2)) < 1e-6,
   "discrete Gaussian vectors must be peak-normalised before the original log1p transform");
+
+const exportContract = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify({
+  sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+  evidenceMode: "hyb-blocks",
+  evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }]
+}))));
+assert.equal(exportContract.bridgeVersion, "4");
+assert.equal(exportContract.evidence.inputRecords, 1);
+assert.ok(exportContract.evidence.bonusEntries.length > 0);
+assert.ok(exportContract.evidence.bonusEntries.every(function (entry) { return entry.one < entry.two; }));
+
+const extendedExport = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify({
+  sequence: "A".repeat(501),
+  evidenceMode: "hyb-blocks",
+  evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 493, twoEnd: 498 }]
+}))));
+assert.equal(extendedExport.sequence.length, 501);
+assert.equal(extendedExport.evidence.inputRecords, 1);
 
 const result = JSON.parse(String(bridge.fold_json(JSON.stringify({
   sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",

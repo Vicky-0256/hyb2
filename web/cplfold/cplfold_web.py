@@ -19,9 +19,10 @@ from typing import Any
 
 
 CPLFOLD_SOURCE_REVISION = "af49f8e"
-BRIDGE_VERSION = "3"
+BRIDGE_VERSION = "4"
 DEFAULT_MAX_SEQUENCE_LENGTH = 75
 BROWSER_HARD_MAX_SEQUENCE_LENGTH = 500
+BONUS_EXPORT_MAX_SEQUENCE_LENGTH = 5_000
 MAX_EVIDENCE_RECORDS = 50_000
 ENERGY_MODELS = {"DP03", "DP09", "CC06", "CC09", "RE"}
 BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">"}
@@ -98,6 +99,19 @@ def _sequence(value: Any, maximum: int = DEFAULT_MAX_SEQUENCE_LENGTH) -> str:
     if len(sequence) > maximum:
         raise ValueError(
             f"Browser CPLfold is limited to {maximum} nt for this capacity-tested request."
+        )
+    return sequence
+
+
+def _bonus_export_sequence(value: Any) -> str:
+    sequence = re.sub(r"\s+", "", str(value or "")).upper().replace("T", "U")
+    if not sequence:
+        raise ValueError("CPLfold requires an RNA sequence.")
+    if re.search(r"[^ACGU]", sequence):
+        raise ValueError("CPLfold accepts only A, C, G and U.")
+    if len(sequence) > BONUS_EXPORT_MAX_SEQUENCE_LENGTH:
+        raise ValueError(
+            f"Bonus-matrix export is limited to {BONUS_EXPORT_MAX_SEQUENCE_LENGTH:,} nt in the browser."
         )
     return sequence
 
@@ -201,6 +215,106 @@ def build_hyb_bonus_matrix(
         "maximumBonus": maximum,
         "bonusEntries": bonus_entries,
         "nucleotideSupport": nucleotide_support,
+        "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
+    }
+
+
+def build_hyb_bonus_matrix_export(
+    sequence_length: int, arms: list[tuple[int, int, int, int]]
+) -> dict[str, Any]:
+    """Build the sparse TSV representation without allocating an n-by-n array.
+
+    Folding still uses ``build_hyb_bonus_matrix`` because the parser needs a
+    dense matrix.  Downloads only need non-zero upper-triangle cells, so this
+    path keeps the same float32 arithmetic while avoiding a second quadratic
+    allocation and permits local handoff for sequences above the browser fold
+    ceiling.
+    """
+
+    if not arms:
+        return {
+            "source": "none",
+            "inputRecords": 0,
+            "uniqueBlocks": 0,
+            "nonzeroBonusCells": 0,
+            "nonzeroUpperTriangleCells": 0,
+            "maximumBonus": 0.0,
+            "bonusEntries": [],
+            "evidenceWeight": "none",
+        }
+
+    arm_lengths = [
+        end - start + 1
+        for arm in arms
+        for start, end in ((arm[0], arm[1]), (arm[2], arm[3]))
+    ]
+    standard_deviation = max(float(np.mean(arm_lengths)) / 6.0, 1e-6)
+    positions = np.arange(sequence_length, dtype=np.float32)
+    compressed = Counter(arms)
+    upper_support: dict[tuple[int, int], np.float32] = {}
+    diagonal_support = np.zeros(sequence_length, dtype=np.float32)
+
+    for (one_start, one_end, two_start, two_end), weight in compressed.items():
+        one_mean = ((one_start - 1) + one_end) / 2.0
+        two_mean = ((two_start - 1) + two_end) / 2.0
+        one_support = np.exp(-0.5 * ((positions - one_mean) / standard_deviation) ** 2)
+        two_support = np.exp(-0.5 * ((positions - two_mean) / standard_deviation) ** 2)
+        one_support /= np.max(one_support)
+        two_support /= np.max(two_support)
+        active = np.flatnonzero((one_support > 0) | (two_support > 0))
+        weight32 = np.float32(weight)
+
+        for position in active:
+            diagonal_contribution = weight32 * np.float32(
+                np.float32(one_support[position] * two_support[position]) * np.float32(2.0)
+            )
+            diagonal_support[position] = np.float32(
+                diagonal_support[position] + diagonal_contribution
+            )
+
+        for offset, left in enumerate(active[:-1]):
+            for right in active[offset + 1:]:
+                contribution = weight32 * np.float32(
+                    np.float32(one_support[left] * two_support[right])
+                    + np.float32(one_support[right] * two_support[left])
+                )
+                if contribution == 0:
+                    continue
+                key = (int(left), int(right))
+                upper_support[key] = np.float32(
+                    upper_support.get(key, np.float32(0.0)) + contribution
+                )
+
+    threshold = np.float32(1e-6)
+    diagonal_bonus = np.log1p(np.where(diagonal_support >= threshold, diagonal_support, 0.0)).astype(
+        np.float32, copy=False
+    )
+    entries = []
+    for (left, right), support in sorted(upper_support.items()):
+        if support < threshold:
+            continue
+        entries.append({
+            "one": left + 1,
+            "two": right + 1,
+            "value": float(np.log1p(np.float32(support))),
+        })
+
+    maximum = float(np.max(diagonal_bonus)) if diagonal_bonus.size else 0.0
+    if entries:
+        maximum = max(maximum, max(float(entry["value"]) for entry in entries))
+    nonzero_diagonal = int(np.count_nonzero(diagonal_bonus))
+    return {
+        "source": "hyb-block-intervals",
+        "transform": "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
+        "coordinateSystem": "prepared-sequence, 1-based inclusive input",
+        "inputRecords": len(arms),
+        "uniqueBlocks": len(compressed),
+        "meanArmLength": float(np.mean(arm_lengths)),
+        "gaussianStandardDeviation": standard_deviation,
+        "nonzeroBonusCells": nonzero_diagonal + 2 * len(entries),
+        "nonzeroUpperTriangleCells": len(entries),
+        "maximumBonus": maximum,
+        "bonusEntries": entries,
         "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
     }
 
@@ -376,6 +490,27 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def bonus_matrix(payload: dict[str, Any]) -> dict[str, Any]:
+    """Prepare the exact sparse bonus matrix used by a guided local run."""
+
+    sequence = _bonus_export_sequence(payload.get("sequence"))
+    evidence_mode = str(payload.get("evidenceMode", "none"))
+    if evidence_mode not in {"none", "hyb-blocks"}:
+        raise ValueError("CPLfold evidence mode must be 'none' or 'hyb-blocks'.")
+    arms = _normalise_arms(payload.get("evidenceArms"), len(sequence)) if evidence_mode == "hyb-blocks" else []
+    if evidence_mode == "hyb-blocks" and not arms:
+        raise ValueError("No eligible HYB rows are fully contained in the selected reference region.")
+    evidence = build_hyb_bonus_matrix_export(len(sequence), arms)
+    return {
+        "engine": "CPLfold",
+        "engineVersion": CPLFOLD_SOURCE_REVISION,
+        "bridgeVersion": BRIDGE_VERSION,
+        "sequence": sequence,
+        "evidenceMode": evidence_mode,
+        "evidence": evidence,
+    }
+
+
 def fold_json(payload_json: str) -> str:
     payload = json.loads(payload_json)
     if not isinstance(payload, dict):
@@ -383,4 +518,18 @@ def fold_json(payload_json: str) -> str:
     return json.dumps(fold(payload), separators=(",", ":"), allow_nan=False)
 
 
-__all__ = ["build_hyb_bonus_matrix", "fold", "fold_json"]
+def bonus_matrix_json(payload_json: str) -> str:
+    payload = json.loads(payload_json)
+    if not isinstance(payload, dict):
+        raise ValueError("The CPLfold bonus-matrix request must be a JSON object.")
+    return json.dumps(bonus_matrix(payload), separators=(",", ":"), allow_nan=False)
+
+
+__all__ = [
+    "build_hyb_bonus_matrix",
+    "build_hyb_bonus_matrix_export",
+    "bonus_matrix",
+    "bonus_matrix_json",
+    "fold",
+    "fold_json",
+]

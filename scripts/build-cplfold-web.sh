@@ -67,6 +67,6 @@ archive_file="cplfold-python-${archive_hash}.zip"
 cp "$archive_staging" "$output_directory/$archive_file"
 printf '{\n  "pyodide": "%s",\n  "python": "3.13.2",\n  "numpy": "2.2.5",\n  "cplfoldRevision": "af49f8e",\n  "bridgeVersion": "2",\n  "buildCommit": "%s",\n  "cplfoldArchiveFile": "%s",\n  "cplfoldArchiveSha256": "%s"\n}\n' \
   "$pyodide_version" "$build_commit" "$archive_file" "$archive_hash" > "$output_directory/build-manifest.json"
-sed -i 's/"bridgeVersion": "2"/"bridgeVersion": "3"/' "$output_directory/build-manifest.json"
+sed -i 's/"bridgeVersion": "2"/"bridgeVersion": "4"/' "$output_directory/build-manifest.json"
 
 printf 'Built browser CPLfold runtime in %s\n' "$output_directory"

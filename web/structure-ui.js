@@ -35,11 +35,14 @@
 
     if (action === "cancel-structure") {
       const capacityProbe = state.structure && state.structure.operation === "capacity";
+      const bonusMatrixExport = state.structure && state.structure.operation === "bonus-matrix";
       if (window.Hyb2Structure) {
         window.Hyb2Structure.cancel(state);
       }
       api.render();
-      api.showToast(capacityProbe ? "Browser CPLfold capacity test cancelled." : "Local structure prediction cancelled.");
+      api.showToast(capacityProbe
+        ? "Browser CPLfold capacity test cancelled."
+        : (bonusMatrixExport ? "CPLfold local input export cancelled." : "Local structure prediction cancelled."));
       return true;
     }
 
@@ -118,7 +121,7 @@
     }
 
     if (action === "download-cplfold-evidence") {
-      api.download("cplfold-hyb-bonus-matrix.tsv", cplfoldEvidenceTsv(result), "text/tab-separated-values");
+      api.download("cplfold-bonus-matrix.tsv", cplfoldEvidenceTsv(result), "text/tab-separated-values");
       api.showToast("CPLfold HYB bonus matrix downloaded locally.");
       return true;
     }
@@ -168,13 +171,64 @@
       return true;
     }
 
+    const guided = state.structure.cplfoldEvidence === "hyb-blocks";
+    if (prepared && prepared.error) {
+      api.showToast(prepared.error);
+      return true;
+    }
+
     api.download(
       "cplfold-input.fasta",
       ">HYB2_Web_prepared_sequence\n" + sequence + "\n",
       "text/plain"
     );
-    api.showToast("CPLfold input downloaded. Run: bin/cplfold --sequence-file cplfold-input.fasta");
+
+    const hasPreparedArms = prepared && prepared.assembly && Array.isArray(prepared.assembly.evidenceArms) && prepared.assembly.evidenceArms.length > 0;
+    const hasResultMatrix = result && result.evidence && result.evidence.source === "hyb-block-intervals" && Array.isArray(result.evidence.bonusEntries);
+    if (!guided || (!hasPreparedArms && !hasResultMatrix)) {
+      api.showToast("CPLfold FASTA downloaded. Run: " + localCplfoldCommand(state.structure, false));
+      return true;
+    }
+
+    if (hasResultMatrix) {
+      api.download("cplfold-bonus-matrix.tsv", cplfoldEvidenceTsv(result), "text/tab-separated-values");
+      api.showToast("CPLfold local inputs downloaded. Run: " + localCplfoldCommand(state.structure, true));
+      return true;
+    }
+
+    if (!window.Hyb2Structure || typeof window.Hyb2Structure.downloadCplfoldBonusMatrix !== "function") {
+      api.showToast("The local CPLfold bonus-matrix exporter is unavailable in this browser.");
+      return true;
+    }
+    api.showToast("FASTA downloaded. Preparing the CPLfold HYB bonus matrix…");
+    window.Hyb2Structure.downloadCplfoldBonusMatrix(state, api, prepared, function (matrixResult) {
+      api.download("cplfold-bonus-matrix.tsv", cplfoldEvidenceTsv(matrixResult), "text/tab-separated-values");
+      api.showToast("CPLfold local inputs downloaded. Run: " + localCplfoldCommand(state.structure, true));
+    });
     return true;
+  }
+
+  function localCplfoldCommand(structure, guided) {
+    const command = [
+      "bin/cplfold",
+      "--sequence-file",
+      "cplfold-input.fasta"
+    ];
+    if (guided) {
+      command.push("--bonus-matrix-file", "cplfold-bonus-matrix.tsv");
+    }
+    command.push(
+      "--beam", profileValue(structure && structure.cplfoldBeam, "20"),
+      "--delta", profileValue(structure && structure.cplfoldEnergyDelta, "5"),
+      "--max-phase1", profileValue(structure && structure.cplfoldMaxPhase1, "3"),
+      "--max-phase2", "1",
+      "--model", profileValue(structure && structure.cplfoldEnergyModel, "DP09").toUpperCase(),
+      "--beta", profileValue(structure && structure.cplfoldBeta, "0")
+    );
+    if (guided) {
+      command.push("--alpha", profileValue(structure && structure.cplfoldAlpha, "0.5"));
+    }
+    return command.join(" ");
   }
 
   function selectCplfoldCandidate(result, index) {
@@ -748,12 +802,19 @@
   }
 
   function cplfoldEvidenceTsv(result) {
-    const rows = [["prepared_position_1", "prepared_position_2", "log1p_gaussian_hyb_bonus"]];
     const evidence = result.evidence || {};
+    const sequenceLength = result.sequence ? String(result.sequence).length : Number(evidence.sequenceLength) || 0;
+    const rows = [
+      "# HYB2 CPLfold bonus matrix",
+      "# sequence_length=" + sequenceLength,
+      "# coordinate_system=prepared-sequence-1-based-inclusive",
+      "# transform=IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
+      ["prepared_position_1", "prepared_position_2", "log1p_gaussian_hyb_bonus"].join("\t")
+    ];
     (evidence.bonusEntries || []).forEach(function (entry) {
-      rows.push([entry.one, entry.two, Number(entry.value).toFixed(6)]);
+      rows.push([entry.one, entry.two, Number(entry.value).toFixed(8)].join("\t"));
     });
-    return rows.map(function (row) { return row.join("\t"); }).join("\n") + "\n";
+    return rows.join("\n") + "\n";
   }
 
   function cplfoldCandidatesTsv(result) {

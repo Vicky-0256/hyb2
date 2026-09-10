@@ -87,9 +87,10 @@ an optional HYB-derived block bonus matrix, and visualises/ranks nested and
 pseudoknotted candidates. The browser path uses a measured session-specific
 recommendation above a 75 nt baseline, with a 500 nt hard safety ceiling
 without Numba; use the structure page's local-input download and run
-`bin/cplfold --sequence-file cplfold-input.fasta` for longer sequences. The
-download contains the prepared sequence only, not the browser-only HYB bonus
-matrix. Resolve the licensing boundary in
+`bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv`
+for longer guided sequences. The download includes the prepared sequence and,
+when HYB-guided CPLfold is selected, the same sparse bonus matrix used in the
+browser. Resolve the licensing boundary in
 `third_party/cplfold/THIRD_PARTY_NOTICES.md` before public release.
 The Pages workflow enforces that decision through the repository Actions
 variable `CPLFOLD_DISTRIBUTION_APPROVED=true`; leave it unset until approval.

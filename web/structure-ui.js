@@ -869,6 +869,7 @@
     ensembleTsv: ensembleTsv,
     cplfoldEvidenceTsv: cplfoldEvidenceTsv,
     cplfoldCandidatesTsv: cplfoldCandidatesTsv,
+    localCplfoldCommand: localCplfoldCommand,
     selectCplfoldCandidate: selectCplfoldCandidate
   };
 }());

@@ -157,6 +157,159 @@
   margin: 0;
 }
 
+.cplfold-local-guide {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.cplfold-local-guide summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  list-style: none;
+}
+
+.cplfold-local-guide summary::-webkit-details-marker {
+  display: none;
+}
+
+.cplfold-local-guide summary::after {
+  flex: 0 0 auto;
+  color: var(--primary);
+  content: "+";
+  font-size: 18px;
+  line-height: 1;
+}
+
+.cplfold-local-guide[open] summary::after {
+  content: "−";
+}
+
+.cplfold-local-guide summary > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cplfold-local-guide summary strong {
+  color: var(--primary);
+  font-size: 13px;
+}
+
+.cplfold-local-guide summary small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.cplfold-guide-body {
+  display: grid;
+  gap: 12px;
+}
+
+.cplfold-guide-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 21px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cplfold-guide-steps li::marker {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.cplfold-guide-steps li {
+  padding-left: 3px;
+}
+
+.cplfold-guide-steps li > strong,
+.cplfold-guide-steps li > span {
+  display: block;
+}
+
+.cplfold-guide-steps li > strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.cplfold-guide-steps li > span {
+  margin-top: 2px;
+}
+
+.cplfold-guide-steps em {
+  color: var(--primary);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.cplfold-guide-files,
+.cplfold-guide-override {
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.cplfold-guide-file {
+  display: grid;
+  grid-template-columns: minmax(180px, .42fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.cplfold-guide-file code {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.cplfold-command {
+  max-width: 100%;
+  margin: 7px 0 0;
+  padding: 10px 11px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.cplfold-guide-override p,
+.cplfold-guide-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.cplfold-guide-override small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.cplfold-guide-note {
+  padding-top: 2px;
+}
+
 .assembly-preview {
   display: grid;
   gap: 8px;
@@ -669,6 +822,11 @@
 
   .cplfold-capacity-row .button {
     width: 100%;
+  }
+
+  .cplfold-guide-file {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 
   .structure-setup .card-title-row .method-badge {

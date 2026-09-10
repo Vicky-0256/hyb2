@@ -1,11 +1,173 @@
 (function () {
   "use strict";
 
-  const MAX_CONTACT_CELLS = 100000;
-  const MAX_CONTACT_BIN_CONTRIBUTIONS = 2000000;
+  const CONTACT_MIN_CELLS = 50000;
+  const CONTACT_BASELINE_CELLS = 100000;
+  const CONTACT_HARD_MAX_CELLS = 1000000;
+  const CONTACT_BASELINE_BIN_CONTRIBUTIONS = 2000000;
+  const CONTACT_HARD_MAX_BIN_CONTRIBUTIONS = 20000000;
+  const CONTACT_BIN_CONTRIBUTIONS_PER_CELL = 20;
+  const CONTACT_ESTIMATED_CELL_BYTES = 320;
+  const CONTACT_MEMORY_BYTES_PER_GB = 32 * 1024 * 1024;
+  const CONTACT_MIN_MEMORY_BUDGET_BYTES = 32 * 1024 * 1024;
+  const CONTACT_MAX_MEMORY_BUDGET_BYTES = 256 * 1024 * 1024;
+  const CONTACT_FALLBACK_MEMORY_GB = 2;
+  const CONTACT_TARGET_BUILD_MS = 250;
   const MAX_COMPARISON_CELLS = 100000;
   const MAX_COMPARISON_DATASET_CELLS = 500000;
   const MAX_R_INTEGER_COUNT = 2147483647;
+  let contactResourceBudgetCache = null;
+
+  function clampInteger(value, minimum, maximum) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return minimum;
+    }
+    return Math.max(minimum, Math.min(maximum, Math.floor(numeric)));
+  }
+
+  function getBrowserNavigator() {
+    if (typeof navigator !== "undefined" && navigator) {
+      return navigator;
+    }
+    if (typeof window !== "undefined" && window && window.navigator) {
+      return window.navigator;
+    }
+    return null;
+  }
+
+  function performanceNow() {
+    if (typeof performance !== "undefined" && performance && typeof performance.now === "function") {
+      return performance.now();
+    }
+    if (typeof window !== "undefined" && window && window.performance && typeof window.performance.now === "function") {
+      return window.performance.now();
+    }
+    return Date.now();
+  }
+
+  function median(values) {
+    if (!values.length) {
+      return 0;
+    }
+    const sorted = values.slice().sort(function (left, right) { return left - right; });
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+
+  // The probe follows the allocation and lookup pattern used by the sparse map.
+  // It is intentionally small so the first contact-map render stays responsive.
+  function probeContactPerformance() {
+    const sampleCells = 4000;
+    const sampleContributions = 16000;
+    const cellRates = [];
+    const contributionRates = [];
+    let checksum = 0;
+
+    for (let round = 0; round < 4; round += 1) {
+      const cells = Object.create(null);
+      let startedAt = performanceNow();
+      for (let index = 0; index < sampleCells; index += 1) {
+        const key = index + ":" + index;
+        cells[key] = { x: index, y: index, records: 0, support: 0, value: 1 };
+      }
+      const cellElapsed = Math.max(1, performanceNow() - startedAt);
+
+      startedAt = performanceNow();
+      for (let index = 0; index < sampleContributions; index += 1) {
+        const coordinate = index % sampleCells;
+        const cell = cells[coordinate + ":" + coordinate];
+        if (cell) {
+          cell.records += 1;
+          cell.value += 1;
+          checksum += cell.records;
+        }
+      }
+      const contributionElapsed = Math.max(1, performanceNow() - startedAt);
+
+      if (round > 0) {
+        cellRates.push(sampleCells / cellElapsed);
+        contributionRates.push(sampleContributions / contributionElapsed);
+      }
+    }
+
+    if (checksum === Number.MIN_SAFE_INTEGER) {
+      return { cellsPerMs: 0, contributionsPerMs: 0 };
+    }
+    return {
+      cellsPerMs: Math.max(1, median(cellRates)),
+      contributionsPerMs: Math.max(1, median(contributionRates))
+    };
+  }
+
+  function getContactResourceBudget() {
+    if (contactResourceBudgetCache) {
+      return contactResourceBudgetCache;
+    }
+
+    const browserNavigator = getBrowserNavigator();
+    const reportedDeviceMemory = browserNavigator && Number.isFinite(Number(browserNavigator.deviceMemory))
+      ? Number(browserNavigator.deviceMemory)
+      : null;
+    const deviceMemoryGb = reportedDeviceMemory !== null && reportedDeviceMemory > 0
+      ? Math.min(64, reportedDeviceMemory)
+      : null;
+    const hardwareConcurrency = browserNavigator && Number.isSafeInteger(Number(browserNavigator.hardwareConcurrency)) && Number(browserNavigator.hardwareConcurrency) > 0
+      ? Number(browserNavigator.hardwareConcurrency)
+      : null;
+
+    let probe;
+    try {
+      probe = probeContactPerformance();
+    } catch (error) {
+      probe = {
+        cellsPerMs: CONTACT_BASELINE_CELLS / CONTACT_TARGET_BUILD_MS,
+        contributionsPerMs: CONTACT_BASELINE_BIN_CONTRIBUTIONS / CONTACT_TARGET_BUILD_MS
+      };
+    }
+
+    const effectiveMemoryGb = deviceMemoryGb || CONTACT_FALLBACK_MEMORY_GB;
+    const memoryBudgetBytes = Math.max(
+      CONTACT_MIN_MEMORY_BUDGET_BYTES,
+      Math.min(CONTACT_MAX_MEMORY_BUDGET_BYTES, effectiveMemoryGb * CONTACT_MEMORY_BYTES_PER_GB)
+    );
+    const memoryBoundCells = Math.floor(memoryBudgetBytes / CONTACT_ESTIMATED_CELL_BYTES);
+    const performanceBoundCells = Math.max(
+      CONTACT_BASELINE_CELLS,
+      Math.floor(probe.cellsPerMs * CONTACT_TARGET_BUILD_MS)
+    );
+    const maximumCells = clampInteger(
+      Math.min(memoryBoundCells, performanceBoundCells),
+      CONTACT_MIN_CELLS,
+      CONTACT_HARD_MAX_CELLS
+    );
+    const performanceBoundContributions = Math.floor(probe.contributionsPerMs * CONTACT_TARGET_BUILD_MS);
+    const maximumBinContributions = clampInteger(
+      Math.max(
+        CONTACT_BASELINE_BIN_CONTRIBUTIONS,
+        Math.min(
+          CONTACT_HARD_MAX_BIN_CONTRIBUTIONS,
+          performanceBoundContributions,
+          maximumCells * CONTACT_BIN_CONTRIBUTIONS_PER_CELL
+        )
+      ),
+      CONTACT_BASELINE_BIN_CONTRIBUTIONS,
+      CONTACT_HARD_MAX_BIN_CONTRIBUTIONS
+    );
+
+    contactResourceBudgetCache = {
+      maximumCells: maximumCells,
+      maximumBinContributions: maximumBinContributions,
+      deviceMemoryGb: deviceMemoryGb,
+      hardwareConcurrency: hardwareConcurrency,
+      memoryBudgetMb: Math.round(memoryBudgetBytes / (1024 * 1024)),
+      estimatedCellBytes: CONTACT_ESTIMATED_CELL_BYTES,
+      targetBuildMs: CONTACT_TARGET_BUILD_MS,
+      probeCellsPerMs: probe.cellsPerMs,
+      probeContributionsPerMs: probe.contributionsPerMs,
+      profile: deviceMemoryGb === null ? "fallback-memory+performance-probe" : "device-memory+performance-probe"
+    };
+    return contactResourceBudgetCache;
+  }
 
   function defaultInteractionFilters() {
     return {
@@ -355,6 +517,9 @@
   function buildContactMatrix(records, contact) {
     const requestedBinSize = Number(contact.binSize);
     const binSize = Number.isSafeInteger(requestedBinSize) && requestedBinSize > 0 ? requestedBinSize : 10;
+    const resourceBudget = getContactResourceBudget();
+    const maximumCells = resourceBudget.maximumCells;
+    const maximumBinContributions = resourceBudget.maximumBinContributions;
     const cells = Object.create(null);
     let xMin = Infinity;
     let xMax = -Infinity;
@@ -390,12 +555,12 @@
       const value = contact.measure === "records" ? 1 : record.supportCount;
 
       if (!Number.isSafeInteger(xBinCount) || !Number.isSafeInteger(yBinCount) ||
-          !Number.isSafeInteger(recordContributions) || recordContributions > MAX_CONTACT_CELLS) {
-        limitReason = "Contact map not generated: one interaction spans more than " + MAX_CONTACT_CELLS.toLocaleString("en-US") + " bin pairs. Increase the bin size or correct unusually large arm coordinates.";
+          !Number.isSafeInteger(recordContributions) || recordContributions > maximumCells) {
+        limitReason = "Contact map not generated: one interaction spans more than " + maximumCells.toLocaleString("en-US") + " bin pairs under the adaptive browser budget. Increase the bin size or correct unusually large arm coordinates.";
         break;
       }
-      if (recordContributions > MAX_CONTACT_BIN_CONTRIBUTIONS - binContributions) {
-        limitReason = "Contact map not generated: the selected records require more than " + MAX_CONTACT_BIN_CONTRIBUTIONS.toLocaleString("en-US") + " bin contributions. Increase the bin size or narrow the selected data.";
+      if (recordContributions > maximumBinContributions - binContributions) {
+        limitReason = "Contact map not generated: the selected records require more than " + maximumBinContributions.toLocaleString("en-US") + " bin contributions under the adaptive browser budget. Increase the bin size or narrow the selected data.";
         break;
       }
 
@@ -404,8 +569,8 @@
           const key = x + ":" + y;
           let cell = cells[key];
           if (!cell) {
-            if (cellCount >= MAX_CONTACT_CELLS) {
-              limitReason = "Contact map not generated: the selected records cover more than " + MAX_CONTACT_CELLS.toLocaleString("en-US") + " distinct cells. Increase the bin size or narrow the selected data.";
+            if (cellCount >= maximumCells) {
+              limitReason = "Contact map not generated: the selected records cover more than " + maximumCells.toLocaleString("en-US") + " distinct cells under the adaptive browser budget. Increase the bin size or narrow the selected data.";
               break recordLoop;
             }
             cell = { x: x, y: y, records: 0, support: 0 };
@@ -442,8 +607,9 @@
         recordsUsed: 0,
         totalSupport: 0,
         cellContributions: binContributions,
-        maximumCells: MAX_CONTACT_CELLS,
-        maximumBinContributions: MAX_CONTACT_BIN_CONTRIBUTIONS,
+        maximumCells: maximumCells,
+        maximumBinContributions: maximumBinContributions,
+        resourceBudget: resourceBudget,
         max: 0,
         cap: 0
       };
@@ -468,8 +634,9 @@
       recordsUsed: recordsUsed,
       totalSupport: totalSupport,
       cellContributions: binContributions,
-      maximumCells: MAX_CONTACT_CELLS,
-      maximumBinContributions: MAX_CONTACT_BIN_CONTRIBUTIONS,
+      maximumCells: maximumCells,
+      maximumBinContributions: maximumBinContributions,
+      resourceBudget: resourceBudget,
       max: displayValues.length ? displayValues[displayValues.length - 1] : 0,
       cap: cap
     };
@@ -1473,6 +1640,7 @@
     getFilteredRecords: getFilteredRecords,
     getPartnerCounts: getPartnerCounts,
     orientRecordForPair: orientRecordForPair,
+    getContactResourceBudget: getContactResourceBudget,
     buildContactMatrix: buildContactMatrix,
     getCellRecords: getCellRecords,
     getRegionResults: getRegionResults,

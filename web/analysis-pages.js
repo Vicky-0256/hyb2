@@ -159,6 +159,9 @@
       ? (contact.matrix || window.Hyb2Data.buildContactMatrix(state.records || [], contact))
       : null;
     contact.matrix = matrix;
+    const budgetHint = matrix && matrix.resourceBudget
+      ? "Adaptive browser budget: up to " + format(matrix.resourceBudget.maximumCells) + " cells / " + format(matrix.resourceBudget.maximumBinContributions) + " bin contributions. "
+      : "";
     const selection = contact.selection;
     const selectedRecords = selection && matrix
       ? window.Hyb2Data.getCellRecords(state.records || [], contact, selection.x, selection.y)
@@ -207,7 +210,7 @@
         { value: "exclude", label: "Exclude homodimer proxy" }
       ], "contact-control"),
       "</div>",
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset navigator</button><span class="control-hint">Use the three linked maps from overview to local detail. Cluster support is used only when the input carries legacy count metadata.</span></div>',
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset navigator</button><span class="control-hint">' + escape(budgetHint) + 'Use the three linked maps from overview to local detail. Cluster support is used only when the input carries legacy count metadata.</span></div>',
       "</section>",
       matrix && matrix.cells.length ? [
         '<section class="contact-navigator" aria-label="Three-stage contact map navigator">',
@@ -286,9 +289,12 @@
       : contact.rnaX && contact.rnaY
       ? "No interactions were found for the selected RNA pair."
       : "Choose two RNAs to generate a contact map.";
+    const budgetNote = matrix && matrix.resourceBudget
+      ? "Adaptive browser budget: up to " + format(matrix.resourceBudget.maximumCells) + " cells and " + format(matrix.resourceBudget.maximumBinContributions) + " bin contributions, estimated from browser memory and a short local performance probe."
+      : "Contact map calculations stay local and are generated from the HYB records currently loaded in this tab.";
     return [
       '<section class="placeholder-card contact-empty"><div class="placeholder-inner"><span class="placeholder-label">' + (limited ? "Contact map limit" : "Contact map") + "</span><h2>" + escape(message) + "</h2>",
-      "<p>Contact map calculations stay local and are generated from the HYB records currently loaded in this tab.</p></div></section>"
+      "<p>" + escape(budgetNote) + "</p></div></section>"
     ].join("");
   }
 

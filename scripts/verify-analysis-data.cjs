@@ -29,6 +29,50 @@ vm.runInContext(
 );
 
 const data = context.window.Hyb2Data;
+const contactBudget = data.getContactResourceBudget();
+assert.ok(contactBudget.maximumCells >= 50000);
+assert.ok(contactBudget.maximumCells <= 1000000);
+assert.ok(contactBudget.maximumBinContributions >= 2000000);
+assert.ok(contactBudget.maximumBinContributions <= 20000000);
+assert.ok(contactBudget.targetBuildMs > 0);
+assert.ok(contactBudget.probeCellsPerMs > 0);
+assert.ok(contactBudget.probeContributionsPerMs > 0);
+
+function loadBudgetForProfile(deviceMemory, clockStep) {
+  let tick = 0;
+  const dynamicContext = vm.createContext({
+    Number,
+    String,
+    Boolean,
+    Object,
+    Array,
+    Math,
+    RegExp,
+    Set,
+    Map,
+    Intl,
+    window: {
+      navigator: { deviceMemory: deviceMemory, hardwareConcurrency: 4 },
+      performance: { now: function () { tick += clockStep; return tick; } }
+    }
+  });
+  vm.runInContext(
+    fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"),
+    dynamicContext,
+    { filename: "analysis-data-dynamic-budget.js" }
+  );
+  return dynamicContext.window.Hyb2Data.getContactResourceBudget();
+}
+
+const lowMemoryBudget = loadBudgetForProfile(0.5, 1);
+const highMemoryBudget = loadBudgetForProfile(8, 1);
+const slowBudget = loadBudgetForProfile(8, 100);
+assert.ok(highMemoryBudget.maximumCells > lowMemoryBudget.maximumCells,
+  "reported device memory should raise the adaptive contact-cell budget");
+assert.ok(highMemoryBudget.maximumBinContributions > lowMemoryBudget.maximumBinContributions,
+  "reported device memory should raise the adaptive contribution budget");
+assert.ok(highMemoryBudget.maximumCells > slowBudget.maximumCells,
+  "the local performance probe should lower the budget on a slower device");
 const defaultStructure = data.defaultStructureState();
 assert.equal(defaultStructure.engine, "viennarna", "ViennaRNA should remain the default structure engine");
 assert.equal(defaultStructure.constraintMode, "none", "Structure folding should default to plain MFE mode");
@@ -118,6 +162,9 @@ const spanning = record({
 });
 const spanningMatrix = data.buildContactMatrix([spanning], contact());
 assert.equal(spanningMatrix.ready, true);
+assert.equal(spanningMatrix.maximumCells, contactBudget.maximumCells);
+assert.equal(spanningMatrix.maximumBinContributions, contactBudget.maximumBinContributions);
+assert.equal(spanningMatrix.resourceBudget.maximumCells, contactBudget.maximumCells);
 assert.equal(spanningMatrix.recordsUsed, 1);
 assert.equal(spanningMatrix.totalSupport, 4);
 assert.equal(spanningMatrix.cellContributions, 4);

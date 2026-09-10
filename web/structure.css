@@ -157,6 +157,39 @@
   margin: 0;
 }
 
+.cplfold-local-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.cplfold-local-cta > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cplfold-local-cta strong {
+  color: var(--primary);
+  font-size: 13px;
+}
+
+.cplfold-local-cta span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.cplfold-local-cta .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .cplfold-local-guide {
   display: grid;
   gap: 10px;
@@ -308,6 +341,80 @@
 
 .cplfold-guide-note {
   padding-top: 2px;
+}
+
+.local-run-shell {
+  min-height: 100vh;
+}
+
+.local-run-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.local-run-main {
+  display: grid;
+  gap: 26px;
+  width: min(1040px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 56px 0 76px;
+}
+
+.local-run-hero {
+  display: grid;
+  gap: 14px;
+  max-width: 780px;
+}
+
+.local-run-hero h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(34px, 6vw, 58px);
+  font-weight: 780;
+  letter-spacing: 0;
+  line-height: .98;
+}
+
+.local-run-hero p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+.local-run-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.local-run-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-tight);
+}
+
+.local-run-card-wide {
+  grid-column: 1 / -1;
+}
+
+.local-run-card h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.local-run-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .assembly-preview {
@@ -824,9 +931,37 @@
     width: 100%;
   }
 
+  .cplfold-local-cta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cplfold-local-cta .button {
+    width: 100%;
+  }
+
   .cplfold-guide-file {
     grid-template-columns: 1fr;
     gap: 2px;
+  }
+
+  .local-run-main {
+    width: min(100% - 28px, 1040px);
+    padding: 36px 0 56px;
+  }
+
+  .local-run-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .local-run-header .header-actions {
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .local-run-header .header-actions .button,
+  .local-run-header .header-actions .quiet-button {
+    flex: 1 1 0;
   }
 
   .structure-setup .card-title-row .method-badge {

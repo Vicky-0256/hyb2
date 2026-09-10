@@ -732,7 +732,7 @@
       ], "structure-control") + "</div>",
       '<div class="control-grid">' + renderTextControl("Evidence alpha", "cplfoldAlpha", structure.cplfoldAlpha || "0.5", "0.5", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + renderTextControl("Pseudoknot beta", "cplfoldBeta", structure.cplfoldBeta || "0", "0", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + "</div>",
       renderCplfoldCapacity(structure),
-      renderCplfoldLocalGuide(structure, guided),
+      renderCplfoldLocalCta(guided),
       '<p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p>',
       "</section>"
     ].join("");
@@ -776,27 +776,12 @@
     return lines.join(" \\\n");
   }
 
-  function renderCplfoldLocalGuide(structure, guided) {
-    const command = cplfoldLocalCommand(structure, guided);
-    const longCommand = "HYB2_CPLFOLD_MAX_NT=2000 " + command;
+  function renderCplfoldLocalCta(guided) {
     return [
-      '<details class="cplfold-local-guide" open>',
-      '<summary><span><strong>Run longer sequences locally</strong><small>Download the prepared inputs, then run <code>bin/cplfold</code> on your own machine.</small></span></summary>',
-      '<div class="cplfold-guide-body">',
-      '<ol class="cplfold-guide-steps">',
-      '<li><strong>Download the prepared inputs.</strong><span>Click <em>Download local inputs</em> below the sequence preview. It always downloads <code>cplfold-input.fasta</code>. HYB-guided mode also prepares and downloads <code>cplfold-bonus-matrix.tsv</code>; wait for the second download to finish.</span></li>',
-      '<li><strong>Put the files in the HYB2 repository root.</strong><span>The commands below assume that both downloaded files are next to the <code>bin/</code> and <code>requirements/</code> directories.</span></li>',
-      '<li><strong>Install the local environment once.</strong><span>Skip this step if <code>bin/cplfold</code> already runs in your active environment.</span><pre class="cplfold-command"><code>python3.11 -m venv .venv-cplfold\n. .venv-cplfold/bin/activate\npython -m pip install -r requirements/cplfold-core.txt</code></pre></li>',
-      '<li><strong>Run the command for the current settings.</strong><span>' + (guided ? "Use both files to reproduce the HYB-guided bonus-matrix input." : "Sequence-only mode needs only the FASTA file; no bonus matrix is required.") + '</span><pre class="cplfold-command"><code>' + escape(formatCplfoldCommand(command)) + "</code></pre></li>",
-      "</ol>",
-      '<div class="cplfold-guide-files"><span class="drawer-kicker">Downloaded files</span>',
-      '<div class="cplfold-guide-file"><code>cplfold-input.fasta</code><span>Required single-record FASTA with the prepared sequence.</span></div>',
-      guided ? '<div class="cplfold-guide-file"><code>cplfold-bonus-matrix.tsv</code><span>Required for this HYB-guided run; sparse 1-based prepared-sequence coordinates.</span></div>' : '<div class="cplfold-guide-file"><code>bonus matrix</code><span>Not used in sequence-only mode.</span></div>',
-      "</div>",
-      '<div class="cplfold-guide-override"><span class="drawer-kicker">For sequences above 1,000 nt</span><p>The local wrapper has a conservative 1,000 nt guard. After checking your machine\'s memory, override it deliberately by prefixing the same command:</p><pre class="cplfold-command"><code>' + escape(formatCplfoldCommand(longCommand)) + "</code></pre><small>Append <code>--output cplfold-results.txt</code> if you want to save the tabular result to a file.</small></div>",
-      '<p class="cplfold-guide-note">The downloaded bonus matrix is already in the format expected by <code>bin/cplfold</code>. Do not transpose it or convert its coordinates; the local CLI reconstructs the symmetric matrix before folding.</p>',
-      "</div>",
-      "</details>"
+      '<div class="cplfold-local-cta">',
+      '<div><strong>Run longer sequences locally</strong><span>' + (guided ? "Download the prepared FASTA and bonus matrix, then run bin/cplfold on your own machine." : "Download the prepared FASTA, then run bin/cplfold on your own machine.") + '</span></div>',
+      '<a class="button button-secondary" href="./local-cplfold.html" target="_blank" rel="noopener">Open local run guide</a>',
+      "</div>"
     ].join("");
   }
 

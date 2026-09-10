@@ -10,6 +10,7 @@ const appSource = fs.readFileSync(path.join(repository, "web", "app.js"), "utf8"
 const analysisPagesSource = fs.readFileSync(path.join(repository, "web", "analysis-pages.js"), "utf8");
 const overviewPageSource = fs.readFileSync(path.join(repository, "web", "overview-page.js"), "utf8");
 const indexSource = fs.readFileSync(path.join(repository, "web", "index.html"), "utf8");
+const localCplfoldSource = fs.readFileSync(path.join(repository, "web", "local-cplfold.html"), "utf8");
 const workflowSource = fs.readFileSync(path.join(repository, ".github", "workflows", "deploy-pages.yml"), "utf8");
 const exampleHybPath = path.join(repository, "web", "assets", "examples", "ZIKV_1-10807_example.hyb");
 const exampleFastaPath = path.join(repository, "web", "assets", "examples", "ZIKV_1-10807.fasta");
@@ -647,6 +648,14 @@ assert.match(appSource, /const referenceFile = parseOptions\.referenceFile \|\| 
   "primary HYB parsing must carry a landing-page FASTA into the workspace");
 assert.match(appSource, /if \(parseSession\.referenceFile\) \{\s*loadFasta\(parseSession\.referenceFile\);\s*\}/,
   "a retained example or landing-page FASTA must load after HYB parsing");
+assert.match(analysisPagesSource, /href="\.\/local-cplfold\.html"[^>]*>Open local run guide<\/a>/,
+  "the CPLfold setup must link to the dedicated local-run guide page");
+assert.match(localCplfoldSource, /<h1 id="local-run-title">Run longer sequences locally<\/h1>/,
+  "the dedicated local-run guide page must have a clear title");
+assert.match(localCplfoldSource, /--bonus-matrix-file cplfold-bonus-matrix\.tsv/,
+  "the local-run guide must document the HYB-derived bonus matrix input");
+assert.match(localCplfoldSource, /HYB2_CPLFOLD_MAX_NT=2000 bin\/cplfold/,
+  "the local-run guide must document deliberate local sequence-limit override");
 assert.match(appSource, /removeFasta: removeFasta/,
   "the feature UI must delegate FASTA removal to the app session owner");
 assert.match(appSource, /function startParsing\(file(?:,\s*options)?\)\s*{\s*terminateWorker\(\);\s*cancelComparisonLoads\(\);\s*invalidateFastaLoad\(\);/,

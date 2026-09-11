@@ -168,6 +168,9 @@ state.structure.result = {
 
 const resultHtml = context.window.Hyb2Pages.renderStructure(state);
 assert.match(resultHtml, /-2\.50/);
+assert.match(resultHtml, /Folded RNA structure/);
+assert.match(resultHtml, /data-view-mode="folded"/);
+assert.match(resultHtml, /data-view-mode="folded" aria-pressed="true"/);
 assert.match(resultHtml, /Download DBN/);
 assert.match(resultHtml, /Download CT/);
 assert.match(resultHtml, /data-feature-action="download-structure-png">Download PNG/);
@@ -185,6 +188,7 @@ state.structure.viewMode = "matrix";
 const matrixResultHtml = context.window.Hyb2Pages.renderStructure(state);
 assert.match(matrixResultHtml, /Base-pair matrix/);
 assert.match(matrixResultHtml, /data-view-mode="matrix"/);
+assert.match(matrixResultHtml, /data-view-mode="folded" aria-pressed="false"/);
 assert.match(matrixResultHtml, /data-view-mode="radial" aria-pressed="false"/);
 let viewRenderCount = 0;
 assert.equal(context.window.Hyb2StructureUI.handleAction("set-structure-view", state, {

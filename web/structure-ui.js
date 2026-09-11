@@ -406,7 +406,7 @@
   }
 
   function structureViewMode(value) {
-    return ["arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "arc";
+    return ["folded", "arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "folded";
   }
 
   function structureViewFileStem(viewMode) {
@@ -415,6 +415,8 @@
 
   function buildStructureDiagram(result, selectedNucleotide, viewMode) {
     switch (structureViewMode(viewMode)) {
+      case "folded":
+        return buildFoldedDiagram(result, selectedNucleotide);
       case "radial":
         return buildRadialDiagram(result, selectedNucleotide);
       case "circular":
@@ -424,6 +426,156 @@
       default:
         return buildArcDiagram(result, selectedNucleotide);
     }
+  }
+
+  function buildFoldedDiagram(result, selectedNucleotide) {
+    const width = 760;
+    const height = 620;
+    const sequence = result.sequence || "";
+    const length = Math.max(1, sequence.length);
+    const colors = colorTokens();
+    const pairs = result.pairs || [];
+    const points = foldedLayout(length, pairs, width, height);
+    const svg = structureSvg(width, height, "Folded diagram for " + length + " nucleotide RNA secondary structure", "Predicted RNA fold with backbone, stems and loops", colors);
+    const hardPairs = structureHardPairs(result);
+
+    const backbone = element("path", {
+      d: points.map(function (point, index) { return (index ? "L " : "M ") + point.x.toFixed(2) + " " + point.y.toFixed(2); }).join(" "),
+      fill: "none",
+      stroke: colors.lineStrong,
+      "stroke-width": length <= 180 ? 2.2 : 1.5,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      opacity: 0.9
+    });
+    svg.appendChild(backbone);
+
+    pairs.forEach(function (pair) {
+      const start = points[pair.left - 1];
+      const end = points[pair.right - 1];
+      if (!start || !end) {
+        return;
+      }
+      const style = structurePairStyle(result, pair, colors, hardPairs);
+      const rung = element("line", {
+        x1: start.x.toFixed(2), y1: start.y.toFixed(2),
+        x2: end.x.toFixed(2), y2: end.y.toFixed(2),
+        stroke: style.stroke,
+        "stroke-width": style.strokeWidth,
+        "stroke-linecap": "round",
+        "stroke-dasharray": style.dash,
+        opacity: style.opacity
+      });
+      rung.appendChild(element("title", {}, structurePairTitle(result, pair, style)));
+      svg.appendChild(rung);
+    });
+
+    if (length <= 700) {
+      const radius = length <= 100 ? 5.2 : (length <= 300 ? 3.5 : 2.2);
+      points.forEach(function (point, index) {
+        svg.appendChild(structureMarker(result, index + 1, point.x, point.y, colors, selectedNucleotide, radius));
+      });
+      if (length <= 120) {
+        points.forEach(function (point, index) {
+          svg.appendChild(element("text", {
+            x: point.x,
+            y: point.y + 3.2,
+            fill: Number(selectedNucleotide) === index + 1 ? colors.surface : colors.ink,
+            "font-size": 7.5,
+            "font-weight": 700,
+            "text-anchor": "middle",
+            "pointer-events": "none"
+          }, sequence.charAt(index)));
+        });
+      }
+    } else {
+      appendInspectionTrack(svg, result, selectedNucleotide, 150, height - 30, width - 300, colors);
+    }
+
+    tickPositions(length).forEach(function (position) {
+      const point = points[position - 1];
+      if (point) {
+        svg.appendChild(element("text", { x: point.x + 7, y: point.y - 7, fill: colors.muted, "font-size": 9, "font-family": "ui-monospace, monospace" }, String(position)));
+      }
+    });
+    legend(svg, colors, result, { x: 28, y: 22 });
+    return svg;
+  }
+
+  function foldedLayout(length, pairs, width, height) {
+    const points = [];
+    const centerX = width / 2;
+    const centerY = height / 2 + 18;
+    const initialRadius = Math.min(width, height) * 0.34;
+    for (let index = 0; index < length; index += 1) {
+      const angle = -Math.PI / 2 + index * Math.PI * 2 / Math.max(12, length);
+      const spiral = initialRadius * (0.72 + 0.28 * index / Math.max(1, length - 1));
+      points.push({ x: centerX + Math.cos(angle) * spiral, y: centerY + Math.sin(angle) * spiral, vx: 0, vy: 0 });
+    }
+    const links = [];
+    for (let index = 0; index < length - 1; index += 1) {
+      links.push({ left: index, right: index + 1, distance: 13, strength: 0.16 });
+    }
+    pairs.forEach(function (pair) {
+      if (pair.left >= 1 && pair.right <= length && pair.left < pair.right) {
+        links.push({ left: pair.left - 1, right: pair.right - 1, distance: 18, strength: 0.24 });
+      }
+    });
+    const iterations = length <= 300 ? 220 : (length <= 700 ? 130 : 60);
+    for (let step = 0; step < iterations; step += 1) {
+      links.forEach(function (link) {
+        const one = points[link.left];
+        const two = points[link.right];
+        const dx = two.x - one.x;
+        const dy = two.y - one.y;
+        const distance = Math.max(0.01, Math.sqrt(dx * dx + dy * dy));
+        const force = (distance - link.distance) * link.strength;
+        const fx = dx / distance * force;
+        const fy = dy / distance * force;
+        one.vx += fx; one.vy += fy;
+        two.vx -= fx; two.vy -= fy;
+      });
+      points.forEach(function (point, index) {
+        const previous = points[index - 2];
+        const next = points[index + 2];
+        [previous, next].forEach(function (other) {
+          if (!other) { return; }
+          const dx = point.x - other.x;
+          const dy = point.y - other.y;
+          const distanceSquared = Math.max(16, dx * dx + dy * dy);
+          point.vx += dx / distanceSquared * 1.8;
+          point.vy += dy / distanceSquared * 1.8;
+        });
+        point.vx += (centerX - point.x) * 0.0009;
+        point.vy += (centerY - point.y) * 0.0009;
+      });
+      points.forEach(function (point) {
+        point.vx *= 0.72;
+        point.vy *= 0.72;
+        point.x += point.vx;
+        point.y += point.vy;
+      });
+    }
+    return fitFoldedPoints(points, width, height);
+  }
+
+  function fitFoldedPoints(points, width, height) {
+    const paddingX = 72;
+    const paddingTop = 64;
+    const paddingBottom = 52;
+    const xs = points.map(function (point) { return point.x; });
+    const ys = points.map(function (point) { return point.y; });
+    const minX = Math.min.apply(Math, xs);
+    const maxX = Math.max.apply(Math, xs);
+    const minY = Math.min.apply(Math, ys);
+    const maxY = Math.max.apply(Math, ys);
+    const scale = Math.min((width - paddingX * 2) / Math.max(1, maxX - minX), (height - paddingTop - paddingBottom) / Math.max(1, maxY - minY));
+    return points.map(function (point) {
+      return {
+        x: paddingX + (point.x - minX) * scale,
+        y: paddingTop + (point.y - minY) * scale
+      };
+    });
   }
 
   function buildArcDiagram(result, selectedNucleotide) {

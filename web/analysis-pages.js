@@ -931,11 +931,12 @@
   }
 
   function structureViewMode(value) {
-    return ["arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "arc";
+    return ["folded", "arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "folded";
   }
 
   function structureViewCopy(viewMode, cplfold, guided, manualConstrained) {
     const descriptions = {
+      folded: "The RNA backbone is laid out as a folded molecule: paired bases form stem rungs while unpaired bases open into hairpin and internal loops.",
       arc: cplfold
         ? "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects HYB bonus support when enabled."
         : (guided ? "Arc colour intensity shows aggregated RNAcofold evidence; fitted constraint arcs are thicker." : (manualConstrained ? "Manual hard-pair arcs are thicker and marked in the base-pair list; all other arcs minimise free energy around them." : "Each arc represents a ViennaRNA MFE base pair.")),
@@ -949,18 +950,21 @@
   function renderStructureDiagramPanel(result, viewMode, cplfold, guided, manualConstrained, inspectorInstruction) {
     const activeView = structureViewMode(viewMode);
     const titles = {
+      folded: "Folded RNA structure",
       arc: "Arc diagram",
       radial: "Radial diagram",
       circular: "Circular contact view",
       matrix: "Base-pair matrix"
     };
     const labels = {
+      folded: "Folded RNA secondary-structure diagram",
       arc: "RNA secondary-structure arc diagram",
       radial: "RNA secondary-structure radial diagram",
       circular: "RNA secondary-structure circular diagram",
       matrix: "RNA secondary-structure base-pair matrix"
     };
     const options = [
+      ["folded", "Folded"],
       ["arc", "Arc"],
       ["radial", "Radial"],
       ["circular", "Circular"],

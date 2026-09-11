@@ -320,7 +320,7 @@
         parameters: null,
         message: ""
       },
-      viewMode: "arc",
+      viewMode: "folded",
       selectedNucleotide: null,
       operation: null,
       status: "idle",

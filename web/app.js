@@ -19,6 +19,7 @@
 
   const state = {
     activePage: "landing",
+    analysisEntered: false,
     dialog: null,
     file: null,
     summary: null,
@@ -82,7 +83,7 @@
     const route = parts[0];
     const query = new URLSearchParams(parts[1] || "");
 
-    if (!state.summary) {
+    if (!state.summary || !state.analysisEntered) {
       state.activePage = "landing";
       return;
     }
@@ -119,18 +120,19 @@
   }
 
   function render() {
-    app.innerHTML = state.summary ? renderWorkspace() : renderLanding();
+    const workspaceOpen = !!state.summary && state.analysisEntered;
+    app.innerHTML = workspaceOpen ? renderWorkspace() : renderLanding();
     document.documentElement.dataset.theme = state.theme;
     app.dataset.density = state.density;
     const themeColor = document.querySelector('meta[name="theme-color"]');
     if (themeColor) {
       themeColor.setAttribute("content", state.theme === "dark" ? "#132c47" : "#f3f7f8");
     }
-    document.title = state.summary
+    document.title = workspaceOpen
       ? pageTitle(state.activePage) + " · HYB2 Web Lite"
       : "HYB2 Web Lite";
 
-    if (state.summary && window.Hyb2UI) {
+    if (workspaceOpen && window.Hyb2UI) {
       window.Hyb2UI.afterRender(state, featureApi());
     }
   }
@@ -198,13 +200,17 @@
       ].join("");
     }
 
+    if (state.summary && !state.analysisEntered) {
+      return renderPreparedFilePanel();
+    }
+
     const landingFastaFile = state.landingFastaFile;
     return [
       '<div class="file-card"><div class="file-card-inner">',
       '  <div class="file-card-header">',
       "    <div>",
       "      <h2>Start with interaction data</h2>",
-      "      <p>Choose one HYB file to begin a local analysis session.</p>",
+      "      <p>Choose one HYB file. After it is parsed, you can add a reference FASTA before entering analysis.</p>",
       "    </div>",
       '    <span class="v0-chip">Local-only</span>',
       "  </div>",
@@ -239,7 +245,7 @@
       '    <div class="reference-upload-copy">',
       '      <span class="reference-upload-kicker">Optional reference</span>',
       '      <h3 id="reference-upload-title">Add a FASTA for RNA structure</h3>',
-      '      <p>Choose it now or add it later from the workspace.</p>',
+      '      <p>Choose it now, after HYB parsing, or later from the workspace.</p>',
       "    </div>",
       '    <div class="reference-upload-actions">',
       '      <span class="reference-file-name' + (landingFastaFile ? "" : " is-empty") + '" title="' + escapeAttribute(landingFastaFile ? landingFastaFile.name : "No FASTA selected") + '">' + escapeHtml(landingFastaFile ? landingFastaFile.name : "No FASTA selected") + "</span>",
@@ -249,6 +255,57 @@
       "  </section>",
       '  <p class="privacy-note">Files are read and processed locally in this browser. This page has no upload endpoint.</p>',
       '  <p class="card-footnote">Recommended working size: up to 50 MB. Larger files are streamed to a dedicated worker to keep the interface responsive.</p>',
+      "</div></div>"
+    ].join("");
+  }
+
+  function renderPreparedFilePanel() {
+    const summary = state.summary || {};
+    const fasta = state.fasta;
+    const fastaLoad = state.fastaLoadSession;
+    const loadingFile = fastaLoad && fastaLoad.file;
+    const fastaFileName = loadingFile && loadingFile.name || (fasta && fasta.fileName) || "No FASTA selected";
+    const mappedCount = fasta
+      ? Object.keys(fasta.mapping || {}).filter(function (rna) { return fasta.mapping[rna]; }).length
+      : 0;
+    const sequenceCount = fasta && Array.isArray(fasta.sequences) ? fasta.sequences.length : 0;
+    const fastaStatus = fastaLoad
+      ? (fasta ? "Updating locally" : "Reading locally")
+      : (fasta ? "Ready" : "Optional");
+    const fastaDetail = fastaLoad
+      ? "The reference file will remain available while you enter the workspace."
+      : (fasta ? formatNumber(sequenceCount) + " sequence" + (sequenceCount === 1 ? "" : "s") + " · " + formatNumber(mappedCount) + " RNA mapping" + (mappedCount === 1 ? "" : "s") : "Needed for reference-based RNA structure and full-reference Viewpoint.");
+    return [
+      '<div class="file-card"><div class="file-card-inner prepared-file-card">',
+      '  <div class="file-card-header">',
+      "    <div>",
+      '      <span class="file-card-kicker">Step 1 complete</span>',
+      '      <h2>Review files before analysis</h2>',
+      '      <p>HYB is parsed locally. Add an optional reference FASTA now, then open the analysis workspace when you are ready.</p>',
+      "    </div>",
+      '    <span class="status-chip">Files ready</span>',
+      "  </div>",
+      '  <section class="prepared-file-list" aria-label="Files ready for analysis">',
+      '    <div class="prepared-file-row">',
+      '      <span class="prepared-file-kind prepared-file-kind-hyb">HYB</span>',
+      '      <div class="prepared-file-details"><strong title="' + escapeAttribute(summary.fileName || "HYB file") + '">' + escapeHtml(summary.fileName || "HYB file") + '</strong><span>' + formatBytes(summary.fileSize) + " · " + formatNumber(summary.validRecords) + ' valid records</span></div>',
+      '      <span class="prepared-file-status is-ready">Ready</span>',
+      "    </div>",
+      '    <div class="prepared-file-row prepared-file-row-reference">',
+      '      <span class="prepared-file-kind prepared-file-kind-fasta">FASTA</span>',
+      '      <div class="prepared-file-details"><strong title="' + escapeAttribute(fastaFileName) + '">' + escapeHtml(fastaFileName) + '</strong><span>' + escapeHtml(fastaDetail) + '</span></div>',
+      '      <span class="prepared-file-status' + (fastaLoad ? " is-loading" : (fasta ? " is-ready" : " is-optional")) + '">' + fastaStatus + '</span>',
+      '      <button class="quiet-button" type="button" data-action="choose-fasta">' + (fasta || fastaLoad ? "Replace FASTA" : "Add FASTA") + '</button>',
+      "    </div>",
+      "  </section>",
+      '  <p class="prepared-file-note"><strong>FASTA is optional.</strong> Interaction tables and contact maps can run without it; reference-based structure and full-reference coordinate views need a mapped sequence. You can also add or replace it later from the Files panel.</p>',
+      '  <section class="prepared-next-step" aria-label="Enter analysis workspace">',
+      '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>All calculations still run locally in this browser tab.</span></div>',
+      '    <button class="button" type="button" data-action="enter-analysis">Enter analysis</button>',
+      "  </section>",
+      '  <div class="prepared-file-actions"><button class="button button-secondary" type="button" data-action="reset-file">Choose another HYB</button></div>',
+      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
+      '  <p class="privacy-note">Files are read and processed locally in this browser. This page has no upload endpoint.</p>',
       "</div></div>"
     ].join("");
   }
@@ -483,7 +540,7 @@
       '<div class="pop-layer">',
       '  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="help-dialog-title" data-dialog>',
       '    <h2 id="help-dialog-title">HYB2 Web Lite</h2>',
-      "    <p>Choose a local .hyb or tab-delimited .txt file. HYB parsing, filtering, contact maps, region exploration, FASTA mapping, and exports run without a server connection.</p>",
+      "    <p>Choose a local .hyb or tab-delimited .txt file. After parsing, review the files and add an optional FASTA before clicking Enter analysis. HYB parsing, filtering, contact maps, region exploration, FASTA mapping, and exports run without a server connection.</p>",
       '    <div class="dialog-actions"><button class="button" type="button" data-action="close-dialog">Close</button></div>',
       "  </section>",
       "</div>"
@@ -575,6 +632,11 @@
 
     if (action === "navigate") {
       navigate(actionNode.dataset.page);
+      return;
+    }
+
+    if (action === "enter-analysis") {
+      enterAnalysis();
       return;
     }
 
@@ -870,6 +932,7 @@
     state.parseSession = parseSession;
     state.dialog = null;
     state.file = file;
+    state.analysisEntered = false;
     state.summary = null;
     state.records = [];
     state.filters = null;
@@ -975,7 +1038,9 @@
               ? Math.min(secondStructureExtent.max, secondStructureExtent.min + 200)
               : state.region.end;
             state.loading = null;
-            navigate("overview");
+            state.analysisEntered = false;
+            state.activePage = "landing";
+            setRouteHash("#/");
             if (parseSession.referenceFile) {
               loadFasta(parseSession.referenceFile);
             }
@@ -983,7 +1048,7 @@
               if (state.summary === summary) {
                 state.summary.sha256 = hash;
                 state.summary.sha256Unavailable = !hash;
-                if (state.dialog === "files") {
+                if (state.dialog === "files" || !state.analysisEntered) {
                   render();
                 }
               }
@@ -991,7 +1056,7 @@
               if (state.summary === summary) {
                 state.summary.sha256 = "";
                 state.summary.sha256Unavailable = true;
-                if (state.dialog === "files") {
+                if (state.dialog === "files" || !state.analysisEntered) {
                   render();
                 }
               }
@@ -1063,6 +1128,14 @@
     const isAnalysis = analysisPages.some(function (item) { return item.id === page; });
     const nextHash = isAnalysis ? "#/workspace/" + page : "#/" + page;
     setRouteHash(nextHash);
+  }
+
+  function enterAnalysis() {
+    if (!state.summary) {
+      return;
+    }
+    state.analysisEntered = true;
+    navigate("overview");
   }
 
   function setRouteHash(nextHash) {
@@ -1147,6 +1220,10 @@
       return;
     }
 
+    if (!state.analysisEntered) {
+      render();
+    }
+
     let loadedFasta = null;
     try {
       showToast("Reading reference FASTA locally…");
@@ -1208,7 +1285,7 @@
       if (state.fastaLoadSession === fastaLoadSession) {
         invalidateFastaLoad();
       }
-      if (state.dialog === "files") {
+      if (state.dialog === "files" || !state.analysisEntered) {
         render();
       }
     } catch (error) {
@@ -1221,7 +1298,7 @@
         if (state.fastaLoadSession === fastaLoadSession) {
           invalidateFastaLoad();
         }
-        if (state.dialog === "files") {
+        if (state.dialog === "files" || !state.analysisEntered) {
           render();
         }
         showToast("Reference FASTA loaded, but its SHA-256 fingerprint is unavailable.");
@@ -1231,6 +1308,9 @@
         return;
       }
       invalidateFastaLoad();
+      if (!state.analysisEntered) {
+        render();
+      }
       showToast(error && error.message ? error.message : "The FASTA file could not be parsed.");
     }
   }
@@ -1451,6 +1531,7 @@
     state.exampleLoadSession = null;
     state.landingFastaFile = null;
     state.parseSession = null;
+    state.analysisEntered = false;
     state.dialog = null;
     state.file = null;
     state.summary = null;
@@ -1477,6 +1558,7 @@
     state.exampleLoadSession = null;
     state.landingFastaFile = null;
     state.parseSession = null;
+    state.analysisEntered = false;
     state.file = null;
     state.summary = null;
     state.records = [];

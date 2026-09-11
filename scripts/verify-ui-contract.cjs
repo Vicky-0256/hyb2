@@ -599,6 +599,8 @@ assert.ok(fastaLoaderMatch, "The FASTA loader should remain available for sessio
 const fastaLoaderSource = fastaLoaderMatch[1];
 assert.match(fastaLoaderSource, /const primaryFile = state\.file;/);
 assert.match(fastaLoaderSource, /const primarySummary = state\.summary;/);
+assert.match(fastaLoaderSource, /if \(!state\.analysisEntered\) \{\s*render\(\);\s*\}/,
+  "the file-review stage must show that a FASTA is being read before analysis opens");
 assert.match(fastaLoaderSource, /state\.fastaLoadSession = fastaLoadSession;/);
 assert.match(
   fastaLoaderSource,
@@ -613,6 +615,8 @@ assert.match(fastaLoaderSource, /const hash = await digestFile\(file\);\s*if \(s
   "FASTA digest completion must use file identity so a retained reference can finish hashing across a primary-HYB replacement");
 assert.match(fastaLoaderSource, /if \(state\.fastaLoadSession === fastaLoadSession\) \{\s*invalidateFastaLoad\(\);\s*}/,
   "an old retained-FASTA digest must not invalidate a newer FASTA load token");
+assert.match(fastaLoaderSource, /state\.dialog === "files" \|\| !state\.analysisEntered/,
+  "the file-review stage must refresh when FASTA loading or fingerprinting finishes");
 assert.match(fastaLoaderSource, /catch \(error\) \{\s*if \(loadedFasta\) \{\s*if \(state\.fasta !== loadedFasta\)/,
   "FASTA hash failures must update only the same retained reference object");
 assert.match(fastaLoaderSource, /loadedFasta\.sha256Unavailable = true;[\s\S]*?render\(\);[\s\S]*?fingerprint is unavailable/,
@@ -634,6 +638,20 @@ assert.match(analysisPagesSource, /Git commit:/,
   "the Files drawer must display deployed build provenance");
 assert.match(appSource, /data-action="load-example"/,
   "the landing page must expose the included example action");
+assert.match(appSource, /analysisEntered: false/,
+  "the app must begin in the file-preparation stage");
+assert.match(appSource, /const workspaceOpen = !!state\.summary && state\.analysisEntered;/,
+  "a parsed HYB must not open the workspace until the user confirms");
+assert.match(appSource, /if \(!state\.summary \|\| !state\.analysisEntered\) \{\s*state\.activePage = "landing";/,
+  "unconfirmed parsed files must remain on the landing review stage even if the hash changes");
+assert.match(appSource, /state\.summary && !state\.analysisEntered\) \{\s*return renderPreparedFilePanel\(\);/,
+  "the landing page must render the file-review stage after HYB parsing");
+assert.match(appSource, /data-action="enter-analysis">Enter analysis/,
+  "the file-review stage must expose a separate analysis-entry action");
+assert.match(appSource, /function enterAnalysis\(\)\s*\{[\s\S]*?state\.analysisEntered = true;[\s\S]*?navigate\("overview"\);/,
+  "entering analysis must be an explicit state transition");
+assert.match(appSource, /state\.loading = null;\s*state\.analysisEntered = false;\s*state\.activePage = "landing";\s*setRouteHash\("#\/"\);\s*if \(parseSession\.referenceFile\)/,
+  "HYB parsing must finish on the review stage instead of navigating directly to Overview");
 assert.match(appSource, /ZIKV_1-10807_example\.hyb/,
   "the included HYB example must visibly use the ZIKV dataset name");
 assert.match(appSource, /ZIKV_1-10807\.fasta/,
@@ -668,7 +686,7 @@ assert.match(appSource, /function resetToLanding\(\)\s*{\s*terminateWorker\(\);\
   "resetting to the landing page must cancel pending comparison and FASTA work");
 const resetSource = appSource.match(/function resetToLanding\(\)\s*{([\s\S]*?)\n  function terminateWorker/);
 assert.ok(resetSource);
-["summary", "records", "fasta", "filters", "interactionResults", "contact", "region", "viewpoint", "comparison", "structure"].forEach(function (field) {
+["summary", "records", "fasta", "filters", "interactionResults", "contact", "region", "viewpoint", "comparison", "structure", "analysisEntered"].forEach(function (field) {
   assert.match(resetSource[1], new RegExp("state\\." + field + "\\s*="),
     "resetting after a failed replacement must release " + field);
 });

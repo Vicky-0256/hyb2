@@ -162,6 +162,25 @@
     margin-bottom: 20px;
   }
 
+  .prepared-file-row,
+  .prepared-file-row-reference {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+  }
+
+  .prepared-file-row-reference .quiet-button {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .prepared-next-step {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .prepared-next-step .button {
+    width: 100%;
+  }
+
   .dropzone {
     min-height: 260px;
   }
@@ -338,6 +357,19 @@
   .reference-file-name {
     flex: 1 1 100%;
     max-width: none;
+  }
+
+  .prepared-file-row,
+  .prepared-file-row-reference {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .prepared-file-status {
+    grid-column: 2;
+  }
+
+  .prepared-file-row-reference .quiet-button {
+    grid-column: 2;
   }
 }
 

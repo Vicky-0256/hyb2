@@ -10,7 +10,9 @@
       return;
     }
 
-    target.replaceChildren(buildArcDiagram(result, state.structure.selectedNucleotide));
+    const viewMode = structureViewMode(state.structure.viewMode);
+    state.structure.viewMode = viewMode;
+    target.replaceChildren(buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode));
     bindNucleotideMarkers(target, state, api);
   }
 
@@ -43,6 +45,16 @@
       api.showToast(capacityProbe
         ? "Browser CPLfold capacity test cancelled."
         : (bonusMatrixExport ? "CPLfold local input export cancelled." : "Local structure prediction cancelled."));
+      return true;
+    }
+
+    if (action === "set-structure-view") {
+      const viewMode = structureViewMode(element && element.dataset && element.dataset.viewMode);
+      if (!state.structure) {
+        return true;
+      }
+      state.structure.viewMode = viewMode;
+      api.render();
       return true;
     }
 
@@ -138,13 +150,14 @@
         api.showToast("The structure diagram is not ready to export yet.");
         return true;
       }
-      api.download("rna-secondary-structure-arcs.svg", "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + new XMLSerializer().serializeToString(svg), "image/svg+xml");
+      const viewMode = structureViewMode(state.structure && state.structure.viewMode);
+      api.download("rna-secondary-structure-" + structureViewFileStem(viewMode) + ".svg", "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + new XMLSerializer().serializeToString(svg), "image/svg+xml");
       api.showToast("Structure SVG downloaded locally.");
       return true;
     }
 
     if (action === "download-structure-png") {
-      downloadStructurePng(api);
+      downloadStructurePng(api, structureViewMode(state.structure && state.structure.viewMode));
       return true;
     }
 
@@ -339,6 +352,9 @@
         evidenceMode: cplfold ? result.evidenceMode : null,
         evidenceSource: cplfold ? result.evidenceSource : null
       },
+      visualization: {
+        viewMode: structureViewMode(state.structure && state.structure.viewMode)
+      },
       hybGuidedEvidence: guided ? result.evidence : null,
       cplfoldEvidence: cplfold ? result.evidence : null,
       cplfoldParameters: cplfold ? result.parameters : null,
@@ -389,6 +405,27 @@
     return value === undefined || value === null || value === "" ? fallback : String(value);
   }
 
+  function structureViewMode(value) {
+    return ["arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "arc";
+  }
+
+  function structureViewFileStem(viewMode) {
+    return structureViewMode(viewMode) === "arc" ? "arcs" : structureViewMode(viewMode);
+  }
+
+  function buildStructureDiagram(result, selectedNucleotide, viewMode) {
+    switch (structureViewMode(viewMode)) {
+      case "radial":
+        return buildRadialDiagram(result, selectedNucleotide);
+      case "circular":
+        return buildCircularDiagram(result, selectedNucleotide);
+      case "matrix":
+        return buildMatrixDiagram(result, selectedNucleotide);
+      default:
+        return buildArcDiagram(result, selectedNucleotide);
+    }
+  }
+
   function buildArcDiagram(result, selectedNucleotide) {
     const width = 920;
     const height = 300;
@@ -398,10 +435,10 @@
     const sequence = result.sequence || "";
     const length = sequence.length || 1;
     const colors = colorTokens();
-    const maximumEvidence = Math.max(0, Number(result.maximumNucleotideSupport) || 0);
     const guided = result.constraintMode === "hyb-guided";
     const cplfold = result.engine === "CPLfold";
     const cplfoldEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
+    const maximumEvidence = Math.max(0, Number(cplfoldEvidence ? result.evidence.maximumBonus : result.maximumNucleotideSupport) || 0);
     const hardPairs = new Set((result.constraints || []).map(function (pair) {
       return pair.left + ":" + pair.right;
     }));
@@ -446,7 +483,408 @@
     return svg;
   }
 
-  function downloadStructurePng(api) {
+  function buildRadialDiagram(result, selectedNucleotide) {
+    const width = 680;
+    const height = 650;
+    const centerX = 340;
+    const centerY = 324;
+    const radius = 224;
+    const sequence = result.sequence || "";
+    const length = Math.max(1, sequence.length);
+    const colors = colorTokens();
+    const pairs = result.pairs || [];
+    const svg = structureSvg(width, height, "Radial diagram for " + length + " nucleotide RNA secondary structure", result.engine === "CPLfold" ? "Selected CPLfold radial structure" : "Predicted radial RNA secondary structure", colors);
+    const hardPairs = structureHardPairs(result);
+
+    [0.25, 0.5, 0.75].forEach(function (ratio) {
+      svg.appendChild(element("circle", {
+        cx: centerX,
+        cy: centerY,
+        r: (radius * ratio).toFixed(2),
+        fill: "none",
+        stroke: colors.line,
+        "stroke-width": 1,
+        "stroke-dasharray": "2 5",
+        opacity: 0.8
+      }));
+    });
+    svg.appendChild(element("circle", {
+      cx: centerX,
+      cy: centerY,
+      r: radius,
+      fill: "none",
+      stroke: colors.lineStrong,
+      "stroke-width": 1.5
+    }));
+
+    pairs.forEach(function (pair) {
+      const start = circlePoint(pair.left, length, centerX, centerY, radius);
+      const end = circlePoint(pair.right, length, centerX, centerY, radius);
+      const depth = pairDepth(pair, pairs);
+      const pull = Math.max(0.16, 0.64 - Math.min(depth, 9) * 0.045);
+      const midpointX = (start.x + end.x) / 2;
+      const midpointY = (start.y + end.y) / 2;
+      const controlX = centerX + (midpointX - centerX) * pull;
+      const controlY = centerY + (midpointY - centerY) * pull;
+      const style = structurePairStyle(result, pair, colors, hardPairs);
+      const path = element("path", {
+        d: "M " + start.x.toFixed(2) + " " + start.y.toFixed(2) + " Q " + controlX.toFixed(2) + " " + controlY.toFixed(2) + " " + end.x.toFixed(2) + " " + end.y.toFixed(2),
+        fill: "none",
+        stroke: style.stroke,
+        "stroke-width": style.strokeWidth,
+        "stroke-linecap": "round",
+        "stroke-dasharray": style.dash,
+        opacity: style.opacity
+      });
+      path.appendChild(element("title", {}, structurePairTitle(result, pair, style)));
+      svg.appendChild(path);
+    });
+
+    appendSelectedRingRay(svg, length, centerX, centerY, radius, selectedNucleotide, colors);
+    appendCircularTicks(svg, length, centerX, centerY, radius, colors);
+    appendRingMarkers(svg, result, selectedNucleotide, centerX, centerY, radius, colors);
+    legend(svg, colors, result, { x: 44, y: 24 });
+    return svg;
+  }
+
+  function buildCircularDiagram(result, selectedNucleotide) {
+    const width = 680;
+    const height = 650;
+    const centerX = 340;
+    const centerY = 324;
+    const radius = 224;
+    const sequence = result.sequence || "";
+    const length = Math.max(1, sequence.length);
+    const colors = colorTokens();
+    const pairs = result.pairs || [];
+    const svg = structureSvg(width, height, "Circular diagram for " + length + " nucleotide RNA secondary structure", result.engine === "CPLfold" ? "Selected CPLfold circular structure" : "Predicted circular RNA secondary structure", colors);
+    const hardPairs = structureHardPairs(result);
+
+    svg.appendChild(element("circle", {
+      cx: centerX,
+      cy: centerY,
+      r: radius,
+      fill: "none",
+      stroke: colors.lineStrong,
+      "stroke-width": 2
+    }));
+    svg.appendChild(element("circle", {
+      cx: centerX,
+      cy: centerY,
+      r: radius - 13,
+      fill: "none",
+      stroke: colors.line,
+      "stroke-width": 1,
+      "stroke-dasharray": "1 5"
+    }));
+
+    pairs.forEach(function (pair) {
+      const start = circlePoint(pair.left, length, centerX, centerY, radius - 4);
+      const end = circlePoint(pair.right, length, centerX, centerY, radius - 4);
+      const style = structurePairStyle(result, pair, colors, hardPairs);
+      const chord = element("line", {
+        x1: start.x.toFixed(2),
+        y1: start.y.toFixed(2),
+        x2: end.x.toFixed(2),
+        y2: end.y.toFixed(2),
+        stroke: style.stroke,
+        "stroke-width": style.strokeWidth,
+        "stroke-linecap": "round",
+        "stroke-dasharray": style.dash,
+        opacity: style.opacity
+      });
+      chord.appendChild(element("title", {}, structurePairTitle(result, pair, style)));
+      svg.appendChild(chord);
+    });
+
+    appendSelectedRingRay(svg, length, centerX, centerY, radius, selectedNucleotide, colors);
+    appendCircularTicks(svg, length, centerX, centerY, radius, colors);
+    appendRingMarkers(svg, result, selectedNucleotide, centerX, centerY, radius, colors);
+    legend(svg, colors, result, { x: 44, y: 24 });
+    return svg;
+  }
+
+  function buildMatrixDiagram(result, selectedNucleotide) {
+    const width = 760;
+    const height = 560;
+    const plotLeft = 104;
+    const plotTop = 62;
+    const plotSize = 390;
+    const plotBottom = plotTop + plotSize;
+    const sequence = result.sequence || "";
+    const length = Math.max(1, sequence.length);
+    const colors = colorTokens();
+    const pairs = result.pairs || [];
+    const svg = structureSvg(width, height, "Base-pair matrix for " + length + " nucleotide RNA secondary structure", result.engine === "CPLfold" ? "Selected CPLfold base-pair matrix" : "Predicted RNA base-pair matrix", colors);
+    const hardPairs = structureHardPairs(result);
+
+    svg.appendChild(element("rect", {
+      x: plotLeft,
+      y: plotTop,
+      width: plotSize,
+      height: plotSize,
+      fill: colors.surface,
+      stroke: colors.lineStrong,
+      "stroke-width": 1.2
+    }));
+    svg.appendChild(element("line", {
+      x1: plotLeft,
+      y1: plotTop,
+      x2: plotLeft + plotSize,
+      y2: plotBottom,
+      stroke: colors.line,
+      "stroke-width": 1,
+      "stroke-dasharray": "3 5"
+    }));
+    appendMatrixTicks(svg, length, plotLeft, plotTop, plotSize, colors);
+
+    pairs.forEach(function (pair) {
+      const first = matrixPoint(pair.left, pair.right, length, plotLeft, plotTop, plotSize);
+      const second = matrixPoint(pair.right, pair.left, length, plotLeft, plotTop, plotSize);
+      const style = structurePairStyle(result, pair, colors, hardPairs);
+      const point = element("circle", {
+        cx: first.x.toFixed(2),
+        cy: first.y.toFixed(2),
+        r: length <= 180 ? 4 : 3,
+        fill: style.stroke,
+        stroke: colors.surface,
+        "stroke-width": 0.8,
+        opacity: style.opacity
+      });
+      point.appendChild(element("title", {}, structurePairTitle(result, pair, style) + " · matrix point"));
+      svg.appendChild(point);
+      if (pair.left !== pair.right) {
+        const mirror = element("circle", {
+          cx: second.x.toFixed(2),
+          cy: second.y.toFixed(2),
+          r: length <= 180 ? 4 : 3,
+          fill: style.stroke,
+          stroke: colors.surface,
+          "stroke-width": 0.8,
+          opacity: style.opacity
+        });
+        mirror.appendChild(element("title", {}, structurePairTitle(result, pair, style) + " · mirrored matrix point"));
+        svg.appendChild(mirror);
+      }
+    });
+
+    const selected = Number(selectedNucleotide);
+    if (Number.isInteger(selected) && selected >= 1 && selected <= length) {
+      const selectedX = matrixScale(selected, length, plotLeft, plotSize);
+      const selectedY = matrixScale(selected, length, plotTop, plotSize);
+      svg.appendChild(element("line", { x1: selectedX, y1: plotTop, x2: selectedX, y2: plotBottom, stroke: colors.accent, "stroke-width": 1.2, opacity: 0.55 }));
+      svg.appendChild(element("line", { x1: plotLeft, y1: selectedY, x2: plotLeft + plotSize, y2: selectedY, stroke: colors.accent, "stroke-width": 1.2, opacity: 0.55 }));
+    }
+    appendMatrixPositionControls(svg, result, selectedNucleotide, plotLeft, plotBottom + 36, plotSize, colors);
+    svg.appendChild(element("text", { x: plotLeft + plotSize / 2, y: height - 8, fill: colors.muted, "font-size": 11, "text-anchor": "middle", "font-family": "ui-monospace, monospace" }, "sequence position"));
+    legend(svg, colors, result, { x: 44, y: 24 });
+    return svg;
+  }
+
+  function structureSvg(width, height, label, title, colors) {
+    const svg = element("svg", {
+      xmlns: SVG_NS,
+      viewBox: "0 0 " + width + " " + height,
+      width: "100%",
+      height: String(height),
+      role: "img",
+      "aria-label": label
+    });
+    svg.appendChild(element("title", {}, title));
+    svg.appendChild(element("rect", { x: 0, y: 0, width: width, height: height, rx: 8, fill: colors.surface }));
+    return svg;
+  }
+
+  function structureHardPairs(result) {
+    return new Set((result.constraints || []).map(function (pair) {
+      return pair.left + ":" + pair.right;
+    }));
+  }
+
+  function structurePairStyle(result, pair, colors, hardPairs) {
+    const constraints = hardPairs || structureHardPairs(result);
+    const support = Number(pair.evidenceSupport) || 0;
+    const guided = result.constraintMode === "hyb-guided";
+    const cplfold = result.engine === "CPLfold";
+    const cplfoldEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
+    const maximumEvidence = Math.max(0, Number(cplfoldEvidence ? result.evidence.maximumBonus : result.maximumNucleotideSupport) || 0);
+    const hardConstraint = constraints.has(pair.left + ":" + pair.right);
+    return {
+      stroke: cplfold ? cplfoldPairColor(pair, colors) : (guided ? evidenceColor(support, maximumEvidence, colors) : pairColor(pair.type, colors)),
+      strokeWidth: cplfold && pair.layer !== "primary" ? 3 : (hardConstraint ? 3.7 : (guided && support > 0 ? 2.5 : ((pair.type === "G–C" || pair.type === "C–G") ? 2.1 : 1.6))),
+      opacity: cplfoldEvidence
+        ? Math.max(0.32, Math.min(0.96, 0.32 + support / Math.max(maximumEvidence, 1e-12) * 0.64))
+        : (guided && !support ? 0.34 : 0.9),
+      dash: cplfold && pair.layer && pair.layer !== "primary" ? "5 3" : "",
+      hardConstraint: hardConstraint
+    };
+  }
+
+  function structurePairTitle(result, pair, style) {
+    const cplfold = result.engine === "CPLfold";
+    const guided = result.constraintMode === "hyb-guided";
+    const cplfoldEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
+    const prefix = cplfold
+      ? (pair.layer || "primary") + " CPLfold pair: "
+      : (style.hardConstraint ? (guided ? "HYB-fitted hard pair: " : "Manual hard pair: ") : "MFE pair: ");
+    const support = Number(pair.evidenceSupport) || 0;
+    const evidence = guided ? "; RNAcofold evidence " + support : (cplfoldEvidence ? "; HYB bonus " + support.toFixed(4) : "");
+    return prefix + pair.left + " " + pair.leftBase + " paired with " + pair.right + " " + pair.rightBase + " (" + pair.type + ")" + evidence;
+  }
+
+  function circlePoint(position, length, centerX, centerY, radius) {
+    const angle = -Math.PI / 2 + (2 * Math.PI * (position - 1)) / Math.max(1, length);
+    return {
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius
+    };
+  }
+
+  function pairDepth(pair, pairs) {
+    return pairs.reduce(function (depth, other) {
+      return other.left < pair.left && other.right > pair.right ? depth + 1 : depth;
+    }, 0);
+  }
+
+  function appendRingMarkers(svg, result, selectedNucleotide, centerX, centerY, radius, colors) {
+    const length = Math.max(1, (result.sequence || "").length);
+    if (length > 700) {
+      appendInspectionTrack(svg, result, selectedNucleotide, 110, 602, 460, colors);
+      return;
+    }
+    const markerRadius = length <= 120 ? 4.5 : (length <= 360 ? 3 : 1.9);
+    for (let position = 1; position <= length; position += 1) {
+      const point = circlePoint(position, length, centerX, centerY, radius);
+      svg.appendChild(structureMarker(result, position, point.x, point.y, colors, selectedNucleotide, markerRadius));
+    }
+  }
+
+  function appendSelectedRingRay(svg, length, centerX, centerY, radius, selectedNucleotide, colors) {
+    const selected = Number(selectedNucleotide);
+    if (!Number.isInteger(selected) || selected < 1 || selected > length) {
+      return;
+    }
+    const point = circlePoint(selected, length, centerX, centerY, radius - 8);
+    svg.appendChild(element("line", {
+      x1: centerX,
+      y1: centerY,
+      x2: point.x.toFixed(2),
+      y2: point.y.toFixed(2),
+      stroke: colors.accent,
+      "stroke-width": 1.2,
+      "stroke-dasharray": "4 4",
+      opacity: 0.45,
+      "pointer-events": "none"
+    }));
+  }
+
+  function appendCircularTicks(svg, length, centerX, centerY, radius, colors) {
+    tickPositions(length).forEach(function (position) {
+      const inner = circlePoint(position, length, centerX, centerY, radius + 4);
+      const outer = circlePoint(position, length, centerX, centerY, radius + 13);
+      const label = circlePoint(position, length, centerX, centerY, radius + 28);
+      svg.appendChild(element("line", { x1: inner.x, y1: inner.y, x2: outer.x, y2: outer.y, stroke: colors.muted, "stroke-width": 1 }));
+      svg.appendChild(element("text", { x: label.x, y: label.y + 4, fill: colors.muted, "font-size": 11, "text-anchor": "middle", "font-family": "ui-monospace, monospace" }, String(position)));
+    });
+  }
+
+  function appendMatrixTicks(svg, length, plotLeft, plotTop, plotSize, colors) {
+    tickPositions(length).forEach(function (position) {
+      const x = matrixScale(position, length, plotLeft, plotSize);
+      const y = matrixScale(position, length, plotTop, plotSize);
+      svg.appendChild(element("line", { x1: x, y1: plotTop, x2: x, y2: plotTop + plotSize, stroke: colors.line, "stroke-width": 1, opacity: 0.45 }));
+      svg.appendChild(element("line", { x1: plotLeft, y1: y, x2: plotLeft + plotSize, y2: y, stroke: colors.line, "stroke-width": 1, opacity: 0.45 }));
+      svg.appendChild(element("text", { x: x, y: plotTop + plotSize + 17, fill: colors.muted, "font-size": 10, "text-anchor": "middle", "font-family": "ui-monospace, monospace" }, String(position)));
+      svg.appendChild(element("text", { x: plotLeft - 9, y: y + 3, fill: colors.muted, "font-size": 10, "text-anchor": "end", "font-family": "ui-monospace, monospace" }, String(position)));
+    });
+    svg.appendChild(element("text", { x: plotLeft - 43, y: plotTop + plotSize / 2, fill: colors.muted, "font-size": 11, "text-anchor": "middle", transform: "rotate(-90 " + (plotLeft - 43) + " " + (plotTop + plotSize / 2) + ")" }, "position"));
+  }
+
+  function appendMatrixPositionControls(svg, result, selectedNucleotide, x, y, width, colors) {
+    const length = Math.max(1, (result.sequence || "").length);
+    if (length > 700) {
+      appendInspectionTrack(svg, result, selectedNucleotide, x, y, width, colors);
+      return;
+    }
+    const markerRadius = length <= 120 ? 4.5 : (length <= 360 ? 3 : 1.9);
+    for (let position = 1; position <= length; position += 1) {
+      const markerX = linearScale(position, length, x, width);
+      svg.appendChild(element("line", { x1: markerX, y1: y - 7, x2: markerX, y2: y + 5, stroke: colors.muted, "stroke-width": 1 }));
+      svg.appendChild(structureMarker(result, position, markerX, y, colors, selectedNucleotide, markerRadius));
+    }
+  }
+
+  function structureMarker(result, position, x, y, colors, selectedNucleotide, radius) {
+    const sequence = result.sequence || "";
+    const selected = Number(selectedNucleotide) === position;
+    const evidenceDriven = result.constraintMode === "hyb-guided" || (result.engine === "CPLfold" && result.evidence && result.evidence.source === "hyb-block-intervals");
+    const marker = element("circle", {
+      cx: Number(x).toFixed(2),
+      cy: Number(y).toFixed(2),
+      r: radius,
+      fill: selected ? colors.accent : (evidenceDriven ? nucleotideEvidenceColor(result, position, colors) : colors.surface),
+      stroke: selected ? colors.accent : colors.muted,
+      "stroke-width": selected ? 2.3 : 1.1,
+      "data-structure-position": position,
+      tabindex: 0,
+      role: "button",
+      "aria-label": "Inspect nucleotide " + position + ", " + sequence.charAt(position - 1)
+    });
+    marker.appendChild(element("title", {}, nucleotideTitle(result, position)));
+    return marker;
+  }
+
+  function appendInspectionTrack(svg, result, selectedNucleotide, x, y, width, colors) {
+    const length = Math.max(1, (result.sequence || "").length);
+    const selected = Number.isInteger(Number(selectedNucleotide))
+      ? Math.max(1, Math.min(length, Number(selectedNucleotide)))
+      : 1;
+    svg.appendChild(element("line", { x1: x, y1: y, x2: x + width, y2: y, stroke: colors.lineStrong, "stroke-width": 2 }));
+    const track = element("rect", {
+      x: x,
+      y: y - 14,
+      width: width,
+      height: 28,
+      fill: "transparent",
+      "data-structure-track": "true",
+      tabindex: 0,
+      role: "slider",
+      "aria-label": "Inspect nucleotide along the sequence baseline",
+      "aria-valuemin": 1,
+      "aria-valuemax": length,
+      "aria-valuenow": selected
+    });
+    track.appendChild(element("title", {}, "Click the sequence track or use Left, Right, Home and End to inspect a nucleotide"));
+    svg.appendChild(track);
+    const thumbX = linearScale(selected, length, x, width);
+    svg.appendChild(element("circle", { cx: thumbX, cy: y, r: 6, fill: colors.accent, stroke: colors.surface, "stroke-width": 2, "pointer-events": "none" }));
+    svg.appendChild(element("text", { x: x, y: y + 30, fill: colors.muted, "font-size": 11, "font-family": "ui-monospace, monospace" }, "1"));
+    svg.appendChild(element("text", { x: x + width, y: y + 30, fill: colors.muted, "font-size": 11, "text-anchor": "end", "font-family": "ui-monospace, monospace" }, String(length)));
+  }
+
+  function tickPositions(length) {
+    const values = [1, Math.round(1 + (length - 1) * 0.25), Math.round(1 + (length - 1) * 0.5), Math.round(1 + (length - 1) * 0.75), length];
+    return values.filter(function (position, index) {
+      return values.indexOf(position) === index;
+    });
+  }
+
+  function matrixPoint(one, two, length, plotLeft, plotTop, plotSize) {
+    return {
+      x: matrixScale(one, length, plotLeft, plotSize),
+      y: matrixScale(two, length, plotTop, plotSize)
+    };
+  }
+
+  function matrixScale(position, length, start, span) {
+    return start + ((position - 1) / Math.max(1, length - 1)) * span;
+  }
+
+  function linearScale(position, length, start, span) {
+    return start + ((position - 1) / Math.max(1, length - 1)) * span;
+  }
+
+  function downloadStructurePng(api, viewMode) {
     const svg = document.querySelector("[data-structure-diagram] svg");
     if (!svg) {
       api.showToast("The structure diagram is not ready to export yet.");
@@ -501,7 +939,7 @@
               return;
             }
             try {
-              api.downloadBlob("rna-secondary-structure-arcs.png", blob);
+              api.downloadBlob("rna-secondary-structure-" + structureViewFileStem(viewMode) + ".png", blob);
               finished = true;
               api.showToast("Structure PNG downloaded locally.");
             } catch (error) {
@@ -651,18 +1089,22 @@
     return position + " " + base + ": paired with " + partner + " (" + pair.type + ")";
   }
 
-  function legend(svg, colors, result) {
+  function legend(svg, colors, result, options) {
+    const settings = options || {};
+    const startX = settings.x == null ? 44 : settings.x;
+    const y = settings.y == null ? 24 : settings.y;
     const guided = result.constraintMode === "hyb-guided";
     const cplfold = result.engine === "CPLfold";
+    const spacing = settings.spacing == null ? ((guided || cplfold) ? 132 : 98) : settings.spacing;
     const items = cplfold
       ? [{ label: "phase 1", color: colors.primary }, { label: "pseudoknot", color: colors.accent }, { label: "deeper layer", color: colors.warning }]
       : guided
       ? [{ label: "high evidence", color: colors.warning }, { label: "low evidence", color: colors.primary }, { label: "MFE only", color: colors.lineStrong }]
       : [{ label: "G–C", color: colors.primary }, { label: "A–U", color: colors.accent }, { label: "G–U", color: colors.muted }];
     items.forEach(function (item, index) {
-      const x = 44 + index * ((guided || cplfold) ? 132 : 98);
-      svg.appendChild(element("line", { x1: x, y1: 24, x2: x + 17, y2: 24, stroke: item.color, "stroke-width": 2.5, "stroke-linecap": "round" }));
-      svg.appendChild(element("text", { x: x + 24, y: 28, fill: colors.muted, "font-size": 11, "font-family": "ui-monospace, monospace" }, item.label));
+      const x = startX + index * spacing;
+      svg.appendChild(element("line", { x1: x, y1: y, x2: x + 17, y2: y, stroke: item.color, "stroke-width": 2.5, "stroke-linecap": "round" }));
+      svg.appendChild(element("text", { x: x + 24, y: y + 4, fill: colors.muted, "font-size": 11, "font-family": "ui-monospace, monospace" }, item.label));
     });
   }
 

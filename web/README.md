@@ -45,7 +45,7 @@ FASTA parsing removes layout whitespace only. Unsupported symbols are preserved 
 
 ## Local structure prediction
 
-The structure workspace loads a pinned ViennaRNA 2.7.2 RNAlib build in a dedicated Web Worker. It reports a global MFE in kcal/mol, dot-bracket notation, CT and base-pair exports, and an interactive SVG arc diagram. The normal UI accepts up to 2,000 nt; users may explicitly continue up to 3,000 nt after a browser-memory warning. Plain MFE remains the default; an expert may instead choose **Manual hard base pairs** and enter one 1-based `i-j` pair per line, relative to the prepared sequence.
+The structure workspace loads a pinned ViennaRNA 2.7.2 RNAlib build in a dedicated Web Worker. It reports a global MFE in kcal/mol, dot-bracket notation, CT and base-pair exports, and interactive SVG views for arc, radial, circular-contact, and symmetric base-pair matrix layouts. Arc remains the default; all views share nucleotide inspection, HYB/RNAcofold evidence colouring, CPLfold layer styling, and SVG/PNG export. The normal UI accepts up to 2,000 nt; users may explicitly continue up to 3,000 nt after a browser-memory warning. Plain MFE remains the default; an expert may instead choose **Manual hard base pairs** and enter one 1-based `i-j` pair per line, relative to the prepared sequence.
 
 Manual pairs must be in range, non-crossing canonical or G–U pairs, satisfy the selected minimum-loop size, and never reuse a nucleotide. The controller validates them before starting the worker; ViennaRNA enforces them, and the result is checked and labelled in the diagram and base-pair export. Report JSON records `constraintSource: "manual-user-input"` and explicitly marks automatic HYB/RNAcofold evidence generation as false for that mode.
 

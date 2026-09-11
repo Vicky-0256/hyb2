@@ -690,7 +690,7 @@
       sequenceInfo.error ? '<div class="notice notice-warning">' + escape(sequenceInfo.error) + "</div>" : "",
       lengthNotice ? '<div class="notice notice-warning">' + escape(lengthNotice) + "</div>" : "",
       structure.status === "error" ? '<div class="notice notice-error">' + escape(structure.message || (cplfold ? "Browser CPLfold could not finish the structure prediction." : "ViennaRNA WebAssembly could not finish the structure prediction.")) + "</div>" : "",
-      structure.result ? renderStructureResult(structure.result, structure.selectedNucleotide) : renderStructurePreparation(sequenceInfo, structure),
+      structure.result ? renderStructureResult(structure.result, structure.selectedNucleotide, structure.viewMode) : renderStructurePreparation(sequenceInfo, structure),
       cplfold
         ? '<div class="method-limit"><strong>Browser execution boundary</strong><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span></div>'
         : guidedConstraintMode
@@ -885,7 +885,7 @@
     ].join("");
   }
 
-  function renderStructureResult(result, selectedNucleotide) {
+  function renderStructureResult(result, selectedNucleotide, viewMode) {
     const pairs = result.pairs || [];
     const cplfold = result.engine === "CPLfold";
     const cplfoldHasEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
@@ -898,6 +898,7 @@
     const requestedPairs = new Set((result.constraints || []).map(function (pair) {
       return pair.left + ":" + pair.right;
     }));
+    const activeView = structureViewMode(viewMode);
     return [
       '<section class="structure-result-summary" aria-label="' + (cplfold ? "CPLfold pseudoknot candidate result" : "ViennaRNA secondary-structure result") + '">',
       '<div class="structure-metric"><span>' + (cplfold ? "Energy" : "MFE") + '</span><strong>' + formatEnergy(result.energy) + '</strong><small>kcal/mol' + (cplfold ? " · " + escape(result.parameters && result.parameters.energyModel || "DP09") : "") + '</small></div>',
@@ -916,7 +917,7 @@
         ? '<div class="structure-constraint-summary structure-evidence-summary"><strong>HYB-evidence-selected structure</strong><span>The selected ensemble member maximises the original nucleotide-summed COMRADES support score. Supported arcs are coloured by RNAcofold evidence; fitted hard-pair arcs remain thicker.</span></div>'
         : (manualConstrained ? '<div class="structure-constraint-summary"><strong>Manual hard-pair result</strong><span>ViennaRNA enforced ' + format(constraintCount) + " user-entered pair" + (constraintCount === 1 ? "" : "s") + ". These pairs were not generated from HYB interaction evidence.</span></div>" : ""),
       guided ? renderComradesResult(result) : (cplfold ? renderCplfoldResult(result) : ""),
-      '<section class="structure-diagram-panel"><div class="structure-diagram-heading"><div><h3>Arc diagram</h3><p>' + (cplfold ? "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects HYB bonus support when enabled." : (guided ? "Arc colour intensity shows aggregated RNAcofold evidence; fitted constraint arcs are thicker." : (manualConstrained ? "Manual hard-pair arcs are thicker and marked in the base-pair list; all other arcs minimise free energy around them." : "Each arc represents a ViennaRNA MFE base pair."))) + " " + inspectorInstruction + '</p></div><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span></div><div class="structure-diagram" data-structure-diagram aria-label="RNA secondary-structure arc diagram"></div></section>',
+      renderStructureDiagramPanel(result, activeView, cplfold, guided, manualConstrained, inspectorInstruction),
       renderNucleotideInspector(result, selectedNucleotide),
       '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span><code class="structure-output-code">' + escape(wrapSequence(result.sequence, 64)) + '</code></div><div><span class="drawer-kicker">Dot-bracket</span><code class="structure-output-code">' + escape(wrapSequence(result.dotBracket, 64)) + "</code></div></section>",
       '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button><button class="button button-secondary" type="button" data-feature-action="download-structure-dot-bracket">Download DBN</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ct">Download CT</button><button class="button button-secondary" type="button" data-feature-action="download-structure-pairs">Download base pairs</button>' + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>' : "") + (guided ? '<button class="button button-secondary" type="button" data-feature-action="download-structure-evidence">Download evidence</button><button class="button button-secondary" type="button" data-feature-action="download-structure-constraints">Download constraints</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ensemble">Download ensemble</button>' : "") + (cplfoldHasEvidence ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-evidence">Download bonus matrix</button>' : "") + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-candidates">Download candidates</button>' : "") + '<button class="button button-secondary" type="button" data-feature-action="download-structure-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-png">Download PNG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-report">Download report</button></div>',
@@ -927,6 +928,47 @@
         return '<li' + (isHardConstraint ? ' class="hard-constraint-pair"' : "") + "><span>" + format(pair.left) + " " + escape(pair.leftBase) + "</span><span>" + escape(pair.type) + "</span><span>" + format(pair.right) + " " + escape(pair.rightBase) + "</span><span>" + pairLabel + evidenceLabel + "</span></li>";
       }).join("") + "</ol>" : '<p class="empty-inline">The selected predictor did not place any base pairs.</p>') + "</details>"
     ].join("");
+  }
+
+  function structureViewMode(value) {
+    return ["arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "arc";
+  }
+
+  function structureViewCopy(viewMode, cplfold, guided, manualConstrained) {
+    const descriptions = {
+      arc: cplfold
+        ? "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects HYB bonus support when enabled."
+        : (guided ? "Arc colour intensity shows aggregated RNAcofold evidence; fitted constraint arcs are thicker." : (manualConstrained ? "Manual hard-pair arcs are thicker and marked in the base-pair list; all other arcs minimise free energy around them." : "Each arc represents a ViennaRNA MFE base pair.")),
+      radial: "Pairs are drawn from the sequence perimeter toward the centre so long-range contacts and nested depth can be compared at a glance.",
+      circular: "The sequence runs around a circular backbone; chords make long-range and crossing contacts easy to scan.",
+      matrix: "The symmetric contact matrix places each base pair at its two sequence coordinates; mirrored points preserve the full interaction map."
+    };
+    return descriptions[structureViewMode(viewMode)];
+  }
+
+  function renderStructureDiagramPanel(result, viewMode, cplfold, guided, manualConstrained, inspectorInstruction) {
+    const activeView = structureViewMode(viewMode);
+    const titles = {
+      arc: "Arc diagram",
+      radial: "Radial diagram",
+      circular: "Circular contact view",
+      matrix: "Base-pair matrix"
+    };
+    const labels = {
+      arc: "RNA secondary-structure arc diagram",
+      radial: "RNA secondary-structure radial diagram",
+      circular: "RNA secondary-structure circular diagram",
+      matrix: "RNA secondary-structure base-pair matrix"
+    };
+    const options = [
+      ["arc", "Arc"],
+      ["radial", "Radial"],
+      ["circular", "Circular"],
+      ["matrix", "Matrix"]
+    ];
+    return '<section class="structure-diagram-panel"><div class="structure-diagram-heading"><div><h3>' + titles[activeView] + '</h3><p>' + structureViewCopy(activeView, cplfold, guided, manualConstrained) + " " + inspectorInstruction + '</p></div><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span></div><div class="structure-view-toolbar"><span class="structure-view-label">View</span><div class="structure-view-options" role="group" aria-label="RNA structure visualization view">' + options.map(function (option) {
+      return '<button class="structure-view-option' + (option[0] === activeView ? " is-active" : '') + '" type="button" data-feature-action="set-structure-view" data-view-mode="' + option[0] + '" aria-pressed="' + (option[0] === activeView ? "true" : "false") + '">' + option[1] + "</button>";
+    }).join("") + '</div></div><div class="structure-diagram" data-structure-diagram data-view-mode="' + activeView + '" aria-label="' + labels[activeView] + '"></div></section>';
   }
 
   function renderCplfoldResult(result) {

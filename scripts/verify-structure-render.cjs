@@ -181,6 +181,17 @@ assert.match(resultHtml, /class="hard-constraint-pair"/);
 assert.match(resultHtml, /Hard pair/);
 assert.match(resultHtml, /not generated from HYB interaction evidence/);
 assert.doesNotMatch(resultHtml, /undefined/);
+state.structure.viewMode = "matrix";
+const matrixResultHtml = context.window.Hyb2Pages.renderStructure(state);
+assert.match(matrixResultHtml, /Base-pair matrix/);
+assert.match(matrixResultHtml, /data-view-mode="matrix"/);
+assert.match(matrixResultHtml, /data-view-mode="radial" aria-pressed="false"/);
+let viewRenderCount = 0;
+assert.equal(context.window.Hyb2StructureUI.handleAction("set-structure-view", state, {
+  render: function () { viewRenderCount += 1; }
+}, { dataset: { viewMode: "radial" } }), true);
+assert.equal(state.structure.viewMode, "radial");
+assert.equal(viewRenderCount, 1);
 const longResultHtml = context.window.Hyb2Pages.renderStructureResult
   ? context.window.Hyb2Pages.renderStructureResult(Object.assign({}, state.structure.result, { sequence: "A".repeat(701) }), null)
   : "";
@@ -190,6 +201,7 @@ if (longResultHtml) {
 }
 
 const report = context.window.Hyb2StructureUI.structureReport(state, state.structure.result);
+assert.equal(report.visualization.viewMode, "radial");
 assert.equal(report.prediction.constraintMode, "hard-base-pairs");
 assert.equal(report.prediction.constraintSource, "manual-user-input");
 assert.equal(report.prediction.constraintCount, 1);
@@ -579,6 +591,7 @@ function controllerApiForCplfold() {
 }
 
 const pngEvents = { downloads: [], toasts: [], revoked: [] };
+state.structure.viewMode = "arc";
 const exportSvg = {
   attributes: { viewBox: "0 0 920 300", width: "100%", height: "300" },
   getAttribute: function (name) { return this.attributes[name] || ""; },

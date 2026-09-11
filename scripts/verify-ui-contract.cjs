@@ -628,6 +628,8 @@ assert.match(analysisPagesSource, /sha256Unavailable \? "Unavailable" : "Calcula
 assert.match(indexSource, /<script src="\.\/build-info\.js" defer><\/script>/);
 assert.match(workflowSource, /GITHUB_SHA[\s\S]*?> web\/build-info\.js/,
   "the Pages artifact must record the exact deployed Git commit");
+assert.match(workflowSource, /Version static assets for browser cache refresh[\s\S]*?app\.js\?build=\$\{GITHUB_SHA\}[\s\S]*?styles\.css\?build=\$\{GITHUB_SHA\}/,
+  "the deployed HTML must version CSS and JavaScript URLs with the exact Git commit");
 assert.match(workflowSource, /Configure GitHub Pages[\s\S]*?if: \$\{\{ vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true' \}\}/,
   "Pages configuration must remain behind the CPLfold redistribution approval gate");
 assert.match(workflowSource, /Upload GitHub Pages artifact[\s\S]*?if: \$\{\{ vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true' \}\}/,

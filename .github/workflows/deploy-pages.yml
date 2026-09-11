@@ -86,6 +86,12 @@ jobs:
           node scripts/verify-cplfold-pyodide.mjs
           node scripts/verify-cplfold-worker.mjs
 
+      - name: Version static assets for browser cache refresh
+        run: |
+          sed -i -E "s#(\./[^\"?]+\.(css|js))\"#\1?build=${GITHUB_SHA}\"#g" web/index.html
+          grep -q "app.js?build=${GITHUB_SHA}" web/index.html
+          grep -q "styles.css?build=${GITHUB_SHA}" web/index.html
+
       - name: Configure GitHub Pages
         if: ${{ vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
         uses: actions/configure-pages@v5

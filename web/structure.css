@@ -819,6 +819,48 @@
   max-width: 100%;
 }
 
+.forna-structure-mount {
+  width: 100%;
+  min-height: 560px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.forna-structure-mount svg {
+  min-height: 560px;
+  background: var(--surface);
+}
+
+.forna-structure-mount circle.fornac-node[node_type="nucleotide"] {
+  fill: var(--surface);
+  stroke: #132c47;
+}
+
+.forna-structure-mount text.fornac-nodeLabel,
+.forna-structure-mount text {
+  fill: #132c47;
+}
+
+.forna-structure-mount line.fornac-link[link_type="basepair"] {
+  stroke: #00a09d;
+}
+
+.forna-structure-mount line.fornac-link[link_type="pseudoknot"] {
+  stroke: #6a4ff2;
+  stroke-width: 2.5px;
+  stroke-dasharray: 5 3;
+}
+
+.structure-render-error {
+  margin: 24px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted-strong);
+  background: var(--surface-subtle);
+}
+
 .structure-diagram [data-structure-position] {
   cursor: pointer;
   transition: r 140ms var(--ease), fill 140ms var(--ease), stroke 140ms var(--ease);

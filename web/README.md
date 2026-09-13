@@ -69,6 +69,11 @@ The vendored CPLfold snapshot has an unresolved combined-distribution licence
 boundary. Review `third_party/cplfold/THIRD_PARTY_NOTICES.md` and obtain the
 necessary permission or exception before publishing this branch publicly.
 
+The molecule-like RNA secondary-structure view uses the locally vendored
+`fornac` 1.2.0 renderer from ViennaRNA (Apache-2.0) with D3 3.5.17. The pinned
+browser assets and license texts are stored under `vendor/fornac/` and
+`vendor/d3/`; sequence and dot-bracket data remain in the browser.
+
 FASTQ/SAM alignment and HYB construction remain in the local CLI. The static application starts at `.hyb`; it never uploads those files or invokes a backend.
 
 For an engine-enabled local preview, install `curl`, `tar`, `zip`, `sha256sum`,

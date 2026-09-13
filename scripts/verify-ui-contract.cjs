@@ -626,6 +626,14 @@ assert.match(appSource, /digestFile\(file\)\.then[\s\S]*?state\.summary\.sha256U
 assert.match(analysisPagesSource, /sha256Unavailable \? "Unavailable" : "Calculating locally…"/,
   "the Files drawer must distinguish terminal hash failure from pending calculation");
 assert.match(indexSource, /<script src="\.\/build-info\.js" defer><\/script>/);
+assert.match(indexSource, /vendor\/d3\/d3\.v3\.min\.js/,
+  "the folded RNA view must load its pinned local D3 dependency");
+assert.match(indexSource, /vendor\/fornac\/fornac\.js/,
+  "the folded RNA view must load the pinned local fornac renderer");
+assert.ok(fs.existsSync(path.join(repository, "web", "vendor", "fornac", "LICENSE.txt")),
+  "the vendored fornac renderer must include its Apache-2.0 license");
+assert.ok(fs.existsSync(path.join(repository, "web", "vendor", "d3", "LICENSE.txt")),
+  "the vendored D3 dependency must include its license");
 assert.match(workflowSource, /GITHUB_SHA[\s\S]*?> web\/build-info\.js/,
   "the Pages artifact must record the exact deployed Git commit");
 assert.match(workflowSource, /Version static assets for browser cache refresh[\s\S]*?app\.js\?build=\$\{GITHUB_SHA\}[\s\S]*?styles\.css\?build=\$\{GITHUB_SHA\}/,

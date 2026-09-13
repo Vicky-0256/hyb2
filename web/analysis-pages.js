@@ -892,13 +892,15 @@
     const constraintCount = Math.max(0, Number(result.constraintCount) || 0);
     const manualConstrained = result.constraintMode === "hard-base-pairs" && constraintCount > 0;
     const guided = result.constraintMode === "hyb-guided";
-    const inspectorInstruction = result.sequence.length <= 700
-      ? "Click a nucleotide marker to inspect it."
-      : "Click along the sequence baseline, or focus it and use the arrow keys, to inspect a nucleotide.";
     const requestedPairs = new Set((result.constraints || []).map(function (pair) {
       return pair.left + ":" + pair.right;
     }));
     const activeView = structureViewMode(viewMode);
+    const inspectorInstruction = activeView === "folded"
+      ? "Drag the molecule to adjust the layout; scroll or pinch to zoom and pan."
+      : (result.sequence.length <= 700
+        ? "Click a nucleotide marker to inspect it."
+        : "Click along the sequence baseline, or focus it and use the arrow keys, to inspect a nucleotide.");
     return [
       '<section class="structure-result-summary" aria-label="' + (cplfold ? "CPLfold pseudoknot candidate result" : "ViennaRNA secondary-structure result") + '">',
       '<div class="structure-metric"><span>' + (cplfold ? "Energy" : "MFE") + '</span><strong>' + formatEnergy(result.energy) + '</strong><small>kcal/mol' + (cplfold ? " · " + escape(result.parameters && result.parameters.energyModel || "DP09") : "") + '</small></div>',

@@ -109,6 +109,20 @@
       }
       state.structure.selectedNucleotide = null;
       api.render();
+      const revealDiagram = function () {
+        if (typeof document === "undefined") {
+          return;
+        }
+        const diagram = document.querySelector("[data-structure-diagram]");
+        if (diagram && typeof diagram.scrollIntoView === "function") {
+          diagram.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      };
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(revealDiagram);
+      } else {
+        revealDiagram();
+      }
       api.showToast("CPLfold candidate " + (candidateIndex + 1) + " selected.");
       return true;
     }

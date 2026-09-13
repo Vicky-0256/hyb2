@@ -990,10 +990,11 @@
       '<div><span>4 · Selected topology</span><strong>' + escape(result.topology || "nested") + '</strong><small>' + format(result.crossingPairs || 0) + ' base pairs participate in crossings</small></div>',
       "</div>",
       evidence.source === "hyb-block-intervals" ? renderCplfoldBonusMap(result) : "",
-      '<div class="data-table-wrap"><table class="data-table compact-table cplfold-candidate-table"><thead><tr><th>Rank</th><th>Topology</th><th>Energy</th><th>Effective</th><th>Pairs</th><th>Dot-bracket</th><th></th></tr></thead><tbody>',
+      '<div class="candidate-table-intro"><strong>Select a candidate structure</strong><span>Click any row to update the RNA visualization and all result details below.</span></div>',
+      '<div class="data-table-wrap"><table class="data-table compact-table cplfold-candidate-table"><thead><tr><th>Rank</th><th>Topology</th><th>Energy</th><th>Effective</th><th>Pairs</th><th>Dot-bracket</th><th>Status</th></tr></thead><tbody>',
       candidates.map(function (candidate, index) {
         const selected = index === Number(result.selectedCandidate || 0);
-        return '<tr' + (selected ? ' class="is-selected"' : "") + '><td>#' + format(index + 1) + '</td><td><span class="candidate-type candidate-type-' + attribute(candidate.type) + '">' + escape(candidate.topology) + '</span></td><td>' + formatEnergy(candidate.energy) + '</td><td>' + formatEnergy(candidate.effectiveEnergy) + '</td><td>' + format((candidate.pairs || []).length) + '</td><td><code>' + escape(candidate.dotBracket) + '</code></td><td><button class="quiet-button" type="button" data-feature-action="select-cplfold-candidate" data-candidate-index="' + index + '"' + (selected ? " disabled" : "") + '>' + (selected ? "Selected" : "View") + '</button></td></tr>';
+        return '<tr class="cplfold-candidate-row' + (selected ? ' is-selected' : "") + '" data-feature-action="select-cplfold-candidate" data-candidate-index="' + index + '" tabindex="0" role="button" aria-pressed="' + (selected ? "true" : "false") + '" aria-label="View CPLfold candidate ' + format(index + 1) + '"><td>#' + format(index + 1) + '</td><td><span class="candidate-type candidate-type-' + attribute(candidate.type) + '">' + escape(candidate.topology) + '</span></td><td>' + formatEnergy(candidate.energy) + '</td><td>' + formatEnergy(candidate.effectiveEnergy) + '</td><td>' + format((candidate.pairs || []).length) + '</td><td><code>' + escape(candidate.dotBracket) + '</code></td><td><span class="candidate-view-state">' + (selected ? "Visualized" : "View structure") + '</span></td></tr>';
       }).join(""),
       "</tbody></table></div>",
       "</section>"

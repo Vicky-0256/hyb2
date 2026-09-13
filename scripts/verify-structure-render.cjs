@@ -478,6 +478,9 @@ const cplfoldResultHtml = context.window.Hyb2Pages.renderStructure(cplfoldState)
 assert.match(cplfoldResultHtml, /Pseudoknot candidate/);
 assert.match(cplfoldResultHtml, /HYB-derived CPLfold bonus matrix/);
 assert.match(cplfoldResultHtml, /data-feature-action="select-cplfold-candidate"/);
+assert.match(cplfoldResultHtml, /Click any row to update the RNA visualization/);
+assert.match(cplfoldResultHtml, /class="cplfold-candidate-row is-selected"[^>]*aria-pressed="true"/);
+assert.match(cplfoldResultHtml, /View structure/);
 assert.match(cplfoldResultHtml, /Download bonus matrix/);
 assert.match(cplfoldResultHtml, /data-feature-action="download-local-cplfold-input"[^>]*>Download local inputs/);
 assert.match(cplfoldResultHtml, /pseudoknot-1/);
@@ -546,6 +549,7 @@ assert.match(preResultInputEvents.toasts.at(-1), /--bonus-matrix-file cplfold-bo
 assert.equal(preResultCplfoldState.structure.status, "idle");
 assert.equal(context.window.Hyb2StructureUI.handleAction("select-cplfold-candidate", cplfoldState, cplfoldApi, { dataset: { candidateIndex: "1" } }), true);
 assert.equal(cplfoldState.structure.result.selectedCandidate, 1);
+assert.equal(cplfoldApi.renders, 1);
 assert.equal(cplfoldState.structure.result.topology, "nested");
 assert.equal(cplfoldState.structure.result.dotBracket, "..(((((......)))))..........");
 const cplfoldReport = context.window.Hyb2StructureUI.structureReport(cplfoldState, cplfoldState.structure.result);

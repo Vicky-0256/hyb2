@@ -812,6 +812,15 @@
 
   function handleKeydown(event) {
     const dropzone = event.target.closest("[data-dropzone]");
+    const actionableRow = event.target.closest("tr[data-feature-action]");
+
+    if (actionableRow && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      if (window.Hyb2UI) {
+        window.Hyb2UI.handleAction(state, actionableRow, featureApi());
+      }
+      return;
+    }
 
     if (dropzone && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();

@@ -3,8 +3,8 @@
 The `feature/cplfold-python` branch includes a source snapshot of CPLfold at
 `third_party/cplfold`. The snapshot was imported from
 `https://github.com/Vicky-0256/CPLfold.git`, branch
-`feature/standalone-pseudoknot-energy`, commit
-`af49f8ea3177adba089fa480d49259ec1ba14d50`.
+`feature/pseudoknot-free-mode`, commit
+`24bab521e0bcf2cff71f4567363aac1d5f5c97d5`.
 
 ## Runtime boundary
 
@@ -49,9 +49,11 @@ Run the full vendored regression suite and a real-Numba smoke test with:
 python scripts/verify-cplfold-python.py
 ```
 
-The current `--max-phase2` option is retained for upstream CLI compatibility,
-but upstream commit `af49f8e` does not use it to enumerate multiple Phase 2
-structures. Do not interpret that option as an effective search limit yet.
+The updated CPLfold source supports `--no-pseudoknot` for secondary-structure
+only prediction. The default remains pseudoknot-enabled prediction. The
+current `--max-phase2` option is retained for upstream CLI compatibility, but
+the source does not use it to enumerate multiple Phase 2 structures. Do not
+interpret that option as an effective search limit yet.
 
 ## Updating the snapshot
 

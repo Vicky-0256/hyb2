@@ -119,8 +119,8 @@ def main() -> None:
             environment=environment,
         )
         test_count = re.search(r"^Ran (\d+) tests?", unit_output, re.MULTILINE)
-        if test_count is None or int(test_count.group(1)) != 28:
-            raise SystemExit("CPLfold did not run the expected 28 regression tests")
+        if test_count is None or int(test_count.group(1)) != 29:
+            raise SystemExit("CPLfold did not run the expected 29 regression tests")
         if re.search(r"^OK$", unit_output, re.MULTILINE) is None:
             raise SystemExit("CPLfold unit tests did not report success")
 
@@ -148,7 +148,7 @@ def main() -> None:
 
     print(
         "CPLfold Python verification passed: length guard, secure cache, "
-        "28 unit tests, "
+        "29 unit tests, "
         "and real-JIT smoke."
     )
     print(f"Reference structure: {EXPECTED_STRUCTURE}")

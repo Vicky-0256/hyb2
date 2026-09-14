@@ -626,6 +626,10 @@ assert.match(appSource, /digestFile\(file\)\.then[\s\S]*?state\.summary\.sha256U
 assert.match(analysisPagesSource, /sha256Unavailable \? "Unavailable" : "Calculating locally…"/,
   "the Files drawer must distinguish terminal hash failure from pending calculation");
 assert.match(indexSource, /<script src="\.\/build-info\.js" defer><\/script>/);
+assert.match(appSource, /data-action="start-over"/,
+  "the workspace must expose a one-click start-over action");
+assert.match(appSource, /action === "start-over"[\s\S]*?resetToLanding\(\)/,
+  "start-over must clear state and return to the landing upload screen");
 assert.match(indexSource, /vendor\/d3\/d3\.v3\.min\.js/,
   "the folded RNA view must load its pinned local D3 dependency");
 assert.match(indexSource, /vendor\/fornac\/fornac\.js/,

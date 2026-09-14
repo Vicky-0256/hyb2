@@ -373,6 +373,7 @@
       '    <div class="toolbar-actions">',
       '      <button class="local-chip" type="button" data-action="open-privacy">Local-only processing</button>',
       '      <button class="text-button" type="button" data-action="open-files">Files</button>',
+      '      <button class="text-button start-over-button" type="button" data-action="start-over" aria-label="Clear all analysis and return to file upload">Start over</button>',
       '      <button class="text-button" type="button" data-action="open-help">Help</button>',
       '      <button class="icon-button" type="button" data-action="toggle-theme" aria-label="Toggle color theme">' + themeGlyph() + "</button>",
       "    </div>",
@@ -663,6 +664,12 @@
     if (action === "clear-session") {
       state.dialog = "clear";
       render();
+      return;
+    }
+
+    if (action === "start-over") {
+      resetToLanding();
+      showToast("Analysis cleared. Choose a HYB file to begin again.");
       return;
     }
 

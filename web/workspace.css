@@ -236,6 +236,18 @@
   text-align: left;
 }
 
+.start-over-button {
+  color: var(--accent);
+  font-weight: 720;
+}
+
+.start-over-button:hover,
+.start-over-button:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .workspace-main {
   grid-column: 2;
   min-width: 0;

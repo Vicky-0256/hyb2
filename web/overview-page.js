@@ -257,7 +257,7 @@
       '        <div class="card-title-row"><h2>Local by design</h2><span class="card-kicker">No backend</span></div>',
       '        <div class="notice">HYB2 Web Lite is a static GitHub Pages application. The selected HYB file is passed from the file picker to a Web Worker inside the same browser tab. No upload, API request, analytics call, cloud save, or persistent browser database is used.</div>',
       '        <div class="card-title-row"><h2>Session lifetime</h2></div>',
-      '        <div class="notice">Parsed results exist only in tab memory. Choosing “Clear session”, refreshing the page, or closing the tab removes the data from this version.</div>',
+      '        <div class="notice">Parsed results exist only in tab memory. Choose “Start over” in the top bar to clear this analysis and return to file upload.</div>',
       "      </section>"
     ].join("");
   }

@@ -11,8 +11,8 @@ const HARD_MAX_SEQUENCE_LENGTH = 500;
 const CAPACITY_PROBE_LENGTH = 75;
 const RUNTIME_DIRECTORY = new URL("./vendor/pyodide-cplfold/", self.location.href);
 const PYODIDE_MODULE_URL = new URL("pyodide.mjs", RUNTIME_DIRECTORY);
-const EXPECTED_CPLFOLD_REVISION = "af49f8e";
-const EXPECTED_BRIDGE_VERSION = "4";
+const EXPECTED_CPLFOLD_REVISION = "24bab52";
+const EXPECTED_BRIDGE_VERSION = "5";
 const WORKER_BUILD = new URL(self.location.href).searchParams.get("build") || "local";
 
 let runtimePromise = null;
@@ -49,7 +49,13 @@ self.onmessage = async function (event) {
       { phase: "evidence" }
     );
     await yieldToEventLoop();
-    postProgress("Running CPLfold phase 1 and pseudoknot phase 2", 56, { phase: "cplfold" });
+    postProgress(
+      message.allowPseudoknot === false
+        ? "Running CPLfold phase 1 without pseudoknot search"
+        : "Running CPLfold phase 1 and pseudoknot phase 2",
+      56,
+      { phase: "cplfold" }
+    );
 
     const startedAt = Date.now();
     const response = runtime.bridge.fold_json(JSON.stringify({
@@ -62,6 +68,7 @@ self.onmessage = async function (event) {
       energyModel: message.energyModel,
       alpha: message.alpha,
       beta: message.beta,
+      allowPseudoknot: message.allowPseudoknot !== false,
       maxSequenceLength: maximumSequenceLength
     }));
     const result = JSON.parse(String(response));
@@ -76,7 +83,13 @@ self.onmessage = async function (event) {
       throw new Error("The loaded CPLfold source does not match this web worker build.");
     }
 
-    postProgress("Preparing pseudoknot candidates and arc layers", 96, { phase: "result" });
+    postProgress(
+      message.allowPseudoknot === false
+        ? "Preparing pseudoknot-free secondary-structure candidates"
+        : "Preparing pseudoknot candidates and arc layers",
+      96,
+      { phase: "result" }
+    );
     self.postMessage({ type: "complete", result: result });
   } catch (error) {
     self.postMessage({
@@ -122,6 +135,7 @@ async function runCapacityProbe(message) {
       energyModel: message.energyModel,
       alpha: message.alpha,
       beta: message.beta,
+      allowPseudoknot: message.allowPseudoknot !== false,
       maxSequenceLength: HARD_MAX_SEQUENCE_LENGTH
     }));
     const result = JSON.parse(String(response));
@@ -155,6 +169,7 @@ async function runCapacityProbe(message) {
         energyModel: result.parameters && result.parameters.energyModel,
         alpha: result.parameters && result.parameters.alpha,
         beta: result.parameters && result.parameters.beta,
+        allowPseudoknot: result.parameters && result.parameters.allowPseudoknot,
         evidenceMode: evidenceMode
       }
     });

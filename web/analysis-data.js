@@ -304,6 +304,7 @@
       cplfoldEnergyModel: "DP09",
       cplfoldAlpha: "0.5",
       cplfoldBeta: "0",
+      cplfoldAllowPseudoknot: true,
       cplfoldCapacity: {
         status: "unknown",
         baselineLength: 75,

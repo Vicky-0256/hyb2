@@ -82,6 +82,7 @@ assert.equal(defaultStructure.cplfoldEvidence, "hyb-blocks", "CPLfold should def
 assert.equal(defaultStructure.cplfoldBeam, "20");
 assert.equal(defaultStructure.cplfoldMaxPhase1, "3");
 assert.equal(defaultStructure.cplfoldEnergyModel, "DP09");
+assert.equal(defaultStructure.cplfoldAllowPseudoknot, true);
 assert.equal(defaultStructure.cplfoldCapacity.status, "unknown");
 assert.equal(defaultStructure.cplfoldCapacity.baselineLength, 75);
 assert.equal(defaultStructure.cplfoldCapacity.recommendedLength, 75);

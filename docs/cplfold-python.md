@@ -3,8 +3,8 @@
 The `feature/cplfold-python` branch includes a source snapshot of CPLfold at
 `third_party/cplfold`. The snapshot was imported from
 `https://github.com/Vicky-0256/CPLfold.git`, branch
-`feature/standalone-pseudoknot-energy`, commit
-`af49f8ea3177adba089fa480d49259ec1ba14d50`.
+`feature/pseudoknot-free-mode`, commit
+`24bab521e0bcf2cff71f4567363aac1d5f5c97d5`.
 
 ## Runtime boundary
 
@@ -59,6 +59,10 @@ matrix uses 1-based prepared-sequence coordinates, includes a declared
 `sequence_length`, and is symmetric when loaded. Sequence-only CPLfold mode
 does not need the matrix file.
 
+To keep only pseudoknot-free secondary structures, add `--no-pseudoknot`. This
+runs Phase 1 and skips the constrained Phase 2; in that mode `--beta` is
+ignored.
+
 The browser can export the matrix for local handoff independently of whether
 the pure-Python browser fold fits its 500-nt prediction ceiling. Matrix export
 is capped at 5,000 nt because the HYB transform is inherently quadratic; the
@@ -81,7 +85,7 @@ python scripts/verify-cplfold-python.py
 ```
 
 The current `--max-phase2` option is retained for upstream CLI compatibility,
-but upstream commit `af49f8e` does not use it to enumerate multiple Phase 2
+but upstream commit `24bab52` does not use it to enumerate multiple Phase 2
 structures. Do not interpret that option as an effective search limit yet.
 
 ## Updating the snapshot

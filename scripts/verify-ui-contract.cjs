@@ -534,6 +534,13 @@ context.window.Hyb2UI.handleChange(
 );
 assert.equal(structureControlState.structure.cplfoldEvidence, "none",
   "a non-reference CPLfold source must switch to sequence-only evidence semantics");
+context.window.Hyb2UI.handleChange(
+  structureControlState,
+  { dataset: { feature: "structure-control", key: "cplfoldAllowPseudoknot" }, type: "radio", value: "false" },
+  navigationApi
+);
+assert.equal(structureControlState.structure.cplfoldAllowPseudoknot, false,
+  "the pseudoknot radio control must store a boolean false rather than the truthy string 'false'");
 
 Object.assign(structureControlState.structure, {
   engine: "cplfold",
@@ -571,12 +578,17 @@ assert.match(analysisPagesSource, /rnas\.slice\(0, 500\)/);
 assert.match(analysisPagesSource, /fasta\.sequences\.slice\(0, 500\)/);
 assert.match(analysisPagesSource, /data-feature-action="probe-cplfold-capacity"/);
 assert.match(analysisPagesSource, /data-feature-action="download-local-cplfold-input"/);
+assert.match(analysisPagesSource, /data-key="cplfoldAllowPseudoknot"/);
+assert.match(analysisPagesSource, /Secondary structure only/);
 assert.match(analysisPagesSource, /Download local inputs/);
 assert.match(analysisPagesSource, /cplfold-bonus-matrix\.tsv/);
 assert.match(fs.readFileSync(path.join(repository, "bin", "cplfold"), "utf8"), /--sequence-file/);
 assert.match(fs.readFileSync(path.join(repository, "third_party", "cplfold", "CPLfold.py"), "utf8"), /--bonus-matrix-file/);
 assert.match(fs.readFileSync(path.join(repository, "web", "cplfold.worker.mjs"), "utf8"), /cplfold-capacity/);
 assert.match(fs.readFileSync(path.join(repository, "web", "cplfold.worker.mjs"), "utf8"), /cplfold-bonus-matrix/);
+assert.match(fs.readFileSync(path.join(repository, "web", "cplfold.worker.mjs"), "utf8"), /allowPseudoknot/);
+assert.match(fs.readFileSync(path.join(repository, "web", "cplfold", "cplfold_web.py"), "utf8"), /allow_pseudoknot/);
+assert.match(fs.readFileSync(path.join(repository, "third_party", "cplfold", "CPLfold.py"), "utf8"), /--no-pseudoknot/);
 assert.doesNotMatch(analysisPagesSource, /rnas\.map[\s\S]{0,300}fasta\.sequences\.map/,
   "FASTA mapping controls must not build an RNA-by-reference Cartesian option set");
 assert.match(appSource, /function handleHashChange\(\)\s*{\s*const previousPage = state\.activePage;\s*syncRoute\(\);\s*render\(\);[\s\S]*?previousPage !== state\.activePage[\s\S]*?window\.scrollTo\(0, 0\)/,

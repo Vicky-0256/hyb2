@@ -46,7 +46,8 @@
       profileValue(structure.cplfoldEnergyDelta, "5"),
       profileValue(structure.cplfoldEnergyModel, "DP09").toUpperCase(),
       profileValue(structure.cplfoldAlpha, "0.5"),
-      profileValue(structure.cplfoldBeta, "0")
+      profileValue(structure.cplfoldBeta, "0"),
+      profileValue(structure.cplfoldAllowPseudoknot, true) === "false" ? "nested" : "pseudoknot"
     ].join("|");
   }
 
@@ -114,6 +115,7 @@
       energyDelta: parseBoundedNumber(structure.cplfoldEnergyDelta, 0, 50, "Energy delta"),
       alpha: parseBoundedNumber(structure.cplfoldAlpha, 0, 1, "Evidence alpha"),
       beta: parseBoundedNumber(structure.cplfoldBeta, 0, 1, "Pseudoknot beta"),
+      allowPseudoknot: structure.cplfoldAllowPseudoknot !== false,
       energyModel: String(structure.cplfoldEnergyModel || "DP09").toUpperCase()
     };
     if (["DP03", "DP09", "CC06", "CC09", "RE"].indexOf(parameters.energyModel) === -1) {
@@ -301,6 +303,7 @@
         energyModel: cplfoldParameters.energyModel,
         alpha: cplfoldParameters.alpha,
         beta: cplfoldParameters.beta,
+        allowPseudoknot: cplfoldParameters.allowPseudoknot,
         maxSequenceLength: cplfold ? cplfoldMaximumLength(structure) : undefined
       } : hybGuided ? {
         type: "comrades-fold",
@@ -443,7 +446,8 @@
         energyDelta: parameters.energyDelta,
         energyModel: parameters.energyModel,
         alpha: parameters.alpha,
-        beta: parameters.beta
+        beta: parameters.beta,
+        allowPseudoknot: parameters.allowPseudoknot
       });
     } catch (error) {
       return failCapacityProbe(state, worker, runId, api, error && error.message

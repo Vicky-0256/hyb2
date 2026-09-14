@@ -612,6 +612,7 @@
     const rnas = state.summary.rnaNames || [];
     const sequenceInfo = getStructureSequence(state);
     const cplfold = structure.engine === "cplfold";
+    const cplfoldAllowsPseudoknot = structure.cplfoldAllowPseudoknot !== false;
     const cplfoldGuided = cplfold && structure.cplfoldEvidence === "hyb-blocks";
     const sourceOptions = cplfoldGuided ? [
       { value: "reference", label: "Reference region" }
@@ -675,7 +676,7 @@
       cplfold ? renderCplfoldSetup(structure, sequenceInfo) : "",
       manualConstraintMode ? '<div class="structure-constraint-editor"><label class="control-field" for="structure-constraint-text"><span>Manual hard base pairs</span><textarea id="structure-constraint-text" class="sequence-textarea" rows="5" maxlength="20000" spellcheck="false" autocapitalize="off" autocomplete="off" data-feature="structure-control" data-key="constraintText" aria-describedby="structure-constraint-help" placeholder="4-18\n7-15">' + escape(structure.constraintText || "") + '</textarea><small id="structure-constraint-help">One 1-based i-j pair per line, relative to the prepared sequence shown here. Pairs must be canonical, non-crossing, use each nucleotide once, and satisfy the minimum loop size.</small></label></div>' : "",
       cplfold
-        ? '<div class="fold-status fold-status-cplfold"><strong>Pure-Python CPLfold mode</strong><p>LinearFold generates phase-1 candidates; a second constrained phase adds crossing base pairs, and CPLfold/HotKnots energy models rank nested and pseudoknotted structures. The computation runs in a dedicated Pyodide worker.</p></div>'
+        ? '<div class="fold-status fold-status-cplfold"><strong>Pure-Python CPLfold mode</strong><p>' + (cplfoldAllowsPseudoknot ? "LinearFold generates phase-1 candidates; a second constrained phase searches for crossing base pairs, and CPLfold/HotKnots energy models rank nested and pseudoknotted structures." : "LinearFold generates phase-1 secondary-structure candidates and skips the constrained Phase 2 pseudoknot search.") + ' The computation runs in a dedicated Pyodide worker.</p></div>'
         : guidedConstraintMode
         ? '<div class="fold-status fold-status-evidence"><strong>HYB-guided COMRADES mode</strong><p>Each eligible HYB row is folded with RNAcofold. Base-pair frequencies are merged into ranked stems, fitted greedily as hard constraints, then optionally re-fitted in seeded random orders.</p></div>'
         : manualConstraintMode
@@ -703,6 +704,7 @@
 
   function renderCplfoldSetup(structure, sequenceInfo) {
     const guided = structure.cplfoldEvidence === "hyb-blocks";
+    const allowPseudoknot = structure.cplfoldAllowPseudoknot !== false;
     const assembly = sequenceInfo.assembly;
     return [
       '<section class="guided-fold-controls cplfold-controls" aria-label="CPLfold setup">',
@@ -711,6 +713,7 @@
         { value: "none", label: "Sequence only" }
       ], "structure-control"),
       guided ? '<div class="guided-input-summary"><strong>' + format(assembly ? assembly.eligibleRecordCount : 0) + ' eligible HYB row' + (assembly && assembly.eligibleRecordCount === 1 ? "" : "s") + '</strong><span>one contribution per row · overlap_score and collapsed raw-read count are not weights · single reference region</span></div>' : "",
+      renderCplfoldTopologyControl(allowPseudoknot),
       '<div class="control-grid">',
       renderSelectControl("Beam size", "cplfoldBeam", String(structure.cplfoldBeam || "20"), [
         { value: "10", label: "10 · faster" },
@@ -738,6 +741,26 @@
     ].join("");
   }
 
+  function renderCplfoldTopologyControl(allowPseudoknot) {
+    const options = [
+      {
+        value: "true",
+        title: "Allow pseudoknots",
+        description: "Run Phase 2 to search for crossing base pairs.",
+        selected: allowPseudoknot
+      },
+      {
+        value: "false",
+        title: "Secondary structure only",
+        description: "Run Phase 1 candidates and skip pseudoknot search.",
+        selected: !allowPseudoknot
+      }
+    ];
+    return '<fieldset class="cplfold-topology-control" aria-describedby="cplfold-topology-help"><legend>Structure topology</legend><div class="cplfold-topology-options" role="radiogroup" aria-label="CPLfold pseudoknot mode">' + options.map(function (option) {
+      return '<label class="cplfold-topology-option' + (option.selected ? ' is-selected' : '') + '"><input type="radio" name="cplfold-topology" value="' + option.value + '" data-feature="structure-control" data-key="cplfoldAllowPseudoknot"' + (option.selected ? " checked" : "") + '><span><strong>' + option.title + '</strong><small>' + option.description + '</small></span></label>';
+    }).join("") + '</div><p id="cplfold-topology-help" class="cplfold-topology-help">CPLfold is the browser engine that can search crossing pairs. ViennaRNA remains pseudoknot-free.</p></fieldset>';
+  }
+
   function cplfoldLocalCommand(structure, guided) {
     if (window.Hyb2StructureUI && typeof window.Hyb2StructureUI.localCplfoldCommand === "function") {
       return window.Hyb2StructureUI.localCplfoldCommand(structure, guided);
@@ -757,6 +780,9 @@
     );
     if (guided) {
       command.push("--alpha", profileValue(structure && structure.cplfoldAlpha, "0.5"));
+    }
+    if (structure && structure.cplfoldAllowPseudoknot === false) {
+      command.push("--no-pseudoknot");
     }
     return command.join(" ");
   }
@@ -888,6 +914,7 @@
   function renderStructureResult(result, selectedNucleotide, viewMode) {
     const pairs = result.pairs || [];
     const cplfold = result.engine === "CPLfold";
+    const allowPseudoknot = resultAllowsPseudoknot(result);
     const cplfoldHasEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
     const constraintCount = Math.max(0, Number(result.constraintCount) || 0);
     const manualConstrained = result.constraintMode === "hard-base-pairs" && constraintCount > 0;
@@ -902,24 +929,24 @@
         ? "Click a nucleotide marker to inspect it."
         : "Click along the sequence baseline, or focus it and use the arrow keys, to inspect a nucleotide.");
     return [
-      '<section class="structure-result-summary" aria-label="' + (cplfold ? "CPLfold pseudoknot candidate result" : "ViennaRNA secondary-structure result") + '">',
+      '<section class="structure-result-summary" aria-label="' + (cplfold ? (allowPseudoknot ? "CPLfold pseudoknot candidate result" : "CPLfold pseudoknot-free result") : "ViennaRNA secondary-structure result") + '">',
       '<div class="structure-metric"><span>' + (cplfold ? "Energy" : "MFE") + '</span><strong>' + formatEnergy(result.energy) + '</strong><small>kcal/mol' + (cplfold ? " · " + escape(result.parameters && result.parameters.energyModel || "DP09") : "") + '</small></div>',
       '<div class="structure-metric"><span>Base pairs</span><strong>' + format(pairs.length) + "</strong><small>" + (cplfold ? escape(result.topology || "nested") + " topology" : "non-crossing pairs") + "</small></div>",
       '<div class="structure-metric"><span>Unpaired bases</span><strong>' + format(result.unpaired) + "</strong><small>of " + format(result.sequence.length) + " nt</small></div>",
       cplfold
-        ? '<div class="structure-metric"><span>Candidate</span><strong>#' + format((Number(result.selectedCandidate) || 0) + 1) + '</strong><small>' + escape(result.structureType === "pseudoknot" ? "phase 1 + crossing phase 2" : "phase 1 nested") + '</small></div>'
+        ? '<div class="structure-metric"><span>Candidate</span><strong>#' + format((Number(result.selectedCandidate) || 0) + 1) + '</strong><small>' + escape(result.structureType === "pseudoknot" && allowPseudoknot ? "phase 1 + crossing phase 2" : (allowPseudoknot ? "phase 1 nested" : "phase 1 secondary")) + '</small></div>'
         : '<div class="structure-metric"><span>Constraint mode</span><strong>' + (guided ? "HYB-guided" : (manualConstrained ? "Manual hard" : "None")) + "</strong><small>" + format(constraintCount) + " enforced pair" + (constraintCount === 1 ? "" : "s") + "</small></div>",
       guided ? '<div class="structure-metric"><span>COMRADES score</span><strong>' + format(result.comradesScore || 0) + '</strong><small>' + format(result.matchedEvidencePairs || 0) + " supported structure pairs</small></div>" : "",
       cplfold && Number(result.effectiveEnergy) !== Number(result.energy) ? '<div class="structure-metric"><span>Effective energy</span><strong>' + formatEnergy(result.effectiveEnergy) + '</strong><small>kcal/mol · beta-adjusted rank</small></div>' : "",
       '<div class="structure-metric"><span>Elapsed</span><strong>' + format(result.elapsedMs) + " ms</strong><small>" + (cplfold ? "total · runtime " + format(result.runtimeLoadMs) + " ms · fold " + format(result.foldElapsedMs) + " ms" : "local worker") + "</small></div>",
       "</section>",
       cplfold
-        ? '<div class="structure-constraint-summary structure-cplfold-summary"><strong>' + escape(result.topology === "pseudoknotted" ? "Pseudoknot candidate" : "Nested candidate") + '</strong><span>CPLfold ranked ' + format((result.candidates || []).length) + ' unique candidate' + ((result.candidates || []).length === 1 ? "" : "s") + '. Parentheses show phase-1 pairs; square brackets show the crossing phase-2 layer.</span></div>'
+        ? '<div class="structure-constraint-summary structure-cplfold-summary"><strong>' + escape(allowPseudoknot ? (result.topology === "pseudoknotted" ? "Pseudoknot candidate" : "Nested candidate") : "Pseudoknot search disabled") + '</strong><span>' + (allowPseudoknot ? "CPLfold ranked " + format((result.candidates || []).length) + ' unique candidate' + ((result.candidates || []).length === 1 ? "" : "s") + '. Parentheses show phase-1 pairs; square brackets show the crossing phase-2 layer.' : "CPLfold ranked " + format((result.candidates || []).length) + ' phase-1 secondary-structure candidate' + ((result.candidates || []).length === 1 ? "" : "s") + '. No crossing Phase 2 layer was generated.') + '</span></div>'
         : guided
         ? '<div class="structure-constraint-summary structure-evidence-summary"><strong>HYB-evidence-selected structure</strong><span>The selected ensemble member maximises the original nucleotide-summed COMRADES support score. Supported arcs are coloured by RNAcofold evidence; fitted hard-pair arcs remain thicker.</span></div>'
         : (manualConstrained ? '<div class="structure-constraint-summary"><strong>Manual hard-pair result</strong><span>ViennaRNA enforced ' + format(constraintCount) + " user-entered pair" + (constraintCount === 1 ? "" : "s") + ". These pairs were not generated from HYB interaction evidence.</span></div>" : ""),
       guided ? renderComradesResult(result) : (cplfold ? renderCplfoldResult(result) : ""),
-      renderStructureDiagramPanel(result, activeView, cplfold, guided, manualConstrained, inspectorInstruction),
+      renderStructureDiagramPanel(result, activeView, cplfold, allowPseudoknot, guided, manualConstrained, inspectorInstruction),
       renderNucleotideInspector(result, selectedNucleotide),
       '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span><code class="structure-output-code">' + escape(wrapSequence(result.sequence, 64)) + '</code></div><div><span class="drawer-kicker">Dot-bracket</span><code class="structure-output-code">' + escape(wrapSequence(result.dotBracket, 64)) + "</code></div></section>",
       '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button><button class="button button-secondary" type="button" data-feature-action="download-structure-dot-bracket">Download DBN</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ct">Download CT</button><button class="button button-secondary" type="button" data-feature-action="download-structure-pairs">Download base pairs</button>' + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>' : "") + (guided ? '<button class="button button-secondary" type="button" data-feature-action="download-structure-evidence">Download evidence</button><button class="button button-secondary" type="button" data-feature-action="download-structure-constraints">Download constraints</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ensemble">Download ensemble</button>' : "") + (cplfoldHasEvidence ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-evidence">Download bonus matrix</button>' : "") + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-candidates">Download candidates</button>' : "") + '<button class="button button-secondary" type="button" data-feature-action="download-structure-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-png">Download PNG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-report">Download report</button></div>',
@@ -936,11 +963,11 @@
     return ["folded", "arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "folded";
   }
 
-  function structureViewCopy(viewMode, cplfold, guided, manualConstrained) {
+  function structureViewCopy(viewMode, cplfold, allowPseudoknot, guided, manualConstrained) {
     const descriptions = {
       folded: "The RNA backbone is laid out as a folded molecule: paired bases form stem rungs while unpaired bases open into hairpin and internal loops.",
       arc: cplfold
-        ? "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects HYB bonus support when enabled."
+        ? (allowPseudoknot ? "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects HYB bonus support when enabled." : "The arc diagram shows the pseudoknot-free Phase-1 candidate; opacity reflects HYB bonus support when enabled.")
         : (guided ? "Arc colour intensity shows aggregated RNAcofold evidence; fitted constraint arcs are thicker." : (manualConstrained ? "Manual hard-pair arcs are thicker and marked in the base-pair list; all other arcs minimise free energy around them." : "Each arc represents a ViennaRNA MFE base pair.")),
       radial: "Pairs are drawn from the sequence perimeter toward the centre so long-range contacts and nested depth can be compared at a glance.",
       circular: "The sequence runs around a circular backbone; chords make long-range and crossing contacts easy to scan.",
@@ -949,7 +976,7 @@
     return descriptions[structureViewMode(viewMode)];
   }
 
-  function renderStructureDiagramPanel(result, viewMode, cplfold, guided, manualConstrained, inspectorInstruction) {
+  function renderStructureDiagramPanel(result, viewMode, cplfold, allowPseudoknot, guided, manualConstrained, inspectorInstruction) {
     const activeView = structureViewMode(viewMode);
     const titles = {
       folded: "Folded RNA structure",
@@ -972,7 +999,7 @@
       ["circular", "Circular"],
       ["matrix", "Matrix"]
     ];
-    return '<section class="structure-diagram-panel"><div class="structure-diagram-heading"><div><h3>' + titles[activeView] + '</h3><p>' + structureViewCopy(activeView, cplfold, guided, manualConstrained) + " " + inspectorInstruction + '</p></div><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span></div><div class="structure-view-toolbar"><span class="structure-view-label">View</span><div class="structure-view-options" role="group" aria-label="RNA structure visualization view">' + options.map(function (option) {
+    return '<section class="structure-diagram-panel"><div class="structure-diagram-heading"><div><h3>' + titles[activeView] + '</h3><p>' + structureViewCopy(activeView, cplfold, allowPseudoknot, guided, manualConstrained) + " " + inspectorInstruction + '</p></div><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span></div><div class="structure-view-toolbar"><span class="structure-view-label">View</span><div class="structure-view-options" role="group" aria-label="RNA structure visualization view">' + options.map(function (option) {
       return '<button class="structure-view-option' + (option[0] === activeView ? " is-active" : '') + '" type="button" data-feature-action="set-structure-view" data-view-mode="' + option[0] + '" aria-pressed="' + (option[0] === activeView ? "true" : "false") + '">' + option[1] + "</button>";
     }).join("") + '</div></div><div class="structure-diagram" data-structure-diagram data-view-mode="' + activeView + '" aria-label="' + labels[activeView] + '"></div></section>';
   }
@@ -981,13 +1008,15 @@
     const candidates = result.candidates || [];
     const evidence = result.evidence || {};
     const maximumBonus = Number(evidence.maximumBonus) || 0;
+    const allowPseudoknot = resultAllowsPseudoknot(result);
     return [
       '<section class="comrades-result cplfold-result" aria-label="CPLfold candidate search result">',
+      '<div class="cplfold-mode-note"><strong>' + (allowPseudoknot ? "Pseudoknot search enabled" : "Pseudoknot search disabled") + '</strong><span>' + (allowPseudoknot ? "Phase 1 and the constrained Phase 2 are included in candidate ranking." : "Only Phase 1 secondary structures are ranked; beta is ignored and no crossing pairs are generated.") + '</span></div>',
       '<div class="comrades-stage-grid">',
       '<div><span>1 · HYB blocks</span><strong>' + countLabel(evidence.inputRecords, "row") + '</strong><small>' + (evidence.source === "hyb-block-intervals" ? format(evidence.uniqueBlocks) + " unique prepared interval blocks" : "sequence-only run") + '</small></div>',
       '<div><span>2 · Bonus matrix</span><strong>' + format(evidence.nonzeroUpperTriangleCells || 0) + ' upper-triangle cells</strong><small>maximum log1p bonus ' + formatEvidence(maximumBonus) + '</small></div>',
-      '<div><span>3 · Two-phase search</span><strong>' + countLabel(candidates.length, "candidate") + '</strong><small>beam ' + format(result.parameters && result.parameters.beamSize) + ' · ΔE ' + formatEvidence(result.parameters && result.parameters.energyDelta) + '</small></div>',
-      '<div><span>4 · Selected topology</span><strong>' + escape(result.topology || "nested") + '</strong><small>' + format(result.crossingPairs || 0) + ' base pairs participate in crossings</small></div>',
+      '<div><span>3 · ' + (allowPseudoknot ? "Two-phase search" : "Secondary search") + '</span><strong>' + countLabel(candidates.length, "candidate") + '</strong><small>' + (allowPseudoknot ? "beam " + format(result.parameters && result.parameters.beamSize) + ' · ΔE ' + formatEvidence(result.parameters && result.parameters.energyDelta) : "Phase 2 skipped · beta ignored") + '</small></div>',
+      '<div><span>4 · Selected topology</span><strong>' + escape(result.topology || "nested") + '</strong><small>' + (allowPseudoknot ? format(result.crossingPairs || 0) + ' base pairs participate in crossings' : "pseudoknot-free candidate") + '</small></div>',
       "</div>",
       evidence.source === "hyb-block-intervals" ? renderCplfoldBonusMap(result) : "",
       '<div class="candidate-table-intro"><strong>Select a candidate structure</strong><span>Click any row to update the RNA visualization and all result details below.</span></div>',
@@ -1269,6 +1298,11 @@
     return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
   }
 
+  function resultAllowsPseudoknot(result) {
+    return !!result && result.allowPseudoknot !== false &&
+      !(result.parameters && result.parameters.allowPseudoknot === false);
+  }
+
   function cplfoldProfileKey(structure) {
     return [
       profileValue(structure && structure.cplfoldEvidence, "hyb-blocks"),
@@ -1277,7 +1311,8 @@
       profileValue(structure && structure.cplfoldEnergyDelta, "5"),
       profileValue(structure && structure.cplfoldEnergyModel, "DP09").toUpperCase(),
       profileValue(structure && structure.cplfoldAlpha, "0.5"),
-      profileValue(structure && structure.cplfoldBeta, "0")
+      profileValue(structure && structure.cplfoldBeta, "0"),
+      profileValue(structure && structure.cplfoldAllowPseudoknot, true) === "false" ? "nested" : "pseudoknot"
     ].join("|");
   }
 

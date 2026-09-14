@@ -107,6 +107,99 @@
   accent-color: var(--accent);
 }
 
+.cplfold-topology-control {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cplfold-topology-control legend {
+  padding: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cplfold-topology-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cplfold-topology-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  min-height: 72px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.cplfold-topology-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.cplfold-topology-option.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.cplfold-topology-option input {
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.cplfold-topology-option span {
+  display: grid;
+  gap: 3px;
+}
+
+.cplfold-topology-option strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.cplfold-topology-option small,
+.cplfold-topology-help {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.cplfold-topology-help {
+  margin: 0;
+}
+
+.cplfold-mode-note {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.cplfold-mode-note strong {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.cplfold-mode-note span {
+  color: var(--muted-strong);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .cplfold-runtime-note {
   margin: 0;
   color: var(--muted);
@@ -1074,6 +1167,10 @@
   .cplfold-capacity-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .cplfold-topology-options {
+    grid-template-columns: 1fr;
   }
 
   .cplfold-capacity-row .button {

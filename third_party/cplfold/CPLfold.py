@@ -257,7 +257,8 @@ def compute_energy_hotknots(seq: str, structure: str, hk: HotKnotsEnergy,
 
 
 def output_results(all_structures: List[Dict], seq: str,
-                   output_file: Optional[str], verbose: bool = True) -> None:
+                   output_file: Optional[str], verbose: bool = True,
+                   allow_pseudoknot: bool = True) -> None:
     """
     Output results to stdout and optionally to file.
 
@@ -266,6 +267,7 @@ def output_results(all_structures: List[Dict], seq: str,
         seq: Original RNA sequence
         output_file: Optional file path for output
         verbose: Whether to print to stdout
+        allow_pseudoknot: Whether pseudoknot candidates were searched
     """
     lines = []
 
@@ -278,16 +280,22 @@ def output_results(all_structures: List[Dict], seq: str,
     phase1_structs = [s for s in all_structures if s['type'] == 'phase1']
     pk_structs = [s for s in all_structures if s['type'] == 'pseudoknot']
 
-    lines.append(f"Phase 1 Structures: {len(phase1_structs)}")
-    lines.append(f"Pseudoknot Structures: {len(pk_structs)}")
+    secondary_label = "Phase 1 Structures" if allow_pseudoknot else "Secondary Structures"
+    secondary_id = "P1" if allow_pseudoknot else "S"
+
+    lines.append(f"{secondary_label}: {len(phase1_structs)}")
+    if allow_pseudoknot:
+        lines.append(f"Pseudoknot Structures: {len(pk_structs)}")
+    else:
+        lines.append("Pseudoknot Structures: disabled")
     lines.append("")
 
-    # Output Phase 1 structures
+    # Output ordinary secondary structures
     if phase1_structs:
-        lines.append("--- Phase 1 Structures ---")
+        lines.append(f"--- {secondary_label} ---")
         for i, s in enumerate(phase1_structs, 1):
             energy_str = f"{s['energy']:.2f}" if s['energy'] is not None else "N/A"
-            lines.append(f"P1-{i}: {s['structure']}")
+            lines.append(f"{secondary_id}-{i}: {s['structure']}")
             lines.append(f"       Energy: {energy_str} kcal/mol")
         lines.append("")
 
@@ -379,7 +387,8 @@ def two_phase_pseudoknot_fold(seq: str,
                                lv: bool = True,
                                bonus_matrix = None,
                                alpha: float = 0.0,
-                               beta: float = 0.0) -> List[Dict]:
+                               beta: float = 0.0,
+                               allow_pseudoknot: bool = True) -> List[Dict]:
     """
     Main function: Two-phase pseudoknot prediction algorithm.
 
@@ -399,6 +408,9 @@ def two_phase_pseudoknot_fold(seq: str,
               the sorting energy = pseudoknot_energy + beta * phase1_energy.
               Since RNA energies are negative, this makes pseudoknots more
               favorable in ranking, improving recall of pseudoknot structures.
+        allow_pseudoknot: Whether to run Phase 2 and return pseudoknot candidates.
+                         Defaults to True. When False, only Phase 1 secondary
+                         structures are generated and returned.
 
     Returns:
         List of structure dictionaries sorted by effective energy
@@ -407,23 +419,26 @@ def two_phase_pseudoknot_fold(seq: str,
     seq = seq.upper().replace('T', 'U')
 
     if verbose:
-        print(f"Running Two-Phase Pseudoknot Algorithm...")
+        print("Running CPLfold RNA structure prediction...")
         print(f"Sequence length: {len(seq)}")
         print(f"Beam size: {beam_size}")
         print(f"Energy delta: {energy_delta}")
         print(f"Energy model: {energy_model}")
         print(f"LinearFold mode: {'Vienna' if lv else 'CONTRAfold'}")
+        print(f"Structure mode: {'Pseudoknot-enabled' if allow_pseudoknot else 'Pseudoknot-free'}")
         if bonus_matrix is not None:
             print(f"Using bonus matrix with alpha: {alpha}")
-        if beta != 0.0:
+        if allow_pseudoknot and beta != 0.0:
             print(f"Pseudoknot energy bonus (beta): {beta}")
+        elif not allow_pseudoknot and beta != 0.0:
+            print("Ignoring beta because pseudoknot generation is disabled")
         print("")
 
-    # Initialize parser with constraints enabled
+    # Constraints are needed only by the pseudoknot-enabled Phase 2.
     parser = BeamCKYParserHyper(
         beam_size=beam_size,
         lv=lv,  # Vienna mode (True) or CONTRAfold mode (False)
-        use_constraints=True,
+        use_constraints=allow_pseudoknot,
         is_verbose=False
     )
     
@@ -473,6 +488,9 @@ def two_phase_pseudoknot_fold(seq: str,
 
         if verbose:
             print(f"  Energy: {energy1:.2f} kcal/mol")
+
+        if not allow_pseudoknot:
+            continue
 
         # Phase 2: Generate constraint and fold
         constraint = structure_to_constraint(struct1)
@@ -685,6 +703,11 @@ Beta Parameter:
 
   Example: beta=0.5, phase1=-30, pseudoknot=-25
     effective = -25 + 0.5*(-30) = -40 kcal/mol
+
+  Structure modes:
+    By default, Phase 2 searches for pseudoknots.
+    Use --no-pseudoknot to stop after Phase 1 and output only
+    pseudoknot-free secondary structures. In that mode, --beta is ignored.
         """
     )
 
@@ -712,6 +735,9 @@ Beta Parameter:
                         help='Pseudoknot energy bonus factor (default: 0.0). '
                              'For pseudoknots, effective_energy = pk_energy + beta * phase1_energy. '
                              'Higher beta favors pseudoknots in ranking (improves recall).')
+    parser.add_argument('--no-pseudoknot', action='store_true',
+                        help='Only generate pseudoknot-free secondary structures; '
+                             'skip Phase 2 (default: pseudoknots enabled)')
     parser.add_argument('-q', '--quiet', action='store_true',
                         help='Suppress verbose output')
 
@@ -734,7 +760,8 @@ Beta Parameter:
         verbose=not args.quiet,
         bonus_matrix=bonus_matrix,
         alpha=args.alpha,
-        beta=args.beta
+        beta=args.beta,
+        allow_pseudoknot=not args.no_pseudoknot
     )
 
     # A completed fold is successful even when no pseudoknot candidate wins.

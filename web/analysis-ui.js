@@ -1135,6 +1135,19 @@
     }
   }
 
+  function structureControlValue(element, key) {
+    if (key === "selectedRecordIndex") {
+      return element.value === "" ? null : Number(element.value);
+    }
+    if (element.type === "checkbox") {
+      return element.checked;
+    }
+    if (element.type === "radio" && key === "cplfoldAllowPseudoknot") {
+      return element.value === "true";
+    }
+    return element.value;
+  }
+
   function invalidateFastaConsumers(state) {
     if (state.viewpoint) {
       state.viewpoint.results = null;
@@ -1221,7 +1234,7 @@
 
     if (feature === "structure-control") {
       resetStructureForControl(state, key);
-      const value = key === "selectedRecordIndex" ? (element.value === "" ? null : Number(element.value)) : (element.type === "checkbox" ? element.checked : element.value);
+      const value = structureControlValue(element, key);
       state.structure[key] = value;
       if (key === "constraintMode" && value === "hyb-guided") {
         state.structure.source = "reference";
@@ -1329,21 +1342,22 @@
     }
     if (feature === "structure-control" && state.structure) {
       resetStructureForControl(state, key);
-      state.structure[key] = element.value;
-      if (key === "constraintMode" && element.value === "hyb-guided") {
+      const value = structureControlValue(element, key);
+      state.structure[key] = value;
+      if (key === "constraintMode" && value === "hyb-guided") {
         state.structure.source = "reference";
       }
-      if ((key === "engine" && element.value === "cplfold" && state.structure.cplfoldEvidence === "hyb-blocks") ||
-          (key === "cplfoldEvidence" && element.value === "hyb-blocks")) {
+      if ((key === "engine" && value === "cplfold" && state.structure.cplfoldEvidence === "hyb-blocks") ||
+          (key === "cplfoldEvidence" && value === "hyb-blocks")) {
         state.structure.source = "reference";
       }
-      if (key === "engine" && element.value === "viennarna" && state.structure.constraintMode === "hyb-guided") {
+      if (key === "engine" && value === "viennarna" && state.structure.constraintMode === "hyb-guided") {
         state.structure.source = "reference";
       }
-      if (key === "source" && element.value !== "reference" && state.structure.constraintMode === "hyb-guided") {
+      if (key === "source" && value !== "reference" && state.structure.constraintMode === "hyb-guided") {
         state.structure.constraintMode = "none";
       }
-      if (key === "source" && element.value !== "reference" && state.structure.engine === "cplfold") {
+      if (key === "source" && value !== "reference" && state.structure.engine === "cplfold") {
         state.structure.cplfoldEvidence = "none";
       }
       return true;

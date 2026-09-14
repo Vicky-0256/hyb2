@@ -374,11 +374,15 @@ Object.assign(cplfoldState.structure, {
   cplfoldEnergyDelta: "5",
   cplfoldEnergyModel: "DP09",
   cplfoldAlpha: "0.5",
-  cplfoldBeta: "0"
+  cplfoldBeta: "0",
+  cplfoldAllowPseudoknot: true
 });
 const cplfoldSetup = context.window.Hyb2Pages.renderStructure(cplfoldState);
 assert.match(cplfoldSetup, /CPLfold \+ Pyodide · Browser/);
 assert.match(cplfoldSetup, /HYB block bonus matrix/);
+assert.match(cplfoldSetup, /Allow pseudoknots/);
+assert.match(cplfoldSetup, /Secondary structure only/);
+assert.match(cplfoldSetup, /value="true"[^>]*data-key="cplfoldAllowPseudoknot"[^>]* checked/);
 assert.match(cplfoldSetup, /1 eligible HYB row/);
 assert.match(cplfoldSetup, /Predict CPLfold candidates/);
 assert.match(cplfoldSetup, /Baseline 75 nt/);
@@ -416,13 +420,15 @@ assert.equal(cplfoldWorker.message.type, "cplfold");
 assert.equal(cplfoldWorker.message.evidenceMode, "hyb-blocks");
 assert.equal(cplfoldWorker.message.evidenceArms.length, 1);
 assert.equal(cplfoldWorker.message.energyModel, "DP09");
+assert.equal(cplfoldWorker.message.allowPseudoknot, true);
 assert.match(context.window.Hyb2Pages.renderStructure(cplfoldState), /aria-label="CPLfold structure prediction progress"/);
 cplfoldWorker.onmessage({ data: { type: "complete", result: {
   algorithm: "CPLfold two-phase pseudoknot prediction",
   model: "LinearFold Vienna-mode scoring with CPLfold/HotKnots DP09 energy ranking",
   engine: "CPLfold",
-  engineVersion: "af49f8e",
-  bridgeVersion: "4",
+  engineVersion: "24bab52",
+  bridgeVersion: "5",
+  allowPseudoknot: true,
   runtime: "Pyodide test runtime",
   dotBracket: "..(((((..[[[[)))))......]]]]",
   energy: -8.0204,
@@ -444,7 +450,7 @@ cplfoldWorker.onmessage({ data: { type: "complete", result: {
   evidenceMode: "hyb-blocks",
   evidenceSource: "hyb-block-bonus-matrix",
   selectedCandidate: 0,
-  parameters: { beamSize: 20, maxPhase1: 2, energyDelta: 5, energyModel: "DP09", alpha: 0.5, beta: 0 },
+  parameters: { beamSize: 20, maxPhase1: 2, energyDelta: 5, energyModel: "DP09", alpha: 0.5, beta: 0, allowPseudoknot: true },
   evidence: {
     source: "hyb-block-intervals", inputRecords: 1, uniqueBlocks: 1,
     nonzeroBonusCells: 4, nonzeroUpperTriangleCells: 2, maximumBonus: 0.8,
@@ -531,8 +537,8 @@ assert.equal(bonusMatrixWorker.message.type, "cplfold-bonus-matrix");
 assert.equal(bonusMatrixWorker.message.evidenceArms.length, 1);
 bonusMatrixWorker.onmessage({ data: { type: "bonus-matrix-complete", result: {
   engine: "CPLfold",
-  engineVersion: "af49f8e",
-  bridgeVersion: "4",
+  engineVersion: "24bab52",
+  bridgeVersion: "5",
   sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
   evidenceMode: "hyb-blocks",
   evidence: {
@@ -554,6 +560,8 @@ assert.equal(cplfoldState.structure.result.topology, "nested");
 assert.equal(cplfoldState.structure.result.dotBracket, "..(((((......)))))..........");
 const cplfoldReport = context.window.Hyb2StructureUI.structureReport(cplfoldState, cplfoldState.structure.result);
 assert.equal(cplfoldReport.methodScope.cplfoldPurePythonBrowserExecution, true);
+assert.equal(cplfoldReport.prediction.pseudoknotAllowed, true);
+assert.equal(cplfoldReport.methodScope.cplfoldPseudoknotPrediction, true);
 assert.equal(cplfoldReport.methodScope.cplfoldHybBlockBonusMatrix, true);
 assert.equal(cplfoldReport.methodScope.numbaJitAvailable, false);
 assert.equal(cplfoldReport.methodScope.browserCplfoldBaselineLength, 75);
@@ -576,6 +584,37 @@ const sequenceOnlyCplfoldHtml = context.window.Hyb2Pages.renderStructureResult(O
 assert.doesNotMatch(sequenceOnlyCplfoldHtml, /Download bonus matrix/,
   "sequence-only CPLfold must not offer an empty HYB bonus export");
 assert.match(sequenceOnlyCplfoldHtml, /Download candidates/);
+
+const pseudoknotFreeSetupState = Object.assign({}, cplfoldState, {
+  structure: Object.assign({}, cplfoldState.structure, {
+    cplfoldAllowPseudoknot: false,
+    result: null,
+    status: "idle",
+    operation: null,
+    message: ""
+  })
+});
+const pseudoknotFreeSetupHtml = context.window.Hyb2Pages.renderStructure(pseudoknotFreeSetupState);
+assert.match(pseudoknotFreeSetupHtml, /Secondary structure only/);
+assert.match(pseudoknotFreeSetupHtml, /value="false"[^>]*data-key="cplfoldAllowPseudoknot"[^>]* checked/);
+assert.doesNotMatch(pseudoknotFreeSetupHtml, /value="true"[^>]*data-key="cplfoldAllowPseudoknot"[^>]* checked/);
+assert.match(context.window.Hyb2StructureUI.localCplfoldCommand(pseudoknotFreeSetupState.structure, true), /--no-pseudoknot/);
+const pseudoknotFreeResult = Object.assign({}, cplfoldState.structure.result, {
+  algorithm: "CPLfold pseudoknot-free secondary-structure prediction",
+  allowPseudoknot: false,
+  structureType: "phase1",
+  topology: "nested",
+  crossingPairs: 0,
+  parameters: Object.assign({}, cplfoldState.structure.result.parameters, { allowPseudoknot: false }),
+  candidates: [cplfoldState.structure.result.candidates[1]]
+});
+const pseudoknotFreeResultHtml = context.window.Hyb2Pages.renderStructureResult(pseudoknotFreeResult, null);
+assert.match(pseudoknotFreeResultHtml, /Pseudoknot search disabled/);
+assert.match(pseudoknotFreeResultHtml, /No crossing Phase 2 layer was generated/);
+assert.match(pseudoknotFreeResultHtml, /Only Phase 1 secondary structures are ranked/);
+const pseudoknotFreeReport = context.window.Hyb2StructureUI.structureReport(pseudoknotFreeSetupState, pseudoknotFreeResult);
+assert.equal(pseudoknotFreeReport.prediction.pseudoknotAllowed, false);
+assert.equal(pseudoknotFreeReport.methodScope.cplfoldPseudoknotPrediction, false);
 
 const oversizedCplfoldState = structureState("none", "");
 Object.assign(oversizedCplfoldState.structure, {

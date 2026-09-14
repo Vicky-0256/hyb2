@@ -18,8 +18,8 @@ from collections import Counter
 from typing import Any
 
 
-CPLFOLD_SOURCE_REVISION = "af49f8e"
-BRIDGE_VERSION = "4"
+CPLFOLD_SOURCE_REVISION = "24bab52"
+BRIDGE_VERSION = "5"
 DEFAULT_MAX_SEQUENCE_LENGTH = 75
 BROWSER_HARD_MAX_SEQUENCE_LENGTH = 500
 BONUS_EXPORT_MAX_SEQUENCE_LENGTH = 5_000
@@ -408,6 +408,9 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
     energy_delta = _number(payload.get("energyDelta", 5), 0.0, 50.0, "Energy delta")
     alpha = _number(payload.get("alpha", 0.5), 0.0, 1.0, "Evidence alpha")
     beta = _number(payload.get("beta", 0.0), 0.0, 1.0, "Pseudoknot beta")
+    allow_pseudoknot = payload.get("allowPseudoknot", True)
+    if not isinstance(allow_pseudoknot, bool):
+        raise ValueError("allowPseudoknot must be a boolean.")
     energy_model = str(payload.get("energyModel", "DP09")).upper()
     if energy_model not in ENERGY_MODELS:
         raise ValueError("Energy model must be one of DP03, DP09, CC06, CC09 or RE.")
@@ -433,6 +436,7 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
         bonus_matrix=bonus_matrix,
         alpha=alpha,
         beta=beta,
+        allow_pseudoknot=allow_pseudoknot,
     )
     candidates = [
         _candidate(sequence, candidate, index, bonus_matrix)
@@ -444,11 +448,12 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
     best = candidates[0]
     nucleotide_support = evidence.pop("nucleotideSupport", [0.0] * len(sequence))
     return {
-        "algorithm": "CPLfold two-phase pseudoknot prediction",
+        "algorithm": "CPLfold two-phase pseudoknot prediction" if allow_pseudoknot else "CPLfold pseudoknot-free secondary-structure prediction",
         "model": f"LinearFold Vienna-mode scoring with CPLfold/HotKnots {energy_model} energy ranking",
         "engine": "CPLfold",
         "engineVersion": CPLFOLD_SOURCE_REVISION,
         "bridgeVersion": BRIDGE_VERSION,
+        "allowPseudoknot": allow_pseudoknot,
         "runtime": "Pyodide 0.29.4; Python 3.13.2; NumPy 2.2.5; Numba identity fallback",
         "maxSequenceLength": maximum_sequence_length,
         "sequence": sequence,
@@ -481,6 +486,7 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
             "energyModel": energy_model,
             "alpha": alpha,
             "beta": beta,
+            "allowPseudoknot": allow_pseudoknot,
             "linearFoldMode": "Vienna",
             "maxPhase2": 1,
         },

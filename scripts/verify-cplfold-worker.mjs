@@ -47,7 +47,8 @@ await self.onmessage({
     energyDelta: 5,
     energyModel: "DP09",
     alpha: 0.5,
-    beta: 0
+    beta: 0,
+    allowPseudoknot: true
   }
 });
 
@@ -56,8 +57,9 @@ assert.equal(failure, undefined, failure && failure.message);
 assert.ok(messages.some(function (message) { return message.type === "progress" && message.phase === "source"; }));
 const completion = messages.find(function (message) { return message.type === "complete"; });
 assert.ok(completion, "the actual worker message path must return a completed fold");
-assert.equal(completion.result.bridgeVersion, "4");
-assert.equal(completion.result.engineVersion, "af49f8e");
+assert.equal(completion.result.bridgeVersion, "5");
+assert.equal(completion.result.engineVersion, "24bab52");
+assert.equal(completion.result.allowPseudoknot, true);
 assert.equal(completion.result.dotBracket, "..(((((..[[[[)))))......]]]]");
 assert.equal(completion.result.maxSequenceLength, 75);
 assert.match(completion.result.runtimeManifest.archiveSha256, /^[a-f0-9]{64}$/);
@@ -75,7 +77,8 @@ await self.onmessage({
     energyDelta: 0,
     energyModel: "DP09",
     alpha: 0,
-    beta: 0
+    beta: 0,
+    allowPseudoknot: true
   }
 });
 const capacityFailure = messages.find(function (message) { return message.type === "error"; });
@@ -102,7 +105,7 @@ const matrixFailure = messages.find(function (message) { return message.type ===
 assert.equal(matrixFailure, undefined, matrixFailure && matrixFailure.message);
 const matrixCompletion = messages.find(function (message) { return message.type === "bonus-matrix-complete"; });
 assert.ok(matrixCompletion, "the worker must export the HYB bonus matrix independently of a fold");
-assert.equal(matrixCompletion.result.bridgeVersion, "4");
+assert.equal(matrixCompletion.result.bridgeVersion, "5");
 assert.equal(matrixCompletion.result.evidence.inputRecords, 1);
 assert.ok(matrixCompletion.result.evidence.bonusEntries.length > 0);
 
@@ -118,7 +121,8 @@ await self.onmessage({
     energyDelta: 0,
     energyModel: "DP09",
     alpha: 0,
-    beta: 0
+    beta: 0,
+    allowPseudoknot: true
   }
 });
 const extendedFailure = messages.find(function (message) { return message.type === "error"; });
@@ -127,6 +131,31 @@ const extendedCompletion = messages.find(function (message) { return message.typ
 assert.ok(extendedCompletion, "the worker must execute a sequence above the baseline when the request is within the tested capacity");
 assert.equal(extendedCompletion.result.sequence.length, 76);
 assert.equal(extendedCompletion.result.maxSequenceLength, 125);
+
+messages.length = 0;
+await self.onmessage({
+  data: {
+    type: "cplfold",
+    sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+    evidenceMode: "none",
+    beamSize: 1,
+    maxPhase1: 1,
+    energyDelta: 0,
+    energyModel: "DP09",
+    alpha: 0,
+    beta: 0.5,
+    allowPseudoknot: false
+  }
+});
+const pseudoknotFreeFailure = messages.find(function (message) { return message.type === "error"; });
+assert.equal(pseudoknotFreeFailure, undefined, pseudoknotFreeFailure && pseudoknotFreeFailure.message);
+const pseudoknotFreeCompletion = messages.find(function (message) { return message.type === "complete"; });
+assert.ok(pseudoknotFreeCompletion, "the worker must complete a pseudoknot-free fold");
+assert.equal(pseudoknotFreeCompletion.result.allowPseudoknot, false);
+assert.equal(pseudoknotFreeCompletion.result.crossingPairs, 0);
+assert.ok(pseudoknotFreeCompletion.result.candidates.every(function (candidate) {
+  return candidate.type !== "pseudoknot" && candidate.crossingPairs === 0;
+}));
 
 globalThis.fetch = nativeFetch;
 delete globalThis.self;

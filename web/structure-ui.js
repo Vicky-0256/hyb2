@@ -293,6 +293,9 @@
     if (guided) {
       command.push("--alpha", profileValue(structure && structure.cplfoldAlpha, "0.5"));
     }
+    if (structure && structure.cplfoldAllowPseudoknot === false) {
+      command.push("--no-pseudoknot");
+    }
     return command.join(" ");
   }
 
@@ -322,6 +325,7 @@
     const constraintCount = Math.max(0, Number(result.constraintCount) || 0);
     const guided = result.constraintMode === "hyb-guided";
     const cplfold = result.engine === "CPLfold";
+    const allowPseudoknot = resultAllowsPseudoknot(result);
     const capacity = cplfold && state.structure && state.structure.cplfoldCapacity
       ? state.structure.cplfoldCapacity
       : null;
@@ -399,6 +403,7 @@
         structureType: cplfold ? result.structureType : null,
         topology: cplfold ? result.topology : "nested",
         crossingPairs: cplfold ? result.crossingPairs : 0,
+        pseudoknotAllowed: cplfold ? allowPseudoknot : false,
         selectedCandidateIndex: selectedCandidateIndex,
         selectedCandidateRank: cplfold ? selectedCandidateIndex + 1 : null,
         evidenceMode: cplfold ? result.evidenceMode : null,
@@ -422,7 +427,8 @@
         randomisedConstraintOrderFolding: guided && !!(result.randomisation && result.randomisation.completedFolds),
         supportBasedStructureScoring: guided,
         cplfoldPurePythonBrowserExecution: cplfold,
-        cplfoldPseudoknotPrediction: cplfold,
+        cplfoldPseudoknotPrediction: cplfold && allowPseudoknot,
+        cplfoldPseudoknotSearchRequested: cplfold ? allowPseudoknot : false,
         cplfoldHybBlockBonusMatrix: cplfold && result.evidenceSource === "hyb-block-bonus-matrix",
         numbaJitAvailable: cplfold ? false : null,
         browserCplfoldMaximumLength: cplfold ? recommendedLength : null,
@@ -431,7 +437,9 @@
         browserCplfoldCapacity: cplfold ? capacity : null,
         unafoldExecution: "external-cli-only",
         note: cplfold
-          ? "The browser ran the vendored pure-Python CPLfold two-phase algorithm in Pyodide. HYB-guided runs transform prepared arm intervals with the CPLfold IRIS-style Gaussian, symmetric outer-product and log1p bonus pipeline. Numba JIT is unavailable; the browser uses a local capacity probe to estimate a session-specific length up to its hard safety ceiling."
+          ? (allowPseudoknot
+            ? "The browser ran the vendored pure-Python CPLfold two-phase algorithm in Pyodide. HYB-guided runs transform prepared arm intervals with the CPLfold IRIS-style Gaussian, symmetric outer-product and log1p bonus pipeline. Numba JIT is unavailable; the browser uses a local capacity probe to estimate a session-specific length up to its hard safety ceiling."
+            : "The browser ran vendored pure-Python CPLfold Phase 1 in pseudoknot-free mode. Phase 2 was skipped, so no crossing pairs were searched; HYB-guided runs still use the IRIS-style Gaussian, symmetric outer-product and log1p bonus pipeline.")
           : guided
           ? "The browser reproduced the ViennaRNA HYB2 post-HYB chain: per-row RNAcofold evidence, ranked stem construction, greedy compatible hard-constraint fitting, optional seeded randomised folds, and COMRADES support scoring."
           : constraintCount
@@ -439,6 +447,11 @@
           : "This is an unconstrained ViennaRNA global MFE fold. No HYB or RNAcofold evidence-derived constraints were generated."
       }
     };
+  }
+
+  function resultAllowsPseudoknot(result) {
+    return !!result && result.allowPseudoknot !== false &&
+      !(result.parameters && result.parameters.allowPseudoknot === false);
   }
 
   function cplfoldProfileKey(structure) {
@@ -449,7 +462,8 @@
       profileValue(structure && structure.cplfoldEnergyDelta, "5"),
       profileValue(structure && structure.cplfoldEnergyModel, "DP09").toUpperCase(),
       profileValue(structure && structure.cplfoldAlpha, "0.5"),
-      profileValue(structure && structure.cplfoldBeta, "0")
+      profileValue(structure && structure.cplfoldBeta, "0"),
+      profileValue(structure && structure.cplfoldAllowPseudoknot, true) === "false" ? "nested" : "pseudoknot"
     ].join("|");
   }
 

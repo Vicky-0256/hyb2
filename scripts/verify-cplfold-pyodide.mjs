@@ -28,8 +28,8 @@ const manifest = JSON.parse(fs.readFileSync(path.join(runtimeDirectory, "build-m
 assert.equal(manifest.pyodide, "0.29.4");
 assert.equal(manifest.python, "3.13.2");
 assert.equal(manifest.numpy, "2.2.5");
-assert.equal(manifest.cplfoldRevision, "af49f8e");
-assert.equal(manifest.bridgeVersion, "4");
+assert.equal(manifest.cplfoldRevision, "24bab52");
+assert.equal(manifest.bridgeVersion, "5");
 assert.match(manifest.cplfoldArchiveFile, /^cplfold-python-[a-f0-9]{64}\.zip$/);
 const archivePath = path.join(runtimeDirectory, manifest.cplfoldArchiveFile);
 assert.ok(fs.statSync(archivePath).size > 0);
@@ -68,7 +68,7 @@ const exportContract = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify
   evidenceMode: "hyb-blocks",
   evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }]
 }))));
-assert.equal(exportContract.bridgeVersion, "4");
+assert.equal(exportContract.bridgeVersion, "5");
 assert.equal(exportContract.evidence.inputRecords, 1);
 assert.ok(exportContract.evidence.bonusEntries.length > 0);
 assert.ok(exportContract.evidence.bonusEntries.every(function (entry) { return entry.one < entry.two; }));
@@ -89,6 +89,7 @@ const result = JSON.parse(String(bridge.fold_json(JSON.stringify({
   energyModel: "DP09",
   alpha: 0.5,
   beta: 0,
+  allowPseudoknot: true,
   evidenceMode: "hyb-blocks",
   evidenceArms: [
     { oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 },
@@ -97,7 +98,9 @@ const result = JSON.parse(String(bridge.fold_json(JSON.stringify({
 }))));
 
 assert.equal(result.engine, "CPLfold");
-assert.equal(result.engineVersion, "af49f8e");
+assert.equal(result.engineVersion, "24bab52");
+assert.equal(result.bridgeVersion, "5");
+assert.equal(result.allowPseudoknot, true);
 assert.equal(result.dotBracket, "..(((((..[[[[)))))......]]]]");
 assert.equal(result.topology, "pseudoknotted");
 assert.equal(result.structureType, "pseudoknot");
@@ -130,10 +133,33 @@ const extendedResult = JSON.parse(String(bridge.fold_json(JSON.stringify({
   energyModel: "DP09",
   alpha: 0,
   beta: 0,
+  allowPseudoknot: true,
   evidenceMode: "none"
 }))));
 assert.equal(extendedResult.sequence.length, 76);
 assert.equal(extendedResult.maxSequenceLength, 125);
+
+const pseudoknotFreeResult = JSON.parse(String(bridge.fold_json(JSON.stringify({
+  sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+  beamSize: 20,
+  maxPhase1: 2,
+  energyDelta: 5,
+  energyModel: "DP09",
+  alpha: 0.5,
+  beta: 0.5,
+  allowPseudoknot: false,
+  evidenceMode: "hyb-blocks",
+  evidenceArms: [
+    { oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 },
+    { oneStart: 4, oneEnd: 9, twoStart: 19, twoEnd: 24 }
+  ]
+}))));
+assert.equal(pseudoknotFreeResult.allowPseudoknot, false);
+assert.equal(pseudoknotFreeResult.parameters.allowPseudoknot, false);
+assert.equal(pseudoknotFreeResult.crossingPairs, 0);
+assert.ok(pseudoknotFreeResult.candidates.every(function (candidate) {
+  return candidate.type !== "pseudoknot" && candidate.crossingPairs === 0;
+}));
 
 assert.throws(function () {
   bridge.fold_json(JSON.stringify({

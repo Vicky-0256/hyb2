@@ -694,7 +694,9 @@
 
     if (action === "start-over") {
       resetToLanding();
-      showToast("Analysis cleared. Choose a HYB file to begin again.");
+      window.setTimeout(function () {
+        showToast("Analysis cleared. Choose a HYB file to begin again.");
+      }, 0);
       return;
     }
 
@@ -1616,7 +1618,8 @@
     state.loading = null;
     state.error = null;
     state.activePage = "landing";
-    render();
+    state.dialog = null;
+    setRouteHash("#/");
   }
 
   function terminateWorker() {

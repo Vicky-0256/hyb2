@@ -212,6 +212,18 @@ assert.match(analysisPagesSource, /data-feature-action="comparison-export-hyb2-n
   "Compare must expose the two-column headerless names.table required by the legacy HYB2 CLI");
 assert.match(analysisPagesSource, /data-feature-action="comparison-export-deseq-metadata"/,
   "Compare must retain extended headered metadata for audit and custom R workflows");
+assert.doesNotMatch(overviewPageSource, /single-region HYB block bonus matrix/,
+  "the Overview structure text must not imply that CPLfold uses one HYB block only");
+assert.match(overviewPageSource, /bonus matrix built from all eligible HYB rows in one selected reference region/,
+  "the Overview structure text must describe the full eligible-row bonus-matrix scope");
+assert.doesNotMatch(overviewPageSource, /structure workspace accepts reference regions, HYB record sequences, and pasted sequences/,
+  "the Overview structure text must not imply that every structure mode exposes every sequence source");
+assert.match(overviewPageSource, /provides reference-region input for HYB-guided modes and supports HYB record or pasted sequence input in compatible sequence-only and ViennaRNA modes/,
+  "the Overview structure text must qualify sequence-source availability by mode");
+assert.doesNotMatch(fs.readFileSync(path.join(repository, "web", "local-cplfold.html"), "utf8"), /bonus matrix from the selected HYB block/,
+  "the local CPLfold guide must not imply that the bonus matrix comes from one HYB block");
+assert.match(fs.readFileSync(path.join(repository, "web", "local-cplfold.html"), "utf8"), /all eligible HYB rows in the selected reference region/,
+  "the local CPLfold guide must describe the full eligible-row bonus-matrix scope");
 assert.match(analysisPagesSource, /headerless HYB2 names\.table[\s\S]*?Extended metadata has a header/,
   "Compare must distinguish legacy CLI input from extended metadata");
 
@@ -748,6 +760,8 @@ assert.match(appSource, /function resetToLanding\(\)\s*{\s*terminateWorker\(\);\
   "resetting to the landing page must cancel pending comparison and FASTA work");
 const resetSource = appSource.match(/function resetToLanding\(\)\s*{([\s\S]*?)\n  function terminateWorker/);
 assert.ok(resetSource);
+assert.match(resetSource[1], /state\.activePage = "landing";[\s\S]*?setRouteHash\("#\/"\);/,
+  "resetting the analysis must also return the browser route to the landing hash");
 ["summary", "records", "fasta", "filters", "interactionResults", "contact", "region", "viewpoint", "comparison", "structure", "analysisEntered"].forEach(function (field) {
   assert.match(resetSource[1], new RegExp("state\\." + field + "\\s*="),
     "resetting after a failed replacement must release " + field);

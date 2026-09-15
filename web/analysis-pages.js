@@ -623,7 +623,7 @@
     ];
     const engineOptions = [
       { value: "viennarna", label: "ViennaRNA · nested MFE" },
-      { value: "cplfold", label: "CPLfold · pseudoknot candidates" }
+      { value: "cplfold", label: "CPLfold · energy-guided folding" }
     ];
     const constraintModeOptions = [
       { value: "none", label: "Plain MFE (default)" },
@@ -657,7 +657,7 @@
       : (manualConstraintMode ? "Predict constrained MFE" : "Predict MFE structure");
 
     return [
-      '<div class="page-heading"><div><h1>RNA Structure</h1><p>Run ViennaRNA MFE workflows or pure-Python CPLfold pseudoknot prediction from a sequence and optional HYB-derived evidence, entirely in this browser.</p></div></div>',
+      '<div class="page-heading"><div><h1>RNA Structure</h1><p>Run ViennaRNA MFE workflows or pure-Python CPLfold prediction from a sequence and optional HYB-derived evidence, entirely in this browser. Choose the structure topology below when using CPLfold.</p></div></div>',
       '<section class="structure-layout">',
       '<section class="structure-setup data-card">',
       '<div class="card-title-row"><h2>Prediction setup</h2><span class="method-badge">' + methodBadge + "</span></div>",

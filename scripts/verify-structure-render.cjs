@@ -93,7 +93,7 @@ const setupHtml = context.window.Hyb2Pages.renderStructure(state);
 assert.match(setupHtml, /ViennaRNA MFE · Browser/);
 assert.match(setupHtml, /Temperature/);
 assert.match(setupHtml, /Predict MFE structure/);
-assert.match(setupHtml, /Plain MFE \(default\)/);
+assert.match(setupHtml, /Plain MFE/);
 assert.match(setupHtml, /Manual hard base pairs \(expert\)/);
 assert.doesNotMatch(setupHtml, /id="structure-constraint-text"/);
 assert.doesNotMatch(setupHtml, /Nussinov|Pairing score/);

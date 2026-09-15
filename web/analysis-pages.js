@@ -626,7 +626,7 @@
       { value: "cplfold", label: "CPLfold · energy-guided folding" }
     ];
     const constraintModeOptions = [
-      { value: "none", label: "Plain MFE (default)" },
+      { value: "none", label: "Plain MFE" },
       { value: "hyb-guided", label: "HYB-guided RNAcofold evidence" },
       { value: "manual-hard-base-pairs", label: "Manual hard base pairs (expert)" }
     ];

@@ -325,6 +325,7 @@
     const constraintCount = Math.max(0, Number(result.constraintCount) || 0);
     const guided = result.constraintMode === "hyb-guided";
     const cplfold = result.engine === "CPLfold";
+    const cplfoldAllowsPseudoknot = cplfold && resultAllowsPseudoknot(result);
     const allowPseudoknot = resultAllowsPseudoknot(result);
     const capacity = cplfold && state.structure && state.structure.cplfoldCapacity
       ? state.structure.cplfoldCapacity
@@ -517,7 +518,9 @@
       "aria-label": "Arc diagram for " + length + " nucleotide RNA secondary structure"
     });
 
-    svg.appendChild(element("title", {}, cplfold ? "Selected CPLfold RNA structure with pseudoknot layers" : "Predicted non-crossing RNA base pairs"));
+    svg.appendChild(element("title", {}, cplfold
+      ? (cplfoldAllowsPseudoknot ? "Selected CPLfold RNA structure with pseudoknot layers" : "Selected CPLfold pseudoknot-free RNA structure")
+      : "Predicted non-crossing RNA base pairs"));
     svg.appendChild(element("rect", { x: 0, y: 0, width: width, height: height, rx: 8, fill: colors.surface }));
     svg.appendChild(element("line", { x1: left, y1: baseline, x2: right, y2: baseline, stroke: colors.line, "stroke-width": 1.5 }));
 
@@ -1161,9 +1164,12 @@
     const y = settings.y == null ? 24 : settings.y;
     const guided = result.constraintMode === "hyb-guided";
     const cplfold = result.engine === "CPLfold";
+    const cplfoldAllowsPseudoknot = cplfold && resultAllowsPseudoknot(result);
     const spacing = settings.spacing == null ? ((guided || cplfold) ? 132 : 98) : settings.spacing;
     const items = cplfold
-      ? [{ label: "phase 1", color: colors.primary }, { label: "pseudoknot", color: colors.accent }, { label: "deeper layer", color: colors.warning }]
+      ? (cplfoldAllowsPseudoknot
+        ? [{ label: "phase 1", color: colors.primary }, { label: "pseudoknot", color: colors.accent }, { label: "deeper layer", color: colors.warning }]
+        : [{ label: "phase 1", color: colors.primary }])
       : guided
       ? [{ label: "high evidence", color: colors.warning }, { label: "low evidence", color: colors.primary }, { label: "MFE only", color: colors.lineStrong }]
       : [{ label: "G–C", color: colors.primary }, { label: "A–U", color: colors.accent }, { label: "G–U", color: colors.muted }];

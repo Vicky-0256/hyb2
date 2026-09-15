@@ -64,7 +64,7 @@ Manual pairs must be in range, non-crossing canonical or G–U pairs, satisfy th
 
 **HYB-guided RNAcofold evidence** requires a loaded HYB file and mapped reference FASTA. Single-region mode covers short-range intramolecular interactions. Paired-region mode reproduces the original two-fragment assembly with the 100-nt `50 A + 50 U` RNA spacer and supports long-range, intermolecular, and overlap-score-defined homodimer subsets. Every eligible HYB row contributes one observation, independent of overlap score or collapsed-read provenance. The browser preserves the original 1,001-row evidence-selection nuance and 75-stem default. General pseudoknots remain outside the ViennaRNA dot-bracket result.
 
-**CPLfold pseudoknot candidates** run the vendored pure-Python two-phase
+**Optional CPLfold pseudoknot search** runs the vendored pure-Python two-phase
 algorithm in Pyodide 0.29.4 with NumPy 2.2.5. Pyodide does not ship Numba, so
 the browser bridge replaces `numba.njit` with an identity decorator. The
 structure page measures a representative local run when a longer request is

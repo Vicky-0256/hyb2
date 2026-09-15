@@ -61,6 +61,8 @@
     { id: "compare", label: "Compare", shortLabel: "CP" },
     { id: "structure", label: "RNA Structure", shortLabel: "RS" }
   ];
+  const reportPage = { id: "report", label: "Report", shortLabel: "RP" };
+  const workspacePages = analysisPages.concat([reportPage]);
 
   app.addEventListener("pointerdown", handlePointerDown);
   app.addEventListener("click", handleClick);
@@ -95,7 +97,7 @@
 
     if (route.indexOf("workspace/") === 0) {
       const candidate = route.slice("workspace/".length);
-      state.activePage = analysisPages.some(function (page) { return page.id === candidate; })
+      state.activePage = workspacePages.some(function (page) { return page.id === candidate; })
         ? candidate
         : "overview";
       if (state.activePage === "interactions" && state.filters) {
@@ -134,6 +136,9 @@
 
     if (workspaceOpen && window.Hyb2UI) {
       window.Hyb2UI.afterRender(state, featureApi());
+    }
+    if (workspaceOpen && state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
+      window.Hyb2Report.afterRender(state, featureApi());
     }
   }
 
@@ -373,6 +378,7 @@
       '    <div class="toolbar-actions">',
       '      <button class="local-chip" type="button" data-action="open-privacy">Local-only processing</button>',
       '      <button class="text-button" type="button" data-action="open-files">Files</button>',
+      '      <button class="text-button report-button" type="button" data-action="navigate" data-page="report">Report</button>',
       '      <button class="text-button start-over-button" type="button" data-action="start-over" aria-label="Clear all analysis and return to file upload">Start over</button>',
       '      <button class="text-button" type="button" data-action="open-help">Help</button>',
       '      <button class="icon-button" type="button" data-action="toggle-theme" aria-label="Toggle color theme">' + themeGlyph() + "</button>",
@@ -411,6 +417,7 @@
       '    <nav class="sidebar-nav" aria-label="Data management">',
       '      <span class="nav-label">Data management</span>',
       renderActionNavButton("open-files", "Files", "FI"),
+      renderNavButton(reportPage),
       renderNavButton({ id: "validation", label: "Validation", shortLabel: "VA" }),
       renderNavButton({ id: "methods", label: "Methods", shortLabel: "MT" }),
       renderNavButton({ id: "file-format", label: "File format", shortLabel: "FF" }),
@@ -427,7 +434,7 @@
   function renderMobileNav() {
     return [
       '<nav class="mobile-nav" aria-label="Analysis">',
-      analysisPages.map(renderNavButton).join(""),
+      workspacePages.map(renderNavButton).join(""),
       "</nav>"
     ].join("");
   }
@@ -486,6 +493,12 @@
 
     if (state.activePage === "structure") {
       return window.Hyb2Pages.renderStructure(state);
+    }
+
+    if (state.activePage === "report") {
+      return window.Hyb2Report
+        ? window.Hyb2Report.render(state)
+        : '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Report</span><h2>The report page is unavailable.</h2></div></section>';
     }
 
     return window.Hyb2Overview.render(state);
@@ -658,6 +671,18 @@
 
     if (action === "download-validation") {
       downloadValidationReport();
+      return;
+    }
+
+    if (action === "print-report") {
+      if (typeof window.print === "function") {
+        window.print();
+      }
+      return;
+    }
+
+    if (action === "download-full-report") {
+      downloadFullReport();
       return;
     }
 
@@ -1141,7 +1166,7 @@
   }
 
   function navigate(page) {
-    const isAnalysis = analysisPages.some(function (item) { return item.id === page; });
+    const isAnalysis = workspacePages.some(function (item) { return item.id === page; });
     const nextHash = isAnalysis ? "#/workspace/" + page : "#/" + page;
     setRouteHash(nextHash);
   }
@@ -1649,6 +1674,16 @@
       : "Validation report downloaded locally.");
   }
 
+  function downloadFullReport() {
+    if (!window.Hyb2Report || typeof window.Hyb2Report.getData !== "function") {
+      showToast("The consolidated report is unavailable in this build.");
+      return;
+    }
+    const report = window.Hyb2Report.getData(state);
+    downloadText("hyb2-analysis-report.json", JSON.stringify(report, null, 2), "application/json");
+    showToast("Consolidated report data downloaded locally.");
+  }
+
   function downloadText(fileName, content, type) {
     const blob = new Blob([content], { type: type + ";charset=utf-8" });
     downloadBlob(fileName, blob);
@@ -1680,7 +1715,7 @@
   }
 
   function pageTitle(page) {
-    const allPages = analysisPages.concat([
+    const allPages = workspacePages.concat([
       { id: "validation", label: "Validation" },
       { id: "methods", label: "Methods" },
       { id: "file-format", label: "File format" },

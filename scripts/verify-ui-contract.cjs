@@ -9,6 +9,8 @@ const repository = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(repository, "web", "app.js"), "utf8");
 const analysisPagesSource = fs.readFileSync(path.join(repository, "web", "analysis-pages.js"), "utf8");
 const overviewPageSource = fs.readFileSync(path.join(repository, "web", "overview-page.js"), "utf8");
+const reportPageSource = fs.readFileSync(path.join(repository, "web", "report-page.js"), "utf8");
+const reportCssSource = fs.readFileSync(path.join(repository, "web", "report.css"), "utf8");
 const indexSource = fs.readFileSync(path.join(repository, "web", "index.html"), "utf8");
 const localCplfoldSource = fs.readFileSync(path.join(repository, "web", "local-cplfold.html"), "utf8");
 const workflowSource = fs.readFileSync(path.join(repository, ".github", "workflows", "deploy-pages.yml"), "utf8");
@@ -672,6 +674,40 @@ assert.match(appSource, /if \(!state\.summary \|\| !state\.analysisEntered\) \{\
   "unconfirmed parsed files must remain on the landing review stage even if the hash changes");
 assert.match(appSource, /state\.summary && !state\.analysisEntered\) \{\s*return renderPreparedFilePanel\(\);/,
   "the landing page must render the file-review stage after HYB parsing");
+assert.match(indexSource, /stylesheet" href="\.\/report\.css"/,
+  "the report stylesheet must be included in the static application");
+assert.match(indexSource, /script src="\.\/report-page\.js" defer/,
+  "the report page module must load before the app controller");
+assert.match(appSource, /const reportPage = \{ id: "report"/,
+  "the app must register a dedicated report route");
+assert.match(appSource, /workspacePages\.some\(function \(page\) \{ return page\.id === candidate; \}\)/,
+  "the report route must be accepted by workspace navigation");
+assert.match(appSource, /data-action="navigate" data-page="report">Report/,
+  "the workspace header must expose the consolidated report action");
+assert.match(appSource, /action === "print-report"/,
+  "the report must invoke the browser print dialog");
+assert.match(appSource, /action === "download-full-report"/,
+  "the report must expose a machine-readable download action");
+assert.match(appSource, /window\.Hyb2Report\.afterRender\(state, featureApi\(\)\)/,
+  "the report must receive its post-render structure visualisation hook");
+assert.match(reportPageSource, /data-report-page/,
+  "the report page must have a stable root marker");
+assert.match(reportPageSource, /Print \/ Save PDF/,
+  "the report page must expose browser PDF instructions");
+assert.match(reportPageSource, /Executive summary/,
+  "the report page must include an executive summary");
+assert.match(reportPageSource, /Contact Map/,
+  "the report page must include Contact Map state");
+assert.match(reportPageSource, /RNA Structure/,
+  "the report page must include RNA Structure state");
+assert.match(reportCssSource, /@media print/,
+  "the report must have print-specific CSS");
+assert.match(reportCssSource, /\.workspace-header[\s\S]*\.sidebar[\s\S]*\.report-actions/,
+  "print CSS must remove workspace chrome and report-only controls");
+assert.match(workflowSource, /scripts\/verify-report-render\.cjs/,
+  "the deployment workflow must track report render changes");
+assert.match(workflowSource, /node scripts\/verify-report-render\.cjs/,
+  "the deployment workflow must run the report render contract");
 assert.match(appSource, /data-action="enter-analysis">Enter analysis/,
   "the file-review stage must expose a separate analysis-entry action");
 assert.match(appSource, /function enterAnalysis\(\)\s*\{[\s\S]*?state\.analysisEntered = true;[\s\S]*?navigate\("overview"\);/,

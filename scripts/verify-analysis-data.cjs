@@ -74,7 +74,7 @@ assert.ok(highMemoryBudget.maximumBinContributions > lowMemoryBudget.maximumBinC
 assert.ok(highMemoryBudget.maximumCells > slowBudget.maximumCells,
   "the local performance probe should lower the budget on a slower device");
 const defaultStructure = data.defaultStructureState();
-assert.equal(defaultStructure.engine, "viennarna", "ViennaRNA should remain the default structure engine");
+assert.equal(defaultStructure.engine, "cplfold", "CPLfold should be the default structure engine");
 assert.equal(defaultStructure.constraintMode, "none", "Structure folding should default to plain MFE mode");
 assert.equal(defaultStructure.constraintText, "", "Manual structure constraints should default to empty input");
 assert.equal(defaultStructure.viewMode, "folded", "The molecule-like folded view should be the default structure visualization");
@@ -82,7 +82,8 @@ assert.equal(defaultStructure.cplfoldEvidence, "hyb-blocks", "CPLfold should def
 assert.equal(defaultStructure.cplfoldBeam, "20");
 assert.equal(defaultStructure.cplfoldMaxPhase1, "3");
 assert.equal(defaultStructure.cplfoldEnergyModel, "DP09");
-assert.equal(defaultStructure.cplfoldAllowPseudoknot, true);
+assert.equal(defaultStructure.cplfoldAllowPseudoknot, false,
+  "CPLfold should default to pseudoknot-free output");
 assert.equal(defaultStructure.cplfoldCapacity.status, "unknown");
 assert.equal(defaultStructure.cplfoldCapacity.baselineLength, 75);
 assert.equal(defaultStructure.cplfoldCapacity.recommendedLength, 75);

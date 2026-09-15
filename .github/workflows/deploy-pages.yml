@@ -18,6 +18,7 @@ on:
       - "scripts/verify-cplfold-worker.mjs"
       - "scripts/verify-analysis-data.cjs"
       - "scripts/verify-ui-contract.cjs"
+      - "scripts/verify-report-render.cjs"
       - "scripts/webr-smoke/**"
       - "third_party/cplfold/**"
       - ".github/workflows/deploy-pages.yml"
@@ -73,6 +74,7 @@ jobs:
           node scripts/verify-comrades-analysis.cjs
           node scripts/verify-webr-feasibility.cjs
           node scripts/verify-ui-contract.cjs
+          node scripts/verify-report-render.cjs
 
       - name: Build and verify pinned browser CPLfold runtime
         run: |

@@ -1378,6 +1378,7 @@
     cplfoldEvidenceTsv: cplfoldEvidenceTsv,
     cplfoldCandidatesTsv: cplfoldCandidatesTsv,
     localCplfoldCommand: localCplfoldCommand,
-    selectCplfoldCandidate: selectCplfoldCandidate
+    selectCplfoldCandidate: selectCplfoldCandidate,
+    buildStructureDiagram: buildStructureDiagram
   };
 }());

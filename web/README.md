@@ -31,6 +31,17 @@ The page has no analytics, API call, runtime CDN request, or server-side upload 
 
 The landing flow is intentionally two-stage: after the HYB file is parsed, the page stays on a local file-review screen. Users can add or replace the optional reference FASTA there, then click **Enter analysis** to open the workspace. Interaction tables and contact maps do not require FASTA; reference-based RNA structure and full-reference Viewpoint do.
 
+## Printable report
+
+After entering the workspace, choose **Report** in the header or sidebar. The
+report page consolidates the current session's summary, validation, interaction
+filters, Contact Map, Viewpoint, Region Explorer, Compare, and RNA Structure
+state in one print-oriented document. **Print / Save PDF** opens the browser
+print dialog; choose **Save as PDF** there. A **Download report data** action
+also saves a bounded JSON snapshot locally. Large tables and visual maps are
+sampled for reliable printing; the existing page-level raw data and visual
+exports remain available when the complete dataset is needed.
+
 FASTA parsing removes layout whitespace only. Unsupported symbols are preserved and reported instead of being deleted, so reference coordinates never shift silently; structure folding rejects a selected region that contains them.
 
 ## HYB semantics and analysis coverage
@@ -47,7 +58,7 @@ FASTA parsing removes layout whitespace only. Unsupported symbols are preserved 
 
 ## Local structure prediction
 
-The structure workspace loads a pinned ViennaRNA 2.7.2 RNAlib build in a dedicated Web Worker. It reports a global MFE in kcal/mol, dot-bracket notation, CT and base-pair exports, and interactive SVG views for arc, radial, circular-contact, and symmetric base-pair matrix layouts. Arc remains the default; all views share nucleotide inspection, HYB/RNAcofold evidence colouring, CPLfold layer styling, and SVG/PNG export. The normal UI accepts up to 2,000 nt; users may explicitly continue up to 3,000 nt after a browser-memory warning. Plain MFE remains the default; an expert may instead choose **Manual hard base pairs** and enter one 1-based `i-j` pair per line, relative to the prepared sequence.
+The structure workspace loads a pinned ViennaRNA 2.7.2 RNAlib build in a dedicated Web Worker. It reports a global MFE in kcal/mol, dot-bracket notation, CT and base-pair exports, and interactive SVG views for arc, radial, circular-contact, and symmetric base-pair matrix layouts. Arc remains the default; all views share nucleotide inspection, HYB/RNAcofold evidence colouring, CPLfold layer styling, and SVG/PNG export. The normal UI accepts up to 2,000 nt; users may explicitly continue up to 3,000 nt after a browser-memory warning. CPLfold is the default engine and starts in pseudoknot-free mode; users may enable pseudoknot search explicitly. ViennaRNA remains available for nested MFE, HYB-guided RNAcofold evidence, and manual hard base pairs; an expert may instead choose **Manual hard base pairs** and enter one 1-based `i-j` pair per line, relative to the prepared sequence.
 
 Manual pairs must be in range, non-crossing canonical or G–U pairs, satisfy the selected minimum-loop size, and never reuse a nucleotide. The controller validates them before starting the worker; ViennaRNA enforces them, and the result is checked and labelled in the diagram and base-pair export. Report JSON records `constraintSource: "manual-user-input"` and explicitly marks automatic HYB/RNAcofold evidence generation as false for that mode.
 

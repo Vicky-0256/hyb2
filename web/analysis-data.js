@@ -276,7 +276,7 @@
 
   function defaultStructureState() {
     return {
-      engine: "viennarna",
+      engine: "cplfold",
       source: "reference",
       rna: "",
       start: "",
@@ -304,7 +304,7 @@
       cplfoldEnergyModel: "DP09",
       cplfoldAlpha: "0.5",
       cplfoldBeta: "0",
-      cplfoldAllowPseudoknot: true,
+      cplfoldAllowPseudoknot: false,
       cplfoldCapacity: {
         status: "unknown",
         baselineLength: 75,

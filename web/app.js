@@ -6,12 +6,12 @@
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
   const exampleAssets = {
     hyb: {
-      url: "./assets/examples/ZIKV_1-10807_example.hyb",
+      url: (window.HYB2_ASSET_BASE || "./") + "assets/examples/ZIKV_1-10807_example.hyb",
       fileName: "ZIKV_1-10807_example.hyb",
       type: "text/plain"
     },
     fasta: {
-      url: "./assets/examples/ZIKV_1-10807.fasta",
+      url: (window.HYB2_ASSET_BASE || "./") + "assets/examples/ZIKV_1-10807.fasta",
       fileName: "ZIKV_1-10807.fasta",
       type: "text/plain"
     }
@@ -1032,7 +1032,7 @@
     render();
 
     try {
-      const worker = new Worker("./parser.worker.js");
+      const worker = new Worker((window.HYB2_ASSET_BASE || "./") + "parser.worker.js");
       state.worker = worker;
 
       function parseSessionIsCurrent() {
@@ -1510,7 +1510,7 @@
       }
 
       try {
-        worker = new Worker("./parser.worker.js");
+        worker = new Worker((window.HYB2_ASSET_BASE || "./") + "parser.worker.js");
       } catch (error) {
         settle(reject, error);
         return;

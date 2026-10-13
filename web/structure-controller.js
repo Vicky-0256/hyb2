@@ -275,8 +275,8 @@
 
     try {
       const worker = cplfold
-        ? new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" })
-        : new Worker("./structure.worker.js");
+        ? new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" })
+        : new Worker((window.HYB2_ASSET_BASE || "./") + "structure.worker.js");
       state.structureWorker = worker;
 
       worker.onmessage = function (event) {
@@ -441,7 +441,7 @@
 
     let worker;
     try {
-      worker = new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
+      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
       state.structureWorker = worker;
     } catch (error) {
       return failCapacityProbe(state, null, runId, api, error && error.message
@@ -561,7 +561,7 @@
 
     let worker;
     try {
-      worker = new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
+      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
       state.structureWorker = worker;
     } catch (error) {
       structure.status = "error";

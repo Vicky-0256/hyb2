@@ -149,6 +149,24 @@
     document.getElementById("open-path").value = project.path;
     document.getElementById("task-path").value = project.path;
     syncProjectInputs(manifest.inputs || []);
+    renderRunHistory(manifest.runs || []);
+  }
+  function renderRunHistory(runs) {
+    var host = document.getElementById("run-history-list");
+    if (!host) return;
+    if (!runs.length) { host.innerHTML = '<p class="muted">No saved analysis runs.</p>'; return; }
+    host.innerHTML = runs.slice().reverse().map(function (run) {
+      var output = (run.output_paths && run.output_paths[0]) || "";
+      return '<button class="run-history-item" type="button" data-run-path="' + String(output).replace(/"/g, "&quot;") + '"><strong>' + (run.kind || "Structure analysis") + '</strong><span>' + (run.id || "") + '</span><small>' + (run.status || "unknown") + ' · ' + output + '</small></button>';
+    }).join("");
+    host.querySelectorAll("[data-run-path]").forEach(function (button) {
+      button.addEventListener("click", async function () {
+        try {
+          var response = await invoke("project_read_input", {request: {path: currentProjectPath, relative: button.dataset.runPath}});
+          show("run-result", response.input.content);
+        } catch (error) { show("run-result", "Could not open saved result: " + errorText(error)); }
+      });
+    });
   }
   async function readProjectInput(item) {
     if (!invoke || !currentProjectPath || !item || !item.path) return null;

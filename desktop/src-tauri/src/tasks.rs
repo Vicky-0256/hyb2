@@ -679,6 +679,63 @@ mod tests {
         assert!(snap["output"].is_null());
         fs::remove_dir_all(project).unwrap();
     }
+    /// Rust task model -> bridge child -> hyb2pipe, against the real repository.
+    #[cfg(unix)]
+    #[test]
+    fn pipeline_task_runs_real_bridge_end_to_end() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        if !root.join("pipeline/hyb2pipe/__init__.py").is_file() || !root.join("data/testData.sam").is_file() {
+            return;
+        }
+        let project = std::env::temp_dir().join(task_id()).join("p.hyb2proj");
+        let setup = Command::new("python3")
+            .args(["-c", "import sys; from pathlib import Path; from desktop.runtime.project import new_project, import_input as i; p=Path(sys.argv[1]); new_project(p, 'Rust e2e'); i(p, Path('data/testData.sam'), role='sam'); i(p, Path('data/Zika_18S_formatted.fasta'), role='reference')"])
+            .arg(&project)
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(setup.success());
+        let project = project.canonicalize().unwrap();
+        let id = format!("pipeline-{}", task_id());
+        let request = TaskStartRequest {
+            project_path: project.display().to_string(),
+            kind: "pipeline".into(),
+            task_id: None,
+            sequence: None,
+            bonus_matrix: None,
+            parameters: None,
+            input: Some("inputs/testData.sam".into()),
+            reference: Some("inputs/Zika_18S_formatted.fasta".into()),
+        };
+        let (project, run_dir) = prepare_run_dir(&project, &id).unwrap();
+        let payload = task_payload(&request, &project, &id, &run_dir).unwrap();
+        let request_file = run_dir.join("task-request.json");
+        fs::write(&request_file, serde_json::to_vec(&payload).unwrap()).unwrap();
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = finished.clone();
+        let on_finish: OnFinish = Arc::new(move |_: &Path, _: &str| flag.store(true, std::sync::atomic::Ordering::SeqCst));
+        start_managed(bridge_command(Path::new("python3"), &root, &request_file, &[]), &project, id.clone(), "pipeline", run_dir, on_finish).unwrap();
+        let mut snap = Value::Null;
+        for _ in 0..1200 {
+            snap = status(&id, None).unwrap();
+            if snap["finished_at"].is_string() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(snap["status"], "succeeded", "{snap}");
+        let output = PathBuf::from(snap["output"].as_str().unwrap());
+        assert!(output.starts_with(&project) && output.ends_with("testData.hyb"));
+        assert_eq!(fs::read(&output).unwrap(), fs::read(root.join("pipeline/tests/golden/testData.hyb")).unwrap());
+        for _ in 0..50 {
+            if finished.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(finished.load(std::sync::atomic::Ordering::SeqCst), "on_finish hook did not run");
+        fs::remove_dir_all(project.parent().unwrap()).unwrap();
+    }
     #[test]
     fn child_command_passes_result_file() {
         let command = bridge_command(

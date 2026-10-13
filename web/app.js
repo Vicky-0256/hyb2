@@ -123,6 +123,20 @@
       if (state.filters && snapshot.filters && typeof snapshot.filters === "object") Object.assign(state.filters, snapshot.filters);
       if (snapshot.route && snapshot.route !== "landing") window.location.hash = "#/workspace/" + String(snapshot.route).replace(/^workspace\//, "");
       render();
+    },
+    showSavedStructure: function (result) {
+      if (!state.summary || !result || typeof result !== "object" || !result.sequence || !result.dotBracket) return false;
+      if (!state.structure) state.structure = window.Hyb2Data.defaultStructureState();
+      state.structure.status = "complete";
+      state.structure.progress = 100;
+      state.structure.operation = null;
+      state.structure.result = result;
+      state.structure.message = "Restored saved structure result.";
+      state.analysisEntered = true;
+      state.activePage = "structure";
+      setRouteHash("#/workspace/structure");
+      render();
+      return true;
     }
   };
 
@@ -187,7 +201,9 @@
     if (workspaceOpen && state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
       window.Hyb2Report.afterRender(state, featureApi());
     }
-    window.dispatchEvent(new CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
+    if (typeof window.CustomEvent === "function") {
+      window.dispatchEvent(new window.CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
+    }
   }
 
   function renderLanding() {
@@ -1165,6 +1181,9 @@
             state.analysisEntered = false;
             state.activePage = "landing";
             setRouteHash("#/");
+            if (parseSession.referenceFile) {
+              loadFasta(parseSession.referenceFile);
+            }
             if (state.pendingSessionSnapshot) {
               const pending = state.pendingSessionSnapshot;
               state.pendingSessionSnapshot = null;
@@ -1172,9 +1191,6 @@
               if (pending.density === "compact" || pending.density === "comfortable") state.density = pending.density;
               setRouteHash(pending.route && pending.route !== "landing" ? "#/workspace/" + String(pending.route).replace(/^workspace\//, "") : "#/workspace/overview");
               state.analysisEntered = true;
-            }
-            if (parseSession.referenceFile) {
-              loadFasta(parseSession.referenceFile);
             }
             digestFile(file).then(function (hash) {
               if (state.summary === summary) {

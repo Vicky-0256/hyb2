@@ -163,7 +163,14 @@
       button.addEventListener("click", async function () {
         try {
           var response = await invoke("project_read_input", {request: {path: currentProjectPath, relative: button.dataset.runPath}});
-          show("run-result", response.input.content);
+          var saved = JSON.parse(response.input.content);
+          if (!loaded) await loadAnalysisWorkspace();
+          if (window.Hyb2Web && window.Hyb2Web.showSavedStructure && window.Hyb2Web.showSavedStructure(saved)) {
+            activate("analysis");
+            show("run-result", "Restored " + (saved.algorithm || "saved structure") + " in the RNA Structure workspace.");
+          } else {
+            show("run-result", response.input.content);
+          }
         } catch (error) { show("run-result", "Could not open saved result: " + errorText(error)); }
       });
     });

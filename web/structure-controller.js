@@ -324,7 +324,9 @@
             } : null
           });
           api.render();
-          window.dispatchEvent(new CustomEvent("hyb2:analysis-result", { detail: structure.result }));
+          if (typeof window.CustomEvent === "function") {
+            window.dispatchEvent(new window.CustomEvent("hyb2:analysis-result", { detail: structure.result }));
+          }
           api.showToast(structure.message);
           return;
         }

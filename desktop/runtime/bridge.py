@@ -1,13 +1,17 @@
 """Process bridge used by the independent HYB2 Desktop entry point.
 
-The Tauri layer can launch this module as a sidecar and exchange one JSON
-request per invocation.  Keeping the protocol here makes the desktop app
-testable without a GUI and avoids shell command construction.
+The Tauri layer launches this module as a long-lived sidecar (``--serve``:
+one ``{"id", "request"}`` JSON line in, one ``{"id", "response"}`` line out)
+or once per invocation (stdin line, ``--request``, ``--validate-project``).
+Keeping the protocol here makes the desktop app testable without a GUI and
+avoids shell command construction.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import math
 import sys
 import tempfile
 import uuid
@@ -16,8 +20,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .detector import detect_runtime
-from .project import new_project, validate_project_directory, import_input, read_input, save_analysis_run, update_ui_state
+from .detector import cplfold_max_nt, detect_runtime
+from .project import _atomic_write_json, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
 import importlib.util
 
 _RUNNER_PATH = Path(__file__).resolve().parents[1] / "task-runner" / "runner.py"
@@ -28,6 +32,10 @@ sys.modules["hyb2_task_runner"] = _RUNNER_MODULE
 _RUNNER_SPEC.loader.exec_module(_RUNNER_MODULE)
 TaskRunner = _RUNNER_MODULE.TaskRunner
 TaskSpec = _RUNNER_MODULE.TaskSpec
+
+# Loaded cplfold_web modules keyed by source path.  Kept for the lifetime of a
+# ``--serve`` sidecar so Numba JIT compilation is paid once per process.
+_CPLFOLD_MODULES: dict[str, Any] = {}
 
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 
@@ -52,6 +60,94 @@ def _secure_run_dir(project: Path, task_id: str) -> Path:
         raise FileExistsError("task_id already exists")
     target.mkdir(mode=0o700)
     return target
+
+
+def _load_cplfold_module(root: Path) -> Any:
+    source = root / "web" / "cplfold" / "cplfold_web.py"
+    key = str(source)
+    if key in _CPLFOLD_MODULES:
+        return _CPLFOLD_MODULES[key]
+    if not source.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("hyb2_native_cplfold", source)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    # cplfold_web imports the vendored CPLfold module by its historical
+    # top-level name; make both source layouts visible to that import.
+    for extra in (str(root / "third_party" / "cplfold"), str(source.parent)):
+        if extra not in sys.path:
+            sys.path.insert(0, extra)
+    spec.loader.exec_module(module)
+    _CPLFOLD_MODULES[key] = module
+    return module
+
+
+def _project_file(project: Path, relative: Any, label: str) -> Path:
+    """A project-relative input that must stay inside the project."""
+    if not safe_relative_path(relative):
+        raise ValueError(f"{label} must be a project-relative path")
+    target = (project / relative).resolve()
+    if project not in target.parents or not target.is_file():
+        raise ValueError(f"{label} does not exist in the project: {relative}")
+    return target
+
+
+def _pipeline_run(request: dict[str, Any], repo_root: Path | None) -> dict[str, Any]:
+    """FASTQ/FASTA/SAM -> .hyb with the bundled pure-Python pipeline."""
+    raw_path = request.get("project_path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("project path must be a non-empty string")
+    path = Path(raw_path).expanduser().resolve()
+    errors = validate_project_directory(path)
+    if errors: raise ValueError("invalid project: " + "; ".join(errors))
+    task_id = _safe_task_id(request.get("task_id"), "pipeline-")
+    requested_run_dir = request.get("run_dir")
+    if requested_run_dir is not None:
+        run_dir = Path(str(requested_run_dir)).expanduser().resolve()
+        if not run_dir.is_dir() or run_dir.parent != (path / "runs").resolve():
+            raise ValueError("run_dir must be an existing direct child of project runs")
+    else:
+        run_dir = _secure_run_dir(path, task_id)
+    reads = _project_file(path, request.get("input"), "pipeline input")
+    reference = _project_file(path, request.get("reference"), "pipeline reference")
+    params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
+    bounds = {"blast_threshold": (0.0, 10.0, float), "max_overlap": (0, 1000, int), "max_hits": (1, 10000, int), "threads": (1, 256, int)}
+    values: dict[str, Any] = {}
+    for key, (lo, hi, kind) in bounds.items():
+        if key in params and params[key] is not None:
+            value = params[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not lo <= value <= hi or (kind is int and value != int(value)):
+                raise ValueError("pipeline parameter out of bounds: " + key)
+            values[key] = kind(value)
+    if not isinstance(params.get("energy", False), bool):
+        raise ValueError("pipeline parameter energy must be a boolean")
+    root = Path(repo_root or Path.cwd()).resolve()
+    package = root / "pipeline"
+    if not (package / "hyb2pipe" / "__init__.py").is_file():
+        return {"ok": False, "status": "unavailable", "error": "the Python HYB2 pipeline is not bundled", "task_id": task_id}
+    if str(package) not in sys.path:
+        sys.path.insert(0, str(package))
+    # Prefer the Bowtie2 binaries staged into the runtime's bin/ directory.
+    os.environ.setdefault("HYB2PIPE_TOOL_DIR", str(root / "bin"))
+    from hyb2pipe import Options, run as run_pipeline
+    from hyb2pipe.energy import EnergyUnavailable
+    from hyb2pipe.inputs import MappingUnavailable
+
+    def progress(stage: str, detail: str) -> None:
+        print(json.dumps({"type": "progress", "stage": stage, "detail": detail}), file=sys.stderr, flush=True)
+
+    stem = reads.name
+    for suffix in (".gz", ".fastq", ".fq", ".fasta", ".fa", ".sam"):
+        stem = stem[: -len(suffix)] if stem.lower().endswith(suffix) else stem
+    options = Options(energy=params.get("energy", False) is True, **values)
+    try:
+        result = run_pipeline(reads, reference, run_dir / (stem or "hyb2"), options, progress, log=sys.stderr)
+    except (EnergyUnavailable, MappingUnavailable) as error:
+        return {"ok": False, "status": "failed", "task_id": task_id, "run_dir": str(run_dir), "error": str(error)}
+    return {"ok": True, "status": "succeeded", "task_id": task_id, "run_dir": str(run_dir), "output": str(result.hyb),
+            "outputs": {"hyb": str(result.hyb), "homodimers": str(result.homodimers), "stats": str(result.stats), "sam": str(result.sam)},
+            "counts": result.counts}
 
 
 def project_path(request: dict[str, Any]) -> Path:
@@ -90,25 +186,19 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         sequence = "".join(sequence.upper().split()).replace("T", "U")
         if not sequence or any(c not in "ACGUN" for c in sequence):
             raise ValueError("sequence must contain RNA bases A/C/G/U/T/N")
-        try:
-            max_nt = int(os.environ.get("HYB2_CPLFOLD_MAX_NT", "1000"))
-        except ValueError:
-            max_nt = 1000
+        max_nt = cplfold_max_nt()
         if len(sequence) > max_nt:
             raise ValueError(f"sequence exceeds CPLfold safety limit ({max_nt} nt)")
         root = Path(repo_root or Path.cwd()).resolve()
-        source = root / "web" / "cplfold" / "cplfold_web.py"
-        if not source.is_file():
+        if not (root / "web" / "cplfold" / "cplfold_web.py").is_file():
             return {"ok": False, "status": "unavailable", "error": "native CPLfold source is not bundled"}
-        spec = importlib.util.spec_from_file_location("hyb2_native_cplfold", source)
-        if spec is None or spec.loader is None:
+        module = _load_cplfold_module(root)
+        if module is None:
             return {"ok": False, "status": "unavailable", "error": "native CPLfold module cannot be loaded"}
-        module = importlib.util.module_from_spec(spec)
-        # cplfold_web imports the vendored CPLfold module by its historical
-        # top-level name; make both source layouts visible to that import.
-        sys.path.insert(0, str(source.parent))
-        sys.path.insert(0, str(root / "third_party" / "cplfold"))
-        spec.loader.exec_module(module)
+        # The shared module keeps the browser's 500 nt ceiling unless a native
+        # host raises it; the desktop limit is HYB2_CPLFOLD_MAX_NT.
+        if hasattr(module, "set_host_hard_max_sequence_length"):
+            module.set_host_hard_max_sequence_length(max_nt)
         params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
         allow = params.get("allowPseudoknot", True)
         if not isinstance(allow, bool):
@@ -124,9 +214,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
             "alpha": params.get("alpha", 0.5),
             "beta": params.get("beta", 0),
             "allowPseudoknot": allow,
-            # The shared result normaliser retains the browser's structural
-            # safety bound; native task mode still has its own 1000 nt guard.
-            "maxSequenceLength": min(max_nt, 500),
+            "maxSequenceLength": max_nt,
         }
         result = module.fold(payload)
         result["runtime"] = "HYB2 Desktop bundled Python/NumPy/Numba"
@@ -157,6 +245,15 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         if errors: raise ValueError("invalid project: " + "; ".join(errors))
         result = update_ui_state(path, request.get("ui_state", {}))
         return {"ok": True, "path": str(path), **result}
+    if operation == "register_task_run":
+        path = project_path(request)
+        errors = validate_project_directory(path)
+        if errors: raise ValueError("invalid project: " + "; ".join(errors))
+        task_id = request.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError("task_id must be a safe identifier")
+        _safe_task_id(task_id, "task-")
+        return {"ok": True, "path": str(path), "run": register_task_run(path, task_id)}
     if operation == "run_task":
         raw_path = request.get("path")
         if not isinstance(raw_path, str) or not raw_path.strip():
@@ -184,8 +281,11 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         result = {"ok": True, "task_id": task_id, "status": "succeeded" if code == 0 else "failed", "exit_code": code, "events": events, "run_dir": str(run_dir)}
         if code:
             result["error"] = "Project validation failed; see the task events for details."
-        (run_dir / "status.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # status.json is owned by the Rust task manager; children report via result.json.
+        _atomic_write_json(run_dir / "result.json", result)
         return result
+    if operation == "pipeline_run":
+        return _pipeline_run(request, repo_root)
     if operation == "cplfold_run":
         raw_path = request.get("project_path")
         sequence = request.get("sequence")
@@ -264,12 +364,65 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
             completed = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=900, check=False, env=env)
         except subprocess.TimeoutExpired as error:
             result = {"ok": False, "status": "failed", "task_id": task_id, "run_dir": str(run_dir), "error": "CPLfold timed out", "exit_code": None, "stdout": (error.stdout or "")[-20000:], "stderr": (error.stderr or "")[-20000:]}
-            (run_dir / "status.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+            _atomic_write_json(run_dir / "result.json", result)
             return result
         result = {"ok": completed.returncode == 0, "status": "succeeded" if completed.returncode == 0 else "failed", "task_id": task_id, "run_dir": str(run_dir), "output": str(output) if output.exists() else None, "stdout": completed.stdout[-20000:], "stderr": completed.stderr[-20000:], "exit_code": completed.returncode}
-        (run_dir / "status.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        _atomic_write_json(run_dir / "result.json", result)
         return result
     raise ValueError("unsupported bridge operation: %s" % operation)
+
+
+def _json_safe(value: Any) -> Any:
+    """Replace NaN/Infinity (not valid JSON for strict readers) with null."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {str(key): _json_safe(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(child) for child in value]
+    return value
+
+
+def _dumps_line(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=True, allow_nan=False)
+    except ValueError:
+        return json.dumps(_json_safe(value), ensure_ascii=True, allow_nan=False)
+
+
+def serve(repo_root: Path | None = None, stdin: Any = None, stdout: Any = None) -> int:
+    """Long-lived sidecar loop: one JSON request line in, one response line out.
+
+    The protocol stream is a private duplicate of fd 1; fd 1 and ``sys.stdout``
+    are pointed at stderr so stray prints (Python or native) cannot corrupt it.
+    """
+    if stdout is None:
+        protocol_fd = os.dup(1)
+        sys.stdout.flush()
+        os.dup2(2, 1)
+        stdout = os.fdopen(protocol_fd, "w", encoding="utf-8", newline="\n")
+    reader = stdin if stdin is not None else sys.stdin.buffer
+    while True:
+        raw = reader.readline()
+        if not raw:
+            return 0
+        line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+        if not line.strip():
+            continue
+        request_id: Any = None
+        try:
+            message = json.loads(line)
+            if not isinstance(message, dict) or not isinstance(message.get("request"), dict):
+                if isinstance(message, dict) and isinstance(message.get("id"), (int, str)) and not isinstance(message.get("id"), bool):
+                    request_id = message["id"]
+                raise ValueError("sidecar message must be {\"id\": <int>, \"request\": {...}}")
+            request_id = message.get("id")
+            with contextlib.redirect_stdout(sys.stderr):
+                response = handle(message["request"], repo_root=repo_root)
+        except Exception as error:  # noqa: BLE001 - every failure must be a protocol response
+            response = {"ok": False, "error": str(error) or error.__class__.__name__}
+        stdout.write(_dumps_line({"id": request_id, "response": response}) + "\n")
+        stdout.flush()
 
 
 def main() -> int:
@@ -277,12 +430,22 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--request", type=Path, help="JSON request file; stdin is used when omitted")
     parser.add_argument("--validate-project", type=Path, help="validate a project directory")
+    parser.add_argument("--result-file", type=Path, help="also write the response here (default: result.json beside a task-request.json)")
+    parser.add_argument("--serve", action="store_true", help="long-lived line protocol on stdin/stdout")
     args = parser.parse_args()
+    if args.serve:
+        return serve(args.repo_root)
     try:
         raw = args.request.read_text(encoding="utf-8") if args.request else (json.dumps({"operation": "validate_project", "path": str(args.validate_project), "check_files": True}) if args.validate_project else input())
         result = handle(json.loads(raw), repo_root=args.repo_root)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         result = {"ok": False, "error": str(error)}
+    result_file = args.result_file or (args.request.parent / "result.json" if args.request and args.request.name == "task-request.json" else None)
+    if result_file is not None:
+        try:
+            _atomic_write_json(result_file, _json_safe(result))
+        except OSError as error:
+            print("cannot write result file: %s" % error, file=sys.stderr)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0 if result.get("ok") else 1
 

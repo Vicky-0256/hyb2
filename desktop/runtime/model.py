@@ -65,9 +65,10 @@ class CapabilityResult:
     executable: Optional[str] = None
     requires: List[str] = field(default_factory=list)
     remediation: Optional[str] = None
+    details: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result: Dict[str, Any] = {
             "id": self.id,
             "status": self.status,
             "execution": self.execution,
@@ -77,6 +78,9 @@ class CapabilityResult:
             "requires": list(self.requires),
             "remediation": self.remediation,
         }
+        if self.details:
+            result["details"] = dict(self.details)
+        return result
 
 
 @dataclass

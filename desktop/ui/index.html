@@ -1,29 +1,161 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>HYB2 Desktop</title><link rel="stylesheet" href="./style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HYB2 Desktop</title>
+  <link rel="stylesheet" href="./style.css">
 </head>
-<body>
-  <header class="topbar"><strong>HYB2 Desktop</strong><span class="badge">Local analysis</span><span id="active-project">No project open</span></header>
-  <div class="layout">
-    <nav aria-label="Desktop navigation">
-      <button class="nav active" data-view="home" aria-current="page">Project Home</button>
-      <button class="nav" data-view="analysis">Analysis</button>
-      <button class="nav" data-view="tasks">Task Center</button>
-      <button class="nav" data-view="runtime">Runtime</button>
+<body class="d-body">
+  <header class="d-topbar">
+    <strong class="d-brand">HYB2 Desktop</strong>
+    <span class="d-badge">Local analysis</span>
+    <span id="d-active-project" class="d-active-project">No project open</span>
+  </header>
+  <div class="d-layout">
+    <nav class="d-sidebar" aria-label="Desktop navigation">
+      <button type="button" class="d-nav d-nav-active" data-view="home" aria-current="page">Project Home</button>
+      <button type="button" class="d-nav" data-view="analysis">Analysis</button>
+      <button type="button" class="d-nav" data-view="tasks">Task Center</button>
+      <button type="button" class="d-nav" data-view="runtime">Runtime</button>
     </nav>
-    <main>
-      <section id="home" class="view active"><h1>Project Home</h1><p class="muted">Create a portable project or open an existing project folder.</p>
-        <div class="project-grid">
-          <div><h2>Open project</h2><form id="open-form"><label>Project folder<input id="open-path" required placeholder="/path/to/sample.hyb2proj" autocomplete="off"></label><label class="checkbox"><input id="check-files" type="checkbox" checked>Check referenced files exist</label><div class="actions"><button class="primary" type="submit" value="open">Open project</button><button type="submit" value="validate">Validate only</button></div></form><pre id="open-result" class="output" role="status" aria-live="polite"></pre></div>
-          <div><h2>Create project</h2><form id="create-form"><label>New project folder<input id="project-path" required placeholder="/path/to/sample.hyb2proj" autocomplete="off"></label><label>Project name<input id="project-name" required placeholder="My experiment"></label><label>Description<textarea id="project-description"></textarea></label><button class="primary" type="submit">Create project</button></form><pre id="project-result" class="output" role="status" aria-live="polite"></pre></div>
+    <main class="d-main">
+      <section id="d-view-home" class="d-view d-view-active" data-view="home">
+        <h1 class="d-title">Project Home</h1>
+        <p class="d-muted">Create a portable project or open an existing project folder.</p>
+        <div class="d-project-grid">
+          <div class="d-panel">
+            <h2 class="d-subtitle">Open project</h2>
+            <form id="d-open-form" class="d-form">
+              <label class="d-label" for="d-open-path">Project folder</label>
+              <div class="d-path-row">
+                <input id="d-open-path" class="d-input" required placeholder="/path/to/sample.hyb2proj" autocomplete="off" spellcheck="false">
+                <button type="button" id="d-open-browse" class="d-btn">Browse…</button>
+              </div>
+              <label class="d-checkbox"><input id="d-check-files" type="checkbox" checked> Check referenced files exist</label>
+              <div class="d-actions">
+                <button class="d-btn d-btn-primary" type="submit" value="open">Open project</button>
+                <button class="d-btn" type="submit" value="validate">Validate only</button>
+              </div>
+            </form>
+            <pre id="d-open-result" class="d-output" role="status" aria-live="polite"></pre>
+          </div>
+          <div class="d-panel">
+            <h2 class="d-subtitle">Create project</h2>
+            <form id="d-create-form" class="d-form">
+              <label class="d-label" for="d-project-path">New project folder</label>
+              <div class="d-path-row">
+                <input id="d-project-path" class="d-input" required placeholder="/path/to/sample.hyb2proj" autocomplete="off" spellcheck="false">
+                <button type="button" id="d-create-browse" class="d-btn">Browse…</button>
+              </div>
+              <label class="d-label" for="d-project-name">Project name</label>
+              <input id="d-project-name" class="d-input" required placeholder="My experiment">
+              <label class="d-label" for="d-project-description">Description</label>
+              <textarea id="d-project-description" class="d-input d-textarea"></textarea>
+              <div class="d-actions">
+                <button class="d-btn d-btn-primary" type="submit">Create project</button>
+              </div>
+            </form>
+            <pre id="d-project-result" class="d-output" role="status" aria-live="polite"></pre>
+          </div>
         </div>
-        <article id="project-details" hidden><h2>Current project</h2><pre id="project-summary" class="output"></pre><p class="muted">Imported files are copied into the project so the analysis is portable.</p><form id="import-form"><label>Input file<input id="input-source" required placeholder="/path/to/sample.hyb" autocomplete="off"></label><label>Role<select id="input-role"><option value="hyb">HYB</option><option value="fasta">FASTA</option><option value="reference">Reference</option><option value="other">Other</option></select></label><button type="submit">Import into project</button></form><pre id="import-result" class="output" role="status" aria-live="polite"></pre><button class="primary" id="project-analysis">Open analysis workspace</button><section class="run-history" aria-labelledby="run-history-title"><h2 id="run-history-title">Analysis history</h2><div id="run-history-list" class="run-history-list"><p class="muted">No saved analysis runs.</p></div><pre id="run-result" class="output" role="status" aria-live="polite"></pre></section></article>
+        <section class="d-recent" aria-labelledby="d-recent-title">
+          <h2 id="d-recent-title" class="d-subtitle">Recent projects</h2>
+          <ul id="d-recent-list" class="d-recent-list"></ul>
+          <p id="d-recent-empty" class="d-muted">No recent projects.</p>
+        </section>
+        <article id="d-project-details" class="d-project-details" hidden>
+          <h2 class="d-subtitle">Current project</h2>
+          <dl id="d-project-summary" class="d-summary"></dl>
+          <p class="d-muted">Imported files are copied into the project so the analysis is portable.</p>
+          <div id="d-import-form" class="d-form d-import-form">
+            <label class="d-label" for="d-input-role">Input role</label>
+            <div class="d-path-row">
+              <select id="d-input-role" class="d-input">
+                <option value="hyb">HYB</option>
+                <option value="fasta">FASTA</option>
+                <option value="reference">Reference</option>
+                <option value="fastq">FASTQ reads</option>
+                <option value="sam">SAM alignments</option>
+                <option value="other">Other</option>
+              </select>
+              <button type="button" id="d-import-button" class="d-btn">Choose file and import…</button>
+            </div>
+          </div>
+          <pre id="d-import-result" class="d-output" role="status" aria-live="polite"></pre>
+          <div class="d-actions">
+            <button type="button" class="d-btn d-btn-primary" id="d-project-analysis">Open analysis workspace</button>
+          </div>
+          <section class="d-run-history" aria-labelledby="d-run-history-title">
+            <h2 id="d-run-history-title" class="d-subtitle">Analysis history</h2>
+            <div id="d-run-history-list" class="d-run-history-list"><p class="d-muted">No saved analysis runs.</p></div>
+            <pre id="d-run-result" class="d-output" role="status" aria-live="polite"></pre>
+          </section>
+        </article>
       </section>
-      <section id="analysis" class="view"><h1>Analysis workspace</h1><p id="analysis-status" class="muted" role="status" aria-live="polite">Open a project or load an example to begin.</p><p class="analysis-note">The analysis workspace is part of the desktop application. Project inputs, structure predictions, contact maps and reports share the desktop session.</p><div id="analysis-host" aria-label="HYB2 analysis workspace"></div></section>
-      <section id="tasks" class="view"><h1>Task Center</h1><p class="muted">Run a safe local project validation task or a native CPLfold calculation.</p><form id="task-form"><label>Project folder<input id="task-path" required placeholder="Open a project first"></label><button class="primary" type="submit">Run validation task</button></form><form id="cplfold-form"><label>RNA sequence<textarea id="cplfold-sequence" required placeholder="ACGU..."></textarea></label><label>Optional beam<input id="cplfold-beam" type="number" min="1" max="200" value="20"></label><div class="actions"><button class="primary" type="submit">Run native CPLfold</button><button id="cancel-task" type="button" disabled>Cancel active task</button></div></form><pre id="task-state" class="output" role="status" aria-live="polite">No native tasks submitted.</pre></section>
-      <section id="runtime" class="view"><h1>Runtime</h1><p class="muted">Detect installed local tools and available engines. Analysis uses browser assets; native CPLfold uses the bundled Python runtime when available.</p><button id="detect-runtime">Detect runtime</button><pre id="runtime-result" class="output" role="status" aria-live="polite"></pre></section>
+      <section id="d-view-analysis" class="d-view" data-view="analysis">
+        <h1 class="d-title">Analysis workspace</h1>
+        <p id="d-analysis-status" class="d-muted" role="status" aria-live="polite">Open a project or load an example to begin.</p>
+        <p id="d-analysis-note" class="d-analysis-note">The analysis workspace is part of the desktop application. Project inputs, structure predictions, contact maps and reports share the desktop session.</p>
+        <div id="d-analysis-host" class="d-analysis-host" aria-label="HYB2 analysis workspace"></div>
+      </section>
+      <section id="d-view-tasks" class="d-view" data-view="tasks">
+        <h1 class="d-title">Task Center</h1>
+        <p class="d-muted">Run the HYB2 pipeline, a native CPLfold calculation or a project validation task. Several tasks can run at the same time.</p>
+        <p class="d-task-project">Project: <span id="d-task-project">Open a project first</span></p>
+        <form id="d-task-form" class="d-form">
+          <div class="d-actions">
+            <button class="d-btn d-btn-primary" type="submit">Run validation task</button>
+          </div>
+        </form>
+        <form id="d-pipeline-form" class="d-form">
+          <h2 class="d-subtitle">HYB2 pipeline (FASTQ / FASTA / SAM → .hyb)</h2>
+          <label class="d-label" for="d-pipeline-input">Reads or alignments</label>
+          <select id="d-pipeline-input" class="d-input" required></select>
+          <label class="d-label" for="d-pipeline-reference">Reference FASTA used for mapping</label>
+          <select id="d-pipeline-reference" class="d-input" required></select>
+          <label class="d-label" for="d-pipeline-threshold">BLAST threshold</label>
+          <input id="d-pipeline-threshold" class="d-input d-input-short" type="number" min="0" max="10" step="any" value="0.1">
+          <label class="d-label" for="d-pipeline-overlap">Maximum overlap (nt)</label>
+          <input id="d-pipeline-overlap" class="d-input d-input-short" type="number" min="0" max="1000" step="1" value="4">
+          <label class="d-checkbox"><input id="d-pipeline-energy" type="checkbox">Add folding energy (needs ViennaRNA)</label>
+          <p class="d-muted">Import FASTQ, SAM and reference FASTA files on Project Home first. FASTQ and FASTA reads are mapped with Bowtie2.</p>
+          <div class="d-actions">
+            <button class="d-btn d-btn-primary" type="submit">Run HYB2 pipeline</button>
+          </div>
+        </form>
+        <form id="d-cplfold-form" class="d-form">
+          <label class="d-label" for="d-cplfold-sequence">RNA sequence</label>
+          <textarea id="d-cplfold-sequence" class="d-input d-textarea" required placeholder="ACGU..." spellcheck="false"></textarea>
+          <label class="d-label" for="d-cplfold-beam">Optional beam</label>
+          <input id="d-cplfold-beam" class="d-input d-input-short" type="number" min="1" max="200" value="20">
+          <div class="d-actions">
+            <button class="d-btn d-btn-primary" type="submit">Run native CPLfold</button>
+          </div>
+        </form>
+        <pre id="d-task-state" class="d-output" role="status" aria-live="polite"></pre>
+        <div class="d-task-header">
+          <h2 class="d-subtitle">Tasks</h2>
+          <button type="button" id="d-task-refresh" class="d-btn">Refresh</button>
+        </div>
+        <div class="d-table-wrap">
+          <table class="d-table">
+            <thead>
+              <tr><th scope="col">Kind</th><th scope="col">Status</th><th scope="col">Started</th><th scope="col">Finished</th><th scope="col">Output</th><th scope="col"><span class="d-sr-only">Actions</span></th></tr>
+            </thead>
+            <tbody id="d-task-rows"></tbody>
+          </table>
+          <p id="d-task-empty" class="d-muted">No tasks for this project.</p>
+        </div>
+      </section>
+      <section id="d-view-runtime" class="d-view" data-view="runtime">
+        <h1 class="d-title">Runtime</h1>
+        <p class="d-muted">Detect installed local tools and available engines. Analysis uses browser assets; native CPLfold uses the bundled Python runtime when available.</p>
+        <div class="d-actions">
+          <button type="button" id="d-detect-runtime" class="d-btn d-btn-primary">Detect runtime</button>
+        </div>
+        <pre id="d-runtime-result" class="d-output" role="status" aria-live="polite"></pre>
+      </section>
     </main>
   </div>
   <script src="./asset-status.js"></script>

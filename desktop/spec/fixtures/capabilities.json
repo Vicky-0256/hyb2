@@ -4,6 +4,6 @@
   "platform": {"os": "unknown", "architecture": "fixture"},
   "capabilities": [
     {"id": "web.analysis", "status": "available", "execution": "browser", "summary": "Web analysis"},
-    {"id": "structure.cplfold_native", "status": "unavailable", "execution": "native", "summary": "Native runtime unavailable"}
+    {"id": "structure.cplfold_native", "status": "unavailable", "execution": "native", "summary": "Native runtime unavailable", "details": {"max_sequence_length": 1000}}
   ]
 }

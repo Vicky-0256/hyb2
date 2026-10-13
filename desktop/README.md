@@ -49,9 +49,8 @@ connected through the desktop adapter and task runner in later milestones.
 - `src-tauri/tauri.conf.json` resolves `frontendDist: "../dist"` relative to
   its directory. Build and dev hooks stage the desktop entry and shared web assets.
 - `beforeDevCommand` runs `npm run dev:frontend` from `desktop/`.
-- `csp` is currently unset (`null`) to preserve the web app's Worker, WASM, and
-  local asset loading behavior. Tighten the policy after the full asset matrix
-  has been verified in the desktop protocol.
+- `csp` is a strict policy; Pyodide/WASM require `'wasm-unsafe-eval'` and
+  `'unsafe-eval'` in `script-src`.
 - `runtime_detect`, `project_create`, and `project_validate` are exposed as
   structured Tauri commands and call the local JSON bridge without a shell.
 
@@ -110,8 +109,27 @@ reports missing ViennaRNA or Pyodide/NumPy/CPLfold runtime files. Presence is
 not proof of successful engine startup; native folding flags remain disabled.
 HYB import and data visualizations work without those optional folding assets.
 
-Project Home supports create, open and validate through Tauri IPC, with
-optional referenced-file checks. Opening shows project metadata; importing
-project inputs automatically and saving analysis sessions back into the
-project are not connected yet. Task Center also remains a placeholder for
-native job submission.
+Project Home supports create, open and validate through native folder pickers
+(paths remain editable), a recent-projects list, and file import through a
+native file dialog (`project_import_input_dialog`; the UI can no longer pass an
+arbitrary source path). Opening a project grants the asset protocol access to
+its `inputs/` and `runs/` folders so large inputs are read with `fetch` instead
+of being piped through JSON IPC.
+
+## Architecture after the 2026-10 fixes
+
+See `../DESKTOP_FIX_PLAN.md` for the full contracts.
+
+- Rust keeps two persistent Python sidecars (`bridge --serve`): `control` for
+  project/runtime operations and `compute` for `cplfold_predict`, so the Numba
+  JIT stays warm (`NUMBA_CACHE_DIR` is the app cache dir).
+- Long jobs use one task API: `task_start` (`kind`: `validate_project` or
+  `cplfold`), `task_status`, `task_cancel`, `task_list`. Rust is the only writer
+  of `runs/<id>/status.json`; children write `result.json`; finished tasks are
+  registered in `project.json`. Tasks left running at exit are `interrupted`.
+- `project.json` writes are locked (`project.json.lock`) and atomic.
+- `ui_state` is `{desktop: {route}, analysis: {...}}`.
+- A strict CSP is set in `tauri.conf.json`; `HYB2_REPOSITORY_ROOT` /
+  `HYB2_PYTHON` are honoured in debug builds only.
+- Native CPLfold limit: `HYB2_CPLFOLD_MAX_NT` (default 1000); the browser path
+  keeps its 500 nt ceiling.

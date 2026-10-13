@@ -14,6 +14,6 @@
   "additionalProperties": false,
   "$defs": {
     "status": { "enum": ["available", "degraded", "unavailable", "unknown"] },
-    "capability": { "type": "object", "required": ["id", "status", "execution"], "properties": { "id": { "type": "string" }, "status": { "$ref": "#/$defs/status" }, "execution": { "enum": ["browser", "native", "wsl", "hybrid"] }, "version": { "type": ["string", "null"] }, "requires": { "type": "array", "items": { "type": "string" } }, "summary": { "type": "string" } }, "additionalProperties": true }
+    "capability": { "type": "object", "required": ["id", "status", "execution"], "properties": { "id": { "type": "string" }, "status": { "$ref": "#/$defs/status" }, "execution": { "enum": ["browser", "native", "wsl", "hybrid"] }, "version": { "type": ["string", "null"] }, "requires": { "type": "array", "items": { "type": "string" } }, "summary": { "type": "string" }, "details": { "type": "object", "properties": { "max_sequence_length": { "type": "integer", "minimum": 1 } }, "additionalProperties": true } }, "additionalProperties": true }
   }
 }

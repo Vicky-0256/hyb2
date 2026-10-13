@@ -87,7 +87,12 @@
     loadProjectFiles: function (files) {
       const input = files || {};
       const makeFile = function (entry, fallback) {
-        if (!entry || typeof entry.content !== "string") return null;
+        if (!entry) return null;
+        if (typeof File === "function" && entry instanceof File) return entry;
+        if (typeof Blob === "function" && entry.file instanceof Blob) {
+          return entry.file instanceof File ? entry.file : new File([entry.file], entry.name || fallback, { type: "text/plain" });
+        }
+        if (typeof entry.content !== "string") return null;
         return new File([entry.content], entry.name || fallback, { type: "text/plain" });
       };
       const hyb = makeFile(input.hyb, "project.hyb");
@@ -122,6 +127,9 @@
       if (snapshot.density === "compact" || snapshot.density === "comfortable") state.density = snapshot.density;
       if (state.filters && snapshot.filters && typeof snapshot.filters === "object") Object.assign(state.filters, snapshot.filters);
       if (snapshot.route && snapshot.route !== "landing") window.location.hash = "#/workspace/" + String(snapshot.route).replace(/^workspace\//, "");
+      render();
+    },
+    refresh: function () {
       render();
     },
     showSavedStructure: function (result) {

@@ -151,6 +151,23 @@ APP.
 The desktop IPC exposes `task_start`, `task_status`, and `task_cancel`. The
 current release allowlists `validate_project` and invokes the bundled Python
 bridge through an argv array; unsupported engines return an explicit
-unavailable error. Every task writes `runs/<task-id>/status.json`,
-`stdout.log`, and `stderr.log`. IDs are validated and run directories are
-confined to the project.
+unavailable error. Every task has `runs/<task-id>/status.json` (written only
+by the Rust task manager), `stdout.log`, and `stderr.log`; the Python child
+(`bridge --request runs/<task-id>/task-request.json`) writes its own response
+to `runs/<task-id>/result.json`. When a task finishes, Rust calls the bridge
+operation `register_task_run {path, task_id}`, which idempotently upserts the
+manifest `runs` entry. IDs are validated and run directories are confined to
+the project.
+
+## Sidecar mode
+
+`python -m desktop.runtime.bridge --repo-root <root> --serve` reads one
+`{"id": <int>, "request": {...}}` JSON line per request from stdin and writes
+exactly one `{"id": <int>, "response": {...}}` line to stdout. Errors become
+`{"ok": false, "error": "..."}`; an unparseable line is answered with
+`"id": null`. Everything else printed while handling a request goes to stderr.
+EOF on stdin exits with status 0. The loaded CPLfold module is cached for the
+process lifetime so Numba JIT work is reused; `NUMBA_CACHE_DIR` is honoured.
+
+`project.json` writes take an exclusive lock on `project.json.lock`, re-read
+the manifest inside the lock, and replace it atomically.

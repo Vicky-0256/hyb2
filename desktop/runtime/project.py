@@ -7,17 +7,87 @@ on a JSON Schema package being installed.
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 import uuid
 import shutil
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
+
+try:
+    import fcntl  # type: ignore[import-not-found]
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt  # type: ignore[import-not-found]
 
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _ID = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,63}$")
 _SCHEMA = re.compile(r"^[0-9]+\.[0-9]+$")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+
+
+DEFAULT_APP_VERSION = "0.1.0"
+DEFAULT_UI_STATE: Dict[str, Any] = {"desktop": {"route": "home"}, "analysis": {}}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+@contextmanager
+def _manifest_lock(root: Path) -> Iterator[None]:
+    """Exclusive inter-process lock on ``project.json.lock`` (flock/msvcrt)."""
+    handle = open(Path(root) / "project.json.lock", "a+b")
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        else:
+            handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1); break
+                except OSError:
+                    continue  # LK_LOCK gives up after ~10 s; keep waiting
+        yield
+    finally:
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            else:
+                handle.seek(0); msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            handle.close()
+
+
+def _atomic_write_json(path: Path, data: Any) -> None:
+    """Write JSON to a same-directory temp file, fsync, then os.replace."""
+    fd, tmp = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, indent=2) + "\n"); handle.flush(); os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise
+
+
+def _mutate_manifest(root: Path, fn: Callable[[Dict[str, Any]], Any]) -> Any:
+    """Locked read-modify-write of project.json; ``fn`` mutates in place and returns a result."""
+    root = Path(root).expanduser().resolve(); manifest_path = root / "project.json"
+    if not manifest_path.is_file():
+        raise ValueError("project.json is missing")
+    with _manifest_lock(root):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        errors = validate_manifest(manifest)
+        if errors: raise ValueError("invalid project: " + "; ".join(errors))
+        manifest["updated_at"] = _now()
+        result = fn(manifest)
+        _atomic_write_json(manifest_path, manifest)
+        return result
 
 
 def safe_relative_path(value: Any) -> bool:
@@ -130,38 +200,27 @@ def import_input(root: Path, source: Path, *, role: str = "other", label: str = 
     source = Path(source).expanduser().resolve()
     if not source.is_file():
         raise ValueError("input file does not exist: %s" % source)
-    manifest_path = root / "project.json"
-    if not manifest_path.is_file():
-        raise ValueError("project.json is missing")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    errors = validate_manifest(manifest)
-    if errors:
-        raise ValueError("invalid project: " + "; ".join(errors))
     if role not in {"hyb", "fasta", "fastq", "sam", "reference", "constraints", "other"}:
         raise ValueError("invalid input role")
-    inputs_dir = root / "inputs"
-    inputs_dir.mkdir(mode=0o700, exist_ok=True)
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", source.name).strip("._") or "input"
-    destination = inputs_dir / stem
-    if destination.exists():
-        digest = sha256_file(source)
-        for item in manifest["inputs"]:
-            if item.get("path") == "inputs/" + stem and item.get("sha256") == digest:
-                return item
-        destination = inputs_dir / (destination.stem + "-" + uuid.uuid4().hex[:8] + destination.suffix)
-    shutil.copy2(source, destination)
-    relative = destination.relative_to(root).as_posix()
-    suffix = source.name.lower()
-    formats = {".hyb": "hyb", ".fasta": "fasta", ".fa": "fasta", ".fastq": "fastq", ".fq": "fastq", ".sam": "sam", ".ct": "ct", ".dbn": "dbn", ".tsv": "tsv", ".csv": "csv"}
-    fmt = formats.get(source.suffix.lower(), "other")
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    item = {"id": "input-" + uuid.uuid4().hex[:12], "role": role, "path": relative,
-            "format": fmt, "sha256": sha256_file(destination), "size_bytes": destination.stat().st_size,
-            "label": (label or source.stem)[:200], "imported_at": now}
-    manifest["inputs"].append(item)
-    manifest["updated_at"] = now
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return item
+    def mutate(manifest: Dict[str, Any]) -> Dict[str, Any]:
+        inputs_dir = root / "inputs"
+        inputs_dir.mkdir(mode=0o700, exist_ok=True)
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", source.name).strip("._") or "input"
+        destination = inputs_dir / stem
+        if destination.exists():
+            digest = sha256_file(source)
+            for item in manifest["inputs"]:
+                if item.get("path") == "inputs/" + stem and item.get("sha256") == digest:
+                    return item
+            destination = inputs_dir / (destination.stem + "-" + uuid.uuid4().hex[:8] + destination.suffix)
+        shutil.copy2(source, destination)
+        formats = {".hyb": "hyb", ".fasta": "fasta", ".fa": "fasta", ".fastq": "fastq", ".fq": "fastq", ".sam": "sam", ".ct": "ct", ".dbn": "dbn", ".tsv": "tsv", ".csv": "csv"}
+        item = {"id": "input-" + uuid.uuid4().hex[:12], "role": role, "path": destination.relative_to(root).as_posix(),
+                "format": formats.get(source.suffix.lower(), "other"), "sha256": sha256_file(destination), "size_bytes": destination.stat().st_size,
+                "label": (label or source.stem)[:200], "imported_at": _now()}
+        manifest["inputs"].append(item)
+        return item
+    return _mutate_manifest(root, mutate)
 
 
 def read_input(root: Path, relative: str, *, limit: int = 50_000_000) -> Dict[str, Any]:
@@ -181,9 +240,7 @@ def save_analysis_run(root: Path, result: Dict[str, Any]) -> Dict[str, Any]:
     """Persist a compact structure result and register it in project.json."""
     if not isinstance(result, dict): raise ValueError("analysis result must be an object")
     root = Path(root).expanduser().resolve()
-    manifest_path = root / "project.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    errors = validate_manifest(manifest)
+    errors = validate_project_directory(root)
     if errors: raise ValueError("invalid project: " + "; ".join(errors))
     run_id = "run-" + uuid.uuid4().hex[:12]
     run_dir = root / "runs" / run_id
@@ -191,72 +248,156 @@ def save_analysis_run(root: Path, result: Dict[str, Any]) -> Dict[str, Any]:
     output = run_dir / "structure-result.json"
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     relative = output.relative_to(root).as_posix()
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    manifest["runs"].append({"id": run_id, "kind": str(result.get("algorithm", "structure")), "status": "succeeded", "input_ids": [], "parameters": {"engine": result.get("engine"), "constraintMode": result.get("constraintMode")}, "output_paths": [relative], "log_paths": []})
-    manifest["artifacts"].append({"path": relative, "kind": "structure-result", "sha256": sha256_file(output), "size_bytes": output.stat().st_size})
-    manifest["updated_at"] = now
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    run = {"id": run_id, "kind": str(result.get("algorithm", "structure")), "status": "succeeded", "input_ids": [], "parameters": {"engine": result.get("engine"), "constraintMode": result.get("constraintMode")}, "output_paths": [relative], "log_paths": []}
+    artifact = {"path": relative, "kind": "structure-result", "sha256": sha256_file(output), "size_bytes": output.stat().st_size}
+    def mutate(manifest: Dict[str, Any]) -> None:
+        manifest["runs"].append(run); manifest["artifacts"].append(artifact)
+    _mutate_manifest(root, mutate)
     return {"run_id": run_id, "path": relative}
 
 
+def _check_ui_state(value: Any) -> None:
+    if isinstance(value, str):
+        normal = value.replace("\\", "/")
+        if "\x00" in value or normal.startswith("/") or re.match(r"^[A-Za-z]:/", normal) or any(part == ".." for part in normal.split("/")):
+            raise ValueError("ui state cannot contain absolute or traversal paths")
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            if not isinstance(key, str): raise ValueError("ui state keys must be strings")
+            _check_ui_state(child)
+    elif isinstance(value, list):
+        for child in value: _check_ui_state(child)
+    elif value is not None and not isinstance(value, (bool, int, float)):
+        raise ValueError("ui state must contain JSON scalar values")
+
+
 def update_ui_state(root: Path, state: Dict[str, Any]) -> Dict[str, Any]:
-    """Persist bounded, JSON-serializable UI state without absolute paths."""
+    """Persist bounded, JSON-serializable UI state without absolute paths.
+
+    Accepts the namespaced shape ``{"desktop": {"route": ...}, "analysis": {...}}``
+    as well as legacy flat objects; the whole object replaces ``ui_state``.
+    """
     if not isinstance(state, dict):
         raise ValueError("ui state must be an object")
     encoded = json.dumps(state, ensure_ascii=False)
     if len(encoded) > 256_000:
         raise ValueError("ui state is too large")
-    def check(value: Any) -> None:
-        if isinstance(value, str):
-            normal = value.replace("\\", "/")
-            if "\x00" in value or normal.startswith("/") or re.match(r"^[A-Za-z]:/", normal) or any(part == ".." for part in normal.split("/")):
-                raise ValueError("ui state cannot contain absolute or traversal paths")
-        elif isinstance(value, dict):
-            for key, child in value.items():
-                if not isinstance(key, str): raise ValueError("ui state keys must be strings")
-                check(child)
-        elif isinstance(value, list):
-            for child in value: check(child)
-        elif value is not None and not isinstance(value, (bool, int, float)):
-            raise ValueError("ui state must contain JSON scalar values")
-    check(state)
-    root = Path(root).expanduser().resolve(); manifest_path = root / "project.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    errors = validate_manifest(manifest)
-    if errors: raise ValueError("invalid project: " + "; ".join(errors))
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    manifest["ui_state"] = state; manifest["updated_at"] = now
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return {"updated_at": now, "ui_state": state}
+    _check_ui_state(state)
+    def mutate(manifest: Dict[str, Any]) -> str:
+        manifest["ui_state"] = state
+        return manifest["updated_at"]
+    return {"updated_at": _mutate_manifest(root, mutate), "ui_state": state}
 
 
-def new_project(root: Path, name: str, *, description: str = "", app_version: str = "0.1.0") -> Path:
+def _project_relative(root: Path, value: Any) -> Optional[str]:
+    """Return a safe project-relative path for an existing file inside ``root``, else None."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return None
+    candidate = Path(value) if os.path.isabs(value) else (root / value.replace("\\", "/") if safe_relative_path(value) else None)
+    if candidate is None:
+        return None
+    try:
+        resolved = candidate.resolve()
+        relative = resolved.relative_to(root).as_posix()
+    except (OSError, ValueError):
+        return None
+    return relative if safe_relative_path(relative) and resolved.is_file() else None
+
+
+def _path_values(value: Any) -> List[Any]:
+    if isinstance(value, dict): return list(value.values())
+    if isinstance(value, list): return list(value)
+    return [value] if value is not None else []
+
+
+def register_task_run(root: Path, task_id: str) -> Dict[str, Any]:
+    """Upsert a manifest run from the Rust-owned ``runs/<task_id>/status.json`` (idempotent)."""
+    if not isinstance(task_id, str) or not _ID.match(task_id):
+        raise ValueError("task_id must be a safe identifier")
+    root = Path(root).expanduser().resolve()
+    runs = root / "runs"
+    if runs.is_symlink() or not runs.is_dir() or runs.resolve() != runs:
+        raise ValueError("project runs directory escapes project (must be a real directory)")
+    run_dir = runs / task_id
+    if run_dir.is_symlink() or not run_dir.is_dir():
+        raise ValueError("task run directory does not exist: %s" % task_id)
+    status_path = run_dir / "status.json"
+    if status_path.is_symlink() or not status_path.is_file():
+        raise ValueError("task status.json does not exist: %s" % task_id)
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    if not isinstance(status, dict): raise ValueError("task status.json must be an object")
+    result_path = run_dir / "result.json"
+    result: Dict[str, Any] = {}
+    if result_path.is_file() and not result_path.is_symlink():
+        try:
+            loaded = json.loads(result_path.read_text(encoding="utf-8"))
+            result = loaded if isinstance(loaded, dict) else {}
+        except ValueError:
+            result = {}
+    if status.get("task_id") not in (None, task_id):
+        raise ValueError("status.json task_id does not match")
+    output = status.get("output")
+    candidates = _path_values(output.get("output") if isinstance(output, dict) else output) + _path_values(result.get("output"))
+    if result: candidates.append(str(result_path))
+    outputs: List[str] = []
+    for value in candidates:
+        relative = _project_relative(root, value)
+        if relative and relative not in outputs: outputs.append(relative)
+    logs: List[str] = []
+    for value in _path_values(status.get("log_paths")):
+        relative = _project_relative(root, value)
+        if relative and relative not in logs and relative not in outputs: logs.append(relative)
+    entry: Dict[str, Any] = {"id": task_id, "kind": str(status.get("kind") or "custom"), "status": str(status.get("status") or "failed"), "output_paths": outputs, "log_paths": logs}
+    if type(status.get("exit_code")) is int: entry["exit_code"] = status["exit_code"]
+    for key in ("started_at", "finished_at"):
+        if isinstance(status.get(key), str) and _DATE.match(status[key]): entry[key] = status[key]
+    error = status.get("error")
+    if isinstance(error, str) and error: entry["error"] = {"code": "task_" + entry["status"], "message": error[:4000]}
+    elif isinstance(error, dict) and isinstance(error.get("message"), str): entry["error"] = {"code": str(error.get("code", "task_" + entry["status"])), "message": error["message"][:4000]}
+    def mutate(manifest: Dict[str, Any]) -> Dict[str, Any]:
+        for index, existing in enumerate(manifest["runs"]):
+            if isinstance(existing, dict) and existing.get("id") == task_id:
+                merged = {"input_ids": existing.get("input_ids", []), "parameters": existing.get("parameters", {})}
+                merged.update(entry)
+                manifest["runs"][index] = merged
+                return merged
+        record = {"id": task_id, "kind": entry["kind"], "status": entry["status"], "input_ids": [], "parameters": {}}
+        record.update(entry)
+        manifest["runs"].append(record)
+        return record
+    return _mutate_manifest(root, mutate)
+
+
+def new_project(root: Path, name: str, *, description: str = "", app_version: Optional[str] = None) -> Path:
     """Create an empty portable project directory and return its manifest path.
 
     This is intentionally a small filesystem API for the desktop bridge.  It
     never accepts an input path as a project member; callers import files via
-    a later, hash-recording operation.
+    a later, hash-recording operation.  ``HYB2_APP_VERSION`` (set by the Tauri
+    host) takes precedence over the built-in default version.
     """
     root = Path(root).expanduser().resolve()
     if not isinstance(name, str) or not name.strip():
         raise ValueError("project name must be non-empty")
     if root.exists() and any(root.iterdir()):
         raise ValueError("project directory must be empty or absent")
+    version = app_version or os.environ.get("HYB2_APP_VERSION") or DEFAULT_APP_VERSION
     root.mkdir(parents=True, exist_ok=True)
     for directory in ("inputs", "runs", "exports"):
         (root / directory).mkdir()
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = _now()
     manifest = {
         "format": "hyb2-project", "schema_version": "1.0",
         "project_id": str(uuid.uuid4()), "name": name.strip(),
         "description": description, "created_at": now, "updated_at": now,
-        "application": {"name": "HYB2 Desktop", "version": app_version},
+        "application": {"name": "HYB2 Desktop", "version": version},
         "inputs": [], "runs": [], "artifacts": [],
         "runtime": {"protocol_version": "1.0", "detected_at": now, "detector_version": "unknown",
                      "platform": {"os": "unknown", "architecture": "unknown", "release": "unknown", "wsl": False, "wsl_distributions": []},
                      "capabilities": []},
-        "settings": {"max_parallel_tasks": 1}, "ui_state": {"route": "overview", "filters": {}}, "extensions": {},
+        "settings": {"max_parallel_tasks": 1}, "ui_state": json.loads(json.dumps(DEFAULT_UI_STATE)), "extensions": {},
     }
     manifest_path = root / "project.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    with _manifest_lock(root):
+        _atomic_write_json(manifest_path, manifest)
     return manifest_path

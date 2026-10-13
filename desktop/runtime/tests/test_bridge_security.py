@@ -51,7 +51,8 @@ class BridgeSecurityTests(unittest.TestCase):
             self.assertEqual(result['status'], 'failed')
             self.assertIn('missing project file', json.dumps(result['events']))
             self.assertTrue((Path(result['run_dir']) / 'events.jsonl').is_file())
-            self.assertTrue((Path(result['run_dir']) / 'status.json').is_file())
+            self.assertTrue((Path(result['run_dir']) / 'result.json').is_file())
+            self.assertFalse((Path(result['run_dir']) / 'status.json').exists())
             with self.assertRaises(FileExistsError):
                 handle({'operation': 'run_task', 'path': str(project), 'task_id': 'validation-test'})
 

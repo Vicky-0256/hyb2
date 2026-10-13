@@ -75,7 +75,15 @@
     },
     "ui_state": {
       "type": "object",
-      "description": "Optional serializable UI state. It must not contain local absolute paths.",
+      "description": "Optional serializable UI state. It must not contain local absolute paths. Desktop shell state lives under `desktop` and the web analysis session snapshot under `analysis`; legacy flat objects are still accepted.",
+      "properties": {
+        "desktop": {
+          "type": "object",
+          "properties": { "route": { "type": "string" } },
+          "additionalProperties": true
+        },
+        "analysis": { "type": "object", "additionalProperties": true }
+      },
       "additionalProperties": true
     },
     "extensions": {
@@ -166,11 +174,11 @@
         },
         "kind": {
           "type": "string",
-          "enum": ["mapping", "sam_to_hyb", "hyb_filter", "contact_map", "viewpoint", "compare", "structure", "cplfold", "varna", "report", "custom"]
+          "enum": ["mapping", "sam_to_hyb", "hyb_filter", "contact_map", "viewpoint", "compare", "structure", "cplfold", "varna", "report", "validate_project", "custom"]
         },
         "status": {
           "type": "string",
-          "enum": ["queued", "running", "succeeded", "failed", "cancelled", "paused"]
+          "enum": ["queued", "running", "succeeded", "failed", "cancelled", "interrupted", "paused"]
         },
         "input_ids": {
           "type": "array",

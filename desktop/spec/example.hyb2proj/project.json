@@ -87,8 +87,10 @@
     "max_parallel_tasks": 1
   },
   "ui_state": {
-    "route": "overview",
-    "filters": {}
+    "desktop": {
+      "route": "home"
+    },
+    "analysis": {}
   },
   "extensions": {}
 }

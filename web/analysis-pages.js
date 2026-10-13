@@ -820,8 +820,9 @@
 
   function renderCplfoldCapacity(structure) {
     if (cplfoldNativeAvailable()) {
-      const accelerated = !!(window.Hyb2Desktop.capabilities && window.Hyb2Desktop.capabilities.numbaJit === true);
-      return '<div class="cplfold-capacity" aria-live="polite"><div class="cplfold-capacity-row"><div><span class="drawer-kicker">Desktop runtime</span><strong>Bundled NumPy/CPLfold' + (accelerated ? ' + Numba JIT' : '') + '</strong><small>Using the installed desktop runtime. Browser capacity measurement is not required.</small></div></div><small class="cplfold-capacity-footnote">Sequence limits are enforced by the desktop task runner and available memory.' + (accelerated ? ' The first run may spend time compiling and caching Numba kernels.' : ' Numba acceleration is unavailable; NumPy mode remains active.') + '</small></div>';
+      const desktop = window.Hyb2Desktop || {};
+      const accelerated = !!(desktop.capabilities && desktop.capabilities.numbaJit === true);
+      return '<div class="cplfold-capacity" aria-live="polite"><div class="cplfold-capacity-row"><div><span class="drawer-kicker">Desktop runtime</span><strong>Bundled NumPy/CPLfold' + (accelerated ? ' + Numba JIT' : '') + ' · up to ' + format(cplfoldNativeMaxLength()) + ' nt</strong><small>Using the installed desktop runtime. Browser capacity measurement is not required.</small></div></div><small class="cplfold-capacity-footnote">The desktop runtime accepts sequences up to ' + format(cplfoldNativeMaxLength()) + ' nt; longer runs are limited by available memory.' + (accelerated ? ' The first run may spend time compiling and caching Numba kernels.' : ' Numba acceleration is unavailable; NumPy mode remains active.') + '</small></div>';
     }
     const capacity = cplfoldCapacity(structure);
     const profileMatches = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
@@ -1295,8 +1296,8 @@
         status: "native",
         mode: "desktop-native",
         baselineLength: 0,
-        hardCeiling: Number.MAX_SAFE_INTEGER,
-        recommendedLength: Number.MAX_SAFE_INTEGER,
+        hardCeiling: cplfoldNativeMaxLength(),
+        recommendedLength: cplfoldNativeMaxLength(),
         probeLength: 0,
         foldElapsedMs: null,
         profileKey: "desktop-native",
@@ -1329,6 +1330,13 @@
     return !!(window.Hyb2Desktop && window.Hyb2Desktop.enabled && window.Hyb2Desktop.capabilities && window.Hyb2Desktop.capabilities.cplfoldNative === true);
   }
 
+  // Native ceiling from the desktop runtime detector; 500 nt (the browser
+  // ceiling) when the detector did not report one.
+  function cplfoldNativeMaxLength() {
+    const limits = window.Hyb2Desktop && window.Hyb2Desktop.limits;
+    return positiveInteger(limits && limits.cplfoldMaxLength, 500);
+  }
+
   function resultAllowsPseudoknot(result) {
     return !!result && result.allowPseudoknot !== false &&
       !(result.parameters && result.parameters.allowPseudoknot === false);
@@ -1353,7 +1361,7 @@
 
   function cplfoldCannotRun(length, structure) {
     if (cplfoldNativeAvailable()) {
-      return false;
+      return length > cplfoldNativeMaxLength();
     }
     const capacity = cplfoldCapacity(structure);
     if (length > capacity.hardCeiling || length <= capacity.baselineLength) {
@@ -1378,7 +1386,10 @@
   function structureLengthNotice(length, allowLarge, engine, structure) {
     if (engine === "cplfold") {
       if (cplfoldNativeAvailable()) {
-        return "Using the desktop bundled NumPy/CPLfold runtime; no browser capacity test is required.";
+        if (length > cplfoldNativeMaxLength()) {
+          return "Desktop CPLfold is limited to " + format(cplfoldNativeMaxLength()) + " nt by the bundled runtime. Select a shorter region.";
+        }
+        return "Using the desktop bundled NumPy/CPLfold runtime (up to " + format(cplfoldNativeMaxLength()) + " nt); no browser capacity test is required.";
       }
       const capacity = cplfoldCapacity(structure);
       if (length > capacity.hardCeiling) {

@@ -79,6 +79,28 @@
   syncRoute();
   render();
 
+  // Desktop uses the same analysis engine in the same document. This small
+  // bridge lets the project controller hand imported project inputs directly
+  // to the parser without reopening a file picker.
+  window.Hyb2Web = {
+    loadProjectFiles: function (files) {
+      const input = files || {};
+      const makeFile = function (entry, fallback) {
+        if (!entry || typeof entry.content !== "string") return null;
+        return new File([entry.content], entry.name || fallback, { type: "text/plain" });
+      };
+      const hyb = makeFile(input.hyb, "project.hyb");
+      const fasta = makeFile(input.fasta, "reference.fasta");
+      if (hyb) {
+        startParsing(hyb, { referenceFile: fasta });
+      } else if (fasta) {
+        state.landingFastaFile = fasta;
+        render();
+      }
+      return !!(hyb || fasta);
+    }
+  };
+
   function syncRoute() {
     const hash = window.location.hash.replace(/^#\/?/, "");
     const parts = hash.split("?");

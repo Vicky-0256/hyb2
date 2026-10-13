@@ -7,6 +7,7 @@
   var pollTimer = null;
   var assets = window.HYB2_ASSET_STATUS;
   var currentProjectPath = null;
+  var projectInputs = { hyb: null, fasta: null };
   if (assets) {
     var missing = [];
     if (!assets.vienna.assetsPresent) missing.push("ViennaRNA / COMRADES");
@@ -76,6 +77,7 @@
         await appendScript(file);
       }
       loaded = true;
+      if (projectInputs.hyb || projectInputs.fasta) window.Hyb2Web.loadProjectFiles(projectInputs);
       show("analysis-status", "Integrated analysis workspace ready.");
     })().catch(function (error) {
       show("analysis-status", "Analysis could not load: " + errorText(error));
@@ -113,6 +115,29 @@
     document.getElementById("project-details").hidden = false;
     document.getElementById("open-path").value = project.path;
     document.getElementById("task-path").value = project.path;
+    syncProjectInputs(manifest.inputs || []);
+  }
+  async function readProjectInput(item) {
+    if (!invoke || !currentProjectPath || !item || !item.path) return null;
+    var result = await invoke("project_read_input", {request: {path: currentProjectPath, relative: item.path}});
+    return result && result.input ? result.input : null;
+  }
+  async function syncProjectInputs(inputs) {
+    var selected = { hyb: null, fasta: null };
+    for (const item of inputs || []) {
+      if (item.role === "hyb" || item.format === "hyb") selected.hyb = item;
+      if (item.role === "fasta" || item.role === "reference" || item.format === "fasta") selected.fasta = item;
+    }
+    try {
+      projectInputs.hyb = selected.hyb ? await readProjectInput(selected.hyb) : null;
+      projectInputs.fasta = selected.fasta ? await readProjectInput(selected.fasta) : null;
+      if (window.Hyb2Web && (projectInputs.hyb || projectInputs.fasta)) {
+        window.Hyb2Web.loadProjectFiles(projectInputs);
+        show("analysis-status", "Project inputs loaded into the integrated analysis workspace.");
+      }
+    } catch (error) {
+      show("analysis-status", "Project inputs could not be loaded: " + errorText(error));
+    }
   }
   document.getElementById("import-form").addEventListener("submit", async function (event) {
     event.preventDefault();
@@ -124,6 +149,14 @@
       show("import-result", "Imported " + result.input.path + " (" + result.input.size_bytes + " bytes)");
       var summary = document.getElementById("project-summary");
       try { var data = JSON.parse(summary.textContent); data.inputs += 1; summary.textContent = JSON.stringify(data, null, 2); } catch (_) {}
+      var imported = result.input;
+      if (imported && (imported.role === "hyb" || imported.role === "fasta" || imported.role === "reference")) {
+        var inputs = [];
+        try { inputs = JSON.parse(summary.textContent).inputs_manifest || []; } catch (_) {}
+        if (imported.role === "hyb") projectInputs.hyb = await readProjectInput(imported);
+        else projectInputs.fasta = await readProjectInput(imported);
+        if (window.Hyb2Web && (projectInputs.hyb || projectInputs.fasta)) window.Hyb2Web.loadProjectFiles(projectInputs);
+      }
     }
   });
   document.getElementById("project-analysis").addEventListener("click", function () { activate("analysis"); });

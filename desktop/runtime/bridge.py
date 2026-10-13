@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .detector import detect_runtime
-from .project import new_project, validate_project_directory, import_input, update_ui_state
+from .project import new_project, validate_project_directory, import_input, read_input, update_ui_state
 import importlib.util
 
 _RUNNER_PATH = Path(__file__).resolve().parents[1] / "task-runner" / "runner.py"
@@ -141,6 +141,11 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         if not isinstance(source, str) or not source.strip(): raise ValueError("input source must be a non-empty path")
         item = import_input(path, Path(source), role=str(request.get("role", "other")), label=str(request.get("label", "")))
         return {"ok": True, "path": str(path), "input": item}
+    if operation == "read_input":
+        path = project_path(request)
+        errors = validate_project_directory(path)
+        if errors: raise ValueError("invalid project: " + "; ".join(errors))
+        return {"ok": True, "path": str(path), "input": read_input(path, str(request.get("relative", "")))}
     if operation == "update_ui_state":
         path = project_path(request)
         errors = validate_project_directory(path)

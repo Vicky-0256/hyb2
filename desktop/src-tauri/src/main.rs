@@ -27,6 +27,11 @@ struct ImportInputRequest {
     label: Option<String>,
 }
 #[derive(Debug, Deserialize)]
+struct ReadInputRequest {
+    path: String,
+    relative: String,
+}
+#[derive(Debug, Deserialize)]
 struct UpdateUiStateRequest {
     path: String,
     ui_state: Value,
@@ -216,6 +221,14 @@ async fn project_import_input(
 }
 
 #[tauri::command]
+async fn project_read_input(
+    app: tauri::AppHandle,
+    request: ReadInputRequest,
+) -> Result<Value, String> {
+    dispatch(app, json!({"operation":"read_input", "path":request.path, "relative":request.relative})).await
+}
+
+#[tauri::command]
 async fn project_update_ui_state(
     app: tauri::AppHandle,
     request: UpdateUiStateRequest,
@@ -270,6 +283,7 @@ fn main() {
             project_validate,
             project_open,
             project_import_input,
+            project_read_input,
             project_update_ui_state,
             task_run,
             cplfold_run,

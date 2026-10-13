@@ -164,6 +164,19 @@ def import_input(root: Path, source: Path, *, role: str = "other", label: str = 
     return item
 
 
+def read_input(root: Path, relative: str, *, limit: int = 50_000_000) -> Dict[str, Any]:
+    """Read a project input for the integrated desktop analysis workspace."""
+    if not safe_relative_path(relative):
+        raise ValueError("input path must be relative and traversal-free")
+    root = Path(root).expanduser().resolve()
+    path = (root / relative).resolve()
+    if root not in path.parents or not path.is_file():
+        raise ValueError("project input does not exist")
+    if path.stat().st_size > limit:
+        raise ValueError("project input exceeds desktop preview limit")
+    return {"path": relative, "name": path.name, "content": path.read_text(encoding="utf-8", errors="replace")}
+
+
 def update_ui_state(root: Path, state: Dict[str, Any]) -> Dict[str, Any]:
     """Persist bounded, JSON-serializable UI state without absolute paths."""
     if not isinstance(state, dict):

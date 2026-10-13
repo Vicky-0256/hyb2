@@ -12,7 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PINS = {"numpy":"1.24.4", "numba":"0.58.1", "llvmlite":"0.41.1"}
 EXPECTED = "..(((((..[[[[)))))......]]]]"
-LICENSE_FILES = ["third_party/cplfold/THIRD_PARTY_NOTICES.md",
+LICENSE_FILES = ["third_party/bowtie2/LICENSE",
+                 "third_party/cplfold/THIRD_PARTY_NOTICES.md",
                  "third_party/cplfold/LICENSES/LinearFold-LICENSE.txt",
                  "third_party/cplfold/LICENSES/GPL-2.0-or-later.txt"]
 
@@ -77,6 +78,16 @@ def main() -> int:
         path = root / rel
         if not path.is_file() or path.is_symlink(): return fail(f"manifest file missing or symlinked: {rel}")
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest: return fail(f"SHA256 mismatch: {rel}")
+    # The bundle carries a copy of the repository sources; a stale copy silently
+    # ships an old bridge protocol, so every staged source must match the repo.
+    stage_spec = importlib.util.spec_from_file_location("native_stage_dirs", Path(__file__).with_name("stage-native.py"))
+    stage_module = importlib.util.module_from_spec(stage_spec)
+    stage_spec.loader.exec_module(stage_module)
+    for rel, digest in files.items():
+        if any(rel.startswith(prefix + "/") for prefix in stage_module.SOURCE_DIRS) or rel == "bin/cplfold":
+            source = ROOT / rel
+            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+                return fail(f"bundled source is stale (re-run stage-native.py): {rel}")
     for rel in LICENSE_FILES:
         if not (root / rel).is_file(): return fail(f"required license notice missing: {rel}")
     # Use the same real JIT/reference-fold checks as staging. The probe uses an
@@ -88,6 +99,8 @@ def main() -> int:
         details = staging.smoke(root, interpreter, portable=True)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return fail(f"native runtime smoke failed: {error}")
+    if not details.get("bowtie2"):
+        return fail("Bowtie2 is not bundled: stage with --bowtie2 <acquire-bowtie2.py output>")
     print(json.dumps({"ok":True,"resource_root":str(root),"portable":True,"platform":platform.system(),"architecture":expected_arch,"runtime":details,"cplfold":"passed"}, indent=2))
     return 0
 

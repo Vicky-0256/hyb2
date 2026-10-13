@@ -27,9 +27,11 @@ verify on the same runner:
 ```bash
 /tmp/cpython-runtime/bin/python3 -m pip install --no-index --only-binary=:all: \
   --find-links "$WHEELHOUSE" -r desktop/runtime/requirements-native.txt
+python3 desktop/scripts/acquire-bowtie2.py --platform linux-x86_64 --output /tmp/bowtie2
 python3 desktop/scripts/stage-native.py \
   --standalone-python /tmp/cpython-runtime \
   --source-id "$CPYTHON_URL; sha256=$CPYTHON_SHA256" \
+  --bowtie2 /tmp/bowtie2 \
   --output desktop/resources/native
 python3 desktop/scripts/verify-native-release.py
 ```
@@ -51,3 +53,21 @@ Numba and CPLfold smoke test and records the target platform in the manifest.
 Each job must publish the staged `native-manifest.json` and the archive SHA256
 as build artifacts.  A missing URL/SHA or an unavailable target wheel is a
 failed release, never a reason to fall back to a host virtualenv.
+
+## Bowtie2
+
+`acquire-bowtie2.py` downloads the pinned Bowtie2 2.5.5 release for the
+target and checks it against the SHA-256 that GitHub publishes for that
+release. It keeps only `bowtie2-align-s` and `bowtie2-build-s` (plus `.exe`
+on Windows) and the GPL-3.0 `LICENSE`. These binaries run without the Perl
+and Python wrappers, so FASTQ mapping works on Windows with no extra
+installs.
+
+`stage-native.py --bowtie2 DIR` copies them to `bin/` and checks them by
+building an index and aligning a probe read. `verify-native-release.py`
+fails if Bowtie2 is missing, and if any repository source copied into the
+bundle (the `SOURCE_DIRS` list in `stage-native.py`) is stale.
+
+Bowtie2 publishes no macOS x86_64 build. An Intel Mac release needs a
+self-built binary, or that target ships without FASTQ mapping (SAM input
+still works).

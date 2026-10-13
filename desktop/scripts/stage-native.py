@@ -57,6 +57,24 @@ def smoke(root, executable, portable):
             raise ValueError('CPLfold native smoke did not match reference structure/energy:\n' + output)
         details['cplfold_reference_fold'] = 'passed'
         details['bowtie2'] = bowtie2_smoke(root, cache)
+        details['viennarna'] = viennarna_smoke(root, executable, env)
+    return details
+
+
+VIENNA_PROBE = '''import json, RNA
+structure, mfe = RNA.fold_compound("GGGGAAAACCCC&GGGGUUUUCCCC").mfe_dimer()
+print(json.dumps({"version": RNA.__version__, "structure": structure, "mfe": round(mfe, 2)}))
+'''
+
+
+def viennarna_smoke(root, executable, env):
+    """Folding energy for hyb2pipe -e 1 comes from the ViennaRNA wheel."""
+    try:
+        details = json.loads(run([str(executable), '-I', '-B', '-c', VIENNA_PROBE], root, env))
+    except subprocess.CalledProcessError:
+        return None
+    if details['version'] != '2.7.2' or details['mfe'] >= 0:
+        raise ValueError('ViennaRNA smoke failed: %s' % details)
     return details
 
 

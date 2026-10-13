@@ -99,6 +99,8 @@ def main() -> int:
         details = staging.smoke(root, interpreter, portable=True)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return fail(f"native runtime smoke failed: {error}")
+    if not details.get("viennarna"):
+        return fail("ViennaRNA 2.7.2 is not installed in the bundled Python (needed for pipeline -e 1)")
     if not details.get("bowtie2"):
         return fail("Bowtie2 is not bundled: stage with --bowtie2 <acquire-bowtie2.py output>")
     print(json.dumps({"ok":True,"resource_root":str(root),"portable":True,"platform":platform.system(),"architecture":expected_arch,"runtime":details,"cplfold":"passed"}, indent=2))

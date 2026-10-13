@@ -71,3 +71,10 @@ bundle (the `SOURCE_DIRS` list in `stage-native.py`) is stale.
 Bowtie2 publishes no macOS x86_64 build. An Intel Mac release needs a
 self-built binary, or that target ships without FASTQ mapping (SAM input
 still works).
+
+## ViennaRNA
+
+`requirements-native.txt` pins `ViennaRNA==2.7.2` next to NumPy and Numba.
+It is used for folding energy (`pipeline -e 1`), and binary wheels exist for
+every target. `stage-native.py` checks the import with a dimer-fold smoke
+test, and `verify-native-release.py` fails if ViennaRNA is missing.

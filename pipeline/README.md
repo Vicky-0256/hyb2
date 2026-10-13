@@ -40,8 +40,12 @@ It deliberately differs from the legacy scripts in four places:
   PATH. It prefers `bowtie2-align-s` / `bowtie2-build-s`, because the
   `bowtie2` wrapper needs Perl. The desktop runtime ships these binaries;
   see `desktop/scripts/acquire-bowtie2.py`.
-- **ViennaRNA:** needed only for `-e 1`, either the Python `RNA` module or
-  `RNAcofold` on the PATH.
+- **ViennaRNA:** needed only for `-e 1`. The pipeline uses the Python `RNA`
+  module, or `RNAcofold` on the PATH if the module is missing. The desktop
+  runtime bundles the ViennaRNA 2.7.2 wheel, which exists for Windows, macOS
+  and Linux. ViennaRNA's licence allows free redistribution with credit; a
+  commercial product needs the authors' permission. In-process cofolding
+  takes about 1 minute for the 10k hybrids in `testData.sam`.
 
 Steps 2 and 3 of `hyb2` (contact maps, viewpoint, folding) are already
 provided by the web and desktop analysis pages. `hyb2_compare` (R/DESeq2) has

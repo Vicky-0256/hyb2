@@ -91,6 +91,31 @@ class StageTest(unittest.TestCase):
         self.assertEqual(out[0].split("\t")[2], "-9.50")
 
 
+def _has_viennarna():
+    try:
+        import RNA  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+class ViennaEnergyTest(unittest.TestCase):
+    @unittest.skipUnless(_has_viennarna(), "ViennaRNA Python package not installed")
+    def test_energy_keeps_columns_and_adds_numeric_dg(self):
+        golden = (HERE / "golden/testData.hyb").read_text().splitlines()[:200]
+        stripped = []
+        for line in golden:  # back to the pre-annotation 16-field shape
+            cols = line.split("\t")
+            stripped.append("\t".join(cols[:16]))
+        out = energy.add_energies(stripped, inputs.iter_lines(ROOT / "data/Zika_18S_formatted.fasta"))
+        self.assertEqual(len(out), len(stripped))
+        for before, after in zip(stripped, out):
+            a, b = before.split("\t"), after.split("\t")
+            self.assertEqual(len(a), len(b))
+            self.assertEqual(a[:2] + a[3:], b[:2] + b[3:])
+            self.assertLess(float(b[2]), 0)
+
+
 class CliTest(unittest.TestCase):
     def test_rejects_unknown_input_type(self):
         from hyb2pipe.__main__ import main

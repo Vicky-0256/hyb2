@@ -19,8 +19,11 @@ alongside this file:
 The generated files are intentionally not committed. A local preview without a
 build has no folding engine and must display the clear missing-engine state;
 it must never substitute a different algorithm while claiming ViennaRNA MFE.
-For a local build, the script requires `curl`, `tar`, `sha256sum`,
-`pkg-config`, Node, and an active Emscripten SDK.
+For a local build, the script requires `curl`, `tar`, `pkg-config`, Node,
+an active Emscripten SDK, and either `sha256sum` (GNU coreutils) or the
+macOS `shasum -a 256` command. If generated assets are absent, the structure
+page reports the missing `vienna-rna.js` URL instead of substituting another
+folding algorithm.
 
 ## Attribution and redistribution
 

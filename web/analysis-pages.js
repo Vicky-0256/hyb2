@@ -210,17 +210,15 @@
         { value: "exclude", label: "Exclude homodimer proxy" }
       ], "contact-control"),
       "</div>",
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset navigator</button><span class="control-hint">' + escape(budgetHint) + 'Use the three linked maps from overview to local detail. Cluster support is used only when the input carries legacy count metadata.</span></div>',
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset map</button><button class="quiet-button" type="button" data-feature-action="reset-contact-zoom">Reset zoom</button><span class="control-hint">' + escape(budgetHint) + 'Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click or Reset zoom returns to the full extent.</span></div>',
       "</section>",
       matrix && matrix.cells.length ? [
-        '<section class="contact-navigator" aria-label="Three-stage contact map navigator">',
-        renderContactStage("overview", "1. Overview", "Select a global interaction window.", contact.overviewSelection, contact, matrix),
-        renderContactStage("zoom", "2. Local map", "Select a local interaction bin.", contact.zoomSelection, contact, matrix),
-        renderContactStage("detail", "3. Detail", "Inspect and export one bin pair.", contact.selection, contact, matrix),
+        '<section class="contact-navigator" aria-label="Interactive contact map">',
+        renderContactStage("overview", "Contact map", "Drag to select a region. Click a cell to zoom and inspect it.", contact.overviewSelection, contact, matrix),
         "</section>",
         '<section class="heatmap-layout">',
         '<div class="heatmap-card data-card">',
-        '<div class="heatmap-topline"><span class="card-kicker">Viridis · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Exports use the detail extent when one is selected.</span></div>',
+        '<div class="heatmap-topline"><span class="card-kicker">Viridis · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
         '<div class="heatmap-axis"><span>' + escape(contact.rnaX) + " · X axis</span><span>" + escape(contact.rnaY) + " · Y axis</span></div>",
         '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="contact-export-tsv">Export contact TSV</button><button class="quiet-button" type="button" data-feature-action="contact-export-params">Export parameters</button></div>',
         contact.showDataTable ? renderContactDataTable(matrix) : "",
@@ -237,14 +235,14 @@
     const rangeText = selection
       ? escape(contact.rnaX) + ":" + range(selection.x, selection.x + matrix.binSize - 1) + " × " + escape(contact.rnaY) + ":" + range(selection.y, selection.y + matrix.binSize - 1)
       : "Waiting for selection";
-    const stageLabel = stage === "overview" ? "Full extent" : stage === "zoom" ? "Focused extent" : "Bin-level extent";
+    const stageLabel = contact.overviewView ? "Zoomed extent" : "Full extent";
 
     return [
       '<article class="contact-stage data-card contact-stage-' + stage + '">',
-      '<div class="contact-stage-heading"><div><span class="drawer-kicker">' + title + '</span><h2>' + stageLabel + '</h2></div><span class="card-kicker">' + rangeText + "</span></div>",
+      '<div class="contact-stage-heading"><div><span class="drawer-kicker">' + title + '</span><h2>' + stageLabel + '</h2></div><div class="contact-stage-heading-actions"><span class="card-kicker">' + rangeText + "</span><button class=\"quiet-button\" type=\"button\" data-feature-action=\"reset-contact-zoom\">Reset zoom</button></div></div>",
       '<p class="contact-stage-note">' + instruction + "</p>",
       unlocked
-        ? '<div class="canvas-wrap contact-stage-canvas-wrap"><canvas id="contact-' + stage + '-canvas" class="contact-canvas contact-stage-canvas" width="720" height="420" tabindex="0" data-contact-stage="' + stage + '" aria-label="' + title + ' contact map. ' + instruction + '"></canvas></div><span class="heatmap-tooltip" data-contact-tooltip="' + stage + '">Hover a cell for coordinates and counts.</span>'
+        ? '<div class="canvas-wrap contact-stage-canvas-wrap"><canvas id="contact-' + stage + '-canvas" class="contact-canvas contact-stage-canvas" width="1040" height="640" tabindex="0" data-contact-stage="' + stage + '" aria-label="' + title + ' contact map. ' + instruction + '"></canvas></div><span class="heatmap-tooltip" data-contact-tooltip="' + stage + '">Hover a cell for coordinates and counts.</span>'
         : '<div class="contact-stage-placeholder"><span>Selection needed</span><p>' + (stage === "zoom" ? "Choose a cell in the overview map to open this local map." : "Choose a cell in the local map to open this detailed map.") + "</p></div>",
       "</article>"
     ].join("");
@@ -625,9 +623,16 @@
       { value: "viennarna", label: "ViennaRNA · nested MFE" },
       { value: "cplfold", label: "CPLfold · energy-guided folding" }
     ];
+    const workflowOptions = [
+      { value: "custom", label: "Custom engine and reference layout" },
+      { value: "short-intramolecular", label: "Short-ranged intramolecular (<500 nt)" },
+      { value: "long-intramolecular", label: "Long-ranged intramolecular" },
+      { value: "intermolecular", label: "Intermolecular" },
+      { value: "homodimer", label: "Homodimer (overlap ≥ 5)" }
+    ];
     const constraintModeOptions = [
       { value: "none", label: "Plain MFE" },
-      { value: "hyb-guided", label: "HYB-guided RNAcofold evidence" },
+      { value: "hyb-guided", label: "COMRADES(ViennaRNA)" },
       { value: "manual-hard-base-pairs", label: "Manual hard base pairs (expert)" }
     ];
     const manualConstraintMode = !cplfold && structure.constraintMode === "manual-hard-base-pairs";
@@ -657,10 +662,12 @@
       : (manualConstraintMode ? "Predict constrained MFE" : "Predict MFE structure");
 
     return [
-      '<div class="page-heading"><div><h1>RNA Structure</h1><p>Run ViennaRNA MFE workflows or pure-Python CPLfold prediction from a sequence and optional HYB-derived evidence, entirely in this browser. Choose the structure topology below when using CPLfold.</p></div></div>',
+      '<div class="page-heading"><div><h1>RNA Structure</h1><p>Run ViennaRNA MFE workflows or pure-Python CPLfold prediction from a sequence and optional HYB-derived evidence, entirely in this browser. Choose a folding workflow and structure topology below.</p></div></div>',
       '<section class="structure-layout">',
       '<section class="structure-setup data-card">',
       '<div class="card-title-row"><h2>Prediction setup</h2><span class="method-badge">' + methodBadge + "</span></div>",
+      renderSelectControl("Folding workflow", "workflow", structure.workflow || "custom", workflowOptions, "structure-control"),
+      '<p class="card-note legacy-workflow-note">Presets select ViennaRNA with HYB-guided evidence. Short-range uses one region; long-range uses two regions of the same RNA. Intermolecular uses two different RNAs; homodimer uses two copies of one RNA and overlap score ≥ 5. Paired layouts include the original 100 nt spacer. Choose Custom for CPLfold or manual settings.</p>',
       renderSelectControl("Prediction engine", "engine", structure.engine || "viennarna", engineOptions, "structure-control"),
       renderSelectControl("Sequence source", "source", structure.source, sourceOptions, "structure-control"),
       structure.source === "reference" ? [
@@ -678,7 +685,7 @@
       cplfold
         ? '<div class="fold-status fold-status-cplfold"><strong>Pure-Python CPLfold mode</strong><p>' + (cplfoldAllowsPseudoknot ? "LinearFold generates phase-1 candidates; a second constrained phase searches for crossing base pairs, and CPLfold/HotKnots energy models rank nested and pseudoknotted structures." : "LinearFold generates phase-1 secondary-structure candidates and skips the constrained Phase 2 pseudoknot search.") + ' The computation runs in a dedicated Pyodide worker.</p></div>'
         : guidedConstraintMode
-        ? '<div class="fold-status fold-status-evidence"><strong>HYB-guided COMRADES mode</strong><p>Each eligible HYB row is folded with RNAcofold. Base-pair frequencies are merged into ranked stems, fitted greedily as hard constraints, then optionally re-fitted in seeded random orders.</p></div>'
+        ? '<div class="fold-status fold-status-evidence"><strong>COMRADES(ViennaRNA)</strong><p>Each eligible HYB row is folded with RNAcofold. Base-pair frequencies are merged into ranked stems, fitted greedily as hard constraints, then optionally re-fitted in seeded random orders.</p></div>'
         : manualConstraintMode
         ? '<div class="fold-status fold-status-constraints"><strong>Manual hard-pair mode</strong><p>ViennaRNA will enforce the pairs you enter before calculating the MFE. HYB2 Web Lite does not infer these pairs from HYB or RNAcofold evidence.</p></div>'
         : '<div class="fold-status fold-status-mfe"><strong>Plain minimum-free-energy mode</strong><p>Runs the deployed ViennaRNA WebAssembly engine in a dedicated worker without base-pair constraints.</p></div>',
@@ -696,7 +703,7 @@
         ? '<div class="method-limit"><strong>Browser execution boundary</strong><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span></div>'
         : guidedConstraintMode
         ? '<div class="method-limit"><strong>Compatibility boundary</strong><span>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. UNAFold remains an optional external CLI compatibility path, and pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</span></div>'
-        : '<div class="method-limit"><strong>Scope</strong><span>Choose HYB-guided RNAcofold evidence to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</span></div>',
+        : '<div class="method-limit"><strong>Scope</strong><span>Choose COMRADES(ViennaRNA) to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</span></div>',
       "</section>",
       "</section>"
     ].join("");
@@ -812,6 +819,10 @@
   }
 
   function renderCplfoldCapacity(structure) {
+    if (cplfoldNativeAvailable()) {
+      const accelerated = !!(window.Hyb2Desktop.capabilities && window.Hyb2Desktop.capabilities.numbaJit === true);
+      return '<div class="cplfold-capacity" aria-live="polite"><div class="cplfold-capacity-row"><div><span class="drawer-kicker">Desktop runtime</span><strong>Bundled NumPy/CPLfold' + (accelerated ? ' + Numba JIT' : '') + '</strong><small>Using the installed desktop runtime. Browser capacity measurement is not required.</small></div></div><small class="cplfold-capacity-footnote">Sequence limits are enforced by the desktop task runner and available memory.' + (accelerated ? ' The first run may spend time compiling and caching Numba kernels.' : ' Numba acceleration is unavailable; NumPy mode remains active.') + '</small></div>';
+    }
     const capacity = cplfoldCapacity(structure);
     const profileMatches = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
     let headline = "Baseline " + format(capacity.baselineLength) + " nt";
@@ -1109,6 +1120,9 @@
           return { sequence: "", label: "", error: "The HYB-guided evidence module is unavailable." };
         }
         try {
+          if (structure.workflow === "intermolecular" && structure.rna === structure.secondRna) {
+            throw new Error("Intermolecular folding requires two different RNAs. Choose a different Region 2 RNA.");
+          }
           const regions = [{ rna: structure.rna, start: structure.start, end: structure.end }];
           if (!cplfoldGuided && structure.evidenceLayout === "paired") {
             regions.push({ rna: structure.secondRna, start: structure.secondStart, end: structure.secondEnd });
@@ -1276,6 +1290,19 @@
   }
 
   function cplfoldCapacity(structure) {
+    if (cplfoldNativeAvailable()) {
+      return {
+        status: "native",
+        mode: "desktop-native",
+        baselineLength: 0,
+        hardCeiling: Number.MAX_SAFE_INTEGER,
+        recommendedLength: Number.MAX_SAFE_INTEGER,
+        probeLength: 0,
+        foldElapsedMs: null,
+        profileKey: "desktop-native",
+        message: "Using the desktop bundled NumPy/CPLfold runtime. Browser capacity measurement is not required."
+      };
+    }
     const raw = structure && structure.cplfoldCapacity && typeof structure.cplfoldCapacity === "object"
       ? structure.cplfoldCapacity
       : {};
@@ -1296,6 +1323,10 @@
   function positiveInteger(value, fallback) {
     const parsed = Number(value);
     return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  function cplfoldNativeAvailable() {
+    return !!(window.Hyb2Desktop && window.Hyb2Desktop.enabled && window.Hyb2Desktop.capabilities && window.Hyb2Desktop.capabilities.cplfoldNative === true);
   }
 
   function resultAllowsPseudoknot(result) {
@@ -1321,6 +1352,9 @@
   }
 
   function cplfoldCannotRun(length, structure) {
+    if (cplfoldNativeAvailable()) {
+      return false;
+    }
     const capacity = cplfoldCapacity(structure);
     if (length > capacity.hardCeiling || length <= capacity.baselineLength) {
       return length > capacity.hardCeiling;
@@ -1343,6 +1377,9 @@
 
   function structureLengthNotice(length, allowLarge, engine, structure) {
     if (engine === "cplfold") {
+      if (cplfoldNativeAvailable()) {
+        return "Using the desktop bundled NumPy/CPLfold runtime; no browser capacity test is required.";
+      }
       const capacity = cplfoldCapacity(structure);
       if (length > capacity.hardCeiling) {
         return "Browser CPLfold has a hard safety ceiling of " + format(capacity.hardCeiling) + " nt in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";

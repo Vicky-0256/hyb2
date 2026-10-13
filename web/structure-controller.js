@@ -204,10 +204,74 @@
     structure.progress = 2;
     structure.message = cplfold
       ? "Starting pure-Python CPLfold in a local Pyodide worker…"
-      : (hybGuided ? "Starting the local RNAcofold evidence pipeline…" : "Starting ViennaRNA WebAssembly…");
+      : (hybGuided ? "Starting COMRADES(ViennaRNA)…" : "Starting ViennaRNA WebAssembly…");
     structure.result = null;
     structure.runningSequenceInfo = sequenceInfo;
     api.render();
+
+    // Desktop uses the bundled Python/NumPy/Numba runtime for CPLfold. Keep
+    // ViennaRNA and browser CPLfold on the worker path, and fall back to it
+    // when a packaged runtime reports itself unavailable.
+    if (cplfold && window.Hyb2Desktop && window.Hyb2Desktop.enabled &&
+        window.Hyb2Desktop.capabilities && window.Hyb2Desktop.capabilities.cplfoldNative === true &&
+        typeof window.Hyb2Desktop.predictCplfold === "function") {
+      const nativeRequest = {
+        sequence: sequenceInfo.sequence,
+        evidence_mode: cplfoldGuided ? "hyb-blocks" : "none",
+        evidence_arms: cplfoldGuided ? sequenceInfo.assembly.evidenceArms : [],
+        parameters: Object.assign({}, cplfoldParameters)
+      };
+      window.Hyb2Desktop.predictCplfold(nativeRequest).then(function (nativeResult) {
+        if (!state.structure || state.structure.runId !== runId) return;
+        if (!nativeResult || nativeResult.status === "unavailable") {
+          // Re-enter the browser path by clearing the native-only marker. The
+          // worker request below is intentionally kept as the compatibility
+          // fallback for development builds without a portable runtime.
+          structure.message = "Native CPLfold is unavailable; using the browser worker…";
+          structure.status = "idle";
+          structure.operation = null;
+          structure.runningSequenceInfo = null;
+          api.render();
+          window.Hyb2Desktop.capabilities.cplfoldNative = false;
+          predict(state, api);
+          return;
+        }
+        if (nativeResult.ok === false) throw new Error(nativeResult.error || "Native CPLfold failed.");
+        structure.runningSequenceInfo = null;
+        structure.operation = null;
+        structure.status = "complete";
+        structure.progress = 100;
+        structure.message = "CPLfold completed with the desktop bundled NumPy/Numba runtime.";
+        structure.result = Object.assign({}, nativeResult, {
+          sequence: sequenceInfo.sequence,
+          label: sequenceInfo.label,
+          source: structure.source,
+          sourceRna: structure.source === "reference" ? sequenceInfo.sourceRna : "",
+          sourceStart: structure.source === "reference" ? sequenceInfo.sourceStart : null,
+          sourceEnd: structure.source === "reference" ? sequenceInfo.sourceEnd : null,
+          sourceSegments: sequenceInfo.sourceSegments || null,
+          assembly: sequenceInfo.assembly ? {
+            segments: sequenceInfo.assembly.segments,
+            linker: sequenceInfo.assembly.linker,
+            inputRecordCount: sequenceInfo.assembly.inputRecordCount,
+            eligibleRecordCount: sequenceInfo.assembly.eligibleRecordCount,
+            skipped: sequenceInfo.assembly.skipped,
+            homodimerOnly: sequenceInfo.assembly.homodimerOnly
+          } : null
+        });
+        api.render();
+        api.showToast(structure.message);
+      }).catch(function (error) {
+        if (!state.structure || state.structure.runId !== runId) return;
+        structure.runningSequenceInfo = null;
+        structure.operation = null;
+        structure.status = "error";
+        structure.progress = 0;
+        structure.message = error && error.message ? error.message : "Native CPLfold could not finish.";
+        api.render();
+      });
+      return true;
+    }
 
     try {
       const worker = cplfold
@@ -238,7 +302,7 @@
           structure.message = message.result && message.result.engine === "CPLfold"
             ? "CPLfold completed locally with " + ((message.result.candidates || []).length) + " ranked candidate" + ((message.result.candidates || []).length === 1 ? "." : "s.")
             : message.result && message.result.constraintMode === "hyb-guided"
-            ? "HYB-guided structure ensemble completed locally from " + (message.result.evidence ? message.result.evidence.inputRecords : 0) + " eligible HYB record" + ((message.result.evidence && message.result.evidence.inputRecords === 1) ? "." : "s.")
+            ? "COMRADES(ViennaRNA) completed locally from " + (message.result.evidence ? message.result.evidence.inputRecords : 0) + " eligible HYB record" + ((message.result.evidence && message.result.evidence.inputRecords === 1) ? "." : "s.")
             : (constraintCount
               ? "ViennaRNA MFE structure predicted locally with " + constraintCount + " manual hard base-pair constraint" + (constraintCount === 1 ? "." : "s.")
               : "ViennaRNA MFE structure predicted locally.");
@@ -339,6 +403,12 @@
     const structure = state.structure;
     if (!structure || structure.engine !== "cplfold") {
       api.showToast("Select CPLfold before measuring browser capacity.");
+      return false;
+    }
+    if (window.Hyb2Desktop && window.Hyb2Desktop.enabled && window.Hyb2Desktop.capabilities && window.Hyb2Desktop.capabilities.cplfoldNative === true) {
+      structure.message = "The desktop bundled NumPy/CPLfold runtime does not require a browser capacity test.";
+      api.render();
+      api.showToast(structure.message);
       return false;
     }
 

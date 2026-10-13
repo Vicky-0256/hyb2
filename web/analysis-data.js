@@ -277,6 +277,7 @@
   function defaultStructureState() {
     return {
       engine: "cplfold",
+      workflow: "custom",
       source: "reference",
       rna: "",
       start: "",

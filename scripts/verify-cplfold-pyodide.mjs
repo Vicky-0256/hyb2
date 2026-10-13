@@ -25,6 +25,12 @@ const runtimeDirectory = path.join(repository, "web", "vendor", "pyodide-cplfold
 });
 
 const manifest = JSON.parse(fs.readFileSync(path.join(runtimeDirectory, "build-manifest.json"), "utf8"));
+assert.ok(manifest.assets && Object.keys(manifest.assets).length >= 11, "build must record all shipped asset hashes");
+for (const [filename, digest] of Object.entries(manifest.assets)) {
+  assert.match(filename, /^[A-Za-z0-9_.-]+$/, "asset paths must be single file names");
+  assert.match(digest, /^[a-f0-9]{64}$/);
+  assert.equal(createHash("sha256").update(fs.readFileSync(path.join(runtimeDirectory, filename))).digest("hex"), digest, filename + " hash mismatch");
+}
 assert.equal(manifest.pyodide, "0.29.4");
 assert.equal(manifest.python, "3.13.2");
 assert.equal(manifest.numpy, "2.2.5");

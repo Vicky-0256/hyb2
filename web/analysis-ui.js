@@ -166,7 +166,8 @@
         }
         const drag = state.contact.stageDrag;
         if (drag && drag.stage === stage && event.buttons === 1) {
-          panContactStageView(state, stage, point);
+          drag.end = point;
+          state.contact.stageDragMoved = Math.hypot(event.clientX - drag.clientX, event.clientY - drag.clientY) > 5;
           scheduleContactStageDraw(state, canvas, stage);
           return;
         }
@@ -182,11 +183,13 @@
 
       canvas.addEventListener("pointerdown", function (event) {
         const point = contactStagePointFromEvent(state, canvas, stage, event);
-        if (!point) {
+        if (!point || event.button !== 0) {
           return;
         }
+        event.preventDefault();
         state.contact.stageDrag = {
           stage: stage,
+          clientX: event.clientX, clientY: event.clientY, end: point,
           x: point.x,
           y: point.y,
           view: getContactStageView(state, stage)
@@ -198,15 +201,30 @@
       canvas.addEventListener("pointerup", function (event) {
         const point = contactStagePointFromEvent(state, canvas, stage, event);
         const moved = state.contact.stageDragMoved;
+        const drag = state.contact.stageDrag;
         state.contact.stageDrag = null;
         if (canvas.hasPointerCapture(event.pointerId)) {
           canvas.releasePointerCapture(event.pointerId);
         }
-        if (!point || moved) {
+        if (!drag || !point) {
+          drawContactStageCanvas(state, canvas, stage);
           return;
         }
-        selectContactStagePoint(state, stage, point);
+        if (moved) {
+          const selectedRegion = { x: Math.min(drag.x, point.x), y: Math.min(drag.y, point.y) };
+          setContactStageView(state, stage, { xStart: selectedRegion.x, xEnd: Math.max(drag.x, point.x), yStart: selectedRegion.y, yEnd: Math.max(drag.y, point.y) });
+          state.contact.overviewSelection = selectedRegion;
+          state.contact.selection = selectedRegion;
+        } else {
+          selectContactStagePoint(state, stage, point);
+          zoomContactStageView(state, stage, point, 0.5);
+        }
         renderAndFocus(api, "#contact-" + stage + "-canvas");
+      });
+
+      canvas.addEventListener("pointercancel", function () {
+        state.contact.stageDrag = null;
+        drawContactStageCanvas(state, canvas, stage);
       });
 
       canvas.addEventListener("wheel", function (event) {
@@ -333,6 +351,19 @@
       );
     }
 
+    const drag = state.contact.stageDrag;
+    if (drag && drag.stage === stage && drag.end && state.contact.stageDragMoved) {
+      const x = geometry.left + (Math.min(drag.x, drag.end.x) - geometry.xStart) / matrix.binSize * geometry.cellWidth;
+      const y = geometry.top + (Math.min(drag.y, drag.end.y) - geometry.yStart) / matrix.binSize * geometry.cellHeight;
+      const width = (Math.abs(drag.x - drag.end.x) / matrix.binSize + 1) * geometry.cellWidth;
+      const height = (Math.abs(drag.y - drag.end.y) / matrix.binSize + 1) * geometry.cellHeight;
+      context.fillStyle = "rgba(0,160,157,0.18)";
+      context.fillRect(x, y, width, height);
+      context.strokeStyle = ink;
+      context.lineWidth = 2;
+      context.strokeRect(x, y, width, height);
+    }
+
     context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
     context.fillStyle = muted;
     context.textAlign = "left";
@@ -423,7 +454,7 @@
   }
 
   function getContactStageSelection(state, stage) {
-    if (stage === "overview") return state.contact.overviewSelection;
+    if (stage === "overview") return state.contact.selection;
     if (stage === "zoom") return state.contact.zoomSelection;
     return state.contact.selection;
   }
@@ -432,10 +463,7 @@
     const contact = state.contact;
     if (stage === "overview") {
       contact.overviewSelection = point;
-      contact.zoomSelection = null;
-      contact.selection = null;
-      contact.zoomView = null;
-      contact.detailView = null;
+      contact.selection = point;
       return;
     }
     if (stage === "zoom") {
@@ -637,7 +665,7 @@
   }
 
   function getContactExportStage(state) {
-    return state.contact && state.contact.zoomSelection ? "detail" : "overview";
+    return "overview";
   }
 
   function getContactGeometry(state, width, height) {
@@ -1125,8 +1153,36 @@
     return true;
   }
 
+  function applyLegacyWorkflow(state, key, value) {
+    const structure = state.structure;
+    if (key !== "workflow") {
+      if (["engine", "source", "constraintMode", "evidenceLayout", "homodimerOnly", "secondRna"].indexOf(key) !== -1) {
+        structure.workflow = "custom";
+      }
+      if (key === "rna" && ["long-intramolecular", "homodimer"].indexOf(structure.workflow) !== -1) {
+        structure.secondRna = structure.rna;
+      }
+      return;
+    }
+    if (value === "custom") return;
+    structure.engine = "viennarna";
+    structure.source = "reference";
+    structure.constraintMode = "hyb-guided";
+    structure.evidenceLayout = value === "short-intramolecular" ? "single" : "paired";
+    structure.homodimerOnly = value === "homodimer";
+    if (value === "long-intramolecular" || value === "homodimer") {
+      structure.secondRna = structure.rna;
+    } else if (value === "intermolecular" && structure.secondRna === structure.rna) {
+      structure.secondRna = (state.summary.rnaNames || []).find(function (rna) { return rna !== structure.rna; }) || "";
+    }
+    if (value === "homodimer") {
+      structure.secondStart = structure.start;
+      structure.secondEnd = structure.end;
+    }
+  }
+
   function structureControlChangesSequence(key) {
-    return ["engine", "source", "rna", "start", "end", "pastedSequence", "selectedRecordIndex", "evidenceLayout", "secondRna", "secondStart", "secondEnd", "homodimerOnly", "cplfoldEvidence"].indexOf(key) !== -1;
+    return ["workflow", "engine", "source", "rna", "start", "end", "pastedSequence", "selectedRecordIndex", "evidenceLayout", "secondRna", "secondStart", "secondEnd", "homodimerOnly", "cplfoldEvidence"].indexOf(key) !== -1;
   }
 
   function resetStructureForControl(state, key) {
@@ -1236,6 +1292,7 @@
       resetStructureForControl(state, key);
       const value = structureControlValue(element, key);
       state.structure[key] = value;
+      applyLegacyWorkflow(state, key, value);
       if (key === "constraintMode" && value === "hyb-guided") {
         state.structure.source = "reference";
       }
@@ -1344,6 +1401,7 @@
       resetStructureForControl(state, key);
       const value = structureControlValue(element, key);
       state.structure[key] = value;
+      applyLegacyWorkflow(state, key, value);
       if (key === "constraintMode" && value === "hyb-guided") {
         state.structure.source = "reference";
       }
@@ -1497,6 +1555,13 @@
       return true;
     }
 
+    if (action === "reset-contact-zoom") {
+      state.contact.overviewView = null;
+      state.contact.stageDrag = null;
+      api.render();
+      return true;
+    }
+
     if (action === "reset-contact") {
       state.contact.selection = null;
       state.contact.overviewSelection = null;
@@ -1557,7 +1622,7 @@
       if (!ensureVisualExport(state, "contact", api)) {
         return true;
       }
-      downloadCanvasPng("contact-map.png", api, "contact-detail-canvas", "Contact PNG downloaded locally.", "contact-overview-canvas");
+      downloadCanvasPng("contact-map.png", api, "contact-overview-canvas", "Contact PNG downloaded locally.");
       return true;
     }
 

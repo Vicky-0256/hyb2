@@ -10,6 +10,7 @@
 const assert = require("node:assert/strict");
 const { Worker } = require("node:worker_threads");
 const path = require("node:path");
+const fs = require("node:fs");
 
 const workerSource = path.resolve(__dirname, "..", "web", "structure.worker.js");
 const shimSource = `
@@ -35,6 +36,24 @@ const shimSource = `
 `;
 
 async function main() {
+  const generatedAsset = path.resolve(__dirname, "..", "web", "vendor", "viennarna", "vienna-rna.js");
+  if (!fs.existsSync(generatedAsset)) {
+    const worker = new Worker(shimSource, { eval: true });
+    try {
+      const missing = await waitForTerminal(worker, [], {
+        type: "fold",
+        sequence: "GCGCUUCGCC",
+        temperature: 37,
+        minimumLoop: 3
+      });
+      assert.equal(missing.type, "error");
+      assert.match(missing.message, /ViennaRNA WebAssembly assets are missing/);
+      process.stdout.write("structure-worker-assets-missing: diagnostic ok\n");
+      return;
+    } finally {
+      await worker.terminate();
+    }
+  }
   const worker = new Worker(shimSource, { eval: true });
   const messages = [];
 

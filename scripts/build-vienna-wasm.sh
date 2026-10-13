@@ -2,7 +2,7 @@
 
 # Build a narrow RNAlib WebAssembly module for the static HYB2 Web site.
 #
-# Requirements: curl, tar, sha256sum, pkg-config and an active Emscripten SDK
+# Requirements: curl, tar, shasum/sha256sum, pkg-config and an active Emscripten SDK
 # (emcc, emconfigure, emmake). The deployment workflow supplies the pinned SDK.
 
 set -euo pipefail
@@ -15,12 +15,21 @@ readonly VIENNA_SHA256="1ab5f4a4f76fc85a2243546088e45f5d85f2d7a56cc656e969b005cc
 readonly OUTPUT_DIRECTORY="${HYB2_REPOSITORY_ROOT}/web/vendor/viennarna"
 readonly WRAPPER_SOURCE="${OUTPUT_DIRECTORY}/hyb2_vienna_fold.c"
 
-for hyb2_command in curl tar sha256sum pkg-config emcc emconfigure emmake node; do
+for hyb2_command in curl tar pkg-config emcc emconfigure emmake node; do
   command -v "${hyb2_command}" >/dev/null || {
     printf 'Missing required command: %s\n' "${hyb2_command}" >&2
     exit 1
   }
 done
+
+if command -v sha256sum >/dev/null 2>&1; then
+  hyb2_sha256() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+  hyb2_sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+  printf 'Missing SHA-256 tool: install coreutils (sha256sum) or use the macOS shasum command.\n' >&2
+  exit 1
+fi
 
 if [[ ! -f "${WRAPPER_SOURCE}" ]]; then
   printf 'Missing ViennaRNA wrapper source: %s\n' "${WRAPPER_SOURCE}" >&2
@@ -49,7 +58,11 @@ hyb2_source_directory="${hyb2_build_directory}/ViennaRNA-${VIENNA_VERSION}"
 printf 'Downloading ViennaRNA %s source…\n' "${VIENNA_VERSION}"
 curl --fail --location --retry 3 --silent --show-error \
   --output "${hyb2_tarball_path}" "${VIENNA_SOURCE_URL}"
-printf '%s  %s\n' "${VIENNA_SHA256}" "${hyb2_tarball_path}" | sha256sum --check --status
+hyb2_actual_sha256="$(hyb2_sha256 "${hyb2_tarball_path}")"
+if [[ "${hyb2_actual_sha256}" != "${VIENNA_SHA256}" ]]; then
+  printf 'ViennaRNA source SHA-256 mismatch: expected %s, got %s\n' "${VIENNA_SHA256}" "${hyb2_actual_sha256}" >&2
+  exit 1
+fi
 
 tar -xzf "${hyb2_tarball_path}" -C "${hyb2_build_directory}"
 test -d "${hyb2_source_directory}"

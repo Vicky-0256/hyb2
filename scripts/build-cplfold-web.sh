@@ -18,6 +18,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if command -v sha256sum >/dev/null 2>&1; then
+  hyb2_sha256() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+  hyb2_sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+  printf 'Missing SHA-256 tool: install coreutils or use macOS shasum.\n' >&2
+  exit 1
+fi
+
 mkdir -p "$download_directory" "$staging_directory/Utils/energy_params" "$output_directory"
 
 download_and_verify() {
@@ -32,10 +41,15 @@ download_and_verify() {
   else
     curl -L --fail --silent --show-error "$url" -o "$destination"
   fi
-  printf '%s  %s\n' "$expected" "$destination" | sha256sum --check --status || {
-    printf 'Checksum failed for %s\n' "$name" >&2
+  # macOS ships a BSD ``sha256sum`` compatibility command without GNU's
+  # ``--check --status`` flags. Compute the digest explicitly so the same
+  # reproducible build works on macOS and Linux.
+  local actual
+  actual="$(shasum -a 256 "$destination" | awk '{print $1}')"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'Checksum failed for %s (expected %s, got %s)\n' "$name" "$expected" "$actual" >&2
     exit 1
-  }
+  fi
   cp "$destination" "$output_directory/$name"
 }
 
@@ -62,10 +76,26 @@ archive_staging="$build_directory/cplfold-python.zip"
   zip -q -r "$archive_staging" cplfold
 )
 
-archive_hash="$(sha256sum "$archive_staging" | awk '{print $1}')"
+archive_hash="$(hyb2_sha256 "$archive_staging")"
 archive_file="cplfold-python-${archive_hash}.zip"
 cp "$archive_staging" "$output_directory/$archive_file"
 printf '{\n  "pyodide": "%s",\n  "python": "3.13.2",\n  "numpy": "2.2.5",\n  "cplfoldRevision": "24bab52",\n  "bridgeVersion": "5",\n  "buildCommit": "%s",\n  "cplfoldArchiveFile": "%s",\n  "cplfoldArchiveSha256": "%s"\n}\n' \
   "$pyodide_version" "$build_commit" "$archive_file" "$archive_hash" > "$output_directory/build-manifest.json"
+
+# Record hashes for every shipped static asset, not only the Python archive.
+python3 - "$output_directory" <<'PY_ASSET_MANIFEST'
+import hashlib, json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+manifest_path = root / "build-manifest.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+names = ["pyodide.mjs", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip",
+         "pyodide-lock.json", "numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl",
+         "Pyodide-LICENSE.txt", "CPLfold-THIRD_PARTY_NOTICES.md",
+         "CPLfold-GPL-2.0-or-later.txt", "CPLfold-LinearFold-LICENSE.txt",
+         manifest["cplfoldArchiveFile"]]
+manifest["assets"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names}
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY_ASSET_MANIFEST
 
 printf 'Built browser CPLfold runtime in %s\n' "$output_directory"

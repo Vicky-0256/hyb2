@@ -110,8 +110,10 @@ const contactExportState = {
   contact: {
     rnaX: "RNA_A", rnaY: "RNA_B", binSize: 10, measure: "records", colourCap: "max", customCap: "",
     scale: "linear", orientation: "normalised", chimeraType: "all", homodimer: "all",
+    // The contact map is a single canvas. Its visible extent is the canonical
+    // overviewView regardless of how the user reached it (drag, click, or wheel).
     zoomSelection: { x: 30, y: 130 },
-    detailView: { xStart: 20, xEnd: 40, yStart: 120, yEnd: 150 },
+    overviewView: { xStart: 20, xEnd: 40, yStart: 120, yEnd: 150 },
     selection: { x: 30, y: 130 },
     matrix: {
       xMin: 0, xMax: 90, yMin: 100, yMax: 190, binSize: 10, cap: 1, max: 1,
@@ -121,7 +123,7 @@ const contactExportState = {
 };
 const contactExportParameters = context.window.Hyb2UI.contactParameters(contactExportState);
 assert.deepEqual(JSON.parse(JSON.stringify(contactExportParameters.parameters.exportedView)), {
-  stage: "detail", xStart: 20, xEnd: 49, yStart: 120, yEnd: 159
+  stage: "overview", xStart: 20, xEnd: 49, yStart: 120, yEnd: 159
 });
 assert.deepEqual(JSON.parse(JSON.stringify(contactExportParameters.parameters.selectedCell)), {
   xStart: 30, xEnd: 39, yStart: 130, yEnd: 139
@@ -130,12 +132,12 @@ assert.equal(contactExportParameters.sourceHyb.fileSize, 88);
 const contactSvg = context.window.Hyb2UI.buildContactSvg(contactExportState);
 assert.match(contactSvg, />120<\/text>/, "Contact SVG must label the top Y coordinate");
 assert.match(contactSvg, />159<\/text>/, "Contact SVG must label the bottom Y coordinate");
-contactExportState.contact.zoomSelection = null;
+contactExportState.contact.overviewView = null;
 contactExportState.contact.overviewView = { xStart: 10, xEnd: 60, yStart: 110, yEnd: 170 };
 const overviewExport = context.window.Hyb2UI.contactParameters(contactExportState);
 assert.deepEqual(JSON.parse(JSON.stringify(overviewExport.parameters.exportedView)), {
   stage: "overview", xStart: 10, xEnd: 69, yStart: 110, yEnd: 179
-}, "when detail is locked, parameters must describe the overview canvas used by PNG export");
+}, "the single map export must describe the visible overview canvas");
 
 const reproducibilityState = {
   summary: { fileName: "primary.hyb", fileSize: 321, sha256: "primary-sha" },

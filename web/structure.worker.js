@@ -76,7 +76,7 @@ async function initialiseEngine() {
   try {
     importScripts(ENGINE_GLUE_URL);
   } catch (error) {
-    throw new Error("ViennaRNA WebAssembly assets are unavailable. Build the static site with scripts/build-vienna-wasm.sh or deploy through the Pages workflow.");
+    throw new Error("ViennaRNA WebAssembly assets are missing at " + ENGINE_GLUE_URL + ". Build the static site with scripts/build-vienna-wasm.sh or deploy through the Pages workflow.");
   }
 
   const factory = self.createHyb2Vienna;
@@ -95,7 +95,7 @@ async function initialiseEngine() {
       noInitialRun: true
     });
   } catch (error) {
-    throw new Error("ViennaRNA WebAssembly could not initialise in this browser.");
+    throw new Error("ViennaRNA WebAssembly assets were found but could not initialise in this browser. Check the generated .wasm file and browser console.");
   }
 
   ["_hyb2_vienna_mfe", "_hyb2_vienna_mfe_constrained", "_hyb2_vienna_cofold", "_hyb2_vienna_version", "_malloc", "_free", "lengthBytesUTF8", "stringToUTF8", "UTF8ToString"].forEach(function (key) {
@@ -190,7 +190,7 @@ async function runComradesFold(message) {
   const best = candidates[0];
   const result = best.result;
   result.elapsedMs = Date.now() - startedAt;
-  result.algorithm = "HYB-guided COMRADES constraint ensemble";
+  result.algorithm = "COMRADES(ViennaRNA)";
   result.model = "RNAcofold evidence frequencies; ranked stem constraints fitted greedily with ViennaRNA 2.7.2 global MFE; non-pseudoknotted structures";
   result.constraintMode = "hyb-guided";
   result.constraintSource = "hyb-rna-cofold-evidence";

@@ -265,7 +265,7 @@ const guidedSequence = context.window.Hyb2Pages.getStructureSequence(guidedState
 assert.equal(guidedSequence.sequence, "GGGGGGAAAACCCCCC");
 assert.equal(guidedSequence.assembly.evidenceArms.length, 1);
 const guidedSetupHtml = context.window.Hyb2Pages.renderStructure(guidedState);
-assert.match(guidedSetupHtml, /HYB-guided COMRADES mode/);
+assert.match(guidedSetupHtml, /COMRADES\(ViennaRNA\)/);
 assert.match(guidedSetupHtml, /RNAcofold \+ constrained RNAfold · Browser/);
 assert.match(guidedSetupHtml, /1 eligible HYB row/);
 assert.match(guidedSetupHtml, /Run HYB-guided ensemble/);
@@ -286,7 +286,7 @@ context.window.Hyb2Structure.cancel(guidedState);
 
 guidedState.structure.status = "complete";
 guidedState.structure.result = {
-  algorithm: "HYB-guided COMRADES constraint ensemble",
+  algorithm: "COMRADES(ViennaRNA)",
   model: "RNAcofold evidence",
   engine: "ViennaRNA",
   engineVersion: "2.7.2",

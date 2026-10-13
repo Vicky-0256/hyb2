@@ -378,6 +378,112 @@ a {
   transform: rotate(-45deg);
 }
 
+.web-capability-card,
+.legacy-workflow-guide {
+  margin-top: 1.35rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(106, 79, 242, .18);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.web-capability-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .75rem;
+}
+
+.web-capability-card h2,
+.legacy-workflow-guide h2 {
+  margin: .2rem 0 .7rem;
+  font-size: 1rem;
+}
+
+.web-capability-chip {
+  padding: .22rem .5rem;
+  border-radius: 999px;
+  color: var(--success);
+  background: var(--success-soft);
+  font-size: .7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.web-capability-list,
+.legacy-workflow-guide ol {
+  display: grid;
+  gap: .42rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.web-capability-item {
+  display: grid;
+  grid-template-columns: .55rem 1fr auto;
+  align-items: center;
+  gap: .5rem;
+  font-size: .78rem;
+}
+
+.web-capability-item strong {
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 600;
+}
+
+.web-capability-dot {
+  width: .5rem;
+  height: .5rem;
+  border-radius: 50%;
+  background: #c5cad3;
+}
+
+.web-capability-dot.is-ready {
+  background: #00a58f;
+  box-shadow: 0 0 0 3px rgba(0, 165, 143, .12);
+}
+
+.web-capability-note,
+.legacy-workflow-guide p {
+  margin: .75rem 0 0;
+  color: var(--muted);
+  font-size: .74rem;
+  line-height: 1.5;
+}
+
+.legacy-workflow-guide ol {
+  counter-reset: workflow;
+}
+
+.legacy-workflow-guide li {
+  display: grid;
+  grid-template-columns: 1.45rem 1fr;
+  gap: .35rem;
+  font-size: .76rem;
+}
+
+.legacy-workflow-guide li::before {
+  counter-increment: workflow;
+  content: counter(workflow);
+  display: grid;
+  place-items: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  color: #fff;
+  background: #6a4ff2;
+  font-size: .67rem;
+  font-weight: 700;
+}
+
+.legacy-workflow-guide li span {
+  display: block;
+  color: var(--muted);
+  font-size: .71rem;
+}
+
 .landing-panel {
   align-self: center;
 }

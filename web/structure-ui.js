@@ -504,6 +504,7 @@
     const colors = colorTokens();
     const guided = result.constraintMode === "hyb-guided";
     const cplfold = result.engine === "CPLfold";
+    const cplfoldAllowsPseudoknot = cplfold && resultAllowsPseudoknot(result);
     const cplfoldEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
     const maximumEvidence = Math.max(0, Number(cplfoldEvidence ? result.evidence.maximumBonus : result.maximumNucleotideSupport) || 0);
     const hardPairs = new Set((result.constraints || []).map(function (pair) {

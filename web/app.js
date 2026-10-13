@@ -163,6 +163,8 @@
       "        <li>Files remain in this browser session</li>",
       "        <li>Built for HYB-format interaction records</li>",
       "      </ul>",
+      renderWebCapabilityCard(),
+      renderLegacyWorkflowGuide(),
       "    </section>",
       '    <section class="landing-panel" aria-label="Open a HYB file">',
       renderFilePanel(),
@@ -171,6 +173,37 @@
       renderDialog(),
       '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
       "</div>"
+    ].join("");
+  }
+
+  function renderWebCapabilityCard() {
+    const hasFiles = typeof window.File !== "undefined" && typeof window.FileReader !== "undefined";
+    const hasWorker = typeof window.Worker !== "undefined";
+    const hasWasm = typeof window.WebAssembly !== "undefined";
+    const status = function (ready, label, supportedLabel) {
+      return '<li class="web-capability-item"><span class="web-capability-dot' + (ready ? ' is-ready' : '') + '" aria-hidden="true"></span><span>' + label + '</span><strong>' + (ready ? (supportedLabel || 'Supported') : 'Unavailable') + '</strong></li>';
+    };
+    return [
+      '<section class="web-capability-card" aria-labelledby="web-capability-title">',
+      '<div class="web-capability-heading"><div><span class="example-kicker">Web runtime</span><h2 id="web-capability-title">Browser capabilities</h2></div><span class="web-capability-chip">No server</span></div>',
+      '<ul class="web-capability-list">',
+      status(hasFiles, 'Local file reading'),
+      status(hasWorker, 'Background parsing workers'),
+      status(hasWasm, 'ViennaRNA WebAssembly folding', 'Load on first run'),
+      status(hasWorker && hasWasm, 'CPLfold Pyodide worker · capacity measured when needed', 'Load on first run'),
+      '</ul>',
+      '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately. This browser workspace processes your data locally.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderLegacyWorkflowGuide() {
+    return [
+      '<section class="legacy-workflow-guide" aria-labelledby="legacy-workflow-title">',
+      '<span class="example-kicker">RNA secondary structure</span><h2 id="legacy-workflow-title">Explore RNA folding and interactions</h2>',
+      '<ol><li><strong>Short-ranged intramolecular</strong><span>One contiguous reference region.</span></li><li><strong>Long-ranged intramolecular</strong><span>Two regions of the same RNA with a 100 nt spacer.</span></li><li><strong>Intermolecular</strong><span>Two regions with the original 100 nt spacer.</span></li><li><strong>Homodimer</strong><span>Two regions, filtered to overlap score ≥ 5.</span></li></ol>',
+      '<p>After loading a HYB file, open <strong>RNA Structure</strong> and select <strong>Folding workflow</strong>. The selected workflow configures the reference layout and evidence filter for COMRADES(ViennaRNA). Choose Custom for CPLfold.</p>',
+      '</section>'
     ].join("");
   }
 
@@ -1693,6 +1726,20 @@
   }
 
   function downloadBlob(fileName, blob) {
+    if (window.Hyb2Desktop && window.Hyb2Desktop.enabled && typeof window.Hyb2Desktop.saveFile === "function") {
+      Promise.resolve(window.Hyb2Desktop.saveFile(fileName, blob)).then(function (handled) {
+        if (!handled) {
+          browserDownloadBlob(fileName, blob);
+        }
+      }).catch(function () {
+        browserDownloadBlob(fileName, blob);
+      });
+      return;
+    }
+    browserDownloadBlob(fileName, blob);
+  }
+
+  function browserDownloadBlob(fileName, blob) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;

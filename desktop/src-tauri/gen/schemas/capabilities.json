@@ -1,0 +1,1 @@
+{"main":{"identifier":"main","description":"Main window. Native dialogs are opened from Rust commands, so no dialog permissions are granted to the webview.","local":true,"windows":["main"],"permissions":["core:default"]}}

@@ -10,6 +10,24 @@
   const CPLFOLD_CAPACITY_SAFETY_FACTOR = 0.65;
   const CPLFOLD_CAPACITY_TIMEOUT_MS = 60000;
 
+  // Desktop only: the bundled Python runtime reports its own ceiling through
+  // Hyb2Desktop.limits.cplfoldMaxLength. The browser path always keeps 500.
+  function nativeCplfoldActive() {
+    const desktop = window.Hyb2Desktop;
+    return !!(desktop && desktop.enabled && desktop.capabilities &&
+      desktop.capabilities.cplfoldNative === true &&
+      typeof desktop.predictCplfold === "function");
+  }
+
+  function nativeCplfoldMaxLength() {
+    const limits = window.Hyb2Desktop && window.Hyb2Desktop.limits;
+    return positiveIntegerOrDefault(limits && limits.cplfoldMaxLength, CPLFOLD_HARD_MAX_SEQUENCE_LENGTH);
+  }
+
+  function currentCplfoldMaxLength() {
+    return nativeCplfoldActive() ? nativeCplfoldMaxLength() : CPLFOLD_HARD_MAX_SEQUENCE_LENGTH;
+  }
+
   function ensureCplfoldCapacity(structure) {
     if (!structure.cplfoldCapacity || typeof structure.cplfoldCapacity !== "object") {
       structure.cplfoldCapacity = {};
@@ -86,6 +104,12 @@
   }
 
   function cplfoldLengthIssue(length, structure) {
+    if (nativeCplfoldActive()) {
+      const nativeMax = nativeCplfoldMaxLength();
+      return length > nativeMax
+        ? "Desktop CPLfold is limited to " + nativeMax + " nt by the bundled runtime. Select a shorter region."
+        : "";
+    }
     const capacity = ensureCplfoldCapacity(structure || {});
     if (length > CPLFOLD_HARD_MAX_SEQUENCE_LENGTH) {
       return "Browser CPLfold has a hard safety ceiling of " + CPLFOLD_HARD_MAX_SEQUENCE_LENGTH + " nt in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";
@@ -212,9 +236,7 @@
     // Desktop uses the bundled Python/NumPy/Numba runtime for CPLfold. Keep
     // ViennaRNA and browser CPLfold on the worker path, and fall back to it
     // when a packaged runtime reports itself unavailable.
-    if (cplfold && window.Hyb2Desktop && window.Hyb2Desktop.enabled &&
-        window.Hyb2Desktop.capabilities && window.Hyb2Desktop.capabilities.cplfoldNative === true &&
-        typeof window.Hyb2Desktop.predictCplfold === "function") {
+    if (cplfold && nativeCplfoldActive()) {
       const nativeRequest = {
         sequence: sequenceInfo.sequence,
         evidence_mode: cplfoldGuided ? "hyb-blocks" : "none",
@@ -275,8 +297,8 @@
 
     try {
       const worker = cplfold
-        ? new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" })
-        : new Worker("./structure.worker.js");
+        ? new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" })
+        : new Worker((window.HYB2_ASSET_BASE || "./") + "structure.worker.js");
       state.structureWorker = worker;
 
       worker.onmessage = function (event) {
@@ -324,6 +346,9 @@
             } : null
           });
           api.render();
+          if (typeof window.CustomEvent === "function") {
+            window.dispatchEvent(new window.CustomEvent("hyb2:analysis-result", { detail: structure.result }));
+          }
           api.showToast(structure.message);
           return;
         }
@@ -405,7 +430,7 @@
       api.showToast("Select CPLfold before measuring browser capacity.");
       return false;
     }
-    if (window.Hyb2Desktop && window.Hyb2Desktop.enabled && window.Hyb2Desktop.capabilities && window.Hyb2Desktop.capabilities.cplfoldNative === true) {
+    if (nativeCplfoldActive()) {
       structure.message = "The desktop bundled NumPy/CPLfold runtime does not require a browser capacity test.";
       api.render();
       api.showToast(structure.message);
@@ -441,7 +466,7 @@
 
     let worker;
     try {
-      worker = new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
+      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
       state.structureWorker = worker;
     } catch (error) {
       return failCapacityProbe(state, null, runId, api, error && error.message
@@ -561,7 +586,7 @@
 
     let worker;
     try {
-      worker = new Worker("./cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
+      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
       state.structureWorker = worker;
     } catch (error) {
       structure.status = "error";
@@ -879,7 +904,9 @@
     advancedSequenceLength: ADVANCED_SEQUENCE_LENGTH,
     cplfoldBaselineSequenceLength: CPLFOLD_BASELINE_SEQUENCE_LENGTH,
     cplfoldHardSequenceLength: CPLFOLD_HARD_MAX_SEQUENCE_LENGTH,
-    cplfoldMaxSequenceLength: CPLFOLD_HARD_MAX_SEQUENCE_LENGTH,
+    get cplfoldMaxSequenceLength() {
+      return currentCplfoldMaxLength();
+    },
     validateLength: validateLength,
     estimateCplfoldCapacity: estimateCplfoldCapacity,
     parseManualConstraints: parseManualConstraints,

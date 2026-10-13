@@ -22,6 +22,10 @@ CPLFOLD_SOURCE_REVISION = "24bab52"
 BRIDGE_VERSION = "5"
 DEFAULT_MAX_SEQUENCE_LENGTH = 75
 BROWSER_HARD_MAX_SEQUENCE_LENGTH = 500
+# Native hosts (HYB2 Desktop) may raise the ceiling via
+# set_host_hard_max_sequence_length(); the browser never calls it, so the
+# Pyodide build keeps the 500 nt bound.
+_hard_max_sequence_length = BROWSER_HARD_MAX_SEQUENCE_LENGTH
 BONUS_EXPORT_MAX_SEQUENCE_LENGTH = 5_000
 MAX_EVIDENCE_RECORDS = 50_000
 ENERGY_MODELS = {"DP03", "DP09", "CC06", "CC09", "RE"}
@@ -92,10 +96,12 @@ def _sequence(value: Any, maximum: int = DEFAULT_MAX_SEQUENCE_LENGTH) -> str:
         raise ValueError("CPLfold requires an RNA sequence.")
     if re.search(r"[^ACGU]", sequence):
         raise ValueError("CPLfold accepts only A, C, G and U.")
-    if len(sequence) > BROWSER_HARD_MAX_SEQUENCE_LENGTH:
-        raise ValueError(
-            f"Browser CPLfold has a hard safety ceiling of {BROWSER_HARD_MAX_SEQUENCE_LENGTH} nt in this pure-Python Pyodide build."
-        )
+    if len(sequence) > _hard_max_sequence_length:
+        if _hard_max_sequence_length == BROWSER_HARD_MAX_SEQUENCE_LENGTH:
+            raise ValueError(
+                f"Browser CPLfold has a hard safety ceiling of {BROWSER_HARD_MAX_SEQUENCE_LENGTH} nt in this pure-Python Pyodide build."
+            )
+        raise ValueError(f"CPLfold has a hard safety ceiling of {_hard_max_sequence_length} nt in this runtime.")
     if len(sequence) > maximum:
         raise ValueError(
             f"Browser CPLfold is limited to {maximum} nt for this capacity-tested request."
@@ -116,11 +122,19 @@ def _bonus_export_sequence(value: Any) -> str:
     return sequence
 
 
+def set_host_hard_max_sequence_length(value: int) -> None:
+    """Raise the hard ceiling for a native host; not used by the browser."""
+    global _hard_max_sequence_length
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("Host CPLfold hard maximum must be a positive integer.")
+    _hard_max_sequence_length = value
+
+
 def _request_maximum(value: Any) -> int:
     return _integer(
         DEFAULT_MAX_SEQUENCE_LENGTH if value is None else value,
         1,
-        BROWSER_HARD_MAX_SEQUENCE_LENGTH,
+        _hard_max_sequence_length,
         "Browser CPLfold maximum sequence length",
     )
 

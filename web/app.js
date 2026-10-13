@@ -6,12 +6,12 @@
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
   const exampleAssets = {
     hyb: {
-      url: "./assets/examples/ZIKV_1-10807_example.hyb",
+      url: (window.HYB2_ASSET_BASE || "./") + "assets/examples/ZIKV_1-10807_example.hyb",
       fileName: "ZIKV_1-10807_example.hyb",
       type: "text/plain"
     },
     fasta: {
-      url: "./assets/examples/ZIKV_1-10807.fasta",
+      url: (window.HYB2_ASSET_BASE || "./") + "assets/examples/ZIKV_1-10807.fasta",
       fileName: "ZIKV_1-10807.fasta",
       type: "text/plain"
     }
@@ -49,7 +49,8 @@
     tweaksOpen: false,
     toastTimer: null,
     pointerActionPending: false,
-    pendingCommittedInputRender: false
+    pendingCommittedInputRender: false,
+    pendingSessionSnapshot: null
   };
 
   const analysisPages = [
@@ -78,6 +79,74 @@
 
   syncRoute();
   render();
+
+  // Desktop uses the same analysis engine in the same document. This small
+  // bridge lets the project controller hand imported project inputs directly
+  // to the parser without reopening a file picker.
+  window.Hyb2Web = {
+    loadProjectFiles: function (files) {
+      const input = files || {};
+      const makeFile = function (entry, fallback) {
+        if (!entry) return null;
+        if (typeof File === "function" && entry instanceof File) return entry;
+        if (typeof Blob === "function" && entry.file instanceof Blob) {
+          return entry.file instanceof File ? entry.file : new File([entry.file], entry.name || fallback, { type: "text/plain" });
+        }
+        if (typeof entry.content !== "string") return null;
+        return new File([entry.content], entry.name || fallback, { type: "text/plain" });
+      };
+      const hyb = makeFile(input.hyb, "project.hyb");
+      const fasta = makeFile(input.fasta, "reference.fasta");
+      if (hyb) {
+        startParsing(hyb, { referenceFile: fasta });
+      } else if (fasta) {
+        state.landingFastaFile = fasta;
+        render();
+      }
+      return !!(hyb || fasta);
+    },
+    getSessionSnapshot: function () {
+      return {
+        route: state.activePage,
+        theme: state.theme,
+        density: state.density,
+        filters: state.filters ? {
+          rna: state.filters.rna || "",
+          partner: state.filters.partner || "",
+          minScore: state.filters.minScore || ""
+        } : {}
+      };
+    },
+    restoreSession: function (snapshot) {
+      if (!snapshot || typeof snapshot !== "object") return;
+      if (!state.summary) {
+        state.pendingSessionSnapshot = snapshot;
+        return;
+      }
+      if (snapshot.theme === "dark" || snapshot.theme === "light") state.theme = snapshot.theme;
+      if (snapshot.density === "compact" || snapshot.density === "comfortable") state.density = snapshot.density;
+      if (state.filters && snapshot.filters && typeof snapshot.filters === "object") Object.assign(state.filters, snapshot.filters);
+      if (snapshot.route && snapshot.route !== "landing") window.location.hash = "#/workspace/" + String(snapshot.route).replace(/^workspace\//, "");
+      render();
+    },
+    refresh: function () {
+      render();
+    },
+    showSavedStructure: function (result) {
+      if (!state.summary || !result || typeof result !== "object" || !result.sequence || !result.dotBracket) return false;
+      if (!state.structure) state.structure = window.Hyb2Data.defaultStructureState();
+      state.structure.status = "complete";
+      state.structure.progress = 100;
+      state.structure.operation = null;
+      state.structure.result = result;
+      state.structure.message = "Restored saved structure result.";
+      state.analysisEntered = true;
+      state.activePage = "structure";
+      setRouteHash("#/workspace/structure");
+      render();
+      return true;
+    }
+  };
 
   function syncRoute() {
     const hash = window.location.hash.replace(/^#\/?/, "");
@@ -139,6 +208,9 @@
     }
     if (workspaceOpen && state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
       window.Hyb2Report.afterRender(state, featureApi());
+    }
+    if (typeof window.CustomEvent === "function") {
+      window.dispatchEvent(new window.CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
     }
   }
 
@@ -1032,7 +1104,7 @@
     render();
 
     try {
-      const worker = new Worker("./parser.worker.js");
+      const worker = new Worker((window.HYB2_ASSET_BASE || "./") + "parser.worker.js");
       state.worker = worker;
 
       function parseSessionIsCurrent() {
@@ -1119,6 +1191,14 @@
             setRouteHash("#/");
             if (parseSession.referenceFile) {
               loadFasta(parseSession.referenceFile);
+            }
+            if (state.pendingSessionSnapshot) {
+              const pending = state.pendingSessionSnapshot;
+              state.pendingSessionSnapshot = null;
+              if (pending.theme === "dark" || pending.theme === "light") state.theme = pending.theme;
+              if (pending.density === "compact" || pending.density === "comfortable") state.density = pending.density;
+              setRouteHash(pending.route && pending.route !== "landing" ? "#/workspace/" + String(pending.route).replace(/^workspace\//, "") : "#/workspace/overview");
+              state.analysisEntered = true;
             }
             digestFile(file).then(function (hash) {
               if (state.summary === summary) {
@@ -1510,7 +1590,7 @@
       }
 
       try {
-        worker = new Worker("./parser.worker.js");
+        worker = new Worker((window.HYB2_ASSET_BASE || "./") + "parser.worker.js");
       } catch (error) {
         settle(reject, error);
         return;

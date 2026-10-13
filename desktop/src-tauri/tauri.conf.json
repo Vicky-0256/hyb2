@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HYB2 Desktop",
+  "version": "../package.json",
+  "identifier": "org.cplfold.hyb2.desktop",
+  "build": {
+    "devUrl": "http://localhost:4173",
+    "beforeDevCommand": "npm run dev:frontend",
+    "frontendDist": "../dist",
+    "beforeBuildCommand": "npm run stage"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "HYB2 Desktop",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 1024,
+        "minHeight": 720,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "shortDescription": "Local RNA interaction analysis with HYB2",
+    "longDescription": "HYB2 Desktop is an independent offline application for local RNA interaction analysis.",
+    "resources": {
+      "../resources/native/": "native/"
+    }
+  }
+}

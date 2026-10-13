@@ -1,0 +1,378 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyb2.org/schemas/hyb2-project-1.0.json",
+  "title": "HYB2 Desktop project manifest",
+  "description": "Portable manifest for a HYB2 analysis project. All paths are relative to the project root.",
+  "type": "object",
+  "required": [
+    "format",
+    "schema_version",
+    "project_id",
+    "name",
+    "created_at",
+    "updated_at",
+    "inputs",
+    "runs",
+    "artifacts",
+    "application",
+    "runtime"
+  ],
+  "properties": {
+    "format": {
+      "const": "hyb2-project"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Manifest format version, independent of the application version."
+    },
+    "project_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 10000
+    },
+    "created_at": {
+      "$ref": "#/$defs/dateTime"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/dateTime"
+    },
+    "application": {
+      "$ref": "#/$defs/application"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/input"
+      }
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/run"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtimeSnapshot"
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ui_state": {
+      "type": "object",
+      "description": "Optional serializable UI state. It must not contain local absolute paths. Desktop shell state lives under `desktop` and the web analysis session snapshot under `analysis`; legacy flat objects are still accepted.",
+      "properties": {
+        "desktop": {
+          "type": "object",
+          "properties": { "route": { "type": "string" } },
+          "additionalProperties": true
+        },
+        "analysis": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "dateTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:$))[^\\u0000]+$",
+      "description": "A slash separated path relative to the project root. Absolute and parent traversal paths are rejected."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "application": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "const": "HYB2 Desktop"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "input": {
+      "type": "object",
+      "required": ["id", "role", "path", "format", "sha256", "size_bytes"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["hyb", "fasta", "fastq", "sam", "reference", "constraints", "other"]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["hyb", "fasta", "fastq", "fastq.gz", "sam", "ct", "dbn", "json", "tsv", "csv", "other"]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "imported_at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "run": {
+      "type": "object",
+      "required": ["id", "kind", "status", "input_ids", "parameters", "output_paths"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["mapping", "sam_to_hyb", "hyb_filter", "contact_map", "viewpoint", "compare", "structure", "cplfold", "varna", "report", "validate_project", "custom"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["queued", "running", "succeeded", "failed", "cancelled", "interrupted", "paused"]
+        },
+        "input_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "output_paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "uniqueItems": true
+        },
+        "started_at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "finished_at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "engine": {
+          "type": "string"
+        },
+        "runtime_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "log_paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "uniqueItems": true
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": ["code", "message"],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["path", "kind", "sha256", "size_bytes"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["input", "output", "log", "report", "export", "other"]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "produced_by_run": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtimeSnapshot": {
+      "type": "object",
+      "required": ["detected_at", "platform", "capabilities"],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0",
+          "description": "Shared HYB2 capability protocol version."
+        },
+        "detected_at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "detector_version": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "object",
+          "required": ["os", "architecture"],
+          "properties": {
+            "os": {
+              "enum": ["windows", "macos", "linux", "unknown"]
+            },
+            "architecture": {
+              "type": "string"
+            },
+            "release": {
+              "type": "string"
+            },
+            "machine": {
+              "type": "string"
+            },
+            "python": {
+              "type": "string"
+            },
+            "wsl": {
+              "type": "boolean"
+            },
+            "wsl_distributions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "probes": {
+          "type": "array",
+          "description": "Optional raw probe details retained for diagnostics.",
+          "items": {
+            "type": "object",
+            "required": ["id", "status", "kind"],
+            "properties": {
+              "id": {"type": "string"},
+              "status": {"enum": ["available", "degraded", "unavailable", "unknown"]},
+              "kind": {"type": "string"},
+              "executable": {"type": ["string", "null"]},
+              "version": {"type": ["string", "null"]},
+              "summary": {"type": "string"},
+              "error": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "capability": {
+      "type": "object",
+      "required": ["id", "status", "execution", "summary"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["available", "degraded", "unavailable", "unknown"]
+        },
+        "execution": {
+          "enum": ["browser", "native", "wsl", "hybrid"]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "version": {
+          "type": ["string", "null"]
+        },
+        "executable": {
+          "type": ["string", "null"]
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "remediation": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,6 +1,16 @@
 # Local CPLfold environments and generated Python/Numba caches.
 .venv-cplfold/
+.build-tools/
 __pycache__/
 *.py[cod]
 *.nbc
 *.nbi
+
+# Platform-specific native runtimes are release inputs, not source files.
+# They are staged by the release workflow from verified archives. Keeping them
+# out of Git avoids accidentally committing hundreds of megabytes of binaries.
+desktop/resources/native/
+desktop/resources/native-*/
+desktop/resources/native-stage-*/
+desktop/resources/*.tar.gz
+desktop/resources/*.zip

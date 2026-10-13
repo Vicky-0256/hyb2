@@ -32,6 +32,11 @@ struct ReadInputRequest {
     relative: String,
 }
 #[derive(Debug, Deserialize)]
+struct SaveAnalysisRunRequest {
+    path: String,
+    result: Value,
+}
+#[derive(Debug, Deserialize)]
 struct UpdateUiStateRequest {
     path: String,
     ui_state: Value,
@@ -229,6 +234,14 @@ async fn project_read_input(
 }
 
 #[tauri::command]
+async fn project_save_analysis_run(
+    app: tauri::AppHandle,
+    request: SaveAnalysisRunRequest,
+) -> Result<Value, String> {
+    dispatch(app, json!({"operation":"save_analysis_run", "path":request.path, "result":request.result})).await
+}
+
+#[tauri::command]
 async fn project_update_ui_state(
     app: tauri::AppHandle,
     request: UpdateUiStateRequest,
@@ -284,6 +297,7 @@ fn main() {
             project_open,
             project_import_input,
             project_read_input,
+            project_save_analysis_run,
             project_update_ui_state,
             task_run,
             cplfold_run,

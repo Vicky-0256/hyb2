@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .detector import detect_runtime
-from .project import new_project, validate_project_directory, import_input, read_input, update_ui_state
+from .project import new_project, validate_project_directory, import_input, read_input, save_analysis_run, update_ui_state
 import importlib.util
 
 _RUNNER_PATH = Path(__file__).resolve().parents[1] / "task-runner" / "runner.py"
@@ -146,6 +146,11 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         errors = validate_project_directory(path)
         if errors: raise ValueError("invalid project: " + "; ".join(errors))
         return {"ok": True, "path": str(path), "input": read_input(path, str(request.get("relative", "")))}
+    if operation == "save_analysis_run":
+        path = project_path(request)
+        errors = validate_project_directory(path)
+        if errors: raise ValueError("invalid project: " + "; ".join(errors))
+        return {"ok": True, "path": str(path), "run": save_analysis_run(path, request.get("result", {}))}
     if operation == "update_ui_state":
         path = project_path(request)
         errors = validate_project_directory(path)

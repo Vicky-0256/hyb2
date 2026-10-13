@@ -177,6 +177,28 @@ def read_input(root: Path, relative: str, *, limit: int = 50_000_000) -> Dict[st
     return {"path": relative, "name": path.name, "content": path.read_text(encoding="utf-8", errors="replace")}
 
 
+def save_analysis_run(root: Path, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist a compact structure result and register it in project.json."""
+    if not isinstance(result, dict): raise ValueError("analysis result must be an object")
+    root = Path(root).expanduser().resolve()
+    manifest_path = root / "project.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    errors = validate_manifest(manifest)
+    if errors: raise ValueError("invalid project: " + "; ".join(errors))
+    run_id = "run-" + uuid.uuid4().hex[:12]
+    run_dir = root / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    output = run_dir / "structure-result.json"
+    output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    relative = output.relative_to(root).as_posix()
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    manifest["runs"].append({"id": run_id, "kind": str(result.get("algorithm", "structure")), "status": "succeeded", "input_ids": [], "parameters": {"engine": result.get("engine"), "constraintMode": result.get("constraintMode")}, "output_paths": [relative], "log_paths": []})
+    manifest["artifacts"].append({"path": relative, "kind": "structure-result", "sha256": sha256_file(output), "size_bytes": output.stat().st_size})
+    manifest["updated_at"] = now
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return {"run_id": run_id, "path": relative}
+
+
 def update_ui_state(root: Path, state: Dict[str, Any]) -> Dict[str, Any]:
     """Persist bounded, JSON-serializable UI state without absolute paths."""
     if not isinstance(state, dict):

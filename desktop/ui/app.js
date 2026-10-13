@@ -60,6 +60,21 @@
       if (pendingUiState) invoke("project_update_ui_state", {request: {path: currentProjectPath, ui_state: pendingUiState}}).catch(function () {});
     }, 350);
   });
+  window.addEventListener("hyb2:analysis-result", function (event) {
+    if (!currentProjectPath || !invoke || !event.detail) return;
+    var result = event.detail;
+    var saved = {
+      algorithm: result.algorithm, engine: result.engine, model: result.model,
+      constraintMode: result.constraintMode, sequence: result.sequence,
+      dotBracket: result.dotBracket, energy: result.energy,
+      comradesScore: result.comradesScore, constraintCount: result.constraintCount,
+      randomisation: result.randomisation, native: result.native === true,
+      elapsedMs: result.elapsedMs
+    };
+    invoke("project_save_analysis_run", {request: {path: currentProjectPath, result: saved}}).then(function (response) {
+      if (response && response.run) show("analysis-status", "Analysis result saved as " + response.run.run_id + ".");
+    }).catch(function (error) { show("analysis-status", "Analysis completed but could not be saved: " + errorText(error)); });
+  });
   document.querySelectorAll(".nav").forEach(function (button) {
     button.addEventListener("click", function () { activate(button.dataset.view); });
   });

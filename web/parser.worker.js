@@ -309,6 +309,18 @@ function parseAnnotations(columns) {
   // HYB2's documented current layout has 17 fields: column 16 is the
   // overlap score and column 17 is the chimera type. Older clustered files
   // instead have 15 fields plus a 16th count/count_total annotation.
+  // sam2hyb itself writes 18 fields: txt2hyb.awk leaves an empty column 16,
+  // so the overlap score and chimera type sit in columns 17 and 18.
+  if (columns.length >= 18 && column16 === "") {
+    return {
+      supportCount: 1,
+      supportSource: "row",
+      overlapScore: parseOptionalNumber(tail[1] || ""),
+      chimeraType: normaliseChimeraType(tail[2] || ""),
+      inputLayout: "hyb2_sam2hyb_18_column",
+      ambiguousColumn16: false
+    };
+  }
   if (columns.length >= 17) {
     return {
       supportCount: 1,
@@ -439,7 +451,7 @@ function addRecord(summary, record) {
     summary.overlapScoreRecords += 1;
   }
 
-  if (record.inputLayout === "hyb2_17_column") {
+  if (record.inputLayout === "hyb2_17_column" || record.inputLayout === "hyb2_sam2hyb_18_column") {
     summary.canonicalRecords += 1;
   }
   if (record.inputLayout === "legacy_clustered") {

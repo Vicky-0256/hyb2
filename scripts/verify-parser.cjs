@@ -71,6 +71,19 @@ assert.equal(canonical.record.overlapScore, 7);
 assert.equal(canonical.record.chimeraType, "Type_9");
 assert.equal(canonical.record.rawReadCount, 12);
 assert.equal(canonical.record.isHomodimer, true);
+// Real sam2hyb output: an empty column 16, then overlap and chimera type (18 fields).
+const sam2hybColumns = line({ overlap: "-3", type: "Type_2" }).split("\t");
+sam2hybColumns.splice(15, 0, "");
+const sam2hyb = parse(sam2hybColumns.join("\t"));
+assert.equal(sam2hyb.ok, true);
+assert.equal(sam2hyb.record.inputLayout, "hyb2_sam2hyb_18_column");
+assert.equal(sam2hyb.record.overlapScore, -3);
+assert.equal(sam2hyb.record.chimeraType, "Type_2");
+assert.equal(sam2hyb.record.supportCount, 1);
+const sam2hybInter = line({ rnaTwo: "RNA_B", overlap: ".", type: "Intermolecular" }).split("\t");
+sam2hybInter.splice(15, 0, "");
+assert.equal(parse(sam2hybInter.join("\t")).record.chimeraType, "Intermolecular");
+assert.equal(parse(sam2hybInter.join("\t")).record.overlapScore, null);
 const canonicalCountLikeOverlap = parse(line({ overlap: "count_total=7", type: "Type_1" }));
 assert.equal(canonicalCountLikeOverlap.ok, true);
 assert.equal(canonicalCountLikeOverlap.record.supportCount, 1,

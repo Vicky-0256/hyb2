@@ -209,7 +209,8 @@
     if (workspaceOpen && state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
       window.Hyb2Report.afterRender(state, featureApi());
     }
-    if (typeof window.CustomEvent === "function") {
+    // The first render() runs before window.Hyb2Web is defined below.
+    if (window.Hyb2Web && typeof window.CustomEvent === "function") {
       window.dispatchEvent(new window.CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
     }
   }

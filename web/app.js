@@ -282,8 +282,8 @@
 
   function renderBrand() {
     const logoAsset = state.theme === "dark"
-      ? "./assets/hyb2-logo-dark.png"
-      : "./assets/hyb2-logo.png";
+      ? (window.HYB2_ASSET_BASE || "./") + "assets/hyb2-logo-dark.png"
+      : (window.HYB2_ASSET_BASE || "./") + "assets/hyb2-logo.png";
     return [
       '<a class="brand" href="#/" aria-label="HYB2 Web Lite home">',
       '  <span class="brand-mark"><img src="' + logoAsset + '" alt="HYB2"></span>',
@@ -337,8 +337,8 @@
       "    </div>",
       '    <div class="example-actions">',
       '      <button class="button" type="button" data-action="load-example">Try example</button>',
-      '      <a class="quiet-button example-link" href="./assets/examples/ZIKV_1-10807_example.hyb" download>Download HYB</a>',
-      '      <a class="quiet-button example-link" href="./assets/examples/ZIKV_1-10807.fasta" download>Download FASTA</a>',
+      '      <a class="quiet-button example-link" href="' + exampleAssets.hyb.url + '" download>Download HYB</a>',
+      '      <a class="quiet-button example-link" href="' + exampleAssets.fasta.url + '" download>Download FASTA</a>',
       "    </div>",
       "  </section>",
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Choose a HYB file">',

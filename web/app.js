@@ -49,7 +49,8 @@
     tweaksOpen: false,
     toastTimer: null,
     pointerActionPending: false,
-    pendingCommittedInputRender: false
+    pendingCommittedInputRender: false,
+    pendingSessionSnapshot: null
   };
 
   const analysisPages = [
@@ -98,6 +99,30 @@
         render();
       }
       return !!(hyb || fasta);
+    },
+    getSessionSnapshot: function () {
+      return {
+        route: state.activePage,
+        theme: state.theme,
+        density: state.density,
+        filters: state.filters ? {
+          rna: state.filters.rna || "",
+          partner: state.filters.partner || "",
+          minScore: state.filters.minScore || ""
+        } : {}
+      };
+    },
+    restoreSession: function (snapshot) {
+      if (!snapshot || typeof snapshot !== "object") return;
+      if (!state.summary) {
+        state.pendingSessionSnapshot = snapshot;
+        return;
+      }
+      if (snapshot.theme === "dark" || snapshot.theme === "light") state.theme = snapshot.theme;
+      if (snapshot.density === "compact" || snapshot.density === "comfortable") state.density = snapshot.density;
+      if (state.filters && snapshot.filters && typeof snapshot.filters === "object") Object.assign(state.filters, snapshot.filters);
+      if (snapshot.route && snapshot.route !== "landing") window.location.hash = "#/workspace/" + String(snapshot.route).replace(/^workspace\//, "");
+      render();
     }
   };
 
@@ -162,6 +187,7 @@
     if (workspaceOpen && state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
       window.Hyb2Report.afterRender(state, featureApi());
     }
+    window.dispatchEvent(new CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
   }
 
   function renderLanding() {
@@ -1139,6 +1165,14 @@
             state.analysisEntered = false;
             state.activePage = "landing";
             setRouteHash("#/");
+            if (state.pendingSessionSnapshot) {
+              const pending = state.pendingSessionSnapshot;
+              state.pendingSessionSnapshot = null;
+              if (pending.theme === "dark" || pending.theme === "light") state.theme = pending.theme;
+              if (pending.density === "compact" || pending.density === "comfortable") state.density = pending.density;
+              setRouteHash(pending.route && pending.route !== "landing" ? "#/workspace/" + String(pending.route).replace(/^workspace\//, "") : "#/workspace/overview");
+              state.analysisEntered = true;
+            }
             if (parseSession.referenceFile) {
               loadFasta(parseSession.referenceFile);
             }

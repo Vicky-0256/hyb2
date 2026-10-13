@@ -8,6 +8,8 @@
   var assets = window.HYB2_ASSET_STATUS;
   var currentProjectPath = null;
   var projectInputs = { hyb: null, fasta: null };
+  var pendingUiState = null;
+  var uiStateSaveTimer = null;
   if (assets) {
     var missing = [];
     if (!assets.vienna.assetsPresent) missing.push("ViennaRNA / COMRADES");
@@ -39,11 +41,25 @@
       else item.removeAttribute("aria-current");
     });
     document.querySelectorAll(".view").forEach(function (item) { item.classList.toggle("active", item.id === view); });
-    if (currentProjectPath && invoke) invoke("project_update_ui_state", {request: {path: currentProjectPath, ui_state: {route: view}}}).catch(function () {});
+    if (currentProjectPath && invoke) {
+      pendingUiState = Object.assign({}, pendingUiState || {}, {route: view});
+      clearTimeout(uiStateSaveTimer);
+      uiStateSaveTimer = setTimeout(function () {
+        invoke("project_update_ui_state", {request: {path: currentProjectPath, ui_state: pendingUiState}}).catch(function () {});
+      }, 350);
+    }
     if (view === "analysis" && !loaded) {
       loadAnalysisWorkspace();
     }
   }
+  window.addEventListener("hyb2:session-change", function (event) {
+    if (!currentProjectPath || !invoke || !event.detail) return;
+    pendingUiState = event.detail;
+    clearTimeout(uiStateSaveTimer);
+    uiStateSaveTimer = setTimeout(function () {
+      if (pendingUiState) invoke("project_update_ui_state", {request: {path: currentProjectPath, ui_state: pendingUiState}}).catch(function () {});
+    }, 350);
+  });
   document.querySelectorAll(".nav").forEach(function (button) {
     button.addEventListener("click", function () { activate(button.dataset.view); });
   });
@@ -78,6 +94,7 @@
       }
       loaded = true;
       if (projectInputs.hyb || projectInputs.fasta) window.Hyb2Web.loadProjectFiles(projectInputs);
+      if (pendingUiState) window.Hyb2Web.restoreSession(pendingUiState);
       show("analysis-status", "Integrated analysis workspace ready.");
     })().catch(function (error) {
       show("analysis-status", "Analysis could not load: " + errorText(error));
@@ -107,6 +124,7 @@
   function displayProject(project) {
     var manifest = project.manifest;
     currentProjectPath = project.path;
+    pendingUiState = manifest.ui_state || null;
     show("active-project", manifest.name + " · " + project.path);
     show("project-summary", {
       name: manifest.name, path: project.path, description: manifest.description || "",

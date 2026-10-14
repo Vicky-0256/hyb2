@@ -10,8 +10,43 @@ PYTHONPATH=pipeline python3 -m hyb2pipe -i aligned.sam -d reference.fasta -o out
 ```
 
 The `-i -d -o -v -m -h -e` flags match `hyb2`. The command writes
-`<out>.hyb`, `<out>_homodimers.hyb`, `<out>_hybrids.hyb_stats.txt` and
-`<out>.sam`. In the desktop app the same code runs as the `pipeline` task kind.
+`<out>.hyb`, `<out>_homodimers.hyb` and `<out>_hybrids.hyb_stats.txt`, plus
+`<out>.sam` or `<out>.sam.gz` with `--keep-sam plain|gz` (default: no SAM).
+In the desktop app the same code runs as the `pipeline` task kind.
+
+## Memory, temp files and resuming
+
+Every stage reads one file and writes another, so memory does not grow with
+the input: FASTQ reads are counted in a table that spills to hash buckets,
+Bowtie2's output is piped straight into hybrid calling one read at a time,
+and the collapse steps are external sorts (sorted chunks merged with
+`heapq.merge`, same keys and tie-breaks as `sort -kN`).
+
+- `--memory-mb N` (default 1024, or a quarter of `$HYB2_TASK_MEM_MB`) sizes
+  the in-memory chunks; peak RSS is about 0.5 GB for the Python process
+  plus Bowtie2.
+- `--tmp-dir DIR` holds work and sort files (default `<out>.work/`). They
+  need about the size of the collapsed reads and are deleted at the end.
+- `<out>.checkpoint.json` records finished stages. Rerunning the same
+  command (same input, reference and options) continues after the last
+  finished stage; `--no-resume` starts over.
+- `-p` (Bowtie2 threads and worker processes) defaults to
+  `$HYB2_TASK_CPUS`, else all CPUs.
+- With `--json-progress`, long stages also print
+  `{"type": "progress", "stage", "bytes_done", "bytes_total"}` events.
+
+The gene ranking used to break ties between a read's hybrids needs the whole
+BLAST table; it is only built when the reference has more than one sequence
+(with a single sequence the ranking cannot change the result).
+
+`bench/bench.py` measures wall time, peak RSS and temp disk of one run;
+`tests/test_zafr_regression.py` checks a 2M-read ZAFR_REP1 subset against
+a golden made before the streaming rewrite (needs `zika_files/`).
+
+| reads (ZAFR_REP1) | before: time / peak RSS | now: time / peak RSS (Python, Python + Bowtie2) / temp disk |
+|---|---|---|
+| 2 M | 71 s / 1.7 GB | 41 s / 0.40, 0.85 GB / 0.5 GB |
+| 8 M | 258 s / 7.1 GB | 160 s / 0.50, 1.7 GB / 2.0 GB |
 
 ## Compatibility
 

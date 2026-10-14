@@ -563,6 +563,45 @@ async fn task_list(request: tasks::TaskListRequest) -> Result<Value, String> {
     blocking(move || tasks::list(Path::new(&request.project_path))).await
 }
 
+// ---- Analysis queries (contract R3/R6).
+
+const ANALYSIS_OPERATIONS: [&str; 4] = [
+    "analysis_summary",
+    "analysis_contact_bins",
+    "analysis_hybrids",
+    "analysis_top",
+];
+
+/// Accepts `{project_path, operation, ...}` for one of the four read-only
+/// analysis operations; everything else is forwarded unchanged for Python
+/// to validate.
+fn analysis_request(request: Value) -> Result<Value, String> {
+    let Value::Object(object) = request else {
+        return Err("analysis query must be a JSON object".into());
+    };
+    let operation = object.get("operation").and_then(Value::as_str).unwrap_or("");
+    if !ANALYSIS_OPERATIONS.contains(&operation) {
+        return Err(format!(
+            "unsupported analysis operation; expected one of {}",
+            ANALYSIS_OPERATIONS.join(", ")
+        ));
+    }
+    if !object
+        .get("project_path")
+        .and_then(Value::as_str)
+        .is_some_and(|p| !p.trim().is_empty())
+    {
+        return Err("analysis query needs a project_path".into());
+    }
+    Ok(Value::Object(object))
+}
+
+#[tauri::command]
+async fn analysis_query(app: tauri::AppHandle, request: Value) -> Result<Value, String> {
+    let request = analysis_request(request)?;
+    dispatch(app, Lane::Compute, request).await
+}
+
 // ---- Preferences (resource budget, contract R6).
 
 fn preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -624,6 +663,7 @@ fn main() {
             task_cancel,
             task_list,
             task_resume,
+            analysis_query,
             preferences_get,
             preferences_set
         ])
@@ -678,6 +718,24 @@ mod tests {
             bridge_result(json!({"ok": false, "error": "bad"})).unwrap_err(),
             "bad"
         );
+    }
+
+    #[test]
+    fn analysis_queries_are_allowlisted() {
+        for operation in ANALYSIS_OPERATIONS {
+            let request = json!({"project_path": "/p", "operation": operation, "sample_ids": ["a"], "bin_size": 10});
+            assert_eq!(analysis_request(request.clone()).unwrap(), request);
+        }
+        for bad in [
+            json!({"project_path": "/p", "operation": "import_input"}),
+            json!({"project_path": "/p", "operation": "sample_pipeline_run"}),
+            json!({"project_path": "/p"}),
+            json!({"operation": "analysis_summary"}),
+            json!({"project_path": " ", "operation": "analysis_summary"}),
+            json!(["analysis_summary"]),
+        ] {
+            assert!(analysis_request(bad).is_err());
+        }
     }
 
     #[test]

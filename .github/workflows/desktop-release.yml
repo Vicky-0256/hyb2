@@ -92,7 +92,7 @@ jobs:
       - name: Check the packaged runtime
         working-directory: desktop/app
         run: |
-          python=$(find build -path "*native/${{ matrix.python }}" -type f | head -1)
+          python=$(find build -path "*native/${{ matrix.python }}" -type f -print -quit)
           test -n "$python" || { echo "bundled python not found"; exit 1; }
           echo "bundled interpreter: $python"
           "$python" -c "import numpy, numba, RNA; print('runtime ok', numpy.__version__, numba.__version__)"

@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .project import _atomic_write_json, _now, load_manifest
+from .project import _atomic_write_json, _now, load_manifest, safe_relative_path
 from .samples import check_record, disk_estimate, resolve_record_path, read_stem, set_sample_stage
 
 # Stages reported by hyb2pipe after mapping has finished.
@@ -114,6 +114,116 @@ def _install_term_handler():
         return None
 
 
+def _index_stage(project: Path, sample: Dict[str, Any], task_id: str, sample_dir: Path, stem: str, hyb_path: Path,
+                 progress: "ProgressFile") -> Dict[str, Optional[str]]:
+    """contact.txt (when the sample has a gene_id) + analysis index; records outputs and stages.index."""
+    coverage = importlib.import_module("hyb2analysis.coverage")
+    index = importlib.import_module("hyb2analysis.index")
+    sample_id = sample["id"]
+    set_sample_stage(project, sample_id, "index", "running", task_id=task_id)
+    stage_outputs: Dict[str, Optional[str]] = {}
+    gene_id = sample.get("gene_id")
+    if gene_id:
+        progress.write("contact", "writing contact map for %s" % gene_id)
+        contact = sample_dir / ("%s.%s.contact.txt" % (stem, _safe_component(gene_id)))
+        coverage.write_contact(hyb_path, gene_id, contact)
+        stage_outputs["contact"] = _relative(project, contact)
+    progress.write("index", "building analysis index")
+    index_path = sample_dir / (stem + ".index.sqlite")
+    total = hyb_path.stat().st_size
+
+    def on_bytes(done: int, size: int) -> None:
+        progress.write("index", "building analysis index", done, size)
+
+    try:
+        takes_progress = "progress" in inspect.signature(index.build).parameters
+    except (TypeError, ValueError):
+        takes_progress = False
+    index.build(hyb_path, index_path, **({"progress": on_bytes} if takes_progress else {}))
+    progress.write("index", "analysis index built", total, total)
+    stage_outputs["index"] = _relative(project, index_path)
+    set_sample_stage(project, sample_id, "index", "succeeded", task_id=task_id, outputs=stage_outputs)
+    return stage_outputs
+
+
+def _sample_dir(project: Path, sample_id: str) -> Path:
+    sample_dir = project / "samples" / sample_id
+    samples_root = project / "samples"
+    if samples_root.is_symlink() or (sample_dir.exists() and sample_dir.is_symlink()):
+        raise ValueError("project samples directory must not be a symlink")
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    if sample_dir.resolve().parent != samples_root.resolve() or project not in sample_dir.resolve().parents:
+        raise ValueError("sample output directory escapes the project")
+    return sample_dir
+
+
+def run_sample_index(project: Path, sample_id: str, task_id: str, run_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    """``analysis_index_build``: contact + index for a sample's existing .hyb.
+
+    The .hyb is ``samples[].outputs.hyb`` (project-relative), or the sample's
+    reads file when its format is ``hyb``.
+    """
+    project = Path(project).resolve()
+    manifest = load_manifest(project)
+    sample = next((s for s in manifest["samples"] if s.get("id") == sample_id), None)
+    if sample is None:
+        raise ValueError("sample does not exist: %s" % sample_id)
+    base = {"task_id": task_id, "run_dir": str(run_dir), "sample_id": sample_id}
+
+    def finish(result: Dict[str, Any]) -> Dict[str, Any]:
+        result = {**base, **result}
+        _atomic_write_json(Path(run_dir) / "result.json", result)
+        return result
+
+    progress = ProgressFile(run_dir)
+    progress.write("check", "locating the sample .hyb")
+    hyb_rel = (sample.get("outputs") or {}).get("hyb")
+    reads = sample.get("reads") or {}
+    if hyb_rel:
+        if not safe_relative_path(hyb_rel):
+            raise ValueError("sample .hyb output must be project-relative")
+        hyb_path = (project / hyb_rel).resolve()
+        if project not in hyb_path.parents:
+            raise ValueError("sample .hyb output escapes the project")
+        stem = _safe_component(sample.get("name") or read_stem(hyb_path))
+    elif reads.get("format") == "hyb":
+        hyb_path = resolve_record_path(project, reads)
+        stem = _safe_component(sample.get("name") or read_stem(hyb_path))
+    else:
+        return finish({"ok": False, "status": "failed", "error": "sample %s has no .hyb yet" % sample_id})
+    if not hyb_path.is_file():
+        return finish({"ok": False, "status": "failed", "error": "sample .hyb not found: %s" % hyb_path})
+    package = Path(repo_root).resolve() / "pipeline"
+    if str(package) not in sys.path:
+        sys.path.insert(0, str(package))
+    if importlib.util.find_spec("hyb2analysis") is None:
+        set_sample_stage(project, sample_id, "index", "failed", task_id=task_id)
+        return finish({"ok": False, "status": "unavailable", "error": "the analysis backend (hyb2analysis) is not bundled"})
+    previous_handler = _install_term_handler()
+    try:
+        outputs = _index_stage(project, sample, task_id, _sample_dir(project, sample_id), stem, hyb_path, progress)
+        progress.write("done", "sample %s indexed" % sample_id)
+        stages = next(s for s in load_manifest(project)["samples"] if s["id"] == sample_id)["stages"]
+        return finish({"ok": True, "status": "succeeded", "output": str(project / outputs["index"]),
+                       "outputs": {key: str(project / value) for key, value in outputs.items() if value}, "stages": stages})
+    except BaseException as error:
+        interrupted = isinstance(error, (KeyboardInterrupt, SystemExit))
+        try:
+            set_sample_stage(project, sample_id, "index", "interrupted" if interrupted else "failed", task_id=task_id)
+        except Exception as nested:  # noqa: BLE001 - keep the original error
+            print("cannot record stage failure: %s" % nested, file=sys.stderr)
+        if interrupted:
+            raise
+        progress.write("failed", str(error)[:500])
+        return finish({"ok": False, "status": "failed", "error": "%s: %s" % (error.__class__.__name__, error), "stage": "index"})
+    finally:
+        if previous_handler is not None:
+            try:
+                signal.signal(signal.SIGTERM, previous_handler)
+            except (ValueError, OSError):
+                pass
+
+
 def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Path, parameters: Dict[str, Any],
                         repo_root: Path) -> Dict[str, Any]:
     project = Path(project).resolve()
@@ -160,13 +270,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
                            "error": "not enough disk space on %s: need ~%d MB, %d MB free" % (
                                volume["path"], volume["required_bytes"] // 1_000_000, volume["free_bytes"] // 1_000_000)})
 
-    sample_dir = project / "samples" / sample_id
-    samples_root = project / "samples"
-    if samples_root.is_symlink() or (sample_dir.exists() and sample_dir.is_symlink()):
-        raise ValueError("project samples directory must not be a symlink")
-    sample_dir.mkdir(parents=True, exist_ok=True)
-    if sample_dir.resolve().parent != samples_root.resolve() or project not in sample_dir.resolve().parents:
-        raise ValueError("sample output directory escapes the project")
+    sample_dir = _sample_dir(project, sample_id)
     stem = _safe_component(sample.get("name") or read_stem(reads_path))
     out_prefix = sample_dir / stem
 
@@ -232,22 +336,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
             set_sample_stage(project, sample_id, "index", "skipped", task_id=task_id)
             index_status = "skipped"
         else:
-            coverage = importlib.import_module("hyb2analysis.coverage")
-            index = importlib.import_module("hyb2analysis.index")
-            set_sample_stage(project, sample_id, "index", "running", task_id=task_id)
-            stage_outputs: Dict[str, Optional[str]] = {}
-            gene_id = sample.get("gene_id")
-            if gene_id:
-                progress.write("contact", "writing contact map for %s" % gene_id)
-                contact = sample_dir / ("%s.%s.contact.txt" % (stem, _safe_component(gene_id)))
-                coverage.write_contact(hyb_path, gene_id, contact)
-                stage_outputs["contact"] = _relative(project, contact)
-            progress.write("index", "building analysis index")
-            index_path = sample_dir / (stem + ".index.sqlite")
-            index.build(hyb_path, index_path)
-            stage_outputs["index"] = _relative(project, index_path)
-            outputs.update(stage_outputs)
-            set_sample_stage(project, sample_id, "index", "succeeded", task_id=task_id, outputs=stage_outputs)
+            outputs.update(_index_stage(project, sample, task_id, sample_dir, stem, hyb_path, progress))
             index_status = "succeeded"
         progress.write("done", "sample %s finished" % sample_id)
         final = load_manifest(project)

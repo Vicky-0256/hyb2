@@ -24,7 +24,7 @@ from typing import Any
 from .detector import cplfold_max_nt, detect_runtime
 from .project import _atomic_write_json, load_manifest, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
 from . import samples as _samples
-from .sample_run import ProgressFile, run_sample_pipeline
+from .sample_run import ProgressFile, run_sample_index, run_sample_pipeline
 import importlib.util
 
 _RUNNER_PATH = Path(__file__).resolve().parents[1] / "task-runner" / "runner.py"
@@ -286,6 +286,13 @@ def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None)
         params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
         root = Path(repo_root or Path.cwd()).resolve()
         return run_sample_pipeline(path, sample_id, task_id, run_dir, params, root)
+    if operation == "analysis_index_build":
+        path = _valid_project(request)
+        sample_id = request.get("sample_id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise ValueError("sample_id is required")
+        task_id, run_dir = _task_run_dir(path, request, "index-")
+        return run_sample_index(path, sample_id, task_id, run_dir, Path(repo_root or Path.cwd()).resolve())
     return None
 
 

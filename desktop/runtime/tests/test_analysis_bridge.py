@@ -94,6 +94,36 @@ class AnalysisBridgeTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=request):
                 self.call(**request)
 
+    def test_analysis_index_build_task(self):
+        project = Path(self.tmp.name) / "build.hyb2proj"
+        new_project(project, "Index build")
+        source = Path(self.tmp.name) / "given.hyb"
+        shutil.copyfile(HYB, source)
+        reference = ROOT / "data" / "Zika_18S_formatted.fasta"
+        for mode in ("copied", "linked"):
+            added = handle({"operation": "add_sample", "path": str(project), "source": str(source), "reference": str(reference),
+                            "gene_id": "18S_rRNA", "mode": mode, "name": "given_" + mode}, repo_root=ROOT)
+            self.assertTrue(added["ok"], added)
+            sample_id = added["sample"]["id"]
+            run_dir = project / "runs" / ("index-" + mode)
+            run_dir.mkdir(parents=True)
+            result = handle({"operation": "analysis_index_build", "project_path": str(project), "sample_id": sample_id,
+                             "task_id": "index-" + mode, "run_dir": str(run_dir)}, repo_root=ROOT)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(json.loads((run_dir / "result.json").read_text())["status"], "succeeded")
+            self.assertEqual(json.loads((run_dir / "progress.json").read_text())["stage"], "done")
+            stored = next(s for s in json.loads((project / "project.json").read_text())["samples"] if s["id"] == sample_id)
+            self.assertEqual(stored["stages"]["index"]["status"], "succeeded")
+            self.assertEqual(stored["outputs"]["index"], "samples/%s/given_%s.index.sqlite" % (sample_id, mode))
+            contact = project / stored["outputs"]["contact"]
+            self.assertEqual(contact.name, "given_%s.18S_rRNA.contact.txt" % mode)
+            self.assertEqual(contact.read_bytes(), (ROOT / "pipeline/tests/golden/testData.18S_rRNA.contact.txt").read_bytes())
+            summary = handle({"operation": "analysis_summary", "project_path": str(project), "sample_ids": [sample_id]},
+                             repo_root=ROOT)
+            self.assertEqual(summary["result"]["merged"]["records"], 10411)
+        with self.assertRaises(ValueError):
+            handle({"operation": "analysis_index_build", "project_path": str(project), "sample_id": "nope"}, repo_root=ROOT)
+
     def test_missing_backend(self):
         with self.assertRaisesRegex(ValueError, "not bundled"):
             handle({"operation": "analysis_summary", "project_path": str(self.project), "sample_ids": ["S1"]},

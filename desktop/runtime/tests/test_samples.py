@@ -31,8 +31,9 @@ REFERENCE_NAMES = {"ZAFR": "ZIKV_African_KX377335-1_virusRNA", "ZBRA": "ZIKV_Bra
 
 
 def _write_gz(path: Path, text: str) -> None:
-    with gzip.open(path, "wt") as handle:
-        handle.write(text)
+    # mtime=0: rewriting the same text must give the same bytes (the gzip
+    # header otherwise embeds the current second, which made dedup flaky).
+    path.write_bytes(gzip.compress(text.encode("utf-8"), mtime=0))
 
 
 def _make_zikv_layout(directory: Path) -> Path:

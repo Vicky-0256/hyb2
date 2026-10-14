@@ -214,7 +214,7 @@
 
   function defaultRegionState(summary, records) {
     const rna = summary && summary.rnaCounts && summary.rnaCounts[0] ? summary.rnaCounts[0].name : "";
-    const extent = getRnaExtent(records || [], rna);
+    const extent = getRnaExtent(records || [], rna, summary);
     return {
       rna: rna,
       start: extent ? extent.min : "",
@@ -229,7 +229,7 @@
 
   function defaultViewpointState(summary, records) {
     const rna = summary && summary.rnaCounts && summary.rnaCounts[0] ? summary.rnaCounts[0].name : "";
-    const extent = getRnaExtent(records || [], rna);
+    const extent = getRnaExtent(records || [], rna, summary);
     return {
       rna: rna,
       partner: "",
@@ -334,7 +334,13 @@
     };
   }
 
-  function getRnaExtent(records, rna) {
+  // Extent of an RNA's arms. When no records are supplied (pages fed by a
+  // DataProvider), the summary's rnaExtents map is used instead.
+  function getRnaExtent(records, rna, summary) {
+    if ((!records || !records.length) && summary && summary.rnaExtents) {
+      const known = summary.rnaExtents[rna];
+      return known ? { min: known.min, max: known.max } : null;
+    }
     let min = Infinity;
     let max = -Infinity;
 
@@ -353,7 +359,14 @@
   }
 
   function getFilteredRecords(state) {
-    const filters = state.filters || defaultInteractionFilters();
+    return filterRecords(state.records || [], state.filters);
+  }
+
+  // Pure record filter shared by the legacy state wrapper above and the
+  // BrowserProvider (data-provider.js). `filterValues` uses the
+  // defaultInteractionFilters() shape.
+  function filterRecords(records, filterValues) {
+    const filters = filterValues || defaultInteractionFilters();
     const query = String(filters.search || "").trim().toLowerCase();
     const armOneStart = coordinateOrNull(filters.armOneStart);
     const armOneEnd = coordinateOrNull(filters.armOneEnd);
@@ -379,7 +392,7 @@
       return [];
     }
 
-    return (state.records || []).filter(function (record) {
+    return (records || []).filter(function (record) {
       if (filters.rna && record.rnaOne !== filters.rna && record.rnaTwo !== filters.rna) {
         return false;
       }
@@ -518,6 +531,15 @@
   }
 
   function buildContactMatrix(records, contact) {
+    return contactMatrixFromBins(buildContactBins(records, contact), contact);
+  }
+
+  // Accumulates records into sparse contact bins. This is the data half of the
+  // contact map and the shape DataProvider.getContactBins() returns:
+  // parallel arrays x/y (bin start coordinates), count (chosen measure),
+  // records (rows per cell) and support (cluster support per cell), in first-
+  // seen order. Display-only settings (colour cap, scale) are not used here.
+  function buildContactBins(records, contact) {
     const requestedBinSize = Number(contact.binSize);
     const binSize = Number.isSafeInteger(requestedBinSize) && requestedBinSize > 0 ? requestedBinSize : 10;
     const resourceBudget = getContactResourceBudget();
@@ -595,11 +617,77 @@
       yMax = Math.max(yMax, oriented.yEnd);
     }
 
+    const limits = {
+      cellContributions: binContributions,
+      maximumCells: maximumCells,
+      maximumBinContributions: maximumBinContributions,
+      resourceBudget: resourceBudget
+    };
+
     if (limitReason) {
       return {
         ready: false,
         reason: limitReason,
         limitExceeded: true,
+        binSize: binSize,
+        length: 0,
+        x: [],
+        y: [],
+        count: [],
+        records: [],
+        support: [],
+        recordsUsed: 0,
+        totalSupport: 0,
+        extent: { xMin: 0, xMax: 0, yMin: 0, yMax: 0 },
+        limits: limits
+      };
+    }
+
+    const keys = Object.keys(cells);
+    const bins = {
+      ready: true,
+      reason: "",
+      limitExceeded: false,
+      binSize: binSize,
+      length: 0,
+      x: new Array(keys.length),
+      y: new Array(keys.length),
+      count: new Array(keys.length),
+      records: new Array(keys.length),
+      support: new Array(keys.length),
+      recordsUsed: recordsUsed,
+      totalSupport: totalSupport,
+      extent: {
+        xMin: Number.isFinite(xMin) ? xMin : 0,
+        xMax: Number.isFinite(xMax) ? xMax : 0,
+        yMin: Number.isFinite(yMin) ? yMin : 0,
+        yMax: Number.isFinite(yMax) ? yMax : 0
+      },
+      limits: limits
+    };
+    keys.forEach(function (key, index) {
+      const cell = cells[key];
+      bins.x[index] = cell.x;
+      bins.y[index] = cell.y;
+      bins.count[index] = cell.value;
+      bins.records[index] = cell.records;
+      bins.support[index] = cell.support;
+    });
+    bins.length = Math.max(bins.extent.xMax, bins.extent.yMax);
+    return bins;
+  }
+
+  // Display half of the contact map: turns DataProvider contact bins into the
+  // matrix object the Contact Map, Compare and Report pages render.
+  function contactMatrixFromBins(bins, contact) {
+    const source = bins || {};
+    const limits = source.limits || {};
+    const binSize = Number(source.binSize) || 10;
+    if (source.ready === false) {
+      return {
+        ready: false,
+        reason: source.reason || "Contact map not generated.",
+        limitExceeded: source.limitExceeded !== false,
         cells: [],
         cellMap: Object.create(null),
         binSize: binSize,
@@ -609,39 +697,55 @@
         yMax: 0,
         recordsUsed: 0,
         totalSupport: 0,
-        cellContributions: binContributions,
-        maximumCells: maximumCells,
-        maximumBinContributions: maximumBinContributions,
-        resourceBudget: resourceBudget,
+        cellContributions: limits.cellContributions || 0,
+        maximumCells: limits.maximumCells,
+        maximumBinContributions: limits.maximumBinContributions,
+        resourceBudget: limits.resourceBudget,
         max: 0,
         cap: 0
       };
     }
 
-    const entries = Object.keys(cells).map(function (key) { return cells[key]; });
+    const xs = source.x || [];
+    const cellMap = Object.create(null);
+    const entries = new Array(xs.length);
+    for (let index = 0; index < xs.length; index += 1) {
+      const cell = {
+        x: xs[index],
+        y: source.y[index],
+        records: source.records ? source.records[index] : source.count[index],
+        support: source.support ? source.support[index] : source.count[index],
+        value: source.count[index]
+      };
+      entries[index] = cell;
+      cellMap[cell.x + ":" + cell.y] = cell;
+    }
     const values = entries.map(function (cell) { return cell.value; }).sort(function (left, right) { return left - right; });
     const displayValues = values.map(function (value) { return contact.scale === "log" ? Math.log1p(value) : value; });
     const cap = resolveColourCap(displayValues, contact);
+    const extent = source.extent || {};
 
     return {
       ready: true,
       reason: "",
       limitExceeded: false,
       cells: entries,
-      cellMap: cells,
+      cellMap: cellMap,
       binSize: binSize,
-      xMin: Number.isFinite(xMin) ? xMin : 0,
-      xMax: Number.isFinite(xMax) ? xMax : 0,
-      yMin: Number.isFinite(yMin) ? yMin : 0,
-      yMax: Number.isFinite(yMax) ? yMax : 0,
-      recordsUsed: recordsUsed,
-      totalSupport: totalSupport,
-      cellContributions: binContributions,
-      maximumCells: maximumCells,
-      maximumBinContributions: maximumBinContributions,
-      resourceBudget: resourceBudget,
+      xMin: Number.isFinite(extent.xMin) ? extent.xMin : 0,
+      xMax: Number.isFinite(extent.xMax) ? extent.xMax : 0,
+      yMin: Number.isFinite(extent.yMin) ? extent.yMin : 0,
+      yMax: Number.isFinite(extent.yMax) ? extent.yMax : 0,
+      recordsUsed: source.recordsUsed || 0,
+      totalSupport: source.totalSupport || 0,
+      cellContributions: limits.cellContributions || 0,
+      maximumCells: limits.maximumCells,
+      maximumBinContributions: limits.maximumBinContributions,
+      resourceBudget: limits.resourceBudget,
       max: displayValues.length ? displayValues[displayValues.length - 1] : 0,
-      cap: cap
+      cap: cap,
+      binSizeAdjusted: !!source.binSizeAdjusted,
+      requestedBinSize: source.requestedBinSize || binSize
     };
   }
 
@@ -698,22 +802,50 @@
 
   function getRegionResults(state) {
     const region = state.region;
-    const start = coordinateOrNull(region.start);
-    const end = coordinateOrNull(region.end);
-    const partnerStartText = String(region.partnerStart == null ? "" : region.partnerStart).trim();
-    const partnerEndText = String(region.partnerEnd == null ? "" : region.partnerEnd).trim();
-    const partnerRangeSpecified = !!partnerStartText || !!partnerEndText;
-    const partnerStart = coordinateOrNull(region.partnerStart);
-    const partnerEnd = coordinateOrNull(region.partnerEnd);
+    return regionResultsFromRecords(filterRegionRecords(state.records || [], region), region);
+  }
 
-    if (!region.rna || start === null || end === null || start > end ||
-        (partnerRangeSpecified && (!region.partner || partnerStart === null || partnerEnd === null || partnerStart > partnerEnd))) {
+  function regionQuery(region) {
+    const query = region || {};
+    const start = coordinateOrNull(query.start);
+    const end = coordinateOrNull(query.end);
+    const partnerStartText = String(query.partnerStart == null ? "" : query.partnerStart).trim();
+    const partnerEndText = String(query.partnerEnd == null ? "" : query.partnerEnd).trim();
+    const partnerRangeSpecified = !!partnerStartText || !!partnerEndText;
+    const partnerStart = coordinateOrNull(query.partnerStart);
+    const partnerEnd = coordinateOrNull(query.partnerEnd);
+
+    if (!query.rna || start === null || end === null || start > end ||
+        (partnerRangeSpecified && (!query.partner || partnerStart === null || partnerEnd === null || partnerStart > partnerEnd))) {
+      return null;
+    }
+    return { start: start, end: end, partnerRangeSpecified: partnerRangeSpecified, partnerStart: partnerStart, partnerEnd: partnerEnd };
+  }
+
+  // Records matching a Region Explorer query (used by the BrowserProvider for
+  // queryHybrids({ region })). Invalid queries match nothing.
+  function filterRegionRecords(records, region) {
+    const query = regionQuery(region);
+    if (!query) {
+      return [];
+    }
+    return (records || []).filter(function (record) {
+      return matchingRegionOrientations(record, region, query.start, query.end, query.partnerRangeSpecified, query.partnerStart, query.partnerEnd).length > 0;
+    });
+  }
+
+  // Region Explorer aggregation (partners, profile) over matched records.
+  function regionResultsFromRecords(matchedRecords, region) {
+    const query = regionQuery(region);
+    if (!query) {
       return emptyRegionResults();
     }
-
-    const matches = (state.records || []).filter(function (record) {
-      return matchingRegionOrientations(record, region, start, end, partnerRangeSpecified, partnerStart, partnerEnd).length > 0;
-    });
+    const start = query.start;
+    const end = query.end;
+    const partnerRangeSpecified = query.partnerRangeSpecified;
+    const partnerStart = query.partnerStart;
+    const partnerEnd = query.partnerEnd;
+    const matches = matchedRecords || [];
 
     const partnerMap = Object.create(null);
     matches.forEach(function (record) {
@@ -859,8 +991,49 @@
 
   function getViewpointResults(state) {
     const viewpoint = state.viewpoint || defaultViewpointState(state.summary, state.records);
-    const extent = getRnaExtent(state.records || [], viewpoint.rna);
     const reference = findFastaEntry(state.fasta, viewpoint.rna);
+    return viewpointResultsFromRecords(viewpoint, state.records || [], {
+      extent: getRnaExtent(state.records || [], viewpoint.rna, state.summary),
+      referenceLength: reference ? reference.sequence.length : null
+    });
+  }
+
+  // Resolves the inclusive Viewpoint interval. `context.extent` is the RNA's
+  // observed {min,max}; `context.referenceLength` is the mapped reference
+  // length or null. Returns null when the interval is invalid.
+  function viewpointRange(viewpoint, context) {
+    const options = context || {};
+    const extent = options.extent || null;
+    const hasReference = Number.isSafeInteger(options.referenceLength) && options.referenceLength > 0;
+    const requestedStart = coordinateOrNull(viewpoint.start);
+    const requestedEnd = coordinateOrNull(viewpoint.end);
+    const useReferenceRange = viewpoint.rangeMode === "reference" && hasReference;
+    if (viewpoint.rangeMode === "reference" && !hasReference) {
+      return null;
+    }
+    const invalidRequestedRange = !useReferenceRange && (
+      (String(viewpoint.start == null ? "" : viewpoint.start).trim() && requestedStart === null) ||
+      (String(viewpoint.end == null ? "" : viewpoint.end).trim() && requestedEnd === null)
+    );
+    if (invalidRequestedRange) {
+      return null;
+    }
+    const start = useReferenceRange ? 1 : (requestedStart === null ? (extent ? extent.min : null) : requestedStart);
+    const end = useReferenceRange ? options.referenceLength : (requestedEnd === null ? (extent ? extent.max : null) : requestedEnd);
+    if (!viewpoint.rna || start === null || end === null || start > end) {
+      return null;
+    }
+    return { start: start, end: end };
+  }
+
+  // Viewpoint coverage over the supplied records (typically the arms returned
+  // by DataProvider.getArms()). Records without a contributing arm are ignored.
+  function viewpointResultsFromRecords(viewpoint, records, context) {
+    const options = context || {};
+    const extent = options.extent || null;
+    const reference = Number.isSafeInteger(options.referenceLength) && options.referenceLength > 0
+      ? { sequence: { length: options.referenceLength } }
+      : null;
     const requestedStart = coordinateOrNull(viewpoint.start);
     const requestedEnd = coordinateOrNull(viewpoint.end);
     const useReferenceRange = viewpoint.rangeMode === "reference" && reference;
@@ -902,7 +1075,7 @@
     let coverageBoundaryUpdates = 0;
     let coverageRangeUpdates = 0;
 
-    (state.records || []).forEach(function (record) {
+    (records || []).forEach(function (record) {
       const arms = getViewpointArms(record, viewpoint.rna, viewpoint.partner, viewpoint.chimeraType, viewpoint.homodimer);
       if (!arms.length) {
         return;
@@ -1021,8 +1194,10 @@
 
   function buildComparisonResults(comparison) {
     const config = comparison || {};
+    // A dataset contributes either prefetched DataProvider contact bins
+    // (`contactBins`, built with comparisonContactQuery()) or in-memory records.
     const datasets = (config.datasets || []).filter(function (dataset) {
-      return dataset && dataset.summary && Array.isArray(dataset.records);
+      return dataset && dataset.summary && (Array.isArray(dataset.records) || !!dataset.contactBins);
     });
     const groupA = datasets.filter(function (dataset) { return dataset.condition === "A"; });
     const groupB = datasets.filter(function (dataset) { return dataset.condition === "B"; });
@@ -1040,15 +1215,7 @@
       };
     }
 
-    const template = {
-      rnaX: config.rnaX,
-      rnaY: config.rnaY,
-      binSize: Number(config.binSize) || 10,
-      measure: config.measure === "support" ? "support" : "records",
-      colourCap: "95",
-      scale: "linear",
-      orientation: "normalised"
-    };
+    const template = comparisonContactQuery(config);
     const byKey = Object.create(null);
     const allDatasets = groupA.concat(groupB);
     let matrixFailure = "";
@@ -1059,7 +1226,9 @@
       if (matrixFailure) {
         return;
       }
-      const matrix = buildContactMatrix(dataset.records, template);
+      const matrix = dataset.contactBins
+        ? contactMatrixFromBins(dataset.contactBins, template)
+        : buildContactMatrix(dataset.records, template);
       if (matrix.ready === false) {
         matrixFailure = matrix.reason || "A dataset exceeded the browser contact-map limits.";
         return;
@@ -1179,6 +1348,21 @@
       maximumDatasetCells: MAX_COMPARISON_DATASET_CELLS,
       normalise: config.normalise || "library",
       measure: template.measure
+    };
+  }
+
+  // The per-dataset contact query a comparison uses; also what the page-data
+  // layer passes to DataProvider.getContactBins() for each dataset.
+  function comparisonContactQuery(comparison) {
+    const config = comparison || {};
+    return {
+      rnaX: config.rnaX,
+      rnaY: config.rnaY,
+      binSize: Number(config.binSize) || 10,
+      measure: config.measure === "support" ? "support" : "records",
+      colourCap: "95",
+      scale: "linear",
+      orientation: "normalised"
     };
   }
 
@@ -1641,15 +1825,26 @@
     defaultStructureState: defaultStructureState,
     getRnaExtent: getRnaExtent,
     getFilteredRecords: getFilteredRecords,
+    filterRecords: filterRecords,
     getPartnerCounts: getPartnerCounts,
     orientRecordForPair: orientRecordForPair,
     getContactResourceBudget: getContactResourceBudget,
     buildContactMatrix: buildContactMatrix,
+    buildContactBins: buildContactBins,
+    contactMatrixFromBins: contactMatrixFromBins,
     getCellRecords: getCellRecords,
     getRegionResults: getRegionResults,
+    filterRegionRecords: filterRegionRecords,
+    regionQuery: regionQuery,
+    regionResultsFromRecords: regionResultsFromRecords,
     getViewpointResults: getViewpointResults,
+    viewpointRange: viewpointRange,
+    viewpointResultsFromRecords: viewpointResultsFromRecords,
+    getViewpointArms: getViewpointArms,
+    matchesHomodimerSubset: matchesHomodimerSubset,
     viewpointToTsv: viewpointToTsv,
     buildComparisonResults: buildComparisonResults,
+    comparisonContactQuery: comparisonContactQuery,
     comparisonToTsv: comparisonToTsv,
     comparisonSelectedToTsv: comparisonSelectedToTsv,
     comparisonCountMatrixToTsv: comparisonCountMatrixToTsv,

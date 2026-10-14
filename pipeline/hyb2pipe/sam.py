@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from math import log
-from typing import Iterable, Iterator, List
+from typing import Iterable, Iterator, List, Optional
 
 from . import awk
 
@@ -92,15 +92,87 @@ def sam2blast(lines: Iterable[str]) -> Iterator[str]:
             arr = li.split()
             flag = int(arr[1])
             if flag in (0, 256):
-                yield _blast_line(arr, "f", dblen)
+                yield _blast_line_fast(arr, "f", dblen)
             elif flag in (16, 272):
-                yield _blast_line(arr, "r", dblen)
+                yield _blast_line_fast(arr, "r", dblen)
             elif flag == 4:
                 pass
             else:
                 raise ValueError("unknown SAM flag %s" % arr[1])
         elif li.startswith("@SQ"):
             dblen += int(li.split("LN:")[1])
+
+
+_CIGAR_OP = re.compile(r"(\d+)([MISHD])")
+_CIGAR_FULL = re.compile(r"(?:\d+[MISHD])+")
+
+
+def blast_row(arr: List[str], dblen: int) -> Optional[str]:
+    """One ``sam2blast_3`` row for a split SAM line (None for unmapped)."""
+    flag = int(arr[1])
+    if flag in (0, 256):
+        return _blast_line_fast(arr, "f", dblen)
+    if flag in (16, 272):
+        return _blast_line_fast(arr, "r", dblen)
+    if flag == 4:
+        return None
+    raise ValueError("unknown SAM flag %s" % arr[1])
+
+
+def _blast_line_fast(arr: List[str], flag: str, dblen: int) -> str:
+    """``_blast_line`` without expanding the CIGAR base by base; any CIGAR
+    other than plain ``(\\d+[MISHD])+`` goes through ``_blast_line``."""
+    cigar = arr[5]
+    if not _CIGAR_FULL.fullmatch(cigar):
+        return _blast_line(arr, flag, dblen)
+    len_read = ref_len = gaps = 0
+    lead = trail = 0  # soft/hard clipped bases before the first / after the last aligned base
+    aligned = False
+    for count_text, op in _CIGAR_OP.findall(cigar):
+        count = int(count_text)
+        if op == "M" or op == "I":
+            len_read += count
+            if op == "M":
+                ref_len += count
+            else:
+                gaps += 1
+            if count:
+                aligned = True
+                trail = 0
+        elif op == "D":
+            ref_len += count
+            gaps += 1
+        else:
+            len_read += count
+            if aligned:
+                trail += count
+            else:
+                lead += count
+    if aligned:
+        align_start, align_end = lead, len_read - trail
+    else:
+        align_start, align_end = len_read, 0
+    len_align = align_end - align_start
+    ref_start = int(arr[3])
+    if flag == "f":
+        ref_end = ref_start + ref_len - 1
+    else:
+        ref_end = ref_start
+        ref_start = ref_start + ref_len - 1
+        align_start, align_end = len_read - align_end, len_read - align_start
+    mismatches = int([x for x in arr if x.startswith("NM:i:")][0].split("NM:i:")[1])
+    identity = ((abs(align_end - align_start) - mismatches) / float(len_align)) * 100
+    align_score = int(re.split(r"AS:i:", [x for x in arr if x.startswith("AS:i:")][0])[1])
+    n, m = dblen, len_read
+    np_ = n - log(0.46 * n * m) / 0.85
+    mp = m - log(0.46 * n * m) / 0.85
+    if mp < 0:
+        mp = 0.1
+    bit_score = ((1.28 * float(align_score)) - log(0.46)) / log(2)
+    evalue = mp * np_ * 2 ** -bit_score
+    return "%s\t%s\t%.2f\t%i\t%i\t%i\t%i\t%i\t%i\t%i\t%.2g\t%.1f\t%s" % (
+        arr[0], arr[2], identity, len_align, mismatches, gaps, align_start + 1,
+        align_end, ref_start, ref_end, evalue, bit_score, arr[9])
 
 
 def _blast_line(arr: List[str], flag: str, dblen: int) -> str:

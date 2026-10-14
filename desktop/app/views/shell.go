@@ -25,7 +25,7 @@ func (a *App) View(c *ui.Context) {
 		a.topBar(c)
 		ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 			a.navigation(c)
-			ui.Column(c).Grow(1).Background(t.Surface).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).ClipX().Background(t.Surface).Children(func() {
 				if p := a.pages[a.Page]; p != nil {
 					p.View(c.Key("page-" + a.Page))
 				}
@@ -225,8 +225,10 @@ func StatusChip(c *ui.Context, status string) {
 	switch status {
 	case "succeeded", "done", "available":
 		b.Background(t.Success.Alpha(0.15)).TextColor(t.Success)
-	case "failed", "interrupted":
+	case "failed", "interrupted", "missing", "changed":
 		b.Background(t.Danger.Alpha(0.15)).TextColor(t.Danger)
+	case "cancelled", "skipped", "pending":
+		b.Background(t.TextMuted.Alpha(0.12)).TextColor(t.TextMuted)
 	case "running", "queued":
 		b.Background(t.Accent.Alpha(0.15)).TextColor(t.Accent)
 	}

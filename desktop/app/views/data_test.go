@@ -1,0 +1,315 @@
+package views
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+
+	"hyb2desktop/core"
+)
+
+// dataCall is one ProjectOp the page made.
+type dataCall struct {
+	op      string
+	payload core.Obj
+}
+
+// dataFake records ProjectOp payloads; sheetErrors makes a sheet's dry run
+// fail as the bridge does for a bad sample sheet.
+type dataFake struct {
+	*fakeBackend
+	opCalls     []dataCall
+	sheetErrors map[string]string
+}
+
+func (f *dataFake) ProjectOp(path, operation string, payload core.Obj) (core.Obj, error) {
+	f.mu.Lock()
+	f.opCalls = append(f.opCalls, dataCall{operation, payload})
+	f.mu.Unlock()
+	if operation == "import_sample_sheet" {
+		if message := f.sheetErrors[fmt.Sprint(payload["sheet"])]; message != "" {
+			return nil, errors.New(message)
+		}
+	}
+	return f.fakeBackend.ProjectOp(path, operation, payload)
+}
+
+func (f *dataFake) callsOf(op string) []core.Obj {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []core.Obj
+	for _, call := range f.opCalls {
+		if call.op == op {
+			out = append(out, call.payload)
+		}
+	}
+	return out
+}
+
+// dataOpen opens the fixture project with list (a testdata file) as
+// list_samples' answer and the real analysis_summary for its ready samples.
+func dataOpen(t *testing.T, list string) (*App, *dataFake) {
+	t.Helper()
+	f := newFake(t)
+	f.ops["list_samples"] = fixture(t, list)
+	f.ops["disk_estimate"] = fixture(t, "data_disk_estimate.json")
+	f.ops["check_inputs"] = fixture(t, "data_check_inputs.json")
+	f.ops["import_sample_sheet"] = fixture(t, "data_sheet_preview.json")
+	for _, op := range []string{"remove_sample", "update_sample", "add_sample", "update_reference", "add_reference"} {
+		f.ops[op] = core.Obj{"ok": true}
+	}
+	summary := fixture(t, "qc_analysis_summary.json")["result"].(map[string]any)
+	if list == "data_list_samples_mixed.json" {
+		// SUB_REP1 and SUB_REP2 are not analysed in this variant.
+		indexes := summary["indexes"].([]any)
+		summary = map[string]any{"indexes": indexes[2:]}
+	}
+	f.queries["analysis_summary"] = summary
+	df := &dataFake{fakeBackend: f, sheetErrors: map[string]string{}}
+	a := New(df, nil, "")
+	a.Open("/projects/zikv.hyb2proj")
+	waitFlush(a)
+	if a.Project == nil {
+		t.Fatalf("project did not open: %q", a.start.status)
+	}
+	a.Navigate("data", nil)
+	waitFlush(a)
+	return a, df
+}
+
+// dataPick makes the file dialog answer paths.
+func dataPick(t *testing.T, paths ...string) {
+	old := PickFiles
+	PickFiles = func(string, bool) []string { return paths }
+	t.Cleanup(func() { PickFiles = old })
+}
+
+func dataExpect(t *testing.T, tt *ui.Tester, texts ...string) {
+	t.Helper()
+	for _, text := range texts {
+		if !tt.HasText(text) {
+			t.Fatalf("page lacks %q: %q", text, tt.Texts())
+		}
+	}
+}
+
+func dataClick(t *testing.T, tt *ui.Tester, a *App, label string) {
+	t.Helper()
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	waitFlush(a)
+	tt.Frame()
+}
+
+func TestDataPageSamplesAndRun(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Samples (6)", "References", "ZAFR", "ZIKV_African_KX377335-1_virusRNA · 10,807 nt",
+		"SUB_REP1", "ZBRA_REP2", "ZAFR_REP1_sub.fastq", "fastq · 29.1 MB · linked", "map done", "hyb done", "index done",
+		"map —", "Run all pending (0)", "224 k", "757", "Explore")
+	snapshot(t, tt, "data")
+	tt.SetDark(true)
+	tt.Frame()
+	snapshot(t, tt, "data-dark")
+	tt.SetDark(false)
+
+	// Select two samples and run them: the disk estimate comes first.
+	dataClick(t, tt, a, "Select SUB_REP1")
+	dataClick(t, tt, a, "Select SUB_REP2")
+	dataExpect(t, tt, "Run selected (2)", "Remove selected")
+	dataClick(t, tt, a, "Run selected (2)")
+	dataExpect(t, tt, "Run 2 samples", "SUB_REP1, SUB_REP2", "Input", "57.1 MB", "Temporary peak", "34.9 MB",
+		"Results", "1.7 MB", "36.6 MB needed for outputs+temp on /projects/zikv.hyb2proj, 220 GB free.", "Start")
+	snapshot(t, tt, "data-run")
+	estimates := f.callsOf("disk_estimate")
+	if len(estimates) != 1 || fmt.Sprint(estimates[0]["sample_ids"]) != "[SUB_REP1 SUB_REP2]" || estimates[0]["include_completed"] != true {
+		t.Fatalf("disk_estimate %v", estimates)
+	}
+	if len(f.started) != 0 {
+		t.Fatalf("started before confirming: %+v", f.started)
+	}
+	dataClick(t, tt, a, "Start")
+	if len(f.started) != 2 || f.started[0].Kind != "sample_pipeline" || *f.started[0].SampleID != "SUB_REP1" || *f.started[1].SampleID != "SUB_REP2" {
+		t.Fatalf("started %+v", f.started)
+	}
+	if got := a.TaskLabel(a.Tasks["sample_pipeline-1"]); !strings.HasPrefix(got, "Pipeline · SUB_REP") {
+		t.Fatalf("label %q", got)
+	}
+	// Live progress replaces the stage chips of the running samples.
+	dataExpect(t, tt, "map · bowtie2 · 25%", "Cancel", "Run all pending (0)")
+	if tt.HasText("Run selected") {
+		t.Fatalf("selection not cleared: %q", tt.Texts())
+	}
+	snapshot(t, tt, "data-running")
+}
+
+func TestDataPageResumeAndPending(t *testing.T) {
+	a, _ := dataOpen(t, "data_list_samples_mixed.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Run all pending (2)", "Resume interrupted (1)", "hyb failed", "map pending", "Resume", "Run")
+	snapshot(t, tt, "data-mixed")
+	// The fake refuses to resume: the page says so.
+	dataClick(t, tt, a, "Resume")
+	tt.Frame()
+	dataExpect(t, tt, "Could not resume SUB_REP2: not resumable")
+}
+
+func TestDataPageImportSheet(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	dataPick(t, "/data/zikv/samples.tsv")
+	dataClick(t, tt, a, "Import sample sheet…")
+	dataExpect(t, tt, "Import samples.tsv", "4 samples, 1 reference(s). Nothing has been imported yet.",
+		"AFR_REP2", "ZAFR_REP1.hyb", "ZAFR.fasta", "Import 4 samples")
+	snapshot(t, tt, "data-sheet")
+	tt.SetDark(true)
+	tt.Frame()
+	snapshot(t, tt, "data-sheet-dark")
+	tt.SetDark(false)
+	dataClick(t, tt, a, "Import 4 samples")
+	calls := f.callsOf("import_sample_sheet")
+	if len(calls) != 2 || calls[0]["dry_run"] != true || calls[1]["dry_run"] != nil || calls[1]["mode"] != "linked" ||
+		calls[1]["sheet"] != "/data/zikv/samples.tsv" {
+		t.Fatalf("import calls %v", calls)
+	}
+	tt.Frame()
+	dataExpect(t, tt, "Imported 4 samples.")
+	if tt.HasText("Nothing has been imported yet") {
+		t.Fatal("preview still open")
+	}
+
+	// A sheet with errors shows them instead of a preview.
+	f.sheetErrors["/data/bad.tsv"] = "row 3: file not found: /data/zikv/x.fastq; row 4: no read files"
+	dataPick(t, "/data/bad.tsv")
+	dataClick(t, tt, a, "Import sample sheet…")
+	dataExpect(t, tt, "Sample sheet problems", "bad.tsv cannot be imported:", "row 3: file not found: /data/zikv/x.fastq", "row 4: no read files")
+	snapshot(t, tt, "data-sheet-problems")
+}
+
+func TestDataPageRemoveConfirm(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	dataClick(t, tt, a, "Select AFR_REP2")
+	dataClick(t, tt, a, "Remove selected")
+	dataExpect(t, tt, "Remove samples", "Remove AFR_REP2 from the project?")
+	snapshot(t, tt, "data-remove")
+	if len(f.callsOf("remove_sample")) != 0 {
+		t.Fatal("removed before confirming")
+	}
+	dataClick(t, tt, a, "Remove")
+	calls := f.callsOf("remove_sample")
+	if len(calls) != 1 || calls[0]["sample_id"] != "AFR_REP2" {
+		t.Fatalf("remove calls %v", calls)
+	}
+	tt.Frame()
+	dataExpect(t, tt, "Removed 1 sample.")
+}
+
+func TestDataPageCheckInputsAndRelink(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	dataClick(t, tt, a, "Check inputs")
+	dataExpect(t, tt, "Inputs checked: 8 ok, 0 missing, 0 changed.", "All 8 input files are present and unchanged.")
+	if tt.HasText("Relink…") {
+		t.Fatal("relink offered for ok inputs")
+	}
+	// One file moved: it is marked and can be relinked.
+	checked := fixture(t, "data_check_inputs.json")
+	items := checked["items"].([]any)
+	items[2].(map[string]any)["status"] = "missing"
+	f.ops["check_inputs"] = checked
+	dataClick(t, tt, a, "Check inputs")
+	tt.Frame()
+	dataExpect(t, tt, "Inputs checked: 7 ok, 1 missing, 0 changed.", "missing", "Relink…")
+	snapshot(t, tt, "data-missing")
+	dataPick(t, "/data/moved/ZAFR_REP1_sub.fastq")
+	dataClick(t, tt, a, "Relink…")
+	calls := f.callsOf("update_sample")
+	if len(calls) != 1 || calls[0]["sample_id"] != "SUB_REP1" ||
+		calls[0]["changes"].(core.Obj)["reads_path"] != "/data/moved/ZAFR_REP1_sub.fastq" {
+		t.Fatalf("relink %v", calls)
+	}
+}
+
+func TestDataPageEditSample(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	dataClick(t, tt, a, "Edit sample SUB_REP1")
+	dataExpect(t, tt, "Sample SUB_REP1", "Replicate", "Gene", "/data/zikv/ZAFR_REP1_sub.fastq")
+	snapshot(t, tt, "data-edit")
+	page := a.PageFor("data").(*dataPage)
+	page.edit.replicate = "x"
+	tt.Frame()
+	dataClick(t, tt, a, "Save")
+	dataExpect(t, tt, "Replicate must be a positive whole number.")
+	page.edit.replicate = "3"
+	page.edit.condition = "AFR"
+	tt.Frame()
+	dataClick(t, tt, a, "Save")
+	calls := f.callsOf("update_sample")
+	if len(calls) != 1 {
+		t.Fatalf("update calls %v", calls)
+	}
+	changes := calls[0]["changes"].(core.Obj)
+	if calls[0]["sample_id"] != "SUB_REP1" || changes["replicate"] != 3 || changes["condition"] != "AFR" ||
+		changes["reference_id"] != "ZAFR" || changes["gene_id"] != "ZIKV_African_KX377335-1_virusRNA" || changes["name"] != "SUB_REP1" {
+		t.Fatalf("changes %v", changes)
+	}
+	if page.edit.open {
+		t.Fatal("dialog still open")
+	}
+}
+
+func TestDataPageImportRawFiles(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	dataPick(t, "/data/zikv/new_REP1.fastq.gz", "/data/zikv/new_REP2.fq")
+	dataClick(t, tt, a, "Import raw files…")
+	dataExpect(t, tt, "Import 2 files", "Reference", "First replicate", "/data/zikv/new_REP1.fastq.gz")
+	page := a.PageFor("data").(*dataPage)
+	if strings.Join(page.add.names, ",") != "new_REP1,new_REP2" || page.add.reference != "ZAFR" {
+		t.Fatalf("add dialog %+v", page.add)
+	}
+	snapshot(t, tt, "data-add")
+	page.add.condition = "SUB"
+	tt.Frame()
+	dataClick(t, tt, a, "Import")
+	calls := f.callsOf("add_sample")
+	if len(calls) != 2 {
+		t.Fatalf("add calls %v", calls)
+	}
+	// SUB has replicates 1 and 2: the new files continue the numbering.
+	for i, call := range calls {
+		if call["replicate"] != 3+i || call["condition"] != "SUB" || call["reference_id"] != "ZAFR" || call["mode"] != "linked" ||
+			call["gene_id"] != nil || call["name"] != fmt.Sprintf("new_REP%d", i+1) {
+			t.Fatalf("add call %d: %v", i, call)
+		}
+	}
+	tt.Frame()
+	dataExpect(t, tt, "Added 2 samples.")
+}
+
+func TestDataFormatting(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 30519358: "29.1 MB", 235819716608: "220 GB"} {
+		if got := dataFormatBytes(n); got != want {
+			t.Errorf("bytes %d: %q, want %q", n, got, want)
+		}
+	}
+	for n, want := range map[int64]string{757: "757", 9999: "9,999", 224154: "224 k", 1302094: "1.3 M", 12_000_000: "12 M"} {
+		if got := dataFormatCompact(n); got != want {
+			t.Errorf("compact %d: %q, want %q", n, got, want)
+		}
+	}
+}

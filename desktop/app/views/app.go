@@ -581,25 +581,39 @@ func (a *App) CancelTask(id string) {
 }
 
 // ResumeTask restarts an interrupted or failed task.
-func (a *App) ResumeTask(id string) {
+func (a *App) ResumeTask(id string) { a.ResumeTaskThen(id, "", nil) }
+
+// ResumeTaskThen resumes a task under a new id (labelled like the old one,
+// or label); done runs on the main thread with the new snapshot.
+func (a *App) ResumeTaskThen(id, label string, done func(model.Task, error)) {
 	if a.Project == nil {
 		return
 	}
 	path := a.Project.Path
 	a.Go(func() func() {
 		snapshot, err := a.B.ResumeTask(path, id)
+		var t model.Task
+		if err == nil {
+			err = model.Decode(snapshot, &t)
+		}
 		return func() {
-			if err != nil {
-				a.Toast("Could not resume: %v", err)
+			if a.Project == nil || a.Project.Path != path {
 				return
 			}
-			var t model.Task
-			if model.Decode(snapshot, &t) == nil {
-				if l := a.labels[id]; l != "" {
-					a.labels[t.TaskID] = l
+			if err == nil {
+				if label == "" {
+					label = a.labels[id]
+				}
+				if label != "" {
+					a.labels[t.TaskID] = label
 				}
 				a.storeTask(t)
 				a.ensurePolling()
+			}
+			if done != nil {
+				done(t, err)
+			} else if err != nil {
+				a.Toast("Could not resume: %v", err)
 			}
 		}
 	})

@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .detector import CPLFOLD_MEMORY_FRACTION, cplfold_limits, cplfold_memory_estimate, memory_snapshot
 from .project import _atomic_write_json, safe_relative_path, validate_project_directory
+from .samples import _hyb2_reference_name
 
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 MAX_WINDOWS = 512
@@ -181,21 +182,25 @@ def _input_file(project: Path, value: Any, label: str) -> Path:
 
 
 def read_fasta(path: Path) -> List[Tuple[str, str]]:
-    records: List[Tuple[str, str]] = []
-    name: Optional[str] = None
-    chunks: List[str] = []
+    """``(name, sequence)`` records.  Names follow ``samples.read_fasta_sequences``:
+    hyb2 ``|``-headers are renamed the way the pipeline does, so they match
+    .hyb gene IDs; otherwise the first header word."""
+    headers: List[str] = []
+    chunks: List[List[str]] = []
     opener = __import__("gzip").open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
         for line in handle:
             line = line.strip()
             if line.startswith(">"):
-                if name is not None:
-                    records.append((name, "".join(chunks)))
-                name, chunks = (line[1:].split() or [""])[0], []
-            elif line:
-                chunks.append(line)
-    if name is not None:
-        records.append((name, "".join(chunks)))
+                headers.append(line[1:].strip())
+                chunks.append([])
+            elif line and chunks:
+                chunks[-1].append(line)
+    formatted = any("|" in header for header in headers)
+    records = []
+    for header, parts in zip(headers, chunks):
+        name = _hyb2_reference_name(header) if formatted else header
+        records.append(((name.split() or [""])[0], "".join(parts)))
     return records
 
 

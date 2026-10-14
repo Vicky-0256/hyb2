@@ -196,24 +196,27 @@ class StructureRunTests(unittest.TestCase):
         self.assertEqual(capped["summary"]["workers"], 1)
 
     def test_samples_resolve_from_schema_2_manifest(self):
-        manifest_path = self.project / "project.json"
-        manifest = json.loads(manifest_path.read_text())
-        manifest["references"] = [{"id": "ref1", "path": "data/ref.fa"}]
-        manifest["samples"] = [
-            {"id": "s1", "reference_id": "ref1", "gene_id": GENE, "outputs": {"hyb": "data/a.hyb"}},
-            {"id": "s2", "reference_id": "ref1", "gene_id": GENE, "outputs": {"hyb": str(self.external)}},
-        ]
-        manifest_path.write_text(json.dumps(manifest))
-        request = {"operation": "structure_run", "project_path": str(self.project), "sample_ids": ["s1", "s2"],
+        from desktop.runtime.samples import add_reference, add_sample
+        reference = add_reference(self.project, self.project / "data" / "ref.fa", mode="linked")["reference"]
+        ids = [add_sample(self.project, path, name=name, reference_id=reference["id"], gene_id=GENE, mode="copied")["id"]
+               for name, path in (("s1", self.project / "data" / "a.hyb"), ("s2", self.external))]
+        request = {"operation": "structure_run", "project_path": str(self.project), "sample_ids": ids,
                    "task_id": "samples", "parameters": {"beam": 30}}
         result = handle(request, repo_root=ROOT)
         self.assertTrue(result["ok"], result)
         meta = json.loads((self.project / "structures" / "samples" / "meta.json").read_text())
-        self.assertEqual([s["id"] for s in meta["evidence_inputs"]["samples"]], ["s1", "s2"])
+        self.assertEqual([s["id"] for s in meta["evidence_inputs"]["samples"]], ids)
         explicit = handle(self._request(task_id="explicit", parameters={"beam": 30}), repo_root=ROOT)
         self.assertEqual((self.project / "structures" / "samples" / "structure.dbn").read_text().split("\n")[1:],
                          (self.project / "structures" / "explicit" / "structure.dbn").read_text().split("\n")[1:])
         self.assertTrue(explicit["ok"])
+
+    def test_fasta_names_follow_hyb2_renaming(self):
+        from desktop.runtime.samples import read_fasta_sequences
+        from desktop.runtime.structure import read_fasta
+        path = Path(self.tmp.name) / "formatted.fa"
+        path.write_text(">ENSG1|ENST1|GENE_A|protein_coding\nACGU\n>ENSG2|ENST2|B|lncRNA\nGGCC\n")
+        self.assertEqual([name for name, _ in read_fasta(path)], [s["name"] for s in read_fasta_sequences(path)])
 
     def test_rejects_bad_requests(self):
         with self.assertRaises(ValueError):

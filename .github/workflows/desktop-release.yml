@@ -86,7 +86,8 @@ jobs:
           mkdir -p resources/${{ matrix.resource_dir }}
           cp -R ../resources/native resources/${{ matrix.resource_dir }}/native
           go tool mygo build -platform ${{ matrix.go_platform }} -skip-dmg
-          ls -R build | head -40
+          # (no "| head": with pipefail its SIGPIPE fails the step)
+          find build -maxdepth 3
           du -sh build/*
       - name: Check the packaged runtime
         working-directory: desktop/app

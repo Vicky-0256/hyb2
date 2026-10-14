@@ -9,15 +9,24 @@
 //	HYB2_ACCEPT_DIR=<dir> HYB2_ZIKA_FILES=<zika_files> CGO_ENABLED=0 \
 //	  go test -tags e2e -run TestAcceptance -timeout 12h -v .
 //
+// Quick iteration: HYB2_ACCEPT_READS=200000 takes only the first N reads of
+// every file (subsets under <dir>/reads-N, project <dir>/zikv-N.hyb2proj)
+// and runs the same flow in minutes. Only the full run is comparable with
+// reproduce_zikv.
+//
 // It writes <dir>/acceptance.json (sample counts, comparison and structure
 // ids) for reproduce_zikv/../hyb2/desktop/scripts/compare-acceptance.py.
 package main
 
 import (
+	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -92,11 +101,36 @@ func TestAcceptance(t *testing.T) {
 	d := &driver{t: t, q: q, a: app, tt: ui.NewTester(app.View, 1400, 1000)}
 	result := acceptResult{Samples: map[string]string{}, Comparisons: map[string]string{}, Structures: map[string]string{}, Timings: map[string]string{}}
 	started := time.Now()
+	// Only tasks of this run count; a resumed run finds older interrupted ones.
+	since := started.UTC().Add(-time.Second).Format(time.RFC3339)
+	mine := func(task model.Task) bool { return task.StartedAt >= since }
 	lap := func(what string) {
 		result.Timings[what] = fmt.Sprintf("%.0fs", time.Since(started).Seconds())
 		t.Logf("[%7.0fs] %s", time.Since(started).Seconds(), what)
 	}
 	project := filepath.Join(dir, "zikv.hyb2proj")
+	resultName := "acceptance.json"
+	if n, _ := strconv.Atoi(os.Getenv("HYB2_ACCEPT_READS")); n > 0 {
+		subsets := filepath.Join(dir, fmt.Sprintf("reads-%d", n))
+		for _, s := range acceptSamples {
+			if err := subsetReads(filepath.Join(data, s.file), subsets, n); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// references are small: link them next to the subsets
+		for _, ref := range []string{"ZAFR.fasta", "ZBRA.fasta", "ZILM.fasta", "ZSIN.fasta", "Zika.fasta"} {
+			target := filepath.Join(subsets, ref)
+			if _, err := os.Stat(target); err != nil {
+				if err := os.Symlink(filepath.Join(data, ref), target); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		data = subsets
+		project = filepath.Join(dir, fmt.Sprintf("zikv-%d.hyb2proj", n))
+		resultName = fmt.Sprintf("acceptance-%d.json", n)
+		lap(fmt.Sprintf("subsets of %d reads", n))
+	}
 	result.Project = project
 
 	// 1. Project and sample sheet (skipped when resuming).
@@ -104,10 +138,14 @@ func TestAcceptance(t *testing.T) {
 		var sheet strings.Builder
 		sheet.WriteString("name\tcondition\treplicate\tfiles\treference\tgene_id\n")
 		for _, s := range acceptSamples {
+			file := filepath.Join(data, s.file)
+			if _, err := os.Stat(file); err != nil {
+				file = filepath.Join(data, strings.TrimSuffix(s.file, ".gz"))
+			}
 			fmt.Fprintf(&sheet, "%s\t%s\t%s\t%s\t%s\t%s\n", s.name, s.condition, s.rep,
-				filepath.Join(data, s.file), filepath.Join(data, s.reference), s.gene)
+				file, filepath.Join(data, s.reference), s.gene)
 		}
-		sheetPath := filepath.Join(dir, "samples.tsv")
+		sheetPath := filepath.Join(dir, strings.TrimSuffix(resultName, ".json")+"-samples.tsv")
 		if err := os.WriteFile(sheetPath, []byte(sheet.String()), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -163,7 +201,7 @@ func TestAcceptance(t *testing.T) {
 	}
 	d.until("all samples analysed", 10*time.Hour, func() bool {
 		for _, task := range app.Tasks {
-			if task.Kind == "sample_pipeline" && (task.Status == "failed" || task.Status == "interrupted") {
+			if mine(task) && task.Kind == "sample_pipeline" && (task.Status == "failed" || task.Status == "interrupted") {
 				t.Fatalf("pipeline %s %s: %s", task.TaskID, task.Status, task.ErrorText())
 			}
 		}
@@ -230,8 +268,11 @@ func TestAcceptance(t *testing.T) {
 			continue
 		}
 		gene, mode := fold.gene, "genome"
-		app.StartTask(core.TaskStartRequest{Kind: "structure", SampleIDs: ids(fold.condition), GeneID: &gene, Mode: &mode,
-			Parameters: map[string]any{"alpha": 0.5, "beam": 100, "allow_pseudoknot": false}},
+		req := core.TaskStartRequest{Kind: "structure", SampleIDs: ids(fold.condition), GeneID: &gene, Mode: &mode,
+			Parameters: map[string]any{"alpha": 0.5, "beam": 100, "allow_pseudoknot": false}}
+		mem := views.StructureMemClaim(req, app.Project.GeneLength(gene), false)
+		req.MemMB = &mem
+		app.StartTask(req,
 			"Structure · "+fold.condition+" · whole RNA", func(_ model.Task, err error) {
 				if err != nil {
 					t.Fatalf("start fold %v: %v", fold, err)
@@ -241,7 +282,7 @@ func TestAcceptance(t *testing.T) {
 	}
 	d.until("comparisons and folds", 4*time.Hour, func() bool {
 		for _, task := range app.Tasks {
-			if (task.Kind == "compare" || task.Kind == "structure") && (task.Status == "failed" || task.Status == "interrupted") {
+			if mine(task) && (task.Kind == "compare" || task.Kind == "structure") && (task.Status == "failed" || task.Status == "interrupted") {
 				t.Fatalf("%s %s %s: %s", task.Kind, task.TaskID, task.Status, task.ErrorText())
 			}
 		}
@@ -281,7 +322,7 @@ func TestAcceptance(t *testing.T) {
 	lap("pages")
 
 	raw, _ := json.MarshalIndent(result, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, "acceptance.json"), raw, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, resultName), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -294,4 +335,58 @@ func hasActive(app *views.App, kind, what string) bool {
 		}
 	}
 	return false
+}
+
+// subsetReads writes the first n reads of a FASTQ or FASTA file (gzipped or
+// not) to dir/<name without .gz>, once.
+func subsetReads(path, dir string, n int) error {
+	target := filepath.Join(dir, strings.TrimSuffix(filepath.Base(path), ".gz"))
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	var reader io.Reader = in
+	if strings.HasSuffix(path, ".gz") {
+		gz, err := gzip.NewReader(in)
+		if err != nil {
+			return err
+		}
+		defer gz.Close()
+		reader = gz
+	}
+	lines := 2 // FASTA records are two lines (collapsed files)
+	if strings.Contains(path, ".fastq") || strings.Contains(path, ".fq") {
+		lines = 4
+	}
+	tmp := target + ".tmp"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 1<<20), 1<<24)
+	writer := bufio.NewWriter(out)
+	for i := 0; i < n*lines && scanner.Scan(); i++ {
+		writer.Write(scanner.Bytes())
+		writer.WriteByte('\n')
+	}
+	if err := scanner.Err(); err != nil {
+		out.Close()
+		return err
+	}
+	if err := writer.Flush(); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, target)
 }

@@ -598,10 +598,12 @@ func (p *comparePage) startFold() {
 		req := core.TaskStartRequest{Kind: "structure", SampleIDs: append([]string(nil), g.ids...), GeneID: &gene, Mode: &mode,
 			Windows:    []core.Window{{Start: uint64(plan.start), End: uint64(end)}},
 			Parameters: map[string]any{"allow_pseudoknot": true}}
+		mem := StructureMemClaim(req, a.Project.GeneLength(g.gene), true)
+		req.MemMB = &mem
 		label := fmt.Sprintf("Structure · %s · %d-%d", g.label, plan.start, end)
 		a.StartTask(req, label, func(t model.Task, err error) {
 			if err != nil {
-				a.Toast("Could not start the fold: %v", err)
+				a.Toast("Could not start the fold: %s", StructureStartError(err, mem))
 			} else {
 				started = append(started, t.TaskID)
 			}

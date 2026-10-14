@@ -612,12 +612,14 @@ func (p *structurePage) runFold() {
 		params["allow_pseudoknot"] = p.pseudoknot
 		what = fmt.Sprintf("%d window%s", len(windows), plural(len(windows)))
 	}
+	mem := StructureMemClaim(req, a.Project.GeneLength(gene), params["allow_pseudoknot"] == true)
+	req.MemMB = &mem
 	p.formErr = false
 	p.formMsg = "Starting…"
 	a.StartTask(req, "Structure · "+a.SelectionLabel(p.evidence)+" · "+what, func(t model.Task, err error) {
 		if err != nil {
 			p.formErr = true
-			p.formMsg = "Could not start: " + err.Error()
+			p.formMsg = "Could not start: " + StructureStartError(err, mem)
 			return
 		}
 		p.formMsg = "Started. Progress is shown in the list and the task drawer."
@@ -1086,4 +1088,31 @@ func (p *structurePage) saveDBN(a *structureResult) {
 			}
 		}
 	})
+}
+
+// StructureMemClaim is the memory a structure request claims from the task
+// budget: the CPLfold estimate for its longest window (the whole RNA in
+// genome mode) times the windows folded at once.
+func StructureMemClaim(req core.TaskStartRequest, geneLength int, allowPseudoknot bool) uint64 {
+	longest, parallel := geneLength, 1
+	if len(req.Windows) > 0 {
+		longest = 0
+		for _, w := range req.Windows {
+			longest = max(longest, int(w.End-w.Start+1))
+		}
+		parallel = len(req.Windows)
+		if req.Workers != nil {
+			parallel = min(parallel, int(*req.Workers))
+		}
+	}
+	return core.StructureClaimMB(longest, allowPseudoknot, parallel)
+}
+
+// StructureStartError explains a fold the memory budget cannot hold.
+func StructureStartError(err error, needMB uint64) string {
+	if strings.Contains(err.Error(), "mem_mb") {
+		return fmt.Sprintf("this fold needs about %.1f GB of memory, more than the task budget. "+
+			"Raise the memory budget in Preferences, use fewer parallel windows, or fold shorter windows.", float64(needMB)/1024)
+	}
+	return err.Error()
 }

@@ -2,6 +2,7 @@ package views
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -279,4 +280,22 @@ func TestStructureShadeByChimeraSupport(t *testing.T) {
 		t.Fatal("shading not on")
 	}
 	snapshot(t, tt, "structure-shaded")
+}
+
+func TestStructureMemoryClaim(t *testing.T) {
+	genome := core.TaskStartRequest{Kind: "structure"}
+	if got := StructureMemClaim(genome, 10807, false); got != 16231 {
+		t.Fatalf("genome claim %d MiB", got)
+	}
+	workers := uint32(2)
+	windows := core.TaskStartRequest{Kind: "structure", Workers: &workers,
+		Windows: []core.Window{{Start: 1, End: 4000}, {Start: 3001, End: 7000}, {Start: 6001, End: 10000}}}
+	// three 4000-nt pseudoknot windows, two at a time (above the 4096 MiB floor)
+	if got := StructureMemClaim(windows, 10807, true); got != 2*core.CPLfoldMemoryMB(4000, true) {
+		t.Fatalf("windows claim %d MiB", got)
+	}
+	msg := StructureStartError(errors.New("task mem_mb must be between 1 and the budget (8192)"), 16231)
+	if !strings.Contains(msg, "15.9 GB") || !strings.Contains(msg, "Preferences") {
+		t.Fatalf("message %q", msg)
+	}
 }

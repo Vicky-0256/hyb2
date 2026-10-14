@@ -51,12 +51,17 @@ func (f *fakeBackend) record(name string) {
 	f.mu.Unlock()
 }
 
-func (f *fakeBackend) Detect() (core.Obj, error) { f.record("detect"); return core.Obj{"ok": true}, nil }
+func (f *fakeBackend) Detect() (core.Obj, error) {
+	f.record("detect")
+	return core.Obj{"ok": true}, nil
+}
 func (f *fakeBackend) CreateProject(path, name, description string) (core.Obj, error) {
 	f.record("create:" + name)
 	return core.Obj{"ok": true}, nil
 }
-func (f *fakeBackend) ValidateProject(string, bool) (core.Obj, error) { return core.Obj{"ok": true}, nil }
+func (f *fakeBackend) ValidateProject(string, bool) (core.Obj, error) {
+	return core.Obj{"ok": true}, nil
+}
 func (f *fakeBackend) OpenProject(path string) (core.Obj, error) {
 	f.record("open:" + path)
 	if path == "/missing" {
@@ -70,8 +75,10 @@ func (f *fakeBackend) UpdateUIState(path string, state core.Obj) (core.Obj, erro
 	f.mu.Unlock()
 	return core.Obj{"ok": true}, nil
 }
-func (f *fakeBackend) SaveAnalysisRun(string, core.Obj) (core.Obj, error) { return core.Obj{"ok": true}, nil }
-func (f *fakeBackend) ReadInput(string, string) (core.Obj, error)        { return core.Obj{"ok": true}, nil }
+func (f *fakeBackend) SaveAnalysisRun(string, core.Obj) (core.Obj, error) {
+	return core.Obj{"ok": true}, nil
+}
+func (f *fakeBackend) ReadInput(string, string) (core.Obj, error) { return core.Obj{"ok": true}, nil }
 func (f *fakeBackend) ProjectOp(path, operation string, payload core.Obj) (core.Obj, error) {
 	f.record("op:" + operation)
 	if r, ok := f.ops[operation]; ok {
@@ -99,7 +106,9 @@ func (f *fakeBackend) StartTask(req core.TaskStartRequest) (core.Obj, error) {
 	f.tasks = append(f.tasks, snapshot)
 	return snapshot, nil
 }
-func (f *fakeBackend) ResumeTask(string, string) (core.Obj, error) { return nil, errors.New("not resumable") }
+func (f *fakeBackend) ResumeTask(string, string) (core.Obj, error) {
+	return nil, errors.New("not resumable")
+}
 func (f *fakeBackend) TaskStatus(_, id string) (core.Obj, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -123,7 +132,7 @@ func (f *fakeBackend) Preferences() (core.Obj, error) {
 		"system": core.Obj{"cpus": 10.0, "mem_mb": 32768.0}}, nil
 }
 func (f *fakeBackend) SetPreferences(patch core.Obj) (core.Obj, error) { return f.Preferences() }
-func (f *fakeBackend) Shutdown()                                     {}
+func (f *fakeBackend) Shutdown()                                       {}
 
 var _ core.Backend = (*fakeBackend)(nil)
 

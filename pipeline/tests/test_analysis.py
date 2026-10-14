@@ -364,5 +364,157 @@ class ProviderGapsTest(unittest.TestCase):
         self.assertEqual((empty["cells"], empty["x"]), (0, []))
 
 
+
+def brute_viewpoint(recs, gene, lo, hi, width, partner=None, types=None, measure="records"):
+    cov = [0.0] * (hi - lo + 1)
+    records = reads = arms = 0
+    partners = {}
+    g = gene.encode()
+    for r in recs:
+        if types and r.chimera_type.decode() not in types:
+            continue
+        hit = None
+        for own, other, s, e, mate in ((r.gene1, r.gene2, r.start1, r.end1, r.gene2), (r.gene2, r.gene1, r.start2, r.end2, r.gene1)):
+            if own != g or (partner and other != partner.encode()) or s > hi or e < lo:
+                continue
+            arms += 1
+            for p in range(max(s, lo), min(e, hi) + 1):
+                cov[p - lo] += 1 if measure == "records" else r.reads
+            hit = hit or mate.decode()
+        if hit:
+            records += 1
+            reads += r.reads
+            entry = partners.setdefault(hit, [0, 0])
+            entry[0] += 1
+            entry[1] += r.reads
+    starts = list(range(lo, hi + 1, width))
+    values = [sum(cov[s - lo:min(s + width - 1, hi) - lo + 1]) / (min(s + width - 1, hi) - s + 1) for s in starts]
+    return records, reads, arms, starts, values, partners
+
+
+def brute_region(recs, gene, lo, hi, partner=None, plo=None, phi=None, overlap="any", types=None):
+    def ov(s, e, a, b):
+        return (s >= a and e <= b) if overlap == "contained" else (s <= b and e >= a)
+    g = gene.encode()
+    span = hi - lo + 1
+    width = 50 if span > 1000 else 25 if span > 500 else 10
+    profile = [0] * (-(-span // width))
+    hits, partners, groups = [], {}, {}
+    for r in recs:
+        if types and r.chimera_type.decode() not in types:
+            continue
+        forward = r.gene1 == g and ov(r.start1, r.end1, lo, hi) and (not partner or r.gene2 == partner.encode())
+        reverse = r.gene2 == g and ov(r.start2, r.end2, lo, hi) and (not partner or r.gene1 == partner.encode())
+        if plo is not None:
+            forward = forward and ov(r.start2, r.end2, plo, phi)
+            reverse = reverse and ov(r.start1, r.end1, plo, phi)
+        if not (forward or reverse):
+            continue
+        hits.append(r)
+        name = (r.gene2 if forward else r.gene1).decode()
+        entry = partners.setdefault(name, [0, 0])
+        entry[0] += 1
+        entry[1] += r.reads
+        for own, s, e in ((r.gene1, r.start1, r.end1), (r.gene2, r.start2, r.end2)):
+            if own == g and s <= hi and e >= lo:
+                for b in range((max(s, lo) - lo) // width, (min(e, hi) - lo) // width + 1):
+                    profile[b] += r.reads
+        key = (r.start1, r.end1, r.start2, r.end2, r.chimera_type.decode(), r.gene1.decode(), r.gene2.decode())
+        group = groups.setdefault(key, [0, 0])
+        group[0] += 1
+        group[1] += r.reads
+    return hits, partners, profile, groups
+
+
+class ViewpointRegionTest(unittest.TestCase):
+    """analysis_viewpoint / analysis_region against brute force over the records."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.index = Path(cls.tmp.name) / "testData.hyb2idx"
+        index.build(HYB, cls.index)
+        cls.records = records()
+        half = Path(cls.tmp.name) / "half.hyb"
+        lines = HYB.read_text().splitlines(keepends=True)
+        half.write_text("".join(lines[: len(lines) // 2]))
+        cls.half = Path(cls.tmp.name) / "half.hyb2idx"
+        index.build(half, cls.half)
+        cls.half_records = [r for r in (hybfile.parse(line.encode()) for line in lines[: len(lines) // 2]) if r is not None]
+
+    @classmethod
+    def tearDownClass(cls):
+        query.close_all()
+        cls.tmp.cleanup()
+
+    def check_viewpoint(self, result, expected):
+        records, reads, arms, starts, values, partners = expected
+        self.assertEqual((result["records"], result["reads"], result["arms"]), (records, reads, arms))
+        self.assertEqual(result["bins"]["start"], starts)
+        for got, want in zip(result["bins"]["value"], values):
+            self.assertAlmostEqual(got, want, places=3)
+        self.assertEqual({p["name"]: [p["records"], p["reads"]] for p in result["partners"]}, partners)
+
+    def test_viewpoint_matches_brute_force(self):
+        recs = self.records
+        result = query.viewpoint([self.index], "Zika_virusRNA", 2000, 2600)
+        self.check_viewpoint(result, brute_viewpoint(recs, "Zika_virusRNA", 2000, 2600, 1))
+        self.assertEqual((result["start"], result["end"], result["bin_size"], result["adjusted"]), (2000, 2600, 1, False))
+        result = query.viewpoint([self.index], "Zika_virusRNA", 100, 9000, bin_size=25, measure="reads", types=["Type_1"])
+        self.check_viewpoint(result, brute_viewpoint(recs, "Zika_virusRNA", 100, 9000, 25, types=["Type_1"], measure="reads"))
+        result = query.viewpoint([self.index], "18S_rRNA", 1, 1900, bin_size=10, partner="Zika_virusRNA")
+        self.check_viewpoint(result, brute_viewpoint(recs, "18S_rRNA", 1, 1900, 10, partner="Zika_virusRNA"))
+        merged = query.viewpoint([self.index, self.half], "Zika_virusRNA", 3000, 3400, bin_size=5)
+        self.check_viewpoint(merged, brute_viewpoint(recs + self.half_records, "Zika_virusRNA", 3000, 3400, 5))
+        # defaults: observed start to the reference length; the bin grows past 30,000 bins
+        whole = query.viewpoint([self.index], "Zika_virusRNA", lengths={"Zika_virusRNA": 10807})
+        self.assertEqual((whole["start"], whole["end"]), (min(min(r.start1 for r in recs if r.gene1 == b"Zika_virusRNA"),
+                                                              min(r.start2 for r in recs if r.gene2 == b"Zika_virusRNA")), 10807))
+        wide = query.viewpoint([self.index], "Zika_virusRNA", 1, 90_000)
+        self.assertTrue(wide["adjusted"])
+        self.assertEqual(wide["bin_size"], 3)
+        self.assertEqual(query.viewpoint([self.index], "Missing")["bins"]["value"], [])
+        for bad in ({"measure": "x"}, {"bin_size": 0}, {"start": 10, "end": 5}, {"start": 1.5}):
+            with self.assertRaises(ValueError, msg=bad):
+                query.viewpoint([self.index], "Zika_virusRNA", **bad)
+
+    def check_region(self, result, recs, *args, **kwargs):
+        hits, partners, profile, groups = brute_region(recs, *args, **kwargs)
+        self.assertEqual(result["records"], len(hits))
+        self.assertEqual(result["reads"], sum(r.reads for r in hits))
+        self.assertEqual({p["name"]: [p["records"], p["reads"]] for p in result["partners"]}, partners)
+        self.assertEqual(result["profile"]["value"], profile)
+        # the strongest distinct interactions (ties at the cut may pick any of the tied rows)
+        ranked = sorted(groups.values(), key=lambda v: (-v[1], -v[0]))
+        got = [((r["start1"], r["end1"], r["start2"], r["end2"], r["type"], r["gene1"], r["gene2"]), [r["records"], r["reads"]])
+               for r in result["rows"]]
+        self.assertEqual([v for _, v in got], ranked[:len(got)])
+        self.assertEqual(len({k for k, _ in got}), len(got))
+        for key, value in got:
+            self.assertEqual(groups[key], value, key)
+        return groups
+
+    def test_region_matches_brute_force(self):
+        recs = self.records
+        result = query.region([self.index], "Zika_virusRNA", 3000, 3200, limit=20)
+        groups = self.check_region(result, recs, "Zika_virusRNA", 3000, 3200)
+        self.assertEqual(result["distinct"], len(groups))
+        self.assertEqual(len(result["rows"]), 20)
+        self.assertTrue(result["rows_exact"])
+        result = query.region([self.index], "Zika_virusRNA", 2000, 4000, partner="Zika_virusRNA", partner_start=5000,
+                              partner_end=9000, overlap="contained", types=["Type_1", "Type_2"], limit=50)
+        self.check_region(result, recs, "Zika_virusRNA", 2000, 4000, "Zika_virusRNA", 5000, 9000, "contained", ["Type_1", "Type_2"])
+        result = query.region([self.index], "18S_rRNA", 1, 1900, partner="Zika_virusRNA")
+        self.check_region(result, recs, "18S_rRNA", 1, 1900, "Zika_virusRNA")
+        self.assertEqual(result["profile"]["bin_size"], 50)
+        merged = query.region([self.index, self.half], "Zika_virusRNA", 1, 10807, limit=30)
+        self.check_region(merged, recs + self.half_records, "Zika_virusRNA", 1, 10807)
+        self.assertIsNone(merged["distinct"])
+        self.assertEqual(query.region([self.index], "Missing", 1, 100)["records"], 0)
+        for bad in ({"start": 5, "end": 1}, {"start": 1, "end": 5, "partner_start": 1}, {"start": 1, "end": 5, "partner_start": 1, "partner_end": 9},
+                    {"start": 1, "end": 5, "overlap": "x"}, {"start": None, "end": 5}, {"start": 1, "end": 5, "limit": 10**6}):
+            with self.assertRaises(ValueError, msg=bad):
+                query.region([self.index], "Zika_virusRNA", **bad)
+
 if __name__ == "__main__":
     unittest.main()

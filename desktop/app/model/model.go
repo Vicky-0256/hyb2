@@ -173,17 +173,17 @@ func (p *Progress) Fraction() float64 {
 
 // Task is a scheduler snapshot (task_start / task_status / task_list).
 type Task struct {
-	TaskID       string    `json:"task_id"`
-	Kind         string    `json:"kind"`
-	Status       string    `json:"status"`
-	ExitCode     *int      `json:"exit_code"`
-	Error        any       `json:"error"`
-	StartedAt    string    `json:"started_at"`
-	LaunchedAt   string    `json:"launched_at"`
-	FinishedAt   string    `json:"finished_at"`
-	Progress     *Progress `json:"progress"`
-	ResumedFrom  string    `json:"resumed_from"`
-	Output       any       `json:"output"`
+	TaskID      string    `json:"task_id"`
+	Kind        string    `json:"kind"`
+	Status      string    `json:"status"`
+	ExitCode    *int      `json:"exit_code"`
+	Error       any       `json:"error"`
+	StartedAt   string    `json:"started_at"`
+	LaunchedAt  string    `json:"launched_at"`
+	FinishedAt  string    `json:"finished_at"`
+	Progress    *Progress `json:"progress"`
+	ResumedFrom string    `json:"resumed_from"`
+	Output      any       `json:"output"`
 }
 
 var activeStatuses = map[string]bool{"queued": true, "running": true}

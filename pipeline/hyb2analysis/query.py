@@ -681,3 +681,331 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
                     "gene2": index.gene_names[row[4]], "start2": row[5], "end2": row[6],
                     "reads": row[7], "dg": row[8], "overlap": row[9], "type": index.type_names.get(row[10])})
     return {"total": total, "limit": limit, "offset": offset, "order": order, "rows": out}
+
+
+# --------------------------------------------------------------------------
+# viewpoint and region (aggregated over the rectangles, so a sample of
+# millions of hybrids answers in well under a second)
+
+
+MAX_PROFILE_BINS = 30_000
+OVERLAP_RULES = ("any", "contained")
+
+
+def _anchor_parts(opened: List[_Index], gene: str, partner: Optional[str], types: Optional[Sequence[str]]):
+    """Rectangles of every pair with ``gene`` on either arm (``partner`` on the other).
+
+    Yields ``(rects, on1, on2, name1, name2)``: ``on1`` when arm 1 is the
+    anchor (``gene``), ``on2`` when arm 2 is; ``name1``/``name2`` are the
+    pair's gene names.  An intramolecular pair has both arms on the anchor.
+    """
+    for index in opened:
+        anchor = index.gene(gene)
+        if anchor is None:
+            continue
+        other = index.gene(partner) if partner else None
+        if partner and other is None:
+            continue
+        for (g1, g2) in sorted(index.spans):
+            on1 = g1 == anchor and (other is None or g2 == other)
+            on2 = g2 == anchor and (other is None or g1 == other)
+            if not (on1 or on2):
+                continue
+            rects = _load_rects(index, g1, g2)
+            if rects is None or not len(rects["s1"]):
+                continue
+            mask = _type_mask(index, rects, types)
+            if mask is not None:
+                rects = {key: value[mask] for key, value in rects.items()}
+                if not len(rects["s1"]):
+                    continue
+            yield rects, on1, on2, index.gene_names[g1], index.gene_names[g2]
+
+
+def _anchor_range(opened: List[_Index], gene: str, lengths: Dict[str, int]) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    """``(observed min, observed max, length)`` of ``gene`` over the indexes."""
+    lows, highs = [], []
+    for index in opened:
+        extent = index.extents().get(gene)
+        if extent is not None:
+            lows.append(extent[0])
+            highs.append(extent[1])
+    observed_max = max(highs) if highs else None
+    return (min(lows) if lows else None), observed_max, lengths.get(gene, observed_max)
+
+
+def _span(value: Any, name: str) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != int(value):
+        raise ValueError("%s must be an integer" % name)
+    if value < 0:
+        raise ValueError("%s must not be negative" % name)
+    return int(value)
+
+
+def _overlaps(start: np.ndarray, end: np.ndarray, lo: int, hi: int, rule: str) -> np.ndarray:
+    if rule == "contained":
+        return (start >= lo) & (end <= hi)
+    return (start <= hi) & (end >= lo)
+
+
+def _bin_means(diff: np.ndarray, lo: int, hi: int, width: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-nt coverage from a difference array -> (bin starts, bin ends, mean per nt)."""
+    span = hi - lo + 1
+    per_nt = np.cumsum(diff[:span])
+    count = -(-span // width)
+    padded = np.zeros(count * width, dtype=np.float64)
+    padded[:span] = per_nt
+    sums = padded.reshape(count, width).sum(axis=1)
+    starts = lo + np.arange(count, dtype=np.int64) * width
+    ends = np.minimum(starts + width - 1, hi)
+    return starts, ends, sums / (ends - starts + 1)
+
+
+def _partner_rows(partners: Dict[str, List[int]]) -> List[Dict[str, Any]]:
+    rows = [{"name": name, "records": int(v[0]), "reads": int(v[1])} for name, v in partners.items() if v[0]]
+    return sorted(rows, key=lambda row: (-row["reads"], -row["records"], row["name"]))
+
+
+def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = None, end: Optional[int] = None, *,
+              partner: Optional[str] = None, types: Optional[Sequence[str]] = None, measure: str = "records",
+              bin_size: int = 1, lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """Interaction coverage along ``gene`` (the viewpoint) and its partners.
+
+    Every arm on ``gene`` (both arms of an intramolecular hybrid) adds its
+    weight (1 per record, or its reads for ``measure="reads"``) to each
+    nucleotide it covers inside ``[start, end]`` (inclusive; default: the
+    observed start to the reference length).  ``bin_size`` > 1 reports the
+    mean per nucleotide of each bin, as the web Viewpoint does; the bin grows
+    so there are at most 30,000 bins (``adjusted``).
+
+    Returns ``{gene, partner, start, end, length, measure, requested_bin_size,
+    bin_size, adjusted, records, reads, arms, max, bins: {start: [], end: [],
+    value: []}, partners: [{name, records, reads}]}``; ``records``/``reads``
+    count the hybrids with an arm in the range, ``arms`` the arms (records).
+    """
+    if measure not in ("records", "reads"):
+        raise ValueError("measure must be 'records' or 'reads'")
+    if isinstance(bin_size, bool) or not isinstance(bin_size, int) or not 1 <= bin_size <= 100_000:
+        raise ValueError("bin_size must be an integer between 1 and 100000")
+    lengths = _check_lengths(lengths)
+    opened = _indexes(indexes)
+    low, _, length = _anchor_range(opened, gene, lengths)
+    lo = _span(start, "start")
+    hi = _span(end, "end")
+    lo = lo if lo is not None else (low if low is not None else 1)
+    hi = hi if hi is not None else length
+    out = {"gene": gene, "partner": partner, "length": length, "measure": measure, "requested_bin_size": bin_size,
+           "bin_size": bin_size, "adjusted": False, "records": 0, "reads": 0, "arms": 0, "max": 0.0,
+           "start": lo, "end": hi, "bins": {"start": [], "end": [], "value": []}, "partners": []}
+    if hi is None:
+        return out
+    if lo > hi:
+        raise ValueError("start must not exceed end")
+    span = hi - lo + 1
+    width = max(bin_size, -(-span // MAX_PROFILE_BINS))
+    diff = np.zeros(span + 1, dtype=np.float64)
+    partners: Dict[str, List[int]] = {}
+    records = reads = arms = 0
+    for rects, on1, on2, name1, name2 in _anchor_parts(opened, gene, partner, types):
+        count = rects["count"].astype(np.int64)
+        weight = (count if measure == "records" else rects["reads"].astype(np.int64)).astype(np.float64)
+        matched = {}
+        for arm, on in (("1", on1), ("2", on2)):
+            if not on:
+                continue
+            s = rects["s" + arm].astype(np.int64)
+            e = rects["e" + arm].astype(np.int64)
+            keep = (s <= hi) & (e >= lo)
+            matched[arm] = keep
+            if not keep.any():
+                continue
+            s, e, w = np.maximum(s[keep], lo) - lo, np.minimum(e[keep], hi) - lo + 1, weight[keep]
+            diff += np.bincount(s, weights=w, minlength=span + 1)[:span + 1]
+            diff -= np.bincount(e, weights=w, minlength=span + 1)[:span + 1]
+            arms += int(count[keep].sum())
+        none = np.zeros(len(count), dtype=bool)
+        first, second = matched.get("1", none), matched.get("2", none)
+        hit = first | second
+        records += int(count[hit].sum())
+        reads += int(rects["reads"][hit].astype(np.int64).sum())
+        # partner: arm 2's gene where arm 1 is the anchor in range, else arm 1's
+        for name, mask in ((name2, first), (name1, second & ~first)):
+            if not mask.any():
+                continue
+            entry = partners.setdefault(name, [0, 0])
+            entry[0] += int(count[mask].sum())
+            entry[1] += int(rects["reads"][mask].astype(np.int64).sum())
+    starts, ends, values = _bin_means(diff, lo, hi, width)
+    values = np.round(values, 4)
+    out.update({"bin_size": width, "adjusted": width != bin_size, "records": records, "reads": reads, "arms": arms,
+                "max": float(values.max()) if len(values) else 0.0,
+                "bins": {"start": starts.tolist(), "end": ends.tolist(), "value": values.tolist()},
+                "partners": _partner_rows(partners)})
+    return out
+
+
+def _top(reads: np.ndarray, count: np.ndarray, s1: np.ndarray, rows: np.ndarray, k: int) -> np.ndarray:
+    """Up to ``k`` of ``rows`` by reads, then records, then position (the
+    rectangles are stored sorted by arm 1 start, so by row number)."""
+    if len(rows) > k:
+        values = reads[rows]
+        cut = np.partition(values, len(values) - k)[len(values) - k]
+        above, tied = rows[values > cut], rows[values == cut]
+        need = k - len(above)
+        if len(tied) > need:
+            counts = count[tied]
+            cut = np.partition(counts, len(counts) - need)[len(counts) - need]
+            more = tied[counts > cut]
+            tied = np.concatenate([more, tied[counts == cut][:need - len(more)]])
+        rows = np.concatenate([above, tied])
+    return rows[np.lexsort((rows, -count[rows], -reads[rows]))]
+
+
+def _lookup(part: Dict[str, Any], key: tuple) -> Tuple[int, int]:
+    """(records, reads) of one distinct interaction in a part (0, 0 when absent)."""
+    s1 = part["s1"]
+    lo, hi = np.searchsorted(s1, key[0], "left"), np.searchsorted(s1, key[0], "right")
+    if lo == hi:
+        return 0, 0
+    window = slice(lo, hi)
+    match = (part["e1"][window] == key[1]) & (part["s2"][window] == key[2]) & (part["e2"][window] == key[3]) \
+        & (part["types"][part["type"][window]] == key[4]) & part["hit"][window]
+    return int(part["count"][window][match].sum()), int(part["reads"][window][match].sum())
+
+
+def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, partner: Optional[str] = None,
+           partner_start: Optional[int] = None, partner_end: Optional[int] = None, overlap: str = "any",
+           types: Optional[Sequence[str]] = None, limit: int = 100) -> Dict[str, Any]:
+    """Hybrids with an arm on ``gene:[start, end]`` (and the other arm on
+    ``partner``, inside ``[partner_start, partner_end]`` when given), as the
+    web Region Explorer: either arm order matches.
+
+    ``overlap``: ``any`` (the arm overlaps the range) or ``contained``.
+    Returns ``{gene, start, end, partner, partner_start, partner_end, overlap,
+    records, reads, distinct, partners: [{name, records, reads}],
+    profile: {bin_size, adjusted, start: [], end: [], value: []}, rows: [...],
+    rows_exact}``.  The profile adds each matching hybrid's reads to every
+    bin of ``[start, end]`` its anchor arm covers.  ``rows`` are the
+    ``limit`` strongest distinct interactions (same genes, coordinates and
+    type, summed over the indexes): ``{gene1, start1, end1, gene2, start2,
+    end2, type, records, reads}`` by reads, then records, then arm 1 start.
+    Over several indexes they come from each index's strongest candidates;
+    ``rows_exact`` is false in the rare case that bound cannot prove the
+    order, and ``distinct`` (the number of distinct interactions) is only
+    given for one index.
+    """
+    lo, hi = _span(start, "start"), _span(end, "end")
+    if lo is None or hi is None:
+        raise ValueError("start and end are required")
+    if lo > hi:
+        raise ValueError("start must not exceed end")
+    plo, phi = _span(partner_start, "partner_start"), _span(partner_end, "partner_end")
+    if (plo is None) != (phi is None):
+        raise ValueError("partner_start and partner_end go together")
+    if plo is not None and not partner:
+        raise ValueError("a partner range needs a partner gene")
+    if plo is not None and plo > phi:
+        raise ValueError("partner_start must not exceed partner_end")
+    if overlap not in OVERLAP_RULES:
+        raise ValueError("overlap must be 'any' or 'contained'")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= MAX_LIMIT:
+        raise ValueError("limit must be an integer between 0 and %d" % MAX_LIMIT)
+    opened = _indexes(indexes)
+    span = hi - lo + 1
+    requested = 50 if span > 1000 else 25 if span > 500 else 10
+    width = max(requested, -(-span // MAX_PROFILE_BINS))
+    nbins = -(-span // width)
+    diff = np.zeros(nbins + 1, dtype=np.float64)
+    partners: Dict[str, List[int]] = {}
+    records = reads = 0
+    per_index: List[List[Dict[str, Any]]] = []
+    for index in opened:
+        parts = []
+        type_names = np.asarray([index.type_names.get(t, "") for t in range(max(index.type_names, default=0) + 1)], dtype=object)
+        for rects, on1, on2, name1, name2 in _anchor_parts([index], gene, partner, types):
+            s1 = rects["s1"].astype(np.int64)
+            if len(s1) > 1 and not bool(np.all(s1[1:] >= s1[:-1])):  # indexes store them sorted; _lookup needs it
+                order = np.argsort(s1, kind="stable")
+                rects = {key: value[order] for key, value in rects.items()}
+                s1 = s1[order]
+            count = rects["count"].astype(np.int64)
+            weight = rects["reads"].astype(np.int64)
+            e1 = rects["e1"].astype(np.int64)
+            s2, e2 = rects["s2"].astype(np.int64), rects["e2"].astype(np.int64)
+            none = np.zeros(len(s1), dtype=bool)
+            forward = _overlaps(s1, e1, lo, hi, overlap) if on1 else none
+            reverse = _overlaps(s2, e2, lo, hi, overlap) if on2 else none
+            if plo is not None:
+                forward = forward & _overlaps(s2, e2, plo, phi, overlap)
+                reverse = reverse & _overlaps(s1, e1, plo, phi, overlap)
+            hit = forward | reverse
+            if not hit.any():
+                continue
+            records += int(count[hit].sum())
+            reads += int(weight[hit].sum())
+            for name, mask in ((name2, forward), (name1, reverse & ~forward)):
+                if mask.any():
+                    entry = partners.setdefault(name, [0, 0])
+                    entry[0] += int(count[mask].sum())
+                    entry[1] += int(weight[mask].sum())
+            # profile: every anchor arm of a matching hybrid, clipped to the range
+            for anchored, s, e in ((name1 == gene, s1, e1), (name2 == gene, s2, e2)):
+                if not anchored:
+                    continue
+                keep = hit & (s <= hi) & (e >= lo)
+                if keep.any():
+                    first = (np.maximum(s[keep], lo) - lo) // width
+                    last = (np.minimum(e[keep], hi) - lo) // width
+                    w = weight[keep].astype(np.float64)
+                    diff += np.bincount(first, weights=w, minlength=nbins + 1)[:nbins + 1]
+                    diff -= np.bincount(last + 1, weights=w, minlength=nbins + 1)[:nbins + 1]
+            parts.append({"name1": name1, "name2": name2, "s1": s1, "e1": e1, "s2": s2, "e2": e2,
+                          "type": rects["type"].astype(np.int64), "types": type_names, "count": count, "reads": weight,
+                          "hit": hit, "rows": np.flatnonzero(hit)})
+        per_index.append(parts)
+
+    def key_of(part: Dict[str, Any], i: int) -> tuple:
+        return (int(part["s1"][i]), int(part["e1"][i]), int(part["s2"][i]), int(part["e2"][i]),
+                part["types"][part["type"][i]], part["name1"], part["name2"])
+
+    rows: List[Dict[str, Any]] = []
+    exact = True
+    distinct = sum(len(part["rows"]) for part in per_index[0]) if len(opened) == 1 and per_index else None
+    if limit:
+        k = limit if len(opened) == 1 else max(4 * limit, 200)
+        candidates: Dict[tuple, List[int]] = {}
+        bound = 0
+        for parts in per_index:
+            best: List[Tuple[int, int, int, tuple]] = []
+            for part in parts:
+                for i in _top(part["reads"], part["count"], part["s1"], part["rows"], k).tolist():
+                    best.append((-int(part["reads"][i]), -int(part["count"][i]), int(part["s1"][i]), key_of(part, i)))
+            best.sort()
+            best = best[:k]
+            if len(best) == k:
+                bound += -best[-1][0]
+            for item in best:
+                candidates.setdefault(item[3], [0, 0])
+        for item_key, total in candidates.items():
+            for parts in per_index:
+                for part in parts:
+                    if part["name1"] == item_key[5] and part["name2"] == item_key[6]:
+                        got = _lookup(part, item_key)
+                        total[0] += got[0]
+                        total[1] += got[1]
+        ranked = sorted(candidates.items(), key=lambda kv: (-kv[1][1], -kv[1][0], kv[0][0], kv[0]))[:limit]
+        if len(opened) > 1 and len(ranked) == limit and ranked[-1][1][1] < bound:
+            exact = False
+        for item_key, (n, r) in ranked:
+            rows.append({"gene1": item_key[5], "start1": item_key[0], "end1": item_key[1], "gene2": item_key[6],
+                         "start2": item_key[2], "end2": item_key[3], "type": item_key[4] or None, "records": n, "reads": r})
+    starts = lo + np.arange(nbins, dtype=np.int64) * width
+    return {"gene": gene, "start": lo, "end": hi, "partner": partner, "partner_start": plo, "partner_end": phi,
+            "overlap": overlap, "records": records, "reads": reads, "distinct": distinct,
+            "partners": _partner_rows(partners),
+            "profile": {"bin_size": width, "adjusted": width != requested, "start": starts.tolist(),
+                        "end": np.minimum(starts + width - 1, hi).tolist(),
+                        "value": np.rint(np.cumsum(diff[:nbins])).astype(np.int64).tolist()},
+            "rows": rows, "rows_exact": exact}

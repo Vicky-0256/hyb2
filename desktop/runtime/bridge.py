@@ -600,7 +600,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
 # --- analysis queries (R3): aggregated results from per-sample SQLite indexes ---
 
 _ANALYSIS_OPS = {"analysis_summary", "analysis_contact_bins", "analysis_hybrids", "analysis_top",
-                 "compare_bins", "analysis_compare_bins"}
+                 "analysis_viewpoint", "analysis_region", "compare_bins", "analysis_compare_bins"}
 
 
 def _analysis_module(repo_root: Path | None) -> Any:
@@ -762,6 +762,14 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
         result = query.top_interactions(paths, required_gene(), opt_int("bin_size", 10), opt_int("n", 50), gene2=opt_str("gene2"),
                                         region=request.get("region"), types=opt_types(),
                                         measure=opt_str("measure") or "records", orientation=opt_str("orientation") or "oriented")
+    elif operation == "analysis_viewpoint":
+        result = query.viewpoint(paths, required_gene(), opt_int("start", None), opt_int("end", None), partner=opt_str("partner"),
+                                 types=opt_types(), measure=opt_str("measure") or "records", bin_size=opt_int("bin_size", 1),
+                                 lengths=lengths)
+    elif operation == "analysis_region":
+        result = query.region(paths, required_gene(), opt_int("start", None), opt_int("end", None), partner=opt_str("partner"),
+                              partner_start=opt_int("partner_start", None), partner_end=opt_int("partner_end", None),
+                              overlap=opt_str("overlap") or "any", types=opt_types(), limit=opt_int("limit", 100))
     else:
         filters = {} if request.get("filters") is None else request["filters"]
         if not isinstance(filters, dict):

@@ -78,6 +78,32 @@ class AnalysisBridgeTest(unittest.TestCase):
         self.assertEqual(len(result["rows"]), 3)
         self.assertTrue(result["rows"][0]["name"])
 
+    def test_viewpoint_and_region(self):
+        single = self.call(operation="analysis_viewpoint", sample_ids=["S1"], gene="Zika_virusRNA", start=2000, end=2600,
+                           bin_size=10)["result"]
+        merged = self.call(operation="analysis_viewpoint", sample_ids=["S1", "S2"], gene="Zika_virusRNA", start=2000, end=2600,
+                           bin_size=10, measure="reads", types=["Type_1"])["result"]
+        self.assertEqual((single["start"], single["end"], single["bin_size"]), (2000, 2600, 10))
+        self.assertEqual(len(single["bins"]["value"]), 61)
+        self.assertGreater(single["records"], 0)
+        self.assertEqual(merged["measure"], "reads")
+        self.assertLess(merged["records"], 2 * single["records"])
+        region = self.call(operation="analysis_region", sample_ids=["S1", "S2"], gene="Zika_virusRNA", start=3000, end=3200,
+                           partner="Zika_virusRNA", partner_start=1, partner_end=10807, overlap="any", limit=5)["result"]
+        alone = self.call(operation="analysis_region", sample_ids=["S1"], gene="Zika_virusRNA", start=3000, end=3200,
+                          partner="Zika_virusRNA")["result"]
+        self.assertEqual(region["records"], 2 * alone["records"])
+        self.assertEqual(len(region["rows"]), 5)
+        self.assertEqual(region["rows"][0]["records"] % 2, 0)
+        self.assertEqual(set(region["profile"]), {"bin_size", "adjusted", "start", "end", "value"})
+        for request in ({"operation": "analysis_viewpoint", "sample_ids": ["S1"]},
+                        {"operation": "analysis_viewpoint", "sample_ids": ["S1"], "gene": "Zika_virusRNA", "start": "1"},
+                        {"operation": "analysis_region", "sample_ids": ["S1"], "gene": "Zika_virusRNA", "start": 1},
+                        {"operation": "analysis_region", "sample_ids": ["S1"], "gene": "Zika_virusRNA", "start": 1, "end": 9,
+                         "overlap": "inside"}):
+            with self.assertRaises(ValueError, msg=request):
+                self.call(**request)
+
     def test_errors(self):
         for request in (
             {"operation": "analysis_summary", "sample_ids": ["NOPE"]},

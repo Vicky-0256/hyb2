@@ -178,7 +178,7 @@ class RuntimeDetector:
         for package in ("numpy", "numba"):
             probe_id = "native." + package
             try:
-                result = subprocess.run([str(executable), "-I", "-c", f"import {package}; print({package}.__version__)"], cwd=root, capture_output=True, text=True, timeout=self.timeout_seconds, check=False)
+                result = subprocess.run([str(executable), "-I", "-B", "-c", f"import {package}; print({package}.__version__)"], cwd=root, capture_output=True, text=True, timeout=self.timeout_seconds, check=False)
                 out.append(ProbeResult(probe_id, "available" if result.returncode == 0 else "unavailable", "native-package", str(executable), _version(result.stdout.strip()), summary="Bundled package imported" if result.returncode == 0 else "Bundled package import failed"))
             except (OSError, subprocess.SubprocessError) as error:
                 out.append(ProbeResult(probe_id, "degraded", "native-package", str(executable), summary="Probe failed", error=str(error)))

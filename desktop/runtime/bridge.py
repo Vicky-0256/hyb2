@@ -293,6 +293,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
     if not isinstance(request, dict):
         raise ValueError("bridge request must be a JSON object")
     operation = request.get("operation")
+    if operation in _ANALYSIS_OPS:
+        return _analysis_op(operation, request, repo_root)
     if operation == "detect":
         return {"ok": True, "result": detect_runtime(repo_root).to_dict()}
     if operation in {"validate_project", "open_project"}:
@@ -515,6 +517,119 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         _atomic_write_json(run_dir / "result.json", result)
         return result
     raise ValueError("unsupported bridge operation: %s" % operation)
+
+
+# --- analysis queries (R3): aggregated results from per-sample SQLite indexes ---
+
+_ANALYSIS_OPS = {"analysis_summary", "analysis_contact_bins", "analysis_hybrids", "analysis_top"}
+
+
+def _analysis_module(repo_root: Path | None) -> Any:
+    package = Path(repo_root or Path.cwd()).resolve() / "pipeline"
+    if not (package / "hyb2analysis" / "__init__.py").is_file():
+        raise ValueError("the analysis backend (hyb2analysis) is not bundled")
+    if str(package) not in sys.path:
+        sys.path.insert(0, str(package))
+    import hyb2analysis
+    return hyb2analysis
+
+
+def _analysis_index_paths(request: dict[str, Any]) -> tuple[list[str], list[Path]]:
+    """Sample ids -> index files via project.json ``samples[].outputs.index``.
+
+    Relative index paths resolve inside the project; absolute ones (linked
+    data) are used as given.  ``index_paths`` may list index files directly.
+    """
+    sample_ids = request.get("sample_ids")
+    explicit = request.get("index_paths")
+    paths: list[Path] = []
+    ids: list[str] = []
+    if sample_ids is not None:
+        if not isinstance(sample_ids, list) or not all(isinstance(s, str) and s for s in sample_ids):
+            raise ValueError("sample_ids must be a list of sample ids")
+        raw_path = request.get("project_path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("project path must be a non-empty string")
+        project = Path(raw_path).expanduser().resolve()
+        if project.name == "project.json":
+            project = project.parent
+        manifest = json.loads((project / "project.json").read_text(encoding="utf-8"))
+        samples = {s.get("id"): s for s in manifest.get("samples") or [] if isinstance(s, dict)}
+        for sample_id in sample_ids:
+            sample = samples.get(sample_id)
+            if sample is None:
+                raise ValueError("unknown sample: %s" % sample_id)
+            index = ((sample.get("outputs") or {}).get("index")) if isinstance(sample.get("outputs"), dict) else None
+            if not isinstance(index, str) or not index:
+                raise ValueError("sample has no analysis index yet: %s" % sample_id)
+            if Path(index).is_absolute():
+                target = Path(index).resolve()
+            else:
+                if not safe_relative_path(index):
+                    raise ValueError("sample index must be a project-relative or absolute path: %s" % sample_id)
+                target = (project / index).resolve()
+                if project not in target.parents:
+                    raise ValueError("sample index escapes the project: %s" % sample_id)
+            paths.append(target)
+            ids.append(sample_id)
+    if explicit is not None:
+        if not isinstance(explicit, list) or not all(isinstance(p, str) and p for p in explicit):
+            raise ValueError("index_paths must be a list of paths")
+        paths.extend(Path(p).expanduser().resolve() for p in explicit)
+    if not paths:
+        raise ValueError("sample_ids or index_paths is required")
+    for path in paths:
+        if not path.is_file():
+            raise ValueError("analysis index not found: %s" % path)
+    return ids, paths
+
+
+def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None) -> dict[str, Any]:
+    analysis = _analysis_module(repo_root)
+    sample_ids, paths = _analysis_index_paths(request)
+    query = analysis.query
+
+    def opt_int(name: str, default: Any) -> Any:
+        value = request.get(name, default)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError("%s must be an integer" % name)
+        return value
+
+    def opt_str(name: str) -> Any:
+        value = request.get(name)
+        if value is not None and not isinstance(value, str):
+            raise ValueError("%s must be a string" % name)
+        return value
+
+    def opt_types() -> Any:
+        value = request.get("types")
+        if value is not None and (not isinstance(value, list) or not all(isinstance(t, str) for t in value)):
+            raise ValueError("types must be a list of chimera type names")
+        return value
+
+    if operation == "analysis_summary":
+        result = query.summary(paths)
+    elif operation == "analysis_contact_bins":
+        gene = opt_str("gene")
+        if not gene:
+            raise ValueError("gene is required")
+        result = query.contact_bins(paths, gene, opt_int("bin_size", 10), request.get("region"), gene2=opt_str("gene2"),
+                                    types=opt_types(), measure=opt_str("measure") or "records",
+                                    max_cells=opt_int("max_cells", None))
+    elif operation == "analysis_top":
+        gene = opt_str("gene")
+        if not gene:
+            raise ValueError("gene is required")
+        result = query.top_interactions(paths, gene, opt_int("bin_size", 10), opt_int("n", 50), gene2=opt_str("gene2"),
+                                        region=request.get("region"), types=opt_types(),
+                                        measure=opt_str("measure") or "records")
+    else:
+        filters = {} if request.get("filters") is None else request["filters"]
+        if not isinstance(filters, dict):
+            raise ValueError("filters must be an object")
+        result = query.hybrids(paths, filters, opt_int("limit", 100), opt_int("offset", 0),
+                               order=opt_str("order") or "file", with_sequence=request.get("with_sequence", True) is not False)
+    return {"ok": True, "operation": operation, "sample_ids": sample_ids, "indexes": [str(p) for p in paths], "result": result}
 
 
 def _json_safe(value: Any) -> Any:

@@ -141,9 +141,11 @@ assert.deepEqual(JSON.parse(JSON.stringify(overviewExport.parameters.exportedVie
 
 const reproducibilityState = {
   summary: { fileName: "primary.hyb", fileSize: 321, sha256: "primary-sha" },
-  fasta: { fileName: "reference.fa", fileSize: 99, sha256: "fasta-sha", mapping: { RNA_A: "ref_A" } },
+  // Provider-fed view model (web/page-data.js): DatasetInfo.reference and the
+  // queryHybrids total for the current filters.
+  reference: { fileName: "reference.fa", fileSize: 99, sha256: "fasta-sha", mapping: { RNA_A: "ref_A" } },
   filters: { rna: "RNA_A", chimeraType: "Type_2", minSupport: "3" },
-  interactionResults: [{}, {}],
+  view: { interactions: { total: 2, offset: 0, rows: [] } },
   viewpoint: {
     rna: "RNA_A", partner: "RNA_B", chimeraType: "Type_2", homodimer: "exclude",
     rangeMode: "reference", start: "5", end: "40", binSize: "10", measure: "support",
@@ -279,9 +281,11 @@ assert.match(comparisonExportEvents.toasts[0], /exceeds the legacy R integer max
   "Count-export failures must surface an actionable error to the user");
 assert.match(analysisPagesSource, /item \? item\.rawValue : 0/,
   "the selected-bin breakdown must display explicit zeroes for datasets without that bin");
-assert.match(appSource, /downloadText\("rna_counts\.csv", window\.Hyb2Data\.rnaCountsToCsv\(state\.records \|\| \[\]\), "text\/csv"\)/,
+assert.match(appSource, /pageData\.queryHybrids\(\{ offset: 0, limit: null \}\)/,
+  "the RNA-count and RNA-pair exports must request every row from the DataProvider");
+assert.match(appSource, /withAllRows\(function \(rows\) \{\s*downloadText\("rna_counts\.csv", window\.Hyb2Data\.rnaCountsToCsv\(rows\), "text\/csv"\)/,
   "the RNA-count control must download a complete record-derived CSV");
-assert.match(appSource, /downloadText\("rna_pairs\.csv", window\.Hyb2Data\.rnaPairsToCsv\(state\.records \|\| \[\]\), "text\/csv"\)/,
+assert.match(appSource, /withAllRows\(function \(rows\) \{\s*downloadText\("rna_pairs\.csv", window\.Hyb2Data\.rnaPairsToCsv\(rows\), "text\/csv"\)/,
   "the RNA-pair control must download a complete record-derived CSV");
 
 const comparisonCells = [

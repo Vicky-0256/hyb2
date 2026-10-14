@@ -128,12 +128,15 @@ state.records = Array.from({ length: 501 }, function (_, index) {
 });
 state.structure.source = "record";
 state.structure.selectedRecordIndex = 500;
+providerView(state);
+state.view.structureSelectedRecord = { index: 500, record: state.records[500] };
 const distantRecordHtml = context.window.Hyb2Pages.renderStructure(state);
 assert.match(distantRecordHtml, /value="500" selected>record_500/,
   "a record opened from beyond the first 500 rows must remain visible in the selector");
 assert.match(distantRecordHtml, /Hybrid-read sequence/);
 assert.match(distantRecordHtml, /not necessarily a complete reference RNA/);
 state.records = [];
+state.view = null;
 state.structure.source = "paste";
 state.structure.selectedRecordIndex = null;
 
@@ -215,7 +218,7 @@ assert.equal(report.methodScope.automaticRnaCofoldEvidenceSelection, false);
 assert.match(report.methodScope.note, /entered manually/);
 const referenceReport = context.window.Hyb2StructureUI.structureReport({
   summary: { fileName: "primary.hyb", fileSize: 111, sha256: "hyb-sha" },
-  fasta: { fileName: "reference.fa", fileSize: 222, sha256: "fasta-sha" }
+  reference: { fileName: "reference.fa", fileSize: 222, sha256: "fasta-sha" }
 }, Object.assign({}, state.structure.result, {
   source: "reference",
   sourceRna: "RNA_A",
@@ -261,6 +264,7 @@ Object.assign(guidedState.structure, {
   randomSeed: "guided-contract",
   allowLargeEnsemble: false
 });
+providerView(guidedState);
 const guidedSequence = context.window.Hyb2Pages.getStructureSequence(guidedState);
 assert.equal(guidedSequence.sequence, "GGGGGGAAAACCCCCC");
 assert.equal(guidedSequence.assembly.evidenceArms.length, 1);
@@ -377,6 +381,7 @@ Object.assign(cplfoldState.structure, {
   cplfoldBeta: "0",
   cplfoldAllowPseudoknot: true
 });
+providerView(cplfoldState);
 const cplfoldSetup = context.window.Hyb2Pages.renderStructure(cplfoldState);
 assert.match(cplfoldSetup, /CPLfold \+ Pyodide · Browser/);
 assert.match(cplfoldSetup, /HYB block bonus matrix/);
@@ -772,6 +777,7 @@ referenceState.structure.source = "reference";
 referenceState.structure.rna = "RNA_A";
 referenceState.structure.start = "";
 referenceState.structure.end = "999";
+providerView(referenceState);
 const effectiveReference = context.window.Hyb2Pages.getStructureSequence(referenceState);
 assert.equal(effectiveReference.sourceStart, 1);
 assert.equal(effectiveReference.sourceEnd, 10);
@@ -859,6 +865,35 @@ assert.equal(parameterResetState.structure.selectedNucleotide, null);
   assert.equal(controllerApi.toasts.at(-1), parameterState.structure.message,
     "The actionable parameter error should also be shown as a toast");
 });
+
+// Mirrors web/page-data.js: pages receive DataProvider results in
+// state.view / state.reference instead of raw records and the parsed FASTA.
+function providerView(target) {
+  const fasta = target.fasta || null;
+  const records = target.records || [];
+  const structure = target.structure || {};
+  const guided = structure.engine === "cplfold" ? structure.cplfoldEvidence === "hyb-blocks" : structure.constraintMode === "hyb-guided";
+  const rnas = [structure.rna, structure.secondRna].filter(function (rna, index, list) { return rna && list.indexOf(rna) === index; });
+  const mapped = {};
+  Object.keys(fasta && fasta.mapping || {}).forEach(function (rna) {
+    const entry = (fasta.sequences || []).find(function (item) { return item.id === fasta.mapping[rna]; });
+    mapped[rna] = { referenceId: fasta.mapping[rna], length: entry ? entry.sequence.length : 0 };
+  });
+  target.reference = fasta ? {
+    fileName: fasta.fileName, fileSize: fasta.fileSize, sha256: fasta.sha256,
+    mapping: Object.assign({}, fasta.mapping), mapped: mapped, sequenceCount: (fasta.sequences || []).length
+  } : null;
+  target.view = Object.assign({}, target.view, {
+    structureRecords: records.slice(0, 500),
+    structureEvidence: fasta ? {
+      fasta: { sequences: fasta.sequences || [], mapping: Object.assign({}, fasta.mapping) },
+      records: guided ? records : null,
+      guided: guided,
+      rnas: rnas
+    } : null
+  });
+  return target;
+}
 
 function structureState(constraintMode, constraintText) {
   return {

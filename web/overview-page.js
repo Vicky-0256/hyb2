@@ -49,15 +49,27 @@
   }
 
   function renderReferenceStatus(state) {
-    if (state.fasta) {
-      const mapped = Object.keys(state.fasta.mapping || {}).length;
+    // state.reference is DatasetInfo.reference from DataProvider.listDatasets().
+    const embedded = state.shell === false;
+    if (state.reference) {
+      const mapped = Object.keys(state.reference.mapping || {}).length;
       return [
         '      <section class="overview-callout" aria-label="Reference FASTA status">',
         "        <div>",
         "          <h2>Reference sequences loaded</h2>",
-        "          <p>" + format(state.fasta.sequences.length) + " FASTA sequences · " + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</p>",
+        "          <p>" + format(state.reference.sequenceCount) + " FASTA sequences · " + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</p>",
         "        </div>",
-        '        <button class="quiet-button" type="button" data-action="open-files">Review mapping</button>',
+        embedded ? "" : '        <button class="quiet-button" type="button" data-action="open-files">Review mapping</button>',
+        "      </section>"
+      ].join("");
+    }
+    if (embedded) {
+      return [
+        '      <section class="overview-callout" aria-label="Reference FASTA status">',
+        "        <div>",
+        "          <h2>Reference sequences are not available</h2>",
+        "          <p>Interaction analysis and contact maps are available now. Add a reference to the project to extract reference regions and prepare structure input.</p>",
+        "        </div>",
         "      </section>"
       ].join("");
     }

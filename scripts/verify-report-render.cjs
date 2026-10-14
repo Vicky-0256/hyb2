@@ -161,6 +161,22 @@ const state = {
   }
 };
 
+// The report reads analysis data that web/page-data.js fetched through the
+// DataProvider: page result slots, state.reference (DatasetInfo.reference)
+// and state.view.report (top filtered rows, total, partner counts).
+state.contact.matrix = context.window.Hyb2Data.buildContactMatrix();
+state.viewpoint.results = context.window.Hyb2Data.getViewpointResults();
+state.region.results = context.window.Hyb2Data.getRegionResults();
+state.comparison.result = context.window.Hyb2Data.buildComparisonResults();
+state.reference = { fileName: "reference.fasta", fileSize: 99, sha256: "fasta-sha", sequenceCount: 1, mapping: { RNA_A: "RNA_A" }, mapped: { RNA_A: { referenceId: "RNA_A", length: 4 } } };
+state.view = {
+  report: {
+    filteredTotal: 2,
+    filteredSample: context.window.Hyb2Data.getFilteredRecords(state),
+    partnerCounts: context.window.Hyb2Data.getPartnerCounts()
+  }
+};
+
 const report = context.window.Hyb2Report;
 const html = report.render(state);
 assert.match(html, /data-report-page/);

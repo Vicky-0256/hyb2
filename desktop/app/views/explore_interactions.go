@@ -270,6 +270,9 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 					p.loadMoreInteractions()
 				}
 			}
+			if ui.Button(c, "Export TSV…").Tooltip("Save the rows loaded as a tab-separated file").Disabled(len(s.rows) == 0).Clicked() && len(s.rows) > 0 {
+				p.exportInteractions()
+			}
 		})
 		p.hybridTable(c)
 	})

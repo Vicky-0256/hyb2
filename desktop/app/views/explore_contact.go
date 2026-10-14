@@ -341,6 +341,14 @@ func (p *explorePage) contactLegend(c *ui.Context, d *contactData) {
 					FontSize(11).TextColor(t.TextMuted)
 			})
 		})
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, "Export SVG…").Tooltip("Save the map as shown (cells in view)").Clicked() {
+				p.exportContactSVG()
+			}
+			if ui.Button(c, "Export TSV…").Tooltip("Save the cells in view as a tab-separated file").Clicked() {
+				p.exportContactTSV()
+			}
+		})
 	})
 }
 

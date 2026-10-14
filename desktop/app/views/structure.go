@@ -826,6 +826,9 @@ func (p *structurePage) viewer(c *ui.Context) {
 				if ui.Button(c, "Save .dbn").Clicked() {
 					p.saveDBN(a)
 				}
+				if ui.Button(c, "Export SVG…").Tooltip("Save the arc diagram as shown").Clicked() {
+					p.exportArcsSVG(a)
+				}
 			}
 		})
 		if len(p.pendingPair) == 2 {

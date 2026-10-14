@@ -926,6 +926,14 @@ func (p *comparePage) results(c *ui.Context) {
 					p.heat.Picked = -1
 				}
 				cmpLegend(c, ctx.LabelA, ctx.LabelB)
+				ui.Row(c).Gap(8).Children(func() {
+					if ui.Button(c, "Export SVG…").Tooltip("Save the significant map as shown").Clicked() {
+						p.exportMapSVG()
+					}
+					if ui.Button(c, "Export TSV…").Tooltip("Save all merged interactions as a tab-separated file").Clicked() {
+						p.exportInteractionsTSV()
+					}
+				})
 			})
 			ui.Column(c).Gap(8).Grow(1).MinWidth(320).Children(func() {
 				ui.Row(c).Gap(8).Wrap().Children(func() {

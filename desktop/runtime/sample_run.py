@@ -242,7 +242,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
         raise ValueError("sample %s has no reference" % sample_id)
     settings = dict(sample.get("settings") or {})
     settings.update(parameters or {})
-    # The Rust scheduler grants this task a CPU budget; use it unless threads were set explicitly.
+    # The desktop scheduler grants this task a CPU budget; use it unless threads were set explicitly.
     cpus = os.environ.get("HYB2_TASK_CPUS", "")
     if settings.get("threads") is None and cpus.isdigit() and int(cpus) >= 1:
         settings["threads"] = min(int(cpus), 256)

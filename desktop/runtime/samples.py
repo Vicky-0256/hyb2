@@ -548,7 +548,7 @@ def set_sample_stage(root: Path, sample_id: str, stage: str, status: str, *, tas
 
 ACTIVE_STAGE_STATUSES = ("queued", "running")
 # Status of the stage's task in runs/<task_id>/status.json (written only by the
-# Rust task manager) -> what a still-"active" stage is shown as.  queued/running
+# desktop task scheduler) -> what a still-"active" stage is shown as.  queued/running
 # task records may belong to a live task and are left alone.
 _STALE_STAGE_STATUS = {"interrupted": "interrupted", "cancelled": "cancelled", "failed": "failed",
                        "succeeded": "interrupted", None: "interrupted"}

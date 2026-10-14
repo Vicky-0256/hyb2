@@ -632,7 +632,7 @@ def _upsert(manifest: Dict[str, Any], key: str, entry: Dict[str, Any]) -> None:
 
 
 def register_task_run(root: Path, task_id: str) -> Dict[str, Any]:
-    """Upsert a manifest run from the Rust-owned ``runs/<task_id>/status.json`` (idempotent)."""
+    """Upsert a manifest run from the shell-owned ``runs/<task_id>/status.json`` (idempotent)."""
     if not isinstance(task_id, str) or not _ID.match(task_id):
         raise ValueError("task_id must be a safe identifier")
     root = Path(root).expanduser().resolve()
@@ -700,7 +700,7 @@ def new_project(root: Path, name: str, *, description: str = "", app_version: Op
 
     This is intentionally a small filesystem API for the desktop bridge.  It
     never accepts an input path as a project member; callers import files via
-    a later, hash-recording operation.  ``HYB2_APP_VERSION`` (set by the Tauri
+    a later, hash-recording operation.  ``HYB2_APP_VERSION`` (set by the desktop
     host) takes precedence over the built-in default version.
     """
     root = Path(root).expanduser().resolve()

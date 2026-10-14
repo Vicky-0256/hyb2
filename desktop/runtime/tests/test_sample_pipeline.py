@@ -83,7 +83,7 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertEqual(progress["stage"], "done")
         self.assertEqual(set(progress), {"stage", "detail", "bytes_done", "bytes_total", "updated_at"})
         self.assertTrue(json.loads((run_dir / "result.json").read_text(encoding="utf-8"))["ok"])
-        # The Rust-owned status.json + result.json still register as a project run.
+        # The shell-owned status.json + result.json still register as a project run.
         (run_dir / "status.json").write_text(json.dumps({"task_id": "sample-t1", "kind": "sample_pipeline", "status": "succeeded"}))
         run = self.call("register_task_run", task_id="sample-t1")["run"]
         self.assertIn("samples/%s/testData.hyb" % sample["id"], run["output_paths"])

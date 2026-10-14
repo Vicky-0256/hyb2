@@ -1,6 +1,6 @@
 """Cross-platform, no-dependency runtime and capability detector.
 
-This is a reference implementation for the Tauri runtime bridge. It never
+This is a reference implementation for the desktop runtime bridge. It never
 passes a command through a shell; all probes are executable plus an argument
 array. A detector result is diagnostic metadata and must not replace command
 allow-listing in the task runner.
@@ -324,7 +324,7 @@ class RuntimeDetector:
 
     def _native_runtime_probes(self) -> List[ProbeResult]:
         """Probe only a declared portable resource, never the host venv."""
-        # In development ``repo_root`` is the checkout root, while the Tauri
+        # In development ``repo_root`` is the checkout root, while the desktop shell
         # packaged bridge is launched with the resource root itself.  Accept
         # both layouts; otherwise a packaged app would probe
         # ``native/desktop/resources/native`` and always report unavailable.

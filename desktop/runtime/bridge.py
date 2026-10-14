@@ -1,6 +1,6 @@
 """Process bridge used by the independent HYB2 Desktop entry point.
 
-The Tauri layer launches this module as a long-lived sidecar (``--serve``:
+The desktop shell (desktop/app) launches this module as a long-lived sidecar (``--serve``:
 one ``{"id", "request"}`` JSON line in, one ``{"id", "response"}`` line out)
 or once per invocation (stdin line, ``--request``, ``--validate-project``).
 Keeping the protocol here makes the desktop app testable without a GUI and
@@ -202,7 +202,7 @@ def _valid_project(request: dict[str, Any]) -> Path:
 
 
 def _task_run_dir(project: Path, request: dict[str, Any], prefix: str) -> tuple[str, Path]:
-    """``(task_id, run_dir)``: an existing Rust-created run dir or a fresh secure one."""
+    """``(task_id, run_dir)``: an existing shell-created run dir or a fresh secure one."""
     task_id = _safe_task_id(request.get("task_id"), prefix)
     requested = request.get("run_dir")
     if requested is not None:
@@ -488,7 +488,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         result = {"ok": True, "task_id": task_id, "status": "succeeded" if code == 0 else "failed", "exit_code": code, "events": events, "run_dir": str(run_dir)}
         if code:
             result["error"] = "Project validation failed; see the task events for details."
-        # status.json is owned by the Rust task manager; children report via result.json.
+        # status.json is owned by the shell's task scheduler; children report via result.json.
         _atomic_write_json(run_dir / "result.json", result)
         return result
     if operation == "warmup":

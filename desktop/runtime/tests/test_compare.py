@@ -74,7 +74,7 @@ class CompareRunTests(unittest.TestCase):
         self.assertEqual(top[0], "up")
         self.assertTrue(280 <= int(top[1]) <= 350 and 1480 <= int(top[2]) <= 1550, top)
 
-        # what the Rust host does when the task ends
+        # what the desktop scheduler does when the task ends
         run_dir = Path(result["run_dir"])
         (run_dir / "status.json").write_text(json.dumps({"task_id": "cmp1", "kind": "compare", "status": "succeeded"}))
         register_task_run(self.project, "cmp1")

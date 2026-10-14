@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Small, dependency-free process runner for HYB2 Desktop.
 
-The desktop shell will eventually expose the same contract through Tauri IPC.
+The desktop shell will eventually expose the same contract through the Go task scheduler (desktop/app/core).
 This prototype deliberately accepts an argv array and never invokes a shell.
 It emits newline-delimited JSON events so a UI or an integration test can
 consume progress, logs, and terminal state incrementally.

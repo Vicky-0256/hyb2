@@ -2,7 +2,7 @@
 """Strict preflight for a distributable HYB2 native runtime.
 
 This command intentionally rejects development-external-python staging.  It is
-safe to run from CI before invoking Tauri's release build.
+safe to run from CI before building the desktop app (go tool mygo build).
 """
 from __future__ import annotations
 import argparse, hashlib, json, platform, subprocess, sys, re, importlib.util

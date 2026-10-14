@@ -86,7 +86,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn("language.numba", {probe["id"] for probe in data["probes"]})
 
     def test_packaged_native_resource_root_is_detected(self):
-        """The Tauri bridge passes resources/native as repo_root in a bundle."""
+        """The desktop shell passes resources/native as repo_root in a bundle."""
         resource_root = ROOT / "desktop" / "resources" / "native"
         if not (resource_root / "native-manifest.json").is_file():
             self.skipTest("portable native resource is not staged")

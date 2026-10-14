@@ -16,6 +16,10 @@ type Pair struct{ I, J int }
 type Arcs struct {
 	A, B   []Pair
 	Length int
+	// WeightA/WeightB, aligned with A/B, are the pairs' chimera evidence
+	// (HYB bonus); with Shade, an arc's opacity follows its weight.
+	WeightA, WeightB []float64
+	Shade            bool
 	// Start/End are the visible range (1-based, inclusive).
 	Start, End float64
 	// Region, when End > Start, shades a region (e.g. a folded window).
@@ -109,10 +113,32 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 			}
 			maxUp := base - r.Y - 6
 			maxDown := r.Y + r.H - base - 22
+			// With Shade, arcs go into five opacity buckets by weight (one
+			// path each), from 0.12 for no evidence to 1 for the strongest.
+			maxWeight := 0.0
+			if s.Shade {
+				for _, ws := range [][]float64{s.WeightA, s.WeightB} {
+					for _, w := range ws {
+						maxWeight = math.Max(maxWeight, w)
+					}
+				}
+			}
+			const buckets = 5
+			bucket := func(weights []float64, index int) int {
+				if maxWeight <= 0 || index >= len(weights) {
+					return buckets - 1
+				}
+				b := int(math.Ceil(weights[index] / maxWeight * (buckets - 1)))
+				return max(0, min(buckets-1, b))
+			}
 			draw := func(pairs []Pair, up bool, color ui.Color, onlyShared bool) {
-				var path ui.Path
-				n := 0
-				for _, pr := range pairs {
+				weights := s.WeightA
+				if !up {
+					weights = s.WeightB
+				}
+				var paths [buckets]ui.Path
+				var counts [buckets]int
+				for index, pr := range pairs {
 					if float64(pr.J) < s.Start || float64(pr.I) > s.End {
 						continue
 					}
@@ -136,13 +162,20 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 					k := float32(0.5523)
 					mid := (x0 + x1) / 2
 					rx := (x1 - x0) / 2
-					path.MoveTo(x0, base).
+					b := bucket(weights, index)
+					paths[b].MoveTo(x0, base).
 						CubeTo(x0, base+dir*height*k, mid-rx*k, base+dir*height, mid, base+dir*height).
 						CubeTo(mid+rx*k, base+dir*height, x1, base+dir*height*k, x1, base)
-					n++
+					counts[b]++
 				}
-				if n > 0 {
-					p.StrokePath(&path, 1, color)
+				for b := range buckets {
+					if counts[b] > 0 {
+						alpha := float32(0.12 + 0.88*float64(b)/(buckets-1))
+						if maxWeight <= 0 {
+							alpha = 1
+						}
+						p.StrokePath(&paths[b], 1, color.Alpha(alpha))
+					}
 				}
 			}
 			draw(s.A, true, colorA, false)

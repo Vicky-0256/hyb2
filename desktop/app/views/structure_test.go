@@ -239,3 +239,44 @@ func TestParseWindowsAndCoverage(t *testing.T) {
 		t.Fatalf("stats %+v", s)
 	}
 }
+
+func TestStructureShadeByChimeraSupport(t *testing.T) {
+	a, f := openFixture(t)
+	f.ops["list_structures"] = fixture(t, "structure_list.json")
+	p := a.PageFor("structure").(*structurePage)
+	tt := ui.NewTester(a.View, 1280, 900)
+	a.Navigate("structure", nil)
+	waitFlush(a)
+	tt.Frame()
+	var result structureResult
+	if err := model.Decode(fixture(t, "structure_read.json"), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Records) == 0 || len(result.Records[0].Bonus) != len(result.Records[0].Pairs) {
+		t.Fatalf("fixture lacks bonus values")
+	}
+	id := result.Structure.ID
+	p.cache[id] = &result
+	p.show(id)
+	tt.Frame()
+	if len(p.arcs.WeightA) != len(p.arcs.A) || len(p.arcs.A) == 0 {
+		t.Fatalf("weights %d for %d arcs", len(p.arcs.WeightA), len(p.arcs.A))
+	}
+	positive := 0
+	for _, w := range p.arcs.WeightA {
+		if w > 0 {
+			positive++
+		}
+	}
+	if positive == 0 {
+		t.Fatal("no chimera-supported pair")
+	}
+	if err := tt.Click("Shade by chimera support"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !p.shade || !p.arcs.Shade {
+		t.Fatal("shading not on")
+	}
+	snapshot(t, tt, "structure-shaded")
+}

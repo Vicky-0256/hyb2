@@ -65,7 +65,22 @@ type structureRecord struct {
 	Sequence    string   `json:"sequence"`
 	DBN         string   `json:"dbn"`
 	Pairs       [][2]int `json:"pairs"`
-	Energy      *float64 `json:"energy"`
+	// Bonus is each pair's chimera evidence (HYB bonus), aligned with Pairs.
+	Bonus  []*float64 `json:"bonus"`
+	Energy *float64   `json:"energy"`
+}
+
+// stWeights maps the records' pairs to their chimera bonus.
+func stWeights(records []structureRecord) map[[2]int]float64 {
+	out := map[[2]int]float64{}
+	for _, r := range records {
+		for i, pr := range r.Pairs {
+			if i < len(r.Bonus) && r.Bonus[i] != nil {
+				out[pr] = *r.Bonus[i]
+			}
+		}
+	}
+	return out
 }
 
 type structureResult struct {
@@ -305,6 +320,8 @@ func stParseWindows(text string, length int) ([]core.Window, []string) {
 // ---- page
 
 type structurePage struct {
+	// shade colors arcs by chimera evidence (HYB bonus).
+	shade   bool
 	a       *App
 	project string
 
@@ -819,6 +836,10 @@ func (p *structurePage) viewer(c *ui.Context) {
 					}
 				})
 			}
+			if a != nil && ui.Checkbox(c.Key("st-shade"), &p.shade, "Shade by chimera support").
+				Tooltip("Arc opacity follows the pair's HYB bonus: faint arcs have little chimera evidence").Changed() {
+				p.arcs.Shade = p.shade
+			}
 			if p.viewB != "" && ui.Button(c, "Clear B").Clicked() {
 				p.viewB = ""
 			}
@@ -955,6 +976,16 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 		return out
 	}
 	p.arcs.Set(toArcs(pairsA), toArcs(pairsB), length)
+	weights := func(pairs []stPair, records []structureRecord) []float64 {
+		known := stWeights(records)
+		out := make([]float64, len(pairs))
+		for i, pr := range pairs {
+			out[i] = known[[2]int{pr.I, pr.J}]
+		}
+		return out
+	}
+	p.arcs.WeightA, p.arcs.WeightB = weights(pairsA, recordsA), weights(pairsB, recordsB)
+	p.arcs.Shade = p.shade
 	p.arcs.Start, p.arcs.End = float64(start), float64(end)
 	if end-start < 20 {
 		p.arcs.Start, p.arcs.End = 1, float64(length)

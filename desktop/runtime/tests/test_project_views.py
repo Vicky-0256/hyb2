@@ -106,6 +106,9 @@ class StructureRegistryTests(unittest.TestCase):
         expected = [[int(c[2]), int(c[3])] for c in (line.split("\t") for line in tsv) if c[0] == "101"]
         self.assertEqual(sorted(second["pairs"]), sorted(expected))
         self.assertTrue(all(101 <= i < j <= 240 for i, j in second["pairs"]))
+        # each pair's chimera bonus comes from pairs.tsv
+        bonus = {(int(c[2]), int(c[3])): float(c[5]) for c in (line.split("\t") for line in tsv) if c[0] == "101"}
+        self.assertEqual(second["bonus"], [bonus[(i, j)] for i, j in second["pairs"]])
         with self.assertRaises(ValueError):
             handle({"operation": "read_structure", "path": str(self.project), "structure_id": "nope"}, repo_root=ROOT)
 

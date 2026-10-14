@@ -706,8 +706,28 @@ def parse_dbn(text: str) -> List[Dict[str, Any]]:
     return records
 
 
+def _pair_bonus(path: Optional[Path]) -> Dict[Tuple[int, int, int], float]:
+    """``(window_start, i, j) -> bonus`` from a pairs.tsv of :func:`_write_outputs`."""
+    out: Dict[Tuple[int, int, int], float] = {}
+    if path is None:
+        return out
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines[1:]:
+        cells = line.split("\t")
+        if len(cells) < 6:
+            continue
+        try:
+            out[(int(cells[0]), int(cells[2]), int(cells[3]))] = float(cells[5])
+        except ValueError:
+            continue
+    return out
+
+
 def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
-    """``{structure, meta, records: [{window_start, window_end, sequence, dbn, pairs, energy}]}``.
+    """``{structure, meta, records: [{window_start, window_end, sequence, dbn, pairs, bonus, energy}]}``.
 
     Coordinates are 1-based positions on the gene: ``window_start``/``window_end``
     bound each folded window and ``pairs`` lists ``[i, j]`` gene positions.
@@ -730,6 +750,7 @@ def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
         except ValueError:
             meta = {}
     parsed = parse_dbn(dbn_path.read_text(encoding="utf-8"))
+    bonus = _pair_bonus(_structure_file(project, entry, "pairs"))
     summaries = meta.get("records") if isinstance(meta.get("records"), list) else []
     records = []
     for index, record in enumerate(parsed):
@@ -738,10 +759,12 @@ def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
         if type(summary.get("start")) is int:
             start = summary["start"]
         energy = summary["energy"] if "energy" in summary else record["energy"]
+        pairs = [[start + i - 1, start + j - 1] for i, j, _ in _pairs(record["dbn"])]
         records.append({
             "window_start": start, "window_end": start + len(record["sequence"]) - 1,
-            "sequence": record["sequence"], "dbn": record["dbn"],
-            "pairs": [[start + i - 1, start + j - 1] for i, j, _ in _pairs(record["dbn"])],
+            "sequence": record["sequence"], "dbn": record["dbn"], "pairs": pairs,
+            # chimera evidence (HYB bonus) of each pair, from pairs.tsv; null when unknown
+            "bonus": [bonus.get((start, i, j)) for i, j in pairs] if bonus else None,
             "energy": energy,
         })
     return {"structure": entry, "meta": meta, "records": records}

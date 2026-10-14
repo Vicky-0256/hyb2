@@ -4,9 +4,10 @@ Layout (``FORMAT`` / ``VERSION`` in table ``meta``):
 
 ``meta(key, value)``
     source path/size/mtime, record counts, build time, invalid-line samples.
-``genes(id, name, max_end, records, reads)``
+``genes(id, name, max_end, records, reads, min_start)``
     gene names are stored once; ``max_end`` (largest arm end seen) stands in
-    for the gene length.  ``records``/``reads`` count both arms, like the web
+    for the gene length and ``min_start`` is the smallest arm start (added
+    after version 1 shipped: readers fall back when the column is absent).  ``records``/``reads`` count both arms, like the web
     parser's per-RNA table.
 ``types(id, name, records, reads)``
     chimera types (column 18, or inferred from coordinates).
@@ -48,7 +49,8 @@ PathLike = Union[str, "os.PathLike[str]"]
 
 SCHEMA = """
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
-CREATE TABLE genes(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, max_end INTEGER, records INTEGER, reads INTEGER);
+CREATE TABLE genes(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, max_end INTEGER, records INTEGER, reads INTEGER,
+                   min_start INTEGER);
 CREATE TABLE types(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, records INTEGER, reads INTEGER);
 CREATE TABLE pairs(g1 INTEGER, g2 INTEGER, records INTEGER, reads INTEGER, max_span1 INTEGER, max_span2 INTEGER,
                    PRIMARY KEY(g1, g2)) WITHOUT ROWID;
@@ -123,19 +125,21 @@ def _build(con: sqlite3.Connection, hyb: Path, total_bytes: int, progress) -> Di
         con.execute("PRAGMA " + pragma)
     con.executescript(SCHEMA)
 
-    genes: Dict[bytes, List[int]] = {}   # name -> [id, max_end, records, reads]
+    genes: Dict[bytes, List[int]] = {}   # name -> [id, max_end, records, reads, min_start]
     types: Dict[bytes, List[int]] = {}   # name -> [id, records, reads]
     pairs: Dict[Tuple[int, int], List[int]] = {}
     counters = {"records": 0, "invalid": 0, "skipped": 0, "reads": 0, "records_with_reads": 0, "with_dg": 0,
                 "intra_records": 0, "inter_records": 0}
     errors: List[Dict] = []
 
-    def gene_id(name: bytes, end: int, reads: int) -> int:
+    def gene_id(name: bytes, start: int, end: int, reads: int) -> int:
         entry = genes.get(name)
         if entry is None:
-            entry = genes[name] = [len(genes) + 1, 0, 0, 0]
+            entry = genes[name] = [len(genes) + 1, 0, 0, 0, start]
         if end > entry[1]:
             entry[1] = end
+        if start < entry[4]:
+            entry[4] = start
         entry[2] += 1
         entry[3] += reads
         return entry[0]
@@ -165,8 +169,8 @@ def _build(con: sqlite3.Connection, hyb: Path, total_bytes: int, progress) -> Di
                     continue
                 parsed = tuple(record)
             g1n, s1, e1, g2n, s2, e2, reads, dg, overlap, ctype = parsed
-            g1 = gene_id(g1n, e1, reads)
-            g2 = gene_id(g2n, e2, reads)
+            g1 = gene_id(g1n, s1, e1, reads)
+            g2 = gene_id(g2n, s2, e2, reads)
             tentry = types.get(ctype)
             if tentry is None:
                 tentry = types[ctype] = [len(types) + 1, 0, 0]
@@ -196,8 +200,8 @@ def _build(con: sqlite3.Connection, hyb: Path, total_bytes: int, progress) -> Di
                     progress(offset, total_bytes)
     if batch:
         con.executemany(insert, batch)
-    con.executemany("INSERT INTO genes VALUES (?,?,?,?,?)",
-                    [(v[0], k.decode("utf-8", "replace"), v[1], v[2], v[3]) for k, v in genes.items()])
+    con.executemany("INSERT INTO genes VALUES (?,?,?,?,?,?)",
+                    [(v[0], k.decode("utf-8", "replace"), v[1], v[2], v[3], v[4]) for k, v in genes.items()])
     con.executemany("INSERT INTO types VALUES (?,?,?,?)",
                     [(v[0], k.decode("utf-8", "replace"), v[1], v[2]) for k, v in types.items()])
     con.executemany("INSERT INTO pairs VALUES (?,?,?,?,?,?)", [(k[0], k[1], *v) for k, v in pairs.items()])

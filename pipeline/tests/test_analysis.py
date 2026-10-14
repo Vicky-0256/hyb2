@@ -233,5 +233,136 @@ class IndexQueryTest(unittest.TestCase):
         self.assertEqual((meta["records"], meta["invalid"], meta["skipped"]), (2, 1, 2))
 
 
+def brute_pair(recs, gene, gene2, bin_size, both=False):
+    """Cells of the (gene, gene2) map; ``both`` adds (gene2, gene) rows with swapped arms."""
+    cells = {}
+    g, g2 = gene.encode(), gene2.encode()
+    for r in recs:
+        if r.gene1 == g and r.gene2 == g2:
+            spans = (r.start1, r.end1, r.start2, r.end2)
+        elif both and g != g2 and r.gene1 == g2 and r.gene2 == g:
+            spans = (r.start2, r.end2, r.start1, r.end1)
+        else:
+            continue
+        for i in range(spans[0] // bin_size, spans[1] // bin_size + 1):
+            for j in range(spans[2] // bin_size, spans[3] // bin_size + 1):
+                key = (i * bin_size, j * bin_size)
+                cells[key] = cells.get(key, 0) + 1
+    return cells
+
+
+class ProviderGapsTest(unittest.TestCase):
+    """extents/lengths, orientation, fixed_bin and compare_bins (DesktopProvider needs)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.index = Path(cls.tmp.name) / "testData.hyb2idx"
+        index.build(HYB, cls.index)
+        cls.records = records()
+        # a second "condition": only the first half of the file
+        half = Path(cls.tmp.name) / "half.hyb"
+        lines = HYB.read_text().splitlines(keepends=True)
+        half.write_text("".join(lines[: len(lines) // 2]))
+        cls.half = Path(cls.tmp.name) / "half.hyb2idx"
+        index.build(half, cls.half)
+        cls.half_records = [r for r in (hybfile.parse(line.encode()) for line in lines[: len(lines) // 2]) if r is not None]
+
+    @classmethod
+    def tearDownClass(cls):
+        query.close_all()
+        cls.tmp.cleanup()
+
+    def expected_extents(self, recs):
+        out = {}
+        for r in recs:
+            for gene, start, end in ((r.gene1, r.start1, r.end1), (r.gene2, r.start2, r.end2)):
+                lo, hi = out.get(gene.decode(), (start, end))
+                out[gene.decode()] = (min(lo, start), max(hi, end))
+        return {k: {"min": lo, "max": hi} for k, (lo, hi) in out.items()}
+
+    def test_summary_extents_and_reference_lengths(self):
+        result = query.summary([self.index, self.half], lengths={"Zika_virusRNA": 10807})
+        self.assertEqual(result["merged"]["extents"], self.expected_extents(self.records))
+        self.assertEqual(result["indexes"][1]["extents"], self.expected_extents(self.half_records))
+        genes = {g["name"]: g for g in result["merged"]["genes"]}
+        self.assertEqual((genes["Zika_virusRNA"]["length"], genes["Zika_virusRNA"]["length_source"]), (10807, "reference"))
+        self.assertEqual(genes["18S_rRNA"]["length"], genes["18S_rRNA"]["max_end"])
+        self.assertEqual(genes["18S_rRNA"]["length_source"], "observed")
+        with self.assertRaises(ValueError):
+            query.summary([self.index], lengths={"Zika_virusRNA": "long"})
+
+    def test_extents_fall_back_for_indexes_without_min_start(self):
+        import shutil
+        import sqlite3
+
+        old = Path(self.tmp.name) / "old.hyb2idx"
+        shutil.copy(self.index, old)
+        con = sqlite3.connect(str(old))
+        con.execute("ALTER TABLE genes DROP COLUMN min_start")
+        con.commit()
+        con.close()
+        self.assertEqual(query.summary([old])["merged"]["extents"], self.expected_extents(self.records))
+
+    def test_orientation_both_merges_swapped_pairs(self):
+        for bin_size in (50, 200):
+            oriented = query.contact_bins([self.index], "Zika_virusRNA", bin_size, gene2="18S_rRNA")
+            both = query.contact_bins([self.index], "Zika_virusRNA", bin_size, gene2="18S_rRNA", orientation="both")
+            self.assertEqual(as_cells(oriented), brute_pair(self.records, "Zika_virusRNA", "18S_rRNA", bin_size))
+            self.assertEqual(as_cells(both), brute_pair(self.records, "Zika_virusRNA", "18S_rRNA", bin_size, both=True))
+            self.assertEqual(both["orientation"], "both")
+        swapped = sum(1 for r in self.records if r.gene1 == b"18S_rRNA" and r.gene2 == b"Zika_virusRNA")
+        self.assertGreater(swapped, 0)  # the fixture has both orientations
+        self.assertEqual(both["total"], oriented["total"] + swapped)
+        # intramolecular maps keep the legacy (unmirrored) rule
+        self.assertEqual(query.contact_bins([self.index], "Zika_virusRNA", 100, orientation="both")["count"],
+                         query.contact_bins([self.index], "Zika_virusRNA", 100)["count"])
+        top = query.top_interactions([self.index], "18S_rRNA", 100, 5, gene2="Zika_virusRNA", orientation="both")
+        expected = sorted(brute_pair(self.records, "18S_rRNA", "Zika_virusRNA", 100, both=True).items(),
+                          key=lambda kv: (-kv[1], kv[0]))[:5]
+        self.assertEqual([(row["x"], row["y"], row["count"]) for row in top["rows"]], [(x, y, c) for (x, y), c in expected])
+        with self.assertRaises(ValueError):
+            query.contact_bins([self.index], "Zika_virusRNA", 10, orientation="normalised")
+
+    def test_fixed_bin_ignores_max_cells(self):
+        fixed = query.contact_bins([self.index], "Zika_virusRNA", 10, max_cells=500, fixed_bin=True)
+        self.assertEqual((fixed["bin_size"], fixed["adjusted"], fixed["fixed_bin"]), (10, False, True))
+        self.assertGreater(fixed["cells"], 500)
+        with self.assertRaises(ValueError):  # the dense-grid guard still applies
+            query.contact_bins([self.index], "Zika_virusRNA", 1, max_cells=10, fixed_bin=True)
+        self.assertEqual(query.contact_bins([self.index], "Zika_virusRNA", 10, lengths={"Zika_virusRNA": 10807})["length"], 10807)
+
+    def test_compare_bins_normalizes_per_million(self):
+        result = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 100)
+        full = brute_contact(self.records, "Zika_virusRNA", 100)
+        half = brute_contact(self.half_records, "Zika_virusRNA", 100)
+        keys = sorted(set(full) | set(half))
+        self.assertEqual(list(zip(result["x"], result["y"])), keys)
+        self.assertEqual(result["a_count"], [full.get(k, 0) for k in keys])
+        self.assertEqual(result["b_count"], [half.get(k, 0) for k in keys])
+        lib_a, lib_b = len(self.records), len(self.half_records)
+        self.assertEqual((result["library_a"], result["library_b"]), (lib_a, lib_b))
+        self.assertAlmostEqual(result["pseudocount"], 1e6 / lib_b)
+        import math
+        for k, key in enumerate(keys[:200]):
+            a = full.get(key, 0) * 1e6 / lib_a
+            b = half.get(key, 0) * 1e6 / lib_b
+            self.assertAlmostEqual(result["a"][k], a, places=5)
+            self.assertAlmostEqual(result["b"][k], b, places=5)
+            self.assertAlmostEqual(result["log2ratio"][k], math.log2((b + 1e6 / lib_b) / (a + 1e6 / lib_b)), places=5)
+        self.assertEqual(result["normalization"], "per_million_records")
+        same = query.compare_bins([self.index, self.index], [self.index], "Zika_virusRNA", 250)
+        self.assertEqual(same["a"], same["b"])
+        coarse = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 10, max_cells=300)
+        self.assertTrue(coarse["adjusted"])
+        self.assertLessEqual(coarse["cells"], 300)
+        fixed = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 10, max_cells=300, fixed_bin=True)
+        self.assertEqual(fixed["bin_size"], 10)
+        region = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 50, {"x": [1000, 2999], "y": [4000, 8999]})
+        self.assertTrue(all(1000 <= x <= 2999 for x in region["x"]) and all(4000 <= y <= 8999 for y in region["y"]))
+        empty = query.compare_bins([self.index], [self.half], "Missing", 50)
+        self.assertEqual((empty["cells"], empty["x"]), (0, []))
+
+
 if __name__ == "__main__":
     unittest.main()

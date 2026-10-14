@@ -3,6 +3,8 @@
 Every function takes ``indexes``: a list of index paths.  Gene and type names
 are resolved per index, so indexes built from different files merge by name.
 
+``compare_bins`` puts two such merged groups (conditions) on one bin grid.
+
 Contact maps use the legacy ``plot_hybrids_3.awk USE_ENTIRE_HYBRIDS=1``
 rule at the requested bin size: a hybrid adds one to every
 ``bin(arm 1) x bin(arm 2)`` cell its two arms cover, where
@@ -55,9 +57,30 @@ class _Index:
         self.type_names = {tid: name for name, tid in self.types.items()}
         self.spans = {(g1, g2): (s1, s2) for g1, g2, s1, s2 in self.con.execute("SELECT g1, g2, max_span1, max_span2 FROM pairs")}
 
+        self._extents: Optional[Dict[str, Tuple[int, int]]] = None
+
     def gene(self, name: str) -> Optional[int]:
         entry = self.genes.get(name)
         return entry[0] if entry else None
+
+    def extents(self) -> Dict[str, Tuple[int, int]]:
+        """``{gene: (smallest arm start, largest arm end)}`` over both arms."""
+        if self._extents is None:
+            try:
+                rows = self.con.execute("SELECT name, min_start, max_end FROM genes").fetchall()
+                extents = {name: (lo, hi) for name, lo, hi in rows if lo is not None}
+            except sqlite3.OperationalError:  # index built before genes.min_start existed
+                lows: Dict[int, int] = {}
+                for (g1, g2) in self.spans:
+                    row = self.con.execute("SELECT min(s1) FROM hybrids WHERE g1 = ? AND g2 = ?", (g1, g2)).fetchone()
+                    if row[0] is not None:
+                        lows[g1] = min(lows.get(g1, row[0]), row[0])
+                    row = self.con.execute("SELECT min(s2) FROM hybrids WHERE g1 = ? AND g2 = ?", (g1, g2)).fetchone()
+                    if row[0] is not None:
+                        lows[g2] = min(lows.get(g2, row[0]), row[0])
+                extents = {name: (lows[gid], max_end) for name, (gid, max_end) in self.genes.items() if gid in lows}
+            self._extents = extents
+        return self._extents
 
 
 _lock = threading.Lock()
@@ -106,7 +129,8 @@ def close_all() -> None:
 
 def _single_summary(index: _Index) -> Dict[str, Any]:
     con = index.con
-    genes = [{"name": n, "length": m, "records": r, "reads": rd}
+    extents = index.extents()
+    genes = [{"name": n, "length": m, "max_end": m, "min_start": extents.get(n, (None, m))[0], "records": r, "reads": rd}
              for n, m, r, rd in con.execute("SELECT name, max_end, records, reads FROM genes ORDER BY records DESC, name")]
     types = [{"name": n, "records": r, "reads": rd}
              for n, r, rd in con.execute("SELECT name, records, reads FROM types ORDER BY records DESC, name")]
@@ -123,7 +147,7 @@ def _single_summary(index: _Index) -> Dict[str, Any]:
 
 
 def _merge_named(lists: Iterable[List[Dict[str, Any]]], keys: Sequence[str], sums: Sequence[str],
-                 maxes: Sequence[str] = ()) -> List[Dict[str, Any]]:
+                 maxes: Sequence[str] = (), mins: Sequence[str] = ()) -> List[Dict[str, Any]]:
     merged: Dict[tuple, Dict[str, Any]] = {}
     for items in lists:
         for item in items:
@@ -136,17 +160,51 @@ def _merge_named(lists: Iterable[List[Dict[str, Any]]], keys: Sequence[str], sum
                 entry[name] += item[name]
             for name in maxes:
                 entry[name] = max(entry[name], item[name])
+            for name in mins:
+                if item[name] is not None:
+                    entry[name] = item[name] if entry[name] is None else min(entry[name], item[name])
     return sorted(merged.values(), key=lambda item: (-item["records"],) + tuple(item[k] for k in keys))
 
 
-def summary(indexes: Sequence[PathLike]) -> Dict[str, Any]:
-    """Per-index summaries plus a merged total (``merged``)."""
+def _check_lengths(lengths: Optional[Dict[str, int]]) -> Dict[str, int]:
+    if lengths is None:
+        return {}
+    if not isinstance(lengths, dict) or any(not isinstance(k, str) or isinstance(v, bool) or not isinstance(v, int) or v < 0
+                                            for k, v in lengths.items()):
+        raise ValueError("lengths must map gene names to non-negative integers")
+    return lengths
+
+
+def _apply_lengths(genes: List[Dict[str, Any]], lengths: Dict[str, int]) -> Dict[str, Dict[str, Any]]:
+    """Set ``length`` from the reference when known; return ``{gene: {min, max}}`` extents."""
+    extents = {}
+    for gene in genes:
+        known = lengths.get(gene["name"])
+        gene["length"] = known if known is not None else gene["max_end"]
+        gene["length_source"] = "reference" if known is not None else "observed"
+        extents[gene["name"]] = {"min": gene["min_start"], "max": gene["max_end"]}
+    return extents
+
+
+def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """Per-index summaries plus a merged total (``merged``).
+
+    ``genes[]`` rows are ``{name, length, length_source, max_end, min_start,
+    records, reads}``: ``length`` is the reference length from ``lengths``
+    (gene name -> nt) when known, otherwise the largest arm end seen
+    (``length_source`` says which).  Each part and ``merged`` also carry
+    ``extents: {gene: {min, max}}``, the observed arm coordinate range.
+    """
+    lengths = _check_lengths(lengths)
     parts = [_single_summary(index) for index in _indexes(indexes)]
     merged = {name: sum(part[name] for part in parts)
               for name in ("records", "reads", "records_with_reads", "with_dg", "intra_records", "inter_records", "invalid", "skipped")}
-    merged["genes"] = _merge_named((p["genes"] for p in parts), ("name",), ("records", "reads"), ("length",))
+    merged["genes"] = _merge_named((p["genes"] for p in parts), ("name",), ("records", "reads"), ("length", "max_end"), ("min_start",))
     merged["types"] = _merge_named((p["types"] for p in parts), ("name",), ("records", "reads"))
     merged["pairs"] = _merge_named((p["pairs"] for p in parts), ("gene1", "gene2"), ("records", "reads"))
+    for part in parts:
+        part["extents"] = _apply_lengths(part["genes"], lengths)
+    merged["extents"] = _apply_lengths(merged["genes"], lengths)
     return {"indexes": parts, "merged": merged}
 
 
@@ -233,13 +291,36 @@ def _rasterise(parts: List[Tuple[np.ndarray, ...]], bin_size: int, bounds: Tuple
     return grid[:nx, :ny]
 
 
+ORIENTATIONS = ("oriented", "both")
+
+
+def _pair_rects(index: _Index, g1: Optional[int], g2: Optional[int], swapped: bool) -> Optional[Dict[str, np.ndarray]]:
+    """Rectangles of the oriented pair ``(g1, g2)``; ``swapped`` loads ``(g2, g1)`` with the arms exchanged."""
+    if g1 is None or g2 is None:
+        return None
+    rects = _load_rects(index, g2, g1) if swapped else _load_rects(index, g1, g2)
+    if rects is None or not swapped:
+        return rects
+    out = dict(rects)
+    out["s1"], out["e1"], out["s2"], out["e2"] = rects["s2"], rects["e2"], rects["s1"], rects["e1"]
+    return out
+
+
 def _contact_grid(indexes: List[_Index], gene: str, gene2: Optional[str], bin_size: int, region,
-                  types: Optional[Sequence[str]], measure: str):
-    """Per-index rectangle selections and the merged grid."""
+                  types: Optional[Sequence[str]], measure: str, orientation: str = "oriented"):
+    """Per-index rectangle selections and the merged grid.
+
+    ``orientation="both"`` adds the hybrids whose arm 1 is on ``gene2`` and
+    arm 2 on ``gene`` with the arms swapped (the browser's "normalised"
+    pairs).  For an intramolecular map (``gene2 == gene``) both settings keep
+    the legacy rule: x = arm 1, y = arm 2, no mirroring.
+    """
     if isinstance(bin_size, bool) or not isinstance(bin_size, int) or not 1 <= bin_size <= 100_000:
         raise ValueError("bin_size must be an integer between 1 and 100000")
     if measure not in ("records", "reads"):
         raise ValueError("measure must be 'records' or 'reads'")
+    if orientation not in ORIENTATIONS:
+        raise ValueError("orientation must be 'oriented' or 'both'")
     gene2 = gene2 or gene
     bounds_nt = _region(region)
     selections = []
@@ -250,13 +331,16 @@ def _contact_grid(indexes: List[_Index], gene: str, gene2: Optional[str], bin_si
             length_x = max(length_x, index.genes[gene][1])
         if g2 is not None:
             length_y = max(length_y, index.genes[gene2][1])
-        rects = _load_rects(index, g1, g2) if g1 is not None and g2 is not None else None
-        if rects is None:
+        found = [rects for rects in (_pair_rects(index, g1, g2, False),
+                                     _pair_rects(index, g1, g2, True) if orientation == "both" and gene2 != gene else None)
+                 if rects is not None]
+        if not found:
             selections.append(None)
             continue
-        s1, e1, s2, e2 = (rects[k].astype(np.int64) for k in ("s1", "e1", "s2", "e2"))
-        weight = rects["count" if measure == "records" else "reads"].astype(np.int64)
-        mask = _type_mask(index, rects, types)
+        s1, e1, s2, e2 = (np.concatenate([rects[k].astype(np.int64) for rects in found]) for k in ("s1", "e1", "s2", "e2"))
+        weight = np.concatenate([rects["count" if measure == "records" else "reads"].astype(np.int64) for rects in found])
+        masks = [_type_mask(index, rects, types) for rects in found]
+        mask = None if masks[0] is None else np.concatenate(masks)
         if bounds_nt is not None:
             x0, x1, y0, y1 = bounds_nt
             # keep rectangles that reach the region's bins
@@ -289,40 +373,128 @@ def _cells(grid: np.ndarray, bounds, bin_size: int):
     return (ix + bounds[0]) * bin_size, (iy + bounds[2]) * bin_size, grid[ix, iy]
 
 
+def _lengths_for(lengths: Dict[str, int], gene: str, gene2: Optional[str], observed: Tuple[int, int]) -> Tuple[int, int]:
+    return (lengths.get(gene, observed[0]), lengths.get(gene2 or gene, observed[1]))
+
+
 def contact_bins(indexes: Sequence[PathLike], gene: str, bin_size: int = 10, region: Any = None, *,
                  gene2: Optional[str] = None, types: Optional[Sequence[str]] = None, measure: str = "records",
-                 max_cells: Optional[int] = None) -> Dict[str, Any]:
+                 max_cells: Optional[int] = None, orientation: str = "oriented", fixed_bin: bool = False,
+                 lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """Non-empty contact-map cells for ``gene`` (x = arm 1, y = arm 2).
 
     Returns ``{gene, gene2, bin_size, requested_bin_size, adjusted, measure,
-    length, length2, region, cells, total, max, x: [], y: [], count: []}``
-    where ``x``/``y`` are bin starts in nt (row-major order) and ``total`` is
-    the summed weight of the hybrids drawn.  With ``max_cells`` the bin size
-    is doubled until the map has at most that many non-empty cells.
+    orientation, fixed_bin, length, length2, region, cells, total, max, x: [],
+    y: [], count: []}`` where ``x``/``y`` are bin starts in nt (row-major
+    order) and ``total`` is the summed weight of the hybrids drawn.  With
+    ``max_cells`` the bin size is doubled until the map has at most that many
+    non-empty cells, unless ``fixed_bin`` (then the requested bin is kept, so
+    maps of several datasets line up; the dense-grid guard still applies).
+    ``length``/``length2`` are reference lengths from ``lengths`` when known,
+    otherwise the largest arm end seen.
     """
+    if not isinstance(fixed_bin, bool):
+        raise ValueError("fixed_bin must be a boolean")
+    lengths = _check_lengths(lengths)
     opened = _indexes(indexes)
     requested = bin_size
     while True:
-        selections, bounds, lengths = _contact_grid(opened, gene, gene2, bin_size, region, types, measure)
+        selections, bounds, observed = _contact_grid(opened, gene, gene2, bin_size, region, types, measure, orientation)
         parts = [sel for sel in selections if sel is not None and len(sel[0])]
         grid = _rasterise(parts, bin_size, bounds) if parts else np.zeros((0, 0), dtype=np.int64)
         cells = int(np.count_nonzero(grid))
-        if max_cells is None or cells <= max_cells or bin_size >= 100_000:
+        if fixed_bin or max_cells is None or cells <= max_cells or bin_size >= 100_000:
             break
         bin_size *= 2
     x, y, count = _cells(grid, bounds, bin_size)
+    length, length2 = _lengths_for(lengths, gene, gene2, observed)
     return {
         "gene": gene, "gene2": gene2 or gene, "bin_size": bin_size, "requested_bin_size": requested,
-        "adjusted": bin_size != requested, "measure": measure, "length": lengths[0], "length2": lengths[1],
+        "adjusted": bin_size != requested, "measure": measure, "orientation": orientation, "fixed_bin": fixed_bin,
+        "length": length, "length2": length2,
         "region": region, "cells": cells, "total": int(sum(int(sel[4].sum()) for sel in parts)),
         "max": int(count.max()) if len(count) else 0,
         "x": x.tolist(), "y": y.tolist(), "count": count.tolist(),
     }
 
 
+def _union_bounds(*bounds: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
+    return (min(b[0] for b in bounds), max(b[1] for b in bounds), min(b[2] for b in bounds), max(b[3] for b in bounds))
+
+
+def _side_grid(selections, bin_size: int, bounds) -> np.ndarray:
+    parts = [sel for sel in selections if sel is not None and len(sel[0])]
+    if parts:
+        return _rasterise(parts, bin_size, bounds)
+    nx, ny = bounds[1] - bounds[0] + 1, bounds[3] - bounds[2] + 1
+    if nx * ny > MAX_GRID_CELLS:
+        raise ValueError("contact map would need %d cells; increase bin_size or narrow the region" % (nx * ny))
+    return np.zeros((nx, ny), dtype=np.int64)
+
+
+def compare_bins(indexes_a: Sequence[PathLike], indexes_b: Sequence[PathLike], gene: str, bin_size: int = 10,
+                 region: Any = None, *, gene2: Optional[str] = None, types: Optional[Sequence[str]] = None,
+                 measure: str = "records", orientation: str = "oriented", max_cells: Optional[int] = None,
+                 fixed_bin: bool = False, lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """Two conditions on one shared bin grid (descriptive, no statistics).
+
+    Each side's indexes are merged by summing; counts are normalized to
+    counts per million of that side's library (total records, or total reads
+    for ``measure="reads"``).  Cells non-empty on either side are returned
+    in row-major order::
+
+        {gene, gene2, bin_size, requested_bin_size, adjusted, measure, orientation,
+         length, length2, region, cells, library_a, library_b, pseudocount,
+         x: [], y: [], a: [], b: [], a_count: [], b_count: [], log2ratio: []}
+
+    ``a``/``b`` are the normalized values, ``a_count``/``b_count`` the raw
+    ones and ``log2ratio = log2((b + p) / (a + p))`` with ``p`` the
+    normalized value of one count in the smaller library.  ``max_cells``
+    doubles the shared bin size (unless ``fixed_bin``) until the union has at
+    most that many cells.
+    """
+    if not isinstance(fixed_bin, bool):
+        raise ValueError("fixed_bin must be a boolean")
+    lengths = _check_lengths(lengths)
+    side_a, side_b = _indexes(indexes_a), _indexes(indexes_b)
+    key = "records" if measure == "records" else "reads"
+    library_a = sum(int(index.meta[key]) for index in side_a)
+    library_b = sum(int(index.meta[key]) for index in side_b)
+    requested = bin_size
+    while True:
+        sel_a, bounds_a, observed_a = _contact_grid(side_a, gene, gene2, bin_size, region, types, measure, orientation)
+        sel_b, bounds_b, observed_b = _contact_grid(side_b, gene, gene2, bin_size, region, types, measure, orientation)
+        bounds = _union_bounds(bounds_a, bounds_b)
+        grid_a = _side_grid(sel_a, bin_size, bounds)
+        grid_b = _side_grid(sel_b, bin_size, bounds)
+        ix, iy = np.nonzero((grid_a != 0) | (grid_b != 0))
+        if fixed_bin or max_cells is None or len(ix) <= max_cells or bin_size >= 100_000:
+            break
+        del grid_a, grid_b
+        bin_size *= 2
+    count_a, count_b = grid_a[ix, iy], grid_b[ix, iy]
+    del grid_a, grid_b
+    norm_a = count_a * (1e6 / library_a) if library_a else np.zeros(len(ix))
+    norm_b = count_b * (1e6 / library_b) if library_b else np.zeros(len(ix))
+    smallest = min([lib for lib in (library_a, library_b) if lib] or [1_000_000])
+    pseudocount = 1e6 / smallest
+    ratio = np.log2((norm_b + pseudocount) / (norm_a + pseudocount))
+    observed = (max(observed_a[0], observed_b[0]), max(observed_a[1], observed_b[1]))
+    length, length2 = _lengths_for(lengths, gene, gene2, observed)
+    return {
+        "gene": gene, "gene2": gene2 or gene, "bin_size": bin_size, "requested_bin_size": requested,
+        "adjusted": bin_size != requested, "measure": measure, "orientation": orientation,
+        "normalization": "per_million_" + key, "length": length, "length2": length2, "region": region,
+        "cells": int(len(ix)), "library_a": library_a, "library_b": library_b, "pseudocount": pseudocount,
+        "x": ((ix + bounds[0]) * bin_size).tolist(), "y": ((iy + bounds[2]) * bin_size).tolist(),
+        "a": np.round(norm_a, 6).tolist(), "b": np.round(norm_b, 6).tolist(),
+        "a_count": count_a.tolist(), "b_count": count_b.tolist(), "log2ratio": np.round(ratio, 6).tolist(),
+    }
+
+
 def top_interactions(indexes: Sequence[PathLike], gene: str, bin_size: int = 10, n: int = 50, *,
                      gene2: Optional[str] = None, region: Any = None, types: Optional[Sequence[str]] = None,
-                     measure: str = "records") -> Dict[str, Any]:
+                     measure: str = "records", orientation: str = "oriented") -> Dict[str, Any]:
     """The ``n`` strongest contact cells, with the per-index counts behind each.
 
     Ties are broken by position (x, then y).  Each row is
@@ -331,7 +503,7 @@ def top_interactions(indexes: Sequence[PathLike], gene: str, bin_size: int = 10,
     if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= MAX_LIMIT:
         raise ValueError("n must be an integer between 1 and %d" % MAX_LIMIT)
     opened = _indexes(indexes)
-    selections, bounds, lengths = _contact_grid(opened, gene, gene2, bin_size, region, types, measure)
+    selections, bounds, lengths = _contact_grid(opened, gene, gene2, bin_size, region, types, measure, orientation)
     grids = [(_rasterise([sel], bin_size, bounds) if sel is not None and len(sel[0]) else None) for sel in selections]
     shape = (bounds[1] - bounds[0] + 1, bounds[3] - bounds[2] + 1)
     total = np.zeros(shape, dtype=np.int64)

@@ -4,15 +4,16 @@
   ``hyb2_coverage`` contact.txt and the ``hyb2_compare`` forTable, byte-for-byte.
 * :func:`index.build`: a per-sample SQLite index of a .hyb file.
 * :mod:`query`: ``summary``, ``contact_bins``, ``hybrids``, ``top_interactions``
-  over one or more indexes (replicates merged by summing).
+  over one or more indexes (replicates merged by summing), and
+  ``compare_bins`` for two conditions on one shared bin grid.
 
 Requires numpy; the import of ``hyb2pipe.awk`` expects ``pipeline/`` on sys.path.
 """
 from . import coverage, index, query
 from .coverage import write_contact, write_for_table
 from .index import build
-from .query import contact_bins, hybrids, summary, top_interactions
+from .query import compare_bins, contact_bins, hybrids, summary, top_interactions
 
 __all__ = ["coverage", "index", "query", "write_contact", "write_for_table", "build",
-           "summary", "contact_bins", "hybrids", "top_interactions"]
+           "summary", "contact_bins", "compare_bins", "hybrids", "top_interactions"]
 __version__ = "0.1.0"

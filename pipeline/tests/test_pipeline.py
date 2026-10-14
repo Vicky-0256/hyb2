@@ -283,6 +283,8 @@ class StreamingTest(unittest.TestCase):
 
 
 class Bowtie2StreamTest(unittest.TestCase):
+    # The stand-in Bowtie2 is a shell script, which Windows cannot execute.
+    @unittest.skipIf(sys.platform == "win32", "needs a POSIX shell script as the fake bowtie2")
     def test_killed_bowtie2_reports_exit_not_parse_error(self):
         import os
         import subprocess

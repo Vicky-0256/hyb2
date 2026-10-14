@@ -27,7 +27,6 @@ import importlib.util
 import json
 import math
 import os
-import resource
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -77,6 +76,10 @@ def _now() -> str:
 
 
 def _peak_rss_bytes() -> int:
+    try:
+        import resource  # POSIX only; Windows has no getrusage
+    except ImportError:
+        return 0
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(value if sys.platform == "darwin" else value * 1024)
 

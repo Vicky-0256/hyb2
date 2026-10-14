@@ -88,3 +88,15 @@ M1 完成后，M2、M3、M4 可以由多个 agent 在各自的 worktree 里并�
 1. 安装 Go 1.27.2（`brew install go`）和 mygo CLI（`go install`，MyGo 的 getting-started 文档里写的方式）。
 2. Tauri 版本保留到 M5 再删（建议），还是现在就删。
 3. 按 M0 → M1 顺序做，M1 完成后用多个 agent 并行做 M2、M3、M4。
+
+## 8. 进度（2026-10-14）
+
+M0 到 M5 都已完成，Tauri 外壳（`desktop/src-tauri`）和旧的 WebView 界面（`desktop/ui`、`package.json`、`stage-frontend.cjs`）已从仓库中删除。
+
+- **M0**：`desktop/app` 骨架，捆绑运行时作为平台资源打包。
+- **M1**：Rust 核心移植到 Go（`core/`：sidecar、任务调度、偏好设置、白名单），Rust 测试全部移植。
+- **M2–M4**：数据、质控、探索、比较、结构页面，以及共享的热图、弧图和覆盖度控件；探索页新增后端查询 `analysis_viewpoint` 和 `analysis_region`。
+- **M5**：报告页和 HTML 报告导出，各页面的 TSV / SVG 导出，三平台 CI（`.github/workflows/desktop-native.yml`），文档更新。
+- **验证**：`e2e_test.go` 用真实 ZIKV 数据跑通“导入 → 流程 → 质控 → 差异检验 → contact map → 折叠”（约 100 秒），记录见 `desktop/VERIFICATION.md`。
+
+仍未完成：Windows 和 Linux 上实际运行 APP（CI 只覆盖构建和测试）；在 macOS 上手动点击真实窗口（本机终端没有屏幕录制权限）；签名和公证。`web/desktop-adapter.js` 里的 Tauri 分支对网页版无影响，留待网页版下次整理时清理。

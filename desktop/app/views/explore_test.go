@@ -227,6 +227,9 @@ func TestExploreInteractionsTableAndLoadMore(t *testing.T) {
 
 func TestExploreViewpointAndRegion(t *testing.T) {
 	a, f, p, tt := openExplore(t)
+	// Tall enough that "Explore region" stays in view with any platform's
+	// fonts (Windows renders taller and pushed it below a 720 px window).
+	tt.SetSize(1100, 1400)
 	if err := tt.Click("Viewpoint"); err != nil {
 		t.Fatal(err)
 	}

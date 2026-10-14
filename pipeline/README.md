@@ -26,7 +26,8 @@ and the collapse steps are external sorts (sorted chunks merged with
   the in-memory chunks; peak RSS is about 0.5 GB for the Python process
   plus Bowtie2.
 - `--tmp-dir DIR` holds work and sort files (default `<out>.work/`). They
-  need about the size of the collapsed reads and are deleted at the end.
+  peak at about twice the size of the collapsed reads FASTA (7.7 GB for
+  the 33M-read ZAFR_REP1) and are deleted at the end.
 - `<out>.checkpoint.json` records finished stages. Rerunning the same
   command (same input, reference and options) continues after the last
   finished stage; `--no-resume` starts over.
@@ -47,6 +48,14 @@ a golden made before the streaming rewrite (needs `zika_files/`).
 |---|---|---|
 | 2 M | 71 s / 1.7 GB | 41 s / 0.40, 0.85 GB / 0.5 GB |
 | 8 M | 258 s / 7.1 GB | 160 s / 0.50, 1.7 GB / 2.0 GB |
+| 32.9 M (whole `.fastq.gz`) | ≈ 18 min / ≈ 29 GB (extrapolated) | 662 s / 0.50, 1.7 GB / 7.7 GB |
+
+10-core M-series Mac, bundled runtime, Bowtie2 on all cores. Bowtie2 takes
+most of the time (≈ 550 s of the full run); its RSS stays near 230 MB. The
+Python + Bowtie2 peak is during FASTQ collapsing, when four bucket workers
+run at once. The whole-sample `.hyb` has the same 224,154 lines as the
+legacy `reproduce_zikv/results_combined/ZAFR_REP1.hyb`; only their order
+differs (the legacy run had no `--reorder`).
 
 ## Compatibility
 

@@ -397,7 +397,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
                     reader = inputs.ProgressReader(input_path)
                     stream = reader
                     lines = sam.sam_filt(reader) if source == "sam" else reader
-                    throttle = inputs.Throttle(progress_bytes, "map")
+                    throttle = inputs.Throttle(progress_bytes, "blast")
 
                     def report(key: str) -> None:
                         throttle(reader.position(), reader.total)

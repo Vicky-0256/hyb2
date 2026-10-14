@@ -293,7 +293,7 @@ def collapse_fastq(source: Path, out_fasta: Path, tmp_dir: Path, memory_mb: floa
     summed and rank-sorted on its own (in ``workers`` processes) and the
     sorted buckets are merged.  Output is identical to ``collapse_reads``."""
     reader = ProgressReader(source)
-    report = Throttle(progress_bytes, "collapse")
+    report = Throttle(progress_bytes, "reads")
     budget = max(memory_mb, 1e-6) * 2 ** 20 / 2
     first = None
     want_names = [True]

@@ -486,7 +486,7 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
         if where is None:
             continue
         clause, params = where
-        total += index.con.execute("SELECT count(*) FROM hybrids" + clause, params).fetchone()[0]
+        total += index.meta["records"] if not clause else index.con.execute("SELECT count(*) FROM hybrids" + clause, params).fetchone()[0]
         if limit == 0:
             continue
         sort = "%s IS NULL, %s %s, id" % (column, column, "DESC" if descending else "ASC")

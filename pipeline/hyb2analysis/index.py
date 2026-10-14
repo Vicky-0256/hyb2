@@ -15,7 +15,7 @@ Layout (``FORMAT`` / ``VERSION`` in table ``meta``):
 ``hybrids(id, g1, s1, e1, g2, s2, e2, reads, dg, overlap, type, offset)``
     one row per valid record in file order; ``offset`` is the byte offset of
     the line in the .hyb so names and sequences are read back on demand
-    rather than stored.  Indexed on ``(g1, g2, s1)``.
+    rather than stored.  Indexed on ``(g1, g2, s1, e1)`` (covers arm-1 region counts).
 ``rects(g1, g2, n, dtypes, s1, e1, s2, e2, type, count, reads)``
     per oriented gene pair, the distinct (arm 1, arm 2, type) rectangles with
     their record and read totals, as little-endian numpy column blobs.  Any
@@ -202,7 +202,7 @@ def _build(con: sqlite3.Connection, hyb: Path, total_bytes: int, progress) -> Di
                     [(v[0], k.decode("utf-8", "replace"), v[1], v[2]) for k, v in types.items()])
     con.executemany("INSERT INTO pairs VALUES (?,?,?,?,?,?)", [(k[0], k[1], *v) for k, v in pairs.items()])
     con.execute("COMMIT")
-    con.execute("CREATE INDEX hybrids_pos ON hybrids(g1, g2, s1)")
+    con.execute("CREATE INDEX hybrids_pos ON hybrids(g1, g2, s1, e1)")
     _build_rects(con)
     if progress:
         progress(total_bytes, total_bytes)

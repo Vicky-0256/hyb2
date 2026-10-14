@@ -565,14 +565,15 @@ async fn task_list(request: tasks::TaskListRequest) -> Result<Value, String> {
 
 // ---- Analysis queries (contract R3/R6).
 
-const ANALYSIS_OPERATIONS: [&str; 4] = [
+const ANALYSIS_OPERATIONS: [&str; 5] = [
     "analysis_summary",
     "analysis_contact_bins",
     "analysis_hybrids",
     "analysis_top",
+    "compare_bins",
 ];
 
-/// Accepts `{project_path, operation, ...}` for one of the four read-only
+/// Accepts `{project_path, operation, ...}` for one of the read-only
 /// analysis operations; everything else is forwarded unchanged for Python
 /// to validate.
 fn analysis_request(request: Value) -> Result<Value, String> {
@@ -600,6 +601,82 @@ fn analysis_request(request: Value) -> Result<Value, String> {
 async fn analysis_query(app: tauri::AppHandle, request: Value) -> Result<Value, String> {
     let request = analysis_request(request)?;
     dispatch(app, Lane::Compute, request).await
+}
+
+// ---- Project data operations (samples, references, structures).
+
+/// Short control-lane operations on project.json; Python validates the rest.
+const PROJECT_OPERATIONS: [&str; 12] = [
+    "add_reference",
+    "update_reference",
+    "remove_reference",
+    "add_sample",
+    "update_sample",
+    "remove_sample",
+    "import_sample_sheet",
+    "check_inputs",
+    "disk_estimate",
+    "list_samples",
+    "list_structures",
+    "read_structure",
+];
+
+/// Accepts `{path, operation, ...}` for one of `PROJECT_OPERATIONS`.
+fn project_op_request(request: Value) -> Result<Value, String> {
+    let Value::Object(object) = request else {
+        return Err("project operation must be a JSON object".into());
+    };
+    let operation = object.get("operation").and_then(Value::as_str).unwrap_or("");
+    if !PROJECT_OPERATIONS.contains(&operation) {
+        return Err(format!(
+            "unsupported project operation; expected one of {}",
+            PROJECT_OPERATIONS.join(", ")
+        ));
+    }
+    if !object
+        .get("path")
+        .and_then(Value::as_str)
+        .is_some_and(|p| !p.trim().is_empty())
+    {
+        return Err("project operation needs a project path".into());
+    }
+    Ok(Value::Object(object))
+}
+
+#[tauri::command]
+async fn project_op(app: tauri::AppHandle, request: Value) -> Result<Value, String> {
+    let request = project_op_request(request)?;
+    dispatch(app, Lane::Control, request).await
+}
+
+#[derive(Debug, Deserialize)]
+struct PickFilesRequest {
+    title: Option<String>,
+    multiple: Option<bool>,
+}
+
+/// Native file picker returning absolute paths (`{paths: []}` when cancelled).
+/// Raw read files are linked in place, so only the path crosses into the UI.
+#[tauri::command]
+async fn dialog_pick_files(
+    app: tauri::AppHandle,
+    request: PickFilesRequest,
+) -> Result<Value, String> {
+    blocking(move || {
+        let title = request.title.as_deref().unwrap_or("Choose files");
+        let dialog = file_dialog(&app, title);
+        let picked = if request.multiple.unwrap_or(true) {
+            dialog.blocking_pick_files().unwrap_or_default()
+        } else {
+            dialog.blocking_pick_file().into_iter().collect()
+        };
+        let paths = picked
+            .into_iter()
+            .map(|path| dialog_path(Some(path)).map(|p| p.unwrap_or_default()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(json!({"paths": paths}))
+    })
+    .await
 }
 
 // ---- Preferences (resource budget, contract R6).
@@ -664,6 +741,8 @@ fn main() {
             task_list,
             task_resume,
             analysis_query,
+            project_op,
+            dialog_pick_files,
             preferences_get,
             preferences_set
         ])
@@ -690,6 +769,23 @@ fn warm_up(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_op_allowlist() {
+        for operation in PROJECT_OPERATIONS {
+            let request = json!({"operation": operation, "path": "/p"});
+            assert_eq!(project_op_request(request.clone()).unwrap(), request);
+        }
+        for bad in [
+            json!({"operation": "create_project", "path": "/p"}),
+            json!({"operation": "run_task", "path": "/p"}),
+            json!({"operation": "list_samples"}),
+            json!({"operation": "list_samples", "path": " "}),
+            json!(["list_samples"]),
+        ] {
+            assert!(project_op_request(bad).is_err());
+        }
+    }
 
     #[test]
     fn release_ignores_environment_overrides() {

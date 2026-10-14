@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import awk
@@ -43,18 +44,110 @@ def reference_table(fasta_lines: Iterable[str]) -> Dict[str, str]:
 
 def bit_pairs(hyb_lines: Iterable[str], table: Dict[str, str]) -> List[Tuple[str, str, str]]:
     """(energy_key, bit1_seq, bit2_seq) for every sense/sense hybrid."""
-    pairs = []
-    for line in hyb_lines:
+    return [pair for pair in (bit_pair(line, table) for line in hyb_lines) if pair is not None]
+
+
+def bit_pair(line: str, table: Dict[str, str]) -> Optional[Tuple[str, str, str]]:
+    f = awk.fields(line)
+    get = lambda n: awk.field(f, n)
+    if awk.compare(get(8), get(7)) < 0 or awk.compare(get(14), get(13)) < 0:
+        return None
+    s1 = awk.substr(table.get(get(4), ""), awk.to_num(get(7)), 1 + awk.to_num(get(8)) - awk.to_num(get(7)))
+    s2 = awk.substr(table.get(get(10), ""), awk.to_num(get(13)), 1 + awk.to_num(get(14)) - awk.to_num(get(13)))
+    return (pair_key(f), s1, s2)
+
+
+def pair_key(f: List[str]) -> str:
+    # add_dG keys energies by the first two '_'-separated parts of the bit name
+    key = _PAIR_KEY.match("%s_%s_%s_%s" % (awk.field(f, 1), awk.field(f, 4), awk.field(f, 7), awk.field(f, 8)))
+    return key.group(1) if key else ""
+
+
+_PAIR_KEY = re.compile(r"^([^_]*_[^_]*)")
+_SIMPLE_ID = re.compile(r"[^_]*_[^_]*")
+_ALNUM = re.compile(r"[a-zA-Z0-9]")
+_DIGIT = re.compile(r"[0-9]")
+
+
+def _passthrough(cols: List[str]) -> bool:
+    return cols[0].startswith("#") or not _ALNUM.search(cols[0])
+
+
+def _with_dg(cols: List[str], value: str) -> str:
+    if len(cols) < 3:
+        cols += [""] * (3 - len(cols))
+    cols[2] = value if _DIGIT.search(value) else "."
+    return "\t".join(cols)
+
+
+def add_energies_file(src: Path, dst: Path, fasta_lines: Iterable[str], tmp_dir: Path, folder: Optional[Folder] = None,
+                      workers: Optional[int] = None, chunk: int = 50000) -> None:
+    """``add_energies`` over a file, folding ``chunk`` hybrids at a time.
+
+    ``add_energies`` looks dG up by the whole read ID in a table keyed by
+    the first two '_'-parts of each pair's name, the last pair winning.  A
+    line can only receive its own pair's dG unless keys repeat or cross
+    between lines; a first pass with a Bloom filter finds such keys
+    (``shared``) and only those go through an exact global table.
+    """
+    from .collapse import iter_file
+    from .extsort import Bloom
+
+    folder = folder or default_folder(workers)
+    table = reference_table(fasta_lines)
+    seen = Bloom(16)
+    shared = set()
+    for line in iter_file(src):
+        cols = line.split("\t")
         f = awk.fields(line)
-        get = lambda n: awk.field(f, n)
-        if awk.compare(get(8), get(7)) < 0 or awk.compare(get(14), get(13)) < 0:
-            continue
-        s1 = awk.substr(table.get(get(4), ""), awk.to_num(get(7)), 1 + awk.to_num(get(8)) - awk.to_num(get(7)))
-        s2 = awk.substr(table.get(get(10), ""), awk.to_num(get(13)), 1 + awk.to_num(get(14)) - awk.to_num(get(13)))
-        # add_dG keys energies by the first two '_'-separated parts of the bit name
-        key = re.match(r"^([^_]*_[^_]*)", "%s_%s_%s_%s" % (get(1), get(4), get(7), get(8)))
-        pairs.append((key.group(1) if key else "", s1, s2))
-    return pairs
+        lookup = None if _passthrough(cols) else cols[0]
+        own = pair_key(f) if not (awk.compare(awk.field(f, 8), awk.field(f, 7)) < 0
+                                  or awk.compare(awk.field(f, 14), awk.field(f, 13)) < 0) else None
+        if lookup is not None and _SIMPLE_ID.fullmatch(lookup):
+            if seen.add(lookup):
+                shared.add(lookup)
+        if own is not None and own != lookup and seen.add(own):
+            shared.add(own)
+    shared_dg: Dict[str, str] = {}
+    staged = Path(str(dst) + ".stage") if shared else dst
+    with open(staged, "w", encoding="utf-8", newline="\n") as out:
+        def flush(lines: List[str]) -> None:
+            pairs = [bit_pair(line, table) for line in lines]
+            energies = iter(folder([(p[1], p[2]) for p in pairs if p is not None]))
+            for line, pair in zip(lines, pairs):
+                value = next(energies) if pair is not None else None
+                own = "" if value is None else "%.2f" % value
+                if pair is not None and value is not None and pair[0] in shared:
+                    shared_dg[pair[0]] = own
+                cols = line.split("\t")
+                if shared:
+                    out.write("%s\0%s\0%s\n" % (pair[0] if pair is not None else "", own, line))
+                elif _passthrough(cols):
+                    out.write(line + "\n")
+                else:
+                    # not shared: dg[cols[0]] exists only as this line's own pair
+                    out.write(_with_dg(cols, own if pair is not None and pair[0] == cols[0] else "") + "\n")
+
+        batch: List[str] = []
+        for line in iter_file(src):
+            batch.append(line)
+            if len(batch) >= chunk:
+                flush(batch)
+                batch = []
+        flush(batch)
+    if not shared:
+        return
+    with open(dst, "w", encoding="utf-8", newline="\n") as out:
+        for record in iter_file(staged):
+            key, own, line = record.split("\0", 2)
+            cols = line.split("\t")
+            if _passthrough(cols):
+                out.write(line + "\n")
+            elif cols[0] in shared:
+                out.write(_with_dg(cols, shared_dg.get(cols[0], "")) + "\n")
+            else:
+                out.write(_with_dg(cols, own if key == cols[0] else "") + "\n")
+    staged.unlink()
 
 
 def _vienna_chunk(pairs: Sequence[Tuple[str, str]]) -> List[float]:

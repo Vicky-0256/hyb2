@@ -3,7 +3,7 @@ and ``remove_duplicate_hybrids_hOH5_2.pl``."""
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from . import awk
 
@@ -17,53 +17,76 @@ def _overlap(a: float, b: float, c: float, d: float) -> float:
 def mtop_hybrids(blast_lines: Iterable[str], *, blast_threshold: float = 0.1, mode: int = 2,
                  max_overlap: float = 4, max_hits: int = 10) -> List[str]:
     """Port of ``get_mtop_hybrids.pl`` with OUTPUT_FORMAT=HYB (header omitted)."""
+    caller = MtopCaller(blast_threshold=blast_threshold, mode=mode, max_overlap=max_overlap, max_hits=max_hits)
     out: List[str] = []
-    arr: List[str] = []
-    name: Optional[str] = None
-    min_start = max_end = 0.0
-    curr_overlap = 0.0
-    threshold = 0.0
-    nbits = 0
-
-    def flush() -> None:
-        if nbits > 1 and len(arr) <= max_hits:
-            rows = [(line, awk.perl_split(line, "\t")) for line in arr]
-            rows.sort(key=lambda row: awk.to_num(row[1][6] if len(row[1]) > 6 else ""))
-            out.extend(_hyb_format([fields for _, fields in rows], max_overlap))
-
     for line in blast_lines:
+        out.extend(caller.feed(line))
+    out.extend(caller.finish())
+    return out
+
+
+class MtopCaller:
+    """``get_mtop_hybrids.pl`` as a streaming state machine.  The script only
+    keeps the alignments of the current read (consecutive lines with the same
+    read ID), so ``feed`` returns the hybrids of the previous read when a new
+    one starts, and ``finish`` those of the last read."""
+
+    def __init__(self, *, blast_threshold: float = 0.1, mode: int = 2, max_overlap: float = 4, max_hits: int = 10) -> None:
+        self.blast_threshold, self.mode, self.max_overlap, self.max_hits = blast_threshold, mode, max_overlap, max_hits
+        self.name: Optional[str] = None
+        self.arr: List[str] = []
+        self.min_start = self.max_end = 0.0
+        self.curr_overlap = 0.0
+        self.threshold = 0.0
+        self.nbits = 0
+
+    def _flush(self) -> List[str]:
+        if self.nbits > 1 and len(self.arr) <= self.max_hits:
+            rows = [(line, awk.perl_split(line, "\t")) for line in self.arr]
+            rows.sort(key=lambda row: awk.to_num(row[1][6] if len(row[1]) > 6 else ""))
+            return _hyb_format([fields for _, fields in rows], self.max_overlap)
+        return []
+
+    def feed(self, line: str) -> List[str]:
+        out: List[str] = []
         fld = line.rstrip("\n").split("\t")
         f6, f7 = awk.to_num(fld[6]), awk.to_num(fld[7])
         evalue = awk.to_num(fld[10])
-        if fld[0] != (name if name is not None else ""):
-            flush()
-            arr = []
-            name = fld[0]
-            min_start, max_end = f6, f7
-            curr_overlap = 0.0
-            threshold = 0.0
-            nbits = 0
+        if fld[0] != (self.name if self.name is not None else ""):
+            out = self._flush()
+            self.arr = []
+            self.name = fld[0]
+            self.min_start, self.max_end = f6, f7
+            self.curr_overlap = 0.0
+            self.threshold = 0.0
+            self.nbits = 0
         else:
-            curr_overlap = _overlap(min_start, max_end, f6, f7)
-            if evalue <= blast_threshold:
-                min_start = min(min_start, f6)
-                max_end = max(max_end, f7)
+            self.curr_overlap = _overlap(self.min_start, self.max_end, f6, f7)
+            if evalue <= self.blast_threshold:
+                self.min_start = min(self.min_start, f6)
+                self.max_end = max(self.max_end, f7)
+        mode, max_overlap, curr_overlap = self.mode, self.max_overlap, self.curr_overlap
         if awk.to_num(fld[8]) > awk.to_num(fld[9]) and mode in (2, 3):
-            continue
-        if evalue <= threshold:
-            arr.append(line)
-        if evalue > blast_threshold:
-            continue
+            return out
+        if evalue <= self.threshold:
+            self.arr.append(line)
+        if evalue > self.blast_threshold:
+            return out
         if mode in (0, 3) and curr_overlap > max_overlap:
-            continue
+            return out
         if mode in (1, 2) and (curr_overlap > max_overlap or curr_overlap < -max_overlap):
-            continue
-        nbits += 1
-        if evalue != threshold:
-            threshold = evalue
-            arr.append(line)
-    flush()
-    return out
+            return out
+        self.nbits += 1
+        if evalue != self.threshold:
+            self.threshold = evalue
+            self.arr.append(line)
+        return out
+
+    def finish(self) -> List[str]:
+        out = self._flush()
+        self.arr = []
+        self.nbits = 0
+        return out
 
 
 def _hyb_format(rows: Sequence[List[str]], max_overlap: float) -> List[str]:
@@ -99,6 +122,13 @@ def attach_sequences(hybrid_lines: Sequence[str], sam_lines: Iterable[str]) -> L
     return out
 
 
+def attach_sequence(hybrid_line: str, value: str) -> Optional[str]:
+    """``attach_sequences`` for one hybrid whose read's last SAM SEQ is ``value``."""
+    if not awk.truthy(value):
+        return None
+    return "".join((value if i == 1 else item) + "\t" for i, item in enumerate(awk.fields(hybrid_line)))
+
+
 class _Hybrid:
     __slots__ = ("line", "seq_id", "bit1", "bit2", "evalue_sum")
 
@@ -121,6 +151,11 @@ class _Hybrid:
 
 def remove_duplicate_hybrids(reference_lines: Sequence[str], hybrid_lines: Iterable[str], *, prefer_mim: bool = True) -> List[str]:
     """Port of ``remove_duplicate_hybrids_hOH5_2.pl``: one hybrid per read."""
+    return list(iter_unique_hybrids(reference_lines, hybrid_lines, prefer_mim=prefer_mim))
+
+
+def iter_unique_hybrids(reference_lines: Sequence[str], hybrid_lines: Iterable[str], *, prefer_mim: bool = True) -> Iterator[str]:
+    """Streaming ``remove_duplicate_hybrids`` (keeps one read's lines at a time)."""
     rank: Dict[str, int] = {}
     for number, line in enumerate(reference_lines, 1):
         rank[line.split("\t")[0]] = number
@@ -156,7 +191,6 @@ def remove_duplicate_hybrids(reference_lines: Sequence[str], hybrid_lines: Itera
                 return y
         return x
 
-    out: List[str] = []
     group: List[_Hybrid] = []
     previous = ""
     for raw in hybrid_lines:
@@ -166,13 +200,12 @@ def remove_duplicate_hybrids(reference_lines: Sequence[str], hybrid_lines: Itera
         hit = _Hybrid(line)
         if hit.seq_id != previous:
             if group:
-                out.append(_best(group, better).line)
+                yield _best(group, better).line
             group = []
             previous = hit.seq_id
         group.append(hit)
     if group:
-        out.append(_best(group, better).line)
-    return out
+        yield _best(group, better).line
 
 
 def _best(group: List[_Hybrid], better) -> _Hybrid:

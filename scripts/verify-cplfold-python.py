@@ -35,23 +35,6 @@ def main() -> None:
     repository = Path(__file__).resolve().parents[1]
     vendor = repository / "third_party" / "cplfold"
     wrapper = repository / "bin" / "cplfold"
-    configured = os.environ.get("HYB2_PYTHON")
-    candidates = [
-        Path(configured).expanduser() if configured else None,
-        repository / ".venv-cplfold" / "bin" / "python",
-        Path(sys.executable),
-    ]
-    runner = next((candidate for candidate in candidates if candidate and candidate.is_file()), Path(sys.executable))
-    probe = subprocess.run(
-        [str(runner), "-c", "import numpy, numba"],
-        cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, check=False,
-    )
-    if probe.returncode != 0:
-        raise SystemExit(
-            "CPLfold verification needs a Python environment with NumPy and Numba. "
-            "Set HYB2_PYTHON or create .venv-cplfold."
-        )
 
     with tempfile.TemporaryDirectory(prefix="hyb2-cplfold-numba-") as cache:
         environment = os.environ.copy()
@@ -71,7 +54,7 @@ def main() -> None:
         ]
         for arguments in guard_cases:
             oversized = subprocess.run(
-                [str(runner), str(wrapper), *arguments, "--quiet"],
+                [sys.executable, str(wrapper), *arguments, "--quiet"],
                 cwd=repository,
                 env=environment,
                 check=False,
@@ -93,7 +76,7 @@ def main() -> None:
         default_cache_root = Path(cache) / "xdg-cache"
         default_cache_environment["XDG_CACHE_HOME"] = str(default_cache_root)
         run(
-            [str(runner), str(wrapper), "--help"],
+            [sys.executable, str(wrapper), "--help"],
             cwd=repository,
             environment=default_cache_environment,
         )
@@ -109,7 +92,7 @@ def main() -> None:
             Path(cache) / "no-pseudoknot-cache"
         )
         no_pseudoknot = subprocess.run(
-            [str(runner), str(wrapper), "--sequence", "AAAAA", "--quiet"],
+            [sys.executable, str(wrapper), "--sequence", "AAAAA", "--quiet"],
             cwd=repository,
             env=no_pseudoknot_environment,
             check=False,
@@ -132,7 +115,7 @@ def main() -> None:
 
         unit_output = run(
             [
-                str(runner),
+                sys.executable,
                 "-m",
                 "unittest",
                 "discover",
@@ -151,7 +134,7 @@ def main() -> None:
 
         smoke_output = run(
             [
-                str(runner),
+                sys.executable,
                 str(wrapper),
                 "--sequence-file",
                 str(sequence_file),
@@ -178,7 +161,7 @@ def main() -> None:
         )
         guided_output = run(
             [
-                str(runner),
+                sys.executable,
                 str(wrapper),
                 "--sequence-file",
                 str(sequence_file),

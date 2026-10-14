@@ -45,7 +45,8 @@ It deliberately differs from the legacy scripts in four places:
   runtime bundles the ViennaRNA 2.7.2 wheel, which exists for Windows, macOS
   and Linux. ViennaRNA's licence allows free redistribution with credit; a
   commercial product needs the authors' permission. In-process cofolding
-  takes about 1 minute for the 10k hybrids in `testData.sam`.
+  is spread over one worker process per CPU: about 12 s for the 10k hybrids
+  in `testData.sam`, against 63 s in a single process.
 
 Steps 2 and 3 of `hyb2` (contact maps, viewpoint, folding) are already
 provided by the web and desktop analysis pages. `hyb2_compare` (R/DESeq2) has

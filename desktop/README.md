@@ -86,8 +86,8 @@ JSON
 
 Supported operations are `detect`, `create_project`, `validate_project`, and
 the allowlisted `run_task` validation job. A task writes its structured event
-log under the project's `runs/<task-id>/events.jsonl`; the desktop Task Center
-renders queued, running, log, succeeded, and failed states. The current safe
+log under the project's `runs/<task-id>/events.jsonl`; the desktop task drawer
+renders queued, running, succeeded, failed and interrupted states. The current safe
 job validates project references; analysis engine jobs will be added only when
 their native assets and execution bridges are available.
 Project creation makes portable `inputs/`, `runs/`, and `exports/` directories;
@@ -109,12 +109,38 @@ reports missing ViennaRNA or Pyodide/NumPy/CPLfold runtime files. Presence is
 not proof of successful engine startup; native folding flags remain disabled.
 HYB import and data visualizations work without those optional folding assets.
 
-Project Home supports create, open and validate through native folder pickers
-(paths remain editable), a recent-projects list, and file import through a
-native file dialog (`project_import_input_dialog`; the UI can no longer pass an
-arbitrary source path). Opening a project grants the asset protocol access to
-its `inputs/` and `runs/` folders so large inputs are read with `fetch` instead
-of being piped through JSON IPC.
+### Desktop shell (RAWDATA_APP_PLAN.md section 3.7)
+
+One project, one navigation. Without an open project the app shows a start
+screen (open / create / recent). With a project open:
+
+- **Top bar**: project switcher, reference and gene, the global *selection*
+  (one sample, or a condition = its replicates merged), a task indicator that
+  opens the task drawer (progress from `progress.json` bytes with an ETA,
+  cancel, resume), Help (workflow, methods, file format, validation of the
+  selection) and Preferences (CPU / memory budget, theme, runtime diagnostics).
+- **1 Data** references and samples (`project_op`): import raw files
+  (`dialog_pick_files` then `add_sample`, linked in place by default), import a
+  sample sheet (dry-run preview, then commit), run / resume samples
+  (`disk_estimate` first, then `task_start sample_pipeline`), check inputs
+  and relink.
+- **2 QC** per-sample counts (`analysis_summary`), replicate correlation,
+  and the Overview page of the selection.
+- **3 Explore / 6 Report** the web analysis pages mounted with
+  `Hyb2Web.mount(host, {shell:false, provider: DesktopProvider})`
+  (`ui/desktop-provider.js` maps the DataProvider contract onto
+  `analysis_query`).
+- **4 Compare** condition A vs B through `analysis_query compare_bins`, with
+  Locate / Region / Fold A & B per differential bin.
+- **5 Structure** genome and window folds (`task_start structure`), the
+  result list (`list_structures`), and an arc viewer that compares two
+  structures (`read_structure`).
+
+`ui_state.desktop` keeps the page, sub-tabs, selection, reference/gene and
+the compare groups; `ui_state.analysis` keeps the embedded pages' snapshot.
+Shell code lives in `ui/` (`boot.js`, `core.js`, `app.js`, one file per page,
+`arc-view.js`, `desktop-provider.js`); `scripts/stage-frontend.cjs` checks
+that every file is staged.
 
 ## Architecture after the 2026-10 fixes
 

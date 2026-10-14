@@ -12,7 +12,7 @@ fs.cpSync(path.join(desktop, "..", "web"), path.join(output, "analysis"), {
   recursive: true,
   filter: (source) => ![".git", "__pycache__", ".DS_Store"].includes(path.basename(source))
 });
-for (const entry of ["index.html", "app.js", "style.css", "analysis/index.html", "analysis/app.js", "analysis/desktop-adapter.js", "analysis/structure-controller.js", "analysis/analysis-pages.js", "analysis/parser.worker.js", "analysis/assets/examples/ZIKV_1-10807_example.hyb"]) {
+for (const entry of ["index.html", "app.js", "style.css", "boot.js", "core.js", "desktop-provider.js", "arc-view.js", "data-page.js", "qc-page.js", "workspace.js", "compare-page.js", "structure-page.js", "analysis/data-provider.js", "analysis/page-data.js", "analysis/index.html", "analysis/app.js", "analysis/desktop-adapter.js", "analysis/structure-controller.js", "analysis/analysis-pages.js", "analysis/parser.worker.js", "analysis/assets/examples/ZIKV_1-10807_example.hyb"]) {
   if (!fs.statSync(path.join(output, entry)).isFile()) throw new Error("Missing desktop asset: " + entry);
 }
 function availability(files) {

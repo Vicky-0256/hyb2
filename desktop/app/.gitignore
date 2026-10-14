@@ -1,0 +1,5 @@
+/build/
+/.mygo/
+mygo_windows_*.syso
+# Staged runtime, linked from desktop/resources/native (stage-native.py)
+/resources/*/native

@@ -165,6 +165,8 @@ impl Runtime {
             ("HYB2_APP_VERSION".into(), env!("CARGO_PKG_VERSION").into()),
             ("PYTHONUNBUFFERED".into(), "1".into()),
             ("PYTHONIOENCODING".into(), "utf-8".into()),
+            // Never write .pyc into the (signed, possibly read-only) app bundle.
+            ("PYTHONDONTWRITEBYTECODE".into(), "1".into()),
         ];
         let mut compute_env = base.clone();
         if let Ok(cache) = app.path().app_cache_dir() {

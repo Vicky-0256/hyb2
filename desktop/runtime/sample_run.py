@@ -1,0 +1,276 @@
+"""``sample_pipeline_run``: reads -> .hyb -> contact/index for one project sample.
+
+Runs hyb2pipe.run into ``samples/<sample_id>/<name>`` (stable prefix so the
+pipeline's own checkpoint can resume across task ids), then, when the
+``hyb2analysis`` package is importable, ``coverage.write_contact`` and
+``index.build`` (contract R3).  ``samples[].stages``/``outputs`` are updated
+with the locked manifest writer at every stage transition, and every progress
+event is written atomically to ``run_dir/progress.json``.
+"""
+from __future__ import annotations
+
+import dataclasses
+import importlib
+import importlib.util
+import inspect
+import json
+import os
+import re
+import signal
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from .project import _atomic_write_json, _now, load_manifest
+from .samples import check_record, disk_estimate, resolve_record_path, read_stem, set_sample_stage
+
+# Stages reported by hyb2pipe after mapping has finished.
+_POST_MAP_STAGES = {"filter", "blast", "rank", "hybrids", "annotate", "energy", "collapse", "dedup", "done"}
+_BYTE_EVENT_INTERVAL = 0.2  # seconds; stage changes are always written
+
+
+class ProgressFile:
+    """Atomic ``run_dir/progress.json`` writer (also mirrors events to stderr as JSON lines)."""
+
+    def __init__(self, run_dir: Path):
+        self.path = Path(run_dir) / "progress.json"
+        self.last_stage: Optional[str] = None
+        self.last_write = 0.0
+
+    def write(self, stage: str, detail: str = "", bytes_done: Optional[int] = None, bytes_total: Optional[int] = None) -> None:
+        now = time.monotonic()
+        if stage == self.last_stage and bytes_done is not None and now - self.last_write < _BYTE_EVENT_INTERVAL and bytes_done != bytes_total:
+            return
+        self.last_stage, self.last_write = stage, now
+        payload = {"stage": stage, "detail": detail, "bytes_done": bytes_done, "bytes_total": bytes_total, "updated_at": _now()}
+        try:
+            _atomic_write_json(self.path, payload)
+        except OSError as error:  # progress is advisory; never fail the task for it
+            print("cannot write progress.json: %s" % error, file=sys.stderr)
+        print(json.dumps({"type": "progress", **payload}), file=sys.stderr, flush=True)
+
+
+_PIPELINE_BOUNDS = {"blast_threshold": (0.0, 10.0, float), "max_overlap": (0, 1000, int), "max_hits": (1, 10000, int),
+                    "threads": (1, 256, int), "memory_mb": (64, 1_048_576, int)}
+
+
+def build_options(options_cls: Any, settings: Dict[str, Any]) -> "tuple[Any, list[str]]":
+    """Bounded Options from sample settings; keys the installed Options lacks are reported, not passed."""
+    fields = {field.name for field in dataclasses.fields(options_cls)}
+    values: Dict[str, Any] = {}
+    for key, (lo, hi, kind) in _PIPELINE_BOUNDS.items():
+        if settings.get(key) is not None:
+            value = settings[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not lo <= value <= hi or (kind is int and value != int(value)):
+                raise ValueError("pipeline parameter out of bounds: " + key)
+            values[key] = kind(value)
+    for key in ("energy", "resume"):
+        if key in settings and settings[key] is not None:
+            if not isinstance(settings[key], bool):
+                raise ValueError("pipeline parameter %s must be a boolean" % key)
+            values[key] = settings[key]
+    if settings.get("keep_sam") is not None:
+        if settings["keep_sam"] not in ("none", "gz", "plain"):
+            raise ValueError("keep_sam must be none, gz or plain")
+        values["keep_sam"] = settings["keep_sam"]
+    if settings.get("tmp_dir") is not None:
+        tmp = settings["tmp_dir"]
+        if not isinstance(tmp, str) or not Path(tmp).is_absolute() or not Path(tmp).is_dir():
+            raise ValueError("tmp_dir must be an existing absolute directory")
+        values["tmp_dir"] = Path(tmp)
+    ignored = sorted(key for key in values if key not in fields)
+    return options_cls(**{key: value for key, value in values.items() if key in fields}), ignored
+
+
+def _safe_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._") or "sample"
+
+
+def _relative(project: Path, path: Optional[Path]) -> Optional[str]:
+    if path is None:
+        return None
+    try:
+        return Path(path).resolve().relative_to(project).as_posix()
+    except ValueError:
+        return None
+
+
+@dataclasses.dataclass
+class _State:
+    stage: str = "map"
+
+
+def _install_term_handler():
+    """Turn SIGTERM into SystemExit so stages can be marked ``interrupted``."""
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "SIGTERM"):
+        return None
+    def raise_exit(signum, frame):  # noqa: ARG001
+        raise SystemExit(128 + signum)
+    try:
+        return signal.signal(signal.SIGTERM, raise_exit)
+    except (ValueError, OSError):
+        return None
+
+
+def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Path, parameters: Dict[str, Any],
+                        repo_root: Path) -> Dict[str, Any]:
+    project = Path(project).resolve()
+    manifest = load_manifest(project)
+    sample = next((s for s in manifest["samples"] if s.get("id") == sample_id), None)
+    if sample is None:
+        raise ValueError("sample does not exist: %s" % sample_id)
+    reads_record = sample["reads"]
+    fmt = reads_record["format"]
+    reference = None
+    if sample.get("reference_id") is not None:
+        reference = next((r for r in manifest["references"] if r.get("id") == sample["reference_id"]), None)
+    if reference is None and fmt != "hyb":
+        raise ValueError("sample %s has no reference" % sample_id)
+    settings = dict(sample.get("settings") or {})
+    settings.update(parameters or {})
+    # The Rust scheduler grants this task a CPU budget; use it unless threads were set explicitly.
+    cpus = os.environ.get("HYB2_TASK_CPUS", "")
+    if settings.get("threads") is None and cpus.isdigit() and int(cpus) >= 1:
+        settings["threads"] = min(int(cpus), 256)
+    base = {"task_id": task_id, "run_dir": str(run_dir), "sample_id": sample_id}
+
+    def finish(result: Dict[str, Any]) -> Dict[str, Any]:
+        result = {**base, **result}
+        _atomic_write_json(Path(run_dir) / "result.json", result)
+        return result
+
+    progress = ProgressFile(run_dir)
+    progress.write("check", "checking input files")
+    for kind, record in (("reads", reads_record), ("reference", reference)):
+        if record is None:
+            continue
+        status, detail = check_record(project, record)
+        if status != "ok" and not settings.get("allow_changed_inputs"):
+            return finish({"ok": False, "status": "failed", "error": "%s file is %s: %s (%s)" % (kind, status, record.get("path"), detail)})
+    reads_path = resolve_record_path(project, reads_record)
+    reference_path = resolve_record_path(project, reference) if reference is not None else None
+
+    if not settings.get("skip_disk_check"):
+        estimate = disk_estimate(project, [sample_id], include_completed=True)
+        if not estimate["fits"]:
+            volume = next(v for v in estimate["volumes"] if not v["ok"])
+            return finish({"ok": False, "status": "failed", "disk_estimate": estimate,
+                           "error": "not enough disk space on %s: need ~%d MB, %d MB free" % (
+                               volume["path"], volume["required_bytes"] // 1_000_000, volume["free_bytes"] // 1_000_000)})
+
+    sample_dir = project / "samples" / sample_id
+    samples_root = project / "samples"
+    if samples_root.is_symlink() or (sample_dir.exists() and sample_dir.is_symlink()):
+        raise ValueError("project samples directory must not be a symlink")
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    if sample_dir.resolve().parent != samples_root.resolve() or project not in sample_dir.resolve().parents:
+        raise ValueError("sample output directory escapes the project")
+    stem = _safe_component(sample.get("name") or read_stem(reads_path))
+    out_prefix = sample_dir / stem
+
+    package = Path(repo_root).resolve() / "pipeline"
+    if str(package) not in sys.path:
+        sys.path.insert(0, str(package))
+    state = _State(stage={"sam": "hyb", "hyb": "index"}.get(fmt, "map"))
+    outputs: Dict[str, Optional[str]] = {}
+    counts: Dict[str, Any] = {}
+    ignored: list = []
+    previous_handler = _install_term_handler()
+    try:
+        # ---- map + hyb (hyb2pipe) -------------------------------------------
+        if fmt == "hyb":
+            hyb_path = reads_path
+            set_sample_stage(project, sample_id, "map", "skipped", task_id=task_id, extra_stages={"hyb": "skipped"})
+        else:
+            if not (package / "hyb2pipe" / "__init__.py").is_file():
+                set_sample_stage(project, sample_id, "map" if fmt != "sam" else "hyb", "failed", task_id=task_id)
+                return finish({"ok": False, "status": "unavailable", "error": "the Python HYB2 pipeline is not bundled"})
+
+            os.environ.setdefault("HYB2PIPE_TOOL_DIR", str(Path(repo_root).resolve() / "bin"))
+            from hyb2pipe import Options, run as run_pipeline
+            options, ignored = build_options(Options, settings)
+            if fmt == "sam":
+                state.stage = "hyb"
+                set_sample_stage(project, sample_id, "hyb", "running", task_id=task_id, extra_stages={"map": "skipped", "index": "pending"})
+            else:
+                set_sample_stage(project, sample_id, "map", "running", task_id=task_id, extra_stages={"hyb": "pending", "index": "pending"})
+
+            def on_progress(stage: str, detail: str = "", *extra: Any) -> None:
+                if state.stage == "map" and stage in _POST_MAP_STAGES:
+                    state.stage = "hyb"
+                    set_sample_stage(project, sample_id, "map", "succeeded", task_id=task_id, extra_stages={"hyb": "running"})
+                done = extra[0] if len(extra) >= 1 and isinstance(extra[0], int) else None
+                total = extra[1] if len(extra) >= 2 and isinstance(extra[1], int) else None
+                progress.write(stage, detail, done, total)
+
+            def on_bytes(stage: str, done: int, total: int) -> None:
+                progress.write(stage, "", done, total)
+
+            kwargs: Dict[str, Any] = {}
+            try:
+                if "progress_bytes" in inspect.signature(run_pipeline).parameters:
+                    kwargs["progress_bytes"] = on_bytes
+            except (TypeError, ValueError):
+                pass
+            result = run_pipeline(reads_path, reference_path, out_prefix, options, on_progress, log=sys.stderr, **kwargs)
+            hyb_path = Path(result.hyb)
+            counts = dict(getattr(result, "counts", {}) or {})
+            outputs = {"hyb": _relative(project, result.hyb), "homodimers": _relative(project, result.homodimers),
+                       "stats": _relative(project, result.stats)}
+            done_stages = {"hyb": "succeeded"}
+            if fmt != "sam":
+                done_stages["map"] = "succeeded"
+            state.stage = "index"
+            set_sample_stage(project, sample_id, "index", "pending", task_id=task_id, outputs=outputs, extra_stages=done_stages)
+
+        # ---- contact + index (hyb2analysis, optional) -----------------------
+        state.stage = "index"
+        if importlib.util.find_spec("hyb2analysis") is None:
+            progress.write("index", "hyb2analysis is not available; contact/index skipped")
+            set_sample_stage(project, sample_id, "index", "skipped", task_id=task_id)
+            index_status = "skipped"
+        else:
+            coverage = importlib.import_module("hyb2analysis.coverage")
+            index = importlib.import_module("hyb2analysis.index")
+            set_sample_stage(project, sample_id, "index", "running", task_id=task_id)
+            stage_outputs: Dict[str, Optional[str]] = {}
+            gene_id = sample.get("gene_id")
+            if gene_id:
+                progress.write("contact", "writing contact map for %s" % gene_id)
+                contact = sample_dir / ("%s.%s.contact.txt" % (stem, _safe_component(gene_id)))
+                coverage.write_contact(hyb_path, gene_id, contact)
+                stage_outputs["contact"] = _relative(project, contact)
+            progress.write("index", "building analysis index")
+            index_path = sample_dir / (stem + ".index.sqlite")
+            index.build(hyb_path, index_path)
+            stage_outputs["index"] = _relative(project, index_path)
+            outputs.update(stage_outputs)
+            set_sample_stage(project, sample_id, "index", "succeeded", task_id=task_id, outputs=stage_outputs)
+            index_status = "succeeded"
+        progress.write("done", "sample %s finished" % sample_id)
+        final = load_manifest(project)
+        stages = next(s for s in final["samples"] if s["id"] == sample_id)["stages"]
+        absolute = {key: str(project / value) for key, value in outputs.items() if value}
+        response = {"ok": True, "status": "succeeded", "output": str(hyb_path), "outputs": absolute, "counts": counts,
+                    "stages": stages, "index_status": index_status}
+        if ignored:
+            response["ignored_parameters"] = ignored
+        return finish(response)
+    except BaseException as error:
+        interrupted = isinstance(error, (KeyboardInterrupt, SystemExit))
+        try:
+            set_sample_stage(project, sample_id, state.stage, "interrupted" if interrupted else "failed", task_id=task_id)
+        except Exception as nested:  # noqa: BLE001 - keep the original error
+            print("cannot record stage failure: %s" % nested, file=sys.stderr)
+        if interrupted:
+            raise
+        progress.write("failed", str(error)[:500])
+        return finish({"ok": False, "status": "failed", "error": "%s: %s" % (error.__class__.__name__, error), "stage": state.stage})
+    finally:
+        if previous_handler is not None:
+            try:
+                signal.signal(signal.SIGTERM, previous_handler)
+            except (ValueError, OSError):
+                pass

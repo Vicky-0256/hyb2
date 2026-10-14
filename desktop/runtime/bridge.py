@@ -296,6 +296,10 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         return {"ok": True, "status": "warm", "seconds": round(time.monotonic() - started, 2)}
     if operation == "pipeline_run":
         return _pipeline_run(request, repo_root)
+    if operation == "structure_run":
+        # Evidence-guided CPLfold over a genome or windows (desktop/runtime/structure.py).
+        from .structure import structure_run
+        return structure_run(request, repo_root)
     if operation == "cplfold_run":
         raw_path = request.get("project_path")
         sequence = request.get("sequence")
@@ -306,10 +310,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         sequence = "".join(sequence.upper().split()).replace("T", "U")
         if not sequence or any(c not in "ACGUN" for c in sequence):
             raise ValueError("sequence must contain RNA bases A/C/G/U/T/N")
-        try:
-            max_nt = int(os.environ.get("HYB2_CPLFOLD_MAX_NT", "1000"))
-        except ValueError:
-            max_nt = 1000
+        no_pk = isinstance(request.get("parameters"), dict) and request["parameters"].get("no_pseudoknot") is True
+        max_nt = cplfold_max_nt(not no_pk)
         if len(sequence) > max_nt:
             raise ValueError(f"sequence exceeds CPLfold safety limit ({max_nt} nt)")
         path = Path(raw_path).expanduser().resolve()
@@ -363,7 +365,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         output = run_dir / "cplfold.out"
         argv.extend(["--output", str(output), "--quiet"])
         env = os.environ.copy()
-        env.setdefault("HYB2_CPLFOLD_MAX_NT", "1000")
+        env.setdefault("HYB2_CPLFOLD_MAX_NT", str(max_nt))
         # Keep JIT artifacts inside the project run.  This is writable in
         # packaged apps and prevents a hostile/shared global cache from being
         # reused across projects.

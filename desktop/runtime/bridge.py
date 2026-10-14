@@ -179,7 +179,7 @@ def _pipeline_run(request: dict[str, Any], repo_root: Path | None) -> dict[str, 
     except (EnergyUnavailable, MappingUnavailable) as error:
         return {"ok": False, "status": "failed", "task_id": task_id, "run_dir": str(run_dir), "error": str(error)}
     return {"ok": True, "status": "succeeded", "task_id": task_id, "run_dir": str(run_dir), "output": str(result.hyb),
-            "outputs": {"hyb": str(result.hyb), "homodimers": str(result.homodimers), "stats": str(result.stats), "sam": str(result.sam)},
+            "outputs": {"hyb": str(result.hyb), "homodimers": str(result.homodimers), "stats": str(result.stats), "sam": str(result.sam) if result.sam else None},
             "counts": result.counts}
 
 

@@ -51,3 +51,18 @@ It deliberately differs from the legacy scripts in four places:
 Steps 2 and 3 of `hyb2` (contact maps, viewpoint, folding) are already
 provided by the web and desktop analysis pages. `hyb2_compare` (R/DESeq2) has
 not been ported.
+
+## Analysis backend (`hyb2analysis`)
+
+`hyb2analysis` (needs numpy) serves the desktop analysis pages from large
+.hyb files without loading them into the WebView:
+
+- `coverage.write_contact(hyb, gene_id, out)` writes `hyb2_coverage`'s
+  `contact.txt` byte-for-byte (one-true-awk `for (k in a)` order included);
+  `coverage.write_for_table(contact, out, name)` writes `hyb2_compare`'s
+  forTable. Both stream; memory depends on gene length, not file size.
+- `index.build(hyb, index_path)` writes a per-sample SQLite index (hybrid
+  coordinates, read counts, dG, type, and per gene pair the distinct arm
+  rectangles that every contact map is drawn from).
+- `query.summary / contact_bins / hybrids / top_interactions` accept a list
+  of indexes and sum replicates.

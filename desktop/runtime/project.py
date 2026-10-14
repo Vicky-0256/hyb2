@@ -107,7 +107,8 @@ def migrate_manifest(manifest: Any) -> Any:
     """Upgrade an older manifest in place (in memory) to schema 2.0.
 
     1.x -> 2.0 adds empty ``references`` and ``samples`` arrays; ``inputs``,
-    ``runs`` and ``artifacts`` are kept unchanged.  The upgraded manifest is
+    ``runs`` and ``artifacts`` are kept unchanged.  2.0 manifests written
+    before ``structures`` existed get an empty ``structures`` array.  The upgraded manifest is
     written back by the next locked mutation, so opening a read-only project
     still works.  Unknown or newer versions are returned untouched so that
     validation can report them.
@@ -118,6 +119,8 @@ def migrate_manifest(manifest: Any) -> Any:
         manifest.setdefault("references", [])
         manifest.setdefault("samples", [])
         manifest["schema_version"] = SCHEMA_VERSION
+    if _schema_major(manifest) == 2:
+        manifest.setdefault("structures", [])
     return manifest
 
 
@@ -196,7 +199,39 @@ def validate_manifest(manifest: Any) -> List[str]:
         errors.append("manifest.schema_version %s is newer than this application supports" % manifest.get("schema_version"))
     if major is not None and major >= 2:
         _validate_references_samples(manifest, errors)
+        _validate_structures(manifest, errors)
     return errors
+
+
+STRUCTURE_PATH_KEYS = ("dbn", "pairs", "ct", "meta")
+
+
+def _validate_structures(manifest: Dict[str, Any], errors: List[str]) -> None:
+    """``structures[]`` (optional in 2.0): registered structure_run results."""
+    structures = manifest.get("structures", [])
+    if not isinstance(structures, list):
+        errors.append("manifest.structures must be an array"); return
+    ids = set()
+    for index, item in enumerate(structures):
+        where = "manifest.structures[%d]" % index
+        if not isinstance(item, dict):
+            errors.append(where + " must be an object"); continue
+        _required(item, ("id", "task_id", "sample_ids", "gene_id", "mode", "windows", "parameters", "created_at", "paths", "summary"), errors, where)
+        if not isinstance(item.get("id"), str) or not _ID.match(item.get("id", "")): errors.append(where + ".id is invalid")
+        elif item["id"] in ids: errors.append(where + ".id is duplicated")
+        else: ids.add(item["id"])
+        if "task_id" in item and (not isinstance(item.get("task_id"), str) or not _ID.match(item.get("task_id", ""))): errors.append(where + ".task_id is invalid")
+        if "sample_ids" in item and (not isinstance(item.get("sample_ids"), list) or any(not isinstance(s, str) for s in item["sample_ids"])): errors.append(where + ".sample_ids must be an array of ids")
+        if "mode" in item and item.get("mode") not in ("genome", "windows"): errors.append(where + ".mode must be genome or windows")
+        if "windows" in item and (not isinstance(item.get("windows"), list) or any(not isinstance(w, dict) for w in item["windows"])): errors.append(where + ".windows must be an array of {start, end}")
+        for key in ("parameters", "summary"):
+            if key in item and not isinstance(item.get(key), dict): errors.append(where + "." + key + " must be an object")
+        paths = item.get("paths")
+        if "paths" in item:
+            if not isinstance(paths, dict): errors.append(where + ".paths must be an object")
+            else:
+                for key, value in paths.items():
+                    if value is not None and not safe_relative_path(value): errors.append(where + ".paths." + str(key) + " must be a project-relative path or null")
 
 
 def _validate_file_record(record: Any, where: str, errors: List[str], *, formats: Optional[Iterable[str]] = None) -> None:
@@ -485,6 +520,46 @@ def _path_values(value: Any) -> List[Any]:
     return [value] if value is not None else []
 
 
+def _structure_entry(root: Path, task_id: str, result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A ``structures[]`` entry from a structure task's ``result.json`` (None if not one).
+
+    Output paths must be files under ``structures/<task_id>/``; everything is
+    re-derived here so a malformed result cannot place arbitrary paths in the
+    manifest.
+    """
+    raw = result.get("structure")
+    if not isinstance(raw, dict) or result.get("ok") is False:
+        return None
+    base = root / "structures" / task_id
+    if base.is_symlink() or not base.is_dir():
+        return None
+    raw_paths = raw.get("paths") if isinstance(raw.get("paths"), dict) else {}
+    legacy = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+    defaults = {"dbn": "structure.dbn", "pairs": "pairs.tsv", "ct": "structure.ct", "meta": "meta.json"}
+    paths: Dict[str, Optional[str]] = {}
+    for key in STRUCTURE_PATH_KEYS:
+        relative = None
+        for value in (raw_paths.get(key), legacy.get(key), "structures/%s/%s" % (task_id, defaults[key])):
+            candidate = _project_relative(root, value)
+            if candidate and candidate.startswith("structures/%s/" % task_id):
+                relative = candidate; break
+        paths[key] = relative
+    if paths["dbn"] is None:
+        return None
+    sample_ids = raw.get("sample_ids", raw.get("samples", []))
+    sample_ids = [s for s in sample_ids if isinstance(s, str)] if isinstance(sample_ids, list) else []
+    windows = [{"start": int(w["start"]), "end": int(w["end"])} for w in raw.get("windows") or []
+               if isinstance(w, dict) and type(w.get("start")) is int and type(w.get("end")) is int]
+    mode = raw.get("mode") if raw.get("mode") in ("genome", "windows") else "genome"
+    created = raw.get("created_at") if isinstance(raw.get("created_at"), str) and _DATE.match(raw["created_at"]) else _now()
+    parameters = raw.get("parameters") if isinstance(raw.get("parameters"), dict) else {}
+    summary = raw.get("summary") if isinstance(raw.get("summary"), dict) else (result.get("summary") if isinstance(result.get("summary"), dict) else {})
+    return {"id": task_id, "task_id": task_id, "sample_ids": sample_ids,
+            "gene_id": raw.get("gene_id") if isinstance(raw.get("gene_id"), str) else None,
+            "mode": mode, "windows": windows, "parameters": json.loads(json.dumps(parameters)), "created_at": created,
+            "paths": paths, "summary": json.loads(json.dumps(summary))}
+
+
 def register_task_run(root: Path, task_id: str) -> Dict[str, Any]:
     """Upsert a manifest run from the Rust-owned ``runs/<task_id>/status.json`` (idempotent)."""
     if not isinstance(task_id, str) or not _ID.match(task_id):
@@ -529,7 +604,15 @@ def register_task_run(root: Path, task_id: str) -> Dict[str, Any]:
     error = status.get("error")
     if isinstance(error, str) and error: entry["error"] = {"code": "task_" + entry["status"], "message": error[:4000]}
     elif isinstance(error, dict) and isinstance(error.get("message"), str): entry["error"] = {"code": str(error.get("code", "task_" + entry["status"])), "message": error["message"][:4000]}
+    structure = _structure_entry(root, task_id, result) if entry["status"] == "succeeded" else None
     def mutate(manifest: Dict[str, Any]) -> Dict[str, Any]:
+        if structure is not None:
+            structures = manifest.setdefault("structures", [])
+            for index, existing in enumerate(structures):
+                if isinstance(existing, dict) and existing.get("id") == structure["id"]:
+                    structures[index] = structure; break
+            else:
+                structures.append(structure)
         for index, existing in enumerate(manifest["runs"]):
             if isinstance(existing, dict) and existing.get("id") == task_id:
                 merged = {"input_ids": existing.get("input_ids", []), "parameters": existing.get("parameters", {})}
@@ -566,7 +649,7 @@ def new_project(root: Path, name: str, *, description: str = "", app_version: Op
         "project_id": str(uuid.uuid4()), "name": name.strip(),
         "description": description, "created_at": now, "updated_at": now,
         "application": {"name": "HYB2 Desktop", "version": version},
-        "inputs": [], "references": [], "samples": [], "runs": [], "artifacts": [],
+        "inputs": [], "references": [], "samples": [], "structures": [], "runs": [], "artifacts": [],
         "runtime": {"protocol_version": "1.0", "detected_at": now, "detector_version": "unknown",
                      "platform": {"os": "unknown", "architecture": "unknown", "release": "unknown", "wsl": False, "wsl_distributions": []},
                      "capabilities": []},

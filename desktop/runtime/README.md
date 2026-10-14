@@ -157,7 +157,36 @@ by the Rust task manager), `stdout.log`, and `stderr.log`; the Python child
 to `runs/<task-id>/result.json`. When a task finishes, Rust calls the bridge
 operation `register_task_run {path, task_id}`, which idempotently upserts the
 manifest `runs` entry. IDs are validated and run directories are confined to
-the project.
+the project. When the finished task is a successful `structure` run, its
+`result.json` `structure` entry is also upserted into `structures[]`
+(`{id, task_id, sample_ids, gene_id, mode, windows, parameters, created_at,
+paths: {dbn, pairs, ct, meta}, summary}`, paths project-relative under
+`structures/<task_id>/`).
+
+`open_project` and `list_samples` normalize stale sample stages: a stage left
+`queued`/`running` whose `runs/<task_id>/status.json` (read only; Rust writes
+it) is missing or terminal is saved as `interrupted` (`failed`/`cancelled`
+when the task record says so). Queued/running task records are left alone.
+
+## Project read operations (desktop UI)
+
+- `list_samples {path}` -> `{samples: [<sample> + {ready, stage_summary}],
+  conditions: [{name, sample_ids}], references: [<reference> incl.
+  sequences [{name, length}]], normalized: [...]}`. `ready` = the analysis
+  index exists; `stage_summary` is `pending|running|done|failed|interrupted`.
+- `list_structures {path}` -> `{structures: [<structures[] entry> +
+  {available}]}`, newest first.
+- `read_structure {path, structure_id}` -> `{structure, meta, records:
+  [{window_start, window_end, sequence, dbn, pairs: [[i, j]], energy}]}`;
+  coordinates are 1-based gene positions.
+- `compare_bins {project_path, sample_ids_a, sample_ids_b, gene, bin_size,
+  region?, max_cells?, fixed_bin?, gene2?, types?, measure?, orientation?}`
+  (alias `analysis_compare_bins`) -> `{result: {bin_size, length, x, y, a, b,
+  log2ratio, a_count, b_count, library_a, library_b, pseudocount, ...}}`;
+  `a`/`b` are counts per million records of each side.
+- `analysis_contact_bins` also takes `orientation: "oriented"|"both"` and
+  `fixed_bin`; `analysis_summary` reports `extents: {gene: {min, max}}` and
+  reference `length`s for genes of the samples' references.
 
 ## Sidecar mode
 

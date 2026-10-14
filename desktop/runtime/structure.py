@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .detector import CPLFOLD_MEMORY_FRACTION, cplfold_limits, cplfold_memory_estimate, memory_snapshot
-from .project import _atomic_write_json, safe_relative_path, validate_project_directory
+from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
 from .samples import _hyb2_reference_name
 
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
@@ -600,16 +600,24 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     _atomic_write_json(out_dir / "meta.json", meta)
     outputs["meta"] = str(out_dir / "meta.json")
     relative_dir = f"structures/{task_id}"
+    energies = [item["energy"] for item in summaries]
+    summary = {"records": len(records), "pairs": sum(item["pairs"] for item in summaries),
+               "pairs_with_bonus": sum(item["pairs_with_bonus"] for item in summaries),
+               "pseudoknot_pairs": sum(item["pseudoknot_pairs"] for item in summaries),
+               "energy": energies[0] if len(energies) == 1 else None, "energies": energies,
+               "length": sum(item["length"] for item in summaries),
+               "workers": workers, "timings": meta["timings"]}
     result = {
         "ok": True, "status": "succeeded", "task_id": task_id, "run_dir": str(run_dir),
         "output": outputs["dbn"], "output_dir": str(out_dir), "outputs": outputs,
-        # Shape of a project.json structures[] entry, for whoever registers it.
-        "structure": {"id": task_id, "samples": [sample["id"] for sample in inputs["samples"]], "gene_id": gene_id,
-                      "mode": mode, "windows": meta["windows"], "allow_pseudoknot": params["allow_pseudoknot"],
-                      "path": relative_dir, "created_at": meta["created_at"]},
-        "summary": {"records": len(records), "pairs": sum(item["pairs"] for item in summaries),
-                    "pairs_with_bonus": sum(item["pairs_with_bonus"] for item in summaries),
-                    "workers": workers, "timings": meta["timings"]},
+        # A project.json structures[] entry; register_task_run copies it into
+        # the manifest when the task finishes.
+        "structure": {"id": task_id, "task_id": task_id, "sample_ids": [sample["id"] for sample in inputs["samples"]],
+                      "gene_id": gene_id, "mode": mode, "windows": meta["windows"], "parameters": meta["parameters"],
+                      "created_at": meta["created_at"], "path": relative_dir,
+                      "paths": {key: f"{relative_dir}/{Path(value).name}" for key, value in outputs.items()},
+                      "summary": summary},
+        "summary": summary,
     }
     progress("done", "finished", None, None, units="none", force=True)
     _atomic_write_json(run_dir / "result.json", result)
@@ -631,3 +639,103 @@ def structure_run(request: Dict[str, Any], repo_root: Optional[Path] = None) -> 
         ProgressWriter(run_dir)("failed", result["error"], None, None, units="none", force=True)
         _atomic_write_json(run_dir / "result.json", result)
         return result
+
+
+# ---------------------------------------------------------------------------
+# registered results (bridge operations list_structures / read_structure)
+# ---------------------------------------------------------------------------
+
+def _structure_file(project: Path, entry: Dict[str, Any], key: str) -> Optional[Path]:
+    """A registered output file under ``structures/``, or None when absent/unsafe."""
+    relative = (entry.get("paths") or {}).get(key) if isinstance(entry.get("paths"), dict) else None
+    if not safe_relative_path(relative):
+        return None
+    target = (project / relative).resolve()
+    base = (project / "structures").resolve()
+    if base not in target.parents or not target.is_file():
+        return None
+    return target
+
+
+def list_structures(project: Path) -> List[Dict[str, Any]]:
+    """``structures[]`` of the manifest, newest first, each with ``available``
+    (its dot-bracket file still exists)."""
+    project = Path(project).expanduser().resolve()
+    manifest = load_manifest(project)
+    out = []
+    for entry in manifest.get("structures") or []:
+        if isinstance(entry, dict):
+            out.append({**entry, "available": _structure_file(project, entry, "dbn") is not None})
+    out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return out
+
+
+def parse_dbn(text: str) -> List[Dict[str, Any]]:
+    """Records (header, sequence, structure triples) of a structure.dbn from :func:`_write_outputs`."""
+    lines = [line.rstrip("\r") for line in text.splitlines() if line.strip()]
+    if len(lines) % 3:
+        raise ValueError("structure.dbn is malformed (expected header, sequence, structure triples)")
+    records = []
+    for index in range(0, len(lines), 3):
+        header, sequence, structure = lines[index], lines[index + 1], lines[index + 2]
+        if not header.startswith(">") or len(sequence) != len(structure):
+            raise ValueError("structure.dbn is malformed near record %d" % (index // 3 + 1))
+        words = header[1:].split()
+        label = words[0] if words else ""
+        start = 1
+        gene, _, span = label.rpartition(":")
+        if gene and "-" in span:
+            try:
+                start = int(span.split("-", 1)[0])
+            except ValueError:
+                start = 1
+        energy = None
+        if "energy " in header:
+            try:
+                energy = float(header.rsplit("energy ", 1)[1].split()[0])
+            except (ValueError, IndexError):
+                energy = None
+        records.append({"label": label, "window_start": start, "window_end": start + len(sequence) - 1,
+                        "sequence": sequence, "dbn": structure, "energy": energy})
+    return records
+
+
+def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
+    """``{structure, meta, records: [{window_start, window_end, sequence, dbn, pairs, energy}]}``.
+
+    Coordinates are 1-based positions on the gene: ``window_start``/``window_end``
+    bound each folded window and ``pairs`` lists ``[i, j]`` gene positions.
+    """
+    project = Path(project).expanduser().resolve()
+    manifest = load_manifest(project)
+    entry = next((item for item in manifest.get("structures") or []
+                  if isinstance(item, dict) and item.get("id") == structure_id), None)
+    if entry is None:
+        raise ValueError("structure does not exist: %s" % structure_id)
+    dbn_path = _structure_file(project, entry, "dbn")
+    if dbn_path is None:
+        raise ValueError("structure files are missing: %s" % structure_id)
+    meta_path = _structure_file(project, entry, "meta")
+    meta: Dict[str, Any] = {}
+    if meta_path is not None:
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta = loaded if isinstance(loaded, dict) else {}
+        except ValueError:
+            meta = {}
+    parsed = parse_dbn(dbn_path.read_text(encoding="utf-8"))
+    summaries = meta.get("records") if isinstance(meta.get("records"), list) else []
+    records = []
+    for index, record in enumerate(parsed):
+        start = record["window_start"]
+        summary = summaries[index] if index < len(summaries) and isinstance(summaries[index], dict) else {}
+        if type(summary.get("start")) is int:
+            start = summary["start"]
+        energy = summary["energy"] if "energy" in summary else record["energy"]
+        records.append({
+            "window_start": start, "window_end": start + len(record["sequence"]) - 1,
+            "sequence": record["sequence"], "dbn": record["dbn"],
+            "pairs": [[start + i - 1, start + j - 1] for i, j, _ in _pairs(record["dbn"])],
+            "energy": energy,
+        })
+    return {"structure": entry, "meta": meta, "records": records}

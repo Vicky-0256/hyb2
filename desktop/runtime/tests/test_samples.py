@@ -277,7 +277,7 @@ class FileRecordTests(ProjectTestCase):
         b = self.call("add_sample", source=str(plain), reference=str(self.reference()))["sample"]
         result = self.call("disk_estimate", sample_ids=[a["id"], b["id"]])
         rows = {row["id"]: row for row in result["samples"]}
-        self.assertEqual(rows[a["id"]]["uncompressed_bytes"], int(gz.stat().st_size * 6))
+        self.assertEqual(rows[a["id"]]["uncompressed_bytes"], int(gz.stat().st_size * samples.GZ_EXPANSION))
         self.assertEqual(rows[b["id"]]["temp_bytes"], int(plain.stat().st_size * 1.2))
         self.assertEqual(result["totals"]["temp_peak_bytes"], max(r["temp_bytes"] for r in rows.values()))
         both = self.call("disk_estimate", sample_ids=[a["id"], b["id"]], concurrency=2)

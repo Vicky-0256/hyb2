@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import heapq
 import json
 import math
 import sys
@@ -94,6 +95,35 @@ def _project_file(project: Path, relative: Any, label: str) -> Path:
     if project not in target.parents or not target.is_file():
         raise ValueError(f"{label} does not exist in the project: {relative}")
     return target
+
+
+MAX_BONUS_ENTRIES = 200_000
+
+
+def cap_bonus_entries(result: dict[str, Any], limit: int = MAX_BONUS_ENTRIES) -> dict[str, Any]:
+    """Keep the ``limit`` largest ``evidence.bonusEntries`` (original order).
+
+    Long sequences give millions of non-zero bonus cells; the WebView only
+    needs the strongest.  Sets ``evidence.bonusEntriesTruncated`` and
+    ``evidence.bonusEntriesTotal`` (and mirrors the flag at the top level).
+    """
+    evidence = result.get("evidence")
+    if not isinstance(evidence, dict) or not isinstance(evidence.get("bonusEntries"), list):
+        return result
+    entries = evidence["bonusEntries"]
+    total = len(entries)
+    truncated = total > limit
+    if truncated:
+        def value(index: int) -> float:
+            entry = entries[index]
+            number = entry.get("value") if isinstance(entry, dict) else None
+            return float(number) if isinstance(number, (int, float)) and not isinstance(number, bool) else float("-inf")
+        keep = sorted(heapq.nlargest(limit, range(total), key=lambda index: (value(index), -index)))
+        evidence["bonusEntries"] = [entries[index] for index in keep]
+    evidence["bonusEntriesTruncated"] = truncated
+    evidence["bonusEntriesTotal"] = total
+    result["bonusEntriesTruncated"] = truncated
+    return result
 
 
 def _pipeline_run(request: dict[str, Any], repo_root: Path | None) -> dict[str, Any]:
@@ -252,6 +282,20 @@ def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None)
         except _samples.SampleSheetError as error:
             return {"ok": False, "path": str(path), "errors": error.errors, "error": str(error)}
         return {"ok": True, "path": str(path), **result}
+    if operation == "list_samples":
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), **_samples.list_samples(path)}
+    if operation == "list_structures":
+        from .structure import list_structures
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), "structures": list_structures(path)}
+    if operation == "read_structure":
+        from .structure import read_structure
+        path = _valid_project(request)
+        structure_id = request.get("structure_id")
+        if not isinstance(structure_id, str) or not structure_id:
+            raise ValueError("structure_id is required")
+        return {"ok": True, "path": str(path), **read_structure(path, structure_id)}
     if operation == "check_inputs":
         path = _valid_project(request)
         return {"ok": True, "path": str(path), **_samples.check_inputs(path)}
@@ -312,8 +356,12 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         result = {"ok": True, "path": str(path), "errors": []}
         if operation == "open_project":
             # Schema 1.x projects are migrated in memory; the upgrade is saved
-            # by the next manifest mutation.
-            result["manifest"] = load_manifest(path)
+            # by the next manifest mutation.  Sample stages left queued/running
+            # by a task that is no longer live are shown (and saved) as
+            # interrupted.
+            manifest, changes = _samples.normalize_stale_stages(path)
+            result["manifest"] = manifest
+            result["normalized"] = changes
         return result
     if operation == "create_project":
         path = project_path(request)
@@ -359,6 +407,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
             "maxSequenceLength": max_nt,
         }
         result = module.fold(payload)
+        cap_bonus_entries(result)
         result["runtime"] = "HYB2 Desktop bundled Python/NumPy/Numba"
         result["native"] = True
         result["ok"] = True
@@ -530,7 +579,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
 
 # --- analysis queries (R3): aggregated results from per-sample SQLite indexes ---
 
-_ANALYSIS_OPS = {"analysis_summary", "analysis_contact_bins", "analysis_hybrids", "analysis_top"}
+_ANALYSIS_OPS = {"analysis_summary", "analysis_contact_bins", "analysis_hybrids", "analysis_top",
+                 "compare_bins", "analysis_compare_bins"}
 
 
 def _analysis_module(repo_root: Path | None) -> Any:
@@ -543,59 +593,97 @@ def _analysis_module(repo_root: Path | None) -> Any:
     return hyb2analysis
 
 
-def _analysis_index_paths(request: dict[str, Any]) -> tuple[list[str], list[Path]]:
+def _analysis_project(request: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    raw_path = request.get("project_path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("project path must be a non-empty string")
+    project = Path(raw_path).expanduser().resolve()
+    if project.name == "project.json":
+        project = project.parent
+    manifest = json.loads((project / "project.json").read_text(encoding="utf-8"))
+    return project, manifest if isinstance(manifest, dict) else {}
+
+
+def _sample_index_paths(project: Path, manifest: dict[str, Any], sample_ids: Any, key: str = "sample_ids") -> tuple[list[str], list[Path]]:
     """Sample ids -> index files via project.json ``samples[].outputs.index``.
 
     Relative index paths resolve inside the project; absolute ones (linked
-    data) are used as given.  ``index_paths`` may list index files directly.
+    data) are used as given.
+    """
+    if not isinstance(sample_ids, list) or not all(isinstance(s, str) and s for s in sample_ids):
+        raise ValueError("%s must be a list of sample ids" % key)
+    samples = {s.get("id"): s for s in manifest.get("samples") or [] if isinstance(s, dict)}
+    paths: list[Path] = []
+    ids: list[str] = []
+    for sample_id in sample_ids:
+        sample = samples.get(sample_id)
+        if sample is None:
+            raise ValueError("unknown sample: %s" % sample_id)
+        index = ((sample.get("outputs") or {}).get("index")) if isinstance(sample.get("outputs"), dict) else None
+        if not isinstance(index, str) or not index:
+            raise ValueError("sample has no analysis index yet: %s" % sample_id)
+        if Path(index).is_absolute():
+            target = Path(index).resolve()
+        else:
+            if not safe_relative_path(index):
+                raise ValueError("sample index must be a project-relative or absolute path: %s" % sample_id)
+            target = (project / index).resolve()
+            if project not in target.parents:
+                raise ValueError("sample index escapes the project: %s" % sample_id)
+        paths.append(target)
+        ids.append(sample_id)
+    return ids, paths
+
+
+def _reference_lengths(manifest: dict[str, Any], sample_ids: list[str]) -> dict[str, int]:
+    """Gene name -> length from the references of the given samples (project references[].sequences)."""
+    references = {r.get("id"): r for r in manifest.get("references") or [] if isinstance(r, dict)}
+    lengths: dict[str, int] = {}
+    wanted = set(sample_ids)
+    for sample in manifest.get("samples") or []:
+        if not isinstance(sample, dict) or sample.get("id") not in wanted:
+            continue
+        reference = references.get(sample.get("reference_id"))
+        for sequence in (reference or {}).get("sequences") or []:
+            if isinstance(sequence, dict) and isinstance(sequence.get("name"), str) \
+                    and type(sequence.get("length")) is int and sequence["length"] >= 0:
+                lengths.setdefault(sequence["name"], sequence["length"])
+    return lengths
+
+
+def _existing(paths: list[Path]) -> list[Path]:
+    for path in paths:
+        if not path.is_file():
+            raise ValueError("analysis index not found: %s" % path)
+    return paths
+
+
+def _analysis_index_paths(request: dict[str, Any]) -> tuple[list[str], list[Path], dict[str, int]]:
+    """``(sample_ids, index paths, reference lengths)`` for an analysis request.
+
+    ``sample_ids`` resolve through the project; ``index_paths`` may list index
+    files directly (no reference lengths are known for those).
     """
     sample_ids = request.get("sample_ids")
     explicit = request.get("index_paths")
     paths: list[Path] = []
     ids: list[str] = []
+    lengths: dict[str, int] = {}
     if sample_ids is not None:
-        if not isinstance(sample_ids, list) or not all(isinstance(s, str) and s for s in sample_ids):
-            raise ValueError("sample_ids must be a list of sample ids")
-        raw_path = request.get("project_path")
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            raise ValueError("project path must be a non-empty string")
-        project = Path(raw_path).expanduser().resolve()
-        if project.name == "project.json":
-            project = project.parent
-        manifest = json.loads((project / "project.json").read_text(encoding="utf-8"))
-        samples = {s.get("id"): s for s in manifest.get("samples") or [] if isinstance(s, dict)}
-        for sample_id in sample_ids:
-            sample = samples.get(sample_id)
-            if sample is None:
-                raise ValueError("unknown sample: %s" % sample_id)
-            index = ((sample.get("outputs") or {}).get("index")) if isinstance(sample.get("outputs"), dict) else None
-            if not isinstance(index, str) or not index:
-                raise ValueError("sample has no analysis index yet: %s" % sample_id)
-            if Path(index).is_absolute():
-                target = Path(index).resolve()
-            else:
-                if not safe_relative_path(index):
-                    raise ValueError("sample index must be a project-relative or absolute path: %s" % sample_id)
-                target = (project / index).resolve()
-                if project not in target.parents:
-                    raise ValueError("sample index escapes the project: %s" % sample_id)
-            paths.append(target)
-            ids.append(sample_id)
+        project, manifest = _analysis_project(request)
+        ids, paths = _sample_index_paths(project, manifest, sample_ids)
+        lengths = _reference_lengths(manifest, ids)
     if explicit is not None:
         if not isinstance(explicit, list) or not all(isinstance(p, str) and p for p in explicit):
             raise ValueError("index_paths must be a list of paths")
         paths.extend(Path(p).expanduser().resolve() for p in explicit)
     if not paths:
         raise ValueError("sample_ids or index_paths is required")
-    for path in paths:
-        if not path.is_file():
-            raise ValueError("analysis index not found: %s" % path)
-    return ids, paths
+    return ids, _existing(paths), lengths
 
 
 def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None) -> dict[str, Any]:
     analysis = _analysis_module(repo_root)
-    sample_ids, paths = _analysis_index_paths(request)
     query = analysis.query
 
     def opt_int(name: str, default: Any) -> Any:
@@ -616,22 +704,44 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
             raise ValueError("types must be a list of chimera type names")
         return value
 
+    def opt_bool(name: str) -> bool:
+        value = request.get(name, False)
+        if not isinstance(value, bool):
+            raise ValueError("%s must be a boolean" % name)
+        return value
+
+    def required_gene() -> str:
+        gene = opt_str("gene")
+        if not gene:
+            raise ValueError("gene is required")
+        return gene
+
+    if operation in ("compare_bins", "analysis_compare_bins"):
+        project, manifest = _analysis_project(request)
+        ids_a, paths_a = _sample_index_paths(project, manifest, request.get("sample_ids_a"), "sample_ids_a")
+        ids_b, paths_b = _sample_index_paths(project, manifest, request.get("sample_ids_b"), "sample_ids_b")
+        if not ids_a or not ids_b:
+            raise ValueError("sample_ids_a and sample_ids_b must each name at least one sample")
+        result = query.compare_bins(_existing(paths_a), _existing(paths_b), required_gene(), opt_int("bin_size", 10),
+                                    request.get("region"), gene2=opt_str("gene2"), types=opt_types(),
+                                    measure=opt_str("measure") or "records", orientation=opt_str("orientation") or "oriented",
+                                    max_cells=opt_int("max_cells", None), fixed_bin=opt_bool("fixed_bin"),
+                                    lengths=_reference_lengths(manifest, ids_a + ids_b))
+        return {"ok": True, "operation": "compare_bins", "sample_ids_a": ids_a, "sample_ids_b": ids_b,
+                "indexes_a": [str(p) for p in paths_a], "indexes_b": [str(p) for p in paths_b], "result": result}
+
+    sample_ids, paths, lengths = _analysis_index_paths(request)
     if operation == "analysis_summary":
-        result = query.summary(paths)
+        result = query.summary(paths, lengths=lengths)
     elif operation == "analysis_contact_bins":
-        gene = opt_str("gene")
-        if not gene:
-            raise ValueError("gene is required")
-        result = query.contact_bins(paths, gene, opt_int("bin_size", 10), request.get("region"), gene2=opt_str("gene2"),
+        result = query.contact_bins(paths, required_gene(), opt_int("bin_size", 10), request.get("region"), gene2=opt_str("gene2"),
                                     types=opt_types(), measure=opt_str("measure") or "records",
-                                    max_cells=opt_int("max_cells", None))
+                                    max_cells=opt_int("max_cells", None), orientation=opt_str("orientation") or "oriented",
+                                    fixed_bin=opt_bool("fixed_bin"), lengths=lengths)
     elif operation == "analysis_top":
-        gene = opt_str("gene")
-        if not gene:
-            raise ValueError("gene is required")
-        result = query.top_interactions(paths, gene, opt_int("bin_size", 10), opt_int("n", 50), gene2=opt_str("gene2"),
+        result = query.top_interactions(paths, required_gene(), opt_int("bin_size", 10), opt_int("n", 50), gene2=opt_str("gene2"),
                                         region=request.get("region"), types=opt_types(),
-                                        measure=opt_str("measure") or "records")
+                                        measure=opt_str("measure") or "records", orientation=opt_str("orientation") or "oriented")
     else:
         filters = {} if request.get("filters") is None else request["filters"]
         if not isinstance(filters, dict):

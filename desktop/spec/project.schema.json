@@ -68,6 +68,13 @@
         "$ref": "#/$defs/sample"
       }
     },
+    "structures": {
+      "type": "array",
+      "description": "Registered CPLfold structure results (schema >= 2.0; optional, migrated as empty). Upserted by register_task_run when a structure task succeeds.",
+      "items": {
+        "$ref": "#/$defs/structure"
+      }
+    },
     "runs": {
       "type": "array",
       "items": {
@@ -903,6 +910,132 @@
         }
       },
       "additionalProperties": false
+    },
+    "structure": {
+      "type": "object",
+      "required": [
+        "id",
+        "task_id",
+        "sample_ids",
+        "gene_id",
+        "mode",
+        "windows",
+        "parameters",
+        "created_at",
+        "paths",
+        "summary"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$",
+          "description": "Equal to task_id."
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$"
+        },
+        "sample_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gene_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "genome",
+            "windows"
+          ]
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "start",
+              "end"
+            ],
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "1-based inclusive gene coordinates."
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "created_at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "paths": {
+          "type": "object",
+          "properties": {
+            "dbn": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pairs": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ct": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "meta": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "description": "Project-relative files under structures/<task_id>/."
+        },
+        "summary": {
+          "type": "object",
+          "description": "{records, pairs, pairs_with_bonus, pseudoknot_pairs, energy, energies, length, workers, timings}.",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
     }
   },
   "allOf": [

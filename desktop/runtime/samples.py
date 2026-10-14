@@ -544,6 +544,133 @@ def set_sample_stage(root: Path, sample_id: str, stage: str, status: str, *, tas
     return _mutate_manifest(Path(root), mutate)
 
 
+# --------------------------------------------------------------------------- stale stages and listing
+
+ACTIVE_STAGE_STATUSES = ("queued", "running")
+# Status of the stage's task in runs/<task_id>/status.json (written only by the
+# Rust task manager) -> what a still-"active" stage is shown as.  queued/running
+# task records may belong to a live task and are left alone.
+_STALE_STAGE_STATUS = {"interrupted": "interrupted", "cancelled": "cancelled", "failed": "failed",
+                       "succeeded": "interrupted", None: "interrupted"}
+
+
+def _task_status(root: Path, task_id: Any) -> Optional[str]:
+    """``status`` from ``runs/<task_id>/status.json``; None when the record is absent or unreadable."""
+    if not isinstance(task_id, str) or not _ID.match(task_id):
+        return None
+    status_path = Path(root) / "runs" / task_id / "status.json"
+    try:
+        if status_path.is_symlink() or not status_path.is_file():
+            return None
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    status = data.get("status") if isinstance(data, dict) else None
+    return status if isinstance(status, str) else None
+
+
+def stale_stages(root: Path, manifest: Dict[str, Any]) -> List[Tuple[str, str, Optional[str], str]]:
+    """``(sample_id, stage, task_id, new_status)`` for queued/running stages with no live task."""
+    stale = []
+    for sample in manifest.get("samples") or []:
+        if not isinstance(sample, dict) or not isinstance(sample.get("stages"), dict):
+            continue
+        for name, stage in sample["stages"].items():
+            if not isinstance(stage, dict) or stage.get("status") not in ACTIVE_STAGE_STATUSES:
+                continue
+            task_status = _task_status(root, stage.get("task_id"))
+            if task_status in ACTIVE_STAGE_STATUSES:
+                continue
+            new = _STALE_STAGE_STATUS.get(task_status, "interrupted")
+            stale.append((sample.get("id"), name, stage.get("task_id"), new))
+    return stale
+
+
+def normalize_stale_stages(root: Path, manifest: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Mark queued/running sample stages whose task is no longer live.
+
+    Returns the (normalized) manifest and the changes.  The change is
+    persisted through the locked manifest writer; a read-only project is
+    normalized in memory only.
+    """
+    root = Path(root).expanduser().resolve()
+    manifest = manifest if manifest is not None else load_manifest(root)
+    stale = stale_stages(root, manifest)
+    if not stale:
+        return manifest, []
+    changes = [{"sample_id": sid, "stage": name, "task_id": task_id, "status": status} for sid, name, task_id, status in stale]
+
+    def apply(target: Dict[str, Any]) -> List[Dict[str, Any]]:
+        stamp = _now()
+        applied = []
+        for change in changes:
+            sample = next((s for s in target.get("samples") or [] if isinstance(s, dict) and s.get("id") == change["sample_id"]), None)
+            stage = (sample or {}).get("stages", {}).get(change["stage"]) if sample else None
+            # Re-check under the lock: the stage may have moved on meanwhile.
+            if not isinstance(stage, dict) or stage.get("status") not in ACTIVE_STAGE_STATUSES or stage.get("task_id") != change["task_id"]:
+                continue
+            stage["status"] = change["status"]
+            stage["updated_at"] = stamp
+            applied.append(change)
+        return applied
+
+    try:
+        applied = _mutate_manifest(root, apply)
+        return load_manifest(root), applied
+    except OSError:
+        return manifest, apply(manifest)
+
+
+def stage_summary(stages: Any) -> str:
+    """One word for a sample's stage row: pending | running | done | failed | interrupted."""
+    statuses = [stage.get("status") for stage in (stages or {}).values() if isinstance(stage, dict)] if isinstance(stages, dict) else []
+    if any(status in ACTIVE_STAGE_STATUSES for status in statuses):
+        return "running"
+    if "failed" in statuses:
+        return "failed"
+    if any(status in ("interrupted", "cancelled") for status in statuses):
+        return "interrupted"
+    if statuses and all(status in ("succeeded", "skipped") for status in statuses):
+        return "done"
+    return "pending"
+
+
+def _output_exists(root: Path, value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if is_absolute_path(value):
+        return Path(value).is_file()
+    if not safe_relative_path(value):
+        return False
+    target = (root / value).resolve()
+    return root in target.parents and target.is_file()
+
+
+def list_samples(root: Path) -> Dict[str, Any]:
+    """Samples with derived fields, conditions and references (bridge ``list_samples``).
+
+    ``samples[]`` are the manifest records plus ``ready`` (the analysis index
+    exists) and ``stage_summary``; stale queued/running stages are normalized
+    first.  ``conditions`` groups sample ids by condition in sample order;
+    ``references`` are the reference records with their ``sequences``.
+    """
+    root = _project_root(root)
+    manifest, changes = normalize_stale_stages(root)
+    samples = []
+    conditions: Dict[str, List[str]] = {}
+    for sample in manifest.get("samples") or []:
+        outputs = sample.get("outputs") if isinstance(sample.get("outputs"), dict) else {}
+        samples.append({**sample, "ready": _output_exists(root, outputs.get("index")),
+                        "stage_summary": stage_summary(sample.get("stages"))})
+        condition = sample.get("condition")
+        if isinstance(condition, str) and condition:
+            conditions.setdefault(condition, []).append(sample["id"])
+    references = [{**reference, "sequences": list(reference.get("sequences") or [])}
+                  for reference in manifest.get("references") or []]
+    return {"samples": samples, "conditions": [{"name": name, "sample_ids": ids} for name, ids in conditions.items()],
+            "references": references, "normalized": changes}
+
+
 # --------------------------------------------------------------------------- sample sheets
 
 _FILES_COLUMNS = ("files", "file", "reads", "read", "path", "paths", "fastq", "input")
@@ -757,11 +884,21 @@ def hash_inputs(root: Path, *, ids: Optional[List[str]] = None, force: bool = Fa
 
 
 # Disk estimate heuristics (documented in the response so the UI can show them).
-GZ_EXPANSION = 6.0         # gzip FASTQ/FASTA expands ~6x
+# Calibrated on the ZIKV data set (zika_files/*.fastq.gz against the legacy
+# reproduce_zikv/results_combined outputs, 9 samples of 1.5-2.2 GB gz):
+#   gz FASTQ -> FASTQ        5.6x-6.8x (median 6.1x; ZAFR_REP1 1.71 GB -> 10.19 GB = 5.97x)
+#   .hyb / FASTQ             0.004-0.014 (ZSIN_REP3, a degenerate library, 0.13)
+#   plain SAM / FASTQ        0.72-1.16 (median 0.90)
+#   contact.txt / .hyb       0.07-0.20
+#   analysis index / .hyb    ~0.23 (352 MB index for a 1.56 GB .hyb)
+# The factors round towards the conservative end so a pre-flight check does
+# not pass for a run that then fills the disk.
+GZ_EXPANSION = 6.5         # gzip FASTQ/FASTA expands ~6x
 TEMP_FACTOR = 1.2          # external sort / intermediates ~1.2x the uncompressed input
-HYB_FACTOR = 0.15          # .hyb + homodimers + stats vs uncompressed input
-INDEX_FACTOR = 0.5         # analysis index + contact vs .hyb size
-SAM_FACTORS = {"none": 0.0, "gz": 0.15, "plain": 0.9}
+HYB_FACTOR = 0.02          # .hyb + homodimers + stats vs uncompressed input
+INDEX_FACTOR = 0.25        # analysis index vs .hyb size
+CONTACT_FACTOR = 0.2       # contact.txt vs .hyb size
+SAM_FACTORS = {"none": 0.0, "gz": 0.25, "plain": 1.0}
 
 
 def estimate_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -772,11 +909,11 @@ def estimate_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
     settings = sample.get("settings") or {}
     keep_sam = settings.get("keep_sam", "none") if settings.get("keep_sam") in SAM_FACTORS else "none"
     if fmt == "hyb":
-        temp, outputs = 0, int(size * INDEX_FACTOR)
+        temp, outputs = 0, int(size * (INDEX_FACTOR + CONTACT_FACTOR))
     else:
         temp = int(uncompressed * TEMP_FACTOR)
         hyb = int(uncompressed * HYB_FACTOR)
-        outputs = hyb + int(hyb * INDEX_FACTOR) + int(uncompressed * SAM_FACTORS[keep_sam])
+        outputs = hyb + int(hyb * (INDEX_FACTOR + CONTACT_FACTOR)) + int(uncompressed * SAM_FACTORS[keep_sam])
     return {"id": sample["id"], "format": fmt, "input_bytes": size, "uncompressed_bytes": uncompressed,
             "temp_bytes": temp, "output_bytes": outputs}
 
@@ -785,7 +922,7 @@ def disk_estimate(root: Path, sample_ids: Optional[List[str]] = None, *, concurr
                   tmp_dir: Optional[Path] = None, include_completed: bool = False) -> Dict[str, Any]:
     """Estimate disk needed to run samples and compare with free space.
 
-    temp ~ 1.2x uncompressed input (gz counted as 6x its size), freed after
+    temp ~ 1.2x uncompressed input (gz counted as 6.5x its size), freed after
     each sample, so the peak temp is the ``concurrency`` largest samples;
     outputs accumulate.  Samples whose ``hyb`` stage already succeeded are
     left out unless ``include_completed``.
@@ -827,5 +964,5 @@ def disk_estimate(root: Path, sample_ids: Optional[List[str]] = None, *, concurr
                    "required_bytes": outputs + temp_peak},
         "volumes": volumes, "fits": all(v["ok"] for v in volumes),
         "assumptions": {"gz_expansion": GZ_EXPANSION, "temp_factor": TEMP_FACTOR, "hyb_factor": HYB_FACTOR,
-                        "index_factor": INDEX_FACTOR, "sam_factors": SAM_FACTORS, "concurrency": concurrency},
+                        "index_factor": INDEX_FACTOR, "contact_factor": CONTACT_FACTOR, "sam_factors": SAM_FACTORS, "concurrency": concurrency},
     }

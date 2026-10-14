@@ -106,6 +106,12 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(self.sample(sample["id"])["stages"]["hyb"]["status"], "failed")
 
+    @staticmethod
+    def _restore_modules(cached):
+        for name in [n for n in sys.modules if n == "hyb2analysis" or n.startswith("hyb2analysis.")]:
+            del sys.modules[name]
+        sys.modules.update(cached)
+
     def test_hyb_sample_runs_analysis_stage_with_hyb2analysis(self):
         """A stub hyb2analysis (R3 API) is called for contact + index; outputs land in samples/<id>/."""
         fake_root = self.dir / "repo"
@@ -124,6 +130,12 @@ class SamplePipelineTest(unittest.TestCase):
                 Path(index_path).write_bytes(b"SQLite stub")
         """))
         self.repo_root = fake_root
+        # Other tests may have imported the real package; load the stub instead.
+        cached = {name: module for name, module in sys.modules.items()
+                  if name == "hyb2analysis" or name.startswith("hyb2analysis.")}
+        for name in cached:
+            del sys.modules[name]
+        self.addCleanup(self._restore_modules, cached)
         hyb = self.dir / "given.hyb"
         shutil.copyfile(GOLDEN, hyb)
         sample = self.add(hyb, gene_id="Zika_virusRNA", mode="copied")

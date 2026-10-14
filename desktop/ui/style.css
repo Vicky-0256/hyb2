@@ -505,13 +505,35 @@
   min-height: calc(100vh - 220px);
   padding: 0;
   overflow: auto;
-  background: var(--d-surface);
+  /* The web theme's canvas once the workspace has loaded (light or dark). */
+  background: var(--canvas, var(--d-surface));
+  container-type: inline-size;
   border: 1px solid #d5dfeb;
   border-radius: 10px;
 }
 
 .desktop-integrated-analysis {
   min-height: 760px;
+  /* Re-establish what web/styles.css sets on <body>: the desktop shell
+     sits in between and would otherwise force its light-theme ink. */
+  color: var(--ink);
+  background: var(--canvas);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+/* The landing page switches to one column on viewport width, but inside the
+   desktop host the available width is the host's, not the window's. */
+@container (max-width: 1100px) {
+  .desktop-integrated-analysis .landing-main {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .desktop-integrated-analysis .landing-copy h1 {
+    font-size: 48px;
+  }
 }
 
 .desktop-integrated-analysis .landing-header,

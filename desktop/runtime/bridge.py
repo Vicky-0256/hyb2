@@ -238,6 +238,10 @@ def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None)
         result = _samples.add_reference(path, Path(source) if source else None, input_id=request.get("input_id"),
                                         label=str(request.get("label") or ""), mode=str(request.get("mode") or "linked"))
         return {"ok": True, "path": str(path), **result}
+    if operation == "read_reference_sequence":
+        path = _valid_project(request)
+        result = _samples.read_reference_sequence(path, str(request.get("reference_id") or ""), str(request.get("name") or ""))
+        return {"ok": True, "path": str(path), **result}
     if operation == "update_reference":
         path = _valid_project(request)
         source = _optional_str(request, "source")

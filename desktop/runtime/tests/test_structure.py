@@ -198,8 +198,9 @@ class StructureRunTests(unittest.TestCase):
     def test_samples_resolve_from_schema_2_manifest(self):
         from desktop.runtime.samples import add_reference, add_sample
         reference = add_reference(self.project, self.project / "data" / "ref.fa", mode="linked")["reference"]
-        ids = [add_sample(self.project, path, name=name, reference_id=reference["id"], gene_id=GENE, mode="copied")["id"]
-               for name, path in (("s1", self.project / "data" / "a.hyb"), ("s2", self.external))]
+        # s2 is a linked .hyb: it has no outputs.hyb, the reads file is the evidence
+        ids = [add_sample(self.project, path, name=name, reference_id=reference["id"], gene_id=GENE, mode=mode)["id"]
+               for name, path, mode in (("s1", self.project / "data" / "a.hyb", "copied"), ("s2", self.external, "linked"))]
         request = {"operation": "structure_run", "project_path": str(self.project), "sample_ids": ids,
                    "task_id": "samples", "parameters": {"beam": 30}}
         result = handle(request, repo_root=ROOT)

@@ -293,6 +293,9 @@ def _evidence_inputs(project: Path, request: Dict[str, Any]) -> Dict[str, Any]:
             if sample is None:
                 raise ValueError(f"unknown sample: {sample_id}")
             hyb = (sample.get("outputs") or {}).get("hyb")
+            reads = sample.get("reads") or {}
+            if not hyb and reads.get("format") == "hyb":
+                hyb = reads.get("path")  # a linked or copied .hyb is its own output
             if not hyb:
                 raise ValueError(f"sample {sample_id} has no .hyb output yet")
             paths.append(_input_file(project, hyb, f"sample {sample_id} .hyb"))

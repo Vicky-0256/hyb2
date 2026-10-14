@@ -142,6 +142,24 @@ class StructureRegistryTests(unittest.TestCase):
         self.assertTrue(any("paths.dbn" in error for error in validate_manifest(manifest)))
 
 
+class ReferenceSequenceTests(unittest.TestCase):
+    def test_reads_linked_reference_sequence_by_gene(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "p.hyb2proj"
+            new_project(project, "Ref")
+            fasta = Path(tmp) / "ref.fa"
+            fasta.write_text(">geneA first\nACGU\nACGT\n>geneB\nGGGG\n")
+            reference = add_reference(project, fasta, mode="linked")["reference"]
+            result = handle({"operation": "read_reference_sequence", "path": str(project),
+                             "reference_id": reference["id"], "name": "geneA"})
+            self.assertEqual((result["sequence"], result["length"]), ("ACGUACGT", 8))
+            self.assertEqual(handle({"operation": "read_reference_sequence", "path": str(project),
+                                     "reference_id": reference["id"], "name": "geneB"})["sequence"], "GGGG")
+            with self.assertRaises(ValueError):
+                handle({"operation": "read_reference_sequence", "path": str(project),
+                        "reference_id": reference["id"], "name": "nope"})
+
+
 class StaleStageTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

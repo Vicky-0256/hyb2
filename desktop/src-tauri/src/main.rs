@@ -606,7 +606,7 @@ async fn analysis_query(app: tauri::AppHandle, request: Value) -> Result<Value, 
 // ---- Project data operations (samples, references, structures).
 
 /// Short control-lane operations on project.json; Python validates the rest.
-const PROJECT_OPERATIONS: [&str; 12] = [
+const PROJECT_OPERATIONS: [&str; 13] = [
     "add_reference",
     "update_reference",
     "remove_reference",
@@ -619,6 +619,7 @@ const PROJECT_OPERATIONS: [&str; 12] = [
     "list_samples",
     "list_structures",
     "read_structure",
+    "read_reference_sequence",
 ];
 
 /// Accepts `{path, operation, ...}` for one of `PROJECT_OPERATIONS`.

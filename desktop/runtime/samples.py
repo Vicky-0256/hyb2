@@ -832,6 +832,39 @@ def check_inputs(root: Path) -> Dict[str, Any]:
     return {"items": items, "summary": summary, "all_ok": summary["missing"] == 0 and summary["changed"] == 0}
 
 
+MAX_REFERENCE_SEQUENCE = 50_000_000
+
+
+def read_reference_sequence(root: Path, reference_id: str, name: str) -> Dict[str, Any]:
+    """One reference sequence by gene name (names as ``read_fasta_sequences`` reports them)."""
+    root = _project_root(root)
+    manifest = load_manifest(root)
+    reference = next((item for item in manifest["references"] if item.get("id") == reference_id), None)
+    if reference is None:
+        raise ValueError("unknown reference: %s" % reference_id)
+    status, detail = check_record(root, reference)
+    if status == "missing":
+        raise ValueError("reference file is missing: %s" % detail)
+    path = resolve_record_path(root, reference)
+    with _open_text(path) as handle:
+        lines = handle.read().splitlines() if path.stat().st_size <= MAX_REFERENCE_SEQUENCE else None
+    if lines is None:
+        raise ValueError("reference file is too large to read whole")
+    formatted = any(line.startswith(">") and "|" in line for line in lines)
+    current, chunks, header = None, [], ""
+    for line in lines + [">"]:
+        if line.startswith(">"):
+            if current == name:
+                return {"reference_id": reference_id, "name": name, "header": header,
+                        "length": sum(len(c) for c in chunks), "sequence": "".join(chunks)}
+            header = line[1:].strip()
+            current = (_hyb2_reference_name(header).split() or [""])[0] if formatted else (header.split() or [""])[0]
+            chunks = []
+        elif current is not None:
+            chunks.append(line.strip())
+    raise ValueError("sequence %s is not in reference %s" % (name, reference_id))
+
+
 def hash_inputs(root: Path, *, ids: Optional[List[str]] = None, force: bool = False,
                 progress: Optional[ByteProgress] = None) -> Dict[str, Any]:
     """Compute full SHA-256 for references/sample reads (``sha256: null`` ones unless ``force``).

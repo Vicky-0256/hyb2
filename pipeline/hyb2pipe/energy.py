@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from concurrent.futures import ProcessPoolExecutor
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import awk
@@ -55,17 +56,28 @@ def bit_pairs(hyb_lines: Iterable[str], table: Dict[str, str]) -> List[Tuple[str
     return pairs
 
 
-def default_folder() -> Folder:
-    """ViennaRNA Python bindings, else an ``RNAcofold`` executable."""
+def _vienna_chunk(pairs: Sequence[Tuple[str, str]]) -> List[float]:
+    import RNA  # type: ignore
+    return [RNA.fold_compound(a + "&" + b).mfe_dimer()[1] for a, b in pairs]
+
+
+def default_folder(workers: Optional[int] = None) -> Folder:
+    """ViennaRNA Python bindings (spread over ``workers`` processes when given), else an
+    ``RNAcofold`` executable.  Each pair folds independently, so the result
+    does not depend on the number of workers."""
     try:
-        import RNA  # type: ignore
+        import RNA  # type: ignore  # noqa: F401
 
         def fold(pairs):
-            out = []
-            for a, b in pairs:
-                _, mfe = RNA.fold_compound(a + "&" + b).mfe_dimer()
-                out.append(mfe)
-            return out
+            pairs = list(pairs)
+            # Opt-in: parallel speed-up is unmeasured on a quiet machine, so default to one process.
+            count = max(1, min(workers or 1, len(pairs) // 200 or 1))
+            if count == 1:
+                return _vienna_chunk(pairs)
+            size = -(-len(pairs) // (count * 4))
+            chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
+            with ProcessPoolExecutor(max_workers=count) as pool:
+                return [value for chunk in pool.map(_vienna_chunk, chunks) for value in chunk]
         return fold
     except ImportError:
         pass
@@ -84,8 +96,9 @@ def default_folder() -> Folder:
     raise EnergyUnavailable("folding energy needs the ViennaRNA Python package or RNAcofold on PATH")
 
 
-def add_energies(hyb_lines: Sequence[str], fasta_lines: Iterable[str], folder: Optional[Folder] = None) -> List[str]:
-    folder = folder or default_folder()
+def add_energies(hyb_lines: Sequence[str], fasta_lines: Iterable[str], folder: Optional[Folder] = None,
+                 workers: Optional[int] = None) -> List[str]:
+    folder = folder or default_folder(workers)
     pairs = bit_pairs(hyb_lines, reference_table(fasta_lines))
     energies = folder([(a, b) for _, a, b in pairs])
     dg: Dict[str, str] = {}

@@ -115,6 +115,12 @@ class ViennaEnergyTest(unittest.TestCase):
             self.assertEqual(a[:2] + a[3:], b[:2] + b[3:])
             self.assertLess(float(b[2]), 0)
 
+    @unittest.skipUnless(_has_viennarna(), "ViennaRNA Python package not installed")
+    def test_parallel_folding_matches_serial(self):
+        hyb = (HERE / "golden/testData.hyb").read_text().splitlines()[:600]
+        pairs = [(a, b) for _, a, b in energy.bit_pairs(hyb, energy.reference_table(inputs.iter_lines(ROOT / "data/Zika_18S_formatted.fasta")))]
+        self.assertEqual(energy.default_folder(3)(pairs), energy.default_folder()(pairs))
+
 
 class CliTest(unittest.TestCase):
     def test_rejects_unknown_input_type(self):

@@ -16,7 +16,7 @@ class Options:
     max_overlap: float = 4  # -m / -g
     max_hits: int = 10  # -h (the legacy hyb2 wrapper never forwarded it)
     energy: bool = False  # -e
-    threads: Optional[int] = None
+    threads: Optional[int] = None  # Bowtie2 threads and energy worker processes
 
 
 @dataclass
@@ -55,7 +55,7 @@ def sam2hyb(sam_path: Path, reference: Path, out_prefix: Path, options: Options 
     counts["hybrids_called"] = len(unique)
     if options.energy:
         progress("energy", "folding hybrid bits")
-        unique = energy.add_energies(unique, inputs.iter_lines(reference))
+        unique = energy.add_energies(unique, inputs.iter_lines(reference), workers=options.threads)
     progress("annotate", "collapsing and annotating hybrids")
     final = finalize.add_chimera_types(finalize.add_overlaps(finalize.filter_homopolymers(collapse.collapse_hyb(unique))))
     counts["hybrids"] = len(final)

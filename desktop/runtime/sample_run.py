@@ -18,6 +18,7 @@ import os
 import re
 import signal
 import sys
+import traceback
 import threading
 import time
 from pathlib import Path
@@ -214,6 +215,7 @@ def run_sample_index(project: Path, sample_id: str, task_id: str, run_dir: Path,
             print("cannot record stage failure: %s" % nested, file=sys.stderr)
         if interrupted:
             raise
+        traceback.print_exc(file=sys.stderr)
         progress.write("failed", str(error)[:500])
         return finish({"ok": False, "status": "failed", "error": "%s: %s" % (error.__class__.__name__, error), "stage": "index"})
     finally:
@@ -355,6 +357,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
             print("cannot record stage failure: %s" % nested, file=sys.stderr)
         if interrupted:
             raise
+        traceback.print_exc(file=sys.stderr)
         progress.write("failed", str(error)[:500])
         return finish({"ok": False, "status": "failed", "error": "%s: %s" % (error.__class__.__name__, error), "stage": state.stage})
     finally:

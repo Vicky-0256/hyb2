@@ -413,6 +413,13 @@ class Bowtie2Stream:
 
     def __iter__(self) -> Iterator[str]:
         for line in self._text:
+            if not line.endswith("\n"):
+                # Bowtie2 ends every SAM line with a newline; a cut-off last
+                # line means it died mid-write, so report that, not the
+                # parse error the partial record would cause downstream.
+                code = self.proc.wait()
+                if code:
+                    raise subprocess.CalledProcessError(code, self.args)
             yield line.rstrip("\r\n")
         code = self.proc.wait()
         if code:

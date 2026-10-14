@@ -282,6 +282,31 @@ class StreamingTest(unittest.TestCase):
             self.assertEqual(list((Path(tmp) / "t").iterdir()), [])
 
 
+class Bowtie2StreamTest(unittest.TestCase):
+    def test_killed_bowtie2_reports_exit_not_parse_error(self):
+        import os
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "bowtie2-align-s"
+            fake.write_text("#!/bin/sh\nprintf '@HD\\tVN:1.0\\nread_1\\t0\\tgen'\nkill -9 $$\n")
+            fake.chmod(0o755)
+            old = os.environ.get("HYB2PIPE_TOOL_DIR")
+            os.environ["HYB2PIPE_TOOL_DIR"] = tmp
+            try:
+                stream = inputs.Bowtie2Stream(Path(tmp) / "r.fa", Path(tmp) / "idx", threads=1)
+                lines = []
+                with self.assertRaises(subprocess.CalledProcessError):
+                    for line in stream:
+                        lines.append(line)
+                stream.close()
+            finally:
+                if old is None:
+                    os.environ.pop("HYB2PIPE_TOOL_DIR", None)
+                else:
+                    os.environ["HYB2PIPE_TOOL_DIR"] = old
+            self.assertEqual(lines, ["@HD\tVN:1.0"])
+
+
 class CliTest(unittest.TestCase):
     def test_rejects_unknown_input_type(self):
         from hyb2pipe.__main__ import main

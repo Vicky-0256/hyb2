@@ -75,6 +75,13 @@
         "$ref": "#/$defs/structure"
       }
     },
+    "comparisons": {
+      "type": "array",
+      "description": "Registered two-condition DESeq2 comparisons (schema >= 2.0; optional, migrated as empty). Upserted by register_task_run when a compare task succeeds.",
+      "items": {
+        "$ref": "#/$defs/comparison"
+      }
+    },
     "runs": {
       "type": "array",
       "items": {
@@ -1033,6 +1040,126 @@
           "type": "object",
           "description": "{records, pairs, pairs_with_bonus, pseudoknot_pairs, energy, energies, length, workers, timings}.",
           "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "comparison": {
+      "type": "object",
+      "required": [
+        "id",
+        "task_id",
+        "samples_one",
+        "samples_two",
+        "parameters",
+        "created_at",
+        "paths",
+        "summary"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$",
+          "description": "Equal to task_id."
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$"
+        },
+        "samples_one": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Condition one (numerator of log2FoldChange)."
+        },
+        "samples_two": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "label_one": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label_two": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "genes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Target genes whose contact maps were compared."
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "{min_count, range, padj_cutoff, gene_id}."
+        },
+        "created_at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "paths": {
+          "type": "object",
+          "properties": {
+            "results": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "significant": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "interactions": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "summary": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "description": "Project-relative files under comparisons/<task_id>/."
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "{cells_tested, significant, significant_up, significant_down, interactions, interactions_up, interactions_down, max_coordinate, timings}."
         }
       },
       "additionalProperties": true

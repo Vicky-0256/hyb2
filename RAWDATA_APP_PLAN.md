@@ -124,6 +124,8 @@ project.json
 
 `hyb2_compare` 依赖 R 和 DESeq2，reproduce_zikv 在本机还遇到了 dyld 的问题。**建议**：bin 计数和合并相互作用用 Python 移植；统计部分用 PyDESeq2，再用 7 组 `compare_*` 的结果验证（G7）。备选方案是在桌面包里带一个精简的 R 环境，但包体积和跨平台成本都高得多。
 
+**实施结果（2026-10-14）**：PyDESeq2 依赖 scipy、pandas、anndata、scikit-learn 和 matplotlib，捆绑运行时只有 numpy 和 numba，所以改为把 DESeq2 1.46 两条件 Wald 检验的每一步直接移植到 numpy（`pipeline/hyb2analysis/deseq.py`），按 R 和 C++ 源码逐项对齐，包括 locfit、loess 和 lowess 的细节。和 `reproduce_zikv` 的 14 组 `compare_*` 逐项对比：13 组显著 bin 完全一致或只差 1 到 3 个，padj 秩相关为 1.0；min30 一组是 0.9994，原因是 R 在残差自由度 ≤ 3 时用 1e4 次随机抽样估计先验方差，这里用的是精确分布。合并后的 interaction 与 legacy 一致。每组约 20 秒，峰值内存约 2.4 GB。桌面版以 `compare` 任务运行，结果登记在 `comparisons[]` 中，比较页显示 padj 加权的显著 bin 图和合并 interaction 列表，可以直接定位、打开 Region 或做 A/B 两次折叠。
+
 ### 3.7 整体流程与界面：一个项目、一条主线
 
 #### 现在为什么显得割裂
@@ -199,7 +201,7 @@ project.json
 | **P3 分析后端** | 3.3 的全部内容：移植 `hyb2_coverage`、建索引、新 bridge 操作、WebView 切到后端 | F：Python 索引和查询；G：前端适配 | G4；contact.txt 与命令行逐字节一致 |
 | **P3.5 界面统一** | 3.7 的全部内容：拆分 `web/app.js`（页面组件、DataProvider、外壳），换成单一导航和顶栏的当前选择，任务改成抽屉，Runtime 和帮助移出主导航，串起页面之间的路径 | K：拆分 web 和 BrowserProvider（网页版行为不变）；L：桌面外壳、数据页、DesktopProvider | 网页版现有的验证脚本全部通过；桌面版只有一套导航；从导入原始数据到折叠一个差异区域，全程不离开项目、不手动选文件 |
 | **P4 结构** | 3.4 的全部内容：稀疏 bonus、按内存估算长度、`structure_batch`、弧图查看器 | H：runtime；I：前端 | G5、G6；全基因组 dbn 与 `analysis/cplfold/*.dbn` 一致 |
-| **P5 比较** | 3.6 | J | G7 |
+| **P5 比较** | 3.6（已完成，见 3.6 末尾） | J | G7 |
 | **P6 端到端验收** | 在 APP 里跑完 14 个样本、6 组比较和 2 个全基因组折叠，与 reproduce_zikv 逐项对比 | — | 验收报告 |
 
 P1 和 P2 互不依赖，可以同时开始。P3.5 的拆分（K）不依赖后端，可以和 P1 同时做；L 需要 P2 的样本模型和 P3 的查询接口。P3 需要 P1 的输出格式先定下来；P4 的稀疏 bonus 和长度估算可以和 P1 同时做，读取全部 arm 的部分等 P3。

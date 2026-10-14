@@ -491,8 +491,12 @@ fn start_task(
     }
     let project = open_project(rt, &request.project_path)?;
     let prepared = tasks::prepare(request, &project, resumed_from)?;
-    let command =
-        tasks::bridge_command(&rt.python, &rt.root, &prepared.request_file, &rt.compute_env);
+    let command = tasks::bridge_command(
+        &rt.python,
+        &rt.root,
+        &prepared.request_file,
+        &rt.compute_env,
+    );
     let register = rt.clone();
     let on_finish: tasks::OnFinish = Arc::new(move |project: &Path, id: &str| {
         let request = json!({"operation":"register_task_run","path":project,"task_id":id});
@@ -580,7 +584,10 @@ fn analysis_request(request: Value) -> Result<Value, String> {
     let Value::Object(object) = request else {
         return Err("analysis query must be a JSON object".into());
     };
-    let operation = object.get("operation").and_then(Value::as_str).unwrap_or("");
+    let operation = object
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if !ANALYSIS_OPERATIONS.contains(&operation) {
         return Err(format!(
             "unsupported analysis operation; expected one of {}",
@@ -603,10 +610,10 @@ async fn analysis_query(app: tauri::AppHandle, request: Value) -> Result<Value, 
     dispatch(app, Lane::Compute, request).await
 }
 
-// ---- Project data operations (samples, references, structures).
+// ---- Project data operations (samples, references, structures, comparisons).
 
 /// Short control-lane operations on project.json; Python validates the rest.
-const PROJECT_OPERATIONS: [&str; 13] = [
+const PROJECT_OPERATIONS: [&str; 15] = [
     "add_reference",
     "update_reference",
     "remove_reference",
@@ -620,6 +627,8 @@ const PROJECT_OPERATIONS: [&str; 13] = [
     "list_structures",
     "read_structure",
     "read_reference_sequence",
+    "list_comparisons",
+    "read_comparison",
 ];
 
 /// Accepts `{path, operation, ...}` for one of `PROJECT_OPERATIONS`.
@@ -627,7 +636,10 @@ fn project_op_request(request: Value) -> Result<Value, String> {
     let Value::Object(object) = request else {
         return Err("project operation must be a JSON object".into());
     };
-    let operation = object.get("operation").and_then(Value::as_str).unwrap_or("");
+    let operation = object
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if !PROJECT_OPERATIONS.contains(&operation) {
         return Err(format!(
             "unsupported project operation; expected one of {}",

@@ -110,3 +110,23 @@ not been ported.
   rectangles that every contact map is drawn from).
 - `query.summary / contact_bins / hybrids / top_interactions` accept a list
   of indexes and sum replicates.
+- `differential.compare(contacts, names, condition_one, out_dir)` is
+  `hyb2_compare` without the plots: one count table over the samples'
+  contact.txt cells, the DESeq2 Wald test (condition one vs two, rows with
+  total count > `min_count`, alpha 0.01), `padj < 0.05` cells, and the greedy
+  ±`range` merge into interactions (results.tsv, significant.tsv,
+  interactions.tsv, summary.json). The legacy split's dummy (0, 0) cell is not
+  reproduced.
+- `deseq.deseq_two_conditions(counts, condition_one)` is a numpy port of
+  DESeq2 1.46 for a two-level design (size factors, Cox-Reid gene-wise
+  dispersions with the C++ line search, parametric trend with the locfit
+  fallback, MAP shrinkage, IRLS with the optim fallback, Cook's filtering,
+  independent filtering with R's `lowess`, BH). numba compiles the per-row
+  loops when installed; without it the same code runs in plain Python. On all
+  14 `reproduce_zikv/compare_*` runs the padj rank correlation with R is at
+  least 0.9994 (1.0 on 13). The one gap is the prior variance of the log
+  dispersions when there are 1-3 residual degrees of freedom: R estimates it
+  from 1e4 random draws (`set.seed(2)`) and loess; here the draws are replaced
+  by the exact distribution, which is the limit R approaches as the number of
+  draws grows (`compare_BRA_human_vs_insect_min30`: 0.801 vs R's 0.825;
+  54,088 of R's 54,120 significant cells shared).

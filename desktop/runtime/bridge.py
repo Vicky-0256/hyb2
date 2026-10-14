@@ -300,6 +300,18 @@ def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None)
         if not isinstance(structure_id, str) or not structure_id:
             raise ValueError("structure_id is required")
         return {"ok": True, "path": str(path), **read_structure(path, structure_id)}
+    if operation == "list_comparisons":
+        from .compare import list_comparisons
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), "comparisons": list_comparisons(path)}
+    if operation == "read_comparison":
+        from .compare import read_comparison
+        path = _valid_project(request)
+        comparison_id = request.get("comparison_id")
+        if not isinstance(comparison_id, str) or not comparison_id:
+            raise ValueError("comparison_id is required")
+        limit = request.get("limit", 250_000)
+        return {"ok": True, "path": str(path), **read_comparison(path, comparison_id, limit=limit)}
     if operation == "check_inputs":
         path = _valid_project(request)
         return {"ok": True, "path": str(path), **_samples.check_inputs(path)}
@@ -494,6 +506,10 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         # Evidence-guided CPLfold over a genome or windows (desktop/runtime/structure.py).
         from .structure import structure_run
         return structure_run(request, repo_root)
+    if operation == "compare_run":
+        # Two-condition DESeq2 comparison of contact maps (desktop/runtime/compare.py).
+        from .compare import compare_run
+        return compare_run(request, repo_root)
     sample_result = _sample_ops(str(operation), request, repo_root)
     if sample_result is not None:
         return sample_result

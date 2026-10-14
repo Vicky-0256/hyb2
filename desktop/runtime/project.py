@@ -108,7 +108,7 @@ def migrate_manifest(manifest: Any) -> Any:
 
     1.x -> 2.0 adds empty ``references`` and ``samples`` arrays; ``inputs``,
     ``runs`` and ``artifacts`` are kept unchanged.  2.0 manifests written
-    before ``structures`` existed get an empty ``structures`` array.  The upgraded manifest is
+    before ``structures``/``comparisons`` existed get empty arrays.  The upgraded manifest is
     written back by the next locked mutation, so opening a read-only project
     still works.  Unknown or newer versions are returned untouched so that
     validation can report them.
@@ -121,6 +121,7 @@ def migrate_manifest(manifest: Any) -> Any:
         manifest["schema_version"] = SCHEMA_VERSION
     if _schema_major(manifest) == 2:
         manifest.setdefault("structures", [])
+        manifest.setdefault("comparisons", [])
     return manifest
 
 
@@ -200,6 +201,7 @@ def validate_manifest(manifest: Any) -> List[str]:
     if major is not None and major >= 2:
         _validate_references_samples(manifest, errors)
         _validate_structures(manifest, errors)
+        _validate_comparisons(manifest, errors)
     return errors
 
 
@@ -224,6 +226,35 @@ def _validate_structures(manifest: Dict[str, Any], errors: List[str]) -> None:
         if "sample_ids" in item and (not isinstance(item.get("sample_ids"), list) or any(not isinstance(s, str) for s in item["sample_ids"])): errors.append(where + ".sample_ids must be an array of ids")
         if "mode" in item and item.get("mode") not in ("genome", "windows"): errors.append(where + ".mode must be genome or windows")
         if "windows" in item and (not isinstance(item.get("windows"), list) or any(not isinstance(w, dict) for w in item["windows"])): errors.append(where + ".windows must be an array of {start, end}")
+        for key in ("parameters", "summary"):
+            if key in item and not isinstance(item.get(key), dict): errors.append(where + "." + key + " must be an object")
+        paths = item.get("paths")
+        if "paths" in item:
+            if not isinstance(paths, dict): errors.append(where + ".paths must be an object")
+            else:
+                for key, value in paths.items():
+                    if value is not None and not safe_relative_path(value): errors.append(where + ".paths." + str(key) + " must be a project-relative path or null")
+
+
+COMPARISON_PATH_KEYS = ("results", "significant", "interactions", "summary")
+
+
+def _validate_comparisons(manifest: Dict[str, Any], errors: List[str]) -> None:
+    """``comparisons[]`` (optional in 2.0): registered compare_run results."""
+    comparisons = manifest.get("comparisons", [])
+    if not isinstance(comparisons, list):
+        errors.append("manifest.comparisons must be an array"); return
+    ids = set()
+    for index, item in enumerate(comparisons):
+        where = "manifest.comparisons[%d]" % index
+        if not isinstance(item, dict):
+            errors.append(where + " must be an object"); continue
+        _required(item, ("id", "task_id", "samples_one", "samples_two", "parameters", "created_at", "paths", "summary"), errors, where)
+        if not isinstance(item.get("id"), str) or not _ID.match(item.get("id", "")): errors.append(where + ".id is invalid")
+        elif item["id"] in ids: errors.append(where + ".id is duplicated")
+        else: ids.add(item["id"])
+        for key in ("samples_one", "samples_two"):
+            if key in item and (not isinstance(item.get(key), list) or any(not isinstance(s, str) for s in item[key])): errors.append(where + "." + key + " must be an array of ids")
         for key in ("parameters", "summary"):
             if key in item and not isinstance(item.get(key), dict): errors.append(where + "." + key + " must be an object")
         paths = item.get("paths")
@@ -560,6 +591,46 @@ def _structure_entry(root: Path, task_id: str, result: Dict[str, Any]) -> Option
             "paths": paths, "summary": json.loads(json.dumps(summary))}
 
 
+def _comparison_entry(root: Path, task_id: str, result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A ``comparisons[]`` entry from a compare task's ``result.json`` (None if not one).
+
+    Like :func:`_structure_entry`, paths are re-derived under
+    ``comparisons/<task_id>/`` and every value is copied by type.
+    """
+    raw = result.get("comparison")
+    if not isinstance(raw, dict) or result.get("ok") is False:
+        return None
+    base = root / "comparisons" / task_id
+    if base.is_symlink() or not base.is_dir():
+        return None
+    files = {"results": "results.tsv", "significant": "significant.tsv", "interactions": "interactions.tsv", "summary": "summary.json"}
+    paths: Dict[str, Optional[str]] = {}
+    for key in COMPARISON_PATH_KEYS:
+        target = base / files[key]
+        paths[key] = "comparisons/%s/%s" % (task_id, files[key]) if target.is_file() and not target.is_symlink() else None
+    if paths["significant"] is None or paths["interactions"] is None:
+        return None
+    def ids(value: Any) -> List[str]:
+        return [s for s in value if isinstance(s, str)] if isinstance(value, list) else []
+    def text(value: Any) -> Optional[str]:
+        return value if isinstance(value, str) else None
+    created = raw.get("created_at") if isinstance(raw.get("created_at"), str) and _DATE.match(raw["created_at"]) else _now()
+    parameters = raw.get("parameters") if isinstance(raw.get("parameters"), dict) else {}
+    summary = raw.get("summary") if isinstance(raw.get("summary"), dict) else {}
+    return {"id": task_id, "task_id": task_id, "samples_one": ids(raw.get("samples_one")), "samples_two": ids(raw.get("samples_two")),
+            "label_one": text(raw.get("label_one")), "label_two": text(raw.get("label_two")), "genes": ids(raw.get("genes")),
+            "parameters": json.loads(json.dumps(parameters)), "created_at": created,
+            "path": "comparisons/%s" % task_id, "paths": paths, "summary": json.loads(json.dumps(summary))}
+
+
+def _upsert(manifest: Dict[str, Any], key: str, entry: Dict[str, Any]) -> None:
+    items = manifest.setdefault(key, [])
+    for index, existing in enumerate(items):
+        if isinstance(existing, dict) and existing.get("id") == entry["id"]:
+            items[index] = entry; return
+    items.append(entry)
+
+
 def register_task_run(root: Path, task_id: str) -> Dict[str, Any]:
     """Upsert a manifest run from the Rust-owned ``runs/<task_id>/status.json`` (idempotent)."""
     if not isinstance(task_id, str) or not _ID.match(task_id):
@@ -605,14 +676,12 @@ def register_task_run(root: Path, task_id: str) -> Dict[str, Any]:
     if isinstance(error, str) and error: entry["error"] = {"code": "task_" + entry["status"], "message": error[:4000]}
     elif isinstance(error, dict) and isinstance(error.get("message"), str): entry["error"] = {"code": str(error.get("code", "task_" + entry["status"])), "message": error["message"][:4000]}
     structure = _structure_entry(root, task_id, result) if entry["status"] == "succeeded" else None
+    comparison = _comparison_entry(root, task_id, result) if entry["status"] == "succeeded" else None
     def mutate(manifest: Dict[str, Any]) -> Dict[str, Any]:
         if structure is not None:
-            structures = manifest.setdefault("structures", [])
-            for index, existing in enumerate(structures):
-                if isinstance(existing, dict) and existing.get("id") == structure["id"]:
-                    structures[index] = structure; break
-            else:
-                structures.append(structure)
+            _upsert(manifest, "structures", structure)
+        if comparison is not None:
+            _upsert(manifest, "comparisons", comparison)
         for index, existing in enumerate(manifest["runs"]):
             if isinstance(existing, dict) and existing.get("id") == task_id:
                 merged = {"input_ids": existing.get("input_ids", []), "parameters": existing.get("parameters", {})}
@@ -649,7 +718,7 @@ def new_project(root: Path, name: str, *, description: str = "", app_version: Op
         "project_id": str(uuid.uuid4()), "name": name.strip(),
         "description": description, "created_at": now, "updated_at": now,
         "application": {"name": "HYB2 Desktop", "version": version},
-        "inputs": [], "references": [], "samples": [], "structures": [], "runs": [], "artifacts": [],
+        "inputs": [], "references": [], "samples": [], "structures": [], "comparisons": [], "runs": [], "artifacts": [],
         "runtime": {"protocol_version": "1.0", "detected_at": now, "detector_version": "unknown",
                      "platform": {"os": "unknown", "architecture": "unknown", "release": "unknown", "wsl": False, "wsl_distributions": []},
                      "capabilities": []},

@@ -1,0 +1,151 @@
+"""Tests for hyb2analysis.deseq / differential against R DESeq2 1.46.
+
+``golden/deseq/<case>.R.tsv`` were made with R 4.4.3 + DESeq2 1.46.0 from
+``<case>.counts.tsv`` and ``<case>.conditions.tsv`` by the same calls as
+``bin/DESeq_run.R`` (``rowSums > 2``, ``DESeq()``, ``results(contrast =
+c("conditions", "condition_one", "condition_two"), alpha = 0.01)``).  The
+counts are random rows of the reproduce_zikv comparisons:
+
+- ``two_vs_two``: ZAFR REP1-2 vs ZBRA REP1-2;
+- ``two_vs_three``: ZAFR REP1-2 vs ZSIN REP1-3 (Cook's distance filtering);
+- ``local_fit``: Livefire1-3 vs Aag1-2 on min-10 hybrids, where the parametric
+  dispersion trend fails and DESeq2 substitutes locfit.
+"""
+import json
+import math
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+
+from hyb2analysis import deseq, differential  # noqa: E402
+
+GOLDEN = HERE / "golden" / "deseq"
+
+
+def _load(case):
+    ids, rows = [], []
+    with open(GOLDEN / f"{case}.counts.tsv") as handle:
+        columns = handle.readline().rstrip("\n").split("\t")[1:]
+        for line in handle:
+            parts = line.rstrip("\n").split("\t")
+            ids.append(parts[0])
+            rows.append([int(v) for v in parts[1:]])
+    with open(GOLDEN / f"{case}.conditions.tsv") as handle:
+        conditions = dict(line.rstrip("\n").split("\t") for line in handle)
+    one = [conditions[c] == "condition_one" for c in columns]
+    expected = {}
+    with open(GOLDEN / f"{case}.R.tsv") as handle:
+        handle.readline()
+        for line in handle:
+            parts = line.rstrip("\n").split("\t")
+            expected[parts[0]] = [math.nan if v == "NA" else float(v) for v in parts[1:]]
+    return ids, np.array(rows), one, expected
+
+
+def _ranks(values):
+    order = np.argsort(values, kind="stable")
+    ranks = np.empty(len(values))
+    ranks[order] = np.arange(len(values))
+    return ranks
+
+
+class DeseqMatchesR(unittest.TestCase):
+    def check(self, case, fit_type):
+        ids, counts, one, expected = _load(case)
+        res = deseq.deseq_two_conditions(counts, one)
+        self.assertEqual(res["fitType"], fit_type)
+        r = np.array([expected[i] for i in ids])  # baseMean lfc se p padj
+        np.testing.assert_allclose(res["baseMean"], r[:, 0], rtol=1e-9)
+        padj, r_padj = res["padj"], r[:, 4]
+        # Same rows filtered (independent filtering, Cook's distance).
+        self.assertEqual(int(np.sum(np.isnan(padj) != np.isnan(r_padj))), 0)
+        both = ~np.isnan(padj)
+        rho = np.corrcoef(_ranks(padj[both]), _ranks(r_padj[both]))[0, 1]
+        self.assertGreater(rho, 0.9999)
+        self.assertLess(float(np.median(np.abs(padj[both] - r_padj[both]) / r_padj[both])), 1e-3)
+        lfc_ok = ~np.isnan(r[:, 1])
+        self.assertLess(float(np.median(np.abs(res["log2FoldChange"][lfc_ok] - r[lfc_ok, 1]))), 1e-4)
+        mine = set(np.where(padj < 0.05)[0])
+        theirs = set(np.where(r_padj < 0.05)[0])
+        self.assertLessEqual(len(mine ^ theirs), max(1, len(theirs) // 200))
+
+    def test_two_vs_two(self):
+        self.check("two_vs_two", "parametric")
+
+    def test_two_vs_three_with_cooks_filtering(self):
+        self.check("two_vs_three", "parametric")
+
+    def test_local_fit_fallback(self):
+        self.check("local_fit", "local")
+
+
+class Helpers(unittest.TestCase):
+    def test_bh_matches_r(self):
+        # p.adjust(c(0.01, 0.02, NA, 0.03, 0.5), "BH") in R
+        out = deseq.p_adjust_bh(np.array([0.01, 0.02, np.nan, 0.03, 0.5]))
+        np.testing.assert_allclose(out[[0, 1, 3, 4]], [0.04, 0.04, 0.04, 0.5])
+        self.assertTrue(math.isnan(out[2]))
+
+    def test_lowess_matches_r(self):
+        # lowess(1:10, c(2,4,3,6,8,7,9,12,11,14), f = 1/2)$y in R 4.4.3
+        y = deseq.lowess(np.arange(1, 11), np.array([2, 4, 3, 6, 8, 7, 9, 12, 11, 14], float), f=0.5)
+        np.testing.assert_allclose(y, [2.2747429004, 3.1808212307, 4.1855134505, 5.7235981303, 7.1313547454,
+                                       7.8686438305, 9.2766208349, 10.8326249350, 12.2145460521, 13.5338242069],
+                                   atol=1e-9)
+
+
+class SplitAndCompare(unittest.TestCase):
+    def test_split_keeps_best_cell_per_neighbourhood_and_direction(self):
+        x = np.array([100, 150, 400, 120, 1000])
+        y = np.array([500, 520, 900, 510, 1000])
+        lfc = np.array([1.0, 2.0, 1.5, -1.0, 3.0])
+        padj = np.array([0.01, 0.001, 0.02, 0.03, 0.04])
+        kept = differential.split_interactions(x, y, lfc, padj, 100)
+        # cell 1 (best) hides cell 0; cell 3 has the other sign; 2 and 4 are far away
+        self.assertEqual(kept, [1, 2, 4, 3])
+
+    def test_compare_writes_outputs_from_contact_maps(self):
+        ids, counts, one, expected = _load("two_vs_two")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            contacts = []
+            for column in range(counts.shape[1]):
+                path = tmp / f"s{column}.G.contact.txt"
+                with open(path, "w") as handle:
+                    handle.write("# hybrids between G and G\nx\ty\tcount\n")
+                    for cell, value in zip(ids, counts[:, column]):
+                        if value:
+                            x, y = cell.split("_")
+                            handle.write(f"{x}\t{y}\t{value}\n")
+                contacts.append(path)
+            summary = differential.compare(contacts, [f"s{i}" for i in range(4)], one, tmp / "out")
+            self.assertEqual(summary["cells_tested"], len(ids))
+            significant = differential.read_significant(tmp / "out" / "significant.tsv")
+            r_sig = sum(1 for values in expected.values() if values[4] < 0.05)
+            self.assertLessEqual(abs(len(significant["x"]) - r_sig), max(1, r_sig // 200))
+            self.assertEqual(summary["significant"], len(significant["x"]))
+            self.assertTrue(all(p < 0.05 for p in significant["padj"]))
+            self.assertEqual(significant["padj"], sorted(significant["padj"]))
+            interactions = differential.read_interactions(tmp / "out" / "interactions.tsv")
+            self.assertEqual(len(interactions), summary["interactions"])
+            self.assertEqual(sum(1 for row in interactions if row["direction"] == "up"), summary["interactions_up"])
+            with open(tmp / "out" / "results.tsv") as handle:
+                header = handle.readline().rstrip("\n").split("\t")
+            self.assertEqual(header, ["x", "y", "s0", "s1", "s2", "s3", "baseMean", "log2FoldChange", "lfcSE",
+                                      "stat", "pvalue", "padj"])
+            self.assertEqual(json.loads((tmp / "out" / "summary.json").read_text())["engine"].split()[0],
+                             "hyb2analysis.deseq")
+
+    def test_compare_rejects_single_sample_condition_pairs(self):
+        with self.assertRaises(ValueError):
+            differential.compare(["a", "b"], ["a", "b"], [True, False], "unused")
+
+
+if __name__ == "__main__":
+    unittest.main()

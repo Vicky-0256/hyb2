@@ -20,13 +20,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const KINDS: [&str; 6] = [
+pub const KINDS: [&str; 7] = [
     "validate_project",
     "cplfold",
     "pipeline",
     "sample_pipeline",
     "analysis_index",
     "structure",
+    "compare",
 ];
 const ACTIVE: [&str; 2] = ["queued", "running"];
 /// Terminal states `task_resume` accepts.
@@ -63,6 +64,11 @@ pub struct TaskStartRequest {
     pub windows: Option<Vec<Window>>,
     #[serde(default)]
     pub workers: Option<u32>,
+    /// compare: sample ids of condition one and condition two
+    #[serde(default)]
+    pub samples_one: Option<Vec<String>>,
+    #[serde(default)]
+    pub samples_two: Option<Vec<String>>,
     /// Resource claim overrides; must fit inside the budget.
     #[serde(default)]
     pub cpu: Option<u32>,
@@ -318,6 +324,7 @@ pub fn default_claim(kind: &str, budget: Budget) -> Budget {
         "sample_pipeline" | "pipeline" | "structure" => (budget.cpu, 4096),
         "cplfold" => (1, 2048),
         "analysis_index" => (1, 1024),
+        "compare" => (budget.cpu, 3072),
         _ => (1, 256),
     };
     clamp_claim(Budget { cpu, mem_mb }, budget)
@@ -378,6 +385,7 @@ fn id_prefix(kind: &str) -> &'static str {
         "sample_pipeline" => "sample-",
         "analysis_index" => "index-",
         "structure" => "structure-",
+        "compare" => "compare-",
         _ => "",
     }
 }
@@ -399,7 +407,13 @@ pub fn prepare(
     validate_id(&id)?;
     let claim = claim_for(request, budget())?;
     // Validate the payload before reserving a run directory.
-    task_payload(request, project, &id, &project.join("runs").join(&id), claim)?;
+    task_payload(
+        request,
+        project,
+        &id,
+        &project.join("runs").join(&id),
+        claim,
+    )?;
     let (project, run_dir) = prepare_run_dir(project, &id)?;
     let payload = task_payload(request, &project, &id, &run_dir, claim)?;
     let request_file = run_dir.join("task-request.json");
@@ -951,6 +965,43 @@ fn structure_payload(
     }))
 }
 
+fn compare_payload(
+    request: &TaskStartRequest,
+    project: &Path,
+    id: &str,
+    run_dir: &Path,
+) -> Result<Value, String> {
+    let one = request
+        .samples_one
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or("compare samples_one must list at least one sample")?;
+    let two = request
+        .samples_two
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or("compare samples_two must list at least one sample")?;
+    if one.len() + two.len() > MAX_SAMPLES {
+        return Err(format!("compare accepts at most {MAX_SAMPLES} samples"));
+    }
+    if one.len() + two.len() < 3 {
+        return Err(
+            "compare needs at least three samples (two replicates in one condition)".into(),
+        );
+    }
+    let all: Vec<&String> = one.iter().chain(two.iter()).collect();
+    for (index, sample) in all.iter().enumerate() {
+        validate_sample_id(sample)?;
+        if all[..index].contains(sample) {
+            return Err(format!("compare sample id {sample:?} is listed twice"));
+        }
+    }
+    Ok(json!({
+        "operation":"compare_run","project_path":project,"samples_one":one,"samples_two":two,
+        "parameters":object_parameters(request)?,"task_id":id,"run_dir":run_dir
+    }))
+}
+
 /// Builds the allowlisted child request for `kind`.
 pub fn task_payload(
     request: &TaskStartRequest,
@@ -972,8 +1023,10 @@ pub fn task_payload(
         "pipeline" => {
             // Paths stay project-relative; the bridge rejects anything outside the project.
             let input = required(request.input.as_deref(), "pipeline input is required")?;
-            let reference =
-                required(request.reference.as_deref(), "pipeline reference is required")?;
+            let reference = required(
+                request.reference.as_deref(),
+                "pipeline reference is required",
+            )?;
             Ok(
                 json!({"operation":"pipeline_run","project_path":project,"input":input,"reference":reference,"parameters":request.parameters.clone().unwrap_or_else(|| json!({})),"task_id":id,"run_dir":run_dir}),
             )
@@ -994,6 +1047,7 @@ pub fn task_payload(
             )
         }
         "structure" => structure_payload(request, project, id, run_dir, claim),
+        "compare" => compare_payload(request, project, id, run_dir),
         _ => Err("engine unavailable or not enabled: unsupported task kind".into()),
     }
 }
@@ -1133,6 +1187,64 @@ mod tests {
         }
     }
     #[test]
+    fn compare_requests_are_validated() {
+        let run = Path::new("/p/runs/a");
+        let good = TaskStartRequest {
+            project_path: "/p".into(),
+            kind: "compare".into(),
+            samples_one: Some(vec!["ZAFR_REP1".into(), "ZAFR_REP2".into()]),
+            samples_two: Some(vec!["ZBRA_REP1".into(), "ZBRA_REP2".into()]),
+            parameters: Some(json!({"min_count": 2})),
+            ..Default::default()
+        };
+        assert_eq!(
+            claim_for(&good, big()).unwrap(),
+            Budget {
+                cpu: big().cpu,
+                mem_mb: 3072
+            }
+        );
+        assert_eq!(id_prefix("compare"), "compare-");
+        assert_eq!(
+            task_payload(&good, Path::new("/p"), "a", run, big()).unwrap(),
+            json!({"operation":"compare_run","project_path":"/p","samples_one":["ZAFR_REP1","ZAFR_REP2"],
+                   "samples_two":["ZBRA_REP1","ZBRA_REP2"],"parameters":{"min_count":2},"task_id":"a","run_dir":"/p/runs/a"})
+        );
+        let bad = [
+            TaskStartRequest {
+                samples_one: None,
+                ..good.clone()
+            },
+            TaskStartRequest {
+                samples_two: Some(vec![]),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                samples_two: Some(vec!["ZBRA_REP1".into()]),
+                samples_one: Some(vec!["ZAFR_REP1".into()]),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                samples_two: Some(vec!["ZAFR_REP1".into(), "ZBRA_REP1".into()]),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                samples_one: Some(vec!["../x".into(), "ZAFR_REP2".into()]),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                parameters: Some(json!([1])),
+                ..good.clone()
+            },
+        ];
+        for request in bad {
+            assert!(
+                task_payload(&request, Path::new("/p"), "a", run, big()).is_err(),
+                "{request:?}"
+            );
+        }
+    }
+    #[test]
     fn structure_requests_are_validated() {
         let run = Path::new("/p/runs/a");
         let good = TaskStartRequest {
@@ -1150,7 +1262,13 @@ mod tests {
             ..Default::default()
         };
         let claim = claim_for(&good, big()).unwrap();
-        assert_eq!(claim, Budget { cpu: 2, mem_mb: 4096 });
+        assert_eq!(
+            claim,
+            Budget {
+                cpu: 2,
+                mem_mb: 4096
+            }
+        );
         let payload = task_payload(&good, Path::new("/p"), "a", run, claim).unwrap();
         assert_eq!(
             payload,
@@ -1172,19 +1290,58 @@ mod tests {
         assert_eq!(payload["workers"], 4);
         assert_eq!(payload["parameters"], json!({}));
         let bad: Vec<TaskStartRequest> = vec![
-            TaskStartRequest { sample_ids: None, ..good.clone() },
-            TaskStartRequest { sample_ids: Some(vec![]), ..good.clone() },
-            TaskStartRequest { sample_ids: Some(vec!["../x".into()]), ..good.clone() },
-            TaskStartRequest { sample_ids: Some(vec!["a".into(), "a".into()]), ..good.clone() },
-            TaskStartRequest { gene_id: None, ..good.clone() },
-            TaskStartRequest { gene_id: Some("a\nb".into()), ..good.clone() },
-            TaskStartRequest { mode: None, ..good.clone() },
-            TaskStartRequest { mode: Some("both".into()), ..good.clone() },
-            TaskStartRequest { windows: None, ..good.clone() },
-            TaskStartRequest { windows: Some(vec![Window { start: 5, end: 5 }]), ..good.clone() },
-            TaskStartRequest { mode: Some("genome".into()), ..good.clone() },
-            TaskStartRequest { workers: Some(0), ..good.clone() },
-            TaskStartRequest { parameters: Some(json!([1])), ..good.clone() },
+            TaskStartRequest {
+                sample_ids: None,
+                ..good.clone()
+            },
+            TaskStartRequest {
+                sample_ids: Some(vec![]),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                sample_ids: Some(vec!["../x".into()]),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                sample_ids: Some(vec!["a".into(), "a".into()]),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                gene_id: None,
+                ..good.clone()
+            },
+            TaskStartRequest {
+                gene_id: Some("a\nb".into()),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                mode: None,
+                ..good.clone()
+            },
+            TaskStartRequest {
+                mode: Some("both".into()),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                windows: None,
+                ..good.clone()
+            },
+            TaskStartRequest {
+                windows: Some(vec![Window { start: 5, end: 5 }]),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                mode: Some("genome".into()),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                workers: Some(0),
+                ..good.clone()
+            },
+            TaskStartRequest {
+                parameters: Some(json!([1])),
+                ..good.clone()
+            },
         ];
         for request in bad {
             assert!(
@@ -1206,36 +1363,96 @@ mod tests {
             ..Default::default()
         };
         let claim = |r: &TaskStartRequest| claim_for(r, budget).unwrap();
-        assert_eq!(claim(&request("sample_pipeline")), Budget { cpu: 4, mem_mb: 4096 });
-        assert_eq!(claim(&request("structure")), Budget { cpu: 4, mem_mb: 4096 });
-        assert_eq!(claim(&request("cplfold")), Budget { cpu: 1, mem_mb: 2048 });
-        assert_eq!(claim(&request("validate_project")), Budget { cpu: 1, mem_mb: 256 });
-        assert_eq!(claim(&request("analysis_index")), Budget { cpu: 1, mem_mb: 1024 });
+        assert_eq!(
+            claim(&request("sample_pipeline")),
+            Budget {
+                cpu: 4,
+                mem_mb: 4096
+            }
+        );
+        assert_eq!(
+            claim(&request("structure")),
+            Budget {
+                cpu: 4,
+                mem_mb: 4096
+            }
+        );
+        assert_eq!(
+            claim(&request("cplfold")),
+            Budget {
+                cpu: 1,
+                mem_mb: 2048
+            }
+        );
+        assert_eq!(
+            claim(&request("validate_project")),
+            Budget {
+                cpu: 1,
+                mem_mb: 256
+            }
+        );
+        assert_eq!(
+            claim(&request("analysis_index")),
+            Budget {
+                cpu: 1,
+                mem_mb: 1024
+            }
+        );
         let structure = TaskStartRequest {
             workers: Some(64),
             mem_mb: Some(6000),
             ..request("structure")
         };
-        assert_eq!(claim(&structure), Budget { cpu: 4, mem_mb: 6000 });
+        assert_eq!(
+            claim(&structure),
+            Budget {
+                cpu: 4,
+                mem_mb: 6000
+            }
+        );
         let overridden = TaskStartRequest {
             cpu: Some(2),
             mem_mb: Some(100),
             ..request("sample_pipeline")
         };
-        assert_eq!(claim(&overridden), Budget { cpu: 2, mem_mb: 100 });
+        assert_eq!(
+            claim(&overridden),
+            Budget {
+                cpu: 2,
+                mem_mb: 100
+            }
+        );
         for bad in [
-            TaskStartRequest { cpu: Some(0), ..request("cplfold") },
-            TaskStartRequest { cpu: Some(5), ..request("cplfold") },
-            TaskStartRequest { mem_mb: Some(0), ..request("cplfold") },
-            TaskStartRequest { mem_mb: Some(8001), ..request("cplfold") },
+            TaskStartRequest {
+                cpu: Some(0),
+                ..request("cplfold")
+            },
+            TaskStartRequest {
+                cpu: Some(5),
+                ..request("cplfold")
+            },
+            TaskStartRequest {
+                mem_mb: Some(0),
+                ..request("cplfold")
+            },
+            TaskStartRequest {
+                mem_mb: Some(8001),
+                ..request("cplfold")
+            },
         ] {
             assert!(claim_for(&bad, budget).is_err());
         }
         // Defaults never exceed a small budget.
-        let small = Budget { cpu: 1, mem_mb: 512 };
+        let small = Budget {
+            cpu: 1,
+            mem_mb: 512,
+        };
         assert_eq!(
             claim_for(&request("sample_pipeline"), small).unwrap(),
-            Budget { cpu: 1, mem_mb: 512 }
+            Budget {
+                cpu: 1,
+                mem_mb: 512
+            }
         );
     }
     #[test]
@@ -1255,12 +1472,18 @@ mod tests {
         assert!(admit(&mut queue, b(2, 0), budget).is_empty());
         assert_eq!(ids(admit(&mut queue, b(1, 0), budget)), ["a"]);
         // Memory blocks as well as cpu.
-        let mut queue = vec![(0, "m".to_string(), b(1, 5000)), (1, "n".to_string(), b(1, 10))];
+        let mut queue = vec![
+            (0, "m".to_string(), b(1, 5000)),
+            (1, "n".to_string(), b(1, 10)),
+        ];
         assert!(admit(&mut queue, b(0, 4000), budget).is_empty());
         assert_eq!(ids(admit(&mut queue, idle, budget)), ["m", "n"]);
         // An oversized claim is clamped and runs alone instead of deadlocking.
         let mut queue = vec![(0, "huge".to_string(), b(64, 1 << 20))];
-        assert_eq!(admit(&mut queue, idle, budget), vec![("huge".to_string(), budget)]);
+        assert_eq!(
+            admit(&mut queue, idle, budget),
+            vec![("huge".to_string(), budget)]
+        );
         assert!(admit(&mut queue, b(1, 0), budget).is_empty());
     }
     #[cfg(unix)]
@@ -1338,7 +1561,11 @@ mod tests {
         let snap = wait_for(&second, &project, |s| s["status"] == "running");
         assert_eq!(snap["status"], "running");
         assert_eq!(granted(&project, &second), "1 100");
-        assert!(!project.join("runs").join(&third).join("granted.txt").exists());
+        assert!(!project
+            .join("runs")
+            .join(&third)
+            .join("granted.txt")
+            .exists());
         cancel(&second, None).unwrap();
         wait_for(&second, &project, |s| s["finished_at"].is_string());
         fs::remove_dir_all(project).unwrap();
@@ -1413,7 +1640,11 @@ mod tests {
         let listed = list(&project).unwrap();
         assert_eq!(listed["tasks"][0]["progress"], progress);
         // Partial writes or non-objects are reported as no progress.
-        fs::write(runs.join("with-progress").join("progress.json"), "{\"stage\":").unwrap();
+        fs::write(
+            runs.join("with-progress").join("progress.json"),
+            "{\"stage\":",
+        )
+        .unwrap();
         assert!(status("with-progress", Some(&project)).unwrap()["progress"].is_null());
         fs::remove_file(runs.join("with-progress").join("progress.json")).unwrap();
         assert!(status("with-progress", Some(&project)).unwrap()["progress"].is_null());
@@ -1437,7 +1668,15 @@ mod tests {
             .arg("-c")
             .arg(r#"printf '{"stage":"collapse","detail":"","bytes_done":1,"bytes_total":2,"updated_at":"x"}' > progress.tmp && mv progress.tmp progress.json; exec sleep 30"#)
             .current_dir(&run_dir);
-        start_managed(command, &project, id.clone(), "sample_pipeline", run_dir, noop()).unwrap();
+        start_managed(
+            command,
+            &project,
+            id.clone(),
+            "sample_pipeline",
+            run_dir,
+            noop(),
+        )
+        .unwrap();
         let snap = wait_for(&id, &project, |s| s["progress"].is_object());
         assert_eq!(snap["status"], "running");
         assert_eq!(snap["progress"]["stage"], "collapse");
@@ -1460,14 +1699,23 @@ mod tests {
         };
         let prepared = prepare(&request, &project, None).unwrap();
         assert!(prepared.id.starts_with("index-"));
-        assert_eq!(prepared.claim, Budget { cpu: 1, mem_mb: 128 });
+        assert_eq!(
+            prepared.claim,
+            Budget {
+                cpu: 1,
+                mem_mb: 128
+            }
+        );
         let child: Value =
             serde_json::from_slice(&fs::read(&prepared.request_file).unwrap()).unwrap();
         assert_eq!(child["operation"], "analysis_index_build");
         assert_eq!(child["run_dir"], json!(prepared.run_dir));
         let id = prepared.id.clone();
         let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg(r#"printf '{"ok":false,"error":"boom"}' > result.json; exit 2"#).current_dir(&prepared.run_dir);
+        command
+            .arg("-c")
+            .arg(r#"printf '{"ok":false,"error":"boom"}' > result.json; exit 2"#)
+            .current_dir(&prepared.run_dir);
         submit(command, prepared, noop()).unwrap();
         let snap = wait_for(&id, &project, |s| s["finished_at"].is_string());
         assert_eq!(snap["status"], "failed");
@@ -1480,7 +1728,10 @@ mod tests {
         assert_ne!(resumed.id, id);
         let new_id = resumed.id.clone();
         let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg("exit 0").current_dir(&resumed.run_dir);
+        command
+            .arg("-c")
+            .arg("exit 0")
+            .current_dir(&resumed.run_dir);
         let snap = submit(command, resumed, noop()).unwrap();
         assert_eq!(snap["resumed_from"], json!(id));
         let snap = wait_for(&new_id, &project, |s| s["finished_at"].is_string());
@@ -1499,10 +1750,8 @@ mod tests {
             ..request
         };
         let prepared = prepare(&named, &project, None).unwrap();
-        let stored: Value = serde_json::from_slice(
-            &fs::read(prepared.run_dir.join(START_FILE)).unwrap(),
-        )
-        .unwrap();
+        let stored: Value =
+            serde_json::from_slice(&fs::read(prepared.run_dir.join(START_FILE)).unwrap()).unwrap();
         assert!(stored["task_id"].is_null());
         assert_eq!(stored["sample_id"], "ZSIN_REP3");
         assert!(prepare(&named, &project, None).is_err(), "id already used");
@@ -1513,14 +1762,28 @@ mod tests {
     fn prepare_rejects_invalid_requests_without_a_run_dir() {
         let project = temp_project();
         for request in [
-            TaskStartRequest { kind: "sh".into(), ..Default::default() },
-            TaskStartRequest { kind: "sample_pipeline".into(), ..Default::default() },
-            TaskStartRequest { kind: "cplfold".into(), sequence: Some("ACGU".into()), cpu: Some(u32::MAX), ..Default::default() },
+            TaskStartRequest {
+                kind: "sh".into(),
+                ..Default::default()
+            },
+            TaskStartRequest {
+                kind: "sample_pipeline".into(),
+                ..Default::default()
+            },
+            TaskStartRequest {
+                kind: "cplfold".into(),
+                sequence: Some("ACGU".into()),
+                cpu: Some(u32::MAX),
+                ..Default::default()
+            },
         ] {
             assert!(prepare(&request, &project, None).is_err());
         }
         let runs = fs::read_dir(project.join("runs")).map(Iterator::count);
-        assert!(runs.map_or(true, |n| n == 0), "a run directory was reserved");
+        assert!(
+            runs.map_or(true, |n| n == 0),
+            "a run directory was reserved"
+        );
         fs::remove_dir_all(project).unwrap();
     }
     #[cfg(unix)]
@@ -1650,7 +1913,8 @@ mod tests {
         let command = bridge_command(Path::new("python3"), &root, &prepared.request_file, &[]);
         let finished = Arc::new(AtomicBool::new(false));
         let flag = finished.clone();
-        let on_finish: OnFinish = Arc::new(move |_: &Path, _: &str| flag.store(true, Ordering::SeqCst));
+        let on_finish: OnFinish =
+            Arc::new(move |_: &Path, _: &str| flag.store(true, Ordering::SeqCst));
         submit(command, prepared, on_finish).unwrap();
         let mut snap = Value::Null;
         for _ in 0..1200 {
@@ -1673,7 +1937,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(finished.load(Ordering::SeqCst), "on_finish hook did not run");
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "on_finish hook did not run"
+        );
         fs::remove_dir_all(project.parent().unwrap()).unwrap();
     }
     #[test]

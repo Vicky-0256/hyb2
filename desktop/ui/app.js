@@ -300,7 +300,7 @@
       var evidence = (structure.sample_ids || []).map(function (id) { var sample = HD.sample(id); return sample ? sample.name : id; }).join(" + ");
       return "Structure · " + evidence + " · " + (structure.mode === "genome" ? "whole RNA" : (structure.windows || []).length + " window(s)");
     }
-    var kinds = { sample_pipeline: "Pipeline", analysis_index: "Index", structure: "Structure", cplfold: "CPLfold", validate_project: "Validation", pipeline: "Pipeline" };
+    var kinds = { sample_pipeline: "Pipeline", analysis_index: "Index", structure: "Structure", compare: "Differential test", cplfold: "CPLfold", validate_project: "Validation", pipeline: "Pipeline" };
     return (kinds[task.kind] || task.kind || "Task") + (label ? " · " + label : "");
   };
   HD.setTaskLabel = function (taskId, label) { taskLabels[taskId] = label; };
@@ -450,6 +450,12 @@
       if (RESUMABLE.indexOf(task.status) >= 0 && task.kind !== "validate_project") {
         actions.appendChild(h("button", { type: "button", className: "d-btn d-btn-small", text: "Resume", on: { click: function () { resume(task.task_id); } } }));
       }
+      if (task.status === "succeeded" && task.kind === "compare") {
+        actions.appendChild(h("button", { type: "button", className: "d-btn d-btn-small", text: "View results", on: { click: function () {
+          closeDrawer();
+          HD.navigate("compare", { comparisonId: task.task_id });
+        } } }));
+      }
       if (task.status === "succeeded" && task.kind === "structure") {
         actions.appendChild(h("button", { type: "button", className: "d-btn d-btn-small", text: "View structure", on: { click: function () {
           closeDrawer();
@@ -509,6 +515,7 @@
       if (item.next.status === "succeeded") HD.toast(label + " finished.");
       else if (item.next.status === "failed") HD.toast(label + " failed: " + String(item.next.error || "see Tasks").slice(0, 200), "error");
       if (item.next.kind === "structure") HD.emit("structures");
+      if (item.next.kind === "compare") HD.emit("comparisons");
     });
     updatePolling();
   }

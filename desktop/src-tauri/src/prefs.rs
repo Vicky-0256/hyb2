@@ -31,7 +31,11 @@ pub fn system_cpus() -> u32 {
 /// Total physical memory in MiB, if the platform reports it.
 pub fn system_mem_mb() -> Option<u64> {
     static CACHE: OnceLock<Option<u64>> = OnceLock::new();
-    *CACHE.get_or_init(|| physical_bytes().map(|b| b / (1024 * 1024)).filter(|&mb| mb > 0))
+    *CACHE.get_or_init(|| {
+        physical_bytes()
+            .map(|b| b / (1024 * 1024))
+            .filter(|&mb| mb > 0)
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -150,7 +154,9 @@ pub struct PreferencesSetRequest {
     #[serde(default, deserialize_with = "nullable")]
     pub budget: Option<Option<BudgetPatch>>,
 }
-fn nullable<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<BudgetPatch>>, D::Error> {
+fn nullable<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<BudgetPatch>>, D::Error> {
     Option::<BudgetPatch>::deserialize(d).map(Some)
 }
 
@@ -221,25 +227,55 @@ mod tests {
         fs::write(&path, r#"{"theme":"dark"}"#).unwrap();
         let patch: PreferencesSetRequest =
             serde_json::from_value(json!({"budget": {"cpu": 1, "mem_mb": 512}})).unwrap();
-        assert_eq!(apply(&path, &patch).unwrap(), Budget { cpu: 1, mem_mb: 512 });
-        assert_eq!(load_budget(&path), Budget { cpu: 1, mem_mb: 512 });
+        assert_eq!(
+            apply(&path, &patch).unwrap(),
+            Budget {
+                cpu: 1,
+                mem_mb: 512
+            }
+        );
+        assert_eq!(
+            load_budget(&path),
+            Budget {
+                cpu: 1,
+                mem_mb: 512
+            }
+        );
         let described = describe(&path);
         assert_eq!(described["budget"], json!({"cpu": 1, "mem_mb": 512}));
         assert_eq!(described["custom_budget"], true);
         // Partial patch keeps the other field.
         let partial: PreferencesSetRequest =
             serde_json::from_value(json!({"budget": {"mem_mb": 1024}})).unwrap();
-        assert_eq!(apply(&path, &partial).unwrap(), Budget { cpu: 1, mem_mb: 1024 });
+        assert_eq!(
+            apply(&path, &partial).unwrap(),
+            Budget {
+                cpu: 1,
+                mem_mb: 1024
+            }
+        );
         let stored: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(stored["theme"], "dark");
         // Out-of-range values are rejected and leave the file untouched.
-        for bad in [json!({"cpu": 0}), json!({"cpu": system_cpus() + 1}), json!({"mem_mb": 1})] {
+        for bad in [
+            json!({"cpu": 0}),
+            json!({"cpu": system_cpus() + 1}),
+            json!({"mem_mb": 1}),
+        ] {
             let patch: PreferencesSetRequest =
                 serde_json::from_value(json!({ "budget": bad })).unwrap();
             assert!(apply(&path, &patch).is_err());
         }
-        assert_eq!(load_budget(&path), Budget { cpu: 1, mem_mb: 1024 });
-        assert!(serde_json::from_value::<PreferencesSetRequest>(json!({"budget": {"gpu": 1}})).is_err());
+        assert_eq!(
+            load_budget(&path),
+            Budget {
+                cpu: 1,
+                mem_mb: 1024
+            }
+        );
+        assert!(
+            serde_json::from_value::<PreferencesSetRequest>(json!({"budget": {"gpu": 1}})).is_err()
+        );
         // null resets to the defaults.
         let reset: PreferencesSetRequest = serde_json::from_value(json!({"budget": null})).unwrap();
         assert_eq!(apply(&path, &reset).unwrap(), default_budget());

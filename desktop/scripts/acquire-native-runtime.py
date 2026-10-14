@@ -27,16 +27,39 @@ def safe_member(name: str) -> bool:
     p = Path(name)
     return not p.is_absolute() and "\\" not in name and all(x not in ("", ".", "..") for x in p.parts)
 
+def safe_link(member: tarfile.TarInfo) -> bool:
+    """Regular files and directories pass; links only when they stay inside
+    the archive (python-build-standalone ships bin/python3 -> python3.11);
+    devices and FIFOs never."""
+    if member.isfile() or member.isdir():
+        return True
+    if member.issym():
+        target = member.linkname
+        if not target or target.startswith(("/", "\\")) or "\\" in target:
+            return False
+        resolved = (Path(member.name).parent / target).parts
+        depth = 0
+        for part in resolved:
+            depth += -1 if part == ".." else 0 if part in ("", ".") else 1
+            if depth < 0:
+                return False
+        return True
+    if member.islnk():
+        return safe_member(member.linkname)
+    return False
+
+
 def unpack(archive: Path, destination: Path) -> None:
-    if archive.suffix == ".zip":
+    # Detect the format from the content: a --url download lands in a temp
+    # file whose name says nothing about the archive type.
+    if zipfile.is_zipfile(archive):
         with zipfile.ZipFile(archive) as z:
             if any(not safe_member(x) for x in z.namelist()):
                 raise SystemExit("archive contains an unsafe path")
             z.extractall(destination)
     else:
-        mode = "r:gz" if archive.name.endswith((".tar.gz", ".tgz")) else "r:bz2" if archive.name.endswith(".tar.bz2") else "r:xz" if archive.name.endswith(".tar.xz") else "r:"
-        with tarfile.open(archive, mode) as t:
-            if any(not safe_member(m.name) or m.issym() or m.islnk() for m in t.getmembers()):
+        with tarfile.open(archive, "r:*") as t:  # transparent gz/bz2/xz
+            if any(not safe_member(m.name) or not safe_link(m) for m in t.getmembers()):
                 raise SystemExit("archive contains unsafe paths or links")
             t.extractall(destination)
 

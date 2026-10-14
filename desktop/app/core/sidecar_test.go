@@ -24,18 +24,20 @@ for line in sys.stdin:
 `
 
 // testPython is the interpreter for the stand-in sidecar: the staged
-// runtime when present, else python3 on PATH.
+// runtime when present, else python3 (or python, as on Windows) on PATH.
 func testPython(t *testing.T) string {
 	t.Helper()
 	staged := pythonIn(filepath.Join(repoRoot(t), "desktop", "resources", "native"))
 	if isFile(staged) {
 		return staged
 	}
-	path, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("python3 is not available")
+	for _, name := range []string{"python3", "python"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
 	}
-	return path
+	t.Skip("python is not available")
+	return ""
 }
 
 func repoRoot(t *testing.T) string {

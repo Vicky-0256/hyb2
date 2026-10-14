@@ -2416,9 +2416,16 @@
         ? { rna: rna, start: left, end: right }
         : null;
     };
-    const pairRequest = function (rnaX, x, rnaY, y, binSize) {
-      const first = span(rnaX, Math.max(1, x), x + binSize - 1);
-      const second = span(rnaY, Math.max(1, y), y + binSize - 1);
+    // A contact cell is one bin per arm; fold each arm with flanking context
+    // (at least 50 nt or two bins) so a cell on the diagonal is not a 10-20 nt
+    // window. Ends are clamped to the map extent when it is known.
+    const pairRequest = function (rnaX, x, rnaY, y, binSize, maxX, maxY) {
+      const pad = Math.max(50, 2 * binSize);
+      const clampEnd = function (value, max) {
+        return Number.isFinite(max) && max > 0 ? Math.min(value, max) : value;
+      };
+      const first = span(rnaX, Math.max(1, x - pad), clampEnd(x + binSize - 1 + pad, maxX));
+      const second = span(rnaY, Math.max(1, y - pad), clampEnd(y + binSize - 1 + pad, maxY));
       if (!first || !second) {
         return null;
       }
@@ -2430,9 +2437,13 @@
     };
     let request = null;
     if (source === "contact-map" && state.contact && state.contact.selection && state.contact.matrix) {
-      request = pairRequest(state.contact.rnaX, state.contact.selection.x, state.contact.rnaY, state.contact.selection.y, state.contact.matrix.binSize);
+      const matrix = state.contact.matrix;
+      request = pairRequest(state.contact.rnaX, state.contact.selection.x, state.contact.rnaY, state.contact.selection.y, matrix.binSize,
+        Number(matrix.lengthX || matrix.length || NaN), Number(matrix.lengthY || matrix.length2 || matrix.length || NaN));
     } else if (source === "compare" && state.comparison && state.comparison.selection && state.comparison.result) {
-      request = pairRequest(state.comparison.rnaX, state.comparison.selection.x, state.comparison.rnaY, state.comparison.selection.y, state.comparison.result.binSize);
+      const result = state.comparison.result;
+      request = pairRequest(state.comparison.rnaX, state.comparison.selection.x, state.comparison.rnaY, state.comparison.selection.y, result.binSize,
+        Number(result.lengthX || result.length || NaN), Number(result.lengthY || result.length2 || result.length || NaN));
     } else if (source === "region" && state.region) {
       const region = span(state.region.rna, state.region.start, state.region.end);
       const partner = state.region.partner && state.region.partner !== state.region.rna

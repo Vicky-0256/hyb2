@@ -736,6 +736,8 @@
       xMax: Number.isFinite(extent.xMax) ? extent.xMax : 0,
       yMin: Number.isFinite(extent.yMin) ? extent.yMin : 0,
       yMax: Number.isFinite(extent.yMax) ? extent.yMax : 0,
+      length: Number.isFinite(source.length) ? source.length : null,
+      length2: Number.isFinite(source.length2) ? source.length2 : null,
       recordsUsed: source.recordsUsed || 0,
       totalSupport: source.totalSupport || 0,
       cellContributions: limits.cellContributions || 0,

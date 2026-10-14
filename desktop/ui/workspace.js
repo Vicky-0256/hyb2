@@ -97,8 +97,12 @@
   function onRequestFold(request) {
     var region = request && request.region;
     if (!region) return;
-    var windows = [{ start: region.start, end: region.end }];
-    if (request.partnerRegion && request.partnerRegion.rna === region.rna) windows.push({ start: request.partnerRegion.start, end: request.partnerRegion.end });
+    var length = HD.geneLength ? HD.geneLength(region.rna) : null;
+    var clamp = function (span) {
+      return { start: Math.max(1, span.start), end: length ? Math.min(length, span.end) : span.end };
+    };
+    var windows = [clamp(region)];
+    if (request.partnerRegion && request.partnerRegion.rna === region.rna) windows.push(clamp(request.partnerRegion));
     HD.navigate("structure", { prefill: { gene: region.rna, windows: windows, source: request.source, selectionKey: HD.selectionKey(state.selection) } });
   }
 

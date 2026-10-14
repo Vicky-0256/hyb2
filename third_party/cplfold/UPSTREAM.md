@@ -18,6 +18,13 @@ other ignored local artifacts.
 - `tests/test_cli_exit_status.py` locks that exit-status behavior.
 - `CPLfold.py` accepts Hyb2's sparse bonus-matrix TSV export through
   `--bonus-matrix-file` and applies it with `--alpha`.
+- `CPLfold_parser.py` compiles the outside pass with Numba. The new
+  `_outside_kernel` and its `_outside_*` scoring helpers are verbatim copies
+  of `BeamCKYParserHyper._outside` and its methods, with `self` dropped and
+  the list tables swapped for the existing int32 arrays; fastmath is off.
+  Output is byte-identical to the original (kept as `_outside_python`;
+  `CPLFOLD_PYTHON_OUTSIDE=1` selects it). 600 nt drops from 270 s to about
+  1 s. This change is not upstream yet.
 - `LICENSES/`, `THIRD_PARTY_NOTICES.md`, and this file record provenance and
   distribution constraints; they do not supply a missing upstream license.
 

@@ -333,11 +333,13 @@ type structurePage struct {
 	reading      map[string]bool
 	readErr      map[string]string
 	pendingPair  []string
-	pairLabels   []string
-	arcs         widgets.Arcs
-	arcsKey      string
-	stats        stStats
-	dbnText      string
+	// pendingShow is a fold started here, shown once it is listed.
+	pendingShow string
+	pairLabels  []string
+	arcs        widgets.Arcs
+	arcsKey     string
+	stats       stStats
+	dbnText     string
 }
 
 func newStructurePage(a *App) *structurePage {
@@ -355,7 +357,7 @@ func (p *structurePage) reset() {
 	p.cache = map[string]*structureResult{}
 	p.reading = map[string]bool{}
 	p.readErr = map[string]string{}
-	p.pendingPair, p.pairLabels = nil, nil
+	p.pendingPair, p.pairLabels, p.pendingShow = nil, nil, ""
 	p.arcsKey, p.dbnText = "", ""
 }
 
@@ -494,6 +496,10 @@ func (p *structurePage) loadList() {
 // resolvePair shows the A fold of a pending pair once it is listed, and B
 // once both are.
 func (p *structurePage) resolvePair() {
+	if p.pendingShow != "" && p.entry(p.pendingShow) != nil {
+		p.show(p.pendingShow)
+		p.pendingShow = ""
+	}
 	if len(p.pendingPair) != 2 {
 		return
 	}
@@ -599,6 +605,7 @@ func (p *structurePage) runFold() {
 		}
 		p.formMsg = "Started. Progress is shown in the list and the task drawer."
 		p.prefillNote = ""
+		p.pendingShow = t.TaskID
 	})
 }
 

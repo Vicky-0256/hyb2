@@ -1089,7 +1089,7 @@ func (p *comparePage) pickNearest(shown []cmpInteraction, x, y float64, ctx cmpC
 func (p *comparePage) interactionTable(c *ui.Context, shown []cmpInteraction) {
 	t := c.Theme()
 	if len(shown) == 0 {
-		ui.Text(c, "No significant cmpInteraction in this direction.").TextColor(t.TextMuted)
+		ui.Text(c, "No significant interaction in this direction.").TextColor(t.TextMuted)
 		return
 	}
 	cols := []ui.TableColumn{{Title: "Arm 1", Width: 112}, {Title: "Arm 2", Width: 112},

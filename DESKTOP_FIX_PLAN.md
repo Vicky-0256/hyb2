@@ -162,3 +162,14 @@ Tauri 命令（删除 `task_run` 和 `cplfold_run`）：
   - `Hyb2Web` 启动顺序；
   - 18 列 sam2hyb 输出的解析；
   - 嵌入桌面端时的布局，以及资源路径。
+
+## 原生 CPLfold 性能（2026-10-14）
+
+- 原因：inside 动态规划已经用 `@njit` 编译，但次优结构要用的 outside 计算（`BeamCKYParserHyper._outside` 及其打分方法）是纯 Python，占了约 99% 的时间。
+- 修复：把这些方法的源码原样生成为模块级的 `@njit(cache=True)` 函数（不开 fastmath）。设置 `CPLFOLD_PYTHON_OUTSIDE=1` 可以切回原来的 Python 实现，用于对比。
+- 结果：在 28、80、150、300、600 nt 上输出都与原实现逐字节一致；网页版的纯 Python 模式结果也一致；`verify-cplfold-python.py` 通过。
+  - 150 nt：13 s → 约 1 s
+  - 300 nt：62 s → 约 1 s
+  - 600 nt：270 s → 约 1 s
+  - 1000 nt：3 s
+- APP 内的 `cplfold_predict`（600 nt）：0.4 s。安装后第一次运行要做 Numba 编译，约 50 s；之后读磁盘缓存，约 1.6 s。

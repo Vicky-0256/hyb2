@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"testing"
 	"time"
 
@@ -23,6 +24,9 @@ func (immediate) Update(fn func()) { fn() }
 func TestRealStackHeadless(t *testing.T) {
 	root := repoRoot()
 	python := filepath.Join(root, "desktop", "resources", "native", "python", "bin", "python3")
+	if goruntime.GOOS == "windows" {
+		python = filepath.Join(root, "desktop", "resources", "native", "python", "python.exe")
+	}
 	if _, err := os.Stat(python); err != nil {
 		t.Skip("staged runtime not available")
 	}

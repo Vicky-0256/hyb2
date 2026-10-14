@@ -22,7 +22,9 @@ from pathlib import Path
 from typing import Any
 
 from .detector import cplfold_max_nt, detect_runtime
-from .project import _atomic_write_json, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
+from .project import _atomic_write_json, load_manifest, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
+from . import samples as _samples
+from .sample_run import ProgressFile, run_sample_index, run_sample_pipeline
 import importlib.util
 
 _RUNNER_PATH = Path(__file__).resolve().parents[1] / "task-runner" / "runner.py"
@@ -159,10 +161,147 @@ def project_path(request: dict[str, Any]) -> Path:
     return path.parent if path.name == "project.json" and path.is_file() else path
 
 
+def _valid_project(request: dict[str, Any]) -> Path:
+    """Project from ``path`` (or ``project_path`` for task-style requests), validated."""
+    if not isinstance(request.get("path"), str) and isinstance(request.get("project_path"), str):
+        request = {**request, "path": request["project_path"]}
+    path = project_path(request)
+    errors = validate_project_directory(path)
+    if errors: raise ValueError("invalid project: " + "; ".join(errors))
+    return path
+
+
+def _task_run_dir(project: Path, request: dict[str, Any], prefix: str) -> tuple[str, Path]:
+    """``(task_id, run_dir)``: an existing Rust-created run dir or a fresh secure one."""
+    task_id = _safe_task_id(request.get("task_id"), prefix)
+    requested = request.get("run_dir")
+    if requested is not None:
+        run_dir = Path(str(requested)).expanduser().resolve()
+        if not run_dir.is_dir() or run_dir.parent != (project / "runs").resolve():
+            raise ValueError("run_dir must be an existing direct child of project runs")
+        return task_id, run_dir
+    return task_id, _secure_run_dir(project, task_id)
+
+
+def _optional_str(request: dict[str, Any], key: str) -> str | None:
+    value = request.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("%s must be a non-empty string" % key)
+    return value
+
+
+def _id_list(value: Any, key: str) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError("%s must be an array of ids" % key)
+    return value
+
+
+def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None) -> dict[str, Any] | None:
+    """Schema 2.0 reference/sample operations (contract R2); None for other operations."""
+    if operation == "add_reference":
+        path = _valid_project(request)
+        source = _optional_str(request, "source")
+        result = _samples.add_reference(path, Path(source) if source else None, input_id=request.get("input_id"),
+                                        label=str(request.get("label") or ""), mode=str(request.get("mode") or "linked"))
+        return {"ok": True, "path": str(path), **result}
+    if operation == "update_reference":
+        path = _valid_project(request)
+        source = _optional_str(request, "source")
+        reference = _samples.update_reference(path, str(request.get("reference_id")), label=request.get("label"),
+                                              source=Path(source) if source else None)
+        return {"ok": True, "path": str(path), "reference": reference}
+    if operation == "remove_reference":
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), "reference": _samples.remove_reference(path, str(request.get("reference_id")))}
+    if operation == "add_sample":
+        path = _valid_project(request)
+        source, reference = _optional_str(request, "source"), _optional_str(request, "reference")
+        sample = _samples.add_sample(
+            path, Path(source) if source else None, input_id=request.get("input_id"), name=request.get("name"),
+            condition=request.get("condition"), replicate=request.get("replicate"), reference_id=request.get("reference_id"),
+            reference=Path(reference) if reference else None, gene_id=request.get("gene_id"),
+            mode=str(request.get("mode") or "linked"), settings=request.get("settings"), metadata=request.get("metadata"))
+        return {"ok": True, "path": str(path), "sample": sample}
+    if operation == "update_sample":
+        path = _valid_project(request)
+        changes = request.get("changes")
+        if changes is None:
+            changes = {key: request[key] for key in request if key not in {"operation", "path", "project_path", "sample_id"}}
+        return {"ok": True, "path": str(path), "sample": _samples.update_sample(path, str(request.get("sample_id")), changes)}
+    if operation == "remove_sample":
+        path = _valid_project(request)
+        delete_outputs = request.get("delete_outputs", False)
+        if not isinstance(delete_outputs, bool):
+            raise ValueError("delete_outputs must be a boolean")
+        return {"ok": True, "path": str(path), **_samples.remove_sample(path, str(request.get("sample_id")), delete_outputs=delete_outputs)}
+    if operation == "import_sample_sheet":
+        path = _valid_project(request)
+        sheet = _optional_str(request, "sheet")
+        if sheet is None:
+            raise ValueError("sheet must be a path to a TSV/CSV sample sheet")
+        base_dir = _optional_str(request, "base_dir")
+        try:
+            result = _samples.import_sample_sheet(path, Path(sheet), base_dir=Path(base_dir) if base_dir else None,
+                                                  mode=str(request.get("mode") or "linked"),
+                                                  condition_column=_optional_str(request, "condition_column"),
+                                                  dry_run=request.get("dry_run") is True)
+        except _samples.SampleSheetError as error:
+            return {"ok": False, "path": str(path), "errors": error.errors, "error": str(error)}
+        return {"ok": True, "path": str(path), **result}
+    if operation == "check_inputs":
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), **_samples.check_inputs(path)}
+    if operation == "disk_estimate":
+        path = _valid_project(request)
+        tmp_dir = _optional_str(request, "tmp_dir")
+        result = _samples.disk_estimate(path, _id_list(request.get("sample_ids"), "sample_ids"),
+                                        concurrency=request.get("concurrency", 1), tmp_dir=Path(tmp_dir) if tmp_dir else None,
+                                        include_completed=request.get("include_completed") is True)
+        return {"ok": True, "path": str(path), **result}
+    if operation == "hash_inputs":
+        path = _valid_project(request)
+        ids = _id_list(request.get("ids"), "ids")
+        progress = None
+        run_dir = None
+        task_id = None
+        if request.get("task_id") is not None or request.get("run_dir") is not None:
+            task_id, run_dir = _task_run_dir(path, request, "hash-")
+            writer = ProgressFile(run_dir)
+            progress = writer.write
+        result = {"ok": True, "path": str(path), **_samples.hash_inputs(path, ids=ids, force=request.get("force") is True, progress=progress)}
+        if run_dir is not None:
+            result.update({"status": "succeeded", "task_id": task_id, "run_dir": str(run_dir)})
+            _atomic_write_json(run_dir / "result.json", result)
+        return result
+    if operation == "sample_pipeline_run":
+        path = _valid_project(request)
+        sample_id = request.get("sample_id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise ValueError("sample_id is required")
+        task_id, run_dir = _task_run_dir(path, request, "sample-")
+        params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
+        root = Path(repo_root or Path.cwd()).resolve()
+        return run_sample_pipeline(path, sample_id, task_id, run_dir, params, root)
+    if operation == "analysis_index_build":
+        path = _valid_project(request)
+        sample_id = request.get("sample_id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise ValueError("sample_id is required")
+        task_id, run_dir = _task_run_dir(path, request, "index-")
+        return run_sample_index(path, sample_id, task_id, run_dir, Path(repo_root or Path.cwd()).resolve())
+    return None
+
+
 def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[str, Any]:
     if not isinstance(request, dict):
         raise ValueError("bridge request must be a JSON object")
     operation = request.get("operation")
+    if operation in _ANALYSIS_OPS:
+        return _analysis_op(operation, request, repo_root)
     if operation == "detect":
         return {"ok": True, "result": detect_runtime(repo_root).to_dict()}
     if operation in {"validate_project", "open_project"}:
@@ -172,7 +311,9 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
             return {"ok": False, "path": str(path), "errors": errors, "error": "; ".join(errors)}
         result = {"ok": True, "path": str(path), "errors": []}
         if operation == "open_project":
-            result["manifest"] = json.loads((path / "project.json").read_text(encoding="utf-8"))
+            # Schema 1.x projects are migrated in memory; the upgrade is saved
+            # by the next manifest mutation.
+            result["manifest"] = load_manifest(path)
         return result
     if operation == "create_project":
         path = project_path(request)
@@ -296,6 +437,13 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         return {"ok": True, "status": "warm", "seconds": round(time.monotonic() - started, 2)}
     if operation == "pipeline_run":
         return _pipeline_run(request, repo_root)
+    if operation == "structure_run":
+        # Evidence-guided CPLfold over a genome or windows (desktop/runtime/structure.py).
+        from .structure import structure_run
+        return structure_run(request, repo_root)
+    sample_result = _sample_ops(str(operation), request, repo_root)
+    if sample_result is not None:
+        return sample_result
     if operation == "cplfold_run":
         raw_path = request.get("project_path")
         sequence = request.get("sequence")
@@ -306,10 +454,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         sequence = "".join(sequence.upper().split()).replace("T", "U")
         if not sequence or any(c not in "ACGUN" for c in sequence):
             raise ValueError("sequence must contain RNA bases A/C/G/U/T/N")
-        try:
-            max_nt = int(os.environ.get("HYB2_CPLFOLD_MAX_NT", "1000"))
-        except ValueError:
-            max_nt = 1000
+        no_pk = isinstance(request.get("parameters"), dict) and request["parameters"].get("no_pseudoknot") is True
+        max_nt = cplfold_max_nt(not no_pk)
         if len(sequence) > max_nt:
             raise ValueError(f"sequence exceeds CPLfold safety limit ({max_nt} nt)")
         path = Path(raw_path).expanduser().resolve()
@@ -363,7 +509,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         output = run_dir / "cplfold.out"
         argv.extend(["--output", str(output), "--quiet"])
         env = os.environ.copy()
-        env.setdefault("HYB2_CPLFOLD_MAX_NT", "1000")
+        env.setdefault("HYB2_CPLFOLD_MAX_NT", str(max_nt))
         # Keep JIT artifacts inside the project run.  This is writable in
         # packaged apps and prevents a hostile/shared global cache from being
         # reused across projects.
@@ -380,6 +526,119 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         _atomic_write_json(run_dir / "result.json", result)
         return result
     raise ValueError("unsupported bridge operation: %s" % operation)
+
+
+# --- analysis queries (R3): aggregated results from per-sample SQLite indexes ---
+
+_ANALYSIS_OPS = {"analysis_summary", "analysis_contact_bins", "analysis_hybrids", "analysis_top"}
+
+
+def _analysis_module(repo_root: Path | None) -> Any:
+    package = Path(repo_root or Path.cwd()).resolve() / "pipeline"
+    if not (package / "hyb2analysis" / "__init__.py").is_file():
+        raise ValueError("the analysis backend (hyb2analysis) is not bundled")
+    if str(package) not in sys.path:
+        sys.path.insert(0, str(package))
+    import hyb2analysis
+    return hyb2analysis
+
+
+def _analysis_index_paths(request: dict[str, Any]) -> tuple[list[str], list[Path]]:
+    """Sample ids -> index files via project.json ``samples[].outputs.index``.
+
+    Relative index paths resolve inside the project; absolute ones (linked
+    data) are used as given.  ``index_paths`` may list index files directly.
+    """
+    sample_ids = request.get("sample_ids")
+    explicit = request.get("index_paths")
+    paths: list[Path] = []
+    ids: list[str] = []
+    if sample_ids is not None:
+        if not isinstance(sample_ids, list) or not all(isinstance(s, str) and s for s in sample_ids):
+            raise ValueError("sample_ids must be a list of sample ids")
+        raw_path = request.get("project_path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("project path must be a non-empty string")
+        project = Path(raw_path).expanduser().resolve()
+        if project.name == "project.json":
+            project = project.parent
+        manifest = json.loads((project / "project.json").read_text(encoding="utf-8"))
+        samples = {s.get("id"): s for s in manifest.get("samples") or [] if isinstance(s, dict)}
+        for sample_id in sample_ids:
+            sample = samples.get(sample_id)
+            if sample is None:
+                raise ValueError("unknown sample: %s" % sample_id)
+            index = ((sample.get("outputs") or {}).get("index")) if isinstance(sample.get("outputs"), dict) else None
+            if not isinstance(index, str) or not index:
+                raise ValueError("sample has no analysis index yet: %s" % sample_id)
+            if Path(index).is_absolute():
+                target = Path(index).resolve()
+            else:
+                if not safe_relative_path(index):
+                    raise ValueError("sample index must be a project-relative or absolute path: %s" % sample_id)
+                target = (project / index).resolve()
+                if project not in target.parents:
+                    raise ValueError("sample index escapes the project: %s" % sample_id)
+            paths.append(target)
+            ids.append(sample_id)
+    if explicit is not None:
+        if not isinstance(explicit, list) or not all(isinstance(p, str) and p for p in explicit):
+            raise ValueError("index_paths must be a list of paths")
+        paths.extend(Path(p).expanduser().resolve() for p in explicit)
+    if not paths:
+        raise ValueError("sample_ids or index_paths is required")
+    for path in paths:
+        if not path.is_file():
+            raise ValueError("analysis index not found: %s" % path)
+    return ids, paths
+
+
+def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None) -> dict[str, Any]:
+    analysis = _analysis_module(repo_root)
+    sample_ids, paths = _analysis_index_paths(request)
+    query = analysis.query
+
+    def opt_int(name: str, default: Any) -> Any:
+        value = request.get(name, default)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError("%s must be an integer" % name)
+        return value
+
+    def opt_str(name: str) -> Any:
+        value = request.get(name)
+        if value is not None and not isinstance(value, str):
+            raise ValueError("%s must be a string" % name)
+        return value
+
+    def opt_types() -> Any:
+        value = request.get("types")
+        if value is not None and (not isinstance(value, list) or not all(isinstance(t, str) for t in value)):
+            raise ValueError("types must be a list of chimera type names")
+        return value
+
+    if operation == "analysis_summary":
+        result = query.summary(paths)
+    elif operation == "analysis_contact_bins":
+        gene = opt_str("gene")
+        if not gene:
+            raise ValueError("gene is required")
+        result = query.contact_bins(paths, gene, opt_int("bin_size", 10), request.get("region"), gene2=opt_str("gene2"),
+                                    types=opt_types(), measure=opt_str("measure") or "records",
+                                    max_cells=opt_int("max_cells", None))
+    elif operation == "analysis_top":
+        gene = opt_str("gene")
+        if not gene:
+            raise ValueError("gene is required")
+        result = query.top_interactions(paths, gene, opt_int("bin_size", 10), opt_int("n", 50), gene2=opt_str("gene2"),
+                                        region=request.get("region"), types=opt_types(),
+                                        measure=opt_str("measure") or "records")
+    else:
+        filters = {} if request.get("filters") is None else request["filters"]
+        if not isinstance(filters, dict):
+            raise ValueError("filters must be an object")
+        result = query.hybrids(paths, filters, opt_int("limit", 100), opt_int("offset", 0),
+                               order=opt_str("order") or "file", with_sequence=request.get("with_sequence", True) is not False)
+    return {"ok": True, "operation": operation, "sample_ids": sample_ids, "indexes": [str(p) for p in paths], "result": result}
 
 
 def _json_safe(value: Any) -> Any:

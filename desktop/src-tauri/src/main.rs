@@ -11,6 +11,7 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
+mod prefs;
 mod sidecar;
 mod tasks;
 use sidecar::{Sidecar, SidecarSpec};
@@ -468,6 +469,40 @@ async fn file_save_dialog(
 
 // ---- Unified tasks (contract C3).
 
+/// Opens the project through the control lane and returns its canonical path.
+fn open_project(rt: &Runtime, path: &str) -> Result<PathBuf, String> {
+    let opened = rt.call(
+        Lane::Control,
+        &json!({"operation":"open_project","path":path}),
+    )?;
+    Ok(PathBuf::from(
+        opened["path"].as_str().ok_or("project path missing")?,
+    ))
+}
+
+/// Validates, stores and submits a task; it runs now or waits in the queue.
+fn start_task(
+    rt: &Arc<Runtime>,
+    request: &tasks::TaskStartRequest,
+    resumed_from: Option<&str>,
+) -> Result<Value, String> {
+    if !tasks::KINDS.contains(&request.kind.as_str()) {
+        return Err("engine unavailable or not enabled: unsupported task kind".into());
+    }
+    let project = open_project(rt, &request.project_path)?;
+    let prepared = tasks::prepare(request, &project, resumed_from)?;
+    let command =
+        tasks::bridge_command(&rt.python, &rt.root, &prepared.request_file, &rt.compute_env);
+    let register = rt.clone();
+    let on_finish: tasks::OnFinish = Arc::new(move |project: &Path, id: &str| {
+        let request = json!({"operation":"register_task_run","path":project,"task_id":id});
+        if let Err(error) = register.call(Lane::Control, &request) {
+            eprintln!("HYB2: register_task_run failed for {id}: {error}");
+        }
+    });
+    tasks::submit(command, prepared, on_finish)
+}
+
 #[tauri::command]
 async fn task_start(
     app: tauri::AppHandle,
@@ -477,38 +512,26 @@ async fn task_start(
         if !tasks::KINDS.contains(&request.kind.as_str()) {
             return Err("engine unavailable or not enabled: unsupported task kind".into());
         }
+        start_task(&runtime(&app)?, &request, None)
+    })
+    .await
+}
+
+/// Starts a new task (new id) from the stored request of an interrupted,
+/// failed or cancelled task. Stage checkpoints are Python's responsibility.
+#[tauri::command]
+async fn task_resume(app: tauri::AppHandle, request: tasks::TaskRequest) -> Result<Value, String> {
+    blocking(move || {
+        tasks::validate_id(&request.task_id)?;
+        let path = request
+            .project_path
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+            .ok_or("project_path is required to resume a task")?;
         let rt = runtime(&app)?;
-        let opened = rt.call(
-            Lane::Control,
-            &json!({"operation":"open_project","path":request.project_path}),
-        )?;
-        let project = PathBuf::from(opened["path"].as_str().ok_or("project path missing")?);
-        let id = match request.task_id.clone() {
-            Some(id) => id,
-            None if request.kind == "cplfold" => format!("cplfold-{}", tasks::task_id()),
-            None if request.kind == "pipeline" => format!("pipeline-{}", tasks::task_id()),
-            None => tasks::task_id(),
-        };
-        tasks::validate_id(&id)?;
-        // Validate the payload before reserving a run directory.
-        tasks::task_payload(&request, &project, &id, &project.join("runs").join(&id))?;
-        let (project, run_dir) = tasks::prepare_run_dir(&project, &id)?;
-        let payload = tasks::task_payload(&request, &project, &id, &run_dir)?;
-        let request_file = run_dir.join("task-request.json");
-        fs::write(
-            &request_file,
-            serde_json::to_vec(&payload).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-        let command = tasks::bridge_command(&rt.python, &rt.root, &request_file, &rt.compute_env);
-        let register = rt.clone();
-        let on_finish: tasks::OnFinish = Arc::new(move |project: &Path, id: &str| {
-            let request = json!({"operation":"register_task_run","path":project,"task_id":id});
-            if let Err(error) = register.call(Lane::Control, &request) {
-                eprintln!("HYB2: register_task_run failed for {id}: {error}");
-            }
-        });
-        tasks::start_managed(command, &project, id, &request.kind, run_dir, on_finish)
+        let project = open_project(&rt, path)?;
+        let stored = tasks::resume_request(&request.task_id, &project)?;
+        start_task(&rt, &stored, Some(&request.task_id))
     })
     .await
 }
@@ -540,6 +563,74 @@ async fn task_list(request: tasks::TaskListRequest) -> Result<Value, String> {
     blocking(move || tasks::list(Path::new(&request.project_path))).await
 }
 
+// ---- Analysis queries (contract R3/R6).
+
+const ANALYSIS_OPERATIONS: [&str; 4] = [
+    "analysis_summary",
+    "analysis_contact_bins",
+    "analysis_hybrids",
+    "analysis_top",
+];
+
+/// Accepts `{project_path, operation, ...}` for one of the four read-only
+/// analysis operations; everything else is forwarded unchanged for Python
+/// to validate.
+fn analysis_request(request: Value) -> Result<Value, String> {
+    let Value::Object(object) = request else {
+        return Err("analysis query must be a JSON object".into());
+    };
+    let operation = object.get("operation").and_then(Value::as_str).unwrap_or("");
+    if !ANALYSIS_OPERATIONS.contains(&operation) {
+        return Err(format!(
+            "unsupported analysis operation; expected one of {}",
+            ANALYSIS_OPERATIONS.join(", ")
+        ));
+    }
+    if !object
+        .get("project_path")
+        .and_then(Value::as_str)
+        .is_some_and(|p| !p.trim().is_empty())
+    {
+        return Err("analysis query needs a project_path".into());
+    }
+    Ok(Value::Object(object))
+}
+
+#[tauri::command]
+async fn analysis_query(app: tauri::AppHandle, request: Value) -> Result<Value, String> {
+    let request = analysis_request(request)?;
+    dispatch(app, Lane::Compute, request).await
+}
+
+// ---- Preferences (resource budget, contract R6).
+
+fn preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join(prefs::FILE_NAME))
+        .map_err(|error| format!("cannot resolve the application config directory: {error}"))
+}
+
+#[tauri::command]
+async fn preferences_get(app: tauri::AppHandle) -> Result<Value, String> {
+    blocking(move || Ok(prefs::describe(&preferences_path(&app)?))).await
+}
+
+/// `{budget: {cpu?, mem_mb?} | null}`; the new budget applies at once and
+/// starts queued tasks that now fit.
+#[tauri::command]
+async fn preferences_set(
+    app: tauri::AppHandle,
+    request: prefs::PreferencesSetRequest,
+) -> Result<Value, String> {
+    blocking(move || {
+        let path = preferences_path(&app)?;
+        tasks::set_budget(prefs::apply(&path, &request)?);
+        Ok(prefs::describe(&path))
+    })
+    .await
+}
+
 // tauri.conf.json keeps `withGlobalTauri: true` on purpose: the frontend has
 // no bundler and calls `window.__TAURI__.core.invoke` / `convertFileSrc`.
 // Webview access is bounded by capabilities/main.json and the CSP.
@@ -547,6 +638,13 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Desktop::default())
+        .setup(|app| {
+            // A missing or invalid preferences file means the default budget.
+            if let Ok(path) = preferences_path(app.handle()) {
+                tasks::set_budget(prefs::load_budget(&path));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             runtime_detect,
             project_create,
@@ -563,7 +661,11 @@ fn main() {
             task_start,
             task_status,
             task_cancel,
-            task_list
+            task_list,
+            task_resume,
+            analysis_query,
+            preferences_get,
+            preferences_set
         ])
         .build(tauri::generate_context!())
         .expect("error while building HYB2 Desktop");
@@ -616,6 +718,24 @@ mod tests {
             bridge_result(json!({"ok": false, "error": "bad"})).unwrap_err(),
             "bad"
         );
+    }
+
+    #[test]
+    fn analysis_queries_are_allowlisted() {
+        for operation in ANALYSIS_OPERATIONS {
+            let request = json!({"project_path": "/p", "operation": operation, "sample_ids": ["a"], "bin_size": 10});
+            assert_eq!(analysis_request(request.clone()).unwrap(), request);
+        }
+        for bad in [
+            json!({"project_path": "/p", "operation": "import_input"}),
+            json!({"project_path": "/p", "operation": "sample_pipeline_run"}),
+            json!({"project_path": "/p"}),
+            json!({"operation": "analysis_summary"}),
+            json!({"project_path": " ", "operation": "analysis_summary"}),
+            json!(["analysis_summary"]),
+        ] {
+            assert!(analysis_request(bad).is_err());
+        }
     }
 
     #[test]

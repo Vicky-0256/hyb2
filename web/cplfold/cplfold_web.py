@@ -333,6 +333,273 @@ def build_hyb_bonus_matrix_export(
     }
 
 
+# ---------------------------------------------------------------------------
+# Sparse (windowed) bonus matrix for long sequences.
+#
+# Same transform as ``build_hyb_bonus_matrix`` -- Gaussian arm blocks with
+# sigma = mean arm length / 6, each arm normalised to peak 1, symmetric outer
+# product, cells below 1e-6 zeroed, log1p -- but each block is evaluated only
+# where it can matter.  A block of weight w is truncated where one arm factor
+# drops below ``tail / w`` (about +-5.7 sigma for w = 1, growing with
+# sqrt(log w)), so every dropped cell contribution is below ``tail``.  The
+# dense builder materialises one n-by-n outer product per unique block, which
+# is quadratic per block; this one is O(window^2) per block.
+# ---------------------------------------------------------------------------
+
+DEFAULT_SPARSE_TAIL = 1e-7
+# The identity fallback installed above has no __version__.
+_NUMBA_AVAILABLE = hasattr(sys.modules.get("numba"), "__version__")
+
+from numba import njit  # noqa: E402  (real Numba, or the identity fallback above)
+
+
+def _block_half_width(weight: float, standard_deviation: float, tail: float) -> int:
+    ratio = max(float(weight), 1.0) / tail
+    return int(math.ceil(standard_deviation * math.sqrt(2.0 * math.log(ratio)))) if ratio > 1.0 else 0
+
+
+# cache=False: this module is loaded under several names (spec_from_file_location),
+# and a cached Numba environment would record an unimportable module name.
+@njit(cache=False)
+def _accumulate_gaussian_blocks(support, blocks, weights, standard_deviation, tail):  # pragma: no cover - JIT
+    n = support.shape[0]
+    for k in range(blocks.shape[0]):
+        one_mean = ((blocks[k, 0] - 1) + blocks[k, 1]) / 2.0
+        two_mean = ((blocks[k, 2] - 1) + blocks[k, 3]) / 2.0
+        weight = weights[k]
+        ratio = max(weight, 1.0) / tail
+        half = 0
+        if ratio > 1.0:
+            half = int(math.ceil(standard_deviation * math.sqrt(2.0 * math.log(ratio))))
+        one_centre = int(math.floor(one_mean + 0.5))
+        two_centre = int(math.floor(two_mean + 0.5))
+        one_lo = max(0, one_centre - half)
+        one_hi = min(n - 1, one_centre + half)
+        two_lo = max(0, two_centre - half)
+        two_hi = min(n - 1, two_centre + half)
+        if one_lo > one_hi or two_lo > two_hi:
+            continue
+        # Peak normalisation over integer positions, as in the dense builder.
+        one_peak = 0.0
+        for x in range(one_lo, one_hi + 1):
+            value = math.exp(-0.5 * ((x - one_mean) / standard_deviation) ** 2)
+            if value > one_peak:
+                one_peak = value
+        two_peak = 0.0
+        for y in range(two_lo, two_hi + 1):
+            value = math.exp(-0.5 * ((y - two_mean) / standard_deviation) ** 2)
+            if value > two_peak:
+                two_peak = value
+        if one_peak <= 0.0 or two_peak <= 0.0:
+            continue
+        for x in range(one_lo, one_hi + 1):
+            gx = weight * math.exp(-0.5 * ((x - one_mean) / standard_deviation) ** 2) / one_peak
+            for y in range(two_lo, two_hi + 1):
+                contribution = gx * math.exp(-0.5 * ((y - two_mean) / standard_deviation) ** 2) / two_peak
+                support[x, y] += contribution
+                support[y, x] += contribution
+
+
+def _accumulate_gaussian_blocks_numpy(support, blocks, weights, standard_deviation, tail) -> None:
+    """Vectorised fallback used when Numba is unavailable (e.g. Pyodide)."""
+    n = support.shape[0]
+    for (one_start, one_end, two_start, two_end), weight in zip(blocks.tolist(), weights.tolist()):
+        half = _block_half_width(weight, standard_deviation, tail)
+        means = (((one_start - 1) + one_end) / 2.0, ((two_start - 1) + two_end) / 2.0)
+        factors = []
+        for mean in means:
+            centre = int(math.floor(mean + 0.5))
+            lo, hi = max(0, centre - half), min(n - 1, centre + half)
+            if lo > hi:
+                break
+            values = np.exp(-0.5 * ((np.arange(lo, hi + 1, dtype=np.float64) - mean) / standard_deviation) ** 2)
+            factors.append((lo, hi, values / values.max()))
+        if len(factors) != 2:
+            continue
+        (one_lo, one_hi, one), (two_lo, two_hi, two) = factors
+        contribution = (weight * np.outer(one, two)).astype(np.float32)
+        support[one_lo:one_hi + 1, two_lo:two_hi + 1] += contribution
+        support[two_lo:two_hi + 1, one_lo:one_hi + 1] += contribution.T
+
+
+def _compress_arms(arms: Any) -> Counter:
+    if isinstance(arms, Counter):
+        return arms
+    if isinstance(arms, dict):
+        return Counter({tuple(int(v) for v in key): int(weight) for key, weight in arms.items()})
+    return Counter(tuple(int(v) for v in arm) for arm in arms)
+
+
+def build_hyb_bonus_matrix_fast(
+    sequence_length: int,
+    arms: Any,
+    *,
+    tail: float = DEFAULT_SPARSE_TAIL,
+    use_numba: bool | None = None,
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    """Long-sequence variant of ``build_hyb_bonus_matrix``.
+
+    ``arms`` is an iterable of ``(one_start, one_end, two_start, two_end)``
+    tuples (1-based inclusive, prepared-sequence coordinates) or a mapping /
+    ``Counter`` from such a tuple to its row count, e.g. the output of
+    ``collect_hyb_arms``.  Returns the dense float32 bonus matrix the parser
+    needs (allocated once; log1p is applied in place) and an evidence summary.
+    Per-cell bonusEntries are not listed (a genome has millions); use
+    ``bonus_matrix_upper_entries`` when needed.
+    """
+
+    compressed = _compress_arms(arms)
+    if not compressed:
+        return None, {
+            "source": "none",
+            "inputRecords": 0,
+            "uniqueBlocks": 0,
+            "nonzeroBonusCells": 0,
+            "nonzeroUpperTriangleCells": 0,
+            "maximumBonus": 0.0,
+            "evidenceWeight": "none",
+        }
+    for one_start, one_end, two_start, two_end in compressed:
+        if not (
+            1 <= one_start <= one_end <= sequence_length
+            and 1 <= two_start <= two_end <= sequence_length
+        ):
+            raise ValueError("HYB evidence falls outside the prepared sequence.")
+
+    blocks = np.array(list(compressed.keys()), dtype=np.int64).reshape(-1, 4)
+    weights = np.array(list(compressed.values()), dtype=np.float64)
+    records = float(weights.sum())
+    arm_length_total = float(
+        np.sum(weights * ((blocks[:, 1] - blocks[:, 0] + 1) + (blocks[:, 3] - blocks[:, 2] + 1)))
+    )
+    mean_arm_length = arm_length_total / (2.0 * records)
+    standard_deviation = max(mean_arm_length / 6.0, 1e-6)
+
+    support = np.zeros((sequence_length, sequence_length), dtype=np.float32)
+    jit = _NUMBA_AVAILABLE if use_numba is None else use_numba
+    if jit:
+        _accumulate_gaussian_blocks(support, blocks, weights, standard_deviation, float(tail))
+    else:
+        _accumulate_gaussian_blocks_numpy(support, blocks, weights, standard_deviation, float(tail))
+    support[support < np.float32(1e-6)] = np.float32(0.0)
+    bonus = np.log1p(support, out=support)
+    nonzero = int(np.count_nonzero(bonus))
+    nonzero_diagonal = int(np.count_nonzero(np.diagonal(bonus)))
+    return bonus, {
+        "source": "hyb-block-intervals",
+        "transform": "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
+        "builder": "sparse-window" + ("-numba" if jit else "-numpy"),
+        "truncationTail": float(tail),
+        "coordinateSystem": "prepared-sequence, 1-based inclusive input",
+        "inputRecords": int(records),
+        "uniqueBlocks": len(compressed),
+        "meanArmLength": mean_arm_length,
+        "gaussianStandardDeviation": standard_deviation,
+        "nonzeroBonusCells": nonzero,
+        "nonzeroUpperTriangleCells": (nonzero - nonzero_diagonal) // 2,
+        "maximumBonus": float(bonus.max()) if bonus.size else 0.0,
+        "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
+    }
+
+
+def bonus_matrix_listing(bonus: np.ndarray | None) -> dict[str, Any]:
+    """``bonusEntries`` and ``nucleotideSupport`` as the dense builder lists them."""
+    if bonus is None or not bonus.size:
+        return {"bonusEntries": [], "nucleotideSupport": []}
+    ones, twos = np.nonzero(bonus)
+    upper = ones < twos
+    ones, twos = ones[upper], twos[upper]
+    return {
+        "bonusEntries": [
+            {"one": int(one + 1), "two": int(two + 1), "value": float(bonus[one, two])}
+            for one, two in zip(ones.tolist(), twos.tolist())
+        ],
+        "nucleotideSupport": np.max(bonus, axis=1).tolist(),
+    }
+
+
+def _open_hyb(path: Any):
+    import gzip
+
+    text = str(path)
+    return gzip.open(text, "rb") if text.endswith(".gz") else open(text, "rb")
+
+
+def iter_hyb_arms(paths: Any, gene_id: str | None = None, progress: Any = None):
+    """Stream intramolecular HYB rows as ``(gene, a0, a1, b0, b1)``.
+
+    A row is intramolecular when both arms map to the same gene (columns 4
+    and 10); with ``gene_id`` only that gene is kept.  Coordinates are the
+    reference positions in columns 7-8 and 13-14 (1-based inclusive).
+    ``progress(bytes_done)`` is called about every 4 MiB.
+    """
+
+    if isinstance(paths, (str, os.PathLike)):
+        paths = [paths]
+    base = 0
+    reported = 0
+    for path in paths:
+        done = base
+        with _open_hyb(path) as handle:
+            # For .gz report compressed bytes so progress matches file sizes.
+            compressed = getattr(handle, "fileobj", None)
+            for raw in handle:
+                done = base + compressed.tell() if compressed is not None else done + len(raw)
+                if progress is not None and done - reported >= 4 << 20:
+                    reported = done
+                    progress(done)
+                fields = raw.split(b"\t", 14)
+                if len(fields) < 14 or fields[3] != fields[9]:
+                    continue
+                gene = fields[3].decode("utf-8", "replace")
+                if gene_id is not None and gene != gene_id:
+                    continue
+                try:
+                    yield gene, int(fields[6]), int(fields[7]), int(fields[12]), int(fields[13])
+                except ValueError:
+                    continue
+        base += os.path.getsize(path)
+    if progress is not None:
+        progress(base)
+
+
+def collect_hyb_arms(
+    paths: Any,
+    gene_id: str | None,
+    sequence_length: int,
+    windows: list[tuple[int, int]] | None = None,
+    progress: Any = None,
+) -> dict[str, Any]:
+    """Compress the HYB evidence for a genome fold or for windows.
+
+    Without ``windows`` returns ``{"genome": Counter}`` of rows whose arms
+    lie within ``1..sequence_length``.  With windows (1-based inclusive
+    ``(start, end)``) each window gets the rows whose two arms both lie
+    inside it, shifted to window coordinates, under ``"windows"``.
+    """
+
+    genome: Counter = Counter()
+    per_window: list[Counter] = [Counter() for _ in windows or []]
+    skipped = 0
+    for _gene, a0, a1, b0, b1 in iter_hyb_arms(paths, gene_id, progress):
+        if not (1 <= a0 <= a1 <= sequence_length and 1 <= b0 <= b1 <= sequence_length):
+            skipped += 1
+            continue
+        if windows is None:
+            genome[(a0, a1, b0, b1)] += 1
+            continue
+        for index, (start, end) in enumerate(windows):
+            if start <= a0 and a1 <= end and start <= b0 and b1 <= end:
+                shift = start - 1
+                per_window[index][(a0 - shift, a1 - shift, b0 - shift, b1 - shift)] += 1
+    result: dict[str, Any] = {"outOfRangeRows": skipped}
+    if windows is None:
+        result["genome"] = genome
+    else:
+        result["windows"] = per_window
+    return result
+
+
 def _pair_type(sequence: str, left: int, right: int) -> str:
     return f"{sequence[left - 1]}–{sequence[right - 1]}"
 
@@ -435,7 +702,13 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
     arms = _normalise_arms(payload.get("evidenceArms"), len(sequence)) if evidence_mode == "hyb-blocks" else []
     if evidence_mode == "hyb-blocks" and not arms:
         raise ValueError("No eligible HYB rows are fully contained in the selected reference region.")
-    bonus_matrix, evidence = build_hyb_bonus_matrix(len(sequence), arms)
+    if arms and _NUMBA_AVAILABLE:
+        # Native hosts: same transform without one n-by-n outer product per
+        # block (values agree with the dense builder to ~1e-6).
+        bonus_matrix, evidence = build_hyb_bonus_matrix_fast(len(sequence), arms)
+        evidence.update(bonus_matrix_listing(bonus_matrix))
+    else:
+        bonus_matrix, evidence = build_hyb_bonus_matrix(len(sequence), arms)
 
     raw_candidates = two_phase_pseudoknot_fold(
         seq=sequence,
@@ -548,6 +821,9 @@ def bonus_matrix_json(payload_json: str) -> str:
 __all__ = [
     "build_hyb_bonus_matrix",
     "build_hyb_bonus_matrix_export",
+    "build_hyb_bonus_matrix_fast",
+    "collect_hyb_arms",
+    "iter_hyb_arms",
     "bonus_matrix",
     "bonus_matrix_json",
     "fold",

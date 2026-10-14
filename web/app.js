@@ -325,7 +325,36 @@
         };
       },
       getPageId: function () { return state.activePage; },
-      getSelection: function () { return state.selection; }
+      getSelection: function () { return state.selection; },
+      // Host cross-page paths (shell:false): open a page focused on a place.
+      //   focus({ page, contact: { rnaX, rnaY, binSize, selection: { x, y } },
+      //           region: { rna, start, end, partner, partnerStart, partnerEnd } })
+      // Call after setSelection() has resolved (page state exists then).
+      focus: function (target) {
+        if (!active() || !target || typeof target !== "object") return false;
+        if (target.contact && state.contact) {
+          ["rnaX", "rnaY"].forEach(function (key) {
+            if (target.contact[key]) state.contact[key] = String(target.contact[key]);
+          });
+          if (Number(target.contact.binSize) > 0) state.contact.binSize = Math.floor(Number(target.contact.binSize));
+          const point = target.contact.selection;
+          state.contact.selection = point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
+            ? { x: Number(point.x), y: Number(point.y) }
+            : null;
+          state.contact.overviewSelection = null;
+          state.contact.zoomSelection = null;
+          state.contact.matrix = null;
+        }
+        if (target.region && state.region) {
+          ["rna", "start", "end", "partner", "partnerStart", "partnerEnd"].forEach(function (key) {
+            if (target.region[key] !== undefined && target.region[key] !== null) state.region[key] = target.region[key];
+          });
+          state.region.results = null;
+        }
+        navigate(target.page || state.activePage, "host");
+        render();
+        return true;
+      }
     };
   }
 

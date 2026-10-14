@@ -66,6 +66,9 @@ const view = Hyb2Web.mount(hostElement, {
 view.navigate("contact-map");
 await view.setSelection({ datasetIds: ["s1", "s2"] });
 await view.refresh();   // re-query the provider (e.g. after new results)
+// Cross-page paths: open a page focused on a bin or a region.
+view.focus({ page: "contact-map", contact: { rnaX, rnaY, binSize, selection: { x, y } } });
+view.focus({ page: "region", region: { rna, start, end, partner, partnerStart, partnerEnd } });
 view.destroy();
 ~~~
 

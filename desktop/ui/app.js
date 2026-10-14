@@ -1,786 +1,712 @@
+/*
+ * HYB2 Desktop shell: start screen, project switcher, top bar (reference,
+ * gene, selection, task indicator), the single navigation
+ * (① Data … ⑥ Report), the task drawer, Preferences and Help.
+ */
 (function () {
   "use strict";
-  var tauri = window.__TAURI__ || null;
-  var invoke = tauri && tauri.core && tauri.core.invoke;
-  var DESKTOP_VIEWS = ["home", "analysis", "tasks", "runtime"];
-  var ACTIVE_TASK_STATES = ["queued", "running"];
+
+  var HD = window.HD;
+  var h = HD.h;
+  var state = HD.state;
+  var PAGES = ["data", "qc", "explore", "compare", "structure", "report"];
   var RECENT_KEY = "hyb2.desktop.recentProjects";
-  var RECENT_MAX = 8;
-  var loaded = false;
-  var loadingAnalysis = null;
-  var assets = window.HYB2_ASSET_STATUS;
-  var currentProjectPath = null;
-  var currentManifest = null;
-  var projectToken = 0;
-  var projectInputs = { hyb: null, fasta: null };
-  // ui_state is namespaced (contract C6): the desktop shell owns
-  // desktop.route, the analysis workspace owns analysis.
-  var uiState = { desktop: { route: "home" }, analysis: null };
-  var analysisRestorePending = false;
-  var uiStateSaveTimer = null;
-  var tasks = {};
-  var taskPollTimer = null;
-  var taskPollBusy = false;
+  var ACTIVE = ["queued", "running"];
+  var RESUMABLE = ["interrupted", "failed", "cancelled"];
+  var pollTimer = null;
+  var pollBusy = false;
+  var lastProjectRefresh = 0;
+  var rates = Object.create(null);
+  var taskLabels = Object.create(null);
+  var rendered = Object.create(null);
+  var sessionStart = HD.sessionStart = new Date().toISOString();
 
-  if (assets) {
-    var missing = [];
-    if (!assets.vienna.assetsPresent) missing.push("ViennaRNA / COMRADES");
-    if (!assets.cplfold.assetsPresent) missing.push("CPLfold (Pyodide)");
-    byId("d-analysis-note").textContent = missing.length
-      ? "Missing folding assets: " + missing.join(", ") + ". File import, contact maps and interaction analysis remain available. Native CPLfold requires the installed runtime."
-      : "Folding runtime files are bundled; engine startup is checked when used. Native CPLfold is available from Task Center when a portable runtime is installed.";
-  }
+  // ---------------------------------------------------------------- recent projects
 
-  // ---------------------------------------------------------------------------
-  // Small helpers. Everything that comes from a manifest, the runtime or the
-  // file system is written with textContent, never innerHTML.
-  // ---------------------------------------------------------------------------
-  function byId(id) {
-    return document.getElementById(id);
+  function readRecent() {
+    try {
+      var list = JSON.parse(window.localStorage.getItem(RECENT_KEY) || "[]");
+      return Array.isArray(list) ? list.filter(function (item) { return item && typeof item.path === "string" && item.path; }).slice(0, 8) : [];
+    } catch (_) { return []; }
   }
-  function el(tag, className, text) {
-    var node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = String(text);
-    return node;
+  function writeRecent(list) {
+    try { window.localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch (_) {}
   }
-  function clear(node) {
-    while (node.firstChild) node.removeChild(node.firstChild);
+  function rememberProject(path, name) {
+    var list = readRecent().filter(function (item) { return item.path !== path; });
+    list.unshift({ path: path, name: String(name || HD.basename(path)), opened_at: new Date().toISOString() });
+    writeRecent(list);
   }
-  function show(id, value) {
-    byId(id).textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  }
-  function errorText(error) {
-    if (!error) return "Unknown error";
-    if (typeof error === "string") return error;
-    if (error.message) return error.message;
-    if (error.error && typeof error.error === "string") return error.error;
-    if (error.errors && error.errors.length) return error.errors.join("\n");
-    return JSON.stringify(error);
-  }
-  function basename(path) {
-    var parts = String(path || "").split(/[\\/]+/);
-    return parts[parts.length - 1] || String(path || "");
-  }
-  function isWindowsPath(path) {
-    return /^[A-Za-z]:[\\/]/.test(path) || /^\\\\/.test(path);
-  }
-  function joinProjectPath(root, relative) {
-    var sep = isWindowsPath(root) ? "\\" : "/";
-    var base = String(root).replace(/[\\/]+$/, "");
-    var rest = String(relative).replace(/^[\\/]+/, "").replace(/[\\/]+/g, sep);
-    return base + sep + rest;
-  }
-  function safeRelative(relative) {
-    var value = String(relative || "");
-    return !!value && !/^[\\/]/.test(value) && !/^[A-Za-z]:/.test(value) && !/(^|[\\/])\.\.([\\/]|$)/.test(value);
-  }
-  function formatTime(value) {
-    if (!value) return "—";
-    var date = new Date(value);
-    if (isNaN(date.getTime())) return String(value);
-    return date.toLocaleString();
-  }
-  function formatBytes(value) {
-    var size = Number(value);
-    if (!isFinite(size) || size < 0) return "";
-    if (size < 1024) return size + " B";
-    if (size < 1024 * 1024) return (size / 1024).toFixed(1) + " KB";
-    return (size / (1024 * 1024)).toFixed(1) + " MB";
+  function renderRecent() {
+    var host = HD.byId("d-recent-list");
+    var list = readRecent();
+    HD.clear(host);
+    HD.byId("d-recent-empty").hidden = list.length > 0;
+    list.forEach(function (item) {
+      host.appendChild(h("li", { className: "d-recent-item" }, [
+        h("button", { type: "button", className: "d-recent-open", title: "Open " + item.path, on: { click: function () { openProject(item.path); } } }, [
+          h("strong", { text: item.name || HD.basename(item.path) }),
+          h("span", { text: item.path })
+        ]),
+        h("button", { type: "button", className: "d-btn d-btn-small d-btn-ghost", text: "Forget", "aria-label": "Forget " + item.path, on: { click: function () {
+          writeRecent(readRecent().filter(function (entry) { return entry.path !== item.path; }));
+          renderRecent();
+        } } })
+      ]));
+    });
   }
 
-  // ---------------------------------------------------------------------------
-  // ui_state persistence (contract C6)
-  // ---------------------------------------------------------------------------
-  function normalizeUiState(raw) {
-    var result = { desktop: { route: "home" }, analysis: null };
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
-    if (Object.prototype.hasOwnProperty.call(raw, "desktop") || Object.prototype.hasOwnProperty.call(raw, "analysis")) {
-      if (raw.desktop && typeof raw.desktop === "object" && DESKTOP_VIEWS.indexOf(raw.desktop.route) >= 0) {
-        result.desktop.route = raw.desktop.route;
-      }
-      if (raw.analysis && typeof raw.analysis === "object" && !Array.isArray(raw.analysis)) {
-        result.analysis = raw.analysis;
-      }
-      return result;
+  // ---------------------------------------------------------------- start screen / projects
+
+  function setStartStatus(text) { HD.byId("d-start-status").textContent = text || ""; }
+
+  function showStart() {
+    stopPolling();
+    state.projectPath = null;
+    state.manifest = null;
+    HD.byId("d-shell").hidden = true;
+    HD.byId("d-start").hidden = false;
+    document.title = "HYB2 Desktop";
+    renderRecent();
+    HD.emit("project-closed");
+  }
+
+  async function openProject(path) {
+    var target = String(path || "").trim();
+    if (!target) return;
+    setStartStatus("Opening " + target + "…");
+    try {
+      var opened = await HD.invoke("project_open", { request: { path: target, check_files: false } });
+      await displayProject(opened);
+      setStartStatus("");
+    } catch (error) {
+      setStartStatus("Could not open the project: " + HD.errorText(error));
+      HD.toast("Could not open the project: " + HD.errorText(error), "error");
     }
-    // Legacy flat {route, ...}: a desktop view name belongs to the shell,
-    // anything else is an analysis-workspace snapshot.
-    if (DESKTOP_VIEWS.indexOf(raw.route) >= 0) {
-      result.desktop.route = raw.route;
-      var rest = {};
-      var keys = Object.keys(raw).filter(function (key) { return key !== "route"; });
-      keys.forEach(function (key) { rest[key] = raw[key]; });
-      result.analysis = keys.length ? rest : null;
+  }
+
+  async function displayProject(opened) {
+    var manifest = opened.manifest || {};
+    state.projectPath = opened.path;
+    state.manifest = manifest;
+    state.tasks = Object.create(null);
+    state.stats = Object.create(null);
+    state.structures = [];
+    rendered = Object.create(null);
+    HD.restoreUiState(manifest.ui_state);
+    HD.applyProjectData({ samples: manifest.samples || [], references: manifest.references || [] });
+    rememberProject(opened.path, manifest.name);
+    HD.byId("d-project-name").textContent = manifest.name || HD.basename(opened.path);
+    document.title = (manifest.name || HD.basename(opened.path)) + " · HYB2 Desktop";
+    HD.byId("d-start").hidden = true;
+    HD.byId("d-shell").hidden = false;
+    HD.emit("project-opened");
+    renderTopbar();
+    activate(state.page, { persist: false });
+    refreshTasks();
+    HD.refreshProject().then(function () { return HD.loadStats(); }).catch(function () {});
+  }
+
+  HD.byId("d-open-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    openProject(HD.byId("d-open-path").value);
+  });
+  HD.byId("d-create-form").addEventListener("submit", async function (event) {
+    event.preventDefault();
+    var form = event.currentTarget;
+    var request = { path: HD.byId("d-create-path").value.trim(), name: HD.byId("d-create-name").value.trim(), description: "" };
+    await HD.busy(form, async function () {
+      try {
+        setStartStatus("Creating project…");
+        await HD.invoke("project_create", { request: request });
+        await openProject(request.path);
+      } catch (error) {
+        setStartStatus("Could not create the project: " + HD.errorText(error));
+      }
+    });
+  });
+  async function browse(command, inputId) {
+    try {
+      var result = await HD.invoke(command);
+      if (result && result.path) {
+        HD.byId(inputId).value = result.path;
+        return result.path;
+      }
+    } catch (error) {
+      setStartStatus("Folder dialog failed: " + HD.errorText(error));
+    }
+    return null;
+  }
+  HD.byId("d-open-browse").addEventListener("click", async function () {
+    var path = await browse("dialog_pick_project_folder", "d-open-path");
+    if (path) openProject(path);
+  });
+  HD.byId("d-create-browse").addEventListener("click", function () { browse("dialog_pick_new_project_folder", "d-create-path"); });
+
+  // ---------------------------------------------------------------- menus
+
+  function toggleMenu(button, menu, fill) {
+    var open = menu.hidden;
+    closeMenus();
+    if (!open) return;
+    if (fill) fill(menu);
+    menu.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    var first = menu.querySelector("button");
+    if (first) first.focus();
+  }
+  function closeMenus() {
+    document.querySelectorAll(".d-menu").forEach(function (menu) { menu.hidden = true; });
+    document.querySelectorAll("[aria-haspopup=menu]").forEach(function (button) { button.setAttribute("aria-expanded", "false"); });
+  }
+  document.addEventListener("click", function (event) {
+    if (!event.target.closest(".d-menu-anchor")) closeMenus();
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") closeMenus();
+  });
+
+  HD.byId("d-project-button").addEventListener("click", function () {
+    toggleMenu(this, HD.byId("d-project-menu"), function (menu) {
+      HD.clear(menu);
+      menu.appendChild(h("div", { className: "d-menu-label", text: state.projectPath }));
+      readRecent().filter(function (item) { return item.path !== state.projectPath; }).slice(0, 5).forEach(function (item) {
+        menu.appendChild(h("button", { type: "button", className: "d-menu-item", role: "menuitem", title: item.path, text: item.name, on: { click: function () { closeMenus(); openProject(item.path); } } }));
+      });
+      menu.appendChild(h("hr", { className: "d-menu-sep" }));
+      menu.appendChild(h("button", { type: "button", className: "d-menu-item", role: "menuitem", text: "Open project…", on: { click: async function () {
+        closeMenus();
+        var result = await HD.invoke("dialog_pick_project_folder").catch(function () { return null; });
+        if (result && result.path) openProject(result.path);
+      } } }));
+      menu.appendChild(h("button", { type: "button", className: "d-menu-item", role: "menuitem", text: "New project…", on: { click: function () { closeMenus(); showStart(); HD.byId("d-create-name").focus(); } } }));
+      menu.appendChild(h("button", { type: "button", className: "d-menu-item", role: "menuitem", text: "Validate project files", on: { click: function () { closeMenus(); validateProject(); } } }));
+      menu.appendChild(h("button", { type: "button", className: "d-menu-item", role: "menuitem", text: "Close project", on: { click: function () { closeMenus(); showStart(); } } }));
+    });
+  });
+  async function validateProject() {
+    try {
+      await HD.invoke("project_validate", { request: { path: state.projectPath, check_files: true } });
+      HD.toast("Project manifest and referenced files are valid.");
+    } catch (error) {
+      HD.toast("Validation failed: " + HD.errorText(error), "error");
+    }
+  }
+
+  // ---------------------------------------------------------------- top bar
+
+  function renderTopbar() {
+    var refSelect = HD.byId("d-reference");
+    HD.clear(refSelect);
+    if (!state.references.length) {
+      refSelect.appendChild(h("option", { value: "", text: "No reference" }));
+      refSelect.disabled = true;
     } else {
-      result.analysis = raw;
+      refSelect.disabled = false;
+      state.references.forEach(function (reference) {
+        refSelect.appendChild(h("option", { value: reference.id, text: reference.label || reference.id }));
+      });
+      refSelect.value = state.referenceId || state.references[0].id;
     }
-    return result;
+    var geneSelect = HD.byId("d-gene");
+    HD.clear(geneSelect);
+    var genes = HD.genes();
+    if (!genes.length) {
+      geneSelect.appendChild(h("option", { value: "", text: "—" }));
+      geneSelect.disabled = true;
+    } else {
+      geneSelect.disabled = false;
+      genes.forEach(function (gene) {
+        geneSelect.appendChild(h("option", { value: gene.name, text: gene.name + " (" + HD.formatNumber(gene.length) + " nt)" }));
+      });
+      geneSelect.value = state.gene || genes[0].name;
+    }
+    geneSelect.title = state.gene || "";
+    var key = HD.fillSelectionSelect(HD.byId("d-selection"), HD.selectionKey(state.selection), "No analysed samples yet");
+    if (key && key !== HD.selectionKey(state.selection)) state.selection = HD.parseSelectionKey(key);
   }
-  function scheduleUiStateSave() {
-    if (!currentProjectPath || !invoke) return;
-    var path = currentProjectPath;
-    clearTimeout(uiStateSaveTimer);
-    uiStateSaveTimer = setTimeout(function () {
-      uiStateSaveTimer = null;
-      if (path !== currentProjectPath) return;
-      var payload = { desktop: { route: uiState.desktop.route }, analysis: uiState.analysis || {} };
-      invoke("project_update_ui_state", { request: { path: path, ui_state: payload } }).catch(function () {});
-    }, 350);
-  }
+  HD.byId("d-reference").addEventListener("change", function () {
+    state.referenceId = this.value || null;
+    var genes = HD.genes();
+    state.gene = genes.length ? genes[0].name : null;
+    renderTopbar();
+    HD.saveUiState();
+    HD.emit("gene");
+  });
+  HD.byId("d-gene").addEventListener("change", function () {
+    state.gene = this.value || null;
+    this.title = state.gene || "";
+    HD.saveUiState();
+    HD.emit("gene");
+  });
+  HD.byId("d-selection").addEventListener("change", function () {
+    HD.setSelection(HD.parseSelectionKey(this.value));
+  });
+  HD.setSelection = function (selection) {
+    state.selection = selection;
+    HD.byId("d-selection").value = HD.selectionKey(selection);
+    HD.saveUiState();
+    HD.emit("selection");
+  };
+  HD.on("project", function () {
+    renderTopbar();
+  });
 
-  // ---------------------------------------------------------------------------
-  // Navigation
-  // ---------------------------------------------------------------------------
-  function activate(view, options) {
-    if (DESKTOP_VIEWS.indexOf(view) < 0) view = "home";
-    document.querySelectorAll(".d-nav").forEach(function (item) {
-      var active = item.getAttribute("data-view") === view;
+  // ---------------------------------------------------------------- navigation
+
+  function activate(page, options) {
+    if (PAGES.indexOf(page) < 0) page = "data";
+    var changed = state.page !== page;
+    state.page = page;
+    document.querySelectorAll(".d-nav-item").forEach(function (item) {
+      var active = item.dataset.page === page;
       item.classList.toggle("d-nav-active", active);
       if (active) item.setAttribute("aria-current", "page");
       else item.removeAttribute("aria-current");
     });
-    document.querySelectorAll(".d-view").forEach(function (item) {
-      item.classList.toggle("d-view-active", item.getAttribute("data-view") === view);
+    document.querySelectorAll(".d-page").forEach(function (section) {
+      section.hidden = section.dataset.page !== page;
     });
-    var changed = uiState.desktop.route !== view;
-    uiState.desktop.route = view;
-    if (changed && !(options && options.persist === false)) scheduleUiStateSave();
-    if (view === "analysis" && !loaded) loadAnalysisWorkspace().catch(function () {});
-    if (view === "tasks") refreshTaskList();
-  }
-  document.querySelectorAll(".d-nav").forEach(function (button) {
-    button.addEventListener("click", function () { activate(button.getAttribute("data-view")); });
-  });
-
-  window.addEventListener("hyb2:session-change", function (event) {
-    if (!currentProjectPath || !invoke || !event.detail || typeof event.detail !== "object") return;
-    // The workspace renders its landing page before a deferred restore is
-    // applied; do not let that transient snapshot overwrite the saved one.
-    if (analysisRestorePending && (!event.detail.route || event.detail.route === "landing")) return;
-    analysisRestorePending = false;
-    if (JSON.stringify(event.detail) === JSON.stringify(uiState.analysis)) return;
-    uiState.analysis = event.detail;
-    scheduleUiStateSave();
-  });
-  window.addEventListener("hyb2:analysis-result", function (event) {
-    if (!currentProjectPath || !invoke || !event.detail) return;
-    var result = event.detail;
-    var saved = {
-      algorithm: result.algorithm, engine: result.engine, model: result.model,
-      constraintMode: result.constraintMode, sequence: result.sequence,
-      dotBracket: result.dotBracket, energy: result.energy,
-      comradesScore: result.comradesScore, constraintCount: result.constraintCount,
-      randomisation: result.randomisation, native: result.native === true,
-      elapsedMs: result.elapsedMs
-    };
-    var path = currentProjectPath;
-    invoke("project_save_analysis_run", { request: { path: path, result: saved } }).then(function (response) {
-      if (response && response.run) {
-        show("d-analysis-status", "Analysis result saved as " + response.run.run_id + ".");
-        if (path === currentProjectPath && currentManifest) {
-          currentManifest.runs = currentManifest.runs || [];
-          currentManifest.runs.push({ id: response.run.run_id, kind: "structure-analysis", status: "succeeded", output_paths: [response.run.path] });
-          renderSummary();
-          renderRunHistory(currentManifest.runs);
-        }
+    var module = HD.pages[page];
+    var container = HD.byId("d-page-" + page);
+    if (module) {
+      if (!rendered[page]) {
+        rendered[page] = true;
+        HD.clear(container);
+        module.render(container);
       }
-    }).catch(function (error) { show("d-analysis-status", "Analysis completed but could not be saved: " + errorText(error)); });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Integrated analysis workspace
-  // ---------------------------------------------------------------------------
-  function appendStyle(file) {
-    var link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = "./analysis/" + file;
-    document.head.appendChild(link);
-  }
-  function appendScript(file) {
-    return new Promise(function (resolve, reject) {
-      var script = document.createElement("script");
-      script.src = "./analysis/" + file;
-      script.onload = resolve;
-      script.onerror = function () { reject(new Error("Could not load desktop analysis asset " + file)); };
-      document.body.appendChild(script);
-    });
-  }
-  function loadAnalysisWorkspace() {
-    if (loadingAnalysis) return loadingAnalysis;
-    loadingAnalysis = (async function () {
-      show("d-analysis-status", "Loading integrated analysis workspace…");
-      window.HYB2_ASSET_BASE = "./analysis/";
-      ["styles.css", "workspace.css", "analysis.css", "structure.css", "report.css", "vendor/fornac/fornac.css", "responsive.css"].forEach(appendStyle);
-      var host = byId("d-analysis-host");
-      var appRoot = document.createElement("div");
-      appRoot.id = "app";
-      appRoot.className = "app-shell desktop-integrated-analysis";
-      host.appendChild(appRoot);
-      // desktop-adapter.js must load first: it defines window.Hyb2Desktop
-      // (native save dialog, native CPLfold) and starts runtime detection.
-      var files = ["desktop-adapter.js", "vendor/d3/d3.v3.min.js", "vendor/fornac/fornac.js", "analysis-data.js", "comrades-analysis.js", "analysis-pages.js", "structure-controller.js", "structure-ui.js", "analysis-ui.js", "overview-page.js", "report-page.js", "app.js"];
-      for (var index = 0; index < files.length; index += 1) {
-        await appendScript(files[index]);
-      }
-      loaded = true;
-      if (projectInputs.hyb || projectInputs.fasta) window.Hyb2Web.loadProjectFiles(projectInputs);
-      if (uiState.analysis) window.Hyb2Web.restoreSession(uiState.analysis);
-      show("d-analysis-status", "Integrated analysis workspace ready.");
-      // Re-render once native capability detection settles so the structure
-      // page switches to the native CPLfold path and its sequence limit.
-      if (window.Hyb2Desktop && window.Hyb2Desktop.ready) {
-        window.Hyb2Desktop.ready.then(function () {
-          if (window.Hyb2Web && typeof window.Hyb2Web.refresh === "function") window.Hyb2Web.refresh();
-        });
-      }
-    })().catch(function (error) {
-      show("d-analysis-status", "Analysis could not load: " + errorText(error));
-      throw error;
-    });
-    return loadingAnalysis;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Generic operation wrapper
-  // ---------------------------------------------------------------------------
-  async function operation(container, output, label, action) {
-    var buttons = container.querySelectorAll("button");
-    buttons.forEach(function (button) { button.disabled = true; });
-    container.setAttribute("aria-busy", "true");
-    show(output, label + "…");
-    try {
-      if (!invoke) throw new Error("Open the installed HYB2 Desktop application to use native project and runtime operations.");
-      var result = await action();
-      // An unavailable native engine is a structured capability result, not
-      // an IPC transport failure; let the caller render the remediation.
-      if (result && result.ok === false && result.status !== "unavailable") throw new Error((result.errors || [result.error || "Operation failed"]).join("\n"));
-      return result;
-    } catch (error) {
-      show(output, label + " failed: " + errorText(error));
-    } finally {
-      buttons.forEach(function (button) { button.disabled = false; });
-      container.removeAttribute("aria-busy");
+      if (module.onShow) module.onShow(options || {});
     }
+    if (changed) window.scrollTo(0, 0);
+    if (changed && !(options && options.persist === false)) HD.saveUiState();
   }
+  document.querySelectorAll(".d-nav-item").forEach(function (button) {
+    button.addEventListener("click", function () { activate(button.dataset.page); });
+  });
+  HD.on("navigate", function (detail) { activate(detail.page, detail.options); });
 
-  // ---------------------------------------------------------------------------
-  // Recent projects (per-machine convenience; localStorage may be unavailable)
-  // ---------------------------------------------------------------------------
-  function readRecent() {
-    try {
-      var parsed = JSON.parse(window.localStorage.getItem(RECENT_KEY) || "[]");
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter(function (item) { return item && typeof item.path === "string" && item.path; }).slice(0, RECENT_MAX);
-    } catch (_) {
-      return [];
-    }
-  }
-  function writeRecent(list) {
-    try { window.localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX))); } catch (_) {}
-  }
-  function rememberProject(path, name) {
-    var list = readRecent().filter(function (item) { return item.path !== path; });
-    list.unshift({ path: path, name: String(name || basename(path)), opened_at: new Date().toISOString() });
-    writeRecent(list);
-    renderRecent();
-  }
-  function renderRecent() {
-    var host = byId("d-recent-list");
-    var list = readRecent();
-    clear(host);
-    byId("d-recent-empty").hidden = list.length > 0;
-    list.forEach(function (item) {
-      var row = el("li", "d-recent-item");
-      var button = el("button", "d-recent-open");
-      button.type = "button";
-      button.appendChild(el("strong", null, item.name || basename(item.path)));
-      button.appendChild(el("span", null, item.path));
-      button.title = "Open " + item.path;
-      button.addEventListener("click", function () {
-        byId("d-open-path").value = item.path;
-        openProject(item.path, byId("d-check-files").checked);
+  // ---------------------------------------------------------------- tasks
+
+  HD.taskLabel = function (task) {
+    if (taskLabels[task.task_id]) return taskLabels[task.task_id];
+    var label = null;
+    state.samples.forEach(function (sample) {
+      Object.keys(sample.stages || {}).forEach(function (stage) {
+        if (sample.stages[stage] && sample.stages[stage].task_id === task.task_id) label = sample.name;
       });
-      var forget = el("button", "d-btn d-btn-small", "Remove");
-      forget.type = "button";
-      forget.setAttribute("aria-label", "Remove " + item.path + " from recent projects");
-      forget.addEventListener("click", function () {
-        writeRecent(readRecent().filter(function (entry) { return entry.path !== item.path; }));
-        renderRecent();
-      });
-      row.appendChild(button);
-      row.appendChild(forget);
-      host.appendChild(row);
     });
-  }
+    var structure = (state.structures || []).find(function (item) { return item.id === task.task_id || item.task_id === task.task_id; });
+    if (structure) {
+      var evidence = (structure.sample_ids || []).map(function (id) { var sample = HD.sample(id); return sample ? sample.name : id; }).join(" + ");
+      return "Structure · " + evidence + " · " + (structure.mode === "genome" ? "whole RNA" : (structure.windows || []).length + " window(s)");
+    }
+    var kinds = { sample_pipeline: "Pipeline", analysis_index: "Index", structure: "Structure", cplfold: "CPLfold", validate_project: "Validation", pipeline: "Pipeline" };
+    return (kinds[task.kind] || task.kind || "Task") + (label ? " · " + label : "");
+  };
+  HD.setTaskLabel = function (taskId, label) { taskLabels[taskId] = label; };
 
-  // ---------------------------------------------------------------------------
-  // Project display
-  // ---------------------------------------------------------------------------
-  function displayProject(project) {
-    var manifest = project.manifest || {};
-    manifest.inputs = manifest.inputs || [];
-    manifest.runs = manifest.runs || [];
-    manifest.artifacts = manifest.artifacts || [];
-    projectToken += 1;
-    currentProjectPath = project.path;
-    currentManifest = manifest;
-    tasks = {};
-    renderTasks();
-    uiState = normalizeUiState(manifest.ui_state);
-    analysisRestorePending = !!(uiState.analysis && uiState.analysis.route && uiState.analysis.route !== "landing");
-    show("d-active-project", (manifest.name || basename(project.path)) + " · " + project.path);
-    byId("d-task-project").textContent = project.path;
-    renderSummary();
-    byId("d-project-details").hidden = false;
-    byId("d-open-path").value = project.path;
-    rememberProject(project.path, manifest.name);
-    syncProjectInputs(manifest.inputs);
-    renderRunHistory(manifest.runs);
-    if (loaded && uiState.analysis && window.Hyb2Web) window.Hyb2Web.restoreSession(uiState.analysis);
-    refreshTaskList();
-    activate(uiState.desktop.route, { persist: false });
-  }
-  function fillSelect(id, items, empty) {
-    var select = byId(id);
-    var previous = select.value;
-    clear(select);
-    if (!items.length) {
-      var none = el("option", null, empty);
-      none.value = "";
-      select.appendChild(none);
-    }
-    items.forEach(function (item) {
-      var option = el("option", null, (item.label ? item.label + " · " : "") + item.path);
-      option.value = item.path;
-      select.appendChild(option);
-    });
-    if (previous && items.some(function (item) { return item.path === previous; })) select.value = previous;
-  }
-  function renderPipelineInputs() {
-    var inputs = (currentManifest && currentManifest.inputs) || [];
-    var reads = inputs.filter(function (item) {
-      return item.role === "fastq" || item.role === "sam" || item.role === "fasta" || /\.(fastq|fq)(\.gz)?$|\.sam$/i.test(item.path || "");
-    });
-    var references = inputs.filter(function (item) {
-      return item.role === "reference" || item.role === "fasta" || /\.(fasta|fa)$/i.test(item.path || "");
-    });
-    fillSelect("d-pipeline-input", reads, "Import FASTQ, FASTA or SAM first");
-    fillSelect("d-pipeline-reference", references, "Import a reference FASTA first");
-  }
-  function renderSummary() {
-    renderPipelineInputs();
-    var host = byId("d-project-summary");
-    var manifest = currentManifest || {};
-    clear(host);
-    function row(label, value) {
-      host.appendChild(el("dt", null, label));
-      var dd = el("dd");
-      if (value && value.nodeType) dd.appendChild(value);
-      else dd.textContent = value === undefined || value === null || value === "" ? "—" : String(value);
-      host.appendChild(dd);
-    }
-    row("Name", manifest.name);
-    row("Folder", currentProjectPath);
-    row("Description", manifest.description);
-    row("Created", manifest.created_at ? formatTime(manifest.created_at) : "");
-    row("Updated", manifest.updated_at ? formatTime(manifest.updated_at) : "");
-    if (manifest.application && manifest.application.version) row("Created with", (manifest.application.name || "HYB2 Desktop") + " " + manifest.application.version);
-    var inputs = manifest.inputs || [];
-    if (inputs.length) {
-      var list = el("ul", "d-summary-list");
-      inputs.forEach(function (item) {
-        var text = (item.role || "other").toUpperCase() + " · " + (item.label || basename(item.path)) + " (" + (item.path || "") + (item.size_bytes !== undefined ? ", " + formatBytes(item.size_bytes) : "") + ")";
-        list.appendChild(el("li", null, text));
-      });
-      row("Inputs (" + inputs.length + ")", list);
-    } else {
-      row("Inputs", "None imported yet");
-    }
-    row("Runs", (manifest.runs || []).length);
-    row("Artifacts", (manifest.artifacts || []).length);
-  }
-  function renderRunHistory(runs) {
-    var host = byId("d-run-history-list");
-    if (!host) return;
-    clear(host);
-    if (!runs.length) {
-      host.appendChild(el("p", "d-muted", "No saved analysis runs."));
-      return;
-    }
-    runs.slice().reverse().forEach(function (run) {
-      var output = (run.output_paths && run.output_paths[0]) || "";
-      var button = el("button", "d-run-item");
-      button.type = "button";
-      button.appendChild(el("strong", null, run.kind || "Structure analysis"));
-      button.appendChild(el("span", null, run.id || ""));
-      button.appendChild(el("small", null, (run.status || "unknown") + " · " + output));
-      if (!output) button.disabled = true;
-      button.addEventListener("click", async function () {
-        try {
-          var content = await readProjectText(output);
-          var saved = JSON.parse(content);
-          if (!loaded) await loadAnalysisWorkspace();
-          if (window.Hyb2Web && window.Hyb2Web.showSavedStructure && window.Hyb2Web.showSavedStructure(saved)) {
-            activate("analysis");
-            show("d-run-result", "Restored " + (saved.algorithm || "saved structure") + " in the RNA Structure workspace.");
-          } else {
-            show("d-run-result", content);
-          }
-        } catch (error) { show("d-run-result", "Could not open saved result: " + errorText(error)); }
-      });
-      host.appendChild(button);
-    });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Project files: asset protocol first, project_read_input as fallback (C4)
-  // ---------------------------------------------------------------------------
-  async function fetchProjectFile(relative) {
-    var convert = tauri && tauri.core && tauri.core.convertFileSrc;
-    if (typeof convert !== "function" || !currentProjectPath || !safeRelative(relative)) throw new Error("Asset protocol unavailable.");
-    var response = await fetch(convert(joinProjectPath(currentProjectPath, relative)));
-    if (!response.ok) throw new Error("Asset request failed with HTTP " + response.status);
-    return response.blob();
-  }
-  async function readProjectText(relative) {
-    try {
-      var blob = await fetchProjectFile(relative);
-      return await blob.text();
-    } catch (_) {
-      var result = await invoke("project_read_input", { request: { path: currentProjectPath, relative: relative } });
-      if (!result || !result.input || typeof result.input.content !== "string") throw new Error("The project file could not be read.");
-      return result.input.content;
-    }
-  }
-  async function readProjectInput(item) {
-    if (!invoke || !currentProjectPath || !item || !item.path) return null;
-    var name = basename(item.path);
-    try {
-      var blob = await fetchProjectFile(item.path);
-      return { name: name, path: item.path, file: new File([blob], name, { type: "text/plain" }) };
-    } catch (_) {
-      var result = await invoke("project_read_input", { request: { path: currentProjectPath, relative: item.path } });
-      return result && result.input ? result.input : null;
-    }
-  }
-  function inputSlot(item) {
-    if (!item) return null;
-    if (item.role === "hyb" || (item.role !== "fasta" && item.role !== "reference" && item.format === "hyb")) return "hyb";
-    if (item.role === "fasta" || item.role === "reference" || item.format === "fasta") return "fasta";
-    return null;
-  }
-  async function syncProjectInputs(inputs) {
-    var token = projectToken;
-    var selected = { hyb: null, fasta: null };
-    (inputs || []).forEach(function (item) {
-      var slot = inputSlot(item);
-      if (slot) selected[slot] = item;
-    });
-    projectInputs = { hyb: null, fasta: null };
-    try {
-      var hyb = selected.hyb ? await readProjectInput(selected.hyb) : null;
-      var fasta = selected.fasta ? await readProjectInput(selected.fasta) : null;
-      if (token !== projectToken) return;
-      projectInputs = { hyb: hyb, fasta: fasta };
-      if (loaded && window.Hyb2Web && (hyb || fasta)) {
-        window.Hyb2Web.loadProjectFiles(projectInputs);
-        show("d-analysis-status", "Project inputs loaded into the integrated analysis workspace.");
-      }
-    } catch (error) {
-      if (token === projectToken) show("d-analysis-status", "Project inputs could not be loaded: " + errorText(error));
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Project Home actions
-  // ---------------------------------------------------------------------------
-  async function browseInto(command, inputId, output) {
-    if (!invoke) { show(output, "Folder dialogs are only available in the installed HYB2 Desktop application."); return; }
-    try {
-      var result = await invoke(command);
-      if (result && typeof result.path === "string" && result.path) {
-        byId(inputId).value = result.path;
-        byId(inputId).focus();
-      }
-    } catch (error) {
-      show(output, "Folder dialog failed: " + errorText(error));
-    }
-  }
-  byId("d-open-browse").addEventListener("click", function () {
-    browseInto("dialog_pick_project_folder", "d-open-path", "d-open-result");
-  });
-  byId("d-create-browse").addEventListener("click", function () {
-    browseInto("dialog_pick_new_project_folder", "d-project-path", "d-project-result");
-  });
-
-  async function openProject(path, checkFiles) {
-    var request = { path: String(path || "").trim(), check_files: !!checkFiles };
-    if (!request.path) return;
-    var result = await operation(byId("d-open-form"), "d-open-result", "Opening project", function () {
-      return invoke("project_open", { request: request });
-    });
-    if (result) {
-      show("d-open-result", "Project opened.");
-      displayProject(result);
-    }
-  }
-  byId("d-open-form").addEventListener("submit", async function (event) {
-    event.preventDefault();
-    var path = byId("d-open-path").value.trim();
-    var checkFiles = byId("d-check-files").checked;
-    if (event.submitter && event.submitter.value === "validate") {
-      var result = await operation(event.currentTarget, "d-open-result", "Validating project", function () {
-        return invoke("project_validate", { request: { path: path, check_files: checkFiles } });
-      });
-      if (result) show("d-open-result", "Project validation passed.");
-      return;
-    }
-    openProject(path, checkFiles);
-  });
-  byId("d-create-form").addEventListener("submit", async function (event) {
-    event.preventDefault();
-    var request = { path: byId("d-project-path").value.trim(), name: byId("d-project-name").value.trim(), description: byId("d-project-description").value };
-    var result = await operation(event.currentTarget, "d-project-result", "Creating project", function () {
-      return invoke("project_create", { request: request });
-    });
-    if (result) {
-      show("d-project-result", "Project created at " + request.path + ". Opening it…");
-      byId("d-open-path").value = request.path;
-      openProject(request.path, false);
-    }
-  });
-  byId("d-import-button").addEventListener("click", async function () {
-    if (!currentProjectPath) return;
-    var path = currentProjectPath;
-    var role = byId("d-input-role").value;
-    var result = await operation(byId("d-import-form"), "d-import-result", "Importing input", function () {
-      return invoke("project_import_input_dialog", { request: { path: path, role: role } });
-    });
-    if (!result) return;
-    if (result.cancelled) { show("d-import-result", "Import cancelled."); return; }
-    var imported = result.input;
-    if (!imported) { show("d-import-result", "Import finished without an input record."); return; }
-    show("d-import-result", "Imported " + imported.path + " (" + formatBytes(imported.size_bytes) + ")");
-    if (path !== currentProjectPath || !currentManifest) return;
-    currentManifest.inputs.push(imported);
-    renderSummary();
-    var slot = inputSlot(imported);
-    if (slot) {
-      var token = projectToken;
-      try {
-        var entry = await readProjectInput(imported);
-        if (token !== projectToken) return;
-        projectInputs[slot] = entry;
-        if (loaded && window.Hyb2Web && (projectInputs.hyb || projectInputs.fasta)) window.Hyb2Web.loadProjectFiles(projectInputs);
-      } catch (error) {
-        show("d-import-result", "Imported, but the file could not be loaded into the workspace: " + errorText(error));
-      }
-    }
-  });
-  byId("d-project-analysis").addEventListener("click", function () { activate("analysis"); });
-
-  // ---------------------------------------------------------------------------
-  // Task Center: unified task API (contract C3)
-  // ---------------------------------------------------------------------------
-  function isActiveTask(task) {
-    return !!task && ACTIVE_TASK_STATES.indexOf(task.status) >= 0;
-  }
   function storeTask(snapshot) {
-    if (!snapshot || !snapshot.task_id) return;
-    tasks[snapshot.task_id] = Object.assign({}, tasks[snapshot.task_id] || {}, snapshot);
+    if (!snapshot || !snapshot.task_id) return null;
+    var previous = state.tasks[snapshot.task_id];
+    var next = Object.assign({}, previous || {}, snapshot);
+    state.tasks[snapshot.task_id] = next;
+    trackRate(next);
+    return { previous: previous, next: next };
   }
-  function taskOutputText(task) {
-    if (task.error) return String(task.error);
-    var output = task.output;
-    if (output === undefined || output === null || output === "") {
-      return task.run_dir ? String(task.run_dir) : "";
+  function trackRate(task) {
+    var progress = task.progress || {};
+    var done = Number(progress.bytes_done);
+    var total = Number(progress.bytes_total);
+    if (!isFinite(done) || !isFinite(total) || !total) return;
+    var now = Date.now() / 1000;
+    var rate = rates[task.task_id];
+    if (!rate || rate.stage !== progress.stage || done < rate.last) {
+      rates[task.task_id] = { stage: progress.stage, t0: now, d0: done, last: done, eta: null };
+      return;
     }
-    if (typeof output === "string") return output;
-    if (typeof output === "object") {
-      if (output.errors && output.errors.length) return output.errors.join("\n");
-      if (output.error) return String(output.error);
-      if (output.dotBracket || output.structure) {
-        var structure = output.dotBracket || output.structure;
-        return String(structure) + (output.energy !== undefined ? "  (" + output.energy + " kcal/mol)" : "");
-      }
+    rate.last = done;
+    var elapsed = now - rate.t0;
+    if (elapsed > 2 && done > rate.d0) {
+      var perSecond = (done - rate.d0) / elapsed;
+      rate.eta = (total - done) / perSecond;
     }
-    var text = JSON.stringify(output);
-    return text.length > 400 ? text.slice(0, 400) + "…" : text;
   }
-  function renderTasks() {
-    var body = byId("d-task-rows");
-    clear(body);
-    var list = Object.keys(tasks).map(function (id) { return tasks[id]; });
-    list.sort(function (a, b) { return String(b.started_at || "").localeCompare(String(a.started_at || "")); });
-    byId("d-task-empty").hidden = list.length > 0;
-    list.forEach(function (task) {
-      var row = el("tr");
-      row.appendChild(el("td", null, task.kind || "task"));
-      var statusCell = el("td");
-      statusCell.appendChild(el("span", "d-status d-status-" + String(task.status || "unknown").replace(/[^a-z]/g, ""), task.status || "unknown"));
-      row.appendChild(statusCell);
-      row.appendChild(el("td", null, formatTime(task.started_at)));
-      row.appendChild(el("td", null, formatTime(task.finished_at)));
-      var outputCell = el("td", "d-task-output");
-      outputCell.appendChild(el("span", null, taskOutputText(task)));
-      if (task.exit_code !== undefined && task.exit_code !== null && task.status !== "succeeded") {
-        outputCell.appendChild(el("small", null, "exit code " + task.exit_code));
-      }
-      row.appendChild(outputCell);
-      var actionCell = el("td");
-      var hyb = task.status === "succeeded" && typeof task.output === "string" && /\.hyb$/i.test(task.output) ? projectRelative(task.output) : null;
-      if (hyb) {
-        var openButton = el("button", "d-btn d-btn-small", "Open in analysis");
-        openButton.type = "button";
-        openButton.addEventListener("click", function () { openPipelineResult(hyb, byId("d-pipeline-reference").value || null); });
-        actionCell.appendChild(openButton);
-      }
-      if (isActiveTask(task)) {
-        var cancel = el("button", "d-btn d-btn-small", "Cancel");
-        cancel.type = "button";
-        cancel.setAttribute("aria-label", "Cancel task " + task.task_id);
-        cancel.addEventListener("click", function () { cancelTask(task.task_id, cancel); });
-        actionCell.appendChild(cancel);
-      }
-      row.appendChild(actionCell);
-      body.appendChild(row);
+  HD.taskProgress = function (task) {
+    var progress = task && task.progress || {};
+    var done = Number(progress.bytes_done);
+    var total = Number(progress.bytes_total);
+    var fraction = isFinite(done) && isFinite(total) && total > 0 ? Math.min(1, done / total) : null;
+    var rate = rates[task && task.task_id];
+    return {
+      fraction: fraction,
+      stage: progress.stage || null,
+      detail: progress.detail || "",
+      units: progress.units || "bytes",
+      done: isFinite(done) ? done : null,
+      total: isFinite(total) ? total : null,
+      eta: rate && rate.eta !== null && isFinite(rate.eta) ? rate.eta : null
+    };
+  };
+  HD.isActiveTask = function (task) { return !!task && ACTIVE.indexOf(task.status) >= 0; };
+  HD.activeTasks = function () {
+    return Object.keys(state.tasks).map(function (id) { return state.tasks[id]; }).filter(HD.isActiveTask);
+  };
+  // Latest task for a sample stage (by the manifest's task_id).
+  HD.sampleTask = function (sample) {
+    var best = null;
+    Object.keys(sample.stages || {}).forEach(function (stage) {
+      var id = sample.stages[stage] && sample.stages[stage].task_id;
+      var task = id && state.tasks[id];
+      if (task && (!best || String(task.started_at || "") > String(best.started_at || ""))) best = task;
     });
-    updateTaskPolling();
+    return best;
+  };
+
+  HD.progressBar = function (task) {
+    var info = HD.taskProgress(task);
+    var percent = info.fraction === null ? null : Math.round(info.fraction * 100);
+    var bar = h("div", { className: "d-progress" + (percent === null ? " d-progress-indeterminate" : ""), role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": percent === null ? null : String(percent) }, [
+      h("span", { style: "width:" + (percent === null ? 35 : percent) + "%" })
+    ]);
+    var parts = [];
+    if (info.stage) parts.push(info.stage);
+    if (percent !== null) parts.push(percent + "%");
+    if (!info.total) { /* no measurable total for this stage */ }
+    else if (info.done !== null && info.units === "bytes") parts.push(HD.formatBytes(info.done) + " / " + HD.formatBytes(info.total));
+    else if (info.done !== null) parts.push(info.done + " / " + info.total + (info.units && info.units !== "none" ? " " + info.units : ""));
+    if (info.eta !== null) parts.push("about " + HD.formatDuration(info.eta) + " left");
+    return h("div", { className: "d-progress-wrap" }, [bar, h("small", { className: "d-muted", text: parts.join(" · ") || (task.status === "queued" ? "waiting for CPU / memory budget" : "starting…") })]);
+  };
+
+  function renderIndicator() {
+    var active = HD.activeTasks();
+    var all = Object.keys(state.tasks).map(function (id) { return state.tasks[id]; });
+    var interrupted = all.filter(function (task) { return task.status === "interrupted"; }).length;
+    // Failures are flagged only for tasks that ended during this session.
+    var failed = all.filter(function (task) { return task.status === "failed" && String(task.finished_at || "") >= sessionStart; }).length;
+    var text;
+    var fraction = null;
+    if (active.length) {
+      var done = 0;
+      var total = 0;
+      active.forEach(function (task) {
+        var info = HD.taskProgress(task);
+        if (info.fraction !== null) { done += info.fraction; total += 1; }
+      });
+      fraction = total ? done / total : null;
+      text = active.length + (active.length === 1 ? " task" : " tasks") + (fraction !== null ? " · " + Math.round(fraction * 100) + "%" : " running");
+    } else if (interrupted) {
+      text = interrupted + " interrupted";
+    } else if (failed) {
+      text = failed + " failed";
+    } else {
+      text = all.length ? "Tasks idle" : "No tasks";
+    }
+    var button = HD.byId("d-task-indicator");
+    button.classList.toggle("d-task-indicator-active", active.length > 0);
+    button.classList.toggle("d-task-indicator-warn", !active.length && (interrupted + failed) > 0);
+    HD.byId("d-task-indicator-text").textContent = text;
+    var bar = HD.byId("d-task-indicator-bar");
+    bar.parentNode.hidden = !active.length;
+    bar.style.width = (fraction === null ? 30 : Math.round(fraction * 100)) + "%";
+    bar.parentNode.classList.toggle("d-mini-bar-indeterminate", fraction === null);
   }
-  function projectRelative(absolute) {
-    if (!currentProjectPath) return null;
-    var root = currentProjectPath.replace(/[\\/]+$/, "");
-    var value = String(absolute);
-    if (value.indexOf(root) !== 0) return null;
-    var rest = value.slice(root.length).replace(/^[\\/]+/, "").replace(/\\/g, "/");
-    return rest && rest.split("/").indexOf("..") < 0 ? rest : null;
+
+  function renderDrawer() {
+    var body = HD.byId("d-drawer-body");
+    if (HD.byId("d-drawer").hidden) return;
+    HD.clear(body);
+    var list = Object.keys(state.tasks).map(function (id) { return state.tasks[id]; });
+    list.sort(function (a, b) {
+      var activeOrder = (HD.isActiveTask(b) ? 1 : 0) - (HD.isActiveTask(a) ? 1 : 0);
+      return activeOrder || String(b.started_at || "").localeCompare(String(a.started_at || ""));
+    });
+    if (!list.length) {
+      body.appendChild(h("p", { className: "d-muted", text: "No tasks in this project yet. Runs started from Data, Compare and Structure appear here." }));
+      return;
+    }
+    var resumable = list.filter(function (task) { return task.status === "interrupted"; });
+    if (resumable.length > 1) {
+      body.appendChild(h("button", { type: "button", className: "d-btn d-btn-primary d-btn-block", text: "Resume all interrupted (" + resumable.length + ")", on: { click: function () {
+        resumable.forEach(function (task) { resume(task.task_id); });
+      } } }));
+    }
+    list.slice(0, 60).forEach(function (task) {
+      var item = h("div", { className: "d-task" + (HD.isActiveTask(task) ? " d-task-active" : "") });
+      item.appendChild(h("div", { className: "d-task-head" }, [
+        h("strong", { text: HD.taskLabel(task) }),
+        HD.chip(task.status)
+      ]));
+      if (HD.isActiveTask(task)) item.appendChild(HD.progressBar(task));
+      var meta = [HD.formatTime(task.started_at)];
+      if (task.finished_at) meta.push("finished " + HD.formatTime(task.finished_at));
+      if (task.resumed_from) meta.push("resumed from " + task.resumed_from);
+      item.appendChild(h("small", { className: "d-muted d-task-meta", text: meta.join(" · ") }));
+      if (task.error && !HD.isActiveTask(task)) item.appendChild(h("p", { className: "d-task-error", text: String(task.error).slice(0, 600) }));
+      var actions = h("div", { className: "d-task-actions" });
+      if (HD.isActiveTask(task)) {
+        actions.appendChild(h("button", { type: "button", className: "d-btn d-btn-small", text: "Cancel", on: { click: function () { cancel(task.task_id); } } }));
+      }
+      if (RESUMABLE.indexOf(task.status) >= 0 && task.kind !== "validate_project") {
+        actions.appendChild(h("button", { type: "button", className: "d-btn d-btn-small", text: "Resume", on: { click: function () { resume(task.task_id); } } }));
+      }
+      if (task.status === "succeeded" && task.kind === "structure") {
+        actions.appendChild(h("button", { type: "button", className: "d-btn d-btn-small", text: "View structure", on: { click: function () {
+          closeDrawer();
+          HD.navigate("structure", { structureId: task.task_id });
+        } } }));
+      }
+      if (actions.firstChild) item.appendChild(actions);
+      body.appendChild(item);
+    });
   }
-  async function openPipelineResult(relative, referencePath) {
+  function openDrawer() {
+    HD.byId("d-drawer").hidden = false;
+    HD.byId("d-task-indicator").setAttribute("aria-expanded", "true");
+    renderDrawer();
+  }
+  function closeDrawer() {
+    HD.byId("d-drawer").hidden = true;
+    HD.byId("d-task-indicator").setAttribute("aria-expanded", "false");
+  }
+  HD.openTasks = openDrawer;
+  HD.byId("d-task-indicator").addEventListener("click", function () {
+    if (HD.byId("d-drawer").hidden) openDrawer(); else closeDrawer();
+  });
+  HD.byId("d-drawer-close").addEventListener("click", closeDrawer);
+
+  async function cancel(taskId) {
+    try { await HD.cancelTask(taskId); } catch (error) { HD.toast("Cancel failed: " + HD.errorText(error), "error"); }
+  }
+  async function resume(taskId) {
     try {
-      var hyb = await readProjectInput({ path: relative });
-      var reference = referencePath ? await readProjectInput({ path: referencePath }) : (projectInputs.fasta || null);
-      projectInputs = { hyb: hyb, fasta: reference };
-      if (!loaded) await loadAnalysisWorkspace();
-      window.Hyb2Web.loadProjectFiles(projectInputs);
-      activate("analysis");
-      show("d-analysis-status", "Loaded pipeline result " + relative + ".");
+      var label = HD.taskLabel(state.tasks[taskId] || { task_id: taskId });
+      var snapshot = await HD.resumeTask(taskId);
+      if (snapshot && snapshot.task_id) HD.setTaskLabel(snapshot.task_id, label);
+      HD.toast("Resumed " + label + ".");
     } catch (error) {
-      show("d-task-state", "Could not open pipeline result: " + errorText(error));
+      HD.toast("Resume failed: " + HD.errorText(error), "error");
     }
   }
-  async function refreshTaskList() {
-    if (!invoke || !currentProjectPath) return;
-    var path = currentProjectPath;
+  HD.resume = resume;
+
+  function tasksChanged(transitions) {
+    renderIndicator();
+    renderDrawer();
+    HD.emit("tasks", transitions || []);
+    var finished = (transitions || []).filter(function (item) {
+      return item.previous && HD.isActiveTask(item.previous) && !HD.isActiveTask(item.next);
+    });
+    var running = HD.activeTasks().some(function (task) { return task.kind === "sample_pipeline" || task.kind === "analysis_index"; });
+    if (finished.length || (running && Date.now() - lastProjectRefresh > 4000)) {
+      lastProjectRefresh = Date.now();
+      HD.refreshProject().then(function () {
+        if (finished.some(function (item) { return item.next.kind === "sample_pipeline" || item.next.kind === "analysis_index"; })) return HD.loadStats();
+      }).catch(function () {});
+    }
+    finished.forEach(function (item) {
+      var label = HD.taskLabel(item.next);
+      if (item.next.status === "succeeded") HD.toast(label + " finished.");
+      else if (item.next.status === "failed") HD.toast(label + " failed: " + String(item.next.error || "see Tasks").slice(0, 200), "error");
+      if (item.next.kind === "structure") HD.emit("structures");
+    });
+    updatePolling();
+  }
+
+  async function refreshTasks() {
+    if (!state.projectPath) return;
+    var path = state.projectPath;
     try {
-      var result = await invoke("task_list", { request: { project_path: path } });
-      if (path !== currentProjectPath) return;
-      (result && result.tasks || []).forEach(storeTask);
-      renderTasks();
+      var result = await HD.invoke("task_list", { request: { project_path: path } });
+      if (path !== state.projectPath) return;
+      var transitions = (result && result.tasks || []).map(storeTask).filter(Boolean);
+      tasksChanged(transitions);
     } catch (error) {
-      show("d-task-state", "Could not list tasks: " + errorText(error));
+      HD.toast("Could not list tasks: " + HD.errorText(error), "error");
     }
   }
-  function updateTaskPolling() {
-    var anyActive = Object.keys(tasks).some(function (id) { return isActiveTask(tasks[id]); });
-    if (anyActive && !taskPollTimer) {
-      taskPollTimer = setInterval(pollTasks, 1000);
-    } else if (!anyActive && taskPollTimer) {
-      clearInterval(taskPollTimer);
-      taskPollTimer = null;
-    }
+  HD.refreshTasks = refreshTasks;
+  HD.on("task", function (snapshot) {
+    var transition = storeTask(snapshot);
+    tasksChanged(transition ? [transition] : []);
+  });
+
+  function updatePolling() {
+    var active = HD.activeTasks().length > 0;
+    if (active && !pollTimer) pollTimer = setInterval(poll, 1500);
+    else if (!active && pollTimer) stopPolling();
   }
-  async function pollTasks() {
-    if (taskPollBusy || !invoke) return;
-    taskPollBusy = true;
-    var path = currentProjectPath;
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  async function poll() {
+    if (pollBusy || !state.projectPath) return;
+    pollBusy = true;
+    var path = state.projectPath;
     try {
-      var active = Object.keys(tasks).filter(function (id) { return isActiveTask(tasks[id]); });
+      var transitions = [];
+      var active = HD.activeTasks();
       for (var index = 0; index < active.length; index += 1) {
         try {
-          var snapshot = await invoke("task_status", { request: { task_id: active[index], project_path: path } });
-          if (path !== currentProjectPath) return;
-          storeTask(snapshot);
-        } catch (error) {
-          show("d-task-state", "Task status failed: " + errorText(error));
+          var snapshot = await HD.invoke("task_status", { request: { task_id: active[index].task_id, project_path: path } });
+          if (path !== state.projectPath) return;
+          var transition = storeTask(snapshot);
+          if (transition) transitions.push(transition);
+        } catch (error) { /* transient; next poll retries */ }
+      }
+      tasksChanged(transitions);
+    } finally {
+      pollBusy = false;
+    }
+  }
+
+  // ---------------------------------------------------------------- preferences
+
+  function openPreferences() {
+    HD.modal("Preferences", function (body) {
+      var budgetSection = h("section", { className: "d-section" }, [h("h3", { className: "d-h3", text: "Resources" }), h("p", { className: "d-muted", text: "Loading…" })]);
+      var themeSection = h("section", { className: "d-section" }, [h("h3", { className: "d-h3", text: "Appearance" })]);
+      var runtimeSection = h("section", { className: "d-section" }, [h("h3", { className: "d-h3", text: "Runtime environment" })]);
+      body.appendChild(budgetSection);
+      body.appendChild(themeSection);
+      body.appendChild(runtimeSection);
+
+      var themeSelect = h("select", { className: "d-select", id: "d-pref-theme" }, [
+        h("option", { value: "system", text: "Follow system" }),
+        h("option", { value: "light", text: "Light" }),
+        h("option", { value: "dark", text: "Dark" })
+      ]);
+      themeSelect.value = window.Hyb2Theme ? window.Hyb2Theme.get() : "system";
+      themeSelect.addEventListener("change", function () { if (window.Hyb2Theme) window.Hyb2Theme.set(themeSelect.value); HD.emit("theme"); });
+      themeSection.appendChild(h("label", { className: "d-label", for: "d-pref-theme", text: "Colour theme" }));
+      themeSection.appendChild(themeSelect);
+
+      function renderBudget(prefs) {
+        HD.clear(budgetSection);
+        budgetSection.appendChild(h("h3", { className: "d-h3", text: "Resources" }));
+        var system = prefs.system || {};
+        var budget = prefs.budget || {};
+        budgetSection.appendChild(h("p", { className: "d-muted", text: "Tasks claim CPU cores and memory from this budget; a task that does not fit waits in the queue. This computer: " + (system.cpus || "?") + " cores, " + HD.formatBytes((system.mem_mb || 0) * 1048576) + " memory." }));
+        var cpu = h("input", { className: "d-input d-input-narrow", type: "number", min: "1", max: String(system.cpus || 256), step: "1", id: "d-pref-cpu", value: String(budget.cpu || "") });
+        var mem = h("input", { className: "d-input d-input-narrow", type: "number", min: "1", max: String(Math.ceil((system.mem_mb || 1048576) / 1024)), step: "0.5", id: "d-pref-mem", value: budget.mem_mb ? String(Math.round(budget.mem_mb / 102.4) / 10) : "" });
+        budgetSection.appendChild(h("div", { className: "d-form-grid" }, [
+          h("label", { className: "d-label", for: "d-pref-cpu", text: "CPU cores" }), cpu,
+          h("label", { className: "d-label", for: "d-pref-mem", text: "Memory (GB)" }), mem
+        ]));
+        var status = h("p", { className: "d-status-line", role: "status" , text: prefs.custom_budget ? "Custom budget." : "Default budget (all cores, 75% of memory)." });
+        budgetSection.appendChild(h("div", { className: "d-actions" }, [
+          h("button", { type: "button", className: "d-btn", text: "Reset to defaults", on: { click: function () { save(null); } } }),
+          h("button", { type: "button", className: "d-btn d-btn-primary", text: "Save budget", on: { click: function () {
+            var cores = Math.floor(Number(cpu.value));
+            var gb = Number(mem.value);
+            if (!(cores >= 1) || !(gb > 0)) { status.textContent = "Enter at least 1 core and a positive memory size."; return; }
+            save({ cpu: cores, mem_mb: Math.round(gb * 1024) });
+          } } })
+        ]));
+        budgetSection.appendChild(status);
+        function save(next) {
+          HD.invoke("preferences_set", { request: { budget: next } }).then(function (result) {
+            renderBudget(result);
+            HD.state.preferences = result;
+            HD.toast("Resource budget saved.");
+          }).catch(function (error) { status.textContent = "Could not save: " + HD.errorText(error); });
         }
       }
-      if (path === currentProjectPath) renderTasks();
-    } finally {
-      taskPollBusy = false;
-    }
+      HD.invoke("preferences_get").then(function (prefs) { HD.state.preferences = prefs; renderBudget(prefs); }).catch(function (error) {
+        HD.clear(budgetSection);
+        budgetSection.appendChild(h("h3", { className: "d-h3", text: "Resources" }));
+        budgetSection.appendChild(h("p", { className: "d-muted", text: "Preferences are unavailable: " + HD.errorText(error) }));
+      });
+
+      var runtimeOut = h("div", { className: "d-runtime" }, [h("p", { className: "d-muted", text: "Checking bundled components…" })]);
+      runtimeSection.appendChild(runtimeOut);
+      HD.invoke("runtime_detect").then(function (result) { renderRuntime(runtimeOut, result && result.result || result); }).catch(function (error) {
+        HD.clear(runtimeOut);
+        runtimeOut.appendChild(h("p", { className: "d-task-error", text: "Runtime detection failed: " + HD.errorText(error) }));
+      });
+    }, { wide: true });
   }
-  async function cancelTask(taskId, button) {
-    if (!invoke) return;
-    if (button) button.disabled = true;
-    try {
-      storeTask(await invoke("task_cancel", { request: { task_id: taskId } }));
-      renderTasks();
-    } catch (error) {
-      show("d-task-state", "Cancel failed: " + errorText(error));
-      if (button) button.disabled = false;
-    }
-  }
-  async function startTask(form, label, request) {
-    var result = await operation(form, "d-task-state", label, function () {
-      if (!currentProjectPath) throw new Error("Open a project before starting a task.");
-      request.project_path = currentProjectPath;
-      return invoke("task_start", { request: request });
+  function renderRuntime(host, info) {
+    HD.clear(host);
+    // Detector output: { platform, probes: [{ id, status, version, summary, ... }] }.
+    var rows = (info && Array.isArray(info.probes) ? info.probes : []).map(function (probe) {
+      return { name: probe.id, ok: probe.status === "available", status: probe.status, detail: [probe.version, probe.summary].filter(Boolean).join(" · ") };
     });
-    if (!result) return;
-    if (result.status === "unavailable") {
-      show("d-task-state", "Native " + request.kind + " unavailable: " + errorText(result.error || "portable runtime is not installed."));
+    if (info && info.platform) host.appendChild(h("p", { className: "d-muted", text: [info.platform.os, info.platform.architecture, info.platform.python ? "Python " + info.platform.python : null].filter(Boolean).join(" · ") }));
+    if (rows.length) {
+      var table = h("table", { className: "d-table d-table-compact" }, [h("tbody", {}, rows.map(function (row) {
+        return h("tr", {}, [h("td", { text: row.name }), h("td", {}, [HD.chip(row.ok ? "succeeded" : "failed", row.ok ? "available" : (row.status || "missing"))]), h("td", { className: "d-muted d-wrap", text: String(row.detail).slice(0, 200) })]);
+      }))]);
+      host.appendChild(table);
+    }
+    host.appendChild(h("details", { className: "d-details" }, [h("summary", { text: "Full diagnostics" }), h("pre", { className: "d-pre", text: JSON.stringify(info, null, 2) })]));
+  }
+  HD.byId("d-prefs-button").addEventListener("click", openPreferences);
+  HD.openPreferences = openPreferences;
+
+  // ---------------------------------------------------------------- help
+
+  var WORKFLOW = [
+    ["1 Data", "Add a reference FASTA, then import raw reads (FASTQ/FASTA, gzipped or not), SAM or finished .hyb files — one by one or from a sample sheet. Files stay where they are (linked) unless you choose to copy them. Select samples and run them: mapping → .hyb → analysis index. Interrupted runs resume from the last finished stage."],
+    ["2 QC", "Per-sample record and read counts, chimera types, intra/inter-molecular share and replicate agreement."],
+    ["3 Explore", "Interactions, contact map, viewpoint and region views for the current selection in the top bar: one sample, or a condition with its replicates merged."],
+    ["4 Compare", "Choose two conditions (or samples). Differential contact bins are listed with actions to locate them on the contact map or fold the region with each condition's evidence."],
+    ["5 Structure", "Whole-RNA folds (pseudoknot-free) and window folds (with pseudoknots) using every chimera of the selection as evidence; view arcs and compare two structures."],
+    ["6 Report", "Assemble figures and tables from the current analysis into a printable report."]
+  ];
+  async function openHelp(topic) {
+    var overview = window.Hyb2Overview;
+    if (topic === "validation") {
+      var ids = HD.selectionIds();
+      if (!ids.length || !HD.workspace) { HD.toast("Select an analysed sample first."); return; }
+      var summary;
+      try { summary = await HD.workspace.provider().getSummary({ datasetIds: ids }); } catch (error) { HD.toast(HD.errorText(error), "error"); return; }
+      HD.modal("Validation · " + HD.selectionLabel(), function (body) { body.appendChild(webContent(overview && overview.renderValidation({ summary: summary }))); }, { wide: true });
       return;
     }
-    storeTask(result);
-    renderTasks();
-    show("d-task-state", "Started " + (result.kind || request.kind) + " task " + (result.task_id || "") + ".");
+    if (topic === "methods" || topic === "file-format") {
+      var html = overview ? (topic === "methods" ? overview.renderMethods() : overview.renderFileFormat()) : "";
+      HD.modal(topic === "methods" ? "Methods" : "File format", function (body) { body.appendChild(webContent(html)); }, { wide: true });
+      return;
+    }
+    HD.modal("Workflow guide", function (body) {
+      WORKFLOW.forEach(function (entry) {
+        body.appendChild(h("h3", { className: "d-h3", text: entry[0] }));
+        body.appendChild(h("p", { text: entry[1] }));
+      });
+      body.appendChild(h("p", { className: "d-muted", text: "Runtime components and the CPU / memory budget are under Preferences. Tasks are in the drawer behind the task indicator in the top bar." }));
+    }, { wide: true });
   }
-  byId("d-task-form").addEventListener("submit", function (event) {
-    event.preventDefault();
-    startTask(event.currentTarget, "Starting validation task", { kind: "validate_project" });
+  // Static help templates shipped with the analysis pages (web/overview-page.js).
+  function webContent(html) {
+    var wrap = h("div", { className: "d-web-content workspace-embedded" });
+    wrap.innerHTML = String(html || "");
+    return wrap;
+  }
+  HD.byId("d-help-button").addEventListener("click", function () { toggleMenu(this, HD.byId("d-help-menu")); });
+  document.querySelectorAll("[data-help]").forEach(function (item) {
+    item.addEventListener("click", function () { closeMenus(); openHelp(item.dataset.help); });
   });
-  byId("d-pipeline-form").addEventListener("submit", function (event) {
-    event.preventDefault();
-    var input = byId("d-pipeline-input").value;
-    var reference = byId("d-pipeline-reference").value;
-    var threshold = Number(byId("d-pipeline-threshold").value);
-    var overlap = Number(byId("d-pipeline-overlap").value);
-    var problem = "";
-    if (!input) problem = "Choose the reads or SAM file to process.";
-    else if (!reference) problem = "Choose the reference FASTA used for mapping.";
-    else if (!(threshold >= 0 && threshold <= 10)) problem = "BLAST threshold must be between 0 and 10.";
-    else if (!Number.isInteger(overlap) || overlap < 0 || overlap > 1000) problem = "Maximum overlap must be an integer from 0 to 1000.";
-    if (problem) { show("d-task-state", problem); return; }
-    startTask(event.currentTarget, "Starting HYB2 pipeline", {
-      kind: "pipeline", input: input, reference: reference,
-      parameters: { blast_threshold: threshold, max_overlap: overlap, energy: byId("d-pipeline-energy").checked }
-    });
-  });
-  byId("d-cplfold-form").addEventListener("submit", function (event) {
-    event.preventDefault();
-    var form = event.currentTarget;
-    var sequence = byId("d-cplfold-sequence").value.replace(/\s+/g, "").toUpperCase();
-    var beam = Number(byId("d-cplfold-beam").value || 20);
-    var limit = window.Hyb2Desktop && window.Hyb2Desktop.limits && window.Hyb2Desktop.limits.cplfoldMaxLength;
-    var problem = "";
-    if (!/^[ACGUTN]+$/.test(sequence)) problem = "RNA sequence may contain only A, C, G, U, T or N.";
-    else if (sequence.length < 2) problem = "RNA sequence must contain at least two bases.";
-    else if (limit && sequence.length > limit) problem = "Native CPLfold accepts at most " + limit + " nt.";
-    else if (!Number.isInteger(beam) || beam < 1 || beam > 200) problem = "Beam must be an integer from 1 to 200.";
-    if (problem) { show("d-task-state", problem); return; }
-    startTask(form, "Starting native CPLfold", { kind: "cplfold", sequence: sequence, parameters: { beam: beam } });
-  });
-  byId("d-task-refresh").addEventListener("click", function () { refreshTaskList(); });
 
-  // ---------------------------------------------------------------------------
-  // Runtime
-  // ---------------------------------------------------------------------------
-  byId("d-detect-runtime").addEventListener("click", async function () {
-    var result = await operation(byId("d-view-runtime"), "d-runtime-result", "Detecting runtime", function () { return invoke("runtime_detect"); });
-    if (result) show("d-runtime-result", result.result || result);
+  // ---------------------------------------------------------------- startup
+
+  window.addEventListener("beforeunload", function (event) {
+    if (HD.activeTasks().length) {
+      event.preventDefault();
+      event.returnValue = "Tasks are still running. They will be marked interrupted and can be resumed.";
+    }
   });
 
   renderRecent();
-  renderTasks();
-})();
+  if (!HD.available) {
+    HD.byId("d-start").hidden = false;
+    setStartStatus("Native project operations are only available in the installed HYB2 Desktop application.");
+    return;
+  }
+  var recent = readRecent();
+  if (recent.length) {
+    HD.byId("d-open-path").value = recent[0].path;
+  }
+  showStart();
+}());

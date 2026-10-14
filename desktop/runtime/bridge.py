@@ -14,6 +14,7 @@ import json
 import math
 import sys
 import tempfile
+import time
 import uuid
 import subprocess
 import os
@@ -284,6 +285,15 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         # status.json is owned by the Rust task manager; children report via result.json.
         _atomic_write_json(run_dir / "result.json", result)
         return result
+    if operation == "warmup":
+        # Fold the CPLfold reference hairpin once so Numba compiles (and
+        # caches) every kernel before the user's first prediction.
+        started = time.monotonic()
+        result = handle({"operation": "cplfold_predict", "sequence": "GGCGCGGCACCGUCCGCGGAACAAACGG",
+                         "parameters": {"beam": 20}}, repo_root=repo_root)
+        if result.get("status") == "unavailable":
+            return result
+        return {"ok": True, "status": "warm", "seconds": round(time.monotonic() - started, 2)}
     if operation == "pipeline_run":
         return _pipeline_run(request, repo_root)
     if operation == "cplfold_run":

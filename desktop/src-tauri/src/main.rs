@@ -565,9 +565,20 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building HYB2 Desktop");
-    app.run(|handle, event| {
-        if let tauri::RunEvent::Exit = event {
-            shutdown(handle);
+    app.run(|handle, event| match event {
+        tauri::RunEvent::Ready => warm_up(handle.clone()),
+        tauri::RunEvent::Exit => shutdown(handle),
+        _ => {}
+    });
+}
+
+/// Compiles the CPLfold Numba kernels in the compute sidecar right after
+/// launch, so the first prediction does not pay the one-off JIT cost (about
+/// 50 s on a fresh install; later launches load the on-disk cache).
+fn warm_up(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        if let Ok(rt) = runtime(&app) {
+            let _ = rt.call(Lane::Compute, &json!({"operation": "warmup"}));
         }
     });
 }

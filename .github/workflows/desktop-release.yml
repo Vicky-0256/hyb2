@@ -19,6 +19,9 @@ permissions:
 # pinned Bowtie2), runs the app's real-stack test against it, packages the
 # MyGo app with the runtime archive as a platform resource, and unpacks the
 # archive found inside the package to import numpy, numba and ViennaRNA.
+# The evidence worker's MCP stack (requirements-evidence.txt, hash-locked) is
+# installed into the same CPython; staging starts it once (tools/list only, no
+# network) and verify-native-release.py fails when it is missing or off-pin.
 jobs:
   package:
     strategy:
@@ -69,6 +72,8 @@ jobs:
         run: |
           if [ -x "$RUNNER_TEMP/cpython/python.exe" ]; then PY="$RUNNER_TEMP/cpython/python.exe"; else PY="$RUNNER_TEMP/cpython/bin/python3"; fi
           "$PY" -m pip install --only-binary=:all: -r desktop/runtime/requirements-native.txt
+          # Evidence worker (RNAcentral MCP client): exact pins, SHA-256 for every wheel.
+          "$PY" -m pip install --only-binary=:all: --require-hashes -r desktop/runtime/requirements-evidence.txt
       - name: Acquire pinned Bowtie2
         run: python desktop/scripts/acquire-bowtie2.py --platform ${{ matrix.target }} --output "$RUNNER_TEMP/bowtie2"
       - name: Stage and verify the runtime

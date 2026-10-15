@@ -27,6 +27,8 @@ verify on the same runner:
 ```bash
 /tmp/cpython-runtime/bin/python3 -m pip install --no-index --only-binary=:all: \
   --find-links "$WHEELHOUSE" -r desktop/runtime/requirements-native.txt
+/tmp/cpython-runtime/bin/python3 -m pip install --only-binary=:all: --require-hashes \
+  -r desktop/runtime/requirements-evidence.txt
 python3 desktop/scripts/acquire-bowtie2.py --platform linux-x86_64 --output /tmp/bowtie2
 python3 desktop/scripts/stage-native.py \
   --standalone-python /tmp/cpython-runtime \
@@ -78,3 +80,34 @@ still works).
 It is used for folding energy (`pipeline -e 1`), and binary wheels exist for
 every target. `stage-native.py` checks the import with a dimer-fold smoke
 test, and `verify-native-release.py` fails if ViennaRNA is missing.
+
+## Evidence worker (RNAcentral MCP)
+
+`requirements-evidence.txt` locks the evidence worker's stack
+(`desktop/runtime/evidence/`, contract `desktop/spec/EVIDENCE.md`): the MCP
+Python SDK v1 (`mcp[cli]==1.30.0`), `rnacentral-mcp-server==0.1.1` and every
+transitive dependency, 46 exact pins (`colorama` and `pywin32` only on
+Windows). Each line carries the SHA-256 of every wheel pip selects for
+CPython 3.11 on macOS arm64 (macOS 11 to 26 tags), Windows amd64 and Linux
+x86_64 (manylinux 2.17 to 2.35), so `--require-hashes` installs succeed on all
+three targets. pip and setuptools are not part of the lock. On Linux, pip on
+`ubuntu-22.04` picks the `manylinux_2_34` cryptography wheel, so the shipped
+runtime then needs glibc 2.34 or newer.
+
+`stage-native.py` checks every applicable pin with `importlib.metadata`,
+confirms the modules come from the staged tree, and runs the worker once
+(`status` with `connect: true`, then `shutdown`): this starts the fixed
+RNAcentral server and lists its tools, without a network request.
+`verify-native-release.py` fails when the packages are missing or off-pin.
+
+To change a pin: resolve the new set in a scratch venv made from the bundled
+CPython, then for each target run
+`pip download --only-binary=:all: --platform <tag> --python-version 3.11
+--implementation cp --abi cp311 --abi abi3 --abi none -r <pins> -d <dir>`
+(macOS `macosx_11_0_arm64`, `macosx_14_0_arm64` and `macosx_26_0_arm64`;
+`win_amd64`; Linux `manylinux_2_17_x86_64` plus `manylinux2014_x86_64`, and
+again with every `manylinux_2_NN_x86_64` from 2_35 down). Add the
+Windows-only dependencies with `--no-deps`, because pip evaluates environment
+markers against the host. Write each wheel's SHA-256 into the file, then
+check it with `pip download --require-hashes` for each tag set and
+`pip install --require-hashes --target <scratch>` on the host.

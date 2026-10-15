@@ -125,6 +125,30 @@ sent by Go); the worker never decides identity.
   - Only `success`, `summary_unavailable` and `not_found_or_no_summary`
     cards can be attached. `source_url` is kept only when it starts with
     `https://rnacentral.org/`.
+- Python worker notes (clarifications, 2026-10-15):
+  - Responses carry `raw_text` and `cached: bool` next to `card`.
+  - `raw_response_digest` and `retrieved_at` are null when no tool response
+    arrived (timeout, lost connection); non-text content hashes as "".
+  - Lost transport / server failed to start → `upstream_error`; MCP protocol
+    errors, refused or unlisted tools, responses over 256 KiB →
+    `unexpected_response`; MCP `isError` → `upstream_error`. The worker never
+    emits `cancelled` or `identity_unconfirmed` (Go does).
+  - map_id: "# ID Mapping for" → success; "No RNAcentral entry found…",
+    "No cross-references found…", "Could not determine a valid Taxon ID…" →
+    `not_found_or_no_summary`; "Error looking up external ID…" →
+    `upstream_error`; other text → `unexpected_response`. A returned taxon
+    other than the requested one stays success with a status_detail; the
+    worker never decides identity.
+  - Request fields are strict (unknown fields → ok:false, nothing sent).
+    Identifiers `[A-Za-z0-9_.:|-]{1,100}`; taxon `[0-9]{1,10}` or
+    `[A-Za-z .-]{1,64}`.
+  - The SDK starts the MCP child in its own session; it exits when the
+    worker's pipe closes (checked with SIGKILL of the worker mid-call).
+  - No clear_cache operation: Go deletes the cache directory. The server log
+    (`rnacentral-server.log`) can contain the queried public id.
+  - The lock (`desktop/runtime/requirements-evidence.txt`, 46 pins, 65
+    hashes) covers macOS arm64, Windows amd64 and Linux x86_64; on Linux the
+    cryptography wheel pip selects needs glibc ≥ 2.34.
 - Report: section "External sources and researcher notes", only cards with
   `include_in_report`, showing provider, tool, query, retrieval date, status,
   "External AI literature summary — not a validation of this structure",

@@ -256,7 +256,7 @@ func (d *reportData) conditionTable() reportTableData {
 
 func (d *reportData) testTable() reportTableData {
 	t := reportTableData{Cols: []reportCol{{Title: "Test (A vs B)", Width: 0}, {Title: "Cells tested", Width: 96, Num: true},
-		{Title: "Significant", Width: 90, Num: true}, {Title: "Up / down", Width: 120, Num: true}, {Title: "Interactions up / down", Width: 150, Num: true}}}
+		{Title: "Significant", Width: 90, Num: true}, {Title: "Higher in A / B", Width: 120, Num: true}, {Title: "Interactions A / B", Width: 150, Num: true}}}
 	for _, x := range d.Tests {
 		s := x.Summary
 		t.Rows = append(t.Rows, []string{x.LabelA + " vs " + x.LabelB, reportCount(s.CellsTested), reportCount(s.Significant),
@@ -539,7 +539,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 <div class="stat"><span>Significant cells</span><b>{{count .Summary.Significant}}</b></div>
 <div class="stat"><span>Higher in {{.LabelA}}</span><b class="up">{{count .Summary.SignificantUp}}</b></div>
 <div class="stat"><span>Higher in {{.LabelB}}</span><b class="down">{{count .Summary.SignificantDown}}</b></div>
-<div class="stat"><span>Interactions up / down</span><b>{{count .Summary.InteractionsUp}} / {{count .Summary.InteractionsDown}}</b></div>
+<div class="stat"><span>Interactions A / B</span><b>{{count .Summary.InteractionsUp}} / {{count .Summary.InteractionsDown}}</b></div>
 </div>
 {{if .Err}}<p class="note">Could not read the results: {{.Err}}</p>{{end}}
 <div class="cols">

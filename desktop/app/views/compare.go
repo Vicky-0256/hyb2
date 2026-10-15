@@ -954,7 +954,8 @@ func (p *comparePage) results(c *ui.Context) {
 			cmpStat(c, "Significant cells", FormatNumber(s.Significant), t.Text)
 			cmpStat(c, "Higher in A", FormatNumber(s.SignificantUp), cmpRed)
 			cmpStat(c, "Higher in B", FormatNumber(s.SignificantDown), cmpBlue)
-			cmpStat(c, "Interactions", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text)
+			cmpStat(c, "Interactions A / B", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text).
+				Tooltip("Merged interactions higher in A / higher in B")
 			if n := len(e.SamplesOne); n > 0 && n < len(sizeFactors) {
 				cmpStat(c, "Size factors A · B", strings.Join(sizeFactors[:n], " ")+" · "+strings.Join(sizeFactors[n:], " "), t.Text).
 					Tooltip("DESeq2 size factors, in sample order: " + strings.Join(append(append([]string{}, e.SamplesOne...), e.SamplesTwo...), ", "))

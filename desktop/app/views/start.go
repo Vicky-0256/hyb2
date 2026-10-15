@@ -202,8 +202,16 @@ func (a *App) startView(c *ui.Context) {
 					if name != "" && s.newParent != "" {
 						ui.Text(c, "Creates the folder "+filepath.Join(s.newParent, ProjectFolderName(name))).FontSize(12).TextColor(t.TextMuted)
 					}
-					ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+					ui.Row(c).Gap(8).Justify(ui.End).AlignItems(ui.Center).Children(func() {
 						ready := name != "" && s.newParent != "" && !s.creating
+						// Say what the disabled button waits for.
+						switch {
+						case s.creating:
+						case name == "":
+							ui.Text(c, "Enter a project name to create it.").FontSize(12).TextColor(t.TextMuted)
+						case s.newParent == "":
+							ui.Text(c, "Choose where to save it.").FontSize(12).TextColor(t.TextMuted)
+						}
 						if ui.PrimaryButton(c, "Create project").Disabled(!ready).Clicked() {
 							a.create(newProjectPath(s.newParent, name), name)
 						}

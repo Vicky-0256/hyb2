@@ -80,7 +80,7 @@ func TestReportPageSections(t *testing.T) {
 		"Conditions", "AFR_REP1, AFR_REP2", "2 of 2", "573,541",
 		// Differential tests with their strongest interactions.
 		"Differential tests", "AFR (2 merged) vs BRA (2 merged)", "SUB (2 merged) vs AFR (2 merged)", "1,023,236", "82,132",
-		"25,276 / 56,856", "742 / 1,547", "Top 10 merged interactions by padj", "5,720–5,729", "3,890–3,899", "No significant interaction.",
+		"25,276 / 56,856", "742 / 1,547", "Interactions A / B", "Top 10 merged interactions by padj", "5,720–5,729", "3,890–3,899", "No significant interaction.",
 		"DESeq2 · min count 2 · merge range 100 nt · padj < 0.05",
 		// Structures and runtime.
 		"Structures", "1 window · 3,170–6,229", "AFR_REP1 + AFR_REP2", "1,055", "-452.0 kcal/mol",

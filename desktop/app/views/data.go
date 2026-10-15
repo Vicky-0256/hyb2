@@ -314,6 +314,11 @@ func dataReplicate(v any) string {
 	return fmt.Sprint(v)
 }
 
+// dataExactCount is the full count behind a compact one ("224 k").
+func dataExactCount(records int64) string {
+	return FormatNumber(records) + " hybrids"
+}
+
 func dataPlural(n int, one, many string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, one)
@@ -696,13 +701,17 @@ func (p *dataPage) sampleRows(c *ui.Context, samples []model.Sample, cols []ui.T
 				}
 			})
 		case 6:
-			label := "—"
+			label, exact := "—", ""
 			if st, ok := stats[s.ID]; ok {
-				label = dataFormatCompact(st.Records)
+				label, exact = dataFormatCompact(st.Records), dataExactCount(st.Records)
 			} else if s.IsReady() && statsLoading {
 				label = "…"
 			}
-			ui.Text(c, label).SingleLine()
+			if exact != "" {
+				ui.Text(c, label).SingleLine().Tooltip(exact)
+			} else {
+				ui.Text(c, label).SingleLine()
+			}
 		case 7:
 			p.rowAction(c, s, task, active)
 		}

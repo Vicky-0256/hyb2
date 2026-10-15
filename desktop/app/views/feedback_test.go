@@ -319,3 +319,24 @@ func TestLocalErrorIsNotBlamedOnRNAcentral(t *testing.T) {
 		t.Fatal("a local error is saveable or not a known status")
 	}
 }
+
+// TestCreateProjectSaysWhatIsMissing: the disabled button is explained.
+func TestCreateProjectSaysWhatIsMissing(t *testing.T) {
+	a := New(newFake(t), nil, "")
+	tt := ui.NewTester(a.View, 1100, 760)
+	tt.Frame()
+	dataExpect(t, tt, "Enter a project name to create it.")
+	a.start.newName = "ZIKV"
+	tt.Frame()
+	if tt.HasText("Enter a project name to create it.") {
+		t.Fatal("hint stays with a name")
+	}
+}
+
+// TestHybridCountsShowTheExactNumber: the compact count has the exact one
+// as its tooltip.
+func TestHybridCountsShowTheExactNumber(t *testing.T) {
+	if got := dataExactCount(224154); got != "224,154 hybrids" {
+		t.Fatalf("tooltip %q", got)
+	}
+}

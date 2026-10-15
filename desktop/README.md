@@ -98,7 +98,14 @@ task drawer and Preferences.
    on each group's merged map; identical to the CLI on the ZIKV ZAFR vs ZILM
    virion data) and the CPM quick view; Locate, Region and Fold A & B.
 5. **Structure**: CPLfold genome and window folds with chimera evidence, and
-   the arc viewer comparing two structures.
+   the arc viewer comparing two structures.  A structure folded on another
+   reference (another strain) is moved onto A's coordinates by a banded
+   global alignment (`app/seqmap`), so arcs and shared pairs compare the
+   same nucleotides.  A Compare test can be overlaid as differential arcs
+   (higher in condition one above, two below, padj cutoff), with the
+   structures in one colour, and the reference's gene annotation (GenBank,
+   GFF/GTF, BED or TSV, attached with "Gene annotation…") is drawn as a
+   track; a GenBank file's own sequence is aligned to the reference first.
 6. **Report**: the project summary and its HTML export.
 
 ## Checks

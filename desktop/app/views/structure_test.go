@@ -54,7 +54,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	readB, listAB, removed := stFixtureB(t)
 	f.structures[structB] = readB
 	f.ops["list_structures"] = listAB
-	tt := ui.NewTester(a.View, 1100, 900)
+	tt := ui.NewTester(a.View, 1100, 1000)
 	// The tasks drawer's "View structure".
 	a.Navigate("structure", map[string]any{"structureId": structA})
 	csSettle(a, tt)

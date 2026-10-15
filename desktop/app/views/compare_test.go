@@ -60,6 +60,7 @@ func openCS(t *testing.T) (*App, *csFake) {
 	f.queries["compare_bins"] = map[string]any(fixture(t, "compare_bins.json"))
 	f.ops["list_structures"] = fixture(t, "structure_list.json")
 	f.ops["read_structure"] = fixture(t, "structure_read.json")
+	f.ops["read_annotation"] = core.Obj{"annotation": nil, "features": []any{}, "seqid": "", "sequence": nil}
 	a := New(f, nil, "")
 	a.Open("/projects/zikv.hyb2proj")
 	waitFlush(a)

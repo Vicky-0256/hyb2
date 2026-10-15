@@ -627,6 +627,36 @@
             },
             "additionalProperties": false
           }
+        },
+        "annotation": {
+          "type": "object",
+          "description": "Gene annotation copied into the project (annotations/<reference_id>.<ext>); see runtime/annotation.py.",
+          "required": [
+            "path",
+            "format"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "format": {
+              "enum": [
+                "genbank",
+                "gff",
+                "bed",
+                "tsv"
+              ]
+            },
+            "file_name": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "features": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
         }
       },
       "allOf": [

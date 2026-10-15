@@ -283,6 +283,14 @@ type arcSVG struct {
 	LabelA, LabelB string
 	// ID prefixes the element ids (see heatSVG.ID).
 	ID string
+	// Overlay arcs (e.g. differential interactions) drawn over the pairs,
+	// with their legend labels: up (above), down (below).
+	Overlay                     []widgets.OverlayArc
+	OverlayUpLabel, OverlayDown string
+	// Mono, when not transparent, draws both structures in this colour.
+	Mono ui.Color
+	// Features is the gene track under the arcs.
+	Features []widgets.Feature
 }
 
 var (
@@ -312,12 +320,19 @@ func (s arcSVG) SVG() (svg string, drawn int) {
 	plotW := width - left - right
 	half := math.Min(220, plotW/4)
 	twoSided := len(s.B) > 0
+	for _, o := range s.Overlay {
+		twoSided = twoSided || !o.Up
+	}
 	plotH := half
 	if twoSided {
 		plotH = 2 * half
 	}
 	base := top + half
-	legendY := top + plotH + 36
+	track := 0.0
+	if len(s.Features) > 0 {
+		track = 20
+	}
+	legendY := top + plotH + track + 36
 	height := legendY + 10
 	span := float64(end - start)
 	if span <= 0 {
@@ -335,16 +350,23 @@ func (s arcSVG) SVG() (svg string, drawn int) {
 			shared[p] = true
 		}
 	}
+	var arcPath func(pairs []widgets.Pair, up, onlyShared, byWidth bool) string
 	path := func(pairs []widgets.Pair, up, onlyShared bool) string {
+		return arcPath(pairs, up, onlyShared, false)
+	}
+	arcPath = func(pairs []widgets.Pair, up, onlyShared, byWidth bool) string {
 		var d strings.Builder
 		for _, p := range pairs {
-			if p.J < start || p.I > end || shared[p] != onlyShared {
+			if p.J < start || p.I > end || (!byWidth && shared[p] != onlyShared) {
 				continue
 			}
 			// A half ellipse from two cubic curves (as widgets.Arcs).
 			x0, x1 := x(p.I), x(p.J)
 			rx := (x1 - x0) / 2
 			h := math.Min(rx, half-6)
+			if byWidth { // overlay arcs: height by span relative to the plot width
+				h = (half - 6) * math.Min(1, 0.06+0.94*(x1-x0)/plotW)
+			}
 			if up {
 				h = -h
 			}
@@ -374,35 +396,88 @@ func (s arcSVG) SVG() (svg string, drawn int) {
 	fmt.Fprintf(&b, `<defs><clipPath id="%s"><rect x="%s" y="%s" width="%s" height="%s"/></clipPath></defs>`,
 		clipID, svgNum(left), svgNum(top), svgNum(plotW), svgNum(plotH))
 	fmt.Fprintf(&b, `<g clip-path="url(#%s)" fill="none" stroke-width="0.8">`, clipID)
+	colorA, colorB, colorShared := arcColorA, arcColorB, arcColorShared
+	if s.Mono.A > 0 {
+		colorA, colorB, colorShared = s.Mono, s.Mono, s.Mono
+	}
 	for _, layer := range []struct {
 		pairs      []widgets.Pair
 		up, shared bool
 		color      ui.Color
-	}{{s.A, true, false, arcColorA}, {s.B, false, false, arcColorB}, {s.A, true, true, arcColorShared}, {s.B, false, true, arcColorShared}} {
+	}{{s.A, true, false, colorA}, {s.B, false, false, colorB}, {s.A, true, true, colorShared}, {s.B, false, true, colorShared}} {
 		if d := path(layer.pairs, layer.up, layer.shared); d != "" {
 			fmt.Fprintf(&b, `<path d="%s" %s/>`, d, svgFill("stroke", layer.color))
 		}
 	}
+	// Overlay arcs, grouped by colour, width and side.
+	type overlayKey struct {
+		color ui.Color
+		width float32
+		up    bool
+	}
+	groups := map[overlayKey][]widgets.Pair{}
+	var order []overlayKey
+	for _, o := range s.Overlay {
+		key := overlayKey{o.Color, max(o.Width, 1), o.Up}
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], widgets.Pair{I: o.I, J: o.J})
+	}
+	for _, key := range order {
+		if d := arcPath(groups[key], key.up, false, true); d != "" {
+			fmt.Fprintf(&b, `<path d="%s" %s stroke-width="%s"/>`, d, svgFill("stroke", key.color), svgNum(float64(key.width)))
+		}
+	}
 	b.WriteString(`</g>`)
 	fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(left), svgNum(base), svgNum(left+plotW), svgNum(base), svgLine)
-	axisY := top + plotH
+	if track > 0 {
+		y := top + plotH + 2
+		for index, f := range s.Features {
+			if f.End < start || f.Start > end {
+				continue
+			}
+			x0, x1 := math.Max(x(f.Start), left), math.Min(x(f.End+1), left+plotW)
+			fill := "#d9d9d9"
+			if index%2 == 1 {
+				fill = "#bdbdbd"
+			}
+			fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="16" fill="%s"><title>%s</title></rect>`,
+				svgNum(x0), svgNum(y), svgNum(math.Max(x1-x0, 0.5)), fill, svgText(f.Name))
+			if width := 6.0 * float64(len([]rune(f.Name))); f.Name != "" && x1-x0 > width+4 {
+				fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="middle" font-size="10" fill="%s">%s</text>`,
+					svgNum((x0+x1)/2), svgNum(y+12), svgInk, svgText(f.Name))
+			}
+		}
+	}
+	axisY := top + plotH + track
 	for _, pos := range niceTicks(float64(start), float64(end), 8) {
 		px := x(int(pos))
 		fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(px), svgNum(axisY+2), svgNum(px), svgNum(axisY+6), svgLine)
 		fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="middle" fill="%s">%d</text>`, svgNum(px), svgNum(axisY+18), svgMuted, int(pos))
 	}
-	legend := []struct {
+	type legendItem struct {
 		color ui.Color
 		label string
-	}{{arcColorA, s.LabelA}}
-	if twoSided {
-		legend = append(legend, struct {
-			color ui.Color
-			label string
-		}{arcColorB, s.LabelB}, struct {
-			color ui.Color
-			label string
-		}{arcColorShared, "in both"})
+	}
+	legend := []legendItem{{colorA, s.LabelA}}
+	if len(s.B) > 0 {
+		legend = append(legend, legendItem{colorB, s.LabelB})
+		if s.Mono.A == 0 {
+			legend = append(legend, legendItem{colorShared, "in both"})
+		}
+	}
+	for _, o := range s.Overlay {
+		if o.Up && s.OverlayUpLabel != "" {
+			legend = append(legend, legendItem{o.Color, s.OverlayUpLabel})
+			break
+		}
+	}
+	for _, o := range s.Overlay {
+		if !o.Up && s.OverlayDown != "" {
+			legend = append(legend, legendItem{o.Color, s.OverlayDown})
+			break
+		}
 	}
 	lx := left
 	for _, item := range legend {

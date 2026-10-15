@@ -57,6 +57,8 @@ var ProjectOperations = []string{
 	"read_reference_sequence",
 	"list_comparisons",
 	"read_comparison",
+	"set_reference_annotation",
+	"read_annotation",
 }
 
 // ServiceOptions configures a Service.

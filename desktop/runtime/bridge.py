@@ -314,6 +314,19 @@ def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None)
         if not isinstance(structure_id, str) or not structure_id:
             raise ValueError("structure_id is required")
         return {"ok": True, "path": str(path), **read_structure(path, structure_id)}
+    if operation == "set_reference_annotation":
+        from .annotation import set_reference_annotation
+        path = _valid_project(request)
+        source = _optional_str(request, "source")
+        if source is not None and not is_absolute_path(source):
+            raise ValueError("source must be an absolute path")
+        reference = set_reference_annotation(path, str(request.get("reference_id") or ""), Path(source) if source else None)
+        return {"ok": True, "path": str(path), "reference": reference}
+    if operation == "read_annotation":
+        from .annotation import read_annotation
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path),
+                **read_annotation(path, str(request.get("reference_id") or ""), str(request.get("gene") or ""))}
     if operation == "list_comparisons":
         from .compare import list_comparisons
         path = _valid_project(request)

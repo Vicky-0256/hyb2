@@ -42,6 +42,14 @@ func init() {
 			p.loadList()
 		}
 	})
+	OnTaskFinished(func(a *App, t model.Task) {
+		if t.Kind != "compare" {
+			return
+		}
+		if p, ok := a.pages["structure"].(*structurePage); ok {
+			p.layers.cmpStale = true // reloaded when the page shows
+		}
+	})
 }
 
 // ---- data
@@ -68,6 +76,9 @@ type structureRecord struct {
 	// Bonus is each pair's chimera evidence (HYB bonus), aligned with Pairs.
 	Bonus  []*float64 `json:"bonus"`
 	Energy *float64   `json:"energy"`
+	// mapped, when set, are the pairs moved onto another reference
+	// (stMapRecords); they replace DBN and Pairs.
+	mapped []stPair
 }
 
 // stWeights maps the records' pairs to their chimera bonus.
@@ -146,6 +157,9 @@ func stParseDBN(dbn string, offset int) []stPair {
 }
 
 func stRecordPairs(r structureRecord) []stPair {
+	if r.mapped != nil {
+		return r.mapped
+	}
 	if r.DBN != "" {
 		return stParseDBN(r.DBN, r.WindowStart)
 	}
@@ -366,6 +380,9 @@ type structurePage struct {
 	// target the result it binds saved cards to (set by syncArcs).
 	research *researchPanel
 	target   *researchTarget
+	// layers: B on A's coordinates, differential arcs, gene track
+	layers        stLayers
+	overlayLabels [2]string
 }
 
 func newStructurePage(a *App) *structurePage {
@@ -385,6 +402,7 @@ func (p *structurePage) reset() {
 	p.readErr = map[string]string{}
 	p.pendingPair, p.pairLabels, p.pendingShow = nil, nil, ""
 	p.arcsKey, p.dbnText, p.target = "", "", nil
+	p.layers = newSTLayers()
 }
 
 func (p *structurePage) Show() {
@@ -408,6 +426,10 @@ func (p *structurePage) Show() {
 	}
 	p.askWorkers()
 	p.loadList()
+	if p.layers.comparisons == nil || p.layers.cmpStale {
+		p.layers.cmpStale = false
+		p.loadComparisons()
+	}
 	p.research.Show()
 }
 
@@ -944,7 +966,9 @@ func (p *structurePage) viewer(c *ui.Context) {
 			ui.Text(c, "Loading…").TextColor(t.TextMuted)
 			return
 		}
+		p.layerControls(c, stGene(a))
 		p.syncArcs(a, b)
+		p.arcs.Mono = p.monoColor(t)
 		metaA := p.entry(p.viewA)
 		labelA := "A · " + p.viewA
 		if metaA != nil {
@@ -958,15 +982,31 @@ func (p *structurePage) viewer(c *ui.Context) {
 			}
 		}
 		ui.Row(c).Gap(14).Wrap().Children(func() {
-			stLegend(c, cmpRed, labelA)
+			colorA, colorB := cmpRed, cmpBlue
+			if p.layers.mono {
+				colorA, colorB = t.Text, t.Text
+			}
+			if b != nil && p.layers.mono {
+				labelA, labelB = labelA+" (above)", labelB+" (below)"
+			}
+			stLegend(c, colorA, labelA)
 			if b != nil {
-				stLegend(c, cmpBlue, labelB)
-				stLegend(c, t.TextMuted, "in both")
+				stLegend(c, colorB, labelB)
+				if !p.layers.mono {
+					stLegend(c, t.TextMuted, "in both")
+				}
+			}
+			if len(p.arcs.Overlay) > 0 {
+				stLegend(c, cmpRed, p.overlayLabels[0])
+				stLegend(c, cmpBlue, p.overlayLabels[1])
 			}
 		})
 		height := float32(340)
-		if b != nil {
+		if b != nil || len(p.arcs.Overlay) > 0 {
 			height = 440
+		}
+		if len(p.arcs.Features) > 0 {
+			height += 20
 		}
 		ev := p.arcs.Show(c.Key("st-arcs"), height, cmpRed, cmpBlue, t.TextMuted, "Arc diagram of base pairs")
 		info := fmt.Sprintf("%s–%s · wheel zooms, drag pans, double click resets", FormatNumber(int64(p.arcs.Start)), FormatNumber(int64(p.arcs.End)))
@@ -974,6 +1014,9 @@ func (p *structurePage) viewer(c *ui.Context) {
 			info = "Position " + FormatNumber(int64(ev.Position)) + " · " + info
 		}
 		ui.Text(c, info).FontSize(11).TextColor(t.TextMuted)
+		for _, note := range p.layers.notes {
+			ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+		}
 		if p.stats.DifferentCover {
 			ui.Text(c, "Pair statistics count pairs inside the regions both structures cover.").FontSize(12).TextColor(t.TextMuted)
 		}
@@ -997,19 +1040,49 @@ func stLegend(c *ui.Context, color ui.Color, label string) {
 	})
 }
 
+// stGene is the gene a result was folded on.
+func stGene(r *structureResult) string {
+	if r == nil {
+		return ""
+	}
+	return nameOr(r.Meta.GeneID, r.Structure.GeneID)
+}
+
 // syncArcs rebuilds pairs, statistics and text when what is shown changes.
 func (p *structurePage) syncArcs(a, b *structureResult) {
-	key := p.viewA + "|" + p.viewB + "|" + p.record
+	key := fmt.Sprintf("%s|%s|%s|%d", p.viewA, p.viewB, p.record, p.layers.version)
 	if key == p.arcsKey {
 		return
 	}
 	p.arcsKey = key
+	p.layers.notes = nil
+	geneA := stGene(a)
 	recordsA := stPickRecords(a.Records, p.record)
 	var recordsB []structureRecord
 	if b != nil {
 		recordsB = stPickRecords(b.Records, p.record)
 		if p.record != "all" && len(recordsB) == 0 {
 			recordsB = b.Records
+		}
+		// B folded on another reference: move it onto A's coordinates.
+		if geneB := stGene(b); geneB != "" && geneA != "" && geneB != geneA {
+			m, ok := p.geneMap(geneB, geneA)
+			switch {
+			case ok && m != nil:
+				var dropped int
+				recordsB, dropped = stMapRecords(recordsB, m)
+				note := "B is shown on A's coordinates: " + stMapNote(geneB, geneA, m) + "."
+				if dropped > 0 {
+					note += fmt.Sprintf(" %s pairs of B with an unaligned end are left out.", FormatNumber(int64(dropped)))
+				}
+				p.layers.notes = append(p.layers.notes, note)
+			case p.layers.mapErr[geneB+">"+geneA] != "":
+				p.layers.notes = append(p.layers.notes, "B is not shown: could not align "+geneB+" to "+geneA+": "+p.layers.mapErr[geneB+">"+geneA])
+				recordsB = nil
+			default:
+				p.layers.notes = append(p.layers.notes, "Aligning "+geneB+" to "+geneA+" to show B on A's coordinates…")
+				recordsB = nil
+			}
 		}
 	}
 	pairsA, pairsB, stats := stCompare(recordsA, recordsB, b != nil)
@@ -1053,6 +1126,20 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 	}
 	p.arcs.WeightA, p.arcs.WeightB = weights(pairsA, recordsA), weights(pairsB, recordsB)
 	p.arcs.Shade = p.shade
+	overlay, labels, note, _ := p.overlayArcs(geneA)
+	p.arcs.Overlay, p.overlayLabels = overlay, labels
+	if note != "" {
+		p.layers.notes = append(p.layers.notes, note)
+	}
+	p.arcs.Features = nil
+	if an := p.annotation(geneA); an != nil {
+		p.arcs.Features = an.features
+		if an.err != "" {
+			p.layers.notes = append(p.layers.notes, "Gene annotation: "+an.err)
+		} else if an.note != "" {
+			p.layers.notes = append(p.layers.notes, an.note)
+		}
+	}
 	p.arcs.Start, p.arcs.End = float64(start), float64(end)
 	if end-start < 20 {
 		p.arcs.Start, p.arcs.End = 1, float64(length)

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/egoist/mygo/ui"
+
 	"hyb2desktop/widgets"
 )
 
@@ -262,7 +264,12 @@ func (p *structurePage) exportArcsSVG(a *structureResult) {
 	start, end := int(math.Round(p.arcs.Start)), int(math.Round(p.arcs.End))
 	spec := arcSVG{A: append([]widgets.Pair(nil), p.arcs.A...), B: append([]widgets.Pair(nil), p.arcs.B...),
 		Start: start, End: end, Width: 1000, Title: fmt.Sprintf("%s · %s–%s", gene, FormatNumber(int64(start)), FormatNumber(int64(end))),
-		LabelA: labelA, LabelB: labelB}
+		LabelA: labelA, LabelB: labelB,
+		Overlay: append([]widgets.OverlayArc(nil), p.arcs.Overlay...), OverlayUpLabel: p.overlayLabels[0], OverlayDown: p.overlayLabels[1],
+		Features: append([]widgets.Feature(nil), p.arcs.Features...)}
+	if p.layers.mono {
+		spec.Mono = ui.RGB(34, 34, 34)
+	}
 	name := exportName(".svg", gene, p.viewA)
 	if p.viewB != "" {
 		name = exportName(".svg", gene, p.viewA, "vs", p.viewB)

@@ -37,6 +37,14 @@ def ensure_child():
         note("child.pid", child.pid)
 
 
+def stop_child():
+    """End the child on exit, as the real worker closes its MCP session
+    (Windows cannot kill the children of an already exited process)."""
+    if child is not None and child.poll() is None:
+        child.kill()
+        child.wait()
+
+
 def now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -117,6 +125,7 @@ def handle(req):
                  kind="database_metadata", identity_confirmation="unconfirmed")
         return {"ok": True, "card": c, "request": req}
     if op == "shutdown":
+        stop_child()
         sys.exit(0)
     return {"ok": False, "error": "unsupported evidence operation"}
 
@@ -127,6 +136,7 @@ def main():
         message = json.loads(line)
         response = handle(message["request"])
         print(json.dumps({"id": message["id"], "response": response}), flush=True)
+    stop_child()
 
 
 if __name__ == "__main__":

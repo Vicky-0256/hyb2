@@ -28,6 +28,18 @@ and compute sidecars never wait on the network.
   - `Error querying RNAcentral API: …` for network errors.
 - map_rna_id answers plain text, e.g. `No RNAcentral entry found for external
   ID: hsa-mir-21` (names are not external ids; mapping is advisory only).
+- What leaves the machine (source of 0.1.1 plus an observation): both allowed
+  tools only issue `GET https://rnacentral.org/api/v1/...` with no body —
+  get_rna_description `litsumm/<rna_id>`, map_rna_id `rna/?external_id=<id>`,
+  `rna/<urs>/xrefs[/<taxon>/]`. During the live test (`TestEvidenceLive`,
+  2026-10-15) `lsof` sampled every 0.1 s showed the evidence processes'
+  only sockets as TCP to 193.62.193.83:443 (rnacentral.org, EBI); nothing
+  else was contacted.
+- Taxon changes identity (live, worker directly): map_rna_id
+  `MIMAT0000076` + 9606 → `URS000039ED8D_9606` (hsa-miR-21-5p), + 10090 →
+  `URS000039ED8D_10090` (mmu-miR-21a-5p), both success; `URS000075E9E1` +
+  9606 → "No cross-references found…" (`not_found_or_no_summary`). This is
+  why Go only sends `describe` after the user confirmed id and taxon.
 
 ## Worker protocol (Go ↔ Python)
 

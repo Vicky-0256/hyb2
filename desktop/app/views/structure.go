@@ -357,10 +357,14 @@ type structurePage struct {
 	arcsKey     string
 	stats       stStats
 	dbnText     string
+	// research is the Related research panel below the viewer and
+	// target the result it binds saved cards to (set by syncArcs).
+	research *researchPanel
+	target   *researchTarget
 }
 
 func newStructurePage(a *App) *structurePage {
-	p := &structurePage{a: a}
+	p := &structurePage{a: a, research: newResearchPanel(a)}
 	p.reset()
 	return p
 }
@@ -375,7 +379,7 @@ func (p *structurePage) reset() {
 	p.reading = map[string]bool{}
 	p.readErr = map[string]string{}
 	p.pendingPair, p.pairLabels, p.pendingShow = nil, nil, ""
-	p.arcsKey, p.dbnText = "", ""
+	p.arcsKey, p.dbnText, p.target = "", "", nil
 }
 
 func (p *structurePage) Show() {
@@ -399,6 +403,7 @@ func (p *structurePage) Show() {
 	}
 	p.askWorkers()
 	p.loadList()
+	p.research.Show()
 }
 
 func (p *structurePage) applyOptions(opts map[string]any) {
@@ -661,8 +666,9 @@ func (p *structurePage) View(c *ui.Context) {
 				p.form(c)
 				p.list(c)
 			})
-			ui.Scroll(c.Key("st-main")).Grow(1).Children(func() {
+			ui.Scroll(c.Key("st-main")).Grow(1).Gap(16).Children(func() {
 				p.viewer(c)
+				p.research.View(c, p.researchTarget())
 			})
 		})
 	})
@@ -993,6 +999,15 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 		p.arcs.Start, p.arcs.End = 1, float64(length)
 	}
 	p.dbnText = stDBNText(gene, recordsA)
+	p.target = &researchTarget{StructureID: p.viewA, Record: p.record, Digest: researchDigest(recordsA), Gene: gene}
+}
+
+// researchTarget is the result A shown, if its arcs are current.
+func (p *structurePage) researchTarget() *researchTarget {
+	if p.target == nil || p.viewA == "" || p.target.StructureID != p.viewA || p.target.Record != p.record || p.cache[p.viewA] == nil {
+		return nil
+	}
+	return p.target
 }
 
 func stDBNText(gene string, records []structureRecord) string {

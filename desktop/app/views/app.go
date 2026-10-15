@@ -73,6 +73,7 @@ type App struct {
 	drawerOpen bool
 	prefsOpen  bool
 	prefs      prefsState
+	lookup     lookupPref // external_lookup (evidence.go)
 	start      startState
 	recent     []Recent
 

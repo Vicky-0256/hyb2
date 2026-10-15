@@ -35,6 +35,8 @@ type reportData struct {
 	Conditions                    []reportCondition
 	Tests                         []reportTest
 	Structures                    []reportStructure
+	// Evidence are the saved external cards included in the report.
+	Evidence []reportEvidence
 	// Notes are parts that could not be loaded.
 	Notes []string
 }
@@ -76,6 +78,75 @@ type reportStructure struct {
 	Arcs                                       []widgets.Pair
 	Start, End                                 int
 	Err                                        string
+	// Digests are the evidence binding digests of the result: "all" and
+	// each window "start-end".
+	Digests map[string]string
+}
+
+// reportEvidence is a saved external card the user included in the report.
+type reportEvidence struct {
+	Title, Boundary, Query, Retrieved, Status string
+	Result, Review, Note, Citations, Text     string
+	SourceURL                                 string
+}
+
+// Facts are the card's label / value lines.
+func (e *reportEvidence) Facts() [][2]string {
+	facts := [][2]string{{"Query", e.Query}, {"Retrieved", e.Retrieved}, {"Status", e.Status}, {"Result", e.Result},
+		{"Review", e.Review}, {"Citations", e.Citations}}
+	if e.SourceURL != "" {
+		facts = append(facts, [2]string{"Source", e.SourceURL})
+	}
+	if e.Note != "" {
+		facts = append(facts, [2]string{"Researcher note", e.Note})
+	}
+	return facts
+}
+
+// reportEvidenceNote ends the section: what the cards are and are not.
+const reportEvidenceNote = "Background material from external sources, kept as retrieved. It does not change any HYB2 result, method, parameter or number."
+
+// newReportEvidence describes a card against the report's structures.
+func newReportEvidence(card *model.EvidenceCard, structures []reportStructure) reportEvidence {
+	e := reportEvidence{Title: card.SourceProvider + " · " + card.SourceTool, Boundary: researchHeading(card),
+		Query: researchQuery(card), Status: researchStatusLabel(card.Status), Review: researchReview(card.Review),
+		Text: card.Text(), SourceURL: researchSourceURL(card)}
+	e.Retrieved = "not retrieved"
+	if card.RetrievedAt != nil && *card.RetrievedAt != "" {
+		e.Retrieved = FormatTime(*card.RetrievedAt)
+	}
+	if detail := researchStatusText(card); detail != "" && card.Status != model.EvidenceSuccess {
+		e.Status += " — " + detail
+	}
+	e.Citations = "citations not verified"
+	if card.CitationVerification == "verified" {
+		e.Citations = "verified"
+	}
+	if len(card.SourceIdentifiers) > 0 {
+		e.Citations += " · " + strings.Join(card.SourceIdentifiers, ", ")
+	}
+	if card.Review.Note != nil {
+		e.Note = *card.Review.Note
+	}
+	e.Result = researchBindingText(card.Binding)
+	if b := card.Binding; b != nil {
+		found := false
+		for i := range structures {
+			s := &structures[i]
+			if s.ID != b.StructureID {
+				continue
+			}
+			found = true
+			e.Result = s.Gene + " · " + e.Result
+			if digest := s.Digests[b.Record]; digest != "" && !strings.EqualFold(digest, b.ResultDigest) {
+				e.Result += " (the result changed after the card was saved)"
+			}
+		}
+		if !found {
+			e.Result += " (no longer in the project)"
+		}
+	}
+	return e
 }
 
 // ---- tables (shared by the page and the HTML)
@@ -327,7 +398,8 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		StructureTable                                         reportTableData
 		TestDetails                                            []reportHTMLTest
 		StructureDetails                                       []reportHTMLStructure
-	}{reportData: d, Facts: d.projectFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
+		EvidenceNote                                           string
+	}{reportData: d, EvidenceNote: reportEvidenceNote, Facts: d.projectFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
 		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable()}
 	for i := range d.Tests {
 		x := &d.Tests[i]
@@ -384,6 +456,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 .stat span { color: var(--muted); font-size: 12px; }
 td .sub { color: var(--muted); font-size: 12px; }
 .up { color: var(--red); } .down { color: var(--blue); }
+.evidence { border: 1px solid var(--line); border-radius: 10px; padding: 4px 16px 14px; margin-top: 16px; }
+.boundary { display: inline-block; margin: 0 0 10px; padding: 3px 8px; border-radius: 6px; background: #fff8c5; color: #6f4e00; font-size: 13px; font-weight: 600; }
+blockquote { margin: 10px 0 0; padding: 8px 12px; background: var(--soft); border-left: 3px solid var(--line); white-space: pre-wrap; }
 .test, .structure { border: 1px solid var(--line); border-radius: 10px; padding: 4px 16px 14px; margin-top: 16px; }
 .cols { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
 .cols > figure { flex: 0 0 auto; }
@@ -395,7 +470,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 @media print {
   main { max-width: none; padding: 0; }
   section { break-inside: auto; }
-  .test, .structure, figure, tr { break-inside: avoid; }
+  .test, .structure, .evidence, figure, tr { break-inside: avoid; }
   h2, h3 { break-after: avoid; }
   .table { overflow: visible; }
 }
@@ -467,6 +542,20 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 {{if .Figure}}<figure>{{.Figure}}<figcaption>{{.Caption}}</figcaption></figure>{{end}}
 </div>
 {{end}}{{else}}<p class="muted">No structure has been folded.</p>{{end}}
+</section>
+
+<section id="external-sources">
+<h2>External sources and researcher notes</h2>
+{{if .Evidence}}{{range .Evidence}}<div class="evidence">
+<h3>{{.Title}}</h3>
+<p class="boundary">{{.Boundary}}</p>
+<dl class="facts">{{range .Facts}}
+<dt>{{index . 0}}</dt><dd>{{index . 1}}</dd>{{end}}
+</dl>
+{{if .Text}}<blockquote>{{.Text}}</blockquote>{{end}}
+</div>
+{{end}}<p class="meta">{{.EvidenceNote}}</p>
+{{else}}<p class="muted">No external source is included in this report.</p>{{end}}
 </section>
 
 <footer>

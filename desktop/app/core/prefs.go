@@ -1,6 +1,7 @@
 package core
 
-// Preferences (contract R6): the resource budget and the UI theme, stored in
+// Preferences (contract R6): the resource budget, the UI theme and whether
+// external public-data lookups are allowed (EVIDENCE.md), stored in
 // preferences.json in the application config directory. Unknown keys are
 // preserved so later preferences can share the file.
 //
@@ -184,6 +185,13 @@ func LoadTheme(path string) string {
 	return "system"
 }
 
+// LoadExternalLookup is the "external_lookup" preference: whether the
+// evidence worker may query RNAcentral. Absent or invalid means false.
+func LoadExternalLookup(path string) bool {
+	on, _ := readPrefs(path)["external_lookup"].(bool)
+	return on
+}
+
 func validTheme(theme string) bool {
 	for _, t := range Themes {
 		if t == theme {
@@ -202,18 +210,19 @@ func DescribePreferences(path string) Obj {
 		mem = mb
 	}
 	return normalize(Obj{
-		"ok":            true,
-		"path":          path,
-		"budget":        LoadBudget(path),
-		"custom_budget": custom && budget != nil,
-		"theme":         LoadTheme(path),
-		"defaults":      Obj{"budget": DefaultBudget(), "theme": "system"},
-		"system":        Obj{"cpus": SystemCPUs(), "mem_mb": mem},
+		"ok":              true,
+		"path":            path,
+		"budget":          LoadBudget(path),
+		"custom_budget":   custom && budget != nil,
+		"theme":           LoadTheme(path),
+		"external_lookup": LoadExternalLookup(path),
+		"defaults":        Obj{"budget": DefaultBudget(), "theme": "system", "external_lookup": false},
+		"system":          Obj{"cpus": SystemCPUs(), "mem_mb": mem},
 	})
 }
 
 // ApplyPreferences applies a patch `{budget?: {cpu?, mem_mb?} | null,
-// theme?: "system"|"light"|"dark" | null}`, writes the file atomically and
+// theme?: "system"|"light"|"dark" | null, external_lookup?: bool | null}`, writes the file atomically and
 // returns the new budget. Omitted fields keep their value; null resets to
 // the default. Unknown keys and invalid values are rejected without
 // touching the file.
@@ -222,7 +231,7 @@ func ApplyPreferences(path string, patch Obj) (Budget, error) {
 		return Budget{}, errors.New("cannot resolve the application config directory")
 	}
 	for key := range patch {
-		if key != "budget" && key != "theme" {
+		if key != "budget" && key != "theme" && key != "external_lookup" {
 			return Budget{}, fmt.Errorf("unknown preference %q", key)
 		}
 	}
@@ -274,6 +283,15 @@ func ApplyPreferences(path string, patch Obj) (Budget, error) {
 			stored["theme"] = theme
 		} else {
 			return Budget{}, fmt.Errorf("theme must be one of %s", strings.Join(Themes, ", "))
+		}
+	}
+	if raw, present := patch["external_lookup"]; present {
+		if raw == nil {
+			delete(stored, "external_lookup")
+		} else if on, ok := raw.(bool); ok {
+			stored["external_lookup"] = on
+		} else {
+			return Budget{}, errors.New("external_lookup must be true, false or null")
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

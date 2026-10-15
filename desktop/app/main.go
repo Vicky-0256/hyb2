@@ -50,7 +50,15 @@ func main() {
 	resources, _ := mygo.App.Path(mygo.PathResources)
 	cache, _ := mygo.App.Path(mygo.PathCache)
 	userData, _ := mygo.App.Path(mygo.PathUserData)
-	service := core.NewService(nil, core.ServiceOptions{PreferencesPath: filepath.Join(userData, "preferences.json")})
+	logs, _ := mygo.App.Path(mygo.PathLogs)
+	// The evidence worker (EVIDENCE.md) starts on the first external
+	// lookup and stops with the other sidecars in service.Shutdown.
+	options := core.ServiceOptions{PreferencesPath: filepath.Join(userData, "preferences.json")}
+	if cache != "" && logs != "" {
+		options.EvidenceCacheDir = filepath.Join(cache, "evidence")
+		options.EvidenceLogDir = logs
+	}
+	service := core.NewService(nil, options)
 	service.SetPending(true)
 	app := views.New(service, nil, userData)
 	mygo.App.WhenReady(func() {

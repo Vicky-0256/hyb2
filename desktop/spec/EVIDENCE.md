@@ -73,7 +73,7 @@ calls per second.
   "content_kind": "external_ai_summary" | "database_metadata",
   "display_text": "...",           // null unless success (or mapping text)
   "raw_response_digest": "sha256:<hex of the raw tool text>",
-  "raw_response_local_ref": null,  // set by the store (cards/<id>.raw.txt)
+  "raw_response_local_ref": null,  // set by Go on attach (evidence/<id>.raw.txt)
   "source_identifiers": ["PMC5549916", ...],   // only ids present in the text
   "citation_verification": "not_checked",
   "relation_to_current_structure": "background_only",
@@ -110,6 +110,21 @@ sent by Go); the worker never decides identity.
   adapter_version)`, 7 days; Preferences can clear it.
 - Preferences: `external_lookup` (bool, default **false**). With it off, Go
   refuses every evidence call before starting the worker.
+- Go implementation notes (clarifications, 2026-10-15):
+  - `describe` / `map_id` responses may carry `raw_text` (the raw tool
+    text) next to `card`; Go keeps it only when its sha256 equals
+    `raw_response_digest` and writes it to `<project>/evidence/<id>.raw.txt`
+    on attach (`raw_response_local_ref: "evidence/<id>.raw.txt"`).
+  - Gated on `external_lookup`: status, describe, map_id and attaching a
+    card. Listing, updating, deleting saved cards, clearing the cache and
+    cancelling stay available with it off (local only).
+  - Go resets `review`, `citation_verification`, `binding` and
+    `raw_response_local_ref` on every worker card. Review states:
+    `unreviewed`, `reviewed`, `rejected`, set only by the user; `review.note`
+    (optional) is the researcher's note shown in the report.
+  - Only `success`, `summary_unavailable` and `not_found_or_no_summary`
+    cards can be attached. `source_url` is kept only when it starts with
+    `https://rnacentral.org/`.
 - Report: section "External sources and researcher notes", only cards with
   `include_in_report`, showing provider, tool, query, retrieval date, status,
   "External AI literature summary — not a validation of this structure",

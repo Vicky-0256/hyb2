@@ -1,5 +1,7 @@
 package core
 
+import "hyb2desktop/model"
+
 // Obj is a JSON object as the bridge sends and receives it.
 type Obj = map[string]any
 
@@ -85,6 +87,43 @@ type Backend interface {
 	// preferences_get / preferences_set.
 	Preferences() (Obj, error)
 	SetPreferences(patch Obj) (Obj, error)
+
+	// External evidence (desktop/spec/EVIDENCE.md), served by a separate
+	// evidence worker that Go starts on demand. Every worker call fails
+	// with ErrExternalLookupOff, before the worker starts, while the
+	// external_lookup preference is off. There is deliberately no generic
+	// tool/arguments entry: only these fixed operations exist.
+
+	// EvidenceStatus is the worker's versions and allowed tools; connect
+	// starts the RNAcentral MCP server (the Preferences connection test).
+	EvidenceStatus(connect bool) (model.EvidenceStatus, error)
+	// DescribeRNA reads RNAcentral's existing literature summary for a
+	// public identifier (get_rna_description). Only rnaID and taxon (may be
+	// empty) leave the machine. Without confirmed (the user confirmed the
+	// identifier and species) it answers an identity_unconfirmed card
+	// without network. force bypasses the worker's cache. Timeouts and
+	// cancellation answer timeout / cancelled cards.
+	DescribeRNA(projectPath, rnaID, taxon string, confirmed, force bool) (model.EvidenceCard, error)
+	// MapRNAID checks an external identifier within a taxon (map_rna_id);
+	// the mapping is advisory and never decides identity.
+	MapRNAID(identifier, taxon string) (model.EvidenceCard, error)
+	// CancelEvidence cancels the running lookup by killing the worker and
+	// its MCP child; the next call starts them again.
+	CancelEvidence()
+	// ListEvidence is the project's saved cards (<project>/evidence/),
+	// newest first.
+	ListEvidence(projectPath string) ([]model.EvidenceCard, error)
+	// AttachEvidence saves a card bound to one structure result (Go sets
+	// project_id and attached_at; review starts unreviewed) and its raw
+	// tool text when known.
+	AttachEvidence(projectPath string, card model.EvidenceCard, binding model.EvidenceBinding) (model.EvidenceCard, error)
+	// UpdateEvidence sets whether a saved card is in the report and, when
+	// update.Review is set, the user's review state and note.
+	UpdateEvidence(projectPath, id string, update model.EvidenceUpdate) (model.EvidenceCard, error)
+	// DeleteEvidence removes a saved card and its raw text.
+	DeleteEvidence(projectPath, id string) error
+	// ClearEvidenceCache empties the worker's response cache.
+	ClearEvidenceCache() error
 
 	// Shutdown marks running tasks interrupted, stops the sidecars and
 	// refuses later calls (application exit).

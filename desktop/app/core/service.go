@@ -13,10 +13,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
 	"sync"
+
+	"hyb2desktop/model"
 )
 
 // AnalysisOperations are the read-only analysis queries (contract R3/R6),
@@ -59,6 +62,11 @@ type ServiceOptions struct {
 	// Logf receives errors nobody waits for (register_task_run, warm-up);
 	// nil uses log.Printf.
 	Logf func(format string, args ...any)
+	// EvidenceCacheDir and EvidenceLogDir are the evidence worker's
+	// HYB2_EVIDENCE_CACHE (<app cache>/evidence) and HYB2_EVIDENCE_LOG
+	// (<app logs>).
+	EvidenceCacheDir string
+	EvidenceLogDir   string
 }
 
 // Service is the Backend over a Runtime and a task Scheduler.
@@ -71,6 +79,7 @@ type Service struct {
 	logf      func(format string, args ...any)
 	// taskCommand builds a task's child command; tests replace it.
 	taskCommand func(rt *Runtime, task *Prepared) *exec.Cmd
+	evidence    *EvidenceService
 }
 
 var _ Backend = (*Service)(nil)
@@ -85,12 +94,29 @@ func NewService(rt *Runtime, opts ServiceOptions) *Service {
 	tasks := NewScheduler()
 	// A missing or invalid preferences file means the default budget.
 	tasks.SetBudget(LoadBudget(opts.PreferencesPath))
-	return &Service{
+	s := &Service{
 		rt: rt, tasks: tasks, prefsPath: opts.PreferencesPath, logf: logf,
 		taskCommand: func(rt *Runtime, task *Prepared) *exec.Cmd {
 			return BridgeCommand(rt.Bridge.Python, rt.Bridge.Root, task.RequestFile, rt.ComputeEnv)
 		},
 	}
+	cacheDir, logDir := opts.EvidenceCacheDir, opts.EvidenceLogDir
+	s.evidence = newEvidenceService(func() (SidecarSpec, error) {
+		rt, err := s.runtime()
+		if err != nil {
+			return SidecarSpec{}, err
+		}
+		if cacheDir == "" || logDir == "" {
+			return SidecarSpec{}, errors.New("the evidence cache and log directories are not set")
+		}
+		for _, dir := range []string{cacheDir, logDir} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return SidecarSpec{}, fmt.Errorf("could not create %s: %w", dir, err)
+			}
+		}
+		return EvidenceSpec(rt.Bridge, cacheDir, logDir), nil
+	}, func() bool { return LoadExternalLookup(s.prefsPath) }, cacheDir)
+	return s
 }
 
 // Scheduler is the task scheduler (for views that need the budget).
@@ -359,7 +385,8 @@ func (s *Service) Preferences() (Obj, error) {
 }
 
 // SetPreferences is preferences_set: `{budget?: {cpu?, mem_mb?} | null,
-// theme?: ... | null}`. A new budget applies at once and starts queued
+// theme?: ... | null, external_lookup?: bool | null}`. Turning
+// external_lookup off cancels a running lookup. A new budget applies at once and starts queued
 // tasks that now fit.
 func (s *Service) SetPreferences(patch Obj) (Obj, error) {
 	budget, err := ApplyPreferences(s.prefsPath, patch)
@@ -367,6 +394,9 @@ func (s *Service) SetPreferences(patch Obj) (Obj, error) {
 		return nil, err
 	}
 	s.tasks.SetBudget(budget)
+	if !LoadExternalLookup(s.prefsPath) {
+		s.evidence.Cancel()
+	}
 	return DescribePreferences(s.prefsPath), nil
 }
 
@@ -389,6 +419,7 @@ func (s *Service) WarmUp() {
 // Shutdown marks running and queued tasks interrupted (killing their
 // process trees), then stops the sidecars; later calls fail.
 func (s *Service) Shutdown() {
+	s.evidence.Shutdown()
 	s.tasks.ShutdownAll()
 	s.rtMu.RLock()
 	rt := s.rt
@@ -397,3 +428,49 @@ func (s *Service) Shutdown() {
 		rt.Shutdown()
 	}
 }
+
+// ---- external evidence (EVIDENCE.md)
+
+// EvidenceStatus asks the evidence worker for its versions; connect also
+// starts the RNAcentral MCP server and lists its tools.
+func (s *Service) EvidenceStatus(connect bool) (model.EvidenceStatus, error) {
+	return s.evidence.Status(connect)
+}
+
+// DescribeRNA is get_rna_description. Only rnaID and taxon reach the
+// worker; projectPath is not sent. Without confirmed the answer is an
+// identity_unconfirmed card made locally, without network.
+func (s *Service) DescribeRNA(projectPath, rnaID, taxon string, confirmed, force bool) (model.EvidenceCard, error) {
+	return s.evidence.Describe(rnaID, taxon, confirmed, force)
+}
+
+// MapRNAID is map_rna_id (advisory; the taxon is required).
+func (s *Service) MapRNAID(identifier, taxon string) (model.EvidenceCard, error) {
+	return s.evidence.Map(identifier, taxon)
+}
+
+// CancelEvidence cancels the running lookup.
+func (s *Service) CancelEvidence() { s.evidence.Cancel() }
+
+// ListEvidence reads <project>/evidence/.
+func (s *Service) ListEvidence(projectPath string) ([]model.EvidenceCard, error) {
+	return s.evidence.List(projectPath)
+}
+
+// AttachEvidence saves a card bound to a structure result.
+func (s *Service) AttachEvidence(projectPath string, card model.EvidenceCard, binding model.EvidenceBinding) (model.EvidenceCard, error) {
+	return s.evidence.Attach(projectPath, card, binding)
+}
+
+// UpdateEvidence changes a saved card's report inclusion and review.
+func (s *Service) UpdateEvidence(projectPath, id string, update model.EvidenceUpdate) (model.EvidenceCard, error) {
+	return s.evidence.Update(projectPath, id, update)
+}
+
+// DeleteEvidence removes a saved card.
+func (s *Service) DeleteEvidence(projectPath, id string) error {
+	return s.evidence.Delete(projectPath, id)
+}
+
+// ClearEvidenceCache empties the worker's response cache.
+func (s *Service) ClearEvidenceCache() error { return s.evidence.ClearCache() }

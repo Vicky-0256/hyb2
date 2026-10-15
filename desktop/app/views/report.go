@@ -198,6 +198,17 @@ func gatherReport(b core.Backend, in reportInput) *reportData {
 			d.Structures = append(d.Structures, reportReadStructure(b, pr, e, label))
 		}
 	}
+
+	// External sources the user included (EVIDENCE.md).
+	if cards, err := b.ListEvidence(pr.Path); err != nil {
+		d.Notes = append(d.Notes, "Could not read the external sources: "+err.Error())
+	} else {
+		for i := range cards {
+			if cards[i].InReport() {
+				d.Evidence = append(d.Evidence, newReportEvidence(&cards[i], d.Structures))
+			}
+		}
+	}
 	return d
 }
 
@@ -273,7 +284,9 @@ func reportReadStructure(b core.Backend, pr *model.Project, e reportStructureEnt
 		s.Err = err.Error()
 		return s
 	}
+	s.Digests = map[string]string{"all": researchDigest(result.Records)}
 	for _, r := range result.Records {
+		s.Digests[fmt.Sprintf("%d-%d", r.WindowStart, r.WindowEnd)] = researchDigest([]structureRecord{r})
 		start, end := r.span()
 		if s.Start == 0 || start < s.Start {
 			s.Start = start
@@ -350,6 +363,7 @@ func (p *reportPage) View(c *ui.Context) {
 					}
 				}
 			})
+			Card(c, "External sources and researcher notes", func() { reportEvidenceView(c, d) })
 			Card(c, "Runtime", func() { reportFacts(c, d.runtimeFacts()) })
 		})
 	})
@@ -388,6 +402,26 @@ func (p *reportPage) testsView(c *ui.Context, d *reportData) {
 			reportTable(c, "top-"+x.ID, x.topTable(), "")
 		})
 	}
+}
+
+func reportEvidenceView(c *ui.Context, d *reportData) {
+	t := c.Theme()
+	if len(d.Evidence) == 0 {
+		ui.Text(c, "No external source is included. Save a card from Structure › Related research and switch on “Include in report”.").TextColor(t.TextMuted)
+		return
+	}
+	for i := range d.Evidence {
+		e := &d.Evidence[i]
+		ui.Column(c.Key(fmt.Sprint("evidence-", i))).Gap(8).Padding(12, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+			ui.Text(c, e.Title).FontSize(16).Bold()
+			ui.Text(c, e.Boundary).Bold().Padding(4, 8).Radius(6).Background(t.Warning.Alpha(0.14))
+			reportFacts(c, e.Facts())
+			if e.Text != "" {
+				ui.Text(c, e.Text).Padding(8, 10).Radius(6).Background(t.Surface)
+			}
+		})
+	}
+	ui.Text(c, reportEvidenceNote).FontSize(12).TextColor(t.TextMuted)
 }
 
 // reportFacts shows label / value lines.

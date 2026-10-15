@@ -25,12 +25,25 @@ type SidecarSpec struct {
 	Program string
 	Args    []string
 	Dir     string
-	Env     []string // appended to os.Environ()
+	Env     []string // appended to os.Environ(), or the whole environment with CleanEnv
 	Timeout time.Duration
+	// CleanEnv gives the process only Env, not the shell's environment.
+	CleanEnv bool
+	// Group starts the process as the leader of its own process group (a
+	// new process group on Windows); a timeout, Cancel or Shutdown kills
+	// the whole tree, children included.
+	Group bool
 }
+
+// Errors a request ends with when the sidecar was killed on purpose.
+var (
+	ErrSidecarTimeout   = errors.New("sidecar timed out")
+	ErrSidecarCancelled = errors.New("request cancelled")
+)
 
 type proc struct {
 	cmd    *exec.Cmd
+	group  bool
 	stdin  io.WriteCloser
 	lines  chan string
 	done   chan struct{} // closed when stdout reaches EOF
@@ -55,6 +68,9 @@ func (p *proc) exited() bool {
 
 func (p *proc) kill() {
 	if p.cmd.Process != nil {
+		if p.group {
+			_ = killTree(p.cmd.Process.Pid)
+		}
 		_ = p.cmd.Process.Kill()
 	}
 	_ = p.cmd.Wait()
@@ -80,6 +96,10 @@ type Sidecar struct {
 	proc   *proc
 	nextID uint64
 	closed bool
+	// cancel is the running request's cancel channel (guarded by cancelMu,
+	// not mu, which the request holds while it waits).
+	cancelMu sync.Mutex
+	cancel   chan struct{}
 }
 
 func NewSidecar(spec SidecarSpec) *Sidecar {
@@ -89,8 +109,15 @@ func NewSidecar(spec SidecarSpec) *Sidecar {
 func (s *Sidecar) spawn() (*proc, error) {
 	cmd := exec.Command(s.spec.Program, s.spec.Args...)
 	cmd.Dir = s.spec.Dir
-	cmd.Env = append(os.Environ(), s.spec.Env...)
+	if s.spec.CleanEnv {
+		cmd.Env = append([]string{}, s.spec.Env...)
+	} else {
+		cmd.Env = append(os.Environ(), s.spec.Env...)
+	}
 	hideWindow(cmd)
+	if s.spec.Group {
+		newProcessGroup(cmd)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -106,7 +133,7 @@ func (s *Sidecar) spawn() (*proc, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("could not start desktop Python %s sidecar (%s): %w", s.spec.Name, s.spec.Program, err)
 	}
-	p := &proc{cmd: cmd, stdin: stdin, lines: make(chan string, 16), done: make(chan struct{})}
+	p := &proc{cmd: cmd, group: s.spec.Group, stdin: stdin, lines: make(chan string, 16), done: make(chan struct{})}
 	go func() {
 		reader := bufio.NewReaderSize(stdout, 1<<20)
 		for {
@@ -178,10 +205,23 @@ func (s *Sidecar) Request(request any) (json.RawMessage, error) {
 		s.proc.kill()
 		s.proc = nil
 	}
+	cancel := make(chan struct{})
+	s.cancelMu.Lock()
+	s.cancel = cancel
+	s.cancelMu.Unlock()
+	defer func() {
+		s.cancelMu.Lock()
+		s.cancel = nil
+		s.cancelMu.Unlock()
+	}()
 	timer := time.NewTimer(s.spec.Timeout)
 	defer timer.Stop()
 	for {
 		select {
+		case <-cancel:
+			s.proc.kill()
+			s.proc = nil
+			return nil, fmt.Errorf("%s sidecar: %w", s.spec.Name, ErrSidecarCancelled)
 		case text := <-s.proc.lines:
 			if response, ok, err := match(text, id); ok {
 				return response, err
@@ -211,7 +251,7 @@ func (s *Sidecar) Request(request any) (json.RawMessage, error) {
 		case <-timer.C:
 			s.proc.kill()
 			s.proc = nil
-			return nil, fmt.Errorf("%s sidecar timed out after %d s and was restarted", s.spec.Name, int(s.spec.Timeout.Seconds()))
+			return nil, fmt.Errorf("%s sidecar timed out after %d s and was restarted: %w", s.spec.Name, int(s.spec.Timeout.Seconds()), ErrSidecarTimeout)
 		}
 	}
 }
@@ -230,6 +270,29 @@ func match(text string, id uint64) (json.RawMessage, bool, error) {
 		return nil, true, errors.New("bridge response is missing `response`")
 	}
 	return message.Response, true, nil
+}
+
+// Cancel ends the running request, if any, by killing the process (its
+// process group with Group); the request returns ErrSidecarCancelled and
+// the next one starts a new process.
+func (s *Sidecar) Cancel() {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	if s.cancel != nil {
+		close(s.cancel)
+		s.cancel = nil
+	}
+}
+
+// Stop kills an idle process (the next request starts a new one); it waits
+// for a running request to end first.
+func (s *Sidecar) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.proc != nil {
+		s.proc.shutdown()
+		s.proc = nil
+	}
 }
 
 // Shutdown stops the process and refuses later requests (application exit).

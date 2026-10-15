@@ -752,9 +752,12 @@ func (s *Scheduler) monitor(m started) {
 	} else {
 		waitError = nil
 	}
-	if e.status == "cancelled" && waitError == nil && e.exitCode != nil && *e.exitCode == 0 {
-		// The cancel came after the child had already exited cleanly (a
-		// killed child cannot exit 0): its outputs are complete.
+	if e.status == "cancelled" && waitError == nil && e.exitCode != nil && *e.exitCode == 0 &&
+		isRegularFile(filepath.Join(m.runDir, "result.json")) {
+		// The child finished as the cancel landed: it wrote its result
+		// (atomically, last) and exited 0, so its outputs are complete.
+		// Exit 0 alone is not enough: a killed group's parent can exit 0
+		// once its children die.
 		e.status, e.err = "succeeded", nil
 	}
 	if slices.Contains(activeStates, e.status) {

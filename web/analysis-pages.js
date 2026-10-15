@@ -159,9 +159,21 @@
     const contact = state.contact;
     const rnas = state.summary.rnaNames || [];
     const chimeraTypes = state.summary.chimeraTypes || [];
-    const matrix = contact.rnaX && contact.rnaY
-      ? (contact.matrix || window.Hyb2Data.buildContactMatrix(state.records || [], contact))
-      : null;
+    // With the slice scheduler (analysis-ui.js) the matrix is built off the
+    // render path; until it lands the previous map stays dimmed, or a
+    // placeholder of the same size is shown on first entry.
+    const scheduler = window.Hyb2ContactBuild;
+    let matrix = null;
+    let building = false;
+    if (contact.rnaX && contact.rnaY) {
+      if (scheduler && (!contact.matrix || contact.matrixStale)) {
+        scheduler.request(state);
+        building = true;
+        matrix = contact.matrix;
+      } else {
+        matrix = contact.matrix || window.Hyb2Data.buildContactMatrix(state.records || [], contact);
+      }
+    }
     contact.matrix = matrix;
     const budgetHint = matrix && matrix.resourceBudget
       ? "Adaptive browser budget: up to " + format(matrix.resourceBudget.maximumCells) + " cells / " + format(matrix.resourceBudget.maximumBinContributions) + " bin contributions. "
@@ -217,10 +229,10 @@
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset map</button><button class="quiet-button" type="button" data-feature-action="reset-contact-zoom">Reset zoom</button><span class="control-hint">' + escape(budgetHint) + 'Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click or Reset zoom returns to the full extent.</span></div>',
       "</section>",
       matrix && matrix.cells.length ? [
-        '<section class="contact-workbench' + (contact.updating ? " is-updating" : "") + '"' + (contact.updating ? ' aria-busy="true"' : "") + '>',
+        '<section class="contact-workbench' + (building ? " is-updating" : "") + '"' + (building ? ' aria-busy="true"' : "") + '>',
         '<div class="contact-navigator contact-workbench-main" aria-label="Interactive contact map">',
         renderContactStage("overview", "Contact map", "Drag to select a region. Click a cell to zoom and inspect it.", contact.overviewSelection, contact, matrix),
-        contact.updating ? '<div class="contact-updating" role="status"><span></span>Updating map…</div>' : "",
+        building ? '<div class="contact-updating" role="status"><span></span>Updating map… <strong data-contact-progress>0%</strong></div>' : "",
         "</div>",
         '<aside class="contact-workbench-side">',
         renderContactSelection(contact, matrix, selectedRecords),
@@ -232,7 +244,7 @@
         "</aside>",
         "</section>",
         contact.showDataTable ? '<section class="data-card contact-data-card">' + renderContactDataTable(matrix) + "</section>" : ""
-      ].join("") : renderNoContactData(contact, matrix),
+      ].join("") : (building ? renderContactBuilding() : renderNoContactData(contact, matrix)),
       "      <section class=\"method-note\"><strong>Method</strong><span>Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.</span></section>"
     ].join("");
   }
@@ -284,6 +296,19 @@
         return "<tr><td>" + range(cell.x, cell.x + matrix.binSize - 1) + "</td><td>" + range(cell.y, cell.y + matrix.binSize - 1) + "</td><td>" + format(cell.records) + "</td><td>" + format(cell.support) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>"
+    ].join("");
+  }
+
+  function renderContactBuilding() {
+    return [
+      '<section class="contact-workbench is-building" aria-busy="true">',
+      '<div class="contact-navigator contact-workbench-main"><article class="contact-stage data-card contact-stage-overview">',
+      '<div class="contact-stage-heading"><div><span class="drawer-kicker">Contact map</span><h2>Building map</h2></div></div>',
+      '<p class="contact-stage-note">Binning interaction arms locally in this tab.</p>',
+      '<div class="canvas-wrap contact-stage-canvas-wrap contact-building-surface"><div class="contact-updating" role="status"><span></span>Building map… <strong data-contact-progress>0%</strong></div></div>',
+      "</article></div>",
+      '<aside class="contact-workbench-side"><aside class="selection-card data-card"><span class="drawer-kicker">Selected region</span><h2>Select a heatmap cell</h2><p>The map is being prepared.</p></aside></aside>',
+      "</section>"
     ].join("");
   }
 

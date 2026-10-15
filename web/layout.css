@@ -127,6 +127,29 @@
   transform: translate(-50%, -50%);
 }
 
+.contact-updating strong {
+  min-width: 4ch;
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* First build: a placeholder with the map's footprint, so nothing jumps
+   when the canvas arrives. */
+.contact-building-surface {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  background:
+    linear-gradient(110deg, transparent 30%, color-mix(in srgb, var(--surface) 70%, transparent) 50%, transparent 70%) 0 0 / 250% 100%,
+    var(--surface-subtle);
+  animation: layout-shimmer 1.4s linear infinite;
+}
+
+@keyframes layout-shimmer {
+  from { background-position: 150% 0, 0 0; }
+  to { background-position: -100% 0, 0 0; }
+}
+
 .contact-updating span {
   width: 14px;
   height: 14px;

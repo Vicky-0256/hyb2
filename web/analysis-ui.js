@@ -17,6 +17,7 @@
   }());
 
   function afterRender(state, api) {
+    contactJobApi = api;
     if (state.activePage === "interactions") {
       bindVirtualTable(state);
     }
@@ -37,40 +38,91 @@
     }
   }
 
-  // The matrix is rebuilt synchronously inside the page render and takes
-  // ~100 ms on larger inputs. Paint the previous map dimmed first so the
-  // control responds at once, then rebuild on the next frame.
+  // Changing a map control keeps the current map on screen, dimmed and
+  // marked stale; the page renderer asks the slice scheduler below for the
+  // new matrix and the map swaps in when it is ready.
   function rebuildContact(state, api) {
     const contact = state.contact;
-    const previous = contact.matrix;
     contact.selection = null;
     contact.overviewSelection = null;
     contact.zoomSelection = null;
     contact.overviewView = null;
     contact.zoomView = null;
     contact.detailView = null;
-    contact.rebuildToken = (contact.rebuildToken || 0) + 1;
-    const token = contact.rebuildToken;
-    if (!previous || !previous.cells || !previous.cells.length) {
-      contact.updating = false;
+    if (contact.matrix && contact.matrix.cells && contact.matrix.cells.length) {
+      contact.matrixStale = true;
+    } else {
       contact.matrix = null;
-      api.render();
+      contact.matrixStale = false;
+    }
+    api.render();
+  }
+
+  // Contact matrices are built in ~10 ms slices, one task each, so painting
+  // and input can run between them. A MessageChannel task avoids the 4 ms
+  // clamp that nested setTimeout calls get.
+  const contactJob = { builder: null, key: "", records: null, state: null };
+  let contactJobApi = null;
+  const contactSliceChannel = typeof MessageChannel === "function" ? new MessageChannel() : null;
+  if (contactSliceChannel) {
+    contactSliceChannel.port1.onmessage = runContactSlice;
+  }
+
+  function contactJobKey(contact) {
+    return [contact.rnaX, contact.rnaY, contact.binSize, contact.measure, contact.colourCap, contact.customCap,
+      contact.scale, contact.orientation, contact.chimeraType, contact.homodimer].join("\u0001");
+  }
+
+  function requestContactMatrix(state) {
+    const records = state.records || [];
+    const key = contactJobKey(state.contact);
+    if (contactJob.builder && contactJob.key === key && contactJob.records === records && contactJob.state === state) {
       return;
     }
-    contact.updating = true;
-    contact.matrix = previous;
-    api.render();
-    window.requestAnimationFrame(function () {
-      window.setTimeout(function () {
-        if (contact.rebuildToken !== token) {
-          return;
-        }
-        contact.updating = false;
-        contact.matrix = null;
-        api.render();
-      }, 0);
-    });
+    contactJob.builder = window.Hyb2Data.createContactMatrixBuilder(records, state.contact);
+    contactJob.key = key;
+    contactJob.records = records;
+    contactJob.state = state;
+    queueContactSlice();
   }
+
+  function queueContactSlice() {
+    if (contactSliceChannel) {
+      contactSliceChannel.port2.postMessage(0);
+    } else {
+      window.setTimeout(runContactSlice, 0);
+    }
+  }
+
+  function runContactSlice() {
+    const builder = contactJob.builder;
+    const state = contactJob.state;
+    if (!builder || !state) {
+      return;
+    }
+    // Inputs changed under the job: drop it; the render that follows the
+    // change requests a fresh one.
+    if (contactJobKey(state.contact) !== contactJob.key || (state.records || []) !== contactJob.records) {
+      contactJob.builder = null;
+      return;
+    }
+    if (!builder.step(performance.now() + 10)) {
+      const progress = document.querySelector("[data-contact-progress]");
+      if (progress) {
+        progress.textContent = Math.round(builder.progress() * 100) + "%";
+      }
+      queueContactSlice();
+      return;
+    }
+    contactJob.builder = null;
+    state.contact.matrix = builder.result();
+    state.contact.matrixStale = false;
+    if (contactJobApi && state.activePage === "contact-map") {
+      contactJobApi.render();
+    }
+  }
+
+  window.Hyb2ContactBuild = { request: requestContactMatrix };
 
   function renderAndFocus(api, selector) {
     api.render();

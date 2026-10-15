@@ -68,7 +68,7 @@
     const data = window.Hyb2Data || {};
     const derived = { contact: false, viewpoint: false, region: false, comparison: false };
 
-    if (reportState.contact && !reportState.contact.matrix && reportState.contact.rnaX && reportState.contact.rnaY && reportState.records.length && typeof data.buildContactMatrix === "function") {
+    if (reportState.contact && (!reportState.contact.matrix || reportState.contact.matrixStale) && reportState.contact.rnaX && reportState.contact.rnaY && reportState.records.length && typeof data.buildContactMatrix === "function") {
       try {
         reportState.contact.matrix = data.buildContactMatrix(reportState.records, reportState.contact);
         derived.contact = true;

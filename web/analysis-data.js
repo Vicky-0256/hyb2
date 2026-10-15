@@ -522,7 +522,11 @@
   const CONTACT_KEY_STRIDE = 67108864;
   const CONTACT_KEY_OFFSET = 33554432;
 
-  function buildContactMatrix(records, contact) {
+  // Builds a contact matrix in resumable slices. step(deadline) processes
+  // records until performance.now() passes `deadline`, returning true once
+  // the matrix is complete; result() then returns it. Running step(Infinity)
+  // once is exactly buildContactMatrix.
+  function createContactMatrixBuilder(records, contact) {
     const requestedBinSize = Number(contact.binSize);
     const binSize = Number.isSafeInteger(requestedBinSize) && requestedBinSize > 0 ? requestedBinSize : 10;
     const resourceBudget = getContactResourceBudget();
@@ -542,144 +546,181 @@
     let binContributions = 0;
     let limitReason = "";
 
-    recordLoop:
-    for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
-      const record = records[recordIndex];
-      if (contact.chimeraType && contact.chimeraType !== "all" && record.chimeraType !== contact.chimeraType) {
-        continue;
-      }
-      if (!matchesHomodimerSubset(record, contact.homodimer)) {
-        continue;
-      }
-      const oriented = orientRecordForPair(record, contact.rnaX, contact.rnaY, contact.orientation);
-      if (!oriented) {
-        continue;
-      }
+    let nextIndex = 0;
+    let result = null;
 
-      const xStartBin = binSize * Math.floor(oriented.xStart / binSize);
-      const xEndBin = binSize * Math.floor(oriented.xEnd / binSize);
-      const yStartBin = binSize * Math.floor(oriented.yStart / binSize);
-      const yEndBin = binSize * Math.floor(oriented.yEnd / binSize);
-      const xBinCount = Math.floor((xEndBin - xStartBin) / binSize) + 1;
-      const yBinCount = Math.floor((yEndBin - yStartBin) / binSize) + 1;
-      const recordContributions = xBinCount * yBinCount;
-      const value = contact.measure === "records" ? 1 : record.supportCount;
-
-      if (!Number.isSafeInteger(xBinCount) || !Number.isSafeInteger(yBinCount) ||
-          !Number.isSafeInteger(recordContributions) || recordContributions > maximumCells) {
-        limitReason = "Contact map not generated: one interaction spans more than " + maximumCells.toLocaleString("en-US") + " bin pairs under the adaptive browser budget. Increase the bin size or correct unusually large arm coordinates.";
-        break;
+    function step(deadline) {
+      if (result) {
+        return true;
       }
-      if (recordContributions > maximumBinContributions - binContributions) {
-        limitReason = "Contact map not generated: the selected records require more than " + maximumBinContributions.toLocaleString("en-US") + " bin contributions under the adaptive browser budget. Increase the bin size or narrow the selected data.";
-        break;
-      }
+      const sliceStart = nextIndex;
+      recordLoop:
+      for (let recordIndex = nextIndex; recordIndex < records.length; recordIndex += 1) {
+        if (recordIndex > sliceStart && (recordIndex & 63) === 0 && performanceNow() > deadline) {
+          nextIndex = recordIndex;
+          return false;
+        }
+        const record = records[recordIndex];
+        if (contact.chimeraType && contact.chimeraType !== "all" && record.chimeraType !== contact.chimeraType) {
+          continue;
+        }
+        if (!matchesHomodimerSubset(record, contact.homodimer)) {
+          continue;
+        }
+        const oriented = orientRecordForPair(record, contact.rnaX, contact.rnaY, contact.orientation);
+        if (!oriented) {
+          continue;
+        }
 
-      for (let x = xStartBin; x <= xEndBin; x += binSize) {
-        const rowKey = (x / binSize) * CONTACT_KEY_STRIDE + CONTACT_KEY_OFFSET;
-        for (let y = yStartBin; y <= yEndBin; y += binSize) {
-          const key = rowKey + y / binSize;
-          let cell = cells.get(key);
-          if (!cell) {
-            if (cellCount >= maximumCells) {
-              limitReason = "Contact map not generated: the selected records cover more than " + maximumCells.toLocaleString("en-US") + " distinct cells under the adaptive browser budget. Increase the bin size or narrow the selected data.";
-              break recordLoop;
+        const xStartBin = binSize * Math.floor(oriented.xStart / binSize);
+        const xEndBin = binSize * Math.floor(oriented.xEnd / binSize);
+        const yStartBin = binSize * Math.floor(oriented.yStart / binSize);
+        const yEndBin = binSize * Math.floor(oriented.yEnd / binSize);
+        const xBinCount = Math.floor((xEndBin - xStartBin) / binSize) + 1;
+        const yBinCount = Math.floor((yEndBin - yStartBin) / binSize) + 1;
+        const recordContributions = xBinCount * yBinCount;
+        const value = contact.measure === "records" ? 1 : record.supportCount;
+
+        if (!Number.isSafeInteger(xBinCount) || !Number.isSafeInteger(yBinCount) ||
+            !Number.isSafeInteger(recordContributions) || recordContributions > maximumCells) {
+          limitReason = "Contact map not generated: one interaction spans more than " + maximumCells.toLocaleString("en-US") + " bin pairs under the adaptive browser budget. Increase the bin size or correct unusually large arm coordinates.";
+          break;
+        }
+        if (recordContributions > maximumBinContributions - binContributions) {
+          limitReason = "Contact map not generated: the selected records require more than " + maximumBinContributions.toLocaleString("en-US") + " bin contributions under the adaptive browser budget. Increase the bin size or narrow the selected data.";
+          break;
+        }
+
+        for (let x = xStartBin; x <= xEndBin; x += binSize) {
+          const rowKey = (x / binSize) * CONTACT_KEY_STRIDE + CONTACT_KEY_OFFSET;
+          for (let y = yStartBin; y <= yEndBin; y += binSize) {
+            const key = rowKey + y / binSize;
+            let cell = cells.get(key);
+            if (!cell) {
+              if (cellCount >= maximumCells) {
+                limitReason = "Contact map not generated: the selected records cover more than " + maximumCells.toLocaleString("en-US") + " distinct cells under the adaptive browser budget. Increase the bin size or narrow the selected data.";
+                break recordLoop;
+              }
+              cell = { x: x, y: y, records: 0, support: 0 };
+              cells.set(key, cell);
+              cellCount += 1;
             }
-            cell = { x: x, y: y, records: 0, support: 0 };
-            cells.set(key, cell);
-            cellCount += 1;
+            cell.records += 1;
+            cell.support += record.supportCount;
+            cell.value = (cell.value || 0) + value;
           }
-          cell.records += 1;
-          cell.support += record.supportCount;
-          cell.value = (cell.value || 0) + value;
+        }
+
+        binContributions += recordContributions;
+        recordsUsed += 1;
+        totalSupport += record.supportCount;
+        xMin = Math.min(xMin, oriented.xStart);
+        xMax = Math.max(xMax, oriented.xEnd);
+        yMin = Math.min(yMin, oriented.yStart);
+        yMax = Math.max(yMax, oriented.yEnd);
+      }
+      // Finishing (collecting cells, the colour cap) gets its own slice
+      // when this one has already used its time.
+      if (nextIndex < records.length) {
+        nextIndex = records.length;
+        if (performanceNow() > deadline && deadline !== Infinity) {
+          return false;
         }
       }
-
-      binContributions += recordContributions;
-      recordsUsed += 1;
-      totalSupport += record.supportCount;
-      xMin = Math.min(xMin, oriented.xStart);
-      xMax = Math.max(xMax, oriented.xEnd);
-      yMin = Math.min(yMin, oriented.yStart);
-      yMax = Math.max(yMax, oriented.yEnd);
+      result = finish();
+      return true;
     }
 
-    if (limitReason) {
-      return {
-        ready: false,
-        reason: limitReason,
-        limitExceeded: true,
-        cells: [],
-        cellMap: Object.create(null),
+    function finish() {
+      if (limitReason) {
+        return {
+          ready: false,
+          reason: limitReason,
+          limitExceeded: true,
+          cells: [],
+          cellMap: Object.create(null),
+          binSize: binSize,
+          xMin: 0,
+          xMax: 0,
+          yMin: 0,
+          yMax: 0,
+          recordsUsed: 0,
+          totalSupport: 0,
+          cellContributions: binContributions,
+          maximumCells: maximumCells,
+          maximumBinContributions: maximumBinContributions,
+          resourceBudget: resourceBudget,
+          max: 0,
+          cap: 0
+        };
+      }
+
+      const entries = Array.from(cells.values());
+      const displayValues = Float64Array.from(entries, function (cell) {
+        return contact.scale === "log" ? Math.log1p(cell.value) : cell.value;
+      });
+      let displayMax = 0;
+      for (let index = 0; index < displayValues.length; index += 1) {
+        if (displayValues[index] > displayMax) {
+          displayMax = displayValues[index];
+        }
+      }
+      const cap = resolveContactCap(displayValues, displayMax, contact);
+
+      const matrix = {
+        ready: true,
+        reason: "",
+        limitExceeded: false,
+        cells: entries,
         binSize: binSize,
-        xMin: 0,
-        xMax: 0,
-        yMin: 0,
-        yMax: 0,
-        recordsUsed: 0,
-        totalSupport: 0,
+        xMin: Number.isFinite(xMin) ? xMin : 0,
+        xMax: Number.isFinite(xMax) ? xMax : 0,
+        yMin: Number.isFinite(yMin) ? yMin : 0,
+        yMax: Number.isFinite(yMax) ? yMax : 0,
+        recordsUsed: recordsUsed,
+        totalSupport: totalSupport,
         cellContributions: binContributions,
         maximumCells: maximumCells,
         maximumBinContributions: maximumBinContributions,
         resourceBudget: resourceBudget,
-        max: 0,
-        cap: 0
+        max: displayMax,
+        cap: cap
       };
-    }
-
-    const entries = Array.from(cells.values());
-    const displayValues = Float64Array.from(entries, function (cell) {
-      return contact.scale === "log" ? Math.log1p(cell.value) : cell.value;
-    });
-    let displayMax = 0;
-    for (let index = 0; index < displayValues.length; index += 1) {
-      if (displayValues[index] > displayMax) {
-        displayMax = displayValues[index];
-      }
-    }
-    const cap = resolveContactCap(displayValues, displayMax, contact);
-
-    const matrix = {
-      ready: true,
-      reason: "",
-      limitExceeded: false,
-      cells: entries,
-      binSize: binSize,
-      xMin: Number.isFinite(xMin) ? xMin : 0,
-      xMax: Number.isFinite(xMax) ? xMax : 0,
-      yMin: Number.isFinite(yMin) ? yMin : 0,
-      yMax: Number.isFinite(yMax) ? yMax : 0,
-      recordsUsed: recordsUsed,
-      totalSupport: totalSupport,
-      cellContributions: binContributions,
-      maximumCells: maximumCells,
-      maximumBinContributions: maximumBinContributions,
-      resourceBudget: resourceBudget,
-      max: displayMax,
-      cap: cap
-    };
-    // Constant-time lookup without building a string key per cell.
-    Object.defineProperty(matrix, "getCell", {
-      value: function (x, y) {
-        return cells.get((x / binSize) * CONTACT_KEY_STRIDE + CONTACT_KEY_OFFSET + y / binSize) || null;
-      }
-    });
-    // The "x:y" map is large (hundreds of thousands of keys at 5 nt) and
-    // most views never need it, so it is built on first access.
-    let cellMap = null;
-    Object.defineProperty(matrix, "cellMap", {
-      enumerable: true,
-      get: function () {
-        if (!cellMap) {
-          cellMap = Object.create(null);
-          for (let index = 0; index < entries.length; index += 1) {
-            cellMap[entries[index].x + ":" + entries[index].y] = entries[index];
-          }
+      // Constant-time lookup without building a string key per cell.
+      Object.defineProperty(matrix, "getCell", {
+        value: function (x, y) {
+          return cells.get((x / binSize) * CONTACT_KEY_STRIDE + CONTACT_KEY_OFFSET + y / binSize) || null;
         }
-        return cellMap;
-      }
-    });
-    return matrix;
+      });
+      // The "x:y" map is large (hundreds of thousands of keys at 5 nt) and
+      // most views never need it, so it is built on first access.
+      let cellMap = null;
+      Object.defineProperty(matrix, "cellMap", {
+        enumerable: true,
+        get: function () {
+          if (!cellMap) {
+            cellMap = Object.create(null);
+            for (let index = 0; index < entries.length; index += 1) {
+              cellMap[entries[index].x + ":" + entries[index].y] = entries[index];
+            }
+          }
+          return cellMap;
+        }
+      });
+      return matrix;
+    }
+
+    return {
+      step: step,
+      progress: function () { return records.length ? nextIndex / records.length : 1; },
+      result: function () { return result; }
+    };
+  }
+
+  function buildContactMatrix(records, contact) {
+    const builder = createContactMatrixBuilder(records, contact);
+    builder.step(Infinity);
+    return builder.result();
   }
 
   // Same result as resolveColourCap(sorted values), without sorting: the
@@ -1747,6 +1788,7 @@
     orientRecordForPair: orientRecordForPair,
     getContactResourceBudget: getContactResourceBudget,
     buildContactMatrix: buildContactMatrix,
+    createContactMatrixBuilder: createContactMatrixBuilder,
     getCellRecords: getCellRecords,
     getRegionResults: getRegionResults,
     getViewpointResults: getViewpointResults,

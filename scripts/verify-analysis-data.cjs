@@ -775,6 +775,27 @@ assert.ok(Date.now() - disjointComparisonStartedAt < 3000,
     assert.equal(lookupMatrix.cellMap[cell.x + ":" + cell.y], cell);
   });
   assert.equal(lookupMatrix.getCell(5000, 5000), null);
+
+  // Building in slices (a deadline already passed forces a yield every
+  // 64 records) must produce the same matrix as one synchronous build.
+  const slicedContact = contact({ binSize: 5, colourCap: "95" });
+  const builder = data.createContactMatrixBuilder(randomRecords, slicedContact);
+  let slices = 0;
+  while (!builder.step(-Infinity)) {
+    slices += 1;
+    assert.ok(builder.progress() > 0 && builder.progress() <= 1);
+  }
+  assert.ok(slices >= 5, "expected several slices, got " + slices);
+  const sliced = builder.result();
+  const whole = data.buildContactMatrix(randomRecords, slicedContact);
+  assert.equal(sliced.cap, whole.cap);
+  assert.equal(sliced.max, whole.max);
+  assert.equal(sliced.recordsUsed, whole.recordsUsed);
+  assert.equal(sliced.cellContributions, whole.cellContributions);
+  assert.deepEqual(
+    sliced.cells.map(function (cell) { return [cell.x, cell.y, cell.records, cell.support, cell.value]; }),
+    whole.cells.map(function (cell) { return [cell.x, cell.y, cell.records, cell.support, cell.value]; })
+  );
 }());
 
 process.stdout.write("analysis-data-contract: ok\n");

@@ -517,13 +517,21 @@
     return null;
   }
 
+  // Numeric cell key = xIndex * stride + yIndex + offset. Unique while bin
+  // indices stay within ±2^25, i.e. coordinates up to ~167 Mnt at 5 nt bins.
+  const CONTACT_KEY_STRIDE = 67108864;
+  const CONTACT_KEY_OFFSET = 33554432;
+
   function buildContactMatrix(records, contact) {
     const requestedBinSize = Number(contact.binSize);
     const binSize = Number.isSafeInteger(requestedBinSize) && requestedBinSize > 0 ? requestedBinSize : 10;
     const resourceBudget = getContactResourceBudget();
     const maximumCells = resourceBudget.maximumCells;
     const maximumBinContributions = resourceBudget.maximumBinContributions;
-    const cells = Object.create(null);
+    // Accumulate under numeric keys: a string key per bin contribution
+    // dominated the build (~1M concatenations at 5 nt). The "x:y" cellMap
+    // is built once per distinct cell at the end.
+    const cells = new Map();
     let xMin = Infinity;
     let xMax = -Infinity;
     let yMin = Infinity;
@@ -568,16 +576,17 @@
       }
 
       for (let x = xStartBin; x <= xEndBin; x += binSize) {
+        const rowKey = (x / binSize) * CONTACT_KEY_STRIDE + CONTACT_KEY_OFFSET;
         for (let y = yStartBin; y <= yEndBin; y += binSize) {
-          const key = x + ":" + y;
-          let cell = cells[key];
+          const key = rowKey + y / binSize;
+          let cell = cells.get(key);
           if (!cell) {
             if (cellCount >= maximumCells) {
               limitReason = "Contact map not generated: the selected records cover more than " + maximumCells.toLocaleString("en-US") + " distinct cells under the adaptive browser budget. Increase the bin size or narrow the selected data.";
               break recordLoop;
             }
             cell = { x: x, y: y, records: 0, support: 0 };
-            cells[key] = cell;
+            cells.set(key, cell);
             cellCount += 1;
           }
           cell.records += 1;
@@ -618,17 +627,23 @@
       };
     }
 
-    const entries = Object.keys(cells).map(function (key) { return cells[key]; });
-    const values = entries.map(function (cell) { return cell.value; }).sort(function (left, right) { return left - right; });
-    const displayValues = values.map(function (value) { return contact.scale === "log" ? Math.log1p(value) : value; });
-    const cap = resolveColourCap(displayValues, contact);
+    const entries = Array.from(cells.values());
+    const displayValues = Float64Array.from(entries, function (cell) {
+      return contact.scale === "log" ? Math.log1p(cell.value) : cell.value;
+    });
+    let displayMax = 0;
+    for (let index = 0; index < displayValues.length; index += 1) {
+      if (displayValues[index] > displayMax) {
+        displayMax = displayValues[index];
+      }
+    }
+    const cap = resolveContactCap(displayValues, displayMax, contact);
 
-    return {
+    const matrix = {
       ready: true,
       reason: "",
       limitExceeded: false,
       cells: entries,
-      cellMap: cells,
       binSize: binSize,
       xMin: Number.isFinite(xMin) ? xMin : 0,
       xMax: Number.isFinite(xMax) ? xMax : 0,
@@ -640,9 +655,96 @@
       maximumCells: maximumCells,
       maximumBinContributions: maximumBinContributions,
       resourceBudget: resourceBudget,
-      max: displayValues.length ? displayValues[displayValues.length - 1] : 0,
+      max: displayMax,
       cap: cap
     };
+    // Constant-time lookup without building a string key per cell.
+    Object.defineProperty(matrix, "getCell", {
+      value: function (x, y) {
+        return cells.get((x / binSize) * CONTACT_KEY_STRIDE + CONTACT_KEY_OFFSET + y / binSize) || null;
+      }
+    });
+    // The "x:y" map is large (hundreds of thousands of keys at 5 nt) and
+    // most views never need it, so it is built on first access.
+    let cellMap = null;
+    Object.defineProperty(matrix, "cellMap", {
+      enumerable: true,
+      get: function () {
+        if (!cellMap) {
+          cellMap = Object.create(null);
+          for (let index = 0; index < entries.length; index += 1) {
+            cellMap[entries[index].x + ":" + entries[index].y] = entries[index];
+          }
+        }
+        return cellMap;
+      }
+    });
+    return matrix;
+  }
+
+  // Same result as resolveColourCap(sorted values), without sorting: the
+  // cap needs at most two order statistics, found by selection in O(n).
+  function resolveContactCap(values, max, contact) {
+    if (!values.length) {
+      return 0;
+    }
+    if (contact.colourCap === "max") {
+      return max;
+    }
+    if (contact.colourCap === "custom") {
+      const custom = numberOrNull(contact.customCap);
+      return custom !== null && custom > 0 ? custom : max;
+    }
+    const fraction = (Number(contact.colourCap) || 95) / 100;
+    const position = Math.max(0, Math.min(values.length - 1, (values.length - 1) * fraction));
+    const lower = Math.floor(position);
+    const upper = Math.ceil(position);
+    const lowerValue = selectKth(values, lower);
+    if (upper === lower) {
+      return lowerValue;
+    }
+    // After selection everything right of `lower` is >= its value.
+    let upperValue = Infinity;
+    for (let index = lower + 1; index < values.length; index += 1) {
+      if (values[index] < upperValue) {
+        upperValue = values[index];
+      }
+    }
+    return lowerValue + (upperValue - lowerValue) * (position - lower);
+  }
+
+  // Hoare-partition quickselect; reorders `values` in place.
+  function selectKth(values, k) {
+    let left = 0;
+    let right = values.length - 1;
+    while (right > left) {
+      const pivot = values[(left + right) >> 1];
+      let i = left;
+      let j = right;
+      while (i <= j) {
+        while (values[i] < pivot) {
+          i += 1;
+        }
+        while (values[j] > pivot) {
+          j -= 1;
+        }
+        if (i <= j) {
+          const swap = values[i];
+          values[i] = values[j];
+          values[j] = swap;
+          i += 1;
+          j -= 1;
+        }
+      }
+      if (k <= j) {
+        right = j;
+      } else if (k >= i) {
+        left = i;
+      } else {
+        break;
+      }
+    }
+    return values[k];
   }
 
   function resolveColourCap(values, contact) {

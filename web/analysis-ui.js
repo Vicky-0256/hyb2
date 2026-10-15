@@ -6,6 +6,15 @@
     [0, 160, 157],
     [106, 79, 242]
   ];
+  // Opaque RGBA pixels (little-endian ABGR) for the canvas fast path.
+  const VIRIDIS_LUT = (function () {
+    const lut = new Uint32Array(1024);
+    for (let index = 0; index < lut.length; index += 1) {
+      const rgb = viridisRgb(index / (lut.length - 1));
+      lut[index] = ((255 << 24) | (rgb[2] << 16) | (rgb[1] << 8) | rgb[0]) >>> 0;
+    }
+    return lut;
+  }());
 
   function afterRender(state, api) {
     if (state.activePage === "interactions") {
@@ -344,14 +353,18 @@
     });
   }
 
+  function contactCellAt(matrix, x, y) {
+    return matrix.getCell ? matrix.getCell(x, y) : (matrix.cellMap && matrix.cellMap[x + ":" + y]) || null;
+  }
+
   function forEachVisibleContactCell(matrix, geometry, callback) {
     const visibleGridSize = geometry.xCount * geometry.yCount;
-    if (matrix.cellMap && visibleGridSize < matrix.cells.length) {
+    if (visibleGridSize < matrix.cells.length) {
       for (let xIndex = 0; xIndex < geometry.xCount; xIndex += 1) {
         const x = geometry.xStart + xIndex * matrix.binSize;
         for (let yIndex = 0; yIndex < geometry.yCount; yIndex += 1) {
           const y = geometry.yStart + yIndex * matrix.binSize;
-          const cell = matrix.cellMap[x + ":" + y];
+          const cell = contactCellAt(matrix, x, y);
           if (cell) {
             callback(cell);
           }
@@ -364,6 +377,51 @@
         callback(cell);
       }
     });
+  }
+
+  // Cells are written into one device-pixel buffer and blitted with a single
+  // drawImage. One fillRect per cell (100k–400k per draw) cost ~200 ms.
+  // Each cell covers the same rectangle, in the same order, as the fillRect
+  // it replaces, so overlapping sub-pixel cells still resolve last-wins.
+  let contactScratch = null;
+
+  function paintContactCells(context, pixelRatio, matrix, geometry, scale) {
+    const width = Math.max(1, Math.round(geometry.plotWidth * pixelRatio));
+    const height = Math.max(1, Math.round(geometry.plotHeight * pixelRatio));
+    if (!contactScratch || contactScratch.canvas.width !== width || contactScratch.canvas.height !== height) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const scratchContext = canvas.getContext("2d");
+      const image = scratchContext.createImageData(width, height);
+      contactScratch = { canvas: canvas, context: scratchContext, image: image, pixels: new Uint32Array(image.data.buffer) };
+    }
+    const pixels = contactScratch.pixels;
+    pixels.fill(0);
+    const cellWidth = geometry.cellWidth * pixelRatio;
+    const cellHeight = geometry.cellHeight * pixelRatio;
+    const spanX = (Math.ceil(geometry.cellWidth) + .4) * pixelRatio;
+    const spanY = (Math.ceil(geometry.cellHeight) + .4) * pixelRatio;
+    const lastLut = VIRIDIS_LUT.length - 1;
+    forEachVisibleContactCell(matrix, geometry, function (cell) {
+      const visualValue = scale === "log" ? Math.log1p(cell.value) : cell.value;
+      const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
+      const color = VIRIDIS_LUT[Math.round(ratio * lastLut)];
+      const x0 = ((cell.x - geometry.xStart) / matrix.binSize) * cellWidth;
+      const y0 = ((cell.y - geometry.yStart) / matrix.binSize) * cellHeight;
+      const left = Math.max(0, Math.floor(x0));
+      const right = Math.min(width, Math.ceil(x0 + spanX));
+      const top = Math.max(0, Math.floor(y0));
+      const bottom = Math.min(height, Math.ceil(y0 + spanY));
+      for (let y = top; y < bottom; y += 1) {
+        pixels.fill(color, y * width + left, y * width + right);
+      }
+    });
+    contactScratch.context.putImageData(contactScratch.image, 0, 0);
+    context.save();
+    context.imageSmoothingEnabled = false;
+    context.drawImage(contactScratch.canvas, geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
+    context.restore();
   }
 
   function drawContactStageCanvas(state, canvas, stage) {
@@ -384,17 +442,7 @@
     context.fillStyle = line;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
-    forEachVisibleContactCell(matrix, geometry, function (cell) {
-      const visualValue = state.contact.scale === "log" ? Math.log1p(cell.value) : cell.value;
-      const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
-      context.fillStyle = viridis(ratio);
-      context.fillRect(
-        geometry.left + ((cell.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth,
-        geometry.top + ((cell.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight,
-        Math.ceil(geometry.cellWidth) + .4,
-        Math.ceil(geometry.cellHeight) + .4
-      );
-    });
+    paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale);
 
     const selection = getContactStageSelection(state, stage);
     if (selection && selection.x >= geometry.xStart && selection.x <= geometry.xEnd && selection.y >= geometry.yStart && selection.y <= geometry.yEnd) {
@@ -538,7 +586,7 @@
       return;
     }
     const matrix = state.contact.matrix;
-    const cell = matrix.cellMap[point.x + ":" + point.y];
+    const cell = contactCellAt(matrix, point.x, point.y);
     const prefix = state.contact.rnaX + ":" + range(point.x, point.x + matrix.binSize - 1) + " × " + state.contact.rnaY + ":" + range(point.y, point.y + matrix.binSize - 1);
     tooltip.textContent = cell
       ? prefix + " · " + format(cell.records) + " records · " + format(cell.support) + " cluster support"
@@ -778,7 +826,7 @@
       return;
     }
     const matrix = state.contact.matrix;
-    const cell = matrix.cellMap[point.x + ":" + point.y];
+    const cell = contactCellAt(matrix, point.x, point.y);
     if (!cell) {
       tooltip.textContent = state.contact.rnaX + ":" + range(point.x, point.x + matrix.binSize - 1) + " × " + state.contact.rnaY + ":" + range(point.y, point.y + matrix.binSize - 1) + " · no records";
       return;
@@ -2405,17 +2453,23 @@
     };
   }
 
-  function viridis(ratio) {
+  function viridisRgb(ratio) {
     const bounded = Math.max(0, Math.min(1, ratio));
     const scaled = bounded * (BRAND_SCALE.length - 1);
     const index = Math.min(BRAND_SCALE.length - 2, Math.floor(scaled));
     const t = scaled - index;
     const from = BRAND_SCALE[index];
     const to = BRAND_SCALE[index + 1];
-    const red = Math.round(from[0] + (to[0] - from[0]) * t);
-    const green = Math.round(from[1] + (to[1] - from[1]) * t);
-    const blue = Math.round(from[2] + (to[2] - from[2]) * t);
-    return "rgb(" + red + ", " + green + ", " + blue + ")";
+    return [
+      Math.round(from[0] + (to[0] - from[0]) * t),
+      Math.round(from[1] + (to[1] - from[1]) * t),
+      Math.round(from[2] + (to[2] - from[2]) * t)
+    ];
+  }
+
+  function viridis(ratio) {
+    const rgb = viridisRgb(ratio);
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
   function effectColor(value) {

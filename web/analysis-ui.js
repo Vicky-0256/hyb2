@@ -1243,6 +1243,22 @@
     const feature = element.dataset.feature;
     const key = element.dataset.key;
 
+    if (feature === "arcmap-file" && window.Hyb2ArcMap) {
+      const file = element.files && element.files[0];
+      state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
+      if (file) {
+        window.Hyb2ArcMap.loadFile(state.arcMap, key, file).then(function () { api.render(); });
+      }
+      return true;
+    }
+
+    if (feature === "arcmap-control" && window.Hyb2ArcMap) {
+      state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
+      window.Hyb2ArcMap.setControl(state.arcMap, key, element.value);
+      api.render();
+      return true;
+    }
+
     if (feature === "interaction-filter") {
       state.filters[key] = element.value;
       state.selectedRecordIndex = null;
@@ -1753,6 +1769,23 @@
 
     if (action === "choose-comparison-files") {
       api.chooseComparisonFiles();
+      return true;
+    }
+
+    if (action === "arcmap-clear" && state.arcMap) {
+      const key = element.dataset.key;
+      state.arcMap[key] = null;
+      state.arcMap.errors[key] = "";
+      api.render();
+      return true;
+    }
+
+    if (action === "arcmap-download-svg" && state.arcMap && window.Hyb2ArcMap) {
+      const model = window.Hyb2ArcMap.build(state.arcMap);
+      if (model.ready) {
+        api.download("arc-map.svg", window.Hyb2ArcMap.svg(state.arcMap, model), "image/svg+xml");
+        api.showToast("Arc map SVG downloaded locally.");
+      }
       return true;
     }
 

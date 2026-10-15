@@ -1282,3 +1282,11 @@
     height: 100%;
   }
 }
+
+/* Arc map (arc-map.js) */
+.arcmap-files { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
+.arcmap-file { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.arcmap-file input[type="file"] { max-width: 100%; }
+.arcmap-figure { overflow-x: auto; margin: 12px 0; }
+.arcmap-figure svg { width: 100%; height: auto; display: block; border-radius: 8px; }
+.arcmap-file .quiet-button { align-self: flex-start; padding-left: 0; }

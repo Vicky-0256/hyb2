@@ -121,6 +121,9 @@ func newReportEvidence(card *model.EvidenceCard, structures []reportStructure) r
 	if researchShowDetail(card) {
 		e.Status += " (" + *card.StatusDetail + ")"
 	}
+	if !card.LocalOrigin {
+		e.Review += " · " + researchOriginNotice
+	}
 	e.Citations = "citations not verified"
 	if card.CitationVerification == "verified" {
 		e.Citations = "verified"
@@ -319,6 +322,18 @@ func prefix(p, s string) string {
 	return p + s
 }
 
+// exportFacts are projectFacts for the exported file, which is shared: the
+// folder is named, not where it is on this computer.
+func (d *reportData) exportFacts() [][2]string {
+	facts := d.projectFacts()
+	for i := range facts {
+		if facts[i][0] == "Folder" {
+			facts[i][1] = filepath.Base(facts[i][1])
+		}
+	}
+	return facts
+}
+
 // projectFacts are the Project section's label / value lines.
 func (d *reportData) projectFacts() [][2]string {
 	facts := [][2]string{{"Name", d.Name}, {"Folder", d.Path}}
@@ -402,7 +417,7 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		TestDetails                                            []reportHTMLTest
 		StructureDetails                                       []reportHTMLStructure
 		EvidenceNote                                           string
-	}{reportData: d, EvidenceNote: reportEvidenceNote, Facts: d.projectFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
+	}{reportData: d, EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
 		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable()}
 	for i := range d.Tests {
 		x := &d.Tests[i]

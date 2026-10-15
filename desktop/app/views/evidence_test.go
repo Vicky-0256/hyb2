@@ -154,6 +154,7 @@ func (f *researchFake) AttachEvidence(path string, card model.EvidenceCard, b mo
 	defer f.emu.Unlock()
 	b.ProjectID, b.AttachedAt = "b6886956", "2026-10-15T08:01:00Z"
 	card.Binding = &b
+	card.LocalOrigin = true // saved here, as the real service seals it
 	f.saved = append(f.saved, card)
 	return card, nil
 }

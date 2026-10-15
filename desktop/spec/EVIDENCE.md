@@ -119,6 +119,16 @@ sent by Go); the worker never decides identity.
   attached_at, include_in_report}`; `result_digest` = sha256 of the bound
   structure's dot-bracket. A card bound to another structure/record is shown
   as "for another result" and never carried over.
+- Card files travel with the project, so their content is only as
+  trustworthy as whoever wrote them last. Go writes `local_seal`
+  (`hmac-sha256:<hex>` of the card JSON without it) under a 32-byte key kept
+  beside the preferences (`evidence-seal.key`, 0600, not in the cache), when
+  it attaches a card and when it updates a card whose seal checks out. A card
+  without a valid seal (made on another computer, or edited since) is shown
+  and reported as "made or edited on another computer: its text and review
+  are not verified here"; updating it does not seal it. Read back, every card
+  has `citation_verification: not_checked` and
+  `relation_to_current_structure: background_only`, whatever the file says.
 - The cache (`HYB2_EVIDENCE_CACHE`, app cache dir) keeps raw responses by
   `(provider, tool, query_identifier, taxon, server_package_version,
   adapter_version)`, 7 days; Preferences can clear it.

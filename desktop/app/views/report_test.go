@@ -147,6 +147,11 @@ func TestReportExportHTML(t *testing.T) {
 	if len(text) < 20_000 || len(text) > 2_000_000 {
 		t.Fatalf("report size %d", len(text))
 	}
+	// The exported file is shared: it names the project folder, not where
+	// it is on this computer (the path holds the user name).
+	if strings.Contains(text, "/projects/zikv.hyb2proj") || !strings.Contains(text, "zikv.hyb2proj") {
+		t.Fatal("the exported report gives the folder's absolute path")
+	}
 	for _, want := range []string{"<!DOCTYPE html>", `<section id="project">`, `<section id="references">`, `<section id="samples">`,
 		`<section id="conditions">`, `<section id="differential-tests">`, `<section id="structures">`,
 		"ZIKV &lt;b&gt;&#34;GUI&#34;&lt;/b&gt; &amp; co", "AFR (2 merged) vs BRA (2 merged)", "Top 10 merged interactions by padj",

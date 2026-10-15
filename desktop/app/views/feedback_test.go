@@ -206,3 +206,38 @@ func TestMapSpeciesMismatchIsShown(t *testing.T) {
 		t.Fatalf("report status %q", e.Status)
 	}
 }
+
+// TestImportedCardSaysSo: a saved card not made here says so on the page
+// and in the report; one made here does not.
+func TestImportedCardSaysSo(t *testing.T) {
+	a, f, tt, p := openResearch(t, true)
+	target := p.researchTarget()
+	if target == nil {
+		t.Fatal("no structure shown")
+	}
+	b := model.EvidenceBinding{StructureID: target.StructureID, Record: target.Record, ResultDigest: target.Digest, IncludeInReport: true}
+	local := rsCard("hsa-mir-21", "9606", model.EvidenceSuccess, rsSummary)
+	local.EvidenceID, local.LocalOrigin, local.Binding = "ev-"+strings.Repeat("cd", 16), true, &b
+	imported := rsCard("hsa-mir-155", "9606", model.EvidenceSuccess, rsSummary)
+	imported.EvidenceID, imported.Binding = "ev-"+strings.Repeat("ef", 16), &b
+	if e := newReportEvidence(&local, nil); strings.Contains(e.Review, researchOriginNotice) {
+		t.Fatalf("local card flagged: %q", e.Review)
+	}
+	if e := newReportEvidence(&imported, nil); !strings.Contains(e.Review, researchOriginNotice) {
+		t.Fatalf("imported card not flagged: %q", e.Review)
+	}
+	f.emu.Lock()
+	f.saved = []model.EvidenceCard{local}
+	f.emu.Unlock()
+	p.research.loadSaved()
+	rsSettle(a, tt)
+	if !tt.HasText("Saved for this result (1)") || tt.HasText(researchOriginNotice+".") {
+		t.Fatalf("local card: %q", tt.Texts())
+	}
+	f.emu.Lock()
+	f.saved = []model.EvidenceCard{imported}
+	f.emu.Unlock()
+	p.research.loadSaved()
+	rsSettle(a, tt)
+	dataExpect(t, tt, researchOriginNotice+".")
+}

@@ -121,6 +121,10 @@ func NewService(rt *Runtime, opts ServiceOptions) *Service {
 		}
 		return EvidenceSpec(rt.Bridge, cacheDir, logDir), nil
 	}, func() bool { return LoadExternalLookup(s.prefsPath) }, cacheDir)
+	if opts.PreferencesPath != "" {
+		// Beside the preferences, not in the cache: clearing it keeps the seals.
+		s.evidence.sealKeyPath = filepath.Join(filepath.Dir(opts.PreferencesPath), sealKeyFile)
+	}
 	return s
 }
 

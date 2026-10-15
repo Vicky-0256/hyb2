@@ -124,7 +124,9 @@ type EvidenceService struct {
 	// enabled reads the external_lookup preference.
 	enabled  func() bool
 	cacheDir string
-	now      func() time.Time
+	// sealKeyPath is this computer's card seal key ("" seals nothing).
+	sealKeyPath string
+	now         func() time.Time
 }
 
 func newEvidenceService(spec func() (SidecarSpec, error), enabled func() bool, cacheDir string) *EvidenceService {
@@ -531,6 +533,9 @@ func (e *EvidenceService) Attach(projectPath string, card model.EvidenceCard, bi
 		card.RawResponseLocalRef = strPtr("evidence/" + name)
 	}
 	card.RawText = ""
+	if err := e.seal(&card); err != nil {
+		return model.EvidenceCard{}, err
+	}
 	if err := writeCard(path, card); err != nil {
 		return model.EvidenceCard{}, err
 	}
@@ -561,6 +566,7 @@ func (e *EvidenceService) List(projectPath string) ([]model.EvidenceCard, error)
 		if err != nil || card.EvidenceID != id {
 			continue
 		}
+		e.verify(&card)
 		cards = append(cards, card)
 	}
 	sort.SliceStable(cards, func(i, j int) bool {
@@ -597,6 +603,7 @@ func (e *EvidenceService) Update(projectPath, id string, update model.EvidenceUp
 	if card.Binding == nil {
 		return model.EvidenceCard{}, errors.New("this evidence card is not bound to a result")
 	}
+	e.verify(&card)
 	card.Binding.IncludeInReport = update.IncludeInReport
 	if r := update.Review; r != nil {
 		if !slices.Contains(model.ReviewStates, r.State) {
@@ -615,6 +622,15 @@ func (e *EvidenceService) Update(projectPath, id string, update model.EvidenceUp
 			review.Note = strPtr(note)
 		}
 		card.Review = review
+	}
+	// Only a card made here is sealed again: sealing an edited or imported
+	// one would vouch for content this computer did not retrieve.
+	if card.LocalOrigin {
+		if err := e.seal(&card); err != nil {
+			return model.EvidenceCard{}, err
+		}
+	} else {
+		card.LocalSeal = ""
 	}
 	if err := writeCard(path, card); err != nil {
 		return model.EvidenceCard{}, err

@@ -88,6 +88,11 @@ type EvidenceCard struct {
 	Review               EvidenceReview   `json:"review"`
 	SourceURL            *string          `json:"source_url"`
 	Binding              *EvidenceBinding `json:"binding"`
+	// LocalSeal is the HMAC this computer puts on cards it saves or
+	// changes (EVIDENCE.md); LocalOrigin is set on read when it checks out,
+	// i.e. the card was made here and not edited since.
+	LocalSeal   string `json:"local_seal,omitempty"`
+	LocalOrigin bool   `json:"-"`
 	// RawText is the raw tool text when the worker sends it (`raw_text`
 	// next to the card); Go writes it to <id>.raw.txt on attach and never
 	// stores it in the card file.

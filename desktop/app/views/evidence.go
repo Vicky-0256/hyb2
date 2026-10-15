@@ -126,6 +126,10 @@ func researchHeading(card *model.EvidenceCard) string {
 }
 
 // researchReview names a review state.
+// researchOriginNotice marks a saved card without this computer's seal
+// (core/evidence_seal.go): made elsewhere, or edited since it was saved.
+const researchOriginNotice = "Made or edited on another computer: its text and review are not verified here"
+
 func researchReview(r model.EvidenceReview) string {
 	switch r.State {
 	case model.ReviewReviewed:
@@ -548,6 +552,9 @@ func (p *researchPanel) savedCard(c *ui.Context, card *model.EvidenceCard) {
 			ui.Text(c, truncate(text, 400)).FontSize(12)
 		}
 		ui.Text(c, researchRetrieved(card)+" · "+researchReview(card.Review)+" · citations not verified").FontSize(11).TextColor(t.TextMuted)
+		if !card.LocalOrigin {
+			ui.Text(c, researchOriginNotice+".").FontSize(11).TextColor(t.Warning)
+		}
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			if card.Binding != nil && ui.Checkbox(c.Key("rs-report-"+id), &card.Binding.IncludeInReport, "Include in report").Changed() {
 				p.update(id, model.EvidenceUpdate{IncludeInReport: card.Binding.IncludeInReport})

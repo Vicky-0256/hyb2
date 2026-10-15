@@ -37,24 +37,35 @@ func (a *App) View(c *ui.Context) {
 	a.prefsDialog(c)
 }
 
+// navigation: the logo and project, the pages, and closing the project.
 func (a *App) navigation(c *ui.Context) {
+	t := c.Theme()
 	page := a.Page
-	ui.Sidebar(c, &page, func() {
-		for _, p := range Pages {
-			ui.SidebarItem(c, p.ID, nil, p.Number+"  "+p.Title)
-		}
-	}).Width(176).OnChange(func() { a.Navigate(page, nil) })
+	ui.Column(c).Width(184).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
+		ui.Column(c).Gap(8).Padding(14, 14, 10, 14).Children(func() {
+			Logo(c, 26)
+			ui.Text(c, a.Project.Name).Bold().MaxLines(2).Tooltip(a.Project.Path)
+		})
+		ui.Sidebar(c, &page, func() {
+			for _, p := range Pages {
+				item := ui.SidebarItem(c, p.ID, nil, p.Number+"  "+p.Title)
+				if p.ID == "data" && len(a.Project.Samples) > 0 {
+					item.Children(func() { ui.Badge(c, fmt.Sprint(len(a.Project.Samples))) })
+				}
+			}
+		}).Grow(1).FillWidth().OnChange(func() { a.Navigate(page, nil) })
+		ui.Column(c).Padding(10, 14, 14, 14).Children(func() {
+			if ui.Button(c, "Close project").FillWidth().Tooltip("Back to the start page").Clicked() {
+				a.Close()
+			}
+		})
+	})
 }
 
 // topBar: project menu, reference, gene, selection, tasks and preferences.
 func (a *App) topBar(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Gap(10).Padding(8, 12).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-		ui.Text(c, a.Project.Name).Bold().SingleLine().MaxWidth(220)
-		if ui.Button(c, "Close").Tooltip("Close the project").Clicked() {
-			a.Close()
-			return
-		}
+	ui.Row(c).Gap(10).Padding(8, 12).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 		a.referencePicker(c)
 		a.genePicker(c)
 		a.selectionPicker(c)
@@ -91,7 +102,8 @@ func (a *App) referencePicker(c *ui.Context) {
 	if len(labels) == 0 {
 		return
 	}
-	ui.Select(c.Key("reference"), &current, labels).Label("Reference").Width(140).OnChange(func() {
+	barLabel(c, "Reference")
+	ui.Select(c.Key("reference"), &current, labels).Label("Reference").Width(110).OnChange(func() {
 		a.Selected.ReferenceID = ids[current]
 		a.normalizeSelection()
 		a.saveUIState()
@@ -107,7 +119,8 @@ func (a *App) genePicker(c *ui.Context) {
 		return
 	}
 	gene := a.Selected.Gene
-	ui.Select(c.Key("gene"), &gene, names).Label("Gene").Width(240).OnChange(func() {
+	barLabel(c, "RNA")
+	ui.Select(c.Key("gene"), &gene, names).Label("RNA").Width(210).Tooltip(gene).OnChange(func() {
 		a.Selected.Gene = gene
 		a.saveUIState()
 	})
@@ -129,7 +142,8 @@ func (a *App) selectionPicker(c *ui.Context) {
 			current = o.Label
 		}
 	}
-	ui.Select(c.Key("selection"), &current, labels).Label("Selection").Width(260).OnChange(func() {
+	barLabel(c, "Samples")
+	ui.Select(c.Key("selection"), &current, labels).Label("Samples").Width(230).Tooltip("The samples, or a condition with its replicates merged, that QC, Explore and Structure show").OnChange(func() {
 		a.Selected.Key = keys[current]
 		a.saveUIState()
 	})
@@ -218,6 +232,11 @@ func (a *App) taskItem(c *ui.Context, task model.Task) {
 }
 
 // ---- shared small widgets
+
+// barLabel names the top bar control after it.
+func barLabel(c *ui.Context, text string) {
+	ui.Text(c, text).FontSize(12).TextColor(c.Theme().TextMuted)
+}
 
 // StatusChip shows a task or stage status.
 func StatusChip(c *ui.Context, status string) {

@@ -906,7 +906,12 @@ func (p *comparePage) results(c *ui.Context) {
 			cmpStat(c, "Higher in A", FormatNumber(s.SignificantUp), cmpRed)
 			cmpStat(c, "Higher in B", FormatNumber(s.SignificantDown), cmpBlue)
 			cmpStat(c, "Interactions", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text)
-			cmpStat(c, "Size factors", strings.Join(sizeFactors, " "), t.Text)
+			if n := len(e.SamplesOne); n > 0 && n < len(sizeFactors) {
+				cmpStat(c, "Size factors A · B", strings.Join(sizeFactors[:n], " ")+" · "+strings.Join(sizeFactors[n:], " "), t.Text).
+					Tooltip("DESeq2 size factors, in sample order: " + strings.Join(append(append([]string{}, e.SamplesOne...), e.SamplesTwo...), ", "))
+			} else {
+				cmpStat(c, "Size factors", strings.Join(sizeFactors, " "), t.Text)
+			}
 		})
 		if result.Truncated {
 			ui.Text(c, fmt.Sprintf("The map shows the %s strongest of %s significant cells.",
@@ -974,9 +979,9 @@ func cmpTitleButton(c *ui.Context, title string) ui.Element {
 	return b
 }
 
-func cmpStat(c *ui.Context, label, value string, color ui.Color) {
+func cmpStat(c *ui.Context, label, value string, color ui.Color) ui.Element {
 	t := c.Theme()
-	ui.Column(c).Gap(2).Padding(8, 12).Radius(8).Background(t.Surface).MinWidth(120).Children(func() {
+	return ui.Column(c).Gap(2).Padding(8, 12).Radius(8).Background(t.Surface).MinWidth(120).Children(func() {
 		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
 		ui.Text(c, value).FontSize(18).Bold().TextColor(color)
 	})

@@ -135,8 +135,11 @@ func (a *App) startView(c *ui.Context) {
 	}
 	ui.Scroll(c).Fill().Children(func() {
 		ui.Column(c).Padding(32).Gap(16).MaxWidth(980).Children(func() {
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, "HYB2 Desktop").FontSize(26).Bold()
+			ui.Column(c).Gap(6).Children(func() {
+				ui.Row(c).Gap(12).AlignItems(ui.End).Children(func() {
+					Logo(c, 44)
+					ui.Text(c, "Desktop").FontSize(22).TextColor(t.TextMuted).Padding(0, 0, 4, 0)
+				})
 				ui.Text(c, "From raw chimeric reads (FASTQ) to hybrids, interactions and RNA structure — all on this computer.").TextColor(t.TextMuted)
 			})
 			if s.runtimeErr != "" {

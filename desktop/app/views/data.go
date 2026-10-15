@@ -608,7 +608,7 @@ func (p *dataPage) samplesTable(c *ui.Context, samples []model.Sample) {
 		{Title: "Sample", MinWidth: 130},
 		{Title: "Condition", Width: 84},
 		{Title: "Rep", Width: 50, Align: ui.End},
-		{Title: "Raw file", Width: 150},
+		{Title: "Raw file", Width: 136},
 		{Title: "Stages", Width: 226},
 		{Title: "Hybrids", Width: 70, Align: ui.End},
 		{Title: "", ID: "actions", Width: 88},

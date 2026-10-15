@@ -107,7 +107,7 @@ func TestCompareResultsAndActions(t *testing.T) {
 		t.Fatalf("selected %q", p.selectedID)
 	}
 	for _, text := range []string{"Differential tests", "AFR (2 merged) vs BRA (2 merged)", "SUB (2 merged) vs AFR (2 merged)",
-		"82,132", "25,276", "56,856", "742 / 1,547", "1.08 1.69 1.14 0.54", "Merged interactions (300)",
+		"82,132", "25,276", "56,856", "742 / 1,547", "1.08 1.69 · 1.14 0.54", "Merged interactions (300)",
 		"The map shows the 1,500 strongest of 82,132 significant cells."} {
 		if !tt.HasText(text) {
 			t.Fatalf("compare page lacks %q: %q", text, tt.Texts())

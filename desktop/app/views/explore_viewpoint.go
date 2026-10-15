@@ -140,12 +140,13 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 			Card(c, "", func() {
 				ui.Row(c).Gap(24).Wrap().Children(func() {
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
-						ui.Text(c, shortGene(d.gene)+":"+span(d.start, d.end)+" interaction coverage").FontSize(16).Bold()
+						ui.Text(c, "Interaction coverage").FontSize(16).Bold()
 						what := "records"
 						if d.measure == measureReads {
 							what = "reads"
 						}
-						ui.Text(c, fmt.Sprintf("Mean %s per nucleotide in %d nt bins.", what, d.bin)).FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, fmt.Sprintf("%s · %s nt · mean %s per nucleotide in %d nt bins.", d.gene, span(d.start, d.end), what, d.bin)).
+							FontSize(12).TextColor(t.TextMuted)
 					})
 					stat(c, "Hybrids", FormatNumber(d.records))
 					stat(c, "Reads", FormatNumber(d.reads))

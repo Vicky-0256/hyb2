@@ -312,7 +312,17 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 	s := &p.ix
 	t := c.Theme()
 	multi := len(p.ids) > 1
-	cols := []ui.TableColumn{
+	rows := s.rows
+	// One RNA (both arms on it in every row): say so once instead of
+	// repeating its long name in two columns.
+	oneGene := len(rows) > 0
+	for _, r := range rows {
+		if r.Gene1 != rows[0].Gene1 || r.Gene2 != rows[0].Gene1 {
+			oneGene = false
+			break
+		}
+	}
+	all := []ui.TableColumn{
 		{Title: "#", Width: 64, Align: ui.End},
 		{Title: "Gene 1", MinWidth: 80},
 		{Title: "Arm 1", Width: 140, Align: ui.End},
@@ -321,16 +331,28 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 		{Title: "Reads", Width: 64, Align: ui.End},
 		{Title: "Type", Width: 84},
 		{Title: "dG", Width: 56, Align: ui.End},
+		{Title: "Sample", Width: 110},
 	}
-	if multi {
-		cols = append(cols, ui.TableColumn{Title: "Sample", Width: 110})
+	var cols []ui.TableColumn
+	var index []int // table column -> column of all
+	for i, col := range all {
+		if (oneGene && (i == 1 || i == 3)) || (i == 8 && !multi) {
+			continue
+		}
+		if oneGene && (i == 2 || i == 4) {
+			col.Width, col.MinWidth = 0, 120
+		}
+		cols, index = append(cols, col), append(index, i)
 	}
-	rows := s.rows
+	if oneGene {
+		ui.Text(c, "Both arms of every hybrid shown are on "+rows[0].Gene1+".").FontSize(12).TextColor(t.TextMuted)
+	}
 	ids := p.ids
 	s.list.Selected = &s.chosen
 	s.list.Key = func(i int) any { return [2]int64{int64(rows[i].Index), rows[i].ID} }
 	ui.Table(c.Key("ix-table"), &s.list, cols, len(rows), func(row, col int) {
 		r := rows[row]
+		col = index[col]
 		var text string
 		muted := false
 		switch col {

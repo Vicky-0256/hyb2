@@ -241,3 +241,26 @@ func TestImportedCardSaysSo(t *testing.T) {
 	rsSettle(a, tt)
 	dataExpect(t, tt, researchOriginNotice+".")
 }
+
+// TestQueryLineSaysHowTheTaxonWasChecked: a summary's taxon is either
+// checked by the miRBase name or only as entered (never sent); a mapping
+// sends its taxon.
+func TestQueryLineSaysHowTheTaxonWasChecked(t *testing.T) {
+	byName := rsCard("hsa-mir-21", "9606", model.EvidenceSuccess, rsSummary)
+	byName.TaxonCheck = core.TaxonCheckedByName
+	entered := rsCard("URS000039ED8D_9606", "9606", model.EvidenceSuccess, rsSummary)
+	entered.TaxonCheck = core.TaxonNotChecked
+	older := rsCard("hsa-mir-21", "9606", model.EvidenceSuccess, rsSummary)
+	mapping := rsCard("MIMAT0000076", "9606", model.EvidenceSuccess, "URS000039ED8D_9606")
+	mapping.SourceTool = core.ToolMap
+	for card, want := range map[*model.EvidenceCard]string{
+		&byName:  "hsa-mir-21 · taxon 9606 (checked by the miRBase name)",
+		&entered: "URS000039ED8D_9606 · taxon 9606 (as entered; not sent to RNAcentral, not checked)",
+		&older:   "hsa-mir-21 · taxon 9606 (as entered; not sent to RNAcentral, not checked)",
+		&mapping: "MIMAT0000076 · taxon 9606",
+	} {
+		if got := researchQuery(card); got != want {
+			t.Errorf("%s: %q, want %q", card.QueryIdentifier, got, want)
+		}
+	}
+}

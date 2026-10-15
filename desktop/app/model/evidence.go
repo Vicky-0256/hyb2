@@ -88,6 +88,9 @@ type EvidenceCard struct {
 	Review               EvidenceReview   `json:"review"`
 	SourceURL            *string          `json:"source_url"`
 	Binding              *EvidenceBinding `json:"binding"`
+	// TaxonCheck says how the taxon of a describe card was checked
+	// (core.TaxonCheckedByName, core.TaxonNotChecked; "" on older cards).
+	TaxonCheck string `json:"taxon_check,omitempty"`
 	// LocalSeal is the HMAC this computer puts on cards it saves or
 	// changes (EVIDENCE.md); LocalOrigin is set on read when it checks out,
 	// i.e. the card was made here and not edited since.

@@ -365,6 +365,10 @@ func (e *EvidenceService) Describe(rnaID, taxon string, confirmed, force bool) (
 	if !e.enabled() {
 		return model.EvidenceCard{}, ErrExternalLookupOff
 	}
+	taxon, check, err := checkTaxonByName(rnaID, taxon)
+	if err != nil {
+		return model.EvidenceCard{}, err
+	}
 	if !confirmed {
 		return e.localCard(ToolDescribe, rnaID, taxon, model.EvidenceIdentityUnconfirmed,
 			"confirm that the identifier and species refer to the RNA you study", e.now()), nil
@@ -373,7 +377,11 @@ func (e *EvidenceService) Describe(rnaID, taxon string, confirmed, force bool) (
 	if taxon != "" {
 		request["taxon"] = taxon
 	}
-	return e.lookup(request, ToolDescribe, rnaID, taxon)
+	card, err := e.lookup(request, ToolDescribe, rnaID, taxon)
+	if err == nil {
+		card.TaxonCheck = check
+	}
+	return card, err
 }
 
 // Map is map_rna_id: advisory mapping of an external id within a taxon.

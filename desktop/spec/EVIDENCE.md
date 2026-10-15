@@ -41,6 +41,20 @@ and compute sidecars never wait on the network.
   9606 → "No cross-references found…" (`not_found_or_no_summary`). This is
   why Go only sends `describe` after the user confirmed id and taxon.
 
+- Summaries are keyed by the miRBase precursor name (live, 2026-10-15):
+  `hsa-mir-21` has a summary, while `URS000039ED8D_9606`,
+  `URS000039ED8D_10090`, `URS000039ED8D` and the mapping's canonical
+  `hsa-miR-21-5p` all answer 404; map_rna_id maps external ids
+  (`MIMAT0000076`, `NR_029493` → `URS000039ED8D_9606`) but not names. So a
+  summary cannot be reached through a species-checked mapping, and the
+  taxon never travels with get_rna_description. Go checks it by the name
+  instead: for a miRBase name with a known prefix (`hsa` 9606, `mmu` 10090,
+  `aae` 7159, … in `core/evidence_taxon.go`) a contradicting taxon is
+  refused before any request, and the card records `taxon_check:
+  name_prefix` (an empty taxon becomes the prefix's); any other identifier
+  records `taxon_check: not_checked` and is shown as "as entered; not sent
+  to RNAcentral, not checked".
+
 ## Worker protocol (Go ↔ Python)
 
 `python -m desktop.runtime.evidence.worker --serve`, stdin

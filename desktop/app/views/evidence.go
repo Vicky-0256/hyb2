@@ -141,11 +141,21 @@ func researchReview(r model.EvidenceReview) string {
 }
 
 // researchQuery is "identifier · taxon".
+// researchQuery is the identifier and taxon, saying how a summary's taxon
+// was checked: it is never sent with a summary (only a mapping sends it).
 func researchQuery(card *model.EvidenceCard) string {
-	if taxon := card.TaxonText(); taxon != "" {
-		return card.QueryIdentifier + " · taxon " + taxon
+	taxon := card.TaxonText()
+	if taxon == "" {
+		return card.QueryIdentifier + " · no taxon"
 	}
-	return card.QueryIdentifier + " · no taxon"
+	out := card.QueryIdentifier + " · taxon " + taxon
+	if card.SourceTool == core.ToolMap {
+		return out
+	}
+	if card.TaxonCheck == core.TaxonCheckedByName {
+		return out + " (checked by the miRBase name)"
+	}
+	return out + " (as entered; not sent to RNAcentral, not checked)"
 }
 
 // researchVersions is the server, SDK and adapter versions.

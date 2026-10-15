@@ -332,10 +332,15 @@ type structurePage struct {
 	pseudoknot     bool
 	alpha, beam    float64
 	workers        float64
-	prefillNote    string
-	formMsg        string
-	formErr        bool
-	prefsAsked     bool
+	// estKey is the form state est was computed for (time and memory of
+	// the fold the form describes).
+	estKey      string
+	est         *core.FoldEstimate
+	estMemMB    uint64
+	prefillNote string
+	formMsg     string
+	formErr     bool
+	prefsAsked  bool
 
 	// list
 	structures []structureEntry
@@ -633,6 +638,59 @@ func (p *structurePage) runFold() {
 	})
 }
 
+// estimate shows the expected time and memory of the fold the form
+// describes, recomputed (off the UI thread) when the form changes.
+func (p *structurePage) estimate(c *ui.Context) {
+	a := p.a
+	t := c.Theme()
+	length := a.Project.GeneLength(p.gene)
+	var lengths []int
+	req := core.TaskStartRequest{Kind: "structure"}
+	pk := false
+	if p.mode == "windows" {
+		windows, errs := stParseWindows(p.windows, length)
+		if len(errs) > 0 || len(windows) == 0 {
+			return
+		}
+		for _, w := range windows {
+			lengths = append(lengths, int(w.End-w.Start+1))
+		}
+		req.Windows = windows
+		pk = p.pseudoknot
+	} else if length > 0 {
+		lengths = []int{length}
+	}
+	if len(lengths) == 0 {
+		return
+	}
+	workers := max(int(p.workers), 1)
+	w := uint32(workers)
+	req.Workers = &w
+	key := fmt.Sprint(lengths, int(p.beam), workers, pk)
+	if key != p.estKey {
+		p.estKey, p.est = key, nil
+		p.estMemMB = StructureMemClaim(req, length, pk)
+		beam := int(p.beam)
+		a.Go(func() func() {
+			e := a.B.EstimateFold(lengths, beam, workers)
+			return func() {
+				if p.estKey == key {
+					p.est = &e
+				}
+			}
+		})
+	}
+	if p.est == nil {
+		return
+	}
+	basis := "measured on this computer"
+	if !p.est.Measured {
+		basis = "rough until a fold has run on this computer"
+	}
+	ui.Text(c, fmt.Sprintf("Estimated: about %s, %.1f GB memory (%s).", FormatDuration(p.est.Seconds), float64(p.estMemMB)/1024, basis)).
+		FontSize(12).TextColor(t.TextMuted)
+}
+
 func (p *structurePage) evidenceNames(e *structureEntry) string {
 	ids := e.SampleIDs
 	if len(ids) == 0 {
@@ -741,6 +799,7 @@ func (p *structurePage) form(c *ui.Context) {
 		numberRow("st-alpha", "Alpha", &p.alpha, 0, 1, 0.05, "Weight of the chimera evidence")
 		numberRow("st-beam", "Beam", &p.beam, 1, 1000, 10, "Beam size of the folding")
 		numberRow("st-workers", "Parallel windows", &p.workers, 1, 256, 1, "Windows folded at once")
+		p.estimate(c)
 		ui.Row(c).Justify(ui.End).Children(func() {
 			if ui.PrimaryButton(c, "Run fold").Clicked() {
 				p.runFold()

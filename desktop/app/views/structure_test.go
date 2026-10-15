@@ -71,6 +71,27 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	if len(p.arcs.A) != 1055 || p.arcs.Start != 3170 || p.arcs.End != 6229 || p.arcs.Length != 10807 {
 		t.Fatalf("arcs %d pairs, %v-%v of %d", len(p.arcs.A), p.arcs.Start, p.arcs.End, p.arcs.Length)
 	}
+	// The form estimates the whole-RNA fold (built-in rate, no history).
+	if !tt.HasText("Estimated: about 1 min 25 s, 15.9 GB memory (rough until a fold has run on this computer).") {
+		t.Fatalf("no fold estimate: %q", tt.Texts())
+	}
+	// Windows change it.
+	p.mode, p.windows = "windows", "1-3000\n3001-6000"
+	waitFlush(a)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	found := false
+	for _, text := range tt.Texts() {
+		found = found || strings.HasPrefix(text, "Estimated: about 11 s, 4.0 GB memory")
+	}
+	if !found {
+		t.Fatalf("no windows estimate: %q", tt.Texts())
+	}
+	p.mode, p.windows = "genome", ""
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
 	snapshot(t, tt, "structure")
 	// Copy the dot-bracket.
 	if err := tt.Click("Copy"); err != nil {

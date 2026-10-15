@@ -163,3 +163,71 @@ func stageTimes(stderr string, batch time.Time) string {
 	}
 	return strings.Join(out, " ")
 }
+
+// TestFoldEstimateLive folds a whole RNA twice through the real scheduler
+// and compares the estimate made beforehand (built-in rate, then the first
+// fold's measured speed) with the actual time.
+//
+//	HYB2_FOLD_PROJECT=<project with analysed samples> HYB2_FOLD_GENE=<gene id> \
+//	  HYB2_FOLD_SAMPLES=<id,id> CGO_ENABLED=0 go test -tags e2e -run TestFoldEstimateLive -v .
+func TestFoldEstimateLive(t *testing.T) {
+	project, gene := os.Getenv("HYB2_FOLD_PROJECT"), os.Getenv("HYB2_FOLD_GENE")
+	if project == "" || gene == "" {
+		t.Skip("HYB2_FOLD_PROJECT and HYB2_FOLD_GENE are not set")
+	}
+	samples := strings.Split(os.Getenv("HYB2_FOLD_SAMPLES"), ",")
+	root := repoRoot()
+	python := filepath.Join(root, "desktop", "resources", "native", "python", "bin", "python3")
+	dir := t.TempDir()
+	rt, err := core.NewRuntime(core.Bridge{Root: root, Python: python}, filepath.Join(dir, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := core.NewService(rt, core.ServiceOptions{PreferencesPath: filepath.Join(dir, "preferences.json")})
+	defer service.Shutdown()
+	opened, err := service.OpenProject(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	length := 0
+	for _, ref := range opened["manifest"].(map[string]any)["references"].([]any) {
+		for _, seq := range ref.(map[string]any)["sequences"].([]any) {
+			if s := seq.(map[string]any); s["name"] == gene {
+				length = int(s["length"].(float64))
+			}
+		}
+	}
+	if length == 0 {
+		t.Fatalf("no reference sequence %s", gene)
+	}
+	for round := 1; round <= 3; round++ {
+		estimate := service.EstimateFold([]int{length}, 100, 1)
+		mode := "genome"
+		mem := core.StructureClaimMB(length, false, 1)
+		started := time.Now()
+		snap, err := service.StartTask(core.TaskStartRequest{ProjectPath: project, Kind: "structure", GeneID: &gene, Mode: &mode,
+			SampleIDs: samples, MemMB: &mem, Parameters: map[string]any{"alpha": 0.5, "beam": 100, "allow_pseudoknot": false}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := snap["task_id"].(string)
+		var midway any
+		for {
+			task, err := service.TaskStatus(project, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if midway == nil && time.Since(started) > 30*time.Second {
+				midway = task["seconds_left"]
+			}
+			if status := task["status"]; status == "succeeded" {
+				break
+			} else if status != "running" && status != "queued" {
+				t.Fatalf("fold %v: %v", status, task)
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		t.Logf("round %d: %d nt folded in %.1fs; estimated %.0fs beforehand (measured %v); at 30s %vs left",
+			round, length, time.Since(started).Seconds(), estimate.Seconds, estimate.Measured, midway)
+	}
+}

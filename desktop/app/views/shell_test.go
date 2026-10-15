@@ -170,3 +170,11 @@ func TestPreferencesDialog(t *testing.T) {
 	}
 	snapshot(t, tt, "preferences")
 }
+
+func TestFormatDuration(t *testing.T) {
+	for seconds, want := range map[float64]string{0.2: "1 s", 42: "42 s", 84.8: "1 min 25 s", 120: "2 min", 1500: "25 min", 7500: "2 h 05 min"} {
+		if got := FormatDuration(seconds); got != want {
+			t.Errorf("%v: %q, want %q", seconds, got, want)
+		}
+	}
+}

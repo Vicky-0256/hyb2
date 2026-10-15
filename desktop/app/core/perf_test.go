@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func near(a, b float64) bool { return math.Abs(a-b) <= 1e-6*math.Max(1, math.Abs(b)) }
@@ -85,12 +86,72 @@ func TestPerfHistoryFile(t *testing.T) {
 	run := filepath.Join(dir, "run")
 	os.MkdirAll(run, 0o755)
 	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":true,"performance":{"format":"fastq.gz","input_bytes":160000000,"cpu":10,"seconds":76.5,"stage_seconds":{"map":66}}}`), 0o644)
-	record, ok := perfFromResult(run)
+	record, ok := perfFromResult("sample_pipeline", run)
 	if !ok || record.Format != "fastq.gz" || record.InputBytes != 160000000 || record.CPU != 10 || record.Seconds != 76.5 {
 		t.Fatalf("%+v %v", record, ok)
 	}
 	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":false,"performance":{"format":"fastq","input_bytes":1,"seconds":1}}`), 0o644)
-	if _, ok := perfFromResult(run); ok {
+	if _, ok := perfFromResult("sample_pipeline", run); ok {
 		t.Fatal("a failed run was recorded")
+	}
+}
+
+func TestEstimateFold(t *testing.T) {
+	// Built-in rate: 10,807 nt at beam 100 took ~81 s on an M1 Pro.
+	e := EstimateFold(nil, []int{10807}, 100, 1)
+	if e.Measured || e.Seconds < 75 || e.Seconds > 95 {
+		t.Fatalf("genome %+v", e)
+	}
+	// Windows spread over workers, never faster than the largest window.
+	one := EstimateFold(nil, []int{3000, 3000, 3000, 3000}, 100, 1).Seconds - foldOverhead
+	four := EstimateFold(nil, []int{3000, 3000, 3000, 3000}, 100, 4).Seconds - foldOverhead
+	if !near(one, 4*four) {
+		t.Fatalf("parallel %v vs %v", one, four)
+	}
+	if got := EstimateFold(nil, []int{5000, 100}, 100, 8).Seconds - foldOverhead; !near(got, priorFoldSeconds*math.Pow(5, foldExponent)) {
+		t.Fatalf("largest window bound %v", got)
+	}
+	// Measured folds replace the built-in rate (seconds x parallel / units).
+	history := []PerfRecord{{Kind: "structure", Units: FoldUnits([]int{2000}, 100), Parallel: 1, Seconds: 10}}
+	e = EstimateFold(history, []int{2000}, 100, 1)
+	if !e.Measured || !near(e.Seconds, 10+foldOverhead) {
+		t.Fatalf("measured %+v", e)
+	}
+}
+
+func TestFoldRemaining(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	total := EstimateFold(nil, []int{10807}, 100, 1).Seconds
+	work := map[string]any{"lengths": []any{10807.0}, "beam": 100.0, "workers": 1.0}
+	left, ok := foldRemaining(nil, Obj{"stage": "fold", "work": work, "updated_at": now.Add(-30 * time.Second).Format(time.RFC3339)}, now)
+	if !ok || !near(left, total-foldOverhead-30) {
+		t.Fatalf("genome %v %v", left, ok)
+	}
+	if _, ok := foldRemaining(nil, Obj{"stage": "fold", "work": work, "updated_at": now.Add(-time.Hour).Format(time.RFC3339)}, now); ok {
+		t.Fatal("overdue fold reported a time left")
+	}
+	windows := map[string]any{"lengths": []any{3000.0, 3000.0, 3000.0, 3000.0}, "beam": 100.0, "workers": 2.0}
+	wtotal := EstimateFold(nil, []int{3000, 3000, 3000, 3000}, 100, 2).Seconds
+	left, ok = foldRemaining(nil, Obj{"stage": "fold", "work": windows, "bytes_done": 1.0, "bytes_total": 4.0}, now)
+	if !ok || !near(left, wtotal*0.75) {
+		t.Fatalf("windows %v %v", left, ok)
+	}
+	if _, ok := foldRemaining(nil, Obj{"stage": "write", "work": windows}, now); ok {
+		t.Fatal("write stage")
+	}
+	// A finished fold's result.json becomes a structure record.
+	run := t.TempDir()
+	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":true,"performance":{"lengths":[3000,3000],"beam":100,"workers":2,"seconds":12}}`), 0o644)
+	record, ok := perfFromResult("structure", run)
+	if !ok || record.Parallel != 2 || !near(record.Units, FoldUnits([]int{3000, 3000}, 100)) || record.Seconds != 12 {
+		t.Fatalf("%+v %v", record, ok)
+	}
+	if err := AppendPerf(filepath.Join(run, perfFile), record); err != nil || len(LoadPerf(filepath.Join(run, perfFile))) != 1 {
+		t.Fatalf("structure record not stored: %v", err)
+	}
+	// A fold that compiled the kernels does not measure the speed.
+	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":true,"performance":{"lengths":[3000],"beam":100,"workers":1,"seconds":70,"compiled":true}}`), 0o644)
+	if _, ok := perfFromResult("structure", run); ok {
+		t.Fatal("a compiling fold was recorded")
 	}
 }

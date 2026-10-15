@@ -68,6 +68,8 @@ type Backend interface {
 
 	// The expected time of running these samples' pipelines (perf.go).
 	EstimatePipelines(inputs []PipelineInput) PipelineEstimate
+	// The expected time of a structure fold of these window lengths.
+	EstimateFold(lengths []int, beam, workers int) FoldEstimate
 
 	// project_op: one of the PROJECT_OPERATIONS allowlist on the control
 	// lane; payload must not contain "operation" or "path".

@@ -111,6 +111,9 @@ class ProgressWriter:
         self.path = run_dir / "progress.json" if run_dir is not None else None
         self.interval = interval
         self._last = 0.0
+        # What is folded ({lengths, beam, workers}): the desktop estimates
+        # the time left from it.
+        self.work: Optional[Dict[str, Any]] = None
 
     def __call__(self, stage: str, detail: str, done: Optional[int] = None, total: Optional[int] = None,
                  *, units: str = "bytes", force: bool = False) -> None:
@@ -120,10 +123,21 @@ class ProgressWriter:
         self._last = now
         payload = {"stage": stage, "detail": detail, "bytes_done": done, "bytes_total": total,
                    "units": units, "updated_at": _now()}
+        if self.work:
+            payload["work"] = self.work
         try:
             _atomic_write_json(self.path, payload)
         except OSError:
             pass
+
+
+def _compiled_kernels() -> Optional[int]:
+    """Numba's cached kernels (NUMBA_CACHE_DIR), or None when unknown: a fold
+    that adds some compiled them, which is not folding speed."""
+    cache = os.environ.get("NUMBA_CACHE_DIR")
+    if not cache or not Path(cache).is_dir():
+        return None
+    return sum(1 for _ in Path(cache).rglob("*.nbc"))
 
 
 def _env_int(name: str) -> Optional[int]:
@@ -545,6 +559,8 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     workers = min(cpu, memory_workers, len(windows))
     if requested_workers is not None:
         workers = min(workers, requested_workers)
+    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"), "workers": workers}
+    kernels_before = _compiled_kernels()
     t0 = time.monotonic()
 
     def finish(index: int, record: Dict[str, Any]) -> None:
@@ -613,9 +629,14 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
                "energy": energies[0] if len(energies) == 1 else None, "energies": energies,
                "length": sum(item["length"] for item in summaries),
                "workers": workers, "timings": meta["timings"]}
+    performance = {**progress.work, "seconds": round(fold_seconds, 2)}
+    kernels_after = _compiled_kernels()
+    if kernels_before is None or kernels_after is None or kernels_after > kernels_before:
+        performance["compiled"] = True  # includes compiling the kernels (first fold after an install)
     result = {
         "ok": True, "status": "succeeded", "task_id": task_id, "run_dir": str(run_dir),
         "output": outputs["dbn"], "output_dir": str(out_dir), "outputs": outputs,
+        "performance": performance,
         # A project.json structures[] entry; register_task_run copies it into
         # the manifest when the task finishes.
         "structure": {"id": task_id, "task_id": task_id, "sample_ids": [sample["id"] for sample in inputs["samples"]],

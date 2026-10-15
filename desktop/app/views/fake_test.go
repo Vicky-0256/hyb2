@@ -62,6 +62,9 @@ func (f *fakeBackend) CreateProject(path, name, description string) (core.Obj, e
 func (f *fakeBackend) EstimatePipelines(inputs []core.PipelineInput) core.PipelineEstimate {
 	return core.EstimatePipelines(nil, inputs, 10)
 }
+func (f *fakeBackend) EstimateFold(lengths []int, beam, workers int) core.FoldEstimate {
+	return core.EstimateFold(nil, lengths, beam, workers)
+}
 func (f *fakeBackend) ValidateProject(string, bool) (core.Obj, error) {
 	return core.Obj{"ok": true}, nil
 }

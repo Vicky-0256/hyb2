@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"hyb2desktop/model"
 )
@@ -335,8 +336,8 @@ func (s *Service) startTask(request TaskStartRequest, resumedFrom *string) (Obj,
 		if _, err := rt.Call(Control, register); err != nil {
 			s.logf("HYB2: register_task_run failed for %s: %v", id, err)
 		}
-		if kind == "sample_pipeline" {
-			if record, ok := perfFromResult(filepath.Join(project, "runs", id)); ok {
+		if kind == "sample_pipeline" || kind == "structure" {
+			if record, ok := perfFromResult(kind, filepath.Join(project, "runs", id)); ok {
 				if err := AppendPerf(perfPath(s.prefsPath), record); err != nil {
 					s.logf("HYB2: cannot record the speed of %s: %v", id, err)
 				}
@@ -389,16 +390,27 @@ func (s *Service) addRemaining(tasks []Obj) {
 	loaded := false
 	for _, task := range tasks {
 		progress, _ := task["progress"].(map[string]any)
-		if task["kind"] != "sample_pipeline" || task["status"] != "running" || progress == nil {
+		kind := task["kind"]
+		if (kind != "sample_pipeline" && kind != "structure") || task["status"] != "running" || progress == nil {
 			continue
 		}
 		if !loaded {
 			history, loaded = LoadPerf(perfPath(s.prefsPath)), true
 		}
-		if left, ok := remainingSeconds(history, progress, s.tasks.Budget().CPU); ok {
+		left, ok := remainingSeconds(history, progress, s.tasks.Budget().CPU)
+		if kind == "structure" {
+			left, ok = foldRemaining(history, progress, time.Now())
+		}
+		if ok {
 			task["seconds_left"] = math.Round(left)
 		}
 	}
+}
+
+// EstimateFold is the expected time of a structure fold of these window
+// lengths (the whole RNA: one), from this computer's measured speed.
+func (s *Service) EstimateFold(lengths []int, beam, workers int) FoldEstimate {
+	return EstimateFold(LoadPerf(perfPath(s.prefsPath)), lengths, beam, workers)
 }
 
 // EstimatePipelines is the expected time of running these samples' pipelines

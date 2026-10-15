@@ -175,6 +175,11 @@ class StructureRunTests(unittest.TestCase):
         progress = json.loads((run_dir / "progress.json").read_text())
         self.assertEqual(set(progress) >= {"stage", "detail", "bytes_done", "bytes_total", "updated_at"}, True)
         self.assertEqual(result["structure"]["path"], "structures/genome1")
+        # What was folded and how long it took feed the desktop's estimates.
+        self.assertEqual(progress["work"], {"lengths": [self.length], "beam": 50, "workers": 1})
+        performance = result["performance"]
+        self.assertEqual((performance["lengths"], performance["beam"], performance["workers"]), ([self.length], 50, 1))
+        self.assertGreater(performance["seconds"], 0)
 
     def test_windows_parallel_matches_serial(self):
         windows = [{"start": 1, "end": 160}, {"start": 120, "end": 300}, {"start": 200, "end": 320}]

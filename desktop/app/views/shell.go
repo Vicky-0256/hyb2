@@ -342,11 +342,18 @@ func (p *placeholder) View(c *ui.Context) {
 	})
 }
 
-// FormatDuration is a rounded duration: "40 s", "12 min", "2 h 05 min".
+// FormatDuration is a rounded duration: "40 s", "1 min 25 s", "12 min",
+// "2 h 05 min".
 func FormatDuration(seconds float64) string {
 	switch {
 	case seconds < 60:
 		return fmt.Sprintf("%.0f s", math.Max(seconds, 1))
+	case seconds < 600:
+		s := int(math.Round(seconds/5)) * 5
+		if s%60 == 0 {
+			return fmt.Sprintf("%d min", s/60)
+		}
+		return fmt.Sprintf("%d min %d s", s/60, s%60)
 	case seconds < 3600:
 		return fmt.Sprintf("%.0f min", math.Round(seconds/60))
 	}

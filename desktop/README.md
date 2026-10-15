@@ -73,6 +73,9 @@ runtime; packaged builds ignore them.
   time to `performance.json` beside the preferences; the Run dialog shows
   the expected time of a batch and the task drawer the time left, from
   this computer's speed (a built-in rate until the first sample is done).
+  Structure folds likewise: the New fold form shows the expected time and
+  memory (time ~ length^1.7 x beam), folds that compiled the Numba kernels
+  (the first after an install, ~1 min) are not recorded as speed.
 - Project and analysis operations are allowlisted in `core/service.go`.
 - `project.json` writes are locked and atomic (Python side).
 

@@ -8,6 +8,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,14 +17,17 @@ import (
 	"time"
 )
 
-// PerfRecord is one finished sample pipeline.
+// PerfRecord is one finished sample pipeline or structure fold.
 type PerfRecord struct {
 	Kind       string  `json:"kind"`
-	Format     string  `json:"format"`
-	InputBytes int64   `json:"input_bytes"`
-	CPU        uint32  `json:"cpu"`
+	Format     string  `json:"format,omitempty"`
+	InputBytes int64   `json:"input_bytes,omitempty"`
+	CPU        uint32  `json:"cpu,omitempty"`
 	Seconds    float64 `json:"seconds"`
 	At         string  `json:"at"`
+	// Structure folds: FoldUnits of the windows and how many ran at once.
+	Units    float64 `json:"units,omitempty"`
+	Parallel int     `json:"parallel,omitempty"`
 }
 
 const (
@@ -80,7 +84,8 @@ func readPerf(path string) []PerfRecord {
 
 // AppendPerf adds a record, keeping the most recent perfKeep.
 func AppendPerf(path string, record PerfRecord) error {
-	if path == "" || record.Seconds <= 0 || record.InputBytes <= 0 {
+	if path == "" || record.Seconds <= 0 || (record.Kind == "structure" && record.Units <= 0) ||
+		(record.Kind != "structure" && record.InputBytes <= 0) {
 		return nil
 	}
 	perfMu.Lock()
@@ -103,9 +108,9 @@ func AppendPerf(path string, record PerfRecord) error {
 	return os.Rename(tmp, path)
 }
 
-// perfFromResult is the record of a finished sample pipeline's result.json
-// ("performance"), or false.
-func perfFromResult(runDir string) (PerfRecord, bool) {
+// perfFromResult is the record of a finished sample pipeline's or
+// structure fold's result.json ("performance"), or false.
+func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 	data, err := os.ReadFile(filepath.Join(runDir, "result.json"))
 	if err != nil {
 		return PerfRecord{}, false
@@ -117,14 +122,130 @@ func perfFromResult(runDir string) (PerfRecord, bool) {
 			InputBytes int64   `json:"input_bytes"`
 			CPU        uint32  `json:"cpu"`
 			Seconds    float64 `json:"seconds"`
+			Lengths    []int   `json:"lengths"`
+			Beam       int     `json:"beam"`
+			Workers    int     `json:"workers"`
+			// The run compiled Numba kernels: its time is not the speed.
+			Compiled bool `json:"compiled"`
 		} `json:"performance"`
 	}
-	if json.Unmarshal(data, &result) != nil || !result.OK || result.Performance == nil {
+	if json.Unmarshal(data, &result) != nil || !result.OK || result.Performance == nil || result.Performance.Compiled {
 		return PerfRecord{}, false
 	}
 	p := result.Performance
-	return PerfRecord{Kind: "sample_pipeline", Format: p.Format, InputBytes: p.InputBytes, CPU: p.CPU,
-		Seconds: p.Seconds, At: time.Now().UTC().Format(time.RFC3339)}, true
+	record := PerfRecord{Kind: kind, Seconds: p.Seconds, At: time.Now().UTC().Format(time.RFC3339)}
+	switch kind {
+	case "sample_pipeline":
+		record.Format, record.InputBytes, record.CPU = p.Format, p.InputBytes, p.CPU
+	case "structure":
+		record.Units, record.Parallel = FoldUnits(p.Lengths, p.Beam), foldParallel(len(p.Lengths), p.Workers)
+		if record.Units <= 0 {
+			return PerfRecord{}, false
+		}
+	default:
+		return PerfRecord{}, false
+	}
+	return record, true
+}
+
+// ---- structure folds
+
+const (
+	// CPLfold time grows as length^1.7 and linearly with the beam (measured
+	// on an Apple M1 Pro, one core, beam 100: 1000 nt 1.5 s, 2000 nt 5 s,
+	// 5000 nt 21 s, 10,807 nt 81 s; pseudoknots barely change it).
+	foldExponent = 1.7
+	// priorFoldSeconds is the time of one unit (1000 nt, beam 100).
+	priorFoldSeconds = 1.45
+	// foldOverhead covers starting the task and reading the .hyb evidence.
+	foldOverhead = 2.0
+)
+
+// FoldUnits is the work of folding windows of these lengths:
+// sum of (length/1000)^1.7 x beam/100.
+func FoldUnits(lengths []int, beam int) float64 {
+	if beam <= 0 {
+		beam = 100
+	}
+	var units float64
+	for _, n := range lengths {
+		units += math.Pow(float64(n)/1000, foldExponent) * float64(beam) / 100
+	}
+	return units
+}
+
+func foldParallel(windows, workers int) int {
+	return max(1, min(max(workers, 1), max(windows, 1)))
+}
+
+// FoldEstimate is the expected time of a structure fold.
+type FoldEstimate struct {
+	Seconds  float64 `json:"seconds"`
+	Measured bool    `json:"measured"`
+}
+
+// EstimateFold is the expected time of folding windows of these lengths
+// (one for the whole RNA), at most workers at once, from this computer's
+// recent folds or the built-in rate.
+func EstimateFold(history []PerfRecord, lengths []int, beam, workers int) FoldEstimate {
+	var rates []float64
+	for i := len(history) - 1; i >= 0 && len(rates) < perfRecent; i-- {
+		r := history[i]
+		if r.Kind == "structure" && r.Units > 0 && r.Seconds > 0 {
+			rates = append(rates, r.Seconds*float64(max(r.Parallel, 1))/r.Units)
+		}
+	}
+	rate, measured := priorFoldSeconds, false
+	if len(rates) > 0 {
+		sort.Float64s(rates)
+		rate, measured = rates[len(rates)/2], true
+	}
+	parallel := foldParallel(len(lengths), workers)
+	largest := 0
+	for _, n := range lengths {
+		largest = max(largest, n)
+	}
+	// Windows spread over the workers, but never faster than the largest.
+	seconds := math.Max(FoldUnits(lengths, beam)/float64(parallel), FoldUnits([]int{largest}, beam)) * rate
+	return FoldEstimate{Seconds: seconds + foldOverhead, Measured: measured}
+}
+
+// foldRemaining is the time left of a running fold from its progress
+// ({stage, bytes_done, bytes_total, updated_at, work: {lengths, beam,
+// workers}}), or false.
+func foldRemaining(history []PerfRecord, progress Obj, now time.Time) (float64, bool) {
+	work, _ := progress["work"].(map[string]any)
+	raw, _ := work["lengths"].([]any)
+	var lengths []int
+	for _, v := range raw {
+		if n, ok := v.(float64); ok && n > 0 {
+			lengths = append(lengths, int(n))
+		}
+	}
+	if len(lengths) == 0 {
+		return 0, false
+	}
+	beam, _ := work["beam"].(float64)
+	workers, _ := work["workers"].(float64)
+	total := EstimateFold(history, lengths, int(beam), int(workers)).Seconds
+	switch stage, _ := progress["stage"].(string); stage {
+	case "evidence":
+		return total, true
+	case "fold":
+	default:
+		return 0, false
+	}
+	if len(lengths) > 1 {
+		done, _ := progress["bytes_done"].(float64)
+		return total * (1 - math.Min(done/float64(len(lengths)), 1)), true
+	}
+	// One fold reports nothing until it ends: time since it started.
+	at, err := time.Parse(time.RFC3339, fmt.Sprint(progress["updated_at"]))
+	if err != nil {
+		return 0, false
+	}
+	left := total - foldOverhead - now.Sub(at).Seconds()
+	return left, left > 0
 }
 
 // cpuScale converts a time measured with from CPUs to one with to CPUs.

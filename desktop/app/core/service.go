@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // AnalysisOperations are the read-only analysis queries (contract R3/R6),
@@ -62,7 +63,9 @@ type ServiceOptions struct {
 
 // Service is the Backend over a Runtime and a task Scheduler.
 type Service struct {
+	rtMu      sync.RWMutex
 	rt        *Runtime
+	rtPending bool // the bundled runtime is still being unpacked
 	tasks     *Scheduler
 	prefsPath string
 	logf      func(format string, args ...any)
@@ -94,10 +97,29 @@ func NewService(rt *Runtime, opts ServiceOptions) *Service {
 func (s *Service) Scheduler() *Scheduler { return s.tasks }
 
 func (s *Service) runtime() (*Runtime, error) {
+	s.rtMu.RLock()
+	defer s.rtMu.RUnlock()
 	if s.rt == nil {
+		if s.rtPending {
+			return nil, errors.New("The bundled runtime is still being prepared; try again in a moment.")
+		}
 		return nil, errors.New("Native runtime is not available. Rebuild or reinstall HYB2 Desktop with the runtime resources.")
 	}
 	return s.rt, nil
+}
+
+// SetPending marks the runtime as being prepared (first-launch unpacking).
+func (s *Service) SetPending(pending bool) {
+	s.rtMu.Lock()
+	s.rtPending = pending
+	s.rtMu.Unlock()
+}
+
+// SetRuntime attaches a runtime resolved after the service was made.
+func (s *Service) SetRuntime(rt *Runtime) {
+	s.rtMu.Lock()
+	s.rt, s.rtPending = rt, false
+	s.rtMu.Unlock()
 }
 
 func (s *Service) call(lane Lane, request Obj) (Obj, error) {
@@ -368,7 +390,10 @@ func (s *Service) WarmUp() {
 // process trees), then stops the sidecars; later calls fail.
 func (s *Service) Shutdown() {
 	s.tasks.ShutdownAll()
-	if s.rt != nil {
-		s.rt.Shutdown()
+	s.rtMu.RLock()
+	rt := s.rt
+	s.rtMu.RUnlock()
+	if rt != nil {
+		rt.Shutdown()
 	}
 }

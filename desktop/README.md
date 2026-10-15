@@ -36,13 +36,18 @@ go tool mygo build -skip-dmg          # build/darwin-arm64/HYB2 Desktop.app
 go tool mygo build -platform windows/amd64,linux/amd64
 ```
 
-The runtime ships as a platform resource: `app/resources/<platform>/native`
-links to the staged `resources/native` (ignored by git). Stage it with:
+The runtime ships as one archive per platform,
+`app/resources/<platform>/native.tar.gz` with its `.sha256` (not in git),
+because MyGo leaves hidden files out of resources and the runtime needs some
+(`numpy/.dylibs`, `numpy/.libs`). The app unpacks it on first launch into its
+cache directory (`runtime/runtime-<sha>/native`, a few seconds) and reuses it
+afterwards. Stage and pack it with:
 
 ```bash
 python3 desktop/scripts/stage-native.py --standalone-python <cpython> \
   --bowtie2 <bowtie2 dir> --source-id "<source id>" --output <empty dir>
 python3 desktop/scripts/verify-native-release.py
+python3 desktop/scripts/pack-runtime.py --platform darwin-arm64   # or windows-amd64, linux-amd64
 ```
 
 In development builds `HYB2_REPOSITORY_ROOT` / `HYB2_PYTHON` select another

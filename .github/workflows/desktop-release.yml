@@ -16,8 +16,9 @@ permissions:
 
 # Stages the native runtime on each target (desktop/scripts/README-native-release.md:
 # a pinned, checksum-verified python-build-standalone CPython, the pinned wheels,
-# pinned Bowtie2), runs the app's real-stack test against it, and packages the
-# MyGo app with the runtime as a platform resource.
+# pinned Bowtie2), runs the app's real-stack test against it, packages the
+# MyGo app with the runtime archive as a platform resource, and unpacks the
+# archive found inside the package to import numpy, numba and ViennaRNA.
 jobs:
   package:
     strategy:
@@ -83,19 +84,19 @@ jobs:
       - name: Package the app with the runtime
         working-directory: desktop/app
         run: |
-          mkdir -p resources/${{ matrix.resource_dir }}
-          cp -R ../resources/native resources/${{ matrix.resource_dir }}/native
+          # The runtime ships as one archive (MyGo leaves hidden files such as
+          # numpy/.dylibs out of resources); the app unpacks it on first launch.
+          python ../scripts/pack-runtime.py --platform ${{ matrix.resource_dir }}
           go tool mygo build -platform ${{ matrix.go_platform }} -skip-dmg
-          # (no "| head": with pipefail its SIGPIPE fails the step)
           find build -maxdepth 3
           du -sh build/*
-      - name: Check the packaged runtime
+      - name: Unpack and import the runtime shipped in the package
         working-directory: desktop/app
         run: |
-          python=$(find build -path "*native/${{ matrix.python }}" -type f -print -quit)
-          test -n "$python" || { echo "bundled python not found"; exit 1; }
-          echo "bundled interpreter: $python"
-          "$python" -c "import numpy, numba, RNA; print('runtime ok', numpy.__version__, numba.__version__)"
+          archive=$(find build -name native.tar.gz -print -quit)
+          test -n "$archive" || { echo "native.tar.gz is not in the package"; exit 1; }
+          echo "shipped archive: $archive"
+          HYB2_PACKED_RUNTIME="$(dirname "$archive")" go test -run TestPackedRuntime -v .
           test "$(find build -name '*.pyc' | wc -l)" -eq 0
       - uses: actions/upload-artifact@v4
         with:

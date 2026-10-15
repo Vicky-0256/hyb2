@@ -25,22 +25,18 @@ func repoRoot() string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
-// startRuntime resolves the bundled runtime and builds the service; the
-// service works without a runtime (calls then fail with its error).
-func startRuntime() (*core.Service, string, error) {
-	resources, _ := mygo.App.Path(mygo.PathResources)
-	cache, _ := mygo.App.Path(mygo.PathCache)
-	userData, _ := mygo.App.Path(mygo.PathUserData)
-	options := core.ServiceOptions{PreferencesPath: filepath.Join(userData, "preferences.json")}
-	bridge, err := core.ResolveBridge(resources, mygo.IsDev() || !mygo.App.IsPackaged(), repoRoot())
+// resolveRuntime finds the runtime: the packed archive of a packaged app
+// (unpacked into the cache on first launch, which can take a while), else
+// a runtime directory (development). It runs off the main thread.
+func resolveRuntime(resources, cache string) (*core.Bridge, error) {
+	archive, digest, ok, err := core.PackedRuntime(resources)
 	if err != nil {
-		return core.NewService(nil, options), "", err
+		return nil, err
 	}
-	rt, err := core.NewRuntime(*bridge, cache)
-	if err != nil {
-		return core.NewService(nil, options), "", err
+	if ok {
+		return core.UnpackRuntime(archive, digest, filepath.Join(cache, "runtime"))
 	}
-	return core.NewService(rt, options), bridge.Python, nil
+	return core.ResolveBridge(resources, mygo.IsDev() || !mygo.App.IsPackaged(), repoRoot())
 }
 
 // detectSummary is one line about the runtime for the start page.
@@ -51,12 +47,12 @@ func detectSummary(response core.Obj) string {
 }
 
 func main() {
-	service, _, runtimeErr := startRuntime()
+	resources, _ := mygo.App.Path(mygo.PathResources)
+	cache, _ := mygo.App.Path(mygo.PathCache)
 	userData, _ := mygo.App.Path(mygo.PathUserData)
+	service := core.NewService(nil, core.ServiceOptions{PreferencesPath: filepath.Join(userData, "preferences.json")})
+	service.SetPending(true)
 	app := views.New(service, nil, userData)
-	if runtimeErr != nil {
-		app.SetRuntimeStatus("", runtimeErr.Error())
-	}
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "HYB2 Desktop",
@@ -68,23 +64,35 @@ func main() {
 			Content:   ui.View(app.View),
 		})
 		app.SetPoster(win)
-		if runtimeErr == nil {
-			// Detect the runtime, then compile the CPLfold kernels in the
-			// background so the first fold does not wait for them.
-			go func() {
-				detected, err := service.Detect()
-				win.Update(func() {
-					if err != nil {
-						app.SetRuntimeStatus("", err.Error())
-						return
-					}
-					app.SetRuntimeStatus(detectSummary(detected), "")
-				})
-				if err == nil {
-					service.WarmUp()
-				}
-			}()
+		if _, digest, ok, _ := core.PackedRuntime(resources); ok && !core.RuntimeReady(filepath.Join(cache, "runtime"), digest) {
+			app.SetRuntimeStatus("Preparing the bundled runtime (first launch)…", "")
 		}
+		// Resolve (and on first launch unpack) the runtime, detect it, then
+		// compile the CPLfold kernels so the first fold does not wait.
+		go func() {
+			bridge, err := resolveRuntime(resources, cache)
+			var rt *core.Runtime
+			if err == nil {
+				rt, err = core.NewRuntime(*bridge, cache)
+			}
+			if err != nil {
+				service.SetPending(false)
+				win.Update(func() { app.SetRuntimeStatus("", err.Error()) })
+				return
+			}
+			service.SetRuntime(rt)
+			detected, err := service.Detect()
+			win.Update(func() {
+				if err != nil {
+					app.SetRuntimeStatus("", err.Error())
+					return
+				}
+				app.SetRuntimeStatus(detectSummary(detected), "")
+			})
+			if err == nil {
+				service.WarmUp()
+			}
+		}()
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		app.Stop()

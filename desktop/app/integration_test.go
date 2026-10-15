@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"testing"
@@ -97,4 +98,42 @@ func waitFor(t *testing.T, tt *ui.Tester, ok func() bool) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("condition not reached")
+}
+
+// TestPackedRuntime unpacks the app's packed runtime (pack-runtime.py output
+// in resources/<platform>) the way a packaged app does on first launch,
+// imports the native packages with it and runs the bridge's detect.
+// HYB2_PACKED_RUNTIME names the resources directory; CI sets it.
+func TestPackedRuntime(t *testing.T) {
+	resources := os.Getenv("HYB2_PACKED_RUNTIME")
+	if resources == "" {
+		t.Skip("HYB2_PACKED_RUNTIME is not set")
+	}
+	archive, digest, ok, err := core.PackedRuntime(resources)
+	if err != nil || !ok {
+		t.Fatalf("no packed runtime in %s: %v", resources, err)
+	}
+	cache := t.TempDir()
+	started := time.Now()
+	bridge, err := core.UnpackRuntime(archive, digest, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("unpacked in %.1f s", time.Since(started).Seconds())
+	cmd := exec.Command(bridge.Python, "-c", "import numpy, numba, RNA; numpy.linalg.inv(numpy.eye(3)); print(numpy.__version__, numba.__version__)")
+	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("imports failed: %v\n%s", err, out)
+	}
+	t.Logf("packages: %s", out)
+	rt, err := core.NewRuntime(*bridge, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Shutdown()
+	detected, err := rt.Call(core.Control, map[string]any{"operation": "detect"})
+	if err != nil || detected["ok"] != true {
+		t.Fatalf("detect: %v %v", err, detected)
+	}
 }

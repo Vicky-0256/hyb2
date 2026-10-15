@@ -39,6 +39,10 @@ const (
 	// is 1.9x faster).
 	perfCPUExponent = 0.7
 	priorCPU        = 10
+	// sampleOverhead is the fixed time of a sample pipeline (process start,
+	// Bowtie2 index, analysis index): 14 samples of 200,000 reads took 1.4 s
+	// each more than their size alone predicts.
+	sampleOverhead = 1.5
 )
 
 // priorSecondsPerMB are seconds per MB of input at 10 CPUs (Apple M1 Pro,
@@ -263,18 +267,18 @@ func SampleEstimate(history []PerfRecord, format string, inputBytes int64, cpu u
 	for i := len(history) - 1; i >= 0 && len(rates) < perfRecent; i-- {
 		r := history[i]
 		if r.Kind == "sample_pipeline" && r.Format == format && r.InputBytes > 0 && r.Seconds > 0 {
-			rates = append(rates, r.Seconds/float64(r.InputBytes)*cpuScale(r.CPU, cpu))
+			rates = append(rates, math.Max(r.Seconds-sampleOverhead, 0)/float64(r.InputBytes)*cpuScale(r.CPU, cpu))
 		}
 	}
 	if len(rates) > 0 {
 		sort.Float64s(rates)
-		return rates[len(rates)/2] * float64(inputBytes), true
+		return sampleOverhead + rates[len(rates)/2]*float64(inputBytes), true
 	}
 	perMB, ok := priorSecondsPerMB[format]
 	if !ok {
 		perMB = priorSecondsPerMB["fastq.gz"]
 	}
-	return perMB * float64(inputBytes) / 1e6 * cpuScale(priorCPU, cpu), false
+	return sampleOverhead + perMB*float64(inputBytes)/1e6*cpuScale(priorCPU, cpu), false
 }
 
 // PipelineInput is one sample to estimate.

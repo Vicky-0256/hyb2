@@ -13,10 +13,10 @@ func near(a, b float64) bool { return math.Abs(a-b) <= 1e-6*math.Max(1, math.Abs
 func TestSampleEstimatePriorAndMeasured(t *testing.T) {
 	// No history: the built-in rate, scaled by CPUs.
 	seconds, measured := SampleEstimate(nil, "fastq.gz", 2_000_000_000, 10)
-	if measured || !near(seconds, 940) {
+	if measured || !near(seconds, sampleOverhead+940) {
 		t.Fatalf("prior %v %v", seconds, measured)
 	}
-	if half, _ := SampleEstimate(nil, "fastq.gz", 2_000_000_000, 5); !near(half, 940*math.Pow(2, perfCPUExponent)) {
+	if half, _ := SampleEstimate(nil, "fastq.gz", 2_000_000_000, 5); !near(half, sampleOverhead+940*math.Pow(2, perfCPUExponent)) {
 		t.Fatalf("5 cpus %v", half)
 	}
 	// Measured runs of the same format win (median; other formats ignored).
@@ -27,16 +27,16 @@ func TestSampleEstimatePriorAndMeasured(t *testing.T) {
 		{Kind: "sample_pipeline", Format: "fastq", InputBytes: 100e6, CPU: 10, Seconds: 999},
 	}
 	seconds, measured = SampleEstimate(history, "fastq.gz", 1e9, 10)
-	if !measured || !near(seconds, 400) {
+	if !measured || !near(seconds, sampleOverhead+(80-sampleOverhead)*5) { // median rate: the 200 MB run
 		t.Fatalf("measured %v %v", seconds, measured)
 	}
 	// A run measured with 5 CPUs counts as faster with 10.
 	seconds, _ = SampleEstimate([]PerfRecord{{Kind: "sample_pipeline", Format: "hyb", InputBytes: 1e6, CPU: 5, Seconds: 10}}, "hyb", 1e6, 10)
-	if !near(seconds, 10*math.Pow(0.5, perfCPUExponent)) {
+	if !near(seconds, sampleOverhead+(10-sampleOverhead)*math.Pow(0.5, perfCPUExponent)) {
 		t.Fatalf("scaled %v", seconds)
 	}
 	e := EstimatePipelines(history, []PipelineInput{{"fastq.gz", 1e9}, {"sam", 1e9}}, 10)
-	if e.Samples != 2 || e.Measured != 1 || !near(e.Seconds, 400+20) {
+	if e.Samples != 2 || e.Measured != 1 || !near(e.Seconds, sampleOverhead+(80-sampleOverhead)*5+sampleOverhead+20) {
 		t.Fatalf("batch %+v", e)
 	}
 }

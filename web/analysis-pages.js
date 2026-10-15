@@ -86,7 +86,9 @@
 
   function renderInteractionTable(records, state) {
     const rowHeight = state.density === "compact" ? 38 : 46;
-    const viewportHeight = 414;
+    // Initial row window only; the table height comes from CSS and
+    // bindVirtualTable re-windows rows from the real clientHeight.
+    const viewportHeight = 960;
     const scrollTop = state.interactionScrollTop || 0;
     const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 4);
     const visible = Math.ceil(viewportHeight / rowHeight) + 8;
@@ -95,12 +97,14 @@
     return [
       '<section class="data-card interaction-table-card">',
       '<div class="card-title-row"><div><h2>Records</h2><span class="card-note">' + format(records.length) + " matching records · virtualised rows</span></div><span class=\"card-kicker\">Local memory</span></div>",
+      '<div class="virtual-table-frame">',
       '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span>Region 1</span><span>RNA 2</span><span>Region 2</span><span>Chimera type</span><span>Support</span><span>dG</span></div>',
-      '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0" style="height:' + viewportHeight + 'px">',
+      '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0">',
       '<div class="virtual-table-spacer" style="height:' + (records.length * rowHeight) + 'px"></div>',
       '<div class="virtual-table-rows" data-virtual-rows style="transform:translateY(' + (start * rowHeight) + 'px)">',
       renderVirtualRows(rows),
       "</div></div>",
+      "</div>",
       "</section>"
     ].join("");
   }
@@ -213,18 +217,21 @@
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset map</button><button class="quiet-button" type="button" data-feature-action="reset-contact-zoom">Reset zoom</button><span class="control-hint">' + escape(budgetHint) + 'Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click or Reset zoom returns to the full extent.</span></div>',
       "</section>",
       matrix && matrix.cells.length ? [
-        '<section class="contact-navigator" aria-label="Interactive contact map">',
+        '<section class="contact-workbench' + (contact.updating ? " is-updating" : "") + '"' + (contact.updating ? ' aria-busy="true"' : "") + '>',
+        '<div class="contact-navigator contact-workbench-main" aria-label="Interactive contact map">',
         renderContactStage("overview", "Contact map", "Drag to select a region. Click a cell to zoom and inspect it.", contact.overviewSelection, contact, matrix),
-        "</section>",
-        '<section class="heatmap-layout">',
+        contact.updating ? '<div class="contact-updating" role="status"><span></span>Updating map…</div>' : "",
+        "</div>",
+        '<aside class="contact-workbench-side">',
+        renderContactSelection(contact, matrix, selectedRecords),
         '<div class="heatmap-card data-card">',
         '<div class="heatmap-topline"><span class="card-kicker">Viridis · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
         '<div class="heatmap-axis"><span>' + escape(contact.rnaX) + " · X axis</span><span>" + escape(contact.rnaY) + " · Y axis</span></div>",
         '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="contact-export-tsv">Export contact TSV</button><button class="quiet-button" type="button" data-feature-action="contact-export-params">Export parameters</button></div>',
-        contact.showDataTable ? renderContactDataTable(matrix) : "",
         "</div>",
-        renderContactSelection(contact, matrix, selectedRecords),
-        "</section>"
+        "</aside>",
+        "</section>",
+        contact.showDataTable ? '<section class="data-card contact-data-card">' + renderContactDataTable(matrix) + "</section>" : ""
       ].join("") : renderNoContactData(contact, matrix),
       "      <section class=\"method-note\"><strong>Method</strong><span>Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.</span></section>"
     ].join("");
@@ -555,7 +562,7 @@
         renderRegionPartners(results),
         "</section>",
         renderReferencePanel(fastaRegion, region),
-        renderRegionRecords(results.records),
+        renderRegionRecords(results.records, region.showAllRecords),
         "</section>"
       ].join("") : renderEmptyRegion()
     ].join("");
@@ -588,15 +595,16 @@
     ].join("");
   }
 
-  function renderRegionRecords(records) {
+  function renderRegionRecords(records, showAll) {
+    const limit = showAll ? 100 : 20;
     return [
       '<section class="data-card"><div class="card-title-row"><h2>Matching records</h2><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="region-export-csv">Export CSV</button><button class="quiet-button" type="button" data-feature-action="region-export-hyb">Export HYB</button><button class="quiet-button" type="button" data-feature-action="region-export-params">Export parameters</button></div></div>',
       '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Sequence ID</th><th>RNA 1</th><th>Region 1</th><th>RNA 2</th><th>Region 2</th><th>Chimera type</th><th>Support</th></tr></thead><tbody>',
-      records.slice(0, 100).map(function (record) {
+      records.slice(0, limit).map(function (record) {
         return "<tr><td>" + escape(record.id) + "</td><td>" + escape(record.rnaOne) + "</td><td>" + range(record.rnaOneStart, record.rnaOneEnd) + "</td><td>" + escape(record.rnaTwo) + "</td><td>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</td><td>" + escape(record.chimeraType) + "</td><td>" + format(record.supportCount) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>",
-      records.length > 100 ? '<p class="table-note">Showing the first 100 of ' + format(records.length) + " matching records. Export includes all local matches.</p>" : "",
+      records.length > 20 ? '<div class="table-more"><button class="quiet-button" type="button" data-feature-action="region-toggle-records">' + (showAll ? "Show fewer records" : "Show " + format(Math.min(records.length, 100)) + " records") + '</button>' + (records.length > 100 && showAll ? '<span class="table-note">Showing the first 100 of ' + format(records.length) + " matching records. Export includes all local matches.</span>" : '<span class="table-note">Showing ' + format(Math.min(limit, records.length)) + " of " + format(records.length) + ". Export includes all local matches.</span>") + "</div>" : "",
       "</section>"
     ].join("");
   }
@@ -690,8 +698,10 @@
         ? '<div class="fold-status fold-status-constraints"><strong>Manual hard-pair mode</strong><p>ViennaRNA will enforce the pairs you enter before calculating the MFE. HYB2 Web Lite does not infer these pairs from HYB or RNAcofold evidence.</p></div>'
         : '<div class="fold-status fold-status-mfe"><strong>Plain minimum-free-energy mode</strong><p>Runs the deployed ViennaRNA WebAssembly engine in a dedicated worker without base-pair constraints.</p></div>',
       !cplfold && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : "",
+      '<div class="structure-run-bar">',
       running ? renderStructureProgress(structure) : "",
       running ? '<button class="button button-secondary" type="button" data-feature-action="cancel-structure">' + (structure.operation === "capacity" ? "Cancel capacity test" : (structure.operation === "bonus-matrix" ? "Cancel input export" : "Cancel prediction")) + '</button>' : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable ? " disabled" : "") + ">" + actionLabel + "</button>",
+      "</div>",
       "</section>",
       '<section class="structure-result data-card">',
       '<div class="card-title-row"><div><h2>' + (structure.result ? "Structure result" : "Sequence preparation") + '</h2><span class="card-note">' + (structure.result && structure.result.label ? escape(structure.result.label) : (sequenceInfo.label ? escape(sequenceInfo.label) : "Choose a source")) + '</span></div><span class="card-kicker">' + format(structure.result && structure.result.sequence ? structure.result.sequence.length : length) + " nt</span></div>",

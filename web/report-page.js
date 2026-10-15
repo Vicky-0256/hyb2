@@ -730,9 +730,11 @@
   }
 
   function table(headers, rows) {
-    return '<table class="report-table"><thead><tr>' + headers.map(function (header) { return '<th scope="col">' + escape(header) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
+    // Wide tables scroll inside their own box on screen instead of widening
+    // the page; print styles let them flow at full width.
+    return '<div class="report-table-scroll"><table class="report-table"><thead><tr>' + headers.map(function (header) { return '<th scope="col">' + escape(header) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
       return '<tr>' + row.map(function (cell) { return '<td>' + cell + '</td>'; }).join("") + '</tr>';
-    }).join("") + '</tbody></table>';
+    }).join("") + '</tbody></table></div>';
   }
 
   function visualBlock(svg, note) {

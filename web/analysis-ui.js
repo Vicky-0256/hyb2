@@ -28,6 +28,41 @@
     }
   }
 
+  // The matrix is rebuilt synchronously inside the page render and takes
+  // ~100 ms on larger inputs. Paint the previous map dimmed first so the
+  // control responds at once, then rebuild on the next frame.
+  function rebuildContact(state, api) {
+    const contact = state.contact;
+    const previous = contact.matrix;
+    contact.selection = null;
+    contact.overviewSelection = null;
+    contact.zoomSelection = null;
+    contact.overviewView = null;
+    contact.zoomView = null;
+    contact.detailView = null;
+    contact.rebuildToken = (contact.rebuildToken || 0) + 1;
+    const token = contact.rebuildToken;
+    if (!previous || !previous.cells || !previous.cells.length) {
+      contact.updating = false;
+      contact.matrix = null;
+      api.render();
+      return;
+    }
+    contact.updating = true;
+    contact.matrix = previous;
+    api.render();
+    window.requestAnimationFrame(function () {
+      window.setTimeout(function () {
+        if (contact.rebuildToken !== token) {
+          return;
+        }
+        contact.updating = false;
+        contact.matrix = null;
+        api.render();
+      }, 0);
+    });
+  }
+
   function renderAndFocus(api, selector) {
     api.render();
     const replacement = document.querySelector(selector);
@@ -47,6 +82,28 @@
       state.interactionScrollTop = table.scrollTop;
       updateVirtualRows(state);
     });
+    // Rows were windowed for a default height; fit them to the real one.
+    updateVirtualRows(state);
+    // Page first, then table: until the table reaches the top of the
+    // viewport the wheel moves the page, and at the table's top edge an
+    // upward wheel hands back to the page instead of stopping dead.
+    table.addEventListener("wheel", function (event) {
+      if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) {
+        return;
+      }
+      const header = document.querySelector(".workspace-header");
+      const dock = (header ? header.getBoundingClientRect().bottom : 0) + 12;
+      const top = table.getBoundingClientRect().top;
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      const pageRoom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+      if (delta > 0 && top > dock + 1 && pageRoom > 1) {
+        event.preventDefault();
+        window.scrollBy(0, Math.min(delta, top - dock, pageRoom));
+      } else if (delta < 0 && table.scrollTop <= 0 && window.scrollY > 0) {
+        event.preventDefault();
+        window.scrollBy(0, delta);
+      }
+    }, { passive: false });
   }
 
   function updateVirtualRows(state) {
@@ -1233,14 +1290,7 @@
 
     if (feature === "contact-control") {
       state.contact[key] = element.value;
-      state.contact.matrix = null;
-      state.contact.selection = null;
-      state.contact.overviewSelection = null;
-      state.contact.zoomSelection = null;
-      state.contact.overviewView = null;
-      state.contact.zoomView = null;
-      state.contact.detailView = null;
-      api.render();
+      rebuildContact(state, api);
       return true;
     }
 
@@ -1544,14 +1594,7 @@
     }
 
     if (action === "generate-contact") {
-      state.contact.matrix = null;
-      state.contact.selection = null;
-      state.contact.overviewSelection = null;
-      state.contact.zoomSelection = null;
-      state.contact.overviewView = null;
-      state.contact.zoomView = null;
-      state.contact.detailView = null;
-      api.render();
+      rebuildContact(state, api);
       return true;
     }
 
@@ -1946,6 +1989,12 @@
         api.download(reference.id + "_" + reference.start + "-" + reference.end + ".fasta", ">" + reference.id + ":" + reference.start + "-" + reference.end + "\n" + reference.sequence + "\n", "text/plain");
         api.showToast("Region FASTA downloaded locally.");
       }
+      return true;
+    }
+
+    if (action === "region-toggle-records") {
+      state.region.showAllRecords = !state.region.showAllRecords;
+      api.render();
       return true;
     }
 

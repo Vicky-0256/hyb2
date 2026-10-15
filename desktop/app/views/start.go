@@ -321,6 +321,11 @@ type prefsState struct {
 	sysCPU  float64
 	sysMem  float64
 	custom  bool
+	// cpuModel, performance/efficiency cores (0: unknown) and samples
+	// measured for time estimates.
+	cpuModel           string
+	perfCores, effCore float64
+	measured           float64
 	// External public-data lookups (EVIDENCE.md).
 	lookup       bool
 	lookupNotice bool // the first-enable notice is open
@@ -351,6 +356,11 @@ func (a *App) applyPrefs(got core.Obj, err error) {
 	a.prefs.sysCPU, _ = system["cpus"].(float64)
 	a.prefs.sysMem, _ = system["mem_mb"].(float64)
 	a.prefs.custom, _ = got["custom_budget"].(bool)
+	a.prefs.cpuModel, _ = system["cpu_model"].(string)
+	a.prefs.perfCores, _ = system["performance_cores"].(float64)
+	a.prefs.effCore, _ = system["efficiency_cores"].(float64)
+	speed, _ := got["speed"].(map[string]any)
+	a.prefs.measured, _ = speed["measured_samples"].(float64)
 	a.prefs.lookup, _ = got["external_lookup"].(bool)
 	a.setLookup(got)
 }
@@ -370,8 +380,13 @@ func (a *App) prefsDialog(c *ui.Context) {
 				return
 			}
 			ui.Text(c, "Resource budget for tasks").Bold()
-			ui.Text(c, fmt.Sprintf("This computer: %.0f CPUs, %s MB memory. Tasks that do not fit wait in the queue.",
-				p.sysCPU, FormatNumber(int64(p.sysMem)))).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "This computer: "+describeComputer(p)).FontSize(12).TextColor(t.TextMuted)
+			speed := "Time estimates use a typical rate until a sample has finished on this computer."
+			if p.measured > 0 {
+				speed = fmt.Sprintf("Time estimates use the speed measured on this computer (%s).", dataPlural(int(p.measured), "finished sample", "finished samples"))
+			}
+			ui.Text(c, "By default tasks may use every CPU and 75% of the memory; tasks that do not fit wait in the queue. "+
+				"One sample maps at a time with all CPUs while the next prepares its reads. "+speed).FontSize(12).TextColor(t.TextMuted)
 			maxCPU := p.sysCPU
 			if maxCPU < 1 {
 				maxCPU = 1
@@ -507,4 +522,21 @@ func maxFloat(x, y float64) float64 {
 		return x
 	}
 	return y
+}
+
+// describeComputer is "Apple M1 Pro · 10 CPUs (8 performance + 2 efficiency) · 32 GB memory".
+func describeComputer(p *prefsState) string {
+	var parts []string
+	if p.cpuModel != "" {
+		parts = append(parts, p.cpuModel)
+	}
+	cpus := fmt.Sprintf("%.0f CPUs", p.sysCPU)
+	if p.perfCores > 0 {
+		cpus += fmt.Sprintf(" (%.0f performance + %.0f efficiency)", p.perfCores, p.effCore)
+	}
+	parts = append(parts, cpus)
+	if p.sysMem > 0 {
+		parts = append(parts, fmt.Sprintf("%.0f GB memory", p.sysMem/1024))
+	}
+	return strings.Join(parts, " · ") + "."
 }

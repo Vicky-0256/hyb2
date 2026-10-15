@@ -66,6 +66,9 @@ type Backend interface {
 	// project_read_input.
 	ReadInput(path, relative string) (Obj, error)
 
+	// The expected time of running these samples' pipelines (perf.go).
+	EstimatePipelines(inputs []PipelineInput) PipelineEstimate
+
 	// project_op: one of the PROJECT_OPERATIONS allowlist on the control
 	// lane; payload must not contain "operation" or "path".
 	ProjectOp(path, operation string, payload Obj) (Obj, error)

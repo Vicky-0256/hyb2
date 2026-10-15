@@ -13,8 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -327,10 +329,18 @@ func (s *Service) startTask(request TaskStartRequest, resumedFrom *string) (Obj,
 	if err != nil {
 		return nil, err
 	}
+	kind := request.Kind
 	onFinish := func(project, id string) {
 		register := Obj{"operation": "register_task_run", "path": project, "task_id": id}
 		if _, err := rt.Call(Control, register); err != nil {
 			s.logf("HYB2: register_task_run failed for %s: %v", id, err)
+		}
+		if kind == "sample_pipeline" {
+			if record, ok := perfFromResult(filepath.Join(project, "runs", id)); ok {
+				if err := AppendPerf(perfPath(s.prefsPath), record); err != nil {
+					s.logf("HYB2: cannot record the speed of %s: %v", id, err)
+				}
+			}
 		}
 	}
 	return s.tasks.Submit(s.taskCommand(rt, prepared), prepared, onFinish)
@@ -365,7 +375,36 @@ func (s *Service) ResumeTask(projectPath, taskID string) (Obj, error) {
 // TaskStatus is task_status; projectPath may be empty for tasks of this
 // session.
 func (s *Service) TaskStatus(projectPath, taskID string) (Obj, error) {
-	return s.tasks.Status(taskID, projectPath)
+	snap, err := s.tasks.Status(taskID, projectPath)
+	if err == nil {
+		s.addRemaining([]Obj{snap})
+	}
+	return snap, err
+}
+
+// addRemaining sets "seconds_left" on running sample pipelines whose time
+// left can be estimated.
+func (s *Service) addRemaining(tasks []Obj) {
+	var history []PerfRecord
+	loaded := false
+	for _, task := range tasks {
+		progress, _ := task["progress"].(map[string]any)
+		if task["kind"] != "sample_pipeline" || task["status"] != "running" || progress == nil {
+			continue
+		}
+		if !loaded {
+			history, loaded = LoadPerf(perfPath(s.prefsPath)), true
+		}
+		if left, ok := remainingSeconds(history, progress, s.tasks.Budget().CPU); ok {
+			task["seconds_left"] = math.Round(left)
+		}
+	}
+}
+
+// EstimatePipelines is the expected time of running these samples' pipelines
+// with the current CPU budget, from this computer's measured speed.
+func (s *Service) EstimatePipelines(inputs []PipelineInput) PipelineEstimate {
+	return EstimatePipelines(LoadPerf(perfPath(s.prefsPath)), inputs, s.tasks.Budget().CPU)
 }
 
 // CancelTask is task_cancel.
@@ -375,7 +414,11 @@ func (s *Service) CancelTask(projectPath, taskID string) (Obj, error) {
 
 // ListTasks is task_list (the `tasks` array), newest first.
 func (s *Service) ListTasks(projectPath string) ([]Obj, error) {
-	return s.tasks.List(projectPath)
+	tasks, err := s.tasks.List(projectPath)
+	if err == nil {
+		s.addRemaining(tasks)
+	}
+	return tasks, err
 }
 
 // Preferences is preferences_get.

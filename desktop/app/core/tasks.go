@@ -517,6 +517,7 @@ type queuedTask struct {
 	seq   uint64
 	id    string
 	claim Budget
+	kind  string
 }
 
 type admitted struct {
@@ -543,6 +544,37 @@ func admit(queued []queuedTask, used, budget Budget) []admitted {
 	return launch
 }
 
+// MapSlotEnv names the lock file sample pipelines hold while Bowtie2 maps.
+const MapSlotEnv = "HYB2_MAP_SLOT"
+
+// earlyKind is the task kind that may start before the CPUs are free:
+// its first stage (reading and collapsing reads) runs on one core, and its
+// mapping waits for the machine-wide map slot, so starting it while
+// another sample maps hides that stage without competing for the cores.
+const earlyKind = "sample_pipeline"
+
+// EarlyStart enables earlyStart (benchmarks turn it off to compare).
+var EarlyStart = true
+
+// earlyStart is the queue head to start beyond the CPU budget, if any:
+// only a sample pipeline, only when exactly one other sample pipeline (and
+// nothing else) runs, and only when its memory fits.
+func earlyStart(queued []queuedTask, running []string, used, budget Budget) *admitted {
+	if !EarlyStart || len(queued) == 0 || len(running) != 1 || running[0] != earlyKind {
+		return nil
+	}
+	sort.Slice(queued, func(i, j int) bool { return queued[i].seq < queued[j].seq })
+	head := queued[0]
+	if head.kind != earlyKind {
+		return nil
+	}
+	claim := clampClaim(head.claim, budget)
+	if used.MemMB+claim.MemMB > budget.MemMB {
+		return nil
+	}
+	return &admitted{head.id, claim}
+}
+
 type started struct {
 	id, project, runDir string
 	cmd                 *exec.Cmd
@@ -559,15 +591,23 @@ func (s *Scheduler) schedule() {
 		budget := s.budgetLocked()
 		var used Budget
 		var queued []queuedTask
+		var running []string
 		for id, e := range s.tasks {
 			if e.status == "running" && e.cmd != nil {
 				used.CPU += e.claim.CPU
 				used.MemMB += e.claim.MemMB
+				running = append(running, e.kind)
 			} else if e.status == "queued" && e.pending != nil {
-				queued = append(queued, queuedTask{e.seq, id, e.claim})
+				queued = append(queued, queuedTask{e.seq, id, e.claim, e.kind})
 			}
 		}
-		for _, a := range admit(queued, used, budget) {
+		launch := admit(queued, used, budget)
+		if len(launch) == 0 {
+			if early := earlyStart(queued, running, used, budget); early != nil {
+				launch = append(launch, *early)
+			}
+		}
+		for _, a := range launch {
 			e := s.tasks[a.id]
 			if e == nil || e.pending == nil {
 				continue

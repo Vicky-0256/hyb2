@@ -217,7 +217,8 @@ func DescribePreferences(path string) Obj {
 		"theme":           LoadTheme(path),
 		"external_lookup": LoadExternalLookup(path),
 		"defaults":        Obj{"budget": DefaultBudget(), "theme": "system", "external_lookup": false},
-		"system":          Obj{"cpus": SystemCPUs(), "mem_mb": mem},
+		"system":          systemInfo(mem),
+		"speed":           Obj{"measured_samples": len(LoadPerf(perfPath(path)))},
 	})
 }
 
@@ -324,4 +325,15 @@ func normalize(value Obj) Obj {
 		return value
 	}
 	return out
+}
+
+// systemInfo describes this computer for Preferences.
+func systemInfo(mem any) Obj {
+	name, performance, efficiency := cpuInfo()
+	info := Obj{"cpus": SystemCPUs(), "mem_mb": mem, "cpu_model": name}
+	if performance > 0 {
+		info["performance_cores"] = performance
+		info["efficiency_cores"] = efficiency
+	}
+	return info
 }

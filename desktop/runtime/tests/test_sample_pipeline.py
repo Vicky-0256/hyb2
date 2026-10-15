@@ -81,8 +81,17 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertEqual(stored["outputs"]["stats"], "samples/%s/testData_hybrids.hyb_stats.txt" % sample["id"])
         progress = json.loads((run_dir / "progress.json").read_text(encoding="utf-8"))
         self.assertEqual(progress["stage"], "done")
-        self.assertEqual(set(progress), {"stage", "detail", "bytes_done", "bytes_total", "updated_at"})
-        self.assertTrue(json.loads((run_dir / "result.json").read_text(encoding="utf-8"))["ok"])
+        self.assertEqual(set(progress), {"stage", "detail", "bytes_done", "bytes_total", "updated_at", "work"})
+        self.assertEqual(progress["work"]["format"], "sam")
+        self.assertEqual(progress["work"]["input_bytes"], stored["reads"]["size_bytes"])
+        stored_result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertTrue(stored_result["ok"])
+        # The active time feeds the desktop's time estimates.
+        performance = stored_result["performance"]
+        self.assertEqual((performance["format"], performance["input_bytes"]), ("sam", stored["reads"]["size_bytes"]))
+        self.assertGreater(performance["seconds"], 0)
+        self.assertIn("hybrids", performance["stage_seconds"])
+        self.assertNotIn("wait", performance["stage_seconds"])
         # The shell-owned status.json + result.json still register as a project run.
         (run_dir / "status.json").write_text(json.dumps({"task_id": "sample-t1", "kind": "sample_pipeline", "status": "succeeded"}))
         run = self.call("register_task_run", task_id="sample-t1")["run"]
@@ -150,8 +159,8 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertEqual((self.project / stored["outputs"]["index"]).read_bytes(), b"SQLite stub")
 
     @unittest.skipUnless(_bowtie2_dir(), "Bowtie2 is not available")
-    def test_fastq_gz_sample_maps_with_bowtie2(self):
-        reads = self.dir / "tiny.fastq.gz"
+    def tiny_fastq(self, name="tiny.fastq.gz"):
+        reads = self.dir / name
         with SAM.open(encoding="utf-8") as sam, gzip.open(reads, "wt") as out:
             seen = set()
             for line in sam:
@@ -164,7 +173,10 @@ class SamplePipelineTest(unittest.TestCase):
                 out.write("@%s\n%s\n+\n%s\n" % (fields[0], fields[9], fields[10]))
                 if len(seen) >= 3000:
                     break
-        sample = self.add(reads)
+        return reads
+
+    def test_fastq_gz_sample_maps_with_bowtie2(self):
+        sample = self.add(self.tiny_fastq())
         saved = {key: os.environ.get(key) for key in ("HYB2PIPE_TOOL_DIR", "HYB2_TASK_CPUS")}
         os.environ["HYB2PIPE_TOOL_DIR"] = str(_bowtie2_dir())
         os.environ["HYB2_TASK_CPUS"] = "2"  # scheduler budget -> Options.threads
@@ -183,6 +195,57 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertTrue((self.project / stored["outputs"]["hyb"]).is_file())
         self.assertGreater(result["counts"].get("alignments", 0), 0)
         self.assertEqual(json.loads((run_dir / "progress.json").read_text())["stage"], "done")
+
+    def test_mapping_waits_for_the_map_slot(self):
+        """A sample started early prepares its reads, then waits while
+        another task holds the machine-wide map slot."""
+        import threading
+        import time
+        from desktop.runtime.sample_run import MapSlot
+        sample = self.add(self.tiny_fastq())
+        lock = self.dir / "map.lock"
+        held = MapSlot(str(lock))
+        held.acquire()
+        saved = {key: os.environ.get(key) for key in ("HYB2PIPE_TOOL_DIR", "HYB2_TASK_CPUS", "HYB2_MAP_SLOT")}
+        os.environ.update({"HYB2PIPE_TOOL_DIR": str(_bowtie2_dir()), "HYB2_TASK_CPUS": "2", "HYB2_MAP_SLOT": str(lock)})
+        out = {}
+        worker = threading.Thread(target=lambda: out.update(zip(("result", "run_dir"), self.run_sample(sample["id"], "sample-slot"))))
+        try:
+            worker.start()
+            progress = self.project / "runs" / "sample-slot" / "progress.json"
+            deadline = time.time() + 60
+            seen = {}
+            while time.time() < deadline and seen.get("detail") != "waiting: another sample is mapping":
+                time.sleep(0.05)
+                try:
+                    seen = json.loads(progress.read_text())
+                except (OSError, ValueError):
+                    pass
+            self.assertEqual(seen.get("stage"), "map", seen)
+            self.assertEqual(seen.get("detail"), "waiting: another sample is mapping")
+            time.sleep(0.5)
+            self.assertTrue(worker.is_alive())
+            held.release()
+            worker.join(120)
+        finally:
+            held.release()
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(out["result"]["ok"], out["result"])
+        # Waiting for the slot is not counted as work.
+        performance = out["result"]["performance"]
+        self.assertGreaterEqual(performance["stage_seconds"]["wait"], 0.5)
+        total = sum(performance["stage_seconds"].values())
+        self.assertLess(performance["seconds"], total - performance["stage_seconds"]["wait"] + 0.5)
+        # The slot is free again once the sample has mapped.
+        again = MapSlot(str(lock))
+        again.handle = open(lock, "a+b")
+        self.assertTrue(again._try())
+        again.release()
 
 
 if __name__ == "__main__":

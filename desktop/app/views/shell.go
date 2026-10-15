@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -247,6 +248,9 @@ func ProgressBar(c *ui.Context, task model.Task) {
 		if fraction >= 0 {
 			detail += fmt.Sprintf(" · %.0f%%", fraction*100)
 		}
+		if task.SecondsLeft != nil {
+			detail += " · about " + FormatDuration(*task.SecondsLeft) + " left"
+		}
 		ui.Text(c, detail).FontSize(12).TextColor(t.TextMuted).SingleLine()
 	} else if task.Status == "queued" {
 		ui.Text(c, "Waiting for CPU or memory budget").FontSize(12).TextColor(t.TextMuted)
@@ -336,4 +340,16 @@ func (p *placeholder) View(c *ui.Context) {
 		ui.Text(c, p.info.Title).FontSize(24).Bold()
 		ui.Text(c, "This page is being rebuilt in the native interface.").TextColor(c.Theme().TextMuted)
 	})
+}
+
+// FormatDuration is a rounded duration: "40 s", "12 min", "2 h 05 min".
+func FormatDuration(seconds float64) string {
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%.0f s", math.Max(seconds, 1))
+	case seconds < 3600:
+		return fmt.Sprintf("%.0f min", math.Round(seconds/60))
+	}
+	minutes := int(math.Round(seconds / 60))
+	return fmt.Sprintf("%d h %02d min", minutes/60, minutes%60)
 }

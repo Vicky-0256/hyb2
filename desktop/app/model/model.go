@@ -182,6 +182,7 @@ type Task struct {
 	LaunchedAt  string    `json:"launched_at"`
 	FinishedAt  string    `json:"finished_at"`
 	Progress    *Progress `json:"progress"`
+	SecondsLeft *float64  `json:"seconds_left"`
 	ResumedFrom string    `json:"resumed_from"`
 	Output      any       `json:"output"`
 }

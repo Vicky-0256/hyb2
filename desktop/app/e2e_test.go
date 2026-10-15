@@ -98,6 +98,16 @@ func (d *driver) clickField(label string) {
 	d.frame()
 }
 
+// newProject fills the start page: the project folder <parent>/<name>.hyb2proj.
+func (d *driver) newProject(parent, name string) {
+	d.t.Helper()
+	views.PickFolder = func(string) string { return parent }
+	d.click("Change…")
+	d.clickField("Project name")
+	d.tt.Type(name)
+	d.click("Create project")
+}
+
 func (d *driver) has(text string) bool {
 	for _, s := range d.tt.Texts() {
 		if strings.Contains(s, text) {
@@ -158,13 +168,13 @@ func TestEndToEnd(t *testing.T) {
 	lap := func(what string) { t.Logf("[%6.1fs] %s", time.Since(started).Seconds(), what) }
 
 	// 1. New project from the start page.
-	project := filepath.Join(t.TempDir(), "e2e.hyb2proj")
-	d.clickField("Empty folder")
-	d.tt.Type(project)
-	d.clickField("Name")
-	d.tt.Type("E2E ZIKV")
-	d.click("Create and open")
+	parent, _ := filepath.EvalSymlinks(t.TempDir())
+	project := filepath.Join(parent, "E2E ZIKV.hyb2proj")
+	d.newProject(parent, "E2E ZIKV")
 	d.until("project opens", 60*time.Second, func() bool { return app.Project != nil })
+	if app.Project.Path != project {
+		t.Fatalf("project at %s, want %s", app.Project.Path, project)
+	}
 	lap("project created")
 
 	// 2. Import the sample sheet (preview, then import).

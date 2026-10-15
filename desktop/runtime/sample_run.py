@@ -39,18 +39,96 @@ class ProgressFile:
         self.path = Path(run_dir) / "progress.json"
         self.last_stage: Optional[str] = None
         self.last_write = 0.0
+        # Time per stage ("wait": waiting for the map slot) for the speed
+        # history, and the input the desktop estimates remaining time from.
+        self.started = time.monotonic()
+        self.stage_seconds: Dict[str, float] = {}
+        self.current: Optional[str] = None
+        self.since = self.started
+        self.work: Optional[Dict[str, Any]] = None
+
+    def _clock(self, stage: str, detail: str, now: float) -> None:
+        key = "wait" if detail.startswith("waiting") else stage
+        if key != self.current:
+            if self.current is not None:
+                self.stage_seconds[self.current] = self.stage_seconds.get(self.current, 0.0) + now - self.since
+            self.current, self.since = key, now
+
+    def active_seconds(self) -> float:
+        """Seconds so far, without waiting for the map slot."""
+        now = time.monotonic()
+        self._clock("", "", now)  # close the running stage
+        return now - self.started - self.stage_seconds.get("wait", 0.0)
 
     def write(self, stage: str, detail: str = "", bytes_done: Optional[int] = None, bytes_total: Optional[int] = None) -> None:
         now = time.monotonic()
+        self._clock(stage, detail, now)
         if stage == self.last_stage and bytes_done is not None and now - self.last_write < _BYTE_EVENT_INTERVAL and bytes_done != bytes_total:
             return
         self.last_stage, self.last_write = stage, now
         payload = {"stage": stage, "detail": detail, "bytes_done": bytes_done, "bytes_total": bytes_total, "updated_at": _now()}
+        if self.work:
+            payload["work"] = self.work
         try:
             _atomic_write_json(self.path, payload)
         except OSError as error:  # progress is advisory; never fail the task for it
             print("cannot write progress.json: %s" % error, file=sys.stderr)
         print(json.dumps({"type": "progress", **payload}), file=sys.stderr, flush=True)
+
+
+class MapSlot:
+    """The machine-wide right to run Bowtie2 (an exclusive lock on the file
+    in ``HYB2_MAP_SLOT``, set by the desktop scheduler). A sample started
+    early collapses its reads while another sample maps, then waits here, so
+    mappings never compete for the cores. The OS drops the lock when the
+    process ends, also when it is cancelled. Without the variable it is a
+    no-op."""
+
+    def __init__(self, path: Optional[str]):
+        self.path = path
+        self.handle = None
+
+    def _try(self) -> bool:
+        if os.name == "nt":
+            import msvcrt
+            try:
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError:
+                return False
+        import fcntl
+        try:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+
+    def acquire(self, waiting: Any = None) -> None:
+        if not self.path or self.handle is not None:
+            return
+        self.handle = open(self.path, "a+b")
+        if not self._try():
+            if waiting is not None:
+                waiting()
+            while not self._try():
+                time.sleep(0.5)
+
+    def release(self) -> None:
+        if self.handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        self.handle.close()
+        self.handle = None
 
 
 _PIPELINE_BOUNDS = {"blast_threshold": (0.0, 10.0, float), "max_overlap": (0, 1000, int), "max_hits": (1, 10000, int),
@@ -254,6 +332,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
         return result
 
     progress = ProgressFile(run_dir)
+    progress.work = {"format": fmt, "input_bytes": reads_record.get("size_bytes"), "cpu": settings.get("threads")}
     progress.write("check", "checking input files")
     for kind, record in (("reads", reads_record), ("reference", reference)):
         if record is None:
@@ -284,6 +363,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
     counts: Dict[str, Any] = {}
     ignored: list = []
     previous_handler = _install_term_handler()
+    slot = MapSlot(os.environ.get("HYB2_MAP_SLOT"))
     try:
         # ---- map + hyb (hyb2pipe) -------------------------------------------
         if fmt == "hyb":
@@ -304,6 +384,10 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
                 set_sample_stage(project, sample_id, "map", "running", task_id=task_id, extra_stages={"hyb": "pending", "index": "pending"})
 
             def on_progress(stage: str, detail: str = "", *extra: Any) -> None:
+                if stage == "map":
+                    slot.acquire(lambda: progress.write("map", "waiting: another sample is mapping"))
+                if stage in _POST_MAP_STAGES:
+                    slot.release()
                 if state.stage == "map" and stage in _POST_MAP_STAGES:
                     state.stage = "hyb"
                     set_sample_stage(project, sample_id, "map", "succeeded", task_id=task_id, extra_stages={"hyb": "running"})
@@ -346,6 +430,9 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
         absolute = {key: str(project / value) for key, value in outputs.items() if value}
         response = {"ok": True, "status": "succeeded", "output": str(hyb_path), "outputs": absolute, "counts": counts,
                     "stages": stages, "index_status": index_status}
+        seconds = progress.active_seconds()
+        response["performance"] = {**progress.work, "seconds": round(seconds, 2),
+                                   "stage_seconds": {k: round(v, 2) for k, v in progress.stage_seconds.items() if k}}
         if ignored:
             response["ignored_parameters"] = ignored
         return finish(response)
@@ -361,6 +448,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
         progress.write("failed", str(error)[:500])
         return finish({"ok": False, "status": "failed", "error": "%s: %s" % (error.__class__.__name__, error), "stage": state.stage})
     finally:
+        slot.release()
         if previous_handler is not None:
             try:
                 signal.signal(signal.SIGTERM, previous_handler)

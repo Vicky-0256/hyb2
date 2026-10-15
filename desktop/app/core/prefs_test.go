@@ -147,3 +147,16 @@ func TestPreferencesRoundTripAndReset(t *testing.T) {
 		t.Fatal("saved without a path")
 	}
 }
+
+func TestSystemInfoNamesTheProcessor(t *testing.T) {
+	info := systemInfo(nil)
+	t.Logf("%v", info)
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		if info["cpu_model"] == "" || info["performance_cores"].(int) < 1 {
+			t.Fatalf("Apple silicon not described: %v", info)
+		}
+		if info["performance_cores"].(int)+info["efficiency_cores"].(int) != int(SystemCPUs()) {
+			t.Fatalf("core counts do not add up: %v", info)
+		}
+	}
+}

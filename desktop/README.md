@@ -65,6 +65,14 @@ runtime; packaged builds ignore them.
   `progress.json` and `result.json` by Python, cancel of the whole process
   tree, resume from the stored request, and registration in `project.json`
   when a task ends. Tasks still running at exit become `interrupted`.
+- Samples: one maps at a time with every CPU (a machine-wide map slot,
+  `HYB2_MAP_SLOT`); while it maps, the next sample starts early and
+  prepares its reads on one core (6–15% faster batches on an M1 Pro,
+  `TestOverlapBenchmark`).
+- Time estimates (`core/perf.go`): every finished sample adds its active
+  time to `performance.json` beside the preferences; the Run dialog shows
+  the expected time of a batch and the task drawer the time left, from
+  this computer's speed (a built-in rate until the first sample is done).
 - Project and analysis operations are allowlisted in `core/service.go`.
 - `project.json` writes are locked and atomic (Python side).
 

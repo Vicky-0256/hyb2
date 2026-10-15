@@ -150,11 +150,7 @@ func TestAcceptance(t *testing.T) {
 			t.Fatal(err)
 		}
 		views.PickFiles = func(string, bool) []string { return []string{sheetPath} }
-		d.clickField("Empty folder")
-		d.tt.Type(project)
-		d.clickField("Name")
-		d.tt.Type("ZIKV acceptance")
-		d.click("Create and open")
+		d.newProject(filepath.Dir(project), strings.TrimSuffix(filepath.Base(project), views.ProjectSuffix))
 		d.until("project opens", time.Minute, func() bool { return app.Project != nil })
 		d.click("Import sample sheet…")
 		d.until("sheet preview", time.Minute, func() bool { return d.has("Nothing has been imported yet") })

@@ -238,7 +238,7 @@ func TestAdmissionIsFIFOWithHeadBlocking(t *testing.T) {
 		return out
 	}
 	// Submission order is seq, not slice order.
-	queue := []queuedTask{{2, "c", Budget{1, 100}}, {0, "a", Budget{3, 100}}, {1, "b", Budget{3, 100}}}
+	queue := []queuedTask{{2, "c", Budget{1, 100}, ""}, {0, "a", Budget{3, 100}, ""}, {1, "b", Budget{3, 100}, ""}}
 	// `b` does not fit after `a`; the small `c` must not overtake it.
 	if got := ids(admit(queue, idle, budget)); !slices.Equal(got, []string{"a"}) {
 		t.Fatal(got)
@@ -250,7 +250,7 @@ func TestAdmissionIsFIFOWithHeadBlocking(t *testing.T) {
 		t.Fatal(got)
 	}
 	// Memory blocks as well as cpu.
-	queue = []queuedTask{{0, "m", Budget{1, 5000}}, {1, "n", Budget{1, 10}}}
+	queue = []queuedTask{{0, "m", Budget{1, 5000}, ""}, {1, "n", Budget{1, 10}, ""}}
 	if got := admit(queue, Budget{0, 4000}, budget); len(got) != 0 {
 		t.Fatal(got)
 	}
@@ -258,11 +258,35 @@ func TestAdmissionIsFIFOWithHeadBlocking(t *testing.T) {
 		t.Fatal(got)
 	}
 	// An oversized claim is clamped and runs alone instead of deadlocking.
-	queue = []queuedTask{{0, "huge", Budget{64, 1 << 20}}}
+	queue = []queuedTask{{0, "huge", Budget{64, 1 << 20}, ""}}
 	if got := admit(queue, idle, budget); len(got) != 1 || got[0] != (admitted{"huge", budget}) {
 		t.Fatal(got)
 	}
 	if got := admit(queue, Budget{1, 0}, budget); len(got) != 0 {
+		t.Fatal(got)
+	}
+}
+
+func TestEarlyStartOfTheNextSample(t *testing.T) {
+	budget := Budget{10, 16000}
+	full := Budget{10, 4096}
+	next := []queuedTask{{1, "s2", full, "sample_pipeline"}, {2, "s3", full, "sample_pipeline"}}
+	// One sample runs: the next one starts early (only the head).
+	if got := earlyStart(next, []string{"sample_pipeline"}, full, budget); got == nil || *got != (admitted{"s2", full}) {
+		t.Fatal(got)
+	}
+	// Two already run, or something else runs, or nothing runs (then the
+	// normal admission starts it): no early start.
+	for _, running := range [][]string{{"sample_pipeline", "sample_pipeline"}, {"structure"}, {"sample_pipeline", "compare"}, nil} {
+		if got := earlyStart(next, running, full, budget); got != nil {
+			t.Fatalf("%v: %v", running, got)
+		}
+	}
+	// The head must be a sample pipeline (FIFO is kept) and fit in memory.
+	if got := earlyStart([]queuedTask{{0, "f", full, "structure"}, {1, "s", full, "sample_pipeline"}}, []string{"sample_pipeline"}, full, budget); got != nil {
+		t.Fatal(got)
+	}
+	if got := earlyStart(next, []string{"sample_pipeline"}, Budget{10, 14000}, budget); got != nil {
 		t.Fatal(got)
 	}
 }

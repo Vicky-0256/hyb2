@@ -73,6 +73,7 @@ type dataRunDialog struct {
 	loading  bool
 	estimate *dataEstimate
 	err      string
+	time     *core.PipelineEstimate
 }
 
 type dataSheetDialog struct {
@@ -746,17 +747,25 @@ func (p *dataPage) runSamples(samples []model.Sample) {
 	}
 	p.run = dataRunDialog{open: true, ids: ids, loading: true}
 	path := a.Project.Path
+	var inputs []core.PipelineInput
+	for _, id := range ids {
+		if s := a.Project.Sample(id); s != nil {
+			inputs = append(inputs, core.PipelineInput{Format: s.Reads.Format, InputBytes: s.Reads.SizeBytes})
+		}
+	}
 	a.Go(func() func() {
 		result, err := a.B.ProjectOp(path, "disk_estimate", core.Obj{"sample_ids": ids, "include_completed": true})
 		var estimate dataEstimate
 		if err == nil {
 			err = model.Decode(result, &estimate)
 		}
+		timing := a.B.EstimatePipelines(inputs)
 		return func() {
 			if a.Project == nil || a.Project.Path != path || !sameIDs(p.run.ids, ids) {
 				return
 			}
 			p.run.loading = false
+			p.run.time = &timing
 			if err != nil {
 				p.run.err = err.Error()
 				return
@@ -817,7 +826,22 @@ func (p *dataPage) runDialog(c *ui.Context) {
 					}
 				}
 			}
-			ui.Text(c, "Each sample runs mapping → .hyb → analysis index as one task; tasks wait in the queue when the CPU / memory budget (Preferences) is used up.").
+			if e := d.time; e != nil && e.Seconds > 0 {
+				ui.Row(c).Gap(8).Children(func() {
+					ui.Text(c, "Estimated time").TextColor(t.TextMuted).Width(130)
+					ui.Text(c, "about "+FormatDuration(e.Seconds)).Bold()
+				})
+				basis := fmt.Sprintf("From the speed measured on this computer (%d CPUs).", e.CPU)
+				switch {
+				case e.Measured == 0:
+					basis = fmt.Sprintf("Rough: nothing measured on this computer yet (%d CPUs); the first finished sample calibrates it.", e.CPU)
+				case e.Measured < e.Samples:
+					basis = fmt.Sprintf("Partly measured on this computer (%d of %d samples' formats; %d CPUs).", e.Measured, e.Samples, e.CPU)
+				}
+				ui.Text(c, basis).FontSize(12).TextColor(t.TextMuted)
+			}
+			ui.Text(c, "Each sample runs mapping → .hyb → analysis index as one task; tasks wait in the queue when the CPU / memory budget (Preferences) is used up. "+
+				"While one sample maps, the next one already prepares its reads.").
 				FontSize(12).TextColor(t.TextMuted)
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Cancel").Clicked() {

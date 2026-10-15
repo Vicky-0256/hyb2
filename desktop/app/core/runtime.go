@@ -111,6 +111,9 @@ func NewRuntime(b Bridge, cacheDir string) (*Runtime, error) {
 		if os.MkdirAll(numba, 0o755) == nil {
 			compute = append(compute, "NUMBA_CACHE_DIR="+numba)
 		}
+		// One Bowtie2 mapping at a time on this computer (sample_run.py),
+		// so a sample admitted early only overlaps its read preparation.
+		compute = append(compute, MapSlotEnv+"="+filepath.Join(cacheDir, "map.lock"))
 	}
 	spec := func(name string, env []string, timeout time.Duration) SidecarSpec {
 		return SidecarSpec{

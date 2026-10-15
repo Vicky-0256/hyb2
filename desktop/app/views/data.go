@@ -826,29 +826,35 @@ func (p *dataPage) runDialog(c *ui.Context) {
 
 func (p *dataPage) startRuns(ids []string) {
 	a := p.a
-	started, answered := 0, 0
+	var reqs []core.TaskStartRequest
+	var labels, sampleIDs, names []string
 	for _, id := range ids {
 		s := a.Project.Sample(id)
 		if s == nil {
-			answered++
 			continue
 		}
-		sampleID, name := s.ID, s.Label()
-		a.StartTask(core.TaskStartRequest{Kind: "sample_pipeline", SampleID: &sampleID}, "Pipeline · "+name, func(t model.Task, err error) {
-			answered++
-			if err != nil {
-				a.Toast("Could not start %s: %v", name, err)
-			} else {
-				started++
-				p.runningFor[sampleID] = t.TaskID
-			}
-			if answered == len(ids) && started > 0 {
-				a.Toast("Started %s.", dataPlural(started, "sample run", "sample runs"))
-				p.clearSelection()
-				a.RefreshProject()
-			}
-		})
+		sampleID := s.ID
+		reqs = append(reqs, core.TaskStartRequest{Kind: "sample_pipeline", SampleID: &sampleID})
+		labels = append(labels, "Pipeline · "+s.Label())
+		sampleIDs = append(sampleIDs, sampleID)
+		names = append(names, s.Label())
 	}
+	started, answered := 0, 0
+	// In order, so the queue runs the samples as they are listed.
+	a.StartTasksInOrder(reqs, labels, func(i int, t model.Task, err error) {
+		answered++
+		if err != nil {
+			a.Toast("Could not start %s: %v", names[i], err)
+		} else {
+			started++
+			p.runningFor[sampleIDs[i]] = t.TaskID
+		}
+		if answered == len(reqs) && started > 0 {
+			a.Toast("Started %s.", dataPlural(started, "sample run", "sample runs"))
+			p.clearSelection()
+			a.RefreshProject()
+		}
+	})
 }
 
 // resumeSamples re-runs the stored task request (Python resumes from

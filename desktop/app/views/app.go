@@ -559,6 +559,44 @@ func (a *App) StartTask(req core.TaskStartRequest, label string, done func(model
 	})
 }
 
+// StartTasksInOrder submits tasks one after another (so the scheduler's
+// queue follows the given order) and calls done(i, task, err) for each on
+// the main thread.
+func (a *App) StartTasksInOrder(reqs []core.TaskStartRequest, labels []string, done func(i int, t model.Task, err error)) {
+	if a.Project == nil || len(reqs) == 0 {
+		return
+	}
+	path := a.Project.Path
+	for i := range reqs {
+		reqs[i].ProjectPath = path
+	}
+	go func() {
+		for i, req := range reqs {
+			snapshot, err := a.B.StartTask(req)
+			var t model.Task
+			if err == nil {
+				err = model.Decode(snapshot, &t)
+			}
+			i, label := i, ""
+			if i < len(labels) {
+				label = labels[i]
+			}
+			a.post(func() {
+				if err == nil {
+					if label != "" {
+						a.labels[t.TaskID] = label
+					}
+					a.storeTask(t)
+					a.ensurePolling()
+				}
+				if done != nil {
+					done(i, t, err)
+				}
+			})
+		}
+	}()
+}
+
 // CancelTask asks the scheduler to cancel a task.
 func (a *App) CancelTask(id string) {
 	if a.Project == nil {

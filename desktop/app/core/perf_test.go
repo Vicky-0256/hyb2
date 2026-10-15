@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -153,5 +154,59 @@ func TestFoldRemaining(t *testing.T) {
 	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":true,"performance":{"lengths":[3000],"beam":100,"workers":1,"seconds":70,"compiled":true}}`), 0o644)
 	if _, ok := perfFromResult("structure", run); ok {
 		t.Fatal("a compiling fold was recorded")
+	}
+}
+
+// TestFoldRateFromAParallelRun: a run that took exactly its estimate does
+// not change the next estimate (the stored rate is per unit of the work an
+// estimate charges, not of all windows times the workers).
+func TestFoldRateFromAParallelRun(t *testing.T) {
+	lengths := []int{10000, 100}
+	prior := EstimateFold(nil, lengths, 100, 2)
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "run")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result := fmt.Sprintf(`{"ok":true,"performance":{"lengths":[10000,100],"beam":100,"workers":2,"seconds":%f}}`,
+		prior.Seconds-foldOverhead)
+	if err := os.WriteFile(filepath.Join(runDir, "result.json"), []byte(result), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record, ok := perfFromResult("structure", runDir)
+	if !ok {
+		t.Fatal("no record")
+	}
+	again := EstimateFold([]PerfRecord{record}, lengths, 100, 2)
+	if math.Abs(again.Seconds-prior.Seconds)/prior.Seconds > 0.01 {
+		t.Fatalf("estimate %.1f s, after a run that took exactly that: %.1f s", prior.Seconds, again.Seconds)
+	}
+	if single := EstimateFold([]PerfRecord{record}, []int{10000}, 100, 1); single.Seconds > prior.Seconds*1.01 {
+		t.Fatalf("one 10 kb fold now %.1f s, was %.1f s", single.Seconds, prior.Seconds)
+	}
+}
+
+// TestFoldsDoNotPushSampleTimingsOut: the history is kept per kind.
+func TestFoldsDoNotPushSampleTimingsOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), perfFile)
+	if err := AppendPerf(path, PerfRecord{Kind: "sample_pipeline", Format: "fastq.gz", InputBytes: 1 << 20, CPU: 10, Seconds: 5}); err != nil {
+		t.Fatal(err)
+	}
+	for range perfKeep + 5 {
+		if err := AppendPerf(path, PerfRecord{Kind: "structure", Units: 1, Parallel: 1, Work: 1, Seconds: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	samples, folds := 0, 0
+	for _, r := range LoadPerf(path) {
+		switch r.Kind {
+		case "sample_pipeline":
+			samples++
+		case "structure":
+			folds++
+		}
+	}
+	if samples != 1 || folds != perfKeep {
+		t.Fatalf("kept %d sample and %d fold records", samples, folds)
 	}
 }

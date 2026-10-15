@@ -535,6 +535,22 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
         _atomic_write_json(run_dir / "result.json", result)
         return result
 
+    # What will be folded, known before the evidence is read, so the desktop
+    # can estimate the time left from the start.
+    estimate = cplfold_memory_estimate(longest, params["allow_pseudoknot"])
+    cpu = os.cpu_count() or 1
+    task_cpus = _env_int("HYB2_TASK_CPUS")
+    if task_cpus is not None:
+        cpu = min(cpu, task_cpus)
+    requested_workers = request.get("workers")
+    if requested_workers is not None and (isinstance(requested_workers, bool) or not isinstance(requested_workers, int) or requested_workers < 1):
+        raise ValueError("workers must be a positive integer")
+    memory_workers = max(1, int(limits["memory_budget_bytes"]) // max(estimate, 1))
+    workers = min(cpu, memory_workers, len(windows))
+    if requested_workers is not None:
+        workers = min(workers, requested_workers)
+    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"), "workers": workers}
+
     # 1. stream the evidence
     total_bytes = sum(path.stat().st_size for path in inputs["hyb_paths"])
     progress("evidence", "reading .hyb", 0, total_bytes, force=True)
@@ -551,19 +567,6 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
 
     # 2. fold
     records: List[Dict[str, Any]] = [None] * len(windows)  # type: ignore[list-item]
-    estimate = cplfold_memory_estimate(longest, params["allow_pseudoknot"])
-    cpu = os.cpu_count() or 1
-    task_cpus = _env_int("HYB2_TASK_CPUS")
-    if task_cpus is not None:
-        cpu = min(cpu, task_cpus)
-    requested_workers = request.get("workers")
-    if requested_workers is not None and (isinstance(requested_workers, bool) or not isinstance(requested_workers, int) or requested_workers < 1):
-        raise ValueError("workers must be a positive integer")
-    memory_workers = max(1, int(limits["memory_budget_bytes"]) // max(estimate, 1))
-    workers = min(cpu, memory_workers, len(windows))
-    if requested_workers is not None:
-        workers = min(workers, requested_workers)
-    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"), "workers": workers}
     kernels_before = _compiled_kernels()
     t0 = time.monotonic()
 

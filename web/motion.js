@@ -95,7 +95,23 @@
     }, 2600);
   }
 
+  // Overlays that app.js re-creates on each render: animate only on the
+  // render where they first appear.
+  const APPEARING = [".pop-layer", ".record-drawer", ".tweaks-panel"];
+  const present = {};
+
+  function markAppearing() {
+    APPEARING.forEach(function (selector) {
+      const node = app.querySelector(selector);
+      if (node && !present[selector] && !motionReduced()) {
+        node.classList.add("is-appearing");
+      }
+      present[selector] = !!node;
+    });
+  }
+
   function onRender() {
+    markAppearing();
     const scene = readScene();
     if (!scene) {
       return;

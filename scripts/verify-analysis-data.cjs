@@ -612,6 +612,45 @@ assert.ok(Math.abs(comparison.cells[0].effect - Math.log2(2.5 / 1.5)) < 1e-12);
 assert.equal(comparison.cells[0].datasets[0].rawValue, 2);
 assert.equal(comparison.cells[0].datasets[0].value, 2);
 assert.equal(comparison.cells[0].datasets[1].rawValue, 1);
+assert.equal(comparison.cells[0].similarity, 1, "similarity is the smaller summed raw count");
+assert.equal(comparison.conservedCells.length, 1);
+
+// Similarity heatmap = HYB2 plot_similarity_map on one merged map per
+// condition: replicates are summed, each map keeps bins >= the minimum, and a
+// bin in both maps scores min(A, B).  Expected values were computed by hand
+// from the awk in bin/plot_similarity_map.
+const simRecord = function (id, start) {
+  return record({ id: id, rnaOne: "RNA_A", rnaTwo: "RNA_A", rnaOneStart: start, rnaOneEnd: start, rnaTwoStart: 500, rnaTwoEnd: 500 });
+};
+const repeat = function (prefix, start, n) {
+  return Array.from({ length: n }, function (_, i) { return simRecord(prefix + i, start); });
+};
+const similarityInput = {
+  datasets: [
+    // bin 0: A 3+4 = 7, B 5 -> 5; bin 100: A 2, B 9 -> 2; bin 200: A only
+    { id: "a1", condition: "A", summary: { validRecords: 6 }, records: repeat("a1_0_", 1, 3).concat(repeat("a1_1_", 101, 2), repeat("a1_2_", 201, 1)) },
+    { id: "a2", condition: "A", summary: { validRecords: 4 }, records: repeat("a2_0_", 1, 4) },
+    { id: "b1", condition: "B", summary: { validRecords: 14 }, records: repeat("b1_0_", 1, 5).concat(repeat("b1_1_", 101, 9)) }
+  ],
+  rnaX: "RNA_A",
+  rnaY: "RNA_A",
+  binSize: "10",
+  measure: "records",
+  normalise: "library"
+};
+const similarity = data.buildComparisonResults(similarityInput);
+const simByX = Object.fromEntries(similarity.cells.map(function (cell) { return [cell.x, cell]; }));
+assert.equal(simByX[0].rawA, 7);
+assert.equal(simByX[0].rawB, 5);
+assert.equal(simByX[0].similarity, 5, "library normalisation must not change the raw similarity count");
+assert.equal(simByX[100].similarity, 2);
+assert.equal(simByX[200].similarity, 0, "a bin missing from one condition is not similar");
+assert.deepEqual(similarity.conservedCells.map(function (cell) { return cell.x; }), [0, 100]);
+assert.equal(similarity.similarityMinimum, 1);
+const similarityFiltered = data.buildComparisonResults(Object.assign({}, similarityInput, { similarityMinimum: "3" }));
+assert.deepEqual(similarityFiltered.conservedCells.map(function (cell) { return [cell.x, cell.similarity]; }), [[0, 5]],
+  "bins below the minimum in either condition are dropped before taking the minimum");
+assert.match(data.comparisonToTsv(similarity).split("\n")[0], /\tcondition_a_raw\tcondition_b_raw\tsimilarity$/);
 const selectedDatasetTsv = data.comparisonSelectedToTsv({ datasets: [
   { id: "a", label: "A sample", condition: "A", fileName: "a.hyb" },
   { id: "b", label: "B sample", condition: "B", fileName: "b.hyb" },

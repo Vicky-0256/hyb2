@@ -265,6 +265,7 @@
       binSize: "10",
       measure: "records",
       normalise: "library",
+      similarityMinimum: "1",
       conditionALabel: "Condition A",
       conditionBLabel: "Condition B",
       result: null,
@@ -1261,6 +1262,8 @@
             y: cell.y,
             aTotal: 0,
             bTotal: 0,
+            aRaw: 0,
+            bRaw: 0,
             presentDatasets: 0,
             datasets: []
           };
@@ -1270,8 +1273,10 @@
         const scaledValue = cell.value * scale;
         if (dataset.condition === "A") {
           entry.aTotal += scaledValue;
+          entry.aRaw += cell.value;
         } else {
           entry.bTotal += scaledValue;
+          entry.bRaw += cell.value;
         }
         entry.presentDatasets += 1;
         entry.datasets.push({
@@ -1300,6 +1305,11 @@
     }
 
     const pseudocount = config.normalise === "library" ? 1 : 0.5;
+    // Similarity heatmap as in HYB2's plot_similarity_map run on one merged
+    // contact map per condition (the condition's .hyb files concatenated):
+    // a bin kept in both maps scores the smaller raw count.  Bins below the
+    // minimum count are dropped from each map first (1 keeps every bin).
+    const similarityMinimum = similarityMinimumOf(config);
     const cells = Object.keys(byKey).map(function (key) {
       const entry = byKey[key];
       const conditionA = entry.aTotal / groupA.length;
@@ -1311,11 +1321,15 @@
         conditionB: conditionB,
         effect: Math.log2((conditionA + pseudocount) / (conditionB + pseudocount)),
         presentDatasets: entry.presentDatasets,
+        rawA: entry.aRaw,
+        rawB: entry.bRaw,
+        similarity: entry.aRaw >= similarityMinimum && entry.bRaw >= similarityMinimum ? Math.min(entry.aRaw, entry.bRaw) : 0,
         datasets: entry.datasets
       };
     }).sort(function (left, right) { return left.x - right.x || left.y - right.y; });
     const absoluteEffects = cells.map(function (cell) { return Math.abs(cell.effect); }).sort(function (left, right) { return left - right; });
-    const conservedCells = cells.filter(function (cell) { return cell.presentDatasets >= 2; });
+    const conservedCells = cells.filter(function (cell) { return cell.similarity > 0; });
+    const similarityValues = conservedCells.map(function (cell) { return cell.similarity; }).sort(function (left, right) { return left - right; });
     const binSize = template.binSize;
 
     if (!cells.length) {
@@ -1343,7 +1357,9 @@
       yMin: cells.length ? cells.reduce(function (minimum, cell) { return Math.min(minimum, cell.y); }, Infinity) : 0,
       yMax: cells.length ? cells.reduce(function (maximum, cell) { return Math.max(maximum, cell.y); }, -Infinity) : 0,
       effectCap: absoluteEffects.length ? Math.max(.25, quantile(absoluteEffects, .95)) : 1,
-      conservedMax: conservedCells.reduce(function (maximum, cell) { return Math.max(maximum, cell.presentDatasets); }, 1),
+      // similarity_heatmap.R caps the colour scale at the 95% quantile.
+      similarityCap: similarityValues.length ? Math.max(1, quantile(similarityValues, .95)) : 1,
+      similarityMinimum: similarityMinimum,
       distinctCells: distinctCellCount,
       datasetCellContributions: datasetCellContributions,
       maximumCells: MAX_COMPARISON_CELLS,
@@ -1351,6 +1367,11 @@
       normalise: config.normalise || "library",
       measure: template.measure
     };
+  }
+
+  function similarityMinimumOf(comparison) {
+    const value = Number(comparison && comparison.similarityMinimum);
+    return Number.isFinite(value) && value > 1 ? value : 1;
   }
 
   // The per-dataset contact query a comparison uses; also what the page-data
@@ -1369,7 +1390,7 @@
   }
 
   function comparisonToTsv(result) {
-    const rows = [["x_start", "x_end", "y_start", "y_end", "condition_a_mean", "condition_b_mean", "log2_effect", "datasets_present"]];
+    const rows = [["x_start", "x_end", "y_start", "y_end", "condition_a_mean", "condition_b_mean", "log2_effect", "datasets_present", "condition_a_raw", "condition_b_raw", "similarity"]];
     if (!result || !result.cells) {
       return rows[0].join("\t");
     }
@@ -1382,7 +1403,10 @@
         cell.conditionA,
         cell.conditionB,
         cell.effect,
-        cell.presentDatasets
+        cell.presentDatasets,
+        cell.rawA,
+        cell.rawB,
+        cell.similarity
       ]);
     });
     return rows.map(function (row) { return row.join("\t"); }).join("\n");

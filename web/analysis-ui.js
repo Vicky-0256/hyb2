@@ -989,7 +989,9 @@
       canvas.addEventListener("pointermove", function (event) {
         const cell = comparisonCellFromEvent(state, canvas, kind, event);
         canvas.title = cell
-          ? "log2 effect " + format(cell.effect) + " · " + format(cell.presentDatasets) + " datasets"
+          ? (kind === "conserved"
+            ? "similarity " + format(cell.similarity) + " · raw " + format(cell.rawA) + " / " + format(cell.rawB)
+            : "log2 effect " + format(cell.effect) + " · " + format(cell.presentDatasets) + " datasets")
           : "";
       });
       canvas.addEventListener("pointerup", function (event) {
@@ -1029,13 +1031,18 @@
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = line;
+    // the similarity heatmap keeps similarity_heatmap.R's white panel
+    context.fillStyle = kind === "conserved" && !isDarkTheme() ? "#ffffff" : line;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
+    if (kind === "conserved" && !isDarkTheme()) {
+      context.strokeStyle = line;
+      context.strokeRect(geometry.left + .5, geometry.top + .5, geometry.plotWidth - 1, geometry.plotHeight - 1);
+    }
     cells.forEach(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
       context.fillStyle = kind === "conserved"
-        ? conservedColor(cell.presentDatasets / Math.max(1, result.conservedMax))
+        ? conservedColor(cell.similarity / Math.max(1, result.similarityCap))
         : effectColor(cell.effect / Math.max(.01, result.effectCap));
       context.fillRect(x, y, Math.ceil(geometry.cellWidth) + .4, Math.ceil(geometry.cellHeight) + .4);
     });
@@ -1114,7 +1121,7 @@
     const xIndex = Math.min(geometry.xCount - 1, Math.max(0, Math.floor((x - geometry.left) / geometry.cellWidth)));
     const yIndex = Math.min(geometry.yCount - 1, Math.max(0, Math.floor((y - geometry.top) / geometry.cellHeight)));
     const cell = result.cellMap[(geometry.xStart + xIndex * result.binSize) + ":" + (geometry.yStart + yIndex * result.binSize)] || null;
-    return kind === "conserved" && cell && cell.presentDatasets < 2 ? null : cell;
+    return kind === "conserved" && cell && !(cell.similarity > 0) ? null : cell;
   }
 
   function moveComparisonSelection(state, kind, key) {
@@ -2341,12 +2348,15 @@
         binSize: nullableNumber(comparison.binSize),
         measure: comparison.measure === "support" ? "cluster-support" : "record-count",
         normalisation: normalise,
-        pseudocount: normalise === "per-million-library-size" ? 1 : 0.5
+        pseudocount: normalise === "per-million-library-size" ? 1 : 0.5,
+        similarityMinimum: Number(comparison.similarityMinimum) > 1 ? Number(comparison.similarityMinimum) : 1,
+        similarityMethod: "HYB2 plot_similarity_map on one merged raw map per condition: min(A, B) of bins present in both"
       },
       result: {
         ready: result.ready === true,
         comparableBins: Array.isArray(result.cells) ? result.cells.length : 0,
-        conservedBins: Array.isArray(result.conservedCells) ? result.conservedCells.length : 0,
+        similarityBins: Array.isArray(result.conservedCells) ? result.conservedCells.length : 0,
+        similarityCap: Number(result.similarityCap) || null,
         selectedBin: selectedBin,
         failureReason: result.ready === false ? result.reason || null : null
       },
@@ -2505,11 +2515,12 @@
     return "rgb(" + red + ", " + green + ", " + blue + ")";
   }
 
+  // similarity_heatmap.R: white to forestgreen.
   function conservedColor(ratio) {
     const bounded = Math.max(0, Math.min(1, ratio));
     const dark = isDarkTheme();
-    const from = dark ? [24, 54, 80] : [237, 249, 248];
-    const to = [0, 160, 157];
+    const from = dark ? [24, 54, 80] : [255, 255, 255];
+    const to = [34, 139, 34];
     const red = Math.round(from[0] + (to[0] - from[0]) * bounded);
     const green = Math.round(from[1] + (to[1] - from[1]) * bounded);
     const blue = Math.round(from[2] + (to[2] - from[2]) * bounded);

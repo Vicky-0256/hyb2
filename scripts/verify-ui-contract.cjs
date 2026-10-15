@@ -289,17 +289,17 @@ assert.match(appSource, /withAllRows\(function \(rows\) \{\s*downloadText\("rna_
   "the RNA-pair control must download a complete record-derived CSV");
 
 const comparisonCells = [
-  { x: 0, y: 0, presentDatasets: 2 },
-  { x: 20, y: 0, presentDatasets: 2 },
-  { x: 0, y: 10, presentDatasets: 1 },
-  { x: 20, y: 20, presentDatasets: 2 }
+  { x: 0, y: 0, presentDatasets: 2, similarity: 3 },
+  { x: 20, y: 0, presentDatasets: 2, similarity: 1 },
+  { x: 0, y: 10, presentDatasets: 1, similarity: 0 },
+  { x: 20, y: 20, presentDatasets: 2, similarity: 2 }
 ];
 const comparisonState = {
   comparison: {
     result: {
       ready: true,
       cells: comparisonCells,
-      conservedCells: comparisonCells.filter(function (cell) { return cell.presentDatasets >= 2; })
+      conservedCells: comparisonCells.filter(function (cell) { return cell.similarity > 0; })
     },
     selection: null,
     activeMap: null

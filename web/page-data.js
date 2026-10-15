@@ -450,7 +450,7 @@
       if (!comparison || comparison.loading) {
         return [];
       }
-      const params = pick(comparison, ["rnaX", "rnaY", "binSize", "measure", "normalise"]);
+      const params = pick(comparison, ["rnaX", "rnaY", "binSize", "measure", "normalise", "similarityMinimum"]);
       const datasets = (comparison.datasets || []).map(function (dataset) {
         return [dataset.id, dataset.condition, dataset.label];
       });

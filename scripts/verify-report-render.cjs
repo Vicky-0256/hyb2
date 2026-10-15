@@ -69,7 +69,7 @@ context.window.Hyb2Data = {
     };
   },
   buildComparisonResults: function () {
-    const cell = { x: 10, y: 20, conditionA: 3, conditionB: 1, effect: 1.5, presentDatasets: 2, datasets: [] };
+    const cell = { x: 10, y: 20, conditionA: 3, conditionB: 1, effect: 1.5, presentDatasets: 2, rawA: 3, rawB: 1, similarity: 1, datasets: [] };
     return {
       ready: true,
       groupA: [{ id: "primary" }],
@@ -79,7 +79,7 @@ context.window.Hyb2Data = {
       conservedCells: [cell],
       binSize: 10,
       effectCap: 2,
-      conservedMax: 2
+      similarityCap: 1
     };
   },
   findFastaEntry: function () { return null; },

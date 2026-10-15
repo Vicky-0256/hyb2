@@ -443,7 +443,8 @@
       rnaY: comparison.rnaY || "",
       binSize: comparison.binSize || "",
       measure: comparison.measure || "records",
-      normalise: comparison.normalise || "library"
+      normalise: comparison.normalise || "library",
+      similarityMinimum: comparison.similarityMinimum || "1"
     });
     const datasetRows = datasets.slice(0, MAX_DATASET_ROWS).map(function (dataset) {
       const summary = dataset.summary || {};
@@ -455,6 +456,7 @@
       [comparison.conditionBLabel || "Condition B", formatNumber(selected.conditionB)],
       ["Log2 effect", formatNumber(selected.effect)],
       ["Datasets present", formatNumber(selected.presentDatasets)],
+      ["Similarity", formatNumber(selected.similarity)],
       ["Coordinates", range(selected.x, selected.x + number(result.binSize, 1) - 1) + " x " + range(selected.y, selected.y + number(result.binSize, 1) - 1)]
     ]) : '<div class="report-empty">No comparison bin is selected.</div>';
     return section(
@@ -473,11 +475,11 @@
           ["Condition A datasets", formatNumber((result.groupA || []).length)],
           ["Condition B datasets", formatNumber((result.groupB || []).length)],
           ["Comparable bins", formatNumber(result.cells.length)],
-          ["Conserved bins", formatNumber((result.conservedCells || []).length)],
+          ["Similarity bins", formatNumber((result.conservedCells || []).length)],
           ["Selected bin", selected ? "Included below" : "None"]
         ]) : '<div class="report-empty">' + escape(result && result.reason || "Update the comparison from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Conserved bins</h3><span class="report-note-inline">teal intensity = datasets present</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Conserved map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
+        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">green = smaller raw count of A and B (HYB2 plot_similarity_map), capped at the 95% quantile</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
         '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
         '<p class="report-note">Comparison effects are descriptive library-size-normalised values. The report does not claim DESeq2 significance or adjusted p-values.</p>'
       ].join("")
@@ -645,7 +647,7 @@
             ready: comparisonResult.ready === true,
             reason: comparisonResult.reason || null,
             comparableBins: Array.isArray(comparisonResult.cells) ? comparisonResult.cells.length : 0,
-            conservedBins: Array.isArray(comparisonResult.conservedCells) ? comparisonResult.conservedCells.length : 0,
+            similarityBins: Array.isArray(comparisonResult.conservedCells) ? comparisonResult.conservedCells.length : 0,
             selectedCell: jsonSafe(findComparisonCell(comparisonResult, comparison.selection), 3, 50),
             effectCells: jsonSafe(boundedItems(comparisonResult.cells || [], MAX_VISUAL_CELLS, sortEffectCells), 3, 50)
           } : { ready: false, reason: "Not generated" }
@@ -791,7 +793,7 @@
     const plotWidth = 650;
     const plotHeight = 300;
     const cap = Math.max(0.25, number(result.effectCap, 1));
-    const conservedMax = Math.max(1, number(result.conservedMax, 1));
+    const similarityCap = Math.max(1, number(result.similarityCap, 1));
     const selected = comparison.selection;
     const rects = shown.map(function (cell) {
       const x = plotLeft + ((number(cell.x) - xStart) / Math.max(1, xEnd - xStart)) * plotWidth;
@@ -799,15 +801,15 @@
       const width = Math.max(1, binSize / Math.max(1, xEnd - xStart) * plotWidth + 0.5);
       const height = Math.max(1, binSize / Math.max(1, yEnd - yStart) * plotHeight + 0.5);
       const ratio = mode === "conserved"
-        ? Math.max(0, Math.min(1, number(cell.presentDatasets) / conservedMax))
+        ? Math.max(0, Math.min(1, number(cell.similarity) / similarityCap))
         : number(cell.effect) / cap;
       const fill = mode === "conserved" ? conservedColor(ratio) : effectColor(ratio);
       const isSelected = selected && number(selected.x) === number(cell.x) && number(selected.y) === number(cell.y);
-      return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + fill + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + (mode === "conserved" ? "; datasets " + formatNumber(cell.presentDatasets) : "; effect " + formatNumber(cell.effect))) + '</title></rect>';
+      return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + fill + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + (mode === "conserved" ? "; similarity " + formatNumber(cell.similarity) : "; effect " + formatNumber(cell.effect))) + '</title></rect>';
     }).join("");
     return [
       '<svg class="report-svg report-heatmap-svg" viewBox="0 0 760 360" role="img" aria-label="Printable comparison map">',
-      '<title>' + escape(mode === "conserved" ? "Conserved comparison bins" : "Mean log2 comparison effect") + '</title>',
+      '<title>' + escape(mode === "conserved" ? "Similarity heatmap" : "Mean log2 comparison effect") + '</title>',
       '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="#c2d3db"></rect>',
       rects,
       '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 24) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xStart)) + '</text>',
@@ -977,7 +979,7 @@
   }
 
   function sortConservedCells(left, right) {
-    return number(right.presentDatasets) - number(left.presentDatasets) || number(left.x) - number(right.x) || number(left.y) - number(right.y);
+    return number(right.similarity) - number(left.similarity) || number(left.x) - number(right.x) || number(left.y) - number(right.y);
   }
 
   function brandHeatColor(ratio) {
@@ -989,7 +991,7 @@
   }
 
   function conservedColor(ratio) {
-    return interpolateColor("#dce7ec", "#00a09d", Math.max(0, Math.min(1, number(ratio))));
+    return interpolateColor("#ffffff", "#228b22", Math.max(0, Math.min(1, number(ratio))));
   }
 
   function effectColor(value) {

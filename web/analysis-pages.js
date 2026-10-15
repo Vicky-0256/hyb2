@@ -438,7 +438,7 @@
 
     return [
       '<div class="page-heading">',
-      '<div><h1>Compare</h1><p>Compare multiple local HYB datasets using contact-map effect sizes and conserved bins.</p></div>',
+      '<div><h1>Compare</h1><p>Compare multiple local HYB datasets using contact-map effect sizes and the HYB2 similarity heatmap.</p></div>',
       '<div class="inline-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + '<button class="button button-secondary" type="button" data-feature-action="comparison-download-svg">Download effect SVG</button><button class="button button-secondary" type="button" data-feature-action="comparison-download-png">Download effect PNG</button></div>',
       '</div>',
       '<section class="comparison-note notice notice-warning"><strong>DESeq2/WebR technical gate</strong><span>A recorded local static-origin smoke ran the official WebR 0.6 asset with PostMessage and base R. This site does not yet ship that runtime, and deployment CI does not rerun the browser smoke. The stable repository lacks DESeq2; a separate 1.53.2 development-closure probe found 42 of 43 packages and was blocked by locfit, but that is not validation of the pinned 1.52.0 target. This page therefore keeps descriptive effects active and exports a raw count table plus a two-column, headerless names.table for the legacy HYB2 CLI.</span></section>',
@@ -466,20 +466,24 @@
       renderSelectControl("Normalisation", "normalise", comparison.normalise, [
         { value: "library", label: "Per million " + normalisationUnit }, { value: "none", label: "Raw mean count" }
       ], "comparison-control"),
+      renderSelectControl("Similarity minimum", "similarityMinimum", comparison.similarityMinimum || "1", [
+        { value: "1", label: "Every shared bin (HYB2 default)" }, { value: "2", label: "≥ 2 per condition" }, { value: "5", label: "≥ 5 per condition" },
+        { value: "10", label: "≥ 10 per condition" }, { value: "20", label: "≥ 20 per condition" }, { value: "30", label: "≥ 30 per condition" }, { value: "50", label: "≥ 50 per condition" }
+      ], "comparison-control"),
       '</div>',
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><button class="quiet-button" type="button" data-feature-action="comparison-export-tsv">Export comparison TSV</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-counts">Export HYB2 count table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-hyb2-names">Export HYB2 names.table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-metadata">Export extended metadata</button><button class="quiet-button" type="button" data-feature-action="comparison-export-params">Export parameters</button></div>',
       '<p class="card-note">Use the headerless HYB2 names.table with the legacy CLI. Extended metadata has a header and additional provenance columns for audit or custom native-R workflows.</p>',
       '</section>',
       result.ready ? [
-        '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Conserved bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
+        '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Similarity bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
         '<section class="comparison-map-grid">',
         renderComparisonMap("effect", "Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal', result),
-        renderComparisonMap("conserved", "Conserved bins", "Teal intensity equals the number of local datasets containing a bin.", result),
+        renderComparisonMap("conserved", "Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; green = the smaller raw count, capped at the 95% quantile (" + format(result.similarityCap) + ").", result),
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
         comparison.showDataTable ? renderComparisonDataTable(result, comparison) : '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Open comparison data table</button></div>'
       ].join("") : '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Comparison</span><h2>' + escape(result.reason || "Add datasets to compare") + '</h2><p>All input files remain in tab memory and are parsed by local browser workers.</p></div></section>',
-      '<section class="method-note"><strong>Method</strong><span>For each dataset, HYB arms are accumulated into fixed contact bins. Each condition uses the mean of its dataset-level counts, optionally scaled per million ' + normalisationUnit + '. The effect map reports log2((A + pseudocount) / (B + pseudocount)); it is a descriptive effect size, not a significance test.</span></section>'
+      '<section class="method-note"><strong>Method</strong><span>For each dataset, HYB arms are accumulated into fixed contact bins. Each condition uses the mean of its dataset-level counts, optionally scaled per million ' + normalisationUnit + '. The effect map reports log2((A + pseudocount) / (B + pseudocount)); it is a descriptive effect size, not a significance test. The similarity heatmap follows HYB2 plot_similarity_map and similarity_heatmap.R: each condition\'s datasets are summed into one raw contact map (as if their .hyb files were concatenated), bins below the similarity minimum are dropped from each map, and a bin present in both maps shows the smaller count.</span></section>'
     ].join("");
   }
 
@@ -510,7 +514,7 @@
     return [
       '<section class="selection-card data-card comparison-selection"><span class="drawer-kicker">Selected comparison bin</span>',
       '<h2>' + range(selected.x, selected.x + result.binSize - 1) + ' × ' + range(selected.y, selected.y + result.binSize - 1) + '</h2>',
-      '<dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' mean</dt><dd>' + format(selected.conditionA) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' mean</dt><dd>' + format(selected.conditionB) + '</dd></div><div><dt>Log2 effect</dt><dd>' + format(selected.effect) + '</dd></div><div><dt>Datasets present</dt><dd>' + format(selected.presentDatasets) + '</dd></div></dl>',
+      '<dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' mean</dt><dd>' + format(selected.conditionA) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' mean</dt><dd>' + format(selected.conditionB) + '</dd></div><div><dt>Log2 effect</dt><dd>' + format(selected.effect) + '</dd></div><div><dt>Datasets present</dt><dd>' + format(selected.presentDatasets) + '</dd></div><div><dt>Similarity</dt><dd>' + format(selected.similarity) + '</dd></div></dl>',
       renderComparisonDatasetValues(selected, comparison),
       '<div class="inline-actions"><button class="button" type="button" data-feature-action="comparison-explore-region">Explore RNA X region</button>' + renderFoldRequestButton(state, "compare") + '<button class="quiet-button" type="button" data-feature-action="comparison-export-selected">Export dataset values</button><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">' + (comparison.showDataTable ? "Hide data table" : "Open data table") + '</button></div>',
       '</section>'
@@ -536,9 +540,9 @@
   function renderComparisonDataTable(result, comparison) {
     return [
       '<section class="data-card"><div class="card-title-row"><h2>Comparison bins</h2><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Hide data table</button></div>',
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>X interval</th><th>Y interval</th><th>' + escape(comparison.conditionALabel) + ' mean</th><th>' + escape(comparison.conditionBLabel) + ' mean</th><th>Log2 effect</th><th>Datasets present</th></tr></thead><tbody>',
+      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>X interval</th><th>Y interval</th><th>' + escape(comparison.conditionALabel) + ' mean</th><th>' + escape(comparison.conditionBLabel) + ' mean</th><th>Log2 effect</th><th>Datasets present</th><th>Similarity</th></tr></thead><tbody>',
       result.cells.slice().sort(function (left, right) { return Math.abs(right.effect) - Math.abs(left.effect); }).slice(0, 150).map(function (cell) {
-        return '<tr><td>' + range(cell.x, cell.x + result.binSize - 1) + '</td><td>' + range(cell.y, cell.y + result.binSize - 1) + '</td><td>' + format(cell.conditionA) + '</td><td>' + format(cell.conditionB) + '</td><td>' + format(cell.effect) + '</td><td>' + format(cell.presentDatasets) + '</td></tr>';
+        return '<tr><td>' + range(cell.x, cell.x + result.binSize - 1) + '</td><td>' + range(cell.y, cell.y + result.binSize - 1) + '</td><td>' + format(cell.conditionA) + '</td><td>' + format(cell.conditionB) + '</td><td>' + format(cell.effect) + '</td><td>' + format(cell.presentDatasets) + '</td><td>' + format(cell.similarity) + '</td></tr>';
       }).join(""),
       '</tbody></table></div></section>'
     ].join("");

@@ -453,6 +453,54 @@ a {
   line-height: 1.5;
 }
 
+.desktop-download-lede {
+  margin-top: 0;
+}
+
+.desktop-download-list {
+  display: grid;
+  gap: .35rem;
+  margin: .7rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.desktop-download-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  min-height: 40px;
+  padding: 0 .75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-size: .8rem;
+  text-decoration: none;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease);
+}
+
+.desktop-download-link strong {
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.desktop-download-link:hover,
+.desktop-download-link:focus-visible {
+  border-color: var(--primary);
+  background: var(--surface);
+}
+
+.desktop-download-link.is-recommended {
+  border-color: rgba(106, 79, 242, .45);
+}
+
+.desktop-download-link.is-recommended strong {
+  color: var(--primary);
+}
+
 .legacy-workflow-guide ol {
   counter-reset: workflow;
 }

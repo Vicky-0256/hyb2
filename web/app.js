@@ -246,6 +246,7 @@
       renderFilePanel(),
       "    </section>",
       '    <div class="landing-details">',
+      renderDesktopDownloadCard(),
       renderWebCapabilityCard(),
       renderLegacyWorkflowGuide(),
       "    </div>",
@@ -253,6 +254,41 @@
       renderDialog(),
       '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
       "</div>"
+    ].join("");
+  }
+
+  function visitorOS() {
+    const platform = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "").toLowerCase();
+    if (platform.indexOf("mac") !== -1) return "mac";
+    if (platform.indexOf("win") !== -1) return "windows";
+    if (platform.indexOf("linux") !== -1) return "linux";
+    return "";
+  }
+
+  // The desktop app's installers, from the latest GitHub release (the
+  // release workflow publishes them under these stable names). Kept inside
+  // the function: renderLanding runs before later top-level consts exist.
+  function renderDesktopDownloadCard() {
+    const releases = "https://github.com/Vicky-0256/hyb2/releases";
+    const downloads = [
+      { os: "mac", label: "macOS · Apple silicon", file: "HYB2-Desktop-macOS-arm64.dmg" },
+      { os: "windows", label: "Windows · 64-bit", file: "HYB2-Desktop-Windows-x64-Setup.exe" },
+      { os: "linux", label: "Linux · .deb", file: "HYB2-Desktop-Linux-x64.deb" },
+      { os: "linux", label: "Linux · .tar.gz", file: "HYB2-Desktop-Linux-x64.tar.gz" }
+    ];
+    const os = visitorOS();
+    const items = downloads.map(function (item) {
+      const mine = item.os === os;
+      return '<li><a class="desktop-download-link' + (mine ? ' is-recommended' : '') + '" href="' + releases + '/latest/download/' + item.file + '">' +
+        '<span>' + item.label + '</span><strong>' + (mine ? 'For this computer' : 'Download') + '</strong></a></li>';
+    }).join("");
+    return [
+      '<section class="web-capability-card desktop-download-card" aria-labelledby="desktop-download-title">',
+      '<div class="web-capability-heading"><div><span class="example-kicker">Desktop app</span><h2 id="desktop-download-title">From raw reads to structure</h2></div><span class="web-capability-chip">Offline</span></div>',
+      '<p class="web-capability-note desktop-download-lede">HYB2 Desktop runs the whole pipeline on your computer: FASTQ mapping, hybrid calling, QC, DESeq2 comparisons and CPLfold structures.</p>',
+      '<ul class="desktop-download-list">', items, '</ul>',
+      '<p class="web-capability-note">Not yet signed: on first launch, macOS asks you to allow it in System Settings → Privacy &amp; Security, and Windows SmartScreen under More info → Run anyway. <a href="' + releases + '/latest">Release notes, older versions and checksums</a>.</p>',
+      '</section>'
     ].join("");
   }
 

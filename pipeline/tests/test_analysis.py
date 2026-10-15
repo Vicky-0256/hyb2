@@ -124,6 +124,18 @@ class IndexQueryTest(unittest.TestCase):
         query.close_all()
         cls.tmp.cleanup()
 
+    def test_index_path_with_uri_characters(self):
+        # Folder names such as "ZIKV #2" or "50% subset" must not change
+        # which file SQLite opens, or how (the index stays read-only).
+        folder = Path(self.tmp.name) / "ZIKV #2 50% a?mode=rw&x"
+        folder.mkdir()
+        copy = folder / "testData.hyb2idx"
+        copy.write_bytes(self.index.read_bytes())
+        self.assertEqual(query.summary([copy])["merged"]["records"], self.meta["records"])
+        con = query._get(copy).con
+        with self.assertRaises(Exception):
+            con.execute("CREATE TABLE x (a)")
+
     def test_meta_and_summary(self):
         self.assertEqual(self.meta["records"], 10411)
         self.assertEqual(self.meta["invalid"], 0)

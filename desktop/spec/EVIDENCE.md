@@ -59,8 +59,10 @@ Operations (anything else → `{"ok":false,"error":"unsupported evidence operati
 | `map_id` | `{identifier, taxon}` | `{ok:true, card: EvidenceCard}` with `content_kind: database_metadata` |
 | `shutdown` | `{}` | closes the MCP session and child, then exits |
 
-Timeouts: Go cancels by killing the worker (and its MCP child, its process
-group) after 45 s per call; the worker itself uses 30 s per tool call and at
+Timeouts: Go cancels by killing the worker's process group after 45 s per
+call. The MCP SDK starts the RNAcentral child in its own session, so the
+group kill does not reach it: the child ends on EOF of its stdin when the
+worker dies (checked: it exits about 0.1 s later); the worker itself uses 30 s per tool call and at
 most one retry for connection errors (never for 404). Rate limit: at most 2
 calls per second.
 

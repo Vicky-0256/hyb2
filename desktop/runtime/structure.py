@@ -228,7 +228,9 @@ def _reference_sequence(path: Path, gene_id: Optional[str]) -> Tuple[str, str]:
     chosen = None
     if gene_id is not None:
         chosen = next((record for record in records if record[0] == gene_id), None)
-        if chosen is None and len(records) > 1:
+        if chosen is None:
+            # Even with one sequence: folding it under gene_id's name would
+            # mislabel the result (e.g. evidence of another reference).
             raise ValueError(f"gene_id {gene_id} is not a sequence of the reference FASTA")
     if chosen is None:
         if len(records) > 1:

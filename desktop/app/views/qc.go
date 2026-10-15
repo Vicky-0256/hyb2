@@ -7,6 +7,7 @@ package views
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -195,7 +196,7 @@ func (p *qcPage) View(c *ui.Context) {
 		}
 		if p.err != "" {
 			ui.Row(c).Gap(10).Children(func() {
-				ui.Text(c, "Could not load the counts: "+p.err).TextColor(t.Danger).Grow(1).Shrink(1).MinWidth(0)
+				ui.Text(c, "Could not load the counts: "+ShortError(p.err)).TextColor(t.Danger).Grow(1).Shrink(1).MinWidth(0)
 				if ui.Button(c, "Retry").Clicked() {
 					p.refresh()
 				}
@@ -215,18 +216,22 @@ func (p *qcPage) View(c *ui.Context) {
 	})
 }
 
-// qcTypeNames: the first four hybrid types met, in the samples' order (as
-// qc-page.js picks them).
+// qcTypeNames: the four most common hybrid types over the samples, largest
+// first (ties in the order met).
 func (p *qcPage) qcTypeNames(ready []string) []string {
 	var names []string
-	seen := map[string]bool{}
+	total := map[string]int64{}
 	for _, id := range ready {
 		for _, t := range p.stats[id].Types {
-			if !seen[t.Name] && len(names) < 4 {
-				seen[t.Name] = true
+			if _, seen := total[t.Name]; !seen {
 				names = append(names, t.Name)
 			}
+			total[t.Name] += t.Records
 		}
+	}
+	sort.SliceStable(names, func(i, j int) bool { return total[names[i]] > total[names[j]] })
+	if len(names) > 4 {
+		names = names[:4]
 	}
 	return names
 }

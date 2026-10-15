@@ -82,7 +82,7 @@ type App struct {
 	pendingFolder string
 	recent        []Recent
 
-	toasts   []string
+	toasts   []appToast
 	pollOnce sync.Once
 	pollStop chan struct{}
 	mu       sync.Mutex // guards pending (written from goroutines)
@@ -167,9 +167,27 @@ func (a *App) Flush() {
 	}
 }
 
+// appToast is a queued toast; one with the ID of a toast showing replaces it.
+type appToast struct {
+	ID, Text string
+}
+
 // Toast queues a message shown at the next frame.
 func (a *App) Toast(format string, args ...any) {
-	a.toasts = append(a.toasts, fmt.Sprintf(format, args...))
+	text := fmt.Sprintf(format, args...)
+	a.ToastAs(text, "%s", text)
+}
+
+// ToastAs queues a message under id: it replaces the toast of the same id
+// (queued or showing), as a newer outcome of the same action.
+func (a *App) ToastAs(id, format string, args ...any) {
+	kept := a.toasts[:0]
+	for _, m := range a.toasts {
+		if m.ID != id {
+			kept = append(kept, m)
+		}
+	}
+	a.toasts = append(kept, appToast{ID: id, Text: fmt.Sprintf(format, args...)})
 }
 
 // ---- project
@@ -697,13 +715,18 @@ func (a *App) storeTask(t model.Task) {
 	previous, known := a.Tasks[t.TaskID]
 	a.Tasks[t.TaskID] = t
 	if known && previous.Active() && !t.Active() {
+		id := "task:" + t.TaskID
 		switch t.Status {
 		case "succeeded":
-			a.Toast("%s finished", a.TaskLabel(t))
+			a.ToastAs(id, "%s finished", a.TaskLabel(t))
 		case "cancelled":
-			a.Toast("%s cancelled", a.TaskLabel(t))
+			a.ToastAs(id, "%s cancelled", a.TaskLabel(t))
 		default:
-			a.Toast("%s %s", a.TaskLabel(t), t.Status)
+			if reason := ShortError(t.ErrorText()); reason != "" {
+				a.ToastAs(id, "%s %s: %s", a.TaskLabel(t), t.Status, reason)
+			} else {
+				a.ToastAs(id, "%s %s", a.TaskLabel(t), t.Status)
+			}
 		}
 		a.RefreshProject()
 		for _, hook := range taskFinishedHooks {

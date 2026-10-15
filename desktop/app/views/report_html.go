@@ -109,7 +109,7 @@ const reportEvidenceNote = "Background material from external sources, kept as r
 // newReportEvidence describes a card against the report's structures.
 func newReportEvidence(card *model.EvidenceCard, structures []reportStructure) reportEvidence {
 	e := reportEvidence{Title: card.SourceProvider + " · " + card.SourceTool, Boundary: researchHeading(card),
-		Query: researchQuery(card), Status: researchStatusLabel(card.Status), Review: researchReview(card.Review),
+		Query: researchQuery(card), Status: researchCardLabel(card), Review: researchReview(card.Review),
 		Text: card.Text(), SourceURL: researchSourceURL(card)}
 	e.Retrieved = "not retrieved"
 	if card.RetrievedAt != nil && *card.RetrievedAt != "" {
@@ -117,6 +117,9 @@ func newReportEvidence(card *model.EvidenceCard, structures []reportStructure) r
 	}
 	if detail := researchStatusText(card); detail != "" && card.Status != model.EvidenceSuccess {
 		e.Status += " — " + detail
+	}
+	if researchShowDetail(card) {
+		e.Status += " (" + *card.StatusDetail + ")"
 	}
 	e.Citations = "citations not verified"
 	if card.CitationVerification == "verified" {

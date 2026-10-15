@@ -76,6 +76,7 @@ type taskState struct {
 	cmd         *exec.Cmd     // running child; nil once reaped or taken
 	exited      chan struct{} // closed when the running child has been reaped
 	pending     *pending
+	onFinish    OnFinish // of the running child; called by monitor or shutdown
 	project     string
 	runDir      string
 	startedAt   string  // submission time; list order
@@ -193,7 +194,7 @@ func (e *taskState) snapshot(id string) Obj { return normalize(e.record(id)) }
 func withProgress(value Obj) Obj {
 	var progress any
 	if dir, ok := value["run_dir"].(string); ok {
-		if data, err := os.ReadFile(filepath.Join(dir, "progress.json")); err == nil {
+		if data, err := readProjectFile(filepath.Join(dir, "progress.json")); err == nil {
 			var parsed any
 			if json.Unmarshal(data, &parsed) == nil {
 				if object, ok := parsed.(map[string]any); ok {
@@ -213,11 +214,7 @@ func writeAtomic(dir, name string, value any) error {
 	if err != nil {
 		return err
 	}
-	pending := filepath.Join(dir, name+".tmp")
-	if err := os.WriteFile(pending, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(pending, filepath.Join(dir, name))
+	return writeFileAtomic(filepath.Join(dir, name), data)
 }
 
 func writeStatus(runDir string, value any) error { return writeAtomic(runDir, "status.json", value) }
@@ -283,7 +280,7 @@ func (s *Scheduler) prepareRunDir(project, id string) (string, string, error) {
 // readResult reads the child's result.json (written via --result-file),
 // falling back to the last JSON object line the bridge printed to stdout.
 func readResult(runDir string) any {
-	if data, err := os.ReadFile(filepath.Join(runDir, "result.json")); err == nil {
+	if data, err := readProjectFile(filepath.Join(runDir, "result.json")); err == nil {
 		var value any
 		if json.Unmarshal(data, &value) == nil {
 			return value
@@ -413,6 +410,14 @@ func (s *Scheduler) Prepare(request TaskStartRequest, project string, resumedFro
 	if err != nil {
 		return nil, err
 	}
+	if resumedFrom != nil {
+		s.mu.Lock()
+		err := s.resumingLocked(*resumedFrom)
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+	}
 	// Validate the payload before reserving a run directory.
 	if _, err := TaskPayload(request, project, id, filepath.Join(project, "runs", id), claim); err != nil {
 		return nil, err
@@ -445,6 +450,17 @@ func (s *Scheduler) Prepare(request TaskStartRequest, project string, resumedFro
 		RequestFile: requestFile, Claim: claim, ResumedFrom: resumedFrom}, nil
 }
 
+// resumingLocked refuses a second resume of from while an earlier resumed
+// copy is still queued or running (both would write the same outputs).
+func (s *Scheduler) resumingLocked(from string) error {
+	for other, e := range s.tasks {
+		if e.resumedFrom != nil && *e.resumedFrom == from && slices.Contains(activeStates, e.status) {
+			return fmt.Errorf("task %s is already being resumed as %s", from, other)
+		}
+	}
+	return nil
+}
+
 // Submit registers the task as queued and launches it at once when the
 // budget allows. The returned snapshot shows running, queued or failed.
 // cmd must not have been started; its stdio and process group are set here.
@@ -466,6 +482,14 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 	if _, used := s.tasks[id]; used {
 		s.mu.Unlock()
 		return nil, errors.New("task id is already in use")
+	}
+	if task.ResumedFrom != nil {
+		if err := s.resumingLocked(*task.ResumedFrom); err != nil {
+			s.mu.Unlock()
+			// A concurrent resume won; this copy never ran.
+			_ = os.RemoveAll(task.RunDir)
+			return nil, err
+		}
 	}
 	if len(s.tasks) >= maxTasks {
 		oldest := ""
@@ -616,6 +640,7 @@ func (s *Scheduler) schedule() {
 			e.pending = nil
 			e.claim = a.claim
 			if s.launch(a.id, e, p.cmd) {
+				e.onFinish = p.onFinish
 				monitors = append(monitors, started{a.id, e.project, e.runDir, e.cmd, e.exited, p.onFinish})
 			} else {
 				failed = append(failed, started{id: a.id, project: e.project, onFinish: p.onFinish})
@@ -719,12 +744,18 @@ func (s *Scheduler) monitor(m started) {
 		s.mu.Unlock()
 		return
 	}
-	if e.cmd == m.cmd {
+	takenByShutdown := e.cmd != m.cmd
+	if !takenByShutdown {
 		// Still ours (not taken by shutdown): record how it ended.
 		e.cmd = nil
 		e.exitCode = exitCode
 	} else {
 		waitError = nil
+	}
+	if e.status == "cancelled" && waitError == nil && e.exitCode != nil && *e.exitCode == 0 {
+		// The cancel came after the child had already exited cleanly (a
+		// killed child cannot exit 0): its outputs are complete.
+		e.status, e.err = "succeeded", nil
 	}
 	if slices.Contains(activeStates, e.status) {
 		ok := waitError == nil && e.exitCode != nil && *e.exitCode == 0
@@ -759,7 +790,10 @@ func (s *Scheduler) monitor(m started) {
 	}
 	s.mu.Unlock()
 	s.schedule()
-	m.onFinish(m.project, m.id)
+	if !takenByShutdown {
+		// ShutdownAll finishes the tasks it takes.
+		m.onFinish(m.project, m.id)
+	}
 }
 
 func resultError(result any) string {
@@ -785,7 +819,12 @@ func (s *Scheduler) liveSnapshot(id, runDir string) (Obj, bool) {
 // running record without a live process in this session is marked
 // interrupted (and saved so).
 func readDisk(id, runDir string) (Obj, error) {
-	data, err := os.ReadFile(filepath.Join(runDir, "status.json"))
+	// Only a real run directory (a symlink may come with a copied project
+	// and point anywhere: it is neither read nor rewritten).
+	if info, err := os.Lstat(runDir); err != nil || !info.IsDir() {
+		return nil, errors.New("task not found")
+	}
+	data, err := readProjectFile(filepath.Join(runDir, "status.json"))
 	if err != nil {
 		return nil, errors.New("task not found")
 	}
@@ -873,7 +912,9 @@ func (s *Scheduler) List(project string) ([]Obj, error) {
 	for _, item := range items {
 		id := item.Name()
 		runDir := filepath.Join(runs, id)
-		if ValidateID(id) != nil || !isFile(filepath.Join(runDir, "status.json")) {
+		// A run directory is one this app made: a symlink (from a copied
+		// project) is skipped, so nothing is read or rewritten through it.
+		if ValidateID(id) != nil || !item.IsDir() || !isRegularFile(filepath.Join(runDir, "status.json")) {
 			continue
 		}
 		if live, ok := s.liveSnapshot(id, runDir); ok {
@@ -942,18 +983,26 @@ func (s *Scheduler) Cancel(id, project string) (Obj, error) {
 
 // ShutdownAll kills every running task (application exit) and records
 // running and queued tasks as interrupted, so they can be resumed next
-// session. Later submissions are refused.
+// session. Later submissions are refused. Their onFinish runs before it
+// returns, so they can still be registered while the runtime is up.
 func (s *Scheduler) ShutdownAll() {
 	s.shuttingDown.Store(true)
+	type finish struct {
+		project, id string
+		onFinish    OnFinish
+	}
+	var finishes []finish
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for id, e := range s.tasks {
 		var message string
+		var onFinish OnFinish
 		switch {
 		case e.pending != nil:
+			onFinish = e.pending.onFinish
 			e.pending = nil
 			message = "the application exited before this queued task started"
 		case e.cmd != nil:
+			onFinish = e.onFinish
 			_ = killTree(e.cmd.Process.Pid)
 			// The monitor reaps the child; it does not need the lock for that.
 			select {
@@ -972,6 +1021,13 @@ func (s *Scheduler) ShutdownAll() {
 		e.finished = now
 		e.finishedAt = &stamp
 		_ = e.persist(id)
+		if onFinish != nil {
+			finishes = append(finishes, finish{e.project, id, onFinish})
+		}
+	}
+	s.mu.Unlock()
+	for _, f := range finishes {
+		f.onFinish(f.project, f.id)
 	}
 }
 

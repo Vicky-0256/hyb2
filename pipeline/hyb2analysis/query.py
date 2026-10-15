@@ -42,7 +42,8 @@ class _Index:
         self.path = path
         stat = path.stat()
         self.stamp = (stat.st_size, stat.st_mtime_ns)
-        self.con = sqlite3.connect("file:%s?mode=ro" % path.as_posix(), uri=True, check_same_thread=False)
+        # as_uri escapes "#", "%" and "?" in folder names; the index opens read-only.
+        self.con = sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True, check_same_thread=False)
         try:
             self.meta = {k: json.loads(v) for k, v in self.con.execute("SELECT key, value FROM meta")}
         except sqlite3.DatabaseError as error:

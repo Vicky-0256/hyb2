@@ -238,7 +238,13 @@ class StructureRunTests(unittest.TestCase):
             handle(self._request(hyb_paths=["../outside.hyb"]), repo_root=ROOT)
         with self.assertRaisesRegex(ValueError, "windows mode"):
             handle(self._request(memory_budget_mb=64), repo_root=ROOT)
-        failed = handle(self._request(task_id="nogene", gene_id="MISSING"), repo_root=ROOT)
+        # A gene that is not in the (single-sequence) reference is refused
+        # as such, not folded as the reference's only sequence.
+        with self.assertRaisesRegex(ValueError, "gene_id MISSING is not a sequence of the reference FASTA"):
+            handle(self._request(task_id="nogene", gene_id="MISSING"), repo_root=ROOT)
+        # Evidence without chimeras of the gene fails in result.json.
+        (self.project / "data" / "other.hyb").write_text("".join(_hyb_rows(self.length, 20, gene="OTHER_virusRNA")))
+        failed = handle(self._request(task_id="noevidence", hyb_paths=["data/other.hyb"]), repo_root=ROOT)
         self.assertFalse(failed["ok"])
         self.assertIn("no intramolecular", failed["error"])
         stored = json.loads((Path(failed["run_dir"]) / "result.json").read_text())

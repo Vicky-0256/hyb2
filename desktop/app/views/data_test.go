@@ -154,7 +154,7 @@ func TestDataPageResumeAndPending(t *testing.T) {
 	tt := ui.NewTester(a.View, 1100, 720)
 	waitFlush(a)
 	tt.Frame()
-	dataExpect(t, tt, "Run all pending (2)", "Resume interrupted (1)", "hyb failed", "map pending", "Resume", "Run")
+	dataExpect(t, tt, "Run all pending (2)", "Retry failed (1)", "hyb failed", "map pending", "Resume", "Run")
 	snapshot(t, tt, "data-mixed")
 	// The fake refuses to resume: the page says so.
 	dataClick(t, tt, a, "Resume")

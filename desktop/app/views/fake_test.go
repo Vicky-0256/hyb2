@@ -23,6 +23,8 @@ type fakeBackend struct {
 	ops     map[string]core.Obj
 	started []core.TaskStartRequest
 	uiState core.Obj
+	// queryErr, when set, is the error of every analysis query.
+	queryErr error
 }
 
 func fixture(t testing.TB, name string) core.Obj {
@@ -94,6 +96,9 @@ func (f *fakeBackend) ProjectOp(path, operation string, payload core.Obj) (core.
 }
 func (f *fakeBackend) Query(path, operation string, payload core.Obj) (any, error) {
 	f.record("query:" + operation)
+	if f.queryErr != nil {
+		return nil, f.queryErr
+	}
 	if r, ok := f.queries[operation]; ok {
 		return r, nil
 	}

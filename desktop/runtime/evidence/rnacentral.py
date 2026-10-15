@@ -278,7 +278,9 @@ class EvidenceService:
                 if getattr(result, "isError", False):
                     outcome = ("upstream_error", ("MCP tool error: " + raw.strip())[:300] if raw.strip() else "MCP tool error",
                                raw, retrieved_at)
-                elif text is None:
+                elif text is None or other:
+                    # Only plain text is understood; text mixed with other
+                    # content is not shown as a summary either.
                     kinds = ", ".join(other) if other else "no content"
                     outcome = ("unexpected_response", "non-text response (%s)" % kinds, raw, retrieved_at)
                 elif len(text) > MAX_RAW_CHARS:

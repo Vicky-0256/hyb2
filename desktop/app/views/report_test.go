@@ -141,7 +141,7 @@ func TestReportExportHTML(t *testing.T) {
 	if dir := os.Getenv("HYB2_SNAPSHOT_DIR"); dir != "" {
 		_ = os.WriteFile(filepath.Join(dir, "export-report.html"), []byte(text), 0o644)
 	}
-	if len(a.toasts) == 0 || a.toasts[len(a.toasts)-1] != "Saved "+(*asked)[0] {
+	if len(a.toasts) == 0 || a.toasts[len(a.toasts)-1].Text != "Saved "+(*asked)[0] {
 		t.Fatalf("toasts %q", a.toasts)
 	}
 	if len(text) < 20_000 || len(text) > 2_000_000 {

@@ -181,6 +181,33 @@ func (p *dataPage) activeTask(s model.Sample) (model.Task, bool) {
 	return best, found
 }
 
+// resumeLabel names the samples the toolbar button resumes: failed ones are
+// retried, interrupted or cancelled ones resumed.
+func (p *dataPage) resumeLabel(problems []model.Sample) string {
+	failed := 0
+	for _, s := range problems {
+		if st, _ := p.problem(s); st.Status == "failed" {
+			failed++
+		}
+	}
+	switch failed {
+	case 0:
+		return fmt.Sprintf("Resume interrupted (%d)", len(problems))
+	case len(problems):
+		return fmt.Sprintf("Retry failed (%d)", len(problems))
+	}
+	return fmt.Sprintf("Resume or retry (%d)", len(problems))
+}
+
+// failReason is the short error of the task behind a failed stage ("" when
+// that task is not known in this session).
+func (p *dataPage) failReason(st model.Stage) string {
+	if st.Status != "failed" || st.TaskID == "" {
+		return ""
+	}
+	return ShortError(p.a.Tasks[st.TaskID].ErrorText())
+}
+
 // problem is the first failed, interrupted or cancelled stage; a stage left
 // running by a task that is no longer active was cut off (interrupted).
 func (p *dataPage) problem(s model.Sample) (model.Stage, bool) {
@@ -361,7 +388,7 @@ func dataErrText(err error) string {
 	if err == nil {
 		return ""
 	}
-	return err.Error()
+	return ShortError(err.Error())
 }
 
 // ---- view
@@ -554,7 +581,7 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 			}
 			ui.Spacer(c)
 			if len(problems) > 0 {
-				if ui.Button(c, fmt.Sprintf("Resume interrupted (%d)", len(problems))).Clicked() {
+				if ui.Button(c, p.resumeLabel(problems)).Clicked() {
 					p.resumeSamples(problems)
 				}
 			}
@@ -649,14 +676,21 @@ func (p *dataPage) sampleRows(c *ui.Context, samples []model.Sample, cols []ui.T
 				ui.Column(c).Width(200).Gap(2).Children(func() { ProgressBar(c, task) })
 				return
 			}
-			_, bad := p.problem(s)
-			ui.Row(c).Gap(4).Wrap().Children(func() {
-				for _, name := range dataStages {
-					status := dataStage(s, name).Status
-					if (status == "running" || status == "queued") && bad {
-						status = "interrupted"
+			stage, bad := p.problem(s)
+			reason := p.failReason(stage)
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Row(c).Gap(4).Wrap().Children(func() {
+					for _, name := range dataStages {
+						status := dataStage(s, name).Status
+						if (status == "running" || status == "queued") && bad {
+							status = "interrupted"
+						}
+						dataStageChip(c, name, status)
 					}
-					dataStageChip(c, name, status)
+				})
+				if reason != "" {
+					ui.Text(c, reason).FontSize(11).TextColor(c.Theme().Danger).SingleLine().
+						Tooltip(reason + " — the full log is in the task drawer")
 				}
 			})
 		case 6:
@@ -1437,7 +1471,7 @@ func (p *dataPage) checkInputs() {
 				return
 			}
 			if err != nil {
-				a.Toast("Check failed: %v", err)
+				a.ToastAs("check-inputs", "Check failed: %s", dataErrText(err))
 				return
 			}
 			p.inputs = map[string]dataInputItem{}
@@ -1448,9 +1482,9 @@ func (p *dataPage) checkInputs() {
 			}
 			p.checkSummary = fmt.Sprintf("Inputs checked: %d ok, %d missing, %d changed.", count["ok"], count["missing"], count["changed"])
 			if count["missing"] == 0 && count["changed"] == 0 {
-				a.Toast("All %d input files are present and unchanged.", len(items))
+				a.ToastAs("check-inputs", "All %d input files are present and unchanged.", len(items))
 			} else {
-				a.Toast("%d missing, %d changed. Use Relink on the marked rows.", count["missing"], count["changed"])
+				a.ToastAs("check-inputs", "%d missing, %d changed. Use Relink on the marked rows.", count["missing"], count["changed"])
 			}
 		}
 	})

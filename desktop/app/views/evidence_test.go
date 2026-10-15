@@ -163,7 +163,11 @@ func (f *researchFake) UpdateEvidence(path, id string, u model.EvidenceUpdate) (
 	defer f.emu.Unlock()
 	for i := range f.saved {
 		if f.saved[i].EvidenceID == id {
-			f.saved[i].Binding.IncludeInReport = u.IncludeInReport
+			// A new binding, as the real backend decodes one per call: the
+			// page may be drawing the old one.
+			b := *f.saved[i].Binding
+			b.IncludeInReport = u.IncludeInReport
+			f.saved[i].Binding = &b
 			if u.Review != nil {
 				f.saved[i].Review = model.EvidenceReview{State: u.Review.State}
 				if u.Review.Note != "" {

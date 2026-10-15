@@ -23,7 +23,7 @@ func exportClick(t *testing.T, a *App, tt *ui.Tester, button string) (string, st
 	waitFlush(a)
 	text := readExport(t, asked)
 	path := (*asked)[0]
-	if want := "Saved " + path; len(a.toasts) == 0 || a.toasts[len(a.toasts)-1] != want {
+	if want := "Saved " + path; len(a.toasts) == 0 || a.toasts[len(a.toasts)-1].Text != want {
 		t.Fatalf("toasts %q, want %q", a.toasts, want)
 	}
 	tt.Frame()

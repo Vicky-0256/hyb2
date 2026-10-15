@@ -120,6 +120,17 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(card["identity_confirmation"], "unconfirmed")
         self.assertEqual(len(client.calls), 1)
 
+    def test_text_with_other_content_is_unexpected(self):
+        # Text plus an image or resource is not the plain summary this
+        # version understands: nothing of it is shown as a summary.
+        mixed = SimpleNamespace(content=[SimpleNamespace(type="text", text="Summary text."),
+                                         SimpleNamespace(type="image", data="AAAA")], isError=False)
+        service, _ = self.service([mixed])
+        card = service.describe({"operation": "describe", "rna_id": "hsa-mir-21"})["card"]
+        self.assertEqual(card["status"], "unexpected_response")
+        self.assertIn("image", card["status_detail"])
+        self.assertIsNone(card["display_text"])
+
     def test_is_error_precedes_known_texts(self):
         service, _ = self.service([text_result("No description available", is_error=True)])
         self.assertEqual(service.describe({"operation": "describe", "rna_id": "x1"})["card"]["status"], "upstream_error")

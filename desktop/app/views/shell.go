@@ -13,8 +13,8 @@ import (
 
 // View builds the window: the start page, or the project shell.
 func (a *App) View(c *ui.Context) {
-	for _, message := range a.toasts {
-		c.Toast(message)
+	for _, m := range a.toasts {
+		c.AddToast(ui.Toast{ID: m.ID, Title: m.Text})
 	}
 	a.toasts = nil
 	if a.Project == nil {

@@ -6,7 +6,8 @@ package core
 // server child. Go decides everything that concerns the user's data: the
 // external_lookup preference gate, identifier validation, identity
 // confirmation, timeouts and cancellation (killing the worker's process
-// group, so the MCP child dies too), and the cards saved in
+// group; the MCP child, in its own session, ends on its stdin's EOF), and
+// the cards saved in
 // <project>/evidence/. Only the public query fields (identifier, taxon)
 // reach the worker; project paths, ids and structures never do.
 
@@ -446,27 +447,19 @@ func cardPath(dir, id string) (string, error) {
 
 func readCard(path string) (model.EvidenceCard, error) {
 	var card model.EvidenceCard
-	data, err := os.ReadFile(path)
+	data, err := readProjectFile(path)
 	if err != nil {
 		return card, err
 	}
 	if err := json.Unmarshal(data, &card); err != nil {
 		return card, err
 	}
+	// The card file is project data (it may have been edited or come with
+	// a copied project): this version never verifies citations nor relates
+	// a card to a structure beyond background, whatever the file says.
+	card.CitationVerification = "not_checked"
+	card.RelationToStructure = "background_only"
 	return card, nil
-}
-
-// writeFileAtomic writes through a temporary file in the same directory.
-func writeFileAtomic(path string, data []byte) error {
-	pending := path + ".tmp"
-	if err := os.WriteFile(pending, data, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(pending, path); err != nil {
-		_ = os.Remove(pending)
-		return err
-	}
-	return nil
 }
 
 func writeCard(path string, card model.EvidenceCard) error {

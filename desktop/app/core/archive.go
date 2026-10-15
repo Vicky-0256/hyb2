@@ -128,7 +128,7 @@ func extractVerified(archive, digest, dest string) error {
 			return fmt.Errorf("the bundled runtime archive is damaged: %w", err)
 		}
 		name := filepath.FromSlash(h.Name)
-		if filepath.IsAbs(name) || strings.Contains(h.Name, "\\") {
+		if absoluteEntry(h.Name) {
 			return fmt.Errorf("unsafe path in the runtime archive: %q", h.Name)
 		}
 		target := filepath.Join(root, name)
@@ -156,7 +156,7 @@ func extractVerified(archive, digest, dest string) error {
 				return err
 			}
 		case tar.TypeSymlink:
-			if filepath.IsAbs(h.Linkname) || !inside(filepath.Join(filepath.Dir(target), filepath.FromSlash(h.Linkname))) {
+			if absoluteEntry(h.Linkname) || !inside(filepath.Join(filepath.Dir(target), filepath.FromSlash(h.Linkname))) {
 				return fmt.Errorf("unsafe link in the runtime archive: %q -> %q", h.Name, h.Linkname)
 			}
 			links = append(links, h) // after the files, so Windows can copy targets
@@ -181,6 +181,14 @@ func extractVerified(archive, digest, dest string) error {
 		}
 	}
 	return nil
+}
+
+// absoluteEntry reports archive names and link targets that are absolute
+// on any platform: "/x" (not absolute for Windows' filepath), "C:x",
+// backslashes, or UNC paths.
+func absoluteEntry(name string) bool {
+	return name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") ||
+		strings.Contains(name, ":") || filepath.IsAbs(name)
 }
 
 // makeLink creates a symlink, or copies the target file where symlinks are

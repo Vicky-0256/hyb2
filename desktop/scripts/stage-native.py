@@ -86,8 +86,9 @@ def bowtie2_smoke(root, scratch):
         return None
     reference = 'GGCGCGGCACCGUCCGCGGAACAAACGGAUCGAUCGGAUCCGAUGCUAGCUAGGCUAGCGAUCGAUCGAUGCAUGC'.replace('U', 'T')
     work = Path(scratch)
-    (work / 'ref.fa').write_text('>ref\n' + reference * 3 + '\n')
-    (work / 'read.fa').write_text('>r1\n' + reference[10:60] + '\n')
+    # LF bytes: text mode writes CRLF on Windows, which Bowtie2 rejects as reads.
+    (work / 'ref.fa').write_bytes(('>ref\n' + reference * 3 + '\n').encode())
+    (work / 'read.fa').write_bytes(('>r1\n' + reference[10:60] + '\n').encode())
     subprocess.run([str(build), str(work / 'ref.fa'), str(work / 'idx')], capture_output=True, check=True, timeout=300)
     sam = subprocess.run([str(align), '--local', '-x', str(work / 'idx'), '-f', str(work / 'read.fa')],
                          capture_output=True, text=True, check=True, timeout=300).stdout

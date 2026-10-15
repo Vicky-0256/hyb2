@@ -34,6 +34,8 @@ type interactionsState struct {
 	gene1, gene2, typ, order string
 	minReads, x0, x1, y0, y1 string
 	inputErr                 string
+	// armsOpen shows the arm position filters (open while one is set).
+	armsOpen bool
 
 	load, more loader
 	key        string // the applied key the rows belong to
@@ -233,23 +235,41 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 	}
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
 		ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
-			picker(c, "ix-gene1", "Gene 1", &s.gene1, genes, 170).OnChange(submit)
-			picker(c, "ix-gene2", "Gene 2", &s.gene2, genes, 170).OnChange(submit)
+			picker(c, "ix-gene1", "Gene 1", &s.gene1, genes, 150).OnChange(submit)
+			picker(c, "ix-gene2", "Gene 2", &s.gene2, genes, 150).OnChange(submit)
 			picker(c, "ix-type", "Chimera type", &s.typ, withAll(allTypes, p.summary.types), 130).OnChange(submit)
-			picker(c, "ix-order", "Sort by", &s.order, orderLabels, 170)
+			picker(c, "ix-order", "Sort by", &s.order, orderLabels, 140)
 			Field(c, "Min reads", func() {
 				ui.TextInput(c.Key("ix-min"), &s.minReads).Label("Min reads").Width(70).OnSubmit(submit)
 			})
-			coordInput(c, "ix-x0", "Arm 1 from", &s.x0, "start").OnSubmit(submit)
-			coordInput(c, "ix-x1", "Arm 1 to", &s.x1, "end").OnSubmit(submit)
-			coordInput(c, "ix-y0", "Arm 2 from", &s.y0, "start").OnSubmit(submit)
-			coordInput(c, "ix-y1", "Arm 2 to", &s.y1, "end").OnSubmit(submit)
 			if ui.PrimaryButton(c, "Apply").Clicked() {
 				submit()
 			}
 			if ui.Button(c, "Clear").Clicked() {
 				s.apply(ixFilters{minReads: 1, typ: allTypes})
 			}
+		})
+		set := 0
+		for _, v := range []string{s.x0, s.x1, s.y0, s.y1} {
+			if strings.TrimSpace(v) != "" {
+				set++
+			}
+		}
+		if set > 0 {
+			s.armsOpen = true
+		}
+		label := "Arm positions"
+		if set > 0 {
+			label += fmt.Sprintf(" (%d set)", set)
+		}
+		ui.Collapsible(c.Key("ix-arms"), label, &s.armsOpen, func() {
+			ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Padding(6, 0, 0, 0).Children(func() {
+				coordInput(c, "ix-x0", "Arm 1 from", &s.x0, "start").OnSubmit(submit)
+				coordInput(c, "ix-x1", "Arm 1 to", &s.x1, "end").OnSubmit(submit)
+				coordInput(c, "ix-y0", "Arm 2 from", &s.y0, "start").OnSubmit(submit)
+				coordInput(c, "ix-y1", "Arm 2 to", &s.y1, "end").OnSubmit(submit)
+				ui.Text(c, "1-based; Enter or Apply filters.").FontSize(12).TextColor(t.TextMuted)
+			})
 		})
 		if s.inputErr != "" {
 			errorLine(c, s.inputErr)

@@ -239,6 +239,9 @@ func (p *comparePage) reset() {
 	p.direction, p.row = 0, -1
 	p.table.Selected = &p.row
 	p.heat = widgets.NewHeatmap()
+	// 10-nt cells are a fraction of a pixel on a whole genome: draw each
+	// significant one at least 3 DIPs wide so it can be seen.
+	p.heat.MinCell = 3
 	p.heatKey, p.shownKey = "", ""
 	p.quick.busy, p.quick.err, p.quick.data = false, "", nil
 	p.quick.bin, p.quick.minCount, p.quick.row = "50 nt", 5, -1
@@ -925,7 +928,7 @@ func (p *comparePage) results(c *ui.Context) {
 				} else {
 					p.heat.Highlight = widgets.Cell{}
 				}
-				ev := p.heat.Show(c.Key("cmp-heat"), 340, "Significant cells: red higher in A, blue higher in B; stronger colour, smaller padj")
+				ev := p.heat.Show(c.Key("cmp-heat"), p.mapSide(), "Significant cells: red higher in A, blue higher in B; stronger colour, smaller padj")
 				if ev.Clicked >= 0 {
 					cells := p.heat.Cells()
 					cell := cells[ev.Clicked]
@@ -1136,7 +1139,7 @@ func (p *comparePage) interactionTable(c *ui.Context, shown []cmpInteraction) {
 				ui.Text(c, FormatNumber(int64(math.Round(*row.BaseMean))))
 			}
 		}
-	}).Height(300).Label("Merged interactions")
+	}).Height(p.mapSide() - 40).Label("Merged interactions")
 }
 
 func cmpFloat(v *float64, format string) string {
@@ -1310,7 +1313,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 		}
 		ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Gap(6).Children(func() {
-				ev := q.heat.Show(c.Key("quick-heat"), 340, "Normalised contact difference, red: higher in A, blue: higher in B")
+				ev := q.heat.Show(c.Key("quick-heat"), p.mapSide(), "Normalised contact difference, red: higher in A, blue: higher in B")
 				if ev.Clicked >= 0 {
 					cell := q.heat.Cells()[ev.Clicked]
 					for i, r := range rows {
@@ -1352,7 +1355,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 								text.TextColor(color)
 							}
 						}
-					}).Height(300).Label("Quick view bins")
+					}).Height(p.mapSide() - 40).Label("Quick view bins")
 				}
 				var target *cmpTarget
 				if q.row >= 0 && q.row < len(rows) {
@@ -1395,4 +1398,11 @@ func cmpMax(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// mapSide is the side of the Compare maps: about half the page width and
+// two thirds of its height.
+func (p *comparePage) mapSide() float32 {
+	w, h := p.a.ContentSize()
+	return clampF(min(w*0.44, h*0.62), 340, 820)
 }

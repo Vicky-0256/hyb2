@@ -75,6 +75,8 @@ type App struct {
 	prefs      prefsState
 	lookup     lookupPref // external_lookup (evidence.go)
 	start      startState
+	// content is the page area of the previous frame (charts size to it).
+	content ui.Rect
 	// pendingFolder is a data folder chosen with a new project; the Data
 	// page scans it once the project is open.
 	pendingFolder string
@@ -800,3 +802,15 @@ func sortedKeys[V any](m map[string]V) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// ContentSize is the page area's width and height (the previous frame's;
+// a typical window before the first one).
+func (a *App) ContentSize() (w, h float32) {
+	if a.content.W <= 0 || a.content.H <= 0 {
+		return 916, 676
+	}
+	return a.content.W, a.content.H
+}
+
+// clampF limits v to [lo, hi].
+func clampF(v, lo, hi float32) float32 { return max(lo, min(v, hi)) }

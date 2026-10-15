@@ -152,7 +152,8 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 					stat(c, "Reads", FormatNumber(d.reads))
 					stat(c, "Arms", FormatNumber(d.arms))
 				})
-				ev := s.profile.Show(c, 180, "Viewpoint coverage of "+d.gene, profileColor(t))
+				_, height := p.a.ContentSize()
+				ev := s.profile.Show(c, clampF(height*0.42, 180, 520), "Viewpoint coverage of "+d.gene, profileColor(t))
 				s.hover = ev.Hover
 				readout := "Hover the plot for a bin's coverage; click to choose it."
 				if i := s.hover; i >= 0 && i < s.profile.Len() {

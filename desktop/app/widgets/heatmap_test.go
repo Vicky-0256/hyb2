@@ -61,3 +61,17 @@ func TestHeatmapPickZoomAndReset(t *testing.T) {
 		t.Fatal("reset failed")
 	}
 }
+
+func TestMinCellIsHitWhereItShows(t *testing.T) {
+	h := NewHeatmap()
+	h.SetCells([]Cell{{X: 5000, Y: 5000, W: 10, H: 10}}, 10000, 10000)
+	// 10 nt of 10,000 on 400 DIPs is 0.4 DIP; drawn 3 DIPs wide it spans
+	// 37.5 nt around the cell, half of it on each side.
+	pad := 1.5 * 10000 / 400.0
+	if h.hit(5005+pad*0.9, 5005, pad, pad) != 0 || h.hit(5005+pad*1.1, 5005, pad, pad) != -1 {
+		t.Fatal("padded hit")
+	}
+	if h.hit(5011, 5005, 0, 0) != -1 || h.hit(5009, 5005, 0, 0) != 0 {
+		t.Fatal("unpadded hit")
+	}
+}

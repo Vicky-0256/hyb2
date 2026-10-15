@@ -42,6 +42,9 @@ type Heatmap struct {
 	Picked int
 	// Highlight, when W > 0, outlines a region (e.g. a merged interaction).
 	Highlight Cell
+	// MinCell is the smallest side (DIPs) a cell is drawn with, centred on
+	// it; 0 draws cells at their size (at least one pixel).
+	MinCell float32
 
 	dragging bool
 	lastX    float32
@@ -142,7 +145,10 @@ func (h *Heatmap) Show(c *ui.Context, size float32, label string) HeatEvent {
 			h.dragging = false
 		} else if px, py, over := box.PointerPosition(); over && plot.Contains(px, py) {
 			gx, gy := h.toGene(plot, px, py)
-			if i := h.hit(gx, gy); i >= 0 {
+			// A cell drawn larger than it is (MinCell) is hit where it shows.
+			padX := float64(h.MinCell/2) * (h.view.X1 - h.view.X0) / float64(plot.W)
+			padY := float64(h.MinCell/2) * (h.view.Y1 - h.view.Y0) / float64(plot.H)
+			if i := h.hit(gx, gy, padX, padY); i >= 0 {
 				h.Picked = i
 				event.Clicked = i
 			}
@@ -166,6 +172,7 @@ func (h *Heatmap) Show(c *ui.Context, size float32, label string) HeatEvent {
 			h.canvas = ui.NewCanvas(w, hgt)
 			h.drawn.version = -1
 		}
+		minCell := float64(h.MinCell * scale)
 		if h.drawn.version != h.version || h.drawn.view != h.view || h.drawn.dark != dark {
 			h.drawn.version, h.drawn.view, h.drawn.w, h.drawn.h, h.drawn.dark = h.version, h.view, w, hgt, dark
 			v := h.view
@@ -176,11 +183,10 @@ func (h *Heatmap) Show(c *ui.Context, size float32, label string) HeatEvent {
 					if cell.X+cell.W < v.X0 || cell.X > v.X1 || cell.Y+cell.H < v.Y0 || cell.Y > v.Y1 {
 						continue
 					}
-					x := float32((cell.X - v.X0) * sx)
-					y := float32((cell.Y - v.Y0) * sy)
-					cw := float32(math.Max(cell.W*sx, 1))
-					ch := float32(math.Max(cell.H*sy, 1))
-					cp.Fill(ui.Rect{X: x, Y: y, W: cw, H: ch}, cell.Color, 0)
+					cw, ch := math.Max(cell.W*sx, math.Max(minCell, 1)), math.Max(cell.H*sy, math.Max(minCell, 1))
+					x := (cell.X-v.X0)*sx - (cw-cell.W*sx)/2
+					y := (cell.Y-v.Y0)*sy - (ch-cell.H*sy)/2
+					cp.Fill(ui.Rect{X: float32(x), Y: float32(y), W: float32(cw), H: float32(ch)}, cell.Color, 0)
 				}
 			})
 		}
@@ -205,11 +211,13 @@ func (h *Heatmap) zoomAt(plot ui.Rect, px, py float32, factor float64) {
 	h.SetView(Window{gx - (gx-v.X0)*factor, gx + (v.X1-gx)*factor, gy - (gy-v.Y0)*factor, gy + (v.Y1-gy)*factor})
 }
 
-// hit returns the last cell covering (x, y): drawn last, so on top.
-func (h *Heatmap) hit(x, y float64) int {
+// hit returns the last cell covering (x, y), widened by pad on each side
+// up to its drawn size: drawn last, so on top.
+func (h *Heatmap) hit(x, y, padX, padY float64) int {
 	for i := len(h.cells) - 1; i >= 0; i-- {
 		cell := h.cells[i]
-		if x >= cell.X && x < cell.X+cell.W && y >= cell.Y && y < cell.Y+cell.H {
+		px, py := math.Max(padX-cell.W/2, 0), math.Max(padY-cell.H/2, 0)
+		if x >= cell.X-px && x < cell.X+cell.W+px && y >= cell.Y-py && y < cell.Y+cell.H+py {
 			return i
 		}
 	}

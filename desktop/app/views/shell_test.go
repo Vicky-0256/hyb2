@@ -178,3 +178,41 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestChartsFollowTheWindow(t *testing.T) {
+	a, _ := openFixture(t)
+	p := a.PageFor("compare").(*comparePage)
+	if got := p.mapSide(); got != 403.04 && (got < 400 || got > 405) {
+		t.Fatalf("default map side %v", got)
+	}
+	a.content = ui.Rect{W: 1700, H: 1100}
+	if got := p.mapSide(); got < 680 || got > 682 {
+		t.Fatalf("large window map side %v", got)
+	}
+	a.content = ui.Rect{W: 600, H: 400}
+	if got := p.mapSide(); got != 340 {
+		t.Fatalf("small window map side %v", got)
+	}
+}
+
+func TestArmPositionsOpenWhenSet(t *testing.T) {
+	a, _ := openFixture(t)
+	a.Navigate("explore", nil)
+	waitFlush(a)
+	tt := ui.NewTester(a.View, 1100, 720)
+	if err := tt.Click("Interactions"); err != nil {
+		t.Fatal(err)
+	}
+	waitFlush(a)
+	tt.Frame()
+	if !tt.HasText("Arm positions") || tt.HasText("Arm 1 from") {
+		t.Fatal("arm filters open by default")
+	}
+	p := a.PageFor("explore").(*explorePage)
+	p.ix.x0 = "100"
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("Arm positions (1 set)") || !tt.HasText("Arm 1 from") {
+		t.Fatalf("texts %q", tt.Texts())
+	}
+}

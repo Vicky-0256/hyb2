@@ -26,11 +26,12 @@ func (a *App) View(c *ui.Context) {
 		a.topBar(c)
 		ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 			a.navigation(c)
-			ui.Column(c).Grow(1).MinWidth(0).ClipX().Background(t.Surface).Children(func() {
+			content := ui.Column(c).Grow(1).MinWidth(0).ClipX().Background(t.Surface).Children(func() {
 				if p := a.pages[a.Page]; p != nil {
 					p.View(c.Key("page-" + a.Page))
 				}
 			})
+			a.content = content.LayoutBounds()
 		})
 	})
 	a.tasksDrawer(c)

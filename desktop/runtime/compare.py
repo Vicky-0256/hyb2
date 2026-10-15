@@ -4,7 +4,7 @@ Request::
 
     {"operation": "compare_run", "project_path": ..., "task_id": ..., "run_dir": ...,
      "samples_one": [sample ids], "samples_two": [sample ids],
-     "parameters": {"min_count": 2, "range": 100, "padj_cutoff": 0.05,
+     "parameters": {"min_count": 2, "range": 100, "padj_cutoff": 0.05, "similarity_min": 1,
                     "label_one": "...", "label_two": "...", "gene_id": null}}
 
 Each sample contributes its contact.txt (10-nt cells of its own target gene,
@@ -14,7 +14,9 @@ made from its .hyb under the comparison directory.  The statistics are
 :mod:`hyb2analysis.differential` (DESeq2 Wald test, condition one vs two).
 
 Results go to ``<project>/comparisons/<task_id>/`` (results.tsv,
-significant.tsv, interactions.tsv, summary.json, contacts/); the task's
+significant.tsv, interactions.tsv, similarity.tsv, summary.json, contacts/);
+similarity.tsv is HYB2's similarity heatmap (bin/plot_similarity_map) of
+the two conditions' merged maps, cells below ``similarity_min`` dropped; the task's
 ``run_dir`` gets ``progress.json`` and ``result.json``.  ``register_task_run``
 copies the ``comparison`` entry of the result into ``comparisons[]``.
 """
@@ -31,9 +33,9 @@ from .project import _atomic_write_json, load_manifest, safe_relative_path, vali
 from .structure import ProgressWriter, _env_int, _input_file, _now, _real_child_dir, _resolve_run_dir, _safe_task_id
 
 MAX_SAMPLES = 64
-PATH_KEYS = ("results", "significant", "interactions", "summary")
+PATH_KEYS = ("results", "significant", "interactions", "similarity", "summary")
 _FILES = {"results": "results.tsv", "significant": "significant.tsv", "interactions": "interactions.tsv",
-          "summary": "summary.json"}
+          "similarity": "similarity.tsv", "summary": "summary.json"}
 
 
 def _pipeline_path(repo_root: Optional[Path]) -> None:
@@ -48,12 +50,13 @@ def _parameters(raw: Any) -> Dict[str, Any]:
         raw = {}
     if not isinstance(raw, dict):
         raise ValueError("parameters must be an object")
-    known = {"min_count", "range", "padj_cutoff", "label_one", "label_two", "gene_id"}
+    known = {"min_count", "range", "padj_cutoff", "similarity_min", "label_one", "label_two", "gene_id"}
     unknown = sorted(set(raw) - known)
     if unknown:
         raise ValueError("unknown compare parameters: " + ", ".join(unknown))
-    params: Dict[str, Any] = {"min_count": 2, "range": 100, "padj_cutoff": 0.05}
-    for key, (low, high) in {"min_count": (0, 1_000_000), "range": (0, 100_000)}.items():
+    params: Dict[str, Any] = {"min_count": 2, "range": 100, "padj_cutoff": 0.05, "similarity_min": 1}
+    for key, (low, high) in {"min_count": (0, 1_000_000), "range": (0, 100_000),
+                             "similarity_min": (1, 1_000_000)}.items():
         if key in raw:
             value = raw[key]
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
@@ -165,7 +168,8 @@ def _compare_run(request: Dict[str, Any], repo_root: Optional[Path], state: Dict
     summary = differential.compare(
         [item["contact"] for item in inputs], [item["id"] for item in inputs],
         [item["id"] in one for item in inputs], out_dir,
-        min_count=params["min_count"], radius=params["range"], padj_cutoff=params["padj_cutoff"], progress=say)
+        min_count=params["min_count"], radius=params["range"], padj_cutoff=params["padj_cutoff"],
+        similarity_min=params["similarity_min"], progress=say)
     created = _now()
     relative_dir = f"comparisons/{task_id}"
     label_one = params["label_one"] or ", ".join(one)
@@ -178,12 +182,13 @@ def _compare_run(request: Dict[str, Any], repo_root: Optional[Path], state: Dict
     _atomic_write_json(out_dir / "summary.json", summary)
     genes = sorted({item["gene_id"] for item in inputs})
     compact = {key: summary[key] for key in ("cells_tested", "significant", "significant_up", "significant_down",
-                                             "interactions", "interactions_up", "interactions_down", "max_coordinate")}
+                                             "interactions", "interactions_up", "interactions_down", "max_coordinate",
+                                             "similarity_cells", "similarity_cap")}
     compact["timings"] = summary["timings"]
     comparison = {
         "id": task_id, "task_id": task_id, "samples_one": one, "samples_two": two,
         "label_one": label_one, "label_two": label_two, "genes": genes,
-        "parameters": {key: params[key] for key in ("min_count", "range", "padj_cutoff", "gene_id")},
+        "parameters": {key: params[key] for key in ("min_count", "range", "padj_cutoff", "similarity_min", "gene_id")},
         "created_at": created, "path": relative_dir,
         "paths": {key: f"{relative_dir}/{name}" for key, name in _FILES.items()},
         "summary": compact,
@@ -243,7 +248,9 @@ def list_comparisons(project: Path) -> List[Dict[str, Any]]:
 
 def read_comparison(project: Path, comparison_id: str, *, limit: Optional[int] = 250_000) -> Dict[str, Any]:
     """``{comparison, summary, cells: {x, y, log2FoldChange, padj, baseMean}, cells_total,
-    truncated, interactions: [...]}``; cells are the significant 10-nt cells by padj."""
+    truncated, interactions: [...], similarity: {x, y, count} | null}``; cells are the
+    significant 10-nt cells by padj; similarity is null for comparisons made
+    before it existed."""
     _pipeline_path(None)
     from hyb2analysis import differential
 
@@ -269,5 +276,8 @@ def read_comparison(project: Path, comparison_id: str, *, limit: Optional[int] =
             summary = {}
     cells = differential.read_significant(significant, limit=limit)
     total = int(summary.get("significant", len(cells["x"])))
+    similarity_path = _comparison_file(project, entry, "similarity")
+    similarity = differential.read_similarity(similarity_path, limit=limit) if similarity_path is not None else None
     return {"comparison": entry, "summary": summary, "cells": cells, "cells_total": total,
-            "truncated": len(cells["x"]) < total, "interactions": differential.read_interactions(interactions)}
+            "truncated": len(cells["x"]) < total, "interactions": differential.read_interactions(interactions),
+            "similarity": similarity}

@@ -45,6 +45,9 @@ type Heatmap struct {
 	// MinCell is the smallest side (DIPs) a cell is drawn with, centred on
 	// it; 0 draws cells at their size (at least one pixel).
 	MinCell float32
+	// Background, when not transparent, replaces the theme surface under
+	// the cells (e.g. white for hyb2's similarity heatmap).
+	Background ui.Color
 
 	dragging bool
 	lastX    float32
@@ -165,7 +168,11 @@ func (h *Heatmap) Show(c *ui.Context, size float32, label string) HeatEvent {
 	dark := t.Background.R < 128
 	box.Draw(func(p *ui.Painter, r ui.Rect) {
 		area := ui.Rect{X: r.X + plot.X, Y: r.Y + plot.Y, W: plot.W, H: plot.H}
-		p.Fill(area, t.Surface, 2)
+		background := t.Surface
+		if h.Background.A > 0 {
+			background = h.Background
+		}
+		p.Fill(area, background, 2)
 		scale := p.Scale()
 		w, hgt := int(math.Ceil(float64(area.W*scale))), int(math.Ceil(float64(area.H*scale)))
 		if h.canvas == nil || h.drawn.w != w || h.drawn.h != hgt {

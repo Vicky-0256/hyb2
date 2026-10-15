@@ -1,5 +1,7 @@
 import json
 import random
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,7 +63,7 @@ class CompareRunTests(unittest.TestCase):
         result = handle(self._request(), repo_root=ROOT)
         self.assertTrue(result["ok"], result)
         out = self.project / "comparisons" / "cmp1"
-        for name in ("results.tsv", "significant.tsv", "interactions.tsv", "summary.json"):
+        for name in ("results.tsv", "significant.tsv", "interactions.tsv", "similarity.tsv", "summary.json"):
             self.assertTrue((out / name).is_file(), name)
         # linked .hyb samples have no contact.txt: the comparison makes them
         self.assertEqual(len(list((out / "contacts").glob("*.contact.txt"))), 5)
@@ -83,6 +85,8 @@ class CompareRunTests(unittest.TestCase):
         self.assertEqual(entry["id"], "cmp1")
         self.assertEqual(entry["samples_one"], self.ids[:3])
         self.assertEqual(entry["paths"]["significant"], "comparisons/cmp1/significant.tsv")
+        self.assertEqual(entry["paths"]["similarity"], "comparisons/cmp1/similarity.tsv")
+        self.assertEqual(entry["summary"]["similarity_cells"], summary["similarity_cells"])
         self.assertEqual(validate_project_directory(self.project), [])
 
         listed = handle({"operation": "list_comparisons", "path": str(self.project)})
@@ -92,14 +96,61 @@ class CompareRunTests(unittest.TestCase):
         self.assertEqual(len(read["cells"]["x"]), min(5, summary["significant"]))
         self.assertEqual(read["truncated"], summary["significant"] > 5)
         self.assertEqual(len(read["interactions"]), summary["interactions"])
+        self.assertEqual(len(read["similarity"]["x"]), min(5, summary["similarity_cells"]))
+        self.assertEqual(read["similarity"]["count"], sorted(read["similarity"]["count"], reverse=True))
         with self.assertRaisesRegex(ValueError, "does not exist"):
             handle({"operation": "read_comparison", "path": str(self.project), "comparison_id": "nope"})
+
+    def _merged_contacts(self, out, ids, name):
+        """One contact map of the samples' summed counts (their .hyb files concatenated)."""
+        merged = {}
+        for sample_id in ids:
+            path = next((out / "contacts").glob(f"{sample_id}.*.contact.txt"))
+            for line in path.read_text().splitlines():
+                parts = line.split("\t")
+                if len(parts) == 3 and parts[0].isdigit():
+                    key = (parts[0], parts[1])
+                    merged[key] = merged.get(key, 0) + int(parts[2])
+        target = out / name
+        target.write_text(f"# hybrids between {GENE} and {GENE}\nx\ty\tcount\n"
+                          + "".join(f"{x}\t{y}\t{n}\n" for (x, y), n in merged.items()))
+        return target
+
+    @unittest.skipUnless(shutil.which("awk"), "awk is needed to run hyb2's plot_similarity_map awk")
+    def test_similarity_matches_plot_similarity_map(self):
+        for minimum in (1, 3):
+            task = f"sim{minimum}"
+            result = handle(self._request(task_id=task, parameters={"similarity_min": minimum}), repo_root=ROOT)
+            self.assertTrue(result["ok"], result)
+            out = self.project / "comparisons" / task
+            maps = []
+            for label, ids in (("A", self.ids[:3]), ("B", self.ids[3:])):
+                merged = self._merged_contacts(out, ids, f"merged_{label}.contact.txt")
+                filtered = out / f"merged_{label}_{minimum}.contact.txt"
+                filtered.write_text("".join(line + "\n" for k, line in enumerate(merged.read_text().splitlines())
+                                            if k < 2 or int(line.split("\t")[2]) >= minimum))
+                maps.append(filtered)
+            # the awk of bin/plot_similarity_map, unchanged
+            script = (ROOT / "bin" / "plot_similarity_map").read_text()
+            pipeline = next(line for line in script.splitlines() if line.startswith("awk 'n=x[$1,$2]"))
+            merge = out / "A-B.merge.txt"  # plot_similarity_map: cat $a1 ... $b1 ... > $A1"-"$B1".merge.txt"
+            merge.write_text("".join(path.read_text() for path in maps))
+            pipeline = pipeline.split(" > ")[0].replace('$A1"-"$B1".merge.txt"', str(merge))
+            text = subprocess.run(["bash", "-c", pipeline], capture_output=True, text=True, check=True).stdout
+            expected = sorted(tuple(int(v) for v in line.split("\t")) for line in text.splitlines()
+                              if line.split("\t")[0].isdigit())
+            got = sorted(tuple(int(v) for v in line.split("\t")[:3])
+                         for line in (out / "similarity.tsv").read_text().splitlines()[1:])
+            self.assertGreater(len(expected), 0)
+            self.assertEqual(got, expected, f"similarity_min {minimum}")
 
     def test_rejects_bad_requests(self):
         with self.assertRaisesRegex(ValueError, "both conditions"):
             handle(self._request(samples_two=[self.ids[0], self.ids[3]]), repo_root=ROOT)
         with self.assertRaisesRegex(ValueError, "at least three"):
             handle(self._request(samples_one=[self.ids[0]], samples_two=[self.ids[3]]), repo_root=ROOT)
+        with self.assertRaisesRegex(ValueError, "similarity_min must be an integer"):
+            handle(self._request(parameters={"similarity_min": 0}), repo_root=ROOT)
         with self.assertRaisesRegex(ValueError, "unknown compare parameters"):
             handle(self._request(parameters={"alpha": 0.1}), repo_root=ROOT)
         result = handle(self._request(samples_two=[self.ids[3], "missing"], task_id="cmp2"), repo_root=ROOT)

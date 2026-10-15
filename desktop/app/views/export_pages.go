@@ -214,6 +214,24 @@ func (p *comparePage) exportMapSVG() {
 	saveExport(p.a, "Export the significant map", exportName(".svg", ctx.LabelA, "vs", ctx.LabelB, "map"), render)
 }
 
+func (p *comparePage) exportSimilaritySVG() {
+	e, result, ctx, ok := p.exportTarget()
+	if !ok || result.Similarity == nil {
+		return
+	}
+	cells, view := p.simHeat.Cells(), p.simHeat.View()
+	title := ctx.LabelA + " and " + ctx.LabelB + " · similarity heatmap"
+	gene := strings.Join(e.Genes, ", ")
+	render := func() ([]byte, error) {
+		svg, _, _ := heatSVG{Cells: cells, View: view, Size: 520, Title: title, MaxCells: svgMaxCells,
+			XLabel: "Arm 1 · " + gene, YLabel: "Arm 2",
+			Note: fmt.Sprintf("Green: the smaller summed count of %s and %s (hyb2 plot_similarity_map), capped at the 95%% quantile (%g).",
+				ctx.LabelA, ctx.LabelB, result.Summary.SimilarityCap)}.SVG()
+		return svgFile(svg), nil
+	}
+	saveExport(p.a, "Export the similarity heatmap", exportName(".svg", ctx.LabelA, "and", ctx.LabelB, "similarity"), render)
+}
+
 // cmpParamsText summarises a test's parameters.
 func cmpParamsText(e *comparisonEntry) string {
 	f := func(v *float64, fallback string) string {

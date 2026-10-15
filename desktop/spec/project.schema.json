@@ -1142,6 +1142,16 @@
                 }
               ]
             },
+            "similarity": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/relativePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "summary": {
               "oneOf": [
                 {
@@ -1159,7 +1169,7 @@
         "summary": {
           "type": "object",
           "additionalProperties": true,
-          "description": "{cells_tested, significant, significant_up, significant_down, interactions, interactions_up, interactions_down, max_coordinate, timings}."
+          "description": "{cells_tested, significant, significant_up, significant_down, interactions, interactions_up, interactions_down, max_coordinate, similarity_cells, similarity_cap, timings}."
         }
       },
       "additionalProperties": true

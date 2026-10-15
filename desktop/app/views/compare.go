@@ -66,6 +66,7 @@ type comparisonParams struct {
 	MinCount   *float64 `json:"min_count"`
 	Range      *float64 `json:"range"`
 	PadjCutoff *float64 `json:"padj_cutoff"`
+	SimMin     *float64 `json:"similarity_min"`
 	GeneID     *string  `json:"gene_id"`
 }
 
@@ -79,6 +80,8 @@ type comparisonSummary struct {
 	InteractionsDown int64     `json:"interactions_down"`
 	MaxCoordinate    int64     `json:"max_coordinate"`
 	SizeFactors      []float64 `json:"size_factors"`
+	SimilarityCells  int64     `json:"similarity_cells"`
+	SimilarityCap    float64   `json:"similarity_cap"`
 }
 
 type comparisonEntry struct {
@@ -117,6 +120,14 @@ type comparisonResult struct {
 	CellsTotal   int64            `json:"cells_total"`
 	Truncated    bool             `json:"truncated"`
 	Interactions []cmpInteraction `json:"interactions"`
+	// Similarity is HYB2's similarity heatmap (bin/plot_similarity_map on
+	// the two conditions' merged maps), strongest cells first; nil for tests
+	// made before it existed.
+	Similarity *struct {
+		X     []int `json:"x"`
+		Y     []int `json:"y"`
+		Count []int `json:"count"`
+	} `json:"similarity"`
 }
 
 // cmpQuickResult is compare_bins' result.
@@ -177,6 +188,7 @@ type comparePage struct {
 	minCount   float64
 	mergeRange float64
 	padj       float64
+	simMin     float64
 	settings   bool
 	runMsg     string
 
@@ -196,6 +208,8 @@ type comparePage struct {
 	row       int
 	heat      *widgets.Heatmap
 	heatKey   string
+	simHeat   *widgets.Heatmap
+	simKey    string
 	shown     []cmpInteraction
 	shownKey  string
 
@@ -229,7 +243,7 @@ func newComparePage(a *App) *comparePage {
 }
 
 func (p *comparePage) reset() {
-	p.minCount, p.mergeRange, p.padj = 2, 100, 0.05
+	p.minCount, p.mergeRange, p.padj, p.simMin = 2, 100, 0.05, 1
 	p.keyA, p.keyB = "", ""
 	p.comparisons, p.listErr, p.loading = nil, "", false
 	p.mode, p.selectedID = cmpModeTest, ""
@@ -242,7 +256,9 @@ func (p *comparePage) reset() {
 	// 10-nt cells are a fraction of a pixel on a whole genome: draw each
 	// significant one at least 3 DIPs wide so it can be seen.
 	p.heat.MinCell = 3
-	p.heatKey, p.shownKey = "", ""
+	p.simHeat = widgets.NewHeatmap()
+	p.simHeat.MinCell = 3
+	p.heatKey, p.simKey, p.shownKey = "", "", ""
 	p.quick.busy, p.quick.err, p.quick.data = false, "", nil
 	p.quick.bin, p.quick.minCount, p.quick.row = "50 nt", 5, -1
 	p.quick.table.Selected = &p.quick.row
@@ -431,7 +447,7 @@ func (p *comparePage) runTest() {
 	labelA, labelB := a.SelectionLabel(p.keyA), a.SelectionLabel(p.keyB)
 	req := core.TaskStartRequest{Kind: "compare", SamplesOne: idsA, SamplesTwo: idsB,
 		Parameters: map[string]any{"min_count": int(p.minCount), "range": int(p.mergeRange), "padj_cutoff": p.padj,
-			"label_one": labelA, "label_two": labelB}}
+			"similarity_min": int(math.Max(1, p.simMin)), "label_one": labelA, "label_two": labelB}}
 	a.StartTask(req, "Differential test · "+labelA+" vs "+labelB, func(t model.Task, err error) {
 		if err != nil {
 			p.runMsg = "Could not start the test: " + err.Error()
@@ -728,6 +744,9 @@ func (p *comparePage) controls(c *ui.Context) {
 					Field(c, "padj cutoff", func() {
 						ui.NumberInput(c.Key("cmp-padj"), &p.padj, 0.0001, 1, 0.01).Width(110).Label("padj cutoff")
 					})
+					Field(c, "Similarity: keep cells with count ≥", func() {
+						ui.NumberInput(c.Key("cmp-simmin"), &p.simMin, 1, 1e6, 1).Width(110).Label("Similarity minimum count")
+					})
 					Field(c, "Quick view bin", func() {
 						ui.Select(c.Key("cmp-bin"), &p.quick.bin, []string{"10 nt", "25 nt", "50 nt", "100 nt", "200 nt"}).Width(110).Label("Quick view bin")
 					})
@@ -735,7 +754,7 @@ func (p *comparePage) controls(c *ui.Context) {
 						ui.NumberInput(c.Key("cmp-qmin"), &p.quick.minCount, 0, 1e6, 1).Width(110).Label("Quick view minimum count")
 					})
 				})
-				ui.Text(c, "The test follows hyb2_compare: DESeq2 Wald test (condition one vs two, alpha 0.01, independent filtering); cells with padj below the cutoff are significant, and significant cells within the merge range of a stronger one are merged into it.").
+				ui.Text(c, "The test follows hyb2_compare: DESeq2 Wald test (condition one vs two, alpha 0.01, independent filtering); cells with padj below the cutoff are significant, and significant cells within the merge range of a stronger one are merged into it. The similarity heatmap follows plot_similarity_map: each condition's replicates are summed into one map (as if their .hyb files were concatenated), cells below the similarity minimum are dropped from each map, and a cell in both maps shows the smaller count (1 keeps every cell, as hyb2 does).").
 					FontSize(12).TextColor(t.TextMuted)
 			})
 		})
@@ -972,6 +991,78 @@ func (p *comparePage) results(c *ui.Context) {
 			})
 		})
 	})
+	p.similarityCard(c, e, result, ctx)
+}
+
+// similarityCard shows HYB2's similarity heatmap of the test's two groups.
+func (p *comparePage) similarityCard(c *ui.Context, e *comparisonEntry, result *comparisonResult, ctx cmpContext) {
+	t := c.Theme()
+	Card(c, "", func() {
+		ui.Text(c, "Similarity heatmap").FontSize(16).Bold()
+		if result.Similarity == nil {
+			ui.Text(c, "This test was run before the similarity heatmap existed; run it again to get one.").TextColor(t.TextMuted)
+			return
+		}
+		key := e.ID
+		if key != p.simKey {
+			p.simKey = key
+			length := float64(p.mapLength(e, result))
+			p.simHeat.SetCells(cmpSimilarityCells(result), length, length)
+		}
+		minimum := 1.0
+		if e.Parameters.SimMin != nil {
+			minimum = *e.Parameters.SimMin
+		}
+		note := fmt.Sprintf("Cells in both %s and %s", ctx.LabelA, ctx.LabelB)
+		if minimum > 1 {
+			note += fmt.Sprintf(" (count ≥ %g in each)", minimum)
+		}
+		note += fmt.Sprintf("; green = the smaller of the two summed counts, capped at the 95%% quantile (%g). As hyb2's plot_similarity_map.", result.Summary.SimilarityCap)
+		ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).Gap(10).Wrap().Children(func() {
+			cmpStat(c, "Similar cells", FormatNumber(result.Summary.SimilarityCells), cmpGreen)
+			cmpStat(c, "Colour cap", fmt.Sprintf("%g", result.Summary.SimilarityCap), t.Text)
+		})
+		if n := int64(len(result.Similarity.X)); n < result.Summary.SimilarityCells {
+			ui.Text(c, fmt.Sprintf("The map shows the %s strongest of %s cells.", FormatNumber(n),
+				FormatNumber(result.Summary.SimilarityCells))).FontSize(12).TextColor(t.TextMuted)
+		}
+		// similarity_heatmap.R draws on white; keep the theme surface in dark mode
+		p.simHeat.Background = ui.Color{}
+		if t.Background.R >= 128 {
+			p.simHeat.Background = ui.RGB(255, 255, 255)
+		}
+		p.simHeat.Show(c.Key("cmp-sim-heat"), p.mapSide(), "Similarity heatmap: cells in both groups, green by the smaller count")
+		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c, "Export SVG…").Tooltip("Save the similarity heatmap as shown").Clicked() {
+				p.exportSimilaritySVG()
+			}
+		})
+	})
+}
+
+// cmpGreen is similarity_heatmap.R's forestgreen.
+var cmpGreen = ui.RGB(34, 139, 34)
+
+// cmpSimilarityCells colours the similar cells forestgreen by count / cap
+// (white at 0 on a light surface); weakest first so strong cells stay on top.
+func cmpSimilarityCells(result *comparisonResult) []widgets.Cell {
+	sim := result.Similarity
+	if sim == nil {
+		return nil
+	}
+	limit := math.Max(1, result.Summary.SimilarityCap)
+	out := make([]widgets.Cell, 0, len(sim.X))
+	for i := len(sim.X) - 1; i >= 0; i-- {
+		if i >= len(sim.Y) || i >= len(sim.Count) {
+			continue
+		}
+		ratio := math.Min(1, float64(sim.Count[i])/limit)
+		out = append(out, widgets.Cell{X: float64(sim.X[i]), Y: float64(sim.Y[i]), W: 10, H: 10,
+			Color: cmpGreen.Alpha(float32(0.06 + 0.94*ratio))})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Color.A < out[j].Color.A })
+	return out
 }
 
 // cmpTitleButton is a list item's title that selects it.

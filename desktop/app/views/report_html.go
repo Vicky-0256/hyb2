@@ -67,8 +67,10 @@ type reportTest struct {
 	// Cells are the significant cells read, coloured, weakest first.
 	Cells      []widgets.Cell
 	CellsTotal int64
-	Length     int
-	Err        string
+	// SimCells is the similarity heatmap read (nil for tests made before it).
+	SimCells []widgets.Cell
+	Length   int
+	Err      string
 }
 
 type reportStructure struct {
@@ -365,6 +367,21 @@ func (x *reportTest) figure(id string) (template.HTML, string) {
 	return template.HTML(svg), caption //nolint:gosec // generated and escaped by heatSVG
 }
 
+func (x *reportTest) similarityFigure(id string) (template.HTML, string) {
+	if len(x.SimCells) == 0 {
+		return "", ""
+	}
+	length := float64(max(x.Length, 1))
+	svg, drawn, _ := heatSVG{Cells: x.SimCells, View: widgets.Window{X0: 0, X1: length, Y0: 0, Y1: length}, Size: 360,
+		MaxCells: reportMaxCells, MinCellPx: 2.5, ID: id, XLabel: "Arm 1 (nt)", YLabel: "Arm 2 (nt)"}.SVG()
+	caption := fmt.Sprintf("Similarity heatmap (hyb2 plot_similarity_map): cells in both %s and %s; green = the smaller summed count, capped at the 95%% quantile (%g).",
+		x.LabelA, x.LabelB, x.Summary.SimilarityCap)
+	if total := max(x.Summary.SimilarityCells, int64(len(x.SimCells))); int64(drawn) < total {
+		caption += fmt.Sprintf(" The %s strongest of %s cells are drawn.", FormatNumber(int64(drawn)), FormatNumber(total))
+	}
+	return template.HTML(svg), caption //nolint:gosec // generated and escaped by heatSVG
+}
+
 func (s *reportStructure) figure(id string) (template.HTML, string) {
 	if len(s.Arcs) == 0 {
 		return "", ""
@@ -378,9 +395,11 @@ func (s *reportStructure) figure(id string) (template.HTML, string) {
 
 type reportHTMLTest struct {
 	*reportTest
-	Figure  template.HTML
-	Caption string
-	Table   reportTableData
+	Figure     template.HTML
+	Caption    string
+	SimFigure  template.HTML
+	SimCaption string
+	Table      reportTableData
 }
 
 type reportHTMLStructure struct {
@@ -404,7 +423,9 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 	for i := range d.Tests {
 		x := &d.Tests[i]
 		fig, caption := x.figure(fmt.Sprintf("test%d", i+1))
-		view.TestDetails = append(view.TestDetails, reportHTMLTest{reportTest: x, Figure: fig, Caption: caption, Table: x.topTable()})
+		simFig, simCaption := x.similarityFigure(fmt.Sprintf("test%dsim", i+1))
+		view.TestDetails = append(view.TestDetails, reportHTMLTest{reportTest: x, Figure: fig, Caption: caption,
+			SimFigure: simFig, SimCaption: simCaption, Table: x.topTable()})
 	}
 	for i := range d.Structures {
 		s := &d.Structures[i]
@@ -528,6 +549,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 {{if .Figure}}<figure>{{.Figure}}<figcaption>{{.Caption}}</figcaption></figure>{{end}}
 {{if .Table.Rows}}<div class="table"><p class="meta">Top {{len .Table.Rows}} merged interactions by padj</p>{{template "rows" .Table}}</div>{{else}}<p class="muted">No significant interaction.</p>{{end}}
 </div>
+{{if .SimFigure}}<div class="cols"><figure>{{.SimFigure}}<figcaption>{{.SimCaption}}</figcaption></figure></div>{{end}}
 </div>
 {{end}}{{else}}<p class="muted">No differential test has been run.</p>{{end}}
 </section>

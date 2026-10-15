@@ -236,7 +236,7 @@ def _validate_structures(manifest: Dict[str, Any], errors: List[str]) -> None:
                     if value is not None and not safe_relative_path(value): errors.append(where + ".paths." + str(key) + " must be a project-relative path or null")
 
 
-COMPARISON_PATH_KEYS = ("results", "significant", "interactions", "summary")
+COMPARISON_PATH_KEYS = ("results", "significant", "interactions", "similarity", "summary")
 
 
 def _validate_comparisons(manifest: Dict[str, Any], errors: List[str]) -> None:
@@ -603,7 +603,8 @@ def _comparison_entry(root: Path, task_id: str, result: Dict[str, Any]) -> Optio
     base = root / "comparisons" / task_id
     if base.is_symlink() or not base.is_dir():
         return None
-    files = {"results": "results.tsv", "significant": "significant.tsv", "interactions": "interactions.tsv", "summary": "summary.json"}
+    files = {"results": "results.tsv", "significant": "significant.tsv", "interactions": "interactions.tsv",
+             "similarity": "similarity.tsv", "summary": "summary.json"}
     paths: Dict[str, Optional[str]] = {}
     for key in COMPARISON_PATH_KEYS:
         target = base / files[key]

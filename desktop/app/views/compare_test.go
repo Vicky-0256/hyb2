@@ -267,7 +267,7 @@ func TestCompareRunTestAndValidation(t *testing.T) {
 	req := started[0]
 	params := req.Parameters.(map[string]any)
 	if req.Kind != "compare" || strings.Join(req.SamplesOne, ",") != "AFR_REP1,AFR_REP2" || strings.Join(req.SamplesTwo, ",") != "ZBRA_REP1,ZBRA_REP2" ||
-		params["min_count"] != 3 || params["range"] != 50 || params["padj_cutoff"] != 0.01 ||
+		params["min_count"] != 3 || params["range"] != 50 || params["padj_cutoff"] != 0.01 || params["similarity_min"] != 1 ||
 		params["label_one"] != "AFR (2 merged)" || params["label_two"] != "BRA (2 merged)" || req.ProjectPath != "/projects/zikv.hyb2proj" {
 		t.Fatalf("request %+v params %+v", req, params)
 	}
@@ -284,6 +284,56 @@ func TestCompareRunTestAndValidation(t *testing.T) {
 	if csCountCalls(f, "op:list_comparisons") != before+1 {
 		t.Fatalf("list not reloaded: %v", f.calls)
 	}
+}
+
+// TestCompareSimilarityHeatmap: a result with similarity.tsv shows HYB2's
+// similarity heatmap under the test; an older result asks for a re-run.
+func TestCompareSimilarityHeatmap(t *testing.T) {
+	a, f := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 2200)
+	a.Navigate("compare", nil)
+	csSettle(a, tt)
+	if !tt.HasText("This test was run before the similarity heatmap existed; run it again to get one.") {
+		t.Fatalf("old result: %q", tt.Texts())
+	}
+
+	read := fixture(t, "compare_read.json")
+	summary := read["summary"].(map[string]any)
+	summary["similarity_cells"] = 3.0
+	summary["similarity_cap"] = 40.0
+	list := fixture(t, "compare_list.json")
+	for _, item := range list["comparisons"].([]any) {
+		if entry := item.(map[string]any); entry["id"] == "compare-1791998444625" {
+			entry["parameters"].(map[string]any)["similarity_min"] = 10.0
+		}
+	}
+	f.ops["list_comparisons"] = list
+	// strongest first, as read_comparison returns them
+	read["similarity"] = map[string]any{"x": []any{100.0, 5000.0, 20.0}, "y": []any{200.0, 9000.0, 30.0},
+		"count": []any{80.0, 40.0, 10.0}}
+	f.ops["read_comparison"] = read
+	p := a.PageFor("compare").(*comparePage)
+	p.reset()
+	a.Navigate("compare", nil)
+	csSettle(a, tt)
+	for _, text := range []string{"Similarity heatmap", "Similar cells", "40",
+		"(count ≥ 10 in each); green = the smaller of the two summed counts, capped at the 95% quantile (40). As hyb2's plot_similarity_map."} {
+		if !tt.HasText(text) && !strings.Contains(strings.Join(tt.Texts(), "\n"), text) {
+			t.Fatalf("lacks %q: %q", text, tt.Texts())
+		}
+	}
+	cells := p.simHeat.Cells()
+	if len(cells) != 3 {
+		t.Fatalf("similarity cells %d", len(cells))
+	}
+	// weakest first; capped at the 95% quantile, so 80 and 40 are equally strong
+	if cells[0].X != 20 || cells[0].Color.A >= cells[1].Color.A || cells[1].Color.A != cells[2].Color.A {
+		t.Fatalf("cells %+v", cells)
+	}
+	if cells[2].Color.R != cmpGreen.R || cells[2].Color.G != cmpGreen.G {
+		t.Fatalf("colour %+v", cells[2].Color)
+	}
+	snapshot(t, tt, "compare-similarity")
 }
 
 func TestCompareQuickView(t *testing.T) {

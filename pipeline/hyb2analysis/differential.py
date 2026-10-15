@@ -121,8 +121,8 @@ def _atomic_text(path: Path, write: Callable[[Any], None]) -> None:
 
 def compare(contacts: Sequence[PathLike], names: Sequence[str], condition_one: Sequence[bool], out_dir: PathLike,
             *, min_count: int = 2, radius: int = 100, alpha: float = 0.01, padj_cutoff: float = 0.05,
-            progress: Progress = None) -> Dict[str, Any]:
-    """Run the comparison and write the four outputs into ``out_dir``."""
+            similarity_min: int = 1, progress: Progress = None) -> Dict[str, Any]:
+    """Run the comparison and write the five outputs into ``out_dir``."""
     started = time.monotonic()
     say = progress or (lambda stage, detail: None)
     if len(contacts) != len(names) or len(names) != len(condition_one):
@@ -134,6 +134,8 @@ def compare(contacts: Sequence[PathLike], names: Sequence[str], condition_one: S
         raise ValueError("min_count must be a non-negative integer")
     if isinstance(radius, bool) or not isinstance(radius, int) or radius < 0:
         raise ValueError("range must be a non-negative integer")
+    if isinstance(similarity_min, bool) or not isinstance(similarity_min, int) or similarity_min < 1:
+        raise ValueError("similarity_min must be a positive integer")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -141,6 +143,7 @@ def compare(contacts: Sequence[PathLike], names: Sequence[str], condition_one: S
     t0 = time.monotonic()
     keys, table = count_table(contacts)
     total_cells = len(keys)
+    sim = similarity(keys, table, one, similarity_min)
     keep = table.sum(axis=1) > min_count
     keys, table = keys[keep], table[keep]
     if len(keys) < 2:
@@ -190,12 +193,20 @@ def compare(contacts: Sequence[PathLike], names: Sequence[str], condition_one: S
                                     _fmt(padj[i]), _fmt(res["baseMean"][i])]) + "\n")
 
     _atomic_text(out / "interactions.tsv", write_interactions)
+
+    def write_similarity(handle):
+        handle.write("x\ty\tcount\tcount_one\tcount_two\n")
+        for row in zip(sim["x"], sim["y"], sim["count"], sim["count_one"], sim["count_two"]):
+            handle.write("\t".join(str(int(v)) for v in row) + "\n")
+
+    _atomic_text(out / "similarity.tsv", write_similarity)
     lfc_sig = res["log2FoldChange"][significant]
     up = sum(1 for i in interactions if res["log2FoldChange"][i] > 0)
     summary = {
         "version": 1,
         "samples": [{"name": name, "condition": "one" if flag else "two"} for name, flag in zip(names, one)],
-        "parameters": {"min_count": min_count, "range": radius, "alpha": alpha, "padj_cutoff": padj_cutoff},
+        "parameters": {"min_count": min_count, "range": radius, "alpha": alpha, "padj_cutoff": padj_cutoff,
+                       "similarity_min": similarity_min},
         "cells_total": int(total_cells),
         "cells_tested": int(len(keys)),
         "cells_with_padj": int(np.sum(~np.isnan(padj))),
@@ -205,6 +216,8 @@ def compare(contacts: Sequence[PathLike], names: Sequence[str], condition_one: S
         "interactions": len(interactions),
         "interactions_up": up,
         "interactions_down": len(interactions) - up,
+        "similarity_cells": int(len(sim["x"])),
+        "similarity_cap": sim["cap"],
         "size_factors": [float(v) for v in res["sizeFactors"]],
         "dispersion_trend": ({"type": "parametric", "asymptDisp": float(res["trend"][0]), "extraPois": float(res["trend"][1])}
                              if res["fitType"] == "parametric" else {"type": "local"}),
@@ -217,6 +230,41 @@ def compare(contacts: Sequence[PathLike], names: Sequence[str], condition_one: S
     }
     _atomic_text(out / "summary.json", lambda handle: json.dump(summary, handle, indent=2))
     return summary
+
+
+def similarity(keys: np.ndarray, table: np.ndarray, condition_one: np.ndarray, minimum: int = 1) -> Dict[str, Any]:
+    """HYB2's similarity heatmap (bin/plot_similarity_map + similarity_heatmap.R).
+
+    The original runs on two contact maps; given one merged map per condition
+    (the condition's .hyb files concatenated, i.e. its samples' counts summed)
+    it keeps every cell present in both and reports the smaller count.  Cells
+    below ``minimum`` are dropped from each map first (1 keeps all).  ``cap``
+    is the 95% quantile of the counts (R's default quantile), the top of
+    similarity_heatmap.R's colour scale.
+    """
+    one = np.asarray(condition_one, dtype=bool)
+    count_one = table[:, one].sum(axis=1)
+    count_two = table[:, ~one].sum(axis=1)
+    keep = (count_one >= max(1, minimum)) & (count_two >= max(1, minimum))
+    count = np.minimum(count_one, count_two)[keep]
+    k = keys[keep]
+    return {"x": (k // _SHIFT).astype(np.int64), "y": (k % _SHIFT).astype(np.int64), "count": count,
+            "count_one": count_one[keep], "count_two": count_two[keep],
+            "cap": float(np.quantile(count, 0.95)) if len(count) else 0.0}
+
+
+def read_similarity(path: PathLike, *, limit: Optional[int] = None) -> Dict[str, List[int]]:
+    """Columns x, y, count of similarity.tsv, strongest cells first when limited."""
+    rows = []
+    with open(path, "r", encoding="utf-8") as handle:
+        handle.readline()
+        for line in handle:
+            parts = line.split("\t")
+            rows.append((int(parts[0]), int(parts[1]), int(parts[2])))
+    if limit is not None and len(rows) > limit:
+        rows.sort(key=lambda row: -row[2])
+        rows = rows[:limit]
+    return {"x": [r[0] for r in rows], "y": [r[1] for r in rows], "count": [r[2] for r in rows]}
 
 
 def read_significant(path: PathLike, *, limit: Optional[int] = None) -> Dict[str, List[Any]]:

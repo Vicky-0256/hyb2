@@ -94,7 +94,9 @@ task drawer and Preferences.
 3. **Explore**: contact map, interactions, viewpoint and region, from the
    per-sample SQLite indexes.
 4. **Compare**: the DESeq2 differential test (numpy port, validated against
-   R) and the CPM quick view; Locate, Region and Fold A & B.
+   R), hyb2's similarity heatmap of the two groups (bin/plot_similarity_map
+   on each group's merged map; identical to the CLI on the ZIKV ZAFR vs ZILM
+   virion data) and the CPM quick view; Locate, Region and Fold A & B.
 5. **Structure**: CPLfold genome and window folds with chimera evidence, and
    the arc viewer comparing two structures.
 6. **Report**: the project summary and its HTML export.

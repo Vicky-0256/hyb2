@@ -313,3 +313,46 @@ func TestDataFormatting(t *testing.T) {
 		}
 	}
 }
+
+func TestDataPageImportFolder(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	f.ops["scan_data_folder"] = fixture(t, "data_folder_scan.json")
+	f.ops["import_sample_rows"] = core.Obj{"ok": true, "samples": []any{1, 2}, "skipped": []any{}}
+	old := PickFolder
+	PickFolder = func(string) string { return "/data/zika_files" }
+	t.Cleanup(func() { PickFolder = old })
+	tt := ui.NewTester(a.View, 1280, 820)
+	dataClick(t, tt, a, "Import data folder…")
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Import a data folder", "/data/zika_files",
+		"Proposed from the file names: 14 samples in 6 conditions, using 5 references. Nothing is imported until you click Import.",
+		"Not imported: 9 uncompressed copies of .gz files (the .gz is used); 5 .tab files; 30 Bowtie2 index files (HYB2 builds its own); 1 named FASTA but not FASTA content.",
+		"ZAFR_REP1.fastq.gz", "1.6 GB", "ZAFR.fasta", "⚠ reference guessed (no file name matched); check it", "Import 14 samples")
+	snapshot(t, tt, "data-folder")
+	if calls := f.callsOf("scan_data_folder"); len(calls) != 1 || calls[0]["folder"] != "/data/zika_files" {
+		t.Fatalf("scan calls %v", calls)
+	}
+	// Edit: Aag is the insect condition, drop the second Aag file.
+	d := &a.pages["data"].(*dataPage).folder
+	d.rows[0].condition = "insect"
+	d.rows[1].include = false
+	tt.Frame()
+	dataExpect(t, tt, "Import 13 samples")
+	dataClick(t, tt, a, "Import 13 samples")
+	calls := f.callsOf("import_sample_rows")
+	if len(calls) != 1 || calls[0]["mode"] != "linked" {
+		t.Fatalf("import calls %v", calls)
+	}
+	rows := calls[0]["rows"].([]core.Obj)
+	if len(rows) != 13 || rows[0]["condition"] != "insect" || rows[0]["reference"] != "/data/zika_files/Zika.fasta" ||
+		rows[0]["replicate"] != 1 || rows[0]["name"] != "Aag-1" {
+		t.Fatalf("rows %v", rows[:2])
+	}
+	last := rows[12]
+	if last["name"] != "ZSIN_REP3" || last["condition"] != "ZSIN" || last["replicate"] != 3 || last["reference"] != "/data/zika_files/ZSIN.fasta" {
+		t.Fatalf("last row %v", last)
+	}
+	tt.Frame()
+	dataExpect(t, tt, "Imported 2 samples. Next: Run all pending.")
+}

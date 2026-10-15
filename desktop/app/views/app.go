@@ -75,7 +75,10 @@ type App struct {
 	prefs      prefsState
 	lookup     lookupPref // external_lookup (evidence.go)
 	start      startState
-	recent     []Recent
+	// pendingFolder is a data folder chosen with a new project; the Data
+	// page scans it once the project is open.
+	pendingFolder string
+	recent        []Recent
 
 	toasts   []string
 	pollOnce sync.Once

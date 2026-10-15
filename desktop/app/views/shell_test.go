@@ -53,7 +53,12 @@ func TestStartPageCreatesProjectFolder(t *testing.T) {
 	parent := t.TempDir()
 	a.start.newParent = parent
 	a.start.newName = "ZIKV virion/RNA"
+	a.start.dataFolder = "/data/zika_files"
+	f.ops["scan_data_folder"] = fixture(t, "data_folder_scan.json")
 	tt := ui.NewTester(a.View, 1100, 720)
+	if !tt.HasText("After the project is created, its files are matched to samples and references for you to review.") {
+		t.Fatalf("texts %q", tt.Texts())
+	}
 	want := filepath.Join(parent, "ZIKV virion-RNA.hyb2proj")
 	if !tt.HasText("Creates the folder " + want) {
 		t.Fatalf("texts %q", tt.Texts())
@@ -71,6 +76,14 @@ func TestStartPageCreatesProjectFolder(t *testing.T) {
 	got := strings.Join(f.calls, ",")
 	if !strings.Contains(got, "create:ZIKV virion/RNA") || !strings.Contains(got, "open:"+filepath.Join(parent, "ZIKV virion-RNA 2.hyb2proj")) {
 		t.Fatalf("calls %s", got)
+	}
+	// The chosen data folder is scanned on the Data page.
+	waitFlush(a)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	if a.Page != "data" || !strings.Contains(strings.Join(f.calls, ","), "op:scan_data_folder") || !tt.HasText("Import a data folder") {
+		t.Fatalf("page %q calls %v", a.Page, f.calls)
 	}
 }
 

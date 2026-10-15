@@ -773,6 +773,13 @@ def import_sample_sheet(root: Path, sheet: Path, *, base_dir: Optional[Path] = N
                             "reference": ref_path, "gene_id": gene_value or None, "metadata": dict(metadata)})
     if errors:
         raise SampleSheetError(errors)
+    return _import_planned(root, planned, references, mode=mode, dry_run=dry_run)
+
+
+def _import_planned(root: Path, planned: List[Dict[str, Any]], references: Dict[Path, Any], *, mode: str,
+                    dry_run: bool) -> Dict[str, Any]:
+    """Register ``references`` and the ``planned`` samples (the common end of
+    the sheet and folder imports); with ``dry_run`` only report the plan."""
     if dry_run:
         return {"dry_run": True, "samples": [{**{k: v for k, v in p.items() if k not in ("source", "reference")},
                                               "path": str(p["source"]), "reference": str(p["reference"]) if p["reference"] else None}
@@ -813,6 +820,208 @@ def import_sample_sheet(root: Path, sheet: Path, *, base_dir: Optional[Path] = N
             prep.discard()
         for _, prep in prepared_samples:
             prep.discard()
+
+
+# --------------------------------------------------------------------------- data folders
+
+_FOLDER_MAX_DEPTH = 2
+_FOLDER_MAX_FILES = 20_000
+_SNIFF_BYTES = MiB
+_BOWTIE2_SUFFIXES = (".bt2", ".bt2l")
+_REP_TOKEN = re.compile(r"^(?P<cond>.+?)[._-]?(?:rep|replicate)[._-]?(?P<rep>\d{1,3})(?P<rest>(?:[._-].*)?)$", re.IGNORECASE)
+_TRAILING_NUMBER = re.compile(r"^(?P<cond>.*?[A-Za-z])[._-]?(?P<rep>\d{1,3})(?P<rest>(?:[._-]\D.*)?)$")
+_MATE = re.compile(r"[._-]R[12](?:[._-]0*1)?$", re.IGNORECASE)
+
+
+def _fasta_kind(path: Path) -> str:
+    """'reads' or 'reference' for a FASTA(.gz), from its first MiB: many
+    short records are reads (collapsed/assembled chimeras), a few long
+    ones a reference."""
+    headers, bases = 0, 0
+    try:
+        with _open_text(path) as handle:
+            text = handle.read(_SNIFF_BYTES)
+    except (OSError, EOFError, ValueError):
+        return "unknown"
+    for line in text.splitlines():
+        if line.startswith(">"):
+            headers += 1
+        else:
+            bases += len(line.strip())
+    if headers == 0:
+        return "unknown"
+    return "reads" if headers >= 50 and bases / headers < 500 else "reference"
+
+
+def _split_replicate(stem: str) -> Tuple[str, Optional[str], Optional[int]]:
+    """(name, condition, replicate) from a file stem:
+    ``ZSIN_REP1`` -> (ZSIN_REP1, ZSIN, 1), ``Livefire1_comp`` -> (Livefire1,
+    Livefire, 1), ``Aag-1.assembled.collapse`` -> (Aag-1, Aag, 1); otherwise
+    (stem, None, None)."""
+    for pattern in (_REP_TOKEN, _TRAILING_NUMBER):
+        match = pattern.match(stem)
+        if match:
+            cond = match.group("cond").rstrip("._-")
+            if cond:
+                rest = match.group("rest")
+                name = stem[: len(stem) - len(rest)] if rest else stem
+                return name, cond, int(match.group("rep"))
+    return stem, None, None
+
+
+def _walk_folder(folder: Path):
+    """Regular files under folder (two levels), skipping hidden entries,
+    symlinked directories and HYB2 project folders."""
+    count = 0
+    stack = [(folder, 0)]
+    while stack:
+        current, depth = stack.pop()
+        try:
+            entries = sorted(os.scandir(current), key=lambda e: e.name)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                if depth + 1 < _FOLDER_MAX_DEPTH and not entry.name.lower().endswith(".hyb2proj"):
+                    stack.append((Path(entry.path), depth + 1))
+                continue
+            if entry.is_file():
+                count += 1
+                if count > _FOLDER_MAX_FILES:
+                    raise ValueError("the folder has more than %d files; choose the folder that holds the data" % _FOLDER_MAX_FILES)
+                yield Path(entry.path)
+
+
+def scan_data_folder(folder: Path) -> Dict[str, Any]:
+    """Propose samples and references for the files of a data folder.
+
+    Reads (FASTQ, read FASTA, SAM, .hyb) become one sample each; the same
+    reads both plain and gzipped are proposed once (the .gz). Condition and
+    replicate come from the file name (``<condition>_REP<n>``,
+    ``<condition><n>``). A reference FASTA whose name starts the sample's
+    name is matched (longest first); samples left over get the single
+    reference no sample matched, flagged as a guess. Nothing is read
+    beyond the first MiB of FASTA files, and nothing is written.
+    """
+    folder = Path(folder).expanduser().resolve()
+    if not folder.is_dir():
+        raise ValueError("not a folder: %s" % folder)
+    reads: List[Path] = []
+    references: List[Path] = []
+    ignored: Dict[str, int] = {}
+
+    def ignore(kind: str) -> None:
+        ignored[kind] = ignored.get(kind, 0) + 1
+
+    for path in _walk_folder(folder):
+        lower = path.name.lower()
+        if lower.endswith(_BOWTIE2_SUFFIXES):
+            ignore("Bowtie2 index files (HYB2 builds its own)"); continue
+        if lower.endswith(_REFERENCE_SUFFIXES) and not lower.endswith((".fastq.gz", ".fq.gz")):
+            kind = _fasta_kind(path)
+            if kind == "reference":
+                references.append(path)
+            elif kind == "reads":
+                reads.append(path)
+            else:
+                ignore("named FASTA but not FASTA content")
+            continue
+        try:
+            detect_read_format(path)
+        except ValueError:
+            ignore("%s files" % (path.suffix.lower() or "other")); continue
+        reads.append(path)
+
+    # The same reads plain and gzipped: keep the .gz.
+    by_stem: Dict[Tuple[Path, str], List[Path]] = {}
+    for path in reads:
+        by_stem.setdefault((path.parent, read_stem(path)), []).append(path)
+    duplicates: List[Dict[str, str]] = []
+    chosen: List[Path] = []
+    for (_, _), paths in sorted(by_stem.items(), key=lambda item: (str(item[0][0]), item[0][1])):
+        paths.sort(key=lambda p: (not p.name.lower().endswith(".gz"), p.name))
+        chosen.append(paths[0])
+        for other in paths[1:]:
+            duplicates.append({"path": str(other), "kept": str(paths[0])})
+
+    ref_stems = sorted(((read_stem(path).lower(), path) for path in references), key=lambda item: -len(item[0]))
+    samples: List[Dict[str, Any]] = []
+    for path in chosen:
+        stem = read_stem(path)
+        name, condition, replicate = _split_replicate(stem)
+        reference = next((ref for ref_stem, ref in ref_stems if stem.lower().startswith(ref_stem)), None)
+        notes = []
+        if _MATE.search(stem) and any(read_stem(other) != stem and _MATE.sub("", read_stem(other)) == _MATE.sub("", stem) for other in chosen):
+            notes.append("looks like one mate of a paired-end run; HYB2 expects single-end (merged) reads")
+        samples.append({"path": str(path), "format": detect_read_format(path), "size_bytes": path.stat().st_size,
+                        "name": name, "condition": condition, "replicate": replicate,
+                        "reference": str(reference) if reference else None, "reference_guessed": False, "notes": notes})
+    matched = {s["reference"] for s in samples if s["reference"]}
+    leftover = [str(ref) for ref in references if str(ref) not in matched]
+    if len(references) == 1:
+        leftover = [str(references[0])]
+    for sample in samples:
+        if sample["reference"] is None and len(leftover) == 1:
+            sample["reference"], sample["reference_guessed"] = leftover[0], True
+            sample["notes"].append("reference guessed (no file name matched); check it")
+        elif sample["reference"] is None:
+            sample["notes"].append("no reference matched; choose one")
+    # Replicate numbers repeated within a condition.
+    seen: Dict[Tuple[Any, Any], int] = {}
+    for sample in samples:
+        if sample["condition"] is not None:
+            key = (sample["condition"], sample["replicate"])
+            seen[key] = seen.get(key, 0) + 1
+    for sample in samples:
+        if seen.get((sample["condition"], sample["replicate"]), 0) > 1:
+            sample["notes"].append("another file has the same condition and replicate")
+    return {"folder": str(folder), "samples": samples, "references": [str(ref) for ref in references],
+            "duplicates": duplicates, "ignored": ignored}
+
+
+def import_sample_rows(root: Path, rows: Any, *, mode: str = "linked", dry_run: bool = False) -> Dict[str, Any]:
+    """Import samples given as rows ``{path, name, condition, replicate,
+    reference}`` (absolute paths, typically a reviewed
+    :func:`scan_data_folder` proposal). All rows are checked first; nothing
+    is written when one has an error."""
+    root = _project_root(root)
+    if not isinstance(rows, list) or not rows:
+        raise SampleSheetError(["no samples to import"])
+    if len(rows) > _FOLDER_MAX_FILES:
+        raise SampleSheetError(["too many samples"])
+    errors: List[str] = []
+    planned: List[Dict[str, Any]] = []
+    references: Dict[Path, Any] = {}
+    for number, row in enumerate(rows, start=1):
+        where = "sample %d" % number
+        if not isinstance(row, dict) or set(row) - {"path", "name", "condition", "replicate", "reference"}:
+            errors.append(where + ": unexpected fields"); continue
+        value = row.get("path")
+        if not isinstance(value, str) or not is_absolute_path(value) or not Path(value).is_file():
+            errors.append(where + ": file not found: %s" % value); continue
+        path = Path(value).resolve()
+        name = row.get("name")
+        condition = row.get("condition") or None
+        replicate = row.get("replicate")
+        try:
+            fmt = detect_read_format(path)
+            _check_sample_fields(name, condition, replicate, None)
+        except ValueError as error:
+            errors.append("%s (%s): %s" % (where, path.name, error)); continue
+        ref_value = row.get("reference")
+        ref_path = None
+        if ref_value:
+            if not isinstance(ref_value, str) or not is_absolute_path(ref_value) or not Path(ref_value).is_file():
+                errors.append(where + ": reference not found: %s" % ref_value); continue
+            ref_path = Path(ref_value).resolve()
+            references[ref_path] = None
+        planned.append({"source": path, "format": fmt, "name": name.strip(), "condition": condition, "replicate": replicate,
+                        "reference": ref_path, "gene_id": None, "metadata": {}})
+    if errors:
+        raise SampleSheetError(errors)
+    return _import_planned(root, planned, references, mode=mode, dry_run=dry_run)
 
 
 # --------------------------------------------------------------------------- checks

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // The staged runtime ships as one archive (desktop/scripts/pack-runtime.py)
@@ -77,8 +78,9 @@ func UnpackRuntime(archive, digest, cache string) (*Bridge, error) {
 		if err := os.Rename(tmp, dir); err != nil {
 			return nil, err
 		}
-		removeOldRuntimes(cache, filepath.Base(dir))
 	}
+	// On every launch, so a removal cut short by quitting is finished later.
+	removeOldRuntimes(cache, filepath.Base(dir))
 	b, err := BundledBridge(dir)
 	if err == nil && b == nil {
 		err = errors.New("the bundled runtime archive has no desktop/runtime/bridge.py")
@@ -86,10 +88,25 @@ func UnpackRuntime(archive, digest, cache string) (*Bridge, error) {
 	return b, err
 }
 
+// staleUnpack is how old an unfinished unpack must be before it is
+// removed (a younger one may belong to another instance still unpacking).
+const staleUnpack = time.Hour
+
+// removeOldRuntimes deletes other runtime versions and unpacks abandoned
+// by a quit or crash.
 func removeOldRuntimes(cache, keep string) {
 	entries, _ := os.ReadDir(cache)
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "runtime-") && e.Name() != keep {
+		if !e.IsDir() {
+			continue
+		}
+		old := strings.HasPrefix(e.Name(), "runtime-") && e.Name() != keep
+		if strings.HasPrefix(e.Name(), ".runtime-unpack-") {
+			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > staleUnpack {
+				old = true
+			}
+		}
+		if old {
 			_ = os.RemoveAll(filepath.Join(cache, e.Name()))
 		}
 	}

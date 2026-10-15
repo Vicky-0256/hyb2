@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 type entry struct {
@@ -100,8 +101,15 @@ func TestUnpackRuntimeKeepsHiddenFilesAndLinksAndReuses(t *testing.T) {
 			t.Fatal("interpreter lost its executable bit")
 		}
 	}
-	// A second call reuses the unpacked tree; an older version is removed.
+	// A second call reuses the unpacked tree and finishes cleaning up: an
+	// older version (left by a quit mid-removal) and an abandoned unpack
+	// go, a recent unpack (maybe another instance's) stays.
 	os.MkdirAll(filepath.Join(cache, "runtime-0000000000000000"), 0o755)
+	abandoned, recent := filepath.Join(cache, ".runtime-unpack-1"), filepath.Join(cache, ".runtime-unpack-2")
+	os.MkdirAll(abandoned, 0o755)
+	os.MkdirAll(recent, 0o755)
+	long := time.Now().Add(-2 * staleUnpack)
+	os.Chtimes(abandoned, long, long)
 	marker := filepath.Join(b.Root, "desktop/runtime/bridge.py")
 	os.WriteFile(marker, []byte("# kept"), 0o644)
 	if _, err := UnpackRuntime(archive, digest, cache); err != nil {
@@ -109,6 +117,9 @@ func TestUnpackRuntimeKeepsHiddenFilesAndLinksAndReuses(t *testing.T) {
 	}
 	if body, _ := os.ReadFile(marker); string(body) != "# kept" {
 		t.Fatal("a ready runtime was unpacked again")
+	}
+	if isDir(filepath.Join(cache, "runtime-0000000000000000")) || isDir(abandoned) || !isDir(recent) {
+		t.Fatal("leftovers not cleaned on a reuse launch")
 	}
 	makeArchive(t, resources, append(runtimeEntries(), entry{name: "extra.txt", body: "v2"}))
 	archive, digest2, _, _ := PackedRuntime(resources)
@@ -152,4 +163,9 @@ func TestUnpackRuntimeRejectsCorruptAndUnsafeArchives(t *testing.T) {
 	if _, _, _, err := PackedRuntime(empty); err == nil {
 		t.Fatal("an archive without its digest file was accepted")
 	}
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

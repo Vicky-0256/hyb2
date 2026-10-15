@@ -17,6 +17,7 @@ type startState struct {
 	pasteOpen  bool // the "paste a path" section of Open is expanded
 	newParent  string
 	newName    string
+	dataFolder string // optional raw data folder to import after creating
 	status     string
 	creating   bool
 	runtimeErr string
@@ -170,6 +171,30 @@ func (a *App) startView(c *ui.Context) {
 							}
 						})
 					})
+					Field(c, "Raw data folder (optional)", func() {
+						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, nameOr(s.dataFolder, "Not chosen — you can add data later")).FontSize(12).SingleLine().Grow(1).Shrink(1).MinWidth(0)
+							if s.dataFolder != "" && ui.Button(c, "Clear").Clicked() {
+								s.dataFolder = ""
+							}
+							if ui.Button(c, "Choose…").Tooltip("The folder with your FASTQ files and reference FASTA; nothing in it is changed").Clicked() {
+								a.Go(func() func() {
+									path := PickFolder("Choose the folder with your raw data")
+									return func() {
+										if path != "" {
+											s.dataFolder = path
+											if strings.TrimSpace(s.newName) == "" {
+												s.newName = filepath.Base(path)
+											}
+										}
+									}
+								})
+							}
+						})
+					})
+					if s.dataFolder != "" {
+						ui.Text(c, "After the project is created, its files are matched to samples and references for you to review.").FontSize(12).TextColor(t.TextMuted)
+					}
 					name := strings.TrimSpace(s.newName)
 					if name != "" && s.newParent != "" {
 						ui.Text(c, "Creates the folder "+filepath.Join(s.newParent, ProjectFolderName(name))).FontSize(12).TextColor(t.TextMuted)
@@ -256,6 +281,10 @@ func (a *App) create(path, name string) {
 				return
 			}
 			a.start.newName = ""
+			if a.start.dataFolder != "" {
+				a.pendingFolder, a.start.dataFolder = a.start.dataFolder, ""
+				a.Page = "data"
+			}
 			a.Open(path)
 		}
 	})

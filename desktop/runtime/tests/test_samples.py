@@ -354,5 +354,93 @@ class SampleSheetTests(ProjectTestCase):
         self.assertIsNone(sample["gene_id"], "multi-sequence references have no default gene")
 
 
+class DataFolderTests(ProjectTestCase):
+    def zikv_folder(self):
+        files = self.dir / "zika_files"
+        files.mkdir()
+        for stem in ("ZAFR", "ZSIN", "Zika"):
+            (files / (stem + ".fasta")).write_text(">%s\n%s\n" % (REFERENCE_NAMES[stem], "ACGU" * 200), encoding="utf-8")
+        fastq = "".join("@r%d\nACGTACGT\n+\nIIIIIIII\n" % i for i in range(5))
+        for stem in ("ZAFR_REP1", "ZAFR_REP2", "ZSIN_REP1", "ZSIN_REP2", "ZSIN_REP3"):
+            _write_gz(files / (stem + ".fastq.gz"), "@%s\n" % stem + fastq[fastq.index("\n") + 1:])
+        (files / "ZSIN_REP1.fastq").write_text(fastq, encoding="utf-8")  # plain copy of the .gz
+        for name in ("Livefire1_comp", "Livefire2_comp", "Aag-1.assembled.collapse"):
+            _write_gz(files / (name + ".fasta.gz"), ">%s\nACGT\n" % name + "".join(">%d_10\nACGTACGTAC\n" % i for i in range(80)))
+        _write_gz(files / "Livefire1_hybrids.fasta.gz", "1_9\tACGT\n")  # not FASTA
+        for suffix in (".1.bt2", ".rev.1.bt2"):
+            (files / ("ZSIN" + suffix)).write_bytes(b"x")
+        (files / "ZSIN.tab").write_text("x\tACGU\n", encoding="utf-8")
+        (files / ".DS_Store").write_bytes(b"x")
+        inner = files / "old.hyb2proj"
+        inner.mkdir()
+        (inner / "x.fastq").write_text(fastq, encoding="utf-8")
+        return files
+
+    def test_scan_matches_names_references_and_skips_the_rest(self):
+        files = self.zikv_folder()
+        result = self.call("scan_data_folder", folder=str(files))
+        self.assertTrue(result["ok"], result)
+        rows = {Path(s["path"]).name: s for s in result["samples"]}
+        self.assertEqual(sorted(rows), sorted(["Aag-1.assembled.collapse.fasta.gz", "Livefire1_comp.fasta.gz", "Livefire2_comp.fasta.gz",
+                                              "ZAFR_REP1.fastq.gz", "ZAFR_REP2.fastq.gz", "ZSIN_REP1.fastq.gz", "ZSIN_REP2.fastq.gz",
+                                              "ZSIN_REP3.fastq.gz"]))
+        zsin = rows["ZSIN_REP3.fastq.gz"]
+        self.assertEqual((zsin["name"], zsin["condition"], zsin["replicate"]), ("ZSIN_REP3", "ZSIN", 3))
+        self.assertEqual(Path(zsin["reference"]).name, "ZSIN.fasta")
+        self.assertFalse(zsin["reference_guessed"])
+        live = rows["Livefire2_comp.fasta.gz"]
+        self.assertEqual((live["name"], live["condition"], live["replicate"]), ("Livefire2", "Livefire", 2))
+        self.assertEqual(Path(live["reference"]).name, "Zika.fasta")
+        self.assertTrue(live["reference_guessed"])
+        aag = rows["Aag-1.assembled.collapse.fasta.gz"]
+        self.assertEqual((aag["name"], aag["condition"], aag["replicate"]), ("Aag-1", "Aag", 1))
+        self.assertEqual(len(result["references"]), 3)
+        self.assertEqual([Path(d["path"]).name for d in result["duplicates"]], ["ZSIN_REP1.fastq"])
+        self.assertEqual(result["ignored"], {"Bowtie2 index files (HYB2 builds its own)": 2, ".tab files": 1,
+                                             "named FASTA but not FASTA content": 1})
+        self.assertEqual(self.manifest()["samples"], [])  # scanning writes nothing
+
+    def test_split_replicate_and_paired_end_note(self):
+        self.assertEqual(samples._split_replicate("ctrl-rep12_trimmed"), ("ctrl-rep12", "ctrl", 12))
+        self.assertEqual(samples._split_replicate("Sample"), ("Sample", None, None))
+        _write_gz(self.data / "S_R1.fastq.gz", "@r\nACGT\n+\nIIII\n")
+        _write_gz(self.data / "S_R2.fastq.gz", "@r\nACGT\n+\nIIII\n")
+        result = samples.scan_data_folder(self.data)
+        self.assertTrue(all(any("paired-end" in n for n in s["notes"]) for s in result["samples"]), result)
+        self.assertTrue(all(any("no reference" in n for n in s["notes"]) for s in result["samples"]))
+
+    def test_import_reviewed_rows(self):
+        files = self.zikv_folder()
+        scan = samples.scan_data_folder(files)
+        rows = [{k: s[k] for k in ("path", "name", "condition", "replicate", "reference")} for s in scan["samples"]]
+        rows[0]["condition"] = "insect"
+        dry = self.call("import_sample_rows", rows=rows, dry_run=True)
+        self.assertTrue(dry["ok"], dry)
+        self.assertEqual(self.manifest()["samples"], [])
+        result = self.call("import_sample_rows", rows=rows)
+        self.assertTrue(result["ok"], result)
+        manifest = self.manifest()
+        self.assertEqual(len(manifest["samples"]), len(rows))
+        self.assertEqual(len(manifest["references"]), 3)
+        first = next(s for s in manifest["samples"] if s["name"] == rows[0]["name"])
+        self.assertEqual(first["condition"], "insect")
+        self.assertEqual(first["gene_id"], REFERENCE_NAMES["Zika"])
+        self.assertEqual(first["reads"]["mode"], "linked")
+        again = self.call("import_sample_rows", rows=rows)
+        self.assertEqual(len(again["skipped"]), len(rows))
+
+    def test_import_rows_rejects_bad_rows_atomically(self):
+        good = self.reads("a.fastq.gz")
+        bad = [{"path": str(good), "name": "a"}, {"path": str(self.data / "missing.fastq"), "name": "b"},
+               {"path": str(good), "name": "", "replicate": 0}, {"path": "relative.fastq", "name": "c"},
+               {"path": str(good), "name": "d", "extra": 1}]
+        result = self.call("import_sample_rows", rows=bad)
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(result["errors"]), 4, result["errors"])
+        self.assertEqual(self.manifest()["samples"], [])
+        with self.assertRaises(ValueError):
+            self.call("scan_data_folder", folder="relative/dir")
+
+
 if __name__ == "__main__":
     unittest.main()

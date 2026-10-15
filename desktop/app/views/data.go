@@ -135,6 +135,7 @@ type dataPage struct {
 
 	run        dataRunDialog
 	sheet      dataSheetDialog
+	folder     dataFolderDialog
 	add        dataAddDialog
 	edit       dataEditDialog
 	rename     dataRenameDialog
@@ -367,6 +368,10 @@ func dataErrText(err error) string {
 func (p *dataPage) View(c *ui.Context) {
 	a := p.a
 	t := c.Theme()
+	if folder := a.pendingFolder; folder != "" && a.Project != nil {
+		a.pendingFolder = "" // chosen on the start page with a new project
+		p.scanFolder(folder)
+	}
 	if q := qcFor(a); q != nil {
 		q.ensureStats()
 	}
@@ -381,8 +386,11 @@ func (p *dataPage) View(c *ui.Context) {
 			if ui.Button(c, "Import sample sheet…").Clicked() {
 				p.importSheet()
 			}
-			if ui.PrimaryButton(c, "Import raw files…").Clicked() {
+			if ui.Button(c, "Import raw files…").Clicked() {
 				p.importRaw()
+			}
+			if ui.PrimaryButton(c, "Import data folder…").Tooltip("Pick a folder; samples, replicates and references are matched from the file names").Clicked() {
+				p.chooseFolder()
 			}
 		})
 		if p.checkSummary != "" {
@@ -393,6 +401,7 @@ func (p *dataPage) View(c *ui.Context) {
 	})
 	p.runDialog(c)
 	p.sheetDialog(c)
+	p.folderDialog(c)
 	p.addDialog(c)
 	p.editDialog(c)
 	p.renameDialog(c)
@@ -574,8 +583,9 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 		if len(samples) == 0 {
 			ui.Column(c).Gap(4).Padding(16, 0).Children(func() {
 				ui.Text(c, "No samples yet.").Bold()
-				ui.Text(c, "Next: click Import raw files… to add one sample at a time (FASTQ / FASTA, optionally .gz; also SAM or .hyb), "+
-					"or Import sample sheet… to add many at once from a TSV/CSV with columns name, condition, replicate, files, reference. "+
+				ui.Text(c, "Next: click Import data folder… and pick the folder with your raw reads and reference FASTA: "+
+					"samples, replicates and references are matched from the file names, and you review them before anything is imported. "+
+					"Import raw files… adds single files; Import sample sheet… reads a TSV/CSV (name, condition, replicate, files, reference). "+
 					"Then Run all pending makes the .hyb files.").
 					TextColor(t.TextMuted)
 			})

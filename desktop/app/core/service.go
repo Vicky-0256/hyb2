@@ -44,6 +44,8 @@ var ProjectOperations = []string{
 	"update_sample",
 	"remove_sample",
 	"import_sample_sheet",
+	"scan_data_folder",
+	"import_sample_rows",
 	"check_inputs",
 	"disk_estimate",
 	"list_samples",

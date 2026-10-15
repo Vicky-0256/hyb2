@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .detector import cplfold_max_nt, detect_runtime
-from .project import _atomic_write_json, load_manifest, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
+from .project import _atomic_write_json, is_absolute_path, load_manifest, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
 from . import samples as _samples
 from .sample_run import ProgressFile, run_sample_index, run_sample_pipeline
 import importlib.util
@@ -283,6 +283,20 @@ def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None)
                                                   mode=str(request.get("mode") or "linked"),
                                                   condition_column=_optional_str(request, "condition_column"),
                                                   dry_run=request.get("dry_run") is True)
+        except _samples.SampleSheetError as error:
+            return {"ok": False, "path": str(path), "errors": error.errors, "error": str(error)}
+        return {"ok": True, "path": str(path), **result}
+    if operation == "scan_data_folder":
+        path = _valid_project(request)
+        folder = _optional_str(request, "folder")
+        if folder is None or not is_absolute_path(folder):
+            raise ValueError("folder must be an absolute path")
+        return {"ok": True, "path": str(path), **_samples.scan_data_folder(Path(folder))}
+    if operation == "import_sample_rows":
+        path = _valid_project(request)
+        try:
+            result = _samples.import_sample_rows(path, request.get("rows"), mode=str(request.get("mode") or "linked"),
+                                                 dry_run=request.get("dry_run") is True)
         except _samples.SampleSheetError as error:
             return {"ok": False, "path": str(path), "errors": error.errors, "error": str(error)}
         return {"ok": True, "path": str(path), **result}

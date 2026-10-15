@@ -74,9 +74,11 @@ One project, one navigation; the top bar holds the reference, gene and the
 current selection (a sample, or a condition = its replicates merged), the
 task drawer and Preferences.
 
-1. **Data**: references and samples; import raw files or a sample sheet
-   (dry-run preview), run/resume pipelines after a disk estimate, check and
-   relink inputs.
+1. **Data**: references and samples; import a data folder (samples,
+   conditions, replicates and references matched from the file names and
+   reviewed before import), single raw files or a sample sheet (dry-run
+   preview); run/resume pipelines after a disk estimate, check and relink
+   inputs. A new project can name its data folder on the start page.
 2. **QC**: per-sample and merged counts.
 3. **Explore**: contact map, interactions, viewpoint and region, from the
    per-sample SQLite indexes.

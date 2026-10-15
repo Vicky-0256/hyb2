@@ -25,6 +25,58 @@ is the dedicated `feature/cplfold-web` branch; `main` remains unchanged. Choose
 **GitHub Actions** as the publishing source in **Settings → Pages** before the
 first deployment.
 
+## Data access and embedding the analysis pages
+
+Analysis pages (Overview, Interactions, Contact Map, Viewpoint, Region
+Explorer, Compare, RNA Structure, Report) read data only through a
+**DataProvider**; they never read files or parsed rows. The full contract,
+with exact argument and return shapes, is the header comment of
+`data-provider.js`. In short, every method is async and takes a selection
+`{ datasetIds: [...] }` (one dataset, or several merged with counts summed):
+
+| Method | Returns |
+|---|---|
+| `listDatasets()` | `[{ id, label, fileName, fileSize, sha256, condition, primary, validRecords, supportInteractions, rnaNames, reference }]` |
+| `getSummary(sel)` | parser summary shape + `rnaExtents` |
+| `getContactBins(sel, { rnaX, rnaY, binSize, measure, orientation, chimeraType, homodimer, maxCells?, region? })` | `{ binSize, length, length2, x: [], y: [], count: [], records: [], support: [], total, max, ... }` |
+| `queryHybrids(sel, { filters?, region?, cell?, indices?, order?, offset, limit })` | `{ total, offset, limit, order, rows }` |
+| `getTopInteractions(sel, { by: "partner" \| "pair" \| "bin", ... })` | `{ total, rows }` |
+| `getSequence(sel, { rna, start?, end? })` | `{ rna, referenceId, start, end, length, sequence }` or `null` |
+| `getArms(sel, { rna?, partner?, chimeraType?, homodimer?, start?, end? })` | columnar `{ total, index, id, rnaOne, oneStart, oneEnd, rnaTwo, twoStart, twoEnd, support, homodimer, chimeraType }` |
+
+`BrowserProvider` implements it over the rows parsed by `parser.worker.js`;
+the website shell registers each parsed file with `addDataset()` (Compare
+files become extra datasets). `page-data.js` turns provider results into the
+view state the synchronous page renderers use.
+
+`app.js` auto-mounts the website on `#app`. A host can instead mount only the
+analysis pages:
+
+~~~js
+window.HYB2_AUTO_MOUNT = false; // before app.js loads
+await Hyb2Web.ready();
+const view = Hyb2Web.mount(hostElement, {
+  provider,                       // any DataProvider implementation
+  shell: false,                   // no landing page, nav, uploads or help pages
+  selection: { datasetIds: ["sample-1"] },
+  page: "overview",
+  onNavigate: ({ pageId, previousPageId, reason }) => {},
+  onRequestFold: ({ source, region, partnerRegion, arms, selection }) => {}
+});
+view.navigate("contact-map");
+await view.setSelection({ datasetIds: ["s1", "s2"] });
+await view.refresh();   // re-query the provider (e.g. after new results)
+// Cross-page paths: open a page focused on a bin or a region.
+view.focus({ page: "contact-map", contact: { rnaX, rnaY, binSize, selection: { x, y } } });
+view.focus({ page: "region", region: { rna, start, end, partner, partnerStart, partnerEnd } });
+view.destroy();
+~~~
+
+With `onRequestFold`, Contact Map, Region Explorer and Compare offer "Fold this
+region" and hand the region to the host instead of opening the structure page.
+`Hyb2Web.loadProjectFiles()` and `restoreSession()` still work for the current
+desktop build but are deprecated.
+
 ## Privacy model
 
 The page has no analytics, API call, runtime CDN request, or server-side upload path. HYB data and folding inputs are processed in Web Workers and held in tab memory only. ViennaRNA, Pyodide, NumPy, and the CPLfold source archive are served from the same GitHub Pages artifact.

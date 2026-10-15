@@ -2,7 +2,7 @@
 """Strict preflight for a distributable HYB2 native runtime.
 
 This command intentionally rejects development-external-python staging.  It is
-safe to run from CI before invoking Tauri's release build.
+safe to run from CI before building the desktop app (go tool mygo build).
 """
 from __future__ import annotations
 import argparse, hashlib, json, platform, subprocess, sys, re, importlib.util
@@ -22,7 +22,8 @@ def fail(message: str) -> int:
     print("native release preflight: FAILED", file=sys.stderr)
     print(message, file=sys.stderr)
     print("Acquire a verified relocatable CPython 3.11.x distribution for this platform,\n"
-          "install the pinned binary wheels from desktop/runtime/requirements-native.txt,\n"
+          "install the pinned binary wheels from desktop/runtime/requirements-native.txt\n"
+          "and desktop/runtime/requirements-evidence.txt (--require-hashes),\n"
           "then stage it with desktop/scripts/stage-native.py --standalone-python ...\n"
           "--source-id 'URL; sha256=...' .", file=sys.stderr)
     return 2
@@ -99,6 +100,16 @@ def main() -> int:
         details = staging.smoke(root, interpreter, portable=True)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return fail(f"native runtime smoke failed: {error}")
+    if not details.get("viennarna"):
+        return fail("ViennaRNA 2.7.2 is not installed in the bundled Python (needed for pipeline -e 1)")
+    evidence = details.get("evidence")
+    if not evidence:
+        return fail("RNAcentral evidence packages (mcp, rnacentral-mcp-server) are not installed in the bundled Python:\n"
+                    "install desktop/runtime/requirements-evidence.txt with --require-hashes")
+    pins = staging.evidence_pins()
+    if (evidence.get("mcp"), evidence.get("rnacentral-mcp-server")) != (pins["mcp"], pins["rnacentral-mcp-server"]) \
+            or evidence.get("packages") != len(pins) or evidence.get("worker_status") != "passed":
+        return fail(f"evidence runtime does not match requirements-evidence.txt: {evidence}")
     if not details.get("bowtie2"):
         return fail("Bowtie2 is not bundled: stage with --bowtie2 <acquire-bowtie2.py output>")
     print(json.dumps({"ok":True,"resource_root":str(root),"portable":True,"platform":platform.system(),"architecture":expected_arch,"runtime":details,"cplfold":"passed"}, indent=2))

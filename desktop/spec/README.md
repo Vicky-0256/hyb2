@@ -40,6 +40,21 @@ major version should be opened read-only with a clear message. Application
 versions belong under `application.version` and do not change the manifest
 compatibility contract.
 
+### Schema 2.0: references and samples
+
+2.0 adds `references[]` and `samples[]` (one reads file per sample, with
+condition, replicate, reference, `gene_id`, settings, outputs and per-stage
+status `stages.{map,hyb,index}`). Opening a 1.x project adds empty arrays and
+keeps `inputs[]`; the upgrade is written by the next manifest mutation.
+
+Raw files are *linked* by default: the record keeps the absolute path, size,
+mtime and `quick_hash` = sha256(decimal size + `\n` + first 1 MiB + last
+1 MiB). `sha256` stays `null` until the `hash_inputs` operation computes it.
+*Copied* files live under `inputs/` and use project-relative paths. Linked
+files are never required to open a project; `check_inputs` reports each one as
+`ok`, `missing` or `changed`. Sample outputs are written to
+`samples/<sample_id>/`.
+
 ## Safe writer checklist
 
 1. Write a complete manifest to a temporary file and atomically replace

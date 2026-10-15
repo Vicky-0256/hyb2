@@ -147,3 +147,29 @@ Tauri 命令（删除 `task_run` 和 `cplfold_run`）：
 - 新增 `.github/workflows/pipeline-crossplatform.yml`：在 Windows、Linux、macOS 上跑 pipeline 基准测试和 desktop runtime 测试，尚未推送运行。
 - `.gitattributes` 把基准文件和测试数据标为 `-text`，防止 Windows checkout 时转成 CRLF。
 - 遗留：Bowtie2 没有 macOS x86_64 官方版本；`-e 1` 需要的 ViennaRNA 没有打包；`hyb2_compare` 未移植。
+
+## ViennaRNA 与 Rust 端到端测试（2026-10-13）
+
+- Rust 端到端测试：`pipeline_task_runs_real_bridge_end_to_end`
+  - 路径：Rust 任务模型 → 真实 bridge 子进程 → hyb2pipe；
+  - 输出与旧流程逐字节一致，任务完成后会触发结果登记。
+- ViennaRNA 2.7.2 已打包进 native 运行时：
+  - 加入了 requirements 清单；打包时做冒烟测试；缺失时发布校验判为失败；
+  - 运行时检测新增 `pipeline.energy`；
+  - `-e 1` 实测：10411 条 hybrid 都有 dG，每行都是 18 列，耗时约 63 s（单线程）；
+  - 能量结果没有和旧流程的 RNAcofold 对比过（本机没有 RNAcofold），两者用的是同一套 ViennaRNA 默认参数。
+- 浏览器 GUI 走查中修复了 3 个问题：
+  - `Hyb2Web` 启动顺序；
+  - 18 列 sam2hyb 输出的解析；
+  - 嵌入桌面端时的布局，以及资源路径。
+
+## 原生 CPLfold 性能（2026-10-14）
+
+- 原因：inside 动态规划已经用 `@njit` 编译，但次优结构要用的 outside 计算（`BeamCKYParserHyper._outside` 及其打分方法）是纯 Python，占了约 99% 的时间。
+- 修复：把这些方法的源码原样生成为模块级的 `@njit(cache=True)` 函数（不开 fastmath）。设置 `CPLFOLD_PYTHON_OUTSIDE=1` 可以切回原来的 Python 实现，用于对比。
+- 结果：在 28、80、150、300、600 nt 上输出都与原实现逐字节一致；网页版的纯 Python 模式结果也一致；`verify-cplfold-python.py` 通过。
+  - 150 nt：13 s → 约 1 s
+  - 300 nt：62 s → 约 1 s
+  - 600 nt：270 s → 约 1 s
+  - 1000 nt：3 s
+- APP 内的 `cplfold_predict`（600 nt）：0.4 s。安装后第一次运行要做 Numba 编译，约 50 s；之后读磁盘缓存，约 1.6 s。

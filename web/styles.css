@@ -480,6 +480,8 @@ a {
 
 .legacy-workflow-guide li span {
   display: block;
+  /* Without this the description auto-places into the 1.45rem badge column. */
+  grid-column: 2;
   color: var(--muted);
   font-size: .71rem;
 }

@@ -24,6 +24,7 @@ Key Methods:
 Author: Ke Wang
 """
 
+import os
 import sys
 import time
 import numpy as np
@@ -1476,6 +1477,543 @@ def parse_loop_contrafold(
 # Parser class
 # ============================================================================
 
+
+# --- Outside pass compiled with Numba -------------------------------------
+# Generated verbatim from the BeamCKYParserHyper methods of the same names
+# (self removed, list tables replaced by their identical int32 arrays).
+# Without fastmath, so scores are bit-identical to the Python methods.
+
+@njit(cache=True)
+def NUM_TO_PAIR_JIT(x, y):
+    if x == 0:    # A
+        return 5 if y == 3 else 0  # AU
+    elif x == 1:  # C
+        return 1 if y == 2 else 0  # CG
+    elif x == 2:  # G
+        return 2 if y == 1 else (3 if y == 3 else 0)  # GC or GU
+    elif x == 3:  # U
+        return 4 if y == 2 else (6 if y == 0 else 0)  # UG or UA
+    else:
+        return 0
+
+
+@njit(cache=True)
+def _outside_v_single(p, q, i, j, nucs):
+    """Full Vienna single loop score (matching v_score_single numba function).
+
+    Handles stacks, bulges with terminal AU penalties, and all internal loop
+    special cases (int11, int21, int22, mismatch tables).
+    """
+    n = len(nucs)
+    nucp = nucs[p]
+    nucp1 = nucs[p + 1] if p + 1 < n else -1
+    nucq_1 = nucs[q - 1] if q > 0 else -1
+    nucq = nucs[q]
+    nuci_1 = nucs[i - 1] if i > 0 else -1
+    nuci = nucs[i]
+    nucj = nucs[j]
+    nucj1 = nucs[j + 1] if j + 1 < n else -1
+
+    pt1 = NUM_TO_PAIR_JIT(nucp, nucq)  # outer pair type
+    pt2 = NUM_TO_PAIR_JIT(nucj, nuci)  # inner pair type - REVERSED (as in gold standard)
+    n1 = i - p - 1  # left unpaired
+    n2 = q - j - 1  # right unpaired
+
+    if n1 > n2:
+        nl, ns = n1, n2
+    else:
+        nl, ns = n2, n1
+
+    # Stack - return -energy (score convention, same as -v_score_single in gold standard)
+    if nl == 0:
+        return -_v_stack[pt1][pt2]
+
+    # Bulge
+    if ns == 0:
+        if nl <= 30:
+            energy = _v_bulge[nl]
+        else:
+            energy = _v_bulge[30] + int(107.856 * np.log(nl / 30.0))
+        if nl == 1:
+            energy += _v_stack[pt1][pt2]
+        else:
+            if pt1 > 2:  # Not CG or GC
+                energy += _v_terminalAU
+            if pt2 > 2:
+                energy += _v_terminalAU
+        return -energy
+
+    # Internal loop - get Vienna nucleotide indices
+    si1 = _nuc_table[nucp1] if nucp1 >= 0 and nucp1 <= 4 else -1
+    sj1 = _nuc_table[nucq_1] if nucq_1 >= 0 and nucq_1 <= 4 else -1
+    sp1 = _nuc_table[nuci_1] if nuci_1 >= 0 and nuci_1 <= 4 else -1
+    sq1 = _nuc_table[nucj1] if nucj1 >= 0 and nucj1 <= 4 else -1
+
+    # 1x1 internal loop
+    if ns == 1 and nl == 1:
+        if si1 >= 0 and sj1 >= 0:
+            return -_v_int11[pt1][pt2][si1][sj1]
+        return 0
+
+    # 1x2 or 2x1 internal loop
+    if ns == 1 and nl == 2:
+        if n1 == 1:
+            if si1 >= 0 and sq1 >= 0 and sj1 >= 0:
+                return -_v_int21[pt1][pt2][si1][sq1][sj1]
+        else:
+            if sq1 >= 0 and si1 >= 0 and sp1 >= 0:
+                return -_v_int21[pt2][pt1][sq1][si1][sp1]
+        return 0
+
+    # 2x2 internal loop
+    if ns == 2 and nl == 2:
+        if si1 >= 0 and sp1 >= 0 and sq1 >= 0 and sj1 >= 0:
+            return -_v_int22[pt1][pt2][si1][sp1][sq1][sj1]
+        return 0
+
+    # General internal loop with mismatch energies
+    # 1xn internal loop (n > 2)
+    if ns == 1:
+        u = nl + 1
+        if u <= 30:
+            energy = _v_internal[u]
+        else:
+            energy = _v_internal[30] + int(107.856 * np.log(u / 30.0))
+        energy += min(_v_max_ninio, (nl - ns) * _v_ninio)
+        if si1 >= 0 and sj1 >= 0:
+            energy += _v_mismatch1nI[pt1][si1][sj1]
+        if sq1 >= 0 and sp1 >= 0:
+            energy += _v_mismatch1nI[pt2][sq1][sp1]
+        return -energy
+
+    # 2x3 internal loop (special case)
+    if ns == 2 and nl == 3:
+        energy = _v_internal[5] + _v_ninio
+        if si1 >= 0 and sj1 >= 0:
+            energy += _v_mismatch23I[pt1][si1][sj1]
+        if sq1 >= 0 and sp1 >= 0:
+            energy += _v_mismatch23I[pt2][sq1][sp1]
+        return -energy
+
+    # General internal loop
+    u = nl + ns
+    if u <= 30:
+        energy = _v_internal[u]
+    else:
+        energy = _v_internal[30] + int(107.856 * np.log(u / 30.0))
+    energy += min(_v_max_ninio, (nl - ns) * _v_ninio)
+    if si1 >= 0 and sj1 >= 0:
+        energy += _v_mismatchI[pt1][si1][sj1]
+    if sq1 >= 0 and sp1 >= 0:
+        energy += _v_mismatchI[pt2][sq1][sp1]
+    return -energy
+
+
+@njit(cache=True)
+def _outside_c_helix(nucp, nucp1, nucq_1, nucq):
+    """CONTRAfold helix score."""
+    return (_base_pair[nucp * NOTON + nucq] +
+            _helix_stacking[nucp * NOTONT + nucp1 * NOTOND + nucq_1 * NOTON + nucq])
+
+
+@njit(cache=True)
+def _outside_c_single(p, q, i, j, nucs):
+    """CONTRAfold single loop score."""
+    l1 = i - p - 1
+    l2 = q - j - 1
+    len_total = l1 + l2
+
+    score = _base_pair[nucs[p] * NOTON + nucs[q]]
+
+    if l1 == 0 and l2 == 0:
+        # Stack
+        score += _helix_stacking[nucs[p] * NOTONT + nucs[i] * NOTOND + nucs[j] * NOTON + nucs[q]]
+    else:
+        score += _internal_length[min(len_total, 30)]
+        if l1 == l2:
+            score += _internal_symmetric_length[min(l1, 15)]
+        score += _internal_asymmetry[min(abs(l1 - l2), 28)]
+
+    return score
+
+
+@njit(cache=True)
+def _outside_c_m1(i, j, nuci_1, nuci, nucj, nucj1, n):
+    """CONTRAfold M1 score."""
+    score = _multi_paired
+    if nuci_1 >= 0:
+        score += _dangle_left[nuci_1 * NOTOND + nuci * NOTON + nucj]
+    if nucj1 >= 0 and j + 1 < n:
+        score += _dangle_right[nuci * NOTOND + nucj * NOTON + nucj1]
+    return score
+
+
+@njit(cache=True)
+def _outside_v_m1(i, j, nucs, n):
+    """Vienna M1 score (matching gold standard E_MLstem).
+
+    Uses _v_mismatchM when both neighbors are present.
+    Uses dangles when only one neighbor is present (matching gold standard).
+    Note: Uses Vienna nucleotide indices (1-4) for mismatch/dangle lookups.
+    """
+    nuci = nucs[i]
+    nucj = nucs[j]
+    type_ij = NUM_TO_PAIR_JIT(nuci, nucj)
+
+    score = 0
+    nuci_1 = nucs[i - 1] if i > 0 else -1
+    nucj1 = nucs[j + 1] if j + 1 < n else -1
+
+    # Convert to Vienna nucleotide indices for mismatch/dangle lookups
+    si1 = _nuc_table[nuci_1] if nuci_1 >= 0 and nuci_1 <= 4 else -1
+    sj1 = _nuc_table[nucj1] if nucj1 >= 0 and nucj1 <= 4 else -1
+
+    # Use mismatchM when both neighbors present, otherwise use dangles
+    if si1 >= 0 and sj1 >= 0:
+        score += _v_mismatchM[type_ij][si1][sj1]
+    elif si1 >= 0:
+        score += _v_dangle5[type_ij][si1]
+    elif sj1 >= 0:
+        score += _v_dangle3[type_ij][sj1]
+
+    if type_ij > 2:  # Not CG or GC
+        score += _v_terminalAU
+
+    score += _v_ml_intern
+
+    return -score
+
+
+@njit(cache=True)
+def _outside_c_external(i, j, nuci_1, nuci, nucj, nucj1, n):
+    """CONTRAfold external paired score."""
+    score = _external_paired
+    if nuci_1 >= 0:
+        score += _dangle_left[nuci_1 * NOTOND + nuci * NOTON + nucj]
+    if nucj1 >= 0 and j + 1 < n:
+        score += _dangle_right[nuci * NOTOND + nucj * NOTON + nucj1]
+    return score
+
+
+@njit(cache=True)
+def _outside_v_external(i, j, nucs, n):
+    """Vienna external paired score.
+
+    Uses _v_mismatchExt when both neighbors are present (matching C behavior),
+    otherwise uses dangle5 or dangle3.
+    Note: Uses Vienna nucleotide indices (1-4) for mismatch/dangle lookups.
+    """
+    nuci = nucs[i]
+    nucj = nucs[j]
+    type_ij = NUM_TO_PAIR_JIT(nuci, nucj)
+
+    score = 0
+    if type_ij > 2:  # Not CG or GC
+        score += _v_terminalAU
+
+    nuci_1 = nucs[i - 1] if i > 0 else -1
+    nucj1 = nucs[j + 1] if j + 1 < n else -1
+
+    # Convert to Vienna nucleotide indices for mismatch/dangle lookups
+    si1 = _nuc_table[nuci_1] if nuci_1 >= 0 and nuci_1 <= 4 else -1
+    sj1 = _nuc_table[nucj1] if nucj1 >= 0 and nucj1 <= 4 else -1
+
+    # Use mismatchExt when both neighbors present, otherwise dangle (matching C code)
+    if si1 >= 0 and sj1 >= 0:
+        score += _v_mismatchExt[type_ij][si1][sj1]
+    elif si1 >= 0:
+        score += _v_dangle5[type_ij][si1]
+    elif sj1 >= 0:
+        score += _v_dangle3[type_ij][sj1]
+
+    return -score
+
+
+@njit(cache=True)
+def _outside_c_multi(i, j, nuci, nuci1, nucj_1, nucj, n):
+    """CONTRAfold multi score."""
+    return _multi_base + _multi_paired
+
+
+@njit(cache=True)
+def _outside_v_multi(i, j, nucs, n):
+    """Vienna multi score (matching gold standard v_score_multi).
+
+    For multi-loop closing pair, the pair type is REVERSED: (nucj, nuci).
+    Uses E_MLstem logic with reversed flanking nucleotides (nucj_1, nuci1).
+    Uses dangles when only one neighbor is present (matching gold standard).
+    Note: Uses Vienna nucleotide indices (1-4) for mismatch/dangle lookups.
+    """
+    nuci = nucs[i]
+    nucj = nucs[j]
+    nuci1 = nucs[i + 1] if i + 1 < n else -1
+    nucj_1 = nucs[j - 1] if j > 0 else -1
+
+    # CRITICAL: For multi-loop closing, the pair type is REVERSED!
+    type_ji = NUM_TO_PAIR_JIT(nucj, nuci)
+
+    # Convert to Vienna nucleotide indices for mismatch/dangle lookups
+    # Note: si1=nucj_1, sj1=nuci1 (reversed order for closing pair)
+    si1 = _nuc_table[nucj_1] if nucj_1 >= 0 and nucj_1 <= 4 else -1
+    sj1 = _nuc_table[nuci1] if nuci1 >= 0 and nuci1 <= 4 else -1
+
+    # E_MLstem logic with reversed flanking nucleotides
+    score = 0
+    if si1 >= 0 and sj1 >= 0:
+        score += _v_mismatchM[type_ji][si1][sj1]
+    elif si1 >= 0:
+        score += _v_dangle5[type_ji][si1]
+    elif sj1 >= 0:
+        score += _v_dangle3[type_ji][sj1]
+
+    if type_ji > 2:  # Not CG or GC
+        score += _v_terminalAU
+
+    score += _v_ml_intern
+    score += _v_ml_closing
+
+    return -score
+
+
+@njit(cache=True)
+def _outside_kernel(n, nucs, next_pair, lv,
+             scores, manners, splits, l1s, l2s,
+             c_scores, c_manners, c_splits,
+             beta_scores, beta_manners, beta_splits, beta_l1s, beta_l2s,
+             beta_c_scores, beta_c_manners, beta_c_splits):
+    """
+    Outside pass: compute beta scores for suboptimal structures.
+    Iterates backwards from j = n-1 to 0.
+    """
+    n2 = n * n
+
+    # Initialize: beta[C][n-1] = 0
+    beta_c_scores[n - 1] = 0.0
+    beta_c_manners[n - 1] = MANNER_NONE
+
+    for j in range(n - 1, -1, -1):
+        nucj = nucs[j]
+        nucj1 = nucs[j + 1] if j + 1 < n else -1
+
+        # C beam: C[j] <- C[j+1]
+        if j < n - 1:
+            if beta_c_manners[j + 1] != MANNER_NONE or beta_c_scores[j + 1] > VALUE_MIN_FLOAT + 1e10:
+                newscore = beta_c_scores[j + 1]
+                if not lv:
+                    newscore += _external_unpaired
+                if newscore > beta_c_scores[j]:
+                    beta_c_scores[j] = newscore
+                    beta_c_manners[j] = MANNER_C_eq_C_plus_U
+
+        if j == 0:
+            break
+
+        # M beam
+        for i in range(j):
+            idx_m = STATE_M * n2 + j * n + i
+            if manners[idx_m] == MANNER_NONE:
+                continue
+
+            # M[i,j] <- M[i,j+1]
+            if j < n - 1:
+                idx_m_next = STATE_M * n2 + (j + 1) * n + i
+                if beta_manners[idx_m_next] != MANNER_NONE:
+                    newscore = beta_scores[idx_m_next]
+                    if not lv:
+                        newscore += _multi_unpaired
+                    if newscore > beta_scores[idx_m]:
+                        beta_scores[idx_m] = newscore
+                        beta_manners[idx_m] = MANNER_M_eq_M_plus_U
+
+        # M2 beam
+        for i in range(j):
+            idx_m2 = STATE_M2 * n2 + j * n + i
+            if manners[idx_m2] == MANNER_NONE:
+                continue
+
+            # M2[i,j] <- Multi[p,q] through MANNER_MULTI
+            for p in range(max(0, i - SINGLE_MAX_LEN), i):
+                nucp = nucs[p]
+                q = next_pair[nucp, j]
+                if q != -1 and (i - p - 1) <= SINGLE_MAX_LEN:
+                    idx_multi = STATE_MULTI * n2 + q * n + p
+                    if beta_manners[idx_multi] != MANNER_NONE:
+                        newscore = beta_scores[idx_multi]
+                        if not lv:
+                            newscore += _multi_unpaired * ((i - p - 1) + (q - j - 1))
+                        if newscore > beta_scores[idx_m2]:
+                            beta_scores[idx_m2] = newscore
+                            beta_manners[idx_m2] = MANNER_MULTI
+                            beta_l1s[idx_m2] = i - p
+                            beta_l2s[idx_m2] = q - j
+
+            # M2 <- M (M_eq_M2)
+            idx_m = STATE_M * n2 + j * n + i
+            if beta_manners[idx_m] != MANNER_NONE:
+                if beta_scores[idx_m] > beta_scores[idx_m2]:
+                    beta_scores[idx_m2] = beta_scores[idx_m]
+                    beta_manners[idx_m2] = MANNER_M_eq_M2
+
+        # P beam
+        for i in range(j):
+            idx_p = STATE_P * n2 + j * n + i
+            if manners[idx_p] == MANNER_NONE:
+                continue
+
+            nuci = nucs[i]
+            nuci_1 = nucs[i - 1] if i > 0 else -1
+
+            if i > 0 and j < n - 1:
+                # P[i,j] <- P[p,q] through SINGLE/HELIX
+                for p in range(max(0, i - SINGLE_MAX_LEN), i):
+                    nucp = nucs[p]
+                    nucp1 = nucs[p + 1]
+                    q = next_pair[nucp, j]
+
+                    while q != -1 and (i - p) + (q - j) - 2 <= SINGLE_MAX_LEN:
+                        nucq = nucs[q]
+                        nucq_1 = nucs[q - 1]
+                        idx_pq = STATE_P * n2 + q * n + p
+
+                        if beta_manners[idx_pq] != MANNER_NONE:
+                            if p == i - 1 and q == j + 1:
+                                # Helix extension
+                                if lv:
+                                    score_ext = _outside_v_single(p, q, i, j, nucs)
+                                else:
+                                    score_ext = _outside_c_helix(nucp, nucp1, nucq_1, nucq)
+                                newscore = beta_scores[idx_pq] + score_ext
+                                if newscore > beta_scores[idx_p]:
+                                    beta_scores[idx_p] = newscore
+                                    beta_manners[idx_p] = MANNER_HELIX
+                                    beta_l1s[idx_p] = 1
+                                    beta_l2s[idx_p] = 1
+                            else:
+                                # Single loop (bulge/internal)
+                                if lv:
+                                    score_ext = _outside_v_single(p, q, i, j, nucs)
+                                else:
+                                    score_ext = _outside_c_single(p, q, i, j, nucs)
+                                newscore = beta_scores[idx_pq] + score_ext
+                                if newscore > beta_scores[idx_p]:
+                                    beta_scores[idx_p] = newscore
+                                    beta_manners[idx_p] = MANNER_SINGLE
+                                    beta_l1s[idx_p] = i - p
+                                    beta_l2s[idx_p] = q - j
+
+                        q = next_pair[nucp, q]
+
+            # P <- M (M_eq_P)
+            idx_m = STATE_M * n2 + j * n + i
+            if i > 0 and j < n - 1 and beta_manners[idx_m] != MANNER_NONE:
+                if lv:
+                    score_m1 = _outside_v_m1(i, j, nucs, n)
+                else:
+                    score_m1 = _outside_c_m1(i, j, nuci_1, nuci, nucj, nucj1, n)
+                newscore = beta_scores[idx_m] + score_m1
+                if newscore > beta_scores[idx_p]:
+                    beta_scores[idx_p] = newscore
+                    beta_manners[idx_p] = MANNER_M_eq_P
+
+            # P contributes to M2 = M + P
+            k = i - 1
+            if k > 0:
+                if lv:
+                    m1_score = _outside_v_m1(i, j, nucs, n)
+                else:
+                    m1_score = _outside_c_m1(i, j, nuci_1, nuci, nucj, nucj1, n)
+
+                for newi in range(k):
+                    idx_m_ki = STATE_M * n2 + k * n + newi
+                    if manners[idx_m_ki] == MANNER_NONE:
+                        continue
+
+                    idx_m2_ji = STATE_M2 * n2 + j * n + newi
+                    if beta_manners[idx_m2_ji] != MANNER_NONE:
+                        # Update M[newi, k]
+                        m_alpha = scores[idx_m_ki]
+                        newscore = beta_scores[idx_m2_ji] + scores[idx_p] + m1_score
+                        if newscore > beta_scores[idx_m_ki]:
+                            beta_scores[idx_m_ki] = newscore
+                            beta_manners[idx_m_ki] = MANNER_M2_eq_M_plus_P
+                            beta_splits[idx_m_ki] = j
+
+                        # Update P[i, j]
+                        newscore2 = beta_scores[idx_m2_ji] + m_alpha + m1_score
+                        if newscore2 > beta_scores[idx_p]:
+                            beta_scores[idx_p] = newscore2
+                            beta_manners[idx_p] = MANNER_M2_eq_M_plus_P
+                            beta_splits[idx_p] = newi
+
+            # P <- C (C_eq_C_plus_P)
+            k = i - 1
+            if k >= 0:
+                if lv:
+                    ext_score = _outside_v_external(k + 1, j, nucs, n)
+                else:
+                    ext_score = _outside_c_external(k + 1, j, nuci_1, nuci, nucj, nucj1, n)
+
+                newscore = beta_c_scores[j] + ext_score
+
+                # Update C[k] - no conditional check (gold standard doesn't have one)
+                c_newscore = scores[idx_p] + newscore
+                if c_newscore > beta_c_scores[k]:
+                    beta_c_scores[k] = c_newscore
+                    beta_c_manners[k] = MANNER_C_eq_C_plus_P
+                    beta_c_splits[k] = j  # Store P's end position
+
+                # Update P[i, j]
+                p_newscore = c_scores[k] + newscore
+                if p_newscore > beta_scores[idx_p]:
+                    beta_scores[idx_p] = p_newscore
+                    beta_manners[idx_p] = MANNER_C_eq_C_plus_P
+                    beta_splits[idx_p] = -1
+            elif i == 0:
+                if lv:
+                    ext_score = _outside_v_external(0, j, nucs, n)
+                else:
+                    ext_score = _outside_c_external(0, j, -1, nuci, nucj, nucj1, n)
+                newscore = beta_c_scores[j] + ext_score
+                if newscore > beta_scores[idx_p]:
+                    beta_scores[idx_p] = newscore
+                    beta_manners[idx_p] = MANNER_C_eq_C_plus_P
+                    beta_splits[idx_p] = -1
+
+        # Multi beam
+        for i in range(j):
+            idx_multi = STATE_MULTI * n2 + j * n + i
+            if manners[idx_multi] == MANNER_NONE:
+                continue
+
+            nuci = nucs[i]
+            nuci1 = nucs[i + 1]
+            jnext = next_pair[nuci, j]
+
+            # Multi[i,j] <- Multi[i, jnext]
+            if jnext != -1:
+                idx_multi_next = STATE_MULTI * n2 + jnext * n + i
+                if beta_manners[idx_multi_next] != MANNER_NONE:
+                    newscore = beta_scores[idx_multi_next]
+                    if not lv:
+                        newscore += _multi_unpaired * (jnext - j - 1)
+                    if newscore > beta_scores[idx_multi]:
+                        beta_scores[idx_multi] = newscore
+                        beta_manners[idx_multi] = MANNER_MULTI_eq_MULTI_plus_U
+                        beta_splits[idx_multi] = jnext - j
+
+            # Multi <- P (P_eq_MULTI)
+            idx_p = STATE_P * n2 + j * n + i
+            if beta_manners[idx_p] != MANNER_NONE:
+                if lv:
+                    score_multi = _outside_v_multi(i, j, nucs, n)
+                else:
+                    score_multi = _outside_c_multi(i, j, nuci, nuci1, nucs[j - 1], nucj, n)
+                newscore = beta_scores[idx_p] + score_multi
+                if newscore > beta_scores[idx_multi]:
+                    beta_scores[idx_multi] = newscore
+                    beta_manners[idx_multi] = MANNER_P_eq_MULTI
+
+
 class BeamCKYParserHyper:
     """Ultra-optimized BeamCKY parser with flat arrays and PARIS bonus support."""
 
@@ -2784,7 +3322,13 @@ class BeamCKYParserHyper:
         result.reverse()
         return ''.join(result)
 
-    def _outside(self, n, nucs, next_pair, lv,
+    def _outside(self, n, nucs, next_pair, lv, *arrays):
+        """Outside pass (compiled; see _outside_kernel)."""
+        if os.environ.get("CPLFOLD_PYTHON_OUTSIDE") == "1":
+            return self._outside_python(n, nucs, next_pair, lv, *arrays)
+        return _outside_kernel(n, nucs, next_pair, lv, *arrays)
+
+    def _outside_python(self, n, nucs, next_pair, lv,
                  scores, manners, splits, l1s, l2s,
                  c_scores, c_manners, c_splits,
                  beta_scores, beta_manners, beta_splits, beta_l1s, beta_l2s,

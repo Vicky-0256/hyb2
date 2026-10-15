@@ -1,135 +1,117 @@
-# HYB2 Desktop shell
+# HYB2 Desktop
 
-This directory contains the independent Tauri 2 desktop product. It has its
-own `ui/` entry and navigation, project lifecycle, capability detection and
-native task bridge. The desktop release is not a remote web wrapper: it remains
-usable offline and can add native-only workflows without changing the web
-deployment. Analysis views can consume the shared data contracts separately.
+The desktop product: one local project, from raw chimeric reads to RNA
+structure. It is a Go program using [MyGo](https://mygo.egoist.dev) native UI
+(no webview, no cgo) over a bundled Python runtime. It works offline and does
+not share code with the web deployment (`web/`) beyond the Python analysis
+packages and the project format.
+
+| Directory | Contents |
+|---|---|
+| `app/` | The application (Go module `hyb2desktop`): `core/` runtime link, task scheduler, preferences; `views/` the native pages; `widgets/` heatmap, arc and profile widgets; `model/` typed project data |
+| `runtime/` | `bridge.py`, the Python process boundary (project, samples, analysis queries, `compare_run`, `structure_run`) and its tests |
+| `resources/native/` | The staged runtime (CPython 3.11 + numpy/numba/ViennaRNA, Bowtie2, the Python sources), made by `scripts/stage-native.py`; not in git |
+| `scripts/` | Runtime acquisition, staging and release verification |
+| `spec/` | Project, task, capability and result schemas (`PROTOCOL.md`) |
+| `task-runner/` | The structured child-process contract used by the bridge |
+
+See `../MYGO_DESKTOP_PLAN.md` for the migration from the former Tauri shell and
+`../RAWDATA_APP_PLAN.md` for the product plan.
 
 ## Prerequisites
 
-- Rust stable with the Tauri platform prerequisites installed
-- Node.js 18 or newer and npm
-- Python 3 for the development static server
+- Go 1.27 or newer. MyGo itself is pinned in `app/go.mod` and its CLI runs as
+  `go tool mygo`.
+- For running against real data: the staged runtime in `resources/native/`
+  (see below). Development builds fall back to it automatically.
 
-On Windows, install the Microsoft C++ Build Tools and WebView2 runtime. On
-Linux, install the GTK/WebKitGTK development packages required by Tauri 2. See
-the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) page for
-platform-specific packages.
+Native UI needs nothing else on macOS and Windows; on Linux it needs GTK 3.
 
-## Run the desktop shell
-
-From this directory:
+## Run and build
 
 ```bash
-npm install
-npm run dev
+cd desktop/app
+go tool mygo dev                      # development app with live reload
+go tool mygo build -skip-dmg          # build/darwin-arm64/HYB2 Desktop.app
+go tool mygo build -platform windows/amd64,linux/amd64
 ```
 
-`npm run dev` stages the frontend and starts a static server bound to
-`127.0.0.1:4173`, then opens the independent desktop entry. The static server
-is used only for development; production embeds `desktop/dist` through
-`frontendDist`. Run `npm run stage` after changing frontend files during development.
-
-## Build the desktop app
+The runtime ships as one archive per platform,
+`app/resources/<platform>/native.tar.gz` with its `.sha256` (not in git),
+because MyGo leaves hidden files out of resources and the runtime needs some
+(`numpy/.dylibs`, `numpy/.libs`). The app unpacks it on first launch into its
+cache directory (`runtime/runtime-<sha>/native`, a few seconds) and reuses it
+afterwards. Stage and pack it with:
 
 ```bash
-npm run build
+python3 desktop/scripts/stage-native.py --standalone-python <cpython> \
+  --bowtie2 <bowtie2 dir> --source-id "<source id>" --output <empty dir>
+python3 desktop/scripts/verify-native-release.py
+python3 desktop/scripts/pack-runtime.py --platform darwin-arm64   # or windows-amd64, linux-amd64
 ```
 
-This builds the native application bundle under
-`src-tauri/target/release/bundle/` without requiring a disk-image tool. To
-build platform installers as well, run `npm run build:installers` on the target
-operating system. The first shell milestone does not package
-Bowtie2, R, ViennaRNA, VARNA, or other native analysis runtimes; those will be
-connected through the desktop adapter and task runner in later milestones.
+In development builds `HYB2_REPOSITORY_ROOT` / `HYB2_PYTHON` select another
+runtime; packaged builds ignore them.
 
-## Configuration notes
+## How it works
 
-- `src-tauri/tauri.conf.json` resolves `frontendDist: "../dist"` relative to
-  its directory. Build and dev hooks stage the desktop entry and shared web assets.
-- `beforeDevCommand` runs `npm run dev:frontend` from `desktop/`.
-- `csp` is a strict policy; Pyodide/WASM require `'wasm-unsafe-eval'` and
-  `'unsafe-eval'` in `script-src`.
-- `runtime_detect`, `project_create`, and `project_validate` are exposed as
-  structured Tauri commands and call the local JSON bridge without a shell.
+- `core.Runtime` keeps two persistent Python sidecars (`bridge --serve`,
+  newline JSON, contract C1): `control` for project operations and `compute`
+  for analysis queries, so Numba stays warm (`NUMBA_CACHE_DIR` in the app
+  cache).
+- Long jobs (`sample_pipeline`, `analysis_index`, `structure`, `compare`, ...)
+  run as one child process each under `core.Scheduler`: a CPU/memory budget
+  (Preferences), FIFO admission, `runs/<id>/status.json` written by Go,
+  `progress.json` and `result.json` by Python, cancel of the whole process
+  tree, resume from the stored request, and registration in `project.json`
+  when a task ends. Tasks still running at exit become `interrupted`.
+- Samples: one maps at a time with every CPU (a machine-wide map slot,
+  `HYB2_MAP_SLOT`); while it maps, the next sample starts early and
+  prepares its reads on one core (6–15% faster batches on an M1 Pro,
+  `TestOverlapBenchmark`).
+- Time estimates (`core/perf.go`): every finished sample adds its active
+  time to `performance.json` beside the preferences; the Run dialog shows
+  the expected time of a batch and the task drawer the time left, from
+  this computer's speed (a built-in rate until the first sample is done).
+  Structure folds likewise: the New fold form shows the expected time and
+  memory (time ~ length^1.7 x beam), folds that compiled the Numba kernels
+  (the first after an install, ~1 min) are not recorded as speed.
+- Project and analysis operations are allowlisted in `core/service.go`.
+- `project.json` writes are locked and atomic (Python side).
 
-## Development checks
+## Pages
 
-Run the dependency-free runtime and task-runner checks from the repository
-root:
+One project, one navigation; the top bar holds the reference, gene and the
+current selection (a sample, or a condition = its replicates merged), the
+task drawer and Preferences.
+
+1. **Data**: references and samples; import a data folder (samples,
+   conditions, replicates and references matched from the file names and
+   reviewed before import), single raw files or a sample sheet (dry-run
+   preview); run/resume pipelines after a disk estimate, check and relink
+   inputs. A new project can name its data folder on the start page.
+2. **QC**: per-sample and merged counts.
+3. **Explore**: contact map, interactions, viewpoint and region, from the
+   per-sample SQLite indexes.
+4. **Compare**: the DESeq2 differential test (numpy port, validated against
+   R) and the CPM quick view; Locate, Region and Fold A & B.
+5. **Structure**: CPLfold genome and window folds with chimera evidence, and
+   the arc viewer comparing two structures.
+6. **Report**: the project summary and its HTML export.
+
+## Checks
 
 ```bash
+cd desktop/app
+CGO_ENABLED=0 go test ./... && go vet ./... && go tool mygo vet . && gofmt -l .
+HYB2_SNAPSHOT_DIR=/tmp/snap CGO_ENABLED=0 go test ./views/   # PNG snapshots of the pages
+HYB2_E2E_SHEET=<samples.tsv> CGO_ENABLED=0 go test -tags e2e -run TestEndToEnd -timeout 60m -v .
+
+cd ../..
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s desktop/runtime/tests -p 'test_*.py'
-python3 -m unittest discover -s desktop/task-runner -p 'test_*.py'
-python3 -m desktop.runtime.detector --repo-root . --pretty
 ```
 
-The runtime detector reports a capability matrix for the first-launch screen.
-The task-runner prototype defines the structured process contract that will be
-exposed through Tauri IPC once native commands are added.
-
-## Independent desktop bridge
-
-`runtime/bridge.py` is the process boundary for the desktop product. It is
-independent from the web deployment and accepts one JSON request per
-invocation:
-
-```bash
-python3 -m desktop.runtime.bridge <<'JSON'
-{"operation":"detect","repo_root":"."}
-JSON
-python3 -m desktop.runtime.bridge <<'JSON'
-{"operation":"create_project","path":"/tmp/demo.hyb2proj","name":"Demo"}
-JSON
-```
-
-Supported operations are `detect`, `create_project`, `validate_project`, and
-the allowlisted `run_task` validation job. A task writes its structured event
-log under the project's `runs/<task-id>/events.jsonl`; the desktop Task Center
-renders queued, running, log, succeeded, and failed states. The current safe
-job validates project references; analysis engine jobs will be added only when
-their native assets and execution bridges are available.
-Project creation makes portable `inputs/`, `runs/`, and `exports/` directories;
-it does not claim that Python, NumPy, Numba, or CPLfold are bundled. Those
-capabilities are advertised only after the detector finds them.
-
-## Local analysis integration
-
-`scripts/stage-frontend.cjs` copies the independent desktop navigation to
-`dist/` and the web product to `dist/analysis/`, preserving relative Worker,
-stylesheet and example-file paths. It never modifies the web deployment.
-Analysis is loaded directly into the desktop document as an integrated
-workspace. It is not an iframe and does not load a remote website. The shared
-asset base keeps workers, ViennaRNA, Pyodide and example files inside the
-bundled desktop resources.
-
-Staging writes `asset-status.json` and `asset-status.js`. The Analysis section
-reports missing ViennaRNA or Pyodide/NumPy/CPLfold runtime files. Presence is
-not proof of successful engine startup; native folding flags remain disabled.
-HYB import and data visualizations work without those optional folding assets.
-
-Project Home supports create, open and validate through native folder pickers
-(paths remain editable), a recent-projects list, and file import through a
-native file dialog (`project_import_input_dialog`; the UI can no longer pass an
-arbitrary source path). Opening a project grants the asset protocol access to
-its `inputs/` and `runs/` folders so large inputs are read with `fetch` instead
-of being piped through JSON IPC.
-
-## Architecture after the 2026-10 fixes
-
-See `../DESKTOP_FIX_PLAN.md` for the full contracts.
-
-- Rust keeps two persistent Python sidecars (`bridge --serve`): `control` for
-  project/runtime operations and `compute` for `cplfold_predict`, so the Numba
-  JIT stays warm (`NUMBA_CACHE_DIR` is the app cache dir).
-- Long jobs use one task API: `task_start` (`kind`: `validate_project` or
-  `cplfold`), `task_status`, `task_cancel`, `task_list`. Rust is the only writer
-  of `runs/<id>/status.json`; children write `result.json`; finished tasks are
-  registered in `project.json`. Tasks left running at exit are `interrupted`.
-- `project.json` writes are locked (`project.json.lock`) and atomic.
-- `ui_state` is `{desktop: {route}, analysis: {...}}`.
-- A strict CSP is set in `tauri.conf.json`; `HYB2_REPOSITORY_ROOT` /
-  `HYB2_PYTHON` are honoured in debug builds only.
-- Native CPLfold limit: `HYB2_CPLFOLD_MAX_NT` (default 1000); the browser path
-  keeps its 500 nt ceiling.
+The view tests run headless (`ui.NewTester`) against a fake backend with
+fixtures captured from a real project; `integration_test.go` and the e2e test
+drive the views against the real core and bridge. CI runs all of this on
+Windows, Linux and macOS (`.github/workflows/desktop-native.yml`).

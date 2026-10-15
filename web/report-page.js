@@ -59,73 +59,35 @@
     const source = state || {};
     const reportState = Object.assign({}, source);
     reportState.summary = source.summary || {};
-    reportState.records = Array.isArray(source.records) ? source.records : [];
     reportState.filters = Object.assign({}, source.filters || {});
     ["contact", "viewpoint", "region", "comparison", "structure"].forEach(function (key) {
       reportState[key] = source[key] ? Object.assign({}, source[key]) : source[key];
     });
 
-    const data = window.Hyb2Data || {};
+    // Every analysis result below was fetched through the DataProvider by
+    // page-data.js (the report route prefetches each page's data); the report
+    // never reads HYB rows or files itself.
+    const prepared = source.view && source.view.report || null;
     const derived = { contact: false, viewpoint: false, region: false, comparison: false };
 
-    if (reportState.contact && !reportState.contact.matrix && reportState.contact.rnaX && reportState.contact.rnaY && reportState.records.length && typeof data.buildContactMatrix === "function") {
-      try {
-        reportState.contact.matrix = data.buildContactMatrix(reportState.records, reportState.contact);
-        derived.contact = true;
-      } catch (error) {
-        reportState.contact.matrix = { ready: false, reason: "Contact Map could not be prepared for the report snapshot." };
-      }
+    if (reportState.contact && !reportState.contact.matrix && reportState.contact.rnaX && reportState.contact.rnaY) {
+      reportState.contact.matrix = { ready: false, reason: "Contact Map is still being prepared for the report snapshot.", cells: [] };
     }
-
-    if (reportState.viewpoint && !reportState.viewpoint.results && typeof data.getViewpointResults === "function") {
-      try {
-        reportState.viewpoint.results = data.getViewpointResults(reportState);
-        derived.viewpoint = true;
-      } catch (error) {
-        reportState.viewpoint.results = { ready: false, bins: [], records: [], reason: "Viewpoint could not be prepared for the report snapshot." };
-      }
+    if (reportState.viewpoint && !reportState.viewpoint.results) {
+      reportState.viewpoint.results = { ready: false, bins: [], records: [], reason: "Viewpoint is still being prepared for the report snapshot." };
     }
-
-    if (reportState.region && !reportState.region.results && typeof data.getRegionResults === "function") {
-      try {
-        reportState.region.results = data.getRegionResults(reportState);
-        derived.region = true;
-      } catch (error) {
-        reportState.region.results = { records: [], partners: [], profile: [], support: 0, reason: "Region Explorer could not be prepared for the report snapshot." };
-      }
+    if (reportState.region && !reportState.region.results) {
+      reportState.region.results = { records: [], partners: [], profile: [], support: 0, reason: "Region Explorer is still being prepared for the report snapshot." };
     }
-
-    if (reportState.comparison && !reportState.comparison.result && !reportState.comparison.loading && typeof data.buildComparisonResults === "function") {
-      try {
-        reportState.comparison.result = data.buildComparisonResults(reportState.comparison);
-        derived.comparison = true;
-      } catch (error) {
-        reportState.comparison.result = { ready: false, cells: [], conservedCells: [], reason: "Comparison could not be prepared for the report snapshot." };
-      }
-    }
-
-    let filteredRecords = reportState.records;
-    if (typeof data.getFilteredRecords === "function") {
-      try {
-        filteredRecords = data.getFilteredRecords(reportState);
-      } catch (error) {
-        filteredRecords = [];
-      }
-    }
-
-    let partnerCounts = [];
-    if (typeof data.getPartnerCounts === "function") {
-      try {
-        partnerCounts = data.getPartnerCounts(filteredRecords, reportState.filters.rna || "", reportState.filters.countMode || "support");
-      } catch (error) {
-        partnerCounts = [];
-      }
+    if (reportState.comparison && !reportState.comparison.result) {
+      reportState.comparison.result = { ready: false, cells: [], conservedCells: [], reason: reportState.comparison.loading ? "Finish parsing the selected local datasets before generating or exporting a comparison." : "Comparison is still being prepared for the report snapshot." };
     }
 
     return {
       state: reportState,
-      filteredRecords: filteredRecords,
-      partnerCounts: partnerCounts,
+      filteredTotal: prepared ? number(prepared.filteredTotal) : 0,
+      filteredRecords: prepared && Array.isArray(prepared.filteredSample) ? prepared.filteredSample : [],
+      partnerCounts: prepared && Array.isArray(prepared.partnerCounts) ? prepared.partnerCounts : [],
       derived: derived,
       generatedAt: new Date().toISOString()
     };
@@ -138,8 +100,8 @@
       '<header class="report-hero">',
       '  <div class="report-hero-top">',
       '    <div class="report-identity">',
-      '      <span class="report-logo-wrap report-logo-light"><img src="./assets/hyb2-logo.png" alt="HYB2"></span>',
-      '      <span class="report-logo-wrap report-logo-dark"><img src="./assets/hyb2-logo-dark.png" alt="HYB2"></span>',
+      '      <span class="report-logo-wrap report-logo-light"><img src="' + (window.HYB2_ASSET_BASE || "./") + 'assets/hyb2-logo.png" alt="HYB2"></span>',
+      '      <span class="report-logo-wrap report-logo-dark"><img src="' + (window.HYB2_ASSET_BASE || "./") + 'assets/hyb2-logo-dark.png" alt="HYB2"></span>',
       '      <span><span class="report-product">HYB2 Web Lite</span><span class="report-document-label">Consolidated analysis report</span></span>',
       "    </div>",
       '    <div class="report-actions" aria-label="Report actions">',
@@ -163,9 +125,9 @@
     const summary = context.state.summary || {};
     const totalRows = number(summary.validRecords) + number(summary.invalidRecords);
     const validRatio = totalRows ? number(summary.validRecords) / totalRows : 0;
-    const fasta = context.state.fasta;
+    const fasta = context.state.reference;
     const mapped = fasta ? mappedFastaCount(fasta) : 0;
-    const fastaValue = fasta ? formatNumber(fasta.sequences ? fasta.sequences.length : 0) + " sequences" : "Optional / not loaded";
+    const fastaValue = fasta ? formatNumber(referenceSequenceCount(fasta)) + " sequences" : "Optional / not loaded";
     const fastaDetail = fasta ? formatNumber(mapped) + " mapped HYB RNA names" : "Required for reference-based structure";
     return section(
       "summary",
@@ -193,7 +155,7 @@
   function renderSource(context) {
     const state = context.state;
     const summary = state.summary || {};
-    const fasta = state.fasta;
+    const fasta = state.reference;
     const fastaMapped = mappedFastaCount(fasta);
     const sourceHyb = sourceHybMetadata(state);
     const sourceFasta = sourceFastaMetadata(state);
@@ -276,6 +238,7 @@
     const state = context.state;
     const filters = state.filters || {};
     const records = context.filteredRecords || [];
+    const total = number(context.filteredTotal);
     const partners = context.partnerCounts || [];
     const rows = boundedItems(records, MAX_TABLE_ROWS, sortRecords).map(function (record) {
       return [
@@ -302,15 +265,15 @@
       "interactions",
       "Interactions",
       "Filtered record view",
-      '<span class="report-status is-ready">' + formatNumber(records.length) + " matches</span>",
+      '<span class="report-status is-ready">' + formatNumber(total) + " matches</span>",
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Current filters</h3>' + (filterEntries.length ? definitionList(filterEntries) : '<div class="report-empty">No additional filters; all valid records are included.</div>') + '</div>',
         '<div class="report-subsection"><h3>Selected RNA partners</h3>' + (filters.rna && partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">Choose an RNA on the Interactions page to populate partner counts.</div>') + '</div>',
         "</div>",
-        '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Top matching records</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(records.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(records.length) + '</span></div>',
+        '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Top matching records</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(total, MAX_TABLE_ROWS)) + ' of ' + formatNumber(total) + '</span></div>',
         rows.length ? table(["Sequence ID", "RNA pair", "RNA 1 interval", "RNA 2 interval", "Chimera type", "Support", "dG"], rows) : '<div class="report-empty">No records match the current filter state.</div>',
-        records.length > MAX_TABLE_ROWS ? '<p class="report-note">The full filtered table remains available from the Interactions page export.</p>' : "",
+        total > MAX_TABLE_ROWS ? '<p class="report-note">The full filtered table remains available from the Interactions page export.</p>' : "",
         "</div>"
       ].join("")
     );
@@ -632,7 +595,7 @@
         interactions: {
           parameters: jsonSafe(reportState.filters || {}, 3, 50),
           result: {
-            matchingRecords: context.filteredRecords.length,
+            matchingRecords: context.filteredTotal,
             topPartners: jsonSafe(context.partnerCounts.slice(0, 10), 3, 50),
             sampleRecords: jsonSafe(boundedItems(context.filteredRecords, MAX_TABLE_ROWS, sortRecords), 3, 50)
           }
@@ -875,8 +838,9 @@
     };
   }
 
+  // state.reference is DatasetInfo.reference from DataProvider.listDatasets().
   function sourceFastaMetadata(state) {
-    const fasta = state.fasta;
+    const fasta = state.reference;
     if (!fasta) {
       return null;
     }
@@ -885,9 +849,19 @@
       fileSize: fasta.fileSize == null ? null : fasta.fileSize,
       sha256: fasta.sha256 || null,
       sha256Status: fasta.sha256 ? "available" : (fasta.sha256Unavailable ? "unavailable" : "pending"),
-      sequenceCount: Array.isArray(fasta.sequences) ? fasta.sequences.length : 0,
+      sequenceCount: referenceSequenceCount(fasta),
       mappedRnas: mappedFastaCount(fasta)
     };
+  }
+
+  function referenceSequenceCount(reference) {
+    if (!reference) {
+      return 0;
+    }
+    if (Number.isFinite(Number(reference.sequenceCount))) {
+      return Number(reference.sequenceCount);
+    }
+    return Array.isArray(reference.sequences) ? reference.sequences.length : 0;
   }
 
   function comparisonDatasets(comparison) {

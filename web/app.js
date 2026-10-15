@@ -1,7 +1,22 @@
+/*
+ * HYB2 Web application controller.
+ *
+ * Two ways to run it:
+ *   - Website (shell:true, the default auto-mount on #app): landing page,
+ *     uploads, sidebar navigation, hash routing and help pages. Parsed files
+ *     are registered in a BrowserProvider.
+ *   - Embedded (shell:false): window.Hyb2Web.mount(host, { provider,
+ *     shell: false, ... }) renders only the analysis pages; the host owns
+ *     navigation, data selection and cross-page routing. See web/README.md
+ *     ("Embedding the analysis pages") and data-provider.js for the contract.
+ *
+ * Analysis pages read their data exclusively through the DataProvider via
+ * page-data.js; only this shell reads files.
+ */
 (function () {
   "use strict";
 
-  const app = document.getElementById("app");
+  let app = null;
   const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
   const exampleAssets = {
@@ -50,8 +65,24 @@
     toastTimer: null,
     pointerActionPending: false,
     pendingCommittedInputRender: false,
-    pendingSessionSnapshot: null
+    pendingSessionSnapshot: null,
+    // Provider-facing view model (see page-data.js).
+    shell: true,
+    selection: null,
+    datasets: [],
+    reference: null,
+    view: null,
+    canRequestFold: false
   };
+  const PRIMARY_DATASET_ID = "primary";
+  let provider = null;
+  let pageData = null;
+  let mountOptions = {};
+  let renderedPage = null;
+  let dataWaitToken = 0;
+  let mountListeners = Object.create(null);
+  let pendingCalls = [];
+  let dependenciesLoading = null;
 
   const analysisPages = [
     { id: "overview", label: "Overview", shortLabel: "OV" },
@@ -65,45 +96,285 @@
   const reportPage = { id: "report", label: "Report", shortLabel: "RP" };
   const workspacePages = analysisPages.concat([reportPage]);
 
-  app.addEventListener("pointerdown", handlePointerDown);
-  app.addEventListener("click", handleClick);
-  app.addEventListener("click", finishPointerAction);
-  app.addEventListener("pointercancel", finishPointerAction);
-  app.addEventListener("input", handleInput);
-  app.addEventListener("change", handleChange);
-  app.addEventListener("keydown", handleKeydown);
-  app.addEventListener("dragover", handleDragOver);
-  app.addEventListener("dragleave", handleDragLeave);
-  app.addEventListener("drop", handleDrop);
-  window.addEventListener("hashchange", handleHashChange);
+  const hostEvents = [
+    ["pointerdown", handlePointerDown],
+    ["click", handleClick],
+    ["click", finishPointerAction],
+    ["pointercancel", finishPointerAction],
+    ["input", handleInput],
+    ["change", handleChange],
+    ["keydown", handleKeydown],
+    ["dragover", handleDragOver],
+    ["dragleave", handleDragLeave],
+    ["drop", handleDrop]
+  ];
 
-  syncRoute();
-  render();
+  // ---- Mounting -----------------------------------------------------------
+
+  // data-provider.js and page-data.js are listed in index.html. Hosts that
+  // load an older fixed script list (the current desktop shell) get them
+  // fetched here before the first mount.
+  function dependenciesReady() {
+    return !!(window.Hyb2Provider && window.Hyb2PageData);
+  }
+
+  function loadDependencies() {
+    if (dependenciesReady()) {
+      return Promise.resolve();
+    }
+    if (dependenciesLoading) {
+      return dependenciesLoading;
+    }
+    const base = window.HYB2_ASSET_BASE || "./";
+    const files = [];
+    if (!window.Hyb2Provider) files.push("data-provider.js");
+    if (!window.Hyb2PageData) files.push("page-data.js");
+    dependenciesLoading = files.reduce(function (chain, file) {
+      return chain.then(function () {
+        return new Promise(function (resolve, reject) {
+          const script = document.createElement("script");
+          script.src = base + file;
+          script.onload = resolve;
+          script.onerror = function () { reject(new Error("Could not load " + file)); };
+          document.head.appendChild(script);
+        });
+      });
+    }, Promise.resolve());
+    return dependenciesLoading;
+  }
+
+  function whenMounted(callback) {
+    if (app && pageData) {
+      return callback();
+    }
+    pendingCalls.push(callback);
+    return undefined;
+  }
+
+  function flushPendingCalls() {
+    const calls = pendingCalls;
+    pendingCalls = [];
+    calls.forEach(function (callback) { callback(); });
+  }
+
+  function emit(name, detail) {
+    const handlerName = "on" + name.charAt(0).toUpperCase() + name.slice(1);
+    if (typeof mountOptions[handlerName] === "function") {
+      try {
+        mountOptions[handlerName](detail);
+      } catch (error) {
+        if (window.console) window.console.error(error);
+      }
+    }
+    (mountListeners[name] || []).slice().forEach(function (listener) {
+      try {
+        listener(detail);
+      } catch (error) {
+        if (window.console) window.console.error(error);
+      }
+    });
+  }
+
+  function unmount() {
+    if (!app) {
+      return;
+    }
+    terminateWorker();
+    cancelComparisonLoads();
+    hostEvents.forEach(function (entry) { app.removeEventListener(entry[0], entry[1]); });
+    window.removeEventListener("hashchange", handleHashChange);
+    if (pageData) {
+      pageData.destroy();
+    }
+    app.innerHTML = "";
+    app.classList.remove("hyb2-embedded", "is-refreshing-data");
+    app = null;
+    pageData = null;
+    provider = null;
+    renderedPage = null;
+    mountListeners = Object.create(null);
+  }
+
+  function resetDataState() {
+    state.file = null;
+    state.summary = null;
+    state.records = [];
+    state.fasta = null;
+    state.filters = null;
+    state.interactionResults = [];
+    state.interactionScrollTop = 0;
+    state.selectedRecordIndex = null;
+    state.contact = null;
+    state.region = null;
+    state.viewpoint = null;
+    state.comparison = null;
+    state.structure = null;
+    state.loading = null;
+    state.error = null;
+    state.dialog = null;
+    state.selection = null;
+    state.datasets = [];
+    state.reference = null;
+    state.view = window.Hyb2PageData.freshView();
+  }
+
+  /*
+   * mount(host, options) -> controller
+   *   options.provider   DataProvider (data-provider.js). Default: a new
+   *                      BrowserProvider (required for shell:true uploads).
+   *   options.shell      true (default): the full website. false: analysis
+   *                      pages only (no landing, sidebar/nav, uploads, help).
+   *   options.selection  initial selection, e.g. { datasetIds: ["s1"] }.
+   *   options.page       initial page id (shell:false; default "overview").
+   *   options.onNavigate({ pageId, previousPageId, reason })
+   *   options.onRequestFold({ source, region, partnerRegion, arms, selection })
+   *                      when set (shell:false), "fold this region" actions
+   *                      on Contact Map, Region and Compare go to the host.
+   *   options.onError(error)
+   * controller = { navigate(pageId), setSelection(selection) -> Promise,
+   *   refresh() -> Promise, destroy(), on(event, listener) -> off,
+   *   getPageId(), getSelection(), provider }
+   */
+  function mount(host, options) {
+    if (!host || typeof host.addEventListener !== "function") {
+      throw new Error("Hyb2Web.mount needs a host element.");
+    }
+    if (!dependenciesReady()) {
+      throw new Error("Load data-provider.js and page-data.js before mounting (or use Hyb2Web.ready).");
+    }
+    unmount();
+    const settings = options || {};
+    const shell = settings.shell !== false;
+    const nextProvider = settings.provider || new window.Hyb2Provider.BrowserProvider();
+    if (!window.Hyb2Provider.implementsProvider(nextProvider)) {
+      throw new Error("The provider must implement " + window.Hyb2Provider.METHODS.join(", ") + ".");
+    }
+    mountOptions = settings;
+    app = host;
+    provider = nextProvider;
+    resetDataState();
+    state.shell = shell;
+    state.canRequestFold = !shell && typeof settings.onRequestFold === "function";
+    state.analysisEntered = !shell;
+    state.activePage = shell ? "landing" : normaliseEmbeddedPage(settings.page);
+    if (!shell) {
+      app.classList.add("hyb2-embedded");
+    }
+    pageData = window.Hyb2PageData.createController({
+      state: state,
+      initialiseOnSelection: !shell,
+      onUpdate: function () { rerenderPreservingFocus(); },
+      onError: function (error) { emit("error", error); }
+    });
+    pageData.setProvider(provider);
+    app.addEventListener("pointerdown", handlePointerDown);
+    app.addEventListener("click", handleClick);
+    app.addEventListener("click", finishPointerAction);
+    app.addEventListener("pointercancel", finishPointerAction);
+    app.addEventListener("input", handleInput);
+    app.addEventListener("change", handleChange);
+    app.addEventListener("keydown", handleKeydown);
+    app.addEventListener("dragover", handleDragOver);
+    app.addEventListener("dragleave", handleDragLeave);
+    app.addEventListener("drop", handleDrop);
+    if (shell) {
+      window.addEventListener("hashchange", handleHashChange);
+      syncRoute();
+    }
+    if (settings.selection) {
+      pageData.setSelection(settings.selection);
+    }
+    render();
+    flushPendingCalls();
+    return controller();
+  }
+
+  function normaliseEmbeddedPage(pageId) {
+    return workspacePages.some(function (page) { return page.id === pageId; }) ? pageId : "overview";
+  }
+
+  function controller() {
+    const mountedHost = app;
+    const active = function () { return app === mountedHost && !!pageData; };
+    return {
+      provider: provider,
+      navigate: function (pageId) {
+        if (active()) navigate(pageId, "host");
+      },
+      setSelection: function (selection) {
+        if (!active()) return Promise.resolve(false);
+        const loading = pageData.setSelection(selection);
+        render();
+        return loading.then(function () { render(); return true; });
+      },
+      refresh: function () {
+        if (!active()) return Promise.resolve(false);
+        pageData.invalidate();
+        const loading = pageData.ensure(state.analysisEntered ? state.activePage : null);
+        render();
+        return Promise.resolve(loading).then(function () { return true; });
+      },
+      destroy: function () {
+        if (active()) unmount();
+      },
+      on: function (name, listener) {
+        if (!mountListeners[name]) mountListeners[name] = [];
+        mountListeners[name].push(listener);
+        return function () {
+          mountListeners[name] = (mountListeners[name] || []).filter(function (item) { return item !== listener; });
+        };
+      },
+      getPageId: function () { return state.activePage; },
+      getSelection: function () { return state.selection; },
+      // Host cross-page paths (shell:false): open a page focused on a place.
+      //   focus({ page, contact: { rnaX, rnaY, binSize, selection: { x, y } },
+      //           region: { rna, start, end, partner, partnerStart, partnerEnd } })
+      // Call after setSelection() has resolved (page state exists then).
+      focus: function (target) {
+        if (!active() || !target || typeof target !== "object") return false;
+        if (target.contact && state.contact) {
+          ["rnaX", "rnaY"].forEach(function (key) {
+            if (target.contact[key]) state.contact[key] = String(target.contact[key]);
+          });
+          if (Number(target.contact.binSize) > 0) state.contact.binSize = Math.floor(Number(target.contact.binSize));
+          const point = target.contact.selection;
+          state.contact.selection = point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
+            ? { x: Number(point.x), y: Number(point.y) }
+            : null;
+          state.contact.overviewSelection = null;
+          state.contact.zoomSelection = null;
+          state.contact.matrix = null;
+        }
+        if (target.region && state.region) {
+          ["rna", "start", "end", "partner", "partnerStart", "partnerEnd"].forEach(function (key) {
+            if (target.region[key] !== undefined && target.region[key] !== null) state.region[key] = target.region[key];
+          });
+          state.region.results = null;
+        }
+        navigate(target.page || state.activePage, "host");
+        render();
+        return true;
+      }
+    };
+  }
 
   // Desktop uses the same analysis engine in the same document. This small
   // bridge lets the project controller hand imported project inputs directly
   // to the parser without reopening a file picker.
   window.Hyb2Web = {
+    mount: mount,
+    // Resolves when mount() can be called (dependencies loaded).
+    ready: function () { return loadDependencies(); },
+    createBrowserProvider: function (options) {
+      return new window.Hyb2Provider.BrowserProvider(options);
+    },
+    pages: workspacePages.map(function (page) { return { id: page.id, label: page.label }; }),
+    // Deprecated: the desktop app will feed data through a DataProvider and
+    // mount({ shell: false }) instead. Kept until the desktop wave 2 lands.
     loadProjectFiles: function (files) {
-      const input = files || {};
-      const makeFile = function (entry, fallback) {
-        if (!entry) return null;
-        if (typeof File === "function" && entry instanceof File) return entry;
-        if (typeof Blob === "function" && entry.file instanceof Blob) {
-          return entry.file instanceof File ? entry.file : new File([entry.file], entry.name || fallback, { type: "text/plain" });
-        }
-        if (typeof entry.content !== "string") return null;
-        return new File([entry.content], entry.name || fallback, { type: "text/plain" });
-      };
-      const hyb = makeFile(input.hyb, "project.hyb");
-      const fasta = makeFile(input.fasta, "reference.fasta");
-      if (hyb) {
-        startParsing(hyb, { referenceFile: fasta });
-      } else if (fasta) {
-        state.landingFastaFile = fasta;
-        render();
-      }
-      return !!(hyb || fasta);
+      const accepted = !!(files && (files.hyb || files.fasta));
+      whenMounted(function () { loadProjectFilesNow(files); });
+      return accepted;
     },
     getSessionSnapshot: function () {
       return {
@@ -117,36 +388,99 @@
         } : {}
       };
     },
+    // Deprecated together with loadProjectFiles.
     restoreSession: function (snapshot) {
-      if (!snapshot || typeof snapshot !== "object") return;
-      if (!state.summary) {
-        state.pendingSessionSnapshot = snapshot;
-        return;
-      }
-      if (snapshot.theme === "dark" || snapshot.theme === "light") state.theme = snapshot.theme;
-      if (snapshot.density === "compact" || snapshot.density === "comfortable") state.density = snapshot.density;
-      if (state.filters && snapshot.filters && typeof snapshot.filters === "object") Object.assign(state.filters, snapshot.filters);
-      if (snapshot.route && snapshot.route !== "landing") window.location.hash = "#/workspace/" + String(snapshot.route).replace(/^workspace\//, "");
-      render();
+      whenMounted(function () { restoreSessionNow(snapshot); });
     },
     refresh: function () {
-      render();
+      if (app) render();
     },
     showSavedStructure: function (result) {
-      if (!state.summary || !result || typeof result !== "object" || !result.sequence || !result.dotBracket) return false;
-      if (!state.structure) state.structure = window.Hyb2Data.defaultStructureState();
-      state.structure.status = "complete";
-      state.structure.progress = 100;
-      state.structure.operation = null;
-      state.structure.result = result;
-      state.structure.message = "Restored saved structure result.";
-      state.analysisEntered = true;
+      if (!app) return false;
+      return showSavedStructureNow(result);
+    }
+  };
+
+  function loadProjectFilesNow(files) {
+    if (!state.shell || !canRegisterDatasets()) {
+      return false;
+    }
+    const input = files || {};
+    const makeFile = function (entry, fallback) {
+      if (!entry) return null;
+      if (typeof File === "function" && entry instanceof File) return entry;
+      if (typeof Blob === "function" && entry.file instanceof Blob) {
+        return entry.file instanceof File ? entry.file : new File([entry.file], entry.name || fallback, { type: "text/plain" });
+      }
+      if (typeof entry.content !== "string") return null;
+      return new File([entry.content], entry.name || fallback, { type: "text/plain" });
+    };
+    const hyb = makeFile(input.hyb, "project.hyb");
+    const fasta = makeFile(input.fasta, "reference.fasta");
+    if (hyb) {
+      startParsing(hyb, { referenceFile: fasta });
+    } else if (fasta) {
+      state.landingFastaFile = fasta;
+      render();
+    }
+    return !!(hyb || fasta);
+  }
+
+  function restoreSessionNow(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+    if (!state.summary) {
+      state.pendingSessionSnapshot = snapshot;
+      return;
+    }
+    if (snapshot.theme === "dark" || snapshot.theme === "light") state.theme = snapshot.theme;
+    if (snapshot.density === "compact" || snapshot.density === "comfortable") state.density = snapshot.density;
+    if (state.filters && snapshot.filters && typeof snapshot.filters === "object") Object.assign(state.filters, snapshot.filters);
+    if (snapshot.route && snapshot.route !== "landing") {
+      if (state.shell) {
+        window.location.hash = "#/workspace/" + String(snapshot.route).replace(/^workspace\//, "");
+      } else {
+        state.activePage = normaliseEmbeddedPage(String(snapshot.route).replace(/^workspace\//, ""));
+      }
+    }
+    render();
+  }
+
+  function showSavedStructureNow(result) {
+    if (!state.summary || !result || typeof result !== "object" || !result.sequence || !result.dotBracket) return false;
+    if (!state.structure) state.structure = window.Hyb2Data.defaultStructureState();
+    state.structure.status = "complete";
+    state.structure.progress = 100;
+    state.structure.operation = null;
+    state.structure.result = result;
+    state.structure.message = "Restored saved structure result.";
+    state.analysisEntered = true;
+    if (state.shell) {
       state.activePage = "structure";
       setRouteHash("#/workspace/structure");
       render();
-      return true;
+    } else {
+      navigate("structure", "saved-structure");
     }
-  };
+    return true;
+  }
+
+  // Website auto-mount on #app (also the current desktop embedding). Set
+  // window.HYB2_AUTO_MOUNT = false to mount manually with Hyb2Web.mount().
+  (function autoMount() {
+    const host = document.getElementById("app");
+    if (!host || window.HYB2_AUTO_MOUNT === false) {
+      return;
+    }
+    if (dependenciesReady()) {
+      mount(host, { shell: true });
+      return;
+    }
+    loadDependencies().then(function () {
+      if (!app) mount(host, { shell: true });
+    }).catch(function (error) {
+      host.textContent = "HYB2 analysis could not start: " + (error && error.message ? error.message : "missing scripts");
+    });
+  }());
 
   function syncRoute() {
     const hash = window.location.hash.replace(/^#\/?/, "");
@@ -187,12 +521,60 @@
     render();
     if (previousPage !== state.activePage) {
       window.scrollTo(0, 0);
+      emit("navigate", { pageId: state.activePage, previousPageId: previousPage, reason: "route" });
+    }
+  }
+
+  // Starts any DataProvider fetches the visible page needs. Returns a Promise
+  // while data is loading, otherwise null.
+  function requestPageData() {
+    if (!pageData) {
+      return null;
+    }
+    if (state.shell && !(state.summary && state.analysisEntered)) {
+      return null;
+    }
+    return pageData.ensure(state.analysisEntered ? state.activePage : null);
+  }
+
+  function rerenderPreservingFocus() {
+    if (!app) {
+      return;
+    }
+    const focused = focusIdentity(document.activeElement);
+    render();
+    if (focused) {
+      restoreFocus(focused, null);
     }
   }
 
   function render() {
+    if (!app) {
+      return;
+    }
+    const token = ++dataWaitToken;
+    const pendingData = requestPageData();
+    if (pendingData) {
+      pendingData.then(function () {
+        if (token === dataWaitToken) {
+          rerenderPreservingFocus();
+        }
+      });
+      // Keep the current page on screen while its data refreshes instead of
+      // flashing placeholders (provider calls are async even in the browser).
+      if (renderedPage && renderedPage === state.activePage) {
+        app.classList.add("is-refreshing-data");
+        return;
+      }
+    }
+    app.classList.remove("is-refreshing-data");
     const workspaceOpen = !!state.summary && state.analysisEntered;
+    if (!state.shell) {
+      renderEmbedded(workspaceOpen);
+      return;
+    }
     app.innerHTML = workspaceOpen ? renderWorkspace() : renderLanding();
+    renderedPage = workspaceOpen ? state.activePage : null;
     document.documentElement.dataset.theme = state.theme;
     app.dataset.density = state.density;
     const themeColor = document.querySelector('meta[name="theme-color"]');
@@ -209,7 +591,8 @@
     if (workspaceOpen && state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
       window.Hyb2Report.afterRender(state, featureApi());
     }
-    if (typeof window.CustomEvent === "function") {
+    // The first render() runs before window.Hyb2Web is defined below.
+    if (window.Hyb2Web && typeof window.CustomEvent === "function") {
       window.dispatchEvent(new window.CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
     }
   }
@@ -281,8 +664,8 @@
 
   function renderBrand() {
     const logoAsset = state.theme === "dark"
-      ? "./assets/hyb2-logo-dark.png"
-      : "./assets/hyb2-logo.png";
+      ? (window.HYB2_ASSET_BASE || "./") + "assets/hyb2-logo-dark.png"
+      : (window.HYB2_ASSET_BASE || "./") + "assets/hyb2-logo.png";
     return [
       '<a class="brand" href="#/" aria-label="HYB2 Web Lite home">',
       '  <span class="brand-mark"><img src="' + logoAsset + '" alt="HYB2"></span>',
@@ -336,8 +719,8 @@
       "    </div>",
       '    <div class="example-actions">',
       '      <button class="button" type="button" data-action="load-example">Try example</button>',
-      '      <a class="quiet-button example-link" href="./assets/examples/ZIKV_1-10807_example.hyb" download>Download HYB</a>',
-      '      <a class="quiet-button example-link" href="./assets/examples/ZIKV_1-10807.fasta" download>Download FASTA</a>',
+      '      <a class="quiet-button example-link" href="' + exampleAssets.hyb.url + '" download>Download HYB</a>',
+      '      <a class="quiet-button example-link" href="' + exampleAssets.fasta.url + '" download>Download FASTA</a>',
       "    </div>",
       "  </section>",
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Choose a HYB file">',
@@ -446,6 +829,45 @@
       '  <p class="card-footnote" aria-live="polite">' + (load.totalBytes ? formatBytes(load.processedBytes || 0) + " of " + formatBytes(load.totalBytes || 0) + " read locally" : "Preparing the included example locally") + "</p>",
       "</div></div>"
     ].join("");
+  }
+
+  // shell:false — analysis pages only; the host renders navigation and data
+  // selection and switches pages through the mount controller.
+  function renderEmbedded(workspaceOpen) {
+    app.dataset.density = state.density;
+    if (!workspaceOpen) {
+      const error = state.view && state.view.errors && state.view.errors.base;
+      const hasSelection = !!(state.selection && state.selection.datasetIds && state.selection.datasetIds.length);
+      app.innerHTML = [
+        '<div class="embedded-status placeholder-card"><div class="placeholder-inner">',
+        '<span class="placeholder-label">Analysis</span>',
+        "<h2>" + escapeHtml(error ? "The analysis data could not be loaded." : (hasSelection ? "Loading analysis data…" : "Select a dataset to analyse.")) + "</h2>",
+        error ? "<p>" + escapeHtml(error) + "</p>" : "",
+        "</div></div>"
+      ].join("");
+      renderedPage = null;
+      return;
+    }
+    app.innerHTML = [
+      '<div class="workspace workspace-embedded">',
+      '  <main class="workspace-main" aria-label="' + escapeAttribute(pageTitle(state.activePage)) + '">',
+      '    <div class="content-wrap">',
+      renderPage(),
+      "    </div>",
+      "  </main>",
+      '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
+      "</div>"
+    ].join("");
+    renderedPage = state.activePage;
+    if (window.Hyb2UI) {
+      window.Hyb2UI.afterRender(state, featureApi());
+    }
+    if (state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
+      window.Hyb2Report.afterRender(state, featureApi());
+    }
+    if (window.Hyb2Web && typeof window.CustomEvent === "function") {
+      window.dispatchEvent(new window.CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
+    }
   }
 
   function renderWorkspace() {
@@ -1185,6 +1607,7 @@
             state.structure.secondEnd = secondStructureExtent
               ? Math.min(secondStructureExtent.max, secondStructureExtent.min + 200)
               : state.region.end;
+            registerPrimaryDataset(file, summary, state.records);
             state.loading = null;
             state.analysisEntered = false;
             state.activePage = "landing";
@@ -1204,6 +1627,7 @@
               if (state.summary === summary) {
                 state.summary.sha256 = hash;
                 state.summary.sha256Unavailable = !hash;
+                updatePrimaryFingerprint(hash);
                 if (state.dialog === "files" || !state.analysisEntered) {
                   render();
                 }
@@ -1212,6 +1636,7 @@
               if (state.summary === summary) {
                 state.summary.sha256 = "";
                 state.summary.sha256Unavailable = true;
+                updatePrimaryFingerprint("");
                 if (state.dialog === "files" || !state.analysisEntered) {
                   render();
                 }
@@ -1280,8 +1705,23 @@
     state.fasta.mappingEditorReference = mapping[state.fasta.mappingEditorRna] || "";
   }
 
-  function navigate(page) {
+  function navigate(page, reason) {
     const isAnalysis = workspacePages.some(function (item) { return item.id === page; });
+    if (!state.shell) {
+      // Embedded: no hash routing and no help pages; the host is told so it
+      // can keep its own navigation in sync.
+      if (!isAnalysis) {
+        return;
+      }
+      const previousPage = state.activePage;
+      state.activePage = page;
+      render();
+      if (previousPage !== page) {
+        app.scrollTop = 0;
+        emit("navigate", { pageId: page, previousPageId: previousPage, reason: reason || "page" });
+      }
+      return;
+    }
     const nextHash = isAnalysis ? "#/workspace/" + page : "#/" + page;
     setRouteHash(nextHash);
   }
@@ -1317,8 +1757,53 @@
       downloadBlob: downloadBlob,
       showToast: showToast,
       copyText: copyText,
-      updateInteractionHash: updateInteractionHash
+      updateInteractionHash: updateInteractionHash,
+      // DataProvider access for page actions (exports, paging).
+      queryHybrids: function (query) { return pageData ? pageData.queryHybrids(query) : Promise.resolve({ total: 0, offset: 0, rows: [] }); },
+      loadInteractionWindow: function (start) { return pageData ? pageData.loadInteractionWindow(start) : Promise.resolve(false); },
+      dataChanged: function () {
+        if (provider && typeof provider.notifyChange === "function") provider.notifyChange();
+      },
+      removeDataset: function (datasetId) {
+        if (state.shell && provider && typeof provider.removeDataset === "function") provider.removeDataset(datasetId);
+      },
+      requestFold: function (request) {
+        emit("requestFold", request);
+      }
     };
+  }
+
+  function updatePrimaryFingerprint(hash) {
+    if (canRegisterDatasets()) {
+      provider.updateDataset(PRIMARY_DATASET_ID, { sha256: hash || null, sha256Unavailable: !hash });
+    }
+  }
+
+  function canRegisterDatasets() {
+    return !!(provider && typeof provider.addDataset === "function");
+  }
+
+  // Registers the parsed primary HYB as the BrowserProvider's "primary"
+  // dataset and selects it. Comparison datasets are registered alongside.
+  function registerPrimaryDataset(file, summary, records) {
+    if (!canRegisterDatasets()) {
+      return;
+    }
+    provider.clear();
+    provider.addDataset({
+      id: PRIMARY_DATASET_ID,
+      primary: true,
+      condition: "A",
+      label: "Primary",
+      fileName: summary.fileName || (file && file.name) || "",
+      fileSize: summary.fileSize,
+      summary: summary,
+      records: records
+    });
+    if (state.fasta) {
+      provider.setReference(state.fasta);
+    }
+    pageData.setSelection({ datasetIds: [PRIMARY_DATASET_ID] }, { keepState: true });
   }
 
   function chooseHyb() {
@@ -1346,9 +1831,22 @@
     state.fastaLoadSession = null;
   }
 
+  function setProviderReference(fasta) {
+    if (canRegisterDatasets() && typeof provider.setReference === "function") {
+      provider.setReference(fasta);
+    }
+  }
+
+  function notifyReferenceMetadata() {
+    if (canRegisterDatasets() && typeof provider.notifyChange === "function") {
+      provider.notifyChange({ metadataOnly: true });
+    }
+  }
+
   function removeFasta() {
     invalidateFastaLoad();
     state.fasta = null;
+    setProviderReference(null);
     if (state.viewpoint) {
       state.viewpoint.results = null;
       state.viewpoint.rangeMode = "coordinates";
@@ -1418,6 +1916,7 @@
         return;
       }
       state.fasta = loadedFasta;
+      setProviderReference(loadedFasta);
       if (state.viewpoint) {
         state.viewpoint.results = null;
         if (state.viewpoint.rangeMode === "reference" &&
@@ -1438,6 +1937,7 @@
       }
       loadedFasta.sha256 = hash;
       loadedFasta.sha256Unavailable = !hash;
+      notifyReferenceMetadata();
       if (state.fastaLoadSession === fastaLoadSession) {
         invalidateFastaLoad();
       }
@@ -1451,6 +1951,7 @@
         }
         loadedFasta.sha256 = "";
         loadedFasta.sha256Unavailable = true;
+        notifyReferenceMetadata();
         if (state.fastaLoadSession === fastaLoadSession) {
           invalidateFastaLoad();
         }
@@ -1527,15 +2028,18 @@
           record.index = recordIndex;
           return record;
         });
-        comparisonSession.datasets.push({
+        // Registered in the BrowserProvider; the Compare page lists it via
+        // DataProvider.listDatasets().
+        provider.addDataset({
           id: datasetId,
           fileName: file.name || "comparison.hyb",
           fileSize: file.size,
           sha256: sha256 || null,
+          sha256Unavailable: !sha256,
           summary: parsed.summary,
           records: records,
           condition: "B",
-          label: file.name ? file.name.replace(/\.(hyb|txt)$/i, "") : "Dataset " + (comparisonSession.datasets.length + 1)
+          label: file.name ? file.name.replace(/\.(hyb|txt)$/i, "") : "Dataset " + (comparisonSession.datasets.length + index + 1)
         });
         comparisonSession.result = null;
         comparisonSession.selection = null;
@@ -1626,7 +2130,7 @@
   }
 
   function updateInteractionHash() {
-    if (!state.summary || state.activePage !== "interactions") {
+    if (!state.shell || !state.summary || state.activePage !== "interactions") {
       return;
     }
     const filters = state.filters || {};
@@ -1704,7 +2208,22 @@
     state.structure = null;
     state.loading = null;
     state.error = null;
+    releaseProviderData();
     setRouteHash("#/");
+  }
+
+  // Website shell: forget every registered dataset and the selection.
+  function releaseProviderData() {
+    if (canRegisterDatasets()) {
+      provider.clear();
+    }
+    state.selection = null;
+    state.datasets = [];
+    state.reference = null;
+    state.view = window.Hyb2PageData.freshView();
+    if (pageData) {
+      pageData.invalidate();
+    }
   }
 
   function resetToLanding() {
@@ -1732,6 +2251,7 @@
     state.error = null;
     state.activePage = "landing";
     state.dialog = null;
+    releaseProviderData();
     setRouteHash("#/");
   }
 
@@ -1766,14 +2286,30 @@
     showToast("Summary JSON downloaded locally.");
   }
 
+  // Complete record-derived CSVs; every row comes from the DataProvider.
+  function withAllRows(callback) {
+    if (!pageData) {
+      return;
+    }
+    pageData.queryHybrids({ offset: 0, limit: null }).then(function (result) {
+      callback(result && result.rows || []);
+    }).catch(function (error) {
+      showToast(error && error.message ? error.message : "The interaction rows could not be loaded.");
+    });
+  }
+
   function downloadRnaCounts() {
-    downloadText("rna_counts.csv", window.Hyb2Data.rnaCountsToCsv(state.records || []), "text/csv");
-    showToast("RNA counts CSV downloaded locally.");
+    withAllRows(function (rows) {
+      downloadText("rna_counts.csv", window.Hyb2Data.rnaCountsToCsv(rows), "text/csv");
+      showToast("RNA counts CSV downloaded locally.");
+    });
   }
 
   function downloadRnaPairs() {
-    downloadText("rna_pairs.csv", window.Hyb2Data.rnaPairsToCsv(state.records || []), "text/csv");
-    showToast("RNA-pair counts CSV downloaded locally.");
+    withAllRows(function (rows) {
+      downloadText("rna_pairs.csv", window.Hyb2Data.rnaPairsToCsv(rows), "text/csv");
+      showToast("RNA-pair counts CSV downloaded locally.");
+    });
   }
 
   function downloadValidationReport() {

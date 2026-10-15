@@ -1,6 +1,6 @@
 # HYB2 Desktop runtime prototype
 
-`detector.py` is a no-dependency reference implementation for the Tauri
+`detector.py` is a no-dependency reference implementation for the desktop
 runtime bridge. It detects the host platform, the WSL adapter, commands on
 `PATH`, repository scripts/jars, and the optional R/DESeq2 package. It emits a
 capability matrix that the desktop UI can show at first launch and copy into a
@@ -29,7 +29,7 @@ interpreter. The desktop CPLfold capability is available when the native
 CPLfold entry point, Python, and NumPy are present. Numba is reported as a
 separate acceleration capability: if it is missing, the runtime remains usable
 with NumPy but is marked `degraded` and reports that JIT acceleration is off.
-The Tauri adapter can use the native capability to skip the browser-only
+The desktop shell can use the native capability to skip the browser-only
 CPLfold capacity benchmark; the web build continues to measure Pyodide
 capacity in the browser.
 
@@ -57,23 +57,23 @@ exist.
 ## Desktop IPC
 
 `runtime_detect`, `project_create`, `project_validate`, and `project_open` run
-their Python subprocess on Tauri's blocking worker pool so detection and file
-validation do not block the application event loop. `project_open` accepts a
+their Python call off the UI thread (the Go shell's goroutines) so detection and
+file validation do not block the interface. `project_open` accepts a
 project directory or its `project.json` and returns `{ok, path, manifest}` only
 after validation. Missing or invalid manifests return readable errors.
 
 Release builds resolve `native/desktop/runtime/bridge.py` and
 `native/python/bin/python3` (`native/python/python.exe` on Windows) beneath
-Tauri's resource directory. Missing bundled resources are reported explicitly.
-Debug builds can fall back to the checkout. For an explicit development
+the app's resource directory (`App.Path(PathResources)`). Missing bundled resources are reported explicitly.
+Development builds can fall back to the checkout. For an explicit development
 override set `HYB2_REPOSITORY_ROOT` and optionally `HYB2_PYTHON`; an override
 does not make the bundle portable or establish native folding support.
 
 ## Native runtime staging
 
 `python3 desktop/scripts/stage-native.py` stages the Python bridge, CPLfold source,
-parameter tables, licenses and a runtime into `desktop/resources/native/`. Tauri
-copies this directory into the application resources under `native/`.
+parameter tables, licenses and a runtime into `desktop/resources/native/`. `go tool mygo build`
+copies this directory (a platform resource of `desktop/app`) into the application resources under `native/`.
 
 The earlier proposed Python 3.13 / Numba 0.60 combination was incompatible. Release
 staging now requires CPython 3.11.x with the exact wheel versions in
@@ -88,7 +88,7 @@ python3 desktop/scripts/stage-native.py \
 ```
 
 This uses the existing host interpreter via a small launcher. The manifest says
-`portable: false` and `mode: development-external-python`. A Tauri app built from
+`portable: false` and `mode: development-external-python`. An app built from
 this staging directory **still requires that original local environment**. It is
 not a standalone installer. The checked local environment is CPython 3.9.6 with
 NumPy 1.24.4, Numba 0.58.1 and llvmlite 0.41.1.
@@ -111,7 +111,7 @@ python3 desktop/scripts/stage-native.py \
 
 Use a fresh destination: staging refuses to overwrite existing resources. Once
 validated, arrange the selected release directory at `desktop/resources/native`
-before building Tauri. Do not copy a Homebrew installation or a venv and label it
+before building the app (`go tool mygo build`). Do not copy a Homebrew installation or a venv and label it
 portable. The script rejects venvs, escaping Python symlinks and imported modules
 or base prefixes outside the staged bundle. No download or dependency install is
 silently performed by staging.
@@ -152,12 +152,41 @@ The desktop IPC exposes `task_start`, `task_status`, and `task_cancel`. The
 current release allowlists `validate_project` and invokes the bundled Python
 bridge through an argv array; unsupported engines return an explicit
 unavailable error. Every task has `runs/<task-id>/status.json` (written only
-by the Rust task manager), `stdout.log`, and `stderr.log`; the Python child
+by the Go task scheduler, `desktop/app/core/tasks.go`), `stdout.log`, and `stderr.log`; the Python child
 (`bridge --request runs/<task-id>/task-request.json`) writes its own response
-to `runs/<task-id>/result.json`. When a task finishes, Rust calls the bridge
+to `runs/<task-id>/result.json`. When a task finishes, the scheduler calls the bridge
 operation `register_task_run {path, task_id}`, which idempotently upserts the
 manifest `runs` entry. IDs are validated and run directories are confined to
-the project.
+the project. When the finished task is a successful `structure` run, its
+`result.json` `structure` entry is also upserted into `structures[]`
+(`{id, task_id, sample_ids, gene_id, mode, windows, parameters, created_at,
+paths: {dbn, pairs, ct, meta}, summary}`, paths project-relative under
+`structures/<task_id>/`).
+
+`open_project` and `list_samples` normalize stale sample stages: a stage left
+`queued`/`running` whose `runs/<task_id>/status.json` (read only; the scheduler writes
+it) is missing or terminal is saved as `interrupted` (`failed`/`cancelled`
+when the task record says so). Queued/running task records are left alone.
+
+## Project read operations (desktop UI)
+
+- `list_samples {path}` -> `{samples: [<sample> + {ready, stage_summary}],
+  conditions: [{name, sample_ids}], references: [<reference> incl.
+  sequences [{name, length}]], normalized: [...]}`. `ready` = the analysis
+  index exists; `stage_summary` is `pending|running|done|failed|interrupted`.
+- `list_structures {path}` -> `{structures: [<structures[] entry> +
+  {available}]}`, newest first.
+- `read_structure {path, structure_id}` -> `{structure, meta, records:
+  [{window_start, window_end, sequence, dbn, pairs: [[i, j]], energy}]}`;
+  coordinates are 1-based gene positions.
+- `compare_bins {project_path, sample_ids_a, sample_ids_b, gene, bin_size,
+  region?, max_cells?, fixed_bin?, gene2?, types?, measure?, orientation?}`
+  (alias `analysis_compare_bins`) -> `{result: {bin_size, length, x, y, a, b,
+  log2ratio, a_count, b_count, library_a, library_b, pseudocount, ...}}`;
+  `a`/`b` are counts per million records of each side.
+- `analysis_contact_bins` also takes `orientation: "oriented"|"both"` and
+  `fixed_bin`; `analysis_summary` reports `extents: {gene: {min, max}}` and
+  reference `length`s for genes of the samples' references.
 
 ## Sidecar mode
 

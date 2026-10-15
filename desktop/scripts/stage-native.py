@@ -57,6 +57,101 @@ def smoke(root, executable, portable):
             raise ValueError('CPLfold native smoke did not match reference structure/energy:\n' + output)
         details['cplfold_reference_fold'] = 'passed'
         details['bowtie2'] = bowtie2_smoke(root, cache)
+        details['viennarna'] = viennarna_smoke(root, executable, env)
+        details['evidence'] = evidence_smoke(root, executable, env, portable)
+    return details
+
+
+VIENNA_PROBE = '''import json, RNA
+structure, mfe = RNA.fold_compound("GGGGAAAACCCC&GGGGUUUUCCCC").mfe_dimer()
+print(json.dumps({"version": RNA.__version__, "structure": structure, "mfe": round(mfe, 2)}))
+'''
+
+
+def viennarna_smoke(root, executable, env):
+    """Folding energy for hyb2pipe -e 1 comes from the ViennaRNA wheel."""
+    try:
+        details = json.loads(run([str(executable), '-I', '-B', '-c', VIENNA_PROBE], root, env))
+    except subprocess.CalledProcessError:
+        return None
+    if details['version'] != '2.7.2' or details['mfe'] >= 0:
+        raise ValueError('ViennaRNA smoke failed: %s' % details)
+    return details
+
+
+EVIDENCE_REQUIREMENTS = ROOT / 'desktop/runtime/requirements-evidence.txt'
+EVIDENCE_PROBE = r'''import importlib.metadata, json, sys
+expected = json.loads(sys.argv[1])
+try:
+    import mcp, rnacentral_sequence_search
+    from rnacentral_sequence_search import server
+except ImportError as error:
+    print(json.dumps({"missing": str(error)}))
+    raise SystemExit(0)
+found, wrong = {}, {}
+for name, version in expected.items():
+    try:
+        found[name] = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        found[name] = None
+    if found[name] != version:
+        wrong[name] = found[name]
+print(json.dumps({"mcp": found.get("mcp"), "rnacentral-mcp-server": found.get("rnacentral-mcp-server"),
+                  "packages": len(found), "wrong": wrong,
+                  "module_paths": [mcp.__file__, rnacentral_sequence_search.__file__]}))
+'''
+
+
+def evidence_pins(platform_name=None):
+    """Exact pins of requirements-evidence.txt that apply to this platform."""
+    platform_name = platform_name or sys.platform
+    pins = {}
+    for line in EVIDENCE_REQUIREMENTS.read_text(encoding='utf-8').splitlines():
+        line = line.split('#', 1)[0].strip().rstrip('\\').strip()
+        if not line or line.startswith('--'):
+            continue
+        requirement, _, marker = line.partition(';')
+        name, _, version = requirement.strip().partition('==')
+        marker = marker.strip()
+        if marker == 'sys_platform == "win32"' and platform_name != 'win32':
+            continue
+        if marker and marker != 'sys_platform == "win32"':
+            raise ValueError(f'unsupported marker in requirements-evidence.txt: {marker}')
+        pins[name.strip().lower()] = version.strip()
+    return pins
+
+
+def evidence_smoke(root, executable, env, portable):
+    """RNAcentral MCP client stack: exact pins, then a real stdio session.
+
+    Returns None when the evidence packages are absent (verify-native-release
+    rejects that); raises when they are present but wrong.  The session check
+    starts the fixed RNAcentral server through the evidence worker and lists
+    its tools; it makes no network request.
+    """
+    details = json.loads(run([str(executable), '-I', '-B', '-c', EVIDENCE_PROBE, json.dumps(evidence_pins())], root, env))
+    if 'missing' in details:
+        return None
+    if details['wrong']:
+        raise ValueError('Evidence packages do not match requirements-evidence.txt: %s' % details['wrong'])
+    if portable:
+        for path in details['module_paths']:
+            if not Path(path).resolve().is_relative_to(root.resolve()):
+                raise ValueError(f'Evidence runtime depends on host files: {path}')
+    requests = ''.join(json.dumps({'id': i, 'request': r}) + '\n' for i, r in
+                       enumerate(({'operation': 'status', 'connect': True}, {'operation': 'shutdown'}), 1))
+    worker_env = {k: v for k, v in env.items() if k in ('PATH', 'HOME', 'SYSTEMROOT', 'TEMP', 'TMP')}
+    worker_env.update(PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8')
+    completed = subprocess.run([str(executable), '-B', '-m', 'desktop.runtime.evidence.worker', '--serve'],
+                               cwd=root, env=worker_env, input=requests, text=True, capture_output=True,
+                               check=True, timeout=120)
+    status = json.loads(completed.stdout.splitlines()[0])['response']
+    if not status.get('ok') or status.get('tools') != ['get_rna_description', 'map_rna_id']:
+        raise ValueError('Evidence worker smoke failed: %s' % status)
+    details.pop('module_paths')
+    details.pop('wrong')
+    details['worker_status'] = 'passed'
+    details['tools'] = status['tools']
     return details
 
 
@@ -68,8 +163,9 @@ def bowtie2_smoke(root, scratch):
         return None
     reference = 'GGCGCGGCACCGUCCGCGGAACAAACGGAUCGAUCGGAUCCGAUGCUAGCUAGGCUAGCGAUCGAUCGAUGCAUGC'.replace('U', 'T')
     work = Path(scratch)
-    (work / 'ref.fa').write_text('>ref\n' + reference * 3 + '\n')
-    (work / 'read.fa').write_text('>r1\n' + reference[10:60] + '\n')
+    # LF bytes: text mode writes CRLF on Windows, which Bowtie2 rejects as reads.
+    (work / 'ref.fa').write_bytes(('>ref\n' + reference * 3 + '\n').encode())
+    (work / 'read.fa').write_bytes(('>r1\n' + reference[10:60] + '\n').encode())
     subprocess.run([str(build), str(work / 'ref.fa'), str(work / 'idx')], capture_output=True, check=True, timeout=300)
     sam = subprocess.run([str(align), '--local', '-x', str(work / 'idx'), '-f', str(work / 'read.fa')],
                          capture_output=True, text=True, check=True, timeout=300).stdout

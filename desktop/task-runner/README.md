@@ -17,6 +17,6 @@ Run tests:
 python3 -m unittest discover -s desktop/task-runner -p 'test_*.py'
 ```
 
-The prototype will be replaced or embedded behind Tauri IPC in P3. The
+The prototype will be replaced or embedded behind the desktop task scheduler (desktop/app/core) in P3. The
 contract should remain stable: `started`, `log`, `completed`, `failed`, and
 `cancelled` events contain a `taskId`; terminal events contain `exitCode`.

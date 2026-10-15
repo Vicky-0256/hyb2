@@ -9,7 +9,7 @@
 
   function afterRender(state, api) {
     if (state.activePage === "interactions") {
-      bindVirtualTable(state);
+      bindVirtualTable(state, api);
     }
     if (state.activePage === "contact-map") {
       bindContactCanvases(state, api);
@@ -36,7 +36,7 @@
     }
   }
 
-  function bindVirtualTable(state) {
+  function bindVirtualTable(state, api) {
     const table = document.querySelector("[data-virtual-table]");
     if (!table) {
       return;
@@ -45,23 +45,37 @@
     table.scrollTop = state.interactionScrollTop || 0;
     table.addEventListener("scroll", function () {
       state.interactionScrollTop = table.scrollTop;
-      updateVirtualRows(state);
+      updateVirtualRows(state, api);
     });
+    updateVirtualRows(state, api);
   }
 
-  function updateVirtualRows(state) {
+  // Rows come from the queryHybrids window held in state.view.interactions;
+  // scrolling outside it asks the page-data layer for the next window.
+  function updateVirtualRows(state, api) {
     const table = document.querySelector("[data-virtual-table]");
     const rowsContainer = document.querySelector("[data-virtual-rows]");
     if (!table || !rowsContainer) {
       return;
     }
 
-    const records = state.interactionResults || [];
+    const interactions = state.view && state.view.interactions;
     const rowHeight = state.density === "compact" ? 38 : 46;
     const start = Math.max(0, Math.floor(table.scrollTop / rowHeight) - 4);
     const visible = Math.ceil(table.clientHeight / rowHeight) + 8;
+    const rows = window.Hyb2Pages.interactionWindow(interactions, start, visible);
     rowsContainer.style.transform = "translateY(" + (start * rowHeight) + "px)";
-    rowsContainer.innerHTML = window.Hyb2Pages.renderVirtualRows(records.slice(start, start + visible));
+    if (rows) {
+      rowsContainer.innerHTML = window.Hyb2Pages.renderVirtualRows(rows);
+      return;
+    }
+    if (api && typeof api.loadInteractionWindow === "function") {
+      api.loadInteractionWindow(start).then(function (loaded) {
+        if (loaded) {
+          updateVirtualRows(state, api);
+        }
+      });
+    }
   }
 
   function bindContactCanvas(state, api) {
@@ -1247,7 +1261,7 @@
     if (feature === "viewpoint-control") {
       state.viewpoint[key] = element.value;
       if (key === "rna" && state.viewpoint.rangeMode === "reference" &&
-          !window.Hyb2Data.findFastaEntry(state.fasta, state.viewpoint.rna)) {
+          !window.Hyb2Pages.hasMappedReference(state, state.viewpoint.rna)) {
         state.viewpoint.rangeMode = "coordinates";
       }
       state.viewpoint.results = null;
@@ -1339,6 +1353,7 @@
         delete state.fasta.mapping[rna];
       }
       invalidateFastaConsumers(state);
+      if (typeof api.dataChanged === "function") api.dataChanged();
       api.render();
       return true;
     }
@@ -1525,15 +1540,29 @@
       return true;
     }
 
-    if (action === "export-filtered-csv") {
-      api.download("filtered-interactions.csv", window.Hyb2Data.recordsToCsv(state.interactionResults || []), "text/csv");
-      api.showToast("Filtered interaction CSV downloaded locally.");
+    if (action === "export-filtered-csv" || action === "export-filtered-hyb") {
+      // Exports need every matching row, fetched through the DataProvider.
+      fetchAllRows(api, { filters: Object.assign({}, state.filters || {}) }, function (rows) {
+        if (action === "export-filtered-csv") {
+          api.download("filtered-interactions.csv", window.Hyb2Data.recordsToCsv(rows), "text/csv");
+          api.showToast("Filtered interaction CSV downloaded locally.");
+        } else {
+          api.download("filtered.hyb", window.Hyb2Data.recordsToHyb(rows), "text/plain");
+          api.showToast("Filtered HYB file downloaded locally.");
+        }
+      });
       return true;
     }
 
-    if (action === "export-filtered-hyb") {
-      api.download("filtered.hyb", window.Hyb2Data.recordsToHyb(state.interactionResults || []), "text/plain");
-      api.showToast("Filtered HYB file downloaded locally.");
+    if (action === "request-fold") {
+      const request = foldRequest(state, element.dataset.source || "");
+      if (!request) {
+        api.showToast("Select a region before folding.");
+        return true;
+      }
+      if (typeof api.requestFold === "function") {
+        api.requestFold(request);
+      }
       return true;
     }
 
@@ -1600,9 +1629,22 @@
       if (!selection) {
         return true;
       }
-      const records = window.Hyb2Data.getCellRecords(state.records || [], state.contact, selection.x, selection.y);
-      api.download("contact-cell-records.csv", window.Hyb2Data.recordsToCsv(records), "text/csv");
-      api.showToast("Selected cell records downloaded locally.");
+      const contact = state.contact;
+      fetchAllRows(api, {
+        cell: {
+          rnaX: contact.rnaX,
+          rnaY: contact.rnaY,
+          binSize: contact.matrix && contact.matrix.binSize || contact.binSize,
+          orientation: contact.orientation,
+          chimeraType: contact.chimeraType,
+          homodimer: contact.homodimer,
+          x: selection.x,
+          y: selection.y
+        }
+      }, function (records) {
+        api.download("contact-cell-records.csv", window.Hyb2Data.recordsToCsv(records), "text/csv");
+        api.showToast("Selected cell records downloaded locally.");
+      });
       return true;
     }
 
@@ -1709,6 +1751,15 @@
 
     if (action === "remove-comparison-dataset") {
       const datasetId = element.dataset.datasetId;
+      if (datasetId !== "primary") {
+        // Keep it out of this comparison even if the provider still lists it;
+        // the website shell also unregisters the parsed file.
+        state.comparison.excludedDatasetIds = Object.assign({}, state.comparison.excludedDatasetIds || {});
+        state.comparison.excludedDatasetIds[datasetId] = true;
+        if (typeof api.removeDataset === "function") {
+          api.removeDataset(datasetId);
+        }
+      }
       state.comparison.datasets = (state.comparison.datasets || []).filter(function (dataset) { return dataset.id !== datasetId || dataset.id === "primary"; });
       const remainingRnas = Array.from(new Set(state.comparison.datasets.flatMap(function (dataset) {
         return dataset.summary && dataset.summary.rnaNames ? dataset.summary.rnaNames : [];
@@ -1880,6 +1931,7 @@
       state.fasta.mappingEditorRna = rna;
       state.fasta.mappingEditorReference = reference;
       invalidateFastaConsumers(state);
+      if (typeof api.dataChanged === "function") api.dataChanged();
       api.render();
       api.showToast(reference ? "Reference mapping updated locally." : "RNA marked as not matched.");
       return true;
@@ -1924,13 +1976,18 @@
     }
 
     if (action === "copy-region-sequence" || action === "region-send-structure" || action === "region-download-fasta") {
-      const reference = window.Hyb2Data.extractReference(state.fasta, state.region.rna, state.region.start, state.region.end);
+      // Prefetched DataProvider.getSequence slice for the current region.
+      const reference = window.Hyb2Pages.regionReference(state);
       if (!reference) {
         api.showToast("Reference sequence is unavailable for this region.");
         return true;
       }
       if (action === "copy-region-sequence") {
         api.copyText(reference.sequence, "Reference sequence copied to the clipboard.");
+      }
+      if (action === "region-send-structure" && state.canRequestFold && typeof api.requestFold === "function") {
+        api.requestFold(foldRequest(state, "region"));
+        return true;
       }
       if (action === "region-send-structure") {
         if (window.Hyb2Structure) {
@@ -2176,7 +2233,7 @@
       sourceHyb: sourceHyb(state),
       parameters: Object.assign({}, state.filters || {}),
       result: {
-        matchingRecords: (state.interactionResults || []).length
+        matchingRecords: state.view && state.view.interactions ? Number(state.view.interactions.total) || 0 : 0
       }
     };
   }
@@ -2321,19 +2378,84 @@
     };
   }
 
+  // Reference provenance from DataProvider.listDatasets() (DatasetInfo.reference).
   function sourceFasta(state, rna) {
-    if (!state.fasta) {
+    const reference = state.reference;
+    if (!reference) {
       return null;
     }
     return {
-      fileName: state.fasta.fileName || "",
-      fileSize: state.fasta.fileSize == null ? null : state.fasta.fileSize,
-      sha256: state.fasta.sha256 || null,
-      sha256Status: state.fasta.sha256
+      fileName: reference.fileName || "",
+      fileSize: reference.fileSize == null ? null : reference.fileSize,
+      sha256: reference.sha256 || null,
+      sha256Status: reference.sha256
         ? "available"
-        : (state.fasta.sha256Unavailable ? "unavailable" : "pending"),
-      mappedReferenceId: state.fasta.mapping && rna ? state.fasta.mapping[rna] || null : null
+        : (reference.sha256Unavailable ? "unavailable" : "pending"),
+      mappedReferenceId: reference.mapping && rna ? reference.mapping[rna] || null : null
     };
+  }
+
+  function fetchAllRows(api, query, onRows) {
+    if (typeof api.queryHybrids !== "function") {
+      api.showToast("Interaction rows are unavailable in this view.");
+      return;
+    }
+    Promise.resolve(api.queryHybrids(Object.assign({}, query, { offset: 0, limit: null }))).then(function (result) {
+      onRows(result && result.rows || []);
+    }).catch(function (error) {
+      api.showToast(error && error.message ? error.message : "The rows could not be loaded.");
+    });
+  }
+
+  // Payload for the host's onRequestFold({ region, partnerRegion, source }).
+  function foldRequest(state, source) {
+    const span = function (rna, start, end) {
+      const left = Number(start);
+      const right = Number(end);
+      return rna && Number.isSafeInteger(left) && Number.isSafeInteger(right) && left >= 1 && right >= left
+        ? { rna: rna, start: left, end: right }
+        : null;
+    };
+    // A contact cell is one bin per arm; fold each arm with flanking context
+    // (at least 50 nt or two bins) so a cell on the diagonal is not a 10-20 nt
+    // window. Ends are clamped to the map extent when it is known.
+    const pairRequest = function (rnaX, x, rnaY, y, binSize, maxX, maxY) {
+      const pad = Math.max(50, 2 * binSize);
+      const clampEnd = function (value, max) {
+        return Number.isFinite(max) && max > 0 ? Math.min(value, max) : value;
+      };
+      const first = span(rnaX, Math.max(1, x - pad), clampEnd(x + binSize - 1 + pad, maxX));
+      const second = span(rnaY, Math.max(1, y - pad), clampEnd(y + binSize - 1 + pad, maxY));
+      if (!first || !second) {
+        return null;
+      }
+      // Same RNA: one window spanning both arms; otherwise two regions.
+      if (rnaX === rnaY) {
+        return { source: source, region: span(rnaX, Math.min(first.start, second.start), Math.max(first.end, second.end)), partnerRegion: null, arms: [first, second] };
+      }
+      return { source: source, region: first, partnerRegion: second, arms: [first, second] };
+    };
+    let request = null;
+    if (source === "contact-map" && state.contact && state.contact.selection && state.contact.matrix) {
+      const matrix = state.contact.matrix;
+      request = pairRequest(state.contact.rnaX, state.contact.selection.x, state.contact.rnaY, state.contact.selection.y, matrix.binSize,
+        Number(matrix.lengthX || matrix.length || NaN), Number(matrix.lengthY || matrix.length2 || matrix.length || NaN));
+    } else if (source === "compare" && state.comparison && state.comparison.selection && state.comparison.result) {
+      const result = state.comparison.result;
+      request = pairRequest(state.comparison.rnaX, state.comparison.selection.x, state.comparison.rnaY, state.comparison.selection.y, result.binSize,
+        Number(result.lengthX || result.length || NaN), Number(result.lengthY || result.length2 || result.length || NaN));
+    } else if (source === "region" && state.region) {
+      const region = span(state.region.rna, state.region.start, state.region.end);
+      const partner = state.region.partner && state.region.partner !== state.region.rna
+        ? span(state.region.partner, state.region.partnerStart, state.region.partnerEnd)
+        : null;
+      request = region ? { source: source, region: region, partnerRegion: partner, arms: [region].concat(partner ? [partner] : []) } : null;
+    }
+    if (!request || !request.region) {
+      return null;
+    }
+    request.selection = state.selection || null;
+    return request;
   }
 
   function nullableNumber(value) {
@@ -2462,6 +2584,7 @@
     comparisonParameters: comparisonParameters,
     contactYAxisLabels: contactYAxisLabels,
     visualExportReady: visualExportReady,
-    moveComparisonSelection: moveComparisonSelection
+    moveComparisonSelection: moveComparisonSelection,
+    foldRequest: foldRequest
   };
 }());

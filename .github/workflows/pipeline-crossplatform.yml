@@ -7,6 +7,7 @@ on:
       - "data/**"
       - "desktop/runtime/**"
       - "desktop/scripts/acquire-bowtie2.py"
+      - "third_party/cplfold/**"
       - ".github/workflows/pipeline-crossplatform.yml"
   workflow_dispatch:
 
@@ -38,6 +39,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # The bundled runtime's packages: numpy (hyb2analysis), numba
+      # (DESeq2 port, CPLfold) and ViennaRNA (pipeline -e 1).
+      - name: Install the desktop runtime packages
+        run: 'python -m pip install --only-binary=:all: -r desktop/runtime/requirements-native.txt'
       - name: Acquire pinned Bowtie2
         run: python desktop/scripts/acquire-bowtie2.py --platform "${{ matrix.target }}" --output "$RUNNER_TEMP/bowtie2"
       - name: Pipeline golden and unit tests

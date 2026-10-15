@@ -573,8 +573,10 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 		})
 		if len(samples) == 0 {
 			ui.Column(c).Gap(4).Padding(16, 0).Children(func() {
-				ui.Text(c, "No samples yet.")
-				ui.Text(c, "Import FASTQ / FASTA (optionally .gz), SAM or .hyb files, or a TSV/CSV sample sheet with columns name, condition, replicate, files, reference.").
+				ui.Text(c, "No samples yet.").Bold()
+				ui.Text(c, "Next: click Import raw files… to add one sample at a time (FASTQ / FASTA, optionally .gz; also SAM or .hyb), "+
+					"or Import sample sheet… to add many at once from a TSV/CSV with columns name, condition, replicate, files, reference. "+
+					"Then Run all pending makes the .hyb files.").
 					TextColor(t.TextMuted)
 			})
 			return

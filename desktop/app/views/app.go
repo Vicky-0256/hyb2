@@ -180,7 +180,7 @@ func (a *App) Open(path string) {
 		opened, err := a.B.OpenProject(path)
 		if err != nil {
 			return func() {
-				a.start.status = "Could not open the project: " + err.Error()
+				a.start.status = openError(err)
 				a.Toast("Could not open the project: %v", err)
 			}
 		}

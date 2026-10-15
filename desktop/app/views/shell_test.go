@@ -1,6 +1,9 @@
 package views
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +18,8 @@ func TestStartPageOpensProject(t *testing.T) {
 	a := New(f, nil, t.TempDir())
 	a.SetRuntimeStatus("Runtime: macos arm64 · Python 3.11.17", "")
 	tt := ui.NewTester(a.View, 1100, 720)
-	for _, text := range []string{"Open a project", "New project", "Create and open"} {
+	for _, text := range []string{"How it works", "Start a new project", "Create project",
+		"Open an existing project", "Choose project folder…", "Recent projects", "None yet."} {
 		if !tt.HasText(text) {
 			t.Fatalf("start page lacks %q: %q", text, tt.Texts())
 		}
@@ -24,7 +28,7 @@ func TestStartPageOpensProject(t *testing.T) {
 	a.Open("/missing")
 	waitFlush(a)
 	tt.Frame()
-	if !tt.HasText("Could not open the project: project.json is missing") {
+	if !tt.HasText(openError(errors.New("project.json is missing"))) {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	a.Open("/projects/zikv.hyb2proj")
@@ -40,6 +44,46 @@ func TestStartPageOpensProject(t *testing.T) {
 	again := New(f, nil, a.DataDir)
 	if len(again.recent) != 1 {
 		t.Fatalf("recent not persisted: %+v", again.recent)
+	}
+}
+
+func TestStartPageCreatesProjectFolder(t *testing.T) {
+	f := newFake(t)
+	a := New(f, nil, t.TempDir())
+	parent := t.TempDir()
+	a.start.newParent = parent
+	a.start.newName = "ZIKV virion/RNA"
+	tt := ui.NewTester(a.View, 1100, 720)
+	want := filepath.Join(parent, "ZIKV virion-RNA.hyb2proj")
+	if !tt.HasText("Creates the folder " + want) {
+		t.Fatalf("texts %q", tt.Texts())
+	}
+	// An existing non-empty folder of that name is not reused.
+	if err := os.MkdirAll(filepath.Join(want, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Create project"); err != nil {
+		t.Fatal(err)
+	}
+	waitFlush(a)
+	waitFlush(a)
+	tt.Frame()
+	got := strings.Join(f.calls, ",")
+	if !strings.Contains(got, "create:ZIKV virion/RNA") || !strings.Contains(got, "open:"+filepath.Join(parent, "ZIKV virion-RNA 2.hyb2proj")) {
+		t.Fatalf("calls %s", got)
+	}
+}
+
+func TestProjectFolderName(t *testing.T) {
+	for in, want := range map[string]string{
+		"ZIKV virion RNA": "ZIKV virion RNA.hyb2proj",
+		"a/b\\c:d":        "a-b-c-d.hyb2proj",
+		"  ..  ":          "project.hyb2proj",
+		"寨卡 RNA":          "寨卡 RNA.hyb2proj",
+	} {
+		if got := ProjectFolderName(in); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
 	}
 }
 

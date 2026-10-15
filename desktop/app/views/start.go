@@ -14,13 +14,17 @@ import (
 
 type startState struct {
 	openPath   string
-	newPath    string
+	pasteOpen  bool // the "paste a path" section of Open is expanded
+	newParent  string
 	newName    string
 	status     string
 	creating   bool
 	runtimeErr string
 	runtime    string
 }
+
+// ProjectSuffix ends every project folder the start page creates.
+const ProjectSuffix = ".hyb2proj"
 
 // Dialogs are native and block, so they run on a goroutine; tests replace them.
 var (
@@ -46,27 +50,144 @@ func (a *App) SetRuntimeStatus(summary, err string) {
 	a.start.runtime, a.start.runtimeErr = summary, err
 }
 
+// defaultProjectParent is where new projects go unless the user picks
+// another folder: ~/Documents, else the home folder.
+func defaultProjectParent() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if info, err := os.Stat(filepath.Join(home, "Documents")); err == nil && info.IsDir() {
+		return filepath.Join(home, "Documents")
+	}
+	return home
+}
+
+// ProjectFolderName turns a project name into a folder name:
+// "ZIKV virion RNA" -> "ZIKV virion RNA.hyb2proj".
+func ProjectFolderName(name string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.TrimSpace(name) {
+		ok := r == ' ' || r == '-' || r == '_' || r == '.' ||
+			(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r > 127
+		if ok {
+			b.WriteRune(r)
+			dash = false
+		} else if !dash {
+			b.WriteRune('-')
+			dash = true
+		}
+	}
+	base := strings.Trim(b.String(), " .-")
+	if base == "" {
+		base = "project"
+	}
+	return base + ProjectSuffix
+}
+
+// newProjectPath is the folder Create makes for name under parent; an
+// existing non-empty folder gets " 2", " 3", ... appended.
+func newProjectPath(parent, name string) string {
+	folder := ProjectFolderName(name)
+	path := filepath.Join(parent, folder)
+	for i := 2; i < 1000; i++ {
+		entries, err := os.ReadDir(path)
+		if err != nil || len(entries) == 0 {
+			return path
+		}
+		path = filepath.Join(parent, strings.TrimSuffix(folder, ProjectSuffix)+fmt.Sprintf(" %d", i)+ProjectSuffix)
+	}
+	return path
+}
+
+// openError explains the common reasons a folder does not open.
+func openError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "project.json is missing"):
+		return "This folder is not a HYB2 project (it has no project.json). Choose a folder created by HYB2 Desktop — its name usually ends in " +
+			ProjectSuffix + " — or start a new project."
+	case strings.Contains(msg, "no such file") || strings.Contains(msg, "does not exist"):
+		return "The folder does not exist (moved or renamed?): " + msg
+	}
+	return "Could not open the project: " + msg
+}
+
+// startStep is one numbered step of the "how it works" strip.
+func startStep(c *ui.Context, n, title, body string) {
+	t := c.Theme()
+	ui.Row(c).Gap(10).AlignItems(ui.Start).Grow(1).Basis(200).Children(func() {
+		ui.Text(c, n).FontSize(13).Bold().TextColor(t.Accent).Width(18)
+		ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+			ui.Text(c, title).Bold()
+			ui.Text(c, body).FontSize(12).TextColor(t.TextMuted)
+		})
+	})
+}
+
 func (a *App) startView(c *ui.Context) {
 	t := c.Theme()
 	s := &a.start
+	if s.newParent == "" {
+		s.newParent = defaultProjectParent()
+	}
 	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).Padding(32).Gap(16).MaxWidth(960).Children(func() {
+		ui.Column(c).Padding(32).Gap(16).MaxWidth(980).Children(func() {
 			ui.Column(c).Gap(4).Children(func() {
 				ui.Text(c, "HYB2 Desktop").FontSize(26).Bold()
-				ui.Text(c, "From raw chimeric reads to RNA structure, in one local project.").TextColor(t.TextMuted)
+				ui.Text(c, "From raw chimeric reads (FASTQ) to hybrids, interactions and RNA structure — all on this computer.").TextColor(t.TextMuted)
 			})
 			if s.runtimeErr != "" {
 				ui.Text(c, "Runtime unavailable: "+s.runtimeErr).TextColor(t.Danger)
 			}
+			card(c, "How it works", func() {
+				ui.Row(c).Gap(16).AlignItems(ui.Start).Wrap().Children(func() {
+					startStep(c, "1", "Create a project", "A folder on your disk that keeps the sample list, pipeline outputs and results.")
+					startStep(c, "2", "Add data", "On the Data page: the reference (FASTA) and your raw reads (FASTQ, many GB is fine). Files are linked where they are, not copied.")
+					startStep(c, "3", "Run the pipeline", "Mapping and hybrid calling make the .hyb files, using the CPUs set in Preferences.")
+					startStep(c, "4", "Analyse", "QC, Explore, Compare (DESeq2) and Structure (CPLfold), then export a Report.")
+				})
+			})
 			ui.Row(c).Gap(16).AlignItems(ui.Stretch).Wrap().Children(func() {
-				card(c, "Open a project", func() {
-					Field(c, "Project folder", func() {
-						ui.TextInput(c.Key("open-path"), &s.openPath).Placeholder("/path/to/study.hyb2proj").Label("Project folder")
+				card(c, "Start a new project", func() {
+					ui.Text(c, "Use this the first time you analyse a data set.").FontSize(12).TextColor(t.TextMuted)
+					Field(c, "Project name", func() {
+						ui.TextInput(c.Key("new-name"), &s.newName).Placeholder("e.g. ZIKV virion RNA").Label("Project name")
 					})
+					Field(c, "Save in", func() {
+						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, nameOr(s.newParent, "Choose a folder")).FontSize(12).SingleLine().Grow(1).Shrink(1).MinWidth(0)
+							if ui.Button(c, "Change…").Tooltip("Choose the folder the project folder is created in").Clicked() {
+								a.Go(func() func() {
+									path := PickFolder("Where should the project folder be created?")
+									return func() {
+										if path != "" {
+											s.newParent = path
+										}
+									}
+								})
+							}
+						})
+					})
+					name := strings.TrimSpace(s.newName)
+					if name != "" && s.newParent != "" {
+						ui.Text(c, "Creates the folder "+filepath.Join(s.newParent, ProjectFolderName(name))).FontSize(12).TextColor(t.TextMuted)
+					}
 					ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-						if ui.Button(c, "Browse…").Clicked() {
+						ready := name != "" && s.newParent != "" && !s.creating
+						if ui.PrimaryButton(c, "Create project").Disabled(!ready).Clicked() {
+							a.create(newProjectPath(s.newParent, name), name)
+						}
+					})
+				}).Grow(1).Basis(360)
+				card(c, "Open an existing project", func() {
+					ui.Text(c, "Continue a project made earlier with HYB2 Desktop. Choose its folder — the one whose name ends in "+
+						ProjectSuffix+" and that contains project.json.").FontSize(12).TextColor(t.TextMuted)
+					ui.Row(c).Gap(8).Children(func() {
+						if ui.PrimaryButton(c, "Choose project folder…").Clicked() {
 							a.Go(func() func() {
-								path := PickFolder("Open a HYB2 project")
+								path := PickFolder("Open a HYB2 project folder (" + ProjectSuffix + ")")
 								return func() {
 									if path != "" {
 										s.openPath = path
@@ -75,57 +196,39 @@ func (a *App) startView(c *ui.Context) {
 								}
 							})
 						}
-						if ui.PrimaryButton(c, "Open").Disabled(strings.TrimSpace(s.openPath) == "").Clicked() {
-							a.Open(s.openPath)
-						}
 					})
-				}).Grow(1).Basis(320)
-				card(c, "New project", func() {
-					Field(c, "Empty folder", func() {
-						ui.TextInput(c.Key("new-path"), &s.newPath).Placeholder("/path/to/new-study.hyb2proj").Label("Empty folder")
+					ui.Collapsible(c.Key("open-paste"), "Or paste a folder path", &s.pasteOpen, func() {
+						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+							ui.TextInput(c.Key("open-path"), &s.openPath).Placeholder("/path/to/study" + ProjectSuffix).Label("Project folder").Grow(1)
+							if ui.Button(c, "Open").Disabled(strings.TrimSpace(s.openPath) == "").Clicked() {
+								a.Open(s.openPath)
+							}
+						})
 					})
-					Field(c, "Name", func() {
-						ui.TextInput(c.Key("new-name"), &s.newName).Placeholder("ZIKV virion RNA").Label("Name")
-					})
-					ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-						if ui.Button(c, "Browse…").Clicked() {
-							a.Go(func() func() {
-								path := PickFolder("Choose an empty folder for the project")
-								return func() {
-									if path != "" {
-										s.newPath = path
-									}
-								}
-							})
-						}
-						ready := strings.TrimSpace(s.newPath) != "" && strings.TrimSpace(s.newName) != "" && !s.creating
-						if ui.PrimaryButton(c, "Create and open").Disabled(!ready).Clicked() {
-							a.create(strings.TrimSpace(s.newPath), strings.TrimSpace(s.newName))
-						}
-					})
-				}).Grow(1).Basis(320)
+				}).Grow(1).Basis(360)
 			})
 			if s.status != "" {
 				ui.Text(c, s.status).TextColor(t.TextMuted)
 			}
-			if len(a.recent) > 0 {
-				card(c, "Recent projects", func() {
-					for _, r := range a.recent {
-						r := r
-						ui.Row(c.Key(r.Path)).Gap(8).Children(func() {
-							ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
-								if ui.Link(c, nameOr(r.Name, filepath.Base(r.Path)), "").Clicked() {
-									a.Open(r.Path)
-								}
-								ui.Text(c, r.Path).FontSize(12).TextColor(t.TextMuted).SingleLine()
-							})
-							if ui.Button(c, "Forget").Clicked() {
-								a.forget(r.Path)
+			card(c, "Recent projects", func() {
+				if len(a.recent) == 0 {
+					ui.Text(c, "None yet. Projects you create or open are listed here for one-click reopening.").FontSize(12).TextColor(t.TextMuted)
+				}
+				for _, r := range a.recent {
+					r := r
+					ui.Row(c.Key(r.Path)).Gap(8).Children(func() {
+						ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+							if ui.Link(c, nameOr(r.Name, filepath.Base(r.Path)), "").Clicked() {
+								a.Open(r.Path)
 							}
+							ui.Text(c, r.Path).FontSize(12).TextColor(t.TextMuted).SingleLine()
 						})
-					}
-				})
-			}
+						if ui.Button(c, "Forget").Tooltip("Remove from this list (the folder is not deleted)").Clicked() {
+							a.forget(r.Path)
+						}
+					})
+				}
+			})
 			if s.runtime != "" {
 				ui.Text(c, s.runtime).FontSize(12).TextColor(t.TextMuted)
 			}
@@ -152,7 +255,7 @@ func (a *App) create(path, name string) {
 				a.start.status = fmt.Sprintf("Could not create the project: %v", err)
 				return
 			}
-			a.start.newPath, a.start.newName = "", ""
+			a.start.newName = ""
 			a.Open(path)
 		}
 	})

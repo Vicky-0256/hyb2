@@ -32,6 +32,7 @@ package views
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -412,6 +413,39 @@ func (p *comparePage) selectComparison(id string) {
 	p.ensureResult()
 }
 
+// referenceNotice warns when A and B are mapped to different references:
+// the test compares their positions 1:1, which is only meaningful when the
+// references are colinear (e.g. two strains of one virus).
+func (p *comparePage) referenceNotice() string {
+	a := p.a
+	refs := func(key string) []string {
+		var out []string
+		for _, id := range a.SelectionIDs(key) {
+			if s := a.Project.Sample(id); s != nil && s.ReferenceID != "" && !slices.Contains(out, s.ReferenceID) {
+				out = append(out, s.ReferenceID)
+			}
+		}
+		return out
+	}
+	refA, refB := refs(p.keyA), refs(p.keyB)
+	if len(refA) == 0 || len(refB) == 0 || slices.Equal(refA, refB) {
+		return ""
+	}
+	name := func(ids []string) string {
+		var out []string
+		for _, id := range ids {
+			if r := a.Project.Reference(id); r != nil {
+				out = append(out, nameOr(r.Label, r.ID))
+			} else {
+				out = append(out, id)
+			}
+		}
+		return strings.Join(out, ", ")
+	}
+	return fmt.Sprintf("A is mapped to %s and B to %s: positions are compared 1:1, which assumes the references are aligned position by position.",
+		name(refA), name(refB))
+}
+
 // ---- actions
 
 func (p *comparePage) runTest() {
@@ -732,6 +766,9 @@ func (p *comparePage) controls(c *ui.Context) {
 		if p.runMsg != "" {
 			ui.Text(c, p.runMsg).TextColor(t.Danger)
 		}
+		if notice := p.referenceNotice(); notice != "" {
+			ui.Text(c, notice).FontSize(12).TextColor(t.Warning)
+		}
 		ui.Collapsible(c.Key("cmp-settings"), "Settings", &p.settings, func() {
 			ui.Column(c).Gap(8).Padding(8, 0, 0, 0).Children(func() {
 				ui.Row(c).Gap(16).Wrap().Children(func() {
@@ -797,7 +834,16 @@ func (p *comparePage) list(c *ui.Context) {
 		})
 		running := cmpTaskRows(c, a, "compare")
 		if p.listErr != "" {
-			ui.Text(c, "Could not list comparisons: "+p.listErr).TextColor(t.Danger)
+			// Not "no tests yet": the list is unknown.
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Could not list comparisons: "+ShortError(p.listErr)).TextColor(t.Danger).Grow(1).Shrink(1).MinWidth(0)
+				if ui.Button(c, "Retry").Clicked() {
+					p.loadList()
+				}
+			})
+			if len(p.comparisons) == 0 && running == 0 {
+				return
+			}
 		}
 		if len(p.comparisons) == 0 && running == 0 {
 			msg := "No differential tests yet. Pick A and B, then Run differential test."
@@ -927,7 +973,8 @@ func (p *comparePage) results(c *ui.Context) {
 			cmpStat(c, "Significant cells", FormatNumber(s.Significant), t.Text)
 			cmpStat(c, "Higher in A", FormatNumber(s.SignificantUp), cmpRed)
 			cmpStat(c, "Higher in B", FormatNumber(s.SignificantDown), cmpBlue)
-			cmpStat(c, "Interactions", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text)
+			cmpStat(c, "Interactions A / B", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text).
+				Tooltip("Merged interactions higher in A / higher in B")
 			if n := len(e.SamplesOne); n > 0 && n < len(sizeFactors) {
 				cmpStat(c, "Size factors A · B", strings.Join(sizeFactors[:n], " ")+" · "+strings.Join(sizeFactors[n:], " "), t.Text).
 					Tooltip("DESeq2 size factors, in sample order: " + strings.Join(append(append([]string{}, e.SamplesOne...), e.SamplesTwo...), ", "))

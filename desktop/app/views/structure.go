@@ -609,6 +609,46 @@ func (p *structurePage) ensureRead(id string) {
 	})
 }
 
+// evidenceMismatch says why the evidence cannot be used for the chosen RNA:
+// its samples are mapped to another reference (their chimeras name other
+// sequences). "" when they match or the RNA's reference is unknown.
+func (p *structurePage) evidenceMismatch() string {
+	a := p.a
+	if a.Project == nil || p.gene == "" {
+		return ""
+	}
+	var want *model.Reference
+	for i, r := range a.Project.References {
+		for _, s := range r.Sequences {
+			if s.Name == p.gene {
+				want = &a.Project.References[i]
+			}
+		}
+	}
+	if want == nil {
+		return ""
+	}
+	name := func(r *model.Reference) string {
+		if r.Label != "" {
+			return r.Label
+		}
+		return r.ID
+	}
+	for _, id := range a.SelectionIDs(p.evidence) {
+		s := a.Project.Sample(id)
+		if s == nil || s.ReferenceID == "" || s.ReferenceID == want.ID {
+			continue
+		}
+		other := s.ReferenceID
+		if r := a.Project.Reference(other); r != nil {
+			other = name(r)
+		}
+		return fmt.Sprintf("%s is mapped to %s, not to %s (the reference of this RNA). Choose evidence mapped to %s.",
+			a.SelectionLabel(p.evidence), other, name(want), name(want))
+	}
+	return ""
+}
+
 func (p *structurePage) runFold() {
 	a := p.a
 	p.formErr = true
@@ -620,6 +660,10 @@ func (p *structurePage) runFold() {
 	}
 	if len(ids) == 0 {
 		p.formMsg = "Choose analysed samples as evidence."
+		return
+	}
+	if msg := p.evidenceMismatch(); msg != "" {
+		p.formMsg = msg
 		return
 	}
 	mode := p.mode
@@ -798,6 +842,9 @@ func (p *structurePage) form(c *ui.Context) {
 				return
 			}
 			ui.Select(c.Key("st-evidence"), &currentEv, evLabels).FillWidth().Label("Evidence").OnChange(func() { p.evidence = keys[currentEv] })
+			if msg := p.evidenceMismatch(); msg != "" {
+				ui.Text(c, msg).FontSize(12).TextColor(t.Danger)
+			}
 		})
 		Field(c, "Mode", func() {
 			ui.RadioGroup(c.Key("st-mode"), func() {

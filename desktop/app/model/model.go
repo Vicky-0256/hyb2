@@ -86,6 +86,14 @@ type Condition struct {
 	SampleIDs []string `json:"sample_ids"`
 }
 
+// UntrustedLink is a file the project names outside its folder that was
+// not linked on this computer (list_samples untrusted_links): Python does
+// not open it until the user allows it.
+type UntrustedLink struct {
+	Path   string   `json:"path"`
+	UsedBy []string `json:"used_by"`
+}
+
 // Project is an opened project: its manifest summary plus the sample model.
 type Project struct {
 	Path        string
@@ -94,7 +102,9 @@ type Project struct {
 	References  []Reference
 	Samples     []Sample
 	Conditions  []Condition
-	UIState     map[string]any
+	// UntrustedLinks: see UntrustedLink (empty when all may be opened).
+	UntrustedLinks []UntrustedLink
+	UIState        map[string]any
 }
 
 func (p *Project) Sample(id string) *Sample {

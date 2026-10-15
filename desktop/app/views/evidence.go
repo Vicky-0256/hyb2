@@ -51,6 +51,21 @@ func researchDigest(records []structureRecord) string {
 // only those prefill the query.
 var researchPublicID = regexp.MustCompile(`^(?:[a-z]{3}-(?:mir|miR|let)-[A-Za-z0-9-]+|URS[0-9A-F]{10}(?:_[0-9]+)?|ENS[A-Z]*[GT][0-9]{11}(?:\.[0-9]+)?|[NX]R_[0-9]{6,9}(?:\.[0-9]+)?)$`)
 
+// researchCardLabel names a card's status; an ID mapping is not a summary.
+func researchCardLabel(card *model.EvidenceCard) string {
+	if card.SourceTool == core.ToolMap && card.Status == model.EvidenceSuccess {
+		return "Mapping found"
+	}
+	return researchStatusLabel(card.Status)
+}
+
+// researchShowDetail: the status detail is shown for failures and for every
+// ID mapping (its species check is kept there on success).
+func researchShowDetail(card *model.EvidenceCard) bool {
+	return card.StatusDetail != nil && *card.StatusDetail != "" &&
+		(card.Status != model.EvidenceSuccess || card.SourceTool == core.ToolMap)
+}
+
 // researchStatusLabel names a card's status in a few words.
 func researchStatusLabel(status string) string {
 	switch status {
@@ -62,6 +77,8 @@ func researchStatusLabel(status string) string {
 		return "Not found or no summary"
 	case model.EvidenceUpstreamError:
 		return "RNAcentral error"
+	case model.EvidenceLocalError:
+		return "Local error"
 	case model.EvidenceTimeout:
 		return "Timed out"
 	case model.EvidenceCancelled:
@@ -90,6 +107,9 @@ func researchStatusText(card *model.EvidenceCard) string {
 			"a missing summary does not mean the RNA has not been studied."
 	case model.EvidenceUpstreamError:
 		return "RNAcentral could not be reached or answered with an error. Nothing is concluded; try again later."
+	case model.EvidenceLocalError:
+		return "The RNAcentral helper on this computer failed to start or stopped, so RNAcentral was not asked. " +
+			"Nothing is concluded; try again, and restart HYB2 Desktop if it keeps failing."
 	case model.EvidenceTimeout:
 		return fmt.Sprintf("No answer within %d s; the lookup was stopped. Nothing is concluded.", int(core.EvidenceTimeout.Seconds()))
 	case model.EvidenceCancelled:
@@ -111,6 +131,10 @@ func researchHeading(card *model.EvidenceCard) string {
 }
 
 // researchReview names a review state.
+// researchOriginNotice marks a saved card without this computer's seal
+// (core/evidence_seal.go): made elsewhere, or edited since it was saved.
+const researchOriginNotice = "Made or edited on another computer: its text and review are not verified here"
+
 func researchReview(r model.EvidenceReview) string {
 	switch r.State {
 	case model.ReviewReviewed:
@@ -122,11 +146,21 @@ func researchReview(r model.EvidenceReview) string {
 }
 
 // researchQuery is "identifier · taxon".
+// researchQuery is the identifier and taxon, saying how a summary's taxon
+// was checked: it is never sent with a summary (only a mapping sends it).
 func researchQuery(card *model.EvidenceCard) string {
-	if taxon := card.TaxonText(); taxon != "" {
-		return card.QueryIdentifier + " · taxon " + taxon
+	taxon := card.TaxonText()
+	if taxon == "" {
+		return card.QueryIdentifier + " · no taxon"
 	}
-	return card.QueryIdentifier + " · no taxon"
+	out := card.QueryIdentifier + " · taxon " + taxon
+	if card.SourceTool == core.ToolMap {
+		return out
+	}
+	if card.TaxonCheck == core.TaxonCheckedByName {
+		return out + " (checked by the miRBase name)"
+	}
+	return out + " (as entered; not sent to RNAcentral, not checked)"
 }
 
 // researchVersions is the server, SDK and adapter versions.
@@ -249,6 +283,10 @@ func (p *researchPanel) follow(target *researchTarget) {
 	if key != p.targetKey {
 		p.targetKey = key
 		p.card, p.err, p.confirmed = nil, "", false
+		// A lookup still running was asked for the previous result: its
+		// answer is dropped (seq) rather than shown and saved here.
+		p.seq++
+		p.running = ""
 	}
 	if gene != p.prefillGene {
 		p.prefillGene = gene
@@ -448,13 +486,13 @@ func (p *researchPanel) cardView(c *ui.Context, card *model.EvidenceCard, target
 	ui.Column(c.Key("rs-card")).Gap(8).Padding(12).Radius(8).Border(1, t.Border).Children(func() {
 		ui.Text(c, researchHeading(card)).Bold().Padding(4, 8).Radius(6).Background(tone.Alpha(0.14))
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-			ui.Badge(c, researchStatusLabel(card.Status))
+			ui.Badge(c, researchCardLabel(card))
 			ui.Text(c, researchQuery(card)).FontSize(12).TextColor(t.TextMuted)
 		})
 		if text := researchStatusText(card); text != "" {
 			ui.Text(c, text)
 		}
-		if card.StatusDetail != nil && !ok {
+		if researchShowDetail(card) {
 			ui.Text(c, "Detail: "+*card.StatusDetail).FontSize(12).TextColor(t.TextMuted)
 		}
 		if text := card.Text(); text != "" {
@@ -512,7 +550,7 @@ func (p *researchPanel) savedView(c *ui.Context, target *researchTarget) {
 		if len(other) > 0 {
 			ui.Text(c, fmt.Sprintf("Saved for other results (%d) — not applied here", len(other))).FontSize(12).Bold().TextColor(t.TextMuted)
 			for _, card := range other {
-				ui.Text(c.Key("rs-other-"+card.EvidenceID), card.QueryIdentifier+" · "+researchStatusLabel(card.Status)+
+				ui.Text(c.Key("rs-other-"+card.EvidenceID), card.QueryIdentifier+" · "+researchCardLabel(card)+
 					" · for another result ("+researchBindingText(card.Binding)+")").FontSize(12).TextColor(t.TextMuted)
 			}
 		}
@@ -523,12 +561,15 @@ func (p *researchPanel) savedCard(c *ui.Context, card *model.EvidenceCard) {
 	t := c.Theme()
 	id := card.EvidenceID
 	ui.Column(c.Key("rs-saved-"+id)).Gap(6).Padding(8, 10).Radius(8).Border(1, t.Border).Children(func() {
-		ui.Text(c, researchQuery(card)+" · "+researchStatusLabel(card.Status)).Bold()
+		ui.Text(c, researchQuery(card)+" · "+researchCardLabel(card)).Bold()
 		ui.Text(c, researchHeading(card)).FontSize(12).TextColor(t.TextMuted)
 		if text := card.Text(); text != "" {
 			ui.Text(c, truncate(text, 400)).FontSize(12)
 		}
 		ui.Text(c, researchRetrieved(card)+" · "+researchReview(card.Review)+" · citations not verified").FontSize(11).TextColor(t.TextMuted)
+		if !card.LocalOrigin {
+			ui.Text(c, researchOriginNotice+".").FontSize(11).TextColor(t.Warning)
+		}
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			if card.Binding != nil && ui.Checkbox(c.Key("rs-report-"+id), &card.Binding.IncludeInReport, "Include in report").Changed() {
 				p.update(id, model.EvidenceUpdate{IncludeInReport: card.Binding.IncludeInReport})

@@ -41,6 +41,20 @@ and compute sidecars never wait on the network.
   9606 → "No cross-references found…" (`not_found_or_no_summary`). This is
   why Go only sends `describe` after the user confirmed id and taxon.
 
+- Summaries are keyed by the miRBase precursor name (live, 2026-10-15):
+  `hsa-mir-21` has a summary, while `URS000039ED8D_9606`,
+  `URS000039ED8D_10090`, `URS000039ED8D` and the mapping's canonical
+  `hsa-miR-21-5p` all answer 404; map_rna_id maps external ids
+  (`MIMAT0000076`, `NR_029493` → `URS000039ED8D_9606`) but not names. So a
+  summary cannot be reached through a species-checked mapping, and the
+  taxon never travels with get_rna_description. Go checks it by the name
+  instead: for a miRBase name with a known prefix (`hsa` 9606, `mmu` 10090,
+  `aae` 7159, … in `core/evidence_taxon.go`) a contradicting taxon is
+  refused before any request, and the card records `taxon_check:
+  name_prefix` (an empty taxon becomes the prefix's); any other identifier
+  records `taxon_check: not_checked` and is shown as "as entered; not sent
+  to RNAcentral, not checked".
+
 ## Worker protocol (Go ↔ Python)
 
 `python -m desktop.runtime.evidence.worker --serve`, stdin
@@ -59,10 +73,14 @@ Operations (anything else → `{"ok":false,"error":"unsupported evidence operati
 | `map_id` | `{identifier, taxon}` | `{ok:true, card: EvidenceCard}` with `content_kind: database_metadata` |
 | `shutdown` | `{}` | closes the MCP session and child, then exits |
 
-Timeouts: Go cancels by killing the worker (and its MCP child, its process
-group) after 45 s per call; the worker itself uses 30 s per tool call and at
-most one retry for connection errors (never for 404). Rate limit: at most 2
-calls per second.
+Timeouts: Go cancels by killing the worker's process group after 45 s per
+call. The MCP SDK starts the RNAcentral child in its own session, so the
+group kill does not reach it: the child ends on EOF of its stdin when the
+worker dies (checked: it exits about 0.1 s later). The worker keeps one
+request, retry included, within 40 s (`REQUEST_BUDGET`, so before Go's 45 s):
+starting the server (at most 30 s) and the tool call (at most 30 s) only get
+the time left, and the single retry for a lost server (never for 404) starts
+only with 10 s left. Rate limit: at most 2 calls per second.
 
 ## EvidenceCard (JSON; worker produces, Go stores)
 
@@ -80,7 +98,7 @@ calls per second.
   "identity_confirmation": "user_confirmed" | "unconfirmed",
   "requested_at": "2026-10-15T08:00:00Z",
   "retrieved_at": "2026-10-15T08:00:01Z" | null,
-  "status": "success" | "summary_unavailable" | "not_found_or_no_summary" | "upstream_error" | "timeout" | "cancelled" | "identity_unconfirmed" | "unexpected_response",
+  "status": "success" | "summary_unavailable" | "not_found_or_no_summary" | "upstream_error" | "local_error" | "timeout" | "cancelled" | "identity_unconfirmed" | "unexpected_response",
   "status_detail": "HTTP 404 Not Found" | null,
   "content_kind": "external_ai_summary" | "database_metadata",
   "display_text": "...",           // null unless success (or mapping text)
@@ -117,6 +135,16 @@ sent by Go); the worker never decides identity.
   attached_at, include_in_report}`; `result_digest` = sha256 of the bound
   structure's dot-bracket. A card bound to another structure/record is shown
   as "for another result" and never carried over.
+- Card files travel with the project, so their content is only as
+  trustworthy as whoever wrote them last. Go writes `local_seal`
+  (`hmac-sha256:<hex>` of the card JSON without it) under a 32-byte key kept
+  beside the preferences (`evidence-seal.key`, 0600, not in the cache), when
+  it attaches a card and when it updates a card whose seal checks out. A card
+  without a valid seal (made on another computer, or edited since) is shown
+  and reported as "made or edited on another computer: its text and review
+  are not verified here"; updating it does not seal it. Read back, every card
+  has `citation_verification: not_checked` and
+  `relation_to_current_structure: background_only`, whatever the file says.
 - The cache (`HYB2_EVIDENCE_CACHE`, app cache dir) keeps raw responses by
   `(provider, tool, query_identifier, taxon, server_package_version,
   adapter_version)`, 7 days; Preferences can clear it.
@@ -141,7 +169,9 @@ sent by Go); the worker never decides identity.
   - Responses carry `raw_text` and `cached: bool` next to `card`.
   - `raw_response_digest` and `retrieved_at` are null when no tool response
     arrived (timeout, lost connection); non-text content hashes as "".
-  - Lost transport / server failed to start → `upstream_error`; MCP protocol
+  - Lost transport / server failed to start → `local_error` (the MCP server
+    is a process on this computer; RNAcentral's own errors arrive as tool
+    text and stay `upstream_error`); MCP protocol
     errors, refused or unlisted tools, responses over 256 KiB →
     `unexpected_response`; MCP `isError` → `upstream_error`. The worker never
     emits `cancelled` or `identity_unconfirmed` (Go does).
@@ -156,8 +186,11 @@ sent by Go); the worker never decides identity.
     `[A-Za-z .-]{1,64}`.
   - The SDK starts the MCP child in its own session; it exits when the
     worker's pipe closes (checked with SIGKILL of the worker mid-call).
-  - No clear_cache operation: Go deletes the cache directory. The server log
-    (`rnacentral-server.log`) can contain the queried public id.
+  - No clear_cache operation: Go deletes the cache directory. The server's
+    stderr logs the queried ids, so it is discarded (and an
+    `rnacentral-server.log` left by an earlier version is deleted when the
+    worker starts); `HYB2_EVIDENCE_SERVER_LOG=1` keeps it for debugging, one
+    session per file, never appended.
   - The lock (`desktop/runtime/requirements-evidence.txt`, 46 pins, 65
     hashes) covers macOS arm64, Windows amd64 and Linux x86_64; on Linux the
     cryptography wheel pip selects needs glibc ≥ 2.34.

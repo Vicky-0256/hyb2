@@ -6,7 +6,8 @@ package core
 // server child. Go decides everything that concerns the user's data: the
 // external_lookup preference gate, identifier validation, identity
 // confirmation, timeouts and cancellation (killing the worker's process
-// group, so the MCP child dies too), and the cards saved in
+// group; the MCP child, in its own session, ends on its stdin's EOF), and
+// the cards saved in
 // <project>/evidence/. Only the public query fields (identifier, taxon)
 // reach the worker; project paths, ids and structures never do.
 
@@ -123,7 +124,9 @@ type EvidenceService struct {
 	// enabled reads the external_lookup preference.
 	enabled  func() bool
 	cacheDir string
-	now      func() time.Time
+	// sealKeyPath is this computer's card seal key ("" seals nothing).
+	sealKeyPath string
+	now         func() time.Time
 }
 
 func newEvidenceService(spec func() (SidecarSpec, error), enabled func() bool, cacheDir string) *EvidenceService {
@@ -362,6 +365,10 @@ func (e *EvidenceService) Describe(rnaID, taxon string, confirmed, force bool) (
 	if !e.enabled() {
 		return model.EvidenceCard{}, ErrExternalLookupOff
 	}
+	taxon, check, err := checkTaxonByName(rnaID, taxon)
+	if err != nil {
+		return model.EvidenceCard{}, err
+	}
 	if !confirmed {
 		return e.localCard(ToolDescribe, rnaID, taxon, model.EvidenceIdentityUnconfirmed,
 			"confirm that the identifier and species refer to the RNA you study", e.now()), nil
@@ -370,7 +377,11 @@ func (e *EvidenceService) Describe(rnaID, taxon string, confirmed, force bool) (
 	if taxon != "" {
 		request["taxon"] = taxon
 	}
-	return e.lookup(request, ToolDescribe, rnaID, taxon)
+	card, err := e.lookup(request, ToolDescribe, rnaID, taxon)
+	if err == nil {
+		card.TaxonCheck = check
+	}
+	return card, err
 }
 
 // Map is map_rna_id: advisory mapping of an external id within a taxon.
@@ -446,27 +457,19 @@ func cardPath(dir, id string) (string, error) {
 
 func readCard(path string) (model.EvidenceCard, error) {
 	var card model.EvidenceCard
-	data, err := os.ReadFile(path)
+	data, err := readProjectFile(path)
 	if err != nil {
 		return card, err
 	}
 	if err := json.Unmarshal(data, &card); err != nil {
 		return card, err
 	}
+	// The card file is project data (it may have been edited or come with
+	// a copied project): this version never verifies citations nor relates
+	// a card to a structure beyond background, whatever the file says.
+	card.CitationVerification = "not_checked"
+	card.RelationToStructure = "background_only"
 	return card, nil
-}
-
-// writeFileAtomic writes through a temporary file in the same directory.
-func writeFileAtomic(path string, data []byte) error {
-	pending := path + ".tmp"
-	if err := os.WriteFile(pending, data, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(pending, path); err != nil {
-		_ = os.Remove(pending)
-		return err
-	}
-	return nil
 }
 
 func writeCard(path string, card model.EvidenceCard) error {
@@ -538,6 +541,9 @@ func (e *EvidenceService) Attach(projectPath string, card model.EvidenceCard, bi
 		card.RawResponseLocalRef = strPtr("evidence/" + name)
 	}
 	card.RawText = ""
+	if err := e.seal(&card); err != nil {
+		return model.EvidenceCard{}, err
+	}
 	if err := writeCard(path, card); err != nil {
 		return model.EvidenceCard{}, err
 	}
@@ -568,6 +574,7 @@ func (e *EvidenceService) List(projectPath string) ([]model.EvidenceCard, error)
 		if err != nil || card.EvidenceID != id {
 			continue
 		}
+		e.verify(&card)
 		cards = append(cards, card)
 	}
 	sort.SliceStable(cards, func(i, j int) bool {
@@ -604,6 +611,7 @@ func (e *EvidenceService) Update(projectPath, id string, update model.EvidenceUp
 	if card.Binding == nil {
 		return model.EvidenceCard{}, errors.New("this evidence card is not bound to a result")
 	}
+	e.verify(&card)
 	card.Binding.IncludeInReport = update.IncludeInReport
 	if r := update.Review; r != nil {
 		if !slices.Contains(model.ReviewStates, r.State) {
@@ -622,6 +630,15 @@ func (e *EvidenceService) Update(projectPath, id string, update model.EvidenceUp
 			review.Note = strPtr(note)
 		}
 		card.Review = review
+	}
+	// Only a card made here is sealed again: sealing an edited or imported
+	// one would vouch for content this computer did not retrieve.
+	if card.LocalOrigin {
+		if err := e.seal(&card); err != nil {
+			return model.EvidenceCard{}, err
+		}
+	} else {
+		card.LocalSeal = ""
 	}
 	if err := writeCard(path, card); err != nil {
 		return model.EvidenceCard{}, err

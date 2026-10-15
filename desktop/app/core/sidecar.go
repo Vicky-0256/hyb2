@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,14 +43,20 @@ var (
 )
 
 type proc struct {
-	cmd    *exec.Cmd
-	group  bool
-	stdin  io.WriteCloser
-	lines  chan string
-	done   chan struct{} // closed when stdout reaches EOF
-	mu     sync.Mutex
-	stderr []byte
+	cmd   *exec.Cmd
+	group bool
+	stdin io.WriteCloser
+	lines chan string
+	done  chan struct{} // closed when stdout reaches EOF
+	// quit is closed when the process is stopped: the reader then drops
+	// lines instead of waiting for a request to take them.
+	quit     chan struct{}
+	quitOnce sync.Once
+	mu       sync.Mutex
+	stderr   []byte
 }
+
+func (p *proc) stopReading() { p.quitOnce.Do(func() { close(p.quit) }) }
 
 func (p *proc) tail() string {
 	p.mu.Lock()
@@ -67,6 +74,7 @@ func (p *proc) exited() bool {
 }
 
 func (p *proc) kill() {
+	p.stopReading()
 	if p.cmd.Process != nil {
 		if p.group {
 			_ = killTree(p.cmd.Process.Pid)
@@ -78,6 +86,7 @@ func (p *proc) kill() {
 
 // shutdown closes stdin (the bridge exits on EOF) and kills it after 500 ms.
 func (p *proc) shutdown() {
+	p.stopReading()
 	_ = p.stdin.Close()
 	select {
 	case <-p.done:
@@ -85,6 +94,8 @@ func (p *proc) shutdown() {
 	}
 	p.kill()
 }
+
+var errShuttingDown = errors.New("desktop runtime is shutting down")
 
 // Sidecar speaks the newline JSON protocol of `bridge --serve`:
 // stdin `{"id":N,"request":{...}}`, stdout `{"id":N,"response":{...}}`.
@@ -95,7 +106,7 @@ type Sidecar struct {
 	mu     sync.Mutex
 	proc   *proc
 	nextID uint64
-	closed bool
+	closed atomic.Bool
 	// cancel is the running request's cancel channel (guarded by cancelMu,
 	// not mu, which the request holds while it waits).
 	cancelMu sync.Mutex
@@ -133,13 +144,17 @@ func (s *Sidecar) spawn() (*proc, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("could not start desktop Python %s sidecar (%s): %w", s.spec.Name, s.spec.Program, err)
 	}
-	p := &proc{cmd: cmd, group: s.spec.Group, stdin: stdin, lines: make(chan string, 16), done: make(chan struct{})}
+	p := &proc{cmd: cmd, group: s.spec.Group, stdin: stdin, lines: make(chan string, 16), done: make(chan struct{}),
+		quit: make(chan struct{})}
 	go func() {
 		reader := bufio.NewReaderSize(stdout, 1<<20)
 		for {
 			line, err := reader.ReadString('\n')
 			if line != "" {
-				p.lines <- strings.TrimRight(line, "\r\n")
+				select {
+				case p.lines <- strings.TrimRight(line, "\r\n"):
+				case <-p.quit:
+				}
 			}
 			if err != nil {
 				close(p.done)
@@ -171,8 +186,8 @@ func (s *Sidecar) spawn() (*proc, error) {
 func (s *Sidecar) Request(request any) (json.RawMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return nil, errors.New("desktop runtime is shutting down")
+	if s.closed.Load() {
+		return nil, errShuttingDown
 	}
 	if s.proc != nil && s.proc.exited() {
 		s.proc.kill()
@@ -214,6 +229,13 @@ func (s *Sidecar) Request(request any) (json.RawMessage, error) {
 		s.cancel = nil
 		s.cancelMu.Unlock()
 	}()
+	// Shutdown sets closed before it cancels: either it sees this cancel
+	// channel or this check sees closed.
+	if s.closed.Load() {
+		s.proc.kill()
+		s.proc = nil
+		return nil, errShuttingDown
+	}
 	timer := time.NewTimer(s.spec.Timeout)
 	defer timer.Stop()
 	for {
@@ -296,10 +318,12 @@ func (s *Sidecar) Stop() {
 }
 
 // Shutdown stops the process and refuses later requests (application exit).
+// A request in flight is cancelled rather than waited for.
 func (s *Sidecar) Shutdown() {
+	s.closed.Store(true)
+	s.Cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closed = true
 	if s.proc != nil {
 		s.proc.shutdown()
 		s.proc = nil

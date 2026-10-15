@@ -389,7 +389,8 @@ func (p *reportPage) testsView(c *ui.Context, d *reportData) {
 				cmpStat(c, "Significant cells", FormatNumber(s.Significant), t.Text)
 				cmpStat(c, "Higher in A", FormatNumber(s.SignificantUp), cmpRed)
 				cmpStat(c, "Higher in B", FormatNumber(s.SignificantDown), cmpBlue)
-				cmpStat(c, "Interactions up / down", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text)
+				cmpStat(c, "Interactions A / B", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text).
+					Tooltip("Merged interactions higher in A / higher in B")
 			})
 			if x.Err != "" {
 				errorLine(c, "Could not read the results: "+x.Err)

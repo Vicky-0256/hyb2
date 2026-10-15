@@ -179,6 +179,23 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	}
 	snapshot(t, tt, "structure-prefill")
 
+	// Evidence mapped to another reference than the RNA's is refused
+	// before the fold starts, and the form says why.
+	mismatch := "BRA (2 merged) is mapped to ZBRA, not to ZAFR (the reference of this RNA). Choose evidence mapped to ZAFR."
+	if !tt.HasText(mismatch) {
+		t.Fatalf("no mismatch notice: %q", tt.Texts())
+	}
+	_ = tt.Click("Run fold")
+	tt.Frame()
+	if p.formMsg != mismatch || len(f.startedKinds()) != 1 {
+		t.Fatalf("message %q, started %d", p.formMsg, len(f.startedKinds()))
+	}
+	p.gene = "ZIKV_Brazilian_MF073357-1_virusRNA"
+	tt.Frame()
+	if msg := p.evidenceMismatch(); msg != "" {
+		t.Fatalf("mismatch for matching evidence: %q", msg)
+	}
+
 	// Validation of the window list.
 	for text, want := range map[string]string{
 		"abc":     "Not a window: abc",

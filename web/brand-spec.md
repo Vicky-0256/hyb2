@@ -16,8 +16,9 @@
 - **Typography:** locally available system sans for interface copy; locally available monospace for sequence, coordinates, and data values.
 - **Spacing:** 8 px base unit, with primary layout gaps at 8/16/24/32 px.
 - **Radius:** 8 px content surfaces; 6 px controls; compact status pills.
-- **Elevation:** hairline borders and a single, tight low-contrast shadow level; no decorative gradient surfaces.
-- **Motion:** 140–220 ms opacity/position feedback; disabled under \`prefers-reduced-motion\`.
+- **Elevation:** hairline borders and a tight low-contrast shadow level inside the workspace. The landing page alone may use a faint dot lattice, a slow teal/violet aura and a teal→violet rule on the file panel.
+- **Motion:** \`motion.css\` and \`motion.js\`. Entrances play only when the scene changes (first landing visit, landing panel stage, workspace entry, page change); re-renders within a scene paint the final state. Landing intro ≈1.5 s, workspace page change ≈0.5 s, hover/press feedback 80–260 ms. The landing hero is an *illustrative* arc diagram (labelled as such, generated, not user data). Theme switches use a circular View Transition from the pressed control. Everything is disabled under \`prefers-reduced-motion\` or the Tweaks panel's **Reduce motion** setting, which persists locally.
+- **Interaction:** \`interaction.js\` / \`interaction.css\` act only through the app's own controls. ⌘K / Ctrl+K or \`/\` opens a command palette (pages, this page's visible actions, general commands, fuzzy match). \`g\` then a letter jumps to a page (o, i, c, v, r, p, s, e) and reveals the letters in the sidebar; \`[\` / \`]\` step through analysis pages. Analysis canvases show a crosshair and a pointer-following readout of the same text as the status line or native title. Dialogs take focus, trap Tab, close on Escape, and return focus to their opener.
 
 ## Current implementation scope
 

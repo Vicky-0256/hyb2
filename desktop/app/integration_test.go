@@ -14,11 +14,6 @@ import (
 	"hyb2desktop/views"
 )
 
-// immediate runs posted work at once; the test drives frames itself.
-type immediate struct{}
-
-func (immediate) Update(fn func()) { fn() }
-
 // TestRealStackHeadless drives the native views against the real Service
 // and bridge: create a project, add a .hyb sample, index it as a task, and
 // see the sample become ready.
@@ -39,7 +34,9 @@ func TestRealStackHeadless(t *testing.T) {
 	t.Cleanup(service.Shutdown)
 
 	project := filepath.Join(t.TempDir(), "study.hyb2proj")
-	app := views.New(service, immediate{}, t.TempDir())
+	// No window: posted work queues and app.Flush applies it on this
+	// goroutine, as the main thread would (the test drives the frames).
+	app := views.New(service, nil, t.TempDir())
 	tt := ui.NewTester(app.View, 1280, 820)
 	if _, err := service.CreateProject(project, "Headless", ""); err != nil {
 		t.Fatal(err)
@@ -57,16 +54,18 @@ func TestRealStackHeadless(t *testing.T) {
 	sample := added["sample"].(map[string]any)["id"].(string)
 
 	app.Open(project)
-	waitFor(t, tt, func() bool { return app.Project != nil })
+	waitFor(t, app, tt, func() bool { return app.Project != nil })
 	if !tt.HasText("Headless") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	app.StartTask(core.TaskStartRequest{Kind: "analysis_index", SampleID: &sample}, "Index · T1", nil)
-	waitFor(t, tt, func() bool { return len(app.Tasks) == 1 })
+	waitFor(t, app, tt, func() bool { return len(app.Tasks) == 1 })
 	// The app polls only with a window; poll by hand here.
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		app.RefreshTasks()
+		time.Sleep(50 * time.Millisecond)
+		app.Flush()
 		tt.Frame()
 		done := false
 		for _, task := range app.Tasks {
@@ -81,16 +80,17 @@ func TestRealStackHeadless(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	app.RefreshProject()
-	waitFor(t, tt, func() bool { s := app.Project.Sample(sample); return s != nil && s.IsReady() })
+	waitFor(t, app, tt, func() bool { s := app.Project.Sample(sample); return s != nil && s.IsReady() })
 	if keys := app.SelectionOptions(); len(keys) == 0 || keys[0].Key != "c:test" {
 		t.Fatalf("selection options %+v", keys)
 	}
 }
 
-func waitFor(t *testing.T, tt *ui.Tester, ok func() bool) {
+func waitFor(t *testing.T, app *views.App, tt *ui.Tester, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
+		app.Flush()
 		tt.Frame()
 		if ok() {
 			return

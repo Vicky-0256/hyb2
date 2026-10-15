@@ -16,6 +16,9 @@ const (
 	EvidenceSummaryUnavailable  = "summary_unavailable"
 	EvidenceNotFoundOrNoSummary = "not_found_or_no_summary"
 	EvidenceUpstreamError       = "upstream_error"
+	// EvidenceLocalError: the RNAcentral MCP server (a process on this
+	// computer) failed to start or was lost; RNAcentral was not asked.
+	EvidenceLocalError          = "local_error"
 	EvidenceTimeout             = "timeout"
 	EvidenceCancelled           = "cancelled"
 	EvidenceIdentityUnconfirmed = "identity_unconfirmed"
@@ -24,7 +27,8 @@ const (
 
 // EvidenceStatuses are every status a card may carry.
 var EvidenceStatuses = []string{EvidenceSuccess, EvidenceSummaryUnavailable, EvidenceNotFoundOrNoSummary,
-	EvidenceUpstreamError, EvidenceTimeout, EvidenceCancelled, EvidenceIdentityUnconfirmed, EvidenceUnexpectedResponse}
+	EvidenceUpstreamError, EvidenceLocalError, EvidenceTimeout, EvidenceCancelled, EvidenceIdentityUnconfirmed,
+	EvidenceUnexpectedResponse}
 
 // Review states. Only an explicit user action changes the state; the
 // worker and Go always store "unreviewed".
@@ -88,6 +92,14 @@ type EvidenceCard struct {
 	Review               EvidenceReview   `json:"review"`
 	SourceURL            *string          `json:"source_url"`
 	Binding              *EvidenceBinding `json:"binding"`
+	// TaxonCheck says how the taxon of a describe card was checked
+	// (core.TaxonCheckedByName, core.TaxonNotChecked; "" on older cards).
+	TaxonCheck string `json:"taxon_check,omitempty"`
+	// LocalSeal is the HMAC this computer puts on cards it saves or
+	// changes (EVIDENCE.md); LocalOrigin is set on read when it checks out,
+	// i.e. the card was made here and not edited since.
+	LocalSeal   string `json:"local_seal,omitempty"`
+	LocalOrigin bool   `json:"-"`
 	// RawText is the raw tool text when the worker sends it (`raw_text`
 	// next to the card); Go writes it to <id>.raw.txt on attach and never
 	// stores it in the card file.

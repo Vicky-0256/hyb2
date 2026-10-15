@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -28,6 +29,9 @@ type PerfRecord struct {
 	// Structure folds: FoldUnits of the windows and how many ran at once.
 	Units    float64 `json:"units,omitempty"`
 	Parallel int     `json:"parallel,omitempty"`
+	// Work is what EstimateFold charges for these windows (foldWork): the
+	// fold's rate is Seconds / Work. Older records lack it.
+	Work float64 `json:"work,omitempty"`
 }
 
 const (
@@ -86,7 +90,8 @@ func readPerf(path string) []PerfRecord {
 	return records
 }
 
-// AppendPerf adds a record, keeping the most recent perfKeep.
+// AppendPerf adds a record, keeping the most recent perfKeep of its kind
+// (many folds must not push the sample timings out, nor the reverse).
 func AppendPerf(path string, record PerfRecord) error {
 	if path == "" || record.Seconds <= 0 || (record.Kind == "structure" && record.Units <= 0) ||
 		(record.Kind != "structure" && record.InputBytes <= 0) {
@@ -95,9 +100,15 @@ func AppendPerf(path string, record PerfRecord) error {
 	perfMu.Lock()
 	defer perfMu.Unlock()
 	records := append(readPerf(path), record)
-	if len(records) > perfKeep {
-		records = records[len(records)-perfKeep:]
+	seen := map[string]int{}
+	kept := make([]PerfRecord, 0, len(records))
+	for i := len(records) - 1; i >= 0; i-- {
+		if seen[records[i].Kind]++; seen[records[i].Kind] <= perfKeep {
+			kept = append(kept, records[i])
+		}
 	}
+	slices.Reverse(kept)
+	records = kept
 	data, err := json.MarshalIndent(records, "", " ")
 	if err != nil {
 		return err
@@ -143,6 +154,7 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 		record.Format, record.InputBytes, record.CPU = p.Format, p.InputBytes, p.CPU
 	case "structure":
 		record.Units, record.Parallel = FoldUnits(p.Lengths, p.Beam), foldParallel(len(p.Lengths), p.Workers)
+		record.Work = foldWork(p.Lengths, p.Beam, p.Workers)
 		if record.Units <= 0 {
 			return PerfRecord{}, false
 		}
@@ -195,7 +207,11 @@ func EstimateFold(history []PerfRecord, lengths []int, beam, workers int) FoldEs
 	var rates []float64
 	for i := len(history) - 1; i >= 0 && len(rates) < perfRecent; i-- {
 		r := history[i]
-		if r.Kind == "structure" && r.Units > 0 && r.Seconds > 0 {
+		switch {
+		case r.Kind != "structure" || r.Seconds <= 0:
+		case r.Work > 0:
+			rates = append(rates, r.Seconds/r.Work)
+		case r.Units > 0: // older record: assumes the windows spread evenly
 			rates = append(rates, r.Seconds*float64(max(r.Parallel, 1))/r.Units)
 		}
 	}
@@ -204,14 +220,17 @@ func EstimateFold(history []PerfRecord, lengths []int, beam, workers int) FoldEs
 		sort.Float64s(rates)
 		rate, measured = rates[len(rates)/2], true
 	}
-	parallel := foldParallel(len(lengths), workers)
+	return FoldEstimate{Seconds: foldWork(lengths, beam, workers)*rate + foldOverhead, Measured: measured}
+}
+
+// foldWork is the work of folding windows of these lengths at most workers
+// at once: spread over the workers, but never less than the largest window.
+func foldWork(lengths []int, beam, workers int) float64 {
 	largest := 0
 	for _, n := range lengths {
 		largest = max(largest, n)
 	}
-	// Windows spread over the workers, but never faster than the largest.
-	seconds := math.Max(FoldUnits(lengths, beam)/float64(parallel), FoldUnits([]int{largest}, beam)) * rate
-	return FoldEstimate{Seconds: seconds + foldOverhead, Measured: measured}
+	return math.Max(FoldUnits(lengths, beam)/float64(foldParallel(len(lengths), workers)), FoldUnits([]int{largest}, beam))
 }
 
 // foldRemaining is the time left of a running fold from its progress

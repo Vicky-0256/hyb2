@@ -181,6 +181,30 @@ class StructureRunTests(unittest.TestCase):
         self.assertEqual((performance["lengths"], performance["beam"], performance["workers"]), ([self.length], 50, 1))
         self.assertGreater(performance["seconds"], 0)
 
+    def test_progress_says_what_is_folded_while_reading_evidence(self):
+        # The desktop's time-left estimate needs the work from the start.
+        from desktop.runtime import structure
+        real = structure.load_cplfold_web
+        seen = []
+
+        class Spy:
+            def __init__(self, module):
+                self._module = module
+
+            def __getattr__(self, name):
+                return getattr(self._module, name)
+
+            def collect_hyb_arms(self, *args, **kwargs):
+                progress = json.loads((self_project / "runs" / "evwork" / "progress.json").read_text())
+                seen.append(progress.get("work"))
+                return self._module.collect_hyb_arms(*args, **kwargs)
+
+        self_project = self.project
+        with mock.patch.object(structure, "load_cplfold_web", lambda root: Spy(real(root))):
+            result = handle(self._request(task_id="evwork", parameters={"beam": 50}), repo_root=ROOT)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(seen, [{"lengths": [self.length], "beam": 50, "workers": 1}])
+
     def test_windows_parallel_matches_serial(self):
         windows = [{"start": 1, "end": 160}, {"start": 120, "end": 300}, {"start": 200, "end": 320}]
         serial = handle(self._request(task_id="serial", mode="windows", windows=windows, workers=1,
@@ -238,7 +262,13 @@ class StructureRunTests(unittest.TestCase):
             handle(self._request(hyb_paths=["../outside.hyb"]), repo_root=ROOT)
         with self.assertRaisesRegex(ValueError, "windows mode"):
             handle(self._request(memory_budget_mb=64), repo_root=ROOT)
-        failed = handle(self._request(task_id="nogene", gene_id="MISSING"), repo_root=ROOT)
+        # A gene that is not in the (single-sequence) reference is refused
+        # as such, not folded as the reference's only sequence.
+        with self.assertRaisesRegex(ValueError, "gene_id MISSING is not a sequence of the reference FASTA"):
+            handle(self._request(task_id="nogene", gene_id="MISSING"), repo_root=ROOT)
+        # Evidence without chimeras of the gene fails in result.json.
+        (self.project / "data" / "other.hyb").write_text("".join(_hyb_rows(self.length, 20, gene="OTHER_virusRNA")))
+        failed = handle(self._request(task_id="noevidence", hyb_paths=["data/other.hyb"]), repo_root=ROOT)
         self.assertFalse(failed["ok"])
         self.assertIn("no intramolecular", failed["error"])
         stored = json.loads((Path(failed["run_dir"]) / "result.json").read_text())

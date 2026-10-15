@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .detector import CPLFOLD_MEMORY_FRACTION, cplfold_limits, cplfold_memory_estimate, memory_snapshot
 from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
 from .samples import _hyb2_reference_name
+from . import trust as _trust
 
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 MAX_WINDOWS = 512
@@ -186,6 +187,7 @@ def _input_file(project: Path, value: Any, label: str) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must be a non-empty path")
     if os.path.isabs(value) or value.startswith("~"):
+        _trust.require(project, value, label)
         target = Path(value).expanduser().resolve()
     else:
         if not safe_relative_path(value):
@@ -228,7 +230,9 @@ def _reference_sequence(path: Path, gene_id: Optional[str]) -> Tuple[str, str]:
     chosen = None
     if gene_id is not None:
         chosen = next((record for record in records if record[0] == gene_id), None)
-        if chosen is None and len(records) > 1:
+        if chosen is None:
+            # Even with one sequence: folding it under gene_id's name would
+            # mislabel the result (e.g. evidence of another reference).
             raise ValueError(f"gene_id {gene_id} is not a sequence of the reference FASTA")
     if chosen is None:
         if len(records) > 1:
@@ -531,6 +535,22 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
         _atomic_write_json(run_dir / "result.json", result)
         return result
 
+    # What will be folded, known before the evidence is read, so the desktop
+    # can estimate the time left from the start.
+    estimate = cplfold_memory_estimate(longest, params["allow_pseudoknot"])
+    cpu = os.cpu_count() or 1
+    task_cpus = _env_int("HYB2_TASK_CPUS")
+    if task_cpus is not None:
+        cpu = min(cpu, task_cpus)
+    requested_workers = request.get("workers")
+    if requested_workers is not None and (isinstance(requested_workers, bool) or not isinstance(requested_workers, int) or requested_workers < 1):
+        raise ValueError("workers must be a positive integer")
+    memory_workers = max(1, int(limits["memory_budget_bytes"]) // max(estimate, 1))
+    workers = min(cpu, memory_workers, len(windows))
+    if requested_workers is not None:
+        workers = min(workers, requested_workers)
+    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"), "workers": workers}
+
     # 1. stream the evidence
     total_bytes = sum(path.stat().st_size for path in inputs["hyb_paths"])
     progress("evidence", "reading .hyb", 0, total_bytes, force=True)
@@ -547,19 +567,6 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
 
     # 2. fold
     records: List[Dict[str, Any]] = [None] * len(windows)  # type: ignore[list-item]
-    estimate = cplfold_memory_estimate(longest, params["allow_pseudoknot"])
-    cpu = os.cpu_count() or 1
-    task_cpus = _env_int("HYB2_TASK_CPUS")
-    if task_cpus is not None:
-        cpu = min(cpu, task_cpus)
-    requested_workers = request.get("workers")
-    if requested_workers is not None and (isinstance(requested_workers, bool) or not isinstance(requested_workers, int) or requested_workers < 1):
-        raise ValueError("workers must be a positive integer")
-    memory_workers = max(1, int(limits["memory_budget_bytes"]) // max(estimate, 1))
-    workers = min(cpu, memory_workers, len(windows))
-    if requested_workers is not None:
-        workers = min(workers, requested_workers)
-    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"), "workers": workers}
     kernels_before = _compiled_kernels()
     t0 = time.monotonic()
 

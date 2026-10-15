@@ -1,0 +1,976 @@
+/*
+ * HYB2 Web Lite motion system.
+ *
+ * Entrance animations live behind scene classes that motion.js adds to #app
+ * only when the scene changes (first visit, landing panel stage, workspace
+ * page). Re-renders inside the same scene carry no class, so they paint in
+ * their final state instead of replaying. Everything here is switched off by
+ * prefers-reduced-motion or by html[data-motion="reduced"] (Tweaks panel).
+ */
+
+:root {
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --hero-aura-a: color-mix(in srgb, var(--teal) 22%, transparent);
+  --hero-aura-b: color-mix(in srgb, var(--violet) 16%, transparent);
+  --stage-surface: color-mix(in srgb, var(--surface) 72%, transparent);
+  --gradient-ink: linear-gradient(100deg, var(--teal-deep) 0%, var(--teal) 38%, var(--violet) 72%, var(--teal) 100%);
+}
+
+:root[data-theme="dark"] {
+  --hero-aura-a: color-mix(in srgb, var(--teal) 20%, transparent);
+  --hero-aura-b: color-mix(in srgb, #9a88ff 18%, transparent);
+  --stage-surface: color-mix(in srgb, var(--surface) 60%, transparent);
+  --gradient-ink: linear-gradient(100deg, #35c3c0 0%, #43d1b0 36%, #b7aaff 72%, #35c3c0 100%);
+}
+
+/* ------------------------------------------------------------------ */
+/* Landing: ambient field                                              */
+/* ------------------------------------------------------------------ */
+
+.landing {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+}
+
+.landing::before,
+.landing::after {
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+}
+
+/* Dot lattice: reads as a faint contact-map grid behind the hero. */
+.landing::before {
+  inset: 0 0 auto;
+  height: min(1100px, 140vh);
+  background-image: radial-gradient(circle at center, color-mix(in srgb, var(--ink) 13%, transparent) 1px, transparent 1.6px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 30% 30%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(ellipse 70% 60% at 30% 30%, #000 0%, transparent 72%);
+  opacity: .55;
+}
+
+.landing::after {
+  top: -18vh;
+  left: -10vw;
+  width: 80vw;
+  height: 90vh;
+  background:
+    radial-gradient(closest-side at 35% 45%, var(--hero-aura-a), transparent 70%),
+    radial-gradient(closest-side at 70% 60%, var(--hero-aura-b), transparent 70%);
+  filter: blur(40px);
+  animation: aura-drift 26s var(--ease-in-out) infinite alternate;
+}
+
+@keyframes aura-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(6vw, 4vh, 0) scale(1.08); }
+  100% { transform: translate3d(-3vw, 8vh, 0) scale(.96); }
+}
+
+.landing-header {
+  position: relative;
+  z-index: 2;
+}
+
+/* The single teal accent rule at the top of the file panel column. */
+.landing-main::before {
+  transform-origin: right center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Landing: typography                                                 */
+/* ------------------------------------------------------------------ */
+
+.eyebrow {
+  gap: 8px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.eyebrow::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 60%, transparent);
+  content: "";
+  animation: beacon 2.4s var(--ease-out) infinite;
+}
+
+@keyframes beacon {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 55%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--primary) 0%, transparent); }
+}
+
+.landing-copy h1 {
+  display: flex;
+  flex-direction: column;
+  font-size: clamp(48px, 5.4vw, 76px);
+  letter-spacing: -.025em;
+  line-height: .98;
+}
+
+.headline-line {
+  display: block;
+  padding-bottom: .08em;
+  margin-bottom: -.08em;
+  overflow: clip;
+}
+
+.headline-inner {
+  display: inline-block;
+  will-change: transform;
+}
+
+.headline-accent .headline-inner {
+  background: var(--gradient-ink);
+  background-size: 220% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ink-sheen 9s var(--ease-in-out) 2.2s infinite;
+}
+
+@keyframes ink-sheen {
+  0%, 100% { background-position: 100% 0; }
+  50% { background-position: 0% 0; }
+}
+
+.landing-copy h1 .headline-line,
+.landing-copy h1 .headline-line:first-child .headline-inner {
+  color: var(--ink);
+}
+
+.promise-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 30px;
+}
+
+.promise-list li {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 12px 5px 30px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  font-size: 13px;
+  white-space: nowrap;
+  transition: border-color 200ms var(--ease-out), transform 200ms var(--ease-out), background 200ms var(--ease-out);
+}
+
+.promise-list li:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+  background: var(--surface);
+  transform: translateY(-2px);
+}
+
+.promise-list li::before {
+  top: 50%;
+  left: 13px;
+  margin-top: -5px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Landing: hero stage (arc diagram canvas)                            */
+/* ------------------------------------------------------------------ */
+
+.hero-stage {
+  position: relative;
+  margin: 30px 0 28px;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--stage-surface);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-tight);
+  overflow: hidden;
+}
+
+.hero-stage::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(115deg, transparent 30%, color-mix(in srgb, var(--surface) 55%, transparent) 50%, transparent 70%);
+  background-size: 250% 100%;
+  background-position: 150% 0;
+  content: "";
+  pointer-events: none;
+}
+
+.hero-stage-caption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.hero-stage-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.hero-stage-live::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+  animation: beacon 2.4s var(--ease-out) infinite;
+}
+
+.hero-stage-canvas {
+  position: relative;
+  height: 236px;
+  margin: 6px -16px 0;
+  cursor: crosshair;
+  touch-action: pan-y;
+}
+
+.hero-stage-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-stage-hud {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-stage-hud strong {
+  display: inline-block;
+  min-width: 4ch;
+  color: var(--accent);
+  font-weight: 750;
+}
+
+.hero-stage-hud [data-hero-probe] {
+  overflow: hidden;
+  color: var(--muted-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* Landing: cards and file panel                                       */
+/* ------------------------------------------------------------------ */
+
+/* Desktop: details sit under the hero copy while the file panel spans
+   both rows. Narrow layouts keep source order: copy, panel, details. */
+.landing-details {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+@media (min-width: 1081px) {
+  .landing-main {
+    grid-template-rows: auto 1fr;
+    row-gap: 0;
+  }
+
+  .landing-copy {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .landing-details {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .landing-panel {
+    position: sticky;
+    top: 24px;
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: start;
+    margin-top: 58px;
+  }
+}
+
+.hero-stage {
+  margin-bottom: 0;
+}
+
+.file-card-inner {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--surface) 80%, transparent) inset,
+    0 30px 60px -28px rgb(19 44 71 / 26%),
+    0 12px 24px -16px rgb(19 44 71 / 14%);
+}
+
+.file-card-inner::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--teal), var(--violet), var(--teal));
+  background-size: 200% 100%;
+  content: "";
+  animation: rail-flow 6s linear infinite;
+}
+
+@keyframes rail-flow {
+  to { background-position: -200% 0; }
+}
+
+.web-capability-card,
+.legacy-workflow-guide {
+  border-radius: 12px;
+  transition: border-color 240ms var(--ease-out), box-shadow 240ms var(--ease-out), transform 240ms var(--ease-out);
+}
+
+.web-capability-card:hover,
+.legacy-workflow-guide:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 18px 36px -24px rgb(19 44 71 / 28%);
+  transform: translateY(-2px);
+}
+
+.web-capability-dot.is-ready {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+/* Step rail: a connector line threads the numbered folding workflows. */
+.legacy-workflow-guide ol {
+  position: relative;
+}
+
+.legacy-workflow-guide ol::before {
+  position: absolute;
+  top: 14px;
+  bottom: 30px;
+  left: 9px;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(var(--violet), color-mix(in srgb, var(--violet) 10%, transparent));
+  content: "";
+  transform-origin: top;
+}
+
+.legacy-workflow-guide li::before {
+  z-index: 1;
+}
+
+/* Dropzone: marching-ants border when it wants a file. */
+.dropzone {
+  border-radius: 10px;
+}
+
+.dropzone::before {
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, var(--primary) 50%, transparent 0) repeat-x 0 0 / 14px 1.5px,
+    linear-gradient(90deg, var(--primary) 50%, transparent 0) repeat-x 0 100% / 14px 1.5px,
+    linear-gradient(0deg, var(--primary) 50%, transparent 0) repeat-y 0 0 / 1.5px 14px,
+    linear-gradient(0deg, var(--primary) 50%, transparent 0) repeat-y 100% 0 / 1.5px 14px;
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms var(--ease-out);
+  animation: ants 900ms linear infinite paused;
+}
+
+.dropzone:hover::before,
+.dropzone:focus-visible::before,
+.dropzone.is-dragging::before {
+  opacity: 1;
+  animation-play-state: running;
+}
+
+.dropzone:hover,
+.dropzone:focus-visible,
+.dropzone.is-dragging {
+  border-color: transparent;
+}
+
+@keyframes ants {
+  to { background-position: 14px 0, -14px 100%, 0 -14px, 100% 14px; }
+}
+
+.dropzone.is-dragging {
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 14%, transparent);
+  transform: scale(1.015);
+}
+
+.dropzone.is-dragging .dropzone-title {
+  animation: nudge 700ms var(--ease-spring) infinite alternate;
+}
+
+@keyframes nudge {
+  to { transform: translateY(-4px); }
+}
+
+/* Primary buttons: sheen sweep + spring press. */
+.button {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition: background 180ms var(--ease-out), box-shadow 220ms var(--ease-out), transform 260ms var(--ease-spring);
+}
+
+.button:not(.button-secondary):not(.button-danger)::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 25%, rgb(255 255 255 / 38%) 50%, transparent 75%);
+  content: "";
+  transform: translateX(-120%);
+  transition: transform 0ms;
+}
+
+.button:not(.button-secondary):not(.button-danger):hover::after {
+  transform: translateX(120%);
+  transition: transform 700ms var(--ease-out);
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button:active {
+  transform: translateY(1px) scale(.98);
+  transition-duration: 80ms;
+}
+
+[data-magnetic] {
+  will-change: transform;
+}
+
+/* Loading panel. */
+.progress-bar > span {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(90deg, var(--teal), var(--violet));
+  transition: width 260ms var(--ease-out);
+}
+
+.progress-bar > span::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 45%), transparent);
+  content: "";
+  animation: shimmer 1.1s linear infinite;
+}
+
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+.parse-step.is-current::before {
+  animation: beacon 1.4s var(--ease-out) infinite;
+}
+
+/* Prepared panel: Enter analysis glows once it is the next move. */
+.prepared-next-step .button {
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 45%, transparent);
+  animation: invite 2.6s var(--ease-out) 1.2s infinite;
+}
+
+@keyframes invite {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 42%, transparent); }
+  60%, 100% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--primary) 0%, transparent); }
+}
+
+/* ------------------------------------------------------------------ */
+/* Scene: landing intro (first paint)                                  */
+/* ------------------------------------------------------------------ */
+
+@keyframes rise {
+  from { opacity: 0; transform: translate3d(0, 18px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes rise-blur {
+  from { opacity: 0; filter: blur(8px); transform: translate3d(0, 26px, 0) scale(.985); }
+  to { opacity: 1; filter: blur(0); transform: none; }
+}
+
+@keyframes line-up {
+  from { transform: translate3d(0, 105%, 0) rotate(2deg); }
+  to { transform: none; }
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-x {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes scale-y {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+@keyframes pop {
+  0% { opacity: 0; transform: scale(.4); }
+  60% { opacity: 1; transform: scale(1.12); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes check-draw {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+@keyframes sheen-pass {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+
+.motion-intro .landing-header {
+  animation: rise 700ms var(--ease-out) both;
+}
+
+.motion-intro .eyebrow {
+  animation: rise 700ms var(--ease-out) 120ms both;
+}
+
+.motion-intro .headline-line:nth-child(1) .headline-inner {
+  animation: line-up 1000ms var(--ease-out) 200ms both;
+}
+
+.motion-intro .headline-line:nth-child(2) .headline-inner {
+  animation: line-up 1000ms var(--ease-out) 320ms both, ink-sheen 9s var(--ease-in-out) 2.2s infinite;
+}
+
+.motion-intro .landing-lede {
+  animation: rise 800ms var(--ease-out) 520ms both;
+}
+
+.motion-intro .promise-list li {
+  animation: rise 700ms var(--ease-out) both;
+}
+
+.motion-intro .promise-list li:nth-child(1) { animation-delay: 640ms; }
+.motion-intro .promise-list li:nth-child(2) { animation-delay: 700ms; }
+.motion-intro .promise-list li:nth-child(3) { animation-delay: 760ms; }
+
+.motion-intro .promise-list li::before {
+  animation: check-draw 420ms var(--ease-out) both;
+}
+
+.motion-intro .promise-list li:nth-child(1)::before { animation-delay: 900ms; }
+.motion-intro .promise-list li:nth-child(2)::before { animation-delay: 960ms; }
+.motion-intro .promise-list li:nth-child(3)::before { animation-delay: 1020ms; }
+
+.motion-intro .hero-stage {
+  animation: rise-blur 1000ms var(--ease-out) 720ms both;
+}
+
+.motion-intro .hero-stage::after {
+  animation: sheen-pass 1400ms var(--ease-in-out) 1500ms both;
+}
+
+.motion-intro .landing-main::before {
+  animation: scale-x 900ms var(--ease-out) 300ms both;
+}
+
+.motion-intro .landing-panel .file-card {
+  animation: rise-blur 1100ms var(--ease-out) 380ms both;
+}
+
+.motion-intro .example-strip,
+.motion-intro .dropzone,
+.motion-intro .reference-upload,
+.motion-intro .file-card-inner > .privacy-note,
+.motion-intro .file-card-inner > .card-footnote {
+  animation: rise 700ms var(--ease-out) both;
+}
+
+.motion-intro .example-strip { animation-delay: 620ms; }
+.motion-intro .dropzone { animation-delay: 700ms; }
+.motion-intro .reference-upload { animation-delay: 780ms; }
+.motion-intro .file-card-inner > .privacy-note { animation-delay: 840ms; }
+.motion-intro .file-card-inner > .card-footnote { animation-delay: 880ms; }
+
+/* Cards below the fold reveal as they scroll in (motion.js toggles). */
+[data-reveal] {
+  transition: opacity 800ms var(--ease-out), transform 800ms var(--ease-out), filter 800ms var(--ease-out);
+}
+
+[data-reveal]:not(.is-revealed) {
+  opacity: 0;
+  filter: blur(4px);
+  transform: translate3d(0, 28px, 0);
+}
+
+.web-capability-card.is-revealed .web-capability-item {
+  animation: rise 520ms var(--ease-out) both;
+}
+
+.web-capability-card.is-revealed .web-capability-item:nth-child(1) { animation-delay: 120ms; }
+.web-capability-card.is-revealed .web-capability-item:nth-child(2) { animation-delay: 200ms; }
+.web-capability-card.is-revealed .web-capability-item:nth-child(3) { animation-delay: 280ms; }
+.web-capability-card.is-revealed .web-capability-item:nth-child(4) { animation-delay: 360ms; }
+
+.web-capability-card.is-revealed .web-capability-dot {
+  animation: pop 520ms var(--ease-spring) both;
+}
+
+.web-capability-card.is-revealed .web-capability-item:nth-child(1) .web-capability-dot { animation-delay: 300ms; }
+.web-capability-card.is-revealed .web-capability-item:nth-child(2) .web-capability-dot { animation-delay: 420ms; }
+.web-capability-card.is-revealed .web-capability-item:nth-child(3) .web-capability-dot { animation-delay: 540ms; }
+.web-capability-card.is-revealed .web-capability-item:nth-child(4) .web-capability-dot { animation-delay: 660ms; }
+
+.legacy-workflow-guide.is-revealed ol::before {
+  animation: scale-y 1200ms var(--ease-out) 200ms both;
+}
+
+.legacy-workflow-guide.is-revealed li {
+  animation: rise 560ms var(--ease-out) both;
+}
+
+.legacy-workflow-guide.is-revealed li:nth-child(1) { animation-delay: 160ms; }
+.legacy-workflow-guide.is-revealed li:nth-child(2) { animation-delay: 300ms; }
+.legacy-workflow-guide.is-revealed li:nth-child(3) { animation-delay: 440ms; }
+.legacy-workflow-guide.is-revealed li:nth-child(4) { animation-delay: 580ms; }
+
+.legacy-workflow-guide.is-revealed li::before {
+  animation: pop 480ms var(--ease-spring) both;
+  animation-delay: inherit;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scene: landing panel changes (idle → loading → review)              */
+/* ------------------------------------------------------------------ */
+
+.motion-panel .landing-panel .file-card-inner {
+  animation: panel-swap 620ms var(--ease-out) both;
+}
+
+@keyframes panel-swap {
+  from { opacity: 0; filter: blur(6px); transform: translate3d(0, 14px, 0) scale(.985); }
+  to { opacity: 1; filter: blur(0); transform: none; }
+}
+
+.motion-panel .prepared-file-row,
+.motion-panel .parse-step,
+.motion-panel .prepared-file-note,
+.motion-panel .prepared-next-step,
+.motion-panel .prepared-file-actions {
+  animation: rise 560ms var(--ease-out) both;
+}
+
+.motion-panel .prepared-file-row:nth-child(1) { animation-delay: 140ms; }
+.motion-panel .prepared-file-row:nth-child(2) { animation-delay: 220ms; }
+.motion-panel .prepared-file-note { animation-delay: 300ms; }
+.motion-panel .prepared-next-step { animation-delay: 380ms; }
+.motion-panel .prepared-file-actions { animation-delay: 440ms; }
+.motion-panel .parse-step:nth-child(1) { animation-delay: 80ms; }
+.motion-panel .parse-step:nth-child(2) { animation-delay: 130ms; }
+.motion-panel .parse-step:nth-child(3) { animation-delay: 180ms; }
+.motion-panel .parse-step:nth-child(4) { animation-delay: 230ms; }
+.motion-panel .parse-step:nth-child(5) { animation-delay: 280ms; }
+
+.motion-panel .status-chip {
+  animation: pop 600ms var(--ease-spring) 260ms both;
+}
+
+.motion-panel .prepared-file-status.is-ready {
+  animation: pop 520ms var(--ease-spring) both;
+}
+
+.motion-panel .prepared-file-row:nth-child(1) .prepared-file-status { animation-delay: 420ms; }
+.motion-panel .prepared-file-row:nth-child(2) .prepared-file-status { animation-delay: 500ms; }
+
+/* ------------------------------------------------------------------ */
+/* Scene: entering the workspace                                       */
+/* ------------------------------------------------------------------ */
+
+@keyframes drop-in {
+  from { opacity: 0; transform: translate3d(0, -100%, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translate3d(-24px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+.motion-workspace .workspace-header {
+  animation: drop-in 640ms var(--ease-out) both;
+}
+
+.motion-workspace .sidebar {
+  animation: slide-in-left 700ms var(--ease-out) 80ms both;
+}
+
+.motion-workspace .sidebar .nav-button,
+.motion-workspace .sidebar .sidebar-file,
+.motion-workspace .sidebar .nav-label,
+.motion-workspace .sidebar-footer {
+  animation: slide-in-left 520ms var(--ease-out) both;
+  animation-delay: calc(140ms + var(--stagger, 0) * 28ms);
+}
+
+.motion-workspace .mobile-nav {
+  animation: rise 600ms var(--ease-out) 200ms both;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scene: workspace page change                                        */
+/* ------------------------------------------------------------------ */
+
+.motion-page .content-wrap > * > *,
+.motion-page .content-wrap > .page-heading {
+  animation: rise-short 460ms var(--ease-out) both;
+  animation-delay: calc(var(--stagger, 0) * 36ms);
+}
+
+@keyframes rise-short {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+.motion-page .page-heading h1 {
+  animation: rise-short 520ms var(--ease-out) both;
+}
+
+.motion-page .metric-card,
+.motion-page .data-card {
+  animation: rise-short 520ms var(--ease-out) both;
+  animation-delay: calc(60ms + var(--stagger, 0) * 45ms);
+}
+
+.motion-page .bar-fill,
+.motion-page .type-meter > span {
+  transform-origin: left center;
+  animation: scale-x 1100ms var(--ease-out) both;
+  animation-delay: calc(260ms + var(--stagger, 0) * 70ms);
+}
+
+/* Thin indeterminate rail while a page refreshes its data. */
+.is-refreshing-data .workspace-main::before {
+  position: fixed;
+  z-index: 20;
+  top: 60px;
+  right: 0;
+  left: 240px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--teal), var(--violet), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  content: "";
+  animation: refresh-rail 1s var(--ease-in-out) infinite;
+}
+
+@keyframes refresh-rail {
+  from { background-position: -100% 0; }
+  to { background-position: 200% 0; }
+}
+
+/* Sliding active-page glider in the sidebar. */
+.nav-glider {
+  position: absolute;
+  z-index: 0;
+  right: 13px;
+  left: 13px;
+  border: 1px solid color-mix(in srgb, var(--primary) 16%, var(--line));
+  border-radius: 7px;
+  background: var(--primary-soft);
+  pointer-events: none;
+}
+
+.sidebar.has-glider .nav-button {
+  position: relative;
+  z-index: 1;
+}
+
+.sidebar.has-glider .nav-button.is-active {
+  border-color: transparent;
+  background: transparent;
+}
+
+.nav-button::before {
+  transition: height 240ms var(--ease-spring), background 200ms var(--ease-out);
+}
+
+.nav-button:hover:not(.is-active)::before {
+  height: 10px;
+  background: var(--muted);
+}
+
+/* Cards: quiet lift on hover, only where they are tappable summaries. */
+.metric-card {
+  transition: transform 260ms var(--ease-out), box-shadow 260ms var(--ease-out), border-color 260ms var(--ease-out);
+}
+
+.metric-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--line));
+  box-shadow: 0 16px 32px -22px rgb(19 44 71 / 30%);
+  transform: translateY(-2px);
+}
+
+.metric-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dialogs and toasts get a little spring. */
+/* Overlays are re-created on every render, so motion.js adds .is-appearing
+   only on the render where they first show up. */
+.pop-layer {
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+.pop-layer.is-appearing {
+  animation: fade 220ms var(--ease-out) both;
+}
+
+.pop-layer.is-appearing .dialog {
+  animation: dialog-in 420ms var(--ease-spring) both;
+}
+
+.record-drawer.is-appearing {
+  animation: drawer-in 460ms var(--ease-out) both;
+}
+
+@keyframes drawer-in {
+  from { opacity: 0; transform: translate3d(24px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: translate3d(0, 16px, 0) scale(.96); }
+  to { opacity: 1; transform: none; }
+}
+
+.toast {
+  transition: opacity 240ms var(--ease-out), transform 420ms var(--ease-spring);
+  transform: translate3d(0, 14px, 0) scale(.96);
+}
+
+.toast.is-visible {
+  transform: none;
+}
+
+.tweaks-panel {
+  transform-origin: bottom right;
+}
+
+.tweaks-panel.is-appearing {
+  animation: dialog-in 380ms var(--ease-spring) both;
+}
+
+/* ------------------------------------------------------------------ */
+/* Theme switch: circular reveal (View Transitions API).               */
+/* ------------------------------------------------------------------ */
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive                                                          */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 1080px) {
+  .landing-panel {
+    position: relative;
+  }
+}
+
+@media (max-width: 900px) {
+  .is-refreshing-data .workspace-main::before {
+    left: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .landing-copy h1 {
+    font-size: 46px;
+  }
+
+  .hero-stage-canvas {
+    height: 190px;
+  }
+
+  .hero-stage-caption span:last-child {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion: final states, no loops.                             */
+/* ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .landing::after,
+  .eyebrow::before,
+  .hero-stage-live::before,
+  .file-card-inner::before,
+  .headline-accent .headline-inner,
+  .prepared-next-step .button {
+    animation: none !important;
+  }
+
+  [data-reveal]:not(.is-revealed) {
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+}
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  scroll-behavior: auto !important;
+  transition-duration: .001ms !important;
+  animation-duration: .001ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+}
+
+:root[data-motion="reduced"] [data-reveal]:not(.is-revealed) {
+  opacity: 1;
+  filter: none;
+  transform: none;
+}
+
+@media (max-width: 1080px) {
+  .landing-details {
+    max-width: 720px;
+  }
+}

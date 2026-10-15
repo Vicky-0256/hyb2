@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .project import (_ID, _mutate_manifest, _now, READ_FORMATS, STAGE_NAMES, copy_into_project, is_absolute_path,
                       load_manifest, safe_relative_path, validate_project_directory)
+from . import trust as _trust
 
 MiB = 1024 * 1024
 # Bounded so that a hostile project cannot make the runtime hash forever per call.
@@ -158,6 +159,7 @@ def resolve_record_path(root: Path, record: Dict[str, Any]) -> Path:
         return Path(root) / str(path).replace("\\", "/")
     if not is_absolute_path(path):
         raise ValueError("linked file path must be absolute")
+    _trust.require(Path(root), path, "linked file")
     return Path(path)
 
 
@@ -166,6 +168,8 @@ def check_record(root: Path, record: Dict[str, Any]) -> Tuple[str, str]:
     try:
         path = resolve_record_path(root, record)
         stat = path.stat()
+    except _trust.UntrustedLink:
+        return "unconfirmed", "linked on another computer: not opened until you allow it"
     except (OSError, ValueError):
         return "missing", "file not found"
     if not path.is_file():
@@ -639,7 +643,7 @@ def _output_exists(root: Path, value: Any) -> bool:
     if not isinstance(value, str) or not value:
         return False
     if is_absolute_path(value):
-        return Path(value).is_file()
+        return _trust.is_trusted(root, value) and Path(value).is_file()
     if not safe_relative_path(value):
         return False
     target = (root / value).resolve()
@@ -1037,8 +1041,10 @@ def check_inputs(root: Path) -> Dict[str, Any]:
             status, detail = check_record(root, record)
             items.append({"kind": kind, "id": entry["id"], "path": record.get("path"), "mode": record.get("mode"),
                           "status": status, "detail": detail})
-    summary = {status: sum(1 for item in items if item["status"] == status) for status in ("ok", "missing", "changed")}
-    return {"items": items, "summary": summary, "all_ok": summary["missing"] == 0 and summary["changed"] == 0}
+    summary = {status: sum(1 for item in items if item["status"] == status)
+               for status in ("ok", "missing", "changed", "unconfirmed")}
+    return {"items": items, "summary": summary,
+            "all_ok": summary["missing"] == 0 and summary["changed"] == 0 and summary["unconfirmed"] == 0}
 
 
 MAX_REFERENCE_SEQUENCE = 50_000_000

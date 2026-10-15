@@ -80,7 +80,7 @@ func TestReportPageSections(t *testing.T) {
 		"Conditions", "AFR_REP1, AFR_REP2", "2 of 2", "573,541",
 		// Differential tests with their strongest interactions.
 		"Differential tests", "AFR (2 merged) vs BRA (2 merged)", "SUB (2 merged) vs AFR (2 merged)", "1,023,236", "82,132",
-		"25,276 / 56,856", "742 / 1,547", "Top 10 merged interactions by padj", "5,720–5,729", "3,890–3,899", "No significant interaction.",
+		"25,276 / 56,856", "742 / 1,547", "Interactions A / B", "Top 10 merged interactions by padj", "5,720–5,729", "3,890–3,899", "No significant interaction.",
 		"DESeq2 · min count 2 · merge range 100 nt · padj < 0.05",
 		// Structures and runtime.
 		"Structures", "1 window · 3,170–6,229", "AFR_REP1 + AFR_REP2", "1,055", "-452.0 kcal/mol",
@@ -141,11 +141,16 @@ func TestReportExportHTML(t *testing.T) {
 	if dir := os.Getenv("HYB2_SNAPSHOT_DIR"); dir != "" {
 		_ = os.WriteFile(filepath.Join(dir, "export-report.html"), []byte(text), 0o644)
 	}
-	if len(a.toasts) == 0 || a.toasts[len(a.toasts)-1] != "Saved "+(*asked)[0] {
+	if len(a.toasts) == 0 || a.toasts[len(a.toasts)-1].Text != "Saved "+(*asked)[0] {
 		t.Fatalf("toasts %q", a.toasts)
 	}
 	if len(text) < 20_000 || len(text) > 2_000_000 {
 		t.Fatalf("report size %d", len(text))
+	}
+	// The exported file is shared: it names the project folder, not where
+	// it is on this computer (the path holds the user name).
+	if strings.Contains(text, "/projects/zikv.hyb2proj") || !strings.Contains(text, "zikv.hyb2proj") {
+		t.Fatal("the exported report gives the folder's absolute path")
 	}
 	for _, want := range []string{"<!DOCTYPE html>", `<section id="project">`, `<section id="references">`, `<section id="samples">`,
 		`<section id="conditions">`, `<section id="differential-tests">`, `<section id="structures">`,

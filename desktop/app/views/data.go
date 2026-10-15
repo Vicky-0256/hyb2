@@ -143,6 +143,7 @@ type dataPage struct {
 	removeOpen bool
 	removeIDs  []string
 	allChecked bool
+	allowing   bool // trust_links in flight
 }
 
 func (p *dataPage) Show() {
@@ -179,6 +180,33 @@ func (p *dataPage) activeTask(s model.Sample) (model.Task, bool) {
 		consider(s.Stages[name].TaskID)
 	}
 	return best, found
+}
+
+// resumeLabel names the samples the toolbar button resumes: failed ones are
+// retried, interrupted or cancelled ones resumed.
+func (p *dataPage) resumeLabel(problems []model.Sample) string {
+	failed := 0
+	for _, s := range problems {
+		if st, _ := p.problem(s); st.Status == "failed" {
+			failed++
+		}
+	}
+	switch failed {
+	case 0:
+		return fmt.Sprintf("Resume interrupted (%d)", len(problems))
+	case len(problems):
+		return fmt.Sprintf("Retry failed (%d)", len(problems))
+	}
+	return fmt.Sprintf("Resume or retry (%d)", len(problems))
+}
+
+// failReason is the short error of the task behind a failed stage ("" when
+// that task is not known in this session).
+func (p *dataPage) failReason(st model.Stage) string {
+	if st.Status != "failed" || st.TaskID == "" {
+		return ""
+	}
+	return ShortError(p.a.Tasks[st.TaskID].ErrorText())
 }
 
 // problem is the first failed, interrupted or cancelled stage; a stage left
@@ -286,6 +314,11 @@ func dataReplicate(v any) string {
 	return fmt.Sprint(v)
 }
 
+// dataExactCount is the full count behind a compact one ("224 k").
+func dataExactCount(records int64) string {
+	return FormatNumber(records) + " hybrids"
+}
+
 func dataPlural(n int, one, many string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, one)
@@ -361,7 +394,7 @@ func dataErrText(err error) string {
 	if err == nil {
 		return ""
 	}
-	return err.Error()
+	return ShortError(err.Error())
 }
 
 // ---- view
@@ -397,6 +430,7 @@ func (p *dataPage) View(c *ui.Context) {
 		if p.checkSummary != "" {
 			ui.Text(c, p.checkSummary).FontSize(12).TextColor(t.TextMuted)
 		}
+		p.foreignLinks(c)
 		p.referencesCard(c)
 		p.samplesCard(c)
 	})
@@ -554,7 +588,7 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 			}
 			ui.Spacer(c)
 			if len(problems) > 0 {
-				if ui.Button(c, fmt.Sprintf("Resume interrupted (%d)", len(problems))).Clicked() {
+				if ui.Button(c, p.resumeLabel(problems)).Clicked() {
 					p.resumeSamples(problems)
 				}
 			}
@@ -649,24 +683,35 @@ func (p *dataPage) sampleRows(c *ui.Context, samples []model.Sample, cols []ui.T
 				ui.Column(c).Width(200).Gap(2).Children(func() { ProgressBar(c, task) })
 				return
 			}
-			_, bad := p.problem(s)
-			ui.Row(c).Gap(4).Wrap().Children(func() {
-				for _, name := range dataStages {
-					status := dataStage(s, name).Status
-					if (status == "running" || status == "queued") && bad {
-						status = "interrupted"
+			stage, bad := p.problem(s)
+			reason := p.failReason(stage)
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Row(c).Gap(4).Wrap().Children(func() {
+					for _, name := range dataStages {
+						status := dataStage(s, name).Status
+						if (status == "running" || status == "queued") && bad {
+							status = "interrupted"
+						}
+						dataStageChip(c, name, status)
 					}
-					dataStageChip(c, name, status)
+				})
+				if reason != "" {
+					ui.Text(c, reason).FontSize(11).TextColor(c.Theme().Danger).SingleLine().
+						Tooltip(reason + " — the full log is in the task drawer")
 				}
 			})
 		case 6:
-			label := "—"
+			label, exact := "—", ""
 			if st, ok := stats[s.ID]; ok {
-				label = dataFormatCompact(st.Records)
+				label, exact = dataFormatCompact(st.Records), dataExactCount(st.Records)
 			} else if s.IsReady() && statsLoading {
 				label = "…"
 			}
-			ui.Text(c, label).SingleLine()
+			if exact != "" {
+				ui.Text(c, label).SingleLine().Tooltip(exact)
+			} else {
+				ui.Text(c, label).SingleLine()
+			}
 		case 7:
 			p.rowAction(c, s, task, active)
 		}
@@ -1419,6 +1464,69 @@ func (p *dataPage) confirmSheet() {
 	})
 }
 
+// ---- files linked on another computer (F5)
+
+// dataForeignShown is how many such files the warning lists by name.
+const dataForeignShown = 8
+
+// foreignLinks warns about files the project names outside its folder that
+// were not linked on this computer: Python refuses to open them until the
+// user allows them here.
+func (p *dataPage) foreignLinks(c *ui.Context) {
+	a := p.a
+	links := a.Project.UntrustedLinks
+	if len(links) == 0 {
+		return
+	}
+	t := c.Theme()
+	title := fmt.Sprintf("%d files outside this project's folder were not linked on this computer", len(links))
+	if len(links) == 1 {
+		title = "1 file outside this project's folder was not linked on this computer"
+	}
+	ui.Column(c.Key("data-foreign")).Gap(6).Padding(12, 14).Radius(8).Border(1, t.Warning).Background(t.Warning.Alpha(0.08)).Children(func() {
+		ui.Text(c, title).Bold()
+		ui.Text(c, "The project may come from another computer. HYB2 does not open these files until you allow them; "+
+			"allow them only if you trust where the project came from, or use Relink to point to your own copies.").FontSize(12)
+		for i, link := range links {
+			if i == dataForeignShown {
+				ui.Text(c, fmt.Sprintf("and %d more", len(links)-dataForeignShown)).FontSize(12).TextColor(t.TextMuted)
+				break
+			}
+			ui.Text(c, link.Path).FontSize(12).Font("monospace").SingleLine().Tooltip(strings.Join(link.UsedBy, ", "))
+		}
+		ui.Row(c).Justify(ui.End).Children(func() {
+			if ui.Button(c, "Allow these files").Disabled(p.allowing).Clicked() {
+				p.allowLinks(links)
+			}
+		})
+	})
+}
+
+func (p *dataPage) allowLinks(links []model.UntrustedLink) {
+	a := p.a
+	path := a.Project.Path
+	paths := make([]any, len(links))
+	for i, link := range links {
+		paths[i] = link.Path
+	}
+	p.allowing = true
+	a.Go(func() func() {
+		_, err := a.B.ProjectOp(path, "trust_links", core.Obj{"paths": paths})
+		return func() {
+			p.allowing = false
+			if a.Project == nil || a.Project.Path != path {
+				return
+			}
+			if err != nil {
+				a.Toast("Could not allow the files: %s", dataErrText(err))
+				return
+			}
+			a.Toast("Allowed %s.", dataPlural(len(paths), "file", "files"))
+			a.RefreshProject()
+		}
+	})
+}
+
 // ---- check inputs and relink
 
 func (p *dataPage) checkInputs() {
@@ -1437,7 +1545,7 @@ func (p *dataPage) checkInputs() {
 				return
 			}
 			if err != nil {
-				a.Toast("Check failed: %v", err)
+				a.ToastAs("check-inputs", "Check failed: %s", dataErrText(err))
 				return
 			}
 			p.inputs = map[string]dataInputItem{}
@@ -1447,10 +1555,13 @@ func (p *dataPage) checkInputs() {
 				count[item.Status]++
 			}
 			p.checkSummary = fmt.Sprintf("Inputs checked: %d ok, %d missing, %d changed.", count["ok"], count["missing"], count["changed"])
+			if n := count["unconfirmed"]; n > 0 {
+				p.checkSummary += fmt.Sprintf(" %d not opened (linked on another computer).", n)
+			}
 			if count["missing"] == 0 && count["changed"] == 0 {
-				a.Toast("All %d input files are present and unchanged.", len(items))
+				a.ToastAs("check-inputs", "All %d input files are present and unchanged.", len(items))
 			} else {
-				a.Toast("%d missing, %d changed. Use Relink on the marked rows.", count["missing"], count["changed"])
+				a.ToastAs("check-inputs", "%d missing, %d changed. Use Relink on the marked rows.", count["missing"], count["changed"])
 			}
 		}
 	})

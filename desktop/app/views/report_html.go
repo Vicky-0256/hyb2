@@ -111,7 +111,7 @@ const reportEvidenceNote = "Background material from external sources, kept as r
 // newReportEvidence describes a card against the report's structures.
 func newReportEvidence(card *model.EvidenceCard, structures []reportStructure) reportEvidence {
 	e := reportEvidence{Title: card.SourceProvider + " · " + card.SourceTool, Boundary: researchHeading(card),
-		Query: researchQuery(card), Status: researchStatusLabel(card.Status), Review: researchReview(card.Review),
+		Query: researchQuery(card), Status: researchCardLabel(card), Review: researchReview(card.Review),
 		Text: card.Text(), SourceURL: researchSourceURL(card)}
 	e.Retrieved = "not retrieved"
 	if card.RetrievedAt != nil && *card.RetrievedAt != "" {
@@ -119,6 +119,12 @@ func newReportEvidence(card *model.EvidenceCard, structures []reportStructure) r
 	}
 	if detail := researchStatusText(card); detail != "" && card.Status != model.EvidenceSuccess {
 		e.Status += " — " + detail
+	}
+	if researchShowDetail(card) {
+		e.Status += " (" + *card.StatusDetail + ")"
+	}
+	if !card.LocalOrigin {
+		e.Review += " · " + researchOriginNotice
 	}
 	e.Citations = "citations not verified"
 	if card.CitationVerification == "verified" {
@@ -252,7 +258,7 @@ func (d *reportData) conditionTable() reportTableData {
 
 func (d *reportData) testTable() reportTableData {
 	t := reportTableData{Cols: []reportCol{{Title: "Test (A vs B)", Width: 0}, {Title: "Cells tested", Width: 96, Num: true},
-		{Title: "Significant", Width: 90, Num: true}, {Title: "Up / down", Width: 120, Num: true}, {Title: "Interactions up / down", Width: 150, Num: true}}}
+		{Title: "Significant", Width: 90, Num: true}, {Title: "Higher in A / B", Width: 120, Num: true}, {Title: "Interactions A / B", Width: 150, Num: true}}}
 	for _, x := range d.Tests {
 		s := x.Summary
 		t.Rows = append(t.Rows, []string{x.LabelA + " vs " + x.LabelB, reportCount(s.CellsTested), reportCount(s.Significant),
@@ -316,6 +322,18 @@ func prefix(p, s string) string {
 		return ""
 	}
 	return p + s
+}
+
+// exportFacts are projectFacts for the exported file, which is shared: the
+// folder is named, not where it is on this computer.
+func (d *reportData) exportFacts() [][2]string {
+	facts := d.projectFacts()
+	for i := range facts {
+		if facts[i][0] == "Folder" {
+			facts[i][1] = filepath.Base(facts[i][1])
+		}
+	}
+	return facts
 }
 
 // projectFacts are the Project section's label / value lines.
@@ -418,7 +436,7 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		TestDetails                                            []reportHTMLTest
 		StructureDetails                                       []reportHTMLStructure
 		EvidenceNote                                           string
-	}{reportData: d, EvidenceNote: reportEvidenceNote, Facts: d.projectFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
+	}{reportData: d, EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
 		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable()}
 	for i := range d.Tests {
 		x := &d.Tests[i]
@@ -542,7 +560,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 <div class="stat"><span>Significant cells</span><b>{{count .Summary.Significant}}</b></div>
 <div class="stat"><span>Higher in {{.LabelA}}</span><b class="up">{{count .Summary.SignificantUp}}</b></div>
 <div class="stat"><span>Higher in {{.LabelB}}</span><b class="down">{{count .Summary.SignificantDown}}</b></div>
-<div class="stat"><span>Interactions up / down</span><b>{{count .Summary.InteractionsUp}} / {{count .Summary.InteractionsDown}}</b></div>
+<div class="stat"><span>Interactions A / B</span><b>{{count .Summary.InteractionsUp}} / {{count .Summary.InteractionsDown}}</b></div>
 </div>
 {{if .Err}}<p class="note">Could not read the results: {{.Err}}</p>{{end}}
 <div class="cols">

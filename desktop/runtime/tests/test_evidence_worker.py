@@ -227,7 +227,7 @@ class WorkerProcessTests(unittest.TestCase):
         self.assertEqual(len(worker.calls()), 2)
         self.assertEqual(len(worker.child_pids()), 2)
         card = worker.describe("fake-crash")["card"]  # crashes on both attempts
-        self.assertEqual(card["status"], "upstream_error")
+        self.assertEqual(card["status"], "local_error")
         self.assertIn("connection", card["status_detail"])
         self.assertEqual(worker.describe("fake-ok")["card"]["status"], "success")
         # a child killed while idle is replaced on the next call

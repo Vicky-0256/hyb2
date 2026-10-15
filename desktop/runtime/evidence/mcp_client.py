@@ -35,6 +35,8 @@ CALL_TIMEOUT = 30.0
 CONNECT_TIMEOUT = 30.0
 MIN_INTERVAL = 0.5  # at most 2 calls per second
 CLOSE_TIMEOUT = 8.0
+SERVER_LOG = "rnacentral-server.log"
+SERVER_LOG_ENV = "HYB2_EVIDENCE_SERVER_LOG"
 # Variables we set for the child.  The SDK adds its own small allowlist
 # (mcp.client.stdio.DEFAULT_INHERITED_ENV_VARS: HOME, PATH, ... / SYSTEMROOT,
 # TEMP, ... on Windows) when present in the worker's environment.
@@ -144,11 +146,20 @@ class McpClient:
         return future.result(timeout)
 
     def _errlog_file(self):
+        """The server's stderr: discarded, as it logs the identifiers queried
+        (RNACENTRAL_MCP_TASK.md §8), unless HYB2_EVIDENCE_SERVER_LOG=1 asks
+        for it while debugging; then one session only, never appended."""
         if self._errlog is None:
-            if self._log_dir:
-                Path(self._log_dir).mkdir(parents=True, exist_ok=True)
-                self._errlog = open(Path(self._log_dir) / "rnacentral-server.log", "a", encoding="utf-8")
+            path = Path(self._log_dir) / SERVER_LOG if self._log_dir else None
+            if path is not None and os.environ.get(SERVER_LOG_ENV) == "1":
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._errlog = open(path, "w", encoding="utf-8")
             else:
+                if path is not None:
+                    try:
+                        path.unlink()  # one kept by an earlier version
+                    except OSError:
+                        pass
                 self._errlog = open(os.devnull, "w", encoding="utf-8")
         return self._errlog
 
@@ -178,13 +189,13 @@ class McpClient:
                         item = await session.queue.get()
                         if item is None:
                             break
-                        name, arguments, reply = item
+                        name, arguments, reply, timeout = item
                         try:
-                            result = await asyncio.wait_for(client.call_tool(name, arguments), self.call_timeout)
+                            result = await asyncio.wait_for(client.call_tool(name, arguments), timeout)
                         except asyncio.TimeoutError:
                             # The call may still hold the server; start fresh next time.
                             session.alive = False
-                            _set(reply, error=CallTimeout(f"no answer within {self.call_timeout:g} s"))
+                            _set(reply, error=CallTimeout(f"no answer within {timeout:g} s"))
                             break
                         except Exception as error:  # noqa: BLE001
                             if _is_connection_error(error):
@@ -206,23 +217,23 @@ class McpClient:
                 if item is not None:
                     _set(item[2], error=failure)
 
-    async def _open(self) -> _Session:
+    async def _open(self, connect_timeout: float) -> _Session:
         loop = asyncio.get_running_loop()
         session = _Session(loop)
         session.task = loop.create_task(self._owner(session))
         self._owners.add(session.task)
         session.task.add_done_callback(self._owners.discard)
         try:
-            await asyncio.wait_for(asyncio.shield(session.ready), self.connect_timeout)
+            await asyncio.wait_for(asyncio.shield(session.ready), connect_timeout)
         except asyncio.TimeoutError:
             session.alive = False
             session.task.cancel()
-            raise CallTimeout(f"MCP server did not start within {self.connect_timeout:g} s") from None
+            raise CallTimeout(f"MCP server did not start within {connect_timeout:g} s") from None
         return session
 
-    async def _submit(self, session: _Session, name: str, arguments: dict) -> Any:
+    async def _submit(self, session: _Session, name: str, arguments: dict, timeout: float) -> Any:
         reply = asyncio.get_running_loop().create_future()
-        session.queue.put_nowait((name, arguments, reply))
+        session.queue.put_nowait((name, arguments, reply, timeout))
         return await reply
 
     async def _close_all(self) -> None:
@@ -241,25 +252,30 @@ class McpClient:
     def connected(self) -> bool:
         return self._session is not None and self._session.alive
 
-    def connect(self) -> list[str]:
-        """Start the server if needed; return the tool names it lists."""
+    def connect(self, timeout: float | None = None) -> list[str]:
+        """Start the server if needed (within ``timeout``, at most
+        CONNECT_TIMEOUT); return the tool names it lists."""
         if not mcp_available():
             raise DependencyMissing("evidence dependencies (mcp, rnacentral-mcp-server) are not installed")
+        connect_timeout = self.connect_timeout if timeout is None else min(self.connect_timeout, timeout)
         with self._lock:
             if not self.connected:
                 self._session = None
                 self.tools = []
-                session = self._run(self._open(), self.connect_timeout + CLOSE_TIMEOUT + 5)
+                session = self._run(self._open(connect_timeout), connect_timeout + CLOSE_TIMEOUT + 5)
                 self._session = session
                 self.started_sessions += 1
                 self.tools = list(session.tools)
             return list(self.tools)
 
-    def call_tool(self, name: str, arguments: dict) -> Any:
-        """One bounded call; raises EvidenceClientError subclasses on failure."""
+    def call_tool(self, name: str, arguments: dict, timeout: float | None = None) -> Any:
+        """One bounded call, starting the server if needed, all within
+        ``timeout`` when given (each part also within its own limit); raises
+        EvidenceClientError subclasses on failure."""
         if name not in ALLOWED_TOOLS:
             raise ToolRefused(f"tool {name!r} is not allowed")
-        self.connect()
+        deadline = None if timeout is None else time.monotonic() + timeout
+        self.connect(timeout)
         if name not in self.tools:
             raise ToolRefused(f"tool {name!r} is not offered by the server")
         with self._lock:
@@ -270,13 +286,16 @@ class McpClient:
             session = self._session
             if session is None or not session.alive:
                 raise ConnectionLost("MCP server connection closed")
+            call_timeout = self.call_timeout
+            if deadline is not None:
+                call_timeout = max(min(call_timeout, deadline - time.monotonic()), 0.1)
             try:
-                return self._run(self._submit(session, name, dict(arguments)), self.call_timeout + CLOSE_TIMEOUT + 5)
+                return self._run(self._submit(session, name, dict(arguments), call_timeout), call_timeout + CLOSE_TIMEOUT + 5)
             except EvidenceClientError:
                 raise
             except TimeoutError as error:  # concurrent.futures timeout: owner is stuck
                 session.alive = False
-                raise CallTimeout(f"no answer within {self.call_timeout:g} s") from error
+                raise CallTimeout(f"no answer within {call_timeout:g} s") from error
 
     def close(self) -> None:
         """Close the session and reap the child; safe to call repeatedly."""

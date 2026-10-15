@@ -6,15 +6,24 @@
     [0, 160, 157],
     [106, 79, 242]
   ];
+  // Dark theme: the navy low end vanished against the dark plot, so the
+  // scale starts from a steel blue (~3:1 against the dark surface).
+  const BRAND_SCALE_DARK = [
+    [70, 126, 156],
+    [0, 190, 186],
+    [170, 155, 255]
+  ];
   // Opaque RGBA pixels (little-endian ABGR) for the canvas fast path.
-  const VIRIDIS_LUT = (function () {
+  function buildViridisLut(dark) {
     const lut = new Uint32Array(1024);
     for (let index = 0; index < lut.length; index += 1) {
-      const rgb = viridisRgb(index / (lut.length - 1));
+      const rgb = viridisRgb(index / (lut.length - 1), dark);
       lut[index] = ((255 << 24) | (rgb[2] << 16) | (rgb[1] << 8) | rgb[0]) >>> 0;
     }
     return lut;
-  }());
+  }
+  const VIRIDIS_LUT = buildViridisLut(false);
+  const VIRIDIS_LUT_DARK = buildViridisLut(true);
 
   function afterRender(state, api) {
     contactJobApi = api;
@@ -454,7 +463,8 @@
     const cellHeight = geometry.cellHeight * pixelRatio;
     const spanX = (Math.ceil(geometry.cellWidth) + .4) * pixelRatio;
     const spanY = (Math.ceil(geometry.cellHeight) + .4) * pixelRatio;
-    const lastLut = VIRIDIS_LUT.length - 1;
+    const lut = isDarkTheme() ? VIRIDIS_LUT_DARK : VIRIDIS_LUT;
+    const lastLut = lut.length - 1;
     const cap = geometry.cap;
     const log = scale === "log";
     const binSize = matrix.binSize;
@@ -463,7 +473,7 @@
     const paint = function (cell) {
       const visualValue = log ? Math.log1p(cell.value) : cell.value;
       const ratio = cap ? Math.max(0, Math.min(1, visualValue / cap)) : 0;
-      const color = VIRIDIS_LUT[Math.round(ratio * lastLut)];
+      const color = lut[Math.round(ratio * lastLut)];
       const x0 = ((cell.x - xStart) / binSize) * cellWidth;
       const y0 = ((cell.y - yStart) / binSize) * cellHeight;
       const left = Math.max(0, Math.floor(x0));
@@ -520,7 +530,7 @@
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = line;
+    context.fillStyle = isDarkTheme() ? surface : line;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
     paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale);
@@ -762,7 +772,7 @@
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = line;
+    context.fillStyle = isDarkTheme() ? surface : line;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
     forEachVisibleContactCell(matrix, geometry, function (cell) {
@@ -2183,7 +2193,7 @@
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + " " + height + '">',
       '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
-      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.line + '"/>',
+      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + (isDarkTheme() ? colors.surface : colors.line) + '"/>',
       rects,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '" stroke-width="1"/>',
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.xStart + "</text>",
@@ -2534,13 +2544,14 @@
     };
   }
 
-  function viridisRgb(ratio) {
+  function viridisRgb(ratio, dark) {
+    const scale = dark ? BRAND_SCALE_DARK : BRAND_SCALE;
     const bounded = Math.max(0, Math.min(1, ratio));
-    const scaled = bounded * (BRAND_SCALE.length - 1);
-    const index = Math.min(BRAND_SCALE.length - 2, Math.floor(scaled));
+    const scaled = bounded * (scale.length - 1);
+    const index = Math.min(scale.length - 2, Math.floor(scaled));
     const t = scaled - index;
-    const from = BRAND_SCALE[index];
-    const to = BRAND_SCALE[index + 1];
+    const from = scale[index];
+    const to = scale[index + 1];
     return [
       Math.round(from[0] + (to[0] - from[0]) * t),
       Math.round(from[1] + (to[1] - from[1]) * t),
@@ -2549,7 +2560,7 @@
   }
 
   function viridis(ratio) {
-    const rgb = viridisRgb(ratio);
+    const rgb = viridisRgb(ratio, isDarkTheme());
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 

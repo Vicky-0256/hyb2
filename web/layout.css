@@ -289,3 +289,25 @@
   white-space: normal;
   text-align: left;
 }
+
+/* Phone header: the logo carries the brand, so the "Web" wordmark goes and
+   the actions keep their labels on one line. */
+@media (max-width: 767px) {
+  .workspace-header .brand-name {
+    display: none;
+  }
+
+  .workspace-header .brand-mark {
+    width: 84px;
+    flex-basis: 84px;
+  }
+
+  .workspace-header .toolbar-actions {
+    gap: 2px;
+  }
+
+  .workspace-header .toolbar-actions .text-button {
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+}

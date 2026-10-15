@@ -83,8 +83,9 @@
     if (!className || motionReduced()) {
       return;
     }
-    // Force a style flush so a repeated class restarts its animations.
-    void app.offsetWidth;
+    // No forced reflow: every scene arrives as freshly rendered nodes, which
+    // start their animations on insertion. Reading layout here cost ~25 ms
+    // on long pages such as the report.
     className.split(" ").forEach(function (name) {
       app.classList.add(name);
     });

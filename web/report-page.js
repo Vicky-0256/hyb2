@@ -72,6 +72,12 @@
       try {
         reportState.contact.matrix = data.buildContactMatrix(reportState.records, reportState.contact);
         derived.contact = true;
+        // Keep the build for later report renders and the Contact Map page,
+        // unless that page has a rebuild of its own in flight.
+        if (source.contact && !source.contact.matrix && reportState.contact.matrix.ready) {
+          source.contact.matrix = reportState.contact.matrix;
+          source.contact.matrixStale = false;
+        }
       } catch (error) {
         reportState.contact.matrix = { ready: false, reason: "Contact Map could not be prepared for the report snapshot." };
       }

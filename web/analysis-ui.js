@@ -455,20 +455,49 @@
     const spanX = (Math.ceil(geometry.cellWidth) + .4) * pixelRatio;
     const spanY = (Math.ceil(geometry.cellHeight) + .4) * pixelRatio;
     const lastLut = VIRIDIS_LUT.length - 1;
-    forEachVisibleContactCell(matrix, geometry, function (cell) {
-      const visualValue = scale === "log" ? Math.log1p(cell.value) : cell.value;
-      const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
+    const cap = geometry.cap;
+    const log = scale === "log";
+    const binSize = matrix.binSize;
+    const xStart = geometry.xStart;
+    const yStart = geometry.yStart;
+    const paint = function (cell) {
+      const visualValue = log ? Math.log1p(cell.value) : cell.value;
+      const ratio = cap ? Math.max(0, Math.min(1, visualValue / cap)) : 0;
       const color = VIRIDIS_LUT[Math.round(ratio * lastLut)];
-      const x0 = ((cell.x - geometry.xStart) / matrix.binSize) * cellWidth;
-      const y0 = ((cell.y - geometry.yStart) / matrix.binSize) * cellHeight;
+      const x0 = ((cell.x - xStart) / binSize) * cellWidth;
+      const y0 = ((cell.y - yStart) / binSize) * cellHeight;
       const left = Math.max(0, Math.floor(x0));
       const right = Math.min(width, Math.ceil(x0 + spanX));
       const top = Math.max(0, Math.floor(y0));
       const bottom = Math.min(height, Math.ceil(y0 + spanY));
-      for (let y = top; y < bottom; y += 1) {
-        pixels.fill(color, y * width + left, y * width + right);
+      // Most cells at full extent are 1–3 px wide: write them directly
+      // rather than paying a fill() call per row.
+      if (right - left <= 8) {
+        for (let y = top; y < bottom; y += 1) {
+          const row = y * width;
+          for (let x = left; x < right; x += 1) {
+            pixels[row + x] = color;
+          }
+        }
+      } else {
+        for (let y = top; y < bottom; y += 1) {
+          pixels.fill(color, y * width + left, y * width + right);
+        }
       }
-    });
+    };
+    if (geometry.xCount * geometry.yCount < matrix.cells.length) {
+      forEachVisibleContactCell(matrix, geometry, paint);
+    } else {
+      const cells = matrix.cells;
+      const xEnd = geometry.xEnd;
+      const yEnd = geometry.yEnd;
+      for (let index = 0; index < cells.length; index += 1) {
+        const cell = cells[index];
+        if (cell.x >= xStart && cell.x <= xEnd && cell.y >= yStart && cell.y <= yEnd) {
+          paint(cell);
+        }
+      }
+    }
     contactScratch.context.putImageData(contactScratch.image, 0, 0);
     context.save();
     context.imageSmoothingEnabled = false;

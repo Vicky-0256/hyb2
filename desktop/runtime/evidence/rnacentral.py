@@ -17,6 +17,12 @@ from typing import Any, Callable
 
 from . import ADAPTER_VERSION, PROVIDER, SCHEMA_VERSION
 from .mcp_client import ALLOWED_TOOLS, EvidenceClientError, McpClient, ToolRefused, mcp_available
+
+# One request, retry included, ends within REQUEST_BUDGET seconds, before Go
+# kills the worker (core.EvidenceTimeout, 45 s); the retry starts only with
+# RETRY_MIN seconds left.
+REQUEST_BUDGET = 40.0
+RETRY_MIN = 10.0
 from .store import EvidenceCache, cache_key
 
 DESCRIBE_TOOL = "get_rna_description"
@@ -193,6 +199,8 @@ class EvidenceService:
         self.clock = clock
         self.log = log or (lambda record: None)
         self.tool_calls = 0
+        self.budget = REQUEST_BUDGET
+        self.retry_min = RETRY_MIN
 
     # ---- operations -----------------------------------------------------
     def status(self, request: dict) -> dict:
@@ -255,19 +263,22 @@ class EvidenceService:
     def _call(self, tool: str, arguments: dict, classify) -> tuple[str, str | None, str | None, str | None]:
         """Returns (status, detail, raw_text or None, retrieved_at or None)."""
         started = time.monotonic()
+        deadline = started + self.budget
         outcome: tuple[str, str | None, str | None, str | None] = ("unexpected_response", "no call made", None, None)
         for attempt in (1, 2):
             retry = False
             self.tool_calls += 1
             try:
-                result = self.client.call_tool(tool, arguments)
+                result = self.client.call_tool(tool, arguments, timeout=max(deadline - time.monotonic(), 0.1))
             except ToolRefused as error:
                 outcome = ("unexpected_response", str(error), None, None)
             except EvidenceClientError as error:
                 if error.kind == "timeout":
                     outcome = ("timeout", str(error), None, None)
                 elif error.kind == "connection":
-                    outcome = ("upstream_error", str(error), None, None)
+                    # The MCP server is a process on this computer; RNAcentral's
+                    # own (network) errors come back as tool text.
+                    outcome = ("local_error", str(error), None, None)
                     retry = True
                 else:
                     outcome = ("unexpected_response", str(error), None, None)
@@ -290,7 +301,7 @@ class EvidenceService:
                     status, detail = classify(text)
                     outcome = (status, detail, text, retrieved_at)
                     retry = status == "upstream_error" and _retryable_text(text)
-            if not retry:
+            if not retry or deadline - time.monotonic() < self.retry_min:
                 break
         self.log({"operation": tool, "status": outcome[0], "attempts": attempt,
                   "seconds": round(time.monotonic() - started, 2)})

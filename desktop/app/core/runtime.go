@@ -95,6 +95,17 @@ type Runtime struct {
 // NewRuntime checks the bridge and prepares (but does not start) both
 // sidecars. cacheDir receives the numba cache; it may be empty.
 func NewRuntime(b Bridge, cacheDir string) (*Runtime, error) {
+	return NewRuntimeWith(b, cacheDir)
+}
+
+// TrustedLinksEnv names the file listing the files linked on this computer
+// (desktop/runtime/trust.py): with it, Python refuses other absolute paths
+// a project names. The app sets it; tests and the command line do not.
+const TrustedLinksEnv = "HYB2_TRUSTED_LINKS"
+
+// NewRuntimeWith is NewRuntime with extra environment ("KEY=value") for
+// every Python process: both sidecars and the task children.
+func NewRuntimeWith(b Bridge, cacheDir string, env ...string) (*Runtime, error) {
 	if !isFile(filepath.Join(b.Root, "desktop", "runtime", "bridge.py")) {
 		return nil, fmt.Errorf("Desktop runtime bridge is missing under %s", b.Root)
 	}
@@ -105,6 +116,7 @@ func NewRuntime(b Bridge, cacheDir string) (*Runtime, error) {
 		// Never write .pyc into the (signed, possibly read-only) app bundle.
 		"PYTHONDONTWRITEBYTECODE=1",
 	}
+	base = append(base, env...)
 	compute := append([]string(nil), base...)
 	if cacheDir != "" {
 		numba := filepath.Join(cacheDir, "numba")

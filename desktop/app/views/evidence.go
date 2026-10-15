@@ -77,6 +77,8 @@ func researchStatusLabel(status string) string {
 		return "Not found or no summary"
 	case model.EvidenceUpstreamError:
 		return "RNAcentral error"
+	case model.EvidenceLocalError:
+		return "Local error"
 	case model.EvidenceTimeout:
 		return "Timed out"
 	case model.EvidenceCancelled:
@@ -105,6 +107,9 @@ func researchStatusText(card *model.EvidenceCard) string {
 			"a missing summary does not mean the RNA has not been studied."
 	case model.EvidenceUpstreamError:
 		return "RNAcentral could not be reached or answered with an error. Nothing is concluded; try again later."
+	case model.EvidenceLocalError:
+		return "The RNAcentral helper on this computer failed to start or stopped, so RNAcentral was not asked. " +
+			"Nothing is concluded; try again, and restart HYB2 Desktop if it keeps failing."
 	case model.EvidenceTimeout:
 		return fmt.Sprintf("No answer within %d s; the lookup was stopped. Nothing is concluded.", int(core.EvidenceTimeout.Seconds()))
 	case model.EvidenceCancelled:

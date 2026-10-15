@@ -81,7 +81,10 @@ func main() {
 			bridge, err := resolveRuntime(resources, cache)
 			var rt *core.Runtime
 			if err == nil {
-				rt, err = core.NewRuntime(*bridge, cache)
+				// Files linked on this computer (trust.py): a project from
+				// elsewhere cannot make Python open other absolute paths.
+				rt, err = core.NewRuntimeWith(*bridge, cache,
+					core.TrustedLinksEnv+"="+filepath.Join(userData, "linked-files.json"))
 			}
 			if err != nil {
 				service.SetPending(false)

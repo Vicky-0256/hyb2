@@ -28,17 +28,21 @@ class FakeClient:
     def __init__(self, outcomes):
         self.outcomes = list(outcomes)
         self.calls = []
+        self.timeouts = []
         self.tools = ["get_rna_description", "map_rna_id"]
         self.connected = True
 
     def connect(self):
         return self.tools
 
-    def call_tool(self, name, arguments):
+    def call_tool(self, name, arguments, timeout=None):
         if name not in mcp_client.ALLOWED_TOOLS:
             raise mcp_client.ToolRefused(name)
         self.calls.append((name, dict(arguments)))
+        self.timeouts.append(timeout)
         outcome = self.outcomes.pop(0)
+        if callable(outcome):
+            outcome = outcome()
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -120,6 +124,32 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(card["identity_confirmation"], "unconfirmed")
         self.assertEqual(len(client.calls), 1)
 
+    def test_a_failing_local_helper_is_a_local_error(self):
+        # The MCP server is a process on this computer: its loss is not an
+        # RNAcentral (network) error. One restart is tried.
+        service, client = self.service([mcp_client.ConnectionLost("MCP server unavailable: boom"),
+                                        mcp_client.ConnectionLost("MCP server unavailable: boom")])
+        card = service.describe({"operation": "describe", "rna_id": "hsa-mir-21"})["card"]
+        self.assertEqual(card["status"], "local_error")
+        self.assertIn("boom", card["status_detail"])
+        self.assertEqual(len(client.calls), 2)
+
+    def test_the_request_budget_bounds_calls_and_the_retry(self):
+        import time as _time
+        def slow_loss():
+            _time.sleep(0.2)
+            return mcp_client.ConnectionLost("lost")
+        service, client = self.service([slow_loss, text_result("x")])
+        service.budget, service.retry_min = 0.3, 0.2
+        card = service.describe({"operation": "describe", "rna_id": "hsa-mir-21"})["card"]
+        self.assertEqual(card["status"], "local_error")
+        self.assertEqual(len(client.calls), 1, "retried without the time for it")
+        self.assertLessEqual(client.timeouts[0], 0.3)
+
+    def test_the_default_budget_fits_go_s_deadline(self):
+        from desktop.runtime.evidence import rnacentral
+        self.assertLessEqual(rnacentral.REQUEST_BUDGET + 5, 45)
+
     def test_text_with_other_content_is_unexpected(self):
         # Text plus an image or resource is not the plain summary this
         # version understands: nothing of it is shown as a summary.
@@ -139,7 +169,7 @@ class ServiceTests(unittest.TestCase):
         lost = mcp_client.ConnectionLost("gone")
         service, client = self.service([lost, lost, lost])
         card = service.describe({"operation": "describe", "rna_id": "x1"})["card"]
-        self.assertEqual(card["status"], "upstream_error")
+        self.assertEqual(card["status"], "local_error")
         self.assertIsNone(card["raw_response_digest"])
         self.assertEqual(len(client.calls), 2)
         service, client = self.service([mcp_client.CallTimeout("slow"), text_result("ok")])
@@ -235,6 +265,28 @@ class CacheTests(unittest.TestCase):
             self.assertIsNone(cache.get(cache_key("RNAcentral", "get_rna_description", "x1", None, "0.1.2", ADAPTER_VERSION)))
             future = EvidenceCache(tmp, clock=lambda: 0.0)
             self.assertIsNone(future.get(key))
+
+
+class ServerLogTests(unittest.TestCase):
+    def test_server_log_is_off_unless_asked_and_never_appends(self):
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            old = Path(tmp) / "rnacentral-server.log"
+            old.write_text("litsumm/hsa-mir-21\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("HYB2_EVIDENCE_SERVER_LOG", None)
+                client = mcp_client.McpClient(log_dir=tmp)
+                handle_ = client._errlog_file()
+                self.assertEqual(handle_.name, os.devnull)
+                client.close()
+            self.assertFalse(old.exists(), "the old server log (queried ids) is kept")
+            old.write_text("old session\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"HYB2_EVIDENCE_SERVER_LOG": "1"}):
+                client = mcp_client.McpClient(log_dir=tmp)
+                client._errlog_file().write("new session\n")
+                client.close()
+            self.assertEqual(old.read_text(encoding="utf-8"), "new session\n")
 
 
 if __name__ == "__main__":

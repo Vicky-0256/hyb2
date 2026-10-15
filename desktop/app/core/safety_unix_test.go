@@ -5,6 +5,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"hyb2desktop/model"
@@ -128,5 +129,26 @@ func TestListedCardsKeepVersionOneInvariants(t *testing.T) {
 	}
 	if cards[0].CitationVerification != "not_checked" || cards[0].RelationToStructure != "background_only" {
 		t.Fatalf("citations %q relation %q", cards[0].CitationVerification, cards[0].RelationToStructure)
+	}
+}
+
+// TestRuntimeTellsPythonWhichLinksAreTrusted: the app passes its list of
+// files linked on this computer to every Python process (sidecars and
+// task children), which then refuse other absolute paths (trust.py).
+func TestRuntimeTellsPythonWhichLinksAreTrusted(t *testing.T) {
+	root := repoRoot(t)
+	store := filepath.Join(t.TempDir(), "linked-files.json")
+	rt, err := NewRuntimeWith(Bridge{Root: root, Python: testPython(t)}, t.TempDir(), TrustedLinksEnv+"="+store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := TrustedLinksEnv + "=" + store
+	for name, env := range map[string][]string{"control": rt.control.spec.Env, "compute": rt.compute.spec.Env, "tasks": rt.ComputeEnv} {
+		if !slices.Contains(env, want) {
+			t.Fatalf("%s env lacks %s: %v", name, want, env)
+		}
+	}
+	if !slices.Contains(ProjectOperations, "trust_links") || !slices.Contains(ProjectOperations, "list_untrusted_links") {
+		t.Fatal("the trust operations are not allowed")
 	}
 }

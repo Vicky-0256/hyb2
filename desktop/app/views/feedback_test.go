@@ -2,6 +2,8 @@ package views
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -262,5 +264,58 @@ func TestQueryLineSaysHowTheTaxonWasChecked(t *testing.T) {
 		if got := researchQuery(card); got != want {
 			t.Errorf("%s: %q, want %q", card.QueryIdentifier, got, want)
 		}
+	}
+}
+
+// TestDataPageAsksBeforeOpeningForeignLinks: files a project links outside
+// its folder that were not linked on this computer are listed with a
+// warning; Allow trusts exactly those, and the warning goes away.
+func TestDataPageAsksBeforeOpeningForeignLinks(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	listed := fixture(t, "list_samples.json")
+	listed["untrusted_links"] = []any{
+		map[string]any{"path": "/Users/someone/data/ZAFR.fasta", "used_by": []any{"reference ZAFR"}},
+		map[string]any{"path": "/Users/someone/data/ZAFR_REP1.hyb", "used_by": []any{"sample AFR_REP1 reads"}},
+	}
+	f.mu.Lock()
+	f.ops["list_samples"] = listed
+	f.ops["trust_links"] = core.Obj{"ok": true, "files": []any{}}
+	f.mu.Unlock()
+	a.RefreshProject()
+	waitFlush(a)
+	tt := ui.NewTester(a.View, 1100, 900)
+	tt.Frame()
+	dataExpect(t, tt, "2 files outside this project's folder were not linked on this computer",
+		"/Users/someone/data/ZAFR.fasta", "Allow these files")
+	snapshot(t, tt, "data-foreign-links")
+	cleared := fixture(t, "list_samples.json")
+	f.mu.Lock()
+	f.ops["list_samples"] = cleared
+	f.mu.Unlock()
+	dataClick(t, tt, a, "Allow these files")
+	waitFlush(a)
+	tt.Frame()
+	calls := f.callsOf("trust_links")
+	if len(calls) != 1 || fmt.Sprint(calls[0]["paths"]) != "[/Users/someone/data/ZAFR.fasta /Users/someone/data/ZAFR_REP1.hyb]" {
+		t.Fatalf("trust_links %v", calls)
+	}
+	if tt.HasText("Allow these files") {
+		t.Fatal("the warning stays after allowing")
+	}
+}
+
+// TestLocalErrorIsNotBlamedOnRNAcentral: a failure of this computer's MCP
+// helper says so, not "RNAcentral could not be reached", and cannot be saved.
+func TestLocalErrorIsNotBlamedOnRNAcentral(t *testing.T) {
+	card := rsCard("hsa-mir-21", "9606", model.EvidenceLocalError, "")
+	if got := researchCardLabel(&card); got != "Local error" {
+		t.Fatalf("label %q", got)
+	}
+	text := researchStatusText(&card)
+	if !strings.Contains(text, "on this computer") || strings.Contains(text, "RNAcentral could not be reached") {
+		t.Fatalf("text %q", text)
+	}
+	if card.Saveable() || !slices.Contains(model.EvidenceStatuses, model.EvidenceLocalError) {
+		t.Fatal("a local error is saveable or not a known status")
 	}
 }

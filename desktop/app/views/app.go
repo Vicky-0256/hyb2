@@ -246,6 +246,10 @@ func applySamples(p *model.Project, listed core.Obj) {
 	if model.Decode(listed["references"], &refs) == nil && refs != nil {
 		p.References = refs
 	}
+	var untrusted []model.UntrustedLink
+	if model.Decode(listed["untrusted_links"], &untrusted) == nil {
+		p.UntrustedLinks = untrusted
+	}
 	var conditions []model.Condition
 	if model.Decode(listed["conditions"], &conditions) == nil && len(conditions) > 0 {
 		p.Conditions = conditions

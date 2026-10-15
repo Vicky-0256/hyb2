@@ -25,6 +25,7 @@ from typing import Any
 from .detector import cplfold_max_nt, detect_runtime
 from .project import _atomic_write_json, is_absolute_path, load_manifest, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
 from . import samples as _samples
+from . import trust as _trust
 from .sample_run import ProgressFile, run_sample_index, run_sample_pipeline
 import importlib.util
 
@@ -230,8 +231,40 @@ def _id_list(value: Any, key: str) -> list[str] | None:
     return value
 
 
+# Operations through which the user links files (chosen in a dialog, a sheet
+# or a folder they picked): files they add are linked on this computer.
+_LINKING_OPS = {"add_reference", "update_reference", "add_sample", "update_sample", "import_sample_sheet",
+                "import_sample_rows"}
+
+
 def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None) -> dict[str, Any] | None:
+    """_sample_ops_inner, recording the files a linking operation added (F5)."""
+    if operation not in _LINKING_OPS or request.get("dry_run") is True:
+        return _sample_ops_inner(operation, request, repo_root)
+    path = _valid_project(request)
+    before = set(_trust.linked_files(load_manifest(path)))
+    result = _sample_ops_inner(operation, request, repo_root)
+    if result is not None and result.get("ok"):
+        _trust.trust(set(_trust.linked_files(load_manifest(path))) - before)
+    return result
+
+
+def _sample_ops_inner(operation: str, request: dict[str, Any], repo_root: Path | None) -> dict[str, Any] | None:
     """Schema 2.0 reference/sample operations (contract R2); None for other operations."""
+    if operation == "list_untrusted_links":
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), "files": _trust.untrusted(path, load_manifest(path))}
+    if operation == "trust_links":
+        path = _valid_project(request)
+        paths = request.get("paths")
+        if not isinstance(paths, list) or not paths or any(not isinstance(p, str) for p in paths):
+            raise ValueError("paths must be a non-empty array of paths")
+        known = {item["path"] for item in _trust.untrusted(path, load_manifest(path))}
+        for value in paths:
+            if os.path.realpath(value) not in known:
+                raise ValueError("not a file this project links from outside its folder: %s" % value)
+        _trust.trust(paths)
+        return {"ok": True, "path": str(path), "files": _trust.untrusted(path, load_manifest(path))}
     if operation == "add_reference":
         path = _valid_project(request)
         source = _optional_str(request, "source")
@@ -302,7 +335,8 @@ def _sample_ops(operation: str, request: dict[str, Any], repo_root: Path | None)
         return {"ok": True, "path": str(path), **result}
     if operation == "list_samples":
         path = _valid_project(request)
-        return {"ok": True, "path": str(path), **_samples.list_samples(path)}
+        return {"ok": True, "path": str(path), **_samples.list_samples(path),
+                "untrusted_links": _trust.untrusted(path, load_manifest(path))}
     if operation == "list_structures":
         from .structure import list_structures
         path = _valid_project(request)
@@ -657,6 +691,7 @@ def _sample_index_paths(project: Path, manifest: dict[str, Any], sample_ids: Any
         if not isinstance(index, str) or not index:
             raise ValueError("sample has no analysis index yet: %s" % sample_id)
         if Path(index).is_absolute():
+            _trust.require(project, index, "sample index of %s" % sample_id)
             target = Path(index).resolve()
         else:
             if not safe_relative_path(index):

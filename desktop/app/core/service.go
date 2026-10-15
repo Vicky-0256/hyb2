@@ -57,6 +57,9 @@ var ProjectOperations = []string{
 	"read_reference_sequence",
 	"list_comparisons",
 	"read_comparison",
+	// Files a project links outside its folder (desktop/runtime/trust.py).
+	"list_untrusted_links",
+	"trust_links",
 }
 
 // ServiceOptions configures a Service.

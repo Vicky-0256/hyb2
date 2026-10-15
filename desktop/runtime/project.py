@@ -46,7 +46,14 @@ def _now() -> str:
 @contextmanager
 def _manifest_lock(root: Path) -> Iterator[None]:
     """Exclusive inter-process lock on ``project.json.lock`` (flock/msvcrt)."""
-    handle = open(Path(root) / "project.json.lock", "a+b")
+    with _file_lock(Path(root) / "project.json.lock"):
+        yield
+
+
+@contextmanager
+def _file_lock(path: Path) -> Iterator[None]:
+    """Exclusive inter-process lock on the file ``path`` (flock/msvcrt)."""
+    handle = open(path, "a+b")
     try:
         if fcntl is not None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)

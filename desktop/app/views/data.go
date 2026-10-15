@@ -143,6 +143,7 @@ type dataPage struct {
 	removeOpen bool
 	removeIDs  []string
 	allChecked bool
+	allowing   bool // trust_links in flight
 }
 
 func (p *dataPage) Show() {
@@ -424,6 +425,7 @@ func (p *dataPage) View(c *ui.Context) {
 		if p.checkSummary != "" {
 			ui.Text(c, p.checkSummary).FontSize(12).TextColor(t.TextMuted)
 		}
+		p.foreignLinks(c)
 		p.referencesCard(c)
 		p.samplesCard(c)
 	})
@@ -1453,6 +1455,69 @@ func (p *dataPage) confirmSheet() {
 	})
 }
 
+// ---- files linked on another computer (F5)
+
+// dataForeignShown is how many such files the warning lists by name.
+const dataForeignShown = 8
+
+// foreignLinks warns about files the project names outside its folder that
+// were not linked on this computer: Python refuses to open them until the
+// user allows them here.
+func (p *dataPage) foreignLinks(c *ui.Context) {
+	a := p.a
+	links := a.Project.UntrustedLinks
+	if len(links) == 0 {
+		return
+	}
+	t := c.Theme()
+	title := fmt.Sprintf("%d files outside this project's folder were not linked on this computer", len(links))
+	if len(links) == 1 {
+		title = "1 file outside this project's folder was not linked on this computer"
+	}
+	ui.Column(c.Key("data-foreign")).Gap(6).Padding(12, 14).Radius(8).Border(1, t.Warning).Background(t.Warning.Alpha(0.08)).Children(func() {
+		ui.Text(c, title).Bold()
+		ui.Text(c, "The project may come from another computer. HYB2 does not open these files until you allow them; "+
+			"allow them only if you trust where the project came from, or use Relink to point to your own copies.").FontSize(12)
+		for i, link := range links {
+			if i == dataForeignShown {
+				ui.Text(c, fmt.Sprintf("and %d more", len(links)-dataForeignShown)).FontSize(12).TextColor(t.TextMuted)
+				break
+			}
+			ui.Text(c, link.Path).FontSize(12).Font("monospace").SingleLine().Tooltip(strings.Join(link.UsedBy, ", "))
+		}
+		ui.Row(c).Justify(ui.End).Children(func() {
+			if ui.Button(c, "Allow these files").Disabled(p.allowing).Clicked() {
+				p.allowLinks(links)
+			}
+		})
+	})
+}
+
+func (p *dataPage) allowLinks(links []model.UntrustedLink) {
+	a := p.a
+	path := a.Project.Path
+	paths := make([]any, len(links))
+	for i, link := range links {
+		paths[i] = link.Path
+	}
+	p.allowing = true
+	a.Go(func() func() {
+		_, err := a.B.ProjectOp(path, "trust_links", core.Obj{"paths": paths})
+		return func() {
+			p.allowing = false
+			if a.Project == nil || a.Project.Path != path {
+				return
+			}
+			if err != nil {
+				a.Toast("Could not allow the files: %s", dataErrText(err))
+				return
+			}
+			a.Toast("Allowed %s.", dataPlural(len(paths), "file", "files"))
+			a.RefreshProject()
+		}
+	})
+}
+
 // ---- check inputs and relink
 
 func (p *dataPage) checkInputs() {
@@ -1481,6 +1546,9 @@ func (p *dataPage) checkInputs() {
 				count[item.Status]++
 			}
 			p.checkSummary = fmt.Sprintf("Inputs checked: %d ok, %d missing, %d changed.", count["ok"], count["missing"], count["changed"])
+			if n := count["unconfirmed"]; n > 0 {
+				p.checkSummary += fmt.Sprintf(" %d not opened (linked on another computer).", n)
+			}
 			if count["missing"] == 0 && count["changed"] == 0 {
 				a.ToastAs("check-inputs", "All %d input files are present and unchanged.", len(items))
 			} else {

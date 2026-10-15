@@ -76,9 +76,11 @@ Operations (anything else → `{"ok":false,"error":"unsupported evidence operati
 Timeouts: Go cancels by killing the worker's process group after 45 s per
 call. The MCP SDK starts the RNAcentral child in its own session, so the
 group kill does not reach it: the child ends on EOF of its stdin when the
-worker dies (checked: it exits about 0.1 s later); the worker itself uses 30 s per tool call and at
-most one retry for connection errors (never for 404). Rate limit: at most 2
-calls per second.
+worker dies (checked: it exits about 0.1 s later). The worker keeps one
+request, retry included, within 40 s (`REQUEST_BUDGET`, so before Go's 45 s):
+starting the server (at most 30 s) and the tool call (at most 30 s) only get
+the time left, and the single retry for a lost server (never for 404) starts
+only with 10 s left. Rate limit: at most 2 calls per second.
 
 ## EvidenceCard (JSON; worker produces, Go stores)
 
@@ -96,7 +98,7 @@ calls per second.
   "identity_confirmation": "user_confirmed" | "unconfirmed",
   "requested_at": "2026-10-15T08:00:00Z",
   "retrieved_at": "2026-10-15T08:00:01Z" | null,
-  "status": "success" | "summary_unavailable" | "not_found_or_no_summary" | "upstream_error" | "timeout" | "cancelled" | "identity_unconfirmed" | "unexpected_response",
+  "status": "success" | "summary_unavailable" | "not_found_or_no_summary" | "upstream_error" | "local_error" | "timeout" | "cancelled" | "identity_unconfirmed" | "unexpected_response",
   "status_detail": "HTTP 404 Not Found" | null,
   "content_kind": "external_ai_summary" | "database_metadata",
   "display_text": "...",           // null unless success (or mapping text)
@@ -167,7 +169,9 @@ sent by Go); the worker never decides identity.
   - Responses carry `raw_text` and `cached: bool` next to `card`.
   - `raw_response_digest` and `retrieved_at` are null when no tool response
     arrived (timeout, lost connection); non-text content hashes as "".
-  - Lost transport / server failed to start → `upstream_error`; MCP protocol
+  - Lost transport / server failed to start → `local_error` (the MCP server
+    is a process on this computer; RNAcentral's own errors arrive as tool
+    text and stay `upstream_error`); MCP protocol
     errors, refused or unlisted tools, responses over 256 KiB →
     `unexpected_response`; MCP `isError` → `upstream_error`. The worker never
     emits `cancelled` or `identity_unconfirmed` (Go does).
@@ -182,8 +186,11 @@ sent by Go); the worker never decides identity.
     `[A-Za-z .-]{1,64}`.
   - The SDK starts the MCP child in its own session; it exits when the
     worker's pipe closes (checked with SIGKILL of the worker mid-call).
-  - No clear_cache operation: Go deletes the cache directory. The server log
-    (`rnacentral-server.log`) can contain the queried public id.
+  - No clear_cache operation: Go deletes the cache directory. The server's
+    stderr logs the queried ids, so it is discarded (and an
+    `rnacentral-server.log` left by an earlier version is deleted when the
+    worker starts); `HYB2_EVIDENCE_SERVER_LOG=1` keeps it for debugging, one
+    session per file, never appended.
   - The lock (`desktop/runtime/requirements-evidence.txt`, 46 pins, 65
     hashes) covers macOS arm64, Windows amd64 and Linux x86_64; on Linux the
     cryptography wheel pip selects needs glibc ≥ 2.34.

@@ -1506,10 +1506,31 @@
     }
 
     if (action === "report-export-zip") {
-      if (reportExportCache) {
-        downloadBlob("hyb2-result-" + reportExportCache.audience + ".zip", window.Hyb2Results.zip(reportExportCache.files, "hyb2-result"));
-        showToast("Result package built and downloaded locally.");
+      downloadReportZip();
+      return;
+    }
+
+    if (action === "report-export-toggle") {
+      toggleReportFile(actionNode.dataset.path || "");
+      return;
+    }
+
+    if (action === "report-select" || action === "report-select-all") {
+      // a selected-results report: the page and every export keep only the ticked steps
+      const keys = window.Hyb2Results ? window.Hyb2Results.STEPS.map(function (spec) { return spec[1]; }) : [];
+      if (action === "report-select-all") {
+        state.reportSelection = null;
+      } else {
+        const selection = state.reportSelection || keys.reduce(function (all, key) { all[key] = true; return all; }, {});
+        const key = actionNode.dataset.step || "";
+        if (key && key !== "parse") {
+          selection[key] = !selection[key];
+        }
+        state.reportSelection = keys.every(function (k) { return selection[k]; }) ? null : selection;
       }
+      reportExportCache = null;
+      state.reportExport = null;
+      render();
       return;
     }
 
@@ -1519,9 +1540,8 @@
     }
 
     if (action === "report-export-copy") {
-      const markdown = reportExportCache && reportExportCache.files.find(function (file) { return file.path === "report.md"; });
-      if (markdown) {
-        copyText(markdown.text, "AI summary (report.md) copied to the clipboard.");
+      if (reportExportCache) {
+        copyText(window.Hyb2Results.reportMarkdown(reportExportCache.record), "AI summary (report.md) copied to the clipboard.");
       }
       return;
     }
@@ -1975,6 +1995,7 @@
     state.reportExport = null;
     reportExportCache = null;
     state.reportPurpose = "";
+    state.reportSelection = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.error = null;
     state.loading = {
@@ -2717,6 +2738,7 @@
     state.reportExport = null;
     reportExportCache = null;
     state.reportPurpose = "";
+    state.reportSelection = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
@@ -2765,6 +2787,7 @@
     state.reportExport = null;
     reportExportCache = null;
     state.reportPurpose = "";
+    state.reportSelection = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
@@ -2850,16 +2873,34 @@
   let reportExportCache = null;
   let reportExportSession = 0;
 
-  function prepareReportFiles(audience) {
+  // the record of the export, with every filtered row from the DataProvider
+  function prepareReportRecord() {
     if (!window.Hyb2Results) {
       return Promise.reject(new Error("The result exports are unavailable in this build."));
     }
     const query = pageData ? pageData.queryHybrids({ filters: Object.assign({}, state.filters || {}), offset: 0, limit: window.Hyb2Results.MAX_ANALYSIS_ROWS }) : Promise.resolve(null);
     return Promise.resolve(query).then(function (result) {
       const rows = result && Array.isArray(result.rows) ? result.rows : null;
-      const record = window.Hyb2Results.build(state, { interactionRows: rows, interactionTotal: result && Number.isFinite(result.total) ? result.total : undefined });
-      return window.Hyb2Results.withManifest(window.Hyb2Results.files(record, audience), record);
+      return window.Hyb2Results.build(state, { interactionRows: rows, interactionTotal: result && Number.isFinite(result.total) ? result.total : undefined });
     });
+  }
+
+  // the package as it will be downloaded: without the files left out, with
+  // a manifest that lists them
+  function reportPackage(cache) {
+    return window.Hyb2Results.withManifest(window.Hyb2Results.files(cache.record, cache.audience, { exclude: cache.exclude }), cache.record);
+  }
+
+  function listReportFiles(cache) {
+    const all = window.Hyb2Results.files(cache.record, cache.audience);
+    const kept = window.Hyb2Results.files(cache.record, cache.audience, { exclude: cache.exclude });
+    const keptPaths = {};
+    kept.forEach(function (file) { keptPaths[file.path] = file; });
+    return all.map(function (file) {
+      const shown = keptPaths[file.path] || file;
+      return { path: file.path, description: shown.description, fields: shown.fields, bytes: new TextEncoder().encode(shown.text).length,
+        excluded: !keptPaths[file.path], required: !!window.Hyb2Results.REQUIRED_FILES[file.path] };
+    }).concat([{ path: "manifest.json", description: "File list with sizes and SHA-256, and the files left out.", fields: ["schema", "run", "generatedAt", "application", "scope", "files", "leftOutByResearcher", "note"], bytes: 0, excluded: false, required: true }]);
   }
 
   function openReportExport(audience) {
@@ -2871,15 +2912,13 @@
     if (audience === "people") {
       return;
     }
-    prepareReportFiles(audience).then(function (files) {
+    prepareReportRecord().then(function (record) {
       if (session !== reportExportSession || !state.reportExport) {
         return;
       }
-      reportExportCache = { audience: audience, files: files };
+      reportExportCache = { audience: audience, record: record, exclude: {} };
       state.reportExport.status = "ready";
-      state.reportExport.list = files.map(function (file) {
-        return { path: file.path, description: file.description, bytes: new TextEncoder().encode(file.text).length };
-      });
+      state.reportExport.list = listReportFiles(reportExportCache);
       render();
     }).catch(function (error) {
       if (session !== reportExportSession || !state.reportExport) {
@@ -2888,6 +2927,26 @@
       state.reportExport.status = "error";
       state.reportExport.error = error && error.message ? error.message : "The export could not be prepared.";
       render();
+    });
+  }
+
+  function toggleReportFile(path) {
+    if (!reportExportCache || window.Hyb2Results.REQUIRED_FILES[path]) {
+      return;
+    }
+    reportExportCache.exclude[path] = !reportExportCache.exclude[path];
+    state.reportExport.list = listReportFiles(reportExportCache);
+    render();
+  }
+
+  function downloadReportZip() {
+    if (!reportExportCache) {
+      return;
+    }
+    const cache = reportExportCache;
+    reportPackage(cache).then(function (files) {
+      downloadBlob("hyb2-result-" + cache.audience + (cache.record.scope.kind === "selected_results" ? "-selected" : "") + ".zip", window.Hyb2Results.zip(files, "hyb2-result"));
+      showToast("Result package built and downloaded locally.");
     });
   }
 
@@ -2902,10 +2961,12 @@
       showToast(path + " downloaded locally.");
     };
     if (reportExportCache && reportExportCache.audience === audience) {
-      save(reportExportCache.files);
+      reportPackage(reportExportCache).then(save);
       return;
     }
-    prepareReportFiles(audience).then(save).catch(function (error) {
+    prepareReportRecord().then(function (record) {
+      return reportPackage({ audience: audience, record: record, exclude: {} });
+    }).then(save).catch(function (error) {
       showToast(error && error.message ? error.message : "The file could not be prepared.");
     });
   }
@@ -2919,7 +2980,7 @@
       return;
     }
     const clone = article.cloneNode(true);
-    clone.querySelectorAll("[data-report-export-panel], .report-actions, button").forEach(function (node) { node.remove(); });
+    clone.querySelectorAll("[data-report-export-panel], .report-actions, button, input.report-select").forEach(function (node) { node.remove(); });
     clone.querySelectorAll("details").forEach(function (node) { node.setAttribute("open", ""); });
     // the purpose box becomes the researcher's text (or goes)
     clone.querySelectorAll(".report-purpose, .report-purpose-print").forEach(function (node) { node.remove(); });

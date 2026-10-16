@@ -854,3 +854,50 @@
 .report-table td:nth-child(2) code {
   white-space: nowrap;
 }
+
+/* the result or source a note rests on */
+.report-cite {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 5px;
+  border: 1px solid var(--report-line);
+  border-radius: 4px;
+  color: var(--report-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.report-left-out {
+  color: var(--report-muted);
+  font-size: 11px;
+}
+
+.report-fields {
+  margin-top: 4px;
+}
+
+.report-fields summary {
+  cursor: pointer;
+  color: var(--report-muted);
+  font-size: 11px;
+}
+
+.report-fields code {
+  display: inline-block;
+  margin: 2px 4px 0 0;
+  font-size: 10px;
+}
+
+.report-selected-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+@media print {
+  .report-select {
+    display: none !important;
+  }
+}

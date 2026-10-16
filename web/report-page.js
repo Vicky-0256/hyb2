@@ -22,18 +22,18 @@
       part("results", "2", "Main results"),
       renderKeyResults(context),
       part("figures", "3", "Figures and data"),
-      renderInteractions(context),
-      renderContactMap(context),
-      renderViewpoint(context),
-      renderRegion(context),
-      renderComparison(context),
-      renderStructure(context),
+      when(context, ["interactions"], renderInteractions),
+      when(context, ["contact_map"], renderContactMap),
+      when(context, ["viewpoint"], renderViewpoint),
+      when(context, ["region"], renderRegion),
+      when(context, ["comparison", "differential_test", "arc_map", "region_structures", "folding_energy"], renderComparison),
+      when(context, ["structure"], renderStructure),
       part("methods", "4", "Methods and sources"),
       renderSource(context),
       renderValidation(context),
       renderFileFormat(),
       renderMethods(),
-      renderExternalSources(context),
+      when(context, ["literature_search"], renderExternalSources),
       part("limitations", "5", "Limitations and warnings"),
       renderLimitations(context),
       '</article>'
@@ -99,9 +99,13 @@
     // the result record (results.js) gives every status and key number the
     // report shows, and the exports read the same record
     const record = window.Hyb2Results ? safeCall(function () { return window.Hyb2Results.build(source, { generatedAt: generatedAt }); }, null) : null;
+    const fullRecord = record && record.scope.kind === "selected_results"
+      ? safeCall(function () { return window.Hyb2Results.build(source, { generatedAt: generatedAt, ignoreSelection: true }); }, record)
+      : record;
     return {
       state: reportState,
       record: record,
+      fullRecord: fullRecord,
       filteredTotal: prepared ? number(prepared.filteredTotal) : 0,
       filteredRecords: prepared && Array.isArray(prepared.filteredSample) ? prepared.filteredSample : [],
       partnerCounts: prepared && Array.isArray(prepared.partnerCounts) ? prepared.partnerCounts : [],
@@ -136,7 +140,7 @@
       '    <span class="report-kicker">Local session snapshot</span>',
       '    <h1>Analysis report</h1>',
       '    <p class="report-lede">A print-ready view of the current HYB2 workspace, including configured analyses, generated results, selected intervals, and reproducibility details.</p>',
-      '    <div class="report-hero-meta"><span><strong>Scope</strong> ' + escape(context.record ? context.record.scope.label : "Session report") + '</span><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> <code>' + escape(formatTimestamp(context.generatedAt)) + '</code></span><span><strong>Version</strong> <code>HYB2 Web Lite ' + escape(REPORT_VERSION) + (window.HYB2_BUILD && window.HYB2_BUILD.commit ? " · " + escape(String(window.HYB2_BUILD.commit).slice(0, 12)) : "") + '</code></span><span class="report-status is-ready">Processed locally</span></div>',
+      '    <div class="report-hero-meta"><span><strong>Scope</strong> ' + escape(context.record ? context.record.scope.label : "Session report") + '</span><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> <code>' + escape(formatTimestamp(context.generatedAt)) + '</code></span><span><strong>Version</strong> <code>HYB2 Web Lite ' + escape(REPORT_VERSION) + (window.HYB2_BUILD && window.HYB2_BUILD.commit ? " · " + escape(String(window.HYB2_BUILD.commit).slice(0, 12)) : "") + '</code></span>' + (context.record ? '<span><strong>Run</strong> <code>' + escape(context.record.run.id) + "</code></span>" : "") + '<span class="report-status is-ready">Processed locally</span></div>',
       context.record ? '    <p class="report-scope-note">' + escape(context.record.scope.description) + "</p>" : "",
       "  </div>",
       '  <p class="report-print-note">Use your browser\'s Print dialog and choose <strong>Save as PDF</strong>. The report is generated in this tab and no data is uploaded.</p>',
@@ -252,7 +256,7 @@
           ["Processing", "Browser-local; no server upload"]
         ]) + '</div>',
         "</div>",
-        '<p class="report-note">' + (fasta ? "The loaded FASTA is available for reference-based Viewpoint and RNA Structure workflows." : "No FASTA was loaded in this session. Interaction analysis and contact maps remain available; reference-based structure workflows will remain unavailable until a FASTA is added.") + '</p>'
+        '<p class="report-note" data-cites="S02"><span class="report-cite">S02</span> ' + (fasta ? "The loaded FASTA is available for reference-based Viewpoint and RNA Structure workflows." : "No FASTA was loaded in this session. Interaction analysis and contact maps remain available; reference-based structure workflows will remain unavailable until a FASTA is added.") + '</p>'
       ].join("")
     );
   }
@@ -281,7 +285,7 @@
         metric("Homodimer proxy", formatNumber(summary.homodimerRecords), "Overlap score >= 5"),
         "</div>",
         summary.ambiguousColumn16Records ? '<div class="report-callout report-callout--warning"><strong>Legacy column 16 detected</strong><span>' + formatNumber(summary.ambiguousColumn16Records) + ' rows were interpreted as legacy cluster support because no column 17 chimera type was present.</span></div>' : "",
-        summary.errorSampleTruncated ? '<p class="report-note">The browser retained the first ' + formatNumber(summary.errorSampleCount) + ' validation details and omitted ' + formatNumber(summary.omittedErrorCount) + ' additional error details from memory. The complete invalid-row count remains ' + formatNumber(summary.invalidRecords) + '.</p>' : "",
+        summary.errorSampleTruncated ? '<p class="report-note" data-cites="S01 R02"><span class="report-cite">S01, R02</span> The browser retained the first ' + formatNumber(summary.errorSampleCount) + ' validation details and omitted ' + formatNumber(summary.omittedErrorCount) + ' additional error details from memory. The complete invalid-row count remains ' + formatNumber(summary.invalidRecords) + '.</p>' : "",
         errors.length ? '<div class="report-table-wrap">' + table(["Line", "Error", "Content sample"], errorRows) + '</div>' : '<div class="report-empty is-ready">No invalid row details were retained.</div>'
       ].join("")
     );
@@ -367,7 +371,7 @@
       "HYB File Format",
       "Input layout",
       '<span class="report-status is-ready">Reference</span>',
-      '<div class="report-subsection report-subsection--table"><p class="report-note">The local parser accepts the HYB record layout below. Collapsed source-read counts are retained as provenance and are not reused as Contact Map or Viewpoint weights.</p>' + table(["Column", "Field"], rows.map(function (row) { return [escape(row[0]), escape(row[1])]; })) + '</div>'
+      '<div class="report-subsection report-subsection--table"><p class="report-note" data-cites="S01"><span class="report-cite">S01</span> The local parser accepts the HYB record layout below. Collapsed source-read counts are retained as provenance and are not reused as Contact Map or Viewpoint weights.</p>' + table(["Column", "Field"], rows.map(function (row) { return [escape(row[0]), escape(row[1])]; })) + '</div>'
     );
   }
 
@@ -406,7 +410,7 @@
         ]) : '<div class="report-empty">' + escape(matrix && matrix.reason || "Generate a Contact Map from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
         ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + '</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
-        matrix && matrix.resourceBudget ? '<p class="report-note">Adaptive browser budget: up to ' + formatNumber(matrix.maximumCells) + ' cells and ' + formatNumber(matrix.maximumBinContributions) + ' bin contributions for this device profile.</p>' : ""
+        matrix && matrix.resourceBudget ? '<p class="report-note" data-cites="S04 R12"><span class="report-cite">S04, R12</span> Adaptive browser budget: up to ' + formatNumber(matrix.maximumCells) + ' cells and ' + formatNumber(matrix.maximumBinContributions) + ' bin contributions for this device profile.</p>' : ""
       ].join("")
     );
   }
@@ -443,7 +447,7 @@
         ]) : '<div class="report-empty">Generate Viewpoint coverage from the workspace to include its result here.</div>') + '</div>',
         "</div>",
         ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#00a09d", viewpoint.selection && viewpoint.selection.start), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
-        results && results.binSizeAdjusted ? '<p class="report-note">The requested resolution was adjusted to ' + formatNumber(results.binSize) + ' nt to keep the browser profile within its maximum bin count.</p>' : ""
+        results && results.binSizeAdjusted ? '<p class="report-note" data-cites="S05"><span class="report-cite">S05</span> The requested resolution was adjusted to ' + formatNumber(results.binSize) + ' nt to keep the browser profile within its maximum bin count.</p>' : ""
       ].join("")
     );
   }
@@ -488,7 +492,7 @@
         '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + dataNote(context, "tables/region_partners.tsv") + '</div>',
         '<div class="report-subsection"><h3>Matching record sample</h3>' + (recordRows.length ? table(["Sequence ID", "RNA 1", "Region 1", "RNA 2", "Region 2", "Support"], recordRows) : '<div class="report-empty">No matching records are available for this region.</div>') + '</div>',
         "</div>",
-        results && results.records && results.records.length > MAX_TABLE_ROWS ? '<p class="report-note">Showing the first ' + formatNumber(MAX_TABLE_ROWS) + ' matching records. The Region Explorer export contains all local matches.</p>' : ""
+        results && results.records && results.records.length > MAX_TABLE_ROWS ? '<p class="report-note" data-cites="S06 R15"><span class="report-cite">S06, R15</span> Showing the first ' + formatNumber(MAX_TABLE_ROWS) + ' matching records. The Region Explorer export contains all local matches.</p>' : ""
       ].join("")
     );
   }
@@ -531,7 +535,7 @@
       [
         '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Datasets and conditions</h3><span class="report-note-inline">' + formatNumber(datasets.length) + (datasets.length === 1 ? ' local file' : ' local files') + '</span></div>',
         datasetRows.length ? table(["File", "Label", "Condition", "Valid records", "Support"], datasetRows) : '<div class="report-empty">Add a second local HYB dataset to configure a comparison.</div>',
-        datasets.length > MAX_DATASET_ROWS ? '<p class="report-note">Only the first ' + formatNumber(MAX_DATASET_ROWS) + ' datasets are shown in the printable report.</p>' : "",
+        datasets.length > MAX_DATASET_ROWS ? '<p class="report-note" data-cites="S07"><span class="report-cite">S07</span> Only the first ' + formatNumber(MAX_DATASET_ROWS) + ' datasets are shown in the printable report.</p>' : "",
         "</div>",
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Parameters</h3>' + parameterList(params.parameters) + '</div>',
@@ -545,12 +549,13 @@
         "</div>",
         ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map): white at the smallest plotted count, green at the 95% quantile cap</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' + dataNote(context, "tables/compare_cells.tsv") : "",
         '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
-        '<div class="report-subsection-heading report-step-heading"><h3>Differential test</h3>' + stepBadge(context, "differential_test") + "</div>",
-        window.Hyb2DeseqCard ? window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) : "",
-        resultRefs(context, "differential_test"),
-        dataNote(context, "tables/differential_interactions.tsv") + dataNote(context, "tables/differential_significant_cells.tsv"),
+        included(context, "differential_test") ? '<div class="report-subsection-heading report-step-heading"><h3>Differential test</h3>' + stepBadge(context, "differential_test") + "</div>" : "",
+        window.Hyb2DeseqCard && included(context, "differential_test") ? String(window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) || "")
+          .split('<p class="report-note">').join('<p class="report-note" data-cites="S08"><span class="report-cite">S08</span> ') : "",
+        included(context, "differential_test") ? resultRefs(context, "differential_test") : "",
+        included(context, "differential_test") ? dataNote(context, "tables/differential_interactions.tsv") + dataNote(context, "tables/differential_significant_cells.tsv") : "",
         renderFigurePanels(context),
-        '<p class="report-note">Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
+        '<p class="report-note" data-cites="S07 S08"><span class="report-cite">S07, S08</span> Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
       ].join("")
     );
   }
@@ -596,13 +601,13 @@
           ["Selected candidate", cplfold ? formatNumber(number(result.selectedCandidate, 0) + 1) : "MFE"]
         ]) : '<div class="report-empty">' + escape(sequenceInfo && sequenceInfo.error || "Run a structure prediction from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-structure-result"><div class="report-subsection-heading"><h3>Printable secondary-structure view</h3><span class="report-note-inline">Arc layout used for the report snapshot</span></div><div class="report-structure-diagram" data-report-structure-diagram></div><p class="report-note">The report uses a stable Arc layout so it prints consistently. Use the RNA Structure page SVG/PNG controls to export folded, radial, circular, or matrix views.</p>' + dataNote(context, "results/structure_prediction.json") + dataNote(context, "results/structure_prediction.dbn") + '</div>' : "",
+        ready ? '<div class="report-structure-result"><div class="report-subsection-heading"><h3>Printable secondary-structure view</h3><span class="report-note-inline">Arc layout used for the report snapshot</span></div><div class="report-structure-diagram" data-report-structure-diagram></div><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> The report uses a stable Arc layout so it prints consistently. Use the RNA Structure page SVG/PNG controls to export folded, radial, circular, or matrix views.</p>' + dataNote(context, "results/structure_prediction.json") + dataNote(context, "results/structure_prediction.dbn") + '</div>' : "",
         ready ? '<div class="report-grid report-analysis-grid">' : "",
-        ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.sequence || "", 1400)) + '</code></pre><p class="report-note">The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
-        ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracket || "", 1400)) + '</code></pre><p class="report-note">Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
+        ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.sequence || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12 R37"><span class="report-cite">S12, R37</span> The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
+        ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracket || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
         ready ? "</div>" : "",
         cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table(["Rank", "Type", "Topology", "Energy", "Pairs", "Crossing", "Dot-bracket"], candidateRows) + '</div>' : "",
-        ready && cplfold ? '<p class="report-note">CPLfold candidates preserve the selected pseudoknot setting and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain available from the RNA Structure page.</p>' : ""
+        ready && cplfold ? '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> CPLfold candidates preserve the selected pseudoknot setting and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain available from the RNA Structure page.</p>' : ""
       ].join("")
     );
   }
@@ -618,7 +623,9 @@
       "External sources and researcher notes",
       "Public databases",
       stepBadge(context, "literature_search", cards.length ? formatNumber(cards.length) + " added" : null),
-      cards.length ? cards.map(function (card) {
+      cards.length ? cards.map(function (card, index) {
+        const evidenceId = "E" + String(index + 1).padStart(2, "0");
+        const cite = '<p class="report-note" data-cites="S13 ' + evidenceId + '"><span class="report-cite">S13, ' + evidenceId + "</span> ";
         const text = window.Hyb2Evidence.statusLine(card);
         const entries = (card.entries || []).map(function (entry) {
           return card.content_kind === "database_metadata"
@@ -627,7 +634,7 @@
         }).join("");
         return [
           '<div class="report-subsection report-evidence-card">',
-          "<h3>" + escape(card.source_provider) + " · <code>" + escape(card.query_identifier) + "</code></h3>",
+          "<h3><code>" + evidenceId + "</code> " + escape(card.source_provider) + " · <code>" + escape(card.query_identifier) + "</code></h3>",
           definitionList([
             ["Query", card.query_identifier + (card.taxon ? " · taxon " + card.taxon : ""), true],
             ["Retrieved", card.retrieved_at ? card.retrieved_at.replace("T", " ").slice(0, 16) + " UTC" : "-"],
@@ -637,9 +644,9 @@
             ["Review", reviewLabel[card.review && card.review.state] || "Not reviewed"],
             card.review && card.review.note ? ["Researcher note", card.review.note] : null
           ]),
-          '<p class="report-note">' + escape(text) + "</p>",
+          cite + escape(text) + "</p>",
           entries ? "<ul>" + entries + "</ul>" : "",
-          '<p class="report-note"><strong>' + (card.content_kind === "database_metadata" ? "External database record — background only, not a validation of this structure." : "Literature index — a mention is not evidence for this structure.") + "</strong> Citations not verified.</p>",
+          cite + '<strong>' + (card.content_kind === "database_metadata" ? "External database record — background only, not a validation of this structure." : "Literature index — a mention is not evidence for this structure.") + "</strong> Citations not verified.</p>",
           "</div>"
         ].join("");
       }).join("") : '<div class="report-empty">No external sources were added. Public lookups on the RNA Structure page are optional and off by default; a researcher adds each card to the report explicitly.</div>'
@@ -820,6 +827,16 @@
       formatNumber(record.warnings.length) + (record.warnings.length === 1 ? " warning" : " warnings") + "</span>" : "") + "</nav>";
   }
 
+  // a step is in the report unless a selected-results report left it out
+  function included(context, key) {
+    const record = context.record;
+    return !record || record.scope.kind !== "selected_results" || record.steps.some(function (step) { return step.key === key; });
+  }
+
+  function when(context, keys, render) {
+    return keys.some(function (key) { return included(context, key); }) ? render(context) : "";
+  }
+
   // "Data: T05 tables/x.tsv [Download]" under a chart or table
   const FULL_ONLY = { "tables/interactions.tsv": "every filtered record (built when you download it)" };
   function dataNote(context, file) {
@@ -853,9 +870,15 @@
       return "";
     }
     const purpose = state && typeof state.reportPurpose === "string" ? state.reportPurpose : "";
-    const done = record.steps.filter(function (step) { return step.status === "ok" || step.status === "no_result"; }).length;
-    const stepRows = record.steps.map(function (step) {
-      return ['<code>' + escape(step.id) + "</code>", escape(step.title), stepBadge(context, step.key), escape(step.scope || "—"), escape(step.detail || "")];
+    const full = context.fullRecord || record;
+    const selected = record.scope.kind === "selected_results";
+    const done = full.steps.filter(function (step) { return step.status === "ok" || step.status === "no_result"; }).length;
+    const stepRows = full.steps.map(function (step) {
+      const kept = !selected || record.steps.some(function (item) { return item.id === step.id; });
+      const box = '<input class="report-select" type="checkbox" data-action="report-select" data-step="' + escape(step.key) + '"' + (kept ? " checked" : "") +
+        (step.key === "parse" ? " disabled" : "") + ' aria-label="Include ' + escape(step.id + " " + step.title) + ' in the report">';
+      return [box + ' <code>' + escape(step.id) + "</code>", escape(step.title) + (kept ? "" : ' <em class="report-left-out">left out</em>'), stepBadge({ record: full }, step.key),
+        escape(step.scope || "—"), escape(step.completedAt ? formatTimestamp(step.completedAt) : (step.status === "ok" || step.status === "no_result" ? "from current inputs" : "—")), escape(step.detail || "")];
     });
     return section(
       "status",
@@ -866,8 +889,9 @@
         '<label class="report-purpose"><span>Purpose of this analysis (optional, written by you; saved in the exports as the researcher\'s text)</span>' +
           '<textarea id="report-purpose" rows="2" maxlength="1000" placeholder="e.g. Which ZIKV genome contacts differ between the African and Asian lineages?">' + escape(purpose) + "</textarea></label>",
         purpose.trim() ? '<p class="report-purpose-print"><strong>Purpose:</strong> ' + escape(purpose.trim()) + "</p>" : "",
-        '<p class="report-note">Each step has a fixed id (S01 to S13) shared with the Markdown and JSON exports. A step that did not run shows <code>not_run</code>; its results show —, never 0.</p>',
-        '<div class="report-subsection report-subsection--table">' + table(["Id", "Step", "Status", "Scope", "Detail"], stepRows) + "</div>"
+        '<p class="report-note">Each step has a fixed id (S01 to S13) shared with the Markdown and JSON exports. A step that did not run shows <code>not_run</code>; its results show —, never 0. Untick a step to make a selected-results report: the page and every export then leave it out and say so.</p>',
+        selected ? '<p class="notice notice-warning report-selected-note">Selected results report: ' + escape(record.scope.omittedSteps.join(", ")) + ' left out. <button class="quiet-button" type="button" data-action="report-select-all">Include every step</button></p>' : "",
+        '<div class="report-subsection report-subsection--table">' + table(["Id", "Step", "Status", "Scope", "Completed", "Detail"], stepRows) + "</div>"
       ].join("")
     );
   }
@@ -879,7 +903,8 @@
     }
     const resultRows = record.results.map(function (result) {
       return ['<code>' + escape(result.id) + "</code>", '<code>' + escape(result.step) + "</code>", escape(result.label),
-        '<span data-result="' + escape(result.id) + '">' + escape(window.Hyb2Results.formatValue(result)) + "</span>", escape(result.unit), '<code>' + escape(result.status) + "</code>"];
+        '<span data-result="' + escape(result.id) + '">' + escape(window.Hyb2Results.formatValue(result)) + "</span>", escape(result.unit), '<code>' + escape(result.status) + "</code>",
+        '<span title="' + escape(window.Hyb2Results.NATURE_TEXT[result.nature] || "") + '">' + escape(result.nature.replace(/_/g, " ")) + "</span>"];
     });
     const tableRows = record.tables.map(function (t) {
       return ['<code>' + escape(t.id) + "</code>", '<code>' + escape(t.step) + "</code>", escape(t.title), escape(t.scope),
@@ -892,7 +917,7 @@
       '<span class="report-status is-ready">' + formatNumber(record.results.filter(function (r) { return r.value !== null; }).length) + " of " + formatNumber(record.results.length) + " with a value</span>",
       [
         '<p class="report-note">The numbers in the sections below carry the same ids (for example "Cells · R10"). Each result covers its step\'s scope in Analysis status.</p>',
-        '<details class="report-details" open data-open-key="report-results"><summary>Results (' + formatNumber(record.results.length) + ")</summary>" + table(["Id", "Step", "Result", "Value", "Unit", "Status"], resultRows) + "</details>",
+        '<details class="report-details" open data-open-key="report-results"><summary>Results (' + formatNumber(record.results.length) + ")</summary>" + table(["Id", "Step", "Result", "Value", "Unit", "Status", "Nature"], resultRows) + "</details>",
         tableRows.length ? '<details class="report-details" data-open-key="report-tables"><summary>Data tables (' + formatNumber(tableRows.length) + ")</summary>" + table(["Id", "Step", "Table", "Scope", "File"], tableRows) + "</details>" : ""
       ].join("")
     );
@@ -924,7 +949,7 @@
       return "";
     }
     const keys = [["arc_map", "Arc map (C)"], ["region_structures", "Region structures (D, E)"], ["folding_energy", "Folding energy (F, G)"]];
-    return keys.map(function (pair) {
+    return keys.filter(function (pair) { return included(context, pair[0]); }).map(function (pair) {
       const step = recordStep(context, pair[0]);
       const figures = record.figures.filter(function (f) { return f.step === step.id; });
       const tables = record.tables.filter(function (t) { return t.step === step.id; });
@@ -956,6 +981,9 @@
       '<div class="report-subsection-heading"><h2>Export · ' + escape(text[0]) + '</h2><button class="quiet-button" type="button" data-action="report-export-close">Close</button></div>',
       '<p class="report-note">' + escape(text[1]) + "</p>"];
     // a step still being prepared would be exported as pending, not as a result
+    if (context.record && context.record.scope.kind === "selected_results") {
+      out.push('<p class="notice notice-warning">Selected results report: only the ticked steps are exported (' + escape(context.record.scope.omittedSteps.join(", ")) + " left out), and every file says so.</p>");
+    }
     const waiting = context.record ? context.record.steps.filter(function (step) { return step.status === "pending" || step.status === "running"; }) : [];
     if (waiting.length) {
       out.push('<p class="notice notice-warning" data-export-waiting>Still being prepared: ' + escape(waiting.map(function (step) { return step.id + " " + step.title; }).join("; ")) +
@@ -968,13 +996,18 @@
     } else if (exp.status === "error") {
       out.push('<p class="notice notice-error">' + escape(exp.error || "The export could not be prepared.") + "</p>");
     } else if (exp.status === "ready") {
-      const total = exp.list.reduce(function (sum, f) { return sum + f.bytes; }, 0);
+      const total = exp.list.reduce(function (sum, f) { return sum + (f.excluded ? 0 : f.bytes); }, 0);
       out.push('<div class="report-export-actions"><button class="button" type="button" data-action="report-export-zip">Download all (' + escape(formatBytes(total)) + ", ZIP)</button>" +
         (exp.audience === "ai" ? '<button class="button button-secondary" type="button" data-action="report-export-copy">Copy AI summary (report.md)</button>' : "") + "</div>");
-      out.push(table(["File", "Contents", "Size", ""], exp.list.map(function (f) {
-        return ["<code>" + escape(f.path) + "</code>", escape(f.description), escape(formatBytes(f.bytes)),
-          '<button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + escape(exp.audience) + '" data-path="' + escape(f.path) + '">Download</button>'];
+      out.push(table(["Include", "File", "Contents and fields", "Size", ""], exp.list.map(function (f) {
+        const box = '<input type="checkbox" data-action="report-export-toggle" data-path="' + escape(f.path) + '"' + (f.excluded ? "" : " checked") + (f.required ? " disabled" : "") +
+          ' aria-label="Include ' + escape(f.path) + '">';
+        const fields = f.fields && f.fields.length ? '<details class="report-fields"><summary>' + formatNumber(f.fields.length) + (f.fields.length === 1 ? " field" : " fields") + "</summary><code>" +
+          f.fields.map(escape).join("</code> <code>") + "</code></details>" : "";
+        return [box, "<code>" + escape(f.path) + "</code>" + (f.excluded ? ' <em class="report-left-out">left out</em>' : ""), escape(f.description) + fields, escape(formatBytes(f.bytes)),
+          f.excluded ? "" : '<button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + escape(exp.audience) + '" data-path="' + escape(f.path) + '">Download</button>'];
       })));
+      out.push(exp.list.some(function (f) { return f.excluded; }) ? '<p class="report-note">Files you leave out are listed in manifest.json and README.md as left out by the researcher; data_dictionary.json then describes only the tables that stay. README.md and manifest.json are always included.</p>' : "");
       out.push('<p class="report-note"><strong>Not included:</strong> the input files themselves (only names and SHA-256), local paths, and anything outside this tab. Everything is built in this browser; nothing is uploaded. Sharing a file is a separate step you take yourself.</p>');
     }
     out.push("</section>");

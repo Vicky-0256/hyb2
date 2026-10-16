@@ -265,6 +265,7 @@
         structure.progress = 100;
         structure.message = "CPLfold completed with the desktop bundled NumPy/Numba runtime.";
         structure.result = Object.assign({}, nativeResult, {
+          completedAt: new Date().toISOString(),
           sequence: sequenceInfo.sequence,
           label: sequenceInfo.label,
           source: structure.source,
@@ -329,6 +330,7 @@
               ? "ViennaRNA MFE structure predicted locally with " + constraintCount + " manual hard base-pair constraint" + (constraintCount === 1 ? "." : "s.")
               : "ViennaRNA MFE structure predicted locally.");
           structure.result = Object.assign({}, message.result || {}, {
+            completedAt: new Date().toISOString(),
             sequence: sequenceInfo.sequence,
             label: sequenceInfo.label,
             source: structure.source,

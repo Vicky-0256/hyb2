@@ -582,6 +582,13 @@ async function main() {
   const schema = JSON.parse(aiFiles.find(function (f) { return f.path === "schema/summary.schema.json"; }).text);
   const problems = require("./json-schema-lite.cjs").validate(schema, JSON.parse(aiFiles.find(function (f) { return f.path === "summary.json"; }).text));
   assert.deepEqual(problems, [], "the example's summary.json is valid against its schema: " + problems.slice(0, 3).join("; "));
+  aiFiles.concat(R.files(record, "analysis")).filter(function (f) { return /\.json$/.test(f.path) && !/^schema\//.test(f.path); }).forEach(function (f) {
+    const doc = JSON.parse(f.text);
+    const own = aiFiles.find(function (g) { return g.path === doc.$schema; });
+    assert.ok(own, f.path + " names a schema in the package");
+    const issues = require("./json-schema-lite.cjs").validate(JSON.parse(own.text), doc);
+    assert.deepEqual(issues, [], "the example's " + f.path + ": " + issues.slice(0, 3).join("; "));
+  });
   const foldA = JSON.parse(aiFiles.find(function (f) { return f.path === "results/structure_A.json"; }).text);
   assert.equal(foldA.pairs.length, record.results.find(function (r) { return r.id === "R28"; }).value, "structure A's base pairs = R28");
   const md = aiFiles.find(function (f) { return f.path === "report.md"; }).text;

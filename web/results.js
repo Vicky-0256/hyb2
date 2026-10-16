@@ -101,9 +101,31 @@
   // value type of each result (default integer)
   const RESULT_TYPES = { R05: "number", R14: "number", R16: "number", R31: "string", R32: "string", R34: "number", R36: "number", R38: "number" };
 
+  // what kind of fact each result is (default count)
+  const NATURE = {
+    R12: "setting", R20: "descriptive", R21: "descriptive",
+    R22: "statistical_test", R23: "statistical_test", R24: "statistical_test", R25: "statistical_test", R26: "statistical_test", R27: "statistical_test",
+    R28: "prediction", R29: "prediction", R30: "statistical_test", R31: "derived_from_prediction", R32: "derived_from_prediction",
+    R33: "derived_from_prediction", R34: "statistical_test", R35: "derived_from_prediction", R36: "statistical_test",
+    R37: "setting", R38: "prediction", R39: "prediction", R40: "prediction", R41: "external_source"
+  };
+  const NATURE_TEXT = {
+    count: "counted from the loaded records",
+    setting: "a parameter or input size, not a finding",
+    descriptive: "descriptive summary of counts; not a statistical test",
+    statistical_test: "result of a statistical test (see the step's method and cutoff)",
+    prediction: "computational structure prediction; not an experimental structure",
+    derived_from_prediction: "computed from predicted structures (and test results); inherits their uncertainty",
+    external_source: "material from public databases or literature, added by the researcher"
+  };
+
   const SCHEMA_FILE = "schema/summary.schema.json";
   const STATUS_VALUES = ["ok", "no_result", "not_run", "running", "failed", "stale", "pending"];
+  const NATURE_VALUES = ["count", "setting", "descriptive", "statistical_test", "prediction", "derived_from_prediction", "external_source"];
   const nullable = function (type) { return { type: [type, "null"] }; };
+  const RUN_SCHEMA = { type: "object", required: ["id", "basis"], additionalProperties: false, properties: { id: { type: "string", pattern: "^run-[0-9a-f]{16}$" }, basis: { type: "string" } } };
+  const STEP_ID = { type: "string", pattern: "^S[0-9]{2}$" };
+  const ID_LIST = function (prefix) { return { type: "array", items: { type: "string", pattern: "^" + prefix + "[0-9]{2}$" } }; };
   // JSON Schema of summary.json: structure and types only; it cannot check
   // that a number is scientifically right
   const SUMMARY_SCHEMA = {
@@ -111,31 +133,34 @@
     $id: "https://vicky-0256.github.io/hyb2/schema/summary.schema.json",
     title: "HYB2 result summary (" + SCHEMA + ")",
     type: "object",
-    required: ["schema", "generatedAt", "application", "scope", "steps", "results", "warnings", "literature_search", "limitations"],
+    required: ["schema", "generatedAt", "application", "scope", "run", "steps", "results", "natureVocabulary", "warnings", "literature_search", "limitations"],
     properties: {
       $schema: { type: "string" },
       schema: { const: SCHEMA },
+      run: RUN_SCHEMA,
+      natureVocabulary: { type: "object" },
       generatedAt: { type: "string" },
       application: { type: "object", required: ["name", "version", "buildCommit"], properties: { name: { type: "string" }, version: { type: "string" }, buildCommit: nullable("string") } },
       scope: {
         type: "object", required: ["kind", "label", "description", "primaryDataset", "purpose"],
         properties: {
           kind: { enum: ["session_snapshot", "selected_results"] }, label: { type: "string" }, description: { type: "string" }, primaryDataset: nullable("string"),
+          selectedSteps: { type: "array", items: { type: "string", pattern: "^S[0-9]{2}$" } }, omittedSteps: { type: "array", items: { type: "string", pattern: "^S[0-9]{2}$" } },
           purpose: { type: ["object", "null"], required: ["text", "source"], properties: { text: { type: "string" }, source: { const: "researcher" } } }
         }
       },
       steps: {
         type: "array",
-        items: { type: "object", required: ["id", "key", "title", "status", "detail", "scope"], additionalProperties: false,
-          properties: { id: { type: "string", pattern: "^S[0-9]{2}$" }, key: { type: "string" }, title: { type: "string" }, status: { enum: STATUS_VALUES }, detail: nullable("string"), scope: nullable("string") } }
+        items: { type: "object", required: ["id", "key", "title", "status", "detail", "scope", "completedAt"], additionalProperties: false,
+          properties: { id: { type: "string", pattern: "^S[0-9]{2}$" }, key: { type: "string" }, title: { type: "string" }, status: { enum: STATUS_VALUES }, detail: nullable("string"), scope: nullable("string"), completedAt: nullable("string") } }
       },
       results: {
         type: "array",
         items: {
-          type: "object", required: ["id", "key", "step", "label", "type", "value", "unit", "scope", "definition", "status"], additionalProperties: false,
+          type: "object", required: ["id", "key", "step", "label", "type", "nature", "value", "unit", "scope", "definition", "status"], additionalProperties: false,
           properties: {
             id: { type: "string", pattern: "^R[0-9]{2}$" }, key: { type: "string" }, step: { type: "string", pattern: "^S[0-9]{2}$" }, label: { type: "string" },
-            type: { enum: ["integer", "number", "string"] }, value: { type: ["integer", "number", "string", "null"] }, unit: { type: "string" }, scope: nullable("string"),
+            type: { enum: ["integer", "number", "string"] }, nature: { enum: NATURE_VALUES }, value: { type: ["integer", "number", "string", "null"] }, unit: { type: "string" }, scope: nullable("string"),
             definition: { type: "string" }, status: { enum: STATUS_VALUES.concat(["not_available"]) }
           }
         }
@@ -144,6 +169,62 @@
       literature_search: { type: "object", required: ["status", "lookups", "includedInReport", "hit_count"],
         properties: { status: { enum: STATUS_VALUES }, lookups: { type: "integer" }, includedInReport: { type: "integer" }, hit_count: nullable("integer") } },
       limitations: { type: "array", items: { type: "string" } }
+    }
+  };
+
+  const BASE = "https://vicky-0256.github.io/hyb2/schema/";
+  const SCHEMAS = {
+    "schema/summary.schema.json": SUMMARY_SCHEMA,
+    "schema/provenance.schema.json": {
+      $schema: "https://json-schema.org/draft/2020-12/schema", $id: BASE + "provenance.schema.json", title: "HYB2 provenance (" + SCHEMA + ")",
+      type: "object", required: ["schema", "run", "application", "generatedAt", "environment", "scope", "inputs", "steps", "methods", "reproducibility"],
+      properties: {
+        $schema: { type: "string" }, schema: { const: SCHEMA }, run: RUN_SCHEMA, application: { type: "object" }, generatedAt: { type: "string" }, environment: { type: "string" }, scope: { type: "object" },
+        inputs: { type: "array", items: { type: "object", required: ["id", "role", "fileName"], properties: { id: { type: "string", pattern: "^I[0-9]{2}$" }, role: { type: "string" }, fileName: nullable("string"),
+          bytes: nullable("integer"), sha256: nullable("string"), sha256Status: { enum: ["computed", "pending", "unavailable", "not_computed"] }, records: nullable("integer") } } },
+        steps: { type: "array", items: { type: "object", required: ["id", "key", "title", "status", "detail", "scope", "completedAt", "parameters", "inputs", "results", "tables", "figures"], additionalProperties: false,
+          properties: { id: STEP_ID, key: { type: "string" }, title: { type: "string" }, status: { enum: STATUS_VALUES }, detail: nullable("string"), scope: nullable("string"), completedAt: nullable("string"),
+            parameters: { type: "object" }, inputs: ID_LIST("I"), results: ID_LIST("R"), tables: ID_LIST("T"), figures: ID_LIST("F") } } },
+        methods: { type: "object" }, reproducibility: { type: "string" }
+      }
+    },
+    "schema/data_dictionary.schema.json": {
+      $schema: "https://json-schema.org/draft/2020-12/schema", $id: BASE + "data_dictionary.schema.json", title: "HYB2 data dictionary (" + SCHEMA + ")",
+      type: "object", required: ["schema", "run", "conventions", "tables", "results"],
+      properties: {
+        $schema: { type: "string" }, schema: { const: SCHEMA }, run: RUN_SCHEMA,
+        conventions: { type: "object", required: ["coordinates", "missing", "notRun", "statusVocabulary", "natureVocabulary", "units"] },
+        tables: { type: "array", items: { type: "object", required: ["id", "file", "step", "title", "scope", "rowCount", "columns"], additionalProperties: false,
+          properties: { id: { type: "string", pattern: "^T[0-9]{2}$" }, file: { type: "string", pattern: "^tables/[a-z0-9_]+\\.tsv$" }, step: STEP_ID, title: { type: "string" }, scope: { type: "string" }, rowCount: { type: "integer" },
+            columns: { type: "array", items: { type: "object", required: ["name", "type", "unit", "description"], additionalProperties: false,
+              properties: { name: { type: "string" }, type: { enum: ["string", "integer", "number", "boolean"] }, unit: nullable("string"), description: { type: "string" } } } } } } },
+        results: { type: "array", items: { type: "object", required: ["id", "key", "label", "type", "nature", "unit", "definition"], additionalProperties: false,
+          properties: { id: { type: "string", pattern: "^R[0-9]{2}$" }, key: { type: "string" }, label: { type: "string" }, type: { enum: ["integer", "number", "string"] }, nature: { enum: NATURE_VALUES }, unit: { type: "string" }, definition: { type: "string" } } } }
+      }
+    },
+    "schema/evidence.schema.json": {
+      $schema: "https://json-schema.org/draft/2020-12/schema", $id: BASE + "evidence.schema.json", title: "HYB2 external sources (" + SCHEMA + ")",
+      type: "object", required: ["schema", "run", "literature_search", "sources", "note"],
+      properties: {
+        $schema: { type: "string" }, schema: { const: SCHEMA }, run: RUN_SCHEMA, note: { type: "string" },
+        literature_search: { type: "object", required: ["status", "lookups", "includedInReport", "hit_count"], properties: { status: { enum: STATUS_VALUES }, lookups: { type: "integer" }, includedInReport: { type: "integer" }, hit_count: nullable("integer") } },
+        sources: { type: "array", items: { type: "object", required: ["id", "source", "contentKind", "query", "status", "review", "evidenceNature", "citationsVerified"],
+          properties: { id: { type: "string", pattern: "^E[0-9]{2}$" }, source: { type: "string" }, contentKind: { enum: ["database_metadata", "literature_index"] }, query: { type: "string" }, status: { type: "string" },
+            hitCount: nullable("integer"), review: { type: "object", required: ["state"], properties: { state: { enum: ["unreviewed", "reviewed", "rejected"] }, note: nullable("string") } },
+            evidenceNature: { type: "string" }, citationsVerified: { const: false }, entries: { type: "array" } } } }
+      }
+    },
+    "schema/structure.schema.json": {
+      $schema: "https://json-schema.org/draft/2020-12/schema", $id: BASE + "structure.schema.json", title: "HYB2 structure (" + SCHEMA + ")",
+      type: "object", required: ["schema", "step", "source", "method", "length", "pairs", "coordinates", "prediction"],
+      properties: {
+        $schema: { type: "string" }, schema: { const: SCHEMA }, step: STEP_ID, source: nullable("string"), condition: nullable("string"), method: nullable("string"),
+        sequence: nullable("string"), length: nullable("integer"), dotBracket: nullable("string"), energy: nullable("number"), energyUnit: { type: "string" }, topology: nullable("string"), crossingPairs: nullable("integer"),
+        pairs: { type: "array", items: { type: "array", items: { type: "integer" } } },
+        coordinates: { type: "string" }, positionOffset: { type: "integer" }, selectedCandidate: nullable("integer"),
+        candidates: { type: "array", items: { type: "object", required: ["rank", "energy", "pairs"], properties: { rank: { type: "integer" }, type: nullable("string"), topology: nullable("string"), energy: nullable("number"), pairs: { type: "integer" }, crossingPairs: nullable("integer"), dotBracket: nullable("string") } } },
+        prediction: { type: "string" }
+      }
     }
   };
 
@@ -314,7 +395,7 @@
     };
     const steps = {};
     STEPS.forEach(function (spec) {
-      const step = { id: spec[0], key: spec[1], title: spec[2], status: "not_run", statusText: STATUS.not_run, detail: null, scope: null, parameters: {}, inputs: [], results: [], tables: [], figures: [] };
+      const step = { id: spec[0], key: spec[1], title: spec[2], status: "not_run", statusText: STATUS.not_run, detail: null, scope: null, completedAt: null, parameters: {}, inputs: [], results: [], tables: [], figures: [] };
       steps[spec[1]] = step;
       record.steps.push(step);
     });
@@ -570,6 +651,7 @@
         values.significant_cells_b = number(sm.significantDown);
         values.interactions_a = number(sm.interactionsUp);
         values.interactions_b = number(sm.interactionsDown);
+        steps.differential_test.completedAt = dr.completedAt || null;
         const current = root.Hyb2DeseqCard && typeof root.Hyb2DeseqCard.parameters === "function"
           ? safe(function () { return root.Hyb2DeseqCard.parameters(comparison).result.current; }, true) : true;
         setStatus("differential_test", current ? (sm.significant ? "ok" : "no_result") : "stale", current ? null : "The Compare inputs changed after this run.");
@@ -625,7 +707,7 @@
           return;
         }
         const base = "results/structure_" + spec[1];
-        record.structures.push(structureFile(base + ".dbn", "Arc map structure " + spec[1], item));
+        record.structures.push(Object.assign(structureFile(base + ".dbn", "Arc map structure " + spec[1], item), { step: steps.arc_map.id }));
         record.structures.push(structureJson(base + ".json", "Arc map structure " + spec[1] + " (base pairs)", {
           step: steps.arc_map.id, source: item.name || null, condition: spec[2] || null, method: "loaded structure file (" + (item.name || "unnamed") + ")",
           sequence: item.sequence || null, length: item.length || (item.sequence ? item.sequence.length : null), pairs: item.pairs || [],
@@ -672,6 +754,7 @@
         values.energy_n_two = two ? two.n : null;
         values.energy_p_two = two && Number.isFinite(two.p) ? two.p : null;
         setStatus("folding_energy", energy.results.rows.length ? "ok" : "no_result");
+        steps.folding_energy.completedAt = energy.results.completedAt || null;
         const labels = { one: arcMap && arcMap.labelOne || "condition one", two: arcMap && arcMap.labelTwo || "condition two" };
         addTable("folding_energy", { file: "tables/folding_energy.tsv", title: "RNAcofold energies per interaction", audience: ["ai", "analysis"],
           scope: "all " + energy.results.rows.length + " folded interactions", make: () => fe.toTsv(energy.results) });
@@ -693,9 +776,10 @@
       values.structure_pairs = count(sres.pairs);
       values.structure_crossing_pairs = number(sres.crossingPairs || 0);
       setStatus("structure", "ok");
+      steps.structure.completedAt = sres.completedAt || null;
       const label = (structure.rna || "structure") + (structure.start ? ":" + structure.start + "-" + structure.end : "");
-      record.structures.push(structureFile("results/structure_prediction.dbn", "RNA structure prediction (" + (sres.engine || structure.engine || "") + ")",
-        { name: label, sequence: sres.sequence, dotBracket: sres.dotBracket }));
+      record.structures.push(Object.assign(structureFile("results/structure_prediction.dbn", "RNA structure prediction (" + (sres.engine || structure.engine || "") + ")",
+        { name: label, sequence: sres.sequence, dotBracket: sres.dotBracket }), { step: steps.structure.id }));
       const offset = number(structure.start) && structure.source === "reference" ? number(structure.start) - 1 : 0;
       record.structures.push(structureJson("results/structure_prediction.json", "RNA structure prediction (base pairs, candidates)", {
         step: steps.structure.id, source: label, method: sres.engine || structure.engine || null, energy: number(sres.energy), energyUnit: sres.energyUnit || "kcal/mol",
@@ -712,7 +796,7 @@
       if (root.Hyb2StructureUI && typeof root.Hyb2StructureUI.structureReport === "function") {
         const method = safe(function () { return root.Hyb2StructureUI.structureReport(s, sres); }, null);
         if (method) {
-          record.structures.push({ file: "results/structure_prediction_method.json", title: "Structure page report (the method's own record, unchanged)", length: sres.sequence.length, text: JSON.stringify(method, null, 2) + "\n" });
+          record.structures.push({ file: "results/structure_prediction_method.json", step: steps.structure.id, title: "Structure page report (the method's own record, unchanged; no HYB2 schema)", length: sres.sequence.length, text: JSON.stringify(method, null, 2) + "\n" });
         }
       }
     }
@@ -767,11 +851,58 @@
       const step = steps[spec[2]];
       const known = Object.prototype.hasOwnProperty.call(values, spec[1]);
       const value = known ? values[spec[1]] : null;
-      record.results.push({ id: spec[0], key: spec[1], step: step.id, label: spec[3], type: RESULT_TYPES[spec[0]] || "integer", value: value, unit: spec[4], scope: step.scope, definition: spec[5],
+      record.results.push({ id: spec[0], key: spec[1], step: step.id, label: spec[3], type: RESULT_TYPES[spec[0]] || "integer", nature: NATURE[spec[0]] || "count", value: value, unit: spec[4], scope: step.scope, definition: spec[5],
         status: known && value !== null ? step.status : (step.status === "ok" || step.status === "no_result" ? "not_available" : step.status) });
       step.results.push(spec[0]);
     });
+
+    // one id per analysis run: the same inputs, settings, step results and
+    // completion times give the same id; any change gives a new one
+    record.run = {
+      id: "run-" + fnv1a(JSON.stringify({
+        inputs: record.inputs.map(function (i) { return [i.role, i.fileName, i.bytes, i.sha256, i.records]; }),
+        steps: record.steps.map(function (st) { return [st.key, st.status, st.parameters, st.completedAt]; }),
+        results: record.results.map(function (r) { return r.value; })
+      })),
+      basis: "inputs (names, sizes, digests), step settings and status, step completion times and result values"
+    };
+
+    // a selected-results report keeps only the chosen steps; ids are not renumbered
+    const selection = o.ignoreSelection ? null : o.steps || (s.reportSelection && typeof s.reportSelection === "object" ? Object.keys(s.reportSelection).filter(function (k) { return s.reportSelection[k]; }) : null);
+    if (selection) {
+      const keep = {};
+      selection.concat(["parse"]).forEach(function (k) { if (steps[k]) { keep[steps[k].id] = true; } });
+      if (Object.keys(keep).length < record.steps.length) {
+        const omitted = record.steps.filter(function (st) { return !keep[st.id]; }).map(function (st) { return st.id; });
+        record.scope.kind = "selected_results";
+        record.scope.label = "Selected results report";
+        record.scope.description = "Only the steps the researcher chose: " + record.steps.filter(function (st) { return keep[st.id]; }).map(function (st) { return st.id + " " + st.title; }).join("; ") +
+          ". Left out: " + omitted.join(", ") + ". Ids keep the session's numbering; this is not the whole session.";
+        record.scope.selectedSteps = Object.keys(keep).sort();
+        record.scope.omittedSteps = omitted;
+        record.steps = record.steps.filter(function (st) { return keep[st.id]; });
+        record.results = record.results.filter(function (r) { return keep[r.step]; });
+        record.tables = record.tables.filter(function (t) { return keep[t.step]; });
+        record.figures = record.figures.filter(function (f) { return keep[f.step]; });
+        record.structures = record.structures.filter(function (st) { return keep[st.step]; });
+        record.warnings = record.warnings.filter(function (w) { return keep[w.step]; });
+        if (!keep.S13) {
+          record.evidence = [];
+        }
+      }
+    }
     return record;
+  }
+
+  function fnv1a(text) {
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < text.length; i += 1) {
+      const c = text.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+      h2 = Math.imul(h2 ^ c, 0x5bd1e995) >>> 0;
+    }
+    return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
   }
 
   function structureFile(path, title, structure) {
@@ -799,7 +930,7 @@
   }
 
   function structureJson(path, title, body) {
-    return { file: path, title: title, length: body.length || null, text: JSON.stringify(Object.assign({ schema: SCHEMA }, body), null, 2) + "\n" };
+    return { file: path, step: body.step, title: title, length: body.length || null, text: JSON.stringify(Object.assign({ $schema: "schema/structure.schema.json", schema: SCHEMA }, body), null, 2) + "\n" };
   }
 
   let lastRegion = null;
@@ -878,27 +1009,30 @@
     lines.push("- Purpose: " + (record.scope.purpose ? record.scope.purpose.text + " (written by the researcher)" : "not stated by the researcher."));
     lines.push("- Generated: " + record.generatedAt + " by " + record.application.name + " " + record.application.version +
       (record.application.buildCommit ? " (build " + record.application.buildCommit.slice(0, 12) + ")" : "") + ", locally in a browser tab.");
+    lines.push("- Run: `" + record.run.id + "` (changes when " + record.run.basis + " change).");
     lines.push("- Schema: `" + record.schema + "`. Ids: S = step, R = result, T = table, F = figure, E = external source, W = warning, I = input.");
     lines.push("");
     lines.push("This text was generated from a fixed template, not by a language model. Every number below is also in `summary.json` under the same id.");
     lines.push("");
     lines.push("## Steps");
     lines.push("");
-    lines.push("| Id | Step | Status | Scope | Detail |");
-    lines.push("|---|---|---|---|---|");
+    lines.push("| Id | Step | Status | Scope | Completed | Detail |");
+    lines.push("|---|---|---|---|---|---|");
     record.steps.forEach(function (step) {
-      lines.push("| " + step.id + " | " + markdownCell(step.title) + " | `" + step.status + "` | " + markdownCell(step.scope || "—") + " | " + markdownCell(step.detail || step.statusText) + " |");
+      lines.push("| " + step.id + " | " + markdownCell(step.title) + " | `" + step.status + "` | " + markdownCell(step.scope || "—") + " | " + markdownCell(step.completedAt || (step.status === "ok" || step.status === "no_result" ? "computed from the current inputs" : "—")) + " | " + markdownCell(step.detail || step.statusText) + " |");
     });
     lines.push("");
     lines.push("## Results");
     lines.push("");
     lines.push("Results of steps that did not run are listed with no value (—), never as 0. Each result covers its step's scope above.");
     lines.push("");
-    lines.push("| Id | Step | Result | Value | Unit | Status |");
-    lines.push("|---|---|---|---|---|---|");
+    lines.push("| Id | Step | Result | Value | Unit | Status | Nature |");
+    lines.push("|---|---|---|---|---|---|---|");
     record.results.forEach(function (result) {
-      lines.push("| " + result.id + " | " + result.step + " | " + markdownCell(result.label) + " | " + markdownCell(formatValue(result)) + " | " + markdownCell(result.unit) + " | `" + result.status + "` |");
+      lines.push("| " + result.id + " | " + result.step + " | " + markdownCell(result.label) + " | " + markdownCell(formatValue(result)) + " | " + markdownCell(result.unit) + " | `" + result.status + "` | " + result.nature + " |");
     });
+    lines.push("");
+    lines.push("Nature: " + Object.keys(NATURE_TEXT).map(function (k) { return "`" + k + "` " + NATURE_TEXT[k]; }).join("; ") + ".");
     lines.push("");
     lines.push("## Warnings");
     lines.push("");
@@ -943,13 +1077,15 @@
     return lines.join("\n");
   }
 
-  function readmeMarkdown(record, audience, files) {
+  function readmeMarkdown(record, audience, files, omitted) {
     const lines = [
       "# HYB2 result package",
       "",
       (audience === "ai" ? "Context package for an AI assistant" : "Data package for further analysis") + " from " + record.application.name + " " + record.application.version + ", generated " + record.generatedAt + ".",
       "",
       "Scope: **" + record.scope.label + "**: " + record.scope.description,
+      record.scope.kind === "selected_results" ? "" : null,
+      record.scope.kind === "selected_results" ? "**This is a selected-results package, not the whole session.**" : null,
       "",
       "## Reading order",
       "",
@@ -957,7 +1093,9 @@
       audience === "ai" ? "2. `summary.json`: the same results as typed values with status and unit." : "2. `manifest.json`: every file with its size and SHA-256.",
       "3. `data_dictionary.json` before reading a table; `provenance.json` for methods and parameters" + (audience === "ai" ? "; `evidence.json` for external sources." : "."),
       "4. Tables under `tables/` only when a question needs rows; structures under `results/` (`.dbn`, and `.json` with base pairs, coordinates and candidates)" + (audience === "analysis" ? "; figures under `figures/`." : "."),
-      "5. `" + SCHEMA_FILE + "` validates `summary.json` (structure and types only).",
+      "5. `schema/` has a JSON Schema for each HYB2 JSON file; each file names its own in `$schema` (structure and types only).",
+      "",
+      "Run `" + record.run.id + "`: results from different runs have different ids; do not mix them.",
       "",
       "## Conventions",
       "",
@@ -977,37 +1115,49 @@
     ];
     files.forEach(function (f) { lines.push("- `" + f.path + "`: " + f.description); });
     lines.push("- `manifest.json`: file list with sizes and SHA-256.");
+    if (omitted && omitted.length) {
+      lines.push("");
+      lines.push("## Left out by the researcher");
+      lines.push("");
+      omitted.forEach(function (path) { lines.push("- `" + path + "`"); });
+    }
     lines.push("");
-    return lines.join("\n");
+    return lines.filter(function (line) { return line !== null; }).join("\n");
   }
 
   function dataDictionary(record, tables) {
     return {
+      $schema: "schema/data_dictionary.schema.json",
       schema: SCHEMA,
+      run: record.run,
       conventions: {
         coordinates: "1-based, inclusive, on each RNA's own sequence; contact-map and comparison x/y are bin starts",
         missing: { tsv: "NA", json: null },
         notRun: "status not_run; values null, never 0",
         statusVocabulary: STATUS,
+        natureVocabulary: NATURE_TEXT,
         units: "given per column; counts are record counts unless the column says support units"
       },
       tables: tables.map(function (t) {
         return { id: t.id, file: t.file, step: t.step, title: t.title, scope: t.scope, rowCount: t.rowCount, columns: t.columns };
       }),
-      results: RESULTS.map(function (spec) { return { id: spec[0], key: spec[1], label: spec[3], unit: spec[4], definition: spec[5] }; })
+      results: RESULTS.map(function (spec) { return { id: spec[0], key: spec[1], label: spec[3], type: RESULT_TYPES[spec[0]] || "integer", nature: NATURE[spec[0]] || "count", unit: spec[4], definition: spec[5] }; })
     };
   }
 
   function provenance(record) {
     return {
+      $schema: "schema/provenance.schema.json",
       schema: SCHEMA,
+      run: record.run,
       application: record.application,
       generatedAt: record.generatedAt,
       environment: "Browser tab; all computation local; no server upload",
       scope: record.scope,
       inputs: record.inputs,
       steps: record.steps.map(function (step) {
-        return { id: step.id, key: step.key, title: step.title, status: step.status, detail: step.detail, parameters: step.parameters, inputs: step.inputs, results: step.results, tables: step.tables, figures: step.figures };
+        return { id: step.id, key: step.key, title: step.title, status: step.status, detail: step.detail, scope: step.scope, completedAt: step.completedAt,
+          parameters: step.parameters, inputs: step.inputs, results: step.results, tables: step.tables, figures: step.figures };
       }),
       methods: {
         parsing: "HYB2 Web Lite parser (HYB 15-17 columns, sam2hyb 18 columns)",
@@ -1027,8 +1177,10 @@
       generatedAt: record.generatedAt,
       application: record.application,
       scope: record.scope,
-      steps: record.steps.map(function (step) { return { id: step.id, key: step.key, title: step.title, status: step.status, detail: step.detail, scope: step.scope }; }),
+      run: record.run,
+      steps: record.steps.map(function (step) { return { id: step.id, key: step.key, title: step.title, status: step.status, detail: step.detail, scope: step.scope, completedAt: step.completedAt }; }),
       results: record.results,
+      natureVocabulary: NATURE_TEXT,
       warnings: record.warnings,
       literature_search: record.literatureSearch,
       limitations: record.limitations
@@ -1036,7 +1188,7 @@
   }
 
   function evidenceJson(record) {
-    return { schema: SCHEMA, literature_search: record.literatureSearch, sources: record.evidence,
+    return { $schema: "schema/evidence.schema.json", schema: SCHEMA, run: record.run, literature_search: record.literatureSearch, sources: record.evidence,
       note: "External records are background material chosen by the researcher. Citations are not verified; a database entry or a literature mention does not validate a structure or an interaction." };
   }
 
@@ -1044,23 +1196,49 @@
     return JSON.stringify(value, null, 2) + "\n";
   }
 
-  // files(record, audience) -> [{ path, mediaType, text, description }]
-  function files(record, audience) {
+  // files(record, audience, { exclude }) -> [{ path, mediaType, text, description, fields }]
+  // README.md and manifest.json cannot be left out; data_dictionary.json and
+  // README.md describe only the files that stay.
+  const REQUIRED_FILES = { "README.md": true, "manifest.json": true };
+
+  function fieldsOf(file) {
+    if (/\.tsv$/.test(file.path)) {
+      return columnsOf(file.text);
+    }
+    if (/\.json$/.test(file.path)) {
+      const value = safe(function () { return JSON.parse(file.text); }, null);
+      return value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : [];
+    }
+    if (/\.md$/.test(file.path)) {
+      return file.text.split("\n").filter(function (line) { return /^## /.test(line); }).map(function (line) { return line.slice(3); });
+    }
+    if (/\.dbn$/.test(file.path)) {
+      return ["header", "sequence", "dot-bracket"];
+    }
+    return [];
+  }
+
+  function files(record, audience, options) {
     const kind = audience === "analysis" ? "analysis" : "ai";
-    const tables = record.tables.filter(function (t) { return t.audience.indexOf(kind) >= 0; });
+    const exclude = options && options.exclude || {};
+    const left = function (path) { return !REQUIRED_FILES[path] && exclude[path]; };
+    const tables = record.tables.filter(function (t) { return t.audience.indexOf(kind) >= 0 && !left(t.file); });
     const out = [];
     if (kind === "ai") {
-      out.push({ path: "report.md", mediaType: "text/markdown", text: reportMarkdown(record), description: "Template report: scope, steps, results with ids, warnings, limits, sources." });
-      out.push({ path: "summary.json", mediaType: "application/json", text: json(summaryJson(record)), description: "Steps and results as typed values with status and unit." });
+      out.push({ path: "report.md", mediaType: "text/markdown", text: reportMarkdown(record), description: "Template report: purpose, scope, steps, results with ids, warnings, limits, sources." });
     }
-    out.push({ path: "data_dictionary.json", mediaType: "application/json", text: json(dataDictionary(record, tables)), description: "Conventions, status vocabulary, and every column of every table." });
-    out.push({ path: SCHEMA_FILE, mediaType: "application/schema+json", text: json(SUMMARY_SCHEMA), description: "JSON Schema (2020-12) of summary.json: structure and types, not scientific correctness." });
-    out.push({ path: "provenance.json", mediaType: "application/json", text: json(provenance(record)), description: "Application build, inputs with digests, methods and parameters per step." });
+    out.push({ path: "summary.json", mediaType: "application/json", text: json(summaryJson(record)), description: "Run, steps and results as typed values with status, nature, unit and scope." });
+    out.push({ path: "data_dictionary.json", mediaType: "application/json", text: json(dataDictionary(record, tables)), description: "Conventions, status and nature vocabularies, every column of every table." });
+    out.push({ path: "provenance.json", mediaType: "application/json", text: json(provenance(record)), description: "Run id, build, inputs with digests, methods, parameters and completion time per step." });
     if (kind === "ai") {
       out.push({ path: "evidence.json", mediaType: "application/json", text: json(evidenceJson(record)), description: "External sources added to the report, with query, nature and review state." });
-    } else {
-      out.push({ path: "summary.json", mediaType: "application/json", text: json(summaryJson(record)), description: "Steps and results as typed values with status and unit." });
     }
+    Object.keys(SCHEMAS).forEach(function (path) {
+      if (kind === "analysis" && path === "schema/evidence.schema.json") {
+        return;
+      }
+      out.push({ path: path, mediaType: "application/schema+json", text: json(SCHEMAS[path]), description: "JSON Schema (2020-12) of " + path.slice(7).replace(".schema", "") + ": structure and types, not scientific correctness." });
+    });
     tables.forEach(function (t) {
       out.push({ path: t.file, mediaType: "text/tab-separated-values", text: t.text, description: t.id + " " + t.title + " (" + t.scope + ")." });
     });
@@ -1076,8 +1254,14 @@
         }
       });
     }
-    out.unshift({ path: "README.md", mediaType: "text/markdown", text: readmeMarkdown(record, kind, out), description: "What the package contains, reading order, conventions, what is excluded." });
-    return out;
+    const kept = out.filter(function (f) { return !left(f.path); });
+    const omitted = out.filter(function (f) { return left(f.path); }).map(function (f) { return f.path; })
+      .concat(record.tables.filter(function (t) { return t.audience.indexOf(kind) >= 0 && left(t.file); }).map(function (t) { return t.file; }))
+      .filter(function (path, index, list) { return list.indexOf(path) === index; });
+    kept.unshift({ path: "README.md", mediaType: "text/markdown", text: readmeMarkdown(record, kind, kept, omitted), description: "What the package contains, reading order, conventions, what is excluded." });
+    kept.forEach(function (f) { f.fields = fieldsOf(f); });
+    kept.omitted = omitted;
+    return kept;
   }
 
   // ---- digests, manifest, zip
@@ -1101,7 +1285,8 @@
       const bytes = utf8(f.text);
       return sha256(bytes).then(function (digest) { return { path: f.path, mediaType: f.mediaType, bytes: bytes.length, sha256: digest, description: f.description }; });
     })).then(function (entries) {
-      const manifest = { schema: SCHEMA, generatedAt: record.generatedAt, application: record.application, scope: record.scope, files: entries,
+      const manifest = { schema: SCHEMA, run: record.run, generatedAt: record.generatedAt, application: record.application, scope: record.scope, files: entries,
+        leftOutByResearcher: list.omitted || [],
         note: "sha256 is null where this browser offers no digest API." };
       return list.concat([{ path: "manifest.json", mediaType: "application/json", text: json(manifest), description: "File list with sizes and SHA-256." }]);
     });
@@ -1195,6 +1380,9 @@
   root.Hyb2Results = {
     SCHEMA: SCHEMA,
     SUMMARY_SCHEMA: SUMMARY_SCHEMA,
+    SCHEMAS: SCHEMAS,
+    NATURE_TEXT: NATURE_TEXT,
+    REQUIRED_FILES: REQUIRED_FILES,
     STATUS: STATUS,
     STEPS: STEPS,
     RESULTS: RESULTS,

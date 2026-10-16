@@ -627,7 +627,7 @@
         }
       } else if (m.type === "result") {
         stop(fe);
-        fe.results = { rows: attach(plan.jobs, m.energies), length: plan.length, cutoff: plan.cutoff, key: plan.key, version: m.version };
+        fe.results = { rows: attach(plan.jobs, m.energies), length: plan.length, cutoff: plan.cutoff, key: plan.key, version: m.version, completedAt: new Date().toISOString() };
         api.render();
       } else if (m.type === "error") {
         stop(fe);

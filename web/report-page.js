@@ -5,6 +5,7 @@
   const MAX_TABLE_ROWS = 12;
   const MAX_DATASET_ROWS = 15;
   const MAX_VISUAL_CELLS = 4200;
+  const SIMILARITY_GREY_PANEL = "#ebebeb"; // ggplot2 theme_grey panel
   const MAX_VISUAL_BINS = 180;
   const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
@@ -61,79 +62,35 @@
     const source = state || {};
     const reportState = Object.assign({}, source);
     reportState.summary = source.summary || {};
-    reportState.records = Array.isArray(source.records) ? source.records : [];
     reportState.filters = Object.assign({}, source.filters || {});
     ["contact", "viewpoint", "region", "comparison", "structure"].forEach(function (key) {
       reportState[key] = source[key] ? Object.assign({}, source[key]) : source[key];
     });
 
-    const data = window.Hyb2Data || {};
+    // Every analysis result below was fetched through the DataProvider by
+    // page-data.js (the report route prefetches each page's data); the report
+    // never reads HYB rows or files itself.
+    const prepared = source.view && source.view.report || null;
     const derived = { contact: false, viewpoint: false, region: false, comparison: false };
 
-    if (reportState.contact && (!reportState.contact.matrix || reportState.contact.matrixStale) && reportState.contact.rnaX && reportState.contact.rnaY && reportState.records.length && typeof data.buildContactMatrix === "function") {
-      try {
-        reportState.contact.matrix = data.buildContactMatrix(reportState.records, reportState.contact);
-        derived.contact = true;
-        // Keep the build for later report renders and the Contact Map page,
-        // unless that page has a rebuild of its own in flight.
-        if (source.contact && !source.contact.matrix && reportState.contact.matrix.ready) {
-          source.contact.matrix = reportState.contact.matrix;
-          source.contact.matrixStale = false;
-        }
-      } catch (error) {
-        reportState.contact.matrix = { ready: false, reason: "Contact Map could not be prepared for the report snapshot." };
-      }
+    if (reportState.contact && !reportState.contact.matrix && reportState.contact.rnaX && reportState.contact.rnaY) {
+      reportState.contact.matrix = { ready: false, reason: "Contact Map is still being prepared for the report snapshot.", cells: [] };
     }
-
-    if (reportState.viewpoint && !reportState.viewpoint.results && typeof data.getViewpointResults === "function") {
-      try {
-        reportState.viewpoint.results = data.getViewpointResults(reportState);
-        derived.viewpoint = true;
-      } catch (error) {
-        reportState.viewpoint.results = { ready: false, bins: [], records: [], reason: "Viewpoint could not be prepared for the report snapshot." };
-      }
+    if (reportState.viewpoint && !reportState.viewpoint.results) {
+      reportState.viewpoint.results = { ready: false, bins: [], records: [], reason: "Viewpoint is still being prepared for the report snapshot." };
     }
-
-    if (reportState.region && !reportState.region.results && typeof data.getRegionResults === "function") {
-      try {
-        reportState.region.results = data.getRegionResults(reportState);
-        derived.region = true;
-      } catch (error) {
-        reportState.region.results = { records: [], partners: [], profile: [], support: 0, reason: "Region Explorer could not be prepared for the report snapshot." };
-      }
+    if (reportState.region && !reportState.region.results) {
+      reportState.region.results = { records: [], partners: [], profile: [], support: 0, reason: "Region Explorer is still being prepared for the report snapshot." };
     }
-
-    if (reportState.comparison && !reportState.comparison.result && !reportState.comparison.loading && typeof data.buildComparisonResults === "function") {
-      try {
-        reportState.comparison.result = data.buildComparisonResults(reportState.comparison);
-        derived.comparison = true;
-      } catch (error) {
-        reportState.comparison.result = { ready: false, cells: [], conservedCells: [], reason: "Comparison could not be prepared for the report snapshot." };
-      }
-    }
-
-    let filteredRecords = reportState.records;
-    if (typeof data.getFilteredRecords === "function") {
-      try {
-        filteredRecords = data.getFilteredRecords(reportState);
-      } catch (error) {
-        filteredRecords = [];
-      }
-    }
-
-    let partnerCounts = [];
-    if (typeof data.getPartnerCounts === "function") {
-      try {
-        partnerCounts = data.getPartnerCounts(filteredRecords, reportState.filters.rna || "", reportState.filters.countMode || "support");
-      } catch (error) {
-        partnerCounts = [];
-      }
+    if (reportState.comparison && !reportState.comparison.result) {
+      reportState.comparison.result = { ready: false, cells: [], conservedCells: [], reason: reportState.comparison.loading ? "Finish parsing the selected local datasets before generating or exporting a comparison." : "Comparison is still being prepared for the report snapshot." };
     }
 
     return {
       state: reportState,
-      filteredRecords: filteredRecords,
-      partnerCounts: partnerCounts,
+      filteredTotal: prepared ? number(prepared.filteredTotal) : 0,
+      filteredRecords: prepared && Array.isArray(prepared.filteredSample) ? prepared.filteredSample : [],
+      partnerCounts: prepared && Array.isArray(prepared.partnerCounts) ? prepared.partnerCounts : [],
       derived: derived,
       generatedAt: new Date().toISOString()
     };
@@ -146,8 +103,8 @@
       '<header class="report-hero">',
       '  <div class="report-hero-top">',
       '    <div class="report-identity">',
-      '      <span class="report-logo-wrap report-logo-light"><img src="./assets/hyb2-logo.png" alt="HYB2"></span>',
-      '      <span class="report-logo-wrap report-logo-dark"><img src="./assets/hyb2-logo-dark.png" alt="HYB2"></span>',
+      '      <span class="report-logo-wrap report-logo-light"><img src="' + (window.HYB2_ASSET_BASE || "./") + 'assets/hyb2-logo.png" alt="HYB2"></span>',
+      '      <span class="report-logo-wrap report-logo-dark"><img src="' + (window.HYB2_ASSET_BASE || "./") + 'assets/hyb2-logo-dark.png" alt="HYB2"></span>',
       '      <span><span class="report-product">HYB2 Web Lite</span><span class="report-document-label">Consolidated analysis report</span></span>',
       "    </div>",
       '    <div class="report-actions" aria-label="Report actions">',
@@ -171,9 +128,9 @@
     const summary = context.state.summary || {};
     const totalRows = number(summary.validRecords) + number(summary.invalidRecords);
     const validRatio = totalRows ? number(summary.validRecords) / totalRows : 0;
-    const fasta = context.state.fasta;
+    const fasta = context.state.reference;
     const mapped = fasta ? mappedFastaCount(fasta) : 0;
-    const fastaValue = fasta ? formatNumber(fasta.sequences ? fasta.sequences.length : 0) + " sequences" : "Optional / not loaded";
+    const fastaValue = fasta ? formatNumber(referenceSequenceCount(fasta)) + " sequences" : "Optional / not loaded";
     const fastaDetail = fasta ? formatNumber(mapped) + " mapped HYB RNA names" : "Required for reference-based structure";
     return section(
       "summary",
@@ -203,11 +160,10 @@
   function renderReviewChecks(context) {
     const state = context.state;
     const summary = state.summary || {};
-    const records = state.records || [];
     const items = [];
     items.push("These results describe " + (summary.fileName || "the loaded HYB file") + " only: " + formatNumber(summary.validRecords || 0) +
       " valid records (" + formatNumber(summary.invalidRecords || 0) + " invalid rows skipped). Counts are not normalised against other experiments.");
-    const inferred = records.filter(function (record) { return record && record.chimeraTypeSource === "inferred"; }).length;
+    const inferred = summary.inferredChimeraTypeRecords || 0;
     if (inferred) {
       items.push("Chimera types of " + formatNumber(inferred) + " records were inferred by HYB2 because the file has no type column; check them before reporting type proportions.");
     }
@@ -215,14 +171,15 @@
       items.push(formatNumber(summary.ambiguousColumn16Records) + " rows have a legacy column 16 that may hold a raw-read count or cluster support; confirm how the file was produced.");
     }
     const names = (summary.rnaNames || []).length;
-    if (!state.fasta) {
+    const reference = state.reference || state.fasta;
+    if (!reference) {
       items.push("No reference FASTA was loaded: RNA coordinates are not checked against a sequence.");
-    } else if (mappedFastaCount(state.fasta) < names) {
-      items.push("Only " + formatNumber(mappedFastaCount(state.fasta)) + " of " + formatNumber(names) + " HYB RNA names matched the reference FASTA; coordinates of the others are not checked.");
+    } else if (mappedFastaCount(reference) < names) {
+      items.push("Only " + formatNumber(mappedFastaCount(reference)) + " of " + formatNumber(names) + " HYB RNA names matched the reference FASTA; coordinates of the others are not checked.");
     }
     const comparison = state.comparison || {};
     if (comparison.result && comparison.result.ready) {
-      items.push("Compare effects are descriptive log2 ratios of normalised counts, not a significance test; test replicates with DESeq2 (HYB2 Desktop or R) before claiming a difference.");
+      items.push("Compare effect and similarity maps are descriptive; only the differential test card (a JavaScript port of DESeq2, with replicates in each condition) gives adjusted p-values. Check its result against R before claiming a difference.");
     }
     const structure = state.structure || {};
     if (structure.result && structure.result.sequence) {
@@ -244,7 +201,7 @@
   function renderSource(context) {
     const state = context.state;
     const summary = state.summary || {};
-    const fasta = state.fasta;
+    const fasta = state.reference;
     const fastaMapped = mappedFastaCount(fasta);
     const sourceHyb = sourceHybMetadata(state);
     const sourceFasta = sourceFastaMetadata(state);
@@ -327,6 +284,7 @@
     const state = context.state;
     const filters = state.filters || {};
     const records = context.filteredRecords || [];
+    const total = number(context.filteredTotal);
     const partners = context.partnerCounts || [];
     const rows = boundedItems(records, MAX_TABLE_ROWS, sortRecords).map(function (record) {
       return [
@@ -353,15 +311,15 @@
       "interactions",
       "Interactions",
       "Filtered record view",
-      '<span class="report-status is-ready">' + formatNumber(records.length) + " matches</span>",
+      '<span class="report-status is-ready">' + formatNumber(total) + " matches</span>",
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Current filters</h3>' + (filterEntries.length ? definitionList(filterEntries) : '<div class="report-empty">No additional filters; all valid records are included.</div>') + '</div>',
         '<div class="report-subsection"><h3>Selected RNA partners</h3>' + (filters.rna && partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">Choose an RNA on the Interactions page to populate partner counts.</div>') + '</div>',
         "</div>",
-        '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Top matching records</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(records.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(records.length) + '</span></div>',
+        '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Top matching records</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(total, MAX_TABLE_ROWS)) + ' of ' + formatNumber(total) + '</span></div>',
         rows.length ? table(["Sequence ID", "RNA pair", "RNA 1 interval", "RNA 2 interval", "Chimera type", "Support", "dG"], rows) : '<div class="report-empty">No records match the current filter state.</div>',
-        records.length > MAX_TABLE_ROWS ? '<p class="report-note">The full filtered table remains available from the Interactions page export.</p>' : "",
+        total > MAX_TABLE_ROWS ? '<p class="report-note">The full filtered table remains available from the Interactions page export.</p>' : "",
         "</div>"
       ].join("")
     );
@@ -531,7 +489,9 @@
       rnaY: comparison.rnaY || "",
       binSize: comparison.binSize || "",
       measure: comparison.measure || "records",
-      normalise: comparison.normalise || "library"
+      normalise: comparison.normalise || "library",
+      similarityMinimum: comparison.similarityMinimum || "1",
+      similarityPanel: comparison.similarityPanel === "grey" ? "grey" : "white"
     });
     const datasetRows = datasets.slice(0, MAX_DATASET_ROWS).map(function (dataset) {
       const summary = dataset.summary || {};
@@ -543,6 +503,7 @@
       [comparison.conditionBLabel || "Condition B", formatNumber(selected.conditionB)],
       ["Log2 effect", formatNumber(selected.effect)],
       ["Datasets present", formatNumber(selected.presentDatasets)],
+      ["Similarity", formatNumber(selected.similarity)],
       ["Coordinates", range(selected.x, selected.x + number(result.binSize, 1) - 1) + " x " + range(selected.y, selected.y + number(result.binSize, 1) - 1)]
     ]) : '<div class="report-empty">No comparison bin is selected.</div>';
     return section(
@@ -561,13 +522,14 @@
           ["Condition A datasets", formatNumber((result.groupA || []).length)],
           ["Condition B datasets", formatNumber((result.groupB || []).length)],
           ["Comparable bins", formatNumber(result.cells.length)],
-          ["Conserved bins", formatNumber((result.conservedCells || []).length)],
+          ["Similarity bins", formatNumber((result.conservedCells || []).length)],
           ["Selected bin", selected ? "Included below" : "None"]
         ]) : '<div class="report-empty">' + escape(result && result.reason || "Update the comparison from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Conserved bins</h3><span class="report-note-inline">teal intensity = datasets present</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Conserved map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
+        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map): white at the smallest plotted count, green at the 95% quantile cap</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
         '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
-        '<p class="report-note">Comparison effects are descriptive library-size-normalised values. The report does not claim DESeq2 significance or adjusted p-values.</p>'
+        window.Hyb2DeseqCard ? window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) : "",
+        '<p class="report-note">Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
       ].join("")
     );
   }
@@ -722,7 +684,7 @@
         interactions: {
           parameters: jsonSafe(reportState.filters || {}, 3, 50),
           result: {
-            matchingRecords: context.filteredRecords.length,
+            matchingRecords: context.filteredTotal,
             topPartners: jsonSafe(context.partnerCounts.slice(0, 10), 3, 50),
             sampleRecords: jsonSafe(boundedItems(context.filteredRecords, MAX_TABLE_ROWS, sortRecords), 3, 50)
           }
@@ -772,10 +734,11 @@
             ready: comparisonResult.ready === true,
             reason: comparisonResult.reason || null,
             comparableBins: Array.isArray(comparisonResult.cells) ? comparisonResult.cells.length : 0,
-            conservedBins: Array.isArray(comparisonResult.conservedCells) ? comparisonResult.conservedCells.length : 0,
+            similarityBins: Array.isArray(comparisonResult.conservedCells) ? comparisonResult.conservedCells.length : 0,
             selectedCell: jsonSafe(findComparisonCell(comparisonResult, comparison.selection), 3, 50),
             effectCells: jsonSafe(boundedItems(comparisonResult.cells || [], MAX_VISUAL_CELLS, sortEffectCells), 3, 50)
-          } : { ready: false, reason: "Not generated" }
+          } : { ready: false, reason: "Not generated" },
+          differentialTest: window.Hyb2DeseqCard ? jsonSafe(window.Hyb2DeseqCard.reportData(comparison), 6, 100) : null
         },
         structure: jsonSafe(structurePayload, 5, 1000)
       },
@@ -921,7 +884,6 @@
     const plotWidth = 650;
     const plotHeight = 300;
     const cap = Math.max(0.25, number(result.effectCap, 1));
-    const conservedMax = Math.max(1, number(result.conservedMax, 1));
     const selected = comparison.selection;
     const rects = shown.map(function (cell) {
       const x = plotLeft + ((number(cell.x) - xStart) / Math.max(1, xEnd - xStart)) * plotWidth;
@@ -929,16 +891,16 @@
       const width = Math.max(1, binSize / Math.max(1, xEnd - xStart) * plotWidth + 0.5);
       const height = Math.max(1, binSize / Math.max(1, yEnd - yStart) * plotHeight + 0.5);
       const ratio = mode === "conserved"
-        ? Math.max(0, Math.min(1, number(cell.presentDatasets) / conservedMax))
+        ? conservedRatio(cell.similarity, result)
         : number(cell.effect) / cap;
       const fill = mode === "conserved" ? conservedColor(ratio) : effectColor(ratio);
       const isSelected = selected && number(selected.x) === number(cell.x) && number(selected.y) === number(cell.y);
-      return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + fill + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + (mode === "conserved" ? "; datasets " + formatNumber(cell.presentDatasets) : "; effect " + formatNumber(cell.effect))) + '</title></rect>';
+      return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + fill + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + (mode === "conserved" ? "; similarity " + formatNumber(cell.similarity) : "; effect " + formatNumber(cell.effect))) + '</title></rect>';
     }).join("");
     return [
       '<svg class="report-svg report-heatmap-svg" viewBox="0 0 760 360" role="img" aria-label="Printable comparison map">',
-      '<title>' + escape(mode === "conserved" ? "Conserved comparison bins" : "Mean log2 comparison effect") + '</title>',
-      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="#c2d3db"></rect>',
+      '<title>' + escape(mode === "conserved" ? "Similarity heatmap" : "Mean log2 comparison effect") + '</title>',
+      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="' + (mode !== "conserved" ? "#f7fafb" : comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff") + '" stroke="#c2d3db"></rect>',
       rects,
       '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 24) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xStart)) + '</text>',
       '<text x="' + (plotLeft + plotWidth) + '" y="' + (plotTop + plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xEnd - 1)) + '</text>',
@@ -968,8 +930,9 @@
     };
   }
 
+  // state.reference is DatasetInfo.reference from DataProvider.listDatasets().
   function sourceFastaMetadata(state) {
-    const fasta = state.fasta;
+    const fasta = state.reference;
     if (!fasta) {
       return null;
     }
@@ -978,9 +941,19 @@
       fileSize: fasta.fileSize == null ? null : fasta.fileSize,
       sha256: fasta.sha256 || null,
       sha256Status: fasta.sha256 ? "available" : (fasta.sha256Unavailable ? "unavailable" : "pending"),
-      sequenceCount: Array.isArray(fasta.sequences) ? fasta.sequences.length : 0,
+      sequenceCount: referenceSequenceCount(fasta),
       mappedRnas: mappedFastaCount(fasta)
     };
+  }
+
+  function referenceSequenceCount(reference) {
+    if (!reference) {
+      return 0;
+    }
+    if (Number.isFinite(Number(reference.sequenceCount))) {
+      return Number(reference.sequenceCount);
+    }
+    return Array.isArray(reference.sequences) ? reference.sequences.length : 0;
   }
 
   function comparisonDatasets(comparison) {
@@ -1025,6 +998,9 @@
   function findComparisonCell(result, selection) {
     if (!result || !selection) {
       return null;
+    }
+    if (typeof result.cellLookup === "function") {
+      return result.cellLookup(selection.x, selection.y);
     }
     if (result.cellMap && result.cellMap[selection.x + ":" + selection.y]) {
       return result.cellMap[selection.x + ":" + selection.y];
@@ -1096,7 +1072,7 @@
   }
 
   function sortConservedCells(left, right) {
-    return number(right.presentDatasets) - number(left.presentDatasets) || number(left.x) - number(right.x) || number(left.y) - number(right.y);
+    return number(right.similarity) - number(left.similarity) || number(left.x) - number(right.x) || number(left.y) - number(right.y);
   }
 
   function brandHeatColor(ratio) {
@@ -1107,8 +1083,71 @@
     return interpolateColor("#00a09d", "#6a4ff2", (value - 0.5) * 2);
   }
 
+  // similarity_heatmap.R: counts capped at the 95% quantile, then
+  // scale_fill_gradient(low = white, high = forestgreen) over the data range,
+  // so white is the smallest plotted count (not zero) and forestgreen the cap.
+  // A single-valued range maps to the midpoint, like scales::rescale().
+  function conservedRatio(similarity, result) {
+    const cap = Math.max(1, number(result && result.similarityCap, 1));
+    const floor = Math.min(cap, similarityFloorOf(result));
+    if (!(cap > floor)) {
+      return 0.5;
+    }
+    return Math.max(0, Math.min(1, (Math.min(number(similarity), cap) - floor) / (cap - floor)));
+  }
+
+  function similarityFloorOf(result) {
+    const floor = number(result && result.similarityFloor);
+    if (floor > 0) {
+      return floor;
+    }
+    return ((result && result.conservedCells) || []).reduce(function (minimum, cell) {
+      const value = number(cell.similarity);
+      return value > 0 && value < minimum ? value : minimum;
+    }, Infinity);
+  }
+
+  // scales::pal_seq_gradient interpolates in CIELAB (farver, D65 white).
   function conservedColor(ratio) {
-    return interpolateColor("#dce7ec", "#00a09d", Math.max(0, Math.min(1, number(ratio))));
+    const from = srgbToLab(hexRgb("#ffffff"));
+    const to = srgbToLab(hexRgb("#228b22"));
+    const t = Math.max(0, Math.min(1, number(ratio)));
+    const rgb = labToSrgb([from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t]);
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
+  }
+
+  const LAB_WHITE = [0.95047, 1, 1.08883];
+
+  function srgbToLab(rgb) {
+    const linear = rgb.map(function (channel) {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+    });
+    const xyz = [
+      0.4124564 * linear[0] + 0.3575761 * linear[1] + 0.1804375 * linear[2],
+      0.2126729 * linear[0] + 0.7151522 * linear[1] + 0.0721750 * linear[2],
+      0.0193339 * linear[0] + 0.1191920 * linear[1] + 0.9503041 * linear[2]
+    ].map(function (value, index) {
+      const t = value / LAB_WHITE[index];
+      return t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116;
+    });
+    return [116 * xyz[1] - 16, 500 * (xyz[0] - xyz[1]), 200 * (xyz[1] - xyz[2])];
+  }
+
+  function labToSrgb(lab) {
+    const fy = (lab[0] + 16) / 116;
+    const xyz = [fy + lab[1] / 500, fy, fy - lab[2] / 200].map(function (value, index) {
+      const cube = value * value * value;
+      return LAB_WHITE[index] * (cube > 216 / 24389 ? cube : (116 * value - 16) / (24389 / 27));
+    });
+    return [
+      3.2404542 * xyz[0] - 1.5371385 * xyz[1] - 0.4985314 * xyz[2],
+      -0.9692660 * xyz[0] + 1.8760108 * xyz[1] + 0.0415560 * xyz[2],
+      0.0556434 * xyz[0] - 0.2040259 * xyz[1] + 1.0572252 * xyz[2]
+    ].map(function (value) {
+      const encoded = value <= 0.0031308 ? 12.92 * value : 1.055 * Math.pow(value, 1 / 2.4) - 0.055;
+      return Math.max(0, Math.min(255, Math.round(encoded * 255)));
+    });
   }
 
   function effectColor(value) {

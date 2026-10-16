@@ -1,21 +1,26 @@
+/*
+ * HYB2 Web application controller.
+ *
+ * Two ways to run it:
+ *   - Website (shell:true, the default auto-mount on #app): landing page,
+ *     uploads, sidebar navigation, hash routing and help pages. Parsed files
+ *     are registered in a BrowserProvider.
+ *   - Embedded (shell:false): window.Hyb2Web.mount(host, { provider,
+ *     shell: false, ... }) renders only the analysis pages; the host owns
+ *     navigation, data selection and cross-page routing. See web/README.md
+ *     ("Embedding the analysis pages") and data-provider.js for the contract.
+ *
+ * Analysis pages read their data exclusively through the DataProvider via
+ * page-data.js; only this shell reads files.
+ */
 (function () {
   "use strict";
 
-  const app = document.getElementById("app");
+  let app = null;
   const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
-  const exampleAssets = {
-    hyb: {
-      url: (window.HYB2_ASSET_BASE || "./") + "assets/examples/ZIKV_1-10807_example.hyb",
-      fileName: "ZIKV_1-10807_example.hyb",
-      type: "text/plain"
-    },
-    fasta: {
-      url: (window.HYB2_ASSET_BASE || "./") + "assets/examples/ZIKV_1-10807.fasta",
-      fileName: "ZIKV_1-10807.fasta",
-      type: "text/plain"
-    }
-  };
+  // The included example (example.js): files are fetched only when it is used.
+  const example = window.Hyb2Example || null;
 
   const state = {
     activePage: "landing",
@@ -41,6 +46,9 @@
     parseSession: null,
     fastaLoadSession: null,
     exampleLoadSession: null,
+    // the example's second stage (replicates, arc map files) after the
+    // primary HYB is parsed: { stage, done, total, error, ready }
+    exampleSetup: null,
     landingFastaFile: null,
     loading: null,
     error: null,
@@ -50,8 +58,24 @@
     toastTimer: null,
     pointerActionPending: false,
     pendingCommittedInputRender: false,
-    pendingSessionSnapshot: null
+    pendingSessionSnapshot: null,
+    // Provider-facing view model (see page-data.js).
+    shell: true,
+    selection: null,
+    datasets: [],
+    reference: null,
+    view: null,
+    canRequestFold: false
   };
+  const PRIMARY_DATASET_ID = "primary";
+  let provider = null;
+  let pageData = null;
+  let mountOptions = {};
+  let renderedPage = null;
+  let dataWaitToken = 0;
+  let mountListeners = Object.create(null);
+  let pendingCalls = [];
+  let dependenciesLoading = null;
 
   const analysisPages = [
     { id: "overview", label: "Overview", shortLabel: "OV" },
@@ -68,52 +92,296 @@
   // Folded sections (<details data-open-key>) keep their open state across
   // renders, which replace the whole page.
   window.Hyb2OpenSections = window.Hyb2OpenSections || Object.create(null);
-  app.addEventListener("toggle", function (event) {
+  function handleSectionToggle(event) {
     const target = event.target;
     if (target && target.matches && target.matches("details[data-open-key]")) {
       window.Hyb2OpenSections[target.dataset.openKey] = target.open;
     }
-  }, true);
+  }
 
-  app.addEventListener("pointerdown", handlePointerDown);
-  app.addEventListener("click", handleClick);
-  app.addEventListener("click", finishPointerAction);
-  app.addEventListener("pointercancel", finishPointerAction);
-  app.addEventListener("input", handleInput);
-  app.addEventListener("change", handleChange);
-  app.addEventListener("keydown", handleKeydown);
-  app.addEventListener("dragover", handleDragOver);
-  app.addEventListener("dragleave", handleDragLeave);
-  app.addEventListener("drop", handleDrop);
-  window.addEventListener("hashchange", handleHashChange);
+  const hostEvents = [
+    ["pointerdown", handlePointerDown],
+    ["click", handleClick],
+    ["click", finishPointerAction],
+    ["pointercancel", finishPointerAction],
+    ["input", handleInput],
+    ["change", handleChange],
+    ["keydown", handleKeydown],
+    ["dragover", handleDragOver],
+    ["dragleave", handleDragLeave],
+    ["drop", handleDrop]
+  ];
 
-  syncRoute();
-  render();
+  // ---- Mounting -----------------------------------------------------------
+
+  // data-provider.js and page-data.js are listed in index.html. Hosts that
+  // load an older fixed script list (the current desktop shell) get them
+  // fetched here before the first mount.
+  function dependenciesReady() {
+    return !!(window.Hyb2Provider && window.Hyb2PageData);
+  }
+
+  function loadDependencies() {
+    if (dependenciesReady()) {
+      return Promise.resolve();
+    }
+    if (dependenciesLoading) {
+      return dependenciesLoading;
+    }
+    const base = window.HYB2_ASSET_BASE || "./";
+    const files = [];
+    if (!window.Hyb2Provider) files.push("data-provider.js");
+    if (!window.Hyb2PageData) files.push("page-data.js");
+    dependenciesLoading = files.reduce(function (chain, file) {
+      return chain.then(function () {
+        return new Promise(function (resolve, reject) {
+          const script = document.createElement("script");
+          script.src = base + file;
+          script.onload = resolve;
+          script.onerror = function () { reject(new Error("Could not load " + file)); };
+          document.head.appendChild(script);
+        });
+      });
+    }, Promise.resolve());
+    return dependenciesLoading;
+  }
+
+  function whenMounted(callback) {
+    if (app && pageData) {
+      return callback();
+    }
+    pendingCalls.push(callback);
+    return undefined;
+  }
+
+  function flushPendingCalls() {
+    const calls = pendingCalls;
+    pendingCalls = [];
+    calls.forEach(function (callback) { callback(); });
+  }
+
+  function emit(name, detail) {
+    const handlerName = "on" + name.charAt(0).toUpperCase() + name.slice(1);
+    if (typeof mountOptions[handlerName] === "function") {
+      try {
+        mountOptions[handlerName](detail);
+      } catch (error) {
+        if (window.console) window.console.error(error);
+      }
+    }
+    (mountListeners[name] || []).slice().forEach(function (listener) {
+      try {
+        listener(detail);
+      } catch (error) {
+        if (window.console) window.console.error(error);
+      }
+    });
+  }
+
+  function unmount() {
+    if (!app) {
+      return;
+    }
+    terminateWorker();
+    cancelComparisonLoads();
+    stopAnalysisWorkers();
+    hostEvents.forEach(function (entry) { app.removeEventListener(entry[0], entry[1]); });
+    app.removeEventListener("toggle", handleSectionToggle, true);
+    window.removeEventListener("hashchange", handleHashChange);
+    if (pageData) {
+      pageData.destroy();
+    }
+    app.innerHTML = "";
+    app.classList.remove("hyb2-embedded", "is-refreshing-data");
+    app = null;
+    pageData = null;
+    provider = null;
+    renderedPage = null;
+    mountListeners = Object.create(null);
+  }
+
+  function resetDataState() {
+    state.file = null;
+    state.summary = null;
+    state.records = [];
+    state.fasta = null;
+    state.filters = null;
+    state.interactionResults = [];
+    state.interactionScrollTop = 0;
+    state.selectedRecordIndex = null;
+    state.contact = null;
+    state.region = null;
+    state.viewpoint = null;
+    state.comparison = null;
+    resetAnalysisModules();
+    state.structure = null;
+    state.loading = null;
+    state.error = null;
+    state.dialog = null;
+    state.selection = null;
+    state.datasets = [];
+    state.reference = null;
+    state.view = window.Hyb2PageData.freshView();
+  }
+
+  /*
+   * mount(host, options) -> controller
+   *   options.provider   DataProvider (data-provider.js). Default: a new
+   *                      BrowserProvider (required for shell:true uploads).
+   *   options.shell      true (default): the full website. false: analysis
+   *                      pages only (no landing, sidebar/nav, uploads, help).
+   *   options.selection  initial selection, e.g. { datasetIds: ["s1"] }.
+   *   options.page       initial page id (shell:false; default "overview").
+   *   options.onNavigate({ pageId, previousPageId, reason })
+   *   options.onRequestFold({ source, region, partnerRegion, arms, selection })
+   *                      when set (shell:false), "fold this region" actions
+   *                      on Contact Map, Region and Compare go to the host.
+   *   options.onError(error)
+   * controller = { navigate(pageId), setSelection(selection) -> Promise,
+   *   refresh() -> Promise, destroy(), on(event, listener) -> off,
+   *   getPageId(), getSelection(), provider }
+   */
+  function mount(host, options) {
+    if (!host || typeof host.addEventListener !== "function") {
+      throw new Error("Hyb2Web.mount needs a host element.");
+    }
+    if (!dependenciesReady()) {
+      throw new Error("Load data-provider.js and page-data.js before mounting (or use Hyb2Web.ready).");
+    }
+    unmount();
+    const settings = options || {};
+    const shell = settings.shell !== false;
+    const nextProvider = settings.provider || new window.Hyb2Provider.BrowserProvider();
+    if (!window.Hyb2Provider.implementsProvider(nextProvider)) {
+      throw new Error("The provider must implement " + window.Hyb2Provider.METHODS.join(", ") + ".");
+    }
+    mountOptions = settings;
+    app = host;
+    provider = nextProvider;
+    resetDataState();
+    state.shell = shell;
+    state.canRequestFold = !shell && typeof settings.onRequestFold === "function";
+    state.analysisEntered = !shell;
+    state.activePage = shell ? "landing" : normaliseEmbeddedPage(settings.page);
+    if (!shell) {
+      app.classList.add("hyb2-embedded");
+    }
+    pageData = window.Hyb2PageData.createController({
+      state: state,
+      initialiseOnSelection: !shell,
+      onUpdate: function () { rerenderPreservingFocus(); },
+      onError: function (error) { emit("error", error); }
+    });
+    pageData.setProvider(provider);
+    app.addEventListener("toggle", handleSectionToggle, true);
+    app.addEventListener("pointerdown", handlePointerDown);
+    app.addEventListener("click", handleClick);
+    app.addEventListener("click", finishPointerAction);
+    app.addEventListener("pointercancel", finishPointerAction);
+    app.addEventListener("input", handleInput);
+    app.addEventListener("change", handleChange);
+    app.addEventListener("keydown", handleKeydown);
+    app.addEventListener("dragover", handleDragOver);
+    app.addEventListener("dragleave", handleDragLeave);
+    app.addEventListener("drop", handleDrop);
+    if (shell) {
+      window.addEventListener("hashchange", handleHashChange);
+      syncRoute();
+    }
+    if (settings.selection) {
+      pageData.setSelection(settings.selection);
+    }
+    render();
+    flushPendingCalls();
+    return controller();
+  }
+
+  function normaliseEmbeddedPage(pageId) {
+    return workspacePages.some(function (page) { return page.id === pageId; }) ? pageId : "overview";
+  }
+
+  function controller() {
+    const mountedHost = app;
+    const active = function () { return app === mountedHost && !!pageData; };
+    return {
+      provider: provider,
+      navigate: function (pageId) {
+        if (active()) navigate(pageId, "host");
+      },
+      setSelection: function (selection) {
+        if (!active()) return Promise.resolve(false);
+        const loading = pageData.setSelection(selection);
+        render();
+        return loading.then(function () { render(); return true; });
+      },
+      refresh: function () {
+        if (!active()) return Promise.resolve(false);
+        pageData.invalidate();
+        const loading = pageData.ensure(state.analysisEntered ? state.activePage : null);
+        render();
+        return Promise.resolve(loading).then(function () { return true; });
+      },
+      destroy: function () {
+        if (active()) unmount();
+      },
+      on: function (name, listener) {
+        if (!mountListeners[name]) mountListeners[name] = [];
+        mountListeners[name].push(listener);
+        return function () {
+          mountListeners[name] = (mountListeners[name] || []).filter(function (item) { return item !== listener; });
+        };
+      },
+      getPageId: function () { return state.activePage; },
+      getSelection: function () { return state.selection; },
+      // Host cross-page paths (shell:false): open a page focused on a place.
+      //   focus({ page, contact: { rnaX, rnaY, binSize, selection: { x, y } },
+      //           region: { rna, start, end, partner, partnerStart, partnerEnd } })
+      // Call after setSelection() has resolved (page state exists then).
+      focus: function (target) {
+        if (!active() || !target || typeof target !== "object") return false;
+        if (target.contact && state.contact) {
+          ["rnaX", "rnaY"].forEach(function (key) {
+            if (target.contact[key]) state.contact[key] = String(target.contact[key]);
+          });
+          if (Number(target.contact.binSize) > 0) state.contact.binSize = Math.floor(Number(target.contact.binSize));
+          const point = target.contact.selection;
+          state.contact.selection = point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
+            ? { x: Number(point.x), y: Number(point.y) }
+            : null;
+          state.contact.overviewSelection = null;
+          state.contact.zoomSelection = null;
+          state.contact.matrix = null;
+        }
+        if (target.region && state.region) {
+          ["rna", "start", "end", "partner", "partnerStart", "partnerEnd"].forEach(function (key) {
+            if (target.region[key] !== undefined && target.region[key] !== null) state.region[key] = target.region[key];
+          });
+          state.region.results = null;
+        }
+        navigate(target.page || state.activePage, "host");
+        render();
+        return true;
+      }
+    };
+  }
 
   // Desktop uses the same analysis engine in the same document. This small
   // bridge lets the project controller hand imported project inputs directly
   // to the parser without reopening a file picker.
   window.Hyb2Web = {
+    mount: mount,
+    // Resolves when mount() can be called (dependencies loaded).
+    ready: function () { return loadDependencies(); },
+    createBrowserProvider: function (options) {
+      return new window.Hyb2Provider.BrowserProvider(options);
+    },
+    pages: workspacePages.map(function (page) { return { id: page.id, label: page.label }; }),
+    // Deprecated: the desktop app will feed data through a DataProvider and
+    // mount({ shell: false }) instead. Kept until the desktop wave 2 lands.
     loadProjectFiles: function (files) {
-      const input = files || {};
-      const makeFile = function (entry, fallback) {
-        if (!entry) return null;
-        if (typeof File === "function" && entry instanceof File) return entry;
-        if (typeof Blob === "function" && entry.file instanceof Blob) {
-          return entry.file instanceof File ? entry.file : new File([entry.file], entry.name || fallback, { type: "text/plain" });
-        }
-        if (typeof entry.content !== "string") return null;
-        return new File([entry.content], entry.name || fallback, { type: "text/plain" });
-      };
-      const hyb = makeFile(input.hyb, "project.hyb");
-      const fasta = makeFile(input.fasta, "reference.fasta");
-      if (hyb) {
-        startParsing(hyb, { referenceFile: fasta });
-      } else if (fasta) {
-        state.landingFastaFile = fasta;
-        render();
-      }
-      return !!(hyb || fasta);
+      const accepted = !!(files && (files.hyb || files.fasta));
+      whenMounted(function () { loadProjectFilesNow(files); });
+      return accepted;
     },
     getSessionSnapshot: function () {
       return {
@@ -127,36 +395,99 @@
         } : {}
       };
     },
+    // Deprecated together with loadProjectFiles.
     restoreSession: function (snapshot) {
-      if (!snapshot || typeof snapshot !== "object") return;
-      if (!state.summary) {
-        state.pendingSessionSnapshot = snapshot;
-        return;
-      }
-      if (snapshot.theme === "dark" || snapshot.theme === "light") state.theme = snapshot.theme;
-      if (snapshot.density === "compact" || snapshot.density === "comfortable") state.density = snapshot.density;
-      if (state.filters && snapshot.filters && typeof snapshot.filters === "object") Object.assign(state.filters, snapshot.filters);
-      if (snapshot.route && snapshot.route !== "landing") window.location.hash = "#/workspace/" + String(snapshot.route).replace(/^workspace\//, "");
-      render();
+      whenMounted(function () { restoreSessionNow(snapshot); });
     },
     refresh: function () {
-      render();
+      if (app) render();
     },
     showSavedStructure: function (result) {
-      if (!state.summary || !result || typeof result !== "object" || !result.sequence || !result.dotBracket) return false;
-      if (!state.structure) state.structure = window.Hyb2Data.defaultStructureState();
-      state.structure.status = "complete";
-      state.structure.progress = 100;
-      state.structure.operation = null;
-      state.structure.result = result;
-      state.structure.message = "Restored saved structure result.";
-      state.analysisEntered = true;
+      if (!app) return false;
+      return showSavedStructureNow(result);
+    }
+  };
+
+  function loadProjectFilesNow(files) {
+    if (!state.shell || !canRegisterDatasets()) {
+      return false;
+    }
+    const input = files || {};
+    const makeFile = function (entry, fallback) {
+      if (!entry) return null;
+      if (typeof File === "function" && entry instanceof File) return entry;
+      if (typeof Blob === "function" && entry.file instanceof Blob) {
+        return entry.file instanceof File ? entry.file : new File([entry.file], entry.name || fallback, { type: "text/plain" });
+      }
+      if (typeof entry.content !== "string") return null;
+      return new File([entry.content], entry.name || fallback, { type: "text/plain" });
+    };
+    const hyb = makeFile(input.hyb, "project.hyb");
+    const fasta = makeFile(input.fasta, "reference.fasta");
+    if (hyb) {
+      startParsing(hyb, { referenceFile: fasta });
+    } else if (fasta) {
+      state.landingFastaFile = fasta;
+      render();
+    }
+    return !!(hyb || fasta);
+  }
+
+  function restoreSessionNow(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+    if (!state.summary) {
+      state.pendingSessionSnapshot = snapshot;
+      return;
+    }
+    if (snapshot.theme === "dark" || snapshot.theme === "light") state.theme = snapshot.theme;
+    if (snapshot.density === "compact" || snapshot.density === "comfortable") state.density = snapshot.density;
+    if (state.filters && snapshot.filters && typeof snapshot.filters === "object") Object.assign(state.filters, snapshot.filters);
+    if (snapshot.route && snapshot.route !== "landing") {
+      if (state.shell) {
+        window.location.hash = "#/workspace/" + String(snapshot.route).replace(/^workspace\//, "");
+      } else {
+        state.activePage = normaliseEmbeddedPage(String(snapshot.route).replace(/^workspace\//, ""));
+      }
+    }
+    render();
+  }
+
+  function showSavedStructureNow(result) {
+    if (!state.summary || !result || typeof result !== "object" || !result.sequence || !result.dotBracket) return false;
+    if (!state.structure) state.structure = window.Hyb2Data.defaultStructureState();
+    state.structure.status = "complete";
+    state.structure.progress = 100;
+    state.structure.operation = null;
+    state.structure.result = result;
+    state.structure.message = "Restored saved structure result.";
+    state.analysisEntered = true;
+    if (state.shell) {
       state.activePage = "structure";
       setRouteHash("#/workspace/structure");
       render();
-      return true;
+    } else {
+      navigate("structure", "saved-structure");
     }
-  };
+    return true;
+  }
+
+  // Website auto-mount on #app (also the current desktop embedding). Set
+  // window.HYB2_AUTO_MOUNT = false to mount manually with Hyb2Web.mount().
+  (function autoMount() {
+    const host = document.getElementById("app");
+    if (!host || window.HYB2_AUTO_MOUNT === false) {
+      return;
+    }
+    if (dependenciesReady()) {
+      mount(host, { shell: true });
+      return;
+    }
+    loadDependencies().then(function () {
+      if (!app) mount(host, { shell: true });
+    }).catch(function (error) {
+      host.textContent = "HYB2 analysis could not start: " + (error && error.message ? error.message : "missing scripts");
+    });
+  }());
 
   function syncRoute() {
     const hash = window.location.hash.replace(/^#\/?/, "");
@@ -197,12 +528,60 @@
     render();
     if (previousPage !== state.activePage) {
       window.scrollTo(0, 0);
+      emit("navigate", { pageId: state.activePage, previousPageId: previousPage, reason: "route" });
+    }
+  }
+
+  // Starts any DataProvider fetches the visible page needs. Returns a Promise
+  // while data is loading, otherwise null.
+  function requestPageData() {
+    if (!pageData) {
+      return null;
+    }
+    if (state.shell && !(state.summary && state.analysisEntered)) {
+      return null;
+    }
+    return pageData.ensure(state.analysisEntered ? state.activePage : null);
+  }
+
+  function rerenderPreservingFocus() {
+    if (!app) {
+      return;
+    }
+    const focused = focusIdentity(document.activeElement);
+    render();
+    if (focused) {
+      restoreFocus(focused, null);
     }
   }
 
   function render() {
+    if (!app) {
+      return;
+    }
+    const token = ++dataWaitToken;
+    const pendingData = requestPageData();
+    if (pendingData) {
+      pendingData.then(function () {
+        if (token === dataWaitToken) {
+          rerenderPreservingFocus();
+        }
+      });
+      // Keep the current page on screen while its data refreshes instead of
+      // flashing placeholders (provider calls are async even in the browser).
+      if (renderedPage && renderedPage === state.activePage) {
+        app.classList.add("is-refreshing-data");
+        return;
+      }
+    }
+    app.classList.remove("is-refreshing-data");
     const workspaceOpen = !!state.summary && state.analysisEntered;
+    if (!state.shell) {
+      renderEmbedded(workspaceOpen);
+      return;
+    }
     app.innerHTML = workspaceOpen ? renderWorkspace() : renderLanding();
+    renderedPage = workspaceOpen ? state.activePage : null;
     document.documentElement.dataset.theme = state.theme;
     app.dataset.density = state.density;
     const themeColor = document.querySelector('meta[name="theme-color"]');
@@ -339,8 +718,8 @@
 
   function renderBrand() {
     const logoAsset = state.theme === "dark"
-      ? "./assets/hyb2-logo-dark.png"
-      : "./assets/hyb2-logo.png";
+      ? (window.HYB2_ASSET_BASE || "./") + "assets/hyb2-logo-dark.png"
+      : (window.HYB2_ASSET_BASE || "./") + "assets/hyb2-logo.png";
     return [
       '<a class="brand" href="#/" aria-label="HYB2 Web Lite home">',
       '  <span class="brand-mark"><img src="' + logoAsset + '" alt="HYB2"></span>',
@@ -387,23 +766,8 @@
       "    </div>",
       '    <span class="v0-chip">Local-only</span>',
       "  </div>",
-      '  <section class="example-strip" aria-labelledby="example-title">',
-      '    <div class="example-strip-heading">',
-      '      <div><span class="example-kicker">Included example</span><h3 id="example-title">Try the ZIKV interaction dataset</h3></div>',
-      '      <span class="example-badge">10,000-record subset</span>',
-      "    </div>",
-      '    <p class="example-copy">Load a browser-sized subset of 1-Livefire1_virus-virus.hyb and the matching ZIKV_1-10807 reference FASTA.</p>',
-      '    <div class="example-files" aria-label="Included example files">',
-      '      <div class="example-file"><span class="example-file-kind">HYB</span><code>ZIKV_1-10807_example.hyb</code></div>',
-      '      <div class="example-file"><span class="example-file-kind">FASTA</span><code>ZIKV_1-10807.fasta</code></div>',
-      "    </div>",
-      '    <div class="example-actions">',
-      '      <button class="button" type="button" data-action="load-example">Try example</button>',
-      '      <a class="quiet-button example-link" href="./assets/examples/ZIKV_1-10807_example.hyb" download>Download HYB</a>',
-      '      <a class="quiet-button example-link" href="./assets/examples/ZIKV_1-10807.fasta" download>Download FASTA</a>',
-      "    </div>",
-      "  </section>",
-      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Choose a HYB file">',
+          renderExampleStrip(),
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
       '  <div class="dropzone" data-dropzone tabindex="0" aria-label="HYB input drop zone" aria-describedby="file-input-hint">',
       '    <div class="dropzone-content">',
@@ -411,7 +775,7 @@
       '      <h3 class="dropzone-title">Drop a .hyb file here</h3>',
       '      <p class="dropzone-copy">or choose a file from this device</p>',
       '      <button class="button" type="button" data-action="choose-hyb">Choose HYB file</button>',
-      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line). Raw FASTQ reads? HYB2 Desktop, below, turns them into .hyb.</span>',
+      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line), also gzip-compressed (.gz). Raw FASTQ reads? HYB2 Desktop, below, turns them into .hyb.</span>',
       "    </div>",
       "  </div>",
       '  <section class="reference-upload" aria-labelledby="reference-upload-title">',
@@ -430,6 +794,44 @@
       '  <p class="card-footnote">Recommended working size: up to 50 MB. Larger files are streamed to a dedicated worker to keep the interface responsive.</p>',
       "</div></div>"
     ].join("");
+  }
+
+  function renderExampleStrip() {
+    if (!example) {
+      return "";
+    }
+    return [
+      '  <section class="example-strip" aria-labelledby="example-title">',
+      '    <div class="example-strip-heading">',
+      '      <div><span class="example-kicker">Included example</span><h3 id="example-title">Try the ZIKV virion comparison: ZAFR vs ZASI</h3></div>',
+      '      <span class="example-badge">1-in-10 subset · 4 replicates</span>',
+      "    </div>",
+      '    <p class="example-copy">ZIKV virion RNA of the African lineage (ZAFR, replicates 1 and 2) and the Asian lineage (ZASI = ZILM, French Polynesian isolate, replicates 2 and 3): every 10th record of each replicate .hyb (133,457 records, 6.9 MB compressed), each on its own genome. The primary file is ZAFR replicate 1; the Compare page gets all four replicates (10-nt bins, similarity minimum 10) and an arc map preloaded with CPLfold pseudoknot-free genome folds of both lineages and the NC_035889 gene track. Running the differential test there fills every panel of the summary figure. Because the data are a subset, the panels reproduce the method, not the published numbers.</p>',
+      '    <div class="example-files" aria-label="Included example files">',
+      example.downloads.map(function (item) {
+        return '      <div class="example-file"><span class="example-file-kind">' + escapeHtml(item.kind) + '</span><code title="' + escapeAttribute(item.note) + '">' + escapeHtml(item.file) +
+          '</code><a class="example-file-link" href="' + escapeAttribute(example.url(item.file)) + '" download aria-label="Download ' + escapeAttribute(item.file) + '">Download</a></div>';
+      }).join(""),
+      "    </div>",
+      '    <div class="example-actions">',
+      '      <button class="button" type="button" data-action="load-example">Try example</button>',
+      '      <span class="example-note">Fetched only when you start it; decompressed and parsed in this tab.</span>',
+      "    </div>",
+      "  </section>"
+    ].join("");
+  }
+
+  function renderExampleSetup() {
+    const setup = state.exampleSetup;
+    if (!setup) {
+      return "";
+    }
+    const text = setup.error
+      ? "Example comparison setup stopped: " + setup.error
+      : (setup.ready
+        ? "Compare page ready: " + example.labels.A + " (ZAFR_REP1, ZAFR_REP2) vs " + example.labels.B + " (ZILM_REP2, ZILM_REP3), 10-nt bins, similarity minimum 10; arc map with both CPLfold folds and the gene track. Run the differential test on the Compare page to fill panels A and C to G."
+        : setup.stage + (setup.total ? " (" + formatNumber(setup.done) + " of " + formatNumber(setup.total) + ")" : "") + "…");
+    return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>";
   }
 
   function renderPreparedFilePanel() {
@@ -472,6 +874,7 @@
       "    </div>",
       "  </section>",
       '  <p class="prepared-file-note"><strong>FASTA is optional.</strong> Interaction tables and contact maps can run without it; reference-based structure and full-reference coordinate views need a mapped sequence. You can also add or replace it later from the Files panel.</p>',
+      renderExampleSetup(),
       '  <section class="prepared-next-step" aria-label="Enter analysis workspace">',
       '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>All calculations still run locally in this browser tab.</span></div>',
       '    <button class="button" type="button" data-action="enter-analysis">Enter analysis</button>',
@@ -511,6 +914,45 @@
     ].join("");
   }
 
+  // shell:false — analysis pages only; the host renders navigation and data
+  // selection and switches pages through the mount controller.
+  function renderEmbedded(workspaceOpen) {
+    app.dataset.density = state.density;
+    if (!workspaceOpen) {
+      const error = state.view && state.view.errors && state.view.errors.base;
+      const hasSelection = !!(state.selection && state.selection.datasetIds && state.selection.datasetIds.length);
+      app.innerHTML = [
+        '<div class="embedded-status placeholder-card"><div class="placeholder-inner">',
+        '<span class="placeholder-label">Analysis</span>',
+        "<h2>" + escapeHtml(error ? "The analysis data could not be loaded." : (hasSelection ? "Loading analysis data…" : "Select a dataset to analyse.")) + "</h2>",
+        error ? "<p>" + escapeHtml(error) + "</p>" : "",
+        "</div></div>"
+      ].join("");
+      renderedPage = null;
+      return;
+    }
+    app.innerHTML = [
+      '<div class="workspace workspace-embedded">',
+      '  <main class="workspace-main" aria-label="' + escapeAttribute(pageTitle(state.activePage)) + '">',
+      '    <div class="content-wrap">',
+      renderPage(),
+      "    </div>",
+      "  </main>",
+      '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
+      "</div>"
+    ].join("");
+    renderedPage = state.activePage;
+    if (window.Hyb2UI) {
+      window.Hyb2UI.afterRender(state, featureApi());
+    }
+    if (state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
+      window.Hyb2Report.afterRender(state, featureApi());
+    }
+    if (window.Hyb2Web && typeof window.CustomEvent === "function") {
+      window.dispatchEvent(new window.CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
+    }
+  }
+
   function renderWorkspace() {
     return [
       '<div class="workspace">',
@@ -524,8 +966,8 @@
       renderMobileNav(),
       renderTweaks(),
       renderDialog(),
-      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Replace HYB file">',
-      '  <input id="comparison-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" multiple aria-label="Add HYB datasets for comparison">',
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Replace HYB file">',
+      '  <input id="comparison-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" multiple aria-label="Add HYB datasets for comparison">',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose a reference FASTA file">',
       '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
       "</div>"
@@ -1072,13 +1514,19 @@
     }
   }
 
+  // Stage one: fetch the primary HYB and its FASTA, then parse as an upload.
+  // Stage two (continueExample) starts once the primary file is registered.
   async function loadExample() {
+    if (!example) {
+      return;
+    }
     const session = {};
     state.exampleLoadSession = session;
+    state.exampleSetup = null;
     state.dialog = null;
     state.error = null;
     state.loading = {
-      fileName: "Zika interaction example",
+      fileName: example.title,
       totalBytes: 0,
       processedBytes: 0,
       parsedRecords: 0,
@@ -1088,26 +1536,23 @@
     render();
 
     try {
-      const responses = await Promise.all([
-        fetch(exampleAssets.hyb.url, { cache: "no-store" }),
-        fetch(exampleAssets.fasta.url, { cache: "no-store" })
-      ]);
+      let received = 0;
+      const files = await Promise.all([example.primary.file, example.reference.file].map(function (name) {
+        return fetchExampleFile(name, function (bytes) {
+          if (state.exampleLoadSession !== session) {
+            return;
+          }
+          received += bytes;
+          state.loading.processedBytes = received;
+          state.loading.stage = "Loading example files";
+          updateLoadingStatus("Loading example files · " + formatBytes(received) + " downloaded");
+        });
+      }));
       if (state.exampleLoadSession !== session) {
         return;
       }
-      responses.forEach(function (response) {
-        if (!response.ok) {
-          throw new Error("The example asset could not be read (HTTP " + response.status + ").");
-        }
-      });
-      const blobs = await Promise.all(responses.map(function (response) { return response.blob(); }));
-      if (state.exampleLoadSession !== session) {
-        return;
-      }
-      const hybFile = createExampleFile(blobs[0], exampleAssets.hyb);
-      const fastaFile = createExampleFile(blobs[1], exampleAssets.fasta);
       state.exampleLoadSession = null;
-      startParsing(hybFile, { referenceFile: fastaFile });
+      startParsing(files[0], { referenceFile: files[1], example: true });
     } catch (error) {
       if (state.exampleLoadSession !== session) {
         return;
@@ -1118,6 +1563,127 @@
         title: "The example could not be loaded",
         message: error && error.message ? error.message : "The included example files are unavailable."
       };
+      render();
+    }
+  }
+
+  // Updates the loading panel's status line without a full render.
+  function updateLoadingStatus(text) {
+    const node = app && app.querySelector(".load-status");
+    if (node) {
+      node.textContent = text;
+    }
+  }
+
+  // fetch one example file as a File; onBytes(n) reports downloaded bytes
+  async function fetchExampleFile(name, onBytes) {
+    const response = await fetch(example.url(name), { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("The example file " + name + " could not be read (HTTP " + response.status + ").");
+    }
+    let blob;
+    if (response.body && typeof response.body.getReader === "function") {
+      const reader = response.body.getReader();
+      const chunks = [];
+      while (true) {
+        const next = await reader.read();
+        if (next.done) {
+          break;
+        }
+        chunks.push(next.value);
+        if (onBytes) {
+          onBytes(next.value.byteLength);
+        }
+      }
+      blob = new Blob(chunks);
+    } else {
+      blob = await response.blob();
+    }
+    return createExampleFile(blob, { fileName: name, type: /\.gz$/i.test(name) ? "application/gzip" : "text/plain" });
+  }
+
+  // Stage two: the other three replicates go to the Compare page (parsed in
+  // workers, as "Add HYB datasets" does) and the arc map gets both folds and
+  // the gene track.  The landing page stays usable meanwhile.
+  async function continueExample(parsedFile) {
+    const comparison = state.comparison;
+    if (!example || !comparison) {
+      return;
+    }
+    const setup = { stage: "Downloading the other replicates", done: 0, total: example.replicates.length, error: "", ready: false };
+    state.exampleSetup = setup;
+    const current = function () {
+      return state.exampleSetup === setup && state.comparison === comparison && state.file === parsedFile;
+    };
+    comparison.conditionALabel = example.labels.A;
+    comparison.conditionBLabel = example.labels.B;
+    comparison.binSize = example.comparison.binSize;
+    comparison.similarityMinimum = example.comparison.similarityMinimum;
+    (comparison.datasets || []).forEach(function (dataset) {
+      if (dataset.id === PRIMARY_DATASET_ID) {
+        dataset.label = example.primary.label;
+      }
+    });
+    if (canRegisterDatasets()) {
+      provider.updateDataset(PRIMARY_DATASET_ID, { label: example.primary.label });
+    }
+    comparison.result = null;
+    render();
+    try {
+      const arcFiles = Promise.all([example.arcMap.a, example.arcMap.b, example.arcMap.annotation].map(function (name) {
+        return fetchExampleFile(name);
+      }));
+      const replicateFiles = [];
+      for (let index = 0; index < example.replicates.length; index += 1) {
+        replicateFiles.push(await fetchExampleFile(example.replicates[index].file));
+        if (!current()) {
+          return;
+        }
+        setup.done = index + 1;
+        render();
+      }
+      const structures = await arcFiles;
+      if (!current()) {
+        return;
+      }
+      if (window.Hyb2ArcMap) {
+        state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
+        await Promise.all([
+          window.Hyb2ArcMap.loadFile(state.arcMap, "a", structures[0]),
+          window.Hyb2ArcMap.loadFile(state.arcMap, "b", structures[1]),
+          window.Hyb2ArcMap.loadFile(state.arcMap, "annotation", structures[2])
+        ]);
+        state.arcMap.labelOne = example.labels.A;
+        state.arcMap.labelTwo = example.labels.B;
+      }
+      if (!current()) {
+        return;
+      }
+      setup.stage = "Parsing the other replicates";
+      setup.done = 0;
+      render();
+      await loadComparisonFiles(replicateFiles, {
+        assign: example.replicates,
+        onFile: function (index) {
+          if (current()) {
+            setup.done = index;
+          }
+        }
+      });
+      if (!current()) {
+        return;
+      }
+      if (comparison.error) {
+        setup.error = comparison.error;
+      } else {
+        setup.ready = true;
+      }
+      render();
+    } catch (error) {
+      if (!current()) {
+        return;
+      }
+      setup.error = error && error.message ? error.message : "the example files are unavailable.";
       render();
     }
   }
@@ -1140,8 +1706,10 @@
     state.exampleLoadSession = null;
     const parseSession = {
       file: file,
-      referenceFile: referenceFile
+      referenceFile: referenceFile,
+      example: !!parseOptions.example
     };
+    state.exampleSetup = null;
     state.parseSession = parseSession;
     state.dialog = null;
     state.file = file;
@@ -1156,6 +1724,7 @@
     state.region = null;
     state.viewpoint = null;
     state.comparison = null;
+    resetAnalysisModules();
     state.structure = null;
     state.evidence = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
@@ -1256,12 +1825,16 @@
             state.structure.secondEnd = secondStructureExtent
               ? Math.min(secondStructureExtent.max, secondStructureExtent.min + 200)
               : state.region.end;
+            registerPrimaryDataset(file, summary, state.records);
             state.loading = null;
             state.analysisEntered = false;
             state.activePage = "landing";
             setRouteHash("#/");
             if (parseSession.referenceFile) {
               loadFasta(parseSession.referenceFile);
+            }
+            if (parseSession.example) {
+              continueExample(file);
             }
             if (state.pendingSessionSnapshot) {
               const pending = state.pendingSessionSnapshot;
@@ -1275,6 +1848,7 @@
               if (state.summary === summary) {
                 state.summary.sha256 = hash;
                 state.summary.sha256Unavailable = !hash;
+                updatePrimaryFingerprint(hash);
                 if (state.dialog === "files" || !state.analysisEntered) {
                   render();
                 }
@@ -1283,6 +1857,7 @@
               if (state.summary === summary) {
                 state.summary.sha256 = "";
                 state.summary.sha256Unavailable = true;
+                updatePrimaryFingerprint("");
                 if (state.dialog === "files" || !state.analysisEntered) {
                   render();
                 }
@@ -1351,8 +1926,23 @@
     state.fasta.mappingEditorReference = mapping[state.fasta.mappingEditorRna] || "";
   }
 
-  function navigate(page) {
+  function navigate(page, reason) {
     const isAnalysis = workspacePages.some(function (item) { return item.id === page; });
+    if (!state.shell) {
+      // Embedded: no hash routing and no help pages; the host is told so it
+      // can keep its own navigation in sync.
+      if (!isAnalysis) {
+        return;
+      }
+      const previousPage = state.activePage;
+      state.activePage = page;
+      render();
+      if (previousPage !== page) {
+        app.scrollTop = 0;
+        emit("navigate", { pageId: page, previousPageId: previousPage, reason: reason || "page" });
+      }
+      return;
+    }
     const nextHash = isAnalysis ? "#/workspace/" + page : "#/" + page;
     setRouteHash(nextHash);
   }
@@ -1388,8 +1978,57 @@
       downloadBlob: downloadBlob,
       showToast: showToast,
       copyText: copyText,
-      updateInteractionHash: updateInteractionHash
+      updateInteractionHash: updateInteractionHash,
+      // DataProvider access for page actions (exports, paging).
+      queryHybrids: function (query) { return pageData ? pageData.queryHybrids(query) : Promise.resolve({ total: 0, offset: 0, rows: [] }); },
+      getArms: function (selection, query) {
+        const current = pageData && pageData.getProvider();
+        return current ? current.getArms(selection, query) : Promise.reject(new Error("No data provider is available."));
+      },
+      loadInteractionWindow: function (start) { return pageData ? pageData.loadInteractionWindow(start) : Promise.resolve(false); },
+      dataChanged: function () {
+        if (provider && typeof provider.notifyChange === "function") provider.notifyChange();
+      },
+      removeDataset: function (datasetId) {
+        if (state.shell && provider && typeof provider.removeDataset === "function") provider.removeDataset(datasetId);
+      },
+      requestFold: function (request) {
+        emit("requestFold", request);
+      }
     };
+  }
+
+  function updatePrimaryFingerprint(hash) {
+    if (canRegisterDatasets()) {
+      provider.updateDataset(PRIMARY_DATASET_ID, { sha256: hash || null, sha256Unavailable: !hash });
+    }
+  }
+
+  function canRegisterDatasets() {
+    return !!(provider && typeof provider.addDataset === "function");
+  }
+
+  // Registers the parsed primary HYB as the BrowserProvider's "primary"
+  // dataset and selects it. Comparison datasets are registered alongside.
+  function registerPrimaryDataset(file, summary, records) {
+    if (!canRegisterDatasets()) {
+      return;
+    }
+    provider.clear();
+    provider.addDataset({
+      id: PRIMARY_DATASET_ID,
+      primary: true,
+      condition: "A",
+      label: "Primary",
+      fileName: summary.fileName || (file && file.name) || "",
+      fileSize: summary.fileSize,
+      summary: summary,
+      records: records
+    });
+    if (state.fasta) {
+      provider.setReference(state.fasta);
+    }
+    pageData.setSelection({ datasetIds: [PRIMARY_DATASET_ID] }, { keepState: true });
   }
 
   function chooseHyb() {
@@ -1417,9 +2056,22 @@
     state.fastaLoadSession = null;
   }
 
+  function setProviderReference(fasta) {
+    if (canRegisterDatasets() && typeof provider.setReference === "function") {
+      provider.setReference(fasta);
+    }
+  }
+
+  function notifyReferenceMetadata() {
+    if (canRegisterDatasets() && typeof provider.notifyChange === "function") {
+      provider.notifyChange({ metadataOnly: true });
+    }
+  }
+
   function removeFasta() {
     invalidateFastaLoad();
     state.fasta = null;
+    setProviderReference(null);
     if (state.viewpoint) {
       state.viewpoint.results = null;
       state.viewpoint.rangeMode = "coordinates";
@@ -1489,6 +2141,7 @@
         return;
       }
       state.fasta = loadedFasta;
+      setProviderReference(loadedFasta);
       if (state.viewpoint) {
         state.viewpoint.results = null;
         if (state.viewpoint.rangeMode === "reference" &&
@@ -1509,6 +2162,7 @@
       }
       loadedFasta.sha256 = hash;
       loadedFasta.sha256Unavailable = !hash;
+      notifyReferenceMetadata();
       if (state.fastaLoadSession === fastaLoadSession) {
         invalidateFastaLoad();
       }
@@ -1522,6 +2176,7 @@
         }
         loadedFasta.sha256 = "";
         loadedFasta.sha256Unavailable = true;
+        notifyReferenceMetadata();
         if (state.fastaLoadSession === fastaLoadSession) {
           invalidateFastaLoad();
         }
@@ -1542,7 +2197,11 @@
     }
   }
 
-  async function loadComparisonFiles(files) {
+  // options.assign[index] = { label, condition } overrides a file's label and
+  // condition (the example); options.onFile(index) reports progress.
+  async function loadComparisonFiles(files, options) {
+    const settings = options || {};
+    const assign = settings.assign || [];
     const comparisonSession = state.comparison;
     const primaryFile = state.file;
 
@@ -1572,6 +2231,9 @@
         return;
       }
       comparisonSession.loading = { total: files.length, completed: index, fileName: file.name || "HYB file" };
+      if (settings.onFile) {
+        settings.onFile(index);
+      }
       render();
 
       try {
@@ -1598,15 +2260,19 @@
           record.index = recordIndex;
           return record;
         });
-        comparisonSession.datasets.push({
+        // Registered in the BrowserProvider; the Compare page lists it via
+        // DataProvider.listDatasets().
+        provider.addDataset({
           id: datasetId,
           fileName: file.name || "comparison.hyb",
           fileSize: file.size,
           sha256: sha256 || null,
+          sha256Unavailable: !sha256,
           summary: parsed.summary,
           records: records,
-          condition: "B",
-          label: file.name ? file.name.replace(/\.(hyb|txt)$/i, "") : "Dataset " + (comparisonSession.datasets.length + 1)
+          condition: assign[index] && assign[index].condition || "B",
+          label: assign[index] && assign[index].label ||
+            (file.name ? file.name.replace(/\.gz$/i, "").replace(/\.(hyb|txt)$/i, "") : "Dataset " + (comparisonSession.datasets.length + index + 1))
         });
         comparisonSession.result = null;
         comparisonSession.selection = null;
@@ -1688,6 +2354,30 @@
     });
   }
 
+  // Stop the DESeq2 and RNAcofold workers a comparison may have started; a
+  // reply from a stale run must not land in the next file's state.
+  function stopAnalysisWorkers() {
+    if (window.Hyb2DeseqCard && typeof window.Hyb2DeseqCard.stop === "function") {
+      window.Hyb2DeseqCard.stop();
+    }
+    if (window.Hyb2FoldingEnergy && typeof window.Hyb2FoldingEnergy.stop === "function" && state.foldingEnergy) {
+      window.Hyb2FoldingEnergy.stop(state.foldingEnergy);
+    }
+  }
+
+  // Arc map, region panels and folding energy keep their own state beside
+  // state.comparison; loading or closing a file returns them to defaults.
+  function resetAnalysisModules() {
+    stopAnalysisWorkers();
+    state.arcMap = moduleDefaultState(window.Hyb2ArcMap);
+    state.regionPanels = moduleDefaultState(window.Hyb2RegionPanels);
+    state.foldingEnergy = moduleDefaultState(window.Hyb2FoldingEnergy);
+  }
+
+  function moduleDefaultState(module) {
+    return module && typeof module.defaultState === "function" ? module.defaultState() : null;
+  }
+
   function cancelComparisonLoads() {
     state.comparisonLoadSession = null;
     Array.from(state.comparisonParsers).forEach(function (parser) {
@@ -1697,7 +2387,7 @@
   }
 
   function updateInteractionHash() {
-    if (!state.summary || state.activePage !== "interactions") {
+    if (!state.shell || !state.summary || state.activePage !== "interactions") {
       return;
     }
     const filters = state.filters || {};
@@ -1756,6 +2446,7 @@
     cancelComparisonLoads();
     invalidateFastaLoad();
     state.exampleLoadSession = null;
+    state.exampleSetup = null;
     state.landingFastaFile = null;
     state.parseSession = null;
     state.analysisEntered = false;
@@ -1772,12 +2463,28 @@
     state.region = null;
     state.viewpoint = null;
     state.comparison = null;
+    resetAnalysisModules();
     state.structure = null;
     state.evidence = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
+    releaseProviderData();
     setRouteHash("#/");
+  }
+
+  // Website shell: forget every registered dataset and the selection.
+  function releaseProviderData() {
+    if (canRegisterDatasets()) {
+      provider.clear();
+    }
+    state.selection = null;
+    state.datasets = [];
+    state.reference = null;
+    state.view = window.Hyb2PageData.freshView();
+    if (pageData) {
+      pageData.invalidate();
+    }
   }
 
   function resetToLanding() {
@@ -1785,6 +2492,7 @@
     cancelComparisonLoads();
     invalidateFastaLoad();
     state.exampleLoadSession = null;
+    state.exampleSetup = null;
     state.landingFastaFile = null;
     state.parseSession = null;
     state.analysisEntered = false;
@@ -1800,6 +2508,7 @@
     state.region = null;
     state.viewpoint = null;
     state.comparison = null;
+    resetAnalysisModules();
     state.structure = null;
     state.evidence = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
@@ -1807,6 +2516,7 @@
     state.error = null;
     state.activePage = "landing";
     state.dialog = null;
+    releaseProviderData();
     setRouteHash("#/");
   }
 
@@ -1841,14 +2551,30 @@
     showToast("Summary JSON downloaded locally.");
   }
 
+  // Complete record-derived CSVs; every row comes from the DataProvider.
+  function withAllRows(callback) {
+    if (!pageData) {
+      return;
+    }
+    pageData.queryHybrids({ offset: 0, limit: null }).then(function (result) {
+      callback(result && result.rows || []);
+    }).catch(function (error) {
+      showToast(error && error.message ? error.message : "The interaction rows could not be loaded.");
+    });
+  }
+
   function downloadRnaCounts() {
-    downloadText("rna_counts.csv", window.Hyb2Data.rnaCountsToCsv(state.records || []), "text/csv");
-    showToast("RNA counts CSV downloaded locally.");
+    withAllRows(function (rows) {
+      downloadText("rna_counts.csv", window.Hyb2Data.rnaCountsToCsv(rows), "text/csv");
+      showToast("RNA counts CSV downloaded locally.");
+    });
   }
 
   function downloadRnaPairs() {
-    downloadText("rna_pairs.csv", window.Hyb2Data.rnaPairsToCsv(state.records || []), "text/csv");
-    showToast("RNA-pair counts CSV downloaded locally.");
+    withAllRows(function (rows) {
+      downloadText("rna_pairs.csv", window.Hyb2Data.rnaPairsToCsv(rows), "text/csv");
+      showToast("RNA-pair counts CSV downloaded locally.");
+    });
   }
 
   function downloadValidationReport() {

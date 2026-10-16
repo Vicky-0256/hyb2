@@ -26,9 +26,8 @@
   const VIRIDIS_LUT_DARK = buildViridisLut(true);
 
   function afterRender(state, api) {
-    contactJobApi = api;
     if (state.activePage === "interactions") {
-      bindVirtualTable(state);
+      bindVirtualTable(state, api);
     }
     if (state.activePage === "contact-map") {
       bindContactCanvases(state, api);
@@ -41,6 +40,9 @@
     }
     if (state.activePage === "compare") {
       bindComparisonCanvases(state, api);
+      if (window.Hyb2DeseqCard) {
+        window.Hyb2DeseqCard.draw(state, api);
+      }
     }
     if (state.activePage === "structure" && window.Hyb2StructureUI) {
       window.Hyb2StructureUI.afterRender(state, api);
@@ -48,8 +50,8 @@
   }
 
   // Changing a map control keeps the current map on screen, dimmed and
-  // marked stale; the page renderer asks the slice scheduler below for the
-  // new matrix and the map swaps in when it is ready.
+  // marked stale; page-data.js fetches the new bins through the provider
+  // (the query key changed) and the map swaps in when it is ready.
   function rebuildContact(state, api) {
     const contact = state.contact;
     contact.selection = null;
@@ -67,72 +69,6 @@
     api.render();
   }
 
-  // Contact matrices are built in ~10 ms slices, one task each, so painting
-  // and input can run between them. A MessageChannel task avoids the 4 ms
-  // clamp that nested setTimeout calls get.
-  const contactJob = { builder: null, key: "", records: null, state: null };
-  let contactJobApi = null;
-  const contactSliceChannel = typeof MessageChannel === "function" ? new MessageChannel() : null;
-  if (contactSliceChannel) {
-    contactSliceChannel.port1.onmessage = runContactSlice;
-  }
-
-  function contactJobKey(contact) {
-    return [contact.rnaX, contact.rnaY, contact.binSize, contact.measure, contact.colourCap, contact.customCap,
-      contact.scale, contact.orientation, contact.chimeraType, contact.homodimer].join("\u0001");
-  }
-
-  function requestContactMatrix(state) {
-    const records = state.records || [];
-    const key = contactJobKey(state.contact);
-    if (contactJob.builder && contactJob.key === key && contactJob.records === records && contactJob.state === state) {
-      return;
-    }
-    contactJob.builder = window.Hyb2Data.createContactMatrixBuilder(records, state.contact);
-    contactJob.key = key;
-    contactJob.records = records;
-    contactJob.state = state;
-    queueContactSlice();
-  }
-
-  function queueContactSlice() {
-    if (contactSliceChannel) {
-      contactSliceChannel.port2.postMessage(0);
-    } else {
-      window.setTimeout(runContactSlice, 0);
-    }
-  }
-
-  function runContactSlice() {
-    const builder = contactJob.builder;
-    const state = contactJob.state;
-    if (!builder || !state) {
-      return;
-    }
-    // Inputs changed under the job: drop it; the render that follows the
-    // change requests a fresh one.
-    if (contactJobKey(state.contact) !== contactJob.key || (state.records || []) !== contactJob.records) {
-      contactJob.builder = null;
-      return;
-    }
-    if (!builder.step(performance.now() + 10)) {
-      const progress = document.querySelector("[data-contact-progress]");
-      if (progress) {
-        progress.textContent = Math.round(builder.progress() * 100) + "%";
-      }
-      queueContactSlice();
-      return;
-    }
-    contactJob.builder = null;
-    state.contact.matrix = builder.result();
-    state.contact.matrixStale = false;
-    if (contactJobApi && state.activePage === "contact-map") {
-      contactJobApi.render();
-    }
-  }
-
-  window.Hyb2ContactBuild = { request: requestContactMatrix };
-
   function renderAndFocus(api, selector) {
     api.render();
     const replacement = document.querySelector(selector);
@@ -141,7 +77,7 @@
     }
   }
 
-  function bindVirtualTable(state) {
+  function bindVirtualTable(state, api) {
     const table = document.querySelector("[data-virtual-table]");
     if (!table) {
       return;
@@ -150,10 +86,10 @@
     table.scrollTop = state.interactionScrollTop || 0;
     table.addEventListener("scroll", function () {
       state.interactionScrollTop = table.scrollTop;
-      updateVirtualRows(state);
+      updateVirtualRows(state, api);
     });
     // Rows were windowed for a default height; fit them to the real one.
-    updateVirtualRows(state);
+    updateVirtualRows(state, api);
     // Page first, then table: until the table reaches the top of the
     // viewport the wheel moves the page, and at the table's top edge an
     // upward wheel hands back to the page instead of stopping dead.
@@ -176,19 +112,32 @@
     }, { passive: false });
   }
 
-  function updateVirtualRows(state) {
+  // Rows come from the queryHybrids window held in state.view.interactions;
+  // scrolling outside it asks the page-data layer for the next window.
+  function updateVirtualRows(state, api) {
     const table = document.querySelector("[data-virtual-table]");
     const rowsContainer = document.querySelector("[data-virtual-rows]");
     if (!table || !rowsContainer) {
       return;
     }
 
-    const records = state.interactionResults || [];
+    const interactions = state.view && state.view.interactions;
     const rowHeight = state.density === "compact" ? 38 : 46;
     const start = Math.max(0, Math.floor(table.scrollTop / rowHeight) - 4);
     const visible = Math.ceil(table.clientHeight / rowHeight) + 8;
+    const rows = window.Hyb2Pages.interactionWindow(interactions, start, visible);
     rowsContainer.style.transform = "translateY(" + (start * rowHeight) + "px)";
-    rowsContainer.innerHTML = window.Hyb2Pages.renderVirtualRows(records.slice(start, start + visible));
+    if (rows) {
+      rowsContainer.innerHTML = window.Hyb2Pages.renderVirtualRows(rows);
+      return;
+    }
+    if (api && typeof api.loadInteractionWindow === "function") {
+      api.loadInteractionWindow(start).then(function (loaded) {
+        if (loaded) {
+          updateVirtualRows(state, api);
+        }
+      });
+    }
   }
 
   function bindContactCanvas(state, api) {
@@ -1171,7 +1120,9 @@
       canvas.addEventListener("pointermove", function (event) {
         const cell = comparisonCellFromEvent(state, canvas, kind, event);
         canvas.title = cell
-          ? "log2 effect " + format(cell.effect) + " · " + format(cell.presentDatasets) + " datasets"
+          ? (kind === "conserved"
+            ? "similarity " + format(cell.similarity) + " · raw " + format(cell.rawA) + " / " + format(cell.rawB)
+            : "log2 effect " + format(cell.effect) + " · " + format(cell.presentDatasets) + " datasets")
           : "";
       });
       canvas.addEventListener("pointerup", function (event) {
@@ -1208,19 +1159,33 @@
     state.comparison.geometry = state.comparison.geometry || {};
     state.comparison.geometry[kind] = geometry;
     const cells = kind === "conserved" ? result.conservedCells : result.cells;
-
-    context.fillStyle = surface;
-    context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = line;
-    context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
-    cells.forEach(function (cell) {
-      const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
-      const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
-      context.fillStyle = kind === "conserved"
-        ? conservedColor(cell.presentDatasets / Math.max(1, result.conservedMax))
-        : effectColor(cell.effect / Math.max(.01, result.effectCap));
-      context.fillRect(x, y, Math.ceil(geometry.cellWidth) + .4, Math.ceil(geometry.cellHeight) + .4);
-    });
+    const panel = kind === "conserved" && !isDarkTheme() ? similarityPanelColor(state.comparison) : line;
+    // A whole-genome map has up to ~10^6 cells: they are drawn once into a
+    // layer kept with the result and copied on later renders.
+    const layerKey = [kind, canvas.width, canvas.height, surface, panel, isDarkTheme()].join("|");
+    let layers = comparisonLayers.get(result);
+    if (!layers) {
+      layers = new Map();
+      comparisonLayers.set(result, layers);
+    }
+    let layer = layers.get(layerKey);
+    if (!layer && cells.length > COMPARISON_LAYER_MIN_CELLS && typeof document.createElement === "function") {
+      layer = document.createElement("canvas");
+      layer.width = canvas.width;
+      layer.height = canvas.height;
+      const layerContext = layer.getContext("2d");
+      layerContext.setTransform(canvas.width / dimensions.width, 0, 0, canvas.height / dimensions.height, 0, 0);
+      drawComparisonCells(layerContext, dimensions, geometry, result, kind, cells, surface, panel, line);
+      layers.set(layerKey, layer);
+    }
+    if (layer) {
+      context.save();
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.drawImage(layer, 0, 0);
+      context.restore();
+    } else {
+      drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line);
+    }
     if (state.comparison.selection) {
       const selected = state.comparison.selection;
       if (selected.x >= geometry.xStart && selected.x <= geometry.xEnd && selected.y >= geometry.yStart && selected.y <= geometry.yEnd) {
@@ -1252,6 +1217,107 @@
     }
     context.strokeStyle = line;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
+  }
+
+  function isComparisonLabel(key) {
+    return key === "conditionALabel" || key === "conditionBLabel";
+  }
+
+  const comparisonLayers = new WeakMap();
+  const COMPARISON_SVG_MAX_CELLS = 100000;
+  const COMPARISON_LAYER_MIN_CELLS = 20000;
+
+  function drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line) {
+    context.fillStyle = surface;
+    context.fillRect(0, 0, dimensions.width, dimensions.height);
+    // the similarity heatmap keeps similarity_heatmap.R's white panel, or
+    // ggplot's grey one so that bins at the smallest count show
+    context.fillStyle = panel;
+    context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
+    if (kind === "conserved" && !isDarkTheme()) {
+      context.strokeStyle = line;
+      context.strokeRect(geometry.left + .5, geometry.top + .5, geometry.plotWidth - 1, geometry.plotHeight - 1);
+    }
+    const width = Math.ceil(geometry.cellWidth) + .4;
+    const height = Math.ceil(geometry.cellHeight) + .4;
+    const effectCap = Math.max(.01, result.effectCap);
+    // similarity counts and effects (ratios of small counts) repeat a lot:
+    // each colour is computed once per draw
+    const colours = new Map();
+    const colourOf = function (cell) {
+      const value = kind === "conserved" ? cell.similarity : cell.effect;
+      let colour = colours.get(value);
+      if (colour === undefined) {
+        colour = kind === "conserved" ? conservedColor(conservedRatio(value, result)) : effectColor(value / effectCap);
+        colours.set(value, colour);
+      }
+      return colour;
+    };
+    if (cells.length > COMPARISON_LAYER_MIN_CELLS && typeof context.getImageData === "function") {
+      // effects are nearly all distinct: their colour is packed straight from
+      // the number; similarity counts repeat and keep the string cache
+      const effectPacked = effectPacker(isDarkTheme());
+      const packedOf = kind === "conserved" ? null : function (cell) { return effectPacked(cell.effect / effectCap); };
+      rasterComparisonCells(context, dimensions, geometry, result, cells, width, height, colourOf, packedOf);
+      return;
+    }
+    let previous = "";
+    cells.forEach(function (cell) {
+      const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
+      const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
+      const colour = colourOf(cell);
+      if (colour !== previous) {
+        context.fillStyle = colour;
+        previous = colour;
+      }
+      context.fillRect(x, y, width, height);
+    });
+  }
+
+  // A whole-genome map (~10^6 cells of under a pixel each) as one pixel
+  // buffer: a fillRect per cell took ~1.5 s.  Each cell covers the device
+  // pixels of its rectangle (at least one), later cells over earlier ones as
+  // with fillRect; the colours are opaque rgb().
+  function rasterComparisonCells(context, dimensions, geometry, result, cells, width, height, colourOf, packedOf) {
+    const sx = context.canvas.width / dimensions.width;
+    const sy = context.canvas.height / dimensions.height;
+    const left = Math.round(geometry.left * sx);
+    const top = Math.round(geometry.top * sy);
+    const plotWidth = Math.max(1, Math.min(context.canvas.width - left, Math.round(geometry.plotWidth * sx)));
+    const plotHeight = Math.max(1, Math.min(context.canvas.height - top, Math.round(geometry.plotHeight * sy)));
+    const image = context.getImageData(left, top, plotWidth, plotHeight);
+    const pixels = new Uint32Array(image.data.buffer);
+    const packed = new Map();
+    const cellWidth = geometry.cellWidth * sx;
+    const cellHeight = geometry.cellHeight * sy;
+    const spanX = width * sx;
+    const spanY = height * sy;
+    const offsetX = geometry.left * sx - left;
+    const offsetY = geometry.top * sy - top;
+    for (let index = 0; index < cells.length; index += 1) {
+      const cell = cells[index];
+      let value;
+      if (packedOf) {
+        value = packedOf(cell);
+      } else {
+        const colour = colourOf(cell);
+        value = packed.get(colour);
+        if (value === undefined) {
+          value = packRgb(colour.match(/\d+/g).map(Number));
+          packed.set(colour, value);
+        }
+      }
+      const x = offsetX + ((cell.x - geometry.xStart) / result.binSize) * cellWidth;
+      const y = offsetY + ((cell.y - geometry.yStart) / result.binSize) * cellHeight;
+      const x0 = Math.max(0, Math.floor(x));
+      const y0 = Math.max(0, Math.floor(y));
+      const x1 = Math.min(plotWidth, Math.max(x0 + 1, Math.round(x + spanX)));
+      const y1 = Math.min(plotHeight, Math.max(y0 + 1, Math.round(y + spanY)));
+      for (let row = y0; row < y1; row += 1) {
+        pixels.fill(value, row * plotWidth + x0, row * plotWidth + x1);
+      }
+    }
+    context.putImageData(image, left, top);
   }
 
   function getComparisonGeometry(result, width, height) {
@@ -1295,8 +1361,8 @@
     }
     const xIndex = Math.min(geometry.xCount - 1, Math.max(0, Math.floor((x - geometry.left) / geometry.cellWidth)));
     const yIndex = Math.min(geometry.yCount - 1, Math.max(0, Math.floor((y - geometry.top) / geometry.cellHeight)));
-    const cell = result.cellMap[(geometry.xStart + xIndex * result.binSize) + ":" + (geometry.yStart + yIndex * result.binSize)] || null;
-    return kind === "conserved" && cell && cell.presentDatasets < 2 ? null : cell;
+    const cell = window.Hyb2Data.comparisonCellAt(result, geometry.xStart + xIndex * result.binSize, geometry.yStart + yIndex * result.binSize);
+    return kind === "conserved" && cell && !(cell.similarity > 0) ? null : cell;
   }
 
   function moveComparisonSelection(state, kind, key) {
@@ -1309,36 +1375,42 @@
       return false;
     }
 
-    const ordered = cells.slice().sort(function (left, right) { return left.y - right.y || left.x - right.x; });
+    // single passes over the cells (a whole-genome map has ~10^6): the first
+    // cell in (y, x) order, and the nearest candidate in the key's direction
     const selected = state.comparison.selection;
     const selectedCell = selected
       ? cells.find(function (cell) { return cell.x === selected.x && cell.y === selected.y; })
       : null;
-    const current = selectedCell || ordered[0];
+    let current = selectedCell;
+    if (!current) {
+      cells.forEach(function (cell) {
+        if (!current || cell.y < current.y || (cell.y === current.y && cell.x < current.x)) {
+          current = cell;
+        }
+      });
+    }
     let next;
 
     if (current) {
-      const candidates = cells.filter(function (cell) {
-        if (key === "ArrowLeft") {
-          return cell.x < current.x;
-        }
-        if (key === "ArrowRight") {
-          return cell.x > current.x;
-        }
-        if (key === "ArrowUp") {
-          return cell.y < current.y;
-        }
-        return cell.y > current.y;
-      });
       const horizontal = key === "ArrowLeft" || key === "ArrowRight";
-      candidates.sort(function (left, right) {
+      const before = function (left, right) {
         const leftPrimary = horizontal ? Math.abs(left.x - current.x) : Math.abs(left.y - current.y);
         const rightPrimary = horizontal ? Math.abs(right.x - current.x) : Math.abs(right.y - current.y);
         const leftSecondary = horizontal ? Math.abs(left.y - current.y) : Math.abs(left.x - current.x);
         const rightSecondary = horizontal ? Math.abs(right.y - current.y) : Math.abs(right.x - current.x);
-        return leftSecondary - rightSecondary || leftPrimary - rightPrimary || left.y - right.y || left.x - right.x;
+        return (leftSecondary - rightSecondary || leftPrimary - rightPrimary || left.y - right.y || left.x - right.x) < 0;
+      };
+      let best = null;
+      cells.forEach(function (cell) {
+        const candidate = key === "ArrowLeft" ? cell.x < current.x
+          : key === "ArrowRight" ? cell.x > current.x
+            : key === "ArrowUp" ? cell.y < current.y
+              : cell.y > current.y;
+        if (candidate && (!best || before(cell, best))) {
+          best = cell;
+        }
       });
-      next = candidates[0] || (!selectedCell ? current : null);
+      next = best || (!selectedCell ? current : null);
     }
 
     if (!next) {
@@ -1418,6 +1490,29 @@
     const feature = element.dataset.feature;
     const key = element.dataset.key;
 
+    // differential test (A), region structures (D, E) and folding energy (F, G) cards
+    if ((window.Hyb2DeseqCard && window.Hyb2DeseqCard.handleChange(state, element, api)) ||
+        (window.Hyb2RegionPanels && window.Hyb2RegionPanels.handleChange(state, element, api)) ||
+        (window.Hyb2FoldingEnergy && window.Hyb2FoldingEnergy.handleChange(state, element, api))) {
+      return true;
+    }
+
+    if (feature === "arcmap-file" && window.Hyb2ArcMap) {
+      const file = element.files && element.files[0];
+      state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
+      if (file) {
+        window.Hyb2ArcMap.loadFile(state.arcMap, key, file).then(function () { api.render(); });
+      }
+      return true;
+    }
+
+    if (feature === "arcmap-control" && window.Hyb2ArcMap) {
+      state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
+      window.Hyb2ArcMap.setControl(state.arcMap, key, element.value);
+      api.render();
+      return true;
+    }
+
     if (window.Hyb2Evidence && window.Hyb2Evidence.handleChange(state, element, api)) {
       return true;
     }
@@ -1440,7 +1535,7 @@
     if (feature === "viewpoint-control") {
       state.viewpoint[key] = element.value;
       if (key === "rna" && state.viewpoint.rangeMode === "reference" &&
-          !window.Hyb2Data.findFastaEntry(state.fasta, state.viewpoint.rna)) {
+          !window.Hyb2Pages.hasMappedReference(state, state.viewpoint.rna)) {
         state.viewpoint.rangeMode = "coordinates";
       }
       state.viewpoint.results = null;
@@ -1451,8 +1546,24 @@
 
     if (feature === "comparison-control") {
       state.comparison[key] = element.value;
-      state.comparison.result = null;
-      state.comparison.selection = null;
+      // condition labels are display only: a whole-genome result is kept
+      if (!isComparisonLabel(key)) {
+        state.comparison.result = null;
+        state.comparison.selection = null;
+      }
+      api.render();
+      return true;
+    }
+
+    if (feature === "comparison-display" && state.comparison) {
+      state.comparison[key] = element.value;
+      api.render();
+      return true;
+    }
+
+    if (feature === "comparison-table" && state.comparison) {
+      state.comparison.tableSort = element.value;
+      state.comparison.tablePage = 0;
       api.render();
       return true;
     }
@@ -1532,6 +1643,7 @@
         delete state.fasta.mapping[rna];
       }
       invalidateFastaConsumers(state);
+      if (typeof api.dataChanged === "function") api.dataChanged();
       api.render();
       return true;
     }
@@ -1544,6 +1656,9 @@
     const key = element.dataset.key;
     if (!key) {
       return false;
+    }
+    if (window.Hyb2DeseqCard && window.Hyb2DeseqCard.handleInput(state, element)) {
+      return true;
     }
     if (window.Hyb2Evidence && window.Hyb2Evidence.handleInput(state, element)) {
       return true;
@@ -1573,8 +1688,19 @@
     }
     if (feature === "comparison-control" && state.comparison) {
       state.comparison[key] = element.value;
-      state.comparison.result = null;
-      state.comparison.selection = null;
+      if (!isComparisonLabel(key)) {
+        state.comparison.result = null;
+        state.comparison.selection = null;
+      }
+      return true;
+    }
+    if (feature === "comparison-display" && state.comparison) {
+      state.comparison[key] = element.value;
+      return true;
+    }
+    if (feature === "comparison-table" && state.comparison) {
+      state.comparison.tableSort = element.value;
+      state.comparison.tablePage = 0;
       return true;
     }
     if (feature === "comparison-dataset" && state.comparison) {
@@ -1634,6 +1760,12 @@
     }
 
     if (window.Hyb2StructureUI && window.Hyb2StructureUI.handleAction(action, state, api, element)) {
+      return true;
+    }
+
+    if ((window.Hyb2DeseqCard && window.Hyb2DeseqCard.handleAction(state, action, element, api)) ||
+        (window.Hyb2RegionPanels && window.Hyb2RegionPanels.handleAction(state, element, api)) ||
+        (window.Hyb2FoldingEnergy && window.Hyb2FoldingEnergy.handleAction(state, element, api))) {
       return true;
     }
 
@@ -1725,15 +1857,29 @@
       return true;
     }
 
-    if (action === "export-filtered-csv") {
-      api.download("filtered-interactions.csv", window.Hyb2Data.recordsToCsv(state.interactionResults || []), "text/csv");
-      api.showToast("Filtered interaction CSV downloaded locally.");
+    if (action === "export-filtered-csv" || action === "export-filtered-hyb") {
+      // Exports need every matching row, fetched through the DataProvider.
+      fetchAllRows(api, { filters: Object.assign({}, state.filters || {}) }, function (rows) {
+        if (action === "export-filtered-csv") {
+          api.download("filtered-interactions.csv", window.Hyb2Data.recordsToCsv(rows), "text/csv");
+          api.showToast("Filtered interaction CSV downloaded locally.");
+        } else {
+          api.download("filtered.hyb", window.Hyb2Data.recordsToHyb(rows), "text/plain");
+          api.showToast("Filtered HYB file downloaded locally.");
+        }
+      });
       return true;
     }
 
-    if (action === "export-filtered-hyb") {
-      api.download("filtered.hyb", window.Hyb2Data.recordsToHyb(state.interactionResults || []), "text/plain");
-      api.showToast("Filtered HYB file downloaded locally.");
+    if (action === "request-fold") {
+      const request = foldRequest(state, element.dataset.source || "");
+      if (!request) {
+        api.showToast("Select a region before folding.");
+        return true;
+      }
+      if (typeof api.requestFold === "function") {
+        api.requestFold(request);
+      }
       return true;
     }
 
@@ -1793,9 +1939,22 @@
       if (!selection) {
         return true;
       }
-      const records = window.Hyb2Data.getCellRecords(state.records || [], state.contact, selection.x, selection.y);
-      api.download("contact-cell-records.csv", window.Hyb2Data.recordsToCsv(records), "text/csv");
-      api.showToast("Selected cell records downloaded locally.");
+      const contact = state.contact;
+      fetchAllRows(api, {
+        cell: {
+          rnaX: contact.rnaX,
+          rnaY: contact.rnaY,
+          binSize: contact.matrix && contact.matrix.binSize || contact.binSize,
+          orientation: contact.orientation,
+          chimeraType: contact.chimeraType,
+          homodimer: contact.homodimer,
+          x: selection.x,
+          y: selection.y
+        }
+      }, function (records) {
+        api.download("contact-cell-records.csv", window.Hyb2Data.recordsToCsv(records), "text/csv");
+        api.showToast("Selected cell records downloaded locally.");
+      });
       return true;
     }
 
@@ -1900,8 +2059,34 @@
       return true;
     }
 
+    if (action === "arcmap-clear" && state.arcMap) {
+      const key = element.dataset.key;
+      state.arcMap[key] = null;
+      state.arcMap.errors[key] = "";
+      api.render();
+      return true;
+    }
+
+    if (action === "arcmap-download-svg" && state.arcMap && window.Hyb2ArcMap) {
+      const model = window.Hyb2ArcMap.build(state.arcMap);
+      if (model.ready) {
+        api.download("arc-map.svg", window.Hyb2ArcMap.svg(state.arcMap, model), "image/svg+xml");
+        api.showToast("Arc map SVG downloaded locally.");
+      }
+      return true;
+    }
+
     if (action === "remove-comparison-dataset") {
       const datasetId = element.dataset.datasetId;
+      if (datasetId !== "primary") {
+        // Keep it out of this comparison even if the provider still lists it;
+        // the website shell also unregisters the parsed file.
+        state.comparison.excludedDatasetIds = Object.assign({}, state.comparison.excludedDatasetIds || {});
+        state.comparison.excludedDatasetIds[datasetId] = true;
+        if (typeof api.removeDataset === "function") {
+          api.removeDataset(datasetId);
+        }
+      }
       state.comparison.datasets = (state.comparison.datasets || []).filter(function (dataset) { return dataset.id !== datasetId || dataset.id === "primary"; });
       const remainingRnas = Array.from(new Set(state.comparison.datasets.flatMap(function (dataset) {
         return dataset.summary && dataset.summary.rnaNames ? dataset.summary.rnaNames : [];
@@ -1927,6 +2112,12 @@
 
     if (action === "toggle-comparison-data") {
       state.comparison.showDataTable = !state.comparison.showDataTable;
+      api.render();
+      return true;
+    }
+
+    if (action === "comparison-table-page") {
+      state.comparison.tablePage = Math.max(0, Number(element.dataset.page) || 0);
       api.render();
       return true;
     }
@@ -1982,8 +2173,8 @@
     }
 
     if (action === "comparison-export-selected") {
-      const selected = state.comparison.selection && state.comparison.result && state.comparison.result.cellMap
-        ? state.comparison.result.cellMap[state.comparison.selection.x + ":" + state.comparison.selection.y]
+      const selected = state.comparison.selection && state.comparison.result
+        ? window.Hyb2Data.comparisonCellAt(state.comparison.result, state.comparison.selection.x, state.comparison.selection.y)
         : null;
       if (!selected) {
         api.showToast("Select a comparison bin before exporting dataset values.");
@@ -2073,6 +2264,7 @@
       state.fasta.mappingEditorRna = rna;
       state.fasta.mappingEditorReference = reference;
       invalidateFastaConsumers(state);
+      if (typeof api.dataChanged === "function") api.dataChanged();
       api.render();
       api.showToast(reference ? "Reference mapping updated locally." : "RNA marked as not matched.");
       return true;
@@ -2117,13 +2309,18 @@
     }
 
     if (action === "copy-region-sequence" || action === "region-send-structure" || action === "region-download-fasta") {
-      const reference = window.Hyb2Data.extractReference(state.fasta, state.region.rna, state.region.start, state.region.end);
+      // Prefetched DataProvider.getSequence slice for the current region.
+      const reference = window.Hyb2Pages.regionReference(state);
       if (!reference) {
         api.showToast("Reference sequence is unavailable for this region.");
         return true;
       }
       if (action === "copy-region-sequence") {
         api.copyText(reference.sequence, "Reference sequence copied to the clipboard.");
+      }
+      if (action === "region-send-structure" && state.canRequestFold && typeof api.requestFold === "function") {
+        api.requestFold(foldRequest(state, "region"));
+        return true;
       }
       if (action === "region-send-structure") {
         if (window.Hyb2Structure) {
@@ -2252,7 +2449,12 @@
     const width = 720;
     const height = 520;
     const geometry = getComparisonGeometry(result, width, height);
-    const cells = result.cells.map(function (cell) {
+    // a whole-genome map keeps the SVG printable: the strongest effects,
+    // drawn weakest first
+    const shown = result.cells.length > COMPARISON_SVG_MAX_CELLS
+      ? window.Hyb2Data.comparisonOrderedCells(result, "effect", 0, COMPARISON_SVG_MAX_CELLS).reverse()
+      : result.cells;
+    const cells = shown.map(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
       return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + effectColor(cell.effect / Math.max(.01, result.effectCap)) + '"/>';
@@ -2265,7 +2467,8 @@
       cells,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '"/>',
       '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" fill="' + colors.ink + '">' + escapeXml(state.comparison.rnaX) + ' (X) × ' + escapeXml(state.comparison.rnaY) + ' (Y) · Mean log2 effect</text>',
-      '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal</text>',
+      '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal' +
+        (shown.length < result.cells.length ? ' · the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins' : '') + '</text>',
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.xStart + '</text>',
       '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.xEnd + result.binSize - 1) + '</text>',
       '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.yStart + '</text>',
@@ -2375,7 +2578,7 @@
       sourceHyb: sourceHyb(state),
       parameters: Object.assign({}, state.filters || {}),
       result: {
-        matchingRecords: (state.interactionResults || []).length
+        matchingRecords: state.view && state.view.interactions ? Number(state.view.interactions.total) || 0 : 0
       }
     };
   }
@@ -2446,6 +2649,8 @@
     const comparison = state.comparison || {};
     const result = comparison.result || {};
     const normalise = comparison.normalise === "none" ? "none" : "per-million-library-size";
+    const differentialTest = window.Hyb2DeseqCard ? window.Hyb2DeseqCard.parameters(comparison) : null;
+    const tested = !!(differentialTest && differentialTest.result && differentialTest.result.current);
     const selectedBin = comparison.selection && result.ready ? {
       xStart: comparison.selection.x,
       xEnd: comparison.selection.x + result.binSize - 1,
@@ -2483,19 +2688,28 @@
         binSize: nullableNumber(comparison.binSize),
         measure: comparison.measure === "support" ? "cluster-support" : "record-count",
         normalisation: normalise,
-        pseudocount: normalise === "per-million-library-size" ? 1 : 0.5
+        pseudocount: normalise === "per-million-library-size" ? 1 : 0.5,
+        similarityMinimum: Number(comparison.similarityMinimum) > 1 ? Number(comparison.similarityMinimum) : 1,
+        similarityPanel: comparison.similarityPanel === "grey" ? "grey (#EBEBEB, display only)" : "white (as similarity_heatmap.R)",
+        similarityMethod: "HYB2 plot_similarity_map on one merged raw map per condition (as Desktop differential.py; not hyb2_compare's consecutive replicate pairing): min(A, B) of bins present in both; similarityMinimum = awk $3 >= MIN on each merged map",
+        similarityColourScale: "similarity_heatmap.R: counts capped at the 95% quantile, white at the smallest plotted count to forestgreen at the cap"
       },
       result: {
         ready: result.ready === true,
         comparableBins: Array.isArray(result.cells) ? result.cells.length : 0,
-        conservedBins: Array.isArray(result.conservedCells) ? result.conservedCells.length : 0,
+        similarityBins: Array.isArray(result.conservedCells) ? result.conservedCells.length : 0,
+        similarityCap: Number(result.similarityCap) || null,
+        similarityFloor: Number(result.similarityFloor) || null,
         selectedBin: selectedBin,
         failureReason: result.ready === false ? result.reason || null : null
       },
+      // the in-browser DESeq2 Wald test (deseq.js), when it was run
+      differentialTest: differentialTest,
       methodScope: {
-        descriptiveEffectOnly: true,
-        replicateAwareStatisticalTesting: false,
-        adjustedPValues: false,
+        descriptiveEffectOnly: !tested,
+        replicateAwareStatisticalTesting: tested,
+        adjustedPValues: tested,
+        javascriptDeSeq2Port: true,
         webRBaseRuntimeSmoke: "recorded-manual-pass",
         webRRuntimeValidated: false,
         webRRuntimeVendored: false,
@@ -2520,19 +2734,84 @@
     };
   }
 
+  // Reference provenance from DataProvider.listDatasets() (DatasetInfo.reference).
   function sourceFasta(state, rna) {
-    if (!state.fasta) {
+    const reference = state.reference;
+    if (!reference) {
       return null;
     }
     return {
-      fileName: state.fasta.fileName || "",
-      fileSize: state.fasta.fileSize == null ? null : state.fasta.fileSize,
-      sha256: state.fasta.sha256 || null,
-      sha256Status: state.fasta.sha256
+      fileName: reference.fileName || "",
+      fileSize: reference.fileSize == null ? null : reference.fileSize,
+      sha256: reference.sha256 || null,
+      sha256Status: reference.sha256
         ? "available"
-        : (state.fasta.sha256Unavailable ? "unavailable" : "pending"),
-      mappedReferenceId: state.fasta.mapping && rna ? state.fasta.mapping[rna] || null : null
+        : (reference.sha256Unavailable ? "unavailable" : "pending"),
+      mappedReferenceId: reference.mapping && rna ? reference.mapping[rna] || null : null
     };
+  }
+
+  function fetchAllRows(api, query, onRows) {
+    if (typeof api.queryHybrids !== "function") {
+      api.showToast("Interaction rows are unavailable in this view.");
+      return;
+    }
+    Promise.resolve(api.queryHybrids(Object.assign({}, query, { offset: 0, limit: null }))).then(function (result) {
+      onRows(result && result.rows || []);
+    }).catch(function (error) {
+      api.showToast(error && error.message ? error.message : "The rows could not be loaded.");
+    });
+  }
+
+  // Payload for the host's onRequestFold({ region, partnerRegion, source }).
+  function foldRequest(state, source) {
+    const span = function (rna, start, end) {
+      const left = Number(start);
+      const right = Number(end);
+      return rna && Number.isSafeInteger(left) && Number.isSafeInteger(right) && left >= 1 && right >= left
+        ? { rna: rna, start: left, end: right }
+        : null;
+    };
+    // A contact cell is one bin per arm; fold each arm with flanking context
+    // (at least 50 nt or two bins) so a cell on the diagonal is not a 10-20 nt
+    // window. Ends are clamped to the map extent when it is known.
+    const pairRequest = function (rnaX, x, rnaY, y, binSize, maxX, maxY) {
+      const pad = Math.max(50, 2 * binSize);
+      const clampEnd = function (value, max) {
+        return Number.isFinite(max) && max > 0 ? Math.min(value, max) : value;
+      };
+      const first = span(rnaX, Math.max(1, x - pad), clampEnd(x + binSize - 1 + pad, maxX));
+      const second = span(rnaY, Math.max(1, y - pad), clampEnd(y + binSize - 1 + pad, maxY));
+      if (!first || !second) {
+        return null;
+      }
+      // Same RNA: one window spanning both arms; otherwise two regions.
+      if (rnaX === rnaY) {
+        return { source: source, region: span(rnaX, Math.min(first.start, second.start), Math.max(first.end, second.end)), partnerRegion: null, arms: [first, second] };
+      }
+      return { source: source, region: first, partnerRegion: second, arms: [first, second] };
+    };
+    let request = null;
+    if (source === "contact-map" && state.contact && state.contact.selection && state.contact.matrix) {
+      const matrix = state.contact.matrix;
+      request = pairRequest(state.contact.rnaX, state.contact.selection.x, state.contact.rnaY, state.contact.selection.y, matrix.binSize,
+        Number(matrix.lengthX || matrix.length || NaN), Number(matrix.lengthY || matrix.length2 || matrix.length || NaN));
+    } else if (source === "compare" && state.comparison && state.comparison.selection && state.comparison.result) {
+      const result = state.comparison.result;
+      request = pairRequest(state.comparison.rnaX, state.comparison.selection.x, state.comparison.rnaY, state.comparison.selection.y, result.binSize,
+        Number(result.lengthX || result.length || NaN), Number(result.lengthY || result.length2 || result.length || NaN));
+    } else if (source === "region" && state.region) {
+      const region = span(state.region.rna, state.region.start, state.region.end);
+      const partner = state.region.partner && state.region.partner !== state.region.rna
+        ? span(state.region.partner, state.region.partnerStart, state.region.partnerEnd)
+        : null;
+      request = region ? { source: source, region: region, partnerRegion: partner, arms: [region].concat(partner ? [partner] : []) } : null;
+    }
+    if (!request || !request.region) {
+      return null;
+    }
+    request.selection = state.selection || null;
+    return request;
   }
 
   function nullableNumber(value) {
@@ -2575,7 +2854,7 @@
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
-  function effectColor(value) {
+  function effectRgb(value) {
     const bounded = Math.max(-1, Math.min(1, value));
     const dark = isDarkTheme();
     const center = dark ? [19, 44, 71] : [245, 248, 250];
@@ -2583,21 +2862,120 @@
       ? (dark ? [154, 136, 255] : [106, 79, 242])
       : [0, 160, 157];
     const ratio = Math.abs(bounded);
-    const red = Math.round(center[0] + (target[0] - center[0]) * ratio);
-    const green = Math.round(center[1] + (target[1] - center[1]) * ratio);
-    const blue = Math.round(center[2] + (target[2] - center[2]) * ratio);
-    return "rgb(" + red + ", " + green + ", " + blue + ")";
+    return [
+      Math.round(center[0] + (target[0] - center[0]) * ratio),
+      Math.round(center[1] + (target[1] - center[1]) * ratio),
+      Math.round(center[2] + (target[2] - center[2]) * ratio)
+    ];
   }
 
+  function effectColor(value) {
+    const rgb = effectRgb(value);
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
+  }
+
+  // effectColor() as ImageData pixels, for one theme: no DOM read or
+  // allocation per cell
+  function effectPacker(dark) {
+    const c0 = dark ? 19 : 245;
+    const c1 = dark ? 44 : 248;
+    const c2 = dark ? 71 : 250;
+    const p0 = dark ? 154 : 106;
+    const p1 = dark ? 136 : 79;
+    const p2 = dark ? 255 : 242;
+    return function (value) {
+      const bounded = Math.max(-1, Math.min(1, value));
+      const ratio = Math.abs(bounded);
+      const t0 = bounded >= 0 ? p0 : 0;
+      const t1 = bounded >= 0 ? p1 : 160;
+      const t2 = bounded >= 0 ? p2 : 157;
+      const red = Math.round(c0 + (t0 - c0) * ratio);
+      const green = Math.round(c1 + (t1 - c1) * ratio);
+      const blue = Math.round(c2 + (t2 - c2) * ratio);
+      return ((255 << 24) | (blue << 16) | (green << 8) | red) >>> 0;
+    };
+  }
+
+  // ImageData is RGBA in memory: little-endian 0xAABBGGRR, opaque
+  function packRgb(rgb) {
+    return ((255 << 24) | (rgb[2] << 16) | (rgb[1] << 8) | rgb[0]) >>> 0;
+  }
+
+  // similarity_heatmap.R: counts capped at the 95% quantile, then
+  // scale_fill_gradient(low = white, high = forestgreen) over the data range,
+  // so white is the smallest plotted count (not zero) and forestgreen the cap.
+  // A single-valued range maps to the midpoint, like scales::rescale().
+  function similarityPanelColor(comparison) {
+    return comparison && comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff";
+  }
+
+  function conservedRatio(similarity, result) {
+    const cap = Math.max(1, Number(result && result.similarityCap) || 1);
+    const floor = Math.min(cap, similarityFloorOf(result));
+    if (!(cap > floor)) {
+      return .5;
+    }
+    return Math.max(0, Math.min(1, (Math.min(Number(similarity) || 0, cap) - floor) / (cap - floor)));
+  }
+
+  function similarityFloorOf(result) {
+    const floor = Number(result && result.similarityFloor);
+    if (Number.isFinite(floor) && floor > 0) {
+      return floor;
+    }
+    return ((result && result.conservedCells) || []).reduce(function (minimum, cell) {
+      const value = Number(cell.similarity);
+      return value > 0 && value < minimum ? value : minimum;
+    }, Infinity);
+  }
+
+  // scales::pal_seq_gradient interpolates in CIELAB (farver, D65 white).
   function conservedColor(ratio) {
     const bounded = Math.max(0, Math.min(1, ratio));
     const dark = isDarkTheme();
-    const from = dark ? [24, 54, 80] : [237, 249, 248];
-    const to = [0, 160, 157];
-    const red = Math.round(from[0] + (to[0] - from[0]) * bounded);
-    const green = Math.round(from[1] + (to[1] - from[1]) * bounded);
-    const blue = Math.round(from[2] + (to[2] - from[2]) * bounded);
-    return "rgb(" + red + ", " + green + ", " + blue + ")";
+    const from = srgbToLab(dark ? [24, 54, 80] : [255, 255, 255]);
+    const to = srgbToLab([34, 139, 34]);
+    const rgb = labToSrgb([
+      from[0] + (to[0] - from[0]) * bounded,
+      from[1] + (to[1] - from[1]) * bounded,
+      from[2] + (to[2] - from[2]) * bounded
+    ]);
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
+  }
+
+  const LAB_WHITE = [0.95047, 1, 1.08883];
+  const SIMILARITY_GREY_PANEL = "#ebebeb"; // ggplot2 theme_grey panel
+
+  function srgbToLab(rgb) {
+    const linear = rgb.map(function (channel) {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+    });
+    const xyz = [
+      0.4124564 * linear[0] + 0.3575761 * linear[1] + 0.1804375 * linear[2],
+      0.2126729 * linear[0] + 0.7151522 * linear[1] + 0.0721750 * linear[2],
+      0.0193339 * linear[0] + 0.1191920 * linear[1] + 0.9503041 * linear[2]
+    ].map(function (value, index) {
+      const t = value / LAB_WHITE[index];
+      return t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116;
+    });
+    return [116 * xyz[1] - 16, 500 * (xyz[0] - xyz[1]), 200 * (xyz[1] - xyz[2])];
+  }
+
+  function labToSrgb(lab) {
+    const fy = (lab[0] + 16) / 116;
+    const xyz = [fy + lab[1] / 500, fy, fy - lab[2] / 200].map(function (value, index) {
+      const cube = value * value * value;
+      return LAB_WHITE[index] * (cube > 216 / 24389 ? cube : (116 * value - 16) / (24389 / 27));
+    });
+    return [
+      3.2404542 * xyz[0] - 1.5371385 * xyz[1] - 0.4985314 * xyz[2],
+      -0.9692660 * xyz[0] + 1.8760108 * xyz[1] + 0.0415560 * xyz[2],
+      0.0556434 * xyz[0] - 0.2040259 * xyz[1] + 1.0572252 * xyz[2]
+    ].map(function (value) {
+      const encoded = value <= 0.0031308 ? 12.92 * value : 1.055 * Math.pow(value, 1 / 2.4) - 0.055;
+      return Math.max(0, Math.min(255, Math.round(encoded * 255)));
+    });
   }
 
   function exportColors() {
@@ -2668,6 +3046,13 @@
     comparisonParameters: comparisonParameters,
     contactYAxisLabels: contactYAxisLabels,
     visualExportReady: visualExportReady,
-    moveComparisonSelection: moveComparisonSelection
+    moveComparisonSelection: moveComparisonSelection,
+    conservedRatio: conservedRatio,
+    similarityPanelColor: similarityPanelColor,
+    rasterComparisonCells: rasterComparisonCells,
+    effectColor: effectColor,
+    effectPacker: effectPacker,
+    conservedColor: conservedColor,
+    foldRequest: foldRequest
   };
 }());

@@ -4,6 +4,25 @@
   min-height: 100vh;
 }
 
+/* Embedded analysis pages (Hyb2Web.mount(host, { shell: false })): the host
+   provides navigation, so the page column spans the full host width. */
+.workspace.workspace-embedded {
+  display: block;
+  min-height: 0;
+}
+
+.workspace.workspace-embedded .workspace-main {
+  padding: 24px clamp(16px, 3vw, 40px) 40px;
+}
+
+.embedded-status {
+  padding: 32px clamp(16px, 3vw, 40px);
+}
+
+.is-refreshing-data .workspace-main {
+  cursor: progress;
+}
+
 .workspace-header {
   position: fixed;
   z-index: 10;

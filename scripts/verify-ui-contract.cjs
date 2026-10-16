@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const zlib = require("node:zlib");
 
 const repository = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(repository, "web", "app.js"), "utf8");
@@ -14,19 +15,20 @@ const reportCssSource = fs.readFileSync(path.join(repository, "web", "report.css
 const indexSource = fs.readFileSync(path.join(repository, "web", "index.html"), "utf8");
 const localCplfoldSource = fs.readFileSync(path.join(repository, "web", "local-cplfold.html"), "utf8");
 const workflowSource = fs.readFileSync(path.join(repository, ".github", "workflows", "deploy-pages.yml"), "utf8");
-const exampleHybPath = path.join(repository, "web", "assets", "examples", "ZIKV_1-10807_example.hyb");
-const exampleFastaPath = path.join(repository, "web", "assets", "examples", "ZIKV_1-10807.fasta");
-assert.ok(fs.statSync(exampleHybPath).size > 0, "the landing-page HYB example must be present");
-assert.ok(fs.statSync(exampleFastaPath).size > 0, "the landing-page FASTA example must be present");
-assert.ok(fs.statSync(exampleHybPath).size < 100 * 1024 * 1024,
-  "the landing-page HYB example must remain below GitHub's single-file limit");
-const exampleHybLines = fs.readFileSync(exampleHybPath, "utf8").trimEnd().split(/\r?\n/);
-const exampleFastaSource = fs.readFileSync(exampleFastaPath, "utf8");
-assert.equal(exampleHybLines.length, 10000,
-  "the landing-page HYB example must be the checked-in browser-sized ZIKV subset");
-assert.match(exampleHybLines[0], /ENSG_ENST_ZIKV-PE243-2015_virusRNA/,
+// the included example (web/example.js; scripts/verify-example.cjs checks it in depth)
+const example = require(path.join(repository, "web", "example.js"));
+example.files().forEach(function (file) {
+  const full = path.join(repository, "web", example.directory, file);
+  assert.ok(fs.existsSync(full) && fs.statSync(full).size > 0, "the landing-page example file " + file + " must be present");
+  assert.ok(fs.statSync(full).size < 100 * 1024 * 1024, file + " must remain below GitHub's single-file limit");
+});
+const exampleHybLines = zlib.gunzipSync(fs.readFileSync(path.join(repository, "web", example.directory, example.primary.file))).toString("utf8").trimEnd().split(/\r?\n/);
+const exampleFastaSource = fs.readFileSync(path.join(repository, "web", example.directory, example.reference.file), "utf8");
+assert.equal(exampleHybLines.length, example.primary.records,
+  "the landing-page HYB example must be the checked-in 1-in-10 ZAFR_REP1 subset");
+assert.match(exampleHybLines[0], /ZIKV_African_KX377335-1_virusRNA/,
   "the landing-page HYB example must use the ZIKV reference name");
-assert.equal(exampleFastaSource.split(/\r?\n/, 1)[0], ">ENSG_ENST_ZIKV-PE243-2015_virusRNA",
+assert.equal(exampleFastaSource.split(/\r?\n/, 1)[0], ">ZIKV_African_KX377335-1_virusRNA",
   "the landing-page FASTA example must match the ZIKV reference name used in the HYB file");
 const context = vm.createContext({
   Intl,
@@ -141,9 +143,11 @@ assert.deepEqual(JSON.parse(JSON.stringify(overviewExport.parameters.exportedVie
 
 const reproducibilityState = {
   summary: { fileName: "primary.hyb", fileSize: 321, sha256: "primary-sha" },
-  fasta: { fileName: "reference.fa", fileSize: 99, sha256: "fasta-sha", mapping: { RNA_A: "ref_A" } },
+  // Provider-fed view model (web/page-data.js): DatasetInfo.reference and the
+  // queryHybrids total for the current filters.
+  reference: { fileName: "reference.fa", fileSize: 99, sha256: "fasta-sha", mapping: { RNA_A: "ref_A" } },
   filters: { rna: "RNA_A", chimeraType: "Type_2", minSupport: "3" },
-  interactionResults: [{}, {}],
+  view: { interactions: { total: 2, offset: 0, rows: [] } },
   viewpoint: {
     rna: "RNA_A", partner: "RNA_B", chimeraType: "Type_2", homodimer: "exclude",
     rangeMode: "reference", start: "5", end: "40", binSize: "10", measure: "support",
@@ -186,6 +190,75 @@ assert.equal(comparisonReport.parameters.pseudocount, 0.5);
 assert.equal(comparisonReport.datasets[1].sha256, "second-sha");
 assert.deepEqual(JSON.parse(JSON.stringify(comparisonReport.result.selectedBin)), { xStart: 50, xEnd: 74, yStart: 75, yEnd: 99 });
 assert.equal(comparisonReport.methodScope.replicateAwareStatisticalTesting, false);
+// A DESeq2 result whose inputs changed since the run must not be reported as
+// a current replicate-aware test.
+context.window.Hyb2DeseqCard = { parameters: function () { return { result: { current: false } }; } };
+const staleTestReport = context.window.Hyb2UI.comparisonParameters(reproducibilityState);
+assert.equal(staleTestReport.methodScope.replicateAwareStatisticalTesting, false, "a stale differential test is not a current test");
+assert.equal(staleTestReport.methodScope.adjustedPValues, false, "a stale differential test gives no current adjusted p-values");
+context.window.Hyb2DeseqCard = { parameters: function () { return { result: { current: true } }; } };
+assert.equal(context.window.Hyb2UI.comparisonParameters(reproducibilityState).methodScope.adjustedPValues, true);
+delete context.window.Hyb2DeseqCard;
+// Similarity colours: similarity_heatmap.R puts white at the smallest plotted
+// count and forestgreen at the 95% quantile cap (CIELAB ramp).
+const similarityScale = { similarityCap: 10, similarityFloor: 2, conservedCells: [] };
+assert.equal(context.window.Hyb2UI.conservedRatio(2, similarityScale), 0, "the smallest count is white");
+assert.equal(context.window.Hyb2UI.conservedRatio(6, similarityScale), 0.5);
+assert.equal(context.window.Hyb2UI.conservedRatio(40, similarityScale), 1, "counts above the cap take the cap colour");
+assert.equal(context.window.Hyb2UI.conservedRatio(3, { similarityCap: 3, similarityFloor: 3 }), 0.5,
+  "a single-valued scale maps to the midpoint, like scales::rescale");
+assert.equal(context.window.Hyb2UI.conservedRatio(4, { similarityCap: 8, conservedCells: [{ similarity: 4 }, { similarity: 8 }] }), 0,
+  "without similarityFloor the floor is the smallest conserved cell");
+assert.equal(context.window.Hyb2UI.conservedColor(0), "rgb(255, 255, 255)");
+assert.equal(context.window.Hyb2UI.conservedColor(1), "rgb(34, 139, 34)");
+assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "the ramp interpolates in CIELAB");
+// The panel behind the similarity heatmap is display only: R's white by
+// default, ggplot's grey on request; changing it keeps the computed result.
+// Large maps are rasterised into one pixel buffer: every cell covers at
+// least one device pixel, later cells over earlier ones.
+{
+  const canvas = { width: 20, height: 10 };
+  const buffer = new Uint8ClampedArray(20 * 10 * 4);
+  let put = null;
+  const fake = {
+    canvas: canvas,
+    getImageData: function (x, y, w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
+    putImageData: function (image, x, y) { put = { image: image, x: x, y: y }; }
+  };
+  const geometry = { left: 0, top: 0, plotWidth: 10, plotHeight: 5, cellWidth: 0.5, cellHeight: 0.5, xStart: 0, yStart: 0 };
+  // cells are drawn 0.9 css px (1.8 device px) wide, so they overlap as with fillRect
+  const cells = [{ x: 0, y: 0, c: "rgb(1, 2, 3)" }, { x: 0, y: 0, c: "rgb(7, 8, 9)" }, { x: 10, y: 0, c: "rgb(4, 5, 6)" }];
+  context.window.Hyb2UI.rasterComparisonCells(fake, { width: 10, height: 5 }, geometry, { binSize: 10 }, cells, 0.9, 0.9,
+    function (cell) { return cell.c; });
+  assert.ok(put && put.x === 0 && put.y === 0, "the plot area is written back");
+  const px = put.image.data;
+  assert.deepEqual(Array.from(px.slice(0, 4)), [7, 8, 9, 255], "the later cell wins its pixel");
+  assert.deepEqual(Array.from(px.slice(4, 8)), [4, 5, 6, 255], "the next cell starts at its own device pixel");
+  assert.deepEqual(Array.from(px.slice(12, 16)), [0, 0, 0, 0], "beyond the last cell nothing is written");
+  void buffer;
+}
+{
+  // the raster's packed effect colours are effectColor()'s
+  const pack = context.window.Hyb2UI.effectPacker(false);
+  for (let k = -1200; k <= 1200; k += 7) {
+    const value = k / 1000;
+    const rgb = context.window.Hyb2UI.effectColor(value).match(/\d+/g).map(Number);
+    const p = pack(value);
+    assert.deepEqual([p & 255, (p >>> 8) & 255, (p >>> 16) & 255, p >>> 24], rgb.concat(255), "effect " + value);
+  }
+}
+assert.equal(context.window.Hyb2UI.similarityPanelColor({}), "#ffffff");
+assert.equal(context.window.Hyb2UI.similarityPanelColor({ similarityPanel: "grey" }), "#ebebeb");
+assert.match(comparisonReport.parameters.similarityPanel, /^white/);
+{
+  const displayState = { comparison: { similarityPanel: "white", result: { ready: true }, selection: { x: 1, y: 1 } } };
+  let rendered = 0;
+  const handled = context.window.Hyb2UI.handleChange(displayState, { dataset: { feature: "comparison-display", key: "similarityPanel" }, value: "grey" }, { render: function () { rendered += 1; } });
+  assert.equal(handled, true);
+  assert.equal(displayState.comparison.similarityPanel, "grey");
+  assert.ok(displayState.comparison.result && displayState.comparison.selection, "the panel colour does not drop the result");
+  assert.equal(rendered, 1);
+}
 assert.equal(comparisonReport.methodScope.webRBaseRuntimeSmoke, "recorded-manual-pass");
 assert.equal(comparisonReport.methodScope.webRRuntimeValidated, false);
 assert.equal(comparisonReport.methodScope.webRRuntimeVendored, false);
@@ -279,23 +352,25 @@ assert.match(comparisonExportEvents.toasts[0], /exceeds the legacy R integer max
   "Count-export failures must surface an actionable error to the user");
 assert.match(analysisPagesSource, /item \? item\.rawValue : 0/,
   "the selected-bin breakdown must display explicit zeroes for datasets without that bin");
-assert.match(appSource, /downloadText\("rna_counts\.csv", window\.Hyb2Data\.rnaCountsToCsv\(state\.records \|\| \[\]\), "text\/csv"\)/,
+assert.match(appSource, /pageData\.queryHybrids\(\{ offset: 0, limit: null \}\)/,
+  "the RNA-count and RNA-pair exports must request every row from the DataProvider");
+assert.match(appSource, /withAllRows\(function \(rows\) \{\s*downloadText\("rna_counts\.csv", window\.Hyb2Data\.rnaCountsToCsv\(rows\), "text\/csv"\)/,
   "the RNA-count control must download a complete record-derived CSV");
-assert.match(appSource, /downloadText\("rna_pairs\.csv", window\.Hyb2Data\.rnaPairsToCsv\(state\.records \|\| \[\]\), "text\/csv"\)/,
+assert.match(appSource, /withAllRows\(function \(rows\) \{\s*downloadText\("rna_pairs\.csv", window\.Hyb2Data\.rnaPairsToCsv\(rows\), "text\/csv"\)/,
   "the RNA-pair control must download a complete record-derived CSV");
 
 const comparisonCells = [
-  { x: 0, y: 0, presentDatasets: 2 },
-  { x: 20, y: 0, presentDatasets: 2 },
-  { x: 0, y: 10, presentDatasets: 1 },
-  { x: 20, y: 20, presentDatasets: 2 }
+  { x: 0, y: 0, presentDatasets: 2, similarity: 3 },
+  { x: 20, y: 0, presentDatasets: 2, similarity: 1 },
+  { x: 0, y: 10, presentDatasets: 1, similarity: 0 },
+  { x: 20, y: 20, presentDatasets: 2, similarity: 2 }
 ];
 const comparisonState = {
   comparison: {
     result: {
       ready: true,
       cells: comparisonCells,
-      conservedCells: comparisonCells.filter(function (cell) { return cell.presentDatasets >= 2; })
+      conservedCells: comparisonCells.filter(function (cell) { return cell.similarity > 0; })
     },
     selection: null,
     activeMap: null
@@ -343,7 +418,12 @@ assert.equal(context.window.Hyb2UI.handleInput(typedComparisonState, {
 }), true);
 assert.equal(typedComparisonState.comparison.conditionALabel, "New label",
   "delegated input must persist unblurred text before an asynchronous render");
-assert.equal(typedComparisonState.comparison.result, null);
+assert.deepEqual(typedComparisonState.comparison.result, { stale: true },
+  "condition labels are display only: typing one keeps a (whole-genome) comparison result");
+assert.equal(context.window.Hyb2UI.handleInput(typedComparisonState, {
+  dataset: { feature: "comparison-control", key: "binSize" }, value: "25"
+}), true);
+assert.equal(typedComparisonState.comparison.result, null, "an analysis setting invalidates the result");
 
 const partnerSelectionState = { filters: { partner: "" }, selectedRecordIndex: 7, interactionScrollTop: 12 };
 context.window.Hyb2UI.handleAction(partnerSelectionState, {
@@ -722,18 +802,50 @@ assert.match(workflowSource, /scripts\/verify-report-render\.cjs/,
   "the deployment workflow must track report render changes");
 assert.match(workflowSource, /node scripts\/verify-report-render\.cjs/,
   "the deployment workflow must run the report render contract");
+["verify-deseq", "verify-arc-map", "verify-region-panels", "verify-folding-energy"].forEach(function (script) {
+  assert.ok(workflowSource.includes('"scripts/' + script + '.cjs"'), "the deployment workflow must track " + script);
+  assert.ok(workflowSource.includes("node scripts/" + script + ".cjs"), "the deployment workflow must run " + script);
+});
+assert.ok(workflowSource.indexOf("bash scripts/build-vienna-wasm.sh") < workflowSource.indexOf("node scripts/verify-folding-energy.cjs"),
+  "verify-folding-energy must run after the ViennaRNA build so it folds instead of skipping");
+
+// Loading or closing a file resets the arc map, region panels and folding
+// energy states and stops the DESeq2 and RNAcofold workers.
+const resetSites = appSource.match(/state\.comparison = null;\s*resetAnalysisModules\(\);/g) || [];
+assert.equal(resetSites.length, 4, "resetDataState, startParsing, clearSession and resetToLanding must reset the analysis modules");
+assert.match(appSource, /function unmount\(\)[\s\S]*?stopAnalysisWorkers\(\);[\s\S]*?\n  }/,
+  "unmounting must stop the analysis workers");
+const moduleResetSource = appSource.match(/  function stopAnalysisWorkers\(\) \{[\s\S]*?\n  function cancelComparisonLoads/);
+assert.ok(moduleResetSource, "app.js must define stopAnalysisWorkers/resetAnalysisModules");
+const resetCalls = [];
+const resetContext = vm.createContext({
+  state: { arcMap: { a: "old" }, regionPanels: { padj: "0.5" }, foldingEnergy: { running: true } },
+  window: {
+    Hyb2DeseqCard: { stop: function () { resetCalls.push("deseq"); } },
+    Hyb2FoldingEnergy: { stop: function (fe) { resetCalls.push("energy"); fe.running = false; }, defaultState: function () { return { fresh: "energy" }; } },
+    Hyb2ArcMap: { defaultState: function () { return { fresh: "arc" }; } },
+    Hyb2RegionPanels: { defaultState: function () { return { fresh: "panels" }; } }
+  }
+});
+vm.runInContext(moduleResetSource[0].replace(/\n  function cancelComparisonLoads$/, "") + "\nresetAnalysisModules();", resetContext);
+assert.deepEqual(resetCalls, ["deseq", "energy"], "the reset stops both analysis workers");
+assert.equal(JSON.stringify(resetContext.state), JSON.stringify({ arcMap: { fresh: "arc" }, regionPanels: { fresh: "panels" }, foldingEnergy: { fresh: "energy" } }),
+  "the reset restores the modules' default states");
+const bareResetContext = vm.createContext({ state: { arcMap: { a: 1 } }, window: {} });
+vm.runInContext(moduleResetSource[0].replace(/\n  function cancelComparisonLoads$/, "") + "\nresetAnalysisModules();", bareResetContext);
+assert.equal(bareResetContext.state.arcMap, null, "without the modules the reset still clears their state");
 assert.match(appSource, /data-action="enter-analysis">Enter analysis/,
   "the file-review stage must expose a separate analysis-entry action");
 assert.match(appSource, /function enterAnalysis\(\)\s*\{[\s\S]*?state\.analysisEntered = true;[\s\S]*?navigate\("overview"\);/,
   "entering analysis must be an explicit state transition");
 assert.match(appSource, /state\.loading = null;\s*state\.analysisEntered = false;\s*state\.activePage = "landing";\s*setRouteHash\("#\/"\);\s*if \(parseSession\.referenceFile\)/,
   "HYB parsing must finish on the review stage instead of navigating directly to Overview");
-assert.match(appSource, /ZIKV_1-10807_example\.hyb/,
-  "the included HYB example must visibly use the ZIKV dataset name");
-assert.match(appSource, /ZIKV_1-10807\.fasta/,
-  "the included FASTA example must visibly use the matching ZIKV reference name");
-assert.match(appSource, /fetch\(exampleAssets\.hyb\.url[\s\S]*?fetch\(exampleAssets\.fasta\.url/,
+assert.match(appSource, /example\.downloads\.map\(/,
+  "the included example must visibly list its files with download links");
+assert.match(appSource, /\[example\.primary\.file, example\.reference\.file\]\.map\(function \(name\) \{\s*return fetchExampleFile\(name/,
   "the included example must load both HYB and FASTA assets");
+assert.match(appSource, /startParsing\(files\[0\], \{ referenceFile: files\[1\], example: true \}\)/,
+  "the example HYB is parsed like an upload, with its FASTA");
 assert.match(appSource, /id="fasta-file-input"[^>]*accept="\.fa,\.fasta,\.fna,\.fas,text\/plain"/,
   "the landing page must expose an optional FASTA file input");
 assert.match(appSource, /state\.landingFastaFile = file;[\s\S]*?render\(\);/,
@@ -769,7 +881,7 @@ assert.match(resetSource[1], /state\.activePage = "landing";[\s\S]*?setRouteHash
     "resetting after a failed replacement must release " + field);
 });
 
-const comparisonLoaderMatch = appSource.match(/async function loadComparisonFiles\(files\)\s*{([\s\S]*?)\n  function parseComparisonFile/);
+const comparisonLoaderMatch = appSource.match(/async function loadComparisonFiles\(files(?:, options)?\)\s*{([\s\S]*?)\n  function parseComparisonFile/);
 assert.ok(comparisonLoaderMatch, "The comparison loader should remain available for session-safety checks");
 const comparisonLoaderSource = comparisonLoaderMatch[1];
 assert.match(comparisonLoaderSource, /const comparisonSession = state\.comparison;/);
@@ -799,5 +911,17 @@ assert.match(comparisonParserSource[1], /error\.name = "AbortError";\s*reject\(e
   "cancelling comparison parsing must settle its pending Promise");
 assert.match(appSource, /function cancelComparisonLoads\(\)\s*{\s*state\.comparisonLoadSession = null;\s*Array\.from\(state\.comparisonParsers\)\.forEach[\s\S]*?parser\.cancel\(\);[\s\S]*?state\.comparisonParsers\.clear\(\);\s*}/,
   "comparison cancellation must terminate every active parser and invalidate its batch token");
+
+// The Compare page builds whole-genome comparisons in comparison.worker.js
+// (checked against the in-thread result in verify-example.cjs) and pages the
+// data table from a cached order instead of sorting every cell per render.
+const pageDataSource = fs.readFileSync(path.join(repository, "web", "page-data.js"), "utf8");
+assert.match(pageDataSource, /"comparison\.worker\.js\?build=" \+ encodeURIComponent\(root\.HYB2_BUILD && root\.HYB2_BUILD\.commit \|\| "local"\)/,
+  "the comparison worker URL carries the build cache-buster");
+assert.match(pageDataSource, /function invalidate\(\) \{[\s\S]*?cancelComparisonJob\(\);/, "invalidating the page data cancels a running comparison");
+assert.match(fs.readFileSync(path.join(repository, "web", "comparison.worker.js"), "utf8"), /importScripts\("\.\/analysis-data\.js" \+ BUILD_QUERY/,
+  "the worker loads analysis-data.js with the page's build query");
+assert.doesNotMatch(analysisPagesSource, /result\.cells\.slice\(\)\.sort/, "the comparison data table must not sort every cell on render");
+assert.match(analysisPagesSource, /data-comparison-progress/, "the Compare placeholder shows the comparison progress");
 
 process.stdout.write("ui-contract: ok\n");

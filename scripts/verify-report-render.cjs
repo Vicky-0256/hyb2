@@ -69,7 +69,7 @@ context.window.Hyb2Data = {
     };
   },
   buildComparisonResults: function () {
-    const cell = { x: 10, y: 20, conditionA: 3, conditionB: 1, effect: 1.5, presentDatasets: 2, datasets: [] };
+    const cell = { x: 10, y: 20, conditionA: 3, conditionB: 1, effect: 1.5, presentDatasets: 2, rawA: 3, rawB: 1, similarity: 1, datasets: [] };
     return {
       ready: true,
       groupA: [{ id: "primary" }],
@@ -79,7 +79,7 @@ context.window.Hyb2Data = {
       conservedCells: [cell],
       binSize: 10,
       effectCap: 2,
-      conservedMax: 2
+      similarityCap: 1
     };
   },
   findFastaEntry: function () { return null; },
@@ -161,6 +161,22 @@ const state = {
   }
 };
 
+// The report reads analysis data that web/page-data.js fetched through the
+// DataProvider: page result slots, state.reference (DatasetInfo.reference)
+// and state.view.report (top filtered rows, total, partner counts).
+state.contact.matrix = context.window.Hyb2Data.buildContactMatrix();
+state.viewpoint.results = context.window.Hyb2Data.getViewpointResults();
+state.region.results = context.window.Hyb2Data.getRegionResults();
+state.comparison.result = context.window.Hyb2Data.buildComparisonResults();
+state.reference = { fileName: "reference.fasta", fileSize: 99, sha256: "fasta-sha", sequenceCount: 1, mapping: { RNA_A: "RNA_A" }, mapped: { RNA_A: { referenceId: "RNA_A", length: 4 } } };
+state.view = {
+  report: {
+    filteredTotal: 2,
+    filteredSample: context.window.Hyb2Data.getFilteredRecords(state),
+    partnerCounts: context.window.Hyb2Data.getPartnerCounts()
+  }
+};
+
 const report = context.window.Hyb2Report;
 const html = report.render(state);
 assert.match(html, /data-report-page/);
@@ -171,6 +187,16 @@ assert.match(html, /Print \/ Save PDF/);
 });
 assert.match(html, /&lt;bad&gt;\.hyb/, "user-controlled file names must be escaped");
 assert.doesNotMatch(html, />undefined</, "report markup must not expose undefined values");
+// similarity_heatmap.R: a single-valued scale (floor = cap) maps to the
+// midpoint of the white-to-forestgreen CIELAB ramp, like scales::rescale.
+assert.match(html, /fill="rgb\(153, 197, 143\)"><title>[^<]*; similarity 1</,
+  "the similarity heatmap must use similarity_heatmap.R's data-range colour scale");
+// the similarity panel is R's white unless the grey display panel is chosen
+const similaritySvg = function (markup) { return markup.slice(markup.lastIndexOf('<svg class="report-svg report-heatmap-svg"')); };
+assert.match(similaritySvg(html), /<rect x="52" y="24" width="650" height="300" fill="#ffffff"/, "white similarity panel by default");
+state.comparison.similarityPanel = "grey";
+assert.match(similaritySvg(report.render(state)), /<rect x="52" y="24" width="650" height="300" fill="#ebebeb"/, "grey similarity panel");
+delete state.comparison.similarityPanel;
 
 const data = report.getData(state);
 assert.equal(data.application, "HYB2 Web Lite");

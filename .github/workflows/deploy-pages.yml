@@ -21,6 +21,11 @@ on:
       - "scripts/verify-motion-contract.cjs"
       - "scripts/verify-evidence.cjs"
       - "scripts/verify-report-render.cjs"
+      - "scripts/verify-deseq.cjs"
+      - "scripts/verify-arc-map.cjs"
+      - "scripts/verify-region-panels.cjs"
+      - "scripts/verify-folding-energy.cjs"
+      - "scripts/verify-example.cjs"
       - "scripts/webr-smoke/**"
       - "third_party/cplfold/**"
       - ".github/workflows/deploy-pages.yml"
@@ -79,6 +84,14 @@ jobs:
           node scripts/verify-motion-contract.cjs
           node scripts/verify-evidence.cjs
           node scripts/verify-report-render.cjs
+          node scripts/verify-deseq.cjs
+          node scripts/verify-arc-map.cjs
+          node scripts/verify-region-panels.cjs
+          # runs after the ViennaRNA build above, so RNAcofold is checked too
+          node scripts/verify-folding-energy.cjs
+          # the included example end to end (~15 s): Compare maps, differential
+          # test, arc map, regions and RNAcofold energies vs the R pipeline
+          node scripts/verify-example.cjs
 
       - name: Build and verify pinned browser CPLfold runtime
         run: |

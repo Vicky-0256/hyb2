@@ -805,6 +805,28 @@ a {
   gap: 8px;
 }
 
+.example-file-link {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--teal-deep);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.example-file-link:hover,
+.example-file-link:focus-visible {
+  text-decoration: underline;
+}
+
+.example-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.example-setup.is-error {
+  color: var(--error);
+}
+
 .example-link {
   display: inline-flex;
   align-items: center;

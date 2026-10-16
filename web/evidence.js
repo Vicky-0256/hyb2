@@ -385,11 +385,28 @@
   function structureRnaNames(state) {
     const structure = state.structure || {};
     if (structure.source === "reference") return [structure.rna, structure.secondRna].filter(Boolean);
-    if (structure.source === "record" && structure.selectedRecordIndex !== null && Array.isArray(state.records)) {
-      const record = state.records.find(function (item) { return item.index === Number(structure.selectedRecordIndex); });
+    if (structure.source === "record" && structure.selectedRecordIndex !== null && structure.selectedRecordIndex !== undefined) {
+      const record = loadedRecord(state, structure.selectedRecordIndex);
       return record ? [record.rnaOne, record.rnaTwo].filter(function (name, index, list) { return name && list.indexOf(name) === index; }) : [];
     }
     return [];
+  }
+
+  // The selected record among rows the page-data layer has already fetched
+  // through the DataProvider (structure choices, open record, table window).
+  function loadedRecord(state, index) {
+    const target = String(index);
+    const view = state.view || {};
+    const singles = [view.structureSelectedRecord, view.selectedRecord];
+    for (let i = 0; i < singles.length; i += 1) {
+      if (singles[i] && singles[i].record && String(singles[i].record.index) === target) return singles[i].record;
+    }
+    const lists = [view.structureRecords, view.interactions && view.interactions.rows];
+    for (let i = 0; i < lists.length; i += 1) {
+      const match = Array.isArray(lists[i]) ? lists[i].find(function (item) { return String(item.index) === target; }) : null;
+      if (match) return match;
+    }
+    return null;
   }
 
   let activeController = null;

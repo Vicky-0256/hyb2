@@ -73,6 +73,29 @@ assert.ok(highMemoryBudget.maximumBinContributions > lowMemoryBudget.maximumBinC
   "reported device memory should raise the adaptive contribution budget");
 assert.ok(highMemoryBudget.maximumCells > slowBudget.maximumCells,
   "the local performance probe should lower the budget on a slower device");
+// Compare bins its datasets off the page under the comparison limits: a slow
+// probe (a busy machine) must not refuse a map the Contact page would not show
+{
+  let tick = 0;
+  const slowContext = vm.createContext({ Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, Intl,
+    window: { navigator: { deviceMemory: 8, hardwareConcurrency: 4 }, performance: { now: function () { tick += 100; return tick; } } } });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), slowContext, { filename: "analysis-data-slow.js" });
+  const slow = slowContext.window.Hyb2Data;
+  const limit = slow.getContactResourceBudget().maximumCells;
+  const rows = [];
+  for (let k = 0; k <= limit; k += 1) {
+    const x = 1 + 10 * (k % 1000);
+    const y = 1 + 10 * Math.floor(k / 1000);
+    rows.push({ rnaOne: "RNA_A", rnaTwo: "RNA_A", rnaOneStart: x, rnaOneEnd: x, rnaTwoStart: y, rnaTwoEnd: y, supportCount: 1 });
+  }
+  const query = slow.comparisonContactQuery({ rnaX: "RNA_A", rnaY: "RNA_A", binSize: "10" });
+  assert.equal(query.budget, "comparison");
+  assert.equal(slow.buildContactBins(rows, Object.assign({}, query, { budget: undefined })).ready, false,
+    "the Contact page budget refuses " + (limit + 1) + " cells on the slow profile");
+  const bins = slow.buildContactBins(rows, query);
+  assert.notEqual(bins.ready, false, "the comparison budget keeps them: " + bins.reason);
+  assert.equal(bins.x.length, limit + 1);
+}
 const defaultStructure = data.defaultStructureState();
 assert.equal(defaultStructure.engine, "cplfold", "CPLfold should be the default structure engine");
 assert.equal(defaultStructure.constraintMode, "none", "Structure folding should default to plain MFE mode");
@@ -612,6 +635,49 @@ assert.ok(Math.abs(comparison.cells[0].effect - Math.log2(2.5 / 1.5)) < 1e-12);
 assert.equal(comparison.cells[0].datasets[0].rawValue, 2);
 assert.equal(comparison.cells[0].datasets[0].value, 2);
 assert.equal(comparison.cells[0].datasets[1].rawValue, 1);
+assert.equal(comparison.cells[0].similarity, 1, "similarity is the smaller summed raw count");
+assert.equal(comparison.conservedCells.length, 1);
+
+// Similarity heatmap = HYB2 plot_similarity_map on one merged map per
+// condition: replicates are summed, each map keeps bins >= the minimum, and a
+// bin in both maps scores min(A, B).  Expected values were computed by hand
+// from the awk in bin/plot_similarity_map.
+const simRecord = function (id, start) {
+  return record({ id: id, rnaOne: "RNA_A", rnaTwo: "RNA_A", rnaOneStart: start, rnaOneEnd: start, rnaTwoStart: 500, rnaTwoEnd: 500 });
+};
+const repeat = function (prefix, start, n) {
+  return Array.from({ length: n }, function (_, i) { return simRecord(prefix + i, start); });
+};
+const similarityInput = {
+  datasets: [
+    // bin 0: A 3+4 = 7, B 5 -> 5; bin 100: A 2, B 9 -> 2; bin 200: A only
+    { id: "a1", condition: "A", summary: { validRecords: 6 }, records: repeat("a1_0_", 1, 3).concat(repeat("a1_1_", 101, 2), repeat("a1_2_", 201, 1)) },
+    { id: "a2", condition: "A", summary: { validRecords: 4 }, records: repeat("a2_0_", 1, 4) },
+    { id: "b1", condition: "B", summary: { validRecords: 14 }, records: repeat("b1_0_", 1, 5).concat(repeat("b1_1_", 101, 9)) }
+  ],
+  rnaX: "RNA_A",
+  rnaY: "RNA_A",
+  binSize: "10",
+  measure: "records",
+  normalise: "library"
+};
+const similarity = data.buildComparisonResults(similarityInput);
+const simByX = Object.fromEntries(similarity.cells.map(function (cell) { return [cell.x, cell]; }));
+assert.equal(simByX[0].rawA, 7);
+assert.equal(simByX[0].rawB, 5);
+assert.equal(simByX[0].similarity, 5, "library normalisation must not change the raw similarity count");
+assert.equal(simByX[100].similarity, 2);
+assert.equal(simByX[200].similarity, 0, "a bin missing from one condition is not similar");
+assert.deepEqual(similarity.conservedCells.map(function (cell) { return cell.x; }), [0, 100]);
+assert.equal(similarity.similarityMinimum, 1);
+const similarityFiltered = data.buildComparisonResults(Object.assign({}, similarityInput, { similarityMinimum: "3" }));
+assert.deepEqual(similarityFiltered.conservedCells.map(function (cell) { return [cell.x, cell.similarity]; }), [[0, 5]],
+  "bins below the minimum in either condition are dropped before taking the minimum");
+// similarity_heatmap.R's scale_fill_gradient spans the data range: white sits
+// at the smallest plotted count, not at zero.
+assert.equal(similarity.similarityFloor, 2, "the colour floor is the smallest similarity count");
+assert.equal(similarityFiltered.similarityFloor, 5, "the floor follows the similarity minimum filter");
+assert.match(data.comparisonToTsv(similarity).split("\n")[0], /\tcondition_a_raw\tcondition_b_raw\tsimilarity$/);
 const selectedDatasetTsv = data.comparisonSelectedToTsv({ datasets: [
   { id: "a", label: "A sample", condition: "A", fileName: "a.hyb" },
   { id: "b", label: "B sample", condition: "B", fileName: "b.hyb" },
@@ -696,36 +762,33 @@ assert.match(boundedComparison.reason, /Comparison not generated.*Contact map no
 // Individually valid maps can still have a pathological combined union. The
 // comparison-wide cap must stop the merge before it allocates unbounded result,
 // sort, and lookup arrays.
+function disjointBins(offset, count) {
+  const bins = { ready: true, x: new Array(count), y: new Array(count), count: new Array(count) };
+  for (let index = 0; index < count; index += 1) {
+    bins.x[index] = 10 * (offset + (index % 1000));
+    bins.y[index] = 10 * Math.floor(index / 1000);
+    bins.count[index] = 1;
+  }
+  return bins;
+}
 const disjointComparisonStartedAt = Date.now();
 const disjointComparison = data.buildComparisonResults({
   datasets: [
-    {
-      id: "wide-a",
-      label: "Wide A",
-      condition: "A",
-      summary: { validRecords: 1 },
-      records: [record({ rnaOneStart: 1, rnaOneEnd: 224, rnaTwoStart: 1, rnaTwoEnd: 224 })]
-    },
-    {
-      id: "wide-b",
-      label: "Wide B",
-      condition: "B",
-      summary: { validRecords: 1 },
-      records: [record({ rnaOneStart: 225, rnaOneEnd: 448, rnaTwoStart: 225, rnaTwoEnd: 448 })]
-    }
+    { id: "wide-a", label: "Wide A", condition: "A", summary: { validRecords: 1 }, contactBins: disjointBins(0, 800000) },
+    { id: "wide-b", label: "Wide B", condition: "B", summary: { validRecords: 1 }, contactBins: disjointBins(1000, 800000) }
   ],
   rnaX: "RNA_A",
   rnaY: "RNA_B",
-  binSize: "1",
+  binSize: "10",
   measure: "records",
   normalise: "none"
 });
 assert.equal(disjointComparison.ready, false);
 assert.equal(disjointComparison.limitExceeded, true);
 assert.equal(disjointComparison.cells.length, 0);
-assert.equal(disjointComparison.maximumCells, 100000);
-assert.match(disjointComparison.reason, /combined maps cover more than 100,000 distinct cells/i);
-assert.ok(Date.now() - disjointComparisonStartedAt < 3000,
+assert.equal(disjointComparison.maximumCells, 1500000);
+assert.match(disjointComparison.reason, /combined maps cover more than 1,500,000 distinct cells/i);
+assert.ok(Date.now() - disjointComparisonStartedAt < 5000,
   "Comparison union overflow should stop before constructing full result and lookup arrays");
 
 // The colour cap is found by selection rather than sorting; it must equal
@@ -775,27 +838,63 @@ assert.ok(Date.now() - disjointComparisonStartedAt < 3000,
     assert.equal(lookupMatrix.cellMap[cell.x + ":" + cell.y], cell);
   });
   assert.equal(lookupMatrix.getCell(5000, 5000), null);
-
-  // Building in slices (a deadline already passed forces a yield every
-  // 64 records) must produce the same matrix as one synchronous build.
-  const slicedContact = contact({ binSize: 5, colourCap: "95" });
-  const builder = data.createContactMatrixBuilder(randomRecords, slicedContact);
-  let slices = 0;
-  while (!builder.step(-Infinity)) {
-    slices += 1;
-    assert.ok(builder.progress() > 0 && builder.progress() <= 1);
-  }
-  assert.ok(slices >= 5, "expected several slices, got " + slices);
-  const sliced = builder.result();
-  const whole = data.buildContactMatrix(randomRecords, slicedContact);
-  assert.equal(sliced.cap, whole.cap);
-  assert.equal(sliced.max, whole.max);
-  assert.equal(sliced.recordsUsed, whole.recordsUsed);
-  assert.equal(sliced.cellContributions, whole.cellContributions);
-  assert.deepEqual(
-    sliced.cells.map(function (cell) { return [cell.x, cell.y, cell.records, cell.support, cell.value]; }),
-    whole.cells.map(function (cell) { return [cell.x, cell.y, cell.records, cell.support, cell.value]; })
-  );
 }());
+// Large comparisons (over 100,000 cells) build a cell's dataset values on
+// demand; lookups go through comparisonCellAt().
+{
+  const large = data.buildComparisonResults({
+    datasets: [
+      { id: "large-a", label: "Large A", condition: "A", summary: { validRecords: 10 }, contactBins: disjointBins(0, 120000) },
+      { id: "large-b", label: "Large B", condition: "B", summary: { validRecords: 10 }, contactBins: disjointBins(500, 120000) }
+    ],
+    rnaX: "RNA_A",
+    rnaY: "RNA_A",
+    binSize: "10",
+    measure: "records",
+    normalise: "none"
+  });
+  assert.equal(large.ready, true);
+  assert.equal(large.cells.length, 120000 + 60000);
+  assert.equal(large.cellMap, null, "no cellMap object for large results");
+  const shared = data.comparisonCellAt(large, 5000, 0);
+  assert.equal(shared.presentDatasets, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(shared.datasets)), [
+    { id: "large-a", label: "Large A", condition: "A", rawValue: 1, value: 1 },
+    { id: "large-b", label: "Large B", condition: "B", rawValue: 1, value: 1 }
+  ]);
+  assert.equal(shared.similarity, 1);
+  assert.equal(Object.keys(shared).indexOf("datasets"), -1, "lazy dataset values stay out of JSON exports");
+  assert.equal(data.comparisonCellAt(large, 5, 0), null);
+  assert.equal(large.cells[0].x, 0);
+  assert.equal(large.cells[1].y, 10, "cells are sorted by x, then y");
+  const matrix = data.comparisonCountMatrixToTsv({ datasets: [{ id: "large-a" }, { id: "large-b" }] }, large).split("\n");
+  assert.equal(matrix.length, 1 + large.cells.length);
+  assert.equal(matrix[1], "0_0\t1\t0");
+}
+
+// Per-dataset RNA pairs: a homodimer comparison uses each dataset's own
+// genome when the chosen RNA is absent (another strain), as hyb2_compare
+// compares every dataset's map by position.
+{
+  const afr = "ZIKV_African_KX377335-1_virusRNA";
+  const ilm = "ZIKV_FrenchPolynesian_KJ776791-2_virusRNA";
+  const strain = function (id, rna, condition) {
+    return {
+      id: id, label: id, condition: condition, summary: { validRecords: 1, rnaNames: [rna, "other_RNA"] },
+      records: [record({ rnaOne: rna, rnaTwo: rna, rnaOneStart: 101, rnaOneEnd: 120, rnaTwoStart: 301, rnaTwoEnd: 310 })]
+    };
+  };
+  const strains = { datasets: [strain("afr", afr, "A"), strain("ilm", ilm, "B")], rnaX: afr, rnaY: afr, binSize: "10", measure: "records", normalise: "none" };
+  const plan = data.comparisonRnaPlan(strains);
+  assert.deepEqual(plan.map(function (item) { return [item.rnaX, item.substituted]; }), [[afr, false], [ilm, true]]);
+  assert.equal(data.comparisonContactQuery(strains, strains.datasets[1]).rnaX, ilm);
+  const crossStrain = data.buildComparisonResults(strains);
+  assert.equal(crossStrain.ready, true);
+  assert.equal(data.comparisonCellAt(crossStrain, 100, 300).presentDatasets, 2, "both strains' cells are compared by position");
+  assert.deepEqual(JSON.parse(JSON.stringify(crossStrain.rnaPairs)), [{ id: "ilm", label: "ilm", rnaX: ilm, rnaY: ilm }]);
+  // a choice in the differential test card applies here too
+  strains.deseq = { rnaByDataset: { ilm: "other_RNA" } };
+  assert.equal(data.comparisonRnaPlan(strains)[1].rnaX, "other_RNA");
+}
 
 process.stdout.write("analysis-data-contract: ok\n");

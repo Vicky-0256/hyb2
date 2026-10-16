@@ -361,13 +361,13 @@
           ? "available"
           : (state.summary.sha256Unavailable ? "unavailable" : "pending")
       },
-      sourceFasta: result.source === "reference" && state.fasta ? {
-        fileName: state.fasta.fileName,
-        fileSize: state.fasta.fileSize == null ? null : state.fasta.fileSize,
-        sha256: state.fasta.sha256 || null,
-        sha256Status: state.fasta.sha256
+      sourceFasta: result.source === "reference" && state.reference ? {
+        fileName: state.reference.fileName,
+        fileSize: state.reference.fileSize == null ? null : state.reference.fileSize,
+        sha256: state.reference.sha256 || null,
+        sha256Status: state.reference.sha256
           ? "available"
-          : (state.fasta.sha256Unavailable ? "unavailable" : "pending")
+          : (state.reference.sha256Unavailable ? "unavailable" : "pending")
       } : null,
       source: {
         label: result.label,

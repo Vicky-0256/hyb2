@@ -863,6 +863,12 @@
     const out = ['<section class="report-export-panel" aria-label="Export ' + escape(text[0]) + '" data-report-export-panel>',
       '<div class="report-subsection-heading"><h2>Export · ' + escape(text[0]) + '</h2><button class="quiet-button" type="button" data-action="report-export-close">Close</button></div>',
       '<p class="report-note">' + escape(text[1]) + "</p>"];
+    // a step still being prepared would be exported as pending, not as a result
+    const waiting = context.record ? context.record.steps.filter(function (step) { return step.status === "pending" || step.status === "running"; }) : [];
+    if (waiting.length) {
+      out.push('<p class="notice notice-warning" data-export-waiting>Still being prepared: ' + escape(waiting.map(function (step) { return step.id + " " + step.title; }).join("; ")) +
+        ". These steps are exported as " + escape(waiting.map(function (step) { return step.status; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" or ")) + "; open the export again when they finish to include their results.</p>");
+    }
     if (exp.audience === "people") {
       out.push('<div class="report-export-actions"><button class="button" type="button" data-action="print-report">Print / Save PDF</button><button class="button button-secondary" type="button" data-action="report-export-html">Download offline HTML</button></div>');
     } else if (exp.status === "preparing") {

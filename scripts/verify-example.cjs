@@ -99,6 +99,9 @@ assert.match(appSource, /window\.Hyb2Example/);
 assert.match(appSource, /1-in-10 subset/, "the landing page says the example is a subset");
 assert.match(appSource, /reproduce the method, not the published numbers/);
 assert.match(appSource, /continueExample\(file\)/, "the replicates and arc map files load after the primary file is parsed");
+assert.match(appSource, /renderExampleFileRows\(\)/, "the review step lists every example file, not only the primary HYB and FASTA");
+assert.match(appSource, /example\.replicates\.map\(function \(item, index\)/);
+assert.match(appSource, /example\.arcMap\.annotation, detail:/);
 assert.doesNotMatch(appSource, /ZIKV_1-10807|Livefire/, "the former example is gone");
 assert.ok(!fs.existsSync(web("assets/examples/ZIKV_1-10807_example.hyb")));
 // fetched lazily: nothing of the example is requested before "Try example"

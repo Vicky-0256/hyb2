@@ -650,6 +650,35 @@ a {
   color: var(--muted);
 }
 
+.prepared-file-status.is-error {
+  color: var(--error);
+}
+
+.prepared-file-list-example {
+  margin-top: 14px;
+}
+
+.prepared-file-group {
+  margin: 0;
+  padding: 10px 0 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.prepared-file-row-example {
+  padding: 9px 0;
+}
+
+.prepared-file-kind-structure {
+  border-color: var(--line);
+  background: var(--surface-subtle);
+  color: var(--muted);
+}
+
 .prepared-file-row .quiet-button {
   min-height: 32px;
   padding: 0 9px;

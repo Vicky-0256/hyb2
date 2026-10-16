@@ -834,6 +834,63 @@
     return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>";
   }
 
+  // The example's other files (replicates for Compare, arc map files) as
+  // rows under the primary HYB and FASTA, so the list shows the whole
+  // comparison and not only the primary dataset.
+  function renderExampleFileRows() {
+    const setup = state.exampleSetup;
+    if (!example || !setup) {
+      return "";
+    }
+    const datasets = state.comparison && state.comparison.datasets || [];
+    const parsing = setup.stage === "Parsing the other replicates";
+    const status = function (index) {
+      if (setup.ready) {
+        return '<span class="prepared-file-status is-ready">Ready</span>';
+      }
+      if (setup.error) {
+        return '<span class="prepared-file-status is-error">Stopped</span>';
+      }
+      if (index !== undefined && !parsing) {
+        return '<span class="prepared-file-status is-loading">' + (index < setup.done ? "Downloaded" : "Downloading") + "</span>";
+      }
+      if (index !== undefined) {
+        return '<span class="prepared-file-status is-loading">Parsing</span>';
+      }
+      // the arc map files are loaded before the replicates are parsed
+      return parsing
+        ? '<span class="prepared-file-status is-ready">Ready</span>'
+        : '<span class="prepared-file-status is-loading">Downloading</span>';
+    };
+    const row = function (kind, file, detail, statusMarkup) {
+      return [
+        '    <div class="prepared-file-row prepared-file-row-example">',
+        '      <span class="prepared-file-kind' + (kind === "HYB" ? " prepared-file-kind-hyb" : " prepared-file-kind-structure") + '">' + escapeHtml(kind) + "</span>",
+        '      <div class="prepared-file-details"><strong title="' + escapeAttribute(file) + '">' + escapeHtml(file) + "</strong><span>" + escapeHtml(detail) + "</span></div>",
+        "      " + statusMarkup,
+        "    </div>"
+      ].join("");
+    };
+    const rows = example.replicates.map(function (item, index) {
+      const dataset = datasets.find(function (entry) { return entry.fileName === item.file; });
+      const records = dataset && dataset.summary ? dataset.summary.validRecords : item.records;
+      return row("HYB", item.file, item.label + " · Compare, condition " + item.condition + " (" + example.labels[item.condition] + ") · " + formatNumber(records) + " records", status(index));
+    });
+    [
+      { file: example.arcMap.a, detail: "Arc map structure A · CPLfold genome fold, " + example.labels.A },
+      { file: example.arcMap.b, detail: "Arc map structure B · CPLfold genome fold, " + example.labels.B },
+      { file: example.arcMap.annotation, detail: "Arc map gene track · GenBank" }
+    ].forEach(function (item) {
+      rows.push(row(item.file.split(".").pop().toUpperCase(), item.file, item.detail, status()));
+    });
+    return [
+      '  <section class="prepared-file-list prepared-file-list-example" aria-label="Example files for the Compare page">',
+      '    <p class="prepared-file-group">Example comparison: ' + escapeHtml(example.labels.A) + " vs " + escapeHtml(example.labels.B) + " · loaded into the Compare page</p>",
+      rows.join(""),
+      "  </section>"
+    ].join("");
+  }
+
   function renderPreparedFilePanel() {
     const summary = state.summary || {};
     const fasta = state.fasta;
@@ -863,7 +920,7 @@
       '  <section class="prepared-file-list" aria-label="Files ready for analysis">',
       '    <div class="prepared-file-row">',
       '      <span class="prepared-file-kind prepared-file-kind-hyb">HYB</span>',
-      '      <div class="prepared-file-details"><strong title="' + escapeAttribute(summary.fileName || "HYB file") + '">' + escapeHtml(summary.fileName || "HYB file") + '</strong><span>' + formatBytes(summary.fileSize) + " · " + formatNumber(summary.validRecords) + ' valid records</span></div>',
+      '      <div class="prepared-file-details"><strong title="' + escapeAttribute(summary.fileName || "HYB file") + '">' + escapeHtml(summary.fileName || "HYB file") + '</strong><span>' + (example && state.exampleSetup ? escapeHtml("Primary dataset, condition " + example.primary.condition + " (" + example.labels[example.primary.condition] + ")") + " · " : "") + formatBytes(summary.fileSize) + " · " + formatNumber(summary.validRecords) + ' valid records</span></div>',
       '      <span class="prepared-file-status is-ready">Ready</span>',
       "    </div>",
       '    <div class="prepared-file-row prepared-file-row-reference">',
@@ -873,6 +930,7 @@
       '      <button class="quiet-button" type="button" data-action="choose-fasta">' + (fasta || fastaLoad ? "Replace FASTA" : "Add FASTA") + '</button>',
       "    </div>",
       "  </section>",
+      renderExampleFileRows(),
       '  <p class="prepared-file-note"><strong>FASTA is optional.</strong> Interaction tables and contact maps can run without it; reference-based structure and full-reference coordinate views need a mapped sequence. You can also add or replace it later from the Files panel.</p>',
       renderExampleSetup(),
       '  <section class="prepared-next-step" aria-label="Enter analysis workspace">',

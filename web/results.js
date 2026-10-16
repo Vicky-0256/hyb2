@@ -387,6 +387,9 @@
           make: () => csvToTsv(root.Hyb2Data.recordsToCsv(rows.slice().sort(function (left, right) { return (right.supportCount || 0) - (left.supportCount || 0); }).slice(0, AI_INTERACTION_ROWS)))
         });
       }
+    } else if (s.summary) {
+      // the filtered count arrives from the DataProvider after the page opens
+      setStatus("interactions", "pending", "The filtered record count is still being prepared.");
     }
 
     // S04 contact map
@@ -428,6 +431,8 @@
       });
     } else if (vr && vr.reason) {
       setStatus("viewpoint", "not_run", vr.reason);
+    } else if (viewpoint.rna && !vr) {
+      setStatus("viewpoint", "pending", "The viewpoint profile is still being prepared.");
     }
 
     // S06 region
@@ -443,8 +448,8 @@
         file: "tables/region_partners.tsv", title: "Partner RNAs of the region", audience: ["ai", "analysis"], scope: "all " + (rr.partners || []).length + " partners",
         make: () => tsv(["name", "records", "support"], (rr.partners || []).map(function (p) { return [p.name, p.records, p.support]; }))
       });
-    } else if (region.rna && rr && rr.reason) {
-      setStatus("region", "pending", rr.reason);
+    } else if (region.rna && (!rr || rr.reason)) {
+      setStatus("region", "pending", rr && rr.reason || "The region result is still being prepared.");
     }
 
     // S07 comparison

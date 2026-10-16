@@ -77,6 +77,14 @@ assert.equal(result(bare, "R01").value, 120);
 assert.equal(result(bare, "R06").value, 0, "a counted zero stays 0");
 assert.deepEqual(JSON.parse(JSON.stringify(bare.literatureSearch)), { status: "not_run", lookups: 0, includedInReport: 0, hit_count: null },
   "no literature search: status not_run and hit_count null, not 0");
+// data still arriving from the DataProvider is pending, not not_run
+const loadingState = { summary: summary, filters: {}, viewpoint: { rna: "RNA_A" }, region: { rna: "RNA_A" } };
+const loading = R.build(loadingState, {});
+["interactions", "viewpoint", "region"].forEach(function (key) { assert.equal(status(loading, key), "pending", key + " while its data loads"); });
+assert.equal(result(loading, "R09").value, null);
+assert.equal(result(loading, "R09").status, "pending");
+const waitingHtml = report.render(Object.assign({}, loadingState, { reportExport: { audience: "ai", status: "ready", list: [] } }));
+assert.match(waitingHtml, /data-export-waiting>Still being prepared: S03 /, "the export panel names the steps still being prepared");
 // fixed ids: the same key has the same id in every record
 assert.equal(result(bare, "R23").key, "significant_cells");
 assert.equal(bare.steps.find(function (s) { return s.key === "differential_test"; }).id, "S08");

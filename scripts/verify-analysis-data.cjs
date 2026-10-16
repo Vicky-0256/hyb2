@@ -73,6 +73,29 @@ assert.ok(highMemoryBudget.maximumBinContributions > lowMemoryBudget.maximumBinC
   "reported device memory should raise the adaptive contribution budget");
 assert.ok(highMemoryBudget.maximumCells > slowBudget.maximumCells,
   "the local performance probe should lower the budget on a slower device");
+// Compare bins its datasets off the page under the comparison limits: a slow
+// probe (a busy machine) must not refuse a map the Contact page would not show
+{
+  let tick = 0;
+  const slowContext = vm.createContext({ Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, Intl,
+    window: { navigator: { deviceMemory: 8, hardwareConcurrency: 4 }, performance: { now: function () { tick += 100; return tick; } } } });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), slowContext, { filename: "analysis-data-slow.js" });
+  const slow = slowContext.window.Hyb2Data;
+  const limit = slow.getContactResourceBudget().maximumCells;
+  const rows = [];
+  for (let k = 0; k <= limit; k += 1) {
+    const x = 1 + 10 * (k % 1000);
+    const y = 1 + 10 * Math.floor(k / 1000);
+    rows.push({ rnaOne: "RNA_A", rnaTwo: "RNA_A", rnaOneStart: x, rnaOneEnd: x, rnaTwoStart: y, rnaTwoEnd: y, supportCount: 1 });
+  }
+  const query = slow.comparisonContactQuery({ rnaX: "RNA_A", rnaY: "RNA_A", binSize: "10" });
+  assert.equal(query.budget, "comparison");
+  assert.equal(slow.buildContactBins(rows, Object.assign({}, query, { budget: undefined })).ready, false,
+    "the Contact page budget refuses " + (limit + 1) + " cells on the slow profile");
+  const bins = slow.buildContactBins(rows, query);
+  assert.notEqual(bins.ready, false, "the comparison budget keeps them: " + bins.reason);
+  assert.equal(bins.x.length, limit + 1);
+}
 const defaultStructure = data.defaultStructureState();
 assert.equal(defaultStructure.engine, "cplfold", "CPLfold should be the default structure engine");
 assert.equal(defaultStructure.constraintMode, "none", "Structure folding should default to plain MFE mode");

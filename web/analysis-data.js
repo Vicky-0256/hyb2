@@ -20,6 +20,7 @@
   // dataset cells; buildComparisonResults keeps them in typed arrays
   const MAX_COMPARISON_CELLS = 1500000;
   const MAX_COMPARISON_DATASET_CELLS = 4000000;
+  const COMPARISON_DATASET_BUDGET = { maximumCells: MAX_COMPARISON_CELLS, maximumBinContributions: CONTACT_HARD_MAX_BIN_CONTRIBUTIONS };
   const MAX_R_INTEGER_COUNT = 2147483647;
   let contactResourceBudgetCache = null;
 
@@ -555,7 +556,10 @@
   function buildContactBins(records, contact) {
     const requestedBinSize = Number(contact.binSize);
     const binSize = Number.isSafeInteger(requestedBinSize) && requestedBinSize > 0 ? requestedBinSize : 10;
-    const resourceBudget = getContactResourceBudget();
+    // a comparison dataset is binned off the page (comparison.worker.js) and
+    // bounded by the comparison limits, not the Contact page's timing probe,
+    // which a busy machine lowers below one replicate of the ZIKV example
+    const resourceBudget = contact.budget === "comparison" ? COMPARISON_DATASET_BUDGET : getContactResourceBudget();
     const maximumCells = resourceBudget.maximumCells;
     const maximumBinContributions = resourceBudget.maximumBinContributions;
     // cells in first-seen order: Map from cellKey() to a row of the arrays
@@ -1826,7 +1830,8 @@
       measure: config.measure === "support" ? "support" : "records",
       colourCap: "95",
       scale: "linear",
-      orientation: "normalised"
+      orientation: "normalised",
+      budget: "comparison"
     };
   }
 

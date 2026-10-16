@@ -607,20 +607,106 @@ def _parametric_fit(means: np.ndarray, disps: np.ndarray):
     raise ValueError("parametric dispersion fit did not converge")
 
 
+def _locfit_eig_dec(z: list) -> list:
+    """locfit's ``eig_dec`` (m_eigen.c): cyclic Jacobi on a 3 x 3 matrix in place; returns
+    the eigenvectors (columns)."""
+    q = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    for _ in range(20):
+        moved = False
+        for i in range(3):
+            for j in range(i + 1, 3):
+                if z[i * 3 + j] * z[i * 3 + j] > 1.0e-15 * abs(z[i * 3 + i] * z[j * 3 + j]):
+                    c = (z[j * 3 + j] - z[i * 3 + i]) / 2
+                    s = -z[i * 3 + j]
+                    r = math.sqrt(c * c + s * s)
+                    c /= r
+                    s = math.sqrt((1 - c) / 2) * (1 if s > 0 else -1)
+                    c = math.sqrt((1 + c) / 2)
+                    for k in range(3):
+                        u, v = z[i * 3 + k], z[j * 3 + k]
+                        z[i * 3 + k] = u * c + v * s
+                        z[j * 3 + k] = v * c - u * s
+                    for k in range(3):
+                        u, v = z[k * 3 + i], z[k * 3 + j]
+                        z[k * 3 + i] = u * c + v * s
+                        z[k * 3 + j] = v * c - u * s
+                    z[i * 3 + j] = z[j * 3 + i] = 0.0
+                    for k in range(3):
+                        u, v = q[k * 3 + i], q[k * 3 + j]
+                        q[k * 3 + i] = u * c + v * s
+                        q[k * 3 + j] = v * c - u * s
+                    moved = True
+        if not moved:
+            break
+    return q
+
+
+def _seqsum(a: np.ndarray) -> float:
+    # left-to-right like locfit's loops (np.sum is pairwise)
+    return float(np.cumsum(a)[-1]) if len(a) else 0.0
+
+
+def _locfit_fit(x: np.ndarray, y: np.ndarray, w: np.ndarray, kw: np.ndarray, x0: float):
+    """One local (or global) Gaussian fit at ``x0`` over the points ``x, y`` (prior weights
+    ``w``, kernel weights ``kw``, in locfit's order).
+
+    locfit starts at the weighted mean (``reginit``) and takes one Newton step (``max_nr``
+    stops after it for the Gaussian family), solving ``X'WX d = X'W r`` through the eigen
+    decomposition of the correlation-scaled ``X'WX`` (``JAC_EIGD``).  Components with an
+    eigenvalue <= 1e-8 times the largest are not divided (``eig_solve``), which regularizes
+    fits on fewer than three distinct points and nearly collinear ones.  Returns None when
+    no point has weight (``LF_NOPT``: locfit then keeps the previous coefficients).
+    """
+    s1 = _seqsum(kw * (w * y))
+    s0 = _seqsum(kw * w)
+    if s0 == 0:
+        return None
+    c0 = s1 / s0
+    dx = x - x0
+    basis = (np.ones_like(dx), dx, dx * dx / 2)
+    zd = w * (y - c0)
+    c = kw * w
+    f1 = [_seqsum(basis[j] * kw * zd) for j in range(3)]
+    z = [_seqsum(c * basis[j] * basis[k]) for j in range(3) for k in range(3)]
+    dg = [0.0 if z[j * 4] <= 0 else 1 / math.sqrt(z[j * 4]) for j in range(3)]
+    for j in range(3):
+        for k in range(3):
+            z[j * 3 + k] *= dg[j] * dg[k]
+    q = _locfit_eig_dec(z)
+    tol = 1.0e-8 * max(z[0], z[4], z[8])
+    v = [f1[j] * dg[j] for j in range(3)]
+    wk = [0.0, 0.0, 0.0]
+    for j in range(3):
+        for k in range(3):
+            wk[j] += q[k * 3 + j] * v[k]
+        if z[j * 4] > tol:
+            wk[j] /= z[j * 4]
+    coef = [c0, 0.0, 0.0]
+    for j in range(3):
+        d = 0.0
+        for k in range(3):
+            d += q[j * 3 + k] * wk[k]
+        coef[j] += d * dg[j]
+    return coef
+
+
 def _local_fit(means: np.ndarray, disps: np.ndarray, query: np.ndarray, *, alpha: float = 0.7,
                cut: float = 0.8) -> np.ndarray:
-    """localDispersionFit: ``locfit(log(disp) ~ log(mean), weights = mean)``.
+    """localDispersionFit: ``locfit(log(disp) ~ log(mean), weights = mean)``, then predict.
 
-    locfit's defaults: local quadratic, tricube kernel, nearest-neighbour
-    bandwidth covering ``alpha`` = 70% of the points (prior weights do not
-    enter the bandwidth), evaluated on an adaptive tree over the data range
-    (a cell is halved while its width exceeds ``cut`` times the smaller vertex
-    bandwidth) and interpolated with cubic Hermite polynomials from the
-    vertex values and slopes.  Outside the data range locfit continues the
-    boundary vertex's value and slope with the quadratic coefficient of the
-    global weighted fit ``lm(y ~ x + I(x^2), weights = mean)`` (its parametric
-    component) rather than the Hermite cubic, which would blow up.  This
-    reproduces R's ``predict`` to about 1e-7.
+    locfit's defaults: local quadratic (basis 1, dx, dx^2 / 2), tricube kernel,
+    nearest-neighbour bandwidth covering ``alpha`` = 70% of the points (prior weights do
+    not enter the bandwidth), the global weighted quadratic as parametric component,
+    evaluated on an adaptive tree over the data range (a cell is halved while its width
+    exceeds ``cut`` times the smaller positive vertex bandwidth) and interpolated with cubic
+    Hermite polynomials from the vertex values and slopes of the residual from the
+    parametric component; beyond the data range that residual is continued linearly.  The
+    arithmetic follows locfit 1.5-9.12's C source step by step (sequential sums, its Jacobi
+    solver), because fits on a handful of points are degenerate or nearly so and the result
+    depends on how locfit regularizes them (``_locfit_fit``); a vertex without points keeps
+    the previous vertex's fit.  Like locfit this raises "newsplit: out of vertex space" when
+    the tree needs more than its 2 * floor(5 / (alpha * cut) + 1) vertices (ties that make
+    the bandwidth 0, for instance).
     """
     keep = disps >= MIN_DISP * 10
     if not keep.any():
@@ -629,68 +715,129 @@ def _local_fit(means: np.ndarray, disps: np.ndarray, query: np.ndarray, *, alpha
     yv = np.log(disps[keep])
     w0 = means[keep]
     n = len(x)
-    # the floor(n * alpha)-th nearest point; 90 * 0.7 is 62.999… in floating point
-    k = max(0, min(n, math.floor(n * alpha + 1e-9)) - 1)
+    # the floor(n * alpha)-th nearest point; locfit adds 1e-12 so that 90 * 0.7 = 62.999…
+    # counts as 63
+    nn = int(math.floor(n * alpha + 1e-12))
+    max_vertices = int((5 * (1 / alpha) / min(1.0, cut) + 1) * 2)  # atree_guessnv
+    ordered = bool(np.all(x[1:] >= x[:-1]))
+    lo, hi = float(x.min()), float(x.max())
+    xbar = _seqsum(x * w0) / _seqsum(w0)
+    # parametric component: the global quadratic, centred at the weighted mean
+    pc = _locfit_fit(x, yv, w0, np.ones(n), xbar)
+
+    def pc_value(x1):
+        dx = x1 - xbar
+        return pc[0] * 1.0 + pc[1] * dx + pc[2] * (dx * dx / 2)
+
+    last = [pc]
 
     def vertex(x0: float) -> Tuple[float, float, float]:
+        # fit at a vertex: value and slope minus the parametric component, bandwidth
         d = np.abs(x - x0)
-        h = float(np.partition(d, k)[k])
-        if h <= 0:
-            h = float(d.max()) or 1.0
-        u = d / h
-        w = np.where(u < 1, w0 * (1 - u ** 3) ** 3, 0.0)
-        t = x - x0
-        sw = [float(np.sum(w * t ** p)) for p in range(5)]
-        sy = [float(np.sum(w * yv * t ** p)) for p in range(3)]
-        a = np.array([[sw[0], sw[1], sw[2]], [sw[1], sw[2], sw[3]], [sw[2], sw[3], sw[4]]])
-        try:
-            coef = np.linalg.solve(a, np.array(sy))
-        except np.linalg.LinAlgError:
-            coef = np.array([sy[0] / sw[0] if sw[0] > 0 else float(np.mean(yv)), 0.0, 0.0])
-        return float(coef[0]), float(coef[1]), h
+        h = float(np.partition(d, nn - 1)[nn - 1]) if nn >= 1 else 0.0
 
-    lo, hi = float(x.min()), float(x.max())
-    verts = {lo: vertex(lo)}
-    if hi > lo:
-        verts[hi] = vertex(hi)
-        stack = [(lo, hi)]
-        while stack:
-            a, b = stack.pop()
-            if (b - a) > cut * min(verts[a][2], verts[b][2]) and len(verts) < 4096:
-                m = (a + b) / 2
-                verts[m] = vertex(m)
-                stack.extend([(a, m), (m, b)])
-    xs = np.array(sorted(verts))
+        def kernel(di):
+            if h == 0:
+                return np.where(di == 0, 1.0, 0.0)
+            u = di / h
+            t = 1 - u * u * u
+            return np.where(u > 1, 0.0, t * t * t)
+
+        if ordered:
+            # nbhd1: walk left from the closest point, then right, while weights are > 0
+            if x0 <= x[0]:
+                zc = 0
+            elif x0 >= x[n - 1]:
+                zc = n - 1
+            else:
+                r = int(np.searchsorted(x, x0, side="right"))
+                l = r - 1
+                zc = r if (x0 - x[l]) > (x[r] - x0) else l
+            if x[zc] > x0:
+                zc -= 1
+            left = kernel(x0 - x[zc::-1]) if zc >= 0 else np.zeros(0)
+            right = kernel(x[zc + 1:] - x0)
+            nl = int(np.argmax(~(left > 0))) if not np.all(left > 0) else len(left)
+            nr = int(np.argmax(~(right > 0))) if not np.all(right > 0) else len(right)
+            idx = np.concatenate([np.arange(zc, zc - nl, -1), np.arange(zc + 1, zc + 1 + nr)]).astype(int)
+            kw = np.concatenate([left[:nl], right[:nr]])
+        else:
+            wt = kernel(d)
+            idx = np.nonzero(wt > 0)[0]
+            kw = wt[idx]
+        coef = _locfit_fit(x[idx], yv[idx], w0[idx], kw, x0) or last[0]
+        last[0] = coef
+        slope = pc[0] * 0.0 + pc[1] * 1.0 + pc[2] * (x0 - xbar)
+        return coef[0] - pc_value(x0), coef[1] - slope, h
+
+    vx = [lo, hi]
+    vf = [vertex(lo), vertex(hi)]
+
+    def needs_split(a: int, b: int) -> bool:
+        # atree_split: wider than cut times the smallest positive vertex bandwidth (40% of
+        # the range when no vertex has one)
+        hmin = 0.0
+        for h in (vf[a][2], vf[b][2]):
+            if h > 0 and (hmin == 0 or h < hmin):
+                hmin = h
+        if hmin == 0:
+            # all x tied: 0 / 0 in C, never split
+            return hi > lo and cut < 2 * (vx[b] - vx[a]) / (hi - lo)
+        return cut < (vx[b] - vx[a]) / hmin
+
+    # atree_grow: depth first, left half first (the order matters when a vertex has no
+    # points and inherits the previous fit); tree nodes are cells (a, b)
+    cells = [(0, 1)]
+    kids = {}
+
+    def grow(node: int) -> None:
+        a, b = cells[node]
+        if not needs_split(a, b):
+            return
+        if len(vx) == max_vertices:
+            raise ValueError("local dispersion fit failed (locfit: newsplit: out of vertex space)")
+        vx.append((vx[a] + vx[b]) / 2)
+        vf.append(vertex(vx[-1]))
+        m = len(vx) - 1
+        cells.extend([(a, m), (m, b)])
+        kids[node] = (len(cells) - 2, len(cells) - 1)
+        grow(kids[node][0])
+        grow(kids[node][1])
+
+    grow(0)
     lq = np.log(query)
-    if len(xs) == 1:
-        return np.full(len(query), math.exp(verts[lo][0]))
-    f = np.array([verts[v][0] for v in xs])
-    dv = np.array([verts[v][1] for v in xs])
-    i = np.clip(np.searchsorted(xs, lq) - 1, 0, len(xs) - 2)
-    a, b = xs[i], xs[i + 1]
-    length = b - a
-    t = (lq - a) / length
-    val = ((2 * t ** 3 - 3 * t ** 2 + 1) * f[i] + (t ** 3 - 2 * t ** 2 + t) * length * dv[i]
-           + (-2 * t ** 3 + 3 * t ** 2) * f[i + 1] + (t ** 3 - t ** 2) * length * dv[i + 1])
-    outside = (lq < lo) | (lq > hi)
-    if outside.any():
-        xm = float(np.sum(w0 * x) / np.sum(w0))
-        c = x - xm
-        gw = [float(np.sum(w0 * c ** p)) for p in range(5)]
-        gy = [float(np.sum(w0 * yv * c ** p)) for p in range(3)]
-        try:
-            curvature = float(np.linalg.solve(np.array([[gw[0], gw[1], gw[2]], [gw[1], gw[2], gw[3]],
-                                                        [gw[2], gw[3], gw[4]]]), np.array(gy))[2])
-        except np.linalg.LinAlgError:
-            curvature = 0.0
-        if not math.isfinite(curvature):
-            curvature = 0.0
-        edge = np.where(lq < lo, lo, hi)
-        dx = lq - edge
-        fe = np.where(lq < lo, verts[lo][0], verts[hi][0])
-        se = np.where(lq < lo, verts[lo][1], verts[hi][1])
-        val = np.where(outside, fe + se * dx + curvature * dx * dx, val)
-    return np.exp(val)
+    # atree_int: descend to the cell; outside the data range that is the edge cell
+    ca = np.array([vx[a] for a, _ in cells])
+    cb = np.array([vx[b] for _, b in cells])
+    kid_lo = np.array([kids.get(c, (c, c))[0] for c in range(len(cells))])
+    kid_hi = np.array([kids.get(c, (c, c))[1] for c in range(len(cells))])
+    node = np.zeros(len(lq), dtype=int)
+    for _ in range(len(cells)):
+        inner = kid_lo[node] != node
+        if not inner.any():
+            break
+        go_left = 2 * (lq - ca[node]) < cb[node] - ca[node]
+        node = np.where(inner, np.where(go_left, kid_lo[node], kid_hi[node]), node)
+    va, vb = ca[node], cb[node]
+    vfa = np.array(vf)
+    fa = vfa[[cells[c][0] for c in range(len(cells))]][node]
+    fb = vfa[[cells[c][1] for c in range(len(cells))]][node]
+    # rectcell_interp / hermite2: cubic inside the cell, linear beyond the data range
+    length = vb - va
+    with np.errstate(all="ignore"):
+        t = (lq - va) / length
+    p1 = t * t * (3 - 2 * t)
+    phi0 = np.where(t < 0, 1.0, np.where(t > 1, 0.0, 1 - p1))
+    phi1 = np.where(t < 0, 0.0, np.where(t > 1, 1.0, p1))
+    phi2 = np.where(t < 0, t, np.where(t > 1, 0.0, t * (1 - t) * (1 - t)))
+    phi3 = np.where(t < 0, 0.0, np.where(t > 1, t - 1, t * t * (t - 1)))
+    flat = length == 0
+    phi0, phi1, phi2, phi3 = (np.where(flat, 1.0, phi0), np.where(flat, 0.0, phi1),
+                              np.where(flat, 0.0, phi2), np.where(flat, 0.0, phi3))
+    phi2 = phi2 * length
+    phi3 = phi3 * length
+    val = phi0 * fa[:, 0] + phi1 * fb[:, 0] + phi2 * fa[:, 1] + phi3 * fb[:, 1]
+    return np.exp(val + pc_value(lq))
 
 
 # --- the whole test --------------------------------------------------------------
@@ -756,6 +903,10 @@ def deseq_two_conditions(counts: np.ndarray, condition_one: Sequence[bool], *, a
 
     # trend
     use_fit = disp_gene > 100 * MIN_DISP
+    if not use_fit.any():
+        # estimateDispersionsFit stops here
+        raise ValueError("all gene-wise dispersion estimates are within 2 orders of magnitude from the minimum "
+                         "value, and so the standard curve fitting techniques will not work")
     try:
         coefs = _parametric_fit(base_mean[use_fit], disp_gene[use_fit])
         disp_fit = coefs[0] + coefs[1] / base_mean

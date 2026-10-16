@@ -18,6 +18,15 @@ counts are random rows of the reproduce_zikv comparisons:
   columns baseMean lfc padj dispFit dispersion) whose trend is
   fitted on 690 cells: locfit's span 0.7 takes the floor(690 * 0.7) = 483rd
   nearest point, though 690 * 0.7 is 482.999... in floating point.
+- ``local_four_points``: a synthetic 3 vs 3 table of 7 rows (R ``DESeq()``
+  defaults; columns as ``bandwidth_690``) whose trend falls back to locfit on
+  only 4 gene-wise estimates; ``local_vertex_space``: a 3-row table where R
+  stops with locfit's "newsplit: out of vertex space" (counts only).
+- ``local_small_fits``: locfit itself, ``locfit(logDisps ~ logMeans, weights
+  = means)`` then ``exp(predict())`` as in ``localDispersionFit``, on 2-8
+  points (random, wide, tied and equispaced means; scratch generator, kept as
+  ``case means disps`` and ``case q p``; ``p`` is NA where R stops with "out of
+  vertex space").
 """
 import json
 import math
@@ -114,8 +123,55 @@ class DeseqMatchesR(unittest.TestCase):
         np.testing.assert_allclose(res["dispFit"], r[:, 3], rtol=1e-6)
         np.testing.assert_allclose(res["dispersion"], r[:, 4], rtol=1e-6)
 
+    def test_local_fit_on_a_few_points(self):
+        # degenerate local fits (one or two points in the window, a vertex with
+        # no points, nearly collinear windows) as locfit solves them
+        data, pred = {}, {}
+        with open(GOLDEN / "local_small_fits.data.tsv") as handle:
+            handle.readline()
+            for line in handle:
+                case, mean, disp = line.split("\t")
+                data.setdefault(case, []).append((float(mean), float(disp)))
+        with open(GOLDEN / "local_small_fits.R.tsv") as handle:
+            handle.readline()
+            for line in handle:
+                case, q, p = line.split("\t")
+                pred.setdefault(case, []).append((float(q), math.nan if p.strip() == "NA" else float(p)))
+        for case, rows in data.items():
+            means, disps = np.array(rows).T
+            q, p = np.array(pred[case]).T
+            with self.subTest(case=case):
+                if np.isnan(p).all():
+                    with self.assertRaisesRegex(ValueError, "out of vertex space"):
+                        deseq._local_fit(means, disps, q)
+                else:
+                    np.testing.assert_allclose(deseq._local_fit(means, disps, q), p, rtol=1e-8)
+
+    def test_local_fit_with_four_points(self):
+        ids, counts, one, expected = _load("local_four_points")
+        res = deseq.deseq_two_conditions(counts, one)
+        self.assertEqual(res["fitType"], "local")
+        r = np.array([expected[i] for i in ids])  # baseMean lfc padj dispFit dispersion
+        np.testing.assert_allclose(res["dispFit"], r[:, 3], rtol=1e-9)
+        np.testing.assert_allclose(res["dispersion"], r[:, 4], rtol=1e-5)
+        np.testing.assert_allclose(res["padj"], r[:, 2], rtol=1e-4)
+
+    def test_local_fit_out_of_vertex_space(self):
+        with open(GOLDEN / "local_vertex_space.counts.tsv") as handle:
+            handle.readline()
+            counts = np.array([[int(v) for v in line.split("\t")[1:]] for line in handle])
+        with self.assertRaisesRegex(ValueError, "out of vertex space"):
+            deseq.deseq_two_conditions(counts, [True, True, True, False, False, False])
+
 
 class Helpers(unittest.TestCase):
+    def test_no_trend_when_every_dispersion_is_at_the_minimum(self):
+        # R estimateDispersionsFit: "all gene-wise dispersion estimates are within
+        # 2 orders of magnitude from the minimum value ..."
+        counts = np.array([[5, 15, 2, 9], [1, 1, 2, 2], [18, 29, 7, 11]])
+        with self.assertRaisesRegex(ValueError, "within 2 orders of magnitude"):
+            deseq.deseq_two_conditions(counts, [True, True, False, False])
+
     def test_no_cell_without_zero_has_no_size_factors(self):
         # R: "every gene contains at least one zero, cannot compute log geometric means"
         counts = np.array([[5, 0, 3, 4], [2, 6, 0, 1], [0, 7, 8, 9], [3, 3, 3, 0]])

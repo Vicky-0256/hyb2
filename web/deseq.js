@@ -1413,7 +1413,134 @@
     throw new Error("parametric dispersion fit did not converge");
   }
 
-  // localDispersionFit: locfit(log(disp) ~ log(mean), weights = mean)
+  // ---- locfit, as DESeq2's localDispersionFit calls it -----------------------------------
+  // locfit(log(disp) ~ log(mean), weights = mean) with the defaults: local
+  // quadratic (basis 1, dx, dx^2 / 2), tricube kernel, nearest-neighbour span
+  // 0.7, global quadratic as parametric component, adaptive tree with cut 0.8
+  // and cubic Hermite interpolation.  The arithmetic follows locfit 1.5-9.12's C
+  // source step by step (sequential sums, its Jacobi eigen solver), because
+  // fits on a handful of points are degenerate or nearly so and their result
+  // depends on how locfit regularizes them (see locfitFit).
+
+  // eig_dec (m_eigen.c): cyclic Jacobi on the 3 x 3 matrix z, in place;
+  // returns the eigenvectors (columns)
+  function locfitEigDec(z) {
+    const q = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    for (let iter = 0; iter < 20; iter += 1) {
+      let moved = false;
+      for (let i = 0; i < 3; i += 1) {
+        for (let j = i + 1; j < 3; j += 1) {
+          if (z[i * 3 + j] * z[i * 3 + j] > 1.0e-15 * Math.abs(z[i * 3 + i] * z[j * 3 + j])) {
+            let c = (z[j * 3 + j] - z[i * 3 + i]) / 2;
+            let s = -z[i * 3 + j];
+            const r = Math.sqrt(c * c + s * s);
+            c /= r;
+            s = Math.sqrt((1 - c) / 2) * (s > 0 ? 1 : -1);
+            c = Math.sqrt((1 + c) / 2);
+            for (let k = 0; k < 3; k += 1) {
+              const u = z[i * 3 + k];
+              const v = z[j * 3 + k];
+              z[i * 3 + k] = u * c + v * s;
+              z[j * 3 + k] = v * c - u * s;
+            }
+            for (let k = 0; k < 3; k += 1) {
+              const u = z[k * 3 + i];
+              const v = z[k * 3 + j];
+              z[k * 3 + i] = u * c + v * s;
+              z[k * 3 + j] = v * c - u * s;
+            }
+            z[i * 3 + j] = 0.0;
+            z[j * 3 + i] = 0.0;
+            for (let k = 0; k < 3; k += 1) {
+              const u = q[k * 3 + i];
+              const v = q[k * 3 + j];
+              q[k * 3 + i] = u * c + v * s;
+              q[k * 3 + j] = v * c - u * s;
+            }
+            moved = true;
+          }
+        }
+      }
+      if (!moved) {
+        break;
+      }
+    }
+    return q;
+  }
+
+  // One local (or global) Gaussian fit at x0 over the points idx with kernel
+  // weights kw: locfit starts at the weighted mean (reginit) and takes one
+  // Newton step (max_nr stops after it for the Gaussian family), solving
+  // X'WX d = X'W r through the eigen decomposition of the correlation-scaled
+  // X'WX (JAC_EIGD).  Components with eigenvalue <= 1e-8 * the largest are
+  // not divided (eig_solve), which regularizes fits on fewer than three
+  // distinct points and nearly collinear ones.  Returns null when no point
+  // has weight (LF_NOPT; locfit then keeps the previous coefficients).
+  function locfitFit(x, y, w0, idx, kw, m, x0) {
+    let s0 = 0;
+    let s1 = 0;
+    for (let a = 0; a < m; a += 1) {
+      const i = idx[a];
+      s1 += kw[a] * (w0[i] * y[i]);
+      s0 += kw[a] * w0[i];
+    }
+    if (s0 === 0) {
+      return null;
+    }
+    const c0 = s1 / s0;
+    const z = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const f1 = [0, 0, 0];
+    for (let a = 0; a < m; a += 1) {
+      const i = idx[a];
+      const dx = x[i] - x0;
+      const b = [1.0, dx, dx * dx / 2];
+      const zd = w0[i] * (y[i] - c0);
+      const c = kw[a] * w0[i];
+      for (let j = 0; j < 3; j += 1) {
+        f1[j] += b[j] * kw[a] * zd;
+      }
+      for (let j = 0; j < 3; j += 1) {
+        for (let k = 0; k < 3; k += 1) {
+          z[j * 3 + k] += c * b[j] * b[k];
+        }
+      }
+    }
+    const dg = [0, 0, 0];
+    for (let j = 0; j < 3; j += 1) {
+      dg[j] = z[j * 4] <= 0 ? 0.0 : 1 / Math.sqrt(z[j * 4]);
+    }
+    for (let j = 0; j < 3; j += 1) {
+      for (let k = 0; k < 3; k += 1) {
+        z[j * 3 + k] *= dg[j] * dg[k];
+      }
+    }
+    const q = locfitEigDec(z);
+    const tol = 1.0e-8 * Math.max(z[0], z[4], z[8]);
+    const v = [f1[0] * dg[0], f1[1] * dg[1], f1[2] * dg[2]];
+    const wk = [0, 0, 0];
+    for (let j = 0; j < 3; j += 1) {
+      for (let k = 0; k < 3; k += 1) {
+        wk[j] += q[k * 3 + j] * v[k];
+      }
+      if (z[j * 4] > tol) {
+        wk[j] /= z[j * 4];
+      }
+    }
+    const coef = [c0, 0.0, 0.0];
+    for (let j = 0; j < 3; j += 1) {
+      let d = 0.0;
+      for (let k = 0; k < 3; k += 1) {
+        d += q[j * 3 + k] * wk[k];
+      }
+      coef[j] += d * dg[j];
+    }
+    return coef;
+  }
+
+  // localDispersionFit: locfit(log(disp) ~ log(mean), weights = mean), then
+  // predict at the query means.  Throws as locfit does when the adaptive tree
+  // needs more vertices than it allocates ("newsplit: out of vertex space",
+  // e.g. ties make the bandwidth 0).
   function localFit(means, disps, query, alphaSpan, cut) {
     alphaSpan = alphaSpan == null ? 0.7 : alphaSpan;
     cut = cut == null ? 0.8 : cut;
@@ -1431,134 +1558,185 @@
     const yv = new Float64Array(n);
     const w0 = new Float64Array(n);
     keep.forEach(function (i, k) { x[k] = Math.log(means[i]); yv[k] = Math.log(disps[i]); w0[k] = means[i]; });
-    // floor(n * alpha) as locfit gets it: 90 * 0.7 is 62.999… in floating point
-    const kk = Math.max(0, Math.min(n, Math.floor(n * alphaSpan + 1e-9)) - 1);
+    // the floor(n * alpha)-th nearest point; locfit adds 1e-12 so that
+    // 90 * 0.7 = 62.999... counts as 63
+    const nn = Math.floor(n * alphaSpan + 1e-12);
+    // atree_guessnv: room for 2 * floor(5 / (alpha * cut) + 1) vertices
+    const maxVertices = Math.floor((5 * (1 / alphaSpan) / Math.min(1.0, cut) + 1) * 2);
+    let ordered = true;
+    let lo = x[0];
+    let hi = x[0];
+    for (let i = 1; i < n; i += 1) {
+      ordered = ordered && x[i] >= x[i - 1];
+      lo = Math.min(lo, x[i]);
+      hi = Math.max(hi, x[i]);
+    }
+    const all = new Int32Array(n);
+    const ones = new Float64Array(n).fill(1.0);
+    let sw = 0;
+    let xbar = 0;
+    for (let i = 0; i < n; i += 1) {
+      all[i] = i;
+      sw += w0[i];
+      xbar += x[i] * w0[i];
+    }
+    xbar /= sw;
+    // parametric component: the global quadratic, centred at the weighted mean
+    const pc = locfitFit(x, yv, w0, all, ones, n, xbar);
+    const pcValue = function (x1) {
+      const dx = x1 - xbar;
+      return pc[0] * 1.0 + pc[1] * dx + pc[2] * (dx * dx / 2);
+    };
+    const pcSlope = function (x1) {
+      return pc[0] * 0.0 + pc[1] * 1.0 + pc[2] * (x1 - xbar);
+    };
     const d = new Float64Array(n);
-    const w = new Float64Array(n);
-    const tmp = new Float64Array(n);
+    const idx = new Int32Array(n);
+    const kw = new Float64Array(n);
+    let last = pc;
+    // fit at a vertex; stores value and slope minus the parametric component
     function vertex(x0) {
       for (let i = 0; i < n; i += 1) {
         d[i] = Math.abs(x[i] - x0);
       }
-      let h = sortedCopy(d)[kk];
-      if (h <= 0) {
-        let mx = 0;
-        for (let i = 0; i < n; i += 1) { mx = Math.max(mx, d[i]); }
-        h = mx || 1.0;
-      }
-      for (let i = 0; i < n; i += 1) {
-        const u = d[i] / h;
-        w[i] = u < 1 ? w0[i] * Math.pow(1 - Math.pow(u, 3), 3) : 0.0;
-      }
-      const sw = [];
-      for (let p = 0; p < 5; p += 1) {
+      const h = nn >= 1 ? sortedCopy(d)[nn - 1] : 0.0;
+      const kernel = function (di) {
+        if (h === 0) {
+          return di === 0 ? 1.0 : 0.0;
+        }
+        let u = di / h;
+        if (u > 1) {
+          return 0.0;
+        }
+        u = 1 - u * u * u;
+        return u * u * u;
+      };
+      let m = 0;
+      if (ordered) {
+        // nbhd1: walk left from the closest point, then right
+        let zc;
+        if (x0 <= x[0]) {
+          zc = 0;
+        } else if (x0 >= x[n - 1]) {
+          zc = n - 1;
+        } else {
+          let l = 0;
+          let r = n - 1;
+          while (r - l > 1) {
+            zc = (r + l) >> 1;
+            if (x[zc] > x0) {
+              r = zc;
+            } else {
+              l = zc;
+            }
+          }
+          zc = (x0 - x[l]) > (x[r] - x0) ? r : l;
+        }
+        if (x[zc] > x0) {
+          zc -= 1;
+        }
+        for (let i = zc; i >= 0; i -= 1) {
+          const wt = kernel(x0 - x[i]);
+          if (!(wt > 0)) {
+            break;
+          }
+          idx[m] = i;
+          kw[m] = wt;
+          m += 1;
+        }
+        for (let i = zc + 1; i < n; i += 1) {
+          const wt = kernel(x[i] - x0);
+          if (!(wt > 0)) {
+            break;
+          }
+          idx[m] = i;
+          kw[m] = wt;
+          m += 1;
+        }
+      } else {
         for (let i = 0; i < n; i += 1) {
-          const t = x[i] - x0;
-          tmp[i] = w[i] * (p === 0 ? 1 : (p === 1 ? t : (p === 2 ? t * t : Math.pow(t, p))));
-        }
-        sw.push(npSum(tmp));
-      }
-      const sy = [];
-      for (let p = 0; p < 3; p += 1) {
-        for (let i = 0; i < n; i += 1) {
-          const t = x[i] - x0;
-          tmp[i] = w[i] * yv[i] * (p === 0 ? 1 : (p === 1 ? t : t * t));
-        }
-        sy.push(npSum(tmp));
-      }
-      let coef;
-      try {
-        coef = solve([[sw[0], sw[1], sw[2]], [sw[1], sw[2], sw[3]], [sw[2], sw[3], sw[4]]], sy);
-      } catch (error) {
-        coef = [sw[0] > 0 ? sy[0] / sw[0] : npMean(yv), 0.0, 0.0];
-      }
-      return [coef[0], coef[1], h];
-    }
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (let i = 0; i < n; i += 1) {
-      lo = Math.min(lo, x[i]);
-      hi = Math.max(hi, x[i]);
-    }
-    const verts = new Map();
-    verts.set(lo, vertex(lo));
-    if (hi > lo) {
-      verts.set(hi, vertex(hi));
-      const stack = [[lo, hi]];
-      while (stack.length) {
-        const pair = stack.pop();
-        const a = pair[0];
-        const b = pair[1];
-        if ((b - a) > cut * Math.min(verts.get(a)[2], verts.get(b)[2]) && verts.size < 4096) {
-          const mid = (a + b) / 2;
-          verts.set(mid, vertex(mid));
-          stack.push([a, mid], [mid, b]);
+          const wt = kernel(d[i]);
+          if (wt > 0) {
+            idx[m] = i;
+            kw[m] = wt;
+            m += 1;
+          }
         }
       }
+      const coef = locfitFit(x, yv, w0, idx, kw, m, x0) || last;
+      last = coef;
+      return [coef[0] - pcValue(x0), coef[1] - pcSlope(x0), h];
     }
-    const xs = Float64Array.from(verts.keys());
-    xs.sort();
+    const vx = [lo, hi];
+    const vf = [vertex(lo), vertex(hi)];
+    const child = new Map();
+    // atree_split: split while the cell is wider than cut times the smallest
+    // positive vertex bandwidth (or 40% of the range when there is none)
+    function needsSplit(a, b) {
+      let hmin = 0.0;
+      [vf[a][2], vf[b][2]].forEach(function (h) {
+        if (h > 0 && (hmin === 0 || h < hmin)) {
+          hmin = h;
+        }
+      });
+      const score = hmin === 0 ? 2 * (vx[b] - vx[a]) / (hi - lo) : (vx[b] - vx[a]) / hmin;
+      return cut < score;
+    }
+    // atree_grow: depth first, left half first (the order matters when a
+    // vertex has no points and inherits the previous fit)
+    function grow(a, b) {
+      if (!needsSplit(a, b)) {
+        return;
+      }
+      const key = Math.min(a, b) + "," + Math.max(a, b);
+      if (!child.has(key)) {
+        if (vx.length === maxVertices) {
+          throw new Error("local dispersion fit failed (locfit: newsplit: out of vertex space)");
+        }
+        vx.push((vx[a] + vx[b]) / 2);
+        child.set(key, vx.length - 1);
+        vf.push(vertex(vx[vx.length - 1]));
+      }
+      const mid = child.get(key);
+      grow(a, mid);
+      grow(mid, b);
+    }
+    grow(0, 1);
     const out = new Float64Array(query.length);
-    if (xs.length === 1) {
-      return out.fill(Math.exp(verts.get(lo)[0]));
-    }
-    // quadratic coefficient of lm(y ~ x + x^2, weights = w0): locfit's
-    // parametric component, which it uses to extrapolate
-    let curvature = 0.0;
-    {
-      const xm = npSum(Float64Array.from(x, function (v, i) { return w0[i] * v; })) / npSum(w0);
-      const gw = [];
-      const gy = [];
-      for (let p = 0; p < 5; p += 1) {
-        for (let i = 0; i < n; i += 1) { tmp[i] = w0[i] * Math.pow(x[i] - xm, p); }
-        gw.push(npSum(tmp));
-      }
-      for (let p = 0; p < 3; p += 1) {
-        for (let i = 0; i < n; i += 1) { tmp[i] = w0[i] * yv[i] * Math.pow(x[i] - xm, p); }
-        gy.push(npSum(tmp));
-      }
-      try {
-        curvature = solve([[gw[0], gw[1], gw[2]], [gw[1], gw[2], gw[3]], [gw[2], gw[3], gw[4]]], gy)[2];
-      } catch (error) {
-        curvature = 0.0;
-      }
-      if (!Number.isFinite(curvature)) {
-        curvature = 0.0;
-      }
-    }
     for (let k = 0; k < query.length; k += 1) {
       const lq = Math.log(query[k]);
-      let a0 = 0;
-      let a1 = xs.length;
-      while (a0 < a1) { // searchsorted left
-        const mid = (a0 + a1) >> 1;
-        if (xs[mid] < lq) {
-          a0 = mid + 1;
+      // atree_int: descend to the cell; outside the range this is the edge cell
+      let a = 0;
+      let b = 1;
+      while (needsSplit(a, b)) {
+        const mid = child.get(Math.min(a, b) + "," + Math.max(a, b));
+        if (2 * (lq - vx[a]) < vx[b] - vx[a]) {
+          b = mid;
         } else {
-          a1 = mid;
+          a = mid;
         }
       }
-      if (lq < lo || lq > hi) {
-        // outside the data range locfit continues the boundary vertex's value
-        // and slope with the curvature of the global weighted quadratic
-        const edge = lq < lo ? lo : hi;
-        const fe = verts.get(edge);
-        const dx = lq - edge;
-        out[k] = Math.exp(fe[0] + fe[1] * dx + curvature * dx * dx);
-        continue;
+      // rectcell_interp / hermite2 on the residual from the parametric
+      // component: cubic inside the cell, linear beyond the data range
+      const length = vx[b] - vx[a];
+      let phi;
+      if (length === 0) {
+        phi = [1, 0, 0, 0];
+      } else {
+        const t = (lq - vx[a]) / length;
+        if (t < 0) {
+          phi = [1, 0, t, 0];
+        } else if (t > 1) {
+          phi = [0, 1, 0, t - 1];
+        } else {
+          const p1 = t * t * (3 - 2 * t);
+          phi = [1 - p1, p1, t * (1 - t) * (1 - t), t * t * (t - 1)];
+        }
       }
-      const i = Math.min(Math.max(a0 - 1, 0), xs.length - 2);
-      const a = xs[i];
-      const b = xs[i + 1];
-      const fa = verts.get(a);
-      const fb = verts.get(b);
-      const length = b - a;
-      const t = (lq - a) / length;
-      const t2 = t * t;
-      const t3 = t2 * t;
-      const val = (2 * t3 - 3 * t2 + 1) * fa[0] + (t3 - 2 * t2 + t) * length * fa[1] +
-        (-2 * t3 + 3 * t2) * fb[0] + (t3 - t2) * length * fb[1];
-      out[k] = Math.exp(val);
+      phi[2] *= length;
+      phi[3] *= length;
+      const val = phi[0] * vf[a][0] + phi[1] * vf[b][0] + phi[2] * vf[a][1] + phi[3] * vf[b][1];
+      out[k] = Math.exp(val + pcValue(lq));
     }
     return out;
   }
@@ -1835,6 +2013,11 @@
       if (dispGene[i] > 100 * MIN_DISP) {
         useFit.push(i);
       }
+    }
+    if (!useFit.length) {
+      // estimateDispersionsFit stops here
+      throw new Error("all gene-wise dispersion estimates are within 2 orders of magnitude from the minimum value, " +
+        "and so the standard curve fitting techniques will not work");
     }
     const fitMeans = Float64Array.from(useFit, function (i) { return baseMean[i]; });
     const fitDisps = Float64Array.from(useFit, function (i) { return dispGene[i]; });

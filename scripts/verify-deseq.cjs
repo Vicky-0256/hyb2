@@ -264,6 +264,62 @@ Object.keys(SYNTH).forEach(function (name) {
   });
 }
 
+// ---- locfit on a handful of points (golden local_small_fits: R locfit on
+// 2-8 points, random, wide, tied and equispaced means; p is NA where R stops
+// with "newsplit: out of vertex space").  Windows with one or two points, a
+// vertex with no points and nearly collinear windows are solved as locfit
+// does (one Newton step from the weighted mean, eigen solve that leaves
+// eigenvalues <= 1e-8 * max undivided, previous fit kept for an empty window).
+{
+  const golden = path.join(repository, "pipeline", "tests", "golden", "deseq", "local_small_fits");
+  const lines = function (file) { return fs.readFileSync(golden + file, "utf8").trim().split("\n").slice(1).map(function (l) { return l.split("\t"); }); };
+  const data = {};
+  const pred = {};
+  lines(".data.tsv").forEach(function (row) { (data[row[0]] = data[row[0]] || []).push([Number(row[1]), Number(row[2])]); });
+  lines(".R.tsv").forEach(function (row) { (pred[row[0]] = pred[row[0]] || []).push([Number(row[1]), row[2] === "NA" ? NaN : Number(row[2])]); });
+  Object.keys(data).forEach(function (name) {
+    const means = Float64Array.from(data[name], function (r) { return r[0]; });
+    const disps = Float64Array.from(data[name], function (r) { return r[1]; });
+    const q = Float64Array.from(pred[name], function (r) { return r[0]; });
+    if (pred[name].every(function (r) { return Number.isNaN(r[1]); })) {
+      assert.throws(function () { D.localFit(means, disps, q); }, /out of vertex space/, name);
+      return;
+    }
+    const out = D.localFit(means, disps, q);
+    pred[name].forEach(function (r, i) { close(out[i], r[1], 1e-8, name + " at " + r[0]); });
+  });
+}
+
+// ---- DESeq2 end to end with a locfit trend on 4 points (golden
+// local_four_points, R DESeq() defaults; columns baseMean lfc padj dispFit
+// dispersion), and a 3-row table where R stops with locfit's "newsplit: out
+// of vertex space" (local_vertex_space)
+{
+  const golden = path.join(repository, "pipeline", "tests", "golden", "deseq");
+  const lines = function (file) { return fs.readFileSync(path.join(golden, file), "utf8").trim().split("\n").slice(1).map(function (l) { return l.split("\t"); }); };
+  const table = function (counts) {
+    const t = new Float64Array(counts.length * 6);
+    counts.forEach(function (row, i) { for (let j = 0; j < 6; j += 1) { t[i * 6 + j] = Number(row[j + 1]); } });
+    return t;
+  };
+  const counts = lines("local_four_points.counts.tsv");
+  const expected = lines("local_four_points.R.tsv");
+  const r = D.deseqTwoConditions(table(counts), counts.length, 6, [true, true, true, false, false, false]);
+  assert.equal(r.fitType, "local");
+  expected.forEach(function (row, i) {
+    assert.equal(row[0], counts[i][0]);
+    close(r.dispFit[i], Number(row[4]), 1e-9, row[0] + " dispFit");
+    close(r.dispersion[i], Number(row[5]), 1e-5, row[0] + " dispersion");
+    close(r.padj[i], Number(row[3]), 1e-4, row[0] + " padj");
+  });
+  const tiny = lines("local_vertex_space.counts.tsv");
+  assert.throws(function () { D.deseqTwoConditions(table(tiny), tiny.length, 6, [true, true, true, false, false, false]); }, /out of vertex space/);
+  // estimateDispersionsFit stops when no gene-wise estimate is above 100 * minDisp
+  assert.throws(function () {
+    D.deseqTwoConditions(Float64Array.from([5, 15, 2, 9, 1, 1, 2, 2, 18, 29, 7, 11]), 3, 4, [true, true, false, false]);
+  }, /within 2 orders of magnitude/);
+}
+
 // ---- the bucketed interaction split = the plain quadratic one
 {
   let s = 7;

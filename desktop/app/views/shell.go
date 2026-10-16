@@ -222,6 +222,12 @@ func (a *App) taskItem(c *ui.Context, task model.Task) {
 					a.Navigate("structure", map[string]any{"structureId": task.TaskID})
 				}
 			}
+			if task.Status == "succeeded" && task.Kind == "energy" {
+				if ui.Button(c, "View results").Clicked() {
+					a.drawerOpen = false
+					a.Navigate("compare", nil)
+				}
+			}
 			if task.Status == "succeeded" && task.Kind == "compare" {
 				if ui.Button(c, "View results").Clicked() {
 					a.drawerOpen = false

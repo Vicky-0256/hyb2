@@ -97,6 +97,25 @@ task drawer and Preferences.
    R), hyb2's similarity heatmap of the two groups (bin/plot_similarity_map
    on each group's merged map; identical to the CLI on the ZIKV ZAFR vs ZILM
    virion data) and the CPM quick view; Locate, Region and Fold A & B.
+   Two panels per test, for a lineage comparison figure:
+   - *Enriched regions*: for each direction, the most significant merged
+     interaction (padj < 0.01) that the enriched lineage's own whole-RNA
+     fold forms (a pair within ±50 nt of both arms), its two windows
+     (those pairs ± 15 nt) cut from both lineages' folds and drawn as 2D
+     diagrams (RNAplot layout, windows joined by a 3-nt linker), with pairs
+     inside / between the windows and the partners outside; another
+     candidate, the reach and flank can be chosen (`structure_regions`,
+     `runtime/regions.py`).  B's fold, and cells of condition two, move onto
+     A's coordinates by the Structure page's alignment (`runtime/seqmap.py`
+     is a port of `app/seqmap`).
+   - *Folding energy*: an `energy` task cofolds (RNAcofold, ViennaRNA
+     defaults) 2 × 40 nt around the arms of every interaction with
+     padj < 0.01 in both lineages' sequences and shows violins with a paired
+     t-test per direction (`runtime/energy.py`; stored as
+     `comparisons/<id>/energy_L40.tsv/.json`, also in the HTML report).
+   On ZIKV AFR vs ILM both reproduce reproduce_zikv/analysis
+   (select_regions_cplfold.py, window_from_structure.py,
+   folding_energy.py + folding_energy_stats.R).
 5. **Structure**: CPLfold genome and window folds with chimera evidence, and
    the arc viewer comparing two structures.  A structure folded on another
    reference (another strain) is moved onto A's coordinates by a banded

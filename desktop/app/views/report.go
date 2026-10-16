@@ -244,6 +244,13 @@ func reportReadTest(b core.Backend, pr *model.Project, e comparisonEntry, label 
 	x.Cells = cmpSignificantCells(&result, 0)
 	x.CellsTotal = max(result.CellsTotal, int64(len(x.Cells)))
 	x.SimCells = cmpSimilarityCells(&result)
+	// the folding energies, when computed (an older runtime may not know the operation)
+	if raw, err := b.ProjectOp(pr.Path, "read_energy", core.Obj{"comparison_id": e.ID}); err == nil {
+		var energy energyResult
+		if model.Decode(raw, &energy) == nil && energy.Summary != nil && energy.Rows != nil {
+			x.Energy = &energy
+		}
+	}
 	for _, g := range e.Genes {
 		x.Length = max(x.Length, pr.GeneLength(g))
 	}

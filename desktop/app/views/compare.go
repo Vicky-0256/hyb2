@@ -799,7 +799,7 @@ func (p *comparePage) controls(c *ui.Context) {
 						ui.NumberInput(c.Key("cmp-qmin"), &p.quick.minCount, 0, 1e6, 1).Width(110).Label("Quick view minimum count")
 					})
 				})
-				ui.Text(c, "The test follows hyb2_compare: DESeq2 Wald test (condition one vs two, alpha 0.01, independent filtering); cells with padj below the cutoff are significant, and significant cells within the merge range of a stronger one are merged into it. The similarity heatmap follows plot_similarity_map: each condition's replicates are summed into one map (as if their .hyb files were concatenated), cells below the similarity minimum are dropped from each map, and a cell in both maps shows the smaller count (1 keeps every cell, as hyb2 does).").
+				ui.Text(c, "Only the differential test says whether a contact differs: it uses the replicates as the noise estimate and gives a padj per 10-nt cell, so it needs at least two biological replicates per condition. The quick view and the similarity heatmap only describe counts. The test follows hyb2_compare: DESeq2 Wald test (condition one vs two, alpha 0.01, independent filtering); cells with padj below the cutoff are significant, and significant cells within the merge range of a stronger one are merged into it. The similarity heatmap follows plot_similarity_map: each condition's replicates are summed into one map (as if their .hyb files were concatenated), cells below the similarity minimum are dropped from each map, and a cell in both maps shows the smaller count (1 keeps every cell, as hyb2 does).").
 					FontSize(12).TextColor(t.TextMuted)
 			})
 		})
@@ -979,8 +979,8 @@ func (p *comparePage) results(c *ui.Context) {
 		}
 		ui.Row(c).Gap(10).Wrap().Children(func() {
 			cmpStat(c, "Significant cells", FormatNumber(s.Significant), t.Text)
-			cmpStat(c, "Higher in A", FormatNumber(s.SignificantUp), cmpRed)
-			cmpStat(c, "Higher in B", FormatNumber(s.SignificantDown), cmpBlue)
+			cmpStat(c, "Higher in "+ctx.LabelA, FormatNumber(s.SignificantUp), cmpRed)
+			cmpStat(c, "Higher in "+ctx.LabelB, FormatNumber(s.SignificantDown), cmpBlue)
 			cmpStat(c, "Interactions A / B", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text).
 				Tooltip("Merged interactions higher in A / higher in B")
 			if n := len(e.SamplesOne); n > 0 && n < len(sizeFactors) {
@@ -990,6 +990,8 @@ func (p *comparePage) results(c *ui.Context) {
 				cmpStat(c, "Size factors", strings.Join(sizeFactors, " "), t.Text)
 			}
 		})
+		ui.Text(c, "padj is corrected over every tested cell. Before reporting an interaction, check that each replicate supports it (open the region in Explore for each sample): a small padj with a low mean count can still come from one replicate.").
+			FontSize(12).TextColor(t.TextMuted)
 		if result.Truncated {
 			ui.Text(c, fmt.Sprintf("The map shows the %s strongest of %s significant cells.",
 				FormatNumber(int64(len(result.Cells.X))), FormatNumber(result.CellsTotal))).FontSize(12).TextColor(t.TextMuted)
@@ -1258,8 +1260,8 @@ func (p *comparePage) interactionTable(c *ui.Context, shown []cmpInteraction) {
 		ui.Text(c, "No significant interaction in this direction.").TextColor(t.TextMuted)
 		return
 	}
-	cols := []ui.TableColumn{{Title: "Arm 1", Width: 112}, {Title: "Arm 2", Width: 112},
-		{Title: "log2 A/B", Width: 76, Align: ui.End}, {Title: "padj", Width: 72, Align: ui.End}, {Title: "Mean", Align: ui.End}}
+	cols := []ui.TableColumn{{Title: "Arm 1 (nt)", Width: 112}, {Title: "Arm 2 (nt)", Width: 112},
+		{Title: "log2 A/B", Width: 76, Align: ui.End}, {Title: "padj", Width: 72, Align: ui.End}, {Title: "Mean count", Align: ui.End}}
 	p.table.Selected = &p.row
 	p.table.Key = func(i int) any { return fmt.Sprintf("%d_%d_%s", shown[i].X, shown[i].Y, shown[i].Direction) }
 	ui.Table(c.Key("cmp-table-"+p.shownKey), &p.table, cols, len(shown), func(i, col int) {
@@ -1478,7 +1480,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 				if len(rows) == 0 {
 					ui.Text(c, "No bin reaches the minimum count.").TextColor(t.TextMuted)
 				} else {
-					cols := []ui.TableColumn{{Title: "Arm 1", Width: 112}, {Title: "Arm 2", Width: 112},
+					cols := []ui.TableColumn{{Title: "Arm 1 (nt)", Width: 112}, {Title: "Arm 2 (nt)", Width: 112},
 						{Title: "A", Width: 64, Align: ui.End}, {Title: "B", Width: 64, Align: ui.End}, {Title: "log2 A/B", Align: ui.End}}
 					q.table.Selected = &q.row
 					q.table.Key = func(i int) any { return [2]int{rows[i].X, rows[i].Y} }

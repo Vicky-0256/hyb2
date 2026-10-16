@@ -494,8 +494,8 @@ func (p *reportPage) testsView(c *ui.Context, d *reportData) {
 			s := x.Summary
 			ui.Row(c).Gap(10).Wrap().Children(func() {
 				cmpStat(c, "Significant cells", FormatNumber(s.Significant), t.Text)
-				cmpStat(c, "Higher in A", FormatNumber(s.SignificantUp), cmpRed)
-				cmpStat(c, "Higher in B", FormatNumber(s.SignificantDown), cmpBlue)
+				cmpStat(c, "Higher in "+x.LabelA, FormatNumber(s.SignificantUp), cmpRed)
+				cmpStat(c, "Higher in "+x.LabelB, FormatNumber(s.SignificantDown), cmpBlue)
 				cmpStat(c, "Interactions A / B", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text).
 					Tooltip("Merged interactions higher in A / higher in B")
 			})

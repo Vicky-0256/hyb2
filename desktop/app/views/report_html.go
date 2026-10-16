@@ -284,8 +284,8 @@ func (d *reportData) testTable() reportTableData {
 }
 
 func (x *reportTest) topTable() reportTableData {
-	t := reportTableData{Cols: []reportCol{{Title: "#", Width: 32, Num: true}, {Title: "Arm 1", Width: 110}, {Title: "Arm 2", Width: 110},
-		{Title: "Higher in", Width: 0}, {Title: "log2 A/B", Width: 76, Num: true}, {Title: "padj", Width: 76, Num: true}, {Title: "Mean", Width: 70, Num: true}}}
+	t := reportTableData{Cols: []reportCol{{Title: "#", Width: 32, Num: true}, {Title: "Arm 1 (nt)", Width: 110}, {Title: "Arm 2 (nt)", Width: 110},
+		{Title: "Higher in", Width: 0}, {Title: "log2 A/B", Width: 76, Num: true}, {Title: "padj", Width: 76, Num: true}, {Title: "Mean count", Width: 84, Num: true}}}
 	for i, r := range x.Top {
 		higher := x.LabelA
 		if r.Direction == "down" || (r.LFC != nil && *r.LFC < 0) {

@@ -11,8 +11,8 @@ DESeq2 1.46 (R/core.R and src/DESeq2.cpp):
   the same Armijo line search (grid search when it does not converge);
 - parametric trend ``asymptDisp + extraPois / mean`` (Gamma-identity GLM);
 - prior variance of the log dispersions (for 1-3 residual degrees of freedom
-  DESeq2 matches a simulated distribution; here the same distribution is
-  computed by numerical convolution, so no random numbers are involved);
+  DESeq2 matches a simulated distribution; R's random numbers are reproduced
+  exactly, so the result is the same);
 - MAP dispersion with outliers kept at the gene-wise value;
 - IRLS for the coefficients with the ridge 1e-6 and ``minmu`` 0.5, Wald test;
 - Cook's distance filtering for cells with three or more replicates;
@@ -78,31 +78,129 @@ def _norm_sf(z: np.ndarray) -> np.ndarray:
     return erfc(np.asarray(z, dtype=float) / math.sqrt(2.0)).astype(float) * 0.5
 
 
+# --- R's lgammafn (nmath/lgamma.c, gamma.c, lgammacor.c, chebyshev.c) ---------
+# The dispersion likelihood is a sum of lgamma(y + 1/alpha) - lgamma(1/alpha)
+# terms; for small alpha each is the difference of two large numbers, so the
+# last bits of lgamma decide the line search's accept / stop tests.  DESeq2
+# calls R's lgammafn, which differs from the C library's by an ulp or more in
+# about half of the arguments; this is R's algorithm with the fused
+# multiply-adds that R's arm64 build (clang, -ffp-contract=on) uses.
+
+_GAMCS = np.array([
+    +.8571195590989331421920062399942e-2, +.4415381324841006757191315771652e-2,
+    +.5685043681599363378632664588789e-1, -.4219835396418560501012500186624e-2,
+    +.1326808181212460220584006796352e-2, -.1893024529798880432523947023886e-3,
+    +.3606925327441245256578082217225e-4, -.6056761904460864218485548290365e-5,
+    +.1055829546302283344731823509093e-5, -.1811967365542384048291855891166e-6,
+    +.3117724964715322277790254593169e-7, -.5354219639019687140874081024347e-8,
+    +.9193275519859588946887786825940e-9, -.1577941280288339761767423273953e-9,
+    +.2707980622934954543266540433089e-10, -.4646818653825730144081661058933e-11,
+    +.7973350192007419656460767175359e-12, -.1368078209830916025799499172309e-12,
+    +.2347319486563800657233471771688e-13, -.4027432614949066932766570534699e-14,
+    +.6910051747372100912138336975257e-15, -.1185584500221992907052387126192e-15])
+_ALGMCS = np.array([
+    +.1666389480451863247205729650822e+0, -.1384948176067563840732986059135e-4,
+    +.9810825646924729426157171547487e-8, -.1809129475572494194263306266719e-10,
+    +.6221098041892605227126015543416e-13])
+_LN_SQRT_2PI = 0.918938533204672741780329736406
+
+
+@njit(cache=False)
+def _fma(a, b, c):
+    """a * b + c with one rounding (Dekker product + error-free sums; exact
+    except, rarely, an ulp off at a rounding tie)."""
+    p = a * b
+    t = 134217729.0 * a
+    ah = t - (t - a)
+    al = a - ah
+    t = 134217729.0 * b
+    bh = t - (t - b)
+    bl = b - bh
+    e = ((ah * bh - p) + ah * bl + al * bh) + al * bl
+    s = p + c
+    bb = s - p
+    err = (p - (s - bb)) + (c - bb)
+    return s + (err + e)
+
+
+@njit(cache=False)
+def _chebyshev_r(x, a, n):
+    twox = x * 2.0
+    b0 = 0.0
+    b1 = 0.0
+    b2 = 0.0
+    for i in range(1, n + 1):
+        b2 = b1
+        b1 = b0
+        b0 = _fma(twox, b1, -b2) + a[n - i]
+    return (b0 - b2) * 0.5
+
+
+@njit(cache=False)
+def _lgamma_r(x):
+    """R's lgammafn(x) for x > 0."""
+    if x < 1e-306:
+        return -math.log(x)
+    if x <= 10.0:
+        n = int(x)
+        y = x - n
+        n -= 1
+        value = _chebyshev_r(y * 2.0 - 1.0, _GAMCS, 22) + .9375
+        if n < 0:
+            value /= x
+        else:
+            for i in range(1, n + 1):
+                value *= (y + i)
+        return math.log(abs(value))
+    if x > 1e17:
+        return x * (math.log(x) - 1.0)
+    base = _fma(x - 0.5, math.log(x), _LN_SQRT_2PI) - x
+    if x > 4934720.0:
+        return base
+    if x < 94906265.62425156:
+        tmp = 10.0 / x
+        cor = _chebyshev_r(tmp * tmp * 2.0 - 1.0, _ALGMCS, 5) / x
+    else:
+        cor = 1.0 / (x * 12.0)
+    return base + cor
+
+
 # --- dispersion likelihood (src/DESeq2.cpp) -----------------------------------
-# x is the 0/1 group membership of each sample; for a design with one factor
-# det(X'WX) is a constant times the product of the per-group sums of W, and
+# x is the 0/1 group membership of each sample (group 1 is the coefficient
+# column of R's model matrix ~conditions); for this design X'WX is
+# [[sum(W), sum1(W)], [sum1(W), sum1(W)]] with sum1 over group 1, and
 # trace((X'WX)^-1 d(X'WX)) is the sum over groups of sum(dW) / sum(W).
+# log_posterior is evaluated in DESeq2's order, which matters for small alpha
+# (each term lgamma(y + 1/alpha) - lgamma(1/alpha) is a difference of two
+# large numbers; summing the lgamma(y + 1/alpha) first and subtracting
+# n * lgamma(1/alpha) at the end loses up to 8 digits): sum over samples of
+# lgamma(y + 1/a) - lgamma(1/a) - y log(mu + 1/a) - 1/a log(1 + mu a), plus
+# the prior, minus log(det(X'WX)) / 2 with Armadillo's 2 x 2 determinant
+# b00 * b11 - b01 * b10 (one fused multiply-add in R's arm64 build).  With R's
+# lgammafn this gives R's log posterior to the last bit.
 
 @njit(cache=False)
 def _log_post(log_alpha, y, mu, group, ngroups, prior_mean, prior_var, use_prior):
     alpha = math.exp(log_alpha)
     r = 1.0 / alpha
     n = y.shape[0]
+    lgr = _lgamma_r(r)
     ll = 0.0
     for j in range(n):
-        ll += math.lgamma(y[j] + r) - y[j] * math.log(mu[j] + r) - r * math.log(1.0 + mu[j] * alpha)
-    ll -= n * math.lgamma(r)
-    cr = 0.0
-    for g in range(ngroups):
-        s = 0.0
-        for j in range(n):
-            if group[j] == g:
-                s += 1.0 / (1.0 / mu[j] + alpha)
-        cr += math.log(s)
+        ll += _lgamma_r(y[j] + r) - lgr - y[j] * math.log(mu[j] + r) - r * math.log(1.0 + mu[j] * alpha)
+    s = 0.0
+    s1 = 0.0
+    for j in range(n):
+        w = 1.0 / (1.0 / mu[j] + alpha)
+        s += w
+        if group[j] == 1:
+            s1 += w
+    cr = -0.5 * math.log(_fma(s, s1, -(s1 * s1)))
     prior = 0.0
     if use_prior:
-        prior = -0.5 * (log_alpha - prior_mean) ** 2 / prior_var
-    return ll - 0.5 * cr + prior
+        d = log_alpha - prior_mean
+        prior = -0.5 * (d * d) / prior_var
+    return ll + prior + cr
 
 
 @njit(cache=False)
@@ -458,47 +556,278 @@ def lowess(x: Sequence[float], y: Sequence[float], f: float = 2 / 3, nsteps: int
 
 
 # --- prior variance for few residual degrees of freedom ----------------------
+#
+# For 1 <= m - p <= 3 DESeq2 (estimateDispersionsPriorVar) picks the variance v
+# in seq(0, 8, length = 200) whose simulated distribution
+#   log(rchisq(1e4, df)) + rnorm(1e4, 0, sqrt(v)) - log(df)
+# drawn after set.seed(2) is closest (KL divergence of the histograms with
+# breaks -20:20/2) to the observed log-dispersion residuals, smooths the 200
+# divergences with loess(span = .2) and takes the minimum on a 1000-point grid.
+# The draws are part of the result, so they are reproduced exactly: R's default
+# generator (Mersenne-Twister seeded as set.seed does; numpy's MT19937 produces
+# the same 32-bit stream from that state), normals by inversion, nmath rgamma
+# (Ahrens-Dieter GD for a >= 1, GS for a < 1) and exp_rand.  The simulated
+# histograms do not depend on the data and are computed once per df.  (The exact
+# density, which earlier versions used, gives a different minimum: 1e4 draws
+# leave enough noise to move dispPriorVar by 10% or more.)
+
+_I2_32M1 = 2.328306437080797e-10
+_EXP_RAND_Q = np.array([0.6931471805599453, 0.9333736875190459, 0.9888777961838675, 0.9984959252914960040,
+                        0.9998292811061389, 0.9999833164100727, 0.9999985508193277, 0.9999998906925558,
+                        0.9999999924734159, 0.9999999995283275, 0.9999999999728814, 0.9999999999985598,
+                        0.9999999999999289, 0.9999999999999968, 0.9999999999999999, 1.0])
+_PRIOR_VAR_FUZZY = np.arange(-20, 21) / 2.0 + np.where(np.arange(41) == 0, -5e-8, 5e-8)
+
+
+def _r_seed_state(seed: int) -> dict:
+    """numpy MT19937 state equal to R's after ``set.seed(seed)``."""
+    s = seed & 0xFFFFFFFF
+    for _ in range(50):
+        s = (69069 * s + 1) & 0xFFFFFFFF
+    s = (69069 * s + 1) & 0xFFFFFFFF  # dummy[0], replaced by mti = N
+    key = np.empty(624, dtype=np.uint32)
+    for j in range(624):
+        s = (69069 * s + 1) & 0xFFFFFFFF
+        key[j] = s
+    return {"bit_generator": "MT19937", "state": {"key": key, "pos": 624}}
+
+
+@njit(cache=False)
+def _unif_r(raw, pos):
+    x = float(raw[pos]) * 2.3283064365386963e-10
+    if x <= 0.0:
+        x = 0.5 * _I2_32M1
+    elif 1.0 - x <= 0.0:
+        x = 1.0 - 0.5 * _I2_32M1
+    return x
+
+
+@njit(cache=False)
+def _qnorm_r(p):
+    """qnorm(p) (Wichura AS241, R's nmath/qnorm.c) for 0 < p < 1."""
+    q = p - 0.5
+    if abs(q) <= 0.425:
+        r = 0.180625 - q * q
+        return q * (((((((r * 2509.0809287301226727 + 33430.575583588128105) * r + 67265.770927008700853) * r
+                         + 45921.953931549871457) * r + 13731.693765509461125) * r + 1971.5909503065514427) * r
+                      + 133.14166789178437745) * r + 3.387132872796366608) \
+            / (((((((r * 5226.495278852545925 + 28729.085735721942674) * r + 39307.89580009271061) * r
+                   + 21213.794301586595867) * r + 5394.1960214247511077) * r + 687.1870074920579083) * r
+                + 42.313330701600911252) * r + 1.0)
+    r = math.sqrt(-math.log(p if q < 0 else 1.0 - p))
+    if r <= 5.0:
+        r -= 1.6
+        val = (((((((r * 7.7454501427834140764e-4 + 0.0227238449892691845833) * r + 0.24178072517745061177) * r
+                   + 1.27045825245236838258) * r + 3.64784832476320460504) * r + 5.7694972214606914055) * r
+                + 4.6303378461565452959) * r + 1.42343711074968357734) \
+            / (((((((r * 1.05075007164441684324e-9 + 5.475938084995344946e-4) * r + 0.0151986665636164571966) * r
+                   + 0.14810397642748007459) * r + 0.68976733498510000455) * r + 1.6763848301838038494) * r
+                + 2.05319162663775882187) * r + 1.0)
+    else:
+        r -= 5.0
+        val = (((((((r * 2.01033439929228813265e-7 + 2.71155556874348757815e-5) * r + 0.0012426609473880784386) * r
+                   + 0.026532189526576123093) * r + 0.29656057182850489123) * r + 1.7848265399172913358) * r
+                + 5.4637849111641143699) * r + 6.6579046435011037772) \
+            / (((((((r * 2.04426310338993978564e-15 + 1.4215117583164458887e-7) * r + 1.8463183175100546818e-5) * r
+                   + 7.868691311456132591e-4) * r + 0.0148753612908506148525) * r + 0.13692988092273580531) * r
+                + 0.59983220655588793769) * r + 1.0)
+    return -val if q < 0 else val
+
+
+@njit(cache=False)
+def _exp_rand_r(raw, pos, qexp):
+    a = 0.0
+    u = _unif_r(raw, pos)
+    pos += 1
+    while u <= 0.0 or u >= 1.0:
+        u = _unif_r(raw, pos)
+        pos += 1
+    while True:
+        u += u
+        if u > 1.0:
+            break
+        a += qexp[0]
+    u -= 1.0
+    if u <= qexp[0]:
+        return a + u, pos
+    i = 0
+    umin = _unif_r(raw, pos)
+    pos += 1
+    while True:
+        ustar = _unif_r(raw, pos)
+        pos += 1
+        if umin > ustar:
+            umin = ustar
+        i += 1
+        if not u > qexp[i]:
+            break
+    return a + umin * qexp[0], pos
+
+
+@njit(cache=False)
+def _gd_quotient(t, s, s2, q0):
+    v = t / (s + s)
+    if abs(v) <= 0.25:
+        return q0 + 0.5 * t * t * ((((((0.1233795 * v - 0.1367177) * v + 0.1423657) * v - 0.1662921) * v
+                                      + 0.2000062) * v - 0.250003) * v + 0.3333333) * v
+    return q0 - s * t + 0.25 * t * t + (s2 + s2) * math.log(1.0 + v)
+
+
+@njit(cache=False)
+def _rgamma_draws(raw, a, scale, out, qexp):
+    """``out[:] = rgamma(len(out), a, scale)`` from the raw MT stream (R's nmath
+    rgamma.c); returns the number of raw values used, or -1 if ``raw`` is too
+    short (the caller retries with more)."""
+    pos = 0
+    limit = raw.shape[0] - 64
+    for k in range(out.shape[0]):
+        if pos > limit:
+            return -1
+        if a < 1.0:
+            e0 = 1.0 + 0.36787944117144233 * a
+            while True:
+                if pos > limit:
+                    return -1
+                pp = e0 * _unif_r(raw, pos)
+                pos += 1
+                if pp >= 1.0:
+                    x = -math.log((e0 - pp) / a)
+                    e, pos = _exp_rand_r(raw, pos, qexp)
+                    if e >= (1.0 - a) * math.log(x):
+                        break
+                else:
+                    x = math.exp(math.log(pp) / a)
+                    e, pos = _exp_rand_r(raw, pos, qexp)
+                    if e >= x:
+                        break
+            out[k] = scale * x
+            continue
+        s2 = a - 0.5
+        s = math.sqrt(s2)
+        d = 5.656854 - s * 12.0
+        u = _unif_r(raw, pos)
+        u = math.trunc(134217728.0 * u) + _unif_r(raw, pos + 1)
+        pos += 2
+        t = _qnorm_r(u / 134217728.0)
+        x = s + 0.5 * t
+        ret = x * x
+        if t >= 0.0:
+            out[k] = scale * ret
+            continue
+        u = _unif_r(raw, pos)
+        pos += 1
+        if d * u <= t * t * t:
+            out[k] = scale * ret
+            continue
+        r = 1.0 / a
+        q0 = ((((((2.424e-4 * r + 2.4511e-4) * r - 7.388e-5) * r + 0.00144121) * r + 0.00801191) * r
+               + 0.02083148) * r + 0.04166669) * r
+        if a <= 3.686:
+            b = 0.463 + s + 0.178 * s2
+            si = 1.235
+            c = 0.195 / s - 0.079 + 0.16 * s
+        elif a <= 13.022:
+            b = 1.654 + 0.0076 * s2
+            si = 1.68 / s + 0.275
+            c = 0.062 / s + 0.024
+        else:
+            b = 1.77
+            si = 0.75
+            c = 0.1515 / s
+        if x > 0.0 and math.log(1.0 - u) <= _gd_quotient(t, s, s2, q0):
+            out[k] = scale * ret
+            continue
+        while True:
+            if pos > limit:
+                return -1
+            e, pos = _exp_rand_r(raw, pos, qexp)
+            u = _unif_r(raw, pos)
+            pos += 1
+            u = u + u - 1.0
+            t = b - si * e if u < 0.0 else b + si * e
+            if t >= -0.71874483771719:
+                q = _gd_quotient(t, s, s2, q0)
+                if q > 0.0 and c * abs(u) <= math.expm1(q) * math.exp(e - 0.5 * t * t):
+                    break
+        x = s + 0.5 * t
+        out[k] = scale * x * x
+    return pos
+
+
+def _norm_draws(raw: np.ndarray, n: int) -> np.ndarray:
+    """``rnorm(n)`` (inversion: two uniforms per value) from the raw stream."""
+    u = raw[:2 * n].astype(np.float64) * 2.3283064365386963e-10
+    u = np.where(u <= 0.0, 0.5 * _I2_32M1, np.where(1.0 - u <= 0.0, 1.0 - 0.5 * _I2_32M1, u))
+    p = (np.trunc(134217728.0 * u[0::2]) + u[1::2]) / 134217728.0
+    return _qnorm_many(p)
+
+
+@njit(cache=False)
+def _qnorm_many(p):
+    out = np.empty(p.shape[0])
+    for i in range(p.shape[0]):
+        out[i] = _qnorm_r(p[i])
+    return out
+
+
+def _hist_counts_r(values: np.ndarray) -> np.ndarray:
+    """hist(values, breaks = -20:20/2)$counts after keeping -10 < values < 10
+    (right-closed bins, edges moved by hist's fuzz)."""
+    v = values[(values > -10.0) & (values < 10.0)]
+    return np.bincount(np.searchsorted(_PRIOR_VAR_FUZZY, v, side="left") - 1, minlength=40)[:40].astype(float)
+
+
+_SIMULATED_LOG_DISP: Dict[int, np.ndarray] = {}
+
+
+def _simulated_log_disp(df: int) -> np.ndarray:
+    """Densities (200 x 40) of DESeq2's simulated histograms for ``df``."""
+    if df in _SIMULATED_LOG_DISP:
+        return _SIMULATED_LOG_DISP[df]
+    bg = np.random.MT19937()
+    bg.state = _r_seed_state(2)
+    n_draw = 10000
+    chi = np.empty(n_draw)
+    dens = np.empty((200, 40))
+    log_df = math.log(df)
+    for gi, v in enumerate(np.linspace(0.0, 8.0, 200)):
+        state = bg.state
+        size = 8 * n_draw
+        while True:
+            used = _rgamma_draws(bg.random_raw(size), df / 2.0, 2.0, chi, _EXP_RAND_Q)  # rchisq(1e4, df)
+            if used >= 0:
+                break
+            bg.state = state
+            size *= 2
+        bg.state = state
+        bg.random_raw(used)
+        if v == 0:
+            z = 0.0  # rnorm(.., 0, 0) returns 0 without drawing
+        else:
+            z = 0.0 + math.sqrt(v) * _norm_draws(bg.random_raw(2 * n_draw), n_draw)
+        counts = _hist_counts_r(np.log(chi) + z - log_df)
+        dens[gi] = counts / (counts.sum() * 0.5)
+    _SIMULATED_LOG_DISP[df] = dens
+    return dens
+
 
 def _prior_var_few_df(residuals: np.ndarray, df: int) -> float:
-    """estimateDispersionsPriorVar for 1 <= m - p <= 3.
-
-    DESeq2 draws 1e4 values of ``log(chisq(df)/df) + N(0, v)`` for 200 values
-    of ``v`` in [0, 8], computes the KL divergence of each histogram from the
-    observed residuals, smooths the 200 divergences with ``loess(span=.2)``
-    and takes the minimum on a 1000-point grid.  Here the histogram densities
-    are computed exactly (numerical convolution) instead of by sampling, which
-    is the limit R's estimate approaches as the number of draws grows.
-    """
-    brks = np.arange(-20, 21) / 2.0
-    obs = residuals[(residuals > brks[0]) & (residuals < brks[-1])]
-    obs_counts, _ = np.histogram(obs, bins=brks)
-    obs_dens = obs_counts / (len(obs) * 0.5)
-    # density of log(chisq_df / df) on a fine grid
-    step = 0.005
-    t = np.arange(-40.0, 12.0 + step, step)
-    k = df / 2.0
-    log_pdf = (math.log(df) + t) * k - df * np.exp(t) / 2 - k * math.log(2.0) - math.lgamma(k)
-    base = np.exp(log_pdf)
-    base /= base.sum() * step
+    """estimateDispersionsPriorVar for 1 <= m - p <= 3 (see above)."""
+    obs_counts = _hist_counts_r(residuals)
+    obs_dens = obs_counts / (obs_counts.sum() * 0.5)
+    obs_small = obs_dens[obs_dens > 0].min()
+    dens = _simulated_log_disp(df)
+    kls = np.empty(200)
+    for gi in range(200):
+        rand_dens = dens[gi]
+        pos = rand_dens[rand_dens > 0]
+        small = min(obs_small, pos.min()) if pos.size else obs_small
+        terms = obs_dens * (np.log(obs_dens + small) - np.log(rand_dens + small))
+        kl = 0.0
+        for t in terms:  # sum() in order (R's long double is a double on arm64)
+            kl += float(t)
+        kls[gi] = kl
     grid = np.linspace(0.0, 8.0, 200)
-    kls = np.empty(len(grid))
-    for gi, v in enumerate(grid):
-        if v == 0:
-            dens = base
-        else:
-            sd = math.sqrt(v)
-            half = int(math.ceil(8 * sd / step))
-            kernel = np.exp(-0.5 * (np.arange(-half, half + 1) * step / sd) ** 2)
-            kernel /= kernel.sum()
-            dens = np.convolve(base, kernel, mode="same")
-        cdf = np.concatenate([[0.0], np.cumsum(dens) * step])
-        edges = np.interp(brks, np.concatenate([t - step / 2, [t[-1] + step / 2]]), cdf)
-        mass = np.diff(edges)
-        total = mass.sum()
-        rand_dens = mass / (total * 0.5) if total > 0 else mass
-        z = np.concatenate([obs_dens, rand_dens])
-        small = z[z > 0].min()
-        kls[gi] = float(np.sum(obs_dens * (np.log(obs_dens + small) - np.log(rand_dens + small))))
     fine = np.linspace(0.0, 8.0, 1000)
     arg = fine[int(np.argmin(_loess(grid, kls, fine, span=0.2)))]
     return max(arg, 0.25)

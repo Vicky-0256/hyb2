@@ -190,12 +190,13 @@ Object.keys(SYNTH).forEach(function (name) {
   });
 });
 
-// prior variance for 1-3 residual degrees of freedom (deseq._prior_var_few_df)
+// prior variance for 1-3 residual degrees of freedom (deseq._prior_var_few_df;
+// expected values from DESeq2 1.46's estimateDispersionsPriorVar code in R 4.4.3)
 {
   let s = 99;
   const rand = function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return (s + 0.5) / 4294967296; };
   const resid = Float64Array.from({ length: 5000 }, function () { return 1.6 * Math.sqrt(-2 * Math.log(rand())) * Math.cos(2 * Math.PI * rand()) - 0.3; });
-  close(D.priorVarFewDf(resid, 1), 1.049049049049049, 1e-12, "prior var df 1");
+  close(D.priorVarFewDf(resid, 1), 1.057057057057057, 1e-12, "prior var df 1");
   close(D.priorVarFewDf(resid, 2), 1.5135135135135136, 1e-12, "prior var df 2");
   close(D.priorVarFewDf(resid, 3), 1.7857857857857857, 1e-12, "prior var df 3");
 }
@@ -318,6 +319,48 @@ Object.keys(SYNTH).forEach(function (name) {
   assert.throws(function () {
     D.deseqTwoConditions(Float64Array.from([5, 15, 2, 9, 1, 1, 2, 2, 18, 29, 7, 11]), 3, 4, [true, true, false, false]);
   }, /within 2 orders of magnitude/);
+}
+
+// ---- MAP dispersion against R (golden map_*: 1-3 residual degrees of freedom,
+// where dispPriorVar comes from DESeq2's simulation after set.seed(2), and small
+// MAP dispersions, where the order of the lgamma terms of the log posterior
+// decides the line search; columns baseMean lfc padj dispGeneEst dispFit
+// dispersion dispPriorVar; R DESeq() defaults, rowSums > 2, alpha 0.01)
+{
+  const golden = path.join(repository, "pipeline", "tests", "golden", "deseq");
+  const lines = function (file) { return fs.readFileSync(path.join(golden, file), "utf8").trim().split("\n").map(function (l) { return l.split("\t"); }); };
+  ["map_two_vs_two", "map_three_vs_two", "map_one_vs_two", "map_small_dispersion"].forEach(function (name) {
+    const counts = lines(name + ".counts.tsv");
+    const columns = counts.shift().slice(1);
+    const conditions = {};
+    lines(name + ".conditions.tsv").forEach(function (row) { conditions[row[0]] = row[1]; });
+    const kept = counts.filter(function (row) { return row.slice(1).reduce(function (a, v) { return a + Number(v); }, 0) > 2; });
+    const m = columns.length;
+    const t = new Float64Array(kept.length * m);
+    kept.forEach(function (row, i) { for (let j = 0; j < m; j += 1) { t[i * m + j] = Number(row[j + 1]); } });
+    const r = D.deseqTwoConditions(t, kept.length, m, columns.map(function (c) { return conditions[c] === "condition_one"; }));
+    const expected = lines(name + ".R.tsv").slice(1);
+    close(r.dispPriorVar, Number(expected[0][7]), 1e-12, name + " dispPriorVar");
+    expected.forEach(function (row, i) {
+      assert.equal(row[0], kept[i][0]);
+      close(r.dispGeneEst[i], Number(row[4]), 1e-9, name + " " + row[0] + " dispGeneEst");
+      close(r.dispFit[i], Number(row[5]), 1e-8, name + " " + row[0] + " dispFit");
+      close(r.dispersion[i], Number(row[6]), 1e-8, name + " " + row[0] + " dispersion");
+      close(r.log2FoldChange[i], Number(row[2]), 1e-4, name + " " + row[0] + " log2FoldChange");
+      close(r.padj[i], row[3] === "NA" ? NaN : Number(row[3]), 1e-4, name + " " + row[0] + " padj");
+    });
+  });
+  // R's lgamma (%a), and DESeq2's simulated histogram for df 2, grid value 101
+  [["0x1p-1", "0x1.250d048e7a1bdp-1"], ["0x1.5p+3", "0x1.be199a0f64394p+3"], ["0x1.81cd6c8b43958p+13", "0x1.9617eb7eee0bcp+16"],
+    ["0x1.2d3106p+22", "0x1.0f4b6983eb25bp+26"], ["0x1.7d78404p+24", "0x1.7e4a2083b2ce5p+28"],
+    ["0x1.7d7841cp+26", "0x1.9f57678c31c43p+30"], ["0x1.6345785d8ap+57", "0x1.af2da8ce803abp+62"]].forEach(function (pair) {
+    const hex = function (h) {
+      const q = h.match(/^0x([01])\.?([0-9a-f]*)p([+-]\d+)$/);
+      return parseInt(q[1] + q[2], 16) / Math.pow(16, q[2].length) * Math.pow(2, Number(q[3]));
+    };
+    const x = hex(pair[0]);
+    assert.equal(x <= 10 ? D.lgammaRSmall(x) : D.lgammaR(x), hex(pair[1]), "R lgamma(" + x + ")");
+  });
 }
 
 // ---- the bucketed interaction split = the plain quadratic one

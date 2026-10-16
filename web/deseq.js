@@ -9,7 +9,7 @@
  *     grid search when it does not converge);
  *   - parametric trend asymptDisp + extraPois / mean, local fit fallback;
  *   - prior variance of the log dispersions (for 1-3 residual degrees of
- *     freedom computed by numerical convolution, as the Desktop port does);
+ *     freedom from DESeq2's simulation, R's random numbers reproduced);
  *   - MAP dispersion, outliers kept at the gene-wise value;
  *   - IRLS (ridge 1e-6, minmu 0.5) and the Wald test;
  *   - Cook's distance filtering for cells with three or more replicates;
@@ -439,39 +439,258 @@
     return out;
   }
 
+  // ---- R's lgammafn (nmath/lgamma.c, gamma.c, lgammacor.c, chebyshev.c) --------------
+  // The dispersion likelihood is a sum of lgamma(y + 1/alpha) - lgamma(1/alpha)
+  // terms; for small alpha each is the difference of two large numbers, so the
+  // last bits of lgamma decide the line search's accept / stop tests.  DESeq2 calls
+  // R's lgammafn, which differs from the C library's (and from lgamma above) by an
+  // ulp or more for about half of the arguments; this is R's algorithm with the
+  // fused multiply-adds of R's arm64 build (clang, -ffp-contract=on).
+
+  const GAMCS = [
+    +0.8571195590989331421920062399942e-2, +0.4415381324841006757191315771652e-2,
+    +0.5685043681599363378632664588789e-1, -0.4219835396418560501012500186624e-2,
+    +0.1326808181212460220584006796352e-2, -0.1893024529798880432523947023886e-3,
+    +0.3606925327441245256578082217225e-4, -0.6056761904460864218485548290365e-5,
+    +0.1055829546302283344731823509093e-5, -0.1811967365542384048291855891166e-6,
+    +0.3117724964715322277790254593169e-7, -0.5354219639019687140874081024347e-8,
+    +0.9193275519859588946887786825940e-9, -0.1577941280288339761767423273953e-9,
+    +0.2707980622934954543266540433089e-10, -0.4646818653825730144081661058933e-11,
+    +0.7973350192007419656460767175359e-12, -0.1368078209830916025799499172309e-12,
+    +0.2347319486563800657233471771688e-13, -0.4027432614949066932766570534699e-14,
+    +0.6910051747372100912138336975257e-15, -0.1185584500221992907052387126192e-15];
+  const ALGMCS = [
+    +0.1666389480451863247205729650822e+0, -0.1384948176067563840732986059135e-4,
+    +0.9810825646924729426157171547487e-8, -0.1809129475572494194263306266719e-10,
+    +0.6221098041892605227126015543416e-13];
+  const LN_SQRT_2PI = 0.918938533204672741780329736406;
+
+  // a * b + c with one rounding (Dekker product + error-free sums; exact except,
+  // rarely, an ulp off at a rounding tie)
+  function fma(a, b, c) {
+    const p = a * b;
+    let t = 134217729.0 * a;
+    const ah = t - (t - a);
+    const al = a - ah;
+    t = 134217729.0 * b;
+    const bh = t - (t - b);
+    const bl = b - bh;
+    const e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+    const s = p + c;
+    const bb = s - p;
+    const err = (p - (s - bb)) + (c - bb);
+    return s + (err + e);
+  }
+
+  // log and exp as the C library's (correctly rounded for all but a few
+  // arguments; V8's Math.log / Math.exp are off by an ulp for ~0.5% of them):
+  // exp in double-double (Cody-Waite reduction, a table of exp(j / 512), a
+  // degree-6 Taylor polynomial), log by one correction step
+  // l + (x - exp(l)) / x.
+  const LN2_HI = 6.93147180369123816490e-01;
+  const LN2_LO = 1.90821492927058770002e-10;
+  function twoProdDD(a, b) {
+    const p = a * b;
+    let t = 134217729.0 * a;
+    const ah = t - (t - a);
+    const al = a - ah;
+    t = 134217729.0 * b;
+    const bh = t - (t - b);
+    const bl = b - bh;
+    return [p, ((ah * bh - p) + ah * bl + al * bh) + al * bl];
+  }
+  function twoSumDD(a, b) {
+    const s = a + b;
+    const bb = s - a;
+    return [s, (a - (s - bb)) + (b - bb)];
+  }
+  const EXP_TABLE_HI = new Float64Array(401);
+  const EXP_TABLE_LO = new Float64Array(401);
+  (function () {
+    for (let j = -200; j <= 200; j += 1) {
+      // Taylor series of exp(j / 512) in double-double
+      const x = j / 512;
+      let sh = 1.0;
+      let sl = 0.0;
+      let th = 1.0;
+      let tl = 0.0;
+      for (let n = 1; n < 40; n += 1) {
+        // term *= x / n
+        const [ph, pl] = twoProdDD(th, x);
+        const lo = pl + tl * x;
+        let qh = ph / n;
+        const [rh, rl] = twoProdDD(qh, n);
+        let ql = ((ph - rh) - rl + lo) / n;
+        const q = twoSumDD(qh, ql);
+        th = q[0];
+        tl = q[1];
+        const s = twoSumDD(sh, th);
+        const e = s[1] + sl + tl;
+        const f = twoSumDD(s[0], e);
+        sh = f[0];
+        sl = f[1];
+      }
+      EXP_TABLE_HI[j + 200] = sh;
+      EXP_TABLE_LO[j + 200] = sl;
+    }
+  }());
+  const POW2 = Float64Array.from({ length: 2200 }, function (_, i) { return Math.pow(2, i - 1100); });
+
+  // exp(c) as hi + lo (written to EXP_DD) for |c| < 700
+  const EXP_DD = new Float64Array(2);
+  function expDD(c) {
+    const k = Math.round(c / 0.6931471805599453);
+    const hi = c - k * LN2_HI;
+    const lo = -k * LN2_LO;
+    const r = hi + lo;
+    const rb = r - hi;
+    const rl = (hi - (r - rb)) + (lo - rb);
+    const j = Math.round(r * 512);
+    const t = r - j / 512;
+    const q = t * t * (0.5 + t * (1 / 6 + t * (1 / 24 + t * (1 / 120 + t / 720))));
+    // p = 1 + t + q + rl * (1 + t) as ph + pl
+    const s0 = 1.0 + t;
+    const e0 = (1.0 - s0) + t;
+    const tail = e0 + q + rl * (1 + t);
+    const ph = s0 + tail;
+    const pl = tail - (ph - s0);
+    // p * exp(j / 512)
+    const th = EXP_TABLE_HI[j + 200];
+    const mh = ph * th;
+    let w = 134217729.0 * ph;
+    const ah = w - (w - ph);
+    const al = ph - ah;
+    w = 134217729.0 * th;
+    const bh = w - (w - th);
+    const bl = th - bh;
+    const ml = (((ah * bh - mh) + ah * bl + al * bh) + al * bl) + ph * EXP_TABLE_LO[j + 200] + pl * th;
+    const scale = POW2[k + 1100];
+    EXP_DD[0] = mh * scale;
+    EXP_DD[1] = ml * scale;
+  }
+
+  // exp(c), correctly rounded (V8's Math.exp is off by an ulp for some arguments)
+  function expAccurate(c) {
+    expDD(c);
+    return EXP_DD[0] + EXP_DD[1];
+  }
+
+  function logAccurate(x) {
+    const l = Math.log(x);
+    expDD(l);
+    return l + ((x - EXP_DD[0]) - EXP_DD[1]) / x;
+  }
+
+  function chebyshevR(x, a, n) {
+    const twox = x * 2.0;
+    let b0 = 0.0;
+    let b1 = 0.0;
+    let b2 = 0.0;
+    for (let i = 1; i <= n; i += 1) {
+      b2 = b1;
+      b1 = b0;
+      b0 = fma(twox, b1, -b2) + a[n - i];
+    }
+    return (b0 - b2) * 0.5;
+  }
+
+  // R's lgammafn(x) for x > 0.  For x <= 10 R takes log(gammafn(x)) from a
+  // 22-term Chebyshev series; that branch is ~10x slower with emulated fused
+  // multiply-adds, and its arguments (y + 1/alpha <= 10, so alpha > 0.1) are
+  // where the likelihood has no large cancellation, so the C library's lgamma
+  // (above; within an ulp of R's) is used there.  lgammaRSmall is R's branch,
+  // kept for the checks in scripts/verify-deseq.cjs.
+  function lgammaRSmall(x) {
+    let n = Math.trunc(x);
+    const y = x - n;
+    n -= 1;
+    let value = chebyshevR(y * 2.0 - 1.0, GAMCS, 22) + 0.9375;
+    if (n < 0) {
+      value /= x;
+    } else {
+      for (let i = 1; i <= n; i += 1) {
+        value *= (y + i);
+      }
+    }
+    return logAccurate(Math.abs(value));
+  }
+
+  function lgammaR(x) {
+    if (x <= 10.0) {
+      return lgamma(x);
+    }
+    if (x > 1e17) {
+      return x * (logAccurate(x) - 1.0);
+    }
+    const base = fma(x - 0.5, logAccurate(x), LN_SQRT_2PI) - x;
+    if (x > 4934720.0) {
+      return base;
+    }
+    let cor;
+    if (x < 94906265.62425156) {
+      // lgammacor: far below an ulp of the sum, so its own last bit (fused or
+      // not) does not matter
+      const t2 = 10.0 / x;
+      const twox = (t2 * t2 * 2.0 - 1.0) * 2.0;
+      let b0 = 0.0;
+      let b1 = 0.0;
+      let b2 = 0.0;
+      for (let i = 4; i >= 0; i -= 1) {
+        b2 = b1;
+        b1 = b0;
+        b0 = twox * b1 - b2 + ALGMCS[i];
+      }
+      cor = (b0 - b2) * 0.5 / x;
+    } else {
+      cor = 1.0 / (x * 12.0);
+    }
+    return base + cor;
+  }
+
   // ---- dispersion likelihood (src/DESeq2.cpp) -------------------------------------
-  // y, mu: row-major n x m; row offset o.  group[j] in {0, 1}.
+  // y, mu: row-major n x m; row offset o.  group[j] in {0, 1}; group 1 is the
+  // coefficient column of R's model matrix ~conditions, so X'WX is
+  // [[sum(W), sum1(W)], [sum1(W), sum1(W)]] with sum1 over group 1.
+  // log_posterior is evaluated in DESeq2's order, which matters for small alpha
+  // (summing the lgamma(y + 1/alpha) first and subtracting m * lgamma(1/alpha) at
+  // the end loses up to 8 digits): the sum over samples of lgamma(y + 1/a) -
+  // lgamma(1/a) - y log(mu + 1/a) - 1/a log(1 + mu a), plus the prior, minus
+  // log(det(X'WX)) / 2 with Armadillo's 2 x 2 determinant b00 * b11 - b01 * b10
+  // (one fused multiply-add in R's arm64 build).  With lgammaR, expAccurate and
+  // logAccurate this is R's log posterior to the last bit for ~95% of the
+  // arguments and within 1e-12 otherwise (the C library's exp / log, which R
+  // uses, are themselves off by an ulp for ~0.2% of arguments).
 
   function logPost(logAlpha, y, mu, o, m, group, priorMean, priorVar, usePrior) {
-    const alpha = Math.exp(logAlpha);
+    const alpha = expAccurate(logAlpha);
     const r = 1.0 / alpha;
+    const lgr = lgammaR(r);
     let ll = 0.0;
     for (let j = 0; j < m; j += 1) {
       const yj = y[o + j];
       const mj = mu[o + j];
-      ll += lgamma(yj + r) - yj * Math.log(mj + r) - r * Math.log(1.0 + mj * alpha);
+      ll += lgammaR(yj + r) - lgr - yj * logAccurate(mj + r) - r * Math.log(1.0 + mj * alpha);
     }
-    ll -= m * lgamma(r);
-    let cr = 0.0;
-    for (let g = 0; g < 2; g += 1) {
-      let s = 0.0;
-      for (let j = 0; j < m; j += 1) {
-        if (group[j] === g) {
-          s += 1.0 / (1.0 / mu[o + j] + alpha);
-        }
+    let s = 0.0;
+    let s1 = 0.0;
+    for (let j = 0; j < m; j += 1) {
+      const w = 1.0 / (1.0 / mu[o + j] + alpha);
+      s += w;
+      if (group[j] === 1) {
+        s1 += w;
       }
-      cr += Math.log(s);
     }
+    const cr = -0.5 * Math.log(fma(s, s1, -(s1 * s1)));
     let prior = 0.0;
     if (usePrior) {
       const d = logAlpha - priorMean;
       prior = -0.5 * (d * d) / priorVar;
     }
-    return ll - 0.5 * cr + prior;
+    return ll + prior + cr;
   }
 
   function dlogPost(logAlpha, y, mu, o, m, group, priorMean, priorVar, usePrior) {
-    const alpha = Math.exp(logAlpha);
+    const alpha = expAccurate(logAlpha); // as the C library's exp, which R uses
     const r = 1.0 / alpha;
     let s = 0.0;
     const dg = digamma(r);
@@ -1150,168 +1369,312 @@
 
   // ---- prior variance for few residual degrees of freedom ---------------------------
 
-  // estimateDispersionsPriorVar for 1 <= m - p <= 3: the exact density of
-  // log(chisq(df)/df) + N(0, v) on the Desktop port's grid, by numerical
-  // convolution.  Only the CDF at the histogram edges is needed, so it is
-  // computed as base * cumulative-kernel at those points (same quantity as
-  // cumsum(convolve(base, kernel, "same")), without the full convolution).
-  function priorVarFewDf(residuals, df) {
-    const brks = new Float64Array(41);
-    for (let i = 0; i < 41; i += 1) {
-      brks[i] = (i - 20) / 2.0;
+  // For 1 <= m - p <= 3 DESeq2 (estimateDispersionsPriorVar) picks the variance v
+  // in seq(0, 8, length = 200) whose simulated distribution
+  //   log(rchisq(1e4, df)) + rnorm(1e4, 0, sqrt(v)) - log(df)
+  // drawn after set.seed(2) is closest (KL divergence of the histograms with
+  // breaks -20:20/2) to the observed log-dispersion residuals, smooths the 200
+  // divergences with loess(span = .2) and takes the minimum on a 1000-point grid.
+  // The draws are part of the result, so they are reproduced exactly: R's default
+  // generator (Mersenne-Twister seeded as set.seed does, normal by inversion),
+  // nmath rgamma (Ahrens-Dieter GD for a >= 1, GS for a < 1) and exp_rand.  The
+  // simulated histograms do not depend on the data, so they are computed once per
+  // df.  (The exact density, which earlier versions used, gives a different
+  // minimum: 1e4 draws leave enough noise to move dispPriorVar by 10% or more.)
+
+  function rRandom(seed) {
+    const mt = new Uint32Array(624);
+    let s = seed >>> 0;
+    for (let j = 0; j < 50; j += 1) {
+      s = (Math.imul(69069, s) + 1) >>> 0;
     }
-    const obsCounts = new Float64Array(40);
-    let nObs = 0;
-    for (let k = 0; k < residuals.length; k += 1) {
-      const v = residuals[k];
-      if (!(v > brks[0] && v < brks[40])) {
-        continue;
+    s = (Math.imul(69069, s) + 1) >>> 0; // dummy[0], replaced by mti = N
+    for (let j = 0; j < 624; j += 1) {
+      s = (Math.imul(69069, s) + 1) >>> 0;
+      mt[j] = s;
+    }
+    let mti = 624;
+    const twist = function (a, b, c) {
+      const y = (a & 0x80000000) | (b & 0x7fffffff);
+      return c ^ (y >>> 1) ^ ((y & 1) ? 0x9908b0df : 0);
+    };
+    return function unifRand() {
+      if (mti >= 624) {
+        let kk;
+        for (kk = 0; kk < 227; kk += 1) {
+          mt[kk] = twist(mt[kk], mt[kk + 1], mt[kk + 397]);
+        }
+        for (; kk < 623; kk += 1) {
+          mt[kk] = twist(mt[kk], mt[kk + 1], mt[kk - 227]);
+        }
+        mt[623] = twist(mt[623], mt[0], mt[396]);
+        mti = 0;
       }
-      let b = Math.floor((v - brks[0]) * 2);
-      b = Math.min(Math.max(b, 0), 39);
-      while (b > 0 && v < brks[b]) {
-        b -= 1;
+      let y = mt[mti];
+      mti += 1;
+      y ^= y >>> 11;
+      y ^= (y << 7) & 0x9d2c5680;
+      y ^= (y << 15) & 0xefc60000;
+      y ^= y >>> 18;
+      const x = (y >>> 0) * 2.3283064365386963e-10;
+      if (x <= 0) {
+        return 0.5 * 2.328306437080797e-10;
       }
-      while (b < 39 && v >= brks[b + 1]) {
-        b += 1;
+      if (1 - x <= 0) {
+        return 1 - 0.5 * 2.328306437080797e-10;
       }
-      obsCounts[b] += 1;
-      nObs += 1;
+      return x;
+    };
+  }
+
+  // qnorm(p) (Wichura AS241, as in R's nmath/qnorm.c) for 0 < p < 1
+  function qnormR(p) {
+    const q = p - 0.5;
+    let r;
+    let val;
+    if (Math.abs(q) <= 0.425) {
+      r = 0.180625 - q * q;
+      return q * (((((((r * 2509.0809287301226727 + 33430.575583588128105) * r + 67265.770927008700853) * r +
+        45921.953931549871457) * r + 13731.693765509461125) * r + 1971.5909503065514427) * r +
+        133.14166789178437745) * r + 3.387132872796366608) /
+        (((((((r * 5226.495278852545925 + 28729.085735721942674) * r + 39307.89580009271061) * r +
+          21213.794301586595867) * r + 5394.1960214247511077) * r + 687.1870074920579083) * r +
+          42.313330701600911252) * r + 1.0);
     }
-    const obsDens = new Float64Array(40);
-    for (let b = 0; b < 40; b += 1) {
-      obsDens[b] = obsCounts[b] / (nObs * 0.5);
+    r = Math.sqrt(-Math.log(q < 0 ? p : 1 - p));
+    if (r <= 5) {
+      r -= 1.6;
+      val = (((((((r * 7.7454501427834140764e-4 + 0.0227238449892691845833) * r + 0.24178072517745061177) * r +
+        1.27045825245236838258) * r + 3.64784832476320460504) * r + 5.7694972214606914055) * r +
+        4.6303378461565452959) * r + 1.42343711074968357734) /
+        (((((((r * 1.05075007164441684324e-9 + 5.475938084995344946e-4) * r + 0.0151986665636164571966) * r +
+          0.14810397642748007459) * r + 0.68976733498510000455) * r + 1.6763848301838038494) * r +
+          2.05319162663775882187) * r + 1.0);
+    } else {
+      r -= 5;
+      val = (((((((r * 2.01033439929228813265e-7 + 2.71155556874348757815e-5) * r + 0.0012426609473880784386) * r +
+        0.026532189526576123093) * r + 0.29656057182850489123) * r + 1.7848265399172913358) * r +
+        5.4637849111641143699) * r + 6.6579046435011037772) /
+        (((((((r * 2.04426310338993978564e-15 + 1.4215117583164458887e-7) * r + 1.8463183175100546818e-5) * r +
+          7.868691311456132591e-4) * r + 0.0148753612908506148525) * r + 0.13692988092273580531) * r +
+          0.59983220655588793769) * r + 1.0);
     }
-    const step = 0.005;
-    const start = -40.0;
-    const delta = (start + step) - start;
-    const nt = Math.ceil(((12.0 + step) - start) / step);
-    const t = new Float64Array(nt);
-    for (let i = 0; i < nt; i += 1) {
-      t[i] = start + i * delta;
+    return q < 0 ? -val : val;
+  }
+
+  function normRandR(unif) {
+    const BIG = 134217728; // 2^27
+    let u = unif();
+    u = Math.trunc(BIG * u) + unif();
+    return qnormR(u / BIG);
+  }
+
+  const EXP_RAND_Q = [0.6931471805599453, 0.9333736875190459, 0.9888777961838675, 0.9984959252914960040,
+    0.9998292811061389, 0.9999833164100727, 0.9999985508193277, 0.9999998906925558, 0.9999999924734159,
+    0.9999999995283275, 0.9999999999728814, 0.9999999999985598, 0.9999999999999289, 0.9999999999999968,
+    0.9999999999999999, 1.0];
+
+  function expRandR(unif) {
+    let a = 0;
+    let u = unif();
+    while (u <= 0 || u >= 1) {
+      u = unif();
     }
-    const k = df / 2.0;
-    const base = new Float64Array(nt);
-    const lgk = lgammaExact(k);
-    for (let i = 0; i < nt; i += 1) {
-      base[i] = Math.exp((Math.log(df) + t[i]) * k - df * Math.exp(t[i]) / 2 - k * Math.log(2.0) - lgk);
+    for (;;) {
+      u += u;
+      if (u > 1) {
+        break;
+      }
+      a += EXP_RAND_Q[0];
     }
-    const baseSum = npSum(base) * step;
-    for (let i = 0; i < nt; i += 1) {
-      base[i] /= baseSum;
+    u -= 1;
+    if (u <= EXP_RAND_Q[0]) {
+      return a + u;
     }
-    // xp: cell edges of the grid (len nt + 1)
-    const xp = new Float64Array(nt + 1);
-    for (let i = 0; i < nt; i += 1) {
-      xp[i] = t[i] - step / 2;
+    let i = 0;
+    let umin = unif();
+    do {
+      const ustar = unif();
+      if (umin > ustar) {
+        umin = ustar;
+      }
+      i += 1;
+    } while (u > EXP_RAND_Q[i]);
+    return a + umin * EXP_RAND_Q[0];
+  }
+
+  // rgamma(1, shape = a, scale) of R's nmath/rgamma.c
+  function rgammaR(unif, a, scale) {
+    if (a < 1) {
+      const e0 = 1.0 + 0.36787944117144233 * a;
+      let x;
+      for (;;) {
+        const pp = e0 * unif();
+        if (pp >= 1.0) {
+          x = -Math.log((e0 - pp) / a);
+          if (expRandR(unif) >= (1.0 - a) * Math.log(x)) {
+            break;
+          }
+        } else {
+          x = Math.exp(Math.log(pp) / a);
+          if (expRandR(unif) >= x) {
+            break;
+          }
+        }
+      }
+      return scale * x;
     }
-    xp[nt] = t[nt - 1] + step / 2;
-    // for each break: interval j with xp[j] <= brk < xp[j + 1]
-    const brkIndex = new Int32Array(41);
-    for (let b = 0; b < 41; b += 1) {
+    const s2 = a - 0.5;
+    const s = Math.sqrt(s2);
+    const d = 5.656854 - s * 12.0;
+    let t = normRandR(unif);
+    let x = s + 0.5 * t;
+    const ret = x * x;
+    if (t >= 0) {
+      return scale * ret;
+    }
+    let u = unif();
+    if (d * u <= t * t * t) {
+      return scale * ret;
+    }
+    const r = 1.0 / a;
+    const q0 = ((((((2.424e-4 * r + 2.4511e-4) * r - 7.388e-5) * r + 0.00144121) * r + 0.00801191) * r +
+      0.02083148) * r + 0.04166669) * r;
+    let b;
+    let si;
+    let c;
+    if (a <= 3.686) {
+      b = 0.463 + s + 0.178 * s2;
+      si = 1.235;
+      c = 0.195 / s - 0.079 + 0.16 * s;
+    } else if (a <= 13.022) {
+      b = 1.654 + 0.0076 * s2;
+      si = 1.68 / s + 0.275;
+      c = 0.062 / s + 0.024;
+    } else {
+      b = 1.77;
+      si = 0.75;
+      c = 0.1515 / s;
+    }
+    const quotient = function (tt) {
+      const v = tt / (s + s);
+      if (Math.abs(v) <= 0.25) {
+        return q0 + 0.5 * tt * tt * ((((((0.1233795 * v - 0.1367177) * v + 0.1423657) * v - 0.1662921) * v +
+          0.2000062) * v - 0.250003) * v + 0.3333333) * v;
+      }
+      return q0 - s * tt + 0.25 * tt * tt + (s2 + s2) * Math.log(1.0 + v);
+    };
+    if (x > 0 && Math.log(1.0 - u) <= quotient(t)) {
+      return scale * ret;
+    }
+    for (;;) {
+      const e = expRandR(unif);
+      u = unif();
+      u = u + u - 1.0;
+      t = u < 0 ? b - si * e : b + si * e;
+      if (t >= -0.71874483771719) {
+        const q = quotient(t);
+        if (q > 0 && c * Math.abs(u) <= Math.expm1(q) * Math.exp(e - 0.5 * t * t)) {
+          break;
+        }
+      }
+    }
+    x = s + 0.5 * t;
+    return scale * x * x;
+  }
+
+  // hist(x, breaks = -20:20/2)$counts: right-closed bins, the lowest one closed,
+  // edges moved by fuzz = 1e-7 * median(diff(breaks)) as hist.default does
+  const PRIOR_VAR_BREAKS = Float64Array.from({ length: 41 }, function (_, i) { return (i - 20) / 2; });
+  const PRIOR_VAR_FUZZY = Float64Array.from(PRIOR_VAR_BREAKS, function (b, i) { return b + (i === 0 ? -5e-8 : 5e-8); });
+
+  function histCountsR(values, counts) {
+    let n = 0;
+    for (let k = 0; k < values.length; k += 1) {
+      const v = values[k];
+      if (!(v > -10 && v < 10)) {
+        continue; // obsDist[obsDist > min(brks) & obsDist < max(brks)]
+      }
       let lo = 0;
-      let hi = nt + 1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (xp[mid] <= brks[b]) {
-          lo = mid + 1;
+      let hi = 40;
+      while (hi - lo >= 2) {
+        const mid = (hi + lo) >> 1;
+        if (v > PRIOR_VAR_FUZZY[mid]) {
+          lo = mid;
         } else {
           hi = mid;
         }
       }
-      brkIndex[b] = lo - 1;
+      counts[lo] += 1;
+      n += 1;
     }
+    return n;
+  }
+
+  const simulatedLogDispCache = {};
+
+  // densities of the 200 simulated histograms (row-major, 200 x 40) for df
+  function simulatedLogDisp(df) {
+    if (simulatedLogDispCache[df]) {
+      return simulatedLogDispCache[df];
+    }
+    const unif = rRandom(2);
     const grid = linspace(0.0, 8.0, 200);
-    const kls = new Float64Array(grid.length);
-    const cdfAt = new Map();
-    const baseCum = new Float64Array(nt + 1);
-    for (let i = 0; i < nt; i += 1) {
-      baseCum[i + 1] = baseCum[i] + base[i];
+    const nDraw = 10000;
+    const chi = new Float64Array(nDraw);
+    const draw = new Float64Array(nDraw);
+    const dens = new Float64Array(200 * 40);
+    const logDf = Math.log(df);
+    const counts = new Float64Array(40);
+    for (let gi = 0; gi < 200; gi += 1) {
+      for (let i = 0; i < nDraw; i += 1) {
+        chi[i] = rgammaR(unif, df / 2.0, 2.0); // rchisq(1e4, df)
+      }
+      const sd = Math.sqrt(grid[gi]);
+      for (let i = 0; i < nDraw; i += 1) {
+        // rnorm(.., 0, 0) returns 0 without drawing
+        const z = sd === 0 ? 0 : 0 + sd * normRandR(unif);
+        draw[i] = Math.log(chi[i]) + z - logDf;
+      }
+      counts.fill(0);
+      const n = histCountsR(draw, counts);
+      for (let b = 0; b < 40; b += 1) {
+        dens[gi * 40 + b] = counts[b] / (n * 0.5);
+      }
     }
-    for (let gi = 0; gi < grid.length; gi += 1) {
-      const v = grid[gi];
-      cdfAt.clear();
-      let cdf;
-      if (v === 0) {
-        // cumsum(base) * step
-        let acc = 0;
-        const cum = new Float64Array(nt + 1);
-        for (let i = 0; i < nt; i += 1) {
-          acc += base[i];
-          cum[i + 1] = acc * step;
-        }
-        cdf = function (idx) { return cum[idx]; };
-      } else {
-        const sd = Math.sqrt(v);
-        const half = Math.ceil(8 * sd / step);
-        const K = 2 * half + 1;
-        const kernel = new Float64Array(K);
-        for (let i = 0; i < K; i += 1) {
-          const z = (i - half) * step / sd;
-          kernel[i] = Math.exp(-0.5 * (z * z));
-        }
-        const ksum = npSum(kernel);
-        for (let i = 0; i < K; i += 1) {
-          kernel[i] /= ksum;
-        }
-        const kc = new Float64Array(K);
-        let acc = 0;
-        for (let i = 0; i < K; i += 1) {
-          acc += kernel[i];
-          kc[i] = acc;
-        }
-        const KC = function (idx) { return idx < 0 ? 0 : (idx >= K - 1 ? kc[K - 1] : kc[idx]); };
-        // cdf[c] = step * sum_{i < c} dens[i];  dens[i] = sum_j base[j] kernel[i + half - j]
-        cdf = function (c) {
-          if (cdfAt.has(c)) {
-            return cdfAt.get(c);
-          }
-          let s = 0;
-          if (c > 0) {
-            const jLo = Math.max(0, -half);
-            const jHi = Math.min(nt - 1, c - 1 + half);
-            for (let j = jLo; j <= jHi; j += 1) {
-              const upper = KC(c - 1 + half - j);
-              const lower = KC(half - j - 1);
-              if (upper !== lower) {
-                s += base[j] * (upper - lower);
-              }
-            }
-          }
-          const value = s * step;
-          cdfAt.set(c, value);
-          return value;
-        };
+    simulatedLogDispCache[df] = dens;
+    return dens;
+  }
+
+  function priorVarFewDf(residuals, df) {
+    const obsCounts = new Float64Array(40);
+    const nObs = histCountsR(residuals, obsCounts);
+    const obsDens = new Float64Array(40);
+    for (let b = 0; b < 40; b += 1) {
+      obsDens[b] = obsCounts[b] / (nObs * 0.5);
+    }
+    let obsSmall = Infinity;
+    for (let b = 0; b < 40; b += 1) {
+      if (obsDens[b] > 0 && obsDens[b] < obsSmall) {
+        obsSmall = obsDens[b];
       }
-      const edges = new Float64Array(41);
-      for (let b = 0; b < 41; b += 1) {
-        const j = brkIndex[b];
-        const x0 = xp[j];
-        const x1 = xp[j + 1];
-        const f0 = cdf(j);
-        const f1 = cdf(j + 1);
-        const slope = (f1 - f0) / (x1 - x0);
-        edges[b] = slope * (brks[b] - x0) + f0;
-      }
-      const mass = new Float64Array(40);
+    }
+    const dens = simulatedLogDisp(df);
+    const grid = linspace(0.0, 8.0, 200);
+    const kls = new Float64Array(200);
+    for (let gi = 0; gi < 200; gi += 1) {
+      let small = obsSmall;
       for (let b = 0; b < 40; b += 1) {
-        mass[b] = Math.max(0, edges[b + 1] - edges[b]);
+        const v = dens[gi * 40 + b];
+        if (v > 0 && v < small) {
+          small = v;
+        }
       }
-      const total = npSum(mass);
-      const randDens = new Float64Array(40);
+      let kl = 0; // sum() in order (R's long double is a double on arm64)
       for (let b = 0; b < 40; b += 1) {
-        randDens[b] = total > 0 ? mass[b] / (total * 0.5) : mass[b];
+        kl += obsDens[b] * (Math.log(obsDens[b] + small) - Math.log(dens[gi * 40 + b] + small));
       }
-      let small = Infinity;
-      for (let b = 0; b < 40; b += 1) {
-        if (obsDens[b] > 0 && obsDens[b] < small) { small = obsDens[b]; }
-        if (randDens[b] > 0 && randDens[b] < small) { small = randDens[b]; }
-      }
-      const terms = new Float64Array(40);
-      for (let b = 0; b < 40; b += 1) {
-        terms[b] = obsDens[b] * (Math.log(obsDens[b] + small) - Math.log(randDens[b] + small));
-      }
-      kls[gi] = npSum(terms);
+      kls[gi] = kl;
     }
     const fine = linspace(0.0, 8.0, 1000);
     const smooth = loess(grid, kls, fine, 0.2);
@@ -1322,11 +1685,6 @@
       }
     }
     return Math.max(fine[best], 0.25);
-  }
-
-  // lgamma for the few non-integer half-integer arguments (k = df / 2)
-  function lgammaExact(x) {
-    return lgamma(x);
   }
 
   // ---- dispersion trend ----------------------------------------------------------------
@@ -2744,6 +3102,8 @@
     DEFAULTS: DEFAULTS,
     KEY_SHIFT: KEY_SHIFT,
     lgamma: lgamma,
+    lgammaR: lgammaR,
+    lgammaRSmall: lgammaRSmall,
     erfc: erfc,
     digamma: digamma,
     trigamma: trigamma,

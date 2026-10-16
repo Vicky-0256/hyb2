@@ -27,6 +27,15 @@ counts are random rows of the reproduce_zikv comparisons:
   points (random, wide, tied and equispaced means; scratch generator, kept as
   ``case means disps`` and ``case q p``; ``p`` is NA where R stops with "out of
   vertex space").
+- ``map_two_vs_two`` (2 vs 2), ``map_three_vs_two`` (3 vs 2), ``map_one_vs_two``
+  (1 vs 2): small synthetic tables (scratch generator, R ``DESeq()`` defaults,
+  ``results(alpha = 0.01)``; columns baseMean lfc padj dispGeneEst dispFit
+  dispersion dispPriorVar) with 1-3 residual degrees of freedom, where
+  dispPriorVar comes from DESeq2's simulation after ``set.seed(2)``; the
+  numerical-convolution prior variance was off by up to 25x and the final
+  dispersions by up to 80%.  ``map_small_dispersion`` (2 vs 3, local trend):
+  genes whose MAP dispersion is ~1e-4, where the order of the lgamma terms in
+  the log posterior decides the line search.
 """
 import json
 import math
@@ -43,6 +52,29 @@ sys.path.insert(0, str(HERE.parent))
 from hyb2analysis import deseq, differential  # noqa: E402
 
 GOLDEN = HERE / "golden" / "deseq"
+
+# R 4.4.3: hist(log(rchisq(1e4, 2)) + rnorm(1e4, 0, sqrt(v)) - log(2), breaks =
+# -20:20/2)$counts for the 101st grid value v of seq(0, 8, length = 200), the
+# draws continuing the stream after set.seed(2) as estimateDispersionsPriorVar
+# does
+SIMULATED_DF2_GRID100 = [3, 2, 7, 10, 11, 21, 36, 64, 90, 141, 183, 242, 314, 442, 483, 651, 698, 798, 815, 868,
+                         827, 724, 618, 553, 450, 320, 232, 160, 105, 58, 27, 23, 11, 3, 2, 4, 0, 0, 0, 0]
+# R 4.4.3 lgamma(x), both printed with %a
+LGAMMA_R = [
+    ("0x1p-1", "0x1.250d048e7a1bdp-1"),
+    ("0x1.ep+1", "0x1.7c9ff21d3df6ap+0"),
+    ("0x1.3fae147ae147bp+3", "0x1.98f02675dd191p+3"),
+    ("0x1.5p+3", "0x1.be199a0f64394p+3"),
+    ("0x1.6333333333333p+5", "0x1.ec2d15b2e1b2p+6"),
+    ("0x1.81cd6c8b43958p+13", "0x1.9617eb7eee0bcp+16"),
+    ("0x1.3882aaaaaaaabp+13", "0x1.40b6c9a012ff2p+16"),
+    ("0x1.2d30fep+22", "0x1.0f4b61cf35128p+26"),
+    ("0x1.2d3106p+22", "0x1.0f4b6983eb25bp+26"),
+    ("0x1.7d78404p+24", "0x1.7e4a2083b2ce5p+28"),
+    ("0x1.7d7841cp+26", "0x1.9f57678c31c43p+30"),
+    ("0x1.5d3ef798p+41", "0x1.2ea3b362d0422p+46"),
+    ("0x1.6345785d8ap+57", "0x1.af2da8ce803abp+62"),
+]
 
 
 def _load(case):
@@ -122,6 +154,31 @@ class DeseqMatchesR(unittest.TestCase):
         r = np.array([expected[i] for i in ids])  # baseMean lfc padj dispFit dispersion
         np.testing.assert_allclose(res["dispFit"], r[:, 3], rtol=1e-6)
         np.testing.assert_allclose(res["dispersion"], r[:, 4], rtol=1e-6)
+
+    def test_map_dispersion_matches_r(self):
+        for case in ("map_two_vs_two", "map_three_vs_two", "map_one_vs_two", "map_small_dispersion"):
+            with self.subTest(case=case):
+                ids, counts, one, expected = _load(case)
+                keep = counts.sum(axis=1) > 2
+                res = deseq.deseq_two_conditions(counts[keep], [bool(v) for v in one])
+                r = np.array([expected[i] for i, k in zip(ids, keep) if k])
+                # baseMean lfc padj dispGeneEst dispFit dispersion dispPriorVar
+                self.assertAlmostEqual(res["dispPriorVar"], r[0, 6], places=12)
+                np.testing.assert_allclose(res["dispGeneEst"], r[:, 3], rtol=1e-9)
+                np.testing.assert_allclose(res["dispFit"], r[:, 4], rtol=1e-8)
+                np.testing.assert_allclose(res["dispersion"], r[:, 5], rtol=1e-8)
+                # (IRLS stops at a deviance tolerance: lfc within ~1e-5 where a cell is 0)
+                np.testing.assert_allclose(res["log2FoldChange"], r[:, 1], rtol=1e-4)
+                np.testing.assert_allclose(res["padj"], r[:, 2], rtol=1e-4)
+
+    def test_prior_variance_simulation_is_rs(self):
+        dens = deseq._simulated_log_disp(2)
+        expected = SIMULATED_DF2_GRID100
+        np.testing.assert_array_equal(np.round(dens[100] * np.sum(expected) * 0.5), expected)
+
+    def test_lgamma_is_rs(self):
+        for x, value in LGAMMA_R:
+            self.assertEqual(deseq._lgamma_r(float.fromhex(x)), float.fromhex(value), x)
 
     def test_local_fit_on_a_few_points(self):
         # degenerate local fits (one or two points in the window, a vertex with

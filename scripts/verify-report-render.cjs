@@ -101,6 +101,7 @@ context.window.Hyb2StructureUI = {
   }
 };
 
+vm.runInContext(fs.readFileSync(path.join(repository, "web", "results.js"), "utf8"), context, { filename: "results.js" });
 vm.runInContext(fs.readFileSync(path.join(repository, "web", "report-page.js"), "utf8"), context, { filename: "report-page.js" });
 
 const state = {
@@ -197,6 +198,11 @@ assert.match(similaritySvg(html), /<rect x="52" y="24" width="650" height="300" 
 state.comparison.similarityPanel = "grey";
 assert.match(similaritySvg(report.render(state)), /<rect x="52" y="24" width="650" height="300" fill="#ebebeb"/, "grey similarity panel");
 delete state.comparison.similarityPanel;
+
+// section status chips come from the result record (results.js)
+assert.match(html, /data-step="S04" data-status="ok"/, "the contact map chip is the record's S04 status");
+assert.match(html, /data-step="S12" data-status="ok"/);
+assert.match(html, /Results at a glance/);
 
 const data = report.getData(state);
 assert.equal(data.application, "HYB2 Web Lite");

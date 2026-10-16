@@ -100,6 +100,68 @@
   gap: 8px;
 }
 
+.report-export-menu {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.report-export-label {
+  color: var(--report-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.report-export-panel {
+  margin: 18px 0 0;
+  padding: 16px 18px;
+  border: 1px solid var(--report-line, var(--line));
+  border-radius: var(--radius-md, 10px);
+  background: var(--report-surface, var(--surface));
+}
+
+.report-export-panel h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.report-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.report-scope-note {
+  max-width: 820px;
+  margin: 10px 0 0;
+  color: var(--report-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.report-step-heading {
+  margin-top: 18px;
+}
+
+.report-figure-panel {
+  margin-top: 14px;
+}
+
+.report-details {
+  margin-top: 14px;
+}
+
+.report-details > summary {
+  cursor: pointer;
+  color: var(--report-ink);
+  font-weight: 700;
+}
+
 .report-hero-copy {
   max-width: 820px;
   padding-top: 52px;
@@ -572,7 +634,9 @@
   .pop-layer,
   .toast,
   .report-actions,
-  .report-print-note {
+  .report-export-panel,
+  .report-print-note,
+  .report-section button {
     display: none !important;
   }
 

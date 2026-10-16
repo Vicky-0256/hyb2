@@ -1046,6 +1046,8 @@
     defaultState: defaultState,
     build: build,
     svg: svg,
+    // { model, svg } of the card's last state, shared with the result record
+    cachedModel: cachedModel,
     renderCard: renderCard,
     loadFile: loadFile,
     setControl: setControl

@@ -83,16 +83,37 @@ The page has no analytics, API call, runtime CDN request, or server-side upload 
 
 The landing flow is intentionally two-stage: after the HYB file is parsed, the page stays on a local file-review screen. Users can add or replace the optional reference FASTA there, then click **Enter analysis** to open the workspace. Interaction tables and contact maps do not require FASTA; reference-based RNA structure and full-reference Viewpoint do.
 
-## Printable report
+## Report and result exports
 
 After entering the workspace, choose **Report** in the header or sidebar. The
 report page consolidates the current session's summary, validation, interaction
-filters, Contact Map, Viewpoint, Region Explorer, Compare, and RNA Structure
-state in one print-oriented document. **Print / Save PDF** opens the browser
-print dialog; choose **Save as PDF** there. A **Download report data** action
-also saves a bounded JSON snapshot locally. Large tables and visual maps are
-sampled for reliable printing; the existing page-level raw data and visual
-exports remain available when the complete dataset is needed.
+filters, Contact Map, Viewpoint, Region Explorer, Compare (with panels A to G
+of the summary figure) and RNA Structure state, with the scope, version and
+generation time at the top.
+
+Everything the report states comes from one result record (`results.js`):
+13 steps (S01 to S13) and 41 results (R01 to R41) with fixed ids, units,
+definitions and a status (`ok`, `no_result`, `not_run`, `running`, `failed`,
+`stale`, `pending`). A step that did not run is `not_run` and its results are
+null, never 0. **Results at a glance** lists them, and each Compare panel links
+the table behind it.
+
+**Export** offers three packages, all built in the tab without uploading:
+
+- **For people**: Print / Save PDF, or one offline HTML file with the styles
+  and images inlined.
+- **For AI**: `README.md`, a template `report.md` (no language model),
+  `summary.json`, `data_dictionary.json`, `provenance.json`, `evidence.json`,
+  bounded tables and `manifest.json` (sizes and SHA-256), as a ZIP or file by
+  file, plus **Copy AI summary**.
+- **For further analysis**: the full tables (every filtered record up to one
+  million, every comparison cell, significant cells, regions, folding
+  energies), the structures as dot-bracket and the figure SVGs, with the same
+  dictionary, provenance and manifest.
+
+The input files are never included, only their names and digests.
+`scripts/verify-results.cjs` checks that the report page, Markdown, JSON and
+tables agree; `verify-example.cjs` checks the record on the included example.
 
 ## Included example
 

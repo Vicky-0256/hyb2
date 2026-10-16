@@ -74,6 +74,7 @@ type dataRunDialog struct {
 	estimate *dataEstimate
 	err      string
 	time     *core.PipelineEstimate
+	leftOut  []string // samples not started: no reference
 }
 
 type dataSheetDialog struct {
@@ -127,6 +128,8 @@ type dataPage struct {
 	// inputs: check_inputs items by "<kind>:<id>"; checkSummary the line
 	// shown after a check.
 	inputs       map[string]dataInputItem
+	checkedOpen  int // a.opened whose inputs were checked
+	checkSeq     int // only the latest check's answer is shown
 	checkSummary string
 	checking     bool
 	// runningFor maps a sample to the task this session started for it,
@@ -225,6 +228,39 @@ func (p *dataPage) problem(s model.Sample) (model.Stage, bool) {
 		}
 	}
 	return model.Stage{}, false
+}
+
+// needsReference: the sample's reads cannot be mapped, it has no
+// reference (sample_run refuses it); a .hyb sample is already mapped.
+func (p *dataPage) needsReference(s model.Sample) bool {
+	return s.Reads.Format != "hyb" && p.a.Project.Reference(s.ReferenceID) == nil
+}
+
+// withReference splits samples into those that can run and the names of
+// those without a reference.
+func (p *dataPage) withReference(samples []model.Sample) (ok []model.Sample, missing []string) {
+	for _, s := range samples {
+		if p.needsReference(s) {
+			missing = append(missing, s.Label())
+		} else {
+			ok = append(ok, s)
+		}
+	}
+	return ok, missing
+}
+
+// noReferenceText says that names were not started.
+func noReferenceText(names []string, started bool) string {
+	list := strings.Join(names, ", ")
+	switch {
+	case started && len(names) == 1:
+		return list + " is left out: it has no reference. Use Set reference… in its row."
+	case started:
+		return list + " are left out: they have no reference. Use Set reference… in their rows."
+	case len(names) == 1:
+		return list + " has no reference. Use Set reference… in its row first."
+	}
+	return list + " have no reference. Use Set reference… in their rows first."
 }
 
 func (p *dataPage) box(id string) *bool {
@@ -402,6 +438,12 @@ func dataErrText(err error) string {
 func (p *dataPage) View(c *ui.Context) {
 	a := p.a
 	t := c.Theme()
+	if a.Project != nil && p.checkedOpen != a.opened {
+		// Files may have moved since the last session: mark them now, not
+		// when a Resume fails again.
+		p.checkedOpen, p.inputs, p.checkSummary = a.opened, nil, ""
+		p.checkInputsQuiet()
+	}
 	if folder := a.pendingFolder; folder != "" && a.Project != nil {
 		a.pendingFolder = "" // chosen on the start page with a new project
 		p.scanFolder(folder)
@@ -415,7 +457,7 @@ func (p *dataPage) View(c *ui.Context) {
 				PageHeader(c, "Data", "References and samples of this project. Raw files are linked in place unless copied.")
 			})
 			if ui.Button(c, "Check inputs").Disabled(p.checking).Clicked() {
-				p.checkInputs()
+				p.runCheck(false)
 			}
 			if ui.Button(c, "Import sample sheet…").Clicked() {
 				p.importSheet()
@@ -695,7 +737,16 @@ func (p *dataPage) sampleRows(c *ui.Context, samples []model.Sample, cols []ui.T
 						dataStageChip(c, name, status)
 					}
 				})
-				if reason != "" {
+				if p.needsReference(s) {
+					id := s.ID
+					ui.Row(c).Gap(6).Children(func() {
+						ui.Text(c, "No reference").FontSize(11).TextColor(c.Theme().Danger)
+						if ui.Link(c, "Set reference…", "").FontSize(11).
+							Tooltip("Choose the reference " + s.Label() + "'s reads are mapped to").Clicked() {
+							p.openEdit(id)
+						}
+					})
+				} else if reason != "" {
 					ui.Text(c, reason).FontSize(11).TextColor(c.Theme().Danger).SingleLine().
 						Tooltip(reason + " — the full log is in the task drawer")
 				}
@@ -760,6 +811,8 @@ func (p *dataPage) rowAction(c *ui.Context, s model.Sample, task model.Task, act
 		if ui.Button(c, "Cancel").Tooltip("Cancel " + s.Label() + "'s run").Clicked() {
 			a.CancelTask(task.TaskID)
 		}
+	case p.needsReference(s):
+		ui.Button(c, "Run").Disabled(true).Tooltip("Set a reference first: reads are mapped to it")
 	default:
 		if _, bad := p.problem(s); bad {
 			if ui.Button(c, "Resume").Clicked() {
@@ -780,17 +833,26 @@ func (p *dataPage) rowAction(c *ui.Context, s model.Sample, task model.Task, act
 
 func (p *dataPage) runSamples(samples []model.Sample) {
 	a := p.a
-	var ids []string
+	var idle []model.Sample
 	for _, s := range samples {
 		if _, active := p.activeTask(s); !active {
-			ids = append(ids, s.ID)
+			idle = append(idle, s)
 		}
 	}
-	if len(ids) == 0 {
+	if len(idle) == 0 {
 		a.Toast("Those samples are already running.")
 		return
 	}
-	p.run = dataRunDialog{open: true, ids: ids, loading: true}
+	runnable, leftOut := p.withReference(idle)
+	if len(runnable) == 0 {
+		a.Toast("%s", noReferenceText(leftOut, false))
+		return
+	}
+	var ids []string
+	for _, s := range runnable {
+		ids = append(ids, s.ID)
+	}
+	p.run = dataRunDialog{open: true, ids: ids, loading: true, leftOut: leftOut}
 	path := a.Project.Path
 	var inputs []core.PipelineInput
 	for _, id := range ids {
@@ -839,6 +901,9 @@ func (p *dataPage) runDialog(c *ui.Context) {
 				}
 			}
 			ui.Text(c, strings.Join(names, ", "))
+			if len(d.leftOut) > 0 {
+				ui.Text(c, noReferenceText(d.leftOut, true)).FontSize(12).TextColor(t.Warning)
+			}
 			switch {
 			case d.loading:
 				ui.Row(c).Gap(8).Children(func() {
@@ -942,6 +1007,10 @@ func (p *dataPage) startRuns(ids []string) {
 // checkpoints); without a known task, it starts a fresh run.
 func (p *dataPage) resumeSamples(samples []model.Sample) {
 	a := p.a
+	samples, leftOut := p.withReference(samples)
+	if len(leftOut) > 0 {
+		a.Toast("%s", noReferenceText(leftOut, len(samples) > 0))
+	}
 	for _, s := range samples {
 		stage, _ := p.problem(s)
 		sampleID, name := s.ID, s.Label()
@@ -1529,22 +1598,40 @@ func (p *dataPage) allowLinks(links []model.UntrustedLink) {
 
 // ---- check inputs and relink
 
-func (p *dataPage) checkInputs() {
+// checkInputsQuiet checks on open: no toast, and a summary only when
+// something needs a look (or the check could not run).
+func (p *dataPage) checkInputsQuiet() { p.runCheck(true) }
+
+func (p *dataPage) runCheck(quiet bool) {
 	a := p.a
 	path := a.Project.Path
-	p.checking = true
+	p.checkSeq++
+	seq := p.checkSeq
+	if !quiet {
+		p.checking = true
+	}
 	a.Go(func() func() {
 		result, err := a.B.ProjectOp(path, "check_inputs", nil)
 		var items []dataInputItem
+		var noReference []string
 		if err == nil {
 			err = model.Decode(result["items"], &items)
 		}
+		if err == nil && result["no_reference"] != nil {
+			err = model.Decode(result["no_reference"], &noReference)
+		}
 		return func() {
-			p.checking = false
-			if a.Project == nil || a.Project.Path != path {
+			if !quiet {
+				p.checking = false
+			}
+			if seq != p.checkSeq || a.Project == nil || a.Project.Path != path {
 				return
 			}
 			if err != nil {
+				if quiet {
+					p.checkSummary = "Could not check the input files: " + dataErrText(err)
+					return
+				}
 				a.ToastAs("check-inputs", "Check failed: %s", dataErrText(err))
 				return
 			}
@@ -1558,10 +1645,22 @@ func (p *dataPage) checkInputs() {
 			if n := count["unconfirmed"]; n > 0 {
 				p.checkSummary += fmt.Sprintf(" %d not opened (linked on another computer).", n)
 			}
-			if count["missing"] == 0 && count["changed"] == 0 {
-				a.ToastAs("check-inputs", "All %d input files are present and unchanged.", len(items))
-			} else {
+			if n := len(noReference); n > 0 {
+				p.checkSummary += " " + dataPlural(n, "sample has", "samples have") + " no reference."
+			}
+			if quiet {
+				if count["missing"]+count["changed"]+count["unconfirmed"]+len(noReference) == 0 {
+					p.checkSummary = ""
+				}
+				return
+			}
+			switch {
+			case count["missing"] > 0 || count["changed"] > 0:
 				a.ToastAs("check-inputs", "%d missing, %d changed. Use Relink on the marked rows.", count["missing"], count["changed"])
+			case len(noReference) > 0:
+				a.ToastAs("check-inputs", "%s before running.", dataPlural(len(noReference), "sample needs a reference", "samples need a reference"))
+			default:
+				a.ToastAs("check-inputs", "All %d input files are present and unchanged.", len(items))
 			}
 		}
 	})

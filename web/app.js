@@ -19,18 +19,8 @@
   let app = null;
   const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
-  const exampleAssets = {
-    hyb: {
-      url: (window.HYB2_ASSET_BASE || "./") + "assets/examples/ZIKV_1-10807_example.hyb",
-      fileName: "ZIKV_1-10807_example.hyb",
-      type: "text/plain"
-    },
-    fasta: {
-      url: (window.HYB2_ASSET_BASE || "./") + "assets/examples/ZIKV_1-10807.fasta",
-      fileName: "ZIKV_1-10807.fasta",
-      type: "text/plain"
-    }
-  };
+  // The included example (example.js): files are fetched only when it is used.
+  const example = window.Hyb2Example || null;
 
   const state = {
     activePage: "landing",
@@ -56,6 +46,9 @@
     parseSession: null,
     fastaLoadSession: null,
     exampleLoadSession: null,
+    // the example's second stage (replicates, arc map files) after the
+    // primary HYB is parsed: { stage, done, total, error, ready }
+    exampleSetup: null,
     landingFastaFile: null,
     loading: null,
     error: null,
@@ -716,23 +709,8 @@
       "    </div>",
       '    <span class="v0-chip">Local-only</span>',
       "  </div>",
-      '  <section class="example-strip" aria-labelledby="example-title">',
-      '    <div class="example-strip-heading">',
-      '      <div><span class="example-kicker">Included example</span><h3 id="example-title">Try the ZIKV interaction dataset</h3></div>',
-      '      <span class="example-badge">10,000-record subset</span>',
-      "    </div>",
-      '    <p class="example-copy">Load a browser-sized subset of 1-Livefire1_virus-virus.hyb and the matching ZIKV_1-10807 reference FASTA.</p>',
-      '    <div class="example-files" aria-label="Included example files">',
-      '      <div class="example-file"><span class="example-file-kind">HYB</span><code>ZIKV_1-10807_example.hyb</code></div>',
-      '      <div class="example-file"><span class="example-file-kind">FASTA</span><code>ZIKV_1-10807.fasta</code></div>',
-      "    </div>",
-      '    <div class="example-actions">',
-      '      <button class="button" type="button" data-action="load-example">Try example</button>',
-      '      <a class="quiet-button example-link" href="' + exampleAssets.hyb.url + '" download>Download HYB</a>',
-      '      <a class="quiet-button example-link" href="' + exampleAssets.fasta.url + '" download>Download FASTA</a>',
-      "    </div>",
-      "  </section>",
-      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Choose a HYB file">',
+          renderExampleStrip(),
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
       '  <div class="dropzone" data-dropzone tabindex="0" aria-label="HYB input drop zone" aria-describedby="file-input-hint">',
       '    <div class="dropzone-content">',
@@ -740,7 +718,7 @@
       '      <h3 class="dropzone-title">Drop a .hyb file here</h3>',
       '      <p class="dropzone-copy">or choose a file from this device</p>',
       '      <button class="button" type="button" data-action="choose-hyb">Choose HYB file</button>',
-      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files</span>',
+      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files, also gzip-compressed (.gz)</span>',
       "    </div>",
       "  </div>",
       '  <section class="reference-upload" aria-labelledby="reference-upload-title">',
@@ -759,6 +737,44 @@
       '  <p class="card-footnote">Recommended working size: up to 50 MB. Larger files are streamed to a dedicated worker to keep the interface responsive.</p>',
       "</div></div>"
     ].join("");
+  }
+
+  function renderExampleStrip() {
+    if (!example) {
+      return "";
+    }
+    return [
+      '  <section class="example-strip" aria-labelledby="example-title">',
+      '    <div class="example-strip-heading">',
+      '      <div><span class="example-kicker">Included example</span><h3 id="example-title">Try the ZIKV virion comparison: ZAFR vs ZASI</h3></div>',
+      '      <span class="example-badge">1-in-10 subset · 4 replicates</span>',
+      "    </div>",
+      '    <p class="example-copy">ZIKV virion RNA of the African lineage (ZAFR, replicates 1 and 2) and the Asian lineage (ZASI = ZILM, French Polynesian isolate, replicates 2 and 3): every 10th record of each replicate .hyb (133,457 records, 6.9 MB compressed), each on its own genome. The primary file is ZAFR replicate 1; the Compare page gets all four replicates (10-nt bins, similarity minimum 10) and an arc map preloaded with CPLfold pseudoknot-free genome folds of both lineages and the NC_035889 gene track. Running the differential test there fills every panel of the summary figure. Because the data are a subset, the panels reproduce the method, not the published numbers.</p>',
+      '    <div class="example-files" aria-label="Included example files">',
+      example.downloads.map(function (item) {
+        return '      <div class="example-file"><span class="example-file-kind">' + escapeHtml(item.kind) + '</span><code title="' + escapeAttribute(item.note) + '">' + escapeHtml(item.file) +
+          '</code><a class="example-file-link" href="' + escapeAttribute(example.url(item.file)) + '" download aria-label="Download ' + escapeAttribute(item.file) + '">Download</a></div>';
+      }).join(""),
+      "    </div>",
+      '    <div class="example-actions">',
+      '      <button class="button" type="button" data-action="load-example">Try example</button>',
+      '      <span class="example-note">Fetched only when you start it; decompressed and parsed in this tab.</span>',
+      "    </div>",
+      "  </section>"
+    ].join("");
+  }
+
+  function renderExampleSetup() {
+    const setup = state.exampleSetup;
+    if (!setup) {
+      return "";
+    }
+    const text = setup.error
+      ? "Example comparison setup stopped: " + setup.error
+      : (setup.ready
+        ? "Compare page ready: " + example.labels.A + " (ZAFR_REP1, ZAFR_REP2) vs " + example.labels.B + " (ZILM_REP2, ZILM_REP3), 10-nt bins, similarity minimum 10; arc map with both CPLfold folds and the gene track. Run the differential test on the Compare page to fill panels A and C to G."
+        : setup.stage + (setup.total ? " (" + formatNumber(setup.done) + " of " + formatNumber(setup.total) + ")" : "") + "…");
+    return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>";
   }
 
   function renderPreparedFilePanel() {
@@ -801,6 +817,7 @@
       "    </div>",
       "  </section>",
       '  <p class="prepared-file-note"><strong>FASTA is optional.</strong> Interaction tables and contact maps can run without it; reference-based structure and full-reference coordinate views need a mapped sequence. You can also add or replace it later from the Files panel.</p>',
+      renderExampleSetup(),
       '  <section class="prepared-next-step" aria-label="Enter analysis workspace">',
       '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>All calculations still run locally in this browser tab.</span></div>',
       '    <button class="button" type="button" data-action="enter-analysis">Enter analysis</button>',
@@ -892,8 +909,8 @@
       renderMobileNav(),
       renderTweaks(),
       renderDialog(),
-      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" aria-label="Replace HYB file">',
-      '  <input id="comparison-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,text/plain" multiple aria-label="Add HYB datasets for comparison">',
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Replace HYB file">',
+      '  <input id="comparison-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" multiple aria-label="Add HYB datasets for comparison">',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose a reference FASTA file">',
       '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
       "</div>"
@@ -1439,13 +1456,19 @@
     }
   }
 
+  // Stage one: fetch the primary HYB and its FASTA, then parse as an upload.
+  // Stage two (continueExample) starts once the primary file is registered.
   async function loadExample() {
+    if (!example) {
+      return;
+    }
     const session = {};
     state.exampleLoadSession = session;
+    state.exampleSetup = null;
     state.dialog = null;
     state.error = null;
     state.loading = {
-      fileName: "Zika interaction example",
+      fileName: example.title,
       totalBytes: 0,
       processedBytes: 0,
       parsedRecords: 0,
@@ -1455,26 +1478,23 @@
     render();
 
     try {
-      const responses = await Promise.all([
-        fetch(exampleAssets.hyb.url, { cache: "no-store" }),
-        fetch(exampleAssets.fasta.url, { cache: "no-store" })
-      ]);
+      let received = 0;
+      const files = await Promise.all([example.primary.file, example.reference.file].map(function (name) {
+        return fetchExampleFile(name, function (bytes) {
+          if (state.exampleLoadSession !== session) {
+            return;
+          }
+          received += bytes;
+          state.loading.processedBytes = received;
+          state.loading.stage = "Loading example files";
+          updateLoadingStatus("Loading example files · " + formatBytes(received) + " downloaded");
+        });
+      }));
       if (state.exampleLoadSession !== session) {
         return;
       }
-      responses.forEach(function (response) {
-        if (!response.ok) {
-          throw new Error("The example asset could not be read (HTTP " + response.status + ").");
-        }
-      });
-      const blobs = await Promise.all(responses.map(function (response) { return response.blob(); }));
-      if (state.exampleLoadSession !== session) {
-        return;
-      }
-      const hybFile = createExampleFile(blobs[0], exampleAssets.hyb);
-      const fastaFile = createExampleFile(blobs[1], exampleAssets.fasta);
       state.exampleLoadSession = null;
-      startParsing(hybFile, { referenceFile: fastaFile });
+      startParsing(files[0], { referenceFile: files[1], example: true });
     } catch (error) {
       if (state.exampleLoadSession !== session) {
         return;
@@ -1485,6 +1505,127 @@
         title: "The example could not be loaded",
         message: error && error.message ? error.message : "The included example files are unavailable."
       };
+      render();
+    }
+  }
+
+  // Updates the loading panel's status line without a full render.
+  function updateLoadingStatus(text) {
+    const node = app && app.querySelector(".load-status");
+    if (node) {
+      node.textContent = text;
+    }
+  }
+
+  // fetch one example file as a File; onBytes(n) reports downloaded bytes
+  async function fetchExampleFile(name, onBytes) {
+    const response = await fetch(example.url(name), { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("The example file " + name + " could not be read (HTTP " + response.status + ").");
+    }
+    let blob;
+    if (response.body && typeof response.body.getReader === "function") {
+      const reader = response.body.getReader();
+      const chunks = [];
+      while (true) {
+        const next = await reader.read();
+        if (next.done) {
+          break;
+        }
+        chunks.push(next.value);
+        if (onBytes) {
+          onBytes(next.value.byteLength);
+        }
+      }
+      blob = new Blob(chunks);
+    } else {
+      blob = await response.blob();
+    }
+    return createExampleFile(blob, { fileName: name, type: /\.gz$/i.test(name) ? "application/gzip" : "text/plain" });
+  }
+
+  // Stage two: the other three replicates go to the Compare page (parsed in
+  // workers, as "Add HYB datasets" does) and the arc map gets both folds and
+  // the gene track.  The landing page stays usable meanwhile.
+  async function continueExample(parsedFile) {
+    const comparison = state.comparison;
+    if (!example || !comparison) {
+      return;
+    }
+    const setup = { stage: "Downloading the other replicates", done: 0, total: example.replicates.length, error: "", ready: false };
+    state.exampleSetup = setup;
+    const current = function () {
+      return state.exampleSetup === setup && state.comparison === comparison && state.file === parsedFile;
+    };
+    comparison.conditionALabel = example.labels.A;
+    comparison.conditionBLabel = example.labels.B;
+    comparison.binSize = example.comparison.binSize;
+    comparison.similarityMinimum = example.comparison.similarityMinimum;
+    (comparison.datasets || []).forEach(function (dataset) {
+      if (dataset.id === PRIMARY_DATASET_ID) {
+        dataset.label = example.primary.label;
+      }
+    });
+    if (canRegisterDatasets()) {
+      provider.updateDataset(PRIMARY_DATASET_ID, { label: example.primary.label });
+    }
+    comparison.result = null;
+    render();
+    try {
+      const arcFiles = Promise.all([example.arcMap.a, example.arcMap.b, example.arcMap.annotation].map(function (name) {
+        return fetchExampleFile(name);
+      }));
+      const replicateFiles = [];
+      for (let index = 0; index < example.replicates.length; index += 1) {
+        replicateFiles.push(await fetchExampleFile(example.replicates[index].file));
+        if (!current()) {
+          return;
+        }
+        setup.done = index + 1;
+        render();
+      }
+      const structures = await arcFiles;
+      if (!current()) {
+        return;
+      }
+      if (window.Hyb2ArcMap) {
+        state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
+        await Promise.all([
+          window.Hyb2ArcMap.loadFile(state.arcMap, "a", structures[0]),
+          window.Hyb2ArcMap.loadFile(state.arcMap, "b", structures[1]),
+          window.Hyb2ArcMap.loadFile(state.arcMap, "annotation", structures[2])
+        ]);
+        state.arcMap.labelOne = example.labels.A;
+        state.arcMap.labelTwo = example.labels.B;
+      }
+      if (!current()) {
+        return;
+      }
+      setup.stage = "Parsing the other replicates";
+      setup.done = 0;
+      render();
+      await loadComparisonFiles(replicateFiles, {
+        assign: example.replicates,
+        onFile: function (index) {
+          if (current()) {
+            setup.done = index;
+          }
+        }
+      });
+      if (!current()) {
+        return;
+      }
+      if (comparison.error) {
+        setup.error = comparison.error;
+      } else {
+        setup.ready = true;
+      }
+      render();
+    } catch (error) {
+      if (!current()) {
+        return;
+      }
+      setup.error = error && error.message ? error.message : "the example files are unavailable.";
       render();
     }
   }
@@ -1507,8 +1648,10 @@
     state.exampleLoadSession = null;
     const parseSession = {
       file: file,
-      referenceFile: referenceFile
+      referenceFile: referenceFile,
+      example: !!parseOptions.example
     };
+    state.exampleSetup = null;
     state.parseSession = parseSession;
     state.dialog = null;
     state.file = file;
@@ -1625,6 +1768,9 @@
             setRouteHash("#/");
             if (parseSession.referenceFile) {
               loadFasta(parseSession.referenceFile);
+            }
+            if (parseSession.example) {
+              continueExample(file);
             }
             if (state.pendingSessionSnapshot) {
               const pending = state.pendingSessionSnapshot;
@@ -1987,7 +2133,11 @@
     }
   }
 
-  async function loadComparisonFiles(files) {
+  // options.assign[index] = { label, condition } overrides a file's label and
+  // condition (the example); options.onFile(index) reports progress.
+  async function loadComparisonFiles(files, options) {
+    const settings = options || {};
+    const assign = settings.assign || [];
     const comparisonSession = state.comparison;
     const primaryFile = state.file;
 
@@ -2017,6 +2167,9 @@
         return;
       }
       comparisonSession.loading = { total: files.length, completed: index, fileName: file.name || "HYB file" };
+      if (settings.onFile) {
+        settings.onFile(index);
+      }
       render();
 
       try {
@@ -2053,8 +2206,9 @@
           sha256Unavailable: !sha256,
           summary: parsed.summary,
           records: records,
-          condition: "B",
-          label: file.name ? file.name.replace(/\.(hyb|txt)$/i, "") : "Dataset " + (comparisonSession.datasets.length + index + 1)
+          condition: assign[index] && assign[index].condition || "B",
+          label: assign[index] && assign[index].label ||
+            (file.name ? file.name.replace(/\.gz$/i, "").replace(/\.(hyb|txt)$/i, "") : "Dataset " + (comparisonSession.datasets.length + index + 1))
         });
         comparisonSession.result = null;
         comparisonSession.selection = null;
@@ -2228,6 +2382,7 @@
     cancelComparisonLoads();
     invalidateFastaLoad();
     state.exampleLoadSession = null;
+    state.exampleSetup = null;
     state.landingFastaFile = null;
     state.parseSession = null;
     state.analysisEntered = false;
@@ -2271,6 +2426,7 @@
     cancelComparisonLoads();
     invalidateFastaLoad();
     state.exampleLoadSession = null;
+    state.exampleSetup = null;
     state.landingFastaFile = null;
     state.parseSession = null;
     state.analysisEntered = false;

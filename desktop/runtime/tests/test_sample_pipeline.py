@@ -105,7 +105,11 @@ class SamplePipelineTest(unittest.TestCase):
         result, _ = self.run_sample(sample["id"], "sample-missing")
         self.assertFalse(result["ok"])
         self.assertIn("missing", result["error"])
-        self.assertEqual(self.sample(sample["id"])["stages"]["hyb"]["status"], "pending")
+        # Nothing ran, but the first stage says this task failed (a pending
+        # stage hid the failure on the Data page).
+        stored = self.sample(sample["id"])
+        self.assertEqual((stored["stages"]["hyb"]["status"], stored["stages"]["hyb"]["task_id"]), ("failed", "sample-missing"))
+        self.assertIsNone(stored["outputs"]["hyb"])
 
     def test_unknown_sample_and_bad_parameters(self):
         with self.assertRaises(ValueError):

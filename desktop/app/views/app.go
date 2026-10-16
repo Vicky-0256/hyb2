@@ -63,6 +63,7 @@ type App struct {
 	DataDir string
 
 	Project *model.Project
+	opened  int // counts setProject: pages tell one opening from the next
 	Tasks   map[string]model.Task
 	labels  map[string]string
 
@@ -260,6 +261,7 @@ func applySamples(p *model.Project, listed core.Obj) {
 
 func (a *App) setProject(p *model.Project) {
 	a.Project = p
+	a.opened++
 	a.Tasks = map[string]model.Task{}
 	a.restoreUIState()
 	a.normalizeSelection()

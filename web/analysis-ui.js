@@ -1031,24 +1031,33 @@
     state.comparison.geometry = state.comparison.geometry || {};
     state.comparison.geometry[kind] = geometry;
     const cells = kind === "conserved" ? result.conservedCells : result.cells;
-
-    context.fillStyle = surface;
-    context.fillRect(0, 0, dimensions.width, dimensions.height);
-    // the similarity heatmap keeps similarity_heatmap.R's white panel
-    context.fillStyle = kind === "conserved" && !isDarkTheme() ? "#ffffff" : line;
-    context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
-    if (kind === "conserved" && !isDarkTheme()) {
-      context.strokeStyle = line;
-      context.strokeRect(geometry.left + .5, geometry.top + .5, geometry.plotWidth - 1, geometry.plotHeight - 1);
+    const panel = kind === "conserved" && !isDarkTheme() ? similarityPanelColor(state.comparison) : line;
+    // A whole-genome map has up to ~10^6 cells: they are drawn once into a
+    // layer kept with the result and copied on later renders.
+    const layerKey = [kind, canvas.width, canvas.height, surface, panel, isDarkTheme()].join("|");
+    let layers = comparisonLayers.get(result);
+    if (!layers) {
+      layers = new Map();
+      comparisonLayers.set(result, layers);
     }
-    cells.forEach(function (cell) {
-      const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
-      const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
-      context.fillStyle = kind === "conserved"
-        ? conservedColor(conservedRatio(cell.similarity, result))
-        : effectColor(cell.effect / Math.max(.01, result.effectCap));
-      context.fillRect(x, y, Math.ceil(geometry.cellWidth) + .4, Math.ceil(geometry.cellHeight) + .4);
-    });
+    let layer = layers.get(layerKey);
+    if (!layer && cells.length > COMPARISON_LAYER_MIN_CELLS && typeof document.createElement === "function") {
+      layer = document.createElement("canvas");
+      layer.width = canvas.width;
+      layer.height = canvas.height;
+      const layerContext = layer.getContext("2d");
+      layerContext.setTransform(canvas.width / dimensions.width, 0, 0, canvas.height / dimensions.height, 0, 0);
+      drawComparisonCells(layerContext, dimensions, geometry, result, kind, cells, surface, panel, line);
+      layers.set(layerKey, layer);
+    }
+    if (layer) {
+      context.save();
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.drawImage(layer, 0, 0);
+      context.restore();
+    } else {
+      drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line);
+    }
     if (state.comparison.selection) {
       const selected = state.comparison.selection;
       if (selected.x >= geometry.xStart && selected.x <= geometry.xEnd && selected.y >= geometry.yStart && selected.y <= geometry.yEnd) {
@@ -1080,6 +1089,52 @@
     }
     context.strokeStyle = line;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
+  }
+
+  function isComparisonLabel(key) {
+    return key === "conditionALabel" || key === "conditionBLabel";
+  }
+
+  const comparisonLayers = new WeakMap();
+  const COMPARISON_SVG_MAX_CELLS = 100000;
+  const COMPARISON_LAYER_MIN_CELLS = 20000;
+
+  function drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line) {
+    context.fillStyle = surface;
+    context.fillRect(0, 0, dimensions.width, dimensions.height);
+    // the similarity heatmap keeps similarity_heatmap.R's white panel, or
+    // ggplot's grey one so that bins at the smallest count show
+    context.fillStyle = panel;
+    context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
+    if (kind === "conserved" && !isDarkTheme()) {
+      context.strokeStyle = line;
+      context.strokeRect(geometry.left + .5, geometry.top + .5, geometry.plotWidth - 1, geometry.plotHeight - 1);
+    }
+    const width = Math.ceil(geometry.cellWidth) + .4;
+    const height = Math.ceil(geometry.cellHeight) + .4;
+    const effectCap = Math.max(.01, result.effectCap);
+    // similarity counts repeat a lot: each colour is computed once per draw
+    const colours = new Map();
+    let previous = "";
+    cells.forEach(function (cell) {
+      const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
+      const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
+      let colour;
+      if (kind === "conserved") {
+        colour = colours.get(cell.similarity);
+        if (colour === undefined) {
+          colour = conservedColor(conservedRatio(cell.similarity, result));
+          colours.set(cell.similarity, colour);
+        }
+      } else {
+        colour = effectColor(cell.effect / effectCap);
+      }
+      if (colour !== previous) {
+        context.fillStyle = colour;
+        previous = colour;
+      }
+      context.fillRect(x, y, width, height);
+    });
   }
 
   function getComparisonGeometry(result, width, height) {
@@ -1123,7 +1178,7 @@
     }
     const xIndex = Math.min(geometry.xCount - 1, Math.max(0, Math.floor((x - geometry.left) / geometry.cellWidth)));
     const yIndex = Math.min(geometry.yCount - 1, Math.max(0, Math.floor((y - geometry.top) / geometry.cellHeight)));
-    const cell = result.cellMap[(geometry.xStart + xIndex * result.binSize) + ":" + (geometry.yStart + yIndex * result.binSize)] || null;
+    const cell = window.Hyb2Data.comparisonCellAt(result, geometry.xStart + xIndex * result.binSize, geometry.yStart + yIndex * result.binSize);
     return kind === "conserved" && cell && !(cell.similarity > 0) ? null : cell;
   }
 
@@ -1305,8 +1360,17 @@
 
     if (feature === "comparison-control") {
       state.comparison[key] = element.value;
-      state.comparison.result = null;
-      state.comparison.selection = null;
+      // condition labels are display only: a whole-genome result is kept
+      if (!isComparisonLabel(key)) {
+        state.comparison.result = null;
+        state.comparison.selection = null;
+      }
+      api.render();
+      return true;
+    }
+
+    if (feature === "comparison-display" && state.comparison) {
+      state.comparison[key] = element.value;
       api.render();
       return true;
     }
@@ -1428,8 +1492,14 @@
     }
     if (feature === "comparison-control" && state.comparison) {
       state.comparison[key] = element.value;
-      state.comparison.result = null;
-      state.comparison.selection = null;
+      if (!isComparisonLabel(key)) {
+        state.comparison.result = null;
+        state.comparison.selection = null;
+      }
+      return true;
+    }
+    if (feature === "comparison-display" && state.comparison) {
+      state.comparison[key] = element.value;
       return true;
     }
     if (feature === "comparison-dataset" && state.comparison) {
@@ -1899,8 +1969,8 @@
     }
 
     if (action === "comparison-export-selected") {
-      const selected = state.comparison.selection && state.comparison.result && state.comparison.result.cellMap
-        ? state.comparison.result.cellMap[state.comparison.selection.x + ":" + state.comparison.selection.y]
+      const selected = state.comparison.selection && state.comparison.result
+        ? window.Hyb2Data.comparisonCellAt(state.comparison.result, state.comparison.selection.x, state.comparison.selection.y)
         : null;
       if (!selected) {
         api.showToast("Select a comparison bin before exporting dataset values.");
@@ -2169,7 +2239,12 @@
     const width = 720;
     const height = 520;
     const geometry = getComparisonGeometry(result, width, height);
-    const cells = result.cells.map(function (cell) {
+    // a whole-genome map keeps the SVG printable: the strongest effects,
+    // drawn weakest first
+    const shown = result.cells.length > COMPARISON_SVG_MAX_CELLS
+      ? result.cells.slice().sort(function (left, right) { return Math.abs(right.effect) - Math.abs(left.effect); }).slice(0, COMPARISON_SVG_MAX_CELLS).reverse()
+      : result.cells;
+    const cells = shown.map(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
       return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + effectColor(cell.effect / Math.max(.01, result.effectCap)) + '"/>';
@@ -2182,7 +2257,8 @@
       cells,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '"/>',
       '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" fill="' + colors.ink + '">' + escapeXml(state.comparison.rnaX) + ' (X) × ' + escapeXml(state.comparison.rnaY) + ' (Y) · Mean log2 effect</text>',
-      '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal</text>',
+      '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal' +
+        (shown.length < result.cells.length ? ' · the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins' : '') + '</text>',
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.xStart + '</text>',
       '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.xEnd + result.binSize - 1) + '</text>',
       '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.yStart + '</text>',
@@ -2404,6 +2480,7 @@
         normalisation: normalise,
         pseudocount: normalise === "per-million-library-size" ? 1 : 0.5,
         similarityMinimum: Number(comparison.similarityMinimum) > 1 ? Number(comparison.similarityMinimum) : 1,
+        similarityPanel: comparison.similarityPanel === "grey" ? "grey (#EBEBEB, display only)" : "white (as similarity_heatmap.R)",
         similarityMethod: "HYB2 plot_similarity_map on one merged raw map per condition (as Desktop differential.py; not hyb2_compare's consecutive replicate pairing): min(A, B) of bins present in both; similarityMinimum = awk $3 >= MIN on each merged map",
         similarityColourScale: "similarity_heatmap.R: counts capped at the 95% quantile, white at the smallest plotted count to forestgreen at the cap"
       },
@@ -2578,6 +2655,10 @@
   // scale_fill_gradient(low = white, high = forestgreen) over the data range,
   // so white is the smallest plotted count (not zero) and forestgreen the cap.
   // A single-valued range maps to the midpoint, like scales::rescale().
+  function similarityPanelColor(comparison) {
+    return comparison && comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff";
+  }
+
   function conservedRatio(similarity, result) {
     const cap = Math.max(1, Number(result && result.similarityCap) || 1);
     const floor = Math.min(cap, similarityFloorOf(result));
@@ -2613,6 +2694,7 @@
   }
 
   const LAB_WHITE = [0.95047, 1, 1.08883];
+  const SIMILARITY_GREY_PANEL = "#ebebeb"; // ggplot2 theme_grey panel
 
   function srgbToLab(rgb) {
     const linear = rgb.map(function (channel) {
@@ -2716,6 +2798,7 @@
     visualExportReady: visualExportReady,
     moveComparisonSelection: moveComparisonSelection,
     conservedRatio: conservedRatio,
+    similarityPanelColor: similarityPanelColor,
     conservedColor: conservedColor,
     foldRequest: foldRequest
   };

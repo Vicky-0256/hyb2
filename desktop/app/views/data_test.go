@@ -162,6 +162,98 @@ func TestDataPageResumeAndPending(t *testing.T) {
 	dataExpect(t, tt, "Could not resume SUB_REP2: not resumable")
 }
 
+// A sample of reads without a reference cannot run (the pipeline refuses
+// it): the row says so and offers to set one, and Run leaves it out.
+func TestDataPageMissingReference(t *testing.T) {
+	a, f := dataOpen(t, "data_list_samples_mixed.json")
+	f.ops["list_samples"]["samples"].([]any)[0].(map[string]any)["reference_id"] = nil // SUB_REP1
+	a.RefreshProject()
+	waitFlush(a)
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	dataExpect(t, tt, "No reference", "Set reference…", "Run all pending (2)")
+	snapshot(t, tt, "data-no-reference")
+
+	// Run all pending: only SUB_REP2 starts, and the dialog says why.
+	dataClick(t, tt, a, "Run all pending (2)")
+	dataExpect(t, tt, "Run 1 sample", "SUB_REP1 is left out: it has no reference. Use Set reference… in its row.")
+	dataClick(t, tt, a, "Start")
+	if len(f.started) != 1 || *f.started[0].SampleID != "SUB_REP2" {
+		t.Fatalf("started %+v", f.started)
+	}
+
+	// Only SUB_REP1 selected: nothing starts.
+	dataClick(t, tt, a, "Select SUB_REP1")
+	dataClick(t, tt, a, "Run selected (1)")
+	dataExpect(t, tt, "SUB_REP1 has no reference. Use Set reference… in its row first.")
+	if len(f.started) != 1 || a.pages["data"].(*dataPage).run.open {
+		t.Fatalf("started %+v, dialog open", f.started)
+	}
+
+	// Set reference… opens the sample's edit dialog.
+	dataClick(t, tt, a, "Set reference…")
+	dataExpect(t, tt, "Sample SUB_REP1")
+
+	// Check inputs counts it too.
+	checked := fixture(t, "data_check_inputs.json")
+	checked["no_reference"] = []any{"SUB_REP1"}
+	f.ops["check_inputs"] = checked
+	a.pages["data"].(*dataPage).edit.open = false
+	tt.Frame()
+	dataClick(t, tt, a, "Check inputs")
+	dataExpect(t, tt, "Inputs checked: 8 ok, 0 missing, 0 changed. 1 sample has no reference.")
+}
+
+// Opening a project checks its input files quietly: a file that went
+// missing since the last session is marked without clicking Check inputs
+// (its Resume would only fail again), and all-fine says nothing.
+func TestDataPageChecksInputsOnOpen(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	if n := len(f.callsOf("check_inputs")); n != 1 {
+		t.Fatalf("check_inputs called %d times on open", n)
+	}
+	if tt.HasText("Inputs checked") || tt.HasText("present and unchanged") || tt.HasText("Relink…") {
+		t.Fatalf("all-fine check is not quiet: %q", tt.Texts())
+	}
+	tt.Frame()
+	if n := len(f.callsOf("check_inputs")); n != 1 {
+		t.Fatalf("checked again on a later frame: %d", n)
+	}
+
+	// The same project with a moved file, opened again.
+	checked := fixture(t, "data_check_inputs.json")
+	checked["items"].([]any)[2].(map[string]any)["status"] = "missing"
+	f.ops["check_inputs"] = checked
+	a.Close()
+	waitFlush(a)
+	a.Open("/projects/zikv.hyb2proj")
+	waitFlush(a)
+	a.Navigate("data", nil)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Inputs checked: 7 ok, 1 missing, 0 changed.", "missing", "Relink…")
+	if tt.HasText("Use Relink on the marked rows") {
+		t.Fatalf("automatic check toasts: %q", tt.Texts())
+	}
+
+	// A check that cannot run says so; it is not an all-fine silence.
+	delete(f.ops, "check_inputs")
+	a.Close()
+	waitFlush(a)
+	a.Open("/projects/zikv.hyb2proj")
+	waitFlush(a)
+	a.Navigate("data", nil)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Could not check the input files: unsupported project operation check_inputs")
+}
+
 func TestDataPageImportSheet(t *testing.T) {
 	a, f := dataOpen(t, "list_samples.json")
 	tt := ui.NewTester(a.View, 1100, 720)
@@ -339,6 +431,16 @@ func TestDataPageImportFolder(t *testing.T) {
 	d.rows[1].include = false
 	tt.Frame()
 	dataExpect(t, tt, "Import 13 samples")
+	// A row without a reference may be imported, with a warning.
+	saved := d.rows[2].reference
+	d.rows[2].reference = dataNoReference
+	tt.Frame()
+	dataExpect(t, tt, "1 sample has no reference: it can be imported but not run until you set one.", "Import 13 samples")
+	d.rows[2].reference = saved
+	tt.Frame()
+	if tt.HasText("has no reference") {
+		t.Fatal("warning stays after the reference is set")
+	}
 	dataClick(t, tt, a, "Import 13 samples")
 	calls := f.callsOf("import_sample_rows")
 	if len(calls) != 1 || calls[0]["mode"] != "linked" {

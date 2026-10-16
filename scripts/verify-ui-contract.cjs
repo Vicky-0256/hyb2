@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const zlib = require("node:zlib");
 
 const repository = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(repository, "web", "app.js"), "utf8");
@@ -14,19 +15,20 @@ const reportCssSource = fs.readFileSync(path.join(repository, "web", "report.css
 const indexSource = fs.readFileSync(path.join(repository, "web", "index.html"), "utf8");
 const localCplfoldSource = fs.readFileSync(path.join(repository, "web", "local-cplfold.html"), "utf8");
 const workflowSource = fs.readFileSync(path.join(repository, ".github", "workflows", "deploy-pages.yml"), "utf8");
-const exampleHybPath = path.join(repository, "web", "assets", "examples", "ZIKV_1-10807_example.hyb");
-const exampleFastaPath = path.join(repository, "web", "assets", "examples", "ZIKV_1-10807.fasta");
-assert.ok(fs.statSync(exampleHybPath).size > 0, "the landing-page HYB example must be present");
-assert.ok(fs.statSync(exampleFastaPath).size > 0, "the landing-page FASTA example must be present");
-assert.ok(fs.statSync(exampleHybPath).size < 100 * 1024 * 1024,
-  "the landing-page HYB example must remain below GitHub's single-file limit");
-const exampleHybLines = fs.readFileSync(exampleHybPath, "utf8").trimEnd().split(/\r?\n/);
-const exampleFastaSource = fs.readFileSync(exampleFastaPath, "utf8");
-assert.equal(exampleHybLines.length, 10000,
-  "the landing-page HYB example must be the checked-in browser-sized ZIKV subset");
-assert.match(exampleHybLines[0], /ENSG_ENST_ZIKV-PE243-2015_virusRNA/,
+// the included example (web/example.js; scripts/verify-example.cjs checks it in depth)
+const example = require(path.join(repository, "web", "example.js"));
+example.files().forEach(function (file) {
+  const full = path.join(repository, "web", example.directory, file);
+  assert.ok(fs.existsSync(full) && fs.statSync(full).size > 0, "the landing-page example file " + file + " must be present");
+  assert.ok(fs.statSync(full).size < 100 * 1024 * 1024, file + " must remain below GitHub's single-file limit");
+});
+const exampleHybLines = zlib.gunzipSync(fs.readFileSync(path.join(repository, "web", example.directory, example.primary.file))).toString("utf8").trimEnd().split(/\r?\n/);
+const exampleFastaSource = fs.readFileSync(path.join(repository, "web", example.directory, example.reference.file), "utf8");
+assert.equal(exampleHybLines.length, example.primary.records,
+  "the landing-page HYB example must be the checked-in 1-in-10 ZAFR_REP1 subset");
+assert.match(exampleHybLines[0], /ZIKV_African_KX377335-1_virusRNA/,
   "the landing-page HYB example must use the ZIKV reference name");
-assert.equal(exampleFastaSource.split(/\r?\n/, 1)[0], ">ENSG_ENST_ZIKV-PE243-2015_virusRNA",
+assert.equal(exampleFastaSource.split(/\r?\n/, 1)[0], ">ZIKV_African_KX377335-1_virusRNA",
   "the landing-page FASTA example must match the ZIKV reference name used in the HYB file");
 const context = vm.createContext({
   Intl,
@@ -210,6 +212,20 @@ assert.equal(context.window.Hyb2UI.conservedRatio(4, { similarityCap: 8, conserv
 assert.equal(context.window.Hyb2UI.conservedColor(0), "rgb(255, 255, 255)");
 assert.equal(context.window.Hyb2UI.conservedColor(1), "rgb(34, 139, 34)");
 assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "the ramp interpolates in CIELAB");
+// The panel behind the similarity heatmap is display only: R's white by
+// default, ggplot's grey on request; changing it keeps the computed result.
+assert.equal(context.window.Hyb2UI.similarityPanelColor({}), "#ffffff");
+assert.equal(context.window.Hyb2UI.similarityPanelColor({ similarityPanel: "grey" }), "#ebebeb");
+assert.match(comparisonReport.parameters.similarityPanel, /^white/);
+{
+  const displayState = { comparison: { similarityPanel: "white", result: { ready: true }, selection: { x: 1, y: 1 } } };
+  let rendered = 0;
+  const handled = context.window.Hyb2UI.handleChange(displayState, { dataset: { feature: "comparison-display", key: "similarityPanel" }, value: "grey" }, { render: function () { rendered += 1; } });
+  assert.equal(handled, true);
+  assert.equal(displayState.comparison.similarityPanel, "grey");
+  assert.ok(displayState.comparison.result && displayState.comparison.selection, "the panel colour does not drop the result");
+  assert.equal(rendered, 1);
+}
 assert.equal(comparisonReport.methodScope.webRBaseRuntimeSmoke, "recorded-manual-pass");
 assert.equal(comparisonReport.methodScope.webRRuntimeValidated, false);
 assert.equal(comparisonReport.methodScope.webRRuntimeVendored, false);
@@ -369,7 +385,12 @@ assert.equal(context.window.Hyb2UI.handleInput(typedComparisonState, {
 }), true);
 assert.equal(typedComparisonState.comparison.conditionALabel, "New label",
   "delegated input must persist unblurred text before an asynchronous render");
-assert.equal(typedComparisonState.comparison.result, null);
+assert.deepEqual(typedComparisonState.comparison.result, { stale: true },
+  "condition labels are display only: typing one keeps a (whole-genome) comparison result");
+assert.equal(context.window.Hyb2UI.handleInput(typedComparisonState, {
+  dataset: { feature: "comparison-control", key: "binSize" }, value: "25"
+}), true);
+assert.equal(typedComparisonState.comparison.result, null, "an analysis setting invalidates the result");
 
 const partnerSelectionState = { filters: { partner: "" }, selectedRecordIndex: 7, interactionScrollTop: 12 };
 context.window.Hyb2UI.handleAction(partnerSelectionState, {
@@ -786,12 +807,12 @@ assert.match(appSource, /function enterAnalysis\(\)\s*\{[\s\S]*?state\.analysisE
   "entering analysis must be an explicit state transition");
 assert.match(appSource, /state\.loading = null;\s*state\.analysisEntered = false;\s*state\.activePage = "landing";\s*setRouteHash\("#\/"\);\s*if \(parseSession\.referenceFile\)/,
   "HYB parsing must finish on the review stage instead of navigating directly to Overview");
-assert.match(appSource, /ZIKV_1-10807_example\.hyb/,
-  "the included HYB example must visibly use the ZIKV dataset name");
-assert.match(appSource, /ZIKV_1-10807\.fasta/,
-  "the included FASTA example must visibly use the matching ZIKV reference name");
-assert.match(appSource, /fetch\(exampleAssets\.hyb\.url[\s\S]*?fetch\(exampleAssets\.fasta\.url/,
+assert.match(appSource, /example\.downloads\.map\(/,
+  "the included example must visibly list its files with download links");
+assert.match(appSource, /\[example\.primary\.file, example\.reference\.file\]\.map\(function \(name\) \{\s*return fetchExampleFile\(name/,
   "the included example must load both HYB and FASTA assets");
+assert.match(appSource, /startParsing\(files\[0\], \{ referenceFile: files\[1\], example: true \}\)/,
+  "the example HYB is parsed like an upload, with its FASTA");
 assert.match(appSource, /id="fasta-file-input"[^>]*accept="\.fa,\.fasta,\.fna,\.fas,text\/plain"/,
   "the landing page must expose an optional FASTA file input");
 assert.match(appSource, /state\.landingFastaFile = file;[\s\S]*?render\(\);/,
@@ -827,7 +848,7 @@ assert.match(resetSource[1], /state\.activePage = "landing";[\s\S]*?setRouteHash
     "resetting after a failed replacement must release " + field);
 });
 
-const comparisonLoaderMatch = appSource.match(/async function loadComparisonFiles\(files\)\s*{([\s\S]*?)\n  function parseComparisonFile/);
+const comparisonLoaderMatch = appSource.match(/async function loadComparisonFiles\(files(?:, options)?\)\s*{([\s\S]*?)\n  function parseComparisonFile/);
 assert.ok(comparisonLoaderMatch, "The comparison loader should remain available for session-safety checks");
 const comparisonLoaderSource = comparisonLoaderMatch[1];
 assert.match(comparisonLoaderSource, /const comparisonSession = state\.comparison;/);

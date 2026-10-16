@@ -11,7 +11,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const repository = path.resolve(__dirname, "..");
-const context = vm.createContext({ Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, Int32Array, Uint8Array, Error, window: {} });
+const context = vm.createContext({ Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, Int32Array, Uint8Array, Error, Promise, window: {} });
 vm.runInContext(fs.readFileSync(path.join(repository, "web", "arc-map.js"), "utf8"), context, { filename: "arc-map.js" });
 const arc = context.window.Hyb2ArcMap;
 // values made inside the vm context have its own prototypes: compare as JSON
@@ -58,6 +58,18 @@ function randomRNA(seed, n) {
   assert.equal(arc.align("acgt", "ACGU").same, true);
 }
 
+// ---- alignment: equal length, 400 nt extra at the 5' end and 400 missing
+// at the 3' end; the k-mer seed widens the band so the shift is found
+{
+  const to = randomRNA(7, 10794);
+  const from = "ACGU".repeat(100) + to.slice(0, to.length - 400);
+  const map = arc.align(from, to);
+  assert.equal(arc.mapPosition(map, 401), 1);
+  assert.equal(arc.mapPosition(map, 5401), 5001);
+  assert.equal(arc.mapPosition(map, 400), 0);
+  assert.equal(map.gaps, 800);
+}
+
 // ---- structures: dbn with windows, ct
 {
   const dbn = arc.parseStructure(">gene:101-110 -3.2\nGGGAAACCCU\n(((...))).\n>gene:201-206\nGGAACC\n((..))\n", "w.dbn");
@@ -70,6 +82,24 @@ function randomRNA(seed, n) {
   const ct = arc.parseStructure("6 test\n1 G 0 2 6 1\n2 G 1 3 5 2\n3 A 2 4 0 3\n4 A 3 5 0 4\n5 C 4 6 2 5\n6 C 5 0 1 6\n", "t.ct");
   same(Array.from(ct.pairs, function (p) { return Array.from(p); }), [[1, 6], [2, 5]]);
   assert.equal(ct.sequence, "GGAACC");
+  assert.equal(ct.note, undefined);
+  // RNAstructure: several structures in one CT file, the first is used
+  const multi = arc.parseStructure("3 ENERGY = -1.0 s1\n1 G 0 2 3 1\n2 A 1 3 0 2\n3 C 2 4 1 3\n3 ENERGY = -0.5 s1\n1 G 0 2 0 1\n2 A 1 3 0 2\n3 C 2 4 0 3\n", "m.ct");
+  assert.equal(multi.sequence, "GAC");
+  same(Array.from(multi.pairs, function (p) { return Array.from(p); }), [[1, 3]]);
+  assert.match(multi.note, /holds 2 structures; the first is used/);
+  // IUPAC codes in the sequence line are a sequence, not pseudoknot brackets
+  const iupac = arc.parseStructure(">x\nACGRYNNACG\n((......))\n", "x.dbn");
+  assert.equal(iupac.sequence, "ACGRYNNACG");
+  same(Array.from(iupac.pairs, function (p) { return Array.from(p); }), [[2, 9], [1, 10]]);
+  assert.equal(iupac.length, 10);
+  // RNAfold -p: only the MFE structure, not the ensemble / centroid / MEA lines
+  const rnafold = arc.parseStructure(">x\nGGGAAACCC\n(((...))) (-1.20)\n((.....)) [-1.50]\n.((...)). {-1.20 d=0.5}\n(((...))) {-1.20 MEA=9.00}\n frequency of mfe structure in ensemble 0.5; ensemble diversity 1.0\n", "p.dbn");
+  assert.equal(rnafold.length, 9);
+  same(Array.from(rnafold.pairs, function (p) { return Array.from(p); }), [[3, 7], [2, 8], [1, 9]]);
+  // a structure wrapped over two lines is still joined
+  const wrapped = arc.parseStructure(">x\nGGGAAA\nCCC\n(((...\n)))\n", "w.dbn");
+  assert.equal(wrapped.pairs.length, 3);
 }
 
 // ---- interactions: Desktop interactions.tsv and hyb2_compare enrichment
@@ -110,9 +140,46 @@ const genbank = [
   assert.equal(track.sequence.length, 60);
   const tsv = arc.parseAnnotation("gene\tstart\tend\nC\t107\t472\nprM\t473\t976\n", "genes.tsv");
   same(arc.trackFeatures(tsv).features.map(function (f) { return f.name; }), ["C", "prM"]);
+  // remote parts of a join are skipped; the last feature's name has no
+  // trailing quote although the table ends in a blank line
+  const remote = arc.parseAnnotation("LOCUS       X 100 bp RNA\nFEATURES             Location/Qualifiers\n     CDS             join(AB012345.1:1..20,30..60)\n                     /gene=\"g\"\n     CDS             complement(<5..>40)\n                     /gene=\"h\"\n\nORIGIN\n        1 acgt\n//\n", "g.gb");
+  same(remote.features.map(function (f) { return [f.name, f.start, f.end]; }), [["g", 30, 60], ["h", 5, 40]]);
 }
 
-// ---- build: B on another reference, cells of condition two on B's
+// ---- axis: whole-nucleotide ticks on a short span
+{
+  const state = arc.defaultState();
+  state.a = arc.parseStructure(">a\n" + "ACGU".repeat(50) + "\n" + "(".repeat(10) + ".".repeat(180) + ")".repeat(10) + "\n", "a.dbn");
+  state.start = "100";
+  state.end = "103";
+  const ticks = (arc.svg(state, arc.build(state)).match(/>[0-9.]+<\/text>/g) || []).map(function (t) { return t.slice(1, -7); });
+  same(ticks, ["100", "101", "102", "103"]);
+}
+
+// ---- defaults: all cells on A's reference, also after B is loaded (the
+// hyb2_compare cell table has one coordinate system)
+{
+  const state = arc.defaultState();
+  same([state.oneOn, state.twoOn], ["a", "a"]);
+  const file = { name: "B.dbn", text: function () { return Promise.resolve(">B\nGGGAAACCC\n(((...)))\n"); } };
+  arc.loadFile(state, "b", file).then(function () {
+    assert.equal(state.b.pairs.length, 3);
+    assert.equal(state.twoOn, "a", "loading B keeps the cells on A's reference");
+  }).catch(function (error) { process.exitCode = 1; process.stderr.write(String(error && error.stack || error) + "\n"); });
+}
+
+// ---- low identity: a visible warning
+{
+  const state = arc.defaultState();
+  const a = randomRNA(11, 600);
+  const b = randomRNA(12, 600);
+  state.a = arc.parseStructure(">A\n" + a + "\n" + ".".repeat(600) + "\n", "A.dbn");
+  state.b = arc.parseStructure(">B\n" + b + "\n" + ".".repeat(600) + "\n", "B.dbn");
+  const model = arc.build(state);
+  assert.ok(model.notes.some(function (n) { return /^Warning: B aligns to A with only/.test(n); }), model.notes.join("\n"));
+}
+
+// ---- build: B on another reference, cells of condition two on B's (set explicitly)
 {
   const a = randomRNA(7, 2000);
   const b = a.slice(0, 72) + "A" + a.slice(72, 1999); // B i -> A i-1 after 72
@@ -148,11 +215,12 @@ if (real) {
   const state = arc.defaultState();
   state.a = arc.parseStructure(read("ZAFR.dbn"), "ZAFR.dbn");
   state.b = arc.parseStructure(read("ZILM.dbn"), "ZILM.dbn");
-  state.twoOn = "b";
   state.interactions = arc.parseInteractions(read("interactions.tsv"), "interactions.tsv");
   state.annotation = arc.parseAnnotation(read("NC_035889.gb"), "NC_035889.gb");
   state.labelOne = "ZAFR";
   state.labelTwo = "ZASI";
+  // default state: every cell on ZAFR's coordinates, as the reproduction
+  same([state.oneOn, state.twoOn], ["a", "a"]);
   const started = Date.now();
   const model = arc.build(state);
   const up = model.overlay.filter(function (o) { return o.up; }).length;
@@ -164,6 +232,12 @@ if (real) {
   assert.equal(down, 1243);
   const c = model.features.find(function (f) { return f.name === "C"; });
   same([c.start, c.end], [107, 472], "NC_035889 C 108-473 lands on ZAFR 107-472");
+  assert.ok(!model.notes.some(function (n) { return /^Warning/.test(n); }), "89.1% identity gives no warning");
+  // condition-two cells read on ZILM instead (the alignment moves them)
+  state.twoOn = "b";
+  const onB = arc.build(state);
+  assert.equal(onB.overlay.filter(function (o) { return !o.up; }).length, 1243);
+  state.twoOn = "a";
   fs.writeFileSync(path.join(real, "arc-map.svg"), arc.svg(state, model));
 }
 

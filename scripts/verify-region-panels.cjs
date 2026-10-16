@@ -81,6 +81,45 @@ same(rp.runs([]), []);
   // given the other way round the windows are swapped
   const r = rp.windowSummary(pt, "", 51, 60, 11, 20);
   same([r.X0, r.Y0, r.between], [11, 51, 2]);
+  // pseudoknot: the crossing pair is left out of the layout (as Desktop's _nested)
+  same(rp.nested([[11, 31], [21, 91], [12, 30]]), [[11, 31], [12, 30]]);
+  const pk = rp.windowSummary(rp.pairTable([[11, 31], [21, 91]], 120), "", 5, 35, 80, 100);
+  assert.equal(pk.dbn.replace(/\./g, ""), "()", "only the nested pair is bracketed");
+  assert.equal(pk.notDrawn, 1);
+  assert.equal(pk.between, 1, "the crossing pair is still counted");
+  // windows that touch are merged into one, without a linker
+  const m = rp.windowSummary(pt, "", 11, 30, 31, 40);
+  same([m.merged, m.X0, m.X1, m.Y0, m.Y1, m.win, m.linker, m.layoutDbn.length], [true, 11, 40, null, null, 30, 0, 30]);
+  assert.match(rp.summaryText({ name: "s", summary: m }), /window_X\t11-40\nwindow_Y\t-\n/);
+}
+
+// ---- a local hairpin: overlapping windows become one (Desktop windows_of)
+{
+  const n = 300;
+  const seq = randomRNA(5, n);
+  const pairs = helix(100, 135, 8);
+  const a = arc.parseStructure(">a\n" + seq + "\n" + dotBracket(n, pairs) + "\n", "a.dbn");
+  const b = arc.parseStructure(">b\n" + seq + "\n" + dotBracket(n, pairs) + "\n", "b.dbn");
+  const state = arc.defaultState();
+  state.a = a;
+  state.b = b;
+  state.interactions = arc.parseInteractions("x\ty\tpadj\tdirection\n101\t121\t0.001\tup\n", "i.tsv");
+  const model = rp.select(state, rp.defaultState());
+  const region = model.regions[0];
+  same(region.windows, { X0: 85, X1: 150, Y0: null, Y1: null });
+  assert.match(region.note, /overlap and are cut as one/);
+  region.panels.forEach(function (panel) {
+    const sm = panel.summary;
+    same([sm.merged, sm.X0, sm.X1, sm.pairsX, sm.between, sm.bases.length, sm.layoutDbn.length], [true, 85, 150, 8, 0, 66, 66]);
+    assert.equal(new Set(sm.bases.map(function (base) { return base.pos; })).size, 66, "no base twice");
+  });
+  assert.equal(rp.panelsTsv(model).trim().split("\n").length, 1 + 2 * 66);
+  assert.match(rp.regionsTsv(model), /\t85\t150\t-\t-\n/);
+  assert.match(rp.svg(model), /^<svg/);
+  // windows near the ends are clamped on both sides
+  state.interactions = arc.parseInteractions("x\ty\tpadj\tdirection\n96\t126\t0.001\tup\n", "i.tsv");
+  const far = rp.select(state, Object.assign(rp.defaultState(), { flank: "400" }));
+  same(far.regions[0].windows, { X0: 1, X1: 300, Y0: null, Y1: null });
 }
 
 // ---- selection on a synthetic pair of lineages
@@ -136,6 +175,19 @@ same(rp.runs([]), []);
   assert.equal(pick.regions[0].chosen.rank, 3);
   assert.equal(pick.regions[0].chosen.own.length, 0);
   assert.equal(pick.regions[0].panels[1].summary.between, 5);
+  // a pick made in the card lapses when another file is loaded in the Arc map card
+  {
+    const ui = { regionPanels: rp.defaultState(), arcMap: state };
+    const api = { render: function () {} };
+    rp.handleChange(ui, { dataset: { feature: "regions-control", key: "pickOne" }, value: "3" }, api);
+    assert.equal(rp.select(state, ui.regionPanels).regions[0].chosen.rank, 3);
+    const interactions = state.interactions;
+    state.interactions = arc.parseInteractions(tsv, "again.tsv");
+    assert.equal(rp.select(state, ui.regionPanels).regions[0].chosen.rank, 2, "stale pick ignored");
+    rp.renderCard(state, ui.regionPanels);
+    same([ui.regionPanels.pickOne, ui.regionPanels.pickFor], ["auto", null]);
+    state.interactions = interactions;
+  }
   // flank
   const wide = rp.select(state, Object.assign(rp.defaultState(), { flank: "30" }));
   assert.equal(wide.regions[0].windows.X0, 118);
@@ -184,8 +236,8 @@ if (real) {
   state.interactions = arc.parseInteractions(read("interactions.tsv"), "interactions.tsv");
   state.labelOne = "ZAFR";
   state.labelTwo = "ZASI";
-  state.oneOn = "a";
-  state.twoOn = "a"; // the reproduction reads all cells on ZAFR
+  // default state: the reproduction reads all cells on ZAFR
+  same([state.oneOn, state.twoOn], ["a", "a"]);
   const started = Date.now();
   const model = rp.select(state, rp.defaultState());
   process.stdout.write("real: regions in " + (Date.now() - started) + " ms\n" + rp.regionsTsv(model));

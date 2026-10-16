@@ -97,7 +97,7 @@ def parse_genbank(text: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
                 blocks.append(current)
             elif current is not None and line[21:].startswith("/"):
                 current["qualifiers"].append(line[21:].strip())
-            elif current is not None:
+            elif current is not None and line.strip():
                 if current["qualifiers"]:
                     current["qualifiers"][-1] += " " + line.strip()
                 else:
@@ -105,13 +105,15 @@ def parse_genbank(text: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
         for block in blocks:
             if block["type"] == "source":
                 continue
-            numbers = [int(n) for n in re.findall(r"\d+", block["location"])]
+            # parts on another entry (join(AB012345.1:1..20,30..60)) are skipped
+            local = re.sub(r"[A-Za-z_]\w*(?:\.\d+)?:[<>]?\d+(?:[.^]{1,2}[<>]?\d+)?", "", block["location"])
+            numbers = [int(n) for n in re.findall(r"\d+", local)]
             if not numbers:
                 continue
             quals: Dict[str, str] = {}
             for q in block["qualifiers"]:
                 key, _, value = q[1:].partition("=")
-                quals.setdefault(key, value.strip('"'))
+                quals.setdefault(key, value.strip().strip('"'))
             product = quals.get("product") or quals.get("note") or ""
             gene = quals.get("gene") or quals.get("locus_tag") or ""
             if block["type"] == "mat_peptide":

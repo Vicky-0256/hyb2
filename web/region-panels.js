@@ -22,7 +22,28 @@
   const CANDIDATES_SHOWN = 40;
 
   function defaultState() {
-    return { padj: "0.01", reach: "50", flank: "15", pickOne: "auto", pickTwo: "auto", fastaA: null, fastaB: null, errors: {} };
+    return { padj: "0.01", reach: "50", flank: "15", pickOne: "auto", pickTwo: "auto", pickFor: null, fastaA: null, fastaB: null, errors: {} };
+  }
+
+  // manual picks are ranks in one interaction table on one pair of
+  // structures: they lapse when a file is loaded or removed in the Arc map card
+  function pickInputs(arcMap) {
+    const s = arcMap || {};
+    return [s.a || null, s.b || null, s.interactions || null];
+  }
+
+  function picksStale(arcMap, rp) {
+    const now = pickInputs(arcMap);
+    return !!(rp && rp.pickFor) && rp.pickFor.some(function (value, k) { return value !== now[k]; });
+  }
+
+  function syncPicks(arcMap, rp) {
+    if (picksStale(arcMap, rp)) {
+      rp.pickOne = "auto";
+      rp.pickTwo = "auto";
+      rp.pickFor = null;
+    }
+    return rp;
   }
 
   function arcApi() {
@@ -94,25 +115,51 @@
     return r.length ? r.map(function (run) { return run[0] === run[1] ? String(run[0]) : run[0] + "-" + run[1]; }).join("; ") : "-";
   }
 
-  // windowSummary(pt, sequence, X0, X1, Y0, Y1): port of window_from_structure.py
+  // nested(pairs): a nested subset (the layout needs one), as Desktop's
+  // regions._nested: shortest first, pairs crossing a kept pair are left out
+  function nested(pairs) {
+    const kept = [];
+    pairs.slice().sort(function (l, r) { return (l[1] - l[0]) - (r[1] - r[0]) || l[0] - r[0]; }).forEach(function (p) {
+      if (kept.every(function (k) { return !(k[0] < p[0] && p[0] < k[1] && k[1] < p[1]) && !(p[0] < k[0] && k[0] < p[1] && p[1] < k[1]); })) {
+        kept.push(p);
+      }
+    });
+    return kept.sort(function (l, r) { return l[0] - r[0]; });
+  }
+
+  // windowSummary(pt, sequence, X0, X1, Y0, Y1): port of window_from_structure.py;
+  // windows that overlap or touch are merged into one (no linker), as
+  // Desktop's regions.windows_of; Y0 / Y1 are then null
   function windowSummary(pt, sequence, X0, X1, Y0, Y1) {
-    if (X0 > Y0) {
+    if (Y0 !== null && Y0 !== undefined && X0 > Y0) {
       const t0 = X0;
       const t1 = X1;
       X0 = Y0; X1 = Y1; Y0 = t0; Y1 = t1;
     }
+    const merged = Y0 === null || Y0 === undefined || Y0 <= X1 + 1;
+    if (merged) {
+      X1 = Y1 === null || Y1 === undefined ? X1 : Math.max(X1, Y1);
+      Y0 = null;
+      Y1 = null;
+    }
     const win = X1 - X0 + 1;
     const pos = [];
     for (let p = X0; p <= X1; p += 1) { pos.push(p); }
-    for (let p = Y0; p <= Y1; p += 1) { pos.push(p); }
+    for (let p = Y0 || 1; !merged && p <= Y1; p += 1) { pos.push(p); }
     const local = new Map();
     pos.forEach(function (p, k) { local.set(p, k); });
     const partnerOf = function (p) { return p >= 1 && p < pt.length ? pt[p] : 0; };
-    let dbn = "";
-    pos.forEach(function (p) {
+    const inside = [];
+    pos.forEach(function (p, k) {
       const q = partnerOf(p);
-      dbn += !q || !local.has(q) ? "." : (q > p ? "(" : ")");
+      if (q > p && local.has(q)) {
+        inside.push([k, local.get(q)]);
+      }
     });
+    const drawn = nested(inside);
+    const chars = new Array(pos.length).fill(".");
+    drawn.forEach(function (pair) { chars[pair[0]] = "("; chars[pair[1]] = ")"; });
+    const dbn = chars.join("");
     const inX = function (q) { return q >= X0 && q <= X1; };
     const inY = function (q) { return q >= Y0 && q <= Y1; };
     let pairsX = 0;
@@ -134,9 +181,9 @@
         partner: q && local.has(q) ? local.get(q) : -1, outside: out };
     });
     return {
-      X0: X0, X1: X1, Y0: Y0, Y1: Y1, win: win, dbn: dbn,
-      layoutDbn: dbn.slice(0, win) + ".".repeat(LINKER) + dbn.slice(win),
-      pairsX: pairsX, pairsY: pairsY, between: between,
+      X0: X0, X1: X1, Y0: Y0, Y1: Y1, merged: merged, win: win, linker: merged ? 0 : LINKER, dbn: dbn,
+      layoutDbn: merged ? dbn : dbn.slice(0, win) + ".".repeat(LINKER) + dbn.slice(win),
+      pairsX: pairsX, pairsY: pairsY, between: between, notDrawn: inside.length - drawn.length,
       outsideCount: outside.length, outsidePartners: runsText(outside), outsideRuns: runs(outside, 5),
       bases: bases
     };
@@ -267,6 +314,9 @@
         return { ready: false, reason: "B could not be aligned to A: " + error.message };
       }
       notes.push("B's pairs and windows are moved to and from A's coordinates by alignment (" + (100 * mapBA.identity).toFixed(1) + "% identity).");
+      if (mapBA.identity < (arcApi().LOW_IDENTITY || 0.8)) {
+        notes.push("Warning: only " + (100 * mapBA.identity).toFixed(1) + "% identity; the windows moved between A and B may be wrong. Check that both structures are of the same gene or genome.");
+      }
     } else if (!seq.a || !seq.b) {
       notes.push("Without full-length sequences for both structures, A and B are taken to share coordinates (load FASTA references below to align them).");
     }
@@ -370,7 +420,7 @@
       const up = spec[1];
       const list = candidates(arcMap, ctx, r, up);
       const firstFormed = list.find(function (c) { return c.own.length > 0; }) || null;
-      const pick = up ? r.pickOne : r.pickTwo;
+      const pick = picksStale(arcMap, r) ? "auto" : up ? r.pickOne : r.pickTwo;
       let chosen = firstFormed;
       if (pick && pick !== "auto") {
         chosen = list.find(function (c) { return String(c.rank) === String(pick); }) || firstFormed;
@@ -399,10 +449,17 @@
         X0 = chosen.a - o.reach; X1 = chosen.a + o.reach; Y0 = chosen.b - o.reach; Y1 = chosen.b + o.reach;
         region.note = "Neither structure forms this interaction: windows are the arms ±" + o.reach + " nt.";
       }
-      X0 = Math.max(1, X0);
-      Y1 = Math.min(ctx.lengthA, Y1);
+      const clamp = function (v) { return Math.min(ctx.lengthA, Math.max(1, v)); };
+      X0 = clamp(X0); X1 = clamp(X1); Y0 = clamp(Y0); Y1 = clamp(Y1);
+      // a local hairpin: windows that overlap or touch become one
+      if (Y0 <= X1 + 1) {
+        X1 = Math.max(X1, Y1);
+        Y0 = null;
+        Y1 = null;
+        region.note = (region.note ? region.note + " " : "") + "The two windows overlap and are cut as one (" + X0 + "–" + X1 + ", no linker).";
+      }
       region.windows = { X0: X0, X1: X1, Y0: Y0, Y1: Y1 };
-      const wb = [mapWindow(ctx.mapAB, X0, X1, ctx.lengthB), mapWindow(ctx.mapAB, Y0, Y1, ctx.lengthB)];
+      const wb = [mapWindow(ctx.mapAB, X0, X1, ctx.lengthB), Y0 === null ? [null, null] : mapWindow(ctx.mapAB, Y0, Y1, ctx.lengthB)];
       const panelA = { structure: "a", lineage: labels.one, name: arcMap.a.name, title: arcMap.a.title,
         summary: windowSummary(ctx.ptA, ctx.seqA, X0, X1, Y0, Y1) };
       const panelB = { structure: "b", lineage: labels.two, name: arcMap.b.name, title: arcMap.b.title,
@@ -414,9 +471,14 @@
 
   // ---- text summaries (same lines as window_from_structure.py's .txt)
 
+  function windowsText(w, dash) {
+    const d = dash || "–";
+    return w.X0 + d + w.X1 + (w.Y0 === null ? "" : " / " + w.Y0 + d + w.Y1);
+  }
+
   function summaryText(panel) {
     const s = panel.summary;
-    return ["source\t" + (panel.title || panel.name), "window_X\t" + s.X0 + "-" + s.X1, "window_Y\t" + s.Y0 + "-" + s.Y1,
+    return ["source\t" + (panel.title || panel.name), "window_X\t" + s.X0 + "-" + s.X1, "window_Y\t" + (s.merged ? "-" : s.Y0 + "-" + s.Y1),
       "pairs_in_X\t" + s.pairsX, "pairs_in_Y\t" + s.pairsY, "inter_window_pairs\t" + s.between,
       "bases_paired_outside\t" + s.outsideCount, "outside_partners\t" + s.outsidePartners].join("\n") + "\n";
   }
@@ -429,7 +491,7 @@
       }
       const c = r.chosen;
       lines.push([r.label, r.lineage, c.rank, c.a, c.b, Number(c.log2FoldChange).toFixed(2), Number(c.padj).toExponential(2),
-        c.own.length, c.other.length, r.windows.X0, r.windows.X1, r.windows.Y0, r.windows.Y1].join("\t"));
+        c.own.length, c.other.length, r.windows.X0, r.windows.X1, r.windows.Y0 === null ? "-" : r.windows.Y0, r.windows.Y1 === null ? "-" : r.windows.Y1].join("\t"));
     });
     return lines.join("\n") + "\n";
   }
@@ -440,7 +502,7 @@
       r.panels.forEach(function (panel) {
         const xy = simpleLayout(panel.summary.layoutDbn);
         panel.summary.bases.forEach(function (b) {
-          const k = b.idx < panel.summary.win ? b.idx : b.idx + LINKER;
+          const k = b.idx < panel.summary.win ? b.idx : b.idx + panel.summary.linker;
           lines.push([r.label, panel.structure.toUpperCase(), panel.lineage, b.idx, b.strand, b.pos, b.base,
             xy.x[k].toFixed(2), xy.y[k].toFixed(2), b.partner, b.outside].join("\t"));
         });
@@ -465,7 +527,7 @@
     const s = panel.summary;
     const xy = simpleLayout(s.layoutDbn);
     const total = s.layoutDbn.length;
-    const local = function (k) { return k < s.win ? k : k + LINKER; };
+    const local = function (k) { return k < s.win ? k : k + s.linker; };
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
@@ -485,24 +547,24 @@
     // backbone (linker dashed)
     let d = "";
     for (let k = 0; k + 1 < total; k += 1) {
-      const linker = k >= s.win - 1 && k < s.win + LINKER;
+      const linker = s.linker && k >= s.win - 1 && k < s.win + s.linker;
       if (!linker) {
         d += "M" + px(k).toFixed(1) + " " + py(k).toFixed(1) + "L" + px(k + 1).toFixed(1) + " " + py(k + 1).toFixed(1);
       }
     }
     out.push('<path d="' + d + '" stroke="' + c.line + '" stroke-width="1" fill="none"/>');
     let dl = "";
-    for (let k = s.win - 1; k < s.win + LINKER && k + 1 < total; k += 1) {
+    for (let k = s.win - 1; s.linker && k < s.win + s.linker && k + 1 < total; k += 1) {
       dl += "M" + px(k).toFixed(1) + " " + py(k).toFixed(1) + "L" + px(k + 1).toFixed(1) + " " + py(k + 1).toFixed(1);
     }
     if (dl) {
       out.push('<path d="' + dl + '" stroke="' + c.line + '" stroke-width="1" stroke-dasharray="2 2" fill="none"/>');
     }
-    // pairs
+    // pairs (crossing pairs left out of the layout are not drawn)
     let dIntra = "";
     let dInter = "";
     s.bases.forEach(function (b) {
-      if (b.partner > b.idx) {
+      if (b.partner > b.idx && s.dbn[b.idx] === "(") {
         const seg = "M" + px(local(b.idx)).toFixed(1) + " " + py(local(b.idx)).toFixed(1) + "L" + px(local(b.partner)).toFixed(1) + " " + py(local(b.partner)).toFixed(1);
         if (b.idx < s.win && b.partner >= s.win) {
           dInter += seg;
@@ -537,7 +599,7 @@
       }
     });
     // window ends
-    [[0, s.X0], [s.win - 1, s.X1], [s.win, s.Y0], [s.bases.length - 1, s.Y1]].forEach(function (end) {
+    (s.merged ? [[0, s.X0], [s.win - 1, s.X1]] : [[0, s.X0], [s.win - 1, s.X1], [s.win, s.Y0], [s.bases.length - 1, s.Y1]]).forEach(function (end) {
       const k = local(end[0]);
       out.push('<text x="' + (px(k) + r + 2).toFixed(1) + '" y="' + (py(k) - r - 1).toFixed(1) + '" font-size="9" fill="' + c.muted + '">' + end[1] + "</text>");
     });
@@ -569,10 +631,11 @@
         const x = 10 + column * (cellW + 10);
         const s = panel.summary;
         parts.push('<text x="' + x + '" y="' + (top + 34) + '" font-size="12" font-weight="600" fill="' + c.ink + '">' +
-          escapeXml(panel.lineage + " structure · " + s.X0 + "–" + s.X1 + " / " + s.Y0 + "–" + s.Y1) + "</text>");
+          escapeXml(panel.lineage + " structure · " + windowsText(s)) + "</text>");
         parts.push('<rect x="' + x + '" y="' + (top + head) + '" width="' + cellW + '" height="' + cellH + '" fill="none" stroke="#e5e7eb"/>');
         parts.push(panelSvg(panel, highlight, { x: x, y: top + head, w: cellW, h: cellH }, c));
-        const lines = [s.between + " inter-window pairs · " + s.pairsX + " in X · " + s.pairsY + " in Y · " + s.outsideCount + " paired outside"];
+        const lines = [(s.merged ? s.pairsX + " pairs in the window" : s.between + " inter-window pairs · " + s.pairsX + " in X · " + s.pairsY + " in Y") +
+          " · " + s.outsideCount + " paired outside" + (s.notDrawn ? " · " + s.notDrawn + " crossing not drawn" : "")];
         let current = "outside partners:";
         s.outsidePartners.split("; ").forEach(function (item, k) {
           const next = current + (k ? "; " : " ") + item;
@@ -598,7 +661,7 @@
   // ---- card
 
   function renderCard(arcMap, rp, escape) {
-    const r = rp || defaultState();
+    const r = syncPicks(arcMap, rp || defaultState());
     const esc = escape || escapeXml;
     const s = arcMap || (arcApi() ? arcApi().defaultState() : {});
     const control = function (label, key, value, placeholder) {
@@ -650,14 +713,14 @@
       const ch = region.chosen;
       out.push('<dl class="selection-stats"><div><dt>Rank</dt><dd>#' + ch.rank + "</dd></div><div><dt>Arms (A)</dt><dd>" + ch.a + "↔" + ch.b +
         "</dd></div><div><dt>log2FC</dt><dd>" + Number(ch.log2FoldChange).toFixed(2) + "</dd></div><div><dt>padj</dt><dd>" + Number(ch.padj).toExponential(2) +
-        "</dd></div><div><dt>Windows (A)</dt><dd>" + region.windows.X0 + "–" + region.windows.X1 + " / " + region.windows.Y0 + "–" + region.windows.Y1 + "</dd></div></dl>");
+        "</dd></div><div><dt>Windows (A)</dt><dd>" + windowsText(region.windows) + "</dd></div></dl>");
       if (region.note) {
         out.push('<p class="card-note">' + esc(region.note) + "</p>");
       }
       out.push('<div class="data-table-wrap"><table class="data-table region-table"><thead><tr><th>Structure</th><th>Windows</th><th>Pairs in X</th><th>Pairs in Y</th><th>Inter-window</th><th>Paired outside</th><th>Outside partners</th></tr></thead><tbody>');
       region.panels.forEach(function (panel) {
         const sm = panel.summary;
-        out.push("<tr data-structure=\"" + panel.structure + "\"><td>" + esc(panel.lineage) + " (" + panel.structure.toUpperCase() + ")</td><td>" + sm.X0 + "–" + sm.X1 + " / " + sm.Y0 + "–" + sm.Y1 +
+        out.push("<tr data-structure=\"" + panel.structure + "\"><td>" + esc(panel.lineage) + " (" + panel.structure.toUpperCase() + ")</td><td>" + windowsText(sm) +
           "</td><td>" + sm.pairsX + "</td><td>" + sm.pairsY + '</td><td data-inter>' + sm.between + "</td><td>" + sm.outsideCount + "</td><td>" + esc(sm.outsidePartners) + "</td></tr>");
       });
       out.push("</tbody></table></div></div>");
@@ -685,10 +748,14 @@
       const rp = ensure(state);
       const key = element.dataset.key;
       if (["padj", "reach", "flank", "pickOne", "pickTwo"].indexOf(key) >= 0) {
+        syncPicks(state.arcMap, rp);
         rp[key] = element.value;
         if (key !== "pickOne" && key !== "pickTwo") {
           rp.pickOne = "auto";
           rp.pickTwo = "auto";
+          rp.pickFor = null;
+        } else {
+          rp.pickFor = pickInputs(state.arcMap);
         }
       }
       api.render();
@@ -725,7 +792,7 @@
       api.render();
       return true;
     }
-    const model = select(state.arcMap, rp);
+    const model = select(state.arcMap, syncPicks(state.arcMap, rp));
     if (!model.ready) {
       return true;
     }
@@ -753,6 +820,8 @@
     pairTable: pairTable,
     runs: runs,
     windowSummary: windowSummary,
+    nested: nested,
+    syncPicks: syncPicks,
     simpleLayout: simpleLayout,
     context: context,
     candidates: candidates,

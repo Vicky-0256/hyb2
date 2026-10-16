@@ -68,6 +68,20 @@ function randomRNA(seed, n) {
   assert.equal(arc.mapPosition(map, 5401), 5001);
   assert.equal(arc.mapPosition(map, 400), 0);
   assert.equal(map.gaps, 800);
+  // the reverse direction is the inverse of this map, without a second DP
+  const back = arc.align(to, from);
+  assert.equal(back.to.length, to.length);
+  assert.equal(arc.mapPosition(back, 1), 401);
+  assert.equal(arc.mapPosition(back, 5001), 5401);
+  assert.equal(arc.mapPosition(back, to.length), 0, "the 3' end missing from from faces a gap");
+  assert.equal(back.gaps, 800);
+  assert.equal(back.identity, map.identity);
+  for (let i = 1; i <= from.length; i += 1) {
+    const j = arc.mapPosition(map, i);
+    if (j) {
+      assert.equal(arc.mapPosition(back, j), i);
+    }
+  }
 }
 
 // ---- structures: dbn with windows, ct

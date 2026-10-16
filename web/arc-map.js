@@ -31,8 +31,30 @@
 
   // align(from, to) -> { to: Int32Array (1-based target per from position,
   // 0 = gap), identity, matches, mismatches, gaps, same }.  Results are
-  // cached, so re-rendering does not align again.
+  // cached, so re-rendering does not align again.  The scores are
+  // symmetric, so the inverse of from -> to is an optimal to -> from
+  // alignment: it is cached too and the other direction costs no second DP.
   const alignCache = new Map();
+
+  function cacheAlignment(key, result) {
+    if (alignCache.has(key)) {
+      return;
+    }
+    if (alignCache.size >= 8) {
+      alignCache.delete(alignCache.keys().next().value);
+    }
+    alignCache.set(key, result);
+  }
+
+  function invertAlignment(result, length) {
+    const to = new Int32Array(length);
+    for (let i = 0; i < result.to.length; i += 1) {
+      if (result.to[i] > 0) {
+        to[result.to[i] - 1] = i + 1;
+      }
+    }
+    return { to: to, identity: result.identity, matches: result.matches, mismatches: result.mismatches, gaps: result.gaps, same: result.same };
+  }
 
   function align(fromSequence, toSequence) {
     const a = normaliseSequence(fromSequence);
@@ -42,10 +64,10 @@
       return alignCache.get(key);
     }
     const result = alignUncached(a, b);
-    if (alignCache.size >= 8) {
-      alignCache.delete(alignCache.keys().next().value);
+    cacheAlignment(key, result);
+    if (a !== b) {
+      cacheAlignment(b + "\u0000" + a, invertAlignment(result, b.length));
     }
-    alignCache.set(key, result);
     return result;
   }
 

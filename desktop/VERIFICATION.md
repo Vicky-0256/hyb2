@@ -62,6 +62,7 @@ HYB2_FLOW_DATA=<data> HYB2_FLOW_OUT=<empty dir> HYB2_SNAPSHOT_DIR=<dir> \
 | Cancel (3M reads, while mapping) | task cancelled, map cancelled, no .hyb/index, Resume | Pass |
 | Offline lookup | lookup shows RNAcentral error / nothing concluded, not "not found"; connection test does not claim RNAcentral was reached | Pass after fix (said "Connected") |
 | Reopen (new runtime, Recent projects) | every row keeps its status, the still-moved file is marked missing with Relink (inputs are checked on open), Explore shows the same hybrids, Report says 5 (1 analysed) | Pass after fix (missing was shown only after Check inputs) |
+| Report: pipeline settings and inputs (reopened) | ok_rep1 shows the settings from its run checkpoint (blast_threshold 0.1 · max_overlap 4 · max_hits 10 · energy off · pipeline format …); a failed sample says "no hybrids: the last run failed at map", not "not run"; each input file has its size and fingerprint | Pass (added 2026-10-16, run final-d exit 0) |
 | Damaged index | Explore shows "Could not load…", not an empty result | Pass |
 
 Also: the built app (`mygo build -skip-dmg` with the packed runtime) launched,

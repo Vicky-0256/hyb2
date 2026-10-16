@@ -438,9 +438,16 @@ func TestAcceptanceFlow(t *testing.T) {
 	d.until("report", 2*time.Minute, func() bool { return d.has("analysed)") })
 	d.shot("flow-reopened-report")
 	reportOK := d.has("5 (1 analysed)")
-	record("reopen_report", map[string]any{"partial_shown": reportOK})
+	// The settings ok_rep1 was run with come from its real checkpoint; a
+	// failed sample is not shown as "not run".
+	settingsOK := d.has("blast_threshold 0.1 · max_overlap 4 · max_hits 10 · energy off · pipeline format ")
+	failedOK := d.has("no hybrids: the last run failed at map")
+	record("reopen_report", map[string]any{"partial_shown": reportOK, "settings_shown": settingsOK, "failed_run_shown": failedOK})
 	if !reportOK {
 		t.Errorf("report does not say 1 of 5 analysed: %q", d.tt.Texts())
+	}
+	if !settingsOK || !failedOK {
+		t.Errorf("report pipeline settings: recorded %v, failed run %v: %q", settingsOK, failedOK, d.tt.Texts())
 	}
 
 	// 8. A query that fails is not shown as an empty result: damage the

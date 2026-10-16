@@ -28,14 +28,19 @@ type Reference struct {
 	Path      string     `json:"path"`
 	Mode      string     `json:"mode"`
 	SizeBytes int64      `json:"size_bytes"`
+	QuickHash string     `json:"quick_hash"`
+	SHA256    string     `json:"sha256"`
 	Sequences []Sequence `json:"sequences"`
 }
 
 type Reads struct {
-	Path      string `json:"path"`
-	Mode      string `json:"mode"`
-	Format    string `json:"format"`
-	SizeBytes int64  `json:"size_bytes"`
+	Path      string  `json:"path"`
+	Mode      string  `json:"mode"`
+	Format    string  `json:"format"`
+	SizeBytes int64   `json:"size_bytes"`
+	Mtime     float64 `json:"mtime"`
+	QuickHash string  `json:"quick_hash"`
+	SHA256    string  `json:"sha256"`
 }
 
 type Outputs struct {

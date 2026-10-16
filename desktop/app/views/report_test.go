@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"hyb2desktop/core"
+	"hyb2desktop/model"
 	"hyb2desktop/widgets"
 )
 
@@ -85,6 +86,11 @@ func TestReportPageSections(t *testing.T) {
 		// Structures and runtime.
 		"Structures", "1 window · 3,170–6,229", "AFR_REP1 + AFR_REP2", "1,055", "-452.0 kcal/mol",
 		"Runtime", "0.1.0-test", "darwin arm64 · Python 3.12.4",
+		// Inputs with fingerprints, and how each sample was run (the
+		// fixture project has no checkpoint files on disk).
+		"Pipeline settings and input files", "ZAFR.fasta", "reference ZAFR", "sample SUB_REP1", "quick fingerprint",
+		"0d9849d59772d0d7bf4ba7aa93ca1ea2733a121a18bff4ea9df85a4dfd1fbc11", "not recorded (no run checkpoint was found)",
+		"imported .hyb file: hybrids were called outside HYB2 Desktop",
 	} {
 		if !tt.HasText(text) {
 			t.Fatalf("report lacks %q: %q", text, tt.Texts())
@@ -159,7 +165,8 @@ func TestReportExportHTML(t *testing.T) {
 		t.Fatal("the exported report gives the folder's absolute path")
 	}
 	for _, want := range []string{"<!DOCTYPE html>", `<section id="project">`, `<section id="references">`, `<section id="samples">`,
-		`<section id="conditions">`, `<section id="differential-tests">`, `<section id="structures">`,
+		`<section id="conditions">`, `<section id="pipeline">`, `<section id="differential-tests">`,
+		"cfdf0a3a09b60d85c2900d07c983c2b2827591c7e4fc9c02e9475db6874a13d7", "Quick fingerprint: SHA-256 of the file size", `<section id="structures">`,
 		"ZIKV &lt;b&gt;&#34;GUI&#34;&lt;/b&gt; &amp; co", "AFR (2 merged) vs BRA (2 merged)", "Top 10 merged interactions by padj",
 		"5,720–5,729", "The 400 strongest of 82,132 cells are drawn.", "Arc diagram of 1,055 base pairs, 3,170–6,229.",
 		"-452.0 kcal/mol", "HYB2 Desktop: 0.1.0-test", "@media print"} {
@@ -190,6 +197,44 @@ func TestReportExportHTML(t *testing.T) {
 	}
 	if !strings.Contains(svgs[1], "<path") || !strings.Contains(svgs[0], `id="test1-clip"`) || !strings.Contains(svgs[1], `id="structure1-clip"`) {
 		t.Fatal("figure ids or arcs missing")
+	}
+}
+
+// The settings come from the sample's run checkpoint (the hyb2pipe
+// format, as written by a real run), and a reads file that changed since
+// that run is called out.
+func TestReportRunSettings(t *testing.T) {
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, "samples", "ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := `{"version": 1, "input": {"path": "/data/ok_rep1.fastq", "size": 6089196, "mtime": 1792136794.1215298},
+		"options": {"blast_threshold": 0.1, "max_overlap": 4, "max_hits": 10, "energy": false, "keep_sam": "none",
+		"source": "fastq", "work": "/x/ok_rep1.work", "format": "2026-10-14"}, "stages": {}}`
+	if err := os.WriteFile(filepath.Join(project, "samples", "ok", "ok_rep1.checkpoint.json"), []byte(checkpoint), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := model.Sample{Reads: model.Reads{Path: "/data/ok_rep1.fastq", Format: "fastq", SizeBytes: 6089196, Mtime: 1792136794.12153},
+		Outputs: model.Outputs{Hyb: "samples/ok/ok_rep1.hyb"}}
+	text, note := reportRunSettings(project, s)
+	if want := "blast_threshold 0.1 · max_overlap 4 · max_hits 10 · energy off · pipeline format 2026-10-14"; text != want || note != "" {
+		t.Fatalf("settings %q, note %q", text, note)
+	}
+	s.Reads.SizeBytes++
+	if _, note := reportRunSettings(project, s); !strings.Contains(note, "now differs from the one this run used") {
+		t.Fatalf("changed reads not noted: %q", note)
+	}
+	s.Outputs.Hyb = ""
+	if text, _ := reportRunSettings(project, s); text != "not run yet" {
+		t.Fatalf("not run: %q", text)
+	}
+	// A failed run is not "not run".
+	s.Stages = map[string]model.Stage{"map": {Status: "failed"}}
+	if text, _ := reportRunSettings(project, s); text != "no hybrids: the last run failed at map" {
+		t.Fatalf("failed run: %q", text)
+	}
+	if got := reportFingerprint("abc", "def"); got != "SHA-256\nabc" {
+		t.Fatalf("fingerprint %q", got)
 	}
 }
 

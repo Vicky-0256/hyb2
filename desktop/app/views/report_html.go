@@ -35,6 +35,10 @@ type reportData struct {
 	Conditions                    []reportCondition
 	Tests                         []reportTest
 	Structures                    []reportStructure
+	// Inputs are the reference and reads files with their fingerprints;
+	// Settings how each sample's hybrids were called.
+	Inputs   []reportFile
+	Settings []reportSettings
 	// Evidence are the saved external cards included in the report.
 	Evidence []reportEvidence
 	// Notes are parts that could not be loaded.
@@ -47,6 +51,15 @@ type reportSample struct {
 	Ready                           bool
 	// Counts is the sample's analysis_summary part (nil when not analysed).
 	Counts *qcStats
+}
+
+type reportFile struct {
+	File, UsedBy, Size, Fingerprint string
+}
+
+type reportSettings struct {
+	Sample, Settings string
+	Note             string // e.g. the reads changed after the run
 }
 
 type reportCondition struct {
@@ -305,6 +318,45 @@ func (d *reportData) structureTable() reportTableData {
 	return t
 }
 
+// reportFingerprint: the full SHA-256 when it was computed, else the
+// quick one (size and first and last MiB, see the meta line).
+func reportFingerprint(sha, quick string) string {
+	switch {
+	case sha != "":
+		return "SHA-256\n" + sha
+	case quick != "":
+		return "quick fingerprint\n" + quick
+	}
+	return "—"
+}
+
+func (d *reportData) inputTable() reportTableData {
+	t := reportTableData{Cols: []reportCol{{Title: "File", Width: 200}, {Title: "Used by", Width: 130},
+		{Title: "Size", Width: 84, Num: true}, {Title: "Fingerprint", Width: 0}}}
+	for _, in := range d.Inputs {
+		t.Rows = append(t.Rows, []string{in.File, in.UsedBy, in.Size, in.Fingerprint})
+	}
+	return t
+}
+
+func (d *reportData) settingsTable() reportTableData {
+	t := reportTableData{Cols: []reportCol{{Title: "Sample", Width: 130}, {Title: "Hybrid calling settings", Width: 0}}}
+	for _, s := range d.Settings {
+		cell := s.Settings
+		if s.Note != "" {
+			cell += "\n" + s.Note
+		}
+		t.Rows = append(t.Rows, []string{s.Sample, cell})
+	}
+	return t
+}
+
+// reportFingerprintNote explains the fingerprints and where the settings
+// come from.
+const reportFingerprintNote = "Quick fingerprint: SHA-256 of the file size and its first and last MiB, recorded when the file was added; " +
+	"it tells a changed file from the same file without reading all of it. Settings are those recorded in each sample's run checkpoint " +
+	"(samples/<sample>/<name>.checkpoint.json), named as in the hyb2pipe options."
+
 // Line describes a structure in one line.
 func (s *reportStructure) Line() string {
 	parts := []string{s.Mode + prefix(" ", s.Windows)}
@@ -455,12 +507,14 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		*reportData
 		Facts, Runtime                                         [][2]string
 		ReferenceTable, SampleTable, ConditionTable, TestTable reportTableData
-		StructureTable                                         reportTableData
+		StructureTable, InputTable, SettingsTable              reportTableData
+		FingerprintNote                                        string
 		TestDetails                                            []reportHTMLTest
 		StructureDetails                                       []reportHTMLStructure
 		EvidenceNote                                           string
 	}{reportData: d, EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
-		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable()}
+		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable(),
+		InputTable: d.inputTable(), SettingsTable: d.settingsTable(), FingerprintNote: reportFingerprintNote}
 	for i := range d.Tests {
 		x := &d.Tests[i]
 		fig, caption := x.figure(fmt.Sprintf("test%d", i+1))
@@ -571,6 +625,13 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 {{if .ConditionTable.Rows}}{{template "table" .ConditionTable}}
 <p class="meta">Counts add up the analysed replicates of each condition.</p>
 {{else}}<p class="muted">No condition: samples have no condition set.</p>{{end}}
+</section>
+
+<section id="pipeline">
+<h2>Pipeline settings and input files</h2>
+{{if .InputTable.Rows}}{{template "table" .InputTable}}{{else}}<p class="muted">No input file in this project.</p>{{end}}
+{{if .SettingsTable.Rows}}{{template "table" .SettingsTable}}{{end}}
+<p class="meta">{{.FingerprintNote}}</p>
 </section>
 
 <section id="differential-tests">

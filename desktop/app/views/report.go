@@ -9,6 +9,7 @@ package views
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -158,6 +159,7 @@ func gatherReport(b core.Backend, in reportInput) *reportData {
 		d.Samples = append(d.Samples, reportSample{ID: s.ID, Label: s.Label(), Condition: s.Condition, Replicate: rep,
 			Reads: s.Reads.Path, Format: s.Reads.Format, Stages: s.StageSummary, Ready: s.IsReady(), Counts: counts[s.ID]})
 	}
+	d.Inputs, d.Settings = reportProvenance(pr)
 	for _, c := range pr.Conditions {
 		rc := reportCondition{Name: c.Name}
 		var parts []qcStats
@@ -210,6 +212,92 @@ func gatherReport(b core.Backend, in reportInput) *reportData {
 		}
 	}
 	return d
+}
+
+// reportProvenance lists the input files with their fingerprints and how
+// each sample's hybrids were called (from its run checkpoint).
+func reportProvenance(pr *model.Project) ([]reportFile, []reportSettings) {
+	var inputs []reportFile
+	for _, r := range pr.References {
+		if r.Path == "" {
+			continue
+		}
+		inputs = append(inputs, reportFile{File: filepath.Base(r.Path), UsedBy: "reference " + dataRefName(r),
+			Size: dataFormatBytes(r.SizeBytes), Fingerprint: reportFingerprint(r.SHA256, r.QuickHash)})
+	}
+	var settings []reportSettings
+	for _, s := range pr.Samples {
+		if s.Reads.Path != "" {
+			inputs = append(inputs, reportFile{File: filepath.Base(s.Reads.Path), UsedBy: "sample " + s.Label(),
+				Size: dataFormatBytes(s.Reads.SizeBytes), Fingerprint: reportFingerprint(s.Reads.SHA256, s.Reads.QuickHash)})
+		}
+		text, note := reportRunSettings(pr.Path, s)
+		settings = append(settings, reportSettings{Sample: s.Label(), Settings: text, Note: note})
+	}
+	return inputs, settings
+}
+
+// reportCheckpoint is the part of <out>.checkpoint.json the report shows.
+type reportCheckpoint struct {
+	Input struct {
+		Path  string  `json:"path"`
+		Size  int64   `json:"size"`
+		Mtime float64 `json:"mtime"`
+	} `json:"input"`
+	Options map[string]any `json:"options"`
+}
+
+// reportOptionKeys are the checkpoint options that change the hybrids, in
+// the order shown (work, source and keep_sam do not).
+var reportOptionKeys = []string{"blast_threshold", "max_overlap", "max_hits", "energy"}
+
+// reportRunSettings: the settings the sample's hybrids were called with,
+// and a note when the reads changed after that run.
+func reportRunSettings(project string, s model.Sample) (string, string) {
+	if s.Reads.Format == "hyb" {
+		return "imported .hyb file: hybrids were called outside HYB2 Desktop", ""
+	}
+	if s.Outputs.Hyb == "" {
+		for _, stage := range []string{"map", "hyb"} {
+			switch status := dataStage(s, stage).Status; status {
+			case "failed", "cancelled", "interrupted":
+				return "no hybrids: the last run " + status + " at " + stage, ""
+			}
+		}
+		return "not run yet", ""
+	}
+	base := strings.TrimSuffix(filepath.FromSlash(s.Outputs.Hyb), ".hyb")
+	if !filepath.IsAbs(base) {
+		base = filepath.Join(project, base)
+	}
+	raw, err := os.ReadFile(base + ".checkpoint.json")
+	var ck reportCheckpoint
+	if err == nil {
+		err = json.Unmarshal(raw, &ck)
+	}
+	if err != nil || ck.Options == nil {
+		return "not recorded (no run checkpoint was found)", ""
+	}
+	var parts []string
+	for _, key := range reportOptionKeys {
+		value, ok := ck.Options[key]
+		if !ok {
+			continue
+		}
+		text := fmt.Sprint(value)
+		if b, isBool := value.(bool); isBool {
+			text = map[bool]string{true: "on", false: "off"}[b]
+		}
+		parts = append(parts, key+" "+text)
+	}
+	if format, ok := ck.Options["format"].(string); ok && format != "" {
+		parts = append(parts, "pipeline format "+format)
+	}
+	note := ""
+	if ck.Input.Size != s.Reads.SizeBytes || (s.Reads.Mtime != 0 && math.Abs(ck.Input.Mtime-s.Reads.Mtime) > 0.01) {
+		note = "The reads file now differs from the one this run used (size or modification time): run the sample again."
+	}
+	return nameOr(strings.Join(parts, " · "), "defaults"), note
 }
 
 func reportReadTest(b core.Backend, pr *model.Project, e comparisonEntry, label func(string) string) reportTest {
@@ -361,6 +449,13 @@ func (p *reportPage) View(c *ui.Context) {
 			})
 			Card(c, "Conditions", func() {
 				reportTable(c, "conditions", d.conditionTable(), "No condition: samples have no condition set.")
+			})
+			Card(c, "Pipeline settings and input files", func() {
+				reportTable(c, "inputs", d.inputTable(), "No input file in this project.")
+				if len(d.Settings) > 0 {
+					reportTable(c, "settings", d.settingsTable(), "")
+				}
+				ui.Text(c, reportFingerprintNote).FontSize(12).TextColor(t.TextMuted)
 			})
 			Card(c, "Differential tests", func() { p.testsView(c, d) })
 			Card(c, "Structures", func() {

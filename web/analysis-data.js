@@ -562,8 +562,37 @@
     const resourceBudget = contact.budget === "comparison" ? COMPARISON_DATASET_BUDGET : getContactResourceBudget();
     const maximumCells = resourceBudget.maximumCells;
     const maximumBinContributions = resourceBudget.maximumBinContributions;
-    // cells in first-seen order: Map from cellKey() to a row of the arrays
-    const index = new Map();
+    // records that pass the filters, oriented, with their bin box; the box
+    // sizes the cell index below
+    const kept = [];
+    let boxXMin = Infinity;
+    let boxXMax = -Infinity;
+    let boxYMin = Infinity;
+    let boxYMax = -Infinity;
+    for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
+      const record = records[recordIndex];
+      if (contact.chimeraType && contact.chimeraType !== "all" && record.chimeraType !== contact.chimeraType) {
+        continue;
+      }
+      if (!matchesHomodimerSubset(record, contact.homodimer)) {
+        continue;
+      }
+      const oriented = orientRecordForPair(record, contact.rnaX, contact.rnaY, contact.orientation);
+      if (!oriented) {
+        continue;
+      }
+      kept.push(oriented);
+      const xs = binSize * Math.floor(oriented.xStart / binSize);
+      const xe = binSize * Math.floor(oriented.xEnd / binSize);
+      const ys = binSize * Math.floor(oriented.yStart / binSize);
+      const ye = binSize * Math.floor(oriented.yEnd / binSize);
+      if (xs < boxXMin) boxXMin = xs;
+      if (xe > boxXMax) boxXMax = xe;
+      if (ys < boxYMin) boxYMin = ys;
+      if (ye > boxYMax) boxYMax = ye;
+    }
+    // cells in first-seen order: the index maps a bin pair to a row of the arrays
+    const index = kept.length ? cellIndex(boxXMin, boxXMax, boxYMin, boxYMax, binSize) : cellIndex(0, 0, 0, 0, binSize);
     const cellX = [];
     const cellY = [];
     const cellRecords = [];
@@ -580,18 +609,9 @@
     let limitReason = "";
 
     recordLoop:
-    for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
-      const record = records[recordIndex];
-      if (contact.chimeraType && contact.chimeraType !== "all" && record.chimeraType !== contact.chimeraType) {
-        continue;
-      }
-      if (!matchesHomodimerSubset(record, contact.homodimer)) {
-        continue;
-      }
-      const oriented = orientRecordForPair(record, contact.rnaX, contact.rnaY, contact.orientation);
-      if (!oriented) {
-        continue;
-      }
+    for (let keptIndex = 0; keptIndex < kept.length; keptIndex += 1) {
+      const oriented = kept[keptIndex];
+      const record = oriented.record;
 
       const xStartBin = binSize * Math.floor(oriented.xStart / binSize);
       const xEndBin = binSize * Math.floor(oriented.xEnd / binSize);
@@ -614,15 +634,14 @@
 
       for (let x = xStartBin; x <= xEndBin; x += binSize) {
         for (let y = yStartBin; y <= yEndBin; y += binSize) {
-          const key = cellKey(x, y);
-          let row = index.get(key);
-          if (row === undefined) {
+          let row = index.get(x, y);
+          if (row < 0) {
             if (cellCount >= maximumCells) {
               limitReason = "Contact map not generated: the selected records cover more than " + maximumCells.toLocaleString("en-US") + " distinct cells under the adaptive browser budget. Increase the bin size or narrow the selected data.";
               break recordLoop;
             }
             row = cellCount;
-            index.set(key, row);
+            index.set(x, y, row);
             cellX.push(x);
             cellY.push(y);
             cellRecords.push(0);
@@ -702,6 +721,61 @@
     return x >= 0 && y >= 0 && x < 67108864 && y < 67108864 && x === Math.floor(x) && y === Math.floor(y)
       ? x * 67108864 + y
       : x + ":" + y;
+  }
+
+  // Row lookup for cells whose bin starts lie in a known box: a dense
+  // Int32Array when the box is small enough (a 10.8 kb genome against
+  // itself at 10 nt is 1,081 x 1,081 bins), a Map otherwise.  Both give the
+  // same rows; the array avoids hashing one key per bin contribution, which
+  // dominated whole-genome binning.  get() returns -1 when absent.
+  const DENSE_CELL_LIMIT = 4194304;
+  function cellIndex(xMin, xMax, yMin, yMax, binSize) {
+    const width = Math.floor((xMax - xMin) / binSize) + 1;
+    const height = Math.floor((yMax - yMin) / binSize) + 1;
+    const aligned = function (value, origin) { return Number.isSafeInteger(value) && (value - origin) % binSize === 0; };
+    if (binSize > 0 && Number.isSafeInteger(binSize) && width > 0 && height > 0 && width * height <= DENSE_CELL_LIMIT &&
+        aligned(xMin, xMin) && aligned(yMin, yMin)) {
+      const rows = new Int32Array(width * height);
+      const slot = function (x, y) {
+        if (!aligned(x, xMin) || !aligned(y, yMin) || x < xMin || x > xMax || y < yMin || y > yMax) {
+          return -1;
+        }
+        return ((x - xMin) / binSize) * height + (y - yMin) / binSize;
+      };
+      return {
+        dense: true,
+        get: function (x, y) {
+          const at = slot(x, y);
+          return at < 0 ? -1 : rows[at] - 1;
+        },
+        set: function (x, y, row) {
+          rows[slot(x, y)] = row + 1;
+        },
+        // rows by x, then y: the slots are laid out that way
+        rowsInOrder: function (count) {
+          const out = new Int32Array(count);
+          let next = 0;
+          for (let at = 0; at < rows.length && next < count; at += 1) {
+            if (rows[at]) {
+              out[next] = rows[at] - 1;
+              next += 1;
+            }
+          }
+          return out;
+        }
+      };
+    }
+    const map = new Map();
+    return {
+      dense: false,
+      get: function (x, y) {
+        const row = map.get(cellKey(x, y));
+        return row === undefined ? -1 : row;
+      },
+      set: function (x, y, row) {
+        map.set(cellKey(x, y), row);
+      }
+    };
   }
 
   // Display half of the contact map: turns DataProvider contact bins into the
@@ -1397,7 +1471,38 @@
     const groupBCount = datasetCount - groupACount;
     // cell rows in first-seen order; per dataset the rows it covers and its
     // raw values there
-    const index = new Map();
+    // every dataset's bins first (in order; a failed dataset ends the list),
+    // so one box over them sizes the cell index
+    const allBins = [];
+    for (let d = 0; d < datasetCount; d += 1) {
+      const b = binsAt(d);
+      allBins.push(b);
+      if (b.ready === false) {
+        break;
+      }
+    }
+    let boxXMin = Infinity;
+    let boxXMax = -Infinity;
+    let boxYMin = Infinity;
+    let boxYMax = -Infinity;
+    let sharedBin = null;
+    allBins.forEach(function (b) {
+      if (b.ready === false) {
+        return;
+      }
+      sharedBin = sharedBin === null ? Number(b.binSize) : (sharedBin === Number(b.binSize) ? sharedBin : NaN);
+      const bx = b.x || [];
+      const by = b.y || [];
+      for (let i = 0; i < bx.length; i += 1) {
+        if (bx[i] < boxXMin) boxXMin = bx[i];
+        if (bx[i] > boxXMax) boxXMax = bx[i];
+        if (by[i] < boxYMin) boxYMin = by[i];
+        if (by[i] > boxYMax) boxYMax = by[i];
+      }
+    });
+    const index = Number.isFinite(boxXMin) && sharedBin > 0
+      ? cellIndex(boxXMin, boxXMax, boxYMin, boxYMax, sharedBin)
+      : cellIndex(0, 0, 0, 0, 0);
     const cellX = [];
     const cellY = [];
     const perDataset = [];
@@ -1406,7 +1511,7 @@
 
     for (let datasetIndex = 0; datasetIndex < datasetCount && !matrixFailure; datasetIndex += 1) {
       const dataset = datasets[datasetIndex];
-      const bins = binsAt(datasetIndex);
+      const bins = allBins[datasetIndex];
       if (bins.ready === false) {
         matrixFailure = bins.reason || "A dataset exceeded the browser contact-map limits.";
         break;
@@ -1422,15 +1527,14 @@
       const rows = new Int32Array(xs.length);
       const values = new Float64Array(xs.length);
       for (let cell = 0; cell < xs.length; cell += 1) {
-        const key = cellKey(xs[cell], ys[cell]);
-        let row = index.get(key);
-        if (row === undefined) {
+        let row = index.get(xs[cell], ys[cell]);
+        if (row < 0) {
           if (cellX.length >= MAX_COMPARISON_CELLS) {
             matrixFailure = "The combined maps cover more than " + MAX_COMPARISON_CELLS.toLocaleString("en-US") + " distinct cells. Increase the bin size or narrow the RNA pair.";
             break;
           }
           row = cellX.length;
-          index.set(key, row);
+          index.set(xs[cell], ys[cell], row);
           cellX.push(xs[cell]);
           cellY.push(ys[cell]);
         }
@@ -1490,11 +1594,17 @@
     // which concatenates every replicate's contact.txt and pairs consecutive
     // occurrences of a bin (A1/A2, A2/B1, B1/B2).
     const similarityMinimum = input.similarityMinimum;
-    const order = new Int32Array(distinctCellCount);
-    for (let row = 0; row < distinctCellCount; row += 1) {
-      order[row] = row;
+    // rows by x, then y (cells are distinct, so there are no ties)
+    let order;
+    if (index.dense) {
+      order = index.rowsInOrder(distinctCellCount);
+    } else {
+      order = new Int32Array(distinctCellCount);
+      for (let row = 0; row < distinctCellCount; row += 1) {
+        order[row] = row;
+      }
+      order.sort(function (left, right) { return cellX[left] - cellX[right] || cellY[left] - cellY[right]; });
     }
-    order.sort(function (left, right) { return cellX[left] - cellX[right] || cellY[left] - cellY[right]; });
     const out = {
       count: distinctCellCount,
       datasetCellContributions: datasetCellContributions,
@@ -1575,13 +1685,60 @@
   }
 
   // positions by descending value, ties in position order: the order of a
-  // stable cells.slice().sort() on that value
+  // stable cells.slice().sort() on that value.  Values are >= 0 and finite,
+  // so their IEEE bits sort like the numbers: a stable radix sort on the
+  // inverted bits (four 16-bit passes) gives that order without a JS
+  // comparator call per comparison (seconds for 838,000 cells).
+  const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
   function effectOrderOf(absoluteEffects) {
-    const order = new Int32Array(absoluteEffects.length);
-    for (let position = 0; position < order.length; position += 1) {
+    const n = absoluteEffects.length;
+    let order = new Int32Array(n);
+    for (let position = 0; position < n; position += 1) {
       order[position] = position;
     }
-    return order.sort(function (left, right) { return absoluteEffects[right] - absoluteEffects[left] || left - right; });
+    let radix = LITTLE_ENDIAN && n > 1;
+    for (let i = 0; radix && i < n; i += 1) {
+      const v = absoluteEffects[i];
+      if (!(v >= 0) || v === Infinity) {
+        radix = false;
+      }
+    }
+    if (!radix) {
+      return order.sort(function (left, right) { return absoluteEffects[right] - absoluteEffects[left] || left - right; });
+    }
+    // a copy: the caller sorts absoluteEffects in place afterwards
+    const values = new Float64Array(absoluteEffects);
+    const words = new Uint32Array(values.buffer);
+    const lo = new Uint32Array(n);
+    const hi = new Uint32Array(n);
+    for (let i = 0; i < n; i += 1) {
+      lo[i] = ~words[2 * i] >>> 0;
+      hi[i] = ~words[2 * i + 1] >>> 0;
+    }
+    let next = new Int32Array(n);
+    const counts = new Uint32Array(65536);
+    [[lo, 0], [lo, 16], [hi, 0], [hi, 16]].forEach(function (pass) {
+      const key = pass[0];
+      const shift = pass[1];
+      counts.fill(0);
+      for (let i = 0; i < n; i += 1) {
+        counts[(key[order[i]] >>> shift) & 0xffff] += 1;
+      }
+      let sum = 0;
+      for (let b = 0; b < 65536; b += 1) {
+        const c = counts[b];
+        counts[b] = sum;
+        sum += c;
+      }
+      for (let i = 0; i < n; i += 1) {
+        const p = order[i];
+        next[counts[(key[p] >>> shift) & 0xffff]++] = p;
+      }
+      const swap = order;
+      order = next;
+      next = swap;
+    });
+    return order;
   }
 
   // The buffers of a computeComparison() result, for postMessage transfer.
@@ -2415,6 +2572,8 @@
     computeComparison: computeComparison,
     comparisonResultBuilder: comparisonResultBuilder,
     comparisonTransfers: comparisonTransfers,
+    effectOrderOf: effectOrderOf,
+    cellIndex: cellIndex,
     comparisonOrder: comparisonOrder,
     comparisonOrderedCells: comparisonOrderedCells,
     comparisonContactQuery: comparisonContactQuery,

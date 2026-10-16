@@ -540,7 +540,27 @@
     if (state.shell && !(state.summary && state.analysisEntered)) {
       return null;
     }
-    return pageData.ensure(state.analysisEntered ? state.activePage : null);
+    const page = state.analysisEntered ? state.activePage : null;
+    // the Report page reads every page's data: draw each part as it lands
+    // instead of waiting for the slowest (the whole comparison)
+    return pageData.ensure(page, page === "report" ? schedulePartialRender : null);
+  }
+
+  let partialRenderFrame = 0;
+  function schedulePartialRender() {
+    if (partialRenderFrame || state.activePage !== "report") {
+      return;
+    }
+    partialRenderFrame = window.requestAnimationFrame(function () {
+      partialRenderFrame = 0;
+      if (state.activePage === "report") {
+        const focused = focusIdentity(document.activeElement);
+        render({ immediate: true });
+        if (focused) {
+          restoreFocus(focused, null);
+        }
+      }
+    });
   }
 
   function rerenderPreservingFocus() {

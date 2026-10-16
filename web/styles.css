@@ -1116,3 +1116,17 @@ a {
   color: var(--error);
   font-size: 14px;
 }
+
+/* Parse error: the first rejected line and what a HYB line needs. */
+.parse-error-detail {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+}
+
+.parse-error-hint {
+  margin: 12px 0 0;
+  font-size: 0.875rem;
+  color: var(--muted-foreground, #5b6b7d);
+}

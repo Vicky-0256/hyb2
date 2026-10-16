@@ -256,6 +256,21 @@
     ].join("");
   }
 
+  // What the first rejected line looked like, for the parse error.
+  function describeParseProblem(problem) {
+    const content = String(problem.content || "");
+    const columns = content ? content.split("\t").length : 0;
+    let text = "Line " + problem.line + ": " + problem.error;
+    if (/tab-separated columns/.test(problem.error || "")) {
+      text += " (found " + columns + (columns === 1 ? " column" : " columns") + (content.indexOf("\t") === -1 ? "; no tab characters" : "") + ")";
+    }
+    return text + ".";
+  }
+
+  function hybFormatHint() {
+    return "A HYB line has 15 or more tab-separated columns: read ID, sequence, ΔG, then name and coordinates of each arm, as written by the hyb pipeline or HYB2 Desktop. FASTQ, SAM and FASTA reads need HYB2 Desktop first.";
+  }
+
   function visitorOS() {
     const platform = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "").toLowerCase();
     if (platform.indexOf("mac") !== -1) return "mac";
@@ -333,11 +348,16 @@
     }
 
     if (state.error) {
+      const error = state.error;
       return [
         '<div class="file-card"><div class="file-card-inner load-state">',
-        '  <div class="parse-error"><strong>' + escapeHtml(state.error.title) + "</strong><br>" + escapeHtml(state.error.message) + "</div>",
+        '  <div class="parse-error" role="alert"><strong>' + escapeHtml(error.title) + "</strong><br>" +
+          (error.fileName ? escapeHtml(error.fileName) + ": " : "") + escapeHtml(error.message) +
+          (error.detail ? '<span class="parse-error-detail">' + escapeHtml(error.detail) + "</span>" : "") + "</div>",
+        error.hint ? '  <p class="parse-error-hint">' + escapeHtml(error.hint) + "</p>" : "",
         '  <div class="dialog-actions">',
-        '    <button class="button button-secondary" type="button" data-action="reset-file">Choose another file</button>',
+        '    <button class="button button-secondary" type="button" data-action="load-example">Try the example instead</button>',
+        '    <button class="button" type="button" data-action="reset-file">Choose another file</button>',
         "  </div>",
         "</div></div>"
       ].join("");
@@ -381,7 +401,7 @@
       '      <h3 class="dropzone-title">Drop a .hyb file here</h3>',
       '      <p class="dropzone-copy">or choose a file from this device</p>',
       '      <button class="button" type="button" data-action="choose-hyb">Choose HYB file</button>',
-      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files</span>',
+      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line). Raw FASTQ reads? HYB2 Desktop, below, turns them into .hyb.</span>',
       "    </div>",
       "  </div>",
       '  <section class="reference-upload" aria-labelledby="reference-upload-title">',
@@ -1174,9 +1194,13 @@
 
           if (!summary || !summary.validRecords) {
             state.loading = null;
+            const firstProblem = summary && summary.errors && summary.errors[0];
             state.error = {
               title: "This does not appear to be a valid HYB file",
-              message: "No records with at least 15 tab-separated columns, RNA names, and valid RNA coordinates were found."
+              message: "No records with at least 15 tab-separated columns, RNA names, and valid RNA coordinates were found.",
+              fileName: file.name || "Untitled file",
+              detail: firstProblem ? describeParseProblem(firstProblem) : "",
+              hint: hybFormatHint()
             };
             render();
             return;

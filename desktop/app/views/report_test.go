@@ -159,6 +159,15 @@ func TestReportExportHTML(t *testing.T) {
 	if len(text) < 20_000 || len(text) > 2_000_000 {
 		t.Fatalf("report size %d", len(text))
 	}
+	// What to check before reporting, in the export too.
+	for _, want := range []string{"<h2>Before you report these results</h2>",
+		"<li>These results cover the 6 analysed samples of this project;",
+		"<li>Differential tests are DESeq2 on 10-nt contact maps;",
+		"<li>Structures are computational predictions guided by chimeric reads;"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("export lacks %q", want)
+		}
+	}
 	// The exported file is shared: it names the project folder, not where
 	// it is on this computer (the path holds the user name).
 	if strings.Contains(text, "/projects/zikv.hyb2proj") || !strings.Contains(text, "zikv.hyb2proj") {
@@ -270,5 +279,28 @@ func TestReportHTMLCapsAndEmpty(t *testing.T) {
 	}
 	if strings.Contains(string(empty), "<svg") || !strings.Contains(string(empty), "No differential test has been run.") {
 		t.Fatal("empty report")
+	}
+}
+
+func TestReportReviewChecks(t *testing.T) {
+	ready := func(label, cond string, ok bool) reportSample {
+		return reportSample{Label: label, Condition: cond, Ready: ok}
+	}
+	d := &reportData{
+		Samples:    []reportSample{ready("A1", "A", true), ready("A2", "A", true), ready("B1", "B", true), ready("B2", "B", false)},
+		Conditions: []reportCondition{{Name: "A", Analysed: 2}, {Name: "B", Analysed: 1}},
+		Settings:   []reportSettings{{Sample: "A1", Note: "changed"}},
+	}
+	got := strings.Join(d.reviewChecks(), "\n")
+	for _, want := range []string{"These results cover the 3 analysed samples", "1 of 4 samples are not analysed",
+		"Only one analysed replicate in B", "1 sample's input changed after it was analysed"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("checks lack %q:\n%s", want, got)
+		}
+	}
+	for _, absent := range []string{"Differential tests", "Structures are", "External sources", "could not be read"} {
+		if strings.Contains(got, absent) {
+			t.Fatalf("check %q without its condition:\n%s", absent, got)
+		}
 	}
 }

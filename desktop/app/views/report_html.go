@@ -417,6 +417,57 @@ func (d *reportData) analysed() int {
 	return n
 }
 
+// reviewChecks are what to check before reporting this project's results,
+// each only when its condition applies (the app's and the export's
+// "Before you report these results").
+func (d *reportData) reviewChecks() []string {
+	analysed := 0
+	for _, s := range d.Samples {
+		if s.Ready {
+			analysed++
+		}
+	}
+	checks := []string{fmt.Sprintf("These results cover the %d analysed sample%s of this project; hybrid counts depend on the pipeline settings listed under Pipeline settings and input files.",
+		analysed, plural(analysed))}
+	if missing := len(d.Samples) - analysed; missing > 0 {
+		checks = append(checks, fmt.Sprintf("%d of %d samples are not analysed: they are missing from the condition counts and the differential tests.", missing, len(d.Samples)))
+	}
+	var single []string
+	for _, c := range d.Conditions {
+		if c.Analysed == 1 {
+			single = append(single, c.Name)
+		}
+	}
+	if len(single) > 0 {
+		checks = append(checks, "Only one analysed replicate in "+strings.Join(single, ", ")+": differences involving it have no replicate variance behind them.")
+	}
+	changed := 0
+	for _, s := range d.Settings {
+		if s.Note != "" {
+			changed++
+		}
+	}
+	switch {
+	case changed == 1:
+		checks = append(checks, "1 sample's input changed after it was analysed (see Pipeline settings); run it again before reporting.")
+	case changed > 1:
+		checks = append(checks, fmt.Sprintf("%d samples' inputs changed after they were analysed (see Pipeline settings); run them again before reporting.", changed))
+	}
+	if len(d.Tests) > 0 {
+		checks = append(checks, "Differential tests are DESeq2 on 10-nt contact maps; padj assumes the replicates are independent biological samples, so check how they were made.")
+	}
+	if len(d.Structures) > 0 {
+		checks = append(checks, "Structures are computational predictions guided by chimeric reads; support key helices with independent evidence (for example probing or mutation) before stating them.")
+	}
+	if len(d.Evidence) > 0 {
+		checks = append(checks, "External sources are AI-generated literature summaries whose citations are not verified; read the cited papers before relying on them.")
+	}
+	if len(d.Notes) > 0 {
+		checks = append(checks, "Parts of the project could not be read for this report (see the notes at the top); it is incomplete.")
+	}
+	return checks
+}
+
 // runtimeFacts: the app and runtime that made the report.
 func (d *reportData) runtimeFacts() [][2]string {
 	return [][2]string{{"HYB2 Desktop", nameOr(d.AppVersion, "development build")}, {"Runtime", nameOr(d.Runtime, "not detected yet")},
@@ -512,7 +563,8 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		TestDetails                                            []reportHTMLTest
 		StructureDetails                                       []reportHTMLStructure
 		EvidenceNote                                           string
-	}{reportData: d, EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
+		Checks                                                 []string
+	}{reportData: d, Checks: d.reviewChecks(), EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
 		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable(),
 		InputTable: d.inputTable(), SettingsTable: d.settingsTable(), FingerprintNote: reportFingerprintNote}
 	for i := range d.Tests {
@@ -606,6 +658,13 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 <dl class="facts">{{range .Facts}}
 <dt>{{index . 0}}</dt><dd>{{index . 1}}</dd>{{end}}
 </dl>
+</section>
+
+<section id="checks">
+<h2>Before you report these results</h2>
+<ul>{{range .Checks}}
+<li>{{.}}</li>{{end}}
+</ul>
 </section>
 
 <section id="references">

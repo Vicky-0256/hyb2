@@ -470,6 +470,13 @@
     return button ? (button.getAttribute("aria-label") || page) : page;
   }
 
+  // One Esc closes one layer. app.js may close a dialog before the handler
+  // below runs, so note in the capture phase whether a dialog was open.
+  let escClosedDialog = false;
+  document.addEventListener("keydown", function (event) {
+    escClosedDialog = event.key === "Escape" && !!document.querySelector("#app [data-dialog]");
+  }, true);
+
   document.addEventListener("keydown", function (event) {
     const key = event.key;
 
@@ -494,6 +501,17 @@
         trapFocus(dialog, event);
       }
       return;
+    }
+
+    // Esc also closes the non-modal panels, unless it is clearing a field
+    // outside them or app.js already used it to close a dialog.
+    if (key === "Escape" && !escClosedDialog) {
+      const panelClose = closePanelButton();
+      if (panelClose && (!isTyping(event.target) || panelClose.closest("aside").contains(event.target))) {
+        event.preventDefault();
+        panelClose.click();
+        return;
+      }
     }
 
     if (event.metaKey || event.ctrlKey || event.altKey || isTyping(event.target)) {
@@ -762,6 +780,44 @@
     const control = event.target.closest && event.target.closest("[data-action]");
     if (control && !control.closest("[data-dialog]")) {
       lastAction = control.getAttribute("data-action");
+    }
+  }, true);
+
+  // Tweaks and the record drawer are not dialogs, and the render that
+  // opens or closes them replaces the button that was clicked, so focus
+  // would fall to <body>. Put it on the matching control in the new tree:
+  // the panel's close button on open, the opener on close.
+  let openedRecord = null;
+
+  function closePanelButton() {
+    return app && app.querySelector('.record-drawer [data-feature-action="close-record"], .tweaks-panel [data-action="toggle-tweaks"]');
+  }
+
+  function focusAfterRender(selector) {
+    window.requestAnimationFrame(function () {
+      const target = app && app.querySelector(selector);
+      if (target && visible(target) && (!document.activeElement || document.activeElement === document.body)) {
+        target.focus({ preventScroll: true });
+      }
+    });
+  }
+
+  // Capture phase: read the clicked control before the render replaces it
+  // (and motion.js strips the old copy for its exit animation).
+  document.addEventListener("click", function (event) {
+    const control = event.target.closest && event.target.closest('[data-action="toggle-tweaks"], [data-feature-action="open-record"], [data-feature-action="close-record"]');
+    if (!control) {
+      return;
+    }
+    if (control.matches('[data-feature-action="open-record"]')) {
+      openedRecord = control.getAttribute("data-record-index");
+      focusAfterRender('.virtual-row[data-record-index="' + openedRecord + '"]');
+    } else if (control.matches('[data-feature-action="close-record"]')) {
+      focusAfterRender(openedRecord !== null ? '.virtual-row[data-record-index="' + openedRecord + '"]' : ".interaction-table-card");
+    } else if (control.closest(".tweaks-panel")) {
+      focusAfterRender(".tweaks-trigger");
+    } else {
+      focusAfterRender('.tweaks-panel [data-action="toggle-tweaks"]');
     }
   }, true);
 

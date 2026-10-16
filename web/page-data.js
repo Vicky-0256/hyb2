@@ -2,8 +2,10 @@
  * Page data layer: the only place where analysis pages meet a DataProvider.
  *
  * Page renderers stay synchronous and read prepared view data from `state`.
- * ensure(pageId) compares each page task's query key with what is already
- * loaded and asynchronously fetches what is missing through the provider:
+ * ensure(pageId, onEach) compares each page task's query key with what is
+ * already loaded and asynchronously fetches what is missing through the
+ * provider; onEach(name) is called as each task lands, so a page that reads
+ * several slots (the Report page) can draw them as they arrive:
  *
  *   state.summary / state.datasets / state.reference   listDatasets + getSummary
  *   state.view.interactions {total, offset, rows, partners}   queryHybrids + getTopInteractions
@@ -882,7 +884,7 @@
 
     // Returns null when the page's data is current, otherwise a Promise that
     // resolves (true when something was applied) once the fetches settle.
-    function ensure(pageId) {
+    function ensure(pageId, onEach) {
       if (destroyed || !hasSelection()) {
         return null;
       }
@@ -897,7 +899,17 @@
       if (!stale.length) {
         return null;
       }
-      return Promise.all(stale.map(run)).then(function (results) {
+      return Promise.all(stale.map(function (task) {
+        const promise = run(task);
+        if (typeof onEach === "function" && stale.length > 1) {
+          promise.then(function (applied) {
+            if (applied) {
+              onEach(task.name);
+            }
+          });
+        }
+        return promise;
+      })).then(function (results) {
         return results.some(Boolean);
       });
     }

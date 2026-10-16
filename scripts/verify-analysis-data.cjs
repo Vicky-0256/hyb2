@@ -849,4 +849,35 @@ assert.ok(Date.now() - disjointComparisonStartedAt < 5000,
   assert.equal(data.comparisonRnaPlan(strains)[1].rnaX, "other_RNA");
 }
 
+// ---- fast paths give the slow paths' answers
+{
+  // |effect| order: descending, ties in position order (radix on the float bits)
+  let seed = 7;
+  const random = function () { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  [0, 1, 2, 5, 1000, 20000].forEach(function (n) {
+    const values = new Float64Array(n);
+    for (let i = 0; i < n; i += 1) {
+      const r = random();
+      values[i] = r < .2 ? 0 : r < .4 ? Math.round(r * 10) / 4 : r < .41 ? 5e-324 : r * 37;
+    }
+    const expected = Array.from({ length: n }, function (_, i) { return i; })
+      .sort(function (left, right) { return values[right] - values[left] || left - right; });
+    assert.deepEqual(Array.from(data.effectOrderOf(values)), expected, "effect order of " + n + " values");
+  });
+  // a negative or non-finite value falls back to the comparator sort
+  assert.deepEqual(Array.from(data.effectOrderOf(Float64Array.from([1, Infinity, 2]))), [1, 2, 0]);
+  // the dense cell index and the Map index agree, including outside the box
+  const dense = data.cellIndex(10, 100, 20, 60, 10);
+  const map = data.cellIndex(0, 0, 0, 0, 0);
+  assert.equal(dense.dense, true);
+  assert.equal(map.dense, false);
+  [[10, 20], [100, 60], [50, 30], [40, 40]].forEach(function (cell, row) { dense.set(cell[0], cell[1], row); map.set(cell[0], cell[1], row); });
+  [[10, 20], [100, 60], [50, 30], [40, 40], [10, 30], [0, 20], [110, 60], [15, 20], [10, 70]].forEach(function (cell) {
+    assert.equal(dense.get(cell[0], cell[1]), map.get(cell[0], cell[1]), "cell " + cell);
+  });
+  assert.deepEqual(Array.from(dense.rowsInOrder(4)), [0, 3, 2, 1], "rows by x, then y");
+  // a box over the limit uses the Map
+  assert.equal(data.cellIndex(0, 30000, 0, 30000, 10).dense, false);
+}
+
 process.stdout.write("analysis-data-contract: ok\n");

@@ -95,8 +95,12 @@ Everything the report states comes from one result record (`results.js`):
 13 steps (S01 to S13) and 41 results (R01 to R41) with fixed ids, units,
 definitions and a status (`ok`, `no_result`, `not_run`, `running`, `failed`,
 `stale`, `pending`). A step that did not run is `not_run` and its results are
-null, never 0. **Results at a glance** lists them, and each Compare panel links
-the table behind it.
+null, never 0. The page is in five parts with a contents
+list: analysis objects and status (with each step's scope and an optional
+purpose the researcher writes), main results, figures and data, methods and
+sources, limitations and warnings. Numbers carry their result ids (for
+example "Cells · R10") and every chart and table names the data file behind
+it.
 
 **Export** offers three packages, all built in the tab without uploading:
 
@@ -111,7 +115,10 @@ the table behind it.
   energies), the structures as dot-bracket and the figure SVGs, with the same
   dictionary, provenance and manifest.
 
-The input files are never included, only their names and digests.
+Both packages carry `schema/summary.schema.json` (JSON Schema 2020-12 of
+`summary.json`) and, under `results/`, every structure as dot-bracket and as
+JSON with base pairs, coordinates and candidates. The input files are never
+included, only their names and digests.
 `scripts/verify-results.cjs` checks that the report page, Markdown, JSON and
 tables agree; `verify-example.cjs` checks the record on the included example.
 

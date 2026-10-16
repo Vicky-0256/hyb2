@@ -27,6 +27,7 @@ on:
       - "scripts/verify-folding-energy.cjs"
       - "scripts/verify-example.cjs"
       - "scripts/verify-results.cjs"
+      - "scripts/json-schema-lite.cjs"
       - "scripts/webr-smoke/**"
       - "third_party/cplfold/**"
       - ".github/workflows/deploy-pages.yml"

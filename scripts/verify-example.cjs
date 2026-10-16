@@ -579,6 +579,11 @@ async function main() {
     assert.equal(value("R34"), null, "no energies: p is null, not 0");
   }
   const aiFiles = R.files(record, "ai");
+  const schema = JSON.parse(aiFiles.find(function (f) { return f.path === "schema/summary.schema.json"; }).text);
+  const problems = require("./json-schema-lite.cjs").validate(schema, JSON.parse(aiFiles.find(function (f) { return f.path === "summary.json"; }).text));
+  assert.deepEqual(problems, [], "the example's summary.json is valid against its schema: " + problems.slice(0, 3).join("; "));
+  const foldA = JSON.parse(aiFiles.find(function (f) { return f.path === "results/structure_A.json"; }).text);
+  assert.equal(foldA.pairs.length, record.results.find(function (r) { return r.id === "R28"; }).value, "structure A's base pairs = R28");
   const md = aiFiles.find(function (f) { return f.path === "report.md"; }).text;
   assert.ok(md.indexOf("| R23 | S08 | Significant cells | " + EXPECTED.deseq.significant.toLocaleString("en-US") + " | cells | `ok` |") >= 0, "report.md has R23");
   const table = record.tables.find(function (t) { return t.file === "tables/differential_interactions.tsv"; });

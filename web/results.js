@@ -98,6 +98,55 @@
     ["R41", "evidence_cards", "literature_search", "External sources added to the report", "cards", "Related research cards the researcher added to the report."]
   ];
 
+  // value type of each result (default integer)
+  const RESULT_TYPES = { R05: "number", R14: "number", R16: "number", R31: "string", R32: "string", R34: "number", R36: "number", R38: "number" };
+
+  const SCHEMA_FILE = "schema/summary.schema.json";
+  const STATUS_VALUES = ["ok", "no_result", "not_run", "running", "failed", "stale", "pending"];
+  const nullable = function (type) { return { type: [type, "null"] }; };
+  // JSON Schema of summary.json: structure and types only; it cannot check
+  // that a number is scientifically right
+  const SUMMARY_SCHEMA = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://vicky-0256.github.io/hyb2/schema/summary.schema.json",
+    title: "HYB2 result summary (" + SCHEMA + ")",
+    type: "object",
+    required: ["schema", "generatedAt", "application", "scope", "steps", "results", "warnings", "literature_search", "limitations"],
+    properties: {
+      $schema: { type: "string" },
+      schema: { const: SCHEMA },
+      generatedAt: { type: "string" },
+      application: { type: "object", required: ["name", "version", "buildCommit"], properties: { name: { type: "string" }, version: { type: "string" }, buildCommit: nullable("string") } },
+      scope: {
+        type: "object", required: ["kind", "label", "description", "primaryDataset", "purpose"],
+        properties: {
+          kind: { enum: ["session_snapshot", "selected_results"] }, label: { type: "string" }, description: { type: "string" }, primaryDataset: nullable("string"),
+          purpose: { type: ["object", "null"], required: ["text", "source"], properties: { text: { type: "string" }, source: { const: "researcher" } } }
+        }
+      },
+      steps: {
+        type: "array",
+        items: { type: "object", required: ["id", "key", "title", "status", "detail", "scope"], additionalProperties: false,
+          properties: { id: { type: "string", pattern: "^S[0-9]{2}$" }, key: { type: "string" }, title: { type: "string" }, status: { enum: STATUS_VALUES }, detail: nullable("string"), scope: nullable("string") } }
+      },
+      results: {
+        type: "array",
+        items: {
+          type: "object", required: ["id", "key", "step", "label", "type", "value", "unit", "scope", "definition", "status"], additionalProperties: false,
+          properties: {
+            id: { type: "string", pattern: "^R[0-9]{2}$" }, key: { type: "string" }, step: { type: "string", pattern: "^S[0-9]{2}$" }, label: { type: "string" },
+            type: { enum: ["integer", "number", "string"] }, value: { type: ["integer", "number", "string", "null"] }, unit: { type: "string" }, scope: nullable("string"),
+            definition: { type: "string" }, status: { enum: STATUS_VALUES.concat(["not_available"]) }
+          }
+        }
+      },
+      warnings: { type: "array", items: { type: "object", required: ["id", "step", "text"], properties: { id: { type: "string", pattern: "^W[0-9]{2}$" }, step: { type: "string" }, text: { type: "string" } } } },
+      literature_search: { type: "object", required: ["status", "lookups", "includedInReport", "hit_count"],
+        properties: { status: { enum: STATUS_VALUES }, lookups: { type: "integer" }, includedInReport: { type: "integer" }, hit_count: nullable("integer") } },
+      limitations: { type: "array", items: { type: "string" } }
+    }
+  };
+
   const COLUMN_TEXT = {
     sequence_id: ["string", "", "HYB sequence (read) identifier, column 1."],
     rna_1: ["string", "", "RNA of arm 1."],
@@ -243,7 +292,9 @@
         description: "Every analysis of this browser tab as currently configured, from one primary HYB file" +
           ((s.comparison && s.comparison.datasets || []).length > 1 ? " and the Compare datasets" : "") +
           ". Not a selection of results: steps that were not run are listed as not_run.",
-        primaryDataset: summary.fileName || null
+        primaryDataset: summary.fileName || null,
+        // written by the researcher on the Report page; never generated
+        purpose: s.reportPurpose && String(s.reportPurpose).trim() ? { text: String(s.reportPurpose).trim().slice(0, 1000), source: "researcher" } : null
       },
       inputs: [],
       steps: [],
@@ -263,7 +314,7 @@
     };
     const steps = {};
     STEPS.forEach(function (spec) {
-      const step = { id: spec[0], key: spec[1], title: spec[2], status: "not_run", statusText: STATUS.not_run, detail: null, parameters: {}, inputs: [], results: [], tables: [], figures: [] };
+      const step = { id: spec[0], key: spec[1], title: spec[2], status: "not_run", statusText: STATUS.not_run, detail: null, scope: null, parameters: {}, inputs: [], results: [], tables: [], figures: [] };
       steps[spec[1]] = step;
       record.steps.push(step);
     });
@@ -444,6 +495,12 @@
       values.region_support = number(rr.support);
       values.region_partners = count(rr.partners);
       setStatus("region", rr.records.length ? "ok" : "no_result");
+      if (Array.isArray(rr.profile) && rr.profile.length) {
+        addTable("region", {
+          file: "tables/region_profile.tsv", title: "Region coverage profile of " + region.rna, audience: ["ai", "analysis"], scope: "all " + rr.profile.length + " bins (" + (rr.profileBinSize || "?") + " nt)",
+          make: () => tsv(["bin_start", "bin_end", "coverage"], rr.profile.map(function (b) { return [b.start, b.end, b.value]; }))
+        });
+      }
       addTable("region", {
         file: "tables/region_partners.tsv", title: "Partner RNAs of the region", audience: ["ai", "analysis"], scope: "all " + (rr.partners || []).length + " partners",
         make: () => tsv(["name", "records", "support"], (rr.partners || []).map(function (p) { return [p.name, p.records, p.support]; }))
@@ -562,12 +619,20 @@
       } else {
         setStatus("arc_map", "not_run", arcModel && arcModel.reason || null);
       }
-      if (arcMap.a) {
-        record.structures.push(structureFile("results/structure_A.dbn", "Arc map structure A", arcMap.a));
-      }
-      if (arcMap.b) {
-        record.structures.push(structureFile("results/structure_B.dbn", "Arc map structure B", arcMap.b));
-      }
+      [["a", "A", arcMap.labelOne], ["b", "B", arcMap.labelTwo]].forEach(function (spec) {
+        const item = arcMap[spec[0]];
+        if (!item) {
+          return;
+        }
+        const base = "results/structure_" + spec[1];
+        record.structures.push(structureFile(base + ".dbn", "Arc map structure " + spec[1], item));
+        record.structures.push(structureJson(base + ".json", "Arc map structure " + spec[1] + " (base pairs)", {
+          step: steps.arc_map.id, source: item.name || null, condition: spec[2] || null, method: "loaded structure file (" + (item.name || "unnamed") + ")",
+          sequence: item.sequence || null, length: item.length || (item.sequence ? item.sequence.length : null), pairs: item.pairs || [],
+          coordinates: "1-based positions on structure " + spec[1] + "'s own sequence; structure B is not moved onto A here",
+          prediction: "computational structure as loaded (for the example: CPLfold genome fold, pseudoknot-free)"
+        }));
+      });
     }
     const panels = root.Hyb2RegionPanels;
     if (arcModel && arcModel.ready && panels && arcMap.interactions) {
@@ -628,8 +693,28 @@
       values.structure_pairs = count(sres.pairs);
       values.structure_crossing_pairs = number(sres.crossingPairs || 0);
       setStatus("structure", "ok");
+      const label = (structure.rna || "structure") + (structure.start ? ":" + structure.start + "-" + structure.end : "");
       record.structures.push(structureFile("results/structure_prediction.dbn", "RNA structure prediction (" + (sres.engine || structure.engine || "") + ")",
-        { name: (structure.rna || "structure") + (structure.start ? ":" + structure.start + "-" + structure.end : ""), sequence: sres.sequence, dotBracket: sres.dotBracket }));
+        { name: label, sequence: sres.sequence, dotBracket: sres.dotBracket }));
+      const offset = number(structure.start) && structure.source === "reference" ? number(structure.start) - 1 : 0;
+      record.structures.push(structureJson("results/structure_prediction.json", "RNA structure prediction (base pairs, candidates)", {
+        step: steps.structure.id, source: label, method: sres.engine || structure.engine || null, energy: number(sres.energy), energyUnit: sres.energyUnit || "kcal/mol",
+        topology: sres.topology || null, crossingPairs: number(sres.crossingPairs || 0), sequence: sres.sequence, length: sres.sequence.length,
+        dotBracket: sres.dotBracket || null, pairs: pairList(sres.pairs),
+        coordinates: "1-based positions on the folded sequence" + (offset ? "; add " + offset + " for the position on " + (structure.rna || "the RNA") : ""),
+        positionOffset: offset,
+        selectedCandidate: Array.isArray(sres.candidates) && sres.candidates.length ? (number(sres.selectedCandidate) || 0) + 1 : null,
+        candidates: Array.isArray(sres.candidates) ? sres.candidates.map(function (c, index) {
+          return { rank: index + 1, type: c.type || null, topology: c.topology || null, energy: number(c.energy), pairs: pairList(c.pairs).length, crossingPairs: number(c.crossingPairs || 0), dotBracket: c.dotBracket || null };
+        }) : [],
+        prediction: "computational prediction; not an experimental structure"
+      }));
+      if (root.Hyb2StructureUI && typeof root.Hyb2StructureUI.structureReport === "function") {
+        const method = safe(function () { return root.Hyb2StructureUI.structureReport(s, sres); }, null);
+        if (method) {
+          record.structures.push({ file: "results/structure_prediction_method.json", title: "Structure page report (the method's own record, unchanged)", length: sres.sequence.length, text: JSON.stringify(method, null, 2) + "\n" });
+        }
+      }
     }
 
     // S13 literature search
@@ -658,12 +743,31 @@
       });
     });
 
+    // what each step's numbers cover
+    const file = summary.fileName || "the primary HYB file";
+    const conditionText = datasets.length ? datasets.map(function (d) { return (d.label || d.fileName) + " (" + (d.condition === "B" ? labelB : labelA) + ")"; }).join(", ") : null;
+    steps.parse.scope = "All rows of " + file;
+    steps.reference.scope = reference ? (reference.fileName || "the FASTA") + " against the RNA names of " + file : null;
+    steps.interactions.scope = "Valid records of " + file + " matching the S03 filters";
+    steps.contact_map.scope = contact.rnaX ? file + ": " + contact.rnaX + " × " + contact.rnaY + (values.contact_bin_size ? ", " + values.contact_bin_size + "-nt bins" : "") : null;
+    steps.viewpoint.scope = viewpoint.rna ? file + ": " + viewpoint.rna + (vr && vr.start ? " " + vr.start + "-" + vr.end : "") : null;
+    steps.region.scope = region.rna ? file + ": " + region.rna + " " + (region.start || "?") + "-" + (region.end || "?") : null;
+    steps.comparison.scope = conditionText ? "Datasets " + conditionText : null;
+    steps.differential_test.scope = deseq && deseq.result && Array.isArray(deseq.result.datasets)
+      ? "Datasets " + deseq.result.datasets.map(function (d) { return (d.label || d.fileName) + " (" + (d.condition === "A" ? labelA : labelB) + ")"; }).join(", ") + "; 10-nt cells"
+      : steps.comparison.scope;
+    steps.arc_map.scope = arcMap && arcMap.a ? "Structure A " + (arcMap.a.name || "") + (arcMap.b ? ", structure B " + (arcMap.b.name || "") + " on A's coordinates" : "") + (arcMap.interactions ? "; interactions " + (arcMap.interactions.name || "") : "") : null;
+    steps.region_structures.scope = steps.arc_map.scope ? "Interactions of S09 with padj below the region cutoff; A coordinates" : null;
+    steps.folding_energy.scope = steps.arc_map.scope ? "Interactions of S09 with padj below the S11 cutoff, each folded with both lineages' sequences" : null;
+    steps.structure.scope = sres && sres.sequence ? (structure.rna || "sequence") + (structure.start ? " " + structure.start + "-" + structure.end : "") + ", " + sres.sequence.length + " nt" : null;
+    steps.literature_search.scope = record.literatureSearch.status === "not_run" ? null : "Cards added to the report by the researcher";
+
     // results, in catalog order, every one present
     RESULTS.forEach(function (spec) {
       const step = steps[spec[2]];
       const known = Object.prototype.hasOwnProperty.call(values, spec[1]);
       const value = known ? values[spec[1]] : null;
-      record.results.push({ id: spec[0], key: spec[1], step: step.id, label: spec[3], value: value, unit: spec[4], definition: spec[5],
+      record.results.push({ id: spec[0], key: spec[1], step: step.id, label: spec[3], type: RESULT_TYPES[spec[0]] || "integer", value: value, unit: spec[4], scope: step.scope, definition: spec[5],
         status: known && value !== null ? step.status : (step.status === "ok" || step.status === "no_result" ? "not_available" : step.status) });
       step.results.push(spec[0]);
     });
@@ -685,6 +789,17 @@
       dotBracket = chars.join("");
     }
     return { file: path, title: title, name: structure.name || null, length: length, text: ">" + (structure.name || title) + "\n" + (structure.sequence ? structure.sequence + "\n" : "") + dotBracket + "\n" };
+  }
+
+  // [[i, j]] from [[i, j]] or [{ left, right }]
+  function pairList(pairs) {
+    return (Array.isArray(pairs) ? pairs : []).map(function (p) {
+      return Array.isArray(p) ? [p[0], p[1]] : [p.left, p.right];
+    }).filter(function (p) { return Number.isFinite(p[0]) && Number.isFinite(p[1]); });
+  }
+
+  function structureJson(path, title, body) {
+    return { file: path, title: title, length: body.length || null, text: JSON.stringify(Object.assign({ schema: SCHEMA }, body), null, 2) + "\n" };
   }
 
   let lastRegion = null;
@@ -760,6 +875,7 @@
     lines.push("");
     lines.push("- Scope: **" + record.scope.label + "**. " + record.scope.description);
     lines.push("- Primary dataset: `" + (record.scope.primaryDataset || "none") + "`");
+    lines.push("- Purpose: " + (record.scope.purpose ? record.scope.purpose.text + " (written by the researcher)" : "not stated by the researcher."));
     lines.push("- Generated: " + record.generatedAt + " by " + record.application.name + " " + record.application.version +
       (record.application.buildCommit ? " (build " + record.application.buildCommit.slice(0, 12) + ")" : "") + ", locally in a browser tab.");
     lines.push("- Schema: `" + record.schema + "`. Ids: S = step, R = result, T = table, F = figure, E = external source, W = warning, I = input.");
@@ -768,15 +884,15 @@
     lines.push("");
     lines.push("## Steps");
     lines.push("");
-    lines.push("| Id | Step | Status | Detail |");
-    lines.push("|---|---|---|---|");
+    lines.push("| Id | Step | Status | Scope | Detail |");
+    lines.push("|---|---|---|---|---|");
     record.steps.forEach(function (step) {
-      lines.push("| " + step.id + " | " + markdownCell(step.title) + " | `" + step.status + "` | " + markdownCell(step.detail || step.statusText) + " |");
+      lines.push("| " + step.id + " | " + markdownCell(step.title) + " | `" + step.status + "` | " + markdownCell(step.scope || "—") + " | " + markdownCell(step.detail || step.statusText) + " |");
     });
     lines.push("");
     lines.push("## Results");
     lines.push("");
-    lines.push("Results of steps that did not run are listed with no value (—), never as 0.");
+    lines.push("Results of steps that did not run are listed with no value (—), never as 0. Each result covers its step's scope above.");
     lines.push("");
     lines.push("| Id | Step | Result | Value | Unit | Status |");
     lines.push("|---|---|---|---|---|---|");
@@ -815,6 +931,7 @@
     lines.push("");
     record.tables.forEach(function (t) { lines.push("- **" + t.id + "** (" + t.step + ") `" + t.file + "`: " + t.title + "; " + t.scope + "."); });
     record.figures.forEach(function (f) { lines.push("- **" + f.id + "** (" + f.step + ") `" + f.file + "`: " + f.title + " (analysis package)."); });
+    record.structures.forEach(function (st) { lines.push("- `" + st.file + "`: " + st.title + "."); });
     lines.push("");
     lines.push("## Parameters");
     lines.push("");
@@ -836,10 +953,11 @@
       "",
       "## Reading order",
       "",
-      audience === "ai" ? "1. `report.md`: what was analysed, which steps ran, the results with ids, warnings and limits." : "1. `data_dictionary.json`: columns, units, coordinates and missing values.",
+      audience === "ai" ? "1. `report.md`: purpose, what was analysed, which steps ran and on what scope, the results with ids, warnings and limits." : "1. `data_dictionary.json`: columns, units, coordinates and missing values.",
       audience === "ai" ? "2. `summary.json`: the same results as typed values with status and unit." : "2. `manifest.json`: every file with its size and SHA-256.",
       "3. `data_dictionary.json` before reading a table; `provenance.json` for methods and parameters" + (audience === "ai" ? "; `evidence.json` for external sources." : "."),
-      "4. Tables under `tables/` only when a question needs rows" + (audience === "analysis" ? "; structures under `results/`, figures under `figures/`." : "."),
+      "4. Tables under `tables/` only when a question needs rows; structures under `results/` (`.dbn`, and `.json` with base pairs, coordinates and candidates)" + (audience === "analysis" ? "; figures under `figures/`." : "."),
+      "5. `" + SCHEMA_FILE + "` validates `summary.json` (structure and types only).",
       "",
       "## Conventions",
       "",
@@ -904,11 +1022,12 @@
 
   function summaryJson(record) {
     return {
+      $schema: SCHEMA_FILE,
       schema: SCHEMA,
       generatedAt: record.generatedAt,
       application: record.application,
       scope: record.scope,
-      steps: record.steps.map(function (step) { return { id: step.id, key: step.key, title: step.title, status: step.status, detail: step.detail }; }),
+      steps: record.steps.map(function (step) { return { id: step.id, key: step.key, title: step.title, status: step.status, detail: step.detail, scope: step.scope }; }),
       results: record.results,
       warnings: record.warnings,
       literature_search: record.literatureSearch,
@@ -935,6 +1054,7 @@
       out.push({ path: "summary.json", mediaType: "application/json", text: json(summaryJson(record)), description: "Steps and results as typed values with status and unit." });
     }
     out.push({ path: "data_dictionary.json", mediaType: "application/json", text: json(dataDictionary(record, tables)), description: "Conventions, status vocabulary, and every column of every table." });
+    out.push({ path: SCHEMA_FILE, mediaType: "application/schema+json", text: json(SUMMARY_SCHEMA), description: "JSON Schema (2020-12) of summary.json: structure and types, not scientific correctness." });
     out.push({ path: "provenance.json", mediaType: "application/json", text: json(provenance(record)), description: "Application build, inputs with digests, methods and parameters per step." });
     if (kind === "ai") {
       out.push({ path: "evidence.json", mediaType: "application/json", text: json(evidenceJson(record)), description: "External sources added to the report, with query, nature and review state." });
@@ -944,10 +1064,11 @@
     tables.forEach(function (t) {
       out.push({ path: t.file, mediaType: "text/tab-separated-values", text: t.text, description: t.id + " " + t.title + " (" + t.scope + ")." });
     });
+    record.structures.forEach(function (st) {
+      const isJson = /\.json$/.test(st.file);
+      out.push({ path: st.file, mediaType: isJson ? "application/json" : "text/plain", text: st.text, description: st.title + (st.length ? ", " + st.length + " nt" : "") + (isJson ? "." : " (dot-bracket).") });
+    });
     if (kind === "analysis") {
-      record.structures.forEach(function (st) {
-        out.push({ path: st.file, mediaType: "text/plain", text: st.text, description: st.title + (st.length ? ", " + st.length + " nt" : "") + " (dot-bracket)." });
-      });
       record.figures.forEach(function (f) {
         const text = safe(f.svg, "");
         if (text) {
@@ -1073,6 +1194,7 @@
 
   root.Hyb2Results = {
     SCHEMA: SCHEMA,
+    SUMMARY_SCHEMA: SUMMARY_SCHEMA,
     STATUS: STATUS,
     STEPS: STEPS,
     RESULTS: RESULTS,

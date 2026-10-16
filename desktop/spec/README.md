@@ -52,7 +52,9 @@ mtime and `quick_hash` = sha256(decimal size + `\n` + first 1 MiB + last
 1 MiB). `sha256` stays `null` until the `hash_inputs` operation computes it.
 *Copied* files live under `inputs/` and use project-relative paths. Linked
 files are never required to open a project; `check_inputs` reports each one as
-`ok`, `missing` or `changed`. Sample outputs are written to
+`ok`, `missing` or `changed`, and lists in `no_reference` the samples whose
+reads cannot be mapped because they have no reference (`.hyb` samples need
+none); either makes `all_ok` false. Sample outputs are written to
 `samples/<sample_id>/`.
 
 ## Safe writer checklist

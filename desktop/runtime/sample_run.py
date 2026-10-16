@@ -316,7 +316,16 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
     reference = None
     if sample.get("reference_id") is not None:
         reference = next((r for r in manifest["references"] if r.get("id") == sample["reference_id"]), None)
+    # A run that stops before its first stage starts still marks that stage
+    # failed with this task, so the Data page shows the failure and its
+    # reason instead of a sample that looks as if it was never run.
+    first_stage = {"sam": "hyb", "hyb": "index"}.get(fmt, "map")
+
+    def stopped_early() -> None:
+        set_sample_stage(project, sample_id, first_stage, "failed", task_id=task_id)
+
     if reference is None and fmt != "hyb":
+        stopped_early()
         raise ValueError("sample %s has no reference" % sample_id)
     settings = dict(sample.get("settings") or {})
     settings.update(parameters or {})
@@ -339,6 +348,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
             continue
         status, detail = check_record(project, record)
         if status != "ok" and not settings.get("allow_changed_inputs"):
+            stopped_early()
             return finish({"ok": False, "status": "failed", "error": "%s file is %s: %s (%s)" % (kind, status, record.get("path"), detail)})
     reads_path = resolve_record_path(project, reads_record)
     reference_path = resolve_record_path(project, reference) if reference is not None else None
@@ -347,6 +357,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
         estimate = disk_estimate(project, [sample_id], include_completed=True)
         if not estimate["fits"]:
             volume = next(v for v in estimate["volumes"] if not v["ok"])
+            stopped_early()
             return finish({"ok": False, "status": "failed", "disk_estimate": estimate,
                            "error": "not enough disk space on %s: need ~%d MB, %d MB free" % (
                                volume["path"], volume["required_bytes"] // 1_000_000, volume["free_bytes"] // 1_000_000)})
@@ -358,7 +369,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
     package = Path(repo_root).resolve() / "pipeline"
     if str(package) not in sys.path:
         sys.path.insert(0, str(package))
-    state = _State(stage={"sam": "hyb", "hyb": "index"}.get(fmt, "map"))
+    state = _State(stage=first_stage)
     outputs: Dict[str, Optional[str]] = {}
     counts: Dict[str, Any] = {}
     ignored: list = []

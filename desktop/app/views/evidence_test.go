@@ -260,7 +260,13 @@ func TestResearchPanelOff(t *testing.T) {
 	}
 	mustClick(t, tt, "Test connection")
 	rsSettle(a, tt)
-	mustHave(t, tt, "Connected · RNAcentral MCP server 0.1.1 · MCP SDK 1.30.0 · hyb2-evidence 1.0 · tools: get_rna_description, map_rna_id")
+	// It starts the helper on this computer only: it must not claim that
+	// RNAcentral (the internet) was reached.
+	mustHave(t, tt, "RNAcentral helper running on this computer · RNAcentral MCP server 0.1.1 · MCP SDK 1.30.0 · hyb2-evidence 1.0 · tools: get_rna_description, map_rna_id")
+	mustHave(t, tt, "This does not contact RNAcentral; the first lookup does.")
+	if tt.HasText("Connected") {
+		t.Fatalf("connection test claims a connection: %q", tt.Texts())
+	}
 	mustClick(t, tt, "Clear cache")
 	rsSettle(a, tt)
 	if !f.cleared {

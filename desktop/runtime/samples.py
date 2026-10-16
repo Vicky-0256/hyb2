@@ -1041,10 +1041,16 @@ def check_inputs(root: Path) -> Dict[str, Any]:
             status, detail = check_record(root, record)
             items.append({"kind": kind, "id": entry["id"], "path": record.get("path"), "mode": record.get("mode"),
                           "status": status, "detail": detail})
+    # Reads are mapped to the sample's reference (sample_run refuses to start
+    # without one); a .hyb sample is already mapped.
+    references = {r.get("id") for r in manifest["references"]}
+    no_reference = [s["id"] for s in manifest["samples"]
+                    if s.get("reads", {}).get("format") != "hyb" and s.get("reference_id") not in references]
     summary = {status: sum(1 for item in items if item["status"] == status)
                for status in ("ok", "missing", "changed", "unconfirmed")}
-    return {"items": items, "summary": summary,
-            "all_ok": summary["missing"] == 0 and summary["changed"] == 0 and summary["unconfirmed"] == 0}
+    summary["no_reference"] = len(no_reference)
+    return {"items": items, "summary": summary, "no_reference": no_reference,
+            "all_ok": not no_reference and summary["missing"] == 0 and summary["changed"] == 0 and summary["unconfirmed"] == 0}
 
 
 MAX_REFERENCE_SEQUENCE = 50_000_000

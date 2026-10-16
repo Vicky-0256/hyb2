@@ -100,10 +100,16 @@
     });
   }
 
+  // an empty or non-numeric field is NaN (Number("") would be 0)
+  function fieldNumber(value) {
+    const text = String(value == null ? "" : value).trim();
+    return text && Number.isFinite(Number(text)) ? Number(text) : NaN;
+  }
+
   function parameters(deseq) {
-    const minCount = Number(deseq.minCount);
-    const radius = Number(deseq.radius);
-    const padjCutoff = Number(deseq.padjCutoff);
+    const minCount = fieldNumber(deseq.minCount);
+    const radius = fieldNumber(deseq.radius);
+    const padjCutoff = fieldNumber(deseq.padjCutoff);
     const errors = [];
     if (!Number.isInteger(minCount) || minCount < 0) {
       errors.push("Min count must be a non-negative integer.");
@@ -493,6 +499,13 @@
     }
   }
 
+  // Abandon any run in progress: the worker is terminated and a pending
+  // arms read, worker message or no-Worker timer finishing later is ignored.
+  function stop() {
+    runToken += 1;
+    stopWorker();
+  }
+
   function run(state, api) {
     const comparison = state.comparison;
     const deseq = ensure(comparison);
@@ -527,6 +540,17 @@
         return { name: item.dataset.label || item.dataset.fileName || item.dataset.id, arms: collectArms(list[index], item) };
       });
       const records = samples.map(function (sample) { return sample.arms.length / 4; });
+      const empty = plan.filter(function (item, index) { return !records[index]; });
+      if (empty.length) {
+        // every cell would have a zero in these samples: no size factors
+        stopWorker();
+        deseq.status = "error";
+        deseq.error = "Differential test not run: " + empty.map(function (item) {
+          return (item.dataset.label || item.dataset.fileName || item.dataset.id) + " has no " + item.rnaX + " × " + item.rnaY + " records";
+        }).join("; ") + ". Every cell would have a zero count in that dataset, so size factors cannot be computed; leave it out of the test or choose another RNA pair.";
+        api.render();
+        return;
+      }
       const conditionOne = plan.map(function (item) { return item.dataset.condition === "A"; });
       const options = { minCount: params.minCount, radius: params.radius, padjCutoff: params.padjCutoff, alpha: params.alpha, binSize: BIN };
       const finish = function (result) {
@@ -570,7 +594,7 @@
         }, 30);
         return;
       }
-      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "deseq.worker.js");
+      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "deseq.worker.js?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"));
       worker.onmessage = function (event) {
         const message = event.data || {};
         if (message.type === "progress") {
@@ -640,8 +664,7 @@
     if (action === "deseq-run") {
       run(state, api);
     } else if (action === "deseq-cancel") {
-      runToken += 1;
-      stopWorker();
+      stop();
       deseq.status = "idle";
       deseq.progress = "";
       api.render();
@@ -769,6 +792,7 @@
     handleChange: handleChange,
     handleInput: handleInput,
     run: run,
+    stop: stop,
     panelSvg: panelSvg,
     parameters: parametersReport,
     reportData: reportData,

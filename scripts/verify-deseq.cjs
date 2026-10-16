@@ -200,6 +200,71 @@ Object.keys(SYNTH).forEach(function (name) {
   close(D.priorVarFewDf(resid, 3), 1.7857857857857857, 1e-12, "prior var df 3");
 }
 
+// ---- R stops when no cell is non-zero in every sample (no size factors)
+{
+  const table = Float64Array.from([5, 0, 3, 4, 2, 6, 0, 1, 0, 7, 8, 9, 3, 3, 3, 0]);
+  assert.throws(function () { D.deseqTwoConditions(table, 4, 4, [true, true, false, false]); }, /zero count in at least one sample.*size factors/);
+  const cells = function (count) { return D.cellsFromColumns([0, 10, 20], [0, 10, 20], count, 10); };
+  assert.throws(function () {
+    D.compare([cells([5, 6, 7]), cells([4, 3, 9]), cells([8, 2, 1]), D.cellsFromColumns([], [], [], 10)].map(function (c, j) { return { name: "s" + j, cells: c }; }),
+      [true, true, false, false]);
+  }, /size factors/, "a sample without records");
+}
+
+// ---- locfit trend outside the fitted means (DESeq2's local fallback)
+// pipeline/tests/golden/deseq/local_extrapolation: the trend is fitted on
+// means up to ~8 and evaluated at ~300; R DESeq2 1.46 gives dispFit ~1.07 and
+// padj ~0.002 for the strong block (locfit continues the boundary value and
+// slope with the global quadratic's curvature, not the Hermite cubic, which
+// gave dispFit ~1e37 and padj ~1)
+{
+  const golden = path.join(repository, "pipeline", "tests", "golden", "deseq", "local_extrapolation");
+  const lines = function (file) { return fs.readFileSync(golden + file, "utf8").trim().split("\n").slice(1).map(function (l) { return l.split("\t"); }); };
+  const counts = lines(".counts.tsv");
+  const expected = lines(".R.tsv");
+  const n = counts.length;
+  const table = new Float64Array(n * 4);
+  counts.forEach(function (row, i) { for (let j = 0; j < 4; j += 1) { table[i * 4 + j] = Number(row[j + 1]); } });
+  const r = D.deseqTwoConditions(table, n, 4, [true, true, false, false], { alpha: 0.01 });
+  assert.equal(r.fitType, "local");
+  let worst = 0;
+  expected.forEach(function (row, i) {
+    assert.equal(row[0], counts[i][0]);
+    worst = Math.max(worst, Math.abs(r.dispFit[i] / Number(row[6]) - 1));
+  });
+  assert.ok(worst < 1e-5, "dispFit as R within 1e-5 (worst " + worst + ")");
+  ["100_300", "100_310", "110_300", "110_310"].forEach(function (cell) {
+    const i = counts.findIndex(function (row) { return row[0] === cell; });
+    close(r.dispFit[i], Number(expected[i][6]), 1e-5, cell + " dispFit");
+    close(r.padj[i], Number(expected[i][5]), 1e-3, cell + " padj");
+  });
+  // the fitted curve itself, far outside the data on both sides
+  const out = D.localFit(Float64Array.from([1, 2, 4, 8]), Float64Array.from([2, 1, 0.6, 0.5]), Float64Array.from([1e-3, 1e6]));
+  assert.ok(out.every(Number.isFinite), "extrapolation stays finite");
+}
+
+// ---- the bucketed interaction split = the plain quadratic one
+{
+  let s = 7;
+  const rand = function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+  for (let t = 0; t < 200; t += 1) {
+    const n = 1 + Math.floor(rand() * 1500);
+    const span = [50, 500, 5000, 1e6][t % 4];
+    const radius = [0, 1, 10, 100, 250][t % 5];
+    const x = [];
+    const y = [];
+    const lfc = [];
+    const padj = [];
+    for (let i = 0; i < n; i += 1) {
+      x.push(Math.floor(rand() * span / 10) * 10 - (t % 7 === 0 ? span / 2 : 0));
+      y.push(Math.floor(rand() * span / 10) * 10);
+      lfc.push(rand() < 0.05 ? 0 : rand() - 0.5);
+      padj.push(rand() < 0.2 ? 0.01 : rand() * 0.05);
+    }
+    same(Array.from(D.splitInteractions(x, y, lfc, padj, radius)), Array.from(D.splitInteractionsPlain(x, y, lfc, padj, radius)), "split case " + t);
+  }
+}
+
 // ---- compare(): input rules, outputs and the arc-map hand-off
 {
   const cellsOf = function (seed) {
@@ -237,8 +302,9 @@ async function workerAndCard() {
   const messages = [];
   const workerScope = { postMessage: function (message, transfer) { messages.push({ message: message, transfer: transfer }); } };
   workerScope.self = workerScope;
+  workerScope.location = { search: "?build=abc123" };
   workerScope.importScripts = function (file) {
-    assert.equal(file, "./deseq.js");
+    assert.equal(file, "./deseq.js?build=abc123", "deseq.js is loaded with the worker's build query");
     const source = fs.readFileSync(path.join(repository, "web", "deseq.js"), "utf8");
     vm.runInThisContext("(function (self, window, module) {" + source + "\n})", { filename: "deseq.js" })(workerScope, undefined, undefined);
   };
@@ -284,6 +350,9 @@ async function workerAndCard() {
   const cardSource = fs.readFileSync(path.join(repository, "web", "deseq-card.js"), "utf8");
   vm.runInThisContext("(function (window, document) {" + cardSource + "\n})", { filename: "deseq-card.js" })(cardWindow, documentStub);
   const card = cardWindow.Hyb2DeseqCard;
+  assert.match(cardSource, /"deseq\.worker\.js\?build=" \+ encodeURIComponent\(window\.HYB2_BUILD && window\.HYB2_BUILD\.commit \|\| "local"\)/,
+    "the worker URL carries the build query");
+  assert.match(workerSource, /new Worker\("\.\/deseq\.worker\.js" \+ BUILD_QUERY\)/, "helper workers carry the build query");
   const ds = function (id, condition, rnas) {
     return { id: id, label: id, fileName: id + ".hyb", condition: condition, summary: { validRecords: 10, rnaNames: rnas } };
   };
@@ -344,6 +413,58 @@ async function workerAndCard() {
     visualBlock: function (svg) { return svg; } };
   assert.match(card.reportSection(state.comparison, helpers), /Differential test \(DESeq2 Wald test\)/);
   assert.equal(card.reportData(state.comparison).result.summary.cellsTested, result.summary.cellsTested);
+
+  // empty or non-numeric fields are rejected, not read as 0
+  state.comparison.deseq.minCount = "";
+  assert.match(card.renderCard(state), /Min count must be a non-negative integer/);
+  state.comparison.deseq.minCount = "2";
+  state.comparison.deseq.radius = " ";
+  assert.match(card.renderCard(state), /Merge range must be/);
+  state.comparison.deseq.radius = "100";
+  state.comparison.deseq.padjCutoff = "abc";
+  assert.match(card.renderCard(state), /padj cutoff must be/);
+  state.comparison.deseq.padjCutoff = "0.05";
+
+  // run() without Worker: arms read through api.getArms, test on a timer
+  const armsTable = function (arms, rna) {
+    const n = arms.length / 4;
+    const t = { index: [], rnaOne: [], rnaTwo: [], oneStart: [], oneEnd: [], twoStart: [], twoEnd: [] };
+    for (let i = 0; i < n; i += 1) {
+      t.index.push(i); t.rnaOne.push(rna); t.rnaTwo.push(rna);
+      t.oneStart.push(arms[4 * i]); t.oneEnd.push(arms[4 * i + 1]); t.twoStart.push(arms[4 * i + 2]); t.twoEnd.push(arms[4 * i + 3]);
+    }
+    return t;
+  };
+  const armsById = { ZAFR_REP1: armsOf(1, 0.2), ZAFR_REP2: armsOf(2, 0.2), ZILM_REP2: armsOf(3, 0), ZILM_REP3: armsOf(4, 0) };
+  const runApi = function (empty) {
+    return { render: function () {}, showToast: function (message) { throw new Error("unexpected toast " + message); },
+      getArms: function (selection, pair) {
+        const id = selection.datasetIds[0];
+        return Promise.resolve(armsTable(id === empty ? new Int32Array(0) : armsById[id], pair.rna));
+      } };
+  };
+  const settle = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
+  const deseqState = state.comparison.deseq;
+  // a dataset without records for the pair: a clear error, no result
+  deseqState.result = null;
+  card.run(state, runApi("ZILM_REP3"));
+  await settle(50);
+  assert.equal(deseqState.status, "error");
+  assert.match(deseqState.error, /ZILM_REP3 has no .* records.*size factors cannot be computed/);
+  assert.equal(deseqState.result, null);
+  // stop() abandons a run: the late timer does not store a result
+  card.run(state, runApi(null));
+  await settle(0);
+  card.stop();
+  await settle(150);
+  assert.equal(deseqState.result, null, "a stopped run does not store its result");
+  // an uninterrupted run stores one
+  card.run(state, runApi(null));
+  for (let wait = 0; wait < 100 && deseqState.status === "running"; wait += 1) {
+    await settle(50);
+  }
+  assert.equal(deseqState.status, "done", deseqState.error);
+  assert.ok(deseqState.result.summary.interactionsUp >= 1);
 
   // split tasks give the same numbers as one task
   {

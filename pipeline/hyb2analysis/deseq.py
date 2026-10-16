@@ -616,7 +616,11 @@ def _local_fit(means: np.ndarray, disps: np.ndarray, query: np.ndarray, *, alpha
     enter the bandwidth), evaluated on an adaptive tree over the data range
     (a cell is halved while its width exceeds ``cut`` times the smaller vertex
     bandwidth) and interpolated with cubic Hermite polynomials from the
-    vertex values and slopes.  This reproduces R's ``predict`` to about 1e-5.
+    vertex values and slopes.  Outside the data range locfit continues the
+    boundary vertex's value and slope with the quadratic coefficient of the
+    global weighted fit ``lm(y ~ x + I(x^2), weights = mean)`` (its parametric
+    component) rather than the Hermite cubic, which would blow up.  This
+    reproduces R's ``predict`` to about 1e-7.
     """
     keep = disps >= MIN_DISP * 10
     if not keep.any():
@@ -625,7 +629,7 @@ def _local_fit(means: np.ndarray, disps: np.ndarray, query: np.ndarray, *, alpha
     yv = np.log(disps[keep])
     w0 = means[keep]
     n = len(x)
-    k = min(n - 1, int(n * alpha))
+    k = max(0, min(n, int(n * alpha)) - 1)  # the floor(n * alpha)-th nearest point
 
     def vertex(x0: float) -> Tuple[float, float, float]:
         d = np.abs(x - x0)
@@ -667,6 +671,24 @@ def _local_fit(means: np.ndarray, disps: np.ndarray, query: np.ndarray, *, alpha
     t = (lq - a) / length
     val = ((2 * t ** 3 - 3 * t ** 2 + 1) * f[i] + (t ** 3 - 2 * t ** 2 + t) * length * dv[i]
            + (-2 * t ** 3 + 3 * t ** 2) * f[i + 1] + (t ** 3 - t ** 2) * length * dv[i + 1])
+    outside = (lq < lo) | (lq > hi)
+    if outside.any():
+        xm = float(np.sum(w0 * x) / np.sum(w0))
+        c = x - xm
+        gw = [float(np.sum(w0 * c ** p)) for p in range(5)]
+        gy = [float(np.sum(w0 * yv * c ** p)) for p in range(3)]
+        try:
+            curvature = float(np.linalg.solve(np.array([[gw[0], gw[1], gw[2]], [gw[1], gw[2], gw[3]],
+                                                        [gw[2], gw[3], gw[4]]]), np.array(gy))[2])
+        except np.linalg.LinAlgError:
+            curvature = 0.0
+        if not math.isfinite(curvature):
+            curvature = 0.0
+        edge = np.where(lq < lo, lo, hi)
+        dx = lq - edge
+        fe = np.where(lq < lo, verts[lo][0], verts[hi][0])
+        se = np.where(lq < lo, verts[lo][1], verts[hi][1])
+        val = np.where(outside, fe + se * dx + curvature * dx * dx, val)
     return np.exp(val)
 
 
@@ -698,7 +720,11 @@ def deseq_two_conditions(counts: np.ndarray, condition_one: Sequence[bool], *, a
     finite = np.isfinite(loggeo)
     for j in range(m):
         use = finite & (y[:, j] > 0)
-        sf[j] = math.exp(float(np.median(logy[use, j] - loggeo[use])))
+        sf[j] = math.exp(float(np.median(logy[use, j] - loggeo[use]))) if use.any() else math.nan
+        if not (math.isfinite(sf[j]) and sf[j] > 0):
+            # estimateSizeFactorsForMatrix: "every gene contains at least one zero"
+            raise ValueError("every cell has a zero count in at least one sample, so size factors (log geometric "
+                             "means) cannot be computed; check that every sample has hybrids for this RNA pair")
     nf = np.broadcast_to(sf, y.shape)
     norm = y / sf
     base_mean = norm.mean(axis=1)

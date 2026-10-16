@@ -1431,7 +1431,7 @@
     const yv = new Float64Array(n);
     const w0 = new Float64Array(n);
     keep.forEach(function (i, k) { x[k] = Math.log(means[i]); yv[k] = Math.log(disps[i]); w0[k] = means[i]; });
-    const kk = Math.min(n - 1, Math.trunc(n * alphaSpan));
+    const kk = Math.max(0, Math.min(n, Math.trunc(n * alphaSpan)) - 1);
     const d = new Float64Array(n);
     const w = new Float64Array(n);
     const tmp = new Float64Array(n);
@@ -1501,6 +1501,30 @@
     if (xs.length === 1) {
       return out.fill(Math.exp(verts.get(lo)[0]));
     }
+    // quadratic coefficient of lm(y ~ x + x^2, weights = w0): locfit's
+    // parametric component, which it uses to extrapolate
+    let curvature = 0.0;
+    {
+      const xm = npSum(Float64Array.from(x, function (v, i) { return w0[i] * v; })) / npSum(w0);
+      const gw = [];
+      const gy = [];
+      for (let p = 0; p < 5; p += 1) {
+        for (let i = 0; i < n; i += 1) { tmp[i] = w0[i] * Math.pow(x[i] - xm, p); }
+        gw.push(npSum(tmp));
+      }
+      for (let p = 0; p < 3; p += 1) {
+        for (let i = 0; i < n; i += 1) { tmp[i] = w0[i] * yv[i] * Math.pow(x[i] - xm, p); }
+        gy.push(npSum(tmp));
+      }
+      try {
+        curvature = solve([[gw[0], gw[1], gw[2]], [gw[1], gw[2], gw[3]], [gw[2], gw[3], gw[4]]], gy)[2];
+      } catch (error) {
+        curvature = 0.0;
+      }
+      if (!Number.isFinite(curvature)) {
+        curvature = 0.0;
+      }
+    }
     for (let k = 0; k < query.length; k += 1) {
       const lq = Math.log(query[k]);
       let a0 = 0;
@@ -1512,6 +1536,15 @@
         } else {
           a1 = mid;
         }
+      }
+      if (lq < lo || lq > hi) {
+        // outside the data range locfit continues the boundary vertex's value
+        // and slope with the curvature of the global weighted quadratic
+        const edge = lq < lo ? lo : hi;
+        const fe = verts.get(edge);
+        const dx = lq - edge;
+        out[k] = Math.exp(fe[0] + fe[1] * dx + curvature * dx * dx);
+        continue;
       }
       const i = Math.min(Math.max(a0 - 1, 0), xs.length - 2);
       const a = xs[i];
@@ -1704,7 +1737,12 @@
           vals.push(Math.log(yij) - loggeo[i]);
         }
       }
-      sf[j] = Math.exp(npMedian(Float64Array.from(vals)));
+      sf[j] = vals.length ? Math.exp(npMedian(Float64Array.from(vals))) : NaN;
+      if (!(sf[j] > 0 && Number.isFinite(sf[j]))) {
+        // estimateSizeFactorsForMatrix: "every gene contains at least one zero"
+        throw new Error("every cell has a zero count in at least one sample, so size factors (log geometric means) " +
+          "cannot be computed; check that every sample has hybrids for this RNA pair");
+      }
     }
     const norm = new Float64Array(n * m);
     const baseMean = new Float64Array(n);
@@ -2252,7 +2290,61 @@
   // increasing padj (ties in input order); a cell is kept unless a kept
   // cell of the same direction lies within radius in both x and y.
   // Returns the kept positions into the given arrays, up first then down.
+  // Kept cells are bucketed on a (radius + 1) grid, so only the 3 x 3
+  // neighbouring buckets are searched.
   function splitInteractions(x, y, lfc, padj, radius) {
+    const n = x.length;
+    const order = Array.from({ length: n }, function (_, i) { return i; });
+    order.sort(function (a, b) { return padj[a] - padj[b] || a - b; });
+    const kept = [];
+    const width = radius + 1;
+    [1, -1].forEach(function (direction) {
+      const grid = new Map();
+      order.forEach(function (index) {
+        const s = lfc[index] > 0 ? 1 : (lfc[index] < 0 ? -1 : 0);
+        if (s !== direction) {
+          return;
+        }
+        const xi = x[index];
+        const yi = y[index];
+        const bx = Math.floor(xi / width);
+        const by = Math.floor(yi / width);
+        for (let gx = bx - 1; gx <= bx + 1; gx += 1) {
+          const column = grid.get(gx);
+          if (!column) {
+            continue;
+          }
+          for (let gy = by - 1; gy <= by + 1; gy += 1) {
+            const bucket = column.get(gy);
+            if (!bucket) {
+              continue;
+            }
+            for (let k = 0; k < bucket.length; k += 2) {
+              if (Math.abs(bucket[k] - xi) <= radius && Math.abs(bucket[k + 1] - yi) <= radius) {
+                return;
+              }
+            }
+          }
+        }
+        let column = grid.get(bx);
+        if (!column) {
+          column = new Map();
+          grid.set(bx, column);
+        }
+        let bucket = column.get(by);
+        if (!bucket) {
+          bucket = [];
+          column.set(by, bucket);
+        }
+        bucket.push(xi, yi);
+        kept.push(index);
+      });
+    });
+    return kept;
+  }
+
+  // the quadratic reference implementation, for the checks
+  function splitInteractionsPlain(x, y, lfc, padj, radius) {
     const n = x.length;
     const order = Array.from({ length: n }, function (_, i) { return i; });
     order.sort(function (a, b) { return padj[a] - padj[b] || a - b; });
@@ -2491,6 +2583,7 @@
     parseContactText: parseContactText,
     countTable: countTable,
     splitInteractions: splitInteractions,
+    splitInteractionsPlain: splitInteractionsPlain,
     compare: compare,
     interactionsToTsv: interactionsToTsv,
     significantToTsv: significantToTsv,

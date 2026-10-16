@@ -85,19 +85,19 @@ def split_interactions(x: np.ndarray, y: np.ndarray, lfc: np.ndarray, padj: np.n
     """
     order = np.argsort(padj, kind="stable")
     kept: List[int] = []
+    width = radius + 1  # kept cells bucketed on this grid: only 3 x 3 buckets to search
     for direction in (1, -1):
-        chosen_x = np.empty(len(order), dtype=np.int64)
-        chosen_y = np.empty(len(order), dtype=np.int64)
-        count = 0
+        grid: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
         for index in order:
             if np.sign(lfc[index]) != direction:
                 continue
             xi, yi = int(x[index]), int(y[index])
-            if count and np.any((np.abs(chosen_x[:count] - xi) <= radius) & (np.abs(chosen_y[:count] - yi) <= radius)):
+            bx, by = xi // width, yi // width
+            if any(abs(cx - xi) <= radius and abs(cy - yi) <= radius
+                   for gx in (bx - 1, bx, bx + 1) for gy in (by - 1, by, by + 1)
+                   for cx, cy in grid.get((gx, gy), ())):
                 continue
-            chosen_x[count] = xi
-            chosen_y[count] = yi
-            count += 1
+            grid.setdefault((bx, by), []).append((xi, yi))
             kept.append(int(index))
     return kept
 

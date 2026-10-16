@@ -13,7 +13,10 @@
  * helper mode: in { type: "task", id, task } -> out { type: "taskDone", id, result }
  *      | { type: "tick", id, done } | { type: "taskError", id, message }
  */
-importScripts("./deseq.js");
+// the page passes ?build=<commit>; deseq.js and the helpers get the same query
+// so a new release does not mix with cached copies
+const BUILD_QUERY = self.location && self.location.search || "";
+importScripts("./deseq.js" + BUILD_QUERY);
 
 const MAX_HELPERS = 8;
 
@@ -51,7 +54,7 @@ function createPool(count) {
   for (let i = 0; i < count; i += 1) {
     let helper;
     try {
-      helper = new Worker("./deseq.worker.js");
+      helper = new Worker("./deseq.worker.js" + BUILD_QUERY);
     } catch (error) {
       break;
     }

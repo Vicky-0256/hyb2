@@ -9,7 +9,11 @@ counts are random rows of the reproduce_zikv comparisons:
 - ``two_vs_two``: ZAFR REP1-2 vs ZBRA REP1-2;
 - ``two_vs_three``: ZAFR REP1-2 vs ZSIN REP1-3 (Cook's distance filtering);
 - ``local_fit``: Livefire1-3 vs Aag1-2 on min-10 hybrids, where the parametric
-  dispersion trend fails and DESeq2 substitutes locfit.
+  dispersion trend fails and DESeq2 substitutes locfit;
+- ``local_extrapolation``: a synthetic 2 vs 2 table (scratch generator, kept
+  as counts) whose locfit trend is evaluated far above the fitted means (one
+  strong block of cells), checking locfit's extrapolation (``dispFit``
+  column).
 """
 import json
 import math
@@ -84,8 +88,27 @@ class DeseqMatchesR(unittest.TestCase):
     def test_local_fit_fallback(self):
         self.check("local_fit", "local")
 
+    def test_local_fit_extrapolates_like_locfit(self):
+        # the trend is fitted on means up to ~8 but evaluated at ~300; a cubic
+        # Hermite continuation gave dispFit ~1e37 and padj ~1 here, R gives
+        # dispFit ~1.07 and padj ~0.002
+        self.check("local_extrapolation", "local")
+        ids, counts, one, expected = _load("local_extrapolation")
+        res = deseq.deseq_two_conditions(counts, one)
+        r = np.array([expected[i] for i in ids])
+        np.testing.assert_allclose(res["dispFit"], r[:, 5], rtol=1e-5)
+        strong = [ids.index(cell) for cell in ("100_300", "100_310", "110_300", "110_310")]
+        np.testing.assert_allclose(res["padj"][strong], r[strong, 4], rtol=1e-3)
+        self.assertTrue(np.all(res["padj"][strong] < 0.01))
+
 
 class Helpers(unittest.TestCase):
+    def test_no_cell_without_zero_has_no_size_factors(self):
+        # R: "every gene contains at least one zero, cannot compute log geometric means"
+        counts = np.array([[5, 0, 3, 4], [2, 6, 0, 1], [0, 7, 8, 9], [3, 3, 3, 0]])
+        with self.assertRaisesRegex(ValueError, "size factors"):
+            deseq.deseq_two_conditions(counts, [True, True, False, False])
+
     def test_bh_matches_r(self):
         # p.adjust(c(0.01, 0.02, NA, 0.03, 0.5), "BH") in R
         out = deseq.p_adjust_bh(np.array([0.01, 0.02, np.nan, 0.03, 0.5]))
@@ -109,6 +132,32 @@ class SplitAndCompare(unittest.TestCase):
         kept = differential.split_interactions(x, y, lfc, padj, 100)
         # cell 1 (best) hides cell 0; cell 3 has the other sign; 2 and 4 are far away
         self.assertEqual(kept, [1, 2, 4, 3])
+
+    def test_bucketed_split_matches_the_plain_scan(self):
+        def plain(x, y, lfc, padj, radius):
+            kept = []
+            for direction in (1, -1):
+                cx, cy = [], []
+                for index in np.argsort(padj, kind="stable"):
+                    if np.sign(lfc[index]) != direction:
+                        continue
+                    if any(abs(a - x[index]) <= radius and abs(b - y[index]) <= radius for a, b in zip(cx, cy)):
+                        continue
+                    cx.append(int(x[index]))
+                    cy.append(int(y[index]))
+                    kept.append(int(index))
+            return kept
+
+        rng = np.random.default_rng(1)
+        for case in range(60):
+            n = int(rng.integers(1, 800))
+            span = [50, 500, 5000, 10 ** 6][case % 4]
+            radius = [0, 1, 10, 100, 250][case % 5]
+            x = rng.integers(0, span // 10 + 1, n) * 10 - (span // 2 if case % 7 == 0 else 0)
+            y = rng.integers(0, span // 10 + 1, n) * 10
+            lfc = np.where(rng.random(n) < 0.05, 0.0, rng.random(n) - 0.5)
+            padj = np.where(rng.random(n) < 0.2, 0.01, rng.random(n) * 0.05)
+            self.assertEqual(differential.split_interactions(x, y, lfc, padj, radius), plain(x, y, lfc, padj, radius))
 
     def test_compare_writes_outputs_from_contact_maps(self):
         ids, counts, one, expected = _load("two_vs_two")

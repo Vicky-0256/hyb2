@@ -1045,7 +1045,7 @@
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
       context.fillStyle = kind === "conserved"
-        ? conservedColor(cell.similarity / Math.max(1, result.similarityCap))
+        ? conservedColor(conservedRatio(cell.similarity, result))
         : effectColor(cell.effect / Math.max(.01, result.effectCap));
       context.fillRect(x, y, Math.ceil(geometry.cellWidth) + .4, Math.ceil(geometry.cellHeight) + .4);
     });
@@ -2364,7 +2364,7 @@
     const result = comparison.result || {};
     const normalise = comparison.normalise === "none" ? "none" : "per-million-library-size";
     const differentialTest = window.Hyb2DeseqCard ? window.Hyb2DeseqCard.parameters(comparison) : null;
-    const tested = !!(differentialTest && differentialTest.result);
+    const tested = !!(differentialTest && differentialTest.result && differentialTest.result.current);
     const selectedBin = comparison.selection && result.ready ? {
       xStart: comparison.selection.x,
       xEnd: comparison.selection.x + result.binSize - 1,
@@ -2404,13 +2404,15 @@
         normalisation: normalise,
         pseudocount: normalise === "per-million-library-size" ? 1 : 0.5,
         similarityMinimum: Number(comparison.similarityMinimum) > 1 ? Number(comparison.similarityMinimum) : 1,
-        similarityMethod: "HYB2 plot_similarity_map on one merged raw map per condition: min(A, B) of bins present in both"
+        similarityMethod: "HYB2 plot_similarity_map on one merged raw map per condition (as Desktop differential.py; not hyb2_compare's consecutive replicate pairing): min(A, B) of bins present in both; similarityMinimum = awk $3 >= MIN on each merged map",
+        similarityColourScale: "similarity_heatmap.R: counts capped at the 95% quantile, white at the smallest plotted count to forestgreen at the cap"
       },
       result: {
         ready: result.ready === true,
         comparableBins: Array.isArray(result.cells) ? result.cells.length : 0,
         similarityBins: Array.isArray(result.conservedCells) ? result.conservedCells.length : 0,
         similarityCap: Number(result.similarityCap) || null,
+        similarityFloor: Number(result.similarityFloor) || null,
         selectedBin: selectedBin,
         failureReason: result.ready === false ? result.reason || null : null
       },
@@ -2572,16 +2574,76 @@
     return "rgb(" + red + ", " + green + ", " + blue + ")";
   }
 
-  // similarity_heatmap.R: white to forestgreen.
+  // similarity_heatmap.R: counts capped at the 95% quantile, then
+  // scale_fill_gradient(low = white, high = forestgreen) over the data range,
+  // so white is the smallest plotted count (not zero) and forestgreen the cap.
+  // A single-valued range maps to the midpoint, like scales::rescale().
+  function conservedRatio(similarity, result) {
+    const cap = Math.max(1, Number(result && result.similarityCap) || 1);
+    const floor = Math.min(cap, similarityFloorOf(result));
+    if (!(cap > floor)) {
+      return .5;
+    }
+    return Math.max(0, Math.min(1, (Math.min(Number(similarity) || 0, cap) - floor) / (cap - floor)));
+  }
+
+  function similarityFloorOf(result) {
+    const floor = Number(result && result.similarityFloor);
+    if (Number.isFinite(floor) && floor > 0) {
+      return floor;
+    }
+    return ((result && result.conservedCells) || []).reduce(function (minimum, cell) {
+      const value = Number(cell.similarity);
+      return value > 0 && value < minimum ? value : minimum;
+    }, Infinity);
+  }
+
+  // scales::pal_seq_gradient interpolates in CIELAB (farver, D65 white).
   function conservedColor(ratio) {
     const bounded = Math.max(0, Math.min(1, ratio));
     const dark = isDarkTheme();
-    const from = dark ? [24, 54, 80] : [255, 255, 255];
-    const to = [34, 139, 34];
-    const red = Math.round(from[0] + (to[0] - from[0]) * bounded);
-    const green = Math.round(from[1] + (to[1] - from[1]) * bounded);
-    const blue = Math.round(from[2] + (to[2] - from[2]) * bounded);
-    return "rgb(" + red + ", " + green + ", " + blue + ")";
+    const from = srgbToLab(dark ? [24, 54, 80] : [255, 255, 255]);
+    const to = srgbToLab([34, 139, 34]);
+    const rgb = labToSrgb([
+      from[0] + (to[0] - from[0]) * bounded,
+      from[1] + (to[1] - from[1]) * bounded,
+      from[2] + (to[2] - from[2]) * bounded
+    ]);
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
+  }
+
+  const LAB_WHITE = [0.95047, 1, 1.08883];
+
+  function srgbToLab(rgb) {
+    const linear = rgb.map(function (channel) {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+    });
+    const xyz = [
+      0.4124564 * linear[0] + 0.3575761 * linear[1] + 0.1804375 * linear[2],
+      0.2126729 * linear[0] + 0.7151522 * linear[1] + 0.0721750 * linear[2],
+      0.0193339 * linear[0] + 0.1191920 * linear[1] + 0.9503041 * linear[2]
+    ].map(function (value, index) {
+      const t = value / LAB_WHITE[index];
+      return t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116;
+    });
+    return [116 * xyz[1] - 16, 500 * (xyz[0] - xyz[1]), 200 * (xyz[1] - xyz[2])];
+  }
+
+  function labToSrgb(lab) {
+    const fy = (lab[0] + 16) / 116;
+    const xyz = [fy + lab[1] / 500, fy, fy - lab[2] / 200].map(function (value, index) {
+      const cube = value * value * value;
+      return LAB_WHITE[index] * (cube > 216 / 24389 ? cube : (116 * value - 16) / (24389 / 27));
+    });
+    return [
+      3.2404542 * xyz[0] - 1.5371385 * xyz[1] - 0.4985314 * xyz[2],
+      -0.9692660 * xyz[0] + 1.8760108 * xyz[1] + 0.0415560 * xyz[2],
+      0.0556434 * xyz[0] - 0.2040259 * xyz[1] + 1.0572252 * xyz[2]
+    ].map(function (value) {
+      const encoded = value <= 0.0031308 ? 12.92 * value : 1.055 * Math.pow(value, 1 / 2.4) - 0.055;
+      return Math.max(0, Math.min(255, Math.round(encoded * 255)));
+    });
   }
 
   function exportColors() {
@@ -2653,6 +2715,8 @@
     contactYAxisLabels: contactYAxisLabels,
     visualExportReady: visualExportReady,
     moveComparisonSelection: moveComparisonSelection,
+    conservedRatio: conservedRatio,
+    conservedColor: conservedColor,
     foldRequest: foldRequest
   };
 }());

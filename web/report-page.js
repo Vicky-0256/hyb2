@@ -479,7 +479,7 @@
           ["Selected bin", selected ? "Included below" : "None"]
         ]) : '<div class="report-empty">' + escape(result && result.reason || "Update the comparison from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">green = smaller raw count of A and B (HYB2 plot_similarity_map), capped at the 95% quantile</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
+        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map): white at the smallest plotted count, green at the 95% quantile cap</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
         '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
         window.Hyb2DeseqCard ? window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) : "",
         '<p class="report-note">Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
@@ -795,7 +795,6 @@
     const plotWidth = 650;
     const plotHeight = 300;
     const cap = Math.max(0.25, number(result.effectCap, 1));
-    const similarityCap = Math.max(1, number(result.similarityCap, 1));
     const selected = comparison.selection;
     const rects = shown.map(function (cell) {
       const x = plotLeft + ((number(cell.x) - xStart) / Math.max(1, xEnd - xStart)) * plotWidth;
@@ -803,7 +802,7 @@
       const width = Math.max(1, binSize / Math.max(1, xEnd - xStart) * plotWidth + 0.5);
       const height = Math.max(1, binSize / Math.max(1, yEnd - yStart) * plotHeight + 0.5);
       const ratio = mode === "conserved"
-        ? Math.max(0, Math.min(1, number(cell.similarity) / similarityCap))
+        ? conservedRatio(cell.similarity, result)
         : number(cell.effect) / cap;
       const fill = mode === "conserved" ? conservedColor(ratio) : effectColor(ratio);
       const isSelected = selected && number(selected.x) === number(cell.x) && number(selected.y) === number(cell.y);
@@ -992,8 +991,71 @@
     return interpolateColor("#00a09d", "#6a4ff2", (value - 0.5) * 2);
   }
 
+  // similarity_heatmap.R: counts capped at the 95% quantile, then
+  // scale_fill_gradient(low = white, high = forestgreen) over the data range,
+  // so white is the smallest plotted count (not zero) and forestgreen the cap.
+  // A single-valued range maps to the midpoint, like scales::rescale().
+  function conservedRatio(similarity, result) {
+    const cap = Math.max(1, number(result && result.similarityCap, 1));
+    const floor = Math.min(cap, similarityFloorOf(result));
+    if (!(cap > floor)) {
+      return 0.5;
+    }
+    return Math.max(0, Math.min(1, (Math.min(number(similarity), cap) - floor) / (cap - floor)));
+  }
+
+  function similarityFloorOf(result) {
+    const floor = number(result && result.similarityFloor);
+    if (floor > 0) {
+      return floor;
+    }
+    return ((result && result.conservedCells) || []).reduce(function (minimum, cell) {
+      const value = number(cell.similarity);
+      return value > 0 && value < minimum ? value : minimum;
+    }, Infinity);
+  }
+
+  // scales::pal_seq_gradient interpolates in CIELAB (farver, D65 white).
   function conservedColor(ratio) {
-    return interpolateColor("#ffffff", "#228b22", Math.max(0, Math.min(1, number(ratio))));
+    const from = srgbToLab(hexRgb("#ffffff"));
+    const to = srgbToLab(hexRgb("#228b22"));
+    const t = Math.max(0, Math.min(1, number(ratio)));
+    const rgb = labToSrgb([from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t]);
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
+  }
+
+  const LAB_WHITE = [0.95047, 1, 1.08883];
+
+  function srgbToLab(rgb) {
+    const linear = rgb.map(function (channel) {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+    });
+    const xyz = [
+      0.4124564 * linear[0] + 0.3575761 * linear[1] + 0.1804375 * linear[2],
+      0.2126729 * linear[0] + 0.7151522 * linear[1] + 0.0721750 * linear[2],
+      0.0193339 * linear[0] + 0.1191920 * linear[1] + 0.9503041 * linear[2]
+    ].map(function (value, index) {
+      const t = value / LAB_WHITE[index];
+      return t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116;
+    });
+    return [116 * xyz[1] - 16, 500 * (xyz[0] - xyz[1]), 200 * (xyz[1] - xyz[2])];
+  }
+
+  function labToSrgb(lab) {
+    const fy = (lab[0] + 16) / 116;
+    const xyz = [fy + lab[1] / 500, fy, fy - lab[2] / 200].map(function (value, index) {
+      const cube = value * value * value;
+      return LAB_WHITE[index] * (cube > 216 / 24389 ? cube : (116 * value - 16) / (24389 / 27));
+    });
+    return [
+      3.2404542 * xyz[0] - 1.5371385 * xyz[1] - 0.4985314 * xyz[2],
+      -0.9692660 * xyz[0] + 1.8760108 * xyz[1] + 0.0415560 * xyz[2],
+      0.0556434 * xyz[0] - 0.2040259 * xyz[1] + 1.0572252 * xyz[2]
+    ].map(function (value) {
+      const encoded = value <= 0.0031308 ? 12.92 * value : 1.055 * Math.pow(value, 1 / 2.4) - 0.055;
+      return Math.max(0, Math.min(255, Math.round(encoded * 255)));
+    });
   }
 
   function effectColor(value) {

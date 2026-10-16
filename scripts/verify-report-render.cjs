@@ -187,6 +187,10 @@ assert.match(html, /Print \/ Save PDF/);
 });
 assert.match(html, /&lt;bad&gt;\.hyb/, "user-controlled file names must be escaped");
 assert.doesNotMatch(html, />undefined</, "report markup must not expose undefined values");
+// similarity_heatmap.R: a single-valued scale (floor = cap) maps to the
+// midpoint of the white-to-forestgreen CIELAB ramp, like scales::rescale.
+assert.match(html, /fill="rgb\(153, 197, 143\)"><title>[^<]*; similarity 1</,
+  "the similarity heatmap must use similarity_heatmap.R's data-range colour scale");
 
 const data = report.getData(state);
 assert.equal(data.application, "HYB2 Web Lite");

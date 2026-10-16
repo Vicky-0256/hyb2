@@ -485,6 +485,8 @@
       ].join("") : '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Comparison</span><h2>' + escape(result.reason || "Add datasets to compare") + '</h2><p>All input files remain in tab memory and are parsed by local browser workers.</p></div></section>',
       // the arc map works from its own files, with or without a comparison here
       window.Hyb2ArcMap ? window.Hyb2ArcMap.renderCard(state.arcMap || window.Hyb2ArcMap.defaultState(), escape) : "",
+      window.Hyb2ArcMap && window.Hyb2RegionPanels ? window.Hyb2RegionPanels.renderCard(state.arcMap, state.regionPanels, escape) : "",
+      window.Hyb2ArcMap && window.Hyb2FoldingEnergy ? window.Hyb2FoldingEnergy.renderCard(state.arcMap, state.regionPanels, state.foldingEnergy, escape) : "",
       '<section class="method-note"><strong>Method</strong><span>For each dataset, HYB arms are accumulated into fixed contact bins. Each condition uses the mean of its dataset-level counts, optionally scaled per million ' + normalisationUnit + '. The effect map reports log2((A + pseudocount) / (B + pseudocount)); it is a descriptive effect size, not a significance test. The similarity heatmap follows HYB2 plot_similarity_map and similarity_heatmap.R: each condition\'s datasets are summed into one raw contact map (as if their .hyb files were concatenated), bins below the similarity minimum are dropped from each map, and a bin present in both maps shows the smaller count.</span></section>'
     ].join("");
   }

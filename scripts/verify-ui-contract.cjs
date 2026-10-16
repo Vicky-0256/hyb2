@@ -735,9 +735,21 @@ assert.match(analysisPagesSource, /sha256Unavailable \? "Unavailable" : "Calcula
   "the Files drawer must distinguish terminal hash failure from pending calculation");
 assert.match(indexSource, /<script src="\.\/build-info\.js" defer><\/script>/);
 assert.match(appSource, /data-action="start-over"/,
-  "the workspace must expose a one-click start-over action");
-assert.match(appSource, /action === "start-over"[\s\S]*?resetToLanding\(\)/,
-  "start-over must clear state and return to the landing upload screen");
+  "the Data panel must expose a start-over action");
+assert.match(appSource, /action === "start-over"\) \{\s*state\.dialog = "clear";/,
+  "start-over must ask before it discards the session");
+assert.match(appSource, /action === "confirm-clear"\) \{\s*resetToLanding\(\);/,
+  "confirming must clear state and return to the landing upload screen");
+// Data, Help, Display and Privacy share one drawer; the header has no
+// destructive control and no bare glyph button.
+["files", "display", "privacy"].forEach(function (id) {
+  assert.match(appSource, new RegExp('state\\.dialog === "' + id + '"[\\s\\S]{0,200}?renderDrawer\\("' + id + '"'), id + " must open as a drawer");
+});
+assert.match(appSource, /return renderDrawer\("help"/, "help must open as a drawer");
+const workspaceHeader = appSource.match(/function renderWorkspaceHeader\(\) \{([\s\S]*?)\n  \}/)[1];
+assert.doesNotMatch(workspaceHeader, /start-over|toggle-theme/, "the header keeps Start over and the theme switch in their panels");
+assert.match(workspaceHeader, /data-action="open-files">Data</);
+assert.match(appSource, /const PAGE_HELP = \{[\s\S]*?"contact-map"[\s\S]*?compare[\s\S]*?structure/, "help must explain the analysis pages");
 assert.match(indexSource, /vendor\/d3\/d3\.v3\.min\.js/,
   "the folded RNA view must load its pinned local D3 dependency");
 assert.match(indexSource, /vendor\/fornac\/fornac\.js/,

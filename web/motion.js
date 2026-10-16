@@ -457,7 +457,7 @@
     }).catch(function () {});
   }, true);
 
-  // Tweaks panel motion toggle (rendered by app.js, handled here).
+  // Display panel motion toggle (rendered by app.js, handled here).
   document.addEventListener("click", function (event) {
     const toggle = event.target.closest && event.target.closest("[data-motion-toggle]");
     if (!toggle) {
@@ -474,7 +474,9 @@
     } catch (error) {
       // Preference simply does not persist.
     }
-    toggle.textContent = reduced ? "Reduce motion" : "Turn motion on";
+    if (!toggle.classList.contains("segmented-option")) {
+      toggle.textContent = reduced ? "Reduce motion" : "Turn motion on";
+    }
     hero.refresh();
   });
 

@@ -1356,22 +1356,37 @@
     };
   }
 
+  // Body of the Data drawer (app.js adds the title and the Start over
+  // section): the loaded files first, then name matching and
+  // reproducibility folded unless they need attention.
   function getFilesDialogBody(state) {
     const fasta = state.fasta;
     const buildCommit = window.HYB2_BUILD && window.HYB2_BUILD.commit;
-    const matchedCount = fasta ? Object.keys(fasta.mapping || {}).length : 0;
     const rnaCount = (state.summary.rnaNames || []).length;
-    return [
-      '<h2 id="files-dialog-title">Files</h2>',
+    const matchedCount = fasta ? Object.keys(fasta.mapping || {}).filter(function (key) { return fasta.mapping[key]; }).length : 0;
+    const unmatched = fasta ? Math.max(0, rnaCount - matchedCount) : 0;
+    const files = [
       '<div class="files-section"><span class="drawer-kicker">Interaction data</span><strong>' + escape(state.summary.fileName) + "</strong><span>" + formatBytes(state.summary.fileSize) + " · " + format(state.summary.validRecords) + ' valid records</span><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="replace-hyb">Replace</button><button class="quiet-button" type="button" data-feature-action="clear-hyb">Remove</button></div></div>',
       '<div class="files-section"><span class="drawer-kicker">Reference sequences</span>',
-      fasta ? '<strong>' + escape(fasta.fileName) + "</strong><span>" + format(fasta.sequences.length) + " sequences · " + format(matchedCount) + " of " + format(rnaCount) + " HYB RNA names matched</span>" + (fasta.unsupportedSequenceEntries ? '<span class="notice notice-warning">' + format(fasta.unsupportedSequenceEntries) + " FASTA record" + (fasta.unsupportedSequenceEntries === 1 ? " contains" : "s contain") + " unsupported symbol" + ((fasta.unsupportedCharacters || []).length === 1 ? "" : "s") + " (" + escape((fasta.unsupportedCharacters || []).join(", ")) + "). Symbols were preserved so coordinates did not shift; affected regions cannot be folded.</span>" : "") : "<strong>No FASTA loaded</strong><span>Optional: enables reference-region extraction and structure preparation.</span>",
-      '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="choose-fasta">' + (fasta ? "Replace" : "Add reference FASTA") + "</button>" + (fasta ? '<button class="quiet-button" type="button" data-feature-action="remove-fasta">Remove</button><button class="quiet-button" type="button" data-feature-action="export-fasta-mapping">Export mapping</button>' : "") + "</div></div>",
-      fasta ? renderFastaMapping(state) : "",
-      renderCompareFiles(state),
-      '<div class="files-section"><span class="drawer-kicker">Reproducibility</span><span>App version: <code class="mono">0.5.0</code></span><span>Git commit: <code class="mono hash-value">' + escape(buildCommit || "Local development build") + '</code></span><span>HYB SHA-256: <code class="mono hash-value">' + escape(state.summary.sha256 || (state.summary.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" + (fasta ? '<span>FASTA SHA-256: <code class="mono hash-value">' + escape(fasta.sha256 || (fasta.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" : "") + "</div>",
-      '<div class="files-section"><span class="drawer-kicker">Privacy</span><span>Files are held in memory only. This preview does not use IndexedDB, analytics, or an upload service.</span></div>'
+      fasta ? '<strong>' + escape(fasta.fileName) + "</strong><span>" + format(fasta.sequences.length) + (fasta.sequences.length === 1 ? " sequence" : " sequences") + "</span>" + (fasta.unsupportedSequenceEntries ? '<span class="notice notice-warning">' + format(fasta.unsupportedSequenceEntries) + " FASTA record" + (fasta.unsupportedSequenceEntries === 1 ? " contains" : "s contain") + " unsupported symbol" + ((fasta.unsupportedCharacters || []).length === 1 ? "" : "s") + " (" + escape((fasta.unsupportedCharacters || []).join(", ")) + "). Symbols were preserved so coordinates did not shift; affected regions cannot be folded.</span>" : "") : "<strong>No reference loaded</strong><span>Optional. Add a FASTA to see sequences, extract regions and predict structures.</span>",
+      '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="choose-fasta">' + (fasta ? "Replace" : "Add reference FASTA") + "</button>" + (fasta ? '<button class="quiet-button" type="button" data-feature-action="remove-fasta">Remove</button>' : "") + "</div></div>",
+      renderCompareFiles(state)
     ].join("");
+    const parts = ['<section class="drawer-section"><h3>Loaded files</h3>' + files + "</section>"];
+    if (fasta) {
+      parts.push(drawerFold("data-mapping", "Name matching",
+        unmatched ? format(unmatched) + " of " + format(rnaCount) + " RNA names have no reference sequence" : "All " + format(rnaCount) + (rnaCount === 1 ? " RNA name matches" : " RNA names match") + " a reference sequence",
+        unmatched > 0, renderFastaMapping(state), unmatched > 0));
+    }
+    parts.push(drawerFold("data-reproducibility", "Reproducibility", "Versions and file fingerprints for your methods section", false,
+      '<div class="files-section"><span>App version: <code class="mono">0.5.0</code></span><span>Git commit: <code class="mono hash-value">' + escape(buildCommit || "Local development build") + '</code></span><span>HYB SHA-256: <code class="mono hash-value">' + escape(state.summary.sha256 || (state.summary.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" + (fasta ? '<span>FASTA SHA-256: <code class="mono hash-value">' + escape(fasta.sha256 || (fasta.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" : "") + "</div>"));
+    return parts.join("");
+  }
+
+  // A folded drawer section; `fallbackOpen` applies until the user toggles it.
+  function drawerFold(key, title, summary, fallbackOpen, body, attention) {
+    const remembered = window.Hyb2OpenSections && key in window.Hyb2OpenSections ? window.Hyb2OpenSections[key] : fallbackOpen;
+    return '<details class="drawer-section drawer-fold' + (attention ? " needs-attention" : "") + '" data-open-key="' + key + '"' + (remembered ? " open" : "") + '><summary><span class="drawer-fold-title">' + escape(title) + '</span><span class="drawer-fold-summary">' + escape(summary) + "</span></summary>" + body + "</details>";
   }
 
   // The other Compare datasets and the arc map files (the example loads
@@ -1424,11 +1439,11 @@
       : fasta.mappingEditorReference;
     const preview = rnas.slice(0, 100);
     return [
-      '<div class="fasta-mapping"><span class="drawer-kicker">Reference mapping</span>',
-      '<p class="card-note">Type exact identifiers to edit one mapping at a time. Suggestions are capped at 500 so large transcriptomes do not create a Cartesian product of DOM options.</p>',
+      '<div class="fasta-mapping">',
+      '<p class="card-note">Each RNA name in the HYB file is paired with the reference sequence of the same name. To fix one, pick the RNA, type the reference ID it should use, and apply.</p>',
       '<div class="control-grid"><label class="control-field"><span>HYB RNA</span><input type="search" list="fasta-rna-suggestions" value="' + attribute(editorRna) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorRna"><datalist id="fasta-rna-suggestions">' + rnas.slice(0, 500).map(function (rna) { return '<option value="' + attribute(rna) + '"></option>'; }).join("") + '</datalist></label>',
       '<label class="control-field"><span>FASTA reference ID</span><input type="search" list="fasta-reference-suggestions" value="' + attribute(editorReference) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorReference"><datalist id="fasta-reference-suggestions">' + fasta.sequences.slice(0, 500).map(function (entry) { return '<option value="' + attribute(entry.id) + '"></option>'; }).join("") + '</datalist></label></div>',
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="apply-fasta-mapping">Apply mapping</button><button class="quiet-button" type="button" data-feature-action="remove-current-fasta-mapping">Mark as not matched</button></div>',
+      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="apply-fasta-mapping">Apply mapping</button><button class="quiet-button" type="button" data-feature-action="remove-current-fasta-mapping">Mark as not matched</button><button class="quiet-button" type="button" data-feature-action="export-fasta-mapping">Export matches</button></div>',
       '<div class="mapping-rows">' + preview.map(function (rna) {
         const mapped = fasta.mapping[rna] || "Not matched";
         return '<div class="mapping-row"><span title="' + attribute(rna) + '">' + escape(rna) + '</span><span title="' + attribute(mapped) + '">' + escape(mapped) + '</span><button class="quiet-button" type="button" data-feature-action="edit-fasta-mapping" data-rna="' + attribute(rna) + '">Edit</button></div>';

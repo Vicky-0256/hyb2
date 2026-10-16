@@ -59,7 +59,7 @@
         "          <h2>Reference sequences loaded</h2>",
         "          <p>" + format(state.reference.sequenceCount) + (state.reference.sequenceCount === 1 ? " FASTA sequence · " : " FASTA sequences · ") + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</p>",
         "        </div>",
-        embedded ? "" : '        <button class="quiet-button" type="button" data-action="open-files">Review mapping</button>',
+        embedded ? "" : '        <button class="quiet-button" type="button" data-action="open-files" data-open-section="data-mapping">Review mapping</button>',
         "      </section>"
       ].join("");
     }

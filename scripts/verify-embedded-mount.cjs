@@ -165,7 +165,7 @@ async function main() {
     [/class="workspace-header/, "workspace header"],
     [/class="mobile-nav/, "mobile navigation"],
     [/type="file"/, "upload inputs"],
-    [/data-action="(choose-hyb|choose-fasta|open-files|open-help|open-privacy|start-over|clear-session|load-example)"/, "shell actions"],
+    [/data-action="(choose-hyb|choose-fasta|open-files|open-help|open-display|open-privacy|start-over|clear-session|load-example)"/, "shell actions"],
     [/data-feature-action="(choose-fasta|choose-comparison-files|replace-hyb)"/, "upload actions"],
     [/data-page="(validation|methods|file-format|privacy)"/, "help pages"],
     [/Tweaks/, "display tweaks"]

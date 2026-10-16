@@ -216,14 +216,22 @@
       }
 
       const general = [
-        { label: "Open files", action: "open-files" },
-        { label: "Help", action: "open-help" },
-        { label: "Privacy model", action: "open-privacy" },
-        { label: "Clear session…", action: "clear-session" }
+        { label: "Data and files", action: "open-files" },
+        { label: "Help for this page", action: "open-help" },
+        { label: "Display settings", action: "open-display" },
+        { label: "Privacy", action: "open-privacy" },
+        { label: "Start over…", action: "start-over", fallback: "open-files" }
       ];
       general.forEach(function (entry) {
-        if (app && app.querySelector('[data-action="' + entry.action + '"]')) {
-          out.push({ group: "General", label: entry.label, hint: "", icon: "action", run: function () { clickAction('[data-action="' + entry.action + '"]'); } });
+        // Start over lives in the Data panel: open it, then ask.
+        const opener = app && (app.querySelector('[data-action="' + entry.action + '"]') ? entry.action : entry.fallback && app.querySelector('[data-action="' + entry.fallback + '"]') ? entry.fallback : null);
+        if (opener) {
+          out.push({ group: "General", label: entry.label, hint: "", icon: "action", run: function () {
+            clickAction('[data-action="' + opener + '"]');
+            if (opener !== entry.action) {
+              window.requestAnimationFrame(function () { clickAction('[data-action="' + entry.action + '"]'); });
+            }
+          } });
         }
       });
       out.push({
@@ -231,7 +239,12 @@
         label: root.dataset.theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
         hint: "",
         icon: "theme",
-        run: function () { clickAction('[data-action="toggle-theme"]'); }
+        // the theme switch lives in the Display panel
+        run: function () {
+          if (!clickAction('[data-action="toggle-theme"]') && clickAction('[data-action="open-display"]')) {
+            window.requestAnimationFrame(function () { clickAction('[data-action="toggle-theme"]'); });
+          }
+        }
       });
       out.push({
         group: "General",
@@ -783,14 +796,13 @@
     }
   }, true);
 
-  // Tweaks and the record drawer are not dialogs, and the render that
-  // opens or closes them replaces the button that was clicked, so focus
-  // would fall to <body>. Put it on the matching control in the new tree:
-  // the panel's close button on open, the opener on close.
+  // The record drawer is not a dialog, and the render that opens or closes
+  // it replaces the row that was clicked, so focus would fall to <body>.
+  // Put it back on the matching row in the new tree.
   let openedRecord = null;
 
   function closePanelButton() {
-    return app && app.querySelector('.record-drawer [data-feature-action="close-record"], .tweaks-panel [data-action="toggle-tweaks"]');
+    return app && app.querySelector('.record-drawer [data-feature-action="close-record"]');
   }
 
   function focusAfterRender(selector) {
@@ -805,19 +817,15 @@
   // Capture phase: read the clicked control before the render replaces it
   // (and motion.js strips the old copy for its exit animation).
   document.addEventListener("click", function (event) {
-    const control = event.target.closest && event.target.closest('[data-action="toggle-tweaks"], [data-feature-action="open-record"], [data-feature-action="close-record"]');
+    const control = event.target.closest && event.target.closest('[data-feature-action="open-record"], [data-feature-action="close-record"]');
     if (!control) {
       return;
     }
     if (control.matches('[data-feature-action="open-record"]')) {
       openedRecord = control.getAttribute("data-record-index");
       focusAfterRender('.virtual-row[data-record-index="' + openedRecord + '"]');
-    } else if (control.matches('[data-feature-action="close-record"]')) {
-      focusAfterRender(openedRecord !== null ? '.virtual-row[data-record-index="' + openedRecord + '"]' : ".interaction-table-card");
-    } else if (control.closest(".tweaks-panel")) {
-      focusAfterRender(".tweaks-trigger");
     } else {
-      focusAfterRender('.tweaks-panel [data-action="toggle-tweaks"]');
+      focusAfterRender(openedRecord !== null ? '.virtual-row[data-record-index="' + openedRecord + '"]' : ".interaction-table-card");
     }
   }, true);
 

@@ -905,3 +905,12 @@
     max-width: 720px;
   }
 }
+
+/* The right-hand drawer slides; centred dialogs keep dialog-in. */
+.pop-layer.drawer-layer.is-appearing .dialog {
+  animation: drawer-in var(--dur-move) var(--ease-out) both, fade var(--dur-quick) var(--ease-out) both;
+}
+
+.pop-layer.drawer-layer.is-leaving .dialog {
+  animation: drawer-out var(--dur-exit) var(--ease-in) both, fade-out var(--dur-exit) var(--ease-in) both;
+}

@@ -59,6 +59,11 @@ var ProjectOperations = []string{
 	"read_comparison",
 	"set_reference_annotation",
 	"read_annotation",
+	// Panels of a Compare test: enriched regions' local structures
+	// (desktop/runtime/regions.py) and the folding-energy result
+	// (desktop/runtime/energy.py; computed by an `energy` task).
+	"structure_regions",
+	"read_energy",
 	// Files a project links outside its folder (desktop/runtime/trust.py).
 	"list_untrusted_links",
 	"trust_links",

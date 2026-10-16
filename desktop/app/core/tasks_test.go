@@ -198,6 +198,7 @@ func TestClaimsHaveKindDefaultsAndBoundedOverrides(t *testing.T) {
 		"cplfold":          {1, 2048},
 		"validate_project": {1, 256},
 		"analysis_index":   {1, 1024},
+		"energy":           {1, 1024},
 	} {
 		if got := claim(TaskStartRequest{Kind: kind}); got != want {
 			t.Fatalf("%s: %v", kind, got)
@@ -410,5 +411,31 @@ func TestListMarksStaleRunningAsInterrupted(t *testing.T) {
 	}
 	if _, err := s.List(t.TempDir()); err == nil {
 		t.Fatal("listed a directory without project.json")
+	}
+}
+
+func TestEnergyRequestsAreValidated(t *testing.T) {
+	run := "/p/runs/a"
+	good := TaskStartRequest{ProjectPath: "/p", Kind: "energy", ComparisonID: ptr("compare-1"),
+		Parameters: map[string]any{"length": 40, "padj": 0.01}}
+	if idPrefix("energy") != "energy-" {
+		t.Fatal("prefix")
+	}
+	payload, err := TaskPayload(good, "/p", "a", run, big())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, payload, `{"operation":"energy_run","project_path":"/p","comparison_id":"compare-1",
+		"parameters":{"length":40,"padj":0.01},"task_id":"a","run_dir":"/p/runs/a"}`)
+	for i, edit := range []func(*TaskStartRequest){
+		func(r *TaskStartRequest) { r.ComparisonID = nil },
+		func(r *TaskStartRequest) { r.ComparisonID = ptr("../x") },
+		func(r *TaskStartRequest) { r.Parameters = "40" },
+	} {
+		request := good
+		edit(&request)
+		if _, err := TaskPayload(request, "/p", "a", run, big()); err == nil {
+			t.Fatalf("bad request %d accepted", i)
+		}
 	}
 }

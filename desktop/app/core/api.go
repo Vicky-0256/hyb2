@@ -30,8 +30,10 @@ type TaskStartRequest struct {
 	Workers     *uint32  `json:"workers,omitempty"`
 	SamplesOne  []string `json:"samples_one,omitempty"`
 	SamplesTwo  []string `json:"samples_two,omitempty"`
-	CPU         *uint32  `json:"cpu,omitempty"`
-	MemMB       *uint64  `json:"mem_mb,omitempty"`
+	// ComparisonID names the Compare test of an energy task.
+	ComparisonID *string `json:"comparison_id,omitempty"`
+	CPU          *uint32 `json:"cpu,omitempty"`
+	MemMB        *uint64 `json:"mem_mb,omitempty"`
 }
 
 // Backend is everything the native UI asks of the shell: one method per

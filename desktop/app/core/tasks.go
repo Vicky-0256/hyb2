@@ -38,6 +38,7 @@ var TaskKinds = []string{
 	"analysis_index",
 	"structure",
 	"compare",
+	"energy",
 }
 
 var activeStates = []string{"queued", "running"}
@@ -330,6 +331,8 @@ func DefaultClaim(kind string, budget Budget) Budget {
 		claim = Budget{1, 1024}
 	case "compare":
 		claim = Budget{budget.CPU, 3072}
+	case "energy":
+		claim = Budget{1, 1024}
 	default:
 		claim = Budget{1, 256}
 	}
@@ -389,6 +392,8 @@ func idPrefix(kind string) string {
 		return "structure-"
 	case "compare":
 		return "compare-"
+	case "energy":
+		return "energy-"
 	}
 	return ""
 }
@@ -1220,6 +1225,24 @@ func comparePayload(request TaskStartRequest, project, id, runDir string) (Obj, 
 	}, nil
 }
 
+func energyPayload(request TaskStartRequest, project, id, runDir string) (Obj, error) {
+	comparison, err := required(request.ComparisonID, "energy comparison_id is required")
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateID(comparison); err != nil {
+		return nil, fmt.Errorf("energy comparison_id: %w", err)
+	}
+	parameters, err := objectParameters(request)
+	if err != nil {
+		return nil, err
+	}
+	return Obj{
+		"operation": "energy_run", "project_path": project, "comparison_id": comparison,
+		"parameters": parameters, "task_id": id, "run_dir": runDir,
+	}, nil
+}
+
 // TaskPayload builds the allowlisted child request for request.Kind.
 func TaskPayload(request TaskStartRequest, project, id, runDir string, claim Budget) (Obj, error) {
 	switch request.Kind {
@@ -1263,6 +1286,8 @@ func TaskPayload(request TaskStartRequest, project, id, runDir string, claim Bud
 		return structurePayload(request, project, id, runDir, claim)
 	case "compare":
 		return comparePayload(request, project, id, runDir)
+	case "energy":
+		return energyPayload(request, project, id, runDir)
 	}
 	return nil, errors.New(unsupportedKind)
 }

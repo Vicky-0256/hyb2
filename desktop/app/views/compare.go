@@ -9,6 +9,10 @@ package views
 // An interaction can be located on Explore's contact map, opened in Region,
 // or folded once with A's and once with B's evidence ("Fold A & B").
 //
+// Under a test, compare_panels.go adds its enriched regions' local
+// structures (structure_regions) and the folding energy of its interactions
+// (an `energy` task, read_energy).
+//
 // "Quick view" is the descriptive comparison: the `compare_bins` query
 // (library-size normalised, no statistics).
 //
@@ -235,6 +239,9 @@ type comparePage struct {
 
 	foldOpen bool
 	fold     cmpFoldPlan
+
+	// panels of the selected test (compare_panels.go)
+	panels cmpPanels
 }
 
 func newComparePage(a *App) *comparePage {
@@ -267,6 +274,7 @@ func (p *comparePage) reset() {
 	p.quick.heatKey, p.quick.rowsKey = "", ""
 	p.foldOpen = false
 	p.runMsg = ""
+	p.panels.reset()
 }
 
 func (p *comparePage) Show() {
@@ -1039,6 +1047,8 @@ func (p *comparePage) results(c *ui.Context) {
 		})
 	})
 	p.similarityCard(c, e, result, ctx)
+	p.regionsCard(c.Key("cmp-regions"), e, ctx)
+	p.energyCard(c.Key("cmp-energy"), e, ctx)
 }
 
 // similarityCard shows HYB2's similarity heatmap of the test's two groups.

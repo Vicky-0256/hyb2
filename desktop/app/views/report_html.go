@@ -69,8 +69,10 @@ type reportTest struct {
 	CellsTotal int64
 	// SimCells is the similarity heatmap read (nil for tests made before it).
 	SimCells []widgets.Cell
-	Length   int
-	Err      string
+	// Energy is the test's folding-energy result (nil when not computed).
+	Energy *energyResult
+	Length int
+	Err    string
 }
 
 type reportStructure struct {
@@ -400,6 +402,25 @@ func (x *reportTest) similarityFigure(id string) (template.HTML, string) {
 	return template.HTML(svg), caption //nolint:gosec // generated and escaped by heatSVG
 }
 
+// energyFigure is the folding-energy violins of both directions.
+func (x *reportTest) energyFigure() (template.HTML, string) {
+	r := x.Energy
+	if r == nil || r.Summary == nil || r.Rows == nil {
+		return "", ""
+	}
+	labels := [2]string{x.LabelA, x.LabelB}
+	svg := energySVG(r, labels, fmt.Sprintf("Folding energy of enriched interactions (2 × %d nt)", r.Summary.Parameters.Length))
+	var parts []string
+	for side := range 2 {
+		st := r.Summary.Sides[energySides[side]]
+		parts = append(parts, fmt.Sprintf("enriched in %s: n = %s, mean dG %s %s vs %s %s kcal/mol, paired t-test p = %s", labels[side],
+			FormatNumber(int64(st.N)), labels[0], formatFloat(st.MeanOne, "%.2f"), labels[1], formatFloat(st.MeanTwo, "%.2f"), formatP(st.P)))
+	}
+	caption := fmt.Sprintf("RNAcofold dG of 2 × %d nt around the arms of each interaction with padj < %g, in %s's sequence and in %s's at the aligned positions; ",
+		r.Summary.Parameters.Length, r.Summary.Parameters.Padj, x.LabelA, x.LabelB) + strings.Join(parts, "; ") + "."
+	return template.HTML(svg), caption //nolint:gosec // generated and escaped by energySVG
+}
+
 func (s *reportStructure) figure(id string) (template.HTML, string) {
 	if len(s.Arcs) == 0 {
 		return "", ""
@@ -413,11 +434,13 @@ func (s *reportStructure) figure(id string) (template.HTML, string) {
 
 type reportHTMLTest struct {
 	*reportTest
-	Figure     template.HTML
-	Caption    string
-	SimFigure  template.HTML
-	SimCaption string
-	Table      reportTableData
+	Figure        template.HTML
+	Caption       string
+	SimFigure     template.HTML
+	SimCaption    string
+	EnergyFigure  template.HTML
+	EnergyCaption string
+	Table         reportTableData
 }
 
 type reportHTMLStructure struct {
@@ -442,8 +465,9 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		x := &d.Tests[i]
 		fig, caption := x.figure(fmt.Sprintf("test%d", i+1))
 		simFig, simCaption := x.similarityFigure(fmt.Sprintf("test%dsim", i+1))
+		energyFig, energyCaption := x.energyFigure()
 		view.TestDetails = append(view.TestDetails, reportHTMLTest{reportTest: x, Figure: fig, Caption: caption,
-			SimFigure: simFig, SimCaption: simCaption, Table: x.topTable()})
+			SimFigure: simFig, SimCaption: simCaption, EnergyFigure: energyFig, EnergyCaption: energyCaption, Table: x.topTable()})
 	}
 	for i := range d.Structures {
 		s := &d.Structures[i]
@@ -568,6 +592,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 {{if .Table.Rows}}<div class="table"><p class="meta">Top {{len .Table.Rows}} merged interactions by padj</p>{{template "rows" .Table}}</div>{{else}}<p class="muted">No significant interaction.</p>{{end}}
 </div>
 {{if .SimFigure}}<div class="cols"><figure>{{.SimFigure}}<figcaption>{{.SimCaption}}</figcaption></figure></div>{{end}}
+{{if .EnergyFigure}}<figure>{{.EnergyFigure}}<figcaption>{{.EnergyCaption}}</figcaption></figure>{{end}}
 </div>
 {{end}}{{else}}<p class="muted">No differential test has been run.</p>{{end}}
 </section>

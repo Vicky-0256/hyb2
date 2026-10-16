@@ -373,6 +373,18 @@ def _sample_ops_inner(operation: str, request: dict[str, Any], repo_root: Path |
             raise ValueError("comparison_id is required")
         limit = request.get("limit", 250_000)
         return {"ok": True, "path": str(path), **read_comparison(path, comparison_id, limit=limit)}
+    if operation == "structure_regions":
+        # Local structures of two lineage-enriched regions (desktop/runtime/regions.py).
+        from .regions import structure_regions
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), **structure_regions(path, request)}
+    if operation == "read_energy":
+        from .energy import read_energy
+        path = _valid_project(request)
+        comparison_id = request.get("comparison_id")
+        if not isinstance(comparison_id, str) or not comparison_id:
+            raise ValueError("comparison_id is required")
+        return {"ok": True, "path": str(path), **read_energy(path, comparison_id, request.get("length"))}
     if operation == "check_inputs":
         path = _valid_project(request)
         return {"ok": True, "path": str(path), **_samples.check_inputs(path)}
@@ -571,6 +583,10 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         # Two-condition DESeq2 comparison of contact maps (desktop/runtime/compare.py).
         from .compare import compare_run
         return compare_run(request, repo_root)
+    if operation == "energy_run":
+        # RNAcofold energies of a test's enriched interactions (desktop/runtime/energy.py).
+        from .energy import energy_run
+        return energy_run(request)
     sample_result = _sample_ops(str(operation), request, repo_root)
     if sample_result is not None:
         return sample_result

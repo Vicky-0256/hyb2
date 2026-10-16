@@ -554,7 +554,10 @@
     }
   }
 
-  function render() {
+  // options.immediate: draw now with the data on hand (and again when the
+  // rest arrives), for changes that only concern the page itself, such as
+  // the Report page's step selection and export panel
+  function render(options) {
     if (!app) {
       return;
     }
@@ -568,7 +571,7 @@
       });
       // Keep the current page on screen while its data refreshes instead of
       // flashing placeholders (provider calls are async even in the browser).
-      if (renderedPage && renderedPage === state.activePage) {
+      if (renderedPage && renderedPage === state.activePage && !(options && options.immediate)) {
         app.classList.add("is-refreshing-data");
         return;
       }
@@ -1501,7 +1504,7 @@
     if (action === "report-export-close") {
       state.reportExport = null;
       reportExportCache = null;
-      render();
+      render(REPORT_NOW);
       return;
     }
 
@@ -1530,7 +1533,7 @@
       }
       reportExportCache = null;
       state.reportExport = null;
-      render();
+      render(REPORT_NOW);
       return;
     }
 
@@ -2870,6 +2873,8 @@
 
   // ---- Report exports: files built from one result record (results.js)
 
+  const REPORT_NOW = { immediate: true };
+
   let reportExportCache = null;
   let reportExportSession = 0;
 
@@ -2908,7 +2913,7 @@
     const session = reportExportSession;
     reportExportCache = null;
     state.reportExport = { audience: audience, status: audience === "people" ? "ready" : "preparing", list: [], error: "" };
-    render();
+    render(REPORT_NOW);
     if (audience === "people") {
       return;
     }
@@ -2919,14 +2924,14 @@
       reportExportCache = { audience: audience, record: record, exclude: {} };
       state.reportExport.status = "ready";
       state.reportExport.list = listReportFiles(reportExportCache);
-      render();
+      render(REPORT_NOW);
     }).catch(function (error) {
       if (session !== reportExportSession || !state.reportExport) {
         return;
       }
       state.reportExport.status = "error";
       state.reportExport.error = error && error.message ? error.message : "The export could not be prepared.";
-      render();
+      render(REPORT_NOW);
     });
   }
 
@@ -2936,7 +2941,7 @@
     }
     reportExportCache.exclude[path] = !reportExportCache.exclude[path];
     state.reportExport.list = listReportFiles(reportExportCache);
-    render();
+    render(REPORT_NOW);
   }
 
   function downloadReportZip() {

@@ -330,6 +330,11 @@ const appSource = fs.readFileSync(web("app.js"), "utf8");
 });
 const handlers = appSource.slice(appSource.indexOf('if (action === "report-export")'), appSource.indexOf('if (action === "report-export-html")'));
 assert.doesNotMatch(handlers, /\belement\./, "the click handler's node is actionNode");
+// report-only actions draw at once: render() otherwise keeps the old page
+// while any prefetched page data is still loading, and the click looks lost
+const selectHandler = appSource.slice(appSource.indexOf('if (action === "report-select" || action === "report-select-all")'));
+assert.match(selectHandler.slice(0, selectHandler.indexOf("return;\n    }")), /render\(REPORT_NOW\)/, "step selection redraws immediately");
+assert.match(appSource, /&& !\(options && options\.immediate\)\) \{/, "render() honours options.immediate");
 assert.match(fs.readFileSync(web("index.html"), "utf8"), /src="\.\/results\.js"[^]*src="\.\/report-page\.js"/, "index.html loads results.js before report-page.js");
 
 async function main() {

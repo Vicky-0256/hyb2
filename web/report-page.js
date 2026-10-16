@@ -5,6 +5,7 @@
   const MAX_TABLE_ROWS = 12;
   const MAX_DATASET_ROWS = 15;
   const MAX_VISUAL_CELLS = 4200;
+  const SIMILARITY_GREY_PANEL = "#ebebeb"; // ggplot2 theme_grey panel
   const MAX_VISUAL_BINS = 180;
   const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
@@ -444,7 +445,8 @@
       binSize: comparison.binSize || "",
       measure: comparison.measure || "records",
       normalise: comparison.normalise || "library",
-      similarityMinimum: comparison.similarityMinimum || "1"
+      similarityMinimum: comparison.similarityMinimum || "1",
+      similarityPanel: comparison.similarityPanel === "grey" ? "grey" : "white"
     });
     const datasetRows = datasets.slice(0, MAX_DATASET_ROWS).map(function (dataset) {
       const summary = dataset.summary || {};
@@ -811,7 +813,7 @@
     return [
       '<svg class="report-svg report-heatmap-svg" viewBox="0 0 760 360" role="img" aria-label="Printable comparison map">',
       '<title>' + escape(mode === "conserved" ? "Similarity heatmap" : "Mean log2 comparison effect") + '</title>',
-      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="#c2d3db"></rect>',
+      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="' + (mode !== "conserved" ? "#f7fafb" : comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff") + '" stroke="#c2d3db"></rect>',
       rects,
       '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 24) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xStart)) + '</text>',
       '<text x="' + (plotLeft + plotWidth) + '" y="' + (plotTop + plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xEnd - 1)) + '</text>',

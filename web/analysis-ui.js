@@ -1034,8 +1034,9 @@
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
-    // the similarity heatmap keeps similarity_heatmap.R's white panel
-    context.fillStyle = kind === "conserved" && !isDarkTheme() ? "#ffffff" : line;
+    // the similarity heatmap keeps similarity_heatmap.R's white panel, or
+    // ggplot's grey one so that bins at the smallest count show
+    context.fillStyle = kind === "conserved" && !isDarkTheme() ? similarityPanelColor(state.comparison) : line;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
     if (kind === "conserved" && !isDarkTheme()) {
       context.strokeStyle = line;
@@ -1311,6 +1312,12 @@
       return true;
     }
 
+    if (feature === "comparison-display" && state.comparison) {
+      state.comparison[key] = element.value;
+      api.render();
+      return true;
+    }
+
     if (feature === "comparison-dataset") {
       const datasetId = element.dataset.datasetId;
       const dataset = (state.comparison.datasets || []).find(function (item) { return item.id === datasetId; });
@@ -1430,6 +1437,10 @@
       state.comparison[key] = element.value;
       state.comparison.result = null;
       state.comparison.selection = null;
+      return true;
+    }
+    if (feature === "comparison-display" && state.comparison) {
+      state.comparison[key] = element.value;
       return true;
     }
     if (feature === "comparison-dataset" && state.comparison) {
@@ -2404,6 +2415,7 @@
         normalisation: normalise,
         pseudocount: normalise === "per-million-library-size" ? 1 : 0.5,
         similarityMinimum: Number(comparison.similarityMinimum) > 1 ? Number(comparison.similarityMinimum) : 1,
+        similarityPanel: comparison.similarityPanel === "grey" ? "grey (#EBEBEB, display only)" : "white (as similarity_heatmap.R)",
         similarityMethod: "HYB2 plot_similarity_map on one merged raw map per condition (as Desktop differential.py; not hyb2_compare's consecutive replicate pairing): min(A, B) of bins present in both; similarityMinimum = awk $3 >= MIN on each merged map",
         similarityColourScale: "similarity_heatmap.R: counts capped at the 95% quantile, white at the smallest plotted count to forestgreen at the cap"
       },
@@ -2578,6 +2590,10 @@
   // scale_fill_gradient(low = white, high = forestgreen) over the data range,
   // so white is the smallest plotted count (not zero) and forestgreen the cap.
   // A single-valued range maps to the midpoint, like scales::rescale().
+  function similarityPanelColor(comparison) {
+    return comparison && comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff";
+  }
+
   function conservedRatio(similarity, result) {
     const cap = Math.max(1, Number(result && result.similarityCap) || 1);
     const floor = Math.min(cap, similarityFloorOf(result));
@@ -2613,6 +2629,7 @@
   }
 
   const LAB_WHITE = [0.95047, 1, 1.08883];
+  const SIMILARITY_GREY_PANEL = "#ebebeb"; // ggplot2 theme_grey panel
 
   function srgbToLab(rgb) {
     const linear = rgb.map(function (channel) {
@@ -2716,6 +2733,7 @@
     visualExportReady: visualExportReady,
     moveComparisonSelection: moveComparisonSelection,
     conservedRatio: conservedRatio,
+    similarityPanelColor: similarityPanelColor,
     conservedColor: conservedColor,
     foldRequest: foldRequest
   };

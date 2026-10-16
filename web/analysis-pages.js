@@ -470,6 +470,11 @@
         { value: "1", label: "Every shared bin (HYB2 default)" }, { value: "2", label: "≥ 2 per condition" }, { value: "5", label: "≥ 5 per condition" },
         { value: "10", label: "≥ 10 per condition" }, { value: "20", label: "≥ 20 per condition" }, { value: "30", label: "≥ 30 per condition" }, { value: "50", label: "≥ 50 per condition" }
       ], "comparison-control"),
+      // display only: bins at the smallest count are white, as in R, and
+      // vanish on R's white panel; the grey panel (ggplot's theme_grey) shows them
+      renderSelectControl("Similarity panel", "similarityPanel", comparison.similarityPanel || "white", [
+        { value: "white", label: "White (as similarity_heatmap.R)" }, { value: "grey", label: "Light grey (shows bins at the minimum)" }
+      ], "comparison-display"),
       '</div>',
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><button class="quiet-button" type="button" data-feature-action="comparison-export-tsv">Export comparison TSV</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-counts">Export HYB2 count table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-hyb2-names">Export HYB2 names.table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-metadata">Export extended metadata</button><button class="quiet-button" type="button" data-feature-action="comparison-export-params">Export parameters</button></div>',
       '<p class="card-note">Use the headerless HYB2 names.table with the legacy CLI. Extended metadata has a header and additional provenance columns for audit or custom native-R workflows.</p>',
@@ -478,7 +483,7 @@
         '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Similarity bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
         '<section class="comparison-map-grid">',
         renderComparisonMap("effect", "Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal', result),
-        renderComparisonMap("conserved", "Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ").", result),
+        renderComparisonMap("conserved", "Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ")" + (comparison.similarityPanel === "grey" ? " on a grey panel." : "; on R's white panel the smallest bins do not show (choose the grey panel to see them)."), result),
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
         comparison.showDataTable ? renderComparisonDataTable(result, comparison) : '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Open comparison data table</button></div>'

@@ -266,6 +266,7 @@
       measure: "records",
       normalise: "library",
       similarityMinimum: "1",
+      similarityPanel: "white",
       conditionALabel: "Condition A",
       conditionBLabel: "Condition B",
       result: null,

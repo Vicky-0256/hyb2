@@ -191,6 +191,12 @@ assert.doesNotMatch(html, />undefined</, "report markup must not expose undefine
 // midpoint of the white-to-forestgreen CIELAB ramp, like scales::rescale.
 assert.match(html, /fill="rgb\(153, 197, 143\)"><title>[^<]*; similarity 1</,
   "the similarity heatmap must use similarity_heatmap.R's data-range colour scale");
+// the similarity panel is R's white unless the grey display panel is chosen
+const similaritySvg = function (markup) { return markup.slice(markup.lastIndexOf('<svg class="report-svg report-heatmap-svg"')); };
+assert.match(similaritySvg(html), /<rect x="52" y="24" width="650" height="300" fill="#ffffff"/, "white similarity panel by default");
+state.comparison.similarityPanel = "grey";
+assert.match(similaritySvg(report.render(state)), /<rect x="52" y="24" width="650" height="300" fill="#ebebeb"/, "grey similarity panel");
+delete state.comparison.similarityPanel;
 
 const data = report.getData(state);
 assert.equal(data.application, "HYB2 Web Lite");

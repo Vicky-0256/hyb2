@@ -210,6 +210,20 @@ assert.equal(context.window.Hyb2UI.conservedRatio(4, { similarityCap: 8, conserv
 assert.equal(context.window.Hyb2UI.conservedColor(0), "rgb(255, 255, 255)");
 assert.equal(context.window.Hyb2UI.conservedColor(1), "rgb(34, 139, 34)");
 assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "the ramp interpolates in CIELAB");
+// The panel behind the similarity heatmap is display only: R's white by
+// default, ggplot's grey on request; changing it keeps the computed result.
+assert.equal(context.window.Hyb2UI.similarityPanelColor({}), "#ffffff");
+assert.equal(context.window.Hyb2UI.similarityPanelColor({ similarityPanel: "grey" }), "#ebebeb");
+assert.match(comparisonReport.parameters.similarityPanel, /^white/);
+{
+  const displayState = { comparison: { similarityPanel: "white", result: { ready: true }, selection: { x: 1, y: 1 } } };
+  let rendered = 0;
+  const handled = context.window.Hyb2UI.handleChange(displayState, { dataset: { feature: "comparison-display", key: "similarityPanel" }, value: "grey" }, { render: function () { rendered += 1; } });
+  assert.equal(handled, true);
+  assert.equal(displayState.comparison.similarityPanel, "grey");
+  assert.ok(displayState.comparison.result && displayState.comparison.selection, "the panel colour does not drop the result");
+  assert.equal(rendered, 1);
+}
 assert.equal(comparisonReport.methodScope.webRBaseRuntimeSmoke, "recorded-manual-pass");
 assert.equal(comparisonReport.methodScope.webRRuntimeValidated, false);
 assert.equal(comparisonReport.methodScope.webRRuntimeVendored, false);

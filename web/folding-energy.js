@@ -124,9 +124,9 @@
     const se = sd(d) / Math.sqrt(n);
     const df = n - 1;
     const out = { n: n, meanOne: mean(one), meanTwo: mean(two), meanDiff: md, t: NaN, df: df, p: NaN };
-    if (n > 1 && !(se > 10 * Number.EPSILON * Math.abs(md))) {
+    if (n > 1 && se < 10 * Number.EPSILON * Math.abs(md)) {
       out.note = "differences are constant";
-    } else if (n > 1) {
+    } else if (n > 1 && se > 0) {
       out.t = md / se;
       out.p = tTwoSided(out.t, df);
     }

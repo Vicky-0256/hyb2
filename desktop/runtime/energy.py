@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -101,14 +102,15 @@ def paired_t_test(one: Sequence[float], two: Sequence[float]) -> Optional[Dict[s
     mean = math.fsum(diff) / n
     var = math.fsum((d - mean) ** 2 for d in diff) / (n - 1)
     se = math.sqrt(var / n)
-    if se == 0:
-        if mean == 0:
-            return None
-        t = math.copysign(math.inf, mean)
-    else:
-        t = mean / se
-    return {"n": n, "mean_dG_one": math.fsum(one) / n, "mean_dG_two": math.fsum(two) / n,
-            "mean_diff_one_minus_two": mean, "t": t, "df": n - 1, "p": t_two_sided(t, n - 1)}
+    out = {"n": n, "mean_dG_one": math.fsum(one) / n, "mean_dG_two": math.fsum(two) / n,
+           "mean_diff_one_minus_two": mean, "t": math.nan, "df": n - 1, "p": math.nan}
+    if se < 10 * sys.float_info.epsilon * abs(mean):
+        # where R stops with "data are essentially constant"
+        out["note"] = "differences are constant"
+    elif se > 0:
+        out["t"] = mean / se
+        out["p"] = t_two_sided(out["t"], n - 1)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +284,7 @@ def _energy_run(request: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any
 
 def _json_safe(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
-        return None  # an infinite t (constant non-zero differences) is reported with p = 0
+        return None
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}
     if isinstance(value, list):

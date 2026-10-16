@@ -62,10 +62,14 @@ class TTestTests(unittest.TestCase):
 
     def test_degenerate_samples(self):
         self.assertIsNone(energy.paired_t_test([1.0], [2.0]))
-        self.assertIsNone(energy.paired_t_test([1.0, 2.0], [1.0, 2.0]))
-        constant = energy.paired_t_test([1.0, 2.0], [0.0, 1.0])
-        self.assertTrue(math.isinf(constant["t"]))
-        self.assertEqual(constant["p"], 0.0)
+        # R: all-zero differences give t and p NaN; constant non-zero ones stop
+        # with "data are essentially constant"
+        zero = energy.paired_t_test([1.0, 2.0], [1.0, 2.0])
+        self.assertTrue(math.isnan(zero["t"]) and math.isnan(zero["p"]))
+        self.assertNotIn("note", zero)
+        constant = energy.paired_t_test([1.0, 2.0, 3.0, 4.0], [0.0, 1.0, 2.0, 3.0])
+        self.assertTrue(math.isnan(constant["t"]) and math.isnan(constant["p"]))
+        self.assertEqual(constant["note"], "differences are constant")
 
     def test_fragment_bounds(self):
         seq = "ACGU" * 10

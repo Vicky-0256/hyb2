@@ -115,9 +115,15 @@ func TestReportPageSections(t *testing.T) {
 	tt.Frame()
 	tt.Frame()
 	snapshot(t, tt, "report-narrow")
+	if !tt.HasText(reportScrollHint) {
+		t.Fatalf("narrow report has no scroll hint: %q", tt.Texts())
+	}
 	tt.SetSize(1100, 2600)
 	tt.Frame()
 	tt.Frame()
+	if tt.HasText(reportScrollHint) {
+		t.Fatalf("wide report still shows the scroll hint")
+	}
 	if !tt.HasText("Type 2 55.0%, Type 1 43.2%, Type 7 1.3%") {
 		t.Fatalf("types: %q", tt.Texts())
 	}

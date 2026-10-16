@@ -715,7 +715,9 @@
       }
       const reduced = motionReduced();
       const elapsed = reduced ? 1e9 : now - born;
-      const dt = lastFrame ? Math.min(64, now - lastFrame) : 16;
+      // a frame stamp before the last one (a timer restarted on navigation) is
+      // no time at all: a negative dt would grow the ripples past their size
+      const dt = lastFrame ? Math.max(0, Math.min(64, now - lastFrame)) : 16;
       lastFrame = now;
       const g = geometry();
 

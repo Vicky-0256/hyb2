@@ -26,6 +26,7 @@ on:
       - "scripts/verify-region-panels.cjs"
       - "scripts/verify-folding-energy.cjs"
       - "scripts/verify-example.cjs"
+      - "scripts/verify-results.cjs"
       - "scripts/webr-smoke/**"
       - "third_party/cplfold/**"
       - ".github/workflows/deploy-pages.yml"
@@ -84,6 +85,7 @@ jobs:
           node scripts/verify-motion-contract.cjs
           node scripts/verify-evidence.cjs
           node scripts/verify-report-render.cjs
+          node scripts/verify-results.cjs
           node scripts/verify-deseq.cjs
           node scripts/verify-arc-map.cjs
           node scripts/verify-region-panels.cjs

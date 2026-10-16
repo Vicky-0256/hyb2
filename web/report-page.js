@@ -14,7 +14,9 @@
     return [
       '<article class="report-page" data-report-page>',
       renderHero(context),
+      renderExportPanel(context, state),
       renderSummary(context),
+      renderResultsIndex(context),
       renderReviewChecks(context),
       renderSource(context),
       renderValidation(context),
@@ -86,13 +88,18 @@
       reportState.comparison.result = { ready: false, cells: [], conservedCells: [], reason: reportState.comparison.loading ? "Finish parsing the selected local datasets before generating or exporting a comparison." : "Comparison is still being prepared for the report snapshot." };
     }
 
+    const generatedAt = new Date().toISOString();
+    // the result record (results.js) gives every status and key number the
+    // report shows, and the exports read the same record
+    const record = window.Hyb2Results ? safeCall(function () { return window.Hyb2Results.build(source, { generatedAt: generatedAt }); }, null) : null;
     return {
       state: reportState,
+      record: record,
       filteredTotal: prepared ? number(prepared.filteredTotal) : 0,
       filteredRecords: prepared && Array.isArray(prepared.filteredSample) ? prepared.filteredSample : [],
       partnerCounts: prepared && Array.isArray(prepared.partnerCounts) ? prepared.partnerCounts : [],
       derived: derived,
-      generatedAt: new Date().toISOString()
+      generatedAt: generatedAt
     };
   }
 
@@ -109,7 +116,12 @@
       "    </div>",
       '    <div class="report-actions" aria-label="Report actions">',
       '      <button class="button" type="button" data-action="print-report">Print / Save PDF</button>',
-      '      <button class="button button-secondary" type="button" data-action="download-full-report">Download report data</button>',
+      '      <div class="report-export-menu" role="group" aria-label="Export">',
+      '        <span class="report-export-label">Export</span>',
+      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="people">For people</button>',
+      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="ai">For AI</button>',
+      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="analysis">For further analysis</button>',
+      "      </div>",
       '      <button class="quiet-button" type="button" data-action="navigate" data-page="overview">Back to workspace</button>',
       "    </div>",
       "  </div>",
@@ -117,7 +129,8 @@
       '    <span class="report-kicker">Local session snapshot</span>',
       '    <h1>Analysis report</h1>',
       '    <p class="report-lede">A print-ready view of the current HYB2 workspace, including configured analyses, generated results, selected intervals, and reproducibility details.</p>',
-      '    <div class="report-hero-meta"><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> <code>' + escape(formatTimestamp(context.generatedAt)) + '</code></span><span class="report-status is-ready">Processed locally</span></div>',
+      '    <div class="report-hero-meta"><span><strong>Scope</strong> ' + escape(context.record ? context.record.scope.label : "Session report") + '</span><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> <code>' + escape(formatTimestamp(context.generatedAt)) + '</code></span><span><strong>Version</strong> <code>HYB2 Web Lite ' + escape(REPORT_VERSION) + (window.HYB2_BUILD && window.HYB2_BUILD.commit ? " · " + escape(String(window.HYB2_BUILD.commit).slice(0, 12)) : "") + '</code></span><span class="report-status is-ready">Processed locally</span></div>',
+      context.record ? '    <p class="report-scope-note">' + escape(context.record.scope.description) + "</p>" : "",
       "  </div>",
       '  <p class="report-print-note">Use your browser\'s Print dialog and choose <strong>Save as PDF</strong>. The report is generated in this tab and no data is uploaded.</p>',
       "</header>"
@@ -312,7 +325,7 @@
       "interactions",
       "Interactions",
       "Filtered record view",
-      '<span class="report-status is-ready">' + formatNumber(total) + " matches</span>",
+      stepBadge(context, "interactions", formatNumber(total) + " matches"),
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Current filters</h3>' + (filterEntries.length ? definitionList(filterEntries) : '<div class="report-empty">No additional filters; all valid records are included.</div>') + '</div>',
@@ -365,11 +378,7 @@
       homodimerSubset: contact.homodimer || "all"
     });
     const ready = !!(matrix && matrix.ready !== false && Array.isArray(matrix.cells) && matrix.cells.length);
-    const status = matrix && matrix.limitExceeded
-      ? '<span class="report-status is-warning">Limit reached</span>'
-      : ready
-      ? '<span class="report-status is-ready">Generated</span>'
-      : '<span class="report-status is-pending">Configured</span>';
+    const status = stepBadge(context, "contact_map");
     const selectedCell = findMatrixCell(matrix, contact.selection);
     const visual = ready ? visualBlock(renderHeatmap(matrix, contact), matrix.cells.length > MAX_VISUAL_CELLS ? "Inline heatmap capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") : "";
     return section(
@@ -413,7 +422,7 @@
       "viewpoint",
       "Viewpoint",
       "Interaction-arm coverage",
-      ready ? '<span class="report-status is-ready">Generated</span>' : '<span class="report-status is-pending">Configured</span>',
+      stepBadge(context, "viewpoint"),
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Parameters</h3>' + parameterList(params.parameters) + '</div>',
@@ -456,7 +465,7 @@
       "region",
       "Region Explorer",
       "Inclusive coordinate overlap",
-      ready ? '<span class="report-status is-ready">Configured</span>' : '<span class="report-status is-pending">Configured</span>',
+      stepBadge(context, "region"),
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Parameters</h3>' + parameterList(params.parameters) + '</div>',
@@ -511,7 +520,7 @@
       "comparison",
       "Compare",
       "Multi-dataset effect map",
-      ready ? '<span class="report-status is-ready">Generated</span>' : '<span class="report-status is-pending">Configured</span>',
+      stepBadge(context, "comparison"),
       [
         '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Datasets and conditions</h3><span class="report-note-inline">' + formatNumber(datasets.length) + (datasets.length === 1 ? ' local file' : ' local files') + '</span></div>',
         datasetRows.length ? table(["File", "Label", "Condition", "Valid records", "Support"], datasetRows) : '<div class="report-empty">Add a second local HYB dataset to configure a comparison.</div>',
@@ -529,7 +538,9 @@
         "</div>",
         ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map): white at the smallest plotted count, green at the 95% quantile cap</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
         '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
+        '<div class="report-subsection-heading report-step-heading"><h3>Differential test</h3>' + stepBadge(context, "differential_test") + "</div>",
         window.Hyb2DeseqCard ? window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) : "",
+        renderFigurePanels(context),
         '<p class="report-note">Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
       ].join("")
     );
@@ -556,7 +567,7 @@
       "structure",
       "RNA Structure",
       "Secondary-structure prediction",
-      ready ? '<span class="report-status is-ready">Result available</span>' : '<span class="report-status is-pending">Not run</span>',
+      stepBadge(context, "structure"),
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Setup</h3>' + definitionList([
@@ -597,7 +608,7 @@
       "external-sources",
       "External sources and researcher notes",
       "Public databases",
-      cards.length ? '<span class="report-status is-ready">' + formatNumber(cards.length) + " added</span>" : '<span class="report-status is-pending">None added</span>',
+      stepBadge(context, "literature_search", cards.length ? formatNumber(cards.length) + " added" : null),
       cards.length ? cards.map(function (card) {
         const text = window.Hyb2Evidence.statusLine(card);
         const entries = (card.entries || []).map(function (entry) {
@@ -743,6 +754,7 @@
         },
         structure: jsonSafe(structurePayload, 5, 1000)
       },
+      resultRecord: context.record ? jsonSafe({ schema: context.record.schema, scope: context.record.scope, steps: context.record.steps.map(function (step) { return { id: step.id, key: step.key, status: step.status, detail: step.detail }; }), results: context.record.results, warnings: context.record.warnings }, 5, 200) : null,
       externalSources: window.Hyb2Evidence ? jsonSafe(safeCall(function () { return window.Hyb2Evidence.reportCards(reportState); }, []), 6, 50) : [],
       methods: {
         browserLocal: true,
@@ -750,6 +762,125 @@
         completeExportsRemainOnPages: true
       }
     };
+  }
+
+
+  // ---- result record: badges, results at a glance, figure panels, export
+
+  const STATUS_BADGE = {
+    ok: ["is-ready", "Completed"],
+    no_result: ["is-pending", "No result"],
+    not_run: ["is-pending", "Not run"],
+    running: ["is-pending", "Running"],
+    pending: ["is-pending", "Preparing"],
+    failed: ["is-warning", "Failed"],
+    stale: ["is-warning", "Inputs changed"]
+  };
+
+  function recordStep(context, key) {
+    const record = context.record;
+    return record ? record.steps.find(function (step) { return step.key === key; }) || null : null;
+  }
+
+  // the status chip of a section, from the result record's step status
+  function stepBadge(context, key, okLabel) {
+    const step = recordStep(context, key);
+    if (!step) {
+      return '<span class="report-status is-pending">Configured</span>';
+    }
+    const badge = STATUS_BADGE[step.status] || ["is-pending", step.status];
+    const label = step.status === "ok" && okLabel ? okLabel : badge[1];
+    return '<span class="report-status ' + badge[0] + '" data-step="' + escape(step.id) + '" data-status="' + escape(step.status) + '" title="' + escape(step.id + " · " + (step.detail || step.statusText)) + '">' + escape(label) + "</span>";
+  }
+
+  function renderResultsIndex(context) {
+    const record = context.record;
+    if (!record) {
+      return "";
+    }
+    const done = record.steps.filter(function (step) { return step.status === "ok" || step.status === "no_result"; }).length;
+    const stepRows = record.steps.map(function (step) {
+      return ['<code>' + escape(step.id) + "</code>", escape(step.title), stepBadge(context, step.key), escape(step.detail || "")];
+    });
+    const resultRows = record.results.map(function (result) {
+      return ['<code>' + escape(result.id) + "</code>", '<code>' + escape(result.step) + "</code>", escape(result.label),
+        '<span data-result="' + escape(result.id) + '">' + escape(window.Hyb2Results.formatValue(result)) + "</span>", escape(result.unit), '<code>' + escape(result.status) + "</code>"];
+    });
+    const tableRows = record.tables.map(function (t) {
+      return ['<code>' + escape(t.id) + "</code>", '<code>' + escape(t.step) + "</code>", escape(t.title), escape(t.scope),
+        "<code>" + escape(t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '">Download</button>'];
+    });
+    return section(
+      "results-index",
+      "Results at a glance",
+      "Steps, results and data, with fixed ids",
+      '<span class="report-status is-ready">' + formatNumber(done) + " of " + formatNumber(record.steps.length) + " steps completed</span>",
+      [
+        '<p class="report-note">Each step, result and table has a fixed id (S08, R23, T05) shared with the Markdown and JSON exports. A step that did not run shows <code>not_run</code> and its results show —, never 0.</p>',
+        '<div class="report-subsection report-subsection--table"><h3>Steps</h3>' + table(["Id", "Step", "Status", "Detail"], stepRows) + "</div>",
+        '<details class="report-details" open data-open-key="report-results"><summary>Results (' + formatNumber(record.results.length) + ")</summary>" + table(["Id", "Step", "Result", "Value", "Unit", "Status"], resultRows) + "</details>",
+        tableRows.length ? '<details class="report-details" data-open-key="report-tables"><summary>Data tables (' + formatNumber(tableRows.length) + ")</summary>" + table(["Id", "Step", "Table", "Scope", "File"], tableRows) + "</details>" : "",
+        record.warnings.length ? '<div class="report-callout report-callout--warning"><strong>Warnings</strong><span>' + record.warnings.map(function (w) { return escape(w.id + " (" + w.step + "): " + w.text); }).join("<br>") + "</span></div>" : ""
+      ].join("")
+    );
+  }
+
+  // panels C to G of the Compare figure, each with the table behind it
+  function renderFigurePanels(context) {
+    const record = context.record;
+    if (!record) {
+      return "";
+    }
+    const keys = [["arc_map", "Arc map (C)"], ["region_structures", "Region structures (D, E)"], ["folding_energy", "Folding energy (F, G)"]];
+    return keys.map(function (pair) {
+      const step = recordStep(context, pair[0]);
+      const figures = record.figures.filter(function (f) { return f.step === step.id; });
+      const tables = record.tables.filter(function (t) { return t.step === step.id; });
+      const body = figures.map(function (f) {
+        const svg = safeCall(f.svg, "");
+        return svg ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>' + escape(f.title) + '</h3><span class="report-note-inline">' + escape(f.id) + "</span></div>" + visualBlock(svg, "") + "</div>" : "";
+      }).join("");
+      const data = tables.length ? '<p class="report-note">Data: ' + tables.map(function (t) {
+        return "<code>" + escape(t.id + " " + t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '">Download</button>';
+      }).join(" · ") + "</p>" : "";
+      return '<div class="report-subsection report-figure-panel"><div class="report-subsection-heading report-step-heading"><h3>' + escape(pair[1]) + "</h3>" + stepBadge(context, pair[0]) + "</div>" +
+        (body || '<div class="report-empty">' + escape(step.detail || step.statusText) + "</div>") + data + "</div>";
+    }).join("");
+  }
+
+  const EXPORT_TEXT = {
+    people: ["For people", "Read, print or archive the report. Print / Save PDF keeps a fixed layout; the offline HTML keeps this page's tables, figures and open sections in one file that works without this site."],
+    ai: ["For AI", "A layered context package for an AI assistant: README, a template report.md (no language model), summary.json with every result id, status and unit, data_dictionary.json, provenance.json, evidence.json and bounded tables. Large tables stay in the analysis package."],
+    analysis: ["For further analysis", "Tables with a data dictionary for scripts and other tools: every filtered record, every comparison cell and significant cell, region and folding-energy tables, structures as dot-bracket, and the figure SVGs."]
+  };
+
+  function renderExportPanel(context, state) {
+    const exp = state && state.reportExport;
+    if (!exp || !EXPORT_TEXT[exp.audience]) {
+      return "";
+    }
+    const text = EXPORT_TEXT[exp.audience];
+    const out = ['<section class="report-export-panel" aria-label="Export ' + escape(text[0]) + '" data-report-export-panel>',
+      '<div class="report-subsection-heading"><h2>Export · ' + escape(text[0]) + '</h2><button class="quiet-button" type="button" data-action="report-export-close">Close</button></div>',
+      '<p class="report-note">' + escape(text[1]) + "</p>"];
+    if (exp.audience === "people") {
+      out.push('<div class="report-export-actions"><button class="button" type="button" data-action="print-report">Print / Save PDF</button><button class="button button-secondary" type="button" data-action="report-export-html">Download offline HTML</button></div>');
+    } else if (exp.status === "preparing") {
+      out.push('<p class="report-note" aria-live="polite">Preparing the files in this tab…</p>');
+    } else if (exp.status === "error") {
+      out.push('<p class="notice notice-error">' + escape(exp.error || "The export could not be prepared.") + "</p>");
+    } else if (exp.status === "ready") {
+      const total = exp.list.reduce(function (sum, f) { return sum + f.bytes; }, 0);
+      out.push('<div class="report-export-actions"><button class="button" type="button" data-action="report-export-zip">Download all (' + escape(formatBytes(total)) + ", ZIP)</button>" +
+        (exp.audience === "ai" ? '<button class="button button-secondary" type="button" data-action="report-export-copy">Copy AI summary (report.md)</button>' : "") + "</div>");
+      out.push(table(["File", "Contents", "Size", ""], exp.list.map(function (f) {
+        return ["<code>" + escape(f.path) + "</code>", escape(f.description), escape(formatBytes(f.bytes)),
+          '<button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + escape(exp.audience) + '" data-path="' + escape(f.path) + '">Download</button>'];
+      })));
+      out.push('<p class="report-note"><strong>Not included:</strong> the input files themselves (only names and SHA-256), local paths, and anything outside this tab. Everything is built in this browser; nothing is uploaded. Sharing a file is a separate step you take yourself.</p>');
+    }
+    out.push("</section>");
+    return out.join("");
   }
 
   function section(id, title, kicker, status, body) {

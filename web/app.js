@@ -1479,6 +1479,44 @@
       return;
     }
 
+    if (action === "report-export") {
+      openReportExport(actionNode.dataset.audience || "people");
+      return;
+    }
+
+    if (action === "report-export-close") {
+      state.reportExport = null;
+      reportExportCache = null;
+      render();
+      return;
+    }
+
+    if (action === "report-export-zip") {
+      if (reportExportCache) {
+        downloadBlob("hyb2-result-" + reportExportCache.audience + ".zip", window.Hyb2Results.zip(reportExportCache.files, "hyb2-result"));
+        showToast("Result package built and downloaded locally.");
+      }
+      return;
+    }
+
+    if (action === "report-export-file") {
+      downloadReportFile(actionNode.dataset.audience || "analysis", actionNode.dataset.path || "");
+      return;
+    }
+
+    if (action === "report-export-copy") {
+      const markdown = reportExportCache && reportExportCache.files.find(function (file) { return file.path === "report.md"; });
+      if (markdown) {
+        copyText(markdown.text, "AI summary (report.md) copied to the clipboard.");
+      }
+      return;
+    }
+
+    if (action === "report-export-html") {
+      downloadOfflineReport();
+      return;
+    }
+
     if (action === "clear-session") {
       state.dialog = "clear";
       render();
@@ -1911,6 +1949,8 @@
     resetAnalysisModules();
     state.structure = null;
     state.evidence = null;
+    state.reportExport = null;
+    reportExportCache = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.error = null;
     state.loading = {
@@ -2650,6 +2690,8 @@
     resetAnalysisModules();
     state.structure = null;
     state.evidence = null;
+    state.reportExport = null;
+    reportExportCache = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
@@ -2695,6 +2737,8 @@
     resetAnalysisModules();
     state.structure = null;
     state.evidence = null;
+    state.reportExport = null;
+    reportExportCache = null;
     if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
@@ -2773,6 +2817,111 @@
     showToast(sampled
       ? "Validation error sample downloaded locally; the Validation page shows how many details were omitted."
       : "Validation report downloaded locally.");
+  }
+
+  // ---- Report exports: files built from one result record (results.js)
+
+  let reportExportCache = null;
+  let reportExportSession = 0;
+
+  function prepareReportFiles(audience) {
+    if (!window.Hyb2Results) {
+      return Promise.reject(new Error("The result exports are unavailable in this build."));
+    }
+    const query = pageData ? pageData.queryHybrids({ filters: Object.assign({}, state.filters || {}), offset: 0, limit: window.Hyb2Results.MAX_ANALYSIS_ROWS }) : Promise.resolve(null);
+    return Promise.resolve(query).then(function (result) {
+      const rows = result && Array.isArray(result.rows) ? result.rows : null;
+      const record = window.Hyb2Results.build(state, { interactionRows: rows, interactionTotal: result && Number.isFinite(result.total) ? result.total : undefined });
+      return window.Hyb2Results.withManifest(window.Hyb2Results.files(record, audience), record);
+    });
+  }
+
+  function openReportExport(audience) {
+    reportExportSession += 1;
+    const session = reportExportSession;
+    reportExportCache = null;
+    state.reportExport = { audience: audience, status: audience === "people" ? "ready" : "preparing", list: [], error: "" };
+    render();
+    if (audience === "people") {
+      return;
+    }
+    prepareReportFiles(audience).then(function (files) {
+      if (session !== reportExportSession || !state.reportExport) {
+        return;
+      }
+      reportExportCache = { audience: audience, files: files };
+      state.reportExport.status = "ready";
+      state.reportExport.list = files.map(function (file) {
+        return { path: file.path, description: file.description, bytes: new TextEncoder().encode(file.text).length };
+      });
+      render();
+    }).catch(function (error) {
+      if (session !== reportExportSession || !state.reportExport) {
+        return;
+      }
+      state.reportExport.status = "error";
+      state.reportExport.error = error && error.message ? error.message : "The export could not be prepared.";
+      render();
+    });
+  }
+
+  function downloadReportFile(audience, path) {
+    const save = function (files) {
+      const file = files.find(function (item) { return item.path === path; });
+      if (!file) {
+        showToast("That file is not part of the " + audience + " export.");
+        return;
+      }
+      downloadText(path.split("/").pop(), file.text, file.mediaType);
+      showToast(path + " downloaded locally.");
+    };
+    if (reportExportCache && reportExportCache.audience === audience) {
+      save(reportExportCache.files);
+      return;
+    }
+    prepareReportFiles(audience).then(save).catch(function (error) {
+      showToast(error && error.message ? error.message : "The file could not be prepared.");
+    });
+  }
+
+  // One self-contained HTML file: the report article with this page's
+  // stylesheets and images inlined, without the buttons that need the app.
+  function downloadOfflineReport() {
+    const article = document.querySelector("[data-report-page]");
+    if (!article) {
+      showToast("Open the report first.");
+      return;
+    }
+    const clone = article.cloneNode(true);
+    clone.querySelectorAll("[data-report-export-panel], .report-actions, button").forEach(function (node) { node.remove(); });
+    clone.querySelectorAll("details").forEach(function (node) { node.setAttribute("open", ""); });
+    const css = [];
+    Array.prototype.forEach.call(document.styleSheets, function (sheet) {
+      try {
+        css.push(Array.prototype.map.call(sheet.cssRules, function (rule) { return rule.cssText; }).join("\n"));
+      } catch (error) {
+        // a cross-origin sheet (none in this app) cannot be read
+      }
+    });
+    const images = Array.prototype.slice.call(clone.querySelectorAll("img"));
+    Promise.all(images.map(function (img) {
+      return fetch(img.src).then(function (response) { return response.blob(); }).then(function (blob) {
+        return new Promise(function (resolve) {
+          const reader = new FileReader();
+          reader.onload = function () { img.src = reader.result; resolve(); };
+          reader.onerror = function () { img.remove(); resolve(); };
+          reader.readAsDataURL(blob);
+        });
+      }).catch(function () { img.remove(); });
+    })).then(function () {
+      const theme = document.documentElement.getAttribute("data-theme") || "light";
+      const title = "HYB2 report · " + (state.summary && state.summary.fileName || "session");
+      const html = "<!doctype html>\n<html lang=\"en\" data-theme=\"" + theme + "\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>" + escapeHtml(title) +
+        "</title><style>" + css.join("\n").replace(/<\/style/gi, "<\\/style") + "\nbody{margin:0;background:var(--background,#fff)}.report-offline-main{max-width:1180px;margin:0 auto;padding:24px 16px}</style></head><body><main class=\"report-offline-main\">" +
+        clone.outerHTML + "<p class=\"report-note\">Offline copy of the HYB2 Web Lite report. Data tables and the AI context package are separate exports (For AI, For further analysis).</p></main></body></html>\n";
+      downloadText("hyb2-report.html", html, "text/html");
+      showToast("Offline report downloaded locally.");
+    });
   }
 
   function downloadFullReport() {

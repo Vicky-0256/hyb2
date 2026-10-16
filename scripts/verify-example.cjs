@@ -130,7 +130,7 @@ function parseHyb(file) {
 // is ~10x slower on a genome).
 const win = { navigator: { deviceMemory: 8, hardwareConcurrency: 4 } };
 const documentStub = { querySelector: function () { return null; }, getElementById: function () { return null; } };
-["analysis-data.js", "data-provider.js", "page-data.js", "deseq.js", "arc-map.js", "deseq-card.js", "region-panels.js", "folding-energy.js"].forEach(function (file) {
+["analysis-data.js", "data-provider.js", "page-data.js", "deseq.js", "arc-map.js", "deseq-card.js", "region-panels.js", "folding-energy.js", "results.js"].forEach(function (file) {
   const source = fs.readFileSync(web(file), "utf8");
   vm.runInThisContext("(function (window, self, module, document, navigator) {" + source + "\n})", { filename: file })(win, win, undefined, documentStub, win.navigator);
 });
@@ -500,6 +500,7 @@ async function main() {
   assert.equal(plan2.considered, EXPECTED.energy.enriched_in_one.n + EXPECTED.energy.enriched_in_two.n);
   assert.equal(plan2.jobs.length, plan2.considered, "every interaction is folded (none off an end)");
   const entry = web("vendor/viennarna/vienna-rna.js");
+  let energyRows = null;
   if (!fs.existsSync(entry)) {
     log("ViennaRNA WebAssembly not built; folding energies skipped");
   } else {
@@ -508,6 +509,7 @@ async function main() {
     const dG = [];
     plan2.jobs.forEach(function (job) { dG.push(fe.cofold(vienna, job.one[0], job.one[1]), fe.cofold(vienna, job.two[0], job.two[1])); });
     const rows = fe.attach(plan2.jobs, dG);
+    energyRows = rows;
     fe.summarise(rows).forEach(function (st) {
       const e = EXPECTED.energyWeb[st.side];
       assert.equal(st.n, e.n, st.side + " n");
@@ -543,6 +545,50 @@ async function main() {
     }
     assert.match(fe.svg({ rows: rows, length: 40 }, { one: "ZAFR", two: "ZASI" }), /^<svg/);
   }
+
+  // the result record of this session (results.js, behind the Report page
+  // and its exports) carries the same numbers and statuses
+  const R = win.Hyb2Results;
+  const primarySummary = parsed[0].summary;
+  const session = {
+    summary: primarySummary, filters: {}, view: { report: { filteredTotal: primarySummary.validRecords, filteredSample: [], partnerCounts: [] } },
+    comparison: Object.assign({}, comparison, { result: result }), arcMap: state.arcMap, regionPanels: rp.defaultState(),
+    foldingEnergy: energyRows ? Object.assign(fe.defaultState(), { results: { rows: energyRows, length: 40 } }) : fe.defaultState()
+  };
+  const record = R.build(session, {});
+  const value = function (id) { return record.results.find(function (r) { return r.id === id; }).value; };
+  const stepStatus = function (key) { return record.steps.find(function (st) { return st.key === key; }).status; };
+  same({ significant: value("R23"), significantUp: value("R24"), significantDown: value("R25"), interactionsUp: value("R26"), interactionsDown: value("R27") },
+    { significant: EXPECTED.deseq.significant, significantUp: EXPECTED.deseq.significantUp, significantDown: EXPECTED.deseq.significantDown,
+      interactionsUp: EXPECTED.deseq.interactionsUp, interactionsDown: EXPECTED.deseq.interactionsDown }, "result record = differential test");
+  assert.equal(value("R01"), EXPECTED.records.ZAFR_REP1);
+  assert.equal(value("R20"), result.cells.length);
+  assert.equal(value("R21"), result.conservedCells.length);
+  ["parse", "comparison", "differential_test", "arc_map", "region_structures"].forEach(function (key) { assert.equal(stepStatus(key), "ok", key); });
+  ["contact_map", "viewpoint", "structure", "literature_search"].forEach(function (key) { assert.equal(stepStatus(key), "not_run", key); });
+  assert.equal(value("R31"), regions.regions[0].chosen.a + "\u2194" + regions.regions[0].chosen.b);
+  assert.equal(value("R32"), regions.regions[1].chosen.a + "\u2194" + regions.regions[1].chosen.b);
+  if (energyRows) {
+    assert.equal(stepStatus("folding_energy"), "ok");
+    const stats = fe.summarise(energyRows);
+    assert.equal(value("R34"), stats[0].p);
+    assert.equal(value("R36"), stats[1].p);
+    assert.equal(value("R33"), EXPECTED.energyWeb.enriched_in_one.n);
+  } else {
+    assert.equal(stepStatus("folding_energy"), "not_run");
+    assert.equal(value("R34"), null, "no energies: p is null, not 0");
+  }
+  const aiFiles = R.files(record, "ai");
+  const md = aiFiles.find(function (f) { return f.path === "report.md"; }).text;
+  assert.ok(md.indexOf("| R23 | S08 | Significant cells | " + EXPECTED.deseq.significant.toLocaleString("en-US") + " | cells | `ok` |") >= 0, "report.md has R23");
+  const table = record.tables.find(function (t) { return t.file === "tables/differential_interactions.tsv"; });
+  assert.equal(table.rowCount, EXPECTED.deseq.interactionsUp + EXPECTED.deseq.interactionsDown);
+  assert.ok(aiFiles.some(function (f) { return f.path === "tables/regions.tsv"; }), "the AI package has the chosen regions");
+  const analysisFiles = R.files(record, "analysis");
+  ["figures/A_differential_map.svg", "figures/C_arc_map.svg", "figures/DE_region_structures.svg", "results/structure_A.dbn", "tables/compare_cells.tsv", "tables/differential_significant_cells.tsv"].forEach(function (file) {
+    assert.ok(analysisFiles.some(function (f) { return f.path === file; }), file + " in the analysis package");
+  });
+  log("result record: R23 " + value("R23") + ", R31 " + value("R31") + ", R32 " + value("R32") + "; " + aiFiles.length + " AI files, " + analysisFiles.length + " analysis files");
 }
 
 main().then(function () {

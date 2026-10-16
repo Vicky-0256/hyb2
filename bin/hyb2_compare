@@ -68,7 +68,7 @@ done
 awk 'NF' $INPUT | while read x y z; do name=${y/.contact.txt/}; sort -k3,3nr $y | awk -v a=$name '!/^#/{print $1 "_" $2 "\t" a "=" $3}' > $name".forTable.txt"; done
 : > $OUT".forTable.list.txt"
 awk 'NF' $INPUT | while read x y z; do echo ${y/.contact.txt/.forTable.txt}  >> $OUT".forTable.list.txt"; done
-awk 'NF' $INPUT | while read x y z; do echo ${y/.contact.txt/}; done | paste -sd '\t' | awk '{print "#seq_ID\t"$0}' | sed 's/-/_/g' > $OUT".table.txt"
+awk 'NF' $INPUT | while read x y z; do echo ${y/.contact.txt/}; done | paste -sd '\t' - | awk '{print "#seq_ID\t"$0}' | sed 's/-/_/g' > $OUT".table.txt"
 make_hybrid_annotation_table.pl $(< $OUT".forTable.list.txt") | awk 'NR>1{gsub("NA","0",$0); print $0}' >> $OUT".table.txt"
 awk 'NF' $INPUT | while read x y z; do echo -e ${y/.contact.txt/}"\t"$z | sed 's/-/_/g' ; done > $OUT"_names.table"
 

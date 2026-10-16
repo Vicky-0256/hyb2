@@ -73,7 +73,7 @@ func main() {
 		})
 		app.SetPoster(win)
 		if _, digest, ok, _ := core.PackedRuntime(resources); ok && !core.RuntimeReady(filepath.Join(cache, "runtime"), digest) {
-			app.SetRuntimeStatus("Preparing the bundled runtime (first launch)…", "")
+			app.SetRuntimePreparing()
 		}
 		// Resolve (and on first launch unpack) the runtime, detect it, then
 		// compile the CPLfold kernels so the first fold does not wait.

@@ -87,6 +87,51 @@ func TestStartPageCreatesProjectFolder(t *testing.T) {
 	}
 }
 
+// While the bundled runtime unpacks on first launch, creating or opening
+// a project would only fail with "still being prepared": the start page
+// says it is getting ready and waits.
+func TestStartPageWaitsForTheRuntime(t *testing.T) {
+	f := newFake(t)
+	a := New(f, nil, t.TempDir())
+	a.recent = []Recent{{Path: "/projects/zikv.hyb2proj", Name: "ZIKV GUI check"}}
+	picked := 0
+	old := PickFolder
+	PickFolder = func(string) string { picked++; return "" }
+	t.Cleanup(func() { PickFolder = old })
+	a.start.newParent = t.TempDir()
+	a.start.newName = "ZIKV"
+	a.SetRuntimePreparing()
+	tt := ui.NewTester(a.View, 1100, 720)
+	for _, text := range []string{"Preparing the analysis runtime (first launch only, usually under a minute)…",
+		"Waiting for the runtime to be ready."} {
+		if !tt.HasText(text) {
+			t.Fatalf("start page lacks %q: %q", text, tt.Texts())
+		}
+	}
+	snapshot(t, tt, "start-preparing")
+	for _, label := range []string{"Create project", "Choose project folder…", "ZIKV GUI check"} {
+		_ = tt.Click(label)
+		waitFlush(a)
+		tt.Frame()
+	}
+	if len(f.calls) != 0 || a.Project != nil || picked != 0 {
+		t.Fatalf("acted while preparing: %v, %d folder dialogs", f.calls, picked)
+	}
+
+	a.SetRuntimeStatus("Runtime: macos arm64 · Python 3.11.17", "")
+	tt.Frame()
+	if tt.HasText("Waiting for the runtime to be ready.") {
+		t.Fatalf("still waiting: %q", tt.Texts())
+	}
+	if err := tt.Click("ZIKV GUI check"); err != nil {
+		t.Fatal(err)
+	}
+	waitFlush(a)
+	if a.Project == nil {
+		t.Fatalf("recent project did not open: %v", f.calls)
+	}
+}
+
 func TestProjectFolderName(t *testing.T) {
 	for in, want := range map[string]string{
 		"ZIKV virion RNA": "ZIKV virion RNA.hyb2proj",

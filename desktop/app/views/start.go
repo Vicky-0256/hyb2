@@ -22,6 +22,9 @@ type startState struct {
 	creating   bool
 	runtimeErr string
 	runtime    string
+	// preparing: the bundled runtime is being unpacked (first launch);
+	// creating or opening a project waits for it.
+	preparing bool
 }
 
 // ProjectSuffix ends every project folder the start page creates.
@@ -46,9 +49,15 @@ var (
 	}
 )
 
-// SetRuntimeStatus shows the bundled runtime's state on the start page.
+// SetRuntimeStatus shows the bundled runtime's state on the start page
+// once it is resolved (or failed).
 func (a *App) SetRuntimeStatus(summary, err string) {
-	a.start.runtime, a.start.runtimeErr = summary, err
+	a.start.runtime, a.start.runtimeErr, a.start.preparing = summary, err, false
+}
+
+// SetRuntimePreparing says the bundled runtime is being unpacked.
+func (a *App) SetRuntimePreparing() {
+	a.start.runtime, a.start.runtimeErr, a.start.preparing = "", "", true
 }
 
 // defaultProjectParent is where new projects go unless the user picks
@@ -145,6 +154,16 @@ func (a *App) startView(c *ui.Context) {
 			if s.runtimeErr != "" {
 				ui.Text(c, "Runtime unavailable: "+s.runtimeErr).TextColor(t.Danger)
 			}
+			if s.preparing {
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(10, 14).Radius(8).Background(t.Accent.Alpha(0.08)).Children(func() {
+					ui.Spinner(c)
+					ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+						ui.Text(c, "Preparing the analysis runtime (first launch only, usually under a minute)…").Bold()
+						ui.Text(c, "You can fill in a new project meanwhile; creating or opening one is possible as soon as it is ready.").
+							FontSize(12).TextColor(t.TextMuted)
+					})
+				})
+			}
 			card(c, "How it works", func() {
 				ui.Row(c).Gap(16).AlignItems(ui.Start).Wrap().Children(func() {
 					startStep(c, "1", "Create a project", "A folder on your disk that keeps the sample list, pipeline outputs and results.")
@@ -203,10 +222,12 @@ func (a *App) startView(c *ui.Context) {
 						ui.Text(c, "Creates the folder "+filepath.Join(s.newParent, ProjectFolderName(name))).FontSize(12).TextColor(t.TextMuted)
 					}
 					ui.Row(c).Gap(8).Justify(ui.End).AlignItems(ui.Center).Children(func() {
-						ready := name != "" && s.newParent != "" && !s.creating
+						ready := name != "" && s.newParent != "" && !s.creating && !s.preparing
 						// Say what the disabled button waits for.
 						switch {
 						case s.creating:
+						case s.preparing:
+							ui.Text(c, "Waiting for the runtime to be ready.").FontSize(12).TextColor(t.TextMuted)
 						case name == "":
 							ui.Text(c, "Enter a project name to create it.").FontSize(12).TextColor(t.TextMuted)
 						case s.newParent == "":
@@ -221,7 +242,7 @@ func (a *App) startView(c *ui.Context) {
 					ui.Text(c, "Continue a project made earlier with HYB2 Desktop. Choose its folder — the one whose name ends in "+
 						ProjectSuffix+" and that contains project.json.").FontSize(12).TextColor(t.TextMuted)
 					ui.Row(c).Gap(8).Children(func() {
-						if ui.PrimaryButton(c, "Choose project folder…").Clicked() {
+						if ui.PrimaryButton(c, "Choose project folder…").Disabled(s.preparing).Clicked() {
 							a.Go(func() func() {
 								path := PickFolder("Open a HYB2 project folder (" + ProjectSuffix + ")")
 								return func() {
@@ -236,7 +257,7 @@ func (a *App) startView(c *ui.Context) {
 					ui.Collapsible(c.Key("open-paste"), "Or paste a folder path", &s.pasteOpen, func() {
 						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 							ui.TextInput(c.Key("open-path"), &s.openPath).Placeholder("/path/to/study" + ProjectSuffix).Label("Project folder").Grow(1)
-							if ui.Button(c, "Open").Disabled(strings.TrimSpace(s.openPath) == "").Clicked() {
+							if ui.Button(c, "Open").Disabled(s.preparing || strings.TrimSpace(s.openPath) == "").Clicked() {
 								a.Open(s.openPath)
 							}
 						})
@@ -254,7 +275,7 @@ func (a *App) startView(c *ui.Context) {
 					r := r
 					ui.Row(c.Key(r.Path)).Gap(8).Children(func() {
 						ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
-							if ui.Link(c, nameOr(r.Name, filepath.Base(r.Path)), "").Clicked() {
+							if ui.Link(c, nameOr(r.Name, filepath.Base(r.Path)), "").Disabled(s.preparing).Clicked() {
 								a.Open(r.Path)
 							}
 							ui.Text(c, r.Path).FontSize(12).TextColor(t.TextMuted).SingleLine()

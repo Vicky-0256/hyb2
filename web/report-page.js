@@ -912,6 +912,9 @@
     if (!result || !selection) {
       return null;
     }
+    if (typeof result.cellLookup === "function") {
+      return result.cellLookup(selection.x, selection.y);
+    }
     if (result.cellMap && result.cellMap[selection.x + ":" + selection.y]) {
       return result.cellMap[selection.x + ":" + selection.y];
     }

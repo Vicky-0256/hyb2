@@ -434,7 +434,7 @@
     const canAddDatasets = state.shell !== false;
     const groupA = result.groupA || [];
     const groupB = result.groupB || [];
-    const selected = comparison.selection && result.ready ? result.cellMap[comparison.selection.x + ":" + comparison.selection.y] : null;
+    const selected = comparison.selection && result.ready ? window.Hyb2Data.comparisonCellAt(result, comparison.selection.x, comparison.selection.y) : null;
 
     return [
       '<div class="page-heading">',
@@ -449,6 +449,7 @@
       comparison.loading ? '<p class="notice">Parsing ' + escape(comparison.loading.fileName) + ' locally (' + format(comparison.loading.completed + 1) + ' of ' + format(comparison.loading.total) + ')…</p>' : '',
       comparison.error ? '<p class="notice notice-error">' + escape(comparison.error) + '</p>' : '',
       renderComparisonDatasetTable(comparison),
+      renderComparisonRnaPairs(comparison),
       '<div class="inline-actions">' + (canAddDatasets ? '<button class="quiet-button" type="button" data-feature-action="choose-comparison-files">Add datasets</button>' : '') + '<span class="card-note">For the original DESeq2 workflow, use at least two biological replicates per condition.</span></div>',
       '</section>',
       '<section class="analysis-controls data-card">',
@@ -507,6 +508,18 @@
       }).join(""),
       '</tbody></table></div>'
     ].join("");
+  }
+
+  // datasets that use their own genome for a homodimer comparison (another
+  // strain); the same rule as the differential test card
+  function renderComparisonRnaPairs(comparison) {
+    const substituted = window.Hyb2Data.comparisonRnaPlan(comparison).filter(function (item) { return item.substituted; });
+    if (!substituted.length) {
+      return "";
+    }
+    return '<p class="notice comparison-rna-note"><strong>Compared by position.</strong> ' + substituted.map(function (item) {
+      return escape(item.dataset.label || item.dataset.fileName || item.dataset.id) + " has no " + escape(comparison.rnaX) + "; it contributes its own " + escape(item.rnaX);
+    }).join("; ") + '. Each dataset\'s map is compared bin by bin on its own coordinates, as bin/hyb2_compare does; the RNA can be changed in the differential test card below.</p>';
   }
 
   function renderComparisonMap(kind, title, note, result) {

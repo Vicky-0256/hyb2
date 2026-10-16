@@ -219,4 +219,39 @@ assert.equal(invalidSummary.errorSampleCount, 100);
 assert.equal(invalidSummary.omittedErrorCount, 150);
 assert.equal(invalidSummary.errorSampleTruncated, true);
 
-process.stdout.write("parser-contract: ok\n");
+// gzip input: recognised by its magic bytes and decompressed in the worker;
+// progress counts compressed bytes
+async function parseFile(file, globals) {
+  const workerContext = vm.createContext(Object.assign({ TextDecoder, self: { postMessage: function () {} } }, globals || {}));
+  vm.runInContext(parserSource, workerContext, { filename: "parser.worker.js" });
+  const progress = [];
+  return new Promise(function (resolve, reject) {
+    workerContext.self.postMessage = function (message) {
+      if (message.type === "progress") progress.push(message);
+      if (message.type === "complete") resolve({ message: message, progress: progress });
+      if (message.type === "error") reject(new Error(message.message));
+    };
+    workerContext.self.onmessage({ data: { file: file } });
+  });
+}
+
+(async function () {
+  const text = [line({ id: "1_3" }), line({ id: "2_5", rnaTwo: "RNA_B" }), "# comment", line({ id: "3_1" })].join("\n") + "\n";
+  const gzip = require("node:zlib").gzipSync(Buffer.from(text));
+  const streams = { TransformStream: TransformStream, DecompressionStream: DecompressionStream };
+  const plain = await parseFile(new File([text], "fixture.hyb"), streams);
+  const packed = await parseFile(new File([gzip], "fixture.hyb.gz"), streams);
+  assert.equal(packed.message.summary.validRecords, 3);
+  assert.equal(packed.message.summary.skippedCommentLines, 1);
+  assert.equal(JSON.stringify(packed.message.records.map(function (r) { return r.id; })), JSON.stringify(plain.message.records.map(function (r) { return r.id; })));
+  assert.ok(packed.progress.every(function (m) { return m.processedBytes <= gzip.length; }), "gzip progress counts compressed bytes");
+  // a .gz name that is already plain text (a server that decoded it) parses as text
+  const decoded = await parseFile(new File([text], "fixture.hyb.gz"), streams);
+  assert.equal(decoded.message.summary.validRecords, 3);
+  // without DecompressionStream a gzip file gets a clear error
+  await assert.rejects(parseFile(new File([gzip], "fixture.hyb.gz")), /cannot decompress gzip files/);
+  process.stdout.write("parser-contract: ok\n");
+})().catch(function (error) {
+  process.stderr.write((error && error.stack) || String(error));
+  process.exit(1);
+});

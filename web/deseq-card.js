@@ -254,6 +254,9 @@
       '<button class="quiet-button" type="button" data-feature-action="deseq-export-interactions">Export interactions TSV</button>' +
       '<button class="quiet-button" type="button" data-feature-action="deseq-export-significant">Export significant cells TSV</button>' +
       '<button class="button" type="button" data-feature-action="deseq-use-arcmap">Use in arc map</button></div>');
+    if (deseq.arcMapFed && !stale) {
+      out.push('<p class="card-note">The arc map below had structures but no interaction table, so it now draws these merged interactions; the region structures (D, E) and folding energies (F, G) follow from it.</p>');
+    }
     out.push('<div class="card-title-row"><h3>Merged interactions</h3><span class="card-note">' + num(rows.length) + " shown by padj" +
       (rows.length > TABLE_ROWS ? " (first " + TABLE_ROWS + " listed; the TSV has all)" : "") + "</span></div>");
     if (!rows.length) {
@@ -576,6 +579,13 @@
         deseq.status = "done";
         deseq.selected = null;
         deseq.progress = "";
+        // an arc map with structures but no interaction table (the included
+        // example) draws this result right away
+        deseq.arcMapFed = false;
+        if (window.Hyb2ArcMap && state.arcMap && !state.arcMap.interactions && (state.arcMap.a || state.arcMap.b)) {
+          useInArcMap(state, result);
+          deseq.arcMapFed = true;
+        }
         api.render();
       };
       const fail = function (message) {
@@ -706,12 +716,7 @@
       if (!window.Hyb2ArcMap) {
         return true;
       }
-      state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
-      state.arcMap.interactions = window.Hyb2Deseq.arcMapInteractions(result.interactions,
-        "Differential test · " + result.labels.A + " vs " + result.labels.B);
-      state.arcMap.errors = Object.assign({}, state.arcMap.errors, { interactions: "" });
-      state.arcMap.labelOne = result.labels.A;
-      state.arcMap.labelTwo = result.labels.B;
+      useInArcMap(state, result);
       api.render();
       api.showToast("The arc map now draws the " + result.interactions.length.toLocaleString("en-US") + " merged interactions (its own padj filter, " +
         state.arcMap.padj + ", applies).");
@@ -723,6 +728,17 @@
       return false;
     }
     return true;
+  }
+
+  // the arc map (and through it the region and folding-energy cards) draws
+  // the merged interactions of this result
+  function useInArcMap(state, result) {
+    state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
+    state.arcMap.interactions = window.Hyb2Deseq.arcMapInteractions(result.interactions,
+      "Differential test · " + result.labels.A + " vs " + result.labels.B);
+    state.arcMap.errors = Object.assign({}, state.arcMap.errors, { interactions: "" });
+    state.arcMap.labelOne = result.labels.A;
+    state.arcMap.labelTwo = result.labels.B;
   }
 
   // ---- reproducibility (parameters JSON, report)

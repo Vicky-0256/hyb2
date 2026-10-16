@@ -8,6 +8,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const zlib = require("node:zlib");
 
 const repository = path.resolve(__dirname, "..");
 const web = function (file) { return path.join(repository, "web", file); };
@@ -75,12 +76,18 @@ function createContext() {
   context.globalThis = context;
   vm.createContext(context);
   [
-    "desktop-adapter.js", "analysis-data.js", "data-provider.js", "page-data.js", "comrades-analysis.js",
+    "desktop-adapter.js", "analysis-data.js", "example.js", "data-provider.js", "page-data.js", "comrades-analysis.js",
     "analysis-pages.js", "analysis-ui.js", "overview-page.js", "report-page.js", "app.js"
   ].forEach(function (file) {
     vm.runInContext(fs.readFileSync(web(file), "utf8"), context, { filename: file });
   });
   return context;
+}
+
+// the first 10,000 records of the included example's primary file
+function exampleText() {
+  const lines = zlib.gunzipSync(fs.readFileSync(web("assets/examples/zikv-virion/ZAFR_REP1_1in10.hyb.gz"))).toString("utf8").split("\n");
+  return lines.slice(0, 10000).join("\n") + "\n";
 }
 
 async function parseExample() {
@@ -89,13 +96,13 @@ async function parseExample() {
     self: { postMessage: function () {} }
   });
   vm.runInContext(fs.readFileSync(web("parser.worker.js"), "utf8"), parserContext, { filename: "parser.worker.js" });
-  const text = fs.readFileSync(web("assets/examples/ZIKV_1-10807_example.hyb"), "utf8");
+  const text = exampleText();
   return new Promise(function (resolve, reject) {
     parserContext.self.postMessage = function (message) {
       if (message.type === "complete") resolve(message);
       if (message.type === "error") reject(new Error(message.message));
     };
-    parserContext.self.onmessage({ data: { file: new File([text], "ZIKV_1-10807_example.hyb") } });
+    parserContext.self.onmessage({ data: { file: new File([text], "ZAFR_REP1_1in10.hyb") } });
   });
 }
 
@@ -128,7 +135,7 @@ async function main() {
     ["overview", "interactions", "contact-map", "viewpoint", "region", "compare", "structure", "report"]);
 
   const parsed = await parseExample();
-  const fastaText = fs.readFileSync(web("assets/examples/ZIKV_1-10807.fasta"), "utf8");
+  const fastaText = fs.readFileSync(web("assets/examples/zikv-virion/ZAFR.fasta"), "utf8");
   const data = context.window.Hyb2Data;
   const sequences = data.parseFasta(fastaText);
   const provider = hyb2Web.createBrowserProvider();

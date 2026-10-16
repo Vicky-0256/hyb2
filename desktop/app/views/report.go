@@ -523,6 +523,11 @@ func reportTable(c *ui.Context, key string, table reportTableData, empty string)
 			rows(0)
 			return
 		}
+		// The scroll bar shows only on hover, so say that more columns
+		// are off to the right.
+		ui.Text(c, reportScrollHint).FontSize(11).TextColor(t.TextMuted)
 		ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Children(func() { rows(minWidth) })
 	})
 }
+
+const reportScrollHint = "More columns: scroll sideways →"

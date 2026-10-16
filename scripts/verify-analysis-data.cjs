@@ -650,6 +650,10 @@ assert.equal(similarity.similarityMinimum, 1);
 const similarityFiltered = data.buildComparisonResults(Object.assign({}, similarityInput, { similarityMinimum: "3" }));
 assert.deepEqual(similarityFiltered.conservedCells.map(function (cell) { return [cell.x, cell.similarity]; }), [[0, 5]],
   "bins below the minimum in either condition are dropped before taking the minimum");
+// similarity_heatmap.R's scale_fill_gradient spans the data range: white sits
+// at the smallest plotted count, not at zero.
+assert.equal(similarity.similarityFloor, 2, "the colour floor is the smallest similarity count");
+assert.equal(similarityFiltered.similarityFloor, 5, "the floor follows the similarity minimum filter");
 assert.match(data.comparisonToTsv(similarity).split("\n")[0], /\tcondition_a_raw\tcondition_b_raw\tsimilarity$/);
 const selectedDatasetTsv = data.comparisonSelectedToTsv({ datasets: [
   { id: "a", label: "A sample", condition: "A", fileName: "a.hyb" },

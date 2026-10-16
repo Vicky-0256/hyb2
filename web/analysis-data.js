@@ -1308,7 +1308,12 @@
     // Similarity heatmap as in HYB2's plot_similarity_map run on one merged
     // contact map per condition (the condition's .hyb files concatenated):
     // a bin kept in both maps scores the smaller raw count.  Bins below the
-    // minimum count are dropped from each map first (1 keeps every bin).
+    // minimum count are dropped from each map first (1 keeps every bin); this
+    // display filter equals awk '$3 >= MIN' on each merged contact.txt before
+    // plot_similarity_map.  As in plot_similarity_map with one file per side
+    // and Desktop's differential.py -- not bin/hyb2_compare with replicates,
+    // which concatenates every replicate's contact.txt and pairs consecutive
+    // occurrences of a bin (A1/A2, A2/B1, B1/B2).
     const similarityMinimum = similarityMinimumOf(config);
     const cells = Object.keys(byKey).map(function (key) {
       const entry = byKey[key];
@@ -1357,8 +1362,11 @@
       yMin: cells.length ? cells.reduce(function (minimum, cell) { return Math.min(minimum, cell.y); }, Infinity) : 0,
       yMax: cells.length ? cells.reduce(function (maximum, cell) { return Math.max(maximum, cell.y); }, -Infinity) : 0,
       effectCap: absoluteEffects.length ? Math.max(.25, quantile(absoluteEffects, .95)) : 1,
-      // similarity_heatmap.R caps the colour scale at the 95% quantile.
+      // similarity_heatmap.R caps the counts at their 95% quantile and lets
+      // scale_fill_gradient span the data range: white at the smallest kept
+      // count (similarityFloor), forestgreen at the cap.
       similarityCap: similarityValues.length ? Math.max(1, quantile(similarityValues, .95)) : 1,
+      similarityFloor: similarityValues.length ? similarityValues[0] : 0,
       similarityMinimum: similarityMinimum,
       distinctCells: distinctCellCount,
       datasetCellContributions: datasetCellContributions,

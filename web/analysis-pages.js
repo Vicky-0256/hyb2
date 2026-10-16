@@ -478,7 +478,7 @@
         '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Similarity bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
         '<section class="comparison-map-grid">',
         renderComparisonMap("effect", "Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal', result),
-        renderComparisonMap("conserved", "Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; green = the smaller raw count, capped at the 95% quantile (" + format(result.similarityCap) + ").", result),
+        renderComparisonMap("conserved", "Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ").", result),
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
         comparison.showDataTable ? renderComparisonDataTable(result, comparison) : '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Open comparison data table</button></div>'

@@ -188,6 +188,28 @@ assert.equal(comparisonReport.parameters.pseudocount, 0.5);
 assert.equal(comparisonReport.datasets[1].sha256, "second-sha");
 assert.deepEqual(JSON.parse(JSON.stringify(comparisonReport.result.selectedBin)), { xStart: 50, xEnd: 74, yStart: 75, yEnd: 99 });
 assert.equal(comparisonReport.methodScope.replicateAwareStatisticalTesting, false);
+// A DESeq2 result whose inputs changed since the run must not be reported as
+// a current replicate-aware test.
+context.window.Hyb2DeseqCard = { parameters: function () { return { result: { current: false } }; } };
+const staleTestReport = context.window.Hyb2UI.comparisonParameters(reproducibilityState);
+assert.equal(staleTestReport.methodScope.replicateAwareStatisticalTesting, false, "a stale differential test is not a current test");
+assert.equal(staleTestReport.methodScope.adjustedPValues, false, "a stale differential test gives no current adjusted p-values");
+context.window.Hyb2DeseqCard = { parameters: function () { return { result: { current: true } }; } };
+assert.equal(context.window.Hyb2UI.comparisonParameters(reproducibilityState).methodScope.adjustedPValues, true);
+delete context.window.Hyb2DeseqCard;
+// Similarity colours: similarity_heatmap.R puts white at the smallest plotted
+// count and forestgreen at the 95% quantile cap (CIELAB ramp).
+const similarityScale = { similarityCap: 10, similarityFloor: 2, conservedCells: [] };
+assert.equal(context.window.Hyb2UI.conservedRatio(2, similarityScale), 0, "the smallest count is white");
+assert.equal(context.window.Hyb2UI.conservedRatio(6, similarityScale), 0.5);
+assert.equal(context.window.Hyb2UI.conservedRatio(40, similarityScale), 1, "counts above the cap take the cap colour");
+assert.equal(context.window.Hyb2UI.conservedRatio(3, { similarityCap: 3, similarityFloor: 3 }), 0.5,
+  "a single-valued scale maps to the midpoint, like scales::rescale");
+assert.equal(context.window.Hyb2UI.conservedRatio(4, { similarityCap: 8, conservedCells: [{ similarity: 4 }, { similarity: 8 }] }), 0,
+  "without similarityFloor the floor is the smallest conserved cell");
+assert.equal(context.window.Hyb2UI.conservedColor(0), "rgb(255, 255, 255)");
+assert.equal(context.window.Hyb2UI.conservedColor(1), "rgb(34, 139, 34)");
+assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "the ramp interpolates in CIELAB");
 assert.equal(comparisonReport.methodScope.webRBaseRuntimeSmoke, "recorded-manual-pass");
 assert.equal(comparisonReport.methodScope.webRRuntimeValidated, false);
 assert.equal(comparisonReport.methodScope.webRRuntimeVendored, false);
@@ -726,6 +748,38 @@ assert.match(workflowSource, /scripts\/verify-report-render\.cjs/,
   "the deployment workflow must track report render changes");
 assert.match(workflowSource, /node scripts\/verify-report-render\.cjs/,
   "the deployment workflow must run the report render contract");
+["verify-deseq", "verify-arc-map", "verify-region-panels", "verify-folding-energy"].forEach(function (script) {
+  assert.ok(workflowSource.includes('"scripts/' + script + '.cjs"'), "the deployment workflow must track " + script);
+  assert.ok(workflowSource.includes("node scripts/" + script + ".cjs"), "the deployment workflow must run " + script);
+});
+assert.ok(workflowSource.indexOf("bash scripts/build-vienna-wasm.sh") < workflowSource.indexOf("node scripts/verify-folding-energy.cjs"),
+  "verify-folding-energy must run after the ViennaRNA build so it folds instead of skipping");
+
+// Loading or closing a file resets the arc map, region panels and folding
+// energy states and stops the DESeq2 and RNAcofold workers.
+const resetSites = appSource.match(/state\.comparison = null;\s*resetAnalysisModules\(\);/g) || [];
+assert.equal(resetSites.length, 4, "resetDataState, startParsing, clearSession and resetToLanding must reset the analysis modules");
+assert.match(appSource, /function unmount\(\)[\s\S]*?stopAnalysisWorkers\(\);[\s\S]*?\n  }/,
+  "unmounting must stop the analysis workers");
+const moduleResetSource = appSource.match(/  function stopAnalysisWorkers\(\) \{[\s\S]*?\n  function cancelComparisonLoads/);
+assert.ok(moduleResetSource, "app.js must define stopAnalysisWorkers/resetAnalysisModules");
+const resetCalls = [];
+const resetContext = vm.createContext({
+  state: { arcMap: { a: "old" }, regionPanels: { padj: "0.5" }, foldingEnergy: { running: true } },
+  window: {
+    Hyb2DeseqCard: { stop: function () { resetCalls.push("deseq"); } },
+    Hyb2FoldingEnergy: { stop: function (fe) { resetCalls.push("energy"); fe.running = false; }, defaultState: function () { return { fresh: "energy" }; } },
+    Hyb2ArcMap: { defaultState: function () { return { fresh: "arc" }; } },
+    Hyb2RegionPanels: { defaultState: function () { return { fresh: "panels" }; } }
+  }
+});
+vm.runInContext(moduleResetSource[0].replace(/\n  function cancelComparisonLoads$/, "") + "\nresetAnalysisModules();", resetContext);
+assert.deepEqual(resetCalls, ["deseq", "energy"], "the reset stops both analysis workers");
+assert.equal(JSON.stringify(resetContext.state), JSON.stringify({ arcMap: { fresh: "arc" }, regionPanels: { fresh: "panels" }, foldingEnergy: { fresh: "energy" } }),
+  "the reset restores the modules' default states");
+const bareResetContext = vm.createContext({ state: { arcMap: { a: 1 } }, window: {} });
+vm.runInContext(moduleResetSource[0].replace(/\n  function cancelComparisonLoads$/, "") + "\nresetAnalysisModules();", bareResetContext);
+assert.equal(bareResetContext.state.arcMap, null, "without the modules the reset still clears their state");
 assert.match(appSource, /data-action="enter-analysis">Enter analysis/,
   "the file-review stage must expose a separate analysis-entry action");
 assert.match(appSource, /function enterAnalysis\(\)\s*\{[\s\S]*?state\.analysisEntered = true;[\s\S]*?navigate\("overview"\);/,

@@ -19,6 +19,10 @@ on:
       - "scripts/verify-analysis-data.cjs"
       - "scripts/verify-ui-contract.cjs"
       - "scripts/verify-report-render.cjs"
+      - "scripts/verify-deseq.cjs"
+      - "scripts/verify-arc-map.cjs"
+      - "scripts/verify-region-panels.cjs"
+      - "scripts/verify-folding-energy.cjs"
       - "scripts/webr-smoke/**"
       - "third_party/cplfold/**"
       - ".github/workflows/deploy-pages.yml"
@@ -75,6 +79,11 @@ jobs:
           node scripts/verify-webr-feasibility.cjs
           node scripts/verify-ui-contract.cjs
           node scripts/verify-report-render.cjs
+          node scripts/verify-deseq.cjs
+          node scripts/verify-arc-map.cjs
+          node scripts/verify-region-panels.cjs
+          # runs after the ViennaRNA build above, so RNAcofold is checked too
+          node scripts/verify-folding-energy.cjs
 
       - name: Build and verify pinned browser CPLfold runtime
         run: |

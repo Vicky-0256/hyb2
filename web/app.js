@@ -181,6 +181,7 @@
     }
     terminateWorker();
     cancelComparisonLoads();
+    stopAnalysisWorkers();
     hostEvents.forEach(function (entry) { app.removeEventListener(entry[0], entry[1]); });
     window.removeEventListener("hashchange", handleHashChange);
     if (pageData) {
@@ -208,6 +209,7 @@
     state.region = null;
     state.viewpoint = null;
     state.comparison = null;
+    resetAnalysisModules();
     state.structure = null;
     state.loading = null;
     state.error = null;
@@ -1521,6 +1523,7 @@
     state.region = null;
     state.viewpoint = null;
     state.comparison = null;
+    resetAnalysisModules();
     state.structure = null;
     state.error = null;
     state.loading = {
@@ -2133,6 +2136,30 @@
     });
   }
 
+  // Stop the DESeq2 and RNAcofold workers a comparison may have started; a
+  // reply from a stale run must not land in the next file's state.
+  function stopAnalysisWorkers() {
+    if (window.Hyb2DeseqCard && typeof window.Hyb2DeseqCard.stop === "function") {
+      window.Hyb2DeseqCard.stop();
+    }
+    if (window.Hyb2FoldingEnergy && typeof window.Hyb2FoldingEnergy.stop === "function" && state.foldingEnergy) {
+      window.Hyb2FoldingEnergy.stop(state.foldingEnergy);
+    }
+  }
+
+  // Arc map, region panels and folding energy keep their own state beside
+  // state.comparison; loading or closing a file returns them to defaults.
+  function resetAnalysisModules() {
+    stopAnalysisWorkers();
+    state.arcMap = moduleDefaultState(window.Hyb2ArcMap);
+    state.regionPanels = moduleDefaultState(window.Hyb2RegionPanels);
+    state.foldingEnergy = moduleDefaultState(window.Hyb2FoldingEnergy);
+  }
+
+  function moduleDefaultState(module) {
+    return module && typeof module.defaultState === "function" ? module.defaultState() : null;
+  }
+
   function cancelComparisonLoads() {
     state.comparisonLoadSession = null;
     Array.from(state.comparisonParsers).forEach(function (parser) {
@@ -2217,6 +2244,7 @@
     state.region = null;
     state.viewpoint = null;
     state.comparison = null;
+    resetAnalysisModules();
     state.structure = null;
     state.loading = null;
     state.error = null;
@@ -2258,6 +2286,7 @@
     state.region = null;
     state.viewpoint = null;
     state.comparison = null;
+    resetAnalysisModules();
     state.structure = null;
     state.loading = null;
     state.error = null;

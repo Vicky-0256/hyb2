@@ -108,12 +108,14 @@ self.onmessage = function (event) {
   }
   const started = Date.now();
   let last = 0;
+  let lastStage = "";
   const progress = function (stage, detail, fraction) {
     const now = Date.now();
-    if (now - last < 150 && fraction !== 0) {
+    if (now - last < 150 && stage === lastStage) {
       return;
     }
     last = now;
+    lastStage = stage;
     self.postMessage({ type: "progress", stage: stage, detail: detail, fraction: fraction == null ? null : fraction });
   };
   let pool = null;

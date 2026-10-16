@@ -65,6 +65,16 @@
   const reportPage = { id: "report", label: "Report", shortLabel: "RP" };
   const workspacePages = analysisPages.concat([reportPage]);
 
+  // Folded sections (<details data-open-key>) keep their open state across
+  // renders, which replace the whole page.
+  window.Hyb2OpenSections = window.Hyb2OpenSections || Object.create(null);
+  app.addEventListener("toggle", function (event) {
+    const target = event.target;
+    if (target && target.matches && target.matches("details[data-open-key]")) {
+      window.Hyb2OpenSections[target.dataset.openKey] = target.open;
+    }
+  }, true);
+
   app.addEventListener("pointerdown", handlePointerDown);
   app.addEventListener("click", handleClick);
   app.addEventListener("click", finishPointerAction);

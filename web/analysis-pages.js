@@ -36,7 +36,7 @@
       ], "interaction-filter"),
       renderTextControl("Search", "search", filters.search, "RNA, sequence ID, or sequence", "interaction-filter"),
       "</div>",
-      '<details class="advanced-filters"><summary>Advanced filters</summary>',
+      '<details class="advanced-filters" data-open-key="interactions-advanced"' + openAttr("interactions-advanced") + '><summary>Advanced filters</summary>',
       '<div class="control-grid advanced-grid">',
       renderTextControl("Arm 1 start", "armOneStart", filters.armOneStart, "Any", "interaction-filter", "number", { min: 1, step: 1 }),
       renderTextControl("Arm 1 end", "armOneEnd", filters.armOneEnd, "Any", "interaction-filter", "number", { min: 1, step: 1 }),
@@ -98,7 +98,7 @@
       '<section class="data-card interaction-table-card">',
       '<div class="card-title-row"><div><h2>Records</h2><span class="card-note">' + format(records.length) + " matching records · virtualised rows</span></div><span class=\"card-kicker\">Local memory</span></div>",
       '<div class="virtual-table-frame">',
-      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span>Region 1 (nt)</span><span>RNA 2</span><span>Region 2 (nt)</span><span>Chimera type</span><span title="Cluster support: records merged into this one">Support</span><span>ΔG (kcal/mol)</span></div>',
+      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span>Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span>Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span title="Cluster support: records merged into this one">Support</span><span>ΔG <span class="unit">(kcal/mol)</span></span></div>',
       '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0">',
       '<div class="virtual-table-spacer" style="height:' + (records.length * rowHeight) + 'px"></div>',
       '<div class="virtual-table-rows" data-virtual-rows style="transform:translateY(' + (start * rowHeight) + 'px)">',
@@ -683,6 +683,14 @@
     const unavailable = !sequenceInfo.sequence || !!sequenceInfo.error ||
       (cplfold ? cplfoldLengthUnavailable : (length > 3000 || (length > 2000 && !structure.allowLarge))) ||
       largeEnsembleNeedsConsent;
+    // Why the Predict button is disabled, said next to it.
+    const unavailableReason = !unavailable ? "" :
+      !sequenceInfo.sequence ? "Choose an RNA and region, a HYB record or paste a sequence first." :
+      sequenceInfo.error ? sequenceInfo.error :
+      cplfold && cplfoldLengthUnavailable ? (lengthNotice || "This sequence is too long for CPLfold in the browser; choose a shorter region.") :
+      !cplfold && length > 3000 ? "The browser folds at most 3,000 nt with ViennaRNA; choose a shorter region." :
+      !cplfold && length > 2000 && !structure.allowLarge ? "Tick the large-fold confirmation above to fold more than 2,000 nt." :
+      largeEnsembleNeedsConsent ? "Confirm the large ensemble above (more than 100 random folds) to run it." : "";
     const methodBadge = cplfold
       ? "CPLfold + Pyodide · Browser"
       : guidedConstraintMode
@@ -724,6 +732,7 @@
         : '<div class="fold-status fold-status-mfe"><strong>Plain minimum-free-energy mode</strong><p>Runs the deployed ViennaRNA WebAssembly engine in a dedicated worker without base-pair constraints.</p></div>',
       !cplfold && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : "",
       '<div class="structure-run-bar">',
+      !running && unavailableReason ? '<p class="structure-run-reason" role="note">Cannot run yet: ' + escape(unavailableReason) + "</p>" : "",
       running ? renderStructureProgress(structure) : "",
       running ? '<button class="button button-secondary" type="button" data-feature-action="cancel-structure">' + (structure.operation === "capacity" ? "Cancel capacity test" : (structure.operation === "bonus-matrix" ? "Cancel input export" : "Cancel prediction")) + '</button>' : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable ? " disabled" : "") + ">" + actionLabel + "</button>",
       "</div>",
@@ -757,6 +766,9 @@
       ], "structure-control"),
       guided ? '<div class="guided-input-summary"><strong>' + format(assembly ? assembly.eligibleRecordCount : 0) + ' eligible HYB row' + (assembly && assembly.eligibleRecordCount === 1 ? "" : "s") + '</strong><span>one contribution per row · overlap_score and collapsed raw-read count are not weights · single reference region</span></div>' : "",
       renderCplfoldTopologyControl(allowPseudoknot),
+      '<details class="structure-advanced" data-open-key="cplfold-advanced"' + openAttr("cplfold-advanced") + '>',
+      '<summary>Advanced settings <span class="structure-advanced-values">' + escape(cplfoldAdvancedSummary(structure)) + '</span></summary>',
+      '<p class="card-note">Defaults suit most RNAs. Evidence alpha sets how strongly HYB evidence pulls bases together (0 = energy only); beam and phase-1 candidates trade speed for a broader search; the energy window keeps candidates within that many kcal/mol of the best.</p>',
       '<div class="control-grid">',
       renderSelectControl("Beam size", "cplfoldBeam", String(structure.cplfoldBeam || "20"), [
         { value: "10", label: "10 · faster" },
@@ -777,11 +789,25 @@
         { value: "RE", label: "Rivas–Eddy" }
       ], "structure-control") + "</div>",
       '<div class="control-grid">' + renderTextControl("Evidence alpha", "cplfoldAlpha", structure.cplfoldAlpha || "0.5", "0.5", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + renderTextControl("Pseudoknot beta", "cplfoldBeta", structure.cplfoldBeta || "0", "0", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + "</div>",
+      '</details>',
       renderCplfoldCapacity(structure),
       renderCplfoldLocalCta(guided),
       '<p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p>',
       "</section>"
     ].join("");
+  }
+
+  // "beam 20 · 3 candidates · ±5 kcal/mol · DP09 · alpha 0.5 · beta 0 · defaults"
+  function cplfoldAdvancedSummary(structure) {
+    const values = {
+      beam: String(structure.cplfoldBeam || "20"), phase1: String(structure.cplfoldMaxPhase1 || "3"),
+      delta: String(structure.cplfoldEnergyDelta || "5"), model: String(structure.cplfoldEnergyModel || "DP09"),
+      alpha: String(structure.cplfoldAlpha || "0.5"), beta: String(structure.cplfoldBeta || "0")
+    };
+    const defaults = values.beam === "20" && values.phase1 === "3" && Number(values.delta) === 5 && values.model === "DP09" &&
+      Number(values.alpha) === 0.5 && Number(values.beta) === 0;
+    return "beam " + values.beam + " · " + values.phase1 + " candidates · ±" + values.delta + " kcal/mol · " + values.model +
+      " · alpha " + values.alpha + " · beta " + values.beta + (defaults ? " · defaults" : " · changed");
   }
 
   function renderCplfoldTopologyControl(allowPseudoknot) {
@@ -1265,6 +1291,11 @@
       rnas.length > preview.length ? '<p class="table-note">Showing the first ' + format(preview.length) + " of " + format(rnas.length) + " RNA mappings. Enter any exact RNA name above to edit it.</p>" : "",
       "</div>"
     ].join("");
+  }
+
+  // " open" when the section with this key was left open (see app.js).
+  function openAttr(key) {
+    return window.Hyb2OpenSections && window.Hyb2OpenSections[key] ? " open" : "";
   }
 
   function renderSelectControl(label, key, value, options, feature) {

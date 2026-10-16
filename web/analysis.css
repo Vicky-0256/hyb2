@@ -1298,3 +1298,38 @@
     height: 100%;
   }
 }
+
+/* CPLfold numeric settings, folded; their values stay in the summary. */
+.structure-advanced {
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 8px);
+  padding: 10px 12px;
+}
+
+.structure-advanced summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.structure-advanced-values {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted-strong);
+  overflow-wrap: anywhere;
+}
+
+/* Why Predict is disabled, next to it. */
+.structure-run-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--warning);
+}
+
+/* Units keep their case in upper-case table headers. */
+.virtual-table-head .unit {
+  text-transform: none;
+}

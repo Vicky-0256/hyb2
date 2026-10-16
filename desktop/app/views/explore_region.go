@@ -201,8 +201,8 @@ func (p *explorePage) regionView(c *ui.Context) {
 			Card(c, "", func() {
 				ui.Row(c).Gap(24).Wrap().AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
-						ui.Text(c, shortGene(d.gene)+":"+span(d.f.start, d.f.end)).FontSize(16).Bold()
-						ui.Text(c, regionSubtitle(d.f)).FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, "Region "+span(d.f.start, d.f.end)+" nt").FontSize(16).Bold()
+						ui.Text(c, d.gene+" · "+regionSubtitle(d.f)).FontSize(12).TextColor(t.TextMuted)
 					})
 					stat(c, "Hybrids", FormatNumber(d.records))
 					stat(c, "Reads", FormatNumber(d.reads))
@@ -261,14 +261,37 @@ func (p *explorePage) regionTable(c *ui.Context, d *regionData) {
 		if !d.exact {
 			notice(c, "The order over several samples is approximate near the end of this list.")
 		}
-		cols := []ui.TableColumn{
-			{Title: "Gene 1", MinWidth: 80}, {Title: "Arm 1", Width: 140, Align: ui.End},
-			{Title: "Gene 2", MinWidth: 80}, {Title: "Arm 2", Width: 140, Align: ui.End},
+		rows := d.rows
+		// One RNA in every row: name it once and give its columns to the arms.
+		oneGene := len(rows) > 0
+		for _, r := range rows {
+			if r.Gene1 != rows[0].Gene1 || r.Gene2 != rows[0].Gene1 {
+				oneGene = false
+				break
+			}
+		}
+		all := []ui.TableColumn{
+			{Title: "Gene 1", MinWidth: 80}, {Title: "Arm 1 (nt)", Width: 140, Align: ui.End},
+			{Title: "Gene 2", MinWidth: 80}, {Title: "Arm 2 (nt)", Width: 140, Align: ui.End},
 			{Title: "Type", Width: 90}, {Title: "Hybrids", Width: 80, Align: ui.End}, {Title: "Reads", Width: 80, Align: ui.End},
 		}
-		rows := d.rows
+		var cols []ui.TableColumn
+		var index []int
+		for i, col := range all {
+			if oneGene && (i == 0 || i == 2) {
+				continue
+			}
+			if oneGene && (i == 1 || i == 3) {
+				col.Width, col.MinWidth = 0, 120
+			}
+			cols, index = append(cols, col), append(index, i)
+		}
+		if oneGene {
+			ui.Text(c, "Both arms of every interaction listed are on "+rows[0].Gene1+".").FontSize(12).TextColor(t.TextMuted)
+		}
 		ui.Table(c.Key("rg-table"), &s.list, cols, len(rows), func(row, col int) {
 			r := rows[row]
+			col = index[col]
 			text := ""
 			switch col {
 			case 0:

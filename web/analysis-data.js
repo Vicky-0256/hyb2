@@ -20,6 +20,7 @@
   // dataset cells; buildComparisonResults keeps them in typed arrays
   const MAX_COMPARISON_CELLS = 1500000;
   const MAX_COMPARISON_DATASET_CELLS = 4000000;
+  const COMPARISON_DATASET_BUDGET = { maximumCells: MAX_COMPARISON_CELLS, maximumBinContributions: CONTACT_HARD_MAX_BIN_CONTRIBUTIONS };
   const MAX_R_INTEGER_COUNT = 2147483647;
   let contactResourceBudgetCache = null;
 
@@ -172,6 +173,12 @@
       profile: deviceMemoryGb === null ? "fallback-memory+performance-probe" : "device-memory+performance-probe"
     };
     return contactResourceBudgetCache;
+  }
+
+  // comparison.worker.js uses the page's budget, so that the limits do not
+  // depend on where the bins are built
+  function setContactResourceBudget(budget) {
+    contactResourceBudgetCache = budget && Number(budget.maximumCells) > 0 && Number(budget.maximumBinContributions) > 0 ? budget : null;
   }
 
   function defaultInteractionFilters() {
@@ -549,7 +556,10 @@
   function buildContactBins(records, contact) {
     const requestedBinSize = Number(contact.binSize);
     const binSize = Number.isSafeInteger(requestedBinSize) && requestedBinSize > 0 ? requestedBinSize : 10;
-    const resourceBudget = getContactResourceBudget();
+    // a comparison dataset is binned off the page (comparison.worker.js) and
+    // bounded by the comparison limits, not the Contact page's timing probe,
+    // which a busy machine lowers below one replicate of the ZIKV example
+    const resourceBudget = contact.budget === "comparison" ? COMPARISON_DATASET_BUDGET : getContactResourceBudget();
     const maximumCells = resourceBudget.maximumCells;
     const maximumBinContributions = resourceBudget.maximumBinContributions;
     // cells in first-seen order: Map from cellKey() to a row of the arrays
@@ -1216,12 +1226,25 @@
   // values on demand and are looked up with comparisonCellAt().
   const SMALL_COMPARISON_CELLS = 100000;
 
-  function buildComparisonResults(comparison) {
+  // A comparison is built in three steps so that the heavy middle one can run
+  // in comparison.worker.js:
+  //   prepareComparison(config)        datasets, groups and a plain input
+  //   computeComparison(input, binsAt) typed arrays in (x, y) order (no DOM,
+  //                                    no dataset objects; worker-safe)
+  //   comparisonResultBuilder(...)     the cell objects the pages read, in
+  //                                    steps the page can spread over frames
+  // buildComparisonResults() runs all three at once.
+  //
+  // hasSource(dataset) says whether a dataset can contribute contact bins;
+  // by default prefetched DataProvider bins (`contactBins`, built with
+  // comparisonContactQuery()) or in-memory records.
+  function prepareComparison(comparison, hasSource) {
     const config = comparison || {};
-    // A dataset contributes either prefetched DataProvider contact bins
-    // (`contactBins`, built with comparisonContactQuery()) or in-memory records.
+    const usable = typeof hasSource === "function" ? hasSource : function (dataset) {
+      return Array.isArray(dataset.records) || !!dataset.contactBins;
+    };
     const datasets = (config.datasets || []).filter(function (dataset) {
-      return dataset && dataset.summary && (Array.isArray(dataset.records) || !!dataset.contactBins);
+      return dataset && dataset.summary && usable(dataset);
     });
     const groupA = datasets.filter(function (dataset) { return dataset.condition === "A"; });
     const groupB = datasets.filter(function (dataset) { return dataset.condition === "B"; });
@@ -1229,19 +1252,55 @@
     if (!config.rnaX || !config.rnaY || !groupA.length || !groupB.length) {
       return {
         ready: false,
-        reason: !groupA.length || !groupB.length
-          ? "Assign at least one local dataset to each condition."
-          : "Choose RNA X and RNA Y to compare.",
-        groupA: groupA,
-        groupB: groupB,
-        cells: [],
-        conservedCells: []
+        result: {
+          ready: false,
+          reason: !groupA.length || !groupB.length
+            ? "Assign at least one local dataset to each condition."
+            : "Choose RNA X and RNA Y to compare.",
+          groupA: groupA,
+          groupB: groupB,
+          cells: [],
+          conservedCells: []
+        }
       };
     }
 
     const template = comparisonContactQuery(config);
     const allDatasets = groupA.concat(groupB);
-    const datasetCount = allDatasets.length;
+    return {
+      ready: true,
+      groupA: groupA,
+      groupB: groupB,
+      allDatasets: allDatasets,
+      template: template,
+      // structured-cloneable: what the worker needs
+      input: {
+        normalise: config.normalise,
+        similarityMinimum: similarityMinimumOf(config),
+        datasets: allDatasets.map(function (dataset) {
+          return {
+            condition: dataset.condition,
+            librarySize: template.measure === "support"
+              ? Number(dataset.summary.supportInteractions || 0)
+              : Number(dataset.summary.validRecords || 0),
+            query: comparisonContactQuery(config, dataset)
+          };
+        })
+      }
+    };
+  }
+
+  // The numeric half of a comparison.  binsAt(datasetIndex) returns the
+  // contact bins ({ ready, reason, x, y, count }) of input.datasets[index];
+  // it is called once per dataset, in order, and not after a failure.
+  // Returns { failure, datasetCellContributions }, { empty: true } or the
+  // cells as typed arrays in (x, y) order.  options.effectOrder adds the
+  // cell positions by |effect|, largest first (comparisonOrder()).
+  function computeComparison(input, binsAt, options) {
+    const datasets = input.datasets || [];
+    const datasetCount = datasets.length;
+    const groupACount = datasets.filter(function (dataset) { return dataset.condition === "A"; }).length;
+    const groupBCount = datasetCount - groupACount;
     // cell rows in first-seen order; per dataset the rows it covers and its
     // raw values there
     const index = new Map();
@@ -1252,10 +1311,8 @@
     let datasetCellContributions = 0;
 
     for (let datasetIndex = 0; datasetIndex < datasetCount && !matrixFailure; datasetIndex += 1) {
-      const dataset = allDatasets[datasetIndex];
-      const bins = dataset.contactBins
-        ? dataset.contactBins
-        : buildContactBins(dataset.records, comparisonContactQuery(config, dataset));
+      const dataset = datasets[datasetIndex];
+      const bins = binsAt(datasetIndex);
       if (bins.ready === false) {
         matrixFailure = bins.reason || "A dataset exceeded the browser contact-map limits.";
         break;
@@ -1268,9 +1325,6 @@
         break;
       }
       datasetCellContributions += xs.length;
-      const librarySize = template.measure === "support"
-        ? Number(dataset.summary.supportInteractions || 0)
-        : Number(dataset.summary.validRecords || 0);
       const rows = new Int32Array(xs.length);
       const values = new Float64Array(xs.length);
       for (let cell = 0; cell < xs.length; cell += 1) {
@@ -1290,38 +1344,20 @@
         values[cell] = counts[cell];
       }
       perDataset.push({
-        dataset: dataset,
+        isA: dataset.condition === "A",
         rows: rows,
         values: values,
-        scale: config.normalise === "library" ? 1000000 / Math.max(1, librarySize) : 1
+        scale: input.normalise === "library" ? 1000000 / Math.max(1, dataset.librarySize) : 1
       });
     }
 
     if (matrixFailure) {
-      return {
-        ready: false,
-        reason: "Comparison not generated. " + matrixFailure,
-        groupA: groupA,
-        groupB: groupB,
-        cells: [],
-        conservedCells: [],
-        limitExceeded: true,
-        maximumCells: MAX_COMPARISON_CELLS,
-        maximumDatasetCells: MAX_COMPARISON_DATASET_CELLS,
-        datasetCellContributions: datasetCellContributions
-      };
+      return { failure: matrixFailure, datasetCellContributions: datasetCellContributions };
     }
 
     const distinctCellCount = cellX.length;
     if (!distinctCellCount) {
-      return {
-        ready: false,
-        reason: "No interactions were found for the selected RNA pair across the assigned datasets.",
-        groupA: groupA,
-        groupB: groupB,
-        cells: [],
-        conservedCells: []
-      };
+      return { empty: true };
     }
 
     const aTotal = new Float64Array(distinctCellCount);
@@ -1329,15 +1365,15 @@
     const aRaw = new Float64Array(distinctCellCount);
     const bRaw = new Float64Array(distinctCellCount);
     const present = new Int32Array(distinctCellCount);
-    // raw value of every dataset in every cell, NaN where the dataset has none
-    const rawByDataset = perDataset.map(function (entry) {
+    // raw value of every dataset in every cell (by row), NaN where the
+    // dataset has none
+    const rawByRow = perDataset.map(function (entry) {
       const dense = new Float64Array(distinctCellCount).fill(NaN);
-      const isA = entry.dataset.condition === "A";
       for (let cell = 0; cell < entry.rows.length; cell += 1) {
         const row = entry.rows[cell];
         const value = entry.values[cell];
         dense[row] = value;
-        if (isA) {
+        if (entry.isA) {
           aTotal[row] += value * entry.scale;
           aRaw[row] += value;
         } else {
@@ -1349,24 +1385,7 @@
       return dense;
     });
 
-    function datasetValues(row) {
-      const list = [];
-      perDataset.forEach(function (entry, datasetIndex) {
-        const rawValue = rawByDataset[datasetIndex][row];
-        if (rawValue === rawValue) {
-          list.push({
-            id: entry.dataset.id,
-            label: entry.dataset.label || entry.dataset.fileName,
-            condition: entry.dataset.condition,
-            rawValue: rawValue,
-            value: rawValue * entry.scale
-          });
-        }
-      });
-      return list;
-    }
-
-    const pseudocount = config.normalise === "library" ? 1 : 0.5;
+    const pseudocount = input.normalise === "library" ? 1 : 0.5;
     // Similarity heatmap as in HYB2's plot_similarity_map run on one merged
     // contact map per condition (the condition's .hyb files concatenated):
     // a bin kept in both maps scores the smaller raw count.  Bins below the
@@ -1376,91 +1395,301 @@
     // and Desktop's differential.py -- not bin/hyb2_compare with replicates,
     // which concatenates every replicate's contact.txt and pairs consecutive
     // occurrences of a bin (A1/A2, A2/B1, B1/B2).
-    const similarityMinimum = similarityMinimumOf(config);
-    const small = distinctCellCount <= SMALL_COMPARISON_CELLS;
-    const lazyPrototype = small ? null : Object.create(Object.prototype, {
-      datasets: { get: function () { return datasetValues(index.get(cellKey(this.x, this.y))); } }
-    });
+    const similarityMinimum = input.similarityMinimum;
     const order = new Int32Array(distinctCellCount);
     for (let row = 0; row < distinctCellCount; row += 1) {
       order[row] = row;
     }
     order.sort(function (left, right) { return cellX[left] - cellX[right] || cellY[left] - cellY[right]; });
-    const cells = new Array(distinctCellCount);
-    const cellByRow = new Array(distinctCellCount);
+    const out = {
+      count: distinctCellCount,
+      datasetCellContributions: datasetCellContributions,
+      similarityMinimum: similarityMinimum,
+      scales: perDataset.map(function (entry) { return entry.scale; }),
+      x: new Float64Array(distinctCellCount),
+      y: new Float64Array(distinctCellCount),
+      conditionA: new Float64Array(distinctCellCount),
+      conditionB: new Float64Array(distinctCellCount),
+      effect: new Float64Array(distinctCellCount),
+      present: new Int32Array(distinctCellCount),
+      rawA: new Float64Array(distinctCellCount),
+      rawB: new Float64Array(distinctCellCount),
+      similarity: new Float64Array(distinctCellCount),
+      // per dataset, by position
+      raw: rawByRow.map(function () { return new Float64Array(distinctCellCount); }),
+      conserved: null,
+      effectOrder: null
+    };
     const absoluteEffects = new Float64Array(distinctCellCount);
+    let conservedCount = 0;
     let xMin = Infinity;
     let xMax = -Infinity;
     let yMin = Infinity;
     let yMax = -Infinity;
     for (let position = 0; position < distinctCellCount; position += 1) {
       const row = order[position];
-      const conditionA = aTotal[row] / groupA.length;
-      const conditionB = bTotal[row] / groupB.length;
-      const cell = small ? {} : Object.create(lazyPrototype);
-      cell.x = cellX[row];
-      cell.y = cellY[row];
-      cell.conditionA = conditionA;
-      cell.conditionB = conditionB;
-      cell.effect = Math.log2((conditionA + pseudocount) / (conditionB + pseudocount));
-      cell.presentDatasets = present[row];
-      cell.rawA = aRaw[row];
-      cell.rawB = bRaw[row];
-      cell.similarity = aRaw[row] >= similarityMinimum && bRaw[row] >= similarityMinimum ? Math.min(aRaw[row], bRaw[row]) : 0;
-      if (small) {
-        cell.datasets = datasetValues(row);
+      const conditionA = aTotal[row] / groupACount;
+      const conditionB = bTotal[row] / groupBCount;
+      const x = cellX[row];
+      const y = cellY[row];
+      const effect = Math.log2((conditionA + pseudocount) / (conditionB + pseudocount));
+      const similarity = aRaw[row] >= similarityMinimum && bRaw[row] >= similarityMinimum ? Math.min(aRaw[row], bRaw[row]) : 0;
+      out.x[position] = x;
+      out.y[position] = y;
+      out.conditionA[position] = conditionA;
+      out.conditionB[position] = conditionB;
+      out.effect[position] = effect;
+      out.present[position] = present[row];
+      out.rawA[position] = aRaw[row];
+      out.rawB[position] = bRaw[row];
+      out.similarity[position] = similarity;
+      for (let datasetIndex = 0; datasetIndex < rawByRow.length; datasetIndex += 1) {
+        out.raw[datasetIndex][position] = rawByRow[datasetIndex][row];
       }
-      cells[position] = cell;
-      cellByRow[row] = cell;
-      absoluteEffects[position] = Math.abs(cell.effect);
-      if (cell.x < xMin) xMin = cell.x;
-      if (cell.x > xMax) xMax = cell.x;
-      if (cell.y < yMin) yMin = cell.y;
-      if (cell.y > yMax) yMax = cell.y;
+      absoluteEffects[position] = Math.abs(effect);
+      if (similarity > 0) conservedCount += 1;
+      if (x < xMin) xMin = x;
+      if (x > xMax) xMax = x;
+      if (y < yMin) yMin = y;
+      if (y > yMax) yMax = y;
+    }
+    out.conserved = new Int32Array(conservedCount);
+    const similarityValues = new Float64Array(conservedCount);
+    for (let position = 0, next = 0; position < distinctCellCount; position += 1) {
+      if (out.similarity[position] > 0) {
+        out.conserved[next] = position;
+        similarityValues[next] = out.similarity[position];
+        next += 1;
+      }
+    }
+    if (options && options.effectOrder) {
+      out.effectOrder = effectOrderOf(absoluteEffects);
     }
     absoluteEffects.sort();
-    const conservedCells = cells.filter(function (cell) { return cell.similarity > 0; });
-    const similarityValues = Float64Array.from(conservedCells, function (cell) { return cell.similarity; }).sort();
-    const binSize = template.binSize;
+    similarityValues.sort();
+    out.xMin = xMin;
+    out.xMax = xMax;
+    out.yMin = yMin;
+    out.yMax = yMax;
+    out.effectCap = absoluteEffects.length ? Math.max(.25, quantile(absoluteEffects, .95)) : 1;
+    // similarity_heatmap.R caps the counts at their 95% quantile and lets
+    // scale_fill_gradient span the data range: white at the smallest kept
+    // count (similarityFloor), forestgreen at the cap.
+    out.similarityCap = similarityValues.length ? Math.max(1, quantile(similarityValues, .95)) : 1;
+    out.similarityFloor = similarityValues.length ? similarityValues[0] : 0;
+    return out;
+  }
 
-    const result = {
-      ready: true,
-      limitExceeded: false,
-      groupA: groupA,
-      groupB: groupB,
-      cells: cells,
-      cellMap: small ? Object.fromEntries(cells.map(function (cell) { return [cell.x + ":" + cell.y, cell]; })) : null,
-      conservedCells: conservedCells,
-      binSize: binSize,
-      xMin: xMin,
-      xMax: xMax,
-      yMin: yMin,
-      yMax: yMax,
-      effectCap: absoluteEffects.length ? Math.max(.25, quantile(absoluteEffects, .95)) : 1,
-      // similarity_heatmap.R caps the counts at their 95% quantile and lets
-      // scale_fill_gradient span the data range: white at the smallest kept
-      // count (similarityFloor), forestgreen at the cap.
-      similarityCap: similarityValues.length ? Math.max(1, quantile(similarityValues, .95)) : 1,
-      similarityFloor: similarityValues.length ? similarityValues[0] : 0,
-      similarityMinimum: similarityMinimum,
-      distinctCells: distinctCellCount,
-      datasetCellContributions: datasetCellContributions,
-      maximumCells: MAX_COMPARISON_CELLS,
-      maximumDatasetCells: MAX_COMPARISON_DATASET_CELLS,
-      normalise: config.normalise || "library",
-      measure: template.measure,
-      rnaPairs: comparisonRnaPlan(config).filter(function (item) { return item.substituted; }).map(function (item) {
-        return { id: item.dataset.id, label: item.dataset.label || item.dataset.fileName || item.dataset.id, rnaX: item.rnaX, rnaY: item.rnaY };
-      })
-    };
-    // cell lookup for comparisonCellAt(), kept out of JSON and report exports
-    Object.defineProperty(result, "cellLookup", {
-      value: function (x, y) {
-        const row = index.get(cellKey(Number(x), Number(y)));
-        return row === undefined ? null : cellByRow[row];
+  // positions by descending value, ties in position order: the order of a
+  // stable cells.slice().sort() on that value
+  function effectOrderOf(absoluteEffects) {
+    const order = new Int32Array(absoluteEffects.length);
+    for (let position = 0; position < order.length; position += 1) {
+      order[position] = position;
+    }
+    return order.sort(function (left, right) { return absoluteEffects[right] - absoluteEffects[left] || left - right; });
+  }
+
+  // The buffers of a computeComparison() result, for postMessage transfer.
+  function comparisonTransfers(packed) {
+    if (!packed || !packed.count) {
+      return [];
+    }
+    return ["x", "y", "conditionA", "conditionB", "effect", "present", "rawA", "rawB", "similarity", "conserved", "effectOrder"]
+      .map(function (key) { return packed[key]; })
+      .concat(packed.raw)
+      .filter(Boolean)
+      .map(function (array) { return array.buffer; });
+  }
+
+  // Index of cell (x, y) in arrays sorted by x then y, or -1.
+  function sortedCellPosition(xs, ys, x, y) {
+    let low = 0;
+    let high = xs.length - 1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      const cellXValue = xs[middle];
+      const cellYValue = ys[middle];
+      if (cellXValue === x && cellYValue === y) {
+        return middle;
       }
+      if (cellXValue < x || (cellXValue === x && cellYValue < y)) {
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return -1;
+  }
+
+  // Turns computeComparison() output into the result the pages read.
+  // step(limit) creates up to `limit` more cells and returns true once the
+  // result is complete; `result` is set then.  A failed or empty
+  // comparison is complete at once.
+  function comparisonResultBuilder(comparison, prepared, packed) {
+    const config = comparison || {};
+    const groupA = prepared.groupA;
+    const groupB = prepared.groupB;
+    const builder = { result: null, done: 0, total: 0, step: function () { return true; } };
+
+    if (packed.failure) {
+      builder.result = {
+        ready: false,
+        reason: "Comparison not generated. " + packed.failure,
+        groupA: groupA,
+        groupB: groupB,
+        cells: [],
+        conservedCells: [],
+        limitExceeded: true,
+        maximumCells: MAX_COMPARISON_CELLS,
+        maximumDatasetCells: MAX_COMPARISON_DATASET_CELLS,
+        datasetCellContributions: packed.datasetCellContributions
+      };
+      return builder;
+    }
+    if (packed.empty) {
+      builder.result = {
+        ready: false,
+        reason: "No interactions were found for the selected RNA pair across the assigned datasets.",
+        groupA: groupA,
+        groupB: groupB,
+        cells: [],
+        conservedCells: []
+      };
+      return builder;
+    }
+
+    const count = packed.count;
+    const allDatasets = prepared.allDatasets;
+    const xs = packed.x;
+    const ys = packed.y;
+    const raw = packed.raw;
+    const scales = packed.scales;
+    const small = count <= SMALL_COMPARISON_CELLS;
+    function datasetValues(position) {
+      const list = [];
+      allDatasets.forEach(function (dataset, datasetIndex) {
+        const rawValue = raw[datasetIndex][position];
+        if (rawValue === rawValue) {
+          list.push({
+            id: dataset.id,
+            label: dataset.label || dataset.fileName,
+            condition: dataset.condition,
+            rawValue: rawValue,
+            value: rawValue * scales[datasetIndex]
+          });
+        }
+      });
+      return list;
+    }
+    // a large map's cells share one shape (a constructor allocates them
+    // much faster than adding properties one by one) and a prototype getter
+    // for their per-dataset values; JSON and Object.keys see the same fields
+    function LazyCell(position) {
+      this.x = xs[position];
+      this.y = ys[position];
+      this.conditionA = packed.conditionA[position];
+      this.conditionB = packed.conditionB[position];
+      this.effect = packed.effect[position];
+      this.presentDatasets = packed.present[position];
+      this.rawA = packed.rawA[position];
+      this.rawB = packed.rawB[position];
+      this.similarity = packed.similarity[position];
+    }
+    Object.defineProperty(LazyCell.prototype, "datasets", {
+      get: function () { return datasetValues(sortedCellPosition(xs, ys, this.x, this.y)); }
     });
-    return result;
+    const cells = new Array(count);
+    builder.total = count;
+    builder.step = function (limit) {
+      const end = Math.min(count, builder.done + Math.max(1, limit));
+      for (let position = builder.done; position < end; position += 1) {
+        if (!small) {
+          cells[position] = new LazyCell(position);
+          continue;
+        }
+        const cell = {};
+        cell.x = xs[position];
+        cell.y = ys[position];
+        cell.conditionA = packed.conditionA[position];
+        cell.conditionB = packed.conditionB[position];
+        cell.effect = packed.effect[position];
+        cell.presentDatasets = packed.present[position];
+        cell.rawA = packed.rawA[position];
+        cell.rawB = packed.rawB[position];
+        cell.similarity = packed.similarity[position];
+        cell.datasets = datasetValues(position);
+        cells[position] = cell;
+      }
+      builder.done = end;
+      if (end < count) {
+        return false;
+      }
+      if (!builder.result) {
+        builder.result = finish();
+      }
+      return true;
+    };
+
+    function finish() {
+      const conservedCells = Array.from(packed.conserved, function (position) { return cells[position]; });
+      const result = {
+        ready: true,
+        limitExceeded: false,
+        groupA: groupA,
+        groupB: groupB,
+        cells: cells,
+        cellMap: small ? Object.fromEntries(cells.map(function (cell) { return [cell.x + ":" + cell.y, cell]; })) : null,
+        conservedCells: conservedCells,
+        binSize: prepared.template.binSize,
+        xMin: packed.xMin,
+        xMax: packed.xMax,
+        yMin: packed.yMin,
+        yMax: packed.yMax,
+        effectCap: packed.effectCap,
+        similarityCap: packed.similarityCap,
+        similarityFloor: packed.similarityFloor,
+        similarityMinimum: packed.similarityMinimum,
+        distinctCells: count,
+        datasetCellContributions: packed.datasetCellContributions,
+        maximumCells: MAX_COMPARISON_CELLS,
+        maximumDatasetCells: MAX_COMPARISON_DATASET_CELLS,
+        normalise: config.normalise || "library",
+        measure: prepared.template.measure,
+        rnaPairs: comparisonRnaPlan(config).filter(function (item) { return item.substituted; }).map(function (item) {
+          return { id: item.dataset.id, label: item.dataset.label || item.dataset.fileName || item.dataset.id, rnaX: item.rnaX, rnaY: item.rnaY };
+        })
+      };
+      // cell lookup for comparisonCellAt(), kept out of JSON and report exports
+      Object.defineProperty(result, "cellLookup", {
+        value: function (x, y) {
+          const position = sortedCellPosition(xs, ys, Number(x), Number(y));
+          return position < 0 ? null : cells[position];
+        }
+      });
+      if (packed.effectOrder) {
+        comparisonOrders.set(result, { effect: packed.effectOrder });
+      }
+      return result;
+    }
+    return builder;
+  }
+
+  function buildComparisonResults(comparison) {
+    const config = comparison || {};
+    const prepared = prepareComparison(config);
+    if (!prepared.ready) {
+      return prepared.result;
+    }
+    const packed = computeComparison(prepared.input, function (datasetIndex) {
+      const dataset = prepared.allDatasets[datasetIndex];
+      return dataset.contactBins
+        ? dataset.contactBins
+        : buildContactBins(dataset.records, prepared.input.datasets[datasetIndex].query);
+    });
+    const builder = comparisonResultBuilder(config, prepared, packed);
+    builder.step(Infinity);
+    return builder.result;
   }
 
   // The comparison cell at bin start (x, y), or null.
@@ -1472,6 +1701,75 @@
       return result.cellLookup(x, y);
     }
     return result.cellMap && result.cellMap[x + ":" + y] || null;
+  }
+
+  // Positions into result.cells in a table order, computed once per result
+  // and key: "effect" (|log2 effect|, largest first), "similarity" (largest
+  // first) or "position" (x, then y: result.cells itself, returns null).
+  // Ties keep position order, as a stable sort of result.cells would.
+  const comparisonOrders = new WeakMap();
+  const COMPARISON_ORDER_KEYS = ["effect", "similarity", "position"];
+
+  function comparisonOrder(result, key) {
+    const sortKey = COMPARISON_ORDER_KEYS.indexOf(key) >= 0 ? key : "effect";
+    if (!result || !Array.isArray(result.cells) || sortKey === "position") {
+      return null;
+    }
+    let orders = comparisonOrders.get(result);
+    if (!orders) {
+      orders = {};
+      comparisonOrders.set(result, orders);
+    }
+    if (orders[sortKey]) {
+      return orders[sortKey];
+    }
+    const cells = result.cells;
+    let order;
+    if (sortKey === "effect") {
+      const absoluteEffects = new Float64Array(cells.length);
+      for (let position = 0; position < cells.length; position += 1) {
+        absoluteEffects[position] = Math.abs(cells[position].effect);
+      }
+      order = effectOrderOf(absoluteEffects);
+    } else {
+      // similarity: the shared cells sorted, then every other cell (0) in
+      // position order
+      const sharedPositions = [];
+      for (let position = 0; position < cells.length; position += 1) {
+        if (cells[position].similarity > 0) {
+          sharedPositions.push(position);
+        }
+      }
+      const shared = Int32Array.from(sharedPositions);
+      shared.sort(function (left, right) { return cells[right].similarity - cells[left].similarity || left - right; });
+      order = new Int32Array(cells.length);
+      order.set(shared);
+      let next = shared.length;
+      for (let position = 0; position < cells.length; position += 1) {
+        if (!(cells[position].similarity > 0)) {
+          order[next] = position;
+          next += 1;
+        }
+      }
+    }
+    orders[sortKey] = order;
+    return order;
+  }
+
+  // Cells start..start+count-1 of result.cells in comparisonOrder(key).
+  function comparisonOrderedCells(result, key, start, count) {
+    const cells = result && Array.isArray(result.cells) ? result.cells : [];
+    const from = Math.max(0, Math.min(cells.length, Math.floor(Number(start) || 0)));
+    const to = Math.min(cells.length, from + Math.max(0, Math.floor(Number(count) || 0)));
+    const order = comparisonOrder(result, key);
+    if (!order) {
+      return cells.slice(from, to);
+    }
+    const list = new Array(to - from);
+    for (let index = from; index < to; index += 1) {
+      list[index - from] = cells[order[index]];
+    }
+    return list;
   }
 
   // Which RNA pair each assigned dataset contributes.  A dataset that has the
@@ -1532,7 +1830,8 @@
       measure: config.measure === "support" ? "support" : "records",
       colourCap: "95",
       scale: "linear",
-      orientation: "normalised"
+      orientation: "normalised",
+      budget: "comparison"
     };
   }
 
@@ -2002,6 +2301,7 @@
     getPartnerCounts: getPartnerCounts,
     orientRecordForPair: orientRecordForPair,
     getContactResourceBudget: getContactResourceBudget,
+    setContactResourceBudget: setContactResourceBudget,
     buildContactMatrix: buildContactMatrix,
     buildContactBins: buildContactBins,
     contactMatrixFromBins: contactMatrixFromBins,
@@ -2017,6 +2317,12 @@
     matchesHomodimerSubset: matchesHomodimerSubset,
     viewpointToTsv: viewpointToTsv,
     buildComparisonResults: buildComparisonResults,
+    prepareComparison: prepareComparison,
+    computeComparison: computeComparison,
+    comparisonResultBuilder: comparisonResultBuilder,
+    comparisonTransfers: comparisonTransfers,
+    comparisonOrder: comparisonOrder,
+    comparisonOrderedCells: comparisonOrderedCells,
     comparisonContactQuery: comparisonContactQuery,
     comparisonRnaPlan: comparisonRnaPlan,
     comparisonCellAt: comparisonCellAt,

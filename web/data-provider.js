@@ -95,6 +95,16 @@
  *   Arms = { total, index: [], id: [], rnaOne: [], oneStart: [], oneEnd: [],
  *     rnaTwo: [], twoStart: [], twoEnd: [], support: [], homodimer: [],
  *     chimeraType: [] }
+ *
+ * Optional: getContactRecords(selection) -> null | ContactRecords
+ *   The fields buildContactBins() reads, as typed columns that copy cheaply
+ *   to comparison.worker.js, which then bins the records off the page:
+ *   ContactRecords = { total, rnaNames: [], rnaOne: Int32Array,
+ *     rnaTwo: Int32Array (indices into rnaNames), oneStart, oneEnd,
+ *     twoStart, twoEnd, support: Float64Array, homodimer: Uint8Array,
+ *     chimeraTypes: [], chimeraType: Int32Array (indices) }.
+ *   null when the records cannot be packed exactly (the page then asks
+ *   getContactBins()).  Providers without it are binned by getContactBins().
  */
 (function (root, factory) {
   "use strict";
@@ -193,6 +203,77 @@
       arms.chimeraType[row] = record.chimeraType;
     });
     return arms;
+  }
+
+  // Records -> ContactRecords (see the header), or null when a coordinate
+  // or support value is not a number (a typed column would change it).
+  function packContactRecords(records) {
+    const list = records || [];
+    const total = list.length;
+    const packed = {
+      total: total,
+      rnaNames: [],
+      rnaOne: new Int32Array(total),
+      rnaTwo: new Int32Array(total),
+      oneStart: new Float64Array(total),
+      oneEnd: new Float64Array(total),
+      twoStart: new Float64Array(total),
+      twoEnd: new Float64Array(total),
+      support: new Float64Array(total),
+      homodimer: new Uint8Array(total),
+      chimeraTypes: [],
+      chimeraType: new Int32Array(total)
+    };
+    const rnaCodes = new Map();
+    const typeCodes = new Map();
+    const code = function (codes, names, value) {
+      let found = codes.get(value);
+      if (found === undefined) {
+        found = names.length;
+        codes.set(value, found);
+        names.push(value);
+      }
+      return found;
+    };
+    for (let row = 0; row < total; row += 1) {
+      const record = list[row];
+      if (typeof record.rnaOneStart !== "number" || typeof record.rnaOneEnd !== "number" ||
+          typeof record.rnaTwoStart !== "number" || typeof record.rnaTwoEnd !== "number" ||
+          typeof record.supportCount !== "number") {
+        return null;
+      }
+      packed.rnaOne[row] = code(rnaCodes, packed.rnaNames, record.rnaOne);
+      packed.rnaTwo[row] = code(rnaCodes, packed.rnaNames, record.rnaTwo);
+      packed.oneStart[row] = record.rnaOneStart;
+      packed.oneEnd[row] = record.rnaOneEnd;
+      packed.twoStart[row] = record.rnaTwoStart;
+      packed.twoEnd[row] = record.rnaTwoEnd;
+      packed.support[row] = record.supportCount;
+      packed.homodimer[row] = record.isHomodimer ? 1 : 0;
+      packed.chimeraType[row] = code(typeCodes, packed.chimeraTypes, record.chimeraType);
+    }
+    return packed;
+  }
+
+  // ContactRecords -> record-like objects with the fields buildContactBins()
+  // reads.
+  function unpackContactRecords(packed) {
+    const total = packed && packed.total || 0;
+    const records = new Array(total);
+    for (let row = 0; row < total; row += 1) {
+      records[row] = {
+        rnaOne: packed.rnaNames[packed.rnaOne[row]],
+        rnaOneStart: packed.oneStart[row],
+        rnaOneEnd: packed.oneEnd[row],
+        rnaTwo: packed.rnaNames[packed.rnaTwo[row]],
+        rnaTwoStart: packed.twoStart[row],
+        rnaTwoEnd: packed.twoEnd[row],
+        supportCount: packed.support[row],
+        isHomodimer: packed.homodimer[row] === 1,
+        chimeraType: packed.chimeraTypes[packed.chimeraType[row]]
+      };
+    }
+    return records;
   }
 
   function computeRnaExtents(records) {
@@ -811,6 +892,17 @@
     return recordsToArms(matches);
   };
 
+  // Packed once per record list (records do not change after addDataset).
+  const contactRecordsCache = new WeakMap();
+
+  BrowserProvider.prototype.getContactRecords = async function (selection) {
+    const rows = this.rows(selection);
+    if (!contactRecordsCache.has(rows)) {
+      contactRecordsCache.set(rows, packContactRecords(rows));
+    }
+    return contactRecordsCache.get(rows);
+  };
+
   function implementsProvider(candidate) {
     return !!candidate && METHODS.every(function (method) { return typeof candidate[method] === "function"; });
   }
@@ -823,6 +915,8 @@
     sameSelection: sameSelection,
     armsToRecords: armsToRecords,
     recordsToArms: recordsToArms,
+    packContactRecords: packContactRecords,
+    unpackContactRecords: unpackContactRecords,
     mergeSummaries: mergeSummaries,
     computeRnaExtents: computeRnaExtents,
     implementsProvider: implementsProvider

@@ -423,6 +423,11 @@ func TestAcceptanceFlow(t *testing.T) {
 			t.Errorf("reopened %s row: %q", name, r)
 		}
 	}
+	// The file is still moved: checked on open, it is marked with Relink.
+	d.until("moved marked", 30*time.Second, func() bool { return contains(rowTexts(d, "moved_rep1", names), "Relink…") })
+	if r := rowTexts(d, "moved_rep1", names); !contains(r, "missing") {
+		t.Errorf("reopened moved row not marked missing: %q", r)
+	}
 	d.click("Explore")
 	d.until("explore reopened", 2*time.Minute, func() bool { return d.has(want) || d.has("Could not") })
 	record("reopen_explore", map[string]any{"shown": d.has(want)})

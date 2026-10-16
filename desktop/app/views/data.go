@@ -128,6 +128,8 @@ type dataPage struct {
 	// inputs: check_inputs items by "<kind>:<id>"; checkSummary the line
 	// shown after a check.
 	inputs       map[string]dataInputItem
+	checkedOpen  int // a.opened whose inputs were checked
+	checkSeq     int // only the latest check's answer is shown
 	checkSummary string
 	checking     bool
 	// runningFor maps a sample to the task this session started for it,
@@ -436,6 +438,12 @@ func dataErrText(err error) string {
 func (p *dataPage) View(c *ui.Context) {
 	a := p.a
 	t := c.Theme()
+	if a.Project != nil && p.checkedOpen != a.opened {
+		// Files may have moved since the last session: mark them now, not
+		// when a Resume fails again.
+		p.checkedOpen, p.inputs, p.checkSummary = a.opened, nil, ""
+		p.checkInputsQuiet()
+	}
 	if folder := a.pendingFolder; folder != "" && a.Project != nil {
 		a.pendingFolder = "" // chosen on the start page with a new project
 		p.scanFolder(folder)
@@ -449,7 +457,7 @@ func (p *dataPage) View(c *ui.Context) {
 				PageHeader(c, "Data", "References and samples of this project. Raw files are linked in place unless copied.")
 			})
 			if ui.Button(c, "Check inputs").Disabled(p.checking).Clicked() {
-				p.checkInputs()
+				p.runCheck(false)
 			}
 			if ui.Button(c, "Import sample sheet…").Clicked() {
 				p.importSheet()
@@ -1590,10 +1598,18 @@ func (p *dataPage) allowLinks(links []model.UntrustedLink) {
 
 // ---- check inputs and relink
 
-func (p *dataPage) checkInputs() {
+// checkInputsQuiet checks on open: no toast, and a summary only when
+// something needs a look (or the check could not run).
+func (p *dataPage) checkInputsQuiet() { p.runCheck(true) }
+
+func (p *dataPage) runCheck(quiet bool) {
 	a := p.a
 	path := a.Project.Path
-	p.checking = true
+	p.checkSeq++
+	seq := p.checkSeq
+	if !quiet {
+		p.checking = true
+	}
 	a.Go(func() func() {
 		result, err := a.B.ProjectOp(path, "check_inputs", nil)
 		var items []dataInputItem
@@ -1605,11 +1621,17 @@ func (p *dataPage) checkInputs() {
 			err = model.Decode(result["no_reference"], &noReference)
 		}
 		return func() {
-			p.checking = false
-			if a.Project == nil || a.Project.Path != path {
+			if !quiet {
+				p.checking = false
+			}
+			if seq != p.checkSeq || a.Project == nil || a.Project.Path != path {
 				return
 			}
 			if err != nil {
+				if quiet {
+					p.checkSummary = "Could not check the input files: " + dataErrText(err)
+					return
+				}
 				a.ToastAs("check-inputs", "Check failed: %s", dataErrText(err))
 				return
 			}
@@ -1625,6 +1647,12 @@ func (p *dataPage) checkInputs() {
 			}
 			if n := len(noReference); n > 0 {
 				p.checkSummary += " " + dataPlural(n, "sample has", "samples have") + " no reference."
+			}
+			if quiet {
+				if count["missing"]+count["changed"]+count["unconfirmed"]+len(noReference) == 0 {
+					p.checkSummary = ""
+				}
+				return
 			}
 			switch {
 			case count["missing"] > 0 || count["changed"] > 0:

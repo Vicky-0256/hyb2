@@ -61,7 +61,7 @@ HYB2_FLOW_DATA=<data> HYB2_FLOW_OUT=<empty dir> HYB2_SNAPSHOT_DIR=<dir> \
 | Failing task (truncated .gz) | task failed, map failed with the EOFError reason, Resume, no Explore, no index | Pass |
 | Cancel (3M reads, while mapping) | task cancelled, map cancelled, no .hyb/index, Resume | Pass |
 | Offline lookup | lookup shows RNAcentral error / nothing concluded, not "not found"; connection test does not claim RNAcentral was reached | Pass after fix (said "Connected") |
-| Reopen (new runtime, Recent projects) | every row keeps its status, Explore shows the same hybrids, Report says 5 (1 analysed) | Pass |
+| Reopen (new runtime, Recent projects) | every row keeps its status, the still-moved file is marked missing with Relink (inputs are checked on open), Explore shows the same hybrids, Report says 5 (1 analysed) | Pass after fix (missing was shown only after Check inputs) |
 | Damaged index | Explore shows "Could not load…", not an empty result | Pass |
 
 Also: the built app (`mygo build -skip-dmg` with the packed runtime) launched,

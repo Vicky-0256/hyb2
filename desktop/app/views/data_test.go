@@ -204,6 +204,56 @@ func TestDataPageMissingReference(t *testing.T) {
 	dataExpect(t, tt, "Inputs checked: 8 ok, 0 missing, 0 changed. 1 sample has no reference.")
 }
 
+// Opening a project checks its input files quietly: a file that went
+// missing since the last session is marked without clicking Check inputs
+// (its Resume would only fail again), and all-fine says nothing.
+func TestDataPageChecksInputsOnOpen(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	if n := len(f.callsOf("check_inputs")); n != 1 {
+		t.Fatalf("check_inputs called %d times on open", n)
+	}
+	if tt.HasText("Inputs checked") || tt.HasText("present and unchanged") || tt.HasText("Relink…") {
+		t.Fatalf("all-fine check is not quiet: %q", tt.Texts())
+	}
+	tt.Frame()
+	if n := len(f.callsOf("check_inputs")); n != 1 {
+		t.Fatalf("checked again on a later frame: %d", n)
+	}
+
+	// The same project with a moved file, opened again.
+	checked := fixture(t, "data_check_inputs.json")
+	checked["items"].([]any)[2].(map[string]any)["status"] = "missing"
+	f.ops["check_inputs"] = checked
+	a.Close()
+	waitFlush(a)
+	a.Open("/projects/zikv.hyb2proj")
+	waitFlush(a)
+	a.Navigate("data", nil)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Inputs checked: 7 ok, 1 missing, 0 changed.", "missing", "Relink…")
+	if tt.HasText("Use Relink on the marked rows") {
+		t.Fatalf("automatic check toasts: %q", tt.Texts())
+	}
+
+	// A check that cannot run says so; it is not an all-fine silence.
+	delete(f.ops, "check_inputs")
+	a.Close()
+	waitFlush(a)
+	a.Open("/projects/zikv.hyb2proj")
+	waitFlush(a)
+	a.Navigate("data", nil)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Could not check the input files: unsupported project operation check_inputs")
+}
+
 func TestDataPageImportSheet(t *testing.T) {
 	a, f := dataOpen(t, "list_samples.json")
 	tt := ui.NewTester(a.View, 1100, 720)

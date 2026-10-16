@@ -64,6 +64,11 @@ output to the legacy scripts, which were run with macOS one-true-awk 20200816
 and `LANG=C.UTF-8`. The port reproduces the legacy quirks that decide which
 duplicate line is kept: awk hash iteration order, `sort` last-resort ordering,
 and the collapse scripts dropping each group's first line.
+`tests/test_analysis.py` also checks `query.viewpoint` (gene and partner
+`Zika_virusRNA`) against the legacy `plot_viewpoint` output for the same
+`testData.hyb` (`golden/testData_Zika_virusRNA.gplot`, from the
+`python-migration` branch's `fixtures/legacy_run/direct_viewpoint`): equal at
+all 10,807 nucleotides.
 
 It deliberately differs from the legacy scripts in four places:
 

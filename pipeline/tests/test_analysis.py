@@ -467,6 +467,19 @@ class ViewpointRegionTest(unittest.TestCase):
             self.assertAlmostEqual(got, want, places=3)
         self.assertEqual({p["name"]: [p["records"], p["reads"]] for p in result["partners"]}, partners)
 
+    def test_viewpoint_matches_legacy_plot_viewpoint(self):
+        # golden/testData_Zika_virusRNA.gplot: the legacy hyb2 step 2
+        # (`plot_viewpoint -a Zika_virusRNA`: hyb2blast.awk + blast2gplot.pl)
+        # on testData.hyb, from TomHarcus's python-migration branch
+        # (fixtures/legacy_run/direct_viewpoint). It counts, per nucleotide,
+        # the arms of the hybrids with both arms on the gene.
+        lines = (GOLDEN / "testData_Zika_virusRNA.gplot").read_text().splitlines()
+        self.assertEqual(lines[0], "#test_Zika_virusRNA_10807")
+        legacy = [int(line.split("\t")[1]) for line in lines[1:]]
+        result = query.viewpoint([self.index], "Zika_virusRNA", 1, 10807, partner="Zika_virusRNA")
+        self.assertEqual(result["bins"]["start"], list(range(1, 10808)))
+        self.assertEqual(result["bins"]["value"], legacy)
+
     def test_viewpoint_matches_brute_force(self):
         recs = self.records
         result = query.viewpoint([self.index], "Zika_virusRNA", 2000, 2600)

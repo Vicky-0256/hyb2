@@ -65,6 +65,8 @@ type structureEntry struct {
 	Parameters map[string]any `json:"parameters"`
 	CreatedAt  string         `json:"created_at"`
 	Available  *bool          `json:"available"`
+	// Summary is the task's {pairs, pseudoknot_pairs, energy, length, ...}.
+	Summary map[string]any `json:"summary"`
 }
 
 type structureRecord struct {
@@ -350,11 +352,16 @@ type structurePage struct {
 	// the fold the form describes).
 	estKey      string
 	est         *core.FoldEstimate
-	estMemMB    uint64
 	prefillNote string
-	formMsg     string
-	formErr     bool
 	prefsAsked  bool
+	// budgetMB is the memory tasks may use (Preferences), 0 until read.
+	budgetMB     uint64
+	advancedOpen bool
+	errorOpen    bool
+	// the fold started here: starting, why it did not start, its task.
+	starting bool
+	startErr string
+	lastTask string
 
 	// list
 	structures []structureEntry
@@ -394,7 +401,7 @@ func newStructurePage(a *App) *structurePage {
 func (p *structurePage) reset() {
 	p.gene, p.evidence, p.mode, p.windows = "", "", "genome", ""
 	p.pseudoknot, p.alpha, p.beam = false, 0.5, 100
-	p.prefillNote, p.formMsg, p.formErr = "", "", false
+	p.prefillNote, p.startErr, p.lastTask, p.starting = "", "", "", false
 	p.structures, p.listErr, p.loading = nil, "", false
 	p.viewA, p.viewB, p.record = "", "", "all"
 	p.cache = map[string]*structureResult{}
@@ -462,8 +469,7 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 			if source == "" {
 				source = "a fold request"
 			}
-			p.prefillNote = "Prefilled from " + source + ". Adjust the window and press Run fold."
-			p.formMsg = ""
+			p.prefillNote = "Prefilled from " + source + ". Check the window, then press Run fold below."
 		}
 	}
 	if id, _ := opts["structureId"].(string); id != "" {
@@ -489,18 +495,20 @@ func (p *structurePage) askWorkers() {
 	a := p.a
 	a.Go(func() func() {
 		prefs, err := a.B.Preferences()
-		cpu := 4.0
+		cpu, mem := 4.0, 0.0
 		if err == nil {
 			if budget, _ := prefs["budget"].(map[string]any); budget != nil {
 				if v, ok := budget["cpu"].(float64); ok && v >= 1 {
 					cpu = v
 				}
+				mem, _ = budget["mem_mb"].(float64)
 			}
 		}
 		return func() {
 			if p.workers <= 0 {
 				p.workers = cpu
 			}
+			p.budgetMB = uint64(mem)
 		}
 	})
 }
@@ -649,114 +657,6 @@ func (p *structurePage) evidenceMismatch() string {
 	return ""
 }
 
-func (p *structurePage) runFold() {
-	a := p.a
-	p.formErr = true
-	gene := p.gene
-	ids := a.SelectionIDs(p.evidence)
-	if gene == "" {
-		p.formMsg = "Choose the RNA to fold."
-		return
-	}
-	if len(ids) == 0 {
-		p.formMsg = "Choose analysed samples as evidence."
-		return
-	}
-	if msg := p.evidenceMismatch(); msg != "" {
-		p.formMsg = msg
-		return
-	}
-	mode := p.mode
-	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "allow_pseudoknot": false}
-	req := core.TaskStartRequest{Kind: "structure", SampleIDs: ids, GeneID: &gene, Mode: &mode, Parameters: params}
-	if p.workers >= 1 {
-		w := uint32(p.workers)
-		req.Workers = &w
-	}
-	what := "whole RNA"
-	if mode == "windows" {
-		windows, errs := stParseWindows(p.windows, a.Project.GeneLength(gene))
-		if len(errs) > 0 {
-			p.formMsg = strings.Join(errs, "; ")
-			return
-		}
-		if len(windows) == 0 {
-			p.formMsg = "Add at least one window."
-			return
-		}
-		req.Windows = windows
-		params["allow_pseudoknot"] = p.pseudoknot
-		what = fmt.Sprintf("%d window%s", len(windows), plural(len(windows)))
-	}
-	mem := StructureMemClaim(req, a.Project.GeneLength(gene), params["allow_pseudoknot"] == true)
-	req.MemMB = &mem
-	p.formErr = false
-	p.formMsg = "Starting…"
-	a.StartTask(req, "Structure · "+a.SelectionLabel(p.evidence)+" · "+what, func(t model.Task, err error) {
-		if err != nil {
-			p.formErr = true
-			p.formMsg = "Could not start: " + StructureStartError(err, mem)
-			return
-		}
-		p.formMsg = "Started. Progress is shown in the list and the task drawer."
-		p.prefillNote = ""
-		p.pendingShow = t.TaskID
-	})
-}
-
-// estimate shows the expected time and memory of the fold the form
-// describes, recomputed (off the UI thread) when the form changes.
-func (p *structurePage) estimate(c *ui.Context) {
-	a := p.a
-	t := c.Theme()
-	length := a.Project.GeneLength(p.gene)
-	var lengths []int
-	req := core.TaskStartRequest{Kind: "structure"}
-	pk := false
-	if p.mode == "windows" {
-		windows, errs := stParseWindows(p.windows, length)
-		if len(errs) > 0 || len(windows) == 0 {
-			return
-		}
-		for _, w := range windows {
-			lengths = append(lengths, int(w.End-w.Start+1))
-		}
-		req.Windows = windows
-		pk = p.pseudoknot
-	} else if length > 0 {
-		lengths = []int{length}
-	}
-	if len(lengths) == 0 {
-		return
-	}
-	workers := max(int(p.workers), 1)
-	w := uint32(workers)
-	req.Workers = &w
-	key := fmt.Sprint(lengths, int(p.beam), workers, pk)
-	if key != p.estKey {
-		p.estKey, p.est = key, nil
-		p.estMemMB = StructureMemClaim(req, length, pk)
-		beam := int(p.beam)
-		a.Go(func() func() {
-			e := a.B.EstimateFold(lengths, beam, workers)
-			return func() {
-				if p.estKey == key {
-					p.est = &e
-				}
-			}
-		})
-	}
-	if p.est == nil {
-		return
-	}
-	basis := "measured on this computer"
-	if !p.est.Measured {
-		basis = "rough until a fold has run on this computer"
-	}
-	ui.Text(c, fmt.Sprintf("Estimated: about %s, %.1f GB memory (%s).", FormatDuration(p.est.Seconds), float64(p.estMemMB)/1024, basis)).
-		FontSize(12).TextColor(t.TextMuted)
-}
-
 func (p *structurePage) evidenceNames(e *structureEntry) string {
 	ids := e.SampleIDs
 	if len(ids) == 0 {
@@ -772,171 +672,26 @@ func (p *structurePage) evidenceNames(e *structureEntry) string {
 	return strings.Join(names, " + ")
 }
 
-func stTitle(e *structureEntry) string {
-	mode := "whole RNA"
-	if e.Mode != "genome" {
-		mode = fmt.Sprintf("%d window%s", len(e.Windows), plural(len(e.Windows)))
-	}
-	return e.GeneID + " · " + mode
-}
-
 // ---- view
 
 func (p *structurePage) View(c *ui.Context) {
 	ui.Column(c).Fill().Padding(24).Gap(16).Children(func() {
-		PageHeader(c, "Structure", "CPLfold with chimeric reads as evidence: whole RNA without pseudoknots, or windows with pseudoknots.")
+		PageHeader(c, "Structure", "Predict RNA secondary structure with CPLfold, using your samples' chimeric reads as evidence, and compare structures.")
 		ui.Row(c).Grow(1).Gap(16).AlignItems(ui.Stretch).Children(func() {
-			ui.Scroll(c.Key("st-side")).Width(354).Padding(0, 14, 0, 0).Gap(16).Children(func() {
-				p.form(c)
-				p.list(c)
+			// The form and results scroll; the check, Run fold and the
+			// fold's status stay pinned below them.
+			ui.Column(c).Width(354).Gap(12).Children(func() {
+				ui.Scroll(c.Key("st-side")).Grow(1).Padding(0, 14, 0, 0).Gap(16).Children(func() {
+					p.form(c)
+					p.list(c)
+				})
+				p.runPanel(c)
 			})
 			ui.Scroll(c.Key("st-main")).Grow(1).Gap(16).Children(func() {
 				p.viewer(c)
 				p.research.View(c, p.researchTarget())
 			})
 		})
-	})
-}
-
-func (p *structurePage) form(c *ui.Context) {
-	a := p.a
-	t := c.Theme()
-	Card(c, "New fold", func() {
-		if p.prefillNote != "" {
-			ui.Text(c, p.prefillNote).FontSize(12).Padding(8).Radius(6).Background(t.Accent.Alpha(0.10))
-		}
-		// RNA: every reference sequence.
-		var geneLabels []string
-		names := map[string]string{}
-		current := ""
-		for _, r := range a.Project.References {
-			for _, s := range r.Sequences {
-				label := s.Name + " · " + FormatNumber(int64(s.Length)) + " nt"
-				if _, seen := names[label]; seen {
-					continue
-				}
-				geneLabels = append(geneLabels, label)
-				names[label] = s.Name
-				if s.Name == p.gene {
-					current = label
-				}
-			}
-		}
-		Field(c, "RNA", func() {
-			ui.Select(c.Key("st-gene"), &current, geneLabels).FillWidth().Label("RNA").OnChange(func() { p.gene = names[current] })
-		})
-		options := a.SelectionOptions()
-		var evLabels []string
-		keys := map[string]string{}
-		currentEv := ""
-		for _, o := range options {
-			evLabels = append(evLabels, o.Label)
-			keys[o.Label] = o.Key
-			if o.Key == p.evidence {
-				currentEv = o.Label
-			}
-		}
-		Field(c, "Evidence (chimeras of)", func() {
-			if len(evLabels) == 0 {
-				ui.Text(c, "No analysed samples").TextColor(t.TextMuted)
-				return
-			}
-			ui.Select(c.Key("st-evidence"), &currentEv, evLabels).FillWidth().Label("Evidence").OnChange(func() { p.evidence = keys[currentEv] })
-			if msg := p.evidenceMismatch(); msg != "" {
-				ui.Text(c, msg).FontSize(12).TextColor(t.Danger)
-			}
-		})
-		Field(c, "Mode", func() {
-			ui.RadioGroup(c.Key("st-mode"), func() {
-				ui.Radio(c, &p.mode, "genome", "Whole RNA, pseudoknot-free")
-				ui.Radio(c, &p.mode, "windows", "Windows")
-			}).Label("Mode")
-		})
-		if p.mode == "windows" {
-			Field(c, "Windows (1-based, inclusive)", func() {
-				ui.TextArea(c.Key("st-windows"), &p.windows).Lines(3, 8).Font("monospace").
-					Placeholder("One window per line, e.g.\n1-400\n2300-2700").Label("Windows")
-			})
-			ui.Checkbox(c.Key("st-pk"), &p.pseudoknot, "Allow pseudoknots in windows")
-		}
-		numberRow := func(key, label string, value *float64, lo, hi, step float64, tip string) {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, label).FontSize(12).Bold().TextColor(t.TextMuted).Width(120).Tooltip(tip)
-				ui.NumberInput(c.Key(key), value, lo, hi, step).Grow(1).Label(label)
-			})
-		}
-		numberRow("st-alpha", "Alpha", &p.alpha, 0, 1, 0.05, "Weight of the chimera evidence")
-		numberRow("st-beam", "Beam", &p.beam, 1, 1000, 10, "Beam size of the folding")
-		numberRow("st-workers", "Parallel windows", &p.workers, 1, 256, 1, "Windows folded at once")
-		p.estimate(c)
-		ui.Row(c).Justify(ui.End).Children(func() {
-			if ui.PrimaryButton(c, "Run fold").Clicked() {
-				p.runFold()
-			}
-		})
-		if p.formMsg != "" {
-			color := t.TextMuted
-			if p.formErr {
-				color = t.Danger
-			}
-			ui.Text(c, p.formMsg).FontSize(12).TextColor(color)
-		}
-	})
-}
-
-func (p *structurePage) list(c *ui.Context) {
-	a := p.a
-	t := c.Theme()
-	Card(c, "", func() {
-		ui.Row(c).Children(func() {
-			ui.Text(c, "Results").FontSize(16).Bold().Grow(1)
-			if ui.Button(c, "Refresh").Clicked() {
-				p.loadList()
-			}
-		})
-		running := cmpTaskRows(c, a, "structure")
-		if p.listErr != "" {
-			ui.Text(c, "Could not list structures: "+p.listErr).TextColor(t.Danger)
-		}
-		if len(p.structures) == 0 && running == 0 {
-			msg := "No structures yet."
-			if p.loading {
-				msg = "Loading…"
-			}
-			ui.Text(c, msg).TextColor(t.TextMuted)
-			return
-		}
-		for i := range p.structures {
-			e := &p.structures[i]
-			isA, isB := p.viewA == e.ID, p.viewB == e.ID
-			item := ui.Column(c.Key("st-"+e.ID)).Gap(4).Padding(8, 10).Radius(8).Border(1, t.Border)
-			if isA || isB {
-				item.Background(t.Accent.Alpha(0.10)).BorderColor(t.Accent)
-			}
-			item.Children(func() {
-				if cmpTitleButton(c, stTitle(e)).Clicked() {
-					p.show(e.ID)
-				}
-				meta := "Evidence: " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
-				if e.Available != nil && !*e.Available {
-					meta += " · files missing"
-				}
-				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
-				ui.Row(c).Gap(6).Children(func() {
-					if isA {
-						ui.Badge(c, "A").Background(cmpRed.Alpha(0.15)).TextColor(cmpRed)
-					} else if ui.Button(c, "Show").Clicked() {
-						p.show(e.ID)
-					}
-					if isB {
-						ui.Badge(c, "B").Background(cmpBlue.Alpha(0.15)).TextColor(cmpBlue)
-					} else if ui.Button(c, "Compare as B").Disabled(p.viewA == "" || isA).Clicked() && p.viewA != "" && !isA {
-						p.viewB = e.ID
-						p.ensureRead(e.ID)
-					}
-				})
-			})
-		}
 	})
 }
 

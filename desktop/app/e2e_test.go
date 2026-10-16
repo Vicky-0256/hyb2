@@ -238,7 +238,20 @@ func TestEndToEnd(t *testing.T) {
 		"gene": "ZIKV_African_KX377335-1_virusRNA", "windows": []map[string]int{{"start": 3170, "end": 3700}},
 		"selectionKey": "c:AFR", "source": "the end-to-end test"}})
 	d.until("prefill", 30*time.Second, func() bool { return d.has("Prefilled from the end-to-end test") })
+	d.until("fold estimate", 30*time.Second, func() bool { return d.has("Check before running") })
+	d.shot("structure-prefill")
+	// A finished-task toast may cover the pinned Run fold button for a few
+	// seconds; a person waits for it to go, so does the test.
+	d.until("toasts gone", time.Minute, func() bool {
+		for _, text := range d.tt.Texts() {
+			if strings.HasSuffix(text, " finished") {
+				return false
+			}
+		}
+		return true
+	})
 	d.click("Run fold")
+	d.shot("structure-started")
 	d.until("fold finishes", 20*time.Minute, func() bool { return d.tasksDone("structure", 1) })
 	d.until("arc viewer", 2*time.Minute, func() bool { return d.has("Base pairs") })
 	d.shot("structure")

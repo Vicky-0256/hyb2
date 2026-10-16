@@ -124,7 +124,7 @@ func TestStructureExportArcsSVG(t *testing.T) {
 	readB, listAB, _ := stFixtureB(t)
 	f.structures[structB] = readB
 	f.ops["list_structures"] = listAB
-	tt := ui.NewTester(a.View, 1100, 900)
+	tt := ui.NewTester(a.View, 1100, 1400)
 	a.Navigate("structure", map[string]any{"structureId": structA})
 	csSettle(a, tt)
 	name, svg := exportClick(t, a, tt, "Export SVG…")

@@ -54,7 +54,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	readB, listAB, removed := stFixtureB(t)
 	f.structures[structB] = readB
 	f.ops["list_structures"] = listAB
-	tt := ui.NewTester(a.View, 1100, 1000)
+	tt := ui.NewTester(a.View, 1100, 1400)
 	// The tasks drawer's "View structure".
 	a.Navigate("structure", map[string]any{"structureId": structA})
 	csSettle(a, tt)
@@ -62,7 +62,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	if p.viewA != structA || a.NavOptions != nil {
 		t.Fatalf("viewA %q", p.viewA)
 	}
-	for _, text := range []string{"New fold", "Results", "ZIKV_African_KX377335-1_virusRNA · 1 window", "Evidence: AFR_REP1 + AFR_REP2 · " + FormatTime("2026-10-14T15:07:24Z"),
+	for _, text := range []string{"New fold", "Results", "1 window · 3,060 nt (3,170–6,229)", "1,055 base pairs · -452.0 kcal/mol", "Evidence: AFR_REP1 + AFR_REP2 · " + FormatTime("2026-10-14T15:07:24Z"),
 		"Viewer", "A · AFR_REP1 + AFR_REP2", "Length (nt)", "3,060", "1,055", "-452.0 kcal/mol", "Dot-bracket (A)"} {
 		if !tt.HasText(text) {
 			t.Fatalf("structure page lacks %q: %q", text, tt.Texts())
@@ -72,8 +72,11 @@ func TestStructureViewerAndCompare(t *testing.T) {
 		t.Fatalf("arcs %d pairs, %v-%v of %d", len(p.arcs.A), p.arcs.Start, p.arcs.End, p.arcs.Length)
 	}
 	// The form estimates the whole-RNA fold (built-in rate, no history).
-	if !tt.HasText("Estimated: about 1 min 25 s, 15.9 GB memory (rough until a fold has run on this computer).") {
-		t.Fatalf("no fold estimate: %q", tt.Texts())
+	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 1 min 25 s (rough; the first fold after installing also prepares the folding engine, about 1 min more)",
+		"about 15.9 GB of the 24.0 GB tasks may use"} {
+		if !tt.HasText(text) {
+			t.Fatalf("no fold check %q: %q", text, tt.Texts())
+		}
 	}
 	// Windows change it.
 	p.mode, p.windows = "windows", "1-3000\n3001-6000"
@@ -83,7 +86,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	tt.Frame()
 	found := false
 	for _, text := range tt.Texts() {
-		found = found || strings.HasPrefix(text, "Estimated: about 11 s, 4.0 GB memory")
+		found = found || text == "about 11 s (rough; the first fold after installing also prepares the folding engine, about 1 min more)"
 	}
 	if !found {
 		t.Fatalf("no windows estimate: %q", tt.Texts())
@@ -161,10 +164,17 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	if params["allow_pseudoknot"] != false || params["alpha"] != 0.5 || params["beam"] != 100 {
 		t.Fatalf("params %+v", params)
 	}
-	for _, text := range []string{"Started. Progress is shown in the list and the task drawer.", "Structure · SUB (2 merged) · whole RNA", "Cancel"} {
+	// The fold's status stays on the page, with Cancel; Run waits for it.
+	for _, text := range []string{"Folding…", "Cancel", "Fold running…", "Fold progress"} {
 		if !tt.HasText(text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())
 		}
+	}
+	id := p.lastTask
+	a.storeTask(model.Task{TaskID: id, Kind: "structure", Status: "succeeded"})
+	csSettle(a, tt)
+	if !tt.HasText("Fold finished") || !tt.HasText("Run fold") {
+		t.Fatalf("after success %q", tt.Texts())
 	}
 
 	// Prefill from Explore's "Fold this region".
@@ -174,21 +184,21 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	if p.mode != "windows" || !p.pseudoknot || p.windows != "3000-3400" || p.evidence != "c:BRA" {
 		t.Fatalf("prefill %q %v %q %q", p.mode, p.pseudoknot, p.windows, p.evidence)
 	}
-	if !tt.HasText("Prefilled from the contact map. Adjust the window and press Run fold.") || !tt.HasText("Allow pseudoknots in windows") {
+	if !tt.HasText("Prefilled from the contact map. Check the window, then press Run fold below.") || !tt.HasText("Allow pseudoknots in the windows") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	snapshot(t, tt, "structure-prefill")
 
-	// Evidence mapped to another reference than the RNA's is refused
-	// before the fold starts, and the form says why.
+	// Evidence mapped to another reference than the RNA's: the check says
+	// why and Run fold stays disabled.
 	mismatch := "BRA (2 merged) is mapped to ZBRA, not to ZAFR (the reference of this RNA). Choose evidence mapped to ZAFR."
-	if !tt.HasText(mismatch) {
+	if !tt.HasText("Cannot run yet:") || !tt.HasText("• "+mismatch) {
 		t.Fatalf("no mismatch notice: %q", tt.Texts())
 	}
 	_ = tt.Click("Run fold")
-	tt.Frame()
-	if p.formMsg != mismatch || len(f.startedKinds()) != 1 {
-		t.Fatalf("message %q, started %d", p.formMsg, len(f.startedKinds()))
+	csSettle(a, tt)
+	if len(f.startedKinds()) != 1 {
+		t.Fatalf("started %d", len(f.startedKinds()))
 	}
 	p.gene = "ZIKV_Brazilian_MF073357-1_virusRNA"
 	tt.Frame()
@@ -198,26 +208,34 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 
 	// Validation of the window list.
 	for text, want := range map[string]string{
-		"abc":     "Not a window: abc",
-		"1-10":    "1-10 is shorter than 20 nt",
-		"1-20000": "1-20000 is outside 1-10807",
-		"  \n  ":  "Add at least one window.",
+		"abc":     "• Not a window: abc (windows are start-end, at least 20 nt).",
+		"1-10":    "• 1-10 is shorter than 20 nt (windows are start-end, at least 20 nt).",
+		"1-20000": "• 1-20000 is outside 1-10807 (windows are start-end, at least 20 nt).",
+		"  \n  ":  "• Add at least one window, one per line as start-end within 1-10,807.",
 	} {
 		p.windows = text
 		tt.Frame()
-		_ = tt.Click("Run fold")
-		tt.Frame()
-		if p.formMsg != want || !tt.HasText(want) {
-			t.Fatalf("%q: message %q", text, p.formMsg)
+		if !tt.HasText(want) {
+			t.Fatalf("%q: %q", text, tt.Texts())
 		}
 	}
 	p.windows = "3000-3400\n5000 – 5600"
 	tt.Frame()
-	_ = tt.Click("Run fold")
+	if !tt.HasText("2 windows: 401 + 601 nt") {
+		t.Fatalf("window summary %q", tt.Texts())
+	}
+	// Keyboard: focus the window list, then Cmd+Enter runs the fold.
+	r, ok := tt.Find("Windows: start-end, one per line (1-based, inclusive)")
+	if !ok {
+		t.Fatal("no window field")
+	}
+	tt.ClickAt(r.X+20, r.Y+r.H+20)
+	tt.Frame()
+	tt.TypeKey(ui.Cmd, ui.KeyEnter, "")
 	csSettle(a, tt)
 	started = f.startedKinds()
 	if len(started) != 2 {
-		t.Fatalf("started %d", len(started))
+		t.Fatalf("started %d: problems %q running %v texts %q", len(started), p.plan().problems, p.running(), tt.Texts())
 	}
 	req := started[1]
 	params = req.Parameters.(map[string]any)
@@ -229,11 +247,11 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 		t.Fatalf("label %q note %q", a.TaskLabel(a.Tasks["structure-2"]), p.prefillNote)
 	}
 	// No evidence.
+	a.storeTask(model.Task{TaskID: p.lastTask, Kind: "structure", Status: "succeeded"})
 	p.evidence = "s:nobody"
-	_ = tt.Click("Run fold")
 	tt.Frame()
-	if p.formMsg != "Choose analysed samples as evidence." {
-		t.Fatalf("message %q", p.formMsg)
+	if !tt.HasText("• Choose the samples whose chimeric reads guide the fold.") {
+		t.Fatalf("no evidence: %q", tt.Texts())
 	}
 }
 

@@ -216,7 +216,7 @@ func partnerCard(c *ui.Context, title string, partners []partnerTotal, byReads b
 				break
 			}
 			ui.Row(c.Key(pt.Name)).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, shortGene(pt.Name)).Width(170).SingleLine()
+				ui.Text(c, shortGene(pt.Name)).Width(170).SingleLine().Tooltip(pt.Name)
 				fraction := float32(1)
 				if top > 0 {
 					fraction = max(float32(value(pt))/float32(top), 0.02)

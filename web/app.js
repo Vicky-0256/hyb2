@@ -1328,6 +1328,20 @@
       return;
     }
 
+    if (action === "report-jump") {
+      event.preventDefault();
+      // after any redraw this click causes, and instant: a smooth scroll
+      // across a long report is cancelled by the next render
+      const id = actionNode.dataset.target || "";
+      window.requestAnimationFrame(function () {
+        const target = document.getElementById(id);
+        if (target) {
+          target.scrollIntoView({ block: "start", behavior: "instant" });
+        }
+      });
+      return;
+    }
+
     if (action === "report-export") {
       openReportExport(actionNode.dataset.audience || "people");
       return;
@@ -1469,6 +1483,15 @@
 
   function handleInput(event) {
     const element = event.target;
+    // the researcher's purpose on the Report page: kept as typed, no redraw
+    if (element && element.id === "report-purpose") {
+      state.reportPurpose = String(element.value || "").slice(0, 1000);
+      if (reportExportCache) {
+        reportExportCache = null;
+        state.reportExport = null;
+      }
+      return;
+    }
     if (!element || !element.dataset || !element.dataset.feature) {
       return;
     }
@@ -1796,6 +1819,7 @@
     state.structure = null;
     state.reportExport = null;
     reportExportCache = null;
+    state.reportPurpose = "";
     state.error = null;
     state.loading = {
       fileName: file.name || "Untitled file",
@@ -2531,6 +2555,7 @@
     state.structure = null;
     state.reportExport = null;
     reportExportCache = null;
+    state.reportPurpose = "";
     state.loading = null;
     state.error = null;
     releaseProviderData();
@@ -2576,6 +2601,7 @@
     state.structure = null;
     state.reportExport = null;
     reportExportCache = null;
+    state.reportPurpose = "";
     state.loading = null;
     state.error = null;
     state.activePage = "landing";
@@ -2731,6 +2757,17 @@
     const clone = article.cloneNode(true);
     clone.querySelectorAll("[data-report-export-panel], .report-actions, button").forEach(function (node) { node.remove(); });
     clone.querySelectorAll("details").forEach(function (node) { node.setAttribute("open", ""); });
+    // the purpose box becomes the researcher's text (or goes)
+    clone.querySelectorAll(".report-purpose, .report-purpose-print").forEach(function (node) { node.remove(); });
+    const purpose = String(state.reportPurpose || "").trim();
+    const status = clone.querySelector("#report-status .report-section-body");
+    if (purpose && status) {
+      const line = document.createElement("p");
+      line.className = "report-purpose-print";
+      line.innerHTML = "<strong>Purpose:</strong> ";
+      line.appendChild(document.createTextNode(purpose));
+      status.insertBefore(line, status.firstChild);
+    }
     const css = [];
     Array.prototype.forEach.call(document.styleSheets, function (sheet) {
       try {

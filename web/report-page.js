@@ -15,18 +15,26 @@
       '<article class="report-page" data-report-page>',
       renderHero(context),
       renderExportPanel(context, state),
+      renderContents(context),
+      part("objects", "1", "Analysis objects and status"),
       renderSummary(context),
-      renderResultsIndex(context),
-      renderSource(context),
-      renderValidation(context),
-      renderFileFormat(),
+      renderStatus(context, state),
+      part("results", "2", "Main results"),
+      renderKeyResults(context),
+      part("figures", "3", "Figures and data"),
       renderInteractions(context),
       renderContactMap(context),
       renderViewpoint(context),
       renderRegion(context),
       renderComparison(context),
       renderStructure(context),
+      part("methods", "4", "Methods and sources"),
+      renderSource(context),
+      renderValidation(context),
+      renderFileFormat(),
       renderMethods(),
+      part("limitations", "5", "Limitations and warnings"),
+      renderLimitations(context),
       '</article>'
     ].join("");
   }
@@ -150,19 +158,62 @@
       '<span class="report-status is-ready">Ready</span>',
       [
         '<div class="report-metric-grid">',
-        metric("Valid HYB records", formatNumber(summary.validRecords), "Rows available for analysis"),
-        metric("Valid ratio", formatPercent(validRatio), formatNumber(summary.invalidRecords) + " invalid rows skipped"),
-        metric("Unique RNAs", formatNumber(summary.uniqueRNAs), "Distinct names across both arms"),
-        metric("RNA pairs", formatNumber(summary.uniquePairs), "Normalised pair identities"),
-        metric("Cluster support", formatNumber(summary.supportInteractions), "Support units retained from HYB metadata"),
-        metric("Reference FASTA", fastaValue, fastaDetail),
+        metric("Valid HYB records", formatNumber(summary.validRecords), "Rows available for analysis · R01"),
+        metric("Valid ratio", formatPercent(validRatio), formatNumber(summary.invalidRecords) + " invalid rows skipped · R02"),
+        metric("Unique RNAs", formatNumber(summary.uniqueRNAs), "Distinct names across both arms · R03"),
+        metric("RNA pairs", formatNumber(summary.uniquePairs), "Normalised pair identities · R04"),
+        metric("Cluster support", formatNumber(summary.supportInteractions), "Support units retained from HYB metadata · R05"),
+        metric("Reference FASTA", fastaValue, fastaDetail + (fasta ? " · R07, R08" : "")),
         "</div>",
         '<div class="report-grid report-analysis-grid report-summary-breakdown">',
-        '<div class="report-subsection"><h3>Top interacting RNAs</h3>' + renderTopRnaTable(summary.rnaCounts) + '</div>',
-        '<div class="report-subsection"><h3>Top RNA pairs</h3>' + renderTopPairTable(summary.pairCounts) + '</div>',
+        '<div class="report-subsection"><h3>Top interacting RNAs</h3>' + renderTopRnaTable(summary.rnaCounts) + dataNote(context, "tables/top_rnas.tsv") + '</div>',
+        '<div class="report-subsection"><h3>Top RNA pairs</h3>' + renderTopPairTable(summary.pairCounts) + dataNote(context, "tables/top_rna_pairs.tsv") + '</div>',
         "</div>",
         '<div class="report-callout"><strong>Report scope</strong><span>Tables and inline visuals are bounded for reliable browser printing. Existing page-level CSV, TSV, HYB, SVG, PNG, FASTA, and structure exports remain the complete data path.</span></div>'
       ].join("")
+    );
+  }
+
+  // What the researcher should check before reporting, for this session
+  // only: each item appears when its analysis or data condition applies.
+  function renderReviewChecks(context) {
+    const state = context.state;
+    const summary = state.summary || {};
+    const items = [];
+    items.push("These results describe " + (summary.fileName || "the loaded HYB file") + " only: " + formatNumber(summary.validRecords || 0) +
+      " valid records (R01; " + formatNumber(summary.invalidRecords || 0) + " invalid rows skipped, R02). Counts are not normalised against other experiments.");
+    const inferred = summary.inferredChimeraTypeRecords || 0;
+    if (inferred) {
+      items.push("Chimera types of " + formatNumber(inferred) + " records (R06) were inferred by HYB2 because the file has no type column; check them before reporting type proportions.");
+    }
+    if (summary.ambiguousColumn16Records) {
+      items.push(formatNumber(summary.ambiguousColumn16Records) + " rows have a legacy column 16 that may hold a raw-read count or cluster support; confirm how the file was produced.");
+    }
+    const names = (summary.rnaNames || []).length;
+    const reference = state.reference || state.fasta;
+    if (!reference) {
+      items.push("No reference FASTA was loaded: RNA coordinates are not checked against a sequence.");
+    } else if (mappedFastaCount(reference) < names) {
+      items.push("Only " + formatNumber(mappedFastaCount(reference)) + " of " + formatNumber(names) + " HYB RNA names matched the reference FASTA (R08); coordinates of the others are not checked.");
+    }
+    const comparison = state.comparison || {};
+    if (comparison.result && comparison.result.ready) {
+      items.push("Compare effect and similarity maps (S07) are descriptive; only the differential test (S08, a JavaScript port of DESeq2, with replicates in each condition) gives adjusted p-values. Check its result against R before claiming a difference.");
+    }
+    const structure = state.structure || {};
+    if (structure.result && structure.result.sequence) {
+      items.push("The RNA structure (S12) is a computational prediction guided by chimeric reads; support key helices with independent evidence (for example probing or mutation) before stating them.");
+    }
+    const cards = window.Hyb2Evidence ? safeCall(function () { return window.Hyb2Evidence.reportCards(state); }, []) : [];
+    if (cards.length) {
+      items.push("External sources (S13, E ids) include AI-generated literature summaries whose citations are not verified; read the cited papers before relying on them.");
+    }
+    return section(
+      "review",
+      "Before you report these results",
+      "Researcher checks for this session",
+      '<span class="report-status is-pending">' + formatNumber(items.length) + (items.length === 1 ? " check" : " checks") + "</span>",
+      '<ul class="report-review-list">' + items.map(function (item) { return "<li>" + escape(item) + "</li>"; }).join("") + "</ul>"
     );
   }
 
@@ -287,7 +338,7 @@
         "</div>",
         '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Top matching records</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(total, MAX_TABLE_ROWS)) + ' of ' + formatNumber(total) + '</span></div>',
         rows.length ? table(["Sequence ID", "RNA pair", "RNA 1 interval", "RNA 2 interval", "Chimera type", "Support", "dG"], rows) : '<div class="report-empty">No records match the current filter state.</div>',
-        total > MAX_TABLE_ROWS ? '<p class="report-note">The full filtered table remains available from the Interactions page export.</p>' : "",
+        dataNote(context, "tables/interactions.tsv"),
         "</div>"
       ].join("")
     );
@@ -344,15 +395,15 @@
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Parameters</h3>' + parameterList(params.parameters) + '</div>',
         '<div class="report-subsection"><h3>Result</h3>' + (ready ? definitionList([
-          ["Cells", formatNumber(matrix.cells.length)],
-          ["Records used", formatNumber(matrix.recordsUsed)],
+          ["Cells · R10", formatNumber(matrix.cells.length)],
+          ["Records used · R11", formatNumber(matrix.recordsUsed)],
           ["Total support", formatNumber(matrix.totalSupport)],
           ["Bin contributions", formatNumber(matrix.cellContributions)],
           ["Display cap", formatNumber(matrix.cap)],
           ["Selected cell", selectedCell ? range(selectedCell.x, selectedCell.x + number(matrix.binSize, 1) - 1) + " x " + range(selectedCell.y, selectedCell.y + number(matrix.binSize, 1) - 1) : "None"]
         ]) : '<div class="report-empty">' + escape(matrix && matrix.reason || "Generate a Contact Map from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + '</span></div>' + visual + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + '</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
         matrix && matrix.resourceBudget ? '<p class="report-note">Adaptive browser budget: up to ' + formatNumber(matrix.maximumCells) + ' cells and ' + formatNumber(matrix.maximumBinContributions) + ' bin contributions for this device profile.</p>' : ""
       ].join("")
     );
@@ -383,13 +434,13 @@
         '<div class="report-subsection"><h3>Result</h3>' + (ready ? definitionList([
           ["Effective range", range(results.start, results.end)],
           ["Resolution", formatNumber(results.binSize) + " nt"],
-          ["Matching records", formatNumber((results.records || []).length)],
+          ["Matching records · R13", formatNumber((results.records || []).length)],
           ["Mapped arms", formatNumber(results.armContributions)],
-          ["Maximum coverage", formatNumber(results.max)],
+          ["Maximum coverage · R14", formatNumber(results.max)],
           ["Total coverage", formatNumber(results.totalCoverage)]
         ]) : '<div class="report-empty">Generate Viewpoint coverage from the workspace to include its result here.</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#00a09d", viewpoint.selection && viewpoint.selection.start), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#00a09d", viewpoint.selection && viewpoint.selection.start), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
         results && results.binSizeAdjusted ? '<p class="report-note">The requested resolution was adjusted to ' + formatNumber(results.binSize) + ' nt to keep the browser profile within its maximum bin count.</p>' : ""
       ].join("")
     );
@@ -424,15 +475,15 @@
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Parameters</h3>' + parameterList(params.parameters) + '</div>',
         '<div class="report-subsection"><h3>Result</h3>' + (results ? definitionList([
-          ["Matching records", formatNumber((results.records || []).length)],
-          ["Cluster support", formatNumber(results.support)],
-          ["Partner RNAs", formatNumber((results.partners || []).length)],
+          ["Matching records · R15", formatNumber((results.records || []).length)],
+          ["Cluster support · R16", formatNumber(results.support)],
+          ["Partner RNAs · R17", formatNumber((results.partners || []).length)],
           ["Profile resolution", formatNumber(results.profileBinSize) + " nt"]
         ]) : '<div class="report-empty">Explore a region from the workspace to include its result here.</div>') + '</div>',
         "</div>",
-        results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#6a4ff2", null), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + '</div>' : "",
+        results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#6a4ff2", null), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/region_profile.tsv") + '</div>' : "",
         '<div class="report-grid report-analysis-grid">',
-        '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + '</div>',
+        '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + dataNote(context, "tables/region_partners.tsv") + '</div>',
         '<div class="report-subsection"><h3>Matching record sample</h3>' + (recordRows.length ? table(["Sequence ID", "RNA 1", "Region 1", "RNA 2", "Region 2", "Support"], recordRows) : '<div class="report-empty">No matching records are available for this region.</div>') + '</div>',
         "</div>",
         results && results.records && results.records.length > MAX_TABLE_ROWS ? '<p class="report-note">Showing the first ' + formatNumber(MAX_TABLE_ROWS) + ' matching records. The Region Explorer export contains all local matches.</p>' : ""
@@ -483,17 +534,19 @@
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Parameters</h3>' + parameterList(params.parameters) + '</div>',
         '<div class="report-subsection"><h3>Result</h3>' + (ready ? definitionList([
-          ["Condition A datasets", formatNumber((result.groupA || []).length)],
-          ["Condition B datasets", formatNumber((result.groupB || []).length)],
-          ["Comparable bins", formatNumber(result.cells.length)],
-          ["Similarity bins", formatNumber((result.conservedCells || []).length)],
+          ["Condition A datasets · R18", formatNumber((result.groupA || []).length)],
+          ["Condition B datasets · R19", formatNumber((result.groupB || []).length)],
+          ["Comparable bins · R20", formatNumber(result.cells.length)],
+          ["Similarity bins · R21", formatNumber((result.conservedCells || []).length)],
           ["Selected bin", selected ? "Included below" : "None"]
         ]) : '<div class="report-empty">' + escape(result && result.reason || "Update the comparison from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map): white at the smallest plotted count, green at the 95% quantile cap</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
+        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map): white at the smallest plotted count, green at the 95% quantile cap</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' + dataNote(context, "tables/compare_cells.tsv") : "",
         '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
         '<div class="report-subsection-heading report-step-heading"><h3>Differential test</h3>' + stepBadge(context, "differential_test") + "</div>",
         window.Hyb2DeseqCard ? window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) : "",
+        resultRefs(context, "differential_test"),
+        dataNote(context, "tables/differential_interactions.tsv") + dataNote(context, "tables/differential_significant_cells.tsv"),
         renderFigurePanels(context),
         '<p class="report-note">Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
       ].join("")
@@ -533,15 +586,15 @@
           ["Pseudoknot search", structure.engine === "cplfold" ? (structure.cplfoldAllowPseudoknot === false ? "Disabled" : "Allowed") : "Outside ViennaRNA mode"]
         ]) + '</div>',
         '<div class="report-subsection"><h3>Result</h3>' + (ready ? definitionList([
-          ["Prepared sequence", formatNumber(result.sequence.length) + " nt"],
-          ["Energy", result.energy == null ? "-" : formatNumber(result.energy) + " " + (result.energyUnit || "kcal/mol")],
+          ["Prepared sequence · R37", formatNumber(result.sequence.length) + " nt"],
+          ["Energy · R38", result.energy == null ? "-" : formatNumber(result.energy) + " " + (result.energyUnit || "kcal/mol")],
           ["Topology", prediction.topology || result.topology || "nested"],
-          ["Base pairs", formatNumber((result.pairs || []).length)],
-          ["Crossing pairs", formatNumber(result.crossingPairs || 0)],
+          ["Base pairs · R39", formatNumber((result.pairs || []).length)],
+          ["Crossing pairs · R40", formatNumber(result.crossingPairs || 0)],
           ["Selected candidate", cplfold ? formatNumber(number(result.selectedCandidate, 0) + 1) : "MFE"]
         ]) : '<div class="report-empty">' + escape(sequenceInfo && sequenceInfo.error || "Run a structure prediction from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-structure-result"><div class="report-subsection-heading"><h3>Printable secondary-structure view</h3><span class="report-note-inline">Arc layout used for the report snapshot</span></div><div class="report-structure-diagram" data-report-structure-diagram></div><p class="report-note">The report uses a stable Arc layout so it prints consistently. Use the RNA Structure page SVG/PNG controls to export folded, radial, circular, or matrix views.</p></div>' : "",
+        ready ? '<div class="report-structure-result"><div class="report-subsection-heading"><h3>Printable secondary-structure view</h3><span class="report-note-inline">Arc layout used for the report snapshot</span></div><div class="report-structure-diagram" data-report-structure-diagram></div><p class="report-note">The report uses a stable Arc layout so it prints consistently. Use the RNA Structure page SVG/PNG controls to export folded, radial, circular, or matrix views.</p>' + dataNote(context, "results/structure_prediction.json") + dataNote(context, "results/structure_prediction.dbn") + '</div>' : "",
         ready ? '<div class="report-grid report-analysis-grid">' : "",
         ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.sequence || "", 1400)) + '</code></pre><p class="report-note">The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
         ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracket || "", 1400)) + '</code></pre><p class="report-note">Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
@@ -707,15 +760,81 @@
     return '<span class="report-status ' + badge[0] + '" data-step="' + escape(step.id) + '" data-status="' + escape(step.status) + '" title="' + escape(step.id + " · " + (step.detail || step.statusText)) + '">' + escape(label) + "</span>";
   }
 
-  function renderResultsIndex(context) {
+  // a part heading of the report (1 to 5), also the table of contents' anchors
+  const PARTS = [["objects", "1", "Analysis objects and status"], ["results", "2", "Main results"], ["figures", "3", "Figures and data"],
+    ["methods", "4", "Methods and sources"], ["limitations", "5", "Limitations and warnings"]];
+
+  function part(id, number, title) {
+    return '<h2 class="report-part" id="report-part-' + id + '"><span>' + escape(number) + "</span> " + escape(title) + "</h2>";
+  }
+
+  function renderContents(context) {
+    const record = context.record;
+    const steps = record ? record.steps : [];
+    const done = steps.filter(function (step) { return step.status === "ok" || step.status === "no_result"; }).length;
+    return '<nav class="report-contents" aria-label="Report contents"><strong>Contents</strong><ol>' + PARTS.map(function (p) {
+      return '<li><span>' + escape(p[1]) + '</span><a href="#report-part-' + p[0] + '" data-action="report-jump" data-target="report-part-' + p[0] + '">' + escape(p[2]) + "</a></li>";
+    }).join("") + "</ol>" + (record ? '<span class="report-note-inline">' + formatNumber(done) + " of " + formatNumber(steps.length) + " steps completed · " +
+      formatNumber(record.warnings.length) + (record.warnings.length === 1 ? " warning" : " warnings") + "</span>" : "") + "</nav>";
+  }
+
+  // "Data: T05 tables/x.tsv [Download]" under a chart or table
+  const FULL_ONLY = { "tables/interactions.tsv": "every filtered record (built when you download it)" };
+  function dataNote(context, file) {
+    const record = context.record;
+    const t = record ? record.tables.find(function (item) { return item.file === file; }) : null;
+    const st = record ? record.structures.find(function (item) { return item.file === file; }) : null;
+    if (!t && !st && !FULL_ONLY[file]) {
+      return "";
+    }
+    const audience = t ? (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") : "analysis";
+    const label = t ? t.id + " " + file : file;
+    const detail = t ? t.scope : st ? st.title : FULL_ONLY[file];
+    return '<p class="report-data-note">Data: <code>' + escape(label) + "</code> · " + escape(detail) + ' <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + audience + '" data-path="' + escape(file) + '">Download</button></p>';
+  }
+
+  // "R22 Cells tested 4,321 · R23 ..." for a step
+  function resultRefs(context, key) {
+    const step = recordStep(context, key);
+    if (!step) {
+      return "";
+    }
+    const items = context.record.results.filter(function (r) { return r.step === step.id; });
+    return items.length ? '<p class="report-data-note">Results: ' + items.map(function (r) {
+      return "<code>" + escape(r.id) + "</code> " + escape(r.label) + ' <span data-result-ref="' + escape(r.id) + '">' + escape(window.Hyb2Results.formatValue(r)) + "</span>";
+    }).join(" · ") + "</p>" : "";
+  }
+
+  function renderStatus(context, state) {
     const record = context.record;
     if (!record) {
       return "";
     }
+    const purpose = state && typeof state.reportPurpose === "string" ? state.reportPurpose : "";
     const done = record.steps.filter(function (step) { return step.status === "ok" || step.status === "no_result"; }).length;
     const stepRows = record.steps.map(function (step) {
-      return ['<code>' + escape(step.id) + "</code>", escape(step.title), stepBadge(context, step.key), escape(step.detail || "")];
+      return ['<code>' + escape(step.id) + "</code>", escape(step.title), stepBadge(context, step.key), escape(step.scope || "—"), escape(step.detail || "")];
     });
+    return section(
+      "status",
+      "Analysis status",
+      "Steps, scope and purpose",
+      '<span class="report-status is-ready">' + formatNumber(done) + " of " + formatNumber(record.steps.length) + " steps completed</span>",
+      [
+        '<label class="report-purpose"><span>Purpose of this analysis (optional, written by you; saved in the exports as the researcher\'s text)</span>' +
+          '<textarea id="report-purpose" rows="2" maxlength="1000" placeholder="e.g. Which ZIKV genome contacts differ between the African and Asian lineages?">' + escape(purpose) + "</textarea></label>",
+        purpose.trim() ? '<p class="report-purpose-print"><strong>Purpose:</strong> ' + escape(purpose.trim()) + "</p>" : "",
+        '<p class="report-note">Each step has a fixed id (S01 to S13) shared with the Markdown and JSON exports. A step that did not run shows <code>not_run</code>; its results show —, never 0.</p>',
+        '<div class="report-subsection report-subsection--table">' + table(["Id", "Step", "Status", "Scope", "Detail"], stepRows) + "</div>"
+      ].join("")
+    );
+  }
+
+  function renderKeyResults(context) {
+    const record = context.record;
+    if (!record) {
+      return "";
+    }
     const resultRows = record.results.map(function (result) {
       return ['<code>' + escape(result.id) + "</code>", '<code>' + escape(result.step) + "</code>", escape(result.label),
         '<span data-result="' + escape(result.id) + '">' + escape(window.Hyb2Results.formatValue(result)) + "</span>", escape(result.unit), '<code>' + escape(result.status) + "</code>"];
@@ -727,16 +846,33 @@
     return section(
       "results-index",
       "Results at a glance",
-      "Steps, results and data, with fixed ids",
-      '<span class="report-status is-ready">' + formatNumber(done) + " of " + formatNumber(record.steps.length) + " steps completed</span>",
+      "Every result with its id, value, unit and status",
+      '<span class="report-status is-ready">' + formatNumber(record.results.filter(function (r) { return r.value !== null; }).length) + " of " + formatNumber(record.results.length) + " with a value</span>",
       [
-        '<p class="report-note">Each step, result and table has a fixed id (S08, R23, T05) shared with the Markdown and JSON exports. A step that did not run shows <code>not_run</code> and its results show —, never 0.</p>',
-        '<div class="report-subsection report-subsection--table"><h3>Steps</h3>' + table(["Id", "Step", "Status", "Detail"], stepRows) + "</div>",
+        '<p class="report-note">The numbers in the sections below carry the same ids (for example "Cells · R10"). Each result covers its step\'s scope in Analysis status.</p>',
         '<details class="report-details" open data-open-key="report-results"><summary>Results (' + formatNumber(record.results.length) + ")</summary>" + table(["Id", "Step", "Result", "Value", "Unit", "Status"], resultRows) + "</details>",
-        tableRows.length ? '<details class="report-details" data-open-key="report-tables"><summary>Data tables (' + formatNumber(tableRows.length) + ")</summary>" + table(["Id", "Step", "Table", "Scope", "File"], tableRows) + "</details>" : "",
-        record.warnings.length ? '<div class="report-callout report-callout--warning"><strong>Warnings</strong><span>' + record.warnings.map(function (w) { return escape(w.id + " (" + w.step + "): " + w.text); }).join("<br>") + "</span></div>" : ""
+        tableRows.length ? '<details class="report-details" data-open-key="report-tables"><summary>Data tables (' + formatNumber(tableRows.length) + ")</summary>" + table(["Id", "Step", "Table", "Scope", "File"], tableRows) + "</details>" : ""
       ].join("")
     );
+  }
+
+  function renderLimitations(context) {
+    const record = context.record;
+    return [
+      renderReviewChecks(context),
+      record ? section(
+        "limitations",
+        "Warnings and limitations",
+        "From the result record",
+        '<span class="report-status ' + (record.warnings.length ? "is-warning" : "is-ready") + '">' + formatNumber(record.warnings.length) + (record.warnings.length === 1 ? " warning" : " warnings") + "</span>",
+        [
+          '<div class="report-subsection"><h3>Warnings</h3>' + (record.warnings.length ? '<ul class="report-review-list">' + record.warnings.map(function (w) {
+            return "<li><code>" + escape(w.id) + "</code> (" + escape(w.step) + ") " + escape(w.text) + "</li>";
+          }).join("") + "</ul>" : '<div class="report-empty is-ready">No warnings for this session.</div>') + "</div>",
+          '<div class="report-subsection"><h3>Limitations</h3><ul class="report-review-list">' + record.limitations.map(function (text) { return "<li>" + escape(text) + "</li>"; }).join("") + "</ul></div>"
+        ].join("")
+      ) : ""
+    ].join("");
   }
 
   // panels C to G of the Compare figure, each with the table behind it
@@ -758,7 +894,7 @@
         return "<code>" + escape(t.id + " " + t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '">Download</button>';
       }).join(" · ") + "</p>" : "";
       return '<div class="report-subsection report-figure-panel"><div class="report-subsection-heading report-step-heading"><h3>' + escape(pair[1]) + "</h3>" + stepBadge(context, pair[0]) + "</div>" +
-        (body || '<div class="report-empty">' + escape(step.detail || step.statusText) + "</div>") + data + "</div>";
+        (body || '<div class="report-empty">' + escape(step.detail || step.statusText) + "</div>") + resultRefs(context, pair[0]) + data + "</div>";
     }).join("");
   }
 

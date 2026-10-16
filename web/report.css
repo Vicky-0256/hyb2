@@ -152,6 +152,94 @@
   margin-top: 14px;
 }
 
+.report-contents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  margin: 18px 0 0;
+  padding: 12px 16px;
+  border: 1px solid var(--report-line);
+  border-radius: var(--radius-md, 10px);
+  background: var(--report-surface);
+}
+
+.report-contents ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-contents li span {
+  margin-right: 5px;
+  color: var(--report-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.report-contents a {
+  color: var(--primary-ink, var(--report-teal));
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.report-contents a:hover {
+  text-decoration: underline;
+}
+
+.report-part {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 42px 0 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--report-ink);
+  color: var(--report-ink);
+  font-size: 22px;
+  scroll-margin-top: 80px;
+}
+
+.report-part span {
+  color: var(--report-muted);
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.report-data-note {
+  margin: 8px 0 0;
+  color: var(--report-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.report-purpose {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: var(--report-muted);
+  font-size: 12px;
+}
+
+.report-purpose textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--report-line);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--report-surface);
+  color: var(--report-ink);
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.report-purpose-print {
+  display: none;
+}
+
 .report-details {
   margin-top: 14px;
 }
@@ -635,6 +723,7 @@
   .toast,
   .report-actions,
   .report-export-panel,
+  .report-purpose,
   .report-print-note,
   .report-section button {
     display: none !important;
@@ -724,4 +813,42 @@
   .workspace-header .report-button {
     display: none;
   }
+}
+
+/* Tables in half-width subsections fit their card: long RNA names wrap
+   instead of pushing the last columns out of view (and off the printout). */
+.report-subsection:not(.report-subsection--table) .report-table {
+  min-width: 0;
+}
+
+.report-subsection:not(.report-subsection--table) .report-table td {
+  overflow-wrap: anywhere;
+}
+
+/* Researcher checks: one plain sentence each. */
+.report-review-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--report-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media print {
+  .report-purpose-print {
+    display: block;
+  }
+}
+
+/* the offline HTML copy has no textarea: show the researcher's purpose */
+.report-offline-main .report-purpose-print {
+  display: block;
+}
+
+/* ids (S08, R23, T05) and file names stay on one line in tables */
+.report-table td:first-child code,
+.report-table td:nth-child(2) code {
+  white-space: nowrap;
 }

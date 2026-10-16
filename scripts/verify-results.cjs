@@ -14,6 +14,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const schemaCheck = require("./json-schema-lite.cjs");
 
 const repository = path.resolve(__dirname, "..");
 const web = function (file) { return path.join(repository, "web", file); };
@@ -109,7 +110,9 @@ const full = {
     result: { ready: true, groupA: [{}], groupB: [{}], cells: [{ x: 1, y: 51, conditionA: 2, conditionB: 1, effect: 1, similarity: 1, presentDatasets: 2 }], conservedCells: [] },
     deseq: { status: "error", error: "Each condition needs at least two replicates.", minCount: "2", radius: "100", padjCutoff: "0.05" }
   },
-  structure: { engine: "vienna", rna: "RNA_A", start: 1, end: 8, result: { engine: "ViennaRNA", sequence: "GGGAAACC", dotBracket: "(((..)))", energy: -1.2, pairs: [[1, 8], [2, 7], [3, 6]], crossingPairs: 0 } },
+  reportPurpose: "  Which RNA_A contacts change on treatment? | check  ",
+  structure: { engine: "vienna", source: "reference", rna: "RNA_A", start: 11, end: 18, result: { engine: "ViennaRNA", sequence: "GGGAAACC", dotBracket: "(((..)))", energy: -1.2, pairs: [[1, 8], [2, 7], [3, 6]], crossingPairs: 0, selectedCandidate: 1,
+    candidates: [{ type: "mfe", topology: "nested", energy: -1.0, pairs: [[1, 8]], crossingPairs: 0, dotBracket: "(......)" }, { type: "suboptimal", topology: "nested", energy: -1.2, pairs: [{ left: 1, right: 8 }, { left: 2, right: 7 }, { left: 3, right: 6 }], crossingPairs: 0, dotBracket: "(((..)))" }] } },
   evidence: { cards: [{ status: "no_match", include_in_report: false, hit_count: 0, entries: [] }] }
 };
 const record = R.build(full, { generatedAt: "2026-10-16T00:00:00.000Z", interactionRows: records, interactionTotal: 3 });
@@ -124,8 +127,50 @@ assert.equal(status(record, "literature_search"), "no_result", "a lookup with no
 assert.equal(record.literatureSearch.hit_count, null, "no card added: hit_count unknown, not 0");
 assert.equal(result(record, "R41").value, 0, "the search ran: zero cards added is a count");
 
+// results carry type and scope; purpose is the researcher's text
+record.results.forEach(function (r) {
+  assert.ok(["integer", "number", "string"].indexOf(r.type) >= 0, r.id + " type");
+  const step = record.steps.find(function (s) { return s.id === r.step; });
+  assert.equal(r.scope, step.scope, r.id + " scope = its step's scope");
+  if (r.value !== null) {
+    assert.equal(r.type === "string" ? typeof r.value === "string" : typeof r.value === "number" && (r.type === "number" || Number.isInteger(r.value)), true, r.id + " value matches its type");
+  }
+});
+assert.equal(record.steps.find(function (s) { return s.key === "contact_map"; }).scope, "sample.hyb: RNA_A × RNA_B, 10-nt bins");
+assert.equal(record.steps.find(function (s) { return s.key === "viewpoint"; }).scope, "sample.hyb: RNA_A 1-30");
+assert.deepEqual(JSON.parse(JSON.stringify(record.scope.purpose)), { text: "Which RNA_A contacts change on treatment? | check", source: "researcher" });
+assert.equal(bare.scope.purpose, null, "no purpose typed: null");
+
 // the Report page shows the record's statuses and values
 const html = report.render(full);
+// five parts in order, with a table of contents linking to each
+const partAt = ["objects", "results", "figures", "methods", "limitations"].map(function (id) {
+  assert.ok(html.indexOf('data-target="report-part-' + id + '"') > 0, "contents link to part " + id);
+  return html.indexOf('id="report-part-' + id + '"');
+});
+partAt.reduce(function (previous, at) { assert.ok(at > previous, "parts in order"); return at; }, -1);
+const sectionAt = function (id) { return html.indexOf('id="report-' + id + '"'); };
+assert.ok(sectionAt("status") > partAt[0] && sectionAt("status") < partAt[1], "Analysis status in part 1");
+assert.ok(sectionAt("results-index") > partAt[1] && sectionAt("results-index") < partAt[2], "Results in part 2");
+assert.ok(sectionAt("contact-map") > partAt[2] && sectionAt("structure") < partAt[3], "figures in part 3");
+assert.ok(sectionAt("source") > partAt[3] && sectionAt("methods") < partAt[4], "methods and sources in part 4");
+assert.ok(sectionAt("review") > partAt[4] && sectionAt("limitations") > partAt[4], "limitations and warnings in part 5");
+record.limitations.forEach(function (text) { assert.ok(html.indexOf(text.replace(/'/g, "&#39;")) > sectionAt("limitations"), "limitation shown: " + text.slice(0, 30)); });
+record.warnings.forEach(function (w) { assert.ok(html.indexOf("<code>" + w.id + "</code>") > sectionAt("limitations"), w.id + " shown in part 5"); });
+// every chart and table with data names it
+[["Printable heatmap", "tables/contact_map_cells.tsv"], ["Printable coverage profile", "tables/viewpoint_bins.tsv"], ["Similarity heatmap", "tables/compare_cells.tsv"],
+  ["Top matching records", "tables/interactions.tsv"], ["Top interacting RNAs", "tables/top_rnas.tsv"], ["Printable secondary-structure view", "results/structure_prediction.json"]].forEach(function (pair) {
+  const at = html.indexOf("<h3>" + pair[0] + "</h3>");
+  assert.ok(at > 0, pair[0] + " is in the report");
+  const note = html.indexOf('report-data-note">Data: <code>', at);
+  assert.ok(note > at && html.slice(note, note + 400).indexOf(pair[1]) > 0, pair[0] + " links " + pair[1]);
+});
+assert.match(html, /Cells · R10/, "numbers carry their result ids");
+html.replace(/data-result-ref="(R\d\d)">([^<]*)</g, function (all, id, value) {
+  assert.equal(value, R.formatValue(result(record, id)), id + " in a section = record");
+  return all;
+});
+assert.match(html, /<textarea id="report-purpose"[^>]*>  Which RNA_A contacts change on treatment\? \| check  <\/textarea>/, "the purpose box shows what was typed");
 const chips = {};
 html.replace(/data-step="(S\d\d)" data-status="([a-z_]+)"/g, function (all, id, value) { chips[id] = chips[id] || new Set(); chips[id].add(value); return all; });
 record.steps.forEach(function (step) {
@@ -153,6 +198,33 @@ record.results.forEach(function (r) {
 });
 record.steps.forEach(function (s) { assert.ok(md.indexOf("| " + s.id + " | ") >= 0 && md.indexOf("`" + s.status + "`") >= 0); });
 assert.match(md, /not generated by a language model|not by a language model/);
+assert.ok(md.indexOf("- Purpose: Which RNA_A contacts change on treatment? | check (written by the researcher)") >= 0, "report.md has the purpose");
+assert.ok(R.reportMarkdown(bare).indexOf("- Purpose: not stated by the researcher.") >= 0);
+assert.ok(md.indexOf("| S04 | Contact map | `ok` | sample.hyb: RNA_A × RNA_B, 10-nt bins |") >= 0, "report.md steps have their scope");
+// summary.json against its JSON Schema (shipped in both packages)
+const schemaFile = byPath(ai, "schema/summary.schema.json");
+assert.ok(schemaFile && byPath(analysis, "schema/summary.schema.json"), "the schema is in both packages");
+const schema = JSON.parse(schemaFile.text);
+[record, bare, loading].forEach(function (rec, index) {
+  const problems = schemaCheck.validate(schema, JSON.parse(R.files(rec, "ai").find(function (f) { return f.path === "summary.json"; }).text));
+  assert.deepEqual(problems, [], "summary.json " + index + " is valid: " + problems.slice(0, 3).join("; "));
+});
+const broken = JSON.parse(byPath(ai, "summary.json").text);
+broken.results[0].status = "done";
+broken.results[1].value = 0.5;
+broken.results[1].type = "boolean";
+broken.steps[0].extra = 1;
+const brokenProblems = schemaCheck.validate(schema, broken);
+assert.deepEqual(brokenProblems, ["$.steps[0]: unexpected property extra", '$.results[0].status: "done" not in enum', '$.results[1].type: "boolean" not in enum'], brokenProblems.join("; "));
+assert.equal(brokenProblems.length, 3, "the schema catches a wrong status, type and an extra field");
+// structures: dot-bracket and base pairs with coordinates and candidates, in both packages
+const structureJson = JSON.parse(byPath(ai, "results/structure_prediction.json").text);
+assert.deepEqual(structureJson.pairs, [[1, 8], [2, 7], [3, 6]]);
+assert.equal(structureJson.positionOffset, 10, "a reference window starting at 11 adds 10");
+assert.match(structureJson.coordinates, /add 10 for the position on RNA_A/);
+assert.equal(structureJson.selectedCandidate, 2, "candidate numbers are 1-based");
+assert.deepEqual(structureJson.candidates.map(function (c) { return [c.rank, c.pairs, c.energy]; }), [[1, 1, -1], [2, 3, -1.2]]);
+assert.ok(byPath(ai, "results/structure_prediction.dbn") && byPath(analysis, "results/structure_prediction.json"));
 const summaryJson = JSON.parse(byPath(ai, "summary.json").text);
 assert.deepEqual(summaryJson.results, JSON.parse(JSON.stringify(record.results)), "summary.json results = record");
 assert.deepEqual(summaryJson.steps.map(function (s) { return s.status; }), JSON.parse(JSON.stringify(record.steps.map(function (s) { return s.status; }))));

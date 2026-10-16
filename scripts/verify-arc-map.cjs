@@ -208,6 +208,11 @@ const genbank = [
   assert.match(svg, /^<svg xmlns/);
   const html = arc.renderCard(state);
   assert.match(html, /data-arcmap-figure/);
+  // the model is kept while the inputs are the same, and rebuilt when one changes
+  assert.equal(arc.renderCard(state), html, "same inputs, same card");
+  state.labelOne = "AFR2";
+  assert.match(arc.renderCard(state), /higher in AFR2/, "a changed setting rebuilds the figure");
+  state.labelOne = "AFR";
   assert.match(html, /Download arc map SVG/);
 }
 

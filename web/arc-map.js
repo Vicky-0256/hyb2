@@ -898,10 +898,43 @@
 
   // ---- card (HTML string; actions handled in analysis-ui.js)
 
+  // The Compare page renders every card on each change; the model and its
+  // SVG (alignment, ~5,000 arcs: ~150 ms) are kept while the inputs are the
+  // same.  Loaded files are replaced, never changed in place, so objects are
+  // compared by identity and settings by value.
+  const objectIds = new WeakMap();
+  let nextObjectId = 1;
+  let lastCard = null;
+
+  function stateKey(s) {
+    // errors are shown by the card, not drawn
+    return Object.keys(s).filter(function (key) { return key !== "errors"; }).sort().map(function (key) {
+      const value = s[key];
+      if (value && typeof value === "object") {
+        if (!objectIds.has(value)) {
+          objectIds.set(value, nextObjectId);
+          nextObjectId += 1;
+        }
+        return key + "=#" + objectIds.get(value);
+      }
+      return key + "=" + JSON.stringify(value);
+    }).join("|");
+  }
+
+  function cachedModel(s) {
+    const key = stateKey(s);
+    if (!lastCard || lastCard.key !== key) {
+      const model = build(s);
+      lastCard = { key: key, model: model, svg: model.ready ? svg(s, model) : "" };
+    }
+    return lastCard;
+  }
+
   function renderCard(arcMap, escape) {
     const s = arcMap || defaultState();
     const esc = escape || escapeXml;
-    const model = build(s);
+    const cached = cachedModel(s);
+    const model = cached.model;
     const fileRow = function (key, label, accept, loaded) {
       return '<div class="arcmap-file control-field"><span>' + esc(label) + '</span>' +
         '<input type="file" accept="' + accept + '" data-feature="arcmap-file" data-key="' + key + '" aria-label="' + esc(label) + '">' +
@@ -940,7 +973,7 @@
     if (!model.ready) {
       out.push('<p class="card-note">' + esc(model.reason) + "</p>");
     } else {
-      out.push('<div class="arcmap-figure" data-arcmap-figure>' + svg(s, model) + "</div>");
+      out.push('<div class="arcmap-figure" data-arcmap-figure>' + cached.svg + "</div>");
       out.push('<dl class="selection-stats"><div><dt>Pairs A</dt><dd>' + formatNumber(model.stats.pairsA) + "</dd></div>" +
         (s.b ? "<div><dt>Pairs B</dt><dd>" + formatNumber(model.stats.pairsB) + "</dd></div><div><dt>Shared</dt><dd>" + formatNumber(model.stats.shared) +
           "</dd></div><div><dt>Only A · only B</dt><dd>" + formatNumber(model.stats.onlyA) + " · " + formatNumber(model.stats.onlyB) + "</dd></div>" : "") +

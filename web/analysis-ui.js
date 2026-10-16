@@ -1116,30 +1116,80 @@
     // similarity counts and effects (ratios of small counts) repeat a lot:
     // each colour is computed once per draw
     const colours = new Map();
+    const colourOf = function (cell) {
+      const value = kind === "conserved" ? cell.similarity : cell.effect;
+      let colour = colours.get(value);
+      if (colour === undefined) {
+        colour = kind === "conserved" ? conservedColor(conservedRatio(value, result)) : effectColor(value / effectCap);
+        colours.set(value, colour);
+      }
+      return colour;
+    };
+    if (cells.length > COMPARISON_LAYER_MIN_CELLS && typeof context.getImageData === "function") {
+      // effects are nearly all distinct: their colour is packed straight from
+      // the number; similarity counts repeat and keep the string cache
+      const effectPacked = effectPacker(isDarkTheme());
+      const packedOf = kind === "conserved" ? null : function (cell) { return effectPacked(cell.effect / effectCap); };
+      rasterComparisonCells(context, dimensions, geometry, result, cells, width, height, colourOf, packedOf);
+      return;
+    }
     let previous = "";
     cells.forEach(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
-      let colour;
-      if (kind === "conserved") {
-        colour = colours.get(cell.similarity);
-        if (colour === undefined) {
-          colour = conservedColor(conservedRatio(cell.similarity, result));
-          colours.set(cell.similarity, colour);
-        }
-      } else {
-        colour = colours.get(cell.effect);
-        if (colour === undefined) {
-          colour = effectColor(cell.effect / effectCap);
-          colours.set(cell.effect, colour);
-        }
-      }
+      const colour = colourOf(cell);
       if (colour !== previous) {
         context.fillStyle = colour;
         previous = colour;
       }
       context.fillRect(x, y, width, height);
     });
+  }
+
+  // A whole-genome map (~10^6 cells of under a pixel each) as one pixel
+  // buffer: a fillRect per cell took ~1.5 s.  Each cell covers the device
+  // pixels of its rectangle (at least one), later cells over earlier ones as
+  // with fillRect; the colours are opaque rgb().
+  function rasterComparisonCells(context, dimensions, geometry, result, cells, width, height, colourOf, packedOf) {
+    const sx = context.canvas.width / dimensions.width;
+    const sy = context.canvas.height / dimensions.height;
+    const left = Math.round(geometry.left * sx);
+    const top = Math.round(geometry.top * sy);
+    const plotWidth = Math.max(1, Math.min(context.canvas.width - left, Math.round(geometry.plotWidth * sx)));
+    const plotHeight = Math.max(1, Math.min(context.canvas.height - top, Math.round(geometry.plotHeight * sy)));
+    const image = context.getImageData(left, top, plotWidth, plotHeight);
+    const pixels = new Uint32Array(image.data.buffer);
+    const packed = new Map();
+    const cellWidth = geometry.cellWidth * sx;
+    const cellHeight = geometry.cellHeight * sy;
+    const spanX = width * sx;
+    const spanY = height * sy;
+    const offsetX = geometry.left * sx - left;
+    const offsetY = geometry.top * sy - top;
+    for (let index = 0; index < cells.length; index += 1) {
+      const cell = cells[index];
+      let value;
+      if (packedOf) {
+        value = packedOf(cell);
+      } else {
+        const colour = colourOf(cell);
+        value = packed.get(colour);
+        if (value === undefined) {
+          value = packRgb(colour.match(/\d+/g).map(Number));
+          packed.set(colour, value);
+        }
+      }
+      const x = offsetX + ((cell.x - geometry.xStart) / result.binSize) * cellWidth;
+      const y = offsetY + ((cell.y - geometry.yStart) / result.binSize) * cellHeight;
+      const x0 = Math.max(0, Math.floor(x));
+      const y0 = Math.max(0, Math.floor(y));
+      const x1 = Math.min(plotWidth, Math.max(x0 + 1, Math.round(x + spanX)));
+      const y1 = Math.min(plotHeight, Math.max(y0 + 1, Math.round(y + spanY)));
+      for (let row = y0; row < y1; row += 1) {
+        pixels.fill(value, row * plotWidth + x0, row * plotWidth + x1);
+      }
+    }
+    context.putImageData(image, left, top);
   }
 
   function getComparisonGeometry(result, width, height) {
@@ -2666,7 +2716,7 @@
     return "rgb(" + red + ", " + green + ", " + blue + ")";
   }
 
-  function effectColor(value) {
+  function effectRgb(value) {
     const bounded = Math.max(-1, Math.min(1, value));
     const dark = isDarkTheme();
     const center = dark ? [19, 44, 71] : [245, 248, 250];
@@ -2674,10 +2724,43 @@
       ? (dark ? [154, 136, 255] : [106, 79, 242])
       : [0, 160, 157];
     const ratio = Math.abs(bounded);
-    const red = Math.round(center[0] + (target[0] - center[0]) * ratio);
-    const green = Math.round(center[1] + (target[1] - center[1]) * ratio);
-    const blue = Math.round(center[2] + (target[2] - center[2]) * ratio);
-    return "rgb(" + red + ", " + green + ", " + blue + ")";
+    return [
+      Math.round(center[0] + (target[0] - center[0]) * ratio),
+      Math.round(center[1] + (target[1] - center[1]) * ratio),
+      Math.round(center[2] + (target[2] - center[2]) * ratio)
+    ];
+  }
+
+  function effectColor(value) {
+    const rgb = effectRgb(value);
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
+  }
+
+  // effectColor() as ImageData pixels, for one theme: no DOM read or
+  // allocation per cell
+  function effectPacker(dark) {
+    const c0 = dark ? 19 : 245;
+    const c1 = dark ? 44 : 248;
+    const c2 = dark ? 71 : 250;
+    const p0 = dark ? 154 : 106;
+    const p1 = dark ? 136 : 79;
+    const p2 = dark ? 255 : 242;
+    return function (value) {
+      const bounded = Math.max(-1, Math.min(1, value));
+      const ratio = Math.abs(bounded);
+      const t0 = bounded >= 0 ? p0 : 0;
+      const t1 = bounded >= 0 ? p1 : 160;
+      const t2 = bounded >= 0 ? p2 : 157;
+      const red = Math.round(c0 + (t0 - c0) * ratio);
+      const green = Math.round(c1 + (t1 - c1) * ratio);
+      const blue = Math.round(c2 + (t2 - c2) * ratio);
+      return ((255 << 24) | (blue << 16) | (green << 8) | red) >>> 0;
+    };
+  }
+
+  // ImageData is RGBA in memory: little-endian 0xAABBGGRR, opaque
+  function packRgb(rgb) {
+    return ((255 << 24) | (rgb[2] << 16) | (rgb[1] << 8) | rgb[0]) >>> 0;
   }
 
   // similarity_heatmap.R: counts capped at the 95% quantile, then
@@ -2828,6 +2911,9 @@
     moveComparisonSelection: moveComparisonSelection,
     conservedRatio: conservedRatio,
     similarityPanelColor: similarityPanelColor,
+    rasterComparisonCells: rasterComparisonCells,
+    effectColor: effectColor,
+    effectPacker: effectPacker,
     conservedColor: conservedColor,
     foldRequest: foldRequest
   };

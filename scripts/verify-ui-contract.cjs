@@ -214,6 +214,39 @@ assert.equal(context.window.Hyb2UI.conservedColor(1), "rgb(34, 139, 34)");
 assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "the ramp interpolates in CIELAB");
 // The panel behind the similarity heatmap is display only: R's white by
 // default, ggplot's grey on request; changing it keeps the computed result.
+// Large maps are rasterised into one pixel buffer: every cell covers at
+// least one device pixel, later cells over earlier ones.
+{
+  const canvas = { width: 20, height: 10 };
+  const buffer = new Uint8ClampedArray(20 * 10 * 4);
+  let put = null;
+  const fake = {
+    canvas: canvas,
+    getImageData: function (x, y, w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
+    putImageData: function (image, x, y) { put = { image: image, x: x, y: y }; }
+  };
+  const geometry = { left: 0, top: 0, plotWidth: 10, plotHeight: 5, cellWidth: 0.5, cellHeight: 0.5, xStart: 0, yStart: 0 };
+  // cells are drawn 0.9 css px (1.8 device px) wide, so they overlap as with fillRect
+  const cells = [{ x: 0, y: 0, c: "rgb(1, 2, 3)" }, { x: 0, y: 0, c: "rgb(7, 8, 9)" }, { x: 10, y: 0, c: "rgb(4, 5, 6)" }];
+  context.window.Hyb2UI.rasterComparisonCells(fake, { width: 10, height: 5 }, geometry, { binSize: 10 }, cells, 0.9, 0.9,
+    function (cell) { return cell.c; });
+  assert.ok(put && put.x === 0 && put.y === 0, "the plot area is written back");
+  const px = put.image.data;
+  assert.deepEqual(Array.from(px.slice(0, 4)), [7, 8, 9, 255], "the later cell wins its pixel");
+  assert.deepEqual(Array.from(px.slice(4, 8)), [4, 5, 6, 255], "the next cell starts at its own device pixel");
+  assert.deepEqual(Array.from(px.slice(12, 16)), [0, 0, 0, 0], "beyond the last cell nothing is written");
+  void buffer;
+}
+{
+  // the raster's packed effect colours are effectColor()'s
+  const pack = context.window.Hyb2UI.effectPacker(false);
+  for (let k = -1200; k <= 1200; k += 7) {
+    const value = k / 1000;
+    const rgb = context.window.Hyb2UI.effectColor(value).match(/\d+/g).map(Number);
+    const p = pack(value);
+    assert.deepEqual([p & 255, (p >>> 8) & 255, (p >>> 16) & 255, p >>> 24], rgb.concat(255), "effect " + value);
+  }
+}
 assert.equal(context.window.Hyb2UI.similarityPanelColor({}), "#ffffff");
 assert.equal(context.window.Hyb2UI.similarityPanelColor({ similarityPanel: "grey" }), "#ebebeb");
 assert.match(comparisonReport.parameters.similarityPanel, /^white/);

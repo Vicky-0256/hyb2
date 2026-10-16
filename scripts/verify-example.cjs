@@ -123,7 +123,7 @@ function parseHyb(file) {
 // is ~10x slower on a genome).
 const win = { navigator: { deviceMemory: 8, hardwareConcurrency: 4 } };
 const documentStub = { querySelector: function () { return null; }, getElementById: function () { return null; } };
-["analysis-data.js", "data-provider.js", "deseq.js", "arc-map.js", "deseq-card.js", "region-panels.js", "folding-energy.js"].forEach(function (file) {
+["analysis-data.js", "data-provider.js", "page-data.js", "deseq.js", "arc-map.js", "deseq-card.js", "region-panels.js", "folding-energy.js"].forEach(function (file) {
   const source = fs.readFileSync(web(file), "utf8");
   vm.runInThisContext("(function (window, self, module, document, navigator) {" + source + "\n})", { filename: file })(win, win, undefined, documentStub, win.navigator);
 });
@@ -137,6 +137,169 @@ const fe = win.Hyb2FoldingEnergy;
 function readReference(name) {
   const file = path.join(reference, name);
   return reference && fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+}
+
+// ---- comparison.worker.js through page-data.js, against the in-thread result
+// A Worker stand-in: runs comparison.worker.js in this process, messages
+// cross by structuredClone with the transfer lists (buffers are detached, as
+// in a browser).
+function makeWorkerClass(log, delay) {
+  return function FakeWorker(url) {
+    assert.match(url, /^\.\/comparison\.worker\.js\?build=local$/, "the worker URL carries the build cache-buster");
+    const outer = this;
+    const entry = { done: false, terminatedEarly: false, progress: 0 };
+    if (log) log.push(entry);
+    let terminated = false;
+    const scope = { location: { search: "?build=local" }, navigator: win.navigator };
+    scope.self = scope;
+    scope.postMessage = function (message, transfer) {
+      const copy = structuredClone(message, { transfer: transfer || [] });
+      if (message.type === "done") {
+        entry.done = true;
+        assert.ok(transfer && transfer.length >= 11, "the worker transfers its typed arrays");
+      }
+      if (message.type === "progress") entry.progress += 1;
+      setImmediate(function () { if (!terminated && outer.onmessage) outer.onmessage({ data: copy }); });
+    };
+    scope.importScripts = function () {
+      Array.from(arguments).forEach(function (file) {
+        assert.match(file, /^\.\/(analysis-data|data-provider)\.js\?build=local$/, "worker scripts carry the build query");
+        const name = file.replace(/^\.\//, "").replace(/\?.*$/, "");
+        vm.runInThisContext("(function (window, self, module, navigator) {" + fs.readFileSync(web(name), "utf8") + "\n})", { filename: name })(scope, scope, undefined, scope.navigator);
+      });
+    };
+    vm.runInThisContext("(function (self, importScripts) {" + fs.readFileSync(web("comparison.worker.js"), "utf8") + "\n})", { filename: "comparison.worker.js" })(scope, scope.importScripts);
+    this.postMessage = function (message, transfer) {
+      const copy = structuredClone(message, { transfer: transfer || [] });
+      setTimeout(function () { if (!terminated) scope.onmessage({ data: copy }); }, delay || 0);
+    };
+    this.terminate = function () { terminated = true; entry.terminatedEarly = !entry.done; };
+  };
+}
+
+function sameComparison(actual, expected, label) {
+  same(Object.keys(actual), Object.keys(expected), label + ": result fields");
+  Object.keys(expected).forEach(function (key) {
+    if (key === "cells" || key === "conservedCells" || key === "cellMap") return;
+    if (key === "groupA" || key === "groupB") {
+      same(actual[key].map(function (d) { return d.id; }), expected[key].map(function (d) { return d.id; }), label + ": " + key);
+      return;
+    }
+    same(actual[key], expected[key], label + ": " + key);
+  });
+  ["cells", "conservedCells"].forEach(function (key) {
+    assert.equal(actual[key].length, expected[key].length, label + ": " + key);
+    for (let index = 0; index < expected[key].length; index += 1) {
+      if (JSON.stringify(actual[key][index]) !== JSON.stringify(expected[key][index])) {
+        assert.fail(label + ": " + key + "[" + index + "] " + JSON.stringify(actual[key][index]) + " vs " + JSON.stringify(expected[key][index]));
+      }
+    }
+  });
+  for (let index = 0; index < expected.cells.length; index += 997) {
+    const cell = expected.cells[index];
+    same(actual.cells[index].datasets, cell.datasets, label + ": per-dataset values");
+    assert.equal(data.comparisonCellAt(actual, cell.x, cell.y), actual.cells[index], label + ": cell lookup");
+  }
+  same(Array.from(data.comparisonOrder(actual, "effect")), Array.from(data.comparisonOrder(expected, "effect")), label + ": effect order");
+}
+
+async function settle(controller, pageId) {
+  let pending = controller.ensure(pageId);
+  for (let round = 0; pending && round < 10; round += 1) {
+    await pending;
+    pending = controller.ensure(pageId);
+  }
+  assert.equal(pending, null, pageId + " data settles");
+}
+
+async function compareWorkerPath(provider, comparison, expected) {
+  const pageData = win.Hyb2PageData;
+  const run = async function (WorkerClass, edit, source) {
+    win.Worker = WorkerClass;
+    const state = { selection: null, summary: null, comparison: Object.assign({}, comparison, { result: null, datasets: comparison.datasets.slice() }) };
+    const controller = pageData.createController({ state: state });
+    controller.setProvider(source || provider);
+    await controller.setSelection({ datasetIds: ["primary"] });
+    if (edit) await edit(state, controller);
+    await settle(controller, "compare");
+    controller.destroy();
+    delete win.Worker;
+    return state;
+  };
+  // the worker path
+  const workers = [];
+  const viaWorker = await run(makeWorkerClass(workers));
+  assert.equal(workers.length, 1, "one worker per comparison");
+  assert.ok(workers[0].done && workers[0].progress >= 5, "the worker reports progress per dataset and finishes");
+  assert.equal(viaWorker.comparison.progress, null, "progress is cleared when the comparison is done");
+  sameComparison(viaWorker.comparison.result, expected, "worker");
+  // packed records are cached in the provider and copied, not detached
+  const packed = await provider.getContactRecords({ datasetIds: ["primary"] });
+  assert.equal(packed.oneStart.length, EXPECTED.records.ZAFR_REP1, "the provider's packed records stay usable");
+  // supersede: a changed bin size while the first run is in the worker
+  const terminations = [];
+  const superseded = await run(makeWorkerClass(terminations, 200), async function (state, controller) {
+    const first = controller.ensure("compare");
+    await new Promise(function (resolve) { setTimeout(resolve, 50); });
+    assert.equal(terminations.length, 1, "the first run is in its worker");
+    assert.ok(state.comparison.progress && /Reading|Binning/.test(state.comparison.progress.stage), "the Compare page has a progress stage while the worker runs");
+    state.comparison.binSize = "100";
+    state.comparison.result = null;
+    controller.ensure("compare");
+    await first;
+  });
+  assert.equal(terminations.length, 2, "a second run for the new inputs");
+  assert.ok(terminations[0].terminatedEarly && !terminations[1].terminatedEarly, "the stale worker is terminated before it finishes");
+  assert.equal(superseded.comparison.result.binSize, 100, "the newest inputs win");
+  // a provider without getContactRecords (the desktop app): its contact
+  // bins go to the worker as transferred typed arrays
+  const binsOnly = Object.create(provider, { getContactRecords: { value: undefined } });
+  const viaBins = await run(makeWorkerClass(), null, binsOnly);
+  sameComparison(viaBins.comparison.result, expected, "worker from contact bins");
+  // a worker that cannot load: the page builds the comparison itself
+  const failing = function () {
+    const self = this;
+    this.postMessage = function () { setImmediate(function () { self.onerror({ message: "404", preventDefault: function () {} }); }); };
+    this.terminate = function () {};
+  };
+  const fallback = await run(failing);
+  sameComparison(fallback.comparison.result, expected, "fallback");
+}
+
+// ---- the comparison data table: one page per render from a cached order
+let tableRenderMs = 0;
+function comparisonTableTiming(result) {
+  const context = { window: { Hyb2Data: data }, document: documentStub, console: console, Intl: Intl };
+  context.window.window = context.window;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(web("analysis-pages.js"), "utf8"), context, { filename: "analysis-pages.js" });
+  const pages = context.window.Hyb2Pages;
+  assert.equal(typeof pages.renderComparisonDataTable, "function", "analysis-pages.js exposes the data table renderer");
+  const comparison = { conditionALabel: "ZAFR", conditionBLabel: "ZASI", tableSort: "effect", tablePage: 0 };
+  const first = pages.renderComparisonDataTable(result, comparison);
+  // the first page equals the former cells.slice().sort(|effect|).slice(0, 150)
+  const reference = result.cells.slice().sort(function (left, right) { return Math.abs(right.effect) - Math.abs(left.effect); }).slice(0, 150);
+  const rows = data.comparisonOrderedCells(result, "effect", 0, 150);
+  assert.ok(rows.every(function (cell, index) { return cell === reference[index]; }), "the data table keeps the |effect| order");
+  assert.equal((first.match(/<tr>/g) || []).length, 151, "one page of 150 bins");
+  let slowest = 0;
+  for (let round = 0; round < 5; round += 1) {
+    comparison.tablePage = round * 1000;
+    const started = process.hrtime.bigint();
+    pages.renderComparisonDataTable(result, comparison);
+    slowest = Math.max(slowest, Number(process.hrtime.bigint() - started) / 1e6);
+  }
+  tableRenderMs = slowest;
+  assert.ok(slowest < 20, "a data table render after the first takes " + slowest.toFixed(1) + " ms (< 20 ms)");
+  comparison.tableSort = "similarity";
+  comparison.tablePage = 0;
+  pages.renderComparisonDataTable(result, comparison);
+  const bySimilarity = data.comparisonOrderedCells(result, "similarity", 0, 50);
+  const similarityReference = result.cells.slice().sort(function (left, right) { return right.similarity - left.similarity; }).slice(0, 50);
+  assert.ok(bySimilarity.every(function (cell, index) { return cell === similarityReference[index]; }), "the similarity order is a stable sort");
+  const started = process.hrtime.bigint();
+  pages.renderComparisonDataTable(result, comparison);
+  assert.ok(Number(process.hrtime.bigint() - started) / 1e6 < 20, "the similarity order is cached as well");
 }
 
 async function main() {
@@ -228,6 +391,9 @@ async function main() {
     log("similarity map equals plot_similarity_map cell by cell");
   }
   log("Compare maps: " + result.cells.length + " cells, " + result.conservedCells.length + " similarity cells, cap " + result.similarityCap);
+  await compareWorkerPath(provider, comparison, result);
+  comparisonTableTiming(result);
+  log("comparison.worker.js gives the in-thread result; the data table renders a page in " + tableRenderMs.toFixed(1) + " ms");
   if (process.env.HYB2_EXAMPLE_QUICK) {
     return;
   }

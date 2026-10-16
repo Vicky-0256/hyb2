@@ -1113,7 +1113,8 @@
     const width = Math.ceil(geometry.cellWidth) + .4;
     const height = Math.ceil(geometry.cellHeight) + .4;
     const effectCap = Math.max(.01, result.effectCap);
-    // similarity counts repeat a lot: each colour is computed once per draw
+    // similarity counts and effects (ratios of small counts) repeat a lot:
+    // each colour is computed once per draw
     const colours = new Map();
     let previous = "";
     cells.forEach(function (cell) {
@@ -1127,7 +1128,11 @@
           colours.set(cell.similarity, colour);
         }
       } else {
-        colour = effectColor(cell.effect / effectCap);
+        colour = colours.get(cell.effect);
+        if (colour === undefined) {
+          colour = effectColor(cell.effect / effectCap);
+          colours.set(cell.effect, colour);
+        }
       }
       if (colour !== previous) {
         context.fillStyle = colour;
@@ -1192,36 +1197,42 @@
       return false;
     }
 
-    const ordered = cells.slice().sort(function (left, right) { return left.y - right.y || left.x - right.x; });
+    // single passes over the cells (a whole-genome map has ~10^6): the first
+    // cell in (y, x) order, and the nearest candidate in the key's direction
     const selected = state.comparison.selection;
     const selectedCell = selected
       ? cells.find(function (cell) { return cell.x === selected.x && cell.y === selected.y; })
       : null;
-    const current = selectedCell || ordered[0];
+    let current = selectedCell;
+    if (!current) {
+      cells.forEach(function (cell) {
+        if (!current || cell.y < current.y || (cell.y === current.y && cell.x < current.x)) {
+          current = cell;
+        }
+      });
+    }
     let next;
 
     if (current) {
-      const candidates = cells.filter(function (cell) {
-        if (key === "ArrowLeft") {
-          return cell.x < current.x;
-        }
-        if (key === "ArrowRight") {
-          return cell.x > current.x;
-        }
-        if (key === "ArrowUp") {
-          return cell.y < current.y;
-        }
-        return cell.y > current.y;
-      });
       const horizontal = key === "ArrowLeft" || key === "ArrowRight";
-      candidates.sort(function (left, right) {
+      const before = function (left, right) {
         const leftPrimary = horizontal ? Math.abs(left.x - current.x) : Math.abs(left.y - current.y);
         const rightPrimary = horizontal ? Math.abs(right.x - current.x) : Math.abs(right.y - current.y);
         const leftSecondary = horizontal ? Math.abs(left.y - current.y) : Math.abs(left.x - current.x);
         const rightSecondary = horizontal ? Math.abs(right.y - current.y) : Math.abs(right.x - current.x);
-        return leftSecondary - rightSecondary || leftPrimary - rightPrimary || left.y - right.y || left.x - right.x;
+        return (leftSecondary - rightSecondary || leftPrimary - rightPrimary || left.y - right.y || left.x - right.x) < 0;
+      };
+      let best = null;
+      cells.forEach(function (cell) {
+        const candidate = key === "ArrowLeft" ? cell.x < current.x
+          : key === "ArrowRight" ? cell.x > current.x
+            : key === "ArrowUp" ? cell.y < current.y
+              : cell.y > current.y;
+        if (candidate && (!best || before(cell, best))) {
+          best = cell;
+        }
       });
-      next = candidates[0] || (!selectedCell ? current : null);
+      next = best || (!selectedCell ? current : null);
     }
 
     if (!next) {
@@ -1375,6 +1386,13 @@
       return true;
     }
 
+    if (feature === "comparison-table" && state.comparison) {
+      state.comparison.tableSort = element.value;
+      state.comparison.tablePage = 0;
+      api.render();
+      return true;
+    }
+
     if (feature === "comparison-dataset") {
       const datasetId = element.dataset.datasetId;
       const dataset = (state.comparison.datasets || []).find(function (item) { return item.id === datasetId; });
@@ -1500,6 +1518,11 @@
     }
     if (feature === "comparison-display" && state.comparison) {
       state.comparison[key] = element.value;
+      return true;
+    }
+    if (feature === "comparison-table" && state.comparison) {
+      state.comparison.tableSort = element.value;
+      state.comparison.tablePage = 0;
       return true;
     }
     if (feature === "comparison-dataset" && state.comparison) {
@@ -1918,6 +1941,12 @@
       return true;
     }
 
+    if (action === "comparison-table-page") {
+      state.comparison.tablePage = Math.max(0, Number(element.dataset.page) || 0);
+      api.render();
+      return true;
+    }
+
     if (action === "comparison-export-tsv") {
       if (!ensureVisualExport(state, "comparison", api)) {
         return true;
@@ -2242,7 +2271,7 @@
     // a whole-genome map keeps the SVG printable: the strongest effects,
     // drawn weakest first
     const shown = result.cells.length > COMPARISON_SVG_MAX_CELLS
-      ? result.cells.slice().sort(function (left, right) { return Math.abs(right.effect) - Math.abs(left.effect); }).slice(0, COMPARISON_SVG_MAX_CELLS).reverse()
+      ? window.Hyb2Data.comparisonOrderedCells(result, "effect", 0, COMPARISON_SVG_MAX_CELLS).reverse()
       : result.cells;
     const cells = shown.map(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;

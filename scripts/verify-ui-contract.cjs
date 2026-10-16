@@ -879,4 +879,16 @@ assert.match(comparisonParserSource[1], /error\.name = "AbortError";\s*reject\(e
 assert.match(appSource, /function cancelComparisonLoads\(\)\s*{\s*state\.comparisonLoadSession = null;\s*Array\.from\(state\.comparisonParsers\)\.forEach[\s\S]*?parser\.cancel\(\);[\s\S]*?state\.comparisonParsers\.clear\(\);\s*}/,
   "comparison cancellation must terminate every active parser and invalidate its batch token");
 
+// The Compare page builds whole-genome comparisons in comparison.worker.js
+// (checked against the in-thread result in verify-example.cjs) and pages the
+// data table from a cached order instead of sorting every cell per render.
+const pageDataSource = fs.readFileSync(path.join(repository, "web", "page-data.js"), "utf8");
+assert.match(pageDataSource, /"comparison\.worker\.js\?build=" \+ encodeURIComponent\(root\.HYB2_BUILD && root\.HYB2_BUILD\.commit \|\| "local"\)/,
+  "the comparison worker URL carries the build cache-buster");
+assert.match(pageDataSource, /function invalidate\(\) \{[\s\S]*?cancelComparisonJob\(\);/, "invalidating the page data cancels a running comparison");
+assert.match(fs.readFileSync(path.join(repository, "web", "comparison.worker.js"), "utf8"), /importScripts\("\.\/analysis-data\.js" \+ BUILD_QUERY/,
+  "the worker loads analysis-data.js with the page's build query");
+assert.doesNotMatch(analysisPagesSource, /result\.cells\.slice\(\)\.sort/, "the comparison data table must not sort every cell on render");
+assert.match(analysisPagesSource, /data-comparison-progress/, "the Compare placeholder shows the comparison progress");
+
 process.stdout.write("ui-contract: ok\n");

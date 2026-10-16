@@ -28,6 +28,9 @@
   const REPORT_TABLE_ROWS = 12;
   const CONTACT_MAX_CELLS = 250000;
   const YIELD_AFTER_CELLS = 50000;
+  // the page creates comparison cells for about this long between yields
+  const COMPARISON_STEP_MS = 12;
+  const COMPARISON_CELLS_PER_CHECK = 4000;
   const PAGE_IDS = ["overview", "interactions", "contact-map", "viewpoint", "region", "compare", "structure", "report"];
 
   function providerApi() {
@@ -166,6 +169,72 @@
     });
   }
 
+  function now() {
+    return root.performance && typeof root.performance.now === "function" ? root.performance.now() : Date.now();
+  }
+
+  // yields to the event loop through a message (not throttled to 1 s in a
+  // background tab, as nested timers are)
+  function yieldToTask() {
+    if (typeof root.MessageChannel !== "function") {
+      return yieldToEventLoop();
+    }
+    return new Promise(function (resolve) {
+      const channel = new root.MessageChannel();
+      channel.port1.onmessage = function () {
+        channel.port1.close();
+        resolve();
+      };
+      channel.port2.postMessage(null);
+    });
+  }
+
+  function comparisonWorkerUrl() {
+    return (root.HYB2_ASSET_BASE || "./") + "comparison.worker.js?build=" + encodeURIComponent(root.HYB2_BUILD && root.HYB2_BUILD.commit || "local");
+  }
+
+  function abortError() {
+    const error = new Error("The comparison was superseded.");
+    error.name = "AbortError";
+    return error;
+  }
+
+  // comparison.progress = { stage, fraction } while a comparison is built;
+  // the Compare page's placeholder shows it (and is updated in place here,
+  // without a full render)
+  function setComparisonProgress(comparison, stage, fraction) {
+    comparison.progress = stage ? { stage: stage, fraction: Math.max(0, Math.min(1, fraction || 0)) } : null;
+    const doc = root.document;
+    const nodes = doc && typeof doc.querySelectorAll === "function" ? Array.from(doc.querySelectorAll("[data-comparison-progress]")) : [];
+    const progress = comparison.progress;
+    const percent = progress ? Math.round(100 * progress.fraction) : 0;
+    nodes.forEach(function (node) {
+      node.hidden = !progress;
+      if (!progress) {
+        return;
+      }
+      const label = node.querySelector("[data-comparison-progress-label]");
+      const bar = node.querySelector(".progress-bar");
+      if (label) label.textContent = stage + " · " + percent + "%";
+      if (bar) {
+        bar.setAttribute("aria-valuenow", String(percent));
+        if (bar.firstElementChild) bar.firstElementChild.style.width = percent + "%";
+      }
+    });
+  }
+
+  // contact bins as typed arrays, for transfer to the worker
+  function transferableBins(bins) {
+    const source = bins || {};
+    return {
+      ready: source.ready,
+      reason: source.reason,
+      x: Float64Array.from(source.x || []),
+      y: Float64Array.from(source.y || []),
+      count: Float64Array.from(source.count || [])
+    };
+  }
+
   function windowRows(interactions, start, count) {
     if (!interactions || !Array.isArray(interactions.rows)) {
       return null;
@@ -188,6 +257,10 @@
     let destroyed = false;
     let notifyScheduled = false;
     const pending = Object.create(null);
+    // the comparison being built in comparison.worker.js; a newer run, a
+    // changed provider or destroy() cancels it
+    let comparisonJob = null;
+    let comparisonWorkerFailed = false;
 
     if (!state.view) {
       state.view = freshView();
@@ -243,6 +316,7 @@
     function invalidate() {
       epoch += 1;
       Object.keys(pending).forEach(function (name) { delete pending[name]; });
+      cancelComparisonJob();
     }
 
     function baseKey() {
@@ -484,33 +558,185 @@
           if (!comparison.rnaX || !comparison.rnaY || !hasA || !hasB) {
             return Promise.resolve(data().buildComparisonResults(comparison));
           }
-          // No maxCells here: every dataset must share one bin size.  One
-          // dataset at a time, yielding after large ones, so whole-genome
-          // maps do not hold the page for all datasets at once.
-          const binsList = [];
-          return assigned.reduce(function (chain, dataset) {
-            return chain.then(function () {
-              return provider.getContactBins({ datasetIds: [dataset.id] }, data().comparisonContactQuery(comparison, dataset));
-            }).then(function (bins) {
-              binsList.push(bins);
-              const more = binsList.length < assigned.length;
-              return more && bins.x && bins.x.length > YIELD_AFTER_CELLS ? yieldToEventLoop() : null;
+          if (typeof root.Worker === "function" && !comparisonWorkerFailed) {
+            return comparisonInWorker(comparison).catch(function (error) {
+              if (error && error.workerUnavailable) {
+                comparisonWorkerFailed = true;
+                return comparisonInThread(comparison, assigned);
+              }
+              throw error;
             });
-          }, Promise.resolve()).then(function () {
-            const byId = Object.create(null);
-            assigned.forEach(function (dataset, index) { byId[dataset.id] = binsList[index]; });
-            return data().buildComparisonResults(Object.assign({}, comparison, {
-              datasets: (comparison.datasets || []).map(function (dataset) {
-                return byId[dataset.id] ? Object.assign({}, dataset, { contactBins: byId[dataset.id] }) : dataset;
-              })
-            }));
-          });
+          }
+          return comparisonInThread(comparison, assigned);
         },
         apply: function (result) { comparison.result = result; },
         fallback: function (error) {
           comparison.result = { ready: false, reason: errorMessage(error, "The comparison could not be loaded."), groupA: [], groupB: [], cells: [], conservedCells: [] };
         }
       }];
+    }
+
+    // Without workers (node, or when comparison.worker.js cannot load).
+    function comparisonInThread(comparison, assigned) {
+      // No maxCells here: every dataset must share one bin size.  One
+      // dataset at a time, yielding after large ones, so whole-genome
+      // maps do not hold the page for all datasets at once.
+      const binsList = [];
+      return assigned.reduce(function (chain, dataset) {
+        return chain.then(function () {
+          return provider.getContactBins({ datasetIds: [dataset.id] }, data().comparisonContactQuery(comparison, dataset));
+        }).then(function (bins) {
+          binsList.push(bins);
+          const more = binsList.length < assigned.length;
+          return more && bins.x && bins.x.length > YIELD_AFTER_CELLS ? yieldToEventLoop() : null;
+        });
+      }, Promise.resolve()).then(function () {
+        const byId = Object.create(null);
+        assigned.forEach(function (dataset, index) { byId[dataset.id] = binsList[index]; });
+        return data().buildComparisonResults(Object.assign({}, comparison, {
+          datasets: (comparison.datasets || []).map(function (dataset) {
+            return byId[dataset.id] ? Object.assign({}, dataset, { contactBins: byId[dataset.id] }) : dataset;
+          })
+        }));
+      });
+    }
+
+    function cancelComparisonJob() {
+      const job = comparisonJob;
+      comparisonJob = null;
+      if (!job) {
+        return;
+      }
+      if (job.worker) {
+        job.worker.terminate();
+        job.worker = null;
+      }
+      if (job.reject) {
+        job.reject(abortError());
+      }
+    }
+
+    // The comparison through comparison.worker.js: each dataset's packed
+    // records (getContactRecords) or contact bins go to the worker, which
+    // bins and combines them; the cell objects are then created here in
+    // steps between frames.  The result equals buildComparisonResults().
+    function comparisonInWorker(comparison) {
+      cancelComparisonJob();
+      const job = { worker: null, reject: null };
+      comparisonJob = job;
+      const current = function () { return comparisonJob === job && !destroyed; };
+      const checkCurrent = function (value) {
+        if (!current()) {
+          throw abortError();
+        }
+        return value;
+      };
+      // every assigned dataset gets bins from the provider (as comparisonInThread)
+      const prepared = data().prepareComparison(comparison, function () { return true; });
+      const datasets = prepared.allDatasets;
+      const sources = [];
+      setComparisonProgress(comparison, "Reading datasets", 0);
+      return datasets.reduce(function (chain, dataset, index) {
+        return chain.then(checkCurrent).then(function () {
+          const selection = { datasetIds: [dataset.id] };
+          const packed = typeof provider.getContactRecords === "function" ? provider.getContactRecords(selection) : null;
+          return Promise.resolve(packed).then(function (records) {
+            if (records) {
+              return { label: dataset.label || dataset.fileName || dataset.id, records: records };
+            }
+            return provider.getContactBins(selection, prepared.input.datasets[index].query).then(function (bins) {
+              return { label: dataset.label || dataset.fileName || dataset.id, bins: transferableBins(bins) };
+            });
+          }).then(function (source) {
+            sources.push(source);
+            setComparisonProgress(comparison, "Reading datasets", .1 * sources.length / datasets.length);
+          });
+        });
+      }, Promise.resolve()).then(checkCurrent).then(function () {
+        return new Promise(function (resolve, reject) {
+          let worker;
+          try {
+            worker = new root.Worker(comparisonWorkerUrl());
+          } catch (error) {
+            reject(Object.assign(new Error("comparison.worker.js could not start."), { workerUnavailable: true }));
+            return;
+          }
+          let answered = false;
+          job.worker = worker;
+          job.reject = reject;
+          const stop = function () {
+            worker.terminate();
+            if (job.worker === worker) {
+              job.worker = null;
+              job.reject = null;
+            }
+          };
+          worker.onmessage = function (event) {
+            const message = event.data || {};
+            answered = true;
+            if (!current()) {
+              return;
+            }
+            if (message.type === "progress") {
+              const total = Math.max(1, message.total || 1);
+              setComparisonProgress(comparison, message.stage, .1 + .7 * (message.done || 0) / total);
+            } else if (message.type === "done") {
+              stop();
+              resolve(message.packed);
+            } else if (message.type === "error") {
+              stop();
+              reject(new Error(message.message || "The comparison worker failed."));
+            }
+          };
+          worker.onerror = function (event) {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            stop();
+            // a worker that never answered did not load: build on the page
+            reject(answered
+              ? new Error(event && event.message ? event.message : "The comparison worker stopped.")
+              : Object.assign(new Error("comparison.worker.js could not load."), { workerUnavailable: true }));
+          };
+          const transfer = [];
+          sources.forEach(function (source) {
+            if (source.bins) {
+              transfer.push(source.bins.x.buffer, source.bins.y.buffer, source.bins.count.buffer);
+            }
+          });
+          // packed records stay cached in the provider: copied, not transferred
+          worker.postMessage({ input: prepared.input, budget: data().getContactResourceBudget(), sources: sources }, transfer);
+        });
+      }).then(function (packed) {
+        checkCurrent();
+        const builder = data().comparisonResultBuilder(comparison, prepared, packed);
+        const step = function () {
+          checkCurrent();
+          const until = now() + COMPARISON_STEP_MS;
+          let done = false;
+          do {
+            done = builder.step(COMPARISON_CELLS_PER_CHECK);
+          } while (!done && now() < until);
+          if (done) {
+            return builder.result;
+          }
+          setComparisonProgress(comparison, "Preparing " + builder.total.toLocaleString("en-US") + " cells", .8 + .2 * builder.done / builder.total);
+          return yieldToTask().then(step);
+        };
+        return step();
+      }).then(function (result) {
+        if (comparisonJob === job) {
+          comparisonJob = null;
+        }
+        setComparisonProgress(comparison, null);
+        return result;
+      }, function (error) {
+        if (comparisonJob === job) {
+          comparisonJob = null;
+          setComparisonProgress(comparison, null);
+        }
+        throw error;
+      });
     }
 
     function structureTasks() {
@@ -743,6 +969,7 @@
 
     function destroy() {
       destroyed = true;
+      cancelComparisonJob();
       if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;

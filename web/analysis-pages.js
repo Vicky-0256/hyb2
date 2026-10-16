@@ -478,6 +478,8 @@
       ], "comparison-display"),
       '</div>',
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><button class="quiet-button" type="button" data-feature-action="comparison-export-tsv">Export comparison TSV</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-counts">Export HYB2 count table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-hyb2-names">Export HYB2 names.table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-metadata">Export extended metadata</button><button class="quiet-button" type="button" data-feature-action="comparison-export-params">Export parameters</button></div>',
+      // a rerun keeps the previous maps on screen: the progress shows here
+      comparison.result ? renderComparisonProgress(comparison.progress) : "",
       '<p class="card-note">Use the headerless HYB2 names.table with the legacy CLI. Extended metadata has a header and additional provenance columns for audit or custom native-R workflows.</p>',
       '</section>',
       result.ready ? [
@@ -488,7 +490,7 @@
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
         comparison.showDataTable ? renderComparisonDataTable(result, comparison) : '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Open comparison data table</button></div>'
-      ].join("") : '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Comparison</span><h2>' + escape(result.reason || "Add datasets to compare") + '</h2><p>All input files remain in tab memory and are parsed by local browser workers.</p></div></section>',
+      ].join("") : '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Comparison</span><h2>' + escape(result.reason || "Add datasets to compare") + '</h2>' + (!comparison.loading && !comparison.result ? renderComparisonProgress(comparison.progress || { stage: "Starting", fraction: 0 }) : "") + '<p>All input files remain in tab memory and are parsed by local browser workers.</p></div></section>',
       // the DESeq2 test bins its own 10-nt cells, independent of the map limits above
       window.Hyb2DeseqCard ? window.Hyb2DeseqCard.renderCard(state) : "",
       // the arc map works from its own files, with or without a comparison here
@@ -561,11 +563,41 @@
     ].join("");
   }
 
+  // stage and bar of a comparison being built (page-data.js updates them in place)
+  function renderComparisonProgress(progress) {
+    const percent = Math.round(100 * (progress && progress.fraction || 0));
+    return '<div class="comparison-progress" data-comparison-progress' + (progress ? "" : " hidden") + '><p class="card-note" data-comparison-progress-label aria-live="polite">' +
+      escape((progress && progress.stage || "Starting") + " · " + percent + "%") + '</p>' +
+      '<div class="progress-bar" role="progressbar" aria-label="Comparison progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div></div>';
+  }
+
+  const COMPARISON_TABLE_ROWS = 150;
+  const COMPARISON_TABLE_SORTS = [
+    { value: "effect", label: "Largest |log2 effect|" },
+    { value: "similarity", label: "Largest similarity" },
+    { value: "position", label: "Position (X, then Y)" }
+  ];
+
+  // One page of result.cells in the chosen order; the order is computed once
+  // per result and sort key (Hyb2Data.comparisonOrder), so a render only
+  // touches the rows shown.
   function renderComparisonDataTable(result, comparison) {
+    const sort = COMPARISON_TABLE_SORTS.some(function (item) { return item.value === comparison.tableSort; }) ? comparison.tableSort : "effect";
+    const total = result.cells.length;
+    const pages = Math.max(1, Math.ceil(total / COMPARISON_TABLE_ROWS));
+    const page = Math.max(0, Math.min(pages - 1, Math.floor(Number(comparison.tablePage) || 0)));
+    const start = page * COMPARISON_TABLE_ROWS;
+    const rows = window.Hyb2Data.comparisonOrderedCells(result, sort, start, COMPARISON_TABLE_ROWS);
     return [
       '<section class="data-card"><div class="card-title-row"><h2>Comparison bins</h2><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Hide data table</button></div>',
+      '<div class="inline-actions comparison-table-controls">',
+      renderSelectControl("Sort bins by", "tableSort", sort, COMPARISON_TABLE_SORTS, "comparison-table"),
+      '<span class="card-note">Bins ' + format(total ? start + 1 : 0) + '–' + format(start + rows.length) + ' of ' + format(total) + '</span>',
+      '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page - 1) + '"' + (page > 0 ? "" : " disabled") + '>Previous</button>',
+      '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page + 1) + '"' + (page < pages - 1 ? "" : " disabled") + '>Next</button>',
+      '</div>',
       '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>X interval</th><th>Y interval</th><th>' + escape(comparison.conditionALabel) + ' mean</th><th>' + escape(comparison.conditionBLabel) + ' mean</th><th>Log2 effect</th><th>Datasets present</th><th>Similarity</th></tr></thead><tbody>',
-      result.cells.slice().sort(function (left, right) { return Math.abs(right.effect) - Math.abs(left.effect); }).slice(0, 150).map(function (cell) {
+      rows.map(function (cell) {
         return '<tr><td>' + range(cell.x, cell.x + result.binSize - 1) + '</td><td>' + range(cell.y, cell.y + result.binSize - 1) + '</td><td>' + format(cell.conditionA) + '</td><td>' + format(cell.conditionB) + '</td><td>' + format(cell.effect) + '</td><td>' + format(cell.presentDatasets) + '</td><td>' + format(cell.similarity) + '</td></tr>';
       }).join(""),
       '</tbody></table></div></section>'
@@ -1602,6 +1634,7 @@
     renderViewpoint: renderViewpoint,
     renderRegion: renderRegion,
     renderComparison: renderComparison,
+    renderComparisonDataTable: renderComparisonDataTable,
     renderStructure: renderStructure,
     renderStructureResult: renderStructureResult,
     renderVirtualRows: renderVirtualRows,

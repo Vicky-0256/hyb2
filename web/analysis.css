@@ -1314,3 +1314,26 @@
 .deseq-include { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin: 10px 0; }
 .deseq-include-item { display: inline-flex; gap: 6px; align-items: center; }
 .deseq-include-item { font-size: 13px; }
+
+/* Compare: progress while comparison.worker.js builds the maps */
+.comparison-progress {
+  margin: 12px 0 0;
+}
+
+.comparison-progress[hidden] {
+  display: none;
+}
+
+.comparison-progress .card-note {
+  margin: 0 0 6px;
+}
+
+.comparison-progress .progress-bar {
+  max-width: 420px;
+  margin: 0;
+}
+
+.comparison-table-controls {
+  align-items: end;
+  margin: 0 0 12px;
+}

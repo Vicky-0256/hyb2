@@ -378,8 +378,7 @@ a {
   transform: rotate(-45deg);
 }
 
-.web-capability-card,
-.legacy-workflow-guide {
+.web-capability-card {
   margin-top: 1.35rem;
   padding: 1rem 1.1rem;
   border: 1px solid rgba(106, 79, 242, .18);
@@ -394,8 +393,7 @@ a {
   gap: .75rem;
 }
 
-.web-capability-card h2,
-.legacy-workflow-guide h2 {
+.web-capability-card h2 {
   margin: .2rem 0 .7rem;
   font-size: 1rem;
 }
@@ -410,8 +408,7 @@ a {
   white-space: nowrap;
 }
 
-.web-capability-list,
-.legacy-workflow-guide ol {
+.web-capability-list {
   display: grid;
   gap: .42rem;
   margin: 0;
@@ -445,8 +442,7 @@ a {
   box-shadow: 0 0 0 3px rgba(0, 165, 143, .12);
 }
 
-.web-capability-note,
-.legacy-workflow-guide p {
+.web-capability-note {
   margin: .75rem 0 0;
   color: var(--muted);
   font-size: .74rem;
@@ -499,37 +495,6 @@ a {
 
 .desktop-download-link.is-recommended strong {
   color: var(--primary);
-}
-
-.legacy-workflow-guide ol {
-  counter-reset: workflow;
-}
-
-.legacy-workflow-guide li {
-  display: grid;
-  grid-template-columns: 1.45rem 1fr;
-  gap: .35rem;
-  font-size: .76rem;
-}
-
-.legacy-workflow-guide li::before {
-  counter-increment: workflow;
-  content: counter(workflow);
-  display: grid;
-  place-items: center;
-  width: 1.2rem;
-  height: 1.2rem;
-  border-radius: 50%;
-  color: #fff;
-  background: #6a4ff2;
-  font-size: .67rem;
-  font-weight: 700;
-}
-
-.legacy-workflow-guide li span {
-  display: block;
-  color: var(--muted);
-  font-size: .71rem;
 }
 
 .landing-panel {

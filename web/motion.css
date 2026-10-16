@@ -346,14 +346,12 @@
   to { background-position: -200% 0; }
 }
 
-.web-capability-card,
-.legacy-workflow-guide {
+.web-capability-card {
   border-radius: 12px;
   transition: border-color 240ms var(--ease-out), box-shadow 240ms var(--ease-out), transform 240ms var(--ease-out);
 }
 
-.web-capability-card:hover,
-.legacy-workflow-guide:hover {
+.web-capability-card:hover {
   border-color: var(--line-strong);
   box-shadow: 0 18px 36px -24px rgb(19 44 71 / 28%);
   transform: translateY(-2px);
@@ -361,27 +359,6 @@
 
 .web-capability-dot.is-ready {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
-}
-
-/* Step rail: a connector line threads the numbered folding workflows. */
-.legacy-workflow-guide ol {
-  position: relative;
-}
-
-.legacy-workflow-guide ol::before {
-  position: absolute;
-  top: 14px;
-  bottom: 30px;
-  left: 9px;
-  width: 2px;
-  border-radius: 2px;
-  background: linear-gradient(var(--violet), color-mix(in srgb, var(--violet) 10%, transparent));
-  content: "";
-  transform-origin: top;
-}
-
-.legacy-workflow-guide li::before {
-  z-index: 1;
 }
 
 /* Dropzone: marching-ants border when it wants a file. */
@@ -651,24 +628,6 @@
 .web-capability-card.is-revealed .web-capability-item:nth-child(2) .web-capability-dot { animation-delay: 420ms; }
 .web-capability-card.is-revealed .web-capability-item:nth-child(3) .web-capability-dot { animation-delay: 540ms; }
 .web-capability-card.is-revealed .web-capability-item:nth-child(4) .web-capability-dot { animation-delay: 660ms; }
-
-.legacy-workflow-guide.is-revealed ol::before {
-  animation: scale-y 1200ms var(--ease-out) 200ms both;
-}
-
-.legacy-workflow-guide.is-revealed li {
-  animation: rise 560ms var(--ease-out) both;
-}
-
-.legacy-workflow-guide.is-revealed li:nth-child(1) { animation-delay: 160ms; }
-.legacy-workflow-guide.is-revealed li:nth-child(2) { animation-delay: 300ms; }
-.legacy-workflow-guide.is-revealed li:nth-child(3) { animation-delay: 440ms; }
-.legacy-workflow-guide.is-revealed li:nth-child(4) { animation-delay: 580ms; }
-
-.legacy-workflow-guide.is-revealed li::before {
-  animation: pop 480ms var(--ease-spring) both;
-  animation-delay: inherit;
-}
 
 /* ------------------------------------------------------------------ */
 /* Scene: landing panel changes (idle → loading → review)              */

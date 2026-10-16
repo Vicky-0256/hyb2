@@ -714,7 +714,7 @@
     ripple.addEventListener("animationend", function () { ripple.remove(); });
   }, { passive: true });
 
-  const SPOTLIGHT = ".metric-card, .web-capability-card, .legacy-workflow-guide, .file-card-inner, .hero-stage";
+  const SPOTLIGHT = ".metric-card, .web-capability-card, .file-card-inner, .hero-stage";
   document.addEventListener("pointermove", function (event) {
     const card = event.target.closest && event.target.closest(SPOTLIGHT);
     if (!card) {

@@ -571,7 +571,6 @@ body.cmdk-locked {
 
 .metric-card,
 .web-capability-card,
-.legacy-workflow-guide,
 .hero-stage {
   background-image: radial-gradient(360px circle at var(--mx, -400px) var(--my, -400px), color-mix(in srgb, var(--primary) 9%, transparent), transparent 60%);
 }

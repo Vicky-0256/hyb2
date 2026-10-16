@@ -248,7 +248,6 @@
       '    <div class="landing-details">',
       renderDesktopDownloadCard(),
       renderWebCapabilityCard(),
-      renderLegacyWorkflowGuide(),
       "    </div>",
       "  </main>",
       renderDialog(),
@@ -309,16 +308,6 @@
       status(hasWorker && hasWasm, 'CPLfold Pyodide worker · capacity measured when needed', 'Load on first run'),
       '</ul>',
       '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately. This browser workspace processes your data locally.</p>',
-      '</section>'
-    ].join("");
-  }
-
-  function renderLegacyWorkflowGuide() {
-    return [
-      '<section class="legacy-workflow-guide" aria-labelledby="legacy-workflow-title">',
-      '<span class="example-kicker">RNA secondary structure</span><h2 id="legacy-workflow-title">Explore RNA folding and interactions</h2>',
-      '<ol><li><strong>Short-ranged intramolecular</strong><span>One contiguous reference region.</span></li><li><strong>Long-ranged intramolecular</strong><span>Two regions of the same RNA with a 100 nt spacer.</span></li><li><strong>Intermolecular</strong><span>Two regions with the original 100 nt spacer.</span></li><li><strong>Homodimer</strong><span>Two regions, filtered to overlap score ≥ 5.</span></li></ol>',
-      '<p>After loading a HYB file, open <strong>RNA Structure</strong> and select <strong>Folding workflow</strong>. The selected workflow configures the reference layout and evidence filter for COMRADES(ViennaRNA). Choose Custom for CPLfold.</p>',
       '</section>'
     ].join("");
   }

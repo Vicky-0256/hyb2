@@ -322,7 +322,7 @@
   let revealObserver = null;
 
   function armReveals(sceneChanged) {
-    const targets = app.querySelectorAll(".web-capability-card, .legacy-workflow-guide");
+    const targets = app.querySelectorAll(".web-capability-card");
     if (!("IntersectionObserver" in window) || motionReduced()) {
       Array.prototype.forEach.call(targets, function (node) {
         node.classList.add("is-revealed");

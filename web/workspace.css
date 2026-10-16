@@ -161,7 +161,7 @@
 .nav-button.is-active {
   border-color: color-mix(in srgb, var(--primary) 16%, var(--line));
   background: var(--primary-soft);
-  color: var(--primary);
+  color: var(--primary-ink);
   font-weight: 730;
 }
 

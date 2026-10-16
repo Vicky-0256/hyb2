@@ -1875,7 +1875,14 @@
     window.clearTimeout(state.toastTimer);
     state.toastTimer = window.setTimeout(function () {
       toast.classList.remove("is-visible");
-    }, 2900);
+    }, toastHoldMs(message));
+  }
+
+  // Long enough to read: 0.3 s per word plus 0.5 s, never shorter than the
+  // 2.9 s short confirmations have always had, capped at 10 s.
+  function toastHoldMs(message) {
+    const words = String(message || "").trim().split(/\s+/).filter(Boolean).length;
+    return Math.min(10000, Math.max(2900, 500 + 300 * words));
   }
 
   function pageTitle(page) {

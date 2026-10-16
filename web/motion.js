@@ -105,7 +105,7 @@
   const INERT_ATTRS = ["id", "data-action", "data-feature-action", "data-dialog", "name", "for"];
 
   function exitMs() {
-    return parseFloat(getComputedStyle(root).getPropertyValue("--dur-exit")) || 200;
+    return parseFloat(cssVar("--dur-exit", "200")) || 200;
   }
 
   // The copy lives outside #app, stripped of ids and actions, so no handler,
@@ -297,11 +297,12 @@
     sidebar.classList.add("has-glider");
     if (fromTop !== null && fromTop !== top && !motionReduced() && glider.animate) {
       const distance = fromTop - top;
+      const gliderMs = parseFloat(cssVar("--dur-move", "400")) || 400;
       glider.animate([
         { transform: "translateY(" + distance + "px) scaleY(1)" },
         { transform: "translateY(" + distance * 0.25 + "px) scaleY(1.18)", offset: 0.55 },
         { transform: "translateY(0) scaleY(1)" }
-      ], { duration: 520, delay: -Math.min(elapsed || 0, 520), easing: "cubic-bezier(.16, 1, .3, 1)" });
+      ], { duration: gliderMs, delay: -Math.min(elapsed || 0, gliderMs), easing: cssVar("--ease-out", "ease-out") });
     }
     lastGliderTop = top;
   }
@@ -449,8 +450,8 @@
       root.animate({
         clipPath: ["circle(0px at " + x + "px " + y + "px)", "circle(" + radius + "px at " + x + "px " + y + "px)"]
       }, {
-        duration: 680,
-        easing: "cubic-bezier(.65, 0, .35, 1)",
+        duration: parseFloat(cssVar("--dur-hero", "750")) || 750,
+        easing: cssVar("--ease-in-out", "ease-in-out"),
         pseudoElement: "::view-transition-new(root)"
       });
     }).catch(function () {});

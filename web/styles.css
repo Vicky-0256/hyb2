@@ -11,20 +11,22 @@
   --surface: #ffffff;
   --surface-subtle: #f7fafb;
   --ink: var(--navy);
-  --muted: #607286;
+  --muted: #5b6c80;
   --muted-strong: #38516a;
   --line: #dce7ec;
   --line-strong: #c2d3db;
   --primary: var(--teal);
-  --primary-hover: #008784;
-  --primary-foreground: var(--navy);
+  --primary-hover: #00b0ac;
+  /* Text on the teal button and teal used as text both clear WCAG 4.5:1. */
+  --primary-foreground: #10263d;
+  --primary-ink: #007672;
   --primary-soft: var(--teal-soft);
   --accent: var(--violet);
   --accent-hover: var(--violet-deep);
   --accent-soft: var(--violet-soft);
   --success: var(--teal-deep);
   --success-soft: #e3f7f6;
-  --warning: #a96614;
+  --warning: #9c5e12;
   --warning-soft: #fff4e3;
   --error: #b42318;
   --error-soft: #fcecea;
@@ -50,9 +52,10 @@
   --line-strong: #45647e;
   --primary: var(--teal);
   --primary-hover: #35c3c0;
-  --primary-foreground: var(--navy);
+  --primary-foreground: #10263d;
+  --primary-ink: #35c3c0;
   --primary-soft: #123f4b;
-  --accent: #9a88ff;
+  --accent: #a596ff;
   --accent-hover: #b7aaff;
   --accent-soft: #302958;
   --success: #43d1b0;
@@ -338,7 +341,7 @@ a {
 }
 
 .landing-copy h1 span {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .landing-lede {
@@ -494,7 +497,7 @@ a {
 }
 
 .desktop-download-link.is-recommended strong {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .landing-panel {
@@ -543,7 +546,7 @@ a {
 .file-card-kicker {
   display: block;
   margin-bottom: 6px;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 750;
@@ -590,7 +593,7 @@ a {
   border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
   border-radius: var(--radius-sm);
   background: var(--primary-soft);
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 800;
@@ -661,7 +664,7 @@ a {
 }
 
 .prepared-file-note strong {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .prepared-next-step {
@@ -919,7 +922,7 @@ a {
 .dropzone-kicker {
   display: inline-block;
   margin-bottom: 13px;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 750;
@@ -1086,7 +1089,7 @@ a {
 }
 
 .parse-step.is-current {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-weight: 720;
 }
 

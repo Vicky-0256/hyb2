@@ -129,7 +129,7 @@
 
 .contact-updating strong {
   min-width: 4ch;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }

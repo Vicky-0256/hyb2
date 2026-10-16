@@ -124,7 +124,7 @@
 }
 
 .advanced-filters summary::marker {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .control-actions {
@@ -154,7 +154,7 @@
 }
 
 .bar-row-button:hover .bar-name {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .bar-row-button:hover .bar-fill {
@@ -596,7 +596,7 @@
 }
 
 .method-note strong {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: .04em;
@@ -1024,7 +1024,7 @@
 
 .tweaks-trigger:hover {
   border-color: var(--primary);
-  color: var(--primary);
+  color: var(--primary-ink);
   transform: translateY(-1px);
 }
 

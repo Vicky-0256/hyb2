@@ -16,7 +16,12 @@
   --ease-out: cubic-bezier(.16, 1, .3, 1);
   --ease-in: cubic-bezier(.5, 0, .75, 0);
   --ease-in-out: cubic-bezier(.65, 0, .35, 1);
-  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  /* Springs, named by damping ratio: --ease-spring (0.75, calm, 3%
+     overshoot) for panels, --ease-pop (0.55, lively, 13%) for small
+     elements. linear() below samples the real damped spring; these
+     cubic-beziers are the fallback where linear() is unsupported. */
+  --ease-spring: cubic-bezier(.22, 1.2, .36, 1);
+  --ease-pop: cubic-bezier(.34, 1.56, .64, 1);
   --dur-press: 80ms;
   --dur-feedback: 150ms;
   --dur-quick: 240ms;
@@ -31,6 +36,15 @@
   --hero-aura-b: color-mix(in srgb, var(--violet) 16%, transparent);
   --stage-surface: color-mix(in srgb, var(--surface) 72%, transparent);
   --gradient-ink: linear-gradient(100deg, var(--teal-deep) 0%, var(--teal) 38%, var(--violet) 72%, var(--teal) 100%);
+}
+
+/* 1 - e^(-zeta w t)(cos(wd t) + zeta w / wd sin(wd t)), sampled at 41 even
+   steps and scaled so the spring settles within 0.2% by the end. */
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(0, 0.0193, 0.0695, 0.1405, 0.2242, 0.314, 0.405, 0.4936, 0.5771, 0.6539, 0.7229, 0.7836, 0.8361, 0.8806, 0.9176, 0.9477, 0.9717, 0.9904, 1.0044, 1.0145, 1.0214, 1.0256, 1.0278, 1.0284, 1.0278, 1.0263, 1.0242, 1.0218, 1.0193, 1.0167, 1.0142, 1.0118, 1.0097, 1.0077, 1.006, 1.0046, 1.0033, 1.0023, 1.0014, 1.0008, 1);
+    --ease-pop: linear(0, 0.0358, 0.1278, 0.2546, 0.3984, 0.5447, 0.683, 0.8059, 0.9092, 0.9912, 1.0518, 1.0927, 1.1164, 1.1258, 1.1241, 1.1145, 1.0996, 1.0819, 1.0633, 1.0454, 1.0292, 1.0153, 1.0041, 0.9956, 0.9897, 0.986, 0.9843, 0.9841, 0.9851, 0.9868, 0.9889, 0.9913, 0.9936, 0.9957, 0.9975, 0.9991, 1.0003, 1.0011, 1.0016, 1.0019, 1);
+  }
 }
 
 :root[data-theme="dark"] {
@@ -395,7 +409,7 @@
 }
 
 .dropzone.is-dragging .dropzone-title {
-  animation: nudge 700ms var(--ease-spring) infinite alternate;
+  animation: nudge 700ms var(--ease-pop) infinite alternate;
 }
 
 @keyframes nudge {
@@ -407,7 +421,7 @@
   position: relative;
   overflow: hidden;
   isolation: isolate;
-  transition: background var(--dur-feedback) var(--ease-out), box-shadow var(--dur-quick) var(--ease-out), transform var(--dur-quick) var(--ease-spring);
+  transition: background var(--dur-feedback) var(--ease-out), box-shadow var(--dur-quick) var(--ease-out), transform var(--dur-quick) var(--ease-pop);
 }
 
 .button:not(.button-secondary):not(.button-danger)::after {
@@ -574,7 +588,7 @@
 }
 
 .web-capability-card.is-revealed .web-capability-dot {
-  animation: pop var(--dur-move) var(--ease-spring) both, fade var(--dur-feedback) var(--ease-out) both;
+  animation: pop var(--dur-move) var(--ease-pop) both, fade var(--dur-feedback) var(--ease-out) both;
   animation-delay: calc(240ms + var(--i, 0) * var(--stagger-item));
 }
 
@@ -610,7 +624,7 @@
 
 .motion-panel .status-chip,
 .motion-panel .prepared-file-status.is-ready {
-  animation: pop var(--dur-move) var(--ease-spring) both, fade var(--dur-feedback) var(--ease-out) both;
+  animation: pop var(--dur-move) var(--ease-pop) both, fade var(--dur-feedback) var(--ease-out) both;
   animation-delay: 240ms;
 }
 
@@ -717,7 +731,7 @@
 }
 
 .nav-button::before {
-  transition: height var(--dur-quick) var(--ease-spring), background var(--dur-feedback) var(--ease-out);
+  transition: height var(--dur-quick) var(--ease-pop), background var(--dur-feedback) var(--ease-out);
 }
 
 .nav-button:hover:not(.is-active)::before {

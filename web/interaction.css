@@ -279,12 +279,12 @@ kbd {
   border-radius: 7px;
   background: var(--surface);
   color: var(--muted);
-  transition: color var(--dur-feedback, 150ms) ease, border-color var(--dur-feedback, 150ms) ease, transform var(--dur-quick, 240ms) var(--ease-spring, ease);
+  transition: color var(--dur-feedback, 150ms) ease, border-color var(--dur-feedback, 150ms) ease, transform var(--dur-quick, 240ms) var(--ease-pop, ease);
 }
 
 .cmdk-item.is-active .cmdk-item-icon {
   border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
-  color: var(--primary);
+  color: var(--primary-ink);
   transform: scale(1.06);
 }
 
@@ -309,7 +309,7 @@ kbd {
 .cmdk-item-label mark {
   border-radius: 2px;
   background: transparent;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-weight: 780;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--primary) 45%, transparent);
@@ -324,7 +324,7 @@ kbd {
 }
 
 .cmdk-item.is-current .cmdk-item-meta {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .cmdk-item-kbd {
@@ -380,7 +380,7 @@ body.cmdk-locked {
 .is-chording .sidebar .nav-button[aria-keyshortcuts] .nav-kbd {
   border-color: var(--primary);
   background: var(--primary-soft);
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .is-chording .sidebar .nav-button:nth-of-type(n) .nav-kbd {
@@ -622,7 +622,7 @@ body.is-scrolled .workspace-header {
 }
 
 .control-field:focus-within > span {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .control-field input:focus,
@@ -645,7 +645,7 @@ body.is-scrolled .workspace-header {
   background: var(--primary);
   content: "";
   transform: scaleY(0);
-  transition: transform var(--dur-quick, 240ms) var(--ease-spring, ease);
+  transition: transform var(--dur-quick, 240ms) var(--ease-pop, ease);
 }
 
 .virtual-row:hover::before,

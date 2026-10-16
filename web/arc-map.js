@@ -20,6 +20,8 @@
 
   const BAND = 300;
   const MAX_ALIGN = 400000;
+  const MAX_TRACE = 400000000; // bytes of traceback a seeded band may use
+  const LOW_IDENTITY = 0.8;
 
   // ---- alignment
 
@@ -47,6 +49,35 @@
     return result;
   }
 
+  // seedOffset(a, b): median diagonal offset (j - i * m / n) of 12-mers
+  // sampled along a that occur once in b; 0 without enough hits
+  function seedOffset(a, b) {
+    const k = 12;
+    const n = a.length;
+    const m = b.length;
+    if (n < 4 * k || m < 4 * k) {
+      return 0;
+    }
+    const index = new Map();
+    for (let j = 0; j + k <= m; j += 1) {
+      const word = b.substr(j, k);
+      index.set(word, index.has(word) ? -1 : j);
+    }
+    const step = Math.max(1, Math.floor(n / 400));
+    const offsets = [];
+    for (let i = 0; i + k <= n; i += step) {
+      const j = index.get(a.substr(i, k));
+      if (j !== undefined && j >= 0) {
+        offsets.push(j - Math.floor(i * m / n));
+      }
+    }
+    if (offsets.length < 10) {
+      return 0;
+    }
+    offsets.sort(function (x, y) { return x - y; });
+    return offsets[offsets.length >> 1];
+  }
+
   function alignUncached(a, b) {
     const n = a.length;
     const m = b.length;
@@ -64,15 +95,21 @@
       throw new Error("sequences longer than 400,000 nt are not aligned");
     }
     const w = BAND + Math.abs(n - m);
+    // a large end indel at about equal length puts the path off the
+    // diagonal: widen the band on that side by the k-mer offset
+    let offset = seedOffset(a, b);
+    if (Math.abs(offset) <= BAND / 2 || (n + 1) * (2 * w + Math.abs(offset) + 2) > MAX_TRACE) {
+      offset = 0;
+    }
     const rowLo = new Int32Array(n + 1);
     const rowHi = new Int32Array(n + 1);
     for (let i = 0; i <= n; i += 1) {
       const centre = Math.floor(i * m / n);
-      rowLo[i] = Math.max(0, centre - w);
-      rowHi[i] = Math.min(m, centre + w);
+      rowLo[i] = Math.max(0, centre + Math.min(0, offset) - w);
+      rowHi[i] = Math.min(m, centre + Math.max(0, offset) + w);
     }
     const NEG = -1000000000;
-    const width = 2 * w + 2;
+    const width = 2 * w + Math.abs(offset) + 2;
     let prev = new Int32Array(width).fill(NEG);
     let cur = new Int32Array(width).fill(NEG);
     const trace = new Uint8Array((n + 1) * width);
@@ -198,6 +235,8 @@
 
   // ---- structures
 
+  const SEQUENCE_LINE = /^[ACGUTRYKMSWBDHVN]+$/i;
+  const STRUCTURE_LINE = /^[().\[\]{}<>A-Za-z]+$/;
   const OPEN = "([{<ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   const CLOSE = ")]}>abcdefghijklmnopqrstuvwxyz";
 
@@ -224,7 +263,7 @@
   function parseStructure(text, fileName) {
     const lines = String(text || "").split(/\r?\n/);
     const first = lines.find(function (line) { return line.trim(); }) || "";
-    if (/^\s*\d+\s+\S/.test(first) && !/^[ACGUTN]+$/i.test(first.trim())) {
+    if (/^\s*\d+\s+\S/.test(first) && !SEQUENCE_LINE.test(first.trim())) {
       return parseCt(lines, fileName);
     }
     const records = [];
@@ -244,10 +283,19 @@
         records.push(current);
       }
       const token = line.split(/\s+/)[0];
-      if (/^[ACGUTNacgutn]+$/.test(token) && !current.structure) {
-        current.sequence += token;
-      } else if (/^[().\[\]{}<>A-Za-z]+$/.test(token)) {
+      // sequence lines (IUPAC letters) come first; after the structure, only
+      // its wrapped continuation is read, not RNAfold -p's ensemble,
+      // centroid and MEA lines
+      if (!current.structure) {
+        if (SEQUENCE_LINE.test(token)) {
+          current.sequence += token;
+        } else if (STRUCTURE_LINE.test(token)) {
+          current.structure = token;
+        }
+      } else if (!current.done && current.sequence && current.structure.length < current.sequence.length && STRUCTURE_LINE.test(token)) {
         current.structure += token;
+      } else {
+        current.done = true;
       }
     });
     const pairs = [];
@@ -273,11 +321,25 @@
     const length = Number(header.trim().split(/\s+/)[0]);
     let sequence = "";
     const pairs = [];
+    // RNAstructure writes several structures per file: read the first
+    // (its `length` rows, up to the next header)
+    const isHeader = function (parts) {
+      return /^\d+$/.test(parts[0]) && (parts.length < 6 || !/^\d+$/.test(parts[2]) || !/^\d+$/.test(parts[4]));
+    };
+    let rows = 0;
+    let structures = 1;
     body.forEach(function (line) {
       const parts = line.trim().split(/\s+/);
-      if (parts.length < 6) {
+      if (isHeader(parts)) {
+        if (rows) {
+          structures += 1;
+        }
         return;
       }
+      if (structures > 1 || (length && rows >= length) || parts.length < 6) {
+        return;
+      }
+      rows += 1;
       const i = Number(parts[0]);
       const j = Number(parts[4]);
       const position = Number(parts[5]) || i;
@@ -288,8 +350,12 @@
     });
     const offset = body.length ? Number(body[0].trim().split(/\s+/)[5]) - 1 || 0 : 0;
     const shifted = pairs.map(function (pair) { return [pair[0] + offset, pair[1] + offset]; });
-    return structureResult(fileName, "ct", [{ start: offset + 1, end: offset + (length || sequence.length), sequence: normaliseSequence(sequence) }],
+    const result = structureResult(fileName, "ct", [{ start: offset + 1, end: offset + (length || sequence.length), sequence: normaliseSequence(sequence) }],
       shifted, header.trim().split(/\s+/).slice(1).join(" "));
+    if (structures > 1) {
+      result.note = (fileName || "The CT file") + " holds " + structures + " structures; the first is used.";
+    }
+    return result;
   }
 
   function structureResult(fileName, format, records, pairs, title) {
@@ -385,7 +451,7 @@
           blocks.push(current);
         } else if (current && line.slice(21).startsWith("/")) {
           current.qualifiers.push(line.slice(21).trim());
-        } else if (current) {
+        } else if (current && line.trim()) {
           if (current.qualifiers.length) {
             current.qualifiers[current.qualifiers.length - 1] += " " + line.trim();
           } else {
@@ -397,7 +463,9 @@
         if (block.type === "source") {
           return;
         }
-        const numbers = (block.location.match(/\d+/g) || []).map(Number);
+        // parts on another entry (join(AB012345.1:1..20,30..60)) are skipped
+        const local = block.location.replace(/[A-Za-z_][\w]*(?:\.\d+)?:[<>]?\d+(?:[.^]{1,2}[<>]?\d+)?/g, "");
+        const numbers = (local.match(/\d+/g) || []).map(Number);
         if (!numbers.length) {
           return;
         }
@@ -406,7 +474,7 @@
           const eq = q.indexOf("=");
           const key = eq >= 0 ? q.slice(1, eq) : q.slice(1);
           if (!(key in quals)) {
-            quals[key] = eq >= 0 ? q.slice(eq + 1).replace(/^"|"$/g, "") : "";
+            quals[key] = eq >= 0 ? q.slice(eq + 1).trim().replace(/^"|"$/g, "") : "";
           }
         });
         const product = quals.product || quals.note || "";
@@ -533,7 +601,7 @@
 
   function defaultState() {
     return { a: null, b: null, interactions: null, annotation: null, errors: {}, padj: "0.01", mono: true,
-      oneOn: "a", twoOn: "b", start: "", end: "", labelOne: "", labelTwo: "" };
+      oneOn: "a", twoOn: "a", start: "", end: "", labelOne: "", labelTwo: "" };
   }
 
   function formatNumber(value) {
@@ -566,6 +634,10 @@
       if (!(key in maps)) {
         try {
           maps[key] = align(sequence, a.sequence);
+          if (!maps[key].same && maps[key].identity < LOW_IDENTITY) {
+            notes.push("Warning: " + label + " aligns to A with only " + (100 * maps[key].identity).toFixed(1) +
+              "% identity; positions moved onto A may be wrong. Check that it is the same gene or genome.");
+          }
         } catch (error) {
           notes.push(label + " could not be aligned to A: " + error.message + "; drawn on its own coordinates.");
           maps[key] = null;
@@ -573,6 +645,11 @@
       }
       return maps[key];
     }
+    [a, s.b].forEach(function (structure) {
+      if (structure && structure.note) {
+        notes.push(structure.note);
+      }
+    });
     const pairsA = a ? a.pairs.slice() : [];
     let pairsB = [];
     let bMap = null;
@@ -700,7 +777,7 @@
       }
       return false;
     });
-    return step;
+    return Math.max(1, step);
   }
 
   // svg(arcMap, model, colours) -> standalone SVG markup
@@ -880,9 +957,6 @@
       try {
         if (key === "a" || key === "b") {
           arcMap[key] = parseStructure(text, file.name);
-          if (key === "b") {
-            arcMap.twoOn = "b";
-          }
         } else if (key === "interactions") {
           arcMap.interactions = parseInteractions(text, file.name);
         } else if (key === "annotation") {
@@ -906,6 +980,7 @@
     align: align,
     mapPosition: mapPosition,
     mapNearest: mapNearest,
+    LOW_IDENTITY: LOW_IDENTITY,
     parseStructure: parseStructure,
     parseInteractions: parseInteractions,
     parseAnnotation: parseAnnotation,

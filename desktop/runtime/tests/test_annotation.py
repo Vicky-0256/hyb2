@@ -70,6 +70,14 @@ class ParseTests(unittest.TestCase):
         self.assertEqual([(f["name"], f["type"]) for f in track], [("alpha", "gene")])
         self.assertEqual(track_features(features, "other")[0], [])  # two sequences, none named "other"
 
+    def test_genbank_remote_parts_and_last_qualifier(self):
+        text = ("LOCUS       X 100 bp RNA\nFEATURES             Location/Qualifiers\n"
+                "     CDS             join(AB012345.1:1..20,30..60)\n                     /gene=\"g\"\n"
+                "     CDS             complement(<5..>40)\n                     /gene=\"h\"\n\n"
+                "ORIGIN\n        1 acgt\n//\n")
+        _, features, _ = parse_annotation(self._write(text, "g.gb"))
+        self.assertEqual([(f["name"], f["start"], f["end"]) for f in features], [("g", 30, 60), ("h", 5, 40)])
+
     def test_tsv_and_bed(self):
         fmt, features, _ = parse_annotation(self._write("gene\tstart\tend\nC\t107\t472\nprM\t473\t976\n", "genes.tsv"))
         self.assertEqual(fmt, "tsv")

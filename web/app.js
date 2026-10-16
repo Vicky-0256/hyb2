@@ -659,6 +659,7 @@
         "      <li>Parsing happens in a dedicated browser worker.</li>",
         "      <li>Results are held in memory and are not saved to a server.</li>",
         "      <li>Refreshing or clearing the session removes loaded data.</li>",
+        "      <li>Optional public lookups on the RNA Structure page are off by default and send only the identifier and species you confirm to EBI.</li>",
         "    </ul>",
         '    <div class="dialog-actions"><button class="button" type="button" data-action="close-dialog">Close</button></div>',
         "  </section>",
@@ -1126,6 +1127,8 @@
     state.viewpoint = null;
     state.comparison = null;
     state.structure = null;
+    state.evidence = null;
+    if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.error = null;
     state.loading = {
       fileName: file.name || "Untitled file",
@@ -1736,6 +1739,8 @@
     state.viewpoint = null;
     state.comparison = null;
     state.structure = null;
+    state.evidence = null;
+    if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
     setRouteHash("#/");
@@ -1762,6 +1767,8 @@
     state.viewpoint = null;
     state.comparison = null;
     state.structure = null;
+    state.evidence = null;
+    if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
     state.activePage = "landing";

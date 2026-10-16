@@ -23,6 +23,7 @@
       renderRegion(context),
       renderComparison(context),
       renderStructure(context),
+      renderExternalSources(context),
       renderMethods(),
       '</article>'
     ].join("");
@@ -579,6 +580,45 @@
     );
   }
 
+  // Cards the researcher added from Related research, bound to the current
+  // structure result. Background material only: nothing here changes a
+  // method, parameter or number in this report.
+  function renderExternalSources(context) {
+    const cards = window.Hyb2Evidence ? safeCall(function () { return window.Hyb2Evidence.reportCards(context.state); }, []) : [];
+    const reviewLabel = { unreviewed: "Not reviewed", reviewed: "Reviewed", rejected: "Rejected" };
+    return section(
+      "external-sources",
+      "External sources and researcher notes",
+      "Public databases",
+      cards.length ? '<span class="report-status is-ready">' + formatNumber(cards.length) + " added</span>" : '<span class="report-status is-pending">None added</span>',
+      cards.length ? cards.map(function (card) {
+        const text = window.Hyb2Evidence.statusLine(card);
+        const entries = (card.entries || []).map(function (entry) {
+          return card.content_kind === "database_metadata"
+            ? "<li><strong>" + escape(entry.id) + "</strong> " + escape(entry.description) + (entry.hasLitSumm ? " <em>(RNAcentral AI literature summary available; not included)</em>" : "") + "</li>"
+            : "<li>" + escape(entry.title) + (entry.year ? " (" + escape(entry.year) + ")" : "") + (entry.pmid ? " · PMID " + escape(entry.pmid) : "") + "</li>";
+        }).join("");
+        return [
+          '<div class="report-subsection report-evidence-card">',
+          "<h3>" + escape(card.source_provider) + " · <code>" + escape(card.query_identifier) + "</code></h3>",
+          definitionList([
+            ["Query", card.query_identifier + (card.taxon ? " · taxon " + card.taxon : ""), true],
+            ["Retrieved", card.retrieved_at ? card.retrieved_at.replace("T", " ").slice(0, 16) + " UTC" : "-"],
+            ["Status", (window.Hyb2Evidence.STATUS_TEXT[card.status] || card.status)],
+            ["Bound to", card.binding && card.binding.rna ? card.binding.rna + " " + range(card.binding.start, card.binding.end) : (card.binding && card.binding.source || "-"), true],
+            ["Structure digest", card.binding && card.binding.resultDigest || "No result yet", true],
+            ["Review", reviewLabel[card.review && card.review.state] || "Not reviewed"],
+            card.review && card.review.note ? ["Researcher note", card.review.note] : null
+          ]),
+          '<p class="report-note">' + escape(text) + "</p>",
+          entries ? "<ul>" + entries + "</ul>" : "",
+          '<p class="report-note"><strong>' + (card.content_kind === "database_metadata" ? "External database record — background only, not a validation of this structure." : "Literature index — a mention is not evidence for this structure.") + "</strong> Citations not verified.</p>",
+          "</div>"
+        ].join("");
+      }).join("") : '<div class="report-empty">No external sources were added. Public lookups on the RNA Structure page are optional and off by default; a researcher adds each card to the report explicitly.</div>'
+    );
+  }
+
   function renderMethods() {
     return section(
       "methods",
@@ -695,6 +735,7 @@
         },
         structure: jsonSafe(structurePayload, 5, 1000)
       },
+      externalSources: window.Hyb2Evidence ? jsonSafe(safeCall(function () { return window.Hyb2Evidence.reportCards(reportState); }, []), 6, 50) : [],
       methods: {
         browserLocal: true,
         reportUsesBoundedVisuals: true,

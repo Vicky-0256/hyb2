@@ -255,7 +255,9 @@
       '      <div class="page-heading"><div><h1>Privacy</h1><p>What happens to data opened in HYB2 Web Lite.</p></div></div>',
       '      <section class="data-card">',
       '        <div class="card-title-row"><h2>Local by design</h2><span class="card-kicker">No backend</span></div>',
-      '        <div class="notice">HYB2 Web Lite is a static GitHub Pages application. The selected HYB file is passed from the file picker to a Web Worker inside the same browser tab. No upload, API request, analytics call, cloud save, or persistent browser database is used.</div>',
+      '        <div class="notice">HYB2 Web Lite is a static GitHub Pages application. The selected HYB file is passed from the file picker to a Web Worker inside the same browser tab. No upload, analytics call, cloud save, or persistent browser database is used.</div>',
+      '        <div class="card-title-row"><h2>Optional public lookups</h2><span class="card-kicker">Off by default</span></div>',
+      '        <div class="notice">Related research on the RNA Structure page is the only feature that contacts another service. It stays off until you turn it on. Each lookup sends only the public identifier you confirm, plus its species to EBI Search, by GET to www.ebi.ac.uk (EBI Search and Europe PMC). HYB files, sequences, structures and file names are never sent, and results stay in this tab.</div>',
       '        <div class="card-title-row"><h2>Session lifetime</h2></div>',
       '        <div class="notice">Parsed results exist only in tab memory. Choose “Start over” in the top bar to clear this analysis and return to file upload.</div>',
       "      </section>"

@@ -19,6 +19,7 @@ on:
       - "scripts/verify-analysis-data.cjs"
       - "scripts/verify-ui-contract.cjs"
       - "scripts/verify-motion-contract.cjs"
+      - "scripts/verify-evidence.cjs"
       - "scripts/verify-report-render.cjs"
       - "scripts/webr-smoke/**"
       - "third_party/cplfold/**"
@@ -76,6 +77,7 @@ jobs:
           node scripts/verify-webr-feasibility.cjs
           node scripts/verify-ui-contract.cjs
           node scripts/verify-motion-contract.cjs
+          node scripts/verify-evidence.cjs
           node scripts/verify-report-render.cjs
 
       - name: Build and verify pinned browser CPLfold runtime

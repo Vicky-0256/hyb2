@@ -740,7 +740,8 @@
         ? '<div class="method-limit"><strong>Compatibility boundary</strong><span>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. UNAFold remains an optional external CLI compatibility path, and pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</span></div>'
         : '<div class="method-limit"><strong>Scope</strong><span>Choose COMRADES(ViennaRNA) to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</span></div>',
       "</section>",
-      "</section>"
+      "</section>",
+      window.Hyb2Evidence ? window.Hyb2Evidence.renderPanel(state) : ""
     ].join("");
   }
 

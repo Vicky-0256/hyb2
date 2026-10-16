@@ -1418,6 +1418,10 @@
     const feature = element.dataset.feature;
     const key = element.dataset.key;
 
+    if (window.Hyb2Evidence && window.Hyb2Evidence.handleChange(state, element, api)) {
+      return true;
+    }
+
     if (feature === "interaction-filter") {
       state.filters[key] = element.value;
       state.selectedRecordIndex = null;
@@ -1541,6 +1545,9 @@
     if (!key) {
       return false;
     }
+    if (window.Hyb2Evidence && window.Hyb2Evidence.handleInput(state, element)) {
+      return true;
+    }
     if (feature === "interaction-filter" && state.filters) {
       state.filters[key] = element.value;
       state.selectedRecordIndex = null;
@@ -1620,6 +1627,10 @@
     const action = element.dataset.featureAction;
     if (!action) {
       return false;
+    }
+
+    if (window.Hyb2Evidence && window.Hyb2Evidence.handleAction(action, state, api, element)) {
+      return true;
     }
 
     if (window.Hyb2StructureUI && window.Hyb2StructureUI.handleAction(action, state, api, element)) {

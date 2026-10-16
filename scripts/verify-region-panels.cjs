@@ -206,7 +206,7 @@ same(rp.runs([]), []);
   assert.match(svg, /^<svg[^>]+xmlns/);
   assert.match(svg, /Region A · L1-enriched #2/);
   const html = rp.renderCard(state, opts);
-  assert.match(html, /Region structures \(D, E\)/);
+  assert.match(html, /D, E · Region structures/);
   assert.match(html, /data-regions-figure/);
   assert.match(html, /<option value="2"/);
   // missing inputs

@@ -130,7 +130,8 @@
     const validRatio = totalRows ? number(summary.validRecords) / totalRows : 0;
     const fasta = context.state.reference;
     const mapped = fasta ? mappedFastaCount(fasta) : 0;
-    const fastaValue = fasta ? formatNumber(referenceSequenceCount(fasta)) + " sequences" : "Optional / not loaded";
+    const fastaCount = fasta ? referenceSequenceCount(fasta) : 0;
+    const fastaValue = fasta ? formatNumber(fastaCount) + (fastaCount === 1 ? " sequence" : " sequences") : "Optional / not loaded";
     const fastaDetail = fasta ? formatNumber(mapped) + " mapped HYB RNA names" : "Required for reference-based structure";
     return section(
       "summary",

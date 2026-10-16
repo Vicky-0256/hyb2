@@ -245,7 +245,7 @@
       return { ready: false, reason: "The arc map modules are not loaded." };
     }
     if (!s.interactions) {
-      return { ready: false, reason: "Load the differential interaction table in the Arc map card." };
+      return { ready: false, reason: "No differential interactions yet: run the differential test above and press Use in arc map, or load a differential interaction table in the Arc map card (C)." };
     }
     const seq = panels.sequences(s, rp);
     if (!seq.a || !seq.b) {
@@ -507,7 +507,7 @@
         '" placeholder="' + esc(placeholder || "") + '" data-feature="energy-control" data-key="' + key + '"' + (e.running ? " disabled" : "") + "></label>";
     };
     const out = ['<section class="data-card folding-energy-card">',
-      '<div class="card-title-row"><div><h2>Folding energy (F, G)</h2><span class="card-note">RNAcofold of the two arms of every significant interaction, once with each lineage\'s sequence (A = condition one, B = condition two, at aligned positions), as violin plots with a paired t-test. ViennaRNA runs in this browser (WebAssembly).</span></div></div>',
+      '<div class="card-title-row"><div><h2>F, G · Folding energy</h2><span class="card-note">RNAcofold of the two arms of every significant interaction, once with each lineage\'s sequence (A = condition one, B = condition two, at aligned positions), as violin plots with a paired t-test. ViennaRNA runs in this browser (WebAssembly).</span></div></div>',
       '<div class="comparison-control-grid">', control("padj <", "padj", e.padj, "0.01"), control("Fragment length per arm (nt)", "length", e.length, "40"),
       '<label class="control-field"><span>Temperature</span><input type="text" value="37 °C, default parameters" disabled></label></div>'];
     const s = arcMap || {};

@@ -1248,6 +1248,10 @@
     grid-template-columns: 1fr;
   }
 
+  .comparison-note-details {
+    grid-column: auto;
+  }
+
   .method-badge {
     margin-top: 8px;
   }
@@ -1405,4 +1409,19 @@
 .comparison-table-controls {
   align-items: end;
   margin: 0 0 12px;
+}
+
+.deseq-method {
+  grid-column: auto;
+  margin-top: 12px;
+}
+
+.comparison-export-more summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.comparison-export-more[open] summary {
+  margin-bottom: 8px;
 }

@@ -1368,9 +1368,45 @@
       fasta ? '<strong>' + escape(fasta.fileName) + "</strong><span>" + format(fasta.sequences.length) + " sequences · " + format(matchedCount) + " of " + format(rnaCount) + " HYB RNA names matched</span>" + (fasta.unsupportedSequenceEntries ? '<span class="notice notice-warning">' + format(fasta.unsupportedSequenceEntries) + " FASTA record" + (fasta.unsupportedSequenceEntries === 1 ? " contains" : "s contain") + " unsupported symbol" + ((fasta.unsupportedCharacters || []).length === 1 ? "" : "s") + " (" + escape((fasta.unsupportedCharacters || []).join(", ")) + "). Symbols were preserved so coordinates did not shift; affected regions cannot be folded.</span>" : "") : "<strong>No FASTA loaded</strong><span>Optional: enables reference-region extraction and structure preparation.</span>",
       '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="choose-fasta">' + (fasta ? "Replace" : "Add reference FASTA") + "</button>" + (fasta ? '<button class="quiet-button" type="button" data-feature-action="remove-fasta">Remove</button><button class="quiet-button" type="button" data-feature-action="export-fasta-mapping">Export mapping</button>' : "") + "</div></div>",
       fasta ? renderFastaMapping(state) : "",
+      renderCompareFiles(state),
       '<div class="files-section"><span class="drawer-kicker">Reproducibility</span><span>App version: <code class="mono">0.5.0</code></span><span>Git commit: <code class="mono hash-value">' + escape(buildCommit || "Local development build") + '</code></span><span>HYB SHA-256: <code class="mono hash-value">' + escape(state.summary.sha256 || (state.summary.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" + (fasta ? '<span>FASTA SHA-256: <code class="mono hash-value">' + escape(fasta.sha256 || (fasta.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" : "") + "</div>",
       '<div class="files-section"><span class="drawer-kicker">Privacy</span><span>Files are held in memory only. This preview does not use IndexedDB, analytics, or an upload service.</span></div>'
     ].join("");
+  }
+
+  // The other Compare datasets and the arc map files (the example loads
+  // three replicates, two folds and a gene track besides the primary file).
+  function renderCompareFiles(state) {
+    const comparison = state.comparison || {};
+    const datasets = comparison.datasets || [];
+    const others = datasets.filter(function (dataset) { return dataset.id !== "primary"; });
+    const primary = datasets.filter(function (dataset) { return dataset.id === "primary"; })[0];
+    const arc = state.arcMap || {};
+    const arcFiles = [["Structure A", arc.a], ["Structure B", arc.b], ["Gene track", arc.annotation]].filter(function (item) { return item[1] && item[1].name; });
+    if (!others.length && !arcFiles.length) {
+      return "";
+    }
+    const conditionLabel = function (condition) {
+      const label = condition === "B" ? comparison.conditionBLabel : comparison.conditionALabel;
+      return "condition " + (condition === "B" ? "B" : "A") + (label ? " (" + label + ")" : "");
+    };
+    const parts = [];
+    if (others.length) {
+      parts.push('<div class="files-section"><span class="drawer-kicker">Compare datasets</span>');
+      others.forEach(function (dataset) {
+        const summary = dataset.summary || {};
+        parts.push("<strong>" + escape(dataset.fileName) + "</strong><span>" + escape((dataset.label ? dataset.label + " · " : "") + conditionLabel(dataset.condition)) + (Number.isFinite(summary.validRecords) ? " · " + format(summary.validRecords) + " valid records" : "") + "</span>");
+      });
+      parts.push("<span>" + (primary ? "The interaction data above is " + escape(conditionLabel(primary.condition)) + ". " : "") + "Add, relabel or reassign datasets on the Compare page.</span></div>");
+    }
+    if (arcFiles.length) {
+      parts.push('<div class="files-section"><span class="drawer-kicker">Arc map files</span>');
+      arcFiles.forEach(function (item) {
+        parts.push("<strong>" + escape(item[1].name) + "</strong><span>" + escape(item[0]) + "</span>");
+      });
+      parts.push("</div>");
+    }
+    return parts.join("");
   }
 
   function renderFastaMapping(state) {

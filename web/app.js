@@ -1041,6 +1041,7 @@
       '      <div class="header-file">',
       '        <span class="header-file-name" title="' + escapeAttribute(summary.fileName) + '">' + escapeHtml(summary.fileName) + "</span>",
       '        <span class="ready-chip">Ready</span>',
+      renderHeaderDatasets(),
       "      </div>",
       "    </div>",
       '    <div class="toolbar-actions">',
@@ -1053,6 +1054,34 @@
       "    </div>",
       "  </header>"
     ].join("");
+  }
+
+  // The primary file is one of several when Compare has more datasets (the
+  // example loads four replicates): say so next to its name.
+  function renderHeaderDatasets() {
+    const others = (state.comparison && state.comparison.datasets || []).filter(function (dataset) {
+      return dataset.id !== PRIMARY_DATASET_ID;
+    });
+    if (!others.length) {
+      return "";
+    }
+    const names = others.map(function (dataset) { return dataset.fileName; }).join(", ");
+    return '        <button class="header-datasets" type="button" data-action="navigate" data-page="compare" title="' + escapeAttribute("Also on the Compare page: " + names) + '">+' + formatNumber(others.length) + " dataset" + (others.length === 1 ? "" : "s") + " on Compare</button>";
+  }
+
+  function renderSidebarDatasets() {
+    const comparison = state.comparison || {};
+    const others = (comparison.datasets || []).filter(function (dataset) { return dataset.id !== PRIMARY_DATASET_ID; });
+    if (!others.length) {
+      return "";
+    }
+    const label = function (condition) {
+      return (condition === "B" ? comparison.conditionBLabel : comparison.conditionALabel) || "Condition " + (condition === "B" ? "B" : "A");
+    };
+    const count = function (condition) {
+      return (comparison.datasets || []).filter(function (dataset) { return (dataset.condition === "B" ? "B" : "A") === condition; }).length;
+    };
+    return '      <span class="sidebar-file-info sidebar-file-compare" title="' + escapeAttribute(others.map(function (dataset) { return dataset.fileName; }).join(", ")) + '">Compare: ' + escapeHtml(label("A")) + " ×" + count("A") + " vs " + escapeHtml(label("B")) + " ×" + count("B") + "</span>";
   }
 
   function renderTweaks() {
@@ -1078,6 +1107,7 @@
       '      <span class="sidebar-label">Data</span>',
       '      <span class="sidebar-file-name" title="' + escapeAttribute(summary.fileName) + '">' + escapeHtml(summary.fileName) + "</span>",
       '      <span class="sidebar-file-info">' + formatBytes(summary.fileSize) + " · " + formatNumber(summary.validRecords) + " records</span>",
+      renderSidebarDatasets(),
       "    </div>",
       '    <nav class="sidebar-nav" aria-label="Analysis">',
       '      <span class="nav-label">Analysis</span>',

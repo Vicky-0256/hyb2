@@ -481,7 +481,8 @@
         "</div>",
         ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">green = smaller raw count of A and B (HYB2 plot_similarity_map), capped at the 95% quantile</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' : "",
         '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
-        '<p class="report-note">Comparison effects are descriptive library-size-normalised values. The report does not claim DESeq2 significance or adjusted p-values.</p>'
+        window.Hyb2DeseqCard ? window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) : "",
+        '<p class="report-note">Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
       ].join("")
     );
   }
@@ -650,7 +651,8 @@
             similarityBins: Array.isArray(comparisonResult.conservedCells) ? comparisonResult.conservedCells.length : 0,
             selectedCell: jsonSafe(findComparisonCell(comparisonResult, comparison.selection), 3, 50),
             effectCells: jsonSafe(boundedItems(comparisonResult.cells || [], MAX_VISUAL_CELLS, sortEffectCells), 3, 50)
-          } : { ready: false, reason: "Not generated" }
+          } : { ready: false, reason: "Not generated" },
+          differentialTest: window.Hyb2DeseqCard ? jsonSafe(window.Hyb2DeseqCard.reportData(comparison), 6, 100) : null
         },
         structure: jsonSafe(structurePayload, 5, 1000)
       },

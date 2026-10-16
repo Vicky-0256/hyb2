@@ -438,10 +438,10 @@
 
     return [
       '<div class="page-heading">',
-      '<div><h1>Compare</h1><p>Compare multiple local HYB datasets using contact-map effect sizes and the HYB2 similarity heatmap.</p></div>',
+      '<div><h1>Compare</h1><p>Compare multiple local HYB datasets: the DESeq2 differential test, contact-map effect sizes and the HYB2 similarity heatmap.</p></div>',
       '<div class="inline-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + '<button class="button button-secondary" type="button" data-feature-action="comparison-download-svg">Download effect SVG</button><button class="button button-secondary" type="button" data-feature-action="comparison-download-png">Download effect PNG</button></div>',
       '</div>',
-      '<section class="comparison-note notice notice-warning"><strong>DESeq2/WebR technical gate</strong><span>A recorded local static-origin smoke ran the official WebR 0.6 asset with PostMessage and base R. This site does not yet ship that runtime, and deployment CI does not rerun the browser smoke. The stable repository lacks DESeq2; a separate 1.53.2 development-closure probe found 42 of 43 packages and was blocked by locfit, but that is not validation of the pinned 1.52.0 target. This page therefore keeps descriptive effects active and exports a raw count table plus a two-column, headerless names.table for the legacy HYB2 CLI.</span></section>',
+      '<section class="comparison-note notice"><strong>Differential test in the browser</strong><span>The DESeq2 Wald test below is a JavaScript port of HYB2 Desktop\'s numpy port of DESeq2 1.46 (not R itself; WebR with DESeq2 is still not shipped). On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of the Desktop port. The effect and similarity maps are descriptive. The raw count table and the headerless names.table for the legacy HYB2 CLI remain available.</span></section>',
       '<section class="data-card comparison-datasets">',
       canAddDatasets
         ? '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">The primary file is included as the first local dataset. Add one or more HYB files, then assign each to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ' local files</span></div>'
@@ -483,6 +483,8 @@
         renderComparisonSelection(selected, comparison, result, state),
         comparison.showDataTable ? renderComparisonDataTable(result, comparison) : '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Open comparison data table</button></div>'
       ].join("") : '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Comparison</span><h2>' + escape(result.reason || "Add datasets to compare") + '</h2><p>All input files remain in tab memory and are parsed by local browser workers.</p></div></section>',
+      // the DESeq2 test bins its own 10-nt cells, independent of the map limits above
+      window.Hyb2DeseqCard ? window.Hyb2DeseqCard.renderCard(state) : "",
       // the arc map works from its own files, with or without a comparison here
       window.Hyb2ArcMap ? window.Hyb2ArcMap.renderCard(state.arcMap || window.Hyb2ArcMap.defaultState(), escape) : "",
       '<section class="method-note"><strong>Method</strong><span>For each dataset, HYB arms are accumulated into fixed contact bins. Each condition uses the mean of its dataset-level counts, optionally scaled per million ' + normalisationUnit + '. The effect map reports log2((A + pseudocount) / (B + pseudocount)); it is a descriptive effect size, not a significance test. The similarity heatmap follows HYB2 plot_similarity_map and similarity_heatmap.R: each condition\'s datasets are summed into one raw contact map (as if their .hyb files were concatenated), bins below the similarity minimum are dropped from each map, and a bin present in both maps shows the smaller count.</span></section>'

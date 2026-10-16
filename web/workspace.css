@@ -85,6 +85,24 @@
   text-transform: uppercase;
 }
 
+.header-datasets {
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--primary-ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.header-datasets:hover {
+  border-color: var(--primary);
+}
+
 .workspace-header-left {
   display: flex;
   align-items: center;
@@ -141,6 +159,15 @@
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+.sidebar-file-compare {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  color: var(--primary-ink);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .sidebar-nav {

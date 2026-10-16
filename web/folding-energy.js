@@ -114,16 +114,23 @@
     return values.length > 1 ? Math.sqrt(s / (values.length - 1)) : NaN;
   }
 
-  // R's t.test(one, two, paired = TRUE)
+  // R's t.test(one, two, paired = TRUE); where R stops with "data are
+  // essentially constant", t and p are NaN with a note
   function pairedTTest(one, two) {
     const n = Math.min(one.length, two.length);
     const d = [];
     for (let i = 0; i < n; i += 1) { d.push(one[i] - two[i]); }
     const md = mean(d);
     const se = sd(d) / Math.sqrt(n);
-    const t = md / se;
     const df = n - 1;
-    return { n: n, meanOne: mean(one), meanTwo: mean(two), meanDiff: md, t: t, df: df, p: n > 1 ? tTwoSided(t, df) : NaN };
+    const out = { n: n, meanOne: mean(one), meanTwo: mean(two), meanDiff: md, t: NaN, df: df, p: NaN };
+    if (n > 1 && !(se > 10 * Number.EPSILON * Math.abs(md))) {
+      out.note = "differences are constant";
+    } else if (n > 1) {
+      out.t = md / se;
+      out.p = tTwoSided(out.t, df);
+    }
+    return out;
   }
 
   // quantile type 7 (R default)
@@ -217,7 +224,18 @@
     return value !== "" && value !== null && value !== undefined && Number.isFinite(n) ? n : fallback;
   }
 
-  // buildJobs(arcMap, regionState, energyState) -> { ready, reason, jobs, skipped, invalid, considered, key, notes }
+  // FNV-1a 32-bit, continued from hash (for the stale-results key)
+  function fnv1a(hash, text) {
+    let h = hash === undefined ? 0x811c9dc5 : hash;
+    const value = String(text);
+    for (let i = 0; i < value.length; i += 1) {
+      h ^= value.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+  }
+
+  // buildJobs(arcMap, regionState, energyState) -> { ready, reason, jobs, skipped, unplaced, invalid, considered, key, notes }
   function buildJobs(arcMap, rp, fe) {
     const s = arcMap || {};
     const e = fe || defaultState();
@@ -249,6 +267,7 @@
     }
     const jobs = [];
     let skipped = 0;
+    let unplaced = 0;
     let invalid = 0;
     let considered = 0;
     s.interactions.rows.forEach(function (row) {
@@ -262,7 +281,7 @@
         cx = arc.mapNearest(mapBA, cx, 10);
         cy = arc.mapNearest(mapBA, cy, 10);
         if (!cx || !cy) {
-          skipped += 1;
+          unplaced += 1;
           return;
         }
       }
@@ -283,9 +302,12 @@
     });
     // the script's order: enriched in one, then enriched in two
     const ordered = jobs.filter(function (j) { return j.side === "enriched_in_one"; }).concat(jobs.filter(function (j) { return j.side === "enriched_in_two"; }));
-    const key = [seq.a.length, seq.b.length, seq.a.slice(0, 50), seq.b.slice(0, 50), s.interactions.name, s.interactions.rows.length,
-      cutoff, length, s.oneOn, s.twoOn].join("|");
-    return { ready: true, jobs: ordered, skipped: skipped, invalid: invalid, considered: considered, cutoff: cutoff, length: length, key: key, notes: notes };
+    let hash = fnv1a(fnv1a(undefined, seq.a), "|" + seq.b);
+    ordered.forEach(function (j) {
+      hash = fnv1a(hash, "|" + [j.side, j.x, j.y, j.log2FoldChange, j.padj, j.one[0], j.one[1], j.two[0], j.two[1]].join(","));
+    });
+    const key = [seq.a.length, seq.b.length, ordered.length, hash.toString(16), cutoff, length, s.oneOn, s.twoOn].join("|");
+    return { ready: true, jobs: ordered, skipped: skipped, unplaced: unplaced, invalid: invalid, considered: considered, cutoff: cutoff, length: length, key: key, notes: notes };
   }
 
   // ---- folding (used by the worker and by node checks)
@@ -302,11 +324,17 @@
 
   // RNAcofold MFE of one & two, rounded to 2 decimals as the CLI prints it
   function cofold(module, one, two, temperature, minimumLoop) {
-    const p1 = writeString(module, one);
-    const p2 = writeString(module, two);
-    const bytes = one.length + two.length + 1;
-    const ps = module._malloc(bytes);
+    let p1 = 0;
+    let p2 = 0;
+    let ps = 0;
     try {
+      p1 = writeString(module, one);
+      p2 = writeString(module, two);
+      const bytes = one.length + two.length + 1;
+      ps = module._malloc(bytes);
+      if (!ps) {
+        throw new Error("ViennaRNA WebAssembly could not allocate memory.");
+      }
       const energy = module._hyb2_vienna_cofold(p1, p2, temperature === undefined ? TEMPERATURE : temperature,
         minimumLoop === undefined ? MINIMUM_LOOP : minimumLoop, ps, bytes);
       if (!Number.isFinite(energy)) {
@@ -314,9 +342,9 @@
       }
       return Math.round(energy * 100) / 100;
     } finally {
-      module._free(ps);
-      module._free(p2);
-      module._free(p1);
+      if (ps) { module._free(ps); }
+      if (p2) { module._free(p2); }
+      if (p1) { module._free(p1); }
     }
   }
 
@@ -342,10 +370,19 @@
     return p.toExponential(1);
   }
 
+  function fixed(value, digits) {
+    return Number.isFinite(value) ? value.toFixed(digits) : "NA";
+  }
+
+  // a TSV cell: non-finite numbers as NA (as R writes them)
+  function cell(value) {
+    return typeof value === "number" && !Number.isFinite(value) ? "NA" : value;
+  }
+
   function toTsv(results) {
     const lines = ["length\tside\tx\ty\tlog2FoldChange\tpadj\tdG_one\tdG_two"];
     results.rows.forEach(function (r) {
-      lines.push([results.length, r.side, r.x, r.y, r.log2FoldChange, r.padj, r.dG_one, r.dG_two].join("\t"));
+      lines.push([results.length, r.side, r.x, r.y, r.log2FoldChange, r.padj, r.dG_one, r.dG_two].map(cell).join("\t"));
     });
     return lines.join("\n") + "\n";
   }
@@ -354,7 +391,7 @@
     const lines = ["comparison\tlength\tenriched_in\tn\tmean_dG_one\tmean_dG_two\tmean_diff_one_minus_two\tt\tp"];
     summarise(results.rows).forEach(function (s) {
       lines.push([labels.one + " vs " + labels.two, results.length, s.side === "enriched_in_one" ? labels.one : labels.two, s.n,
-        s.meanOne, s.meanTwo, s.meanDiff, s.t, s.p].join("\t"));
+        s.meanOne, s.meanTwo, s.meanDiff, s.t, s.p].map(cell).join("\t"));
     });
     return lines.join("\n") + "\n";
   }
@@ -412,11 +449,11 @@
       const ticks = niceTicks(lo, hi);
       const y = function (v) { return bottom - (v - lo) / (hi - lo) * (bottom - top); };
       const who = s.side === "enriched_in_one" ? labels.one : labels.two;
-      parts.push('<text x="' + ox + '" y="18" font-size="14" font-weight="700" fill="' + c.ink + '">' + "FGHIJK"[index] + "</text>");
+      parts.push('<text x="' + ox + '" y="18" font-size="14" font-weight="700" fill="' + c.ink + '">' + (s.side === "enriched_in_one" ? "F" : "G") + "</text>");
       parts.push('<text x="' + (ox + 18) + '" y="18" font-size="12.5" font-weight="600" fill="' + c.ink + '">' +
         escapeXml(who + "-enriched (" + labels.one + " vs " + labels.two + "), n=" + s.n) + "</text>");
       parts.push('<text x="' + (ox + 18) + '" y="36" fill="' + c.muted + '">' +
-        escapeXml("2 × " + results.length + " nt, RNAcofold; paired t-test p = " + formatP(s.p)) + "</text>");
+        escapeXml("2 × " + results.length + " nt, RNAcofold; paired t-test p = " + formatP(s.p) + (s.note ? " (" + s.note + ")" : "")) + "</text>");
       ticks.forEach(function (t) {
         parts.push('<line x1="' + left + '" x2="' + right + '" y1="' + y(t).toFixed(1) + '" y2="' + y(t).toFixed(1) + '" stroke="' + c.grid + '"/>');
         parts.push('<text x="' + (left - 6) + '" y="' + (y(t) + 3.5).toFixed(1) + '" text-anchor="end" fill="' + c.muted + '">' + t + "</text>");
@@ -492,6 +529,7 @@
     plan.notes.forEach(function (note) { out.push('<p class="card-note">' + esc(note) + "</p>"); });
     out.push('<p class="card-note">' + plan.considered.toLocaleString("en-US") + " interactions with padj &lt; " + plan.cutoff + "; " + plan.jobs.length.toLocaleString("en-US") +
       " to fold (" + (2 * plan.jobs.length).toLocaleString("en-US") + " RNAcofold runs)" + (plan.skipped ? "; " + plan.skipped + " skipped (fragment off an end)" : "") +
+      (plan.unplaced ? "; " + plan.unplaced + " skipped (could not be placed on A by alignment)" : "") +
       (plan.invalid ? "; " + plan.invalid + " skipped (non-ACGU bases)" : "") + ".</p>");
     if (e.running) {
       const pct = e.total ? Math.round(100 * e.done / e.total) : 0;
@@ -514,10 +552,15 @@
       out.push('<div class="data-table-wrap"><table class="data-table energy-table"><thead><tr><th>Enriched in</th><th>n</th><th>Mean dG ' + esc(labels.one) + '</th><th>Mean dG ' + esc(labels.two) +
         "</th><th>Mean difference</th><th>t</th><th>Paired t-test p</th></tr></thead><tbody>");
       stats.forEach(function (st) {
-        out.push('<tr data-side="' + st.side + '"><td>' + esc(st.side === "enriched_in_one" ? labels.one : labels.two) + "</td><td data-n>" + st.n + "</td><td>" + st.meanOne.toFixed(2) + "</td><td>" + st.meanTwo.toFixed(2) +
-          "</td><td>" + st.meanDiff.toFixed(2) + "</td><td>" + (Number.isFinite(st.t) ? st.t.toFixed(3) : "NA") + '</td><td data-p="' + st.p + '">' + (Number.isFinite(st.p) ? st.p.toPrecision(3) : "NA") + "</td></tr>");
+        out.push('<tr data-side="' + st.side + '"><td>' + esc(st.side === "enriched_in_one" ? labels.one : labels.two) + "</td><td data-n>" + st.n + "</td><td>" + fixed(st.meanOne, 2) + "</td><td>" + fixed(st.meanTwo, 2) +
+          "</td><td>" + fixed(st.meanDiff, 2) + "</td><td>" + fixed(st.t, 3) + '</td><td data-p="' + cell(st.p) + '">' + (Number.isFinite(st.p) ? st.p.toPrecision(3) : "NA") + "</td></tr>");
       });
       out.push("</tbody></table></div>");
+      stats.forEach(function (st) {
+        if (st.note) {
+          out.push('<p class="card-note">' + esc("Paired t-test for " + (st.side === "enriched_in_one" ? labels.one : labels.two) + "-enriched interactions: NA, the differences are constant.") + "</p>");
+        }
+      });
       out.push('<div class="energy-figure" data-energy-figure>' + svg(r, labels) + "</div>");
       out.push('<p class="card-note">' + esc("ViennaRNA " + (r.version || "?") + " RNAcofold (WebAssembly), " + TEMPERATURE + " °C, default parameters; " + r.rows.length + " interactions × 2 lineages, 2 × " + r.length + " nt.") + "</p>");
       out.push('<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="energy-download-svg">Download violin SVG</button>' +
@@ -537,12 +580,18 @@
     return state.foldingEnergy;
   }
 
+  // terminates the folding worker; its pending results are dropped (also
+  // called by app.js when files are loaded or closed)
   function stop(fe) {
     if (worker) {
+      worker.onmessage = null;
+      worker.onerror = null;
       worker.terminate();
       worker = null;
     }
-    fe.running = false;
+    if (fe) {
+      fe.running = false;
+    }
   }
 
   function run(state, api) {
@@ -559,7 +608,7 @@
     const pairs = [];
     plan.jobs.forEach(function (job) { pairs.push(job.one, job.two); });
     try {
-      worker = new Worker((root.HYB2_ASSET_BASE || "./") + "folding-energy.worker.js");
+      worker = new Worker((root.HYB2_ASSET_BASE || "./") + "folding-energy.worker.js?build=" + encodeURIComponent(root.HYB2_BUILD && root.HYB2_BUILD.commit || "local"));
     } catch (error) {
       fe.running = false;
       fe.error = "Could not start the folding worker: " + (error.message || error);
@@ -643,6 +692,7 @@
     bandwidth: bandwidth,
     density: density,
     boxStats: boxStats,
+    fnv1a: fnv1a,
     forward: forward,
     fragment: fragment,
     buildJobs: buildJobs,
@@ -654,6 +704,7 @@
     svg: svg,
     renderCard: renderCard,
     handleChange: handleChange,
-    handleAction: handleAction
+    handleAction: handleAction,
+    stop: stop
   };
 })(typeof window !== "undefined" ? window : self);

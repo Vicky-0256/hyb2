@@ -8,10 +8,12 @@
 
 "use strict";
 
+// the page's ?build= cache-buster, carried to every script and the wasm
+const BUILD_QUERY = self.location.search || "";
 const ENGINE_DIRECTORY = new URL("./vendor/viennarna/", self.location.href).href;
-const ENGINE_GLUE_URL = new URL("vienna-rna.js", ENGINE_DIRECTORY).href;
+const ENGINE_GLUE_URL = new URL("vienna-rna.js", ENGINE_DIRECTORY).href + BUILD_QUERY;
 
-importScripts(new URL("./folding-energy.js", self.location.href).href);
+importScripts(new URL("./folding-energy.js", self.location.href).href + BUILD_QUERY);
 
 let enginePromise = null;
 
@@ -27,7 +29,7 @@ function getEngine() {
         throw new Error("The ViennaRNA WebAssembly loader did not expose the expected folding module.");
       }
       const module = await self.createHyb2Vienna({
-        locateFile: function (file) { return new URL(file, ENGINE_DIRECTORY).href; },
+        locateFile: function (file) { return new URL(file, ENGINE_DIRECTORY).href + BUILD_QUERY; },
         print: function () {},
         printErr: function () {},
         noInitialRun: true

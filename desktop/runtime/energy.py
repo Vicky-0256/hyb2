@@ -12,7 +12,8 @@ centred on each arm at (bin start + 5) on condition one's reference; the two
 fragments are joined with "&" and cofolded (ViennaRNA RNAcofold, default
 model, 37 C) once with condition one's sequence and once with condition two's
 sequence at the aligned positions (:mod:`seqmap`, the Structure page's
-alignment; a centre facing a gap takes the nearest aligned position).
+alignment; a centre facing a gap takes the base after the previous aligned
+one, as the script's ``align_map``).
 Fragments that run off either end are skipped.  Per direction (enriched in
 one / in two) the dG of the two lineages are compared with a paired t-test.
 
@@ -138,16 +139,29 @@ def vienna_version() -> Optional[str]:
     return str(getattr(RNA, "__version__", "") or "") or None
 
 
+def forward(amap: Any, position: int, length_two: int) -> int:
+    """1-based ``position`` of condition one moved onto condition two: the aligned base, or for a base
+    facing a gap the base after the previous aligned one (the script's ``align_map``), at most
+    ``length_two``; 0 out of range."""
+    if amap is None:
+        return position
+    if position < 1 or position > len(amap.to):
+        return 0
+    if amap.to[position - 1] > 0:
+        return int(amap.to[position - 1])
+    for p in range(position - 1, 0, -1):
+        if amap.to[p - 1] > 0:
+            return min(length_two, int(amap.to[p - 1]) + 1)
+    return 1
+
+
 def fragment_jobs(rows: Sequence[Dict[str, Any]], one: str, two: str, amap: Any, length: int) -> Tuple[List[Tuple], int]:
     """``(jobs, skipped)``; a job is (side, x, y, lfc, padj, (one_a, one_b), (two_a, two_b))."""
     jobs, skipped = [], 0
     for row in rows:
         x, y = row["x"], row["y"]
         cx, cy = x + 5, y + 5  # 1-based centres on condition one's reference
-        if amap is None:
-            ox, oy = cx, cy
-        else:
-            ox, oy = amap.nearest(cx, 50), amap.nearest(cy, 50)
+        ox, oy = forward(amap, cx, len(two)), forward(amap, cy, len(two))
         qa, qb = fragment(one, cx - 1, length), fragment(one, cy - 1, length)
         oa = fragment(two, ox - 1, length) if ox else None
         ob = fragment(two, oy - 1, length) if oy else None

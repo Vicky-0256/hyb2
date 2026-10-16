@@ -74,6 +74,29 @@ class TTestTests(unittest.TestCase):
         self.assertIsNone(energy.fragment(seq, 36, 10))
         self.assertEqual(energy.fragment(seq, 35, 10), seq[30:40])
 
+    def test_gap_takes_the_base_after_the_previous_aligned_one(self):
+        rng = random.Random(7)
+        one = "".join(rng.choice("ACGU") for _ in range(600))
+        two = one[:300] + one[305:]  # 5 nt deleted at 301-305 of one
+        amap = seqmap.align(one, two)
+        gapped = [p for p in range(290, 316) if amap.pos(p) == 0]
+        self.assertEqual(len(gapped), 5)
+        for p in gapped:
+            q = p - 1
+            while amap.pos(q) == 0:
+                q -= 1
+            # every base facing the deletion moves to the same base, as align_map
+            self.assertEqual(energy.forward(amap, p, len(two)), amap.pos(q) + 1, p)
+        self.assertEqual(len({energy.forward(amap, p, len(two)) for p in gapped}), 1)
+        self.assertEqual(energy.forward(amap, 400, len(two)), 395)
+        self.assertEqual(energy.forward(None, 400, len(two)), 400)
+        self.assertEqual(energy.forward(amap, 0, len(two)), 0)
+        rows = [{"x": gapped[-1] - 5, "y": 500, "direction": "down", "padj": 1e-5, "log2FoldChange": -1.0}]
+        jobs, skipped = energy.fragment_jobs(rows, one, two, amap, 20)
+        self.assertEqual(skipped, 0)
+        centre = amap.pos(gapped[0] - 1) + 1
+        self.assertEqual(jobs[0][6][0], two[centre - 1 - 10:centre - 1 + 10])
+
 
 class RegionFunctionTests(unittest.TestCase):
     def test_runs_merge_partners_within_five(self):

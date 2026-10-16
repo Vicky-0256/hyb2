@@ -311,3 +311,10 @@
     white-space: nowrap;
   }
 }
+
+/* Card kickers are short labels ("2 local files", "Local memory"); keep
+   them on one line and let the title column absorb the squeeze. */
+.card-title-row > .card-kicker {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

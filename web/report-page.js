@@ -506,7 +506,7 @@
       "Multi-dataset effect map",
       ready ? '<span class="report-status is-ready">Generated</span>' : '<span class="report-status is-pending">Configured</span>',
       [
-        '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Datasets and conditions</h3><span class="report-note-inline">' + formatNumber(datasets.length) + ' local files</span></div>',
+        '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Datasets and conditions</h3><span class="report-note-inline">' + formatNumber(datasets.length) + (datasets.length === 1 ? ' local file' : ' local files') + '</span></div>',
         datasetRows.length ? table(["File", "Label", "Condition", "Valid records", "Support"], datasetRows) : '<div class="report-empty">Add a second local HYB dataset to configure a comparison.</div>',
         datasets.length > MAX_DATASET_ROWS ? '<p class="report-note">Only the first ' + formatNumber(MAX_DATASET_ROWS) + ' datasets are shown in the printable report.</p>' : "",
         "</div>",

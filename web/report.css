@@ -663,3 +663,13 @@
     display: none;
   }
 }
+
+/* Tables in half-width subsections fit their card: long RNA names wrap
+   instead of pushing the last columns out of view (and off the printout). */
+.report-subsection:not(.report-subsection--table) .report-table {
+  min-width: 0;
+}
+
+.report-subsection:not(.report-subsection--table) .report-table td {
+  overflow-wrap: anywhere;
+}

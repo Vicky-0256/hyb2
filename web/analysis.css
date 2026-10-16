@@ -679,6 +679,22 @@
   text-transform: uppercase;
 }
 
+/* The technical reason, folded under the plain statement. */
+.comparison-note-details {
+  grid-column: 2;
+  font-size: 12px;
+}
+
+.comparison-note-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.comparison-note-details span {
+  display: block;
+  margin-top: 6px;
+}
+
 .comparison-datasets {
   display: grid;
   gap: 14px;

@@ -55,7 +55,7 @@
         '      <section class="overview-callout" aria-label="Reference FASTA status">',
         "        <div>",
         "          <h2>Reference sequences loaded</h2>",
-        "          <p>" + format(state.fasta.sequences.length) + " FASTA sequences · " + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</p>",
+        "          <p>" + format(state.fasta.sequences.length) + (state.fasta.sequences.length === 1 ? " FASTA sequence · " : " FASTA sequences · ") + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</p>",
         "        </div>",
         '        <button class="quiet-button" type="button" data-action="open-files">Review mapping</button>',
         "      </section>"
@@ -87,7 +87,8 @@
     const maximum = items.length ? items[0].support : 1;
     return [
       '        <section class="data-card">',
-      '          <div class="card-title-row"><h2>Top interacting RNAs</h2><span class="card-kicker">Cluster support</span></div>',
+      '          <div class="card-title-row"><h2>Top interacting RNAs</h2><span class="card-kicker">Cluster support, per arm</span></div>',
+      '          <p class="card-note">Each record counts once per arm on the RNA, so a record with both arms on one RNA counts twice.</p>',
       '          <div class="bar-list">',
       items.slice(0, 5).map(function (item) {
         return [

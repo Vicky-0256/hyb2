@@ -1174,7 +1174,9 @@
       return {
         ready: false,
         reason: !groupA.length || !groupB.length
-          ? "Assign at least one local dataset to each condition."
+          ? (!groupB.length && groupA.length
+            ? "Condition B has no dataset yet. Use Add HYB datasets for the second sample, then set its Condition to B."
+            : "Condition A has no dataset yet. Set at least one dataset's Condition to A.")
           : "Choose RNA X and RNA Y to compare.",
         groupA: groupA,
         groupB: groupB,

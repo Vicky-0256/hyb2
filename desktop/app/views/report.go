@@ -442,6 +442,11 @@ func (p *reportPage) View(c *ui.Context) {
 				errorLine(c, note)
 			}
 			Card(c, "Project", func() { reportFacts(c, d.projectFacts()) })
+			Card(c, "Before you report these results", func() {
+				for _, check := range d.reviewChecks() {
+					ui.Text(c, "• "+check).FontSize(12)
+				}
+			})
 			Card(c, "References", func() { reportTable(c, "references", d.referenceTable(), "No reference in this project.") })
 			Card(c, "Samples", func() {
 				reportTable(c, "samples", d.sampleTable(), "No sample in this project.")

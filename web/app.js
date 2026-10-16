@@ -1768,6 +1768,10 @@
       updateInteractionHash: updateInteractionHash,
       // DataProvider access for page actions (exports, paging).
       queryHybrids: function (query) { return pageData ? pageData.queryHybrids(query) : Promise.resolve({ total: 0, offset: 0, rows: [] }); },
+      getArms: function (selection, query) {
+        const current = pageData && pageData.getProvider();
+        return current ? current.getArms(selection, query) : Promise.reject(new Error("No data provider is available."));
+      },
       loadInteractionWindow: function (start) { return pageData ? pageData.loadInteractionWindow(start) : Promise.resolve(false); },
       dataChanged: function () {
         if (provider && typeof provider.notifyChange === "function") provider.notifyChange();

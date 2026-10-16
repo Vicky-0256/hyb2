@@ -22,6 +22,9 @@
     }
     if (state.activePage === "compare") {
       bindComparisonCanvases(state, api);
+      if (window.Hyb2DeseqCard) {
+        window.Hyb2DeseqCard.draw(state, api);
+      }
     }
     if (state.activePage === "structure" && window.Hyb2StructureUI) {
       window.Hyb2StructureUI.afterRender(state, api);
@@ -1243,8 +1246,9 @@
     const feature = element.dataset.feature;
     const key = element.dataset.key;
 
-    // region structures (D, E) and folding energy (F, G) cards
-    if ((window.Hyb2RegionPanels && window.Hyb2RegionPanels.handleChange(state, element, api)) ||
+    // differential test (A), region structures (D, E) and folding energy (F, G) cards
+    if ((window.Hyb2DeseqCard && window.Hyb2DeseqCard.handleChange(state, element, api)) ||
+        (window.Hyb2RegionPanels && window.Hyb2RegionPanels.handleChange(state, element, api)) ||
         (window.Hyb2FoldingEnergy && window.Hyb2FoldingEnergy.handleChange(state, element, api))) {
       return true;
     }
@@ -1396,6 +1400,9 @@
     if (!key) {
       return false;
     }
+    if (window.Hyb2DeseqCard && window.Hyb2DeseqCard.handleInput(state, element)) {
+      return true;
+    }
     if (feature === "interaction-filter" && state.filters) {
       state.filters[key] = element.value;
       state.selectedRecordIndex = null;
@@ -1481,7 +1488,8 @@
       return true;
     }
 
-    if ((window.Hyb2RegionPanels && window.Hyb2RegionPanels.handleAction(state, element, api)) ||
+    if ((window.Hyb2DeseqCard && window.Hyb2DeseqCard.handleAction(state, action, element, api)) ||
+        (window.Hyb2RegionPanels && window.Hyb2RegionPanels.handleAction(state, element, api)) ||
         (window.Hyb2FoldingEnergy && window.Hyb2FoldingEnergy.handleAction(state, element, api))) {
       return true;
     }
@@ -2355,6 +2363,8 @@
     const comparison = state.comparison || {};
     const result = comparison.result || {};
     const normalise = comparison.normalise === "none" ? "none" : "per-million-library-size";
+    const differentialTest = window.Hyb2DeseqCard ? window.Hyb2DeseqCard.parameters(comparison) : null;
+    const tested = !!(differentialTest && differentialTest.result);
     const selectedBin = comparison.selection && result.ready ? {
       xStart: comparison.selection.x,
       xEnd: comparison.selection.x + result.binSize - 1,
@@ -2404,10 +2414,13 @@
         selectedBin: selectedBin,
         failureReason: result.ready === false ? result.reason || null : null
       },
+      // the in-browser DESeq2 Wald test (deseq.js), when it was run
+      differentialTest: differentialTest,
       methodScope: {
-        descriptiveEffectOnly: true,
-        replicateAwareStatisticalTesting: false,
-        adjustedPValues: false,
+        descriptiveEffectOnly: !tested,
+        replicateAwareStatisticalTesting: tested,
+        adjustedPValues: tested,
+        javascriptDeSeq2Port: true,
         webRBaseRuntimeSmoke: "recorded-manual-pass",
         webRRuntimeValidated: false,
         webRRuntimeVendored: false,

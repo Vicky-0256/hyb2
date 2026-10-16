@@ -14,6 +14,7 @@
       '<article class="report-page" data-report-page>',
       renderHero(context),
       renderSummary(context),
+      renderReviewChecks(context),
       renderSource(context),
       renderValidation(context),
       renderFileFormat(),
@@ -194,6 +195,49 @@
         "</div>",
         '<div class="report-callout"><strong>Report scope</strong><span>Tables and inline visuals are bounded for reliable browser printing. Existing page-level CSV, TSV, HYB, SVG, PNG, FASTA, and structure exports remain the complete data path.</span></div>'
       ].join("")
+    );
+  }
+
+  // What the researcher should check before reporting, for this session
+  // only: each item appears when its analysis or data condition applies.
+  function renderReviewChecks(context) {
+    const state = context.state;
+    const summary = state.summary || {};
+    const records = state.records || [];
+    const items = [];
+    items.push("These results describe " + (summary.fileName || "the loaded HYB file") + " only: " + formatNumber(summary.validRecords || 0) +
+      " valid records (" + formatNumber(summary.invalidRecords || 0) + " invalid rows skipped). Counts are not normalised against other experiments.");
+    const inferred = records.filter(function (record) { return record && record.chimeraTypeSource === "inferred"; }).length;
+    if (inferred) {
+      items.push("Chimera types of " + formatNumber(inferred) + " records were inferred by HYB2 because the file has no type column; check them before reporting type proportions.");
+    }
+    if (summary.ambiguousColumn16Records) {
+      items.push(formatNumber(summary.ambiguousColumn16Records) + " rows have a legacy column 16 that may hold a raw-read count or cluster support; confirm how the file was produced.");
+    }
+    const names = (summary.rnaNames || []).length;
+    if (!state.fasta) {
+      items.push("No reference FASTA was loaded: RNA coordinates are not checked against a sequence.");
+    } else if (mappedFastaCount(state.fasta) < names) {
+      items.push("Only " + formatNumber(mappedFastaCount(state.fasta)) + " of " + formatNumber(names) + " HYB RNA names matched the reference FASTA; coordinates of the others are not checked.");
+    }
+    const comparison = state.comparison || {};
+    if (comparison.result && comparison.result.ready) {
+      items.push("Compare effects are descriptive log2 ratios of normalised counts, not a significance test; test replicates with DESeq2 (HYB2 Desktop or R) before claiming a difference.");
+    }
+    const structure = state.structure || {};
+    if (structure.result && structure.result.sequence) {
+      items.push("The RNA structure is a computational prediction guided by chimeric reads; support key helices with independent evidence (for example probing or mutation) before stating them.");
+    }
+    const cards = window.Hyb2Evidence ? safeCall(function () { return window.Hyb2Evidence.reportCards(state); }, []) : [];
+    if (cards.length) {
+      items.push("External sources include AI-generated literature summaries whose citations are not verified; read the cited papers before relying on them.");
+    }
+    return section(
+      "review",
+      "Before you report these results",
+      "Researcher checks",
+      '<span class="report-status is-pending">' + formatNumber(items.length) + (items.length === 1 ? " check" : " checks") + "</span>",
+      '<ul class="report-review-list">' + items.map(function (item) { return "<li>" + escape(item) + "</li>"; }).join("") + "</ul>"
     );
   }
 

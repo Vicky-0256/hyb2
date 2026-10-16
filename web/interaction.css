@@ -81,10 +81,16 @@ kbd {
   }
 }
 
-/* Phones: the header is already full and the palette is keyboard-led. */
+/* Phones: the header is already full and the palette is keyboard-led.
+   On the landing header the trigger also ran over the "Web Lite" label. */
 @media (max-width: 767px) {
-  .workspace-header .cmdk-trigger {
+  .workspace-header .cmdk-trigger,
+  .landing-header .cmdk-trigger {
     display: none;
+  }
+
+  .landing-header > :first-child {
+    flex-shrink: 0;
   }
 
   .cmdk-trigger span,

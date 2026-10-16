@@ -673,3 +673,14 @@
 .report-subsection:not(.report-subsection--table) .report-table td {
   overflow-wrap: anywhere;
 }
+
+/* Researcher checks: one plain sentence each. */
+.report-review-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--report-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}

@@ -232,6 +232,14 @@
   display: none;
 }
 
+/* Phones: the fixed page nav (.mobile-nav, 54 px) covers the bottom of the
+   screen, so the run bar (Predict, Cancel, why it waits) sticks above it. */
+@media (max-width: 767px) {
+  .structure-run-bar {
+    bottom: 56px;
+  }
+}
+
 .structure-run-bar .button {
   width: 100%;
 }

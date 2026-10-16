@@ -1333,3 +1333,21 @@
 .virtual-table-head .unit {
   text-transform: none;
 }
+
+
+/* The plain statement first; the engine details folded under it. */
+.method-limit-details {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.method-limit-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.method-limit-details span {
+  display: block;
+  margin-top: 6px;
+}

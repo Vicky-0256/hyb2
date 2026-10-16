@@ -114,6 +114,15 @@ type dataEditDialog struct {
 	busy      bool
 }
 
+// dataSetRefDialog sets one reference for several samples that have none.
+type dataSetRefDialog struct {
+	open      bool
+	ids       []string
+	reference string // label shown in the select
+	status    string
+	busy      bool
+}
+
 type dataRenameDialog struct {
 	open   bool
 	id     string
@@ -143,6 +152,7 @@ type dataPage struct {
 	add        dataAddDialog
 	edit       dataEditDialog
 	rename     dataRenameDialog
+	setRef     dataSetRefDialog
 	removeOpen bool
 	removeIDs  []string
 	allChecked bool
@@ -236,6 +246,21 @@ func (p *dataPage) needsReference(s model.Sample) bool {
 	return s.Reads.Format != "hyb" && p.a.Project.Reference(s.ReferenceID) == nil
 }
 
+// withoutReference: the selected samples that need a reference, or with
+// nothing selected all of them.
+func (p *dataPage) withoutReference(samples, selected []model.Sample) []model.Sample {
+	if len(selected) > 0 {
+		samples = selected
+	}
+	var out []model.Sample
+	for _, s := range samples {
+		if p.needsReference(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // withReference splits samples into those that can run and the names of
 // those without a reference.
 func (p *dataPage) withReference(samples []model.Sample) (ok []model.Sample, missing []string) {
@@ -256,11 +281,11 @@ func noReferenceText(names []string, started bool) string {
 	case started && len(names) == 1:
 		return list + " is left out: it has no reference. Use Set reference… in its row."
 	case started:
-		return list + " are left out: they have no reference. Use Set reference… in their rows."
+		return list + " are left out: they have no reference. Use Set reference above the samples to set it for all of them."
 	case len(names) == 1:
 		return list + " has no reference. Use Set reference… in its row first."
 	}
-	return list + " have no reference. Use Set reference… in their rows first."
+	return list + " have no reference. Use Set reference above the samples first."
 }
 
 func (p *dataPage) box(id string) *bool {
@@ -481,6 +506,7 @@ func (p *dataPage) View(c *ui.Context) {
 	p.folderDialog(c)
 	p.addDialog(c)
 	p.editDialog(c)
+	p.setRefDialog(c)
 	p.renameDialog(c)
 	p.removeDialog(c)
 }
@@ -632,6 +658,12 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 			if len(problems) > 0 {
 				if ui.Button(c, p.resumeLabel(problems)).Clicked() {
 					p.resumeSamples(problems)
+				}
+			}
+			if noRef := p.withoutReference(samples, selected); len(noRef) > 0 {
+				if ui.Button(c, fmt.Sprintf("Set reference (%d)…", len(noRef))).
+					Tooltip("Choose one reference for the samples that have none").Clicked() {
+					p.openSetRef(noRef)
 				}
 			}
 			removeLabel := "Remove"
@@ -1220,6 +1252,107 @@ func (p *dataPage) saveEdit() {
 			}
 			d.open = false
 			a.RefreshProject()
+		}
+	})
+}
+
+// ---- set one reference for several samples
+
+func (p *dataPage) openSetRef(samples []model.Sample) {
+	d := dataSetRefDialog{open: true}
+	for _, s := range samples {
+		d.ids = append(d.ids, s.ID)
+	}
+	if refs := p.refLabels(); len(refs) > 0 {
+		d.reference = refs[0]
+	}
+	p.setRef = d
+}
+
+func (p *dataPage) setRefDialog(c *ui.Context) {
+	a := p.a
+	t := c.Theme()
+	d := &p.setRef
+	if !d.open {
+		return
+	}
+	var names []string
+	for _, id := range d.ids {
+		if s := a.Project.Sample(id); s != nil {
+			names = append(names, s.Label())
+		}
+	}
+	refs := p.refLabels()
+	ui.Modal(c, &d.open, func() {
+		ui.Column(c).Width(460).Gap(12).Children(func() {
+			ui.Text(c, "Set the reference of "+dataPlural(len(names), "sample", "samples")).FontSize(18).Bold()
+			ui.Text(c, strings.Join(names, ", ")).FontSize(12).TextColor(t.TextMuted)
+			if len(refs) == 0 {
+				ui.Text(c, "The project has no reference yet. Add one under References first.").TextColor(t.Warning)
+			} else {
+				Field(c, "Reference", func() {
+					ui.Select(c.Key("setref-reference"), &d.reference, refs).Label("Reference")
+				})
+				ui.Text(c, "Their reads are mapped to it when they run.").FontSize(12).TextColor(t.TextMuted)
+			}
+			if d.status != "" {
+				ui.Text(c, d.status).TextColor(t.Danger)
+			}
+			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+				if ui.Button(c, "Cancel").Disabled(d.busy).Clicked() {
+					d.open = false
+				}
+				if ui.PrimaryButton(c, "Set reference").Disabled(d.busy || p.refByLabel(d.reference) == nil || len(names) == 0).Clicked() {
+					p.saveSetRef()
+				}
+			})
+		})
+	})
+}
+
+// saveSetRef updates each sample; the ones that fail stay in the dialog
+// with the reason, the others are done.
+func (p *dataPage) saveSetRef() {
+	a := p.a
+	d := &p.setRef
+	r := p.refByLabel(d.reference)
+	if r == nil {
+		return
+	}
+	path, refID, ids := a.Project.Path, r.ID, append([]string(nil), d.ids...)
+	labels := map[string]string{}
+	for _, id := range ids {
+		if s := a.Project.Sample(id); s != nil {
+			labels[id] = s.Label()
+		}
+	}
+	d.busy, d.status = true, ""
+	a.Go(func() func() {
+		var done, failed, reasons []string
+		for _, id := range ids {
+			_, err := a.B.ProjectOp(path, "update_sample", core.Obj{"sample_id": id, "changes": core.Obj{"reference_id": refID}})
+			if err != nil {
+				failed = append(failed, id)
+				reasons = append(reasons, nameOr(labels[id], id)+": "+dataErrText(err))
+			} else {
+				done = append(done, nameOr(labels[id], id))
+			}
+		}
+		return func() {
+			d.busy = false
+			if len(done) > 0 {
+				a.RefreshProject()
+			}
+			if len(failed) == 0 {
+				d.open = false
+				a.Toast("Set the reference of %s to %s.", dataPlural(len(done), "sample", "samples"), d.reference)
+				return
+			}
+			d.ids = failed
+			d.status = "Could not set it for " + strings.Join(reasons, "; ")
+			if len(done) > 0 {
+				d.status = "Set the reference of " + strings.Join(done, ", ") + ". " + d.status
+			}
 		}
 	})
 }

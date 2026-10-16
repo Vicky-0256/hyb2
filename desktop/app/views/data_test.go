@@ -23,6 +23,8 @@ type dataFake struct {
 	*fakeBackend
 	opCalls     []dataCall
 	sheetErrors map[string]string
+	// updateErrors makes update_sample fail for these sample ids.
+	updateErrors map[string]string
 }
 
 func (f *dataFake) ProjectOp(path, operation string, payload core.Obj) (core.Obj, error) {
@@ -31,6 +33,11 @@ func (f *dataFake) ProjectOp(path, operation string, payload core.Obj) (core.Obj
 	f.mu.Unlock()
 	if operation == "import_sample_sheet" {
 		if message := f.sheetErrors[fmt.Sprint(payload["sheet"])]; message != "" {
+			return nil, errors.New(message)
+		}
+	}
+	if operation == "update_sample" {
+		if message := f.updateErrors[fmt.Sprint(payload["sample_id"])]; message != "" {
 			return nil, errors.New(message)
 		}
 	}
@@ -68,7 +75,7 @@ func dataOpen(t *testing.T, list string) (*App, *dataFake) {
 		summary = map[string]any{"indexes": indexes[2:]}
 	}
 	f.queries["analysis_summary"] = summary
-	df := &dataFake{fakeBackend: f, sheetErrors: map[string]string{}}
+	df := &dataFake{fakeBackend: f, sheetErrors: map[string]string{}, updateErrors: map[string]string{}}
 	a := New(df, nil, "")
 	a.Open("/projects/zikv.hyb2proj")
 	waitFlush(a)
@@ -202,6 +209,53 @@ func TestDataPageMissingReference(t *testing.T) {
 	tt.Frame()
 	dataClick(t, tt, a, "Check inputs")
 	dataExpect(t, tt, "Inputs checked: 8 ok, 0 missing, 0 changed. 1 sample has no reference.")
+}
+
+// Samples imported without a reference get one in a single step, not one
+// edit dialog per sample; a sample whose update fails stays listed.
+func TestDataPageSetReferenceForMany(t *testing.T) {
+	a, f := dataOpen(t, "data_list_samples_mixed.json")
+	samples := f.ops["list_samples"]["samples"].([]any)
+	samples[0].(map[string]any)["reference_id"] = nil // SUB_REP1
+	samples[1].(map[string]any)["reference_id"] = nil // SUB_REP2
+	a.RefreshProject()
+	waitFlush(a)
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	dataClick(t, tt, a, "Set reference (2)…")
+	dataExpect(t, tt, "Set the reference of 2 samples", "SUB_REP1, SUB_REP2")
+	snapshot(t, tt, "data-set-reference")
+
+	f.updateErrors["SUB_REP2"] = "manifest is locked"
+	dataClick(t, tt, a, "Set reference")
+	calls := f.callsOf("update_sample")
+	if len(calls) != 2 {
+		t.Fatalf("update_sample calls %+v", calls)
+	}
+	for i, id := range []string{"SUB_REP1", "SUB_REP2"} {
+		changes := calls[i]["changes"].(core.Obj)
+		if calls[i]["sample_id"] != id || changes["reference_id"] != "ZAFR" || len(changes) != 1 {
+			t.Fatalf("call %d: %+v", i, calls[i])
+		}
+	}
+	// The failure is shown and only the failed sample is left in the dialog.
+	dataExpect(t, tt, "Set the reference of SUB_REP1. Could not set it for SUB_REP2: manifest is locked",
+		"Set the reference of 1 sample")
+
+	// Only samples that have none are offered: with a selection, its
+	// samples without one.
+	a.pages["data"].(*dataPage).setRef.open = false
+	samples[0].(map[string]any)["reference_id"] = "ZAFR"
+	a.RefreshProject()
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Set reference (1)…")
+	dataClick(t, tt, a, "Select AFR_REP1")
+	if tt.HasText("Set reference (1)…") {
+		t.Fatalf("offered for a selection that has a reference: %q", tt.Texts())
+	}
+	dataClick(t, tt, a, "Select SUB_REP2")
+	dataExpect(t, tt, "Set reference (1)…")
 }
 
 // Opening a project checks its input files quietly: a file that went

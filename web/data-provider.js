@@ -383,7 +383,7 @@
     }
     this.datasets.set(id, {
       id: id,
-      label: input.label || (summary.fileName ? String(summary.fileName).replace(/\.(hyb|txt)$/i, "") : id),
+      label: input.label || (summary.fileName ? String(summary.fileName).replace(/\.gz$/i, "").replace(/\.(hyb|txt)$/i, "") : id),
       fileName: input.fileName || summary.fileName || "",
       fileSize: input.fileSize == null ? (summary.fileSize == null ? null : summary.fileSize) : input.fileSize,
       sha256: input.sha256 || summary.sha256 || null,

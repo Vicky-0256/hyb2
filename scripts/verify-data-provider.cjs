@@ -8,9 +8,16 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const zlib = require("node:zlib");
 
 const repository = path.resolve(__dirname, "..");
 const web = function (file) { return path.join(repository, "web", file); };
+
+// the first 10,000 records of the included example's primary file
+function exampleText() {
+  const lines = zlib.gunzipSync(fs.readFileSync(web("assets/examples/zikv-virion/ZAFR_REP1_1in10.hyb.gz"))).toString("utf8").split("\n");
+  return lines.slice(0, 10000).join("\n") + "\n";
+}
 
 async function parseExample() {
   const parserContext = vm.createContext({
@@ -18,13 +25,13 @@ async function parseExample() {
     self: { postMessage: function () {} }
   });
   vm.runInContext(fs.readFileSync(web("parser.worker.js"), "utf8"), parserContext, { filename: "parser.worker.js" });
-  const text = fs.readFileSync(web("assets/examples/ZIKV_1-10807_example.hyb"), "utf8");
+  const text = exampleText();
   return new Promise(function (resolve, reject) {
     parserContext.self.postMessage = function (message) {
       if (message.type === "complete") resolve(message);
       if (message.type === "error") reject(new Error(message.message));
     };
-    parserContext.self.onmessage({ data: { file: new File([text], "ZIKV_1-10807_example.hyb", { type: "text/plain" }) } });
+    parserContext.self.onmessage({ data: { file: new File([text], "ZAFR_REP1_1in10.hyb", { type: "text/plain" }) } });
   });
 }
 
@@ -55,9 +62,9 @@ async function main() {
 
   const records = parsed.records.map(function (record, index) { record.index = index; return record; });
   const summary = parsed.summary;
-  const fastaText = fs.readFileSync(web("assets/examples/ZIKV_1-10807.fasta"), "utf8");
+  const fastaText = fs.readFileSync(web("assets/examples/zikv-virion/ZAFR.fasta"), "utf8");
   const sequences = data.parseFasta(fastaText);
-  const fasta = { fileName: "ZIKV_1-10807.fasta", fileSize: fastaText.length, sha256: "fasta-sha", sequences: sequences, mapping: data.buildFastaMapping(summary.rnaNames, sequences) };
+  const fasta = { fileName: "ZAFR.fasta", fileSize: fastaText.length, sha256: "fasta-sha", sequences: sequences, mapping: data.buildFastaMapping(summary.rnaNames, sequences) };
 
   // ---- Interface ----
   const provider = new api.BrowserProvider({ data: data });

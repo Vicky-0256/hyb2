@@ -27,6 +27,7 @@
   const STRUCTURE_RECORD_CHOICES = 500;
   const REPORT_TABLE_ROWS = 12;
   const CONTACT_MAX_CELLS = 250000;
+  const YIELD_AFTER_CELLS = 50000;
   const PAGE_IDS = ["overview", "interactions", "contact-map", "viewpoint", "region", "compare", "structure", "report"];
 
   function providerApi() {
@@ -152,6 +153,17 @@
       comparison.result = null;
       comparison.selection = null;
     }
+  }
+
+  // lets the page paint between long synchronous steps
+  function yieldToEventLoop() {
+    return new Promise(function (resolve) {
+      if (typeof root.setTimeout === "function") {
+        root.setTimeout(resolve, 0);
+      } else {
+        resolve();
+      }
+    });
   }
 
   function windowRows(interactions, start, count) {
@@ -454,9 +466,14 @@
       const datasets = (comparison.datasets || []).map(function (dataset) {
         return [dataset.id, dataset.condition, dataset.label];
       });
+      // each dataset's RNA pair (another strain's genome may stand in, see
+      // comparisonRnaPlan in analysis-data.js)
+      const pairs = data().comparisonRnaPlan(comparison).map(function (item) {
+        return [item.dataset.id, item.rnaX, item.rnaY];
+      });
       return [{
         name: "comparison",
-        key: baseKey() + "|" + stableKey(params) + "|" + stableKey(datasets),
+        key: baseKey() + "|" + stableKey(params) + "|" + stableKey(datasets) + "|" + stableKey(pairs),
         present: function () { return !!state.comparison && !!state.comparison.result; },
         fetch: function () {
           const assigned = (comparison.datasets || []).filter(function (dataset) {
@@ -467,11 +484,19 @@
           if (!comparison.rnaX || !comparison.rnaY || !hasA || !hasB) {
             return Promise.resolve(data().buildComparisonResults(comparison));
           }
-          // No maxCells here: every dataset must share one bin size.
-          const query = data().comparisonContactQuery(comparison);
-          return Promise.all(assigned.map(function (dataset) {
-            return provider.getContactBins({ datasetIds: [dataset.id] }, query);
-          })).then(function (binsList) {
+          // No maxCells here: every dataset must share one bin size.  One
+          // dataset at a time, yielding after large ones, so whole-genome
+          // maps do not hold the page for all datasets at once.
+          const binsList = [];
+          return assigned.reduce(function (chain, dataset) {
+            return chain.then(function () {
+              return provider.getContactBins({ datasetIds: [dataset.id] }, data().comparisonContactQuery(comparison, dataset));
+            }).then(function (bins) {
+              binsList.push(bins);
+              const more = binsList.length < assigned.length;
+              return more && bins.x && bins.x.length > YIELD_AFTER_CELLS ? yieldToEventLoop() : null;
+            });
+          }, Promise.resolve()).then(function () {
             const byId = Object.create(null);
             assigned.forEach(function (dataset, index) { byId[dataset.id] = binsList[index]; });
             return data().buildComparisonResults(Object.assign({}, comparison, {

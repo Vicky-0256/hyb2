@@ -101,12 +101,37 @@ self.onmessage = async function (event) {
   }
 };
 
+// gzip input (.hyb.gz) is recognised by its magic bytes, so a server that
+// already decoded a .gz download (Content-Encoding) is read as plain text
+async function isGzip(file) {
+  if (typeof file.slice !== "function" || file.size < 2) {
+    return false;
+  }
+  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  return head[0] === 0x1f && head[1] === 0x8b;
+}
+
 async function readFileInChunks(file, onChunk) {
   const decoder = new TextDecoder();
+  const gzip = await isGzip(file);
+
+  if (gzip && (typeof file.stream !== "function" || typeof DecompressionStream !== "function")) {
+    throw new Error("This browser cannot decompress gzip files; decompress " + (file.name || "the file") + " first.");
+  }
 
   if (typeof file.stream === "function") {
-    const reader = file.stream().getReader();
+    // progress counts compressed bytes read, so it stays within file.size
     let processedBytes = 0;
+    let stream = file.stream();
+    if (gzip) {
+      stream = stream.pipeThrough(new TransformStream({
+        transform: function (chunk, controller) {
+          processedBytes += chunk.byteLength;
+          controller.enqueue(chunk);
+        }
+      })).pipeThrough(new DecompressionStream("gzip"));
+    }
+    const reader = stream.getReader();
 
     while (true) {
       const next = await reader.read();
@@ -114,7 +139,9 @@ async function readFileInChunks(file, onChunk) {
         break;
       }
 
-      processedBytes += next.value.byteLength;
+      if (!gzip) {
+        processedBytes += next.value.byteLength;
+      }
       onChunk(decoder.decode(next.value, { stream: true }), processedBytes);
     }
 

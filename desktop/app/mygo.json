@@ -1,6 +1,6 @@
 {
   "name": "HYB2 Desktop",
   "identifier": "org.cplfold.hyb2.desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "out": "build"
 }

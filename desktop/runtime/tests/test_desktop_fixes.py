@@ -102,7 +102,7 @@ class UiStateAndVersionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("HYB2_APP_VERSION", None)
             manifest = json.loads(new_project(Path(tmp) / "p", "P").read_text())
-            self.assertEqual(manifest["application"]["version"], "0.1.2")
+            self.assertEqual(manifest["application"]["version"], "0.1.3")
 
 
 class RegisterTaskRunTests(unittest.TestCase):

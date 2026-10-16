@@ -115,10 +115,21 @@ it.
   energies), the structures as dot-bracket and the figure SVGs, with the same
   dictionary, provenance and manifest.
 
-Both packages carry `schema/summary.schema.json` (JSON Schema 2020-12 of
-`summary.json`) and, under `results/`, every structure as dot-bracket and as
-JSON with base pairs, coordinates and candidates. The input files are never
-included, only their names and digests.
+Both packages carry `schema/` with a JSON Schema (2020-12) for each HYB2
+JSON file (summary, provenance, data dictionary, evidence, structure; each
+file names its own in `$schema`) and, under `results/`, every structure as
+dot-bracket and as JSON with base pairs, coordinates and candidates.
+
+Every result also has a `nature` (count, setting, descriptive,
+statistical_test, prediction, derived_from_prediction, external_source),
+each step its completion time where the module keeps one, and the record a
+run id that changes when the inputs, settings, step results or completion
+times change. Explanatory notes cite the steps, results or sources they
+rest on. Unticking steps under Analysis status makes a "Selected results
+report": the page and every export leave those steps out and say so. The
+export panel lists each file's fields and lets the researcher leave files
+out; README.md and manifest.json record what was left out. The input files
+are never included, only their names and digests.
 `scripts/verify-results.cjs` checks that the report page, Markdown, JSON and
 tables agree; `verify-example.cjs` checks the record on the included example.
 

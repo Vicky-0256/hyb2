@@ -243,6 +243,27 @@ Object.keys(SYNTH).forEach(function (name) {
   assert.ok(out.every(Number.isFinite), "extrapolation stays finite");
 }
 
+// ---- locfit's span at a floating-point edge: the trend is fitted on 690
+// cells, 690 * 0.7 is 482.999... and locfit takes the 483rd nearest point
+// (golden bandwidth_690, R DESeq() defaults;
+// columns baseMean lfc padj dispFit dispersion)
+{
+  const golden = path.join(repository, "pipeline", "tests", "golden", "deseq", "bandwidth_690");
+  const lines = function (file) { return fs.readFileSync(golden + file, "utf8").trim().split("\n").slice(1).map(function (l) { return l.split("\t"); }); };
+  const counts = lines(".counts.tsv");
+  const expected = lines(".R.tsv");
+  const n = counts.length;
+  const table = new Float64Array(n * 6);
+  counts.forEach(function (row, i) { for (let j = 0; j < 6; j += 1) { table[i * 6 + j] = Number(row[j + 1]); } });
+  const r = D.deseqTwoConditions(table, n, 6, [true, true, true, false, false, false]);
+  assert.equal(r.fitType, "local");
+  expected.forEach(function (row, i) {
+    assert.equal(row[0], counts[i][0]);
+    close(r.dispFit[i], Number(row[4]), 1e-6, row[0] + " dispFit");
+    close(r.dispersion[i], Number(row[5]), 1e-6, row[0] + " dispersion");
+  });
+}
+
 // ---- the bucketed interaction split = the plain quadratic one
 {
   let s = 7;

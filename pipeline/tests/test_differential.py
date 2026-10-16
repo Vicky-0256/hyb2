@@ -14,6 +14,10 @@ counts are random rows of the reproduce_zikv comparisons:
   as counts) whose locfit trend is evaluated far above the fitted means (one
   strong block of cells), checking locfit's extrapolation (``dispFit``
   column).
+- ``bandwidth_690``: a synthetic 3 vs 3 table (R ``DESeq()`` defaults;
+  columns baseMean lfc padj dispFit dispersion) whose trend is
+  fitted on 690 cells: locfit's span 0.7 takes the floor(690 * 0.7) = 483rd
+  nearest point, though 690 * 0.7 is 482.999... in floating point.
 """
 import json
 import math
@@ -100,6 +104,15 @@ class DeseqMatchesR(unittest.TestCase):
         strong = [ids.index(cell) for cell in ("100_300", "100_310", "110_300", "110_310")]
         np.testing.assert_allclose(res["padj"][strong], r[strong, 4], rtol=1e-3)
         self.assertTrue(np.all(res["padj"][strong] < 0.01))
+
+
+    def test_local_fit_bandwidth_at_a_floating_point_edge(self):
+        ids, counts, one, expected = _load("bandwidth_690")
+        res = deseq.deseq_two_conditions(counts, one)
+        self.assertEqual(res["fitType"], "local")
+        r = np.array([expected[i] for i in ids])  # baseMean lfc padj dispFit dispersion
+        np.testing.assert_allclose(res["dispFit"], r[:, 3], rtol=1e-6)
+        np.testing.assert_allclose(res["dispersion"], r[:, 4], rtol=1e-6)
 
 
 class Helpers(unittest.TestCase):

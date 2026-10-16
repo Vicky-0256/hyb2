@@ -1431,7 +1431,8 @@
     const yv = new Float64Array(n);
     const w0 = new Float64Array(n);
     keep.forEach(function (i, k) { x[k] = Math.log(means[i]); yv[k] = Math.log(disps[i]); w0[k] = means[i]; });
-    const kk = Math.max(0, Math.min(n, Math.trunc(n * alphaSpan)) - 1);
+    // floor(n * alpha) as locfit gets it: 90 * 0.7 is 62.999… in floating point
+    const kk = Math.max(0, Math.min(n, Math.floor(n * alphaSpan + 1e-9)) - 1);
     const d = new Float64Array(n);
     const w = new Float64Array(n);
     const tmp = new Float64Array(n);

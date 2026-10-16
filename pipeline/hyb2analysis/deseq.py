@@ -629,7 +629,8 @@ def _local_fit(means: np.ndarray, disps: np.ndarray, query: np.ndarray, *, alpha
     yv = np.log(disps[keep])
     w0 = means[keep]
     n = len(x)
-    k = max(0, min(n, int(n * alpha)) - 1)  # the floor(n * alpha)-th nearest point
+    # the floor(n * alpha)-th nearest point; 90 * 0.7 is 62.999… in floating point
+    k = max(0, min(n, math.floor(n * alpha + 1e-9)) - 1)
 
     def vertex(x0: float) -> Tuple[float, float, float]:
         d = np.abs(x - x0)

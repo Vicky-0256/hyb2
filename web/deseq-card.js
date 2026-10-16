@@ -501,9 +501,14 @@
 
   // Abandon any run in progress: the worker is terminated and a pending
   // arms read, worker message or no-Worker timer finishing later is ignored.
-  function stop() {
+  // With the card's state, a running card goes back to idle.
+  function stop(deseq) {
     runToken += 1;
     stopWorker();
+    if (deseq && deseq.status === "running") {
+      deseq.status = "idle";
+      deseq.progress = "";
+    }
   }
 
   function run(state, api) {

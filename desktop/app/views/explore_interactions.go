@@ -345,12 +345,12 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 	all := []ui.TableColumn{
 		{Title: "#", Width: 64, Align: ui.End},
 		{Title: "Gene 1", MinWidth: 80},
-		{Title: "Arm 1", Width: 140, Align: ui.End},
+		{Title: "Arm 1 (nt)", Width: 140, Align: ui.End},
 		{Title: "Gene 2", MinWidth: 80},
-		{Title: "Arm 2", Width: 140, Align: ui.End},
+		{Title: "Arm 2 (nt)", Width: 140, Align: ui.End},
 		{Title: "Reads", Width: 64, Align: ui.End},
 		{Title: "Type", Width: 84},
-		{Title: "dG", Width: 56, Align: ui.End},
+		{Title: "ΔG (kcal/mol)", Width: 122, Align: ui.End},
 		{Title: "Sample", Width: 110},
 	}
 	var cols []ui.TableColumn

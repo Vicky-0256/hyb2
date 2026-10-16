@@ -291,9 +291,12 @@
           current.sequence += token;
         } else if (STRUCTURE_LINE.test(token)) {
           current.structure = token;
+          current.closed = line !== token; // an energy ends the structure
         }
-      } else if (!current.done && current.sequence && current.structure.length < current.sequence.length && STRUCTURE_LINE.test(token)) {
+      } else if (!current.done && !current.closed && STRUCTURE_LINE.test(token) &&
+        (!current.sequence || current.structure.length < current.sequence.length)) {
         current.structure += token;
+        current.closed = line !== token;
       } else {
         current.done = true;
       }

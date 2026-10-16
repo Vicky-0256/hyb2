@@ -77,6 +77,9 @@ function randomRNA(seed, n) {
     [[103, 107], [102, 108], [101, 109], [202, 205], [201, 206]]);
   assert.equal(dbn.sequence, "", "windows give no full-length sequence");
   assert.equal(dbn.length, 206);
+  const bare = arc.parseStructure(">x\n((((....\n))))\n", "w.dbn");
+  assert.equal(bare.length, 12, "a structure without a sequence may wrap");
+  assert.equal(bare.pairs.length, 4);
   const full = arc.parseStructure(">ZAFR\nGGGAAACCC\n(((...))) (-1.2)\n", "a.dbn");
   assert.equal(full.sequence, "GGGAAACCC");
   const ct = arc.parseStructure("6 test\n1 G 0 2 6 1\n2 G 1 3 5 2\n3 A 2 4 0 3\n4 A 3 5 0 4\n5 C 4 6 2 5\n6 C 5 0 1 6\n", "t.ct");

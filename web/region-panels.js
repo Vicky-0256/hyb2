@@ -623,7 +623,7 @@
       const top = 10 + index * (head + cellH + foot);
       const highlight = region.up ? c.one : c.two;
       const ch = region.chosen;
-      parts.push('<text x="10" y="' + (top + 16) + '" font-size="14" font-weight="700" fill="' + c.ink + '">' + "DEFGHIJ"[index] + "</text>");
+      parts.push('<text x="10" y="' + (top + 16) + '" font-size="14" font-weight="700" fill="' + c.ink + '">' + (region.label === "A" ? "D" : "E") + "</text>");
       parts.push('<text x="30" y="' + (top + 16) + '" font-size="13" font-weight="600" fill="' + c.ink + '">' +
         escapeXml("Region " + region.label + " · " + region.lineage + "-enriched #" + ch.rank + " · " + ch.a + "↔" + ch.b +
           " · log2FC " + Number(ch.log2FoldChange).toFixed(2) + " · padj " + Number(ch.padj).toExponential(2)) + "</text>");
@@ -653,7 +653,9 @@
       });
     });
     parts.push('<text x="10" y="' + (height - 8) + '" font-size="10" fill="' + c.muted + '">' +
-      escapeXml("Windows joined by a " + LINKER + "-nt unpaired linker (dashed, layout only); coloured lines = pairs between the windows; hollow = paired outside the windows.") + "</text>");
+      escapeXml((regions.some(function (r) { return r.panels.some(function (p) { return p.summary && !p.summary.merged; }); })
+        ? "Windows joined by a " + LINKER + "-nt unpaired linker (dashed, layout only); coloured lines = pairs between the windows; "
+        : "Overlapping windows drawn as one; ") + "hollow = paired outside the windows.") + "</text>");
     parts.push("</svg>");
     return parts.join("");
   }

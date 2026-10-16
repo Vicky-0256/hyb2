@@ -464,7 +464,7 @@ func (a *App) lookupPrefs(c *ui.Context) {
 		})
 	}
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		if ui.Button(c, "Test connection").Disabled(!p.lookup || p.testing).Tooltip("Start the RNAcentral connection and list its tools").Clicked() {
+		if ui.Button(c, "Test connection").Disabled(!p.lookup || p.testing).Tooltip("Start the RNAcentral helper on this computer and list its tools (RNAcentral itself is not contacted)").Clicked() {
 			a.testLookup()
 		}
 		if ui.Button(c, "Clear cache").Tooltip("Forget the RNAcentral answers kept on this computer").Clicked() {
@@ -503,11 +503,13 @@ func (a *App) testLookup() {
 				p.testMsg, p.testErr = "Connection failed: "+err.Error(), true
 				return
 			}
-			state := "Worker ready"
+			// The helper is a local process; RNAcentral itself is first asked
+			// by a lookup, so this says nothing about the internet connection.
+			state := "RNAcentral helper ready on this computer"
 			if status.Connected {
-				state = "Connected"
+				state = "RNAcentral helper running on this computer"
 			}
-			p.testMsg = fmt.Sprintf("%s · RNAcentral MCP server %s · MCP SDK %s · %s · tools: %s", state,
+			p.testMsg = fmt.Sprintf("%s · RNAcentral MCP server %s · MCP SDK %s · %s · tools: %s. This does not contact RNAcentral; the first lookup does.", state,
 				nameOr(status.ServerPackageVersion, "unknown"), nameOr(status.SDKVersion, "unknown"),
 				nameOr(status.AdapterVersion, "unknown adapter"), nameOr(strings.Join(status.Tools, ", "), "none"))
 		}

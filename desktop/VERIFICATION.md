@@ -34,3 +34,37 @@ Tauri verification (2026-10-08) is in git history.
   screen-recording or accessibility permission, so interaction was verified
   with the headless tester instead.
 - Signing and notarization (builds are ad-hoc signed).
+
+# New-user flow acceptance — 2026-10-16
+
+`flow_acceptance_test.go` (tag `e2e`) drives the native views over the real
+core and bundled runtime with real ZIKV reads (subsets of `ZAFR_REP1.fastq`
+and `ZAFR.fasta`), offline, and checks that task status, files on disk and
+the page agree at each step. Repeat it with:
+
+```bash
+# data: main/{ok,moved}_rep1.fastq (20k reads each), big_rep1.fastq (3M reads),
+#       broken_rep1.fastq.gz (truncated gzip), ZAFR.fasta; extra/noref_rep1.fastq
+cd desktop/app && go test -c -tags e2e -o /tmp/flow.test .
+HYB2_FLOW_DATA=<data> HYB2_FLOW_OUT=<empty dir> HYB2_SNAPSHOT_DIR=<dir> \
+  sandbox-exec -p '(version 1)(allow default)(deny network-outbound (remote ip))' \
+  /tmp/flow.test -test.run '^TestAcceptanceFlow$' -test.v
+```
+
+`<out>/flow-result.json` records every step; the PNGs are headless renders.
+
+| Case | Checked | Result |
+|---|---|---|
+| Success | task succeeded, map/hyb/index done, .hyb and index files exist, Explore shows the .hyb's 153 hybrids | Pass |
+| No reference | import warns, Check inputs counts it, row shows No reference, Run leaves it out and says so, no task | Pass |
+| Moved reads file | Check inputs shows missing + Relink; run fails with the reason in the row, map failed, no index | Pass after fix (was shown as pending) |
+| Failing task (truncated .gz) | task failed, map failed with the EOFError reason, Resume, no Explore, no index | Pass |
+| Cancel (3M reads, while mapping) | task cancelled, map cancelled, no .hyb/index, Resume | Pass |
+| Offline lookup | lookup shows RNAcentral error / nothing concluded, not "not found"; connection test does not claim RNAcentral was reached | Pass after fix (said "Connected") |
+| Reopen (new runtime, Recent projects) | every row keeps its status, Explore shows the same hybrids, Report says 5 (1 analysed) | Pass |
+| Damaged index | Explore shows "Could not load…", not an empty result | Pass |
+
+Also: the built app (`mygo build -skip-dmg` with the packed runtime) launched,
+unpacked its runtime, showed the start page in its real window (window
+capture by id) and stopped its sidecars on quit. Its window was not clicked:
+this host denies accessibility access to scripted input.

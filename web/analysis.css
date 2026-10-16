@@ -1290,3 +1290,11 @@
 .arcmap-figure { overflow-x: auto; margin: 12px 0; }
 .arcmap-figure svg { width: 100%; height: auto; display: block; border-radius: 8px; }
 .arcmap-file .quiet-button { align-self: flex-start; padding-left: 0; }
+
+/* Region structures (region-panels.js) and folding energy (folding-energy.js) */
+.region-panels-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin: 12px 0; }
+.region-panel { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.region-panel h3 { margin: 0; font-size: 1rem; }
+.region-panel select { max-width: 100%; }
+.region-figure, .energy-figure { overflow-x: auto; margin: 12px 0; }
+.region-figure svg, .energy-figure svg { width: 100%; height: auto; display: block; border-radius: 8px; }

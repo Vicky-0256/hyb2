@@ -1243,6 +1243,12 @@
     const feature = element.dataset.feature;
     const key = element.dataset.key;
 
+    // region structures (D, E) and folding energy (F, G) cards
+    if ((window.Hyb2RegionPanels && window.Hyb2RegionPanels.handleChange(state, element, api)) ||
+        (window.Hyb2FoldingEnergy && window.Hyb2FoldingEnergy.handleChange(state, element, api))) {
+      return true;
+    }
+
     if (feature === "arcmap-file" && window.Hyb2ArcMap) {
       const file = element.files && element.files[0];
       state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
@@ -1472,6 +1478,11 @@
     }
 
     if (window.Hyb2StructureUI && window.Hyb2StructureUI.handleAction(action, state, api, element)) {
+      return true;
+    }
+
+    if ((window.Hyb2RegionPanels && window.Hyb2RegionPanels.handleAction(state, element, api)) ||
+        (window.Hyb2FoldingEnergy && window.Hyb2FoldingEnergy.handleAction(state, element, api))) {
       return true;
     }
 

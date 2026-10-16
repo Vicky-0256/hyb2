@@ -171,6 +171,18 @@ func (d *dataFolderDialog) summary() string {
 		dataPlural(len(conditions), "condition", "conditions"), dataPlural(len(refs), "reference", "references"))
 }
 
+// withoutReference counts the included rows of reads with no reference
+// (a .hyb file is already mapped and needs none).
+func (d *dataFolderDialog) withoutReference() int {
+	n := 0
+	for _, r := range d.rows {
+		if r.include && r.reference == dataNoReference && !strings.HasSuffix(strings.ToLower(r.path), ".hyb") {
+			n++
+		}
+	}
+	return n
+}
+
 // problem is why Import is disabled, or "".
 func (d *dataFolderDialog) problem() string {
 	n := 0
@@ -224,6 +236,11 @@ func (p *dataPage) folderDialog(c *ui.Context) {
 				ui.Text(c, "Storage").TextColor(t.TextMuted)
 				ui.Select(c.Key("folder-mode"), &d.mode, dataStorageModes).Label("Storage").Width(260)
 			})
+			if n := d.withoutReference(); n == 1 {
+				ui.Text(c, "1 sample has no reference: it can be imported but not run until you set one.").TextColor(t.Warning)
+			} else if n > 1 {
+				ui.Text(c, fmt.Sprintf("%d samples have no reference: they can be imported but not run until you set one.", n)).TextColor(t.Warning)
+			}
 			if d.status != "" {
 				ui.Text(c, d.status).TextColor(t.TextMuted)
 			}

@@ -97,9 +97,37 @@
   }
 
   // Overlays that app.js re-creates on each render: animate only on the
-  // render where they first appear.
+  // render where they first appear. A closed overlay is simply missing from
+  // the new tree, so its last node is put back once to play the exit.
   const APPEARING = [".pop-layer", ".record-drawer", ".tweaks-panel"];
   const present = {};
+  const lastNode = {};
+  const INERT_ATTRS = ["id", "data-action", "data-feature-action", "data-dialog", "name", "for"];
+
+  function exitMs() {
+    return parseFloat(getComputedStyle(root).getPropertyValue("--dur-exit")) || 200;
+  }
+
+  // The copy lives outside #app, stripped of ids and actions, so no handler,
+  // query or focus trap mistakes it for the live overlay.
+  function playExit(node) {
+    if (!node || node.isConnected || motionReduced()) {
+      return;
+    }
+    [node].concat(Array.prototype.slice.call(node.querySelectorAll("*"))).forEach(function (el) {
+      INERT_ATTRS.forEach(function (name) {
+        el.removeAttribute(name);
+      });
+    });
+    node.classList.remove("is-appearing");
+    node.classList.add("is-leaving");
+    node.setAttribute("aria-hidden", "true");
+    node.inert = true;
+    document.body.appendChild(node);
+    window.setTimeout(function () {
+      node.remove();
+    }, exitMs() + 40);
+  }
 
   function markAppearing() {
     APPEARING.forEach(function (selector) {
@@ -107,7 +135,11 @@
       if (node && !present[selector] && !motionReduced()) {
         node.classList.add("is-appearing");
       }
+      if (!node && present[selector]) {
+        playExit(lastNode[selector]);
+      }
       present[selector] = !!node;
+      lastNode[selector] = node;
     });
   }
 

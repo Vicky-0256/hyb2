@@ -9,9 +9,24 @@
  */
 
 :root {
+  /* Motion tokens: every duration, easing and stagger in motion.css and
+     interaction.css comes from here. Enter with ease-out, leave with ease-in
+     in about half the time, move with ease-in-out. The spring overshoots,
+     so it drives position and size only, never opacity or colour. */
   --ease-out: cubic-bezier(.16, 1, .3, 1);
-  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --ease-in: cubic-bezier(.5, 0, .75, 0);
   --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --dur-press: 80ms;
+  --dur-feedback: 150ms;
+  --dur-quick: 240ms;
+  --dur-move: 400ms;
+  --dur-hero: 750ms;
+  --dur-reveal: 1000ms;
+  --dur-exit: 200ms;
+  --stagger-word: 90ms;
+  --stagger-item: 60ms;
+  --stagger-list: 30ms;
   --hero-aura-a: color-mix(in srgb, var(--teal) 22%, transparent);
   --hero-aura-b: color-mix(in srgb, var(--violet) 16%, transparent);
   --stage-surface: color-mix(in srgb, var(--surface) 72%, transparent);
@@ -100,7 +115,6 @@
   background: var(--primary);
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 60%, transparent);
   content: "";
-  animation: beacon 2.4s var(--ease-out) infinite;
 }
 
 @keyframes beacon {
@@ -131,16 +145,10 @@
 .headline-accent .headline-inner {
   background: var(--gradient-ink);
   background-size: 220% 100%;
-  background-position: 100% 0;
+  background-position: 50% 0;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: ink-sheen 9s var(--ease-in-out) 2.2s infinite;
-}
-
-@keyframes ink-sheen {
-  0%, 100% { background-position: 100% 0; }
-  50% { background-position: 0% 0; }
 }
 
 .landing-copy h1 .headline-line,
@@ -165,7 +173,7 @@
   background: color-mix(in srgb, var(--surface) 78%, transparent);
   font-size: 13px;
   white-space: nowrap;
-  transition: border-color 200ms var(--ease-out), transform 200ms var(--ease-out), background 200ms var(--ease-out);
+  transition: border-color var(--dur-feedback) var(--ease-out), transform var(--dur-quick) var(--ease-out), background var(--dur-feedback) var(--ease-out);
 }
 
 .promise-list li:hover {
@@ -197,17 +205,6 @@
   overflow: hidden;
 }
 
-.hero-stage::after {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: linear-gradient(115deg, transparent 30%, color-mix(in srgb, var(--surface) 55%, transparent) 50%, transparent 70%);
-  background-size: 250% 100%;
-  background-position: 150% 0;
-  content: "";
-  pointer-events: none;
-}
-
 .hero-stage-caption {
   display: flex;
   align-items: center;
@@ -237,7 +234,6 @@
   border-radius: 50%;
   background: currentColor;
   content: "";
-  animation: beacon 2.4s var(--ease-out) infinite;
 }
 
 .hero-stage-canvas {
@@ -336,19 +332,13 @@
   position: absolute;
   inset: 0 0 auto;
   height: 3px;
-  background: linear-gradient(90deg, var(--teal), var(--violet), var(--teal));
-  background-size: 200% 100%;
+  background: linear-gradient(90deg, var(--teal), var(--violet));
   content: "";
-  animation: rail-flow 6s linear infinite;
-}
-
-@keyframes rail-flow {
-  to { background-position: -200% 0; }
 }
 
 .web-capability-card {
   border-radius: 12px;
-  transition: border-color 240ms var(--ease-out), box-shadow 240ms var(--ease-out), transform 240ms var(--ease-out);
+  transition: border-color var(--dur-quick) var(--ease-out), box-shadow var(--dur-quick) var(--ease-out), transform var(--dur-quick) var(--ease-out);
 }
 
 .web-capability-card:hover {
@@ -378,7 +368,7 @@
   content: "";
   opacity: 0;
   pointer-events: none;
-  transition: opacity 200ms var(--ease-out);
+  transition: opacity var(--dur-feedback) var(--ease-out);
   animation: ants 900ms linear infinite paused;
 }
 
@@ -417,7 +407,7 @@
   position: relative;
   overflow: hidden;
   isolation: isolate;
-  transition: background 180ms var(--ease-out), box-shadow 220ms var(--ease-out), transform 260ms var(--ease-spring);
+  transition: background var(--dur-feedback) var(--ease-out), box-shadow var(--dur-quick) var(--ease-out), transform var(--dur-quick) var(--ease-spring);
 }
 
 .button:not(.button-secondary):not(.button-danger)::after {
@@ -432,7 +422,7 @@
 
 .button:not(.button-secondary):not(.button-danger):hover::after {
   transform: translateX(120%);
-  transition: transform 700ms var(--ease-out);
+  transition: transform var(--dur-hero) var(--ease-out);
 }
 
 .button:hover {
@@ -441,7 +431,7 @@
 
 .button:active {
   transform: translateY(1px) scale(.98);
-  transition-duration: 80ms;
+  transition-duration: var(--dur-press);
 }
 
 [data-magnetic] {
@@ -453,7 +443,7 @@
   position: relative;
   overflow: hidden;
   background: linear-gradient(90deg, var(--teal), var(--violet));
-  transition: width 260ms var(--ease-out);
+  transition: width var(--dur-quick) var(--ease-out);
 }
 
 .progress-bar > span::after {
@@ -476,7 +466,7 @@
 /* Prepared panel: Enter analysis glows once it is the next move. */
 .prepared-next-step .button {
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 45%, transparent);
-  animation: invite 2.6s var(--ease-out) 1.2s infinite;
+  animation: invite 2.6s var(--ease-out) 1.2s 3;
 }
 
 @keyframes invite {
@@ -488,14 +478,17 @@
 /* Scene: landing intro (first paint)                                  */
 /* ------------------------------------------------------------------ */
 
-@keyframes rise {
-  from { opacity: 0; transform: translate3d(0, 18px, 0); }
-  to { opacity: 1; transform: none; }
+/* Entrances follow one rule per scene: a single hero move, everything
+   else fades in place 100-200 ms behind it. Fading and sliding every
+   element at once reads as a generic template. */
+
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-@keyframes rise-blur {
-  from { opacity: 0; filter: blur(8px); transform: translate3d(0, 26px, 0) scale(.985); }
-  to { opacity: 1; filter: blur(0); transform: none; }
+@keyframes fade-out {
+  to { opacity: 0; }
 }
 
 @keyframes line-up {
@@ -503,9 +496,9 @@
   to { transform: none; }
 }
 
-@keyframes fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
+@keyframes settle {
+  from { transform: translate3d(0, 12px, 0) scale(.985); }
+  to { transform: none; }
 }
 
 @keyframes scale-x {
@@ -513,15 +506,9 @@
   to { transform: scaleX(1); }
 }
 
-@keyframes scale-y {
-  from { transform: scaleY(0); }
-  to { transform: scaleY(1); }
-}
-
 @keyframes pop {
-  0% { opacity: 0; transform: scale(.4); }
-  60% { opacity: 1; transform: scale(1.12); }
-  100% { opacity: 1; transform: scale(1); }
+  from { transform: scale(.4); }
+  to { transform: scale(1); }
 }
 
 @keyframes check-draw {
@@ -529,117 +516,78 @@
   to { clip-path: inset(0 0 0 0); }
 }
 
-@keyframes sheen-pass {
-  from { background-position: 150% 0; }
-  to { background-position: -50% 0; }
-}
-
-.motion-intro .landing-header {
-  animation: rise 700ms var(--ease-out) both;
-}
-
-.motion-intro .eyebrow {
-  animation: rise 700ms var(--ease-out) 120ms both;
-}
-
+/* Hero: the two headline lines, a word-stagger apart. */
 .motion-intro .headline-line:nth-child(1) .headline-inner {
-  animation: line-up 1000ms var(--ease-out) 200ms both;
+  animation: line-up var(--dur-reveal) var(--ease-out) 120ms both;
 }
 
 .motion-intro .headline-line:nth-child(2) .headline-inner {
-  animation: line-up 1000ms var(--ease-out) 320ms both, ink-sheen 9s var(--ease-in-out) 2.2s infinite;
-}
-
-.motion-intro .landing-lede {
-  animation: rise 800ms var(--ease-out) 520ms both;
-}
-
-.motion-intro .promise-list li {
-  animation: rise 700ms var(--ease-out) both;
-}
-
-.motion-intro .promise-list li:nth-child(1) { animation-delay: 640ms; }
-.motion-intro .promise-list li:nth-child(2) { animation-delay: 700ms; }
-.motion-intro .promise-list li:nth-child(3) { animation-delay: 760ms; }
-
-.motion-intro .promise-list li::before {
-  animation: check-draw 420ms var(--ease-out) both;
-}
-
-.motion-intro .promise-list li:nth-child(1)::before { animation-delay: 900ms; }
-.motion-intro .promise-list li:nth-child(2)::before { animation-delay: 960ms; }
-.motion-intro .promise-list li:nth-child(3)::before { animation-delay: 1020ms; }
-
-.motion-intro .hero-stage {
-  animation: rise-blur 1000ms var(--ease-out) 720ms both;
-}
-
-.motion-intro .hero-stage::after {
-  animation: sheen-pass 1400ms var(--ease-in-out) 1500ms both;
+  animation: line-up var(--dur-reveal) var(--ease-out) calc(120ms + var(--stagger-word)) both;
 }
 
 .motion-intro .landing-main::before {
-  animation: scale-x 900ms var(--ease-out) 300ms both;
+  animation: scale-x var(--dur-hero) var(--ease-out) 120ms both;
 }
 
+/* The file panel is the call to action: it settles once, as one piece. */
 .motion-intro .landing-panel .file-card {
-  animation: rise-blur 1100ms var(--ease-out) 380ms both;
+  animation: settle var(--dur-hero) var(--ease-out) 240ms both, fade var(--dur-move) var(--ease-out) 240ms both;
 }
 
-.motion-intro .example-strip,
-.motion-intro .dropzone,
-.motion-intro .reference-upload,
-.motion-intro .file-card-inner > .privacy-note,
-.motion-intro .file-card-inner > .card-footnote {
-  animation: rise 700ms var(--ease-out) both;
+/* Everything else fades in place behind the hero. */
+.motion-intro .landing-header,
+.motion-intro .eyebrow {
+  animation: fade var(--dur-move) var(--ease-out) both;
 }
 
-.motion-intro .example-strip { animation-delay: 620ms; }
-.motion-intro .dropzone { animation-delay: 700ms; }
-.motion-intro .reference-upload { animation-delay: 780ms; }
-.motion-intro .file-card-inner > .privacy-note { animation-delay: 840ms; }
-.motion-intro .file-card-inner > .card-footnote { animation-delay: 880ms; }
+.motion-intro .landing-lede,
+.motion-intro .hero-stage {
+  animation: fade var(--dur-hero) var(--ease-out) 300ms both;
+}
+
+.motion-intro .promise-list li {
+  animation: fade var(--dur-move) var(--ease-out) both;
+  animation-delay: calc(420ms + var(--i, 0) * var(--stagger-item));
+}
+
+.motion-intro .promise-list li::before {
+  animation: check-draw var(--dur-move) var(--ease-out) both;
+  animation-delay: calc(600ms + var(--i, 0) * var(--stagger-item));
+}
+
+.motion-intro .promise-list li:nth-child(2) { --i: 1; }
+.motion-intro .promise-list li:nth-child(3) { --i: 2; }
 
 /* Cards below the fold reveal as they scroll in (motion.js toggles). */
 [data-reveal] {
-  transition: opacity 800ms var(--ease-out), transform 800ms var(--ease-out), filter 800ms var(--ease-out);
+  transition: opacity var(--dur-hero) var(--ease-out), transform var(--dur-hero) var(--ease-out);
 }
 
 [data-reveal]:not(.is-revealed) {
   opacity: 0;
-  filter: blur(4px);
-  transform: translate3d(0, 28px, 0);
+  transform: translate3d(0, 12px, 0);
 }
 
 .web-capability-card.is-revealed .web-capability-item {
-  animation: rise 520ms var(--ease-out) both;
+  animation: fade var(--dur-move) var(--ease-out) both;
+  animation-delay: calc(120ms + var(--i, 0) * var(--stagger-item));
 }
-
-.web-capability-card.is-revealed .web-capability-item:nth-child(1) { animation-delay: 120ms; }
-.web-capability-card.is-revealed .web-capability-item:nth-child(2) { animation-delay: 200ms; }
-.web-capability-card.is-revealed .web-capability-item:nth-child(3) { animation-delay: 280ms; }
-.web-capability-card.is-revealed .web-capability-item:nth-child(4) { animation-delay: 360ms; }
 
 .web-capability-card.is-revealed .web-capability-dot {
-  animation: pop 520ms var(--ease-spring) both;
+  animation: pop var(--dur-move) var(--ease-spring) both, fade var(--dur-feedback) var(--ease-out) both;
+  animation-delay: calc(240ms + var(--i, 0) * var(--stagger-item));
 }
 
-.web-capability-card.is-revealed .web-capability-item:nth-child(1) .web-capability-dot { animation-delay: 300ms; }
-.web-capability-card.is-revealed .web-capability-item:nth-child(2) .web-capability-dot { animation-delay: 420ms; }
-.web-capability-card.is-revealed .web-capability-item:nth-child(3) .web-capability-dot { animation-delay: 540ms; }
-.web-capability-card.is-revealed .web-capability-item:nth-child(4) .web-capability-dot { animation-delay: 660ms; }
+.web-capability-item:nth-child(2) { --i: 1; }
+.web-capability-item:nth-child(3) { --i: 2; }
+.web-capability-item:nth-child(4) { --i: 3; }
 
 /* ------------------------------------------------------------------ */
 /* Scene: landing panel changes (idle → loading → review)              */
 /* ------------------------------------------------------------------ */
 
 .motion-panel .landing-panel .file-card-inner {
-  animation: panel-swap 620ms var(--ease-out) both;
-}
-
-@keyframes panel-swap {
-  from { opacity: 0; filter: blur(6px); transform: translate3d(0, 14px, 0) scale(.985); }
-  to { opacity: 1; filter: blur(0); transform: none; }
+  animation: settle var(--dur-move) var(--ease-out) both, fade var(--dur-quick) var(--ease-out) both;
 }
 
 .motion-panel .prepared-file-row,
@@ -647,95 +595,83 @@
 .motion-panel .prepared-file-note,
 .motion-panel .prepared-next-step,
 .motion-panel .prepared-file-actions {
-  animation: rise 560ms var(--ease-out) both;
+  animation: fade var(--dur-move) var(--ease-out) both;
+  animation-delay: calc(120ms + var(--i, 0) * var(--stagger-item));
 }
 
-.motion-panel .prepared-file-row:nth-child(1) { animation-delay: 140ms; }
-.motion-panel .prepared-file-row:nth-child(2) { animation-delay: 220ms; }
-.motion-panel .prepared-file-note { animation-delay: 300ms; }
-.motion-panel .prepared-next-step { animation-delay: 380ms; }
-.motion-panel .prepared-file-actions { animation-delay: 440ms; }
-.motion-panel .parse-step:nth-child(1) { animation-delay: 80ms; }
-.motion-panel .parse-step:nth-child(2) { animation-delay: 130ms; }
-.motion-panel .parse-step:nth-child(3) { animation-delay: 180ms; }
-.motion-panel .parse-step:nth-child(4) { animation-delay: 230ms; }
-.motion-panel .parse-step:nth-child(5) { animation-delay: 280ms; }
+.motion-panel .prepared-file-row:nth-child(2) { --i: 1; }
+.motion-panel .prepared-file-note { --i: 2; }
+.motion-panel .prepared-next-step { --i: 3; }
+.motion-panel .prepared-file-actions { --i: 4; }
+.motion-panel .parse-step:nth-child(2) { --i: 1; }
+.motion-panel .parse-step:nth-child(3) { --i: 2; }
+.motion-panel .parse-step:nth-child(4) { --i: 3; }
+.motion-panel .parse-step:nth-child(5) { --i: 4; }
 
-.motion-panel .status-chip {
-  animation: pop 600ms var(--ease-spring) 260ms both;
-}
-
+.motion-panel .status-chip,
 .motion-panel .prepared-file-status.is-ready {
-  animation: pop 520ms var(--ease-spring) both;
+  animation: pop var(--dur-move) var(--ease-spring) both, fade var(--dur-feedback) var(--ease-out) both;
+  animation-delay: 240ms;
 }
 
-.motion-panel .prepared-file-row:nth-child(1) .prepared-file-status { animation-delay: 420ms; }
-.motion-panel .prepared-file-row:nth-child(2) .prepared-file-status { animation-delay: 500ms; }
+.motion-panel .prepared-file-row:nth-child(1) .prepared-file-status { animation-delay: 360ms; }
+.motion-panel .prepared-file-row:nth-child(2) .prepared-file-status { animation-delay: calc(360ms + var(--stagger-item)); }
 
 /* ------------------------------------------------------------------ */
 /* Scene: entering the workspace                                       */
 /* ------------------------------------------------------------------ */
 
-@keyframes drop-in {
-  from { opacity: 0; transform: translate3d(0, -100%, 0); }
-  to { opacity: 1; transform: none; }
-}
-
 @keyframes slide-in-left {
-  from { opacity: 0; transform: translate3d(-24px, 0, 0); }
-  to { opacity: 1; transform: none; }
+  from { transform: translate3d(-24px, 0, 0); }
+  to { transform: none; }
 }
 
-.motion-workspace .workspace-header {
-  animation: drop-in 640ms var(--ease-out) both;
+@keyframes rise-short {
+  from { transform: translate3d(0, 8px, 0); }
+  to { transform: none; }
 }
 
+/* Hero: the sidebar slides in as one block; its rows only fade. */
 .motion-workspace .sidebar {
-  animation: slide-in-left 700ms var(--ease-out) 80ms both;
+  animation: slide-in-left var(--dur-hero) var(--ease-out) both, fade var(--dur-move) var(--ease-out) both;
+}
+
+.motion-workspace .workspace-header,
+.motion-workspace .mobile-nav {
+  animation: fade var(--dur-move) var(--ease-out) both;
 }
 
 .motion-workspace .sidebar .nav-button,
 .motion-workspace .sidebar .sidebar-file,
 .motion-workspace .sidebar .nav-label,
 .motion-workspace .sidebar-footer {
-  animation: slide-in-left 520ms var(--ease-out) both;
-  animation-delay: calc(140ms + var(--stagger, 0) * 28ms);
+  animation: fade var(--dur-move) var(--ease-out) both;
+  animation-delay: calc(120ms + var(--stagger, 0) * var(--stagger-list));
 }
 
-.motion-workspace .mobile-nav {
-  animation: rise 600ms var(--ease-out) 200ms both;
-}
-
-/* ------------------------------------------------------------------ */
-/* Scene: workspace page change                                        */
-/* ------------------------------------------------------------------ */
-
+/* Page change: the heading is the hero; content fades in reading order,
+   and data bars grow, since their length is the information. */
 .motion-page .content-wrap > * > *,
 .motion-page .content-wrap > .page-heading {
-  animation: rise-short 460ms var(--ease-out) both;
-  animation-delay: calc(var(--stagger, 0) * 36ms);
-}
-
-@keyframes rise-short {
-  from { opacity: 0; transform: translate3d(0, 10px, 0); }
-  to { opacity: 1; transform: none; }
+  animation: fade var(--dur-move) var(--ease-out) both;
+  animation-delay: calc(var(--stagger, 0) * var(--stagger-list));
 }
 
 .motion-page .page-heading h1 {
-  animation: rise-short 520ms var(--ease-out) both;
+  animation: rise-short var(--dur-move) var(--ease-out) both;
 }
 
 .motion-page .metric-card,
 .motion-page .data-card {
-  animation: rise-short 520ms var(--ease-out) both;
-  animation-delay: calc(60ms + var(--stagger, 0) * 45ms);
+  animation: fade var(--dur-move) var(--ease-out) both;
+  animation-delay: calc(var(--stagger-item) + var(--stagger, 0) * var(--stagger-list));
 }
 
 .motion-page .bar-fill,
 .motion-page .type-meter > span {
   transform-origin: left center;
-  animation: scale-x 1100ms var(--ease-out) both;
-  animation-delay: calc(260ms + var(--stagger, 0) * 70ms);
+  animation: scale-x var(--dur-reveal) var(--ease-out) both;
+  animation-delay: calc(240ms + var(--stagger, 0) * var(--stagger-item));
 }
 
 /* Thin indeterminate rail while a page refreshes its data. */
@@ -781,7 +717,7 @@
 }
 
 .nav-button::before {
-  transition: height 240ms var(--ease-spring), background 200ms var(--ease-out);
+  transition: height var(--dur-quick) var(--ease-spring), background var(--dur-feedback) var(--ease-out);
 }
 
 .nav-button:hover:not(.is-active)::before {
@@ -791,7 +727,7 @@
 
 /* Cards: quiet lift on hover, only where they are tappable summaries. */
 .metric-card {
-  transition: transform 260ms var(--ease-out), box-shadow 260ms var(--ease-out), border-color 260ms var(--ease-out);
+  transition: transform var(--dur-quick) var(--ease-out), box-shadow var(--dur-quick) var(--ease-out), border-color var(--dur-quick) var(--ease-out);
 }
 
 .metric-card:hover {
@@ -804,51 +740,77 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Dialogs and toasts get a little spring. */
-/* Overlays are re-created on every render, so motion.js adds .is-appearing
-   only on the render where they first show up. */
+/* Overlays. app.js re-creates them on every render, so motion.js adds
+   .is-appearing only on the render where one first shows up, and replays
+   the last copy of a closed one with .is-leaving. */
 .pop-layer {
   -webkit-backdrop-filter: blur(3px);
   backdrop-filter: blur(3px);
 }
 
-.pop-layer.is-appearing {
-  animation: fade 220ms var(--ease-out) both;
+@keyframes dialog-in {
+  from { transform: translate3d(0, 16px, 0) scale(.96); }
+  to { transform: none; }
 }
 
-.pop-layer.is-appearing .dialog {
-  animation: dialog-in 420ms var(--ease-spring) both;
-}
-
-.record-drawer.is-appearing {
-  animation: drawer-in 460ms var(--ease-out) both;
+@keyframes dialog-out {
+  to { transform: translate3d(0, 8px, 0) scale(.98); }
 }
 
 @keyframes drawer-in {
-  from { opacity: 0; transform: translate3d(24px, 0, 0); }
-  to { opacity: 1; transform: none; }
+  from { transform: translate3d(24px, 0, 0); }
+  to { transform: none; }
 }
 
-@keyframes dialog-in {
-  from { opacity: 0; transform: translate3d(0, 16px, 0) scale(.96); }
-  to { opacity: 1; transform: none; }
+@keyframes drawer-out {
+  to { transform: translate3d(16px, 0, 0); }
 }
 
+.pop-layer.is-appearing {
+  animation: fade var(--dur-quick) var(--ease-out) both;
+}
+
+.pop-layer.is-appearing .dialog,
+.tweaks-panel.is-appearing {
+  animation: dialog-in var(--dur-move) var(--ease-spring) both, fade var(--dur-quick) var(--ease-out) both;
+}
+
+.record-drawer.is-appearing {
+  animation: drawer-in var(--dur-move) var(--ease-out) both, fade var(--dur-quick) var(--ease-out) both;
+}
+
+.is-leaving.pop-layer,
+.is-leaving.record-drawer,
+.is-leaving.tweaks-panel {
+  pointer-events: none;
+}
+
+.pop-layer.is-leaving {
+  animation: fade-out var(--dur-exit) var(--ease-in) both;
+}
+
+.pop-layer.is-leaving .dialog,
+.tweaks-panel.is-leaving {
+  animation: dialog-out var(--dur-exit) var(--ease-in) both, fade-out var(--dur-exit) var(--ease-in) both;
+}
+
+.record-drawer.is-leaving {
+  animation: drawer-out var(--dur-exit) var(--ease-in) both, fade-out var(--dur-exit) var(--ease-in) both;
+}
+
+/* The toast's base rule is its hidden state, so it carries the exit. */
 .toast {
-  transition: opacity 240ms var(--ease-out), transform 420ms var(--ease-spring);
+  transition: opacity var(--dur-exit) var(--ease-in), transform var(--dur-exit) var(--ease-in);
   transform: translate3d(0, 14px, 0) scale(.96);
 }
 
 .toast.is-visible {
+  transition: opacity var(--dur-quick) var(--ease-out), transform var(--dur-move) var(--ease-spring);
   transform: none;
 }
 
 .tweaks-panel {
   transform-origin: bottom right;
-}
-
-.tweaks-panel.is-appearing {
-  animation: dialog-in 380ms var(--ease-spring) both;
 }
 
 /* ------------------------------------------------------------------ */
@@ -897,10 +859,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .landing::after,
-  .eyebrow::before,
-  .hero-stage-live::before,
-  .file-card-inner::before,
-  .headline-accent .headline-inner,
   .prepared-next-step .button {
     animation: none !important;
   }

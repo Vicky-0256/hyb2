@@ -410,7 +410,7 @@
         finish();
       } else {
         layer.classList.add("is-leaving");
-        window.setTimeout(finish, 180);
+        window.setTimeout(finish, parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--dur-exit")) || 200);
       }
       if (!skipFocus && returnFocus && returnFocus.isConnected) {
         returnFocus.focus({ preventScroll: true });

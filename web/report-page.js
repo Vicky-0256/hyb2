@@ -130,9 +130,9 @@
       '      <details class="export-menu report-export-menu">',
       '        <summary class="button button-secondary">Export</summary>',
       '        <div class="export-menu-list" role="menu" aria-label="Export the report">',
-      Object.keys(EXPORT_TEXT).map(function (audience) {
-        return '          <button class="export-menu-item" type="button" role="menuitem" data-action="report-export" data-audience="' + audience + '">' + escape(EXPORT_TEXT[audience][0]) + "<small>" + escape(EXPORT_TEXT[audience][2]) + "</small></button>";
-      }).join(""),
+      '          <button class="export-menu-item" type="button" role="menuitem" data-action="report-export" data-audience="people">For people<small>' + escape(EXPORT_TEXT.people[2]) + "</small></button>",
+      '          <button class="export-menu-item" type="button" role="menuitem" data-action="report-export" data-audience="ai">For AI<small>' + escape(EXPORT_TEXT.ai[2]) + "</small></button>",
+      '          <button class="export-menu-item" type="button" role="menuitem" data-action="report-export" data-audience="analysis">For further analysis<small>' + escape(EXPORT_TEXT.analysis[2]) + "</small></button>",
       "        </div>",
       "      </details>",
       // inside the workspace the sidebar already returns; embedded and

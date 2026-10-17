@@ -277,6 +277,7 @@
 
 .comparison-dataset-table .compare-dataset-name {
   width: 28%;
+  min-width: 170px;
 }
 
 .comparison-dataset-table .compare-dataset-action {

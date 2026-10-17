@@ -1147,10 +1147,10 @@
     });
   }
 
-  // Compare sub-navigation: the section nearest the top (below the header
-  // and the sticky nav) is marked current.  The page is re-rendered often, so
+  // Compare sub-navigation: the section that has reached the top (below
+  // the header and the sticky nav) is marked current.  The page is re-rendered often, so
   // the observer is rebuilt each time and the last current section is kept.
-  let compareNavObserver = null;
+  let compareNavObservers = [];
   let compareNavCurrent = "";
 
   function markCompareNav(nav, id) {
@@ -1177,10 +1177,8 @@
   }
 
   function bindCompareNav() {
-    if (compareNavObserver) {
-      compareNavObserver.disconnect();
-      compareNavObserver = null;
-    }
+    compareNavObservers.forEach(function (observer) { observer.disconnect(); });
+    compareNavObservers = [];
     const nav = typeof document.querySelector === "function" ? document.querySelector(".compare-subnav") : null;
     if (!nav) {
       return;
@@ -1193,22 +1191,29 @@
       return;
     }
     const offset = Math.round(compareNavHeaderHeight() + (nav.getBoundingClientRect().height || 0));
-    const visible = new Map();
-    compareNavObserver = new IntersectionObserver(function (entries) {
-      entries.forEach(function (entry) {
-        if (entry.isIntersecting) {
-          visible.set(entry.target.id, entry.boundingClientRect.top);
-        } else {
-          visible.delete(entry.target.id);
+    // one observer on a 41-px band under the nav (a section's top crossing
+    // the line) and one on the whole view below it (a jump that moves
+    // sections past the band in one step); either way the current section is
+    // the last one whose top has reached the line
+    const update = function () {
+      // at the end of the page the last sections cannot reach the line:
+      // the last one in view is then current
+      const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+      const line = atEnd ? window.innerHeight - 80 : offset + 40;
+      let current = sections[0];
+      sections.forEach(function (section) {
+        if (section.getBoundingClientRect().top <= line) {
+          current = section;
         }
       });
-      // the first section (in page order) inside the band
-      const current = sections.find(function (section) { return visible.has(section.id); });
-      if (current) {
-        markCompareNav(nav, current.id);
-      }
-    }, { rootMargin: "-" + Math.max(0, offset) + "px 0px -55% 0px", threshold: 0 });
-    sections.forEach(function (section) { compareNavObserver.observe(section); });
+      markCompareNav(nav, current.id);
+    };
+    const below = Math.max(0, (window.innerHeight || 800) - offset - 41);
+    ["-" + offset + "px 0px -" + below + "px 0px", "-" + offset + "px 0px 0px 0px"].forEach(function (rootMargin) {
+      const observer = new IntersectionObserver(update, { rootMargin: rootMargin, threshold: 0 });
+      sections.forEach(function (section) { observer.observe(section); });
+      compareNavObservers.push(observer);
+    });
   }
 
   function compareNavHeaderHeight() {

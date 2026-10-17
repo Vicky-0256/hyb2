@@ -250,3 +250,10 @@
   font-weight: 650;
   line-height: 23px;
 }
+
+/* ---- D13 File format: the raw-reads (HYB2 Desktop) card sits above the
+   field table; reference pages have no grid gap between cards. */
+
+.format-raw-reads {
+  margin-bottom: 16px;
+}

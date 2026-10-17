@@ -40,7 +40,9 @@
       '        <div class="card-title-row"><h2>Data quality</h2><span class="card-kicker">Local validation</span></div>',
       '        <div class="quality-grid">',
       renderQualityStat(percentFormatter.format(validPercentage), "valid data rows"),
-      renderQualityStat(percentFormatter.format(dgPercentage), "include a numeric dG value"),
+      summary.withDg
+        ? renderQualityStat(percentFormatter.format(dgPercentage), "include a numeric dG value")
+        : renderQualityStat("Not provided", "numeric dG values in this file", "quality-stat--absent"),
       renderQualityStat(format(summary.homodimerRecords), "homodimer-proxy records (overlap ≥ 5)"),
       renderQualityStat(format(summary.invalidRecords), "invalid rows skipped"),
       "        </div>",
@@ -155,8 +157,8 @@
     ].join("");
   }
 
-  function renderQualityStat(value, label) {
-    return '<div class="quality-stat"><strong>' + escape(value) + "</strong><span>" + escape(label) + "</span></div>";
+  function renderQualityStat(value, label, modifier) {
+    return '<div class="quality-stat' + (modifier ? " " + modifier : "") + '"><strong>' + escape(value) + "</strong><span>" + escape(label) + "</span></div>";
   }
 
   function renderValidation(state) {

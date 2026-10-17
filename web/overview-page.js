@@ -122,7 +122,7 @@
       '          <div class="type-split">',
       types.slice(0, 4).map(function (item) { return renderType(item.name, item.records / total, item.records); }).join(""),
       "          </div>",
-      '          <button class="quiet-button" type="button" data-action="navigate" data-page="interactions">View interactions</button>',
+      '          <button class="quiet-button overview-types-link" type="button" data-action="navigate" data-page="interactions">View interactions</button>',
       "        </section>"
     ].join("");
   }

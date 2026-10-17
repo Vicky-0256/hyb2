@@ -147,3 +147,11 @@
     margin-top: 0;
   }
 }
+
+/* ---- D5 "View interactions": text starts on the card's content edge (the
+   button's 12px padding + 1px border pulled back), pinned to the card foot. */
+.overview-types-link {
+  align-self: flex-start;
+  margin-top: auto;
+  margin-left: -13px;
+}

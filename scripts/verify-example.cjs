@@ -273,7 +273,7 @@ async function compareWorkerPath(provider, comparison, expected) {
   sameComparison(fallback.comparison.result, expected, "fallback");
 }
 
-// ---- the comparison data table: one page per render from a cached order
+// ---- the comparison data table: one virtual-scroll window per render from a cached order
 let tableRenderMs = 0;
 function comparisonTableTiming(result) {
   const context = { window: { Hyb2Data: data }, document: documentStub, console: console, Intl: Intl };
@@ -282,16 +282,18 @@ function comparisonTableTiming(result) {
   vm.runInContext(fs.readFileSync(web("analysis-pages.js"), "utf8"), context, { filename: "analysis-pages.js" });
   const pages = context.window.Hyb2Pages;
   assert.equal(typeof pages.renderComparisonDataTable, "function", "analysis-pages.js exposes the data table renderer");
-  const comparison = { conditionALabel: "ZAFR", conditionBLabel: "ZASI", tableSort: "effect", tablePage: 0 };
+  const comparison = { conditionALabel: "ZAFR", conditionBLabel: "ZASI", tableSort: "effect", tableScrollTop: 0 };
   const first = pages.renderComparisonDataTable(result, comparison);
   // the first page equals the former cells.slice().sort(|effect|).slice(0, 150)
   const reference = result.cells.slice().sort(function (left, right) { return Math.abs(right.effect) - Math.abs(left.effect); }).slice(0, 150);
   const rows = data.comparisonOrderedCells(result, "effect", 0, 150);
   assert.ok(rows.every(function (cell, index) { return cell === reference[index]; }), "the data table keeps the |effect| order");
-  assert.equal((first.match(/<tr>/g) || []).length, 151, "one page of 150 bins");
+  const firstWindow = pages.comparisonTableWindow(result.cells.length, pages.comparisonRowHeight(), 0, 640);
+  assert.equal((first.match(/class="comparison-row/g) || []).length, firstWindow.count, "only the visible window of bins is rendered");
+  assert.ok(firstWindow.count > 0 && firstWindow.count < 60, "the window holds " + firstWindow.count + " bins, not the whole table");
   let slowest = 0;
   for (let round = 0; round < 5; round += 1) {
-    comparison.tablePage = round * 1000;
+    comparison.tableScrollTop = round * 150000 * pages.comparisonRowHeight();
     const started = process.hrtime.bigint();
     pages.renderComparisonDataTable(result, comparison);
     slowest = Math.max(slowest, Number(process.hrtime.bigint() - started) / 1e6);
@@ -299,7 +301,7 @@ function comparisonTableTiming(result) {
   tableRenderMs = slowest;
   assert.ok(slowest < 20, "a data table render after the first takes " + slowest.toFixed(1) + " ms (< 20 ms)");
   comparison.tableSort = "similarity";
-  comparison.tablePage = 0;
+  comparison.tableScrollTop = 0;
   pages.renderComparisonDataTable(result, comparison);
   const bySimilarity = data.comparisonOrderedCells(result, "similarity", 0, 50);
   const similarityReference = result.cells.slice().sort(function (left, right) { return right.similarity - left.similarity; }).slice(0, 50);
@@ -400,7 +402,7 @@ async function main() {
   log("Compare maps: " + result.cells.length + " cells, " + result.conservedCells.length + " similarity cells, cap " + result.similarityCap);
   await compareWorkerPath(provider, comparison, result);
   comparisonTableTiming(result);
-  log("comparison.worker.js gives the in-thread result; the data table renders a page in " + tableRenderMs.toFixed(1) + " ms");
+  log("comparison.worker.js gives the in-thread result; the data table renders a window in " + tableRenderMs.toFixed(1) + " ms");
   if (process.env.HYB2_EXAMPLE_QUICK) {
     return;
   }

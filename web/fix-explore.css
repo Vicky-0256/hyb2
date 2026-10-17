@@ -143,3 +143,27 @@
 .reference-panel .table-note {
   margin-top: 8px;
 }
+
+/* B12: Region records follow K3. Column widths: the ID narrow, the RNA
+   names share what is left; below 760px the table scrolls in its card
+   instead of folding names onto two lines */
+.region-records-table {
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.region-records-table th:nth-child(1) { width: 9%; }
+.region-records-table th:nth-child(2),
+.region-records-table th:nth-child(4) { width: 27%; }
+.region-records-table th:nth-child(3),
+.region-records-table th:nth-child(5) { width: 11%; }
+.region-records-table th:nth-child(6) { width: 8%; }
+.region-records-table th:nth-child(7) { width: 7%; }
+
+.region-records-table .cell-truncate {
+  max-width: none;
+}
+
+.region-records .card-title-row .export-menu-list {
+  right: 0;
+}

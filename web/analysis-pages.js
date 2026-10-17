@@ -326,9 +326,9 @@
 
   function renderContactDataTable(matrix) {
     return [
-      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead><tr><th>X position</th><th>Y position</th><th>Records</th><th>Cluster support</th></tr></thead><tbody>',
+      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">X position <span class="unit">(nt)</span></th><th class="num">Y position <span class="unit">(nt)</span></th><th class="num">Records</th><th class="num">Cluster support</th></tr></thead><tbody>',
       matrix.cells.slice().sort(function (left, right) { return right.value - left.value; }).slice(0, 100).map(function (cell) {
-        return "<tr><td>" + range(cell.x, cell.x + matrix.binSize - 1) + "</td><td>" + range(cell.y, cell.y + matrix.binSize - 1) + "</td><td>" + format(cell.records) + "</td><td>" + format(cell.support) + "</td></tr>";
+        return '<tr><td class="num">' + range(cell.x, cell.x + matrix.binSize - 1) + '</td><td class="num">' + range(cell.y, cell.y + matrix.binSize - 1) + '</td><td class="num">' + format(cell.records) + '</td><td class="num">' + format(cell.support) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>"
     ].join("");
@@ -467,9 +467,9 @@
 
   function renderViewpointDataTable(results) {
     return [
-      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead><tr><th>Start</th><th>End</th><th>Mean interaction coverage</th></tr></thead><tbody>',
+      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">Start <span class="unit">(nt)</span></th><th class="num">End <span class="unit">(nt)</span></th><th class="num">Mean interaction coverage</th></tr></thead><tbody>',
       results.bins.slice().sort(function (left, right) { return right.value - left.value; }).slice(0, 150).map(function (bin) {
-        return '<tr><td>' + format(bin.start) + '</td><td>' + format(bin.end) + '</td><td>' + format(bin.value) + '</td></tr>';
+        return '<tr><td class="num">' + format(bin.start) + '</td><td class="num">' + format(bin.end) + '</td><td class="num">' + format(bin.value) + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -729,7 +729,7 @@
     return [
       '<section class="region-partners"><div class="card-title-row"><h3>Top partners</h3><span class="card-kicker">Cluster support</span></div>',
       results.partners.length ? '<div class="bar-list">' + results.partners.slice(0, 8).map(function (partner) {
-        return '<div class="bar-row"><span class="bar-name">' + escape(partner.name) + '</span><span class="bar-track"><span class="bar-fill" style="width:' + Math.max(3, (partner.support / max) * 100) + '%"></span></span><span class="bar-value">' + format(partner.support) + "</span></div>";
+        return '<div class="bar-row"><span class="bar-name" title="' + attribute(partner.name) + '">' + escape(partner.name) + '</span><span class="bar-track"><span class="bar-fill" style="width:' + Math.max(3, (partner.support / max) * 100) + '%"></span></span><span class="bar-value">' + format(partner.support) + "</span></div>";
       }).join("") + "</div>" : '<p class="empty-inline">No matching interactions.</p>',
       "</section>"
     ].join("");
@@ -774,10 +774,16 @@
   function renderRegionRecords(records, showAll) {
     const limit = showAll ? 100 : 20;
     return [
-      '<section class="data-card"><div class="card-title-row"><h2>Matching records</h2><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="region-export-csv">Export CSV</button><button class="quiet-button" type="button" data-feature-action="region-export-hyb">Export HYB</button><button class="quiet-button" type="button" data-feature-action="region-export-params">Export parameters</button></div></div>',
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Sequence ID</th><th>RNA 1</th><th>Region 1</th><th>RNA 2</th><th>Region 2</th><th>Chimera type</th><th>Support</th></tr></thead><tbody>',
+      '<section class="data-card region-records"><div class="card-title-row"><h2>Matching records</h2><div class="inline-actions">' + renderExportMenu([
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-csv">Records · CSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-hyb">Records · HYB</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-params">Parameters · JSON</button>'
+      ]) + "</div></div>",
+      // K3: coordinates and counts right-aligned, long RNA names truncated
+      // with their full name in title, headers on one line
+      '<div class="data-table-wrap"><table class="data-table region-records-table"><thead class="nowrap"><tr><th>Sequence ID</th><th>RNA 1</th><th class="num">Region 1 <span class="unit">(nt)</span></th><th>RNA 2</th><th class="num">Region 2 <span class="unit">(nt)</span></th><th>Chimera type</th><th class="num">Support</th></tr></thead><tbody>',
       records.slice(0, limit).map(function (record) {
-        return "<tr><td>" + escape(record.id) + "</td><td>" + escape(record.rnaOne) + "</td><td>" + range(record.rnaOneStart, record.rnaOneEnd) + "</td><td>" + escape(record.rnaTwo) + "</td><td>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</td><td>" + escape(record.chimeraType) + "</td><td>" + format(record.supportCount) + "</td></tr>";
+        return '<tr><td class="cell-truncate" title="' + attribute(record.id) + '">' + escape(record.id) + '</td><td class="cell-truncate" title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + '</td><td class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + '</td><td class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + '</td><td class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + '</td><td class="cell-truncate" title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + '</td><td class="num">' + format(record.supportCount) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>",
       records.length > 20 ? '<div class="table-more"><button class="quiet-button" type="button" data-feature-action="region-toggle-records">' + (showAll ? "Show fewer records" : "Show " + format(Math.min(records.length, 100)) + " records") + '</button>' + (records.length > 100 && showAll ? '<span class="table-note">Showing the first 100 of ' + format(records.length) + " matching records. Export includes all local matches.</span>" : '<span class="table-note">Showing ' + format(Math.min(limit, records.length)) + " of " + format(records.length) + ". Export includes all local matches.</span>") + "</div>" : "",

@@ -18,12 +18,12 @@
 @media (min-width: 901px) {
   .structure-result.is-preparing {
     position: sticky;
-    top: calc(var(--header-h, 60px) + 16px);
+    top: calc(var(--header-h, 60px) + 12px);
   }
 }
 
 .structure-result .method-limit {
-  margin-top: 16px;
+  margin-top: 4px;
 }
 
 .cplfold-limits {
@@ -185,4 +185,21 @@
 /* Sequence above dot-bracket, each wide enough for a 50 nt line. */
 .structure-output-grid {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* Result in the half-width column: the algorithm badge stays one line and
+   drops under the title when the two do not fit side by side. */
+.structure-diagram-heading {
+  flex-wrap: wrap;
+}
+
+.structure-diagram-heading > div {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.structure-diagram-heading .method-badge {
+  flex: 0 0 auto;
+  max-width: 100%;
+  text-align: left;
 }

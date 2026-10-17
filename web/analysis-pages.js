@@ -33,7 +33,7 @@
         { value: "support", label: "Cluster support" },
         { value: "records", label: "Records" }
       ], "interaction-filter"),
-      renderTextControl("Search", "search", filters.search, "RNA, sequence ID, or sequence", "interaction-filter"),
+      renderTextControl("Search", "search", filters.search, "Search ID or RNA", "interaction-filter", "text", { title: "Matches an RNA name, sequence ID or hybrid sequence" }),
       "</div>",
       '<details class="advanced-filters" data-open-key="interactions-advanced"' + openAttr("interactions-advanced") + '><summary>Advanced filters</summary>',
       '<div class="control-grid advanced-grid">',
@@ -1492,7 +1492,8 @@
     const settings = options || {};
     const numericAttributes = (settings.min === undefined ? "" : ' min="' + attribute(settings.min) + '"') +
       (settings.max === undefined ? "" : ' max="' + attribute(settings.max) + '"') +
-      (settings.step === undefined ? "" : ' step="' + attribute(settings.step) + '"');
+      (settings.step === undefined ? "" : ' step="' + attribute(settings.step) + '"') +
+      (settings.title === undefined ? "" : ' title="' + attribute(settings.title) + '"');
     return [
       '<label class="control-field"><span>' + escape(label) + "</span>",
       '<input type="' + (type || "text") + '" value="' + attribute(value) + '" placeholder="' + attribute(placeholder) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '"' + numericAttributes + '>',

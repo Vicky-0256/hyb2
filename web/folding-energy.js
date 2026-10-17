@@ -506,7 +506,7 @@
       return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" value="' + esc(value) +
         '" placeholder="' + esc(placeholder || "") + '" data-feature="energy-control" data-key="' + key + '"' + (e.running ? " disabled" : "") + "></label>";
     };
-    const out = ['<section class="data-card folding-energy-card">',
+    const out = ['<section class="data-card folding-energy-card" id="folding-energy-card">',
       '<div class="card-title-row"><div><h2>F, G · Folding energy</h2><span class="card-note">RNAcofold of the two arms of every significant interaction, once with each lineage\'s sequence (A = condition one, B = condition two, at aligned positions), as violin plots with a paired t-test. ViennaRNA runs in this browser (WebAssembly).</span></div></div>',
       '<div class="comparison-control-grid">', control("padj <", "padj", e.padj, "0.01"), control("Fragment length per arm (nt)", "length", e.length, "40"),
       '<label class="control-field"><span>Temperature</span><input type="text" value="37 °C, default parameters" disabled></label></div>'];

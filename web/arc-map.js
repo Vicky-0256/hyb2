@@ -973,7 +973,7 @@
         "</select></label>";
     };
     const out = [
-      '<section class="data-card arcmap-card">',
+      '<section class="data-card arcmap-card" id="arcmap-card">',
       '<div class="card-title-row"><div><h2>C · Arc map</h2><span class="card-note">One or two structures, the differential interactions of a comparison and a gene track, as in a PARIS-style figure. Its padj cutoff is separate from the differential test\'s and also drives panels D to G. Files stay in this browser.</span></div></div>',
       '<div class="arcmap-files">',
       fileRow("a", "Structure A (.dbn / .ct)", ".dbn,.db,.ct,.txt", s.a ? s.a.name + " · " + formatNumber(s.a.pairs.length) + " pairs · " + formatNumber(s.a.length) + " nt" : ""),

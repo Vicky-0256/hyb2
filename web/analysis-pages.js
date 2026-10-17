@@ -466,7 +466,8 @@
       '<div class="inline-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + '<button class="button button-secondary" type="button" data-feature-action="comparison-download-svg">Download effect SVG</button><button class="button button-secondary" type="button" data-feature-action="comparison-download-png">Download effect PNG</button></div>',
       '</div>',
       '<section class="comparison-note notice notice-warning"><strong>What this page can and cannot tell you</strong><span>Only the <b>differential test</b> (panel A) says whether a contact differs between ' + escape(comparison.conditionALabel) + ' and ' + escape(comparison.conditionBLabel) + ': it uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell. It needs at least two biological replicates per condition. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R or the HYB2 command-line tool, use the exports under Map settings.</span></details></section>',
-      '<section class="data-card comparison-datasets">',
+      renderCompareNav(),
+      '<section class="data-card comparison-datasets" id="compare-sec-datasets">',
       canAddDatasets
         ? '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">The primary file is included as the first local dataset. Add one or more HYB files, then assign each to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ((comparison.datasets || []).length === 1 ? ' local file' : ' local files') + '</span></div>'
         : '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">Assign each project dataset to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ' datasets</span></div>',
@@ -479,7 +480,7 @@
       // the main question comes first: the DESeq2 test bins its own 10-nt
       // cells, independent of the map settings below
       window.Hyb2DeseqCard ? window.Hyb2DeseqCard.renderCard(state) : "",
-      '<section class="analysis-controls data-card">',
+      '<section class="analysis-controls data-card" id="compare-sec-maps">',
       '<div class="card-title-row"><div><h2>Map settings</h2><span class="card-note">These settings change the effect map, the similarity heatmap and their exports. The differential test above bins its own 10-nt cells and is not affected by Bin size, Measure or Normalisation.</span></div></div>',
       '<div class="comparison-control-grid">',
       renderTextControl("Condition A label", "conditionALabel", comparison.conditionALabel, "Condition A", "comparison-control"),
@@ -526,6 +527,22 @@
       window.Hyb2ArcMap && window.Hyb2FoldingEnergy ? window.Hyb2FoldingEnergy.renderCard(state.arcMap, state.regionPanels, state.foldingEnergy, escape) : "",
       '<section class="method-note"><strong>Method</strong><span>For each dataset, HYB arms are accumulated into fixed contact bins. Each condition uses the mean of its dataset-level counts, optionally scaled per million ' + normalisationUnit + '. The effect map reports log2((A + pseudocount) / (B + pseudocount)); it is a descriptive effect size, not a significance test. The similarity heatmap follows HYB2 plot_similarity_map and similarity_heatmap.R: each condition\'s datasets are summed into one raw contact map (as if their .hyb files were concatenated), bins below the similarity minimum are dropped from each map, and a bin present in both maps shows the smaller count.</span></section>'
     ].join("");
+  }
+
+  // in-page navigation: buttons, not links, so the hash route is untouched
+  // (analysis-ui.js comparison-jump scrolls; bindCompareNav highlights)
+  function renderCompareNav() {
+    const items = [["compare-sec-datasets", "Datasets"]];
+    if (window.Hyb2DeseqCard) { items.push(["deseq-card", "Differential test (A)"]); }
+    items.push(["compare-sec-maps", "Maps (B)"]);
+    if (window.Hyb2ArcMap) {
+      items.push(["arcmap-card", "Arc map (C)"]);
+      if (window.Hyb2RegionPanels) { items.push(["region-panels-card", "Regions (D, E)"]); }
+      if (window.Hyb2FoldingEnergy) { items.push(["folding-energy-card", "Energy (F, G)"]); }
+    }
+    return '<nav class="compare-subnav" aria-label="Compare page sections"><div class="compare-subnav-list">' + items.map(function (item) {
+      return '<button class="compare-subnav-item" type="button" data-feature-action="comparison-jump" data-target="' + item[0] + '">' + escape(item[1]) + '</button>';
+    }).join("") + '</div></nav>';
   }
 
   function renderComparisonDatasetTable(comparison) {

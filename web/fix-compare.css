@@ -1,1 +1,95 @@
 /* Owned by Agent C (Compare page). WEB_UI_FIX_PLAN.md: new rules for this agent go here, not at the end of other agents' files. */
+
+/* ---- C1 in-page navigation (renderCompareNav; analysis-ui.js bindCompareNav) */
+
+.compare-subnav {
+  position: sticky;
+  z-index: 8;
+  top: var(--header-h, 60px);
+  margin: 0 0 16px;
+  padding: 8px 0;
+  background: color-mix(in srgb, var(--canvas) 92%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.workspace-embedded .compare-subnav {
+  top: 0;
+}
+
+.compare-subnav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.compare-subnav-item {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-feedback) var(--ease-out), border-color var(--dur-feedback) var(--ease-out), color var(--dur-feedback) var(--ease-out);
+}
+
+.compare-subnav-item:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.compare-subnav-item:focus-visible {
+  outline: 2px solid var(--primary-ink);
+  outline-offset: 2px;
+}
+
+.compare-subnav-item.is-current {
+  border-color: var(--primary-ink);
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+}
+
+/* a section reached from the navigation is focused, not outlined */
+#compare-sec-datasets:focus,
+#compare-sec-maps:focus,
+#deseq-card:focus,
+#arcmap-card:focus,
+#region-panels-card:focus,
+#folding-energy-card:focus {
+  outline: none;
+}
+
+@media (max-width: 767px) {
+  .compare-subnav {
+    margin: 0 -16px 16px;
+    padding: 8px 16px;
+  }
+
+  /* phone: one row of chips that scrolls sideways */
+  .compare-subnav-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  }
+
+  .compare-subnav-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  .compare-subnav-item {
+    flex: 0 0 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compare-subnav-item {
+    transition: none;
+  }
+}

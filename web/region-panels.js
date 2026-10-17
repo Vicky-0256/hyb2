@@ -676,7 +676,7 @@
         '</span> <button class="quiet-button" type="button" data-feature-action="regions-fasta-clear" data-key="' + key + '">Remove</button>' : "") +
         (r.errors && r.errors[key] ? '<p class="notice notice-error">' + esc(r.errors[key]) + "</p>" : "") + "</div>";
     };
-    const out = ['<section class="data-card region-panels-card">',
+    const out = ['<section class="data-card region-panels-card" id="region-panels-card">',
       '<div class="card-title-row"><div><h2>D, E · Region structures</h2><span class="card-note">For each direction, the most significant interaction that the enriched lineage\'s own structure forms (a predicted pair within reach of both arms), cut from both structures loaded in the Arc map card. Structure A is condition one\'s lineage, B is condition two\'s.</span></div></div>',
       '<div class="comparison-control-grid">', control("padj <", "padj", r.padj, "0.01"), control("Reach (nt)", "reach", r.reach, "50"), control("Flank (nt)", "flank", r.flank, "15"), "</div>"];
     const needsFasta = s.a && s.b && (!s.a.sequence || !s.b.sequence);

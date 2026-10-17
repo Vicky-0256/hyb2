@@ -1110,6 +1110,7 @@
   }
 
   function bindComparisonCanvases(state, api) {
+    bindCompareNav();
     const result = state.comparison && state.comparison.result;
     if (!result || !result.ready) {
       return;
@@ -1144,6 +1145,105 @@
         }
       });
     });
+  }
+
+  // Compare sub-navigation: the section nearest the top (below the header
+  // and the sticky nav) is marked current.  The page is re-rendered often, so
+  // the observer is rebuilt each time and the last current section is kept.
+  let compareNavObserver = null;
+  let compareNavCurrent = "";
+
+  function markCompareNav(nav, id) {
+    compareNavCurrent = id || compareNavCurrent;
+    let active = null;
+    Array.from(nav.querySelectorAll(".compare-subnav-item")).forEach(function (item) {
+      const on = item.dataset.target === compareNavCurrent;
+      item.classList.toggle("is-current", on);
+      if (on) {
+        item.setAttribute("aria-current", "true");
+        active = item;
+      } else {
+        item.removeAttribute("aria-current");
+      }
+    });
+    // on a phone the chips scroll sideways: keep the current one in view
+    const list = nav.querySelector(".compare-subnav-list");
+    if (active && list && list.scrollWidth > list.clientWidth) {
+      const left = active.offsetLeft - list.offsetLeft;
+      if (left < list.scrollLeft || left + active.offsetWidth > list.scrollLeft + list.clientWidth) {
+        list.scrollLeft = Math.max(0, left - 16);
+      }
+    }
+  }
+
+  function bindCompareNav() {
+    if (compareNavObserver) {
+      compareNavObserver.disconnect();
+      compareNavObserver = null;
+    }
+    const nav = typeof document.querySelector === "function" ? document.querySelector(".compare-subnav") : null;
+    if (!nav) {
+      return;
+    }
+    const sections = Array.from(nav.querySelectorAll(".compare-subnav-item")).map(function (item) {
+      return document.getElementById(item.dataset.target);
+    }).filter(Boolean);
+    markCompareNav(nav, compareNavCurrent || (sections[0] && sections[0].id));
+    if (typeof IntersectionObserver !== "function" || !sections.length) {
+      return;
+    }
+    const offset = Math.round(compareNavHeaderHeight() + (nav.getBoundingClientRect().height || 0));
+    const visible = new Map();
+    compareNavObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          visible.set(entry.target.id, entry.boundingClientRect.top);
+        } else {
+          visible.delete(entry.target.id);
+        }
+      });
+      // the first section (in page order) inside the band
+      const current = sections.find(function (section) { return visible.has(section.id); });
+      if (current) {
+        markCompareNav(nav, current.id);
+      }
+    }, { rootMargin: "-" + Math.max(0, offset) + "px 0px -55% 0px", threshold: 0 });
+    sections.forEach(function (section) { compareNavObserver.observe(section); });
+  }
+
+  function compareNavHeaderHeight() {
+    if (document.querySelector(".workspace-embedded")) {
+      return 0;
+    }
+    return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--header-h")) || 60;
+  }
+
+  // instant scroll in the next frame: a smooth scroll is cut short when the
+  // page re-renders (as the report's report-jump)
+  function jumpToCompareSection(id) {
+    const target = document.getElementById(id);
+    if (!target) {
+      return;
+    }
+    const nav = document.querySelector(".compare-subnav");
+    const go = function () {
+      const header = compareNavHeaderHeight();
+      const navHeight = nav ? nav.getBoundingClientRect().height : 0;
+      const top = target.getBoundingClientRect().top + window.scrollY - header - navHeight - 12;
+      window.scrollTo({ top: Math.max(0, top), behavior: "instant" });
+      if (nav) {
+        markCompareNav(nav, id);
+      }
+      if (!target.hasAttribute("tabindex")) {
+        target.setAttribute("tabindex", "-1");
+      }
+      target.focus({ preventScroll: true });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(go);
+    } else {
+      go();
+    }
   }
 
   function drawComparisonCanvas(state, canvas, kind) {
@@ -2107,6 +2207,11 @@
       state.comparison.result = null;
       state.comparison.selection = null;
       api.render();
+      return true;
+    }
+
+    if (action === "comparison-jump") {
+      jumpToCompareSection(element.dataset.target);
       return true;
     }
 

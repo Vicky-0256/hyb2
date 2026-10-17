@@ -1073,7 +1073,7 @@
       : "";
     return [
       sequenceInfo.assembly ? renderAssemblyPreview(sequenceInfo.assembly, sequenceInfo.evidenceKind) : "",
-      '<code class="structure-sequence">' + escape(wrapSequence(sequenceInfo.sequence, 70)) + "</code>",
+      renderSequenceBlocks(sequenceInfo.sequence, "structure-sequence"),
       '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="structure-download-fasta">Download FASTA</button>' + localCplfoldInput + "</div>"
     ].join("");
   }
@@ -1128,7 +1128,7 @@
       guided ? renderComradesResult(result) : (cplfold ? renderCplfoldResult(result) : ""),
       renderStructureDiagramPanel(result, activeView, cplfold, allowPseudoknot, guided, manualConstrained, inspectorInstruction),
       renderNucleotideInspector(result, selectedNucleotide),
-      '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span><code class="structure-output-code">' + escape(wrapSequence(result.sequence, 64)) + '</code></div><div><span class="drawer-kicker">Dot-bracket</span><code class="structure-output-code">' + escape(wrapSequence(result.dotBracket, 64)) + "</code></div></section>",
+      '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span>' + renderSequenceBlocks(result.sequence, "structure-output-code") + '</div><div><span class="drawer-kicker">Dot-bracket</span>' + renderSequenceBlocks(result.dotBracket, "structure-output-code") + "</div></section>",
       '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button><button class="button button-secondary" type="button" data-feature-action="download-structure-dot-bracket">Download DBN</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ct">Download CT</button><button class="button button-secondary" type="button" data-feature-action="download-structure-pairs">Download base pairs</button>' + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>' : "") + (guided ? '<button class="button button-secondary" type="button" data-feature-action="download-structure-evidence">Download evidence</button><button class="button button-secondary" type="button" data-feature-action="download-structure-constraints">Download constraints</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ensemble">Download ensemble</button>' : "") + (cplfoldHasEvidence ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-evidence">Download bonus matrix</button>' : "") + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-candidates">Download candidates</button>' : "") + '<button class="button button-secondary" type="button" data-feature-action="download-structure-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-png">Download PNG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-report">Download report</button></div>',
       '<details class="base-pair-details"><summary>Base-pair list (' + format(pairs.length) + ")</summary>" + (pairs.length ? '<ol class="base-pair-list">' + pairs.map(function (pair) {
         const isHardConstraint = requestedPairs.has(pair.left + ":" + pair.right);
@@ -1733,12 +1733,20 @@
     return string.length > length ? string.slice(0, length) + "…" : string;
   }
 
-  function wrapSequence(sequence, length) {
-    const pieces = [];
-    for (let index = 0; index < sequence.length; index += length) {
-      pieces.push(sequence.slice(index, index + length));
+  // Sequence text in lines of 50, groups of 10, each line led by the
+  // 1-based position of its first character; monospaced. The copy and
+  // download actions use the plain sequence, not this text.
+  function renderSequenceBlocks(sequence, className) {
+    const text = String(sequence || "");
+    const lines = [];
+    for (let start = 0; start < text.length; start += 50) {
+      const groups = [];
+      for (let index = start; index < Math.min(text.length, start + 50); index += 10) {
+        groups.push(text.slice(index, Math.min(index + 10, start + 50)));
+      }
+      lines.push('<span class="seq-line"><span class="seq-pos" aria-hidden="true">' + (start + 1) + '</span><span class="seq-text">' + escape(groups.join(" ")) + "</span></span>");
     }
-    return pieces.join("\n");
+    return '<code class="' + className + ' sequence-blocks" style="--seq-pos-ch:' + String(Math.max(1, text.length)).length + '">' + lines.join("") + "</code>";
   }
 
   function format(value) {

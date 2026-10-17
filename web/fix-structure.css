@@ -141,3 +141,48 @@
   outline: 3px solid color-mix(in srgb, var(--primary) 55%, transparent);
   outline-offset: 2px;
 }
+
+/* ------------------------------------------------------------------ */
+/* E6. Sequences in groups of 10, 50 a line, each line led by its       */
+/* position; long lines scroll inside the box rather than re-wrap       */
+/* ------------------------------------------------------------------ */
+
+.sequence-blocks {
+  display: grid;
+  align-content: start;
+  overflow-x: auto;
+  overflow-wrap: normal;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.sequence-blocks .seq-line {
+  display: flex;
+  gap: 1.5ch;
+}
+
+.sequence-blocks .seq-pos {
+  flex: 0 0 auto;
+  min-width: calc(var(--seq-pos-ch, 3) * 1ch);
+  color: var(--muted);
+  text-align: right;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.sequence-blocks .seq-text {
+  color: var(--ink);
+}
+
+.structure-result .structure-sequence {
+  flex: 0 0 auto;
+  padding: 14px 16px;
+}
+
+/* Sequence above dot-bracket, each wide enough for a 50 nt line. */
+.structure-output-grid {
+  grid-template-columns: minmax(0, 1fr);
+}

@@ -359,7 +359,15 @@
         context.fillStyle = "#6b7280";
         context.font = "11px Inter, Arial, sans-serif";
         context.textAlign = anchor;
-        context.fillText(text, a, b);
+        if (kind === "vtext") {
+          context.save();
+          context.translate(a, b);
+          context.rotate(-Math.PI / 2);
+          context.fillText(text, 0, 0);
+          context.restore();
+        } else {
+          context.fillText(text, a, b);
+        }
       }
     }, comparison);
     if (legendKit()) {
@@ -376,7 +384,8 @@
       draw("line", g.left - 5, g.y(v), g.left, g.y(v));
       draw("text", g.left - 8, g.y(v) + 4, 0, 0, String(v), "right");
     }
-    draw("text", g.left + g.size / 2, g.top + g.size + 36, 0, 0, "x (nt, arm 1) · " + (comparison.rnaX || ""), "center");
+    draw("text", g.left + g.size / 2, g.top + g.size + 36, 0, 0, (comparison.rnaX || "RNA X") + " position (nt, arm 1)", "center");
+    draw("vtext", 13, g.top + g.size / 2, 0, 0, (comparison.rnaY || comparison.rnaX || "RNA Y") + " position (nt, arm 2)", "center");
     const labelA = comparison.conditionALabel || "Condition A";
     const labelB = comparison.conditionBLabel || "Condition B";
     if (!legendKit()) {
@@ -500,7 +509,8 @@
       if (kind === "line") {
         parts.push('<line x1="' + a.toFixed(1) + '" y1="' + b.toFixed(1) + '" x2="' + c.toFixed(1) + '" y2="' + d.toFixed(1) + '" stroke="#c7ced6"/>');
       } else {
-        parts.push('<text x="' + a.toFixed(1) + '" y="' + b.toFixed(1) + '" text-anchor="' + (anchor === "center" ? "middle" : (anchor === "right" ? "end" : "start")) + '" fill="#6b7280">' + xml(text) + "</text>");
+        const place = kind === "vtext" ? ' transform="translate(' + a.toFixed(1) + " " + b.toFixed(1) + ') rotate(-90)"' : ' x="' + a.toFixed(1) + '" y="' + b.toFixed(1) + '"';
+        parts.push("<text" + place + ' text-anchor="' + (anchor === "center" ? "middle" : (anchor === "right" ? "end" : "start")) + '" fill="#6b7280">' + xml(text) + "</text>");
       }
     }, comparison);
     if (legendKit()) {

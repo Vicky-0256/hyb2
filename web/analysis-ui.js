@@ -1308,16 +1308,40 @@
         );
       }
     }
+    // K5 axes: ticks on round positions and "<RNA> position (nt)" titles
+    const marks = comparisonAxisMarks(result, geometry);
+    const bottom = geometry.top + geometry.plotHeight;
     context.lineWidth = 1;
-    context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    context.strokeStyle = muted;
     context.fillStyle = muted;
-    context.textAlign = "left";
-    context.fillText(String(geometry.xStart), geometry.left, geometry.top + geometry.plotHeight + 22);
+    context.font = "11px system-ui, sans-serif";
+    context.beginPath();
+    marks.x.forEach(function (mark) {
+      context.moveTo(mark.at + .5, bottom + 1);
+      context.lineTo(mark.at + .5, bottom + 5);
+    });
+    marks.y.forEach(function (mark) {
+      context.moveTo(geometry.left - 5, mark.at + .5);
+      context.lineTo(geometry.left - 1, mark.at + .5);
+    });
+    context.stroke();
+    marks.x.forEach(function (mark) {
+      context.textAlign = mark.anchor === "start" ? "left" : mark.anchor === "end" ? "right" : "center";
+      context.fillText(mark.label, mark.at, bottom + 17);
+    });
     context.textAlign = "right";
-    context.fillText(String(geometry.xEnd + result.binSize - 1), geometry.left + geometry.plotWidth, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "right";
-    context.fillText(String(geometry.yStart), geometry.left - 7, geometry.top + 4);
-    context.fillText(String(geometry.yEnd + result.binSize - 1), geometry.left - 7, geometry.top + geometry.plotHeight);
+    marks.y.forEach(function (mark) {
+      context.fillText(mark.label, geometry.left - 7, mark.at + (mark.edge === "start" ? 8 : mark.edge === "end" ? 0 : 4));
+    });
+    context.fillStyle = ink;
+    const fitsCanvas = function (length) { return function (text) { return context.measureText(text).width <= length; }; };
+    context.textAlign = "center";
+    context.fillText(middleEllipsis(state.comparison.rnaX + " position (nt)", fitsCanvas(geometry.plotWidth)), geometry.left + geometry.plotWidth / 2, bottom + 33);
+    context.save();
+    context.translate(13, geometry.top + geometry.plotHeight / 2);
+    context.rotate(-Math.PI / 2);
+    context.fillText(middleEllipsis(state.comparison.rnaY + " position (nt)", fitsCanvas(geometry.plotHeight)), 0, 0);
+    context.restore();
     context.font = "600 12px system-ui, sans-serif";
     context.fillStyle = ink;
     context.textAlign = "left";
@@ -1377,6 +1401,37 @@
     });
   }
 
+  // tick positions in px along each axis: niceTicks over the plotted
+  // nucleotides, thinned so that labels do not touch
+  function comparisonAxisMarks(result, geometry) {
+    const kit = window.Hyb2UiKit;
+    const axis = function (start, count, origin, length) {
+      const span = count * result.binSize;
+      const last = start + span - 1;
+      const values = kit ? kit.niceTicks(start, last, length < 260 ? 4 : 5) : [start, last];
+      const at = function (value) { return origin + (value - start) / span * length; };
+      // labels at least 50 px apart (a phone's map is ~260 px wide)
+      let previous = origin;
+      return values.filter(function (value, index) {
+        if (index === 0 || index === values.length - 1) {
+          return true;
+        }
+        const keep = at(value) - previous >= 50 && origin + length - at(value) >= 44;
+        if (keep) {
+          previous = at(value);
+        }
+        return keep;
+      }).map(function (value, index, list) {
+        const edge = index === 0 ? "start" : index === list.length - 1 ? "end" : "";
+        return { value: value, at: at(value), edge: edge, anchor: edge || "middle", label: kit ? kit.formatTick(value) : String(value) };
+      });
+    };
+    return {
+      x: axis(geometry.xStart, geometry.xCount, geometry.left, geometry.plotWidth),
+      y: axis(geometry.yStart, geometry.yCount, geometry.top, geometry.plotHeight)
+    };
+  }
+
   // interior ticks too close to an end are dropped: the end labels are wider
   function spacedTicks(ticks) {
     if (ticks.length < 3) {
@@ -1384,7 +1439,7 @@
     }
     const low = ticks[0];
     const high = ticks[ticks.length - 1];
-    const gap = .12 * (high - low);
+    const gap = .18 * (high - low);
     return ticks.filter(function (value, index) {
       return index === 0 || index === ticks.length - 1 || (value - low >= gap && high - value >= gap);
     });
@@ -2718,13 +2773,30 @@
       shown.length < result.cells.length
         ? '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + COMPARISON_LEGEND_OFFSET + 10) + '" text-anchor="end" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins</text>'
         : '',
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.xStart + '</text>',
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.xEnd + result.binSize - 1) + '</text>',
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.yStart + '</text>',
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.yEnd + result.binSize - 1) + '</text>',
+      comparisonAxesSvg(state.comparison, result, geometry, colors),
       window.Hyb2UiKit ? window.Hyb2UiKit.legend.svg(comparisonLegendOptions(state.comparison, result, "effect", "light", geometry, colors)) : '',
       '</svg>'
     ].join("");
+  }
+
+  function comparisonAxesSvg(comparison, result, geometry, colors) {
+    const marks = comparisonAxisMarks(result, geometry);
+    const bottom = geometry.top + geometry.plotHeight;
+    const parts = ['<g font-family="system-ui, sans-serif" font-size="11" fill="' + colors.muted + '">'];
+    marks.x.forEach(function (mark) {
+      parts.push('<line x1="' + mark.at.toFixed(1) + '" x2="' + mark.at.toFixed(1) + '" y1="' + (bottom + 1) + '" y2="' + (bottom + 5) + '" stroke="' + colors.muted + '"/>');
+      parts.push('<text x="' + mark.at.toFixed(1) + '" y="' + (bottom + 17) + '" text-anchor="' + mark.anchor + '">' + escapeXml(mark.label) + '</text>');
+    });
+    marks.y.forEach(function (mark) {
+      parts.push('<line x1="' + (geometry.left - 5) + '" x2="' + (geometry.left - 1) + '" y1="' + mark.at.toFixed(1) + '" y2="' + mark.at.toFixed(1) + '" stroke="' + colors.muted + '"/>');
+      parts.push('<text x="' + (geometry.left - 7) + '" y="' + (mark.at + (mark.edge === "start" ? 8 : mark.edge === "end" ? 0 : 4)).toFixed(1) + '" text-anchor="end">' + escapeXml(mark.label) + '</text>');
+    });
+    parts.push('<text x="' + (geometry.left + geometry.plotWidth / 2).toFixed(1) + '" y="' + (bottom + 33) + '" text-anchor="middle" fill="' + colors.ink + '">' +
+      escapeXml(middleEllipsis(comparison.rnaX + " position (nt)", svgTextFits(11, geometry.plotWidth))) + '</text>');
+    parts.push('<text transform="translate(13 ' + (geometry.top + geometry.plotHeight / 2).toFixed(1) + ') rotate(-90)" text-anchor="middle" fill="' + colors.ink + '">' +
+      escapeXml(middleEllipsis(comparison.rnaY + " position (nt)", svgTextFits(11, geometry.plotHeight))) + '</text>');
+    parts.push('</g>');
+    return parts.join("");
   }
 
   function downloadCanvasPng(fileName, api, canvasId, confirmation, fallbackCanvasId) {

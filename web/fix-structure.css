@@ -1,1 +1,43 @@
 /* Owned by Agent E (RNA Structure page). WEB_UI_FIX_PLAN.md: new rules for this agent go here, not at the end of other agents' files. */
+
+/* ------------------------------------------------------------------ */
+/* E1. Two equal columns; the sequence preparation column stays in view */
+/* ------------------------------------------------------------------ */
+
+.structure-layout {
+  grid-template-columns: minmax(440px, 1fr) minmax(0, 1fr);
+}
+
+/* Sized by content, not a fixed 575 px box that left the column half empty. */
+.structure-result {
+  min-height: 0;
+}
+
+/* Before a result exists the right column is short; keep it beside the
+   setup while the long left column scrolls. A result scrolls normally. */
+@media (min-width: 901px) {
+  .structure-result.is-preparing {
+    position: sticky;
+    top: calc(var(--header-h, 60px) + 16px);
+  }
+}
+
+.structure-result .method-limit {
+  margin-top: 16px;
+}
+
+.cplfold-limits {
+  gap: 10px;
+}
+
+@media (max-width: 1100px) {
+  .structure-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .structure-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

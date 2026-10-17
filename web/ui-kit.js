@@ -43,8 +43,8 @@
   }
 
   // K5: interior ticks on a 1/2/5 x 10^n step chosen so that, with both ends,
-  // there are 4-7 ticks; interior ticks closer than 40% of a step to an end are
-  // dropped so end labels do not collide
+  // there are 4-7 ticks; interior ticks closer than half a step to an end are
+  // dropped so end labels do not collide (half a step: 0-11 gives 0..8, 11)
   function niceTicks(min, max, target) {
     const lo = Number(min);
     const hi = Number(max);
@@ -66,7 +66,7 @@
       const ticks = [low];
       for (let v = Math.ceil(low / step) * step; v < high; v += step) {
         const value = Math.round(v / step) * step;
-        if (value - low > step * 0.4 && high - value > step * 0.4) {
+        if (value - low >= step * 0.5 && high - value > step * 0.5) {
           ticks.push(Number(value.toPrecision(12)));
         }
       }

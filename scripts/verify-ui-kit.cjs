@@ -34,6 +34,15 @@ const nice = function (step) {
   }
 });
 assert.ok(kit.niceTicks(1, 10807).length >= 4, "a genome axis gets at least 4 ticks");
+// no interior tick within half a step of an end (labels would collide)
+[[0, 11], [0, 101], [1, 10807], [0, 45], [0, 2.1], [10, 10807]].forEach(function (pair) {
+  const ticks = Array.from(kit.niceTicks(pair[0], pair[1], 4));
+  if (ticks.length > 3) {
+    const step = ticks[2] - ticks[1];
+    assert.ok(ticks[1] - ticks[0] >= step / 2 - 1e-9 && ticks[ticks.length - 1] - ticks[ticks.length - 2] > step / 2 - 1e-9, "ends spaced from interior ticks: " + ticks);
+  }
+});
+assert.deepEqual(Array.from(kit.niceTicks(0, 11, 4)), [0, 2, 4, 6, 8, 11]);
 assert.deepEqual(Array.from(kit.niceTicks(3, 3)), [3]);
 assert.deepEqual(Array.from(kit.niceTicks(NaN, 3)), []);
 assert.equal(kit.formatTick(10807), "10,807");

@@ -54,11 +54,8 @@
     if (state.reference) {
       const mapped = Object.keys(state.reference.mapping || {}).length;
       return [
-        '      <section class="overview-callout" aria-label="Reference FASTA status">',
-        "        <div>",
-        "          <h2>Reference sequences loaded</h2>",
-        "          <p>" + format(state.reference.sequenceCount) + (state.reference.sequenceCount === 1 ? " FASTA sequence · " : " FASTA sequences · ") + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</p>",
-        "        </div>",
+        '      <section class="overview-callout overview-callout--compact" aria-label="Reference FASTA status">',
+        '        <p class="overview-callout-line"><strong>Reference sequences loaded</strong><span>' + format(state.reference.sequenceCount) + (state.reference.sequenceCount === 1 ? " FASTA sequence · " : " FASTA sequences · ") + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</span></p>",
         embedded ? "" : '        <button class="quiet-button" type="button" data-action="open-files" data-open-section="data-mapping">Review mapping</button>',
         "      </section>"
       ].join("");

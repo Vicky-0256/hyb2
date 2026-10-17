@@ -247,6 +247,25 @@ assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "t
     assert.deepEqual([p & 255, (p >>> 8) & 255, (p >>> 16) & 255, p >>> 24], rgb.concat(255), "effect " + value);
   }
 }
+{
+  // B2: the Contact Map scale is the "Teal–violet sequential" ramp; relative
+  // luminance is monotonic (falling on the light surface, rising on dark)
+  const luminance = function (rgb) {
+    const lin = rgb.map(function (c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  };
+  [["light", -1], ["dark", 1]].forEach(function (entry) {
+    let previous = null;
+    for (let step = 0; step <= 64; step += 1) {
+      const value = luminance(Array.from(context.window.Hyb2UI.viridisRgb(step / 64, entry[0])));
+      if (previous !== null) {
+        assert.ok((value - previous) * entry[1] > 0, entry[0] + " contact scale luminance must be monotonic at " + step + "/64");
+      }
+      previous = value;
+    }
+  });
+  assert.equal(context.window.Hyb2UI.viridis(1, "light"), "rgb(45, 27, 105)");
+}
 assert.equal(context.window.Hyb2UI.similarityPanelColor({}), "#ffffff");
 assert.equal(context.window.Hyb2UI.similarityPanelColor({ similarityPanel: "grey" }), "#ebebeb");
 assert.match(comparisonReport.parameters.similarityPanel, /^white/);

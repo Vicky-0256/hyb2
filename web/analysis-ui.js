@@ -1,29 +1,52 @@
 (function () {
   "use strict";
 
+  // The Contact Map's sequential scale ("Teal–violet sequential"; the
+  // viridis* names are historical, this is not matplotlib's viridis). Stops
+  // are interpolated in CIELAB so relative luminance is monotonic: on the
+  // light surface (and in every export) low counts are pale teal and high
+  // counts deep violet; on the dark surface the ramp runs the other way, from
+  // a steel blue that stays visible against the plot to a light lavender.
+  // verify-ui-contract.cjs checks both ramps for monotonic luminance.
   const BRAND_SCALE = [
-    [19, 44, 71],
+    [150, 215, 210],
     [0, 160, 157],
-    [106, 79, 242]
+    [106, 79, 242],
+    [45, 27, 105]
   ];
-  // Dark theme: the navy low end vanished against the dark plot, so the
-  // scale starts from a steel blue (~3:1 against the dark surface).
   const BRAND_SCALE_DARK = [
-    [70, 126, 156],
-    [0, 190, 186],
-    [170, 155, 255]
+    [46, 104, 130],
+    [0, 176, 172],
+    [200, 190, 255]
   ];
-  // Opaque RGBA pixels (little-endian ABGR) for the canvas fast path.
-  function buildViridisLut(dark) {
-    const lut = new Uint32Array(1024);
-    for (let index = 0; index < lut.length; index += 1) {
-      const rgb = viridisRgb(index / (lut.length - 1), dark);
-      lut[index] = ((255 << 24) | (rgb[2] << 16) | (rgb[1] << 8) | rgb[0]) >>> 0;
+  const SCALE_STEPS = 1024;
+  const scaleLuts = { light: null, dark: null };
+
+  // One entry per step: rgb triplets for viridisRgb() and opaque RGBA pixels
+  // (little-endian ABGR) for the canvas fast path. Built on first use, after
+  // the CIELAB helpers below are initialised.
+  function scaleLut(dark) {
+    const key = dark ? "dark" : "light";
+    if (!scaleLuts[key]) {
+      const stops = (dark ? BRAND_SCALE_DARK : BRAND_SCALE).map(srgbToLab);
+      const rgb = new Uint8Array(SCALE_STEPS * 3);
+      const pixels = new Uint32Array(SCALE_STEPS);
+      for (let index = 0; index < SCALE_STEPS; index += 1) {
+        const scaled = index / (SCALE_STEPS - 1) * (stops.length - 1);
+        const at = Math.min(stops.length - 2, Math.floor(scaled));
+        const t = scaled - at;
+        const colour = labToSrgb([0, 1, 2].map(function (channel) {
+          return stops[at][channel] + (stops[at + 1][channel] - stops[at][channel]) * t;
+        }));
+        rgb[index * 3] = colour[0];
+        rgb[index * 3 + 1] = colour[1];
+        rgb[index * 3 + 2] = colour[2];
+        pixels[index] = packRgb(colour);
+      }
+      scaleLuts[key] = { rgb: rgb, pixels: pixels };
     }
-    return lut;
+    return scaleLuts[key];
   }
-  const VIRIDIS_LUT = buildViridisLut(false);
-  const VIRIDIS_LUT_DARK = buildViridisLut(true);
 
   function afterRender(state, api) {
     if (state.activePage === "interactions") {
@@ -412,7 +435,7 @@
     const cellHeight = geometry.cellHeight * pixelRatio;
     const spanX = (Math.ceil(geometry.cellWidth) + .4) * pixelRatio;
     const spanY = (Math.ceil(geometry.cellHeight) + .4) * pixelRatio;
-    const lut = isDarkTheme() ? VIRIDIS_LUT_DARK : VIRIDIS_LUT;
+    const lut = scaleLut(isDarkTheme()).pixels;
     const lastLut = lut.length - 1;
     const cap = geometry.cap;
     const log = scale === "log";
@@ -479,7 +502,8 @@
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = isDarkTheme() ? surface : line;
+    // empty bins show the surface: the scale's pale low end needs it
+    context.fillStyle = surface;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
     paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale);
@@ -2834,23 +2858,27 @@
     };
   }
 
-  function viridisRgb(ratio, dark) {
-    const scale = dark ? BRAND_SCALE_DARK : BRAND_SCALE;
-    const bounded = Math.max(0, Math.min(1, ratio));
-    const scaled = bounded * (scale.length - 1);
-    const index = Math.min(scale.length - 2, Math.floor(scaled));
-    const t = scaled - index;
-    const from = scale[index];
-    const to = scale[index + 1];
-    return [
-      Math.round(from[0] + (to[0] - from[0]) * t),
-      Math.round(from[1] + (to[1] - from[1]) * t),
-      Math.round(from[2] + (to[2] - from[2]) * t)
-    ];
+  // K4 colour functions: an optional trailing theme, "light" or "dark";
+  // omitted, they follow the page. Exports pass "light".
+  function themeIsDark(theme) {
+    if (theme === "dark" || theme === true) {
+      return true;
+    }
+    if (theme === "light" || theme === false) {
+      return false;
+    }
+    return isDarkTheme();
   }
 
-  function viridis(ratio) {
-    const rgb = viridisRgb(ratio, isDarkTheme());
+  function viridisRgb(ratio, theme) {
+    const lut = scaleLut(themeIsDark(theme)).rgb;
+    const bounded = Math.max(0, Math.min(1, Number(ratio) || 0));
+    const index = Math.round(bounded * (SCALE_STEPS - 1)) * 3;
+    return [lut[index], lut[index + 1], lut[index + 2]];
+  }
+
+  function viridis(ratio, theme) {
+    const rgb = viridisRgb(ratio, theme);
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
@@ -3050,6 +3078,8 @@
     conservedRatio: conservedRatio,
     similarityPanelColor: similarityPanelColor,
     rasterComparisonCells: rasterComparisonCells,
+    viridis: viridis,
+    viridisRgb: viridisRgb,
     effectColor: effectColor,
     effectPacker: effectPacker,
     conservedColor: conservedColor,

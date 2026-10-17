@@ -248,7 +248,7 @@
         '<aside class="contact-workbench-side">',
         renderContactSelection(contact, matrix, selectedCell, state),
         '<div class="heatmap-card data-card">',
-        '<div class="heatmap-topline"><span class="card-kicker">Viridis · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
+        '<div class="heatmap-topline"><span class="card-kicker">Teal–violet sequential · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
         '<div class="heatmap-axis"><span>' + escape(contact.rnaX) + " · X axis</span><span>" + escape(contact.rnaY) + " · Y axis</span></div>",
         '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="contact-export-tsv">Export contact TSV</button><button class="quiet-button" type="button" data-feature-action="contact-export-params">Export parameters</button></div>',
         "</div>",

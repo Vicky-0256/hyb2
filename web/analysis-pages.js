@@ -103,8 +103,8 @@
       '<section class="data-card interaction-table-card">',
       '<div class="card-title-row"><div><h2>Records</h2><span class="card-note">' + escape(note) + "</span></div><span class=\"card-kicker\">" + (state.shell === false ? "Project data" : "Local memory") + "</span></div>",
       '<div class="virtual-table-frame">',
-      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span>Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span>Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span title="Cluster support: records merged into this one">Support</span><span>ΔG <span class="unit">(kcal/mol)</span></span></div>',
-      '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0" style="height:' + viewportHeight + 'px">',
+      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span class="num">Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span class="num">Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span class="num" title="Cluster support: records merged into this one">Support</span><span class="num">ΔG <span class="unit">(kcal/mol)</span></span></div>',
+      '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0">',
       '<div class="virtual-table-spacer" style="height:' + (total * rowHeight) + 'px"></div>',
       '<div class="virtual-table-rows" data-virtual-rows style="transform:translateY(' + (start * rowHeight) + 'px)">',
       renderVirtualRows(rows || []),
@@ -133,13 +133,13 @@
       return [
         '<button class="virtual-row" type="button" data-feature-action="open-record" data-record-index="' + record.index + '" role="row">',
         '<span title="' + attribute(record.id) + '">' + escape(record.id) + "</span>",
-        '<span title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + "</span>",
-        "<span>" + range(record.rnaOneStart, record.rnaOneEnd) + "</span>",
-        '<span title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + "</span>",
-        "<span>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</span>",
+        '<span class="cell-truncate" title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + "</span>",
+        '<span class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + "</span>",
+        '<span class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + "</span>",
+        '<span class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + "</span>",
         '<span title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + "</span>",
-        "<span>" + format(record.supportCount) + "</span>",
-        "<span>" + (record.dg === null ? "—" : format(record.dg)) + "</span>",
+        '<span class="num">' + format(record.supportCount) + "</span>",
+        '<span class="num">' + (record.dg === null ? "—" : format(record.dg)) + "</span>",
         "</button>"
       ].join("");
     }).join("");

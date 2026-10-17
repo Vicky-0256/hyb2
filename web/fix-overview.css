@@ -169,3 +169,52 @@
     left: 0;
   }
 }
+
+/* ---- K3 refinements (D11). ui-kit.css gives .num / .cell-truncate their
+   table-cell rules; these extend them to grid "tables" built from
+   role="row" containers (the Interactions virtual table). A non-cell
+   .cell-truncate must not take the table-cell max-width: 0 trick. */
+[role="row"] > .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cell-truncate:not(td):not(th) {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* ---- D7 Interactions virtual table (K3). Sequence ID narrow, the RNA
+   columns get the space, numbers right-aligned, headers on one line.
+   Row heights are exact, not minimums: the virtual window positions rows
+   at index * 46px (38px compact) in renderInteractionTable and
+   updateVirtualRows, so a row that grew by even 1px would drift over
+   22,416 rows. Overrides analysis.css / layout.css (B / A). */
+.virtual-table-head,
+.virtual-row {
+  grid-template-columns: 120px minmax(150px, 1fr) 100px minmax(150px, 1fr) 100px minmax(92px, .5fr) 64px 104px;
+  column-gap: 16px;
+  min-width: 1040px;
+}
+
+.virtual-table-frame > .virtual-table {
+  min-width: 1040px;
+}
+
+.virtual-table-head > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.virtual-table-rows > .virtual-row {
+  height: 46px;
+  min-height: 46px;
+}
+
+[data-density="compact"] .virtual-table-rows > .virtual-row {
+  height: 38px;
+  min-height: 38px;
+}

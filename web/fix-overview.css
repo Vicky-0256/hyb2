@@ -1,1 +1,72 @@
 /* Owned by Agent D (Overview, Interactions, shared controls). WEB_UI_FIX_PLAN.md: new rules for this agent go here, not at the end of other agents' files. */
+
+/* ---- D1 Overview grid: Top interacting RNAs and Top RNA pairs stacked on
+   the left, Chimera types spanning both rows on the right, so the grid has
+   no holes whichever column is taller. Overrides workspace.css .overview-grid
+   and layout.css:39 (align-items: start). */
+
+.overview-grid {
+  grid-template-rows: auto 1fr;
+  align-items: stretch;
+}
+
+.overview-grid > .overview-top-rnas {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.overview-grid > .overview-top-pairs {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.overview-grid > .overview-types {
+  display: flex;
+  flex-direction: column;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.overview-types > .type-split {
+  margin-bottom: 18px;
+}
+
+@media (max-width: 1199px) {
+  .overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+
+  .overview-grid > .overview-top-rnas,
+  .overview-grid > .overview-top-pairs,
+  .overview-grid > .overview-types {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
+
+/* Chimera types: count and share on the label row, so the card is about as
+   tall as the two stacked cards beside it. */
+.overview-types > .type-split {
+  gap: 16px;
+}
+
+.overview-types .type-item {
+  align-items: baseline;
+}
+
+.overview-types .type-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Top RNA pairs in the narrower column: fixed number columns, the two RNA
+   columns share the rest (K3: names truncate with a title). */
+.overview-pairs-table {
+  min-width: 560px;
+  table-layout: fixed;
+}
+
+.overview-pairs-table th:nth-child(3) { width: 104px; }
+.overview-pairs-table th:nth-child(4) { width: 112px; }
+.overview-pairs-table th:nth-child(5) { width: 136px; }

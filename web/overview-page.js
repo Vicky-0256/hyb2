@@ -34,8 +34,8 @@
       '      <section class="overview-grid">',
       renderTopRnas(summary.rnaCounts),
       renderInteractionTypes(summary),
-      "      </section>",
       renderTopPairs(summary.pairCounts),
+      "      </section>",
       '      <section class="data-card">',
       '        <div class="card-title-row"><h2>Data quality</h2><span class="card-kicker">Local validation</span></div>',
       '        <div class="quality-grid">',
@@ -98,7 +98,7 @@
   function renderTopRnas(items) {
     const maximum = items.length ? items[0].support : 1;
     return [
-      '        <section class="data-card">',
+      '        <section class="data-card overview-top-rnas">',
       '          <div class="card-title-row"><h2>Top interacting RNAs</h2><span class="card-kicker">Cluster support, per arm</span></div>',
       '          <p class="card-note">Each record counts once per arm on the RNA, so a record with both arms on one RNA counts twice.</p>',
       '          <div class="bar-list">',
@@ -120,7 +120,7 @@
     const types = summary.chimeraTypes || [];
     const total = summary.validRecords || 1;
     return [
-      '        <section class="data-card">',
+      '        <section class="data-card overview-types">',
       '          <div class="card-title-row"><h2>Chimera types</h2><span class="card-kicker">Column 17 / inferred</span></div>',
       '          <div class="type-split">',
       types.slice(0, 4).map(function (item) { return renderType(item.name, item.records / total, item.records); }).join(""),
@@ -134,23 +134,22 @@
     return [
       '            <div class="type-item">',
       "              <strong>" + escape(label) + "</strong>",
-      "              <span>" + percentFormatter.format(fraction) + "</span>",
+      '              <span class="type-value">' + format(count) + " records · " + percentFormatter.format(fraction) + "</span>",
       '              <div class="type-meter"><span style="width:' + (fraction * 100) + '%"></span></div>',
-      "              <span>" + format(count) + " records</span>",
       "            </div>"
     ].join("");
   }
 
   function renderTopPairs(items) {
     return [
-      '      <section class="data-card">',
+      '      <section class="data-card overview-top-pairs">',
       '        <div class="card-title-row"><h2>Top RNA pairs</h2><span class="card-kicker">Normalised pairs</span></div>',
       '        <div class="data-table-wrap">',
-      '          <table class="data-table">',
-      "            <thead><tr><th>RNA 1</th><th>RNA 2</th><th>HYB records</th><th>Source reads</th><th>Cluster support</th></tr></thead>",
+      '          <table class="data-table overview-pairs-table">',
+      '            <thead class="nowrap"><tr><th>RNA 1</th><th>RNA 2</th><th class="num">HYB records</th><th class="num">Source reads</th><th class="num">Cluster support</th></tr></thead>',
       "            <tbody>",
       items.slice(0, 6).map(function (item) {
-        return "<tr><td>" + escape(item.rnaOne) + "</td><td>" + escape(item.rnaTwo) + "</td><td>" + format(item.records) + "</td><td>" + (item.rawReadCountRecords ? format(item.rawReads) : "—") + "</td><td>" + format(item.support) + "</td></tr>";
+        return '<tr><td class="cell-truncate" title="' + attribute(item.rnaOne) + '">' + escape(item.rnaOne) + '</td><td class="cell-truncate" title="' + attribute(item.rnaTwo) + '">' + escape(item.rnaTwo) + '</td><td class="num">' + format(item.records) + '</td><td class="num">' + (item.rawReadCountRecords ? format(item.rawReads) : "—") + '</td><td class="num">' + format(item.support) + "</td></tr>";
       }).join(""),
       "            </tbody>",
       "          </table>",

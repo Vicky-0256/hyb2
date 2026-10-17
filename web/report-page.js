@@ -127,13 +127,17 @@
       "    </div>",
       '    <div class="report-actions" aria-label="Report actions">',
       '      <button class="button" type="button" data-action="print-report">Print / Save PDF</button>',
-      '      <div class="report-export-menu" role="group" aria-label="Export">',
-      '        <span class="report-export-label">Export</span>',
-      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="people">For people</button>',
-      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="ai">For AI</button>',
-      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="analysis">For further analysis</button>',
-      "      </div>",
-      '      <button class="quiet-button" type="button" data-action="navigate" data-page="overview">Back to workspace</button>',
+      '      <details class="export-menu report-export-menu">',
+      '        <summary class="button button-secondary">Export</summary>',
+      '        <div class="export-menu-list" role="menu" aria-label="Export the report">',
+      Object.keys(EXPORT_TEXT).map(function (audience) {
+        return '          <button class="export-menu-item" type="button" role="menuitem" data-action="report-export" data-audience="' + audience + '">' + escape(EXPORT_TEXT[audience][0]) + "<small>" + escape(EXPORT_TEXT[audience][2]) + "</small></button>";
+      }).join(""),
+      "        </div>",
+      "      </details>",
+      // inside the workspace the sidebar already returns; embedded and
+      // standalone views keep their own way back
+      context.state.shell === true ? "" : '      <button class="quiet-button" type="button" data-action="navigate" data-page="overview">Back to workspace</button>',
       "    </div>",
       "  </div>",
       '  <div class="report-hero-copy">',
@@ -980,10 +984,14 @@
     }).join("");
   }
 
+  // [menu label, panel description, one-line menu summary]
   const EXPORT_TEXT = {
-    people: ["For people", "Read, print or archive the report. Print / Save PDF keeps a fixed layout; the offline HTML keeps this page's tables, figures and open sections in one file that works without this site."],
-    ai: ["For AI", "A layered context package for an AI assistant: README, a template report.md (no language model), summary.json with every result id, status and unit, data_dictionary.json, provenance.json, evidence.json and bounded tables. Large tables stay in the analysis package."],
-    analysis: ["For further analysis", "Tables with a data dictionary for scripts and other tools: every filtered record, every comparison cell and significant cell, region and folding-energy tables, structures as dot-bracket, and the figure SVGs."]
+    people: ["For people", "Read, print or archive the report. Print / Save PDF keeps a fixed layout; the offline HTML keeps this page's tables, figures and open sections in one file that works without this site.",
+      "PDF or offline HTML to read, print or archive"],
+    ai: ["For AI", "A layered context package for an AI assistant: README, a template report.md (no language model), summary.json with every result id, status and unit, data_dictionary.json, provenance.json, evidence.json and bounded tables. Large tables stay in the analysis package.",
+      "Context package: summary, result ids, bounded tables"],
+    analysis: ["For further analysis", "Tables with a data dictionary for scripts and other tools: every filtered record, every comparison cell and significant cell, region and folding-energy tables, structures as dot-bracket, and the figure SVGs.",
+      "Full tables with a data dictionary, structures, SVGs"]
   };
 
   function renderExportPanel(context, state) {

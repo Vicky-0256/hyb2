@@ -101,20 +101,17 @@
   gap: 8px;
 }
 
-.report-export-menu {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+/* K2: the three exports sit in one menu next to Print / Save PDF */
+.report-export-menu .export-menu-list {
+  min-width: 300px;
 }
 
-.report-export-label {
-  color: var(--report-muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 750;
-  letter-spacing: .06em;
-  text-transform: uppercase;
+.report-export-menu .export-menu-item {
+  font-weight: 650;
+}
+
+.report-export-menu .export-menu-item small {
+  font-weight: 450;
 }
 
 .report-export-panel {
@@ -655,8 +652,20 @@
   }
 
   .report-actions {
+    position: relative;
     justify-content: flex-start;
     margin-top: 18px;
+  }
+
+  /* the menu opens from the left edge of the actions row, inside the screen */
+  .report-export-menu {
+    position: static;
+  }
+
+  .report-export-menu .export-menu-list {
+    right: auto;
+    left: 0;
+    min-width: min(300px, 100%);
   }
 
   .report-hero-copy {

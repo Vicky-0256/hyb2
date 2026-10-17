@@ -150,7 +150,13 @@
   margin-top: 14px;
 }
 
+/* F4: the contents stay in view under the fixed header while reading;
+   print and the offline copy fall back to normal flow (see @media print).
+   report-jump scrolls each part heading to just below it. */
 .report-contents {
+  position: sticky;
+  z-index: 5;
+  top: calc(var(--header-h, 60px) + 8px);
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -160,6 +166,12 @@
   border: 1px solid var(--report-line);
   border-radius: var(--radius-md, 10px);
   background: var(--report-surface);
+  box-shadow: 0 6px 18px -14px color-mix(in srgb, var(--report-ink) 60%, transparent);
+}
+
+.hyb2-embedded .report-contents,
+.report-offline-main .report-contents {
+  top: 8px;
 }
 
 .report-contents ol {
@@ -197,7 +209,12 @@
   border-bottom: 2px solid var(--report-ink);
   color: var(--report-ink);
   font-size: 22px;
-  scroll-margin-top: 80px;
+  scroll-margin-top: calc(var(--header-h, 60px) + var(--report-contents-h, 76px) + 20px);
+}
+
+.hyb2-embedded .report-part,
+.report-offline-main .report-part {
+  scroll-margin-top: calc(var(--report-contents-h, 76px) + 20px);
 }
 
 .report-part span {
@@ -668,6 +685,36 @@
     min-width: min(300px, 100%);
   }
 
+  .report-page {
+    --report-contents-h: 46px;
+  }
+
+  .report-contents {
+    flex-wrap: nowrap;
+    gap: 12px;
+    padding: 9px 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .report-contents::-webkit-scrollbar {
+    display: none;
+  }
+
+  .report-contents ol {
+    flex-wrap: nowrap;
+    gap: 16px;
+  }
+
+  .report-contents li {
+    white-space: nowrap;
+  }
+
+  .report-contents > .report-note-inline {
+    display: none;
+  }
+
   .report-hero-copy {
     padding-top: 38px;
   }
@@ -782,6 +829,11 @@
   .report-hero {
     padding-top: 0;
     break-after: avoid;
+  }
+
+  .report-contents {
+    position: static;
+    box-shadow: none;
   }
 
   .report-section {

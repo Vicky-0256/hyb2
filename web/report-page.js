@@ -413,7 +413,7 @@
           ["Selected cell", selectedCell ? range(selectedCell.x, selectedCell.x + number(matrix.binSize, 1) - 1) + " x " + range(selectedCell.y, selectedCell.y + number(matrix.binSize, 1) - 1) : "None"]
         ]) : '<div class="report-empty">' + escape(matrix && matrix.reason || "Generate a Contact Map from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + '</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + ' · Teal–violet sequential</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
         matrix && matrix.resourceBudget ? '<p class="report-note" data-cites="S04 R12"><span class="report-cite">S04, R12</span> Adaptive browser budget: up to ' + formatNumber(matrix.maximumCells) + ' cells and ' + formatNumber(matrix.maximumBinContributions) + ' bin contributions for this device profile.</p>' : ""
       ].join("")
     );
@@ -1125,16 +1125,10 @@
     return typeof window !== "undefined" && window.Hyb2UiKit ? window.Hyb2UiKit : null;
   }
 
-  // nice ticks (K5) with both ends; an interior tick closer to an end than
-  // gap (a fraction of the span) is dropped so the labels do not run together
-  function axisTicks(min, max, target, gap) {
+  // nice ticks (K5) with both ends
+  function axisTicks(min, max, target) {
     const kit = uiKit();
-    const ticks = kit ? kit.niceTicks(min, max, target || 5) : (min === max ? [min] : [min, max]);
-    const span = Math.abs(max - min);
-    const room = (gap || 0) * span;
-    return ticks.filter(function (value, index) {
-      return index === 0 || index === ticks.length - 1 || (Math.abs(value - min) >= room && Math.abs(max - value) >= room);
-    });
+    return kit ? kit.niceTicks(min, max, target || 5) : (min === max ? [min] : [min, max]);
   }
 
   function axisText(x, y, anchor, text, extra) {
@@ -1144,7 +1138,7 @@
   // x axis below a plot: ticks over [lo, hi], position(v) -> x
   function xAxisSvg(plot, lo, hi, position, title) {
     const bottom = plot.top + plot.height;
-    const ticks = axisTicks(lo, hi, 6, 52 / plot.width).map(function (value, index, all) {
+    const ticks = axisTicks(lo, hi, 6).map(function (value, index, all) {
       const x = position(value);
       const anchor = all.length > 1 && index === 0 ? "start" : all.length > 1 && index === all.length - 1 ? "end" : "middle";
       return '<line x1="' + fixed(x) + '" x2="' + fixed(x) + '" y1="' + bottom + '" y2="' + (bottom + 4) + '" stroke="' + FIGURE_MUTED + '" stroke-width="0.75"></line>' + axisText(x, bottom + 15, anchor, formatNumber(value));
@@ -1154,7 +1148,7 @@
 
   // y axis left of a plot; grid lines across it when asked
   function yAxisSvg(plot, lo, hi, position, title, grid) {
-    const ticks = axisTicks(lo, hi, 5, 16 / plot.height).map(function (value) {
+    const ticks = axisTicks(lo, hi, 5).map(function (value) {
       const y = position(value);
       return (grid ? '<line x1="' + plot.left + '" x2="' + (plot.left + plot.width) + '" y1="' + fixed(y) + '" y2="' + fixed(y) + '" stroke="' + FIGURE_GRID + '" stroke-width="0.75"></line>' : "") +
         '<line x1="' + (plot.left - 4) + '" x2="' + plot.left + '" y1="' + fixed(y) + '" y2="' + fixed(y) + '" stroke="' + FIGURE_MUTED + '" stroke-width="0.75"></line>' + axisText(plot.left - 6, y + 3.5, "end", formatNumber(value));
@@ -1196,27 +1190,26 @@
       '<rect x="' + (-MAP_LEFT_PAD) + '" y="0" width="' + (760 + MAP_LEFT_PAD) + '" height="' + MAP_HEIGHT + '" fill="#ffffff"></rect>';
   }
 
+  // the Contact Map page's colour-bar title: "Record count (linear)",
+  // "Cluster support (log1p)"
   function contactMeasureTitle(contact) {
-    return (contact && contact.measure === "support" ? "Cluster support" : "Records") + " per bin" + (contact && contact.scale === "log" ? " (log1p scale)" : "");
+    return (contact && contact.measure === "support" ? "Cluster support" : "Record count") + (contact && contact.scale === "log" ? " (log1p)" : " (linear)");
   }
 
-  // colour bar of the contact map: linear, or log1p with raw-count labels
-  function contactLegend(cap, contact) {
-    const log = contact && contact.scale === "log";
-    const opts = { kind: "sequential", colorAt: brandHeatColor, min: 0, max: Math.max(cap, 1e-9), ticks: axisTicks(0, cap, 4, 0.14), title: contactMeasureTitle(contact) };
-    if (log) {
-      const rawMax = Math.expm1(cap);
-      const raw = [0];
-      for (let step = 1; step < rawMax; step *= 10) {
-        if (Math.log1p(step) < cap * 0.9) {
-          raw.push(step);
-        }
-      }
-      raw.push(rawMax);
-      opts.ticks = raw.map(function (value) { return Math.log1p(value); });
-      opts.format = function (value) { return formatNumber(Math.round(Math.expm1(value))); };
-    }
-    return opts;
+  // colour bar of the contact map over display values (linear or log1p);
+  // the top tick reads "≥ cap" when the cap clips the largest value
+  function contactLegend(cap, contact, displayMax) {
+    const top = Math.max(cap, 1e-9);
+    const clipped = number(displayMax) > cap;
+    return {
+      kind: "sequential",
+      colorAt: brandHeatColor,
+      min: 0,
+      max: top,
+      ticks: axisTicks(0, top, 4),
+      format: function (value) { return (clipped && value === top ? "\u2265 " : "") + formatNumber(value); },
+      title: contactMeasureTitle(contact)
+    };
   }
 
   function renderHeatmap(matrix, contact) {
@@ -1252,7 +1245,7 @@
       mapSvgOpen("report-heatmap-svg", "Printable contact map", "Contact map for " + (contact && contact.rnaX || "RNA X") + " and " + (contact && contact.rnaY || "RNA Y")),
       '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="' + FIGURE_LINE + '"></rect>',
       rects,
-      mapFrame(plot, { xStart: xStart, xEnd: xEnd, yStart: yStart, yEnd: yEnd }, [positionTitle(contact && contact.rnaX), positionTitle(contact && contact.rnaY)], contactLegend(cap, contact)),
+      mapFrame(plot, { xStart: xStart, xEnd: xEnd, yStart: yStart, yEnd: yEnd }, [positionTitle(contact && contact.rnaX), positionTitle(contact && contact.rnaY)], contactLegend(cap, contact, matrix.max)),
       '</svg>'
     ].join("");
   }
@@ -1349,7 +1342,7 @@
       // a single plotted value: one colour, the midpoint of the ramp
       return { kind: "sequential", colorAt: function () { return conservedColor(0.5); }, min: cap - 0.5, max: cap + 0.5, ticks: [cap], title: title };
     }
-    return { kind: "sequential", colorAt: conservedColor, min: floor, max: cap, ticks: axisTicks(floor, cap, 4, 0.14), title: title, highLabel: "95% quantile cap" };
+    return { kind: "sequential", colorAt: conservedColor, min: floor, max: cap, title: title, highLabel: "95% quantile cap" };
   }
 
   function parameterSnapshot(name, state, fallback) {
@@ -1517,8 +1510,13 @@
     return number(right.similarity) - number(left.similarity) || number(left.x) - number(right.x) || number(left.y) - number(right.y);
   }
 
+  // the Contact Map's "Teal–violet sequential" scale in its light (export)
+  // form from analysis-ui.js (K4); the older ramp when that is not loaded
   function brandHeatColor(ratio) {
     const value = Math.max(0, Math.min(1, number(ratio)));
+    if (typeof window !== "undefined" && window.Hyb2UI && typeof window.Hyb2UI.viridis === "function") {
+      return window.Hyb2UI.viridis(value, "light");
+    }
     if (value < 0.5) {
       return interpolateColor("#132c47", "#00a09d", value * 2);
     }

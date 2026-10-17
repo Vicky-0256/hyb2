@@ -463,7 +463,7 @@
     return [
       '<div class="page-heading">',
       '<div><h1>Compare</h1><p>Compare multiple local HYB datasets: the DESeq2 differential test, contact-map effect sizes and the HYB2 similarity heatmap.</p></div>',
-      '<div class="inline-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + '<button class="button button-secondary" type="button" data-feature-action="comparison-download-svg">Download effect SVG</button><button class="button button-secondary" type="button" data-feature-action="comparison-download-png">Download effect PNG</button></div>',
+      '<div class="inline-actions compare-heading-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + renderCompareExportMenu() + '</div>',
       '</div>',
       '<section class="comparison-note notice notice-warning"><strong>What this page can and cannot tell you</strong><span>Only the <b>differential test</b> (panel A) says whether a contact differs between ' + escape(comparison.conditionALabel) + ' and ' + escape(comparison.conditionBLabel) + ': it uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell. It needs at least two biological replicates per condition. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R or the HYB2 command-line tool, use the exports under Map settings.</span></details></section>',
       renderCompareNav(),
@@ -506,11 +506,10 @@
         { value: "white", label: "White (as similarity_heatmap.R)" }, { value: "grey", label: "Light grey (shows bins at the minimum)" }
       ], "comparison-display"),
       '</div>',
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><button class="quiet-button" type="button" data-feature-action="comparison-export-tsv">Export comparison TSV</button><button class="quiet-button" type="button" data-feature-action="comparison-export-params">Export parameters</button></div>',
-      '<details class="comparison-export-more" data-open-key="compare-exports"' + openAttr("compare-exports") + '><summary>Exports for R or the HYB2 command-line tool</summary><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-counts">Export HYB2 count table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-hyb2-names">Export HYB2 names.table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-metadata">Export extended metadata</button></div>',
+      // the exports are in the page heading's Export menu (K2)
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><span class="card-note">Map images, tables and the files for R or the HYB2 command-line tool are under Export at the top of the page.</span></div>',
       // a rerun keeps the previous maps on screen: the progress shows here
       comparison.result ? renderComparisonProgress(comparison.progress) : "",
-      '<p class="card-note">Use the headerless HYB2 names.table with the HYB2 command-line tool. Extended metadata has a header and provenance columns for audit or your own R workflow.</p></details>',
       '</section>',
       result.ready ? [
         '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Similarity bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
@@ -527,6 +526,21 @@
       window.Hyb2ArcMap && window.Hyb2FoldingEnergy ? window.Hyb2FoldingEnergy.renderCard(state.arcMap, state.regionPanels, state.foldingEnergy, escape) : "",
       '<section class="method-note"><strong>Method</strong><span>For each dataset, HYB arms are accumulated into fixed contact bins. Each condition uses the mean of its dataset-level counts, optionally scaled per million ' + normalisationUnit + '. The effect map reports log2((A + pseudocount) / (B + pseudocount)); it is a descriptive effect size, not a significance test. The similarity heatmap follows HYB2 plot_similarity_map and similarity_heatmap.R: each condition\'s datasets are summed into one raw contact map (as if their .hyb files were concatenated), bins below the similarity minimum are dropped from each map, and a bin present in both maps shows the smaller count.</span></section>'
     ].join("");
+  }
+
+  // K2: every Compare download in one menu; the actions keep their names
+  // (written out: verify-ui-contract.cjs looks for each data-feature-action)
+  function renderCompareExportMenu() {
+    const item = '<button class="export-menu-item" type="button" role="menuitem" ';
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      item + 'data-feature-action="comparison-download-svg">Effect map · SVG</button>' +
+      item + 'data-feature-action="comparison-download-png">Effect map · PNG</button>' +
+      item + 'data-feature-action="comparison-export-tsv">Comparison bins · TSV</button>' +
+      item + 'data-feature-action="comparison-export-params">Parameters · JSON</button>' +
+      item + 'data-feature-action="comparison-export-deseq-counts">HYB2 count table · TSV<small>For R or the HYB2 command-line tool</small></button>' +
+      item + 'data-feature-action="comparison-export-hyb2-names">HYB2 names.table<small>Use the headerless HYB2 names.table with the HYB2 command-line tool</small></button>' +
+      item + 'data-feature-action="comparison-export-deseq-metadata">Extended metadata · TSV<small>Extended metadata has a header and provenance columns, for audit or your own R workflow</small></button>' +
+      '</div></details>';
   }
 
   // in-page navigation: buttons, not links, so the hash route is untouched

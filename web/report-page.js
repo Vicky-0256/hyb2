@@ -141,7 +141,7 @@
       '    <h1>Analysis report</h1>',
       '    <p class="report-lede">A print-ready view of the current HYB2 workspace, including configured analyses, generated results, selected intervals, and reproducibility details.</p>',
       '    <div class="report-hero-meta"><span><strong>Scope</strong> ' + escape(context.record ? context.record.scope.label : "Session report") + '</span><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> ' + timeTag(context.generatedAt) + '</span><span><strong>Version</strong> <code>HYB2 Web Lite ' + escape(REPORT_VERSION) + (window.HYB2_BUILD && window.HYB2_BUILD.commit ? " · " + escape(String(window.HYB2_BUILD.commit).slice(0, 12)) : "") + '</code></span>' + (context.record ? '<span><strong>Run</strong> <code>' + escape(context.record.run.id) + "</code></span>" : "") + '<span class="report-status is-ready">Processed locally</span></div>',
-      context.record ? '    <p class="report-scope-note">' + escape(context.record.scope.description) + "</p>" : "",
+      context.record ? '    <p class="report-scope-note">' + escape(pageText(context.record.scope.description)) + "</p>" : "",
       "  </div>",
       '  <p class="report-print-note">Use your browser\'s Print dialog and choose <strong>Save as PDF</strong>. The report is generated in this tab and no data is uploaded.</p>',
       "</header>"
@@ -793,6 +793,21 @@
     stale: ["is-warning", "Inputs changed"]
   };
 
+  // status codes stay in data-status, Markdown and JSON; the page shows words
+  const RESULT_STATUS_TEXT = { not_available: "No value" };
+
+  function statusLabel(code) {
+    const badge = STATUS_BADGE[code];
+    return badge ? badge[1] : RESULT_STATUS_TEXT[code] || humanize(code);
+  }
+
+  // text from the result record shown on the page: no raw status codes
+  function pageText(text) {
+    return String(text == null ? "" : text).replace(/\b(not_run|no_result|not_available)\b/g, function (code) {
+      return statusLabel(code).toLowerCase();
+    });
+  }
+
   function recordStep(context, key) {
     const record = context.record;
     return record ? record.steps.find(function (step) { return step.key === key; }) || null : null;
@@ -804,9 +819,9 @@
     if (!step) {
       return '<span class="report-status is-pending">Configured</span>';
     }
-    const badge = STATUS_BADGE[step.status] || ["is-pending", step.status];
+    const badge = STATUS_BADGE[step.status] || ["is-pending", statusLabel(step.status)];
     const label = step.status === "ok" && okLabel ? okLabel : badge[1];
-    return '<span class="report-status ' + badge[0] + '" data-step="' + escape(step.id) + '" data-status="' + escape(step.status) + '" title="' + escape(step.id + " · " + (step.detail || step.statusText)) + '">' + escape(label) + "</span>";
+    return '<span class="report-status ' + badge[0] + '" data-step="' + escape(step.id) + '" data-status="' + escape(step.status) + '" title="' + escape(step.id + " · " + pageText(step.detail || step.statusText)) + '">' + escape(label) + "</span>";
   }
 
   // a part heading of the report (1 to 5), also the table of contents' anchors
@@ -878,7 +893,7 @@
       const box = '<input class="report-select" type="checkbox" data-action="report-select" data-step="' + escape(step.key) + '"' + (kept ? " checked" : "") +
         (step.key === "parse" ? " disabled" : "") + ' aria-label="Include ' + escape(step.id + " " + step.title) + ' in the report">';
       return [box + ' <code>' + escape(step.id) + "</code>", escape(step.title) + (kept ? "" : ' <em class="report-left-out">left out</em>'), stepBadge({ record: full }, step.key),
-        escape(step.scope || "—"), step.completedAt ? timeTag(step.completedAt) : escape(step.status === "ok" || step.status === "no_result" ? "from current inputs" : "—"), escape(step.detail || "")];
+        escape(step.scope || "—"), step.completedAt ? timeTag(step.completedAt) : escape(step.status === "ok" || step.status === "no_result" ? "from current inputs" : "—"), escape(pageText(step.detail || ""))];
     });
     return section(
       "status",
@@ -889,7 +904,7 @@
         '<label class="report-purpose"><span>Purpose of this analysis (optional, written by you; saved in the exports as the researcher\'s text)</span>' +
           '<textarea id="report-purpose" rows="2" maxlength="1000" placeholder="e.g. Which ZIKV genome contacts differ between the African and Asian lineages?">' + escape(purpose) + "</textarea></label>",
         purpose.trim() ? '<p class="report-purpose-print"><strong>Purpose:</strong> ' + escape(purpose.trim()) + "</p>" : "",
-        '<p class="report-note">Each step has a fixed id (S01 to S13) shared with the Markdown and JSON exports. A step that did not run shows <code>not_run</code>; its results show —, never 0. Untick a step to make a selected-results report: the page and every export then leave it out and say so.</p>',
+        '<p class="report-note">Each step has a fixed id (S01 to S13) shared with the Markdown and JSON exports. A step that did not run shows “Not run”; its results show —, never 0. Untick a step to make a selected-results report: the page and every export then leave it out and say so.</p>',
         selected ? '<p class="notice notice-warning report-selected-note">Selected results report: ' + escape(record.scope.omittedSteps.join(", ")) + ' left out. <button class="quiet-button" type="button" data-action="report-select-all">Include every step</button></p>' : "",
         '<div class="report-subsection report-subsection--table">' + table(["Id", "Step", "Status", "Scope", "Completed", "Detail"], stepRows) + "</div>"
       ].join("")
@@ -903,7 +918,7 @@
     }
     const resultRows = record.results.map(function (result) {
       return ['<code>' + escape(result.id) + "</code>", '<code>' + escape(result.step) + "</code>", escape(result.label),
-        '<span data-result="' + escape(result.id) + '">' + escape(window.Hyb2Results.formatValue(result)) + "</span>", escape(result.unit), '<code>' + escape(result.status) + "</code>",
+        '<span data-result="' + escape(result.id) + '">' + escape(window.Hyb2Results.formatValue(result)) + "</span>", escape(result.unit), escape(statusLabel(result.status)),
         '<span title="' + escape(window.Hyb2Results.NATURE_TEXT[result.nature] || "") + '">' + escape(result.nature.replace(/_/g, " ")) + "</span>"];
     });
     const tableRows = record.tables.map(function (t) {
@@ -934,9 +949,9 @@
         '<span class="report-status ' + (record.warnings.length ? "is-warning" : "is-ready") + '">' + formatNumber(record.warnings.length) + (record.warnings.length === 1 ? " warning" : " warnings") + "</span>",
         [
           '<div class="report-subsection"><h3>Warnings</h3>' + (record.warnings.length ? '<ul class="report-review-list">' + record.warnings.map(function (w) {
-            return "<li><code>" + escape(w.id) + "</code> (" + escape(w.step) + ") " + escape(w.text) + "</li>";
+            return "<li><code>" + escape(w.id) + "</code> (" + escape(w.step) + ") " + escape(pageText(w.text)) + "</li>";
           }).join("") + "</ul>" : '<div class="report-empty is-ready">No warnings for this session.</div>') + "</div>",
-          '<div class="report-subsection"><h3>Limitations</h3><ul class="report-review-list">' + record.limitations.map(function (text) { return "<li>" + escape(text) + "</li>"; }).join("") + "</ul></div>"
+          '<div class="report-subsection"><h3>Limitations</h3><ul class="report-review-list">' + record.limitations.map(function (text) { return "<li>" + escape(pageText(text)) + "</li>"; }).join("") + "</ul></div>"
         ].join("")
       ) : ""
     ].join("");
@@ -961,7 +976,7 @@
         return "<code>" + escape(t.id + " " + t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '">Download</button>';
       }).join(" · ") + "</p>" : "";
       return '<div class="report-subsection report-figure-panel"><div class="report-subsection-heading report-step-heading"><h3>' + escape(pair[1]) + "</h3>" + stepBadge(context, pair[0]) + "</div>" +
-        (body || '<div class="report-empty">' + escape(step.detail || step.statusText) + "</div>") + resultRefs(context, pair[0]) + data + "</div>";
+        (body || '<div class="report-empty">' + escape(pageText(step.detail || step.statusText)) + "</div>") + resultRefs(context, pair[0]) + data + "</div>";
     }).join("");
   }
 
@@ -987,7 +1002,7 @@
     const waiting = context.record ? context.record.steps.filter(function (step) { return step.status === "pending" || step.status === "running"; }) : [];
     if (waiting.length) {
       out.push('<p class="notice notice-warning" data-export-waiting>Still being prepared: ' + escape(waiting.map(function (step) { return step.id + " " + step.title; }).join("; ")) +
-        ". These steps are exported as " + escape(waiting.map(function (step) { return step.status; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" or ")) + "; open the export again when they finish to include their results.</p>");
+        ". These steps are exported as " + escape(waiting.map(function (step) { return statusLabel(step.status).toLowerCase(); }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" or ")) + ", without results; open the export again when they finish to include their results.</p>");
     }
     if (exp.audience === "people") {
       out.push('<div class="report-export-actions"><button class="button" type="button" data-action="print-report">Print / Save PDF</button><button class="button button-secondary" type="button" data-action="report-export-html">Download offline HTML</button></div>');

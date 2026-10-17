@@ -14,6 +14,12 @@ this), then captures each page as <mode>_<page>.png (viewport) and
 Also prints any page whose document is wider than the viewport (horizontal overflow).
 Folding energies need the ViennaRNA build in web/vendor/viennarna (not in git); without
 it they are skipped with a warning.
+
+Page "structure-result" swaps both folding workers for scripts/ui-fake-structure-worker.js
+(screenshots only; the app never loads it), chooses CPLfold on region 1-201, clicks the
+capacity test and Predict, saves <mode>_structure-result_landing-view.png as the page
+stands when the result arrives, then the usual shots, and prints the layout metrics
+capacity_top, diagram_top, diagram_w and candidates_overflow (px).
 """
 import argparse
 import functools
@@ -25,7 +31,8 @@ import threading
 from playwright.sync_api import sync_playwright
 
 PAGES = ["landing", "prepared", "overview", "interactions", "contact-map", "viewpoint",
-         "region", "compare", "structure", "report"]
+         "region", "compare", "structure", "structure-result", "report"]
+FAKE_WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui-fake-structure-worker.js")
 MODES = {
     "desk": {"viewport": {"width": 1440, "height": 900}},
     "mob": {"viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True, "device_scale_factor": 2},
@@ -89,6 +96,43 @@ def reveal(page):
     page.wait_for_timeout(300)
 
 
+def structure_result(page, out, mode):
+    page.evaluate("location.hash = '#/workspace/structure'")
+    page.locator('[data-key="engine"]').wait_for(timeout=60000)
+    page.locator('select[data-key="engine"]').select_option("cplfold")
+    page.wait_for_timeout(400)
+    for key, value in (("start", "1"), ("end", "201")):
+        field = page.locator('input[data-key="%s"]' % key)
+        if field.count():
+            field.first.fill(value)
+            field.first.dispatch_event("change")
+            page.wait_for_timeout(300)
+    page.evaluate("window.scrollTo({ top: 0, left: 0, behavior: 'instant' })")
+    metrics = {"capacity_top": page.evaluate("""() => {
+        const n = document.querySelector('.structure-capacity-strip, [data-feature-action="probe-cplfold-capacity"]');
+        return n ? Math.round(n.getBoundingClientRect().top + scrollY) : -1; }""")}
+    page.locator('[data-feature-action="probe-cplfold-capacity"]').first.evaluate("b => b.click()")
+    page.wait_for_function("""() => { const b = document.querySelector('[data-feature-action="predict-structure"]');
+        return b && !b.disabled; }""", timeout=60000)
+    page.locator('[data-feature-action="predict-structure"]').first.evaluate("b => b.click()")
+    page.locator("[data-structure-diagram] svg, [data-structure-diagram] .forna-structure-mount").first.wait_for(state="attached", timeout=60000)
+    page.wait_for_timeout(1200)
+    page.screenshot(path=os.path.join(out, "%s_structure-result_landing-view.png" % mode))
+    metrics.update(page.evaluate("""() => {
+        const d = document.querySelector('[data-structure-diagram]');
+        const t = document.querySelector('.cplfold-candidate-table');
+        const w = t && t.closest('.data-table-wrap');
+        return {
+          diagram_top: d ? Math.round(d.getBoundingClientRect().top + scrollY) : -1,
+          diagram_w: d ? Math.round(d.getBoundingClientRect().width) : -1,
+          candidates_overflow: w ? w.scrollWidth - w.clientWidth : -1
+        }; }"""))
+    print("  %s/structure-result metrics: %s" % (mode, " ".join("%s=%s" % kv for kv in metrics.items())))
+    page.evaluate("window.scrollTo({ top: 0, left: 0, behavior: 'instant' })")
+    page.wait_for_timeout(300)
+    shoot(page, out, mode, "structure-result")
+
+
 def shoot(page, out, mode, name):
     page.screenshot(path=os.path.join(out, "%s_%s.png" % (mode, name)))
     page.screenshot(path=os.path.join(out, "%s_%s_full.png" % (mode, name)), full_page=True)
@@ -113,6 +157,10 @@ def main():
         browser = p.chromium.launch()
         for mode in args.modes.split(","):
             context = browser.new_context(**MODES[mode])
+            if "structure-result" in wanted:
+                fake = open(FAKE_WORKER, "rb").read()
+                for pattern in ("**/structure.worker.js*", "**/cplfold.worker.mjs*"):
+                    context.route(pattern, lambda route: route.fulfill(body=fake, content_type="text/javascript"))
             page = context.new_page()
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(base, wait_until="networkidle")
@@ -136,6 +184,13 @@ def main():
                 run_tests(page)
             for name in wanted:
                 if name in ("landing", "prepared"):
+                    continue
+                if name == "structure-result":
+                    try:
+                        structure_result(page, args.out, mode)
+                        print("%s/%s ok" % (mode, name))
+                    except Exception as error:
+                        print("  ! %s/structure-result failed: %s" % (mode, str(error).splitlines()[0]))
                     continue
                 page.evaluate("location.hash = '#/workspace/%s'" % name)
                 page.wait_for_timeout(500)

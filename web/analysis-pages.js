@@ -194,9 +194,14 @@
       : { records: 0, support: 0 };
 
     return [
-      '<div class="page-heading">',
+      '<div class="page-heading page-heading--menu">',
       "<div><h1>Contact Map</h1><p>Fixed-width binning mirrors the current HYB2 coverage accumulation rule.</p></div>",
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="contact-download-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="contact-download-png">Download PNG</button></div>',
+      '<div class="inline-actions">' + renderExportMenu([
+        ["contact-download-svg", "Map · SVG"],
+        ["contact-download-png", "Map · PNG"],
+        ["contact-export-tsv", "Contact cells · TSV"],
+        ["contact-export-params", "Parameters · JSON"]
+      ]) + "</div>",
       "</div>",
       '<section class="analysis-controls data-card">',
       '<div class="contact-control-grid">',
@@ -258,6 +263,14 @@
       ].join("") : (building ? renderContactBuilding() : renderNoContactData(contact, matrix)),
       "      <section class=\"method-note\"><strong>Method</strong><span>Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.</span></section>"
     ].join("");
+  }
+
+  // K2 export menu: [data-feature-action, label] pairs
+  function renderExportMenu(items) {
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      items.map(function (item) {
+        return '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="' + attribute(item[0]) + '">' + escape(item[1]) + "</button>";
+      }).join("") + "</div></details>";
   }
 
   // B6: when the data layer widened the bins, the selected option says so
@@ -381,9 +394,14 @@
       : null;
 
     return [
-      '<div class="page-heading">',
+      '<div class="page-heading page-heading--menu">',
       '<div><h1>Viewpoint</h1><p>Map interaction abundance across a selected interval or the complete mapped reference.</p></div>',
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="viewpoint-download-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="viewpoint-download-png">Download PNG</button></div>',
+      '<div class="inline-actions">' + renderExportMenu([
+        ["viewpoint-download-svg", "Plot · SVG"],
+        ["viewpoint-download-png", "Plot · PNG"],
+        ["viewpoint-export-tsv", "Coverage bins · TSV"],
+        ["viewpoint-export-params", "Parameters · JSON"]
+      ]) + "</div>",
       '</div>',
       '<section class="analysis-controls data-card">',
       '<div class="viewpoint-control-grid">',

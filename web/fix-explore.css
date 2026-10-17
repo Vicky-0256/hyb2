@@ -1,1 +1,19 @@
 /* Owned by Agent B (Contact Map, Viewpoint, Region Explorer). WEB_UI_FIX_PLAN.md: new rules for this agent go here, not at the end of other agents' files. */
+
+/* B13: Contact Map and Viewpoint headings keep their Export menu beside the
+   title at every width (responsive.css stacks .page-heading on phones) */
+.page-heading.page-heading--menu {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.page-heading--menu > .inline-actions {
+  flex: none;
+  margin-top: 0;
+}
+
+.page-heading--menu .export-menu > .button {
+  margin-top: 0;
+}

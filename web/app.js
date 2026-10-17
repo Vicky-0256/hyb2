@@ -661,10 +661,7 @@
       '    <section class="landing-panel" aria-label="Open a HYB file">',
       renderFilePanel(),
       "    </section>",
-      '    <div class="landing-details">',
-      renderDesktopDownloadCard(),
-      renderWebCapabilityCard(),
-      "    </div>",
+      renderWaysToRun(),
       "  </main>",
       renderDialog(),
       '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
@@ -687,53 +684,80 @@
     return "A HYB line has 15 or more tab-separated columns: read ID, sequence, ΔG, then name and coordinates of each arm, as written by the hyb pipeline or HYB2 Desktop. FASTQ, SAM and FASTA reads need HYB2 Desktop first.";
   }
 
-  function visitorOS() {
-    const platform = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "").toLowerCase();
-    if (platform.indexOf("mac") !== -1) return "mac";
-    if (platform.indexOf("win") !== -1) return "windows";
-    if (platform.indexOf("linux") !== -1) return "linux";
-    return "";
+  // K9 (web/ui-kit.js) holds every fact about HYB2 Desktop; some tests load
+  // the pages without the kit, and then no Desktop entry is drawn.
+  function desktopKit() {
+    return window.Hyb2UiKit && window.Hyb2UiKit.desktop || null;
   }
 
-  // The desktop app's installers, from the latest GitHub release (the
-  // release workflow publishes them under these stable names). Kept inside
-  // the function: renderLanding runs before later top-level consts exist.
-  function renderDesktopDownloadCard() {
-    const releases = "https://github.com/Vicky-0256/hyb2/releases";
-    const downloads = [
-      { os: "mac", label: "macOS · Apple silicon", file: "HYB2-Desktop-macOS-arm64.dmg" },
-      { os: "windows", label: "Windows · 64-bit", file: "HYB2-Desktop-Windows-x64-Setup.exe" },
-      { os: "linux", label: "Linux · .deb", file: "HYB2-Desktop-Linux-x64.deb" },
-      { os: "linux", label: "Linux · .tar.gz", file: "HYB2-Desktop-Linux-x64.tar.gz" }
-    ];
-    const os = visitorOS();
-    const items = downloads.map(function (item) {
-      const mine = item.os === os;
-      return '<li><a class="desktop-download-link' + (mine ? ' is-recommended' : '') + '" href="' + releases + '/latest/download/' + item.file + '">' +
-        '<span class="desktop-download-label">' + item.label + (mine ? ' <span class="desktop-download-badge">This computer</span>' : '') + '</span><strong>Download</strong></a></li>';
-    }).join("");
+  // Desktop entries are left out inside HYB2 Desktop itself.
+  function desktopEntriesShown() {
+    const kit = desktopKit();
+    return !!kit && !kit.isInsideDesktop();
+  }
+
+  function formatNt(value) {
+    return Number(value).toLocaleString("en-US") + " nt";
+  }
+
+  // "Two ways to run HYB2": Web Lite and HYB2 Desktop side by side, one row
+  // per question (where to start, pipeline, analysis, CPLfold, install, data).
+  // Replaces the Desktop and Browser capabilities cards under the hero.
+  function renderWaysToRun() {
+    if (!desktopEntriesShown()) {
+      return "";
+    }
+    const kit = desktopKit();
+    const row = function (label, value) {
+      return '<p class="ways-row"><span class="ways-label">' + escapeHtml(label) + '</span><span class="ways-value">' + value + "</span></p>";
+    };
+    const canChoose = !state.loading && !state.error && !state.summary && !state.rawReads;
     return [
-      '<section class="web-capability-card desktop-download-card" aria-labelledby="desktop-download-title">',
-      '<div class="web-capability-heading"><div><span class="example-kicker">Desktop app</span><h2 id="desktop-download-title">From raw reads to structure</h2></div><span class="web-capability-chip">Offline</span></div>',
-      '<p class="web-capability-note desktop-download-lede">HYB2 Desktop runs the whole pipeline on your computer: FASTQ mapping, hybrid calling, QC, DESeq2 comparisons and CPLfold structures.</p>',
-      '<ul class="desktop-download-list">', items, '</ul>',
-      '<p class="web-capability-note">Not yet signed: on first launch, macOS asks you to allow it in System Settings → Privacy &amp; Security, and Windows SmartScreen under More info → Run anyway. <a href="' + releases + '/latest">Release notes, older versions and checksums</a>.</p>',
-      '</section>'
+      '<section class="landing-ways" aria-labelledby="landing-ways-title">',
+      '  <h2 id="landing-ways-title" class="landing-ways-title">Two ways to run HYB2</h2>',
+      '  <div class="ways-grid">',
+      '    <section class="ways-col ways-web" aria-labelledby="ways-web-title">',
+      '      <header class="ways-head"><h3 id="ways-web-title">Web Lite</h3><span class="ways-where">in this browser</span></header>',
+      row("Start from", ".hyb or .hyb.gz files"),
+      row("Pipeline", '<span aria-hidden="true">—</span><span class="visually-hidden">None; it reads finished .hyb files</span>'),
+      row("Analysis", "All analysis pages"),
+      row("CPLfold", "Up to " + formatNt(kit.limits.webCplfoldNt) + " after a capacity test"),
+      row("Install", "None"),
+      row("Data", "Stays in this browser tab"),
+      '      <div class="ways-actions">',
+      canChoose ? '        <button class="button" type="button" data-action="choose-hyb">Choose HYB file</button>' : "",
+      renderBrowserCheck(),
+      "      </div>",
+      "    </section>",
+      '    <section class="ways-col ways-desktop" aria-labelledby="ways-desktop-title">',
+      '      <header class="ways-head"><h3 id="ways-desktop-title">' + escapeHtml(kit.name) + '</h3><span class="ways-where">on your computer</span></header>',
+      row("Start from", "Raw reads: FASTQ, FASTA or SAM, plus a reference"),
+      row("Pipeline", "Bowtie2 mapping → hybrid calling → QC → .hyb"),
+      row("Analysis", "The same pages, saved as projects on disk"),
+      row("CPLfold", "Up to " + formatNt(kit.limits.cplfoldNt) + " by default, native, no capacity test"),
+      row("Install", kit.downloadsAvailable ? "An installer, below" : "An installer, not public yet"),
+      row("Data", "Stays on this computer, works offline"),
+      '      <div class="ways-actions">',
+      renderDesktopDownloads(),
+      "      </div>",
+      "    </section>",
+      "  </div>",
+      "</section>"
     ].join("");
   }
 
-  function renderWebCapabilityCard() {
+  // The four browser checks that used to be the "Browser capabilities" card.
+  function renderBrowserCheck() {
     const hasFiles = typeof window.File !== "undefined" && typeof window.FileReader !== "undefined";
     const hasWorker = typeof window.Worker !== "undefined";
     const hasWasm = typeof window.WebAssembly !== "undefined";
     const supported = [hasFiles, hasWorker, hasWasm, hasWorker && hasWasm].filter(Boolean).length;
-    const summaryChip = supported === 4 ? "All 4 supported" : supported + " of 4 supported";
     const status = function (ready, label, supportedLabel) {
       return '<li class="web-capability-item"><span class="web-capability-dot' + (ready ? ' is-ready' : '') + '" aria-hidden="true"></span><span>' + label + '</span><strong>' + (ready ? (supportedLabel || 'Supported') : 'Unavailable') + '</strong></li>';
     };
     return [
-      '<section class="web-capability-card" aria-labelledby="web-capability-title">',
-      '<div class="web-capability-heading"><div><span class="example-kicker">Web runtime</span><h2 id="web-capability-title">Browser capabilities</h2></div><span class="web-capability-chip">' + summaryChip + '</span></div>',
+      '<details class="ways-browser-check" data-open-key="landing-browser-check"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["landing-browser-check"] ? " open" : "") + ">",
+      '<summary>Browser check <span class="ways-check-chip">' + (supported === 4 ? "all 4 supported" : supported + " of 4 supported") + "</span></summary>",
       '<ul class="web-capability-list">',
       status(hasFiles, 'File reading'),
       status(hasWorker, 'Background parsing workers'),
@@ -741,7 +765,18 @@
       status(hasWorker && hasWasm, 'CPLfold Pyodide worker · capacity measured when needed', 'Load on first run'),
       '</ul>',
       '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately.</p>',
-      '</section>'
+      "</details>"
+    ].join("");
+  }
+
+  // Where to get HYB2 Desktop (A14). While the installers are not public
+  // (K9 downloadsAvailable false) this says so and links nowhere.
+  function renderDesktopDownloads() {
+    const kit = desktopKit();
+    return [
+      '<div class="desktop-downloads is-unavailable">',
+      '<p class="desktop-downloads-status"><strong>' + escapeHtml(kit.notAvailable) + "</strong> " + escapeHtml(kit.tagline) + "</p>",
+      "</div>"
     ].join("");
   }
 

@@ -1073,14 +1073,25 @@
       return '<div class="structure-placeholder"><span class="placeholder-label">Waiting for a sequence</span><p>Reference regions require a mapped FASTA. A HYB sequence can be selected from a record, or you can paste A, C, G and U directly.</p></div>';
     }
 
-    const localCplfoldInput = structure && structure.engine === "cplfold"
-      ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>'
-      : "";
     return [
       sequenceInfo.assembly ? renderAssemblyPreview(sequenceInfo.assembly, sequenceInfo.evidenceKind) : "",
       renderSequenceBlocks(sequenceInfo.sequence, "structure-sequence"),
-      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="structure-download-fasta">Download FASTA</button>' + localCplfoldInput + "</div>"
+      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-sequence">Copy sequence</button>' + structureExportMenu([
+        ['data-feature-action="structure-download-fasta"', "Download FASTA"],
+        structure && structure.engine === "cplfold" ? ['data-feature-action="download-local-cplfold-input"' + LOCAL_INPUT_ATTRS, "Download local inputs"] : null
+      ]) + "</div>"
     ].join("");
+  }
+
+  const LOCAL_INPUT_ATTRS = ' aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold"';
+
+  // K2 export menu: every download on the Structure page sits behind one
+  // Export button; items are [attributes, label].
+  function structureExportMenu(items) {
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      items.filter(Boolean).map(function (item) {
+        return '<button class="export-menu-item" type="button" role="menuitem" ' + item[0] + ">" + item[1] + "</button>";
+      }).join("") + "</div></details>";
   }
 
   function renderAssemblyPreview(assembly, evidenceKind) {
@@ -1134,7 +1145,20 @@
       renderStructureDiagramPanel(result, activeView, cplfold, allowPseudoknot, guided, manualConstrained, inspectorInstruction),
       renderNucleotideInspector(result, selectedNucleotide),
       '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span>' + renderSequenceBlocks(result.sequence, "structure-output-code") + '</div><div><span class="drawer-kicker">Dot-bracket</span>' + renderSequenceBlocks(result.dotBracket, "structure-output-code") + "</div></section>",
-      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button><button class="button button-secondary" type="button" data-feature-action="download-structure-dot-bracket">Download DBN</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ct">Download CT</button><button class="button button-secondary" type="button" data-feature-action="download-structure-pairs">Download base pairs</button>' + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>' : "") + (guided ? '<button class="button button-secondary" type="button" data-feature-action="download-structure-evidence">Download evidence</button><button class="button button-secondary" type="button" data-feature-action="download-structure-constraints">Download constraints</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ensemble">Download ensemble</button>' : "") + (cplfoldHasEvidence ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-evidence">Download bonus matrix</button>' : "") + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-candidates">Download candidates</button>' : "") + '<button class="button button-secondary" type="button" data-feature-action="download-structure-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-png">Download PNG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-report">Download report</button></div>',
+      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button>' + structureExportMenu([
+        ['data-feature-action="download-structure-dot-bracket"', "Download DBN"],
+        ['data-feature-action="download-structure-ct"', "Download CT"],
+        ['data-feature-action="download-structure-pairs"', "Download base pairs"],
+        cplfold ? ['data-feature-action="download-local-cplfold-input"' + LOCAL_INPUT_ATTRS, "Download local inputs"] : null,
+        guided ? ['data-feature-action="download-structure-evidence"', "Download evidence"] : null,
+        guided ? ['data-feature-action="download-structure-constraints"', "Download constraints"] : null,
+        guided ? ['data-feature-action="download-structure-ensemble"', "Download ensemble"] : null,
+        cplfoldHasEvidence ? ['data-feature-action="download-cplfold-evidence"', "Download bonus matrix"] : null,
+        cplfold ? ['data-feature-action="download-cplfold-candidates"', "Download candidates"] : null,
+        ['data-feature-action="download-structure-svg"', "Download SVG"],
+        ['data-feature-action="download-structure-png"', "Download PNG"],
+        ['data-feature-action="download-structure-report"', "Download report"]
+      ]) + "</div>",
       '<details class="base-pair-details"><summary>Base-pair list (' + format(pairs.length) + ")</summary>" + (pairs.length ? '<ol class="base-pair-list">' + pairs.map(function (pair) {
         const isHardConstraint = requestedPairs.has(pair.left + ":" + pair.right);
         const evidenceLabel = (guided || cplfold) && Number(pair.evidenceSupport) > 0 ? " · evidence " + formatEvidence(pair.evidenceSupport) : "";

@@ -822,7 +822,8 @@
     const start = Math.max(1, Number(s.start) || 1);
     const end = Math.min(model.length, Number(s.end) || model.length);
     const span = Math.max(1, end - start);
-    const legendY = top + plotH + track + 40;
+    // ticks, then the axis title (K5), then the legend
+    const legendY = top + plotH + track + 54;
     const height = legendY + 14;
     const x = function (pos) { return left + (pos - start) / span * plotW; };
     const parts = [];
@@ -895,6 +896,9 @@
       parts.push('<line x1="' + px.toFixed(1) + '" y1="' + (axisY + 2) + '" x2="' + px.toFixed(1) + '" y2="' + (axisY + 6) + '" stroke="' + c.line + '"/>');
       parts.push('<text x="' + px.toFixed(1) + '" y="' + (axisY + 18) + '" text-anchor="middle" fill="' + c.muted + '">' + pos + "</text>");
     }
+    // B is drawn on A's coordinates, so the axis is A's
+    parts.push('<text class="arcmap-axis-title" x="' + (left + plotW / 2).toFixed(1) + '" y="' + (axisY + 34) + '" text-anchor="middle" fill="' + c.ink + '">' +
+      escapeXml((s.labelOne || (s.a && s.a.name) || "Structure A") + " position (nt)") + "</text>");
     const legend = [];
     if (s.a) {
       legend.push([mono ? c.ink : c.a, "A · " + s.a.name + (twoSided && model.pairsB.length ? " (above)" : "")]);
@@ -1008,7 +1012,8 @@
           "</dd></div><div><dt>Only A · only B</dt><dd>" + formatNumber(model.stats.onlyA) + " · " + formatNumber(model.stats.onlyB) + "</dd></div>" : "") +
         "<div><dt>Differential arcs</dt><dd>" + formatNumber(model.overlay.length) + "</dd></div></dl>");
       model.notes.forEach(function (note) { out.push('<p class="card-note">' + esc(note) + "</p>"); });
-      out.push('<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="arcmap-download-svg">Download arc map SVG</button></div>');
+      // K2: the card's download sits in an Export menu like every other card
+      out.push('<div class="inline-actions"><details class="export-menu card-export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu"><button class="export-menu-item" type="button" role="menuitem" data-feature-action="arcmap-download-svg">Download arc map SVG</button></div></details></div>');
     }
     out.push("</section>");
     return out.join("");

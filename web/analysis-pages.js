@@ -548,7 +548,7 @@
         renderComparisonMap("conserved", "B · Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ")" + (comparison.similarityPanel === "grey" ? " on a grey panel." : "; on R's white panel the smallest bins do not show (choose the grey panel to see them)."), result),
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
-        comparison.showDataTable ? renderComparisonDataTable(result, comparison) : ''
+        comparison.showDataTable ? renderComparisonDataTable(result, comparison, state) : ''
       ].join("") : '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Comparison</span><h2>' + escape(result.reason || "Add datasets to compare") + '</h2>' + (!comparison.loading && !comparison.result ? renderComparisonProgress(comparison.progress || { stage: "Starting", fraction: 0 }) : "") + '<p>All input files remain in tab memory and are parsed by local browser workers.</p></div></section>',
       // the arc map works from its own files, with or without a comparison here
       window.Hyb2ArcMap ? window.Hyb2ArcMap.renderCard(state.arcMap || window.Hyb2ArcMap.defaultState(), escape) : "",
@@ -668,37 +668,109 @@
       '<div class="progress-bar" role="progressbar" aria-label="Comparison progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div></div>';
   }
 
-  const COMPARISON_TABLE_ROWS = 150;
   const COMPARISON_TABLE_SORTS = [
     { value: "effect", label: "Largest |log2 effect|" },
     { value: "similarity", label: "Largest similarity" },
     { value: "position", label: "Position (X, then Y)" }
   ];
+  // Fixed row heights of the comparison virtual table; .comparison-row in
+  // fix-compare.css must use exactly these heights (rows sit at index * height).
+  const COMPARISON_ROW_HEIGHT = 36;
+  const COMPARISON_ROW_HEIGHT_COMPACT = 30;
+  const COMPARISON_ROW_MARGIN = 6;
+  let comparisonScrollLimit = 0;
 
-  // One page of result.cells in the chosen order; the order is computed once
-  // per result and sort key (Hyb2Data.comparisonOrder), so a render only
-  // touches the rows shown.
-  function renderComparisonDataTable(result, comparison) {
-    const sort = COMPARISON_TABLE_SORTS.some(function (item) { return item.value === comparison.tableSort; }) ? comparison.tableSort : "effect";
+  function comparisonRowHeight(density) {
+    return density === "compact" ? COMPARISON_ROW_HEIGHT_COMPACT : COMPARISON_ROW_HEIGHT;
+  }
+
+  // The tallest scroll spacer this browser lays out (Chrome and Safari stop
+  // near 33.5 million px, Firefox near 17.9 million), measured once.
+  function comparisonMaxScrollHeight() {
+    if (comparisonScrollLimit) {
+      return comparisonScrollLimit;
+    }
+    let measured = 0;
+    try {
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;visibility:hidden;width:1px;height:100000000px;top:0;left:0";
+      document.body.appendChild(probe);
+      measured = probe.getBoundingClientRect().height;
+      probe.remove();
+    } catch (error) {
+      measured = 0;
+    }
+    // stay a little under the limit so the rows below the spacer still lay out
+    comparisonScrollLimit = measured > 1000000 ? Math.floor(measured * 0.98) : 15000000;
+    return comparisonScrollLimit;
+  }
+
+  // Which rows a scroll position shows. The spacer is rows x row height; only
+  // when that is taller than the browser can lay out is it capped, and the
+  // scroll position then maps linearly onto the full row range (rows keep
+  // their fixed height and stay contiguous inside the window).
+  function comparisonTableWindow(total, rowHeight, scrollTop, viewportHeight) {
+    const content = total * rowHeight;
+    const spacer = Math.min(content, comparisonMaxScrollHeight());
+    const viewport = Math.max(1, viewportHeight);
+    const maxScroll = Math.max(0, spacer - viewport);
+    const top = Math.max(0, Math.min(maxScroll, scrollTop || 0));
+    const virtualTop = spacer < content && maxScroll > 0 ? top * (content - viewport) / maxScroll : top;
+    const first = Math.floor(virtualTop / rowHeight);
+    const start = Math.max(0, first - COMPARISON_ROW_MARGIN);
+    const count = Math.max(0, Math.min(total - start, Math.ceil(viewport / rowHeight) + 2 * COMPARISON_ROW_MARGIN + 1));
+    return {
+      spacer: spacer,
+      start: start,
+      count: count,
+      first: Math.min(total, first),
+      last: Math.min(total, Math.ceil((virtualTop + viewport) / rowHeight)),
+      offset: top + start * rowHeight - virtualTop
+    };
+  }
+
+  function comparisonTableSort(comparison) {
+    return COMPARISON_TABLE_SORTS.some(function (item) { return item.value === comparison.tableSort; }) ? comparison.tableSort : "effect";
+  }
+
+  function comparisonTableNote(view, total) {
+    return 'Bins ' + format(total ? view.first + 1 : 0) + '–' + format(view.last) + ' of ' + format(total);
+  }
+
+  // The bins of result.cells in the chosen order, virtually scrolled: the
+  // order is computed once per result and sort key (Hyb2Data.comparisonOrder)
+  // and a render only touches the rows in the window; bindComparisonTable
+  // (analysis-ui.js) re-windows them on scroll.
+  function renderComparisonDataTable(result, comparison, state) {
+    const sort = comparisonTableSort(comparison);
     const total = result.cells.length;
-    const pages = Math.max(1, Math.ceil(total / COMPARISON_TABLE_ROWS));
-    const page = Math.max(0, Math.min(pages - 1, Math.floor(Number(comparison.tablePage) || 0)));
-    const start = page * COMPARISON_TABLE_ROWS;
-    const rows = window.Hyb2Data.comparisonOrderedCells(result, sort, start, COMPARISON_TABLE_ROWS);
+    const rowHeight = comparisonRowHeight(state && state.density);
+    const view = comparisonTableWindow(total, rowHeight, comparison.tableScrollTop || 0, 640);
+    const rows = window.Hyb2Data.comparisonOrderedCells(result, sort, view.start, view.count);
     return [
-      '<section class="data-card"><div class="card-title-row"><h2>Comparison bins</h2><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Hide data table</button></div>',
+      '<section class="data-card comparison-table-card"><div class="card-title-row"><h2>Comparison bins</h2><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Hide data table</button></div>',
       '<div class="inline-actions comparison-table-controls">',
       renderSelectControl("Sort bins by", "tableSort", sort, COMPARISON_TABLE_SORTS, "comparison-table"),
-      '<span class="card-note">Bins ' + format(total ? start + 1 : 0) + '–' + format(start + rows.length) + ' of ' + format(total) + '</span>',
-      '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page - 1) + '"' + (page > 0 ? "" : " disabled") + '>Previous</button>',
-      '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page + 1) + '"' + (page < pages - 1 ? "" : " disabled") + '>Next</button>',
+      '<span class="card-note" data-comparison-table-note aria-live="polite">' + comparisonTableNote(view, total) + '</span>',
       '</div>',
-      '<div class="data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">X interval</th><th class="num">Y interval</th><th class="num">' + escape(comparison.conditionALabel) + ' mean</th><th class="num">' + escape(comparison.conditionBLabel) + ' mean</th><th class="num">Log2 effect</th><th class="num">Datasets present</th><th class="num">Similarity</th></tr></thead><tbody>',
-      rows.map(function (cell) {
-        return '<tr><td class="num">' + range(cell.x, cell.x + result.binSize - 1) + '</td><td class="num">' + range(cell.y, cell.y + result.binSize - 1) + '</td><td class="num">' + format(cell.conditionA) + '</td><td class="num">' + format(cell.conditionB) + '</td><td class="num">' + format(cell.effect) + '</td><td class="num">' + format(cell.presentDatasets) + '</td><td class="num">' + format(cell.similarity) + '</td></tr>';
-      }).join(""),
-      '</tbody></table></div></section>'
+      '<div class="virtual-table-frame comparison-table-frame">',
+      '<div class="comparison-table-head" role="row"><span class="num">X interval</span><span class="num">Y interval</span><span class="num">' + escape(comparison.conditionALabel) + ' mean</span><span class="num">' + escape(comparison.conditionBLabel) + ' mean</span><span class="num">Log2 effect</span><span class="num">Datasets present</span><span class="num">Similarity</span></div>',
+      '<div class="virtual-table comparison-virtual-table" data-comparison-table role="region" aria-label="Comparison bins" tabindex="0">',
+      // the spacer clips the rows, so rows past its end never stretch the scroll range
+      '<div class="comparison-table-spacer" data-comparison-spacer style="height:' + view.spacer + 'px">',
+      '<div class="comparison-table-rows" data-comparison-rows style="transform:translateY(' + view.offset + 'px)">',
+      renderComparisonRows(rows, result, comparison.selection),
+      '</div></div></div></div></section>'
     ].join("");
+  }
+
+  // One button per bin; a click selects the bin as a click on either map does.
+  function renderComparisonRows(cells, result, selection) {
+    return cells.map(function (cell) {
+      const selected = !!selection && selection.x === cell.x && selection.y === cell.y;
+      return '<button class="comparison-row' + (selected ? ' is-selected' : '') + '" type="button" role="row" data-feature-action="comparison-select-bin" data-x="' + cell.x + '" data-y="' + cell.y + '" aria-pressed="' + selected + '">' +
+        '<span class="num">' + range(cell.x, cell.x + result.binSize - 1) + '</span><span class="num">' + range(cell.y, cell.y + result.binSize - 1) + '</span><span class="num">' + format(cell.conditionA) + '</span><span class="num">' + format(cell.conditionB) + '</span><span class="num">' + format(cell.effect) + '</span><span class="num">' + format(cell.presentDatasets) + '</span><span class="num">' + format(cell.similarity) + '</span></button>';
+    }).join("");
   }
 
   function comparisonRnaNames(comparison) {
@@ -1925,6 +1997,11 @@
     renderRegion: renderRegion,
     renderComparison: renderComparison,
     renderComparisonDataTable: renderComparisonDataTable,
+    renderComparisonRows: renderComparisonRows,
+    comparisonTableWindow: comparisonTableWindow,
+    comparisonTableSort: comparisonTableSort,
+    comparisonTableNote: comparisonTableNote,
+    comparisonRowHeight: comparisonRowHeight,
     renderStructure: renderStructure,
     renderStructureResult: renderStructureResult,
     renderVirtualRows: renderVirtualRows,

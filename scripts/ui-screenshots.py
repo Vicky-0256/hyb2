@@ -59,17 +59,18 @@ def wait_ready(page, timeout=90000):
 
 def run_tests(page):
     # differential test (panel A) and folding energies (F, G); the arc map and the
-    # region structures (C-E) fill from the test's result
+    # region structures (C-E) fill from the test's result.  The download buttons
+    # waited for sit in closed Export menus, so they only need to be attached.
     page.evaluate("location.hash = '#/workspace/compare'")
     page.locator('[data-feature-action="deseq-run"]').wait_for(timeout=60000)
     page.locator('[data-feature-action="deseq-run"]').click()
-    page.locator('[data-feature-action="deseq-export-interactions"]').wait_for(timeout=300000)
+    page.locator('[data-feature-action="deseq-export-interactions"]').wait_for(state="attached", timeout=300000)
     print("  differential test done")
     energy = page.locator('[data-feature-action="energy-run"]')
     if energy.count() and energy.first.is_enabled():
         energy.first.click()
         try:
-            page.locator('[data-feature-action="energy-download-svg"]').wait_for(timeout=180000)
+            page.locator('[data-feature-action="energy-download-svg"]').wait_for(state="attached", timeout=180000)
             print("  folding energies done")
         except Exception:
             print("  ! folding energies did not finish (is web/vendor/viennarna built?)")

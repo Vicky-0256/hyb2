@@ -204,7 +204,7 @@
     }
 
     if (action === "download-structure-svg") {
-      const svg = document.querySelector("[data-structure-diagram] svg");
+      const svg = lightExportSvg(state);
       if (!svg) {
         api.showToast("The structure diagram is not ready to export yet.");
         return true;
@@ -216,7 +216,7 @@
     }
 
     if (action === "download-structure-png") {
-      downloadStructurePng(api, structureViewMode(state.structure && state.structure.viewMode));
+      downloadStructurePng(api, structureViewMode(state.structure && state.structure.viewMode), lightExportSvg(state));
       return true;
     }
 
@@ -961,8 +961,55 @@
     return start + ((position - 1) / Math.max(1, length - 1)) * span;
   }
 
-  function downloadStructurePng(api, viewMode) {
-    const svg = document.querySelector("[data-structure-diagram] svg");
+  // The diagram for an image export, light whatever the page theme: the
+  // drawn views (arc, radial, circular, matrix) are drawn again with the
+  // light colours; the folded view (fornac) carries its own colours and is
+  // copied.  Both get a white background (the page's is transparent).
+  function lightExportSvg(state) {
+    const shown = document.querySelector("[data-structure-diagram] svg");
+    const result = state && state.structure && state.structure.result;
+    if (!shown || !result) {
+      return null;
+    }
+    const viewMode = structureViewMode(state.structure.viewMode);
+    let svg = null;
+    if (viewMode !== "folded") {
+      exportColors = LIGHT_EXPORT_COLORS;
+      try {
+        svg = buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode);
+      } catch (error) {
+        svg = null; // no SVG DOM to draw into (tests): export what is shown
+      } finally {
+        exportColors = null;
+      }
+    }
+    if (!svg) {
+      svg = typeof shown.cloneNode === "function" ? shown.cloneNode(true) : shown;
+    }
+    if (typeof svg.getAttribute === "function" && !svg.getAttribute("xmlns") && typeof svg.setAttribute === "function") {
+      svg.setAttribute("xmlns", SVG_NS);
+    }
+    if (typeof document.createElementNS !== "function" || typeof svg.insertBefore !== "function") {
+      return svg;
+    }
+    const box = String(svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    const background = document.createElementNS(SVG_NS, "rect");
+    if (box.length === 4 && box.every(Number.isFinite)) {
+      background.setAttribute("x", String(box[0]));
+      background.setAttribute("y", String(box[1]));
+      background.setAttribute("width", String(box[2]));
+      background.setAttribute("height", String(box[3]));
+    } else {
+      background.setAttribute("width", "100%");
+      background.setAttribute("height", "100%");
+    }
+    background.setAttribute("fill", "#ffffff");
+    svg.insertBefore(background, svg.firstChild);
+    return svg;
+  }
+
+  function downloadStructurePng(api, viewMode, exportSource) {
+    const svg = exportSource || document.querySelector("[data-structure-diagram] svg");
     if (!svg) {
       api.showToast("The structure diagram is not ready to export yet.");
       return;
@@ -988,7 +1035,8 @@
     try {
       const dimensions = svgDimensions(svg);
       const scale = 2;
-      const exportSvg = svg.cloneNode(true);
+      // a light export copy is already a copy; the page's diagram is cloned
+      const exportSvg = exportSource ? svg : svg.cloneNode(true);
       exportSvg.setAttribute("width", String(dimensions.width * scale));
       exportSvg.setAttribute("height", String(dimensions.height * scale));
       const source = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + new XMLSerializer().serializeToString(exportSvg);
@@ -1201,7 +1249,23 @@
     return length <= 1 ? (left + right) / 2 : left + ((position - 1) / (length - 1)) * (right - left);
   }
 
+  // image exports are drawn in the light theme whatever the page's theme
+  // (as the other pages' exports): these are styles.css's light values
+  const LIGHT_EXPORT_COLORS = {
+    primary: "#00a09d",
+    accent: "#6a4ff2",
+    muted: "#5b6c80",
+    line: "#dce7ec",
+    lineStrong: "#c2d3db",
+    warning: "#9c5e12",
+    surface: "#f7fafb"
+  };
+  let exportColors = null;
+
   function colorTokens() {
+    if (exportColors) {
+      return Object.assign({}, exportColors);
+    }
     const style = getComputedStyle(document.documentElement);
     return {
       primary: style.getPropertyValue("--primary").trim(),

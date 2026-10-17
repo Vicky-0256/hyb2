@@ -734,9 +734,11 @@
     });
     out.push("</div>");
     out.push('<div class="region-figure" data-regions-figure>' + svg(model) + "</div>");
-    out.push('<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="regions-download-svg">Download region SVG</button>' +
-      '<button class="quiet-button" type="button" data-feature-action="regions-download-tsv">Download regions TSV</button>' +
-      '<button class="quiet-button" type="button" data-feature-action="regions-download-layout">Download layout TSV</button></div>');
+    // K2: the card's downloads sit in one Export menu
+    out.push('<div class="inline-actions"><details class="export-menu card-export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="regions-download-svg">Download region SVG</button>' +
+      '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="regions-download-tsv">Download regions TSV</button>' +
+      '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="regions-download-layout">Download layout TSV</button></div></details></div>');
     out.push("</section>");
     return out.join("");
   }

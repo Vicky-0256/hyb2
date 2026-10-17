@@ -323,3 +323,104 @@
     margin-top: 16px;
   }
 }
+
+/* ---- Comparison data table: virtual scrolling as on the Interactions page
+   (K3). Row heights are exact, not minimums: comparisonTableWindow
+   (analysis-pages.js) places rows at index * 36px (30px compact), so a row
+   that grew by even 1px would drift over 838,000 rows. The head reserves
+   the scroller's scrollbar gutter so its columns stay over the rows. */
+
+.comparison-table-head,
+.comparison-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.1fr) minmax(120px, 1.1fr) repeat(2, minmax(96px, 1fr)) minmax(96px, 1fr) minmax(112px, 1fr) minmax(96px, 1fr);
+  column-gap: 16px;
+  align-items: center;
+  padding: 0 12px;
+}
+
+.comparison-table-head {
+  min-height: 32px;
+  overflow: hidden;
+  scrollbar-gutter: stable;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-caps);
+  font-weight: 720;
+  letter-spacing: .055em;
+  text-transform: uppercase;
+}
+
+.comparison-table-head > span,
+.comparison-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.virtual-table-frame > .comparison-virtual-table,
+.comparison-table-frame > .comparison-table-head {
+  min-width: 820px;
+}
+
+.comparison-virtual-table {
+  scrollbar-gutter: stable;
+}
+
+.comparison-table-spacer {
+  position: relative;
+  overflow: hidden;
+}
+
+.comparison-table-rows {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+}
+
+.comparison-row {
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted-strong);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-feedback) var(--ease-out), color var(--dur-feedback) var(--ease-out);
+}
+
+[data-density="compact"] .comparison-row {
+  height: 30px;
+  min-height: 30px;
+  font-size: 11px;
+}
+
+.comparison-row:hover,
+.comparison-row:focus-visible {
+  background: var(--primary-soft);
+  color: var(--ink);
+  outline-offset: -3px;
+}
+
+.comparison-row.is-selected {
+  background: var(--primary-soft);
+  color: var(--ink);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comparison-row {
+    transition: none;
+  }
+}

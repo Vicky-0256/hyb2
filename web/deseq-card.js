@@ -252,11 +252,14 @@
         return '<option value="' + option[0] + '"' + (option[0] === show ? " selected" : "") + ">" + esc(option[1]) + "</option>";
       }).join("") + "</select></label></div>");
     out.push('<div class="canvas-wrap deseq-canvas-wrap"><canvas id="deseq-panel-canvas" class="deseq-canvas" width="640" height="640" aria-label="Differential coverage map"></canvas></div>');
-    out.push('<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="deseq-download-svg">Download map SVG</button>' +
-      '<button class="button button-secondary" type="button" data-feature-action="deseq-download-png">Download map PNG</button>' +
-      '<button class="quiet-button" type="button" data-feature-action="deseq-export-interactions">Export interactions TSV</button>' +
-      '<button class="quiet-button" type="button" data-feature-action="deseq-export-significant">Export significant cells TSV</button>' +
-      '<button class="button" type="button" data-feature-action="deseq-use-arcmap">Use in arc map</button></div>');
+    // K2: the card's downloads sit in one Export menu; "Use in arc map" is an action
+    out.push('<div class="inline-actions"><button class="button" type="button" data-feature-action="deseq-use-arcmap">Use in arc map</button>' +
+      '<details class="export-menu card-export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="deseq-download-svg">Download map SVG</button>' +
+      '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="deseq-download-png">Download map PNG</button>' +
+      '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="deseq-export-interactions">Export interactions TSV</button>' +
+      '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="deseq-export-significant">Export significant cells TSV</button>' +
+      '</div></details></div>');
     out.push('<p class="card-note">Before reporting an interaction, check that every replicate supports it: click the same position in the effect map below to see each dataset\'s count. A small padj with a low mean count can still come from one replicate.</p>');
     if (deseq.arcMapFed && !stale) {
       out.push('<p class="card-note">The arc map below had structures but no interaction table, so it now draws these merged interactions; the region structures (D, E) and folding energies (F, G) follow from it. Those panels use their own padj cutoff (0.01 by default), so they can show fewer interactions than this table.</p>');

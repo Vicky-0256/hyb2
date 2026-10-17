@@ -569,9 +569,11 @@
       });
       out.push('<div class="energy-figure" data-energy-figure>' + svg(r, labels) + "</div>");
       out.push('<p class="card-note">' + esc("ViennaRNA " + (r.version || "?") + " RNAcofold (WebAssembly), " + TEMPERATURE + " °C, default parameters; " + r.rows.length + " interactions × 2 lineages, 2 × " + r.length + " nt.") + "</p>");
-      out.push('<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="energy-download-svg">Download violin SVG</button>' +
-        '<button class="quiet-button" type="button" data-feature-action="energy-download-tsv">Download energies TSV</button>' +
-        '<button class="quiet-button" type="button" data-feature-action="energy-download-stats">Download t-tests TSV</button></div>');
+      // K2: the card's downloads sit in one Export menu
+      out.push('<div class="inline-actions"><details class="export-menu card-export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="energy-download-svg">Download violin SVG</button>' +
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="energy-download-tsv">Download energies TSV</button>' +
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="energy-download-stats">Download t-tests TSV</button></div></details></div>');
     }
     out.push("</section>");
     return out.join("");

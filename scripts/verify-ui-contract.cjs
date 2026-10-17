@@ -848,6 +848,18 @@ vm.runInContext(moduleResetSource[0].replace(/\n  function cancelComparisonLoads
 assert.equal(bareResetContext.state.arcMap, null, "without the modules the reset still clears their state");
 assert.match(appSource, /data-action="enter-analysis">Enter analysis/,
   "the file-review stage must expose a separate analysis-entry action");
+{
+  // First screen: the drop zone comes before the example, and Enter
+  // analysis comes before the (long) list of loaded files.
+  const filePanel = appSource.slice(appSource.indexOf("function renderFilePanel()"), appSource.indexOf("function renderExampleStrip()"));
+  assert.ok(filePanel.indexOf('class="dropzone"') > 0 && filePanel.indexOf('class="dropzone"') < filePanel.indexOf("renderExampleStrip()"),
+    "the HYB drop zone must come before the example");
+  const prepared = appSource.slice(appSource.indexOf("function renderPreparedFilePanel()"));
+  assert.ok(prepared.indexOf('class="prepared-next-step"') < prepared.indexOf('class="prepared-file-list"'),
+    "Enter analysis must come before the file list");
+  assert.match(appSource, /<details class="example-more"[\s\S]*?class="example-files"/,
+    "the example's description and downloads must be folded");
+}
 assert.match(appSource, /function enterAnalysis\(\)\s*\{[\s\S]*?state\.analysisEntered = true;[\s\S]*?navigate\("overview"\);/,
   "entering analysis must be an explicit state transition");
 assert.match(appSource, /state\.loading = null;\s*state\.analysisEntered = false;\s*state\.activePage = "landing";\s*setRouteHash\("#\/"\);\s*if \(parseSession\.referenceFile\)/,

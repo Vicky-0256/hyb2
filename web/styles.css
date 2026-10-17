@@ -701,9 +701,11 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  margin-top: 23px;
-  padding: 16px 0 0;
-  border-top: 1px solid var(--line);
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
+  border-radius: var(--radius-lg);
+  background: var(--primary-soft);
 }
 
 .prepared-next-step > div {
@@ -738,10 +740,52 @@ a {
 }
 
 .example-strip {
-  margin: 0 0 22px;
-  padding: 18px 0 20px;
-  border-top: 1px solid var(--line);
+  margin: 14px 0 22px;
+  padding: 0 0 14px;
   border-bottom: 1px solid var(--line);
+}
+
+.example-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.example-line-copy {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.example-line-copy strong {
+  color: var(--ink);
+}
+
+.example-line .button {
+  flex: 0 0 auto;
+}
+
+.example-more {
+  margin-top: 8px;
+}
+
+.example-more > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  color: var(--teal-deep);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.example-more[open] > summary {
+  margin-bottom: 8px;
+}
+
+.example-more .example-badge {
+  display: inline-flex;
 }
 
 .example-strip-heading {

@@ -194,3 +194,9 @@
 .selection-stats.stats-compact dd {
   text-align: left;
 }
+
+/* ---- C11 empty From / To read as editable, not disabled */
+
+.arcmap-card .control-field input::placeholder {
+  color: var(--muted);
+}

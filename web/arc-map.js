@@ -993,8 +993,10 @@
       select("Condition one cells are on", "oneOn", s.oneOn, [["a", "A's reference"], ["b", "B's reference"]]),
       select("Condition two cells are on", "twoOn", s.twoOn, [["a", "A's reference"], ["b", "B's reference"]]),
       select("Structures", "mono", s.mono ? "mono" : "colour", [["mono", "One colour (black)"], ["colour", "A red, B blue"]]),
-      control("From (nt)", "start", s.start, "1"),
-      control("To (nt)", "end", s.end, model.ready ? String(model.length) : ""),
+      // empty means the whole structure: the placeholder says so in words,
+      // so that an empty field does not read as a disabled one
+      control("From (nt)", "start", s.start, "Start (1)"),
+      control("To (nt)", "end", s.end, model.ready ? "End (" + formatNumber(model.length) + ")" : "End of structure"),
       "</div>"
     ];
     if (!model.ready) {

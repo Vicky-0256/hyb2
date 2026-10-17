@@ -405,18 +405,15 @@
       '<div class="viewpoint-control-grid">',
       renderSelectControl("Anchor RNA", "rna", viewpoint.rna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "viewpoint-control"),
       renderSelectControl("Partner", "partner", viewpoint.partner, partnerOptions(rnas, viewpoint.rna), "viewpoint-control"),
-      renderSelectControl("Chimera type", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "viewpoint-control"),
-      renderSelectControl("Homodimer subset", "homodimer", viewpoint.homodimer || "all", [
-        { value: "all", label: "All records" },
-        { value: "only", label: "Overlap score ≥ 5" },
-        { value: "exclude", label: "Exclude homodimer proxy" }
-      ], "viewpoint-control"),
+      // B10: the range mode and its Start and End stay together on one row
+      '<div class="viewpoint-range-group" role="group" aria-label="Coordinate range">',
       renderSelectControl("Coordinate range", "rangeMode", viewpoint.rangeMode || "coordinates", mappedReference ? [
         { value: "coordinates", label: "Selected coordinates" },
         { value: "reference", label: "Full mapped reference" }
       ] : [{ value: "coordinates", label: "Selected coordinates" }], "viewpoint-control"),
       renderTextControl("Start", "start", viewpoint.start, "Observed start", "viewpoint-control", "number", { min: 1, step: 1 }),
       renderTextControl("End", "end", viewpoint.end, "Observed end", "viewpoint-control", "number", { min: 1, step: 1 }),
+      '</div>',
       renderSelectControl("Resolution", "binSize", viewpoint.binSize, effectiveOptions([
         { value: "1", label: "1 nt (legacy viewpoint)" },
         { value: "5", label: "5 nt mean" },
@@ -428,6 +425,12 @@
       renderSelectControl("Measure", "measure", viewpoint.measure, [
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
+      ], "viewpoint-control"),
+      renderSelectControl("Chimera type", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "viewpoint-control"),
+      renderSelectControl("Homodimer subset", "homodimer", viewpoint.homodimer || "all", [
+        { value: "all", label: "All records" },
+        { value: "only", label: "Overlap score ≥ 5" },
+        { value: "exclude", label: "Exclude homodimer proxy" }
       ], "viewpoint-control"),
       '</div>',
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-viewpoint">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-viewpoint-selection">Reset selection</button><span class="control-hint">' + (viewpoint.rangeMode === "reference" ? "The full mapped reference uses coordinates 1 through its FASTA length; Start and End are ignored." : "At 1 nt resolution, each plotted value is the number of overlapping interaction arms, matching the legacy viewpoint interpretation.") + '</span></div>',

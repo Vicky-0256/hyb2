@@ -504,6 +504,66 @@ a {
   font-weight: 680;
 }
 
+.desktop-downloads-planned,
+.desktop-download-unavailable,
+.desktop-download-others,
+.desktop-download-meta {
+  color: var(--muted);
+}
+
+.desktop-download-primary {
+  justify-self: start;
+}
+
+.desktop-download-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.desktop-download-groups .desktop-download-group {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.desktop-download-group > span {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.desktop-download-others .desktop-download-group {
+  white-space: nowrap;
+}
+
+.desktop-download-link,
+.desktop-download-meta a {
+  color: var(--primary-ink);
+  font-weight: 620;
+  text-underline-offset: 2px;
+}
+
+.desktop-download-groups .desktop-download-link {
+  justify-content: center;
+}
+
+.desktop-first-launch summary {
+  cursor: pointer;
+  color: var(--muted-strong);
+  font-weight: 620;
+}
+
+.desktop-first-launch p {
+  margin: 8px 0 0;
+  color: var(--muted-strong);
+}
+
+@media (max-width: 520px) {
+  .desktop-download-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @supports not (grid-template-rows: subgrid) {
   .ways-col {
     display: block;

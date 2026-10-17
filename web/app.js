@@ -769,13 +769,71 @@
     ].join("");
   }
 
-  // Where to get HYB2 Desktop (A14). While the installers are not public
-  // (K9 downloadsAvailable false) this says so and links nowhere.
+  // Where to get HYB2 Desktop (A14). With the installers public (K9
+  // downloadsAvailable): one "Download for <this system>" button, the other
+  // systems as plain links (Linux .deb and .tar.gz together), the systems
+  // without an installer, a first-launch note for the unsigned app,
+  // checksums and release notes. While they are not public, it says so,
+  // lists the planned installers and links nowhere.
   function renderDesktopDownloads() {
     const kit = desktopKit();
+    const groups = [
+      { os: "mac", name: "macOS" },
+      { os: "windows", name: "Windows" },
+      { os: "linux", name: "Linux" }
+    ].map(function (group) {
+      group.platforms = kit.platforms.filter(function (item) { return item.os === group.os; });
+      return group;
+    });
+
+    if (!kit.downloadsAvailable) {
+      const planned = groups.map(function (group) {
+        return group.platforms.length > 1
+          ? group.name + " (" + group.platforms.map(function (item) { return item.label.split(" · ").pop(); }).join(", ") + ")"
+          : group.platforms[0].label;
+      });
+      return [
+        '<div class="desktop-downloads is-unavailable">',
+        '<p class="desktop-downloads-status"><strong>' + escapeHtml(kit.notAvailable) + "</strong> " + escapeHtml(kit.tagline) + "</p>",
+        '<p class="desktop-downloads-planned">Installers planned for ' + escapeHtml(planned.join(", ")) + ". " + escapeHtml(kit.unavailable) + "</p>",
+        "</div>"
+      ].join("");
+    }
+
+    const mine = kit.detectPlatform();
+    const link = function (item, primary) {
+      return '<a class="' + (primary ? "button desktop-download-primary" : "desktop-download-link") + '" href="' + escapeAttribute(kit.downloadUrl(item)) +
+        '" data-platform="' + escapeAttribute(item.id) + '"' + (primary ? "" : ' aria-label="Download for ' + escapeAttribute(item.label) + '"') + ">" +
+        (primary ? "Download for " + escapeHtml(item.label) : escapeHtml(item.label.split(" · ").pop())) + "</a>";
+    };
+    let choices;
+    if (mine) {
+      const others = groups.map(function (group) {
+        const items = group.platforms.filter(function (item) { return item.id !== mine.id; });
+        return items.length ? '<span class="desktop-download-group"><span>' + escapeHtml(group.name) + "</span> " + items.map(function (item) { return link(item); }).join(" ") + "</span>" : "";
+      }).filter(Boolean);
+      choices = link(mine, true) +
+        (others.length ? '<p class="desktop-download-others">Download for another system: ' + others.join('<span aria-hidden="true"> · </span>') + "</p>" : "");
+    } else {
+      choices = '<div class="desktop-download-groups">' + groups.map(function (group) {
+        return '<div class="desktop-download-group"><span>' + escapeHtml(group.name) + "</span>" +
+          group.platforms.map(function (item) {
+            return '<a class="button button-secondary button-compact desktop-download-link" href="' + escapeAttribute(kit.downloadUrl(item)) + '" data-platform="' + escapeAttribute(item.id) + '" aria-label="Download for ' + escapeAttribute(item.label) + '">Download ' +
+              escapeHtml(group.platforms.length > 1 ? item.label.split(" · ").pop() : "") + "</a>";
+          }).join("") + "</div>";
+      }).join("") + "</div>";
+    }
     return [
-      '<div class="desktop-downloads is-unavailable">',
-      '<p class="desktop-downloads-status"><strong>' + escapeHtml(kit.notAvailable) + "</strong> " + escapeHtml(kit.tagline) + "</p>",
+      '<div class="desktop-downloads">',
+      choices,
+      '<p class="desktop-download-unavailable">' + escapeHtml(kit.unavailable) + "</p>",
+      '<details class="desktop-first-launch" data-open-key="desktop-first-launch"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["desktop-first-launch"] ? " open" : "") + ">",
+      "<summary>First launch (unsigned app)</summary>",
+      "<p><strong>macOS:</strong> the first time, macOS blocks the app. Open System Settings → Privacy &amp; Security and choose Open Anyway next to HYB2 Desktop.</p>",
+      "<p><strong>Windows:</strong> SmartScreen may warn about an unrecognised app. Choose More info → Run anyway.</p>",
+      "</details>",
+      '<p class="desktop-download-meta"><a href="' + escapeAttribute(kit.checksumsUrl()) + '">Checksums (' + escapeHtml(kit.checksumsFile) + ")</a>" +
+        '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl + "/latest") + '">Release notes</a></p>',
       "</div>"
     ].join("");
   }

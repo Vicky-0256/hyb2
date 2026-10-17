@@ -93,3 +93,22 @@
     transition: none;
   }
 }
+
+/* ---- C4/C5 maps: room for the axis titles and the colour bar drawn in the canvas */
+
+.comparison-canvas-wrap,
+.comparison-canvas {
+  height: 480px;
+}
+
+@media (max-width: 767px) {
+  .comparison-canvas-wrap,
+  .comparison-canvas {
+    height: 440px;
+  }
+}
+
+/* panel A: the canvas grew by its colour bar */
+.deseq-canvas-wrap {
+  aspect-ratio: 1 / 1.1;
+}

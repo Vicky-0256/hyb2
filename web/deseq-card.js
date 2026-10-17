@@ -14,6 +14,8 @@
   const RED = [214, 69, 65];
   const BLUE = [43, 108, 196];
   const BIN = 10;
+  const PADJ_FULL = 20; // −log10 padj at which a cell is fully opaque
+  const BOTTOM_SPACE = 104;
   const TABLE_ROWS = 60;
   const REPORT_CELLS = 20000;
   const VALIDATION = "On the ZIKV virion comparison (ZAFR_REP1/2 vs ZILM_REP2/3, 1,038,539 tested 10-nt cells) it matches R DESeq2 1.46: the same 83,023 significant cells (20,660 up / 62,363 down) and 668 / 1,725 merged interactions at padj < 0.05 (one interaction is an exactly tied neighbour of R's pick, because ties are merged in table order); against HYB2 Desktop's numpy port, log2 fold changes agree to 2e-9 and padj to 3e-7 (relative) over every tested cell.";
@@ -296,7 +298,8 @@
   function geometry(width, height, length) {
     const left = 58;
     const top = 40;
-    const size = Math.max(60, Math.min(width - left - 16, height - top - 60));
+    // below the map: tick labels, the axis title and the colour bar
+    const size = Math.max(60, Math.min(width - left - 16, height - top - BOTTOM_SPACE));
     return {
       left: left, top: top, size: size, length: length,
       x: function (v) { return left + v / length * size; },
@@ -359,6 +362,9 @@
         context.fillText(text, a, b);
       }
     }, comparison);
+    if (legendKit()) {
+      legendKit().legend.drawCanvas(context, legendOptions(g, comparison));
+    }
   }
 
   // axis ticks and labels through a small drawing callback
@@ -373,7 +379,44 @@
     draw("text", g.left + g.size / 2, g.top + g.size + 36, 0, 0, "x (nt, arm 1) · " + (comparison.rnaX || ""), "center");
     const labelA = comparison.conditionALabel || "Condition A";
     const labelB = comparison.conditionBLabel || "Condition B";
-    draw("text", g.left, g.top + g.size + 54, 0, 0, "■ red: higher in " + labelA + "   ■ blue: higher in " + labelB + "   opacity: −log10 padj (0.2 at padj 1, full at 1e-20)", "left");
+    if (!legendKit()) {
+      draw("text", g.left, g.top + g.size + 54, 0, 0, "■ red: higher in " + labelA + "   ■ blue: higher in " + labelB + "   opacity: −log10 padj (0.2 at padj 1, full at 1e-20)", "left");
+    }
+  }
+
+  function legendKit() {
+    return typeof window !== "undefined" && window.Hyb2UiKit && window.Hyb2UiKit.legend ? window.Hyb2UiKit : null;
+  }
+
+  // K1 colour bar: signed −log10 padj, the colour giving the direction and
+  // the opacity the strength, as the cells are drawn (over white)
+  function legendOptions(g, comparison) {
+    const tint = function (colour, alpha) {
+      return "rgb(" + colour.map(function (c) { return Math.round(255 + (c - 255) * alpha); }).join(",") + ")";
+    };
+    return {
+      kind: "diverging",
+      min: -PADJ_FULL,
+      max: PADJ_FULL,
+      ticks: [-PADJ_FULL, -PADJ_FULL / 2, 0, PADJ_FULL / 2, PADJ_FULL],
+      colorAt: function (t) {
+        const signed = 2 * t - 1;
+        const strength = Math.abs(signed);
+        return strength < 1e-6 ? "rgb(255,255,255)" : tint(signed > 0 ? RED : BLUE, 0.2 + 0.8 * strength);
+      },
+      format: function (value) { return (Math.abs(value) >= PADJ_FULL ? "≥ " : "") + Math.abs(value); },
+      title: "−log10 padj (opacity); colour: direction",
+      lowLabel: "Higher in " + (comparison.conditionBLabel || "Condition B"),
+      highLabel: "Higher in " + (comparison.conditionALabel || "Condition A"),
+      orientation: "horizontal",
+      x: g.left,
+      y: g.top + g.size + 46,
+      width: Math.min(280, g.size),
+      height: 10,
+      ink: "#222222",
+      muted: "#6b7280",
+      font: "Inter, Arial, sans-serif"
+    };
   }
 
   function draw(state, api) {
@@ -428,7 +471,7 @@
     const result = deseq.result;
     const opts = options || {};
     const width = opts.width || 760;
-    const height = opts.height || 780;
+    const height = opts.height || 820;
     const show = opts.show || deseq.show || "both";
     const g = geometry(width, height, mapLength(result));
     const parts = [];
@@ -460,6 +503,9 @@
         parts.push('<text x="' + a.toFixed(1) + '" y="' + b.toFixed(1) + '" text-anchor="' + (anchor === "center" ? "middle" : (anchor === "right" ? "end" : "start")) + '" fill="#6b7280">' + xml(text) + "</text>");
       }
     }, comparison);
+    if (legendKit()) {
+      parts.push(legendKit().legend.svg(legendOptions(g, comparison)));
+    }
     parts.push("</svg>");
     return { svg: parts.join(""), drawn: cells.length - start, total: cells.length };
   }

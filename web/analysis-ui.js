@@ -1246,36 +1246,45 @@
     }
   }
 
-  function drawComparisonCanvas(state, canvas, kind) {
+  // options: { theme: "light" } draws an export copy (K4: light by default)
+  // that keeps neither the hit-test geometry nor a cached layer
+  function drawComparisonCanvas(state, canvas, kind, options) {
+    const opts = options || {};
+    const exporting = Boolean(opts.theme);
+    const theme = opts.theme;
+    const dark = theme ? theme === "dark" : isDarkTheme();
     const result = state.comparison.result;
     const dimensions = prepareCanvas(canvas);
     const context = dimensions.context;
-    const style = getComputedStyle(document.documentElement);
-    const surface = style.getPropertyValue("--surface").trim();
-    const line = style.getPropertyValue("--line").trim();
-    const ink = style.getPropertyValue("--ink").trim();
-    const muted = style.getPropertyValue("--muted").trim();
+    const colours = exporting ? exportColors(theme) : null;
+    const style = exporting ? null : getComputedStyle(document.documentElement);
+    const surface = exporting ? colours.surface : style.getPropertyValue("--surface").trim();
+    const line = exporting ? colours.line : style.getPropertyValue("--line").trim();
+    const ink = exporting ? colours.ink : style.getPropertyValue("--ink").trim();
+    const muted = exporting ? colours.muted : style.getPropertyValue("--muted").trim();
     const geometry = getComparisonGeometry(result, dimensions.width, dimensions.height);
-    state.comparison.geometry = state.comparison.geometry || {};
-    state.comparison.geometry[kind] = geometry;
+    if (!exporting) {
+      state.comparison.geometry = state.comparison.geometry || {};
+      state.comparison.geometry[kind] = geometry;
+    }
     const cells = kind === "conserved" ? result.conservedCells : result.cells;
-    const panel = kind === "conserved" && !isDarkTheme() ? similarityPanelColor(state.comparison) : line;
+    const panel = kind === "conserved" && !dark ? similarityPanelColor(state.comparison) : line;
     // A whole-genome map has up to ~10^6 cells: they are drawn once into a
     // layer kept with the result and copied on later renders.
-    const layerKey = [kind, canvas.width, canvas.height, surface, panel, isDarkTheme()].join("|");
+    const layerKey = [kind, canvas.width, canvas.height, surface, panel, dark].join("|");
     let layers = comparisonLayers.get(result);
     if (!layers) {
       layers = new Map();
       comparisonLayers.set(result, layers);
     }
-    let layer = layers.get(layerKey);
-    if (!layer && cells.length > COMPARISON_LAYER_MIN_CELLS && typeof document.createElement === "function") {
+    let layer = exporting ? null : layers.get(layerKey);
+    if (!layer && !exporting && cells.length > COMPARISON_LAYER_MIN_CELLS && typeof document.createElement === "function") {
       layer = document.createElement("canvas");
       layer.width = canvas.width;
       layer.height = canvas.height;
       const layerContext = layer.getContext("2d");
       layerContext.setTransform(canvas.width / dimensions.width, 0, 0, canvas.height / dimensions.height, 0, 0);
-      drawComparisonCells(layerContext, dimensions, geometry, result, kind, cells, surface, panel, line);
+      drawComparisonCells(layerContext, dimensions, geometry, result, kind, cells, surface, panel, line, theme);
       layers.set(layerKey, layer);
     }
     if (layer) {
@@ -1284,9 +1293,9 @@
       context.drawImage(layer, 0, 0);
       context.restore();
     } else {
-      drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line);
+      drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line, theme);
     }
-    if (state.comparison.selection) {
+    if (state.comparison.selection && !exporting) {
       const selected = state.comparison.selection;
       if (selected.x >= geometry.xStart && selected.x <= geometry.xEnd && selected.y >= geometry.yStart && selected.y <= geometry.yEnd) {
         context.strokeStyle = ink;
@@ -1299,6 +1308,7 @@
         );
       }
     }
+    context.lineWidth = 1;
     context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
     context.fillStyle = muted;
     context.textAlign = "left";
@@ -1311,15 +1321,94 @@
     context.font = "600 12px system-ui, sans-serif";
     context.fillStyle = ink;
     context.textAlign = "left";
-    context.fillText(comparisonMapTitle(state.comparison, kind, false, function (text) {
+    context.fillText(comparisonMapTitle(state.comparison, kind, exporting, function (text) {
       return context.measureText(text).width <= geometry.plotWidth;
-    }), geometry.left, 15);
-    if (kind === "effect") {
-      context.font = "11px system-ui, sans-serif";
-      context.fillText(state.comparison.conditionALabel + " enriched: violet · " + state.comparison.conditionBLabel + " enriched: teal", geometry.left, 29);
+    }), geometry.left, 16);
+    if (window.Hyb2UiKit) {
+      window.Hyb2UiKit.legend.drawCanvas(context, comparisonLegendOptions(state.comparison, result, kind, theme, geometry, { ink: ink, muted: muted }));
     }
     context.strokeStyle = line;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
+  }
+
+  // K1 colour bar under a map: diverging -cap..+cap for the effect,
+  // sequential floor..cap for the similarity (values past the cap take its colour)
+  function comparisonLegendOptions(comparison, result, kind, theme, geometry, palette) {
+    const kit = window.Hyb2UiKit;
+    const place = {
+      orientation: "horizontal",
+      x: geometry.left,
+      y: geometry.top + geometry.plotHeight + COMPARISON_LEGEND_OFFSET,
+      width: Math.min(260, geometry.plotWidth),
+      height: 10,
+      ink: palette.ink,
+      muted: palette.muted
+    };
+    if (kind === "conserved") {
+      const cap = Math.max(1, Number(result.similarityCap) || 1);
+      const smallest = similarityFloorOf(result);
+      const floor = Number.isFinite(smallest) ? Math.min(cap, smallest) : cap;
+      const flat = !(cap > floor);
+      return Object.assign(place, {
+        kind: "sequential",
+        min: floor,
+        max: flat ? floor + 1 : cap,
+        ticks: flat ? [floor] : spacedTicks(kit.niceTicks(floor, cap, 4)),
+        colorAt: function (t) { return conservedColor(flat ? .5 : t, theme); },
+        format: function (value) { return (!flat && value >= cap ? "≥ " : "") + kit.formatTick(value); },
+        title: "Similarity · smaller raw count of A and B"
+      });
+    }
+    const cap = Math.max(.01, Number(result.effectCap) || 0);
+    // symmetric: the ends, zero and one round value each side near cap / 2
+    const inner = kit.niceTicks(0, cap, 3).filter(function (value) { return value > 0 && value < cap; });
+    const half = inner.reduce(function (best, value) { return best === null || Math.abs(value - cap / 2) < Math.abs(best - cap / 2) ? value : best; }, null);
+    const end = Number(cap.toFixed(cap < 1 ? 2 : 1));
+    return Object.assign(place, {
+      kind: "diverging",
+      min: -cap,
+      max: cap,
+      ticks: half === null ? [-cap, 0, cap] : [-cap, -half, 0, half, cap],
+      colorAt: function (t) { return effectColor(2 * t - 1, theme); },
+      format: function (value) { return value <= -cap ? "≤ " + kit.formatTick(-end) : value >= cap ? "≥ " + kit.formatTick(end) : kit.formatTick(value); },
+      title: "Mean log2 effect, log2(A / B)",
+      lowLabel: (comparison.conditionBLabel || "Condition B") + " enriched",
+      highLabel: (comparison.conditionALabel || "Condition A") + " enriched"
+    });
+  }
+
+  // interior ticks too close to an end are dropped: the end labels are wider
+  function spacedTicks(ticks) {
+    if (ticks.length < 3) {
+      return ticks;
+    }
+    const low = ticks[0];
+    const high = ticks[ticks.length - 1];
+    const gap = .12 * (high - low);
+    return ticks.filter(function (value, index) {
+      return index === 0 || index === ticks.length - 1 || (value - low >= gap && high - value >= gap);
+    });
+  }
+
+  // the effect map as a PNG: drawn again off screen in the light export
+  // colours (K4), with its title, axes and colour bar
+  function downloadComparisonPng(state, api) {
+    const id = "comparison-effect-export-canvas";
+    const old = document.getElementById(id);
+    if (old) {
+      old.remove();
+    }
+    const canvas = document.createElement("canvas");
+    canvas.id = id;
+    canvas.setAttribute("aria-hidden", "true");
+    canvas.style.cssText = "position:fixed;left:-10000px;top:0;width:" + COMPARISON_EXPORT_WIDTH + "px;height:" + COMPARISON_EXPORT_HEIGHT + "px;";
+    document.body.appendChild(canvas);
+    try {
+      drawComparisonCanvas(state, canvas, "effect", { theme: "light" });
+      downloadCanvasPng("comparison-effect-map.png", api, id, "Comparison effect PNG downloaded locally.", "comparison-effect-canvas");
+    } finally {
+      canvas.remove();
+    }
   }
 
   // "ZAFR (ZAFR_REP1, ZAFR_REP2) vs ZASI (ZILM_REP2, ZILM_REP3)": with the
@@ -1372,15 +1461,21 @@
   const comparisonLayers = new WeakMap();
   const COMPARISON_SVG_MAX_CELLS = 100000;
   const COMPARISON_LAYER_MIN_CELLS = 20000;
+  // below the plot: tick labels, the axis title, then the colour bar (~56 px)
+  const COMPARISON_LEGEND_OFFSET = 46;
+  const COMPARISON_BOTTOM_SPACE = 104;
+  const COMPARISON_EXPORT_WIDTH = 720;
+  const COMPARISON_EXPORT_HEIGHT = 560;
 
-  function drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line) {
+  function drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line, theme) {
+    const dark = theme ? theme === "dark" : isDarkTheme();
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
     // the similarity heatmap keeps similarity_heatmap.R's white panel, or
     // ggplot's grey one so that bins at the smallest count show
     context.fillStyle = panel;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
-    if (kind === "conserved" && !isDarkTheme()) {
+    if (kind === "conserved" && !dark) {
       context.strokeStyle = line;
       context.strokeRect(geometry.left + .5, geometry.top + .5, geometry.plotWidth - 1, geometry.plotHeight - 1);
     }
@@ -1394,7 +1489,7 @@
       const value = kind === "conserved" ? cell.similarity : cell.effect;
       let colour = colours.get(value);
       if (colour === undefined) {
-        colour = kind === "conserved" ? conservedColor(conservedRatio(value, result)) : effectColor(value / effectCap);
+        colour = kind === "conserved" ? conservedColor(conservedRatio(value, result), theme) : effectColor(value / effectCap, theme);
         colours.set(value, colour);
       }
       return colour;
@@ -1402,7 +1497,7 @@
     if (cells.length > COMPARISON_LAYER_MIN_CELLS && typeof context.getImageData === "function") {
       // effects are nearly all distinct: their colour is packed straight from
       // the number; similarity counts repeat and keep the string cache
-      const effectPacked = effectPacker(isDarkTheme());
+      const effectPacked = effectPacker(dark);
       const packedOf = kind === "conserved" ? null : function (cell) { return effectPacked(cell.effect / effectCap); };
       rasterComparisonCells(context, dimensions, geometry, result, cells, width, height, colourOf, packedOf);
       return;
@@ -1471,10 +1566,11 @@
     const xEnd = Math.floor(result.xMax / result.binSize) * result.binSize;
     const yStart = Math.floor(result.yMin / result.binSize) * result.binSize;
     const yEnd = Math.floor(result.yMax / result.binSize) * result.binSize;
-    const left = 78;
-    const top = 38;
-    const plotWidth = Math.max(120, width - left - 18);
-    const plotHeight = Math.max(120, height - top - 42);
+    // room above for the title, below for the x axis and the colour bar
+    const left = 66;
+    const top = 30;
+    const plotWidth = Math.max(120, width - left - 16);
+    const plotHeight = Math.max(120, height - top - COMPARISON_BOTTOM_SPACE);
     const xCount = Math.max(1, Math.round((xEnd - xStart) / result.binSize) + 1);
     const yCount = Math.max(1, Math.round((yEnd - yStart) / result.binSize) + 1);
     return {
@@ -2361,7 +2457,7 @@
       if (!ensureVisualExport(state, "comparison", api)) {
         return true;
       }
-      downloadCanvasPng("comparison-effect-map.png", api, "comparison-effect-canvas", "Comparison effect PNG downloaded locally.");
+      downloadComparisonPng(state, api);
       return true;
     }
 
@@ -2596,9 +2692,10 @@
     if (!visualExportReady(state, "comparison")) {
       return "";
     }
-    const colors = exportColors();
-    const width = 720;
-    const height = 520;
+    // K4: exports use the light colours whatever the page theme
+    const colors = exportColors("light");
+    const width = COMPARISON_EXPORT_WIDTH;
+    const height = COMPARISON_EXPORT_HEIGHT;
     const geometry = getComparisonGeometry(result, width, height);
     // a whole-genome map keeps the SVG printable: the strongest effects,
     // drawn weakest first
@@ -2608,7 +2705,7 @@
     const cells = shown.map(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
-      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + effectColor(cell.effect / Math.max(.01, result.effectCap)) + '"/>';
+      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + effectColor(cell.effect / Math.max(.01, result.effectCap), "light") + '"/>';
     }).join("");
     return [
       '<?xml version="1.0" encoding="UTF-8"?>',
@@ -2617,13 +2714,15 @@
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.line + '"/>',
       cells,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '"/>',
-      '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="' + colors.ink + '">' + escapeXml(comparisonMapTitle(state.comparison, "effect", true, svgTextFits(13, width - geometry.left - 8))) + '</text>',
-      '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal' +
-        (shown.length < result.cells.length ? ' · the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins' : '') + '</text>',
+      '<text x="' + geometry.left + '" y="16" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="' + colors.ink + '">' + escapeXml(comparisonMapTitle(state.comparison, "effect", true, svgTextFits(13, width - geometry.left - 8))) + '</text>',
+      shown.length < result.cells.length
+        ? '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + COMPARISON_LEGEND_OFFSET + 10) + '" text-anchor="end" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins</text>'
+        : '',
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.xStart + '</text>',
       '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.xEnd + result.binSize - 1) + '</text>',
       '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.yStart + '</text>',
       '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.yEnd + result.binSize - 1) + '</text>',
+      window.Hyb2UiKit ? window.Hyb2UiKit.legend.svg(comparisonLegendOptions(state.comparison, result, "effect", "light", geometry, colors)) : '',
       '</svg>'
     ].join("");
   }

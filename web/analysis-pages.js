@@ -893,10 +893,15 @@
 
   // Right column, below the sequence or result: what the browser can fold,
   // the capacity test that raises the limit, and the local-run route.
+  // The one way the page states the browser CPLfold limit.
+  function cplfoldLimitSentence(capacity) {
+    return format(capacity.baselineLength) + " nt before the capacity test, up to " + format(capacity.hardCeiling) + " nt after it";
+  }
+
   function renderCplfoldLimits(structure) {
     const guided = structure.cplfoldEvidence === "hyb-blocks";
     return [
-      '<div class="method-limit cplfold-limits"><strong>What the browser can fold</strong><span>CPLfold runs here without its fast compiled core, so this browser folds short regions only: up to 500 nt at most, and the capacity test above finds a safe length for this computer. With HYB evidence, each eligible record adds a bonus that pulls the bases of its two arms together. For longer RNAs, use HYB2 Desktop, or Download local inputs and run CPLfold on your own computer.</span>',
+      '<div class="method-limit cplfold-limits"><strong>What the browser can fold</strong><span>CPLfold runs here without its fast compiled core, so this browser folds short regions only: ' + escape(cplfoldLimitSentence(cplfoldCapacity(structure))) + '. With HYB evidence, each eligible record adds a bonus that pulls the bases of its two arms together. For longer RNAs, use HYB2 Desktop, or Download local inputs and run CPLfold on your own computer.</span>',
       renderCplfoldCapacity(structure),
       renderCplfoldLocalCta(guided),
       '<details class="method-limit-details"><summary>Technical details</summary><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span><p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p></details></div>'
@@ -995,7 +1000,7 @@
     const capacity = cplfoldCapacity(structure);
     const profileMatches = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
     let headline = "Baseline " + format(capacity.baselineLength) + " nt";
-    let detail = "Run a short local benchmark to estimate a longer limit for this browser.";
+    let detail = "Run a short benchmark to fold longer sequences here, up to " + format(capacity.hardCeiling) + " nt.";
     if (capacity.status === "probing") {
       headline = "Measuring local capacity…";
       detail = "The Pyodide worker is running a representative " + format(capacity.probeLength || 75) + " nt CPLfold fold.";
@@ -1016,7 +1021,7 @@
       '<div class="cplfold-capacity" aria-live="polite">',
       '<div class="cplfold-capacity-row"><div><span class="drawer-kicker">Browser capacity</span><strong>' + escape(headline) + '</strong><small>' + escape(detail) + '</small></div>',
       '<button class="button button-secondary" type="button" data-feature-action="probe-cplfold-capacity"' + (structure.status === "running" ? " disabled" : "") + '>' + buttonLabel + '</button></div>',
-      '<small class="cplfold-capacity-footnote">The recommendation is session-specific and conservative. It is an estimate, not a guarantee; the absolute browser ceiling is ' + format(capacity.hardCeiling) + ' nt.</small>',
+      '<small class="cplfold-capacity-footnote">The measured length is a conservative estimate for this browser session, not a guarantee.</small>',
       '</div>'
     ].join("");
   }
@@ -1664,13 +1669,13 @@
       }
       const capacity = cplfoldCapacity(structure);
       if (length > capacity.hardCeiling) {
-        return "Browser CPLfold has a hard safety ceiling of " + format(capacity.hardCeiling) + " nt in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";
+        return "This " + format(length) + " nt sequence is too long for the browser, which folds " + cplfoldLimitSentence(capacity) + ". Select a shorter region or run CPLfold locally.";
       }
       if (length > capacity.baselineLength && capacity.status === "probing") {
         return "The browser CPLfold capacity test is running. Wait for it to finish before predicting this " + format(length) + " nt sequence.";
       }
       if (length > capacity.baselineLength && capacity.status !== "ready") {
-        return "This " + format(length) + " nt sequence is above the browser baseline of " + format(capacity.baselineLength) + " nt. Run the local capacity test before predicting.";
+        return "This " + format(length) + " nt sequence needs the capacity test first: the browser folds " + cplfoldLimitSentence(capacity) + ".";
       }
       if (length > capacity.baselineLength && capacity.profileKey !== cplfoldProfileKey(structure)) {
         return "CPLfold settings changed after the last browser capacity test. Measure capacity again before predicting this sequence.";
@@ -1713,7 +1718,7 @@
         ? format(length) + " nt is within the " + format(capacity.baselineLength) + " nt browser baseline."
         : measured
         ? format(length) + " nt " + (length > capacity.recommendedLength ? "is above" : "is within") + " the " + format(capacity.recommendedLength) + " nt measured for this browser."
-        : format(length) + " nt is above the " + format(capacity.baselineLength) + " nt baseline; the capacity test can raise the limit up to " + format(capacity.hardCeiling) + " nt.";
+        : format(length) + " nt is longer than the " + format(capacity.baselineLength) + " nt that folds before the capacity test.";
     } else if (notice) {
       text = format(length) + " nt; ViennaRNA folds up to 3,000 nt in this browser (above 2,000 nt after a confirmation).";
     }

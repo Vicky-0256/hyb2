@@ -180,7 +180,7 @@ assert.ok(sectionAt("review") > partAt[4] && sectionAt("limitations") > partAt[4
 record.limitations.forEach(function (text) { assert.ok(html.indexOf(text.replace(/'/g, "&#39;")) > sectionAt("limitations"), "limitation shown: " + text.slice(0, 30)); });
 record.warnings.forEach(function (w) { assert.ok(html.indexOf("<code>" + w.id + "</code>") > sectionAt("limitations"), w.id + " shown in part 5"); });
 // every chart and table with data names it
-[["Printable heatmap", "tables/contact_map_cells.tsv"], ["Printable coverage profile", "tables/viewpoint_bins.tsv"], ["Similarity heatmap", "tables/compare_cells.tsv"],
+[["Printable heatmap", "tables/contact_map_cells.tsv"], ["Printable coverage profile", "tables/viewpoint_bins.tsv"], ["B · Similarity heatmap", "tables/compare_cells.tsv"],
   ["Top matching records", "tables/interactions.tsv"], ["Top interacting RNAs", "tables/top_rnas.tsv"], ["Printable secondary-structure view", "results/structure_prediction.json"]].forEach(function (pair) {
   const at = html.indexOf("<h3>" + pair[0] + "</h3>");
   assert.ok(at > 0, pair[0] + " is in the report");

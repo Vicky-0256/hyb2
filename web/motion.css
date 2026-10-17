@@ -289,18 +289,20 @@
 /* Landing: cards and file panel                                       */
 /* ------------------------------------------------------------------ */
 
-/* Desktop: details sit under the hero copy while the file panel spans
-   both rows. Narrow layouts keep source order: copy, panel, details. */
-.landing-details {
+/* Desktop: hero copy and file panel side by side, then "Two ways to run
+   HYB2" across the full width. Narrow layouts keep source order: copy,
+   panel, then the comparison. */
+.landing-ways {
   position: relative;
   z-index: 1;
+  grid-column: 1 / -1;
   min-width: 0;
 }
 
 @media (min-width: 1081px) {
   .landing-main {
-    grid-template-rows: auto 1fr;
-    row-gap: 0;
+    grid-template-rows: auto auto;
+    row-gap: clamp(40px, 6vh, 72px);
   }
 
   .landing-copy {
@@ -308,16 +310,13 @@
     grid-row: 1;
   }
 
-  .landing-details {
-    grid-column: 1;
+  .landing-ways {
     grid-row: 2;
   }
 
   .landing-panel {
-    position: sticky;
-    top: 24px;
     grid-column: 2;
-    grid-row: 1 / span 2;
+    grid-row: 1;
     align-self: start;
     margin-top: 58px;
   }
@@ -343,17 +342,6 @@
   height: 3px;
   background: linear-gradient(90deg, var(--teal), var(--violet));
   content: "";
-}
-
-.web-capability-card {
-  border-radius: 12px;
-  transition: border-color var(--dur-quick) var(--ease-out), box-shadow var(--dur-quick) var(--ease-out), transform var(--dur-quick) var(--ease-out);
-}
-
-.web-capability-card:hover {
-  border-color: var(--line-strong);
-  box-shadow: 0 18px 36px -24px rgb(19 44 71 / 28%);
-  transform: translateY(-2px);
 }
 
 .web-capability-dot.is-ready {
@@ -572,20 +560,6 @@
   opacity: 0;
   transform: translate3d(0, 12px, 0);
 }
-
-.web-capability-card.is-revealed .web-capability-item {
-  animation: fade var(--dur-move) var(--ease-out) both;
-  animation-delay: calc(120ms + var(--i, 0) * var(--stagger-item));
-}
-
-.web-capability-card.is-revealed .web-capability-dot {
-  animation: pop var(--dur-move) var(--ease-pop) both, fade var(--dur-feedback) var(--ease-out) both;
-  animation-delay: calc(240ms + var(--i, 0) * var(--stagger-item));
-}
-
-.web-capability-item:nth-child(2) { --i: 1; }
-.web-capability-item:nth-child(3) { --i: 2; }
-.web-capability-item:nth-child(4) { --i: 3; }
 
 /* ------------------------------------------------------------------ */
 /* Scene: landing panel changes (idle → loading → review)              */
@@ -889,12 +863,6 @@
   opacity: 1;
   filter: none;
   transform: none;
-}
-
-@media (max-width: 1080px) {
-  .landing-details {
-    max-width: 720px;
-  }
 }
 
 /* The right-hand drawer slides; centred dialogs keep dialog-in. */

@@ -3,7 +3,18 @@
 
   const SVG_NS = "http://www.w3.org/2000/svg";
 
+  // Results already brought into view (selecting a candidate changes the
+  // result in place, so it is not revealed again).
+  const revealedResults = typeof WeakSet === "function" ? new WeakSet() : null;
+  let diagramObserver = null;
+  let fornaContainer = null;
+
   function afterRender(state, api) {
+    if (diagramObserver) {
+      diagramObserver.disconnect();
+      diagramObserver = null;
+    }
+    fornaContainer = null;
     const result = state.structure && state.structure.result;
     const target = document.querySelector("[data-structure-diagram]");
     if (!result || !target) {
@@ -14,10 +25,92 @@
     state.structure.viewMode = viewMode;
     if (viewMode === "folded") {
       renderFornaDiagram(target, result);
+    } else {
+      target.replaceChildren(buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode));
+      bindNucleotideMarkers(target, state, api);
+    }
+    observeDiagramSize(target);
+    if (revealedResults && !revealedResults.has(result)) {
+      revealedResults.add(result);
+      revealNewResult(result);
+    }
+  }
+
+  function prefersReducedMotion() {
+    return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  // E5 + E7: a new result folds the setup to its summary line, brings the
+  // result heading into view (no smooth scroll under reduced motion), moves
+  // focus to that heading so screen readers announce it, and says the
+  // headline numbers in the live region.
+  function revealNewResult(result) {
+    window.Hyb2OpenSections = window.Hyb2OpenSections || Object.create(null);
+    window.Hyb2OpenSections["structure-setup"] = false;
+    const setup = document.querySelector(".structure-setup-panel");
+    if (setup) {
+      setup.open = false;
+    }
+    const heading = document.getElementById("structure-result-heading");
+    const reveal = function () {
+      if (!heading || !heading.isConnected) {
+        return;
+      }
+      if (typeof heading.scrollIntoView === "function") {
+        heading.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+      }
+      if (typeof heading.focus === "function") {
+        heading.focus({ preventScroll: true });
+      }
+    };
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(reveal);
+    } else {
+      reveal();
+    }
+    const live = document.querySelector("[data-structure-announce]");
+    if (live) {
+      const summary = "Structure ready · " + formatEnergyText(result.energy) + " kcal/mol · " + (result.pairs || []).length + " pair" + ((result.pairs || []).length === 1 ? "" : "s");
+      setTimeout(function () {
+        if (live.isConnected) {
+          live.textContent = summary;
+        }
+      }, 150);
+    }
+  }
+
+  function formatEnergyText(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(1).replace("-", "\u2212") : "—";
+  }
+
+  // E6: the diagram follows its container's width (window resize, setup
+  // folded or opened). The SVG views scale by themselves; fornac needs
+  // setSize. Redraws are throttled to one per frame after the size settles.
+  function observeDiagramSize(target) {
+    if (typeof ResizeObserver !== "function") {
       return;
     }
-    target.replaceChildren(buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode));
-    bindNucleotideMarkers(target, state, api);
+    let lastWidth = target.clientWidth;
+    let timer = null;
+    diagramObserver = new ResizeObserver(function () {
+      const width = target.clientWidth;
+      if (Math.abs(width - lastWidth) < 2) {
+        return;
+      }
+      lastWidth = width;
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        if (fornaContainer && typeof fornaContainer.setSize === "function") {
+          try {
+            fornaContainer.setSize();
+          } catch (error) {
+            // a failed resize keeps the previous layout
+          }
+        }
+      }, 120);
+    });
+    diagramObserver.observe(target);
   }
 
   function renderFornaDiagram(target, result) {
@@ -42,7 +135,7 @@
       const container = new window.fornac.FornaContainer("#" + mount.id, {
         animation: false,
         zoomable: true,
-        initialSize: [760, 560],
+        initialSize: [Math.max(320, target.clientWidth || 760), Math.max(320, target.clientHeight || 560)],
         labelInterval: result.sequence.length <= 200 ? 10 : 25
       });
       delete mount.focus;
@@ -52,6 +145,7 @@
         name: result.label || (result.engine === "CPLfold" ? "CPLfold" : "ViennaRNA")
       });
       container.setSize();
+      fornaContainer = container;
     } catch (error) {
       target.replaceChildren();
       const failed = document.createElement("p");
@@ -116,13 +210,19 @@
       }
       state.structure.selectedNucleotide = null;
       api.render();
+      // only when the diagram is off screen
       const revealDiagram = function () {
         if (typeof document === "undefined") {
           return;
         }
         const diagram = document.querySelector("[data-structure-diagram]");
-        if (diagram && typeof diagram.scrollIntoView === "function") {
-          diagram.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (!diagram || typeof diagram.scrollIntoView !== "function") {
+          return;
+        }
+        const box = typeof diagram.getBoundingClientRect === "function" ? diagram.getBoundingClientRect() : null;
+        const visible = box && box.bottom > 80 && box.top < (window.innerHeight || 0) - 80;
+        if (!visible) {
+          diagram.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
         }
       };
       if (typeof window.requestAnimationFrame === "function") {

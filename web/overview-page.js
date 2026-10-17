@@ -250,8 +250,12 @@
       ["17", "Type of Chimera in standard HYB2 output"]
     ];
 
+    const desktop = desktopKit();
+    const rawReads = desktop ? desktop.cta("raw-reads") : "";
+
     return [
       '      <div class="page-heading"><div><h1>File format</h1><p>The local validator accepts the HYB record layout described below.</p></div></div>',
+      rawReads ? '      <section class="data-card format-raw-reads"><div class="card-title-row"><h2>From raw reads to .hyb</h2></div><p class="notice">' + rawReads + "</p></section>" : "",
       '      <section class="data-card">',
       '        <div class="card-title-row"><h2>Expected tab-delimited fields</h2><span class="card-kicker">1-indexed</span></div>',
       '        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Column</th><th>Field</th></tr></thead><tbody>',
@@ -262,6 +266,7 @@
   }
 
   function renderPrivacy() {
+    const desktop = desktopKit();
     return [
       '      <div class="page-heading"><div><h1>Privacy</h1><p>What happens to data opened in HYB2 Web Lite.</p></div></div>',
       '      <section class="data-card">',
@@ -271,8 +276,16 @@
       '        <div class="notice">Related research on the RNA Structure page is the only feature that contacts another service. It stays off until you turn it on. Each lookup sends only the public identifier you confirm, plus its species to EBI Search, by GET to www.ebi.ac.uk (EBI Search and Europe PMC). HYB files, sequences, structures and file names are never sent, and results stay in this tab.</div>',
       '        <div class="card-title-row"><h2>Session lifetime</h2></div>',
       '        <div class="notice">Parsed results exist only in tab memory. Choose “Start over” in the top bar to clear this analysis and return to file upload.</div>',
+      desktop ? '        <div class="card-title-row"><h2>' + escape(desktop.name) + '</h2></div><div class="notice privacy-desktop">' + escape(desktop.name) + " also processes your data only on your computer: it works offline, and reads, .hyb files and results stay on disk.</div>" : "",
       "      </section>"
     ].join("");
+  }
+
+  // K9 (Hyb2UiKit.desktop), or null inside HYB2 Desktop and in tests that
+  // load this page without ui-kit.js
+  function desktopKit() {
+    const desktop = window.Hyb2UiKit && window.Hyb2UiKit.desktop;
+    return desktop && !desktop.isInsideDesktop() ? desktop : null;
   }
 
   function format(value) {

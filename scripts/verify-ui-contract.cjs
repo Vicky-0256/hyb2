@@ -892,6 +892,12 @@ assert.match(appSource, /data-action="enter-analysis">Enter analysis/,
   assert.match(appSource, /<details class="example-more"[\s\S]*?class="example-files"/,
     "the example's description and downloads must be folded");
 }
+assert.match(appSource, /data-action="reload-page">Reload page/,
+  "a landing load error must offer Reload page");
+assert.match(appSource, /action === "reload-page"\)\s*\{\s*window\.location\.reload\(\);/,
+  "Reload page must reload the page");
+assert.match(appSource, /error\.source === "example"[\s\S]*?data-action="load-example">Try again/,
+  "a failed example load must offer Try again");
 assert.match(appSource, /function enterAnalysis\(\)\s*\{[\s\S]*?state\.analysisEntered = true;[\s\S]*?navigate\("overview"\);/,
   "entering analysis must be an explicit state transition");
 assert.match(appSource, /state\.loading = null;\s*state\.analysisEntered = false;\s*state\.activePage = "landing";\s*setRouteHash\("#\/"\);\s*if \(parseSession\.referenceFile\)/,

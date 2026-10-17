@@ -820,27 +820,6 @@
   font-size: 12px;
 }
 
-.structure-layout {
-  display: grid;
-  grid-template-columns: minmax(300px, .75fr) minmax(0, 1.25fr);
-  gap: 16px;
-}
-
-.structure-setup,
-.structure-result {
-  min-width: 0;
-}
-
-.structure-setup {
-  display: grid;
-  align-content: start;
-  gap: 16px;
-}
-
-.structure-setup .card-title-row {
-  margin-bottom: 0;
-}
-
 .method-badge {
   display: inline-flex;
   align-items: center;
@@ -883,12 +862,6 @@
   margin: 5px 0 0;
   color: var(--muted-strong);
   line-height: 1.5;
-}
-
-.structure-result {
-  display: flex;
-  min-height: 575px;
-  flex-direction: column;
 }
 
 .structure-sequence {
@@ -1135,7 +1108,6 @@
 
 @media (max-width: 900px) {
   .heatmap-layout,
-  .structure-layout,
   .region-results,
   .viewpoint-layout,
   .comparison-map-grid {
@@ -1148,10 +1120,6 @@
 
   .reference-panel {
     grid-column: auto;
-  }
-
-  .structure-result {
-    min-height: 450px;
   }
 }
 
@@ -1346,7 +1314,6 @@
 .virtual-table-head .unit {
   text-transform: none;
 }
-
 
 /* The plain statement first; the engine details folded under it. */
 .method-limit-details {

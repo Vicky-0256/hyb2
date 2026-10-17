@@ -373,34 +373,343 @@ a {
   transform: rotate(-45deg);
 }
 
-.web-capability-card {
-  margin-top: 1.35rem;
-  padding: 1rem 1.1rem;
-  border: 1px solid rgba(106, 79, 242, .18);
-  border-radius: 16px;
+/* "Two ways to run HYB2": Web Lite and HYB2 Desktop, one aligned row per
+   question. The columns share the grid's rows (subgrid), so a row that wraps
+   in one column keeps its neighbour level. */
+.landing-ways-title {
+  margin: 0 0 14px;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.ways-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+}
+
+.ways-col {
+  display: grid;
+  grid-row: span 8;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+  min-width: 0;
+  padding: 18px 22px 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
   background: var(--surface);
 }
 
-.web-capability-heading {
+.ways-desktop {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+.ways-head {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: .75rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-strong);
 }
 
-.web-capability-card h2 {
-  margin: .2rem 0 .7rem;
-  font-size: 1rem;
+.ways-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 720;
 }
 
-.web-capability-chip {
-  padding: .22rem .5rem;
-  border-radius: 999px;
+.ways-where {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.ways-row {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  margin: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.ways-label {
+  color: var(--muted-strong);
+  font-size: var(--text-label);
+  font-weight: 650;
+}
+
+.ways-actions {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 14px;
+  padding-top: 18px;
+}
+
+.ways-browser-check {
+  width: 100%;
+  color: var(--muted-strong);
+  font-size: 14px;
+}
+
+.ways-browser-check summary {
+  cursor: pointer;
+  font-weight: 620;
+}
+
+.ways-browser-check summary:focus-visible {
+  outline: 2px solid var(--primary-ink);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.ways-check-chip {
+  margin-left: 6px;
   color: var(--success);
-  background: var(--success-soft);
   font-size: var(--text-label);
   font-weight: 700;
+}
+
+.ways-browser-check .web-capability-list {
+  margin-top: 10px;
+}
+
+.desktop-downloads {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.desktop-downloads p {
+  margin: 0;
+}
+
+.desktop-downloads-status {
+  color: var(--muted-strong);
+}
+
+.desktop-downloads-status strong {
+  display: block;
+  color: var(--ink);
+  font-weight: 680;
+}
+
+.desktop-downloads-planned,
+.desktop-download-unavailable,
+.desktop-download-others,
+.desktop-download-meta {
+  color: var(--muted);
+}
+
+.desktop-download-primary {
+  justify-self: start;
+}
+
+.desktop-download-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.desktop-download-groups .desktop-download-group {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.desktop-download-group > span {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.desktop-download-others .desktop-download-group {
   white-space: nowrap;
+}
+
+.desktop-download-link,
+.desktop-download-meta a {
+  color: var(--primary-ink);
+  font-weight: 620;
+  text-underline-offset: 2px;
+}
+
+.desktop-download-groups .desktop-download-link {
+  justify-content: center;
+}
+
+.desktop-first-launch summary {
+  cursor: pointer;
+  color: var(--muted-strong);
+  font-weight: 620;
+}
+
+.desktop-first-launch p {
+  margin: 8px 0 0;
+  color: var(--muted-strong);
+}
+
+@media (max-width: 520px) {
+  .desktop-download-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A16: the raw-reads sentence under the drop zone hint */
+.dropzone-desktop {
+  max-width: 34em;
+  margin: 10px auto 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+/* A17: a raw-read file in the HYB slot */
+.raw-reads-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  white-space: normal;
+}
+
+.raw-reads-panel h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 720;
+}
+
+.raw-reads-panel h2:focus {
+  outline: none;
+}
+
+.raw-reads-panel h2:focus-visible {
+  outline: 2px solid var(--primary-ink);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.raw-reads-panel p,
+.raw-reads-body p {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.raw-reads-file code {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.raw-reads-fasta {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--warning-soft);
+}
+
+.raw-reads-panel .raw-reads-fasta {
+  color: var(--ink);
+}
+
+.raw-reads-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.raw-reads-body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding-top: 18px;
+}
+
+.raw-reads-panel .raw-reads-actions,
+.raw-reads-body .raw-reads-actions {
+  align-content: flex-start;
+}
+
+/* Desktop drawer (data-action="open-desktop") and its line in Help */
+.drawer-desktop-line {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.desktop-capabilities li + li {
+  margin-top: 6px;
+}
+
+.desktop-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.desktop-compare th,
+.desktop-compare td {
+  padding: 7px 8px 7px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.desktop-compare thead th {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.desktop-compare tbody th {
+  color: var(--muted-strong);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+@supports not (grid-template-rows: subgrid) {
+  .ways-col {
+    display: block;
+  }
+}
+
+@media (max-width: 720px) {
+  .ways-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ways-desktop {
+    margin-top: 16px;
+  }
+
+  .ways-col {
+    padding: 16px;
+  }
+
+  .ways-row {
+    grid-template-columns: 92px minmax(0, 1fr);
+  }
 }
 
 .web-capability-list {
@@ -442,76 +751,6 @@ a {
   color: var(--muted);
   font-size: .74rem;
   line-height: 1.5;
-}
-
-.desktop-download-lede {
-  margin-top: 0;
-}
-
-.desktop-download-list {
-  display: grid;
-  gap: .35rem;
-  margin: .7rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.desktop-download-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: .75rem;
-  min-height: 40px;
-  padding: 0 .75rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  color: var(--ink);
-  font-size: .8rem;
-  text-decoration: none;
-  transition: border-color 160ms var(--ease), background 160ms var(--ease);
-}
-
-.desktop-download-link strong {
-  color: var(--muted);
-  font-size: var(--text-label);
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.desktop-download-link:hover,
-.desktop-download-link:focus-visible {
-  border-color: var(--primary);
-  background: var(--surface);
-}
-
-.desktop-download-link.is-recommended {
-  border-color: rgba(106, 79, 242, .45);
-}
-
-.desktop-download-link.is-recommended strong {
-  color: var(--primary-ink);
-}
-
-.desktop-download-label {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-}
-
-/* Marks the installer for this system; the verb stays "Download". */
-.desktop-download-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--primary-soft);
-  color: var(--primary-ink);
-  font-size: var(--text-label);
-  font-weight: 700;
-  white-space: nowrap;
 }
 
 .landing-panel {
@@ -883,7 +1122,7 @@ a {
   padding: 4px 8px;
   border: 1px solid color-mix(in srgb, var(--teal) 30%, var(--line));
   border-radius: 999px;
-  background: var(--teal-soft);
+  background: var(--primary-soft);
   color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: var(--text-label);
@@ -1288,4 +1527,34 @@ a {
   margin: 12px 0 0;
   font-size: 0.875rem;
   color: var(--muted-strong);
+}
+
+/* Load errors: Reload page on the left, the retry and the alternative on
+   the right; they wrap on a phone. */
+.load-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.load-error-actions > .quiet-button:first-child {
+  margin-right: auto;
+}
+
+.example-setup-actions {
+  margin-top: 8px;
+}
+
+@media (max-width: 767px) {
+  /* Stacked, the retry first. */
+  .load-error-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .load-error-actions > .quiet-button:first-child {
+    margin-right: 0;
+  }
 }

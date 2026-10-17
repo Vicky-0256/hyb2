@@ -21,7 +21,7 @@
       "          <h1>Overview</h1>",
       '          <p><span class="mono">' + escape(summary.fileName) + "</span> · loaded locally · " + format(summary.validRecords) + " valid records</p>",
       "        </div>",
-      '        <div class="inline-actions"><button class="button button-secondary" type="button" data-action="download-summary">Export summary</button><button class="button button-secondary" type="button" data-action="download-rna-counts">Export RNA counts</button><button class="button button-secondary" type="button" data-action="download-rna-pairs">Export RNA pairs</button></div>',
+      '        <div class="inline-actions heading-export"><details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu"><button class="export-menu-item" type="button" role="menuitem" data-action="download-summary">Summary · JSON</button><button class="export-menu-item" type="button" role="menuitem" data-action="download-rna-counts">RNA counts · CSV</button><button class="export-menu-item" type="button" role="menuitem" data-action="download-rna-pairs">RNA pairs · CSV</button></div></details></div>',
       "      </div>",
       renderReferenceStatus(state),
       '      <section class="metric-grid" aria-label="Dataset summary">',
@@ -34,13 +34,15 @@
       '      <section class="overview-grid">',
       renderTopRnas(summary.rnaCounts),
       renderInteractionTypes(summary),
-      "      </section>",
       renderTopPairs(summary.pairCounts),
+      "      </section>",
       '      <section class="data-card">',
       '        <div class="card-title-row"><h2>Data quality</h2><span class="card-kicker">Local validation</span></div>',
       '        <div class="quality-grid">',
       renderQualityStat(percentFormatter.format(validPercentage), "valid data rows"),
-      renderQualityStat(percentFormatter.format(dgPercentage), "include a numeric dG value"),
+      summary.withDg
+        ? renderQualityStat(percentFormatter.format(dgPercentage), "include a numeric dG value")
+        : renderQualityStat("Not provided", "numeric dG values in this file", "quality-stat--absent"),
       renderQualityStat(format(summary.homodimerRecords), "homodimer-proxy records (overlap ≥ 5)"),
       renderQualityStat(format(summary.invalidRecords), "invalid rows skipped"),
       "        </div>",
@@ -54,11 +56,8 @@
     if (state.reference) {
       const mapped = Object.keys(state.reference.mapping || {}).length;
       return [
-        '      <section class="overview-callout" aria-label="Reference FASTA status">',
-        "        <div>",
-        "          <h2>Reference sequences loaded</h2>",
-        "          <p>" + format(state.reference.sequenceCount) + (state.reference.sequenceCount === 1 ? " FASTA sequence · " : " FASTA sequences · ") + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</p>",
-        "        </div>",
+        '      <section class="overview-callout overview-callout--compact" aria-label="Reference FASTA status">',
+        '        <p class="overview-callout-line"><strong>Reference sequences loaded</strong><span>' + format(state.reference.sequenceCount) + (state.reference.sequenceCount === 1 ? " FASTA sequence · " : " FASTA sequences · ") + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</span></p>",
         embedded ? "" : '        <button class="quiet-button" type="button" data-action="open-files" data-open-section="data-mapping">Review mapping</button>',
         "      </section>"
       ].join("");
@@ -98,7 +97,7 @@
   function renderTopRnas(items) {
     const maximum = items.length ? items[0].support : 1;
     return [
-      '        <section class="data-card">',
+      '        <section class="data-card overview-top-rnas">',
       '          <div class="card-title-row"><h2>Top interacting RNAs</h2><span class="card-kicker">Cluster support, per arm</span></div>',
       '          <p class="card-note">Each record counts once per arm on the RNA, so a record with both arms on one RNA counts twice.</p>',
       '          <div class="bar-list">',
@@ -120,12 +119,12 @@
     const types = summary.chimeraTypes || [];
     const total = summary.validRecords || 1;
     return [
-      '        <section class="data-card">',
+      '        <section class="data-card overview-types">',
       '          <div class="card-title-row"><h2>Chimera types</h2><span class="card-kicker">Column 17 / inferred</span></div>',
       '          <div class="type-split">',
       types.slice(0, 4).map(function (item) { return renderType(item.name, item.records / total, item.records); }).join(""),
       "          </div>",
-      '          <button class="quiet-button" type="button" data-action="navigate" data-page="interactions">View interactions</button>',
+      '          <button class="quiet-button overview-types-link" type="button" data-action="navigate" data-page="interactions">View interactions</button>',
       "        </section>"
     ].join("");
   }
@@ -134,23 +133,22 @@
     return [
       '            <div class="type-item">',
       "              <strong>" + escape(label) + "</strong>",
-      "              <span>" + percentFormatter.format(fraction) + "</span>",
+      '              <span class="type-value">' + format(count) + " records · " + percentFormatter.format(fraction) + "</span>",
       '              <div class="type-meter"><span style="width:' + (fraction * 100) + '%"></span></div>',
-      "              <span>" + format(count) + " records</span>",
       "            </div>"
     ].join("");
   }
 
   function renderTopPairs(items) {
     return [
-      '      <section class="data-card">',
+      '      <section class="data-card overview-top-pairs">',
       '        <div class="card-title-row"><h2>Top RNA pairs</h2><span class="card-kicker">Normalised pairs</span></div>',
       '        <div class="data-table-wrap">',
-      '          <table class="data-table">',
-      "            <thead><tr><th>RNA 1</th><th>RNA 2</th><th>HYB records</th><th>Source reads</th><th>Cluster support</th></tr></thead>",
+      '          <table class="data-table overview-pairs-table">',
+      '            <thead class="nowrap"><tr><th>RNA 1</th><th>RNA 2</th><th class="num">HYB records</th><th class="num">Source reads</th><th class="num">Cluster support</th></tr></thead>',
       "            <tbody>",
       items.slice(0, 6).map(function (item) {
-        return "<tr><td>" + escape(item.rnaOne) + "</td><td>" + escape(item.rnaTwo) + "</td><td>" + format(item.records) + "</td><td>" + (item.rawReadCountRecords ? format(item.rawReads) : "—") + "</td><td>" + format(item.support) + "</td></tr>";
+        return '<tr><td class="cell-truncate" title="' + attribute(item.rnaOne) + '">' + escape(item.rnaOne) + '</td><td class="cell-truncate" title="' + attribute(item.rnaTwo) + '">' + escape(item.rnaTwo) + '</td><td class="num">' + format(item.records) + '</td><td class="num">' + (item.rawReadCountRecords ? format(item.rawReads) : "—") + '</td><td class="num">' + format(item.support) + "</td></tr>";
       }).join(""),
       "            </tbody>",
       "          </table>",
@@ -159,8 +157,8 @@
     ].join("");
   }
 
-  function renderQualityStat(value, label) {
-    return '<div class="quality-stat"><strong>' + escape(value) + "</strong><span>" + escape(label) + "</span></div>";
+  function renderQualityStat(value, label, modifier) {
+    return '<div class="quality-stat' + (modifier ? " " + modifier : "") + '"><strong>' + escape(value) + "</strong><span>" + escape(label) + "</span></div>";
   }
 
   function renderValidation(state) {

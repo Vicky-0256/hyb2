@@ -16,7 +16,7 @@
     return [
       '<div class="page-heading">',
       "<div><h1>Interactions</h1><p>Filter, inspect, and export local HYB records.</p></div>",
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="export-filtered-csv">Export CSV</button><button class="button button-secondary" type="button" data-feature-action="export-filtered-hyb">Export HYB</button><button class="button button-secondary" type="button" data-feature-action="interactions-export-params">Export parameters</button></div>',
+      '<div class="inline-actions heading-export"><details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu"><button class="export-menu-item" type="button" role="menuitem" data-feature-action="export-filtered-csv">Filtered records · CSV</button><button class="export-menu-item" type="button" role="menuitem" data-feature-action="export-filtered-hyb">Filtered records · HYB</button><button class="export-menu-item" type="button" role="menuitem" data-feature-action="interactions-export-params">Parameters · JSON</button></div></details></div>',
       "</div>",
       '<section class="analysis-controls data-card">',
       '<div class="control-grid control-grid-wide">',
@@ -33,7 +33,7 @@
         { value: "support", label: "Cluster support" },
         { value: "records", label: "Records" }
       ], "interaction-filter"),
-      renderTextControl("Search", "search", filters.search, "RNA, sequence ID, or sequence", "interaction-filter"),
+      renderTextControl("Search", "search", filters.search, "Search ID or RNA", "interaction-filter", "text", { title: "Matches an RNA name, sequence ID or hybrid sequence" }),
       "</div>",
       '<details class="advanced-filters" data-open-key="interactions-advanced"' + openAttr("interactions-advanced") + '><summary>Advanced filters</summary>',
       '<div class="control-grid advanced-grid">',
@@ -75,12 +75,8 @@
   }
 
   function renderChooseRnaPanel() {
-    return [
-      '<section class="data-card partner-card">',
-      '<div class="card-title-row"><h2>RNA partner analysis</h2><span class="card-kicker">Select an RNA</span></div>',
-      '<p class="empty-inline">Choose one RNA in the filter bar to compare its interaction partners using real local records.</p>',
-      "</section>"
-    ].join("");
+    // No card until an RNA is chosen: one hint line under the filter bar.
+    return '<p class="partner-hint">Choose an RNA in the filter bar to see its interaction partners.</p>';
   }
 
   function renderInteractionTable(interactions, state) {
@@ -103,8 +99,8 @@
       '<section class="data-card interaction-table-card">',
       '<div class="card-title-row"><div><h2>Records</h2><span class="card-note">' + escape(note) + "</span></div><span class=\"card-kicker\">" + (state.shell === false ? "Project data" : "Local memory") + "</span></div>",
       '<div class="virtual-table-frame">',
-      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span>Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span>Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span title="Cluster support: records merged into this one">Support</span><span>ΔG <span class="unit">(kcal/mol)</span></span></div>',
-      '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0" style="height:' + viewportHeight + 'px">',
+      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span class="num">Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span class="num">Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span class="num" title="Cluster support: records merged into this one">Support</span><span class="num">ΔG <span class="unit">(kcal/mol)</span></span></div>',
+      '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0">',
       '<div class="virtual-table-spacer" style="height:' + (total * rowHeight) + 'px"></div>',
       '<div class="virtual-table-rows" data-virtual-rows style="transform:translateY(' + (start * rowHeight) + 'px)">',
       renderVirtualRows(rows || []),
@@ -133,13 +129,13 @@
       return [
         '<button class="virtual-row" type="button" data-feature-action="open-record" data-record-index="' + record.index + '" role="row">',
         '<span title="' + attribute(record.id) + '">' + escape(record.id) + "</span>",
-        '<span title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + "</span>",
-        "<span>" + range(record.rnaOneStart, record.rnaOneEnd) + "</span>",
-        '<span title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + "</span>",
-        "<span>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</span>",
+        '<span class="cell-truncate" title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + "</span>",
+        '<span class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + "</span>",
+        '<span class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + "</span>",
+        '<span class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + "</span>",
         '<span title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + "</span>",
-        "<span>" + format(record.supportCount) + "</span>",
-        "<span>" + (record.dg === null ? "—" : format(record.dg)) + "</span>",
+        '<span class="num">' + format(record.supportCount) + "</span>",
+        '<span class="num">' + (record.dg === null ? "—" : format(record.dg)) + "</span>",
         "</button>"
       ].join("");
     }).join("");
@@ -1458,8 +1454,12 @@
     return window.Hyb2OpenSections && window.Hyb2OpenSections[key] ? " open" : "";
   }
 
-  function renderSelectControl(label, key, value, options, feature) {
+  // K8: extra is optional, e.g. { wide: true } to span two grid columns.
+  // The select (or datalist input) carries the current choice's full text
+  // as its title, so a label cut off by the field width can still be read.
+  function renderSelectControl(label, key, value, options, feature, extra) {
     const available = options || [];
+    const fieldClass = "control-field" + (extra && extra.wide ? " control-field--wide" : "");
     if (available.length > 750) {
       const selected = available.find(function (option) {
         return String(option.value) === String(value);
@@ -1470,17 +1470,20 @@
       }
       const listId = "options-" + String(feature + "-" + key).replace(/[^a-z0-9_-]/gi, "-");
       return [
-        '<label class="control-field"><span>' + escape(label) + "</span>",
-        '<input type="search" list="' + attribute(listId) + '" value="' + attribute(value) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '" autocomplete="off">',
+        '<label class="' + fieldClass + '"><span>' + escape(label) + "</span>",
+        '<input type="search" list="' + attribute(listId) + '" value="' + attribute(value) + '"' + (selected ? ' title="' + attribute(selected.label) + '"' : "") + ' data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '" autocomplete="off">',
         '<datalist id="' + attribute(listId) + '">' + suggestions.map(function (option) {
           return '<option value="' + attribute(option.value) + '">' + escape(option.label) + "</option>";
         }).join("") + "</datalist>",
         '<small>Type an exact value. Showing ' + format(suggestions.length) + " of " + format(available.length) + " suggestions.</small></label>"
       ].join("");
     }
+    const current = available.find(function (option) {
+      return String(option.value) === String(value);
+    }) || available[0];
     return [
-      '<label class="control-field"><span>' + escape(label) + "</span>",
-      '<select data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '">',
+      '<label class="' + fieldClass + '"><span>' + escape(label) + "</span>",
+      '<select' + (current ? ' title="' + attribute(current.label) + '"' : "") + ' data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '">',
       available.map(function (option) {
         return '<option value="' + attribute(option.value) + '"' + (String(option.value) === String(value) ? " selected" : "") + ">" + escape(option.label) + "</option>";
       }).join(""),
@@ -1492,9 +1495,10 @@
     const settings = options || {};
     const numericAttributes = (settings.min === undefined ? "" : ' min="' + attribute(settings.min) + '"') +
       (settings.max === undefined ? "" : ' max="' + attribute(settings.max) + '"') +
-      (settings.step === undefined ? "" : ' step="' + attribute(settings.step) + '"');
+      (settings.step === undefined ? "" : ' step="' + attribute(settings.step) + '"') +
+      (settings.title === undefined ? "" : ' title="' + attribute(settings.title) + '"');
     return [
-      '<label class="control-field"><span>' + escape(label) + "</span>",
+      '<label class="control-field' + (settings.wide ? " control-field--wide" : "") + '"><span>' + escape(label) + "</span>",
       '<input type="' + (type || "text") + '" value="' + attribute(value) + '" placeholder="' + attribute(placeholder) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '"' + numericAttributes + '>',
       "</label>"
     ].join("");

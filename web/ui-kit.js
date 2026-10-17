@@ -307,15 +307,22 @@
   // cplfoldNt is desktop/runtime/detector.py DEFAULT_CPLFOLD_MAX_NT (it can be
   // changed with HYB2_CPLFOLD_MAX_NT, hence "by default").
   const DESKTOP_LIMITS = { cplfoldNt: 1000, webCplfoldNt: 500 };
-  const DESKTOP_GET = "<strong>Get HYB2 Desktop</strong>";
-  const DESKTOP_CTA = {
+    const DESKTOP_CTA = {
     "raw-reads": "Starting from raw reads (FASTQ, FASTA or SAM)? HYB2 Desktop maps them and writes the .hyb file.",
     "long-fold": "Longer than " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt? HYB2 Desktop runs CPLfold natively, up to " +
       formatTick(DESKTOP_LIMITS.cplfoldNt) + " nt by default, with no capacity test.",
     overview: "The full pipeline on your computer, from raw reads to structures."
   };
+  // The GitHub repository is private, so its release downloads 404 for
+  // visitors: until they are public, no page offers a download (downloadUrl
+  // and checksumsUrl return "") and cta() links to the Desktop drawer only.
+  // Set to true once https://github.com/Vicky-0256/hyb2/releases opens
+  // without signing in.
+  const DESKTOP_DOWNLOADS_PUBLIC = false;
   const desktop = {
     name: "HYB2 Desktop",
+    downloadsAvailable: DESKTOP_DOWNLOADS_PUBLIC,
+    notAvailable: "HYB2 Desktop is not available for public download yet.",
     releasesUrl: "https://github.com/Vicky-0256/hyb2/releases",
     checksumsFile: "SHA256SUMS.txt",
     platforms: [
@@ -348,19 +355,22 @@
     },
     downloadUrl: function (platform) {
       const file = typeof platform === "string" ? platform : platform && platform.file;
-      return desktop.releasesUrl + "/latest/download/" + file;
+      return desktop.downloadsAvailable && file ? desktop.releasesUrl + "/latest/download/" + file : "";
     },
     checksumsUrl: function () {
       return desktop.downloadUrl(desktop.checksumsFile);
     },
     // <a class="desktop-cta" data-action="open-desktop">: the app opens the
-    // Desktop drawer on click; without that handler it opens the release page.
+    // Desktop drawer on click (and calls preventDefault). Without that handler
+    // the link goes to the release page, or nowhere while downloads are private.
     cta: function (context) {
       if (desktop.isInsideDesktop() || !DESKTOP_CTA[context]) {
         return "";
       }
-      return '<a class="desktop-cta" href="' + desktop.releasesUrl + '/latest" data-action="open-desktop" data-desktop-context="' +
-        escapeText(context) + '">' + escapeText(DESKTOP_CTA[context]) + " " + DESKTOP_GET + "</a>";
+      const href = desktop.downloadsAvailable ? desktop.releasesUrl + "/latest" : "#hyb2-desktop";
+      const label = desktop.downloadsAvailable ? "Get HYB2 Desktop" : "About HYB2 Desktop";
+      return '<a class="desktop-cta" href="' + href + '" data-action="open-desktop" data-desktop-context="' +
+        escapeText(context) + '">' + escapeText(DESKTOP_CTA[context]) + " <strong>" + label + "</strong></a>";
     }
   };
 

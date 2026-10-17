@@ -114,13 +114,21 @@ assert.equal(desk.detectPlatform("Windows NT 10.0; Win64; x64").id, "win-x64");
 assert.equal(desk.detectPlatform("X11; Linux x86_64").id, "linux-deb");
 assert.equal(desk.detectPlatform("Linux; Android 14; Pixel 8"), null, "Android is not desktop Linux");
 assert.equal(desk.detectPlatform("iPhone; CPU iPhone OS 17_0"), null);
-assert.equal(desk.downloadUrl(desk.platforms[0]), "https://github.com/Vicky-0256/hyb2/releases/latest/download/HYB2-Desktop-macOS-arm64.dmg");
-assert.equal(desk.checksumsUrl(), "https://github.com/Vicky-0256/hyb2/releases/latest/download/SHA256SUMS.txt");
+// downloads are private for now: nothing may link to an installer
+assert.equal(desk.downloadsAvailable, false);
+assert.equal(desk.downloadUrl(desk.platforms[0]), "");
+assert.equal(desk.checksumsUrl(), "");
 ["raw-reads", "long-fold", "overview"].forEach(function (name) {
   const cta = desk.cta(name);
-  assert.match(cta, /^<a class="desktop-cta" href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest" data-action="open-desktop"/, name);
-  assert.match(cta, /<strong>Get HYB2 Desktop<\/strong><\/a>$/, name);
+  assert.match(cta, /^<a class="desktop-cta" href="#hyb2-desktop" data-action="open-desktop"/, name);
+  assert.match(cta, /<strong>About HYB2 Desktop<\/strong><\/a>$/, name);
+  assert.doesNotMatch(cta, /github\.com/, name);
 });
+desk.downloadsAvailable = true;
+assert.equal(desk.downloadUrl(desk.platforms[0]), "https://github.com/Vicky-0256/hyb2/releases/latest/download/HYB2-Desktop-macOS-arm64.dmg");
+assert.equal(desk.checksumsUrl(), "https://github.com/Vicky-0256/hyb2/releases/latest/download/SHA256SUMS.txt");
+assert.match(desk.cta("raw-reads"), /^<a class="desktop-cta" href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest" data-action="open-desktop".*<strong>Get HYB2 Desktop<\/strong><\/a>$/);
+desk.downloadsAvailable = false;
 assert.match(desk.cta("long-fold"), /Longer than 500 nt\? HYB2 Desktop runs CPLfold natively, up to 1,000 nt by default, with no capacity test\./);
 assert.equal(desk.cta("no-such-context"), "");
 context.window.Hyb2Desktop = { enabled: true };

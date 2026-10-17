@@ -567,9 +567,18 @@
   accent-color: var(--primary);
 }
 
-.structure-setup .button:disabled {
-  opacity: .48;
+/* Disabled actions stay readable (muted-strong on surface-subtle is above
+   4.5:1 in both themes); the dashed border and the reason above the run
+   button say why it waits, not a faded label. */
+.structure-setup .button:disabled,
+.structure-result .button:disabled {
+  border-color: var(--line-strong);
+  border-style: dashed;
+  background: var(--surface-subtle);
+  color: var(--muted-strong);
+  opacity: 1;
   box-shadow: none;
+  transform: none;
 }
 
 .structure-progress {

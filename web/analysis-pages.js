@@ -886,18 +886,19 @@
       !cplfold && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : "",
       '<div class="structure-run-bar">',
       !running && unavailableReason ? '<p class="structure-run-reason" role="note">Cannot run yet: ' + escape(unavailableReason) + "</p>" : "",
+      !running && !unavailableReason && lengthNotice ? '<p class="structure-run-note" role="note">' + escape(lengthNotice) + "</p>" : "",
       running ? renderStructureProgress(structure) : "",
       running ? '<button class="button button-secondary" type="button" data-feature-action="cancel-structure">' + (structure.operation === "capacity" ? "Cancel capacity test" : (structure.operation === "bonus-matrix" ? "Cancel input export" : "Cancel prediction")) + '</button>' : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable ? " disabled" : "") + ">" + actionLabel + "</button>",
       "</div>",
       "</section>",
-      '<section class="structure-result data-card">',
+      '<section class="structure-result data-card' + (structure.result ? "" : " is-preparing") + '">',
       '<div class="card-title-row"><div><h2>' + (structure.result ? "Structure result" : "Sequence preparation") + '</h2><span class="card-note">' + (structure.result && structure.result.label ? escape(structure.result.label) : (sequenceInfo.label ? escape(sequenceInfo.label) : "Choose a source")) + '</span></div><span class="card-kicker">' + format(structure.result && structure.result.sequence ? structure.result.sequence.length : length) + " nt</span></div>",
       sequenceInfo.error ? '<div class="notice notice-warning">' + escape(sequenceInfo.error) + "</div>" : "",
-      lengthNotice ? '<div class="notice notice-warning">' + escape(lengthNotice) + "</div>" : "",
+      length ? structureLengthInfo(length, lengthNotice, cplfold ? "cplfold" : "viennarna", structure) : "",
       structure.status === "error" ? '<div class="notice notice-error">' + escape(structure.message || (cplfold ? "Browser CPLfold could not finish the structure prediction." : "ViennaRNA WebAssembly could not finish the structure prediction.")) + "</div>" : "",
       structure.result ? renderStructureResult(structure.result, structure.selectedNucleotide, structure.viewMode) : renderStructurePreparation(sequenceInfo, structure),
       cplfold
-        ? '<div class="method-limit"><strong>What the browser can fold</strong><span>CPLfold runs here without its fast compiled core, so this browser folds short regions only: up to 500 nt at most, and the capacity test above finds a safe length for this computer. With HYB evidence, each eligible record adds a bonus that pulls the bases of its two arms together. For longer RNAs, use HYB2 Desktop, or Download local inputs and run CPLfold on your own computer.</span><details class="method-limit-details"><summary>Technical details</summary><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span></details></div>'
+        ? renderCplfoldLimits(structure)
         : guidedConstraintMode
         ? '<div class="method-limit"><strong>Compatibility boundary</strong><span>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. UNAFold remains an optional external CLI compatibility path, and pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</span></div>'
         : '<div class="method-limit"><strong>Scope</strong><span>Choose COMRADES(ViennaRNA) to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</span></div>',
@@ -943,10 +944,24 @@
       ], "structure-control") + "</div>",
       '<div class="control-grid">' + renderTextControl("Evidence alpha", "cplfoldAlpha", structure.cplfoldAlpha || "0.5", "0.5", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + renderTextControl("Pseudoknot beta", "cplfoldBeta", structure.cplfoldBeta || "0", "0", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + "</div>",
       '</details>',
+      "</section>"
+    ].join("");
+  }
+
+  // Right column, below the sequence or result: what the browser can fold,
+  // the capacity test that raises the limit, and the local-run route.
+  // The one way the page states the browser CPLfold limit.
+  function cplfoldLimitSentence(capacity) {
+    return format(capacity.baselineLength) + " nt before the capacity test, up to " + format(capacity.hardCeiling) + " nt after it";
+  }
+
+  function renderCplfoldLimits(structure) {
+    const guided = structure.cplfoldEvidence === "hyb-blocks";
+    return [
+      '<div class="method-limit cplfold-limits"><strong>What the browser can fold</strong><span>CPLfold runs here without its fast compiled core, so this browser folds short regions only: ' + escape(cplfoldLimitSentence(cplfoldCapacity(structure))) + '. HYB2 Desktop, or a local run below, folds longer RNAs.</span>',
       renderCplfoldCapacity(structure),
       renderCplfoldLocalCta(guided),
-      '<p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p>',
-      "</section>"
+      '<details class="method-limit-details"><summary>Technical details</summary><span>With HYB evidence, each eligible record adds a bonus that pulls the bases of its two arms together. This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span><p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p></details></div>'
     ].join("");
   }
 
@@ -1042,7 +1057,7 @@
     const capacity = cplfoldCapacity(structure);
     const profileMatches = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
     let headline = "Baseline " + format(capacity.baselineLength) + " nt";
-    let detail = "Run a short local benchmark to estimate a longer limit for this browser.";
+    let detail = "Run a short benchmark to fold longer sequences here, up to " + format(capacity.hardCeiling) + " nt.";
     if (capacity.status === "probing") {
       headline = "Measuring local capacity…";
       detail = "The Pyodide worker is running a representative " + format(capacity.probeLength || 75) + " nt CPLfold fold.";
@@ -1063,7 +1078,7 @@
       '<div class="cplfold-capacity" aria-live="polite">',
       '<div class="cplfold-capacity-row"><div><span class="drawer-kicker">Browser capacity</span><strong>' + escape(headline) + '</strong><small>' + escape(detail) + '</small></div>',
       '<button class="button button-secondary" type="button" data-feature-action="probe-cplfold-capacity"' + (structure.status === "running" ? " disabled" : "") + '>' + buttonLabel + '</button></div>',
-      '<small class="cplfold-capacity-footnote">The recommendation is session-specific and conservative. It is an estimate, not a guarantee; the absolute browser ceiling is ' + format(capacity.hardCeiling) + ' nt.</small>',
+      '<small class="cplfold-capacity-footnote">The measured length is a conservative estimate for this browser session, not a guarantee.</small>',
       '</div>'
     ].join("");
   }
@@ -1115,14 +1130,25 @@
       return '<div class="structure-placeholder"><span class="placeholder-label">Waiting for a sequence</span><p>Reference regions require a mapped FASTA. A HYB sequence can be selected from a record, or you can paste A, C, G and U directly.</p></div>';
     }
 
-    const localCplfoldInput = structure && structure.engine === "cplfold"
-      ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>'
-      : "";
     return [
       sequenceInfo.assembly ? renderAssemblyPreview(sequenceInfo.assembly, sequenceInfo.evidenceKind) : "",
-      '<code class="structure-sequence">' + escape(wrapSequence(sequenceInfo.sequence, 70)) + "</code>",
-      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="structure-download-fasta">Download FASTA</button>' + localCplfoldInput + "</div>"
+      renderSequenceBlocks(sequenceInfo.sequence, "structure-sequence"),
+      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-sequence">Copy sequence</button>' + structureExportMenu([
+        ['data-feature-action="structure-download-fasta"', "Download FASTA"],
+        structure && structure.engine === "cplfold" ? ['data-feature-action="download-local-cplfold-input"' + LOCAL_INPUT_ATTRS, "Download local inputs"] : null
+      ]) + "</div>"
     ].join("");
+  }
+
+  const LOCAL_INPUT_ATTRS = ' aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold"';
+
+  // K2 export menu: every download on the Structure page sits behind one
+  // Export button; items are [attributes, label].
+  function structureExportMenu(items) {
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      items.filter(Boolean).map(function (item) {
+        return '<button class="export-menu-item" type="button" role="menuitem" ' + item[0] + ">" + item[1] + "</button>";
+      }).join("") + "</div></details>";
   }
 
   function renderAssemblyPreview(assembly, evidenceKind) {
@@ -1175,8 +1201,21 @@
       guided ? renderComradesResult(result) : (cplfold ? renderCplfoldResult(result) : ""),
       renderStructureDiagramPanel(result, activeView, cplfold, allowPseudoknot, guided, manualConstrained, inspectorInstruction),
       renderNucleotideInspector(result, selectedNucleotide),
-      '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span><code class="structure-output-code">' + escape(wrapSequence(result.sequence, 64)) + '</code></div><div><span class="drawer-kicker">Dot-bracket</span><code class="structure-output-code">' + escape(wrapSequence(result.dotBracket, 64)) + "</code></div></section>",
-      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button><button class="button button-secondary" type="button" data-feature-action="download-structure-dot-bracket">Download DBN</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ct">Download CT</button><button class="button button-secondary" type="button" data-feature-action="download-structure-pairs">Download base pairs</button>' + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>' : "") + (guided ? '<button class="button button-secondary" type="button" data-feature-action="download-structure-evidence">Download evidence</button><button class="button button-secondary" type="button" data-feature-action="download-structure-constraints">Download constraints</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ensemble">Download ensemble</button>' : "") + (cplfoldHasEvidence ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-evidence">Download bonus matrix</button>' : "") + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-candidates">Download candidates</button>' : "") + '<button class="button button-secondary" type="button" data-feature-action="download-structure-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-png">Download PNG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-report">Download report</button></div>',
+      '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span>' + renderSequenceBlocks(result.sequence, "structure-output-code") + '</div><div><span class="drawer-kicker">Dot-bracket</span>' + renderSequenceBlocks(result.dotBracket, "structure-output-code") + "</div></section>",
+      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button>' + structureExportMenu([
+        ['data-feature-action="download-structure-dot-bracket"', "Download DBN"],
+        ['data-feature-action="download-structure-ct"', "Download CT"],
+        ['data-feature-action="download-structure-pairs"', "Download base pairs"],
+        cplfold ? ['data-feature-action="download-local-cplfold-input"' + LOCAL_INPUT_ATTRS, "Download local inputs"] : null,
+        guided ? ['data-feature-action="download-structure-evidence"', "Download evidence"] : null,
+        guided ? ['data-feature-action="download-structure-constraints"', "Download constraints"] : null,
+        guided ? ['data-feature-action="download-structure-ensemble"', "Download ensemble"] : null,
+        cplfoldHasEvidence ? ['data-feature-action="download-cplfold-evidence"', "Download bonus matrix"] : null,
+        cplfold ? ['data-feature-action="download-cplfold-candidates"', "Download candidates"] : null,
+        ['data-feature-action="download-structure-svg"', "Download SVG"],
+        ['data-feature-action="download-structure-png"', "Download PNG"],
+        ['data-feature-action="download-structure-report"', "Download report"]
+      ]) + "</div>",
       '<details class="base-pair-details"><summary>Base-pair list (' + format(pairs.length) + ")</summary>" + (pairs.length ? '<ol class="base-pair-list">' + pairs.map(function (pair) {
         const isHardConstraint = requestedPairs.has(pair.left + ":" + pair.right);
         const evidenceLabel = (guided || cplfold) && Number(pair.evidenceSupport) > 0 ? " · evidence " + formatEvidence(pair.evidenceSupport) : "";
@@ -1719,13 +1758,13 @@
       }
       const capacity = cplfoldCapacity(structure);
       if (length > capacity.hardCeiling) {
-        return "Browser CPLfold has a hard safety ceiling of " + format(capacity.hardCeiling) + " nt in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";
+        return "This " + format(length) + " nt sequence is too long for the browser, which folds " + cplfoldLimitSentence(capacity) + ". Select a shorter region or run CPLfold locally.";
       }
       if (length > capacity.baselineLength && capacity.status === "probing") {
         return "The browser CPLfold capacity test is running. Wait for it to finish before predicting this " + format(length) + " nt sequence.";
       }
       if (length > capacity.baselineLength && capacity.status !== "ready") {
-        return "This " + format(length) + " nt sequence is above the browser baseline of " + format(capacity.baselineLength) + " nt. Run the local capacity test before predicting.";
+        return "This " + format(length) + " nt sequence needs the capacity test first. The browser folds " + cplfoldLimitSentence(capacity) + ".";
       }
       if (length > capacity.baselineLength && capacity.profileKey !== cplfoldProfileKey(structure)) {
         return "CPLfold settings changed after the last browser capacity test. Measure capacity again before predicting this sequence.";
@@ -1753,6 +1792,28 @@
     return "";
   }
 
+  // Neutral length line for the Sequence preparation panel. The warning
+  // itself (structureLengthNotice) is shown once, next to the run button.
+  function structureLengthInfo(length, notice, engine, structure) {
+    let text = "";
+    if (engine === "cplfold" && cplfoldNativeAvailable()) {
+      text = format(length) + " nt " + (length > cplfoldNativeMaxLength() ? "is above" : "is within") + " the " + format(cplfoldNativeMaxLength()) + " nt desktop CPLfold limit.";
+    } else if (engine === "cplfold") {
+      const capacity = cplfoldCapacity(structure);
+      const measured = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
+      text = length > capacity.hardCeiling
+        ? format(length) + " nt is above the " + format(capacity.hardCeiling) + " nt browser ceiling."
+        : length <= capacity.baselineLength
+        ? format(length) + " nt is within the " + format(capacity.baselineLength) + " nt browser baseline."
+        : measured
+        ? format(length) + " nt " + (length > capacity.recommendedLength ? "is above" : "is within") + " the " + format(capacity.recommendedLength) + " nt measured for this browser."
+        : format(length) + " nt, longer than the " + format(capacity.baselineLength) + " nt baseline.";
+    } else if (notice) {
+      text = format(length) + " nt; ViennaRNA folds up to 3,000 nt in this browser (above 2,000 nt after a confirmation).";
+    }
+    return text ? '<p class="structure-length-info">' + escape(text) + "</p>" : "";
+  }
+
   function range(start, end) {
     return format(start) + "–" + format(end);
   }
@@ -1766,12 +1827,20 @@
     return string.length > length ? string.slice(0, length) + "…" : string;
   }
 
-  function wrapSequence(sequence, length) {
-    const pieces = [];
-    for (let index = 0; index < sequence.length; index += length) {
-      pieces.push(sequence.slice(index, index + length));
+  // Sequence text in lines of 50, groups of 10, each line led by the
+  // 1-based position of its first character; monospaced. The copy and
+  // download actions use the plain sequence, not this text.
+  function renderSequenceBlocks(sequence, className) {
+    const text = String(sequence || "");
+    const lines = [];
+    for (let start = 0; start < text.length; start += 50) {
+      const groups = [];
+      for (let index = start; index < Math.min(text.length, start + 50); index += 10) {
+        groups.push(text.slice(index, Math.min(index + 10, start + 50)));
+      }
+      lines.push('<span class="seq-line"><span class="seq-pos" aria-hidden="true">' + (start + 1) + '</span><span class="seq-text">' + escape(groups.join(" ")) + "</span></span>");
     }
-    return pieces.join("\n");
+    return '<code class="' + className + ' sequence-blocks" style="--seq-pos-ch:' + String(Math.max(1, text.length)).length + '">' + lines.join("") + "</code>";
   }
 
   function format(value) {

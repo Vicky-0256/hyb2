@@ -565,9 +565,11 @@
   function renderComparisonDatasetTable(comparison) {
     const datasets = comparison.datasets || [];
     return [
-      '<div class="data-table-wrap comparison-dataset-table"><table class="data-table"><thead><tr><th>Dataset</th><th>Label</th><th>Condition</th><th>Valid records</th><th>Support</th><th></th></tr></thead><tbody>',
+      // K3: numbers right-aligned, long file names cut with a title; Primary
+      // is a badge in the same column as Remove
+      '<div class="data-table-wrap comparison-dataset-table"><table class="data-table"><thead class="nowrap"><tr><th class="compare-dataset-name">Dataset</th><th>Label</th><th>Condition</th><th class="num">Valid records</th><th class="num">Support</th><th class="compare-dataset-action"><span class="visually-hidden">Role</span></th></tr></thead><tbody>',
       datasets.map(function (dataset) {
-        return '<tr><td title="' + attribute(dataset.fileName) + '">' + escape(dataset.fileName) + '</td><td><input type="text" value="' + attribute(dataset.label || "") + '" data-feature="comparison-dataset" data-key="label" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset label"></td><td><select data-feature="comparison-dataset" data-key="condition" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset condition"><option value="A"' + (dataset.condition === "A" ? " selected" : "") + '>Condition A</option><option value="B"' + (dataset.condition === "B" ? " selected" : "") + '>Condition B</option></select></td><td>' + format(dataset.summary.validRecords) + '</td><td>' + format(dataset.summary.supportInteractions) + '</td><td>' + (dataset.id === "primary" ? '<span class="card-note">Primary</span>' : '<button class="quiet-button" type="button" data-feature-action="remove-comparison-dataset" data-dataset-id="' + attribute(dataset.id) + '">Remove</button>') + '</td></tr>';
+        return '<tr><td class="cell-truncate" title="' + attribute(dataset.fileName) + '">' + escape(dataset.fileName) + '</td><td><input type="text" value="' + attribute(dataset.label || "") + '" data-feature="comparison-dataset" data-key="label" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset label"></td><td><select data-feature="comparison-dataset" data-key="condition" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset condition"><option value="A"' + (dataset.condition === "A" ? " selected" : "") + '>Condition A</option><option value="B"' + (dataset.condition === "B" ? " selected" : "") + '>Condition B</option></select></td><td class="num">' + format(dataset.summary.validRecords) + '</td><td class="num">' + format(dataset.summary.supportInteractions) + '</td><td class="compare-dataset-action">' + (dataset.id === "primary" ? '<span class="compare-badge" title="The file loaded on the Data page; it cannot be removed here">Primary</span>' : '<button class="quiet-button" type="button" data-feature-action="remove-comparison-dataset" data-dataset-id="' + attribute(dataset.id) + '">Remove</button>') + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -621,11 +623,11 @@
     const rawLabel = comparison.measure === "support" ? "Raw support" : "Raw records";
     const analysisLabel = comparison.normalise === "library" ? "Per million" : "Analysis value";
     return [
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Dataset</th><th>Condition</th><th>' + rawLabel + '</th><th>' + analysisLabel + '</th></tr></thead><tbody>',
+      '<div class="data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th>Dataset</th><th>Condition</th><th class="num">' + rawLabel + '</th><th class="num">' + analysisLabel + '</th></tr></thead><tbody>',
       (comparison.datasets || []).map(function (dataset) {
         const item = present[dataset.id];
         const conditionLabel = dataset.condition === "A" ? comparison.conditionALabel : comparison.conditionBLabel;
-        return '<tr><td>' + escape(dataset.label || dataset.fileName || dataset.id) + '</td><td>' + escape(conditionLabel) + '</td><td>' + format(item ? item.rawValue : 0) + '</td><td>' + format(item ? item.value : 0) + '</td></tr>';
+        return '<tr><td>' + escape(dataset.label || dataset.fileName || dataset.id) + '</td><td>' + escape(conditionLabel) + '</td><td class="num">' + format(item ? item.rawValue : 0) + '</td><td class="num">' + format(item ? item.value : 0) + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -664,9 +666,9 @@
       '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page - 1) + '"' + (page > 0 ? "" : " disabled") + '>Previous</button>',
       '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page + 1) + '"' + (page < pages - 1 ? "" : " disabled") + '>Next</button>',
       '</div>',
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>X interval</th><th>Y interval</th><th>' + escape(comparison.conditionALabel) + ' mean</th><th>' + escape(comparison.conditionBLabel) + ' mean</th><th>Log2 effect</th><th>Datasets present</th><th>Similarity</th></tr></thead><tbody>',
+      '<div class="data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">X interval</th><th class="num">Y interval</th><th class="num">' + escape(comparison.conditionALabel) + ' mean</th><th class="num">' + escape(comparison.conditionBLabel) + ' mean</th><th class="num">Log2 effect</th><th class="num">Datasets present</th><th class="num">Similarity</th></tr></thead><tbody>',
       rows.map(function (cell) {
-        return '<tr><td>' + range(cell.x, cell.x + result.binSize - 1) + '</td><td>' + range(cell.y, cell.y + result.binSize - 1) + '</td><td>' + format(cell.conditionA) + '</td><td>' + format(cell.conditionB) + '</td><td>' + format(cell.effect) + '</td><td>' + format(cell.presentDatasets) + '</td><td>' + format(cell.similarity) + '</td></tr>';
+        return '<tr><td class="num">' + range(cell.x, cell.x + result.binSize - 1) + '</td><td class="num">' + range(cell.y, cell.y + result.binSize - 1) + '</td><td class="num">' + format(cell.conditionA) + '</td><td class="num">' + format(cell.conditionB) + '</td><td class="num">' + format(cell.effect) + '</td><td class="num">' + format(cell.presentDatasets) + '</td><td class="num">' + format(cell.similarity) + '</td></tr>';
       }).join(""),
       '</tbody></table></div></section>'
     ].join("");

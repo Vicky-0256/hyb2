@@ -829,6 +829,7 @@
       !cplfold && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : "",
       '<div class="structure-run-bar">',
       !running && unavailableReason ? '<p class="structure-run-reason" role="note">Cannot run yet: ' + escape(unavailableReason) + "</p>" : "",
+      !running && !unavailableReason && lengthNotice ? '<p class="structure-run-note" role="note">' + escape(lengthNotice) + "</p>" : "",
       running ? renderStructureProgress(structure) : "",
       running ? '<button class="button button-secondary" type="button" data-feature-action="cancel-structure">' + (structure.operation === "capacity" ? "Cancel capacity test" : (structure.operation === "bonus-matrix" ? "Cancel input export" : "Cancel prediction")) + '</button>' : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable ? " disabled" : "") + ">" + actionLabel + "</button>",
       "</div>",
@@ -836,7 +837,7 @@
       '<section class="structure-result data-card' + (structure.result ? "" : " is-preparing") + '">',
       '<div class="card-title-row"><div><h2>' + (structure.result ? "Structure result" : "Sequence preparation") + '</h2><span class="card-note">' + (structure.result && structure.result.label ? escape(structure.result.label) : (sequenceInfo.label ? escape(sequenceInfo.label) : "Choose a source")) + '</span></div><span class="card-kicker">' + format(structure.result && structure.result.sequence ? structure.result.sequence.length : length) + " nt</span></div>",
       sequenceInfo.error ? '<div class="notice notice-warning">' + escape(sequenceInfo.error) + "</div>" : "",
-      lengthNotice ? '<div class="notice notice-warning">' + escape(lengthNotice) + "</div>" : "",
+      length ? structureLengthInfo(length, lengthNotice, cplfold ? "cplfold" : "viennarna", structure) : "",
       structure.status === "error" ? '<div class="notice notice-error">' + escape(structure.message || (cplfold ? "Browser CPLfold could not finish the structure prediction." : "ViennaRNA WebAssembly could not finish the structure prediction.")) + "</div>" : "",
       structure.result ? renderStructureResult(structure.result, structure.selectedNucleotide, structure.viewMode) : renderStructurePreparation(sequenceInfo, structure),
       cplfold
@@ -1695,6 +1696,28 @@
       return "This " + format(length) + " nt sequence may take a moment to fold in the local ViennaRNA worker.";
     }
     return "";
+  }
+
+  // Neutral length line for the Sequence preparation panel. The warning
+  // itself (structureLengthNotice) is shown once, next to the run button.
+  function structureLengthInfo(length, notice, engine, structure) {
+    let text = "";
+    if (engine === "cplfold" && cplfoldNativeAvailable()) {
+      text = format(length) + " nt " + (length > cplfoldNativeMaxLength() ? "is above" : "is within") + " the " + format(cplfoldNativeMaxLength()) + " nt desktop CPLfold limit.";
+    } else if (engine === "cplfold") {
+      const capacity = cplfoldCapacity(structure);
+      const measured = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
+      text = length > capacity.hardCeiling
+        ? format(length) + " nt is above the " + format(capacity.hardCeiling) + " nt browser ceiling."
+        : length <= capacity.baselineLength
+        ? format(length) + " nt is within the " + format(capacity.baselineLength) + " nt browser baseline."
+        : measured
+        ? format(length) + " nt " + (length > capacity.recommendedLength ? "is above" : "is within") + " the " + format(capacity.recommendedLength) + " nt measured for this browser."
+        : format(length) + " nt is above the " + format(capacity.baselineLength) + " nt baseline; the capacity test can raise the limit up to " + format(capacity.hardCeiling) + " nt.";
+    } else if (notice) {
+      text = format(length) + " nt; ViennaRNA folds up to 3,000 nt in this browser (above 2,000 nt after a confirmation).";
+    }
+    return text ? '<p class="structure-length-info">' + escape(text) + "</p>" : "";
   }
 
   function range(start, end) {

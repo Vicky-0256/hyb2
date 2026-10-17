@@ -17,3 +17,9 @@
 .page-heading--menu .export-menu > .button {
   margin-top: 0;
 }
+
+/* B9: layout.css stacks the side card's footer as a grid */
+.contact-workbench-side .heatmap-footer {
+  display: flex;
+  justify-content: flex-start;
+}

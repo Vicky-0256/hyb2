@@ -197,10 +197,10 @@
       '<div class="page-heading page-heading--menu">',
       "<div><h1>Contact Map</h1><p>Fixed-width binning mirrors the current HYB2 coverage accumulation rule.</p></div>",
       '<div class="inline-actions">' + renderExportMenu([
-        ["contact-download-svg", "Map · SVG"],
-        ["contact-download-png", "Map · PNG"],
-        ["contact-export-tsv", "Contact cells · TSV"],
-        ["contact-export-params", "Parameters · JSON"]
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-download-svg">Map · SVG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-download-png">Map · PNG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-export-tsv">Contact cells · TSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-export-params">Parameters · JSON</button>'
       ]) + "</div>",
       "</div>",
       '<section class="analysis-controls data-card">',
@@ -255,7 +255,7 @@
         '<div class="heatmap-card data-card">',
         '<div class="heatmap-topline"><span class="card-kicker">Teal–violet sequential · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
         '<div class="heatmap-axis"><span>' + escape(contact.rnaX) + " · X axis</span><span>" + escape(contact.rnaY) + " · Y axis</span></div>",
-        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="contact-export-tsv">Export contact TSV</button><button class="quiet-button" type="button" data-feature-action="contact-export-params">Export parameters</button></div>',
+        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + "</button></div>",
         "</div>",
         "</aside>",
         "</section>",
@@ -265,12 +265,10 @@
     ].join("");
   }
 
-  // K2 export menu: [data-feature-action, label] pairs
+  // K2 export menu around its item buttons (written out in full at each call
+  // so every data-feature-action stays greppable in this source)
   function renderExportMenu(items) {
-    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
-      items.map(function (item) {
-        return '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="' + attribute(item[0]) + '">' + escape(item[1]) + "</button>";
-      }).join("") + "</div></details>";
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' + items.join("") + "</div></details>";
   }
 
   // B6: when the data layer widened the bins, the selected option says so
@@ -397,10 +395,10 @@
       '<div class="page-heading page-heading--menu">',
       '<div><h1>Viewpoint</h1><p>Map interaction abundance across a selected interval or the complete mapped reference.</p></div>',
       '<div class="inline-actions">' + renderExportMenu([
-        ["viewpoint-download-svg", "Plot · SVG"],
-        ["viewpoint-download-png", "Plot · PNG"],
-        ["viewpoint-export-tsv", "Coverage bins · TSV"],
-        ["viewpoint-export-params", "Parameters · JSON"]
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-download-svg">Plot · SVG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-download-png">Plot · PNG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-export-tsv">Coverage bins · TSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-export-params">Parameters · JSON</button>'
       ]) + "</div>",
       '</div>',
       '<section class="analysis-controls data-card">',
@@ -440,7 +438,7 @@
         '<div class="card-title-row"><div><h2>' + escape(results.rna) + ' interaction coverage</h2><span class="card-note">' + format(results.records.length) + ' matching records · ' + format(results.armContributions) + ' mapped arms</span></div><span class="card-kicker">' + escape(viewpoint.measure === "support" ? "Cluster support" : "Records") + '</span></div>',
         results.binSizeAdjusted ? '<p class="notice notice-warning">Requested ' + format(viewpoint.binSize) + " nt resolution; the plot uses " + format(results.binSize) + ' nt to keep this browser-local plot responsive.</p>' : '',
         '<div class="canvas-wrap viewpoint-canvas-wrap"><canvas id="viewpoint-canvas" class="viewpoint-canvas" width="1040" height="300" tabindex="0" aria-label="Viewpoint graph. Click a bar to select a nucleotide interval."></canvas></div>',
-        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-viewpoint-data">' + (viewpoint.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="viewpoint-export-tsv">Export viewpoint TSV</button><button class="quiet-button" type="button" data-feature-action="viewpoint-export-params">Export parameters</button></div>',
+        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-viewpoint-data">' + (viewpoint.showDataTable ? "Hide data table" : "Open data table") + "</button></div>",
         viewpoint.showDataTable ? renderViewpointDataTable(results) : '',
         '</section>',
         renderViewpointSelection(viewpoint, results, selected),

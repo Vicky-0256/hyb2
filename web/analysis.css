@@ -529,8 +529,12 @@
   font-size: 10px;
 }
 
+/* B9: the card's own actions start at the left as one group; exports
+   live in the page's Export menu */
 .heatmap-footer {
   flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px;
   margin-top: 17px;
 }
 

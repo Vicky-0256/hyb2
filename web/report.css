@@ -866,6 +866,12 @@
     box-shadow: none;
   }
 
+  /* a panel heading stays on the page of the panel it names */
+  .report-step-heading,
+  .report-subsection-heading {
+    break-after: avoid;
+  }
+
   .report-section {
     break-inside: auto;
   }

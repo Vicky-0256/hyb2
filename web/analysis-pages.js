@@ -1675,7 +1675,7 @@
         return "The browser CPLfold capacity test is running. Wait for it to finish before predicting this " + format(length) + " nt sequence.";
       }
       if (length > capacity.baselineLength && capacity.status !== "ready") {
-        return "This " + format(length) + " nt sequence needs the capacity test first: the browser folds " + cplfoldLimitSentence(capacity) + ".";
+        return "This " + format(length) + " nt sequence needs the capacity test first. The browser folds " + cplfoldLimitSentence(capacity) + ".";
       }
       if (length > capacity.baselineLength && capacity.profileKey !== cplfoldProfileKey(structure)) {
         return "CPLfold settings changed after the last browser capacity test. Measure capacity again before predicting this sequence.";
@@ -1718,7 +1718,7 @@
         ? format(length) + " nt is within the " + format(capacity.baselineLength) + " nt browser baseline."
         : measured
         ? format(length) + " nt " + (length > capacity.recommendedLength ? "is above" : "is within") + " the " + format(capacity.recommendedLength) + " nt measured for this browser."
-        : format(length) + " nt is longer than the " + format(capacity.baselineLength) + " nt that folds before the capacity test.";
+        : format(length) + " nt, longer than the " + format(capacity.baselineLength) + " nt baseline.";
     } else if (notice) {
       text = format(length) + " nt; ViennaRNA folds up to 3,000 nt in this browser (above 2,000 nt after a confirmation).";
     }

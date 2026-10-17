@@ -538,24 +538,13 @@
       context.strokeRect(x, y, width, height);
     }
 
-    context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    context.fillStyle = muted;
-    context.textAlign = "left";
-    context.fillText(String(geometry.xStart), geometry.left, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "right";
-    context.fillText(String(geometry.xEnd + matrix.binSize - 1), geometry.left + geometry.plotWidth, geometry.top + geometry.plotHeight + 22);
-    context.save();
-    context.translate(14, geometry.top + geometry.plotHeight);
-    context.rotate(-Math.PI / 2);
-    const yLabels = contactYAxisLabels(geometry, matrix.binSize);
-    context.textAlign = "left";
-    context.fillText(String(yLabels.bottom), 0, 0);
-    context.textAlign = "right";
-    context.fillText(String(yLabels.top), geometry.plotHeight, 0);
-    context.restore();
     context.strokeStyle = line;
     context.lineWidth = 1;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
+    drawCanvasAxes(context, contactAxes(state, geometry), colors);
+    if (exportSize) {
+      drawCanvasTitle(context, state.contact.rnaX + " × " + state.contact.rnaY, geometry.left, 18, geometry.plotWidth - contactLegendOptions(state, geometry, theme, colors).width - 16, colors);
+    }
 
     if (window.Hyb2UiKit) {
       window.Hyb2UiKit.legend.drawCanvas(context, contactLegendOptions(state, geometry, theme, colors));
@@ -612,14 +601,147 @@
     };
   }
 
+  // ---- axes (K5): ticks on niceTicks, titles "<RNA> position (nt)"
+
+  const AXIS_FONT = "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif";
+
+  function axisTickValues(first, last, length, labelOf, room) {
+    const kit = window.Hyb2UiKit;
+    const ticks = kit && kit.niceTicks ? kit.niceTicks(first, last, 5) : (first === last ? [first] : [first, last]);
+    return spacedTicks(ticks, first, last, length, labelOf, room);
+  }
+
+  // an inclusive nucleotide axis [first, last]: the ends sit on the plot
+  // edges, interior ticks on the centre of their nucleotide
+  function coordinateOffset(value, first, last, length) {
+    if (value <= first) {
+      return 0;
+    }
+    if (value >= last) {
+      return length;
+    }
+    return (value - first + 0.5) / (last - first + 1) * length;
+  }
+
+  function coordinateTicks(first, last, length, vertical) {
+    return axisTickValues(first, last, length, format, vertical ? 22 : null).map(function (value) {
+      return { offset: coordinateOffset(value, first, last, length), label: format(value) };
+    });
+  }
+
+  // a value axis from 0 (bottom) to max (top)
+  function valueTicks(max, length) {
+    return axisTickValues(0, max, length, format, 22).map(function (value) {
+      return { offset: length - (max ? value / max : 0) * length, label: format(value) };
+    });
+  }
+
+  // middle ellipsis so both the start and the end of a long RNA name show
+  function fitLabel(text, width) {
+    const value = String(text == null ? "" : text);
+    const room = Math.max(8, Math.floor(width / 6.2));
+    if (value.length <= room) {
+      return value;
+    }
+    const head = Math.ceil((room - 1) / 2);
+    return value.slice(0, head) + "…" + value.slice(value.length - (room - 1 - head));
+  }
+
+  function positionTitle(rna) {
+    return (rna ? rna + " " : "") + "position (nt)";
+  }
+
+  function contactAxes(state, geometry) {
+    const binSize = state.contact.matrix.binSize;
+    const yLabels = contactYAxisLabels(geometry, binSize);
+    return {
+      box: { left: geometry.left, top: geometry.top, width: geometry.plotWidth, height: geometry.plotHeight },
+      x: coordinateTicks(geometry.xStart, geometry.xEnd + binSize - 1, geometry.plotWidth, false),
+      y: coordinateTicks(yLabels.top, yLabels.bottom, geometry.plotHeight, true),
+      xTitle: positionTitle(state.contact.rnaX),
+      yTitle: positionTitle(state.contact.rnaY)
+    };
+  }
+
+  function drawCanvasAxes(context, axes, colors) {
+    const box = axes.box;
+    const bottom = box.top + box.height;
+    context.save();
+    context.strokeStyle = colors.muted;
+    context.fillStyle = colors.muted;
+    context.lineWidth = 1;
+    context.font = "11px " + AXIS_FONT;
+    context.textBaseline = "alphabetic";
+    axes.x.forEach(function (tick, index) {
+      const x = Math.round(box.left + tick.offset) + .5;
+      context.beginPath();
+      context.moveTo(x, bottom);
+      context.lineTo(x, bottom + 4);
+      context.stroke();
+      context.textAlign = index === 0 ? "left" : index === axes.x.length - 1 ? "right" : "center";
+      context.fillText(tick.label, box.left + tick.offset, bottom + 16);
+    });
+    context.textBaseline = "middle";
+    context.textAlign = "right";
+    axes.y.forEach(function (tick) {
+      const y = Math.round(box.top + tick.offset) + .5;
+      context.beginPath();
+      context.moveTo(box.left - 4, y);
+      context.lineTo(box.left, y);
+      context.stroke();
+      context.fillText(tick.label, box.left - 7, box.top + tick.offset);
+    });
+    context.fillStyle = colors.ink;
+    context.font = "600 11px " + AXIS_FONT;
+    context.textBaseline = "alphabetic";
+    context.textAlign = "center";
+    context.fillText(fitLabel(axes.xTitle, box.width), box.left + box.width / 2, bottom + 34);
+    context.translate(13, box.top + box.height / 2);
+    context.rotate(-Math.PI / 2);
+    context.textBaseline = "middle";
+    context.fillText(fitLabel(axes.yTitle, box.height), 0, 0);
+    context.restore();
+  }
+
+  function svgAxes(axes, colors) {
+    const box = axes.box;
+    const bottom = box.top + box.height;
+    const parts = ['<g font-family="' + escapeXml(AXIS_FONT) + '" font-size="11">'];
+    axes.x.forEach(function (tick, index) {
+      const x = (box.left + tick.offset).toFixed(1);
+      const anchor = index === 0 ? "start" : index === axes.x.length - 1 ? "end" : "middle";
+      parts.push('<line x1="' + x + '" x2="' + x + '" y1="' + bottom + '" y2="' + (bottom + 4) + '" stroke="' + colors.muted + '"/>');
+      parts.push('<text x="' + x + '" y="' + (bottom + 16) + '" text-anchor="' + anchor + '" fill="' + colors.muted + '">' + escapeXml(tick.label) + "</text>");
+    });
+    axes.y.forEach(function (tick) {
+      const y = (box.top + tick.offset).toFixed(1);
+      parts.push('<line x1="' + (box.left - 4) + '" x2="' + box.left + '" y1="' + y + '" y2="' + y + '" stroke="' + colors.muted + '"/>');
+      parts.push('<text x="' + (box.left - 7) + '" y="' + y + '" text-anchor="end" dominant-baseline="middle" fill="' + colors.muted + '">' + escapeXml(tick.label) + "</text>");
+    });
+    parts.push('<text x="' + (box.left + box.width / 2).toFixed(1) + '" y="' + (bottom + 34) + '" text-anchor="middle" font-weight="600" fill="' + colors.ink + '">' + escapeXml(fitLabel(axes.xTitle, box.width)) + "</text>");
+    parts.push('<text transform="translate(13 ' + (box.top + box.height / 2).toFixed(1) + ') rotate(-90)" text-anchor="middle" dominant-baseline="middle" font-weight="600" fill="' + colors.ink + '">' + escapeXml(fitLabel(axes.yTitle, box.height)) + "</text>");
+    parts.push("</g>");
+    return parts.join("");
+  }
+
+  function drawCanvasTitle(context, text, x, y, width, colors) {
+    context.save();
+    context.fillStyle = colors.ink;
+    context.font = "600 14px " + AXIS_FONT;
+    context.textAlign = "left";
+    context.textBaseline = "alphabetic";
+    context.fillText(fitLabel(text, width * 0.8), x, y);
+    context.restore();
+  }
+
   // Drops interior ticks whose labels would touch a neighbour's along an
   // axis `length` px long (labels about 6.5 px per character).
-  function spacedTicks(ticks, min, max, length, labelOf) {
+  function spacedTicks(ticks, min, max, length, labelOf, fixedRoom) {
     if (ticks.length <= 2 || max === min) {
       return ticks;
     }
     const at = function (value) { return (value - min) / (max - min) * length; };
-    const room = function (value) { return String(labelOf(value)).length * 6.5 + 12; };
+    const room = function (value) { return fixedRoom || String(labelOf(value)).length * 6.5 + 12; };
     const last = ticks[ticks.length - 1];
     const kept = [ticks[0]];
     for (let index = 1; index < ticks.length - 1; index += 1) {
@@ -664,11 +786,12 @@
     const view = getContactStageView(state, stage);
     const xCount = Math.max(1, Math.round((view.xEnd - view.xStart) / matrix.binSize) + 1);
     const yCount = Math.max(1, Math.round((view.yEnd - view.yStart) / matrix.binSize) + 1);
-    const left = 46;
-    // room above the plot for the colour bar (contactLegendOptions)
+    // room for the y ticks and title (left), the colour bar (top,
+    // contactLegendOptions) and the x ticks and title (bottom)
+    const left = 68;
     const top = 52;
-    const plotWidth = Math.max(96, width - left - 15);
-    const plotHeight = Math.max(96, height - top - 42);
+    const plotWidth = Math.max(96, width - left - 16);
+    const plotHeight = Math.max(96, height - top - 48);
     return {
       left: left,
       top: top,
@@ -1100,10 +1223,10 @@
     const muted = style.getPropertyValue("--muted").trim();
     const profile = results.profile;
     const max = Math.max(1, profile.reduce(function (value, bin) { return Math.max(value, bin.value); }, 0));
-    const left = 8;
-    const top = 14;
-    const width = dimensions.width - 16;
-    const height = dimensions.height - 35;
+    const left = 60;
+    const top = 10;
+    const width = dimensions.width - left - 14;
+    const height = Math.max(60, dimensions.height - top - 46);
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
@@ -1112,15 +1235,24 @@
     context.moveTo(left, top + height + .5);
     context.lineTo(left + width, top + height + .5);
     context.stroke();
+    if (!profile.length) {
+      return;
+    }
     profile.forEach(function (bin, index) {
       const barWidth = Math.max(1, width / profile.length);
       const barHeight = (bin.value / max) * height;
       context.fillStyle = primary;
       context.fillRect(left + index * barWidth, top + height - barHeight, Math.max(1, barWidth - 1), barHeight);
     });
-    context.fillStyle = muted;
-    context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    context.fillText("arm support", left, 11);
+    const first = profile[0].start;
+    const last = profile[profile.length - 1].end;
+    drawCanvasAxes(context, {
+      box: { left: left, top: top, width: width, height: height },
+      x: coordinateTicks(first, last, width, false),
+      y: valueTicks(max, height),
+      xTitle: positionTitle(state.region.rna),
+      yTitle: "Arm support"
+    }, { ink: style.getPropertyValue("--ink").trim(), muted: muted });
   }
 
   function bindViewpointCanvas(state, api) {
@@ -1175,7 +1307,7 @@
     const line = colors.line;
     const muted = colors.muted;
     const ink = colors.ink;
-    const geometry = getViewpointGeometry(results, dimensions.width, dimensions.height);
+    const geometry = getViewpointGeometry(results, dimensions.width, dimensions.height, !!exportSize);
     if (!exportSize) {
       state.viewpoint.geometry = geometry;
     }
@@ -1196,24 +1328,30 @@
       context.fillRect(x, geometry.top + geometry.plotHeight - height, Math.max(1, geometry.barWidth - .35), height);
     });
 
-    context.fillStyle = muted;
-    context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    context.textAlign = "left";
-    context.fillText(String(results.start), geometry.left, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "right";
-    context.fillText(String(results.end), geometry.left + geometry.plotWidth, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "left";
-    context.fillStyle = ink;
-    context.fillText("mean interaction coverage", geometry.left, 12);
-    context.fillStyle = muted;
-    context.fillText("max " + format(geometry.max), geometry.left + geometry.plotWidth, 12);
+    void muted;
+    drawCanvasAxes(context, viewpointAxes(state, geometry), colors);
+    if (exportSize) {
+      drawCanvasTitle(context, results.rna + " viewpoint", geometry.left, 18, geometry.plotWidth, colors);
+    }
   }
 
-  function getViewpointGeometry(results, width, height) {
-    const left = 42;
-    const top = 22;
+  function viewpointAxes(state, geometry) {
+    const results = state.viewpoint.results;
+    return {
+      box: { left: geometry.left, top: geometry.top, width: geometry.plotWidth, height: geometry.plotHeight },
+      x: coordinateTicks(results.start, results.end, geometry.plotWidth, false),
+      y: valueTicks(geometry.scaleMax, geometry.plotHeight),
+      xTitle: positionTitle(results.rna),
+      yTitle: "Mean coverage (" + (state.viewpoint.measure === "support" ? "cluster support" : "records") + ")"
+    };
+  }
+
+  // titled: room above the plot for the export's title
+  function getViewpointGeometry(results, width, height, titled) {
+    const left = 64;
+    const top = titled ? 36 : 14;
     const plotWidth = Math.max(120, width - left - 18);
-    const plotHeight = Math.max(120, height - top - 43);
+    const plotHeight = Math.max(80, height - top - 46);
     return {
       left: left,
       top: top,
@@ -2525,8 +2663,8 @@
   }
 
   // the SVG and PNG exports share a size, so both show the same layout
-  const CONTACT_EXPORT_SIZE = { width: 900, height: 720 };
-  const VIEWPOINT_EXPORT_SIZE = { width: 1040, height: 300 };
+  const CONTACT_EXPORT_SIZE = { width: 900, height: 916 };
+  const VIEWPOINT_EXPORT_SIZE = { width: 1040, height: 320 };
 
   function buildContactSvg(state) {
     if (!visualExportReady(state, "contact")) {
@@ -2555,11 +2693,8 @@
       rects,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '" stroke-width="1"/>',
       window.Hyb2UiKit ? window.Hyb2UiKit.legend.svg(contactLegendOptions(state, geometry, "light", colors)) : "",
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.xStart + "</text>",
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + (geometry.xEnd + matrix.binSize - 1) + "</text>",
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.yStart + "</text>",
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + (geometry.yEnd + matrix.binSize - 1) + "</text>",
-      '<text x="' + geometry.left + '" y="16" font-family="system-ui, sans-serif" font-size="15" fill="' + colors.ink + '">' + escapeXml(state.contact.rnaX) + " × " + escapeXml(state.contact.rnaY) + "</text>",
+      svgAxes(contactAxes(state, geometry), colors),
+      '<text x="' + geometry.left + '" y="18" font-family="' + escapeXml(AXIS_FONT) + '" font-size="14" font-weight="600" fill="' + colors.ink + '">' + escapeXml(fitLabel(state.contact.rnaX + " × " + state.contact.rnaY, (geometry.plotWidth - contactLegendOptions(state, geometry, "light", colors).width - 16) * 0.8)) + "</text>",
       "</svg>"
     ].join("");
   }
@@ -2572,7 +2707,7 @@
     const colors = exportColors("light");
     const width = VIEWPOINT_EXPORT_SIZE.width;
     const height = VIEWPOINT_EXPORT_SIZE.height;
-    const geometry = getViewpointGeometry(results, width, height);
+    const geometry = getViewpointGeometry(results, width, height, true);
     const bars = results.bins.map(function (bin, index) {
       const barHeight = geometry.max ? (bin.value / geometry.scaleMax) * geometry.plotHeight : 0;
       const selected = state.viewpoint.selection && state.viewpoint.selection.start === bin.start;
@@ -2584,9 +2719,8 @@
       '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
       '<line x1="' + geometry.left + '" y1="' + (geometry.top + geometry.plotHeight) + '" x2="' + (geometry.left + geometry.plotWidth) + '" y2="' + (geometry.top + geometry.plotHeight) + '" stroke="' + colors.line + '"/>',
       bars,
-      '<text x="' + geometry.left + '" y="12" font-family="system-ui, sans-serif" font-size="14" fill="' + colors.ink + '">' + escapeXml(results.rna) + ' viewpoint</text>',
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 24) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + results.start + '</text>',
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + results.end + '</text>',
+      '<text x="' + geometry.left + '" y="18" font-family="' + escapeXml(AXIS_FONT) + '" font-size="14" font-weight="600" fill="' + colors.ink + '">' + escapeXml(fitLabel(results.rna + " viewpoint", geometry.plotWidth * 0.8)) + '</text>',
+      svgAxes(viewpointAxes(state, geometry), colors),
       '</svg>'
     ].join("");
   }

@@ -78,9 +78,6 @@ function createContext(options) {
     replaced: replaced,
     HYB2_BUILD: { commit: "test" }
   };
-  if (settings.desktop) {
-    context.Hyb2Desktop = settings.desktop;
-  }
   context.window = context;
   context.self = context;
   context.globalThis = context;
@@ -90,13 +87,19 @@ function createContext(options) {
     assert.match(kitSource, /const DESKTOP_DOWNLOADS_PUBLIC = false;/);
     kitSource = kitSource.replace("const DESKTOP_DOWNLOADS_PUBLIC = false;", "const DESKTOP_DOWNLOADS_PUBLIC = true;");
   }
-  vm.runInContext(kitSource, context, { filename: "ui-kit.js" });
+  if (!settings.withoutKit) {
+    vm.runInContext(kitSource, context, { filename: "ui-kit.js" });
+  }
   [
     "desktop-adapter.js", "analysis-data.js", "example.js", "data-provider.js", "page-data.js", "comrades-analysis.js",
     "analysis-pages.js", "analysis-ui.js", "overview-page.js", "report-page.js", "app.js"
   ].forEach(function (file) {
     vm.runInContext(fs.readFileSync(web(file), "utf8"), context, { filename: file });
   });
+  // as inside HYB2 Desktop (desktop-adapter.js sets it from the native bridge)
+  if (settings.desktop) {
+    context.Hyb2Desktop = settings.desktop;
+  }
   return context;
 }
 
@@ -229,5 +232,24 @@ assert.equal(opened.location.hash, "");
   has(page, /Intel Macs and ARM Linux\/Windows have no installer yet/);
   hasNot(page, /For this computer|This computer/, "the verb is always Download");
 });
+
+// ---- A18: inside HYB2 Desktop no page offers HYB2 Desktop
+const inside = createContext({ desktop: { enabled: true } });
+const insideHost = mountSite(inside);
+const noDesktop = /class="desktop-cta|data-action="open-desktop"|landing-ways|ways-desktop/;
+hasNot(insideHost.innerHTML, noDesktop, "inside Desktop: landing");
+click(insideHost, { "data-action": "open-help" });
+has(insideHost.innerHTML, /help-drawer/);
+hasNot(insideHost.innerHTML, noDesktop, "inside Desktop: Help");
+click(insideHost, { "data-action": "close-dialog" });
+click(insideHost, { "data-action": "open-desktop" });
+hasNot(insideHost.innerHTML, /desktop-drawer/, "inside Desktop the drawer never opens");
+inside.location.hash = "#hyb2-desktop";
+inside.windowListeners.hashchange.forEach(function (listener) { listener({}); });
+hasNot(insideHost.innerHTML, /desktop-drawer/, "inside Desktop #hyb2-desktop opens nothing");
+has(insideHost.innerHTML, /class="landing/);
+// without the kit (some tests load the pages without ui-kit.js) nothing breaks
+const noKit = createContext({ withoutKit: true });
+hasNot(mountSite(noKit).innerHTML, noDesktop, "without ui-kit.js");
 
 process.stdout.write("desktop-entry: ok\n");

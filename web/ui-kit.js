@@ -270,6 +270,19 @@
         setTimeout(function () { menu.removeAttribute("open"); }, 0);
       }
     }, true);
+    // an opened list that would leave the viewport on the left opens to the
+    // right instead (toggle does not bubble; a capture listener still sees it)
+    document.addEventListener("toggle", function (event) {
+      const menu = event.target;
+      if (!menu || !menu.matches || !menu.matches("details.export-menu") || !menu.open) {
+        return;
+      }
+      menu.classList.remove("export-menu--start");
+      const list = menu.querySelector(".export-menu-list");
+      if (list && list.getBoundingClientRect().left < 8) {
+        menu.classList.add("export-menu--start");
+      }
+    }, true);
     document.addEventListener("keydown", function (event) {
       if (event.key !== "Escape") {
         return;

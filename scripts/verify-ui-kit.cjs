@@ -79,6 +79,10 @@ const order = ["evidence.css", "ui-kit.css", "fix-shell.css", "fix-overview.css"
   return at;
 });
 order.reduce(function (previous, at) { assert.ok(at > previous, "stylesheet order"); return at; }, 0);
-assert.match(fs.readFileSync(web("ui-kit.css"), "utf8"), /\.export-menu-list \{/);
+const kitCss = fs.readFileSync(web("ui-kit.css"), "utf8");
+assert.match(kitCss, /\.export-menu-list \{/);
+assert.match(kitCss, /\.export-menu\.export-menu--start \.export-menu-list \{\s*right: auto;\s*left: 0;/, "a list that would leave the screen opens rightwards");
+assert.match(kitCss, /\.cell-truncate:not\(td\):not\(th\) \{\s*display: block;/, "outside a table, .cell-truncate keeps its width");
+assert.match(fs.readFileSync(web("ui-kit.js"), "utf8"), /addEventListener\("toggle"/);
 
 process.stdout.write("ui-kit: ok\n");

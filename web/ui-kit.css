@@ -123,6 +123,13 @@
   box-shadow: var(--shadow);
 }
 
+/* set by ui-kit.js when the list would leave the viewport on the left
+   (a heading that has stacked puts the menu at the left edge) */
+.export-menu.export-menu--start .export-menu-list {
+  right: auto;
+  left: 0;
+}
+
 .export-menu-item {
   display: block;
   width: 100%;
@@ -164,15 +171,27 @@
 
 table .num,
 td.num,
-th.num {
+th.num,
+[role="row"] > .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+/* in a table cell the max-width: 0 trick lets the column's width decide;
+   anywhere else the element truncates within the space it has */
 td.cell-truncate,
-.cell-truncate {
+th.cell-truncate {
   max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-truncate:not(td):not(th) {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

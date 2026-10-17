@@ -620,11 +620,18 @@
   text-transform: none;
 }
 
+/* the effect and similarity maps stack: with their axes and colour bars
+   they need the full width to stay legible on screen and on paper */
 .report-visual-pair {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   margin-top: 18px;
+}
+
+.report-heatmap-svg {
+  max-width: 980px;
+  margin: 0 auto;
 }
 
 .report-visual-pair .report-visual-wrap {

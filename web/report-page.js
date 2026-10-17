@@ -450,7 +450,7 @@
           ["Total coverage", formatNumber(results.totalCoverage)]
         ]) : '<div class="report-empty">Generate Viewpoint coverage from the workspace to include its result here.</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#00a09d", viewpoint.selection && viewpoint.selection.start), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#00a09d", viewpoint.selection && viewpoint.selection.start, results.rna || viewpoint.rna, viewpoint.measure === "support" ? "Cluster support" : "Records"), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
         results && results.binSizeAdjusted ? '<p class="report-note" data-cites="S05"><span class="report-cite">S05</span> The requested resolution was adjusted to ' + formatNumber(results.binSize) + ' nt to keep the browser profile within its maximum bin count.</p>' : ""
       ].join("")
     );
@@ -491,7 +491,7 @@
           ["Profile resolution", formatNumber(results.profileBinSize) + " nt"]
         ]) : '<div class="report-empty">Explore a region from the workspace to include its result here.</div>') + '</div>',
         "</div>",
-        results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#6a4ff2", null), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/region_profile.tsv") + '</div>' : "",
+        results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#00a09d", null, region.rna, "Arm support"), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/region_profile.tsv") + '</div>' : "",
         '<div class="report-grid report-region-tables">',
         '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table([long("Partner"), num("Records"), num("Support")], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + dataNote(context, "tables/region_partners.tsv") + '</div>',
         '<div class="report-subsection"><h3>Matching record sample</h3>' + (recordRows.length ? table(["Sequence ID", long("RNA 1"), num("Region 1"), long("RNA 2"), num("Region 2"), num("Support")], recordRows) : '<div class="report-empty">No matching records are available for this region.</div>') + '</div>',
@@ -1105,6 +1105,115 @@
     return '<div class="report-visual">' + svg + (note ? '<p class="report-note-inline">' + escape(note) + '</p>' : "") + '</div>';
   }
 
+  // ---- printable figures: light like every SVG export (K4), with axis
+  // ticks and titles (K5) and a colour bar (K1) drawn into the SVG itself.
+  // Without ui-kit.js (the node checks) the axes keep their two end ticks
+  // and the colour bar is left out.
+  const FIGURE_INK = "#132c47";
+  const FIGURE_MUTED = "#5b6c80";
+  const FIGURE_LINE = "#c2d3db";
+  const FIGURE_GRID = "#e6eef2";
+  const FIGURE_FONT = "ui-sans-serif, system-ui, -apple-system, &quot;Segoe UI&quot;, sans-serif";
+  const MAP_LEFT_PAD = 26; // room left of the plot for the rotated y-axis title
+
+  function uiKit() {
+    return typeof window !== "undefined" && window.Hyb2UiKit ? window.Hyb2UiKit : null;
+  }
+
+  // nice ticks (K5) with both ends; an interior tick closer to an end than
+  // gap (a fraction of the span) is dropped so the labels do not run together
+  function axisTicks(min, max, target, gap) {
+    const kit = uiKit();
+    const ticks = kit ? kit.niceTicks(min, max, target || 5) : (min === max ? [min] : [min, max]);
+    const span = Math.abs(max - min);
+    const room = (gap || 0) * span;
+    return ticks.filter(function (value, index) {
+      return index === 0 || index === ticks.length - 1 || (Math.abs(value - min) >= room && Math.abs(max - value) >= room);
+    });
+  }
+
+  function axisText(x, y, anchor, text, extra) {
+    return '<text x="' + fixed(x) + '" y="' + fixed(y) + '" text-anchor="' + anchor + '" font-family="' + FIGURE_FONT + '" font-size="10" fill="' + FIGURE_MUTED + '"' + (extra || "") + ">" + escape(text) + "</text>";
+  }
+
+  // x axis below a plot: ticks over [lo, hi], position(v) -> x
+  function xAxisSvg(plot, lo, hi, position, title) {
+    const bottom = plot.top + plot.height;
+    const ticks = axisTicks(lo, hi, 6, 52 / plot.width).map(function (value, index, all) {
+      const x = position(value);
+      const anchor = all.length > 1 && index === 0 ? "start" : all.length > 1 && index === all.length - 1 ? "end" : "middle";
+      return '<line x1="' + fixed(x) + '" x2="' + fixed(x) + '" y1="' + bottom + '" y2="' + (bottom + 4) + '" stroke="' + FIGURE_MUTED + '" stroke-width="0.75"></line>' + axisText(x, bottom + 15, anchor, formatNumber(value));
+    }).join("");
+    return ticks + '<text x="' + fixed(plot.left + plot.width / 2) + '" y="' + (bottom + 32) + '" text-anchor="middle" font-family="' + FIGURE_FONT + '" font-size="11" font-weight="600" fill="' + FIGURE_INK + '">' + escape(title) + "</text>";
+  }
+
+  // y axis left of a plot; grid lines across it when asked
+  function yAxisSvg(plot, lo, hi, position, title, grid) {
+    const ticks = axisTicks(lo, hi, 5, 16 / plot.height).map(function (value) {
+      const y = position(value);
+      return (grid ? '<line x1="' + plot.left + '" x2="' + (plot.left + plot.width) + '" y1="' + fixed(y) + '" y2="' + fixed(y) + '" stroke="' + FIGURE_GRID + '" stroke-width="0.75"></line>' : "") +
+        '<line x1="' + (plot.left - 4) + '" x2="' + plot.left + '" y1="' + fixed(y) + '" y2="' + fixed(y) + '" stroke="' + FIGURE_MUTED + '" stroke-width="0.75"></line>' + axisText(plot.left - 6, y + 3.5, "end", formatNumber(value));
+    }).join("");
+    const middle = plot.top + plot.height / 2;
+    const x = plot.titleX;
+    return ticks + '<text x="' + x + '" y="' + fixed(middle) + '" transform="rotate(-90 ' + x + " " + fixed(middle) + ')" text-anchor="middle" font-family="' + FIGURE_FONT + '" font-size="11" font-weight="600" fill="' + FIGURE_INK + '">' + escape(title) + "</text>";
+  }
+
+  // K1 colour bar under the plot, right-aligned
+  function legendSvg(plot, opts) {
+    const kit = uiKit();
+    if (!kit) {
+      return "";
+    }
+    const width = 240;
+    return kit.legend.svg(Object.assign({ orientation: "horizontal", x: plot.left + plot.width - width, y: plot.top + plot.height + 44, width: width, height: 10, ink: FIGURE_INK, muted: FIGURE_MUTED }, opts));
+  }
+
+  function positionTitle(rna) {
+    return (rna || "RNA") + " position (nt)";
+  }
+
+  // a binned map's frame: background, axes over inclusive nt coordinates
+  // (y grows downwards, as on the page), and the colour bar
+  function mapFrame(plot, extent, titles, legend) {
+    const xSpan = Math.max(1, extent.xEnd - extent.xStart);
+    const ySpan = Math.max(1, extent.yEnd - extent.yStart);
+    return xAxisSvg(plot, extent.xStart, extent.xEnd - 1, function (v) { return plot.left + (v - extent.xStart) / xSpan * plot.width; }, titles[0]) +
+      yAxisSvg(plot, extent.yStart, extent.yEnd - 1, function (v) { return plot.top + (v - extent.yStart) / ySpan * plot.height; }, titles[1], false) +
+      legendSvg(plot, legend);
+  }
+
+  const MAP_HEIGHT = 430;
+
+  function mapSvgOpen(className, label, title) {
+    return '<svg class="report-svg ' + className + '" viewBox="' + (-MAP_LEFT_PAD) + " 0 " + (760 + MAP_LEFT_PAD) + " " + MAP_HEIGHT + '" role="img" aria-label="' + escape(label) + '">' +
+      "<title>" + escape(title) + "</title>" +
+      '<rect x="' + (-MAP_LEFT_PAD) + '" y="0" width="' + (760 + MAP_LEFT_PAD) + '" height="' + MAP_HEIGHT + '" fill="#ffffff"></rect>';
+  }
+
+  function contactMeasureTitle(contact) {
+    return (contact && contact.measure === "support" ? "Cluster support" : "Records") + " per bin" + (contact && contact.scale === "log" ? " (log1p scale)" : "");
+  }
+
+  // colour bar of the contact map: linear, or log1p with raw-count labels
+  function contactLegend(cap, contact) {
+    const log = contact && contact.scale === "log";
+    const opts = { kind: "sequential", colorAt: brandHeatColor, min: 0, max: Math.max(cap, 1e-9), ticks: axisTicks(0, cap, 4, 0.14), title: contactMeasureTitle(contact) };
+    if (log) {
+      const rawMax = Math.expm1(cap);
+      const raw = [0];
+      for (let step = 1; step < rawMax; step *= 10) {
+        if (Math.log1p(step) < cap * 0.9) {
+          raw.push(step);
+        }
+      }
+      raw.push(rawMax);
+      opts.ticks = raw.map(function (value) { return Math.log1p(value); });
+      opts.format = function (value) { return formatNumber(Math.round(Math.expm1(value))); };
+    }
+    return opts;
+  }
+
   function renderHeatmap(matrix, contact) {
     const cells = Array.isArray(matrix.cells) ? matrix.cells : [];
     if (!cells.length) {
@@ -1133,47 +1242,41 @@
       const isSelected = selected && number(selected.x) === number(cell.x) && number(selected.y) === number(cell.y);
       return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + brandHeatColor(ratio) + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + "; value " + formatNumber(cell.value)) + '</title></rect>';
     }).join("");
+    const plot = { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight, titleX: -12 };
     return [
-      '<svg class="report-svg report-heatmap-svg" viewBox="0 0 760 360" role="img" aria-label="Printable contact map">',
-      '<title>Contact map for ' + escape(contact && contact.rnaX || "RNA X") + ' and ' + escape(contact && contact.rnaY || "RNA Y") + '</title>',
-      '<rect x="0" y="0" width="760" height="360" fill="transparent"></rect>',
-      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="#c2d3db"></rect>',
+      mapSvgOpen("report-heatmap-svg", "Printable contact map", "Contact map for " + (contact && contact.rnaX || "RNA X") + " and " + (contact && contact.rnaY || "RNA Y")),
+      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="' + FIGURE_LINE + '"></rect>',
       rects,
-      '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 24) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xStart)) + '</text>',
-      '<text x="' + (plotLeft + plotWidth) + '" y="' + (plotTop + plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xEnd - 1)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(yStart)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(yEnd - 1)) + '</text>',
-      '<text x="' + (plotLeft + plotWidth / 2) + '" y="' + (plotTop + plotHeight + 44) + '" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#607286">' + escape(contact && contact.rnaX || "RNA X") + ' coordinate</text>',
-      '<text x="16" y="' + (plotTop + plotHeight / 2) + '" transform="rotate(-90 16 ' + (plotTop + plotHeight / 2) + ')" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#607286">' + escape(contact && contact.rnaY || "RNA Y") + ' coordinate</text>',
+      mapFrame(plot, { xStart: xStart, xEnd: xEnd, yStart: yStart, yEnd: yEnd }, [positionTitle(contact && contact.rnaX), positionTitle(contact && contact.rnaY)], contactLegend(cap, contact)),
       '</svg>'
     ].join("");
   }
 
-  function renderCoverageSvg(items, maximum, color, selectedStart) {
+  function renderCoverageSvg(items, maximum, color, selectedStart, rna, measure) {
     const bins = downsample(items || [], MAX_VISUAL_BINS);
     if (!bins.length) {
       return '<div class="report-empty">No coverage bins were generated.</div>';
     }
-    const plotLeft = 46;
-    const plotTop = 22;
-    const plotWidth = 680;
-    const plotHeight = 155;
+    const plot = { left: 68, top: 14, width: 672, height: 150, titleX: 14 };
     const maxValue = Math.max(0, number(maximum, maxSeriesValue(bins)));
-    const barWidth = plotWidth / bins.length;
+    const barWidth = plot.width / bins.length;
+    const first = number(bins[0].start);
+    const last = number(bins[bins.length - 1].end);
+    const span = Math.max(1, last - first + 1);
     const bars = bins.map(function (bin, index) {
       const value = Math.max(0, number(bin.value));
-      const height = maxValue ? value / maxValue * plotHeight : 0;
+      const height = maxValue ? value / maxValue * plot.height : 0;
       const selected = selectedStart != null && number(selectedStart) >= number(bin.start) && number(selectedStart) <= number(bin.end);
-      return '<rect x="' + fixed(plotLeft + index * barWidth) + '" y="' + fixed(plotTop + plotHeight - height) + '" width="' + fixed(Math.max(1, barWidth - 0.5)) + '" height="' + fixed(height) + '" fill="' + (selected ? "#6a4ff2" : color) + '"><title>' + escape(range(bin.start, bin.end) + "; value " + formatNumber(value)) + '</title></rect>';
+      return '<rect x="' + fixed(plot.left + index * barWidth) + '" y="' + fixed(plot.top + plot.height - height) + '" width="' + fixed(Math.max(1, barWidth - 0.5)) + '" height="' + fixed(height) + '" fill="' + (selected ? "#6a4ff2" : color) + '"><title>' + escape(range(bin.start, bin.end) + "; value " + formatNumber(value)) + '</title></rect>';
     }).join("");
     return [
-      '<svg class="report-svg report-coverage-svg" viewBox="0 0 760 220" role="img" aria-label="Printable coverage profile">',
+      '<svg class="report-svg report-coverage-svg" viewBox="0 0 760 212" role="img" aria-label="Printable coverage profile">',
       '<title>RNA interaction coverage profile</title>',
-      '<line x1="' + plotLeft + '" y1="' + (plotTop + plotHeight) + '" x2="' + (plotLeft + plotWidth) + '" y2="' + (plotTop + plotHeight) + '" stroke="#c2d3db"></line>',
+      '<rect x="0" y="0" width="760" height="212" fill="#ffffff"></rect>',
+      maxValue ? yAxisSvg(plot, 0, maxValue, function (v) { return plot.top + plot.height - v / maxValue * plot.height; }, measure || "Coverage", true) : "",
       bars,
-      '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 22) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(bins[0].start)) + '</text>',
-      '<text x="' + (plotLeft + plotWidth) + '" y="' + (plotTop + plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(bins[bins.length - 1].end)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(formatNumber(maxValue)) + '</text>',
+      '<line x1="' + plot.left + '" y1="' + (plot.top + plot.height) + '" x2="' + (plot.left + plot.width) + '" y2="' + (plot.top + plot.height) + '" stroke="' + FIGURE_LINE + '"></line>',
+      xAxisSvg(plot, first, last, function (v) { return plot.left + (v - first + 0.5) / span * plot.width; }, positionTitle(rna)),
       '</svg>'
     ].join("");
   }
@@ -1207,17 +1310,41 @@
       const isSelected = selected && number(selected.x) === number(cell.x) && number(selected.y) === number(cell.y);
       return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + fill + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + (mode === "conserved" ? "; similarity " + formatNumber(cell.similarity) : "; effect " + formatNumber(cell.effect))) + '</title></rect>';
     }).join("");
+    const plot = { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight, titleX: -12 };
     return [
-      '<svg class="report-svg report-heatmap-svg" viewBox="0 0 760 360" role="img" aria-label="Printable comparison map">',
-      '<title>' + escape(mode === "conserved" ? "Similarity heatmap" : "Mean log2 comparison effect") + '</title>',
-      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="' + (mode !== "conserved" ? "#f7fafb" : comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff") + '" stroke="#c2d3db"></rect>',
+      mapSvgOpen("report-heatmap-svg", "Printable comparison map", mode === "conserved" ? "Similarity heatmap" : "Mean log2 comparison effect"),
+      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="' + (mode !== "conserved" ? "#f7fafb" : comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff") + '" stroke="' + FIGURE_LINE + '"></rect>',
       rects,
-      '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 24) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xStart)) + '</text>',
-      '<text x="' + (plotLeft + plotWidth) + '" y="' + (plotTop + plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xEnd - 1)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(yStart)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(yEnd - 1)) + '</text>',
+      mapFrame(plot, { xStart: xStart, xEnd: xEnd, yStart: yStart, yEnd: yEnd }, [positionTitle(comparison.rnaX), positionTitle(comparison.rnaY)],
+        mode === "conserved" ? similarityLegend(result, comparison) : effectLegend(cap, comparison)),
       '</svg>'
     ].join("");
+  }
+
+  // diverging: negative (teal) = higher in B, positive (violet) = higher in A
+  function effectLegend(cap, comparison) {
+    return {
+      kind: "diverging",
+      colorAt: function (t) { return effectColor(t * 2 - 1); },
+      min: -cap,
+      max: cap,
+      ticks: [-cap, -cap / 2, 0, cap / 2, cap],
+      title: "Mean log2 effect (" + (comparison.conditionALabel || "A") + " / " + (comparison.conditionBLabel || "B") + ")",
+      lowLabel: (comparison.conditionBLabel || "B") + " enriched",
+      highLabel: (comparison.conditionALabel || "A") + " enriched"
+    };
+  }
+
+  // white at the smallest plotted count, forestgreen at the 95% quantile cap
+  function similarityLegend(result, comparison) {
+    const cap = Math.max(1, number(result && result.similarityCap, 1));
+    const floor = Math.min(cap, similarityFloorOf(result));
+    const title = "min(" + (comparison.conditionALabel || "A") + ", " + (comparison.conditionBLabel || "B") + ") raw count";
+    if (!(cap > floor) || !Number.isFinite(floor)) {
+      // a single plotted value: one colour, the midpoint of the ramp
+      return { kind: "sequential", colorAt: function () { return conservedColor(0.5); }, min: cap - 0.5, max: cap + 0.5, ticks: [cap], title: title };
+    }
+    return { kind: "sequential", colorAt: conservedColor, min: floor, max: cap, ticks: axisTicks(floor, cap, 4, 0.14), title: title, highLabel: "95% quantile cap" };
   }
 
   function parameterSnapshot(name, state, fallback) {
@@ -1463,8 +1590,8 @@
   function effectColor(value) {
     const bounded = Math.max(-1, Math.min(1, number(value)));
     return bounded >= 0
-      ? interpolateColor("#f7fafb", "#6a4ff2", bounded)
-      : interpolateColor("#f7fafb", "#00a09d", Math.abs(bounded));
+      ? interpolateColor("#f5f8fa", "#6a4ff2", bounded)
+      : interpolateColor("#f5f8fa", "#00a09d", Math.abs(bounded));
   }
 
   function interpolateColor(from, to, ratio) {

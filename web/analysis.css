@@ -609,9 +609,11 @@
   text-transform: uppercase;
 }
 
+/* B11: one column of full-width cards; Top partners live inside the
+   summary card, so no column is left half empty */
 .region-results {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(250px, .75fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -788,10 +790,8 @@
 
 .reference-panel {
   grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
+  display: grid;
+  gap: 16px;
 }
 
 .reference-panel h2 {
@@ -809,8 +809,10 @@
   font-size: 13px;
 }
 
+/* the three actions in one row, all the same height */
 .reference-panel .inline-actions {
-  justify-content: flex-end;
+  align-items: stretch;
+  justify-content: flex-start;
 }
 
 .table-note {

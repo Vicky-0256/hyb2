@@ -691,16 +691,18 @@
       '<div class="page-heading"><div><h1>Region Explorer</h1><p>Find interactions that overlap a chosen RNA region.</p></div></div>',
       '<section class="analysis-controls data-card">',
       '<div class="region-control-grid">',
+      // B11: anchor, its coordinates and the overlap rule on the first row,
+      // the optional partner and its coordinates on the second
       renderSelectControl("Anchor RNA", "rna", region.rna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "region-control"),
       renderTextControl("Start", "start", region.start, "Start", "region-control", "number", { min: 1, step: 1 }),
       renderTextControl("End", "end", region.end, "End", "region-control", "number", { min: 1, step: 1 }),
-      renderSelectControl("Partner", "partner", region.partner, partnerOptions, "region-control"),
-      renderTextControl("Partner start", "partnerStart", region.partnerStart, "Optional", "region-control", "number", { min: 1, step: 1 }),
-      renderTextControl("Partner end", "partnerEnd", region.partnerEnd, "Optional", "region-control", "number", { min: 1, step: 1 }),
       renderSelectControl("Overlap rule", "overlap", region.overlap, [
         { value: "any", label: "Any overlap" },
         { value: "contained", label: "Fully contained" }
       ], "region-control"),
+      renderSelectControl("Partner", "partner", region.partner, partnerOptions, "region-control"),
+      renderTextControl("Partner start", "partnerStart", region.partnerStart, "Optional", "region-control", "number", { min: 1, step: 1 }),
+      renderTextControl("Partner end", "partnerEnd", region.partnerEnd, "Optional", "region-control", "number", { min: 1, step: 1 }),
       "</div>",
       '<div class="control-actions"><button class="button" type="button" data-feature-action="explore-region">Explore</button>' + renderFoldRequestButton(state, "region") + '<span class="control-hint">Coordinates remain inclusive, matching the HYB record display.</span></div>',
       "</section>",
@@ -708,11 +710,13 @@
         '<section class="region-results">',
         '<div class="region-summary data-card"><div class="card-title-row"><div><h2>' + escape(region.rna) + ":" + range(region.start, region.end) + '</h2><span class="card-note">' + (loading ? "Loading matching records…" : format(results.records.length) + " matching records · profile bins " + format(results.profileBinSize) + " nt") + (region.partner && region.partnerStart !== "" && region.partnerEnd !== "" ? " · " + escape(region.partner) + ":" + range(region.partnerStart, region.partnerEnd) : "") + '</span></div><span class="card-kicker">Local</span></div>',
         results.profileBinSizeAdjusted ? '<p class="notice notice-warning">The profile resolution was increased to ' + format(results.profileBinSize) + ' nt per bin to keep this browser-local plot responsive.</p>' : '',
+        // B11: Top partners sit inside the summary card, beside the profile
+        '<div class="region-summary-body"><div class="region-profile-block">',
         '<dl class="region-totals"><div><dt>Cluster support</dt><dd>' + format(results.support) + "</dd></div><div><dt>Partner RNAs</dt><dd>" + format(results.partners.length) + "</dd></div></dl>",
         '<div class="canvas-wrap region-canvas-wrap"><canvas id="region-profile-canvas" class="region-profile-canvas" width="960" height="210" aria-label="Interaction support position profile"></canvas></div>',
         "</div>",
         renderRegionPartners(results),
-        "</section>",
+        "</div></div>",
         renderReferencePanel(fastaRegion, region, state),
         renderRegionRecords(results.records, region.showAllRecords),
         "</section>"
@@ -723,7 +727,7 @@
   function renderRegionPartners(results) {
     const max = results.partners.length ? results.partners[0].support : 1;
     return [
-      '<section class="data-card region-partners"><div class="card-title-row"><h2>Top partners</h2><span class="card-kicker">Cluster support</span></div>',
+      '<section class="region-partners"><div class="card-title-row"><h3>Top partners</h3><span class="card-kicker">Cluster support</span></div>',
       results.partners.length ? '<div class="bar-list">' + results.partners.slice(0, 8).map(function (partner) {
         return '<div class="bar-row"><span class="bar-name">' + escape(partner.name) + '</span><span class="bar-track"><span class="bar-fill" style="width:' + Math.max(3, (partner.support / max) * 100) + '%"></span></span><span class="bar-value">' + format(partner.support) + "</span></div>";
       }).join("") + "</div>" : '<p class="empty-inline">No matching interactions.</p>',
@@ -742,9 +746,29 @@
 
     return [
       '<section class="reference-panel data-card"><div><span class="drawer-kicker">Reference sequence</span><h2>' + escape(reference.id) + ":" + range(reference.start, reference.end) + "</h2>",
-      '<code class="reference-sequence">' + escape(truncate(reference.sequence, 260)) + "</code></div>",
+      renderGroupedSequence(reference.sequence, reference.start),
+      "</div>",
       '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="copy-region-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="region-send-structure">Send to RNA Structure</button><button class="button button-secondary" type="button" data-feature-action="region-download-fasta">Download FASTA</button></div></section>'
     ].join("");
+  }
+
+  // B11: the reference in groups of 10 nt, 50 nt per line, each line led by
+  // its first coordinate; the first 300 nt are shown (Copy takes them all)
+  const SEQUENCE_PREVIEW = 300;
+  function renderGroupedSequence(sequence, start) {
+    const value = String(sequence || "");
+    const shown = value.slice(0, SEQUENCE_PREVIEW);
+    const first = Number(start) || 1;
+    const lines = [];
+    for (let offset = 0; offset < shown.length; offset += 50) {
+      const groups = [];
+      for (let group = offset; group < Math.min(shown.length, offset + 50); group += 10) {
+        groups.push(escape(shown.slice(group, Math.min(group + 10, offset + 50))));
+      }
+      lines.push('<span class="sequence-line"><span class="sequence-position" aria-hidden="true">' + format(first + offset) + "</span>" + groups.join(" ") + "</span>");
+    }
+    return '<code class="reference-sequence reference-sequence--grouped">' + lines.join("") + "</code>" +
+      (value.length > shown.length ? '<p class="table-note">Showing the first ' + format(shown.length) + " of " + format(value.length) + " nt. Copy sequence and Download FASTA use the whole region.</p>" : "");
   }
 
   function renderRegionRecords(records, showAll) {

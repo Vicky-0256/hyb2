@@ -1,0 +1,203 @@
+"use strict";
+
+// HYB2 Desktop entries on the website (WEB_UI_FIX_PLAN.md A13-A18, K9):
+// the landing comparison and download section in both release states, the
+// Desktop drawer (a link click or a #hyb2-desktop address opens it and the
+// current page stays), and nothing linking to the private release page.
+
+const assert = require("node:assert/strict");
+// HTML assertions print the pattern, not the whole page
+function has(html, pattern, message) { assert.ok(pattern.test(html), (message || "expected") + ": " + pattern); }
+function hasNot(html, pattern, message) { assert.ok(!pattern.test(html), (message || "unexpected") + ": " + pattern); }
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+const repository = path.resolve(__dirname, "..");
+const web = function (file) { return path.join(repository, "web", file); };
+
+function FakeElement(tagName) {
+  this.tagName = String(tagName || "div").toUpperCase();
+  this.innerHTML = "";
+  this.textContent = "";
+  this.dataset = {};
+  this.scrollTop = 0;
+  this.listeners = Object.create(null);
+  const classes = new Set();
+  this.classList = {
+    add: function () { Array.from(arguments).forEach(function (name) { classes.add(name); }); },
+    remove: function () { Array.from(arguments).forEach(function (name) { classes.delete(name); }); },
+    contains: function (name) { return classes.has(name); }
+  };
+}
+FakeElement.prototype.addEventListener = function (type, listener) {
+  (this.listeners[type] = this.listeners[type] || []).push(listener);
+};
+FakeElement.prototype.removeEventListener = function (type, listener) {
+  this.listeners[type] = (this.listeners[type] || []).filter(function (item) { return item !== listener; });
+};
+FakeElement.prototype.contains = function () { return false; };
+FakeElement.prototype.appendChild = function () {};
+
+function createContext(options) {
+  const settings = options || {};
+  const windowListeners = Object.create(null);
+  const replaced = [];
+  const location = { hash: settings.hash || "", pathname: "/hyb2/", search: "" };
+  const context = {
+    Intl, Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, JSON, Promise, Float64Array, Date, Error, URL,
+    URLSearchParams, TextDecoder, Blob, File, console,
+    setTimeout, clearTimeout,
+    navigator: { userAgent: settings.userAgent || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", platform: "" },
+    location: location,
+    history: {
+      replaceState: function (stateObject, title, url) {
+        replaced.push(url);
+        location.hash = String(url).charAt(0) === "#" ? String(url) : "";
+      }
+    },
+    document: {
+      activeElement: null,
+      documentElement: { dataset: {} },
+      head: new FakeElement("head"),
+      body: new FakeElement("body"),
+      title: "",
+      getElementById: function () { return null; },
+      querySelector: function () { return null; },
+      querySelectorAll: function () { return []; },
+      addEventListener: function () {},
+      createElement: function (tag) { return new FakeElement(tag); }
+    },
+    matchMedia: function () { return { matches: false }; },
+    scrollTo: function () {},
+    addEventListener: function (type, listener) { (windowListeners[type] = windowListeners[type] || []).push(listener); },
+    removeEventListener: function () {},
+    dispatchEvent: function () { return true; },
+    CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; },
+    windowListeners: windowListeners,
+    replaced: replaced,
+    HYB2_BUILD: { commit: "test" }
+  };
+  if (settings.desktop) {
+    context.Hyb2Desktop = settings.desktop;
+  }
+  context.window = context;
+  context.self = context;
+  context.globalThis = context;
+  vm.createContext(context);
+  let kitSource = fs.readFileSync(web("ui-kit.js"), "utf8");
+  if (settings.downloadsPublic) {
+    assert.match(kitSource, /const DESKTOP_DOWNLOADS_PUBLIC = false;/);
+    kitSource = kitSource.replace("const DESKTOP_DOWNLOADS_PUBLIC = false;", "const DESKTOP_DOWNLOADS_PUBLIC = true;");
+  }
+  vm.runInContext(kitSource, context, { filename: "ui-kit.js" });
+  [
+    "desktop-adapter.js", "analysis-data.js", "example.js", "data-provider.js", "page-data.js", "comrades-analysis.js",
+    "analysis-pages.js", "analysis-ui.js", "overview-page.js", "report-page.js", "app.js"
+  ].forEach(function (file) {
+    vm.runInContext(fs.readFileSync(web(file), "utf8"), context, { filename: file });
+  });
+  return context;
+}
+
+function mountSite(context) {
+  const host = new FakeElement("div");
+  context.window.Hyb2Web.mount(host, {});
+  return host;
+}
+
+// a click on an element carrying `attributes` (closest() answers for it)
+function click(host, attributes) {
+  let prevented = false;
+  const node = { dataset: attributes.dataset || { action: attributes["data-action"] }, getAttribute: function (name) { return attributes[name] || null; } };
+  const target = {
+    closest: function (selector) {
+      if (selector === '[data-action="open-desktop"]' && attributes["data-action"] === "open-desktop") return node;
+      if (selector === "[data-action]" && attributes["data-action"]) return node;
+      return null;
+    },
+    matches: function () { return false; }
+  };
+  (host.listeners.click || []).forEach(function (listener) {
+    listener({ target: target, preventDefault: function () { prevented = true; } });
+  });
+  return prevented;
+}
+
+// ---- downloads not public (the release repository is private)
+const site = createContext();
+const landing = mountSite(site);
+const html = landing.innerHTML;
+has(html, /<h2 id="landing-ways-title" class="landing-ways-title">Two ways to run HYB2<\/h2>/);
+has(html, /Up to 500 nt after a capacity test/, "Web Lite's CPLfold limit comes from K9");
+has(html, /Up to 1,000 nt by default, native, no capacity test/, "Desktop's CPLfold limit comes from K9");
+has(html, /HYB2 Desktop is not available for public download yet\./);
+has(html, /Installers planned for macOS · Apple silicon, Windows · 64-bit, Linux \(\.deb, \.tar\.gz\)\./);
+hasNot(html, /github\.com\/Vicky-0256\/hyb2/, "no link to the private repository while downloads are not public");
+hasNot(html, /HYB2-Desktop-[A-Za-z0-9-]+\.(dmg|exe|deb|tar\.gz)/, "no installer file names while downloads are not public");
+hasNot(html, /First launch \(unsigned app\)/);
+hasNot(html, /renderDesktopDownloadCard|desktop-download-card|web-capability-card/, "the old Desktop and capability cards are gone");
+has(html, /<details class="ways-browser-check"[^>]*><summary>Browser check/);
+has(html, /<button class="text-button desktop-entry" type="button" data-action="open-desktop">Desktop app<\/button>\s*<button class="text-button" type="button" data-action="open-help">Help<\/button>/,
+  "the landing header has Desktop app left of Help");
+
+// nothing in the site's sources hard-codes an installer or the release page
+fs.readdirSync(path.join(repository, "web")).filter(function (file) { return /\.(js|html)$/.test(file) && file !== "ui-kit.js"; }).forEach(function (file) {
+  const source = fs.readFileSync(web(file), "utf8");
+  hasNot(source, /github\.com\/Vicky-0256\/hyb2\/releases/, file + " must take Desktop links from Hyb2UiKit.desktop (K9)");
+  hasNot(source, /HYB2-Desktop-(macOS|Windows|Linux)/, file + " must take installer names from K9");
+});
+
+// ---- a Desktop link opens the drawer; the page and the address stay
+assert.equal(click(landing, { "data-action": "open-desktop" }), true, "the link's default (#hyb2-desktop) is prevented");
+assert.equal(site.location.hash, "", "the address does not change");
+has(landing.innerHTML, /class="dialog drawer desktop-drawer"/, "the Desktop drawer opens");
+has(landing.innerHTML, /class="landing/, "the current page stays");
+has(landing.innerHTML, /<table class="desktop-compare">/);
+has(landing.innerHTML, /Native CPLfold\.<\/strong> Up to 1,000 nt by default \(browser: 500 nt\), no capacity test/);
+click(landing, { "data-action": "close-dialog" });
+hasNot(landing.innerHTML, /desktop-drawer/);
+
+// ---- #hyb2-desktop in the address (new tab, pasted link): drawer, page kept
+site.location.hash = "#hyb2-desktop";
+site.windowListeners.hashchange.forEach(function (listener) { listener({ oldURL: "https://example.test/hyb2/" }); });
+has(landing.innerHTML, /class="dialog drawer desktop-drawer"/, "#hyb2-desktop opens the drawer");
+has(landing.innerHTML, /class="landing/, "#hyb2-desktop is not a page");
+assert.equal(site.location.hash, "", "the previous address is put back");
+assert.equal(site.replaced.at(-1), "/hyb2/");
+
+const opened = createContext({ hash: "#hyb2-desktop" });
+const openedHost = mountSite(opened);
+has(openedHost.innerHTML, /desktop-drawer/, "a page opened at #hyb2-desktop shows the drawer");
+has(openedHost.innerHTML, /class="landing/);
+assert.equal(opened.location.hash, "");
+
+// ---- downloads public (flip K9 downloadsAvailable): the full download design
+[
+  ["Macintosh; Intel Mac OS X 10_15_7", "mac-arm64", "Download for macOS · Apple silicon"],
+  ["Windows NT 10.0; Win64; x64", "win-x64", "Download for Windows · 64-bit"],
+  ["X11; Linux x86_64", "linux-deb", "Download for Linux · .deb"],
+  ["X11; FreeBSD amd64", null, null]
+].forEach(function (entry) {
+  const page = mountSite(createContext({ downloadsPublic: true, userAgent: entry[0] })).innerHTML;
+  const primary = /<a class="button desktop-download-primary" href="([^"]+)" data-platform="([^"]+)">([^<]+)<\/a>/.exec(page);
+  if (entry[1]) {
+    assert.ok(primary, entry[0] + ": one primary download");
+    assert.equal(primary[2], entry[1], entry[0]);
+    assert.equal(primary[3], entry[2], entry[0]);
+    has(page, /Download for another system:/);
+  } else {
+    assert.equal(primary, null, "an unknown system gets no primary button");
+    has(page, /<div class="desktop-download-groups">/, "an unknown system sees the three systems side by side");
+  }
+  ["HYB2-Desktop-macOS-arm64.dmg", "HYB2-Desktop-Windows-x64-Setup.exe", "HYB2-Desktop-Linux-x64.deb", "HYB2-Desktop-Linux-x64.tar.gz"].forEach(function (file) {
+    assert.ok(page.indexOf('href="https://github.com/Vicky-0256/hyb2/releases/latest/download/' + file + '"') > -1, entry[0] + ": " + file);
+  });
+  has(page, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest\/download\/SHA256SUMS\.txt">Checksums \(SHA256SUMS\.txt\)<\/a>/);
+  has(page, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest">Release notes<\/a>/);
+  has(page, /<summary>First launch \(unsigned app\)<\/summary>/);
+  has(page, /Intel Macs and ARM Linux\/Windows have no installer yet/);
+  hasNot(page, /For this computer|This computer/, "the verb is always Download");
+});
+
+process.stdout.write("desktop-entry: ok\n");

@@ -22,6 +22,11 @@
   // The included example (example.js): files are fetched only when it is used.
   const example = window.Hyb2Example || null;
 
+  // the address K9's Desktop links point at (see syncRoute)
+  const DESKTOP_HASH = "#hyb2-desktop";
+  // the route before the last hash change, put back after #hyb2-desktop
+  let lastRouteHash = "";
+
   const state = {
     activePage: "landing",
     analysisEntered: false,
@@ -489,6 +494,17 @@
   }());
 
   function syncRoute() {
+    // #hyb2-desktop (a K9 Desktop link that reached the URL: opened in a new
+    // tab, pasted, or clicked before a handler could stop it) is not a page:
+    // open the Desktop drawer and put the previous address back, so the
+    // routing below keeps the current page.
+    if (window.location.hash === DESKTOP_HASH) {
+      if (desktopEntriesShown()) {
+        state.dialog = "desktop";
+      }
+      restoreRouteHash(lastRouteHash);
+    }
+    lastRouteHash = window.location.hash;
     const hash = window.location.hash.replace(/^#\/?/, "");
     const parts = hash.split("?");
     const route = parts[0];
@@ -519,6 +535,21 @@
     state.activePage = ["methods", "file-format", "privacy", "validation"].indexOf(route) > -1
       ? route
       : "overview";
+  }
+
+  function openDesktopDrawer() {
+    if (desktopEntriesShown()) {
+      state.dialog = "desktop";
+      render();
+    }
+  }
+
+  function restoreRouteHash(hash) {
+    try {
+      window.history.replaceState(null, "", hash && hash !== DESKTOP_HASH ? hash : window.location.pathname + window.location.search);
+    } catch (error) {
+      // a sandboxed page may refuse to rewrite its URL
+    }
   }
 
   function handleHashChange() {
@@ -639,6 +670,7 @@
       renderBrand(),
       '    <div class="header-actions">',
       '      <button class="local-chip" type="button" data-action="open-privacy" title="What stays on this device">Local only</button>',
+      desktopEntriesShown() ? '      <button class="text-button desktop-entry" type="button" data-action="open-desktop">Desktop app</button>' : "",
       '      <button class="text-button" type="button" data-action="open-help">Help</button>',
       renderDisplayButton(),
       "    </div>",
@@ -775,8 +807,9 @@
   // without an installer, a first-launch note for the unsigned app,
   // checksums and release notes. While they are not public, it says so,
   // lists the planned installers and links nowhere.
-  function renderDesktopDownloads() {
+  function renderDesktopDownloads(options) {
     const kit = desktopKit();
+    const settings = options || {};
     const groups = [
       { os: "mac", name: "macOS" },
       { os: "windows", name: "Windows" },
@@ -794,7 +827,7 @@
       });
       return [
         '<div class="desktop-downloads is-unavailable">',
-        '<p class="desktop-downloads-status"><strong>' + escapeHtml(kit.notAvailable) + "</strong> " + escapeHtml(kit.tagline) + "</p>",
+        '<p class="desktop-downloads-status"><strong>' + escapeHtml(kit.notAvailable) + "</strong>" + (settings.tagline === false ? "" : " " + escapeHtml(kit.tagline)) + "</p>",
         '<p class="desktop-downloads-planned">Installers planned for ' + escapeHtml(planned.join(", ")) + ". " + escapeHtml(kit.unavailable) + "</p>",
         "</div>"
       ].join("");
@@ -1191,6 +1224,7 @@
       '      <button class="text-button" type="button" data-action="open-files">Data</button>',
       '      <button class="text-button report-button" type="button" data-action="navigate" data-page="report">Report</button>',
       '      <span class="toolbar-divider" aria-hidden="true"></span>',
+      desktopEntriesShown() ? '      <button class="text-button desktop-entry" type="button" data-action="open-desktop">Desktop app</button>' : "",
       '      <button class="text-button" type="button" data-action="open-help">Help</button>',
       renderDisplayButton(),
       "    </div>",
@@ -1400,6 +1434,24 @@
         drawerSection("Start over", '<p>Removes every loaded file and result from this tab and returns to the start page.</p><div class="inline-actions"><button class="button button-danger" type="button" data-action="start-over">Start over…</button></div>', "drawer-danger"));
     }
 
+    if (state.dialog === "desktop" && desktopEntriesShown()) {
+      const kit = desktopKit();
+      const compare = function (label, web, desktop) {
+        return "<tr><th scope=\"row\">" + escapeHtml(label) + "</th><td>" + escapeHtml(web) + "</td><td>" + escapeHtml(desktop) + "</td></tr>";
+      };
+      return renderDrawer("desktop", kit.name, kit.tagline, [
+        drawerSection("What it does", '<ul class="drawer-list desktop-capabilities">' + kit.capabilities.map(function (item) {
+          return "<li><strong>" + escapeHtml(item.title) + ".</strong> " + escapeHtml(item.text) + "</li>";
+        }).join("") + "</ul>"),
+        drawerSection("Web Lite or Desktop", '<table class="desktop-compare"><thead><tr><th scope="col"><span class="visually-hidden">Question</span></th><th scope="col">Web Lite</th><th scope="col">' + escapeHtml(kit.name) + "</th></tr></thead><tbody>" +
+          compare("Start from", ".hyb files", "Raw reads (FASTQ, FASTA, SAM)") +
+          compare("CPLfold", "Up to " + formatNt(kit.limits.webCplfoldNt) + " after a test", "Up to " + formatNt(kit.limits.cplfoldNt) + " by default") +
+          compare("Data", "Stays in this tab", "Stays on this computer") +
+          "</tbody></table>"),
+        drawerSection(kit.downloadsAvailable ? "Download" : "Availability", renderDesktopDownloads({ tagline: false }))
+      ].join(""));
+    }
+
     if (state.dialog === "display") {
       const dark = state.theme === "dark";
       const reduced = document.documentElement.dataset.motion === "reduced";
@@ -1499,7 +1551,9 @@
   function renderHelpDrawer() {
     const page = state.analysisEntered ? state.activePage : "landing";
     const entry = PAGE_HELP[page] || PAGE_HELP.overview;
-    const body = [drawerSection("On this page: " + entry[0], '<ol class="drawer-steps">' + entry[1].map(function (line) { return "<li>" + escapeHtml(line) + "</li>"; }).join("") + "</ol>")];
+    const kit = desktopKit();
+    const desktopLine = desktopEntriesShown() ? '<p class="drawer-desktop-line">' + kit.cta("overview") + "</p>" : "";
+    const body = [desktopLine, drawerSection("On this page: " + entry[0], '<ol class="drawer-steps">' + entry[1].map(function (line) { return "<li>" + escapeHtml(line) + "</li>"; }).join("") + "</ol>")];
     if (state.analysisEntered) {
       body.push(drawerSection("Keyboard", '<dl class="drawer-keys">' +
         "<div><dt><kbd>" + (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl") + "</kbd><kbd>K</kbd></dt><dd>Search pages and actions</dd></div>" +
@@ -1515,6 +1569,15 @@
   }
 
   function handleClick(event) {
+    // K9 Desktop links (<a href="#hyb2-desktop" data-action="open-desktop">)
+    // and the header buttons: the drawer opens and the URL stays.
+    const desktopLink = event.target.closest('[data-action="open-desktop"]');
+    if (desktopLink) {
+      event.preventDefault();
+      openDesktopDrawer();
+      return;
+    }
+
     const dialogLayer = event.target.closest(".pop-layer");
     if (dialogLayer && event.target === dialogLayer) {
       state.dialog = null;

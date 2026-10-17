@@ -7,3 +7,11 @@
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+
+/* A15: on phones the header has no room for "Desktop app"; the Help drawer
+   keeps the entry. */
+@media (max-width: 767px) {
+  .desktop-entry {
+    display: none;
+  }
+}

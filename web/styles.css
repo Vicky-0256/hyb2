@@ -564,6 +564,46 @@ a {
   }
 }
 
+/* Desktop drawer (data-action="open-desktop") and its line in Help */
+.drawer-desktop-line {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.desktop-capabilities li + li {
+  margin-top: 6px;
+}
+
+.desktop-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.desktop-compare th,
+.desktop-compare td {
+  padding: 7px 8px 7px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.desktop-compare thead th {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.desktop-compare tbody th {
+  color: var(--muted-strong);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
 @supports not (grid-template-rows: subgrid) {
   .ways-col {
     display: block;

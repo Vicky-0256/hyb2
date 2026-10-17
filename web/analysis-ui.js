@@ -163,91 +163,6 @@
     }
   }
 
-  function bindContactCanvas(state, api) {
-    const canvas = document.getElementById("contact-canvas");
-    if (!canvas || !state.contact.matrix || !state.contact.matrix.cells.length) {
-      return;
-    }
-
-    drawContactCanvas(state);
-
-    canvas.addEventListener("pointermove", function (event) {
-      const point = contactPointFromEvent(state, canvas, event);
-      if (!point) {
-        return;
-      }
-
-      if (state.contact.dragStart && event.buttons === 1) {
-        panContactView(state, point);
-        scheduleLegacyContactDraw(state, canvas);
-        return;
-      }
-
-      updateContactTooltip(state, point);
-    });
-
-    canvas.addEventListener("pointerleave", function () {
-      const tooltip = document.querySelector("[data-contact-tooltip]");
-      if (tooltip) {
-        tooltip.textContent = "Hover a cell for coordinates and counts.";
-      }
-    });
-
-    canvas.addEventListener("pointerdown", function (event) {
-      const point = contactPointFromEvent(state, canvas, event);
-      if (!point) {
-        return;
-      }
-      state.contact.dragStart = {
-        x: point.x,
-        y: point.y,
-        view: getContactView(state)
-      };
-      state.contact.dragMoved = false;
-      canvas.setPointerCapture(event.pointerId);
-    });
-
-    canvas.addEventListener("pointerup", function (event) {
-      const point = contactPointFromEvent(state, canvas, event);
-      const moved = state.contact.dragMoved;
-      state.contact.dragStart = null;
-      if (canvas.hasPointerCapture(event.pointerId)) {
-        canvas.releasePointerCapture(event.pointerId);
-      }
-      if (!point || moved) {
-        return;
-      }
-      state.contact.selection = { x: point.x, y: point.y };
-      renderAndFocus(api, "#contact-canvas");
-    });
-
-    canvas.addEventListener("dblclick", function () {
-      state.contact.view = null;
-      state.contact.selection = null;
-      renderAndFocus(api, "#contact-canvas");
-    });
-
-    canvas.addEventListener("wheel", function (event) {
-      event.preventDefault();
-      const point = contactPointFromEvent(state, canvas, event);
-      if (!point) {
-        return;
-      }
-      zoomContactView(state, point, event.deltaY > 0 ? 1.35 : 0.74);
-      scheduleLegacyContactDraw(state, canvas);
-    }, { passive: false });
-
-    canvas.addEventListener("keydown", function (event) {
-      const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
-      if (keys.indexOf(event.key) === -1) {
-        return;
-      }
-      event.preventDefault();
-      moveContactSelection(state, event.key);
-      renderAndFocus(api, "#contact-canvas");
-    });
-  }
-
   function bindContactCanvases(state, api) {
     const canvases = Array.from(document.querySelectorAll("[data-contact-stage]"));
     if (!canvases.length || !state.contact || !state.contact.matrix || !state.contact.matrix.cells.length) {
@@ -930,91 +845,6 @@
     });
   }
 
-  function drawContactCanvas(state) {
-    const canvas = document.getElementById("contact-canvas");
-    if (!canvas) {
-      return;
-    }
-
-    const matrix = state.contact.matrix;
-    const dimensions = prepareCanvas(canvas);
-    const context = dimensions.context;
-    const style = getComputedStyle(document.documentElement);
-    const ink = style.getPropertyValue("--ink").trim();
-    const muted = style.getPropertyValue("--muted").trim();
-    const line = style.getPropertyValue("--line").trim();
-    const surface = style.getPropertyValue("--surface").trim();
-    const geometry = getContactGeometry(state, dimensions.width, dimensions.height);
-    state.contact.geometry = geometry;
-
-    context.fillStyle = surface;
-    context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = isDarkTheme() ? surface : line;
-    context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
-
-    forEachVisibleContactCell(matrix, geometry, function (cell) {
-      const visualValue = state.contact.scale === "log" ? Math.log1p(cell.value) : cell.value;
-      const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
-      context.fillStyle = viridis(ratio);
-      context.fillRect(
-        geometry.left + ((cell.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth,
-        geometry.top + ((cell.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight,
-        Math.ceil(geometry.cellWidth) + .4,
-        Math.ceil(geometry.cellHeight) + .4
-      );
-    });
-
-    if (state.contact.selection) {
-      const selected = state.contact.selection;
-      if (selected.x >= geometry.xStart && selected.x <= geometry.xEnd && selected.y >= geometry.yStart && selected.y <= geometry.yEnd) {
-        context.strokeStyle = ink;
-        context.lineWidth = 2;
-        context.strokeRect(
-          geometry.left + ((selected.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth + 1,
-          geometry.top + ((selected.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight + 1,
-          Math.max(2, geometry.cellWidth - 2),
-          Math.max(2, geometry.cellHeight - 2)
-        );
-      }
-    }
-
-    context.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    context.fillStyle = muted;
-    context.textAlign = "left";
-    context.fillText(String(geometry.xStart), geometry.left, geometry.top + geometry.plotHeight + 25);
-    context.textAlign = "right";
-    context.fillText(String(geometry.xEnd + matrix.binSize - 1), geometry.left + geometry.plotWidth, geometry.top + geometry.plotHeight + 25);
-    context.save();
-    context.translate(16, geometry.top + geometry.plotHeight);
-    context.rotate(-Math.PI / 2);
-    const yLabels = contactYAxisLabels(geometry, matrix.binSize);
-    context.textAlign = "left";
-    context.fillText(String(yLabels.bottom), 0, 0);
-    context.textAlign = "right";
-    context.fillText(String(yLabels.top), geometry.plotHeight, 0);
-    context.restore();
-    context.strokeStyle = line;
-    context.lineWidth = 1;
-    context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
-  }
-
-  function scheduleLegacyContactDraw(state, canvas) {
-    if (state.contact.pendingLegacyDraw) {
-      return;
-    }
-    if (!window.requestAnimationFrame) {
-      drawContactCanvas(state);
-      return;
-    }
-    state.contact.pendingLegacyDraw = true;
-    window.requestAnimationFrame(function () {
-      state.contact.pendingLegacyDraw = false;
-      if (canvas.isConnected) {
-        drawContactCanvas(state);
-      }
-    });
-  }
-
   // a detached canvas for a PNG export, at twice the css size
   function prepareExportCanvas(canvas, width, height) {
     canvas.width = Math.round(width * 2);
@@ -1024,16 +854,26 @@
     return { context: context, width: width, height: height };
   }
 
-  // PNG exports are drawn light (K4) into a hidden canvas that
-  // downloadCanvasPng can find by id, then removed; null without a DOM
-  function lightExportCanvas(id) {
+  // PNG exports are drawn light (K4) into a canvas that downloadCanvasPng
+  // can find by id, then removed; null without a DOM.  Without a size the
+  // canvas is hidden (the caller sets its pixel size); with one it sits off
+  // screen at that css size, for draw code that measures its canvas.
+  function lightExportCanvas(id, cssWidth, cssHeight) {
     if (typeof document === "undefined" || !document.createElement || !document.body) {
       return null;
     }
+    const old = document.getElementById(id);
+    if (old) {
+      old.remove();
+    }
     const canvas = document.createElement("canvas");
     canvas.id = id;
-    canvas.hidden = true;
     canvas.setAttribute("aria-hidden", "true");
+    if (cssWidth && cssHeight) {
+      canvas.style.cssText = "position:fixed;left:-10000px;top:0;width:" + cssWidth + "px;height:" + cssHeight + "px;";
+    } else {
+      canvas.hidden = true;
+    }
     document.body.appendChild(canvas);
     return canvas;
   }
@@ -1087,27 +927,6 @@
       cellWidth: plotWidth / xCount,
       cellHeight: plotHeight / yCount,
       cap: matrix.cap || matrix.max || 1
-    };
-  }
-
-  function contactPointFromEvent(state, canvas, event) {
-    const geometry = state.contact.geometry;
-    const matrix = state.contact.matrix;
-    if (!geometry || !matrix) {
-      return null;
-    }
-    const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    if (x < geometry.left || x > geometry.left + geometry.plotWidth || y < geometry.top || y > geometry.top + geometry.plotHeight) {
-      return null;
-    }
-
-    const xIndex = Math.min(geometry.xCount - 1, Math.max(0, Math.floor((x - geometry.left) / geometry.cellWidth)));
-    const yIndex = Math.min(geometry.yCount - 1, Math.max(0, Math.floor((y - geometry.top) / geometry.cellHeight)));
-    return {
-      x: geometry.xStart + xIndex * matrix.binSize,
-      y: geometry.yStart + yIndex * matrix.binSize
     };
   }
 
@@ -1723,19 +1542,13 @@
   // the effect map as a PNG: drawn again off screen in the light export
   // colours (K4), with its title, axes and colour bar
   function downloadComparisonPng(state, api) {
-    const id = "comparison-effect-export-canvas";
-    const old = document.getElementById(id);
-    if (old) {
-      old.remove();
+    const canvas = lightExportCanvas("comparison-effect-export-canvas", COMPARISON_EXPORT_WIDTH, COMPARISON_EXPORT_HEIGHT);
+    if (!canvas) {
+      return;
     }
-    const canvas = document.createElement("canvas");
-    canvas.id = id;
-    canvas.setAttribute("aria-hidden", "true");
-    canvas.style.cssText = "position:fixed;left:-10000px;top:0;width:" + COMPARISON_EXPORT_WIDTH + "px;height:" + COMPARISON_EXPORT_HEIGHT + "px;";
-    document.body.appendChild(canvas);
     try {
       drawComparisonCanvas(state, canvas, "effect", { theme: "light" });
-      downloadCanvasPng("comparison-effect-map.png", api, id, "Comparison effect PNG downloaded locally.", "comparison-effect-canvas");
+      downloadCanvasPng("comparison-effect-map.png", api, canvas.id, "Comparison effect PNG downloaded locally.", "comparison-effect-canvas");
     } finally {
       canvas.remove();
     }

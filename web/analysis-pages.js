@@ -490,10 +490,14 @@
     return [
       '<div class="page-heading">',
       '<div><h1>Compare</h1><p>Compare multiple local HYB datasets: the DESeq2 differential test, contact-map effect sizes and the HYB2 similarity heatmap.</p></div>',
-      '<div class="inline-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + '<button class="button button-secondary" type="button" data-feature-action="comparison-download-svg">Download effect SVG</button><button class="button button-secondary" type="button" data-feature-action="comparison-download-png">Download effect PNG</button></div>',
+      '<div class="inline-actions compare-heading-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + renderCompareExportMenu() + '</div>',
       '</div>',
-      '<section class="comparison-note notice notice-warning"><strong>What this page can and cannot tell you</strong><span>Only the <b>differential test</b> (panel A) says whether a contact differs between ' + escape(comparison.conditionALabel) + ' and ' + escape(comparison.conditionBLabel) + ': it uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell. It needs at least two biological replicates per condition. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R or the HYB2 command-line tool, use the exports under Map settings.</span></details></section>',
-      '<section class="data-card comparison-datasets">',
+      // neutral information: the first sentence, the rest on request (on a
+      // phone the whole note folds to its title line)
+      '<section class="comparison-note compare-note notice"><details class="compare-note-more" data-open-key="compare-note"' + openAttr("compare-note") + '><summary><strong>What this page can and cannot tell you</strong><span class="compare-note-lead">Only the <b>differential test</b> (panel A) says whether a contact differs between ' + escape(comparison.conditionALabel) + ' and ' + escape(comparison.conditionBLabel) + '.</span><span class="compare-note-toggle" aria-hidden="true"></span></summary>' +
+        '<div class="compare-note-body"><span>It uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell, and needs at least two biological replicates per condition. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R or the HYB2 command-line tool, use the files under Export at the top of the page.</span></details></div></details></section>',
+      renderCompareNav(),
+      '<section class="data-card comparison-datasets" id="compare-sec-datasets">',
       canAddDatasets
         ? '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">The primary file is included as the first local dataset. Add one or more HYB files, then assign each to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ((comparison.datasets || []).length === 1 ? ' local file' : ' local files') + '</span></div>'
         : '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">Assign each project dataset to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ' datasets</span></div>',
@@ -506,13 +510,13 @@
       // the main question comes first: the DESeq2 test bins its own 10-nt
       // cells, independent of the map settings below
       window.Hyb2DeseqCard ? window.Hyb2DeseqCard.renderCard(state) : "",
-      '<section class="analysis-controls data-card">',
+      '<section class="analysis-controls data-card" id="compare-sec-maps">',
       '<div class="card-title-row"><div><h2>Map settings</h2><span class="card-note">These settings change the effect map, the similarity heatmap and their exports. The differential test above bins its own 10-nt cells and is not affected by Bin size, Measure or Normalisation.</span></div></div>',
       '<div class="comparison-control-grid">',
       renderTextControl("Condition A label", "conditionALabel", comparison.conditionALabel, "Condition A", "comparison-control"),
       renderTextControl("Condition B label", "conditionBLabel", comparison.conditionBLabel, "Condition B", "comparison-control"),
-      renderSelectControl("RNA X", "rnaX", comparison.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control"),
-      renderSelectControl("RNA Y", "rnaY", comparison.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control"),
+      renderSelectControl("RNA X", "rnaX", comparison.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control", { wide: true }),
+      renderSelectControl("RNA Y", "rnaY", comparison.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control", { wide: true }),
       renderSelectControl("Bin size", "binSize", comparison.binSize, [
         { value: "5", label: "5 nt" }, { value: "10", label: "10 nt" }, { value: "25", label: "25 nt" }, { value: "50", label: "50 nt" }, { value: "100", label: "100 nt" }
       ], "comparison-control"),
@@ -532,16 +536,15 @@
         { value: "white", label: "White (as similarity_heatmap.R)" }, { value: "grey", label: "Light grey (shows bins at the minimum)" }
       ], "comparison-display"),
       '</div>',
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><button class="quiet-button" type="button" data-feature-action="comparison-export-tsv">Export comparison TSV</button><button class="quiet-button" type="button" data-feature-action="comparison-export-params">Export parameters</button></div>',
-      '<details class="comparison-export-more" data-open-key="compare-exports"' + openAttr("compare-exports") + '><summary>Exports for R or the HYB2 command-line tool</summary><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-counts">Export HYB2 count table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-hyb2-names">Export HYB2 names.table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-metadata">Export extended metadata</button></div>',
+      // the exports are in the page heading's Export menu (K2)
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><span class="card-note">Map images, tables and the files for R or the HYB2 command-line tool are under Export at the top of the page.</span></div>',
       // a rerun keeps the previous maps on screen: the progress shows here
       comparison.result ? renderComparisonProgress(comparison.progress) : "",
-      '<p class="card-note">Use the headerless HYB2 names.table with the HYB2 command-line tool. Extended metadata has a header and provenance columns for audit or your own R workflow.</p></details>',
       '</section>',
       result.ready ? [
         '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Similarity bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
         '<section class="comparison-map-grid">',
-        renderComparisonMap("effect", "Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal. Descriptive, not a test: bins with few records give strong colours by chance, so use the differential test (A) to judge a difference.', result),
+        renderComparisonMap("effect", "Descriptive · Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal. Descriptive, not a test: bins with few records give strong colours by chance, so use the differential test (A) to judge a difference.', result),
         renderComparisonMap("conserved", "B · Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ")" + (comparison.similarityPanel === "grey" ? " on a grey panel." : "; on R's white panel the smallest bins do not show (choose the grey panel to see them)."), result),
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
@@ -555,12 +558,45 @@
     ].join("");
   }
 
+  // K2: every Compare download in one menu; the actions keep their names
+  // (written out: verify-ui-contract.cjs looks for each data-feature-action)
+  function renderCompareExportMenu() {
+    const item = '<button class="export-menu-item" type="button" role="menuitem" ';
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      item + 'data-feature-action="comparison-download-svg">Effect map · SVG</button>' +
+      item + 'data-feature-action="comparison-download-png">Effect map · PNG</button>' +
+      item + 'data-feature-action="comparison-export-tsv">Comparison bins · TSV</button>' +
+      item + 'data-feature-action="comparison-export-params">Parameters · JSON</button>' +
+      item + 'data-feature-action="comparison-export-deseq-counts">HYB2 count table · TSV<small>For R or the HYB2 command-line tool</small></button>' +
+      item + 'data-feature-action="comparison-export-hyb2-names">HYB2 names.table<small>Use the headerless HYB2 names.table with the HYB2 command-line tool</small></button>' +
+      item + 'data-feature-action="comparison-export-deseq-metadata">Extended metadata · TSV<small>Extended metadata has a header and provenance columns, for audit or your own R workflow</small></button>' +
+      '</div></details>';
+  }
+
+  // in-page navigation: buttons, not links, so the hash route is untouched
+  // (analysis-ui.js comparison-jump scrolls; bindCompareNav highlights)
+  function renderCompareNav() {
+    const items = [["compare-sec-datasets", "Datasets"]];
+    if (window.Hyb2DeseqCard) { items.push(["deseq-card", "Differential test (A)"]); }
+    items.push(["compare-sec-maps", "Maps (B)"]);
+    if (window.Hyb2ArcMap) {
+      items.push(["arcmap-card", "Arc map (C)"]);
+      if (window.Hyb2RegionPanels) { items.push(["region-panels-card", "Regions (D, E)"]); }
+      if (window.Hyb2FoldingEnergy) { items.push(["folding-energy-card", "Energy (F, G)"]); }
+    }
+    return '<nav class="compare-subnav" aria-label="Compare page sections"><div class="compare-subnav-list">' + items.map(function (item) {
+      return '<button class="compare-subnav-item" type="button" data-feature-action="comparison-jump" data-target="' + item[0] + '">' + escape(item[1]) + '</button>';
+    }).join("") + '</div></nav>';
+  }
+
   function renderComparisonDatasetTable(comparison) {
     const datasets = comparison.datasets || [];
     return [
-      '<div class="data-table-wrap comparison-dataset-table"><table class="data-table"><thead><tr><th>Dataset</th><th>Label</th><th>Condition</th><th>Valid records</th><th>Support</th><th></th></tr></thead><tbody>',
+      // K3: numbers right-aligned, long file names cut with a title; Primary
+      // is a badge in the same column as Remove
+      '<div class="data-table-wrap comparison-dataset-table"><table class="data-table"><thead class="nowrap"><tr><th class="compare-dataset-name">Dataset</th><th>Label</th><th>Condition</th><th class="num">Valid records</th><th class="num">Support</th><th class="compare-dataset-action" aria-label="Role"></th></tr></thead><tbody>',
       datasets.map(function (dataset) {
-        return '<tr><td title="' + attribute(dataset.fileName) + '">' + escape(dataset.fileName) + '</td><td><input type="text" value="' + attribute(dataset.label || "") + '" data-feature="comparison-dataset" data-key="label" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset label"></td><td><select data-feature="comparison-dataset" data-key="condition" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset condition"><option value="A"' + (dataset.condition === "A" ? " selected" : "") + '>Condition A</option><option value="B"' + (dataset.condition === "B" ? " selected" : "") + '>Condition B</option></select></td><td>' + format(dataset.summary.validRecords) + '</td><td>' + format(dataset.summary.supportInteractions) + '</td><td>' + (dataset.id === "primary" ? '<span class="card-note">Primary</span>' : '<button class="quiet-button" type="button" data-feature-action="remove-comparison-dataset" data-dataset-id="' + attribute(dataset.id) + '">Remove</button>') + '</td></tr>';
+        return '<tr><td class="cell-truncate" title="' + attribute(dataset.fileName) + '">' + escape(dataset.fileName) + '</td><td><input type="text" value="' + attribute(dataset.label || "") + '" data-feature="comparison-dataset" data-key="label" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset label"></td><td><select data-feature="comparison-dataset" data-key="condition" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset condition"><option value="A"' + (dataset.condition === "A" ? " selected" : "") + '>Condition A</option><option value="B"' + (dataset.condition === "B" ? " selected" : "") + '>Condition B</option></select></td><td class="num">' + format(dataset.summary.validRecords) + '</td><td class="num">' + format(dataset.summary.supportInteractions) + '</td><td class="compare-dataset-action">' + (dataset.id === "primary" ? '<span class="compare-badge" title="The file loaded on the Data page; it cannot be removed here">Primary</span>' : '<button class="quiet-button" type="button" data-feature-action="remove-comparison-dataset" data-dataset-id="' + attribute(dataset.id) + '">Remove</button>') + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -614,11 +650,11 @@
     const rawLabel = comparison.measure === "support" ? "Raw support" : "Raw records";
     const analysisLabel = comparison.normalise === "library" ? "Per million" : "Analysis value";
     return [
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Dataset</th><th>Condition</th><th>' + rawLabel + '</th><th>' + analysisLabel + '</th></tr></thead><tbody>',
+      '<div class="data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th>Dataset</th><th>Condition</th><th class="num">' + rawLabel + '</th><th class="num">' + analysisLabel + '</th></tr></thead><tbody>',
       (comparison.datasets || []).map(function (dataset) {
         const item = present[dataset.id];
         const conditionLabel = dataset.condition === "A" ? comparison.conditionALabel : comparison.conditionBLabel;
-        return '<tr><td>' + escape(dataset.label || dataset.fileName || dataset.id) + '</td><td>' + escape(conditionLabel) + '</td><td>' + format(item ? item.rawValue : 0) + '</td><td>' + format(item ? item.value : 0) + '</td></tr>';
+        return '<tr><td>' + escape(dataset.label || dataset.fileName || dataset.id) + '</td><td>' + escape(conditionLabel) + '</td><td class="num">' + format(item ? item.rawValue : 0) + '</td><td class="num">' + format(item ? item.value : 0) + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -657,9 +693,9 @@
       '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page - 1) + '"' + (page > 0 ? "" : " disabled") + '>Previous</button>',
       '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page + 1) + '"' + (page < pages - 1 ? "" : " disabled") + '>Next</button>',
       '</div>',
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>X interval</th><th>Y interval</th><th>' + escape(comparison.conditionALabel) + ' mean</th><th>' + escape(comparison.conditionBLabel) + ' mean</th><th>Log2 effect</th><th>Datasets present</th><th>Similarity</th></tr></thead><tbody>',
+      '<div class="data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">X interval</th><th class="num">Y interval</th><th class="num">' + escape(comparison.conditionALabel) + ' mean</th><th class="num">' + escape(comparison.conditionBLabel) + ' mean</th><th class="num">Log2 effect</th><th class="num">Datasets present</th><th class="num">Similarity</th></tr></thead><tbody>',
       rows.map(function (cell) {
-        return '<tr><td>' + range(cell.x, cell.x + result.binSize - 1) + '</td><td>' + range(cell.y, cell.y + result.binSize - 1) + '</td><td>' + format(cell.conditionA) + '</td><td>' + format(cell.conditionB) + '</td><td>' + format(cell.effect) + '</td><td>' + format(cell.presentDatasets) + '</td><td>' + format(cell.similarity) + '</td></tr>';
+        return '<tr><td class="num">' + range(cell.x, cell.x + result.binSize - 1) + '</td><td class="num">' + range(cell.y, cell.y + result.binSize - 1) + '</td><td class="num">' + format(cell.conditionA) + '</td><td class="num">' + format(cell.conditionB) + '</td><td class="num">' + format(cell.effect) + '</td><td class="num">' + format(cell.presentDatasets) + '</td><td class="num">' + format(cell.similarity) + '</td></tr>';
       }).join(""),
       '</tbody></table></div></section>'
     ].join("");

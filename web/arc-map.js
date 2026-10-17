@@ -957,11 +957,16 @@
     const esc = escape || escapeXml;
     const cached = cachedModel(s);
     const model = cached.model;
-    const fileRow = function (key, label, accept, loaded) {
-      return '<div class="arcmap-file control-field"><span>' + esc(label) + '</span>' +
-        '<input type="file" accept="' + accept + '" data-feature="arcmap-file" data-key="' + key + '" aria-label="' + esc(label) + '">' +
-        (loaded ? '<span class="card-note">' + esc(loaded) + '</span> <button class="quiet-button" type="button" data-feature-action="arcmap-clear" data-key="' + key + '">Remove</button>' : "") +
-        (s.errors[key] ? '<p class="notice notice-error">' + esc(s.errors[key]) + "</p>" : "") + "</div>";
+    // the native input is hidden behind a button-styled label: a loaded file
+    // shows its name, summary and Remove, never the browser's "No file chosen"
+    const fileRow = function (key, label, accept, name, summary) {
+      const input = '<input class="visually-hidden" type="file" accept="' + accept + '" data-feature="arcmap-file" data-key="' + key + '" aria-label="' + esc((name ? "Replace " : "Choose ") + label) + '">';
+      return '<div class="arcmap-file control-field' + (name ? " is-loaded" : "") + '"><span>' + esc(label) + '</span><div class="file-pick">' +
+        '<label class="button button-secondary file-pick-button">' + input + (name ? "Replace" : "Choose file") + "</label>" +
+        (name
+          ? '<span class="file-pick-name" title="' + esc(name + " · " + summary) + '"><b>' + esc(name) + "</b> · " + esc(summary) + '</span><button class="quiet-button" type="button" data-feature-action="arcmap-clear" data-key="' + key + '">Remove</button>'
+          : '<span class="file-pick-name is-empty">No file</span>') +
+        "</div>" + (s.errors[key] ? '<p class="notice notice-error">' + esc(s.errors[key]) + "</p>" : "") + "</div>";
     };
     const control = function (label, key, value, placeholder) {
       return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" value="' + esc(value) +
@@ -973,13 +978,13 @@
         "</select></label>";
     };
     const out = [
-      '<section class="data-card arcmap-card">',
+      '<section class="data-card arcmap-card" id="arcmap-card">',
       '<div class="card-title-row"><div><h2>C · Arc map</h2><span class="card-note">One or two structures, the differential interactions of a comparison and a gene track, as in a PARIS-style figure. Its padj cutoff is separate from the differential test\'s and also drives panels D to G. Files stay in this browser.</span></div></div>',
       '<div class="arcmap-files">',
-      fileRow("a", "Structure A (.dbn / .ct)", ".dbn,.db,.ct,.txt", s.a ? s.a.name + " · " + formatNumber(s.a.pairs.length) + " pairs · " + formatNumber(s.a.length) + " nt" : ""),
-      fileRow("b", "Structure B (optional)", ".dbn,.db,.ct,.txt", s.b ? s.b.name + " · " + formatNumber(s.b.pairs.length) + " pairs" : ""),
-      fileRow("interactions", "Differential interactions (TSV)", ".tsv,.txt", s.interactions ? s.interactions.name + " · " + formatNumber(s.interactions.rows.length) + " rows" : ""),
-      fileRow("annotation", "Gene annotation (GenBank, GFF, BED, TSV)", ".gb,.gbk,.genbank,.gff,.gff3,.gtf,.bed,.tsv,.txt", s.annotation ? s.annotation.name + " · " + formatNumber(s.annotation.features.length) + " features" : ""),
+      fileRow("a", "Structure A (.dbn / .ct)", ".dbn,.db,.ct,.txt", s.a && s.a.name, s.a ? formatNumber(s.a.pairs.length) + " pairs · " + formatNumber(s.a.length) + " nt" : ""),
+      fileRow("b", "Structure B (optional)", ".dbn,.db,.ct,.txt", s.b && s.b.name, s.b ? formatNumber(s.b.pairs.length) + " pairs" : ""),
+      fileRow("interactions", "Differential interactions (TSV)", ".tsv,.txt", s.interactions && s.interactions.name, s.interactions ? formatNumber(s.interactions.rows.length) + " rows" : ""),
+      fileRow("annotation", "Gene annotation (GenBank, GFF, BED, TSV)", ".gb,.gbk,.genbank,.gff,.gff3,.gtf,.bed,.tsv,.txt", s.annotation && s.annotation.name, s.annotation ? formatNumber(s.annotation.features.length) + " features" : ""),
       "</div>",
       '<div class="comparison-control-grid">',
       control("padj <", "padj", s.padj, "0.01"),
@@ -988,15 +993,17 @@
       select("Condition one cells are on", "oneOn", s.oneOn, [["a", "A's reference"], ["b", "B's reference"]]),
       select("Condition two cells are on", "twoOn", s.twoOn, [["a", "A's reference"], ["b", "B's reference"]]),
       select("Structures", "mono", s.mono ? "mono" : "colour", [["mono", "One colour (black)"], ["colour", "A red, B blue"]]),
-      control("From (nt)", "start", s.start, "1"),
-      control("To (nt)", "end", s.end, model.ready ? String(model.length) : ""),
+      // empty means the whole structure: the placeholder says so in words,
+      // so that an empty field does not read as a disabled one
+      control("From (nt)", "start", s.start, "Start (1)"),
+      control("To (nt)", "end", s.end, model.ready ? "End (" + formatNumber(model.length) + ")" : "End of structure"),
       "</div>"
     ];
     if (!model.ready) {
       out.push('<p class="card-note">' + esc(model.reason) + "</p>");
     } else {
       out.push('<div class="arcmap-figure" data-arcmap-figure>' + cached.svg + "</div>");
-      out.push('<dl class="selection-stats"><div><dt>Pairs A</dt><dd>' + formatNumber(model.stats.pairsA) + "</dd></div>" +
+      out.push('<dl class="selection-stats stats-compact"><div><dt>Pairs A</dt><dd>' + formatNumber(model.stats.pairsA) + "</dd></div>" +
         (s.b ? "<div><dt>Pairs B</dt><dd>" + formatNumber(model.stats.pairsB) + "</dd></div><div><dt>Shared</dt><dd>" + formatNumber(model.stats.shared) +
           "</dd></div><div><dt>Only A · only B</dt><dd>" + formatNumber(model.stats.onlyA) + " · " + formatNumber(model.stats.onlyB) + "</dd></div>" : "") +
         "<div><dt>Differential arcs</dt><dd>" + formatNumber(model.overlay.length) + "</dd></div></dl>");

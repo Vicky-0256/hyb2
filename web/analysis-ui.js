@@ -1380,6 +1380,7 @@
   }
 
   function bindComparisonCanvases(state, api) {
+    bindCompareNav();
     const result = state.comparison && state.comparison.result;
     if (!result || !result.ready) {
       return;
@@ -1416,36 +1417,149 @@
     });
   }
 
-  function drawComparisonCanvas(state, canvas, kind) {
+  // Compare sub-navigation: the section that has reached the top (below
+  // the header and the sticky nav) is marked current.  The page is re-rendered often, so
+  // the observer is rebuilt each time and the last current section is kept.
+  let compareNavObservers = [];
+  let compareNavCurrent = "";
+
+  function markCompareNav(nav, id) {
+    compareNavCurrent = id || compareNavCurrent;
+    let active = null;
+    Array.from(nav.querySelectorAll(".compare-subnav-item")).forEach(function (item) {
+      const on = item.dataset.target === compareNavCurrent;
+      item.classList.toggle("is-current", on);
+      if (on) {
+        item.setAttribute("aria-current", "true");
+        active = item;
+      } else {
+        item.removeAttribute("aria-current");
+      }
+    });
+    // on a phone the chips scroll sideways: keep the current one in view
+    const list = nav.querySelector(".compare-subnav-list");
+    if (active && list && list.scrollWidth > list.clientWidth) {
+      const left = active.offsetLeft - list.offsetLeft;
+      if (left < list.scrollLeft || left + active.offsetWidth > list.scrollLeft + list.clientWidth) {
+        list.scrollLeft = Math.max(0, left - 16);
+      }
+    }
+  }
+
+  function bindCompareNav() {
+    compareNavObservers.forEach(function (observer) { observer.disconnect(); });
+    compareNavObservers = [];
+    const nav = typeof document.querySelector === "function" ? document.querySelector(".compare-subnav") : null;
+    if (!nav) {
+      return;
+    }
+    const sections = Array.from(nav.querySelectorAll(".compare-subnav-item")).map(function (item) {
+      return document.getElementById(item.dataset.target);
+    }).filter(Boolean);
+    markCompareNav(nav, compareNavCurrent || (sections[0] && sections[0].id));
+    if (typeof IntersectionObserver !== "function" || !sections.length) {
+      return;
+    }
+    const offset = Math.round(compareNavHeaderHeight() + (nav.getBoundingClientRect().height || 0));
+    // one observer on a 41-px band under the nav (a section's top crossing
+    // the line) and one on the whole view below it (a jump that moves
+    // sections past the band in one step); either way the current section is
+    // the last one whose top has reached the line
+    const update = function () {
+      // at the end of the page the last sections cannot reach the line:
+      // the last one in view is then current
+      const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+      const line = atEnd ? window.innerHeight - 80 : offset + 40;
+      let current = sections[0];
+      sections.forEach(function (section) {
+        if (section.getBoundingClientRect().top <= line) {
+          current = section;
+        }
+      });
+      markCompareNav(nav, current.id);
+    };
+    const below = Math.max(0, (window.innerHeight || 800) - offset - 41);
+    ["-" + offset + "px 0px -" + below + "px 0px", "-" + offset + "px 0px 0px 0px"].forEach(function (rootMargin) {
+      const observer = new IntersectionObserver(update, { rootMargin: rootMargin, threshold: 0 });
+      sections.forEach(function (section) { observer.observe(section); });
+      compareNavObservers.push(observer);
+    });
+  }
+
+  function compareNavHeaderHeight() {
+    if (document.querySelector(".workspace-embedded")) {
+      return 0;
+    }
+    return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--header-h")) || 60;
+  }
+
+  // instant scroll in the next frame: a smooth scroll is cut short when the
+  // page re-renders (as the report's report-jump)
+  function jumpToCompareSection(id) {
+    const target = document.getElementById(id);
+    if (!target) {
+      return;
+    }
+    const nav = document.querySelector(".compare-subnav");
+    const go = function () {
+      const header = compareNavHeaderHeight();
+      const navHeight = nav ? nav.getBoundingClientRect().height : 0;
+      const top = target.getBoundingClientRect().top + window.scrollY - header - navHeight - 12;
+      window.scrollTo({ top: Math.max(0, top), behavior: "instant" });
+      if (nav) {
+        markCompareNav(nav, id);
+      }
+      if (!target.hasAttribute("tabindex")) {
+        target.setAttribute("tabindex", "-1");
+      }
+      target.focus({ preventScroll: true });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(go);
+    } else {
+      go();
+    }
+  }
+
+  // options: { theme: "light" } draws an export copy (K4: light by default)
+  // that keeps neither the hit-test geometry nor a cached layer
+  function drawComparisonCanvas(state, canvas, kind, options) {
+    const opts = options || {};
+    const exporting = Boolean(opts.theme);
+    const theme = opts.theme;
+    const dark = theme ? theme === "dark" : isDarkTheme();
     const result = state.comparison.result;
     const dimensions = prepareCanvas(canvas);
     const context = dimensions.context;
-    const style = getComputedStyle(document.documentElement);
-    const surface = style.getPropertyValue("--surface").trim();
-    const line = style.getPropertyValue("--line").trim();
-    const ink = style.getPropertyValue("--ink").trim();
-    const muted = style.getPropertyValue("--muted").trim();
+    const colours = exporting ? exportColors(theme) : null;
+    const style = exporting ? null : getComputedStyle(document.documentElement);
+    const surface = exporting ? colours.surface : style.getPropertyValue("--surface").trim();
+    const line = exporting ? colours.line : style.getPropertyValue("--line").trim();
+    const ink = exporting ? colours.ink : style.getPropertyValue("--ink").trim();
+    const muted = exporting ? colours.muted : style.getPropertyValue("--muted").trim();
     const geometry = getComparisonGeometry(result, dimensions.width, dimensions.height);
-    state.comparison.geometry = state.comparison.geometry || {};
-    state.comparison.geometry[kind] = geometry;
+    if (!exporting) {
+      state.comparison.geometry = state.comparison.geometry || {};
+      state.comparison.geometry[kind] = geometry;
+    }
     const cells = kind === "conserved" ? result.conservedCells : result.cells;
-    const panel = kind === "conserved" && !isDarkTheme() ? similarityPanelColor(state.comparison) : line;
+    const panel = kind === "conserved" && !dark ? similarityPanelColor(state.comparison) : line;
     // A whole-genome map has up to ~10^6 cells: they are drawn once into a
     // layer kept with the result and copied on later renders.
-    const layerKey = [kind, canvas.width, canvas.height, surface, panel, isDarkTheme()].join("|");
+    const layerKey = [kind, canvas.width, canvas.height, surface, panel, dark].join("|");
     let layers = comparisonLayers.get(result);
     if (!layers) {
       layers = new Map();
       comparisonLayers.set(result, layers);
     }
-    let layer = layers.get(layerKey);
-    if (!layer && cells.length > COMPARISON_LAYER_MIN_CELLS && typeof document.createElement === "function") {
+    let layer = exporting ? null : layers.get(layerKey);
+    if (!layer && !exporting && cells.length > COMPARISON_LAYER_MIN_CELLS && typeof document.createElement === "function") {
       layer = document.createElement("canvas");
       layer.width = canvas.width;
       layer.height = canvas.height;
       const layerContext = layer.getContext("2d");
       layerContext.setTransform(canvas.width / dimensions.width, 0, 0, canvas.height / dimensions.height, 0, 0);
-      drawComparisonCells(layerContext, dimensions, geometry, result, kind, cells, surface, panel, line);
+      drawComparisonCells(layerContext, dimensions, geometry, result, kind, cells, surface, panel, line, theme);
       layers.set(layerKey, layer);
     }
     if (layer) {
@@ -1454,9 +1568,9 @@
       context.drawImage(layer, 0, 0);
       context.restore();
     } else {
-      drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line);
+      drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line, theme);
     }
-    if (state.comparison.selection) {
+    if (state.comparison.selection && !exporting) {
       const selected = state.comparison.selection;
       if (selected.x >= geometry.xStart && selected.x <= geometry.xEnd && selected.y >= geometry.yStart && selected.y <= geometry.yEnd) {
         context.strokeStyle = ink;
@@ -1469,24 +1583,205 @@
         );
       }
     }
-    context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    // K5 axes: ticks on round positions and "<RNA> position (nt)" titles
+    const marks = comparisonAxisMarks(result, geometry);
+    const bottom = geometry.top + geometry.plotHeight;
+    context.lineWidth = 1;
+    context.strokeStyle = muted;
     context.fillStyle = muted;
-    context.textAlign = "left";
-    context.fillText(String(geometry.xStart), geometry.left, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "right";
-    context.fillText(String(geometry.xEnd + result.binSize - 1), geometry.left + geometry.plotWidth, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "right";
-    context.fillText(String(geometry.yStart), geometry.left - 7, geometry.top + 4);
-    context.fillText(String(geometry.yEnd + result.binSize - 1), geometry.left - 7, geometry.top + geometry.plotHeight);
     context.font = "11px system-ui, sans-serif";
+    context.beginPath();
+    marks.x.forEach(function (mark) {
+      context.moveTo(mark.at + .5, bottom + 1);
+      context.lineTo(mark.at + .5, bottom + 5);
+    });
+    marks.y.forEach(function (mark) {
+      context.moveTo(geometry.left - 5, mark.at + .5);
+      context.lineTo(geometry.left - 1, mark.at + .5);
+    });
+    context.stroke();
+    marks.x.forEach(function (mark) {
+      context.textAlign = mark.anchor === "start" ? "left" : mark.anchor === "end" ? "right" : "center";
+      context.fillText(mark.label, mark.at, bottom + 17);
+    });
+    context.textAlign = "right";
+    marks.y.forEach(function (mark) {
+      context.fillText(mark.label, geometry.left - 7, mark.at + (mark.edge === "start" ? 8 : mark.edge === "end" ? 0 : 4));
+    });
+    context.fillStyle = ink;
+    const fitsCanvas = function (length) { return function (text) { return context.measureText(text).width <= length; }; };
+    context.textAlign = "center";
+    context.fillText(middleEllipsis(state.comparison.rnaX + " position (nt)", fitsCanvas(geometry.plotWidth)), geometry.left + geometry.plotWidth / 2, bottom + 33);
+    context.save();
+    context.translate(13, geometry.top + geometry.plotHeight / 2);
+    context.rotate(-Math.PI / 2);
+    context.fillText(middleEllipsis(state.comparison.rnaY + " position (nt)", fitsCanvas(geometry.plotHeight)), 0, 0);
+    context.restore();
+    context.font = "600 12px system-ui, sans-serif";
     context.fillStyle = ink;
     context.textAlign = "left";
-    context.fillText(state.comparison.rnaX + " (X) × " + state.comparison.rnaY + " (Y)", geometry.left, 15);
-    if (kind === "effect") {
-      context.fillText(state.comparison.conditionALabel + " enriched: violet · " + state.comparison.conditionBLabel + " enriched: teal", geometry.left, 29);
+    context.fillText(comparisonMapTitle(state.comparison, kind, exporting, function (text) {
+      return context.measureText(text).width <= geometry.plotWidth;
+    }), geometry.left, 16);
+    if (window.Hyb2UiKit) {
+      window.Hyb2UiKit.legend.drawCanvas(context, comparisonLegendOptions(state.comparison, result, kind, theme, geometry, { ink: ink, muted: muted }));
     }
     context.strokeStyle = line;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
+  }
+
+  // K1 colour bar under a map: diverging -cap..+cap for the effect,
+  // sequential floor..cap for the similarity (values past the cap take its colour)
+  function comparisonLegendOptions(comparison, result, kind, theme, geometry, palette) {
+    const kit = window.Hyb2UiKit;
+    const place = {
+      orientation: "horizontal",
+      x: geometry.left,
+      y: geometry.top + geometry.plotHeight + COMPARISON_LEGEND_OFFSET,
+      width: Math.min(260, geometry.plotWidth),
+      height: 10,
+      ink: palette.ink,
+      muted: palette.muted
+    };
+    if (kind === "conserved") {
+      const cap = Math.max(1, Number(result.similarityCap) || 1);
+      const smallest = similarityFloorOf(result);
+      const floor = Number.isFinite(smallest) ? Math.min(cap, smallest) : cap;
+      const flat = !(cap > floor);
+      return Object.assign(place, {
+        kind: "sequential",
+        min: floor,
+        max: flat ? floor + 1 : cap,
+        ticks: flat ? [floor] : spacedTicks(kit.niceTicks(floor, cap, 4)),
+        colorAt: function (t) { return conservedColor(flat ? .5 : t, theme); },
+        format: function (value) { return (!flat && value >= cap ? "≥ " : "") + kit.formatTick(value); },
+        title: "Similarity · smaller raw count of A and B"
+      });
+    }
+    const cap = Math.max(.01, Number(result.effectCap) || 0);
+    // symmetric: the ends, zero and one round value each side near cap / 2
+    const inner = kit.niceTicks(0, cap, 3).filter(function (value) { return value > 0 && value < cap; });
+    const half = inner.reduce(function (best, value) { return best === null || Math.abs(value - cap / 2) < Math.abs(best - cap / 2) ? value : best; }, null);
+    const end = Number(cap.toFixed(cap < 1 ? 2 : 1));
+    return Object.assign(place, {
+      kind: "diverging",
+      min: -cap,
+      max: cap,
+      ticks: half === null ? [-cap, 0, cap] : [-cap, -half, 0, half, cap],
+      colorAt: function (t) { return effectColor(2 * t - 1, theme); },
+      format: function (value) { return value <= -cap ? "≤ " + kit.formatTick(-end) : value >= cap ? "≥ " + kit.formatTick(end) : kit.formatTick(value); },
+      title: "Mean log2 effect, log2(A / B)",
+      lowLabel: (comparison.conditionBLabel || "Condition B") + " enriched",
+      highLabel: (comparison.conditionALabel || "Condition A") + " enriched"
+    });
+  }
+
+  // tick positions in px along each axis: niceTicks over the plotted
+  // nucleotides, thinned so that labels do not touch
+  function comparisonAxisMarks(result, geometry) {
+    const kit = window.Hyb2UiKit;
+    const axis = function (start, count, origin, length) {
+      const span = count * result.binSize;
+      const last = start + span - 1;
+      const values = kit ? kit.niceTicks(start, last, length < 260 ? 4 : 5) : [start, last];
+      const at = function (value) { return origin + (value - start) / span * length; };
+      // labels at least 50 px apart, 60 px from the (end-anchored) last one
+      let previous = origin;
+      return values.filter(function (value, index) {
+        if (index === 0 || index === values.length - 1) {
+          return true;
+        }
+        const keep = at(value) - previous >= 50 && origin + length - at(value) >= 60;
+        if (keep) {
+          previous = at(value);
+        }
+        return keep;
+      }).map(function (value, index, list) {
+        const edge = index === 0 ? "start" : index === list.length - 1 ? "end" : "";
+        return { value: value, at: at(value), edge: edge, anchor: edge || "middle", label: kit ? kit.formatTick(value) : String(value) };
+      });
+    };
+    return {
+      x: axis(geometry.xStart, geometry.xCount, geometry.left, geometry.plotWidth),
+      y: axis(geometry.yStart, geometry.yCount, geometry.top, geometry.plotHeight)
+    };
+  }
+
+  // interior ticks too close to an end are dropped: the end labels are wider
+  function spacedTicks(ticks) {
+    if (ticks.length < 3) {
+      return ticks;
+    }
+    const low = ticks[0];
+    const high = ticks[ticks.length - 1];
+    const gap = .18 * (high - low);
+    return ticks.filter(function (value, index) {
+      return index === 0 || index === ticks.length - 1 || (value - low >= gap && high - value >= gap);
+    });
+  }
+
+  // the effect map as a PNG: drawn again off screen in the light export
+  // colours (K4), with its title, axes and colour bar
+  function downloadComparisonPng(state, api) {
+    const id = "comparison-effect-export-canvas";
+    const old = document.getElementById(id);
+    if (old) {
+      old.remove();
+    }
+    const canvas = document.createElement("canvas");
+    canvas.id = id;
+    canvas.setAttribute("aria-hidden", "true");
+    canvas.style.cssText = "position:fixed;left:-10000px;top:0;width:" + COMPARISON_EXPORT_WIDTH + "px;height:" + COMPARISON_EXPORT_HEIGHT + "px;";
+    document.body.appendChild(canvas);
+    try {
+      drawComparisonCanvas(state, canvas, "effect", { theme: "light" });
+      downloadCanvasPng("comparison-effect-map.png", api, id, "Comparison effect PNG downloaded locally.", "comparison-effect-canvas");
+    } finally {
+      canvas.remove();
+    }
+  }
+
+  // "ZAFR (ZAFR_REP1, ZAFR_REP2) vs ZASI (ZILM_REP2, ZILM_REP3)": with the
+  // dataset labels when they fit, else the condition labels, else shortened
+  // in the middle so both ends stay readable
+  function comparisonMapTitle(comparison, kind, named, fits) {
+    const a = comparison.conditionALabel || "Condition A";
+    const b = comparison.conditionBLabel || "Condition B";
+    const labels = function (condition) {
+      return (comparison.datasets || []).filter(function (dataset) { return dataset.condition === condition; })
+        .map(function (dataset) { return dataset.label || dataset.fileName || dataset.id; });
+    };
+    const side = function (name, list) { return list.length ? name + " (" + list.join(", ") + ")" : name; };
+    const join = kind === "conserved" ? " and " : " vs ";
+    const prefix = named ? (kind === "conserved" ? "B · Similarity heatmap · " : "Descriptive · Mean log2 effect · ") : "";
+    const candidates = [prefix + side(a, labels("A")) + join + side(b, labels("B")), prefix + a + join + b];
+    const chosen = candidates.find(fits);
+    return chosen || middleEllipsis(candidates[candidates.length - 1], fits);
+  }
+
+  function middleEllipsis(text, fits) {
+    if (fits(text)) {
+      return text;
+    }
+    let low = 0;
+    let high = text.length - 1;
+    const cut = function (keep) {
+      return text.slice(0, Math.ceil(keep / 2)) + "…" + text.slice(text.length - Math.floor(keep / 2));
+    };
+    while (low < high) {
+      const keep = Math.ceil((low + high) / 2);
+      if (fits(cut(keep))) {
+        low = keep;
+      } else {
+        high = keep - 1;
+      }
+    }
+    return cut(low);
+  }
+
+  // an SVG has no text metrics: about 0.56 em per character of a sans font
+  function svgTextFits(size, width) {
+    return function (text) { return text.length * size * 0.56 <= width; };
   }
 
   function isComparisonLabel(key) {
@@ -1496,15 +1791,21 @@
   const comparisonLayers = new WeakMap();
   const COMPARISON_SVG_MAX_CELLS = 100000;
   const COMPARISON_LAYER_MIN_CELLS = 20000;
+  // below the plot: tick labels, the axis title, then the colour bar (~56 px)
+  const COMPARISON_LEGEND_OFFSET = 46;
+  const COMPARISON_BOTTOM_SPACE = 104;
+  const COMPARISON_EXPORT_WIDTH = 720;
+  const COMPARISON_EXPORT_HEIGHT = 560;
 
-  function drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line) {
+  function drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line, theme) {
+    const dark = theme ? theme === "dark" : isDarkTheme();
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
     // the similarity heatmap keeps similarity_heatmap.R's white panel, or
     // ggplot's grey one so that bins at the smallest count show
     context.fillStyle = panel;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
-    if (kind === "conserved" && !isDarkTheme()) {
+    if (kind === "conserved" && !dark) {
       context.strokeStyle = line;
       context.strokeRect(geometry.left + .5, geometry.top + .5, geometry.plotWidth - 1, geometry.plotHeight - 1);
     }
@@ -1518,7 +1819,7 @@
       const value = kind === "conserved" ? cell.similarity : cell.effect;
       let colour = colours.get(value);
       if (colour === undefined) {
-        colour = kind === "conserved" ? conservedColor(conservedRatio(value, result)) : effectColor(value / effectCap);
+        colour = kind === "conserved" ? conservedColor(conservedRatio(value, result), theme) : effectColor(value / effectCap, theme);
         colours.set(value, colour);
       }
       return colour;
@@ -1526,7 +1827,7 @@
     if (cells.length > COMPARISON_LAYER_MIN_CELLS && typeof context.getImageData === "function") {
       // effects are nearly all distinct: their colour is packed straight from
       // the number; similarity counts repeat and keep the string cache
-      const effectPacked = effectPacker(isDarkTheme());
+      const effectPacked = effectPacker(dark);
       const packedOf = kind === "conserved" ? null : function (cell) { return effectPacked(cell.effect / effectCap); };
       rasterComparisonCells(context, dimensions, geometry, result, cells, width, height, colourOf, packedOf);
       return;
@@ -1595,10 +1896,11 @@
     const xEnd = Math.floor(result.xMax / result.binSize) * result.binSize;
     const yStart = Math.floor(result.yMin / result.binSize) * result.binSize;
     const yEnd = Math.floor(result.yMax / result.binSize) * result.binSize;
-    const left = 78;
-    const top = 38;
-    const plotWidth = Math.max(120, width - left - 18);
-    const plotHeight = Math.max(120, height - top - 42);
+    // room above for the title, below for the x axis and the colour bar
+    const left = 66;
+    const top = 30;
+    const plotWidth = Math.max(120, width - left - 16);
+    const plotHeight = Math.max(120, height - top - COMPARISON_BOTTOM_SPACE);
     const xCount = Math.max(1, Math.round((xEnd - xStart) / result.binSize) + 1);
     const yCount = Math.max(1, Math.round((yEnd - yStart) / result.binSize) + 1);
     return {
@@ -2394,6 +2696,11 @@
       return true;
     }
 
+    if (action === "comparison-jump") {
+      jumpToCompareSection(element.dataset.target);
+      return true;
+    }
+
     if (action === "toggle-comparison-data") {
       state.comparison.showDataTable = !state.comparison.showDataTable;
       api.render();
@@ -2494,7 +2801,7 @@
       if (!ensureVisualExport(state, "comparison", api)) {
         return true;
       }
-      downloadCanvasPng("comparison-effect-map.png", api, "comparison-effect-canvas", "Comparison effect PNG downloaded locally.");
+      downloadComparisonPng(state, api);
       return true;
     }
 
@@ -2730,9 +3037,10 @@
     if (!visualExportReady(state, "comparison")) {
       return "";
     }
-    const colors = exportColors();
-    const width = 720;
-    const height = 520;
+    // K4: exports use the light colours whatever the page theme
+    const colors = exportColors("light");
+    const width = COMPARISON_EXPORT_WIDTH;
+    const height = COMPARISON_EXPORT_HEIGHT;
     const geometry = getComparisonGeometry(result, width, height);
     // a whole-genome map keeps the SVG printable: the strongest effects,
     // drawn weakest first
@@ -2742,7 +3050,7 @@
     const cells = shown.map(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
-      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + effectColor(cell.effect / Math.max(.01, result.effectCap)) + '"/>';
+      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + effectColor(cell.effect / Math.max(.01, result.effectCap), "light") + '"/>';
     }).join("");
     return [
       '<?xml version="1.0" encoding="UTF-8"?>',
@@ -2751,15 +3059,34 @@
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.line + '"/>',
       cells,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '"/>',
-      '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" fill="' + colors.ink + '">' + escapeXml(state.comparison.rnaX) + ' (X) × ' + escapeXml(state.comparison.rnaY) + ' (Y) · Mean log2 effect</text>',
-      '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal' +
-        (shown.length < result.cells.length ? ' · the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins' : '') + '</text>',
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.xStart + '</text>',
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.xEnd + result.binSize - 1) + '</text>',
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.yStart + '</text>',
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + (geometry.yEnd + result.binSize - 1) + '</text>',
+      '<text x="' + geometry.left + '" y="16" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="' + colors.ink + '">' + escapeXml(comparisonMapTitle(state.comparison, "effect", true, svgTextFits(13, width - geometry.left - 8))) + '</text>',
+      shown.length < result.cells.length
+        ? '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + COMPARISON_LEGEND_OFFSET + 10) + '" text-anchor="end" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins</text>'
+        : '',
+      comparisonAxesSvg(state.comparison, result, geometry, colors),
+      window.Hyb2UiKit ? window.Hyb2UiKit.legend.svg(comparisonLegendOptions(state.comparison, result, "effect", "light", geometry, colors)) : '',
       '</svg>'
     ].join("");
+  }
+
+  function comparisonAxesSvg(comparison, result, geometry, colors) {
+    const marks = comparisonAxisMarks(result, geometry);
+    const bottom = geometry.top + geometry.plotHeight;
+    const parts = ['<g font-family="system-ui, sans-serif" font-size="11" fill="' + colors.muted + '">'];
+    marks.x.forEach(function (mark) {
+      parts.push('<line x1="' + mark.at.toFixed(1) + '" x2="' + mark.at.toFixed(1) + '" y1="' + (bottom + 1) + '" y2="' + (bottom + 5) + '" stroke="' + colors.muted + '"/>');
+      parts.push('<text x="' + mark.at.toFixed(1) + '" y="' + (bottom + 17) + '" text-anchor="' + mark.anchor + '">' + escapeXml(mark.label) + '</text>');
+    });
+    marks.y.forEach(function (mark) {
+      parts.push('<line x1="' + (geometry.left - 5) + '" x2="' + (geometry.left - 1) + '" y1="' + mark.at.toFixed(1) + '" y2="' + mark.at.toFixed(1) + '" stroke="' + colors.muted + '"/>');
+      parts.push('<text x="' + (geometry.left - 7) + '" y="' + (mark.at + (mark.edge === "start" ? 8 : mark.edge === "end" ? 0 : 4)).toFixed(1) + '" text-anchor="end">' + escapeXml(mark.label) + '</text>');
+    });
+    parts.push('<text x="' + (geometry.left + geometry.plotWidth / 2).toFixed(1) + '" y="' + (bottom + 33) + '" text-anchor="middle" fill="' + colors.ink + '">' +
+      escapeXml(middleEllipsis(comparison.rnaX + " position (nt)", svgTextFits(11, geometry.plotWidth))) + '</text>');
+    parts.push('<text transform="translate(13 ' + (geometry.top + geometry.plotHeight / 2).toFixed(1) + ') rotate(-90)" text-anchor="middle" fill="' + colors.ink + '">' +
+      escapeXml(middleEllipsis(comparison.rnaY + " position (nt)", svgTextFits(11, geometry.plotHeight))) + '</text>');
+    parts.push('</g>');
+    return parts.join("");
   }
 
   function downloadCanvasPng(fileName, api, canvasId, confirmation, fallbackCanvasId) {

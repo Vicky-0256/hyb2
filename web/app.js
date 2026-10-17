@@ -788,7 +788,6 @@
       "    </div>",
       '    <span class="v0-chip">Local-only</span>',
       "  </div>",
-          renderExampleStrip(),
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
       '  <div class="dropzone" data-dropzone tabindex="0" aria-label="HYB input drop zone" aria-describedby="file-input-hint">',
@@ -800,6 +799,7 @@
       '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line), also gzip-compressed (.gz). Raw FASTQ reads? HYB2 Desktop, below, turns them into .hyb.</span>',
       "    </div>",
       "  </div>",
+      renderExampleStrip(),
       '  <section class="reference-upload" aria-labelledby="reference-upload-title">',
       '    <div class="reference-upload-copy">',
       '      <span class="reference-upload-kicker">Optional reference</span>',
@@ -824,21 +824,22 @@
     }
     return [
       '  <section class="example-strip" aria-labelledby="example-title">',
-      '    <div class="example-strip-heading">',
-      '      <div><span class="example-kicker">Included example</span><h3 id="example-title">Try the ZIKV virion comparison: ZAFR vs ZASI</h3></div>',
-      '      <span class="example-badge">1-in-10 subset · 4 replicates</span>',
+      '    <div class="example-line">',
+      '      <p id="example-title" class="example-line-copy"><strong>No data yet?</strong> Try the ZIKV virion example, ZAFR vs ZASI.</p>',
+      '      <button class="button button-secondary" type="button" data-action="load-example">Try example</button>',
       "    </div>",
-      '    <p class="example-copy">ZIKV virion RNA of the African lineage (ZAFR, replicates 1 and 2) and the Asian lineage (ZASI = ZILM, French Polynesian isolate, replicates 2 and 3): every 10th record of each replicate .hyb (133,457 records, 6.9 MB compressed), each on its own genome. The primary file is ZAFR replicate 1; the Compare page gets all four replicates (10-nt bins, similarity minimum 10) and an arc map preloaded with CPLfold pseudoknot-free genome folds of both lineages and the NC_035889 gene track. Running the differential test there fills every panel of the summary figure. Because the data are a subset, the panels reproduce the method, not the published numbers.</p>',
-      '    <div class="example-files" aria-label="Included example files">',
+      '    <details class="example-more" data-open-key="landing-example"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["landing-example"] ? " open" : "") + '>',
+      '      <summary>What the example contains</summary>',
+      '      <span class="example-badge">1-in-10 subset · 4 replicates</span>',
+      '      <p class="example-copy">ZIKV virion RNA of the African lineage (ZAFR, replicates 1 and 2) and the Asian lineage (ZASI = ZILM, French Polynesian isolate, replicates 2 and 3): every 10th record of each replicate .hyb (133,457 records, 6.9 MB compressed), each on its own genome. The primary file is ZAFR replicate 1; the Compare page gets all four replicates (10-nt bins, similarity minimum 10) and an arc map preloaded with CPLfold pseudoknot-free genome folds of both lineages and the NC_035889 gene track. Running the differential test there fills every panel of the summary figure. Because the data are a subset, the panels reproduce the method, not the published numbers.</p>',
+      '      <div class="example-files" aria-label="Included example files">',
       example.downloads.map(function (item) {
-        return '      <div class="example-file"><span class="example-file-kind">' + escapeHtml(item.kind) + '</span><code title="' + escapeAttribute(item.note) + '">' + escapeHtml(item.file) +
+        return '        <div class="example-file"><span class="example-file-kind">' + escapeHtml(item.kind) + '</span><code title="' + escapeAttribute(item.note) + '">' + escapeHtml(item.file) +
           '</code><a class="example-file-link" href="' + escapeAttribute(example.url(item.file)) + '" download aria-label="Download ' + escapeAttribute(item.file) + '">Download</a></div>';
       }).join(""),
-      "    </div>",
-      '    <div class="example-actions">',
-      '      <button class="button" type="button" data-action="load-example">Try example</button>',
-      '      <span class="example-note">Fetched only when you start it; decompressed and parsed in this tab.</span>',
-      "    </div>",
+      "      </div>",
+      '      <p class="example-note">Fetched only when you start it; decompressed and parsed in this tab.</p>',
+      "    </details>",
       "  </section>"
     ].join("");
   }
@@ -939,6 +940,10 @@
       "    </div>",
       '    <span class="status-chip">Files ready</span>',
       "  </div>",
+      '  <section class="prepared-next-step" aria-label="Enter analysis workspace">',
+      '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>All calculations still run locally in this browser tab.</span></div>',
+      '    <button class="button" type="button" data-action="enter-analysis">Enter analysis</button>',
+      "  </section>",
       '  <section class="prepared-file-list" aria-label="Files ready for analysis">',
       '    <div class="prepared-file-row">',
       '      <span class="prepared-file-kind prepared-file-kind-hyb">HYB</span>',
@@ -955,10 +960,6 @@
       renderExampleFileRows(),
       '  <p class="prepared-file-note"><strong>FASTA is optional.</strong> Interaction tables and contact maps can run without it; reference-based structure and full-reference coordinate views need a mapped sequence. You can also add or replace it later from the Files panel.</p>',
       renderExampleSetup(),
-      '  <section class="prepared-next-step" aria-label="Enter analysis workspace">',
-      '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>All calculations still run locally in this browser tab.</span></div>',
-      '    <button class="button" type="button" data-action="enter-analysis">Enter analysis</button>',
-      "  </section>",
       '  <div class="prepared-file-actions"><button class="button button-secondary" type="button" data-action="reset-file">Choose another HYB</button></div>',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
       '  <p class="privacy-note">Files are read and processed locally in this browser. This page has no upload endpoint.</p>',

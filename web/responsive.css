@@ -115,6 +115,50 @@
     max-width: 650px;
   }
 
+  /* One column: heading and lede, then the file card, then the
+     illustration, so the drop zone is on the first screen. */
+  .landing-copy {
+    display: contents;
+  }
+
+  .landing-main {
+    row-gap: 16px;
+  }
+
+  .landing-copy > * {
+    max-width: 720px;
+  }
+
+  .landing-copy > .eyebrow,
+  .landing-copy > h1,
+  .landing-copy > .landing-lede {
+    order: 0;
+  }
+
+  .landing-copy > .eyebrow {
+    justify-self: start;
+  }
+
+  .landing-copy > h1,
+  .landing-copy > .landing-lede {
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+
+  .landing-panel {
+    order: 1;
+    margin: 12px 0;
+  }
+
+  .landing-copy > .promise-list,
+  .landing-copy > .hero-stage {
+    order: 2;
+  }
+
+  .landing-details {
+    order: 3;
+  }
+
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -182,7 +226,15 @@
   }
 
   .dropzone {
-    min-height: 260px;
+    min-height: 0;
+  }
+
+  .dropzone-content {
+    padding: 18px 16px;
+  }
+
+  .dropzone-kicker {
+    margin-bottom: 6px;
   }
 
   .workspace {
@@ -328,12 +380,14 @@
     font-size: 42px;
   }
 
-  .v0-chip {
-    margin-top: 11px;
+  /* The header's Local only chip already says this on phones. */
+  .file-card-header .v0-chip {
+    display: none;
   }
 
-  .example-strip-heading {
-    display: block;
+  .example-line {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .example-badge {

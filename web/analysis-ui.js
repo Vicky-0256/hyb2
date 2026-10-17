@@ -418,7 +418,7 @@
   // it replaces, so overlapping sub-pixel cells still resolve last-wins.
   let contactScratch = null;
 
-  function paintContactCells(context, pixelRatio, matrix, geometry, scale) {
+  function paintContactCells(context, pixelRatio, matrix, geometry, scale, theme) {
     const width = Math.max(1, Math.round(geometry.plotWidth * pixelRatio));
     const height = Math.max(1, Math.round(geometry.plotHeight * pixelRatio));
     if (!contactScratch || contactScratch.canvas.width !== width || contactScratch.canvas.height !== height) {
@@ -435,7 +435,7 @@
     const cellHeight = geometry.cellHeight * pixelRatio;
     const spanX = (Math.ceil(geometry.cellWidth) + .4) * pixelRatio;
     const spanY = (Math.ceil(geometry.cellHeight) + .4) * pixelRatio;
-    const lut = scaleLut(isDarkTheme()).pixels;
+    const lut = scaleLut(themeIsDark(theme)).pixels;
     const lastLut = lut.length - 1;
     const cap = geometry.cap;
     const log = scale === "log";
@@ -487,18 +487,23 @@
     context.restore();
   }
 
-  function drawContactStageCanvas(state, canvas, stage) {
+  // exportSize ({ width, height }) draws the light PNG export into an
+  // off-page canvas; without it the page canvas in the current theme.
+  function drawContactStageCanvas(state, canvas, stage, exportSize) {
     const matrix = state.contact.matrix;
-    const dimensions = prepareCanvas(canvas);
+    const theme = exportSize ? "light" : undefined;
+    const dimensions = exportSize ? prepareExportCanvas(canvas, exportSize.width, exportSize.height) : prepareCanvas(canvas);
     const context = dimensions.context;
-    const style = getComputedStyle(document.documentElement);
-    const ink = style.getPropertyValue("--ink").trim();
-    const muted = style.getPropertyValue("--muted").trim();
-    const line = style.getPropertyValue("--line").trim();
-    const surface = style.getPropertyValue("--surface").trim();
+    const colors = exportColors(theme);
+    const ink = colors.ink;
+    const muted = colors.muted;
+    const line = colors.line;
+    const surface = colors.surface;
     const geometry = getContactStageGeometry(state, stage, dimensions.width, dimensions.height);
-    state.contact.stageGeometry = state.contact.stageGeometry || {};
-    state.contact.stageGeometry[stage] = geometry;
+    if (!exportSize) {
+      state.contact.stageGeometry = state.contact.stageGeometry || {};
+      state.contact.stageGeometry[stage] = geometry;
+    }
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
@@ -506,7 +511,7 @@
     context.fillStyle = surface;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
-    paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale);
+    paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale, theme);
 
     const selection = getContactStageSelection(state, stage);
     if (selection && selection.x >= geometry.xStart && selection.x <= geometry.xEnd && selection.y >= geometry.yStart && selection.y <= geometry.yEnd) {
@@ -520,7 +525,7 @@
       );
     }
 
-    const drag = state.contact.stageDrag;
+    const drag = exportSize ? null : state.contact.stageDrag;
     if (drag && drag.stage === stage && drag.end && state.contact.stageDragMoved) {
       const x = geometry.left + (Math.min(drag.x, drag.end.x) - geometry.xStart) / matrix.binSize * geometry.cellWidth;
       const y = geometry.top + (Math.min(drag.y, drag.end.y) - geometry.yStart) / matrix.binSize * geometry.cellHeight;
@@ -811,6 +816,29 @@
     });
   }
 
+  // a detached canvas for a PNG export, at twice the css size
+  function prepareExportCanvas(canvas, width, height) {
+    canvas.width = Math.round(width * 2);
+    canvas.height = Math.round(height * 2);
+    const context = canvas.getContext("2d");
+    context.setTransform(2, 0, 0, 2, 0, 0);
+    return { context: context, width: width, height: height };
+  }
+
+  // PNG exports are drawn light (K4) into a hidden canvas that
+  // downloadCanvasPng can find by id, then removed; null without a DOM
+  function lightExportCanvas(id) {
+    if (typeof document === "undefined" || !document.createElement || !document.body) {
+      return null;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.id = id;
+    canvas.hidden = true;
+    canvas.setAttribute("aria-hidden", "true");
+    document.body.appendChild(canvas);
+    return canvas;
+  }
+
   function prepareCanvas(canvas) {
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -1058,19 +1086,23 @@
     });
   }
 
-  function drawViewpointCanvas(state, canvas) {
+  // exportSize: the light PNG export, as for drawContactStageCanvas
+  function drawViewpointCanvas(state, canvas, exportSize) {
     const results = state.viewpoint.results;
-    const dimensions = prepareCanvas(canvas);
+    const theme = exportSize ? "light" : undefined;
+    const dimensions = exportSize ? prepareExportCanvas(canvas, exportSize.width, exportSize.height) : prepareCanvas(canvas);
     const context = dimensions.context;
-    const style = getComputedStyle(document.documentElement);
-    const surface = style.getPropertyValue("--surface").trim();
-    const primary = style.getPropertyValue("--primary").trim();
-    const accent = style.getPropertyValue("--accent").trim();
-    const line = style.getPropertyValue("--line").trim();
-    const muted = style.getPropertyValue("--muted").trim();
-    const ink = style.getPropertyValue("--ink").trim();
+    const colors = exportColors(theme);
+    const surface = colors.surface;
+    const primary = colors.primary;
+    const accent = colors.accent;
+    const line = colors.line;
+    const muted = colors.muted;
+    const ink = colors.ink;
     const geometry = getViewpointGeometry(results, dimensions.width, dimensions.height);
-    state.viewpoint.geometry = geometry;
+    if (!exportSize) {
+      state.viewpoint.geometry = geometry;
+    }
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
@@ -1998,7 +2030,14 @@
       if (!ensureVisualExport(state, "contact", api)) {
         return true;
       }
-      downloadCanvasPng("contact-map.png", api, "contact-overview-canvas", "Contact PNG downloaded locally.");
+      const exportCanvas = lightExportCanvas("contact-export-canvas");
+      if (exportCanvas) {
+        drawContactStageCanvas(state, exportCanvas, getContactExportStage(state), CONTACT_EXPORT_SIZE);
+      }
+      downloadCanvasPng("contact-map.png", api, exportCanvas ? exportCanvas.id : "contact-overview-canvas", "Contact PNG downloaded locally.", "contact-overview-canvas");
+      if (exportCanvas) {
+        exportCanvas.remove();
+      }
       return true;
     }
 
@@ -2065,7 +2104,14 @@
       if (!ensureVisualExport(state, "viewpoint", api)) {
         return true;
       }
-      downloadCanvasPng("viewpoint.png", api, "viewpoint-canvas", "Viewpoint PNG downloaded locally.");
+      const exportCanvas = lightExportCanvas("viewpoint-export-canvas");
+      if (exportCanvas) {
+        drawViewpointCanvas(state, exportCanvas, VIEWPOINT_EXPORT_SIZE);
+      }
+      downloadCanvasPng("viewpoint.png", api, exportCanvas ? exportCanvas.id : "viewpoint-canvas", "Viewpoint PNG downloaded locally.", "viewpoint-canvas");
+      if (exportCanvas) {
+        exportCanvas.remove();
+      }
       return true;
     }
 
@@ -2402,14 +2448,18 @@
     return false;
   }
 
+  // the SVG and PNG exports share a size, so both show the same layout
+  const CONTACT_EXPORT_SIZE = { width: 900, height: 720 };
+  const VIEWPOINT_EXPORT_SIZE = { width: 1040, height: 300 };
+
   function buildContactSvg(state) {
     if (!visualExportReady(state, "contact")) {
       return "";
     }
-    const colors = exportColors();
+    const colors = exportColors("light");
     const matrix = state.contact.matrix;
-    const width = 900;
-    const height = 720;
+    const width = CONTACT_EXPORT_SIZE.width;
+    const height = CONTACT_EXPORT_SIZE.height;
     const geometry = getContactGeometry(state, width, height);
     const rects = matrix.cells.filter(function (cell) {
       return cell.x >= geometry.xStart && cell.x <= geometry.xEnd && cell.y >= geometry.yStart && cell.y <= geometry.yEnd;
@@ -2418,14 +2468,14 @@
       const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
       const x = geometry.left + ((cell.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight;
-      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + viridis(ratio) + '"/>';
+      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + viridis(ratio, "light") + '"/>';
     }).join("");
 
     return [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + " " + height + '">',
       '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
-      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + (isDarkTheme() ? colors.surface : colors.line) + '"/>',
+      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.surface + '"/>',
       rects,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '" stroke-width="1"/>',
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.xStart + "</text>",
@@ -2442,9 +2492,9 @@
     if (!visualExportReady(state, "viewpoint")) {
       return "";
     }
-    const colors = exportColors();
-    const width = 1040;
-    const height = 300;
+    const colors = exportColors("light");
+    const width = VIEWPOINT_EXPORT_SIZE.width;
+    const height = VIEWPOINT_EXPORT_SIZE.height;
     const geometry = getViewpointGeometry(results, width, height);
     const bars = results.bins.map(function (bin, index) {
       const barHeight = geometry.max ? (bin.value / geometry.scaleMax) * geometry.plotHeight : 0;
@@ -2882,9 +2932,9 @@
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
-  function effectRgb(value) {
+  function effectRgb(value, theme) {
     const bounded = Math.max(-1, Math.min(1, value));
-    const dark = isDarkTheme();
+    const dark = themeIsDark(theme);
     const center = dark ? [19, 44, 71] : [245, 248, 250];
     const target = bounded >= 0
       ? (dark ? [154, 136, 255] : [106, 79, 242])
@@ -2897,14 +2947,15 @@
     ];
   }
 
-  function effectColor(value) {
-    const rgb = effectRgb(value);
+  function effectColor(value, theme) {
+    const rgb = effectRgb(value, theme);
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
   // effectColor() as ImageData pixels, for one theme: no DOM read or
   // allocation per cell
-  function effectPacker(dark) {
+  function effectPacker(theme) {
+    const dark = themeIsDark(theme);
     const c0 = dark ? 19 : 245;
     const c1 = dark ? 44 : 248;
     const c2 = dark ? 71 : 250;
@@ -2933,7 +2984,10 @@
   // scale_fill_gradient(low = white, high = forestgreen) over the data range,
   // so white is the smallest plotted count (not zero) and forestgreen the cap.
   // A single-valued range maps to the midpoint, like scales::rescale().
-  function similarityPanelColor(comparison) {
+  // the panel colour is the user's white/grey choice in either theme; theme
+  // is accepted for the K4 signature
+  function similarityPanelColor(comparison, theme) {
+    void theme;
     return comparison && comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff";
   }
 
@@ -2958,9 +3012,9 @@
   }
 
   // scales::pal_seq_gradient interpolates in CIELAB (farver, D65 white).
-  function conservedColor(ratio) {
+  function conservedColor(ratio, theme) {
     const bounded = Math.max(0, Math.min(1, ratio));
-    const dark = isDarkTheme();
+    const dark = themeIsDark(theme);
     const from = srgbToLab(dark ? [24, 54, 80] : [255, 255, 255]);
     const to = srgbToLab([34, 139, 34]);
     const rgb = labToSrgb([
@@ -3006,8 +3060,11 @@
     });
   }
 
-  function exportColors() {
-    const dark = isDarkTheme();
+  // With a theme the fixed palette of that theme (the styles.css tokens), so
+  // an export looks the same whichever theme the page is in; without one the
+  // page's current tokens.
+  function exportColors(theme) {
+    const dark = themeIsDark(theme);
     const fallback = dark
       ? {
         surface: "#132c47",
@@ -3015,17 +3072,17 @@
         ink: "#ecf1f8",
         muted: "#9eb1c3",
         primary: "#00a09d",
-        accent: "#9a88ff"
+        accent: "#a596ff"
       }
       : {
         surface: "#ffffff",
         line: "#dce7ec",
         ink: "#132c47",
-        muted: "#607286",
+        muted: "#5b6c80",
         primary: "#00a09d",
         accent: "#6a4ff2"
       };
-    if (typeof document === "undefined" || typeof getComputedStyle !== "function" || !document.documentElement) {
+    if (theme === "light" || theme === "dark" || typeof document === "undefined" || typeof getComputedStyle !== "function" || !document.documentElement) {
       return fallback;
     }
     const style = getComputedStyle(document.documentElement);

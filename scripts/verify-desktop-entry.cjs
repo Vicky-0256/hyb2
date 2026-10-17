@@ -141,6 +141,16 @@ has(html, /<details class="ways-browser-check"[^>]*><summary>Browser check/);
 has(html, /<button class="text-button desktop-entry" type="button" data-action="open-desktop">Desktop app<\/button>\s*<button class="text-button" type="button" data-action="open-help">Help<\/button>/,
   "the landing header has Desktop app left of Help");
 
+// ---- A16: one linked raw-reads sentence (drop zone, parse error, Help)
+const rawReadsLink = /<a class="desktop-cta" href="#hyb2-desktop" data-action="open-desktop" data-desktop-context="raw-reads">Starting from raw reads \(FASTQ, FASTA or SAM\)\? HYB2 Desktop maps them and writes the \.hyb file\. <strong>About HYB2 Desktop<\/strong><\/a>/;
+has(html, new RegExp('<p class="dropzone-desktop">' + rawReadsLink.source + "</p>"), "the drop zone links raw reads to Desktop");
+hasNot(html, /HYB2 Desktop, below/, "no 'below' pointer");
+has(html, /Recommended working size: up to 50 MB\./, "the working-size sentence is unchanged");
+const appSource = fs.readFileSync(web("app.js"), "utf8");
+assert.match(appSource, /hint: hybFormatHint\(\),\s*rawReadsHint: true/, "the parse error adds the raw-reads sentence");
+assert.match(appSource, /landing: \["Start a session", \[[\s\S]*?\{ html: rawReadsSentenceHtml \}/, "Help on the start page uses the same sentence");
+assert.match(appSource, /if \(dropzone && !event\.target\.closest\("a\[href\]"\) && \(event\.key === "Enter"/, "Enter on the link follows it instead of opening the file chooser");
+
 // nothing in the site's sources hard-codes an installer or the release page
 fs.readdirSync(path.join(repository, "web")).filter(function (file) { return /\.(js|html)$/.test(file) && file !== "ui-kit.js"; }).forEach(function (file) {
   const source = fs.readFileSync(web(file), "utf8");

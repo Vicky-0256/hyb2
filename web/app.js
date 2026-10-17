@@ -26,6 +26,9 @@
   const DESKTOP_HASH = "#hyb2-desktop";
   // the route before the last hash change, put back after #hyb2-desktop
   let lastRouteHash = "";
+  // where focus goes when the Desktop drawer closes: the link that opened it
+  let desktopReturnSelector = null;
+  let renderedDialog = null;
 
   const state = {
     activePage: "landing",
@@ -657,10 +660,33 @@
     if (workspaceOpen && state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
       window.Hyb2Report.afterRender(state, featureApi());
     }
+    returnFocusFromDesktopDrawer();
     // The first render() runs before window.Hyb2Web is defined below.
     if (window.Hyb2Web && typeof window.CustomEvent === "function") {
       window.dispatchEvent(new window.CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
     }
+  }
+
+  // interaction.js gives focus back to the first control with the opener's
+  // action, which for several Desktop links (or a header entry hidden on
+  // phones) is not the one that was used: a frame later, focus that one.
+  function returnFocusFromDesktopDrawer() {
+    const closed = renderedDialog === "desktop" && state.dialog !== "desktop";
+    renderedDialog = state.dialog;
+    if (!closed || !desktopReturnSelector) {
+      return;
+    }
+    const selector = desktopReturnSelector;
+    desktopReturnSelector = null;
+    if (typeof window.requestAnimationFrame !== "function") {
+      return;
+    }
+    window.requestAnimationFrame(function () {
+      const target = app && app.querySelector(selector);
+      if (target && target.getClientRects().length && !target.closest("[data-dialog]")) {
+        target.focus({ preventScroll: true });
+      }
+    });
   }
 
   function renderLanding() {
@@ -712,8 +738,20 @@
     return text + ".";
   }
 
+  // the parse-error hint; renderFilePanel adds the raw-reads sentence (A16)
   function hybFormatHint() {
-    return "A HYB line has 15 or more tab-separated columns: read ID, sequence, ΔG, then name and coordinates of each arm, as written by the hyb pipeline or HYB2 Desktop. FASTQ, SAM and FASTA reads need HYB2 Desktop first.";
+    return "A HYB line has 15 or more tab-separated columns: read ID, sequence, ΔG, then name and coordinates of each arm, as written by the hyb pipeline or HYB2 Desktop.";
+  }
+
+  // One sentence wherever raw reads come up (drop zone, parse error, Help):
+  // K9's "raw-reads" link to the Desktop drawer. Inside HYB2 Desktop, which
+  // maps raw reads itself, there is nothing to add.
+  function rawReadsSentenceHtml() {
+    const kit = desktopKit();
+    if (!kit) {
+      return "Raw FASTQ, FASTA or SAM reads need HYB2 Desktop first; it turns them into .hyb files.";
+    }
+    return kit.cta("raw-reads");
   }
 
   // K9 (web/ui-kit.js) holds every fact about HYB2 Desktop; some tests load
@@ -898,7 +936,7 @@
         '  <div class="parse-error" role="alert"><strong>' + escapeHtml(error.title) + "</strong><br>" +
           (error.fileName ? escapeHtml(error.fileName) + ": " : "") + escapeHtml(error.message) +
           (error.detail ? '<span class="parse-error-detail">' + escapeHtml(error.detail) + "</span>" : "") + "</div>",
-        error.hint ? '  <p class="parse-error-hint">' + escapeHtml(error.hint) + "</p>" : "",
+        error.hint ? '  <p class="parse-error-hint">' + escapeHtml(error.hint) + (error.rawReadsHint && rawReadsSentenceHtml() ? " " + rawReadsSentenceHtml() : "") + "</p>" : "",
         '  <div class="dialog-actions load-error-actions">',
         '    <button class="quiet-button" type="button" data-action="reload-page">Reload page</button>',
         error.source === "example"
@@ -932,7 +970,8 @@
       '      <h3 class="dropzone-title">Drop a .hyb file here</h3>',
       '      <p class="dropzone-copy">or choose a file from this device</p>',
       '      <button class="button" type="button" data-action="choose-hyb">Choose HYB file</button>',
-      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line), also gzip-compressed (.gz). Raw FASTQ reads? HYB2 Desktop, below, turns them into .hyb.</span>',
+      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line), also gzip-compressed (.gz).</span>',
+      rawReadsSentenceHtml() ? '      <p class="dropzone-desktop">' + rawReadsSentenceHtml() + "</p>" : "",
       "    </div>",
       "  </div>",
       renderExampleStrip(),
@@ -1488,7 +1527,7 @@
     landing: ["Start a session", [
       "Drop a .hyb file (the output of the hyb pipeline) or press Try example to load the ZIKV virion comparison.",
       "Add a reference FASTA if you want sequences, region extraction and RNA structure prediction.",
-      "Raw FASTQ reads need HYB2 Desktop first; it turns them into .hyb files."
+      { html: rawReadsSentenceHtml }
     ]],
     overview: ["Overview", [
       "A summary of the loaded file: how many records, which RNAs and chimera types it contains.",
@@ -1553,7 +1592,12 @@
     const entry = PAGE_HELP[page] || PAGE_HELP.overview;
     const kit = desktopKit();
     const desktopLine = desktopEntriesShown() ? '<p class="drawer-desktop-line">' + kit.cta("overview") + "</p>" : "";
-    const body = [desktopLine, drawerSection("On this page: " + entry[0], '<ol class="drawer-steps">' + entry[1].map(function (line) { return "<li>" + escapeHtml(line) + "</li>"; }).join("") + "</ol>")];
+    const steps = entry[1].map(function (line) {
+      // { html: fn } lines are built at render time (the raw-reads sentence)
+      const html = typeof line === "string" ? escapeHtml(line) : line.html();
+      return html ? "<li>" + html + "</li>" : "";
+    });
+    const body = [desktopLine, drawerSection("On this page: " + entry[0], '<ol class="drawer-steps">' + steps.join("") + "</ol>")];
     if (state.analysisEntered) {
       body.push(drawerSection("Keyboard", '<dl class="drawer-keys">' +
         "<div><dt><kbd>" + (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl") + "</kbd><kbd>K</kbd></dt><dd>Search pages and actions</dd></div>" +
@@ -1574,6 +1618,10 @@
     const desktopLink = event.target.closest('[data-action="open-desktop"]');
     if (desktopLink) {
       event.preventDefault();
+      const context = desktopLink.getAttribute && desktopLink.getAttribute("data-desktop-context");
+      desktopReturnSelector = context
+        ? '[data-action="open-desktop"][data-desktop-context="' + context + '"]'
+        : '.desktop-entry[data-action="open-desktop"]';
       openDesktopDrawer();
       return;
     }
@@ -1982,7 +2030,7 @@
       return;
     }
 
-    if (dropzone && (event.key === "Enter" || event.key === " ")) {
+    if (dropzone && !event.target.closest("a[href]") && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
       const input = document.getElementById("hyb-file-input");
       if (input) {
@@ -2305,7 +2353,8 @@
               message: "No records with at least 15 tab-separated columns, RNA names, and valid RNA coordinates were found.",
               fileName: file.name || "Untitled file",
               detail: firstProblem ? describeParseProblem(firstProblem) : "",
-              hint: hybFormatHint()
+              hint: hybFormatHint(),
+              rawReadsHint: true
             };
             render();
             return;

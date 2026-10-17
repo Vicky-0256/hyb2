@@ -564,6 +564,15 @@ a {
   }
 }
 
+/* A16: the raw-reads sentence under the drop zone hint */
+.dropzone-desktop {
+  max-width: 34em;
+  margin: 10px auto 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
 /* Desktop drawer (data-action="open-desktop") and its line in Help */
 .drawer-desktop-line {
   margin: 0;

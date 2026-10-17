@@ -140,7 +140,7 @@
       '    <span class="report-kicker">Local session snapshot</span>',
       '    <h1>Analysis report</h1>',
       '    <p class="report-lede">A print-ready view of the current HYB2 workspace, including configured analyses, generated results, selected intervals, and reproducibility details.</p>',
-      '    <div class="report-hero-meta"><span><strong>Scope</strong> ' + escape(context.record ? context.record.scope.label : "Session report") + '</span><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> <code>' + escape(formatTimestamp(context.generatedAt)) + '</code></span><span><strong>Version</strong> <code>HYB2 Web Lite ' + escape(REPORT_VERSION) + (window.HYB2_BUILD && window.HYB2_BUILD.commit ? " · " + escape(String(window.HYB2_BUILD.commit).slice(0, 12)) : "") + '</code></span>' + (context.record ? '<span><strong>Run</strong> <code>' + escape(context.record.run.id) + "</code></span>" : "") + '<span class="report-status is-ready">Processed locally</span></div>',
+      '    <div class="report-hero-meta"><span><strong>Scope</strong> ' + escape(context.record ? context.record.scope.label : "Session report") + '</span><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> ' + timeTag(context.generatedAt) + '</span><span><strong>Version</strong> <code>HYB2 Web Lite ' + escape(REPORT_VERSION) + (window.HYB2_BUILD && window.HYB2_BUILD.commit ? " · " + escape(String(window.HYB2_BUILD.commit).slice(0, 12)) : "") + '</code></span>' + (context.record ? '<span><strong>Run</strong> <code>' + escape(context.record.run.id) + "</code></span>" : "") + '<span class="report-status is-ready">Processed locally</span></div>',
       context.record ? '    <p class="report-scope-note">' + escape(context.record.scope.description) + "</p>" : "",
       "  </div>",
       '  <p class="report-print-note">Use your browser\'s Print dialog and choose <strong>Save as PDF</strong>. The report is generated in this tab and no data is uploaded.</p>',
@@ -637,7 +637,7 @@
           "<h3><code>" + evidenceId + "</code> " + escape(card.source_provider) + " · <code>" + escape(card.query_identifier) + "</code></h3>",
           definitionList([
             ["Query", card.query_identifier + (card.taxon ? " · taxon " + card.taxon : ""), true],
-            ["Retrieved", card.retrieved_at ? card.retrieved_at.replace("T", " ").slice(0, 16) + " UTC" : "-"],
+            ["Retrieved", card.retrieved_at ? formatTimestamp(card.retrieved_at) : "-"],
             ["Status", (window.Hyb2Evidence.STATUS_TEXT[card.status] || card.status)],
             ["Bound to", card.binding && card.binding.rna ? card.binding.rna + " " + range(card.binding.start, card.binding.end) : (card.binding && card.binding.source || "-"), true],
             ["Structure digest", card.binding && card.binding.resultDigest || "No result yet", true],
@@ -878,7 +878,7 @@
       const box = '<input class="report-select" type="checkbox" data-action="report-select" data-step="' + escape(step.key) + '"' + (kept ? " checked" : "") +
         (step.key === "parse" ? " disabled" : "") + ' aria-label="Include ' + escape(step.id + " " + step.title) + ' in the report">';
       return [box + ' <code>' + escape(step.id) + "</code>", escape(step.title) + (kept ? "" : ' <em class="report-left-out">left out</em>'), stepBadge({ record: full }, step.key),
-        escape(step.scope || "—"), escape(step.completedAt ? formatTimestamp(step.completedAt) : (step.status === "ok" || step.status === "no_result" ? "from current inputs" : "—")), escape(step.detail || "")];
+        escape(step.scope || "—"), step.completedAt ? timeTag(step.completedAt) : escape(step.status === "ok" || step.status === "no_result" ? "from current inputs" : "—"), escape(step.detail || "")];
     });
     return section(
       "status",
@@ -1472,9 +1472,27 @@
     return numberFormatter.format(bytes / Math.pow(1024, index)) + " " + units[index];
   }
 
+  // page display only, in the viewer's local time: "16 Oct 2026, 23:54 (UTC+1)".
+  // The result record and every export keep generatedAt / completedAt as ISO.
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   function formatTimestamp(value) {
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? "Local time" : date.toISOString().replace("T", " ").replace(".000Z", " UTC");
+    if (Number.isNaN(date.getTime())) {
+      return "Local time";
+    }
+    const pad = function (n) { return String(n).padStart(2, "0"); };
+    const offset = -date.getTimezoneOffset();
+    const hours = Math.floor(Math.abs(offset) / 60);
+    const minutes = Math.abs(offset) % 60;
+    const zone = "UTC" + (offset === 0 ? "" : (offset > 0 ? "+" : "\u2212") + hours + (minutes ? ":" + pad(minutes) : ""));
+    return date.getDate() + " " + MONTHS[date.getMonth()] + " " + date.getFullYear() + ", " + pad(date.getHours()) + ":" + pad(date.getMinutes()) + " (" + zone + ")";
+  }
+
+  // a <time> element: readable text, the ISO value in datetime and title
+  function timeTag(value) {
+    const date = new Date(value);
+    const iso = Number.isNaN(date.getTime()) ? "" : date.toISOString();
+    return iso ? '<time datetime="' + escape(iso) + '" title="' + escape(iso) + '">' + escape(formatTimestamp(value)) + "</time>" : escape(formatTimestamp(value));
   }
 
   function range(start, end) {

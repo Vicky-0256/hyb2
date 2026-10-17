@@ -706,7 +706,7 @@
           " · padj " + Number(cand.padj).toExponential(2) + " · " + cand.own.length + " / " + cand.other.length + " pairs</option>";
       })).join("");
       out.push('<div class="region-panel" data-region="' + region.label + '">');
-      out.push("<h3>Region " + region.label + " · " + esc(region.lineage) + "-enriched</h3>");
+      out.push("<h3>" + (region.label === "A" ? "D" : "E") + " · Region " + region.label + " · " + esc(region.lineage) + "-enriched</h3>");
       out.push('<label class="control-field"><span>Interaction (pairs formed by ' + esc(region.lineage) + " / " + esc(region.other) + ')</span><select data-feature="regions-control" data-key="' + key + '">' + optionsHtml + "</select></label>");
       if (!region.chosen) {
         out.push('<p class="card-note">' + esc(region.reason) + "</p></div>");

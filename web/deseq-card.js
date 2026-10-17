@@ -175,7 +175,7 @@
     };
     const out = [
       '<section class="data-card deseq-card" id="deseq-card">',
-      '<div class="card-title-row"><div><h2>Differential test (DESeq2 Wald test)</h2><span class="card-note">Which contacts differ between ' +
+      '<div class="card-title-row"><div><h2>A · Differential test (DESeq2 Wald test)</h2><span class="card-note">Which contacts differ between ' +
         esc(labelA) + ' and ' + esc(labelB) + '? Each 10-nt × 10-nt contact cell is tested with the replicates as the noise estimate; significant neighbouring cells are merged into interactions, as hyb2_compare does. Runs in this tab; nothing is uploaded.</span></div><span class="card-kicker">' +
         num(check.nA) + ' + ' + num(check.nB) + ' replicates</span></div>',
       '<div class="comparison-control-grid">',

@@ -2571,7 +2571,7 @@
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.line + '"/>',
       cells,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '"/>',
-      '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" fill="' + colors.ink + '">' + escapeXml(state.comparison.rnaX) + ' (X) × ' + escapeXml(state.comparison.rnaY) + ' (Y) · Mean log2 effect</text>',
+      '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" fill="' + colors.ink + '">' + escapeXml(state.comparison.rnaX) + ' (X) × ' + escapeXml(state.comparison.rnaY) + ' (Y) · Descriptive · Mean log2 effect</text>',
       '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal' +
         (shown.length < result.cells.length ? ' · the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins' : '') + '</text>',
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.xStart + '</text>',

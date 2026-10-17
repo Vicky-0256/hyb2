@@ -773,9 +773,13 @@
           (error.fileName ? escapeHtml(error.fileName) + ": " : "") + escapeHtml(error.message) +
           (error.detail ? '<span class="parse-error-detail">' + escapeHtml(error.detail) + "</span>" : "") + "</div>",
         error.hint ? '  <p class="parse-error-hint">' + escapeHtml(error.hint) + "</p>" : "",
-        '  <div class="dialog-actions">',
-        '    <button class="button button-secondary" type="button" data-action="load-example">Try the example instead</button>',
-        '    <button class="button" type="button" data-action="reset-file">Choose another file</button>',
+        '  <div class="dialog-actions load-error-actions">',
+        '    <button class="quiet-button" type="button" data-action="reload-page">Reload page</button>',
+        error.source === "example"
+          ? '    <button class="button button-secondary" type="button" data-action="reset-file">Choose a file instead</button>' +
+            '    <button class="button" type="button" data-action="load-example">Try again</button>'
+          : '    <button class="button button-secondary" type="button" data-action="load-example">Try the example instead</button>' +
+            '    <button class="button" type="button" data-action="reset-file">Choose another file</button>',
         "  </div>",
         "</div></div>"
       ].join("");
@@ -860,7 +864,10 @@
       : (setup.ready
         ? "Compare page ready: " + example.labels.A + " (ZAFR_REP1, ZAFR_REP2) vs " + example.labels.B + " (ZILM_REP2, ZILM_REP3), 10-nt bins, similarity minimum 10; the arc map has both CPLfold structures and the gene track. On the Compare page, run the differential test to find which contacts differ and to fill the figure panels that depend on it."
         : setup.stage + (setup.total ? " (" + formatNumber(setup.done) + " of " + formatNumber(setup.total) + ")" : "") + "…");
-    return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>";
+    return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>" +
+      (setup.error
+        ? '  <div class="load-error-actions example-setup-actions"><button class="quiet-button" type="button" data-action="reload-page">Reload page</button><button class="button button-secondary" type="button" data-action="load-example">Load the example again</button></div>'
+        : "");
   }
 
   // The example's other files (replicates for Compare, arc map files) as
@@ -1653,6 +1660,11 @@
       return;
     }
 
+    if (action === "reload-page") {
+      window.location.reload();
+      return;
+    }
+
     if (action === "show-upcoming") {
       showToast(actionNode.dataset.target + " is outside this v0 preview.");
     }
@@ -1905,9 +1917,17 @@
       }
       state.exampleLoadSession = null;
       state.loading = null;
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+      const network = offline || /network|failed to fetch|load failed/i.test(error && error.message || "");
       state.error = {
+        source: "example",
         title: "The example could not be loaded",
-        message: error && error.message ? error.message : "The included example files are unavailable."
+        message: network
+          ? "The example files could not be downloaded" + (offline ? " (this device is offline)." : " (network error).")
+          : (error && error.message ? error.message : "The included example files are unavailable."),
+        hint: network
+          ? "Check the connection and press Try again. If it keeps failing, reload the page."
+          : "Press Try again, or reload the page."
       };
       render();
     }

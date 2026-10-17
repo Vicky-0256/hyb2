@@ -883,7 +883,7 @@ a {
   padding: 4px 8px;
   border: 1px solid color-mix(in srgb, var(--teal) 30%, var(--line));
   border-radius: 999px;
-  background: var(--teal-soft);
+  background: var(--primary-soft);
   color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: var(--text-label);
@@ -1288,4 +1288,34 @@ a {
   margin: 12px 0 0;
   font-size: 0.875rem;
   color: var(--muted-strong);
+}
+
+/* Load errors: Reload page on the left, the retry and the alternative on
+   the right; they wrap on a phone. */
+.load-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.load-error-actions > .quiet-button:first-child {
+  margin-right: auto;
+}
+
+.example-setup-actions {
+  margin-top: 8px;
+}
+
+@media (max-width: 767px) {
+  /* Stacked, the retry first. */
+  .load-error-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .load-error-actions > .quiet-button:first-child {
+    margin-right: 0;
+  }
 }

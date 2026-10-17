@@ -545,13 +545,15 @@
   top: 86px;
 }
 
+/* sans like every other card title (B8; the Compare selection card too) */
 .selection-card h2 {
   margin: 8px 0 0;
   color: var(--ink);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 720;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 
 .selection-card p {

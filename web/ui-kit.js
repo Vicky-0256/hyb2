@@ -1,5 +1,5 @@
 /*
- * HYB2 Web Lite shared UI kit (WEB_UI_FIX_PLAN.md, contracts K1, K2, K5).
+ * HYB2 Web Lite shared UI kit (WEB_UI_FIX_PLAN.md, contracts K1, K2, K5, K9).
  *
  *   Hyb2UiKit.niceTicks(min, max, target = 5)  K5: 4-7 ticks on 1/2/5 x 10^n,
  *                                              both ends included
@@ -9,6 +9,8 @@
  *   Hyb2UiKit.legend.drawCanvas(ctx, opts)     K1: drawn into a canvas (PNG exports)
  *   K2: <details class="export-menu"> closes on an outside click, on Escape and
  *   after an item is chosen (one document-level listener, installed here).
+ *   Hyb2UiKit.desktop                          K9: the one source of HYB2 Desktop
+ *                                              copy, limits and installer links
  *
  * Legend opts: { kind: "sequential" | "diverging", colorAt(t) -> css colour
  *   for t in [0, 1], min, max, ticks?, format?, title, lowLabel?, highLabel?,
@@ -299,10 +301,74 @@
     }, true);
   }
 
+
+  // ---- K9: everything the site says about HYB2 Desktop comes from here.
+  // Installer names match release_name in .github/workflows/desktop-release.yml;
+  // cplfoldNt is desktop/runtime/detector.py DEFAULT_CPLFOLD_MAX_NT (it can be
+  // changed with HYB2_CPLFOLD_MAX_NT, hence "by default").
+  const DESKTOP_LIMITS = { cplfoldNt: 1000, webCplfoldNt: 500 };
+  const DESKTOP_GET = "<strong>Get HYB2 Desktop</strong>";
+  const DESKTOP_CTA = {
+    "raw-reads": "Starting from raw reads (FASTQ, FASTA or SAM)? HYB2 Desktop maps them and writes the .hyb file.",
+    "long-fold": "Longer than " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt? HYB2 Desktop runs CPLfold natively, up to " +
+      formatTick(DESKTOP_LIMITS.cplfoldNt) + " nt by default, with no capacity test.",
+    overview: "The full pipeline on your computer, from raw reads to structures."
+  };
+  const desktop = {
+    name: "HYB2 Desktop",
+    releasesUrl: "https://github.com/Vicky-0256/hyb2/releases",
+    checksumsFile: "SHA256SUMS.txt",
+    platforms: [
+      { id: "mac-arm64", os: "mac", label: "macOS · Apple silicon", file: "HYB2-Desktop-macOS-arm64.dmg" },
+      { id: "win-x64", os: "windows", label: "Windows · 64-bit", file: "HYB2-Desktop-Windows-x64-Setup.exe" },
+      { id: "linux-deb", os: "linux", label: "Linux · .deb", file: "HYB2-Desktop-Linux-x64.deb" },
+      { id: "linux-tar", os: "linux", label: "Linux · .tar.gz", file: "HYB2-Desktop-Linux-x64.tar.gz" }
+    ],
+    unavailable: "Intel Macs and ARM Linux/Windows have no installer yet; use the command-line pipeline (README).",
+    limits: DESKTOP_LIMITS,
+    tagline: "The full HYB2 pipeline on your computer: from raw reads to .hyb files, analysis and longer RNA structures.",
+    capabilities: [
+      { title: "Raw reads → .hyb", text: "FASTQ, FASTA or SAM, mapped with Bowtie2, hybrids called and checked" },
+      { title: "Same analysis pages", text: "The same analysis pages as Web Lite, saved as projects on disk" },
+      { title: "Native CPLfold", text: "Up to " + formatTick(DESKTOP_LIMITS.cplfoldNt) + " nt by default (browser: " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt), no capacity test" },
+      { title: "Comparisons", text: "DESeq2 comparisons and QC" },
+      { title: "Offline", text: "Works offline; data stays on your computer" }
+    ],
+    isInsideDesktop: function () {
+      return !!(root.Hyb2Desktop && root.Hyb2Desktop.enabled);
+    },
+    // the first platform for this computer's OS (Linux: the .deb), or null
+    detectPlatform: function (userAgent) {
+      const nav = root.navigator || {};
+      const text = String(userAgent != null ? userAgent :
+        ((nav.userAgentData && nav.userAgentData.platform) || nav.platform || nav.userAgent || "")).toLowerCase();
+      const os = text.indexOf("mac") !== -1 ? "mac" : text.indexOf("win") !== -1 ? "windows" :
+        text.indexOf("linux") !== -1 && text.indexOf("android") === -1 ? "linux" : "";
+      return desktop.platforms.filter(function (item) { return item.os === os; })[0] || null;
+    },
+    downloadUrl: function (platform) {
+      const file = typeof platform === "string" ? platform : platform && platform.file;
+      return desktop.releasesUrl + "/latest/download/" + file;
+    },
+    checksumsUrl: function () {
+      return desktop.downloadUrl(desktop.checksumsFile);
+    },
+    // <a class="desktop-cta" data-action="open-desktop">: the app opens the
+    // Desktop drawer on click; without that handler it opens the release page.
+    cta: function (context) {
+      if (desktop.isInsideDesktop() || !DESKTOP_CTA[context]) {
+        return "";
+      }
+      return '<a class="desktop-cta" href="' + desktop.releasesUrl + '/latest" data-action="open-desktop" data-desktop-context="' +
+        escapeText(context) + '">' + escapeText(DESKTOP_CTA[context]) + " " + DESKTOP_GET + "</a>";
+    }
+  };
+
   root.Hyb2UiKit = {
     niceTicks: niceTicks,
     formatTick: formatTick,
     legend: { html: html, svg: svg, drawCanvas: drawCanvas },
-    closeExportMenus: function () { closeMenus(null); }
+    closeExportMenus: function () { closeMenus(null); },
+    desktop: desktop
   };
 }(typeof window !== "undefined" ? window : globalThis));

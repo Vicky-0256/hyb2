@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Checks web/ui-kit.js (WEB_UI_FIX_PLAN.md K1, K2, K5): niceTicks gives 4-7
+// Checks web/ui-kit.js (WEB_UI_FIX_PLAN.md K1, K2, K5, K9): niceTicks gives 4-7
 // ticks on 1/2/5 x 10^n with both ends; the legend renders as HTML, SVG and on
-// a canvas with its title, ticks and end labels; the export menu closes.
+// a canvas with its title, ticks and end labels; the export menu closes; the
+// HYB2 Desktop facts (K9) match the release workflow and the desktop runtime.
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -93,5 +94,39 @@ assert.match(kitCss, /\.export-menu-list \{/);
 assert.match(kitCss, /\.export-menu\.export-menu--start \.export-menu-list \{\s*right: auto;\s*left: 0;/, "a list that would leave the screen opens rightwards");
 assert.match(kitCss, /\.cell-truncate:not\(td\):not\(th\) \{\s*display: block;/, "outside a table, .cell-truncate keeps its width");
 assert.match(fs.readFileSync(web("ui-kit.js"), "utf8"), /addEventListener\("toggle"/);
+
+// ---- K9
+const desk = kit.desktop;
+const releaseWorkflow = path.join(__dirname, "..", ".github", "workflows", "desktop-release.yml");
+if (fs.existsSync(releaseWorkflow)) {
+  const names = Array.from(fs.readFileSync(releaseWorkflow, "utf8").matchAll(/release_name:\s*(\S+)/g), function (m) { return m[1]; });
+  desk.platforms.forEach(function (item) {
+    assert.ok(names.some(function (name) { return item.file.indexOf(name) === 0; }), item.file + " matches a release_name");
+  });
+}
+const detector = path.join(__dirname, "..", "desktop", "runtime", "detector.py");
+if (fs.existsSync(detector)) {
+  const max = /DEFAULT_CPLFOLD_MAX_NT\s*=\s*(\d+)/.exec(fs.readFileSync(detector, "utf8"));
+  assert.equal(desk.limits.cplfoldNt, Number(max[1]), "Desktop CPLfold limit = detector.py DEFAULT_CPLFOLD_MAX_NT");
+}
+assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7").id, "mac-arm64");
+assert.equal(desk.detectPlatform("Windows NT 10.0; Win64; x64").id, "win-x64");
+assert.equal(desk.detectPlatform("X11; Linux x86_64").id, "linux-deb");
+assert.equal(desk.detectPlatform("Linux; Android 14; Pixel 8"), null, "Android is not desktop Linux");
+assert.equal(desk.detectPlatform("iPhone; CPU iPhone OS 17_0"), null);
+assert.equal(desk.downloadUrl(desk.platforms[0]), "https://github.com/Vicky-0256/hyb2/releases/latest/download/HYB2-Desktop-macOS-arm64.dmg");
+assert.equal(desk.checksumsUrl(), "https://github.com/Vicky-0256/hyb2/releases/latest/download/SHA256SUMS.txt");
+["raw-reads", "long-fold", "overview"].forEach(function (name) {
+  const cta = desk.cta(name);
+  assert.match(cta, /^<a class="desktop-cta" href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest" data-action="open-desktop"/, name);
+  assert.match(cta, /<strong>Get HYB2 Desktop<\/strong><\/a>$/, name);
+});
+assert.match(desk.cta("long-fold"), /Longer than 500 nt\? HYB2 Desktop runs CPLfold natively, up to 1,000 nt by default, with no capacity test\./);
+assert.equal(desk.cta("no-such-context"), "");
+context.window.Hyb2Desktop = { enabled: true };
+assert.equal(desk.isInsideDesktop(), true);
+assert.equal(desk.cta("raw-reads"), "", "no Desktop links inside Desktop");
+delete context.window.Hyb2Desktop;
+assert.match(kitCss, /\.desktop-cta strong \{[^}]*var\(--primary-ink\)/, "the CTA link text uses --primary-ink");
 
 process.stdout.write("ui-kit: ok\n");

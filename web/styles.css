@@ -727,10 +727,10 @@ a {
   color: var(--muted);
 }
 
-.prepared-file-row .quiet-button {
+.prepared-file-row .button-compact {
   min-height: 32px;
-  padding: 0 9px;
-  font-size: 11px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .prepared-file-note {
@@ -1015,8 +1015,22 @@ a {
   white-space: nowrap;
 }
 
-.reference-file-name.is-empty {
+/* "No FASTA selected" is a plain note, not a file name. */
+.reference-file-name.is-empty,
+.prepared-file-details strong.is-empty {
   color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* The FASTA choosers: secondary buttons, same family as Choose HYB file,
+   sized for a file row. */
+.button-compact {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .v0-chip {

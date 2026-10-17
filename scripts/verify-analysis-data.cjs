@@ -791,6 +791,54 @@ assert.match(disjointComparison.reason, /combined maps cover more than 1,500,000
 assert.ok(Date.now() - disjointComparisonStartedAt < 5000,
   "Comparison union overflow should stop before constructing full result and lookup arrays");
 
+// The colour cap is found by selection rather than sorting; it must equal
+// the sorted-quantile definition, and getCell/cellMap must agree.
+(function () {
+  let seed = 7;
+  const next = function (limit) {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % limit;
+  };
+  const randomRecords = [];
+  for (let index = 0; index < 400; index += 1) {
+    const oneStart = next(300);
+    const twoStart = next(300);
+    randomRecords.push(record({
+      id: "random_" + index,
+      rnaOneStart: oneStart,
+      rnaOneEnd: oneStart + next(40),
+      rnaTwoStart: twoStart,
+      rnaTwoEnd: twoStart + next(40),
+      supportCount: 1 + next(5)
+    }));
+  }
+  const sortedQuantile = function (values, fraction) {
+    const position = Math.max(0, Math.min(values.length - 1, (values.length - 1) * fraction));
+    const lower = Math.floor(position);
+    const upper = Math.ceil(position);
+    return values[lower] + (values[upper] - values[lower]) * (position - lower);
+  };
+  ["90", "95", "99", "max"].forEach(function (colourCap) {
+    ["linear", "log"].forEach(function (scale) {
+      ["records", "support"].forEach(function (measure) {
+        const matrix = data.buildContactMatrix(randomRecords, contact({ binSize: 5, colourCap: colourCap, scale: scale, measure: measure }));
+        const display = Array.from(matrix.cells, function (cell) {
+          return scale === "log" ? Math.log1p(cell.value) : cell.value;
+        }).sort(function (left, right) { return left - right; });
+        const expected = colourCap === "max" ? display[display.length - 1] : sortedQuantile(display, Number(colourCap) / 100);
+        assert.ok(Math.abs(matrix.cap - expected) < 1e-12, "cap " + colourCap + "/" + scale + "/" + measure + ": " + matrix.cap + " vs " + expected);
+        assert.equal(matrix.max, display[display.length - 1]);
+      });
+    });
+  });
+  const lookupMatrix = data.buildContactMatrix(randomRecords, contact({ binSize: 5 }));
+  assert.equal(Object.keys(lookupMatrix.cellMap).length, lookupMatrix.cells.length);
+  lookupMatrix.cells.forEach(function (cell) {
+    assert.equal(lookupMatrix.getCell(cell.x, cell.y), cell);
+    assert.equal(lookupMatrix.cellMap[cell.x + ":" + cell.y], cell);
+  });
+  assert.equal(lookupMatrix.getCell(5000, 5000), null);
+}());
 // Large comparisons (over 100,000 cells) build a cell's dataset values on
 // demand; lookups go through comparisonCellAt().
 {

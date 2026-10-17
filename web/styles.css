@@ -11,20 +11,22 @@
   --surface: #ffffff;
   --surface-subtle: #f7fafb;
   --ink: var(--navy);
-  --muted: #607286;
+  --muted: #5b6c80;
   --muted-strong: #38516a;
   --line: #dce7ec;
   --line-strong: #c2d3db;
   --primary: var(--teal);
-  --primary-hover: #008784;
-  --primary-foreground: var(--navy);
+  --primary-hover: #00b0ac;
+  /* Text on the teal button and teal used as text both clear WCAG 4.5:1. */
+  --primary-foreground: #10263d;
+  --primary-ink: #007672;
   --primary-soft: var(--teal-soft);
   --accent: var(--violet);
   --accent-hover: var(--violet-deep);
   --accent-soft: var(--violet-soft);
   --success: var(--teal-deep);
   --success-soft: #e3f7f6;
-  --warning: #a96614;
+  --warning: #9c5e12;
   --warning-soft: #fff4e3;
   --error: #b42318;
   --error-soft: #fcecea;
@@ -50,9 +52,10 @@
   --line-strong: #45647e;
   --primary: var(--teal);
   --primary-hover: #35c3c0;
-  --primary-foreground: var(--navy);
+  --primary-foreground: #10263d;
+  --primary-ink: #35c3c0;
   --primary-soft: #123f4b;
-  --accent: #9a88ff;
+  --accent: #a596ff;
   --accent-hover: #b7aaff;
   --accent-soft: #302958;
   --success: #43d1b0;
@@ -338,7 +341,7 @@ a {
 }
 
 .landing-copy h1 span {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .landing-lede {
@@ -378,8 +381,7 @@ a {
   transform: rotate(-45deg);
 }
 
-.web-capability-card,
-.legacy-workflow-guide {
+.web-capability-card {
   margin-top: 1.35rem;
   padding: 1rem 1.1rem;
   border: 1px solid rgba(106, 79, 242, .18);
@@ -394,8 +396,7 @@ a {
   gap: .75rem;
 }
 
-.web-capability-card h2,
-.legacy-workflow-guide h2 {
+.web-capability-card h2 {
   margin: .2rem 0 .7rem;
   font-size: 1rem;
 }
@@ -410,8 +411,7 @@ a {
   white-space: nowrap;
 }
 
-.web-capability-list,
-.legacy-workflow-guide ol {
+.web-capability-list {
   display: grid;
   gap: .42rem;
   margin: 0;
@@ -445,45 +445,59 @@ a {
   box-shadow: 0 0 0 3px rgba(0, 165, 143, .12);
 }
 
-.web-capability-note,
-.legacy-workflow-guide p {
+.web-capability-note {
   margin: .75rem 0 0;
   color: var(--muted);
   font-size: .74rem;
   line-height: 1.5;
 }
 
-.legacy-workflow-guide ol {
-  counter-reset: workflow;
+.desktop-download-lede {
+  margin-top: 0;
 }
 
-.legacy-workflow-guide li {
+.desktop-download-list {
   display: grid;
-  grid-template-columns: 1.45rem 1fr;
   gap: .35rem;
-  font-size: .76rem;
+  margin: .7rem 0 0;
+  padding: 0;
+  list-style: none;
 }
 
-.legacy-workflow-guide li::before {
-  counter-increment: workflow;
-  content: counter(workflow);
-  display: grid;
-  place-items: center;
-  width: 1.2rem;
-  height: 1.2rem;
-  border-radius: 50%;
-  color: #fff;
-  background: #6a4ff2;
-  font-size: .67rem;
-  font-weight: 700;
+.desktop-download-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  min-height: 40px;
+  padding: 0 .75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-size: .8rem;
+  text-decoration: none;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease);
 }
 
-.legacy-workflow-guide li span {
-  display: block;
-  /* Without this the description auto-places into the 1.45rem badge column. */
-  grid-column: 2;
+.desktop-download-link strong {
   color: var(--muted);
-  font-size: .71rem;
+  font-size: .7rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.desktop-download-link:hover,
+.desktop-download-link:focus-visible {
+  border-color: var(--primary);
+  background: var(--surface);
+}
+
+.desktop-download-link.is-recommended {
+  border-color: rgba(106, 79, 242, .45);
+}
+
+.desktop-download-link.is-recommended strong {
+  color: var(--primary-ink);
 }
 
 .landing-panel {
@@ -532,7 +546,7 @@ a {
 .file-card-kicker {
   display: block;
   margin-bottom: 6px;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 750;
@@ -579,7 +593,7 @@ a {
   border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
   border-radius: var(--radius-sm);
   background: var(--primary-soft);
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 800;
@@ -679,7 +693,7 @@ a {
 }
 
 .prepared-file-note strong {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .prepared-next-step {
@@ -959,7 +973,7 @@ a {
 .dropzone-kicker {
   display: inline-block;
   margin-bottom: 13px;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 750;
@@ -1126,7 +1140,7 @@ a {
 }
 
 .parse-step.is-current {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-weight: 720;
 }
 
@@ -1152,4 +1166,18 @@ a {
   background: var(--error-soft);
   color: var(--error);
   font-size: 14px;
+}
+
+/* Parse error: the first rejected line and what a HYB line needs. */
+.parse-error-detail {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.parse-error-hint {
+  margin: 12px 0 0;
+  font-size: 0.875rem;
+  color: var(--muted-strong);
 }

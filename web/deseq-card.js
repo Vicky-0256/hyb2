@@ -175,13 +175,13 @@
     };
     const out = [
       '<section class="data-card deseq-card" id="deseq-card">',
-      '<div class="card-title-row"><div><h2>Differential test (DESeq2 Wald test)</h2><span class="card-note">hyb2_compare in the browser: every dataset\'s 10-nt contact cells (record counts, HYB2 coverage rule) are tested ' +
-        esc(labelA) + ' vs ' + esc(labelB) + '; significant cells are merged into interactions. Runs in a background worker; nothing is uploaded.</span></div><span class="card-kicker">' +
+      '<div class="card-title-row"><div><h2>Differential test (DESeq2 Wald test)</h2><span class="card-note">Which contacts differ between ' +
+        esc(labelA) + ' and ' + esc(labelB) + '? Each 10-nt × 10-nt contact cell is tested with the replicates as the noise estimate; significant neighbouring cells are merged into interactions, as hyb2_compare does. Runs in this tab; nothing is uploaded.</span></div><span class="card-kicker">' +
         num(check.nA) + ' + ' + num(check.nB) + ' replicates</span></div>',
       '<div class="comparison-control-grid">',
-      field("Min count (row sum >)", "minCount", deseq.minCount, "Cells whose counts summed over all datasets are at most this are not tested (hyb2_compare -m)"),
+      field("Test cells with total count above", "minCount", deseq.minCount, "Cells whose counts summed over all datasets are at most this are not tested (hyb2_compare -m)"),
       field("Merge range (nt)", "radius", deseq.radius, "Significant cells within this many nt (in x and y) of a stronger one of the same direction are merged (hyb2_compare -r)"),
-      field("padj cutoff", "padjCutoff", deseq.padjCutoff, "Cells with padj below this are significant (independent filtering uses alpha 0.01, as DESeq_run.R)"),
+      field("Significant if padj below", "padjCutoff", deseq.padjCutoff, "Cells with padj below this are significant (independent filtering uses alpha 0.01, as DESeq_run.R)"),
       '</div>',
       '<div class="deseq-include"><span class="card-note">Datasets in the test:</span>' + (comparison.datasets || []).map(function (dataset) {
         const on = !(deseq.excluded || {})[dataset.id];
@@ -214,7 +214,8 @@
     if (result) {
       out.push(renderResult(comparison, deseq, result, stale, labelA, labelB));
     }
-    out.push('<p class="card-note">Method: a JavaScript port of HYB2 Desktop\'s numpy port of the DESeq2 1.46 Wald test (median-of-ratios size factors, Cox-Reid gene-wise dispersions, parametric trend with local fallback, MAP shrinkage, Wald test, Cook\'s filtering with three or more replicates, independent filtering at alpha 0.01, Benjamini-Hochberg), then hyb2_compare\'s greedy merge by padj. It is not R: ' + esc(VALIDATION) + "</p>");
+    const methodOpen = window.Hyb2OpenSections && window.Hyb2OpenSections["deseq-method"] ? " open" : "";
+    out.push('<details class="comparison-note-details deseq-method" data-open-key="deseq-method"' + methodOpen + '><summary>Method and how it was checked against R</summary><p class="card-note">A JavaScript port of HYB2 Desktop\'s numpy port of the DESeq2 1.46 Wald test (median-of-ratios size factors, Cox-Reid gene-wise dispersions, parametric trend with local fallback, MAP shrinkage, Wald test, Cook\'s filtering with three or more replicates, independent filtering at alpha 0.01, Benjamini-Hochberg), then hyb2_compare\'s greedy merge by padj. It is not R: ' + esc(VALIDATION) + "</p></details>");
     out.push("</section>");
     return out.join("");
   }
@@ -235,8 +236,8 @@
       out.push('<p class="notice notice-warning">Datasets, conditions or parameters changed after this result was computed; run the test again to update it.</p>');
     }
     out.push('<dl class="selection-stats deseq-stats">' + [
-      ["Cells tested", num(s.cellsTested) + " of " + num(s.cellsTotal)],
-      ["Significant (padj < " + s.parameters.padjCutoff + ")", num(s.significant)],
+      ["Cells tested", num(s.cellsTested) + " of " + num(s.cellsTotal) + " (the rest have a total count of " + num(s.parameters.minCount) + " or less)"],
+      ["Significant (padj < " + s.parameters.padjCutoff + ")", num(s.significant) + " cells"],
       ["Higher in " + labelA, num(s.significantUp) + " cells · " + num(s.interactionsUp) + " interactions"],
       ["Higher in " + labelB, num(s.significantDown) + " cells · " + num(s.interactionsDown) + " interactions"],
       ["Size factors", s.sizeFactors.map(function (value) { return value.toFixed(4); }).join(" · ")],
@@ -254,15 +255,16 @@
       '<button class="quiet-button" type="button" data-feature-action="deseq-export-interactions">Export interactions TSV</button>' +
       '<button class="quiet-button" type="button" data-feature-action="deseq-export-significant">Export significant cells TSV</button>' +
       '<button class="button" type="button" data-feature-action="deseq-use-arcmap">Use in arc map</button></div>');
+    out.push('<p class="card-note">Before reporting an interaction, check that every replicate supports it: click the same position in the effect map below to see each dataset\'s count. A small padj with a low mean count can still come from one replicate.</p>');
     if (deseq.arcMapFed && !stale) {
-      out.push('<p class="card-note">The arc map below had structures but no interaction table, so it now draws these merged interactions; the region structures (D, E) and folding energies (F, G) follow from it.</p>');
+      out.push('<p class="card-note">The arc map below had structures but no interaction table, so it now draws these merged interactions; the region structures (D, E) and folding energies (F, G) follow from it. Those panels use their own padj cutoff (0.01 by default), so they can show fewer interactions than this table.</p>');
     }
     out.push('<div class="card-title-row"><h3>Merged interactions</h3><span class="card-note">' + num(rows.length) + " shown by padj" +
       (rows.length > TABLE_ROWS ? " (first " + TABLE_ROWS + " listed; the TSV has all)" : "") + "</span></div>");
     if (!rows.length) {
       out.push('<p class="card-note">No significant interaction in this direction.</p>');
     } else {
-      out.push('<div class="data-table-wrap deseq-table"><table class="data-table"><thead><tr><th>Higher in</th><th>Arm 1 (x)</th><th>Arm 2 (y)</th><th>log2 A/B</th><th>padj</th><th>Mean</th></tr></thead><tbody>' +
+      out.push('<div class="data-table-wrap deseq-table"><table class="data-table"><thead><tr><th>Higher in</th><th>Arm 1 (x, nt)</th><th>Arm 2 (y, nt)</th><th>log2 ' + esc(labelA) + '/' + esc(labelB) + '</th><th>padj</th><th>Mean count (normalised)</th></tr></thead><tbody>' +
         rows.slice(0, TABLE_ROWS).map(function (row) {
           const key = row.direction + ":" + row.x + ":" + row.y;
           return '<tr class="' + (selected === key ? "is-selected" : "") + '" data-feature-action="deseq-select" data-key="' + esc(key) + '" tabindex="0"><td>' +

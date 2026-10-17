@@ -18,6 +18,8 @@ on:
       - "scripts/verify-cplfold-worker.mjs"
       - "scripts/verify-analysis-data.cjs"
       - "scripts/verify-ui-contract.cjs"
+      - "scripts/verify-motion-contract.cjs"
+      - "scripts/verify-evidence.cjs"
       - "scripts/verify-report-render.cjs"
       - "scripts/verify-deseq.cjs"
       - "scripts/verify-arc-map.cjs"
@@ -81,6 +83,8 @@ jobs:
           node scripts/verify-comrades-analysis.cjs
           node scripts/verify-webr-feasibility.cjs
           node scripts/verify-ui-contract.cjs
+          node scripts/verify-motion-contract.cjs
+          node scripts/verify-evidence.cjs
           node scripts/verify-report-render.cjs
           node scripts/verify-results.cjs
           node scripts/verify-deseq.cjs

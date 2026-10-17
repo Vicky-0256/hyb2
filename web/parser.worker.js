@@ -187,6 +187,7 @@ function createSummary(file) {
     canonicalRecords: 0,
     legacyClusterRecords: 0,
     ambiguousColumn16Records: 0,
+    inferredChimeraTypeRecords: 0,
     records: [],
     rnaMap: Object.create(null),
     pairMap: Object.create(null),
@@ -486,6 +487,9 @@ function addRecord(summary, record) {
   }
   if (record.ambiguousColumn16) {
     summary.ambiguousColumn16Records += 1;
+  }
+  if (record.chimeraTypeSource === "inferred") {
+    summary.inferredChimeraTypeRecords += 1;
   }
 
   addRna(summary.rnaMap, record.rnaOne, record.supportCount, record.overlapScore, record.rawReadCount);

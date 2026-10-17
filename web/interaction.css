@@ -40,7 +40,7 @@ kbd {
   color: var(--muted);
   font-size: 13px;
   font-weight: 620;
-  transition: border-color 200ms var(--ease-out, ease), color 200ms var(--ease-out, ease), box-shadow 200ms var(--ease-out, ease);
+  transition: border-color var(--dur-feedback, 150ms) var(--ease-out, ease), color var(--dur-feedback, 150ms) var(--ease-out, ease), box-shadow var(--dur-feedback, 150ms) var(--ease-out, ease);
 }
 
 .cmdk-trigger svg {
@@ -81,10 +81,16 @@ kbd {
   }
 }
 
-/* Phones: the header is already full and the palette is keyboard-led. */
+/* Phones: the header is already full and the palette is keyboard-led.
+   On the landing header the trigger also ran over the "Web Lite" label. */
 @media (max-width: 767px) {
-  .workspace-header .cmdk-trigger {
+  .workspace-header .cmdk-trigger,
+  .landing-header .cmdk-trigger {
     display: none;
+  }
+
+  .landing-header > :first-child {
+    flex-shrink: 0;
   }
 
   .cmdk-trigger span,
@@ -124,7 +130,7 @@ kbd {
   -webkit-backdrop-filter: blur(6px) saturate(1.1);
   backdrop-filter: blur(6px) saturate(1.1);
   opacity: 0;
-  transition: opacity 220ms var(--ease-out, ease);
+  transition: opacity var(--dur-quick, 240ms) var(--ease-out, ease);
 }
 
 .cmdk-panel {
@@ -144,7 +150,7 @@ kbd {
   opacity: 0;
   transform: translate3d(0, -10px, 0) scale(.97);
   transform-origin: 50% 0;
-  transition: opacity 200ms var(--ease-out, ease), transform 360ms var(--ease-spring, ease);
+  transition: opacity var(--dur-feedback, 150ms) var(--ease-out, ease), transform var(--dur-move, 400ms) var(--ease-spring, ease);
 }
 
 .cmdk-panel::before {
@@ -164,9 +170,14 @@ kbd {
   transform: none;
 }
 
+.cmdk.is-leaving .cmdk-backdrop,
+.cmdk.is-leaving .cmdk-panel {
+  transition-duration: var(--dur-exit, 200ms);
+  transition-timing-function: var(--ease-in, ease-in);
+}
+
 .cmdk.is-leaving .cmdk-panel {
   transform: translate3d(0, -6px, 0) scale(.98);
-  transition-duration: 160ms;
 }
 
 .cmdk-search {
@@ -227,11 +238,11 @@ kbd {
   box-shadow: inset 3px 0 0 var(--primary);
   opacity: 0;
   pointer-events: none;
-  transition: transform 260ms var(--ease-spring, ease), height 200ms var(--ease-out, ease), opacity 150ms ease;
+  transition: transform var(--dur-quick, 240ms) var(--ease-spring, ease), height var(--dur-feedback, 150ms) var(--ease-out, ease), opacity var(--dur-feedback, 150ms) ease;
 }
 
 .cmdk-glider.is-instant {
-  transition: opacity 150ms ease;
+  transition: opacity var(--dur-feedback, 150ms) ease;
 }
 
 .cmdk-group {
@@ -257,7 +268,7 @@ kbd {
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: color 140ms ease;
+  transition: color var(--dur-feedback, 150ms) ease;
 }
 
 .cmdk-item.is-active {
@@ -274,12 +285,12 @@ kbd {
   border-radius: 7px;
   background: var(--surface);
   color: var(--muted);
-  transition: color 140ms ease, border-color 140ms ease, transform 260ms var(--ease-spring, ease);
+  transition: color var(--dur-feedback, 150ms) ease, border-color var(--dur-feedback, 150ms) ease, transform var(--dur-quick, 240ms) var(--ease-pop, ease);
 }
 
 .cmdk-item.is-active .cmdk-item-icon {
   border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
-  color: var(--primary);
+  color: var(--primary-ink);
   transform: scale(1.06);
 }
 
@@ -304,7 +315,7 @@ kbd {
 .cmdk-item-label mark {
   border-radius: 2px;
   background: transparent;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-weight: 780;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--primary) 45%, transparent);
@@ -319,7 +330,7 @@ kbd {
 }
 
 .cmdk-item.is-current .cmdk-item-meta {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .cmdk-item-kbd {
@@ -362,7 +373,7 @@ body.cmdk-locked {
   margin-left: auto;
   opacity: 0;
   transform: translateX(4px);
-  transition: opacity 160ms ease, transform 220ms var(--ease-out, ease);
+  transition: opacity var(--dur-feedback, 150ms) ease, transform var(--dur-quick, 240ms) var(--ease-out, ease);
 }
 
 .nav-button:hover .nav-kbd,
@@ -375,11 +386,11 @@ body.cmdk-locked {
 .is-chording .sidebar .nav-button[aria-keyshortcuts] .nav-kbd {
   border-color: var(--primary);
   background: var(--primary-soft);
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .is-chording .sidebar .nav-button:nth-of-type(n) .nav-kbd {
-  transition-delay: calc(var(--stagger, 0) * 18ms);
+  transition-delay: calc(var(--stagger, 0) * var(--stagger-list, 30ms) / 2);
 }
 
 .chord-hud {
@@ -405,7 +416,7 @@ body.cmdk-locked {
   opacity: 0;
   pointer-events: none;
   transform: translate3d(-50%, 12px, 0) scale(.97);
-  transition: opacity 180ms ease, transform 320ms var(--ease-spring, ease);
+  transition: opacity var(--dur-feedback, 150ms) ease, transform var(--dur-move, 400ms) var(--ease-spring, ease);
 }
 
 .is-chording .chord-hud {
@@ -435,7 +446,7 @@ body.cmdk-locked {
   inset: 0;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 160ms ease;
+  transition: opacity var(--dur-feedback, 150ms) ease;
 }
 
 .canvas-crosshair.is-on {
@@ -500,7 +511,7 @@ body.cmdk-locked {
   opacity: 0;
   pointer-events: none;
   will-change: transform;
-  transition: opacity 140ms ease;
+  transition: opacity var(--dur-feedback, 150ms) ease;
 }
 
 :root[data-theme="dark"] .canvas-lens {
@@ -526,7 +537,7 @@ body.cmdk-locked {
    users; with a fine pointer the lens carries the same text. */
 @media (pointer: fine) {
   .heatmap-tooltip[data-contact-tooltip] {
-    transition: opacity 200ms ease;
+    transition: opacity var(--dur-feedback, 150ms) ease;
   }
 }
 
@@ -552,7 +563,7 @@ body.cmdk-locked {
   opacity: .16;
   pointer-events: none;
   transform: scale(0);
-  animation: press-ripple 560ms var(--ease-out, ease-out) forwards;
+  animation: press-ripple var(--dur-move, 400ms) var(--ease-out, ease-out) forwards;
 }
 
 .button .press-ripple {
@@ -571,7 +582,6 @@ body.cmdk-locked {
 
 .metric-card,
 .web-capability-card,
-.legacy-workflow-guide,
 .hero-stage {
   background-image: radial-gradient(360px circle at var(--mx, -400px) var(--my, -400px), color-mix(in srgb, var(--primary) 9%, transparent), transparent 60%);
 }
@@ -602,7 +612,7 @@ body:not(.has-workspace) .scroll-rail {
 }
 
 .workspace-header {
-  transition: box-shadow 240ms ease, background 240ms ease;
+  transition: box-shadow var(--dur-quick, 240ms) ease, background var(--dur-quick, 240ms) ease;
 }
 
 body.is-scrolled .workspace-header {
@@ -614,11 +624,11 @@ body.is-scrolled .workspace-header {
 /* ------------------------------------------------------------------ */
 
 .control-field > span {
-  transition: color 160ms ease;
+  transition: color var(--dur-feedback, 150ms) ease;
 }
 
 .control-field:focus-within > span {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .control-field input:focus,
@@ -641,7 +651,7 @@ body.is-scrolled .workspace-header {
   background: var(--primary);
   content: "";
   transform: scaleY(0);
-  transition: transform 220ms var(--ease-spring, ease);
+  transition: transform var(--dur-quick, 240ms) var(--ease-pop, ease);
 }
 
 .virtual-row:hover::before,

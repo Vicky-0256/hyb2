@@ -33,6 +33,11 @@
     mount.id = "forna-structure-" + Math.random().toString(36).slice(2);
     mount.className = "forna-structure-mount";
     target.appendChild(mount);
+    // fornac gives its mount tabindex=1 and focuses it while constructing,
+    // which scrolled the page to the diagram and took focus from the
+    // control the user had pressed. Ignore that focus call and put the
+    // mount back in normal tab order.
+    mount.focus = function () {};
     try {
       const container = new window.fornac.FornaContainer("#" + mount.id, {
         animation: false,
@@ -40,6 +45,8 @@
         initialSize: [760, 560],
         labelInterval: result.sequence.length <= 200 ? 10 : 25
       });
+      delete mount.focus;
+      mount.setAttribute("tabindex", "0");
       container.addRNA(result.dotBracket, {
         sequence: result.sequence,
         name: result.label || (result.engine === "CPLfold" ? "CPLfold" : "ViennaRNA")

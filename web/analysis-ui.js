@@ -6,6 +6,24 @@
     [0, 160, 157],
     [106, 79, 242]
   ];
+  // Dark theme: the navy low end vanished against the dark plot, so the
+  // scale starts from a steel blue (~3:1 against the dark surface).
+  const BRAND_SCALE_DARK = [
+    [70, 126, 156],
+    [0, 190, 186],
+    [170, 155, 255]
+  ];
+  // Opaque RGBA pixels (little-endian ABGR) for the canvas fast path.
+  function buildViridisLut(dark) {
+    const lut = new Uint32Array(1024);
+    for (let index = 0; index < lut.length; index += 1) {
+      const rgb = viridisRgb(index / (lut.length - 1), dark);
+      lut[index] = ((255 << 24) | (rgb[2] << 16) | (rgb[1] << 8) | rgb[0]) >>> 0;
+    }
+    return lut;
+  }
+  const VIRIDIS_LUT = buildViridisLut(false);
+  const VIRIDIS_LUT_DARK = buildViridisLut(true);
 
   function afterRender(state, api) {
     if (state.activePage === "interactions") {
@@ -31,6 +49,26 @@
     }
   }
 
+  // Changing a map control keeps the current map on screen, dimmed and
+  // marked stale; page-data.js fetches the new bins through the provider
+  // (the query key changed) and the map swaps in when it is ready.
+  function rebuildContact(state, api) {
+    const contact = state.contact;
+    contact.selection = null;
+    contact.overviewSelection = null;
+    contact.zoomSelection = null;
+    contact.overviewView = null;
+    contact.zoomView = null;
+    contact.detailView = null;
+    if (contact.matrix && contact.matrix.cells && contact.matrix.cells.length) {
+      contact.matrixStale = true;
+    } else {
+      contact.matrix = null;
+      contact.matrixStale = false;
+    }
+    api.render();
+  }
+
   function renderAndFocus(api, selector) {
     api.render();
     const replacement = document.querySelector(selector);
@@ -50,7 +88,28 @@
       state.interactionScrollTop = table.scrollTop;
       updateVirtualRows(state, api);
     });
+    // Rows were windowed for a default height; fit them to the real one.
     updateVirtualRows(state, api);
+    // Page first, then table: until the table reaches the top of the
+    // viewport the wheel moves the page, and at the table's top edge an
+    // upward wheel hands back to the page instead of stopping dead.
+    table.addEventListener("wheel", function (event) {
+      if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) {
+        return;
+      }
+      const header = document.querySelector(".workspace-header");
+      const dock = (header ? header.getBoundingClientRect().bottom : 0) + 12;
+      const top = table.getBoundingClientRect().top;
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      const pageRoom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+      if (delta > 0 && top > dock + 1 && pageRoom > 1) {
+        event.preventDefault();
+        window.scrollBy(0, Math.min(delta, top - dock, pageRoom));
+      } else if (delta < 0 && table.scrollTop <= 0 && window.scrollY > 0) {
+        event.preventDefault();
+        window.scrollBy(0, delta);
+      }
+    }, { passive: false });
   }
 
   // Rows come from the queryHybrids window held in state.view.interactions;
@@ -304,14 +363,18 @@
     });
   }
 
+  function contactCellAt(matrix, x, y) {
+    return matrix.getCell ? matrix.getCell(x, y) : (matrix.cellMap && matrix.cellMap[x + ":" + y]) || null;
+  }
+
   function forEachVisibleContactCell(matrix, geometry, callback) {
     const visibleGridSize = geometry.xCount * geometry.yCount;
-    if (matrix.cellMap && visibleGridSize < matrix.cells.length) {
+    if (visibleGridSize < matrix.cells.length) {
       for (let xIndex = 0; xIndex < geometry.xCount; xIndex += 1) {
         const x = geometry.xStart + xIndex * matrix.binSize;
         for (let yIndex = 0; yIndex < geometry.yCount; yIndex += 1) {
           const y = geometry.yStart + yIndex * matrix.binSize;
-          const cell = matrix.cellMap[x + ":" + y];
+          const cell = contactCellAt(matrix, x, y);
           if (cell) {
             callback(cell);
           }
@@ -324,6 +387,81 @@
         callback(cell);
       }
     });
+  }
+
+  // Cells are written into one device-pixel buffer and blitted with a single
+  // drawImage. One fillRect per cell (100k–400k per draw) cost ~200 ms.
+  // Each cell covers the same rectangle, in the same order, as the fillRect
+  // it replaces, so overlapping sub-pixel cells still resolve last-wins.
+  let contactScratch = null;
+
+  function paintContactCells(context, pixelRatio, matrix, geometry, scale) {
+    const width = Math.max(1, Math.round(geometry.plotWidth * pixelRatio));
+    const height = Math.max(1, Math.round(geometry.plotHeight * pixelRatio));
+    if (!contactScratch || contactScratch.canvas.width !== width || contactScratch.canvas.height !== height) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const scratchContext = canvas.getContext("2d");
+      const image = scratchContext.createImageData(width, height);
+      contactScratch = { canvas: canvas, context: scratchContext, image: image, pixels: new Uint32Array(image.data.buffer) };
+    }
+    const pixels = contactScratch.pixels;
+    pixels.fill(0);
+    const cellWidth = geometry.cellWidth * pixelRatio;
+    const cellHeight = geometry.cellHeight * pixelRatio;
+    const spanX = (Math.ceil(geometry.cellWidth) + .4) * pixelRatio;
+    const spanY = (Math.ceil(geometry.cellHeight) + .4) * pixelRatio;
+    const lut = isDarkTheme() ? VIRIDIS_LUT_DARK : VIRIDIS_LUT;
+    const lastLut = lut.length - 1;
+    const cap = geometry.cap;
+    const log = scale === "log";
+    const binSize = matrix.binSize;
+    const xStart = geometry.xStart;
+    const yStart = geometry.yStart;
+    const paint = function (cell) {
+      const visualValue = log ? Math.log1p(cell.value) : cell.value;
+      const ratio = cap ? Math.max(0, Math.min(1, visualValue / cap)) : 0;
+      const color = lut[Math.round(ratio * lastLut)];
+      const x0 = ((cell.x - xStart) / binSize) * cellWidth;
+      const y0 = ((cell.y - yStart) / binSize) * cellHeight;
+      const left = Math.max(0, Math.floor(x0));
+      const right = Math.min(width, Math.ceil(x0 + spanX));
+      const top = Math.max(0, Math.floor(y0));
+      const bottom = Math.min(height, Math.ceil(y0 + spanY));
+      // Most cells at full extent are 1–3 px wide: write them directly
+      // rather than paying a fill() call per row.
+      if (right - left <= 8) {
+        for (let y = top; y < bottom; y += 1) {
+          const row = y * width;
+          for (let x = left; x < right; x += 1) {
+            pixels[row + x] = color;
+          }
+        }
+      } else {
+        for (let y = top; y < bottom; y += 1) {
+          pixels.fill(color, y * width + left, y * width + right);
+        }
+      }
+    };
+    if (geometry.xCount * geometry.yCount < matrix.cells.length) {
+      forEachVisibleContactCell(matrix, geometry, paint);
+    } else {
+      const cells = matrix.cells;
+      const xEnd = geometry.xEnd;
+      const yEnd = geometry.yEnd;
+      for (let index = 0; index < cells.length; index += 1) {
+        const cell = cells[index];
+        if (cell.x >= xStart && cell.x <= xEnd && cell.y >= yStart && cell.y <= yEnd) {
+          paint(cell);
+        }
+      }
+    }
+    contactScratch.context.putImageData(contactScratch.image, 0, 0);
+    context.save();
+    context.imageSmoothingEnabled = false;
+    context.drawImage(contactScratch.canvas, geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
+    context.restore();
   }
 
   function drawContactStageCanvas(state, canvas, stage) {
@@ -341,20 +479,10 @@
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = line;
+    context.fillStyle = isDarkTheme() ? surface : line;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
-    forEachVisibleContactCell(matrix, geometry, function (cell) {
-      const visualValue = state.contact.scale === "log" ? Math.log1p(cell.value) : cell.value;
-      const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
-      context.fillStyle = viridis(ratio);
-      context.fillRect(
-        geometry.left + ((cell.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth,
-        geometry.top + ((cell.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight,
-        Math.ceil(geometry.cellWidth) + .4,
-        Math.ceil(geometry.cellHeight) + .4
-      );
-    });
+    paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale);
 
     const selection = getContactStageSelection(state, stage);
     if (selection && selection.x >= geometry.xStart && selection.x <= geometry.xEnd && selection.y >= geometry.yStart && selection.y <= geometry.yEnd) {
@@ -498,7 +626,7 @@
       return;
     }
     const matrix = state.contact.matrix;
-    const cell = matrix.cellMap[point.x + ":" + point.y];
+    const cell = contactCellAt(matrix, point.x, point.y);
     const prefix = state.contact.rnaX + ":" + range(point.x, point.x + matrix.binSize - 1) + " × " + state.contact.rnaY + ":" + range(point.y, point.y + matrix.binSize - 1);
     tooltip.textContent = cell
       ? prefix + " · " + format(cell.records) + " records · " + format(cell.support) + " cluster support"
@@ -593,7 +721,7 @@
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = line;
+    context.fillStyle = isDarkTheme() ? surface : line;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
     forEachVisibleContactCell(matrix, geometry, function (cell) {
@@ -738,7 +866,7 @@
       return;
     }
     const matrix = state.contact.matrix;
-    const cell = matrix.cellMap[point.x + ":" + point.y];
+    const cell = contactCellAt(matrix, point.x, point.y);
     if (!cell) {
       tooltip.textContent = state.contact.rnaX + ":" + range(point.x, point.x + matrix.binSize - 1) + " × " + state.contact.rnaY + ":" + range(point.y, point.y + matrix.binSize - 1) + " · no records";
       return;
@@ -1385,6 +1513,10 @@
       return true;
     }
 
+    if (window.Hyb2Evidence && window.Hyb2Evidence.handleChange(state, element, api)) {
+      return true;
+    }
+
     if (feature === "interaction-filter") {
       state.filters[key] = element.value;
       state.selectedRecordIndex = null;
@@ -1396,14 +1528,7 @@
 
     if (feature === "contact-control") {
       state.contact[key] = element.value;
-      state.contact.matrix = null;
-      state.contact.selection = null;
-      state.contact.overviewSelection = null;
-      state.contact.zoomSelection = null;
-      state.contact.overviewView = null;
-      state.contact.zoomView = null;
-      state.contact.detailView = null;
-      api.render();
+      rebuildContact(state, api);
       return true;
     }
 
@@ -1535,6 +1660,9 @@
     if (window.Hyb2DeseqCard && window.Hyb2DeseqCard.handleInput(state, element)) {
       return true;
     }
+    if (window.Hyb2Evidence && window.Hyb2Evidence.handleInput(state, element)) {
+      return true;
+    }
     if (feature === "interaction-filter" && state.filters) {
       state.filters[key] = element.value;
       state.selectedRecordIndex = null;
@@ -1625,6 +1753,10 @@
     const action = element.dataset.featureAction;
     if (!action) {
       return false;
+    }
+
+    if (window.Hyb2Evidence && window.Hyb2Evidence.handleAction(action, state, api, element)) {
+      return true;
     }
 
     if (window.Hyb2StructureUI && window.Hyb2StructureUI.handleAction(action, state, api, element)) {
@@ -1758,14 +1890,7 @@
     }
 
     if (action === "generate-contact") {
-      state.contact.matrix = null;
-      state.contact.selection = null;
-      state.contact.overviewSelection = null;
-      state.contact.zoomSelection = null;
-      state.contact.overviewView = null;
-      state.contact.zoomView = null;
-      state.contact.detailView = null;
-      api.render();
+      rebuildContact(state, api);
       return true;
     }
 
@@ -2214,6 +2339,12 @@
       return true;
     }
 
+    if (action === "region-toggle-records") {
+      state.region.showAllRecords = !state.region.showAllRecords;
+      api.render();
+      return true;
+    }
+
     if (action === "region-export-csv" || action === "region-export-hyb") {
       const records = state.region.results ? state.region.results.records : [];
       const content = action === "region-export-csv" ? window.Hyb2Data.recordsToCsv(records) : window.Hyb2Data.recordsToHyb(records);
@@ -2270,7 +2401,7 @@
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + " " + height + '">',
       '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
-      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.line + '"/>',
+      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + (isDarkTheme() ? colors.surface : colors.line) + '"/>',
       rects,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '" stroke-width="1"/>',
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.xStart + "</text>",
@@ -2703,17 +2834,24 @@
     };
   }
 
-  function viridis(ratio) {
+  function viridisRgb(ratio, dark) {
+    const scale = dark ? BRAND_SCALE_DARK : BRAND_SCALE;
     const bounded = Math.max(0, Math.min(1, ratio));
-    const scaled = bounded * (BRAND_SCALE.length - 1);
-    const index = Math.min(BRAND_SCALE.length - 2, Math.floor(scaled));
+    const scaled = bounded * (scale.length - 1);
+    const index = Math.min(scale.length - 2, Math.floor(scaled));
     const t = scaled - index;
-    const from = BRAND_SCALE[index];
-    const to = BRAND_SCALE[index + 1];
-    const red = Math.round(from[0] + (to[0] - from[0]) * t);
-    const green = Math.round(from[1] + (to[1] - from[1]) * t);
-    const blue = Math.round(from[2] + (to[2] - from[2]) * t);
-    return "rgb(" + red + ", " + green + ", " + blue + ")";
+    const from = scale[index];
+    const to = scale[index + 1];
+    return [
+      Math.round(from[0] + (to[0] - from[0]) * t),
+      Math.round(from[1] + (to[1] - from[1]) * t),
+      Math.round(from[2] + (to[2] - from[2]) * t)
+    ];
+  }
+
+  function viridis(ratio) {
+    const rgb = viridisRgb(ratio, isDarkTheme());
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
   function effectRgb(value) {

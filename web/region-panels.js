@@ -300,7 +300,7 @@
       return { ready: false, reason: "Load structure A and structure B in the Arc map card (genome-wide folds of the two lineages)." };
     }
     if (!s.interactions) {
-      return { ready: false, reason: "Load the differential interaction table in the Arc map card." };
+      return { ready: false, reason: "No differential interactions yet: run the differential test above and press Use in arc map, or load a differential interaction table in the Arc map card (C)." };
     }
     const seq = sequences(s, rp);
     const notes = [];
@@ -677,7 +677,7 @@
         (r.errors && r.errors[key] ? '<p class="notice notice-error">' + esc(r.errors[key]) + "</p>" : "") + "</div>";
     };
     const out = ['<section class="data-card region-panels-card">',
-      '<div class="card-title-row"><div><h2>Region structures (D, E)</h2><span class="card-note">For each direction, the most significant interaction that the enriched lineage\'s own structure forms (a predicted pair within reach of both arms), cut from both structures loaded in the Arc map card. Structure A is condition one\'s lineage, B is condition two\'s.</span></div></div>',
+      '<div class="card-title-row"><div><h2>D, E · Region structures</h2><span class="card-note">For each direction, the most significant interaction that the enriched lineage\'s own structure forms (a predicted pair within reach of both arms), cut from both structures loaded in the Arc map card. Structure A is condition one\'s lineage, B is condition two\'s.</span></div></div>',
       '<div class="comparison-control-grid">', control("padj <", "padj", r.padj, "0.01"), control("Reach (nt)", "reach", r.reach, "50"), control("Flank (nt)", "flank", r.flank, "15"), "</div>"];
     const needsFasta = s.a && s.b && (!s.a.sequence || !s.b.sequence);
     if (needsFasta || r.fastaA || r.fastaB) {

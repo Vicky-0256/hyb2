@@ -808,8 +808,10 @@
     }
 
     const xs = source.x || [];
-    const cellMap = Object.create(null);
     const entries = new Array(xs.length);
+    const lookup = new Map();
+    const displayValues = new Float64Array(xs.length);
+    let displayMax = 0;
     for (let index = 0; index < xs.length; index += 1) {
       const cell = {
         x: xs[index],
@@ -819,19 +821,22 @@
         value: source.count[index]
       };
       entries[index] = cell;
-      cellMap[cell.x + ":" + cell.y] = cell;
+      lookup.set(cellKey(cell.x, cell.y), cell);
+      const display = contact.scale === "log" ? Math.log1p(cell.value) : cell.value;
+      displayValues[index] = display;
+      if (display > displayMax) {
+        displayMax = display;
+      }
     }
-    const values = entries.map(function (cell) { return cell.value; }).sort(function (left, right) { return left - right; });
-    const displayValues = values.map(function (value) { return contact.scale === "log" ? Math.log1p(value) : value; });
-    const cap = resolveColourCap(displayValues, contact);
+    // The cap needs at most two order statistics, found by selection.
+    const cap = resolveContactCap(displayValues, displayMax, contact);
     const extent = source.extent || {};
 
-    return {
+    const matrix = {
       ready: true,
       reason: "",
       limitExceeded: false,
       cells: entries,
-      cellMap: cellMap,
       binSize: binSize,
       xMin: Number.isFinite(extent.xMin) ? extent.xMin : 0,
       xMax: Number.isFinite(extent.xMax) ? extent.xMax : 0,
@@ -845,11 +850,98 @@
       maximumCells: limits.maximumCells,
       maximumBinContributions: limits.maximumBinContributions,
       resourceBudget: limits.resourceBudget,
-      max: displayValues.length ? displayValues[displayValues.length - 1] : 0,
+      max: displayMax,
       cap: cap,
       binSizeAdjusted: !!source.binSizeAdjusted,
       requestedBinSize: source.requestedBinSize || binSize
     };
+    // Constant-time lookup without building a string key per cell.
+    Object.defineProperty(matrix, "getCell", {
+      value: function (x, y) {
+        return lookup.get(cellKey(x, y)) || null;
+      }
+    });
+    // The "x:y" map is large (hundreds of thousands of keys at 5 nt) and
+    // most views never need it, so it is built on first access.
+    let cellMap = null;
+    Object.defineProperty(matrix, "cellMap", {
+      enumerable: true,
+      get: function () {
+        if (!cellMap) {
+          cellMap = Object.create(null);
+          for (let index = 0; index < entries.length; index += 1) {
+            cellMap[entries[index].x + ":" + entries[index].y] = entries[index];
+          }
+        }
+        return cellMap;
+      }
+    });
+    return matrix;
+  }
+
+  // Same result as resolveColourCap(sorted values), without sorting: the
+  // cap needs at most two order statistics, found by selection in O(n).
+  function resolveContactCap(values, max, contact) {
+    if (!values.length) {
+      return 0;
+    }
+    if (contact.colourCap === "max") {
+      return max;
+    }
+    if (contact.colourCap === "custom") {
+      const custom = numberOrNull(contact.customCap);
+      return custom !== null && custom > 0 ? custom : max;
+    }
+    const fraction = (Number(contact.colourCap) || 95) / 100;
+    const position = Math.max(0, Math.min(values.length - 1, (values.length - 1) * fraction));
+    const lower = Math.floor(position);
+    const upper = Math.ceil(position);
+    const lowerValue = selectKth(values, lower);
+    if (upper === lower) {
+      return lowerValue;
+    }
+    // After selection everything right of `lower` is >= its value.
+    let upperValue = Infinity;
+    for (let index = lower + 1; index < values.length; index += 1) {
+      if (values[index] < upperValue) {
+        upperValue = values[index];
+      }
+    }
+    return lowerValue + (upperValue - lowerValue) * (position - lower);
+  }
+
+  // Hoare-partition quickselect; reorders `values` in place.
+  function selectKth(values, k) {
+    let left = 0;
+    let right = values.length - 1;
+    while (right > left) {
+      const pivot = values[(left + right) >> 1];
+      let i = left;
+      let j = right;
+      while (i <= j) {
+        while (values[i] < pivot) {
+          i += 1;
+        }
+        while (values[j] > pivot) {
+          j -= 1;
+        }
+        if (i <= j) {
+          const swap = values[i];
+          values[i] = values[j];
+          values[j] = swap;
+          i += 1;
+          j -= 1;
+        }
+      }
+      if (k <= j) {
+        right = j;
+      } else if (k >= i) {
+        left = i;
+      } else {
+        break;
+      }
+    }
+    return values[k];
   }
 
   function resolveColourCap(values, contact) {
@@ -1329,7 +1421,9 @@
         result: {
           ready: false,
           reason: !groupA.length || !groupB.length
-            ? "Assign at least one local dataset to each condition."
+            ? (!groupB.length && groupA.length
+              ? "Condition B has no dataset yet. Use Add HYB datasets for the second sample, then set its Condition to B."
+              : "Condition A has no dataset yet. Set at least one dataset's Condition to A.")
             : "Choose RNA X and RNA Y to compare.",
           groupA: groupA,
           groupB: groupB,

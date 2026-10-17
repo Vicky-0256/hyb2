@@ -124,7 +124,7 @@
 }
 
 .advanced-filters summary::marker {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .control-actions {
@@ -154,7 +154,7 @@
 }
 
 .bar-row-button:hover .bar-name {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .bar-row-button:hover .bar-fill {
@@ -596,7 +596,7 @@
 }
 
 .method-note strong {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: .04em;
@@ -677,6 +677,22 @@
   font-family: var(--font-mono);
   font-size: 11px;
   text-transform: uppercase;
+}
+
+/* The technical reason, folded under the plain statement. */
+.comparison-note-details {
+  grid-column: 2;
+  font-size: 12px;
+}
+
+.comparison-note-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.comparison-note-details span {
+  display: block;
+  margin-top: 6px;
 }
 
 .comparison-datasets {
@@ -1024,7 +1040,7 @@
 
 .tweaks-trigger:hover {
   border-color: var(--primary);
-  color: var(--primary);
+  color: var(--primary-ink);
   transform: translateY(-1px);
 }
 
@@ -1232,6 +1248,10 @@
     grid-template-columns: 1fr;
   }
 
+  .comparison-note-details {
+    grid-column: auto;
+  }
+
   .method-badge {
     margin-top: 8px;
   }
@@ -1281,6 +1301,59 @@
   .contact-stage-canvas {
     height: 100%;
   }
+}
+
+/* CPLfold numeric settings, folded; their values stay in the summary. */
+.structure-advanced {
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 8px);
+  padding: 10px 12px;
+}
+
+.structure-advanced summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.structure-advanced-values {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted-strong);
+  overflow-wrap: anywhere;
+}
+
+/* Why Predict is disabled, next to it. */
+.structure-run-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--warning);
+}
+
+/* Units keep their case in upper-case table headers. */
+.virtual-table-head .unit {
+  text-transform: none;
+}
+
+
+/* The plain statement first; the engine details folded under it. */
+.method-limit-details {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.method-limit-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.method-limit-details span {
+  display: block;
+  margin-top: 6px;
 }
 
 /* Arc map (arc-map.js) */
@@ -1336,4 +1409,19 @@
 .comparison-table-controls {
   align-items: end;
   margin: 0 0 12px;
+}
+
+.deseq-method {
+  grid-column: auto;
+  margin-top: 12px;
+}
+
+.comparison-export-more summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.comparison-export-more[open] summary {
+  margin-bottom: 8px;
 }

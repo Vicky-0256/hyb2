@@ -216,14 +216,22 @@
       }
 
       const general = [
-        { label: "Open files", action: "open-files" },
-        { label: "Help", action: "open-help" },
-        { label: "Privacy model", action: "open-privacy" },
-        { label: "Clear session…", action: "clear-session" }
+        { label: "Data and files", action: "open-files" },
+        { label: "Help for this page", action: "open-help" },
+        { label: "Display settings", action: "open-display" },
+        { label: "Privacy", action: "open-privacy" },
+        { label: "Start over…", action: "start-over", fallback: "open-files" }
       ];
       general.forEach(function (entry) {
-        if (app && app.querySelector('[data-action="' + entry.action + '"]')) {
-          out.push({ group: "General", label: entry.label, hint: "", icon: "action", run: function () { clickAction('[data-action="' + entry.action + '"]'); } });
+        // Start over lives in the Data panel: open it, then ask.
+        const opener = app && (app.querySelector('[data-action="' + entry.action + '"]') ? entry.action : entry.fallback && app.querySelector('[data-action="' + entry.fallback + '"]') ? entry.fallback : null);
+        if (opener) {
+          out.push({ group: "General", label: entry.label, hint: "", icon: "action", run: function () {
+            clickAction('[data-action="' + opener + '"]');
+            if (opener !== entry.action) {
+              window.requestAnimationFrame(function () { clickAction('[data-action="' + entry.action + '"]'); });
+            }
+          } });
         }
       });
       out.push({
@@ -231,7 +239,12 @@
         label: root.dataset.theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
         hint: "",
         icon: "theme",
-        run: function () { clickAction('[data-action="toggle-theme"]'); }
+        // the theme switch lives in the Display panel
+        run: function () {
+          if (!clickAction('[data-action="toggle-theme"]') && clickAction('[data-action="open-display"]')) {
+            window.requestAnimationFrame(function () { clickAction('[data-action="toggle-theme"]'); });
+          }
+        }
       });
       out.push({
         group: "General",
@@ -410,7 +423,7 @@
         finish();
       } else {
         layer.classList.add("is-leaving");
-        window.setTimeout(finish, 180);
+        window.setTimeout(finish, parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--dur-exit")) || 200);
       }
       if (!skipFocus && returnFocus && returnFocus.isConnected) {
         returnFocus.focus({ preventScroll: true });
@@ -470,6 +483,13 @@
     return button ? (button.getAttribute("aria-label") || page) : page;
   }
 
+  // One Esc closes one layer. app.js may close a dialog before the handler
+  // below runs, so note in the capture phase whether a dialog was open.
+  let escClosedDialog = false;
+  document.addEventListener("keydown", function (event) {
+    escClosedDialog = event.key === "Escape" && !!document.querySelector("#app [data-dialog]");
+  }, true);
+
   document.addEventListener("keydown", function (event) {
     const key = event.key;
 
@@ -494,6 +514,17 @@
         trapFocus(dialog, event);
       }
       return;
+    }
+
+    // Esc also closes the non-modal panels, unless it is clearing a field
+    // outside them or app.js already used it to close a dialog.
+    if (key === "Escape" && !escClosedDialog) {
+      const panelClose = closePanelButton();
+      if (panelClose && (!isTyping(event.target) || panelClose.closest("aside").contains(event.target))) {
+        event.preventDefault();
+        panelClose.click();
+        return;
+      }
     }
 
     if (event.metaKey || event.ctrlKey || event.altKey || isTyping(event.target)) {
@@ -714,7 +745,7 @@
     ripple.addEventListener("animationend", function () { ripple.remove(); });
   }, { passive: true });
 
-  const SPOTLIGHT = ".metric-card, .web-capability-card, .legacy-workflow-guide, .file-card-inner, .hero-stage";
+  const SPOTLIGHT = ".metric-card, .web-capability-card, .file-card-inner, .hero-stage";
   document.addEventListener("pointermove", function (event) {
     const card = event.target.closest && event.target.closest(SPOTLIGHT);
     if (!card) {
@@ -762,6 +793,39 @@
     const control = event.target.closest && event.target.closest("[data-action]");
     if (control && !control.closest("[data-dialog]")) {
       lastAction = control.getAttribute("data-action");
+    }
+  }, true);
+
+  // The record drawer is not a dialog, and the render that opens or closes
+  // it replaces the row that was clicked, so focus would fall to <body>.
+  // Put it back on the matching row in the new tree.
+  let openedRecord = null;
+
+  function closePanelButton() {
+    return app && app.querySelector('.record-drawer [data-feature-action="close-record"]');
+  }
+
+  function focusAfterRender(selector) {
+    window.requestAnimationFrame(function () {
+      const target = app && app.querySelector(selector);
+      if (target && visible(target) && (!document.activeElement || document.activeElement === document.body)) {
+        target.focus({ preventScroll: true });
+      }
+    });
+  }
+
+  // Capture phase: read the clicked control before the render replaces it
+  // (and motion.js strips the old copy for its exit animation).
+  document.addEventListener("click", function (event) {
+    const control = event.target.closest && event.target.closest('[data-feature-action="open-record"], [data-feature-action="close-record"]');
+    if (!control) {
+      return;
+    }
+    if (control.matches('[data-feature-action="open-record"]')) {
+      openedRecord = control.getAttribute("data-record-index");
+      focusAfterRender('.virtual-row[data-record-index="' + openedRecord + '"]');
+    } else {
+      focusAfterRender(openedRecord !== null ? '.virtual-row[data-record-index="' + openedRecord + '"]' : ".interaction-table-card");
     }
   }, true);
 

@@ -436,8 +436,9 @@
             return data().contactMatrixFromBins(result, contact);
           });
         },
-        apply: function (matrix) { contact.matrix = matrix; },
+        apply: function (matrix) { contact.matrix = matrix; contact.matrixStale = false; },
         fallback: function (error) {
+          contact.matrixStale = false;
           contact.matrix = data().contactMatrixFromBins({ ready: false, limitExceeded: true, reason: errorMessage(error, "The contact map could not be loaded."), binSize: contact.binSize }, contact);
         }
       }];

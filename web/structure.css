@@ -6,7 +6,7 @@
 
 .fold-status-local strong,
 .fold-status-mfe strong {
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .structure-thermo-grid {
@@ -230,7 +230,7 @@
 }
 
 .cplfold-capacity-row strong {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-size: 13px;
 }
 
@@ -268,7 +268,7 @@
 }
 
 .cplfold-local-cta strong {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-size: 13px;
 }
 
@@ -308,7 +308,7 @@
 
 .cplfold-local-guide summary::after {
   flex: 0 0 auto;
-  color: var(--primary);
+  color: var(--primary-ink);
   content: "+";
   font-size: 18px;
   line-height: 1;
@@ -325,7 +325,7 @@
 }
 
 .cplfold-local-guide summary strong {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-size: 13px;
 }
 
@@ -351,7 +351,7 @@
 }
 
 .cplfold-guide-steps li::marker {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-weight: 700;
 }
 
@@ -374,7 +374,7 @@
 }
 
 .cplfold-guide-steps em {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-style: normal;
   font-weight: 700;
 }
@@ -801,7 +801,7 @@
 }
 
 .candidate-view-state {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
@@ -816,7 +816,7 @@
   padding: 3px 7px;
   border-radius: 999px;
   background: var(--primary-soft);
-  color: var(--primary);
+  color: var(--primary-ink);
   font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
@@ -935,14 +935,14 @@
 .structure-view-option:hover,
 .structure-view-option:focus-visible {
   border-color: var(--primary);
-  color: var(--primary);
+  color: var(--primary-ink);
   outline: none;
 }
 
 .structure-view-option.is-active {
   border-color: var(--primary);
   background: var(--primary-soft);
-  color: var(--primary);
+  color: var(--primary-ink);
 }
 
 .structure-diagram {
@@ -1026,7 +1026,7 @@
 }
 
 .structure-nucleotide-inspector strong {
-  color: var(--primary);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: 18px;
 }

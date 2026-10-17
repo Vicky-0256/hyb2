@@ -27,7 +27,7 @@
  *   invalidRecords, totalLines, skippedBlankLines, skippedCommentLines,
  *   supportInteractions, rawReadInteractions, rawReadCountRecords, withDg,
  *   overlapScoreRecords, canonicalRecords, legacyClusterRecords,
- *   ambiguousColumn16Records, intraRecords, intraSupport, interRecords,
+ *   ambiguousColumn16Records, inferredChimeraTypeRecords, intraRecords, intraSupport, interRecords,
  *   interSupport, homodimerRecords, homodimerRawReads, uniqueRNAs,
  *   uniquePairs, rnaNames[], rnaCounts[{name, records, support, rawReads,
  *   rawReadCountRecords, overlapTotal, overlapRecords}] (top 10),
@@ -298,7 +298,7 @@
     "fileSize", "totalLines", "processedBytes", "validRecords", "invalidRecords", "skippedBlankLines",
     "skippedCommentLines", "supportInteractions", "rawReadInteractions", "rawReadCountRecords", "withDg",
     "supportMetadataRecords", "overlapScoreRecords", "canonicalRecords", "legacyClusterRecords",
-    "ambiguousColumn16Records", "intraRecords", "intraSupport", "interRecords", "interSupport",
+    "ambiguousColumn16Records", "inferredChimeraTypeRecords", "intraRecords", "intraSupport", "interRecords", "interSupport",
     "homodimerRecords", "homodimerRawReads", "omittedErrorCount"
   ];
 

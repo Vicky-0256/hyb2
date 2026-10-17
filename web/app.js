@@ -54,7 +54,6 @@
     error: null,
     theme: window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
     density: "comfortable",
-    tweaksOpen: false,
     toastTimer: null,
     pointerActionPending: false,
     pendingCommittedInputRender: false,
@@ -88,6 +87,16 @@
   ];
   const reportPage = { id: "report", label: "Report", shortLabel: "RP" };
   const workspacePages = analysisPages.concat([reportPage]);
+
+  // Folded sections (<details data-open-key>) keep their open state across
+  // renders, which replace the whole page.
+  window.Hyb2OpenSections = window.Hyb2OpenSections || Object.create(null);
+  function handleSectionToggle(event) {
+    const target = event.target;
+    if (target && target.matches && target.matches("details[data-open-key]")) {
+      window.Hyb2OpenSections[target.dataset.openKey] = target.open;
+    }
+  }
 
   const hostEvents = [
     ["pointerdown", handlePointerDown],
@@ -176,6 +185,7 @@
     cancelComparisonLoads();
     stopAnalysisWorkers();
     hostEvents.forEach(function (entry) { app.removeEventListener(entry[0], entry[1]); });
+    app.removeEventListener("toggle", handleSectionToggle, true);
     window.removeEventListener("hashchange", handleHashChange);
     if (pageData) {
       pageData.destroy();
@@ -262,6 +272,7 @@
       onError: function (error) { emit("error", error); }
     });
     pageData.setProvider(provider);
+    app.addEventListener("toggle", handleSectionToggle, true);
     app.addEventListener("pointerdown", handlePointerDown);
     app.addEventListener("click", handleClick);
     app.addEventListener("click", finishPointerAction);
@@ -621,9 +632,9 @@
       '  <header class="landing-header">',
       renderBrand(),
       '    <div class="header-actions">',
-      '      <button class="local-chip" type="button" data-action="open-privacy">Local-only processing</button>',
+      '      <button class="local-chip" type="button" data-action="open-privacy" title="What stays on this device">Local only</button>',
       '      <button class="text-button" type="button" data-action="open-help">Help</button>',
-      '      <button class="icon-button" type="button" data-action="toggle-theme" aria-label="Toggle color theme">' + themeGlyph() + "</button>",
+      renderDisplayButton(),
       "    </div>",
       "  </header>",
       '  <main id="main-content" class="landing-main">',
@@ -646,13 +657,63 @@
       renderFilePanel(),
       "    </section>",
       '    <div class="landing-details">',
+      renderDesktopDownloadCard(),
       renderWebCapabilityCard(),
-      renderLegacyWorkflowGuide(),
       "    </div>",
       "  </main>",
       renderDialog(),
       '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
       "</div>"
+    ].join("");
+  }
+
+  // What the first rejected line looked like, for the parse error.
+  function describeParseProblem(problem) {
+    const content = String(problem.content || "");
+    const columns = content ? content.split("\t").length : 0;
+    let text = "Line " + problem.line + ": " + problem.error;
+    if (/tab-separated columns/.test(problem.error || "")) {
+      text += " (found " + columns + (columns === 1 ? " column" : " columns") + (content.indexOf("\t") === -1 ? "; no tab characters" : "") + ")";
+    }
+    return text + ".";
+  }
+
+  function hybFormatHint() {
+    return "A HYB line has 15 or more tab-separated columns: read ID, sequence, ΔG, then name and coordinates of each arm, as written by the hyb pipeline or HYB2 Desktop. FASTQ, SAM and FASTA reads need HYB2 Desktop first.";
+  }
+
+  function visitorOS() {
+    const platform = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "").toLowerCase();
+    if (platform.indexOf("mac") !== -1) return "mac";
+    if (platform.indexOf("win") !== -1) return "windows";
+    if (platform.indexOf("linux") !== -1) return "linux";
+    return "";
+  }
+
+  // The desktop app's installers, from the latest GitHub release (the
+  // release workflow publishes them under these stable names). Kept inside
+  // the function: renderLanding runs before later top-level consts exist.
+  function renderDesktopDownloadCard() {
+    const releases = "https://github.com/Vicky-0256/hyb2/releases";
+    const downloads = [
+      { os: "mac", label: "macOS · Apple silicon", file: "HYB2-Desktop-macOS-arm64.dmg" },
+      { os: "windows", label: "Windows · 64-bit", file: "HYB2-Desktop-Windows-x64-Setup.exe" },
+      { os: "linux", label: "Linux · .deb", file: "HYB2-Desktop-Linux-x64.deb" },
+      { os: "linux", label: "Linux · .tar.gz", file: "HYB2-Desktop-Linux-x64.tar.gz" }
+    ];
+    const os = visitorOS();
+    const items = downloads.map(function (item) {
+      const mine = item.os === os;
+      return '<li><a class="desktop-download-link' + (mine ? ' is-recommended' : '') + '" href="' + releases + '/latest/download/' + item.file + '">' +
+        '<span>' + item.label + '</span><strong>' + (mine ? 'For this computer' : 'Download') + '</strong></a></li>';
+    }).join("");
+    return [
+      '<section class="web-capability-card desktop-download-card" aria-labelledby="desktop-download-title">',
+      '<div class="web-capability-heading"><div><span class="example-kicker">Desktop app</span><h2 id="desktop-download-title">From raw reads to structure</h2></div><span class="web-capability-chip">Offline</span></div>',
+      '<p class="web-capability-note desktop-download-lede">HYB2 Desktop runs the whole pipeline on your computer: FASTQ mapping, hybrid calling, QC, DESeq2 comparisons and CPLfold structures.</p>',
+      '<ul class="desktop-download-list">', items, '</ul>',
+      '<p class="web-capability-note">Not yet signed: on first launch, macOS asks you to allow it in System Settings → Privacy &amp; Security, and Windows SmartScreen under More info → Run anyway. <a href="' + releases + '/latest">Release notes, older versions and checksums</a>.</p>',
+      '</section>'
     ].join("");
   }
 
@@ -673,16 +734,6 @@
       status(hasWorker && hasWasm, 'CPLfold Pyodide worker · capacity measured when needed', 'Load on first run'),
       '</ul>',
       '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately. This browser workspace processes your data locally.</p>',
-      '</section>'
-    ].join("");
-  }
-
-  function renderLegacyWorkflowGuide() {
-    return [
-      '<section class="legacy-workflow-guide" aria-labelledby="legacy-workflow-title">',
-      '<span class="example-kicker">RNA secondary structure</span><h2 id="legacy-workflow-title">Explore RNA folding and interactions</h2>',
-      '<ol><li><strong>Short-ranged intramolecular</strong><span>One contiguous reference region.</span></li><li><strong>Long-ranged intramolecular</strong><span>Two regions of the same RNA with a 100 nt spacer.</span></li><li><strong>Intermolecular</strong><span>Two regions with the original 100 nt spacer.</span></li><li><strong>Homodimer</strong><span>Two regions, filtered to overlap score ≥ 5.</span></li></ol>',
-      '<p>After loading a HYB file, open <strong>RNA Structure</strong> and select <strong>Folding workflow</strong>. The selected workflow configures the reference layout and evidence filter for COMRADES(ViennaRNA). Choose Custom for CPLfold.</p>',
       '</section>'
     ].join("");
   }
@@ -708,11 +759,16 @@
     }
 
     if (state.error) {
+      const error = state.error;
       return [
         '<div class="file-card"><div class="file-card-inner load-state">',
-        '  <div class="parse-error"><strong>' + escapeHtml(state.error.title) + "</strong><br>" + escapeHtml(state.error.message) + "</div>",
+        '  <div class="parse-error" role="alert"><strong>' + escapeHtml(error.title) + "</strong><br>" +
+          (error.fileName ? escapeHtml(error.fileName) + ": " : "") + escapeHtml(error.message) +
+          (error.detail ? '<span class="parse-error-detail">' + escapeHtml(error.detail) + "</span>" : "") + "</div>",
+        error.hint ? '  <p class="parse-error-hint">' + escapeHtml(error.hint) + "</p>" : "",
         '  <div class="dialog-actions">',
-        '    <button class="button button-secondary" type="button" data-action="reset-file">Choose another file</button>',
+        '    <button class="button button-secondary" type="button" data-action="load-example">Try the example instead</button>',
+        '    <button class="button" type="button" data-action="reset-file">Choose another file</button>',
         "  </div>",
         "</div></div>"
       ].join("");
@@ -741,7 +797,7 @@
       '      <h3 class="dropzone-title">Drop a .hyb file here</h3>',
       '      <p class="dropzone-copy">or choose a file from this device</p>',
       '      <button class="button" type="button" data-action="choose-hyb">Choose HYB file</button>',
-      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files, also gzip-compressed (.gz)</span>',
+      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line), also gzip-compressed (.gz). Raw FASTQ reads? HYB2 Desktop, below, turns them into .hyb.</span>',
       "    </div>",
       "  </div>",
       '  <section class="reference-upload" aria-labelledby="reference-upload-title">',
@@ -795,7 +851,7 @@
     const text = setup.error
       ? "Example comparison setup stopped: " + setup.error
       : (setup.ready
-        ? "Compare page ready: " + example.labels.A + " (ZAFR_REP1, ZAFR_REP2) vs " + example.labels.B + " (ZILM_REP2, ZILM_REP3), 10-nt bins, similarity minimum 10; arc map with both CPLfold folds and the gene track. Run the differential test on the Compare page to fill panels A and C to G."
+        ? "Compare page ready: " + example.labels.A + " (ZAFR_REP1, ZAFR_REP2) vs " + example.labels.B + " (ZILM_REP2, ZILM_REP3), 10-nt bins, similarity minimum 10; the arc map has both CPLfold structures and the gene track. On the Compare page, run the differential test to find which contacts differ and to fill the figure panels that depend on it."
         : setup.stage + (setup.total ? " (" + formatNumber(setup.done) + " of " + formatNumber(setup.total) + ")" : "") + "…");
     return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>";
   }
@@ -988,7 +1044,6 @@
       "    </div>",
       "  </main>",
       renderMobileNav(),
-      renderTweaks(),
       renderDialog(),
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Replace HYB file">',
       '  <input id="comparison-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" multiple aria-label="Add HYB datasets for comparison">',
@@ -1011,12 +1066,13 @@
       "      </div>",
       "    </div>",
       '    <div class="toolbar-actions">',
-      '      <button class="local-chip" type="button" data-action="open-privacy">Local-only processing</button>',
-      '      <button class="text-button" type="button" data-action="open-files">Files</button>',
+      '      <button class="local-chip" type="button" data-action="open-privacy" title="What stays on this device">Local only</button>',
+      '      <span class="toolbar-divider" aria-hidden="true"></span>',
+      '      <button class="text-button" type="button" data-action="open-files">Data</button>',
       '      <button class="text-button report-button" type="button" data-action="navigate" data-page="report">Report</button>',
-      '      <button class="text-button start-over-button" type="button" data-action="start-over" aria-label="Clear all analysis and return to file upload">Start over</button>',
+      '      <span class="toolbar-divider" aria-hidden="true"></span>',
       '      <button class="text-button" type="button" data-action="open-help">Help</button>',
-      '      <button class="icon-button" type="button" data-action="toggle-theme" aria-label="Toggle color theme">' + themeGlyph() + "</button>",
+      renderDisplayButton(),
       "    </div>",
       "  </header>"
     ].join("");
@@ -1050,19 +1106,8 @@
     return '      <span class="sidebar-file-info sidebar-file-compare" title="' + escapeAttribute(others.map(function (dataset) { return dataset.fileName; }).join(", ")) + '">Compare: ' + escapeHtml(label("A")) + " ×" + count("A") + " vs " + escapeHtml(label("B")) + " ×" + count("B") + "</span>";
   }
 
-  function renderTweaks() {
-    if (!state.tweaksOpen) {
-      return '<button class="tweaks-trigger" type="button" data-action="toggle-tweaks">Tweaks</button>';
-    }
-
-    return [
-      '<aside class="tweaks-panel" aria-label="Display tweaks">',
-      '<div class="card-title-row"><h2>Tweaks</h2><button class="icon-button" type="button" data-action="toggle-tweaks" aria-label="Close tweaks">×</button></div>',
-      '<label class="control-field"><span>Appearance</span><button class="quiet-button tweaks-choice" type="button" data-action="toggle-theme">' + (state.theme === "light" ? "Switch to dark" : "Switch to light") + "</button></label>",
-      '<label class="control-field"><span>Motion</span><button class="quiet-button tweaks-choice" type="button" data-motion-toggle>' + (document.documentElement.dataset.motion === "reduced" ? "Turn motion on" : "Reduce motion") + "</button></label>",
-      '<label class="control-field"><span>Data density</span><select id="density-input"><option value="comfortable"' + (state.density === "comfortable" ? " selected" : "") + '>Comfortable</option><option value="compact"' + (state.density === "compact" ? " selected" : "") + ">Compact</option></select></label>",
-      "</aside>"
-    ].join("");
+  function renderDisplayButton() {
+    return '      <button class="icon-button display-button" type="button" data-action="open-display" aria-label="Display settings" title="Display settings"><svg viewBox="0 0 20 20" aria-hidden="true" class="display-icon"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2.2M10 15.3v2.2M2.5 10h2.2M15.3 10h2.2M4.7 4.7l1.6 1.6M13.7 13.7l1.6 1.6M4.7 15.3l1.6-1.6M13.7 6.3l1.6-1.6"/></svg></button>';
   }
 
   function renderSidebar() {
@@ -1079,19 +1124,18 @@
       '      <span class="nav-label">Analysis</span>',
       analysisPages.map(renderNavButton).join(""),
       "    </nav>",
-      '    <nav class="sidebar-nav" aria-label="Data management">',
-      '      <span class="nav-label">Data management</span>',
-      renderActionNavButton("open-files", "Files", "FI"),
+      '    <nav class="sidebar-nav" aria-label="Session">',
+      '      <span class="nav-label">Session</span>',
+      renderActionNavButton("open-files", "Data", "DA"),
+      renderNavButton({ id: "validation", label: "Import check", shortLabel: "IC" }),
       renderNavButton(reportPage),
-      renderNavButton({ id: "validation", label: "Validation", shortLabel: "VA" }),
+      "    </nav>",
+      '    <nav class="sidebar-nav" aria-label="Reference">',
+      '      <span class="nav-label">Reference</span>',
       renderNavButton({ id: "methods", label: "Methods", shortLabel: "MT" }),
       renderNavButton({ id: "file-format", label: "File format", shortLabel: "FF" }),
       renderNavButton({ id: "privacy", label: "Privacy", shortLabel: "PR" }),
       "    </nav>",
-      '    <div class="sidebar-footer">',
-      '      <div class="local-status"><strong>Files stay local</strong><span>Stored only in this tab’s memory.</span></div>',
-      '      <button class="clear-session quiet-button" type="button" data-action="clear-session">Clear session</button>',
-      "    </div>",
       "  </aside>"
     ].join("");
   }
@@ -1175,55 +1219,147 @@
     }
 
     if (state.dialog === "privacy") {
-      return [
-        '<div class="pop-layer">',
-        '  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="privacy-dialog-title" data-dialog>',
-        '    <h2 id="privacy-dialog-title">Your data stays on this device</h2>',
-        "    <p>HYB2 Web Lite is static client-side software. It has no upload flow.</p>",
-        "    <ul>",
-        "      <li>HYB files are read locally by this tab.</li>",
-        "      <li>Parsing happens in a dedicated browser worker.</li>",
-        "      <li>Results are held in memory and are not saved to a server.</li>",
-        "      <li>Refreshing or clearing the session removes loaded data.</li>",
-        "    </ul>",
-        '    <div class="dialog-actions"><button class="button" type="button" data-action="close-dialog">Close</button></div>',
-        "  </section>",
-        "</div>"
-      ].join("");
+      return renderDrawer("privacy", "Your data stays on this device", "HYB2 Web Lite runs entirely in this browser tab. Nothing you load is uploaded.", [
+        drawerSection("What happens to your files", "<ul class=\"drawer-list\">" +
+          "<li>HYB and FASTA files are read by this tab; there is no upload step and no server.</li>" +
+          "<li>Results are kept in this tab’s memory only. Refreshing the page or starting over removes them.</li>" +
+          "<li>Nothing is stored in the browser between visits, and the site has no analytics.</li>" +
+          "</ul>"),
+        drawerSection("The one exception you control", "<p>Related research on the RNA Structure page is off by default. When you turn it on, only the identifier and species you confirm are sent to EBI (RNAcentral and Europe PMC).</p>"),
+        state.analysisEntered ? '<div class="drawer-links"><button class="quiet-button" type="button" data-action="navigate" data-page="privacy">Read the full privacy notes</button></div>' : ""
+      ].join(""));
     }
 
     if (state.dialog === "clear") {
       return [
         '<div class="pop-layer">',
         '  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="clear-dialog-title" data-dialog>',
-        '    <h2 id="clear-dialog-title">Clear this analysis?</h2>',
-        "    <p>This removes the HYB file, validation report, and generated results from memory in this browser tab.</p>",
-        '    <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancel</button><button class="button button-danger" type="button" data-action="confirm-clear">Clear analysis</button></div>',
+        '    <h2 id="clear-dialog-title">Start over?</h2>',
+        "    <p>This removes every loaded file and result from this browser tab and returns to the start page. Export anything you want to keep first.</p>",
+        '    <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancel</button><button class="button button-danger" type="button" data-action="confirm-clear">Start over</button></div>',
         "  </section>",
         "</div>"
       ].join("");
     }
 
     if (state.dialog === "files" && state.summary) {
-      return [
-        '<div class="pop-layer">',
-        '  <section class="dialog files-dialog" role="dialog" aria-modal="true" aria-labelledby="files-dialog-title" data-dialog>',
-        window.Hyb2Pages.getFilesDialogBody(state),
-        '    <div class="dialog-actions"><button class="button" type="button" data-action="close-dialog">Close</button></div>',
-        "  </section>",
-        "</div>"
-      ].join("");
+      return renderDrawer("files", "Data", "The files this session is analysing, how their RNA names match the reference, and how to reproduce the results.",
+        window.Hyb2Pages.getFilesDialogBody(state) +
+        drawerSection("Start over", '<p>Removes every loaded file and result from this tab and returns to the start page.</p><div class="inline-actions"><button class="button button-danger" type="button" data-action="start-over">Start over…</button></div>', "drawer-danger"));
     }
 
+    if (state.dialog === "display") {
+      const dark = state.theme === "dark";
+      const reduced = document.documentElement.dataset.motion === "reduced";
+      return renderDrawer("display", "Display", "How the workspace looks on this device. Results and exports are not affected.", [
+        drawerSection("Theme", '<div class="segmented" role="group" aria-label="Theme"><button type="button" class="segmented-option' + (dark ? "" : " is-selected") + '" aria-pressed="' + !dark + '"' + (dark ? ' data-action="toggle-theme"' : "") + '>Light</button><button type="button" class="segmented-option' + (dark ? " is-selected" : "") + '" aria-pressed="' + dark + '"' + (dark ? "" : ' data-action="toggle-theme"') + ">Dark</button></div>"),
+        drawerSection("Motion", '<div class="segmented" role="group" aria-label="Motion"><button type="button" class="segmented-option' + (reduced ? "" : " is-selected") + '" aria-pressed="' + !reduced + '"' + (reduced ? " data-motion-toggle" : "") + '>Animated</button><button type="button" class="segmented-option' + (reduced ? " is-selected" : "") + '" aria-pressed="' + reduced + '"' + (reduced ? "" : " data-motion-toggle") + ">Reduced</button></div><p>Reduced keeps every change instant; it follows your system setting until you choose here.</p>"),
+        drawerSection("Table density", '<label class="control-field"><span class="visually-hidden">Table density</span><select id="density-input"><option value="comfortable"' + (state.density === "comfortable" ? " selected" : "") + '>Comfortable rows</option><option value="compact"' + (state.density === "compact" ? " selected" : "") + ">Compact rows</option></select></label><p>Compact fits more interaction records on screen.</p>")
+      ].join(""));
+    }
+
+    return renderHelpDrawer();
+  }
+
+  // Data, Help, Display and Privacy open as the same right-hand drawer:
+  // a title, one sentence on what it is for, then a few short sections.
+  function renderDrawer(id, title, lede, body) {
     return [
-      '<div class="pop-layer">',
-      '  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="help-dialog-title" data-dialog>',
-      '    <h2 id="help-dialog-title">HYB2 Web Lite</h2>',
-      "    <p>Choose a local .hyb or tab-delimited .txt file. After parsing, review the files and add an optional FASTA before clicking Enter analysis. HYB parsing, filtering, contact maps, region exploration, FASTA mapping, and exports run without a server connection.</p>",
-      '    <div class="dialog-actions"><button class="button" type="button" data-action="close-dialog">Close</button></div>',
+      '<div class="pop-layer drawer-layer">',
+      '  <section class="dialog drawer ' + id + '-drawer" role="dialog" aria-modal="true" aria-labelledby="' + id + '-dialog-title" data-dialog>',
+      '    <header class="drawer-head"><div><h2 id="' + id + '-dialog-title">' + escapeHtml(title) + '</h2><p class="drawer-lede">' + escapeHtml(lede) + "</p></div>",
+      '    <button class="icon-button drawer-close" type="button" data-action="close-dialog" aria-label="Close ' + escapeAttribute(title) + '">×</button></header>',
+      '    <div class="drawer-body">' + body + "</div>",
       "  </section>",
       "</div>"
     ].join("");
+  }
+
+  function drawerSection(title, html, extraClass) {
+    return '<section class="drawer-section' + (extraClass ? " " + extraClass : "") + '"><h3>' + escapeHtml(title) + "</h3>" + html + "</section>";
+  }
+
+  // What the current page shows, how to read it, and what to do next.
+  const PAGE_HELP = {
+    landing: ["Start a session", [
+      "Drop a .hyb file (the output of the hyb pipeline) or press Try example to load the ZIKV virion comparison.",
+      "Add a reference FASTA if you want sequences, region extraction and RNA structure prediction.",
+      "Raw FASTQ reads need HYB2 Desktop first; it turns them into .hyb files."
+    ]],
+    overview: ["Overview", [
+      "A summary of the loaded file: how many records, which RNAs and chimera types it contains.",
+      "Top interacting RNAs counts each record once per arm, so an RNA paired with itself counts twice.",
+      "Next: open Interactions to filter records, or Contact Map to see where on the RNA they fall."
+    ]],
+    interactions: ["Interactions", [
+      "Every chimeric record in the file, one row each. Filter by RNA, partner or score.",
+      "Click a row to see both arms, their coordinates and the read it came from.",
+      "Export the filtered rows as CSV or HYB to continue in other tools."
+    ]],
+    "contact-map": ["Contact Map", [
+      "Each cell counts records whose two arms fall in that pair of position bins (X: first RNA, Y: second).",
+      "Bright cells are frequent contacts; a diagonal band is local folding, off-diagonal spots are long-range.",
+      "Drag to zoom, click a cell to list its records, then send it to Region Explorer or RNA Structure."
+    ]],
+    viewpoint: ["Viewpoint", [
+      "Pick one region of an RNA and see where along the RNA its partners bind.",
+      "Peaks are positions that pair with your viewpoint more often than elsewhere.",
+      "Click a bar to inspect those records."
+    ]],
+    region: ["Region Explorer", [
+      "Enter a range of an RNA to list every record that touches it and its main partners.",
+      "With a reference FASTA you also get the sequence, ready to copy or fold.",
+      "Send the region to RNA Structure to predict its fold with these interactions as evidence."
+    ]],
+    compare: ["Compare", [
+      "Contrast two conditions, each with biological replicates (the example: ZAFR vs ZASI).",
+      "Only the differential test (panel A) says whether a contact differs; the other maps describe counts.",
+      "Below it: arc maps of both structures, the strongest regions (D, E) and their folding energies (F, G)."
+    ]],
+    structure: ["RNA Structure", [
+      "Predict a secondary structure for a region, optionally guided by the HYB contacts.",
+      "Short sequences fold instantly; longer ones need the local capacity test first (the page says why).",
+      "Related research, at the bottom, looks up public records for the RNA only if you turn it on."
+    ]],
+    report: ["Report", [
+      "One printable page with every analysis you configured, plus the checks to make before reporting.",
+      "Print or save it as PDF, or download the report data as JSON.",
+      "It reflects the current session; change an analysis and the report follows."
+    ]],
+    validation: ["Import check", [
+      "What the parser found while reading the file: valid, skipped and invalid rows, and the column layout.",
+      "Invalid rows are listed with the reason, so you can fix the file at its source.",
+      "Nothing here changes your data; it explains what was used."
+    ]],
+    methods: ["Methods", [
+      "How each number on the analysis pages is calculated, in the order of the pages.",
+      "Use it to describe the analysis in a paper or to check a result."
+    ]],
+    "file-format": ["File format", [
+      "The columns HYB2 expects in a .hyb file, and which optional columns it uses.",
+      "Check this when a file is rejected or a column looks wrong."
+    ]],
+    privacy: ["Privacy", [
+      "Where your data goes (nowhere outside this tab) and the one optional public lookup."
+    ]]
+  };
+
+  function renderHelpDrawer() {
+    const page = state.analysisEntered ? state.activePage : "landing";
+    const entry = PAGE_HELP[page] || PAGE_HELP.overview;
+    const body = [drawerSection("On this page: " + entry[0], '<ol class="drawer-steps">' + entry[1].map(function (line) { return "<li>" + escapeHtml(line) + "</li>"; }).join("") + "</ol>")];
+    if (state.analysisEntered) {
+      body.push(drawerSection("Keyboard", '<dl class="drawer-keys">' +
+        "<div><dt><kbd>" + (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl") + "</kbd><kbd>K</kbd></dt><dd>Search pages and actions</dd></div>" +
+        "<div><dt><kbd>g</kbd> then a letter</dt><dd>Go to a page (letters shown in the sidebar)</dd></div>" +
+        "<div><dt><kbd>Esc</kbd></dt><dd>Close this panel or a record</dd></div></dl>", "drawer-keyboard"));
+      body.push(drawerSection("Reference", '<div class="drawer-links">' +
+        '<button class="quiet-button" type="button" data-action="navigate" data-page="methods">Methods</button>' +
+        '<button class="quiet-button" type="button" data-action="navigate" data-page="file-format">File format</button>' +
+        '<button class="quiet-button" type="button" data-action="navigate" data-page="validation">Import check</button>' +
+        '<button class="quiet-button" type="button" data-action="navigate" data-page="privacy">Privacy</button></div>'));
+    }
+    return renderDrawer("help", "Help", "What this page shows, how to read it, and where to go next.", body.join(""));
   }
 
   function handleClick(event) {
@@ -1231,6 +1367,13 @@
     if (dialogLayer && event.target === dialogLayer) {
       state.dialog = null;
       render();
+      return;
+    }
+
+    // motion.js flips the preference after this handler; redraw the
+    // Display panel's choice once it has.
+    if (event.target.closest("[data-motion-toggle]")) {
+      window.setTimeout(render, 0);
       return;
     }
 
@@ -1286,7 +1429,17 @@
     }
 
     if (action === "open-files") {
+      // "Review mapping" opens the Data panel at its name-matching section.
+      if (actionNode.dataset && actionNode.dataset.openSection) {
+        window.Hyb2OpenSections[actionNode.dataset.openSection] = true;
+      }
       state.dialog = "files";
+      render();
+      return;
+    }
+
+    if (action === "open-display" || action === "toggle-tweaks") {
+      state.dialog = "display";
       render();
       return;
     }
@@ -1303,13 +1456,11 @@
       return;
     }
 
-    if (action === "toggle-tweaks") {
-      state.tweaksOpen = !state.tweaksOpen;
-      render();
-      return;
-    }
 
     if (action === "navigate") {
+      if (typeof actionNode.closest === "function" && actionNode.closest("[data-dialog]")) {
+        state.dialog = null;
+      }
       navigate(actionNode.dataset.page);
       return;
     }
@@ -1429,16 +1580,19 @@
       return;
     }
 
+    // Start over (Data panel, search) asks first; confirming clears the
+    // session and returns to the start page.
     if (action === "start-over") {
-      resetToLanding();
-      window.setTimeout(function () {
-        showToast("Analysis cleared. Choose a HYB file to begin again.");
-      }, 0);
+      state.dialog = "clear";
+      render();
       return;
     }
 
     if (action === "confirm-clear") {
-      clearSession();
+      resetToLanding();
+      window.setTimeout(function () {
+        showToast("Analysis cleared. Choose a HYB file to begin again.");
+      }, 0);
       return;
     }
 
@@ -1860,10 +2014,12 @@
     state.comparison = null;
     resetAnalysisModules();
     state.structure = null;
+    state.evidence = null;
     state.reportExport = null;
     reportExportCache = null;
     state.reportPurpose = "";
     state.reportSelection = null;
+    if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.error = null;
     state.loading = {
       fileName: file.name || "Untitled file",
@@ -1909,9 +2065,13 @@
 
           if (!summary || !summary.validRecords) {
             state.loading = null;
+            const firstProblem = summary && summary.errors && summary.errors[0];
             state.error = {
               title: "This does not appear to be a valid HYB file",
-              message: "No records with at least 15 tab-separated columns, RNA names, and valid RNA coordinates were found."
+              message: "No records with at least 15 tab-separated columns, RNA names, and valid RNA coordinates were found.",
+              fileName: file.name || "Untitled file",
+              detail: firstProblem ? describeParseProblem(firstProblem) : "",
+              hint: hybFormatHint()
             };
             render();
             return;
@@ -2597,10 +2757,12 @@
     state.comparison = null;
     resetAnalysisModules();
     state.structure = null;
+    state.evidence = null;
     state.reportExport = null;
     reportExportCache = null;
     state.reportPurpose = "";
     state.reportSelection = null;
+    if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
     releaseProviderData();
@@ -2644,10 +2806,12 @@
     state.comparison = null;
     resetAnalysisModules();
     state.structure = null;
+    state.evidence = null;
     state.reportExport = null;
     reportExportCache = null;
     state.reportPurpose = "";
     state.reportSelection = null;
+    if (window.Hyb2Evidence) window.Hyb2Evidence.cancel();
     state.loading = null;
     state.error = null;
     state.activePage = "landing";
@@ -2934,7 +3098,14 @@
     window.clearTimeout(state.toastTimer);
     state.toastTimer = window.setTimeout(function () {
       toast.classList.remove("is-visible");
-    }, 2900);
+    }, toastHoldMs(message));
+  }
+
+  // Long enough to read: 0.3 s per word plus 0.5 s, never shorter than the
+  // 2.9 s short confirmations have always had, capped at 10 s.
+  function toastHoldMs(message) {
+    const words = String(message || "").trim().split(/\s+/).filter(Boolean).length;
+    return Math.min(10000, Math.max(2900, 500 + 300 * words));
   }
 
   function pageTitle(page) {
@@ -2946,10 +3117,6 @@
     ]);
     const match = allPages.find(function (item) { return item.id === page; });
     return match ? match.label : "HYB2 Web Lite";
-  }
-
-  function themeGlyph() {
-    return state.theme === "light" ? "◐" : "◑";
   }
 
   function formatNumber(value) {

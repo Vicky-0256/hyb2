@@ -6,6 +6,7 @@
   --report-surface: var(--surface);
   --report-subtle: var(--surface-subtle);
   --report-teal: var(--teal);
+  --report-teal-ink: var(--primary-ink);
   --report-violet: var(--accent);
   width: min(100%, 1180px);
   margin: 0 auto;
@@ -338,7 +339,7 @@
 .report-status.is-ready {
   border-color: color-mix(in srgb, var(--report-teal) 42%, var(--report-line));
   background: color-mix(in srgb, var(--report-teal) 11%, var(--report-surface));
-  color: var(--report-teal);
+  color: var(--report-teal-ink);
 }
 
 .report-status.is-warning {
@@ -634,7 +635,7 @@
 .report-empty.is-ready {
   border-style: solid;
   border-color: color-mix(in srgb, var(--report-teal) 35%, var(--report-line));
-  color: var(--report-teal);
+  color: var(--report-teal-ink);
 }
 
 @media (max-width: 900px) {
@@ -748,13 +749,14 @@
 
   .report-page {
     --report-ink: #132c47;
-    --report-muted: #607286;
+    --report-muted: #5b6c80;
     --report-line: #dce7ec;
     --report-line-strong: #c2d3db;
     --report-surface: #fff;
     --report-subtle: #f7fafb;
     --report-violet: #6a4ff2;
     --report-teal: #00a09d;
+    --report-teal-ink: #007672;
     width: 100%;
     color: #132c47;
     background: #fff;

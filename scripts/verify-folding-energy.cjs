@@ -158,7 +158,7 @@ state.interactions = arc.parseInteractions(["x\ty\tlog2FoldChange\tpadj",
   assert.equal(fe.buildJobs(bare, withFasta, fe.defaultState()).jobs.length, 5);
   // card before folding
   const html = fe.renderCard(state, rp.defaultState(), fe.defaultState());
-  assert.match(html, /Folding energy \(F, G\)/);
+  assert.match(html, /F, G · Folding energy/);
   assert.match(html, /data-feature-action="energy-run"/);
   assert.match(html, /7 interactions with padj &lt; 0\.01; 5 to fold \(10 RNAcofold runs\); 2 skipped/);
   // results, stats, SVG, TSV (synthetic energies)

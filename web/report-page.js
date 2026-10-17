@@ -33,6 +33,7 @@
       renderValidation(context),
       renderFileFormat(),
       renderMethods(),
+      when(context, ["literature_search"], renderExternalSources),
       part("limitations", "5", "Limitations and warnings"),
       renderLimitations(context),
       '</article>'
@@ -153,7 +154,8 @@
     const validRatio = totalRows ? number(summary.validRecords) / totalRows : 0;
     const fasta = context.state.reference;
     const mapped = fasta ? mappedFastaCount(fasta) : 0;
-    const fastaValue = fasta ? formatNumber(referenceSequenceCount(fasta)) + " sequences" : "Optional / not loaded";
+    const fastaCount = fasta ? referenceSequenceCount(fasta) : 0;
+    const fastaValue = fasta ? formatNumber(fastaCount) + (fastaCount === 1 ? " sequence" : " sequences") : "Optional / not loaded";
     const fastaDetail = fasta ? formatNumber(mapped) + " mapped HYB RNA names" : "Required for reference-based structure";
     return section(
       "summary",
@@ -531,7 +533,7 @@
       "Multi-dataset effect map",
       stepBadge(context, "comparison"),
       [
-        '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Datasets and conditions</h3><span class="report-note-inline">' + formatNumber(datasets.length) + ' local files</span></div>',
+        '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Datasets and conditions</h3><span class="report-note-inline">' + formatNumber(datasets.length) + (datasets.length === 1 ? ' local file' : ' local files') + '</span></div>',
         datasetRows.length ? table(["File", "Label", "Condition", "Valid records", "Support"], datasetRows) : '<div class="report-empty">Add a second local HYB dataset to configure a comparison.</div>',
         datasets.length > MAX_DATASET_ROWS ? '<p class="report-note" data-cites="S07"><span class="report-cite">S07</span> Only the first ' + formatNumber(MAX_DATASET_ROWS) + ' datasets are shown in the printable report.</p>' : "",
         "</div>",
@@ -607,6 +609,47 @@
         cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table(["Rank", "Type", "Topology", "Energy", "Pairs", "Crossing", "Dot-bracket"], candidateRows) + '</div>' : "",
         ready && cplfold ? '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> CPLfold candidates preserve the selected pseudoknot setting and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain available from the RNA Structure page.</p>' : ""
       ].join("")
+    );
+  }
+
+  // Cards the researcher added from Related research, bound to the current
+  // structure result. Background material only: nothing here changes a
+  // method, parameter or number in this report.
+  function renderExternalSources(context) {
+    const cards = window.Hyb2Evidence ? safeCall(function () { return window.Hyb2Evidence.reportCards(context.state); }, []) : [];
+    const reviewLabel = { unreviewed: "Not reviewed", reviewed: "Reviewed", rejected: "Rejected" };
+    return section(
+      "external-sources",
+      "External sources and researcher notes",
+      "Public databases",
+      stepBadge(context, "literature_search", cards.length ? formatNumber(cards.length) + " added" : null),
+      cards.length ? cards.map(function (card, index) {
+        const evidenceId = "E" + String(index + 1).padStart(2, "0");
+        const cite = '<p class="report-note" data-cites="S13 ' + evidenceId + '"><span class="report-cite">S13, ' + evidenceId + "</span> ";
+        const text = window.Hyb2Evidence.statusLine(card);
+        const entries = (card.entries || []).map(function (entry) {
+          return card.content_kind === "database_metadata"
+            ? "<li><strong>" + escape(entry.id) + "</strong> " + escape(entry.description) + (entry.hasLitSumm ? " <em>(RNAcentral AI literature summary available; not included)</em>" : "") + "</li>"
+            : "<li>" + escape(entry.title) + (entry.year ? " (" + escape(entry.year) + ")" : "") + (entry.pmid ? " · PMID " + escape(entry.pmid) : "") + "</li>";
+        }).join("");
+        return [
+          '<div class="report-subsection report-evidence-card">',
+          "<h3><code>" + evidenceId + "</code> " + escape(card.source_provider) + " · <code>" + escape(card.query_identifier) + "</code></h3>",
+          definitionList([
+            ["Query", card.query_identifier + (card.taxon ? " · taxon " + card.taxon : ""), true],
+            ["Retrieved", card.retrieved_at ? card.retrieved_at.replace("T", " ").slice(0, 16) + " UTC" : "-"],
+            ["Status", (window.Hyb2Evidence.STATUS_TEXT[card.status] || card.status)],
+            ["Bound to", card.binding && card.binding.rna ? card.binding.rna + " " + range(card.binding.start, card.binding.end) : (card.binding && card.binding.source || "-"), true],
+            ["Structure digest", card.binding && card.binding.resultDigest || "No result yet", true],
+            ["Review", reviewLabel[card.review && card.review.state] || "Not reviewed"],
+            card.review && card.review.note ? ["Researcher note", card.review.note] : null
+          ]),
+          cite + escape(text) + "</p>",
+          entries ? "<ul>" + entries + "</ul>" : "",
+          cite + '<strong>' + (card.content_kind === "database_metadata" ? "External database record — background only, not a validation of this structure." : "Literature index — a mention is not evidence for this structure.") + "</strong> Citations not verified.</p>",
+          "</div>"
+        ].join("");
+      }).join("") : '<div class="report-empty">No external sources were added. Public lookups on the RNA Structure page are optional and off by default; a researcher adds each card to the report explicitly.</div>'
     );
   }
 
@@ -728,6 +771,7 @@
         structure: jsonSafe(structurePayload, 5, 1000)
       },
       resultRecord: context.record ? jsonSafe({ schema: context.record.schema, scope: context.record.scope, steps: context.record.steps.map(function (step) { return { id: step.id, key: step.key, status: step.status, detail: step.detail }; }), results: context.record.results, warnings: context.record.warnings }, 5, 200) : null,
+      externalSources: window.Hyb2Evidence ? jsonSafe(safeCall(function () { return window.Hyb2Evidence.reportCards(reportState); }, []), 6, 50) : [],
       methods: {
         browserLocal: true,
         reportUsesBoundedVisuals: true,
@@ -1003,9 +1047,11 @@
   }
 
   function table(headers, rows) {
-    return '<table class="report-table"><thead><tr>' + headers.map(function (header) { return '<th scope="col">' + escape(header) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
+    // Wide tables scroll inside their own box on screen instead of widening
+    // the page; print styles let them flow at full width.
+    return '<div class="report-table-scroll"><table class="report-table"><thead><tr>' + headers.map(function (header) { return '<th scope="col">' + escape(header) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
       return '<tr>' + row.map(function (cell) { return '<td>' + cell + '</td>'; }).join("") + '</tr>';
-    }).join("") + '</tbody></table>';
+    }).join("") + '</tbody></table></div>';
   }
 
   function visualBlock(svg, note) {

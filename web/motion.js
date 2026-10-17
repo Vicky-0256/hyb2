@@ -83,8 +83,9 @@
     if (!className || motionReduced()) {
       return;
     }
-    // Force a style flush so a repeated class restarts its animations.
-    void app.offsetWidth;
+    // No forced reflow: every scene arrives as freshly rendered nodes, which
+    // start their animations on insertion. Reading layout here cost ~25 ms
+    // on long pages such as the report.
     className.split(" ").forEach(function (name) {
       app.classList.add(name);
     });
@@ -96,9 +97,37 @@
   }
 
   // Overlays that app.js re-creates on each render: animate only on the
-  // render where they first appear.
+  // render where they first appear. A closed overlay is simply missing from
+  // the new tree, so its last node is put back once to play the exit.
   const APPEARING = [".pop-layer", ".record-drawer", ".tweaks-panel"];
   const present = {};
+  const lastNode = {};
+  const INERT_ATTRS = ["id", "data-action", "data-feature-action", "data-dialog", "name", "for"];
+
+  function exitMs() {
+    return parseFloat(cssVar("--dur-exit", "200")) || 200;
+  }
+
+  // The copy lives outside #app, stripped of ids and actions, so no handler,
+  // query or focus trap mistakes it for the live overlay.
+  function playExit(node) {
+    if (!node || node.isConnected || motionReduced()) {
+      return;
+    }
+    [node].concat(Array.prototype.slice.call(node.querySelectorAll("*"))).forEach(function (el) {
+      INERT_ATTRS.forEach(function (name) {
+        el.removeAttribute(name);
+      });
+    });
+    node.classList.remove("is-appearing");
+    node.classList.add("is-leaving");
+    node.setAttribute("aria-hidden", "true");
+    node.inert = true;
+    document.body.appendChild(node);
+    window.setTimeout(function () {
+      node.remove();
+    }, exitMs() + 40);
+  }
 
   function markAppearing() {
     APPEARING.forEach(function (selector) {
@@ -106,7 +135,11 @@
       if (node && !present[selector] && !motionReduced()) {
         node.classList.add("is-appearing");
       }
+      if (!node && present[selector]) {
+        playExit(lastNode[selector]);
+      }
       present[selector] = !!node;
+      lastNode[selector] = node;
     });
   }
 
@@ -264,11 +297,12 @@
     sidebar.classList.add("has-glider");
     if (fromTop !== null && fromTop !== top && !motionReduced() && glider.animate) {
       const distance = fromTop - top;
+      const gliderMs = parseFloat(cssVar("--dur-move", "400")) || 400;
       glider.animate([
         { transform: "translateY(" + distance + "px) scaleY(1)" },
         { transform: "translateY(" + distance * 0.25 + "px) scaleY(1.18)", offset: 0.55 },
         { transform: "translateY(0) scaleY(1)" }
-      ], { duration: 520, delay: -Math.min(elapsed || 0, 520), easing: "cubic-bezier(.16, 1, .3, 1)" });
+      ], { duration: gliderMs, delay: -Math.min(elapsed || 0, gliderMs), easing: cssVar("--ease-out", "ease-out") });
     }
     lastGliderTop = top;
   }
@@ -321,7 +355,7 @@
   let revealObserver = null;
 
   function armReveals(sceneChanged) {
-    const targets = app.querySelectorAll(".web-capability-card, .legacy-workflow-guide");
+    const targets = app.querySelectorAll(".web-capability-card");
     if (!("IntersectionObserver" in window) || motionReduced()) {
       Array.prototype.forEach.call(targets, function (node) {
         node.classList.add("is-revealed");
@@ -416,14 +450,14 @@
       root.animate({
         clipPath: ["circle(0px at " + x + "px " + y + "px)", "circle(" + radius + "px at " + x + "px " + y + "px)"]
       }, {
-        duration: 680,
-        easing: "cubic-bezier(.65, 0, .35, 1)",
+        duration: parseFloat(cssVar("--dur-hero", "750")) || 750,
+        easing: cssVar("--ease-in-out", "ease-in-out"),
         pseudoElement: "::view-transition-new(root)"
       });
     }).catch(function () {});
   }, true);
 
-  // Tweaks panel motion toggle (rendered by app.js, handled here).
+  // Display panel motion toggle (rendered by app.js, handled here).
   document.addEventListener("click", function (event) {
     const toggle = event.target.closest && event.target.closest("[data-motion-toggle]");
     if (!toggle) {
@@ -440,7 +474,9 @@
     } catch (error) {
       // Preference simply does not persist.
     }
-    toggle.textContent = reduced ? "Reduce motion" : "Turn motion on";
+    if (!toggle.classList.contains("segmented-option")) {
+      toggle.textContent = reduced ? "Reduce motion" : "Turn motion on";
+    }
     hero.refresh();
   });
 

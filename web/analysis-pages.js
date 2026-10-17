@@ -35,7 +35,7 @@
       ], "interaction-filter"),
       renderTextControl("Search", "search", filters.search, "RNA, sequence ID, or sequence", "interaction-filter"),
       "</div>",
-      '<details class="advanced-filters"><summary>Advanced filters</summary>',
+      '<details class="advanced-filters" data-open-key="interactions-advanced"' + openAttr("interactions-advanced") + '><summary>Advanced filters</summary>',
       '<div class="control-grid advanced-grid">',
       renderTextControl("Arm 1 start", "armOneStart", filters.armOneStart, "Any", "interaction-filter", "number", { min: 1, step: 1 }),
       renderTextControl("Arm 1 end", "armOneEnd", filters.armOneEnd, "Any", "interaction-filter", "number", { min: 1, step: 1 }),
@@ -85,7 +85,9 @@
 
   function renderInteractionTable(interactions, state) {
     const rowHeight = state.density === "compact" ? 38 : 46;
-    const viewportHeight = 414;
+    // Initial row window only; the table height comes from CSS and
+    // bindVirtualTable re-windows rows from the real clientHeight.
+    const viewportHeight = 960;
     const scrollTop = state.interactionScrollTop || 0;
     const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 4);
     const visible = Math.ceil(viewportHeight / rowHeight) + 8;
@@ -100,12 +102,14 @@
     return [
       '<section class="data-card interaction-table-card">',
       '<div class="card-title-row"><div><h2>Records</h2><span class="card-note">' + escape(note) + "</span></div><span class=\"card-kicker\">" + (state.shell === false ? "Project data" : "Local memory") + "</span></div>",
-      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span>Region 1</span><span>RNA 2</span><span>Region 2</span><span>Chimera type</span><span>Support</span><span>dG</span></div>',
+      '<div class="virtual-table-frame">',
+      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span>Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span>Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span title="Cluster support: records merged into this one">Support</span><span>ΔG <span class="unit">(kcal/mol)</span></span></div>',
       '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0" style="height:' + viewportHeight + 'px">',
       '<div class="virtual-table-spacer" style="height:' + (total * rowHeight) + 'px"></div>',
       '<div class="virtual-table-rows" data-virtual-rows style="transform:translateY(' + (start * rowHeight) + 'px)">',
       renderVirtualRows(rows || []),
       "</div></div>",
+      "</div>",
       "</section>"
     ].join("");
   }
@@ -129,9 +133,9 @@
       return [
         '<button class="virtual-row" type="button" data-feature-action="open-record" data-record-index="' + record.index + '" role="row">',
         '<span title="' + attribute(record.id) + '">' + escape(record.id) + "</span>",
-        "<span>" + escape(record.rnaOne) + "</span>",
+        '<span title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + "</span>",
         "<span>" + range(record.rnaOneStart, record.rnaOneEnd) + "</span>",
-        "<span>" + escape(record.rnaTwo) + "</span>",
+        '<span title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + "</span>",
         "<span>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</span>",
         '<span title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + "</span>",
         "<span>" + format(record.supportCount) + "</span>",
@@ -149,7 +153,7 @@
       '<div class="drawer-section"><span class="detail-label">Sequence</span><code class="sequence-preview">' + escape(truncate(record.sequence, 180)) + "</code></div>",
       renderArmDetails("Arm 1", record.rnaOne, record.rnaOneStart, record.rnaOneEnd, record.rnaOneReadStart, record.rnaOneReadEnd, record.rnaOneEvalue),
       renderArmDetails("Arm 2", record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd, record.rnaTwoReadStart, record.rnaTwoReadEnd, record.rnaTwoEvalue),
-      '<dl class="detail-grid"><div><dt>dG</dt><dd>' + (record.dg === null ? "—" : format(record.dg)) + '</dd></div><div><dt>Cluster support</dt><dd>' + format(record.supportCount) + '</dd></div><div><dt>Source reads</dt><dd>' + (record.rawReadCount === null ? "—" : format(record.rawReadCount)) + '</dd></div><div><dt>Overlap score</dt><dd>' + (record.overlapScore === null ? "—" : format(record.overlapScore)) + '</dd></div><div><dt>Homodimer proxy</dt><dd>' + (record.isHomodimer ? "Yes (overlap ≥ 5)" : "No") + '</dd></div><div><dt>Chimera type</dt><dd>' + escape(record.chimeraType) + '</dd></div><div><dt>Type source</dt><dd>' + escape(record.chimeraTypeSource === "column_17" ? "Column 17" : "Inferred from arms") + '</dd></div><div><dt>Source line</dt><dd>' + format(record.lineNumber) + "</dd></div></dl>",
+      '<dl class="detail-grid"><div><dt>ΔG (kcal/mol)</dt><dd>' + (record.dg === null ? "—" : format(record.dg)) + '</dd></div><div><dt>Cluster support</dt><dd>' + format(record.supportCount) + '</dd></div><div><dt>Source reads</dt><dd>' + (record.rawReadCount === null ? "—" : format(record.rawReadCount)) + '</dd></div><div><dt>Overlap score</dt><dd>' + (record.overlapScore === null ? "—" : format(record.overlapScore)) + '</dd></div><div><dt>Homodimer proxy</dt><dd>' + (record.isHomodimer ? "Yes (overlap ≥ 5)" : "No") + '</dd></div><div><dt>Chimera type</dt><dd>' + escape(record.chimeraType) + '</dd></div><div><dt>Type source</dt><dd>' + escape(record.chimeraTypeSource === "column_17" ? "Column 17" : "Inferred from arms") + '</dd></div><div><dt>Source line</dt><dd>' + format(record.lineNumber) + "</dd></div></dl>",
       '<div class="drawer-actions">',
       '<button class="button button-secondary" type="button" data-feature-action="record-contact" data-record-index="' + record.index + '">Open in Contact Map</button>',
       '<button class="button button-secondary" type="button" data-feature-action="record-region" data-record-index="' + record.index + '" data-arm="1">Explore RNA 1 region</button>',
@@ -175,7 +179,11 @@
     const rnas = state.summary.rnaNames || [];
     const chimeraTypes = state.summary.chimeraTypes || [];
     // contact.matrix is built from DataProvider.getContactBins by page-data.js.
-    const matrix = contact.rnaX && contact.rnaY ? contact.matrix || null : null;
+    // While a rebuild is in flight the previous map stays on screen, dimmed
+    // (matrixStale), or a placeholder is shown on first entry.
+    const hasPair = !!(contact.rnaX && contact.rnaY);
+    const matrix = hasPair ? contact.matrix || null : null;
+    const building = hasPair && (!matrix || !!contact.matrixStale);
     const budgetHint = matrix && matrix.resourceBudget
       ? "Adaptive browser budget: up to " + format(matrix.resourceBudget.maximumCells) + " cells / " + format(matrix.resourceBudget.maximumBinContributions) + " bin contributions. "
       : "";
@@ -232,19 +240,22 @@
       "</section>",
       matrix && matrix.binSizeAdjusted ? '<p class="notice notice-warning">The bin size was increased to ' + format(matrix.binSize) + ' nt so the map stays within the cell budget.</p>' : "",
       matrix && matrix.cells.length ? [
-        '<section class="contact-navigator" aria-label="Interactive contact map">',
+        '<section class="contact-workbench' + (building ? " is-updating" : "") + '"' + (building ? ' aria-busy="true"' : "") + '>',
+        '<div class="contact-navigator contact-workbench-main" aria-label="Interactive contact map">',
         renderContactStage("overview", "Contact map", "Drag to select a region. Click a cell to zoom and inspect it.", contact.overviewSelection, contact, matrix),
-        "</section>",
-        '<section class="heatmap-layout">',
+        building ? '<div class="contact-updating" role="status"><span></span>Updating map…</div>' : "",
+        "</div>",
+        '<aside class="contact-workbench-side">',
+        renderContactSelection(contact, matrix, selectedCell, state),
         '<div class="heatmap-card data-card">',
         '<div class="heatmap-topline"><span class="card-kicker">Viridis · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
         '<div class="heatmap-axis"><span>' + escape(contact.rnaX) + " · X axis</span><span>" + escape(contact.rnaY) + " · Y axis</span></div>",
         '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="contact-export-tsv">Export contact TSV</button><button class="quiet-button" type="button" data-feature-action="contact-export-params">Export parameters</button></div>',
-        contact.showDataTable ? renderContactDataTable(matrix) : "",
         "</div>",
-        renderContactSelection(contact, matrix, selectedCell, state),
-        "</section>"
-      ].join("") : renderNoContactData(contact, matrix),
+        "</aside>",
+        "</section>",
+        contact.showDataTable ? '<section class="data-card contact-data-card">' + renderContactDataTable(matrix) + "</section>" : ""
+      ].join("") : (building ? renderContactBuilding() : renderNoContactData(contact, matrix)),
       "      <section class=\"method-note\"><strong>Method</strong><span>Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.</span></section>"
     ].join("");
   }
@@ -296,6 +307,19 @@
         return "<tr><td>" + range(cell.x, cell.x + matrix.binSize - 1) + "</td><td>" + range(cell.y, cell.y + matrix.binSize - 1) + "</td><td>" + format(cell.records) + "</td><td>" + format(cell.support) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>"
+    ].join("");
+  }
+
+  function renderContactBuilding() {
+    return [
+      '<section class="contact-workbench is-building" aria-busy="true">',
+      '<div class="contact-navigator contact-workbench-main"><article class="contact-stage data-card contact-stage-overview">',
+      '<div class="contact-stage-heading"><div><span class="drawer-kicker">Contact map</span><h2>Building map</h2></div></div>',
+      '<p class="contact-stage-note">Binning interaction arms locally in this tab.</p>',
+      '<div class="canvas-wrap contact-stage-canvas-wrap contact-building-surface"><div class="contact-updating" role="status"><span></span>Building map…</div></div>',
+      "</article></div>",
+      '<aside class="contact-workbench-side"><aside class="selection-card data-card"><span class="drawer-kicker">Selected region</span><h2>Select a heatmap cell</h2><p>The map is being prepared.</p></aside></aside>',
+      "</section>"
     ].join("");
   }
 
@@ -441,10 +465,10 @@
       '<div><h1>Compare</h1><p>Compare multiple local HYB datasets: the DESeq2 differential test, contact-map effect sizes and the HYB2 similarity heatmap.</p></div>',
       '<div class="inline-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + '<button class="button button-secondary" type="button" data-feature-action="comparison-download-svg">Download effect SVG</button><button class="button button-secondary" type="button" data-feature-action="comparison-download-png">Download effect PNG</button></div>',
       '</div>',
-      '<section class="comparison-note notice"><strong>Differential test in the browser</strong><span>The DESeq2 Wald test below is a JavaScript port of HYB2 Desktop\'s numpy port of DESeq2 1.46 (not R itself; WebR with DESeq2 is still not shipped). On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of the Desktop port. The effect and similarity maps are descriptive. The raw count table and the headerless names.table for the legacy HYB2 CLI remain available.</span></section>',
+      '<section class="comparison-note notice notice-warning"><strong>What this page can and cannot tell you</strong><span>Only the <b>differential test</b> (panel A) says whether a contact differs between ' + escape(comparison.conditionALabel) + ' and ' + escape(comparison.conditionBLabel) + ': it uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell. It needs at least two biological replicates per condition. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R or the HYB2 command-line tool, use the exports under Map settings.</span></details></section>',
       '<section class="data-card comparison-datasets">',
       canAddDatasets
-        ? '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">The primary file is included as the first local dataset. Add one or more HYB files, then assign each to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ' local files</span></div>'
+        ? '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">The primary file is included as the first local dataset. Add one or more HYB files, then assign each to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ((comparison.datasets || []).length === 1 ? ' local file' : ' local files') + '</span></div>'
         : '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">Assign each project dataset to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ' datasets</span></div>',
       comparison.loading ? '<p class="notice">Parsing ' + escape(comparison.loading.fileName) + ' locally (' + format(comparison.loading.completed + 1) + ' of ' + format(comparison.loading.total) + ')…</p>' : '',
       comparison.error ? '<p class="notice notice-error">' + escape(comparison.error) + '</p>' : '',
@@ -452,7 +476,11 @@
       renderComparisonRnaPairs(comparison),
       '<div class="inline-actions">' + (canAddDatasets ? '<button class="quiet-button" type="button" data-feature-action="choose-comparison-files">Add datasets</button>' : '') + '<span class="card-note">For the original DESeq2 workflow, use at least two biological replicates per condition.</span></div>',
       '</section>',
+      // the main question comes first: the DESeq2 test bins its own 10-nt
+      // cells, independent of the map settings below
+      window.Hyb2DeseqCard ? window.Hyb2DeseqCard.renderCard(state) : "",
       '<section class="analysis-controls data-card">',
+      '<div class="card-title-row"><div><h2>Map settings</h2><span class="card-note">These settings change the effect map, the similarity heatmap and their exports. The differential test above bins its own 10-nt cells and is not affected by Bin size, Measure or Normalisation.</span></div></div>',
       '<div class="comparison-control-grid">',
       renderTextControl("Condition A label", "conditionALabel", comparison.conditionALabel, "Condition A", "comparison-control"),
       renderTextControl("Condition B label", "conditionBLabel", comparison.conditionBLabel, "Condition B", "comparison-control"),
@@ -477,22 +505,21 @@
         { value: "white", label: "White (as similarity_heatmap.R)" }, { value: "grey", label: "Light grey (shows bins at the minimum)" }
       ], "comparison-display"),
       '</div>',
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><button class="quiet-button" type="button" data-feature-action="comparison-export-tsv">Export comparison TSV</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-counts">Export HYB2 count table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-hyb2-names">Export HYB2 names.table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-metadata">Export extended metadata</button><button class="quiet-button" type="button" data-feature-action="comparison-export-params">Export parameters</button></div>',
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><button class="quiet-button" type="button" data-feature-action="comparison-export-tsv">Export comparison TSV</button><button class="quiet-button" type="button" data-feature-action="comparison-export-params">Export parameters</button></div>',
+      '<details class="comparison-export-more" data-open-key="compare-exports"' + openAttr("compare-exports") + '><summary>Exports for R or the HYB2 command-line tool</summary><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-counts">Export HYB2 count table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-hyb2-names">Export HYB2 names.table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-metadata">Export extended metadata</button></div>',
       // a rerun keeps the previous maps on screen: the progress shows here
       comparison.result ? renderComparisonProgress(comparison.progress) : "",
-      '<p class="card-note">Use the headerless HYB2 names.table with the legacy CLI. Extended metadata has a header and additional provenance columns for audit or custom native-R workflows.</p>',
+      '<p class="card-note">Use the headerless HYB2 names.table with the HYB2 command-line tool. Extended metadata has a header and provenance columns for audit or your own R workflow.</p></details>',
       '</section>',
       result.ready ? [
         '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Similarity bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
         '<section class="comparison-map-grid">',
-        renderComparisonMap("effect", "Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal', result),
-        renderComparisonMap("conserved", "Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ")" + (comparison.similarityPanel === "grey" ? " on a grey panel." : "; on R's white panel the smallest bins do not show (choose the grey panel to see them)."), result),
+        renderComparisonMap("effect", "Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal. Descriptive, not a test: bins with few records give strong colours by chance, so use the differential test (A) to judge a difference.', result),
+        renderComparisonMap("conserved", "B · Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ")" + (comparison.similarityPanel === "grey" ? " on a grey panel." : "; on R's white panel the smallest bins do not show (choose the grey panel to see them)."), result),
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
-        comparison.showDataTable ? renderComparisonDataTable(result, comparison) : '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="toggle-comparison-data">Open comparison data table</button></div>'
+        comparison.showDataTable ? renderComparisonDataTable(result, comparison) : ''
       ].join("") : '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Comparison</span><h2>' + escape(result.reason || "Add datasets to compare") + '</h2>' + (!comparison.loading && !comparison.result ? renderComparisonProgress(comparison.progress || { stage: "Starting", fraction: 0 }) : "") + '<p>All input files remain in tab memory and are parsed by local browser workers.</p></div></section>',
-      // the DESeq2 test bins its own 10-nt cells, independent of the map limits above
-      window.Hyb2DeseqCard ? window.Hyb2DeseqCard.renderCard(state) : "",
       // the arc map works from its own files, with or without a comparison here
       window.Hyb2ArcMap ? window.Hyb2ArcMap.renderCard(state.arcMap || window.Hyb2ArcMap.defaultState(), escape) : "",
       window.Hyb2ArcMap && window.Hyb2RegionPanels ? window.Hyb2RegionPanels.renderCard(state.arcMap, state.regionPanels, escape) : "",
@@ -519,9 +546,16 @@
     if (!substituted.length) {
       return "";
     }
-    return '<p class="notice comparison-rna-note"><strong>Compared by position.</strong> ' + substituted.map(function (item) {
-      return escape(item.dataset.label || item.dataset.fileName || item.dataset.id) + " has no " + escape(comparison.rnaX) + "; it contributes its own " + escape(item.rnaX);
-    }).join("; ") + '. Each dataset\'s map is compared bin by bin on its own coordinates, as bin/hyb2_compare does; the RNA can be changed in the differential test card below.</p>';
+    // one sentence per substitute RNA, naming every dataset that uses it
+    const groups = [];
+    substituted.forEach(function (item) {
+      const name = item.dataset.label || item.dataset.fileName || item.dataset.id;
+      const group = groups.find(function (entry) { return entry.rna === item.rnaX; });
+      if (group) { group.names.push(name); } else { groups.push({ rna: item.rnaX, names: [name] }); }
+    });
+    return '<p class="notice comparison-rna-note"><strong>Compared by position.</strong> ' + groups.map(function (group) {
+      return escape(group.names.join(" and ")) + (group.names.length === 1 ? " has" : " have") + " no " + escape(comparison.rnaX) + " records and " + (group.names.length === 1 ? "uses its" : "use their") + " own " + escape(group.rna) + ".";
+    }).join(" ") + ' Bins are matched by nucleotide position, not by sequence alignment, as bin/hyb2_compare does. You can choose another RNA for each dataset in the differential test below.</p>';
   }
 
   function renderComparisonMap(kind, title, note, result) {
@@ -649,7 +683,7 @@
         renderRegionPartners(results),
         "</section>",
         renderReferencePanel(fastaRegion, region, state),
-        renderRegionRecords(results.records),
+        renderRegionRecords(results.records, region.showAllRecords),
         "</section>"
       ].join("") : renderEmptyRegion()
     ].join("");
@@ -682,15 +716,16 @@
     ].join("");
   }
 
-  function renderRegionRecords(records) {
+  function renderRegionRecords(records, showAll) {
+    const limit = showAll ? 100 : 20;
     return [
       '<section class="data-card"><div class="card-title-row"><h2>Matching records</h2><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="region-export-csv">Export CSV</button><button class="quiet-button" type="button" data-feature-action="region-export-hyb">Export HYB</button><button class="quiet-button" type="button" data-feature-action="region-export-params">Export parameters</button></div></div>',
       '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Sequence ID</th><th>RNA 1</th><th>Region 1</th><th>RNA 2</th><th>Region 2</th><th>Chimera type</th><th>Support</th></tr></thead><tbody>',
-      records.slice(0, 100).map(function (record) {
+      records.slice(0, limit).map(function (record) {
         return "<tr><td>" + escape(record.id) + "</td><td>" + escape(record.rnaOne) + "</td><td>" + range(record.rnaOneStart, record.rnaOneEnd) + "</td><td>" + escape(record.rnaTwo) + "</td><td>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</td><td>" + escape(record.chimeraType) + "</td><td>" + format(record.supportCount) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>",
-      records.length > 100 ? '<p class="table-note">Showing the first 100 of ' + format(records.length) + " matching records. Export includes all local matches.</p>" : "",
+      records.length > 20 ? '<div class="table-more"><button class="quiet-button" type="button" data-feature-action="region-toggle-records">' + (showAll ? "Show fewer records" : "Show " + format(Math.min(records.length, 100)) + " records") + '</button>' + (records.length > 100 && showAll ? '<span class="table-note">Showing the first 100 of ' + format(records.length) + " matching records. Export includes all local matches.</span>" : '<span class="table-note">Showing ' + format(Math.min(limit, records.length)) + " of " + format(records.length) + ". Export includes all local matches.</span>") + "</div>" : "",
       "</section>"
     ].join("");
   }
@@ -744,6 +779,14 @@
     const unavailable = !sequenceInfo.sequence || !!sequenceInfo.error ||
       (cplfold ? cplfoldLengthUnavailable : (length > 3000 || (length > 2000 && !structure.allowLarge))) ||
       largeEnsembleNeedsConsent;
+    // Why the Predict button is disabled, said next to it.
+    const unavailableReason = !unavailable ? "" :
+      !sequenceInfo.sequence ? "Choose an RNA and region, a HYB record or paste a sequence first." :
+      sequenceInfo.error ? sequenceInfo.error :
+      cplfold && cplfoldLengthUnavailable ? (lengthNotice || "This sequence is too long for CPLfold in the browser; choose a shorter region.") :
+      !cplfold && length > 3000 ? "The browser folds at most 3,000 nt with ViennaRNA; choose a shorter region." :
+      !cplfold && length > 2000 && !structure.allowLarge ? "Tick the large-fold confirmation above to fold more than 2,000 nt." :
+      largeEnsembleNeedsConsent ? "Confirm the large ensemble above (more than 100 random folds) to run it." : "";
     const methodBadge = cplfold
       ? "CPLfold + Pyodide · Browser"
       : guidedConstraintMode
@@ -784,8 +827,11 @@
         ? '<div class="fold-status fold-status-constraints"><strong>Manual hard-pair mode</strong><p>ViennaRNA will enforce the pairs you enter before calculating the MFE. HYB2 Web Lite does not infer these pairs from HYB or RNAcofold evidence.</p></div>'
         : '<div class="fold-status fold-status-mfe"><strong>Plain minimum-free-energy mode</strong><p>Runs the deployed ViennaRNA WebAssembly engine in a dedicated worker without base-pair constraints.</p></div>',
       !cplfold && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : "",
+      '<div class="structure-run-bar">',
+      !running && unavailableReason ? '<p class="structure-run-reason" role="note">Cannot run yet: ' + escape(unavailableReason) + "</p>" : "",
       running ? renderStructureProgress(structure) : "",
       running ? '<button class="button button-secondary" type="button" data-feature-action="cancel-structure">' + (structure.operation === "capacity" ? "Cancel capacity test" : (structure.operation === "bonus-matrix" ? "Cancel input export" : "Cancel prediction")) + '</button>' : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable ? " disabled" : "") + ">" + actionLabel + "</button>",
+      "</div>",
       "</section>",
       '<section class="structure-result data-card">',
       '<div class="card-title-row"><div><h2>' + (structure.result ? "Structure result" : "Sequence preparation") + '</h2><span class="card-note">' + (structure.result && structure.result.label ? escape(structure.result.label) : (sequenceInfo.label ? escape(sequenceInfo.label) : "Choose a source")) + '</span></div><span class="card-kicker">' + format(structure.result && structure.result.sequence ? structure.result.sequence.length : length) + " nt</span></div>",
@@ -794,12 +840,13 @@
       structure.status === "error" ? '<div class="notice notice-error">' + escape(structure.message || (cplfold ? "Browser CPLfold could not finish the structure prediction." : "ViennaRNA WebAssembly could not finish the structure prediction.")) + "</div>" : "",
       structure.result ? renderStructureResult(structure.result, structure.selectedNucleotide, structure.viewMode) : renderStructurePreparation(sequenceInfo, structure),
       cplfold
-        ? '<div class="method-limit"><strong>Browser execution boundary</strong><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span></div>'
+        ? '<div class="method-limit"><strong>What the browser can fold</strong><span>CPLfold runs here without its fast compiled core, so this browser folds short regions only: up to 500 nt at most, and the capacity test above finds a safe length for this computer. With HYB evidence, each eligible record adds a bonus that pulls the bases of its two arms together. For longer RNAs, use HYB2 Desktop, or Download local inputs and run CPLfold on your own computer.</span><details class="method-limit-details"><summary>Technical details</summary><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span></details></div>'
         : guidedConstraintMode
         ? '<div class="method-limit"><strong>Compatibility boundary</strong><span>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. UNAFold remains an optional external CLI compatibility path, and pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</span></div>'
         : '<div class="method-limit"><strong>Scope</strong><span>Choose COMRADES(ViennaRNA) to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</span></div>',
       "</section>",
-      "</section>"
+      "</section>",
+      window.Hyb2Evidence ? window.Hyb2Evidence.renderPanel(state) : ""
     ].join("");
   }
 
@@ -815,6 +862,9 @@
       ], "structure-control"),
       guided ? '<div class="guided-input-summary"><strong>' + format(assembly ? assembly.eligibleRecordCount : 0) + ' eligible HYB row' + (assembly && assembly.eligibleRecordCount === 1 ? "" : "s") + '</strong><span>one contribution per row · overlap_score and collapsed raw-read count are not weights · single reference region</span></div>' : "",
       renderCplfoldTopologyControl(allowPseudoknot),
+      '<details class="structure-advanced" data-open-key="cplfold-advanced"' + openAttr("cplfold-advanced") + '>',
+      '<summary>Advanced settings <span class="structure-advanced-values">' + escape(cplfoldAdvancedSummary(structure)) + '</span></summary>',
+      '<p class="card-note">Defaults suit most RNAs. Evidence alpha sets how strongly HYB evidence pulls bases together (0 = energy only); beam and phase-1 candidates trade speed for a broader search; the energy window keeps candidates within that many kcal/mol of the best.</p>',
       '<div class="control-grid">',
       renderSelectControl("Beam size", "cplfoldBeam", String(structure.cplfoldBeam || "20"), [
         { value: "10", label: "10 · faster" },
@@ -835,11 +885,25 @@
         { value: "RE", label: "Rivas–Eddy" }
       ], "structure-control") + "</div>",
       '<div class="control-grid">' + renderTextControl("Evidence alpha", "cplfoldAlpha", structure.cplfoldAlpha || "0.5", "0.5", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + renderTextControl("Pseudoknot beta", "cplfoldBeta", structure.cplfoldBeta || "0", "0", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + "</div>",
+      '</details>',
       renderCplfoldCapacity(structure),
       renderCplfoldLocalCta(guided),
       '<p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p>',
       "</section>"
     ].join("");
+  }
+
+  // "beam 20 · 3 candidates · ±5 kcal/mol · DP09 · alpha 0.5 · beta 0 · defaults"
+  function cplfoldAdvancedSummary(structure) {
+    const values = {
+      beam: String(structure.cplfoldBeam || "20"), phase1: String(structure.cplfoldMaxPhase1 || "3"),
+      delta: String(structure.cplfoldEnergyDelta || "5"), model: String(structure.cplfoldEnergyModel || "DP09"),
+      alpha: String(structure.cplfoldAlpha || "0.5"), beta: String(structure.cplfoldBeta || "0")
+    };
+    const defaults = values.beam === "20" && values.phase1 === "3" && Number(values.delta) === 5 && values.model === "DP09" &&
+      Number(values.alpha) === 0.5 && Number(values.beta) === 0;
+    return "beam " + values.beam + " · " + values.phase1 + " candidates · ±" + values.delta + " kcal/mol · " + values.model +
+      " · alpha " + values.alpha + " · beta " + values.beta + (defaults ? " · defaults" : " · changed");
   }
 
   function renderCplfoldTopologyControl(allowPseudoknot) {
@@ -1292,22 +1356,37 @@
     };
   }
 
+  // Body of the Data drawer (app.js adds the title and the Start over
+  // section): the loaded files first, then name matching and
+  // reproducibility folded unless they need attention.
   function getFilesDialogBody(state) {
     const fasta = state.fasta;
     const buildCommit = window.HYB2_BUILD && window.HYB2_BUILD.commit;
-    const matchedCount = fasta ? Object.keys(fasta.mapping || {}).length : 0;
     const rnaCount = (state.summary.rnaNames || []).length;
-    return [
-      '<h2 id="files-dialog-title">Files</h2>',
+    const matchedCount = fasta ? Object.keys(fasta.mapping || {}).filter(function (key) { return fasta.mapping[key]; }).length : 0;
+    const unmatched = fasta ? Math.max(0, rnaCount - matchedCount) : 0;
+    const files = [
       '<div class="files-section"><span class="drawer-kicker">Interaction data</span><strong>' + escape(state.summary.fileName) + "</strong><span>" + formatBytes(state.summary.fileSize) + " · " + format(state.summary.validRecords) + ' valid records</span><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="replace-hyb">Replace</button><button class="quiet-button" type="button" data-feature-action="clear-hyb">Remove</button></div></div>',
       '<div class="files-section"><span class="drawer-kicker">Reference sequences</span>',
-      fasta ? '<strong>' + escape(fasta.fileName) + "</strong><span>" + format(fasta.sequences.length) + " sequences · " + format(matchedCount) + " of " + format(rnaCount) + " HYB RNA names matched</span>" + (fasta.unsupportedSequenceEntries ? '<span class="notice notice-warning">' + format(fasta.unsupportedSequenceEntries) + " FASTA record" + (fasta.unsupportedSequenceEntries === 1 ? " contains" : "s contain") + " unsupported symbol" + ((fasta.unsupportedCharacters || []).length === 1 ? "" : "s") + " (" + escape((fasta.unsupportedCharacters || []).join(", ")) + "). Symbols were preserved so coordinates did not shift; affected regions cannot be folded.</span>" : "") : "<strong>No FASTA loaded</strong><span>Optional: enables reference-region extraction and structure preparation.</span>",
-      '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="choose-fasta">' + (fasta ? "Replace" : "Add reference FASTA") + "</button>" + (fasta ? '<button class="quiet-button" type="button" data-feature-action="remove-fasta">Remove</button><button class="quiet-button" type="button" data-feature-action="export-fasta-mapping">Export mapping</button>' : "") + "</div></div>",
-      fasta ? renderFastaMapping(state) : "",
-      renderCompareFiles(state),
-      '<div class="files-section"><span class="drawer-kicker">Reproducibility</span><span>App version: <code class="mono">0.5.0</code></span><span>Git commit: <code class="mono hash-value">' + escape(buildCommit || "Local development build") + '</code></span><span>HYB SHA-256: <code class="mono hash-value">' + escape(state.summary.sha256 || (state.summary.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" + (fasta ? '<span>FASTA SHA-256: <code class="mono hash-value">' + escape(fasta.sha256 || (fasta.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" : "") + "</div>",
-      '<div class="files-section"><span class="drawer-kicker">Privacy</span><span>Files are held in memory only. This preview does not use IndexedDB, analytics, or an upload service.</span></div>'
+      fasta ? '<strong>' + escape(fasta.fileName) + "</strong><span>" + format(fasta.sequences.length) + (fasta.sequences.length === 1 ? " sequence" : " sequences") + "</span>" + (fasta.unsupportedSequenceEntries ? '<span class="notice notice-warning">' + format(fasta.unsupportedSequenceEntries) + " FASTA record" + (fasta.unsupportedSequenceEntries === 1 ? " contains" : "s contain") + " unsupported symbol" + ((fasta.unsupportedCharacters || []).length === 1 ? "" : "s") + " (" + escape((fasta.unsupportedCharacters || []).join(", ")) + "). Symbols were preserved so coordinates did not shift; affected regions cannot be folded.</span>" : "") : "<strong>No reference loaded</strong><span>Optional. Add a FASTA to see sequences, extract regions and predict structures.</span>",
+      '<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="choose-fasta">' + (fasta ? "Replace" : "Add reference FASTA") + "</button>" + (fasta ? '<button class="quiet-button" type="button" data-feature-action="remove-fasta">Remove</button>' : "") + "</div></div>",
+      renderCompareFiles(state)
     ].join("");
+    const parts = ['<section class="drawer-section"><h3>Loaded files</h3>' + files + "</section>"];
+    if (fasta) {
+      parts.push(drawerFold("data-mapping", "Name matching",
+        unmatched ? format(unmatched) + " of " + format(rnaCount) + " RNA names have no reference sequence" : "All " + format(rnaCount) + (rnaCount === 1 ? " RNA name matches" : " RNA names match") + " a reference sequence",
+        unmatched > 0, renderFastaMapping(state), unmatched > 0));
+    }
+    parts.push(drawerFold("data-reproducibility", "Reproducibility", "Versions and file fingerprints for your methods section", false,
+      '<div class="files-section"><span>App version: <code class="mono">0.5.0</code></span><span>Git commit: <code class="mono hash-value">' + escape(buildCommit || "Local development build") + '</code></span><span>HYB SHA-256: <code class="mono hash-value">' + escape(state.summary.sha256 || (state.summary.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" + (fasta ? '<span>FASTA SHA-256: <code class="mono hash-value">' + escape(fasta.sha256 || (fasta.sha256Unavailable ? "Unavailable" : "Calculating locally…")) + "</code></span>" : "") + "</div>"));
+    return parts.join("");
+  }
+
+  // A folded drawer section; `fallbackOpen` applies until the user toggles it.
+  function drawerFold(key, title, summary, fallbackOpen, body, attention) {
+    const remembered = window.Hyb2OpenSections && key in window.Hyb2OpenSections ? window.Hyb2OpenSections[key] : fallbackOpen;
+    return '<details class="drawer-section drawer-fold' + (attention ? " needs-attention" : "") + '" data-open-key="' + key + '"' + (remembered ? " open" : "") + '><summary><span class="drawer-fold-title">' + escape(title) + '</span><span class="drawer-fold-summary">' + escape(summary) + "</span></summary>" + body + "</details>";
   }
 
   // The other Compare datasets and the arc map files (the example loads
@@ -1360,11 +1439,11 @@
       : fasta.mappingEditorReference;
     const preview = rnas.slice(0, 100);
     return [
-      '<div class="fasta-mapping"><span class="drawer-kicker">Reference mapping</span>',
-      '<p class="card-note">Type exact identifiers to edit one mapping at a time. Suggestions are capped at 500 so large transcriptomes do not create a Cartesian product of DOM options.</p>',
+      '<div class="fasta-mapping">',
+      '<p class="card-note">Each RNA name in the HYB file is paired with the reference sequence of the same name. To fix one, pick the RNA, type the reference ID it should use, and apply.</p>',
       '<div class="control-grid"><label class="control-field"><span>HYB RNA</span><input type="search" list="fasta-rna-suggestions" value="' + attribute(editorRna) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorRna"><datalist id="fasta-rna-suggestions">' + rnas.slice(0, 500).map(function (rna) { return '<option value="' + attribute(rna) + '"></option>'; }).join("") + '</datalist></label>',
       '<label class="control-field"><span>FASTA reference ID</span><input type="search" list="fasta-reference-suggestions" value="' + attribute(editorReference) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorReference"><datalist id="fasta-reference-suggestions">' + fasta.sequences.slice(0, 500).map(function (entry) { return '<option value="' + attribute(entry.id) + '"></option>'; }).join("") + '</datalist></label></div>',
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="apply-fasta-mapping">Apply mapping</button><button class="quiet-button" type="button" data-feature-action="remove-current-fasta-mapping">Mark as not matched</button></div>',
+      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="apply-fasta-mapping">Apply mapping</button><button class="quiet-button" type="button" data-feature-action="remove-current-fasta-mapping">Mark as not matched</button><button class="quiet-button" type="button" data-feature-action="export-fasta-mapping">Export matches</button></div>',
       '<div class="mapping-rows">' + preview.map(function (rna) {
         const mapped = fasta.mapping[rna] || "Not matched";
         return '<div class="mapping-row"><span title="' + attribute(rna) + '">' + escape(rna) + '</span><span title="' + attribute(mapped) + '">' + escape(mapped) + '</span><button class="quiet-button" type="button" data-feature-action="edit-fasta-mapping" data-rna="' + attribute(rna) + '">Edit</button></div>';
@@ -1372,6 +1451,11 @@
       rnas.length > preview.length ? '<p class="table-note">Showing the first ' + format(preview.length) + " of " + format(rnas.length) + " RNA mappings. Enter any exact RNA name above to edit it.</p>" : "",
       "</div>"
     ].join("");
+  }
+
+  // " open" when the section with this key was left open (see app.js).
+  function openAttr(key) {
+    return window.Hyb2OpenSections && window.Hyb2OpenSections[key] ? " open" : "";
   }
 
   function renderSelectControl(label, key, value, options, feature) {

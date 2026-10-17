@@ -106,11 +106,6 @@
   z-index: 2;
 }
 
-/* The single teal accent rule at the top of the file panel column. */
-.landing-main::before {
-  transform-origin: right center;
-}
-
 /* ------------------------------------------------------------------ */
 /* Landing: typography                                                 */
 /* ------------------------------------------------------------------ */
@@ -537,10 +532,6 @@
 
 .motion-intro .headline-line:nth-child(2) .headline-inner {
   animation: line-up var(--dur-reveal) var(--ease-out) calc(120ms + var(--stagger-word)) both;
-}
-
-.motion-intro .landing-main::before {
-  animation: scale-x var(--dur-hero) var(--ease-out) 120ms both;
 }
 
 /* The file panel is the call to action: it settles once, as one piece. */

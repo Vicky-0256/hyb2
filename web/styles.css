@@ -297,18 +297,6 @@ a {
   padding: clamp(48px, 8vh, 96px) 0 64px;
 }
 
-.landing-main::before {
-  position: absolute;
-  z-index: 0;
-  top: 0;
-  right: 0;
-  width: 176px;
-  height: 3px;
-  background: var(--teal);
-  content: "";
-  pointer-events: none;
-}
-
 .landing-copy,
 .landing-panel {
   position: relative;

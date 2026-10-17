@@ -218,3 +218,12 @@
   height: 38px;
   min-height: 38px;
 }
+
+/* ---- D9 RNA partner analysis before an RNA is chosen: a hint line under
+   the filter bar instead of a card. */
+.partner-hint {
+  margin: -4px 0 12px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}

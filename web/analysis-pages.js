@@ -75,12 +75,8 @@
   }
 
   function renderChooseRnaPanel() {
-    return [
-      '<section class="data-card partner-card">',
-      '<div class="card-title-row"><h2>RNA partner analysis</h2><span class="card-kicker">Select an RNA</span></div>',
-      '<p class="empty-inline">Choose one RNA in the filter bar to compare its interaction partners using real local records.</p>',
-      "</section>"
-    ].join("");
+    // No card until an RNA is chosen: one hint line under the filter bar.
+    return '<p class="partner-hint">Choose an RNA in the filter bar to see its interaction partners.</p>';
   }
 
   function renderInteractionTable(interactions, state) {

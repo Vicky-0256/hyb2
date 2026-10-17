@@ -127,21 +127,25 @@
       "    </div>",
       '    <div class="report-actions" aria-label="Report actions">',
       '      <button class="button" type="button" data-action="print-report">Print / Save PDF</button>',
-      '      <div class="report-export-menu" role="group" aria-label="Export">',
-      '        <span class="report-export-label">Export</span>',
-      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="people">For people</button>',
-      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="ai">For AI</button>',
-      '        <button class="button button-secondary" type="button" data-action="report-export" data-audience="analysis">For further analysis</button>',
-      "      </div>",
-      '      <button class="quiet-button" type="button" data-action="navigate" data-page="overview">Back to workspace</button>',
+      '      <details class="export-menu report-export-menu">',
+      '        <summary class="button button-secondary">Export</summary>',
+      '        <div class="export-menu-list" role="menu" aria-label="Export the report">',
+      '          <button class="export-menu-item" type="button" role="menuitem" data-action="report-export" data-audience="people">For people<small>' + escape(EXPORT_TEXT.people[2]) + "</small></button>",
+      '          <button class="export-menu-item" type="button" role="menuitem" data-action="report-export" data-audience="ai">For AI<small>' + escape(EXPORT_TEXT.ai[2]) + "</small></button>",
+      '          <button class="export-menu-item" type="button" role="menuitem" data-action="report-export" data-audience="analysis">For further analysis<small>' + escape(EXPORT_TEXT.analysis[2]) + "</small></button>",
+      "        </div>",
+      "      </details>",
+      // inside the workspace the sidebar already returns; embedded and
+      // standalone views keep their own way back
+      context.state.shell === true ? "" : '      <button class="quiet-button" type="button" data-action="navigate" data-page="overview">Back to workspace</button>',
       "    </div>",
       "  </div>",
       '  <div class="report-hero-copy">',
       '    <span class="report-kicker">Local session snapshot</span>',
       '    <h1>Analysis report</h1>',
       '    <p class="report-lede">A print-ready view of the current HYB2 workspace, including configured analyses, generated results, selected intervals, and reproducibility details.</p>',
-      '    <div class="report-hero-meta"><span><strong>Scope</strong> ' + escape(context.record ? context.record.scope.label : "Session report") + '</span><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> <code>' + escape(formatTimestamp(context.generatedAt)) + '</code></span><span><strong>Version</strong> <code>HYB2 Web Lite ' + escape(REPORT_VERSION) + (window.HYB2_BUILD && window.HYB2_BUILD.commit ? " · " + escape(String(window.HYB2_BUILD.commit).slice(0, 12)) : "") + '</code></span>' + (context.record ? '<span><strong>Run</strong> <code>' + escape(context.record.run.id) + "</code></span>" : "") + '<span class="report-status is-ready">Processed locally</span></div>',
-      context.record ? '    <p class="report-scope-note">' + escape(context.record.scope.description) + "</p>" : "",
+      '    <div class="report-hero-meta"><span><strong>Scope</strong> ' + escape(context.record ? context.record.scope.label : "Session report") + '</span><span><strong>Source</strong> <code>' + escape(fileName) + '</code></span><span><strong>Generated</strong> ' + timeTag(context.generatedAt) + '</span><span><strong>Version</strong> <code>HYB2 Web Lite ' + escape(REPORT_VERSION) + (window.HYB2_BUILD && window.HYB2_BUILD.commit ? " · " + escape(String(window.HYB2_BUILD.commit).slice(0, 12)) : "") + '</code></span>' + (context.record ? '<span><strong>Run</strong> <code>' + escape(context.record.run.id) + "</code></span>" : "") + '<span class="report-status is-ready">Processed locally</span></div>',
+      context.record ? '    <p class="report-scope-note">' + escape(pageText(context.record.scope.description)) + "</p>" : "",
       "  </div>",
       '  <p class="report-print-note">Use your browser\'s Print dialog and choose <strong>Save as PDF</strong>. The report is generated in this tab and no data is uploaded.</p>',
       "</header>"
@@ -286,7 +290,7 @@
         "</div>",
         summary.ambiguousColumn16Records ? '<div class="report-callout report-callout--warning"><strong>Legacy column 16 detected</strong><span>' + formatNumber(summary.ambiguousColumn16Records) + ' rows were interpreted as legacy cluster support because no column 17 chimera type was present.</span></div>' : "",
         summary.errorSampleTruncated ? '<p class="report-note" data-cites="S01 R02"><span class="report-cite">S01, R02</span> The browser retained the first ' + formatNumber(summary.errorSampleCount) + ' validation details and omitted ' + formatNumber(summary.omittedErrorCount) + ' additional error details from memory. The complete invalid-row count remains ' + formatNumber(summary.invalidRecords) + '.</p>' : "",
-        errors.length ? '<div class="report-table-wrap">' + table(["Line", "Error", "Content sample"], errorRows) + '</div>' : '<div class="report-empty is-ready">No invalid row details were retained.</div>'
+        errors.length ? '<div class="report-table-wrap">' + table([num("Line"), "Error", "Content sample"], errorRows) + '</div>' : '<div class="report-empty is-ready">No invalid row details were retained.</div>'
       ].join("")
     );
   }
@@ -295,14 +299,14 @@
     const rows = (Array.isArray(items) ? items : []).slice(0, 8).map(function (item) {
       return [escape(item.name || ""), formatNumber(item.records), formatNumber(item.support)];
     });
-    return rows.length ? table(["RNA", "Records", "Support"], rows) : '<div class="report-empty">No RNA summary is available.</div>';
+    return rows.length ? table([long("RNA"), num("Records"), num("Support")], rows) : '<div class="report-empty">No RNA summary is available.</div>';
   }
 
   function renderTopPairTable(items) {
     const rows = (Array.isArray(items) ? items : []).slice(0, 8).map(function (item) {
       return [escape(item.rnaOne || ""), escape(item.rnaTwo || ""), formatNumber(item.records), formatNumber(item.support)];
     });
-    return rows.length ? table(["RNA 1", "RNA 2", "Records", "Support"], rows) : '<div class="report-empty">No RNA-pair summary is available.</div>';
+    return rows.length ? table([long("RNA 1"), long("RNA 2"), num("Records"), num("Support")], rows) : '<div class="report-empty">No RNA-pair summary is available.</div>';
   }
 
   function renderInteractions(context) {
@@ -340,10 +344,10 @@
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Current filters</h3>' + (filterEntries.length ? definitionList(filterEntries) : '<div class="report-empty">No additional filters; all valid records are included.</div>') + '</div>',
-        '<div class="report-subsection"><h3>Selected RNA partners</h3>' + (filters.rna && partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">Choose an RNA on the Interactions page to populate partner counts.</div>') + '</div>',
+        '<div class="report-subsection"><h3>Selected RNA partners</h3>' + (filters.rna && partnerRows.length ? table([long("Partner"), num("Records"), num("Support")], partnerRows) : '<div class="report-empty">Choose an RNA on the Interactions page to populate partner counts.</div>') + '</div>',
         "</div>",
         '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Top matching records</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(total, MAX_TABLE_ROWS)) + ' of ' + formatNumber(total) + '</span></div>',
-        rows.length ? table(["Sequence ID", "RNA pair", "RNA 1 interval", "RNA 2 interval", "Chimera type", "Support", "dG"], rows) : '<div class="report-empty">No records match the current filter state.</div>',
+        rows.length ? table(["Sequence ID", long("RNA pair"), num("RNA 1 interval"), num("RNA 2 interval"), "Chimera type", num("Support"), num("dG", "kcal/mol")], rows) : '<div class="report-empty">No records match the current filter state.</div>',
         dataNote(context, "tables/interactions.tsv"),
         "</div>"
       ].join("")
@@ -409,7 +413,7 @@
           ["Selected cell", selectedCell ? range(selectedCell.x, selectedCell.x + number(matrix.binSize, 1) - 1) + " x " + range(selectedCell.y, selectedCell.y + number(matrix.binSize, 1) - 1) : "None"]
         ]) : '<div class="report-empty">' + escape(matrix && matrix.reason || "Generate a Contact Map from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + '</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + ' · Teal–violet sequential</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
         matrix && matrix.resourceBudget ? '<p class="report-note" data-cites="S04 R12"><span class="report-cite">S04, R12</span> Adaptive browser budget: up to ' + formatNumber(matrix.maximumCells) + ' cells and ' + formatNumber(matrix.maximumBinContributions) + ' bin contributions for this device profile.</p>' : ""
       ].join("")
     );
@@ -446,7 +450,7 @@
           ["Total coverage", formatNumber(results.totalCoverage)]
         ]) : '<div class="report-empty">Generate Viewpoint coverage from the workspace to include its result here.</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#00a09d", viewpoint.selection && viewpoint.selection.start), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#00a09d", viewpoint.selection && viewpoint.selection.start, results.rna || viewpoint.rna, viewpoint.measure === "support" ? "Cluster support" : "Records"), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
         results && results.binSizeAdjusted ? '<p class="report-note" data-cites="S05"><span class="report-cite">S05</span> The requested resolution was adjusted to ' + formatNumber(results.binSize) + ' nt to keep the browser profile within its maximum bin count.</p>' : ""
       ].join("")
     );
@@ -487,10 +491,10 @@
           ["Profile resolution", formatNumber(results.profileBinSize) + " nt"]
         ]) : '<div class="report-empty">Explore a region from the workspace to include its result here.</div>') + '</div>',
         "</div>",
-        results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#6a4ff2", null), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/region_profile.tsv") + '</div>' : "",
-        '<div class="report-grid report-analysis-grid">',
-        '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + dataNote(context, "tables/region_partners.tsv") + '</div>',
-        '<div class="report-subsection"><h3>Matching record sample</h3>' + (recordRows.length ? table(["Sequence ID", "RNA 1", "Region 1", "RNA 2", "Region 2", "Support"], recordRows) : '<div class="report-empty">No matching records are available for this region.</div>') + '</div>',
+        results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#00a09d", null, region.rna, "Arm support"), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/region_profile.tsv") + '</div>' : "",
+        '<div class="report-grid report-region-tables">',
+        '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table([long("Partner"), num("Records"), num("Support")], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + dataNote(context, "tables/region_partners.tsv") + '</div>',
+        '<div class="report-subsection"><h3>Matching record sample</h3>' + (recordRows.length ? table(["Sequence ID", long("RNA 1"), num("Region 1"), long("RNA 2"), num("Region 2"), num("Support")], recordRows) : '<div class="report-empty">No matching records are available for this region.</div>') + '</div>',
         "</div>",
         results && results.records && results.records.length > MAX_TABLE_ROWS ? '<p class="report-note" data-cites="S06 R15"><span class="report-cite">S06, R15</span> Showing the first ' + formatNumber(MAX_TABLE_ROWS) + ' matching records. The Region Explorer export contains all local matches.</p>' : ""
       ].join("")
@@ -516,7 +520,7 @@
     });
     const datasetRows = datasets.slice(0, MAX_DATASET_ROWS).map(function (dataset) {
       const summary = dataset.summary || {};
-      return [escape(truncateText(dataset.fileName || "Dataset", 36)), escape(dataset.label || ""), escape(dataset.condition === "A" ? (comparison.conditionALabel || "Condition A") : (comparison.conditionBLabel || "Condition B")), formatNumber(summary.validRecords), formatNumber(summary.supportInteractions)];
+      return [escape(dataset.fileName || "Dataset"), escape(dataset.label || ""), escape(dataset.condition === "A" ? (comparison.conditionALabel || "Condition A") : (comparison.conditionBLabel || "Condition B")), formatNumber(summary.validRecords), formatNumber(summary.supportInteractions)];
     });
     const selected = result && comparison.selection ? findComparisonCell(result, comparison.selection) : null;
     const selectedDetail = selected ? definitionList([
@@ -534,7 +538,7 @@
       stepBadge(context, "comparison"),
       [
         '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Datasets and conditions</h3><span class="report-note-inline">' + formatNumber(datasets.length) + (datasets.length === 1 ? ' local file' : ' local files') + '</span></div>',
-        datasetRows.length ? table(["File", "Label", "Condition", "Valid records", "Support"], datasetRows) : '<div class="report-empty">Add a second local HYB dataset to configure a comparison.</div>',
+        datasetRows.length ? table([long("File"), "Label", "Condition", num("Valid records"), num("Support")], datasetRows) : '<div class="report-empty">Add a second local HYB dataset to configure a comparison.</div>',
         datasets.length > MAX_DATASET_ROWS ? '<p class="report-note" data-cites="S07"><span class="report-cite">S07</span> Only the first ' + formatNumber(MAX_DATASET_ROWS) + ' datasets are shown in the printable report.</p>' : "",
         "</div>",
         '<div class="report-grid report-analysis-grid">',
@@ -547,13 +551,15 @@
           ["Selected bin", selected ? "Included below" : "None"]
         ]) : '<div class="report-empty">' + escape(result && result.reason || "Update the comparison from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map): white at the smallest plotted count, green at the 95% quantile cap</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' + dataNote(context, "tables/compare_cells.tsv") : "",
-        '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
-        included(context, "differential_test") ? '<div class="report-subsection-heading report-step-heading"><h3>Differential test</h3>' + stepBadge(context, "differential_test") + "</div>" : "",
+        // K6, in the Compare page's order: A the differential test, then the
+        // maps (B and the descriptive effect map), then panels C to G
+        included(context, "differential_test") ? '<div class="report-subsection-heading report-step-heading"><h3>A · Differential test</h3>' + stepBadge(context, "differential_test") + "</div>" : "",
         window.Hyb2DeseqCard && included(context, "differential_test") ? String(window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) || "")
           .split('<p class="report-note">').join('<p class="report-note" data-cites="S08"><span class="report-cite">S08</span> ') : "",
         included(context, "differential_test") ? resultRefs(context, "differential_test") : "",
         included(context, "differential_test") ? dataNote(context, "tables/differential_interactions.tsv") + dataNote(context, "tables/differential_significant_cells.tsv") : "",
+        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Descriptive · Mean log2 effect</h3><span class="report-note-inline">not a test · violet = ' + escape(comparison.conditionALabel || "A") + ' enriched; teal = ' + escape(comparison.conditionBLabel || "B") + ' enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>B · Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map)</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' + dataNote(context, "tables/compare_cells.tsv") : "",
+        '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
         renderFigurePanels(context),
         '<p class="report-note" data-cites="S07 S08"><span class="report-cite">S07, S08</span> Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
       ].join("")
@@ -606,7 +612,7 @@
         ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.sequence || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12 R37"><span class="report-cite">S12, R37</span> The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
         ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracket || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
         ready ? "</div>" : "",
-        cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table(["Rank", "Type", "Topology", "Energy", "Pairs", "Crossing", "Dot-bracket"], candidateRows) + '</div>' : "",
+        cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table([num("Rank"), "Type", "Topology", num("Energy", "kcal/mol"), num("Pairs"), num("Crossing"), "Dot-bracket"], candidateRows) + '</div>' : "",
         ready && cplfold ? '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> CPLfold candidates preserve the selected pseudoknot setting and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain available from the RNA Structure page.</p>' : ""
       ].join("")
     );
@@ -637,7 +643,7 @@
           "<h3><code>" + evidenceId + "</code> " + escape(card.source_provider) + " · <code>" + escape(card.query_identifier) + "</code></h3>",
           definitionList([
             ["Query", card.query_identifier + (card.taxon ? " · taxon " + card.taxon : ""), true],
-            ["Retrieved", card.retrieved_at ? card.retrieved_at.replace("T", " ").slice(0, 16) + " UTC" : "-"],
+            ["Retrieved", card.retrieved_at ? formatTimestamp(card.retrieved_at) : "-"],
             ["Status", (window.Hyb2Evidence.STATUS_TEXT[card.status] || card.status)],
             ["Bound to", card.binding && card.binding.rna ? card.binding.rna + " " + range(card.binding.start, card.binding.end) : (card.binding && card.binding.source || "-"), true],
             ["Structure digest", card.binding && card.binding.resultDigest || "No result yet", true],
@@ -793,6 +799,21 @@
     stale: ["is-warning", "Inputs changed"]
   };
 
+  // status codes stay in data-status, Markdown and JSON; the page shows words
+  const RESULT_STATUS_TEXT = { not_available: "No value" };
+
+  function statusLabel(code) {
+    const badge = STATUS_BADGE[code];
+    return badge ? badge[1] : RESULT_STATUS_TEXT[code] || humanize(code);
+  }
+
+  // text from the result record shown on the page: no raw status codes
+  function pageText(text) {
+    return String(text == null ? "" : text).replace(/\b(not_run|no_result|not_available)\b/g, function (code) {
+      return statusLabel(code).toLowerCase();
+    });
+  }
+
   function recordStep(context, key) {
     const record = context.record;
     return record ? record.steps.find(function (step) { return step.key === key; }) || null : null;
@@ -804,9 +825,9 @@
     if (!step) {
       return '<span class="report-status is-pending">Configured</span>';
     }
-    const badge = STATUS_BADGE[step.status] || ["is-pending", step.status];
+    const badge = STATUS_BADGE[step.status] || ["is-pending", statusLabel(step.status)];
     const label = step.status === "ok" && okLabel ? okLabel : badge[1];
-    return '<span class="report-status ' + badge[0] + '" data-step="' + escape(step.id) + '" data-status="' + escape(step.status) + '" title="' + escape(step.id + " · " + (step.detail || step.statusText)) + '">' + escape(label) + "</span>";
+    return '<span class="report-status ' + badge[0] + '" data-step="' + escape(step.id) + '" data-status="' + escape(step.status) + '" title="' + escape(step.id + " · " + pageText(step.detail || step.statusText)) + '">' + escape(label) + "</span>";
   }
 
   // a part heading of the report (1 to 5), also the table of contents' anchors
@@ -878,7 +899,7 @@
       const box = '<input class="report-select" type="checkbox" data-action="report-select" data-step="' + escape(step.key) + '"' + (kept ? " checked" : "") +
         (step.key === "parse" ? " disabled" : "") + ' aria-label="Include ' + escape(step.id + " " + step.title) + ' in the report">';
       return [box + ' <code>' + escape(step.id) + "</code>", escape(step.title) + (kept ? "" : ' <em class="report-left-out">left out</em>'), stepBadge({ record: full }, step.key),
-        escape(step.scope || "—"), escape(step.completedAt ? formatTimestamp(step.completedAt) : (step.status === "ok" || step.status === "no_result" ? "from current inputs" : "—")), escape(step.detail || "")];
+        escape(step.scope || "—"), step.completedAt ? timeTag(step.completedAt) : escape(step.status === "ok" || step.status === "no_result" ? "from current inputs" : "—"), escape(pageText(step.detail || ""))];
     });
     return section(
       "status",
@@ -889,7 +910,7 @@
         '<label class="report-purpose"><span>Purpose of this analysis (optional, written by you; saved in the exports as the researcher\'s text)</span>' +
           '<textarea id="report-purpose" rows="2" maxlength="1000" placeholder="e.g. Which ZIKV genome contacts differ between the African and Asian lineages?">' + escape(purpose) + "</textarea></label>",
         purpose.trim() ? '<p class="report-purpose-print"><strong>Purpose:</strong> ' + escape(purpose.trim()) + "</p>" : "",
-        '<p class="report-note">Each step has a fixed id (S01 to S13) shared with the Markdown and JSON exports. A step that did not run shows <code>not_run</code>; its results show —, never 0. Untick a step to make a selected-results report: the page and every export then leave it out and say so.</p>',
+        '<p class="report-note">Each step has a fixed id (S01 to S13) shared with the Markdown and JSON exports. A step that did not run shows “Not run”; its results show —, never 0. Untick a step to make a selected-results report: the page and every export then leave it out and say so.</p>',
         selected ? '<p class="notice notice-warning report-selected-note">Selected results report: ' + escape(record.scope.omittedSteps.join(", ")) + ' left out. <button class="quiet-button" type="button" data-action="report-select-all">Include every step</button></p>' : "",
         '<div class="report-subsection report-subsection--table">' + table(["Id", "Step", "Status", "Scope", "Completed", "Detail"], stepRows) + "</div>"
       ].join("")
@@ -903,7 +924,7 @@
     }
     const resultRows = record.results.map(function (result) {
       return ['<code>' + escape(result.id) + "</code>", '<code>' + escape(result.step) + "</code>", escape(result.label),
-        '<span data-result="' + escape(result.id) + '">' + escape(window.Hyb2Results.formatValue(result)) + "</span>", escape(result.unit), '<code>' + escape(result.status) + "</code>",
+        '<span data-result="' + escape(result.id) + '">' + escape(window.Hyb2Results.formatValue(result)) + "</span>", escape(result.unit), escape(statusLabel(result.status)),
         '<span title="' + escape(window.Hyb2Results.NATURE_TEXT[result.nature] || "") + '">' + escape(result.nature.replace(/_/g, " ")) + "</span>"];
     });
     const tableRows = record.tables.map(function (t) {
@@ -917,7 +938,7 @@
       '<span class="report-status is-ready">' + formatNumber(record.results.filter(function (r) { return r.value !== null; }).length) + " of " + formatNumber(record.results.length) + " with a value</span>",
       [
         '<p class="report-note">The numbers in the sections below carry the same ids (for example "Cells · R10"). Each result covers its step\'s scope in Analysis status.</p>',
-        '<details class="report-details" open data-open-key="report-results"><summary>Results (' + formatNumber(record.results.length) + ")</summary>" + table(["Id", "Step", "Result", "Value", "Unit", "Status", "Nature"], resultRows) + "</details>",
+        '<details class="report-details" open data-open-key="report-results"><summary>Results (' + formatNumber(record.results.length) + ")</summary>" + table(["Id", "Step", "Result", num("Value"), "Unit", "Status", "Nature"], resultRows) + "</details>",
         tableRows.length ? '<details class="report-details" data-open-key="report-tables"><summary>Data tables (' + formatNumber(tableRows.length) + ")</summary>" + table(["Id", "Step", "Table", "Scope", "File"], tableRows) + "</details>" : ""
       ].join("")
     );
@@ -934,9 +955,9 @@
         '<span class="report-status ' + (record.warnings.length ? "is-warning" : "is-ready") + '">' + formatNumber(record.warnings.length) + (record.warnings.length === 1 ? " warning" : " warnings") + "</span>",
         [
           '<div class="report-subsection"><h3>Warnings</h3>' + (record.warnings.length ? '<ul class="report-review-list">' + record.warnings.map(function (w) {
-            return "<li><code>" + escape(w.id) + "</code> (" + escape(w.step) + ") " + escape(w.text) + "</li>";
+            return "<li><code>" + escape(w.id) + "</code> (" + escape(w.step) + ") " + escape(pageText(w.text)) + "</li>";
           }).join("") + "</ul>" : '<div class="report-empty is-ready">No warnings for this session.</div>') + "</div>",
-          '<div class="report-subsection"><h3>Limitations</h3><ul class="report-review-list">' + record.limitations.map(function (text) { return "<li>" + escape(text) + "</li>"; }).join("") + "</ul></div>"
+          '<div class="report-subsection"><h3>Limitations</h3><ul class="report-review-list">' + record.limitations.map(function (text) { return "<li>" + escape(pageText(text)) + "</li>"; }).join("") + "</ul></div>"
         ].join("")
       ) : ""
     ].join("");
@@ -948,27 +969,34 @@
     if (!record) {
       return "";
     }
-    const keys = [["arc_map", "Arc map (C)"], ["region_structures", "Region structures (D, E)"], ["folding_energy", "Folding energy (F, G)"]];
+    // K6 panel names, as on the Compare page
+    const keys = [["arc_map", "C · Arc map"], ["region_structures", "D, E · Region structures"], ["folding_energy", "F, G · Folding energy"]];
     return keys.filter(function (pair) { return included(context, pair[0]); }).map(function (pair) {
       const step = recordStep(context, pair[0]);
       const figures = record.figures.filter(function (f) { return f.step === step.id; });
       const tables = record.tables.filter(function (t) { return t.step === step.id; });
       const body = figures.map(function (f) {
         const svg = safeCall(f.svg, "");
-        return svg ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>' + escape(f.title) + '</h3><span class="report-note-inline">' + escape(f.id) + "</span></div>" + visualBlock(svg, "") + "</div>" : "";
+        // the panel heading already names a figure titled like its panel
+        const heading = f.title === pair[1] ? '<span class="report-note-inline">' + escape(f.id + " · " + f.file) + "</span>" : "<h3>" + escape(f.title) + '</h3><span class="report-note-inline">' + escape(f.id) + "</span>";
+        return svg ? '<div class="report-visual-wrap"><div class="report-subsection-heading">' + heading + "</div>" + visualBlock(svg, "") + "</div>" : "";
       }).join("");
-      const data = tables.length ? '<p class="report-note">Data: ' + tables.map(function (t) {
+      const data = tables.length ? '<p class="report-data-note">Data: ' + tables.map(function (t) {
         return "<code>" + escape(t.id + " " + t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '">Download</button>';
       }).join(" · ") + "</p>" : "";
       return '<div class="report-subsection report-figure-panel"><div class="report-subsection-heading report-step-heading"><h3>' + escape(pair[1]) + "</h3>" + stepBadge(context, pair[0]) + "</div>" +
-        (body || '<div class="report-empty">' + escape(step.detail || step.statusText) + "</div>") + resultRefs(context, pair[0]) + data + "</div>";
+        (body || '<div class="report-empty">' + escape(pageText(step.detail || step.statusText)) + "</div>") + resultRefs(context, pair[0]) + data + "</div>";
     }).join("");
   }
 
+  // [menu label, panel description, one-line menu summary]
   const EXPORT_TEXT = {
-    people: ["For people", "Read, print or archive the report. Print / Save PDF keeps a fixed layout; the offline HTML keeps this page's tables, figures and open sections in one file that works without this site."],
-    ai: ["For AI", "A layered context package for an AI assistant: README, a template report.md (no language model), summary.json with every result id, status and unit, data_dictionary.json, provenance.json, evidence.json and bounded tables. Large tables stay in the analysis package."],
-    analysis: ["For further analysis", "Tables with a data dictionary for scripts and other tools: every filtered record, every comparison cell and significant cell, region and folding-energy tables, structures as dot-bracket, and the figure SVGs."]
+    people: ["For people", "Read, print or archive the report. Print / Save PDF keeps a fixed layout; the offline HTML keeps this page's tables, figures and open sections in one file that works without this site.",
+      "PDF or offline HTML to read, print or archive"],
+    ai: ["For AI", "A layered context package for an AI assistant: README, a template report.md (no language model), summary.json with every result id, status and unit, data_dictionary.json, provenance.json, evidence.json and bounded tables. Large tables stay in the analysis package.",
+      "Context package: summary, result ids, bounded tables"],
+    analysis: ["For further analysis", "Tables with a data dictionary for scripts and other tools: every filtered record, every comparison cell and significant cell, region and folding-energy tables, structures as dot-bracket, and the figure SVGs.",
+      "Full tables with a data dictionary, structures, SVGs"]
   };
 
   function renderExportPanel(context, state) {
@@ -987,7 +1015,7 @@
     const waiting = context.record ? context.record.steps.filter(function (step) { return step.status === "pending" || step.status === "running"; }) : [];
     if (waiting.length) {
       out.push('<p class="notice notice-warning" data-export-waiting>Still being prepared: ' + escape(waiting.map(function (step) { return step.id + " " + step.title; }).join("; ")) +
-        ". These steps are exported as " + escape(waiting.map(function (step) { return step.status; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" or ")) + "; open the export again when they finish to include their results.</p>");
+        ". These steps are exported as " + escape(waiting.map(function (step) { return statusLabel(step.status).toLowerCase(); }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" or ")) + ", without results; open the export again when they finish to include their results.</p>");
     }
     if (exp.audience === "people") {
       out.push('<div class="report-export-actions"><button class="button" type="button" data-action="print-report">Print / Save PDF</button><button class="button button-secondary" type="button" data-action="report-export-html">Download offline HTML</button></div>');
@@ -999,7 +1027,7 @@
       const total = exp.list.reduce(function (sum, f) { return sum + (f.excluded ? 0 : f.bytes); }, 0);
       out.push('<div class="report-export-actions"><button class="button" type="button" data-action="report-export-zip">Download all (' + escape(formatBytes(total)) + ", ZIP)</button>" +
         (exp.audience === "ai" ? '<button class="button button-secondary" type="button" data-action="report-export-copy">Copy AI summary (report.md)</button>' : "") + "</div>");
-      out.push(table(["Include", "File", "Contents and fields", "Size", ""], exp.list.map(function (f) {
+      out.push(table(["Include", "File", "Contents and fields", num("Size"), ""], exp.list.map(function (f) {
         const box = '<input type="checkbox" data-action="report-export-toggle" data-path="' + escape(f.path) + '"' + (f.excluded ? "" : " checked") + (f.required ? " disabled" : "") +
           ' aria-label="Include ' + escape(f.path) + '">';
         const fields = f.fields && f.fields.length ? '<details class="report-fields"><summary>' + formatNumber(f.fields.length) + (f.fields.length === 1 ? " field" : " fields") + "</summary><code>" +
@@ -1046,16 +1074,142 @@
     return entries.length ? definitionList(entries) : '<div class="report-empty">No parameter values were set.</div>';
   }
 
+  // K3 column kinds for table(): a header is a plain label, or
+  // num(label, unit) for a right-aligned tabular number column, or
+  // long(label) for a name that stays on one line, cut with an ellipsis and
+  // given its full text as a title (print shows it in full).
+  function num(label, unit) {
+    return { label: label, num: true, unit: unit || "" };
+  }
+
+  function long(label) {
+    return { label: label, truncate: true };
+  }
+
   function table(headers, rows) {
     // Wide tables scroll inside their own box on screen instead of widening
     // the page; print styles let them flow at full width.
-    return '<div class="report-table-scroll"><table class="report-table"><thead><tr>' + headers.map(function (header) { return '<th scope="col">' + escape(header) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
-      return '<tr>' + row.map(function (cell) { return '<td>' + cell + '</td>'; }).join("") + '</tr>';
+    const columns = headers.map(function (header) { return typeof header === "string" ? { label: header } : header; });
+    // the long-name columns share 60% of the width (names get the most room)
+    const longColumns = columns.filter(function (column) { return column.truncate; }).length;
+    return '<div class="report-table-scroll"><table class="report-table"><thead><tr>' + columns.map(function (column) {
+      return '<th scope="col"' + (column.num ? ' class="num"' : "") + (column.truncate ? ' style="width:' + Math.round(60 / longColumns) + '%"' : "") + '>' + escape(column.label) + (column.unit ? ' <span class="unit">' + escape(column.unit) + "</span>" : "") + '</th>';
+    }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
+      return '<tr>' + row.map(function (cell, index) {
+        const column = columns[index] || {};
+        if (column.truncate) {
+          // cells are escaped markup: their text, tags removed, is a safe title
+          return '<td class="cell-truncate" title="' + String(cell).replace(/<[^>]*>/g, "") + '">' + cell + '</td>';
+        }
+        return '<td' + (column.num ? ' class="num"' : "") + '>' + cell + '</td>';
+      }).join("") + '</tr>';
     }).join("") + '</tbody></table></div>';
   }
 
   function visualBlock(svg, note) {
     return '<div class="report-visual">' + svg + (note ? '<p class="report-note-inline">' + escape(note) + '</p>' : "") + '</div>';
+  }
+
+  // ---- printable figures: light like every SVG export (K4), with axis
+  // ticks and titles (K5) and a colour bar (K1) drawn into the SVG itself.
+  // Without ui-kit.js (the node checks) the axes keep their two end ticks
+  // and the colour bar is left out.
+  const FIGURE_INK = "#132c47";
+  const FIGURE_MUTED = "#5b6c80";
+  const FIGURE_LINE = "#c2d3db";
+  const FIGURE_GRID = "#e6eef2";
+  const FIGURE_FONT = "ui-sans-serif, system-ui, -apple-system, &quot;Segoe UI&quot;, sans-serif";
+  const MAP_LEFT_PAD = 26; // room left of the plot for the rotated y-axis title
+
+  function uiKit() {
+    return typeof window !== "undefined" && window.Hyb2UiKit ? window.Hyb2UiKit : null;
+  }
+
+  // nice ticks (K5) with both ends
+  function axisTicks(min, max, target) {
+    const kit = uiKit();
+    return kit ? kit.niceTicks(min, max, target || 5) : (min === max ? [min] : [min, max]);
+  }
+
+  function axisText(x, y, anchor, text, extra) {
+    return '<text x="' + fixed(x) + '" y="' + fixed(y) + '" text-anchor="' + anchor + '" font-family="' + FIGURE_FONT + '" font-size="10" fill="' + FIGURE_MUTED + '"' + (extra || "") + ">" + escape(text) + "</text>";
+  }
+
+  // x axis below a plot: ticks over [lo, hi], position(v) -> x
+  function xAxisSvg(plot, lo, hi, position, title) {
+    const bottom = plot.top + plot.height;
+    const ticks = axisTicks(lo, hi, 6).map(function (value, index, all) {
+      const x = position(value);
+      const anchor = all.length > 1 && index === 0 ? "start" : all.length > 1 && index === all.length - 1 ? "end" : "middle";
+      return '<line x1="' + fixed(x) + '" x2="' + fixed(x) + '" y1="' + bottom + '" y2="' + (bottom + 4) + '" stroke="' + FIGURE_MUTED + '" stroke-width="0.75"></line>' + axisText(x, bottom + 15, anchor, formatNumber(value));
+    }).join("");
+    return ticks + '<text x="' + fixed(plot.left + plot.width / 2) + '" y="' + (bottom + 32) + '" text-anchor="middle" font-family="' + FIGURE_FONT + '" font-size="11" font-weight="600" fill="' + FIGURE_INK + '">' + escape(title) + "</text>";
+  }
+
+  // y axis left of a plot; grid lines across it when asked
+  function yAxisSvg(plot, lo, hi, position, title, grid) {
+    const ticks = axisTicks(lo, hi, 5).map(function (value) {
+      const y = position(value);
+      return (grid ? '<line x1="' + plot.left + '" x2="' + (plot.left + plot.width) + '" y1="' + fixed(y) + '" y2="' + fixed(y) + '" stroke="' + FIGURE_GRID + '" stroke-width="0.75"></line>' : "") +
+        '<line x1="' + (plot.left - 4) + '" x2="' + plot.left + '" y1="' + fixed(y) + '" y2="' + fixed(y) + '" stroke="' + FIGURE_MUTED + '" stroke-width="0.75"></line>' + axisText(plot.left - 6, y + 3.5, "end", formatNumber(value));
+    }).join("");
+    const middle = plot.top + plot.height / 2;
+    const x = plot.titleX;
+    return ticks + '<text x="' + x + '" y="' + fixed(middle) + '" transform="rotate(-90 ' + x + " " + fixed(middle) + ')" text-anchor="middle" font-family="' + FIGURE_FONT + '" font-size="11" font-weight="600" fill="' + FIGURE_INK + '">' + escape(title) + "</text>";
+  }
+
+  // K1 colour bar under the plot, right-aligned
+  function legendSvg(plot, opts) {
+    const kit = uiKit();
+    if (!kit) {
+      return "";
+    }
+    const width = 240;
+    return kit.legend.svg(Object.assign({ orientation: "horizontal", x: plot.left + plot.width - width, y: plot.top + plot.height + 44, width: width, height: 10, ink: FIGURE_INK, muted: FIGURE_MUTED }, opts));
+  }
+
+  function positionTitle(rna) {
+    return (rna || "RNA") + " position (nt)";
+  }
+
+  // a binned map's frame: background, axes over inclusive nt coordinates
+  // (y grows downwards, as on the page), and the colour bar
+  function mapFrame(plot, extent, titles, legend) {
+    const xSpan = Math.max(1, extent.xEnd - extent.xStart);
+    const ySpan = Math.max(1, extent.yEnd - extent.yStart);
+    return xAxisSvg(plot, extent.xStart, extent.xEnd - 1, function (v) { return plot.left + (v - extent.xStart) / xSpan * plot.width; }, titles[0]) +
+      yAxisSvg(plot, extent.yStart, extent.yEnd - 1, function (v) { return plot.top + (v - extent.yStart) / ySpan * plot.height; }, titles[1], false) +
+      legendSvg(plot, legend);
+  }
+
+  const MAP_HEIGHT = 430;
+
+  function mapSvgOpen(className, label, title) {
+    return '<svg class="report-svg ' + className + '" viewBox="' + (-MAP_LEFT_PAD) + " 0 " + (760 + MAP_LEFT_PAD) + " " + MAP_HEIGHT + '" role="img" aria-label="' + escape(label) + '">' +
+      "<title>" + escape(title) + "</title>" +
+      '<rect x="' + (-MAP_LEFT_PAD) + '" y="0" width="' + (760 + MAP_LEFT_PAD) + '" height="' + MAP_HEIGHT + '" fill="#ffffff"></rect>';
+  }
+
+  // the Contact Map page's colour-bar title: "Record count (linear)",
+  // "Cluster support (log1p)"
+  function contactMeasureTitle(contact) {
+    return (contact && contact.measure === "support" ? "Cluster support" : "Record count") + (contact && contact.scale === "log" ? " (log1p)" : " (linear)");
+  }
+
+  // colour bar of the contact map over display values (linear or log1p);
+  // the top tick reads "≥ cap" when the cap clips the largest value
+  function contactLegend(cap, contact, displayMax) {
+    const top = Math.max(cap, 1e-9);
+    const clipped = number(displayMax) > cap;
+    return {
+      kind: "sequential",
+      colorAt: brandHeatColor,
+      min: 0,
+      max: top,
+      ticks: axisTicks(0, top, 4),
+      format: function (value) { return (clipped && value === top ? "\u2265 " : "") + formatNumber(value); },
+      title: contactMeasureTitle(contact)
+    };
   }
 
   function renderHeatmap(matrix, contact) {
@@ -1086,47 +1240,41 @@
       const isSelected = selected && number(selected.x) === number(cell.x) && number(selected.y) === number(cell.y);
       return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + brandHeatColor(ratio) + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + "; value " + formatNumber(cell.value)) + '</title></rect>';
     }).join("");
+    const plot = { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight, titleX: -12 };
     return [
-      '<svg class="report-svg report-heatmap-svg" viewBox="0 0 760 360" role="img" aria-label="Printable contact map">',
-      '<title>Contact map for ' + escape(contact && contact.rnaX || "RNA X") + ' and ' + escape(contact && contact.rnaY || "RNA Y") + '</title>',
-      '<rect x="0" y="0" width="760" height="360" fill="transparent"></rect>',
-      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="#c2d3db"></rect>',
+      mapSvgOpen("report-heatmap-svg", "Printable contact map", "Contact map for " + (contact && contact.rnaX || "RNA X") + " and " + (contact && contact.rnaY || "RNA Y")),
+      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="' + FIGURE_LINE + '"></rect>',
       rects,
-      '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 24) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xStart)) + '</text>',
-      '<text x="' + (plotLeft + plotWidth) + '" y="' + (plotTop + plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xEnd - 1)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(yStart)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(yEnd - 1)) + '</text>',
-      '<text x="' + (plotLeft + plotWidth / 2) + '" y="' + (plotTop + plotHeight + 44) + '" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#607286">' + escape(contact && contact.rnaX || "RNA X") + ' coordinate</text>',
-      '<text x="16" y="' + (plotTop + plotHeight / 2) + '" transform="rotate(-90 16 ' + (plotTop + plotHeight / 2) + ')" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#607286">' + escape(contact && contact.rnaY || "RNA Y") + ' coordinate</text>',
+      mapFrame(plot, { xStart: xStart, xEnd: xEnd, yStart: yStart, yEnd: yEnd }, [positionTitle(contact && contact.rnaX), positionTitle(contact && contact.rnaY)], contactLegend(cap, contact, matrix.max)),
       '</svg>'
     ].join("");
   }
 
-  function renderCoverageSvg(items, maximum, color, selectedStart) {
+  function renderCoverageSvg(items, maximum, color, selectedStart, rna, measure) {
     const bins = downsample(items || [], MAX_VISUAL_BINS);
     if (!bins.length) {
       return '<div class="report-empty">No coverage bins were generated.</div>';
     }
-    const plotLeft = 46;
-    const plotTop = 22;
-    const plotWidth = 680;
-    const plotHeight = 155;
+    const plot = { left: 68, top: 14, width: 672, height: 150, titleX: 14 };
     const maxValue = Math.max(0, number(maximum, maxSeriesValue(bins)));
-    const barWidth = plotWidth / bins.length;
+    const barWidth = plot.width / bins.length;
+    const first = number(bins[0].start);
+    const last = number(bins[bins.length - 1].end);
+    const span = Math.max(1, last - first + 1);
     const bars = bins.map(function (bin, index) {
       const value = Math.max(0, number(bin.value));
-      const height = maxValue ? value / maxValue * plotHeight : 0;
+      const height = maxValue ? value / maxValue * plot.height : 0;
       const selected = selectedStart != null && number(selectedStart) >= number(bin.start) && number(selectedStart) <= number(bin.end);
-      return '<rect x="' + fixed(plotLeft + index * barWidth) + '" y="' + fixed(plotTop + plotHeight - height) + '" width="' + fixed(Math.max(1, barWidth - 0.5)) + '" height="' + fixed(height) + '" fill="' + (selected ? "#6a4ff2" : color) + '"><title>' + escape(range(bin.start, bin.end) + "; value " + formatNumber(value)) + '</title></rect>';
+      return '<rect x="' + fixed(plot.left + index * barWidth) + '" y="' + fixed(plot.top + plot.height - height) + '" width="' + fixed(Math.max(1, barWidth - 0.5)) + '" height="' + fixed(height) + '" fill="' + (selected ? "#6a4ff2" : color) + '"><title>' + escape(range(bin.start, bin.end) + "; value " + formatNumber(value)) + '</title></rect>';
     }).join("");
     return [
-      '<svg class="report-svg report-coverage-svg" viewBox="0 0 760 220" role="img" aria-label="Printable coverage profile">',
+      '<svg class="report-svg report-coverage-svg" viewBox="0 0 760 212" role="img" aria-label="Printable coverage profile">',
       '<title>RNA interaction coverage profile</title>',
-      '<line x1="' + plotLeft + '" y1="' + (plotTop + plotHeight) + '" x2="' + (plotLeft + plotWidth) + '" y2="' + (plotTop + plotHeight) + '" stroke="#c2d3db"></line>',
+      '<rect x="0" y="0" width="760" height="212" fill="#ffffff"></rect>',
+      maxValue ? yAxisSvg(plot, 0, maxValue, function (v) { return plot.top + plot.height - v / maxValue * plot.height; }, measure || "Coverage", true) : "",
       bars,
-      '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 22) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(bins[0].start)) + '</text>',
-      '<text x="' + (plotLeft + plotWidth) + '" y="' + (plotTop + plotHeight + 22) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(bins[bins.length - 1].end)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(formatNumber(maxValue)) + '</text>',
+      '<line x1="' + plot.left + '" y1="' + (plot.top + plot.height) + '" x2="' + (plot.left + plot.width) + '" y2="' + (plot.top + plot.height) + '" stroke="' + FIGURE_LINE + '"></line>',
+      xAxisSvg(plot, first, last, function (v) { return plot.left + (v - first + 0.5) / span * plot.width; }, positionTitle(rna)),
       '</svg>'
     ].join("");
   }
@@ -1160,17 +1308,41 @@
       const isSelected = selected && number(selected.x) === number(cell.x) && number(selected.y) === number(cell.y);
       return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + fill + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + (mode === "conserved" ? "; similarity " + formatNumber(cell.similarity) : "; effect " + formatNumber(cell.effect))) + '</title></rect>';
     }).join("");
+    const plot = { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight, titleX: -12 };
     return [
-      '<svg class="report-svg report-heatmap-svg" viewBox="0 0 760 360" role="img" aria-label="Printable comparison map">',
-      '<title>' + escape(mode === "conserved" ? "Similarity heatmap" : "Mean log2 comparison effect") + '</title>',
-      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="' + (mode !== "conserved" ? "#f7fafb" : comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff") + '" stroke="#c2d3db"></rect>',
+      mapSvgOpen("report-heatmap-svg", "Printable comparison map", mode === "conserved" ? "Similarity heatmap" : "Mean log2 comparison effect"),
+      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="' + (mode !== "conserved" ? "#f7fafb" : comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff") + '" stroke="' + FIGURE_LINE + '"></rect>',
       rects,
-      '<text x="' + plotLeft + '" y="' + (plotTop + plotHeight + 24) + '" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xStart)) + '</text>',
-      '<text x="' + (plotLeft + plotWidth) + '" y="' + (plotTop + plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(xEnd - 1)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + 4) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(yStart)) + '</text>',
-      '<text x="' + (plotLeft - 8) + '" y="' + (plotTop + plotHeight) + '" text-anchor="end" font-family="monospace" font-size="11" fill="#607286">' + escape(String(yEnd - 1)) + '</text>',
+      mapFrame(plot, { xStart: xStart, xEnd: xEnd, yStart: yStart, yEnd: yEnd }, [positionTitle(comparison.rnaX), positionTitle(comparison.rnaY)],
+        mode === "conserved" ? similarityLegend(result, comparison) : effectLegend(cap, comparison)),
       '</svg>'
     ].join("");
+  }
+
+  // diverging: negative (teal) = higher in B, positive (violet) = higher in A
+  function effectLegend(cap, comparison) {
+    return {
+      kind: "diverging",
+      colorAt: function (t) { return effectColor(t * 2 - 1); },
+      min: -cap,
+      max: cap,
+      ticks: [-cap, -cap / 2, 0, cap / 2, cap],
+      title: "Mean log2 effect (" + (comparison.conditionALabel || "A") + " / " + (comparison.conditionBLabel || "B") + ")",
+      lowLabel: (comparison.conditionBLabel || "B") + " enriched",
+      highLabel: (comparison.conditionALabel || "A") + " enriched"
+    };
+  }
+
+  // white at the smallest plotted count, forestgreen at the 95% quantile cap
+  function similarityLegend(result, comparison) {
+    const cap = Math.max(1, number(result && result.similarityCap, 1));
+    const floor = Math.min(cap, similarityFloorOf(result));
+    const title = "min(" + (comparison.conditionALabel || "A") + ", " + (comparison.conditionBLabel || "B") + ") raw count";
+    if (!(cap > floor) || !Number.isFinite(floor)) {
+      // a single plotted value: one colour, the midpoint of the ramp
+      return { kind: "sequential", colorAt: function () { return conservedColor(0.5); }, min: cap - 0.5, max: cap + 0.5, ticks: [cap], title: title };
+    }
+    return { kind: "sequential", colorAt: conservedColor, min: floor, max: cap, title: title, highLabel: "95% quantile cap" };
   }
 
   function parameterSnapshot(name, state, fallback) {
@@ -1338,8 +1510,13 @@
     return number(right.similarity) - number(left.similarity) || number(left.x) - number(right.x) || number(left.y) - number(right.y);
   }
 
+  // the Contact Map's "Teal–violet sequential" scale in its light (export)
+  // form from analysis-ui.js (K4); the older ramp when that is not loaded
   function brandHeatColor(ratio) {
     const value = Math.max(0, Math.min(1, number(ratio)));
+    if (typeof window !== "undefined" && window.Hyb2UI && typeof window.Hyb2UI.viridis === "function") {
+      return window.Hyb2UI.viridis(value, "light");
+    }
     if (value < 0.5) {
       return interpolateColor("#132c47", "#00a09d", value * 2);
     }
@@ -1416,8 +1593,8 @@
   function effectColor(value) {
     const bounded = Math.max(-1, Math.min(1, number(value)));
     return bounded >= 0
-      ? interpolateColor("#f7fafb", "#6a4ff2", bounded)
-      : interpolateColor("#f7fafb", "#00a09d", Math.abs(bounded));
+      ? interpolateColor("#f5f8fa", "#6a4ff2", bounded)
+      : interpolateColor("#f5f8fa", "#00a09d", Math.abs(bounded));
   }
 
   function interpolateColor(from, to, ratio) {
@@ -1472,9 +1649,27 @@
     return numberFormatter.format(bytes / Math.pow(1024, index)) + " " + units[index];
   }
 
+  // page display only, in the viewer's local time: "16 Oct 2026, 23:54 (UTC+1)".
+  // The result record and every export keep generatedAt / completedAt as ISO.
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   function formatTimestamp(value) {
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? "Local time" : date.toISOString().replace("T", " ").replace(".000Z", " UTC");
+    if (Number.isNaN(date.getTime())) {
+      return "Local time";
+    }
+    const pad = function (n) { return String(n).padStart(2, "0"); };
+    const offset = -date.getTimezoneOffset();
+    const hours = Math.floor(Math.abs(offset) / 60);
+    const minutes = Math.abs(offset) % 60;
+    const zone = "UTC" + (offset === 0 ? "" : (offset > 0 ? "+" : "\u2212") + hours + (minutes ? ":" + pad(minutes) : ""));
+    return date.getDate() + " " + MONTHS[date.getMonth()] + " " + date.getFullYear() + ", " + pad(date.getHours()) + ":" + pad(date.getMinutes()) + " (" + zone + ")";
+  }
+
+  // a <time> element: readable text, the ISO value in datetime and title
+  function timeTag(value) {
+    const date = new Date(value);
+    const iso = Number.isNaN(date.getTime()) ? "" : date.toISOString();
+    return iso ? '<time datetime="' + escape(iso) + '" title="' + escape(iso) + '">' + escape(formatTimestamp(value)) + "</time>" : escape(formatTimestamp(value));
   }
 
   function range(start, end) {

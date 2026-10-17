@@ -83,7 +83,7 @@
 .report-note-inline {
   color: var(--report-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 720;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -91,6 +91,7 @@
 
 .report-document-label {
   margin-top: 3px;
+  font-size: var(--text-label);
   letter-spacing: .02em;
   text-transform: none;
 }
@@ -101,20 +102,17 @@
   gap: 8px;
 }
 
-.report-export-menu {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+/* K2: the three exports sit in one menu next to Print / Save PDF */
+.report-export-menu .export-menu-list {
+  min-width: 300px;
 }
 
-.report-export-label {
-  color: var(--report-muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 750;
-  letter-spacing: .06em;
-  text-transform: uppercase;
+.report-export-menu .export-menu-item {
+  font-weight: 650;
+}
+
+.report-export-menu .export-menu-item small {
+  font-weight: 450;
 }
 
 .report-export-panel {
@@ -153,7 +151,13 @@
   margin-top: 14px;
 }
 
+/* F4: the contents stay in view under the fixed header while reading;
+   print and the offline copy fall back to normal flow (see @media print).
+   report-jump scrolls each part heading to just below it. */
 .report-contents {
+  position: sticky;
+  z-index: 5;
+  top: calc(var(--header-h, 60px) + 8px);
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -163,6 +167,12 @@
   border: 1px solid var(--report-line);
   border-radius: var(--radius-md, 10px);
   background: var(--report-surface);
+  box-shadow: 0 6px 18px -14px color-mix(in srgb, var(--report-ink) 60%, transparent);
+}
+
+.hyb2-embedded .report-contents,
+.report-offline-main .report-contents {
+  top: 8px;
 }
 
 .report-contents ol {
@@ -200,7 +210,12 @@
   border-bottom: 2px solid var(--report-ink);
   color: var(--report-ink);
   font-size: 22px;
-  scroll-margin-top: 80px;
+  scroll-margin-top: calc(var(--header-h, 60px) + var(--report-contents-h, 76px) + 20px);
+}
+
+.hyb2-embedded .report-part,
+.report-offline-main .report-part {
+  scroll-margin-top: calc(var(--report-contents-h, 76px) + 20px);
 }
 
 .report-part span {
@@ -329,7 +344,7 @@
   border-radius: 999px;
   color: var(--report-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 760;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -380,7 +395,7 @@
 
 .report-metric-label {
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 700;
 }
 
@@ -398,7 +413,7 @@
 .report-metric-detail {
   margin-top: 9px;
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
   line-height: 1.4;
 }
 
@@ -445,6 +460,12 @@
 
 .report-analysis-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Region Explorer: the record sample has six columns, the partners three */
+.report-region-tables {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  margin-top: 18px;
 }
 
 .report-summary-breakdown {
@@ -496,7 +517,7 @@
 
 .report-definition-list dt {
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .report-definition-list dd {
@@ -511,7 +532,7 @@
 
 .report-definition-list dd.is-mono {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 500;
 }
 
@@ -528,7 +549,7 @@
   min-width: 620px;
   border-collapse: collapse;
   color: var(--report-ink);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .report-table th,
@@ -542,7 +563,7 @@
 .report-table th {
   background: var(--report-subtle);
   color: var(--report-muted);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 760;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -553,10 +574,26 @@
   border-bottom: 0;
 }
 
+/* K3: numbers right-aligned in tabular figures; long names on one line */
+.report-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.report-table th .unit {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.report-table td.cell-truncate {
+  overflow-wrap: normal;
+}
+
 .report-table code {
   overflow-wrap: anywhere;
   color: var(--report-ink);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .report-subsection-heading {
@@ -580,15 +617,23 @@
 .report-visual .report-note-inline {
   display: block;
   padding: 0 12px 11px;
+  font-size: var(--text-label);
   letter-spacing: .02em;
   text-transform: none;
 }
 
+/* the effect and similarity maps stack: with their axes and colour bars
+   they need the full width to stay legible on screen and on paper */
 .report-visual-pair {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   margin-top: 18px;
+}
+
+.report-heatmap-svg {
+  max-width: 980px;
+  margin: 0 auto;
 }
 
 .report-visual-pair .report-visual-wrap {
@@ -605,7 +650,7 @@
   background: var(--report-subtle);
   color: var(--report-ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -639,7 +684,8 @@
 }
 
 @media (max-width: 900px) {
-  .report-source-grid {
+  .report-source-grid,
+  .report-region-tables {
     grid-template-columns: 1fr;
   }
 
@@ -655,8 +701,50 @@
   }
 
   .report-actions {
+    position: relative;
     justify-content: flex-start;
     margin-top: 18px;
+  }
+
+  /* the menu opens from the left edge of the actions row, inside the screen */
+  .report-export-menu {
+    position: static;
+  }
+
+  .report-export-menu .export-menu-list {
+    right: auto;
+    left: 0;
+    min-width: min(300px, 100%);
+  }
+
+  .report-page {
+    --report-contents-h: 46px;
+  }
+
+  .report-contents {
+    flex-wrap: nowrap;
+    gap: 12px;
+    padding: 9px 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .report-contents::-webkit-scrollbar {
+    display: none;
+  }
+
+  .report-contents ol {
+    flex-wrap: nowrap;
+    gap: 16px;
+  }
+
+  .report-contents li {
+    white-space: nowrap;
+  }
+
+  .report-contents > .report-note-inline {
+    display: none;
   }
 
   .report-hero-copy {
@@ -775,6 +863,17 @@
     break-after: avoid;
   }
 
+  .report-contents {
+    position: static;
+    box-shadow: none;
+  }
+
+  /* a panel heading stays on the page of the panel it names */
+  .report-step-heading,
+  .report-subsection-heading {
+    break-after: avoid;
+  }
+
   .report-section {
     break-inside: auto;
   }
@@ -800,6 +899,15 @@
   .report-table th,
   .report-table td {
     padding: 6px 7px;
+  }
+
+  /* paper has no hover title: truncated names print in full */
+  .report-table td.cell-truncate {
+    max-width: none;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
   }
 
   .report-section-heading h2 {
@@ -864,13 +972,13 @@
   border-radius: 4px;
   color: var(--report-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 700;
 }
 
 .report-left-out {
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .report-fields {
@@ -880,13 +988,13 @@
 .report-fields summary {
   cursor: pointer;
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .report-fields code {
   display: inline-block;
   margin: 2px 4px 0 0;
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .report-selected-note {

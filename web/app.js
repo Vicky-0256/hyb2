@@ -602,8 +602,14 @@
       renderEmbedded(workspaceOpen);
       return;
     }
+    const previousNav = typeof app.querySelector === "function" ? app.querySelector(".mobile-nav") : null;
+    const navScrollLeft = previousNav ? previousNav.scrollLeft : 0;
+    const previousPage = renderedPage;
     app.innerHTML = workspaceOpen ? renderWorkspace() : renderLanding();
     renderedPage = workspaceOpen ? state.activePage : null;
+    if (workspaceOpen) {
+      revealActiveMobileNav(navScrollLeft, previousPage !== renderedPage);
+    }
     document.documentElement.dataset.theme = state.theme;
     app.dataset.density = state.density;
     const themeColor = document.querySelector('meta[name="theme-color"]');
@@ -639,12 +645,11 @@
       "  </header>",
       '  <main id="main-content" class="landing-main">',
       '    <section class="landing-copy" aria-labelledby="landing-title">',
-      '      <span class="eyebrow" data-scramble>RNA interaction analysis · browser-local</span>',
+      '      <span class="eyebrow" data-scramble>RNA–RNA interaction analysis · HYB files</span>',
       '      <h1 id="landing-title" aria-label="HYB2 Web Lite. Explore locally."><span class="headline-line" aria-hidden="true"><span class="headline-inner">HYB2 Web Lite.</span></span><span class="headline-line headline-accent" aria-hidden="true"><span class="headline-inner">Explore locally.</span></span></h1>',
-      '      <p class="landing-lede">Inspect RNA–RNA interactions, validate records, and prepare contact-map analysis without sending your research data to a server.</p>',
+      '      <p class="landing-lede">Inspect RNA–RNA interactions, validate records, compare conditions and fold RNA structures, all in this browser tab.</p>',
       '      <ul class="promise-list">',
-      "        <li>No account or server upload required</li>",
-      "        <li>Files remain in this browser session</li>",
+      "        <li>No account needed</li>",
       "        <li>Built for HYB-format interaction records</li>",
       "      </ul>",
       '      <figure class="hero-stage" data-hero-stage aria-label="Illustrative arc diagram: intramolecular stems above the sequence, HYB chimeric contacts below">',
@@ -705,7 +710,7 @@
     const items = downloads.map(function (item) {
       const mine = item.os === os;
       return '<li><a class="desktop-download-link' + (mine ? ' is-recommended' : '') + '" href="' + releases + '/latest/download/' + item.file + '">' +
-        '<span>' + item.label + '</span><strong>' + (mine ? 'For this computer' : 'Download') + '</strong></a></li>';
+        '<span class="desktop-download-label">' + item.label + (mine ? ' <span class="desktop-download-badge">This computer</span>' : '') + '</span><strong>Download</strong></a></li>';
     }).join("");
     return [
       '<section class="web-capability-card desktop-download-card" aria-labelledby="desktop-download-title">',
@@ -721,19 +726,21 @@
     const hasFiles = typeof window.File !== "undefined" && typeof window.FileReader !== "undefined";
     const hasWorker = typeof window.Worker !== "undefined";
     const hasWasm = typeof window.WebAssembly !== "undefined";
+    const supported = [hasFiles, hasWorker, hasWasm, hasWorker && hasWasm].filter(Boolean).length;
+    const summaryChip = supported === 4 ? "All 4 supported" : supported + " of 4 supported";
     const status = function (ready, label, supportedLabel) {
       return '<li class="web-capability-item"><span class="web-capability-dot' + (ready ? ' is-ready' : '') + '" aria-hidden="true"></span><span>' + label + '</span><strong>' + (ready ? (supportedLabel || 'Supported') : 'Unavailable') + '</strong></li>';
     };
     return [
       '<section class="web-capability-card" aria-labelledby="web-capability-title">',
-      '<div class="web-capability-heading"><div><span class="example-kicker">Web runtime</span><h2 id="web-capability-title">Browser capabilities</h2></div><span class="web-capability-chip">No server</span></div>',
+      '<div class="web-capability-heading"><div><span class="example-kicker">Web runtime</span><h2 id="web-capability-title">Browser capabilities</h2></div><span class="web-capability-chip">' + summaryChip + '</span></div>',
       '<ul class="web-capability-list">',
-      status(hasFiles, 'Local file reading'),
+      status(hasFiles, 'File reading'),
       status(hasWorker, 'Background parsing workers'),
       status(hasWasm, 'ViennaRNA WebAssembly folding', 'Load on first run'),
       status(hasWorker && hasWasm, 'CPLfold Pyodide worker · capacity measured when needed', 'Load on first run'),
       '</ul>',
-      '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately. This browser workspace processes your data locally.</p>',
+      '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately.</p>',
       '</section>'
     ].join("");
   }
@@ -786,7 +793,6 @@
       "      <h2>Start with interaction data</h2>",
       "      <p>Choose one HYB file. After it is parsed, you can add a reference FASTA before entering analysis.</p>",
       "    </div>",
-      '    <span class="v0-chip">Local-only</span>',
       "  </div>",
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
@@ -808,7 +814,7 @@
       "    </div>",
       '    <div class="reference-upload-actions">',
       '      <span class="reference-file-name' + (landingFastaFile ? "" : " is-empty") + '" title="' + escapeAttribute(landingFastaFile ? landingFastaFile.name : "No FASTA selected") + '">' + escapeHtml(landingFastaFile ? landingFastaFile.name : "No FASTA selected") + "</span>",
-      '      <button class="quiet-button" type="button" data-action="choose-fasta">' + (landingFastaFile ? "Replace FASTA" : "Choose FASTA") + "</button>",
+      '      <button class="button button-secondary button-compact" type="button" data-action="choose-fasta">' + (landingFastaFile ? "Replace FASTA" : "Choose FASTA") + "</button>",
       landingFastaFile ? '      <button class="quiet-button" type="button" data-action="remove-landing-fasta">Remove</button>' : "",
       "    </div>",
       "  </section>",
@@ -906,11 +912,24 @@
     ].forEach(function (item) {
       rows.push(row(item.file.split(".").pop().toUpperCase(), item.file, item.detail, status()));
     });
+    // Folded to one line: the review step stays short enough for Enter
+    // analysis and the primary files to fit the first screen.
+    const count = rows.length;
+    const summaryStatus = setup.ready
+      ? '<span class="prepared-file-status is-ready">Ready</span>'
+      : (setup.error
+        ? '<span class="prepared-file-status is-error">Stopped</span>'
+        : '<span class="prepared-file-status is-loading">' + (parsing ? "Parsing" : "Downloading") + "</span>");
+    const openKey = "prepared-example-files";
     return [
-      '  <section class="prepared-file-list prepared-file-list-example" aria-label="Example files for the Compare page">',
-      '    <p class="prepared-file-group">Example comparison: ' + escapeHtml(example.labels.A) + " vs " + escapeHtml(example.labels.B) + " · loaded into the Compare page</p>",
+      '  <details class="prepared-file-list prepared-file-list-example" data-open-key="' + openKey + '"' + (window.Hyb2OpenSections && window.Hyb2OpenSections[openKey] ? " open" : "") + ' aria-label="Example files for the Compare page">',
+      '    <summary class="prepared-file-row prepared-file-summary">',
+      '      <span class="prepared-file-kind prepared-file-kind-structure">+' + count + "</span>",
+      '      <div class="prepared-file-details"><strong>' + count + " files " + (setup.ready ? "loaded" : "loading") + " for Compare</strong><span>Example comparison " + escapeHtml(example.labels.A) + " vs " + escapeHtml(example.labels.B) + " · " + example.replicates.length + " more replicates, 2 arc map structures, gene track</span></div>",
+      "      " + summaryStatus,
+      "    </summary>",
       rows.join(""),
-      "  </section>"
+      "  </details>"
     ].join("");
   }
 
@@ -925,7 +944,7 @@
       : 0;
     const sequenceCount = fasta && Array.isArray(fasta.sequences) ? fasta.sequences.length : 0;
     const fastaStatus = fastaLoad
-      ? (fasta ? "Updating locally" : "Reading locally")
+      ? (fasta ? "Updating" : "Reading")
       : (fasta ? "Ready" : "Optional");
     const fastaDetail = fastaLoad
       ? "The reference file will remain available while you enter the workspace."
@@ -936,12 +955,12 @@
       "    <div>",
       '      <span class="file-card-kicker">Step 1 complete</span>',
       '      <h2>Review files before analysis</h2>',
-      '      <p>HYB is parsed locally. Add an optional reference FASTA now, then open the analysis workspace when you are ready.</p>',
+      '      <p>The HYB file is parsed. Add an optional reference FASTA now, then open the analysis workspace when you are ready.</p>',
       "    </div>",
       '    <span class="status-chip">Files ready</span>',
       "  </div>",
       '  <section class="prepared-next-step" aria-label="Enter analysis workspace">',
-      '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>All calculations still run locally in this browser tab.</span></div>',
+      '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>Overview, interactions, contact maps, Compare, RNA structure and the report.</span></div>',
       '    <button class="button" type="button" data-action="enter-analysis">Enter analysis</button>',
       "  </section>",
       '  <section class="prepared-file-list" aria-label="Files ready for analysis">',
@@ -952,9 +971,9 @@
       "    </div>",
       '    <div class="prepared-file-row prepared-file-row-reference">',
       '      <span class="prepared-file-kind prepared-file-kind-fasta">FASTA</span>',
-      '      <div class="prepared-file-details"><strong title="' + escapeAttribute(fastaFileName) + '">' + escapeHtml(fastaFileName) + '</strong><span>' + escapeHtml(fastaDetail) + '</span></div>',
+      '      <div class="prepared-file-details"><strong' + (fasta || loadingFile ? "" : ' class="is-empty"') + ' title="' + escapeAttribute(fastaFileName) + '">' + escapeHtml(fastaFileName) + '</strong><span>' + escapeHtml(fastaDetail) + '</span></div>',
       '      <span class="prepared-file-status' + (fastaLoad ? " is-loading" : (fasta ? " is-ready" : " is-optional")) + '">' + fastaStatus + '</span>',
-      '      <button class="quiet-button" type="button" data-action="choose-fasta">' + (fasta || fastaLoad ? "Replace FASTA" : "Add FASTA") + '</button>',
+      '      <button class="button button-secondary button-compact" type="button" data-action="choose-fasta">' + (fasta || fastaLoad ? "Replace FASTA" : "Add FASTA") + '</button>',
       "    </div>",
       "  </section>",
       renderExampleFileRows(),
@@ -990,7 +1009,7 @@
         return '<li class="parse-step' + className + '">' + stage + "</li>";
       }).join(""),
       "  </ol>",
-      '  <p class="card-footnote" aria-live="polite">' + (load.totalBytes ? formatBytes(load.processedBytes || 0) + " of " + formatBytes(load.totalBytes || 0) + " read locally" : "Preparing the included example locally") + "</p>",
+      '  <p class="card-footnote" aria-live="polite">' + (load.totalBytes ? formatBytes(load.processedBytes || 0) + " of " + formatBytes(load.totalBytes || 0) + " read" : "Preparing the included example") + "</p>",
       "</div></div>"
     ].join("");
   }
@@ -1147,6 +1166,38 @@
       workspacePages.map(renderNavButton).join(""),
       "</nav>"
     ].join("");
+  }
+
+  // The phone nav is rebuilt on every render: put it back where it was,
+  // then bring the current page's tab to the middle (smoothly only when the
+  // page changed and motion is allowed). Scrolls the nav itself, never the
+  // page, so it cannot interrupt the Report page's jump scrolling.
+  function revealActiveMobileNav(previousScrollLeft, pageChanged) {
+    const nav = typeof app.querySelector === "function" ? app.querySelector(".mobile-nav") : null;
+    if (!nav || typeof nav.addEventListener !== "function") {
+      return;
+    }
+    const updateEdges = function () {
+      const max = nav.scrollWidth - nav.clientWidth;
+      nav.classList.toggle("can-scroll-left", nav.scrollLeft > 2);
+      nav.classList.toggle("can-scroll-right", nav.scrollLeft < max - 2);
+    };
+    nav.addEventListener("scroll", updateEdges, { passive: true });
+    nav.scrollLeft = previousScrollLeft || 0;
+    const active = nav.querySelector(".nav-button.is-active");
+    if (!active || nav.scrollWidth <= nav.clientWidth) {
+      updateEdges();
+      return;
+    }
+    const target = Math.max(0, Math.min(nav.scrollWidth - nav.clientWidth,
+      active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2));
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (typeof nav.scrollTo === "function") {
+      nav.scrollTo({ left: target, behavior: pageChanged && !reduce ? "smooth" : "auto" });
+    } else {
+      nav.scrollLeft = target;
+    }
+    updateEdges();
   }
 
   function renderNavButton(page) {
@@ -1631,6 +1682,12 @@
   }
 
   function handleChange(event) {
+    // K8: a select's title is its current option's full text; keep it current
+    // for pages that do not redraw on this change
+    const changed = event.target;
+    if (changed && changed.tagName === "SELECT" && changed.hasAttribute("title") && changed.selectedOptions && changed.selectedOptions[0]) {
+      changed.title = changed.selectedOptions[0].text;
+    }
     if (event.target.id === "density-input") {
       state.density = event.target.value === "compact" ? "compact" : "comfortable";
       render();

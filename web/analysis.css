@@ -60,7 +60,7 @@
 
 .control-field > span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 710;
   letter-spacing: .01em;
 }
@@ -107,7 +107,7 @@
 .control-field small {
   margin-top: -1px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .advanced-filters {
@@ -194,7 +194,7 @@
   background: var(--surface-subtle);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 720;
   letter-spacing: .055em;
   text-transform: uppercase;
@@ -285,7 +285,7 @@
 .placeholder-label {
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 750;
   letter-spacing: .075em;
   text-transform: uppercase;
@@ -310,7 +310,7 @@
   overflow-wrap: anywhere;
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
   line-height: 1.65;
   white-space: pre-wrap;
 }
@@ -339,7 +339,7 @@
 .selection-stats dt,
 .region-totals dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .detail-list dd,
@@ -412,7 +412,7 @@
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -509,7 +509,7 @@
 .contact-stage-placeholder span {
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-caps);
   font-weight: 700;
   letter-spacing: .05em;
   text-transform: uppercase;
@@ -526,11 +526,15 @@
   padding: 8px 1px 0;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
 }
 
+/* B9: the card's own actions start at the left as one group; exports
+   live in the page's Export menu */
 .heatmap-footer {
   flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px;
   margin-top: 17px;
 }
 
@@ -545,13 +549,15 @@
   top: 86px;
 }
 
+/* sans like every other card title (B8; the Compare selection card too) */
 .selection-card h2 {
   margin: 8px 0 0;
   color: var(--ink);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 720;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 
 .selection-card p {
@@ -598,14 +604,16 @@
 .method-note strong {
   color: var(--primary-ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-caps);
   letter-spacing: .04em;
   text-transform: uppercase;
 }
 
+/* B11: one column of full-width cards; Top partners live inside the
+   summary card, so no column is left half empty */
 .region-results {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(250px, .75fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -632,14 +640,16 @@
   text-align: left;
 }
 
+/* 250px: prepareCanvas never draws a canvas shorter, so a shorter box
+   would squash the axis labels */
 .region-canvas-wrap {
-  height: 196px;
+  height: 250px;
 }
 
 .region-profile-canvas {
   display: block;
   width: 100%;
-  height: 196px;
+  height: 250px;
 }
 
 .viewpoint-layout {
@@ -675,7 +685,7 @@
 .comparison-note strong {
   color: var(--warning);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-caps);
   text-transform: uppercase;
 }
 
@@ -780,16 +790,13 @@
 
 .reference-panel {
   grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
+  display: grid;
+  gap: 16px;
 }
 
 .reference-panel h2 {
   margin: 5px 0 8px;
   color: var(--ink);
-  font-family: var(--font-mono);
   font-size: 15px;
   font-weight: 700;
 }
@@ -801,8 +808,10 @@
   font-size: 13px;
 }
 
+/* the three actions in one row, all the same height */
 .reference-panel .inline-actions {
-  justify-content: flex-end;
+  align-items: stretch;
+  justify-content: flex-start;
 }
 
 .table-note {
@@ -842,7 +851,7 @@
   background: var(--accent-soft);
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -1005,7 +1014,7 @@
   overflow: hidden;
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1201,7 +1210,7 @@
 
   .viewpoint-canvas-wrap,
   .viewpoint-canvas {
-    height: 245px;
+    height: 250px;
   }
 
   .comparison-canvas-wrap,

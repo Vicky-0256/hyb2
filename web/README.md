@@ -83,6 +83,20 @@ The page has no analytics, API call, runtime CDN request, or server-side upload 
 
 The landing flow is intentionally two-stage: after the HYB file is parsed, the page stays on a local file-review screen. Users can add or replace the optional reference FASTA there, then click **Enter analysis** to open the workspace. Interaction tables and contact maps do not require FASTA; reference-based RNA structure and full-reference Viewpoint do.
 
+## Shared UI conventions
+
+`ui-kit.js` / `ui-kit.css` hold what the pages share: colour bars
+(`Hyb2UiKit.legend.html / svg / drawCanvas`, drawn into PNG and SVG exports
+as well as on the page), round axis ticks (`Hyb2UiKit.niceTicks`), and the
+Export menu (`<details class="export-menu">`: every download of a page sits
+in one menu, closed by an outside click, Escape or a chosen item). Tables
+mark number columns `.num` (right-aligned, tabular figures) and long names
+`.cell-truncate` with the full name in `title`. Image exports are drawn in
+the light theme whatever the page's theme. Labels use the `--text-label`
+(12px) and `--text-caps` (11px, uppercase) tokens in `styles.css`.
+`scripts/ui-screenshots.py` takes before/after screenshots with the example
+loaded and both Compare tests run; `scripts/verify-ui-kit.cjs` checks the kit.
+
 ## Report and result exports
 
 After entering the workspace, choose **Report** in the header or sidebar. The

@@ -16,7 +16,7 @@
     return [
       '<div class="page-heading">',
       "<div><h1>Interactions</h1><p>Filter, inspect, and export local HYB records.</p></div>",
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="export-filtered-csv">Export CSV</button><button class="button button-secondary" type="button" data-feature-action="export-filtered-hyb">Export HYB</button><button class="button button-secondary" type="button" data-feature-action="interactions-export-params">Export parameters</button></div>',
+      '<div class="inline-actions heading-export"><details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu"><button class="export-menu-item" type="button" role="menuitem" data-feature-action="export-filtered-csv">Filtered records · CSV</button><button class="export-menu-item" type="button" role="menuitem" data-feature-action="export-filtered-hyb">Filtered records · HYB</button><button class="export-menu-item" type="button" role="menuitem" data-feature-action="interactions-export-params">Parameters · JSON</button></div></details></div>',
       "</div>",
       '<section class="analysis-controls data-card">',
       '<div class="control-grid control-grid-wide">',
@@ -33,7 +33,7 @@
         { value: "support", label: "Cluster support" },
         { value: "records", label: "Records" }
       ], "interaction-filter"),
-      renderTextControl("Search", "search", filters.search, "RNA, sequence ID, or sequence", "interaction-filter"),
+      renderTextControl("Search", "search", filters.search, "Search ID or RNA", "interaction-filter", "text", { title: "Matches an RNA name, sequence ID or hybrid sequence" }),
       "</div>",
       '<details class="advanced-filters" data-open-key="interactions-advanced"' + openAttr("interactions-advanced") + '><summary>Advanced filters</summary>',
       '<div class="control-grid advanced-grid">',
@@ -75,12 +75,8 @@
   }
 
   function renderChooseRnaPanel() {
-    return [
-      '<section class="data-card partner-card">',
-      '<div class="card-title-row"><h2>RNA partner analysis</h2><span class="card-kicker">Select an RNA</span></div>',
-      '<p class="empty-inline">Choose one RNA in the filter bar to compare its interaction partners using real local records.</p>',
-      "</section>"
-    ].join("");
+    // No card until an RNA is chosen: one hint line under the filter bar.
+    return '<p class="partner-hint">Choose an RNA in the filter bar to see its interaction partners.</p>';
   }
 
   function renderInteractionTable(interactions, state) {
@@ -103,8 +99,8 @@
       '<section class="data-card interaction-table-card">',
       '<div class="card-title-row"><div><h2>Records</h2><span class="card-note">' + escape(note) + "</span></div><span class=\"card-kicker\">" + (state.shell === false ? "Project data" : "Local memory") + "</span></div>",
       '<div class="virtual-table-frame">',
-      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span>Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span>Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span title="Cluster support: records merged into this one">Support</span><span>ΔG <span class="unit">(kcal/mol)</span></span></div>',
-      '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0" style="height:' + viewportHeight + 'px">',
+      '<div class="virtual-table-head" role="row"><span>Sequence ID</span><span>RNA 1</span><span class="num">Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span class="num">Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span class="num" title="Cluster support: records merged into this one">Support</span><span class="num">ΔG <span class="unit">(kcal/mol)</span></span></div>',
+      '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0">',
       '<div class="virtual-table-spacer" style="height:' + (total * rowHeight) + 'px"></div>',
       '<div class="virtual-table-rows" data-virtual-rows style="transform:translateY(' + (start * rowHeight) + 'px)">',
       renderVirtualRows(rows || []),
@@ -133,13 +129,13 @@
       return [
         '<button class="virtual-row" type="button" data-feature-action="open-record" data-record-index="' + record.index + '" role="row">',
         '<span title="' + attribute(record.id) + '">' + escape(record.id) + "</span>",
-        '<span title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + "</span>",
-        "<span>" + range(record.rnaOneStart, record.rnaOneEnd) + "</span>",
-        '<span title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + "</span>",
-        "<span>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</span>",
+        '<span class="cell-truncate" title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + "</span>",
+        '<span class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + "</span>",
+        '<span class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + "</span>",
+        '<span class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + "</span>",
         '<span title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + "</span>",
-        "<span>" + format(record.supportCount) + "</span>",
-        "<span>" + (record.dg === null ? "—" : format(record.dg)) + "</span>",
+        '<span class="num">' + format(record.supportCount) + "</span>",
+        '<span class="num">' + (record.dg === null ? "—" : format(record.dg)) + "</span>",
         "</button>"
       ].join("");
     }).join("");
@@ -194,21 +190,26 @@
       : { records: 0, support: 0 };
 
     return [
-      '<div class="page-heading">',
+      '<div class="page-heading page-heading--menu">',
       "<div><h1>Contact Map</h1><p>Fixed-width binning mirrors the current HYB2 coverage accumulation rule.</p></div>",
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="contact-download-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="contact-download-png">Download PNG</button></div>',
+      '<div class="inline-actions">' + renderExportMenu([
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-download-svg">Map · SVG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-download-png">Map · PNG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-export-tsv">Contact cells · TSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-export-params">Parameters · JSON</button>'
+      ]) + "</div>",
       "</div>",
       '<section class="analysis-controls data-card">',
       '<div class="contact-control-grid">',
       renderSelectControl("RNA X", "rnaX", contact.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "contact-control"),
       renderSelectControl("RNA Y", "rnaY", contact.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "contact-control"),
-      renderSelectControl("Bin size", "binSize", String(contact.binSize), [
+      renderSelectControl("Bin size", "binSize", String(contact.binSize), effectiveOptions([
         { value: "5", label: "5 nt" },
         { value: "10", label: "10 nt" },
         { value: "25", label: "25 nt" },
         { value: "50", label: "50 nt" },
         { value: "100", label: "100 nt" }
-      ], "contact-control"),
+      ], contact.binSize, matrix && !building && matrix.binSizeAdjusted ? matrix.binSize : null), "contact-control"),
       renderSelectControl("Measure", "measure", contact.measure, [
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
@@ -236,9 +237,9 @@
         { value: "exclude", label: "Exclude homodimer proxy" }
       ], "contact-control"),
       "</div>",
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset map</button><button class="quiet-button" type="button" data-feature-action="reset-contact-zoom">Reset zoom</button><span class="control-hint">' + escape(budgetHint) + 'Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click or Reset zoom returns to the full extent.</span></div>',
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset map</button><span class="control-hint">' + escape(budgetHint) + 'Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click the map, or Reset zoom above it, to return to the full extent.</span></div>',
       "</section>",
-      matrix && matrix.binSizeAdjusted ? '<p class="notice notice-warning">The bin size was increased to ' + format(matrix.binSize) + ' nt so the map stays within the cell budget.</p>' : "",
+      matrix && matrix.binSizeAdjusted ? '<p class="notice notice-warning">Requested ' + format(matrix.requestedBinSize || contact.binSize) + " nt bins; the map uses " + format(matrix.binSize) + ' nt so it stays within the cell budget.</p>' : "",
       matrix && matrix.cells.length ? [
         '<section class="contact-workbench' + (building ? " is-updating" : "") + '"' + (building ? ' aria-busy="true"' : "") + '>',
         '<div class="contact-navigator contact-workbench-main" aria-label="Interactive contact map">',
@@ -248,9 +249,9 @@
         '<aside class="contact-workbench-side">',
         renderContactSelection(contact, matrix, selectedCell, state),
         '<div class="heatmap-card data-card">',
-        '<div class="heatmap-topline"><span class="card-kicker">Viridis · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
+        '<div class="heatmap-topline"><span class="card-kicker">Teal–violet sequential · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
         '<div class="heatmap-axis"><span>' + escape(contact.rnaX) + " · X axis</span><span>" + escape(contact.rnaY) + " · Y axis</span></div>",
-        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="contact-export-tsv">Export contact TSV</button><button class="quiet-button" type="button" data-feature-action="contact-export-params">Export parameters</button></div>',
+        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + "</button></div>",
         "</div>",
         "</aside>",
         "</section>",
@@ -258,6 +259,25 @@
       ].join("") : (building ? renderContactBuilding() : renderNoContactData(contact, matrix)),
       "      <section class=\"method-note\"><strong>Method</strong><span>Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.</span></section>"
     ].join("");
+  }
+
+  // K2 export menu around its item buttons (written out in full at each call
+  // so every data-feature-action stays greppable in this source)
+  function renderExportMenu(items) {
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' + items.join("") + "</div></details>";
+  }
+
+  // B6: when the data layer widened the bins, the selected option says so
+  // ("10 nt · using 20 nt"), so the control and the plot never disagree
+  function effectiveOptions(options, requested, used) {
+    if (used === null || used === undefined || Number(used) === Number(requested)) {
+      return options;
+    }
+    return options.map(function (option) {
+      return String(option.value) === String(requested)
+        ? { value: option.value, label: option.label + " · using " + format(used) + " nt" }
+        : option;
+    });
   }
 
   function renderContactStage(stage, title, instruction, selection, contact, matrix) {
@@ -302,9 +322,9 @@
 
   function renderContactDataTable(matrix) {
     return [
-      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead><tr><th>X position</th><th>Y position</th><th>Records</th><th>Cluster support</th></tr></thead><tbody>',
+      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">X position <span class="unit">(nt)</span></th><th class="num">Y position <span class="unit">(nt)</span></th><th class="num">Records</th><th class="num">Cluster support</th></tr></thead><tbody>',
       matrix.cells.slice().sort(function (left, right) { return right.value - left.value; }).slice(0, 100).map(function (cell) {
-        return "<tr><td>" + range(cell.x, cell.x + matrix.binSize - 1) + "</td><td>" + range(cell.y, cell.y + matrix.binSize - 1) + "</td><td>" + format(cell.records) + "</td><td>" + format(cell.support) + "</td></tr>";
+        return '<tr><td class="num">' + range(cell.x, cell.x + matrix.binSize - 1) + '</td><td class="num">' + range(cell.y, cell.y + matrix.binSize - 1) + '</td><td class="num">' + format(cell.records) + '</td><td class="num">' + format(cell.support) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>"
     ].join("");
@@ -368,37 +388,45 @@
       : null;
 
     return [
-      '<div class="page-heading">',
+      '<div class="page-heading page-heading--menu">',
       '<div><h1>Viewpoint</h1><p>Map interaction abundance across a selected interval or the complete mapped reference.</p></div>',
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="viewpoint-download-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="viewpoint-download-png">Download PNG</button></div>',
+      '<div class="inline-actions">' + renderExportMenu([
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-download-svg">Plot · SVG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-download-png">Plot · PNG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-export-tsv">Coverage bins · TSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-export-params">Parameters · JSON</button>'
+      ]) + "</div>",
       '</div>',
       '<section class="analysis-controls data-card">',
       '<div class="viewpoint-control-grid">',
       renderSelectControl("Anchor RNA", "rna", viewpoint.rna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "viewpoint-control"),
       renderSelectControl("Partner", "partner", viewpoint.partner, partnerOptions(rnas, viewpoint.rna), "viewpoint-control"),
-      renderSelectControl("Chimera type", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "viewpoint-control"),
-      renderSelectControl("Homodimer subset", "homodimer", viewpoint.homodimer || "all", [
-        { value: "all", label: "All records" },
-        { value: "only", label: "Overlap score ≥ 5" },
-        { value: "exclude", label: "Exclude homodimer proxy" }
-      ], "viewpoint-control"),
+      // B10: the range mode and its Start and End stay together on one row
+      '<div class="viewpoint-range-group" role="group" aria-label="Coordinate range">',
       renderSelectControl("Coordinate range", "rangeMode", viewpoint.rangeMode || "coordinates", mappedReference ? [
         { value: "coordinates", label: "Selected coordinates" },
         { value: "reference", label: "Full mapped reference" }
       ] : [{ value: "coordinates", label: "Selected coordinates" }], "viewpoint-control"),
       renderTextControl("Start", "start", viewpoint.start, "Observed start", "viewpoint-control", "number", { min: 1, step: 1 }),
       renderTextControl("End", "end", viewpoint.end, "Observed end", "viewpoint-control", "number", { min: 1, step: 1 }),
-      renderSelectControl("Resolution", "binSize", viewpoint.binSize, [
+      '</div>',
+      renderSelectControl("Resolution", "binSize", viewpoint.binSize, effectiveOptions([
         { value: "1", label: "1 nt (legacy viewpoint)" },
         { value: "5", label: "5 nt mean" },
         { value: "10", label: "10 nt mean" },
         { value: "25", label: "25 nt mean" },
         { value: "50", label: "50 nt mean" },
         { value: "100", label: "100 nt mean" }
-      ], "viewpoint-control"),
+      ], viewpoint.binSize, results.ready && results.binSizeAdjusted ? results.binSize : null), "viewpoint-control"),
       renderSelectControl("Measure", "measure", viewpoint.measure, [
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
+      ], "viewpoint-control"),
+      renderSelectControl("Chimera type", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "viewpoint-control"),
+      renderSelectControl("Homodimer subset", "homodimer", viewpoint.homodimer || "all", [
+        { value: "all", label: "All records" },
+        { value: "only", label: "Overlap score ≥ 5" },
+        { value: "exclude", label: "Exclude homodimer proxy" }
       ], "viewpoint-control"),
       '</div>',
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-viewpoint">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-viewpoint-selection">Reset selection</button><span class="control-hint">' + (viewpoint.rangeMode === "reference" ? "The full mapped reference uses coordinates 1 through its FASTA length; Start and End are ignored." : "At 1 nt resolution, each plotted value is the number of overlapping interaction arms, matching the legacy viewpoint interpretation.") + '</span></div>',
@@ -407,10 +435,9 @@
         '<section class="viewpoint-layout">',
         '<section class="viewpoint-card data-card">',
         '<div class="card-title-row"><div><h2>' + escape(results.rna) + ' interaction coverage</h2><span class="card-note">' + format(results.records.length) + ' matching records · ' + format(results.armContributions) + ' mapped arms</span></div><span class="card-kicker">' + escape(viewpoint.measure === "support" ? "Cluster support" : "Records") + '</span></div>',
-        results.binSizeAdjusted ? '<p class="notice notice-warning">The requested resolution was increased to ' + format(results.binSize) + ' nt to keep this browser-local plot responsive.</p>' : '',
+        results.binSizeAdjusted ? '<p class="notice notice-warning">Requested ' + format(viewpoint.binSize) + " nt resolution; the plot uses " + format(results.binSize) + ' nt to keep this browser-local plot responsive.</p>' : '',
         '<div class="canvas-wrap viewpoint-canvas-wrap"><canvas id="viewpoint-canvas" class="viewpoint-canvas" width="1040" height="300" tabindex="0" aria-label="Viewpoint graph. Click a bar to select a nucleotide interval."></canvas></div>',
-        '<div class="profile-axis"><span>' + format(results.start) + '</span><span>' + format(results.end) + '</span></div>',
-        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-viewpoint-data">' + (viewpoint.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="viewpoint-export-tsv">Export viewpoint TSV</button><button class="quiet-button" type="button" data-feature-action="viewpoint-export-params">Export parameters</button></div>',
+        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-viewpoint-data">' + (viewpoint.showDataTable ? "Hide data table" : "Open data table") + "</button></div>",
         viewpoint.showDataTable ? renderViewpointDataTable(results) : '',
         '</section>',
         renderViewpointSelection(viewpoint, results, selected),
@@ -436,9 +463,9 @@
 
   function renderViewpointDataTable(results) {
     return [
-      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead><tr><th>Start</th><th>End</th><th>Mean interaction coverage</th></tr></thead><tbody>',
+      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">Start <span class="unit">(nt)</span></th><th class="num">End <span class="unit">(nt)</span></th><th class="num">Mean interaction coverage</th></tr></thead><tbody>',
       results.bins.slice().sort(function (left, right) { return right.value - left.value; }).slice(0, 150).map(function (bin) {
-        return '<tr><td>' + format(bin.start) + '</td><td>' + format(bin.end) + '</td><td>' + format(bin.value) + '</td></tr>';
+        return '<tr><td class="num">' + format(bin.start) + '</td><td class="num">' + format(bin.end) + '</td><td class="num">' + format(bin.value) + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -463,10 +490,14 @@
     return [
       '<div class="page-heading">',
       '<div><h1>Compare</h1><p>Compare multiple local HYB datasets: the DESeq2 differential test, contact-map effect sizes and the HYB2 similarity heatmap.</p></div>',
-      '<div class="inline-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + '<button class="button button-secondary" type="button" data-feature-action="comparison-download-svg">Download effect SVG</button><button class="button button-secondary" type="button" data-feature-action="comparison-download-png">Download effect PNG</button></div>',
+      '<div class="inline-actions compare-heading-actions">' + (canAddDatasets ? '<button class="button" type="button" data-feature-action="choose-comparison-files">Add HYB datasets</button>' : '') + renderCompareExportMenu() + '</div>',
       '</div>',
-      '<section class="comparison-note notice notice-warning"><strong>What this page can and cannot tell you</strong><span>Only the <b>differential test</b> (panel A) says whether a contact differs between ' + escape(comparison.conditionALabel) + ' and ' + escape(comparison.conditionBLabel) + ': it uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell. It needs at least two biological replicates per condition. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R or the HYB2 command-line tool, use the exports under Map settings.</span></details></section>',
-      '<section class="data-card comparison-datasets">',
+      // neutral information: the first sentence, the rest on request (on a
+      // phone the whole note folds to its title line)
+      '<section class="comparison-note compare-note notice"><details class="compare-note-more" data-open-key="compare-note"' + openAttr("compare-note") + '><summary><strong>What this page can and cannot tell you</strong><span class="compare-note-lead">Only the <b>differential test</b> (panel A) says whether a contact differs between ' + escape(comparison.conditionALabel) + ' and ' + escape(comparison.conditionBLabel) + '.</span><span class="compare-note-toggle" aria-hidden="true"></span></summary>' +
+        '<div class="compare-note-body"><span>It uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell, and needs at least two biological replicates per condition. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R or the HYB2 command-line tool, use the files under Export at the top of the page.</span></details></div></details></section>',
+      renderCompareNav(),
+      '<section class="data-card comparison-datasets" id="compare-sec-datasets">',
       canAddDatasets
         ? '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">The primary file is included as the first local dataset. Add one or more HYB files, then assign each to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ((comparison.datasets || []).length === 1 ? ' local file' : ' local files') + '</span></div>'
         : '<div class="card-title-row"><div><h2>Datasets and conditions</h2><span class="card-note">Assign each project dataset to Condition A or B.</span></div><span class="card-kicker">' + format((comparison.datasets || []).length) + ' datasets</span></div>',
@@ -479,13 +510,13 @@
       // the main question comes first: the DESeq2 test bins its own 10-nt
       // cells, independent of the map settings below
       window.Hyb2DeseqCard ? window.Hyb2DeseqCard.renderCard(state) : "",
-      '<section class="analysis-controls data-card">',
+      '<section class="analysis-controls data-card" id="compare-sec-maps">',
       '<div class="card-title-row"><div><h2>Map settings</h2><span class="card-note">These settings change the effect map, the similarity heatmap and their exports. The differential test above bins its own 10-nt cells and is not affected by Bin size, Measure or Normalisation.</span></div></div>',
       '<div class="comparison-control-grid">',
       renderTextControl("Condition A label", "conditionALabel", comparison.conditionALabel, "Condition A", "comparison-control"),
       renderTextControl("Condition B label", "conditionBLabel", comparison.conditionBLabel, "Condition B", "comparison-control"),
-      renderSelectControl("RNA X", "rnaX", comparison.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control"),
-      renderSelectControl("RNA Y", "rnaY", comparison.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control"),
+      renderSelectControl("RNA X", "rnaX", comparison.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control", { wide: true }),
+      renderSelectControl("RNA Y", "rnaY", comparison.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control", { wide: true }),
       renderSelectControl("Bin size", "binSize", comparison.binSize, [
         { value: "5", label: "5 nt" }, { value: "10", label: "10 nt" }, { value: "25", label: "25 nt" }, { value: "50", label: "50 nt" }, { value: "100", label: "100 nt" }
       ], "comparison-control"),
@@ -505,16 +536,15 @@
         { value: "white", label: "White (as similarity_heatmap.R)" }, { value: "grey", label: "Light grey (shows bins at the minimum)" }
       ], "comparison-display"),
       '</div>',
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><button class="quiet-button" type="button" data-feature-action="comparison-export-tsv">Export comparison TSV</button><button class="quiet-button" type="button" data-feature-action="comparison-export-params">Export parameters</button></div>',
-      '<details class="comparison-export-more" data-open-key="compare-exports"' + openAttr("compare-exports") + '><summary>Exports for R or the HYB2 command-line tool</summary><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-counts">Export HYB2 count table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-hyb2-names">Export HYB2 names.table</button><button class="quiet-button" type="button" data-feature-action="comparison-export-deseq-metadata">Export extended metadata</button></div>',
+      // the exports are in the page heading's Export menu (K2)
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><span class="card-note">Map images, tables and the files for R or the HYB2 command-line tool are under Export at the top of the page.</span></div>',
       // a rerun keeps the previous maps on screen: the progress shows here
       comparison.result ? renderComparisonProgress(comparison.progress) : "",
-      '<p class="card-note">Use the headerless HYB2 names.table with the HYB2 command-line tool. Extended metadata has a header and provenance columns for audit or your own R workflow.</p></details>',
       '</section>',
       result.ready ? [
         '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Similarity bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
         '<section class="comparison-map-grid">',
-        renderComparisonMap("effect", "Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal. Descriptive, not a test: bins with few records give strong colours by chance, so use the differential test (A) to judge a difference.', result),
+        renderComparisonMap("effect", "Descriptive · Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal. Descriptive, not a test: bins with few records give strong colours by chance, so use the differential test (A) to judge a difference.', result),
         renderComparisonMap("conserved", "B · Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ")" + (comparison.similarityPanel === "grey" ? " on a grey panel." : "; on R's white panel the smallest bins do not show (choose the grey panel to see them)."), result),
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
@@ -528,12 +558,45 @@
     ].join("");
   }
 
+  // K2: every Compare download in one menu; the actions keep their names
+  // (written out: verify-ui-contract.cjs looks for each data-feature-action)
+  function renderCompareExportMenu() {
+    const item = '<button class="export-menu-item" type="button" role="menuitem" ';
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      item + 'data-feature-action="comparison-download-svg">Effect map · SVG</button>' +
+      item + 'data-feature-action="comparison-download-png">Effect map · PNG</button>' +
+      item + 'data-feature-action="comparison-export-tsv">Comparison bins · TSV</button>' +
+      item + 'data-feature-action="comparison-export-params">Parameters · JSON</button>' +
+      item + 'data-feature-action="comparison-export-deseq-counts">HYB2 count table · TSV<small>For R or the HYB2 command-line tool</small></button>' +
+      item + 'data-feature-action="comparison-export-hyb2-names">HYB2 names.table<small>Use the headerless HYB2 names.table with the HYB2 command-line tool</small></button>' +
+      item + 'data-feature-action="comparison-export-deseq-metadata">Extended metadata · TSV<small>Extended metadata has a header and provenance columns, for audit or your own R workflow</small></button>' +
+      '</div></details>';
+  }
+
+  // in-page navigation: buttons, not links, so the hash route is untouched
+  // (analysis-ui.js comparison-jump scrolls; bindCompareNav highlights)
+  function renderCompareNav() {
+    const items = [["compare-sec-datasets", "Datasets"]];
+    if (window.Hyb2DeseqCard) { items.push(["deseq-card", "Differential test (A)"]); }
+    items.push(["compare-sec-maps", "Maps (B)"]);
+    if (window.Hyb2ArcMap) {
+      items.push(["arcmap-card", "Arc map (C)"]);
+      if (window.Hyb2RegionPanels) { items.push(["region-panels-card", "Regions (D, E)"]); }
+      if (window.Hyb2FoldingEnergy) { items.push(["folding-energy-card", "Energy (F, G)"]); }
+    }
+    return '<nav class="compare-subnav" aria-label="Compare page sections"><div class="compare-subnav-list">' + items.map(function (item) {
+      return '<button class="compare-subnav-item" type="button" data-feature-action="comparison-jump" data-target="' + item[0] + '">' + escape(item[1]) + '</button>';
+    }).join("") + '</div></nav>';
+  }
+
   function renderComparisonDatasetTable(comparison) {
     const datasets = comparison.datasets || [];
     return [
-      '<div class="data-table-wrap comparison-dataset-table"><table class="data-table"><thead><tr><th>Dataset</th><th>Label</th><th>Condition</th><th>Valid records</th><th>Support</th><th></th></tr></thead><tbody>',
+      // K3: numbers right-aligned, long file names cut with a title; Primary
+      // is a badge in the same column as Remove
+      '<div class="data-table-wrap comparison-dataset-table"><table class="data-table"><thead class="nowrap"><tr><th class="compare-dataset-name">Dataset</th><th>Label</th><th>Condition</th><th class="num">Valid records</th><th class="num">Support</th><th class="compare-dataset-action" aria-label="Role"></th></tr></thead><tbody>',
       datasets.map(function (dataset) {
-        return '<tr><td title="' + attribute(dataset.fileName) + '">' + escape(dataset.fileName) + '</td><td><input type="text" value="' + attribute(dataset.label || "") + '" data-feature="comparison-dataset" data-key="label" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset label"></td><td><select data-feature="comparison-dataset" data-key="condition" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset condition"><option value="A"' + (dataset.condition === "A" ? " selected" : "") + '>Condition A</option><option value="B"' + (dataset.condition === "B" ? " selected" : "") + '>Condition B</option></select></td><td>' + format(dataset.summary.validRecords) + '</td><td>' + format(dataset.summary.supportInteractions) + '</td><td>' + (dataset.id === "primary" ? '<span class="card-note">Primary</span>' : '<button class="quiet-button" type="button" data-feature-action="remove-comparison-dataset" data-dataset-id="' + attribute(dataset.id) + '">Remove</button>') + '</td></tr>';
+        return '<tr><td class="cell-truncate" title="' + attribute(dataset.fileName) + '">' + escape(dataset.fileName) + '</td><td><input type="text" value="' + attribute(dataset.label || "") + '" data-feature="comparison-dataset" data-key="label" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset label"></td><td><select data-feature="comparison-dataset" data-key="condition" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset condition"><option value="A"' + (dataset.condition === "A" ? " selected" : "") + '>Condition A</option><option value="B"' + (dataset.condition === "B" ? " selected" : "") + '>Condition B</option></select></td><td class="num">' + format(dataset.summary.validRecords) + '</td><td class="num">' + format(dataset.summary.supportInteractions) + '</td><td class="compare-dataset-action">' + (dataset.id === "primary" ? '<span class="compare-badge" title="The file loaded on the Data page; it cannot be removed here">Primary</span>' : '<button class="quiet-button" type="button" data-feature-action="remove-comparison-dataset" data-dataset-id="' + attribute(dataset.id) + '">Remove</button>') + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -587,11 +650,11 @@
     const rawLabel = comparison.measure === "support" ? "Raw support" : "Raw records";
     const analysisLabel = comparison.normalise === "library" ? "Per million" : "Analysis value";
     return [
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Dataset</th><th>Condition</th><th>' + rawLabel + '</th><th>' + analysisLabel + '</th></tr></thead><tbody>',
+      '<div class="data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th>Dataset</th><th>Condition</th><th class="num">' + rawLabel + '</th><th class="num">' + analysisLabel + '</th></tr></thead><tbody>',
       (comparison.datasets || []).map(function (dataset) {
         const item = present[dataset.id];
         const conditionLabel = dataset.condition === "A" ? comparison.conditionALabel : comparison.conditionBLabel;
-        return '<tr><td>' + escape(dataset.label || dataset.fileName || dataset.id) + '</td><td>' + escape(conditionLabel) + '</td><td>' + format(item ? item.rawValue : 0) + '</td><td>' + format(item ? item.value : 0) + '</td></tr>';
+        return '<tr><td>' + escape(dataset.label || dataset.fileName || dataset.id) + '</td><td>' + escape(conditionLabel) + '</td><td class="num">' + format(item ? item.rawValue : 0) + '</td><td class="num">' + format(item ? item.value : 0) + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -630,9 +693,9 @@
       '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page - 1) + '"' + (page > 0 ? "" : " disabled") + '>Previous</button>',
       '<button class="quiet-button" type="button" data-feature-action="comparison-table-page" data-page="' + (page + 1) + '"' + (page < pages - 1 ? "" : " disabled") + '>Next</button>',
       '</div>',
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>X interval</th><th>Y interval</th><th>' + escape(comparison.conditionALabel) + ' mean</th><th>' + escape(comparison.conditionBLabel) + ' mean</th><th>Log2 effect</th><th>Datasets present</th><th>Similarity</th></tr></thead><tbody>',
+      '<div class="data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">X interval</th><th class="num">Y interval</th><th class="num">' + escape(comparison.conditionALabel) + ' mean</th><th class="num">' + escape(comparison.conditionBLabel) + ' mean</th><th class="num">Log2 effect</th><th class="num">Datasets present</th><th class="num">Similarity</th></tr></thead><tbody>',
       rows.map(function (cell) {
-        return '<tr><td>' + range(cell.x, cell.x + result.binSize - 1) + '</td><td>' + range(cell.y, cell.y + result.binSize - 1) + '</td><td>' + format(cell.conditionA) + '</td><td>' + format(cell.conditionB) + '</td><td>' + format(cell.effect) + '</td><td>' + format(cell.presentDatasets) + '</td><td>' + format(cell.similarity) + '</td></tr>';
+        return '<tr><td class="num">' + range(cell.x, cell.x + result.binSize - 1) + '</td><td class="num">' + range(cell.y, cell.y + result.binSize - 1) + '</td><td class="num">' + format(cell.conditionA) + '</td><td class="num">' + format(cell.conditionB) + '</td><td class="num">' + format(cell.effect) + '</td><td class="num">' + format(cell.presentDatasets) + '</td><td class="num">' + format(cell.similarity) + '</td></tr>';
       }).join(""),
       '</tbody></table></div></section>'
     ].join("");
@@ -660,28 +723,32 @@
       '<div class="page-heading"><div><h1>Region Explorer</h1><p>Find interactions that overlap a chosen RNA region.</p></div></div>',
       '<section class="analysis-controls data-card">',
       '<div class="region-control-grid">',
+      // B11: anchor, its coordinates and the overlap rule on the first row,
+      // the optional partner and its coordinates on the second
       renderSelectControl("Anchor RNA", "rna", region.rna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "region-control"),
       renderTextControl("Start", "start", region.start, "Start", "region-control", "number", { min: 1, step: 1 }),
       renderTextControl("End", "end", region.end, "End", "region-control", "number", { min: 1, step: 1 }),
-      renderSelectControl("Partner", "partner", region.partner, partnerOptions, "region-control"),
-      renderTextControl("Partner start", "partnerStart", region.partnerStart, "Optional", "region-control", "number", { min: 1, step: 1 }),
-      renderTextControl("Partner end", "partnerEnd", region.partnerEnd, "Optional", "region-control", "number", { min: 1, step: 1 }),
       renderSelectControl("Overlap rule", "overlap", region.overlap, [
         { value: "any", label: "Any overlap" },
         { value: "contained", label: "Fully contained" }
       ], "region-control"),
+      renderSelectControl("Partner", "partner", region.partner, partnerOptions, "region-control"),
+      renderTextControl("Partner start", "partnerStart", region.partnerStart, "Optional", "region-control", "number", { min: 1, step: 1 }),
+      renderTextControl("Partner end", "partnerEnd", region.partnerEnd, "Optional", "region-control", "number", { min: 1, step: 1 }),
       "</div>",
       '<div class="control-actions"><button class="button" type="button" data-feature-action="explore-region">Explore</button>' + renderFoldRequestButton(state, "region") + '<span class="control-hint">Coordinates remain inclusive, matching the HYB record display.</span></div>',
       "</section>",
       region.rna && region.start !== "" && region.end !== "" ? [
         '<section class="region-results">',
-        '<div class="region-summary data-card"><div class="card-title-row"><div><h2>' + escape(region.rna) + ":" + range(region.start, region.end) + '</h2><span class="card-note">' + (loading ? "Loading matching records…" : format(results.records.length) + " matching records") + (region.partner && region.partnerStart !== "" && region.partnerEnd !== "" ? " · " + escape(region.partner) + ":" + range(region.partnerStart, region.partnerEnd) : "") + '</span></div><span class="card-kicker">Local</span></div>',
+        '<div class="region-summary data-card"><div class="card-title-row"><div><h2>' + escape(region.rna) + ":" + range(region.start, region.end) + '</h2><span class="card-note">' + (loading ? "Loading matching records…" : format(results.records.length) + " matching records · profile bins " + format(results.profileBinSize) + " nt") + (region.partner && region.partnerStart !== "" && region.partnerEnd !== "" ? " · " + escape(region.partner) + ":" + range(region.partnerStart, region.partnerEnd) : "") + '</span></div><span class="card-kicker">Local</span></div>',
         results.profileBinSizeAdjusted ? '<p class="notice notice-warning">The profile resolution was increased to ' + format(results.profileBinSize) + ' nt per bin to keep this browser-local plot responsive.</p>' : '',
+        // B11: Top partners sit inside the summary card, beside the profile
+        '<div class="region-summary-body"><div class="region-profile-block">',
         '<dl class="region-totals"><div><dt>Cluster support</dt><dd>' + format(results.support) + "</dd></div><div><dt>Partner RNAs</dt><dd>" + format(results.partners.length) + "</dd></div></dl>",
         '<div class="canvas-wrap region-canvas-wrap"><canvas id="region-profile-canvas" class="region-profile-canvas" width="960" height="210" aria-label="Interaction support position profile"></canvas></div>',
-        '<div class="profile-axis"><span>' + format(region.start) + "</span><span>" + format(region.end) + "</span></div></div>",
+        "</div>",
         renderRegionPartners(results),
-        "</section>",
+        "</div></div>",
         renderReferencePanel(fastaRegion, region, state),
         renderRegionRecords(results.records, region.showAllRecords),
         "</section>"
@@ -692,9 +759,9 @@
   function renderRegionPartners(results) {
     const max = results.partners.length ? results.partners[0].support : 1;
     return [
-      '<section class="data-card region-partners"><div class="card-title-row"><h2>Top partners</h2><span class="card-kicker">Cluster support</span></div>',
+      '<section class="region-partners"><div class="card-title-row"><h3>Top partners</h3><span class="card-kicker">Cluster support</span></div>',
       results.partners.length ? '<div class="bar-list">' + results.partners.slice(0, 8).map(function (partner) {
-        return '<div class="bar-row"><span class="bar-name">' + escape(partner.name) + '</span><span class="bar-track"><span class="bar-fill" style="width:' + Math.max(3, (partner.support / max) * 100) + '%"></span></span><span class="bar-value">' + format(partner.support) + "</span></div>";
+        return '<div class="bar-row"><span class="bar-name" title="' + attribute(partner.name) + '">' + escape(partner.name) + '</span><span class="bar-track"><span class="bar-fill" style="width:' + Math.max(3, (partner.support / max) * 100) + '%"></span></span><span class="bar-value">' + format(partner.support) + "</span></div>";
       }).join("") + "</div>" : '<p class="empty-inline">No matching interactions.</p>',
       "</section>"
     ].join("");
@@ -711,18 +778,44 @@
 
     return [
       '<section class="reference-panel data-card"><div><span class="drawer-kicker">Reference sequence</span><h2>' + escape(reference.id) + ":" + range(reference.start, reference.end) + "</h2>",
-      '<code class="reference-sequence">' + escape(truncate(reference.sequence, 260)) + "</code></div>",
+      renderGroupedSequence(reference.sequence, reference.start),
+      "</div>",
       '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="copy-region-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="region-send-structure">Send to RNA Structure</button><button class="button button-secondary" type="button" data-feature-action="region-download-fasta">Download FASTA</button></div></section>'
     ].join("");
+  }
+
+  // B11: the reference in groups of 10 nt, 50 nt per line, each line led by
+  // its first coordinate; the first 300 nt are shown (Copy takes them all)
+  const SEQUENCE_PREVIEW = 300;
+  function renderGroupedSequence(sequence, start) {
+    const value = String(sequence || "");
+    const shown = value.slice(0, SEQUENCE_PREVIEW);
+    const first = Number(start) || 1;
+    const lines = [];
+    for (let offset = 0; offset < shown.length; offset += 50) {
+      const groups = [];
+      for (let group = offset; group < Math.min(shown.length, offset + 50); group += 10) {
+        groups.push(escape(shown.slice(group, Math.min(group + 10, offset + 50))));
+      }
+      lines.push('<span class="sequence-line"><span class="sequence-position" aria-hidden="true">' + format(first + offset) + "</span>" + groups.join(" ") + "</span>");
+    }
+    return '<code class="reference-sequence reference-sequence--grouped">' + lines.join("") + "</code>" +
+      (value.length > shown.length ? '<p class="table-note">Showing the first ' + format(shown.length) + " of " + format(value.length) + " nt. Copy sequence and Download FASTA use the whole region.</p>" : "");
   }
 
   function renderRegionRecords(records, showAll) {
     const limit = showAll ? 100 : 20;
     return [
-      '<section class="data-card"><div class="card-title-row"><h2>Matching records</h2><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="region-export-csv">Export CSV</button><button class="quiet-button" type="button" data-feature-action="region-export-hyb">Export HYB</button><button class="quiet-button" type="button" data-feature-action="region-export-params">Export parameters</button></div></div>',
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Sequence ID</th><th>RNA 1</th><th>Region 1</th><th>RNA 2</th><th>Region 2</th><th>Chimera type</th><th>Support</th></tr></thead><tbody>',
+      '<section class="data-card region-records"><div class="card-title-row"><h2>Matching records</h2><div class="inline-actions">' + renderExportMenu([
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-csv">Records · CSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-hyb">Records · HYB</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-params">Parameters · JSON</button>'
+      ]) + "</div></div>",
+      // K3: coordinates and counts right-aligned, long RNA names truncated
+      // with their full name in title, headers on one line
+      '<div class="data-table-wrap"><table class="data-table region-records-table"><thead class="nowrap"><tr><th>Sequence ID</th><th>RNA 1</th><th class="num">Region 1 <span class="unit">(nt)</span></th><th>RNA 2</th><th class="num">Region 2 <span class="unit">(nt)</span></th><th>Chimera type</th><th class="num">Support</th></tr></thead><tbody>',
       records.slice(0, limit).map(function (record) {
-        return "<tr><td>" + escape(record.id) + "</td><td>" + escape(record.rnaOne) + "</td><td>" + range(record.rnaOneStart, record.rnaOneEnd) + "</td><td>" + escape(record.rnaTwo) + "</td><td>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</td><td>" + escape(record.chimeraType) + "</td><td>" + format(record.supportCount) + "</td></tr>";
+        return '<tr><td class="cell-truncate" title="' + attribute(record.id) + '">' + escape(record.id) + '</td><td class="cell-truncate" title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + '</td><td class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + '</td><td class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + '</td><td class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + '</td><td class="cell-truncate" title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + '</td><td class="num">' + format(record.supportCount) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>",
       records.length > 20 ? '<div class="table-more"><button class="quiet-button" type="button" data-feature-action="region-toggle-records">' + (showAll ? "Show fewer records" : "Show " + format(Math.min(records.length, 100)) + " records") + '</button>' + (records.length > 100 && showAll ? '<span class="table-note">Showing the first 100 of ' + format(records.length) + " matching records. Export includes all local matches.</span>" : '<span class="table-note">Showing ' + format(Math.min(limit, records.length)) + " of " + format(records.length) + ". Export includes all local matches.</span>") + "</div>" : "",
@@ -829,18 +922,19 @@
       !cplfold && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : "",
       '<div class="structure-run-bar">',
       !running && unavailableReason ? '<p class="structure-run-reason" role="note">Cannot run yet: ' + escape(unavailableReason) + "</p>" : "",
+      !running && !unavailableReason && lengthNotice ? '<p class="structure-run-note" role="note">' + escape(lengthNotice) + "</p>" : "",
       running ? renderStructureProgress(structure) : "",
       running ? '<button class="button button-secondary" type="button" data-feature-action="cancel-structure">' + (structure.operation === "capacity" ? "Cancel capacity test" : (structure.operation === "bonus-matrix" ? "Cancel input export" : "Cancel prediction")) + '</button>' : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable ? " disabled" : "") + ">" + actionLabel + "</button>",
       "</div>",
       "</section>",
-      '<section class="structure-result data-card">',
+      '<section class="structure-result data-card' + (structure.result ? "" : " is-preparing") + '">',
       '<div class="card-title-row"><div><h2>' + (structure.result ? "Structure result" : "Sequence preparation") + '</h2><span class="card-note">' + (structure.result && structure.result.label ? escape(structure.result.label) : (sequenceInfo.label ? escape(sequenceInfo.label) : "Choose a source")) + '</span></div><span class="card-kicker">' + format(structure.result && structure.result.sequence ? structure.result.sequence.length : length) + " nt</span></div>",
       sequenceInfo.error ? '<div class="notice notice-warning">' + escape(sequenceInfo.error) + "</div>" : "",
-      lengthNotice ? '<div class="notice notice-warning">' + escape(lengthNotice) + "</div>" : "",
+      length ? structureLengthInfo(length, lengthNotice, cplfold ? "cplfold" : "viennarna", structure) : "",
       structure.status === "error" ? '<div class="notice notice-error">' + escape(structure.message || (cplfold ? "Browser CPLfold could not finish the structure prediction." : "ViennaRNA WebAssembly could not finish the structure prediction.")) + "</div>" : "",
       structure.result ? renderStructureResult(structure.result, structure.selectedNucleotide, structure.viewMode) : renderStructurePreparation(sequenceInfo, structure),
       cplfold
-        ? '<div class="method-limit"><strong>What the browser can fold</strong><span>CPLfold runs here without its fast compiled core, so this browser folds short regions only: up to 500 nt at most, and the capacity test above finds a safe length for this computer. With HYB evidence, each eligible record adds a bonus that pulls the bases of its two arms together. For longer RNAs, use HYB2 Desktop, or Download local inputs and run CPLfold on your own computer.</span><details class="method-limit-details"><summary>Technical details</summary><span>This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span></details></div>'
+        ? renderCplfoldLimits(structure)
         : guidedConstraintMode
         ? '<div class="method-limit"><strong>Compatibility boundary</strong><span>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. UNAFold remains an optional external CLI compatibility path, and pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</span></div>'
         : '<div class="method-limit"><strong>Scope</strong><span>Choose COMRADES(ViennaRNA) to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</span></div>',
@@ -886,10 +980,24 @@
       ], "structure-control") + "</div>",
       '<div class="control-grid">' + renderTextControl("Evidence alpha", "cplfoldAlpha", structure.cplfoldAlpha || "0.5", "0.5", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + renderTextControl("Pseudoknot beta", "cplfoldBeta", structure.cplfoldBeta || "0", "0", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + "</div>",
       '</details>',
+      "</section>"
+    ].join("");
+  }
+
+  // Right column, below the sequence or result: what the browser can fold,
+  // the capacity test that raises the limit, and the local-run route.
+  // The one way the page states the browser CPLfold limit.
+  function cplfoldLimitSentence(capacity) {
+    return format(capacity.baselineLength) + " nt before the capacity test, up to " + format(capacity.hardCeiling) + " nt after it";
+  }
+
+  function renderCplfoldLimits(structure) {
+    const guided = structure.cplfoldEvidence === "hyb-blocks";
+    return [
+      '<div class="method-limit cplfold-limits"><strong>What the browser can fold</strong><span>CPLfold runs here without its fast compiled core, so this browser folds short regions only: ' + escape(cplfoldLimitSentence(cplfoldCapacity(structure))) + '. HYB2 Desktop, or a local run below, folds longer RNAs.</span>',
       renderCplfoldCapacity(structure),
       renderCplfoldLocalCta(guided),
-      '<p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p>',
-      "</section>"
+      '<details class="method-limit-details"><summary>Technical details</summary><span>With HYB evidence, each eligible record adds a bonus that pulls the bases of its two arms together. This is the vendored pure-Python CPLfold implementation running without Numba JIT. The browser capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5</code> locally. Sequence-only mode requires only the FASTA. Public redistribution still requires resolution of the upstream CPLfold licence noted in the repository.</span><p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p></details></div>'
     ].join("");
   }
 
@@ -985,7 +1093,7 @@
     const capacity = cplfoldCapacity(structure);
     const profileMatches = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
     let headline = "Baseline " + format(capacity.baselineLength) + " nt";
-    let detail = "Run a short local benchmark to estimate a longer limit for this browser.";
+    let detail = "Run a short benchmark to fold longer sequences here, up to " + format(capacity.hardCeiling) + " nt.";
     if (capacity.status === "probing") {
       headline = "Measuring local capacity…";
       detail = "The Pyodide worker is running a representative " + format(capacity.probeLength || 75) + " nt CPLfold fold.";
@@ -1006,7 +1114,7 @@
       '<div class="cplfold-capacity" aria-live="polite">',
       '<div class="cplfold-capacity-row"><div><span class="drawer-kicker">Browser capacity</span><strong>' + escape(headline) + '</strong><small>' + escape(detail) + '</small></div>',
       '<button class="button button-secondary" type="button" data-feature-action="probe-cplfold-capacity"' + (structure.status === "running" ? " disabled" : "") + '>' + buttonLabel + '</button></div>',
-      '<small class="cplfold-capacity-footnote">The recommendation is session-specific and conservative. It is an estimate, not a guarantee; the absolute browser ceiling is ' + format(capacity.hardCeiling) + ' nt.</small>',
+      '<small class="cplfold-capacity-footnote">The measured length is a conservative estimate for this browser session, not a guarantee.</small>',
       '</div>'
     ].join("");
   }
@@ -1058,14 +1166,25 @@
       return '<div class="structure-placeholder"><span class="placeholder-label">Waiting for a sequence</span><p>Reference regions require a mapped FASTA. A HYB sequence can be selected from a record, or you can paste A, C, G and U directly.</p></div>';
     }
 
-    const localCplfoldInput = structure && structure.engine === "cplfold"
-      ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>'
-      : "";
     return [
       sequenceInfo.assembly ? renderAssemblyPreview(sequenceInfo.assembly, sequenceInfo.evidenceKind) : "",
-      '<code class="structure-sequence">' + escape(wrapSequence(sequenceInfo.sequence, 70)) + "</code>",
-      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="structure-download-fasta">Download FASTA</button>' + localCplfoldInput + "</div>"
+      renderSequenceBlocks(sequenceInfo.sequence, "structure-sequence"),
+      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-sequence">Copy sequence</button>' + structureExportMenu([
+        ['data-feature-action="structure-download-fasta"', "Download FASTA"],
+        structure && structure.engine === "cplfold" ? ['data-feature-action="download-local-cplfold-input"' + LOCAL_INPUT_ATTRS, "Download local inputs"] : null
+      ]) + "</div>"
     ].join("");
+  }
+
+  const LOCAL_INPUT_ATTRS = ' aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold"';
+
+  // K2 export menu: every download on the Structure page sits behind one
+  // Export button; items are [attributes, label].
+  function structureExportMenu(items) {
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
+      items.filter(Boolean).map(function (item) {
+        return '<button class="export-menu-item" type="button" role="menuitem" ' + item[0] + ">" + item[1] + "</button>";
+      }).join("") + "</div></details>";
   }
 
   function renderAssemblyPreview(assembly, evidenceKind) {
@@ -1118,8 +1237,21 @@
       guided ? renderComradesResult(result) : (cplfold ? renderCplfoldResult(result) : ""),
       renderStructureDiagramPanel(result, activeView, cplfold, allowPseudoknot, guided, manualConstrained, inspectorInstruction),
       renderNucleotideInspector(result, selectedNucleotide),
-      '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span><code class="structure-output-code">' + escape(wrapSequence(result.sequence, 64)) + '</code></div><div><span class="drawer-kicker">Dot-bracket</span><code class="structure-output-code">' + escape(wrapSequence(result.dotBracket, 64)) + "</code></div></section>",
-      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button><button class="button button-secondary" type="button" data-feature-action="download-structure-dot-bracket">Download DBN</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ct">Download CT</button><button class="button button-secondary" type="button" data-feature-action="download-structure-pairs">Download base pairs</button>' + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-local-cplfold-input" aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold">Download local inputs</button>' : "") + (guided ? '<button class="button button-secondary" type="button" data-feature-action="download-structure-evidence">Download evidence</button><button class="button button-secondary" type="button" data-feature-action="download-structure-constraints">Download constraints</button><button class="button button-secondary" type="button" data-feature-action="download-structure-ensemble">Download ensemble</button>' : "") + (cplfoldHasEvidence ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-evidence">Download bonus matrix</button>' : "") + (cplfold ? '<button class="button button-secondary" type="button" data-feature-action="download-cplfold-candidates">Download candidates</button>' : "") + '<button class="button button-secondary" type="button" data-feature-action="download-structure-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-png">Download PNG</button><button class="button button-secondary" type="button" data-feature-action="download-structure-report">Download report</button></div>',
+      '<section class="structure-output-grid"><div><span class="drawer-kicker">Sequence</span>' + renderSequenceBlocks(result.sequence, "structure-output-code") + '</div><div><span class="drawer-kicker">Dot-bracket</span>' + renderSequenceBlocks(result.dotBracket, "structure-output-code") + "</div></section>",
+      '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button>' + structureExportMenu([
+        ['data-feature-action="download-structure-dot-bracket"', "Download DBN"],
+        ['data-feature-action="download-structure-ct"', "Download CT"],
+        ['data-feature-action="download-structure-pairs"', "Download base pairs"],
+        cplfold ? ['data-feature-action="download-local-cplfold-input"' + LOCAL_INPUT_ATTRS, "Download local inputs"] : null,
+        guided ? ['data-feature-action="download-structure-evidence"', "Download evidence"] : null,
+        guided ? ['data-feature-action="download-structure-constraints"', "Download constraints"] : null,
+        guided ? ['data-feature-action="download-structure-ensemble"', "Download ensemble"] : null,
+        cplfoldHasEvidence ? ['data-feature-action="download-cplfold-evidence"', "Download bonus matrix"] : null,
+        cplfold ? ['data-feature-action="download-cplfold-candidates"', "Download candidates"] : null,
+        ['data-feature-action="download-structure-svg"', "Download SVG"],
+        ['data-feature-action="download-structure-png"', "Download PNG"],
+        ['data-feature-action="download-structure-report"', "Download report"]
+      ]) + "</div>",
       '<details class="base-pair-details"><summary>Base-pair list (' + format(pairs.length) + ")</summary>" + (pairs.length ? '<ol class="base-pair-list">' + pairs.map(function (pair) {
         const isHardConstraint = requestedPairs.has(pair.left + ":" + pair.right);
         const evidenceLabel = (guided || cplfold) && Number(pair.evidenceSupport) > 0 ? " · evidence " + formatEvidence(pair.evidenceSupport) : "";
@@ -1458,8 +1590,12 @@
     return window.Hyb2OpenSections && window.Hyb2OpenSections[key] ? " open" : "";
   }
 
-  function renderSelectControl(label, key, value, options, feature) {
+  // K8: extra is optional, e.g. { wide: true } to span two grid columns.
+  // The select (or datalist input) carries the current choice's full text
+  // as its title, so a label cut off by the field width can still be read.
+  function renderSelectControl(label, key, value, options, feature, extra) {
     const available = options || [];
+    const fieldClass = "control-field" + (extra && extra.wide ? " control-field--wide" : "");
     if (available.length > 750) {
       const selected = available.find(function (option) {
         return String(option.value) === String(value);
@@ -1470,17 +1606,20 @@
       }
       const listId = "options-" + String(feature + "-" + key).replace(/[^a-z0-9_-]/gi, "-");
       return [
-        '<label class="control-field"><span>' + escape(label) + "</span>",
-        '<input type="search" list="' + attribute(listId) + '" value="' + attribute(value) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '" autocomplete="off">',
+        '<label class="' + fieldClass + '"><span>' + escape(label) + "</span>",
+        '<input type="search" list="' + attribute(listId) + '" value="' + attribute(value) + '"' + (selected ? ' title="' + attribute(selected.label) + '"' : "") + ' data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '" autocomplete="off">',
         '<datalist id="' + attribute(listId) + '">' + suggestions.map(function (option) {
           return '<option value="' + attribute(option.value) + '">' + escape(option.label) + "</option>";
         }).join("") + "</datalist>",
         '<small>Type an exact value. Showing ' + format(suggestions.length) + " of " + format(available.length) + " suggestions.</small></label>"
       ].join("");
     }
+    const current = available.find(function (option) {
+      return String(option.value) === String(value);
+    }) || available[0];
     return [
-      '<label class="control-field"><span>' + escape(label) + "</span>",
-      '<select data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '">',
+      '<label class="' + fieldClass + '"><span>' + escape(label) + "</span>",
+      '<select' + (current ? ' title="' + attribute(current.label) + '"' : "") + ' data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '">',
       available.map(function (option) {
         return '<option value="' + attribute(option.value) + '"' + (String(option.value) === String(value) ? " selected" : "") + ">" + escape(option.label) + "</option>";
       }).join(""),
@@ -1492,9 +1631,10 @@
     const settings = options || {};
     const numericAttributes = (settings.min === undefined ? "" : ' min="' + attribute(settings.min) + '"') +
       (settings.max === undefined ? "" : ' max="' + attribute(settings.max) + '"') +
-      (settings.step === undefined ? "" : ' step="' + attribute(settings.step) + '"');
+      (settings.step === undefined ? "" : ' step="' + attribute(settings.step) + '"') +
+      (settings.title === undefined ? "" : ' title="' + attribute(settings.title) + '"');
     return [
-      '<label class="control-field"><span>' + escape(label) + "</span>",
+      '<label class="control-field' + (settings.wide ? " control-field--wide" : "") + '"><span>' + escape(label) + "</span>",
       '<input type="' + (type || "text") + '" value="' + attribute(value) + '" placeholder="' + attribute(placeholder) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '"' + numericAttributes + '>',
       "</label>"
     ].join("");
@@ -1654,13 +1794,13 @@
       }
       const capacity = cplfoldCapacity(structure);
       if (length > capacity.hardCeiling) {
-        return "Browser CPLfold has a hard safety ceiling of " + format(capacity.hardCeiling) + " nt in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";
+        return "This " + format(length) + " nt sequence is too long for the browser, which folds " + cplfoldLimitSentence(capacity) + ". Select a shorter region or run CPLfold locally.";
       }
       if (length > capacity.baselineLength && capacity.status === "probing") {
         return "The browser CPLfold capacity test is running. Wait for it to finish before predicting this " + format(length) + " nt sequence.";
       }
       if (length > capacity.baselineLength && capacity.status !== "ready") {
-        return "This " + format(length) + " nt sequence is above the browser baseline of " + format(capacity.baselineLength) + " nt. Run the local capacity test before predicting.";
+        return "This " + format(length) + " nt sequence needs the capacity test first. The browser folds " + cplfoldLimitSentence(capacity) + ".";
       }
       if (length > capacity.baselineLength && capacity.profileKey !== cplfoldProfileKey(structure)) {
         return "CPLfold settings changed after the last browser capacity test. Measure capacity again before predicting this sequence.";
@@ -1688,6 +1828,28 @@
     return "";
   }
 
+  // Neutral length line for the Sequence preparation panel. The warning
+  // itself (structureLengthNotice) is shown once, next to the run button.
+  function structureLengthInfo(length, notice, engine, structure) {
+    let text = "";
+    if (engine === "cplfold" && cplfoldNativeAvailable()) {
+      text = format(length) + " nt " + (length > cplfoldNativeMaxLength() ? "is above" : "is within") + " the " + format(cplfoldNativeMaxLength()) + " nt desktop CPLfold limit.";
+    } else if (engine === "cplfold") {
+      const capacity = cplfoldCapacity(structure);
+      const measured = capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
+      text = length > capacity.hardCeiling
+        ? format(length) + " nt is above the " + format(capacity.hardCeiling) + " nt browser ceiling."
+        : length <= capacity.baselineLength
+        ? format(length) + " nt is within the " + format(capacity.baselineLength) + " nt browser baseline."
+        : measured
+        ? format(length) + " nt " + (length > capacity.recommendedLength ? "is above" : "is within") + " the " + format(capacity.recommendedLength) + " nt measured for this browser."
+        : format(length) + " nt, longer than the " + format(capacity.baselineLength) + " nt baseline.";
+    } else if (notice) {
+      text = format(length) + " nt; ViennaRNA folds up to 3,000 nt in this browser (above 2,000 nt after a confirmation).";
+    }
+    return text ? '<p class="structure-length-info">' + escape(text) + "</p>" : "";
+  }
+
   function range(start, end) {
     return format(start) + "–" + format(end);
   }
@@ -1701,12 +1863,20 @@
     return string.length > length ? string.slice(0, length) + "…" : string;
   }
 
-  function wrapSequence(sequence, length) {
-    const pieces = [];
-    for (let index = 0; index < sequence.length; index += length) {
-      pieces.push(sequence.slice(index, index + length));
+  // Sequence text in lines of 50, groups of 10, each line led by the
+  // 1-based position of its first character; monospaced. The copy and
+  // download actions use the plain sequence, not this text.
+  function renderSequenceBlocks(sequence, className) {
+    const text = String(sequence || "");
+    const lines = [];
+    for (let start = 0; start < text.length; start += 50) {
+      const groups = [];
+      for (let index = start; index < Math.min(text.length, start + 50); index += 10) {
+        groups.push(text.slice(index, Math.min(index + 10, start + 50)));
+      }
+      lines.push('<span class="seq-line"><span class="seq-pos" aria-hidden="true">' + (start + 1) + '</span><span class="seq-text">' + escape(groups.join(" ")) + "</span></span>");
     }
-    return pieces.join("\n");
+    return '<code class="' + className + ' sequence-blocks" style="--seq-pos-ch:' + String(Math.max(1, text.length)).length + '">' + lines.join("") + "</code>";
   }
 
   function format(value) {

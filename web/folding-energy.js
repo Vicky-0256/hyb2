@@ -506,7 +506,7 @@
       return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" value="' + esc(value) +
         '" placeholder="' + esc(placeholder || "") + '" data-feature="energy-control" data-key="' + key + '"' + (e.running ? " disabled" : "") + "></label>";
     };
-    const out = ['<section class="data-card folding-energy-card">',
+    const out = ['<section class="data-card folding-energy-card" id="folding-energy-card">',
       '<div class="card-title-row"><div><h2>F, G · Folding energy</h2><span class="card-note">RNAcofold of the two arms of every significant interaction, once with each lineage\'s sequence (A = condition one, B = condition two, at aligned positions), as violin plots with a paired t-test. ViennaRNA runs in this browser (WebAssembly).</span></div></div>',
       '<div class="comparison-control-grid">', control("padj <", "padj", e.padj, "0.01"), control("Fragment length per arm (nt)", "length", e.length, "40"),
       '<label class="control-field"><span>Temperature</span><input type="text" value="37 °C, default parameters" disabled></label></div>'];
@@ -515,9 +515,15 @@
     if (panels && (!(s.a && s.a.sequence) || !(s.b && s.b.sequence))) {
       const fasta = function (key, label) {
         const loaded = rp && rp[key];
-        return '<div class="arcmap-file control-field"><span>' + esc(label) + '</span><input type="file" accept=".fa,.fasta,.fna,.txt" data-feature="regions-fasta" data-key="' + key +
-          '" aria-label="' + esc(label) + '">' + (loaded ? '<span class="card-note">' + esc(loaded.name + " · " + loaded.sequence.length.toLocaleString("en-US") + " nt") + "</span>" : "") +
-          (rp && rp.errors && rp.errors[key] ? '<p class="notice notice-error">' + esc(rp.errors[key]) + "</p>" : "") + "</div>";
+        const summary = loaded ? loaded.sequence.length.toLocaleString("en-US") + " nt" : "";
+        // a button-styled label over the hidden input, as in the Arc map card
+        return '<div class="arcmap-file control-field' + (loaded ? " is-loaded" : "") + '"><span>' + esc(label) + '</span><div class="file-pick">' +
+          '<label class="button button-secondary file-pick-button"><input class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.txt" data-feature="regions-fasta" data-key="' + key +
+          '" aria-label="' + esc((loaded ? "Replace " : "Choose ") + label) + '">' + (loaded ? "Replace" : "Choose file") + "</label>" +
+          (loaded
+            ? '<span class="file-pick-name" title="' + esc(loaded.name + " · " + summary) + '"><b>' + esc(loaded.name) + "</b> · " + esc(summary) + "</span>"
+            : '<span class="file-pick-name is-empty">No file</span>') +
+          "</div>" + (rp && rp.errors && rp.errors[key] ? '<p class="notice notice-error">' + esc(rp.errors[key]) + "</p>" : "") + "</div>";
       };
       out.push('<div class="arcmap-files">', fasta("fastaA", "Reference of condition one / A (FASTA)"), fasta("fastaB", "Reference of condition two / B (FASTA)"), "</div>");
     }

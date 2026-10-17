@@ -63,6 +63,7 @@
     }
     if (state.activePage === "compare") {
       bindComparisonCanvases(state, api);
+      bindComparisonTable(state);
       if (window.Hyb2DeseqCard) {
         window.Hyb2DeseqCard.draw(state, api);
       }
@@ -113,16 +114,26 @@
     });
     // Rows were windowed for a default height; fit them to the real one.
     updateVirtualRows(state, api);
-    // Page first, then table: until the table reaches the top of the
-    // viewport the wheel moves the page, and at the table's top edge an
-    // upward wheel hands back to the page instead of stopping dead.
+    bindPageFirstWheel(table);
+  }
+
+  // Page first, then table: until the table reaches the top of the
+  // viewport the wheel moves the page, and at the table's top edge an
+  // upward wheel hands back to the page instead of stopping dead.
+  // anchor (default: the table) is the element that docks; bars lists the
+  // sticky bars it docks under.
+  function bindPageFirstWheel(table, anchor, bars) {
+    const docked = anchor || table;
+    const stickyBars = bars || [".workspace-header"];
     table.addEventListener("wheel", function (event) {
       if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) {
         return;
       }
-      const header = document.querySelector(".workspace-header");
-      const dock = (header ? header.getBoundingClientRect().bottom : 0) + 12;
-      const top = table.getBoundingClientRect().top;
+      const dock = stickyBars.reduce(function (bottom, selector) {
+        const bar = document.querySelector(selector);
+        return bar ? Math.max(bottom, bar.getBoundingClientRect().bottom) : bottom;
+      }, 0) + 12;
+      const top = docked.getBoundingClientRect().top;
       const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
       const pageRoom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
       if (delta > 0 && top > dock + 1 && pageRoom > 1) {
@@ -133,6 +144,63 @@
         window.scrollBy(0, delta);
       }
     }, { passive: false });
+  }
+
+  // Compare data table: the same virtual scrolling as the Interactions
+  // table, rows from Hyb2Data.comparisonOrderedCells for the visible window.
+  function bindComparisonTable(state) {
+    const table = document.querySelector("[data-comparison-table]");
+    if (!table || !state.comparison || !state.comparison.result) {
+      return;
+    }
+    table.scrollTop = state.comparison.tableScrollTop || 0;
+    table.addEventListener("scroll", function () {
+      state.comparison.tableScrollTop = table.scrollTop;
+      updateComparisonRows(state);
+    });
+    updateComparisonRows(state);
+    // dock the column head, not just the rows, under the header and the
+    // Compare section bar
+    bindPageFirstWheel(table, table.parentNode, [".workspace-header", ".compare-subnav"]);
+  }
+
+  function updateComparisonRows(state) {
+    const table = document.querySelector("[data-comparison-table]");
+    const rowsContainer = document.querySelector("[data-comparison-rows]");
+    const comparison = state.comparison;
+    const result = comparison && comparison.result;
+    if (!table || !rowsContainer || !result || !Array.isArray(result.cells)) {
+      return;
+    }
+    const pages = window.Hyb2Pages;
+    const total = result.cells.length;
+    const view = pages.comparisonTableWindow(total, pages.comparisonRowHeight(state.density), table.scrollTop, table.clientHeight);
+    const spacer = document.querySelector("[data-comparison-spacer]");
+    if (spacer && spacer.style.height !== view.spacer + "px") {
+      spacer.style.height = view.spacer + "px";
+    }
+    const sort = pages.comparisonTableSort(comparison);
+    const key = sort + ":" + view.start + ":" + view.count;
+    rowsContainer.style.transform = "translateY(" + view.offset + "px)";
+    if (rowsContainer.dataset.window !== key) {
+      // keep keyboard focus on the same bin when its row is redrawn
+      const focused = rowsContainer.contains(document.activeElement) ? document.activeElement : null;
+      rowsContainer.dataset.window = key;
+      rowsContainer.innerHTML = pages.renderComparisonRows(window.Hyb2Data.comparisonOrderedCells(result, sort, view.start, view.count), result, comparison.selection);
+      if (focused) {
+        const again = rowsContainer.querySelector('[data-x="' + focused.dataset.x + '"][data-y="' + focused.dataset.y + '"]');
+        if (again) {
+          again.focus({ preventScroll: true });
+        }
+      }
+    }
+    const note = document.querySelector("[data-comparison-table-note]");
+    if (note) {
+      const text = pages.comparisonTableNote(view, total);
+      if (note.textContent !== text) {
+        note.textContent = text;
+      }
+    }
   }
 
   // Rows come from the queryHybrids window held in state.view.interactions;
@@ -1948,7 +2016,7 @@
 
     if (feature === "comparison-table" && state.comparison) {
       state.comparison.tableSort = element.value;
-      state.comparison.tablePage = 0;
+      state.comparison.tableScrollTop = 0;
       api.render();
       return true;
     }
@@ -2085,7 +2153,7 @@
     }
     if (feature === "comparison-table" && state.comparison) {
       state.comparison.tableSort = element.value;
-      state.comparison.tablePage = 0;
+      state.comparison.tableScrollTop = 0;
       return true;
     }
     if (feature === "comparison-dataset" && state.comparison) {
@@ -2520,9 +2588,17 @@
       return true;
     }
 
-    if (action === "comparison-table-page") {
-      state.comparison.tablePage = Math.max(0, Number(element.dataset.page) || 0);
-      api.render();
+    if (action === "comparison-select-bin") {
+      // a row of the data table selects its bin, as a click on a map does;
+      // the table keeps its place on the page while the selection card grows
+      const table = document.querySelector("[data-comparison-table]");
+      const before = table ? table.getBoundingClientRect().top : null;
+      state.comparison.selection = { x: Number(element.dataset.x), y: Number(element.dataset.y) };
+      renderAndFocus(api, '[data-feature-action="comparison-select-bin"][data-x="' + element.dataset.x + '"][data-y="' + element.dataset.y + '"]');
+      const after = document.querySelector("[data-comparison-table]");
+      if (before !== null && after) {
+        window.scrollBy(0, after.getBoundingClientRect().top - before);
+      }
       return true;
     }
 

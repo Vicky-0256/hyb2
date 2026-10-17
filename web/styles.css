@@ -37,6 +37,10 @@
   --radius-sm: 4px;
   --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  /* G1: smallest text sizes. Labels, kickers, notes and small data text use
+     --text-label; uppercase letter-spaced labels (and key caps) may use --text-caps. */
+  --text-label: 12px;
+  --text-caps: 11px;
   --ease: cubic-bezier(.2, .8, .2, 1);
 }
 
@@ -202,7 +206,7 @@ a {
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-caps);
   font-weight: 600;
   letter-spacing: .055em;
   line-height: 1;
@@ -312,7 +316,7 @@ a {
   border-radius: 999px;
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-caps);
   font-weight: 650;
   letter-spacing: .045em;
   text-transform: uppercase;
@@ -394,7 +398,7 @@ a {
   border-radius: 999px;
   color: var(--success);
   background: var(--success-soft);
-  font-size: .7rem;
+  font-size: var(--text-label);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -417,7 +421,7 @@ a {
 
 .web-capability-item strong {
   color: var(--muted);
-  font-size: .68rem;
+  font-size: var(--text-label);
   font-weight: 600;
 }
 
@@ -469,7 +473,7 @@ a {
 
 .desktop-download-link strong {
   color: var(--muted);
-  font-size: .7rem;
+  font-size: var(--text-label);
   font-weight: 650;
   white-space: nowrap;
 }
@@ -505,7 +509,7 @@ a {
   border-radius: 999px;
   background: var(--primary-soft);
   color: var(--primary-ink);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -558,7 +562,7 @@ a {
   margin-bottom: 6px;
   color: var(--primary-ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 750;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -623,7 +627,7 @@ a {
   background: var(--primary-soft);
   color: var(--primary-ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 800;
   letter-spacing: .04em;
 }
@@ -652,7 +656,7 @@ a {
 /* The file's metadata wraps rather than cutting off its numbers. */
 .prepared-file-details span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -660,7 +664,7 @@ a {
 .prepared-file-status {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 750;
   white-space: nowrap;
 }
@@ -670,7 +674,7 @@ a {
 }
 
 .prepared-file-status.is-loading {
-  color: var(--violet);
+  color: var(--accent);
 }
 
 .prepared-file-status.is-optional {
@@ -690,7 +694,7 @@ a {
   padding: 10px 0 2px;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 750;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -784,7 +788,7 @@ a {
 
 .prepared-next-step span:last-child {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
   line-height: 1.4;
 }
 
@@ -833,7 +837,7 @@ a {
   display: inline-flex;
   align-items: center;
   min-height: 32px;
-  color: var(--teal-deep);
+  color: var(--primary-ink);
   font-size: 12px;
   cursor: pointer;
 }
@@ -856,9 +860,9 @@ a {
 .example-kicker {
   display: block;
   margin-bottom: 6px;
-  color: var(--violet);
+  color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 750;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -880,9 +884,9 @@ a {
   border: 1px solid color-mix(in srgb, var(--teal) 30%, var(--line));
   border-radius: 999px;
   background: var(--teal-soft);
-  color: var(--teal-deep);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -912,9 +916,9 @@ a {
 
 .example-file-kind {
   flex: 0 0 48px;
-  color: var(--teal-deep);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 750;
   letter-spacing: .05em;
 }
@@ -924,7 +928,7 @@ a {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -939,8 +943,8 @@ a {
 .example-file-link {
   flex: 0 0 auto;
   margin-left: auto;
-  color: var(--teal-deep);
-  font-size: 11px;
+  color: var(--primary-ink);
+  font-size: var(--text-label);
   text-decoration: none;
 }
 
@@ -982,9 +986,9 @@ a {
 .reference-upload-kicker {
   display: block;
   margin-bottom: 5px;
-  color: var(--teal-deep);
+  color: var(--primary-ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 750;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -1020,7 +1024,7 @@ a {
   overflow: hidden;
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1077,7 +1081,7 @@ a {
   margin-bottom: 13px;
   color: var(--primary-ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-caps);
   font-weight: 750;
   letter-spacing: .08em;
   text-transform: uppercase;

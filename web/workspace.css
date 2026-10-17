@@ -79,7 +79,7 @@
   background: var(--success-soft);
   color: var(--success);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 750;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -93,7 +93,7 @@
   background: transparent;
   color: var(--primary-ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 750;
   white-space: nowrap;
   cursor: pointer;
@@ -137,7 +137,7 @@
   margin-bottom: 6px;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -158,7 +158,7 @@
   margin-top: 3px;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .sidebar-file-compare {
@@ -243,7 +243,7 @@
   min-width: 30px;
   color: currentColor;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 760;
   letter-spacing: .04em;
 }
@@ -269,7 +269,7 @@
   display: block;
   margin-top: 3px;
   color: var(--muted-strong);
-  font-size: 11px;
+  font-size: var(--text-label);
   line-height: 1.4;
 }
 
@@ -397,7 +397,7 @@
   display: block;
   margin-top: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .overview-grid {
@@ -433,7 +433,7 @@
 .card-kicker {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .bar-list {
@@ -475,7 +475,7 @@
 .bar-value {
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 650;
   text-align: right;
 }
@@ -538,7 +538,7 @@
 .data-table th {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 730;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -600,7 +600,7 @@
   margin-bottom: 14px;
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-caps);
   font-weight: 750;
   letter-spacing: .07em;
   text-transform: uppercase;
@@ -657,7 +657,7 @@
   display: block;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .validation-actions {

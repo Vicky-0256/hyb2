@@ -221,7 +221,7 @@
   margin: 0;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-caps);
   font-weight: 650;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -267,7 +267,7 @@
   border-top: 1px dashed var(--line);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-variant-numeric: tabular-nums;
 }
 

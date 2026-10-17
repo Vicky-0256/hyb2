@@ -83,7 +83,7 @@
 .report-note-inline {
   color: var(--report-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 720;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -91,6 +91,7 @@
 
 .report-document-label {
   margin-top: 3px;
+  font-size: var(--text-label);
   letter-spacing: .02em;
   text-transform: none;
 }
@@ -343,7 +344,7 @@
   border-radius: 999px;
   color: var(--report-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 760;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -394,7 +395,7 @@
 
 .report-metric-label {
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 700;
 }
 
@@ -412,7 +413,7 @@
 .report-metric-detail {
   margin-top: 9px;
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
   line-height: 1.4;
 }
 
@@ -516,7 +517,7 @@
 
 .report-definition-list dt {
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .report-definition-list dd {
@@ -531,7 +532,7 @@
 
 .report-definition-list dd.is-mono {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 500;
 }
 
@@ -548,7 +549,7 @@
   min-width: 620px;
   border-collapse: collapse;
   color: var(--report-ink);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .report-table th,
@@ -562,7 +563,7 @@
 .report-table th {
   background: var(--report-subtle);
   color: var(--report-muted);
-  font-size: 10px;
+  font-size: var(--text-caps);
   font-weight: 760;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -592,7 +593,7 @@
 .report-table code {
   overflow-wrap: anywhere;
   color: var(--report-ink);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .report-subsection-heading {
@@ -616,6 +617,7 @@
 .report-visual .report-note-inline {
   display: block;
   padding: 0 12px 11px;
+  font-size: var(--text-label);
   letter-spacing: .02em;
   text-transform: none;
 }
@@ -648,7 +650,7 @@
   background: var(--report-subtle);
   color: var(--report-ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -970,13 +972,13 @@
   border-radius: 4px;
   color: var(--report-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 700;
 }
 
 .report-left-out {
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .report-fields {
@@ -986,13 +988,13 @@
 .report-fields summary {
   cursor: pointer;
   color: var(--report-muted);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .report-fields code {
   display: inline-block;
   margin: 2px 4px 0 0;
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .report-selected-note {

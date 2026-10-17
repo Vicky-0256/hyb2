@@ -70,3 +70,18 @@
 .overview-pairs-table th:nth-child(3) { width: 104px; }
 .overview-pairs-table th:nth-child(4) { width: 112px; }
 .overview-pairs-table th:nth-child(5) { width: 136px; }
+
+/* ---- D2 one 12px rhythm between every Overview block: the reference
+   banner, the metric row, the legacy-column notice, the grid and Data
+   quality. */
+.overview-callout {
+  margin-bottom: 12px;
+}
+
+.metric-grid + .notice {
+  margin: 0 0 12px;
+}
+
+.overview-grid + .data-card {
+  margin-top: 0;
+}

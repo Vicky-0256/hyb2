@@ -325,6 +325,45 @@
     border-top: 1px solid var(--line);
     background: color-mix(in srgb, var(--surface) 94%, transparent);
     backdrop-filter: blur(14px);
+    scrollbar-width: none;
+  }
+
+  .mobile-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Faded edges say there are more tabs to scroll to: sticky overlays at
+     each end, shown only while there is more in that direction. */
+  .mobile-nav::before,
+  .mobile-nav::after {
+    position: sticky;
+    z-index: 1;
+    flex: 0 0 28px;
+    align-self: stretch;
+    margin: -8px 0;
+    opacity: 0;
+    content: "";
+    pointer-events: none;
+    transition: opacity var(--dur-feedback) var(--ease-out);
+  }
+
+  .mobile-nav::before {
+    left: 0;
+    margin-right: -28px;
+    margin-left: -12px;
+    background: linear-gradient(to right, var(--surface), transparent);
+  }
+
+  .mobile-nav::after {
+    right: 0;
+    margin-right: -12px;
+    margin-left: -28px;
+    background: linear-gradient(to left, var(--surface), transparent);
+  }
+
+  .mobile-nav.can-scroll-left::before,
+  .mobile-nav.can-scroll-right::after {
+    opacity: 1;
   }
 
   .mobile-nav .nav-button {

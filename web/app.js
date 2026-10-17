@@ -602,8 +602,14 @@
       renderEmbedded(workspaceOpen);
       return;
     }
+    const previousNav = typeof app.querySelector === "function" ? app.querySelector(".mobile-nav") : null;
+    const navScrollLeft = previousNav ? previousNav.scrollLeft : 0;
+    const previousPage = renderedPage;
     app.innerHTML = workspaceOpen ? renderWorkspace() : renderLanding();
     renderedPage = workspaceOpen ? state.activePage : null;
+    if (workspaceOpen) {
+      revealActiveMobileNav(navScrollLeft, previousPage !== renderedPage);
+    }
     document.documentElement.dataset.theme = state.theme;
     app.dataset.density = state.density;
     const themeColor = document.querySelector('meta[name="theme-color"]');
@@ -1160,6 +1166,38 @@
       workspacePages.map(renderNavButton).join(""),
       "</nav>"
     ].join("");
+  }
+
+  // The phone nav is rebuilt on every render: put it back where it was,
+  // then bring the current page's tab to the middle (smoothly only when the
+  // page changed and motion is allowed). Scrolls the nav itself, never the
+  // page, so it cannot interrupt the Report page's jump scrolling.
+  function revealActiveMobileNav(previousScrollLeft, pageChanged) {
+    const nav = typeof app.querySelector === "function" ? app.querySelector(".mobile-nav") : null;
+    if (!nav || typeof nav.addEventListener !== "function") {
+      return;
+    }
+    const updateEdges = function () {
+      const max = nav.scrollWidth - nav.clientWidth;
+      nav.classList.toggle("can-scroll-left", nav.scrollLeft > 2);
+      nav.classList.toggle("can-scroll-right", nav.scrollLeft < max - 2);
+    };
+    nav.addEventListener("scroll", updateEdges, { passive: true });
+    nav.scrollLeft = previousScrollLeft || 0;
+    const active = nav.querySelector(".nav-button.is-active");
+    if (!active || nav.scrollWidth <= nav.clientWidth) {
+      updateEdges();
+      return;
+    }
+    const target = Math.max(0, Math.min(nav.scrollWidth - nav.clientWidth,
+      active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2));
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (typeof nav.scrollTo === "function") {
+      nav.scrollTo({ left: target, behavior: pageChanged && !reduce ? "smooth" : "auto" });
+    } else {
+      nav.scrollLeft = target;
+    }
+    updateEdges();
   }
 
   function renderNavButton(page) {

@@ -200,3 +200,74 @@
 .arcmap-card .control-field input::placeholder {
   color: var(--muted);
 }
+
+/* ---- C9 "What this page can and cannot tell you": neutral, first sentence first */
+
+.comparison-note.compare-note {
+  display: block;
+  padding: 12px 14px;
+}
+
+.compare-note-more > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.compare-note-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.compare-note-more > summary:focus-visible {
+  outline: 2px solid var(--primary-ink);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.comparison-note.compare-note strong {
+  color: var(--muted-strong);
+}
+
+.compare-note-lead {
+  flex: 1 1 320px;
+  color: var(--ink);
+}
+
+.compare-note-toggle {
+  color: var(--primary-ink);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.compare-note-toggle::after {
+  content: "More";
+}
+
+.compare-note-more[open] .compare-note-toggle::after {
+  content: "Less";
+}
+
+.compare-note-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.compare-note-body .comparison-note-details {
+  grid-column: auto;
+}
+
+@media (max-width: 767px) {
+  /* a phone shows the title line only until the note is opened */
+  .compare-note-more:not([open]) .compare-note-lead {
+    display: none;
+  }
+
+  .compare-note-more > summary {
+    justify-content: space-between;
+  }
+}

@@ -1,29 +1,52 @@
 (function () {
   "use strict";
 
+  // The Contact Map's sequential scale ("Teal–violet sequential"; the
+  // viridis* names are historical, this is not matplotlib's viridis). Stops
+  // are interpolated in CIELAB so relative luminance is monotonic: on the
+  // light surface (and in every export) low counts are pale teal and high
+  // counts deep violet; on the dark surface the ramp runs the other way, from
+  // a steel blue that stays visible against the plot to a light lavender.
+  // verify-ui-contract.cjs checks both ramps for monotonic luminance.
   const BRAND_SCALE = [
-    [19, 44, 71],
+    [150, 215, 210],
     [0, 160, 157],
-    [106, 79, 242]
+    [106, 79, 242],
+    [45, 27, 105]
   ];
-  // Dark theme: the navy low end vanished against the dark plot, so the
-  // scale starts from a steel blue (~3:1 against the dark surface).
   const BRAND_SCALE_DARK = [
-    [70, 126, 156],
-    [0, 190, 186],
-    [170, 155, 255]
+    [46, 104, 130],
+    [0, 176, 172],
+    [200, 190, 255]
   ];
-  // Opaque RGBA pixels (little-endian ABGR) for the canvas fast path.
-  function buildViridisLut(dark) {
-    const lut = new Uint32Array(1024);
-    for (let index = 0; index < lut.length; index += 1) {
-      const rgb = viridisRgb(index / (lut.length - 1), dark);
-      lut[index] = ((255 << 24) | (rgb[2] << 16) | (rgb[1] << 8) | rgb[0]) >>> 0;
+  const SCALE_STEPS = 1024;
+  const scaleLuts = { light: null, dark: null };
+
+  // One entry per step: rgb triplets for viridisRgb() and opaque RGBA pixels
+  // (little-endian ABGR) for the canvas fast path. Built on first use, after
+  // the CIELAB helpers below are initialised.
+  function scaleLut(dark) {
+    const key = dark ? "dark" : "light";
+    if (!scaleLuts[key]) {
+      const stops = (dark ? BRAND_SCALE_DARK : BRAND_SCALE).map(srgbToLab);
+      const rgb = new Uint8Array(SCALE_STEPS * 3);
+      const pixels = new Uint32Array(SCALE_STEPS);
+      for (let index = 0; index < SCALE_STEPS; index += 1) {
+        const scaled = index / (SCALE_STEPS - 1) * (stops.length - 1);
+        const at = Math.min(stops.length - 2, Math.floor(scaled));
+        const t = scaled - at;
+        const colour = labToSrgb([0, 1, 2].map(function (channel) {
+          return stops[at][channel] + (stops[at + 1][channel] - stops[at][channel]) * t;
+        }));
+        rgb[index * 3] = colour[0];
+        rgb[index * 3 + 1] = colour[1];
+        rgb[index * 3 + 2] = colour[2];
+        pixels[index] = packRgb(colour);
+      }
+      scaleLuts[key] = { rgb: rgb, pixels: pixels };
     }
-    return lut;
+    return scaleLuts[key];
   }
-  const VIRIDIS_LUT = buildViridisLut(false);
-  const VIRIDIS_LUT_DARK = buildViridisLut(true);
 
   function afterRender(state, api) {
     if (state.activePage === "interactions") {
@@ -395,7 +418,7 @@
   // it replaces, so overlapping sub-pixel cells still resolve last-wins.
   let contactScratch = null;
 
-  function paintContactCells(context, pixelRatio, matrix, geometry, scale) {
+  function paintContactCells(context, pixelRatio, matrix, geometry, scale, theme) {
     const width = Math.max(1, Math.round(geometry.plotWidth * pixelRatio));
     const height = Math.max(1, Math.round(geometry.plotHeight * pixelRatio));
     if (!contactScratch || contactScratch.canvas.width !== width || contactScratch.canvas.height !== height) {
@@ -412,7 +435,7 @@
     const cellHeight = geometry.cellHeight * pixelRatio;
     const spanX = (Math.ceil(geometry.cellWidth) + .4) * pixelRatio;
     const spanY = (Math.ceil(geometry.cellHeight) + .4) * pixelRatio;
-    const lut = isDarkTheme() ? VIRIDIS_LUT_DARK : VIRIDIS_LUT;
+    const lut = scaleLut(themeIsDark(theme)).pixels;
     const lastLut = lut.length - 1;
     const cap = geometry.cap;
     const log = scale === "log";
@@ -464,25 +487,31 @@
     context.restore();
   }
 
-  function drawContactStageCanvas(state, canvas, stage) {
+  // exportSize ({ width, height }) draws the light PNG export into an
+  // off-page canvas; without it the page canvas in the current theme.
+  function drawContactStageCanvas(state, canvas, stage, exportSize) {
     const matrix = state.contact.matrix;
-    const dimensions = prepareCanvas(canvas);
+    const theme = exportSize ? "light" : undefined;
+    const dimensions = exportSize ? prepareExportCanvas(canvas, exportSize.width, exportSize.height) : prepareCanvas(canvas);
     const context = dimensions.context;
-    const style = getComputedStyle(document.documentElement);
-    const ink = style.getPropertyValue("--ink").trim();
-    const muted = style.getPropertyValue("--muted").trim();
-    const line = style.getPropertyValue("--line").trim();
-    const surface = style.getPropertyValue("--surface").trim();
+    const colors = exportColors(theme);
+    const ink = colors.ink;
+    const muted = colors.muted;
+    const line = colors.line;
+    const surface = colors.surface;
     const geometry = getContactStageGeometry(state, stage, dimensions.width, dimensions.height);
-    state.contact.stageGeometry = state.contact.stageGeometry || {};
-    state.contact.stageGeometry[stage] = geometry;
+    if (!exportSize) {
+      state.contact.stageGeometry = state.contact.stageGeometry || {};
+      state.contact.stageGeometry[stage] = geometry;
+    }
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
-    context.fillStyle = isDarkTheme() ? surface : line;
+    // empty bins show the surface: the scale's pale low end needs it
+    context.fillStyle = surface;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
-    paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale);
+    paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale, theme);
 
     const selection = getContactStageSelection(state, stage);
     if (selection && selection.x >= geometry.xStart && selection.x <= geometry.xEnd && selection.y >= geometry.yStart && selection.y <= geometry.yEnd) {
@@ -496,7 +525,7 @@
       );
     }
 
-    const drag = state.contact.stageDrag;
+    const drag = exportSize ? null : state.contact.stageDrag;
     if (drag && drag.stage === stage && drag.end && state.contact.stageDragMoved) {
       const x = geometry.left + (Math.min(drag.x, drag.end.x) - geometry.xStart) / matrix.binSize * geometry.cellWidth;
       const y = geometry.top + (Math.min(drag.y, drag.end.y) - geometry.yStart) / matrix.binSize * geometry.cellHeight;
@@ -509,24 +538,221 @@
       context.strokeRect(x, y, width, height);
     }
 
-    context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    context.fillStyle = muted;
-    context.textAlign = "left";
-    context.fillText(String(geometry.xStart), geometry.left, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "right";
-    context.fillText(String(geometry.xEnd + matrix.binSize - 1), geometry.left + geometry.plotWidth, geometry.top + geometry.plotHeight + 22);
-    context.save();
-    context.translate(14, geometry.top + geometry.plotHeight);
-    context.rotate(-Math.PI / 2);
-    const yLabels = contactYAxisLabels(geometry, matrix.binSize);
-    context.textAlign = "left";
-    context.fillText(String(yLabels.bottom), 0, 0);
-    context.textAlign = "right";
-    context.fillText(String(yLabels.top), geometry.plotHeight, 0);
-    context.restore();
     context.strokeStyle = line;
     context.lineWidth = 1;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
+    drawCanvasAxes(context, contactAxes(state, geometry), colors);
+    if (exportSize) {
+      drawCanvasTitle(context, state.contact.rnaX + " × " + state.contact.rnaY, geometry.left, 18, geometry.plotWidth - contactLegendOptions(state, geometry, theme, colors).width - 16, colors);
+    }
+
+    if (window.Hyb2UiKit) {
+      window.Hyb2UiKit.legend.drawCanvas(context, contactLegendOptions(state, geometry, theme, colors));
+    }
+  }
+
+  // K1 colour bar over the top-right of the plot: 0 to the cap in the
+  // measure's units. In log1p display the bar is linear in log1p(value) and
+  // its ticks are labelled with the counts; a cap below the maximum is "≥".
+  function contactLegendOptions(state, geometry, theme, colors) {
+    const contact = state.contact;
+    const matrix = contact.matrix;
+    const kit = window.Hyb2UiKit;
+    const cap = geometry.cap;
+    const log = contact.scale === "log";
+    const clipped = Number(matrix.max) > cap * (1 + 1e-9);
+    const formatTick = kit && kit.formatTick ? kit.formatTick : format;
+    const raw = function (value) { return log ? Math.expm1(value) : value; };
+    let ticks;
+    if (log) {
+      const top = Math.expm1(cap);
+      ticks = [0];
+      for (let magnitude = 1; magnitude < top; magnitude *= 10) {
+        [1, 2, 5].forEach(function (multiple) {
+          const position = Math.log1p(multiple * magnitude) / cap;
+          if (multiple * magnitude < top && position - ticks[ticks.length - 1] / cap >= 0.16 && 1 - position >= 0.12) {
+            ticks.push(Math.log1p(multiple * magnitude));
+          }
+        });
+      }
+      ticks.push(cap);
+    }
+    const width = Math.max(120, Math.min(220, geometry.plotWidth * 0.5));
+    const label = function (value) {
+      return (clipped && Math.abs(value - cap) < 1e-9 ? "≥ " : "") + formatTick(raw(value));
+    };
+    if (!log && kit && kit.niceTicks) {
+      ticks = spacedTicks(kit.niceTicks(0, cap, 4), 0, cap, width, label);
+    }
+    return {
+      kind: "sequential",
+      colorAt: function (t) { return viridis(t, theme); },
+      min: 0,
+      max: cap,
+      ticks: ticks,
+      format: label,
+      title: (contact.measure === "support" ? "Cluster support" : "Record count") + " (" + (log ? "log1p" : "linear") + ")",
+      x: geometry.left + geometry.plotWidth - width,
+      y: 4,
+      width: width,
+      height: 10,
+      ink: colors.ink,
+      muted: colors.muted
+    };
+  }
+
+  // ---- axes (K5): ticks on niceTicks, titles "<RNA> position (nt)"
+
+  const AXIS_FONT = "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif";
+
+  function axisTickValues(first, last, length, labelOf, room) {
+    const kit = window.Hyb2UiKit;
+    const ticks = kit && kit.niceTicks ? kit.niceTicks(first, last, 5) : (first === last ? [first] : [first, last]);
+    return spacedTicks(ticks, first, last, length, labelOf, room);
+  }
+
+  // an inclusive nucleotide axis [first, last]: the ends sit on the plot
+  // edges, interior ticks on the centre of their nucleotide
+  function coordinateOffset(value, first, last, length) {
+    if (value <= first) {
+      return 0;
+    }
+    if (value >= last) {
+      return length;
+    }
+    return (value - first + 0.5) / (last - first + 1) * length;
+  }
+
+  function coordinateTicks(first, last, length, vertical) {
+    return axisTickValues(first, last, length, format, vertical ? 22 : null).map(function (value) {
+      return { offset: coordinateOffset(value, first, last, length), label: format(value) };
+    });
+  }
+
+  // a value axis from 0 (bottom) to max (top)
+  function valueTicks(max, length) {
+    return axisTickValues(0, max, length, format, 22).map(function (value) {
+      return { offset: length - (max ? value / max : 0) * length, label: format(value) };
+    });
+  }
+
+  // middle ellipsis so both the start and the end of a long RNA name show
+  function fitLabel(text, width) {
+    const value = String(text == null ? "" : text);
+    const room = Math.max(8, Math.floor(width / 6.2));
+    if (value.length <= room) {
+      return value;
+    }
+    const head = Math.ceil((room - 1) / 2);
+    return value.slice(0, head) + "…" + value.slice(value.length - (room - 1 - head));
+  }
+
+  function positionTitle(rna) {
+    return (rna ? rna + " " : "") + "position (nt)";
+  }
+
+  function contactAxes(state, geometry) {
+    const binSize = state.contact.matrix.binSize;
+    const yLabels = contactYAxisLabels(geometry, binSize);
+    return {
+      box: { left: geometry.left, top: geometry.top, width: geometry.plotWidth, height: geometry.plotHeight },
+      x: coordinateTicks(geometry.xStart, geometry.xEnd + binSize - 1, geometry.plotWidth, false),
+      y: coordinateTicks(yLabels.top, yLabels.bottom, geometry.plotHeight, true),
+      xTitle: positionTitle(state.contact.rnaX),
+      yTitle: positionTitle(state.contact.rnaY)
+    };
+  }
+
+  function drawCanvasAxes(context, axes, colors) {
+    const box = axes.box;
+    const bottom = box.top + box.height;
+    context.save();
+    context.strokeStyle = colors.muted;
+    context.fillStyle = colors.muted;
+    context.lineWidth = 1;
+    context.font = "11px " + AXIS_FONT;
+    context.textBaseline = "alphabetic";
+    axes.x.forEach(function (tick, index) {
+      const x = Math.round(box.left + tick.offset) + .5;
+      context.beginPath();
+      context.moveTo(x, bottom);
+      context.lineTo(x, bottom + 4);
+      context.stroke();
+      context.textAlign = index === 0 ? "left" : index === axes.x.length - 1 ? "right" : "center";
+      context.fillText(tick.label, box.left + tick.offset, bottom + 16);
+    });
+    context.textBaseline = "middle";
+    context.textAlign = "right";
+    axes.y.forEach(function (tick) {
+      const y = Math.round(box.top + tick.offset) + .5;
+      context.beginPath();
+      context.moveTo(box.left - 4, y);
+      context.lineTo(box.left, y);
+      context.stroke();
+      context.fillText(tick.label, box.left - 7, box.top + tick.offset);
+    });
+    context.fillStyle = colors.ink;
+    context.font = "600 11px " + AXIS_FONT;
+    context.textBaseline = "alphabetic";
+    context.textAlign = "center";
+    context.fillText(fitLabel(axes.xTitle, box.width), box.left + box.width / 2, bottom + 34);
+    context.translate(13, box.top + box.height / 2);
+    context.rotate(-Math.PI / 2);
+    context.textBaseline = "middle";
+    context.fillText(fitLabel(axes.yTitle, box.height), 0, 0);
+    context.restore();
+  }
+
+  function svgAxes(axes, colors) {
+    const box = axes.box;
+    const bottom = box.top + box.height;
+    const parts = ['<g font-family="' + escapeXml(AXIS_FONT) + '" font-size="11">'];
+    axes.x.forEach(function (tick, index) {
+      const x = (box.left + tick.offset).toFixed(1);
+      const anchor = index === 0 ? "start" : index === axes.x.length - 1 ? "end" : "middle";
+      parts.push('<line x1="' + x + '" x2="' + x + '" y1="' + bottom + '" y2="' + (bottom + 4) + '" stroke="' + colors.muted + '"/>');
+      parts.push('<text x="' + x + '" y="' + (bottom + 16) + '" text-anchor="' + anchor + '" fill="' + colors.muted + '">' + escapeXml(tick.label) + "</text>");
+    });
+    axes.y.forEach(function (tick) {
+      const y = (box.top + tick.offset).toFixed(1);
+      parts.push('<line x1="' + (box.left - 4) + '" x2="' + box.left + '" y1="' + y + '" y2="' + y + '" stroke="' + colors.muted + '"/>');
+      parts.push('<text x="' + (box.left - 7) + '" y="' + y + '" text-anchor="end" dominant-baseline="middle" fill="' + colors.muted + '">' + escapeXml(tick.label) + "</text>");
+    });
+    parts.push('<text x="' + (box.left + box.width / 2).toFixed(1) + '" y="' + (bottom + 34) + '" text-anchor="middle" font-weight="600" fill="' + colors.ink + '">' + escapeXml(fitLabel(axes.xTitle, box.width)) + "</text>");
+    parts.push('<text transform="translate(13 ' + (box.top + box.height / 2).toFixed(1) + ') rotate(-90)" text-anchor="middle" dominant-baseline="middle" font-weight="600" fill="' + colors.ink + '">' + escapeXml(fitLabel(axes.yTitle, box.height)) + "</text>");
+    parts.push("</g>");
+    return parts.join("");
+  }
+
+  function drawCanvasTitle(context, text, x, y, width, colors) {
+    context.save();
+    context.fillStyle = colors.ink;
+    context.font = "600 14px " + AXIS_FONT;
+    context.textAlign = "left";
+    context.textBaseline = "alphabetic";
+    context.fillText(fitLabel(text, width * 0.8), x, y);
+    context.restore();
+  }
+
+  // Drops interior ticks whose labels would touch a neighbour's along an
+  // axis `length` px long (labels about 6.5 px per character).
+  function spacedTicks(ticks, min, max, length, labelOf, fixedRoom) {
+    if (ticks.length <= 2 || max === min) {
+      return ticks;
+    }
+    const at = function (value) { return (value - min) / (max - min) * length; };
+    const room = function (value) { return fixedRoom || String(labelOf(value)).length * 6.5 + 12; };
+    const last = ticks[ticks.length - 1];
+    const kept = [ticks[0]];
+    for (let index = 1; index < ticks.length - 1; index += 1) {
+      const value = ticks[index];
+      const previous = kept[kept.length - 1];
+      if (at(value) - at(previous) >= (room(value) + room(previous)) / 2 && at(last) - at(value) >= (room(value) + room(last)) / 2) {
+        kept.push(value);
+      }
+    }
+    kept.push(last);
+    return kept;
   }
 
   function contactBaseView(matrix) {
@@ -560,10 +786,12 @@
     const view = getContactStageView(state, stage);
     const xCount = Math.max(1, Math.round((view.xEnd - view.xStart) / matrix.binSize) + 1);
     const yCount = Math.max(1, Math.round((view.yEnd - view.yStart) / matrix.binSize) + 1);
-    const left = 46;
-    const top = 20;
-    const plotWidth = Math.max(96, width - left - 15);
-    const plotHeight = Math.max(96, height - top - 42);
+    // room for the y ticks and title (left), the colour bar (top,
+    // contactLegendOptions) and the x ticks and title (bottom)
+    const left = 68;
+    const top = 52;
+    const plotWidth = Math.max(96, width - left - 16);
+    const plotHeight = Math.max(96, height - top - 48);
     return {
       left: left,
       top: top,
@@ -787,6 +1015,29 @@
     });
   }
 
+  // a detached canvas for a PNG export, at twice the css size
+  function prepareExportCanvas(canvas, width, height) {
+    canvas.width = Math.round(width * 2);
+    canvas.height = Math.round(height * 2);
+    const context = canvas.getContext("2d");
+    context.setTransform(2, 0, 0, 2, 0, 0);
+    return { context: context, width: width, height: height };
+  }
+
+  // PNG exports are drawn light (K4) into a hidden canvas that
+  // downloadCanvasPng can find by id, then removed; null without a DOM
+  function lightExportCanvas(id) {
+    if (typeof document === "undefined" || !document.createElement || !document.body) {
+      return null;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.id = id;
+    canvas.hidden = true;
+    canvas.setAttribute("aria-hidden", "true");
+    document.body.appendChild(canvas);
+    return canvas;
+  }
+
   function prepareCanvas(canvas) {
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -972,10 +1223,10 @@
     const muted = style.getPropertyValue("--muted").trim();
     const profile = results.profile;
     const max = Math.max(1, profile.reduce(function (value, bin) { return Math.max(value, bin.value); }, 0));
-    const left = 8;
-    const top = 14;
-    const width = dimensions.width - 16;
-    const height = dimensions.height - 35;
+    const left = 60;
+    const top = 10;
+    const width = dimensions.width - left - 14;
+    const height = Math.max(60, dimensions.height - top - 46);
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
@@ -984,15 +1235,24 @@
     context.moveTo(left, top + height + .5);
     context.lineTo(left + width, top + height + .5);
     context.stroke();
+    if (!profile.length) {
+      return;
+    }
     profile.forEach(function (bin, index) {
       const barWidth = Math.max(1, width / profile.length);
       const barHeight = (bin.value / max) * height;
       context.fillStyle = primary;
       context.fillRect(left + index * barWidth, top + height - barHeight, Math.max(1, barWidth - 1), barHeight);
     });
-    context.fillStyle = muted;
-    context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    context.fillText("arm support", left, 11);
+    const first = profile[0].start;
+    const last = profile[profile.length - 1].end;
+    drawCanvasAxes(context, {
+      box: { left: left, top: top, width: width, height: height },
+      x: coordinateTicks(first, last, width, false),
+      y: valueTicks(max, height),
+      xTitle: positionTitle(state.region.rna),
+      yTitle: "Arm support"
+    }, { ink: style.getPropertyValue("--ink").trim(), muted: muted });
   }
 
   function bindViewpointCanvas(state, api) {
@@ -1034,19 +1294,23 @@
     });
   }
 
-  function drawViewpointCanvas(state, canvas) {
+  // exportSize: the light PNG export, as for drawContactStageCanvas
+  function drawViewpointCanvas(state, canvas, exportSize) {
     const results = state.viewpoint.results;
-    const dimensions = prepareCanvas(canvas);
+    const theme = exportSize ? "light" : undefined;
+    const dimensions = exportSize ? prepareExportCanvas(canvas, exportSize.width, exportSize.height) : prepareCanvas(canvas);
     const context = dimensions.context;
-    const style = getComputedStyle(document.documentElement);
-    const surface = style.getPropertyValue("--surface").trim();
-    const primary = style.getPropertyValue("--primary").trim();
-    const accent = style.getPropertyValue("--accent").trim();
-    const line = style.getPropertyValue("--line").trim();
-    const muted = style.getPropertyValue("--muted").trim();
-    const ink = style.getPropertyValue("--ink").trim();
-    const geometry = getViewpointGeometry(results, dimensions.width, dimensions.height);
-    state.viewpoint.geometry = geometry;
+    const colors = exportColors(theme);
+    const surface = colors.surface;
+    const primary = colors.primary;
+    const accent = colors.accent;
+    const line = colors.line;
+    const muted = colors.muted;
+    const ink = colors.ink;
+    const geometry = getViewpointGeometry(results, dimensions.width, dimensions.height, !!exportSize);
+    if (!exportSize) {
+      state.viewpoint.geometry = geometry;
+    }
 
     context.fillStyle = surface;
     context.fillRect(0, 0, dimensions.width, dimensions.height);
@@ -1064,24 +1328,30 @@
       context.fillRect(x, geometry.top + geometry.plotHeight - height, Math.max(1, geometry.barWidth - .35), height);
     });
 
-    context.fillStyle = muted;
-    context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    context.textAlign = "left";
-    context.fillText(String(results.start), geometry.left, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "right";
-    context.fillText(String(results.end), geometry.left + geometry.plotWidth, geometry.top + geometry.plotHeight + 22);
-    context.textAlign = "left";
-    context.fillStyle = ink;
-    context.fillText("mean interaction coverage", geometry.left, 12);
-    context.fillStyle = muted;
-    context.fillText("max " + format(geometry.max), geometry.left + geometry.plotWidth, 12);
+    void muted;
+    drawCanvasAxes(context, viewpointAxes(state, geometry), colors);
+    if (exportSize) {
+      drawCanvasTitle(context, results.rna + " viewpoint", geometry.left, 18, geometry.plotWidth, colors);
+    }
   }
 
-  function getViewpointGeometry(results, width, height) {
-    const left = 42;
-    const top = 22;
+  function viewpointAxes(state, geometry) {
+    const results = state.viewpoint.results;
+    return {
+      box: { left: geometry.left, top: geometry.top, width: geometry.plotWidth, height: geometry.plotHeight },
+      x: coordinateTicks(results.start, results.end, geometry.plotWidth, false),
+      y: valueTicks(geometry.scaleMax, geometry.plotHeight),
+      xTitle: positionTitle(results.rna),
+      yTitle: "Mean coverage (" + (state.viewpoint.measure === "support" ? "cluster support" : "records") + ")"
+    };
+  }
+
+  // titled: room above the plot for the export's title
+  function getViewpointGeometry(results, width, height, titled) {
+    const left = 64;
+    const top = titled ? 36 : 14;
     const plotWidth = Math.max(120, width - left - 18);
-    const plotHeight = Math.max(120, height - top - 43);
+    const plotHeight = Math.max(80, height - top - 46);
     return {
       left: left,
       top: top,
@@ -1974,7 +2244,14 @@
       if (!ensureVisualExport(state, "contact", api)) {
         return true;
       }
-      downloadCanvasPng("contact-map.png", api, "contact-overview-canvas", "Contact PNG downloaded locally.");
+      const exportCanvas = lightExportCanvas("contact-export-canvas");
+      if (exportCanvas) {
+        drawContactStageCanvas(state, exportCanvas, getContactExportStage(state), CONTACT_EXPORT_SIZE);
+      }
+      downloadCanvasPng("contact-map.png", api, exportCanvas ? exportCanvas.id : "contact-overview-canvas", "Contact PNG downloaded locally.", "contact-overview-canvas");
+      if (exportCanvas) {
+        exportCanvas.remove();
+      }
       return true;
     }
 
@@ -2041,7 +2318,14 @@
       if (!ensureVisualExport(state, "viewpoint", api)) {
         return true;
       }
-      downloadCanvasPng("viewpoint.png", api, "viewpoint-canvas", "Viewpoint PNG downloaded locally.");
+      const exportCanvas = lightExportCanvas("viewpoint-export-canvas");
+      if (exportCanvas) {
+        drawViewpointCanvas(state, exportCanvas, VIEWPOINT_EXPORT_SIZE);
+      }
+      downloadCanvasPng("viewpoint.png", api, exportCanvas ? exportCanvas.id : "viewpoint-canvas", "Viewpoint PNG downloaded locally.", "viewpoint-canvas");
+      if (exportCanvas) {
+        exportCanvas.remove();
+      }
       return true;
     }
 
@@ -2378,15 +2662,19 @@
     return false;
   }
 
+  // the SVG and PNG exports share a size, so both show the same layout
+  const CONTACT_EXPORT_SIZE = { width: 900, height: 916 };
+  const VIEWPOINT_EXPORT_SIZE = { width: 1040, height: 320 };
+
   function buildContactSvg(state) {
     if (!visualExportReady(state, "contact")) {
       return "";
     }
-    const colors = exportColors();
+    const colors = exportColors("light");
     const matrix = state.contact.matrix;
-    const width = 900;
-    const height = 720;
-    const geometry = getContactGeometry(state, width, height);
+    const width = CONTACT_EXPORT_SIZE.width;
+    const height = CONTACT_EXPORT_SIZE.height;
+    const geometry = getContactStageGeometry(state, getContactExportStage(state), width, height);
     const rects = matrix.cells.filter(function (cell) {
       return cell.x >= geometry.xStart && cell.x <= geometry.xEnd && cell.y >= geometry.yStart && cell.y <= geometry.yEnd;
     }).map(function (cell) {
@@ -2394,21 +2682,19 @@
       const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
       const x = geometry.left + ((cell.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight;
-      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + viridis(ratio) + '"/>';
+      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + viridis(ratio, "light") + '"/>';
     }).join("");
 
     return [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + " " + height + '">',
       '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
-      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + (isDarkTheme() ? colors.surface : colors.line) + '"/>',
+      '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.surface + '"/>',
       rects,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '" stroke-width="1"/>',
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.xStart + "</text>",
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + (geometry.xEnd + matrix.binSize - 1) + "</text>",
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.yStart + "</text>",
-      '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + geometry.plotHeight) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + (geometry.yEnd + matrix.binSize - 1) + "</text>",
-      '<text x="' + geometry.left + '" y="16" font-family="system-ui, sans-serif" font-size="15" fill="' + colors.ink + '">' + escapeXml(state.contact.rnaX) + " × " + escapeXml(state.contact.rnaY) + "</text>",
+      window.Hyb2UiKit ? window.Hyb2UiKit.legend.svg(contactLegendOptions(state, geometry, "light", colors)) : "",
+      svgAxes(contactAxes(state, geometry), colors),
+      '<text x="' + geometry.left + '" y="18" font-family="' + escapeXml(AXIS_FONT) + '" font-size="14" font-weight="600" fill="' + colors.ink + '">' + escapeXml(fitLabel(state.contact.rnaX + " × " + state.contact.rnaY, (geometry.plotWidth - contactLegendOptions(state, geometry, "light", colors).width - 16) * 0.8)) + "</text>",
       "</svg>"
     ].join("");
   }
@@ -2418,10 +2704,10 @@
     if (!visualExportReady(state, "viewpoint")) {
       return "";
     }
-    const colors = exportColors();
-    const width = 1040;
-    const height = 300;
-    const geometry = getViewpointGeometry(results, width, height);
+    const colors = exportColors("light");
+    const width = VIEWPOINT_EXPORT_SIZE.width;
+    const height = VIEWPOINT_EXPORT_SIZE.height;
+    const geometry = getViewpointGeometry(results, width, height, true);
     const bars = results.bins.map(function (bin, index) {
       const barHeight = geometry.max ? (bin.value / geometry.scaleMax) * geometry.plotHeight : 0;
       const selected = state.viewpoint.selection && state.viewpoint.selection.start === bin.start;
@@ -2433,9 +2719,8 @@
       '<rect width="100%" height="100%" fill="' + colors.surface + '"/>',
       '<line x1="' + geometry.left + '" y1="' + (geometry.top + geometry.plotHeight) + '" x2="' + (geometry.left + geometry.plotWidth) + '" y2="' + (geometry.top + geometry.plotHeight) + '" stroke="' + colors.line + '"/>',
       bars,
-      '<text x="' + geometry.left + '" y="12" font-family="system-ui, sans-serif" font-size="14" fill="' + colors.ink + '">' + escapeXml(results.rna) + ' viewpoint</text>',
-      '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 24) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + results.start + '</text>',
-      '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 24) + '" text-anchor="end" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + results.end + '</text>',
+      '<text x="' + geometry.left + '" y="18" font-family="' + escapeXml(AXIS_FONT) + '" font-size="14" font-weight="600" fill="' + colors.ink + '">' + escapeXml(fitLabel(results.rna + " viewpoint", geometry.plotWidth * 0.8)) + '</text>',
+      svgAxes(viewpointAxes(state, geometry), colors),
       '</svg>'
     ].join("");
   }
@@ -2834,29 +3119,33 @@
     };
   }
 
-  function viridisRgb(ratio, dark) {
-    const scale = dark ? BRAND_SCALE_DARK : BRAND_SCALE;
-    const bounded = Math.max(0, Math.min(1, ratio));
-    const scaled = bounded * (scale.length - 1);
-    const index = Math.min(scale.length - 2, Math.floor(scaled));
-    const t = scaled - index;
-    const from = scale[index];
-    const to = scale[index + 1];
-    return [
-      Math.round(from[0] + (to[0] - from[0]) * t),
-      Math.round(from[1] + (to[1] - from[1]) * t),
-      Math.round(from[2] + (to[2] - from[2]) * t)
-    ];
+  // K4 colour functions: an optional trailing theme, "light" or "dark";
+  // omitted, they follow the page. Exports pass "light".
+  function themeIsDark(theme) {
+    if (theme === "dark" || theme === true) {
+      return true;
+    }
+    if (theme === "light" || theme === false) {
+      return false;
+    }
+    return isDarkTheme();
   }
 
-  function viridis(ratio) {
-    const rgb = viridisRgb(ratio, isDarkTheme());
+  function viridisRgb(ratio, theme) {
+    const lut = scaleLut(themeIsDark(theme)).rgb;
+    const bounded = Math.max(0, Math.min(1, Number(ratio) || 0));
+    const index = Math.round(bounded * (SCALE_STEPS - 1)) * 3;
+    return [lut[index], lut[index + 1], lut[index + 2]];
+  }
+
+  function viridis(ratio, theme) {
+    const rgb = viridisRgb(ratio, theme);
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
-  function effectRgb(value) {
+  function effectRgb(value, theme) {
     const bounded = Math.max(-1, Math.min(1, value));
-    const dark = isDarkTheme();
+    const dark = themeIsDark(theme);
     const center = dark ? [19, 44, 71] : [245, 248, 250];
     const target = bounded >= 0
       ? (dark ? [154, 136, 255] : [106, 79, 242])
@@ -2869,14 +3158,15 @@
     ];
   }
 
-  function effectColor(value) {
-    const rgb = effectRgb(value);
+  function effectColor(value, theme) {
+    const rgb = effectRgb(value, theme);
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
   // effectColor() as ImageData pixels, for one theme: no DOM read or
   // allocation per cell
-  function effectPacker(dark) {
+  function effectPacker(theme) {
+    const dark = themeIsDark(theme);
     const c0 = dark ? 19 : 245;
     const c1 = dark ? 44 : 248;
     const c2 = dark ? 71 : 250;
@@ -2905,7 +3195,10 @@
   // scale_fill_gradient(low = white, high = forestgreen) over the data range,
   // so white is the smallest plotted count (not zero) and forestgreen the cap.
   // A single-valued range maps to the midpoint, like scales::rescale().
-  function similarityPanelColor(comparison) {
+  // the panel colour is the user's white/grey choice in either theme; theme
+  // is accepted for the K4 signature
+  function similarityPanelColor(comparison, theme) {
+    void theme;
     return comparison && comparison.similarityPanel === "grey" ? SIMILARITY_GREY_PANEL : "#ffffff";
   }
 
@@ -2930,9 +3223,9 @@
   }
 
   // scales::pal_seq_gradient interpolates in CIELAB (farver, D65 white).
-  function conservedColor(ratio) {
+  function conservedColor(ratio, theme) {
     const bounded = Math.max(0, Math.min(1, ratio));
-    const dark = isDarkTheme();
+    const dark = themeIsDark(theme);
     const from = srgbToLab(dark ? [24, 54, 80] : [255, 255, 255]);
     const to = srgbToLab([34, 139, 34]);
     const rgb = labToSrgb([
@@ -2978,8 +3271,11 @@
     });
   }
 
-  function exportColors() {
-    const dark = isDarkTheme();
+  // With a theme the fixed palette of that theme (the styles.css tokens), so
+  // an export looks the same whichever theme the page is in; without one the
+  // page's current tokens.
+  function exportColors(theme) {
+    const dark = themeIsDark(theme);
     const fallback = dark
       ? {
         surface: "#132c47",
@@ -2987,17 +3283,17 @@
         ink: "#ecf1f8",
         muted: "#9eb1c3",
         primary: "#00a09d",
-        accent: "#9a88ff"
+        accent: "#a596ff"
       }
       : {
         surface: "#ffffff",
         line: "#dce7ec",
         ink: "#132c47",
-        muted: "#607286",
+        muted: "#5b6c80",
         primary: "#00a09d",
         accent: "#6a4ff2"
       };
-    if (typeof document === "undefined" || typeof getComputedStyle !== "function" || !document.documentElement) {
+    if (theme === "light" || theme === "dark" || typeof document === "undefined" || typeof getComputedStyle !== "function" || !document.documentElement) {
       return fallback;
     }
     const style = getComputedStyle(document.documentElement);
@@ -3050,6 +3346,8 @@
     conservedRatio: conservedRatio,
     similarityPanelColor: similarityPanelColor,
     rasterComparisonCells: rasterComparisonCells,
+    viridis: viridis,
+    viridisRgb: viridisRgb,
     effectColor: effectColor,
     effectPacker: effectPacker,
     conservedColor: conservedColor,

@@ -134,6 +134,19 @@ assert.equal(contactExportParameters.sourceHyb.fileSize, 88);
 const contactSvg = context.window.Hyb2UI.buildContactSvg(contactExportState);
 assert.match(contactSvg, />120<\/text>/, "Contact SVG must label the top Y coordinate");
 assert.match(contactSvg, />159<\/text>/, "Contact SVG must label the bottom Y coordinate");
+assert.match(contactSvg, />RNA_A position \(nt\)<\/text>/, "Contact SVG must title the X axis");
+assert.match(contactSvg, />RNA_B position \(nt\)<\/text>/, "Contact SVG must title the Y axis");
+{
+  // B1/B4: with the UI kit loaded the Contact SVG carries the colour bar
+  const kitContext = vm.createContext({ Intl, Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, window: {} });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "ui-kit.js"), "utf8"), kitContext, { filename: "ui-kit.js" });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-ui.js"), "utf8"), kitContext, { filename: "analysis-ui.js" });
+  const kitSvg = kitContext.window.Hyb2UI.buildContactSvg(contactExportState);
+  assert.match(kitSvg, /<g class="chart-legend"/, "the Contact SVG has a colour bar");
+  assert.match(kitSvg, />Record count \(linear\)<\/text>/, "the colour bar names the measure and the scale");
+  assert.match(kitSvg, /<rect width="100%" height="100%" fill="#ffffff"\/>/, "the Contact SVG is light");
+  assert.ok((kitSvg.match(/<line x1="[\d.]+" x2="[\d.]+" y1="[\d.]+" y2="[\d.]+" stroke/g) || []).length >= 8, "the Contact SVG axes carry interior ticks (K5)");
+}
 contactExportState.contact.overviewView = null;
 contactExportState.contact.overviewView = { xStart: 10, xEnd: 60, yStart: 110, yEnd: 170 };
 const overviewExport = context.window.Hyb2UI.contactParameters(contactExportState);
@@ -246,6 +259,25 @@ assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "t
     const p = pack(value);
     assert.deepEqual([p & 255, (p >>> 8) & 255, (p >>> 16) & 255, p >>> 24], rgb.concat(255), "effect " + value);
   }
+}
+{
+  // B2: the Contact Map scale is the "Teal–violet sequential" ramp; relative
+  // luminance is monotonic (falling on the light surface, rising on dark)
+  const luminance = function (rgb) {
+    const lin = rgb.map(function (c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  };
+  [["light", -1], ["dark", 1]].forEach(function (entry) {
+    let previous = null;
+    for (let step = 0; step <= 64; step += 1) {
+      const value = luminance(Array.from(context.window.Hyb2UI.viridisRgb(step / 64, entry[0])));
+      if (previous !== null) {
+        assert.ok((value - previous) * entry[1] > 0, entry[0] + " contact scale luminance must be monotonic at " + step + "/64");
+      }
+      previous = value;
+    }
+  });
+  assert.equal(context.window.Hyb2UI.viridis(1, "light"), "rgb(45, 27, 105)");
 }
 assert.equal(context.window.Hyb2UI.similarityPanelColor({}), "#ffffff");
 assert.equal(context.window.Hyb2UI.similarityPanelColor({ similarityPanel: "grey" }), "#ebebeb");

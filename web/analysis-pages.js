@@ -190,21 +190,26 @@
       : { records: 0, support: 0 };
 
     return [
-      '<div class="page-heading">',
+      '<div class="page-heading page-heading--menu">',
       "<div><h1>Contact Map</h1><p>Fixed-width binning mirrors the current HYB2 coverage accumulation rule.</p></div>",
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="contact-download-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="contact-download-png">Download PNG</button></div>',
+      '<div class="inline-actions">' + renderExportMenu([
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-download-svg">Map · SVG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-download-png">Map · PNG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-export-tsv">Contact cells · TSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-export-params">Parameters · JSON</button>'
+      ]) + "</div>",
       "</div>",
       '<section class="analysis-controls data-card">',
       '<div class="contact-control-grid">',
       renderSelectControl("RNA X", "rnaX", contact.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "contact-control"),
       renderSelectControl("RNA Y", "rnaY", contact.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "contact-control"),
-      renderSelectControl("Bin size", "binSize", String(contact.binSize), [
+      renderSelectControl("Bin size", "binSize", String(contact.binSize), effectiveOptions([
         { value: "5", label: "5 nt" },
         { value: "10", label: "10 nt" },
         { value: "25", label: "25 nt" },
         { value: "50", label: "50 nt" },
         { value: "100", label: "100 nt" }
-      ], "contact-control"),
+      ], contact.binSize, matrix && !building && matrix.binSizeAdjusted ? matrix.binSize : null), "contact-control"),
       renderSelectControl("Measure", "measure", contact.measure, [
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
@@ -232,9 +237,9 @@
         { value: "exclude", label: "Exclude homodimer proxy" }
       ], "contact-control"),
       "</div>",
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset map</button><button class="quiet-button" type="button" data-feature-action="reset-contact-zoom">Reset zoom</button><span class="control-hint">' + escape(budgetHint) + 'Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click or Reset zoom returns to the full extent.</span></div>',
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset map</button><span class="control-hint">' + escape(budgetHint) + 'Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click the map, or Reset zoom above it, to return to the full extent.</span></div>',
       "</section>",
-      matrix && matrix.binSizeAdjusted ? '<p class="notice notice-warning">The bin size was increased to ' + format(matrix.binSize) + ' nt so the map stays within the cell budget.</p>' : "",
+      matrix && matrix.binSizeAdjusted ? '<p class="notice notice-warning">Requested ' + format(matrix.requestedBinSize || contact.binSize) + " nt bins; the map uses " + format(matrix.binSize) + ' nt so it stays within the cell budget.</p>' : "",
       matrix && matrix.cells.length ? [
         '<section class="contact-workbench' + (building ? " is-updating" : "") + '"' + (building ? ' aria-busy="true"' : "") + '>',
         '<div class="contact-navigator contact-workbench-main" aria-label="Interactive contact map">',
@@ -244,9 +249,9 @@
         '<aside class="contact-workbench-side">',
         renderContactSelection(contact, matrix, selectedCell, state),
         '<div class="heatmap-card data-card">',
-        '<div class="heatmap-topline"><span class="card-kicker">Viridis · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
+        '<div class="heatmap-topline"><span class="card-kicker">Teal–violet sequential · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
         '<div class="heatmap-axis"><span>' + escape(contact.rnaX) + " · X axis</span><span>" + escape(contact.rnaY) + " · Y axis</span></div>",
-        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="contact-export-tsv">Export contact TSV</button><button class="quiet-button" type="button" data-feature-action="contact-export-params">Export parameters</button></div>',
+        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + "</button></div>",
         "</div>",
         "</aside>",
         "</section>",
@@ -254,6 +259,25 @@
       ].join("") : (building ? renderContactBuilding() : renderNoContactData(contact, matrix)),
       "      <section class=\"method-note\"><strong>Method</strong><span>Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.</span></section>"
     ].join("");
+  }
+
+  // K2 export menu around its item buttons (written out in full at each call
+  // so every data-feature-action stays greppable in this source)
+  function renderExportMenu(items) {
+    return '<details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' + items.join("") + "</div></details>";
+  }
+
+  // B6: when the data layer widened the bins, the selected option says so
+  // ("10 nt · using 20 nt"), so the control and the plot never disagree
+  function effectiveOptions(options, requested, used) {
+    if (used === null || used === undefined || Number(used) === Number(requested)) {
+      return options;
+    }
+    return options.map(function (option) {
+      return String(option.value) === String(requested)
+        ? { value: option.value, label: option.label + " · using " + format(used) + " nt" }
+        : option;
+    });
   }
 
   function renderContactStage(stage, title, instruction, selection, contact, matrix) {
@@ -298,9 +322,9 @@
 
   function renderContactDataTable(matrix) {
     return [
-      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead><tr><th>X position</th><th>Y position</th><th>Records</th><th>Cluster support</th></tr></thead><tbody>',
+      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">X position <span class="unit">(nt)</span></th><th class="num">Y position <span class="unit">(nt)</span></th><th class="num">Records</th><th class="num">Cluster support</th></tr></thead><tbody>',
       matrix.cells.slice().sort(function (left, right) { return right.value - left.value; }).slice(0, 100).map(function (cell) {
-        return "<tr><td>" + range(cell.x, cell.x + matrix.binSize - 1) + "</td><td>" + range(cell.y, cell.y + matrix.binSize - 1) + "</td><td>" + format(cell.records) + "</td><td>" + format(cell.support) + "</td></tr>";
+        return '<tr><td class="num">' + range(cell.x, cell.x + matrix.binSize - 1) + '</td><td class="num">' + range(cell.y, cell.y + matrix.binSize - 1) + '</td><td class="num">' + format(cell.records) + '</td><td class="num">' + format(cell.support) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>"
     ].join("");
@@ -364,37 +388,45 @@
       : null;
 
     return [
-      '<div class="page-heading">',
+      '<div class="page-heading page-heading--menu">',
       '<div><h1>Viewpoint</h1><p>Map interaction abundance across a selected interval or the complete mapped reference.</p></div>',
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="viewpoint-download-svg">Download SVG</button><button class="button button-secondary" type="button" data-feature-action="viewpoint-download-png">Download PNG</button></div>',
+      '<div class="inline-actions">' + renderExportMenu([
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-download-svg">Plot · SVG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-download-png">Plot · PNG</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-export-tsv">Coverage bins · TSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="viewpoint-export-params">Parameters · JSON</button>'
+      ]) + "</div>",
       '</div>',
       '<section class="analysis-controls data-card">',
       '<div class="viewpoint-control-grid">',
       renderSelectControl("Anchor RNA", "rna", viewpoint.rna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "viewpoint-control"),
       renderSelectControl("Partner", "partner", viewpoint.partner, partnerOptions(rnas, viewpoint.rna), "viewpoint-control"),
-      renderSelectControl("Chimera type", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "viewpoint-control"),
-      renderSelectControl("Homodimer subset", "homodimer", viewpoint.homodimer || "all", [
-        { value: "all", label: "All records" },
-        { value: "only", label: "Overlap score ≥ 5" },
-        { value: "exclude", label: "Exclude homodimer proxy" }
-      ], "viewpoint-control"),
+      // B10: the range mode and its Start and End stay together on one row
+      '<div class="viewpoint-range-group" role="group" aria-label="Coordinate range">',
       renderSelectControl("Coordinate range", "rangeMode", viewpoint.rangeMode || "coordinates", mappedReference ? [
         { value: "coordinates", label: "Selected coordinates" },
         { value: "reference", label: "Full mapped reference" }
       ] : [{ value: "coordinates", label: "Selected coordinates" }], "viewpoint-control"),
       renderTextControl("Start", "start", viewpoint.start, "Observed start", "viewpoint-control", "number", { min: 1, step: 1 }),
       renderTextControl("End", "end", viewpoint.end, "Observed end", "viewpoint-control", "number", { min: 1, step: 1 }),
-      renderSelectControl("Resolution", "binSize", viewpoint.binSize, [
+      '</div>',
+      renderSelectControl("Resolution", "binSize", viewpoint.binSize, effectiveOptions([
         { value: "1", label: "1 nt (legacy viewpoint)" },
         { value: "5", label: "5 nt mean" },
         { value: "10", label: "10 nt mean" },
         { value: "25", label: "25 nt mean" },
         { value: "50", label: "50 nt mean" },
         { value: "100", label: "100 nt mean" }
-      ], "viewpoint-control"),
+      ], viewpoint.binSize, results.ready && results.binSizeAdjusted ? results.binSize : null), "viewpoint-control"),
       renderSelectControl("Measure", "measure", viewpoint.measure, [
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
+      ], "viewpoint-control"),
+      renderSelectControl("Chimera type", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "viewpoint-control"),
+      renderSelectControl("Homodimer subset", "homodimer", viewpoint.homodimer || "all", [
+        { value: "all", label: "All records" },
+        { value: "only", label: "Overlap score ≥ 5" },
+        { value: "exclude", label: "Exclude homodimer proxy" }
       ], "viewpoint-control"),
       '</div>',
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-viewpoint">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-viewpoint-selection">Reset selection</button><span class="control-hint">' + (viewpoint.rangeMode === "reference" ? "The full mapped reference uses coordinates 1 through its FASTA length; Start and End are ignored." : "At 1 nt resolution, each plotted value is the number of overlapping interaction arms, matching the legacy viewpoint interpretation.") + '</span></div>',
@@ -403,10 +435,9 @@
         '<section class="viewpoint-layout">',
         '<section class="viewpoint-card data-card">',
         '<div class="card-title-row"><div><h2>' + escape(results.rna) + ' interaction coverage</h2><span class="card-note">' + format(results.records.length) + ' matching records · ' + format(results.armContributions) + ' mapped arms</span></div><span class="card-kicker">' + escape(viewpoint.measure === "support" ? "Cluster support" : "Records") + '</span></div>',
-        results.binSizeAdjusted ? '<p class="notice notice-warning">The requested resolution was increased to ' + format(results.binSize) + ' nt to keep this browser-local plot responsive.</p>' : '',
+        results.binSizeAdjusted ? '<p class="notice notice-warning">Requested ' + format(viewpoint.binSize) + " nt resolution; the plot uses " + format(results.binSize) + ' nt to keep this browser-local plot responsive.</p>' : '',
         '<div class="canvas-wrap viewpoint-canvas-wrap"><canvas id="viewpoint-canvas" class="viewpoint-canvas" width="1040" height="300" tabindex="0" aria-label="Viewpoint graph. Click a bar to select a nucleotide interval."></canvas></div>',
-        '<div class="profile-axis"><span>' + format(results.start) + '</span><span>' + format(results.end) + '</span></div>',
-        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-viewpoint-data">' + (viewpoint.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="viewpoint-export-tsv">Export viewpoint TSV</button><button class="quiet-button" type="button" data-feature-action="viewpoint-export-params">Export parameters</button></div>',
+        '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-viewpoint-data">' + (viewpoint.showDataTable ? "Hide data table" : "Open data table") + "</button></div>",
         viewpoint.showDataTable ? renderViewpointDataTable(results) : '',
         '</section>',
         renderViewpointSelection(viewpoint, results, selected),
@@ -432,9 +463,9 @@
 
   function renderViewpointDataTable(results) {
     return [
-      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead><tr><th>Start</th><th>End</th><th>Mean interaction coverage</th></tr></thead><tbody>',
+      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">Start <span class="unit">(nt)</span></th><th class="num">End <span class="unit">(nt)</span></th><th class="num">Mean interaction coverage</th></tr></thead><tbody>',
       results.bins.slice().sort(function (left, right) { return right.value - left.value; }).slice(0, 150).map(function (bin) {
-        return '<tr><td>' + format(bin.start) + '</td><td>' + format(bin.end) + '</td><td>' + format(bin.value) + '</td></tr>';
+        return '<tr><td class="num">' + format(bin.start) + '</td><td class="num">' + format(bin.end) + '</td><td class="num">' + format(bin.value) + '</td></tr>';
       }).join(""),
       '</tbody></table></div>'
     ].join("");
@@ -656,28 +687,32 @@
       '<div class="page-heading"><div><h1>Region Explorer</h1><p>Find interactions that overlap a chosen RNA region.</p></div></div>',
       '<section class="analysis-controls data-card">',
       '<div class="region-control-grid">',
+      // B11: anchor, its coordinates and the overlap rule on the first row,
+      // the optional partner and its coordinates on the second
       renderSelectControl("Anchor RNA", "rna", region.rna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "region-control"),
       renderTextControl("Start", "start", region.start, "Start", "region-control", "number", { min: 1, step: 1 }),
       renderTextControl("End", "end", region.end, "End", "region-control", "number", { min: 1, step: 1 }),
-      renderSelectControl("Partner", "partner", region.partner, partnerOptions, "region-control"),
-      renderTextControl("Partner start", "partnerStart", region.partnerStart, "Optional", "region-control", "number", { min: 1, step: 1 }),
-      renderTextControl("Partner end", "partnerEnd", region.partnerEnd, "Optional", "region-control", "number", { min: 1, step: 1 }),
       renderSelectControl("Overlap rule", "overlap", region.overlap, [
         { value: "any", label: "Any overlap" },
         { value: "contained", label: "Fully contained" }
       ], "region-control"),
+      renderSelectControl("Partner", "partner", region.partner, partnerOptions, "region-control"),
+      renderTextControl("Partner start", "partnerStart", region.partnerStart, "Optional", "region-control", "number", { min: 1, step: 1 }),
+      renderTextControl("Partner end", "partnerEnd", region.partnerEnd, "Optional", "region-control", "number", { min: 1, step: 1 }),
       "</div>",
       '<div class="control-actions"><button class="button" type="button" data-feature-action="explore-region">Explore</button>' + renderFoldRequestButton(state, "region") + '<span class="control-hint">Coordinates remain inclusive, matching the HYB record display.</span></div>',
       "</section>",
       region.rna && region.start !== "" && region.end !== "" ? [
         '<section class="region-results">',
-        '<div class="region-summary data-card"><div class="card-title-row"><div><h2>' + escape(region.rna) + ":" + range(region.start, region.end) + '</h2><span class="card-note">' + (loading ? "Loading matching records…" : format(results.records.length) + " matching records") + (region.partner && region.partnerStart !== "" && region.partnerEnd !== "" ? " · " + escape(region.partner) + ":" + range(region.partnerStart, region.partnerEnd) : "") + '</span></div><span class="card-kicker">Local</span></div>',
+        '<div class="region-summary data-card"><div class="card-title-row"><div><h2>' + escape(region.rna) + ":" + range(region.start, region.end) + '</h2><span class="card-note">' + (loading ? "Loading matching records…" : format(results.records.length) + " matching records · profile bins " + format(results.profileBinSize) + " nt") + (region.partner && region.partnerStart !== "" && region.partnerEnd !== "" ? " · " + escape(region.partner) + ":" + range(region.partnerStart, region.partnerEnd) : "") + '</span></div><span class="card-kicker">Local</span></div>',
         results.profileBinSizeAdjusted ? '<p class="notice notice-warning">The profile resolution was increased to ' + format(results.profileBinSize) + ' nt per bin to keep this browser-local plot responsive.</p>' : '',
+        // B11: Top partners sit inside the summary card, beside the profile
+        '<div class="region-summary-body"><div class="region-profile-block">',
         '<dl class="region-totals"><div><dt>Cluster support</dt><dd>' + format(results.support) + "</dd></div><div><dt>Partner RNAs</dt><dd>" + format(results.partners.length) + "</dd></div></dl>",
         '<div class="canvas-wrap region-canvas-wrap"><canvas id="region-profile-canvas" class="region-profile-canvas" width="960" height="210" aria-label="Interaction support position profile"></canvas></div>',
-        '<div class="profile-axis"><span>' + format(region.start) + "</span><span>" + format(region.end) + "</span></div></div>",
+        "</div>",
         renderRegionPartners(results),
-        "</section>",
+        "</div></div>",
         renderReferencePanel(fastaRegion, region, state),
         renderRegionRecords(results.records, region.showAllRecords),
         "</section>"
@@ -688,9 +723,9 @@
   function renderRegionPartners(results) {
     const max = results.partners.length ? results.partners[0].support : 1;
     return [
-      '<section class="data-card region-partners"><div class="card-title-row"><h2>Top partners</h2><span class="card-kicker">Cluster support</span></div>',
+      '<section class="region-partners"><div class="card-title-row"><h3>Top partners</h3><span class="card-kicker">Cluster support</span></div>',
       results.partners.length ? '<div class="bar-list">' + results.partners.slice(0, 8).map(function (partner) {
-        return '<div class="bar-row"><span class="bar-name">' + escape(partner.name) + '</span><span class="bar-track"><span class="bar-fill" style="width:' + Math.max(3, (partner.support / max) * 100) + '%"></span></span><span class="bar-value">' + format(partner.support) + "</span></div>";
+        return '<div class="bar-row"><span class="bar-name" title="' + attribute(partner.name) + '">' + escape(partner.name) + '</span><span class="bar-track"><span class="bar-fill" style="width:' + Math.max(3, (partner.support / max) * 100) + '%"></span></span><span class="bar-value">' + format(partner.support) + "</span></div>";
       }).join("") + "</div>" : '<p class="empty-inline">No matching interactions.</p>',
       "</section>"
     ].join("");
@@ -707,18 +742,44 @@
 
     return [
       '<section class="reference-panel data-card"><div><span class="drawer-kicker">Reference sequence</span><h2>' + escape(reference.id) + ":" + range(reference.start, reference.end) + "</h2>",
-      '<code class="reference-sequence">' + escape(truncate(reference.sequence, 260)) + "</code></div>",
+      renderGroupedSequence(reference.sequence, reference.start),
+      "</div>",
       '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="copy-region-sequence">Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="region-send-structure">Send to RNA Structure</button><button class="button button-secondary" type="button" data-feature-action="region-download-fasta">Download FASTA</button></div></section>'
     ].join("");
+  }
+
+  // B11: the reference in groups of 10 nt, 50 nt per line, each line led by
+  // its first coordinate; the first 300 nt are shown (Copy takes them all)
+  const SEQUENCE_PREVIEW = 300;
+  function renderGroupedSequence(sequence, start) {
+    const value = String(sequence || "");
+    const shown = value.slice(0, SEQUENCE_PREVIEW);
+    const first = Number(start) || 1;
+    const lines = [];
+    for (let offset = 0; offset < shown.length; offset += 50) {
+      const groups = [];
+      for (let group = offset; group < Math.min(shown.length, offset + 50); group += 10) {
+        groups.push(escape(shown.slice(group, Math.min(group + 10, offset + 50))));
+      }
+      lines.push('<span class="sequence-line"><span class="sequence-position" aria-hidden="true">' + format(first + offset) + "</span>" + groups.join(" ") + "</span>");
+    }
+    return '<code class="reference-sequence reference-sequence--grouped">' + lines.join("") + "</code>" +
+      (value.length > shown.length ? '<p class="table-note">Showing the first ' + format(shown.length) + " of " + format(value.length) + " nt. Copy sequence and Download FASTA use the whole region.</p>" : "");
   }
 
   function renderRegionRecords(records, showAll) {
     const limit = showAll ? 100 : 20;
     return [
-      '<section class="data-card"><div class="card-title-row"><h2>Matching records</h2><div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="region-export-csv">Export CSV</button><button class="quiet-button" type="button" data-feature-action="region-export-hyb">Export HYB</button><button class="quiet-button" type="button" data-feature-action="region-export-params">Export parameters</button></div></div>',
-      '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Sequence ID</th><th>RNA 1</th><th>Region 1</th><th>RNA 2</th><th>Region 2</th><th>Chimera type</th><th>Support</th></tr></thead><tbody>',
+      '<section class="data-card region-records"><div class="card-title-row"><h2>Matching records</h2><div class="inline-actions">' + renderExportMenu([
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-csv">Records · CSV</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-hyb">Records · HYB</button>',
+        '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="region-export-params">Parameters · JSON</button>'
+      ]) + "</div></div>",
+      // K3: coordinates and counts right-aligned, long RNA names truncated
+      // with their full name in title, headers on one line
+      '<div class="data-table-wrap"><table class="data-table region-records-table"><thead class="nowrap"><tr><th>Sequence ID</th><th>RNA 1</th><th class="num">Region 1 <span class="unit">(nt)</span></th><th>RNA 2</th><th class="num">Region 2 <span class="unit">(nt)</span></th><th>Chimera type</th><th class="num">Support</th></tr></thead><tbody>',
       records.slice(0, limit).map(function (record) {
-        return "<tr><td>" + escape(record.id) + "</td><td>" + escape(record.rnaOne) + "</td><td>" + range(record.rnaOneStart, record.rnaOneEnd) + "</td><td>" + escape(record.rnaTwo) + "</td><td>" + range(record.rnaTwoStart, record.rnaTwoEnd) + "</td><td>" + escape(record.chimeraType) + "</td><td>" + format(record.supportCount) + "</td></tr>";
+        return '<tr><td class="cell-truncate" title="' + attribute(record.id) + '">' + escape(record.id) + '</td><td class="cell-truncate" title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + '</td><td class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + '</td><td class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + '</td><td class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + '</td><td class="cell-truncate" title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + '</td><td class="num">' + format(record.supportCount) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>",
       records.length > 20 ? '<div class="table-more"><button class="quiet-button" type="button" data-feature-action="region-toggle-records">' + (showAll ? "Show fewer records" : "Show " + format(Math.min(records.length, 100)) + " records") + '</button>' + (records.length > 100 && showAll ? '<span class="table-note">Showing the first 100 of ' + format(records.length) + " matching records. Export includes all local matches.</span>" : '<span class="table-note">Showing ' + format(Math.min(limit, records.length)) + " of " + format(records.length) + ". Export includes all local matches.</span>") + "</div>" : "",

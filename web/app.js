@@ -58,6 +58,8 @@
     // primary HYB is parsed: { stage, done, total, error, ready }
     exampleSetup: null,
     landingFastaFile: null,
+    // a raw-read file dropped where a HYB file goes: { name, kind } (A17)
+    rawReads: null,
     loading: null,
     error: null,
     theme: window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
@@ -949,6 +951,10 @@
       ].join("");
     }
 
+    if (state.rawReads && !state.analysisEntered) {
+      return renderRawReadsPanel();
+    }
+
     if (state.summary && !state.analysisEntered) {
       return renderPreparedFilePanel();
     }
@@ -1473,6 +1479,10 @@
         drawerSection("Start over", '<p>Removes every loaded file and result from this tab and returns to the start page.</p><div class="inline-actions"><button class="button button-danger" type="button" data-action="start-over">Start over…</button></div>', "drawer-danger"));
     }
 
+    if (state.dialog === "raw-reads" && state.rawReads) {
+      return renderDrawer("raw-reads", "This is a raw-read file", "The current analysis is unchanged.", '<div class="raw-reads-body">' + renderRawReadsBody(false) + "</div>");
+    }
+
     if (state.dialog === "desktop" && desktopEntriesShown()) {
       const kit = desktopKit();
       const compare = function (label, web, desktop) {
@@ -1707,7 +1717,16 @@
       return;
     }
 
+    if (action === "dismiss-raw-reads") {
+      state.rawReads = null;
+      render();
+      return;
+    }
+
     if (action === "close-dialog") {
+      if (state.dialog === "raw-reads") {
+        state.rawReads = null;
+      }
       state.dialog = null;
       render();
       return;
@@ -1913,7 +1932,7 @@
     if (event.target.id === "hyb-file-input") {
       const file = event.target.files && event.target.files[0];
       if (file) {
-        startParsing(file);
+        acceptHybFile(file);
       }
       event.target.value = "";
       return;
@@ -2072,8 +2091,117 @@
     const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
 
     if (file) {
-      startParsing(file);
+      acceptHybFile(file);
     }
+  }
+
+  // A17: a raw-read file (FASTQ, SAM/BAM, FASTA) given where a HYB file goes
+  // gets its own panel instead of the parser's "Line 1: ..." error. Known
+  // extensions (also .gz) decide at once; other uncompressed files are
+  // judged by their first 4 KB. Everything else is parsed as before.
+  const RAW_READ_EXTENSION = /\.(fastq|fq|sam|bam|fa|fasta|fna)(\.gz)?$/i;
+
+  function rawReadKind(name, head) {
+    const extension = RAW_READ_EXTENSION.exec(String(name || ""));
+    if (extension) {
+      const kind = extension[1].toLowerCase();
+      return kind === "fq" || kind === "fastq" ? "fastq" : kind === "sam" || kind === "bam" ? kind : "fasta";
+    }
+    if (typeof head !== "string" || !head) {
+      return null;
+    }
+    const text = head.replace(/^\uFEFF/, "");
+    if (/^@(HD|SQ)\t/.test(text)) {
+      return "sam";
+    }
+    const lines = text.split(/\r?\n/);
+    if (lines.length >= 4 && /^@\S/.test(lines[0]) && /^[A-Za-z.*-]+$/.test(lines[1]) && lines[2].charAt(0) === "+") {
+      return "fastq";
+    }
+    if (text.charAt(0) === ">") {
+      return "fasta";
+    }
+    return null;
+  }
+
+  function acceptHybFile(file) {
+    const byName = rawReadKind(file && file.name);
+    if (byName) {
+      showRawReads(file, byName);
+      return;
+    }
+    if (/\.gz$/i.test(file.name || "") || typeof file.slice !== "function") {
+      startParsing(file);
+      return;
+    }
+    const head = file.slice(0, 4096);
+    const read = typeof head.text === "function" ? head.text() : Promise.reject(new Error("no Blob.text"));
+    read.then(function (text) {
+      const kind = rawReadKind("", text);
+      if (kind) {
+        showRawReads(file, kind);
+      } else {
+        startParsing(file);
+      }
+    }, function () {
+      startParsing(file);
+    });
+  }
+
+  function showRawReads(file, kind) {
+    state.rawReads = { name: file.name || "Untitled file", kind: kind };
+    state.error = null;
+    if (state.analysisEntered) {
+      state.dialog = "raw-reads";
+    }
+    render();
+    if (!state.analysisEntered && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(function () {
+        const heading = document.getElementById("raw-reads-title");
+        if (heading) {
+          heading.focus({ preventScroll: false });
+        }
+      });
+    }
+  }
+
+  const RAW_READ_LABELS = { fastq: "FASTQ reads", sam: "SAM alignments", bam: "BAM alignments", fasta: "FASTA sequences" };
+
+  // The panel's content (landing card and workspace drawer share it).
+  function renderRawReadsBody(withHeading) {
+    const raw = state.rawReads;
+    const kit = desktopKit();
+    const shown = desktopEntriesShown();
+    const mine = shown && kit.downloadsAvailable ? kit.detectPlatform() : null;
+    const actions = [];
+    if (mine) {
+      actions.push('<a class="button" href="' + escapeAttribute(kit.downloadUrl(mine)) + '">Download for ' + escapeHtml(mine.label) + "</a>");
+    }
+    if (shown) {
+      actions.push('<button class="' + (mine ? "button button-secondary" : "button") + '" type="button" data-action="open-desktop" data-desktop-context="raw-read-panel">What HYB2 Desktop does</button>');
+    }
+    actions.push('<button class="button button-secondary" type="button" data-action="choose-hyb">Choose a .hyb file instead</button>');
+    if (!state.analysisEntered) {
+      actions.push('<button class="quiet-button" type="button" data-action="dismiss-raw-reads">Back</button>');
+    }
+    return [
+      withHeading ? '<span class="dropzone-kicker">' + escapeHtml(RAW_READ_LABELS[raw.kind] || "Raw reads") + "</span>" : "",
+      withHeading ? '<h2 id="raw-reads-title" tabindex="-1">This is a raw-read file</h2>' : "",
+      '<p class="raw-reads-file"><code title="' + escapeAttribute(raw.name) + '">' + escapeHtml(raw.name) + "</code>" + (withHeading ? "" : " · " + escapeHtml(RAW_READ_LABELS[raw.kind] || "raw reads")) + "</p>",
+      "<p>Web Lite reads .hyb files, the output of the hyb pipeline." + (shown ? " HYB2 Desktop maps raw reads like these and turns them into .hyb files." : "") + "</p>",
+      raw.kind === "fasta" ? '<p class="raw-reads-fasta">If this is your reference sequence, add it as the FASTA after the HYB file.</p>' : "",
+      shown && !kit.downloadsAvailable ? '<p class="raw-reads-note">' + escapeHtml(kit.notAvailable) + "</p>" : "",
+      '<div class="raw-reads-actions">' + actions.join("") + "</div>"
+    ].join("");
+  }
+
+  function renderRawReadsPanel() {
+    return [
+      '<div class="file-card"><div class="file-card-inner raw-reads-panel">',
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
+      renderRawReadsBody(true),
+      "</div></div>"
+    ].join("");
   }
 
   // Stage one: fetch the primary HYB and its FASTA, then parse as an upload.
@@ -2083,6 +2211,7 @@
       return;
     }
     const session = {};
+    state.rawReads = null;
     state.exampleLoadSession = session;
     state.exampleSetup = null;
     state.dialog = null;
@@ -2271,6 +2400,7 @@
     cancelComparisonLoads();
     invalidateFastaLoad();
     const parseOptions = options || {};
+    state.rawReads = null;
     const referenceFile = parseOptions.referenceFile || state.landingFastaFile || null;
     state.landingFastaFile = null;
     state.exampleLoadSession = null;
@@ -3070,6 +3200,7 @@
     terminateWorker();
     cancelComparisonLoads();
     invalidateFastaLoad();
+    state.rawReads = null;
     state.exampleLoadSession = null;
     state.exampleSetup = null;
     state.landingFastaFile = null;

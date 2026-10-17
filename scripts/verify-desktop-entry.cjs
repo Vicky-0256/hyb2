@@ -151,6 +151,26 @@ assert.match(appSource, /hint: hybFormatHint\(\),\s*rawReadsHint: true/, "the pa
 assert.match(appSource, /landing: \["Start a session", \[[\s\S]*?\{ html: rawReadsSentenceHtml \}/, "Help on the start page uses the same sentence");
 assert.match(appSource, /if \(dropzone && !event\.target\.closest\("a\[href\]"\) && \(event\.key === "Enter"/, "Enter on the link follows it instead of opening the file chooser");
 
+// ---- A17: raw-read files given as HYB get their own panel, decided before parsing
+const kindSource = /const RAW_READ_EXTENSION = [^\n]+\n\n  function rawReadKind\(name, head\) \{[\s\S]*?\n  \}\n/.exec(appSource);
+assert.ok(kindSource, "rawReadKind is in app.js");
+const kindContext = vm.createContext({});
+vm.runInContext(kindSource[0] + "\nthis.rawReadKind = rawReadKind;", kindContext);
+const kind = kindContext.rawReadKind;
+[["reads.fastq", "fastq"], ["reads.fq.gz", "fastq"], ["R1.FASTQ.GZ", "fastq"], ["x.sam", "sam"], ["x.bam", "bam"], ["x.sam.gz", "sam"],
+ ["ref.fa", "fasta"], ["ref.fasta.gz", "fasta"], ["ref.fna", "fasta"], ["data.hyb", null], ["data.hyb.gz", null], ["data.txt", null]].forEach(function (entry) {
+  assert.equal(kind(entry[0]), entry[1], entry[0]);
+});
+assert.equal(kind("reads.txt", "@r1 1:N:0\nACGTN\n+\nIIIII\n"), "fastq", "FASTQ by its four-line records");
+assert.equal(kind("x.txt", "@HD\tVN:1.6\n@SQ\tSN:a\tLN:9\n"), "sam", "SAM by its header");
+assert.equal(kind("x.txt", "@SQ\tSN:a\tLN:9\n"), "sam");
+assert.equal(kind("x.txt", ">chr1\nACGU\n"), "fasta", "FASTA by its first character");
+assert.equal(kind("x.txt", "﻿>chr1\nACGU\n"), "fasta", "a byte-order mark is ignored");
+assert.equal(kind("x.txt", "1234_567\tACGU\t-12.3\tRNA_A\t1\t20\t1\t20\tRNA_B\t1\t20\t1\t20\t.\t.\n"), null, "a HYB line is parsed as before");
+assert.equal(kind("x.txt", "@r1\nACGU\n"), null, "two lines are not a FASTQ record");
+assert.match(appSource, /if \(file\) \{\s*acceptHybFile\(file\);\s*\}\s*event\.target\.value = "";/, "the HYB file input checks for raw reads first");
+assert.match(appSource, /const file = event\.dataTransfer && [^\n]+\n\n    if \(file\) \{\s*acceptHybFile\(file\);/, "a dropped file is checked for raw reads first");
+
 // nothing in the site's sources hard-codes an installer or the release page
 fs.readdirSync(path.join(repository, "web")).filter(function (file) { return /\.(js|html)$/.test(file) && file !== "ui-kit.js"; }).forEach(function (file) {
   const source = fs.readFileSync(web(file), "utf8");

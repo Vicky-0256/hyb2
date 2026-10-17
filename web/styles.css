@@ -573,6 +573,81 @@ a {
   white-space: normal;
 }
 
+/* A17: a raw-read file in the HYB slot */
+.raw-reads-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  white-space: normal;
+}
+
+.raw-reads-panel h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 720;
+}
+
+.raw-reads-panel h2:focus {
+  outline: none;
+}
+
+.raw-reads-panel h2:focus-visible {
+  outline: 2px solid var(--primary-ink);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.raw-reads-panel p,
+.raw-reads-body p {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.raw-reads-file code {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.raw-reads-fasta {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--warning-soft);
+}
+
+.raw-reads-panel .raw-reads-fasta {
+  color: var(--ink);
+}
+
+.raw-reads-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.raw-reads-body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding-top: 18px;
+}
+
+.raw-reads-panel .raw-reads-actions,
+.raw-reads-body .raw-reads-actions {
+  align-content: flex-start;
+}
+
 /* Desktop drawer (data-action="open-desktop") and its line in Help */
 .drawer-desktop-line {
   margin: 0;

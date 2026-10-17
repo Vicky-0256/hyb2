@@ -41,3 +41,23 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* E2. Capacity and local-run cards: text first, the button wraps below */
+/* when the text would be squeezed under ~26 characters a line          */
+/* ------------------------------------------------------------------ */
+
+.cplfold-capacity-row,
+.cplfold-local-cta {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.cplfold-capacity-row > div,
+.cplfold-local-cta > div {
+  flex: 1 1 26ch;
+}
+
+.cplfold-capacity-row strong {
+  white-space: nowrap;
+}

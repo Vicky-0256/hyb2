@@ -176,3 +176,21 @@
   min-height: 32px;
   padding: 0 4px;
 }
+
+/* ---- C7 compact statistics: label next to its value, 2-3 per row */
+
+.selection-stats.stats-compact {
+  /* at most three columns, fewer when narrow */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, max(180px, calc((100% - 48px) / 3))), 1fr));
+  gap: 8px 24px;
+  margin: 12px 0;
+}
+
+.selection-stats.stats-compact > div {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.selection-stats.stats-compact dd {
+  text-align: left;
+}

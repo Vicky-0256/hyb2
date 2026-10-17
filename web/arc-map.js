@@ -1001,7 +1001,7 @@
       out.push('<p class="card-note">' + esc(model.reason) + "</p>");
     } else {
       out.push('<div class="arcmap-figure" data-arcmap-figure>' + cached.svg + "</div>");
-      out.push('<dl class="selection-stats"><div><dt>Pairs A</dt><dd>' + formatNumber(model.stats.pairsA) + "</dd></div>" +
+      out.push('<dl class="selection-stats stats-compact"><div><dt>Pairs A</dt><dd>' + formatNumber(model.stats.pairsA) + "</dd></div>" +
         (s.b ? "<div><dt>Pairs B</dt><dd>" + formatNumber(model.stats.pairsB) + "</dd></div><div><dt>Shared</dt><dd>" + formatNumber(model.stats.shared) +
           "</dd></div><div><dt>Only A · only B</dt><dd>" + formatNumber(model.stats.onlyA) + " · " + formatNumber(model.stats.onlyB) + "</dd></div>" : "") +
         "<div><dt>Differential arcs</dt><dd>" + formatNumber(model.overlay.length) + "</dd></div></dl>");

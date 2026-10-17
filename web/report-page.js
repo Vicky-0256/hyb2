@@ -290,7 +290,7 @@
         "</div>",
         summary.ambiguousColumn16Records ? '<div class="report-callout report-callout--warning"><strong>Legacy column 16 detected</strong><span>' + formatNumber(summary.ambiguousColumn16Records) + ' rows were interpreted as legacy cluster support because no column 17 chimera type was present.</span></div>' : "",
         summary.errorSampleTruncated ? '<p class="report-note" data-cites="S01 R02"><span class="report-cite">S01, R02</span> The browser retained the first ' + formatNumber(summary.errorSampleCount) + ' validation details and omitted ' + formatNumber(summary.omittedErrorCount) + ' additional error details from memory. The complete invalid-row count remains ' + formatNumber(summary.invalidRecords) + '.</p>' : "",
-        errors.length ? '<div class="report-table-wrap">' + table(["Line", "Error", "Content sample"], errorRows) + '</div>' : '<div class="report-empty is-ready">No invalid row details were retained.</div>'
+        errors.length ? '<div class="report-table-wrap">' + table([num("Line"), "Error", "Content sample"], errorRows) + '</div>' : '<div class="report-empty is-ready">No invalid row details were retained.</div>'
       ].join("")
     );
   }
@@ -299,14 +299,14 @@
     const rows = (Array.isArray(items) ? items : []).slice(0, 8).map(function (item) {
       return [escape(item.name || ""), formatNumber(item.records), formatNumber(item.support)];
     });
-    return rows.length ? table(["RNA", "Records", "Support"], rows) : '<div class="report-empty">No RNA summary is available.</div>';
+    return rows.length ? table([long("RNA"), num("Records"), num("Support")], rows) : '<div class="report-empty">No RNA summary is available.</div>';
   }
 
   function renderTopPairTable(items) {
     const rows = (Array.isArray(items) ? items : []).slice(0, 8).map(function (item) {
       return [escape(item.rnaOne || ""), escape(item.rnaTwo || ""), formatNumber(item.records), formatNumber(item.support)];
     });
-    return rows.length ? table(["RNA 1", "RNA 2", "Records", "Support"], rows) : '<div class="report-empty">No RNA-pair summary is available.</div>';
+    return rows.length ? table([long("RNA 1"), long("RNA 2"), num("Records"), num("Support")], rows) : '<div class="report-empty">No RNA-pair summary is available.</div>';
   }
 
   function renderInteractions(context) {
@@ -344,10 +344,10 @@
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Current filters</h3>' + (filterEntries.length ? definitionList(filterEntries) : '<div class="report-empty">No additional filters; all valid records are included.</div>') + '</div>',
-        '<div class="report-subsection"><h3>Selected RNA partners</h3>' + (filters.rna && partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">Choose an RNA on the Interactions page to populate partner counts.</div>') + '</div>',
+        '<div class="report-subsection"><h3>Selected RNA partners</h3>' + (filters.rna && partnerRows.length ? table([long("Partner"), num("Records"), num("Support")], partnerRows) : '<div class="report-empty">Choose an RNA on the Interactions page to populate partner counts.</div>') + '</div>',
         "</div>",
         '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Top matching records</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(total, MAX_TABLE_ROWS)) + ' of ' + formatNumber(total) + '</span></div>',
-        rows.length ? table(["Sequence ID", "RNA pair", "RNA 1 interval", "RNA 2 interval", "Chimera type", "Support", "dG"], rows) : '<div class="report-empty">No records match the current filter state.</div>',
+        rows.length ? table(["Sequence ID", long("RNA pair"), num("RNA 1 interval"), num("RNA 2 interval"), "Chimera type", num("Support"), num("dG", "kcal/mol")], rows) : '<div class="report-empty">No records match the current filter state.</div>',
         dataNote(context, "tables/interactions.tsv"),
         "</div>"
       ].join("")
@@ -492,9 +492,9 @@
         ]) : '<div class="report-empty">Explore a region from the workspace to include its result here.</div>') + '</div>',
         "</div>",
         results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#6a4ff2", null), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/region_profile.tsv") + '</div>' : "",
-        '<div class="report-grid report-analysis-grid">',
-        '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table(["Partner", "Records", "Support"], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + dataNote(context, "tables/region_partners.tsv") + '</div>',
-        '<div class="report-subsection"><h3>Matching record sample</h3>' + (recordRows.length ? table(["Sequence ID", "RNA 1", "Region 1", "RNA 2", "Region 2", "Support"], recordRows) : '<div class="report-empty">No matching records are available for this region.</div>') + '</div>',
+        '<div class="report-grid report-region-tables">',
+        '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table([long("Partner"), num("Records"), num("Support")], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + dataNote(context, "tables/region_partners.tsv") + '</div>',
+        '<div class="report-subsection"><h3>Matching record sample</h3>' + (recordRows.length ? table(["Sequence ID", long("RNA 1"), num("Region 1"), long("RNA 2"), num("Region 2"), num("Support")], recordRows) : '<div class="report-empty">No matching records are available for this region.</div>') + '</div>',
         "</div>",
         results && results.records && results.records.length > MAX_TABLE_ROWS ? '<p class="report-note" data-cites="S06 R15"><span class="report-cite">S06, R15</span> Showing the first ' + formatNumber(MAX_TABLE_ROWS) + ' matching records. The Region Explorer export contains all local matches.</p>' : ""
       ].join("")
@@ -520,7 +520,7 @@
     });
     const datasetRows = datasets.slice(0, MAX_DATASET_ROWS).map(function (dataset) {
       const summary = dataset.summary || {};
-      return [escape(truncateText(dataset.fileName || "Dataset", 36)), escape(dataset.label || ""), escape(dataset.condition === "A" ? (comparison.conditionALabel || "Condition A") : (comparison.conditionBLabel || "Condition B")), formatNumber(summary.validRecords), formatNumber(summary.supportInteractions)];
+      return [escape(dataset.fileName || "Dataset"), escape(dataset.label || ""), escape(dataset.condition === "A" ? (comparison.conditionALabel || "Condition A") : (comparison.conditionBLabel || "Condition B")), formatNumber(summary.validRecords), formatNumber(summary.supportInteractions)];
     });
     const selected = result && comparison.selection ? findComparisonCell(result, comparison.selection) : null;
     const selectedDetail = selected ? definitionList([
@@ -538,7 +538,7 @@
       stepBadge(context, "comparison"),
       [
         '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>Datasets and conditions</h3><span class="report-note-inline">' + formatNumber(datasets.length) + (datasets.length === 1 ? ' local file' : ' local files') + '</span></div>',
-        datasetRows.length ? table(["File", "Label", "Condition", "Valid records", "Support"], datasetRows) : '<div class="report-empty">Add a second local HYB dataset to configure a comparison.</div>',
+        datasetRows.length ? table([long("File"), "Label", "Condition", num("Valid records"), num("Support")], datasetRows) : '<div class="report-empty">Add a second local HYB dataset to configure a comparison.</div>',
         datasets.length > MAX_DATASET_ROWS ? '<p class="report-note" data-cites="S07"><span class="report-cite">S07</span> Only the first ' + formatNumber(MAX_DATASET_ROWS) + ' datasets are shown in the printable report.</p>' : "",
         "</div>",
         '<div class="report-grid report-analysis-grid">',
@@ -610,7 +610,7 @@
         ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.sequence || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12 R37"><span class="report-cite">S12, R37</span> The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
         ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracket || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
         ready ? "</div>" : "",
-        cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table(["Rank", "Type", "Topology", "Energy", "Pairs", "Crossing", "Dot-bracket"], candidateRows) + '</div>' : "",
+        cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table([num("Rank"), "Type", "Topology", num("Energy", "kcal/mol"), num("Pairs"), num("Crossing"), "Dot-bracket"], candidateRows) + '</div>' : "",
         ready && cplfold ? '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> CPLfold candidates preserve the selected pseudoknot setting and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain available from the RNA Structure page.</p>' : ""
       ].join("")
     );
@@ -936,7 +936,7 @@
       '<span class="report-status is-ready">' + formatNumber(record.results.filter(function (r) { return r.value !== null; }).length) + " of " + formatNumber(record.results.length) + " with a value</span>",
       [
         '<p class="report-note">The numbers in the sections below carry the same ids (for example "Cells · R10"). Each result covers its step\'s scope in Analysis status.</p>',
-        '<details class="report-details" open data-open-key="report-results"><summary>Results (' + formatNumber(record.results.length) + ")</summary>" + table(["Id", "Step", "Result", "Value", "Unit", "Status", "Nature"], resultRows) + "</details>",
+        '<details class="report-details" open data-open-key="report-results"><summary>Results (' + formatNumber(record.results.length) + ")</summary>" + table(["Id", "Step", "Result", num("Value"), "Unit", "Status", "Nature"], resultRows) + "</details>",
         tableRows.length ? '<details class="report-details" data-open-key="report-tables"><summary>Data tables (' + formatNumber(tableRows.length) + ")</summary>" + table(["Id", "Step", "Table", "Scope", "File"], tableRows) + "</details>" : ""
       ].join("")
     );
@@ -1022,7 +1022,7 @@
       const total = exp.list.reduce(function (sum, f) { return sum + (f.excluded ? 0 : f.bytes); }, 0);
       out.push('<div class="report-export-actions"><button class="button" type="button" data-action="report-export-zip">Download all (' + escape(formatBytes(total)) + ", ZIP)</button>" +
         (exp.audience === "ai" ? '<button class="button button-secondary" type="button" data-action="report-export-copy">Copy AI summary (report.md)</button>' : "") + "</div>");
-      out.push(table(["Include", "File", "Contents and fields", "Size", ""], exp.list.map(function (f) {
+      out.push(table(["Include", "File", "Contents and fields", num("Size"), ""], exp.list.map(function (f) {
         const box = '<input type="checkbox" data-action="report-export-toggle" data-path="' + escape(f.path) + '"' + (f.excluded ? "" : " checked") + (f.required ? " disabled" : "") +
           ' aria-label="Include ' + escape(f.path) + '">';
         const fields = f.fields && f.fields.length ? '<details class="report-fields"><summary>' + formatNumber(f.fields.length) + (f.fields.length === 1 ? " field" : " fields") + "</summary><code>" +
@@ -1069,11 +1069,35 @@
     return entries.length ? definitionList(entries) : '<div class="report-empty">No parameter values were set.</div>';
   }
 
+  // K3 column kinds for table(): a header is a plain label, or
+  // num(label, unit) for a right-aligned tabular number column, or
+  // long(label) for a name that stays on one line, cut with an ellipsis and
+  // given its full text as a title (print shows it in full).
+  function num(label, unit) {
+    return { label: label, num: true, unit: unit || "" };
+  }
+
+  function long(label) {
+    return { label: label, truncate: true };
+  }
+
   function table(headers, rows) {
     // Wide tables scroll inside their own box on screen instead of widening
     // the page; print styles let them flow at full width.
-    return '<div class="report-table-scroll"><table class="report-table"><thead><tr>' + headers.map(function (header) { return '<th scope="col">' + escape(header) + '</th>'; }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
-      return '<tr>' + row.map(function (cell) { return '<td>' + cell + '</td>'; }).join("") + '</tr>';
+    const columns = headers.map(function (header) { return typeof header === "string" ? { label: header } : header; });
+    // the long-name columns share 60% of the width (names get the most room)
+    const longColumns = columns.filter(function (column) { return column.truncate; }).length;
+    return '<div class="report-table-scroll"><table class="report-table"><thead><tr>' + columns.map(function (column) {
+      return '<th scope="col"' + (column.num ? ' class="num"' : "") + (column.truncate ? ' style="width:' + Math.round(60 / longColumns) + '%"' : "") + '>' + escape(column.label) + (column.unit ? ' <span class="unit">' + escape(column.unit) + "</span>" : "") + '</th>';
+    }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
+      return '<tr>' + row.map(function (cell, index) {
+        const column = columns[index] || {};
+        if (column.truncate) {
+          // cells are escaped markup: their text, tags removed, is a safe title
+          return '<td class="cell-truncate" title="' + String(cell).replace(/<[^>]*>/g, "") + '">' + cell + '</td>';
+        }
+        return '<td' + (column.num ? ' class="num"' : "") + '>' + cell + '</td>';
+      }).join("") + '</tr>';
     }).join("") + '</tbody></table></div>';
   }
 

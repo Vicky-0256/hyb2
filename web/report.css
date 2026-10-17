@@ -461,6 +461,12 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* Region Explorer: the record sample has six columns, the partners three */
+.report-region-tables {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  margin-top: 18px;
+}
+
 .report-summary-breakdown {
   margin-top: 18px;
 }
@@ -567,6 +573,22 @@
   border-bottom: 0;
 }
 
+/* K3: numbers right-aligned in tabular figures; long names on one line */
+.report-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.report-table th .unit {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.report-table td.cell-truncate {
+  overflow-wrap: normal;
+}
+
 .report-table code {
   overflow-wrap: anywhere;
   color: var(--report-ink);
@@ -653,7 +675,8 @@
 }
 
 @media (max-width: 900px) {
-  .report-source-grid {
+  .report-source-grid,
+  .report-region-tables {
     grid-template-columns: 1fr;
   }
 
@@ -861,6 +884,15 @@
   .report-table th,
   .report-table td {
     padding: 6px 7px;
+  }
+
+  /* paper has no hover title: truncated names print in full */
+  .report-table td.cell-truncate {
+    max-width: none;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
   }
 
   .report-section-heading h2 {

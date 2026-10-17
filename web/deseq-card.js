@@ -266,12 +266,12 @@
     if (!rows.length) {
       out.push('<p class="card-note">No significant interaction in this direction.</p>');
     } else {
-      out.push('<div class="data-table-wrap deseq-table"><table class="data-table"><thead><tr><th>Higher in</th><th>Arm 1 (x, nt)</th><th>Arm 2 (y, nt)</th><th>log2 ' + esc(labelA) + '/' + esc(labelB) + '</th><th>padj</th><th>Mean count (normalised)</th></tr></thead><tbody>' +
+      out.push('<div class="data-table-wrap deseq-table"><table class="data-table"><thead class="nowrap"><tr><th>Higher in</th><th class="num">Arm 1 <span class="unit">x, nt</span></th><th class="num">Arm 2 <span class="unit">y, nt</span></th><th class="num">log2 ' + esc(labelA) + '/' + esc(labelB) + '</th><th class="num">padj</th><th class="num">Mean count <span class="unit">normalised</span></th></tr></thead><tbody>' +
         rows.slice(0, TABLE_ROWS).map(function (row) {
           const key = row.direction + ":" + row.x + ":" + row.y;
           return '<tr class="' + (selected === key ? "is-selected" : "") + '" data-feature-action="deseq-select" data-key="' + esc(key) + '" tabindex="0"><td>' +
-            esc(row.direction === "up" ? labelA : labelB) + "</td><td>" + num(row.x) + "–" + num(row.x + BIN - 1) + "</td><td>" + num(row.y) + "–" + num(row.y + BIN - 1) +
-            "</td><td>" + fixed(row.log2FoldChange, 2) + "</td><td>" + padjText(row.padj) + "</td><td>" + fixed(row.baseMean, 1) + "</td></tr>";
+            esc(row.direction === "up" ? labelA : labelB) + '</td><td class="num">' + num(row.x) + "–" + num(row.x + BIN - 1) + '</td><td class="num">' + num(row.y) + "–" + num(row.y + BIN - 1) +
+            '</td><td class="num">' + fixed(row.log2FoldChange, 2) + '</td><td class="num">' + padjText(row.padj) + '</td><td class="num">' + fixed(row.baseMean, 1) + "</td></tr>";
         }).join("") + "</tbody></table></div>");
     }
     return out.join("");

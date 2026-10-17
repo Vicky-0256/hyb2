@@ -704,7 +704,7 @@
     const items = downloads.map(function (item) {
       const mine = item.os === os;
       return '<li><a class="desktop-download-link' + (mine ? ' is-recommended' : '') + '" href="' + releases + '/latest/download/' + item.file + '">' +
-        '<span>' + item.label + '</span><strong>' + (mine ? 'For this computer' : 'Download') + '</strong></a></li>';
+        '<span class="desktop-download-label">' + item.label + (mine ? ' <span class="desktop-download-badge">This computer</span>' : '') + '</span><strong>Download</strong></a></li>';
     }).join("");
     return [
       '<section class="web-capability-card desktop-download-card" aria-labelledby="desktop-download-title">',

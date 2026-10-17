@@ -488,6 +488,28 @@ a {
   color: var(--primary-ink);
 }
 
+.desktop-download-label {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Marks the installer for this system; the verb stays "Download". */
+.desktop-download-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .landing-panel {
   align-self: center;
 }

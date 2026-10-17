@@ -556,6 +556,81 @@
     context.strokeStyle = line;
     context.lineWidth = 1;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
+
+    if (window.Hyb2UiKit) {
+      window.Hyb2UiKit.legend.drawCanvas(context, contactLegendOptions(state, geometry, theme, colors));
+    }
+  }
+
+  // K1 colour bar over the top-right of the plot: 0 to the cap in the
+  // measure's units. In log1p display the bar is linear in log1p(value) and
+  // its ticks are labelled with the counts; a cap below the maximum is "≥".
+  function contactLegendOptions(state, geometry, theme, colors) {
+    const contact = state.contact;
+    const matrix = contact.matrix;
+    const kit = window.Hyb2UiKit;
+    const cap = geometry.cap;
+    const log = contact.scale === "log";
+    const clipped = Number(matrix.max) > cap * (1 + 1e-9);
+    const formatTick = kit && kit.formatTick ? kit.formatTick : format;
+    const raw = function (value) { return log ? Math.expm1(value) : value; };
+    let ticks;
+    if (log) {
+      const top = Math.expm1(cap);
+      ticks = [0];
+      for (let magnitude = 1; magnitude < top; magnitude *= 10) {
+        [1, 2, 5].forEach(function (multiple) {
+          const position = Math.log1p(multiple * magnitude) / cap;
+          if (multiple * magnitude < top && position - ticks[ticks.length - 1] / cap >= 0.16 && 1 - position >= 0.12) {
+            ticks.push(Math.log1p(multiple * magnitude));
+          }
+        });
+      }
+      ticks.push(cap);
+    }
+    const width = Math.max(120, Math.min(220, geometry.plotWidth * 0.5));
+    const label = function (value) {
+      return (clipped && Math.abs(value - cap) < 1e-9 ? "≥ " : "") + formatTick(raw(value));
+    };
+    if (!log && kit && kit.niceTicks) {
+      ticks = spacedTicks(kit.niceTicks(0, cap, 4), 0, cap, width, label);
+    }
+    return {
+      kind: "sequential",
+      colorAt: function (t) { return viridis(t, theme); },
+      min: 0,
+      max: cap,
+      ticks: ticks,
+      format: label,
+      title: (contact.measure === "support" ? "Cluster support" : "Record count") + " (" + (log ? "log1p" : "linear") + ")",
+      x: geometry.left + geometry.plotWidth - width,
+      y: 4,
+      width: width,
+      height: 10,
+      ink: colors.ink,
+      muted: colors.muted
+    };
+  }
+
+  // Drops interior ticks whose labels would touch a neighbour's along an
+  // axis `length` px long (labels about 6.5 px per character).
+  function spacedTicks(ticks, min, max, length, labelOf) {
+    if (ticks.length <= 2 || max === min) {
+      return ticks;
+    }
+    const at = function (value) { return (value - min) / (max - min) * length; };
+    const room = function (value) { return String(labelOf(value)).length * 6.5 + 12; };
+    const last = ticks[ticks.length - 1];
+    const kept = [ticks[0]];
+    for (let index = 1; index < ticks.length - 1; index += 1) {
+      const value = ticks[index];
+      const previous = kept[kept.length - 1];
+      if (at(value) - at(previous) >= (room(value) + room(previous)) / 2 && at(last) - at(value) >= (room(value) + room(last)) / 2) {
+        kept.push(value);
+      }
+    }
+    kept.push(last);
+    return kept;
   }
 
   function contactBaseView(matrix) {
@@ -590,7 +665,8 @@
     const xCount = Math.max(1, Math.round((view.xEnd - view.xStart) / matrix.binSize) + 1);
     const yCount = Math.max(1, Math.round((view.yEnd - view.yStart) / matrix.binSize) + 1);
     const left = 46;
-    const top = 20;
+    // room above the plot for the colour bar (contactLegendOptions)
+    const top = 52;
     const plotWidth = Math.max(96, width - left - 15);
     const plotHeight = Math.max(96, height - top - 42);
     return {
@@ -2460,7 +2536,7 @@
     const matrix = state.contact.matrix;
     const width = CONTACT_EXPORT_SIZE.width;
     const height = CONTACT_EXPORT_SIZE.height;
-    const geometry = getContactGeometry(state, width, height);
+    const geometry = getContactStageGeometry(state, getContactExportStage(state), width, height);
     const rects = matrix.cells.filter(function (cell) {
       return cell.x >= geometry.xStart && cell.x <= geometry.xEnd && cell.y >= geometry.yStart && cell.y <= geometry.yEnd;
     }).map(function (cell) {
@@ -2478,6 +2554,7 @@
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.surface + '"/>',
       rects,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '" stroke-width="1"/>',
+      window.Hyb2UiKit ? window.Hyb2UiKit.legend.svg(contactLegendOptions(state, geometry, "light", colors)) : "",
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.xStart + "</text>",
       '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + 28) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + (geometry.xEnd + matrix.binSize - 1) + "</text>",
       '<text x="' + (geometry.left - 8) + '" y="' + (geometry.top + 4) + '" text-anchor="end" font-family="monospace" font-size="12" fill="' + colors.muted + '">' + geometry.yStart + "</text>",

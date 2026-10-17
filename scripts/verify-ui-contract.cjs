@@ -134,6 +134,16 @@ assert.equal(contactExportParameters.sourceHyb.fileSize, 88);
 const contactSvg = context.window.Hyb2UI.buildContactSvg(contactExportState);
 assert.match(contactSvg, />120<\/text>/, "Contact SVG must label the top Y coordinate");
 assert.match(contactSvg, />159<\/text>/, "Contact SVG must label the bottom Y coordinate");
+{
+  // B1/B4: with the UI kit loaded the Contact SVG carries the colour bar
+  const kitContext = vm.createContext({ Intl, Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, window: {} });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "ui-kit.js"), "utf8"), kitContext, { filename: "ui-kit.js" });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-ui.js"), "utf8"), kitContext, { filename: "analysis-ui.js" });
+  const kitSvg = kitContext.window.Hyb2UI.buildContactSvg(contactExportState);
+  assert.match(kitSvg, /<g class="chart-legend"/, "the Contact SVG has a colour bar");
+  assert.match(kitSvg, />Record count \(linear\)<\/text>/, "the colour bar names the measure and the scale");
+  assert.match(kitSvg, /<rect width="100%" height="100%" fill="#ffffff"\/>/, "the Contact SVG is light");
+}
 contactExportState.contact.overviewView = null;
 contactExportState.contact.overviewView = { xStart: 10, xEnd: 60, yStart: 110, yEnd: 170 };
 const overviewExport = context.window.Hyb2UI.contactParameters(contactExportState);

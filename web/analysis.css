@@ -1425,12 +1425,3 @@
   margin-top: 12px;
 }
 
-.comparison-export-more summary {
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.comparison-export-more[open] summary {
-  margin-bottom: 8px;
-}

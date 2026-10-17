@@ -202,13 +202,13 @@
       '<div class="contact-control-grid">',
       renderSelectControl("RNA X", "rnaX", contact.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "contact-control"),
       renderSelectControl("RNA Y", "rnaY", contact.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "contact-control"),
-      renderSelectControl("Bin size", "binSize", String(contact.binSize), [
+      renderSelectControl("Bin size", "binSize", String(contact.binSize), effectiveOptions([
         { value: "5", label: "5 nt" },
         { value: "10", label: "10 nt" },
         { value: "25", label: "25 nt" },
         { value: "50", label: "50 nt" },
         { value: "100", label: "100 nt" }
-      ], "contact-control"),
+      ], contact.binSize, matrix && !building && matrix.binSizeAdjusted ? matrix.binSize : null), "contact-control"),
       renderSelectControl("Measure", "measure", contact.measure, [
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
@@ -238,7 +238,7 @@
       "</div>",
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-contact">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-contact">Reset map</button><button class="quiet-button" type="button" data-feature-action="reset-contact-zoom">Reset zoom</button><span class="control-hint">' + escape(budgetHint) + 'Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click or Reset zoom returns to the full extent.</span></div>',
       "</section>",
-      matrix && matrix.binSizeAdjusted ? '<p class="notice notice-warning">The bin size was increased to ' + format(matrix.binSize) + ' nt so the map stays within the cell budget.</p>' : "",
+      matrix && matrix.binSizeAdjusted ? '<p class="notice notice-warning">Requested ' + format(matrix.requestedBinSize || contact.binSize) + " nt bins; the map uses " + format(matrix.binSize) + ' nt so it stays within the cell budget.</p>' : "",
       matrix && matrix.cells.length ? [
         '<section class="contact-workbench' + (building ? " is-updating" : "") + '"' + (building ? ' aria-busy="true"' : "") + '>',
         '<div class="contact-navigator contact-workbench-main" aria-label="Interactive contact map">',
@@ -258,6 +258,19 @@
       ].join("") : (building ? renderContactBuilding() : renderNoContactData(contact, matrix)),
       "      <section class=\"method-note\"><strong>Method</strong><span>Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.</span></section>"
     ].join("");
+  }
+
+  // B6: when the data layer widened the bins, the selected option says so
+  // ("10 nt · using 20 nt"), so the control and the plot never disagree
+  function effectiveOptions(options, requested, used) {
+    if (used === null || used === undefined || Number(used) === Number(requested)) {
+      return options;
+    }
+    return options.map(function (option) {
+      return String(option.value) === String(requested)
+        ? { value: option.value, label: option.label + " · using " + format(used) + " nt" }
+        : option;
+    });
   }
 
   function renderContactStage(stage, title, instruction, selection, contact, matrix) {
@@ -388,14 +401,14 @@
       ] : [{ value: "coordinates", label: "Selected coordinates" }], "viewpoint-control"),
       renderTextControl("Start", "start", viewpoint.start, "Observed start", "viewpoint-control", "number", { min: 1, step: 1 }),
       renderTextControl("End", "end", viewpoint.end, "Observed end", "viewpoint-control", "number", { min: 1, step: 1 }),
-      renderSelectControl("Resolution", "binSize", viewpoint.binSize, [
+      renderSelectControl("Resolution", "binSize", viewpoint.binSize, effectiveOptions([
         { value: "1", label: "1 nt (legacy viewpoint)" },
         { value: "5", label: "5 nt mean" },
         { value: "10", label: "10 nt mean" },
         { value: "25", label: "25 nt mean" },
         { value: "50", label: "50 nt mean" },
         { value: "100", label: "100 nt mean" }
-      ], "viewpoint-control"),
+      ], viewpoint.binSize, results.ready && results.binSizeAdjusted ? results.binSize : null), "viewpoint-control"),
       renderSelectControl("Measure", "measure", viewpoint.measure, [
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
@@ -407,7 +420,7 @@
         '<section class="viewpoint-layout">',
         '<section class="viewpoint-card data-card">',
         '<div class="card-title-row"><div><h2>' + escape(results.rna) + ' interaction coverage</h2><span class="card-note">' + format(results.records.length) + ' matching records · ' + format(results.armContributions) + ' mapped arms</span></div><span class="card-kicker">' + escape(viewpoint.measure === "support" ? "Cluster support" : "Records") + '</span></div>',
-        results.binSizeAdjusted ? '<p class="notice notice-warning">The requested resolution was increased to ' + format(results.binSize) + ' nt to keep this browser-local plot responsive.</p>' : '',
+        results.binSizeAdjusted ? '<p class="notice notice-warning">Requested ' + format(viewpoint.binSize) + " nt resolution; the plot uses " + format(results.binSize) + ' nt to keep this browser-local plot responsive.</p>' : '',
         '<div class="canvas-wrap viewpoint-canvas-wrap"><canvas id="viewpoint-canvas" class="viewpoint-canvas" width="1040" height="300" tabindex="0" aria-label="Viewpoint graph. Click a bar to select a nucleotide interval."></canvas></div>',
         '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-viewpoint-data">' + (viewpoint.showDataTable ? "Hide data table" : "Open data table") + '</button><button class="quiet-button" type="button" data-feature-action="viewpoint-export-tsv">Export viewpoint TSV</button><button class="quiet-button" type="button" data-feature-action="viewpoint-export-params">Export parameters</button></div>',
         viewpoint.showDataTable ? renderViewpointDataTable(results) : '',
@@ -674,7 +687,7 @@
       "</section>",
       region.rna && region.start !== "" && region.end !== "" ? [
         '<section class="region-results">',
-        '<div class="region-summary data-card"><div class="card-title-row"><div><h2>' + escape(region.rna) + ":" + range(region.start, region.end) + '</h2><span class="card-note">' + (loading ? "Loading matching records…" : format(results.records.length) + " matching records") + (region.partner && region.partnerStart !== "" && region.partnerEnd !== "" ? " · " + escape(region.partner) + ":" + range(region.partnerStart, region.partnerEnd) : "") + '</span></div><span class="card-kicker">Local</span></div>',
+        '<div class="region-summary data-card"><div class="card-title-row"><div><h2>' + escape(region.rna) + ":" + range(region.start, region.end) + '</h2><span class="card-note">' + (loading ? "Loading matching records…" : format(results.records.length) + " matching records · profile bins " + format(results.profileBinSize) + " nt") + (region.partner && region.partnerStart !== "" && region.partnerEnd !== "" ? " · " + escape(region.partner) + ":" + range(region.partnerStart, region.partnerEnd) : "") + '</span></div><span class="card-kicker">Local</span></div>',
         results.profileBinSizeAdjusted ? '<p class="notice notice-warning">The profile resolution was increased to ' + format(results.profileBinSize) + ' nt per bin to keep this browser-local plot responsive.</p>' : '',
         '<dl class="region-totals"><div><dt>Cluster support</dt><dd>' + format(results.support) + "</dd></div><div><dt>Partner RNAs</dt><dd>" + format(results.partners.length) + "</dd></div></dl>",
         '<div class="canvas-wrap region-canvas-wrap"><canvas id="region-profile-canvas" class="region-profile-canvas" width="960" height="210" aria-label="Interaction support position profile"></canvas></div>',

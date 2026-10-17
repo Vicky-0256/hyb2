@@ -105,3 +105,39 @@
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
+
+/* ------------------------------------------------------------------ */
+/* E5. Topology choice: two equal-height options with room for the text */
+/* ------------------------------------------------------------------ */
+
+.cplfold-topology-options {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  align-items: stretch;
+  gap: 10px;
+}
+
+.cplfold-topology-option {
+  height: 100%;
+  min-height: 0;
+  padding: 12px 14px;
+  gap: 10px;
+}
+
+.cplfold-topology-option span {
+  gap: 4px;
+  align-content: start;
+}
+
+.cplfold-topology-option strong {
+  font-size: 13px;
+}
+
+.cplfold-topology-option small {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cplfold-topology-option:has(input:focus-visible) {
+  outline: 3px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  outline-offset: 2px;
+}

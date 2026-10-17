@@ -938,7 +938,7 @@
       : 0;
     const sequenceCount = fasta && Array.isArray(fasta.sequences) ? fasta.sequences.length : 0;
     const fastaStatus = fastaLoad
-      ? (fasta ? "Updating locally" : "Reading locally")
+      ? (fasta ? "Updating" : "Reading")
       : (fasta ? "Ready" : "Optional");
     const fastaDetail = fastaLoad
       ? "The reference file will remain available while you enter the workspace."

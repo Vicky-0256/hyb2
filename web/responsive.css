@@ -206,13 +206,17 @@
     margin-bottom: 20px;
   }
 
-  .prepared-file-row,
-  .prepared-file-row-reference {
-    grid-template-columns: 48px minmax(0, 1fr) auto;
+  .prepared-file-row {
+    grid-template-columns: 48px minmax(0, 1fr) 68px;
   }
 
-  .prepared-file-row-reference .quiet-button {
+  .prepared-file-row > .prepared-file-status {
+    grid-column: 3;
+  }
+
+  .prepared-file-row > button {
     grid-column: 2 / -1;
+    grid-row: 2;
     justify-self: start;
   }
 
@@ -413,17 +417,10 @@
     max-width: none;
   }
 
-  .prepared-file-row,
-  .prepared-file-row-reference {
-    grid-template-columns: 48px minmax(0, 1fr);
-  }
-
-  .prepared-file-status {
-    grid-column: 2;
-  }
-
-  .prepared-file-row-reference .quiet-button {
-    grid-column: 2;
+  /* Status stays in its own column (from the 767px layout) so every
+     Ready lines up; the FASTA button keeps the second row. */
+  .prepared-file-row {
+    gap: 10px;
   }
 }
 

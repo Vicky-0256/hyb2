@@ -1308,15 +1308,61 @@
     context.textAlign = "right";
     context.fillText(String(geometry.yStart), geometry.left - 7, geometry.top + 4);
     context.fillText(String(geometry.yEnd + result.binSize - 1), geometry.left - 7, geometry.top + geometry.plotHeight);
-    context.font = "11px system-ui, sans-serif";
+    context.font = "600 12px system-ui, sans-serif";
     context.fillStyle = ink;
     context.textAlign = "left";
-    context.fillText(state.comparison.rnaX + " (X) × " + state.comparison.rnaY + " (Y)", geometry.left, 15);
+    context.fillText(comparisonMapTitle(state.comparison, kind, false, function (text) {
+      return context.measureText(text).width <= geometry.plotWidth;
+    }), geometry.left, 15);
     if (kind === "effect") {
+      context.font = "11px system-ui, sans-serif";
       context.fillText(state.comparison.conditionALabel + " enriched: violet · " + state.comparison.conditionBLabel + " enriched: teal", geometry.left, 29);
     }
     context.strokeStyle = line;
     context.strokeRect(geometry.left - .5, geometry.top - .5, geometry.plotWidth + 1, geometry.plotHeight + 1);
+  }
+
+  // "ZAFR (ZAFR_REP1, ZAFR_REP2) vs ZASI (ZILM_REP2, ZILM_REP3)": with the
+  // dataset labels when they fit, else the condition labels, else shortened
+  // in the middle so both ends stay readable
+  function comparisonMapTitle(comparison, kind, named, fits) {
+    const a = comparison.conditionALabel || "Condition A";
+    const b = comparison.conditionBLabel || "Condition B";
+    const labels = function (condition) {
+      return (comparison.datasets || []).filter(function (dataset) { return dataset.condition === condition; })
+        .map(function (dataset) { return dataset.label || dataset.fileName || dataset.id; });
+    };
+    const side = function (name, list) { return list.length ? name + " (" + list.join(", ") + ")" : name; };
+    const join = kind === "conserved" ? " and " : " vs ";
+    const prefix = named ? (kind === "conserved" ? "B · Similarity heatmap · " : "Descriptive · Mean log2 effect · ") : "";
+    const candidates = [prefix + side(a, labels("A")) + join + side(b, labels("B")), prefix + a + join + b];
+    const chosen = candidates.find(fits);
+    return chosen || middleEllipsis(candidates[candidates.length - 1], fits);
+  }
+
+  function middleEllipsis(text, fits) {
+    if (fits(text)) {
+      return text;
+    }
+    let low = 0;
+    let high = text.length - 1;
+    const cut = function (keep) {
+      return text.slice(0, Math.ceil(keep / 2)) + "…" + text.slice(text.length - Math.floor(keep / 2));
+    };
+    while (low < high) {
+      const keep = Math.ceil((low + high) / 2);
+      if (fits(cut(keep))) {
+        low = keep;
+      } else {
+        high = keep - 1;
+      }
+    }
+    return cut(low);
+  }
+
+  // an SVG has no text metrics: about 0.56 em per character of a sans font
+  function svgTextFits(size, width) {
+    return function (text) { return text.length * size * 0.56 <= width; };
   }
 
   function isComparisonLabel(key) {
@@ -2571,7 +2617,7 @@
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="' + colors.line + '"/>',
       cells,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '"/>',
-      '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" fill="' + colors.ink + '">' + escapeXml(state.comparison.rnaX) + ' (X) × ' + escapeXml(state.comparison.rnaY) + ' (Y) · Descriptive · Mean log2 effect</text>',
+      '<text x="' + geometry.left + '" y="15" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="' + colors.ink + '">' + escapeXml(comparisonMapTitle(state.comparison, "effect", true, svgTextFits(13, width - geometry.left - 8))) + '</text>',
       '<text x="' + geometry.left + '" y="29" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">' + escapeXml(state.comparison.conditionALabel) + ' enriched: violet · ' + escapeXml(state.comparison.conditionBLabel) + ' enriched: teal' +
         (shown.length < result.cells.length ? ' · the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins' : '') + '</text>',
       '<text x="' + geometry.left + '" y="' + (geometry.top + geometry.plotHeight + 22) + '" font-family="monospace" font-size="11" fill="' + colors.muted + '">' + geometry.xStart + '</text>',

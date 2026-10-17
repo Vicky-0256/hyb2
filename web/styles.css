@@ -673,6 +673,33 @@ a {
   padding: 9px 0;
 }
 
+/* The example's Compare files, folded to one summary line. */
+.prepared-file-summary {
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius-sm);
+}
+
+.prepared-file-summary::-webkit-details-marker {
+  display: none;
+}
+
+.prepared-file-summary strong::after {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--primary-ink);
+  content: "▸";
+  transition: transform var(--dur-feedback) var(--ease-out);
+}
+
+.prepared-file-list-example[open] > .prepared-file-summary strong::after {
+  transform: rotate(90deg);
+}
+
+.prepared-file-summary:hover strong {
+  color: var(--primary-ink);
+}
+
 .prepared-file-kind-structure {
   border-color: var(--line);
   background: var(--surface-subtle);

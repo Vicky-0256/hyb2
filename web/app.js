@@ -906,11 +906,24 @@
     ].forEach(function (item) {
       rows.push(row(item.file.split(".").pop().toUpperCase(), item.file, item.detail, status()));
     });
+    // Folded to one line: the review step stays short enough for Enter
+    // analysis and the primary files to fit the first screen.
+    const count = rows.length;
+    const summaryStatus = setup.ready
+      ? '<span class="prepared-file-status is-ready">Ready</span>'
+      : (setup.error
+        ? '<span class="prepared-file-status is-error">Stopped</span>'
+        : '<span class="prepared-file-status is-loading">' + (parsing ? "Parsing" : "Downloading") + "</span>");
+    const openKey = "prepared-example-files";
     return [
-      '  <section class="prepared-file-list prepared-file-list-example" aria-label="Example files for the Compare page">',
-      '    <p class="prepared-file-group">Example comparison: ' + escapeHtml(example.labels.A) + " vs " + escapeHtml(example.labels.B) + " · loaded into the Compare page</p>",
+      '  <details class="prepared-file-list prepared-file-list-example" data-open-key="' + openKey + '"' + (window.Hyb2OpenSections && window.Hyb2OpenSections[openKey] ? " open" : "") + ' aria-label="Example files for the Compare page">',
+      '    <summary class="prepared-file-row prepared-file-summary">',
+      '      <span class="prepared-file-kind prepared-file-kind-structure">+' + count + "</span>",
+      '      <div class="prepared-file-details"><strong>' + count + " files " + (setup.ready ? "loaded" : "loading") + " for Compare</strong><span>Example comparison " + escapeHtml(example.labels.A) + " vs " + escapeHtml(example.labels.B) + " · " + example.replicates.length + " more replicates, 2 arc map structures, gene track</span></div>",
+      "      " + summaryStatus,
+      "    </summary>",
       rows.join(""),
-      "  </section>"
+      "  </details>"
     ].join("");
   }
 

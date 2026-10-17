@@ -384,11 +384,6 @@
     font-size: 42px;
   }
 
-  /* The header's Local only chip already says this on phones. */
-  .file-card-header .v0-chip {
-    display: none;
-  }
-
   .example-line {
     align-items: stretch;
     flex-direction: column;

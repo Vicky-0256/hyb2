@@ -639,12 +639,11 @@
       "  </header>",
       '  <main id="main-content" class="landing-main">',
       '    <section class="landing-copy" aria-labelledby="landing-title">',
-      '      <span class="eyebrow" data-scramble>RNA interaction analysis · browser-local</span>',
+      '      <span class="eyebrow" data-scramble>RNA–RNA interaction analysis · HYB files</span>',
       '      <h1 id="landing-title" aria-label="HYB2 Web Lite. Explore locally."><span class="headline-line" aria-hidden="true"><span class="headline-inner">HYB2 Web Lite.</span></span><span class="headline-line headline-accent" aria-hidden="true"><span class="headline-inner">Explore locally.</span></span></h1>',
-      '      <p class="landing-lede">Inspect RNA–RNA interactions, validate records, and prepare contact-map analysis without sending your research data to a server.</p>',
+      '      <p class="landing-lede">Inspect RNA–RNA interactions, validate records, compare conditions and fold RNA structures, all in this browser tab.</p>',
       '      <ul class="promise-list">',
-      "        <li>No account or server upload required</li>",
-      "        <li>Files remain in this browser session</li>",
+      "        <li>No account needed</li>",
       "        <li>Built for HYB-format interaction records</li>",
       "      </ul>",
       '      <figure class="hero-stage" data-hero-stage aria-label="Illustrative arc diagram: intramolecular stems above the sequence, HYB chimeric contacts below">',
@@ -721,19 +720,21 @@
     const hasFiles = typeof window.File !== "undefined" && typeof window.FileReader !== "undefined";
     const hasWorker = typeof window.Worker !== "undefined";
     const hasWasm = typeof window.WebAssembly !== "undefined";
+    const supported = [hasFiles, hasWorker, hasWasm, hasWorker && hasWasm].filter(Boolean).length;
+    const summaryChip = supported === 4 ? "All 4 supported" : supported + " of 4 supported";
     const status = function (ready, label, supportedLabel) {
       return '<li class="web-capability-item"><span class="web-capability-dot' + (ready ? ' is-ready' : '') + '" aria-hidden="true"></span><span>' + label + '</span><strong>' + (ready ? (supportedLabel || 'Supported') : 'Unavailable') + '</strong></li>';
     };
     return [
       '<section class="web-capability-card" aria-labelledby="web-capability-title">',
-      '<div class="web-capability-heading"><div><span class="example-kicker">Web runtime</span><h2 id="web-capability-title">Browser capabilities</h2></div><span class="web-capability-chip">No server</span></div>',
+      '<div class="web-capability-heading"><div><span class="example-kicker">Web runtime</span><h2 id="web-capability-title">Browser capabilities</h2></div><span class="web-capability-chip">' + summaryChip + '</span></div>',
       '<ul class="web-capability-list">',
-      status(hasFiles, 'Local file reading'),
+      status(hasFiles, 'File reading'),
       status(hasWorker, 'Background parsing workers'),
       status(hasWasm, 'ViennaRNA WebAssembly folding', 'Load on first run'),
       status(hasWorker && hasWasm, 'CPLfold Pyodide worker · capacity measured when needed', 'Load on first run'),
       '</ul>',
-      '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately. This browser workspace processes your data locally.</p>',
+      '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately.</p>',
       '</section>'
     ].join("");
   }
@@ -786,7 +787,6 @@
       "      <h2>Start with interaction data</h2>",
       "      <p>Choose one HYB file. After it is parsed, you can add a reference FASTA before entering analysis.</p>",
       "    </div>",
-      '    <span class="v0-chip">Local-only</span>',
       "  </div>",
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
       '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
@@ -949,12 +949,12 @@
       "    <div>",
       '      <span class="file-card-kicker">Step 1 complete</span>',
       '      <h2>Review files before analysis</h2>',
-      '      <p>HYB is parsed locally. Add an optional reference FASTA now, then open the analysis workspace when you are ready.</p>',
+      '      <p>The HYB file is parsed. Add an optional reference FASTA now, then open the analysis workspace when you are ready.</p>',
       "    </div>",
       '    <span class="status-chip">Files ready</span>',
       "  </div>",
       '  <section class="prepared-next-step" aria-label="Enter analysis workspace">',
-      '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>All calculations still run locally in this browser tab.</span></div>',
+      '    <div><span class="file-card-kicker">Step 2</span><strong>Open the analysis workspace</strong><span>Overview, interactions, contact maps, Compare, RNA structure and the report.</span></div>',
       '    <button class="button" type="button" data-action="enter-analysis">Enter analysis</button>',
       "  </section>",
       '  <section class="prepared-file-list" aria-label="Files ready for analysis">',
@@ -1003,7 +1003,7 @@
         return '<li class="parse-step' + className + '">' + stage + "</li>";
       }).join(""),
       "  </ol>",
-      '  <p class="card-footnote" aria-live="polite">' + (load.totalBytes ? formatBytes(load.processedBytes || 0) + " of " + formatBytes(load.totalBytes || 0) + " read locally" : "Preparing the included example locally") + "</p>",
+      '  <p class="card-footnote" aria-live="polite">' + (load.totalBytes ? formatBytes(load.processedBytes || 0) + " of " + formatBytes(load.totalBytes || 0) + " read" : "Preparing the included example") + "</p>",
       "</div></div>"
     ].join("");
   }

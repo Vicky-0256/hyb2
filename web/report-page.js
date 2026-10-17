@@ -551,13 +551,15 @@
           ["Selected bin", selected ? "Included below" : "None"]
         ]) : '<div class="report-empty">' + escape(result && result.reason || "Update the comparison from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Mean log2 effect</h3><span class="report-note-inline">violet = A enriched; teal = B enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map): white at the smallest plotted count, green at the 95% quantile cap</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' + dataNote(context, "tables/compare_cells.tsv") : "",
-        '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
-        included(context, "differential_test") ? '<div class="report-subsection-heading report-step-heading"><h3>Differential test</h3>' + stepBadge(context, "differential_test") + "</div>" : "",
+        // K6, in the Compare page's order: A the differential test, then the
+        // maps (B and the descriptive effect map), then panels C to G
+        included(context, "differential_test") ? '<div class="report-subsection-heading report-step-heading"><h3>A · Differential test</h3>' + stepBadge(context, "differential_test") + "</div>" : "",
         window.Hyb2DeseqCard && included(context, "differential_test") ? String(window.Hyb2DeseqCard.reportSection(comparison, { escape: escape, formatNumber: formatNumber, table: table, definitionList: definitionList, visualBlock: visualBlock, maxRows: MAX_TABLE_ROWS }) || "")
           .split('<p class="report-note">').join('<p class="report-note" data-cites="S08"><span class="report-cite">S08</span> ') : "",
         included(context, "differential_test") ? resultRefs(context, "differential_test") : "",
         included(context, "differential_test") ? dataNote(context, "tables/differential_interactions.tsv") + dataNote(context, "tables/differential_significant_cells.tsv") : "",
+        ready ? '<div class="report-visual-pair"><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Descriptive · Mean log2 effect</h3><span class="report-note-inline">not a test · violet = ' + escape(comparison.conditionALabel || "A") + ' enriched; teal = ' + escape(comparison.conditionBLabel || "B") + ' enriched</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "effect"), result.cells.length > MAX_VISUAL_CELLS ? "Effect map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div><div class="report-visual-wrap"><div class="report-subsection-heading"><h3>B · Similarity heatmap</h3><span class="report-note-inline">smaller raw count of A and B (HYB2 plot_similarity_map)</span></div>' + visualBlock(renderComparisonMapSvg(result, comparison, "conserved"), (result.conservedCells || []).length > MAX_VISUAL_CELLS ? "Similarity map capped at " + formatNumber(MAX_VISUAL_CELLS) + " cells for printing." : "") + '</div></div>' + dataNote(context, "tables/compare_cells.tsv") : "",
+        '<div class="report-subsection"><h3>Selected comparison bin</h3>' + selectedDetail + '</div>',
         renderFigurePanels(context),
         '<p class="report-note" data-cites="S07 S08"><span class="report-cite">S07, S08</span> Comparison effects are descriptive library-size-normalised values; adjusted p-values come only from the differential test' + (comparison.deseq && comparison.deseq.result ? " above" : ", which was not run") + '.</p>'
       ].join("")
@@ -967,16 +969,19 @@
     if (!record) {
       return "";
     }
-    const keys = [["arc_map", "Arc map (C)"], ["region_structures", "Region structures (D, E)"], ["folding_energy", "Folding energy (F, G)"]];
+    // K6 panel names, as on the Compare page
+    const keys = [["arc_map", "C · Arc map"], ["region_structures", "D, E · Region structures"], ["folding_energy", "F, G · Folding energy"]];
     return keys.filter(function (pair) { return included(context, pair[0]); }).map(function (pair) {
       const step = recordStep(context, pair[0]);
       const figures = record.figures.filter(function (f) { return f.step === step.id; });
       const tables = record.tables.filter(function (t) { return t.step === step.id; });
       const body = figures.map(function (f) {
         const svg = safeCall(f.svg, "");
-        return svg ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>' + escape(f.title) + '</h3><span class="report-note-inline">' + escape(f.id) + "</span></div>" + visualBlock(svg, "") + "</div>" : "";
+        // the panel heading already names a figure titled like its panel
+        const heading = f.title === pair[1] ? '<span class="report-note-inline">' + escape(f.id + " · " + f.file) + "</span>" : "<h3>" + escape(f.title) + '</h3><span class="report-note-inline">' + escape(f.id) + "</span>";
+        return svg ? '<div class="report-visual-wrap"><div class="report-subsection-heading">' + heading + "</div>" + visualBlock(svg, "") + "</div>" : "";
       }).join("");
-      const data = tables.length ? '<p class="report-note">Data: ' + tables.map(function (t) {
+      const data = tables.length ? '<p class="report-data-note">Data: ' + tables.map(function (t) {
         return "<code>" + escape(t.id + " " + t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '">Download</button>';
       }).join(" · ") + "</p>" : "";
       return '<div class="report-subsection report-figure-panel"><div class="report-subsection-heading report-step-heading"><h3>' + escape(pair[1]) + "</h3>" + stepBadge(context, pair[0]) + "</div>" +

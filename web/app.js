@@ -1682,6 +1682,12 @@
   }
 
   function handleChange(event) {
+    // K8: a select's title is its current option's full text; keep it current
+    // for pages that do not redraw on this change
+    const changed = event.target;
+    if (changed && changed.tagName === "SELECT" && changed.hasAttribute("title") && changed.selectedOptions && changed.selectedOptions[0]) {
+      changed.title = changed.selectedOptions[0].text;
+    }
     if (event.target.id === "density-input") {
       state.density = event.target.value === "compact" ? "compact" : "comfortable";
       render();

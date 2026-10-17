@@ -488,8 +488,8 @@
       '<div class="comparison-control-grid">',
       renderTextControl("Condition A label", "conditionALabel", comparison.conditionALabel, "Condition A", "comparison-control"),
       renderTextControl("Condition B label", "conditionBLabel", comparison.conditionBLabel, "Condition B", "comparison-control"),
-      renderSelectControl("RNA X", "rnaX", comparison.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control"),
-      renderSelectControl("RNA Y", "rnaY", comparison.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control"),
+      renderSelectControl("RNA X", "rnaX", comparison.rnaX, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control", { wide: true }),
+      renderSelectControl("RNA Y", "rnaY", comparison.rnaY, rnas.map(function (rna) { return { value: rna, label: rna }; }), "comparison-control", { wide: true }),
       renderSelectControl("Bin size", "binSize", comparison.binSize, [
         { value: "5", label: "5 nt" }, { value: "10", label: "10 nt" }, { value: "25", label: "25 nt" }, { value: "50", label: "50 nt" }, { value: "100", label: "100 nt" }
       ], "comparison-control"),

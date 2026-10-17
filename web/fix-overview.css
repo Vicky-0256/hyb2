@@ -85,3 +85,23 @@
 .overview-grid + .data-card {
   margin-top: 0;
 }
+
+/* ---- D3 RNA names in the bar lists (Overview Top interacting RNAs and the
+   Interactions partner panel): a label column wide enough for a full
+   genome-length name at 1440, and up to two lines where the card is narrow.
+   The full name stays in the title attribute. */
+.overview-top-rnas .bar-row,
+.partner-card .bar-row {
+  grid-template-columns: minmax(66px, min(42%, 260px)) minmax(80px, 1fr) auto;
+}
+
+.overview-top-rnas .bar-name,
+.partner-card .bar-name {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}

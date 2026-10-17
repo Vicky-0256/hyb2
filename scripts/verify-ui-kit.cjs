@@ -114,6 +114,8 @@ assert.equal(desk.detectPlatform("Windows NT 10.0; Win64; x64").id, "win-x64");
 assert.equal(desk.detectPlatform("X11; Linux x86_64").id, "linux-deb");
 assert.equal(desk.detectPlatform("Linux; Android 14; Pixel 8"), null, "Android is not desktop Linux");
 assert.equal(desk.detectPlatform("iPhone; CPU iPhone OS 17_0"), null);
+assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7", 5), null, "iPadOS Safari reports a Mac with touch points");
+assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7", 0).id, "mac-arm64");
 // downloads are private for now: nothing may link to an installer
 assert.equal(desk.downloadsAvailable, false);
 assert.equal(desk.downloadUrl(desk.platforms[0]), "");

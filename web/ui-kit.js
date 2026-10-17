@@ -344,11 +344,17 @@
     isInsideDesktop: function () {
       return !!(root.Hyb2Desktop && root.Hyb2Desktop.enabled);
     },
-    // the first platform for this computer's OS (Linux: the .deb), or null
-    detectPlatform: function (userAgent) {
+    // the first platform for this computer's OS (Linux: the .deb), or null.
+    // iPadOS Safari reports a Mac; a touch screen with several touch points
+    // tells it apart (Macs report 0).
+    detectPlatform: function (userAgent, maxTouchPoints) {
       const nav = root.navigator || {};
       const text = String(userAgent != null ? userAgent :
         ((nav.userAgentData && nav.userAgentData.platform) || nav.platform || nav.userAgent || "")).toLowerCase();
+      const touches = Number(maxTouchPoints != null ? maxTouchPoints : userAgent != null ? 0 : nav.maxTouchPoints) || 0;
+      if (/iphone|ipad|ipod/.test(text) || (text.indexOf("mac") !== -1 && touches > 1)) {
+        return null;
+      }
       const os = text.indexOf("mac") !== -1 ? "mac" : text.indexOf("win") !== -1 ? "windows" :
         text.indexOf("linux") !== -1 && text.indexOf("android") === -1 ? "linux" : "";
       return desktop.platforms.filter(function (item) { return item.os === os; })[0] || null;

@@ -28,6 +28,7 @@ on:
       - "scripts/verify-example.cjs"
       - "scripts/verify-results.cjs"
       - "scripts/verify-ui-kit.cjs"
+      - "scripts/verify-desktop-entry.cjs"
       - "scripts/json-schema-lite.cjs"
       - "scripts/webr-smoke/**"
       - "third_party/cplfold/**"
@@ -89,6 +90,7 @@ jobs:
           node scripts/verify-report-render.cjs
           node scripts/verify-results.cjs
           node scripts/verify-ui-kit.cjs
+          node scripts/verify-desktop-entry.cjs
           node scripts/verify-deseq.cjs
           node scripts/verify-arc-map.cjs
           node scripts/verify-region-panels.cjs

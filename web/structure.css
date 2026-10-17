@@ -567,20 +567,6 @@
   accent-color: var(--primary);
 }
 
-/* Disabled actions stay readable (muted-strong on surface-subtle is above
-   4.5:1 in both themes); the dashed border and the reason above the run
-   button say why it waits, not a faded label. */
-.structure-setup .button:disabled,
-.structure-result .button:disabled {
-  border-color: var(--line-strong);
-  border-style: dashed;
-  background: var(--surface-subtle);
-  color: var(--muted-strong);
-  opacity: 1;
-  box-shadow: none;
-  transform: none;
-}
-
 .structure-progress {
   display: grid;
   gap: 9px;
@@ -1164,15 +1150,6 @@
     font-size: 16px;
   }
 
-  .structure-setup {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .structure-setup .card-title-row {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
   .cplfold-capacity-row {
     align-items: flex-start;
     flex-direction: column;
@@ -1217,11 +1194,6 @@
   .local-run-header .header-actions .button,
   .local-run-header .header-actions .quiet-button {
     flex: 1 1 0;
-  }
-
-  .structure-setup .card-title-row .method-badge {
-    max-width: 100%;
-    white-space: normal;
   }
 
   .structure-thermo-grid {

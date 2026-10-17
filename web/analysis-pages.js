@@ -16,7 +16,7 @@
     return [
       '<div class="page-heading">',
       "<div><h1>Interactions</h1><p>Filter, inspect, and export local HYB records.</p></div>",
-      '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="export-filtered-csv">Export CSV</button><button class="button button-secondary" type="button" data-feature-action="export-filtered-hyb">Export HYB</button><button class="button button-secondary" type="button" data-feature-action="interactions-export-params">Export parameters</button></div>',
+      '<div class="inline-actions heading-export"><details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu"><button class="export-menu-item" type="button" role="menuitem" data-feature-action="export-filtered-csv">Filtered records · CSV</button><button class="export-menu-item" type="button" role="menuitem" data-feature-action="export-filtered-hyb">Filtered records · HYB</button><button class="export-menu-item" type="button" role="menuitem" data-feature-action="interactions-export-params">Parameters · JSON</button></div></details></div>',
       "</div>",
       '<section class="analysis-controls data-card">',
       '<div class="control-grid control-grid-wide">',

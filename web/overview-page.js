@@ -21,7 +21,7 @@
       "          <h1>Overview</h1>",
       '          <p><span class="mono">' + escape(summary.fileName) + "</span> · loaded locally · " + format(summary.validRecords) + " valid records</p>",
       "        </div>",
-      '        <div class="inline-actions"><button class="button button-secondary" type="button" data-action="download-summary">Export summary</button><button class="button button-secondary" type="button" data-action="download-rna-counts">Export RNA counts</button><button class="button button-secondary" type="button" data-action="download-rna-pairs">Export RNA pairs</button></div>',
+      '        <div class="inline-actions heading-export"><details class="export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu"><button class="export-menu-item" type="button" role="menuitem" data-action="download-summary">Summary · JSON</button><button class="export-menu-item" type="button" role="menuitem" data-action="download-rna-counts">RNA counts · CSV</button><button class="export-menu-item" type="button" role="menuitem" data-action="download-rna-pairs">RNA pairs · CSV</button></div></details></div>',
       "      </div>",
       renderReferenceStatus(state),
       '      <section class="metric-grid" aria-label="Dataset summary">',

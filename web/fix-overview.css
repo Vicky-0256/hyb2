@@ -155,3 +155,17 @@
   margin-top: auto;
   margin-left: -13px;
 }
+
+/* ---- D6 page-heading export menu (K2) on Overview and Interactions. When
+   the heading stacks (<=900px) the menu sits at the left edge, so its list
+   opens rightwards instead of off-screen. */
+@media (max-width: 900px) {
+  .heading-export .export-menu > summary {
+    margin-top: 0;
+  }
+
+  .heading-export .export-menu-list {
+    right: auto;
+    left: 0;
+  }
+}

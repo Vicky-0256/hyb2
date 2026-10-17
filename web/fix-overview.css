@@ -227,3 +227,17 @@
   color: var(--muted);
   font-size: 13px;
 }
+
+/* ---- D10 / K8 form controls: renderSelectControl(..., { wide: true }) and
+   renderTextControl(..., { wide: true }) span two grid columns. On phones
+   (two tracks or one) they take the whole row instead: 1 / -1 never adds an
+   implicit column the way span 2 would in a one-track grid. */
+.control-field--wide {
+  grid-column: span 2;
+}
+
+@media (max-width: 480px) {
+  .control-field--wide {
+    grid-column: 1 / -1;
+  }
+}

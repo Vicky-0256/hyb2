@@ -1454,8 +1454,12 @@
     return window.Hyb2OpenSections && window.Hyb2OpenSections[key] ? " open" : "";
   }
 
-  function renderSelectControl(label, key, value, options, feature) {
+  // K8: extra is optional, e.g. { wide: true } to span two grid columns.
+  // The select (or datalist input) carries the current choice's full text
+  // as its title, so a label cut off by the field width can still be read.
+  function renderSelectControl(label, key, value, options, feature, extra) {
     const available = options || [];
+    const fieldClass = "control-field" + (extra && extra.wide ? " control-field--wide" : "");
     if (available.length > 750) {
       const selected = available.find(function (option) {
         return String(option.value) === String(value);
@@ -1466,17 +1470,20 @@
       }
       const listId = "options-" + String(feature + "-" + key).replace(/[^a-z0-9_-]/gi, "-");
       return [
-        '<label class="control-field"><span>' + escape(label) + "</span>",
-        '<input type="search" list="' + attribute(listId) + '" value="' + attribute(value) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '" autocomplete="off">',
+        '<label class="' + fieldClass + '"><span>' + escape(label) + "</span>",
+        '<input type="search" list="' + attribute(listId) + '" value="' + attribute(value) + '"' + (selected ? ' title="' + attribute(selected.label) + '"' : "") + ' data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '" autocomplete="off">',
         '<datalist id="' + attribute(listId) + '">' + suggestions.map(function (option) {
           return '<option value="' + attribute(option.value) + '">' + escape(option.label) + "</option>";
         }).join("") + "</datalist>",
         '<small>Type an exact value. Showing ' + format(suggestions.length) + " of " + format(available.length) + " suggestions.</small></label>"
       ].join("");
     }
+    const current = available.find(function (option) {
+      return String(option.value) === String(value);
+    }) || available[0];
     return [
-      '<label class="control-field"><span>' + escape(label) + "</span>",
-      '<select data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '">',
+      '<label class="' + fieldClass + '"><span>' + escape(label) + "</span>",
+      '<select' + (current ? ' title="' + attribute(current.label) + '"' : "") + ' data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '">',
       available.map(function (option) {
         return '<option value="' + attribute(option.value) + '"' + (String(option.value) === String(value) ? " selected" : "") + ">" + escape(option.label) + "</option>";
       }).join(""),
@@ -1491,7 +1498,7 @@
       (settings.step === undefined ? "" : ' step="' + attribute(settings.step) + '"') +
       (settings.title === undefined ? "" : ' title="' + attribute(settings.title) + '"');
     return [
-      '<label class="control-field"><span>' + escape(label) + "</span>",
+      '<label class="control-field' + (settings.wide ? " control-field--wide" : "") + '"><span>' + escape(label) + "</span>",
       '<input type="' + (type || "text") + '" value="' + attribute(value) + '" placeholder="' + attribute(placeholder) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '"' + numericAttributes + '>',
       "</label>"
     ].join("");

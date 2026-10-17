@@ -1415,13 +1415,13 @@
       const last = start + span - 1;
       const values = kit ? kit.niceTicks(start, last, length < 260 ? 4 : 5) : [start, last];
       const at = function (value) { return origin + (value - start) / span * length; };
-      // labels at least 50 px apart (a phone's map is ~260 px wide)
+      // labels at least 50 px apart, 60 px from the (end-anchored) last one
       let previous = origin;
       return values.filter(function (value, index) {
         if (index === 0 || index === values.length - 1) {
           return true;
         }
-        const keep = at(value) - previous >= 50 && origin + length - at(value) >= 44;
+        const keep = at(value) - previous >= 50 && origin + length - at(value) >= 60;
         if (keep) {
           previous = at(value);
         }

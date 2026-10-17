@@ -112,3 +112,67 @@
 .deseq-canvas-wrap {
   aspect-ratio: 1 / 1.1;
 }
+
+/* ---- C6 file pickers (arc map, region and folding-energy references) */
+
+.file-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+/* the native input stays focusable but invisible (beats .control-field input) */
+.control-field .file-pick input[type="file"] {
+  position: absolute;
+  width: 1px;
+  min-width: 0;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+  white-space: nowrap;
+}
+
+.file-pick-button {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+.file-pick-button:focus-within {
+  outline: 2px solid var(--primary-ink);
+  outline-offset: 2px;
+}
+
+.file-pick-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-pick-name b {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.file-pick-name.is-empty {
+  font-style: italic;
+}
+
+.arcmap-file .file-pick .quiet-button {
+  flex: 0 0 auto;
+  align-self: center;
+  min-height: 32px;
+  padding: 0 4px;
+}

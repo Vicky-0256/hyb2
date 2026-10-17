@@ -515,9 +515,15 @@
     if (panels && (!(s.a && s.a.sequence) || !(s.b && s.b.sequence))) {
       const fasta = function (key, label) {
         const loaded = rp && rp[key];
-        return '<div class="arcmap-file control-field"><span>' + esc(label) + '</span><input type="file" accept=".fa,.fasta,.fna,.txt" data-feature="regions-fasta" data-key="' + key +
-          '" aria-label="' + esc(label) + '">' + (loaded ? '<span class="card-note">' + esc(loaded.name + " · " + loaded.sequence.length.toLocaleString("en-US") + " nt") + "</span>" : "") +
-          (rp && rp.errors && rp.errors[key] ? '<p class="notice notice-error">' + esc(rp.errors[key]) + "</p>" : "") + "</div>";
+        const summary = loaded ? loaded.sequence.length.toLocaleString("en-US") + " nt" : "";
+        // a button-styled label over the hidden input, as in the Arc map card
+        return '<div class="arcmap-file control-field' + (loaded ? " is-loaded" : "") + '"><span>' + esc(label) + '</span><div class="file-pick">' +
+          '<label class="button button-secondary file-pick-button"><input class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.txt" data-feature="regions-fasta" data-key="' + key +
+          '" aria-label="' + esc((loaded ? "Replace " : "Choose ") + label) + '">' + (loaded ? "Replace" : "Choose file") + "</label>" +
+          (loaded
+            ? '<span class="file-pick-name" title="' + esc(loaded.name + " · " + summary) + '"><b>' + esc(loaded.name) + "</b> · " + esc(summary) + "</span>"
+            : '<span class="file-pick-name is-empty">No file</span>') +
+          "</div>" + (rp && rp.errors && rp.errors[key] ? '<p class="notice notice-error">' + esc(rp.errors[key]) + "</p>" : "") + "</div>";
       };
       out.push('<div class="arcmap-files">', fasta("fastaA", "Reference of condition one / A (FASTA)"), fasta("fastaB", "Reference of condition two / B (FASTA)"), "</div>");
     }

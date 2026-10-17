@@ -670,11 +670,16 @@
       return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" value="' + esc(value) +
         '" placeholder="' + esc(placeholder || "") + '" data-feature="regions-control" data-key="' + key + '"></label>';
     };
+    // a button-styled label over the hidden input, as in the Arc map card
     const fasta = function (key, label, loaded) {
-      return '<div class="arcmap-file control-field"><span>' + esc(label) + '</span><input type="file" accept=".fa,.fasta,.fna,.txt" data-feature="regions-fasta" data-key="' + key +
-        '" aria-label="' + esc(label) + '">' + (loaded ? '<span class="card-note">' + esc(loaded.name + " · " + loaded.sequence.length.toLocaleString("en-US") + " nt") +
-        '</span> <button class="quiet-button" type="button" data-feature-action="regions-fasta-clear" data-key="' + key + '">Remove</button>' : "") +
-        (r.errors && r.errors[key] ? '<p class="notice notice-error">' + esc(r.errors[key]) + "</p>" : "") + "</div>";
+      const summary = loaded ? loaded.sequence.length.toLocaleString("en-US") + " nt" : "";
+      return '<div class="arcmap-file control-field' + (loaded ? " is-loaded" : "") + '"><span>' + esc(label) + '</span><div class="file-pick">' +
+        '<label class="button button-secondary file-pick-button"><input class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.txt" data-feature="regions-fasta" data-key="' + key +
+        '" aria-label="' + esc((loaded ? "Replace " : "Choose ") + label) + '">' + (loaded ? "Replace" : "Choose file") + "</label>" +
+        (loaded
+          ? '<span class="file-pick-name" title="' + esc(loaded.name + " · " + summary) + '"><b>' + esc(loaded.name) + "</b> · " + esc(summary) + '</span><button class="quiet-button" type="button" data-feature-action="regions-fasta-clear" data-key="' + key + '">Remove</button>'
+          : '<span class="file-pick-name is-empty">No file</span>') +
+        "</div>" + (r.errors && r.errors[key] ? '<p class="notice notice-error">' + esc(r.errors[key]) + "</p>" : "") + "</div>";
     };
     const out = ['<section class="data-card region-panels-card" id="region-panels-card">',
       '<div class="card-title-row"><div><h2>D, E · Region structures</h2><span class="card-note">For each direction, the most significant interaction that the enriched lineage\'s own structure forms (a predicted pair within reach of both arms), cut from both structures loaded in the Arc map card. Structure A is condition one\'s lineage, B is condition two\'s.</span></div></div>',

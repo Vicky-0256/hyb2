@@ -84,7 +84,7 @@ def reveal(page):
         page.mouse.wheel(0, 300)
         page.wait_for_timeout(80)
     page.wait_for_timeout(800)
-    page.evaluate("window.scrollTo(0, 0)")
+    page.evaluate("window.scrollTo({ top: 0, left: 0, behavior: 'instant' })")
     page.wait_for_timeout(300)
 
 
@@ -142,7 +142,7 @@ def main():
                     wait_ready(page)
                 except Exception:
                     print("  ! %s/%s: still loading after 90 s; shot taken anyway" % (mode, name))
-                page.evaluate("window.scrollTo(0, 0)")
+                page.evaluate("window.scrollTo({ top: 0, left: 0, behavior: 'instant' })")
                 shoot(page, args.out, mode, name)
                 print("%s/%s ok" % (mode, name))
             context.close()

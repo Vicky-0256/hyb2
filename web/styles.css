@@ -1162,13 +1162,15 @@ a {
   line-height: 1.5;
 }
 
+/* A padlock, so the note cannot be read as an unchecked radio button. */
 .privacy-note::before {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  margin-top: 4px;
-  border: 2px solid var(--success);
-  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin-top: 3px;
+  background: var(--success);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 7.5V5a3 3 0 0 1 6 0v2.5' fill='none' stroke='%23000' stroke-width='2'/%3E%3Crect x='2.5' y='7' width='11' height='8' rx='2'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 7.5V5a3 3 0 0 1 6 0v2.5' fill='none' stroke='%23000' stroke-width='2'/%3E%3Crect x='2.5' y='7' width='11' height='8' rx='2'/%3E%3C/svg%3E") center / contain no-repeat;
   content: "";
 }
 

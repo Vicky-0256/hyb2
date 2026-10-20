@@ -18,8 +18,10 @@ other ignored local artifacts.
 - `tests/test_cli_exit_status.py` locks that exit-status behavior.
 - `CPLfold.py` accepts Hyb2's sparse bonus-matrix TSV export through
   `--bonus-matrix-file` and applies it with `--alpha`.
-- `LICENSES/`, `THIRD_PARTY_NOTICES.md`, and this file record provenance and
-  distribution constraints; they do not supply a missing upstream license.
+- `LICENSE` is the author's GPL-2.0-or-later grant for CPLfold's own code
+  (2026-10-17), not in upstream commit `24bab52`. `LICENSES/`,
+  `THIRD_PARTY_NOTICES.md`, and this file record provenance and the
+  distribution constraints of the LinearFold- and HotKnots-derived parts.
 
 Upstream commit `24bab52` does not identify an exact LinearFold source revision
 or the exact HotKnots 2.0 archive/checksum used to create the Python-derived

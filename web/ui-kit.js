@@ -303,22 +303,30 @@
 
 
   // ---- K9: everything the site says about HYB2 Desktop comes from here.
-  // Installer names match release_name in .github/workflows/desktop-release.yml;
-  // cplfoldNt is desktop/runtime/detector.py DEFAULT_CPLFOLD_MAX_NT (it can be
-  // changed with HYB2_CPLFOLD_MAX_NT, hence "by default").
-  const DESKTOP_LIMITS = { cplfoldNt: 1000, webCplfoldNt: 500 };
-    const DESKTOP_CTA = {
+  // Installer names match release_name in .github/workflows/desktop-release.yml.
+  // Desktop CPLfold has no fixed length limit: desktop/runtime/detector.py
+  // (cplfold_limits) allows floor(sqrt((budget - base) / bytes_per_nt2)) nt,
+  // the budget being 75 % of memory. The site quotes the pseudoknot-free
+  // figure for an 8 GB computer, rounded down to 100 nt.
+  const DESKTOP_FOLD_MODEL = { baseBytes: 192 * 1024 * 1024, bytesPerNt2Free: 144, memoryFraction: 0.75, exampleGb: 8 };
+  const DESKTOP_LIMITS = {
+    webCplfoldNt: 500,
+    cplfoldExampleGb: DESKTOP_FOLD_MODEL.exampleGb,
+    cplfoldExampleNt: Math.floor(Math.sqrt((DESKTOP_FOLD_MODEL.exampleGb * Math.pow(1024, 3) * DESKTOP_FOLD_MODEL.memoryFraction -
+      DESKTOP_FOLD_MODEL.baseBytes) / DESKTOP_FOLD_MODEL.bytesPerNt2Free) / 100) * 100
+  };
+  // "about 6,500 nt with 8 GB of memory"
+  DESKTOP_LIMITS.cplfoldText = "about " + formatTick(DESKTOP_LIMITS.cplfoldExampleNt) + " nt with " + DESKTOP_LIMITS.cplfoldExampleGb + " GB of memory";
+  const DESKTOP_CTA = {
     "raw-reads": "Starting from raw reads (FASTQ, FASTA or SAM)? HYB2 Desktop maps them and writes the .hyb file.",
-    "long-fold": "Longer than " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt? HYB2 Desktop runs CPLfold natively, up to " +
-      formatTick(DESKTOP_LIMITS.cplfoldNt) + " nt by default, with no capacity test.",
+    "long-fold": "Longer than " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt? HYB2 Desktop runs CPLfold natively with no capacity test; " +
+      "its limit grows with memory: " + DESKTOP_LIMITS.cplfoldText + ".",
     overview: "The full pipeline on your computer, from raw reads to structures."
   };
-  // The GitHub repository is private, so its release downloads 404 for
-  // visitors: until they are public, no page offers a download (downloadUrl
-  // and checksumsUrl return "") and cta() links to the Desktop drawer only.
-  // Set to true once https://github.com/Vicky-0256/hyb2/releases opens
-  // without signing in.
-  const DESKTOP_DOWNLOADS_PUBLIC = false;
+  // The installers are the GitHub releases' files, public since the
+  // repository is (2026-10-17). False hides every download (downloadUrl and
+  // checksumsUrl return "", cta() opens the Desktop drawer only).
+  const DESKTOP_DOWNLOADS_PUBLIC = true;
   const desktop = {
     name: "HYB2 Desktop",
     downloadsAvailable: DESKTOP_DOWNLOADS_PUBLIC,
@@ -336,8 +344,8 @@
     tagline: "The full HYB2 pipeline on your computer: from raw reads to .hyb files, analysis and longer RNA structures.",
     capabilities: [
       { title: "Raw reads → .hyb", text: "FASTQ, FASTA or SAM, mapped with Bowtie2, hybrids called and checked" },
-      { title: "Same analysis pages", text: "The same analysis pages as Web Lite, saved as projects on disk" },
-      { title: "Native CPLfold", text: "Up to " + formatTick(DESKTOP_LIMITS.cplfoldNt) + " nt by default (browser: " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt), no capacity test" },
+      { title: "Same analysis pages", text: "The same analysis pages as Web, saved as projects on disk" },
+      { title: "Native CPLfold", text: "Set by memory, " + DESKTOP_LIMITS.cplfoldText + " (browser: " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt), no capacity test" },
       { title: "Comparisons", text: "DESeq2 comparisons and QC" },
       { title: "Offline", text: "Works offline; data stays on your computer" }
     ],
@@ -365,6 +373,21 @@
     },
     checksumsUrl: function () {
       return desktop.downloadUrl(desktop.checksumsFile);
+    },
+    // The published releases, newest first, as web/releases.js lists them
+    // when the site is deployed (scripts/write-releases.mjs): [{ tag,
+    // published: "YYYY-MM-DD", files: [names] }]. Empty when it is missing.
+    releases: function () {
+      const list = root.HYB2_RELEASES;
+      return Array.isArray(list) ? list.filter(function (release) {
+        return release && typeof release.tag === "string" && Array.isArray(release.files);
+      }) : [];
+    },
+    // A file of one release (tag), as downloadUrl gives the latest's.
+    releaseDownloadUrl: function (tag, platform) {
+      const file = typeof platform === "string" ? platform : platform && platform.file;
+      return desktop.downloadsAvailable && tag && file
+        ? desktop.releasesUrl + "/download/" + encodeURIComponent(tag) + "/" + file : "";
     },
     // <a class="desktop-cta" data-action="open-desktop">: the app opens the
     // Desktop drawer on click (and calls preventDefault). Without that handler

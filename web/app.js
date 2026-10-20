@@ -1,5 +1,5 @@
 /*
- * HYB2 Web application controller.
+ * HYB2 Web Lite application controller.
  *
  * Two ways to run it:
  *   - Website (shell:true, the default auto-mount on #app): landing page,
@@ -62,7 +62,9 @@
     rawReads: null,
     loading: null,
     error: null,
-    theme: window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+    // dark by default; the theme button switches, and a restored session
+    // keeps the visitor's choice
+    theme: "dark",
     density: "comfortable",
     toastTimer: null,
     pointerActionPending: false,
@@ -641,12 +643,14 @@
     const previousNav = typeof app.querySelector === "function" ? app.querySelector(".mobile-nav") : null;
     const navScrollLeft = previousNav ? previousNav.scrollLeft : 0;
     const previousPage = renderedPage;
+    // the theme is set first: cards that read theme colours while building
+    // their markup (the arc map) must see the new one
+    document.documentElement.dataset.theme = state.theme;
     app.innerHTML = workspaceOpen ? renderWorkspace() : renderLanding();
     renderedPage = workspaceOpen ? state.activePage : null;
     if (workspaceOpen) {
       revealActiveMobileNav(navScrollLeft, previousPage !== renderedPage);
     }
-    document.documentElement.dataset.theme = state.theme;
     app.dataset.density = state.density;
     const themeColor = document.querySelector('meta[name="theme-color"]');
     if (themeColor) {
@@ -712,8 +716,8 @@
       "        <li>No account needed</li>",
       "        <li>Built for HYB-format interaction records</li>",
       "      </ul>",
-      '      <figure class="hero-stage" data-hero-stage aria-label="Illustrative arc diagram: intramolecular stems above the sequence, HYB chimeric contacts below">',
-      '        <figcaption class="hero-stage-caption"><span class="hero-stage-live">Illustrative</span><span>Arc diagram · stems above, chimeric contacts below</span></figcaption>',
+      '      <figure class="hero-stage" data-hero-stage aria-label="Illustrative arc diagram: many chimeric reads below the sequence, the structure predicted from them above">',
+      '        <figcaption class="hero-stage-caption"><span class="hero-stage-live">Illustrative</span><span>Predicted structure above · chimeric reads below</span></figcaption>',
       '        <div class="hero-stage-canvas" data-hero-canvas></div>',
       '        <div class="hero-stage-hud" aria-hidden="true"><span>Chimeric reads <strong data-hero-reads>0</strong></span><span data-hero-probe>Hover the sequence</span></div>',
       "      </figure>",
@@ -772,7 +776,7 @@
     return Number(value).toLocaleString("en-US") + " nt";
   }
 
-  // "Two ways to run HYB2": Web Lite and HYB2 Desktop side by side, one row
+  // "Two ways to run HYB2": Web and HYB2 Desktop side by side, one row
   // per question (where to start, pipeline, analysis, CPLfold, install, data).
   // Replaces the Desktop and Browser capabilities cards under the hero.
   function renderWaysToRun() {
@@ -789,7 +793,7 @@
       '  <h2 id="landing-ways-title" class="landing-ways-title">Two ways to run HYB2</h2>',
       '  <div class="ways-grid">',
       '    <section class="ways-col ways-web" aria-labelledby="ways-web-title">',
-      '      <header class="ways-head"><h3 id="ways-web-title">Web Lite</h3><span class="ways-where">in this browser</span></header>',
+      '      <header class="ways-head"><h3 id="ways-web-title">Web</h3><span class="ways-where">in this browser</span></header>',
       row("Start from", ".hyb or .hyb.gz files"),
       row("Pipeline", '<span aria-hidden="true">—</span><span class="visually-hidden">None; it reads finished .hyb files</span>'),
       row("Analysis", "All analysis pages"),
@@ -806,7 +810,7 @@
       row("Start from", "Raw reads: FASTQ, FASTA or SAM, plus a reference"),
       row("Pipeline", "Bowtie2 mapping → hybrid calling → QC → .hyb"),
       row("Analysis", "The same pages, saved as projects on disk"),
-      row("CPLfold", "Up to " + formatNt(kit.limits.cplfoldNt) + " by default, native, no capacity test"),
+      row("CPLfold", "Set by memory, " + kit.limits.cplfoldText + "; native, no capacity test"),
       row("Install", kit.downloadsAvailable ? "An installer, below" : "An installer, not public yet"),
       row("Data", "Stays on this computer, works offline"),
       '      <div class="ways-actions">',
@@ -896,8 +900,10 @@
           }).join("") + "</div>";
       }).join("") + "</div>";
     }
+    const versions = desktopVersions(kit);
     return [
       '<div class="desktop-downloads">',
+      versions.latest,
       choices,
       '<p class="desktop-download-unavailable">' + escapeHtml(kit.unavailable) + "</p>",
       '<details class="desktop-first-launch" data-open-key="desktop-first-launch"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["desktop-first-launch"] ? " open" : "") + ">",
@@ -906,9 +912,44 @@
       "<p><strong>Windows:</strong> SmartScreen may warn about an unrecognised app. Choose More info → Run anyway.</p>",
       "</details>",
       '<p class="desktop-download-meta"><a href="' + escapeAttribute(kit.checksumsUrl()) + '">Checksums (' + escapeHtml(kit.checksumsFile) + ")</a>" +
-        '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl + "/latest") + '">Release notes</a></p>',
+        '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl + "/latest") + '">Release notes</a>' +
+        '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl) + '">All releases</a></p>',
+      versions.earlier,
       "</div>"
     ].join("");
+  }
+
+  // The latest version, over the downloads, and the earlier versions
+  // (web/releases.js, written when the site is deployed), each with the
+  // installers it has, in a closed <details> under them.
+  function desktopVersions(kit) {
+    const releases = kit.releases();
+    if (!releases.length) {
+      return { latest: "", earlier: "" };
+    }
+    const date = function (release) {
+      const parsed = release.published ? new Date(release.published + "T00:00:00Z") : null;
+      return parsed && !isNaN(parsed) ? parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }) : "";
+    };
+    const versionLine = function (release) {
+      const files = kit.platforms.filter(function (item) { return release.files.indexOf(item.file) !== -1; });
+      const links = files.map(function (item) {
+        return '<a class="desktop-download-link" href="' + escapeAttribute(kit.releaseDownloadUrl(release.tag, item)) + '" data-platform="' + escapeAttribute(item.id) +
+          '" aria-label="Download ' + escapeAttribute(release.tag) + " for " + escapeAttribute(item.label) + '">' + escapeHtml(item.label) + "</a>";
+      });
+      links.push('<a class="desktop-download-link" href="' + escapeAttribute(kit.releasesUrl + "/tag/" + encodeURIComponent(release.tag)) + '">Release notes</a>');
+      return '<li><span class="desktop-version-name">' + escapeHtml(release.tag) + "</span>" +
+        (date(release) ? ' <span class="desktop-version-date">' + escapeHtml(date(release)) + "</span>" : "") +
+        '<span class="desktop-version-links">' + links.join('<span aria-hidden="true"> · </span>') + "</span></li>";
+    };
+    const latest = releases[0];
+    const earlier = releases.slice(1);
+    return {
+      latest: '<p class="desktop-download-version">Latest version <strong>' + escapeHtml(latest.tag) + "</strong>" + (date(latest) ? ", " + escapeHtml(date(latest)) : "") + "</p>",
+      earlier: earlier.length ? '<details class="desktop-versions" data-open-key="desktop-versions"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["desktop-versions"] ? " open" : "") + ">" +
+        "<summary>Earlier versions (" + earlier.length + ")</summary>" +
+        '<ul class="desktop-version-list">' + earlier.map(versionLine).join("") + "</ul></details>" : ""
+    };
   }
 
   function renderBrand() {
@@ -920,7 +961,6 @@
       '  <span class="brand-mark"><img src="' + logoAsset + '" alt="HYB2"></span>',
       "  <span>",
       '    <span class="brand-name">Web</span>',
-      '    <span class="brand-subtitle">Lite</span>',
       "  </span>",
       "</a>"
     ].join("");
@@ -1492,9 +1532,9 @@
         drawerSection("What it does", '<ul class="drawer-list desktop-capabilities">' + kit.capabilities.map(function (item) {
           return "<li><strong>" + escapeHtml(item.title) + ".</strong> " + escapeHtml(item.text) + "</li>";
         }).join("") + "</ul>"),
-        drawerSection("Web Lite or Desktop", '<table class="desktop-compare"><thead><tr><th scope="col"><span class="visually-hidden">Question</span></th><th scope="col">Web Lite</th><th scope="col">' + escapeHtml(kit.name) + "</th></tr></thead><tbody>" +
+        drawerSection("Web or Desktop", '<table class="desktop-compare"><thead><tr><th scope="col"><span class="visually-hidden">Question</span></th><th scope="col">Web</th><th scope="col">' + escapeHtml(kit.name) + "</th></tr></thead><tbody>" +
           compare("Start from", ".hyb files", "Raw reads (FASTQ, FASTA, SAM)") +
-          compare("CPLfold", "Up to " + formatNt(kit.limits.webCplfoldNt) + " after a test", "Up to " + formatNt(kit.limits.cplfoldNt) + " by default") +
+          compare("CPLfold", "Up to " + formatNt(kit.limits.webCplfoldNt) + " after a test", "Set by memory, " + kit.limits.cplfoldText) +
           compare("Data", "Stays in this tab", "Stays on this computer") +
           "</tbody></table>"),
         drawerSection(kit.downloadsAvailable ? "Download" : "Availability", renderDesktopDownloads({ tagline: false }))
@@ -1661,6 +1701,12 @@
     }
 
     const action = actionNode.dataset.action;
+
+    if (action === "app-download-placeholder") {
+      event.preventDefault();
+      showToast("Desktop app download is not available in this preview.");
+      return;
+    }
 
     if (action === "choose-hyb") {
       const input = document.getElementById("hyb-file-input");
@@ -2188,7 +2234,7 @@
       withHeading ? '<span class="dropzone-kicker">' + escapeHtml(RAW_READ_LABELS[raw.kind] || "Raw reads") + "</span>" : "",
       withHeading ? '<h2 id="raw-reads-title" tabindex="-1">This is a raw-read file</h2>' : "",
       '<p class="raw-reads-file"><code title="' + escapeAttribute(raw.name) + '">' + escapeHtml(raw.name) + "</code>" + (withHeading ? "" : " · " + escapeHtml(RAW_READ_LABELS[raw.kind] || "raw reads")) + "</p>",
-      "<p>Web Lite reads .hyb files, the output of the hyb pipeline." + (shown ? " HYB2 Desktop maps raw reads like these and turns them into .hyb files." : "") + "</p>",
+      "<p>Web reads .hyb files, the output of the hyb pipeline." + (shown ? " HYB2 Desktop maps raw reads like these and turns them into .hyb files." : "") + "</p>",
       raw.kind === "fasta" ? '<p class="raw-reads-fasta">If this is your reference sequence, add it as the FASTA after the HYB file.</p>' : "",
       shown && !kit.downloadsAvailable ? '<p class="raw-reads-note">' + escapeHtml(kit.notAvailable) + "</p>" : "",
       '<div class="raw-reads-actions">' + actions.join("") + "</div>"

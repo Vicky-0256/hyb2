@@ -83,9 +83,12 @@ function createContext(options) {
   context.globalThis = context;
   vm.createContext(context);
   let kitSource = fs.readFileSync(web("ui-kit.js"), "utf8");
-  if (settings.downloadsPublic) {
-    assert.match(kitSource, /const DESKTOP_DOWNLOADS_PUBLIC = false;/);
-    kitSource = kitSource.replace("const DESKTOP_DOWNLOADS_PUBLIC = false;", "const DESKTOP_DOWNLOADS_PUBLIC = true;");
+  if (settings.downloadsHidden) {
+    assert.match(kitSource, /const DESKTOP_DOWNLOADS_PUBLIC = true;/);
+    kitSource = kitSource.replace("const DESKTOP_DOWNLOADS_PUBLIC = true;", "const DESKTOP_DOWNLOADS_PUBLIC = false;");
+  }
+  if (settings.releases) {
+    vm.runInContext(fs.readFileSync(web("releases.js"), "utf8"), context, { filename: "releases.js" });
   }
   if (!settings.withoutKit) {
     vm.runInContext(kitSource, context, { filename: "ui-kit.js" });
@@ -127,13 +130,14 @@ function click(host, attributes) {
   return prevented;
 }
 
-// ---- downloads not public (the release repository is private)
-const site = createContext();
+// ---- downloads hidden (K9 DESKTOP_DOWNLOADS_PUBLIC false, as while the
+// repository was private)
+const site = createContext({ downloadsHidden: true });
 const landing = mountSite(site);
 const html = landing.innerHTML;
 has(html, /<h2 id="landing-ways-title" class="landing-ways-title">Two ways to run HYB2<\/h2>/);
-has(html, /Up to 500 nt after a capacity test/, "Web Lite's CPLfold limit comes from K9");
-has(html, /Up to 1,000 nt by default, native, no capacity test/, "Desktop's CPLfold limit comes from K9");
+has(html, /Up to 500 nt after a capacity test/, "Web's CPLfold limit comes from K9");
+has(html, /Set by memory, about 6,500 nt with 8 GB of memory; native, no capacity test/, "Desktop's CPLfold limit comes from K9");
 has(html, /HYB2 Desktop is not available for public download yet\./);
 has(html, /Installers planned for macOS · Apple silicon, Windows · 64-bit, Linux \(\.deb, \.tar\.gz\)\./);
 hasNot(html, /github\.com\/Vicky-0256\/hyb2/, "no link to the private repository while downloads are not public");
@@ -175,7 +179,9 @@ assert.match(appSource, /if \(file\) \{\s*acceptHybFile\(file\);\s*\}\s*event\.t
 assert.match(appSource, /const file = event\.dataTransfer && [^\n]+\n\n    if \(file\) \{\s*acceptHybFile\(file\);/, "a dropped file is checked for raw reads first");
 
 // nothing in the site's sources hard-codes an installer or the release page
-fs.readdirSync(path.join(repository, "web")).filter(function (file) { return /\.(js|html)$/.test(file) && file !== "ui-kit.js"; }).forEach(function (file) {
+// (releases.js is data: the published releases' file names, written by
+// scripts/write-releases.mjs and checked in verify-ui-kit.cjs)
+fs.readdirSync(path.join(repository, "web")).filter(function (file) { return /\.(js|html)$/.test(file) && file !== "ui-kit.js" && file !== "releases.js"; }).forEach(function (file) {
   const source = fs.readFileSync(web(file), "utf8");
   hasNot(source, /github\.com\/Vicky-0256\/hyb2\/releases/, file + " must take Desktop links from Hyb2UiKit.desktop (K9)");
   hasNot(source, /HYB2-Desktop-(macOS|Windows|Linux)/, file + " must take installer names from K9");
@@ -187,7 +193,7 @@ assert.equal(site.location.hash, "", "the address does not change");
 has(landing.innerHTML, /class="dialog drawer desktop-drawer"/, "the Desktop drawer opens");
 has(landing.innerHTML, /class="landing/, "the current page stays");
 has(landing.innerHTML, /<table class="desktop-compare">/);
-has(landing.innerHTML, /Native CPLfold\.<\/strong> Up to 1,000 nt by default \(browser: 500 nt\), no capacity test/);
+has(landing.innerHTML, /Native CPLfold\.<\/strong> Set by memory, about 6,500 nt with 8 GB of memory \(browser: 500 nt\), no capacity test/);
 click(landing, { "data-action": "close-dialog" });
 hasNot(landing.innerHTML, /desktop-drawer/);
 
@@ -199,20 +205,20 @@ has(landing.innerHTML, /class="landing/, "#hyb2-desktop is not a page");
 assert.equal(site.location.hash, "", "the previous address is put back");
 assert.equal(site.replaced.at(-1), "/hyb2/");
 
-const opened = createContext({ hash: "#hyb2-desktop" });
+const opened = createContext({ hash: "#hyb2-desktop", downloadsHidden: true });
 const openedHost = mountSite(opened);
 has(openedHost.innerHTML, /desktop-drawer/, "a page opened at #hyb2-desktop shows the drawer");
 has(openedHost.innerHTML, /class="landing/);
 assert.equal(opened.location.hash, "");
 
-// ---- downloads public (flip K9 downloadsAvailable): the full download design
+// ---- downloads public (K9 downloadsAvailable): the full download design
 [
   ["Macintosh; Intel Mac OS X 10_15_7", "mac-arm64", "Download for macOS · Apple silicon"],
   ["Windows NT 10.0; Win64; x64", "win-x64", "Download for Windows · 64-bit"],
   ["X11; Linux x86_64", "linux-deb", "Download for Linux · .deb"],
   ["X11; FreeBSD amd64", null, null]
 ].forEach(function (entry) {
-  const page = mountSite(createContext({ downloadsPublic: true, userAgent: entry[0] })).innerHTML;
+  const page = mountSite(createContext({ userAgent: entry[0] })).innerHTML;
   const primary = /<a class="button desktop-download-primary" href="([^"]+)" data-platform="([^"]+)">([^<]+)<\/a>/.exec(page);
   if (entry[1]) {
     assert.ok(primary, entry[0] + ": one primary download");
@@ -231,7 +237,31 @@ assert.equal(opened.location.hash, "");
   has(page, /<summary>First launch \(unsigned app\)<\/summary>/);
   has(page, /Intel Macs and ARM Linux\/Windows have no installer yet/);
   hasNot(page, /For this computer|This computer/, "the verb is always Download");
+  hasNot(page, /desktop-download-version|desktop-versions/, "no version list without web/releases.js");
 });
+
+// ---- the version list (web/releases.js): the latest version over the
+// downloads, each earlier version with its own installers (skipped while
+// web/releases.js lists no release)
+const publishedReleases = (function () { const c = { window: {} }; vm.runInNewContext(fs.readFileSync(web("releases.js"), "utf8"), c); return c.window.HYB2_RELEASES; }());
+if (publishedReleases.length) {
+  const releases = publishedReleases;
+  const page = mountSite(createContext({ releases: true, hash: "#hyb2-desktop" })).innerHTML;
+  has(page, new RegExp('<p class="desktop-download-version">Latest version <strong>' + releases[0].tag.replace(/\./g, "\\.") + "</strong>"));
+  assert.ok(page.indexOf("desktop-download-version") < page.indexOf("desktop-download-primary"), "the latest version is named over the download button");
+  has(page, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases">All releases<\/a>/);
+  if (releases.length > 1) {
+    has(page, new RegExp("<summary>Earlier versions \\(" + (releases.length - 1) + "\\)</summary>"));
+    releases.slice(1).forEach(function (release) {
+      release.files.filter(function (file) { return /\.(dmg|exe|deb|tar\.gz)$/.test(file); }).forEach(function (file) {
+        assert.ok(page.indexOf('href="https://github.com/Vicky-0256/hyb2/releases/download/' + release.tag + "/" + file + '"') > -1, release.tag + ": " + file);
+      });
+      assert.ok(page.indexOf('href="https://github.com/Vicky-0256/hyb2/releases/tag/' + release.tag + '">Release notes</a>') > -1, release.tag + " release notes");
+    });
+  }
+  const hidden = mountSite(createContext({ releases: true, downloadsHidden: true, hash: "#hyb2-desktop" })).innerHTML;
+  hasNot(hidden, /releases\/download\/|desktop-versions/, "hidden downloads list no versions either");
+}
 
 // ---- A18: inside HYB2 Desktop no page offers HYB2 Desktop
 const inside = createContext({ desktop: { enabled: true } });

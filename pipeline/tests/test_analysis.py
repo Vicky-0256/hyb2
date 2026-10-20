@@ -345,6 +345,7 @@ class ProviderGapsTest(unittest.TestCase):
         self.assertEqual(query.contact_bins([self.index], "Zika_virusRNA", 10, lengths={"Zika_virusRNA": 10807})["length"], 10807)
 
     def test_compare_bins_normalizes_per_million(self):
+        # the web Compare page: per-dataset per million, condition = mean of its datasets, pseudocount 1
         result = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 100)
         full = brute_contact(self.records, "Zika_virusRNA", 100)
         half = brute_contact(self.half_records, "Zika_virusRNA", 100)
@@ -354,15 +355,22 @@ class ProviderGapsTest(unittest.TestCase):
         self.assertEqual(result["b_count"], [half.get(k, 0) for k in keys])
         lib_a, lib_b = len(self.records), len(self.half_records)
         self.assertEqual((result["library_a"], result["library_b"]), (lib_a, lib_b))
-        self.assertAlmostEqual(result["pseudocount"], 1e6 / lib_b)
+        self.assertEqual((result["pseudocount"], result["normalisation"]), (1.0, "library"))
         import math
         for k, key in enumerate(keys[:200]):
             a = full.get(key, 0) * 1e6 / lib_a
             b = half.get(key, 0) * 1e6 / lib_b
             self.assertAlmostEqual(result["a"][k], a, places=5)
             self.assertAlmostEqual(result["b"][k], b, places=5)
-            self.assertAlmostEqual(result["log2ratio"][k], math.log2((b + 1e6 / lib_b) / (a + 1e6 / lib_b)), places=5)
-        self.assertEqual(result["normalization"], "per_million_records")
+            self.assertAlmostEqual(result["effect"][k], math.log2((a + 1) / (b + 1)), places=5)
+            self.assertAlmostEqual(result["log2ratio"][k], -result["effect"][k], places=6)
+        # two datasets on one side: the mean of their per-million values, not the CPM of their sum
+        pair = query.compare_bins([self.index, self.half], [self.index], "Zika_virusRNA", 100)
+        for k, key in enumerate(list(zip(pair["x"], pair["y"]))[:200]):
+            mean = (full.get(key, 0) * 1e6 / lib_a + half.get(key, 0) * 1e6 / lib_b) / 2
+            self.assertAlmostEqual(pair["a"][k], mean, places=5)
+        raw = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 100, normalisation="none")
+        self.assertEqual((raw["pseudocount"], raw["a"][:50]), (0.5, [float(v) for v in raw["a_count"][:50]]))
         same = query.compare_bins([self.index, self.index], [self.index], "Zika_virusRNA", 250)
         self.assertEqual(same["a"], same["b"])
         coarse = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 10, max_cells=300)
@@ -404,7 +412,7 @@ def brute_viewpoint(recs, gene, lo, hi, width, partner=None, types=None, measure
     return records, reads, arms, starts, values, partners
 
 
-def brute_region(recs, gene, lo, hi, partner=None, plo=None, phi=None, overlap="any", types=None):
+def brute_region(recs, gene, lo, hi, partner=None, plo=None, phi=None, overlap="any", types=None, measure="support"):
     def ov(s, e, a, b):
         return (s >= a and e <= b) if overlap == "contained" else (s <= b and e >= a)
     g = gene.encode()
@@ -430,7 +438,7 @@ def brute_region(recs, gene, lo, hi, partner=None, plo=None, phi=None, overlap="
         for own, s, e in ((r.gene1, r.start1, r.end1), (r.gene2, r.start2, r.end2)):
             if own == g and s <= hi and e >= lo:
                 for b in range((max(s, lo) - lo) // width, (min(e, hi) - lo) // width + 1):
-                    profile[b] += r.reads
+                    profile[b] += {"records": 1, "support": r.support, "reads": r.reads}[measure]
         key = (r.start1, r.end1, r.start2, r.end2, r.chimera_type.decode(), r.gene1.decode(), r.gene2.decode())
         group = groups.setdefault(key, [0, 0])
         group[0] += 1
@@ -524,6 +532,9 @@ class ViewpointRegionTest(unittest.TestCase):
         result = query.region([self.index], "Zika_virusRNA", 3000, 3200, limit=20)
         groups = self.check_region(result, recs, "Zika_virusRNA", 3000, 3200)
         self.assertEqual(result["distinct"], len(groups))
+        self.assertEqual(result["support"], result["records"])  # 18-column sam2hyb lines: one per row
+        reads = query.region([self.index], "Zika_virusRNA", 3000, 3200, limit=20, measure="reads")
+        self.check_region(reads, recs, "Zika_virusRNA", 3000, 3200, measure="reads")
         self.assertEqual(len(result["rows"]), 20)
         self.assertTrue(result["rows_exact"])
         result = query.region([self.index], "Zika_virusRNA", 2000, 4000, partner="Zika_virusRNA", partner_start=5000,
@@ -543,3 +554,59 @@ class ViewpointRegionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SupportTest(unittest.TestCase):
+    """Cluster support as the web parser counts it (web/parser.worker.js parseAnnotations)."""
+
+    ARMS = "\t".join(["seq", ".", "G", "1", "20", "{s1}", "{e1}", "1e-5", "G", "21", "40", "{s2}", "{e2}", "1e-5"])
+
+    def line(self, rid, tail, s1=1, e1=20, s2=101, e2=120):
+        return (rid + "\t" + self.ARMS.format(s1=s1, e1=e1, s2=s2, e2=e2) + tail + "\n").encode()
+
+    def test_layouts(self):
+        cases = [
+            ("\t\t7\tType_1", 1, 7),           # sam2hyb 18 columns
+            ("\t6\tType_1", 1, 6),             # 17 columns
+            ("\t4", 4, None),                  # legacy clustered: column 16 count
+            ("\tcount_total=3", 3, None),       # legacy count_total metadata
+            ("\t2.5", 1, 2.5),                 # partial: column 16 is an overlap score
+            ("\t0", 1, 0),
+            ("", 1, None),                     # 15 columns
+        ]
+        for tail, support, overlap in cases:
+            record = hybfile.parse(self.line("r_2", tail))
+            self.assertEqual((record.support, record.overlap), (support, overlap), tail)
+            self.assertEqual(record.reads, 2)
+        for tail in ("\tcount_total=abc", "\tcount_total=0", "\t99999999999999999999"):
+            with self.assertRaises(ValueError, msg=tail):
+                hybfile.parse(self.line("r_1", tail))
+
+    def test_index_support_and_old_index_fallback(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            hyb = Path(tmp) / "legacy.hyb"
+            hyb.write_bytes(self.line("a_5", "\t4") + self.line("b_1", "\tcount_total=3", 11, 30)
+                            + self.line("c_2", "\t\t7\tType_1"))
+            path = Path(tmp) / "legacy.hyb2idx"
+            meta = index.build(hyb, path)
+            self.assertEqual((meta["records"], meta["support"], meta["reads"]), (3, 8, 8))
+            maps = {m: query.contact_bins([path], "G", 10, measure=m) for m in ("records", "support", "reads")}
+            self.assertEqual([maps[m]["total"] for m in maps], [3, 8, 8])
+            # (0, 100) is covered by a (column 16 count 4) and c (one row); b starts at 11
+            self.assertEqual(as_cells(maps["support"])[(0, 100)], 5)
+            view = query.viewpoint([path], "G", 1, 40, measure="support")
+            self.assertEqual(view["bins"]["value"][:12], [5] * 10 + [8, 8])
+            self.assertEqual(query.region([path], "G", 1, 40)["profile"]["value"][:2], [5, 8])
+            self.assertEqual(query.compare_bins([path], [path], "G", 10, measure="support")["library_a"], 8)
+            # an index built before the support column: support falls back to one per record
+            query.close_all()
+            con = sqlite3.connect(path)
+            con.execute("ALTER TABLE rects DROP COLUMN support")
+            con.execute("DELETE FROM meta WHERE key = 'support'")
+            con.commit()
+            con.close()
+            old = query.contact_bins([path], "G", 10, measure="support")
+            self.assertEqual(old["total"], 3)
+            self.assertEqual(query.compare_bins([path], [path], "G", 10, measure="support")["library_a"], 3)
+            query.close_all()

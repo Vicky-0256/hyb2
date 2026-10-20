@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -203,7 +204,7 @@ func TestCompareResultsAndActions(t *testing.T) {
 		req := started[i]
 		params, _ := req.Parameters.(map[string]any)
 		if req.Kind != "structure" || *req.GeneID != want.gene || *req.Mode != "windows" || strings.Join(req.SampleIDs, ",") != strings.Join(want.ids, ",") ||
-			len(req.Windows) != 1 || req.Windows[0] != (core.Window{Start: 3790, End: 5829}) || params["allow_pseudoknot"] != true {
+			len(req.Windows) != 1 || req.Windows[0] != (core.Window{Start: 3790, End: 5829}) || params["allow_pseudoknot"] != false {
 			t.Fatalf("fold %d: %+v params %+v", i, req, params)
 		}
 	}
@@ -354,10 +355,15 @@ func TestCompareQuickView(t *testing.T) {
 	if len(rows) == 0 || len(p.quick.heat.Cells()) == 0 {
 		t.Fatalf("rows %d", len(rows))
 	}
-	for i := 1; i < len(rows); i++ {
-		if rows[i].A+rows[i].B < p.quick.minCount {
-			t.Fatalf("row below min count %+v", rows[i])
+	// the web Compare page's effect: log2((A + 1) / (B + 1)) on per-million condition means
+	for _, r := range rows[:min(len(rows), 50)] {
+		want := math.Log2((r.A + 1) / (r.B + 1))
+		if r.Ratio == nil || math.Abs(*r.Ratio-want) > 1e-5 {
+			t.Fatalf("effect of %+v, want %g", r, want)
 		}
+	}
+	if p.quick.bin != "10 nt" || p.quick.data.Pseudocount != 1 {
+		t.Fatalf("bin %q, pseudocount %g", p.quick.bin, p.quick.data.Pseudocount)
 	}
 	snapshot(t, tt, "compare-quick")
 	if err := tt.Click("Back to tests"); err != nil {

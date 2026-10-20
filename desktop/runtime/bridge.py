@@ -824,7 +824,8 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
                                     request.get("region"), gene2=opt_str("gene2"), types=opt_types(),
                                     measure=opt_str("measure") or "records", orientation=opt_str("orientation") or "oriented",
                                     max_cells=opt_int("max_cells", None), fixed_bin=opt_bool("fixed_bin"),
-                                    lengths=_reference_lengths(manifest, ids_a + ids_b))
+                                    lengths=_reference_lengths(manifest, ids_a + ids_b),
+                                    normalisation=opt_str("normalisation") or "library")
         return {"ok": True, "operation": "compare_bins", "sample_ids_a": ids_a, "sample_ids_b": ids_b,
                 "indexes_a": [str(p) for p in paths_a], "indexes_b": [str(p) for p in paths_b], "result": result}
 
@@ -847,7 +848,8 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
     elif operation == "analysis_region":
         result = query.region(paths, required_gene(), opt_int("start", None), opt_int("end", None), partner=opt_str("partner"),
                               partner_start=opt_int("partner_start", None), partner_end=opt_int("partner_end", None),
-                              overlap=opt_str("overlap") or "any", types=opt_types(), limit=opt_int("limit", 100))
+                              overlap=opt_str("overlap") or "any", types=opt_types(), limit=opt_int("limit", 100),
+                              measure=opt_str("measure") or "support")
     else:
         filters = {} if request.get("filters") is None else request["filters"]
         if not isinstance(filters, dict):

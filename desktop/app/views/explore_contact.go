@@ -15,27 +15,28 @@ import (
 // Contact map: analysis_contact_bins drawn with widgets.Heatmap.
 
 const (
-	binAuto = "Auto"
-	// autoMaxCells bounds "Auto": the backend doubles the bin until the
-	// map has at most this many non-empty cells.
-	autoMaxCells = 200_000
-	// fixedMaxCells keeps a chosen bin from producing a map too large to
-	// draw; the backend then coarsens it (shown as adjusted).
-	fixedMaxCells = 600_000
+	// contactMaxCells is the web page's limit (web/page-data.js): the backend
+	// doubles the chosen bin until the map has at most this many non-empty
+	// cells (shown as adjusted).
+	contactMaxCells = 250_000
+	binDefault      = "10 nt"
 
 	orientBoth     = "Both arm orders"
 	orientOriented = "Arm 1 on X"
 	measureRecords = "Records"
+	// measureSupport is the web's cluster support; measureReads the raw
+	// read counts in the read ids (desktop only).
+	measureSupport = "Support"
 	measureReads   = "Reads"
 	scaleLinear    = "Linear"
 	scaleLog       = "Log"
 )
 
 var (
-	binOptions    = []string{binAuto, "10 nt", "20 nt", "50 nt", "100 nt", "200 nt"}
+	binOptions    = []string{"5 nt", "10 nt", "25 nt", "50 nt", "100 nt"}
 	capOptions    = []string{"90th percentile", "95th percentile", "99th percentile", "Maximum"}
 	capFractions  = []float64{0.90, 0.95, 0.99, 1}
-	measures      = []string{measureRecords, measureReads}
+	measures      = []string{measureRecords, measureSupport, measureReads}
 	orientations  = []string{orientBoth, orientOriented}
 	scaleOptions  = []string{scaleLinear, scaleLog}
 	mapSizeTarget = float32(430)
@@ -49,6 +50,7 @@ type contactState struct {
 	typ         string
 	colorCap    string
 	scale       string
+	dark        bool // the theme the cells were coloured for
 
 	load loader
 	data *contactData
@@ -77,7 +79,7 @@ type contactData struct {
 }
 
 func (s *contactState) init() {
-	s.bin, s.measure, s.orientation, s.typ = binAuto, measureRecords, orientBoth, allTypes
+	s.bin, s.measure, s.orientation, s.typ = binDefault, measureRecords, orientBoth, allTypes
 	s.colorCap, s.scale = capOptions[1], scaleLinear
 	s.heat = widgets.NewHeatmap()
 	s.picked = -1
@@ -107,37 +109,30 @@ func (p *explorePage) loadContact() {
 	s := &p.cm
 	path, ids, gene, gene2 := p.a.Project.Path, p.ids, p.gene, p.contactGene2()
 	bin, measure, orientation, typ := s.bin, s.measure, s.orientation, s.typ
-	colorCap, scale := s.colorCap, s.scale
+	colorCap, scale, dark := s.colorCap, s.scale, s.dark
 	lengthX, lengthY := p.geneLength(gene), p.geneLength(gene2)
 	p.ensure(&s.load, p.contactKey(), func() (func(), error) {
-		payload := core.Obj{"gene": gene, "gene2": gene2, "measure": "records", "orientation": "both"}
-		if measure == measureReads {
-			payload["measure"] = "reads"
-		}
+		payload := core.Obj{"gene": gene, "gene2": gene2, "measure": measurePayload(measure), "orientation": "both"}
 		if orientation == orientOriented {
 			payload["orientation"] = "oriented"
 		}
 		if types := typesPayload(typ); types != nil {
 			payload["types"] = types
 		}
-		if bin == binAuto {
-			payload["bin_size"], payload["max_cells"] = 10, autoMaxCells
-		} else {
-			var size int
-			fmt.Sscanf(bin, "%d", &size)
-			payload["bin_size"], payload["max_cells"] = size, fixedMaxCells
-		}
+		var size int
+		fmt.Sscanf(bin, "%d", &size)
+		payload["bin_size"], payload["max_cells"] = size, contactMaxCells
 		got, err := p.query(path, "analysis_contact_bins", ids, payload)
 		if err != nil {
 			return nil, err
 		}
 		d := decodeContact(got, measure, orientation, typ, lengthX, lengthY)
-		cells := d.cells(colorCap, scale)
+		cells := d.cells(colorCap, scale, dark)
 		return func() {
 			s.data = d
 			s.heat.SetCells(cells, float64(d.lengthX), float64(d.lengthY))
 			s.picked = -1
-			if s.colorCap != colorCap || s.scale != scale {
+			if s.colorCap != colorCap || s.scale != scale || s.dark != dark {
 				p.recolor() // changed while loading
 			}
 			if f := s.focus; f != nil {
@@ -176,10 +171,30 @@ func decodeContact(got map[string]any, measure, orientation, typ string, lengthX
 
 func str(v any) string { s, _ := v.(string); return s }
 
-// colorCap is the count at which colours saturate.
-func (d *contactData) colorCap(choice string) float64 {
+// measurePayload is the bridge's name for a measure label.
+func measurePayload(measure string) string {
+	switch measure {
+	case measureSupport:
+		return "support"
+	case measureReads:
+		return "reads"
+	}
+	return "records"
+}
+
+// display is a count as the colour scale sees it: log1p for the Log scale.
+func display(n int, scale string) float64 {
+	if scale == scaleLog {
+		return math.Log1p(float64(n))
+	}
+	return float64(n)
+}
+
+// colorCap is the displayed value at which colours saturate: the chosen
+// quantile of the displayed values, as the web's resolveContactCap.
+func (d *contactData) colorCap(choice, scale string) float64 {
 	if len(d.sorted) == 0 {
-		return 1
+		return 0
 	}
 	fraction := 0.95
 	for i, label := range capOptions {
@@ -187,39 +202,34 @@ func (d *contactData) colorCap(choice string) float64 {
 			fraction = capFractions[i]
 		}
 	}
-	// linear interpolation between ranks, as the web page's quantile
-	pos := float64(len(d.sorted)-1) * fraction
-	lo, hi := int(math.Floor(pos)), int(math.Ceil(pos))
-	v := float64(d.sorted[lo]) + (float64(d.sorted[hi])-float64(d.sorted[lo]))*(pos-float64(lo))
-	return math.Max(v, 1)
+	values := make([]float64, len(d.sorted))
+	for i, n := range d.sorted {
+		values[i] = display(n, scale)
+	}
+	return quantile(values, fraction)
 }
 
-// cells colours every cell by its count: viridis up to the cap.
-func (d *contactData) cells(choice, scale string) []widgets.Cell {
-	limit := d.colorCap(choice)
+// capCount is the cap as a count, for labels.
+func capCount(limit float64, scale string) float64 {
+	if scale == scaleLog {
+		return math.Expm1(limit)
+	}
+	return limit
+}
+
+// cells colours every cell by its displayed value over the cap, on the
+// web's contact ramp of the theme.
+func (d *contactData) cells(choice, scale string, dark bool) []widgets.Cell {
+	limit := d.colorCap(choice, scale)
 	out := make([]widgets.Cell, len(d.count))
 	for i, n := range d.count {
-		f := math.Min(float64(n)/limit, 1)
-		if scale == scaleLog {
-			f = math.Min(math.Log1p(float64(n))/math.Log1p(limit), 1)
+		ratio := 1.0
+		if limit > 0 {
+			ratio = display(n, scale) / limit
 		}
-		out[i] = widgets.Cell{X: float64(d.x[i]), Y: float64(d.y[i]), W: float64(d.bin), H: float64(d.bin), Color: viridis(f)}
+		out[i] = widgets.Cell{X: float64(d.x[i]), Y: float64(d.y[i]), W: float64(d.bin), H: float64(d.bin), Color: contactColor(ratio, dark)}
 	}
 	return out
-}
-
-// viridis maps [0, 1] to the viridis colour map (matplotlib anchors).
-func viridis(f float64) ui.Color {
-	stops := [][3]float64{{68, 1, 84}, {71, 44, 122}, {59, 81, 139}, {44, 113, 142}, {33, 144, 141},
-		{39, 173, 129}, {92, 200, 99}, {170, 220, 50}, {253, 231, 37}}
-	f = math.Max(0, math.Min(1, f)) * float64(len(stops)-1)
-	i := int(math.Floor(f))
-	if i >= len(stops)-1 {
-		i = len(stops) - 2
-	}
-	t := f - float64(i)
-	mix := func(k int) uint8 { return uint8(math.Round(stops[i][k] + (stops[i+1][k]-stops[i][k])*t)) }
-	return ui.RGB(mix(0), mix(1), mix(2))
 }
 
 // cellRange is the inclusive gene range of a bin starting at x.
@@ -228,6 +238,10 @@ func cellRange(x, bin int) (int, int) { return max(1, x), x + bin - 1 }
 func (p *explorePage) contactView(c *ui.Context) {
 	s := &p.cm
 	t := c.Theme()
+	if s.dark != t.Dark {
+		s.dark = t.Dark
+		p.recolor()
+	}
 	p.loadContact()
 	genes := p.genes()
 	ui.Scroll(c).Grow(1).Children(func() {
@@ -246,11 +260,9 @@ func (p *explorePage) contactView(c *ui.Context) {
 			if d == nil {
 				return
 			}
-			if d.adjusted && s.bin == binAuto {
-				notice(c, fmt.Sprintf("Auto bin: %d nt, so the map stays within %s cells.", d.bin, FormatNumber(autoMaxCells)))
-			} else if d.adjusted {
-				notice(c, fmt.Sprintf("The bin size was increased from %d to %d nt so the map stays within %s cells.",
-					d.requested, d.bin, FormatNumber(fixedMaxCells)))
+			if d.adjusted {
+				notice(c, fmt.Sprintf("%d nt · using %d nt, so the map stays within %s cells.",
+					d.requested, d.bin, FormatNumber(contactMaxCells)))
 			}
 			if len(d.count) == 0 {
 				ui.Text(c, "No hybrids between these genes with these settings.").TextColor(t.TextMuted)
@@ -292,7 +304,7 @@ func (p *explorePage) recolor() {
 		return
 	}
 	view, picked := s.heat.View(), s.heat.Picked
-	s.heat.SetCells(s.data.cells(s.colorCap, s.scale), float64(s.data.lengthX), float64(s.data.lengthY))
+	s.heat.SetCells(s.data.cells(s.colorCap, s.scale, s.dark), float64(s.data.lengthX), float64(s.data.lengthY))
 	s.heat.SetView(view)
 	s.heat.Picked = picked
 }
@@ -326,13 +338,13 @@ func (p *explorePage) contactLegend(c *ui.Context, d *contactData) {
 			picker(c, "cm-cap", "Colour cap", &s.colorCap, capOptions, 145).OnChange(p.recolor)
 			picker(c, "cm-scale", "Scale", &s.scale, scaleOptions, 84).OnChange(p.recolor)
 		})
-		limit := d.colorCap(s.colorCap)
+		limit := capCount(d.colorCap(s.colorCap, s.scale), s.scale)
 		ui.Column(c).Gap(4).Children(func() {
 			ui.Box(c).FillWidth().Height(10).Radius(3).Draw(func(pt *ui.Painter, r ui.Rect) {
 				steps := 48
 				for i := range steps {
 					w := r.W / float32(steps)
-					pt.Fill(ui.Rect{X: r.X + float32(i)*w, Y: r.Y, W: w + 0.5, H: r.H}, viridis(float64(i)/float64(steps-1)), 0)
+					pt.Fill(ui.Rect{X: r.X + float32(i)*w, Y: r.Y, W: w + 0.5, H: r.H}, contactColor(float64(i)/float64(steps-1), t.Dark), 0)
 				}
 			})
 			ui.Row(c).Children(func() {

@@ -77,7 +77,7 @@ class StructureRegistryTests(unittest.TestCase):
         self.assertEqual((entry["gene_id"], entry["mode"], entry["windows"]), (GENE, "windows", self.windows))
         self.assertEqual(entry["paths"], {"dbn": "structures/win1/structure.dbn", "pairs": "structures/win1/pairs.tsv",
                                           "ct": "structures/win1/structure.ct", "meta": "structures/win1/meta.json"})
-        self.assertTrue(entry["parameters"]["allow_pseudoknot"])
+        self.assertFalse(entry["parameters"]["allow_pseudoknot"])  # the web's default, also for windows
         self.assertEqual(entry["summary"]["records"], 2)
         self.assertEqual(len(entry["summary"]["energies"]), 2)
         self.assertIsNone(entry["summary"]["energy"])

@@ -24,11 +24,14 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from .index import FORMAT, RECT_COLUMNS, VERSION
+from .index import FORMAT, RECT_COLUMNS, RECT_COLUMNS_V1, VERSION
 
 PathLike = Union[str, "os.PathLike[str]"]
 
 MAX_GRID_CELLS = 25_000_000
+# measure -> rects weight column: one per record, cluster support (the web's
+# "support", hybfile), or the raw read count from the read ids
+MEASURES = {"records": "count", "support": "support", "reads": "reads"}
 MAX_LIMIT = 10_000
 _RECT_CACHE_BYTES = 512 * 1024 * 1024
 
@@ -57,6 +60,9 @@ class _Index:
         self.types = {name: tid for tid, name in self.con.execute("SELECT id, name FROM types")}
         self.type_names = {tid: name for name, tid in self.types.items()}
         self.spans = {(g1, g2): (s1, s2) for g1, g2, s1, s2 in self.con.execute("SELECT g1, g2, max_span1, max_span2 FROM pairs")}
+        # cluster support (hybfile) came after version 1: older indexes count one per record
+        self.has_support = any(row[1] == "support" for row in self.con.execute("PRAGMA table_info(rects)"))
+        self.support_total = int(self.meta["support"]) if self.has_support and "support" in self.meta else int(self.meta["records"])
 
         self._extents: Optional[Dict[str, Tuple[int, int]]] = None
 
@@ -221,11 +227,14 @@ def _load_rects(index: _Index, g1: int, g2: int) -> Optional[Dict[str, np.ndarra
         if cached is not None:
             _rects.move_to_end(key)
             return cached
-    row = index.con.execute("SELECT n, dtypes, %s FROM rects WHERE g1 = ? AND g2 = ?" % ", ".join(RECT_COLUMNS), (g1, g2)).fetchone()
+    columns = RECT_COLUMNS if index.has_support else RECT_COLUMNS_V1
+    row = index.con.execute("SELECT n, dtypes, %s FROM rects WHERE g1 = ? AND g2 = ?" % ", ".join(columns), (g1, g2)).fetchone()
     if row is None:
         return None
     dtypes = json.loads(row[1])
-    arrays = {name: np.frombuffer(blob, dtype=dtypes[name]) for name, blob in zip(RECT_COLUMNS, row[2:])}
+    arrays = {name: np.frombuffer(blob, dtype=dtypes[name]) for name, blob in zip(columns, row[2:])}
+    if not index.has_support:
+        arrays["support"] = arrays["count"]
     size = sum(array.nbytes for array in arrays.values())
     with _lock:
         _rects[key] = arrays
@@ -295,6 +304,11 @@ def _rasterise(parts: List[Tuple[np.ndarray, ...]], bin_size: int, bounds: Tuple
 ORIENTATIONS = ("oriented", "both")
 
 
+def _check_measure(measure: str) -> None:
+    if measure not in MEASURES:
+        raise ValueError("measure must be 'records', 'support' or 'reads'")
+
+
 def _pair_rects(index: _Index, g1: Optional[int], g2: Optional[int], swapped: bool) -> Optional[Dict[str, np.ndarray]]:
     """Rectangles of the oriented pair ``(g1, g2)``; ``swapped`` loads ``(g2, g1)`` with the arms exchanged."""
     if g1 is None or g2 is None:
@@ -318,8 +332,7 @@ def _contact_grid(indexes: List[_Index], gene: str, gene2: Optional[str], bin_si
     """
     if isinstance(bin_size, bool) or not isinstance(bin_size, int) or not 1 <= bin_size <= 100_000:
         raise ValueError("bin_size must be an integer between 1 and 100000")
-    if measure not in ("records", "reads"):
-        raise ValueError("measure must be 'records' or 'reads'")
+    _check_measure(measure)
     if orientation not in ORIENTATIONS:
         raise ValueError("orientation must be 'oriented' or 'both'")
     gene2 = gene2 or gene
@@ -339,7 +352,7 @@ def _contact_grid(indexes: List[_Index], gene: str, gene2: Optional[str], bin_si
             selections.append(None)
             continue
         s1, e1, s2, e2 = (np.concatenate([rects[k].astype(np.int64) for rects in found]) for k in ("s1", "e1", "s2", "e2"))
-        weight = np.concatenate([rects["count" if measure == "records" else "reads"].astype(np.int64) for rects in found])
+        weight = np.concatenate([rects[MEASURES[measure]].astype(np.int64) for rects in found])
         masks = [_type_mask(index, rects, types) for rects in found]
         mask = None if masks[0] is None else np.concatenate(masks)
         if bounds_nt is not None:
@@ -433,63 +446,92 @@ def _side_grid(selections, bin_size: int, bounds) -> np.ndarray:
     return np.zeros((nx, ny), dtype=np.int64)
 
 
+NORMALISATIONS = ("library", "none")
+
+
+def _library(index: _Index, measure: str) -> int:
+    if measure == "support":
+        return index.support_total
+    return int(index.meta[measure])
+
+
 def compare_bins(indexes_a: Sequence[PathLike], indexes_b: Sequence[PathLike], gene: str, bin_size: int = 10,
                  region: Any = None, *, gene2: Optional[str] = None, types: Optional[Sequence[str]] = None,
                  measure: str = "records", orientation: str = "oriented", max_cells: Optional[int] = None,
-                 fixed_bin: bool = False, lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
-    """Two conditions on one shared bin grid (descriptive, no statistics).
+                 fixed_bin: bool = False, lengths: Optional[Dict[str, int]] = None,
+                 normalisation: str = "library") -> Dict[str, Any]:
+    """Two conditions on one shared bin grid (descriptive, no statistics),
+    as the web Compare page (``computeComparison`` in web/analysis-data.js).
 
-    Each side's indexes are merged by summing; counts are normalized to
-    counts per million of that side's library (total records, or total reads
-    for ``measure="reads"``).  Cells non-empty on either side are returned
-    in row-major order::
+    Each index is one dataset.  With ``normalisation="library"`` a dataset's
+    counts are scaled to per million of its own library (its total records,
+    cluster support or reads, by ``measure``); a condition's value is the
+    mean of its datasets' values.  Cells non-empty on either side are
+    returned in row-major order::
 
         {gene, gene2, bin_size, requested_bin_size, adjusted, measure, orientation,
-         length, length2, region, cells, library_a, library_b, pseudocount,
-         x: [], y: [], a: [], b: [], a_count: [], b_count: [], log2ratio: []}
+         normalisation, length, length2, region, cells, library_a, library_b,
+         libraries_a, libraries_b, pseudocount,
+         x: [], y: [], a: [], b: [], a_count: [], b_count: [], effect: [], log2ratio: []}
 
-    ``a``/``b`` are the normalized values, ``a_count``/``b_count`` the raw
-    ones and ``log2ratio = log2((b + p) / (a + p))`` with ``p`` the
-    normalized value of one count in the smaller library.  ``max_cells``
-    doubles the shared bin size (unless ``fixed_bin``) until the union has at
-    most that many cells.
+    ``a``/``b`` are the condition values, ``a_count``/``b_count`` the summed
+    raw counts, ``effect = log2((a + p) / (b + p))`` with ``p`` 1 (per
+    million) or 0.5 (raw means, ``normalisation="none"``), and ``log2ratio``
+    its negation (B over A).  ``max_cells`` doubles the shared bin size
+    (unless ``fixed_bin``) until the union has at most that many cells.
     """
     if not isinstance(fixed_bin, bool):
         raise ValueError("fixed_bin must be a boolean")
+    if normalisation not in NORMALISATIONS:
+        raise ValueError("normalisation must be 'library' or 'none'")
+    _check_measure(measure)
     lengths = _check_lengths(lengths)
     side_a, side_b = _indexes(indexes_a), _indexes(indexes_b)
-    key = "records" if measure == "records" else "reads"
-    library_a = sum(int(index.meta[key]) for index in side_a)
-    library_b = sum(int(index.meta[key]) for index in side_b)
+    libraries_a = [_library(index, measure) for index in side_a]
+    libraries_b = [_library(index, measure) for index in side_b]
     requested = bin_size
     while True:
         sel_a, bounds_a, observed_a = _contact_grid(side_a, gene, gene2, bin_size, region, types, measure, orientation)
         sel_b, bounds_b, observed_b = _contact_grid(side_b, gene, gene2, bin_size, region, types, measure, orientation)
         bounds = _union_bounds(bounds_a, bounds_b)
-        grid_a = _side_grid(sel_a, bin_size, bounds)
-        grid_b = _side_grid(sel_b, bin_size, bounds)
-        ix, iy = np.nonzero((grid_a != 0) | (grid_b != 0))
+        grids_a = [_side_grid([sel], bin_size, bounds) for sel in sel_a]
+        grids_b = [_side_grid([sel], bin_size, bounds) for sel in sel_b]
+        occupied = np.zeros_like(grids_a[0], dtype=bool)
+        for grid in grids_a + grids_b:
+            occupied |= grid != 0
+        ix, iy = np.nonzero(occupied)
+        del occupied
         if fixed_bin or max_cells is None or len(ix) <= max_cells or bin_size >= 100_000:
             break
-        del grid_a, grid_b
+        del grids_a, grids_b
         bin_size *= 2
-    count_a, count_b = grid_a[ix, iy], grid_b[ix, iy]
-    del grid_a, grid_b
-    norm_a = count_a * (1e6 / library_a) if library_a else np.zeros(len(ix))
-    norm_b = count_b * (1e6 / library_b) if library_b else np.zeros(len(ix))
-    smallest = min([lib for lib in (library_a, library_b) if lib] or [1_000_000])
-    pseudocount = 1e6 / smallest
-    ratio = np.log2((norm_b + pseudocount) / (norm_a + pseudocount))
+
+    def side(grids: List[np.ndarray], libraries: List[int]) -> Tuple[np.ndarray, np.ndarray]:
+        raw = np.zeros(len(ix), dtype=np.int64)
+        total = np.zeros(len(ix), dtype=np.float64)
+        for grid, library in zip(grids, libraries):
+            values = grid[ix, iy]
+            raw += values
+            total += values * (1e6 / max(1, library) if normalisation == "library" else 1.0)
+        return raw, total / len(grids)
+
+    count_a, norm_a = side(grids_a, libraries_a)
+    count_b, norm_b = side(grids_b, libraries_b)
+    del grids_a, grids_b
+    pseudocount = 1.0 if normalisation == "library" else 0.5
+    effect = np.log2((norm_a + pseudocount) / (norm_b + pseudocount))
     observed = (max(observed_a[0], observed_b[0]), max(observed_a[1], observed_b[1]))
     length, length2 = _lengths_for(lengths, gene, gene2, observed)
     return {
         "gene": gene, "gene2": gene2 or gene, "bin_size": bin_size, "requested_bin_size": requested,
         "adjusted": bin_size != requested, "measure": measure, "orientation": orientation,
-        "normalization": "per_million_" + key, "length": length, "length2": length2, "region": region,
-        "cells": int(len(ix)), "library_a": library_a, "library_b": library_b, "pseudocount": pseudocount,
+        "normalisation": normalisation, "length": length, "length2": length2, "region": region,
+        "cells": int(len(ix)), "library_a": sum(libraries_a), "library_b": sum(libraries_b),
+        "libraries_a": libraries_a, "libraries_b": libraries_b, "pseudocount": pseudocount,
         "x": ((ix + bounds[0]) * bin_size).tolist(), "y": ((iy + bounds[2]) * bin_size).tolist(),
         "a": np.round(norm_a, 6).tolist(), "b": np.round(norm_b, 6).tolist(),
-        "a_count": count_a.tolist(), "b_count": count_b.tolist(), "log2ratio": np.round(ratio, 6).tolist(),
+        "a_count": count_a.tolist(), "b_count": count_b.tolist(),
+        "effect": np.round(effect, 6).tolist(), "log2ratio": np.round(-effect, 6).tolist(),
     }
 
 
@@ -764,9 +806,17 @@ def _bin_means(diff: np.ndarray, lo: int, hi: int, width: int) -> Tuple[np.ndarr
     return starts, ends, sums / (ends - starts + 1)
 
 
+def _add_partner(partners: Dict[str, List[int]], name: str, rects: Dict[str, np.ndarray], mask: np.ndarray) -> None:
+    entry = partners.setdefault(name, [0, 0, 0])
+    for slot, column in enumerate(("count", "support", "reads")):
+        entry[slot] += int(rects[column][mask].astype(np.int64).sum())
+
+
 def _partner_rows(partners: Dict[str, List[int]]) -> List[Dict[str, Any]]:
-    rows = [{"name": name, "records": int(v[0]), "reads": int(v[1])} for name, v in partners.items() if v[0]]
-    return sorted(rows, key=lambda row: (-row["reads"], -row["records"], row["name"]))
+    """By cluster support, then name, as the web Region Explorer orders its partners."""
+    rows = [{"name": name, "records": int(v[0]), "support": int(v[1]), "reads": int(v[2])}
+            for name, v in partners.items() if v[0]]
+    return sorted(rows, key=lambda row: (-row["support"], row["name"].casefold(), row["name"]))
 
 
 def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = None, end: Optional[int] = None, *,
@@ -775,7 +825,7 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
     """Interaction coverage along ``gene`` (the viewpoint) and its partners.
 
     Every arm on ``gene`` (both arms of an intramolecular hybrid) adds its
-    weight (1 per record, or its reads for ``measure="reads"``) to each
+    weight (1 per record, its cluster support or its reads, by ``measure``) to each
     nucleotide it covers inside ``[start, end]`` (inclusive; default: the
     observed start to the reference length).  ``bin_size`` > 1 reports the
     mean per nucleotide of each bin, as the web Viewpoint does; the bin grows
@@ -783,11 +833,11 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
 
     Returns ``{gene, partner, start, end, length, measure, requested_bin_size,
     bin_size, adjusted, records, reads, arms, max, bins: {start: [], end: [],
-    value: []}, partners: [{name, records, reads}]}``; ``records``/``reads``
-    count the hybrids with an arm in the range, ``arms`` the arms (records).
+    value: []}, partners: [{name, records, support, reads}]}``; ``records``/
+    ``support``/``reads`` count the hybrids with an arm in the range, ``arms``
+    the arms (records).
     """
-    if measure not in ("records", "reads"):
-        raise ValueError("measure must be 'records' or 'reads'")
+    _check_measure(measure)
     if isinstance(bin_size, bool) or not isinstance(bin_size, int) or not 1 <= bin_size <= 100_000:
         raise ValueError("bin_size must be an integer between 1 and 100000")
     lengths = _check_lengths(lengths)
@@ -798,7 +848,7 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
     lo = lo if lo is not None else (low if low is not None else 1)
     hi = hi if hi is not None else length
     out = {"gene": gene, "partner": partner, "length": length, "measure": measure, "requested_bin_size": bin_size,
-           "bin_size": bin_size, "adjusted": False, "records": 0, "reads": 0, "arms": 0, "max": 0.0,
+           "bin_size": bin_size, "adjusted": False, "records": 0, "support": 0, "reads": 0, "arms": 0, "max": 0.0,
            "start": lo, "end": hi, "bins": {"start": [], "end": [], "value": []}, "partners": []}
     if hi is None:
         return out
@@ -808,10 +858,10 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
     width = max(bin_size, -(-span // MAX_PROFILE_BINS))
     diff = np.zeros(span + 1, dtype=np.float64)
     partners: Dict[str, List[int]] = {}
-    records = reads = arms = 0
+    records = support = reads = arms = 0
     for rects, on1, on2, name1, name2 in _anchor_parts(opened, gene, partner, types):
         count = rects["count"].astype(np.int64)
-        weight = (count if measure == "records" else rects["reads"].astype(np.int64)).astype(np.float64)
+        weight = rects[MEASURES[measure]].astype(np.float64)
         matched = {}
         for arm, on in (("1", on1), ("2", on2)):
             if not on:
@@ -830,17 +880,16 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
         first, second = matched.get("1", none), matched.get("2", none)
         hit = first | second
         records += int(count[hit].sum())
+        support += int(rects["support"][hit].astype(np.int64).sum())
         reads += int(rects["reads"][hit].astype(np.int64).sum())
         # partner: arm 2's gene where arm 1 is the anchor in range, else arm 1's
         for name, mask in ((name2, first), (name1, second & ~first)):
-            if not mask.any():
-                continue
-            entry = partners.setdefault(name, [0, 0])
-            entry[0] += int(count[mask].sum())
-            entry[1] += int(rects["reads"][mask].astype(np.int64).sum())
+            if mask.any():
+                _add_partner(partners, name, rects, mask)
     starts, ends, values = _bin_means(diff, lo, hi, width)
     values = np.round(values, 4)
-    out.update({"bin_size": width, "adjusted": width != bin_size, "records": records, "reads": reads, "arms": arms,
+    out.update({"bin_size": width, "adjusted": width != bin_size, "records": records, "support": support, "reads": reads,
+                "arms": arms,
                 "max": float(values.max()) if len(values) else 0.0,
                 "bins": {"start": starts.tolist(), "end": ends.tolist(), "value": values.tolist()},
                 "partners": _partner_rows(partners)})
@@ -878,17 +927,18 @@ def _lookup(part: Dict[str, Any], key: tuple) -> Tuple[int, int]:
 
 def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, partner: Optional[str] = None,
            partner_start: Optional[int] = None, partner_end: Optional[int] = None, overlap: str = "any",
-           types: Optional[Sequence[str]] = None, limit: int = 100) -> Dict[str, Any]:
+           types: Optional[Sequence[str]] = None, limit: int = 100, measure: str = "support") -> Dict[str, Any]:
     """Hybrids with an arm on ``gene:[start, end]`` (and the other arm on
     ``partner``, inside ``[partner_start, partner_end]`` when given), as the
     web Region Explorer: either arm order matches.
 
     ``overlap``: ``any`` (the arm overlaps the range) or ``contained``.
     Returns ``{gene, start, end, partner, partner_start, partner_end, overlap,
-    records, reads, distinct, partners: [{name, records, reads}],
-    profile: {bin_size, adjusted, start: [], end: [], value: []}, rows: [...],
-    rows_exact}``.  The profile adds each matching hybrid's reads to every
-    bin of ``[start, end]`` its anchor arm covers.  ``rows`` are the
+    measure, records, support, reads, distinct, partners: [{name, records,
+    support, reads}], profile: {bin_size, adjusted, start: [], end: [],
+    value: []}, rows: [...], rows_exact}``.  The profile adds each matching
+    hybrid's weight (``measure``; the web's is cluster support) to every bin
+    of ``[start, end]`` its anchor arm covers.  ``rows`` are the
     ``limit`` strongest distinct interactions (same genes, coordinates and
     type, summed over the indexes): ``{gene1, start1, end1, gene2, start2,
     end2, type, records, reads}`` by reads, then records, then arm 1 start.
@@ -911,6 +961,7 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
         raise ValueError("partner_start must not exceed partner_end")
     if overlap not in OVERLAP_RULES:
         raise ValueError("overlap must be 'any' or 'contained'")
+    _check_measure(measure)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= MAX_LIMIT:
         raise ValueError("limit must be an integer between 0 and %d" % MAX_LIMIT)
     opened = _indexes(indexes)
@@ -920,7 +971,7 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
     nbins = -(-span // width)
     diff = np.zeros(nbins + 1, dtype=np.float64)
     partners: Dict[str, List[int]] = {}
-    records = reads = 0
+    records = support = reads = 0
     per_index: List[List[Dict[str, Any]]] = []
     for index in opened:
         parts = []
@@ -933,6 +984,7 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
                 s1 = s1[order]
             count = rects["count"].astype(np.int64)
             weight = rects["reads"].astype(np.int64)
+            profile_weight = rects[MEASURES[measure]].astype(np.float64)
             e1 = rects["e1"].astype(np.int64)
             s2, e2 = rects["s2"].astype(np.int64), rects["e2"].astype(np.int64)
             none = np.zeros(len(s1), dtype=bool)
@@ -945,12 +997,11 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
             if not hit.any():
                 continue
             records += int(count[hit].sum())
+            support += int(rects["support"][hit].astype(np.int64).sum())
             reads += int(weight[hit].sum())
             for name, mask in ((name2, forward), (name1, reverse & ~forward)):
                 if mask.any():
-                    entry = partners.setdefault(name, [0, 0])
-                    entry[0] += int(count[mask].sum())
-                    entry[1] += int(weight[mask].sum())
+                    _add_partner(partners, name, rects, mask)
             # profile: every anchor arm of a matching hybrid, clipped to the range
             for anchored, s, e in ((name1 == gene, s1, e1), (name2 == gene, s2, e2)):
                 if not anchored:
@@ -959,7 +1010,7 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
                 if keep.any():
                     first = (np.maximum(s[keep], lo) - lo) // width
                     last = (np.minimum(e[keep], hi) - lo) // width
-                    w = weight[keep].astype(np.float64)
+                    w = profile_weight[keep]
                     diff += np.bincount(first, weights=w, minlength=nbins + 1)[:nbins + 1]
                     diff -= np.bincount(last + 1, weights=w, minlength=nbins + 1)[:nbins + 1]
             parts.append({"name1": name1, "name2": name2, "s1": s1, "e1": e1, "s2": s2, "e2": e2,
@@ -1004,7 +1055,8 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
                          "start2": item_key[2], "end2": item_key[3], "type": item_key[4] or None, "records": n, "reads": r})
     starts = lo + np.arange(nbins, dtype=np.int64) * width
     return {"gene": gene, "start": lo, "end": hi, "partner": partner, "partner_start": plo, "partner_end": phi,
-            "overlap": overlap, "records": records, "reads": reads, "distinct": distinct,
+            "overlap": overlap, "measure": measure, "records": records, "support": support, "reads": reads,
+            "distinct": distinct,
             "partners": _partner_rows(partners),
             "profile": {"bin_size": width, "adjusted": width != requested, "start": starts.tolist(),
                         "end": np.minimum(starts + width - 1, hi).tolist(),

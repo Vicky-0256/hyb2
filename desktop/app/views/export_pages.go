@@ -119,9 +119,11 @@ func (p *explorePage) exportContactSVG() {
 	if d == nil {
 		return
 	}
-	cells, view := s.heat.Cells(), s.heat.View()
+	// light colours whatever the theme, as the web's exports
+	cells, view := d.cells(s.colorCap, s.scale, false), s.heat.View()
 	title := p.contactTitle()
-	note := fmt.Sprintf("Viridis colours, saturated at %s %s (%s, %s scale).", formatCount(d.colorCap(s.colorCap)),
+	note := fmt.Sprintf("Teal–violet scale, saturated at %s %s (%s, %s scale).",
+		formatCount(capCount(d.colorCap(s.colorCap, s.scale), s.scale)),
 		strings.ToLower(d.measure), strings.ToLower(s.colorCap), strings.ToLower(s.scale))
 	render := func() ([]byte, error) {
 		// Weakest first, so a capped map keeps the strongest cells.

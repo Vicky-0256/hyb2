@@ -5,7 +5,7 @@ Two modes share one request shape::
     {"operation": "structure_run", "project_path": ..., "task_id": ..., "run_dir": ...,
      "sample_ids": [...] | "hyb_paths": [...], "reference": <fasta path>, "gene_id": ...,
      "mode": "genome" | "windows", "windows": [{"start": 1, "end": 1500}, ...],
-     "parameters": {"alpha": 0.5, "beam": 100, "allow_pseudoknot": ..., ...},
+     "parameters": {"alpha": 0.5, "beam": 20, "allow_pseudoknot": ..., ...},
      "workers": <int>, "memory_budget_mb": <int>}
 
 * ``genome`` folds the whole reference sequence once (pseudoknot-free by
@@ -44,10 +44,12 @@ _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 MAX_WINDOWS = 512
 MAX_HYB_FILES = 64
 MIN_WINDOW_NT = 10
+# The web RNA Structure page's CPLfold defaults (web/analysis-data.js
+# defaultStructureState), so a fold of the same inputs gives the same result.
 DEFAULTS = {
     "alpha": 0.5,
-    "beam": 100,
-    "max_phase1": 1,
+    "beam": 20,
+    "max_phase1": 3,
     "energy_delta": 5.0,
     "beta": 0.0,
     "energy_model": "DP09",
@@ -249,7 +251,7 @@ def _reference_sequence(path: Path, gene_id: Optional[str]) -> Tuple[str, str]:
 def _parameters(raw: Any, mode: str) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     values: Dict[str, Any] = dict(DEFAULTS)
-    values["allow_pseudoknot"] = mode == "windows"
+    values["allow_pseudoknot"] = False  # the web's default topology: secondary structure only
     for key, value in raw.items():
         key = _ALIASES.get(key, key)
         if key in _BOUNDS:

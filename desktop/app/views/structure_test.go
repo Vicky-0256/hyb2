@@ -72,7 +72,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 		t.Fatalf("arcs %d pairs, %v-%v of %d", len(p.arcs.A), p.arcs.Start, p.arcs.End, p.arcs.Length)
 	}
 	// The form estimates the whole-RNA fold (built-in rate, no history).
-	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 1 min 25 s (rough; the first fold after installing also prepares the folding engine, about 1 min more)",
+	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 19 s (rough; the first fold after installing also prepares the folding engine, about 1 min more)",
 		"about 15.9 GB of the 24.0 GB tasks may use"} {
 		if !tt.HasText(text) {
 			t.Fatalf("no fold check %q: %q", text, tt.Texts())
@@ -86,7 +86,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	tt.Frame()
 	found := false
 	for _, text := range tt.Texts() {
-		found = found || text == "about 11 s (rough; the first fold after installing also prepares the folding engine, about 1 min more)"
+		found = found || text == "about 4 s (rough; the first fold after installing also prepares the folding engine, about 1 min more)"
 	}
 	if !found {
 		t.Fatalf("no windows estimate: %q", tt.Texts())
@@ -161,7 +161,9 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 		t.Fatalf("started %+v", started)
 	}
 	params := started[0].Parameters.(map[string]any)
-	if params["allow_pseudoknot"] != false || params["alpha"] != 0.5 || params["beam"] != 100 {
+	// the web RNA Structure page's CPLfold defaults
+	if params["allow_pseudoknot"] != false || params["alpha"] != 0.5 || params["beam"] != 20 || params["max_phase1"] != 3 ||
+		params["energy_delta"] != 5.0 || params["beta"] != 0.0 || params["energy_model"] != "DP09" {
 		t.Fatalf("params %+v", params)
 	}
 	// The fold's status stays on the page, with Cancel; Run waits for it.
@@ -181,7 +183,8 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	a.Navigate("structure", map[string]any{"prefill": map[string]any{"gene": africaGene,
 		"windows": []map[string]any{{"start": 3000, "end": 3400}}, "selectionKey": "c:BRA", "source": "the contact map"}})
 	csSettle(a, tt)
-	if p.mode != "windows" || !p.pseudoknot || p.windows != "3000-3400" || p.evidence != "c:BRA" {
+	// pseudoknots stay off, the web's default topology
+	if p.mode != "windows" || p.pseudoknot || p.windows != "3000-3400" || p.evidence != "c:BRA" {
 		t.Fatalf("prefill %q %v %q %q", p.mode, p.pseudoknot, p.windows, p.evidence)
 	}
 	if !tt.HasText("Prefilled from the contact map. Check the window, then press Run fold below.") || !tt.HasText("Allow pseudoknots in the windows") {
@@ -239,7 +242,7 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	}
 	req := started[1]
 	params = req.Parameters.(map[string]any)
-	if *req.Mode != "windows" || strings.Join(req.SampleIDs, ",") != "ZBRA_REP1,ZBRA_REP2" || params["allow_pseudoknot"] != true ||
+	if *req.Mode != "windows" || strings.Join(req.SampleIDs, ",") != "ZBRA_REP1,ZBRA_REP2" || params["allow_pseudoknot"] != false ||
 		len(req.Windows) != 2 || req.Windows[1] != (core.Window{Start: 5000, End: 5600}) {
 		t.Fatalf("request %+v params %+v", req, params)
 	}

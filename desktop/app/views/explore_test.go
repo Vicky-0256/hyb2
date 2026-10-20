@@ -96,7 +96,7 @@ func TestExploreContactMapPickShowHybridsAndFold(t *testing.T) {
 		t.Fatalf("tab %d data %v err %q texts %q", p.tab, p.cm.data, p.cm.load.err, tt.Texts())
 	}
 	sent := f.last("analysis_contact_bins")
-	if fmt.Sprint(sent["sample_ids"]) != "[SUB_REP1 SUB_REP2]" || sent["gene"] != zikvGene || sent["max_cells"] != float64(autoMaxCells) {
+	if fmt.Sprint(sent["sample_ids"]) != "[SUB_REP1 SUB_REP2]" || sent["gene"] != zikvGene || sent["max_cells"] != float64(contactMaxCells) {
 		t.Fatalf("contact payload %v", sent)
 	}
 	d := p.cm.data

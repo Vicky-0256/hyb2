@@ -181,7 +181,7 @@ const (
 // sum of (length/1000)^1.7 x beam/100.
 func FoldUnits(lengths []int, beam int) float64 {
 	if beam <= 0 {
-		beam = 100
+		beam = 20 // the runtime's default (structure.DEFAULTS, as the web page)
 	}
 	var units float64
 	for _, n := range lengths {

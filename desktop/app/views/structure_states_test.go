@@ -153,13 +153,13 @@ func TestStructureFoldStates(t *testing.T) {
 		"Its files are missing from the project folder; it cannot be shown. Run the fold again to recreate it.")
 
 	// Advanced settings: folded, values always shown, flagged when changed.
-	expect(tt, "Advanced settings", "Evidence weight 0.50 · beam 100 · defaults")
+	expect(tt, "Advanced settings", "Evidence weight 0.50 · beam 20 · phase 1 3 · energy window 5 · DP09 · beta 0.00 · defaults")
 	if tt.HasText("Beam size") {
 		t.Fatal("advanced settings open by default")
 	}
 	p.beam = 200
 	tt.Frame()
-	expect(tt, "Evidence weight 0.50 · beam 200 · changed from the defaults")
+	expect(tt, "Evidence weight 0.50 · beam 200 · phase 1 3 · energy window 5 · DP09 · beta 0.00 · changed from the defaults")
 	p.beam = stDefaultBeam
 
 	// Memory over the budget blocks the run and says what to do.

@@ -150,13 +150,23 @@ type cmpQuickResult struct {
 	A        []float64  `json:"a"`
 	B        []float64  `json:"b"`
 	Log2     []*float64 `json:"log2ratio"`
+	// Effect is the web Compare page's log2((A + p) / (B + p)) on the
+	// condition means of per-million values (p = Pseudocount).
+	Effect      []*float64 `json:"effect"`
+	Pseudocount float64    `json:"pseudocount"`
 }
 
 type cmpQuickRow struct {
-	X, Y  int
-	A, B  float64
-	Ratio *float64 // log2 A/B
+	X, Y       int
+	A, B       float64  // condition values: mean per million of each group's datasets
+	RawA, RawB float64  // summed raw counts
+	Ratio      *float64 // log2 A/B (the web's effect)
 }
+
+// quickBins are the web Compare page's bin sizes; quickMaxCells its cell limit.
+var quickBins = []string{"5 nt", "10 nt", "25 nt", "50 nt", "100 nt"}
+
+const quickMaxCells = 1_500_000
 
 // cmpContext names the two groups of a result for Locate / Region / Fold.
 type cmpContext struct {
@@ -219,22 +229,21 @@ type comparePage struct {
 	shownKey  string
 
 	quick struct {
-		busy     bool
-		err      string
-		data     *cmpQuickResult
-		keyA     string
-		keyB     string
-		gene     string
-		idsA     []string
-		idsB     []string
-		bin      string
-		minCount float64
-		rows     []cmpQuickRow
-		rowsKey  string
-		table    ui.ListState
-		row      int
-		heat     *widgets.Heatmap
-		heatKey  string
+		busy    bool
+		err     string
+		data    *cmpQuickResult
+		keyA    string
+		keyB    string
+		gene    string
+		idsA    []string
+		idsB    []string
+		bin     string
+		rows    []cmpQuickRow
+		rowsKey string
+		table   ui.ListState
+		row     int
+		heat    *widgets.Heatmap
+		heatKey string
 	}
 
 	foldOpen bool
@@ -268,7 +277,7 @@ func (p *comparePage) reset() {
 	p.simHeat.MinCell = 3
 	p.heatKey, p.simKey, p.shownKey = "", "", ""
 	p.quick.busy, p.quick.err, p.quick.data = false, "", nil
-	p.quick.bin, p.quick.minCount, p.quick.row = "50 nt", 5, -1
+	p.quick.bin, p.quick.row = "10 nt", -1
 	p.quick.table.Selected = &p.quick.row
 	p.quick.heat = widgets.NewHeatmap()
 	p.quick.heatKey, p.quick.rowsKey = "", ""
@@ -658,8 +667,8 @@ func (p *comparePage) startFold() {
 		gene, mode := g.gene, "windows"
 		req := core.TaskStartRequest{Kind: "structure", SampleIDs: append([]string(nil), g.ids...), GeneID: &gene, Mode: &mode,
 			Windows:    []core.Window{{Start: uint64(plan.start), End: uint64(end)}},
-			Parameters: map[string]any{"allow_pseudoknot": true}}
-		mem := StructureMemClaim(req, a.Project.GeneLength(g.gene), true)
+			Parameters: map[string]any{"allow_pseudoknot": false}}
+		mem := StructureMemClaim(req, a.Project.GeneLength(g.gene), false)
 		req.MemMB = &mem
 		label := fmt.Sprintf("Structure · %s · %d-%d", g.label, plan.start, end)
 		a.StartTask(req, label, func(t model.Task, err error) {
@@ -693,7 +702,7 @@ func (p *comparePage) runQuick() {
 	}
 	bin, _ := strconv.Atoi(strings.TrimSuffix(p.quick.bin, " nt"))
 	if bin <= 0 {
-		bin = 50
+		bin = 10
 	}
 	q := &p.quick
 	q.busy, q.err, q.data, q.row = true, "", nil, -1
@@ -702,7 +711,7 @@ func (p *comparePage) runQuick() {
 	path := a.Project.Path
 	a.Go(func() func() {
 		raw, err := a.B.Query(path, "compare_bins", core.Obj{"sample_ids_a": idsA, "sample_ids_b": idsB, "gene": gene,
-			"bin_size": bin, "max_cells": 400000})
+			"bin_size": bin, "max_cells": quickMaxCells, "orientation": "both", "normalisation": "library"})
 		var result cmpQuickResult
 		if err == nil {
 			err = model.Decode(raw, &result)
@@ -793,10 +802,7 @@ func (p *comparePage) controls(c *ui.Context) {
 						ui.NumberInput(c.Key("cmp-simmin"), &p.simMin, 1, 1e6, 1).Width(110).Label("Similarity minimum count")
 					})
 					Field(c, "Quick view bin", func() {
-						ui.Select(c.Key("cmp-bin"), &p.quick.bin, []string{"10 nt", "25 nt", "50 nt", "100 nt", "200 nt"}).Width(110).Label("Quick view bin")
-					})
-					Field(c, "Quick view min. count", func() {
-						ui.NumberInput(c.Key("cmp-qmin"), &p.quick.minCount, 0, 1e6, 1).Width(110).Label("Quick view minimum count")
+						ui.Select(c.Key("cmp-bin"), &p.quick.bin, quickBins).Width(110).Label("Quick view bin")
 					})
 				})
 				ui.Text(c, "Only the differential test says whether a contact differs: it uses the replicates as the noise estimate and gives a padj per 10-nt cell, so it needs at least two biological replicates per condition. The quick view and the similarity heatmap only describe counts. The test follows hyb2_compare: DESeq2 Wald test (condition one vs two, alpha 0.01, independent filtering); cells with padj below the cutoff are significant, and significant cells within the merge range of a stronger one are merged into it. The similarity heatmap follows plot_similarity_map: each condition's replicates are summed into one map (as if their .hyb files were concatenated), cells below the similarity minimum are dropped from each map, and a cell in both maps shows the smaller count (1 keeps every cell, as hyb2 does).").
@@ -1351,17 +1357,14 @@ func (p *comparePage) quickRows() []cmpQuickRow {
 	if q.data == nil {
 		return nil
 	}
-	key := fmt.Sprintf("%p/%g", q.data, q.minCount)
+	key := fmt.Sprintf("%p", q.data)
 	if key == q.rowsKey {
 		return q.rows
 	}
 	d := q.data
-	counts := func(raw, norm []float64, i int) float64 {
-		if i < len(raw) {
-			return raw[i]
-		}
-		if i < len(norm) {
-			return norm[i]
+	at := func(values []float64, i int) float64 {
+		if i < len(values) {
+			return values[i]
 		}
 		return 0
 	}
@@ -1370,13 +1373,11 @@ func (p *comparePage) quickRows() []cmpQuickRow {
 		if i >= len(d.Y) {
 			break
 		}
-		a, b := counts(d.ACount, d.A, i), counts(d.BCount, d.B, i)
-		if a+b < q.minCount {
-			continue
-		}
-		row := cmpQuickRow{X: d.X[i], Y: d.Y[i], A: a, B: b}
-		// Backend log2ratio = log2(B / A); shown as A / B.
-		if i < len(d.Log2) && d.Log2[i] != nil {
+		row := cmpQuickRow{X: d.X[i], Y: d.Y[i], A: at(d.A, i), B: at(d.B, i), RawA: at(d.ACount, i), RawB: at(d.BCount, i)}
+		if i < len(d.Effect) && d.Effect[i] != nil {
+			r := *d.Effect[i]
+			row.Ratio = &r
+		} else if i < len(d.Log2) && d.Log2[i] != nil { // a result from before the effect field
 			r := -*d.Log2[i]
 			row.Ratio = &r
 		}
@@ -1392,12 +1393,25 @@ func (p *comparePage) quickRows() []cmpQuickRow {
 		if abs(rows[i].Ratio) != abs(rows[j].Ratio) {
 			return abs(rows[i].Ratio) > abs(rows[j].Ratio)
 		}
-		return rows[i].A+rows[i].B > rows[j].A+rows[j].B
+		return rows[i].RawA+rows[i].RawB > rows[j].RawA+rows[j].RawB
 	})
 	q.rows, q.rowsKey = rows, key
 	q.row = -1
 	q.table = ui.ListState{}
 	return rows
+}
+
+// quickEffectCap is the web's effect cap: the 95th percentile of |effect|,
+// at least 0.25.
+func quickEffectCap(rows []cmpQuickRow) float64 {
+	values := make([]float64, 0, len(rows))
+	for _, r := range rows {
+		if r.Ratio != nil {
+			values = append(values, math.Abs(*r.Ratio))
+		}
+	}
+	sort.Float64s(values)
+	return math.Max(0.25, quantile(values, 0.95))
 }
 
 func (p *comparePage) quickContext() cmpContext {
@@ -1438,14 +1452,15 @@ func (p *comparePage) quickView(c *ui.Context) {
 				if d.LibraryA != nil && d.LibraryB != nil {
 					meta += " · libraries " + FormatNumber(int64(*d.LibraryA)) + " / " + FormatNumber(int64(*d.LibraryB))
 				}
-				ui.Text(c, meta+" · no statistics; use the differential test for padj").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, meta+" · mean per million of each group's datasets, log2((A + 1) / (B + 1)) · no statistics; use the differential test for padj").
+					FontSize(12).TextColor(t.TextMuted)
 			})
 			if ui.Button(c, "Back to tests").Clicked() {
 				p.mode = cmpModeTest
 			}
 		})
-		if q.heatKey != q.rowsKey {
-			q.heatKey = q.rowsKey
+		if heatKey := fmt.Sprint(q.rowsKey, t.Dark); q.heatKey != heatKey {
+			q.heatKey = heatKey
 			length := d.Length
 			if length <= 0 {
 				for i := range d.X {
@@ -1453,7 +1468,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 				}
 				length += d.BinSize
 			}
-			q.heat.SetCells(cmpQuickCells(rows, d.BinSize), float64(length), float64(length))
+			q.heat.SetCells(cmpQuickCells(rows, d.BinSize, t.Dark), float64(length), float64(length))
 		}
 		if q.row >= 0 && q.row < len(rows) {
 			r := rows[q.row]
@@ -1463,7 +1478,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 		}
 		ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Gap(6).Children(func() {
-				ev := q.heat.Show(c.Key("quick-heat"), p.mapSide(), "Normalised contact difference, red: higher in A, blue: higher in B")
+				ev := q.heat.Show(c.Key("quick-heat"), p.mapSide(), "Normalised contact difference, violet: higher in A, teal: higher in B")
 				if ev.Clicked >= 0 {
 					cell := q.heat.Cells()[ev.Clicked]
 					for i, r := range rows {
@@ -1473,15 +1488,15 @@ func (p *comparePage) quickView(c *ui.Context) {
 					}
 					q.heat.Picked = -1
 				}
-				cmpLegend(c, ctx.LabelA, ctx.LabelB)
+				effectLegend(c, ctx.LabelA, ctx.LabelB, quickEffectCap(rows))
 			})
 			ui.Column(c).Gap(8).Grow(1).MinWidth(320).Children(func() {
 				ui.Text(c, "Bins ("+FormatNumber(int64(len(rows)))+")").Bold()
 				if len(rows) == 0 {
-					ui.Text(c, "No bin reaches the minimum count.").TextColor(t.TextMuted)
+					ui.Text(c, "No bin has hybrids in either group.").TextColor(t.TextMuted)
 				} else {
 					cols := []ui.TableColumn{{Title: "Arm 1 (nt)", Width: 112}, {Title: "Arm 2 (nt)", Width: 112},
-						{Title: "A", Width: 64, Align: ui.End}, {Title: "B", Width: 64, Align: ui.End}, {Title: "log2 A/B", Align: ui.End}}
+						{Title: "A per M", Width: 76, Align: ui.End}, {Title: "B per M", Width: 76, Align: ui.End}, {Title: "log2 A/B", Align: ui.End}}
 					q.table.Selected = &q.row
 					q.table.Key = func(i int) any { return [2]int{rows[i].X, rows[i].Y} }
 					ui.Table(c.Key("quick-table-"+q.rowsKey), &q.table, cols, len(rows), func(i, col int) {
@@ -1492,13 +1507,13 @@ func (p *comparePage) quickView(c *ui.Context) {
 						case 1:
 							ui.Text(c, fmt.Sprintf("%d–%d", r.Y, r.Y+d.BinSize-1)).SingleLine()
 						case 2:
-							ui.Text(c, FormatNumber(int64(r.A)))
+							ui.Text(c, trimFloat(r.A)).Tooltip(FormatNumber(int64(r.RawA)) + " raw")
 						case 3:
-							ui.Text(c, FormatNumber(int64(r.B)))
+							ui.Text(c, trimFloat(r.B)).Tooltip(FormatNumber(int64(r.RawB)) + " raw")
 						case 4:
-							color := cmpBlue
+							color := effectColor(-1, t.Dark)
 							if r.Ratio != nil && *r.Ratio > 0 {
-								color = cmpRed
+								color = effectColor(1, t.Dark)
 							}
 							text := ui.Text(c, cmpFloat(r.Ratio, "%.2f"))
 							if i != q.row {
@@ -1509,7 +1524,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 				}
 				var target *cmpTarget
 				if q.row >= 0 && q.row < len(rows) {
-					target = &cmpTarget{X: rows[q.row].X, Y: rows[q.row].Y, HigherInB: rows[q.row].B > rows[q.row].A}
+					target = &cmpTarget{X: rows[q.row].X, Y: rows[q.row].Y, HigherInB: rows[q.row].Ratio != nil && *rows[q.row].Ratio < 0}
 				}
 				p.actionRow(c, target, ctx)
 			})
@@ -1517,23 +1532,39 @@ func (p *comparePage) quickView(c *ui.Context) {
 	})
 }
 
-// cmpQuickCells colours bins by log2 A/B: red higher in A, blue higher in B.
-func cmpQuickCells(rows []cmpQuickRow, bin int) []widgets.Cell {
+// cmpQuickCells colours bins by the effect over its cap, as the web's
+// effect map: violet higher in A, teal higher in B.
+func cmpQuickCells(rows []cmpQuickRow, bin int, dark bool) []widgets.Cell {
+	limit := quickEffectCap(rows)
 	out := make([]widgets.Cell, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
 		r := rows[i]
 		if r.Ratio == nil {
 			continue
 		}
-		strength := math.Min(1, math.Abs(*r.Ratio)/3)
-		color := cmpBlue
-		if *r.Ratio > 0 {
-			color = cmpRed
-		}
 		out = append(out, widgets.Cell{X: float64(r.X), Y: float64(r.Y), W: float64(bin), H: float64(bin),
-			Color: color.Alpha(float32(0.15 + 0.85*strength))})
+			Color: effectColor(*r.Ratio/limit, dark)})
 	}
 	return out
+}
+
+// effectLegend is the quick view's scale: teal (B) through the surface to violet (A).
+func effectLegend(c *ui.Context, labelA, labelB string, limit float64) {
+	t := c.Theme()
+	ui.Column(c).Gap(4).Width(260).Children(func() {
+		ui.Box(c).FillWidth().Height(10).Radius(3).Draw(func(pt *ui.Painter, r ui.Rect) {
+			steps := 48
+			for i := range steps {
+				w := r.W / float32(steps)
+				v := -1 + 2*float64(i)/float64(steps-1)
+				pt.Fill(ui.Rect{X: r.X + float32(i)*w, Y: r.Y, W: w + 0.5, H: r.H}, effectColor(v, t.Dark), 0)
+			}
+		})
+		ui.Row(c).Children(func() {
+			ui.Text(c, fmt.Sprintf("≤ −%s · higher in %s", trimFloat(limit), labelB)).FontSize(11).TextColor(t.TextMuted).Grow(1)
+			ui.Text(c, fmt.Sprintf("higher in %s · ≥ %s", labelA, trimFloat(limit))).FontSize(11).TextColor(t.TextMuted)
+		})
+	})
 }
 
 func cmpMin(a, b int) int {

@@ -73,6 +73,8 @@ type exploreSummary struct {
 	types   []string
 	records int64
 	reads   int64
+	// extents: the observed arm range of each gene {smallest start, largest end}
+	extents map[string][2]int
 }
 
 func newExplorePage(a *App) *explorePage {
@@ -122,7 +124,7 @@ func (p *explorePage) Show() {
 	switch p.tab {
 	case tabContact:
 		if bin := int(num(opts["binSize"])); bin > 0 {
-			p.cm.bin = binAuto
+			p.cm.bin = binDefault
 			for _, option := range binOptions {
 				if option == fmt.Sprintf("%d nt", bin) {
 					p.cm.bin = option
@@ -248,6 +250,14 @@ func (p *explorePage) loadSummary() {
 			s.types = append(s.types, t.Name)
 		}
 		s.records, s.reads = int64(num(merged["records"])), int64(num(merged["reads"]))
+		s.extents = map[string][2]int{}
+		if extents, ok := merged["extents"].(map[string]any); ok {
+			for name, v := range extents {
+				if e, ok := v.(map[string]any); ok && e["min"] != nil {
+					s.extents[name] = [2]int{int(num(e["min"])), int(num(e["max"]))}
+				}
+			}
+		}
 		return func() { p.summary = s }, nil
 	})
 }

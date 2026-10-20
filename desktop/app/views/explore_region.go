@@ -43,6 +43,7 @@ type regionData struct {
 	gene               string
 	f                  regionFilters
 	records, reads     int64
+	support            int64
 	distinct           int64
 	hasDistinct, exact bool
 	partners           []partnerTotal
@@ -69,17 +70,29 @@ func (s *regionState) init() {
 	s.hover = -1
 }
 
-// selectionChanged starts a new gene at its first 500 nt.
+// selectionChanged starts a new gene at the web's default range, set by
+// defaultRange once the summary gives the gene's observed extent.
 func (s *regionState) selectionChanged(geneChanged bool, length int) {
 	if geneChanged || s.applied.end == 0 {
-		end := 500
-		if length > 0 {
-			end = min(end, length)
-		}
-		s.applyRange(1, end)
+		s.applied.start, s.applied.end = 0, 0
+		s.start, s.end, s.inputErr = "", "", ""
 		s.partner, s.partnerStart, s.partnerEnd = allPartners, "", ""
 		s.applied.partner, s.applied.partnerStart, s.applied.pEnd = "", 0, 0
 	}
+}
+
+// defaultRange is the web Region Explorer's: the observed start to 200 nt
+// after it (within the observed end), else 1–201 of the reference.
+func (s *regionState) defaultRange(extent [2]int, known bool, length int) {
+	if known && extent[0] > 0 {
+		s.applyRange(extent[0], min(extent[1], extent[0]+200))
+		return
+	}
+	end := 201
+	if length > 0 {
+		end = min(end, length)
+	}
+	s.applyRange(1, end)
 }
 
 // applyRange sets the anchor range (inputs and applied).
@@ -123,7 +136,11 @@ func (p *explorePage) regionKey() string {
 func (p *explorePage) loadRegion() {
 	s := &p.rg
 	if s.applied.end == 0 {
-		return
+		if p.summary.extents == nil {
+			return // the summary (and the gene's extent) is still loading
+		}
+		extent, known := p.summary.extents[p.gene]
+		s.defaultRange(extent, known, p.geneLength(p.gene))
 	}
 	path, ids, gene, f := p.a.Project.Path, p.ids, p.gene, s.applied
 	p.ensure(&s.load, p.regionKey(), func() (func(), error) {
@@ -148,7 +165,7 @@ func (p *explorePage) loadRegion() {
 			f.start, f.end = v, int(num(got["end"])) // as answered
 		}
 		d := &regionData{gene: gene, f: f, records: int64(num(got["records"])), reads: int64(num(got["reads"])),
-			exact: got["rows_exact"] != false}
+			support: int64(num(got["support"])), exact: got["rows_exact"] != false}
 		if v, ok := got["distinct"].(float64); ok {
 			d.distinct, d.hasDistinct = int64(v), true
 		}
@@ -205,15 +222,16 @@ func (p *explorePage) regionView(c *ui.Context) {
 						ui.Text(c, d.gene+" · "+regionSubtitle(d.f)).FontSize(12).TextColor(t.TextMuted)
 					})
 					stat(c, "Hybrids", FormatNumber(d.records))
+					stat(c, "Cluster support", FormatNumber(d.support))
 					stat(c, "Reads", FormatNumber(d.reads))
 					stat(c, "Partners", FormatNumber(int64(len(d.partners))))
 				})
-				ev := s.profile.Show(c, 140, "Reads along "+d.gene, profileColor(t))
+				ev := s.profile.Show(c, 140, "Cluster support along "+d.gene, profileColor(t))
 				s.hover = ev.Hover
-				readout := fmt.Sprintf("Reads of the matching hybrids per %d nt bin of the anchor arm.", d.bin)
+				readout := fmt.Sprintf("Cluster support of the matching hybrids per %d nt bin of the anchor arm.", d.bin)
 				if i := s.hover; i >= 0 && i < s.profile.Len() {
 					start, end, v := s.profile.Bin(i)
-					readout = fmt.Sprintf("%s · %s reads", span(start, end), trimFloat(v))
+					readout = fmt.Sprintf("%s · %s support", span(start, end), trimFloat(v))
 				}
 				ui.Text(c, readout).FontSize(12).TextColor(t.TextMuted)
 				ui.Row(c).Gap(8).Children(func() {
@@ -225,7 +243,7 @@ func (p *explorePage) regionView(c *ui.Context) {
 					}
 				})
 			})
-			partnerCard(c, "Partners", d.partners, true)
+			partnerCard(c, "Partners", d.partners, measureSupport)
 			p.regionTable(c, d)
 		})
 	})

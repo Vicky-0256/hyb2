@@ -18,10 +18,31 @@ import (
 	"hyb2desktop/model"
 )
 
+// The web RNA Structure page's CPLfold defaults (web/analysis-data.js).
 const (
-	stDefaultAlpha = 0.5
-	stDefaultBeam  = 100
+	stDefaultAlpha  = 0.5
+	stDefaultBeam   = 20
+	stDefaultPhase1 = 3
+	stDefaultDelta  = 5
+	stDefaultBeta   = 0
+	stDefaultModel  = "DP09"
 )
+
+// stModels are CPLfold's energy models, labelled as on the web page.
+var (
+	stModels      = []string{"DP09", "DP03", "CC06", "CC09", "RE"}
+	stModelLabels = []string{"DP09", "DP03", "CC06", "CC09", "RE (Rivas–Eddy)"}
+)
+
+func (p *structurePage) resetFoldSettings() {
+	p.alpha, p.beam, p.phase1, p.delta, p.beta, p.model =
+		stDefaultAlpha, stDefaultBeam, stDefaultPhase1, stDefaultDelta, stDefaultBeta, stDefaultModel
+}
+
+func (p *structurePage) foldSettingsChanged() bool {
+	return p.alpha != stDefaultAlpha || int(p.beam) != stDefaultBeam || int(p.phase1) != stDefaultPhase1 ||
+		p.delta != stDefaultDelta || p.beta != stDefaultBeta || p.model != stDefaultModel
+}
 
 // foldPlan is the fold the form describes, checked.
 type foldPlan struct {
@@ -59,7 +80,8 @@ func (p *structurePage) plan() foldPlan {
 			pl.problems = append(pl.problems, msg)
 		}
 	}
-	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "allow_pseudoknot": false}
+	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
+		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": false}
 	mode := p.mode
 	pl.req = core.TaskStartRequest{Kind: "structure", SampleIDs: pl.ids, GeneID: &pl.gene, Mode: &mode, Parameters: params}
 	workers := uint32(max(int(p.workers), 1))
@@ -222,12 +244,13 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 	}
 }
 
-// advanced: alpha, beam and parallel windows, folded away. Their values
-// stay visible in the summary line, flagged when changed.
+// advanced: the CPLfold settings and parallel windows, folded away. Their
+// values stay visible in the summary line, flagged when changed.
 func (p *structurePage) advanced(c *ui.Context) {
 	t := c.Theme()
-	changed := p.alpha != stDefaultAlpha || int(p.beam) != stDefaultBeam
-	summary := fmt.Sprintf("Evidence weight %.2f · beam %d", p.alpha, int(p.beam))
+	changed := p.foldSettingsChanged()
+	summary := fmt.Sprintf("Evidence weight %.2f · beam %d · phase 1 %d · energy window %g · %s · beta %.2f",
+		p.alpha, int(p.beam), int(p.phase1), p.delta, p.model, p.beta)
 	if p.mode == "windows" {
 		summary += fmt.Sprintf(" · %d window%s at once", int(p.workers), plural(int(p.workers)))
 	}
@@ -250,13 +273,39 @@ func (p *structurePage) advanced(c *ui.Context) {
 			row("st-alpha", "Evidence weight (alpha)", &p.alpha, 0, 1, 0.05,
 				"How strongly chimeric reads pull bases together, 0 to 1. 0 ignores them (energy only). Default 0.5.")
 			row("st-beam", "Beam size", &p.beam, 1, 1000, 10,
-				"How many partial structures CPLfold keeps per position. Larger is slower. Default 100.")
+				"How many partial structures CPLfold keeps per position. Larger is slower. Default 20, as on the web.")
+			row("st-phase1", "Phase-1 candidates", &p.phase1, 1, 20, 1,
+				"Candidate structures carried from the first phase into the second. Default 3.")
+			row("st-delta", "Energy window", &p.delta, 0, 50, 1,
+				"kcal/mol above the best structure within which candidates are kept. Default 5.")
+			row("st-beta", "Pseudoknot beta", &p.beta, 0, 1, 0.05,
+				"Weight of the pseudoknot energy term, 0 to 1. Default 0.")
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Energy model").FontSize(12).Bold().Width(150)
+					i := 0
+					for k, m := range stModels {
+						if m == p.model {
+							i = k
+						}
+					}
+					label := stModelLabels[i]
+					if ui.Select(c.Key("st-model"), &label, stModelLabels).Grow(1).Label("Energy model").Changed() {
+						for k, l := range stModelLabels {
+							if l == label {
+								p.model = stModels[k]
+							}
+						}
+					}
+				})
+				ui.Text(c, "Nearest-neighbour parameters for the free energy. Default DP09.").FontSize(12).TextColor(t.TextMuted)
+			})
 			if p.mode == "windows" {
 				row("st-workers", "Windows at once", &p.workers, 1, 256, 1,
 					"Windows folded in parallel; each needs its own memory. Default: your CPU budget.")
 			}
 			if ui.Button(c, "Reset to defaults").Disabled(!changed).Clicked() {
-				p.alpha, p.beam = stDefaultAlpha, stDefaultBeam
+				p.resetFoldSettings()
 			}
 		})
 	})

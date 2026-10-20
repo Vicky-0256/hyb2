@@ -347,7 +347,10 @@ type structurePage struct {
 	windows        string
 	pseudoknot     bool
 	alpha, beam    float64
-	workers        float64
+	// the other CPLfold settings, as on the web RNA Structure page
+	phase1, delta, beta float64
+	model               string
+	workers             float64
 	// estKey is the form state est was computed for (time and memory of
 	// the fold the form describes).
 	estKey      string
@@ -400,7 +403,8 @@ func newStructurePage(a *App) *structurePage {
 
 func (p *structurePage) reset() {
 	p.gene, p.evidence, p.mode, p.windows = "", "", "genome", ""
-	p.pseudoknot, p.alpha, p.beam = false, 0.5, 100
+	p.pseudoknot = false
+	p.resetFoldSettings()
 	p.prefillNote, p.startErr, p.lastTask, p.starting = "", "", "", false
 	p.structures, p.listErr, p.loading = nil, "", false
 	p.viewA, p.viewB, p.record = "", "", "all"
@@ -456,7 +460,6 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 				p.gene = prefill.Gene
 			}
 			p.mode = "windows"
-			p.pseudoknot = true
 			lines := make([]string, len(prefill.Windows))
 			for i, w := range prefill.Windows {
 				lines[i] = fmt.Sprintf("%d-%d", int(w.Start), int(w.End))

@@ -217,7 +217,7 @@ class StructureRunTests(unittest.TestCase):
         b = (self.project / "structures" / "parallel" / "structure.dbn").read_text().split("\n")
         self.assertEqual(a, b)
         meta = json.loads((self.project / "structures" / "parallel" / "meta.json").read_text())
-        self.assertTrue(meta["parameters"]["allow_pseudoknot"])
+        self.assertFalse(meta["parameters"]["allow_pseudoknot"])  # the web's default, also for windows
         self.assertEqual([r["start"] for r in meta["records"]], [1, 120, 200])
         with mock.patch.dict(os.environ, {"HYB2_TASK_CPUS": "1"}):
             capped = handle(self._request(task_id="capped", mode="windows", windows=windows,

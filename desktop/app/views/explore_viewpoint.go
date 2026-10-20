@@ -19,6 +19,7 @@ var resolutions = []string{"1 nt", "5 nt", "10 nt", "25 nt", "50 nt", "100 nt"}
 type partnerTotal struct {
 	Name    string `json:"name"`
 	Records int64  `json:"records"`
+	Support int64  `json:"support"`
 	Reads   int64  `json:"reads"`
 }
 
@@ -46,7 +47,8 @@ type viewpointData struct {
 }
 
 func (s *viewpointState) init() {
-	s.partner, s.typ, s.measure, s.resolution = allPartners, allTypes, measureRecords, "10 nt"
+	// 1 nt is the web's default ("legacy" per-nucleotide viewpoint)
+	s.partner, s.typ, s.measure, s.resolution = allPartners, allTypes, measureRecords, "1 nt"
 	s.profile = widgets.NewProfile()
 	s.hover = -1
 }
@@ -67,10 +69,7 @@ func (p *explorePage) loadViewpoint() {
 	p.ensure(&s.load, p.viewpointKey(), func() (func(), error) {
 		var bin int
 		fmt.Sscanf(resolution, "%d", &bin)
-		payload := core.Obj{"gene": gene, "bin_size": max(bin, 1), "measure": "records"}
-		if measure == measureReads {
-			payload["measure"] = "reads"
-		}
+		payload := core.Obj{"gene": gene, "bin_size": max(bin, 1), "measure": measurePayload(measure)}
 		if partner != allPartners {
 			payload["partner"] = partner
 		}
@@ -141,10 +140,7 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 				ui.Row(c).Gap(24).Wrap().Children(func() {
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
 						ui.Text(c, "Interaction coverage").FontSize(16).Bold()
-						what := "records"
-						if d.measure == measureReads {
-							what = "reads"
-						}
+						what := strings.ToLower(d.measure)
 						ui.Text(c, fmt.Sprintf("%s · %s nt · mean %s per nucleotide in %d nt bins.", d.gene, span(d.start, d.end), what, d.bin)).
 							FontSize(12).TextColor(t.TextMuted)
 					})
@@ -176,7 +172,7 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 						p.exploreRegion(start, end)
 					}
 				}).Width(280)
-				partnerCard(c, "Partners in range", d.partners, d.measure == measureReads).Grow(1).Basis(320)
+				partnerCard(c, "Partners in range", d.partners, d.measure).Grow(1).Basis(320)
 			})
 		})
 	})
@@ -193,7 +189,9 @@ func (p *explorePage) exploreRegion(start, end int) {
 }
 
 // partnerCard shows partner genes with bars (the top eight).
-func partnerCard(c *ui.Context, title string, partners []partnerTotal, byReads bool) ui.Element {
+// partnerCard draws partners with bars by measure (the rows come sorted by
+// cluster support, as the web Region Explorer's).
+func partnerCard(c *ui.Context, title string, partners []partnerTotal, measure string) ui.Element {
 	t := c.Theme()
 	return Card(c, title, func() {
 		if len(partners) == 0 {
@@ -201,8 +199,11 @@ func partnerCard(c *ui.Context, title string, partners []partnerTotal, byReads b
 			return
 		}
 		value := func(pt partnerTotal) int64 {
-			if byReads {
+			switch measure {
+			case measureReads:
 				return pt.Reads
+			case measureSupport:
+				return pt.Support
 			}
 			return pt.Records
 		}
@@ -224,7 +225,11 @@ func partnerCard(c *ui.Context, title string, partners []partnerTotal, byReads b
 				ui.Box(c).Grow(1).Height(8).Radius(4).Background(t.Border).Children(func() {
 					ui.Box(c).WidthPercent(fraction * 100).FillHeight().Radius(4).Background(t.Accent)
 				})
-				ui.Text(c, FormatNumber(pt.Records)+" hybrids · "+FormatNumber(pt.Reads)+" reads").FontSize(12).
+				label := FormatNumber(pt.Records) + " hybrids · " + FormatNumber(pt.Reads) + " reads"
+				if pt.Support != pt.Records {
+					label = FormatNumber(pt.Records) + " hybrids · " + FormatNumber(pt.Support) + " support"
+				}
+				ui.Text(c, label).FontSize(12).
 					TextColor(t.TextMuted).Width(170).TextAlign(ui.End)
 			})
 		}

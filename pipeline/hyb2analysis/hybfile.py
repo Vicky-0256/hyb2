@@ -9,6 +9,10 @@ A hyb2 ``sam2hyb`` line has 18 TAB-separated columns::
 
 17-column files carry the overlap score and type in columns 16 and 17; older
 15/16-column files have neither, and the type is inferred from coordinates.
+
+``support`` is the web parser's cluster support: 1 per row, except older
+clustered 15/16-column files, where a ``count_total=N`` annotation or a
+positive integer in column 16 gives the count.
 """
 from __future__ import annotations
 
@@ -29,6 +33,37 @@ class Record(NamedTuple):
     dg: Optional[float]
     overlap: Optional[float]
     chimera_type: bytes
+    support: int = 1    # cluster support (see the module docstring)
+
+
+_COUNT_TOTAL = re.compile(rb"(?:^|[;,\s])count_total\s*=\s*([^;,\s]+)(?=$|[;,\s])", re.I)
+_NUMBER = re.compile(rb"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$", re.I)
+_SAFE_INTEGER = 2 ** 53 - 1
+
+
+def legacy_annotations(cols: list) -> "tuple[int, Optional[float]]":
+    """``(support, overlap)`` of a 15/16-column line, as ``parseAnnotations``
+    in ``web/parser.worker.js``; ``ValueError`` where the web marks it invalid."""
+    tail = [value.strip() for value in cols[15:]]
+    match = _COUNT_TOTAL.search(b";".join(tail))
+    if match:
+        value = match.group(1)
+        if not _DIGITS.match(value) or not 1 <= int(value) <= _SAFE_INTEGER:
+            raise ValueError("count_total metadata must be a positive safe integer")
+        return int(value), None
+    column16 = tail[0] if tail else b""
+    integer = int(column16) if _DIGITS.match(column16) else None
+    if integer is not None and integer > _SAFE_INTEGER:
+        if len(cols) == 16:
+            raise ValueError("legacy column 16 count is outside the safe positive-integer range")
+        integer = None
+    if integer is not None and integer > 0:
+        return integer, None
+    if _NUMBER.match(column16):
+        number = float(column16)
+        if number == number and abs(number) != float("inf"):
+            return 1, number
+    return 1, None
 
 
 def _coordinate(value: bytes) -> int:
@@ -100,10 +135,13 @@ def parse(line: bytes) -> Optional[Record]:
         raise ValueError("invalid RNA coordinates")
     overlap = None
     ctype = b""
+    support = 1
     if len(cols) >= 18 and cols[15].strip() == b"":
         overlap, ctype = _optional_number(cols[16]), _type_name(cols[17])
     elif len(cols) >= 17:
         overlap, ctype = _optional_number(cols[15]), _type_name(cols[16])
+    else:
+        support, overlap = legacy_annotations(cols)
     return Record(g1, s1, e1, g2, s2, e2, raw_read_count(cols[0]), _optional_number(cols[2]),
                   None if overlap is None else (int(overlap) if overlap.is_integer() else overlap),
-                  ctype or infer_type(g1, s1, e1, g2, s2, e2))
+                  ctype or infer_type(g1, s1, e1, g2, s2, e2), support)

@@ -26,7 +26,8 @@
 
 use warnings;
 use strict;
-use lib '~/hyb2/bin';
+use FindBin qw($Bin);
+use lib $Bin;
 use Hybrid_long_2;
 my @all_hits;
 my %HoA_ref_hits;

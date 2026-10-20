@@ -1,5 +1,5 @@
 /*
- * HYB2 Web application controller.
+ * HYB2 Web Lite application controller.
  *
  * Two ways to run it:
  *   - Website (shell:true, the default auto-mount on #app): landing page,
@@ -21,6 +21,14 @@
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
   // The included example (example.js): files are fetched only when it is used.
   const example = window.Hyb2Example || null;
+
+  // the address K9's Desktop links point at (see syncRoute)
+  const DESKTOP_HASH = "#hyb2-desktop";
+  // the route before the last hash change, put back after #hyb2-desktop
+  let lastRouteHash = "";
+  // where focus goes when the Desktop drawer closes: the link that opened it
+  let desktopReturnSelector = null;
+  let renderedDialog = null;
 
   const state = {
     activePage: "landing",
@@ -50,9 +58,13 @@
     // primary HYB is parsed: { stage, done, total, error, ready }
     exampleSetup: null,
     landingFastaFile: null,
+    // a raw-read file dropped where a HYB file goes: { name, kind } (A17)
+    rawReads: null,
     loading: null,
     error: null,
-    theme: window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+    // dark by default; the theme button switches, and a restored session
+    // keeps the visitor's choice
+    theme: "dark",
     density: "comfortable",
     toastTimer: null,
     pointerActionPending: false,
@@ -489,6 +501,17 @@
   }());
 
   function syncRoute() {
+    // #hyb2-desktop (a K9 Desktop link that reached the URL: opened in a new
+    // tab, pasted, or clicked before a handler could stop it) is not a page:
+    // open the Desktop drawer and put the previous address back, so the
+    // routing below keeps the current page.
+    if (window.location.hash === DESKTOP_HASH) {
+      if (desktopEntriesShown()) {
+        state.dialog = "desktop";
+      }
+      restoreRouteHash(lastRouteHash);
+    }
+    lastRouteHash = window.location.hash;
     const hash = window.location.hash.replace(/^#\/?/, "");
     const parts = hash.split("?");
     const route = parts[0];
@@ -519,6 +542,21 @@
     state.activePage = ["methods", "file-format", "privacy", "validation"].indexOf(route) > -1
       ? route
       : "overview";
+  }
+
+  function openDesktopDrawer() {
+    if (desktopEntriesShown()) {
+      state.dialog = "desktop";
+      render();
+    }
+  }
+
+  function restoreRouteHash(hash) {
+    try {
+      window.history.replaceState(null, "", hash && hash !== DESKTOP_HASH ? hash : window.location.pathname + window.location.search);
+    } catch (error) {
+      // a sandboxed page may refuse to rewrite its URL
+    }
   }
 
   function handleHashChange() {
@@ -605,12 +643,14 @@
     const previousNav = typeof app.querySelector === "function" ? app.querySelector(".mobile-nav") : null;
     const navScrollLeft = previousNav ? previousNav.scrollLeft : 0;
     const previousPage = renderedPage;
+    // the theme is set first: cards that read theme colours while building
+    // their markup (the arc map) must see the new one
+    document.documentElement.dataset.theme = state.theme;
     app.innerHTML = workspaceOpen ? renderWorkspace() : renderLanding();
     renderedPage = workspaceOpen ? state.activePage : null;
     if (workspaceOpen) {
       revealActiveMobileNav(navScrollLeft, previousPage !== renderedPage);
     }
-    document.documentElement.dataset.theme = state.theme;
     app.dataset.density = state.density;
     const themeColor = document.querySelector('meta[name="theme-color"]');
     if (themeColor) {
@@ -626,10 +666,33 @@
     if (workspaceOpen && state.activePage === "report" && window.Hyb2Report && typeof window.Hyb2Report.afterRender === "function") {
       window.Hyb2Report.afterRender(state, featureApi());
     }
+    returnFocusFromDesktopDrawer();
     // The first render() runs before window.Hyb2Web is defined below.
     if (window.Hyb2Web && typeof window.CustomEvent === "function") {
       window.dispatchEvent(new window.CustomEvent("hyb2:session-change", { detail: window.Hyb2Web.getSessionSnapshot() }));
     }
+  }
+
+  // interaction.js gives focus back to the first control with the opener's
+  // action, which for several Desktop links (or a header entry hidden on
+  // phones) is not the one that was used: a frame later, focus that one.
+  function returnFocusFromDesktopDrawer() {
+    const closed = renderedDialog === "desktop" && state.dialog !== "desktop";
+    renderedDialog = state.dialog;
+    if (!closed || !desktopReturnSelector) {
+      return;
+    }
+    const selector = desktopReturnSelector;
+    desktopReturnSelector = null;
+    if (typeof window.requestAnimationFrame !== "function") {
+      return;
+    }
+    window.requestAnimationFrame(function () {
+      const target = app && app.querySelector(selector);
+      if (target && target.getClientRects().length && !target.closest("[data-dialog]")) {
+        target.focus({ preventScroll: true });
+      }
+    });
   }
 
   function renderLanding() {
@@ -639,6 +702,7 @@
       renderBrand(),
       '    <div class="header-actions">',
       '      <button class="local-chip" type="button" data-action="open-privacy" title="What stays on this device">Local only</button>',
+      desktopEntriesShown() ? '      <button class="text-button desktop-entry" type="button" data-action="open-desktop">Desktop app</button>' : "",
       '      <button class="text-button" type="button" data-action="open-help">Help</button>',
       renderDisplayButton(),
       "    </div>",
@@ -652,8 +716,8 @@
       "        <li>No account needed</li>",
       "        <li>Built for HYB-format interaction records</li>",
       "      </ul>",
-      '      <figure class="hero-stage" data-hero-stage aria-label="Illustrative arc diagram: intramolecular stems above the sequence, HYB chimeric contacts below">',
-      '        <figcaption class="hero-stage-caption"><span class="hero-stage-live">Illustrative</span><span>Arc diagram · stems above, chimeric contacts below</span></figcaption>',
+      '      <figure class="hero-stage" data-hero-stage aria-label="Illustrative arc diagram: many chimeric reads below the sequence, the structure predicted from them above">',
+      '        <figcaption class="hero-stage-caption"><span class="hero-stage-live">Illustrative</span><span>Predicted structure above · chimeric reads below</span></figcaption>',
       '        <div class="hero-stage-canvas" data-hero-canvas></div>',
       '        <div class="hero-stage-hud" aria-hidden="true"><span>Chimeric reads <strong data-hero-reads>0</strong></span><span data-hero-probe>Hover the sequence</span></div>',
       "      </figure>",
@@ -661,10 +725,7 @@
       '    <section class="landing-panel" aria-label="Open a HYB file">',
       renderFilePanel(),
       "    </section>",
-      '    <div class="landing-details">',
-      renderDesktopDownloadCard(),
-      renderWebCapabilityCard(),
-      "    </div>",
+      renderWaysToRun(),
       "  </main>",
       renderDialog(),
       '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
@@ -683,57 +744,96 @@
     return text + ".";
   }
 
+  // the parse-error hint; renderFilePanel adds the raw-reads sentence (A16)
   function hybFormatHint() {
-    return "A HYB line has 15 or more tab-separated columns: read ID, sequence, ΔG, then name and coordinates of each arm, as written by the hyb pipeline or HYB2 Desktop. FASTQ, SAM and FASTA reads need HYB2 Desktop first.";
+    return "A HYB line has 15 or more tab-separated columns: read ID, sequence, ΔG, then name and coordinates of each arm, as written by the hyb pipeline or HYB2 Desktop.";
   }
 
-  function visitorOS() {
-    const platform = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "").toLowerCase();
-    if (platform.indexOf("mac") !== -1) return "mac";
-    if (platform.indexOf("win") !== -1) return "windows";
-    if (platform.indexOf("linux") !== -1) return "linux";
-    return "";
+  // One sentence wherever raw reads come up (drop zone, parse error, Help):
+  // K9's "raw-reads" link to the Desktop drawer. Inside HYB2 Desktop, which
+  // maps raw reads itself, there is nothing to add.
+  function rawReadsSentenceHtml() {
+    const kit = desktopKit();
+    if (!kit) {
+      return "Raw FASTQ, FASTA or SAM reads need HYB2 Desktop first; it turns them into .hyb files.";
+    }
+    return kit.cta("raw-reads");
   }
 
-  // The desktop app's installers, from the latest GitHub release (the
-  // release workflow publishes them under these stable names). Kept inside
-  // the function: renderLanding runs before later top-level consts exist.
-  function renderDesktopDownloadCard() {
-    const releases = "https://github.com/Vicky-0256/hyb2/releases";
-    const downloads = [
-      { os: "mac", label: "macOS · Apple silicon", file: "HYB2-Desktop-macOS-arm64.dmg" },
-      { os: "windows", label: "Windows · 64-bit", file: "HYB2-Desktop-Windows-x64-Setup.exe" },
-      { os: "linux", label: "Linux · .deb", file: "HYB2-Desktop-Linux-x64.deb" },
-      { os: "linux", label: "Linux · .tar.gz", file: "HYB2-Desktop-Linux-x64.tar.gz" }
-    ];
-    const os = visitorOS();
-    const items = downloads.map(function (item) {
-      const mine = item.os === os;
-      return '<li><a class="desktop-download-link' + (mine ? ' is-recommended' : '') + '" href="' + releases + '/latest/download/' + item.file + '">' +
-        '<span class="desktop-download-label">' + item.label + (mine ? ' <span class="desktop-download-badge">This computer</span>' : '') + '</span><strong>Download</strong></a></li>';
-    }).join("");
+  // K9 (web/ui-kit.js) holds every fact about HYB2 Desktop; some tests load
+  // the pages without the kit, and then no Desktop entry is drawn.
+  function desktopKit() {
+    return window.Hyb2UiKit && window.Hyb2UiKit.desktop || null;
+  }
+
+  // Desktop entries are left out inside HYB2 Desktop itself.
+  function desktopEntriesShown() {
+    const kit = desktopKit();
+    return !!kit && !kit.isInsideDesktop();
+  }
+
+  function formatNt(value) {
+    return Number(value).toLocaleString("en-US") + " nt";
+  }
+
+  // "Two ways to run HYB2": Web and HYB2 Desktop side by side, one row
+  // per question (where to start, pipeline, analysis, CPLfold, install, data).
+  // Replaces the Desktop and Browser capabilities cards under the hero.
+  function renderWaysToRun() {
+    if (!desktopEntriesShown()) {
+      return "";
+    }
+    const kit = desktopKit();
+    const row = function (label, value) {
+      return '<p class="ways-row"><span class="ways-label">' + escapeHtml(label) + '</span><span class="ways-value">' + value + "</span></p>";
+    };
+    const canChoose = !state.loading && !state.error && !state.summary && !state.rawReads;
     return [
-      '<section class="web-capability-card desktop-download-card" aria-labelledby="desktop-download-title">',
-      '<div class="web-capability-heading"><div><span class="example-kicker">Desktop app</span><h2 id="desktop-download-title">From raw reads to structure</h2></div><span class="web-capability-chip">Offline</span></div>',
-      '<p class="web-capability-note desktop-download-lede">HYB2 Desktop runs the whole pipeline on your computer: FASTQ mapping, hybrid calling, QC, DESeq2 comparisons and CPLfold structures.</p>',
-      '<ul class="desktop-download-list">', items, '</ul>',
-      '<p class="web-capability-note">Not yet signed: on first launch, macOS asks you to allow it in System Settings → Privacy &amp; Security, and Windows SmartScreen under More info → Run anyway. <a href="' + releases + '/latest">Release notes, older versions and checksums</a>.</p>',
-      '</section>'
+      '<section class="landing-ways" aria-labelledby="landing-ways-title">',
+      '  <h2 id="landing-ways-title" class="landing-ways-title">Two ways to run HYB2</h2>',
+      '  <div class="ways-grid">',
+      '    <section class="ways-col ways-web" aria-labelledby="ways-web-title">',
+      '      <header class="ways-head"><h3 id="ways-web-title">Web</h3><span class="ways-where">in this browser</span></header>',
+      row("Start from", ".hyb or .hyb.gz files"),
+      row("Pipeline", '<span aria-hidden="true">—</span><span class="visually-hidden">None; it reads finished .hyb files</span>'),
+      row("Analysis", "All analysis pages"),
+      row("CPLfold", "Up to " + formatNt(kit.limits.webCplfoldNt) + " after a capacity test"),
+      row("Install", "None"),
+      row("Data", "Stays in this browser tab"),
+      '      <div class="ways-actions">',
+      canChoose ? '        <button class="button" type="button" data-action="choose-hyb">Choose HYB file</button>' : "",
+      renderBrowserCheck(),
+      "      </div>",
+      "    </section>",
+      '    <section class="ways-col ways-desktop" aria-labelledby="ways-desktop-title">',
+      '      <header class="ways-head"><h3 id="ways-desktop-title">' + escapeHtml(kit.name) + '</h3><span class="ways-where">on your computer</span></header>',
+      row("Start from", "Raw reads: FASTQ, FASTA or SAM, plus a reference"),
+      row("Pipeline", "Bowtie2 mapping → hybrid calling → QC → .hyb"),
+      row("Analysis", "The same pages, saved as projects on disk"),
+      row("CPLfold", "Set by memory, " + kit.limits.cplfoldText + "; native, no capacity test"),
+      row("Install", kit.downloadsAvailable ? "An installer, below" : "An installer, not public yet"),
+      row("Data", "Stays on this computer, works offline"),
+      '      <div class="ways-actions">',
+      renderDesktopDownloads(),
+      "      </div>",
+      "    </section>",
+      "  </div>",
+      "</section>"
     ].join("");
   }
 
-  function renderWebCapabilityCard() {
+  // The four browser checks that used to be the "Browser capabilities" card.
+  function renderBrowserCheck() {
     const hasFiles = typeof window.File !== "undefined" && typeof window.FileReader !== "undefined";
     const hasWorker = typeof window.Worker !== "undefined";
     const hasWasm = typeof window.WebAssembly !== "undefined";
     const supported = [hasFiles, hasWorker, hasWasm, hasWorker && hasWasm].filter(Boolean).length;
-    const summaryChip = supported === 4 ? "All 4 supported" : supported + " of 4 supported";
     const status = function (ready, label, supportedLabel) {
       return '<li class="web-capability-item"><span class="web-capability-dot' + (ready ? ' is-ready' : '') + '" aria-hidden="true"></span><span>' + label + '</span><strong>' + (ready ? (supportedLabel || 'Supported') : 'Unavailable') + '</strong></li>';
     };
     return [
-      '<section class="web-capability-card" aria-labelledby="web-capability-title">',
-      '<div class="web-capability-heading"><div><span class="example-kicker">Web runtime</span><h2 id="web-capability-title">Browser capabilities</h2></div><span class="web-capability-chip">' + summaryChip + '</span></div>',
+      '<details class="ways-browser-check" data-open-key="landing-browser-check"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["landing-browser-check"] ? " open" : "") + ">",
+      '<summary>Browser check <span class="ways-check-chip">' + (supported === 4 ? "all 4 supported" : supported + " of 4 supported") + "</span></summary>",
       '<ul class="web-capability-list">',
       status(hasFiles, 'File reading'),
       status(hasWorker, 'Background parsing workers'),
@@ -741,8 +841,115 @@
       status(hasWorker && hasWasm, 'CPLfold Pyodide worker · capacity measured when needed', 'Load on first run'),
       '</ul>',
       '<p class="web-capability-note">These checks confirm browser support. Folding engines are loaded and verified when first used; CPLfold capacity is measured separately.</p>',
-      '</section>'
+      "</details>"
     ].join("");
+  }
+
+  // Where to get HYB2 Desktop (A14). With the installers public (K9
+  // downloadsAvailable): one "Download for <this system>" button, the other
+  // systems as plain links (Linux .deb and .tar.gz together), the systems
+  // without an installer, a first-launch note for the unsigned app,
+  // checksums and release notes. While they are not public, it says so,
+  // lists the planned installers and links nowhere.
+  function renderDesktopDownloads(options) {
+    const kit = desktopKit();
+    const settings = options || {};
+    const groups = [
+      { os: "mac", name: "macOS" },
+      { os: "windows", name: "Windows" },
+      { os: "linux", name: "Linux" }
+    ].map(function (group) {
+      group.platforms = kit.platforms.filter(function (item) { return item.os === group.os; });
+      return group;
+    });
+
+    if (!kit.downloadsAvailable) {
+      const planned = groups.map(function (group) {
+        return group.platforms.length > 1
+          ? group.name + " (" + group.platforms.map(function (item) { return item.label.split(" · ").pop(); }).join(", ") + ")"
+          : group.platforms[0].label;
+      });
+      return [
+        '<div class="desktop-downloads is-unavailable">',
+        '<p class="desktop-downloads-status"><strong>' + escapeHtml(kit.notAvailable) + "</strong>" + (settings.tagline === false ? "" : " " + escapeHtml(kit.tagline)) + "</p>",
+        '<p class="desktop-downloads-planned">Installers planned for ' + escapeHtml(planned.join(", ")) + ". " + escapeHtml(kit.unavailable) + "</p>",
+        "</div>"
+      ].join("");
+    }
+
+    const mine = kit.detectPlatform();
+    const link = function (item, primary) {
+      return '<a class="' + (primary ? "button desktop-download-primary" : "desktop-download-link") + '" href="' + escapeAttribute(kit.downloadUrl(item)) +
+        '" data-platform="' + escapeAttribute(item.id) + '"' + (primary ? "" : ' aria-label="Download for ' + escapeAttribute(item.label) + '"') + ">" +
+        (primary ? "Download for " + escapeHtml(item.label) : escapeHtml(item.label.split(" · ").pop())) + "</a>";
+    };
+    let choices;
+    if (mine) {
+      const others = groups.map(function (group) {
+        const items = group.platforms.filter(function (item) { return item.id !== mine.id; });
+        return items.length ? '<span class="desktop-download-group"><span>' + escapeHtml(group.name) + "</span> " + items.map(function (item) { return link(item); }).join(" ") + "</span>" : "";
+      }).filter(Boolean);
+      choices = link(mine, true) +
+        (others.length ? '<p class="desktop-download-others">Download for another system: ' + others.join('<span aria-hidden="true"> · </span>') + "</p>" : "");
+    } else {
+      choices = '<div class="desktop-download-groups">' + groups.map(function (group) {
+        return '<div class="desktop-download-group"><span>' + escapeHtml(group.name) + "</span>" +
+          group.platforms.map(function (item) {
+            return '<a class="button button-secondary button-compact desktop-download-link" href="' + escapeAttribute(kit.downloadUrl(item)) + '" data-platform="' + escapeAttribute(item.id) + '" aria-label="Download for ' + escapeAttribute(item.label) + '">Download ' +
+              escapeHtml(group.platforms.length > 1 ? item.label.split(" · ").pop() : "") + "</a>";
+          }).join("") + "</div>";
+      }).join("") + "</div>";
+    }
+    const versions = desktopVersions(kit);
+    return [
+      '<div class="desktop-downloads">',
+      versions.latest,
+      choices,
+      '<p class="desktop-download-unavailable">' + escapeHtml(kit.unavailable) + "</p>",
+      '<details class="desktop-first-launch" data-open-key="desktop-first-launch"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["desktop-first-launch"] ? " open" : "") + ">",
+      "<summary>First launch (unsigned app)</summary>",
+      "<p><strong>macOS:</strong> the first time, macOS blocks the app. Open System Settings → Privacy &amp; Security and choose Open Anyway next to HYB2 Desktop.</p>",
+      "<p><strong>Windows:</strong> SmartScreen may warn about an unrecognised app. Choose More info → Run anyway.</p>",
+      "</details>",
+      '<p class="desktop-download-meta"><a href="' + escapeAttribute(kit.checksumsUrl()) + '">Checksums (' + escapeHtml(kit.checksumsFile) + ")</a>" +
+        '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl + "/latest") + '">Release notes</a>' +
+        '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl) + '">All releases</a></p>',
+      versions.earlier,
+      "</div>"
+    ].join("");
+  }
+
+  // The latest version, over the downloads, and the earlier versions
+  // (web/releases.js, written when the site is deployed), each with the
+  // installers it has, in a closed <details> under them.
+  function desktopVersions(kit) {
+    const releases = kit.releases();
+    if (!releases.length) {
+      return { latest: "", earlier: "" };
+    }
+    const date = function (release) {
+      const parsed = release.published ? new Date(release.published + "T00:00:00Z") : null;
+      return parsed && !isNaN(parsed) ? parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }) : "";
+    };
+    const versionLine = function (release) {
+      const files = kit.platforms.filter(function (item) { return release.files.indexOf(item.file) !== -1; });
+      const links = files.map(function (item) {
+        return '<a class="desktop-download-link" href="' + escapeAttribute(kit.releaseDownloadUrl(release.tag, item)) + '" data-platform="' + escapeAttribute(item.id) +
+          '" aria-label="Download ' + escapeAttribute(release.tag) + " for " + escapeAttribute(item.label) + '">' + escapeHtml(item.label) + "</a>";
+      });
+      links.push('<a class="desktop-download-link" href="' + escapeAttribute(kit.releasesUrl + "/tag/" + encodeURIComponent(release.tag)) + '">Release notes</a>');
+      return '<li><span class="desktop-version-name">' + escapeHtml(release.tag) + "</span>" +
+        (date(release) ? ' <span class="desktop-version-date">' + escapeHtml(date(release)) + "</span>" : "") +
+        '<span class="desktop-version-links">' + links.join('<span aria-hidden="true"> · </span>') + "</span></li>";
+    };
+    const latest = releases[0];
+    const earlier = releases.slice(1);
+    return {
+      latest: '<p class="desktop-download-version">Latest version <strong>' + escapeHtml(latest.tag) + "</strong>" + (date(latest) ? ", " + escapeHtml(date(latest)) : "") + "</p>",
+      earlier: earlier.length ? '<details class="desktop-versions" data-open-key="desktop-versions"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["desktop-versions"] ? " open" : "") + ">" +
+        "<summary>Earlier versions (" + earlier.length + ")</summary>" +
+        '<ul class="desktop-version-list">' + earlier.map(versionLine).join("") + "</ul></details>" : ""
+    };
   }
 
   function renderBrand() {
@@ -754,7 +961,6 @@
       '  <span class="brand-mark"><img src="' + logoAsset + '" alt="HYB2"></span>',
       "  <span>",
       '    <span class="brand-name">Web</span>',
-      '    <span class="brand-subtitle">Lite</span>',
       "  </span>",
       "</a>"
     ].join("");
@@ -772,13 +978,21 @@
         '  <div class="parse-error" role="alert"><strong>' + escapeHtml(error.title) + "</strong><br>" +
           (error.fileName ? escapeHtml(error.fileName) + ": " : "") + escapeHtml(error.message) +
           (error.detail ? '<span class="parse-error-detail">' + escapeHtml(error.detail) + "</span>" : "") + "</div>",
-        error.hint ? '  <p class="parse-error-hint">' + escapeHtml(error.hint) + "</p>" : "",
-        '  <div class="dialog-actions">',
-        '    <button class="button button-secondary" type="button" data-action="load-example">Try the example instead</button>',
-        '    <button class="button" type="button" data-action="reset-file">Choose another file</button>',
+        error.hint ? '  <p class="parse-error-hint">' + escapeHtml(error.hint) + (error.rawReadsHint && rawReadsSentenceHtml() ? " " + rawReadsSentenceHtml() : "") + "</p>" : "",
+        '  <div class="dialog-actions load-error-actions">',
+        '    <button class="quiet-button" type="button" data-action="reload-page">Reload page</button>',
+        error.source === "example"
+          ? '    <button class="button button-secondary" type="button" data-action="reset-file">Choose a file instead</button>' +
+            '    <button class="button" type="button" data-action="load-example">Try again</button>'
+          : '    <button class="button button-secondary" type="button" data-action="load-example">Try the example instead</button>' +
+            '    <button class="button" type="button" data-action="reset-file">Choose another file</button>',
         "  </div>",
         "</div></div>"
       ].join("");
+    }
+
+    if (state.rawReads && !state.analysisEntered) {
+      return renderRawReadsPanel();
     }
 
     if (state.summary && !state.analysisEntered) {
@@ -802,7 +1016,8 @@
       '      <h3 class="dropzone-title">Drop a .hyb file here</h3>',
       '      <p class="dropzone-copy">or choose a file from this device</p>',
       '      <button class="button" type="button" data-action="choose-hyb">Choose HYB file</button>',
-      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line), also gzip-compressed (.gz). Raw FASTQ reads? HYB2 Desktop, below, turns them into .hyb.</span>',
+      '      <span id="file-input-hint" class="dropzone-hint">Accepts .hyb and tab-delimited .txt files (hyb pipeline output, 15+ columns per line), also gzip-compressed (.gz).</span>',
+      rawReadsSentenceHtml() ? '      <p class="dropzone-desktop">' + rawReadsSentenceHtml() + "</p>" : "",
       "    </div>",
       "  </div>",
       renderExampleStrip(),
@@ -860,7 +1075,10 @@
       : (setup.ready
         ? "Compare page ready: " + example.labels.A + " (ZAFR_REP1, ZAFR_REP2) vs " + example.labels.B + " (ZILM_REP2, ZILM_REP3), 10-nt bins, similarity minimum 10; the arc map has both CPLfold structures and the gene track. On the Compare page, run the differential test to find which contacts differ and to fill the figure panels that depend on it."
         : setup.stage + (setup.total ? " (" + formatNumber(setup.done) + " of " + formatNumber(setup.total) + ")" : "") + "…");
-    return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>";
+    return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>" +
+      (setup.error
+        ? '  <div class="load-error-actions example-setup-actions"><button class="quiet-button" type="button" data-action="reload-page">Reload page</button><button class="button button-secondary" type="button" data-action="load-example">Load the example again</button></div>'
+        : "");
   }
 
   // The example's other files (replicates for Compare, arc map files) as
@@ -1091,6 +1309,7 @@
       '      <button class="text-button" type="button" data-action="open-files">Data</button>',
       '      <button class="text-button report-button" type="button" data-action="navigate" data-page="report">Report</button>',
       '      <span class="toolbar-divider" aria-hidden="true"></span>',
+      desktopEntriesShown() ? '      <button class="text-button desktop-entry" type="button" data-action="open-desktop">Desktop app</button>' : "",
       '      <button class="text-button" type="button" data-action="open-help">Help</button>',
       renderDisplayButton(),
       "    </div>",
@@ -1300,6 +1519,28 @@
         drawerSection("Start over", '<p>Removes every loaded file and result from this tab and returns to the start page.</p><div class="inline-actions"><button class="button button-danger" type="button" data-action="start-over">Start over…</button></div>', "drawer-danger"));
     }
 
+    if (state.dialog === "raw-reads" && state.rawReads) {
+      return renderDrawer("raw-reads", "This is a raw-read file", "The current analysis is unchanged.", '<div class="raw-reads-body">' + renderRawReadsBody(false) + "</div>");
+    }
+
+    if (state.dialog === "desktop" && desktopEntriesShown()) {
+      const kit = desktopKit();
+      const compare = function (label, web, desktop) {
+        return "<tr><th scope=\"row\">" + escapeHtml(label) + "</th><td>" + escapeHtml(web) + "</td><td>" + escapeHtml(desktop) + "</td></tr>";
+      };
+      return renderDrawer("desktop", kit.name, kit.tagline, [
+        drawerSection("What it does", '<ul class="drawer-list desktop-capabilities">' + kit.capabilities.map(function (item) {
+          return "<li><strong>" + escapeHtml(item.title) + ".</strong> " + escapeHtml(item.text) + "</li>";
+        }).join("") + "</ul>"),
+        drawerSection("Web or Desktop", '<table class="desktop-compare"><thead><tr><th scope="col"><span class="visually-hidden">Question</span></th><th scope="col">Web</th><th scope="col">' + escapeHtml(kit.name) + "</th></tr></thead><tbody>" +
+          compare("Start from", ".hyb files", "Raw reads (FASTQ, FASTA, SAM)") +
+          compare("CPLfold", "Up to " + formatNt(kit.limits.webCplfoldNt) + " after a test", "Set by memory, " + kit.limits.cplfoldText) +
+          compare("Data", "Stays in this tab", "Stays on this computer") +
+          "</tbody></table>"),
+        drawerSection(kit.downloadsAvailable ? "Download" : "Availability", renderDesktopDownloads({ tagline: false }))
+      ].join(""));
+    }
+
     if (state.dialog === "display") {
       const dark = state.theme === "dark";
       const reduced = document.documentElement.dataset.motion === "reduced";
@@ -1336,7 +1577,7 @@
     landing: ["Start a session", [
       "Drop a .hyb file (the output of the hyb pipeline) or press Try example to load the ZIKV virion comparison.",
       "Add a reference FASTA if you want sequences, region extraction and RNA structure prediction.",
-      "Raw FASTQ reads need HYB2 Desktop first; it turns them into .hyb files."
+      { html: rawReadsSentenceHtml }
     ]],
     overview: ["Overview", [
       "A summary of the loaded file: how many records, which RNAs and chimera types it contains.",
@@ -1399,7 +1640,14 @@
   function renderHelpDrawer() {
     const page = state.analysisEntered ? state.activePage : "landing";
     const entry = PAGE_HELP[page] || PAGE_HELP.overview;
-    const body = [drawerSection("On this page: " + entry[0], '<ol class="drawer-steps">' + entry[1].map(function (line) { return "<li>" + escapeHtml(line) + "</li>"; }).join("") + "</ol>")];
+    const kit = desktopKit();
+    const desktopLine = desktopEntriesShown() ? '<p class="drawer-desktop-line">' + kit.cta("overview") + "</p>" : "";
+    const steps = entry[1].map(function (line) {
+      // { html: fn } lines are built at render time (the raw-reads sentence)
+      const html = typeof line === "string" ? escapeHtml(line) : line.html();
+      return html ? "<li>" + html + "</li>" : "";
+    });
+    const body = [desktopLine, drawerSection("On this page: " + entry[0], '<ol class="drawer-steps">' + steps.join("") + "</ol>")];
     if (state.analysisEntered) {
       body.push(drawerSection("Keyboard", '<dl class="drawer-keys">' +
         "<div><dt><kbd>" + (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl") + "</kbd><kbd>K</kbd></dt><dd>Search pages and actions</dd></div>" +
@@ -1415,6 +1663,19 @@
   }
 
   function handleClick(event) {
+    // K9 Desktop links (<a href="#hyb2-desktop" data-action="open-desktop">)
+    // and the header buttons: the drawer opens and the URL stays.
+    const desktopLink = event.target.closest('[data-action="open-desktop"]');
+    if (desktopLink) {
+      event.preventDefault();
+      const context = desktopLink.getAttribute && desktopLink.getAttribute("data-desktop-context");
+      desktopReturnSelector = context
+        ? '[data-action="open-desktop"][data-desktop-context="' + context + '"]'
+        : '.desktop-entry[data-action="open-desktop"]';
+      openDesktopDrawer();
+      return;
+    }
+
     const dialogLayer = event.target.closest(".pop-layer");
     if (dialogLayer && event.target === dialogLayer) {
       state.dialog = null;
@@ -1440,6 +1701,12 @@
     }
 
     const action = actionNode.dataset.action;
+
+    if (action === "app-download-placeholder") {
+      event.preventDefault();
+      showToast("Desktop app download is not available in this preview.");
+      return;
+    }
 
     if (action === "choose-hyb") {
       const input = document.getElementById("hyb-file-input");
@@ -1496,7 +1763,16 @@
       return;
     }
 
+    if (action === "dismiss-raw-reads") {
+      state.rawReads = null;
+      render();
+      return;
+    }
+
     if (action === "close-dialog") {
+      if (state.dialog === "raw-reads") {
+        state.rawReads = null;
+      }
       state.dialog = null;
       render();
       return;
@@ -1653,6 +1929,11 @@
       return;
     }
 
+    if (action === "reload-page") {
+      window.location.reload();
+      return;
+    }
+
     if (action === "show-upcoming") {
       showToast(actionNode.dataset.target + " is outside this v0 preview.");
     }
@@ -1697,7 +1978,7 @@
     if (event.target.id === "hyb-file-input") {
       const file = event.target.files && event.target.files[0];
       if (file) {
-        startParsing(file);
+        acceptHybFile(file);
       }
       event.target.value = "";
       return;
@@ -1814,7 +2095,7 @@
       return;
     }
 
-    if (dropzone && (event.key === "Enter" || event.key === " ")) {
+    if (dropzone && !event.target.closest("a[href]") && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
       const input = document.getElementById("hyb-file-input");
       if (input) {
@@ -1856,8 +2137,117 @@
     const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
 
     if (file) {
-      startParsing(file);
+      acceptHybFile(file);
     }
+  }
+
+  // A17: a raw-read file (FASTQ, SAM/BAM, FASTA) given where a HYB file goes
+  // gets its own panel instead of the parser's "Line 1: ..." error. Known
+  // extensions (also .gz) decide at once; other uncompressed files are
+  // judged by their first 4 KB. Everything else is parsed as before.
+  const RAW_READ_EXTENSION = /\.(fastq|fq|sam|bam|fa|fasta|fna)(\.gz)?$/i;
+
+  function rawReadKind(name, head) {
+    const extension = RAW_READ_EXTENSION.exec(String(name || ""));
+    if (extension) {
+      const kind = extension[1].toLowerCase();
+      return kind === "fq" || kind === "fastq" ? "fastq" : kind === "sam" || kind === "bam" ? kind : "fasta";
+    }
+    if (typeof head !== "string" || !head) {
+      return null;
+    }
+    const text = head.replace(/^\uFEFF/, "");
+    if (/^@(HD|SQ)\t/.test(text)) {
+      return "sam";
+    }
+    const lines = text.split(/\r?\n/);
+    if (lines.length >= 4 && /^@\S/.test(lines[0]) && /^[A-Za-z.*-]+$/.test(lines[1]) && lines[2].charAt(0) === "+") {
+      return "fastq";
+    }
+    if (text.charAt(0) === ">") {
+      return "fasta";
+    }
+    return null;
+  }
+
+  function acceptHybFile(file) {
+    const byName = rawReadKind(file && file.name);
+    if (byName) {
+      showRawReads(file, byName);
+      return;
+    }
+    if (/\.gz$/i.test(file.name || "") || typeof file.slice !== "function") {
+      startParsing(file);
+      return;
+    }
+    const head = file.slice(0, 4096);
+    const read = typeof head.text === "function" ? head.text() : Promise.reject(new Error("no Blob.text"));
+    read.then(function (text) {
+      const kind = rawReadKind("", text);
+      if (kind) {
+        showRawReads(file, kind);
+      } else {
+        startParsing(file);
+      }
+    }, function () {
+      startParsing(file);
+    });
+  }
+
+  function showRawReads(file, kind) {
+    state.rawReads = { name: file.name || "Untitled file", kind: kind };
+    state.error = null;
+    if (state.analysisEntered) {
+      state.dialog = "raw-reads";
+    }
+    render();
+    if (!state.analysisEntered && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(function () {
+        const heading = document.getElementById("raw-reads-title");
+        if (heading) {
+          heading.focus({ preventScroll: false });
+        }
+      });
+    }
+  }
+
+  const RAW_READ_LABELS = { fastq: "FASTQ reads", sam: "SAM alignments", bam: "BAM alignments", fasta: "FASTA sequences" };
+
+  // The panel's content (landing card and workspace drawer share it).
+  function renderRawReadsBody(withHeading) {
+    const raw = state.rawReads;
+    const kit = desktopKit();
+    const shown = desktopEntriesShown();
+    const mine = shown && kit.downloadsAvailable ? kit.detectPlatform() : null;
+    const actions = [];
+    if (mine) {
+      actions.push('<a class="button" href="' + escapeAttribute(kit.downloadUrl(mine)) + '">Download for ' + escapeHtml(mine.label) + "</a>");
+    }
+    if (shown) {
+      actions.push('<button class="' + (mine ? "button button-secondary" : "button") + '" type="button" data-action="open-desktop" data-desktop-context="raw-read-panel">What HYB2 Desktop does</button>');
+    }
+    actions.push('<button class="button button-secondary" type="button" data-action="choose-hyb">Choose a .hyb file instead</button>');
+    if (!state.analysisEntered) {
+      actions.push('<button class="quiet-button" type="button" data-action="dismiss-raw-reads">Back</button>');
+    }
+    return [
+      withHeading ? '<span class="dropzone-kicker">' + escapeHtml(RAW_READ_LABELS[raw.kind] || "Raw reads") + "</span>" : "",
+      withHeading ? '<h2 id="raw-reads-title" tabindex="-1">This is a raw-read file</h2>' : "",
+      '<p class="raw-reads-file"><code title="' + escapeAttribute(raw.name) + '">' + escapeHtml(raw.name) + "</code>" + (withHeading ? "" : " · " + escapeHtml(RAW_READ_LABELS[raw.kind] || "raw reads")) + "</p>",
+      "<p>Web reads .hyb files, the output of the hyb pipeline." + (shown ? " HYB2 Desktop maps raw reads like these and turns them into .hyb files." : "") + "</p>",
+      raw.kind === "fasta" ? '<p class="raw-reads-fasta">If this is your reference sequence, add it as the FASTA after the HYB file.</p>' : "",
+      shown && !kit.downloadsAvailable ? '<p class="raw-reads-note">' + escapeHtml(kit.notAvailable) + "</p>" : "",
+      '<div class="raw-reads-actions">' + actions.join("") + "</div>"
+    ].join("");
+  }
+
+  function renderRawReadsPanel() {
+    return [
+      '<div class="file-card"><div class="file-card-inner raw-reads-panel">',
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
+      renderRawReadsBody(true),
+      "</div></div>"
+    ].join("");
   }
 
   // Stage one: fetch the primary HYB and its FASTA, then parse as an upload.
@@ -1867,6 +2257,7 @@
       return;
     }
     const session = {};
+    state.rawReads = null;
     state.exampleLoadSession = session;
     state.exampleSetup = null;
     state.dialog = null;
@@ -1905,9 +2296,17 @@
       }
       state.exampleLoadSession = null;
       state.loading = null;
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+      const network = offline || /network|failed to fetch|load failed/i.test(error && error.message || "");
       state.error = {
+        source: "example",
         title: "The example could not be loaded",
-        message: error && error.message ? error.message : "The included example files are unavailable."
+        message: network
+          ? "The example files could not be downloaded" + (offline ? " (this device is offline)." : " (network error).")
+          : (error && error.message ? error.message : "The included example files are unavailable."),
+        hint: network
+          ? "Check the connection and press Try again. If it keeps failing, reload the page."
+          : "Press Try again, or reload the page."
       };
       render();
     }
@@ -2047,6 +2446,7 @@
     cancelComparisonLoads();
     invalidateFastaLoad();
     const parseOptions = options || {};
+    state.rawReads = null;
     const referenceFile = parseOptions.referenceFile || state.landingFastaFile || null;
     state.landingFastaFile = null;
     state.exampleLoadSession = null;
@@ -2129,7 +2529,8 @@
               message: "No records with at least 15 tab-separated columns, RNA names, and valid RNA coordinates were found.",
               fileName: file.name || "Untitled file",
               detail: firstProblem ? describeParseProblem(firstProblem) : "",
-              hint: hybFormatHint()
+              hint: hybFormatHint(),
+              rawReadsHint: true
             };
             render();
             return;
@@ -2845,6 +3246,7 @@
     terminateWorker();
     cancelComparisonLoads();
     invalidateFastaLoad();
+    state.rawReads = null;
     state.exampleLoadSession = null;
     state.exampleSetup = null;
     state.landingFastaFile = null;

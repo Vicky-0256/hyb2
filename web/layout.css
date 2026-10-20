@@ -199,19 +199,6 @@
 /* RNA Structure: columns size to content; the run action stays put    */
 /* ------------------------------------------------------------------ */
 
-.structure-layout {
-  align-items: start;
-}
-
-.structure-setup {
-  --pad-x: 20px;
-  --pad-b: 20px;
-}
-
-[data-density="compact"] .structure-setup {
-  --pad-b: 14px;
-}
-
 .structure-run-bar {
   position: sticky;
   z-index: 2;
@@ -276,10 +263,6 @@
 }
 
 @media (max-width: 767px) {
-  .structure-setup {
-    --pad-x: 16px;
-    --pad-b: 16px;
-  }
 
   .virtual-table-frame > .virtual-table {
     height: clamp(320px, calc(100vh - 220px), 640px);
@@ -306,8 +289,8 @@
   }
 
   .workspace-header .brand-mark {
-    width: 84px;
-    flex-basis: 84px;
+    width: 104px;
+    flex-basis: 104px;
   }
 
   .workspace-header .toolbar-actions {

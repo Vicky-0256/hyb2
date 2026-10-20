@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Checks web/ui-kit.js (WEB_UI_FIX_PLAN.md K1, K2, K5): niceTicks gives 4-7
+// Checks web/ui-kit.js (WEB_UI_FIX_PLAN.md K1, K2, K5, K9): niceTicks gives 4-7
 // ticks on 1/2/5 x 10^n with both ends; the legend renders as HTML, SVG and on
-// a canvas with its title, ticks and end labels; the export menu closes.
+// a canvas with its title, ticks and end labels; the export menu closes; the
+// HYB2 Desktop facts (K9) match the release workflow and the desktop runtime.
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -93,5 +94,73 @@ assert.match(kitCss, /\.export-menu-list \{/);
 assert.match(kitCss, /\.export-menu\.export-menu--start \.export-menu-list \{\s*right: auto;\s*left: 0;/, "a list that would leave the screen opens rightwards");
 assert.match(kitCss, /\.cell-truncate:not\(td\):not\(th\) \{\s*display: block;/, "outside a table, .cell-truncate keeps its width");
 assert.match(fs.readFileSync(web("ui-kit.js"), "utf8"), /addEventListener\("toggle"/);
+
+// ---- K9
+const desk = kit.desktop;
+const releaseWorkflow = path.join(__dirname, "..", ".github", "workflows", "desktop-release.yml");
+if (fs.existsSync(releaseWorkflow)) {
+  const names = Array.from(fs.readFileSync(releaseWorkflow, "utf8").matchAll(/release_name:\s*(\S+)/g), function (m) { return m[1]; });
+  desk.platforms.forEach(function (item) {
+    assert.ok(names.some(function (name) { return item.file.indexOf(name) === 0; }), item.file + " matches a release_name");
+  });
+}
+const detector = path.join(__dirname, "..", "desktop", "runtime", "detector.py");
+if (fs.existsSync(detector)) {
+  // the quoted Desktop limit follows cplfold_limits(): floor(sqrt((0.75 * 8 GiB - base) / c_free)), to 100 nt
+  const py = fs.readFileSync(detector, "utf8");
+  const base = /CPLFOLD_BASE_BYTES = (\d+) \* 1024 \* 1024/.exec(py);
+  const perNt2 = /CPLFOLD_BYTES_PER_NT2 = \{False: ([\d.]+),/.exec(py);
+  const fraction = /CPLFOLD_MEMORY_FRACTION = ([\d.]+)/.exec(py);
+  assert.ok(base && perNt2 && fraction, "detector.py still has the CPLfold memory model");
+  const expected = Math.floor(Math.sqrt((8 * Math.pow(1024, 3) * Number(fraction[1]) - Number(base[1]) * 1024 * 1024) / Number(perNt2[1])) / 100) * 100;
+  assert.equal(desk.limits.cplfoldExampleNt, expected, "Desktop CPLfold figure follows detector.py cplfold_limits");
+}
+assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7").id, "mac-arm64");
+assert.equal(desk.detectPlatform("Windows NT 10.0; Win64; x64").id, "win-x64");
+assert.equal(desk.detectPlatform("X11; Linux x86_64").id, "linux-deb");
+assert.equal(desk.detectPlatform("Linux; Android 14; Pixel 8"), null, "Android is not desktop Linux");
+assert.equal(desk.detectPlatform("iPhone; CPU iPhone OS 17_0"), null);
+assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7", 5), null, "iPadOS Safari reports a Mac with touch points");
+assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7", 0).id, "mac-arm64");
+// downloads are public: the latest release's files, and each release's
+assert.equal(desk.downloadsAvailable, true);
+assert.equal(desk.downloadUrl(desk.platforms[0]), "https://github.com/Vicky-0256/hyb2/releases/latest/download/HYB2-Desktop-macOS-arm64.dmg");
+assert.equal(desk.checksumsUrl(), "https://github.com/Vicky-0256/hyb2/releases/latest/download/SHA256SUMS.txt");
+assert.match(desk.cta("raw-reads"), /^<a class="desktop-cta" href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest" data-action="open-desktop".*<strong>Get HYB2 Desktop<\/strong><\/a>$/);
+assert.equal(desk.releaseDownloadUrl("v0.1.4", desk.platforms[1]), "https://github.com/Vicky-0256/hyb2/releases/download/v0.1.4/HYB2-Desktop-Windows-x64-Setup.exe");
+assert.equal(desk.releases().length, 0, "no web/releases.js loaded: no versions");
+context.window.HYB2_RELEASES = [{ tag: "v0.2.0", published: "2026-11-01", files: ["HYB2-Desktop-macOS-arm64.dmg"] }, { tag: "broken" }, null];
+assert.equal(desk.releases().map(function (release) { return release.tag; }).join(","), "v0.2.0", "malformed entries are left out");
+delete context.window.HYB2_RELEASES;
+// the generated list, as committed, names only installers the release workflow builds
+const releasesSource = fs.readFileSync(web("releases.js"), "utf8");
+const releasesContext = { window: {} };
+vm.runInNewContext(releasesSource, releasesContext);
+// empty while the repository has no published release
+assert.ok(Array.isArray(releasesContext.window.HYB2_RELEASES), "web/releases.js lists the releases");
+releasesContext.window.HYB2_RELEASES.forEach(function (release) {
+  assert.match(release.tag, /^v\d/);
+  release.files.forEach(function (file) {
+    assert.ok(file === desk.checksumsFile || desk.platforms.some(function (item) { return item.file === file; }), file + " is a known installer");
+  });
+});
+// with downloads hidden, nothing may link to an installer
+desk.downloadsAvailable = false;
+assert.equal(desk.downloadUrl(desk.platforms[0]), "");
+assert.equal(desk.checksumsUrl(), "");
+assert.equal(desk.releaseDownloadUrl("v0.1.4", desk.platforms[0]), "");
+["raw-reads", "long-fold", "overview"].forEach(function (name) {
+  const cta = desk.cta(name);
+  assert.match(cta, /^<a class="desktop-cta" href="#hyb2-desktop" data-action="open-desktop"/, name);
+  assert.match(cta, /<strong>About HYB2 Desktop<\/strong><\/a>$/, name);
+  assert.doesNotMatch(cta, /github\.com/, name);
+});
+assert.match(desk.cta("long-fold"), /Longer than 500 nt\? HYB2 Desktop runs CPLfold natively with no capacity test; its limit grows with memory: about 6,500 nt with 8 GB of memory\./);
+assert.equal(desk.cta("no-such-context"), "");
+context.window.Hyb2Desktop = { enabled: true };
+assert.equal(desk.isInsideDesktop(), true);
+assert.equal(desk.cta("raw-reads"), "", "no Desktop links inside Desktop");
+delete context.window.Hyb2Desktop;
+assert.match(kitCss, /\.desktop-cta strong \{[^}]*var\(--primary-ink\)/, "the CTA link text uses --primary-ink");
 
 process.stdout.write("ui-kit: ok\n");

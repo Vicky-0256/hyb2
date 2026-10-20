@@ -1,5 +1,5 @@
 /*
- * HYB2 Web Lite shared UI kit (WEB_UI_FIX_PLAN.md, contracts K1, K2, K5).
+ * HYB2 Web Lite shared UI kit (WEB_UI_FIX_PLAN.md, contracts K1, K2, K5, K9).
  *
  *   Hyb2UiKit.niceTicks(min, max, target = 5)  K5: 4-7 ticks on 1/2/5 x 10^n,
  *                                              both ends included
@@ -9,6 +9,8 @@
  *   Hyb2UiKit.legend.drawCanvas(ctx, opts)     K1: drawn into a canvas (PNG exports)
  *   K2: <details class="export-menu"> closes on an outside click, on Escape and
  *   after an item is chosen (one document-level listener, installed here).
+ *   Hyb2UiKit.desktop                          K9: the one source of HYB2 Desktop
+ *                                              copy, limits and installer links
  *
  * Legend opts: { kind: "sequential" | "diverging", colorAt(t) -> css colour
  *   for t in [0, 1], min, max, ticks?, format?, title, lowLabel?, highLabel?,
@@ -299,10 +301,113 @@
     }, true);
   }
 
+
+  // ---- K9: everything the site says about HYB2 Desktop comes from here.
+  // Installer names match release_name in .github/workflows/desktop-release.yml.
+  // Desktop CPLfold has no fixed length limit: desktop/runtime/detector.py
+  // (cplfold_limits) allows floor(sqrt((budget - base) / bytes_per_nt2)) nt,
+  // the budget being 75 % of memory. The site quotes the pseudoknot-free
+  // figure for an 8 GB computer, rounded down to 100 nt.
+  const DESKTOP_FOLD_MODEL = { baseBytes: 192 * 1024 * 1024, bytesPerNt2Free: 144, memoryFraction: 0.75, exampleGb: 8 };
+  const DESKTOP_LIMITS = {
+    webCplfoldNt: 500,
+    cplfoldExampleGb: DESKTOP_FOLD_MODEL.exampleGb,
+    cplfoldExampleNt: Math.floor(Math.sqrt((DESKTOP_FOLD_MODEL.exampleGb * Math.pow(1024, 3) * DESKTOP_FOLD_MODEL.memoryFraction -
+      DESKTOP_FOLD_MODEL.baseBytes) / DESKTOP_FOLD_MODEL.bytesPerNt2Free) / 100) * 100
+  };
+  // "about 6,500 nt with 8 GB of memory"
+  DESKTOP_LIMITS.cplfoldText = "about " + formatTick(DESKTOP_LIMITS.cplfoldExampleNt) + " nt with " + DESKTOP_LIMITS.cplfoldExampleGb + " GB of memory";
+  const DESKTOP_CTA = {
+    "raw-reads": "Starting from raw reads (FASTQ, FASTA or SAM)? HYB2 Desktop maps them and writes the .hyb file.",
+    "long-fold": "Longer than " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt? HYB2 Desktop runs CPLfold natively with no capacity test; " +
+      "its limit grows with memory: " + DESKTOP_LIMITS.cplfoldText + ".",
+    overview: "The full pipeline on your computer, from raw reads to structures."
+  };
+  // The installers are the GitHub releases' files, public since the
+  // repository is (2026-10-17). False hides every download (downloadUrl and
+  // checksumsUrl return "", cta() opens the Desktop drawer only).
+  const DESKTOP_DOWNLOADS_PUBLIC = true;
+  const desktop = {
+    name: "HYB2 Desktop",
+    downloadsAvailable: DESKTOP_DOWNLOADS_PUBLIC,
+    notAvailable: "HYB2 Desktop is not available for public download yet.",
+    releasesUrl: "https://github.com/Vicky-0256/hyb2/releases",
+    checksumsFile: "SHA256SUMS.txt",
+    platforms: [
+      { id: "mac-arm64", os: "mac", label: "macOS · Apple silicon", file: "HYB2-Desktop-macOS-arm64.dmg" },
+      { id: "win-x64", os: "windows", label: "Windows · 64-bit", file: "HYB2-Desktop-Windows-x64-Setup.exe" },
+      { id: "linux-deb", os: "linux", label: "Linux · .deb", file: "HYB2-Desktop-Linux-x64.deb" },
+      { id: "linux-tar", os: "linux", label: "Linux · .tar.gz", file: "HYB2-Desktop-Linux-x64.tar.gz" }
+    ],
+    unavailable: "Intel Macs and ARM Linux/Windows have no installer yet; use the command-line pipeline (README).",
+    limits: DESKTOP_LIMITS,
+    tagline: "The full HYB2 pipeline on your computer: from raw reads to .hyb files, analysis and longer RNA structures.",
+    capabilities: [
+      { title: "Raw reads → .hyb", text: "FASTQ, FASTA or SAM, mapped with Bowtie2, hybrids called and checked" },
+      { title: "Same analysis pages", text: "The same analysis pages as Web, saved as projects on disk" },
+      { title: "Native CPLfold", text: "Set by memory, " + DESKTOP_LIMITS.cplfoldText + " (browser: " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt), no capacity test" },
+      { title: "Comparisons", text: "DESeq2 comparisons and QC" },
+      { title: "Offline", text: "Works offline; data stays on your computer" }
+    ],
+    isInsideDesktop: function () {
+      return !!(root.Hyb2Desktop && root.Hyb2Desktop.enabled);
+    },
+    // the first platform for this computer's OS (Linux: the .deb), or null.
+    // iPadOS Safari reports a Mac; a touch screen with several touch points
+    // tells it apart (Macs report 0).
+    detectPlatform: function (userAgent, maxTouchPoints) {
+      const nav = root.navigator || {};
+      const text = String(userAgent != null ? userAgent :
+        ((nav.userAgentData && nav.userAgentData.platform) || nav.platform || nav.userAgent || "")).toLowerCase();
+      const touches = Number(maxTouchPoints != null ? maxTouchPoints : userAgent != null ? 0 : nav.maxTouchPoints) || 0;
+      if (/iphone|ipad|ipod/.test(text) || (text.indexOf("mac") !== -1 && touches > 1)) {
+        return null;
+      }
+      const os = text.indexOf("mac") !== -1 ? "mac" : text.indexOf("win") !== -1 ? "windows" :
+        text.indexOf("linux") !== -1 && text.indexOf("android") === -1 ? "linux" : "";
+      return desktop.platforms.filter(function (item) { return item.os === os; })[0] || null;
+    },
+    downloadUrl: function (platform) {
+      const file = typeof platform === "string" ? platform : platform && platform.file;
+      return desktop.downloadsAvailable && file ? desktop.releasesUrl + "/latest/download/" + file : "";
+    },
+    checksumsUrl: function () {
+      return desktop.downloadUrl(desktop.checksumsFile);
+    },
+    // The published releases, newest first, as web/releases.js lists them
+    // when the site is deployed (scripts/write-releases.mjs): [{ tag,
+    // published: "YYYY-MM-DD", files: [names] }]. Empty when it is missing.
+    releases: function () {
+      const list = root.HYB2_RELEASES;
+      return Array.isArray(list) ? list.filter(function (release) {
+        return release && typeof release.tag === "string" && Array.isArray(release.files);
+      }) : [];
+    },
+    // A file of one release (tag), as downloadUrl gives the latest's.
+    releaseDownloadUrl: function (tag, platform) {
+      const file = typeof platform === "string" ? platform : platform && platform.file;
+      return desktop.downloadsAvailable && tag && file
+        ? desktop.releasesUrl + "/download/" + encodeURIComponent(tag) + "/" + file : "";
+    },
+    // <a class="desktop-cta" data-action="open-desktop">: the app opens the
+    // Desktop drawer on click (and calls preventDefault). Without that handler
+    // the link goes to the release page, or nowhere while downloads are private.
+    cta: function (context) {
+      if (desktop.isInsideDesktop() || !DESKTOP_CTA[context]) {
+        return "";
+      }
+      const href = desktop.downloadsAvailable ? desktop.releasesUrl + "/latest" : "#hyb2-desktop";
+      const label = desktop.downloadsAvailable ? "Get HYB2 Desktop" : "About HYB2 Desktop";
+      return '<a class="desktop-cta" href="' + href + '" data-action="open-desktop" data-desktop-context="' +
+        escapeText(context) + '">' + escapeText(DESKTOP_CTA[context]) + " <strong>" + label + "</strong></a>";
+    }
+  };
+
   root.Hyb2UiKit = {
     niceTicks: niceTicks,
     formatTick: formatTick,
     legend: { html: html, svg: svg, drawCanvas: drawCanvas },
-    closeExportMenus: function () { closeMenus(null); }
+    closeExportMenus: function () { closeMenus(null); },
+    desktop: desktop
   };
 }(typeof window !== "undefined" ? window : globalThis));

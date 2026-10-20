@@ -82,7 +82,7 @@ kbd {
 }
 
 /* Phones: the header is already full and the palette is keyboard-led.
-   On the landing header the trigger also ran over the "Web Lite" label. */
+   On the landing header the trigger also ran over the "Web" label. */
 @media (max-width: 767px) {
   .workspace-header .cmdk-trigger,
   .landing-header .cmdk-trigger {
@@ -157,7 +157,7 @@ kbd {
   position: absolute;
   inset: 0 0 auto;
   height: 2px;
-  background: linear-gradient(90deg, var(--teal), var(--violet));
+  background: var(--brand-gradient);
   content: "";
 }
 
@@ -601,7 +601,7 @@ body.cmdk-locked {
   right: 0;
   left: 0;
   height: 2px;
-  background: linear-gradient(90deg, var(--teal), var(--violet));
+  background: var(--brand-gradient);
   pointer-events: none;
   transform: scaleX(0);
   transform-origin: left center;

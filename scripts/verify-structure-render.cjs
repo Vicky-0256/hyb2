@@ -581,11 +581,14 @@ assert.match(context.window.Hyb2StructureUI.cplfoldCandidatesTsv(cplfoldState.st
 const cplfoldPairsTsv = context.window.Hyb2StructureUI.basePairTsv(cplfoldState.structure.result);
 assert.match(cplfoldPairsTsv, /rna_cofold_evidence\tmfe_kcal_per_mol\tevidence_kind\tevidence_support/);
 assert.match(cplfoldPairsTsv, /\t\tlog1p_hyb_bonus\t0\.2\tprimary\t-4\.10\tCPLfold/);
-const sequenceOnlyCplfoldHtml = context.window.Hyb2Pages.renderStructureResult(Object.assign({}, cplfoldState.structure.result, {
+const sequenceOnlyCplfoldResult = Object.assign({}, cplfoldState.structure.result, {
   evidenceMode: "none",
   evidenceSource: "none",
   evidence: { source: "none", inputRecords: 0, bonusEntries: [] }
-}), null);
+});
+// the downloads sit in the page heading's Export menu, not in the result
+const sequenceOnlyCplfoldHtml = context.window.Hyb2Pages.renderStructureResult(sequenceOnlyCplfoldResult, null) +
+  context.window.Hyb2Pages.renderStructureExportMenu(sequenceOnlyCplfoldResult);
 assert.doesNotMatch(sequenceOnlyCplfoldHtml, /Download bonus matrix/,
   "sequence-only CPLfold must not offer an empty HYB bonus export");
 assert.match(sequenceOnlyCplfoldHtml, /Download candidates/);

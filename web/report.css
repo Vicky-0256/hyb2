@@ -42,11 +42,11 @@
 
 .report-logo-wrap {
   display: inline-flex;
-  width: 124px;
+  width: 91px;
   height: 40px;
   align-items: center;
   justify-content: center;
-  flex: 0 0 124px;
+  flex: 0 0 91px;
 }
 
 .report-logo-wrap img {
@@ -776,8 +776,8 @@
   }
 
   .report-logo-wrap {
-    width: 104px;
-    flex-basis: 104px;
+    width: 76px;
+    flex-basis: 76px;
   }
 
   .report-definition-list > div {

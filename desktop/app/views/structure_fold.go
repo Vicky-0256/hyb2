@@ -37,6 +37,9 @@ var (
 func (p *structurePage) resetFoldSettings() {
 	p.alpha, p.beam, p.phase1, p.delta, p.beta, p.model =
 		stDefaultAlpha, stDefaultBeam, stDefaultPhase1, stDefaultDelta, stDefaultBeta, stDefaultModel
+	if p.engine == "" {
+		p.engine, p.temperature, p.minLoop = engineCPLfold, stDefaultTemp, stDefaultLoop
+	}
 }
 
 func (p *structurePage) foldSettingsChanged() bool {
@@ -110,9 +113,13 @@ func (p *structurePage) plan() foldPlan {
 		pl.limits = append(pl.limits, "Whole-RNA folds cannot contain pseudoknots; fold windows to allow them.")
 	}
 	pl.limits = append(pl.limits, "Only chimeras with both arms inside the folded region are used as evidence.")
-	if len(pl.lengths) > 0 {
+	if p.engine == engineVienna {
+		p.viennaPlan(&pl)
+	} else if len(pl.lengths) > 0 {
 		pl.memMB = StructureMemClaim(pl.req, pl.length, pl.pk)
 		pl.req.MemMB = &pl.memMB
+	}
+	if len(pl.lengths) > 0 {
 		if p.budgetMB > 0 && pl.memMB > p.budgetMB {
 			pl.problems = append(pl.problems, fmt.Sprintf("This fold needs about %.1f GB of memory but tasks may use %.1f GB. "+
 				"Fold shorter windows, fewer windows at once (Advanced), or raise Memory in Preferences.",
@@ -148,7 +155,11 @@ func (p *structurePage) form(c *ui.Context) {
 			ui.Text(c, p.prefillNote).FontSize(12).Padding(8).Radius(6).Background(t.Accent.Alpha(0.10))
 		}
 		p.inputs(c, pl)
-		p.advanced(c)
+		if p.engine == engineVienna {
+			p.viennaAdvanced(c)
+		} else {
+			p.advanced(c)
+		}
 	})
 	// Cmd+Enter (Ctrl+Enter) runs the fold from anywhere in the form.
 	card.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
@@ -214,7 +225,11 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 			currentEv = o.Label
 		}
 	}
-	Field(c, "2  Evidence: chimeric reads of", func() {
+	evidenceLabel := "2  Evidence: chimeric reads of"
+	if p.engine == engineVienna {
+		evidenceLabel = "2  Samples (their reference is folded)"
+	}
+	Field(c, evidenceLabel, func() {
 		if len(evLabels) == 0 {
 			ui.Text(c, "No analysed samples yet. Run the pipeline on the Data page; analysed samples and conditions appear here.").
 				FontSize(12).TextColor(t.TextMuted)
@@ -229,7 +244,11 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 	Field(c, "3  What to fold", func() {
 		ui.RadioGroup(c.Key("st-mode"), func() {
 			ui.Radio(c, &p.mode, "genome", "The whole RNA (no pseudoknots)")
-			ui.Radio(c, &p.mode, "windows", "Regions (windows), pseudoknots possible")
+			windows := "Regions (windows), pseudoknots possible"
+			if p.engine == engineVienna {
+				windows = "Regions (windows)"
+			}
+			ui.Radio(c, &p.mode, "windows", windows)
 		}).Label("What to fold")
 	})
 	if p.mode == "windows" {
@@ -240,8 +259,16 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 				ui.Text(c, pl.what+": "+pl.span()).FontSize(12).TextColor(t.TextMuted)
 			}
 		})
-		ui.Checkbox(c.Key("st-pk"), &p.pseudoknot, "Allow pseudoknots in the windows")
+		if p.engine != engineVienna {
+			ui.Checkbox(c.Key("st-pk"), &p.pseudoknot, "Allow pseudoknots in the windows")
+		}
 	}
+	Field(c, "4  Engine", func() {
+		ui.RadioGroup(c.Key("st-engine"), func() {
+			ui.Radio(c, &p.engine, engineCPLfold, "CPLfold, guided by the chimeric reads")
+			ui.Radio(c, &p.engine, engineVienna, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
+		}).Label("Engine")
+	})
 }
 
 // advanced: the CPLfold settings and parallel windows, folded away. Their
@@ -339,10 +366,14 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 			}
 			line("Fold", what)
 		}
-		if len(pl.ids) > 0 {
+		if len(pl.ids) > 0 && p.engine != engineVienna {
 			line("Evidence", pl.evidence)
 		}
-		if p.est != nil {
+		if p.engine == engineVienna && len(pl.lengths) > 0 {
+			line("Engine", fmt.Sprintf("ViennaRNA MFE, %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
+			line("Time", "about "+FormatDuration(viennaSeconds(pl.lengths))+" (rough: MFE time grows with the cube of the length)")
+		}
+		if p.est != nil && p.engine != engineVienna {
 			time := "about " + FormatDuration(p.est.Seconds) + " (measured on this computer)"
 			if !p.est.Measured {
 				time = "about " + FormatDuration(p.est.Seconds) + " (rough; the first fold after installing also " +
@@ -422,7 +453,11 @@ func (p *structurePage) runFold() {
 	}
 	p.starting, p.startErr, p.lastTask = true, "", ""
 	mem := pl.memMB
-	a.StartTask(pl.req, "Structure · "+pl.evidence+" · "+pl.what, func(t model.Task, err error) {
+	title := "Structure · " + pl.evidence + " · " + pl.what
+	if p.engine == engineVienna {
+		title = "Structure (ViennaRNA) · " + pl.what
+	}
+	a.StartTask(pl.req, title, func(t model.Task, err error) {
 		p.starting = false
 		if err != nil {
 			p.startErr = StructureStartError(err, mem)
@@ -697,6 +732,9 @@ func (p *structurePage) list(c *ui.Context) {
 					ui.Text(c, s).FontSize(12)
 				}
 				meta := "Evidence: " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
+				if e.Parameters["engine"] == "ViennaRNA" {
+					meta = "ViennaRNA MFE · reference of " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
+				}
 				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
 				if e.Available != nil && !*e.Available {
 					ui.Text(c, "Its files are missing from the project folder; it cannot be shown. Run the fold again to recreate it.").

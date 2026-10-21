@@ -151,7 +151,17 @@ func TestStructureRequestsAreValidated(t *testing.T) {
 	assertJSON(t, payload["windows"], `[]`)
 	assertJSON(t, payload["workers"], `4`)
 	assertJSON(t, payload["parameters"], `{}`)
+	if _, ok := payload["engine"]; ok {
+		t.Fatalf("engine sent by default: %v", payload)
+	}
+	vienna := genome
+	vienna.Engine = ptr("viennarna")
+	payload, err = TaskPayload(vienna, "/p", "a", run, claim)
+	if err != nil || payload["engine"] != "viennarna" {
+		t.Fatalf("vienna payload %v %v", payload, err)
+	}
 	edits := []func(*TaskStartRequest){
+		func(r *TaskStartRequest) { r.Engine = ptr("unafold") },
 		func(r *TaskStartRequest) { r.SampleIDs = nil },
 		func(r *TaskStartRequest) { r.SampleIDs = []string{} },
 		func(r *TaskStartRequest) { r.SampleIDs = []string{"../x"} },

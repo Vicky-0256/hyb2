@@ -155,6 +155,11 @@ func TestFoldRemaining(t *testing.T) {
 	if _, ok := perfFromResult("structure", run); ok {
 		t.Fatal("a compiling fold was recorded")
 	}
+	// Nor does a ViennaRNA fold measure CPLfold's.
+	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":true,"performance":{"lengths":[3000],"engine":"viennarna","workers":1,"seconds":7}}`), 0o644)
+	if _, ok := perfFromResult("structure", run); ok {
+		t.Fatal("a ViennaRNA fold was recorded")
+	}
 }
 
 // TestFoldRateFromAParallelRun: a run that took exactly its estimate does

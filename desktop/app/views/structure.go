@@ -350,7 +350,12 @@ type structurePage struct {
 	// the other CPLfold settings, as on the web RNA Structure page
 	phase1, delta, beta float64
 	model               string
-	workers             float64
+	// engine is engineCPLfold or engineVienna; the ViennaRNA settings
+	// (structure_vienna.go).
+	engine               string
+	temperature, minLoop float64
+	hardPairs            string
+	workers              float64
 	// estKey is the form state est was computed for (time and memory of
 	// the fold the form describes).
 	estKey      string
@@ -1048,7 +1053,13 @@ func (p *structurePage) statsTable(c *ui.Context, compare bool) {
 func (p *structurePage) metaLine(a *structureResult) string {
 	m := a.Meta
 	parts := []string{"Engine " + nameOr(m.Engine, "CPLfold")}
-	if m.Parameters != nil {
+	if m.Engine == "ViennaRNA" && m.Parameters != nil {
+		text := fmt.Sprintf("MFE, %v °C, minimum loop %v", m.Parameters["temperature"], m.Parameters["min_loop"])
+		if n := len(stHardPairs(a)); n > 0 {
+			text += fmt.Sprintf(", %d hard pair%s", n, plural(n))
+		}
+		parts = append(parts, text)
+	} else if m.Parameters != nil {
 		pk := "pseudoknot-free"
 		if on, _ := m.Parameters["allow_pseudoknot"].(bool); on {
 			pk = "pseudoknots allowed"

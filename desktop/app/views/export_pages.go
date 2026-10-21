@@ -437,9 +437,24 @@ func stCTText(gene string, records []structureRecord) string {
 	return b.String()
 }
 
+// stHardPairs are a result's ViennaRNA hard pairs (meta parameters).
+func stHardPairs(a *structureResult) map[[2]int]bool {
+	out := map[[2]int]bool{}
+	list, _ := a.Meta.Parameters["hard_pairs"].([]any)
+	for _, item := range list {
+		if pr, ok := item.([]any); ok && len(pr) == 2 {
+			i, _ := pr[0].(float64)
+			j, _ := pr[1].(float64)
+			out[[2]int{int(i), int(j)}] = true
+		}
+	}
+	return out
+}
+
 // stPairsRows are the web's rna-secondary-structure-pairs.tsv columns that
-// apply to CPLfold, in gene positions, with the window of each pair.
-func stPairsRows(records []structureRecord) [][]string {
+// apply to the desktop's engines, in gene positions, with the window of
+// each pair.
+func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool) [][]string {
 	weights := stWeights(records)
 	var rows [][]string
 	for _, r := range records {
@@ -460,8 +475,12 @@ func stPairsRows(records []structureRecord) [][]string {
 				kind, support = "log1p_hyb_bonus", strconv.FormatFloat(w, 'f', -1, 64)
 			}
 			left, right := base(pr.I), base(pr.J)
+			fixed := "no"
+			if hard[[2]int{pr.I, pr.J}] {
+				fixed = "yes"
+			}
 			rows = append(rows, []string{strconv.Itoa(start), strconv.Itoa(end), strconv.Itoa(pr.I), left, strconv.Itoa(pr.J), right,
-				left + "–" + right, stLayerName(pr.Layer), kind, support, energy, "CPLfold"})
+				left + "–" + right, fixed, stLayerName(pr.Layer), kind, support, energy, engine})
 		}
 	}
 	return rows
@@ -479,13 +498,13 @@ func (p *structurePage) exportCT(a *structureResult) {
 }
 
 func (p *structurePage) exportPairsTSV(a *structureResult) {
-	records := stPickRecords(a.Records, p.record)
-	comments := []string{"HYB2 structure " + p.viewA + " · " + nameOr(a.Meta.GeneID, a.Structure.GeneID) + " · " + nameOr(a.Meta.Engine, "CPLfold"),
+	records, engine, hard := stPickRecords(a.Records, p.record), nameOr(a.Meta.Engine, "CPLfold"), stHardPairs(a)
+	comments := []string{"HYB2 structure " + p.viewA + " · " + nameOr(a.Meta.GeneID, a.Structure.GeneID) + " · " + engine,
 		"Positions on the RNA; evidence_support is the pair's HYB bonus (log1p of the chimera support) where CPLfold used one"}
 	saveExport(p.a, "Save the base pairs", p.exportName(a, "_pairs.tsv"), func() ([]byte, error) {
 		header := []string{"window_start", "window_end", "left_position", "left_base", "right_position", "right_base", "pair_type",
-			"pair_layer", "evidence_kind", "evidence_support", "selected_energy_kcal_per_mol", "engine"}
-		return tsvTable{Comments: comments, Header: header, Rows: stPairsRows(records)}.Bytes()
+			"hard_constraint", "pair_layer", "evidence_kind", "evidence_support", "selected_energy_kcal_per_mol", "engine"}
+		return tsvTable{Comments: comments, Header: header, Rows: stPairsRows(records, engine, hard)}.Bytes()
 	})
 }
 

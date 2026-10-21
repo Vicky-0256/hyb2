@@ -1185,11 +1185,18 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 	if err != nil {
 		return nil, err
 	}
-	return Obj{
+	payload := Obj{
 		"operation": "structure_run", "project_path": project, "sample_ids": samples,
 		"gene_id": gene, "mode": mode, "windows": windows, "parameters": parameters,
 		"workers": max(workers, 1), "task_id": id, "run_dir": runDir,
-	}, nil
+	}
+	if request.Engine != nil {
+		if *request.Engine != "cplfold" && *request.Engine != "viennarna" {
+			return nil, errors.New("structure engine must be cplfold or viennarna")
+		}
+		payload["engine"] = *request.Engine
+	}
+	return payload, nil
 }
 
 func comparePayload(request TaskStartRequest, project, id, runDir string) (Obj, error) {

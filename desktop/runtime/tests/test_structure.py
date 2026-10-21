@@ -277,3 +277,87 @@ class StructureRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ViennaRunTests(unittest.TestCase):
+    """engine "viennarna": the web's ViennaRNA MFE mode with hard pairs."""
+    length = 180
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self.tmp.name) / "p.hyb2proj"
+        new_project(self.project, "Vienna")
+        (self.project / "data").mkdir()
+        self.sequence = _sequence(self.length, seed=3)
+        (self.project / "data" / "ref.fa").write_text(f">{GENE} test\n{self.sequence}\n")
+        (self.project / "data" / "a.hyb").write_text("".join(_hyb_rows(self.length, 10)))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, **extra):
+        request = {"operation": "structure_run", "project_path": str(self.project), "reference": "data/ref.fa",
+                   "hyb_paths": ["data/a.hyb"], "gene_id": GENE, "engine": "viennarna"}
+        request.update(extra)
+        return handle(request, repo_root=ROOT)
+
+    def _canonical_pair(self, start=1, end=None, loop=3):
+        end = end or self.length
+        for i in range(start, end + 1):
+            for j in range(i + loop + 1, end + 1):
+                if self.sequence[i - 1] + self.sequence[j - 1] in {"GC", "CG"}:
+                    return i, j
+        raise AssertionError("no G-C pair")
+
+    def test_mfe_matches_rnafold(self):
+        import RNA
+        result = self._run(task_id="v1", parameters={"temperature": 30, "min_loop": 4})
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "v1"
+        lines = (out / "structure.dbn").read_text().splitlines()
+        md = RNA.md()
+        md.temperature, md.min_loop_size = 30, 4
+        structure, energy = RNA.fold_compound(self.sequence, md, RNA.OPTION_MFE).mfe()
+        self.assertEqual(lines[2], structure)
+        self.assertIn("ViennaRNA MFE, 30 °C, min loop 4", lines[0])
+        meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual((meta["engine"], meta["parameters"]["temperature"]), ("ViennaRNA", 30.0))
+        self.assertAlmostEqual(meta["records"][0]["energy"], round(energy, 2))
+        self.assertEqual(result["performance"]["engine"], "viennarna")
+        self.assertEqual(result["structure"]["summary"]["pairs"], structure.count("("))
+        # what the desktop scheduler does when the task ends
+        from desktop.runtime.project import register_task_run
+        (Path(result["run_dir"]) / "status.json").write_text(json.dumps({"task_id": "v1", "kind": "structure", "status": "succeeded"}))
+        register_task_run(self.project, "v1")
+        read = handle({"operation": "read_structure", "path": str(self.project), "structure_id": "v1"}, repo_root=ROOT)
+        self.assertEqual(read["records"][0]["dbn"], structure)
+
+    def test_hard_pairs(self):
+        i, j = self._canonical_pair(start=40, end=120)
+        result = self._run(task_id="v2", mode="windows", windows=[{"start": 31, "end": 130}],
+                           parameters={"hard_pairs": [[i, j]]})
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "v2"
+        tsv = (out / "pairs.tsv").read_text().splitlines()[1:]
+        self.assertIn((i, j), {(int(r.split("\t")[2]), int(r.split("\t")[3])) for r in tsv})
+        self.assertIn("1 hard pairs", (out / "structure.dbn").read_text().splitlines()[0])
+
+    def test_rejects(self):
+        i, j = self._canonical_pair(start=40, end=120)
+        bad_pair = next((a, b) for a in range(1, 50) for b in range(a + 4, 60)
+                        if self.sequence[a - 1] + self.sequence[b - 1] in {"AA", "CC", "GG", "UU", "AC", "CA"})
+        for extra in ({"parameters": {"temperature": 101}}, {"parameters": {"min_loop": 13}},
+                      {"parameters": {"beam": 20}}, {"parameters": {"hard_pairs": [[j, i]]}},
+                      {"parameters": {"hard_pairs": [list(bad_pair)]}},
+                      {"parameters": {"hard_pairs": [[i, j], [i, j]]}},
+                      {"parameters": {"hard_pairs": [[i, i + 2]]}},
+                      {"mode": "windows", "windows": [{"start": 1, "end": 20}], "parameters": {"hard_pairs": [[i, j]]}},
+                      {"engine": "unafold"}):
+            with self.assertRaises(ValueError, msg=extra):
+                self._run(task_id="bad", **extra)
+        # crossing hard pairs
+        from desktop.runtime.vienna import check_hard_pairs
+        seq = "GGGGAAAACCCCAAAAGGGGAAAACCCC"
+        with self.assertRaises(ValueError):
+            check_hard_pairs([(1, 12), (5, 17)], seq.replace("A", "C", 0), 3)
+        self.assertEqual(check_hard_pairs([(17, 28), (1, 12)], seq, 3), [(1, 12), (17, 28)])

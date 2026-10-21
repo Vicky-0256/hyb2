@@ -26,10 +26,12 @@ type TaskStartRequest struct {
 	SampleIDs   []string `json:"sample_ids,omitempty"`
 	GeneID      *string  `json:"gene_id,omitempty"`
 	Mode        *string  `json:"mode,omitempty"`
-	Windows     []Window `json:"windows,omitempty"`
-	Workers     *uint32  `json:"workers,omitempty"`
-	SamplesOne  []string `json:"samples_one,omitempty"`
-	SamplesTwo  []string `json:"samples_two,omitempty"`
+	// Engine of a structure task: "cplfold" (default) or "viennarna".
+	Engine     *string  `json:"engine,omitempty"`
+	Windows    []Window `json:"windows,omitempty"`
+	Workers    *uint32  `json:"workers,omitempty"`
+	SamplesOne []string `json:"samples_one,omitempty"`
+	SamplesTwo []string `json:"samples_two,omitempty"`
 	// ComparisonID names the Compare test of an energy task.
 	ComparisonID *string `json:"comparison_id,omitempty"`
 	CPU          *uint32 `json:"cpu,omitempty"`

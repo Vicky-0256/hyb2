@@ -39,6 +39,7 @@ from .detector import CPLFOLD_MEMORY_FRACTION, cplfold_limits, cplfold_memory_es
 from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
 from .samples import _hyb2_reference_name
 from . import trust as _trust
+from . import vienna as _vienna
 
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 MAX_WINDOWS = 512
@@ -433,16 +434,25 @@ def _atomic_write_text(path: Path, text: str) -> None:
     os.replace(temporary, path)
 
 
+def _describe(params: Dict[str, Any]) -> str:
+    """The .dbn header's account of how a record was folded."""
+    if params.get("engine") == "ViennaRNA":
+        hard = f", {len(params['hard_pairs'])} hard pairs" if params.get("hard_pairs") else ""
+        return f"ViennaRNA MFE, {params['temperature']:g} °C, min loop {params['min_loop']}{hard}"
+    mode = "pseudoknot" if params["allow_pseudoknot"] else "pseudoknot-free"
+    return f"CPLfold {mode}, alpha {params['alpha']}, beam {params['beam']}"
+
+
 def _write_outputs(out_dir: Path, records: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, str]:
     dbn, ct = [], []
     tsv = ["window_start\twindow_end\ti\tj\tbracket\tbonus"]
-    mode = "pseudoknot" if params["allow_pseudoknot"] else "pseudoknot-free"
+    describe = _describe(params)
     for record in records:
         start, end = record["start"], record["end"]
         energy = record["energy"]
         energy_text = f"{energy:.2f}" if isinstance(energy, (int, float)) else "NA"
         label = f"{record['gene_id']}:{start}-{end}"
-        dbn.append(f">{label} CPLfold {mode}, alpha {params['alpha']}, beam {params['beam']}, energy {energy_text}\n"
+        dbn.append(f">{label} {describe}, energy {energy_text}\n"
                    f"{record['sequence']}\n{record['structure']}\n")
         partner = {}
         for i, j, bracket, bonus in record["pairs"]:
@@ -494,6 +504,11 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     mode = request.get("mode", "genome")
     if mode not in {"genome", "windows"}:
         raise ValueError("mode must be 'genome' or 'windows'")
+    engine = request.get("engine", "cplfold")
+    if engine not in {"cplfold", "viennarna"}:
+        raise ValueError("engine must be 'cplfold' or 'viennarna'")
+    if engine == "viennarna":
+        return _vienna_run(request, project, task_id, mode, state, started)
     params = _parameters(request.get("parameters"), mode)
     inputs = _evidence_inputs(project, request)
     gene_id, sequence = _reference_sequence(inputs["reference"], inputs["gene_id"])
@@ -650,6 +665,82 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
         # the manifest when the task finishes.
         "structure": {"id": task_id, "task_id": task_id, "sample_ids": [sample["id"] for sample in inputs["samples"]],
                       "gene_id": gene_id, "mode": mode, "windows": meta["windows"], "parameters": meta["parameters"],
+                      "created_at": meta["created_at"], "path": relative_dir,
+                      "paths": {key: f"{relative_dir}/{Path(value).name}" for key, value in outputs.items()},
+                      "summary": summary},
+        "summary": summary,
+    }
+    progress("done", "finished", None, None, units="none", force=True)
+    _atomic_write_json(run_dir / "result.json", result)
+    return result
+
+
+def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str, state: Dict[str, Any],
+                started: float) -> Dict[str, Any]:
+    """ViennaRNA MFE of the whole RNA or each window (vienna.py); the samples
+    give the reference, and their chimeras are not used."""
+    params = _vienna.parameters(request.get("parameters"))
+    inputs = _evidence_inputs(project, request)
+    gene_id, sequence = _reference_sequence(inputs["reference"], inputs["gene_id"])
+    windows = _windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
+    longest = max(end - start + 1 for start, end in windows)
+    if longest > _vienna.MAX_VIENNA_NT:
+        raise ValueError(f"{longest} nt exceeds the ViennaRNA limit of {_vienna.MAX_VIENNA_NT} nt; fold windows")
+    # each hard pair applies to the windows that hold both its ends
+    hard = params["hard_pairs"]
+    per_window = [[(i, j) for i, j in hard if start <= i and j <= end] for start, end in windows]
+    outside = [f"{i}-{j}" for i, j in hard if not any(start <= i and j <= end for start, end in windows)]
+    if outside:
+        raise ValueError("hard pair(s) " + ", ".join(outside) + " are not inside a folded window")
+    local = [_vienna.check_hard_pairs(pairs, sequence[start - 1:end].upper().replace("T", "U"), params["min_loop"], start)
+             for pairs, (start, end) in zip(per_window, windows)]
+
+    run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
+    state.update(run_dir=run_dir, task_id=task_id)
+    out_dir = _real_child_dir(project / "structures", task_id, exist_ok=True)
+    progress = ProgressWriter(run_dir)
+    progress.work = {"lengths": [end - start + 1 for start, end in windows], "engine": "viennarna", "workers": 1}
+    records: List[Dict[str, Any]] = []
+    t0 = time.monotonic()
+    for index, ((start, end), pairs) in enumerate(zip(windows, local)):
+        progress("fold", f"window {index + 1}/{len(windows)} ({start}-{end})" if mode == "windows" else "folding",
+                 index, len(windows), units="windows", force=True)
+        record = _vienna.fold(sequence[start - 1:end], params, pairs)
+        record.update({"start": start, "end": end, "gene_id": gene_id, "sequence": sequence[start - 1:end].upper().replace("T", "U")})
+        records.append(record)
+    fold_seconds = time.monotonic() - t0
+
+    progress("write", "writing results", None, None, units="none", force=True)
+    stored = {"engine": "ViennaRNA", "temperature": params["temperature"], "min_loop": params["min_loop"],
+              "hard_pairs": [list(p) for p in hard]}
+    outputs = _write_outputs(out_dir, records, stored)
+    summaries = [_summary(record) for record in records]
+    meta = {
+        "version": 1, "task_id": task_id, "mode": mode, "engine": "ViennaRNA", "engine_version": _vienna.version(),
+        "gene_id": gene_id, "reference": {"path": str(inputs["reference"]), "length": len(sequence)},
+        "evidence_inputs": {"samples": inputs["samples"], "hyb": [],
+                            "rows": "none: ViennaRNA MFE uses the sequence (and any hard pairs) only"},
+        "parameters": stored,
+        "coordinates": "1-based inclusive positions on the gene_id reference sequence (windows, pairs.tsv i/j, ct column 6)",
+        "windows": [{"start": start, "end": end} for start, end in windows],
+        "workers": 1, "records": summaries,
+        "timings": {"evidence_s": 0.0, "fold_s": round(fold_seconds, 2), "total_s": round(time.monotonic() - started, 2)},
+        "created_at": _now(),
+    }
+    _atomic_write_json(out_dir / "meta.json", meta)
+    outputs["meta"] = str(out_dir / "meta.json")
+    relative_dir = f"structures/{task_id}"
+    energies = [item["energy"] for item in summaries]
+    summary = {"records": len(records), "pairs": sum(item["pairs"] for item in summaries), "pairs_with_bonus": 0,
+               "pseudoknot_pairs": 0, "energy": energies[0] if len(energies) == 1 else None, "energies": energies,
+               "length": sum(item["length"] for item in summaries), "workers": 1, "timings": meta["timings"],
+               "engine": "ViennaRNA"}
+    result = {
+        "ok": True, "status": "succeeded", "task_id": task_id, "run_dir": str(run_dir),
+        "output": outputs["dbn"], "output_dir": str(out_dir), "outputs": outputs,
+        "performance": {**progress.work, "seconds": round(fold_seconds, 2)},
+        "structure": {"id": task_id, "task_id": task_id, "sample_ids": [sample["id"] for sample in inputs["samples"]],
+                      "gene_id": gene_id, "mode": mode, "windows": meta["windows"], "parameters": stored,
                       "created_at": meta["created_at"], "path": relative_dir,
                       "paths": {key: f"{relative_dir}/{Path(value).name}" for key, value in outputs.items()},
                       "summary": summary},

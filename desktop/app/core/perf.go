@@ -140,11 +140,14 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 			Lengths    []int   `json:"lengths"`
 			Beam       int     `json:"beam"`
 			Workers    int     `json:"workers"`
+			// Engine "viennarna" folds are not CPLfold's speed.
+			Engine string `json:"engine"`
 			// The run compiled Numba kernels: its time is not the speed.
 			Compiled bool `json:"compiled"`
 		} `json:"performance"`
 	}
-	if json.Unmarshal(data, &result) != nil || !result.OK || result.Performance == nil || result.Performance.Compiled {
+	if json.Unmarshal(data, &result) != nil || !result.OK || result.Performance == nil || result.Performance.Compiled ||
+		result.Performance.Engine == "viennarna" {
 		return PerfRecord{}, false
 	}
 	p := result.Performance

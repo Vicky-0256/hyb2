@@ -3,6 +3,7 @@ package views
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -356,5 +357,61 @@ func TestStructureMemoryClaim(t *testing.T) {
 	msg := StructureStartError(errors.New("task mem_mb must be between 1 and the budget (8192)"), 16231)
 	if !strings.Contains(msg, "15.9 GB") || !strings.Contains(msg, "Preferences") {
 		t.Fatalf("message %q", msg)
+	}
+}
+
+// The web's ViennaRNA mode: an engine choice with its settings and hard pairs.
+func TestStructureViennaForm(t *testing.T) {
+	a, f := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 1300)
+	a.Navigate("structure", nil)
+	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	if p.engine != engineCPLfold || p.temperature != 37 || p.minLoop != 3 {
+		t.Fatalf("defaults %q %v %v", p.engine, p.temperature, p.minLoop)
+	}
+	if err := tt.Click("ViennaRNA MFE, the sequence alone (optional hard pairs)"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for _, text := range []string{"ViennaRNA settings", "37 °C · minimum loop 3 · defaults", "Engine", "ViennaRNA MFE, 37 °C, minimum loop 3",
+		"• ViennaRNA MFE folds the sequence alone: the chimeric reads are not used, the samples only give the reference."} {
+		if !tt.HasText(text) {
+			t.Fatalf("lacks %q: %q", text, tt.Texts())
+		}
+	}
+	if tt.HasText("Advanced settings") || tt.HasText("Evidence weight (alpha)") {
+		t.Fatal("CPLfold settings shown for ViennaRNA")
+	}
+	// whole RNA, about 5 minutes by the cubic rule
+	if pl := p.plan(); pl.memMB != 730 || viennaSeconds(pl.lengths) < 280 || viennaSeconds(pl.lengths) > 290 {
+		t.Fatalf("memory %d MB, %g s", pl.memMB, viennaSeconds(pl.lengths))
+	}
+	snapshot(t, tt, "structure-vienna")
+	p.hardPairs = "120-188\n5-4\nabc"
+	tt.Frame()
+	for _, text := range []string{"• Hard pair line 2 must have i < j.", "• Hard pair line 3 must be one pair as i-j, for example 4-18."} {
+		if !tt.HasText(text) {
+			t.Fatalf("lacks %q: %q", text, tt.Texts())
+		}
+	}
+	p.mode, p.windows, p.hardPairs, p.temperature = "windows", "100-400", "120-188\n500-560", 25
+	tt.Frame()
+	if !tt.HasText("• Hard pair 500-560 is not inside a folded window.") {
+		t.Fatalf("texts %q", tt.Texts())
+	}
+	p.hardPairs = "120 - 188"
+	tt.Frame()
+	if err := tt.Click("Run fold"); err != nil {
+		t.Fatal(err)
+	}
+	csSettle(a, tt)
+	started := f.startedKinds()
+	if len(started) != 1 || started[0].Engine == nil || *started[0].Engine != "viennarna" || *started[0].Workers != 1 {
+		t.Fatalf("started %+v", started)
+	}
+	params := started[0].Parameters.(map[string]any)
+	if params["temperature"] != 25.0 || params["min_loop"] != 3 || fmt.Sprint(params["hard_pairs"]) != "[[120 188]]" {
+		t.Fatalf("params %+v", params)
 	}
 }

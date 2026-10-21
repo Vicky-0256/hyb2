@@ -253,7 +253,7 @@ func TestStructureExportCTPairsAndReport(t *testing.T) {
 		t.Fatalf("%s: %d rows for %d pairs, header %q", name, len(rows), len(pairs), rows[0])
 	}
 	for _, row := range rows[1:] {
-		if row[6] != row[3]+"–"+row[5] || (row[7] != "primary" && !strings.HasPrefix(row[7], "pseudoknot-")) || row[11] != "CPLfold" {
+		if row[6] != row[3]+"–"+row[5] || row[7] != "no" || (row[8] != "primary" && !strings.HasPrefix(row[8], "pseudoknot-")) || row[12] != "CPLfold" {
 			t.Fatalf("row %q", row)
 		}
 	}

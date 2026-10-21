@@ -375,10 +375,14 @@ type structurePage struct {
 	// viewer
 	viewA, viewB string
 	record       string
-	cache        map[string]*structureResult
-	reading      map[string]bool
-	readErr      map[string]string
-	pendingPair  []string
+	// view is one of stViewLabels (structure_views.go); layouts are the
+	// folded view's, by nested dot-bracket.
+	view        string
+	layouts     map[string]stLayout
+	cache       map[string]*structureResult
+	reading     map[string]bool
+	readErr     map[string]string
+	pendingPair []string
 	// pendingShow is a fold started here, shown once it is listed.
 	pendingShow string
 	pairLabels  []string
@@ -408,6 +412,7 @@ func (p *structurePage) reset() {
 	p.prefillNote, p.startErr, p.lastTask, p.starting = "", "", "", false
 	p.structures, p.listErr, p.loading = nil, "", false
 	p.viewA, p.viewB, p.record = "", "", "all"
+	p.view, p.layouts = stViewLabels[0], map[string]stLayout{}
 	p.cache = map[string]*structureResult{}
 	p.reading = map[string]bool{}
 	p.readErr = map[string]string{}
@@ -741,8 +746,12 @@ func (p *structurePage) viewer(c *ui.Context) {
 				if ui.Button(c, "Save .dbn").Clicked() {
 					p.saveDBN(a)
 				}
-				if ui.Button(c, "Export SVG…").Tooltip("Save the arc diagram as shown").Clicked() {
-					p.exportArcsSVG(a)
+				if ui.Button(c, "Export SVG…").Tooltip("Save the view as shown").Clicked() {
+					if _, other := stViewModes[p.view]; other && b == nil {
+						p.exportViewSVG(a)
+					} else {
+						p.exportArcsSVG(a)
+					}
 				}
 				if ui.Button(c, "Save .ct").Tooltip("Connectivity table, one block per window shown").Clicked() {
 					p.exportCT(a)
@@ -779,6 +788,17 @@ func (p *structurePage) viewer(c *ui.Context) {
 		if a == nil || (p.viewB != "" && b == nil) {
 			ui.Text(c, "Loading…").TextColor(t.TextMuted)
 			return
+		}
+		if b == nil {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "View").FontSize(12).Bold().TextColor(t.TextMuted)
+				ui.Select(c.Key("st-view"), &p.view, stViewLabels).Width(140).Label("View")
+			})
+			if p.otherView(c, a) {
+				p.statsTable(c, false)
+				ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+				return
+			}
 		}
 		p.layerControls(c, stGene(a))
 		p.syncArcs(a, b)

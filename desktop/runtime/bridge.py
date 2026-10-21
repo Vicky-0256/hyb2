@@ -378,6 +378,10 @@ def _sample_ops_inner(operation: str, request: dict[str, Any], repo_root: Path |
         from .regions import structure_regions
         path = _valid_project(request)
         return {"ok": True, "path": str(path), **structure_regions(path, request)}
+    if operation == "structure_layout":
+        from .layout import structure_layout
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), **structure_layout(request.get("dbn"))}
     if operation == "read_energy":
         from .energy import read_energy
         path = _valid_project(request)

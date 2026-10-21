@@ -3,6 +3,8 @@ package views
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"hyb2desktop/core"
 	"hyb2desktop/widgets"
 )
 
@@ -264,5 +267,74 @@ func TestStructureExportCTPairsAndReport(t *testing.T) {
 	if !strings.HasSuffix(name, "_report.json") || report["structure_id"] != structA || len(windows) != len(res.Records) ||
 		windows[0].(map[string]any)["base_pairs"] != float64(len(pairs)) {
 		t.Fatalf("%s: %.400s", name, text)
+	}
+}
+
+func TestStructureOtherViews(t *testing.T) {
+	a, f := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 1600)
+	a.Navigate("structure", map[string]any{"structureId": structA})
+	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	res := p.cache[structA]
+	pairs, _, start, length, _ := stViewData(res, p.record)
+	if len(pairs) == 0 || start < 1 || length < 1 {
+		t.Fatalf("view data: %d pairs from %d over %d", len(pairs), start, length)
+	}
+	for _, view := range []string{"Circular", "Radial", "Matrix"} {
+		p.view = view
+		tt.Frame()
+		if _, ok := tt.Find(view + " view of the base pairs"); !ok {
+			t.Fatalf("%s: %q", view, tt.Texts())
+		}
+		snapshot(t, tt, "structure-"+strings.ToLower(view))
+		name, svg := exportClick(t, a, tt, "Export SVG…")
+		xmlWellFormed(t, svg)
+		if !strings.HasSuffix(name, "_"+strings.ToLower(view)+".svg") || !strings.Contains(svg, strings.ToLower(view)+" view") {
+			t.Fatalf("%s: %.300s", name, svg)
+		}
+		want := map[string]string{"Circular": "<line", "Radial": "<path", "Matrix": "<circle"}[view]
+		if strings.Count(svg, want) < len(pairs) {
+			t.Fatalf("%s: %d %s for %d pairs", view, strings.Count(svg, want), want, len(pairs))
+		}
+	}
+	// Folded: one window, laid out by structure_layout
+	p.view = "Folded"
+	if len(res.Records) > 1 {
+		tt.Frame()
+		if !tt.HasText("The folded view draws one window: choose it above.") {
+			t.Fatalf("texts %q", tt.Texts())
+		}
+		r := res.Records[0]
+		p.record = fmt.Sprintf("%d-%d", r.WindowStart, r.WindowEnd)
+		_, _, _, length, _ = stViewData(res, p.record)
+	}
+	xs, ys := make([]any, length), make([]any, length)
+	for i := range xs {
+		angle := 2 * math.Pi * float64(i) / float64(length)
+		xs[i], ys[i] = 1000*math.Cos(angle), 1000*math.Sin(angle)
+	}
+	f.ops["structure_layout"] = core.Obj{"ok": true, "x": xs, "y": ys}
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	if _, ok := tt.Find("Folded view of the base pairs"); !ok {
+		t.Fatalf("folded: %q", tt.Texts())
+	}
+	snapshot(t, tt, "structure-folded")
+	_, svg := exportClick(t, a, tt, "Export SVG…")
+	xmlWellFormed(t, svg)
+	if strings.Count(svg, "<line") < length-1 {
+		t.Fatalf("folded svg has %d lines for %d nt", strings.Count(svg, "<line"), length)
+	}
+	// B shows the arc comparison only
+	p.view = "Arcs"
+	tt.Frame()
+}
+
+func TestNestedDBN(t *testing.T) {
+	pairs := []widgets.LayeredPair{{I: 11, J: 20, Layer: 0}, {I: 12, J: 19, Layer: 0}, {I: 14, J: 25, Layer: 1}}
+	if got := stNestedDBN(pairs, 10, 16); got != ".((......))....." {
+		t.Fatalf("dbn %q", got)
 	}
 }

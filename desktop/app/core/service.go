@@ -65,6 +65,8 @@ var ProjectOperations = []string{
 	// (desktop/runtime/energy.py; computed by an `energy` task).
 	"structure_regions",
 	"read_energy",
+	// The folded view's 2-D layout of a structure (desktop/runtime/layout.py).
+	"structure_layout",
 	// Files a project links outside its folder (desktop/runtime/trust.py).
 	"list_untrusted_links",
 	"trust_links",

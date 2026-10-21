@@ -676,7 +676,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
 
 # --- analysis queries (R3): aggregated results from per-sample SQLite indexes ---
 
-_ANALYSIS_OPS = {"analysis_summary", "analysis_contact_bins", "analysis_hybrids", "analysis_top",
+_ANALYSIS_OPS = {"analysis_summary", "analysis_overview", "analysis_contact_bins", "analysis_hybrids", "analysis_top",
                  "analysis_viewpoint", "analysis_region", "compare_bins", "analysis_compare_bins"}
 
 
@@ -832,6 +832,8 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
     sample_ids, paths, lengths = _analysis_index_paths(request)
     if operation == "analysis_summary":
         result = query.summary(paths, lengths=lengths)
+    elif operation == "analysis_overview":
+        result = query.overview(paths, limit=opt_int("limit", None))
     elif operation == "analysis_contact_bins":
         result = query.contact_bins(paths, required_gene(), opt_int("bin_size", 10), request.get("region"), gene2=opt_str("gene2"),
                                     types=opt_types(), measure=opt_str("measure") or "records",

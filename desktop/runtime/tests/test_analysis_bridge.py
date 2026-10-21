@@ -96,9 +96,15 @@ class AnalysisBridgeTest(unittest.TestCase):
         self.assertEqual(len(region["rows"]), 5)
         self.assertEqual(region["rows"][0]["records"] % 2, 0)
         self.assertEqual(set(region["profile"]), {"bin_size", "adjusted", "start", "end", "value"})
+        overview = self.call(operation="analysis_overview", sample_ids=["S1", "S2"], limit=1)["result"]
+        alone = self.call(operation="analysis_overview", sample_ids=["S1"])["result"]
+        self.assertEqual(overview["records"], 2 * alone["records"])
+        self.assertEqual(len(overview["rnas"]), 1)
+        self.assertEqual(overview["unique_rnas"], alone["unique_rnas"])
         for request in ({"operation": "analysis_viewpoint", "sample_ids": ["S1"]},
                         {"operation": "analysis_viewpoint", "sample_ids": ["S1"], "gene": "Zika_virusRNA", "start": "1"},
                         {"operation": "analysis_region", "sample_ids": ["S1"], "gene": "Zika_virusRNA", "start": 1},
+                        {"operation": "analysis_overview", "sample_ids": ["S1"], "limit": -1},
                         {"operation": "analysis_region", "sample_ids": ["S1"], "gene": "Zika_virusRNA", "start": 1, "end": 9,
                          "overlap": "inside"}):
             with self.assertRaises(ValueError, msg=request):

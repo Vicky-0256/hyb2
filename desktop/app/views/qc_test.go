@@ -1,6 +1,7 @@
 package views
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -24,6 +25,7 @@ func (f *qcFake) Query(path, operation string, payload core.Obj) (any, error) {
 func qcOpen(t *testing.T, gate chan struct{}, withSummary bool) (*App, *qcFake) {
 	t.Helper()
 	f := newFake(t)
+	f.queries["analysis_overview"] = fixture(t, "qc_analysis_overview.json")["result"]
 	if withSummary {
 		f.queries["analysis_summary"] = fixture(t, "qc_analysis_summary.json")["result"]
 	}
@@ -41,7 +43,7 @@ func TestQCPageCounts(t *testing.T) {
 	gate := make(chan struct{})
 	a, _ := qcOpen(t, gate, true)
 	a.Navigate("qc", nil)
-	tt := ui.NewTester(a.View, 1100, 720)
+	tt := ui.NewTester(a.View, 1100, 1500) // tall enough for the Overview and the table
 	dataExpect(t, tt, "Quality control", "Loading counts…", "loading…")
 	close(gate)
 	waitFlush(a)
@@ -56,6 +58,11 @@ func TestQCPageCounts(t *testing.T) {
 	if tt.HasText("loading…") {
 		t.Fatalf("still loading: %q", tt.Texts())
 	}
+	// The web's Overview for the top bar's selection.
+	dataExpect(t, tt, "Overview · ", "HYB records", "44,832", "Source reads", "46,005", "Recovered from 43,118 sequence IDs",
+		"Unique RNAs", "RNA pairs", "Top interacting RNAs", "87,440", "4,204", "Chimera types", "24,528 records · 54.7%",
+		"Top RNA pairs", "41,618", "Data quality", "100.0%", "2.9%", "613", "homodimer-proxy records (overlap ≥ 5)",
+		"Summary JSON…", "RNA counts CSV…", "RNA pairs CSV…")
 	snapshot(t, tt, "qc")
 	tt.SetDark(true)
 	tt.Frame()
@@ -121,5 +128,48 @@ func TestQCPageEmpty(t *testing.T) {
 	tt.Frame()
 	if a.Page != "data" {
 		t.Fatalf("page %q", a.Page)
+	}
+}
+
+func TestOverviewCSV(t *testing.T) {
+	rows := []ovCount{{Name: `a"b`, Records: 3, Support: 4, OverlapTotal: 2.5, OverlapRecords: 1}}
+	want := `"rna","arm_occurrences","source_reads","source_read_count_arms","cluster_support","overlap_score_total","overlap_score_arms"` +
+		"\n" + `"a""b","3","","0","4","2.5","1"`
+	if got := string(ovRNAsCSV(rows)); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	pairs := []ovCount{{Gene1: "A", Gene2: "B", Records: 2, Support: 2, Reads: 5, ReadRecords: 2}}
+	if got := string(ovPairsCSV(pairs)); !strings.HasSuffix(got, "\n"+`"A","B","2","5","2","2","","0"`) {
+		t.Fatalf("pairs %q", got)
+	}
+}
+
+func TestQCExports(t *testing.T) {
+	a, _ := qcOpen(t, nil, true)
+	a.Navigate("qc", nil)
+	tt := ui.NewTester(a.View, 1100, 1500)
+	waitFlush(a)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+
+	name, text := exportClick(t, a, tt, "RNA counts CSV…")
+	if name != "SUB_rna_counts.csv" || !strings.HasPrefix(text, `"rna","arm_occurrences",`) ||
+		!strings.Contains(text, "\n"+`"RNA18S","4024","3966","3716","4204","-8714152","3838"`) {
+		t.Fatalf("%s:\n%s", name, text)
+	}
+	name, text = exportClick(t, a, tt, "RNA pairs CSV…")
+	if name != "SUB_rna_pairs.csv" || !strings.Contains(text, `"RNA18S","ZIKV_African_KX377335-1_virusRNA","4024"`) {
+		t.Fatalf("%s:\n%s", name, text)
+	}
+	name, text = exportClick(t, a, tt, "Summary JSON…")
+	if name != "SUB_overview_summary.json" || !strings.Contains(text, `"analysis": "overview"`) || !strings.Contains(text, `"unique_pairs": 2`) {
+		t.Fatalf("%s:\n%s", name, text)
+	}
+	name, text = exportClick(t, a, tt, "Export TSV…")
+	rows := tsvRecords(t, text)
+	if !strings.HasSuffix(name, "_qc.tsv") || len(rows) != 10 || rows[0][4] != "hybrids" ||
+		rows[3][1] != "AFR_REP1" || rows[3][4] != "224154" || rows[7][0] != "condition" || rows[8][4] != "573541" {
+		t.Fatalf("%s: %q", name, rows)
 	}
 }

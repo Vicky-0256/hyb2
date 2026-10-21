@@ -281,3 +281,115 @@ func (p *structurePage) exportArcsSVG(a *structureResult) {
 		return svgFile(svg), nil
 	})
 }
+
+// ---- ③ Explore: viewpoint and region
+
+// profileRows are a profile's bins as start, end and value columns.
+func profileRows(pr *widgets.Profile) [][]string {
+	rows := make([][]string, pr.Len())
+	for i := range rows {
+		start, end, v := pr.Bin(i)
+		rows[i] = []string{strconv.Itoa(start), strconv.Itoa(end), strconv.FormatFloat(v, 'f', -1, 64)}
+	}
+	return rows
+}
+
+// exportViewpointTSV writes the profile with the web's viewpoint.tsv columns.
+func (p *explorePage) exportViewpointTSV() {
+	s := &p.vp
+	d := s.data
+	if d == nil {
+		return
+	}
+	rows := profileRows(s.profile)
+	comments := []string{"HYB2 viewpoint · " + p.a.SelectionLabel(p.a.Selected.Key) + " · " + d.gene + ":" + span(d.start, d.end),
+		fmt.Sprintf("Mean %s per nucleotide in %d nt bins; partner: %s; type: %s", strings.ToLower(d.measure), d.bin, s.partner, s.typ)}
+	saveExport(p.a, "Export the viewpoint", exportName(".tsv", selectionName(p.a.Selected.Key), shortName(d.gene), "viewpoint"), func() ([]byte, error) {
+		return tsvTable{Comments: comments, Header: []string{"start", "end", "mean_interaction_coverage"}, Rows: rows}.Bytes()
+	})
+}
+
+func (p *explorePage) regionComments(d *regionData) []string {
+	return []string{"HYB2 region · " + p.a.SelectionLabel(p.a.Selected.Key) + " · " + d.gene + ":" + span(d.f.start, d.f.end),
+		regionSubtitle(d.f)}
+}
+
+func (p *explorePage) regionExportName(d *regionData, ext, what string) string {
+	return exportName(ext, selectionName(p.a.Selected.Key), shortName(d.gene), span(d.f.start, d.f.end), what)
+}
+
+func (p *explorePage) exportRegionProfileTSV(d *regionData) {
+	rows := profileRows(p.rg.profile)
+	comments := append(p.regionComments(d), fmt.Sprintf("Cluster support of the matching hybrids per %d nt bin of the anchor arm", d.bin))
+	saveExport(p.a, "Export the region profile", p.regionExportName(d, ".tsv", "profile"), func() ([]byte, error) {
+		return tsvTable{Comments: comments, Header: []string{"start", "end", "cluster_support"}, Rows: rows}.Bytes()
+	})
+}
+
+func (p *explorePage) exportRegionInteractionsTSV(d *regionData) {
+	rows := append([]regionRow(nil), d.rows...)
+	comments := append(p.regionComments(d), "Hybrids with the same genes, arm coordinates and type merged; by reads")
+	if d.hasDistinct && int64(len(rows)) < d.distinct {
+		comments = append(comments, fmt.Sprintf("The %d strongest of %d distinct interactions", len(rows), d.distinct))
+	}
+	saveExport(p.a, "Export the region interactions", p.regionExportName(d, ".tsv", "interactions"), func() ([]byte, error) {
+		out := make([][]string, len(rows))
+		for i, r := range rows {
+			out[i] = []string{r.Gene1, strconv.Itoa(r.Start1), strconv.Itoa(r.End1), r.Gene2, strconv.Itoa(r.Start2), strconv.Itoa(r.End2),
+				r.Type, strconv.FormatInt(r.Records, 10), strconv.FormatInt(r.Reads, 10)}
+		}
+		header := []string{"gene1", "start1", "end1", "gene2", "start2", "end2", "type", "hybrids", "reads"}
+		return tsvTable{Comments: comments, Header: header, Rows: out}.Bytes()
+	})
+}
+
+// exportRegionFASTA writes the region's reference sequence as the web does:
+// <gene>_<start>-<end>.fasta with the header ">gene:start-end".
+func (p *explorePage) exportRegionFASTA(d *regionData) {
+	a := p.a
+	pr, gene, start, end := a.Project, d.gene, d.f.start, d.f.end
+	name := exportName(".fasta", fmt.Sprintf("%s_%d-%d", gene, start, end))
+	saveExport(a, "Export the region sequence", name, func() ([]byte, error) {
+		seq, err := fetchSequence(a.B, pr, pr.Path, gene)
+		if err != nil {
+			return nil, err
+		}
+		if end > len(seq) {
+			return nil, fmt.Errorf("%s is %d nt; the region ends at %d", gene, len(seq), end)
+		}
+		return []byte(fmt.Sprintf(">%s:%d-%d\n%s\n", gene, start, end, seq[start-1:end])), nil
+	})
+}
+
+// ---- ④ Compare: the quick view
+
+// exportQuickTSV writes every bin with the web's comparison.tsv columns
+// (less datasets_present and similarity, which the quick view does not
+// compute), in arm order.
+func (p *comparePage) exportQuickTSV() {
+	q := &p.quick
+	d := q.data
+	if d == nil {
+		return
+	}
+	ctx := p.quickContext()
+	rows := append([]cmpQuickRow(nil), p.quickRows()...)
+	comments := []string{"HYB2 quick view · " + ctx.LabelA + " (A) vs " + ctx.LabelB + " (B) · " + q.gene,
+		fmt.Sprintf("%d-nt bins; condition means of per-million values; log2_effect = log2((A + 1) / (B + 1)); raw = summed counts; no statistics", d.BinSize)}
+	saveExport(p.a, "Export the quick view", exportName(".tsv", ctx.LabelA, "vs", ctx.LabelB, "quick"), func() ([]byte, error) {
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].X != rows[j].X {
+				return rows[i].X < rows[j].X
+			}
+			return rows[i].Y < rows[j].Y
+		})
+		f := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+		out := make([][]string, len(rows))
+		for i, r := range rows {
+			out[i] = []string{strconv.Itoa(r.X), strconv.Itoa(r.X + d.BinSize - 1), strconv.Itoa(r.Y), strconv.Itoa(r.Y + d.BinSize - 1),
+				f(r.A), f(r.B), tsvFloat(r.Ratio), f(r.RawA), f(r.RawB)}
+		}
+		header := []string{"x_start", "x_end", "y_start", "y_end", "condition_a_mean", "condition_b_mean", "log2_effect", "condition_a_raw", "condition_b_raw"}
+		return tsvTable{Comments: comments, Header: header, Rows: out}.Bytes()
+	})
+}

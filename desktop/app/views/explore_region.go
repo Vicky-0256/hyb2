@@ -241,6 +241,16 @@ func (p *explorePage) regionView(c *ui.Context) {
 					if ui.Button(c, "Fold this region").Clicked() {
 						p.foldRegion(d)
 					}
+					ui.Row(c).Grow(1)
+					if ui.Button(c, "Profile TSV…").Tooltip("Save the support profile as a tab-separated file").Clicked() {
+						p.exportRegionProfileTSV(d)
+					}
+					if ui.Button(c, "Interactions TSV…").Tooltip("Save the strongest interactions below").Disabled(len(d.rows) == 0).Clicked() && len(d.rows) > 0 {
+						p.exportRegionInteractionsTSV(d)
+					}
+					if ui.Button(c, "FASTA…").Tooltip("Save the region's reference sequence").Disabled(stReferenceOf(p.a.Project, d.gene) == "").Clicked() {
+						p.exportRegionFASTA(d)
+					}
 				})
 			})
 			partnerCard(c, "Partners", d.partners, measureSupport)

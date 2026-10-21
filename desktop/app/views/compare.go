@@ -1455,6 +1455,9 @@ func (p *comparePage) quickView(c *ui.Context) {
 				ui.Text(c, meta+" · mean per million of each group's datasets, log2((A + 1) / (B + 1)) · no statistics; use the differential test for padj").
 					FontSize(12).TextColor(t.TextMuted)
 			})
+			if ui.Button(c, "Export TSV…").Tooltip("Save every bin as a tab-separated file").Disabled(len(rows) == 0).Clicked() && len(rows) > 0 {
+				p.exportQuickTSV()
+			}
 			if ui.Button(c, "Back to tests").Clicked() {
 				p.mode = cmpModeTest
 			}

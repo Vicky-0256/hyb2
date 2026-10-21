@@ -1,0 +1,119 @@
+{
+ "ok": true,
+ "operation": "analysis_overview",
+ "result": {
+  "records": 44832,
+  "support": 45822,
+  "reads": 46005,
+  "read_records": 43118,
+  "with_dg": 1319,
+  "overlap_records": 43805,
+  "homodimer_records": 613,
+  "homodimer_reads": 607,
+  "intra_records": 40808,
+  "inter_records": 4024,
+  "invalid": 2,
+  "skipped": 2,
+  "unique_rnas": 2,
+  "unique_pairs": 2,
+  "rnas": [
+   {
+    "name": "ZIKV_African_KX377335-1_virusRNA",
+    "records": 85640,
+    "support": 87440,
+    "reads": 88044,
+    "read_records": 82520,
+    "overlap_total": -189543560,
+    "overlap_records": 83772
+   },
+   {
+    "name": "RNA18S",
+    "records": 4024,
+    "support": 4204,
+    "reads": 3966,
+    "read_records": 3716,
+    "overlap_total": -8714152,
+    "overlap_records": 3838
+   }
+  ],
+  "pairs": [
+   {
+    "gene1": "ZIKV_African_KX377335-1_virusRNA",
+    "gene2": "ZIKV_African_KX377335-1_virusRNA",
+    "records": 40808,
+    "support": 41618,
+    "reads": 42039,
+    "read_records": 39402,
+    "overlap_total": -90414704,
+    "overlap_records": 39967
+   },
+   {
+    "gene1": "RNA18S",
+    "gene2": "ZIKV_African_KX377335-1_virusRNA",
+    "records": 4024,
+    "support": 4204,
+    "reads": 3966,
+    "read_records": 3716,
+    "overlap_total": -8714152,
+    "overlap_records": 3838
+   }
+  ],
+  "types": [
+   {
+    "name": "Type_2",
+    "records": 24528,
+    "support": 24958
+   },
+   {
+    "name": "Type_1",
+    "records": 18681,
+    "support": 19037
+   },
+   {
+    "name": "Type_13",
+    "records": 641,
+    "support": 651
+   },
+   {
+    "name": "Type_7",
+    "records": 560,
+    "support": 568
+   },
+   {
+    "name": "Intermolecular",
+    "records": 312,
+    "support": 492
+   },
+   {
+    "name": "Type_3",
+    "records": 54,
+    "support": 58
+   },
+   {
+    "name": "Type_11",
+    "records": 32,
+    "support": 32
+   },
+   {
+    "name": "Type_5",
+    "records": 12,
+    "support": 12
+   },
+   {
+    "name": "Type_6",
+    "records": 6,
+    "support": 6
+   },
+   {
+    "name": "Type_10",
+    "records": 4,
+    "support": 6
+   },
+   {
+    "name": "Type_9",
+    "records": 2,
+    "support": 2
+   }
+  ]
+ }
+}

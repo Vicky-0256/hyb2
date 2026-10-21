@@ -8,6 +8,7 @@ package views
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -24,7 +25,7 @@ func init() {
 			return
 		}
 		if q := qcFor(a); q != nil {
-			q.loadedKey = ""
+			q.loadedKey, q.ov.key = "", ""
 		}
 	})
 }
@@ -92,6 +93,7 @@ type qcPage struct {
 	loading   bool
 	err       string
 	table     ui.ListState
+	ov        qcOverview
 }
 
 func qcFor(a *App) *qcPage {
@@ -162,16 +164,24 @@ func (p *qcPage) ensureStats() {
 
 func (p *qcPage) refresh() {
 	p.stats = map[string]qcStats{}
-	p.loadedKey = ""
+	p.loadedKey, p.ov.key = "", ""
 	p.ensureStats()
 }
 
 func (p *qcPage) View(c *ui.Context) {
 	a := p.a
-	t := c.Theme()
 	p.ensureStats()
+	p.ensureOverview()
 	ready := qcReadyIDs(a)
-	ui.Column(c).Fill().MinWidth(0).Padding(24).Gap(16).Children(func() {
+	// The page scrolls: the Overview comes first and the table below it
+	// takes the height of its rows.
+	ui.Scroll(c).Fill().Children(func() { p.page(c, ready) })
+}
+
+func (p *qcPage) page(c *ui.Context, ready []string) {
+	a := p.a
+	t := c.Theme()
+	ui.Column(c).FillWidth().MinWidth(0).Padding(24).Gap(16).Children(func() {
 		ui.Row(c).Gap(12).Children(func() {
 			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 				PageHeader(c, "Quality control", "Analysed samples: library size and chimera composition.")
@@ -208,11 +218,19 @@ func (p *qcPage) View(c *ui.Context) {
 				ui.Text(c, "Loading counts…").TextColor(t.TextMuted)
 			})
 		}
+		if len(a.SelectionIDs(a.Selected.Key)) > 0 {
+			p.overview(c)
+		}
 		Card(c, "Per-sample summary", func() {
 			p.summaryTable(c, ready)
-			ui.Text(c, "Percentages are of hybrids. Merged rows add up the analysed replicates of each condition.").
-				FontSize(12).TextColor(t.TextMuted)
-		}).Grow(1).MinWidth(0)
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Percentages are of hybrids. Merged rows add up the analysed replicates of each condition.").
+					FontSize(12).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0)
+				if ui.Button(c, "Export TSV…").Tooltip("Save the table, every chimera type as a column").Disabled(len(p.stats) == 0).Clicked() && len(p.stats) > 0 {
+					p.exportTable(ready)
+				}
+			})
+		}).MinWidth(0)
 	})
 }
 
@@ -319,7 +337,7 @@ func (p *qcPage) summaryTable(c *ui.Context, ready []string) {
 	}
 	// The scroller keeps the columns' widths out of the page's minimum
 	// width: a narrow window scrolls the table, not the page.
-	ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Grow(1).MinHeight(160).Children(func() { p.summaryRows(c, cols, rows, types, maxSample, maxCond) })
+	ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Height(qcTableHeight(len(rows))).Children(func() { p.summaryRows(c, cols, rows, types, maxSample, maxCond) })
 }
 
 func (p *qcPage) summaryRows(c *ui.Context, cols []ui.TableColumn, rows []qcRow, types []string, maxSample, maxCond int64) {
@@ -386,6 +404,12 @@ func (p *qcPage) summaryRows(c *ui.Context, cols []ui.TableColumn, rows []qcRow,
 	}).Width(dataColumnsWidth(cols)).Grow(1)
 }
 
+// qcTableHeight fits the table's rows (two-line cells) up to 560 px; more
+// rows scroll inside it.
+func qcTableHeight(rows int) float32 {
+	return min(float32(40+43*rows), 560)
+}
+
 func qcTableColumn(name string) ui.TableColumn {
 	return ui.TableColumn{Title: strings.ReplaceAll(name, "_", " "), ID: "type:" + name, Width: 64, Align: ui.End}
 }
@@ -420,4 +444,47 @@ func qcCell(s qcStats, col int, types []string) string {
 		return qcPercent(s.typeRecords(types[i]), s.Records)
 	}
 	return ""
+}
+
+// exportTable writes the table as TSV with raw counts beside the shares,
+// and every chimera type (the page shows the four largest).
+func (p *qcPage) exportTable(ready []string) {
+	a := p.a
+	var types []string
+	seen := map[string]bool{}
+	for _, id := range ready {
+		for _, ty := range p.stats[id].Types {
+			if !seen[ty.Name] {
+				seen[ty.Name] = true
+				types = append(types, ty.Name)
+			}
+		}
+	}
+	header := []string{"row", "sample", "condition", "replicates", "hybrids", "reads", "with_dg", "intra", "inter"}
+	header = append(header, types...)
+	var rows [][]string
+	for _, r := range p.rows(ready) {
+		s, ok := p.statsFor(r)
+		if r.header != "" || !ok {
+			continue
+		}
+		kind, sample, cond, n := "sample", r.sample, r.cond, 1
+		if r.sample != "" {
+			if m := a.Project.Sample(r.sample); m != nil {
+				cond = m.Condition
+			}
+		} else {
+			kind, n = "condition", len(a.SelectionIDs("c:"+r.cond))
+		}
+		row := []string{kind, sample, cond, strconv.Itoa(n), itoa64(s.Records), itoa64(s.Reads), itoa64(s.WithDG), itoa64(s.Intra), itoa64(s.Inter)}
+		for _, name := range types {
+			row = append(row, itoa64(s.typeRecords(name)))
+		}
+		rows = append(rows, row)
+	}
+	comments := []string{"HYB2 quality control · " + a.Project.Name,
+		"Counts of hybrids (records); condition rows add up their analysed replicates; one column per chimera type"}
+	saveExport(a, "Export the QC table", exportName(".tsv", a.Project.Name, "qc"), func() ([]byte, error) {
+		return tsvTable{Comments: comments, Header: header, Rows: rows}.Bytes()
+	})
 }

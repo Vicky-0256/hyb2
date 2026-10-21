@@ -35,6 +35,7 @@ var AnalysisOperations = []string{
 	"compare_bins",
 	"analysis_viewpoint",
 	"analysis_region",
+	"analysis_overview",
 }
 
 // ProjectOperations are the short control-lane operations on project.json;

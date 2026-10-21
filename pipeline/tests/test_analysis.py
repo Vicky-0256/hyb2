@@ -599,6 +599,14 @@ class SupportTest(unittest.TestCase):
             self.assertEqual(view["bins"]["value"][:12], [5] * 10 + [8, 8])
             self.assertEqual(query.region([path], "G", 1, 40)["profile"]["value"][:2], [5, 8])
             self.assertEqual(query.compare_bins([path], [path], "G", 10, measure="support")["library_a"], 8)
+            # the web's Overview: arms count once each, so one RNA has twice the records
+            view = query.overview([path, path], limit=0)
+            self.assertEqual((view["records"], view["support"], view["reads"], view["read_records"]), (6, 16, 16, 6))
+            self.assertEqual((view["unique_rnas"], view["unique_pairs"], view["rnas"], view["pairs"]), (1, 1, [], []))
+            rna, = query.overview([path])["rnas"]
+            self.assertEqual(rna, {"name": "G", "records": 6, "support": 16, "reads": 16, "read_records": 6,
+                                   "overlap_total": 14, "overlap_records": 2})
+            self.assertEqual(query.overview([path])["types"], [{"name": "Type_1", "records": 3, "support": 8}])
             # an index built before the support column: support falls back to one per record
             query.close_all()
             con = sqlite3.connect(path)
@@ -609,4 +617,5 @@ class SupportTest(unittest.TestCase):
             old = query.contact_bins([path], "G", 10, measure="support")
             self.assertEqual(old["total"], 3)
             self.assertEqual(query.compare_bins([path], [path], "G", 10, measure="support")["library_a"], 3)
+            self.assertEqual(query.overview([path])["support"], 3)
             query.close_all()

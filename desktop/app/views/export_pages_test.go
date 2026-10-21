@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -144,5 +145,65 @@ func TestStructureExportArcsSVG(t *testing.T) {
 	xmlWellFormed(t, svg)
 	if !strings.Contains(name, "_vs_") || strings.Count(svg, "<path") != 3 || !strings.Contains(svg, "B · ZBRA_REP1 + ZBRA_REP2") {
 		t.Fatalf("%s: %.600s", name, svg)
+	}
+}
+
+func TestExploreViewpointAndRegionExports(t *testing.T) {
+	a, f, p, tt := openExplore(t)
+	tt.SetSize(1100, 1400)
+	if err := tt.Click("Viewpoint"); err != nil {
+		t.Fatal(err)
+	}
+	settle(a, tt)
+	name, text := exportClick(t, a, tt, "Export TSV…")
+	rows := tsvRecords(t, text)
+	if !strings.HasSuffix(name, "_viewpoint.tsv") || strings.Join(rows[0], ",") != "start,end,mean_interaction_coverage" ||
+		len(rows) != p.vp.profile.Len()+1 {
+		t.Fatalf("%s: %d rows, first %q", name, len(rows), rows[0])
+	}
+
+	p.exploreRegion(3000, 3600)
+	settle(a, tt)
+	name, text = exportClick(t, a, tt, "Profile TSV…")
+	if rows = tsvRecords(t, text); !strings.HasSuffix(name, "_profile.tsv") || rows[0][2] != "cluster_support" || len(rows) != p.rg.profile.Len()+1 {
+		t.Fatalf("%s: %q", name, rows[:1])
+	}
+	name, text = exportClick(t, a, tt, "Interactions TSV…")
+	if rows = tsvRecords(t, text); !strings.HasSuffix(name, "_interactions.tsv") || len(rows) != 26 || rows[0][7] != "hybrids" {
+		t.Fatalf("%s: %d rows %q", name, len(rows), rows[:1])
+	}
+	// The reference holds the RNA: FASTA as the web writes it.
+	seq := strings.Repeat("ACGU", 3000)
+	f.ops["read_reference_sequence"] = map[string]any{"ok": true, "sequence": seq}
+	name, text = exportClick(t, a, tt, "FASTA…")
+	want := ">" + zikvGene + ":3000-3600\n" + seq[2999:3600] + "\n"
+	if name != exportName(".fasta", zikvGene+"_3000-3600") || text != want {
+		t.Fatalf("%s:\n%q", name, text[:min(len(text), 120)])
+	}
+}
+
+func TestCompareQuickViewExportTSV(t *testing.T) {
+	a, _ := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 1400)
+	a.Navigate("compare", nil)
+	csSettle(a, tt)
+	if err := tt.Click("Quick view"); err != nil {
+		t.Fatal(err)
+	}
+	csSettle(a, tt)
+	p := a.PageFor("compare").(*comparePage)
+	name, text := exportClick(t, a, tt, "Export TSV…")
+	rows := tsvRecords(t, text)
+	if !strings.HasSuffix(name, "_quick.tsv") || len(rows) != len(p.quickRows())+1 || rows[0][6] != "log2_effect" {
+		t.Fatalf("%s: %d rows %q", name, len(rows), rows[:1])
+	}
+	// arm order, bins of the quick view's size
+	for i := 2; i < len(rows); i++ {
+		x0, _ := strconv.Atoi(rows[i-1][0])
+		x1, _ := strconv.Atoi(rows[i][0])
+		end, _ := strconv.Atoi(rows[i][1])
+		if x1 < x0 || end != x1+p.quick.data.BinSize-1 {
+			t.Fatalf("row %d: %q after %q", i, rows[i], rows[i-1])
+		}
 	}
 }

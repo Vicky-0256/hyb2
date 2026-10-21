@@ -216,6 +216,81 @@ def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = Non
 
 
 # --------------------------------------------------------------------------
+# overview (the web's Overview page and its rna_counts.csv / rna_pairs.csv)
+
+_COUNT_FIELDS = ("records", "support", "reads", "read_records", "overlap_total", "overlap_records")
+
+
+def _name_key(name: str) -> Tuple[str, str]:
+    # close to the web's localeCompare: case-insensitive, then exact
+    return name.casefold(), name
+
+
+def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[str, Any]:
+    """Counts of the web's Overview over the indexes together.
+
+    ``rnas[]`` count each record once per arm on the RNA (``records`` is the
+    web's arm occurrences); ``pairs[]`` are RNA pairs in name order. Each has
+    ``records, support, reads, read_records`` (records whose id carries a read
+    count), ``overlap_total, overlap_records``. Both lists are sorted by
+    support, then name, and cut to ``limit`` when given; ``unique_rnas`` and
+    ``unique_pairs`` count them all.
+    """
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be zero or more")
+    rnas: Dict[str, List[float]] = {}
+    pairs: Dict[Tuple[str, str], List[float]] = {}
+    types: Dict[str, List[int]] = {}
+    totals = dict.fromkeys(("records", "support", "reads", "read_records", "with_dg", "overlap_records",
+                            "homodimer_records", "homodimer_reads", "intra_records", "inter_records",
+                            "invalid", "skipped"), 0)
+    for index in _indexes(indexes):
+        support = "support" if index.has_support else "1"
+        rows = index.con.execute(
+            "SELECT g1, g2, count(*), sum(%s), sum(reads), sum(reads > 0), sum(overlap), count(overlap), count(dg),"
+            " sum(g1 = g2 AND overlap >= 5), sum(CASE WHEN g1 = g2 AND overlap >= 5 THEN reads ELSE 0 END)"
+            " FROM hybrids GROUP BY g1, g2" % support)
+        for g1, g2, n, sup, reads, read_records, overlap_total, overlap_records, with_dg, homodimers, homodimer_reads in rows:
+            counts = (n, sup, reads, read_records, overlap_total or 0, overlap_records)
+            for gene in (index.gene_names[g1], index.gene_names[g2]):
+                entry = rnas.setdefault(gene, [0] * len(_COUNT_FIELDS))
+                for i, value in enumerate(counts):
+                    entry[i] += value
+            pair = tuple(sorted((index.gene_names[g1], index.gene_names[g2]), key=_name_key))
+            entry = pairs.setdefault(pair, [0] * len(_COUNT_FIELDS))
+            for i, value in enumerate(counts):
+                entry[i] += value
+            for name, value in zip(("records", "support", "reads", "read_records", "overlap_records", "with_dg",
+                                    "homodimer_records", "homodimer_reads"),
+                                   (n, sup, reads, read_records, overlap_records, with_dg, homodimers or 0, homodimer_reads or 0)):
+                totals[name] += value
+            totals["intra_records" if g1 == g2 else "inter_records"] += n
+        for name, records, sup in index.con.execute(
+                "SELECT t.name, count(*), sum(%s) FROM hybrids h JOIN types t ON t.id = h.type GROUP BY t.name" % support):
+            entry = types.setdefault(name, [0, 0])
+            entry[0] += records
+            entry[1] += sup
+        totals["invalid"] += int(index.meta.get("invalid", 0))
+        totals["skipped"] += int(index.meta.get("skipped", 0))
+
+    def number(value: float) -> Any:
+        return int(value) if float(value).is_integer() else value
+
+    def rows(items, identity) -> List[Dict[str, Any]]:
+        return [dict(identity(key), **{field: number(value) for field, value in zip(_COUNT_FIELDS, counts)})
+                for key, counts in items.items()]
+
+    rna_rows = sorted(rows(rnas, lambda name: {"name": name}), key=lambda r: (-r["support"],) + _name_key(r["name"]))
+    pair_rows = sorted(rows(pairs, lambda pair: {"gene1": pair[0], "gene2": pair[1]}),
+                       key=lambda r: (-r["support"],) + _name_key(r["gene1"]) + _name_key(r["gene2"]))
+    type_rows = sorted(({"name": name, "records": r, "support": s} for name, (r, s) in types.items()),
+                       key=lambda r: (-r["records"],) + _name_key(r["name"]))
+    if limit is not None:
+        rna_rows, pair_rows = rna_rows[:limit], pair_rows[:limit]
+    return dict(totals, unique_rnas=len(rnas), unique_pairs=len(pairs), rnas=rna_rows, pairs=pair_rows, types=type_rows)
+
+
+# --------------------------------------------------------------------------
 # contact bins
 
 

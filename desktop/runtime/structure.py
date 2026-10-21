@@ -39,6 +39,7 @@ from .detector import CPLFOLD_MEMORY_FRACTION, cplfold_limits, cplfold_memory_es
 from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
 from .samples import _hyb2_reference_name
 from . import trust as _trust
+from . import comrades as _comrades
 from . import vienna as _vienna
 
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
@@ -436,6 +437,9 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 def _describe(params: Dict[str, Any]) -> str:
     """The .dbn header's account of how a record was folded."""
+    if params.get("engine") == "COMRADES(ViennaRNA)":
+        return (f"COMRADES(ViennaRNA), {params['temperature']:g} °C, min loop {params['min_loop']}, "
+                f"{params['random_folds']} randomised folds, seed {params['seed']}")
     if params.get("engine") == "ViennaRNA":
         hard = f", {len(params['hard_pairs'])} hard pairs" if params.get("hard_pairs") else ""
         return f"ViennaRNA MFE, {params['temperature']:g} °C, min loop {params['min_loop']}{hard}"
@@ -484,6 +488,7 @@ def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
             "nonzeroBonusCells", "maximumBonus", "truncationTail", "transform", "evidenceWeight")},
         "seconds": record["seconds"],
         "peak_rss_bytes": record.get("peak_rss_bytes"),
+        **({"comrades": {"evidence": record["evidence"], "randomisation": record["randomisation"]}} if "randomisation" in record else {}),
     }
 
 
@@ -505,10 +510,10 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     if mode not in {"genome", "windows"}:
         raise ValueError("mode must be 'genome' or 'windows'")
     engine = request.get("engine", "cplfold")
-    if engine not in {"cplfold", "viennarna"}:
-        raise ValueError("engine must be 'cplfold' or 'viennarna'")
-    if engine == "viennarna":
-        return _vienna_run(request, project, task_id, mode, state, started)
+    if engine not in {"cplfold", "viennarna", "comrades"}:
+        raise ValueError("engine must be 'cplfold', 'viennarna' or 'comrades'")
+    if engine != "cplfold":
+        return _vienna_run(request, project, task_id, mode, state, started, engine)
     params = _parameters(request.get("parameters"), mode)
     inputs = _evidence_inputs(project, request)
     gene_id, sequence = _reference_sequence(inputs["reference"], inputs["gene_id"])
@@ -676,50 +681,75 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
 
 
 def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str, state: Dict[str, Any],
-                started: float) -> Dict[str, Any]:
-    """ViennaRNA MFE of the whole RNA or each window (vienna.py); the samples
-    give the reference, and their chimeras are not used."""
-    params = _vienna.parameters(request.get("parameters"))
+                started: float, engine: str) -> Dict[str, Any]:
+    """ViennaRNA MFE (engine "viennarna", vienna.py: the samples only give the
+    reference) or COMRADES(ViennaRNA) (engine "comrades", comrades.py: their
+    chimeras inside each window are the evidence) of the whole RNA or each
+    window."""
+    comrades = engine == "comrades"
+    params = (_comrades if comrades else _vienna).parameters(request.get("parameters"))
     inputs = _evidence_inputs(project, request)
     gene_id, sequence = _reference_sequence(inputs["reference"], inputs["gene_id"])
+    sequence = sequence.upper().replace("T", "U")
     windows = _windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
     longest = max(end - start + 1 for start, end in windows)
-    if longest > _vienna.MAX_VIENNA_NT:
-        raise ValueError(f"{longest} nt exceeds the ViennaRNA limit of {_vienna.MAX_VIENNA_NT} nt; fold windows")
+    limit = _comrades.MAX_COMRADES_NT if comrades else _vienna.MAX_VIENNA_NT
+    if longest > limit:
+        raise ValueError(f"{longest} nt exceeds the {'COMRADES(ViennaRNA)' if comrades else 'ViennaRNA'} limit of {limit} nt; fold windows")
     # each hard pair applies to the windows that hold both its ends
-    hard = params["hard_pairs"]
+    hard = params.get("hard_pairs", [])
     per_window = [[(i, j) for i, j in hard if start <= i and j <= end] for start, end in windows]
     outside = [f"{i}-{j}" for i, j in hard if not any(start <= i and j <= end for start, end in windows)]
     if outside:
         raise ValueError("hard pair(s) " + ", ".join(outside) + " are not inside a folded window")
-    local = [_vienna.check_hard_pairs(pairs, sequence[start - 1:end].upper().replace("T", "U"), params["min_loop"], start)
+    local = [_vienna.check_hard_pairs(pairs, sequence[start - 1:end], params["min_loop"], start)
              for pairs, (start, end) in zip(per_window, windows)]
+    arms = []
+    if comrades:
+        for start, end in windows:
+            found, _ = _comrades.evidence_arms(inputs["hyb_paths"], gene_id, sequence, start, end, params["homodimer_only"])
+            if not found:
+                raise ValueError(f"no {gene_id} chimeras have both arms inside {start}-{end}")
+            arms.append(found)
 
     run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
     state.update(run_dir=run_dir, task_id=task_id)
     out_dir = _real_child_dir(project / "structures", task_id, exist_ok=True)
     progress = ProgressWriter(run_dir)
-    progress.work = {"lengths": [end - start + 1 for start, end in windows], "engine": "viennarna", "workers": 1}
+    progress.work = {"lengths": [end - start + 1 for start, end in windows], "engine": engine, "workers": 1}
     records: List[Dict[str, Any]] = []
     t0 = time.monotonic()
     for index, ((start, end), pairs) in enumerate(zip(windows, local)):
         progress("fold", f"window {index + 1}/{len(windows)} ({start}-{end})" if mode == "windows" else "folding",
                  index, len(windows), units="windows", force=True)
-        record = _vienna.fold(sequence[start - 1:end], params, pairs)
-        record.update({"start": start, "end": end, "gene_id": gene_id, "sequence": sequence[start - 1:end].upper().replace("T", "U")})
+        if comrades:
+            record = _comrades.fold(sequence[start - 1:end], arms[index], params)
+        else:
+            record = _vienna.fold(sequence[start - 1:end], params, pairs)
+        record.update({"start": start, "end": end, "gene_id": gene_id, "sequence": sequence[start - 1:end]})
         records.append(record)
     fold_seconds = time.monotonic() - t0
 
     progress("write", "writing results", None, None, units="none", force=True)
-    stored = {"engine": "ViennaRNA", "temperature": params["temperature"], "min_loop": params["min_loop"],
-              "hard_pairs": [list(p) for p in hard]}
+    name = "COMRADES(ViennaRNA)" if comrades else "ViennaRNA"
+    if comrades:
+        # the stem constraints the chosen structures were fitted with, on the RNA
+        hard = [(record["start"] + i - 1, record["start"] + j - 1) for record in records for i, j in record["hard_pairs"]]
+        stored = {"engine": name, **{k: params[k] for k in ("temperature", "min_loop", "constraint_limit", "random_folds",
+                                                              "seed", "homodimer_only")}}
+    else:
+        stored = {"engine": name, "temperature": params["temperature"], "min_loop": params["min_loop"]}
+    stored["hard_pairs"] = [list(p) for p in hard]
     outputs = _write_outputs(out_dir, records, stored)
     summaries = [_summary(record) for record in records]
     meta = {
-        "version": 1, "task_id": task_id, "mode": mode, "engine": "ViennaRNA", "engine_version": _vienna.version(),
+        "version": 1, "task_id": task_id, "mode": mode, "engine": name, "engine_version": _vienna.version(),
         "gene_id": gene_id, "reference": {"path": str(inputs["reference"]), "length": len(sequence)},
-        "evidence_inputs": {"samples": inputs["samples"], "hyb": [],
-                            "rows": "none: ViennaRNA MFE uses the sequence (and any hard pairs) only"},
+        "evidence_inputs": {"samples": inputs["samples"],
+                            "hyb": [{"path": str(path), "size_bytes": path.stat().st_size} for path in inputs["hyb_paths"]] if comrades else [],
+                            "rows": ("intramolecular chimeras (both arms on gene_id) inside the window, one RNAcofold each"
+                                     + (", homodimer proxies only" if params.get("homodimer_only") else "")) if comrades
+                            else "none: ViennaRNA MFE uses the sequence (and any hard pairs) only"},
         "parameters": stored,
         "coordinates": "1-based inclusive positions on the gene_id reference sequence (windows, pairs.tsv i/j, ct column 6)",
         "windows": [{"start": start, "end": end} for start, end in windows],
@@ -731,10 +761,11 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     outputs["meta"] = str(out_dir / "meta.json")
     relative_dir = f"structures/{task_id}"
     energies = [item["energy"] for item in summaries]
-    summary = {"records": len(records), "pairs": sum(item["pairs"] for item in summaries), "pairs_with_bonus": 0,
+    summary = {"records": len(records), "pairs": sum(item["pairs"] for item in summaries),
+               "pairs_with_bonus": sum(item["pairs_with_bonus"] for item in summaries),
                "pseudoknot_pairs": 0, "energy": energies[0] if len(energies) == 1 else None, "energies": energies,
                "length": sum(item["length"] for item in summaries), "workers": 1, "timings": meta["timings"],
-               "engine": "ViennaRNA"}
+               "engine": name}
     result = {
         "ok": True, "status": "succeeded", "task_id": task_id, "run_dir": str(run_dir),
         "output": outputs["dbn"], "output_dir": str(out_dir), "outputs": outputs,

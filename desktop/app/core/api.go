@@ -26,7 +26,8 @@ type TaskStartRequest struct {
 	SampleIDs   []string `json:"sample_ids,omitempty"`
 	GeneID      *string  `json:"gene_id,omitempty"`
 	Mode        *string  `json:"mode,omitempty"`
-	// Engine of a structure task: "cplfold" (default) or "viennarna".
+	// Engine of a structure task: "cplfold" (default), "viennarna" or
+	// "comrades" (COMRADES(ViennaRNA)).
 	Engine     *string  `json:"engine,omitempty"`
 	Windows    []Window `json:"windows,omitempty"`
 	Workers    *uint32  `json:"workers,omitempty"`

@@ -361,3 +361,60 @@ class ViennaRunTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_hard_pairs([(1, 12), (5, 17)], seq.replace("A", "C", 0), 3)
         self.assertEqual(check_hard_pairs([(17, 28), (1, 12)], seq, 3), [(1, 12), (17, 28)])
+
+
+class ComradesRunTests(unittest.TestCase):
+    """engine "comrades": the web's COMRADES(ViennaRNA) HYB-guided mode."""
+    length = 260
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self.tmp.name) / "p.hyb2proj"
+        new_project(self.project, "Comrades")
+        (self.project / "data").mkdir()
+        self.sequence = _sequence(self.length, seed=9)
+        (self.project / "data" / "ref.fa").write_text(f">{GENE} test\n{self.sequence}\n")
+        rows = [r for r in _hyb_rows(self.length, 60, seed=4) if not r.startswith("dup_")]
+        (self.project / "data" / "a.hyb").write_text("".join(rows))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, **extra):
+        request = {"operation": "structure_run", "project_path": str(self.project), "reference": "data/ref.fa",
+                   "hyb_paths": ["data/a.hyb"], "gene_id": GENE, "engine": "comrades"}
+        request.update(extra)
+        return handle(request, repo_root=ROOT)
+
+    def test_fold_and_ensemble(self):
+        result = self._run(task_id="c1", parameters={"random_folds": 3, "seed": "s1"})
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "c1"
+        meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual(meta["engine"], "COMRADES(ViennaRNA)")
+        self.assertEqual((meta["parameters"]["random_folds"], meta["parameters"]["seed"]), (3, "s1"))
+        comrades = meta["records"][0]["comrades"]
+        self.assertEqual(comrades["evidence"]["inputRecords"], 60)
+        self.assertEqual(len(comrades["randomisation"]["structures"]), 4)
+        self.assertGreater(meta["records"][0]["pairs_with_bonus"], 0)
+        # the accepted stem constraints are pairs of the structure
+        dbn = (out / "structure.dbn").read_text().splitlines()
+        self.assertIn("COMRADES(ViennaRNA), 37 °C, min loop 3, 3 randomised folds, seed s1", dbn[0])
+        pairs = {(int(r.split("\t")[2]), int(r.split("\t")[3])) for r in (out / "pairs.tsv").read_text().splitlines()[1:]}
+        self.assertTrue(meta["parameters"]["hard_pairs"])
+        self.assertTrue({tuple(p) for p in meta["parameters"]["hard_pairs"]} <= pairs)
+        # the same seed gives the same structure
+        again = self._run(task_id="c2", parameters={"random_folds": 3, "seed": "s1"})
+        self.assertTrue(again["ok"], again)
+        self.assertEqual((self.project / "structures" / "c2" / "structure.dbn").read_text().splitlines()[2], dbn[2])
+
+    def test_rejects(self):
+        for extra in ({"parameters": {"random_folds": 1001}}, {"parameters": {"constraint_limit": 0}},
+                      {"parameters": {"seed": " "}}, {"parameters": {"homodimer_only": 1}},
+                      {"parameters": {"hard_pairs": []}}):
+            with self.assertRaises(ValueError, msg=extra):
+                self._run(task_id="bad", **extra)
+        # no chimera inside the window: refused before anything runs
+        (self.project / "data" / "a.hyb").write_text("")
+        with self.assertRaisesRegex(ValueError, "chimeras have both arms inside"):
+            self._run(task_id="empty")

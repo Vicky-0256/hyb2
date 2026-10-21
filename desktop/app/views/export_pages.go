@@ -473,6 +473,9 @@ func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool)
 			kind, support := "none", ""
 			if w, ok := weights[[2]int{pr.I, pr.J}]; ok {
 				kind, support = "log1p_hyb_bonus", strconv.FormatFloat(w, 'f', -1, 64)
+				if engine == "COMRADES(ViennaRNA)" {
+					kind = "rna_cofold_observations"
+				}
 			}
 			left, right := base(pr.I), base(pr.J)
 			fixed := "no"
@@ -500,7 +503,7 @@ func (p *structurePage) exportCT(a *structureResult) {
 func (p *structurePage) exportPairsTSV(a *structureResult) {
 	records, engine, hard := stPickRecords(a.Records, p.record), nameOr(a.Meta.Engine, "CPLfold"), stHardPairs(a)
 	comments := []string{"HYB2 structure " + p.viewA + " · " + nameOr(a.Meta.GeneID, a.Structure.GeneID) + " · " + engine,
-		"Positions on the RNA; evidence_support is the pair's HYB bonus (log1p of the chimera support) where CPLfold used one"}
+		"Positions on the RNA; evidence_support is the pair's HYB bonus (CPLfold, log1p of the chimera support) or RNAcofold observations (COMRADES)"}
 	saveExport(p.a, "Save the base pairs", p.exportName(a, "_pairs.tsv"), func() ([]byte, error) {
 		header := []string{"window_start", "window_end", "left_position", "left_base", "right_position", "right_base", "pair_type",
 			"hard_constraint", "pair_layer", "evidence_kind", "evidence_support", "selected_energy_kcal_per_mol", "engine"}

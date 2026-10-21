@@ -415,3 +415,41 @@ func TestStructureViennaForm(t *testing.T) {
 		t.Fatalf("params %+v", params)
 	}
 }
+
+// The web's COMRADES(ViennaRNA) mode: evidence settings and its window limit.
+func TestStructureComradesForm(t *testing.T) {
+	a, f := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 1400)
+	a.Navigate("structure", nil)
+	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	if err := tt.Click("COMRADES(ViennaRNA), guided by RNAcofold of the chimeras"); err != nil {
+		t.Fatal(err)
+	}
+	p.advancedOpen = true
+	tt.Frame()
+	for _, text := range []string{"Evidence stem constraints", "Randomised folds", "Seed", "Evidence", "SUB (2 merged)",
+		"75 stems · 0 randomised folds · seed HYB2-Web", "• COMRADES(ViennaRNA) folds at most 3,000 nt at a time, as the web: fold windows of that size."} {
+		if !strings.Contains(strings.Join(tt.Texts(), "\n"), text) {
+			t.Fatalf("lacks %q: %q", text, tt.Texts())
+		}
+	}
+	if tt.HasText("Hard base pairs (optional): i-j, one per line, RNA positions") {
+		t.Fatal("hard pairs shown for COMRADES")
+	}
+	snapshot(t, tt, "structure-comrades")
+	p.mode, p.windows, p.randomFolds, p.seed, p.homodimerOnly = "windows", "2800-3300", 5, " run1 ", true
+	tt.Frame()
+	if err := tt.Click("Run fold"); err != nil {
+		t.Fatal(err)
+	}
+	csSettle(a, tt)
+	started := f.startedKinds()
+	if len(started) != 1 || *started[0].Engine != "comrades" {
+		t.Fatalf("started %+v", started)
+	}
+	params := started[0].Parameters.(map[string]any)
+	if params["random_folds"] != 5 || params["seed"] != "run1" || params["constraint_limit"] != 75 || params["homodimer_only"] != true {
+		t.Fatalf("params %+v", params)
+	}
+}

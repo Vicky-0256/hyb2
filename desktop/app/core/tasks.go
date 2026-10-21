@@ -1191,8 +1191,8 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 		"workers": max(workers, 1), "task_id": id, "run_dir": runDir,
 	}
 	if request.Engine != nil {
-		if *request.Engine != "cplfold" && *request.Engine != "viennarna" {
-			return nil, errors.New("structure engine must be cplfold or viennarna")
+		if *request.Engine != "cplfold" && *request.Engine != "viennarna" && *request.Engine != "comrades" {
+			return nil, errors.New("structure engine must be cplfold, viennarna or comrades")
 		}
 		payload["engine"] = *request.Engine
 	}

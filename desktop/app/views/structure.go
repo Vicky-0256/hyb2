@@ -355,6 +355,9 @@ type structurePage struct {
 	engine               string
 	temperature, minLoop float64
 	hardPairs            string
+	stems, randomFolds   float64
+	seed                 string
+	homodimerOnly        bool
 	workers              float64
 	// estKey is the form state est was computed for (time and memory of
 	// the fold the form describes).
@@ -1053,7 +1056,10 @@ func (p *structurePage) statsTable(c *ui.Context, compare bool) {
 func (p *structurePage) metaLine(a *structureResult) string {
 	m := a.Meta
 	parts := []string{"Engine " + nameOr(m.Engine, "CPLfold")}
-	if m.Engine == "ViennaRNA" && m.Parameters != nil {
+	if m.Engine == "COMRADES(ViennaRNA)" && m.Parameters != nil {
+		parts = append(parts, fmt.Sprintf("%v °C, minimum loop %v, %v randomised folds, seed %v, %d stem pairs fitted",
+			m.Parameters["temperature"], m.Parameters["min_loop"], m.Parameters["random_folds"], m.Parameters["seed"], len(stHardPairs(a))))
+	} else if m.Engine == "ViennaRNA" && m.Parameters != nil {
 		text := fmt.Sprintf("MFE, %v °C, minimum loop %v", m.Parameters["temperature"], m.Parameters["min_loop"])
 		if n := len(stHardPairs(a)); n > 0 {
 			text += fmt.Sprintf(", %d hard pair%s", n, plural(n))

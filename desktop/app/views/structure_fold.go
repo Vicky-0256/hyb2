@@ -39,6 +39,7 @@ func (p *structurePage) resetFoldSettings() {
 		stDefaultAlpha, stDefaultBeam, stDefaultPhase1, stDefaultDelta, stDefaultBeta, stDefaultModel
 	if p.engine == "" {
 		p.engine, p.temperature, p.minLoop = engineCPLfold, stDefaultTemp, stDefaultLoop
+		p.stems, p.randomFolds, p.seed = stDefaultStems, 0, stDefaultSeed
 	}
 }
 
@@ -113,7 +114,7 @@ func (p *structurePage) plan() foldPlan {
 		pl.limits = append(pl.limits, "Whole-RNA folds cannot contain pseudoknots; fold windows to allow them.")
 	}
 	pl.limits = append(pl.limits, "Only chimeras with both arms inside the folded region are used as evidence.")
-	if p.engine == engineVienna {
+	if p.engine != engineCPLfold {
 		p.viennaPlan(&pl)
 	} else if len(pl.lengths) > 0 {
 		pl.memMB = StructureMemClaim(pl.req, pl.length, pl.pk)
@@ -155,7 +156,7 @@ func (p *structurePage) form(c *ui.Context) {
 			ui.Text(c, p.prefillNote).FontSize(12).Padding(8).Radius(6).Background(t.Accent.Alpha(0.10))
 		}
 		p.inputs(c, pl)
-		if p.engine == engineVienna {
+		if p.engine != engineCPLfold {
 			p.viennaAdvanced(c)
 		} else {
 			p.advanced(c)
@@ -245,7 +246,7 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 		ui.RadioGroup(c.Key("st-mode"), func() {
 			ui.Radio(c, &p.mode, "genome", "The whole RNA (no pseudoknots)")
 			windows := "Regions (windows), pseudoknots possible"
-			if p.engine == engineVienna {
+			if p.engine != engineCPLfold {
 				windows = "Regions (windows)"
 			}
 			ui.Radio(c, &p.mode, "windows", windows)
@@ -259,7 +260,7 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 				ui.Text(c, pl.what+": "+pl.span()).FontSize(12).TextColor(t.TextMuted)
 			}
 		})
-		if p.engine != engineVienna {
+		if p.engine == engineCPLfold {
 			ui.Checkbox(c.Key("st-pk"), &p.pseudoknot, "Allow pseudoknots in the windows")
 		}
 	}
@@ -267,6 +268,7 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 		ui.RadioGroup(c.Key("st-engine"), func() {
 			ui.Radio(c, &p.engine, engineCPLfold, "CPLfold, guided by the chimeric reads")
 			ui.Radio(c, &p.engine, engineVienna, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
+			ui.Radio(c, &p.engine, engineComrades, "COMRADES(ViennaRNA), guided by RNAcofold of the chimeras")
 		}).Label("Engine")
 	})
 }
@@ -373,7 +375,11 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 			line("Engine", fmt.Sprintf("ViennaRNA MFE, %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
 			line("Time", "about "+FormatDuration(viennaSeconds(pl.lengths))+" (rough: MFE time grows with the cube of the length)")
 		}
-		if p.est != nil && p.engine != engineVienna {
+		if p.engine == engineComrades && len(pl.lengths) > 0 {
+			line("Engine", fmt.Sprintf("COMRADES(ViennaRNA), %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
+			line("Time", "up to about "+FormatDuration(p.comradesSeconds(pl.lengths))+" (one ViennaRNA fold per stem tried, per order)")
+		}
+		if p.est != nil && p.engine == engineCPLfold {
 			time := "about " + FormatDuration(p.est.Seconds) + " (measured on this computer)"
 			if !p.est.Measured {
 				time = "about " + FormatDuration(p.est.Seconds) + " (rough; the first fold after installing also " +
@@ -454,8 +460,11 @@ func (p *structurePage) runFold() {
 	p.starting, p.startErr, p.lastTask = true, "", ""
 	mem := pl.memMB
 	title := "Structure · " + pl.evidence + " · " + pl.what
-	if p.engine == engineVienna {
+	switch p.engine {
+	case engineVienna:
 		title = "Structure (ViennaRNA) · " + pl.what
+	case engineComrades:
+		title = "Structure (COMRADES) · " + pl.evidence + " · " + pl.what
 	}
 	a.StartTask(pl.req, title, func(t model.Task, err error) {
 		p.starting = false

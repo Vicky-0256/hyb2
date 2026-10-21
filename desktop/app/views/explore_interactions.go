@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -16,26 +17,34 @@ import (
 const interactionsPage = 200
 
 var (
-	orderLabels = []string{"File order", "Reads (most first)", "Arm 1 position", "dG (lowest first)"}
-	orderValues = []string{"file", "reads", "position", "dg"}
+	orderLabels = []string{"File order", "Reads (most first)", "Support (most first)", "Arm 1 position", "dG (lowest first)"}
+	orderValues = []string{"file", "reads", "support", "position", "dg"}
+	// scopeLabels are the web's interaction scopes; the homodimer proxy is
+	// both arms on one RNA with an overlap score of 5 or more.
+	scopeLabels = []string{"All interactions", "Intramolecular", "Intermolecular", "Homodimer proxy", "Not homodimer proxy"}
 )
 
 // ixFilters are the filters applied (the inputs hold drafts until Apply).
 type ixFilters struct {
 	gene1, gene2   string // "" = any
 	typ            string
+	scope          string // one of scopeLabels; "" = all
+	search         string
 	minReads       int
+	minSupport     int
+	minDG, maxDG   *float64
 	x0, x1, y0, y1 int // 0 = unset
 }
 
 type interactionsState struct {
 	applied ixFilters
 	// inputs
-	gene1, gene2, typ, order string
-	minReads, x0, x1, y0, y1 string
-	inputErr                 string
-	// armsOpen shows the arm position filters (open while one is set).
-	armsOpen bool
+	gene1, gene2, typ, order, scope string
+	search, minReads, minSupport     string
+	minDG, maxDG, x0, x1, y0, y1     string
+	inputErr                         string
+	// moreOpen shows the ΔG and arm position filters (open while one is set).
+	moreOpen bool
 
 	load, more loader
 	key        string // the applied key the rows belong to
@@ -54,15 +63,21 @@ type hybridRow struct {
 	Gene2  string   `json:"gene2"`
 	Start2 int      `json:"start2"`
 	End2   int      `json:"end2"`
-	Reads  int      `json:"reads"`
-	DG     *float64 `json:"dg"`
-	Type   string   `json:"type"`
+	Reads   int      `json:"reads"`
+	Support int      `json:"support"`
+	DG      *float64 `json:"dg"`
+	Overlap *float64 `json:"overlap"`
+	Type    string   `json:"type"`
+	// Name and Sequence are columns 1 and 2 of the .hyb line ("" when the
+	// file has changed since the index was built).
+	Name     string `json:"name"`
+	Sequence string `json:"sequence"`
 }
 
 func (s *interactionsState) init() {
-	s.gene1, s.gene2, s.typ, s.order = anyGene, anyGene, allTypes, orderLabels[0]
-	s.applied.minReads = 1
-	s.minReads = "1"
+	s.gene1, s.gene2, s.typ, s.order, s.scope = anyGene, anyGene, allTypes, orderLabels[0], scopeLabels[0]
+	s.applied.minReads, s.applied.minSupport = 1, 1
+	s.minReads, s.minSupport = "1", "1"
 	s.chosen = -1
 }
 
@@ -77,7 +92,13 @@ func (s *interactionsState) apply(f ixFilters) {
 	if s.typ == "" {
 		s.typ = allTypes
 	}
-	s.minReads = strconv.Itoa(max(f.minReads, 1))
+	s.scope = f.scope
+	if s.scope == "" {
+		s.scope = scopeLabels[0]
+	}
+	s.search = f.search
+	s.minReads, s.minSupport = strconv.Itoa(max(f.minReads, 1)), strconv.Itoa(max(f.minSupport, 1))
+	s.minDG, s.maxDG = dgText(f.minDG), dgText(f.maxDG)
 	s.x0, s.x1, s.y0, s.y1 = coordText(f.x0), coordText(f.x1), coordText(f.y0), coordText(f.y1)
 	s.inputErr = ""
 }
@@ -89,9 +110,32 @@ func orAny(gene string) string {
 	return gene
 }
 
+func dgText(v *float64) string {
+	if v == nil {
+		return ""
+	}
+	return strconv.FormatFloat(*v, 'f', -1, 64)
+}
+
+// parseDG reads an optional ΔG bound ("" = none).
+func parseDG(text string) (*float64, bool) {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "−", "-"))
+	if text == "" {
+		return nil, true
+	}
+	v, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return nil, false
+	}
+	return &v, true
+}
+
 // fromInputs reads the inputs into filters.
 func (s *interactionsState) fromInputs() (ixFilters, error) {
-	f := ixFilters{typ: s.typ}
+	f := ixFilters{typ: s.typ, search: strings.TrimSpace(s.search)}
+	if s.scope != scopeLabels[0] {
+		f.scope = s.scope
+	}
 	if s.gene1 != anyGene {
 		f.gene1 = s.gene1
 	}
@@ -103,6 +147,20 @@ func (s *interactionsState) fromInputs() (ixFilters, error) {
 		return f, fmt.Errorf("min reads must be a whole number")
 	}
 	f.minReads = max(reads, 1)
+	support, ok := parseCoord(s.minSupport)
+	if !ok {
+		return f, fmt.Errorf("min support must be a whole number")
+	}
+	f.minSupport = max(support, 1)
+	if f.minDG, ok = parseDG(s.minDG); !ok {
+		return f, fmt.Errorf("ΔG from must be a number")
+	}
+	if f.maxDG, ok = parseDG(s.maxDG); !ok {
+		return f, fmt.Errorf("ΔG to must be a number")
+	}
+	if f.minDG != nil && f.maxDG != nil && *f.minDG > *f.maxDG {
+		return f, fmt.Errorf("the ΔG range's lower bound must not exceed its upper bound")
+	}
 	fields := []struct {
 		text string
 		into *int
@@ -145,6 +203,28 @@ func (f ixFilters) payload() core.Obj {
 	if f.minReads > 1 {
 		out["min_reads"] = f.minReads
 	}
+	if f.minSupport > 1 {
+		out["min_support"] = f.minSupport
+	}
+	switch f.scope {
+	case scopeLabels[1]:
+		out["intra"] = true
+	case scopeLabels[2]:
+		out["intra"] = false
+	case scopeLabels[3]:
+		out["homodimer"] = "only"
+	case scopeLabels[4]:
+		out["homodimer"] = "exclude"
+	}
+	if f.search != "" {
+		out["search"] = f.search
+	}
+	if f.minDG != nil {
+		out["min_dg"] = *f.minDG
+	}
+	if f.maxDG != nil {
+		out["max_dg"] = *f.maxDG
+	}
 	region := core.Obj{}
 	if f.x0 > 0 || f.x1 > 0 {
 		region["x"] = []int{f.x0, orMax(f.x1)}
@@ -167,12 +247,13 @@ func orMax(n int) int {
 
 func (p *explorePage) interactionsKey() string {
 	s := &p.ix
-	return fmt.Sprintf("%s\x00%+v\x00%s", p.sel, s.applied, s.orderValue())
+	f := s.applied
+	return fmt.Sprintf("%s\x00%+v\x00%s\x00%s\x00%s", p.sel, f, dgText(f.minDG), dgText(f.maxDG), s.orderValue())
 }
 
 func (p *explorePage) fetchHybrids(path string, ids []string, f ixFilters, order string, offset int) ([]hybridRow, int, error) {
 	got, err := p.query(path, "analysis_hybrids", ids, core.Obj{
-		"filters": f.payload(), "limit": interactionsPage, "offset": offset, "order": order, "with_sequence": false,
+		"filters": f.payload(), "limit": interactionsPage, "offset": offset, "order": order, "with_sequence": true,
 	})
 	if err != nil {
 		return nil, 0, err
@@ -237,38 +318,51 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 		ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
 			picker(c, "ix-gene1", "Gene 1", &s.gene1, genes, 150).OnChange(submit)
 			picker(c, "ix-gene2", "Gene 2", &s.gene2, genes, 150).OnChange(submit)
+			picker(c, "ix-scope", "Scope", &s.scope, scopeLabels, 150).OnChange(submit)
 			picker(c, "ix-type", "Chimera type", &s.typ, withAll(allTypes, p.summary.types), 130).OnChange(submit)
-			picker(c, "ix-order", "Sort by", &s.order, orderLabels, 140)
+			picker(c, "ix-order", "Sort by", &s.order, orderLabels, 150)
+			Field(c, "Search", func() {
+				ui.TextInput(c.Key("ix-search"), &s.search).Label("Search").Placeholder("ID, sequence, RNA, type").Width(170).OnSubmit(submit)
+			})
 			Field(c, "Min reads", func() {
 				ui.TextInput(c.Key("ix-min"), &s.minReads).Label("Min reads").Width(70).OnSubmit(submit)
+			})
+			Field(c, "Min support", func() {
+				ui.TextInput(c.Key("ix-min-support"), &s.minSupport).Label("Min support").Width(70).OnSubmit(submit)
 			})
 			if ui.PrimaryButton(c, "Apply").Clicked() {
 				submit()
 			}
 			if ui.Button(c, "Clear").Clicked() {
-				s.apply(ixFilters{minReads: 1, typ: allTypes})
+				s.apply(ixFilters{minReads: 1, minSupport: 1, typ: allTypes})
 			}
 		})
 		set := 0
-		for _, v := range []string{s.x0, s.x1, s.y0, s.y1} {
+		for _, v := range []string{s.minDG, s.maxDG, s.x0, s.x1, s.y0, s.y1} {
 			if strings.TrimSpace(v) != "" {
 				set++
 			}
 		}
 		if set > 0 {
-			s.armsOpen = true
+			s.moreOpen = true
 		}
-		label := "Arm positions"
+		label := "ΔG and arm positions"
 		if set > 0 {
 			label += fmt.Sprintf(" (%d set)", set)
 		}
-		ui.Collapsible(c.Key("ix-arms"), label, &s.armsOpen, func() {
+		ui.Collapsible(c.Key("ix-arms"), label, &s.moreOpen, func() {
 			ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Padding(6, 0, 0, 0).Children(func() {
+				Field(c, "ΔG from", func() {
+					ui.TextInput(c.Key("ix-dg0"), &s.minDG).Label("ΔG from").Placeholder("kcal/mol").Width(90).OnSubmit(submit)
+				})
+				Field(c, "ΔG to", func() {
+					ui.TextInput(c.Key("ix-dg1"), &s.maxDG).Label("ΔG to").Placeholder("kcal/mol").Width(90).OnSubmit(submit)
+				})
 				coordInput(c, "ix-x0", "Arm 1 from", &s.x0, "start").OnSubmit(submit)
 				coordInput(c, "ix-x1", "Arm 1 to", &s.x1, "end").OnSubmit(submit)
 				coordInput(c, "ix-y0", "Arm 2 from", &s.y0, "start").OnSubmit(submit)
 				coordInput(c, "ix-y1", "Arm 2 to", &s.y1, "end").OnSubmit(submit)
-				ui.Text(c, "1-based; Enter or Apply filters.").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "A ΔG bound leaves out hybrids without ΔG. Positions are 1-based; Enter or Apply filters.").FontSize(12).TextColor(t.TextMuted)
 			})
 		})
 		if s.inputErr != "" {
@@ -295,6 +389,7 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 			}
 		})
 		p.hybridTable(c)
+		p.hybridDetail(c)
 	})
 }
 
@@ -306,11 +401,28 @@ func describeFilters(f ixFilters) string {
 	if f.gene2 != "" {
 		parts = append(parts, "gene 2 "+shortGene(f.gene2))
 	}
+	if f.scope != "" {
+		parts = append(parts, strings.ToLower(f.scope))
+	}
 	if f.typ != "" && f.typ != allTypes {
 		parts = append(parts, f.typ)
 	}
+	if f.search != "" {
+		parts = append(parts, fmt.Sprintf("matching %q", f.search))
+	}
 	if f.minReads > 1 {
 		parts = append(parts, fmt.Sprintf("≥ %d reads", f.minReads))
+	}
+	if f.minSupport > 1 {
+		parts = append(parts, fmt.Sprintf("support ≥ %d", f.minSupport))
+	}
+	switch {
+	case f.minDG != nil && f.maxDG != nil:
+		parts = append(parts, fmt.Sprintf("ΔG %s to %s", dgText(f.minDG), dgText(f.maxDG)))
+	case f.minDG != nil:
+		parts = append(parts, "ΔG ≥ "+dgText(f.minDG))
+	case f.maxDG != nil:
+		parts = append(parts, "ΔG ≤ "+dgText(f.maxDG))
 	}
 	if f.x0 > 0 || f.x1 > 0 {
 		parts = append(parts, "arm 1 in "+rangeText(f.x0, f.x1))
@@ -352,10 +464,13 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 		{Title: "Type", Width: 84},
 		{Title: "ΔG (kcal/mol)", Width: 122, Align: ui.End},
 		{Title: "Sample", Width: 110},
+		{Title: "Support", Width: 72, Align: ui.End},
 	}
 	var cols []ui.TableColumn
 	var index []int // table column -> column of all
-	for i, col := range all {
+	// Support shows beside Reads (it was added after the other columns)
+	for _, i := range []int{0, 1, 2, 3, 4, 5, 9, 6, 7, 8} {
+		col := all[i]
 		if (oneGene && (i == 1 || i == 3)) || (i == 8 && !multi) {
 			continue
 		}
@@ -399,6 +514,8 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 			if r.Index < len(ids) {
 				text = ids[r.Index]
 			}
+		case 9:
+			text = FormatNumber(int64(r.Support))
 		}
 		el := ui.Text(c, text).SingleLine().Padding(3, 6)
 		if muted {
@@ -408,5 +525,56 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 		if len(rows) == 0 && s.key != "" && !s.load.busy() {
 			ui.Text(c, "No hybrids match these filters.").TextColor(t.TextMuted).Padding(12)
 		}
+	})
+}
+
+// hybridDetail is the web's record drawer: the chosen row in full, with its
+// .hyb name and sequence.
+func (p *explorePage) hybridDetail(c *ui.Context) {
+	s := &p.ix
+	t := c.Theme()
+	if s.chosen < 0 || s.chosen >= len(s.rows) {
+		return
+	}
+	r := s.rows[s.chosen]
+	Card(c, "", func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			title := "Hybrid " + FormatNumber(r.ID)
+			if r.Name != "" {
+				title += " · " + r.Name
+			}
+			ui.Text(c, title).FontSize(16).Bold().Grow(1).Shrink(1).MinWidth(0).SingleLine()
+			if r.Sequence != "" && ui.Button(c, "Copy sequence").Clicked() {
+				c.WriteClipboard(r.Sequence)
+				p.a.Toast("Sequence copied")
+			}
+			if ui.Button(c, "Close").Clicked() {
+				s.chosen = -1
+			}
+		})
+		ui.Row(c).Gap(24).Wrap().Children(func() {
+			stat(c, "Arm 1", shortGene(r.Gene1)+":"+span(r.Start1, r.End1))
+			stat(c, "Arm 2", shortGene(r.Gene2)+":"+span(r.Start2, r.End2))
+			stat(c, "Type", r.Type)
+			stat(c, "Reads", FormatNumber(int64(r.Reads)))
+			stat(c, "Cluster support", FormatNumber(int64(r.Support)))
+			dg, overlap := "—", "—"
+			if r.DG != nil {
+				dg = strconv.FormatFloat(*r.DG, 'f', -1, 64) + " kcal/mol"
+			}
+			if r.Overlap != nil {
+				overlap = strconv.FormatFloat(*r.Overlap, 'f', -1, 64)
+			}
+			stat(c, "ΔG", dg)
+			stat(c, "Overlap score", overlap)
+			if len(p.ids) > 1 && r.Index < len(p.ids) {
+				stat(c, "Sample", p.ids[r.Index])
+			}
+		})
+		if r.Sequence == "" {
+			ui.Text(c, "The sequence is unavailable: the sample's .hyb file has changed since its index was built.").FontSize(12).TextColor(t.TextMuted)
+			return
+		}
+		ui.Text(c, r.Sequence).FontSize(12).Selectable().TextColor(t.TextMuted)
 	})
 }

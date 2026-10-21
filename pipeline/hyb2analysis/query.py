@@ -63,6 +63,8 @@ class _Index:
         # cluster support (hybfile) came after version 1: older indexes count one per record
         self.has_support = any(row[1] == "support" for row in self.con.execute("PRAGMA table_info(rects)"))
         self.support_total = int(self.meta["support"]) if self.has_support and "support" in self.meta else int(self.meta["records"])
+        self.support_sql = "support" if self.has_support else "1"
+        self.con.create_function("hyb2_found", 2, _found, deterministic=True)
 
         self._extents: Optional[Dict[str, Tuple[int, int]]] = None
 
@@ -377,6 +379,20 @@ def _rasterise(parts: List[Tuple[np.ndarray, ...]], bin_size: int, bounds: Tuple
 
 
 ORIENTATIONS = ("oriented", "both")
+HOMODIMER_SUBSETS = ("only", "exclude")
+
+
+def _homodimer_rects(index: _Index, g: int, sign: int) -> Dict[str, np.ndarray]:
+    """The homodimer-proxy hybrids of RNA ``g`` as one-record rectangles
+    (the index's rectangles group records without their overlap score);
+    ``sign`` -1 makes them subtract from a map."""
+    rows = index.con.execute("SELECT s1, e1, s2, e2, type, reads, %s FROM hybrids WHERE g1 = ? AND g2 = ? AND %s"
+                             % (index.support_sql, HOMODIMER), (g, g)).fetchall()
+    table = np.asarray(rows, dtype=np.int64).reshape(-1, 7)
+    out = {name: table[:, i] for i, name in enumerate(("s1", "e1", "s2", "e2", "type"))}
+    out["count"] = np.full(len(table), sign, dtype=np.int64)
+    out["reads"], out["support"] = sign * table[:, 5], sign * table[:, 6]
+    return out
 
 
 def _check_measure(measure: str) -> None:
@@ -397,14 +413,19 @@ def _pair_rects(index: _Index, g1: Optional[int], g2: Optional[int], swapped: bo
 
 
 def _contact_grid(indexes: List[_Index], gene: str, gene2: Optional[str], bin_size: int, region,
-                  types: Optional[Sequence[str]], measure: str, orientation: str = "oriented"):
+                  types: Optional[Sequence[str]], measure: str, orientation: str = "oriented",
+                  homodimer: Optional[str] = None):
     """Per-index rectangle selections and the merged grid.
 
     ``orientation="both"`` adds the hybrids whose arm 1 is on ``gene2`` and
     arm 2 on ``gene`` with the arms swapped (the browser's "normalised"
     pairs).  For an intramolecular map (``gene2 == gene``) both settings keep
-    the legacy rule: x = arm 1, y = arm 2, no mirroring.
+    the legacy rule: x = arm 1, y = arm 2, no mirroring.  ``homodimer``
+    ``"only"`` / ``"exclude"`` keeps or drops the homodimer-proxy hybrids
+    (both arms on one RNA, overlap score >= 5), as the web's contact map.
     """
+    if homodimer is not None and homodimer not in HOMODIMER_SUBSETS:
+        raise ValueError("homodimer must be 'only' or 'exclude'")
     if isinstance(bin_size, bool) or not isinstance(bin_size, int) or not 1 <= bin_size <= 100_000:
         raise ValueError("bin_size must be an integer between 1 and 100000")
     _check_measure(measure)
@@ -423,6 +444,10 @@ def _contact_grid(indexes: List[_Index], gene: str, gene2: Optional[str], bin_si
         found = [rects for rects in (_pair_rects(index, g1, g2, False),
                                      _pair_rects(index, g1, g2, True) if orientation == "both" and gene2 != gene else None)
                  if rects is not None]
+        if homodimer == "only":
+            found = [_homodimer_rects(index, g1, 1)] if found and gene2 == gene else []
+        elif homodimer == "exclude" and found and gene2 == gene:
+            found.append(_homodimer_rects(index, g1, -1))
         if not found:
             selections.append(None)
             continue
@@ -469,7 +494,7 @@ def _lengths_for(lengths: Dict[str, int], gene: str, gene2: Optional[str], obser
 def contact_bins(indexes: Sequence[PathLike], gene: str, bin_size: int = 10, region: Any = None, *,
                  gene2: Optional[str] = None, types: Optional[Sequence[str]] = None, measure: str = "records",
                  max_cells: Optional[int] = None, orientation: str = "oriented", fixed_bin: bool = False,
-                 lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+                 lengths: Optional[Dict[str, int]] = None, homodimer: Optional[str] = None) -> Dict[str, Any]:
     """Non-empty contact-map cells for ``gene`` (x = arm 1, y = arm 2).
 
     Returns ``{gene, gene2, bin_size, requested_bin_size, adjusted, measure,
@@ -488,7 +513,7 @@ def contact_bins(indexes: Sequence[PathLike], gene: str, bin_size: int = 10, reg
     opened = _indexes(indexes)
     requested = bin_size
     while True:
-        selections, bounds, observed = _contact_grid(opened, gene, gene2, bin_size, region, types, measure, orientation)
+        selections, bounds, observed = _contact_grid(opened, gene, gene2, bin_size, region, types, measure, orientation, homodimer)
         parts = [sel for sel in selections if sel is not None and len(sel[0])]
         grid = _rasterise(parts, bin_size, bounds) if parts else np.zeros((0, 0), dtype=np.int64)
         cells = int(np.count_nonzero(grid))
@@ -500,6 +525,7 @@ def contact_bins(indexes: Sequence[PathLike], gene: str, bin_size: int = 10, reg
     return {
         "gene": gene, "gene2": gene2 or gene, "bin_size": bin_size, "requested_bin_size": requested,
         "adjusted": bin_size != requested, "measure": measure, "orientation": orientation, "fixed_bin": fixed_bin,
+        "homodimer": homodimer,
         "length": length, "length2": length2,
         "region": region, "cells": cells, "total": int(sum(int(sel[4].sum()) for sel in parts)),
         "max": int(count.max()) if len(count) else 0,
@@ -652,9 +678,63 @@ def top_interactions(indexes: Sequence[PathLike], gene: str, bin_size: int = 10,
 _ORDERS = {
     "file": ("id", False),
     "reads": ("reads", True),
+    "support": ("support", True),
     "position": ("s1", False),
     "dg": ("dg", False),
 }
+
+HOMODIMER = "g1 = g2 AND overlap IS NOT NULL AND overlap >= 5"  # the web's homodimer proxy
+
+# search: the hybrid ids whose text matches, by (index, its stamp, query)
+_found_sets: "OrderedDict[str, frozenset]" = OrderedDict()
+_FOUND_CACHE = 8
+
+
+def _found(key: str, rid: int) -> bool:
+    return rid in _found_sets.get(key, ())
+
+
+def _js_number(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(int(value)) if float(value).is_integer() else repr(float(value))
+
+
+def _search_key(index: _Index, query: str) -> str:
+    """Find the hybrids whose id, sequence, RNA names, chimera type or overlap
+    score contain ``query`` (case-insensitive; the web's interaction search,
+    over the same fields joined by spaces). The id and sequence are read from
+    the sample's .hyb, which must be the file the index was built from."""
+    key = json.dumps([str(index.path), index.stamp, query])
+    with _lock:
+        if key in _found_sets:
+            _found_sets.move_to_end(key)
+            return key
+    meta = index.meta
+    source = meta.get("source_path")
+    try:
+        stat = os.stat(source) if source else None
+    except OSError:
+        stat = None
+    if stat is None or stat.st_size != meta.get("source_size") or stat.st_mtime_ns != meta.get("source_mtime_ns"):
+        raise ValueError("search reads the sample's .hyb file, which has moved or changed since its index was built")
+    names, types = index.gene_names, index.type_names
+    found = []
+    with open(source, "rb") as handle:
+        for rid, offset, g1, g2, ctype, overlap in index.con.execute(
+                "SELECT id, offset, g1, g2, type, overlap FROM hybrids ORDER BY offset"):
+            handle.seek(offset)
+            cols = handle.readline().rstrip(b"\r\n").split(b"\t", 2)
+            text = " ".join((cols[0].strip().decode("utf-8", "replace"),
+                             cols[1].strip().decode("utf-8", "replace") if len(cols) > 1 else "",
+                             names[g1], names[g2], types.get(ctype, ""), _js_number(overlap))).lower()
+            if query in text:
+                found.append(rid)
+    with _lock:
+        _found_sets[key] = frozenset(found)
+        while len(_found_sets) > _FOUND_CACHE:
+            _found_sets.popitem(last=False)
+    return key
 
 
 def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, list]]:
@@ -682,6 +762,19 @@ def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, l
         params.extend((g, g))
     if filters.get("intra") is not None:
         clauses.append("g1 = g2" if filters["intra"] else "g1 != g2")
+    homodimer = filters.get("homodimer")
+    if homodimer is not None:
+        if homodimer not in ("only", "exclude"):
+            raise ValueError("homodimer must be \"only\" or \"exclude\"")
+        clauses.append("(%s)" % HOMODIMER if homodimer == "only" else "NOT (%s)" % HOMODIMER)
+    search = filters.get("search")
+    if search is not None:
+        if not isinstance(search, str):
+            raise ValueError("search must be text")
+        query = search.strip().lower()
+        if query:
+            clauses.append("hyb2_found(?, id)")
+            params.append(_search_key(index, query))
     region = _region(filters.get("region"))
     if region is not None:
         x0, x1, y0, y1 = region
@@ -706,6 +799,7 @@ def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, l
         clauses.append("type IN (%s)" % ",".join("?" * len(ids)))
         params.extend(ids)
     for key, column, op in (("min_reads", "reads", ">="), ("max_reads", "reads", "<="),
+                            ("min_support", index.support_sql, ">="),
                             ("min_dg", "dg", ">="), ("max_dg", "dg", "<=")):
         value = filters.get(key)
         if value is not None:
@@ -735,7 +829,7 @@ def _read_lines(source: Optional[str], meta: Dict[str, Any], offsets: List[int])
         return {}
 
 
-_ROW_COLUMN = {"id": 0, "s1": 2, "reads": 7, "dg": 8}
+_ROW_COLUMN = {"id": 0, "s1": 2, "reads": 7, "dg": 8, "support": 12}
 
 
 def _merge_key(row: tuple, column: str, descending: bool, number: int) -> tuple:
@@ -753,12 +847,15 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
     """Filtered hybrid rows across indexes.
 
     ``filters``: ``gene1``, ``gene2``, ``gene`` (either arm), ``intra`` (bool),
+    ``homodimer`` (``"only"``/``"exclude"``: same RNA and overlap >= 5),
+    ``search`` (text, see ``_search_key``),
     ``region`` (``{"x": [s, e], "y": [s, e]}``, overlap with arm 1 / arm 2),
-    ``types`` (list), ``min_reads``/``max_reads``, ``min_dg``/``max_dg``.
-    ``order``: ``file`` (index order, then file order), ``reads`` (desc),
-    ``position`` (arm 1 start), ``dg`` (asc, missing last).
+    ``types`` (list), ``min_reads``/``max_reads``, ``min_support``,
+    ``min_dg``/``max_dg`` (a row without dG never matches these).
+    ``order``: ``file`` (index order, then file order), ``reads`` / ``support``
+    (desc), ``position`` (arm 1 start), ``dg`` (asc, missing last).
     Returns ``{total, limit, offset, order, rows: [{index, id, name, sequence,
-    gene1, start1, end1, gene2, start2, end2, reads, dg, overlap, type}]}``.
+    gene1, start1, end1, gene2, start2, end2, reads, support, dg, overlap, type}]}``.
     """
     filters = dict(filters or {})
     if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= MAX_LIMIT:
@@ -779,10 +876,11 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
         total += index.meta["records"] if not clause else index.con.execute("SELECT count(*) FROM hybrids" + clause, params).fetchone()[0]
         if limit == 0:
             continue
-        sort = "%s IS NULL, %s %s, id" % (column, column, "DESC" if descending else "ASC")
+        expression = index.support_sql if column == "support" else column
+        sort = "%s IS NULL, %s %s, id" % (expression, expression, "DESC" if descending else "ASC")
         rows = index.con.execute(
-            "SELECT id, g1, s1, e1, g2, s2, e2, reads, dg, overlap, type, offset FROM hybrids%s ORDER BY %s LIMIT ?"
-            % (clause, sort), params + [offset + limit]).fetchall()
+            "SELECT id, g1, s1, e1, g2, s2, e2, reads, dg, overlap, type, offset, %s FROM hybrids%s ORDER BY %s LIMIT ?"
+            % (index.support_sql, clause, sort), params + [offset + limit]).fetchall()
         streams.append([(_merge_key(row, column, descending, number), number, row) for row in rows])
     merged = list(heapq.merge(*streams, key=lambda item: item[0]))[offset:offset + limit] if streams else []
     lookups: Dict[int, Dict[int, Tuple[str, str]]] = {}
@@ -797,7 +895,7 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
         out.append({"index": number, "id": row[0], "name": name, "sequence": sequence,
                     "gene1": index.gene_names[row[1]], "start1": row[2], "end1": row[3],
                     "gene2": index.gene_names[row[4]], "start2": row[5], "end2": row[6],
-                    "reads": row[7], "dg": row[8], "overlap": row[9], "type": index.type_names.get(row[10])})
+                    "reads": row[7], "support": row[12], "dg": row[8], "overlap": row[9], "type": index.type_names.get(row[10])})
     return {"total": total, "limit": limit, "offset": offset, "order": order, "rows": out}
 
 
@@ -810,13 +908,18 @@ MAX_PROFILE_BINS = 30_000
 OVERLAP_RULES = ("any", "contained")
 
 
-def _anchor_parts(opened: List[_Index], gene: str, partner: Optional[str], types: Optional[Sequence[str]]):
+def _anchor_parts(opened: List[_Index], gene: str, partner: Optional[str], types: Optional[Sequence[str]],
+                  homodimer: Optional[str] = None):
     """Rectangles of every pair with ``gene`` on either arm (``partner`` on the other).
 
     Yields ``(rects, on1, on2, name1, name2)``: ``on1`` when arm 1 is the
     anchor (``gene``), ``on2`` when arm 2 is; ``name1``/``name2`` are the
     pair's gene names.  An intramolecular pair has both arms on the anchor.
+    ``homodimer`` ``"exclude"`` adds the homodimer-proxy hybrids with
+    negative weights, so it suits callers that only add the rectangles up.
     """
+    if homodimer is not None and homodimer not in HOMODIMER_SUBSETS:
+        raise ValueError("homodimer must be 'only' or 'exclude'")
     for index in opened:
         anchor = index.gene(gene)
         if anchor is None:
@@ -832,12 +935,17 @@ def _anchor_parts(opened: List[_Index], gene: str, partner: Optional[str], types
             rects = _load_rects(index, g1, g2)
             if rects is None or not len(rects["s1"]):
                 continue
-            mask = _type_mask(index, rects, types)
-            if mask is not None:
-                rects = {key: value[mask] for key, value in rects.items()}
-                if not len(rects["s1"]):
-                    continue
-            yield rects, on1, on2, index.gene_names[g1], index.gene_names[g2]
+            found = [rects]
+            if homodimer == "only":
+                found = [_homodimer_rects(index, g1, 1)] if g1 == g2 else []
+            elif homodimer == "exclude" and g1 == g2:
+                found.append(_homodimer_rects(index, g1, -1))
+            for rects in found:
+                mask = _type_mask(index, rects, types)
+                if mask is not None:
+                    rects = {key: value[mask] for key, value in rects.items()}
+                if len(rects["s1"]):
+                    yield rects, on1, on2, index.gene_names[g1], index.gene_names[g2]
 
 
 def _anchor_range(opened: List[_Index], gene: str, lengths: Dict[str, int]) -> Tuple[Optional[int], Optional[int], Optional[int]]:
@@ -896,7 +1004,7 @@ def _partner_rows(partners: Dict[str, List[int]]) -> List[Dict[str, Any]]:
 
 def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = None, end: Optional[int] = None, *,
               partner: Optional[str] = None, types: Optional[Sequence[str]] = None, measure: str = "records",
-              bin_size: int = 1, lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+              bin_size: int = 1, lengths: Optional[Dict[str, int]] = None, homodimer: Optional[str] = None) -> Dict[str, Any]:
     """Interaction coverage along ``gene`` (the viewpoint) and its partners.
 
     Every arm on ``gene`` (both arms of an intramolecular hybrid) adds its
@@ -910,7 +1018,8 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
     bin_size, adjusted, records, reads, arms, max, bins: {start: [], end: [],
     value: []}, partners: [{name, records, support, reads}]}``; ``records``/
     ``support``/``reads`` count the hybrids with an arm in the range, ``arms``
-    the arms (records).
+    the arms (records).  ``homodimer`` ``"only"``/``"exclude"`` keeps or drops
+    the homodimer-proxy hybrids, as the web's Viewpoint.
     """
     _check_measure(measure)
     if isinstance(bin_size, bool) or not isinstance(bin_size, int) or not 1 <= bin_size <= 100_000:
@@ -934,7 +1043,7 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
     diff = np.zeros(span + 1, dtype=np.float64)
     partners: Dict[str, List[int]] = {}
     records = support = reads = arms = 0
-    for rects, on1, on2, name1, name2 in _anchor_parts(opened, gene, partner, types):
+    for rects, on1, on2, name1, name2 in _anchor_parts(opened, gene, partner, types, homodimer):
         count = rects["count"].astype(np.int64)
         weight = rects[MEASURES[measure]].astype(np.float64)
         matched = {}

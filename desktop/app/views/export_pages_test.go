@@ -60,11 +60,12 @@ func TestExploreInteractionsExportTSV(t *testing.T) {
 		t.Fatalf("comments %.300q", text)
 	}
 	records := tsvRecords(t, text)
-	if len(records) != 41 || strings.Join(records[0], ",") != "id,gene1,start1,end1,gene2,start2,end2,reads,type,dG,sample" {
+	if len(records) != 41 || strings.Join(records[0], ",") != "id,gene1,start1,end1,gene2,start2,end2,reads,type,dG,support,name,sequence,sample" {
 		t.Fatalf("%d records, header %q", len(records), records[0])
 	}
 	first := p.ix.rows[0]
-	if records[1][1] != first.Gene1 || records[1][10] != p.ids[first.Index] {
+	if records[1][1] != first.Gene1 || records[1][10] != "1" || records[1][11] != first.Name || records[1][12] != first.Sequence ||
+		records[1][13] != p.ids[first.Index] {
 		t.Fatalf("first row %q", records[1])
 	}
 }

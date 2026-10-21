@@ -25,6 +25,7 @@ type partnerTotal struct {
 
 type viewpointState struct {
 	partner, typ, measure, resolution string
+	homodimer                         string // one of homodimerOptions
 	start, end                        string // inputs
 	from, to                          int    // applied (0 = default)
 	inputErr                          string
@@ -48,7 +49,7 @@ type viewpointData struct {
 
 func (s *viewpointState) init() {
 	// 1 nt is the web's default ("legacy" per-nucleotide viewpoint)
-	s.partner, s.typ, s.measure, s.resolution = allPartners, allTypes, measureRecords, "1 nt"
+	s.partner, s.typ, s.measure, s.resolution, s.homodimer = allPartners, allTypes, measureRecords, "1 nt", homodimerOptions[0]
 	s.profile = widgets.NewProfile()
 	s.hover = -1
 }
@@ -59,13 +60,14 @@ func (s *viewpointState) selectionChanged() {
 
 func (p *explorePage) viewpointKey() string {
 	s := &p.vp
-	return strings.Join([]string{p.sel, s.partner, s.typ, s.measure, s.resolution, fmt.Sprint(s.from, "-", s.to)}, "\x00")
+	return strings.Join([]string{p.sel, s.partner, s.typ, s.homodimer, s.measure, s.resolution, fmt.Sprint(s.from, "-", s.to)}, "\x00")
 }
 
 func (p *explorePage) loadViewpoint() {
 	s := &p.vp
 	path, ids, gene := p.a.Project.Path, p.ids, p.gene
 	partner, typ, measure, resolution, from, to := s.partner, s.typ, s.measure, s.resolution, s.from, s.to
+	homodimer := homodimerPayload(s.homodimer)
 	p.ensure(&s.load, p.viewpointKey(), func() (func(), error) {
 		var bin int
 		fmt.Sscanf(resolution, "%d", &bin)
@@ -75,6 +77,9 @@ func (p *explorePage) loadViewpoint() {
 		}
 		if types := typesPayload(typ); types != nil {
 			payload["types"] = types
+		}
+		if homodimer != "" {
+			payload["homodimer"] = homodimer
 		}
 		if from > 0 {
 			payload["start"] = from
@@ -117,6 +122,7 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 			ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
 				picker(c, "vp-partner", "Partner", &s.partner, withAll(allPartners, p.genes()), 190)
 				picker(c, "vp-type", "Chimera type", &s.typ, withAll(allTypes, p.summary.types), 130)
+				picker(c, "vp-homodimer", "Homodimer", &s.homodimer, homodimerOptions, 200)
 				picker(c, "vp-measure", "Measure", &s.measure, measures, 110)
 				picker(c, "vp-resolution", "Resolution", &s.resolution, resolutions, 90)
 				coordInput(c, "vp-start", "Start", &s.start, "observed").OnSubmit(submit)

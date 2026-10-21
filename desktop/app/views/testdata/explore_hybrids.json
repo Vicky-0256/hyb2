@@ -7,8 +7,8 @@
   {
    "index": 0,
    "id": 1,
-   "name": null,
-   "sequence": null,
+   "name": "100001_1",
+   "sequence": "CAGATTTTCATATTATGCAGAAAATCTACTTCGCCTGATA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 10420,
    "end1": 10472,
@@ -18,13 +18,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -92,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 2,
-   "name": null,
-   "sequence": null,
+   "name": "100002_1",
+   "sequence": "CGAGTCGGTTATCTTCGGATACTGTATAGTCCCACCTGGT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 6940,
    "end1": 7025,
@@ -34,13 +35,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -418,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 3,
-   "name": null,
-   "sequence": null,
+   "name": "100003_1",
+   "sequence": "GATCCTATGCTTGTGAGTACCCAGAAAATAGCGACGGACC",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 5251,
    "end1": 5356,
@@ -50,13 +52,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2904,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 4,
-   "name": null,
-   "sequence": null,
+   "name": "100004_1",
+   "sequence": "GCGGTGTTAAGTGTCGAGCTACATCACTTCTCATGTAGCC",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 5251,
    "end1": 5356,
@@ -66,13 +69,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2904,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 5,
-   "name": null,
-   "sequence": null,
+   "name": "100005_1",
+   "sequence": "AGAAGGCTGCAACTCATCGACTCTATGTAGTGACCGCGTC",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 326,
    "end1": 400,
@@ -82,13 +86,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -63,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 6,
-   "name": null,
-   "sequence": null,
+   "name": "100006_1",
+   "sequence": "GATGTCAAACCCCGGGGGGAGCTCAGATATCCGATACAGG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 5806,
    "end1": 5826,
@@ -98,13 +103,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -19,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 7,
-   "name": null,
-   "sequence": null,
+   "name": "100007_1",
+   "sequence": "GATGAAGAAATAACCTCATCCCATTGGTGACGAAAGGTTG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 349,
    "end1": 393,
@@ -114,13 +120,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -29,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 8,
-   "name": null,
-   "sequence": null,
+   "name": "100008_1",
+   "sequence": "TAAGTAGCTGGCCGCCGAGATAGCTGAGCGGCGAACCACT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 8184,
    "end1": 8207,
@@ -130,13 +137,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -139,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 9,
-   "name": null,
-   "sequence": null,
+   "name": "100009_1",
+   "sequence": "AGAAAAGGTTCAGACCCCGGAGCCCAGCCGTCACGATTGT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 1855,
    "end1": 1887,
@@ -146,13 +154,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2089,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 10,
-   "name": null,
-   "sequence": null,
+   "name": "100010_1",
+   "sequence": "TATGCGTATAAGCCCGGTTCACTACGTCCGTTCTGGCAAG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 10254,
    "end1": 10295,
@@ -162,13 +171,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -9840,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 11,
-   "name": null,
-   "sequence": null,
+   "name": "100011_1",
+   "sequence": "CCGGGGCTAATCCGTCATTGTCAAGAGACATCTTTCGTCT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 3463,
    "end1": 3509,
@@ -178,13 +188,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2823,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 12,
-   "name": null,
-   "sequence": null,
+   "name": "100012_1",
+   "sequence": "CATTAGGCTACTAACGCCGCCGGGTCGTTACTCGAAAAGC",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 9937,
    "end1": 9995,
@@ -194,13 +205,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -869,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 13,
-   "name": null,
-   "sequence": null,
+   "name": "100013_1",
+   "sequence": "AGGTGGAATTGGTGTATTCAGCTTGCTCGATTTGATCGAT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 1734,
    "end1": 1773,
@@ -210,13 +222,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -7020,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 14,
-   "name": null,
-   "sequence": null,
+   "name": "100014_1",
+   "sequence": "CTGCAAGGTGCTGTCTAGATAGATACCATGGCCCGGAAGT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 9171,
    "end1": 9219,
@@ -226,13 +239,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -748,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 15,
-   "name": null,
-   "sequence": null,
+   "name": "100015_1",
+   "sequence": "ACGGGCTTCTGGCGCATGTCGCACTCGTCCCTGGTCACGA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 10262,
    "end1": 10355,
@@ -242,13 +256,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -9865,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 16,
-   "name": null,
-   "sequence": null,
+   "name": "100016_1",
+   "sequence": "ACTGTACAAACATTGGACACTCTTTCCCGTTCTGGTACAA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 401,
    "end1": 458,
@@ -258,13 +273,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -3059,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 17,
-   "name": null,
-   "sequence": null,
+   "name": "100017_1",
+   "sequence": "AATGTGCTCCAATCATGCATGAAACAGATACATCGCTTGG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 362,
    "end1": 464,
@@ -274,13 +290,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -7462,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 18,
-   "name": null,
-   "sequence": null,
+   "name": "100018_1",
+   "sequence": "GCCACGTAGTCTAGAGCACACTAAATGAGACATCTTAGAG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 6358,
    "end1": 6423,
@@ -290,13 +307,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2445,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 19,
-   "name": null,
-   "sequence": null,
+   "name": "100019_1",
+   "sequence": "GAGATAGGCGTAGATCCGGTTACTAGCCGTGATGCAAGGT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 3794,
    "end1": 3889,
@@ -306,13 +324,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2591,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 20,
-   "name": null,
-   "sequence": null,
+   "name": "100020_1",
+   "sequence": "GGGGGAACGGGATGTTGTAACATGCGGGTGTGCACGCCAC",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 3794,
    "end1": 3876,
@@ -322,13 +341,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -19,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 21,
-   "name": null,
-   "sequence": null,
+   "name": "100021_1",
+   "sequence": "TAAGACGAAACCTAGTGCCTCTTGCTAGTCATTATTAGTA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 3166,
    "end1": 3259,
@@ -338,13 +358,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2770,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 22,
-   "name": null,
-   "sequence": null,
+   "name": "100022_1",
+   "sequence": "CGAAGGGTTGTGCTCCGATAGTTGAAAATGTGGTGTTATG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 342,
    "end1": 413,
@@ -354,13 +375,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -9856,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 23,
-   "name": null,
-   "sequence": null,
+   "name": "100023_1",
+   "sequence": "CTCACGGCGTGGTGTGTCTTTAACCCCAAGCTATCAATAC",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 5036,
    "end1": 5093,
@@ -370,13 +392,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2568,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 24,
-   "name": null,
-   "sequence": null,
+   "name": "100024_1",
+   "sequence": "TGAATAGGCTACATATGTTATACTCCGTGTCGTAAGGATG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 5036,
    "end1": 5062,
@@ -386,13 +409,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -1805,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 25,
-   "name": null,
-   "sequence": null,
+   "name": "100025_1",
+   "sequence": "ACGGCTCCGCTACTGGTGGTCTGTCGCCTCAGCCGTTGAC",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 2408,
    "end1": 2466,
@@ -402,13 +426,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -7664,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 26,
-   "name": null,
-   "sequence": null,
+   "name": "100026_1",
+   "sequence": "CGCAACACCGTGAAGCACGGGTAAGGCAGCAGAAAGGCGA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 2946,
    "end1": 2977,
@@ -418,13 +443,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -336,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 27,
-   "name": null,
-   "sequence": null,
+   "name": "100027_1",
+   "sequence": "GAACTGCAGGAGAGCGTATTTGCGCAACCCTGAGGGTCTA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 10552,
    "end1": 10620,
@@ -434,13 +460,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -7439,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 28,
-   "name": null,
-   "sequence": null,
+   "name": "100028_1",
+   "sequence": "GAGAGTCCACCTGGGCCTTTACGGAACTATATTGGTTTAA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 1619,
    "end1": 1666,
@@ -450,13 +477,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -8006,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 29,
-   "name": null,
-   "sequence": null,
+   "name": "100029_1",
+   "sequence": "TAAAACGGGTCCAGCAAGTGGATTTGGGTCCAGACTGAAT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 7550,
    "end1": 7605,
@@ -466,13 +494,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -39,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 30,
-   "name": null,
-   "sequence": null,
+   "name": "100030_1",
+   "sequence": "CTCTCACGGCTTGTCTTTATGCCATTAAACTTGCCAGATT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 7000,
    "end1": 7113,
@@ -482,13 +511,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -619,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 31,
-   "name": null,
-   "sequence": null,
+   "name": "100031_1",
+   "sequence": "CTACTCCGCACCTACTCACACTTAATAATACAAGTGTCCG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 3932,
    "end1": 3987,
@@ -498,13 +528,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -166,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 32,
-   "name": null,
-   "sequence": null,
+   "name": "100032_1",
+   "sequence": "TTCTTCTGGCGGCAGGCGGGGTGTACCGCCACTCCTTCAA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 6715,
    "end1": 6752,
@@ -514,13 +545,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2362,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 33,
-   "name": null,
-   "sequence": null,
+   "name": "100033_1",
+   "sequence": "CAATTTCCACTCGCTGCCGCGTGAGCTAGAGTGAAGCCAA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 3888,
    "end1": 3931,
@@ -530,13 +562,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -5203,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 34,
-   "name": null,
-   "sequence": null,
+   "name": "100034_1",
+   "sequence": "TCCTACTCGAACTTCGACCTGTTGTACCATATCTGCAAAT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 6005,
    "end1": 6099,
@@ -546,13 +579,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -2450,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 35,
-   "name": null,
-   "sequence": null,
+   "name": "100035_1",
+   "sequence": "TCCCTGCCGAGATACCGTAATATGTGGTATATGGCGAGTT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 1688,
    "end1": 1799,
@@ -562,13 +596,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -751,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 36,
-   "name": null,
-   "sequence": null,
+   "name": "100036_1",
+   "sequence": "AAAAAGGGAGATATGACGGCCCATGTGGGGAACGTGAACG",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 9812,
    "end1": 9936,
@@ -578,13 +613,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -123,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 37,
-   "name": null,
-   "sequence": null,
+   "name": "100037_1",
+   "sequence": "TACGGCCAGTAGCAGGGCATGAAGTCATCCCACAGTCAGT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 4018,
    "end1": 4039,
@@ -594,13 +630,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -4569,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   },
   {
    "index": 0,
    "id": 38,
-   "name": null,
-   "sequence": null,
+   "name": "100038_1",
+   "sequence": "GGCAATACGAACACACCTGCTGGTACCCGTTGATAATGGA",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 7225,
    "end1": 7272,
@@ -610,13 +647,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -4983,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 39,
-   "name": null,
-   "sequence": null,
+   "name": "100039_1",
+   "sequence": "TCTTTTCGGTGGGAATTGCTCTGCTTAAGAGAGTAGGGAC",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 6878,
    "end1": 6904,
@@ -626,13 +664,14 @@
    "reads": 1,
    "dg": null,
    "overlap": -780,
-   "type": "Type_2"
+   "type": "Type_2",
+   "support": 1
   },
   {
    "index": 0,
    "id": 40,
-   "name": null,
-   "sequence": null,
+   "name": "100040_1",
+   "sequence": "AGAACGTGCACGGGTTTACTCACCCTTCCGGAGTTCCAGT",
    "gene1": "ZIKV_African_KX377335-1_virusRNA",
    "start1": 580,
    "end1": 629,
@@ -642,7 +681,8 @@
    "reads": 1,
    "dg": null,
    "overlap": -6606,
-   "type": "Type_1"
+   "type": "Type_1",
+   "support": 1
   }
  ]
 }

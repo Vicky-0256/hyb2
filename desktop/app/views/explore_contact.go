@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -30,12 +31,18 @@ const (
 	measureReads   = "Reads"
 	scaleLinear    = "Linear"
 	scaleLog       = "Log"
+	// capCustom is the web's custom cap: a value on the displayed scale
+	// (log(1 + count) on the Log scale), the maximum when not positive.
+	capCustom = "Custom"
 )
 
 var (
 	binOptions    = []string{"5 nt", "10 nt", "25 nt", "50 nt", "100 nt"}
-	capOptions    = []string{"90th percentile", "95th percentile", "99th percentile", "Maximum"}
+	capOptions    = []string{"90th percentile", "95th percentile", "99th percentile", "Maximum", capCustom}
 	capFractions  = []float64{0.90, 0.95, 0.99, 1}
+	// homodimerOptions are the web's contact-map subsets of the homodimer
+	// proxy (both arms on one RNA, overlap score >= 5).
+	homodimerOptions = []string{"All hybrids", "Homodimer proxy only", "Exclude homodimer proxy"}
 	measures      = []string{measureRecords, measureSupport, measureReads}
 	orientations  = []string{orientBoth, orientOriented}
 	scaleOptions  = []string{scaleLinear, scaleLog}
@@ -48,7 +55,9 @@ type contactState struct {
 	measure     string
 	orientation string
 	typ         string
+	homodimer   string
 	colorCap    string
+	customCap   string
 	scale       string
 	dark        bool // the theme the cells were coloured for
 
@@ -73,13 +82,14 @@ type contactData struct {
 	measure          string
 	orientation      string
 	typ              string
+	homodimer        string
 	x, y, count      []int
 	sorted           []int // counts, ascending (for the colour cap)
 	at               map[[2]int]int
 }
 
 func (s *contactState) init() {
-	s.bin, s.measure, s.orientation, s.typ = binDefault, measureRecords, orientBoth, allTypes
+	s.bin, s.measure, s.orientation, s.typ, s.homodimer = binDefault, measureRecords, orientBoth, allTypes, homodimerOptions[0]
 	s.colorCap, s.scale = capOptions[1], scaleLinear
 	s.heat = widgets.NewHeatmap()
 	s.picked = -1
@@ -102,14 +112,32 @@ func (p *explorePage) contactGene2() string {
 
 func (p *explorePage) contactKey() string {
 	s := &p.cm
-	return strings.Join([]string{p.sel, p.contactGene2(), s.bin, s.measure, s.orientation, s.typ}, "\x00")
+	return strings.Join([]string{p.sel, p.contactGene2(), s.bin, s.measure, s.orientation, s.typ, s.homodimer}, "\x00")
+}
+
+// capChoice is the colour cap for colorCap: an option, or "Custom:<value>".
+func (s *contactState) capChoice() string {
+	if s.colorCap == capCustom {
+		return capCustom + ":" + strings.TrimSpace(s.customCap)
+	}
+	return s.colorCap
+}
+
+func homodimerPayload(option string) string {
+	switch option {
+	case homodimerOptions[1]:
+		return "only"
+	case homodimerOptions[2]:
+		return "exclude"
+	}
+	return ""
 }
 
 func (p *explorePage) loadContact() {
 	s := &p.cm
 	path, ids, gene, gene2 := p.a.Project.Path, p.ids, p.gene, p.contactGene2()
-	bin, measure, orientation, typ := s.bin, s.measure, s.orientation, s.typ
-	colorCap, scale, dark := s.colorCap, s.scale, s.dark
+	bin, measure, orientation, typ, homodimer := s.bin, s.measure, s.orientation, s.typ, s.homodimer
+	colorCap, scale, dark := s.capChoice(), s.scale, s.dark
 	lengthX, lengthY := p.geneLength(gene), p.geneLength(gene2)
 	p.ensure(&s.load, p.contactKey(), func() (func(), error) {
 		payload := core.Obj{"gene": gene, "gene2": gene2, "measure": measurePayload(measure), "orientation": "both"}
@@ -119,6 +147,9 @@ func (p *explorePage) loadContact() {
 		if types := typesPayload(typ); types != nil {
 			payload["types"] = types
 		}
+		if h := homodimerPayload(homodimer); h != "" {
+			payload["homodimer"] = h
+		}
 		var size int
 		fmt.Sscanf(bin, "%d", &size)
 		payload["bin_size"], payload["max_cells"] = size, contactMaxCells
@@ -127,12 +158,13 @@ func (p *explorePage) loadContact() {
 			return nil, err
 		}
 		d := decodeContact(got, measure, orientation, typ, lengthX, lengthY)
+		d.homodimer = homodimer
 		cells := d.cells(colorCap, scale, dark)
 		return func() {
 			s.data = d
 			s.heat.SetCells(cells, float64(d.lengthX), float64(d.lengthY))
 			s.picked = -1
-			if s.colorCap != colorCap || s.scale != scale || s.dark != dark {
+			if s.capChoice() != colorCap || s.scale != scale || s.dark != dark {
 				p.recolor() // changed while loading
 			}
 			if f := s.focus; f != nil {
@@ -191,10 +223,17 @@ func display(n int, scale string) float64 {
 }
 
 // colorCap is the displayed value at which colours saturate: the chosen
-// quantile of the displayed values, as the web's resolveContactCap.
+// quantile of the displayed values, or a custom value, as the web's
+// resolveContactCap.
 func (d *contactData) colorCap(choice, scale string) float64 {
 	if len(d.sorted) == 0 {
 		return 0
+	}
+	if custom, ok := strings.CutPrefix(choice, capCustom+":"); ok {
+		if v, err := strconv.ParseFloat(custom, 64); err == nil && v > 0 && !math.IsInf(v, 0) {
+			return v
+		}
+		return display(d.sorted[len(d.sorted)-1], scale)
 	}
 	fraction := 0.95
 	for i, label := range capOptions {
@@ -254,6 +293,7 @@ func (p *explorePage) contactView(c *ui.Context) {
 				picker(c, "cm-measure", "Measure", &s.measure, measures, 100)
 				picker(c, "cm-orientation", "Orientation", &s.orientation, orientations, 150)
 				picker(c, "cm-type", "Chimera type", &s.typ, withAll(allTypes, p.summary.types), 120)
+				picker(c, "cm-homodimer", "Homodimer", &s.homodimer, homodimerOptions, 200)
 			})
 			loadingLine(c, &s.load, "the contact map")
 			d := s.data
@@ -304,7 +344,7 @@ func (p *explorePage) recolor() {
 		return
 	}
 	view, picked := s.heat.View(), s.heat.Picked
-	s.heat.SetCells(s.data.cells(s.colorCap, s.scale, s.dark), float64(s.data.lengthX), float64(s.data.lengthY))
+	s.heat.SetCells(s.data.cells(s.capChoice(), s.scale, s.dark), float64(s.data.lengthX), float64(s.data.lengthY))
 	s.heat.SetView(view)
 	s.heat.Picked = picked
 }
@@ -336,9 +376,18 @@ func (p *explorePage) contactLegend(c *ui.Context, d *contactData) {
 		})
 		ui.Row(c).Gap(10).Wrap().Children(func() {
 			picker(c, "cm-cap", "Colour cap", &s.colorCap, capOptions, 145).OnChange(p.recolor)
+			if s.colorCap == capCustom {
+				what := "Cap (count)"
+				if s.scale == scaleLog {
+					what = "Cap (log(1 + count))"
+				}
+				Field(c, what, func() {
+					ui.TextInput(c.Key("cm-custom-cap"), &s.customCap).Label(what).Placeholder("maximum").Width(110).OnChange(p.recolor)
+				})
+			}
 			picker(c, "cm-scale", "Scale", &s.scale, scaleOptions, 84).OnChange(p.recolor)
 		})
-		limit := capCount(d.colorCap(s.colorCap, s.scale), s.scale)
+		limit := capCount(d.colorCap(s.capChoice(), s.scale), s.scale)
 		ui.Column(c).Gap(4).Children(func() {
 			ui.Box(c).FillWidth().Height(10).Radius(3).Draw(func(pt *ui.Painter, r ui.Rect) {
 				steps := 48
@@ -410,7 +459,13 @@ func (p *explorePage) contactDetails(c *ui.Context, d *contactData) {
 
 // showCellHybrids switches to Interactions filtered to the cell's ranges.
 func (p *explorePage) showCellHybrids(d *contactData, x0, x1, y0, y1 int) {
-	f := ixFilters{gene1: d.gene, gene2: d.gene2, typ: d.typ, x0: x0, x1: x1, y0: y0, y1: y1, minReads: 1}
+	f := ixFilters{gene1: d.gene, gene2: d.gene2, typ: d.typ, x0: x0, x1: x1, y0: y0, y1: y1, minReads: 1, minSupport: 1}
+	switch homodimerPayload(d.homodimer) {
+	case "only":
+		f.scope = scopeLabels[3]
+	case "exclude":
+		f.scope = scopeLabels[4]
+	}
 	p.ix.apply(f)
 	p.tab = tabInteractions
 }

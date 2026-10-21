@@ -3,6 +3,7 @@ package views
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -240,6 +241,14 @@ func TestExploreViewpointAndRegion(t *testing.T) {
 	if !tt.HasText("Partners in range") || !tt.HasText("Selected interval") {
 		t.Fatalf("viewpoint texts %q", tt.Texts())
 	}
+	if sent := f.last("analysis_viewpoint"); sent["homodimer"] != nil {
+		t.Fatalf("payload %v", sent)
+	}
+	p.vp.homodimer = homodimerOptions[2]
+	settle(a, tt)
+	if sent := f.last("analysis_viewpoint"); sent["homodimer"] != "exclude" {
+		t.Fatalf("payload %v", sent)
+	}
 	snapshot(t, tt, "explore-viewpoint")
 	// Pick a bin and explore its region.
 	box, ok := tt.Find("Viewpoint coverage of " + zikvGene)
@@ -338,4 +347,110 @@ func TestExploreNavigationFromCompare(t *testing.T) {
 		t.Fatal("not zoomed to the cell")
 	}
 	snapshot(t, tt, "explore-contact-focus")
+}
+
+// The web's Interactions filters reach analysis_hybrids; a row opens its
+// record card with the .hyb name and sequence.
+func TestExploreInteractionFiltersAndRecord(t *testing.T) {
+	a, f, p, tt := openExplore(t)
+	tt.SetSize(1100, 1000)
+	if err := tt.Click("Interactions"); err != nil {
+		t.Fatal(err)
+	}
+	settle(a, tt)
+	s := &p.ix
+	s.scope, s.search, s.minSupport, s.minDG, s.maxDG, s.order = scopeLabels[3], " ggct ", "2", "−30", "-10", "Support (most first)"
+	if err := tt.Click("Apply"); err != nil {
+		t.Fatal(err)
+	}
+	settle(a, tt)
+	sent := f.last("analysis_hybrids")
+	filters := sent["filters"].(map[string]any)
+	if filters["homodimer"] != "only" || filters["search"] != "ggct" || filters["min_support"] != float64(2) ||
+		filters["min_dg"] != float64(-30) || filters["max_dg"] != float64(-10) || sent["order"] != "support" || sent["with_sequence"] != true {
+		t.Fatalf("payload %v", sent)
+	}
+	if !strings.Contains(strings.Join(tt.Texts(), "|"), `homodimer proxy, matching "ggct", support ≥ 2, ΔG -30 to -10`) {
+		t.Fatalf("summary %q", tt.Texts())
+	}
+	s.minDG, s.maxDG = "-5", "-20"
+	if err := tt.Click("Apply"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("the ΔG range's lower bound must not exceed its upper bound") {
+		t.Fatalf("texts %q", tt.Texts())
+	}
+	if err := tt.Click("Clear"); err != nil {
+		t.Fatal(err)
+	}
+	settle(a, tt)
+	if s.scope != scopeLabels[0] || s.search != "" || s.minDG != "" {
+		t.Fatalf("not cleared: %+v", s.applied)
+	}
+	// the record card
+	s.chosen = 0
+	tt.Frame()
+	r := s.rows[0]
+	for _, text := range []string{"Hybrid " + FormatNumber(r.ID) + " · " + r.Name, r.Sequence, "Cluster support", "Overlap score", "Copy sequence"} {
+		if !tt.HasText(text) {
+			t.Fatalf("record card lacks %q: %q", text, tt.Texts())
+		}
+	}
+	snapshot(t, tt, "explore-record")
+	if err := tt.Click("Close"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if s.chosen != -1 {
+		t.Fatal("card still open")
+	}
+}
+
+// The web's homodimer subsets and custom colour cap on the contact map.
+func TestExploreContactHomodimerAndCustomCap(t *testing.T) {
+	a, f, p, tt := openExplore(t)
+	s := &p.cm
+	s.homodimer = homodimerOptions[1]
+	settle(a, tt)
+	if sent := f.last("analysis_contact_bins"); sent["homodimer"] != "only" {
+		t.Fatalf("payload %v", sent)
+	}
+	d := s.data
+	if d.homodimer != homodimerOptions[1] {
+		t.Fatalf("data subset %q", d.homodimer)
+	}
+	p.showCellHybrids(d, 1, 100, 1, 100)
+	if p.ix.applied.scope != scopeLabels[3] || p.ix.applied.payload()["homodimer"] != "only" {
+		t.Fatalf("interactions %+v", p.ix.applied)
+	}
+	p.tab = tabContact
+	s.homodimer = homodimerOptions[2]
+	settle(a, tt)
+	if sent := f.last("analysis_contact_bins"); sent["homodimer"] != "exclude" {
+		t.Fatalf("payload %v", sent)
+	}
+
+	// custom: a displayed value; nothing usable is the maximum
+	maximum := float64(d.sorted[len(d.sorted)-1])
+	for _, c := range []struct {
+		custom, scale string
+		want          float64
+	}{{"3", scaleLinear, 3}, {"", scaleLinear, maximum}, {"-2", scaleLinear, maximum}, {"x", scaleLinear, maximum},
+		{"2", scaleLog, 2}, {"", scaleLog, math.Log1p(maximum)}} {
+		if got := d.colorCap(capCustom+":"+c.custom, c.scale); got != c.want {
+			t.Fatalf("custom %q %s: %g, want %g", c.custom, c.scale, got, c.want)
+		}
+	}
+	s.colorCap = capCustom
+	tt.Frame()
+	if !tt.HasText("Cap (count)") {
+		t.Fatalf("no custom input: %q", tt.Texts())
+	}
+	s.customCap = "1"
+	p.recolor()
+	tt.Frame()
+	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "≥ 1 records") {
+		t.Fatalf("legend %q", tt.Texts())
+	}
 }

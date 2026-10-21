@@ -838,7 +838,7 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
         result = query.contact_bins(paths, required_gene(), opt_int("bin_size", 10), request.get("region"), gene2=opt_str("gene2"),
                                     types=opt_types(), measure=opt_str("measure") or "records",
                                     max_cells=opt_int("max_cells", None), orientation=opt_str("orientation") or "oriented",
-                                    fixed_bin=opt_bool("fixed_bin"), lengths=lengths)
+                                    fixed_bin=opt_bool("fixed_bin"), lengths=lengths, homodimer=opt_str("homodimer"))
     elif operation == "analysis_top":
         result = query.top_interactions(paths, required_gene(), opt_int("bin_size", 10), opt_int("n", 50), gene2=opt_str("gene2"),
                                         region=request.get("region"), types=opt_types(),
@@ -846,7 +846,7 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
     elif operation == "analysis_viewpoint":
         result = query.viewpoint(paths, required_gene(), opt_int("start", None), opt_int("end", None), partner=opt_str("partner"),
                                  types=opt_types(), measure=opt_str("measure") or "records", bin_size=opt_int("bin_size", 1),
-                                 lengths=lengths)
+                                 lengths=lengths, homodimer=opt_str("homodimer"))
     elif operation == "analysis_region":
         result = query.region(paths, required_gene(), opt_int("start", None), opt_int("end", None), partner=opt_str("partner"),
                               partner_start=opt_int("partner_start", None), partner_end=opt_int("partner_end", None),

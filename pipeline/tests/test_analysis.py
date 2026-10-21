@@ -582,6 +582,55 @@ class SupportTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=tail):
                 hybfile.parse(self.line("r_1", tail))
 
+    def test_interaction_filters(self):
+        """The web's Interactions filters: homodimer proxy, search, min support."""
+        with tempfile.TemporaryDirectory() as tmp:
+            hyb = Path(tmp) / "f.hyb"
+            other = "\t".join(["seq", ".", "G", "1", "20", "1", "20", "1e-5", "H", "21", "40", "5", "30", "1e-5"])
+            hyb.write_bytes(self.line("a_5", "\t4") + self.line("b_1", "\tcount_total=3", 11, 30)
+                            + self.line("c_2", "\t\t7\tType_1") + ("d_1\t" + other + "\t\t9\tInter\n").encode())
+            path = Path(tmp) / "f.hyb2idx"
+            index.build(hyb, path)
+
+            def ids(filters, order="file"):
+                return [r["name"] for r in query.hybrids([path], filters, order=order)["rows"]]
+            self.assertEqual(ids({"homodimer": "only"}), ["c_2"])          # same RNA, overlap 7
+            self.assertEqual(ids({"homodimer": "exclude"}), ["a_5", "b_1", "d_1"])
+            self.assertEqual(ids({"min_support": 3}), ["a_5", "b_1"])
+            self.assertEqual(ids({}, "support"), ["a_5", "b_1", "c_2", "d_1"])
+            self.assertEqual(query.hybrids([path], {}, order="support")["rows"][0]["support"], 4)
+            # id, sequence, RNA names, type and overlap, joined by spaces, any case
+            self.assertEqual(ids({"search": "C_2"}), ["c_2"])
+            self.assertEqual(ids({"search": " g h "}), ["d_1"])
+            self.assertEqual(ids({"search": "inter 9"}), ["d_1"])
+            self.assertEqual(ids({"search": "type_1"}), ["a_5", "b_1", "c_2"])   # a and b inferred
+            self.assertEqual(ids({"search": "   "}), ["a_5", "b_1", "c_2", "d_1"])
+            self.assertEqual(query.hybrids([path], {"search": "seq"}, limit=0)["total"], 4)
+            # the contact map and viewpoint subsets: only + exclude = all
+            for measure in ("records", "support", "reads"):
+                maps = {h: as_cells(query.contact_bins([path], "G", 10, measure=measure, homodimer=h)) for h in (None, "only", "exclude")}
+                for cell, value in maps[None].items():
+                    self.assertEqual(maps["only"].get(cell, 0) + maps["exclude"].get(cell, 0), value, (measure, cell))
+                views = {h: query.viewpoint([path], "G", 1, 140, measure=measure, homodimer=h) for h in (None, "only", "exclude")}
+                for i, value in enumerate(views[None]["bins"]["value"]):
+                    self.assertAlmostEqual(views["only"]["bins"]["value"][i] + views["exclude"]["bins"]["value"][i], value)
+            self.assertEqual(query.contact_bins([path], "G", 10, homodimer="only")["total"], 1)
+            self.assertEqual(query.contact_bins([path], "G", 10, gene2="H", homodimer="only")["cells"], 0)
+            self.assertEqual(query.viewpoint([path], "G", homodimer="only")["records"], 1)
+            self.assertEqual([p["name"] for p in query.viewpoint([path], "G", homodimer="exclude")["partners"]], ["G", "H"])
+            for call in (lambda: query.contact_bins([path], "G", 10, homodimer="all"),
+                         lambda: query.viewpoint([path], "G", homodimer="both")):
+                with self.assertRaises(ValueError):
+                    call()
+            for bad in ({"homodimer": "yes"}, {"search": 3}):
+                with self.assertRaises(ValueError, msg=bad):
+                    query.hybrids([path], bad)
+            # search needs the .hyb the index was built from
+            hyb.write_bytes(hyb.read_bytes() + b"\n")
+            with self.assertRaises(ValueError):
+                query.hybrids([path], {"search": "new"})
+            query.close_all()
+
     def test_index_support_and_old_index_fallback(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as tmp:

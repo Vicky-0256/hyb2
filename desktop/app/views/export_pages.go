@@ -46,7 +46,7 @@ func (p *explorePage) exportInteractions() {
 	}
 	render := func() ([]byte, error) {
 		multi := len(ids) > 1
-		header := []string{"id", "gene1", "start1", "end1", "gene2", "start2", "end2", "reads", "type", "dG"}
+		header := []string{"id", "gene1", "start1", "end1", "gene2", "start2", "end2", "reads", "type", "dG", "support", "name", "sequence"}
 		if multi {
 			header = append(header, "sample")
 		}
@@ -57,7 +57,8 @@ func (p *explorePage) exportInteractions() {
 				dg = strconv.FormatFloat(*r.DG, 'f', -1, 64)
 			}
 			row := []string{strconv.FormatInt(r.ID, 10), r.Gene1, strconv.Itoa(r.Start1), strconv.Itoa(r.End1),
-				r.Gene2, strconv.Itoa(r.Start2), strconv.Itoa(r.End2), strconv.Itoa(r.Reads), r.Type, dg}
+				r.Gene2, strconv.Itoa(r.Start2), strconv.Itoa(r.End2), strconv.Itoa(r.Reads), r.Type, dg,
+				strconv.Itoa(r.Support), r.Name, r.Sequence}
 			if multi {
 				sample := ""
 				if r.Index < len(ids) {
@@ -120,10 +121,10 @@ func (p *explorePage) exportContactSVG() {
 		return
 	}
 	// light colours whatever the theme, as the web's exports
-	cells, view := d.cells(s.colorCap, s.scale, false), s.heat.View()
+	cells, view := d.cells(s.capChoice(), s.scale, false), s.heat.View()
 	title := p.contactTitle()
 	note := fmt.Sprintf("Teal–violet scale, saturated at %s %s (%s, %s scale).",
-		formatCount(capCount(d.colorCap(s.colorCap, s.scale), s.scale)),
+		formatCount(capCount(d.colorCap(s.capChoice(), s.scale), s.scale)),
 		strings.ToLower(d.measure), strings.ToLower(s.colorCap), strings.ToLower(s.scale))
 	render := func() ([]byte, error) {
 		// Weakest first, so a capped map keeps the strongest cells.
@@ -150,7 +151,7 @@ func (p *explorePage) exportContactTSV() {
 	}
 	view := s.heat.View()
 	comments := []string{"HYB2 contact map · " + p.contactTitle(),
-		fmt.Sprintf("Measure: %s · orientation: %s · type: %s", strings.ToLower(d.measure), d.orientation, d.typ),
+		fmt.Sprintf("Measure: %s · orientation: %s · type: %s · %s", strings.ToLower(d.measure), d.orientation, d.typ, strings.ToLower(nameOr(d.homodimer, homodimerOptions[0]))),
 		fmt.Sprintf("Cells in view: arm 1 %d–%d, arm 2 %d–%d", int(view.X0), int(math.Ceil(view.X1)), int(view.Y0), int(math.Ceil(view.Y1)))}
 	render := func() ([]byte, error) {
 		var rows [][]string
@@ -303,7 +304,7 @@ func (p *explorePage) exportViewpointTSV() {
 	}
 	rows := profileRows(s.profile)
 	comments := []string{"HYB2 viewpoint · " + p.a.SelectionLabel(p.a.Selected.Key) + " · " + d.gene + ":" + span(d.start, d.end),
-		fmt.Sprintf("Mean %s per nucleotide in %d nt bins; partner: %s; type: %s", strings.ToLower(d.measure), d.bin, s.partner, s.typ)}
+		fmt.Sprintf("Mean %s per nucleotide in %d nt bins; partner: %s; type: %s; %s", strings.ToLower(d.measure), d.bin, s.partner, s.typ, strings.ToLower(s.homodimer))}
 	saveExport(p.a, "Export the viewpoint", exportName(".tsv", selectionName(p.a.Selected.Key), shortName(d.gene), "viewpoint"), func() ([]byte, error) {
 		return tsvTable{Comments: comments, Header: []string{"start", "end", "mean_interaction_coverage"}, Rows: rows}.Bytes()
 	})

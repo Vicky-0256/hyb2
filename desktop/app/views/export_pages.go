@@ -5,6 +5,7 @@ package views
 // and written by saveExport off it.
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -392,5 +393,126 @@ func (p *comparePage) exportQuickTSV() {
 		}
 		header := []string{"x_start", "x_end", "y_start", "y_end", "condition_a_mean", "condition_b_mean", "log2_effect", "condition_a_raw", "condition_b_raw"}
 		return tsvTable{Comments: comments, Header: header, Rows: out}.Bytes()
+	})
+}
+
+// ---- ⑤ Structure: CT, base pairs and the report
+
+// stLayerName is the web's pair layer: "primary", then "pseudoknot-1", ….
+func stLayerName(layer int) string {
+	if layer == 0 {
+		return "primary"
+	}
+	return "pseudoknot-" + strconv.Itoa(layer)
+}
+
+// stCTText is one CT block per record (window): local positions, the pair
+// partner (0 for none) and the gene position as the natural numbering.
+func stCTText(gene string, records []structureRecord) string {
+	gene = nameOr(gene, "RNA")
+	var b strings.Builder
+	for _, r := range records {
+		start, _ := r.span()
+		n := len(r.Sequence)
+		partner := make([]int, n+2)
+		for _, pr := range stRecordPairs(r) {
+			i, j := pr.I-start+1, pr.J-start+1
+			if i >= 1 && j >= 1 && i <= n && j <= n {
+				partner[i], partner[j] = j, i
+			}
+		}
+		energy := "NA"
+		if r.Energy != nil {
+			energy = strconv.FormatFloat(*r.Energy, 'f', 2, 64)
+		}
+		fmt.Fprintf(&b, "%d ENERGY = %s %s:%d-%d\n", n, energy, gene, start, start+n-1)
+		for pos := 1; pos <= n; pos++ {
+			next := pos + 1
+			if pos == n {
+				next = 0
+			}
+			fmt.Fprintf(&b, "%d\t%c\t%d\t%d\t%d\t%d\n", pos, r.Sequence[pos-1], pos-1, next, partner[pos], start+pos-1)
+		}
+	}
+	return b.String()
+}
+
+// stPairsRows are the web's rna-secondary-structure-pairs.tsv columns that
+// apply to CPLfold, in gene positions, with the window of each pair.
+func stPairsRows(records []structureRecord) [][]string {
+	weights := stWeights(records)
+	var rows [][]string
+	for _, r := range records {
+		start, end := r.span()
+		base := func(pos int) string {
+			if i := pos - start; i >= 0 && i < len(r.Sequence) {
+				return string(r.Sequence[i])
+			}
+			return ""
+		}
+		energy := ""
+		if r.Energy != nil {
+			energy = strconv.FormatFloat(*r.Energy, 'f', 2, 64)
+		}
+		for _, pr := range stRecordPairs(r) {
+			kind, support := "none", ""
+			if w, ok := weights[[2]int{pr.I, pr.J}]; ok {
+				kind, support = "log1p_hyb_bonus", strconv.FormatFloat(w, 'f', -1, 64)
+			}
+			left, right := base(pr.I), base(pr.J)
+			rows = append(rows, []string{strconv.Itoa(start), strconv.Itoa(end), strconv.Itoa(pr.I), left, strconv.Itoa(pr.J), right,
+				left + "–" + right, stLayerName(pr.Layer), kind, support, energy, "CPLfold"})
+		}
+	}
+	return rows
+}
+
+func (p *structurePage) exportName(a *structureResult, ext string) string {
+	return exportName(ext, nameOr(a.Meta.GeneID, a.Structure.GeneID), p.viewA)
+}
+
+func (p *structurePage) exportCT(a *structureResult) {
+	gene, records := nameOr(a.Meta.GeneID, a.Structure.GeneID), stPickRecords(a.Records, p.record)
+	saveExport(p.a, "Save the CT file", p.exportName(a, ".ct"), func() ([]byte, error) {
+		return []byte(stCTText(gene, records)), nil
+	})
+}
+
+func (p *structurePage) exportPairsTSV(a *structureResult) {
+	records := stPickRecords(a.Records, p.record)
+	comments := []string{"HYB2 structure " + p.viewA + " · " + nameOr(a.Meta.GeneID, a.Structure.GeneID) + " · " + nameOr(a.Meta.Engine, "CPLfold"),
+		"Positions on the RNA; evidence_support is the pair's HYB bonus (log1p of the chimera support) where CPLfold used one"}
+	saveExport(p.a, "Save the base pairs", p.exportName(a, "_pairs.tsv"), func() ([]byte, error) {
+		header := []string{"window_start", "window_end", "left_position", "left_base", "right_position", "right_base", "pair_type",
+			"pair_layer", "evidence_kind", "evidence_support", "selected_energy_kcal_per_mol", "engine"}
+		return tsvTable{Comments: comments, Header: header, Rows: stPairsRows(records)}.Bytes()
+	})
+}
+
+// exportReport writes the result as the web's structure report JSON:
+// what was folded, how, and each window's structure.
+func (p *structurePage) exportReport(a *structureResult) {
+	var windows []map[string]any
+	for _, r := range a.Records {
+		start, end := r.span()
+		pairs, knotted := 0, 0
+		for _, pr := range stRecordPairs(r) {
+			pairs++
+			if pr.Layer > 0 {
+				knotted++
+			}
+		}
+		windows = append(windows, map[string]any{"start": start, "end": end, "sequence": r.Sequence, "dot_bracket": r.DBN,
+			"energy_kcal_per_mol": r.Energy, "base_pairs": pairs, "pseudoknotted_pairs": knotted})
+	}
+	payload := map[string]any{
+		"application": "HYB2 Desktop", "version": nameOr(reportAppVersion(), "development build"), "analysis": "rna-secondary-structure",
+		"structure_id": p.viewA, "engine": nameOr(a.Meta.Engine, "CPLfold"), "rna": nameOr(a.Meta.GeneID, a.Structure.GeneID),
+		"mode": nameOr(a.Meta.Mode, a.Structure.Mode), "parameters": a.Meta.Parameters, "evidence_samples": a.Structure.Samples,
+		"created_at": a.Structure.CreatedAt, "total_seconds": a.Meta.Timings.TotalS, "summary": a.Structure.Summary, "windows": windows,
+	}
+	saveExport(p.a, "Save the structure report", p.exportName(a, "_report.json"), func() ([]byte, error) {
+		out, err := json.MarshalIndent(payload, "", "  ")
+		return append(out, '\n'), err
 	})
 }

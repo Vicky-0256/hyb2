@@ -744,6 +744,15 @@ func (p *structurePage) viewer(c *ui.Context) {
 				if ui.Button(c, "Export SVG…").Tooltip("Save the arc diagram as shown").Clicked() {
 					p.exportArcsSVG(a)
 				}
+				if ui.Button(c, "Save .ct").Tooltip("Connectivity table, one block per window shown").Clicked() {
+					p.exportCT(a)
+				}
+				if ui.Button(c, "Pairs TSV…").Tooltip("Every base pair shown, with its type, layer and chimera evidence").Clicked() {
+					p.exportPairsTSV(a)
+				}
+				if ui.Button(c, "Report JSON…").Tooltip("What was folded, with which parameters, and each window's structure").Clicked() {
+					p.exportReport(a)
+				}
 			}
 		})
 		if len(p.pendingPair) == 2 {

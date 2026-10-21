@@ -2,6 +2,7 @@ package views
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -206,5 +207,62 @@ func TestCompareQuickViewExportTSV(t *testing.T) {
 		if x1 < x0 || end != x1+p.quick.data.BinSize-1 {
 			t.Fatalf("row %d: %q after %q", i, rows[i], rows[i-1])
 		}
+	}
+}
+
+func TestStructureExportCTPairsAndReport(t *testing.T) {
+	a, _ := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 1400)
+	a.Navigate("structure", map[string]any{"structureId": structA})
+	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	res := p.cache[structA]
+	r := res.Records[0]
+	pairs := stRecordPairs(r)
+
+	name, ct := exportClick(t, a, tt, "Save .ct")
+	lines := strings.Split(strings.TrimSuffix(ct, "\n"), "\n")
+	if !strings.HasSuffix(name, ".ct") || len(lines) != len(r.Sequence)+1 || !strings.HasPrefix(lines[0], strconv.Itoa(len(r.Sequence))+" ENERGY = ") {
+		t.Fatalf("%s: %d lines, header %q", name, len(lines), lines[0])
+	}
+	// every pair is listed from both ends; the last column is the gene position
+	start, _ := r.span()
+	partners := 0
+	for _, line := range lines[1:] {
+		f := strings.Split(line, "\t")
+		pos, _ := strconv.Atoi(f[0])
+		partner, _ := strconv.Atoi(f[4])
+		natural, _ := strconv.Atoi(f[5])
+		if natural != start+pos-1 || f[1] != string(r.Sequence[pos-1]) {
+			t.Fatalf("row %q", line)
+		}
+		if partner > 0 {
+			partners++
+		}
+	}
+	if partners != 2*len(pairs) {
+		t.Fatalf("%d partner entries for %d pairs", partners, len(pairs))
+	}
+
+	name, text := exportClick(t, a, tt, "Pairs TSV…")
+	rows := tsvRecords(t, text)
+	if !strings.HasSuffix(name, "_pairs.tsv") || len(rows) != len(pairs)+1 || rows[0][6] != "pair_type" {
+		t.Fatalf("%s: %d rows for %d pairs, header %q", name, len(rows), len(pairs), rows[0])
+	}
+	for _, row := range rows[1:] {
+		if row[6] != row[3]+"–"+row[5] || (row[7] != "primary" && !strings.HasPrefix(row[7], "pseudoknot-")) || row[11] != "CPLfold" {
+			t.Fatalf("row %q", row)
+		}
+	}
+
+	name, text = exportClick(t, a, tt, "Report JSON…")
+	var report map[string]any
+	if err := json.Unmarshal([]byte(text), &report); err != nil {
+		t.Fatal(err)
+	}
+	windows := report["windows"].([]any)
+	if !strings.HasSuffix(name, "_report.json") || report["structure_id"] != structA || len(windows) != len(res.Records) ||
+		windows[0].(map[string]any)["base_pairs"] != float64(len(pairs)) {
+		t.Fatalf("%s: %.400s", name, text)
 	}
 }

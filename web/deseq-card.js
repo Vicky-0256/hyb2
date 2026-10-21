@@ -21,7 +21,7 @@
   const BOTTOM_SPACE = 104;
   const TABLE_ROWS = 60;
   const REPORT_CELLS = 20000;
-  const VALIDATION = "On the ZIKV virion comparison (ZAFR_REP1/2 vs ZILM_REP2/3, 1,038,539 tested 10-nt cells) it matches R DESeq2 1.46: the same 83,023 significant cells (20,660 up / 62,363 down) and 668 / 1,725 merged interactions at padj < 0.05 (one interaction is an exactly tied neighbour of R's pick, because ties are merged in table order); against HYB2 Desktop's numpy port, log2 fold changes agree to 2e-9 and padj to 3e-7 (relative) over every tested cell.";
+  const VALIDATION = "On the ZIKV virion comparison (ZAFR_REP1/2 vs ZILM_REP2/3, 1,038,539 tested 10-nt cells) it matches R DESeq2 1.46: the same 83,023 significant cells (20,660 up / 62,363 down) and 668 / 1,725 merged interactions at padj < 0.05 (one interaction is an exactly tied neighbour of R's pick, because ties are merged in table order); against HYB2 Desktop's numpy port, log2 fold changes agree to 2e-9 and padj to 3e-7 (relative) over every tested cell. On smaller inputs the gap can be wider (1-in-10 subsamples of the same files: padj within 0.3%, one cell on either side of 0.05), because the browser's Math.log is not always correctly rounded and the desktop's is.";
 
   let worker = null;
   let runToken = 0;

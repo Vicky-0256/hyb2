@@ -395,6 +395,7 @@ func (a *App) applyPrefs(got core.Obj, err error) {
 	a.prefs.measured, _ = speed["measured_samples"].(float64)
 	a.prefs.lookup, _ = got["external_lookup"].(bool)
 	a.setLookup(got)
+	a.setTheme(got)
 }
 
 func (a *App) prefsDialog(c *ui.Context) {
@@ -439,6 +440,8 @@ func (a *App) prefsDialog(c *ui.Context) {
 					a.savePrefs(core.Obj{"budget": core.Obj{"cpu": int(p.cpu), "mem_mb": int(p.memMB)}})
 				}
 			})
+			ui.Divider(c)
+			a.themePref(c)
 			ui.Divider(c)
 			a.lookupPrefs(c)
 		})

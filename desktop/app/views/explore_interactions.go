@@ -40,9 +40,9 @@ type interactionsState struct {
 	applied ixFilters
 	// inputs
 	gene1, gene2, typ, order, scope string
-	search, minReads, minSupport     string
-	minDG, maxDG, x0, x1, y0, y1     string
-	inputErr                         string
+	search, minReads, minSupport    string
+	minDG, maxDG, x0, x1, y0, y1    string
+	inputErr                        string
 	// moreOpen shows the ΔG and arm position filters (open while one is set).
 	moreOpen bool
 
@@ -55,14 +55,14 @@ type interactionsState struct {
 }
 
 type hybridRow struct {
-	Index  int      `json:"index"`
-	ID     int64    `json:"id"`
-	Gene1  string   `json:"gene1"`
-	Start1 int      `json:"start1"`
-	End1   int      `json:"end1"`
-	Gene2  string   `json:"gene2"`
-	Start2 int      `json:"start2"`
-	End2   int      `json:"end2"`
+	Index   int      `json:"index"`
+	ID      int64    `json:"id"`
+	Gene1   string   `json:"gene1"`
+	Start1  int      `json:"start1"`
+	End1    int      `json:"end1"`
+	Gene2   string   `json:"gene2"`
+	Start2  int      `json:"start2"`
+	End2    int      `json:"end2"`
 	Reads   int      `json:"reads"`
 	Support int      `json:"support"`
 	DG      *float64 `json:"dg"`
@@ -384,6 +384,8 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 					p.loadMoreInteractions()
 				}
 			}
+			density := nameOr(p.a.Density, densityLabels[0])
+			ui.Select(c.Key("ix-density"), &density, densityLabels).Label("Table density").Width(170).OnChange(func() { p.a.setDensity(density) })
 			if ui.Button(c, "Export TSV…").Tooltip("Save the rows loaded as a tab-separated file").Disabled(len(s.rows) == 0).Clicked() && len(s.rows) > 0 {
 				p.exportInteractions()
 			}
@@ -483,6 +485,7 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 		ui.Text(c, "Both arms of every hybrid shown are on "+rows[0].Gene1+".").FontSize(12).TextColor(t.TextMuted)
 	}
 	ids := p.ids
+	compact := p.a.compact()
 	s.list.Selected = &s.chosen
 	s.list.Key = func(i int) any { return [2]int64{int64(rows[i].Index), rows[i].ID} }
 	ui.Table(c.Key("ix-table"), &s.list, cols, len(rows), func(row, col int) {
@@ -518,6 +521,9 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 			text = FormatNumber(int64(r.Support))
 		}
 		el := ui.Text(c, text).SingleLine().Padding(3, 6)
+		if compact {
+			el.Padding(0, 6).FontSize(12)
+		}
 		if muted {
 			el.TextColor(t.TextMuted)
 		}

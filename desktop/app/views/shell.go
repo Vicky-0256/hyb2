@@ -13,12 +13,20 @@ import (
 
 // View builds the window: the start page, or the project shell.
 func (a *App) View(c *ui.Context) {
+	a.loadTheme()
+	a.applyTheme(c)
+	if c.Shortcut(ui.Cmd, ui.KeyK) {
+		a.openPalette()
+	}
 	for _, m := range a.toasts {
 		c.AddToast(ui.Toast{ID: m.ID, Title: m.Text})
 	}
 	a.toasts = nil
 	if a.Project == nil {
 		a.startView(c)
+		a.paletteDialog(c)
+		a.helpDialog(c)
+		a.prefsDialog(c)
 		return
 	}
 	t := c.Theme()
@@ -36,6 +44,8 @@ func (a *App) View(c *ui.Context) {
 	})
 	a.tasksDrawer(c)
 	a.prefsDialog(c)
+	a.paletteDialog(c)
+	a.helpDialog(c)
 }
 
 // navigation: the logo and project, the pages, and closing the project.
@@ -66,7 +76,8 @@ func (a *App) navigation(c *ui.Context) {
 // topBar: project menu, reference, gene, selection, tasks and preferences.
 func (a *App) topBar(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Gap(10).Padding(8, 12).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+	// it wraps in a narrow window rather than hiding its last buttons
+	ui.Row(c).Gap(8).Wrap().Padding(8, 12).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 		a.referencePicker(c)
 		a.genePicker(c)
 		a.selectionPicker(c)
@@ -78,6 +89,12 @@ func (a *App) topBar(c *ui.Context) {
 		}
 		if ui.Button(c, label).Clicked() {
 			a.drawerOpen = !a.drawerOpen
+		}
+		if ui.Button(c, "⌘K").Label("Search pages and actions").Tooltip("Search pages and actions (⌘K or Ctrl+K)").Clicked() {
+			a.openPalette()
+		}
+		if ui.Button(c, "Help").Tooltip("What this page shows and how to read it").Clicked() {
+			a.helpOpen = true
 		}
 		if ui.Button(c, "Preferences").Clicked() {
 			a.openPrefs()
@@ -121,7 +138,7 @@ func (a *App) genePicker(c *ui.Context) {
 	}
 	gene := a.Selected.Gene
 	barLabel(c, "RNA")
-	ui.Select(c.Key("gene"), &gene, names).Label("RNA").Width(210).Tooltip(gene).OnChange(func() {
+	ui.Select(c.Key("gene"), &gene, names).Label("RNA").Width(180).Tooltip(gene).OnChange(func() {
 		a.Selected.Gene = gene
 		a.saveUIState()
 	})
@@ -144,7 +161,7 @@ func (a *App) selectionPicker(c *ui.Context) {
 		}
 	}
 	barLabel(c, "Samples")
-	ui.Select(c.Key("selection"), &current, labels).Label("Samples").Width(230).Tooltip("The samples, or a condition with its replicates merged, that QC, Explore and Structure show").OnChange(func() {
+	ui.Select(c.Key("selection"), &current, labels).Label("Samples").Width(210).Tooltip("The samples, or a condition with its replicates merged, that QC, Explore and Structure show").OnChange(func() {
 		a.Selected.Key = keys[current]
 		a.saveUIState()
 	})

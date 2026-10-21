@@ -74,8 +74,16 @@ type App struct {
 	drawerOpen bool
 	prefsOpen  bool
 	prefs      prefsState
-	lookup     lookupPref // external_lookup (evidence.go)
-	start      startState
+	// the frame (frame.go): theme preference, command palette, help
+	theme                 string // "system", "light" or "dark"
+	themeOnce             sync.Once
+	lightTheme, darkTheme *ui.Theme
+	palette               paletteState
+	helpOpen              bool
+	// Density is the Interactions table's rows: densityLabels[0] or [1].
+	Density string
+	lookup  lookupPref // external_lookup (evidence.go)
+	start   startState
 	// content is the page area of the previous frame (charts size to it).
 	content ui.Rect
 	// pendingFolder is a data folder chosen with a new project; the Data
@@ -108,7 +116,7 @@ func New(b core.Backend, win Poster, dataDir string) *App {
 		labels: map[string]string{}, pages: map[string]Page{},
 		SessionStart: time.Now().UTC().Format(time.RFC3339)}
 	a.recent = a.loadRecent()
-	for _, p := range Pages {
+	for _, p := range append(append([]PageInfo(nil), Pages...), HelpPages...) {
 		if factory := pageFactories[p.ID]; factory != nil {
 			a.pages[p.ID] = factory(a)
 		} else {
@@ -458,6 +466,7 @@ func (a *App) restoreUIState() {
 	a.Selected.ReferenceID, _ = desktop["reference_id"].(string)
 	a.Selected.Gene, _ = desktop["gene"].(string)
 	a.Selected.Key, _ = desktop["selection"].(string)
+	a.Density, _ = desktop["density"].(string)
 }
 
 func (a *App) saveUIState() {
@@ -469,7 +478,8 @@ func (a *App) saveUIState() {
 	for k, v := range a.Project.UIState {
 		state[k] = v
 	}
-	desktop := map[string]any{"page": a.Page, "reference_id": a.Selected.ReferenceID, "gene": a.Selected.Gene, "selection": a.Selected.Key}
+	desktop := map[string]any{"page": a.Page, "reference_id": a.Selected.ReferenceID, "gene": a.Selected.Gene, "selection": a.Selected.Key,
+		"density": a.Density}
 	state["desktop"] = desktop
 	a.Project.UIState = state
 	go func() { _, _ = a.B.UpdateUIState(path, state) }()

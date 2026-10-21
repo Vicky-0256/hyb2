@@ -37,16 +37,16 @@ const (
 )
 
 var (
-	binOptions    = []string{"5 nt", "10 nt", "25 nt", "50 nt", "100 nt"}
-	capOptions    = []string{"90th percentile", "95th percentile", "99th percentile", "Maximum", capCustom}
-	capFractions  = []float64{0.90, 0.95, 0.99, 1}
+	binOptions   = []string{"5 nt", "10 nt", "25 nt", "50 nt", "100 nt"}
+	capOptions   = []string{"90th percentile", "95th percentile", "99th percentile", "Maximum", capCustom}
+	capFractions = []float64{0.90, 0.95, 0.99, 1}
 	// homodimerOptions are the web's contact-map subsets of the homodimer
 	// proxy (both arms on one RNA, overlap score >= 5).
 	homodimerOptions = []string{"All hybrids", "Homodimer proxy only", "Exclude homodimer proxy"}
-	measures      = []string{measureRecords, measureSupport, measureReads}
-	orientations  = []string{orientBoth, orientOriented}
-	scaleOptions  = []string{scaleLinear, scaleLog}
-	mapSizeTarget = float32(430)
+	measures         = []string{measureRecords, measureSupport, measureReads}
+	orientations     = []string{orientBoth, orientOriented}
+	scaleOptions     = []string{scaleLinear, scaleLog}
+	mapSizeTarget    = float32(430)
 )
 
 type contactState struct {

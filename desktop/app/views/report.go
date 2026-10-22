@@ -4,7 +4,9 @@ package views
 // the page shows (manifest, references, samples with their index counts,
 // conditions, differential tests with their strongest interactions, and
 // structures), and "Export report…": the same sections as one
-// self-contained HTML file with inline SVG figures (report_html.go).
+// self-contained HTML file with inline SVG figures (report_html.go). The
+// two result packages ("For AI", "For analysis") are the web app's
+// hyb2-result/1.0 ZIPs (resultpkg.go).
 
 import (
 	"encoding/json"
@@ -134,8 +136,15 @@ func gatherReport(b core.Backend, in reportInput) *reportData {
 			ready = append(ready, s.ID)
 		}
 	}
+	d.Ready = ready
 	counts := map[string]*qcStats{}
 	if len(ready) > 0 {
+		if raw, err := b.Query(pr.Path, "analysis_overview", core.Obj{"sample_ids": ready}); err == nil {
+			var ov ovData
+			if model.Decode(raw, &ov) == nil {
+				d.Overview = &ov
+			}
+		}
 		result, err := b.Query(pr.Path, "analysis_summary", core.Obj{"sample_ids": ready})
 		var parts []qcStats
 		if err == nil {
@@ -205,6 +214,7 @@ func gatherReport(b core.Backend, in reportInput) *reportData {
 	if cards, err := b.ListEvidence(pr.Path); err != nil {
 		d.Notes = append(d.Notes, "Could not read the external sources: "+err.Error())
 	} else {
+		d.Cards = len(cards)
 		for i := range cards {
 			if cards[i].InReport() {
 				d.Evidence = append(d.Evidence, newReportEvidence(&cards[i], d.Structures))
@@ -309,7 +319,7 @@ func reportReadTest(b core.Backend, pr *model.Project, e comparisonEntry, label 
 		return strings.Join(out, " + ")
 	}
 	x := reportTest{ID: e.ID, LabelA: nameOr(e.LabelOne, names(e.SamplesOne)), LabelB: nameOr(e.LabelTwo, names(e.SamplesTwo)),
-		Genes: e.Genes, Params: cmpParamsText(&e), Created: e.CreatedAt, Summary: e.Summary}
+		Genes: e.Genes, Params: cmpParamsText(&e), Created: e.CreatedAt, Summary: e.Summary, Entry: e}
 	if e.Available != nil && !*e.Available {
 		x.Err = "the result files are missing"
 		return x
@@ -328,7 +338,7 @@ func reportReadTest(b core.Backend, pr *model.Project, e comparisonEntry, label 
 	}
 	top := append([]cmpInteraction(nil), result.Interactions...)
 	sort.SliceStable(top, func(i, j int) bool { return cmpPadj(top[i].Padj) < cmpPadj(top[j].Padj) })
-	x.Top = top[:min(len(top), reportTopInteractions)]
+	x.Top, x.All = top[:min(len(top), reportTopInteractions)], top
 	x.Cells = cmpSignificantCells(&result, 0)
 	x.CellsTotal = max(result.CellsTotal, int64(len(x.Cells)))
 	x.SimCells = cmpSimilarityCells(&result)
@@ -380,6 +390,7 @@ func reportReadStructure(b core.Backend, pr *model.Project, e reportStructureEnt
 		s.Err = err.Error()
 		return s
 	}
+	s.Result = &result
 	s.Digests = map[string]string{"all": researchDigest(result.Records)}
 	for _, r := range result.Records {
 		s.Digests[fmt.Sprintf("%d-%d", r.WindowStart, r.WindowEnd)] = researchDigest([]structureRecord{r})
@@ -411,6 +422,19 @@ func (p *reportPage) export() {
 	saveExport(p.a, "Export report", exportName("-report.html", d.Name), func() ([]byte, error) { return renderReportHTML(d) })
 }
 
+// exportPackage saves the web's hyb2-result-<audience>.zip for the project.
+func (p *reportPage) exportPackage(audience string) {
+	d := p.data
+	if d == nil {
+		return
+	}
+	title := map[string]string{"ai": "Save the package for an AI assistant", "analysis": "Save the package for further analysis"}[audience]
+	saveExport(p.a, title, exportName(".zip", d.Name, "hyb2-result", audience), func() ([]byte, error) {
+		now := time.Now()
+		return buildResultRecord(d, now).zip(audience, now)
+	})
+}
+
 // ---- view
 
 func (p *reportPage) View(c *ui.Context) {
@@ -427,6 +451,14 @@ func (p *reportPage) View(c *ui.Context) {
 				}
 				if ui.Button(c, "Refresh").Disabled(p.loading).Clicked() {
 					p.load()
+				}
+				if ui.Button(c, "For AI (ZIP)…").Tooltip("The web app's result package for an AI assistant: README, report.md, summary.json with result ids, short tables").
+					Disabled(d == nil).Clicked() && d != nil {
+					p.exportPackage("ai")
+				}
+				if ui.Button(c, "For analysis (ZIP)…").Tooltip("The web app's result package for further analysis: full tables, structures, figures, data dictionary").
+					Disabled(d == nil).Clicked() && d != nil {
+					p.exportPackage("analysis")
 				}
 				if ui.PrimaryButton(c, "Export report…").Tooltip("Save the report as one HTML file with its figures").Disabled(d == nil).Clicked() && d != nil {
 					p.export()

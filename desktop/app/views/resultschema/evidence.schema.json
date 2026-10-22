@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vicky-0256.github.io/hyb2/schema/evidence.schema.json",
+  "title": "HYB2 external sources (hyb2-result/1.0)",
+  "type": "object",
+  "required": [
+    "schema",
+    "run",
+    "literature_search",
+    "sources",
+    "note"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "hyb2-result/1.0"
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "id",
+        "basis"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^run-[0-9a-f]{16}$"
+        },
+        "basis": {
+          "type": "string"
+        }
+      }
+    },
+    "note": {
+      "type": "string"
+    },
+    "literature_search": {
+      "type": "object",
+      "required": [
+        "status",
+        "lookups",
+        "includedInReport",
+        "hit_count"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "ok",
+            "no_result",
+            "not_run",
+            "running",
+            "failed",
+            "stale",
+            "pending"
+          ]
+        },
+        "lookups": {
+          "type": "integer"
+        },
+        "includedInReport": {
+          "type": "integer"
+        },
+        "hit_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "contentKind",
+          "query",
+          "status",
+          "review",
+          "evidenceNature",
+          "citationsVerified"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^E[0-9]{2}$"
+          },
+          "source": {
+            "type": "string"
+          },
+          "contentKind": {
+            "enum": [
+              "database_metadata",
+              "literature_index"
+            ]
+          },
+          "query": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "hitCount": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "review": {
+            "type": "object",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "enum": [
+                  "unreviewed",
+                  "reviewed",
+                  "rejected"
+                ]
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "evidenceNature": {
+            "type": "string"
+          },
+          "citationsVerified": {
+            "const": false
+          },
+          "entries": {
+            "type": "array"
+          }
+        }
+      }
+    }
+  }
+}

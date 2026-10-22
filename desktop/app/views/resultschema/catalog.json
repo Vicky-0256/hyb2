@@ -1,0 +1,418 @@
+{
+  "schema": "hyb2-result/1.0",
+  "status": {
+    "ok": "Completed with results",
+    "no_result": "Completed; no result met the criteria",
+    "not_run": "Not run in this session",
+    "running": "Running when the snapshot was taken",
+    "failed": "Failed or stopped",
+    "stale": "Result is from earlier inputs; the inputs have changed since",
+    "pending": "Configured; result still being prepared"
+  },
+  "steps": [
+    [
+      "S01",
+      "parse",
+      "HYB parsing and validation"
+    ],
+    [
+      "S02",
+      "reference",
+      "Reference FASTA mapping"
+    ],
+    [
+      "S03",
+      "interactions",
+      "Interaction filtering"
+    ],
+    [
+      "S04",
+      "contact_map",
+      "Contact map"
+    ],
+    [
+      "S05",
+      "viewpoint",
+      "Viewpoint coverage"
+    ],
+    [
+      "S06",
+      "region",
+      "Region Explorer"
+    ],
+    [
+      "S07",
+      "comparison",
+      "Compare: effect map and similarity heatmap"
+    ],
+    [
+      "S08",
+      "differential_test",
+      "Compare: differential test (DESeq2 Wald test, JavaScript port)"
+    ],
+    [
+      "S09",
+      "arc_map",
+      "Compare: arc map of structures and differential interactions"
+    ],
+    [
+      "S10",
+      "region_structures",
+      "Compare: region structures (panels D, E)"
+    ],
+    [
+      "S11",
+      "folding_energy",
+      "Compare: folding energy (panels F, G)"
+    ],
+    [
+      "S12",
+      "structure",
+      "RNA structure prediction"
+    ],
+    [
+      "S13",
+      "literature_search",
+      "Related research (public database and literature lookups)"
+    ]
+  ],
+  "results": [
+    [
+      "R01",
+      "valid_records",
+      "parse",
+      "Valid HYB records",
+      "records",
+      "Rows of the primary HYB file that passed validation."
+    ],
+    [
+      "R02",
+      "invalid_records",
+      "parse",
+      "Invalid HYB rows",
+      "rows",
+      "Rows skipped by validation (blank and comment lines not included)."
+    ],
+    [
+      "R03",
+      "unique_rnas",
+      "parse",
+      "Unique RNAs",
+      "RNAs",
+      "Distinct RNA names across both arms of the valid records."
+    ],
+    [
+      "R04",
+      "rna_pairs",
+      "parse",
+      "RNA pairs",
+      "pairs",
+      "Distinct RNA pairs, arm order normalised."
+    ],
+    [
+      "R05",
+      "cluster_support",
+      "parse",
+      "Cluster support",
+      "support units",
+      "Sum of the cluster support of the valid records (1 per record when the file has none)."
+    ],
+    [
+      "R06",
+      "inferred_chimera_types",
+      "parse",
+      "Records with an inferred chimera type",
+      "records",
+      "Records whose chimera type HYB2 inferred because the file has no type column."
+    ],
+    [
+      "R07",
+      "fasta_sequences",
+      "reference",
+      "Reference sequences",
+      "sequences",
+      "Sequences in the loaded reference FASTA."
+    ],
+    [
+      "R08",
+      "mapped_rna_names",
+      "reference",
+      "HYB RNA names mapped to the FASTA",
+      "RNA names",
+      "HYB RNA names matched to a reference sequence."
+    ],
+    [
+      "R09",
+      "filtered_records",
+      "interactions",
+      "Records matching the current filters",
+      "records",
+      "Valid records that pass the Interactions page filters (see S03 parameters)."
+    ],
+    [
+      "R10",
+      "contact_cells",
+      "contact_map",
+      "Contact map cells",
+      "cells",
+      "Non-empty bins of the contact map of the S04 RNA pair."
+    ],
+    [
+      "R11",
+      "contact_records_used",
+      "contact_map",
+      "Records in the contact map",
+      "records",
+      "Records that contributed to at least one contact map cell."
+    ],
+    [
+      "R12",
+      "contact_bin_size",
+      "contact_map",
+      "Contact map bin size",
+      "nt",
+      "Bin width used (it can be larger than requested; see S04 parameters)."
+    ],
+    [
+      "R13",
+      "viewpoint_records",
+      "viewpoint",
+      "Records covering the viewpoint",
+      "records",
+      "Records with an arm on the viewpoint RNA within the range."
+    ],
+    [
+      "R14",
+      "viewpoint_max_coverage",
+      "viewpoint",
+      "Maximum viewpoint coverage",
+      "records per bin",
+      "Largest bin value of the viewpoint profile."
+    ],
+    [
+      "R15",
+      "region_records",
+      "region",
+      "Records overlapping the region",
+      "records",
+      "Records with an arm overlapping the Region Explorer interval (inclusive)."
+    ],
+    [
+      "R16",
+      "region_support",
+      "region",
+      "Cluster support in the region",
+      "support units",
+      "Sum of cluster support of the R15 records."
+    ],
+    [
+      "R17",
+      "region_partners",
+      "region",
+      "Partner RNAs of the region",
+      "RNAs",
+      "Distinct partner RNAs of the R15 records."
+    ],
+    [
+      "R18",
+      "compare_datasets_a",
+      "comparison",
+      "Datasets in condition A",
+      "datasets",
+      "HYB datasets assigned to condition A."
+    ],
+    [
+      "R19",
+      "compare_datasets_b",
+      "comparison",
+      "Datasets in condition B",
+      "datasets",
+      "HYB datasets assigned to condition B."
+    ],
+    [
+      "R20",
+      "comparable_bins",
+      "comparison",
+      "Comparable bins",
+      "cells",
+      "Bins of the effect map (present in at least one dataset)."
+    ],
+    [
+      "R21",
+      "similarity_bins",
+      "comparison",
+      "Similarity heatmap bins",
+      "cells",
+      "Bins plotted in the similarity heatmap (smaller of the A and B counts at or above the minimum)."
+    ],
+    [
+      "R22",
+      "cells_tested",
+      "differential_test",
+      "Cells tested",
+      "cells",
+      "Cells that passed the minimum count and were tested."
+    ],
+    [
+      "R23",
+      "significant_cells",
+      "differential_test",
+      "Significant cells",
+      "cells",
+      "Tested cells with padj below the S08 cutoff."
+    ],
+    [
+      "R24",
+      "significant_cells_a",
+      "differential_test",
+      "Significant cells higher in A",
+      "cells",
+      "R23 cells with log2 fold change A/B > 0."
+    ],
+    [
+      "R25",
+      "significant_cells_b",
+      "differential_test",
+      "Significant cells higher in B",
+      "cells",
+      "R23 cells with log2 fold change A/B < 0."
+    ],
+    [
+      "R26",
+      "interactions_a",
+      "differential_test",
+      "Merged interactions higher in A",
+      "interactions",
+      "Significant cells higher in A merged within the S08 merge range (hyb2_compare)."
+    ],
+    [
+      "R27",
+      "interactions_b",
+      "differential_test",
+      "Merged interactions higher in B",
+      "interactions",
+      "Significant cells higher in B merged within the S08 merge range (hyb2_compare)."
+    ],
+    [
+      "R28",
+      "arc_pairs_a",
+      "arc_map",
+      "Base pairs of structure A",
+      "pairs",
+      "Base pairs of the arc map's structure A."
+    ],
+    [
+      "R29",
+      "arc_pairs_b",
+      "arc_map",
+      "Base pairs of structure B",
+      "pairs",
+      "Base pairs of the arc map's structure B, on A's coordinates."
+    ],
+    [
+      "R30",
+      "arc_interactions",
+      "arc_map",
+      "Interactions drawn on the arc map",
+      "interactions",
+      "Differential interactions drawn under the arc map's padj cutoff."
+    ],
+    [
+      "R31",
+      "region_a",
+      "region_structures",
+      "Region A (higher in condition one)",
+      "interaction",
+      "Chosen interaction for panel D as arm1↔arm2 (nt, A coordinates)."
+    ],
+    [
+      "R32",
+      "region_b",
+      "region_structures",
+      "Region B (higher in condition two)",
+      "interaction",
+      "Chosen interaction for panel E as arm1↔arm2 (nt, A coordinates)."
+    ],
+    [
+      "R33",
+      "energy_n_one",
+      "folding_energy",
+      "Interactions higher in condition one, folded",
+      "interactions",
+      "Paired RNAcofold energies in panel F."
+    ],
+    [
+      "R34",
+      "energy_p_one",
+      "folding_energy",
+      "Paired t-test p, interactions higher in condition one",
+      "p-value",
+      "Two-sided paired t-test of dG(one) vs dG(two) in panel F; null when fewer than 3 pairs."
+    ],
+    [
+      "R35",
+      "energy_n_two",
+      "folding_energy",
+      "Interactions higher in condition two, folded",
+      "interactions",
+      "Paired RNAcofold energies in panel G."
+    ],
+    [
+      "R36",
+      "energy_p_two",
+      "folding_energy",
+      "Paired t-test p, interactions higher in condition two",
+      "p-value",
+      "Two-sided paired t-test of dG(one) vs dG(two) in panel G; null when fewer than 3 pairs."
+    ],
+    [
+      "R37",
+      "structure_length",
+      "structure",
+      "Folded sequence length",
+      "nt",
+      "Length of the sequence of the RNA structure prediction."
+    ],
+    [
+      "R38",
+      "structure_energy",
+      "structure",
+      "Predicted free energy",
+      "kcal/mol",
+      "Free energy of the selected structure."
+    ],
+    [
+      "R39",
+      "structure_pairs",
+      "structure",
+      "Base pairs",
+      "pairs",
+      "Base pairs of the selected structure."
+    ],
+    [
+      "R40",
+      "structure_crossing_pairs",
+      "structure",
+      "Crossing (pseudoknotted) pairs",
+      "pairs",
+      "Base pairs that cross another pair."
+    ],
+    [
+      "R41",
+      "evidence_cards",
+      "literature_search",
+      "External sources added to the report",
+      "cards",
+      "Related research cards the researcher added to the report."
+    ]
+  ],
+  "nature": {
+    "count": "counted from the loaded records",
+    "setting": "a parameter or input size, not a finding",
+    "descriptive": "descriptive summary of counts; not a statistical test",
+    "statistical_test": "result of a statistical test (see the step's method and cutoff)",
+    "prediction": "computational structure prediction; not an experimental structure",
+    "derived_from_prediction": "computed from predicted structures (and test results); inherits their uncertainty",
+    "external_source": "material from public databases or literature, added by the researcher"
+  }
+}

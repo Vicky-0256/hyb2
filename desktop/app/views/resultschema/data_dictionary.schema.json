@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vicky-0256.github.io/hyb2/schema/data_dictionary.schema.json",
+  "title": "HYB2 data dictionary (hyb2-result/1.0)",
+  "type": "object",
+  "required": [
+    "schema",
+    "run",
+    "conventions",
+    "tables",
+    "results"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "hyb2-result/1.0"
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "id",
+        "basis"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^run-[0-9a-f]{16}$"
+        },
+        "basis": {
+          "type": "string"
+        }
+      }
+    },
+    "conventions": {
+      "type": "object",
+      "required": [
+        "coordinates",
+        "missing",
+        "notRun",
+        "statusVocabulary",
+        "natureVocabulary",
+        "units"
+      ]
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "file",
+          "step",
+          "title",
+          "scope",
+          "rowCount",
+          "columns"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^T[0-9]{2}$"
+          },
+          "file": {
+            "type": "string",
+            "pattern": "^tables/[a-z0-9_]+\\.tsv$"
+          },
+          "step": {
+            "type": "string",
+            "pattern": "^S[0-9]{2}$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "integer"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "type",
+                "unit",
+                "description"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "string",
+                    "integer",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "unit": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "label",
+          "type",
+          "nature",
+          "unit",
+          "definition"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^R[0-9]{2}$"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "integer",
+              "number",
+              "string"
+            ]
+          },
+          "nature": {
+            "enum": [
+              "count",
+              "setting",
+              "descriptive",
+              "statistical_test",
+              "prediction",
+              "derived_from_prediction",
+              "external_source"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "definition": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

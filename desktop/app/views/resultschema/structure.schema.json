@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vicky-0256.github.io/hyb2/schema/structure.schema.json",
+  "title": "HYB2 structure (hyb2-result/1.0)",
+  "type": "object",
+  "required": [
+    "schema",
+    "step",
+    "source",
+    "method",
+    "length",
+    "pairs",
+    "coordinates",
+    "prediction"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "hyb2-result/1.0"
+    },
+    "step": {
+      "type": "string",
+      "pattern": "^S[0-9]{2}$"
+    },
+    "source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "condition": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "method": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sequence": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "length": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "dotBracket": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "energy": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "energyUnit": {
+      "type": "string"
+    },
+    "topology": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "crossingPairs": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "pairs": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      }
+    },
+    "coordinates": {
+      "type": "string"
+    },
+    "positionOffset": {
+      "type": "integer"
+    },
+    "selectedCandidate": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "rank",
+          "energy",
+          "pairs"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topology": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "energy": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pairs": {
+            "type": "integer"
+          },
+          "crossingPairs": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "dotBracket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "prediction": {
+      "type": "string"
+    }
+  }
+}

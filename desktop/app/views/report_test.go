@@ -1,10 +1,16 @@
 package views
 
 import (
+	"archive/zip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -303,4 +309,174 @@ func TestReportReviewChecks(t *testing.T) {
 			t.Fatalf("check %q without its condition:\n%s", absent, got)
 		}
 	}
+}
+
+// unzipExport reads a saved ZIP into path -> text (without the folder).
+func unzipExport(t *testing.T, path string) map[string]string {
+	t.Helper()
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	out := map[string]string{}
+	for _, f := range zr.File {
+		if !strings.HasPrefix(f.Name, "hyb2-result/") {
+			t.Fatalf("file outside hyb2-result/: %s", f.Name)
+		}
+		r, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(r)
+		r.Close()
+		out[strings.TrimPrefix(f.Name, "hyb2-result/")] = string(raw)
+	}
+	return out
+}
+
+// The web app's hyb2-result/1.0 packages, built from the project.
+func TestReportResultPackages(t *testing.T) {
+	a, f := openReport(t)
+	f.queries["analysis_overview"] = fixture(t, "qc_analysis_overview.json")["result"]
+	tt := ui.NewTester(a.View, 1100, 900)
+	a.Navigate("report", nil)
+	csSettle(a, tt)
+	packages := map[string]map[string]string{}
+	for _, audience := range []string{"ai", "analysis"} {
+		asked := pickSaveInto(t, t.TempDir())
+		button := map[string]string{"ai": "For AI (ZIP)…", "analysis": "For analysis (ZIP)…"}[audience]
+		if err := tt.Click(button); err != nil {
+			t.Fatal(err)
+		}
+		waitFlush(a)
+		if len(*asked) != 1 || !strings.HasSuffix((*asked)[0], "_hyb2-result_"+audience+".zip") {
+			t.Fatalf("asked %q", *asked)
+		}
+		files := unzipExport(t, (*asked)[0])
+		packages[audience] = files
+		if dir := os.Getenv("HYB2_SNAPSHOT_DIR"); dir != "" {
+			raw, _ := os.ReadFile((*asked)[0])
+			_ = os.WriteFile(filepath.Join(dir, "hyb2-result-"+audience+".zip"), raw, 0o644)
+		}
+		// every file is in the manifest with its digest, and the manifest lists nothing else
+		var manifest struct {
+			Run   map[string]string `json:"run"`
+			Files []struct {
+				Path   string `json:"path"`
+				Bytes  int    `json:"bytes"`
+				SHA256 string `json:"sha256"`
+			} `json:"files"`
+		}
+		if err := json.Unmarshal([]byte(files["manifest.json"]), &manifest); err != nil {
+			t.Fatal(err)
+		}
+		if len(manifest.Files) != len(files)-1 {
+			t.Fatalf("%s: manifest lists %d of %d files", audience, len(manifest.Files), len(files)-1)
+		}
+		for _, entry := range manifest.Files {
+			sum := sha256.Sum256([]byte(files[entry.Path]))
+			if hex.EncodeToString(sum[:]) != entry.SHA256 || len(files[entry.Path]) != entry.Bytes {
+				t.Fatalf("%s: digest of %s", audience, entry.Path)
+			}
+		}
+		if !strings.HasPrefix(manifest.Run["id"], "run-") || len(manifest.Run["id"]) != 20 {
+			t.Fatalf("run %v", manifest.Run)
+		}
+	}
+	ai, analysis := packages["ai"], packages["analysis"]
+	for _, path := range []string{"README.md", "report.md", "summary.json", "data_dictionary.json", "provenance.json", "evidence.json",
+		"schema/summary.schema.json", "schema/structure.schema.json", "tables/samples.tsv", "tables/top_rnas.tsv", "tables/top_rna_pairs.tsv",
+		"tables/differential_tests.tsv", "tables/differential_interactions.tsv", "tables/structures.tsv",
+		"results/structure_prediction.dbn", "results/structure_prediction.json"} {
+		if _, ok := ai[path]; !ok {
+			t.Fatalf("ai package lacks %s: %v", path, keys(ai))
+		}
+	}
+	for _, path := range []string{"tables/rna_pairs.tsv", "tables/differential_interactions_all_tests.tsv", "figures/A_differential_map.svg"} {
+		if _, ok := analysis[path]; !ok {
+			t.Fatalf("analysis package lacks %s: %v", path, keys(analysis))
+		}
+		if _, ok := ai[path]; ok {
+			t.Fatalf("ai package has the large file %s", path)
+		}
+	}
+	if _, ok := analysis["report.md"]; ok {
+		t.Fatal("analysis package has report.md")
+	}
+	xmlWellFormed(t, analysis["figures/A_differential_map.svg"])
+
+	var summary struct {
+		Schema  string                             `json:"schema"`
+		Steps   []struct{ ID, Key, Status string } `json:"steps"`
+		Results []struct {
+			ID, Status string
+			Value      any
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(ai["summary.json"]), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.Schema != "hyb2-result/1.0" || len(summary.Steps) != 13 || len(summary.Results) != 41 {
+		t.Fatalf("summary %s %d steps %d results", summary.Schema, len(summary.Steps), len(summary.Results))
+	}
+	status := map[string]string{}
+	for _, s := range summary.Steps {
+		status[s.ID] = s.Status
+	}
+	value := map[string]any{}
+	for _, r := range summary.Results {
+		value[r.ID] = r.Value
+	}
+	// counts of the fixtures: six analysed samples; the overview fixture
+	if status["S01"] != "ok" || value["R01"] != float64(1724+224154+349387+266248+286509) || value["R03"] != float64(2) {
+		t.Fatalf("S01 %s R01 %v R03 %v", status["S01"], value["R01"], value["R03"])
+	}
+	// interactive desktop views are not_run, with no values
+	for _, id := range []string{"S03", "S04", "S05", "S06"} {
+		if status[id] != "not_run" {
+			t.Fatalf("%s %s", id, status[id])
+		}
+	}
+	if value["R09"] != nil || value["R10"] != nil {
+		t.Fatal("values for steps that did not run")
+	}
+	// the newest test and structure
+	if status["S08"] != "ok" || value["R26"] == nil || status["S12"] != "ok" || value["R39"] != float64(1055) {
+		t.Fatalf("S08 %s R26 %v S12 %s R39 %v", status["S08"], value["R26"], status["S12"], value["R39"])
+	}
+	if !strings.Contains(ai["report.md"], "| R39 | S12 | Base pairs | 1,055 | pairs | `ok` | prediction |") {
+		t.Fatalf("report.md %.2000s", ai["report.md"])
+	}
+	// tables match their dictionary entries
+	var dict struct {
+		Tables []struct {
+			File     string                  `json:"file"`
+			RowCount int                     `json:"rowCount"`
+			Columns  []struct{ Name string } `json:"columns"`
+		} `json:"tables"`
+	}
+	if err := json.Unmarshal([]byte(ai["data_dictionary.json"]), &dict); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range dict.Tables {
+		lines := strings.Split(strings.TrimSuffix(ai[table.File], "\n"), "\n")
+		if len(lines)-1 != table.RowCount || len(strings.Split(lines[0], "\t")) != len(table.Columns) {
+			t.Fatalf("%s: %d rows vs %d, header %q", table.File, len(lines)-1, table.RowCount, lines[0])
+		}
+	}
+	// the same project gives the same run id
+	d := a.PageFor("report").(*reportPage).data
+	if buildResultRecord(d, time.Now()).Run["id"] != buildResultRecord(d, time.Now().Add(time.Hour)).Run["id"] {
+		t.Fatal("run id depends on the export time")
+	}
+}
+
+func keys(m map[string]string) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

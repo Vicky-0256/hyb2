@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vicky-0256.github.io/hyb2/schema/summary.schema.json",
+  "title": "HYB2 result summary (hyb2-result/1.0)",
+  "type": "object",
+  "required": [
+    "schema",
+    "generatedAt",
+    "application",
+    "scope",
+    "run",
+    "steps",
+    "results",
+    "natureVocabulary",
+    "warnings",
+    "literature_search",
+    "limitations"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "hyb2-result/1.0"
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "id",
+        "basis"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^run-[0-9a-f]{16}$"
+        },
+        "basis": {
+          "type": "string"
+        }
+      }
+    },
+    "natureVocabulary": {
+      "type": "object"
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "application": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "buildCommit"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "buildCommit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "required": [
+        "kind",
+        "label",
+        "description",
+        "primaryDataset",
+        "purpose"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "session_snapshot",
+            "selected_results"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "primaryDataset": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selectedSteps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^S[0-9]{2}$"
+          }
+        },
+        "omittedSteps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^S[0-9]{2}$"
+          }
+        },
+        "purpose": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "text",
+            "source"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "source": {
+              "const": "researcher"
+            }
+          }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "title",
+          "status",
+          "detail",
+          "scope",
+          "completedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^S[0-9]{2}$"
+          },
+          "key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "no_result",
+              "not_run",
+              "running",
+              "failed",
+              "stale",
+              "pending"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "step",
+          "label",
+          "type",
+          "nature",
+          "value",
+          "unit",
+          "scope",
+          "definition",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^R[0-9]{2}$"
+          },
+          "key": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string",
+            "pattern": "^S[0-9]{2}$"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "integer",
+              "number",
+              "string"
+            ]
+          },
+          "nature": {
+            "enum": [
+              "count",
+              "setting",
+              "descriptive",
+              "statistical_test",
+              "prediction",
+              "derived_from_prediction",
+              "external_source"
+            ]
+          },
+          "value": {
+            "type": [
+              "integer",
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "definition": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "no_result",
+              "not_run",
+              "running",
+              "failed",
+              "stale",
+              "pending",
+              "not_available"
+            ]
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "step",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^W[0-9]{2}$"
+          },
+          "step": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "literature_search": {
+      "type": "object",
+      "required": [
+        "status",
+        "lookups",
+        "includedInReport",
+        "hit_count"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "ok",
+            "no_result",
+            "not_run",
+            "running",
+            "failed",
+            "stale",
+            "pending"
+          ]
+        },
+        "lookups": {
+          "type": "integer"
+        },
+        "includedInReport": {
+          "type": "integer"
+        },
+        "hit_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

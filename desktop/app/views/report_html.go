@@ -41,6 +41,12 @@ type reportData struct {
 	Settings []reportSettings
 	// Evidence are the saved external cards included in the report.
 	Evidence []reportEvidence
+	// Overview is analysis_overview over every analysed sample (nil when
+	// none); Cards counts the saved external cards (in the report or not);
+	// Ready are the analysed samples' ids. For the result package.
+	Overview *ovData
+	Cards    int
+	Ready    []string
 	// Notes are parts that could not be loaded.
 	Notes []string
 }
@@ -86,6 +92,9 @@ type reportTest struct {
 	Energy *energyResult
 	Length int
 	Err    string
+	// Entry is the test as listed; All its merged interactions by padj.
+	Entry comparisonEntry
+	All   []cmpInteraction
 }
 
 type reportStructure struct {
@@ -98,6 +107,8 @@ type reportStructure struct {
 	// Digests are the evidence binding digests of the result: "all" and
 	// each window "start-end".
 	Digests map[string]string
+	// Result is the structure as read (nil when it could not be).
+	Result *structureResult
 }
 
 // reportEvidence is a saved external card the user included in the report.

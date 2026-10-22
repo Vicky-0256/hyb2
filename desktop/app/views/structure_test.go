@@ -438,6 +438,18 @@ func TestStructureComradesForm(t *testing.T) {
 		t.Fatal("hard pairs shown for COMRADES")
 	}
 	snapshot(t, tt, "structure-comrades")
+	// more than 100 randomised folds wait for the large-ensemble consent
+	p.mode, p.windows, p.randomFolds = "windows", "2800-3300", 150
+	tt.Frame()
+	if !tt.HasText("• Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.") ||
+		!tt.HasText("I understand that up to 1,000 serial folds may take a long time; Cancel stops them.") {
+		t.Fatalf("no large-ensemble consent: %q", tt.Texts())
+	}
+	p.allowLargeEnsemble = true
+	tt.Frame()
+	if tt.HasText("• Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.") {
+		t.Fatal("the consent did not lift the block")
+	}
 	p.mode, p.windows, p.randomFolds, p.seed, p.homodimerOnly = "windows", "2800-3300", 5, " run1 ", true
 	tt.Frame()
 	if err := tt.Click("Run fold"); err != nil {

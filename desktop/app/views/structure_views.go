@@ -136,8 +136,9 @@ func (p *structurePage) layout(dbn string) stLayout {
 	return p.layouts[dbn]
 }
 
-// exportViewSVG writes the view shown, in light colours.
-func (p *structurePage) exportViewSVG(a *structureResult) {
+// exportViewSVG writes the view shown, in light colours; with png, as a
+// PNG at twice the SVG's size, as the web's.
+func (p *structurePage) exportViewSVG(a *structureResult, asPNG bool) {
 	mode := stViewModes[p.view]
 	pairs, weights, start, length, seq := stViewData(a, p.record)
 	v := &widgets.StructView{Mode: mode, Pairs: pairs, Weights: weights, Shade: p.shade, Start: start, Length: length, Sequence: seq}
@@ -150,6 +151,11 @@ func (p *structurePage) exportViewSVG(a *structureResult) {
 	}
 	title := fmt.Sprintf("%s · %s:%s · %s view", p.viewA, nameOr(stGene(a), "RNA"), span(start, start+length-1), strings.ToLower(p.view))
 	colors := stColors(ui.LightTheme())
+	if asPNG {
+		saveExport(p.a, "Export the "+strings.ToLower(p.view)+" view", exportName(".png", nameOr(stGene(a), "structure"), p.viewA, strings.ToLower(p.view)),
+			func() ([]byte, error) { return v.PNG(640, colors, title, 2) })
+		return
+	}
 	saveExport(p.a, "Export the "+strings.ToLower(p.view)+" view", exportName(".svg", nameOr(stGene(a), "structure"), p.viewA, strings.ToLower(p.view)),
 		func() ([]byte, error) {
 			return []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" + v.SVG(640, colors, title)), nil

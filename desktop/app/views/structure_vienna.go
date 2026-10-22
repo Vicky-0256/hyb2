@@ -102,6 +102,9 @@ func viennaMemory(pl *foldPlan) {
 	pl.req.Workers = &one
 }
 
+// stLargeEnsemble is the most randomised folds run without confirming.
+const stLargeEnsemble = 100
+
 // comradesPlan: the web's COMRADES(ViennaRNA) settings and limits.
 func (p *structurePage) comradesPlan(pl *foldPlan) {
 	seed := strings.TrimSpace(p.seed)
@@ -112,6 +115,9 @@ func (p *structurePage) comradesPlan(pl *foldPlan) {
 		"No pseudoknots: ViennaRNA returns a nested structure."}
 	if seed == "" {
 		pl.problems = append(pl.problems, "Enter a reproducibility seed for the randomised constraint orders.")
+	}
+	if p.randomFolds > stLargeEnsemble && !p.allowLargeEnsemble {
+		pl.problems = append(pl.problems, "Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.")
 	}
 	for _, n := range pl.lengths {
 		if n > stComradesMaxNT {
@@ -181,6 +187,10 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 				row("st-stems", "Evidence stem constraints", &p.stems, 1, 75, 1, "Strongest RNAcofold stems tried as hard pairs, 1 to 75. Default 75.")
 				row("st-random", "Randomised folds", &p.randomFolds, 0, 1000, 1,
 					"Extra fits with the stems in seeded random orders, 0 to 1000; each takes about as long as the ranked fit. Default 0.")
+				if p.randomFolds > stLargeEnsemble {
+					ui.Checkbox(c.Key("st-large"), &p.allowLargeEnsemble,
+						"I understand that up to 1,000 serial folds may take a long time; Cancel stops them.")
+				}
 				Field(c, "Seed", func() {
 					ui.TextInput(c.Key("st-seed"), &p.seed).Label("Seed").Width(200)
 					ui.Text(c, "The same seed gives the same random orders. Default HYB2-Web.").FontSize(12).TextColor(t.TextMuted)
@@ -189,7 +199,7 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 			}
 			if ui.Button(c, "Reset to defaults").Disabled(!changed).Clicked() {
 				p.temperature, p.minLoop = stDefaultTemp, stDefaultLoop
-				p.stems, p.randomFolds, p.seed, p.homodimerOnly = stDefaultStems, 0, stDefaultSeed, false
+				p.stems, p.randomFolds, p.seed, p.homodimerOnly, p.allowLargeEnsemble = stDefaultStems, 0, stDefaultSeed, false, false
 			}
 		})
 	})

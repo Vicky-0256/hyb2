@@ -5,8 +5,10 @@ package views
 // and written by saveExport off it.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"image/png"
 	"math"
 	"sort"
 	"strconv"
@@ -253,6 +255,71 @@ func cmpParamsText(e *comparisonEntry) string {
 // ---- ⑤ Structure: the arc diagram shown
 
 func (p *structurePage) exportArcsSVG(a *structureResult) {
+	spec, name := p.arcSpec(a)
+	saveExport(p.a, "Export the arc diagram", name+".svg", func() ([]byte, error) {
+		svg, _ := spec.SVG()
+		return svgFile(svg), nil
+	})
+}
+
+// exportArcsPNG draws the arc diagram off screen in the light theme, with
+// the title and legend of the SVG, at twice its size as the web's PNG.
+func (p *structurePage) exportArcsPNG(a *structureResult) {
+	spec, name := p.arcSpec(a)
+	arcs := &widgets.Arcs{A: spec.A, B: spec.B, Length: p.arcs.Length, WeightA: append([]float64(nil), p.arcs.WeightA...),
+		WeightB: append([]float64(nil), p.arcs.WeightB...), Shade: p.arcs.Shade, Start: float64(spec.Start), End: float64(spec.End),
+		Overlay: spec.Overlay, Mono: spec.Mono, Features: spec.Features}
+	height := float32(340)
+	if len(spec.B) > 0 || len(spec.Overlay) > 0 {
+		height = 440
+	}
+	if len(spec.Features) > 0 {
+		height += 20
+	}
+	saveExport(p.a, "Export the arc diagram", name+".png", func() ([]byte, error) {
+		return renderPNG(1000, int(height)+64, func(c *ui.Context) {
+			t := c.Theme()
+			ui.Text(c, spec.Title).FontSize(13).TextColor(t.Text)
+			ui.Row(c).Gap(14).Wrap().Children(func() {
+				colorA, colorB := cmpRed, cmpBlue
+				if spec.Mono != (ui.Color{}) {
+					colorA, colorB = spec.Mono, spec.Mono
+				}
+				stLegend(c, colorA, spec.LabelA)
+				if spec.LabelB != "" {
+					stLegend(c, colorB, spec.LabelB)
+					if spec.Mono == (ui.Color{}) {
+						stLegend(c, t.TextMuted, "in both")
+					}
+				}
+				if len(spec.Overlay) > 0 {
+					stLegend(c, cmpRed, spec.OverlayUpLabel)
+					stLegend(c, cmpBlue, spec.OverlayDown)
+				}
+			})
+			arcs.Show(c.Key("arcs"), height, cmpRed, cmpBlue, t.TextMuted, "Arc diagram of base pairs")
+		})
+	})
+}
+
+// renderPNG draws view off screen in the light theme, width×height at
+// twice the size, as a PNG.
+func renderPNG(width, height int, view func(c *ui.Context)) ([]byte, error) {
+	img := ui.Render(func(c *ui.Context) {
+		c.SetTheme(ui.LightTheme())
+		t := c.Theme()
+		ui.Column(c).FillWidth().FillHeight().Padding(8).Gap(6).Background(t.Surface).Children(func() { view(c) })
+	}, width, height, 2)
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+// arcSpec is the arc diagram as shown, and the file name it saves under
+// (without the extension).
+func (p *structurePage) arcSpec(a *structureResult) (arcSVG, string) {
 	gene := nameOr(a.Meta.GeneID, a.Structure.GeneID)
 	labelA := "A · " + p.viewA
 	if e := p.entry(p.viewA); e != nil {
@@ -274,14 +341,11 @@ func (p *structurePage) exportArcsSVG(a *structureResult) {
 	if p.layers.mono {
 		spec.Mono = ui.RGB(34, 34, 34)
 	}
-	name := exportName(".svg", gene, p.viewA)
+	name := exportName("", gene, p.viewA)
 	if p.viewB != "" {
-		name = exportName(".svg", gene, p.viewA, "vs", p.viewB)
+		name = exportName("", gene, p.viewA, "vs", p.viewB)
 	}
-	saveExport(p.a, "Export the arc diagram", name, func() ([]byte, error) {
-		svg, _ := spec.SVG()
-		return svgFile(svg), nil
-	})
+	return spec, name
 }
 
 // ---- ③ Explore: viewpoint and region

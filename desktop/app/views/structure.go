@@ -358,7 +358,9 @@ type structurePage struct {
 	stems, randomFolds   float64
 	seed                 string
 	homodimerOnly        bool
-	workers              float64
+	// allowLargeEnsemble confirms more than 100 randomised folds, as the web.
+	allowLargeEnsemble bool
+	workers            float64
 	// estKey is the form state est was computed for (time and memory of
 	// the fold the form describes).
 	estKey      string
@@ -754,11 +756,18 @@ func (p *structurePage) viewer(c *ui.Context) {
 				if ui.Button(c, "Save .dbn").Clicked() {
 					p.saveDBN(a)
 				}
-				if ui.Button(c, "Export SVG…").Tooltip("Save the view as shown").Clicked() {
-					if _, other := stViewModes[p.view]; other && b == nil {
-						p.exportViewSVG(a)
-					} else {
-						p.exportArcsSVG(a)
+				for _, asPNG := range []bool{false, true} {
+					label := map[bool]string{false: "Export SVG…", true: "Export PNG…"}[asPNG]
+					if ui.Button(c.Key(label), label).Tooltip("Save the view as shown, in light colours").Clicked() {
+						_, other := stViewModes[p.view]
+						switch {
+						case other && b == nil:
+							p.exportViewSVG(a, asPNG)
+						case asPNG:
+							p.exportArcsPNG(a)
+						default:
+							p.exportArcsSVG(a)
+						}
 					}
 				}
 				if ui.Button(c, "Save .ct").Tooltip("Connectivity table, one block per window shown").Clicked() {

@@ -1,7 +1,9 @@
 package widgets
 
 import (
+	"bytes"
 	"fmt"
+	"image/png"
 	"math"
 	"strconv"
 	"strings"
@@ -239,29 +241,52 @@ func (v *StructView) Show(c *ui.Context, maxSide float32, colors StructColors, l
 		side := min(full.W, full.H)
 		r := ui.Rect{X: full.X + (full.W-side)/2, Y: full.Y, W: side, H: side}
 		p.Fill(r, colors.Background, 6)
-		for _, s := range v.shapes(float64(r.W), colors) {
-			col := s.color.Alpha(float32(s.alpha))
-			switch s.kind {
-			case shapeLine: // Painter.Line draws axis-aligned lines only
-				path := (&ui.Path{}).MoveTo(r.X+float32(s.x0), r.Y+float32(s.y0)).LineTo(r.X+float32(s.x1), r.Y+float32(s.y1))
-				p.StrokePath(path, float32(s.width), col)
-			case shapeQuad:
-				path := (&ui.Path{}).MoveTo(r.X+float32(s.x0), r.Y+float32(s.y0)).
-					QuadTo(r.X+float32(s.cx), r.Y+float32(s.cy), r.X+float32(s.x1), r.Y+float32(s.y1))
-				p.StrokePath(path, float32(s.width), col)
-			case shapeCircle:
-				d := float32(s.x1)
-				p.Fill(ui.Rect{X: r.X + float32(s.x0) - d, Y: r.Y + float32(s.y0) - d, W: 2 * d, H: 2 * d}, col, d)
-			case shapeRing:
-				d := float32(s.x1)
-				p.Stroke(ui.Rect{X: r.X + float32(s.x0) - d, Y: r.Y + float32(s.y0) - d, W: 2 * d, H: 2 * d}, col, d, float32(s.width))
-			case shapeText:
-				size := float32(s.size)
-				w := float32(len([]rune(s.text))) * size * 0.55
-				p.Text(r.X+float32(s.x0)-w/2, r.Y+float32(s.y0)-size*0.6, s.text, size, col)
-			}
-		}
+		v.paint(p, r, colors)
 	})
+}
+
+// paint draws the shapes in the square r.
+func (v *StructView) paint(p *ui.Painter, r ui.Rect, colors StructColors) {
+	for _, s := range v.shapes(float64(r.W), colors) {
+		col := s.color.Alpha(float32(s.alpha))
+		switch s.kind {
+		case shapeLine: // Painter.Line draws axis-aligned lines only
+			path := (&ui.Path{}).MoveTo(r.X+float32(s.x0), r.Y+float32(s.y0)).LineTo(r.X+float32(s.x1), r.Y+float32(s.y1))
+			p.StrokePath(path, float32(s.width), col)
+		case shapeQuad:
+			path := (&ui.Path{}).MoveTo(r.X+float32(s.x0), r.Y+float32(s.y0)).
+				QuadTo(r.X+float32(s.cx), r.Y+float32(s.cy), r.X+float32(s.x1), r.Y+float32(s.y1))
+			p.StrokePath(path, float32(s.width), col)
+		case shapeCircle:
+			d := float32(s.x1)
+			p.Fill(ui.Rect{X: r.X + float32(s.x0) - d, Y: r.Y + float32(s.y0) - d, W: 2 * d, H: 2 * d}, col, d)
+		case shapeRing:
+			d := float32(s.x1)
+			p.Stroke(ui.Rect{X: r.X + float32(s.x0) - d, Y: r.Y + float32(s.y0) - d, W: 2 * d, H: 2 * d}, col, d, float32(s.width))
+		case shapeText:
+			size := float32(s.size)
+			w := float32(len([]rune(s.text))) * size * 0.55
+			p.Text(r.X+float32(s.x0)-w/2, r.Y+float32(s.y0)-size*0.6, s.text, size, col)
+		}
+	}
+}
+
+// PNG is the view as the SVG lays it out — side units wide under a title —
+// drawn at scale pixels per unit, as the web's PNG export.
+func (v *StructView) PNG(side float32, colors StructColors, title string, scale float32) ([]byte, error) {
+	const head = 28
+	img := ui.Render(func(c *ui.Context) {
+		ui.Box(c).FillWidth().FillHeight().Draw(func(p *ui.Painter, full ui.Rect) {
+			p.Fill(full, colors.Background, 0)
+			p.Text(full.X+8, full.Y+6, title, 13, colors.Text)
+			v.paint(p, ui.Rect{X: full.X, Y: full.Y + head, W: side, H: side}, colors)
+		})
+	}, int(side), int(side)+head, scale)
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
 }
 
 // SVG is the view as an SVG document side units wide, with a title.

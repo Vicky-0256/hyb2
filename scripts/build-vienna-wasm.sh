@@ -10,8 +10,12 @@ set -euo pipefail
 readonly HYB2_REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly VIENNA_VERSION="2.7.2"
 readonly VIENNA_TARBALL="ViennaRNA-${VIENNA_VERSION}.tar.gz"
-readonly VIENNA_SOURCE_URL="https://www.tbi.univie.ac.at/RNA/download/sourcecode/2_7_x/${VIENNA_TARBALL}"
-readonly VIENNA_SHA256="1ab5f4a4f76fc85a2243546088e45f5d85f2d7a56cc656e969b005cce9bfab5f"
+# The official ViennaRNA GitHub release asset. The University of Vienna
+# download (www.tbi.univie.ac.at/RNA/download/sourcecode/2_7_x/, pinned at
+# 1ab5f4a4…) answers "Missing link ID" since 2026-10-22; this is a different
+# tarball of the same release, so it has its own digest.
+readonly VIENNA_SOURCE_URL="https://github.com/ViennaRNA/ViennaRNA/releases/download/v${VIENNA_VERSION}/${VIENNA_TARBALL}"
+readonly VIENNA_SHA256="4cb7aaca00dfac92cb36b030c9111487c170b90568759bd4ffedd8318cc9384f"
 readonly OUTPUT_DIRECTORY="${HYB2_REPOSITORY_ROOT}/web/vendor/viennarna"
 readonly WRAPPER_SOURCE="${OUTPUT_DIRECTORY}/hyb2_vienna_fold.c"
 

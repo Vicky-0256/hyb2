@@ -87,7 +87,7 @@ func (h *Heatmap) Zoomed() bool {
 func (h *Heatmap) clamp(v Window) Window {
 	minSpan := 20.0
 	clampAxis := func(a0, a1, length float64) (float64, float64) {
-		span := math.Max(minSpan, math.Min(a1-a0, length))
+		span := math.Min(math.Max(minSpan, a1-a0), length) // never wider than the map
 		if a0 < 0 {
 			a0 = 0
 		}

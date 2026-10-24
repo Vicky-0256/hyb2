@@ -26,7 +26,10 @@ var (
 
 // ixFilters are the filters applied (the inputs hold drafts until Apply).
 type ixFilters struct {
-	gene1, gene2   string // "" = any
+	// gene1, gene2 are the web's RNA and partner, either arm order; with an
+	// arm position (a contact map or region drill-down) they are arm 1 and
+	// arm 2. "" = any.
+	gene1, gene2   string
 	typ            string
 	scope          string // one of scopeLabels; "" = all
 	search         string
@@ -101,6 +104,23 @@ func (s *interactionsState) apply(f ixFilters) {
 	s.minDG, s.maxDG = dgText(f.minDG), dgText(f.maxDG)
 	s.x0, s.x1, s.y0, s.y1 = coordText(f.x0), coordText(f.x1), coordText(f.y0), coordText(f.y1)
 	s.inputErr = ""
+}
+
+// applyPickers applies the pickers at once, whatever the text drafts hold
+// (an invalid one would otherwise block the change).
+func (s *interactionsState) applyPickers() {
+	f := s.applied
+	f.gene1, f.gene2, f.typ, f.scope = "", "", s.typ, ""
+	if s.gene1 != anyGene {
+		f.gene1 = s.gene1
+	}
+	if s.gene2 != anyGene {
+		f.gene2 = s.gene2
+	}
+	if s.scope != scopeLabels[0] {
+		f.scope = s.scope
+	}
+	s.applied = f
 }
 
 func orAny(gene string) string {
@@ -188,14 +208,21 @@ func (s *interactionsState) orderValue() string {
 	return "file"
 }
 
+// oriented: an arm position is set, so gene1 and gene2 are the arms.
+func (f ixFilters) oriented() bool { return f.x0 != 0 || f.x1 != 0 || f.y0 != 0 || f.y1 != 0 }
+
 // payload is the analysis_hybrids filters object.
 func (f ixFilters) payload() core.Obj {
 	out := core.Obj{}
+	one, two := "gene", "partner"
+	if f.oriented() {
+		one, two = "gene1", "gene2"
+	}
 	if f.gene1 != "" {
-		out["gene1"] = f.gene1
+		out[one] = f.gene1
 	}
 	if f.gene2 != "" {
-		out["gene2"] = f.gene2
+		out[two] = f.gene2
 	}
 	if types := typesPayload(f.typ); types != nil {
 		out["types"] = types
@@ -316,10 +343,14 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 	}
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
 		ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
-			picker(c, "ix-gene1", "Gene 1", &s.gene1, genes, 150).OnChange(submit)
-			picker(c, "ix-gene2", "Gene 2", &s.gene2, genes, 150).OnChange(submit)
-			picker(c, "ix-scope", "Scope", &s.scope, scopeLabels, 150).OnChange(submit)
-			picker(c, "ix-type", "Chimera type", &s.typ, withAll(allTypes, p.summary.types), 130).OnChange(submit)
+			one, two := "RNA", "Partner"
+			if s.applied.oriented() {
+				one, two = "Arm 1 RNA", "Arm 2 RNA"
+			}
+			picker(c, "ix-gene1", one, &s.gene1, genes, 150).OnChange(s.applyPickers)
+			picker(c, "ix-gene2", two, &s.gene2, genes, 150).OnChange(s.applyPickers)
+			picker(c, "ix-scope", "Scope", &s.scope, scopeLabels, 150).OnChange(s.applyPickers)
+			picker(c, "ix-type", "Chimera type", &s.typ, withAll(allTypes, p.summary.types), 130).OnChange(s.applyPickers)
 			picker(c, "ix-order", "Sort by", &s.order, orderLabels, 150)
 			Field(c, "Search", func() {
 				ui.TextInput(c.Key("ix-search"), &s.search).Label("Search").Placeholder("ID, sequence, RNA, type").Width(170).OnSubmit(submit)
@@ -397,11 +428,15 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 
 func describeFilters(f ixFilters) string {
 	var parts []string
+	one, two := "RNA ", "partner "
+	if f.oriented() {
+		one, two = "arm 1 ", "arm 2 "
+	}
 	if f.gene1 != "" {
-		parts = append(parts, "gene 1 "+shortGene(f.gene1))
+		parts = append(parts, one+shortGene(f.gene1))
 	}
 	if f.gene2 != "" {
-		parts = append(parts, "gene 2 "+shortGene(f.gene2))
+		parts = append(parts, two+shortGene(f.gene2))
 	}
 	if f.scope != "" {
 		parts = append(parts, strings.ToLower(f.scope))

@@ -99,6 +99,8 @@ func TestExportName(t *testing.T) {
 		{exportName(".tsv", "AFR (2 merged)", "vs", "BRA"), "AFR__2_merged_vs_BRA.tsv"},
 		{exportName("-report.html", "ZIKV <GUI>/check"), "ZIKV__GUI__check-report.html"},
 		{exportName(".svg", "", "///"), "export.svg"},
+		{exportName(".svg", "αβ", "map"), "αβ_map.svg"},
+		{exportName(".svg", "γ", "map"), "γ_map.svg"},
 	} {
 		if c.got != c.want {
 			t.Fatalf("%q want %q", c.got, c.want)

@@ -193,7 +193,7 @@ func TestExploreInteractionsTableAndLoadMore(t *testing.T) {
 	if len(p.ix.rows) != 40 || p.ix.total != 1724 {
 		t.Fatalf("rows %d total %d err %q", len(p.ix.rows), p.ix.total, p.ix.load.err)
 	}
-	for _, text := range []string{"Showing 40 of 1,724 hybrids", "Gene 1", "Arm 2", "Reads", "Load more", "Sample"} {
+	for _, text := range []string{"Showing 40 of 1,724 hybrids", "Partner", "Arm 2", "Reads", "Load more", "Sample"} {
 		if !tt.HasText(text) {
 			t.Fatalf("interactions lack %q: %q", text, tt.Texts())
 		}
@@ -452,5 +452,33 @@ func TestExploreContactHomodimerAndCustomCap(t *testing.T) {
 	tt.Frame()
 	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "≥ 1 records") {
 		t.Fatalf("legend %q", tt.Texts())
+	}
+}
+
+// The pickers are the web's RNA and partner (either arm order); a drill-down
+// with arm positions keeps them as arm 1 and arm 2.
+func TestInteractionFiltersMatchEitherArm(t *testing.T) {
+	f := ixFilters{gene1: "A", gene2: "B", minReads: 1, minSupport: 1}
+	if got := f.payload(); got["gene"] != "A" || got["partner"] != "B" || got["gene1"] != nil {
+		t.Fatalf("payload %v", got)
+	}
+	if got := describeFilters(f); !strings.Contains(got, "RNA A") || !strings.Contains(got, "partner B") {
+		t.Fatalf("describe %q", got)
+	}
+	f.x0, f.x1 = 10, 20
+	if got := f.payload(); got["gene1"] != "A" || got["gene2"] != "B" || got["gene"] != nil {
+		t.Fatalf("oriented payload %v", got)
+	}
+}
+
+// A picker applies its value at once, even while a text draft is invalid.
+func TestInteractionPickerIgnoresBadDrafts(t *testing.T) {
+	var s interactionsState
+	s.init()
+	s.applied.search = "kept"
+	s.minReads, s.gene2, s.scope = "abc", "B", scopeLabels[2]
+	s.applyPickers()
+	if f := s.applied; f.gene2 != "B" || f.gene1 != "" || f.scope != scopeLabels[2] || f.search != "kept" || f.minReads != 1 {
+		t.Fatalf("applied %+v", f)
 	}
 }

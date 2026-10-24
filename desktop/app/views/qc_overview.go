@@ -143,7 +143,7 @@ func (p *qcPage) overview(c *ui.Context) {
 		}
 	})
 	switch {
-	case o.err != "" && !current:
+	case o.err != "" && current:
 		ui.Row(c).Gap(10).Children(func() {
 			ui.Text(c, "Could not load the overview: "+ShortError(o.err)).TextColor(t.Danger).Grow(1).Shrink(1).MinWidth(0)
 			if ui.Button(c, "Retry").Clicked() {

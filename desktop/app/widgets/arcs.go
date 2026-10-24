@@ -294,12 +294,13 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 
 func (s *Arcs) setRange(start, end float64) {
 	length := math.Max(float64(s.Length), 2)
-	span := math.Max(20, math.Min(end-start, length-1))
-	if start < 1 {
-		start = 1
-	}
+	// at least 20 nt shown, but never more than the RNA
+	span := math.Min(math.Max(20, end-start), length-1)
 	if start+span > length {
 		start = length - span
+	}
+	if start < 1 {
+		start = 1
 	}
 	s.Start, s.End = start, start+span
 }

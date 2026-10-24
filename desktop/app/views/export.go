@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
@@ -43,15 +44,16 @@ func saveExport(a *App, title, name string, render func() ([]byte, error)) {
 	})
 }
 
-// exportName makes a file name from parts: letters, digits, '.', '-' and
-// '_' are kept, anything else becomes '_'.
+// exportName makes a file name from parts: letters and digits (any
+// script, so "αβ" and "γ" stay apart), '.', '-' and '_' are kept, anything
+// else becomes '_'.
 func exportName(ext string, parts ...string) string {
 	var kept []string
 	for _, part := range parts {
 		var b strings.Builder
 		for _, r := range part {
 			switch {
-			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			case unicode.IsLetter(r), unicode.IsDigit(r), r == '.', r == '-', r == '_':
 				b.WriteRune(r)
 			default:
 				b.WriteByte('_')

@@ -173,3 +173,29 @@ func TestQCExports(t *testing.T) {
 		t.Fatalf("%s: %q", name, rows)
 	}
 }
+
+// A failed overview query shows its error and a Retry, not a spinner.
+func TestQCOverviewShowsLoadError(t *testing.T) {
+	a, f := qcOpen(t, nil, true)
+	delete(f.queries, "analysis_overview")
+	a.Navigate("qc", nil)
+	tt := ui.NewTester(a.View, 1100, 1500)
+	for i := 0; i < 5 && !tt.HasText("Could not load the overview"); i++ {
+		waitFlush(a)
+		tt.Frame()
+	}
+	if !tt.HasText("Could not load the overview") || tt.HasText("Loading the overview…") {
+		t.Fatalf("no overview error: %q", tt.Texts())
+	}
+	f.queries["analysis_overview"] = fixture(t, "qc_analysis_overview.json")["result"]
+	if err := tt.Click("Retry"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5 && tt.HasText("Could not load the overview"); i++ {
+		waitFlush(a)
+		tt.Frame()
+	}
+	if tt.HasText("Could not load the overview") {
+		t.Fatal("Retry did not reload the overview")
+	}
+}

@@ -1093,7 +1093,7 @@ func (p *structurePage) metaLine(a *structureResult) string {
 func (p *structurePage) saveDBN(a *structureResult) {
 	gene := nameOr(a.Meta.GeneID, a.Structure.GeneID)
 	text := stDBNText(gene, a.Records)
-	name := nameOr(gene, "structure") + "_" + p.viewA + ".dbn"
+	name := exportName(".dbn", nameOr(gene, "structure"), p.viewA)
 	app := p.a
 	app.Go(func() func() {
 		path := PickSave("Save the dot-bracket file", name)

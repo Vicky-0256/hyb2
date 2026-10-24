@@ -69,9 +69,10 @@ RECT_COLUMNS_V1 = RECT_COLUMNS[:-1]
 
 def _number(value: bytes):
     try:
-        return int(value)
+        number = int(value)
     except ValueError:
         return hybfile._optional_number(value)
+    return number if abs(number) <= hybfile._SAFE_INTEGER else float(number)  # SQLite integers are 64-bit
 
 
 def _fast_parse(cols: List[bytes]):
@@ -82,10 +83,12 @@ def _fast_parse(cols: List[bytes]):
     if not g1 or not g2 or g1 != g1.strip() or g2 != g2.strip():
         return None
     s1, e1, s2, e2 = int(cols[6]), int(cols[7]), int(cols[12]), int(cols[13])
-    if s1 < 1 or s2 < 1 or s1 > e1 or s2 > e2:
-        return None
+    if s1 < 1 or s2 < 1 or s1 > e1 or s2 > e2 or max(e1, e2) > hybfile._SAFE_INTEGER:
+        return None  # hybfile.parse says why
     name = cols[0].split(b"_", 2)
     reads = int(name[1]) if len(name) > 1 and name[1].isdigit() else 0
+    if reads > hybfile._SAFE_INTEGER:
+        reads = 0  # as hybfile.raw_read_count
     dg = None if cols[2] == b"." else hybfile._optional_number(cols[2])
     ctype = cols[17].rstrip(b"\r\n").strip()
     if not ctype or ctype == b"." or ctype.lower() == b"na":

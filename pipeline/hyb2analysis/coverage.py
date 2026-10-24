@@ -48,9 +48,11 @@ class _Fallback(Exception):
 
 
 def contact_path(hyb: PathLike, gene_id: str) -> Path:
-    """``${HYB/.hyb/.GENE.contact.txt}`` (bash replaces the first ``.hyb``)."""
-    text = str(hyb)
-    return Path(text.replace(".hyb", "." + gene_id + ".contact.txt", 1))
+    """``${HYB/.hyb/.GENE.contact.txt}`` on the file name: bash replaces the
+    first ``.hyb`` of the whole path, which a folder such as ``run.hyb2/``
+    would take."""
+    hyb = Path(hyb)
+    return hyb.with_name(hyb.name.replace(".hyb", "." + gene_id + ".contact.txt", 1))
 
 
 # --------------------------------------------------------------------------

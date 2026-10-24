@@ -71,7 +71,7 @@ def _coordinate(value: bytes) -> int:
     if not _DIGITS.match(value):
         raise ValueError("coordinate")
     number = int(value)
-    if number < 1:
+    if not 1 <= number <= _SAFE_INTEGER:  # as the web: a positive safe integer
         raise ValueError("coordinate")
     return number
 
@@ -91,7 +91,8 @@ def raw_read_count(identifier: bytes) -> int:
     parts = identifier.strip().split(b"_")
     if len(parts) < 2 or not _DIGITS.match(parts[1]):
         return 0
-    return int(parts[1])
+    count = int(parts[1])
+    return count if count <= _SAFE_INTEGER else 0  # the web reads no count
 
 
 def infer_type(g1: bytes, s1: int, e1: int, g2: bytes, s2: int, e2: int) -> bytes:
@@ -143,5 +144,5 @@ def parse(line: bytes) -> Optional[Record]:
     else:
         support, overlap = legacy_annotations(cols)
     return Record(g1, s1, e1, g2, s2, e2, raw_read_count(cols[0]), _optional_number(cols[2]),
-                  None if overlap is None else (int(overlap) if overlap.is_integer() else overlap),
+                  None if overlap is None else (int(overlap) if overlap.is_integer() and abs(overlap) <= _SAFE_INTEGER else overlap),
                   ctype or infer_type(g1, s1, e1, g2, s2, e2), support)

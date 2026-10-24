@@ -18,6 +18,7 @@ import json
 import os
 import sqlite3
 import threading
+import unicodedata
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
@@ -223,9 +224,22 @@ def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = Non
 _COUNT_FIELDS = ("records", "support", "reads", "read_records", "overlap_total", "overlap_records")
 
 
-def _name_key(name: str) -> Tuple[str, str]:
-    # close to the web's localeCompare: case-insensitive, then exact
-    return name.casefold(), name
+# The web sorts names with localeCompare: ICU's root collation, in which
+# spaces and punctuation come before symbols, digits and then letters, a
+# letter's accents and then its case (lower first) only break ties.
+_COLLATION_ORDER = " _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$0123456789abcdefghijklmnopqrstuvwxyz"
+_COLLATION_RANK = {c: i for i, c in enumerate(_COLLATION_ORDER)}
+
+
+def _name_key(name: str) -> Tuple[Any, ...]:
+    primary, accents, case = [], [], []
+    for char in name:
+        parts = unicodedata.normalize("NFD", char)
+        base = parts[0].lower()
+        primary.append(_COLLATION_RANK.get(base, len(_COLLATION_ORDER) + ord(base)))
+        accents.append(tuple(ord(mark) for mark in parts[1:]))
+        case.append(parts[0] != base)
+    return primary, accents, case, name
 
 
 def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[str, Any]:
@@ -650,9 +664,13 @@ def top_interactions(indexes: Sequence[PathLike], gene: str, bin_size: int = 10,
     selections, bounds, lengths = _contact_grid(opened, gene, gene2, bin_size, region, types, measure, orientation)
     grids = [(_rasterise([sel], bin_size, bounds) if sel is not None and len(sel[0]) else None) for sel in selections]
     shape = (bounds[1] - bounds[0] + 1, bounds[3] - bounds[2] + 1)
-    total = np.zeros(shape, dtype=np.int64)
-    for grid in grids:
-        if grid is not None:
+    present = [grid for grid in grids if grid is not None]
+    if not present:
+        # nothing in the region: no grid (an empty region can still be huge)
+        total = np.zeros((0,), dtype=np.int64)
+    else:
+        total = present[0].astype(np.int64, copy=True)
+        for grid in present[1:]:
             total += grid
     flat = total.reshape(-1)
     nonzero = np.flatnonzero(flat)
@@ -754,10 +772,24 @@ def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, l
             return None
         clauses.append("g2 = ?")
         params.append(g2)
+    g = None
     if filters.get("gene") is not None:
         g = index.gene(str(filters["gene"]))
         if g is None:
             return None
+    if filters.get("partner") is not None:
+        # the web's RNA + partner: the pair in either arm order; a partner
+        # alone is an RNA on either arm
+        p = index.gene(str(filters["partner"]))
+        if p is None:
+            return None
+        if g is None:
+            g = p
+        else:
+            clauses.append("((g1 = ? AND g2 = ?) OR (g1 = ? AND g2 = ?))")
+            params.extend((g, p, p, g))
+            g = None
+    if g is not None:
         clauses.append("(g1 = ? OR g2 = ?)")
         params.extend((g, g))
     if filters.get("intra") is not None:
@@ -846,7 +878,9 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
             order: str = "file", with_sequence: bool = True) -> Dict[str, Any]:
     """Filtered hybrid rows across indexes.
 
-    ``filters``: ``gene1``, ``gene2``, ``gene`` (either arm), ``intra`` (bool),
+    ``filters``: ``gene1``, ``gene2``, ``gene`` (either arm), ``partner`` (with
+    ``gene``: the pair in either arm order, as the web's RNA + partner; alone,
+    either arm), ``intra`` (bool),
     ``homodimer`` (``"only"``/``"exclude"``: same RNA and overlap >= 5),
     ``search`` (text, see ``_search_key``),
     ``region`` (``{"x": [s, e], "y": [s, e]}``, overlap with arm 1 / arm 2),
@@ -999,7 +1033,7 @@ def _partner_rows(partners: Dict[str, List[int]]) -> List[Dict[str, Any]]:
     """By cluster support, then name, as the web Region Explorer orders its partners."""
     rows = [{"name": name, "records": int(v[0]), "support": int(v[1]), "reads": int(v[2])}
             for name, v in partners.items() if v[0]]
-    return sorted(rows, key=lambda row: (-row["support"], row["name"].casefold(), row["name"]))
+    return sorted(rows, key=lambda row: (-row["support"],) + _name_key(row["name"]))
 
 
 def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = None, end: Optional[int] = None, *,

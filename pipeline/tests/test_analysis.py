@@ -85,6 +85,7 @@ class CoverageTest(unittest.TestCase):
 
     def test_default_names_follow_the_shell_substitution(self):
         self.assertEqual(coverage.contact_path("/a/S.hyb", "G"), Path("/a/S.G.contact.txt"))
+        self.assertEqual(coverage.contact_path("/data/run.hyb2/S.hyb", "G"), Path("/data/run.hyb2/S.G.contact.txt"))
         self.assertEqual(coverage.for_table_name("/a/S.G.contact.txt"), "/a/S.G")
 
     def test_unusual_coordinates_use_the_exact_fallback(self):
@@ -597,6 +598,13 @@ class SupportTest(unittest.TestCase):
             self.assertEqual(ids({"homodimer": "only"}), ["c_2"])          # same RNA, overlap 7
             self.assertEqual(ids({"homodimer": "exclude"}), ["a_5", "b_1", "d_1"])
             self.assertEqual(ids({"min_support": 3}), ["a_5", "b_1"])
+            # the web's RNA + partner match either arm order; gene1 is arm 1 only
+            self.assertEqual(ids({"gene1": "H"}), [])
+            self.assertEqual(ids({"gene": "H"}), ["d_1"])
+            self.assertEqual(ids({"partner": "H"}), ["d_1"])
+            self.assertEqual(ids({"gene": "H", "partner": "G"}), ["d_1"])
+            self.assertEqual(ids({"gene": "G", "partner": "G"}), ["a_5", "b_1", "c_2"])
+            self.assertEqual(ids({"gene": "G", "partner": "nope"}), [])
             self.assertEqual(ids({}, "support"), ["a_5", "b_1", "c_2", "d_1"])
             self.assertEqual(query.hybrids([path], {}, order="support")["rows"][0]["support"], 4)
             # id, sequence, RNA names, type and overlap, joined by spaces, any case
@@ -629,6 +637,28 @@ class SupportTest(unittest.TestCase):
             hyb.write_bytes(hyb.read_bytes() + b"\n")
             with self.assertRaises(ValueError):
                 query.hybrids([path], {"search": "new"})
+            query.close_all()
+
+    def test_names_sort_as_the_web(self):
+        """Ties sort as the web's localeCompare (ICU root): punctuation before
+        digits before letters; accents, then lower before upper case, break ties."""
+        web = ["a b", "a_b", "a.b", "ab", "Ab", "AB", "e1", "E1", "é1", "hsa-mir-21", "hsa-miR-21-5p",
+               "RNA_1", "RNA-1", "rna1", "Rna1", "RNA1", "RNA10", "RNA2", "z_9", "Z9"]
+        self.assertEqual(sorted(reversed(web), key=query._name_key), web)
+
+    def test_unsafe_integers_and_empty_regions(self):
+        """Numbers past 2^53 are handled as the web does instead of failing the
+        build; an empty region needs no grid however large it is."""
+        with tempfile.TemporaryDirectory() as tmp:
+            hyb = Path(tmp) / "f.hyb"
+            big = "99999999999999999999"
+            hyb.write_bytes(self.line("a_5", "\t4") + self.line("b_" + big, "\t4")
+                            + self.line("c_1", "\t4", e1=big))
+            path = Path(tmp) / "f.hyb2idx"
+            meta = index.build(hyb, path)
+            self.assertEqual((meta["records"], meta["invalid"]), (2, 1))   # c: coordinate; b: no read count
+            self.assertEqual(query.top_interactions([path], "G", 1, region={"x": [5_000_000, 10_000_000],
+                                                                           "y": [5_000_000, 10_000_000]})["rows"], [])
             query.close_all()
 
     def test_index_support_and_old_index_fallback(self):

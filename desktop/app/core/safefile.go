@@ -67,3 +67,25 @@ func readProjectFile(path string) ([]byte, error) {
 	}
 	return data, nil
 }
+
+// readProjectTail reads the last max bytes at most of a regular file (not a
+// symlink, FIFO or device), for logs that may be long.
+func readProjectTail(path string, max int64) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	} else if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", filepath.Base(path))
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if size := info.Size(); size > max {
+		if _, err := f.Seek(size-max, io.SeekStart); err != nil {
+			return nil, err
+		}
+	}
+	return io.ReadAll(io.LimitReader(f, max))
+}

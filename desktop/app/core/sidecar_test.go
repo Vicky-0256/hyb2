@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,6 +104,49 @@ func TestTimeoutKillsAndRestarts(t *testing.T) {
 	}
 	if decode(t, again)["echo"].(map[string]any)["op"] != "after" || s.pid() == pid {
 		t.Fatalf("restart failed: %s", again)
+	}
+}
+
+// A process that stops reading stdin blocks a request larger than the pipe
+// buffer: the timeout still ends it, and Shutdown does not wait on it.
+func TestTimeoutWhileWriteBlocks(t *testing.T) {
+	s := NewSidecar(SidecarSpec{Name: "stuck", Program: testPython(t),
+		Args: []string{"-c", "import time; time.sleep(60)"}, Dir: os.TempDir(), Timeout: time.Second})
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Request(map[string]any{"op": "x", "blob": strings.Repeat("a", 1<<20)})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrSidecarTimeout) {
+			t.Fatalf("expected a timeout, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request outlived its 1 s timeout")
+	}
+	stopped := make(chan struct{})
+	go func() { s.Shutdown(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Shutdown hung")
+	}
+}
+
+// A stdout line longer than the cap fails the request instead of growing
+// without bound.
+func TestOversizedLineFailsRequest(t *testing.T) {
+	saved := maxResponseLine
+	maxResponseLine = 1 << 20
+	t.Cleanup(func() { maxResponseLine = saved })
+	script := "import sys\nsys.stdin.readline()\nsys.stdout.write('x' * (4 << 20) + '\\n'); sys.stdout.flush()\nimport time; time.sleep(30)\n"
+	s := NewSidecar(SidecarSpec{Name: "huge", Program: testPython(t), Args: []string{"-c", script},
+		Dir: os.TempDir(), Timeout: 10 * time.Second})
+	t.Cleanup(s.Shutdown)
+	_, err := s.Request(map[string]any{"op": "x"})
+	if err == nil || !strings.Contains(err.Error(), "longer than 1 MB") {
+		t.Fatalf("expected an oversized-response error, got %v", err)
 	}
 }
 

@@ -287,7 +287,7 @@ func readResult(runDir string) any {
 			return value
 		}
 	}
-	data, err := os.ReadFile(filepath.Join(runDir, "stdout.log"))
+	data, err := readProjectTail(filepath.Join(runDir, "stdout.log"), maxProjectFile)
 	if err != nil {
 		return nil
 	}
@@ -1058,7 +1058,7 @@ func (s *Scheduler) ResumeRequest(id, project string) (TaskStartRequest, error) 
 	if !slices.Contains(resumableStates, state) {
 		return TaskStartRequest{}, fmt.Errorf("only interrupted, failed or cancelled tasks can be resumed (this task is %s)", state)
 	}
-	data, err := os.ReadFile(filepath.Join(runDir, StartFile))
+	data, err := readProjectFile(filepath.Join(runDir, StartFile))
 	if err != nil {
 		return TaskStartRequest{}, errors.New("this task cannot be resumed: its original request was not stored")
 	}

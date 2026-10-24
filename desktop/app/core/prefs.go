@@ -222,6 +222,9 @@ func DescribePreferences(path string) Obj {
 	})
 }
 
+// prefsMu serializes ApplyPreferences.
+var prefsMu sync.Mutex
+
 // ApplyPreferences applies a patch `{budget?: {cpu?, mem_mb?} | null,
 // theme?: "system"|"light"|"dark" | null, external_lookup?: bool | null}`, writes the file atomically and
 // returns the new budget. Omitted fields keep their value; null resets to
@@ -236,6 +239,10 @@ func ApplyPreferences(path string, patch Obj) (Budget, error) {
 			return Budget{}, fmt.Errorf("unknown preference %q", key)
 		}
 	}
+	// read-modify-write: two saves at once (theme and budget) would each
+	// drop the other's change
+	prefsMu.Lock()
+	defer prefsMu.Unlock()
 	stored := readPrefs(path)
 	if raw, present := patch["budget"]; present {
 		if raw == nil {
@@ -302,12 +309,7 @@ func ApplyPreferences(path string, patch Obj) (Budget, error) {
 	if err != nil {
 		return Budget{}, err
 	}
-	pending := path + ".tmp"
-	if err := os.WriteFile(pending, data, 0o644); err != nil {
-		return Budget{}, fmt.Errorf("cannot save preferences: %w", err)
-	}
-	// os.Rename replaces the destination on every platform (MoveFileEx on Windows).
-	if err := os.Rename(pending, path); err != nil {
+	if err := writeFileAtomic(path, data); err != nil {
 		return Budget{}, fmt.Errorf("cannot save preferences: %w", err)
 	}
 	return LoadBudget(path), nil

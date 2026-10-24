@@ -433,7 +433,7 @@ func evidenceDir(projectPath string) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("project path is invalid: %w", err)
 	}
-	manifest, err := os.ReadFile(filepath.Join(root, "project.json"))
+	manifest, err := readProjectFile(filepath.Join(root, "project.json"))
 	if err != nil {
 		return "", "", errors.New("not a HYB2 project: project.json is missing")
 	}

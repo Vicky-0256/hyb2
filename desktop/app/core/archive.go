@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -122,7 +123,8 @@ func extractVerified(archive, digest, dest string) error {
 	}
 	defer f.Close()
 	hash := sha256.New()
-	gz, err := gzip.NewReader(io.TeeReader(f, hash))
+	hashed := io.TeeReader(f, hash)
+	gz, err := gzip.NewReader(hashed)
 	if err != nil {
 		return fmt.Errorf("the bundled runtime archive is unreadable: %w", err)
 	}
@@ -181,12 +183,29 @@ func extractVerified(archive, digest, dest string) error {
 			return fmt.Errorf("unsupported entry in the runtime archive: %q", h.Name)
 		}
 	}
-	// Drain to the end so the whole file is hashed.
-	if _, err := io.Copy(io.Discard, f); err != nil {
+	// Drain to the end through the hash: the tar padding and the gzip
+	// trailer after the end marker, then anything after the gzip stream.
+	if _, err := io.Copy(io.Discard, gz); err != nil {
+		return fmt.Errorf("the bundled runtime archive is damaged: %w", err)
+	}
+	if _, err := io.Copy(io.Discard, hashed); err != nil {
 		return err
 	}
 	if got := hex.EncodeToString(hash.Sum(nil)); got != digest {
 		return fmt.Errorf("the bundled runtime archive is corrupt (SHA-256 %s, expected %s); reinstall HYB2 Desktop", got, digest)
+	}
+	// Each link target was checked as text; a link made through an earlier
+	// link would resolve elsewhere, so none may sit under another, and each
+	// must still resolve inside dest once made.
+	made := map[string]bool{}
+	for _, h := range links {
+		name := path.Clean(h.Name)
+		for dir := path.Dir(name); dir != "." && dir != "/"; dir = path.Dir(dir) {
+			if made[dir] {
+				return fmt.Errorf("unsafe link in the runtime archive: %q is under the link %q", h.Name, dir)
+			}
+		}
+		made[name] = true
 	}
 	for _, h := range links {
 		target := filepath.Join(root, filepath.FromSlash(h.Name))
@@ -195,6 +214,19 @@ func extractVerified(archive, digest, dest string) error {
 		}
 		if err := makeLink(h.Linkname, target); err != nil {
 			return err
+		}
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	for _, h := range links {
+		resolved, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(h.Name)))
+		if err != nil {
+			continue // dangling: it points nowhere, so not outside either
+		}
+		if rel, err := filepath.Rel(realRoot, resolved); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("unsafe link in the runtime archive: %q resolves outside it", h.Name)
 		}
 	}
 	return nil

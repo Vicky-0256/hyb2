@@ -149,7 +149,7 @@ func (s *Sidecar) spawn() (*proc, error) {
 	go func() {
 		reader := bufio.NewReaderSize(stdout, 1<<20)
 		for {
-			line, err := reader.ReadString('\n')
+			line, err := readLine(reader, maxResponseLine)
 			if line != "" {
 				select {
 				case p.lines <- strings.TrimRight(line, "\r\n"):
@@ -200,26 +200,9 @@ func (s *Sidecar) Request(request any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("could not encode bridge request: %w", err)
 	}
 	line = append(line, '\n')
-	// A write failure means the request never reached Python, so one
-	// restart-and-retry is safe even for non-idempotent operations.
-	for attempt := 0; ; attempt++ {
-		if s.proc == nil {
-			p, err := s.spawn()
-			if err != nil {
-				return nil, err
-			}
-			s.proc = p
-		}
-		if _, err := s.proc.stdin.Write(line); err == nil {
-			break
-		} else if attempt > 0 {
-			s.proc.kill()
-			s.proc = nil
-			return nil, fmt.Errorf("could not send request to %s sidecar: %w", s.spec.Name, err)
-		}
-		s.proc.kill()
-		s.proc = nil
-	}
+	// The cancel channel and the timer exist before the write: a process
+	// that stops reading stdin blocks a large write, which they then end
+	// by killing it.
 	cancel := make(chan struct{})
 	s.cancelMu.Lock()
 	s.cancel = cancel
@@ -232,12 +215,50 @@ func (s *Sidecar) Request(request any) (json.RawMessage, error) {
 	// Shutdown sets closed before it cancels: either it sees this cancel
 	// channel or this check sees closed.
 	if s.closed.Load() {
-		s.proc.kill()
-		s.proc = nil
+		if s.proc != nil {
+			s.proc.kill()
+			s.proc = nil
+		}
 		return nil, errShuttingDown
 	}
 	timer := time.NewTimer(s.spec.Timeout)
 	defer timer.Stop()
+	// A write failure means the request never reached Python, so one
+	// restart-and-retry is safe even for non-idempotent operations.
+	for attempt := 0; ; attempt++ {
+		if s.proc == nil {
+			p, err := s.spawn()
+			if err != nil {
+				return nil, err
+			}
+			s.proc = p
+		}
+		written := make(chan error, 1)
+		go func(w io.Writer) {
+			_, err := w.Write(line)
+			written <- err
+		}(s.proc.stdin)
+		var err error
+		select {
+		case err = <-written:
+		case <-cancel:
+			s.proc.kill()
+			s.proc = nil
+			return nil, fmt.Errorf("%s sidecar: %w", s.spec.Name, ErrSidecarCancelled)
+		case <-timer.C:
+			s.proc.kill()
+			s.proc = nil
+			return nil, fmt.Errorf("%s sidecar did not take the request within %d s and was restarted: %w", s.spec.Name, int(s.spec.Timeout.Seconds()), ErrSidecarTimeout)
+		}
+		if err == nil {
+			break
+		}
+		s.proc.kill()
+		s.proc = nil
+		if attempt > 0 {
+			return nil, fmt.Errorf("could not send request to %s sidecar: %w", s.spec.Name, err)
+		}
+	}
 	for {
 		select {
 		case <-cancel:
@@ -278,9 +299,42 @@ func (s *Sidecar) Request(request any) (json.RawMessage, error) {
 	}
 }
 
+// maxResponseLine caps one stdout line: a longer one is dropped and
+// reported as oversizedLine, which fails the request waiting for it.
+var maxResponseLine = 256 << 20 // a variable for tests
+
+const oversizedLine = "\x00oversized"
+
+// readLine reads up to a newline, keeping at most max bytes: the rest of a
+// longer line is read and dropped, and oversizedLine stands for it.
+func readLine(r *bufio.Reader, max int) (string, error) {
+	var buf []byte
+	over := false
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if !over {
+			if len(buf)+len(chunk) > max {
+				over, buf = true, nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if over {
+			return oversizedLine, err
+		}
+		return string(buf), err
+	}
+}
+
 // match decodes one stdout line; ok is false for non-protocol output and
 // stale responses from earlier requests.
 func match(text string, id uint64) (json.RawMessage, bool, error) {
+	if text == oversizedLine {
+		return nil, true, fmt.Errorf("bridge response is longer than %d MB", maxResponseLine>>20)
+	}
 	var message struct {
 		ID       *uint64         `json:"id"`
 		Response json.RawMessage `json:"response"`

@@ -47,9 +47,9 @@ def parameters(raw: Any) -> Dict[str, Any]:
                 raise ValueError(f"{label} must be a whole number from {lo} to {hi}.")
             out[key] = value
     if "seed" in raw:
-        if not isinstance(raw["seed"], str) or not raw["seed"].strip():
+        if not isinstance(raw["seed"], str) or not raw["seed"].strip(_JS_SPACE):
             raise ValueError("Enter a reproducibility seed for randomised constraint ordering.")
-        out["seed"] = raw["seed"].strip()[:128]
+        out["seed"] = js_seed(raw["seed"])
     if "homodimer_only" in raw:
         if not isinstance(raw["homodimer_only"], bool):
             raise ValueError("homodimer_only must be a boolean")
@@ -233,9 +233,20 @@ def _imul(a: int, b: int) -> int:
     return product - 0x100000000 if product & 0x80000000 else product
 
 
+# JavaScript's String.prototype.trim whitespace (not Python's: no \x1c-\x1f
+# or \x85, but U+FEFF).
+_JS_SPACE = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+
+def js_seed(text: str) -> str:
+    """The web's ``String(seed).trim().slice(0, 128)``: 128 UTF-16 code units."""
+    units = text.strip(_JS_SPACE).encode("utf-16-le", "surrogatepass")[:256]
+    return units.decode("utf-16-le", "surrogatepass")
+
+
 def hash_seed(text: str) -> int:
     """FNV-1a over the UTF-16 code units (JavaScript's charCodeAt)."""
-    data = text.encode("utf-16-le")
+    data = text.encode("utf-16-le", "surrogatepass")
     value = 2166136261
     for k in range(0, len(data), 2):
         value = (value ^ (data[k] | data[k + 1] << 8)) & 0xFFFFFFFF

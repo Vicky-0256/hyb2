@@ -20,6 +20,7 @@ class LayoutTest(unittest.TestCase):
         step = ((out["x"][1] - out["x"][0]) ** 2 + (out["y"][1] - out["y"][0]) ** 2) ** 0.5
         self.assertGreater(step, 1)
         self.assertEqual(len(set(zip(out["x"], out["y"]))), len(dbn))
+        self.assertEqual(structure_layout("."), {"x": [0.0], "y": [0.0]})  # naview gives NaN here
         for bad in ("", "((..)", "(..))", "([..])", 5, "A" * 3):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 structure_layout(bad)

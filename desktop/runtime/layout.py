@@ -23,6 +23,8 @@ def structure_layout(dbn: Any) -> Dict[str, Any]:
             break
     if depth != 0:
         raise ValueError("dbn brackets are unbalanced")
+    if len(dbn) == 1:
+        return {"x": [0.0], "y": [0.0]}  # naview gives NaN for one nucleotide
     import RNA  # the bundled ViennaRNA
     points = RNA.naview_xy_coordinates(dbn)[:len(dbn)]  # it adds one point past the end
     return {"x": [round(p.X, 2) for p in points], "y": [round(p.Y, 2) for p in points]}

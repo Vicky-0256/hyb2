@@ -7,6 +7,7 @@ on a JSON Schema package being installed.
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -75,12 +76,24 @@ def _file_lock(path: Path) -> Iterator[None]:
             handle.close()
 
 
+def _finite(value: Any) -> Any:
+    """NaN and Infinity as null: strict JSON readers (the Go app) reject them."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _finite(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(child) for child in value]
+    return value
+
+
 def _atomic_write_json(path: Path, data: Any) -> None:
     """Write JSON to a same-directory temp file, fsync, then os.replace."""
+    text = json.dumps(_finite(data), indent=2, allow_nan=False) + "\n"
     fd, tmp = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(data, indent=2) + "\n"); handle.flush(); os.fsync(handle.fileno())
+            handle.write(text); handle.flush(); os.fsync(handle.fileno())
         os.replace(tmp, path)
     except BaseException:
         try: os.unlink(tmp)

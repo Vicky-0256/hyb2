@@ -51,6 +51,44 @@ class ServeModeTests(unittest.TestCase):
         self.assertIn("stray output", stderr.getvalue())
 
 
+class ServeEncodingTests(unittest.TestCase):
+    def test_unencodable_response_fails_only_its_request(self):
+        import numpy as np
+        def handler(request, repo_root=None):
+            return {"ok": True, "path": Path("/x")} if request.get("bad") else {"ok": True, "n": np.int64(3)}
+        stdin = io.BytesIO(b'{"id": 1, "request": {"bad": true}}\n{"id": 2, "request": {}}\n')
+        stdout = io.StringIO()
+        with mock.patch.object(bridge, "handle", handler):
+            self.assertEqual(serve(None, stdin=stdin, stdout=stdout), 0)
+        out = [json.loads(line) for line in stdout.getvalue().splitlines()]
+        self.assertEqual([o["id"] for o in out], [1, 2])
+        self.assertFalse(out[0]["response"]["ok"])
+        self.assertIn("could not be encoded", out[0]["response"]["error"])
+        self.assertEqual(out[1]["response"], {"ok": True, "n": 3})
+
+    def test_project_json_has_no_nan(self):
+        from desktop.runtime.project import _atomic_write_json
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "x.json"
+            _atomic_write_json(path, {"a": float("inf"), "b": [float("nan"), 1.5]})
+            self.assertEqual(json.loads(path.read_text(), parse_constant=lambda c: self.fail(c)), {"a": None, "b": [None, 1.5]})
+
+
+class ComradesSeedTests(unittest.TestCase):
+    def test_seed_is_trimmed_and_cut_as_the_web(self):
+        from desktop.runtime import comrades
+        # String(seed).trim().slice(0, 128): UTF-16 units, JavaScript whitespace
+        self.assertEqual(comrades.js_seed("\ufeff run1 \t"), "run1")
+        self.assertEqual(comrades.js_seed("abc\x1c"), "abc\x1c")
+        self.assertEqual(comrades.js_seed("\U0001F600" * 100), "\U0001F600" * 64)
+        self.assertEqual(comrades.hash_seed(comrades.js_seed("\U0001F600" * 100)), 817844933)  # node
+
+    def test_empty_sequence(self):
+        from desktop.runtime import vienna
+        with self.assertRaisesRegex(ValueError, "no sequence"):
+            vienna.fold("", {"temperature": 37, "min_loop": 3})
+
+
 class ManifestConcurrencyTests(unittest.TestCase):
     def test_concurrent_writers_do_not_lose_runs(self):
         with tempfile.TemporaryDirectory() as tmp:

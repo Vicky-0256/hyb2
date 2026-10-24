@@ -90,6 +90,8 @@ def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, 
     import RNA  # the bundled ViennaRNA
 
     sequence = sequence.upper().replace("T", "U")
+    if not sequence:
+        raise ValueError("there is no sequence to fold")
     if set(sequence) - set("ACGU"):
         raise ValueError("ViennaRNA folds A, C, G and U only; the sequence holds other letters")
     started = time.monotonic()

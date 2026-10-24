@@ -876,11 +876,19 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _json_default(value: Any) -> Any:
+    # numpy scalars (from analysis results) as plain numbers
+    item = getattr(value, "item", None)
+    if callable(item) and type(value).__module__ == "numpy":
+        return item()
+    raise TypeError("Object of type %s is not JSON serializable" % type(value).__name__)
+
+
 def _dumps_line(value: Any) -> str:
     try:
-        return json.dumps(value, ensure_ascii=True, allow_nan=False)
+        return json.dumps(value, ensure_ascii=True, allow_nan=False, default=_json_default)
     except ValueError:
-        return json.dumps(_json_safe(value), ensure_ascii=True, allow_nan=False)
+        return json.dumps(_json_safe(value), ensure_ascii=True, allow_nan=False, default=_json_default)
 
 
 def serve(repo_root: Path | None = None, stdin: Any = None, stdout: Any = None) -> int:
@@ -914,7 +922,12 @@ def serve(repo_root: Path | None = None, stdin: Any = None, stdout: Any = None) 
                 response = handle(message["request"], repo_root=repo_root)
         except Exception as error:  # noqa: BLE001 - every failure must be a protocol response
             response = {"ok": False, "error": str(error) or error.__class__.__name__}
-        stdout.write(_dumps_line({"id": request_id, "response": response}) + "\n")
+        try:
+            text = _dumps_line({"id": request_id, "response": response})
+        except (TypeError, ValueError) as error:
+            # a response that cannot be encoded fails its request, not the loop
+            text = _dumps_line({"id": request_id, "response": {"ok": False, "error": "the response could not be encoded: %s" % error}})
+        stdout.write(text + "\n")
         stdout.flush()
 
 

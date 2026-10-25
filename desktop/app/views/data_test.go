@@ -360,6 +360,34 @@ func TestDataPageRemoveConfirm(t *testing.T) {
 	dataExpect(t, tt, "Removed 1 sample.")
 }
 
+// A sample whose task is queued or running cannot be removed: its task
+// would keep writing into a sample re-added under the same name.
+func TestDataPageRemoveDisabledWhileRunning(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	tt := ui.NewTester(a.View, 1100, 720)
+	waitFlush(a)
+	tt.Frame()
+	dataClick(t, tt, a, "Select SUB_REP1")
+	dataClick(t, tt, a, "Run selected (1)")
+	dataClick(t, tt, a, "Start")
+	if len(f.started) != 1 {
+		t.Fatalf("started %+v", f.started)
+	}
+	dataClick(t, tt, a, "Select SUB_REP1")
+	dataClick(t, tt, a, "Select AFR_REP2")
+	dataExpect(t, tt, "Remove selected")
+	_ = tt.Click("Remove selected")
+	waitFlush(a)
+	tt.Frame()
+	if tt.HasText("Remove samples") || len(f.callsOf("remove_sample")) != 0 {
+		t.Fatal("remove offered for a running sample")
+	}
+	// Without the running sample in the selection it can be removed.
+	dataClick(t, tt, a, "Select SUB_REP1")
+	dataClick(t, tt, a, "Remove selected")
+	dataExpect(t, tt, "Remove samples", "Remove AFR_REP2 from the project?")
+}
+
 func TestDataPageCheckInputsAndRelink(t *testing.T) {
 	a, f := dataOpen(t, "list_samples.json")
 	tt := ui.NewTester(a.View, 1100, 720)

@@ -313,6 +313,53 @@ class FileRecordTests(ProjectTestCase):
             self.call("disk_estimate", sample_ids=["missing"])
 
 
+class RemoveWhileRunningTests(ProjectTestCase):
+    def add(self):
+        self.call("add_sample", source=str(self.reads()), reference=str(self.reference()))
+        return self.manifest()["samples"][0]
+
+    def task(self, task_id, status, sample_id=None):
+        run = self.project / "runs" / task_id
+        run.mkdir(parents=True)
+        (run / "status.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+        if sample_id:
+            (run / "task-start.json").write_text(json.dumps({"kind": "sample_pipeline", "sample_id": sample_id}), encoding="utf-8")
+
+    def test_a_sample_with_a_live_task_is_not_removed(self):
+        sample = self.add()
+        samples.set_sample_stage(self.project, sample["id"], "map", "running", task_id="t-live")
+        self.task("t-live", "running")
+        with self.assertRaisesRegex(ValueError, "queued or running task"):
+            self.call("remove_sample", sample_id=sample["id"])
+        # Its task ended without updating the stage (app quit): removable.
+        (self.project / "runs" / "t-live" / "status.json").write_text('{"status": "interrupted"}', encoding="utf-8")
+        self.call("remove_sample", sample_id=sample["id"])
+        self.assertEqual(self.manifest()["samples"], [])
+
+    def test_a_queued_task_that_has_not_started_blocks_removal(self):
+        sample = self.add()
+        self.task("t-queued", "queued", sample["id"])
+        self.task("t-other", "queued", "someone-else")
+        with self.assertRaisesRegex(ValueError, "queued or running task"):
+            self.call("remove_sample", sample_id=sample["id"])
+
+    def test_a_stale_task_cannot_mark_a_re_added_sample(self):
+        from desktop.runtime.sample_run import _stage_writer
+        sample = self.add()
+        mark = _stage_writer(self.project, sample, "t-old")
+        mark("index", "running")
+        self.call("remove_sample", sample_id=sample["id"])
+        again = self.add()
+        self.assertEqual(again["id"], sample["id"])
+        with self.assertRaises(samples.StaleSampleTask):
+            mark("index", "succeeded", outputs={"index": "samples/%s/x.sqlite" % sample["id"]})
+        with self.assertRaises(samples.StaleSampleTask):
+            samples.set_sample_stage(self.project, sample["id"], "map", "running", task_id="t-new", created_at="2000-01-01T00:00:00Z")
+        current = self.manifest()["samples"][0]
+        self.assertIsNone(current["outputs"]["index"])
+        self.assertNotEqual((current.get("stages") or {}).get("index", {}).get("task_id"), "t-old")
+
+
 class SampleSheetTests(ProjectTestCase):
     def test_zikv_dataset_map(self):
         sheet = _make_zikv_layout(self.dir)

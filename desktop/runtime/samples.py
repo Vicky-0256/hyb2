@@ -574,6 +574,10 @@ def remove_sample(root: Path, sample_id: str, *, delete_outputs: bool = False) -
 
     def mutate(manifest: Dict[str, Any]) -> Dict[str, Any]:
         sample = _find(manifest["samples"], sample_id, "sample")
+        # A running task would keep writing into samples/<id>/ and record its
+        # stages on a sample re-added under the same name.
+        if active_sample_tasks(root, sample):
+            raise ValueError("sample %s has a queued or running task: cancel it or wait for it to finish first" % sample_id)
         manifest["samples"].remove(sample)
         return sample
     sample = _mutate_manifest(root, mutate)
@@ -587,11 +591,26 @@ def remove_sample(root: Path, sample_id: str, *, delete_outputs: bool = False) -
     return {"sample": sample, "outputs_deleted": deleted}
 
 
+class StaleSampleTask(ValueError):
+    """A task updating a sample that was removed (and maybe re-added) since it started."""
+
+
 def set_sample_stage(root: Path, sample_id: str, stage: str, status: str, *, task_id: Optional[str] = None,
-                     outputs: Optional[Dict[str, Optional[str]]] = None, extra_stages: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """Atomically update one (or more) stage statuses and output paths of a sample."""
+                     outputs: Optional[Dict[str, Optional[str]]] = None, extra_stages: Optional[Dict[str, str]] = None,
+                     claim: bool = True, created_at: Optional[str] = None) -> Dict[str, Any]:
+    """Atomically update one (or more) stage statuses and output paths of a sample.
+
+    A task's first update claims the sample (``claim``); later ones
+    (``claim=False``) need a stage of the sample to still carry ``task_id``,
+    and ``created_at`` (of the sample the task started with) must match, so a
+    task whose sample was removed cannot mark one re-added under the same id.
+    """
     def mutate(manifest: Dict[str, Any]) -> Dict[str, Any]:
         sample = _find(manifest["samples"], sample_id, "sample")
+        current = sample.get("stages") if isinstance(sample.get("stages"), dict) else {}
+        owned = any(isinstance(v, dict) and v.get("task_id") == task_id for v in current.values())
+        if (created_at is not None and sample.get("created_at") != created_at) or (task_id and not claim and not owned):
+            raise StaleSampleTask("sample %s was removed or replaced while this task ran" % sample_id)
         stamp = _now()
         stages = sample.setdefault("stages", {})
         for name, value in [(stage, status)] + list((extra_stages or {}).items()):
@@ -625,6 +644,36 @@ def _task_status(root: Path, task_id: Any) -> Optional[str]:
         return None
     status = data.get("status") if isinstance(data, dict) else None
     return status if isinstance(status, str) else None
+
+
+def _task_sample(root: Path, task_id: str) -> Optional[str]:
+    """``sample_id`` of the request stored in ``runs/<task_id>/task-start.json``."""
+    path = Path(root) / "runs" / task_id / "task-start.json"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > _MAX_SETTINGS_BYTES:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("sample_id") if isinstance(data, dict) else None
+    return value if isinstance(value, str) else None
+
+
+def active_sample_tasks(root: Path, sample: Dict[str, Any]) -> List[str]:
+    """Live (queued/running) tasks of a sample: those its stages name, and
+    queued ones that have not reached a stage yet."""
+    found = set()
+    for stage in (sample.get("stages") or {}).values() if isinstance(sample.get("stages"), dict) else ():
+        if isinstance(stage, dict) and stage.get("status") in ACTIVE_STAGE_STATUSES \
+                and _task_status(root, stage.get("task_id")) in ACTIVE_STAGE_STATUSES:
+            found.add(stage["task_id"])
+    runs = Path(root) / "runs"
+    if runs.is_dir() and not runs.is_symlink():
+        for entry in runs.iterdir():
+            if entry.name not in found and _task_status(root, entry.name) in ACTIVE_STAGE_STATUSES \
+                    and _task_sample(root, entry.name) == sample.get("id"):
+                found.add(entry.name)
+    return sorted(found)
 
 
 def stale_stages(root: Path, manifest: Dict[str, Any]) -> List[Tuple[str, str, Optional[str], str]]:

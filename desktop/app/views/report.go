@@ -139,13 +139,15 @@ func gatherReport(b core.Backend, in reportInput) *reportData {
 	d.Ready = ready
 	counts := map[string]*qcStats{}
 	if len(ready) > 0 {
+		// No limit: the result package writes every RNA pair (rna_pairs.tsv)
+		// and matches every RNA name against the references.
 		if raw, err := b.Query(pr.Path, "analysis_overview", core.Obj{"sample_ids": ready}); err == nil {
 			var ov ovData
 			if model.Decode(raw, &ov) == nil {
 				d.Overview = &ov
 			}
 		}
-		result, err := b.Query(pr.Path, "analysis_summary", core.Obj{"sample_ids": ready})
+		result, err := b.Query(pr.Path, "analysis_summary", core.Obj{"sample_ids": ready, "pairs": false})
 		var parts []qcStats
 		if err == nil {
 			object, _ := result.(map[string]any)

@@ -835,7 +835,10 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
 
     sample_ids, paths, lengths = _analysis_index_paths(request)
     if operation == "analysis_summary":
-        result = query.summary(paths, lengths=lengths)
+        with_pairs = request.get("pairs", True)
+        if not isinstance(with_pairs, bool):
+            raise ValueError("pairs must be a boolean")
+        result = query.summary(paths, lengths=lengths, pairs=with_pairs)
     elif operation == "analysis_overview":
         result = query.overview(paths, limit=opt_int("limit", None))
     elif operation == "analysis_contact_bins":

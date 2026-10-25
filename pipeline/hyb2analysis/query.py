@@ -137,7 +137,7 @@ def close_all() -> None:
 # summary
 
 
-def _single_summary(index: _Index) -> Dict[str, Any]:
+def _single_summary(index: _Index, with_pairs: bool = True) -> Dict[str, Any]:
     con = index.con
     extents = index.extents()
     genes = [{"name": n, "length": m, "max_end": m, "min_start": extents.get(n, (None, m))[0], "records": r, "reads": rd}
@@ -145,15 +145,18 @@ def _single_summary(index: _Index) -> Dict[str, Any]:
     types = [{"name": n, "records": r, "reads": rd}
              for n, r, rd in con.execute("SELECT name, records, reads FROM types ORDER BY records DESC, name")]
     pairs = [{"gene1": index.gene_names[g1], "gene2": index.gene_names[g2], "records": r, "reads": rd}
-             for g1, g2, r, rd in con.execute("SELECT g1, g2, records, reads FROM pairs ORDER BY records DESC")]
+             for g1, g2, r, rd in con.execute("SELECT g1, g2, records, reads FROM pairs ORDER BY records DESC")] if with_pairs else None
     meta = index.meta
-    return {
+    out = {
         "index": str(index.path), "source": meta.get("source_path"), "built_at": meta.get("built_at"),
         "records": meta["records"], "reads": meta["reads"], "records_with_reads": meta["records_with_reads"],
         "with_dg": meta["with_dg"], "intra_records": meta["intra_records"], "inter_records": meta["inter_records"],
         "invalid": meta["invalid"], "skipped": meta["skipped"], "errors": meta.get("errors", []),
-        "genes": genes, "types": types, "pairs": pairs,
+        "genes": genes, "types": types,
     }
+    if with_pairs:
+        out["pairs"] = pairs
+    return out
 
 
 def _merge_named(lists: Iterable[List[Dict[str, Any]]], keys: Sequence[str], sums: Sequence[str],
@@ -196,7 +199,7 @@ def _apply_lengths(genes: List[Dict[str, Any]], lengths: Dict[str, int]) -> Dict
     return extents
 
 
-def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = None, *, pairs: bool = True) -> Dict[str, Any]:
     """Per-index summaries plus a merged total (``merged``).
 
     ``genes[]`` rows are ``{name, length, length_source, max_end, min_start,
@@ -204,14 +207,19 @@ def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = Non
     (gene name -> nt) when known, otherwise the largest arm end seen
     (``length_source`` says which).  Each part and ``merged`` also carry
     ``extents: {gene: {min, max}}``, the observed arm coordinate range.
+    ``pairs=False`` leaves out ``pairs[]`` (every gene pair: the bulk of a
+    large sample's summary) for callers that only need the counts.
     """
+    if not isinstance(pairs, bool):
+        raise ValueError("pairs must be a boolean")
     lengths = _check_lengths(lengths)
-    parts = [_single_summary(index) for index in _indexes(indexes)]
+    parts = [_single_summary(index, pairs) for index in _indexes(indexes)]
     merged = {name: sum(part[name] for part in parts)
               for name in ("records", "reads", "records_with_reads", "with_dg", "intra_records", "inter_records", "invalid", "skipped")}
     merged["genes"] = _merge_named((p["genes"] for p in parts), ("name",), ("records", "reads"), ("length", "max_end"), ("min_start",))
     merged["types"] = _merge_named((p["types"] for p in parts), ("name",), ("records", "reads"))
-    merged["pairs"] = _merge_named((p["pairs"] for p in parts), ("gene1", "gene2"), ("records", "reads"))
+    if pairs:
+        merged["pairs"] = _merge_named((p["pairs"] for p in parts), ("gene1", "gene2"), ("records", "reads"))
     for part in parts:
         part["extents"] = _apply_lengths(part["genes"], lengths)
     merged["extents"] = _apply_lengths(merged["genes"], lengths)

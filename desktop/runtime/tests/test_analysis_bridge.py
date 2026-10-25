@@ -59,6 +59,19 @@ class AnalysisBridgeTest(unittest.TestCase):
         linked = self.call(operation="analysis_summary", sample_ids=["LINKED"])
         self.assertEqual(linked["indexes"], [str(self.outside.resolve())])
 
+    def test_summary_without_pairs(self):
+        # the pickers and QC need genes, types and counts; pairs[] is the bulk of a large sample
+        full = self.call(operation="analysis_summary", sample_ids=["S1", "S2"])["result"]
+        lean = self.call(operation="analysis_summary", sample_ids=["S1", "S2"], pairs=False)["result"]
+        self.assertTrue(full["merged"]["pairs"])
+        self.assertNotIn("pairs", lean["merged"])
+        self.assertFalse(any("pairs" in part for part in lean["indexes"]))
+        for part in [full["merged"]] + full["indexes"]:
+            del part["pairs"]
+        self.assertEqual(lean, full)
+        with self.assertRaises(ValueError):
+            self.call(operation="analysis_summary", sample_ids=["S1"], pairs="no")
+
     def test_contact_bins_and_top(self):
         single = self.call(operation="analysis_contact_bins", sample_ids=["S1"], gene="18S_rRNA", bin_size=10)["result"]
         merged = self.call(operation="analysis_contact_bins", sample_ids=["S1", "S2"], gene="18S_rRNA", bin_size=10)["result"]

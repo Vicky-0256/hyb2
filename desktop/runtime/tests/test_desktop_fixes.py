@@ -65,6 +65,7 @@ class ServeEncodingTests(unittest.TestCase):
         self.assertFalse(out[0]["response"]["ok"])
         self.assertIn("could not be encoded", out[0]["response"]["error"])
         self.assertEqual(out[1]["response"], {"ok": True, "n": 3})
+        self.assertEqual(json.loads(bridge._dumps_line({"r": np.float32("nan")})), {"r": None})
 
     def test_project_json_has_no_nan(self):
         from desktop.runtime.project import _atomic_write_json
@@ -82,6 +83,16 @@ class ComradesSeedTests(unittest.TestCase):
         self.assertEqual(comrades.js_seed("abc\x1c"), "abc\x1c")
         self.assertEqual(comrades.js_seed("\U0001F600" * 100), "\U0001F600" * 64)
         self.assertEqual(comrades.hash_seed(comrades.js_seed("\U0001F600" * 100)), 817844933)  # node
+
+    def test_seed_cut_through_an_emoji(self):
+        from desktop.runtime import comrades, structure
+        seed = comrades.js_seed("a" * 127 + "\U0001F600")
+        self.assertEqual(comrades.hash_seed(seed), 1758622465)  # node: the half emoji is hashed
+        label = comrades.seed_label(seed)
+        self.assertEqual(label, "a" * 127 + "\ufffd")
+        with tempfile.TemporaryDirectory() as tmp:  # and the .dbn header can be written
+            structure._atomic_write_text(Path(tmp) / "x.dbn", structure._describe(
+                {"engine": "COMRADES(ViennaRNA)", "temperature": 37.0, "min_loop": 3, "random_folds": 1, "seed": label}))
 
     def test_empty_sequence(self):
         from desktop.runtime import vienna

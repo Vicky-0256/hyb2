@@ -439,7 +439,7 @@ def _describe(params: Dict[str, Any]) -> str:
     """The .dbn header's account of how a record was folded."""
     if params.get("engine") == "COMRADES(ViennaRNA)":
         return (f"COMRADES(ViennaRNA), {params['temperature']:g} °C, min loop {params['min_loop']}, "
-                f"{params['random_folds']} randomised folds, seed {params['seed']}")
+                f"{params['random_folds']} randomised folds, seed {_comrades.seed_label(params['seed'])}")
     if params.get("engine") == "ViennaRNA":
         hard = f", {len(params['hard_pairs'])} hard pairs" if params.get("hard_pairs") else ""
         return f"ViennaRNA MFE, {params['temperature']:g} °C, min loop {params['min_loop']}{hard}"
@@ -737,6 +737,7 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
         hard = [(record["start"] + i - 1, record["start"] + j - 1) for record in records for i, j in record["hard_pairs"]]
         stored = {"engine": name, **{k: params[k] for k in ("temperature", "min_loop", "constraint_limit", "random_folds",
                                                               "seed", "homodimer_only")}}
+        stored["seed"] = _comrades.seed_label(stored["seed"])  # stored as UTF-8 text
     else:
         stored = {"engine": name, "temperature": params["temperature"], "min_loop": params["min_loop"]}
     stored["hard_pairs"] = [list(p) for p in hard]

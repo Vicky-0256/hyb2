@@ -877,10 +877,10 @@ def _json_safe(value: Any) -> Any:
 
 
 def _json_default(value: Any) -> Any:
-    # numpy scalars (from analysis results) as plain numbers
+    # numpy scalars (from analysis results) as plain numbers; NaN/Inf as null
     item = getattr(value, "item", None)
     if callable(item) and type(value).__module__ == "numpy":
-        return item()
+        return _json_safe(item())
     raise TypeError("Object of type %s is not JSON serializable" % type(value).__name__)
 
 

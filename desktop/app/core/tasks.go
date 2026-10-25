@@ -876,21 +876,34 @@ func (s *Scheduler) statusRaw(id, project string) (Obj, error) {
 	if err := ValidateID(id); err != nil {
 		return nil, err
 	}
+	runDir, err := projectRunDir(id, project)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
-	if e, ok := s.tasks[id]; ok {
+	if e, ok := s.tasks[id]; ok && (runDir == "" || e.runDir == runDir) {
 		snap := e.snapshot(id)
 		s.mu.Unlock()
 		return snap, nil
 	}
 	s.mu.Unlock()
-	if strings.TrimSpace(project) == "" {
+	if runDir == "" {
 		return nil, errors.New("task not found; pass project_path to read a finished task")
+	}
+	return readDisk(id, runDir)
+}
+
+// projectRunDir is the task's run directory in project, or "" without a
+// project: a live task of another project is not this one's to read or cancel.
+func projectRunDir(id, project string) (string, error) {
+	if strings.TrimSpace(project) == "" {
+		return "", nil
 	}
 	_, runs, err := canonicalProject(project)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return readDisk(id, filepath.Join(runs, id))
+	return filepath.Join(runs, id), nil
 }
 
 // Status is a task snapshot with progress. project may be empty for tasks
@@ -939,8 +952,18 @@ func (s *Scheduler) List(project string) ([]Obj, error) {
 // Cancel stops a queued or running task (killing the whole process tree).
 // Unknown ids fall back to Status.
 func (s *Scheduler) Cancel(id, project string) (Obj, error) {
+	if err := ValidateID(id); err != nil {
+		return nil, err
+	}
+	runDir, err := projectRunDir(id, project)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	e, ok := s.tasks[id]
+	if ok && runDir != "" && e.runDir != runDir {
+		ok = false // another project's task
+	}
 	if !ok {
 		s.mu.Unlock()
 		return s.Status(id, project)

@@ -128,6 +128,8 @@ func extractVerified(archive, digest, dest string) error {
 	if err != nil {
 		return fmt.Errorf("the bundled runtime archive is unreadable: %w", err)
 	}
+	// one gzip stream: bytes after it (zero padding) are hashed, not parsed
+	gz.Multistream(false)
 	root, err := filepath.Abs(dest)
 	if err != nil {
 		return err

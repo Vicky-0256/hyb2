@@ -35,6 +35,25 @@ func TestUnpackRuntimeHashesTheTail(t *testing.T) {
 	}
 }
 
+// Zero padding after the gzip stream is hashed, not read as another stream.
+func TestUnpackRuntimeAcceptsPaddingAfterGzip(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "a", Mode: 0o644, Typeflag: tar.TypeReg, Size: 1})
+	tw.Write([]byte("x"))
+	tw.Close()
+	gz.Close()
+	buf.Write(make([]byte, 512))
+	path := filepath.Join(dir, RuntimeArchive)
+	os.WriteFile(path, buf.Bytes(), 0o644)
+	sum := sha256.Sum256(buf.Bytes())
+	if err := extractVerified(path, hex.EncodeToString(sum[:]), filepath.Join(dir, "out")); err != nil {
+		t.Fatalf("archive with zero padding rejected: %v", err)
+	}
+}
+
 // Chained in-archive symlinks, each lexically inside dest, would resolve
 // outside it once created: they are refused, and nothing lands outside.
 func TestUnpackRuntimeRejectsChainedLinks(t *testing.T) {

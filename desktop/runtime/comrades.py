@@ -239,9 +239,17 @@ _JS_SPACE = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u
 
 
 def js_seed(text: str) -> str:
-    """The web's ``String(seed).trim().slice(0, 128)``: 128 UTF-16 code units."""
+    """The web's ``String(seed).trim().slice(0, 128)``: 128 UTF-16 code units.
+    A cut through an emoji leaves half of it, as in the web; that lone
+    surrogate is hashed (hash_seed) but cannot be written as UTF-8, so
+    seed_label shows it."""
     units = text.strip(_JS_SPACE).encode("utf-16-le", "surrogatepass")[:256]
     return units.decode("utf-16-le", "surrogatepass")
+
+
+def seed_label(seed: str) -> str:
+    """The seed as text to store and show: a lone surrogate as U+FFFD."""
+    return "".join("\ufffd" if 0xD800 <= ord(char) <= 0xDFFF else char for char in seed)
 
 
 def hash_seed(text: str) -> int:
@@ -373,7 +381,7 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
         "matchedEvidencePairs": best["score"]["matched_pairs"],
     }
     result["randomisation"] = {
-        "requestedFolds": params["random_folds"], "seed": params["seed"], "selectedRun": best["run"],
+        "requestedFolds": params["random_folds"], "seed": seed_label(params["seed"]), "selectedRun": best["run"],
         "selectedRunWasRandomised": best["randomised"],
         "structures": [{"run": c["run"], "randomised": c["randomised"], "energy": c["result"]["energy"],
                         "comradesScore": c["score"]["score"], "matchedEvidencePairs": c["score"]["matched_pairs"],

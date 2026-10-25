@@ -6,6 +6,7 @@ package views
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,6 +65,7 @@ type App struct {
 
 	Project *model.Project
 	opened  int // counts setProject: pages tell one opening from the next
+	opening int // counts Open calls: only the latest one's reply applies
 	Tasks   map[string]model.Task
 	labels  map[string]string
 
@@ -208,10 +210,15 @@ func (a *App) Open(path string) {
 		return
 	}
 	a.start.status = "Opening " + path + "…"
+	a.opening++
+	seq := a.opening
 	a.Go(func() func() {
 		opened, err := a.B.OpenProject(path)
 		if err != nil {
 			return func() {
+				if seq != a.opening {
+					return // a later Open replaced this one
+				}
 				a.start.status = openError(err)
 				a.Toast("Could not open the project: %v", err)
 			}
@@ -219,6 +226,9 @@ func (a *App) Open(path string) {
 		project := projectFromOpen(path, opened)
 		listed, listErr := a.B.ProjectOp(project.Path, "list_samples", nil)
 		return func() {
+			if seq != a.opening {
+				return
+			}
 			a.start.status = ""
 			if listErr == nil {
 				applySamples(project, listed)
@@ -280,6 +290,7 @@ func (a *App) setProject(p *model.Project) {
 
 // Close returns to the start page.
 func (a *App) Close() {
+	a.opened++ // a reply for the closed project is not this one's
 	a.Project = nil
 	a.Tasks = map[string]model.Task{}
 	a.drawerOpen = false
@@ -572,12 +583,22 @@ func (a *App) TaskList() []model.Task {
 	return out
 }
 
+// errProjectChanged ends a callback whose project is no longer open.
+var errProjectChanged = errors.New("the project was closed or another one opened")
+
+// current reports whether the project opened as generation gen at path is
+// still the open one: replies for an earlier project are dropped.
+func (a *App) current(path string, gen int) bool {
+	return a.Project != nil && a.Project.Path == path && a.opened == gen
+}
+
 // StartTask starts a task; done runs on the main thread with the snapshot.
 func (a *App) StartTask(req core.TaskStartRequest, label string, done func(model.Task, error)) {
 	if a.Project == nil {
 		return
 	}
-	req.ProjectPath = a.Project.Path
+	path, gen := a.Project.Path, a.opened
+	req.ProjectPath = path
 	a.Go(func() func() {
 		snapshot, err := a.B.StartTask(req)
 		var t model.Task
@@ -585,6 +606,13 @@ func (a *App) StartTask(req core.TaskStartRequest, label string, done func(model
 			err = model.Decode(snapshot, &t)
 		}
 		return func() {
+			if !a.current(path, gen) {
+				// it runs in its own project, which lists it when reopened
+				if done != nil {
+					done(t, errProjectChanged)
+				}
+				return
+			}
 			if err == nil {
 				if label != "" {
 					a.labels[t.TaskID] = label
@@ -606,7 +634,7 @@ func (a *App) StartTasksInOrder(reqs []core.TaskStartRequest, labels []string, d
 	if a.Project == nil || len(reqs) == 0 {
 		return
 	}
-	path := a.Project.Path
+	path, gen := a.Project.Path, a.opened
 	for i := range reqs {
 		reqs[i].ProjectPath = path
 	}
@@ -622,6 +650,12 @@ func (a *App) StartTasksInOrder(reqs []core.TaskStartRequest, labels []string, d
 				label = labels[i]
 			}
 			a.post(func() {
+				if !a.current(path, gen) {
+					if done != nil {
+						done(i, t, errProjectChanged)
+					}
+					return
+				}
 				if err == nil {
 					if label != "" {
 						a.labels[t.TaskID] = label
@@ -642,10 +676,13 @@ func (a *App) CancelTask(id string) {
 	if a.Project == nil {
 		return
 	}
-	path := a.Project.Path
+	path, gen := a.Project.Path, a.opened
 	a.Go(func() func() {
 		snapshot, err := a.B.CancelTask(path, id)
 		return func() {
+			if !a.current(path, gen) {
+				return
+			}
 			if err != nil {
 				a.Toast("Could not cancel: %v", err)
 				return

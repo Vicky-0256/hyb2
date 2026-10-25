@@ -103,9 +103,41 @@ def split_interactions(x: np.ndarray, y: np.ndarray, lfc: np.ndarray, padj: np.n
 
 
 def _fmt(value: float) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    """A number as the web writes it: JavaScript's String(number), "NA" for none."""
+    if value is None or math.isnan(float(value)):
         return "NA"
-    return repr(float(value))
+    return js_number(float(value))
+
+
+def js_number(value: float) -> str:
+    """JavaScript's Number.prototype.toString: the shortest round-trip digits,
+    plain notation for 1e-6 <= |value| < 1e21 and exponent form (``1e-7``,
+    ``1.5e+21``) outside it."""
+    if math.isnan(value):
+        return "NaN"
+    if math.isinf(value):
+        return "Infinity" if value > 0 else "-Infinity"
+    if value == 0:
+        return "0"
+    sign = "-" if value < 0 else ""
+    mantissa, _, exponent = ("%r" % abs(value)).partition("e")
+    whole, _, fraction = mantissa.partition(".")
+    body = whole + fraction
+    digits = body.lstrip("0")
+    # n: the decimal point sits n digits after the first significant digit
+    n = len(whole) + int(exponent or 0) - (len(body) - len(digits))
+    digits = digits.rstrip("0")
+    k = len(digits)
+    if k <= n <= 21:
+        text = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        text = digits[:n] + "." + digits[n:]
+    elif -6 < n <= 0:
+        text = "0." + "0" * -n + digits
+    else:
+        e = n - 1
+        text = digits[0] + ("." + digits[1:] if k > 1 else "") + "e" + ("+" if e >= 0 else "-") + str(abs(e))
+    return sign + text
 
 
 def _atomic_text(path: Path, write: Callable[[Any], None]) -> None:

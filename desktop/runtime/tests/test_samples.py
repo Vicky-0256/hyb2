@@ -351,9 +351,9 @@ class RemoveWhileRunningTests(ProjectTestCase):
         self.call("remove_sample", sample_id=sample["id"])
         again = self.add()
         self.assertEqual(again["id"], sample["id"])
-        with self.assertRaises(samples.StaleSampleTask):
+        with self.assertRaises(samples.StaleSampleError):
             mark("index", "succeeded", outputs={"index": "samples/%s/x.sqlite" % sample["id"]})
-        with self.assertRaises(samples.StaleSampleTask):
+        with self.assertRaises(samples.StaleSampleError):
             samples.set_sample_stage(self.project, sample["id"], "map", "running", task_id="t-new", created_at="2000-01-01T00:00:00Z")
         current = self.manifest()["samples"][0]
         self.assertIsNone(current["outputs"]["index"])

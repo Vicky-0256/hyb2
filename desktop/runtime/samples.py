@@ -591,7 +591,7 @@ def remove_sample(root: Path, sample_id: str, *, delete_outputs: bool = False) -
     return {"sample": sample, "outputs_deleted": deleted}
 
 
-class StaleSampleTask(ValueError):
+class StaleSampleError(ValueError):
     """A task updating a sample that was removed (and maybe re-added) since it started."""
 
 
@@ -610,7 +610,7 @@ def set_sample_stage(root: Path, sample_id: str, stage: str, status: str, *, tas
         current = sample.get("stages") if isinstance(sample.get("stages"), dict) else {}
         owned = any(isinstance(v, dict) and v.get("task_id") == task_id for v in current.values())
         if (created_at is not None and sample.get("created_at") != created_at) or (task_id and not claim and not owned):
-            raise StaleSampleTask("sample %s was removed or replaced while this task ran" % sample_id)
+            raise StaleSampleError("sample %s was removed or replaced while this task ran" % sample_id)
         stamp = _now()
         stages = sample.setdefault("stages", {})
         for name, value in [(stage, status)] + list((extra_stages or {}).items()):

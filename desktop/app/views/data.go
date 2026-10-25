@@ -1102,7 +1102,7 @@ func (p *dataPage) removeDialog(c *ui.Context) {
 			var errs []string
 			for _, id := range ids {
 				if _, err := a.B.ProjectOp(path, "remove_sample", core.Obj{"sample_id": id}); err != nil {
-					errs = append(errs, id+": "+err.Error())
+					errs = append(errs, id+": "+ShortError(err.Error()))
 				}
 			}
 			return func() {

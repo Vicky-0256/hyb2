@@ -837,12 +837,12 @@
 /* ------------------------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {
-  .landing::after,
-  .prepared-next-step .button {
+  :root:not([data-motion="full"]) .landing::after,
+  :root:not([data-motion="full"]) .prepared-next-step .button {
     animation: none !important;
   }
 
-  [data-reveal]:not(.is-revealed) {
+  :root:not([data-motion="full"]) [data-reveal]:not(.is-revealed) {
     opacity: 1;
     filter: none;
     transform: none;

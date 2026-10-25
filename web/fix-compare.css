@@ -89,7 +89,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .compare-subnav-item {
+  :root:not([data-motion="full"]) .compare-subnav-item {
     transition: none;
   }
 }
@@ -420,7 +420,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .comparison-row {
+  :root:not([data-motion="full"]) .comparison-row {
     transition: none;
   }
 }

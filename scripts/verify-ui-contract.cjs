@@ -987,3 +987,34 @@ assert.doesNotMatch(analysisPagesSource, /result\.cells\.slice\(\)\.sort/, "the 
 assert.match(analysisPagesSource, /data-comparison-progress/, "the Compare placeholder shows the comparison progress");
 
 process.stdout.write("ui-contract: ok\n");
+
+// The skip link is outside #app and must not enter the hash router.
+{
+  const interaction = fs.readFileSync(path.join(repository, 'web', 'interaction.js'), 'utf8');
+  let click;
+  let focused = false;
+  let scrolled = false;
+  let prevented = false;
+  const main = { focus() { focused = true; }, scrollIntoView() { scrolled = true; } };
+  const sandbox = { document: {
+    addEventListener(type, listener) { assert.equal(type, 'click'); click = listener; },
+    getElementById(id) { assert.equal(id, 'main-content'); return main; }
+  } };
+  vm.runInNewContext(interaction.slice(interaction.indexOf('  // The skip link'), interaction.indexOf('  // Letter after')), sandbox);
+  click({ target: { closest: () => ({}) }, preventDefault() { prevented = true; } });
+  assert.ok(prevented && focused && scrolled, 'skip must focus and scroll without changing the fragment');
+  assert.match(appSource, /<main id="main-content" tabindex="-1" class="landing-main"/);
+  assert.match(appSource, /<main id="main-content" tabindex="-1" class="workspace-main"/);
+  for (const page of ['report', 'interactions', 'contact-map', 'landing']) {
+    let restored;
+    const routeContext = {
+      window: { location: { hash: '#main-content' } },
+      state: { activePage: page }, lastRouteHash: '#/workspace/' + page,
+      restoreRouteHash(hash) { restored = hash; }
+    };
+    vm.runInNewContext(appSource.slice(appSource.indexOf('  function syncRoute()'), appSource.indexOf('  function openDesktopDrawer()')) + '\nsyncRoute();', routeContext);
+    assert.equal(routeContext.state.activePage, page);
+    assert.equal(restored, '#/workspace/' + page);
+  }
+}
+console.log('skip-link-routing: ok');

@@ -202,3 +202,51 @@ assert.equal(toastHoldMs(Array(20).fill("word").join(" ")), 6500, "0.3 s per wor
 assert.equal(toastHoldMs(Array(60).fill("word").join(" ")), 10000, "toasts cap at 10 s");
 
 process.stdout.write("motion-contract: ok\n");
+
+// Explicit choices override the OS, survive reload, and work without storage.
+function motionPreferences(saved, systemReduced, storageBlocked) {
+  const root = { dataset: {} };
+  const media = { matches: systemReduced };
+  const storage = { value: saved };
+  const sandbox = {
+    document: { documentElement: root },
+    window: { matchMedia: () => media, localStorage: {
+      getItem: () => { if (storageBlocked) throw new Error("blocked"); return storage.value; },
+      setItem: (_, value) => { if (storageBlocked) throw new Error("blocked"); storage.value = value; }
+    } },
+    hero: { refresh() {} },
+    CustomEvent: function (type) { this.type = type; }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(motionJs.slice(motionJs.indexOf('  const root ='), motionJs.indexOf('  function cssVar')), sandbox);
+  const start = motionJs.indexOf('    const reduced = root.dataset.motion', motionJs.indexOf('// Display panel motion toggle'));
+  const end = motionJs.indexOf('    hero.refresh();', start) + '    hero.refresh();'.length;
+  sandbox.toggle = { classList: { contains: () => true } };
+  return { root, media, storage,
+    toggle: () => vm.runInContext(motionJs.slice(start, end), sandbox),
+    sync: () => vm.runInContext('syncMotionPreference()', sandbox) };
+}
+for (const systemReduced of [false, true]) {
+  const automatic = motionPreferences(null, systemReduced, false);
+  assert.equal(automatic.root.dataset.motion, systemReduced ? 'reduced' : 'full');
+  automatic.media.matches = !systemReduced;
+  automatic.sync();
+  assert.equal(automatic.root.dataset.motion, systemReduced ? 'full' : 'reduced');
+  for (const saved of ['full', 'reduced']) {
+    const explicit = motionPreferences(saved, systemReduced, false);
+    assert.equal(explicit.root.dataset.motion, saved);
+    explicit.media.matches = !systemReduced;
+    explicit.sync();
+    assert.equal(explicit.root.dataset.motion, saved, 'system changes must not replace an explicit preference');
+    explicit.toggle();
+    const next = saved === 'full' ? 'reduced' : 'full';
+    assert.equal(explicit.root.dataset.motion, next);
+    assert.equal(motionPreferences(explicit.storage.value, systemReduced, false).root.dataset.motion, next);
+  }
+}
+const noStorage = motionPreferences(null, true, true);
+noStorage.toggle();
+assert.equal(noStorage.root.dataset.motion, 'full');
+noStorage.sync();
+assert.equal(noStorage.root.dataset.motion, 'full');
+console.log('motion-preferences: ok');

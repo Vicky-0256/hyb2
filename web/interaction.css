@@ -664,10 +664,10 @@ body.is-scrolled .workspace-header {
 /* ------------------------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {
-  .cmdk-panel,
-  .cmdk-backdrop,
-  .cmdk-glider,
-  .chord-hud {
+  :root:not([data-motion="full"]) .cmdk-panel,
+  :root:not([data-motion="full"]) .cmdk-backdrop,
+  :root:not([data-motion="full"]) .cmdk-glider,
+  :root:not([data-motion="full"]) .chord-hud {
     transition: none;
   }
 }

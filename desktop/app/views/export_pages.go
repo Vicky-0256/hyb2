@@ -179,29 +179,35 @@ func (p *comparePage) exportTarget() (*comparisonEntry, *comparisonResult, cmpCo
 	return e, p.cache[p.selectedID], p.context(e), true
 }
 
+// exportInteractionsTSV writes the merged interactions as the web's
+// interactions.tsv: the up rows then the down rows, in the result's order,
+// numbers as JavaScript prints them.
 func (p *comparePage) exportInteractionsTSV() {
-	e, result, ctx, ok := p.exportTarget()
+	_, result, ctx, ok := p.exportTarget()
 	if !ok {
 		return
 	}
 	rows := append([]cmpInteraction(nil), result.Interactions...)
-	comments := []string{"HYB2 differential test " + e.ID + " · " + ctx.LabelA + " (A) vs " + ctx.LabelB + " (B)",
-		"Genes: " + strings.Join(e.Genes, ", "), cmpParamsText(e) + " · log2FoldChange = A / B; 10-nt cells merged into interactions"}
-	render := func() ([]byte, error) {
-		sort.SliceStable(rows, func(i, j int) bool { return cmpPadj(rows[i].Padj) < cmpPadj(rows[j].Padj) })
-		out := make([][]string, len(rows))
-		for i, r := range rows {
-			direction := "higher in A"
-			if r.Direction == "down" {
-				direction = "higher in B"
-			}
-			out[i] = []string{r.Direction, direction, strconv.Itoa(r.X), strconv.Itoa(r.X + 9), strconv.Itoa(r.Y), strconv.Itoa(r.Y + 9),
-				tsvFloat(r.LFC), tsvFloat(r.Padj), tsvFloat(r.BaseMean)}
-		}
-		header := []string{"direction", "meaning", "arm1_start", "arm1_end", "arm2_start", "arm2_end", "log2FoldChange", "padj", "baseMean"}
-		return tsvTable{Comments: comments, Header: header, Rows: out}.Bytes()
-	}
+	render := func() ([]byte, error) { return cmpInteractionsTSV(rows), nil }
 	saveExport(p.a, "Export merged interactions", exportName(".tsv", ctx.LabelA, "vs", ctx.LabelB, "interactions"), render)
+}
+
+// cmpInteractionsTSV is the web's interactionsToTsv: direction x y
+// log2FoldChange padj baseMean, "NA" for a missing number.
+func cmpInteractionsTSV(rows []cmpInteraction) []byte {
+	num := func(v *float64) string {
+		if v == nil || math.IsNaN(*v) {
+			return "NA"
+		}
+		return jsNumber(*v)
+	}
+	sorted := append([]cmpInteraction(nil), rows...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Direction == "up" && sorted[j].Direction != "up" })
+	out := [][]string{{"direction", "x", "y", "log2FoldChange", "padj", "baseMean"}}
+	for _, r := range sorted {
+		out = append(out, []string{r.Direction, strconv.Itoa(r.X), strconv.Itoa(r.Y), num(r.LFC), num(r.Padj), num(r.BaseMean)})
+	}
+	return webTSV(out)
 }
 
 func (p *comparePage) exportMapSVG() {

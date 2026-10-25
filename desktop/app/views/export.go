@@ -110,6 +110,97 @@ func tsvFloat(v *float64) string {
 	return strconv.FormatFloat(*v, 'g', 6, 64)
 }
 
+// webTSV is a table as the web writes one: cells joined by tabs, rows by
+// newlines, no quoting and no comment lines.
+func webTSV(rows [][]string) []byte {
+	var b strings.Builder
+	for _, row := range rows {
+		b.WriteString(strings.Join(row, "\t"))
+		b.WriteByte('\n')
+	}
+	return []byte(b.String())
+}
+
+// jsNumber is JavaScript's String(number): the shortest digits that read
+// back as v, plain for 1e-6 <= |v| < 1e21 and exponent form outside it
+// ("1e-7", "1.5e+21").
+func jsNumber(v float64) string {
+	switch {
+	case math.IsNaN(v):
+		return "NaN"
+	case math.IsInf(v, 1):
+		return "Infinity"
+	case math.IsInf(v, -1):
+		return "-Infinity"
+	case v == 0:
+		return "0"
+	}
+	sign := ""
+	if v < 0 {
+		sign, v = "-", -v
+	}
+	// d.ddddde±x: the digits, and the decimal point n digits after the first
+	mant, exp, _ := strings.Cut(strconv.FormatFloat(v, 'e', -1, 64), "e")
+	digits := strings.Replace(mant, ".", "", 1)
+	e, _ := strconv.Atoi(exp)
+	n, k := e+1, len(digits)
+	switch {
+	case k <= n && n <= 21:
+		return sign + digits + strings.Repeat("0", n-k)
+	case 0 < n && n <= 21:
+		return sign + digits[:n] + "." + digits[n:]
+	case -6 < n && n <= 0:
+		return sign + "0." + strings.Repeat("0", -n) + digits
+	}
+	out := digits[:1]
+	if k > 1 {
+		out += "." + digits[1:]
+	}
+	if e >= 0 {
+		return sign + out + "e+" + strconv.Itoa(e)
+	}
+	return sign + out + "e" + strconv.Itoa(e)
+}
+
+// jsFixed is JavaScript's Number.prototype.toFixed for |v| < 1e21: the
+// exact value rounded half away from zero at d decimals, with -0 as "0".
+func jsFixed(v float64, d int) string {
+	if math.IsNaN(v) {
+		return "NaN"
+	}
+	if math.Abs(v) >= 1e21 || math.IsInf(v, 0) {
+		return jsNumber(v)
+	}
+	sign := ""
+	if v < 0 {
+		sign = "-"
+	}
+	v = math.Abs(v) // -0 prints as "0", as in JavaScript
+	// the exact decimal expansion of v (a float64 has at most 1074 decimals)
+	exact := strconv.FormatFloat(v, 'f', 1100, 64)
+	whole, frac, _ := strings.Cut(exact, ".")
+	keep := whole + frac[:d]
+	if frac[d] >= '5' {
+		// half-way or more of the exact value rounds up
+		b := []byte(keep)
+		i := len(b) - 1
+		for ; i >= 0 && b[i] == '9'; i-- {
+			b[i] = '0'
+		}
+		if i < 0 {
+			b = append([]byte{'1'}, b...)
+		} else {
+			b[i]++
+		}
+		keep = string(b)
+	}
+	head, tail := keep[:len(keep)-d], keep[len(keep)-d:]
+	if d == 0 {
+		return sign + head
+	}
+	return sign + head + "." + tail
+}
+
 // ---- SVG
 
 // svgNum writes a coordinate with at most one decimal.

@@ -111,12 +111,30 @@ func TestCompareExportTSVAndSVG(t *testing.T) {
 	if name != "AFR__2_merged_vs_BRA__2_merged_interactions.tsv" {
 		t.Fatalf("name %q", name)
 	}
-	records := tsvRecords(t, text)
-	if len(records) != 301 || records[1][2] != "5720" || records[1][1] != "higher in B" {
-		t.Fatalf("%d records, first %q", len(records), records[1])
+	// the web's interactions.tsv: no comments, up rows then down rows in the
+	// result's order, numbers as JavaScript's String(number)
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	cp := a.PageFor("compare").(*comparePage)
+	result := cp.cache[cp.selectedID]
+	if len(lines) != 301 || lines[0] != "direction\tx\ty\tlog2FoldChange\tpadj\tbaseMean" {
+		t.Fatalf("%d lines, header %q", len(lines), lines[0])
 	}
-	if !strings.Contains(text, "# HYB2 differential test compare-1791998444625 · AFR (2 merged) (A) vs BRA (2 merged) (B)") {
-		t.Fatalf("comments %.300q", text)
+	var up, down []cmpInteraction
+	for _, r := range result.Interactions {
+		if r.Direction == "up" {
+			up = append(up, r)
+		} else {
+			down = append(down, r)
+		}
+	}
+	for i, r := range append(up, down...) {
+		want := strings.Join([]string{r.Direction, strconv.Itoa(r.X), strconv.Itoa(r.Y), jsNumber(*r.LFC), jsNumber(*r.Padj), jsNumber(*r.BaseMean)}, "\t")
+		if lines[i+1] != want {
+			t.Fatalf("line %d %q, want %q", i+1, lines[i+1], want)
+		}
+	}
+	if len(up) == 0 || len(down) == 0 {
+		t.Fatalf("%d up, %d down", len(up), len(down))
 	}
 	_, svg := exportClick(t, a, tt, "Export SVG…")
 	xmlWellFormed(t, svg)

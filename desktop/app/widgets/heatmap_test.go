@@ -1,6 +1,7 @@
 package widgets
 
 import (
+	"image"
 	"image/png"
 	"math/rand"
 	"os"
@@ -73,5 +74,43 @@ func TestMinCellIsHitWhereItShows(t *testing.T) {
 	}
 	if h.hit(5011, 5005, 0, 0) != -1 || h.hit(5009, 5005, 0, 0) != 0 {
 		t.Fatal("unpadded hit")
+	}
+}
+
+// Cells are written where they are, later ones on top (blended), and a
+// zoomed window still shows a large cell that starts outside it.
+func TestHeatmapRasterPlacesCells(t *testing.T) {
+	red, blue := ui.RGB(255, 0, 0), ui.RGBA(0, 0, 255, 0.5)
+	cells := []Cell{
+		{X: 0, Y: 0, W: 2000, H: 2000, Color: red}, // starts far left of the zoom below
+		{X: 1500, Y: 1500, W: 100, H: 100, Color: blue},
+		{X: 9000, Y: 9000, W: 10, H: 10, Color: red},
+	}
+	ix := newCellIndex(cells, 10000, 10000, 1)
+	at := func(img *image.RGBA, x, y int) [4]uint8 {
+		i := img.PixOffset(x, y)
+		return [4]uint8{img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3]}
+	}
+	whole := image.NewRGBA(image.Rect(0, 0, 100, 100))
+	ix.raster(whole, cells, Window{0, 10000, 0, 10000}, 0)
+	if got := at(whole, 5, 5); got != [4]uint8{255, 0, 0, 255} {
+		t.Fatalf("big cell %v", got)
+	}
+	if got := at(whole, 15, 15); got != [4]uint8{127, 0, 128, 255} {
+		t.Fatalf("blue over red %v", got)
+	}
+	if got := at(whole, 90, 90); got[3] != 255 {
+		t.Fatalf("a cell smaller than a pixel is drawn one pixel wide: %v", got)
+	}
+	if got := at(whole, 50, 50); got[3] != 0 {
+		t.Fatalf("empty space painted %v", got)
+	}
+	zoom := image.NewRGBA(image.Rect(0, 0, 100, 100))
+	ix.raster(zoom, cells, Window{1900, 2100, 1900, 2100}, 0)
+	if got := at(zoom, 10, 10); got != [4]uint8{255, 0, 0, 255} {
+		t.Fatalf("zoomed: big cell from outside the window %v", got)
+	}
+	if got := at(zoom, 90, 90); got[3] != 0 {
+		t.Fatalf("zoomed: past the big cell %v", got)
 	}
 }

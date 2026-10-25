@@ -4,6 +4,7 @@ package widgets
 
 import (
 	"fmt"
+	"image"
 	"math"
 
 	"github.com/egoist/mygo/ui"
@@ -22,8 +23,10 @@ type Window struct{ X0, X1, Y0, Y1 float64 }
 // Heatmap is the state of one contact-map view: its cells, the zoom window
 // and the cell picked. Keep it in the page's state; Show builds it.
 //
-// Cells are painted into a GPU canvas once per change of data, window or
+// Cells are rasterized into a bitmap once per change of data, window or
 // size, so a map of hundreds of thousands of cells costs one image a frame.
+// They are written as pixels, not painted as shapes: at a million cells a
+// painted rectangle each made every zoom or drag frame take 200 ms.
 type Heatmap struct {
 	cells   []Cell
 	version int
@@ -31,7 +34,10 @@ type Heatmap struct {
 	lenY    float64
 	view    Window
 
-	canvas *ui.Canvas
+	index  cellIndex // of cells, for the version drawn
+	bitmap *ui.Bitmap
+	pix    [2]*image.RGBA // alternate: Bitmap.Update keeps the last one shown
+	flip   int
 	drawn  struct {
 		version int
 		view    Window
@@ -175,34 +181,128 @@ func (h *Heatmap) Show(c *ui.Context, size float32, label string) HeatEvent {
 		p.Fill(area, background, 2)
 		scale := p.Scale()
 		w, hgt := int(math.Ceil(float64(area.W*scale))), int(math.Ceil(float64(area.H*scale)))
-		if h.canvas == nil || h.drawn.w != w || h.drawn.h != hgt {
-			h.canvas = ui.NewCanvas(w, hgt)
+		if h.drawn.w != w || h.drawn.h != hgt {
+			h.pix = [2]*image.RGBA{}
 			h.drawn.version = -1
 		}
-		minCell := float64(h.MinCell * scale)
-		if h.drawn.version != h.version || h.drawn.view != h.view || h.drawn.dark != dark {
+		if h.bitmap == nil || h.drawn.version != h.version || h.drawn.view != h.view || h.drawn.dark != dark {
 			h.drawn.version, h.drawn.view, h.drawn.w, h.drawn.h, h.drawn.dark = h.version, h.view, w, hgt, dark
-			v := h.view
-			sx := float64(w) / (v.X1 - v.X0)
-			sy := float64(hgt) / (v.Y1 - v.Y0)
-			h.canvas.Draw(p, func(cp *ui.Painter) {
-				for _, cell := range h.cells {
-					if cell.X+cell.W < v.X0 || cell.X > v.X1 || cell.Y+cell.H < v.Y0 || cell.Y > v.Y1 {
-						continue
-					}
-					cw, ch := math.Max(cell.W*sx, math.Max(minCell, 1)), math.Max(cell.H*sy, math.Max(minCell, 1))
-					x := (cell.X-v.X0)*sx - (cw-cell.W*sx)/2
-					y := (cell.Y-v.Y0)*sy - (ch-cell.H*sy)/2
-					cp.Fill(ui.Rect{X: float32(x), Y: float32(y), W: float32(cw), H: float32(ch)}, cell.Color, 0)
-				}
-			})
+			h.flip ^= 1
+			img := h.pix[h.flip]
+			if img == nil {
+				img = image.NewRGBA(image.Rect(0, 0, w, hgt))
+				h.pix[h.flip] = img
+			} else {
+				clear(img.Pix)
+			}
+			if h.index.version != h.version {
+				h.index = newCellIndex(h.cells, h.lenX, h.lenY, h.version)
+			}
+			h.index.raster(img, h.cells, h.view, float64(h.MinCell*scale))
+			if h.bitmap == nil {
+				h.bitmap = ui.NewBitmap(img)
+			} else {
+				h.bitmap.Update(img)
+			}
 		}
-		p.Image(h.canvas.Bitmap(), area, ui.FillBox)
+		p.Image(h.bitmap, area, ui.FillBox)
 		p.Stroke(area, t.Border, 2, 1)
 		h.drawMarks(p, area, t)
 		h.drawAxes(p, r, area, t)
 	})
 	return event
+}
+
+// tileGrid is the side of cellIndex's grid of tiles.
+const tileGrid = 128
+
+// cellIndex buckets cells into a grid of tiles over the map: a zoomed frame
+// tests a byte pair per cell (is its tile shown?) instead of the cell, and
+// still writes the cells in their order, which decides what is on top.
+type cellIndex struct {
+	version      int
+	tile         []uint16 // per cell
+	tileW, tileH float64
+	maxW, maxH   float64 // largest cell, how far one reaches past its tile
+}
+
+func newCellIndex(cells []Cell, lenX, lenY float64, version int) cellIndex {
+	ix := cellIndex{version: version, tile: make([]uint16, len(cells)), tileW: lenX / tileGrid, tileH: lenY / tileGrid}
+	for i, cell := range cells {
+		ix.maxW, ix.maxH = math.Max(ix.maxW, cell.W), math.Max(ix.maxH, cell.H)
+		ix.tile[i] = uint16(ix.row(cell.Y)*tileGrid + ix.col(cell.X))
+	}
+	return ix
+}
+
+func (ix *cellIndex) col(x float64) int { return min(max(int(x/ix.tileW), 0), tileGrid-1) }
+func (ix *cellIndex) row(y float64) int { return min(max(int(y/ix.tileH), 0), tileGrid-1) }
+
+// raster writes the cells shown in window v over img (rasterCells).
+func (ix *cellIndex) raster(img *image.RGBA, cells []Cell, v Window, minCell float64) {
+	// A cell drawn minCell pixels wide reaches past its own size.
+	padX := minCell * (v.X1 - v.X0) / float64(img.Rect.Dx())
+	padY := minCell * (v.Y1 - v.Y0) / float64(img.Rect.Dy())
+	c0, c1 := ix.col(v.X0-ix.maxW-padX), ix.col(v.X1+padX)
+	r0, r1 := ix.row(v.Y0-ix.maxH-padY), ix.row(v.Y1+padY)
+	if (c1-c0+1)*(r1-r0+1) > tileGrid*tileGrid/2 {
+		rasterCells(img, cells, v, minCell, nil, nil)
+		return
+	}
+	shown := new([tileGrid * tileGrid]bool)
+	for r := r0; r <= r1; r++ {
+		for c := c0; c <= c1; c++ {
+			shown[r*tileGrid+c] = true
+		}
+	}
+	rasterCells(img, cells, v, minCell, ix.tile, shown)
+}
+
+// rasterCells writes the cells inside window v (with tile, only those in a
+// shown tile) over img, in order (later on top, blended source-over), each
+// at least minCell pixels and one pixel wide, centred on where it is.
+func rasterCells(img *image.RGBA, cells []Cell, v Window, minCell float64, tile []uint16, shown *[tileGrid * tileGrid]bool) {
+	w, hgt := img.Rect.Dx(), img.Rect.Dy()
+	sx := float64(w) / (v.X1 - v.X0)
+	sy := float64(hgt) / (v.Y1 - v.Y0)
+	least := math.Max(minCell, 1)
+	for i := range cells {
+		if tile != nil && !shown[tile[i]] {
+			continue
+		}
+		cell := &cells[i]
+		if cell.X+cell.W < v.X0 || cell.X > v.X1 || cell.Y+cell.H < v.Y0 || cell.Y > v.Y1 || cell.Color.A == 0 {
+			continue
+		}
+		cw, ch := math.Max(cell.W*sx, least), math.Max(cell.H*sy, least)
+		x := (cell.X-v.X0)*sx - (cw-cell.W*sx)/2
+		y := (cell.Y-v.Y0)*sy - (ch-cell.H*sy)/2
+		x0, y0 := int(math.Round(x)), int(math.Round(y))
+		x1, y1 := max(int(math.Round(x+cw)), x0+1), max(int(math.Round(y+ch)), y0+1)
+		x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, w), min(y1, hgt)
+		if x0 >= x1 || y0 >= y1 {
+			continue
+		}
+		// image.RGBA holds premultiplied colour
+		a := uint32(cell.Color.A)
+		r, g, b := uint32(cell.Color.R)*a/255, uint32(cell.Color.G)*a/255, uint32(cell.Color.B)*a/255
+		rest := 255 - a
+		for py := y0; py < y1; py++ {
+			row := img.Pix[py*img.Stride+x0*4 : py*img.Stride+x1*4]
+			if rest == 0 {
+				for i := 0; i < len(row); i += 4 {
+					row[i], row[i+1], row[i+2], row[i+3] = uint8(r), uint8(g), uint8(b), 255
+				}
+				continue
+			}
+			for i := 0; i < len(row); i += 4 {
+				row[i] = uint8(r + uint32(row[i])*rest/255)
+				row[i+1] = uint8(g + uint32(row[i+1])*rest/255)
+				row[i+2] = uint8(b + uint32(row[i+2])*rest/255)
+				row[i+3] = uint8(a + uint32(row[i+3])*rest/255)
+			}
+		}
+	}
 }
 
 func (h *Heatmap) toGene(plot ui.Rect, px, py float32) (float64, float64) {

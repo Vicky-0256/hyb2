@@ -76,6 +76,17 @@ class ServeEncodingTests(unittest.TestCase):
 
 
 class ComradesSeedTests(unittest.TestCase):
+    def test_an_endless_gzip_hyb_line_fails_instead_of_loading_whole(self):
+        import gzip
+        from desktop.runtime import comrades
+        from hyb2analysis import hybfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.hyb.gz"
+            with gzip.open(path, "wb") as out:
+                out.write(b"A" * (hybfile.MAX_LINE + 1))
+            with self.assertRaisesRegex(ValueError, "longer than"):
+                comrades.evidence_arms([path], "G", "ACGU", 1, 4)
+
     def test_seed_is_trimmed_and_cut_as_the_web(self):
         from desktop.runtime import comrades
         # String(seed).trim().slice(0, 128): UTF-16 units, JavaScript whitespace

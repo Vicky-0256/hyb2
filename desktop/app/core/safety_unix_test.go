@@ -152,3 +152,26 @@ func TestRuntimeTellsPythonWhichLinksAreTrusted(t *testing.T) {
 		t.Fatal("the trust operations are not allowed")
 	}
 }
+
+// TestPlantedRunsSymlinkIsRefused: runs/ of a copied project may be a
+// symlink, to elsewhere in the project or outside it; no task is started there.
+func TestPlantedRunsSymlinkIsRefused(t *testing.T) {
+	base := t.TempDir()
+	project := filepath.Join(base, "p.hyb2proj")
+	for _, target := range []string{filepath.Join(project, "inputs"), filepath.Join(base, "outside")} {
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runs := filepath.Join(project, "runs")
+		_ = os.Remove(runs)
+		if err := os.Symlink(target, runs); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := NewScheduler().prepareRunDir(project, "task-1"); err == nil {
+			t.Fatalf("runs -> %s accepted", target)
+		}
+		if entries, _ := os.ReadDir(target); len(entries) != 0 {
+			t.Fatalf("a run directory was created in %s", target)
+		}
+	}
+}

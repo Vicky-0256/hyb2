@@ -22,12 +22,16 @@ ValueError: index of SUB_REP1 is unreadable`
 
 func TestShortError(t *testing.T) {
 	for in, want := range map[string]string{
-		"":                       "",
-		"boom":                   "boom",
-		"first line\nsecond":     "first line",
-		"\n  \nlate start\nmore": "late start",
-		pyTraceback:              "compute sidecar exited unexpectedly: ValueError: index of SUB_REP1 is unreadable",
-		strings.Repeat("x", 300): strings.Repeat("x", 160) + "…",
+		"":                                      "",
+		"boom":                                  "boom",
+		"first line\nsecond":                    "first line",
+		"\n  \nlate start\nmore":                "late start",
+		pyTraceback:                             "compute sidecar exited unexpectedly: index of SUB_REP1 is unreadable",
+		"ValueError: sample does not exist: R1": "sample does not exist: R1",
+		"samples.StaleSampleError: sample R1 was removed":        "sample R1 was removed",
+		"bad value: ValueError: kept when not leading":           "bad value: ValueError: kept when not leading",
+		"Traceback (most recent call last):\n  x\nOSError: disk": "disk",
+		strings.Repeat("x", 300):                                 strings.Repeat("x", 160) + "…",
 	} {
 		if got := ShortError(in); got != want {
 			t.Errorf("ShortError(%.40q) = %q, want %q", in, got, want)
@@ -58,7 +62,7 @@ func TestFailedTaskToastSaysWhy(t *testing.T) {
 	a.storeTask(model.Task{TaskID: "t1", Kind: "validate_project", Status: "running"})
 	a.storeTask(model.Task{TaskID: "t1", Kind: "validate_project", Status: "failed", Error: pyTraceback})
 	last := a.toasts[len(a.toasts)-1].Text
-	if !strings.HasSuffix(last, " failed: compute sidecar exited unexpectedly: ValueError: index of SUB_REP1 is unreadable") {
+	if !strings.HasSuffix(last, " failed: compute sidecar exited unexpectedly: index of SUB_REP1 is unreadable") {
 		t.Fatalf("toast %q", last)
 	}
 }
@@ -76,7 +80,7 @@ func TestDataPageFailedStageSaysWhy(t *testing.T) {
 	waitFlush(a)
 	tt := ui.NewTester(a.View, 1100, 720)
 	tt.Frame()
-	dataExpect(t, tt, "Retry failed (1)", "hyb failed", "RuntimeError: bowtie2 index is missing")
+	dataExpect(t, tt, "Retry failed (1)", "hyb failed", "bowtie2 index is missing")
 	snapshot(t, tt, "data-failed-reason")
 	if tt.HasText("Resume interrupted (1)") {
 		t.Fatal("failed sample called interrupted")
@@ -95,7 +99,7 @@ func TestQCErrorShowsOneLine(t *testing.T) {
 	f.queryErr = errors.New(pyTraceback)
 	f.mu.Unlock()
 	dataClick(t, tt, a, "Retry")
-	dataExpect(t, tt, "Could not load the counts: compute sidecar exited unexpectedly: ValueError: index of SUB_REP1 is unreadable", "Retry")
+	dataExpect(t, tt, "Could not load the counts: compute sidecar exited unexpectedly: index of SUB_REP1 is unreadable", "Retry")
 	for _, text := range tt.Texts() {
 		if strings.Contains(text, "Traceback") {
 			t.Fatalf("traceback on the page: %q", text)

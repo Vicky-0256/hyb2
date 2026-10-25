@@ -157,7 +157,7 @@ def _build(con: sqlite3.Connection, hyb: Path, total_bytes: int, progress) -> Di
     line_no = 0
     con.execute("BEGIN")
     with open(hyb, "rb", buffering=1 << 20) as handle:
-        for line in handle:
+        for line in hybfile.lines(handle):
             line_no += 1
             here = offset
             offset += len(line)

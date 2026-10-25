@@ -74,7 +74,7 @@ def _hybfile():
 def _lines(path: Path) -> Iterable[bytes]:
     opener = gzip.open if path.name.endswith(".gz") else open
     with opener(path, "rb") as handle:
-        yield from handle
+        yield from _hybfile().lines(handle)
 
 
 def evidence_arms(hyb_paths: Sequence[Path], gene: str, sequence: str, start: int, end: int,

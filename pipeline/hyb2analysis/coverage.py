@@ -30,6 +30,8 @@ from typing import BinaryIO, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 
+from . import hybfile
+
 PathLike = Union[str, "os.PathLike[str]"]
 
 BIN_SIZE = 10
@@ -131,7 +133,7 @@ def bwk_order(hashes: np.ndarray) -> np.ndarray:
 
 def _iter_matching(handle: BinaryIO, gene: bytes):
     """Yield (s1, e1, s2, e2) byte fields of hybrids with $4 == $10 == gene."""
-    for line in handle:
+    for line in hybfile.lines(handle):
         parts = line.split(None, 14)
         if len(parts) < 14 or parts[3] != gene or parts[9] != gene:
             continue
@@ -222,7 +224,7 @@ def _contact_lines_fast(path: PathLike, gene: bytes) -> Iterable[bytes]:
 def _contact_lines_reference(path: PathLike, gene: bytes) -> Iterable[bytes]:
     order: dict = {}
     with open(path, "rb") as handle:
-        for line in handle:
+        for line in hybfile.lines(handle):
             parts = line.split()
             field = lambda n: parts[n - 1] if n <= len(parts) else b""  # noqa: E731
             if field(4) != gene or field(10) != gene:

@@ -670,7 +670,20 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 			if len(selected) > 0 {
 				removeLabel = "Remove selected"
 			}
-			if ui.Button(c, removeLabel).Disabled(len(selected) == 0).Clicked() {
+			// The runtime refuses too: a running task would keep writing into
+			// a sample re-added under the same name.
+			busy := 0
+			for _, s := range selected {
+				if _, active := p.activeTask(s); active {
+					busy++
+				}
+			}
+			remove := ui.Button(c, removeLabel).Disabled(len(selected) == 0 || busy > 0)
+			if busy > 0 {
+				remove = remove.Tooltip(fmt.Sprintf("%s queued or running: cancel or wait before removing",
+					dataPlural(busy, "selected sample is", "selected samples are")))
+			}
+			if remove.Clicked() {
 				p.removeIDs = nil
 				for _, s := range selected {
 					p.removeIDs = append(p.removeIDs, s.ID)
@@ -1089,7 +1102,7 @@ func (p *dataPage) removeDialog(c *ui.Context) {
 			var errs []string
 			for _, id := range ids {
 				if _, err := a.B.ProjectOp(path, "remove_sample", core.Obj{"sample_id": id}); err != nil {
-					errs = append(errs, id+": "+err.Error())
+					errs = append(errs, id+": "+ShortError(err.Error()))
 				}
 			}
 			return func() {

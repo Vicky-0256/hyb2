@@ -8,6 +8,7 @@ it. Without HYB2_TRUSTED_LINKS (tests, command line) nothing is checked.
 import gzip
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -98,6 +99,28 @@ class TrustedLinksTest(unittest.TestCase):
             inside = self.project / "data.hyb"
             inside.write_text("x\n", encoding="utf-8")
             self.assertEqual(_input_file(self.project, str(inside), "inside"), inside.resolve())
+
+    def test_a_copied_file_that_is_a_symlink_out_of_the_project_is_not_opened(self):
+        inside = self.project / "data"
+        inside.mkdir()
+        (inside / "ref.fasta").write_text(">Gene_A d\nACGU\n", encoding="utf-8")
+        reads = inside / "s1.fastq.gz"
+        reads.write_bytes(self.reads.read_bytes())
+        self.call("add_sample", self.here, source=str(reads), reference=str(inside / "ref.fasta"))
+        self.assertEqual({r["mode"] for r in (self.manifest()["references"][0], self.manifest()["samples"][0]["reads"])},
+                         {"copied"})
+        # The received project swaps the copied file (or a parent folder) for a link outside it.
+        (inside / "ref.fasta").unlink()
+        os.symlink(self.fasta, inside / "ref.fasta")
+        reference_id = self.manifest()["references"][0]["id"]
+        with self.assertRaisesRegex(ValueError, "outside the project folder"):
+            self.call("read_reference_sequence", self.here, reference_id=reference_id, name="Gene_A")
+        statuses = {item["path"]: item for item in self.call("check_inputs", self.here)["items"]}
+        self.assertEqual(statuses["data/ref.fasta"]["status"], "missing", statuses)
+        shutil.rmtree(inside)
+        os.symlink(self.data, inside)
+        statuses = self.call("check_inputs", self.here)["items"]
+        self.assertEqual({item["status"] for item in statuses}, {"missing"}, statuses)
 
     def test_a_dry_run_import_trusts_nothing(self):
         sheet = self.data / "sheet.tsv"

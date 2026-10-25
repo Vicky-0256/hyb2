@@ -154,6 +154,30 @@ class FileRecordTests(ProjectTestCase):
         expected = hashlib.sha256(b"%d\n" % len(payload) + payload[: samples.MiB] + payload[-samples.MiB:]).hexdigest()
         self.assertEqual(samples.quick_hash(big), expected)
 
+    def test_a_gzip_with_one_endless_line_is_streamed_and_capped(self):
+        from unittest import mock
+        bomb = self.data / "bomb.fa.gz"
+        line = "A" * (3 * samples.MAX_HEADER + 5)
+        with gzip.open(bomb, "wt") as out:
+            out.write(">Gene_A d\n%s\n>Gene_B\nCC" % line)
+        self.assertEqual(samples.read_fasta_sequences(bomb), [{"name": "Gene_A", "length": len(line)},
+                                                              {"name": "Gene_B", "length": 2}])
+        self.call("add_sample", source=str(self.reads()), reference=str(bomb))
+        reference_id = self.manifest()["references"][0]["id"]
+        found = self.call("read_reference_sequence", reference_id=reference_id, name="Gene_B")
+        self.assertEqual((found["length"], found["sequence"]), (2, "CC"))
+        with mock.patch.object(samples, "MAX_REFERENCE_SEQUENCE", len(line) - 1):
+            with self.assertRaisesRegex(ValueError, "too large to read whole"):
+                self.call("read_reference_sequence", reference_id=reference_id, name="Gene_A")
+        with mock.patch.object(samples, "MAX_DECOMPRESSED", samples.MiB):
+            with self.assertRaisesRegex(ValueError, "decompresses to more than 1 MiB"):
+                samples.read_fasta_sequences(bomb)
+        header = self.data / "header.fa.gz"
+        with gzip.open(header, "wt") as out:
+            out.write(">" + "x" * samples.MAX_HEADER + "\nACGU\n")
+        with self.assertRaisesRegex(ValueError, "header line is longer"):
+            samples.read_fasta_sequences(header)
+
     def test_format_detection_includes_gz(self):
         cases = {"a.fastq.gz": "fastq.gz", "a.FQ.GZ": "fastq.gz", "a.fasta.gz": "fasta.gz", "a.fa.gz": "fasta.gz",
                  "a.fastq": "fastq", "a.fq": "fastq", "a.fa": "fasta", "a.sam": "sam", "a.hyb": "hyb"}
@@ -287,6 +311,53 @@ class FileRecordTests(ProjectTestCase):
         self.assertGreater(result["volumes"][0]["free_bytes"], 0)
         with self.assertRaises(ValueError):
             self.call("disk_estimate", sample_ids=["missing"])
+
+
+class RemoveWhileRunningTests(ProjectTestCase):
+    def add(self):
+        self.call("add_sample", source=str(self.reads()), reference=str(self.reference()))
+        return self.manifest()["samples"][0]
+
+    def task(self, task_id, status, sample_id=None):
+        run = self.project / "runs" / task_id
+        run.mkdir(parents=True)
+        (run / "status.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+        if sample_id:
+            (run / "task-start.json").write_text(json.dumps({"kind": "sample_pipeline", "sample_id": sample_id}), encoding="utf-8")
+
+    def test_a_sample_with_a_live_task_is_not_removed(self):
+        sample = self.add()
+        samples.set_sample_stage(self.project, sample["id"], "map", "running", task_id="t-live")
+        self.task("t-live", "running")
+        with self.assertRaisesRegex(ValueError, "queued or running task"):
+            self.call("remove_sample", sample_id=sample["id"])
+        # Its task ended without updating the stage (app quit): removable.
+        (self.project / "runs" / "t-live" / "status.json").write_text('{"status": "interrupted"}', encoding="utf-8")
+        self.call("remove_sample", sample_id=sample["id"])
+        self.assertEqual(self.manifest()["samples"], [])
+
+    def test_a_queued_task_that_has_not_started_blocks_removal(self):
+        sample = self.add()
+        self.task("t-queued", "queued", sample["id"])
+        self.task("t-other", "queued", "someone-else")
+        with self.assertRaisesRegex(ValueError, "queued or running task"):
+            self.call("remove_sample", sample_id=sample["id"])
+
+    def test_a_stale_task_cannot_mark_a_re_added_sample(self):
+        from desktop.runtime.sample_run import _stage_writer
+        sample = self.add()
+        mark = _stage_writer(self.project, sample, "t-old")
+        mark("index", "running")
+        self.call("remove_sample", sample_id=sample["id"])
+        again = self.add()
+        self.assertEqual(again["id"], sample["id"])
+        with self.assertRaises(samples.StaleSampleError):
+            mark("index", "succeeded", outputs={"index": "samples/%s/x.sqlite" % sample["id"]})
+        with self.assertRaises(samples.StaleSampleError):
+            samples.set_sample_stage(self.project, sample["id"], "map", "running", task_id="t-new", created_at="2000-01-01T00:00:00Z")
+        current = self.manifest()["samples"][0]
+        self.assertIsNone(current["outputs"]["index"])
+        self.assertNotEqual((current.get("stages") or {}).get("index", {}).get("task_id"), "t-old")
 
 
 class SampleSheetTests(ProjectTestCase):

@@ -137,7 +137,7 @@ func (p *qcPage) ensureStats() {
 	p.loading, p.err = true, ""
 	path := a.Project.Path
 	a.Go(func() func() {
-		result, err := a.B.Query(path, "analysis_summary", core.Obj{"sample_ids": ids})
+		result, err := a.B.Query(path, "analysis_summary", core.Obj{"sample_ids": ids, "pairs": false})
 		var parts []qcStats
 		if err == nil {
 			object, _ := result.(map[string]any)

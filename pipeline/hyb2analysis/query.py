@@ -14,6 +14,7 @@ equal ``contact.txt`` exactly.
 from __future__ import annotations
 
 import heapq
+import itertools
 import json
 import os
 import sqlite3
@@ -65,7 +66,6 @@ class _Index:
         self.has_support = any(row[1] == "support" for row in self.con.execute("PRAGMA table_info(rects)"))
         self.support_total = int(self.meta["support"]) if self.has_support and "support" in self.meta else int(self.meta["records"])
         self.support_sql = "support" if self.has_support else "1"
-        self.con.create_function("hyb2_found", 2, _found, deterministic=True)
 
         self._extents: Optional[Dict[str, Tuple[int, int]]] = None
 
@@ -124,20 +124,23 @@ def _indexes(indexes: Sequence[PathLike]) -> List[_Index]:
 
 
 def close_all() -> None:
-    global _rect_bytes
+    global _rect_bytes, _found_rows
     with _lock:
         for index in _open.values():
             index.con.close()
         _open.clear()
         _rects.clear()
         _rect_bytes = 0
+        _found_tables.clear()
+        _found_rows = 0
+        _cursors.clear()
 
 
 # --------------------------------------------------------------------------
 # summary
 
 
-def _single_summary(index: _Index) -> Dict[str, Any]:
+def _single_summary(index: _Index, with_pairs: bool = True) -> Dict[str, Any]:
     con = index.con
     extents = index.extents()
     genes = [{"name": n, "length": m, "max_end": m, "min_start": extents.get(n, (None, m))[0], "records": r, "reads": rd}
@@ -145,15 +148,18 @@ def _single_summary(index: _Index) -> Dict[str, Any]:
     types = [{"name": n, "records": r, "reads": rd}
              for n, r, rd in con.execute("SELECT name, records, reads FROM types ORDER BY records DESC, name")]
     pairs = [{"gene1": index.gene_names[g1], "gene2": index.gene_names[g2], "records": r, "reads": rd}
-             for g1, g2, r, rd in con.execute("SELECT g1, g2, records, reads FROM pairs ORDER BY records DESC")]
+             for g1, g2, r, rd in con.execute("SELECT g1, g2, records, reads FROM pairs ORDER BY records DESC")] if with_pairs else None
     meta = index.meta
-    return {
+    out = {
         "index": str(index.path), "source": meta.get("source_path"), "built_at": meta.get("built_at"),
         "records": meta["records"], "reads": meta["reads"], "records_with_reads": meta["records_with_reads"],
         "with_dg": meta["with_dg"], "intra_records": meta["intra_records"], "inter_records": meta["inter_records"],
         "invalid": meta["invalid"], "skipped": meta["skipped"], "errors": meta.get("errors", []),
-        "genes": genes, "types": types, "pairs": pairs,
+        "genes": genes, "types": types,
     }
+    if with_pairs:
+        out["pairs"] = pairs
+    return out
 
 
 def _merge_named(lists: Iterable[List[Dict[str, Any]]], keys: Sequence[str], sums: Sequence[str],
@@ -196,7 +202,7 @@ def _apply_lengths(genes: List[Dict[str, Any]], lengths: Dict[str, int]) -> Dict
     return extents
 
 
-def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = None, *, pairs: bool = True) -> Dict[str, Any]:
     """Per-index summaries plus a merged total (``merged``).
 
     ``genes[]`` rows are ``{name, length, length_source, max_end, min_start,
@@ -204,14 +210,19 @@ def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = Non
     (gene name -> nt) when known, otherwise the largest arm end seen
     (``length_source`` says which).  Each part and ``merged`` also carry
     ``extents: {gene: {min, max}}``, the observed arm coordinate range.
+    ``pairs=False`` leaves out ``pairs[]`` (every gene pair: the bulk of a
+    large sample's summary) for callers that only need the counts.
     """
+    if not isinstance(pairs, bool):
+        raise ValueError("pairs must be a boolean")
     lengths = _check_lengths(lengths)
-    parts = [_single_summary(index) for index in _indexes(indexes)]
+    parts = [_single_summary(index, pairs) for index in _indexes(indexes)]
     merged = {name: sum(part[name] for part in parts)
               for name in ("records", "reads", "records_with_reads", "with_dg", "intra_records", "inter_records", "invalid", "skipped")}
     merged["genes"] = _merge_named((p["genes"] for p in parts), ("name",), ("records", "reads"), ("length", "max_end"), ("min_start",))
     merged["types"] = _merge_named((p["types"] for p in parts), ("name",), ("records", "reads"))
-    merged["pairs"] = _merge_named((p["pairs"] for p in parts), ("gene1", "gene2"), ("records", "reads"))
+    if pairs:
+        merged["pairs"] = _merge_named((p["pairs"] for p in parts), ("gene1", "gene2"), ("records", "reads"))
     for part in parts:
         part["extents"] = _apply_lengths(part["genes"], lengths)
     merged["extents"] = _apply_lengths(merged["genes"], lengths)
@@ -257,6 +268,15 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
     rnas: Dict[str, List[float]] = {}
     pairs: Dict[Tuple[str, str], List[float]] = {}
     types: Dict[str, List[int]] = {}
+    # one collation key per distinct name: building it is the slow part of the sorts
+    keys: Dict[str, Tuple[Any, ...]] = {}
+
+    def name_key(name: str) -> Tuple[Any, ...]:
+        key = keys.get(name)
+        if key is None:
+            key = keys[name] = _name_key(name)
+        return key
+
     totals = dict.fromkeys(("records", "support", "reads", "read_records", "with_dg", "overlap_records",
                             "homodimer_records", "homodimer_reads", "intra_records", "inter_records",
                             "invalid", "skipped"), 0)
@@ -272,7 +292,7 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
                 entry = rnas.setdefault(gene, [0] * len(_COUNT_FIELDS))
                 for i, value in enumerate(counts):
                     entry[i] += value
-            pair = tuple(sorted((index.gene_names[g1], index.gene_names[g2]), key=_name_key))
+            pair = tuple(sorted((index.gene_names[g1], index.gene_names[g2]), key=name_key))
             entry = pairs.setdefault(pair, [0] * len(_COUNT_FIELDS))
             for i, value in enumerate(counts):
                 entry[i] += value
@@ -292,17 +312,18 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
     def number(value: float) -> Any:
         return int(value) if float(value).is_integer() else value
 
-    def rows(items, identity) -> List[Dict[str, Any]]:
-        return [dict(identity(key), **{field: number(value) for field, value in zip(_COUNT_FIELDS, counts)})
-                for key, counts in items.items()]
+    def rows(items, rank, identity) -> List[Dict[str, Any]]:
+        # rank on the raw counts, then build the rows that are kept
+        keys = sorted(items, key=rank) if limit is None else heapq.nsmallest(limit, items, key=rank)
+        return [dict(identity(key), **{field: number(value) for field, value in zip(_COUNT_FIELDS, items[key])})
+                for key in keys]
 
-    rna_rows = sorted(rows(rnas, lambda name: {"name": name}), key=lambda r: (-r["support"],) + _name_key(r["name"]))
-    pair_rows = sorted(rows(pairs, lambda pair: {"gene1": pair[0], "gene2": pair[1]}),
-                       key=lambda r: (-r["support"],) + _name_key(r["gene1"]) + _name_key(r["gene2"]))
+    by_support = _COUNT_FIELDS.index("support")
+    rna_rows = rows(rnas, lambda name: (-rnas[name][by_support],) + name_key(name), lambda name: {"name": name})
+    pair_rows = rows(pairs, lambda pair: (-pairs[pair][by_support],) + name_key(pair[0]) + name_key(pair[1]),
+                     lambda pair: {"gene1": pair[0], "gene2": pair[1]})
     type_rows = sorted(({"name": name, "records": r, "support": s} for name, (r, s) in types.items()),
-                       key=lambda r: (-r["records"],) + _name_key(r["name"]))
-    if limit is not None:
-        rna_rows, pair_rows = rna_rows[:limit], pair_rows[:limit]
+                       key=lambda r: (-r["records"],) + name_key(r["name"]))
     return dict(totals, unique_rnas=len(rnas), unique_pairs=len(pairs), rnas=rna_rows, pairs=pair_rows, types=type_rows)
 
 
@@ -496,6 +517,22 @@ def _contact_grid(indexes: List[_Index], gene: str, gene2: Optional[str], bin_si
     return selections, (bx0, bx1, by0, by1), (length_x, length_y)
 
 
+def _grid_size(bounds: Tuple[int, int, int, int]) -> int:
+    return max(0, bounds[1] - bounds[0] + 1) * max(0, bounds[3] - bounds[2] + 1)
+
+
+def _coarser(bounds: Tuple[int, int, int, int], bin_size: int) -> int:
+    """The doubled bin size, from ``bin_size``, whose grid over ``bounds``
+    (bins of ``bin_size``) fits ``MAX_GRID_CELLS``: auto-binning starts there
+    instead of asking for a dense grid it cannot allocate."""
+    x0, x1 = bounds[0] * bin_size, bounds[1] * bin_size
+    y0, y1 = bounds[2] * bin_size, bounds[3] * bin_size
+    size = bin_size
+    while size < 100_000 and (x1 // size - x0 // size + 1) * (y1 // size - y0 // size + 1) > MAX_GRID_CELLS:
+        size = min(2 * size, 100_000)
+    return size
+
+
 def _cells(grid: np.ndarray, bounds, bin_size: int):
     ix, iy = np.nonzero(grid)
     return (ix + bounds[0]) * bin_size, (iy + bounds[2]) * bin_size, grid[ix, iy]
@@ -515,8 +552,9 @@ def contact_bins(indexes: Sequence[PathLike], gene: str, bin_size: int = 10, reg
     orientation, fixed_bin, length, length2, region, cells, total, max, x: [],
     y: [], count: []}`` where ``x``/``y`` are bin starts in nt (row-major
     order) and ``total`` is the summed weight of the hybrids drawn.  With
-    ``max_cells`` the bin size is doubled until the map has at most that many
-    non-empty cells, unless ``fixed_bin`` (then the requested bin is kept, so
+    ``max_cells`` the bin size is doubled (up to 100,000; bins whose grid
+    would exceed ``MAX_GRID_CELLS`` are skipped) until the map has at most
+    that many non-empty cells, unless ``fixed_bin`` (then the requested bin is kept, so
     maps of several datasets line up; the dense-grid guard still applies).
     ``length``/``length2`` are reference lengths from ``lengths`` when known,
     otherwise the largest arm end seen.
@@ -529,11 +567,15 @@ def contact_bins(indexes: Sequence[PathLike], gene: str, bin_size: int = 10, reg
     while True:
         selections, bounds, observed = _contact_grid(opened, gene, gene2, bin_size, region, types, measure, orientation, homodimer)
         parts = [sel for sel in selections if sel is not None and len(sel[0])]
+        if not fixed_bin and max_cells is not None and parts and bin_size < 100_000 and _grid_size(bounds) > MAX_GRID_CELLS:
+            # every finer map is too large to build, so it cannot be the answer
+            bin_size = max(min(2 * bin_size, 100_000), _coarser(bounds, bin_size))
+            continue
         grid = _rasterise(parts, bin_size, bounds) if parts else np.zeros((0, 0), dtype=np.int64)
         cells = int(np.count_nonzero(grid))
         if fixed_bin or max_cells is None or cells <= max_cells or bin_size >= 100_000:
             break
-        bin_size *= 2
+        bin_size = min(2 * bin_size, 100_000)  # the largest bin the grid takes
     x, y, count = _cells(grid, bounds, bin_size)
     length, length2 = _lengths_for(lengths, gene, gene2, observed)
     return {
@@ -593,7 +635,8 @@ def compare_bins(indexes_a: Sequence[PathLike], indexes_b: Sequence[PathLike], g
     raw counts, ``effect = log2((a + p) / (b + p))`` with ``p`` 1 (per
     million) or 0.5 (raw means, ``normalisation="none"``), and ``log2ratio``
     its negation (B over A).  ``max_cells`` doubles the shared bin size
-    (unless ``fixed_bin``) until the union has at most that many cells.
+    (unless ``fixed_bin``; as ``contact_bins``) until the union has at most
+    that many cells.
     """
     if not isinstance(fixed_bin, bool):
         raise ValueError("fixed_bin must be a boolean")
@@ -609,30 +652,48 @@ def compare_bins(indexes_a: Sequence[PathLike], indexes_b: Sequence[PathLike], g
         sel_a, bounds_a, observed_a = _contact_grid(side_a, gene, gene2, bin_size, region, types, measure, orientation)
         sel_b, bounds_b, observed_b = _contact_grid(side_b, gene, gene2, bin_size, region, types, measure, orientation)
         bounds = _union_bounds(bounds_a, bounds_b)
-        grids_a = [_side_grid([sel], bin_size, bounds) for sel in sel_a]
-        grids_b = [_side_grid([sel], bin_size, bounds) for sel in sel_b]
-        occupied = np.zeros_like(grids_a[0], dtype=bool)
-        for grid in grids_a + grids_b:
-            occupied |= grid != 0
+        if (not fixed_bin and max_cells is not None and bin_size < 100_000 and _grid_size(bounds) > MAX_GRID_CELLS
+                and any(sel is not None and len(sel[0]) for sel in sel_a + sel_b)):
+            bin_size = max(min(2 * bin_size, 100_000), _coarser(bounds, bin_size))
+            continue
+        # running sums per condition, not one grid per dataset
+        occupied = None
+        sums = []
+        for selections, libraries in ((sel_a, libraries_a), (sel_b, libraries_b)):
+            raw = scaled = None
+            for sel, library in zip(selections, libraries):
+                grid = _side_grid([sel], bin_size, bounds)
+                if occupied is None:
+                    occupied = np.zeros(grid.shape, dtype=bool)
+                occupied |= grid != 0
+                if raw is None:
+                    raw = grid.copy()
+                else:
+                    raw += grid
+                if normalisation == "library":
+                    values = grid * (1e6 / max(1, library))
+                    if scaled is None:
+                        scaled = values
+                    else:
+                        scaled += values
+                    del values
+                del grid
+            sums.append((raw, scaled, len(selections)))
         ix, iy = np.nonzero(occupied)
         del occupied
         if fixed_bin or max_cells is None or len(ix) <= max_cells or bin_size >= 100_000:
             break
-        del grids_a, grids_b
-        bin_size *= 2
+        del sums
+        bin_size = min(2 * bin_size, 100_000)
 
-    def side(grids: List[np.ndarray], libraries: List[int]) -> Tuple[np.ndarray, np.ndarray]:
-        raw = np.zeros(len(ix), dtype=np.int64)
-        total = np.zeros(len(ix), dtype=np.float64)
-        for grid, library in zip(grids, libraries):
-            values = grid[ix, iy]
-            raw += values
-            total += values * (1e6 / max(1, library) if normalisation == "library" else 1.0)
-        return raw, total / len(grids)
+    def side(raw: np.ndarray, scaled: Optional[np.ndarray], datasets: int) -> Tuple[np.ndarray, np.ndarray]:
+        count = raw[ix, iy]
+        total = scaled[ix, iy] if scaled is not None else count.astype(np.float64)
+        return count, total / datasets
 
-    count_a, norm_a = side(grids_a, libraries_a)
-    count_b, norm_b = side(grids_b, libraries_b)
-    del grids_a, grids_b
+    count_a, norm_a = side(*sums[0])
+    count_b, norm_b = side(*sums[1])
+    del sums
     pseudocount = 1.0 if normalisation == "library" else 0.5
     effect = np.log2((norm_a + pseudocount) / (norm_b + pseudocount))
     observed = (max(observed_a[0], observed_b[0]), max(observed_a[1], observed_b[1]))
@@ -662,16 +723,20 @@ def top_interactions(indexes: Sequence[PathLike], gene: str, bin_size: int = 10,
         raise ValueError("n must be an integer between 1 and %d" % MAX_LIMIT)
     opened = _indexes(indexes)
     selections, bounds, lengths = _contact_grid(opened, gene, gene2, bin_size, region, types, measure, orientation)
-    grids = [(_rasterise([sel], bin_size, bounds) if sel is not None and len(sel[0]) else None) for sel in selections]
     shape = (bounds[1] - bounds[0] + 1, bounds[3] - bounds[2] + 1)
-    present = [grid for grid in grids if grid is not None]
-    if not present:
+    present = [sel is not None and len(sel[0]) > 0 for sel in selections]
+    total = None
+    for sel, has in zip(selections, present):
+        if has:
+            grid = _rasterise([sel], bin_size, bounds)
+            if total is None:
+                total = grid.copy()
+            else:
+                total += grid
+            del grid
+    if total is None:
         # nothing in the region: no grid (an empty region can still be huge)
         total = np.zeros((0,), dtype=np.int64)
-    else:
-        total = present[0].astype(np.int64, copy=True)
-        for grid in present[1:]:
-            total += grid
     flat = total.reshape(-1)
     nonzero = np.flatnonzero(flat)
     if len(nonzero) > n:
@@ -679,12 +744,22 @@ def top_interactions(indexes: Sequence[PathLike], gene: str, bin_size: int = 10,
         threshold = np.partition(flat[nonzero], len(nonzero) - n)[len(nonzero) - n]
         nonzero = nonzero[flat[nonzero] >= threshold]
     order = nonzero[np.lexsort((nonzero, -flat[nonzero]))][:n]
+    counts = flat[order]
+    del total, flat
+    # the per-index counts of the chosen cells only: one index's grid at a time
+    per_index = np.zeros((len(order), len(selections)), dtype=np.int64)
+    if len(order) and sum(present) > 1:
+        for column, (sel, has) in enumerate(zip(selections, present)):
+            if has:
+                per_index[:, column] = _rasterise([sel], bin_size, bounds).reshape(-1)[order]
+    elif len(order):
+        per_index[:, present.index(True)] = counts
     rows = []
-    for cell in order.tolist():
+    for row, cell in enumerate(order.tolist()):
         ix, iy = divmod(cell, shape[1])
         x, y = (ix + bounds[0]) * bin_size, (iy + bounds[2]) * bin_size
-        rows.append({"x": x, "y": y, "x_end": x + bin_size - 1, "y_end": y + bin_size - 1, "count": int(flat[cell]),
-                     "per_index": [int(g[ix, iy]) if g is not None else 0 for g in grids]})
+        rows.append({"x": x, "y": y, "x_end": x + bin_size - 1, "y_end": y + bin_size - 1, "count": int(counts[row]),
+                     "per_index": per_index[row].tolist()})
     return {"gene": gene, "gene2": gene2 or gene, "bin_size": bin_size, "measure": measure,
             "length": lengths[0], "length2": lengths[1], "indexes": [str(i.path) for i in opened], "rows": rows}
 
@@ -703,13 +778,22 @@ _ORDERS = {
 
 HOMODIMER = "g1 = g2 AND overlap IS NOT NULL AND overlap >= 5"  # the web's homodimer proxy
 
-# search: the hybrid ids whose text matches, by (index, its stamp, query)
-_found_sets: "OrderedDict[str, frozenset]" = OrderedDict()
-_FOUND_CACHE = 8
+# search: the hybrid ids whose text matches, as a temp table in the index's
+# own connection (SQLite joins it without a Python call per row), by (index,
+# its stamp, query). The tables are bounded by their ids in all; the latest
+# query is kept over every index, so paging a search never rereads a .hyb.
+_found_tables: "OrderedDict[Tuple[str, Tuple[int, int], str], Tuple[_Index, str, int]]" = OrderedDict()
+_found_rows = 0
+_FOUND_ROWS = 20_000_000
+_found_serial = itertools.count()
 
 
-def _found(key: str, rid: int) -> bool:
-    return rid in _found_sets.get(key, ())
+def _drop_found(index: _Index, table: str) -> None:
+    try:
+        index.con.execute("DROP TABLE IF EXISTS temp.%s" % table)
+        index.con.commit()
+    except sqlite3.Error:  # the index was closed (reopened after a rebuild): the table went with it
+        pass
 
 
 def _js_number(value: Any) -> str:
@@ -718,16 +802,46 @@ def _js_number(value: Any) -> str:
     return str(int(value)) if float(value).is_integer() else repr(float(value))
 
 
-def _search_key(index: _Index, query: str) -> str:
+def _search_table(index: _Index, query: str) -> str:
     """Find the hybrids whose id, sequence, RNA names, chimera type or overlap
     score contain ``query`` (case-insensitive; the web's interaction search,
     over the same fields joined by spaces). The id and sequence are read from
-    the sample's .hyb, which must be the file the index was built from."""
-    key = json.dumps([str(index.path), index.stamp, query])
+    the sample's .hyb, which must be the file the index was built from.
+    Returns the name of the temp table of their ids."""
+    global _found_rows
+    key = (str(index.path), index.stamp, query)
     with _lock:
-        if key in _found_sets:
-            _found_sets.move_to_end(key)
-            return key
+        entry = _found_tables.get(key)
+        if entry is not None and entry[0] is index:
+            _found_tables.move_to_end(key)
+            return entry[1]
+    found = _scan_search(index, query)
+    table = "hyb2_found_%d" % next(_found_serial)
+    index.con.execute("CREATE TEMP TABLE %s(id INTEGER PRIMARY KEY)" % table)
+    index.con.executemany("INSERT INTO temp.%s VALUES (?)" % table, ((rid,) for rid in found))
+    index.con.commit()
+    dropped = []
+    with _lock:
+        old = _found_tables.pop(key, None)
+        if old is not None:
+            _found_rows -= old[2]
+            dropped.append(old[:2])
+        _found_tables[key] = (index, table, len(found))
+        _found_rows += len(found)
+        for other in list(_found_tables):
+            if _found_rows <= _FOUND_ROWS:
+                break
+            if other[2] != query:
+                gone = _found_tables.pop(other)
+                _found_rows -= gone[2]
+                dropped.append(gone[:2])
+    for old_index, old_table in dropped:
+        _drop_found(old_index, old_table)
+    return table
+
+
+def _scan_search(index: _Index, query: str) -> List[int]:
+    """The ids of the hybrids whose text contains ``query``, read from the .hyb."""
     meta = index.meta
     source = meta.get("source_path")
     try:
@@ -748,11 +862,7 @@ def _search_key(index: _Index, query: str) -> str:
                              names[g1], names[g2], types.get(ctype, ""), _js_number(overlap))).lower()
             if query in text:
                 found.append(rid)
-    with _lock:
-        _found_sets[key] = frozenset(found)
-        while len(_found_sets) > _FOUND_CACHE:
-            _found_sets.popitem(last=False)
-    return key
+    return found
 
 
 def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, list]]:
@@ -805,8 +915,7 @@ def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, l
             raise ValueError("search must be text")
         query = search.strip().lower()
         if query:
-            clauses.append("hyb2_found(?, id)")
-            params.append(_search_key(index, query))
+            clauses.append("id IN temp.%s" % _search_table(index, query))
     region = _region(filters.get("region"))
     if region is not None:
         x0, x1, y0, y1 = region
@@ -874,6 +983,25 @@ def _merge_key(row: tuple, column: str, descending: bool, number: int) -> tuple:
     return (False, -value if descending else value, number, row[0])
 
 
+# "Load more": where each index's stream stood after a page, so the next
+# page reads on from there instead of every row before its offset. By
+# (indexes and stamps, filters, order) -> {"total": n, "ends": {offset: cursors}}.
+_cursors: "OrderedDict[tuple, Dict[str, Any]]" = OrderedDict()
+_CURSOR_QUERIES = 32
+_CURSOR_ENDS = 16
+
+
+def _after(expression: str, descending: bool, cursor: Tuple[Any, int]) -> Tuple[str, list]:
+    """SQL for the rows after ``cursor`` (sort value, id) in ``expression IS NULL, expression, id`` order."""
+    value, rid = cursor
+    if expression == "id":
+        return "id > ?", [rid]
+    if value is None:
+        return "(%s IS NULL AND id > ?)" % expression, [rid]
+    return ("(%s IS NULL OR %s %s ? OR (%s = ? AND id > ?))" % (expression, expression, "<" if descending else ">", expression),
+            [value, value, rid])
+
+
 def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = None, limit: int = 100, offset: int = 0, *,
             order: str = "file", with_sequence: bool = True) -> Dict[str, Any]:
     """Filtered hybrid rows across indexes.
@@ -882,7 +1010,7 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
     ``gene``: the pair in either arm order, as the web's RNA + partner; alone,
     either arm), ``intra`` (bool),
     ``homodimer`` (``"only"``/``"exclude"``: same RNA and overlap >= 5),
-    ``search`` (text, see ``_search_key``),
+    ``search`` (text, see ``_search_table``),
     ``region`` (``{"x": [s, e], "y": [s, e]}``, overlap with arm 1 / arm 2),
     ``types`` (list), ``min_reads``/``max_reads``, ``min_support``,
     ``min_dg``/``max_dg`` (a row without dG never matches these).
@@ -900,23 +1028,50 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
         raise ValueError("order must be one of %s" % ", ".join(sorted(_ORDERS)))
     column, descending = _ORDERS[order]
     opened = _indexes(indexes)
-    total = 0
+    key = (tuple((str(index.path), index.stamp) for index in opened), json.dumps(filters, sort_keys=True, default=repr), order)
+    with _lock:
+        known = _cursors.get(key)
+        if known is not None:
+            _cursors.move_to_end(key)
+        total = known["total"] if known is not None else None
+        base = max((end for end in known["ends"] if end <= offset), default=0) if known is not None else 0
+        cursors = known["ends"][base] if base else [None] * len(opened)
+    skip = offset - base
+    counted = 0
     streams = []
     for number, index in enumerate(opened):
         where = _filter_sql(index, filters)
         if where is None:
             continue
         clause, params = where
-        total += index.meta["records"] if not clause else index.con.execute("SELECT count(*) FROM hybrids" + clause, params).fetchone()[0]
+        if total is None:
+            counted += index.meta["records"] if not clause else index.con.execute("SELECT count(*) FROM hybrids" + clause, params).fetchone()[0]
         if limit == 0:
             continue
         expression = index.support_sql if column == "support" else column
+        if cursors[number] is not None:
+            after, more = _after(expression, descending, cursors[number])
+            clause, params = clause + (" AND " if clause else " WHERE ") + after, params + more
         sort = "%s IS NULL, %s %s, id" % (expression, expression, "DESC" if descending else "ASC")
         rows = index.con.execute(
             "SELECT id, g1, s1, e1, g2, s2, e2, reads, dg, overlap, type, offset, %s FROM hybrids%s ORDER BY %s LIMIT ?"
-            % (index.support_sql, clause, sort), params + [offset + limit]).fetchall()
+            % (index.support_sql, clause, sort), params + [skip + limit]).fetchall()
         streams.append([(_merge_key(row, column, descending, number), number, row) for row in rows])
-    merged = list(heapq.merge(*streams, key=lambda item: item[0]))[offset:offset + limit] if streams else []
+    total = counted if total is None else total
+    consumed = list(heapq.merge(*streams, key=lambda item: item[0]))[:skip + limit] if streams else []
+    merged = consumed[skip:]
+    if limit:
+        reached = list(cursors)
+        for _, number, row in consumed:
+            reached[number] = (row[_ROW_COLUMN[column]], row[0])
+        with _lock:
+            entry = _cursors.setdefault(key, {"total": total, "ends": {}})
+            _cursors.move_to_end(key)
+            entry["ends"][offset + len(merged)] = reached
+            while len(entry["ends"]) > _CURSOR_ENDS:
+                del entry["ends"][min(entry["ends"])]
+            while len(_cursors) > _CURSOR_QUERIES:
+                _cursors.popitem(last=False)
     lookups: Dict[int, Dict[int, Tuple[str, str]]] = {}
     if with_sequence:
         for number, index in enumerate(opened):
@@ -1011,13 +1166,18 @@ def _overlaps(start: np.ndarray, end: np.ndarray, lo: int, hi: int, rule: str) -
 
 
 def _bin_means(diff: np.ndarray, lo: int, hi: int, width: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-nt coverage from a difference array -> (bin starts, bin ends, mean per nt)."""
+    """Per-nt coverage from a difference array -> (bin starts, bin ends, mean per nt).
+
+    ``diff`` may stop short of ``hi``: the nucleotides past it have no coverage."""
     span = hi - lo + 1
-    per_nt = np.cumsum(diff[:span])
+    covered = min(span, len(diff) - 1)
+    per_nt = np.cumsum(diff[:covered])
     count = -(-span // width)
-    padded = np.zeros(count * width, dtype=np.float64)
-    padded[:span] = per_nt
-    sums = padded.reshape(count, width).sum(axis=1)
+    full = -(-covered // width)
+    padded = np.zeros(full * width, dtype=np.float64)
+    padded[:covered] = per_nt
+    sums = np.zeros(count, dtype=np.float64)
+    sums[:full] = padded.reshape(full, width).sum(axis=1)
     starts = lo + np.arange(count, dtype=np.int64) * width
     ends = np.minimum(starts + width - 1, hi)
     return starts, ends, sums / (ends - starts + 1)
@@ -1060,21 +1220,26 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
         raise ValueError("bin_size must be an integer between 1 and 100000")
     lengths = _check_lengths(lengths)
     opened = _indexes(indexes)
-    low, _, length = _anchor_range(opened, gene, lengths)
+    low, observed_max, length = _anchor_range(opened, gene, lengths)
     lo = _span(start, "start")
     hi = _span(end, "end")
     lo = lo if lo is not None else (low if low is not None else 1)
     hi = hi if hi is not None else length
+    if hi is not None and lo > hi:
+        raise ValueError("start must not exceed end")
     out = {"gene": gene, "partner": partner, "length": length, "measure": measure, "requested_bin_size": bin_size,
            "bin_size": bin_size, "adjusted": False, "records": 0, "support": 0, "reads": 0, "arms": 0, "max": 0.0,
            "start": lo, "end": hi, "bins": {"start": [], "end": [], "value": []}, "partners": []}
     if hi is None:
         return out
-    if lo > hi:
-        raise ValueError("start must not exceed end")
     span = hi - lo + 1
+    # coverage is kept per nucleotide only up to the gene's end (no arm lies
+    # past it), so a far end costs bins, not memory
+    covered = max(0, min(hi, max(length or 0, observed_max or 0)) - lo + 1)
     width = max(bin_size, -(-span // MAX_PROFILE_BINS))
-    diff = np.zeros(span + 1, dtype=np.float64)
+    # arm starts (+weight) and ends (-weight), one bincount for them all
+    marks: List[np.ndarray] = []
+    marked: List[np.ndarray] = []
     partners: Dict[str, List[int]] = {}
     records = support = reads = arms = 0
     for rects, on1, on2, name1, name2 in _anchor_parts(opened, gene, partner, types, homodimer):
@@ -1090,9 +1255,9 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
             matched[arm] = keep
             if not keep.any():
                 continue
-            s, e, w = np.maximum(s[keep], lo) - lo, np.minimum(e[keep], hi) - lo + 1, weight[keep]
-            diff += np.bincount(s, weights=w, minlength=span + 1)[:span + 1]
-            diff -= np.bincount(e, weights=w, minlength=span + 1)[:span + 1]
+            w = weight[keep]
+            marks += [np.maximum(s[keep], lo) - lo, np.minimum(e[keep], hi) - lo + 1]
+            marked += [w, -w]
             arms += int(count[keep].sum())
         none = np.zeros(len(count), dtype=bool)
         first, second = matched.get("1", none), matched.get("2", none)
@@ -1104,8 +1269,12 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
         for name, mask in ((name2, first), (name1, second & ~first)):
             if mask.any():
                 _add_partner(partners, name, rects, mask)
+    if marks:
+        diff = np.bincount(np.concatenate(marks), weights=np.concatenate(marked), minlength=covered + 1)
+    else:
+        diff = np.zeros(covered + 1, dtype=np.float64)
+    del marks, marked
     starts, ends, values = _bin_means(diff, lo, hi, width)
-    values = np.round(values, 4)
     out.update({"bin_size": width, "adjusted": width != bin_size, "records": records, "support": support, "reads": reads,
                 "arms": arms,
                 "max": float(values.max()) if len(values) else 0.0,
@@ -1187,7 +1356,8 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
     requested = 50 if span > 1000 else 25 if span > 500 else 10
     width = max(requested, -(-span // MAX_PROFILE_BINS))
     nbins = -(-span // width)
-    diff = np.zeros(nbins + 1, dtype=np.float64)
+    marks: List[np.ndarray] = []  # first bins (+weight) and bins after the last (-weight)
+    marked: List[np.ndarray] = []
     partners: Dict[str, List[int]] = {}
     records = support = reads = 0
     per_index: List[List[Dict[str, Any]]] = []
@@ -1229,8 +1399,8 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
                     first = (np.maximum(s[keep], lo) - lo) // width
                     last = (np.minimum(e[keep], hi) - lo) // width
                     w = profile_weight[keep]
-                    diff += np.bincount(first, weights=w, minlength=nbins + 1)[:nbins + 1]
-                    diff -= np.bincount(last + 1, weights=w, minlength=nbins + 1)[:nbins + 1]
+                    marks += [first, last + 1]
+                    marked += [w, -w]
             parts.append({"name1": name1, "name2": name2, "s1": s1, "e1": e1, "s2": s2, "e2": e2,
                           "type": rects["type"].astype(np.int64), "types": type_names, "count": count, "reads": weight,
                           "hit": hit, "rows": np.flatnonzero(hit)})
@@ -1248,23 +1418,30 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
         candidates: Dict[tuple, List[int]] = {}
         bound = 0
         for parts in per_index:
-            best: List[Tuple[int, int, int, tuple]] = []
-            for part in parts:
-                for i in _top(part["reads"], part["count"], part["s1"], part["rows"], k).tolist():
-                    best.append((-int(part["reads"][i]), -int(part["count"][i]), int(part["s1"][i]), key_of(part, i)))
-            best.sort()
-            best = best[:k]
+            ranks: List[Tuple[int, int, int, int, int]] = []
+            for number, part in enumerate(parts):
+                rows_ = _top(part["reads"], part["count"], part["s1"], part["rows"], k)
+                ranks.extend(zip((-part["reads"][rows_]).tolist(), (-part["count"][rows_]).tolist(),
+                                 part["s1"][rows_].tolist(), [number] * len(rows_), rows_.tolist()))
+            ranks.sort()
+            if len(ranks) > k:
+                # the full key only breaks ties at the cut, so build it for those alone
+                cut = ranks[k - 1][:3]
+                ranks = [rank for rank in ranks if rank[:3] <= cut]
+            best = sorted((rank[0], rank[1], rank[2], key_of(parts[rank[3]], rank[4])) for rank in ranks)[:k]
             if len(best) == k:
                 bound += -best[-1][0]
             for item in best:
                 candidates.setdefault(item[3], [0, 0])
+        by_pair: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for parts in per_index:
+            for part in parts:
+                by_pair.setdefault((part["name1"], part["name2"]), []).append(part)
         for item_key, total in candidates.items():
-            for parts in per_index:
-                for part in parts:
-                    if part["name1"] == item_key[5] and part["name2"] == item_key[6]:
-                        got = _lookup(part, item_key)
-                        total[0] += got[0]
-                        total[1] += got[1]
+            for part in by_pair.get((item_key[5], item_key[6]), ()):
+                got = _lookup(part, item_key)
+                total[0] += got[0]
+                total[1] += got[1]
         ranked = sorted(candidates.items(), key=lambda kv: (-kv[1][1], -kv[1][0], kv[0][0], kv[0]))[:limit]
         if len(opened) > 1 and len(ranked) == limit and ranked[-1][1][1] < bound:
             exact = False
@@ -1272,6 +1449,8 @@ def region(indexes: Sequence[PathLike], gene: str, start: int, end: int, *, part
             rows.append({"gene1": item_key[5], "start1": item_key[0], "end1": item_key[1], "gene2": item_key[6],
                          "start2": item_key[2], "end2": item_key[3], "type": item_key[4] or None, "records": n, "reads": r})
     starts = lo + np.arange(nbins, dtype=np.int64) * width
+    diff = (np.bincount(np.concatenate(marks), weights=np.concatenate(marked), minlength=nbins + 1) if marks
+            else np.zeros(nbins + 1, dtype=np.float64))
     return {"gene": gene, "start": lo, "end": hi, "partner": partner, "partner_start": plo, "partner_end": phi,
             "overlap": overlap, "measure": measure, "records": records, "support": support, "reads": reads,
             "distinct": distinct,

@@ -200,6 +200,37 @@ class IndexQueryTest(unittest.TestCase):
         self.assertEqual([r["count"] for r in result["rows"]], [2 * v for _, v in expected])
         self.assertEqual(result["rows"][0]["per_index"], [expected[0][1]] * 2)
 
+    def test_search_pages_reuse_the_matches(self):
+        # the matches of a query are kept for every index, so the next page
+        # does not reread each .hyb (they were kept for 8 indexes in all)
+        copies = []
+        for i in range(10):
+            copy = Path(self.tmp.name) / ("search%d.hyb2idx" % i)
+            copy.write_bytes(self.index.read_bytes())
+            copies.append(copy)
+        scans = []
+        real, saved = query._scan_search, query._FOUND_ROWS
+        query._scan_search = lambda index, text: scans.append(index.path) or real(index, text)
+        try:
+            first = query.hybrids(copies, {"search": "zika"}, limit=50)
+            second = query.hybrids(copies, {"search": "zika"}, limit=50, offset=50)
+            self.assertEqual(len(scans), 10)
+            single = query.hybrids([self.index], {"search": "zika"}, limit=0)["total"]
+            self.assertEqual((first["total"], second["total"]), (10 * single, 10 * single))
+            self.assertEqual(first["rows"] + second["rows"], query.hybrids(copies, {"search": "zika"}, limit=100)["rows"])
+            # over the bound, the latest query stays whole and older ones go
+            query._FOUND_ROWS = 1
+            query.hybrids(copies, {"search": "18s"}, limit=1)
+            query.hybrids(copies, {"search": "18s"}, limit=1, offset=1, order="reads")
+            self.assertEqual(len(scans), 21)  # zika on the index itself, then 18s on the copies
+            query.hybrids(copies[:1], {"search": "zika"}, limit=1)
+            self.assertEqual(len(scans), 22)
+            tables = [query._get(c).con.execute("SELECT count(*) FROM sqlite_temp_master WHERE type = 'table'").fetchone()[0]
+                      for c in copies]
+            self.assertEqual(tables, [1] + [0] * 9)
+        finally:
+            query._scan_search, query._FOUND_ROWS = real, saved
+
     def test_hybrids_filters(self):
         recs = self.records
         result = query.hybrids([self.index], {"gene1": "Zika_virusRNA", "gene2": "Zika_virusRNA",
@@ -357,6 +388,63 @@ class ProviderGapsTest(unittest.TestCase):
         with self.assertRaises(ValueError):  # the dense-grid guard still applies
             query.contact_bins([self.index], "Zika_virusRNA", 1, max_cells=10, fixed_bin=True)
         self.assertEqual(query.contact_bins([self.index], "Zika_virusRNA", 10, lengths={"Zika_virusRNA": 10807})["length"], 10807)
+
+    def test_max_cells_skips_bins_too_large_to_build(self):
+        # a bin whose dense grid is over MAX_GRID_CELLS used to raise before
+        # max_cells could coarsen it (a 1 Mb RNA at 10 nt)
+        saved = query.MAX_GRID_CELLS
+        query.MAX_GRID_CELLS = 20_000
+        try:
+            with self.assertRaises(ValueError):
+                query.contact_bins([self.index], "Zika_virusRNA", 1)
+            result = query.contact_bins([self.index], "Zika_virusRNA", 1, max_cells=10**6)
+            self.assertEqual(result["bin_size"], 128)  # the first doubling of 1 nt with at most 20,000 cells
+            self.assertTrue(result["adjusted"])
+            self.assertEqual(as_cells(result), brute_contact(self.records, "Zika_virusRNA", 128))
+            coarse = query.contact_bins([self.index], "Zika_virusRNA", 1, max_cells=300)
+            self.assertLessEqual(coarse["cells"], 300)
+            self.assertEqual(as_cells(coarse), brute_contact(self.records, "Zika_virusRNA", coarse["bin_size"]))
+            compared = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 1, max_cells=10**6)
+            self.assertEqual(compared["bin_size"], 128)
+            plain = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 128)
+            for key in ("x", "y", "a", "b", "a_count", "b_count", "effect"):
+                self.assertEqual(compared[key], plain[key], key)
+            with self.assertRaises(ValueError):
+                query.contact_bins([self.index], "Zika_virusRNA", 1, max_cells=10**6, fixed_bin=True)
+        finally:
+            query.MAX_GRID_CELLS = saved
+        # the doubling stops at the largest bin the grid takes, not past it
+        widest = query.contact_bins([self.index], "Zika_virusRNA", 40_000, max_cells=0)
+        self.assertEqual(widest["bin_size"], 100_000)
+
+    def test_top_interactions_per_index_counts(self):
+        both = query.top_interactions([self.index, self.half, "%s" % self.index], "Zika_virusRNA", 50, 25)
+        index, half = (query.top_interactions([path], "Zika_virusRNA", 50, 10_000) for path in (self.index, self.half))
+        cells = {}
+        for result in (index, half):
+            for row in result["rows"]:
+                cells.setdefault((row["x"], row["y"]), []).append(row["count"])
+        own = {(r["x"], r["y"]): r["count"] for r in index["rows"]}
+        part = {(r["x"], r["y"]): r["count"] for r in half["rows"]}
+        for row in both["rows"]:
+            key = (row["x"], row["y"])
+            self.assertEqual(row["per_index"], [own.get(key, 0), part.get(key, 0), own.get(key, 0)])
+            self.assertEqual(row["count"], sum(row["per_index"]))
+
+    def test_load_more_reads_on_from_the_last_page(self):
+        # each page used to fetch every row before its offset from every index
+        both = [self.index, self.half]
+        for order in ("file", "reads", "support", "position", "dg"):
+            for filters in ({}, {"gene": "Zika_virusRNA", "min_reads": 2}, {"types": ["Type_1"]}):
+                query.close_all()
+                fresh = [query.hybrids(both, filters, 37, offset, order=order) for offset in (0, 37, 74, 200, 1000)]
+                query.close_all()
+                paged = [query.hybrids(both, filters, 37, offset, order=order) for offset in (0, 37, 74, 200, 1000)]
+                self.assertEqual(paged, fresh, (order, filters))
+                ends = next(iter(query._cursors.values()))["ends"]
+                self.assertTrue({37, 74, 111} <= set(ends), (order, filters, sorted(ends)))
+        # a cursor only reads on: a page before it still comes from the start
+        self.assertEqual(query.hybrids(both, {}, 5, 3, order="dg"), (query.close_all(), query.hybrids(both, {}, 5, 3, order="dg"))[1])
 
     def test_compare_bins_normalizes_per_million(self):
         # the web Compare page: per-dataset per million, condition = mean of its datasets, pseudocount 1
@@ -517,13 +605,33 @@ class ViewpointRegionTest(unittest.TestCase):
         whole = query.viewpoint([self.index], "Zika_virusRNA", lengths={"Zika_virusRNA": 10807})
         self.assertEqual((whole["start"], whole["end"]), (min(min(r.start1 for r in recs if r.gene1 == b"Zika_virusRNA"),
                                                               min(r.start2 for r in recs if r.gene2 == b"Zika_virusRNA")), 10807))
-        wide = query.viewpoint([self.index], "Zika_virusRNA", 1, 90_000)
+        wide = query.viewpoint([self.index], "Zika_virusRNA", 1, 90_000, lengths={"Zika_virusRNA": 90_000})
         self.assertTrue(wide["adjusted"])
         self.assertEqual(wide["bin_size"], 3)
         self.assertEqual(query.viewpoint([self.index], "Missing")["bins"]["value"], [])
         for bad in ({"measure": "x"}, {"bin_size": 0}, {"start": 10, "end": 5}, {"start": 1.5}):
             with self.assertRaises(ValueError, msg=bad):
                 query.viewpoint([self.index], "Zika_virusRNA", **bad)
+
+    def test_viewpoint_far_end_costs_no_memory(self):
+        # an end far past the gene used to allocate one float per nucleotide up to it (80 GB here)
+        huge = query.viewpoint([self.index], "Zika_virusRNA", 1, 10**10)
+        width = -(-10**10 // query.MAX_PROFILE_BINS)
+        self.assertEqual((huge["end"], huge["bin_size"], len(huge["bins"]["value"])), (10**10, width, query.MAX_PROFILE_BINS))
+        records, _, _, _, per_nt, _ = brute_viewpoint(self.records, "Zika_virusRNA", 1, 11_000, 1)
+        self.assertEqual(huge["records"], records)
+        self.assertEqual(huge["bins"]["value"][0], sum(per_nt) / width)
+        self.assertEqual(set(huge["bins"]["value"][1:]), {0.0})
+        past = query.viewpoint([self.index], "Zika_virusRNA", 10**9, 10**10)
+        self.assertEqual((past["records"], past["max"]), (0, 0.0))
+        self.assertEqual(query.viewpoint([self.index], "Missing", 1, 10**10)["max"], 0.0)
+
+    def test_viewpoint_values_keep_full_precision(self):
+        # the web writes the mean per nucleotide unrounded (a 7 nt bin is not 4 decimals)
+        result = query.viewpoint([self.index], "Zika_virusRNA", 1000, 1700, bin_size=7)
+        *_, values, _ = brute_viewpoint(self.records, "Zika_virusRNA", 1000, 1700, 7)
+        self.assertEqual(result["bins"]["value"], values)
+        self.assertTrue(any(round(v, 4) != v for v in values))
 
     def check_region(self, result, recs, *args, **kwargs):
         hits, partners, profile, groups = brute_region(recs, *args, **kwargs)

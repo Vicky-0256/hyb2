@@ -229,7 +229,7 @@ func (p *explorePage) track() {
 func (p *explorePage) loadSummary() {
 	path, ids, key := p.a.Project.Path, p.ids, p.sel
 	p.ensure(&p.sumLoad, key, func() (func(), error) {
-		got, err := p.query(path, "analysis_summary", ids, core.Obj{})
+		got, err := p.query(path, "analysis_summary", ids, core.Obj{"pairs": false})
 		if err != nil {
 			return nil, err
 		}

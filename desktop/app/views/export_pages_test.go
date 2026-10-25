@@ -75,7 +75,7 @@ func TestExploreInteractionsExportTSV(t *testing.T) {
 }
 
 func TestExploreContactExportSVGAndTSV(t *testing.T) {
-	a, _, p, tt := openExplore(t)
+	a, f, p, tt := openExplore(t)
 	d := p.cm.data
 	if d == nil {
 		t.Fatal("no map")
@@ -88,17 +88,33 @@ func TestExploreContactExportSVGAndTSV(t *testing.T) {
 	if n := strings.Count(svg, "<rect") - 4; n != len(d.count) {
 		t.Fatalf("%d cells drawn of %d", n, len(d.count))
 	}
-	// Zoomed in: the TSV has the cells in view only.
+	// Zoomed in or not, the TSV has every cell, as the web's contact-map.tsv:
+	// the hybrids and the cluster support of each, whatever the measure.
 	p.cm.heat.SetView(widgets.Window{X0: 0, X1: 2000, Y0: 0, Y1: 2000})
 	tt.Frame()
+	before := f.count("analysis_contact_bins")
 	_, text := exportClick(t, a, tt, "Export TSV…")
-	records := tsvRecords(t, text)
-	inView := contactInView(d, p.cm.heat.View())
-	if len(records) != len(inView)+1 || len(inView) == 0 || len(inView) == len(d.count) {
-		t.Fatalf("%d records, %d in view of %d", len(records), len(inView), len(d.count))
+	lines := strings.Split(text, "\n")
+	if len(lines) != len(d.count)+1 || lines[0] != "x_start\tx_end\ty_start\ty_end\trecords\tsupport_count" || strings.HasSuffix(text, "\n") {
+		t.Fatalf("%d lines for %d cells: %.200q", len(lines), len(d.count), text)
 	}
-	if !strings.Contains(text, "# Cells in view: arm 1 0–2000, arm 2 0–2000") || records[0][6] != "records" {
-		t.Fatalf("tsv %.400q", text)
+	if want := fmt.Sprintf("%d\t%d\t", d.x[0], d.x[0]+d.bin-1); !strings.HasPrefix(lines[1], want) {
+		t.Fatalf("first row %q, want %q…", lines[1], want)
+	}
+	// the map is of records: one more query, for the support on its bins
+	sent := f.last("analysis_contact_bins")
+	if f.count("analysis_contact_bins") != before+1 || sent["measure"] != "support" || sent["fixed_bin"] != true || sent["bin_size"] != float64(d.bin) {
+		t.Fatalf("%d queries, last %v", f.count("analysis_contact_bins")-before, sent)
+	}
+}
+
+// The web's contactToTsv on the same cells (HYB2 Web Lite, Node).
+func TestContactTSVMatchesWeb(t *testing.T) {
+	records := contactMeasure{total: 4, x: []int{25, 0, 0}, y: []int{50, 25, 0}, count: []int{1, 2, 3}}
+	support := contactMeasure{total: 9, x: []int{0, 0, 25}, y: []int{0, 25, 50}, count: []int{5, 3, 1}}
+	want := "x_start\tx_end\ty_start\ty_end\trecords\tsupport_count\n0\t24\t0\t24\t3\t5\n0\t24\t25\t49\t2\t3\n25\t49\t50\t74\t1\t1"
+	if got := string(contactTSV(25, records, support)); got != want {
+		t.Fatalf("got %q", got)
 	}
 }
 
@@ -111,12 +127,30 @@ func TestCompareExportTSVAndSVG(t *testing.T) {
 	if name != "AFR__2_merged_vs_BRA__2_merged_interactions.tsv" {
 		t.Fatalf("name %q", name)
 	}
-	records := tsvRecords(t, text)
-	if len(records) != 301 || records[1][2] != "5720" || records[1][1] != "higher in B" {
-		t.Fatalf("%d records, first %q", len(records), records[1])
+	// the web's interactions.tsv: no comments, up rows then down rows in the
+	// result's order, numbers as JavaScript's String(number)
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	cp := a.PageFor("compare").(*comparePage)
+	result := cp.cache[cp.selectedID]
+	if len(lines) != 301 || lines[0] != "direction\tx\ty\tlog2FoldChange\tpadj\tbaseMean" {
+		t.Fatalf("%d lines, header %q", len(lines), lines[0])
 	}
-	if !strings.Contains(text, "# HYB2 differential test compare-1791998444625 · AFR (2 merged) (A) vs BRA (2 merged) (B)") {
-		t.Fatalf("comments %.300q", text)
+	var up, down []cmpInteraction
+	for _, r := range result.Interactions {
+		if r.Direction == "up" {
+			up = append(up, r)
+		} else {
+			down = append(down, r)
+		}
+	}
+	for i, r := range append(up, down...) {
+		want := strings.Join([]string{r.Direction, strconv.Itoa(r.X), strconv.Itoa(r.Y), jsNumber(*r.LFC), jsNumber(*r.Padj), jsNumber(*r.BaseMean)}, "\t")
+		if lines[i+1] != want {
+			t.Fatalf("line %d %q, want %q", i+1, lines[i+1], want)
+		}
+	}
+	if len(up) == 0 || len(down) == 0 {
+		t.Fatalf("%d up, %d down", len(up), len(down))
 	}
 	_, svg := exportClick(t, a, tt, "Export SVG…")
 	xmlWellFormed(t, svg)
@@ -228,15 +262,15 @@ func TestStructureExportCTPairsAndReport(t *testing.T) {
 	if !strings.HasSuffix(name, ".ct") || len(lines) != len(r.Sequence)+1 || !strings.HasPrefix(lines[0], strconv.Itoa(len(r.Sequence))+" ENERGY = ") {
 		t.Fatalf("%s: %d lines, header %q", name, len(lines), lines[0])
 	}
-	// every pair is listed from both ends; the last column is the gene position
-	start, _ := r.span()
+	// every pair is listed from both ends; the last column is the position
+	// in the window, as the web's
 	partners := 0
 	for _, line := range lines[1:] {
 		f := strings.Split(line, "\t")
 		pos, _ := strconv.Atoi(f[0])
 		partner, _ := strconv.Atoi(f[4])
 		natural, _ := strconv.Atoi(f[5])
-		if natural != start+pos-1 || f[1] != string(r.Sequence[pos-1]) {
+		if natural != pos || f[1] != string(r.Sequence[pos-1]) {
 			t.Fatalf("row %q", line)
 		}
 		if partner > 0 {
@@ -249,13 +283,18 @@ func TestStructureExportCTPairsAndReport(t *testing.T) {
 
 	name, text := exportClick(t, a, tt, "Pairs TSV…")
 	rows := tsvRecords(t, text)
-	if !strings.HasSuffix(name, "_pairs.tsv") || len(rows) != len(pairs)+1 || rows[0][6] != "pair_type" {
+	if !strings.HasSuffix(name, "_pairs.tsv") || len(rows) != len(pairs)+1 || strings.Join(rows[0], ",") != strings.Join(stPairsHeader, ",") ||
+		strings.HasPrefix(text, "#") {
 		t.Fatalf("%s: %d rows for %d pairs, header %q", name, len(rows), len(pairs), rows[0])
 	}
+	last := 0
 	for _, row := range rows[1:] {
-		if row[6] != row[3]+"–"+row[5] || row[7] != "no" || (row[8] != "primary" && !strings.HasPrefix(row[8], "pseudoknot-")) || row[12] != "CPLfold" {
+		left, _ := strconv.Atoi(row[0])
+		if row[4] != row[1]+"–"+row[3] || row[5] != "no" || row[6] != "" || row[7] != "" || row[8] != "log1p_hyb_bonus" ||
+			(row[10] != "primary" && !strings.HasPrefix(row[10], "pseudoknot-")) || row[12] != "CPLfold" || left < last {
 			t.Fatalf("row %q", row)
 		}
+		last = left
 	}
 
 	name, text = exportClick(t, a, tt, "Report JSON…")
@@ -336,5 +375,53 @@ func TestNestedDBN(t *testing.T) {
 	pairs := []widgets.LayeredPair{{I: 11, J: 20, Layer: 0}, {I: 12, J: 19, Layer: 0}, {I: 14, J: 25, Layer: 1}}
 	if got := stNestedDBN(pairs, 10, 16); got != ".((......))....." {
 		t.Fatalf("dbn %q", got)
+	}
+}
+
+// The web's basePairTsv, dotBracketFile and ctFile (structure-ui.js, run in
+// Node) on the same structures.
+func TestStructureExportsMatchWeb(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	seq := "GGGAAACCCAGCAAGCU"
+	zero := math.Copysign(0, -1)
+	cpl := structureRecord{WindowStart: 1, WindowEnd: 17, Sequence: seq, DBN: "(((...)))[[..]]..", Energy: &zero,
+		Pairs: [][2]int{{3, 7}, {2, 8}, {1, 9}, {11, 14}, {10, 15}},
+		Bonus: []*float64{f(1.0986122886681098), f(0), f(0.6931471805599453), f(0), f(2.5e-7)}}
+	recs := []structureRecord{cpl}
+	if got := string(webTSV(append([][]string{stPairsHeader}, stPairsRows(recs, "CPLfold", nil, true)...))); got != "left_position\tleft_base\tright_position\tright_base\tpair_type\thard_constraint\trna_cofold_evidence\tmfe_kcal_per_mol\tevidence_kind\tevidence_support\tpair_layer\tselected_energy_kcal_per_mol\tengine\n1\tG\t9\tC\tG–C\tno\t\t\tlog1p_hyb_bonus\t0.6931471805599453\tprimary\t0.00\tCPLfold\n2\tG\t8\tC\tG–C\tno\t\t\tlog1p_hyb_bonus\t0\tprimary\t0.00\tCPLfold\n3\tG\t7\tC\tG–C\tno\t\t\tlog1p_hyb_bonus\t1.0986122886681098\tprimary\t0.00\tCPLfold\n10\tA\t15\tG\tA–G\tno\t\t\tlog1p_hyb_bonus\t2.5e-7\tpseudoknot-1\t0.00\tCPLfold\n11\tG\t14\tA\tG–A\tno\t\t\tlog1p_hyb_bonus\t0\tpseudoknot-1\t0.00\tCPLfold\n" {
+		t.Errorf("CPLfold pairs:\n%s", got)
+	}
+	if got := stDBNText("G", recs); got != ">G:1-17\nGGGAAACCCAGCAAGCU\n(((...)))[[..]].. (0.00)\n" {
+		t.Errorf("CPLfold dbn %q", got)
+	}
+	if got := stCTText("G", recs); got != "17 ENERGY = 0.00 G:1-17\n1\tG\t0\t2\t9\t1\n2\tG\t1\t3\t8\t2\n3\tG\t2\t4\t7\t3\n4\tA\t3\t5\t0\t4\n5\tA\t4\t6\t0\t5\n6\tA\t5\t7\t0\t6\n7\tC\t6\t8\t3\t7\n8\tC\t7\t9\t2\t8\n9\tC\t8\t10\t1\t9\n10\tA\t9\t11\t15\t10\n11\tG\t10\t12\t14\t11\n12\tC\t11\t13\t0\t12\n13\tA\t12\t14\t0\t13\n14\tA\t13\t15\t11\t14\n15\tG\t14\t16\t10\t15\n16\tC\t15\t17\t0\t16\n17\tU\t16\t0\t0\t17\n" {
+		t.Errorf("CPLfold ct %q", got)
+	}
+	// plain ViennaRNA MFE: no HYB evidence, even when a stored bonus is 0
+	energy := -1.005
+	vienna := structureRecord{WindowStart: 1, WindowEnd: 17, Sequence: seq, DBN: "(((...)))........", Energy: &energy,
+		Pairs: [][2]int{{3, 7}, {2, 8}, {1, 9}}, Bonus: []*float64{f(0), f(0), f(0)}}
+	recs = []structureRecord{vienna}
+	if got := string(webTSV(append([][]string{stPairsHeader}, stPairsRows(recs, "ViennaRNA", nil, false)...))); got != "left_position\tleft_base\tright_position\tright_base\tpair_type\thard_constraint\trna_cofold_evidence\tmfe_kcal_per_mol\tevidence_kind\tevidence_support\tpair_layer\tselected_energy_kcal_per_mol\tengine\n1\tG\t9\tC\tG–C\tno\t0\t-1.00\tnone\t0\tnested\t-1.00\tViennaRNA\n2\tG\t8\tC\tG–C\tno\t0\t-1.00\tnone\t0\tnested\t-1.00\tViennaRNA\n3\tG\t7\tC\tG–C\tno\t0\t-1.00\tnone\t0\tnested\t-1.00\tViennaRNA\n" {
+		t.Errorf("ViennaRNA pairs:\n%s", got)
+	}
+	if got := stDBNText("G", recs); got != ">G:1-17\nGGGAAACCCAGCAAGCU\n(((...)))........ (-1.00)\n" {
+		t.Errorf("ViennaRNA dbn %q", got)
+	}
+}
+
+// The web's region FASTA (parseFasta + extractReference, Node) for a region
+// that ends past the sequence: the FASTA id, capitals, no whitespace, the
+// end clamped.
+func TestRegionFASTAMatchesWeb(t *testing.T) {
+	got, err := regionFASTA("ZIKV", "KX377335.1 Zika virus strain", "acgu acguACGUAC", 5, 40)
+	if err != nil || got != ">KX377335.1:5-14\nACGUACGUAC\n" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if got, _ := regionFASTA("ZIKV", "", "ACGU", 1, 2); got != ">ZIKV:1-2\nAC\n" {
+		t.Fatalf("no header: %q", got)
+	}
+	if _, err := regionFASTA("ZIKV", "", "ACGU", 5, 9); err == nil {
+		t.Fatal("a region past the sequence's end has no sequence")
 	}
 }

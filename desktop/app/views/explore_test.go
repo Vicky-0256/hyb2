@@ -104,7 +104,7 @@ func TestExploreContactMapPickShowHybridsAndFold(t *testing.T) {
 	if len(d.count) != 2601 || d.bin != 100 || len(p.cm.heat.Cells()) != 2601 {
 		t.Fatalf("cells %d bin %d", len(d.count), d.bin)
 	}
-	for _, text := range []string{"Explore", "Contact map", "Selected cell", "Bin size", "Colour cap", "1,724"} {
+	for _, text := range []string{"Explore", "Contact map", "Selected cell", "Bin size", "Colour cap", "Records in map", "1,724"} {
 		if !tt.HasText(text) && !strings.Contains(strings.Join(tt.Texts(), "\n"), text) {
 			t.Fatalf("contact map lacks %q: %q", text, tt.Texts())
 		}
@@ -404,6 +404,22 @@ func TestExploreInteractionFiltersAndRecord(t *testing.T) {
 	tt.Frame()
 	if s.chosen != -1 {
 		t.Fatal("card still open")
+	}
+}
+
+// "Records in map" counts hybrids whatever the cells weigh: a support map
+// asks for the records on its bins too.
+func TestExploreContactRecordsInMap(t *testing.T) {
+	a, f, p, tt := openExplore(t)
+	before := f.count("analysis_contact_bins")
+	p.cm.measure = measureSupport
+	settle(a, tt)
+	sent := f.last("analysis_contact_bins")
+	if f.count("analysis_contact_bins") != before+2 || sent["measure"] != "records" || sent["fixed_bin"] != true {
+		t.Fatalf("%d queries, last %v", f.count("analysis_contact_bins")-before, sent)
+	}
+	if p.cm.data.records != 1724 || !tt.HasText("Records in map") {
+		t.Fatalf("records %d, texts %q", p.cm.data.records, tt.Texts())
 	}
 }
 

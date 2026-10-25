@@ -16,6 +16,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"hyb2desktop/core"
 	"hyb2desktop/widgets"
 )
 
@@ -146,27 +147,51 @@ func (p *explorePage) exportContactSVG() {
 	saveExport(p.a, "Export the contact map", p.contactExportName(".svg"), render)
 }
 
+// exportContactTSV writes every cell of the map as the web's
+// contact-map.tsv: bin ranges, the hybrids in the cell and their summed
+// cluster support, whatever the map's measure, in arm order.
 func (p *explorePage) exportContactTSV() {
-	s := &p.cm
-	d := s.data
+	d := p.cm.data
 	if d == nil {
 		return
 	}
-	view := s.heat.View()
-	comments := []string{"HYB2 contact map · " + p.contactTitle(),
-		fmt.Sprintf("Measure: %s · orientation: %s · type: %s · %s", strings.ToLower(d.measure), d.orientation, d.typ, strings.ToLower(nameOr(d.homodimer, homodimerOptions[0]))),
-		fmt.Sprintf("Cells in view: arm 1 %d–%d, arm 2 %d–%d", int(view.X0), int(math.Ceil(view.X1)), int(view.Y0), int(math.Ceil(view.Y1)))}
 	render := func() ([]byte, error) {
-		var rows [][]string
-		for _, i := range contactInView(d, view) {
-			x0, x1 := cellRange(d.x[i], d.bin)
-			y0, y1 := cellRange(d.y[i], d.bin)
-			rows = append(rows, []string{d.gene, strconv.Itoa(x0), strconv.Itoa(x1), d.gene2, strconv.Itoa(y0), strconv.Itoa(y1), strconv.Itoa(d.count[i])})
+		records, err := p.contactCells(d, measureRecords)
+		if err != nil {
+			return nil, err
 		}
-		header := []string{"gene1", "start1", "end1", "gene2", "start2", "end2", strings.ToLower(d.measure)}
-		return tsvTable{Comments: comments, Header: header, Rows: rows}.Bytes()
+		support, err := p.contactCells(d, measureSupport)
+		if err != nil {
+			return nil, err
+		}
+		return contactTSV(d.bin, records, support), nil
 	}
 	saveExport(p.a, "Export the contact map cells", p.contactExportName(".tsv"), render)
+}
+
+// contactTSV is the web's contactToTsv (no newline after the last row).
+func contactTSV(bin int, records, support contactMeasure) []byte {
+	supportAt := make(map[[2]int]int, len(support.x))
+	for i := range support.x {
+		supportAt[[2]int{support.x[i], support.y[i]}] = support.count[i]
+	}
+	order := make([]int, len(records.x))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool {
+		a, b := order[i], order[j]
+		if records.x[a] != records.x[b] {
+			return records.x[a] < records.x[b]
+		}
+		return records.y[a] < records.y[b]
+	})
+	rows := []string{"x_start\tx_end\ty_start\ty_end\trecords\tsupport_count"}
+	for _, i := range order {
+		x, y := records.x[i], records.y[i]
+		rows = append(rows, fmt.Sprintf("%d\t%d\t%d\t%d\t%d\t%d", x, x+bin-1, y, y+bin-1, records.count[i], supportAt[[2]int{x, y}]))
+	}
+	return []byte(strings.Join(rows, "\n"))
 }
 
 // ---- ④ Compare: the selected test
@@ -179,29 +204,35 @@ func (p *comparePage) exportTarget() (*comparisonEntry, *comparisonResult, cmpCo
 	return e, p.cache[p.selectedID], p.context(e), true
 }
 
+// exportInteractionsTSV writes the merged interactions as the web's
+// interactions.tsv: the up rows then the down rows, in the result's order,
+// numbers as JavaScript prints them.
 func (p *comparePage) exportInteractionsTSV() {
-	e, result, ctx, ok := p.exportTarget()
+	_, result, ctx, ok := p.exportTarget()
 	if !ok {
 		return
 	}
 	rows := append([]cmpInteraction(nil), result.Interactions...)
-	comments := []string{"HYB2 differential test " + e.ID + " · " + ctx.LabelA + " (A) vs " + ctx.LabelB + " (B)",
-		"Genes: " + strings.Join(e.Genes, ", "), cmpParamsText(e) + " · log2FoldChange = A / B; 10-nt cells merged into interactions"}
-	render := func() ([]byte, error) {
-		sort.SliceStable(rows, func(i, j int) bool { return cmpPadj(rows[i].Padj) < cmpPadj(rows[j].Padj) })
-		out := make([][]string, len(rows))
-		for i, r := range rows {
-			direction := "higher in A"
-			if r.Direction == "down" {
-				direction = "higher in B"
-			}
-			out[i] = []string{r.Direction, direction, strconv.Itoa(r.X), strconv.Itoa(r.X + 9), strconv.Itoa(r.Y), strconv.Itoa(r.Y + 9),
-				tsvFloat(r.LFC), tsvFloat(r.Padj), tsvFloat(r.BaseMean)}
-		}
-		header := []string{"direction", "meaning", "arm1_start", "arm1_end", "arm2_start", "arm2_end", "log2FoldChange", "padj", "baseMean"}
-		return tsvTable{Comments: comments, Header: header, Rows: out}.Bytes()
-	}
+	render := func() ([]byte, error) { return cmpInteractionsTSV(rows), nil }
 	saveExport(p.a, "Export merged interactions", exportName(".tsv", ctx.LabelA, "vs", ctx.LabelB, "interactions"), render)
+}
+
+// cmpInteractionsTSV is the web's interactionsToTsv: direction x y
+// log2FoldChange padj baseMean, "NA" for a missing number.
+func cmpInteractionsTSV(rows []cmpInteraction) []byte {
+	num := func(v *float64) string {
+		if v == nil || math.IsNaN(*v) {
+			return "NA"
+		}
+		return jsNumber(*v)
+	}
+	sorted := append([]cmpInteraction(nil), rows...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Direction == "up" && sorted[j].Direction != "up" })
+	out := [][]string{{"direction", "x", "y", "log2FoldChange", "padj", "baseMean"}}
+	for _, r := range sorted {
+		out = append(out, []string{r.Direction, strconv.Itoa(r.X), strconv.Itoa(r.Y), num(r.LFC), num(r.Padj), num(r.BaseMean)})
+	}
+	return webTSV(out)
 }
 
 func (p *comparePage) exportMapSVG() {
@@ -410,21 +441,41 @@ func (p *explorePage) exportRegionInteractionsTSV(d *regionData) {
 }
 
 // exportRegionFASTA writes the region's reference sequence as the web does:
-// <gene>_<start>-<end>.fasta with the header ">gene:start-end".
+// <gene>_<start>-<end>.fasta holding regionFASTA.
 func (p *explorePage) exportRegionFASTA(d *regionData) {
 	a := p.a
 	pr, gene, start, end := a.Project, d.gene, d.f.start, d.f.end
 	name := exportName(".fasta", fmt.Sprintf("%s_%d-%d", gene, start, end))
 	saveExport(a, "Export the region sequence", name, func() ([]byte, error) {
-		seq, err := fetchSequence(a.B, pr, pr.Path, gene)
+		ref := stReferenceOf(pr, gene)
+		if ref == "" {
+			return nil, fmt.Errorf("no reference holds %s", gene)
+		}
+		raw, err := a.B.ProjectOp(pr.Path, "read_reference_sequence", core.Obj{"reference_id": ref, "name": gene})
 		if err != nil {
 			return nil, err
 		}
-		if end > len(seq) {
-			return nil, fmt.Errorf("%s is %d nt; the region ends at %d", gene, len(seq), end)
-		}
-		return []byte(fmt.Sprintf(">%s:%d-%d\n%s\n", gene, start, end, seq[start-1:end])), nil
+		seq, _ := raw["sequence"].(string)
+		header, _ := raw["header"].(string)
+		text, err := regionFASTA(gene, header, seq, start, end)
+		return []byte(text), err
 	})
+}
+
+// regionFASTA is the web's region FASTA: ">id:start-end" with the FASTA
+// id of the gene's entry (the header's first word), the sequence without
+// whitespace and in capitals, the end clamped to the sequence.
+func regionFASTA(gene, header, seq string, start, end int) (string, error) {
+	seq = strings.ToUpper(strings.Join(strings.Fields(seq), ""))
+	id := gene
+	if words := strings.Fields(header); len(words) > 0 {
+		id = words[0]
+	}
+	start, end = max(start, 1), min(end, len(seq))
+	if start > end {
+		return "", fmt.Errorf("the reference sequence of %s (%d nt) does not cover the region", gene, len(seq))
+	}
+	return fmt.Sprintf(">%s:%d-%d\n%s\n", id, start, end, seq[start-1:end]), nil
 }
 
 // ---- ④ Compare: the quick view
@@ -462,7 +513,8 @@ func (p *comparePage) exportQuickTSV() {
 
 // ---- ⑤ Structure: CT, base pairs and the report
 
-// stLayerName is the web's pair layer: "primary", then "pseudoknot-1", ….
+// stLayerName is the web's CPLfold pair layer: "primary", then
+// "pseudoknot-1", ….
 func stLayerName(layer int) string {
 	if layer == 0 {
 		return "primary"
@@ -470,8 +522,9 @@ func stLayerName(layer int) string {
 	return "pseudoknot-" + strconv.Itoa(layer)
 }
 
-// stCTText is one CT block per record (window): local positions, the pair
-// partner (0 for none) and the gene position as the natural numbering.
+// stCTText is one CT block per record (window), as the web's .ct: local
+// positions, the pair partner (0 for none) and the local position again
+// as the natural numbering; the energy with two decimals.
 func stCTText(gene string, records []structureRecord) string {
 	gene = nameOr(gene, "RNA")
 	var b strings.Builder
@@ -485,20 +538,24 @@ func stCTText(gene string, records []structureRecord) string {
 				partner[i], partner[j] = j, i
 			}
 		}
-		energy := "NA"
-		if r.Energy != nil {
-			energy = strconv.FormatFloat(*r.Energy, 'f', 2, 64)
-		}
-		fmt.Fprintf(&b, "%d ENERGY = %s %s:%d-%d\n", n, energy, gene, start, start+n-1)
+		fmt.Fprintf(&b, "%d ENERGY = %s %s:%d-%d\n", n, stEnergyText(r.Energy, "NA"), gene, start, start+n-1)
 		for pos := 1; pos <= n; pos++ {
 			next := pos + 1
 			if pos == n {
 				next = 0
 			}
-			fmt.Fprintf(&b, "%d\t%c\t%d\t%d\t%d\t%d\n", pos, r.Sequence[pos-1], pos-1, next, partner[pos], start+pos-1)
+			fmt.Fprintf(&b, "%d\t%c\t%d\t%d\t%d\t%d\n", pos, r.Sequence[pos-1], pos-1, next, partner[pos], pos)
 		}
 	}
 	return b.String()
+}
+
+// stEnergyText is an energy as the web writes it (toFixed(2)), or none.
+func stEnergyText(v *float64, none string) string {
+	if v == nil || math.IsNaN(*v) || math.IsInf(*v, 0) {
+		return none
+	}
+	return jsFixed(*v, 2)
 }
 
 // stHardPairs are a result's ViennaRNA hard pairs (meta parameters).
@@ -515,42 +572,87 @@ func stHardPairs(a *structureResult) map[[2]int]bool {
 	return out
 }
 
-// stPairsRows are the web's rna-secondary-structure-pairs.tsv columns that
-// apply to the desktop's engines, in gene positions, with the window of
-// each pair.
-func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool) [][]string {
+// stHybEvidence: whether CPLfold folded with HYB evidence (the web's
+// evidence.source "hyb-block-intervals"); without window summaries, whether
+// any pair carries a bonus.
+func stHybEvidence(a *structureResult) bool {
+	if len(a.Meta.Records) > 0 {
+		for _, r := range a.Meta.Records {
+			if r.Evidence.Source == "hyb-block-intervals" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, w := range stWeights(a.Records) {
+		if w > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// stPairsHeader is the web's rna-secondary-structure-pairs.tsv header.
+var stPairsHeader = []string{"left_position", "left_base", "right_position", "right_base", "pair_type", "hard_constraint",
+	"rna_cofold_evidence", "mfe_kcal_per_mol", "evidence_kind", "evidence_support", "pair_layer",
+	"selected_energy_kcal_per_mol", "engine"}
+
+// stPairsRows are the web's rna-secondary-structure-pairs.tsv rows, in
+// gene positions, sorted by the left position. evidence_kind is the
+// result's: log1p_hyb_bonus for CPLfold with HYB evidence,
+// rna_cofold_observations for COMRADES(ViennaRNA), none otherwise (support
+// 0); the ViennaRNA columns rna_cofold_evidence and mfe_kcal_per_mol are
+// empty for CPLfold; pair_layer is "nested" and engine "ViennaRNA" for the
+// ViennaRNA engines.
+func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool, hybEvidence bool) [][]string {
 	weights := stWeights(records)
-	var rows [][]string
+	cplfold := engine == "CPLfold"
+	kind := "none"
+	switch {
+	case cplfold && hybEvidence:
+		kind = "log1p_hyb_bonus"
+	case engine == "COMRADES(ViennaRNA)":
+		// the web folds COMRADES with its ViennaRNA engine and names that
+		kind, engine = "rna_cofold_observations", "ViennaRNA"
+	}
+	type row struct {
+		left  int
+		cells []string
+	}
+	var rows []row
 	for _, r := range records {
-		start, end := r.span()
+		start, _ := r.span()
 		base := func(pos int) string {
 			if i := pos - start; i >= 0 && i < len(r.Sequence) {
 				return string(r.Sequence[i])
 			}
 			return ""
 		}
-		energy := ""
-		if r.Energy != nil {
-			energy = strconv.FormatFloat(*r.Energy, 'f', 2, 64)
-		}
+		energy := stEnergyText(r.Energy, "")
 		for _, pr := range stRecordPairs(r) {
-			kind, support := "none", ""
-			if w, ok := weights[[2]int{pr.I, pr.J}]; ok {
-				kind, support = "log1p_hyb_bonus", strconv.FormatFloat(w, 'f', -1, 64)
-				if engine == "COMRADES(ViennaRNA)" {
-					kind = "rna_cofold_observations"
-				}
+			support := "0"
+			if w, ok := weights[[2]int{pr.I, pr.J}]; ok && kind != "none" && !math.IsNaN(w) {
+				support = jsNumber(w)
+			}
+			cofold, mfe, layer := support, energy, "nested"
+			if cplfold {
+				cofold, mfe, layer = "", "", stLayerName(pr.Layer)
 			}
 			left, right := base(pr.I), base(pr.J)
 			fixed := "no"
 			if hard[[2]int{pr.I, pr.J}] {
 				fixed = "yes"
 			}
-			rows = append(rows, []string{strconv.Itoa(start), strconv.Itoa(end), strconv.Itoa(pr.I), left, strconv.Itoa(pr.J), right,
-				left + "–" + right, fixed, stLayerName(pr.Layer), kind, support, energy, engine})
+			rows = append(rows, row{pr.I, []string{strconv.Itoa(pr.I), left, strconv.Itoa(pr.J), right, left + "–" + right, fixed,
+				cofold, mfe, kind, support, layer, energy, engine}})
 		}
 	}
-	return rows
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].left < rows[j].left })
+	out := make([][]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.cells
+	}
+	return out
 }
 
 func (p *structurePage) exportName(a *structureResult, ext string) string {
@@ -566,12 +668,9 @@ func (p *structurePage) exportCT(a *structureResult) {
 
 func (p *structurePage) exportPairsTSV(a *structureResult) {
 	records, engine, hard := stPickRecords(a.Records, p.record), nameOr(a.Meta.Engine, "CPLfold"), stHardPairs(a)
-	comments := []string{"HYB2 structure " + p.viewA + " · " + nameOr(a.Meta.GeneID, a.Structure.GeneID) + " · " + engine,
-		"Positions on the RNA; evidence_support is the pair's HYB bonus (CPLfold, log1p of the chimera support) or RNAcofold observations (COMRADES)"}
+	evidence := stHybEvidence(a)
 	saveExport(p.a, "Save the base pairs", p.exportName(a, "_pairs.tsv"), func() ([]byte, error) {
-		header := []string{"window_start", "window_end", "left_position", "left_base", "right_position", "right_base", "pair_type",
-			"hard_constraint", "pair_layer", "evidence_kind", "evidence_support", "selected_energy_kcal_per_mol", "engine"}
-		return tsvTable{Comments: comments, Header: header, Rows: stPairsRows(records, engine, hard)}.Bytes()
+		return webTSV(append([][]string{stPairsHeader}, stPairsRows(records, engine, hard, evidence)...)), nil
 	})
 }
 

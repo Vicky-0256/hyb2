@@ -317,6 +317,19 @@ class SplitAndCompare(unittest.TestCase):
             self.assertEqual(json.loads((tmp / "out" / "summary.json").read_text())["engine"].split()[0],
                              "hyb2analysis.deseq")
 
+    def test_numbers_are_written_as_javascript_string_number(self):
+        # String(x) in Node for each value: the web's DESeq exports
+        cases = [(0.000024497189003056657, "0.000024497189003056657"), (3.679863616759913e-9, "3.679863616759913e-9"),
+                 (1e21, "1e+21"), (1.5e21, "1.5e+21"), (1e-6, "0.000001"), (1e-7, "1e-7"), (123.0, "123"),
+                 (-0.5, "-0.5"), (1.0, "1"), (0.0, "0"), (-0.0, "0"), (100.0, "100"), (12345.678, "12345.678"),
+                 (1.2345678901234569e23, "1.2345678901234569e+23"), (5e-324, "5e-324"),
+                 (float("inf"), "Infinity"), (float("-inf"), "-Infinity")]
+        for value, text in cases:
+            self.assertEqual(differential.js_number(value), text)
+            self.assertEqual(differential._fmt(np.float64(value)), text)
+        self.assertEqual(differential._fmt(float("nan")), "NA")
+        self.assertEqual(differential._fmt(None), "NA")
+
     def test_compare_rejects_single_sample_condition_pairs(self):
         with self.assertRaises(ValueError):
             differential.compare(["a", "b"], ["a", "b"], [True, False], "unused")

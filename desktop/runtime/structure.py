@@ -390,7 +390,8 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any]) -> D
         raise ValueError("CPLfold did not produce a structure")
     best = results[0]
     structure = best["structure"]
-    pairs = [(i, j, bracket, float(bonus[i - 1, j - 1]) if bonus is not None else 0.0)
+    # bonus None: folded from the sequence alone, the pairs carry no HYB evidence
+    pairs = [(i, j, bracket, float(bonus[i - 1, j - 1]) if bonus is not None else None)
              for i, j, bracket in _pairs(structure)]
     del bonus
     return {
@@ -461,7 +462,9 @@ def _write_outputs(out_dir: Path, records: List[Dict[str, Any]], params: Dict[st
         partner = {}
         for i, j, bracket, bonus in record["pairs"]:
             partner[i], partner[j] = j, i
-            tsv.append(f"{start}\t{end}\t{start + i - 1}\t{start + j - 1}\t{bracket}\t{bonus:.4f}")
+            # the bonus at full precision (the web's pairs TSV); empty without HYB evidence
+            bonus_text = "" if bonus is None else repr(float(bonus))
+            tsv.append(f"{start}\t{end}\t{start + i - 1}\t{start + j - 1}\t{bracket}\t{bonus_text}")
         n = len(record["sequence"])
         ct.append(f"{n}\tENERGY = {energy_text}\t{label}\n")
         for k, base in enumerate(record["sequence"], 1):
@@ -480,7 +483,7 @@ def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
         "start": record["start"], "end": record["end"], "length": len(record["sequence"]),
         "energy": record["energy"], "structure_type": record["type"],
         "pairs": len(pairs),
-        "pairs_with_bonus": sum(1 for pair in pairs if pair[3] > 0),
+        "pairs_with_bonus": sum(1 for pair in pairs if (pair[3] or 0) > 0),
         "pseudoknot_pairs": sum(1 for pair in pairs if pair[2] != "()"),
         "long_range_pairs_gt_1000": sum(1 for pair in pairs if pair[1] - pair[0] > 1000),
         "evidence": {key: evidence.get(key) for key in (

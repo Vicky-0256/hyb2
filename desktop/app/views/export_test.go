@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -165,4 +166,48 @@ func TestArcSVGWellFormed(t *testing.T) {
 func atof(s string) float64 {
 	v, _ := strconv.ParseFloat(s, 64)
 	return v
+}
+
+// Each expected string is Node's String(v) / v.toFixed(d).
+func TestJSNumberAndFixed(t *testing.T) {
+	for _, c := range []struct {
+		v    float64
+		want string
+	}{{0.000024497189003056657, "0.000024497189003056657"}, {3.679863616759913e-9, "3.679863616759913e-9"},
+		{1e21, "1e+21"}, {1.5e21, "1.5e+21"}, {1e-6, "0.000001"}, {1e-7, "1e-7"}, {123, "123"}, {-0.5, "-0.5"},
+		{math.Copysign(0, -1), "0"}, {12345.678, "12345.678"}, {1.2345678901234569e23, "1.2345678901234569e+23"},
+		{5e-324, "5e-324"}, {math.Inf(1), "Infinity"}, {math.NaN(), "NaN"}} {
+		if got := jsNumber(c.v); got != c.want {
+			t.Errorf("jsNumber(%v) = %q, want %q", c.v, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		v    float64
+		d    int
+		want string
+	}{{-12.3, 2, "-12.30"}, {math.Copysign(0, -1), 2, "0.00"}, {-0.001, 2, "-0.00"}, {1e-7, 2, "0.00"},
+		{0.125, 2, "0.13"}, {-0.125, 2, "-0.13"}, {1.005, 2, "1.00"}, {2.5, 0, "3"}, {9.999, 2, "10.00"}} {
+		if got := jsFixed(c.v, c.d); got != c.want {
+			t.Errorf("jsFixed(%v, %d) = %q, want %q", c.v, c.d, got, c.want)
+		}
+	}
+}
+
+// The web's interactionsToTsv on the same rows (Node, HYB2 Web Lite).
+func TestCompareInteractionsTSVMatchesWeb(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	rows := []cmpInteraction{
+		{Direction: "down", X: 0, Y: 10, LFC: f(-8.776445444752918), Padj: f(0.0000011796673442258842), BaseMean: f(28.05259848605843)},
+		{Direction: "up", X: 60, Y: 310, LFC: f(4.433926817464807), Padj: f(2.6603136482030757e-23), BaseMean: f(430.3326360217795)},
+		{Direction: "down", X: 0, Y: 2220, LFC: f(-3.83531835132079), Padj: f(0.00002120333486596111), BaseMean: f(29.56968483743743)},
+		{Direction: "up", X: 10, Y: 2220, LFC: f(4.905582335739226), Padj: f(2.5203360745034645e-12), BaseMean: nil},
+	}
+	want := "direction\tx\ty\tlog2FoldChange\tpadj\tbaseMean\n" +
+		"up\t60\t310\t4.433926817464807\t2.6603136482030757e-23\t430.3326360217795\n" +
+		"up\t10\t2220\t4.905582335739226\t2.5203360745034645e-12\tNA\n" +
+		"down\t0\t10\t-8.776445444752918\t0.0000011796673442258842\t28.05259848605843\n" +
+		"down\t0\t2220\t-3.83531835132079\t0.00002120333486596111\t29.56968483743743\n"
+	if got := string(cmpInteractionsTSV(rows)); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
 }

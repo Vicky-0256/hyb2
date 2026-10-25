@@ -168,6 +168,10 @@ class StructureRunTests(unittest.TestCase):
         pairs = (out / "pairs.tsv").read_text().splitlines()
         self.assertEqual(pairs[0], "window_start\twindow_end\ti\tj\tbracket\tbonus")
         self.assertEqual(len(pairs) - 1, lines[2].count("("))
+        # HYB bonus at full precision, as the web's pairs TSV
+        bonuses = [row.split("\t")[5] for row in pairs[1:]]
+        self.assertTrue(all(repr(float(b)) == b for b in bonuses), bonuses[:5])
+        self.assertTrue(any(len(b.split(".")[-1]) > 4 for b in bonuses), bonuses[:5])
         ct = (out / "structure.ct").read_text().splitlines()
         self.assertEqual(len(ct), self.length + 1)
         run_dir = Path(result["run_dir"])
@@ -331,6 +335,11 @@ class ViennaRunTests(unittest.TestCase):
         register_task_run(self.project, "v1")
         read = handle({"operation": "read_structure", "path": str(self.project), "structure_id": "v1"}, repo_root=ROOT)
         self.assertEqual(read["records"][0]["dbn"], structure)
+        # plain MFE carries no HYB evidence: no bonus, not 0.0
+        tsv = (out / "pairs.tsv").read_text().splitlines()[1:]
+        self.assertEqual({row.split("\t")[5] for row in tsv}, {""})
+        self.assertIsNone(read["records"][0]["bonus"])
+        self.assertEqual(meta["records"][0]["pairs_with_bonus"], 0)
 
     def test_hard_pairs(self):
         i, j = self._canonical_pair(start=40, end=120)

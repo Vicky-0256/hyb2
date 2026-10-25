@@ -47,6 +47,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      pages_artifact_id: ${{ steps.pages-artifact.outputs.artifact_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -123,10 +125,12 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Upload GitHub Pages artifact
+        id: pages-artifact
         if: ${{ vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
         uses: actions/upload-pages-artifact@v4
         with:
           path: ./web
+          retention-days: 1
 
       - name: Explain release gate
         if: ${{ vars.CPLFOLD_DISTRIBUTION_APPROVED != 'true' }}
@@ -136,6 +140,11 @@ jobs:
 
   deploy:
     if: ${{ vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+      actions: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -145,3 +154,10 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Remove the temporary artifact after deployment
+        if: ${{ success() && needs.build.outputs.pages_artifact_id != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build.outputs.pages_artifact_id }}
+        run: gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"

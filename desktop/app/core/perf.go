@@ -51,10 +51,14 @@ const (
 
 // priorSecondsPerMB are seconds per MB of input at 10 CPUs (Apple M1 Pro,
 // ZIKV SPLASH reads; fastq.gz: 3 M reads, 160 MB in 76 s, and a full 2 GB
-// sample in ~15 min).
+// sample in ~15 min). A .hyb input is only indexed: 362 MB in 37 s.
 var priorSecondsPerMB = map[string]float64{
-	"fastq.gz": 0.47, "fastq": 0.078, "fasta.gz": 0.4, "fasta": 0.07, "sam": 0.02, "hyb": 0.01,
+	"fastq.gz": 0.47, "fastq": 0.078, "fasta.gz": 0.4, "fasta": 0.07, "sam": 0.02, "hyb": indexSecondsPerMB,
 }
+
+// indexSecondsPerMB is the analysis index build per MB of .hyb (measured:
+// 362 MB in 37 s).
+const indexSecondsPerMB = 0.1
 
 // sampleStageWeights is the share of a sample pipeline's time before and
 // in each stage, for the remaining time of a running one (measured: reads
@@ -350,16 +354,33 @@ func remainingSeconds(history []PerfRecord, progress Obj, cpu uint32) (float64, 
 		cpu = uint32(c)
 	}
 	total, _ := SampleEstimate(history, format, int64(inputBytes), cpu)
+	done, size := -1.0, -1.0
+	if d, ok := progress["bytes_done"].(float64); ok {
+		if t, ok := progress["bytes_total"].(float64); ok && t > 0 {
+			done, size = math.Min(d, t), t
+		}
+	}
+	if stage == "contact" || stage == "index" {
+		switch {
+		case format == "hyb":
+			// Indexing is all the pipeline does with a .hyb.
+			if stage == "index" && size > 0 {
+				return math.Max(total*(1-done/size), 1), true
+			}
+			return total, true
+		case stage == "index" && size > 0:
+			// The .hyb the pipeline wrote: its size is the stage's work.
+			return math.Max(indexSecondsPerMB*(size-done)/1e6, 1), true
+		}
+	}
 	weights, ok := sampleStageWeights[stage]
 	if !ok {
 		// Past mapping: seconds left.
 		return math.Max(total*0.03*0.5, 1), true
 	}
-	done := weights[0]
-	if d, ok := progress["bytes_done"].(float64); ok {
-		if t, ok := progress["bytes_total"].(float64); ok && t > 0 {
-			done += weights[1] * math.Min(d/t, 1)
-		}
+	share := weights[0]
+	if size > 0 {
+		share += weights[1] * done / size
 	}
-	return total * (1 - done), true
+	return total * (1 - share), true
 }

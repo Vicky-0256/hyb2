@@ -465,3 +465,15 @@ func TestStructureComradesForm(t *testing.T) {
 		t.Fatalf("params %+v", params)
 	}
 }
+
+// The ViennaRNA estimate is near measured folds at short lengths too.
+func TestViennaEstimateNearMeasured(t *testing.T) {
+	for _, m := range []struct {
+		nt      int
+		seconds float64
+	}{{1000, 0.81}, {3000, 10.9}, {10_807, 285}} {
+		if got := viennaSeconds([]int{m.nt}); got < m.seconds*0.8 || got > m.seconds*1.25 {
+			t.Errorf("%d nt: %.2f s, measured %.2f s", m.nt, got, m.seconds)
+		}
+	}
+}

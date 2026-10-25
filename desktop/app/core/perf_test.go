@@ -215,3 +215,21 @@ func TestFoldsDoNotPushSampleTimingsOut(t *testing.T) {
 		t.Fatalf("kept %d sample and %d fold records", samples, folds)
 	}
 }
+
+// The built-in rates match measured runs: a 362 MB .hyb indexed in 37 s;
+// the index stage's time left follows the .hyb it is indexing.
+func TestIndexStageEstimates(t *testing.T) {
+	seconds, measured := SampleEstimate(nil, "hyb", 362e6, priorCPU)
+	if measured || seconds < 30 || seconds > 45 {
+		t.Fatalf(".hyb prior %v", seconds)
+	}
+	hyb := map[string]any{"format": "hyb", "input_bytes": 362e6, "cpu": 10.0}
+	if left, ok := remainingSeconds(nil, Obj{"stage": "index", "work": hyb, "bytes_done": 181e6, "bytes_total": 362e6}, 10); !ok || !near(left, seconds/2) {
+		t.Fatalf(".hyb half indexed: %v", left)
+	}
+	// A fastq.gz sample's index stage: 200 MB of .hyb left is about 20 s.
+	reads := map[string]any{"format": "fastq.gz", "input_bytes": 2e9, "cpu": 10.0}
+	if left, ok := remainingSeconds(nil, Obj{"stage": "index", "work": reads, "bytes_done": 100e6, "bytes_total": 300e6}, 10); !ok || !near(left, 20) {
+		t.Fatalf("index of a mapped sample: %v", left)
+	}
+}

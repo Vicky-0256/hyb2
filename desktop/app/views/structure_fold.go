@@ -373,7 +373,7 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 		}
 		if p.engine == engineVienna && len(pl.lengths) > 0 {
 			line("Engine", fmt.Sprintf("ViennaRNA MFE, %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
-			line("Time", "about "+FormatDuration(viennaSeconds(pl.lengths))+" (rough: MFE time grows with the cube of the length)")
+			line("Time", "about "+FormatDuration(viennaSeconds(pl.lengths))+" (rough: MFE time grows with about the 2.5th power of the length)")
 		}
 		if p.engine == engineComrades && len(pl.lengths) > 0 {
 			line("Engine", fmt.Sprintf("COMRADES(ViennaRNA), %g °C, minimum loop %d", p.temperature, int(p.minLoop)))

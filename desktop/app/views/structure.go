@@ -20,6 +20,7 @@ package views
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -109,6 +110,13 @@ type structureResult struct {
 		EvidenceInputs struct {
 			Rows string `json:"rows"`
 		} `json:"evidence_inputs"`
+		// Records are the windows' summaries; evidence.source is
+		// "hyb-block-intervals" when CPLfold folded with HYB evidence.
+		Records []struct {
+			Evidence struct {
+				Source string `json:"source"`
+			} `json:"evidence"`
+		} `json:"records"`
 	} `json:"meta"`
 	Records []structureRecord `json:"records"`
 }
@@ -1013,11 +1021,12 @@ func stDBNText(gene string, records []structureRecord) string {
 	}
 	var b strings.Builder
 	for _, r := range records {
-		fmt.Fprintf(&b, ">%s:%d-%d", gene, r.WindowStart, r.WindowEnd)
-		if r.Energy != nil {
-			fmt.Fprintf(&b, " %g", *r.Energy)
+		// as the web's .dbn: the energy follows the structure, two decimals
+		energy := ""
+		if r.Energy != nil && !math.IsNaN(*r.Energy) && !math.IsInf(*r.Energy, 0) {
+			energy = " (" + jsFixed(*r.Energy, 2) + ")"
 		}
-		fmt.Fprintf(&b, "\n%s\n%s\n", r.Sequence, r.DBN)
+		fmt.Fprintf(&b, ">%s:%d-%d\n%s\n%s%s\n", gene, r.WindowStart, r.WindowEnd, r.Sequence, r.DBN, energy)
 	}
 	return b.String()
 }

@@ -112,7 +112,7 @@ def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, 
         "structure": structure,
         "energy": round(float(energy), 2),
         "type": "constrained MFE" if hard_pairs else "MFE",
-        "pairs": [(i, j, "()", 0.0) for i, j in pairs],
+        "pairs": [(i, j, "()", None) for i, j in pairs],  # plain MFE: no HYB evidence (bonus None)
         "hard_pairs": [list(p) for p in hard_pairs],
         "evidence": {},
         "seconds": {"bonus": 0.0, "fold": round(time.monotonic() - started, 2)},

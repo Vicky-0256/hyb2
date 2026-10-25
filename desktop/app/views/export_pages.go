@@ -468,7 +468,8 @@ func (p *comparePage) exportQuickTSV() {
 
 // ---- ⑤ Structure: CT, base pairs and the report
 
-// stLayerName is the web's pair layer: "primary", then "pseudoknot-1", ….
+// stLayerName is the web's CPLfold pair layer: "primary", then
+// "pseudoknot-1", ….
 func stLayerName(layer int) string {
 	if layer == 0 {
 		return "primary"
@@ -476,8 +477,9 @@ func stLayerName(layer int) string {
 	return "pseudoknot-" + strconv.Itoa(layer)
 }
 
-// stCTText is one CT block per record (window): local positions, the pair
-// partner (0 for none) and the gene position as the natural numbering.
+// stCTText is one CT block per record (window), as the web's .ct: local
+// positions, the pair partner (0 for none) and the local position again
+// as the natural numbering; the energy with two decimals.
 func stCTText(gene string, records []structureRecord) string {
 	gene = nameOr(gene, "RNA")
 	var b strings.Builder
@@ -491,20 +493,24 @@ func stCTText(gene string, records []structureRecord) string {
 				partner[i], partner[j] = j, i
 			}
 		}
-		energy := "NA"
-		if r.Energy != nil {
-			energy = strconv.FormatFloat(*r.Energy, 'f', 2, 64)
-		}
-		fmt.Fprintf(&b, "%d ENERGY = %s %s:%d-%d\n", n, energy, gene, start, start+n-1)
+		fmt.Fprintf(&b, "%d ENERGY = %s %s:%d-%d\n", n, stEnergyText(r.Energy, "NA"), gene, start, start+n-1)
 		for pos := 1; pos <= n; pos++ {
 			next := pos + 1
 			if pos == n {
 				next = 0
 			}
-			fmt.Fprintf(&b, "%d\t%c\t%d\t%d\t%d\t%d\n", pos, r.Sequence[pos-1], pos-1, next, partner[pos], start+pos-1)
+			fmt.Fprintf(&b, "%d\t%c\t%d\t%d\t%d\t%d\n", pos, r.Sequence[pos-1], pos-1, next, partner[pos], pos)
 		}
 	}
 	return b.String()
+}
+
+// stEnergyText is an energy as the web writes it (toFixed(2)), or none.
+func stEnergyText(v *float64, none string) string {
+	if v == nil || math.IsNaN(*v) || math.IsInf(*v, 0) {
+		return none
+	}
+	return jsFixed(*v, 2)
 }
 
 // stHardPairs are a result's ViennaRNA hard pairs (meta parameters).
@@ -521,42 +527,87 @@ func stHardPairs(a *structureResult) map[[2]int]bool {
 	return out
 }
 
-// stPairsRows are the web's rna-secondary-structure-pairs.tsv columns that
-// apply to the desktop's engines, in gene positions, with the window of
-// each pair.
-func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool) [][]string {
+// stHybEvidence: whether CPLfold folded with HYB evidence (the web's
+// evidence.source "hyb-block-intervals"); without window summaries, whether
+// any pair carries a bonus.
+func stHybEvidence(a *structureResult) bool {
+	if len(a.Meta.Records) > 0 {
+		for _, r := range a.Meta.Records {
+			if r.Evidence.Source == "hyb-block-intervals" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, w := range stWeights(a.Records) {
+		if w > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// stPairsHeader is the web's rna-secondary-structure-pairs.tsv header.
+var stPairsHeader = []string{"left_position", "left_base", "right_position", "right_base", "pair_type", "hard_constraint",
+	"rna_cofold_evidence", "mfe_kcal_per_mol", "evidence_kind", "evidence_support", "pair_layer",
+	"selected_energy_kcal_per_mol", "engine"}
+
+// stPairsRows are the web's rna-secondary-structure-pairs.tsv rows, in
+// gene positions, sorted by the left position. evidence_kind is the
+// result's: log1p_hyb_bonus for CPLfold with HYB evidence,
+// rna_cofold_observations for COMRADES(ViennaRNA), none otherwise (support
+// 0); the ViennaRNA columns rna_cofold_evidence and mfe_kcal_per_mol are
+// empty for CPLfold; pair_layer is "nested" and engine "ViennaRNA" for the
+// ViennaRNA engines.
+func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool, hybEvidence bool) [][]string {
 	weights := stWeights(records)
-	var rows [][]string
+	cplfold := engine == "CPLfold"
+	kind := "none"
+	switch {
+	case cplfold && hybEvidence:
+		kind = "log1p_hyb_bonus"
+	case engine == "COMRADES(ViennaRNA)":
+		// the web folds COMRADES with its ViennaRNA engine and names that
+		kind, engine = "rna_cofold_observations", "ViennaRNA"
+	}
+	type row struct {
+		left  int
+		cells []string
+	}
+	var rows []row
 	for _, r := range records {
-		start, end := r.span()
+		start, _ := r.span()
 		base := func(pos int) string {
 			if i := pos - start; i >= 0 && i < len(r.Sequence) {
 				return string(r.Sequence[i])
 			}
 			return ""
 		}
-		energy := ""
-		if r.Energy != nil {
-			energy = strconv.FormatFloat(*r.Energy, 'f', 2, 64)
-		}
+		energy := stEnergyText(r.Energy, "")
 		for _, pr := range stRecordPairs(r) {
-			kind, support := "none", ""
-			if w, ok := weights[[2]int{pr.I, pr.J}]; ok {
-				kind, support = "log1p_hyb_bonus", strconv.FormatFloat(w, 'f', -1, 64)
-				if engine == "COMRADES(ViennaRNA)" {
-					kind = "rna_cofold_observations"
-				}
+			support := "0"
+			if w, ok := weights[[2]int{pr.I, pr.J}]; ok && kind != "none" && !math.IsNaN(w) {
+				support = jsNumber(w)
+			}
+			cofold, mfe, layer := support, energy, "nested"
+			if cplfold {
+				cofold, mfe, layer = "", "", stLayerName(pr.Layer)
 			}
 			left, right := base(pr.I), base(pr.J)
 			fixed := "no"
 			if hard[[2]int{pr.I, pr.J}] {
 				fixed = "yes"
 			}
-			rows = append(rows, []string{strconv.Itoa(start), strconv.Itoa(end), strconv.Itoa(pr.I), left, strconv.Itoa(pr.J), right,
-				left + "–" + right, fixed, stLayerName(pr.Layer), kind, support, energy, engine})
+			rows = append(rows, row{pr.I, []string{strconv.Itoa(pr.I), left, strconv.Itoa(pr.J), right, left + "–" + right, fixed,
+				cofold, mfe, kind, support, layer, energy, engine}})
 		}
 	}
-	return rows
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].left < rows[j].left })
+	out := make([][]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.cells
+	}
+	return out
 }
 
 func (p *structurePage) exportName(a *structureResult, ext string) string {
@@ -572,12 +623,9 @@ func (p *structurePage) exportCT(a *structureResult) {
 
 func (p *structurePage) exportPairsTSV(a *structureResult) {
 	records, engine, hard := stPickRecords(a.Records, p.record), nameOr(a.Meta.Engine, "CPLfold"), stHardPairs(a)
-	comments := []string{"HYB2 structure " + p.viewA + " · " + nameOr(a.Meta.GeneID, a.Structure.GeneID) + " · " + engine,
-		"Positions on the RNA; evidence_support is the pair's HYB bonus (CPLfold, log1p of the chimera support) or RNAcofold observations (COMRADES)"}
+	evidence := stHybEvidence(a)
 	saveExport(p.a, "Save the base pairs", p.exportName(a, "_pairs.tsv"), func() ([]byte, error) {
-		header := []string{"window_start", "window_end", "left_position", "left_base", "right_position", "right_base", "pair_type",
-			"hard_constraint", "pair_layer", "evidence_kind", "evidence_support", "selected_energy_kcal_per_mol", "engine"}
-		return tsvTable{Comments: comments, Header: header, Rows: stPairsRows(records, engine, hard)}.Bytes()
+		return webTSV(append([][]string{stPairsHeader}, stPairsRows(records, engine, hard, evidence)...)), nil
 	})
 }
 

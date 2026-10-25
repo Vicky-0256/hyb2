@@ -101,7 +101,8 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	if err := tt.Click("Copy"); err != nil {
 		t.Fatal(err)
 	}
-	if got := tt.Clipboard(); !strings.HasPrefix(got, ">ZIKV_African_KX377335-1_virusRNA:3170-6229 -452.02\n") {
+	// the web's .dbn: the energy follows the structure, two decimals
+	if got := tt.Clipboard(); !strings.HasPrefix(got, ">ZIKV_African_KX377335-1_virusRNA:3170-6229\n") || !strings.Contains(got, " (-452.02)\n") {
 		t.Fatalf("clipboard %.80q", got)
 	}
 	// Compare as B: shared pairs and pairs only in A / B.

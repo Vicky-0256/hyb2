@@ -14,6 +14,7 @@ equal ``contact.txt`` exactly.
 from __future__ import annotations
 
 import heapq
+import itertools
 import json
 import os
 import sqlite3
@@ -65,7 +66,6 @@ class _Index:
         self.has_support = any(row[1] == "support" for row in self.con.execute("PRAGMA table_info(rects)"))
         self.support_total = int(self.meta["support"]) if self.has_support and "support" in self.meta else int(self.meta["records"])
         self.support_sql = "support" if self.has_support else "1"
-        self.con.create_function("hyb2_found", 2, _found, deterministic=True)
 
         self._extents: Optional[Dict[str, Tuple[int, int]]] = None
 
@@ -124,13 +124,15 @@ def _indexes(indexes: Sequence[PathLike]) -> List[_Index]:
 
 
 def close_all() -> None:
-    global _rect_bytes
+    global _rect_bytes, _found_rows
     with _lock:
         for index in _open.values():
             index.con.close()
         _open.clear()
         _rects.clear()
         _rect_bytes = 0
+        _found_tables.clear()
+        _found_rows = 0
 
 
 # --------------------------------------------------------------------------
@@ -775,13 +777,22 @@ _ORDERS = {
 
 HOMODIMER = "g1 = g2 AND overlap IS NOT NULL AND overlap >= 5"  # the web's homodimer proxy
 
-# search: the hybrid ids whose text matches, by (index, its stamp, query)
-_found_sets: "OrderedDict[str, frozenset]" = OrderedDict()
-_FOUND_CACHE = 8
+# search: the hybrid ids whose text matches, as a temp table in the index's
+# own connection (SQLite joins it without a Python call per row), by (index,
+# its stamp, query). The tables are bounded by their ids in all; the latest
+# query is kept over every index, so paging a search never rereads a .hyb.
+_found_tables: "OrderedDict[Tuple[str, Tuple[int, int], str], Tuple[_Index, str, int]]" = OrderedDict()
+_found_rows = 0
+_FOUND_ROWS = 20_000_000
+_found_serial = itertools.count()
 
 
-def _found(key: str, rid: int) -> bool:
-    return rid in _found_sets.get(key, ())
+def _drop_found(index: _Index, table: str) -> None:
+    try:
+        index.con.execute("DROP TABLE IF EXISTS temp.%s" % table)
+        index.con.commit()
+    except sqlite3.Error:  # the index was closed (reopened after a rebuild): the table went with it
+        pass
 
 
 def _js_number(value: Any) -> str:
@@ -790,16 +801,46 @@ def _js_number(value: Any) -> str:
     return str(int(value)) if float(value).is_integer() else repr(float(value))
 
 
-def _search_key(index: _Index, query: str) -> str:
+def _search_table(index: _Index, query: str) -> str:
     """Find the hybrids whose id, sequence, RNA names, chimera type or overlap
     score contain ``query`` (case-insensitive; the web's interaction search,
     over the same fields joined by spaces). The id and sequence are read from
-    the sample's .hyb, which must be the file the index was built from."""
-    key = json.dumps([str(index.path), index.stamp, query])
+    the sample's .hyb, which must be the file the index was built from.
+    Returns the name of the temp table of their ids."""
+    global _found_rows
+    key = (str(index.path), index.stamp, query)
     with _lock:
-        if key in _found_sets:
-            _found_sets.move_to_end(key)
-            return key
+        entry = _found_tables.get(key)
+        if entry is not None and entry[0] is index:
+            _found_tables.move_to_end(key)
+            return entry[1]
+    found = _scan_search(index, query)
+    table = "hyb2_found_%d" % next(_found_serial)
+    index.con.execute("CREATE TEMP TABLE %s(id INTEGER PRIMARY KEY)" % table)
+    index.con.executemany("INSERT INTO temp.%s VALUES (?)" % table, ((rid,) for rid in found))
+    index.con.commit()
+    dropped = []
+    with _lock:
+        old = _found_tables.pop(key, None)
+        if old is not None:
+            _found_rows -= old[2]
+            dropped.append(old[:2])
+        _found_tables[key] = (index, table, len(found))
+        _found_rows += len(found)
+        for other in list(_found_tables):
+            if _found_rows <= _FOUND_ROWS:
+                break
+            if other[2] != query:
+                gone = _found_tables.pop(other)
+                _found_rows -= gone[2]
+                dropped.append(gone[:2])
+    for old_index, old_table in dropped:
+        _drop_found(old_index, old_table)
+    return table
+
+
+def _scan_search(index: _Index, query: str) -> List[int]:
+    """The ids of the hybrids whose text contains ``query``, read from the .hyb."""
     meta = index.meta
     source = meta.get("source_path")
     try:
@@ -820,11 +861,7 @@ def _search_key(index: _Index, query: str) -> str:
                              names[g1], names[g2], types.get(ctype, ""), _js_number(overlap))).lower()
             if query in text:
                 found.append(rid)
-    with _lock:
-        _found_sets[key] = frozenset(found)
-        while len(_found_sets) > _FOUND_CACHE:
-            _found_sets.popitem(last=False)
-    return key
+    return found
 
 
 def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, list]]:
@@ -877,8 +914,7 @@ def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, l
             raise ValueError("search must be text")
         query = search.strip().lower()
         if query:
-            clauses.append("hyb2_found(?, id)")
-            params.append(_search_key(index, query))
+            clauses.append("id IN temp.%s" % _search_table(index, query))
     region = _region(filters.get("region"))
     if region is not None:
         x0, x1, y0, y1 = region
@@ -954,7 +990,7 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
     ``gene``: the pair in either arm order, as the web's RNA + partner; alone,
     either arm), ``intra`` (bool),
     ``homodimer`` (``"only"``/``"exclude"``: same RNA and overlap >= 5),
-    ``search`` (text, see ``_search_key``),
+    ``search`` (text, see ``_search_table``),
     ``region`` (``{"x": [s, e], "y": [s, e]}``, overlap with arm 1 / arm 2),
     ``types`` (list), ``min_reads``/``max_reads``, ``min_support``,
     ``min_dg``/``max_dg`` (a row without dG never matches these).

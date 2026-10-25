@@ -200,6 +200,37 @@ class IndexQueryTest(unittest.TestCase):
         self.assertEqual([r["count"] for r in result["rows"]], [2 * v for _, v in expected])
         self.assertEqual(result["rows"][0]["per_index"], [expected[0][1]] * 2)
 
+    def test_search_pages_reuse_the_matches(self):
+        # the matches of a query are kept for every index, so the next page
+        # does not reread each .hyb (they were kept for 8 indexes in all)
+        copies = []
+        for i in range(10):
+            copy = Path(self.tmp.name) / ("search%d.hyb2idx" % i)
+            copy.write_bytes(self.index.read_bytes())
+            copies.append(copy)
+        scans = []
+        real, saved = query._scan_search, query._FOUND_ROWS
+        query._scan_search = lambda index, text: scans.append(index.path) or real(index, text)
+        try:
+            first = query.hybrids(copies, {"search": "zika"}, limit=50)
+            second = query.hybrids(copies, {"search": "zika"}, limit=50, offset=50)
+            self.assertEqual(len(scans), 10)
+            single = query.hybrids([self.index], {"search": "zika"}, limit=0)["total"]
+            self.assertEqual((first["total"], second["total"]), (10 * single, 10 * single))
+            self.assertEqual(first["rows"] + second["rows"], query.hybrids(copies, {"search": "zika"}, limit=100)["rows"])
+            # over the bound, the latest query stays whole and older ones go
+            query._FOUND_ROWS = 1
+            query.hybrids(copies, {"search": "18s"}, limit=1)
+            query.hybrids(copies, {"search": "18s"}, limit=1, offset=1, order="reads")
+            self.assertEqual(len(scans), 21)  # zika on the index itself, then 18s on the copies
+            query.hybrids(copies[:1], {"search": "zika"}, limit=1)
+            self.assertEqual(len(scans), 22)
+            tables = [query._get(c).con.execute("SELECT count(*) FROM sqlite_temp_master WHERE type = 'table'").fetchone()[0]
+                      for c in copies]
+            self.assertEqual(tables, [1] + [0] * 9)
+        finally:
+            query._scan_search, query._FOUND_ROWS = real, saved
+
     def test_hybrids_filters(self):
         recs = self.records
         result = query.hybrids([self.index], {"gene1": "Zika_virusRNA", "gene2": "Zika_virusRNA",

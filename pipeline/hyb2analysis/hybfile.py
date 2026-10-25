@@ -16,10 +16,26 @@ positive integer in column 16 gives the count.
 """
 from __future__ import annotations
 
+import functools
 import re
-from typing import NamedTuple, Optional
+from typing import BinaryIO, Iterator, NamedTuple, Optional
 
 _DIGITS = re.compile(rb"^\d+$")
+
+
+# A real .hyb line is well under 100 kB; a file with one endless line (a
+# corrupt or hostile copy) must fail instead of being loaded whole.
+MAX_LINE = 1 << 20
+
+
+def lines(handle: BinaryIO, limit: int = MAX_LINE) -> Iterator[bytes]:
+    """The lines of a binary file; ``ValueError`` at one longer than ``limit``."""
+    number = 0
+    for line in iter(functools.partial(handle.readline, limit + 1), b""):
+        number += 1
+        if len(line) > limit:
+            raise ValueError("line %d is longer than %d bytes: not a .hyb file" % (number, limit))
+        yield line
 
 
 class Record(NamedTuple):

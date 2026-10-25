@@ -154,6 +154,30 @@ class FileRecordTests(ProjectTestCase):
         expected = hashlib.sha256(b"%d\n" % len(payload) + payload[: samples.MiB] + payload[-samples.MiB:]).hexdigest()
         self.assertEqual(samples.quick_hash(big), expected)
 
+    def test_a_gzip_with_one_endless_line_is_streamed_and_capped(self):
+        from unittest import mock
+        bomb = self.data / "bomb.fa.gz"
+        line = "A" * (3 * samples.MAX_HEADER + 5)
+        with gzip.open(bomb, "wt") as out:
+            out.write(">Gene_A d\n%s\n>Gene_B\nCC" % line)
+        self.assertEqual(samples.read_fasta_sequences(bomb), [{"name": "Gene_A", "length": len(line)},
+                                                              {"name": "Gene_B", "length": 2}])
+        self.call("add_sample", source=str(self.reads()), reference=str(bomb))
+        reference_id = self.manifest()["references"][0]["id"]
+        found = self.call("read_reference_sequence", reference_id=reference_id, name="Gene_B")
+        self.assertEqual((found["length"], found["sequence"]), (2, "CC"))
+        with mock.patch.object(samples, "MAX_REFERENCE_SEQUENCE", len(line) - 1):
+            with self.assertRaisesRegex(ValueError, "too large to read whole"):
+                self.call("read_reference_sequence", reference_id=reference_id, name="Gene_A")
+        with mock.patch.object(samples, "MAX_DECOMPRESSED", samples.MiB):
+            with self.assertRaisesRegex(ValueError, "decompresses to more than 1 MiB"):
+                samples.read_fasta_sequences(bomb)
+        header = self.data / "header.fa.gz"
+        with gzip.open(header, "wt") as out:
+            out.write(">" + "x" * samples.MAX_HEADER + "\nACGU\n")
+        with self.assertRaisesRegex(ValueError, "header line is longer"):
+            samples.read_fasta_sequences(header)
+
     def test_format_detection_includes_gz(self):
         cases = {"a.fastq.gz": "fastq.gz", "a.FQ.GZ": "fastq.gz", "a.fasta.gz": "fasta.gz", "a.fa.gz": "fasta.gz",
                  "a.fastq": "fastq", "a.fq": "fastq", "a.fa": "fasta", "a.sam": "sam", "a.hyb": "hyb"}

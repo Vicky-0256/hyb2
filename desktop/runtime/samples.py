@@ -17,13 +17,14 @@ import csv
 import gzip
 import hashlib
 import io
+import itertools
 import json
 import os
 import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from .project import (_ID, _mutate_manifest, _now, READ_FORMATS, STAGE_NAMES, copy_into_project, is_absolute_path,
                       load_manifest, safe_relative_path, validate_project_directory)
@@ -99,12 +100,56 @@ def read_stem(path: Path) -> str:
     return name
 
 
-def _open_text(path: Path):
+# Decompressed bytes read from one .gz input: far above any reference, but
+# a small gzip bomb stops here instead of decompressing for hours.
+MAX_DECOMPRESSED = 16 * 1024 ** 3
+# A FASTA header line; sequence lines may be any length (they are streamed).
+MAX_HEADER = MiB
+
+
+class _Capped(io.RawIOBase):
+    def __init__(self, raw, limit: int, name: str):
+        self.raw, self.left, self.limit, self.name_ = raw, limit, limit, name
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        data = self.raw.read(min(len(buffer), self.left + 1))
+        if len(data) > self.left:
+            raise ValueError("%s decompresses to more than %d MiB" % (self.name_, self.limit // MiB))
+        self.left -= len(data)
+        buffer[:len(data)] = data
+        return len(data)
+
+    def close(self) -> None:
+        self.raw.close()
+        super().close()
+
+
+def _open_text(path: Path, limit: Optional[int] = None):
     with Path(path).open("rb") as probe:
         magic = probe.read(2)
     if magic == b"\x1f\x8b":
-        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+        raw = io.BufferedReader(_Capped(gzip.open(path, "rb"), limit or MAX_DECOMPRESSED, Path(path).name), MiB)
+        return io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
     return open(path, "r", encoding="utf-8", errors="replace")
+
+
+def _fasta_lines(handle, name: str) -> Iterator[Tuple[bool, str]]:
+    """``(is_header, text)`` per line, read in bounded pieces: a sequence line
+    comes as several pieces, so a file with one endless line never sits in
+    memory whole. A header longer than MAX_HEADER is refused."""
+    at_start = True
+    for piece in iter(lambda: handle.readline(MAX_HEADER), ""):
+        ends = piece.endswith("\n")
+        if at_start and piece.startswith(">"):
+            if not ends and len(piece) >= MAX_HEADER:
+                raise ValueError("reference header line is longer than %d bytes: %s" % (MAX_HEADER, name))
+            yield True, piece[1:].strip()
+        else:
+            yield False, piece.strip()
+        at_start = ends
 
 
 def _hyb2_reference_name(header: str) -> str:
@@ -123,13 +168,12 @@ def read_fasta_sequences(path: Path) -> List[Dict[str, Any]]:
     headers: List[str] = []
     lengths: List[int] = []
     with _open_text(path) as handle:
-        for raw in handle:
-            line = raw.rstrip("\r\n")
-            if line.startswith(">"):
-                headers.append(line[1:].strip()); lengths.append(0)
+        for is_header, text in _fasta_lines(handle, Path(path).name):
+            if is_header:
+                headers.append(text); lengths.append(0)
             elif headers:
-                lengths[-1] += len(line.strip())
-            elif line.strip():
+                lengths[-1] += len(text)
+            elif text:
                 raise ValueError("reference is not a FASTA file: %s" % Path(path).name)
     if not headers:
         raise ValueError("reference FASTA contains no sequences: %s" % Path(path).name)
@@ -1077,22 +1121,25 @@ def read_reference_sequence(root: Path, reference_id: str, name: str) -> Dict[st
     if status == "missing":
         raise ValueError("reference file is missing: %s" % detail)
     path = resolve_record_path(root, reference)
+    # Streamed twice (names depend on whether any header is hyb2-formatted)
+    # so only the wanted sequence is held, never the whole (maybe gzip) file.
     with _open_text(path) as handle:
-        lines = handle.read().splitlines() if path.stat().st_size <= MAX_REFERENCE_SEQUENCE else None
-    if lines is None:
-        raise ValueError("reference file is too large to read whole")
-    formatted = any(line.startswith(">") and "|" in line for line in lines)
-    current, chunks, header = None, [], ""
-    for line in lines + [">"]:
-        if line.startswith(">"):
-            if current == name:
-                return {"reference_id": reference_id, "name": name, "header": header,
-                        "length": sum(len(c) for c in chunks), "sequence": "".join(chunks)}
-            header = line[1:].strip()
-            current = (_hyb2_reference_name(header).split() or [""])[0] if formatted else (header.split() or [""])[0]
-            chunks = []
-        elif current is not None:
-            chunks.append(line.strip())
+        formatted = any(is_header and "|" in text for is_header, text in _fasta_lines(handle, path.name))
+    current, chunks, header, size = None, [], "", 0
+    with _open_text(path) as handle:
+        for is_header, text in itertools.chain(_fasta_lines(handle, path.name), [(True, "")]):
+            if is_header:
+                if current == name:
+                    return {"reference_id": reference_id, "name": name, "header": header,
+                            "length": size, "sequence": "".join(chunks)}
+                header = text
+                current = (_hyb2_reference_name(header).split() or [""])[0] if formatted else (header.split() or [""])[0]
+                chunks, size = [], 0
+            elif current == name:
+                size += len(text)
+                if size > MAX_REFERENCE_SEQUENCE:
+                    raise ValueError("reference sequence %s is too large to read whole" % name)
+                chunks.append(text)
     raise ValueError("sequence %s is not in reference %s" % (name, reference_id))
 
 

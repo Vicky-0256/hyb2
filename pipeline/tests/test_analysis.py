@@ -246,6 +246,19 @@ class IndexQueryTest(unittest.TestCase):
         self.assertEqual((meta["records"], meta["invalid"], meta["skipped"]), (2, 1, 2))
 
 
+    def test_an_endless_line_fails_instead_of_loading_whole(self):
+        from hyb2analysis import hybfile
+        hyb = Path(self.tmp.name) / "endless.hyb"
+        good = HYB.read_text().splitlines()[0]
+        hyb.write_bytes(good.encode() + b"\n" + b"A" * (hybfile.MAX_LINE + 10))
+        target = Path(self.tmp.name) / "endless.hyb2idx"
+        with self.assertRaisesRegex(ValueError, "line 2 is longer than"):
+            index.build(hyb, target)
+        self.assertEqual(list(Path(self.tmp.name).glob("endless.hyb2idx*")), [])
+        with self.assertRaisesRegex(ValueError, "longer than"):
+            list(coverage.contact_lines(hyb, "G", exact_fallback_only=True))
+
+
 def brute_pair(recs, gene, gene2, bin_size, both=False):
     """Cells of the (gene, gene2) map; ``both`` adds (gene2, gene) rows with swapped arms."""
     cells = {}

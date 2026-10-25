@@ -16,6 +16,17 @@
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   const MOD_LABEL = isMac ? "⌘" : "Ctrl";
 
+  // The skip link is outside #app. Focus the current main without changing
+  // the fragment used by the workspace router.
+  document.addEventListener("click", function (event) {
+    const link = event.target.closest && event.target.closest('.skip-link[href="#main-content"]');
+    const main = link && document.getElementById("main-content");
+    if (!main) return;
+    event.preventDefault();
+    main.focus({ preventScroll: true });
+    main.scrollIntoView({ behavior: "instant", block: "start" });
+  });
+
   // Letter after "g" → workspace page id.
   const CHORDS = {
     o: "overview",
@@ -36,7 +47,7 @@
   let app = null;
 
   function motionReduced() {
-    return root.dataset.motion === "reduced" || !!(reduceQuery && reduceQuery.matches);
+    return root.dataset.motion === "reduced" || (root.dataset.motion !== "full" && !!(reduceQuery && reduceQuery.matches));
   }
 
   function isTyping(target) {

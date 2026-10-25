@@ -37,7 +37,8 @@
   }
 
   function prefersReducedMotion() {
-    return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const motion = document.documentElement.dataset.motion;
+    return motion === "reduced" || (motion !== "full" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   }
 
   // E5 + E7: a new result folds the setup to its summary line, brings the

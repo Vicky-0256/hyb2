@@ -17,16 +17,22 @@
   const MOTION_KEY = "hyb2-web-motion";
   const SCENE_CLASSES = ["motion-intro", "motion-panel", "motion-workspace", "motion-page"];
 
+  // Keep the explicit choice separate from the effective system preference.
+  let motionPreference = null;
   try {
-    if (window.localStorage.getItem(MOTION_KEY) === "reduced") {
-      root.dataset.motion = "reduced";
-    }
+    const saved = window.localStorage.getItem(MOTION_KEY);
+    if (saved === "reduced" || saved === "full") motionPreference = saved;
   } catch (error) {
-    // Storage can be unavailable (private mode); motion stays on.
+    // Without storage, follow the system until the user chooses in this tab.
   }
 
+  function syncMotionPreference() {
+    root.dataset.motion = motionPreference || (reduceQuery && reduceQuery.matches ? "reduced" : "full");
+  }
+  syncMotionPreference();
+
   function motionReduced() {
-    return root.dataset.motion === "reduced" || !!(reduceQuery && reduceQuery.matches);
+    return root.dataset.motion === "reduced";
   }
 
   function cssVar(name, fallback) {
@@ -464,11 +470,8 @@
       return;
     }
     const reduced = root.dataset.motion === "reduced";
-    if (reduced) {
-      delete root.dataset.motion;
-    } else {
-      root.dataset.motion = "reduced";
-    }
+    motionPreference = reduced ? "full" : "reduced";
+    syncMotionPreference();
     try {
       window.localStorage.setItem(MOTION_KEY, reduced ? "full" : "reduced");
     } catch (error) {
@@ -905,7 +908,11 @@
       onRender();
     }
     if (reduceQuery && typeof reduceQuery.addEventListener === "function") {
-      reduceQuery.addEventListener("change", hero.refresh);
+      reduceQuery.addEventListener("change", function () {
+        syncMotionPreference();
+        hero.refresh();
+        window.dispatchEvent(new CustomEvent("hyb2:motion-change"));
+      });
     }
   }
 

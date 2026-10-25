@@ -199,6 +199,7 @@
     hostEvents.forEach(function (entry) { app.removeEventListener(entry[0], entry[1]); });
     app.removeEventListener("toggle", handleSectionToggle, true);
     window.removeEventListener("hashchange", handleHashChange);
+    window.removeEventListener("hyb2:motion-change", handleMotionChange);
     if (pageData) {
       pageData.destroy();
     }
@@ -297,6 +298,7 @@
     app.addEventListener("drop", handleDrop);
     if (shell) {
       window.addEventListener("hashchange", handleHashChange);
+      window.addEventListener("hyb2:motion-change", handleMotionChange);
       syncRoute();
     }
     if (settings.selection) {
@@ -501,6 +503,10 @@
   }());
 
   function syncRoute() {
+    if (window.location.hash === "#main-content") {
+      restoreRouteHash(lastRouteHash);
+      return;
+    }
     // #hyb2-desktop (a K9 Desktop link that reached the URL: opened in a new
     // tab, pasted, or clicked before a handler could stop it) is not a page:
     // open the Desktop drawer and put the previous address back, so the
@@ -557,6 +563,10 @@
     } catch (error) {
       // a sandboxed page may refuse to rewrite its URL
     }
+  }
+
+  function handleMotionChange() {
+    if (state.dialog === "display") render();
   }
 
   function handleHashChange() {
@@ -707,7 +717,7 @@
       renderDisplayButton(),
       "    </div>",
       "  </header>",
-      '  <main id="main-content" class="landing-main">',
+      '  <main id="main-content" tabindex="-1" class="landing-main">',
       '    <section class="landing-copy" aria-labelledby="landing-title">',
       '      <span class="eyebrow" data-scramble>RNA–RNA interaction analysis · HYB files</span>',
       '      <h1 id="landing-title" aria-label="HYB2 Web Lite. Explore locally."><span class="headline-line" aria-hidden="true"><span class="headline-inner">HYB2 Web Lite.</span></span><span class="headline-line headline-accent" aria-hidden="true"><span class="headline-inner">Explore locally.</span></span></h1>',
@@ -1277,7 +1287,7 @@
       '<div class="workspace">',
       renderWorkspaceHeader(),
       renderSidebar(),
-      '  <main id="main-content" class="workspace-main">',
+      '  <main id="main-content" tabindex="-1" class="workspace-main">',
       '    <div class="content-wrap">',
       renderPage(),
       "    </div>",
@@ -1411,7 +1421,8 @@
     }
     const target = Math.max(0, Math.min(nav.scrollWidth - nav.clientWidth,
       active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2));
-    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const motion = document.documentElement.dataset.motion;
+    const reduce = motion === "reduced" || (motion !== "full" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
     if (typeof nav.scrollTo === "function") {
       nav.scrollTo({ left: target, behavior: pageChanged && !reduce ? "smooth" : "auto" });
     } else {

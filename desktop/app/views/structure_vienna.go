@@ -26,9 +26,12 @@ const (
 	// the web's ViennaRNA defaults
 	stDefaultTemp = 37
 	stDefaultLoop = 3
-	// a measured ViennaRNA MFE of 10,807 nt (time is cubic in the length,
-	// memory quadratic), for the check before running
+	// a measured ViennaRNA MFE of 10,807 nt, for the check before running:
+	// memory is quadratic in the length, time grows as length^2.5 at these
+	// lengths (measured 0.81 s at 1,000 nt, 10.9 s at 3,000 nt; cubic from
+	// this anchor was 1.8-3.5x low there)
 	viennaRefNT, viennaRefSeconds, viennaRefMB = 10_807, 285.0, 670.0
+	viennaTimeExponent                         = 2.5
 )
 
 var stHardPair = regexp.MustCompile(`^([1-9][0-9]*)\s*-\s*([1-9][0-9]*)$`)
@@ -151,7 +154,7 @@ func (pl foldPlan) windowsOrWhole() [][2]int {
 func viennaSeconds(lengths []int) float64 {
 	total := 0.0
 	for _, n := range lengths {
-		total += viennaRefSeconds * math.Pow(float64(n)/viennaRefNT, 3)
+		total += viennaRefSeconds * math.Pow(float64(n)/viennaRefNT, viennaTimeExponent)
 	}
 	return total
 }

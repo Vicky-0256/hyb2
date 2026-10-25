@@ -231,6 +231,13 @@ var prefsMu sync.Mutex
 // the default. Unknown keys and invalid values are rejected without
 // touching the file.
 func ApplyPreferences(path string, patch Obj) (Budget, error) {
+	return applyPreferences(path, patch, nil)
+}
+
+// applyPreferences is ApplyPreferences; apply (when set) receives the new
+// budget before the lock is released, so the last save is also the budget
+// in force.
+func applyPreferences(path string, patch Obj, apply func(Budget)) (Budget, error) {
 	if path == "" {
 		return Budget{}, errors.New("cannot resolve the application config directory")
 	}
@@ -312,7 +319,11 @@ func ApplyPreferences(path string, patch Obj) (Budget, error) {
 	if err := writeFileAtomic(path, data); err != nil {
 		return Budget{}, fmt.Errorf("cannot save preferences: %w", err)
 	}
-	return LoadBudget(path), nil
+	budget := LoadBudget(path)
+	if apply != nil {
+		apply(budget)
+	}
+	return budget, nil
 }
 
 // normalize round-trips a value through JSON so callers always see the

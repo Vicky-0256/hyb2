@@ -463,11 +463,11 @@ func (s *Service) Preferences() (Obj, error) {
 // external_lookup off cancels a running lookup. A new budget applies at once and starts queued
 // tasks that now fit.
 func (s *Service) SetPreferences(patch Obj) (Obj, error) {
-	budget, err := ApplyPreferences(s.prefsPath, patch)
-	if err != nil {
+	// Applied under the preferences lock: two quick changes applied after
+	// it could reach the scheduler in the wrong order.
+	if _, err := applyPreferences(s.prefsPath, patch, s.tasks.SetBudget); err != nil {
 		return nil, err
 	}
-	s.tasks.SetBudget(budget)
 	if !LoadExternalLookup(s.prefsPath) {
 		s.evidence.Cancel()
 	}

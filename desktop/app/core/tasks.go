@@ -88,6 +88,7 @@ type taskState struct {
 	claim       Budget
 	seq         uint64
 	resumedFrom *string
+	lock        *os.File // run directory owner lock; held until finished
 }
 
 // Scheduler owns the task table and the resource budget. The Tauri shell
@@ -220,7 +221,27 @@ func writeAtomic(dir, name string, value any) error {
 
 func writeStatus(runDir string, value any) error { return writeAtomic(runDir, "status.json", value) }
 
-func (e *taskState) persist(id string) error { return writeStatus(e.runDir, e.record(id)) }
+// ownerLockFile in a run directory is locked by the process that owns the
+// task while it is queued or running, so another instance on the same
+// project can tell a live task from one an exited session left behind.
+const ownerLockFile = "owner.lock"
+
+// persist saves the record; a finished task releases its owner lock after
+// its final status is on disk.
+func (e *taskState) persist(id string) error {
+	err := writeStatus(e.runDir, e.record(id))
+	if e.finishedAt != nil {
+		e.unlock()
+	}
+	return err
+}
+
+func (e *taskState) unlock() {
+	if e.lock != nil {
+		_ = e.lock.Close()
+		e.lock = nil
+	}
+}
 
 // canonicalPath resolves symlinks and makes the path absolute.
 func canonicalPath(path string) (string, error) {
@@ -419,6 +440,9 @@ func (s *Scheduler) Prepare(request TaskStartRequest, project string, resumedFro
 		s.mu.Lock()
 		err := s.resumingLocked(*resumedFrom)
 		s.mu.Unlock()
+		if err == nil {
+			err = resumingElsewhere(project, *resumedFrom)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -461,6 +485,36 @@ func (s *Scheduler) resumingLocked(from string) error {
 	for other, e := range s.tasks {
 		if e.resumedFrom != nil && *e.resumedFrom == from && slices.Contains(activeStates, e.status) {
 			return fmt.Errorf("task %s is already being resumed as %s", from, other)
+		}
+	}
+	return nil
+}
+
+// resumingElsewhere refuses a resume of from while another instance's
+// resumed copy of it is still live in project.
+func resumingElsewhere(project, from string) error {
+	_, runs, err := canonicalProject(project)
+	if err != nil {
+		return err
+	}
+	items, err := os.ReadDir(runs)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		runDir := filepath.Join(runs, item.Name())
+		if !item.IsDir() || item.Name() == from || !runDirLocked(runDir) {
+			continue
+		}
+		data, err := readProjectFile(filepath.Join(runDir, "status.json"))
+		if err != nil {
+			continue
+		}
+		var record struct {
+			ResumedFrom *string `json:"resumed_from"`
+		}
+		if json.Unmarshal(data, &record) == nil && record.ResumedFrom != nil && *record.ResumedFrom == from {
+			return fmt.Errorf("task %s is already being resumed as %s in another window", from, item.Name())
 		}
 	}
 	return nil
@@ -521,8 +575,17 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 		seq:         s.seq,
 		resumedFrom: task.ResumedFrom,
 	}
+	// Taken before the first status write, so no other instance ever sees
+	// this task active without a live owner.
+	lock, err := lockRunDir(task.RunDir)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("cannot lock task directory: %w", err)
+	}
+	entry.lock = lock
 	s.seq++
 	if err := entry.persist(id); err != nil {
+		entry.unlock()
 		s.mu.Unlock()
 		return nil, fmt.Errorf("cannot save task status: %w", err)
 	}
@@ -823,9 +886,10 @@ func (s *Scheduler) liveSnapshot(id, runDir string) (Obj, bool) {
 	return nil, false
 }
 
-// readDisk reads a snapshot persisted by an earlier session. A queued or
-// running record without a live process in this session is marked
-// interrupted (and saved so).
+// readDisk reads a snapshot persisted by an earlier session or another
+// instance. A queued or running record whose owner lock is free (its
+// process is gone) is marked interrupted (and saved so); one another live
+// instance owns is returned as it is.
 func readDisk(id, runDir string) (Obj, error) {
 	// Only a real run directory (a symlink may come with a copied project
 	// and point anywhere: it is neither read nor rewritten).
@@ -855,7 +919,7 @@ func readDisk(id, runDir string) (Obj, error) {
 	}
 	status, present := object["status"]
 	state, _ := status.(string)
-	if !present || slices.Contains(activeStates, state) {
+	if (!present || slices.Contains(activeStates, state)) && !runDirLocked(runDir) {
 		object["status"] = "interrupted"
 		if object["error"] == nil {
 			object["error"] = "the application stopped before this task finished"

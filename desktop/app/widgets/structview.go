@@ -2,11 +2,16 @@ package widgets
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"image/png"
 	"math"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -83,13 +88,18 @@ func (v *StructView) pairColor(p LayeredPair, c StructColors) ui.Color {
 	return c.Other
 }
 
-func (v *StructView) pairAlpha(i int) float64 {
-	if !v.Shade || len(v.Weights) == 0 {
-		return 0.9
-	}
+// topWeight is the largest weight, which pairAlpha scales by.
+func (v *StructView) topWeight() float64 {
 	top := 0.0
 	for _, w := range v.Weights {
 		top = math.Max(top, w)
+	}
+	return top
+}
+
+func (v *StructView) pairAlpha(i int, top float64) float64 {
+	if !v.Shade || len(v.Weights) == 0 {
+		return 0.9
 	}
 	w := 0.0
 	if i < len(v.Weights) {
@@ -102,6 +112,7 @@ func (v *StructView) pairAlpha(i int) float64 {
 // shapes lays the view out in a size×size square.
 func (v *StructView) shapes(size float64, c StructColors) []shape {
 	n := max(v.Length, 1)
+	top := v.topWeight()
 	var out []shape
 	switch v.Mode {
 	case ModeCircular, ModeRadial:
@@ -116,18 +127,16 @@ func (v *StructView) shapes(size float64, c StructColors) []shape {
 				out = append(out, shape{kind: shapeRing, x0: cx, y0: cy, x1: r * f, width: 1, color: c.Line, alpha: 0.5})
 			}
 		}
+		var depth []int
+		if v.Mode == ModeRadial {
+			depth = nestingDepths(v.Pairs)
+		}
 		for i, p := range v.Pairs {
 			x0, y0 := point(p.I)
 			x1, y1 := point(p.J)
-			s := shape{kind: shapeLine, x0: x0, y0: y0, x1: x1, y1: y1, width: 1.4, color: v.pairColor(p, c), alpha: v.pairAlpha(i)}
+			s := shape{kind: shapeLine, x0: x0, y0: y0, x1: x1, y1: y1, width: 1.4, color: v.pairColor(p, c), alpha: v.pairAlpha(i, top)}
 			if v.Mode == ModeRadial {
-				depth := 0
-				for _, o := range v.Pairs {
-					if o.I < p.I && o.J > p.J {
-						depth++
-					}
-				}
-				pull := math.Max(0.16, 0.64-math.Min(float64(depth), 9)*0.045)
+				pull := math.Max(0.16, 0.64-math.Min(float64(depth[i]), 9)*0.045)
 				s.kind = shapeQuad
 				s.cx, s.cy = cx+((x0+x1)/2-cx)*pull, cy+((y0+y1)/2-cy)*pull
 			}
@@ -149,7 +158,7 @@ func (v *StructView) shapes(size float64, c StructColors) []shape {
 			shape{kind: shapeLine, x0: left, y0: top, x1: left + plot, y1: top + plot, width: 1, color: c.Line, alpha: 0.5})
 		radius := math.Max(1, math.Min(4, plot/float64(n)*1.5))
 		for i, p := range v.Pairs {
-			col, a := v.pairColor(p, c), v.pairAlpha(i)
+			col, a := v.pairColor(p, c), v.pairAlpha(i, top)
 			out = append(out,
 				shape{kind: shapeCircle, x0: left + scale(p.I), y0: top + scale(p.J), x1: radius, color: col, alpha: a},
 				shape{kind: shapeCircle, x0: left + scale(p.J), y0: top + scale(p.I), x1: radius, color: col, alpha: a})
@@ -191,7 +200,7 @@ func (v *StructView) shapes(size float64, c StructColors) []shape {
 			x0, y0, ok0 := at(p.I)
 			x1, y1, ok1 := at(p.J)
 			if ok0 && ok1 {
-				out = append(out, shape{kind: shapeLine, x0: x0, y0: y0, x1: x1, y1: y1, width: backbone * 1.4, color: v.pairColor(p, c), alpha: v.pairAlpha(i)})
+				out = append(out, shape{kind: shapeLine, x0: x0, y0: y0, x1: x1, y1: y1, width: backbone * 1.4, color: v.pairColor(p, c), alpha: v.pairAlpha(i, top)})
 			}
 		}
 		if dot := k * 0.35; dot >= 2 {
@@ -206,6 +215,118 @@ func (v *StructView) shapes(size float64, c StructColors) []shape {
 		}
 		x, y, _ := at(v.Start)
 		out = append(out, shape{kind: shapeText, x0: x - 14, y0: y, text: "5′", size: 11, color: c.Text, alpha: 1})
+	}
+	return out
+}
+
+// nestingDepths counts, for each pair, the pairs that enclose it (o.I < p.I
+// and o.J > p.J; pseudoknot layers included) in O(P log P): pairs are taken
+// in order of I, and a Fenwick tree over the ranks of J counts the earlier
+// pairs that close after this one.
+func nestingDepths(pairs []LayeredPair) []int {
+	order := make([]int, len(pairs))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(a, b int) bool { return pairs[order[a]].I < pairs[order[b]].I })
+	js := make([]int, len(pairs))
+	for i, p := range pairs {
+		js[i] = p.J
+	}
+	sort.Ints(js)
+	js = slices.Compact(js)
+	rank := func(j int) int { r, _ := slices.BinarySearch(js, j); return r + 1 } // 1-based
+	tree := make([]int, len(js)+1)
+	inserted := 0
+	depth := make([]int, len(pairs))
+	for a := 0; a < len(order); {
+		// pairs opening at the same I do not enclose each other
+		b := a
+		for b < len(order) && pairs[order[b]].I == pairs[order[a]].I {
+			b++
+		}
+		for _, k := range order[a:b] {
+			atMost := 0 // inserted pairs with J <= this J
+			for r := rank(pairs[k].J); r > 0; r -= r & -r {
+				atMost += tree[r]
+			}
+			depth[k] = inserted - atMost
+		}
+		for _, k := range order[a:b] {
+			for r := rank(pairs[k].J); r < len(tree); r += r & -r {
+				tree[r]++
+			}
+			inserted++
+		}
+		a = b
+	}
+	return depth
+}
+
+// shapeCache keeps the last layouts painted: the views rebuild their
+// StructView every frame, so a layout is found again by its inputs.
+var shapeCache struct {
+	sync.Mutex
+	entries []shapeEntry
+}
+
+type shapeEntry struct {
+	key    shapeKey
+	shapes []shape
+}
+
+type shapeKey struct {
+	size                  float64
+	colors                StructColors
+	mode                  StructMode
+	start, length         int
+	shade                 bool
+	sequence              string
+	pairs, weights, place uint64 // content hashes
+	npairs                int
+}
+
+func (v *StructView) cacheKey(size float64, c StructColors) shapeKey {
+	h := fnv.New64a()
+	var buf [8]byte
+	word := func(x uint64) { binary.LittleEndian.PutUint64(buf[:], x); h.Write(buf[:]) }
+	for _, p := range v.Pairs {
+		word(uint64(p.I)<<32 | uint64(uint32(p.J)))
+		word(uint64(p.Layer))
+	}
+	pairs := h.Sum64()
+	h.Reset()
+	for _, w := range v.Weights {
+		word(math.Float64bits(w))
+	}
+	weights := h.Sum64()
+	h.Reset()
+	for _, xy := range v.Coords {
+		word(math.Float64bits(xy[0]))
+		word(math.Float64bits(xy[1]))
+	}
+	return shapeKey{size: size, colors: c, mode: v.Mode, start: v.Start, length: v.Length, shade: v.Shade,
+		sequence: v.Sequence, pairs: pairs, weights: weights, place: h.Sum64(), npairs: len(v.Pairs)}
+}
+
+// cachedShapes is shapes, reused while size, colours and inputs stay the
+// same (hashing the inputs is linear; laying them out is not cheap).
+func (v *StructView) cachedShapes(size float64, c StructColors) []shape {
+	key := v.cacheKey(size, c)
+	shapeCache.Lock()
+	for _, e := range shapeCache.entries {
+		if e.key == key {
+			shapeCache.Unlock()
+			return e.shapes
+		}
+	}
+	shapeCache.Unlock()
+	out := v.shapes(size, c)
+	shapeCache.Lock()
+	defer shapeCache.Unlock()
+	shapeCache.entries = append(shapeCache.entries, shapeEntry{key, out})
+	if len(shapeCache.entries) > 4 {
+		shapeCache.entries = shapeCache.entries[1:]
 	}
 	return out
 }
@@ -245,18 +366,54 @@ func (v *StructView) Show(c *ui.Context, maxSide float32, colors StructColors, l
 	})
 }
 
+// strokeKey groups strokes painted as one path: one mask the painter keeps
+// across frames, where thousands of long curves, one mask each, overflow
+// its cache and are rasterized again every frame. Opacity is grouped in
+// 1/32 steps (shaded pairs vary continuously).
+type strokeKey struct {
+	width float64
+	color ui.Color
+	alpha int
+}
+
 // paint draws the shapes in the square r.
 func (v *StructView) paint(p *ui.Painter, r ui.Rect, colors StructColors) {
-	for _, s := range v.shapes(float64(r.W), colors) {
+	shapes := v.cachedShapes(float64(r.W), colors)
+	for i := 0; i < len(shapes); {
+		if k := shapes[i].kind; k == shapeLine || k == shapeQuad {
+			// A run of strokes (nothing painted between them to keep
+			// above or below), grouped by look in order of appearance.
+			end := i
+			for end < len(shapes) && (shapes[end].kind == shapeLine || shapes[end].kind == shapeQuad) {
+				end++
+			}
+			paths := map[strokeKey]*ui.Path{}
+			var order []strokeKey
+			for _, s := range shapes[i:end] {
+				key := strokeKey{s.width, s.color, int(math.Round(s.alpha * 32))}
+				path := paths[key]
+				if path == nil {
+					path = &ui.Path{}
+					paths[key] = path
+					order = append(order, key)
+				}
+				path.MoveTo(r.X+float32(s.x0), r.Y+float32(s.y0))
+				if s.kind == shapeQuad {
+					path.QuadTo(r.X+float32(s.cx), r.Y+float32(s.cy), r.X+float32(s.x1), r.Y+float32(s.y1))
+				} else {
+					path.LineTo(r.X+float32(s.x1), r.Y+float32(s.y1))
+				}
+			}
+			for _, key := range order {
+				p.StrokePath(paths[key], float32(key.width), key.color.Alpha(float32(key.alpha)/32))
+			}
+			i = end
+			continue
+		}
+		s := shapes[i]
+		i++
 		col := s.color.Alpha(float32(s.alpha))
 		switch s.kind {
-		case shapeLine: // Painter.Line draws axis-aligned lines only
-			path := (&ui.Path{}).MoveTo(r.X+float32(s.x0), r.Y+float32(s.y0)).LineTo(r.X+float32(s.x1), r.Y+float32(s.y1))
-			p.StrokePath(path, float32(s.width), col)
-		case shapeQuad:
-			path := (&ui.Path{}).MoveTo(r.X+float32(s.x0), r.Y+float32(s.y0)).
-				QuadTo(r.X+float32(s.cx), r.Y+float32(s.cy), r.X+float32(s.x1), r.Y+float32(s.y1))
-			p.StrokePath(path, float32(s.width), col)
 		case shapeCircle:
 			d := float32(s.x1)
 			p.Fill(ui.Rect{X: r.X + float32(s.x0) - d, Y: r.Y + float32(s.y0) - d, W: 2 * d, H: 2 * d}, col, d)

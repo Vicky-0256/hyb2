@@ -106,9 +106,14 @@ func (s *interactionsState) apply(f ixFilters) {
 	s.inputErr = ""
 }
 
-// applyPickers applies the pickers at once, whatever the text drafts hold
-// (an invalid one would otherwise block the change).
+// applyPickers applies the pickers at once, with the text drafts when they
+// are valid; an invalid draft would otherwise block the change, so then
+// only the pickers change.
 func (s *interactionsState) applyPickers() {
+	if f, err := s.fromInputs(); err == nil {
+		s.applied, s.inputErr = f, ""
+		return
+	}
 	f := s.applied
 	f.gene1, f.gene2, f.typ, f.scope = "", "", s.typ, ""
 	if s.gene1 != anyGene {

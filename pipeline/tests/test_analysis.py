@@ -418,6 +418,21 @@ class ProviderGapsTest(unittest.TestCase):
             self.assertEqual(row["per_index"], [own.get(key, 0), part.get(key, 0), own.get(key, 0)])
             self.assertEqual(row["count"], sum(row["per_index"]))
 
+    def test_load_more_reads_on_from_the_last_page(self):
+        # each page used to fetch every row before its offset from every index
+        both = [self.index, self.half]
+        for order in ("file", "reads", "support", "position", "dg"):
+            for filters in ({}, {"gene": "Zika_virusRNA", "min_reads": 2}, {"types": ["Type_1"]}):
+                query.close_all()
+                fresh = [query.hybrids(both, filters, 37, offset, order=order) for offset in (0, 37, 74, 200, 1000)]
+                query.close_all()
+                paged = [query.hybrids(both, filters, 37, offset, order=order) for offset in (0, 37, 74, 200, 1000)]
+                self.assertEqual(paged, fresh, (order, filters))
+                ends = next(iter(query._cursors.values()))["ends"]
+                self.assertTrue({37, 74, 111} <= set(ends), (order, filters, sorted(ends)))
+        # a cursor only reads on: a page before it still comes from the start
+        self.assertEqual(query.hybrids(both, {}, 5, 3, order="dg"), (query.close_all(), query.hybrids(both, {}, 5, 3, order="dg"))[1])
+
     def test_compare_bins_normalizes_per_million(self):
         # the web Compare page: per-dataset per million, condition = mean of its datasets, pseudocount 1
         result = query.compare_bins([self.index], [self.half], "Zika_virusRNA", 100)

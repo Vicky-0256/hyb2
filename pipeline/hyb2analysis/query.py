@@ -133,6 +133,7 @@ def close_all() -> None:
         _rect_bytes = 0
         _found_tables.clear()
         _found_rows = 0
+        _cursors.clear()
 
 
 # --------------------------------------------------------------------------
@@ -982,6 +983,25 @@ def _merge_key(row: tuple, column: str, descending: bool, number: int) -> tuple:
     return (False, -value if descending else value, number, row[0])
 
 
+# "Load more": where each index's stream stood after a page, so the next
+# page reads on from there instead of every row before its offset. By
+# (indexes and stamps, filters, order) -> {"total": n, "ends": {offset: cursors}}.
+_cursors: "OrderedDict[tuple, Dict[str, Any]]" = OrderedDict()
+_CURSOR_QUERIES = 32
+_CURSOR_ENDS = 16
+
+
+def _after(expression: str, descending: bool, cursor: Tuple[Any, int]) -> Tuple[str, list]:
+    """SQL for the rows after ``cursor`` (sort value, id) in ``expression IS NULL, expression, id`` order."""
+    value, rid = cursor
+    if expression == "id":
+        return "id > ?", [rid]
+    if value is None:
+        return "(%s IS NULL AND id > ?)" % expression, [rid]
+    return ("(%s IS NULL OR %s %s ? OR (%s = ? AND id > ?))" % (expression, expression, "<" if descending else ">", expression),
+            [value, value, rid])
+
+
 def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = None, limit: int = 100, offset: int = 0, *,
             order: str = "file", with_sequence: bool = True) -> Dict[str, Any]:
     """Filtered hybrid rows across indexes.
@@ -1008,23 +1028,50 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
         raise ValueError("order must be one of %s" % ", ".join(sorted(_ORDERS)))
     column, descending = _ORDERS[order]
     opened = _indexes(indexes)
-    total = 0
+    key = (tuple((str(index.path), index.stamp) for index in opened), json.dumps(filters, sort_keys=True, default=repr), order)
+    with _lock:
+        known = _cursors.get(key)
+        if known is not None:
+            _cursors.move_to_end(key)
+        total = known["total"] if known is not None else None
+        base = max((end for end in known["ends"] if end <= offset), default=0) if known is not None else 0
+        cursors = known["ends"][base] if base else [None] * len(opened)
+    skip = offset - base
+    counted = 0
     streams = []
     for number, index in enumerate(opened):
         where = _filter_sql(index, filters)
         if where is None:
             continue
         clause, params = where
-        total += index.meta["records"] if not clause else index.con.execute("SELECT count(*) FROM hybrids" + clause, params).fetchone()[0]
+        if total is None:
+            counted += index.meta["records"] if not clause else index.con.execute("SELECT count(*) FROM hybrids" + clause, params).fetchone()[0]
         if limit == 0:
             continue
         expression = index.support_sql if column == "support" else column
+        if cursors[number] is not None:
+            after, more = _after(expression, descending, cursors[number])
+            clause, params = clause + (" AND " if clause else " WHERE ") + after, params + more
         sort = "%s IS NULL, %s %s, id" % (expression, expression, "DESC" if descending else "ASC")
         rows = index.con.execute(
             "SELECT id, g1, s1, e1, g2, s2, e2, reads, dg, overlap, type, offset, %s FROM hybrids%s ORDER BY %s LIMIT ?"
-            % (index.support_sql, clause, sort), params + [offset + limit]).fetchall()
+            % (index.support_sql, clause, sort), params + [skip + limit]).fetchall()
         streams.append([(_merge_key(row, column, descending, number), number, row) for row in rows])
-    merged = list(heapq.merge(*streams, key=lambda item: item[0]))[offset:offset + limit] if streams else []
+    total = counted if total is None else total
+    consumed = list(heapq.merge(*streams, key=lambda item: item[0]))[:skip + limit] if streams else []
+    merged = consumed[skip:]
+    if limit:
+        reached = list(cursors)
+        for _, number, row in consumed:
+            reached[number] = (row[_ROW_COLUMN[column]], row[0])
+        with _lock:
+            entry = _cursors.setdefault(key, {"total": total, "ends": {}})
+            _cursors.move_to_end(key)
+            entry["ends"][offset + len(merged)] = reached
+            while len(entry["ends"]) > _CURSOR_ENDS:
+                del entry["ends"][min(entry["ends"])]
+            while len(_cursors) > _CURSOR_QUERIES:
+                _cursors.popitem(last=False)
     lookups: Dict[int, Dict[int, Tuple[str, str]]] = {}
     if with_sequence:
         for number, index in enumerate(opened):

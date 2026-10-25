@@ -409,3 +409,19 @@ func TestStructureExportsMatchWeb(t *testing.T) {
 		t.Errorf("ViennaRNA dbn %q", got)
 	}
 }
+
+// The web's region FASTA (parseFasta + extractReference, Node) for a region
+// that ends past the sequence: the FASTA id, capitals, no whitespace, the
+// end clamped.
+func TestRegionFASTAMatchesWeb(t *testing.T) {
+	got, err := regionFASTA("ZIKV", "KX377335.1 Zika virus strain", "acgu acguACGUAC", 5, 40)
+	if err != nil || got != ">KX377335.1:5-14\nACGUACGUAC\n" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if got, _ := regionFASTA("ZIKV", "", "ACGU", 1, 2); got != ">ZIKV:1-2\nAC\n" {
+		t.Fatalf("no header: %q", got)
+	}
+	if _, err := regionFASTA("ZIKV", "", "ACGU", 5, 9); err == nil {
+		t.Fatal("a region past the sequence's end has no sequence")
+	}
+}

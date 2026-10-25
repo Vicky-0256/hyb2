@@ -16,6 +16,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"hyb2desktop/core"
 	"hyb2desktop/widgets"
 )
 
@@ -440,21 +441,41 @@ func (p *explorePage) exportRegionInteractionsTSV(d *regionData) {
 }
 
 // exportRegionFASTA writes the region's reference sequence as the web does:
-// <gene>_<start>-<end>.fasta with the header ">gene:start-end".
+// <gene>_<start>-<end>.fasta holding regionFASTA.
 func (p *explorePage) exportRegionFASTA(d *regionData) {
 	a := p.a
 	pr, gene, start, end := a.Project, d.gene, d.f.start, d.f.end
 	name := exportName(".fasta", fmt.Sprintf("%s_%d-%d", gene, start, end))
 	saveExport(a, "Export the region sequence", name, func() ([]byte, error) {
-		seq, err := fetchSequence(a.B, pr, pr.Path, gene)
+		ref := stReferenceOf(pr, gene)
+		if ref == "" {
+			return nil, fmt.Errorf("no reference holds %s", gene)
+		}
+		raw, err := a.B.ProjectOp(pr.Path, "read_reference_sequence", core.Obj{"reference_id": ref, "name": gene})
 		if err != nil {
 			return nil, err
 		}
-		if end > len(seq) {
-			return nil, fmt.Errorf("%s is %d nt; the region ends at %d", gene, len(seq), end)
-		}
-		return []byte(fmt.Sprintf(">%s:%d-%d\n%s\n", gene, start, end, seq[start-1:end])), nil
+		seq, _ := raw["sequence"].(string)
+		header, _ := raw["header"].(string)
+		text, err := regionFASTA(gene, header, seq, start, end)
+		return []byte(text), err
 	})
+}
+
+// regionFASTA is the web's region FASTA: ">id:start-end" with the FASTA
+// id of the gene's entry (the header's first word), the sequence without
+// whitespace and in capitals, the end clamped to the sequence.
+func regionFASTA(gene, header, seq string, start, end int) (string, error) {
+	seq = strings.ToUpper(strings.Join(strings.Fields(seq), ""))
+	id := gene
+	if words := strings.Fields(header); len(words) > 0 {
+		id = words[0]
+	}
+	start, end = max(start, 1), min(end, len(seq))
+	if start > end {
+		return "", fmt.Errorf("the reference sequence of %s (%d nt) does not cover the region", gene, len(seq))
+	}
+	return fmt.Sprintf(">%s:%d-%d\n%s\n", id, start, end, seq[start-1:end]), nil
 }
 
 // ---- ④ Compare: the quick view

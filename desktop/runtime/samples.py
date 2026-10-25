@@ -156,7 +156,12 @@ def resolve_record_path(root: Path, record: Dict[str, Any]) -> Path:
     if record.get("mode") == "copied":
         if not safe_relative_path(path):
             raise ValueError("copied file path must be project-relative")
-        return Path(root) / str(path).replace("\\", "/")
+        # A received project could ship ``data/ref.fa`` as a symlink to any
+        # file on this computer; listing it as copied must not skip the trust gate.
+        target = Path(root) / str(path).replace("\\", "/")
+        if not _trust._inside(Path(root), os.path.realpath(target)):
+            raise ValueError("copied file points outside the project folder: %s" % path)
+        return target
     if not is_absolute_path(path):
         raise ValueError("linked file path must be absolute")
     _trust.require(Path(root), path, "linked file")
@@ -170,8 +175,10 @@ def check_record(root: Path, record: Dict[str, Any]) -> Tuple[str, str]:
         stat = path.stat()
     except _trust.UntrustedLink:
         return "unconfirmed", "linked on another computer: not opened until you allow it"
-    except (OSError, ValueError):
+    except OSError:
         return "missing", "file not found"
+    except ValueError as error:
+        return "missing", str(error)
     if not path.is_file():
         return "missing", "not a regular file"
     if stat.st_size != record.get("size_bytes"):
@@ -315,7 +322,10 @@ def _source_from_input(root: Path, input_id: Any) -> Path:
     item = _find(manifest.get("inputs", []), input_id, "input")
     if not safe_relative_path(item.get("path")):
         raise ValueError("input path is unsafe")
-    return root / item["path"]
+    source = root / item["path"]
+    if not _trust._inside(root, os.path.realpath(source)):
+        raise ValueError("input points outside the project folder: %s" % item["path"])
+    return source
 
 
 # --------------------------------------------------------------------------- references

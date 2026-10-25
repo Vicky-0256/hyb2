@@ -239,6 +239,12 @@ func canonicalProject(project string) (string, string, error) {
 		return "", "", fmt.Errorf("project path is invalid: %w", err)
 	}
 	runs := filepath.Join(root, "runs")
+	// Like the runtime's _secure_run_dir: a copied project's runs entry must
+	// be a real directory, even a symlink to elsewhere inside the project
+	// would let task files land beside (and be read back as) project data.
+	if info, err := os.Lstat(runs); err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
+		return "", "", errors.New("project runs directory escapes project (must be a real directory)")
+	}
 	if err := os.MkdirAll(runs, 0o755); err != nil {
 		return "", "", err
 	}

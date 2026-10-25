@@ -482,3 +482,15 @@ func TestInteractionPickerIgnoresBadDrafts(t *testing.T) {
 		t.Fatalf("applied %+v", f)
 	}
 }
+
+// Valid unapplied drafts go along with a picker change.
+func TestInteractionPickerKeepsValidDrafts(t *testing.T) {
+	var s interactionsState
+	s.init()
+	s.search, s.minReads, s.x0, s.x1 = " new ", "5", "100", "200"
+	s.gene1 = "A"
+	s.applyPickers()
+	if f := s.applied; f.gene1 != "A" || f.search != "new" || f.minReads != 5 || f.x0 != 100 || f.x1 != 200 {
+		t.Fatalf("applied %+v", f)
+	}
+}

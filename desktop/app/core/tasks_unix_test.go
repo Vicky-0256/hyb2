@@ -143,6 +143,7 @@ func TestShutdownMarksQueuedAndRunningInterrupted(t *testing.T) {
 			if e.cmd != nil {
 				_ = killTree(e.cmd.Process.Pid)
 			}
+			e.unlock() // the exited process's lock goes with it
 			delete(s.tasks, id)
 		}
 	}
@@ -481,5 +482,59 @@ func TestPipelineTaskRunsRealBridgeEndToEnd(t *testing.T) {
 	}
 	if !called.Load() {
 		t.Fatal("on_finish hook did not run")
+	}
+}
+
+// A second instance on the same project (its own scheduler) leaves the
+// first instance's live task alone and refuses to resume it; once the owner
+// is gone the same record reads as interrupted.
+func TestAnotherInstanceDoesNotInterruptALiveTask(t *testing.T) {
+	first := testScheduler(t, 0, 0)
+	second := testScheduler(t, 0, 0)
+	project := tempProject(t)
+	request := TaskStartRequest{ProjectPath: project, Kind: "analysis_index", SampleID: ptr("ZSIN_REP3"), MemMB: ptr(uint64(128))}
+	failed, err := first.Prepare(request, project, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Submit(shell(failed.RunDir, `exit 2`), failed, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, first, failed.ID, project, finished)
+	resumed, err := first.Prepare(request, project, &failed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Submit(shell(resumed.RunDir, `exec sleep 30`), resumed, nil); err != nil {
+		t.Fatal(err)
+	}
+	id := resumed.ID
+	statusFile := filepath.Join(resumed.RunDir, "status.json")
+	if snap, err := second.Status(id, project); err != nil || snap["status"] != "running" {
+		t.Fatalf("second instance sees %v %v", snap, err)
+	}
+	if tasks, err := second.List(project); err != nil || tasks[0]["task_id"] != id || tasks[0]["status"] != "running" {
+		t.Fatalf("second instance lists %v %v", tasks, err)
+	}
+	if disk := readJSON(t, statusFile); disk["status"] != "running" {
+		t.Fatalf("status rewritten: %v", disk)
+	}
+	if _, err := second.ResumeRequest(id, project); err == nil {
+		t.Fatal("resumed another instance's live task")
+	}
+	if _, err := second.Prepare(request, project, &failed.ID); err == nil || !strings.Contains(err.Error(), "another window") {
+		t.Fatalf("second resume of %s: %v", failed.ID, err)
+	}
+
+	// The owner exits without saving a final status (a crash): the lock is
+	// gone with it, so the record is stale.
+	first.mu.Lock()
+	first.tasks[id].unlock()
+	first.mu.Unlock()
+	if snap, err := second.Status(id, project); err != nil || snap["status"] != "interrupted" {
+		t.Fatalf("after owner exit %v %v", snap, err)
+	}
+	if _, err := second.ResumeRequest(id, project); err != nil {
+		t.Fatal(err)
 	}
 }

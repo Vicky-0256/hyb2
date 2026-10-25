@@ -146,27 +146,51 @@ func (p *explorePage) exportContactSVG() {
 	saveExport(p.a, "Export the contact map", p.contactExportName(".svg"), render)
 }
 
+// exportContactTSV writes every cell of the map as the web's
+// contact-map.tsv: bin ranges, the hybrids in the cell and their summed
+// cluster support, whatever the map's measure, in arm order.
 func (p *explorePage) exportContactTSV() {
-	s := &p.cm
-	d := s.data
+	d := p.cm.data
 	if d == nil {
 		return
 	}
-	view := s.heat.View()
-	comments := []string{"HYB2 contact map · " + p.contactTitle(),
-		fmt.Sprintf("Measure: %s · orientation: %s · type: %s · %s", strings.ToLower(d.measure), d.orientation, d.typ, strings.ToLower(nameOr(d.homodimer, homodimerOptions[0]))),
-		fmt.Sprintf("Cells in view: arm 1 %d–%d, arm 2 %d–%d", int(view.X0), int(math.Ceil(view.X1)), int(view.Y0), int(math.Ceil(view.Y1)))}
 	render := func() ([]byte, error) {
-		var rows [][]string
-		for _, i := range contactInView(d, view) {
-			x0, x1 := cellRange(d.x[i], d.bin)
-			y0, y1 := cellRange(d.y[i], d.bin)
-			rows = append(rows, []string{d.gene, strconv.Itoa(x0), strconv.Itoa(x1), d.gene2, strconv.Itoa(y0), strconv.Itoa(y1), strconv.Itoa(d.count[i])})
+		records, err := p.contactCells(d, measureRecords)
+		if err != nil {
+			return nil, err
 		}
-		header := []string{"gene1", "start1", "end1", "gene2", "start2", "end2", strings.ToLower(d.measure)}
-		return tsvTable{Comments: comments, Header: header, Rows: rows}.Bytes()
+		support, err := p.contactCells(d, measureSupport)
+		if err != nil {
+			return nil, err
+		}
+		return contactTSV(d.bin, records, support), nil
 	}
 	saveExport(p.a, "Export the contact map cells", p.contactExportName(".tsv"), render)
+}
+
+// contactTSV is the web's contactToTsv (no newline after the last row).
+func contactTSV(bin int, records, support contactMeasure) []byte {
+	supportAt := make(map[[2]int]int, len(support.x))
+	for i := range support.x {
+		supportAt[[2]int{support.x[i], support.y[i]}] = support.count[i]
+	}
+	order := make([]int, len(records.x))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool {
+		a, b := order[i], order[j]
+		if records.x[a] != records.x[b] {
+			return records.x[a] < records.x[b]
+		}
+		return records.y[a] < records.y[b]
+	})
+	rows := []string{"x_start\tx_end\ty_start\ty_end\trecords\tsupport_count"}
+	for _, i := range order {
+		x, y := records.x[i], records.y[i]
+		rows = append(rows, fmt.Sprintf("%d\t%d\t%d\t%d\t%d\t%d", x, x+bin-1, y, y+bin-1, records.count[i], supportAt[[2]int{x, y}]))
+	}
+	return []byte(strings.Join(rows, "\n"))
 }
 
 // ---- ④ Compare: the selected test

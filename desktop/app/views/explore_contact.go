@@ -86,6 +86,12 @@ type contactData struct {
 	x, y, count      []int
 	sorted           []int // counts, ascending (for the colour cap)
 	at               map[[2]int]int
+	// records is the number of hybrids in the map (the web's "Records in
+	// map"): total for the Records measure, else from a records query.
+	records int
+	// what the map was queried with (for the export's other measures)
+	path string
+	ids  []string
 }
 
 func (s *contactState) init() {
@@ -140,25 +146,25 @@ func (p *explorePage) loadContact() {
 	colorCap, scale, dark := s.capChoice(), s.scale, s.dark
 	lengthX, lengthY := p.geneLength(gene), p.geneLength(gene2)
 	p.ensure(&s.load, p.contactKey(), func() (func(), error) {
-		payload := core.Obj{"gene": gene, "gene2": gene2, "measure": measurePayload(measure), "orientation": "both"}
-		if orientation == orientOriented {
-			payload["orientation"] = "oriented"
-		}
-		if types := typesPayload(typ); types != nil {
-			payload["types"] = types
-		}
-		if h := homodimerPayload(homodimer); h != "" {
-			payload["homodimer"] = h
-		}
 		var size int
 		fmt.Sscanf(bin, "%d", &size)
+		payload := contactPayload(gene, gene2, measure, orientation, typ, homodimer)
 		payload["bin_size"], payload["max_cells"] = size, contactMaxCells
 		got, err := p.query(path, "analysis_contact_bins", ids, payload)
 		if err != nil {
 			return nil, err
 		}
 		d := decodeContact(got, measure, orientation, typ, lengthX, lengthY)
-		d.homodimer = homodimer
+		d.path, d.ids = path, append([]string(nil), ids...)
+		d.homodimer, d.records = homodimer, d.total
+		if measure != measureRecords {
+			// the hybrids in the map, whatever the cells weigh
+			recs, err := p.contactCells(d, measureRecords)
+			if err != nil {
+				return nil, err
+			}
+			d.records = recs.total
+		}
 		cells := d.cells(colorCap, scale, dark)
 		return func() {
 			s.data = d
@@ -173,6 +179,45 @@ func (p *explorePage) loadContact() {
 			}
 		}, nil
 	})
+}
+
+// contactPayload is the analysis_contact_bins request for a map's filters.
+func contactPayload(gene, gene2, measure, orientation, typ, homodimer string) core.Obj {
+	payload := core.Obj{"gene": gene, "gene2": gene2, "measure": measurePayload(measure), "orientation": "both"}
+	if orientation == orientOriented {
+		payload["orientation"] = "oriented"
+	}
+	if types := typesPayload(typ); types != nil {
+		payload["types"] = types
+	}
+	if h := homodimerPayload(homodimer); h != "" {
+		payload["homodimer"] = h
+	}
+	return payload
+}
+
+// contactMeasure is a map's non-empty cells under one measure.
+type contactMeasure struct {
+	total       int
+	x, y, count []int
+}
+
+// contactCells is d's map under measure, on d's bins: d itself for its own
+// measure, else queried again with the bin fixed. Safe off the main thread.
+func (p *explorePage) contactCells(d *contactData, measure string) (contactMeasure, error) {
+	if measure == d.measure {
+		return contactMeasure{total: d.total, x: d.x, y: d.y, count: d.count}, nil
+	}
+	payload := contactPayload(d.gene, d.gene2, measure, d.orientation, d.typ, d.homodimer)
+	payload["bin_size"], payload["fixed_bin"] = d.bin, true
+	got, err := p.query(d.path, "analysis_contact_bins", d.ids, payload)
+	if err != nil {
+		return contactMeasure{}, err
+	}
+	m := contactMeasure{total: int(num(got["total"])), x: ints(got["x"]), y: ints(got["y"]), count: ints(got["count"])}
+	n := min(len(m.x), len(m.y), len(m.count))
+	m.x, m.y, m.count = m.x[:n], m.y[:n], m.count[:n]
+	return m, nil
 }
 
 func decodeContact(got map[string]any, measure, orientation, typ string, lengthX, lengthY int) *contactData {
@@ -372,7 +417,7 @@ func (p *explorePage) contactLegend(c *ui.Context, d *contactData) {
 		ui.Row(c).Gap(16).Wrap().Children(func() {
 			stat(c, "Bin", fmt.Sprintf("%d nt", d.bin))
 			stat(c, "Cells", FormatNumber(int64(len(d.count))))
-			stat(c, "Hybrids drawn", FormatNumber(int64(d.total)))
+			stat(c, "Records in map", FormatNumber(int64(d.records)))
 		})
 		ui.Row(c).Gap(10).Wrap().Children(func() {
 			picker(c, "cm-cap", "Colour cap", &s.colorCap, capOptions, 145).OnChange(p.recolor)

@@ -75,7 +75,7 @@ func TestExploreInteractionsExportTSV(t *testing.T) {
 }
 
 func TestExploreContactExportSVGAndTSV(t *testing.T) {
-	a, _, p, tt := openExplore(t)
+	a, f, p, tt := openExplore(t)
 	d := p.cm.data
 	if d == nil {
 		t.Fatal("no map")
@@ -88,17 +88,33 @@ func TestExploreContactExportSVGAndTSV(t *testing.T) {
 	if n := strings.Count(svg, "<rect") - 4; n != len(d.count) {
 		t.Fatalf("%d cells drawn of %d", n, len(d.count))
 	}
-	// Zoomed in: the TSV has the cells in view only.
+	// Zoomed in or not, the TSV has every cell, as the web's contact-map.tsv:
+	// the hybrids and the cluster support of each, whatever the measure.
 	p.cm.heat.SetView(widgets.Window{X0: 0, X1: 2000, Y0: 0, Y1: 2000})
 	tt.Frame()
+	before := f.count("analysis_contact_bins")
 	_, text := exportClick(t, a, tt, "Export TSV…")
-	records := tsvRecords(t, text)
-	inView := contactInView(d, p.cm.heat.View())
-	if len(records) != len(inView)+1 || len(inView) == 0 || len(inView) == len(d.count) {
-		t.Fatalf("%d records, %d in view of %d", len(records), len(inView), len(d.count))
+	lines := strings.Split(text, "\n")
+	if len(lines) != len(d.count)+1 || lines[0] != "x_start\tx_end\ty_start\ty_end\trecords\tsupport_count" || strings.HasSuffix(text, "\n") {
+		t.Fatalf("%d lines for %d cells: %.200q", len(lines), len(d.count), text)
 	}
-	if !strings.Contains(text, "# Cells in view: arm 1 0–2000, arm 2 0–2000") || records[0][6] != "records" {
-		t.Fatalf("tsv %.400q", text)
+	if want := fmt.Sprintf("%d\t%d\t", d.x[0], d.x[0]+d.bin-1); !strings.HasPrefix(lines[1], want) {
+		t.Fatalf("first row %q, want %q…", lines[1], want)
+	}
+	// the map is of records: one more query, for the support on its bins
+	sent := f.last("analysis_contact_bins")
+	if f.count("analysis_contact_bins") != before+1 || sent["measure"] != "support" || sent["fixed_bin"] != true || sent["bin_size"] != float64(d.bin) {
+		t.Fatalf("%d queries, last %v", f.count("analysis_contact_bins")-before, sent)
+	}
+}
+
+// The web's contactToTsv on the same cells (HYB2 Web Lite, Node).
+func TestContactTSVMatchesWeb(t *testing.T) {
+	records := contactMeasure{total: 4, x: []int{25, 0, 0}, y: []int{50, 25, 0}, count: []int{1, 2, 3}}
+	support := contactMeasure{total: 9, x: []int{0, 0, 25}, y: []int{0, 25, 50}, count: []int{5, 3, 1}}
+	want := "x_start\tx_end\ty_start\ty_end\trecords\tsupport_count\n0\t24\t0\t24\t3\t5\n0\t24\t25\t49\t2\t3\n25\t49\t50\t74\t1\t1"
+	if got := string(contactTSV(25, records, support)); got != want {
+		t.Fatalf("got %q", got)
 	}
 }
 

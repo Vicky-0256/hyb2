@@ -1,6 +1,7 @@
 package views
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -372,5 +373,50 @@ func TestCompareQuickView(t *testing.T) {
 	tt.Frame()
 	if p.mode != cmpModeTest {
 		t.Fatal("still in quick view")
+	}
+}
+
+// The quick view's rows are built and sorted off the UI goroutine, and an
+// answer to an earlier request that arrives last is dropped.
+func TestCompareQuickDropsAStaleAnswer(t *testing.T) {
+	a, f := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 1400)
+	a.Navigate("compare", nil)
+	csSettle(a, tt)
+	p := a.PageFor("compare").(*comparePage)
+	posted := func(n int) {
+		for range 400 {
+			a.mu.Lock()
+			got := len(a.pending)
+			a.mu.Unlock()
+			if got >= n {
+				return
+			}
+			sleepMS(5)
+		}
+		t.Fatalf("%d answers not posted", n)
+	}
+	f.queryErr = errors.New("stale failure")
+	p.runQuick()
+	posted(1)
+	f.queryErr = nil
+	p.runQuick()
+	posted(2)
+	// The second answer lands first, the first one after it.
+	a.mu.Lock()
+	a.pending[0], a.pending[1] = a.pending[1], a.pending[0]
+	a.mu.Unlock()
+	csSettle(a, tt)
+	q := &p.quick
+	if q.err != "" || q.data == nil || len(q.rows) == 0 {
+		t.Fatalf("err %q, data %v, rows %d", q.err, q.data != nil, len(q.rows))
+	}
+	for i := 1; i < len(q.rows); i++ {
+		if math.Abs(*q.rows[i].Ratio) > math.Abs(*q.rows[i-1].Ratio) {
+			t.Fatalf("rows not by effect at %d", i)
+		}
+	}
+	if q.cap != quickEffectCap(q.rows) || len(q.heat.Cells()) == 0 {
+		t.Fatalf("cap %g, cells %d", q.cap, len(q.heat.Cells()))
 	}
 }

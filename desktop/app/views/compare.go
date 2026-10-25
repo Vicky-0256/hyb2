@@ -34,6 +34,7 @@ package views
 //	           both finish).
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -238,8 +239,10 @@ type comparePage struct {
 		idsA    []string
 		idsB    []string
 		bin     string
-		rows    []cmpQuickRow
+		rows    []cmpQuickRow // built with data, off the UI goroutine
+		cap     float64       // quickEffectCap(rows)
 		rowsKey string
+		seq     int // of the request shown; a stale answer is dropped
 		table   ui.ListState
 		row     int
 		heat    *widgets.Heatmap
@@ -281,6 +284,7 @@ func (p *comparePage) reset() {
 	p.quick.table.Selected = &p.quick.row
 	p.quick.heat = widgets.NewHeatmap()
 	p.quick.heatKey, p.quick.rowsKey = "", ""
+	p.quick.rows, p.quick.seq = nil, p.quick.seq+1
 	p.foldOpen = false
 	p.runMsg = ""
 	p.panels.reset()
@@ -705,7 +709,9 @@ func (p *comparePage) runQuick() {
 		bin = 10
 	}
 	q := &p.quick
-	q.busy, q.err, q.data, q.row = true, "", nil, -1
+	q.busy, q.err, q.data, q.rows, q.row = true, "", nil, nil, -1
+	q.seq++
+	seq := q.seq
 	q.keyA, q.keyB, q.gene, q.idsA, q.idsB = p.keyA, p.keyB, gene, idsA, idsB
 	p.mode = cmpModeQuick
 	path := a.Project.Path
@@ -716,8 +722,14 @@ func (p *comparePage) runQuick() {
 		if err == nil {
 			err = model.Decode(raw, &result)
 		}
+		// Sorting 1.5M rows takes seconds: not on the UI goroutine.
+		var rows []cmpQuickRow
+		if err == nil {
+			rows = cmpQuickRows(&result)
+		}
+		limit := quickEffectCap(rows)
 		return func() {
-			if a.Project == nil || a.Project.Path != path {
+			if a.Project == nil || a.Project.Path != path || q.seq != seq {
 				return
 			}
 			q.busy = false
@@ -725,8 +737,10 @@ func (p *comparePage) runQuick() {
 				q.err = err.Error()
 				return
 			}
-			q.data = &result
-			q.rowsKey, q.heatKey = "", ""
+			q.data, q.rows, q.cap = &result, rows, limit
+			q.rowsKey, q.heatKey = fmt.Sprintf("%p", &result), ""
+			q.row = -1
+			q.table = ui.ListState{}
 		}
 	})
 }
@@ -1352,16 +1366,16 @@ func (p *comparePage) foldDialog(c *ui.Context) {
 
 // ---- quick view
 
+// quickRows are the quick view's bins, strongest effect first.
 func (p *comparePage) quickRows() []cmpQuickRow {
-	q := &p.quick
-	if q.data == nil {
+	if p.quick.data == nil {
 		return nil
 	}
-	key := fmt.Sprintf("%p", q.data)
-	if key == q.rowsKey {
-		return q.rows
-	}
-	d := q.data
+	return p.quick.rows
+}
+
+// cmpQuickRows are d's bins, strongest effect first (then most hybrids).
+func cmpQuickRows(d *cmpQuickResult) []cmpQuickRow {
 	at := func(values []float64, i int) float64 {
 		if i < len(values) {
 			return values[i]
@@ -1389,15 +1403,12 @@ func (p *comparePage) quickRows() []cmpQuickRow {
 		}
 		return math.Abs(*r)
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if abs(rows[i].Ratio) != abs(rows[j].Ratio) {
-			return abs(rows[i].Ratio) > abs(rows[j].Ratio)
+	slices.SortStableFunc(rows, func(a, b cmpQuickRow) int {
+		if c := cmp.Compare(abs(b.Ratio), abs(a.Ratio)); c != 0 {
+			return c
 		}
-		return rows[i].RawA+rows[i].RawB > rows[j].RawA+rows[j].RawB
+		return cmp.Compare(b.RawA+b.RawB, a.RawA+a.RawB)
 	})
-	q.rows, q.rowsKey = rows, key
-	q.row = -1
-	q.table = ui.ListState{}
 	return rows
 }
 
@@ -1471,7 +1482,17 @@ func (p *comparePage) quickView(c *ui.Context) {
 				}
 				length += d.BinSize
 			}
-			q.heat.SetCells(cmpQuickCells(rows, d.BinSize, t.Dark), float64(length), float64(length))
+			// The cells come in the background; until then the map is empty.
+			q.heat.SetCells(nil, float64(length), float64(length))
+			bin, dark, limit := d.BinSize, t.Dark, q.cap
+			p.a.Go(func() func() {
+				cells := cmpQuickCells(rows, bin, dark, limit)
+				return func() {
+					if q.heatKey == heatKey {
+						q.heat.SetCells(cells, float64(length), float64(length))
+					}
+				}
+			})
 		}
 		if q.row >= 0 && q.row < len(rows) {
 			r := rows[q.row]
@@ -1491,7 +1512,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 					}
 					q.heat.Picked = -1
 				}
-				effectLegend(c, ctx.LabelA, ctx.LabelB, quickEffectCap(rows))
+				effectLegend(c, ctx.LabelA, ctx.LabelB, q.cap)
 			})
 			ui.Column(c).Gap(8).Grow(1).MinWidth(320).Children(func() {
 				ui.Text(c, "Bins ("+FormatNumber(int64(len(rows)))+")").Bold()
@@ -1537,8 +1558,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 
 // cmpQuickCells colours bins by the effect over its cap, as the web's
 // effect map: violet higher in A, teal higher in B.
-func cmpQuickCells(rows []cmpQuickRow, bin int, dark bool) []widgets.Cell {
-	limit := quickEffectCap(rows)
+func cmpQuickCells(rows []cmpQuickRow, bin int, dark bool, limit float64) []widgets.Cell {
 	out := make([]widgets.Cell, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
 		r := rows[i]

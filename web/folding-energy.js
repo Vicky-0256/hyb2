@@ -419,7 +419,7 @@
   }
 
   function svg(results, labels, colours) {
-    const c = Object.assign({ ink: "#222222", muted: "#6b7280", grid: "#e5e7eb", one: "#c62828", two: "#1f4e9e", background: "#ffffff" }, colours || {});
+    const c = Object.assign({ ink: "#222222", muted: "#6b7280", grid: "#e5e7eb", one: "#E64B35", two: "#4DBBD5", background: "#ffffff" }, colours || {});
     const stats = summarise(results.rows).filter(function (s) { return s.n > 0; });
     const panelW = 400;
     const panelH = 340;

@@ -1,32 +1,19 @@
 (function () {
   "use strict";
 
-  // The Contact Map's sequential scale ("Teal–violet sequential"; the
-  // viridis* names are historical, this is not matplotlib's viridis). Stops
-  // are interpolated in CIELAB so relative luminance is monotonic: on the
-  // light surface (and in every export) low counts are pale teal and high
-  // counts deep violet; on the dark surface the ramp runs the other way, from
-  // a steel blue that stays visible against the plot to a light lavender.
-  // verify-ui-contract.cjs checks both ramps for monotonic luminance.
-  const BRAND_SCALE = [
-    [150, 215, 210],
-    [0, 160, 157],
-    [106, 79, 242],
-    [45, 27, 105]
-  ];
-  const BRAND_SCALE_DARK = [
-    [46, 104, 130],
-    [0, 176, 172],
-    [200, 190, 255]
-  ];
+  // Mint–navy sequential scale, interpolated in CIELAB with monotonic
+  // luminance. The dark theme reverses the palette for visible high counts.
+  // The viridis* function names are retained for API compatibility.
+  const BRAND_SCALE = [[145, 209, 194], [77, 187, 213], [0, 160, 135], [60, 84, 136]];
+  const BRAND_SCALE_DARK = [[60, 84, 136], [0, 160, 135], [77, 187, 213], [145, 209, 194]];
   const SCALE_STEPS = 1024;
   const scaleLuts = { light: null, dark: null };
 
   // One entry per step: rgb triplets for viridisRgb() and opaque RGBA pixels
   // (little-endian ABGR) for the canvas fast path. Built on first use, after
   // the CIELAB helpers below are initialised.
-  function scaleLut(dark) {
-    const key = dark ? "dark" : "light";
+  function scaleLut(dark, palette) {
+    const key = palette === "monochrome" ? "monochrome" : dark ? "dark" : "light";
     if (!scaleLuts[key]) {
       const stops = (dark ? BRAND_SCALE_DARK : BRAND_SCALE).map(srgbToLab);
       const rgb = new Uint8Array(SCALE_STEPS * 3);
@@ -35,7 +22,8 @@
         const scaled = index / (SCALE_STEPS - 1) * (stops.length - 1);
         const at = Math.min(stops.length - 2, Math.floor(scaled));
         const t = scaled - at;
-        const colour = labToSrgb([0, 1, 2].map(function (channel) {
+        const grey = Math.round(255 * (1 - index / (SCALE_STEPS - 1)));
+        const colour = palette === "monochrome" ? [grey, grey, grey] : labToSrgb([0, 1, 2].map(function (channel) {
           return stops[at][channel] + (stops[at + 1][channel] - stops[at][channel]) * t;
         }));
         rgb[index * 3] = colour[0];
@@ -401,7 +389,7 @@
   // it replaces, so overlapping sub-pixel cells still resolve last-wins.
   let contactScratch = null;
 
-  function paintContactCells(context, pixelRatio, matrix, geometry, scale, theme) {
+  function paintContactCells(context, pixelRatio, matrix, geometry, scale, theme, palette) {
     const width = Math.max(1, Math.round(geometry.plotWidth * pixelRatio));
     const height = Math.max(1, Math.round(geometry.plotHeight * pixelRatio));
     if (!contactScratch || contactScratch.canvas.width !== width || contactScratch.canvas.height !== height) {
@@ -418,7 +406,7 @@
     const cellHeight = geometry.cellHeight * pixelRatio;
     const spanX = (Math.ceil(geometry.cellWidth) + .4) * pixelRatio;
     const spanY = (Math.ceil(geometry.cellHeight) + .4) * pixelRatio;
-    const lut = scaleLut(themeIsDark(theme)).pixels;
+    const lut = scaleLut(themeIsDark(theme), palette).pixels;
     const lastLut = lut.length - 1;
     const cap = geometry.cap;
     const log = scale === "log";
@@ -474,10 +462,10 @@
   // off-page canvas; without it the page canvas in the current theme.
   function drawContactStageCanvas(state, canvas, stage, exportSize) {
     const matrix = state.contact.matrix;
-    const theme = exportSize ? "light" : undefined;
+    const theme = exportSize || state.contact.palette === "monochrome" ? "light" : undefined;
     const dimensions = exportSize ? prepareExportCanvas(canvas, exportSize.width, exportSize.height) : prepareCanvas(canvas);
     const context = dimensions.context;
-    const colors = exportColors(theme);
+    const colors = contactColors(state.contact, theme);
     const ink = colors.ink;
     const muted = colors.muted;
     const line = colors.line;
@@ -494,7 +482,7 @@
     context.fillStyle = surface;
     context.fillRect(geometry.left, geometry.top, geometry.plotWidth, geometry.plotHeight);
 
-    paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale, theme);
+    paintContactCells(context, canvas.width / dimensions.width, matrix, geometry, state.contact.scale, theme, state.contact.palette);
 
     const selection = getContactStageSelection(state, stage);
     if (selection && selection.x >= geometry.xStart && selection.x <= geometry.xEnd && selection.y >= geometry.yStart && selection.y <= geometry.yEnd) {
@@ -569,7 +557,7 @@
     }
     return {
       kind: "sequential",
-      colorAt: function (t) { return viridis(t, theme); },
+      colorAt: function (t) { return viridis(t, theme, contact.palette); },
       min: 0,
       max: cap,
       ticks: ticks,
@@ -1266,6 +1254,33 @@
     return results.bins[index];
   }
 
+  // Views belong to a result: a newly computed result starts at full extent.
+  const comparisonViews = new WeakMap();
+  function comparisonView(result, kind) {
+    return (comparisonViews.get(result) || {})[kind] || null;
+  }
+  function setComparisonView(result, kind, view) {
+    const views = comparisonViews.get(result) || {};
+    views[kind] = view;
+    comparisonViews.set(result, views);
+  }
+  function changeComparisonView(result, kind, factor, fx, fy, dx, dy) {
+    const full = getComparisonGeometry(result, 720, 520);
+    const old = getComparisonGeometry(result, 720, 520, comparisonView(result, kind));
+    const view = {};
+    ["x", "y"].forEach(function (axis, index) {
+      const count = old[axis + "Count"];
+      const next = Math.max(1, Math.min(full[axis + "Count"], Math.round(count * factor)));
+      const fraction = index ? fy : fx;
+      const shift = index ? dy : dx;
+      const start = old[axis + "Start"] + Math.round((count - next) * fraction + shift * count) * result.binSize;
+      view[axis + "Start"] = Math.max(full[axis + "Start"], Math.min(full[axis + "End"] - (next - 1) * result.binSize, start));
+      view[axis + "End"] = view[axis + "Start"] + (next - 1) * result.binSize;
+    });
+    setComparisonView(result, kind, view);
+    return view;
+  }
+
   function bindComparisonCanvases(state, api) {
     bindCompareNav();
     const result = state.comparison && state.comparison.result;
@@ -1275,7 +1290,44 @@
     Array.from(document.querySelectorAll("[data-comparison-map]")).forEach(function (canvas) {
       const kind = canvas.dataset.comparisonMap;
       drawComparisonCanvas(state, canvas, kind);
+      let drag = null;
+      const position = function (event) {
+        const rect = canvas.getBoundingClientRect();
+        const geometry = state.comparison.geometry[kind];
+        const x = event.clientX - rect.left, y = event.clientY - rect.top;
+        return { x: x, y: y, fx: (x - geometry.left) / geometry.plotWidth, fy: (y - geometry.top) / geometry.plotHeight, geometry: geometry };
+      };
+      canvas.addEventListener("wheel", function (event) {
+        const p = position(event);
+        if (p.fx < 0 || p.fx > 1 || p.fy < 0 || p.fy > 1) { return; }
+        event.preventDefault();
+        changeComparisonView(result, kind, event.deltaY > 0 ? 1.35 : 0.74, p.fx, p.fy, 0, 0);
+        drawComparisonCanvas(state, canvas, kind);
+      }, { passive: false });
+      canvas.addEventListener("pointerdown", function (event) {
+        if (event.button !== 0) { return; }
+        const p = position(event);
+        if (p.fx < 0 || p.fx > 1 || p.fy < 0 || p.fy > 1) { return; }
+        drag = { x: p.x, y: p.y, moved: false, view: comparisonView(result, kind) };
+        canvas.setPointerCapture(event.pointerId);
+      });
+      canvas.addEventListener("pointercancel", function () { drag = null; });
+      canvas.addEventListener("dblclick", function (event) {
+        event.preventDefault();
+        setComparisonView(result, kind, null);
+        drawComparisonCanvas(state, canvas, kind);
+      });
       canvas.addEventListener("pointermove", function (event) {
+        if (drag) {
+          const p = position(event);
+          if (Math.hypot(p.x - drag.x, p.y - drag.y) >= 4) {
+            setComparisonView(result, kind, drag.view);
+            changeComparisonView(result, kind, 1, 0.5, 0.5, (drag.x - p.x) / p.geometry.plotWidth, (drag.y - p.y) / p.geometry.plotHeight);
+            drag.moved = true;
+            drawComparisonCanvas(state, canvas, kind);
+          }
+          return;
+        }
         const cell = comparisonCellFromEvent(state, canvas, kind, event);
         canvas.title = cell
           ? (kind === "conserved"
@@ -1284,6 +1336,10 @@
           : "";
       });
       canvas.addEventListener("pointerup", function (event) {
+        const moved = drag && drag.moved;
+        drag = null;
+        if (canvas.hasPointerCapture(event.pointerId)) { canvas.releasePointerCapture(event.pointerId); }
+        if (moved) { return; }
         const cell = comparisonCellFromEvent(state, canvas, kind, event);
         if (!cell) {
           return;
@@ -1424,16 +1480,19 @@
     const line = exporting ? colours.line : style.getPropertyValue("--line").trim();
     const ink = exporting ? colours.ink : style.getPropertyValue("--ink").trim();
     const muted = exporting ? colours.muted : style.getPropertyValue("--muted").trim();
-    const geometry = getComparisonGeometry(result, dimensions.width, dimensions.height);
+    const geometry = getComparisonGeometry(result, dimensions.width, dimensions.height, comparisonView(result, kind));
     if (!exporting) {
       state.comparison.geometry = state.comparison.geometry || {};
       state.comparison.geometry[kind] = geometry;
     }
-    const cells = kind === "conserved" ? result.conservedCells : result.cells;
+    const sourceCells = kind === "conserved" ? result.conservedCells : result.cells;
+    const cells = comparisonView(result, kind) ? sourceCells.filter(function (cell) {
+      return cell.x >= geometry.xStart && cell.x <= geometry.xEnd && cell.y >= geometry.yStart && cell.y <= geometry.yEnd;
+    }) : sourceCells;
     const panel = kind === "conserved" && !dark ? similarityPanelColor(state.comparison) : line;
     // A whole-genome map has up to ~10^6 cells: they are drawn once into a
     // layer kept with the result and copied on later renders.
-    const layerKey = [kind, canvas.width, canvas.height, surface, panel, dark].join("|");
+    const layerKey = [kind, canvas.width, canvas.height, surface, panel, dark, geometry.xStart, geometry.xEnd, geometry.yStart, geometry.yEnd].join("|");
     let layers = comparisonLayers.get(result);
     if (!layers) {
       layers = new Map();
@@ -1447,6 +1506,7 @@
       const layerContext = layer.getContext("2d");
       layerContext.setTransform(canvas.width / dimensions.width, 0, 0, canvas.height / dimensions.height, 0, 0);
       drawComparisonCells(layerContext, dimensions, geometry, result, kind, cells, surface, panel, line, theme);
+      if (layers.size >= 4) { layers.delete(layers.keys().next().value); }
       layers.set(layerKey, layer);
     }
     if (layer) {
@@ -1772,11 +1832,11 @@
     context.putImageData(image, left, top);
   }
 
-  function getComparisonGeometry(result, width, height) {
-    const xStart = Math.floor(result.xMin / result.binSize) * result.binSize;
-    const xEnd = Math.floor(result.xMax / result.binSize) * result.binSize;
-    const yStart = Math.floor(result.yMin / result.binSize) * result.binSize;
-    const yEnd = Math.floor(result.yMax / result.binSize) * result.binSize;
+  function getComparisonGeometry(result, width, height, view) {
+    const xStart = view ? view.xStart : Math.floor(result.xMin / result.binSize) * result.binSize;
+    const xEnd = view ? view.xEnd : Math.floor(result.xMax / result.binSize) * result.binSize;
+    const yStart = view ? view.yStart : Math.floor(result.yMin / result.binSize) * result.binSize;
+    const yEnd = view ? view.yEnd : Math.floor(result.yMax / result.binSize) * result.binSize;
     // room above for the title, below for the x axis and the colour bar
     const left = 66;
     const top = 30;
@@ -1981,6 +2041,10 @@
 
     if (feature === "contact-control") {
       state.contact[key] = element.value;
+      if (key === "palette") {
+        api.render();
+        return true;
+      }
       rebuildContact(state, api);
       return true;
     }
@@ -2050,6 +2114,10 @@
       const value = structureControlValue(element, key);
       state.structure[key] = value;
       applyLegacyWorkflow(state, key, value);
+      if (key === "engine" && value === "iris") {
+        state.structure.source = "reference"; state.structure.workflow = "custom";
+        state.structure.constraintMode = "none"; state.structure.evidenceLayout = "single";
+      }
       if (key === "constraintMode" && value === "hyb-guided") {
         state.structure.source = "reference";
       }
@@ -2177,6 +2245,10 @@
       const value = structureControlValue(element, key);
       state.structure[key] = value;
       applyLegacyWorkflow(state, key, value);
+      if (key === "engine" && value === "iris") {
+        state.structure.source = "reference"; state.structure.workflow = "custom";
+        state.structure.constraintMode = "none"; state.structure.evidenceLayout = "single";
+      }
       if (key === "constraintMode" && value === "hyb-guided") {
         state.structure.source = "reference";
       }
@@ -2206,6 +2278,14 @@
     const action = element.dataset.featureAction;
     if (!action) {
       return false;
+    }
+
+    if (action === "comparison-zoom" && state.comparison && state.comparison.result) {
+      const result = state.comparison.result, kind = element.dataset.kind;
+      if (element.dataset.zoom === "reset") { setComparisonView(result, kind, null); }
+      else { changeComparisonView(result, kind, element.dataset.zoom === "in" ? 0.5 : 2, 0.5, 0.5, 0, 0); }
+      renderAndFocus(api, "#comparison-" + kind + "-canvas");
+      return true;
     }
 
     if (window.Hyb2Evidence && window.Hyb2Evidence.handleAction(action, state, api, element)) {
@@ -2862,11 +2942,18 @@
   const CONTACT_EXPORT_SIZE = { width: 900, height: 916 };
   const VIEWPOINT_EXPORT_SIZE = { width: 1040, height: 320 };
 
+  function contactColors(contact, theme) {
+    if (contact.palette === "monochrome") {
+      return { surface: "#ffffff", ink: "#222222", muted: "#666666", line: "#cccccc", primary: "#222222", accent: "#666666" };
+    }
+    return exportColors(theme);
+  }
+
   function buildContactSvg(state) {
     if (!visualExportReady(state, "contact")) {
       return "";
     }
-    const colors = exportColors("light");
+    const colors = contactColors(state.contact, "light");
     const matrix = state.contact.matrix;
     const width = CONTACT_EXPORT_SIZE.width;
     const height = CONTACT_EXPORT_SIZE.height;
@@ -2878,7 +2965,7 @@
       const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
       const x = geometry.left + ((cell.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight;
-      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + viridis(ratio, "light") + '"/>';
+      return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + viridis(ratio, "light", state.contact.palette) + '"/>';
     }).join("");
 
     return [
@@ -2930,13 +3017,18 @@
     const colors = exportColors("light");
     const width = COMPARISON_EXPORT_WIDTH;
     const height = COMPARISON_EXPORT_HEIGHT;
-    const geometry = getComparisonGeometry(result, width, height);
+    const geometry = getComparisonGeometry(result, width, height, comparisonView(result, "effect"));
     // a whole-genome map keeps the SVG printable: the strongest effects,
     // drawn weakest first
-    const shown = result.cells.length > COMPARISON_SVG_MAX_CELLS
-      ? window.Hyb2Data.comparisonOrderedCells(result, "effect", 0, COMPARISON_SVG_MAX_CELLS).reverse()
-      : result.cells;
-    const cells = shown.map(function (cell) {
+    const visible = result.cells.filter(function (cell) {
+      return cell.x >= geometry.xStart && cell.x <= geometry.xEnd && cell.y >= geometry.yStart && cell.y <= geometry.yEnd;
+    });
+    const shown = visible.length > COMPARISON_SVG_MAX_CELLS
+      ? visible.slice().sort(function (a, b) { return Math.abs(b.effect) - Math.abs(a.effect); }).slice(0, COMPARISON_SVG_MAX_CELLS).reverse()
+      : visible;
+    const cells = shown.filter(function (cell) {
+      return cell.x >= geometry.xStart && cell.x <= geometry.xEnd && cell.y >= geometry.yStart && cell.y <= geometry.yEnd;
+    }).map(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
       const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
       return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + effectColor(cell.effect / Math.max(.01, result.effectCap), "light") + '"/>';
@@ -2949,8 +3041,8 @@
       cells,
       '<rect x="' + geometry.left + '" y="' + geometry.top + '" width="' + geometry.plotWidth + '" height="' + geometry.plotHeight + '" fill="none" stroke="' + colors.ink + '"/>',
       '<text x="' + geometry.left + '" y="16" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="' + colors.ink + '">' + escapeXml(comparisonMapTitle(state.comparison, "effect", true, svgTextFits(13, width - geometry.left - 8))) + '</text>',
-      shown.length < result.cells.length
-        ? '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + COMPARISON_LEGEND_OFFSET + 10) + '" text-anchor="end" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">the ' + format(shown.length) + ' strongest of ' + format(result.cells.length) + ' bins</text>'
+      shown.length < visible.length
+        ? '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + COMPARISON_LEGEND_OFFSET + 10) + '" text-anchor="end" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">the ' + format(shown.length) + ' strongest of ' + format(visible.length) + ' visible bins</text>'
         : '',
       comparisonAxesSvg(state.comparison, result, geometry, colors),
       window.Hyb2UiKit ? window.Hyb2UiKit.legend.svg(comparisonLegendOptions(state.comparison, result, "effect", "light", geometry, colors)) : '',
@@ -3049,6 +3141,7 @@
         customCap: state.contact.colourCap === "custom" ? customCap : null,
         effectiveColourCap: state.contact.matrix && Number.isFinite(state.contact.matrix.cap) ? state.contact.matrix.cap : null,
         scale: state.contact.scale,
+        palette: state.contact.palette || "colour",
         orientation: state.contact.orientation,
         chimeraType: state.contact.chimeraType,
         homodimerSubset: state.contact.homodimer || "all",
@@ -3193,7 +3286,7 @@
         similarityMinimum: Number(comparison.similarityMinimum) > 1 ? Number(comparison.similarityMinimum) : 1,
         similarityPanel: comparison.similarityPanel === "grey" ? "grey (#EBEBEB, display only)" : "white (as similarity_heatmap.R)",
         similarityMethod: "HYB2 plot_similarity_map on one merged raw map per condition (as Desktop differential.py; not hyb2_compare's consecutive replicate pairing): min(A, B) of bins present in both; similarityMinimum = awk $3 >= MIN on each merged map",
-        similarityColourScale: "similarity_heatmap.R: counts capped at the 95% quantile, white at the smallest plotted count to forestgreen at the cap"
+        similarityColourScale: "similarity_heatmap.R: counts capped at the 95% quantile, white at the smallest plotted count to teal (#00A087) at the cap"
       },
       result: {
         ready: result.ready === true,
@@ -3347,15 +3440,15 @@
     return isDarkTheme();
   }
 
-  function viridisRgb(ratio, theme) {
-    const lut = scaleLut(themeIsDark(theme)).rgb;
+  function viridisRgb(ratio, theme, palette) {
+    const lut = scaleLut(themeIsDark(theme), palette).rgb;
     const bounded = Math.max(0, Math.min(1, Number(ratio) || 0));
     const index = Math.round(bounded * (SCALE_STEPS - 1)) * 3;
     return [lut[index], lut[index + 1], lut[index + 2]];
   }
 
-  function viridis(ratio, theme) {
-    const rgb = viridisRgb(ratio, theme);
+  function viridis(ratio, theme, palette) {
+    const rgb = viridisRgb(ratio, theme, palette);
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
   }
 
@@ -3364,8 +3457,8 @@
     const dark = themeIsDark(theme);
     const center = dark ? [19, 44, 71] : [245, 248, 250];
     const target = bounded >= 0
-      ? (dark ? [154, 136, 255] : [106, 79, 242])
-      : [0, 160, 157];
+      ? (dark ? [243, 155, 127] : [230, 75, 53])
+      : [77, 187, 213];
     const ratio = Math.abs(bounded);
     return [
       Math.round(center[0] + (target[0] - center[0]) * ratio),
@@ -3386,15 +3479,15 @@
     const c0 = dark ? 19 : 245;
     const c1 = dark ? 44 : 248;
     const c2 = dark ? 71 : 250;
-    const p0 = dark ? 154 : 106;
-    const p1 = dark ? 136 : 79;
-    const p2 = dark ? 255 : 242;
+    const p0 = dark ? 243 : 230;
+    const p1 = dark ? 155 : 75;
+    const p2 = dark ? 127 : 53;
     return function (value) {
       const bounded = Math.max(-1, Math.min(1, value));
       const ratio = Math.abs(bounded);
-      const t0 = bounded >= 0 ? p0 : 0;
-      const t1 = bounded >= 0 ? p1 : 160;
-      const t2 = bounded >= 0 ? p2 : 157;
+      const t0 = bounded >= 0 ? p0 : 77;
+      const t1 = bounded >= 0 ? p1 : 187;
+      const t2 = bounded >= 0 ? p2 : 213;
       const red = Math.round(c0 + (t0 - c0) * ratio);
       const green = Math.round(c1 + (t1 - c1) * ratio);
       const blue = Math.round(c2 + (t2 - c2) * ratio);
@@ -3408,8 +3501,8 @@
   }
 
   // similarity_heatmap.R: counts capped at the 95% quantile, then
-  // scale_fill_gradient(low = white, high = forestgreen) over the data range,
-  // so white is the smallest plotted count (not zero) and forestgreen the cap.
+  // the reference figure presents that range in white–teal (#00A087),
+  // so white is the smallest plotted count (not zero) and teal (#00A087) the cap.
   // A single-valued range maps to the midpoint, like scales::rescale().
   // the panel colour is the user's white/grey choice in either theme; theme
   // is accepted for the K4 signature
@@ -3441,9 +3534,9 @@
   // scales::pal_seq_gradient interpolates in CIELAB (farver, D65 white).
   function conservedColor(ratio, theme) {
     const bounded = Math.max(0, Math.min(1, ratio));
-    const dark = themeIsDark(theme);
-    const from = srgbToLab(dark ? [24, 54, 80] : [255, 255, 255]);
-    const to = srgbToLab([34, 139, 34]);
+    void theme; // The reference figure uses the same white–teal scale in both themes.
+    const from = srgbToLab([255, 255, 255]);
+    const to = srgbToLab([0, 160, 135]);
     const rgb = labToSrgb([
       from[0] + (to[0] - from[0]) * bounded,
       from[1] + (to[1] - from[1]) * bounded,
@@ -3498,16 +3591,16 @@
         line: "#2e4b66",
         ink: "#ecf1f8",
         muted: "#9eb1c3",
-        primary: "#0be3ea",
-        accent: "#c97afd"
+        primary: "#4DBBD5",
+        accent: "#F39B7F"
       }
       : {
         surface: "#ffffff",
         line: "#dce7ec",
         ink: "#132c47",
         muted: "#5b6c80",
-        primary: "#0060fe",
-        accent: "#9c05f8"
+        primary: "#3C5488",
+        accent: "#E64B35"
       };
     if (theme === "light" || theme === "dark" || typeof document === "undefined" || typeof getComputedStyle !== "function" || !document.documentElement) {
       return fallback;

@@ -132,6 +132,33 @@ assert.deepEqual(JSON.parse(JSON.stringify(contactExportParameters.parameters.se
 });
 assert.equal(contactExportParameters.sourceHyb.fileSize, 88);
 const contactSvg = context.window.Hyb2UI.buildContactSvg(contactExportState);
+{
+  const bw = JSON.parse(JSON.stringify(contactExportState));
+  const matrix = bw.contact.matrix;
+  const view = bw.contact.overviewView;
+  let renders = 0;
+  context.window.Hyb2UI.handleChange(bw, { dataset: { feature: "contact-control", key: "palette" }, value: "monochrome" }, { render: function () { renders++; } });
+  assert.equal(renders, 1);
+  assert.equal(bw.contact.matrix, matrix, "palette changes must not recalculate data");
+  assert.equal(bw.contact.overviewView, view, "palette changes preserve zoom");
+  const svg = context.window.Hyb2UI.buildContactSvg(bw);
+  assert.match(svg, /fill="rgb\(0, 0, 0\)"/, "maximum count exports black");
+  assert.match(svg, /fill="#ffffff"/, "monochrome export uses white paper");
+  assert.equal(context.window.Hyb2UI.contactParameters(bw).parameters.palette, "monochrome");
+  for (const theme of ["light", "dark"]) {
+    let previous = 256;
+    for (let step = 0; step <= 64; step++) {
+      const rgb = Array.from(context.window.Hyb2UI.viridisRgb(step / 64, theme, "monochrome"));
+      assert.equal(rgb[0], rgb[1]);
+      assert.equal(rgb[1], rgb[2]);
+      assert.ok(rgb[0] < previous, "grayscale decreases monotonically");
+      previous = rgb[0];
+    }
+    assert.equal(context.window.Hyb2UI.viridis(0, theme, "monochrome"), "rgb(255, 255, 255)");
+    assert.equal(context.window.Hyb2UI.viridis(1, theme, "monochrome"), "rgb(0, 0, 0)");
+  }
+}
+
 assert.match(contactSvg, />120<\/text>/, "Contact SVG must label the top Y coordinate");
 assert.match(contactSvg, />159<\/text>/, "Contact SVG must label the bottom Y coordinate");
 assert.match(contactSvg, />RNA_A position \(nt\)<\/text>/, "Contact SVG must title the X axis");
@@ -213,7 +240,7 @@ context.window.Hyb2DeseqCard = { parameters: function () { return { result: { cu
 assert.equal(context.window.Hyb2UI.comparisonParameters(reproducibilityState).methodScope.adjustedPValues, true);
 delete context.window.Hyb2DeseqCard;
 // Similarity colours: similarity_heatmap.R puts white at the smallest plotted
-// count and forestgreen at the 95% quantile cap (CIELAB ramp).
+// count and teal at the 95% quantile cap (CIELAB ramp).
 const similarityScale = { similarityCap: 10, similarityFloor: 2, conservedCells: [] };
 assert.equal(context.window.Hyb2UI.conservedRatio(2, similarityScale), 0, "the smallest count is white");
 assert.equal(context.window.Hyb2UI.conservedRatio(6, similarityScale), 0.5);
@@ -223,8 +250,11 @@ assert.equal(context.window.Hyb2UI.conservedRatio(3, { similarityCap: 3, similar
 assert.equal(context.window.Hyb2UI.conservedRatio(4, { similarityCap: 8, conservedCells: [{ similarity: 4 }, { similarity: 8 }] }), 0,
   "without similarityFloor the floor is the smallest conserved cell");
 assert.equal(context.window.Hyb2UI.conservedColor(0), "rgb(255, 255, 255)");
-assert.equal(context.window.Hyb2UI.conservedColor(1), "rgb(34, 139, 34)");
-assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "the ramp interpolates in CIELAB");
+assert.equal(context.window.Hyb2UI.conservedColor(1), "rgb(0, 160, 135)");
+assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 208, 193)", "the ramp interpolates in CIELAB");
+[0, 0.25, 0.5, 0.75, 1].forEach(function (ratio) {
+  assert.equal(context.window.Hyb2UI.conservedColor(ratio, "dark"), context.window.Hyb2UI.conservedColor(ratio, "light"), "reference figure colors stay identical across themes");
+});
 // The panel behind the similarity heatmap is display only: R's white by
 // default, ggplot's grey on request; changing it keeps the computed result.
 // Large maps are rasterised into one pixel buffer: every cell covers at
@@ -261,7 +291,7 @@ assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "t
   }
 }
 {
-  // B2: the Contact Map scale is the "Teal–violet sequential" ramp; relative
+  // B2: the Contact Map scale is the "Mint–navy sequential" ramp; relative
   // luminance is monotonic (falling on the light surface, rising on dark)
   const luminance = function (rgb) {
     const lin = rgb.map(function (c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
@@ -277,7 +307,7 @@ assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 197, 143)", "t
       previous = value;
     }
   });
-  assert.equal(context.window.Hyb2UI.viridis(1, "light"), "rgb(45, 27, 105)");
+  assert.equal(context.window.Hyb2UI.viridis(1, "light"), "rgb(60, 84, 136)");
 }
 assert.equal(context.window.Hyb2UI.similarityPanelColor({}), "#ffffff");
 assert.equal(context.window.Hyb2UI.similarityPanelColor({ similarityPanel: "grey" }), "#ebebeb");

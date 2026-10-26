@@ -13,6 +13,7 @@ on:
       - "scripts/verify-webr-feasibility.cjs"
       - "scripts/verify-parser.cjs"
       - "scripts/verify-structure-worker.cjs"
+      - "scripts/verify-iris-*.cjs"
       - "scripts/verify-structure-render.cjs"
       - "scripts/verify-cplfold-pyodide.mjs"
       - "scripts/verify-cplfold-worker.mjs"
@@ -68,6 +69,9 @@ jobs:
           source "$hyb2_emsdk_directory/emsdk_env.sh"
           bash scripts/build-vienna-wasm.sh
           node scripts/verify-structure-worker.cjs
+          node scripts/verify-iris-core.cjs
+          node scripts/verify-iris-worker.cjs
+          node scripts/verify-iris-ui.cjs
           node scripts/verify-structure-render.cjs
 
       - name: Verify static application

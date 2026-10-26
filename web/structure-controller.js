@@ -10,8 +10,17 @@
   const CPLFOLD_CAPACITY_SAFETY_FACTOR = 0.65;
   const CPLFOLD_CAPACITY_TIMEOUT_MS = 60000;
 
-  // Desktop only: the bundled Python runtime reports its own ceiling through
-  // Hyb2Desktop.limits.cplfoldMaxLength. The browser path always keeps 500.
+  // Preserve the mapped input intervals for display alongside this result.
+  // These are raw record arms, not inferred base pairs or bonus-matrix cells.
+  function snapshotRawHybArms(sequenceInfo) {
+    if (!sequenceInfo.assembly || !Array.isArray(sequenceInfo.assembly.evidenceArms)) { return null; }
+    return sequenceInfo.assembly.evidenceArms.map(function (arm) {
+      return { recordId: arm.recordId, oneStart: arm.oneStart, oneEnd: arm.oneEnd,
+        twoStart: arm.twoStart, twoEnd: arm.twoEnd };
+    });
+  }
+
+  // Desktop only: its bundled runtime reports a separate sequence ceiling.
   function nativeCplfoldActive() {
     const desktop = window.Hyb2Desktop;
     return !!(desktop && desktop.enabled && desktop.capabilities &&
@@ -151,7 +160,8 @@
   function predict(state, api) {
     const structure = state.structure;
     const sequenceInfo = window.Hyb2Pages.getStructureSequence(state);
-    const hybGuided = structure && structure.constraintMode === "hyb-guided";
+    const iris = structure && structure.engine === "iris";
+    const hybGuided = !iris && structure && structure.constraintMode === "hyb-guided";
     const cplfold = structure && structure.engine === "cplfold";
     const cplfoldGuided = cplfold && structure.cplfoldEvidence === "hyb-blocks";
 
@@ -161,6 +171,9 @@
     }
 
     const lengthIssue = validateLength(sequenceInfo.sequence.length, structure.allowLarge, cplfold ? "cplfold" : "viennarna", structure);
+    if (iris && (sequenceInfo.sequence.length > 300 || !sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length)) {
+      api.showToast("IRIS requires a reference region up to 300 nt with eligible HYB evidence."); return false;
+    }
     if (lengthIssue) {
       api.showToast(lengthIssue);
       return false;
@@ -179,7 +192,7 @@
       } catch (error) {
         return rejectInput(structure, api, error, "The CPLfold parameters are invalid.");
       }
-    } else {
+    } else if (!iris) {
       try {
         minimumLoop = parseMinimumLoop(structure.minimumLoop);
         temperature = parseTemperature(structure.temperature);
@@ -191,7 +204,7 @@
     let randomFoldCount = 0;
     let constraintLimit = 75;
 
-    if (!cplfold && structure.constraintMode === "manual-hard-base-pairs") {
+    if (!cplfold && !iris && structure.constraintMode === "manual-hard-base-pairs") {
       try {
         constraints = parseManualConstraints(structure.constraintText, sequenceInfo.sequence, minimumLoop);
         if (!constraints.length) {
@@ -226,7 +239,7 @@
     structure.status = "running";
     structure.operation = "prediction";
     structure.progress = 2;
-    structure.message = cplfold
+    structure.message = iris ? "Starting IRIS ensemble prediction…" : cplfold
       ? "Starting pure-Python CPLfold in a local Pyodide worker…"
       : (hybGuided ? "Starting COMRADES(ViennaRNA)…" : "Starting ViennaRNA WebAssembly…");
     structure.result = null;
@@ -273,6 +286,7 @@
           sourceStart: structure.source === "reference" ? sequenceInfo.sourceStart : null,
           sourceEnd: structure.source === "reference" ? sequenceInfo.sourceEnd : null,
           sourceSegments: sequenceInfo.sourceSegments || null,
+            rawHybArms: snapshotRawHybArms(sequenceInfo),
           assembly: sequenceInfo.assembly ? {
             segments: sequenceInfo.assembly.segments,
             linker: sequenceInfo.assembly.linker,
@@ -322,7 +336,7 @@
           const constraintCount = Math.max(0, Number(message.result && message.result.constraintCount) || 0);
           structure.status = "complete";
           structure.progress = 100;
-          structure.message = message.result && message.result.engine === "CPLfold"
+          structure.message = message.result && message.result.engine === "IRIS" ? "IRIS weighted ensemble predicted locally." : message.result && message.result.engine === "CPLfold"
             ? "CPLfold completed locally with " + ((message.result.candidates || []).length) + " ranked candidate" + ((message.result.candidates || []).length === 1 ? "." : "s.")
             : message.result && message.result.constraintMode === "hyb-guided"
             ? "COMRADES(ViennaRNA) completed locally from " + (message.result.evidence ? message.result.evidence.inputRecords : 0) + " eligible HYB record" + ((message.result.evidence && message.result.evidence.inputRecords === 1) ? "." : "s.")
@@ -338,6 +352,7 @@
             sourceStart: structure.source === "reference" ? sequenceInfo.sourceStart : null,
             sourceEnd: structure.source === "reference" ? sequenceInfo.sourceEnd : null,
             sourceSegments: sequenceInfo.sourceSegments || null,
+            rawHybArms: snapshotRawHybArms(sequenceInfo),
             assembly: sequenceInfo.assembly ? {
               segments: sequenceInfo.assembly.segments,
               linker: sequenceInfo.assembly.linker,
@@ -383,7 +398,11 @@
         api.render();
       };
 
-      worker.postMessage(cplfold ? {
+      worker.postMessage(iris ? {
+        type: "iris-fold", sequence: sequenceInfo.sequence,
+        evidenceArms: sequenceInfo.assembly.evidenceArms,
+        parameters: { K: structure.irisK, C: structure.irisC, fraction: structure.irisFraction, kRange: structure.irisKRange }
+      } : cplfold ? {
         type: "cplfold",
         sequence: sequenceInfo.sequence,
         evidenceMode: cplfoldGuided ? "hyb-blocks" : "none",

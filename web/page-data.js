@@ -753,7 +753,7 @@
       const tasks = [];
       if (structure.source === "reference") {
         const cplfold = structure.engine === "cplfold";
-        const guided = cplfold ? structure.cplfoldEvidence === "hyb-blocks" : structure.constraintMode === "hyb-guided";
+        const guided = structure.engine === "iris" || (cplfold ? structure.cplfoldEvidence === "hyb-blocks" : structure.constraintMode === "hyb-guided");
         const rnas = [structure.rna, structure.secondRna].filter(function (rna, index, list) {
           return rna && list.indexOf(rna) === index;
         });

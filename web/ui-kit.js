@@ -403,6 +403,48 @@
     }
   };
 
+  // Coordinate relationships from Lau/hyb2/bin/chim_types and
+  // hyb_chim_types.awk. Internal identifiers remain unchanged for filtering.
+  const chimeraPatterns = {
+    Type_1: ["Separated · 5′ arm first", [20, 85, 125, 195], "Same RNA; the first arm ends before the second starts."],
+    Type_2: ["Separated · 3′ arm first", [125, 195, 20, 85], "Same RNA; the first arm starts after the second ends."],
+    Type_3: ["Overlap · 5′ arm starts first", [20, 130, 85, 195], "Same RNA; the first arm starts earlier and ends inside the second."],
+    Type_4: ["Shared end · 5′ arm longer", [20, 195, 85, 195], "Same RNA; the first arm starts earlier; both end together."],
+    Type_5: ["5′ arm contains 3′ arm", [20, 195, 70, 145], "Same RNA; the second interval lies strictly inside the first."],
+    Type_6: ["Shared start · 5′ arm longer", [20, 195, 20, 125], "Same RNA; both start together; the first ends later."],
+    Type_7: ["Overlap · 3′ arm starts first", [85, 195, 20, 130], "Same RNA; the second arm starts earlier and ends inside the first."],
+    Type_8: ["Identical intervals", [20, 195, 20, 195], "Same RNA; both start and end coordinates match."],
+    Type_9: ["Shared end · 3′ arm longer", [85, 195, 20, 195], "Same RNA; the second arm starts earlier; both end together."],
+    Type_10: ["Shared start · 3′ arm longer", [20, 125, 20, 195], "Same RNA; both start together; the second ends later."],
+    Type_11: ["3′ arm contains 5′ arm", [70, 145, 20, 195], "Same RNA; the first interval lies strictly inside the second."],
+    Type_12: ["Touching · 5′ arm first", [20, 105, 105, 195], "Same RNA; the first arm's end equals the second arm's start."],
+    Type_13: ["Touching · 3′ arm first", [105, 195, 20, 105], "Same RNA; the first arm's start equals the second arm's end."],
+    Intermolecular: ["Different RNAs", [20, 145, 70, 195], "The two arms map to different RNA identifiers."]
+  };
+  function chimeraInfo(value) {
+    const key = String(value).replace(/^Type[_ ]?(\d+)$/i, "Type_$1");
+    return chimeraPatterns[key] || [String(value || "Unclassified"), null, "No source-defined diagram is available for this label."];
+  }
+  function chimeraDiagram(value) {
+    const info = chimeraInfo(value), spans = info[1];
+    if (!spans) { return ""; }
+    return '<svg class="chimera-diagram" viewBox="0 0 270 62" role="img" aria-label="' + escapeText(info[0] + ". " + info[2]) + '"><title>' + escapeText(info[2]) + '</title>' +
+      '<text x="0" y="20">5′ arm</text><text x="0" y="44">3′ arm</text>' +
+      '<path d="M65 17H265M65 41H265" stroke="currentColor" opacity=".2"/>' +
+      '<rect x="' + (spans[0] + 60) + '" y="11" width="' + (spans[1] - spans[0]) + '" height="12" rx="3" fill="#3C5488"/>' +
+      '<rect x="' + (spans[2] + 60) + '" y="35" width="' + (spans[3] - spans[2]) + '" height="12" rx="3" fill="#E64B35"/>' +
+      '<text x="65" y="60">' + (value === "Intermolecular" ? "Separate RNA references" : "Reference position →") + '</text></svg>';
+  }
+  root.Hyb2ChimeraTypes = {
+    label: function (value) { return chimeraInfo(value)[0]; },
+    diagram: chimeraDiagram,
+    guide: function () {
+      return '<details class="chimera-guide"><summary>How to read these patterns</summary><p>5′ and 3′ identify the two arms in the read. Their positions are shown on the reference, not as a predicted fold. Shared boundaries follow the source coordinate comparisons exactly.</p><div class="chimera-guide-grid">' +
+        Object.keys(chimeraPatterns).map(function (key) { const info = chimeraInfo(key); return '<div><strong>' + escapeText(info[0]) + '</strong>' + chimeraDiagram(key) + '<p>' + escapeText(info[2]) + '</p></div>'; }).join("") +
+        '</div><p>Source: HYB2 bin/chim_types and bin/hyb_chim_types.awk (Lau). Original classification codes remain in data exports.</p></details>';
+    }
+  };
+
   root.Hyb2UiKit = {
     niceTicks: niceTicks,
     formatTick: formatTick,

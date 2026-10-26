@@ -230,6 +230,27 @@ const genbank = [
   assert.match(html, /Download arc map SVG/);
 }
 
+// Presentation contract: C defaults to existing HYB interaction rows, not
+// predicted pairs. Fixtures are synthetic and do not run a differential test.
+{
+  const state = arc.defaultState();
+  state.a = arc.parseStructure(">fixture\n" + "ACGU".repeat(25) + "\n" + "(" + ".".repeat(98) + ")\n", "prediction.dbn");
+  assert.match(arc.renderCard(state), /Structure files alone do not supply HYB interactions/);
+  state.interactions = arc.parseInteractions("x\ty\tpadj\tdirection\n10\t70\t0.001\tup\n20\t80\t0.000001\tdown\n30\t90\t0.5\tup\n", "HYB comparison.tsv");
+  const model = arc.build(state);
+  const svg = arc.svg(state, model);
+  assert.equal((svg.match(/data-layer="hyb-interaction"/g) || []).length, 2);
+  assert.doesNotMatch(svg, /stroke-width="0.8"/, "predicted pairs are absent by default");
+  assert.match(svg, /stroke="#E64B35" stroke-opacity="0.150"/);
+  assert.match(svg, /stroke="#4DBBD5" stroke-opacity="0.300"/);
+  assert.match(svg, /HYB comparison.tsv/);
+  arc.setControl(state, "showStructures", "yes");
+  assert.match(arc.svg(state, model), /stroke-width="0.8"/, "structures require an explicit overlay choice");
+  state.a = null;
+  state.showStructures = false;
+  assert.equal(arc.build(state).ready, true, "HYB interactions need no structure file");
+}
+
 // ---- real data (optional)
 const real = process.env.HYB2_ARCMAP_REAL;
 if (real) {

@@ -143,10 +143,12 @@
       mount.setAttribute("tabindex", "0");
       container.addRNA(result.dotBracket, {
         sequence: result.sequence,
-        name: result.label || (result.engine === "CPLfold" ? "CPLfold" : "ViennaRNA")
+        name: result.label || (result.engine || "ViennaRNA")
       });
       container.setSize();
       fornaContainer = container;
+      bindFornaControls(target, mount, container);
+
     } catch (error) {
       target.replaceChildren();
       const failed = document.createElement("p");
@@ -154,6 +156,94 @@
       failed.textContent = "fornac could not lay out this structure. Select Arc or Matrix to inspect all base pairs.";
       target.appendChild(failed);
     }
+  }
+
+  // View-only controls use fornac's existing zoom state, so wheel, drag and
+  // buttons stay in sync without rebuilding the result or altering pairs.
+  function bindFornaControls(target, mount, container) {
+    const toolbar = document.createElement("div");
+    toolbar.className = "forna-view-controls";
+    toolbar.setAttribute("role", "group");
+    toolbar.setAttribute("aria-label", "Folded structure view controls");
+    const zoom = function (factor) {
+      const current = container.zoomer.scale();
+      const extent = container.zoomer.scaleExtent();
+      const next = Math.max(extent[0], Math.min(extent[1], current * factor));
+      const translate = container.zoomer.translate();
+      const centre = [container.options.svgW / 2, container.options.svgH / 2];
+      container.zoomer.scale(next).translate(centre.map(function (value, index) {
+        return value - (value - translate[index]) * next / current;
+      }));
+      container.options.svg.call(container.zoomer.event);
+    };
+    const button = function (label, action) {
+      const control = document.createElement("button");
+      control.type = "button";
+      control.className = "button button-secondary";
+      control.textContent = label;
+      control.addEventListener("click", action);
+      toolbar.appendChild(control);
+      return control;
+    };
+    button("Zoom in", function () { zoom(1.25); });
+    button("Zoom out", function () { zoom(0.8); });
+    button("Fit to view", function () { container.centerView(0); });
+    const expanded = function () { return target.classList.contains("is-expanded"); };
+    const normalHint = "forna · Scroll or pinch to zoom. Drag the canvas to pan. Keyboard: + / − to zoom, arrows to pan, 0 to fit.";
+    const syncViewSize = function () {
+      full.textContent = expanded() ? "Exit expanded view" : document.fullscreenElement === target ? "Exit full screen" : "Full screen";
+      hint.textContent = expanded() ? "Expanded within this page. Press Escape or Exit expanded view to return. Scroll to zoom; drag to pan." : normalHint;
+      container.setSize();
+    };
+    const full = button("Full screen", async function () {
+      if (expanded()) {
+        target.classList.remove("is-expanded");
+        syncViewSize();
+        return;
+      }
+      try {
+        if (document.fullscreenElement === target) {
+          await document.exitFullscreen();
+        } else if (typeof target.requestFullscreen === "function") {
+          await target.requestFullscreen();
+        } else {
+          throw new Error("Native fullscreen unavailable");
+        }
+      } catch (error) {
+        // A browser may deny native fullscreen; this stays inside the page.
+        target.classList.add("is-expanded");
+        hint.textContent = "Expanded within this page. Press Escape or Exit expanded view to return. Scroll to zoom; drag to pan.";
+      }
+      syncViewSize();
+    });
+    target.onfullscreenchange = syncViewSize;
+    target.onkeydown = function (event) {
+      if (event.key === "Escape" && expanded()) {
+        target.classList.remove("is-expanded");
+        syncViewSize();
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    const hint = document.createElement("p");
+    hint.className = "card-note forna-view-hint";
+    hint.textContent = normalHint;
+    mount.setAttribute("aria-label", "Interactive folded RNA structure. Scroll to zoom; drag to pan.");
+    mount.addEventListener("keydown", function (event) {
+      if (event.ctrlKey || event.metaKey || event.altKey) { return; }
+      if (event.key === "+" || event.key === "=") { zoom(1.25); }
+      else if (event.key === "-" || event.key === "_") { zoom(0.8); }
+      else if (event.key === "0") { container.centerView(0); }
+      else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].indexOf(event.key) >= 0) {
+        const delta = { ArrowLeft: [-40, 0], ArrowRight: [40, 0], ArrowUp: [0, -40], ArrowDown: [0, 40] }[event.key];
+        container.zoomer.translate(container.zoomer.translate().map(function (value, index) { return value + delta[index]; }));
+        container.options.svg.call(container.zoomer.event);
+      } else { return; }
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    target.insertBefore(toolbar, mount);
+    target.appendChild(hint);
   }
 
   function handleAction(action, state, api, element) {
@@ -203,6 +293,12 @@
     }
 
     const result = state.structure && state.structure.result;
+    if (action === "select-iris-candidate") {
+      const index = Number(element && element.dataset && element.dataset.candidateIndex);
+      if (!result || result.engine !== "IRIS" || !selectCplfoldCandidate(result, index)) { api.showToast("That IRIS member is unavailable."); return true; }
+      state.structure.selectedNucleotide = null; api.render();
+      api.showToast("IRIS ensemble member " + (index + 1) + " selected."); return true;
+    }
     if (action === "select-cplfold-candidate") {
       const candidateIndex = Number(element && element.dataset && element.dataset.candidateIndex);
       if (!result || result.engine !== "CPLfold" || !selectCplfoldCandidate(result, candidateIndex)) {
@@ -242,6 +338,7 @@
       "download-structure-evidence",
       "download-structure-constraints",
       "download-structure-ensemble",
+      "download-iris-ensemble",
       "download-cplfold-evidence",
       "download-cplfold-candidates",
       "download-structure-svg",
@@ -251,6 +348,12 @@
       return false;
     }
 
+    if (action === "download-iris-ensemble" && result.engine === "IRIS") {
+      const rows = [["member", "selected", "weight", "coefficient", "energy_kcal_per_mol", "dot_bracket"]];
+      (result.candidates || []).forEach(function(c,i) { rows.push([i+1, i === result.selectedCandidate ? "yes" : "no", c.weight, c.coefficient, c.energy, c.dotBracket]); });
+      api.download("iris-ensemble.tsv", rows.map(function(row) { return row.join("\t"); }).join("\n") + "\n", "text/tab-separated-values");
+      api.showToast("IRIS weighted ensemble downloaded locally."); return true;
+    }
     if (action === "copy-structure-dot-bracket") {
       api.copyText(result.dotBracket, "Dot-bracket notation copied to the clipboard.");
       return true;
@@ -414,6 +517,7 @@
     }
     const candidate = candidates[index];
     result.selectedCandidate = index;
+    if (result.engine === "IRIS") { result.constraints = candidate.constraints || []; result.constraintCount = result.constraints.length; }
     result.dotBracket = candidate.dotBracket;
     result.pairs = candidate.pairs || [];
     result.unpaired = candidate.unpaired;
@@ -450,6 +554,7 @@
       : (result.maxSequenceLength || baselineLength);
     const selectedCandidateIndex = cplfold ? Math.max(0, Number(result.selectedCandidate) || 0) : null;
     return {
+      iris: result.engine === "IRIS" ? {parameters: result.parameters, ensemble: result.ensemble, members: result.candidates, selectedMember: result.selectedCandidate, warnings: result.warnings} : undefined,
       application: "HYB2 Web Lite",
       version: "0.5.0",
       buildCommit: window.HYB2_BUILD && window.HYB2_BUILD.commit || null,
@@ -489,7 +594,7 @@
         runtime: cplfold ? result.runtime : null,
         temperatureCelsius: result.temperature,
         minimumLoop: result.minimumLoop,
-        mfe: cplfold ? null : result.energy,
+        mfe: cplfold || result.engine === "IRIS" ? null : result.energy,
         energy: result.energy,
         effectiveEnergy: cplfold ? result.effectiveEnergy : null,
         phase1Energy: cplfold ? result.phase1Energy : null,
@@ -529,12 +634,12 @@
       acceptedStemConstraints: guided ? result.acceptedStemConstraints : null,
       rejectedStemConstraints: guided ? result.rejectedStemConstraints : null,
       methodScope: {
-        manualHardBasePairsApplied: !guided && !cplfold && constraintCount > 0,
-        automaticHybEvidenceConstraintGeneration: guided,
+        manualHardBasePairsApplied: result.engine !== "IRIS" && !guided && !cplfold && constraintCount > 0,
+        automaticHybEvidenceConstraintGeneration: guided || result.engine === "IRIS",
         automaticRnaCofoldEvidenceSelection: guided,
         iterativeCompatibleConstraintFitting: guided,
         randomisedConstraintOrderFolding: guided && !!(result.randomisation && result.randomisation.completedFolds),
-        supportBasedStructureScoring: guided,
+        supportBasedStructureScoring: guided || result.engine === "IRIS",
         cplfoldPurePythonBrowserExecution: cplfold,
         cplfoldPseudoknotPrediction: cplfold && allowPseudoknot,
         cplfoldPseudoknotSearchRequested: cplfold ? allowPseudoknot : false,
@@ -545,7 +650,8 @@
         browserCplfoldHardCeiling: cplfold ? hardCeiling : null,
         browserCplfoldCapacity: cplfold ? capacity : null,
         unafoldExecution: "external-cli-only",
-        note: cplfold
+        irisBrowserAdaptation: result.engine === "IRIS",
+        note: result.engine === "IRIS" ? result.model + ". " + (result.warnings || []).join(" ") : cplfold
           ? (allowPseudoknot
             ? "The browser ran the vendored pure-Python CPLfold two-phase algorithm in Pyodide. HYB-guided runs transform prepared arm intervals with the CPLfold IRIS-style Gaussian, symmetric outer-product and log1p bonus pipeline. Numba JIT is unavailable; the browser uses a local capacity probe to estimate a session-specific length up to its hard safety ceiling."
             : "The browser ran vendored pure-Python CPLfold Phase 1 in pseudoknot-free mode. Phase 2 was skipped, so no crossing pairs were searched; HYB-guided runs still use the IRIS-style Gaussian, symmetric outer-product and log1p bonus pipeline.")
@@ -603,7 +709,7 @@
 
   function buildArcDiagram(result, selectedNucleotide) {
     const width = 920;
-    const height = 300;
+    const height = 540;
     const left = 42;
     const right = width - 28;
     const baseline = 244;
@@ -622,9 +728,9 @@
       xmlns: SVG_NS,
       viewBox: "0 0 " + width + " " + height,
       width: "100%",
-      height: "300",
+      height: String(height),
       role: "img",
-      "aria-label": "Arc diagram for " + length + " nucleotide RNA secondary structure"
+      "aria-label": "Predicted base pairs above and mapped raw HYB interactions below, " + length + " nucleotides"
     });
 
     svg.appendChild(element("title", {}, cplfold
@@ -642,6 +748,7 @@
       const lift = Math.min(195, 24 + Math.sqrt(span / length) * 190);
       const path = element("path", {
         d: "M " + start.toFixed(2) + " " + baseline + " Q " + center.toFixed(2) + " " + (baseline - lift).toFixed(2) + " " + end.toFixed(2) + " " + baseline,
+        "data-arc-source": "prediction",
         fill: "none",
         stroke: cplfold ? cplfoldPairColor(pair, colors) : (guided ? evidenceColor(Number(pair.evidenceSupport) || 0, maximumEvidence, colors) : pairColor(pair.type, colors)),
         "stroke-width": cplfold && pair.layer !== "primary" ? 3 : (hardConstraint ? 3.7 : (guided && Number(pair.evidenceSupport) > 0 ? 2.5 : (pair.type === "G–C" || pair.type === "C–G" ? 2.1 : 1.6))),
@@ -656,6 +763,38 @@
       svg.appendChild(path);
     });
 
+    svg.appendChild(element("text", { x: left, y: 49, fill: colors.ink, "font-size": 12 }, "Predicted structure · above"));
+    const raw = Array.isArray(result.rawHybArms) ? result.rawHybArms : null;
+    const valid = (raw || []).filter(function (arm) {
+      const positions = [arm.oneStart, arm.oneEnd, arm.twoStart, arm.twoEnd];
+      return positions.every(function (position) { return Number.isInteger(position) && position >= 1 && position <= length; }) &&
+        arm.oneStart <= arm.oneEnd && arm.twoStart <= arm.twoEnd;
+    });
+    // Bound SVG size without silently claiming that every record is shown.
+    const shown = valid.slice(0, 2000);
+    shown.forEach(function (arm) {
+      const first = (arm.oneStart + arm.oneEnd) / 2;
+      const second = (arm.twoStart + arm.twoEnd) / 2;
+      const start = xFor(Math.min(first, second), length, left, right);
+      const end = xFor(Math.max(first, second), length, left, right);
+      const lift = Math.min(400, 36 + Math.sqrt(Math.abs(second - first) / length) * 360);
+      const path = element("path", {
+        "data-arc-source": "raw-hyb",
+        d: "M " + start.toFixed(2) + " " + baseline + " Q " + ((start + end) / 2).toFixed(2) + " " + (baseline + lift).toFixed(2) + " " + end.toFixed(2) + " " + baseline,
+        fill: "none", stroke: colors.accent, "stroke-width": 1.1, opacity: valid.length < 100 ? 0.6 : 0.3
+      });
+      path.appendChild(element("title", {}, "HYB record " + (arm.recordId || "") + ": prepared-sequence arms " +
+        arm.oneStart + "–" + arm.oneEnd + " / " + arm.twoStart + "–" + arm.twoEnd + "; arc joins arm midpoints, not a predicted base pair"));
+      svg.appendChild(path);
+    });
+    const rawLabel = raw === null
+      ? "Raw HYB data not attached to this result"
+      : valid.length ? "Raw HYB interactions · below · " + shown.length + " / " + valid.length + " mapped records shown"
+      : "No eligible HYB records mapped to this structure";
+    svg.appendChild(element("text", { x: left, y: 501, fill: colors.ink, "font-size": 12 }, rawLabel));
+    svg.appendChild(element("text", { x: left, y: 521, fill: colors.muted, "font-size": 11 },
+      raw === null ? "No synthetic or predicted arcs are substituted for missing raw data." :
+      "Arm midpoints on prepared-sequence coordinates; eligible mapped input records only." + (valid.length > shown.length ? " First 2,000 displayed." : "")));
     markerTicks(svg, result, length, left, right, baseline, colors, selectedNucleotide);
     legend(svg, colors, result);
     return svg;
@@ -1353,8 +1492,9 @@
   // image exports are drawn in the light theme whatever the page's theme
   // (as the other pages' exports): these are styles.css's light values
   const LIGHT_EXPORT_COLORS = {
-    primary: "#0060fe",
-    accent: "#9c05f8",
+    ink: "#222222",
+    primary: "#3C5488",
+    accent: "#E64B35",
     muted: "#5b6c80",
     line: "#dce7ec",
     lineStrong: "#c2d3db",
@@ -1369,6 +1509,7 @@
     }
     const style = getComputedStyle(document.documentElement);
     return {
+      ink: style.getPropertyValue("--ink").trim(),
       primary: style.getPropertyValue("--primary").trim(),
       accent: style.getPropertyValue("--accent").trim(),
       muted: style.getPropertyValue("--muted").trim(),
@@ -1413,7 +1554,7 @@
 
   function dotBracketFile(result) {
     const energy = Number.isFinite(Number(result.energy)) ? " (" + Number(result.energy).toFixed(2) + ")" : "";
-    return ">" + (result.label || (result.engine === "CPLfold" ? "HYB2_Web_CPLfold" : "HYB2_Web_ViennaRNA_MFE")) + "\n" + result.sequence + "\n" + result.dotBracket + energy + "\n";
+    return ">" + (result.label || ("HYB2_Web_" + (result.engine || "ViennaRNA_MFE"))) + "\n" + result.sequence + "\n" + result.dotBracket + energy + "\n";
   }
 
   function basePairTsv(result) {
@@ -1532,7 +1673,7 @@
       pairLookup.set(pair.right, pair.left);
     });
     const energy = Number.isFinite(Number(result.energy)) ? Number(result.energy).toFixed(2) : "NA";
-    const rows = [sequence.length + " ENERGY = " + energy + " " + (result.label || (result.engine === "CPLfold" ? "HYB2_Web_CPLfold" : "HYB2_Web_ViennaRNA_MFE"))];
+    const rows = [sequence.length + " ENERGY = " + energy + " " + (result.label || ("HYB2_Web_" + (result.engine || "ViennaRNA_MFE")))];
     for (let position = 1; position <= sequence.length; position += 1) {
       rows.push([
         position,

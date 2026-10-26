@@ -625,7 +625,7 @@
   // ---- model
 
   function defaultState() {
-    return { a: null, b: null, interactions: null, annotation: null, errors: {}, padj: "0.01", mono: true,
+    return { a: null, b: null, interactions: null, annotation: null, errors: {}, padj: "0.01", mono: true, showStructures: false,
       oneOn: "a", twoOn: "a", start: "", end: "", labelOne: "", labelTwo: "" };
   }
 
@@ -807,8 +807,8 @@
 
   // svg(arcMap, model, colours) -> standalone SVG markup
   function svg(arcMap, model, colours) {
-    const c = Object.assign({ ink: "#222222", muted: "#6b7280", line: "#c7ced6", a: "#d64541", b: "#2b6cc4", shared: "#8c8c8c",
-      up: "#c62828", down: "#1f4e9e", track: ["#d9d9d9", "#bdbdbd"], background: "#ffffff" }, colours || {});
+    const c = Object.assign({ ink: "#222222", muted: "#6b7280", line: "#c7ced6", a: "#E64B35", b: "#4DBBD5", shared: "#8c8c8c",
+      up: "#E64B35", down: "#4DBBD5", track: ["#CCCCCC", "#A6A6A6"], background: "#ffffff" }, colours || {});
     // default structure colours, A above and B below in two colours: ink and
     // grey in print, the theme's primary and accent on screen
     c.structure = c.structure || c.ink;
@@ -818,7 +818,7 @@
     const left = 16;
     const plotW = width - 2 * left;
     const half = 210;
-    const twoSided = model.pairsB.length > 0 || model.overlay.some(function (o) { return !o.up; });
+    const twoSided = (s.showStructures && model.pairsB.length > 0) || model.overlay.some(function (o) { return !o.up; });
     const top = 34;
     const plotH = twoSided ? 2 * half : half;
     const base = top + half;
@@ -836,7 +836,7 @@
     parts.push("<title>Arc map</title>");
     parts.push('<rect width="100%" height="100%" fill="' + c.background + '"/>');
     parts.push('<text x="' + left + '" y="20" font-size="13" font-weight="600" fill="' + c.ink + '">' +
-      escapeXml((s.a ? s.a.name : "Arc map") + " · " + formatNumber(start) + "–" + formatNumber(end)) + "</text>");
+      escapeXml((s.interactions ? s.interactions.name : "HYB interaction arc map") + " · " + formatNumber(start) + "–" + formatNumber(end)) + "</text>");
     parts.push('<defs><clipPath id="arcmap-clip"><rect x="' + left + '" y="' + top + '" width="' + plotW + '" height="' + plotH + '"/></clipPath></defs>');
     parts.push('<g clip-path="url(#arcmap-clip)" fill="none">');
     function arcPath(i, j, up, byWidth) {
@@ -863,18 +863,19 @@
       { pairs: model.pairsA.filter(function (p) { return setB.has(p[0] + ":" + p[1]); }), up: true, colour: mono ? c.structure : c.shared },
       { pairs: model.pairsB.filter(function (p) { return setA.has(p[0] + ":" + p[1]); }), up: false, colour: mono ? c.structureB : c.shared }
     ];
-    layers.forEach(function (layer) {
+    (s.showStructures ? layers : []).forEach(function (layer) {
       const d = layer.pairs.filter(visible).map(function (p) { return arcPath(p[0], p[1], layer.up, false); }).join("");
       if (d) {
         parts.push('<path d="' + d + '" stroke="' + layer.colour + '" stroke-width="0.8"/>');
       }
     });
-    [true, false].forEach(function (up) {
-      const d = model.overlay.filter(function (o) { return o.up === up && visible([o.i, o.j]); })
-        .map(function (o) { return arcPath(o.i, o.j, up, true); }).join("");
-      if (d) {
-        parts.push('<path d="' + d + '" stroke="' + (up ? c.up : c.down) + '" stroke-opacity="0.85" stroke-width="1.3"/>');
-      }
+    // Draw the existing HYB-derived interactions individually, preserving their
+    // direction and significance in the presentation (no new inference here).
+    model.overlay.filter(function (o) { return visible([o.i, o.j]); }).forEach(function (o) {
+      const opacity = Math.max(0.08, Math.min(1, -Math.log10(Math.max(o.padj, 1e-300)) / 20));
+      parts.push('<path data-layer="hyb-interaction" d="' + arcPath(o.i, o.j, o.up, true) + '" stroke="' +
+        (o.up ? c.up : c.down) + '" stroke-opacity="' + opacity.toFixed(3) + '" stroke-width="1.3"><title>' +
+        escapeXml((o.up ? s.labelOne || "condition one" : s.labelTwo || "condition two") + ": " + o.i + "–" + o.j + "; padj " + o.padj) + '</title></path>');
     });
     parts.push("</g>");
     parts.push('<line x1="' + left + '" y1="' + base + '" x2="' + (left + plotW) + '" y2="' + base + '" stroke="' + c.line + '"/>');
@@ -889,7 +890,7 @@
         parts.push('<rect x="' + x0.toFixed(1) + '" y="' + y + '" width="' + Math.max(0.5, x1 - x0).toFixed(1) + '" height="16" fill="' +
           c.track[index % 2] + '"><title>' + escapeXml(f.detail + " " + f.start + "–" + f.end) + "</title></rect>");
         if (f.name && x1 - x0 > 6 * f.name.length + 4) {
-          parts.push('<text x="' + ((x0 + x1) / 2).toFixed(1) + '" y="' + (y + 12) + '" text-anchor="middle" font-size="10" fill="' + c.ink + '">' + escapeXml(f.name) + "</text>");
+          parts.push('<text x="' + ((x0 + x1) / 2).toFixed(1) + '" y="' + (y + 12) + '" text-anchor="middle" font-size="10" fill="#333333">' + escapeXml(f.name) + "</text>");
         }
       });
     }
@@ -904,10 +905,10 @@
     parts.push('<text class="arcmap-axis-title" x="' + (left + plotW / 2).toFixed(1) + '" y="' + (axisY + 34) + '" text-anchor="middle" fill="' + c.ink + '">' +
       escapeXml((s.labelOne || (s.a && s.a.name) || "Structure A") + " position (nt)") + "</text>");
     const legend = [];
-    if (s.a) {
+    if (s.showStructures && s.a) {
       legend.push([mono ? c.structure : c.a, "A · " + s.a.name + (twoSided && model.pairsB.length ? " (above)" : "")]);
     }
-    if (s.b) {
+    if (s.showStructures && s.b) {
       legend.push([mono ? c.structureB : c.b, "B · " + s.b.name + " (below)"]);
     }
     if (model.overlay.some(function (o) { return o.up; })) {
@@ -953,7 +954,7 @@
 
   // On screen the figure takes the site's theme: its surface, ink and lines,
   // structures in the primary colour (as on the RNA Structure page and the
-  // landing illustration) and the conditions' red and blue, brighter on dark.
+  // landing illustration) and the conditions' red and cyan, identical in both themes.
   // The downloaded SVG keeps svg()'s white publication palette. Without a
   // document (the Node checks) the screen uses it too.
   function screenColours() {
@@ -962,11 +963,10 @@
     }
     const style = getComputedStyle(document.documentElement);
     const token = function (name) { return style.getPropertyValue(name).trim(); };
-    const dark = document.documentElement.dataset.theme === "dark";
     return {
       ink: token("--ink"), muted: token("--muted"), line: token("--line-strong"), background: token("--surface-subtle"),
-      structure: token("--primary"), structureB: token("--accent"), a: dark ? "#e8605a" : "#d64541", b: dark ? "#4c8fe8" : "#2b6cc4", shared: token("--muted"),
-      up: dark ? "#e8605a" : "#c62828", down: dark ? "#4c8fe8" : "#1f4e9e", track: [token("--line"), token("--line-strong")]
+      structure: token("--primary"), structureB: token("--accent"), a: "#E64B35", b: "#4DBBD5", shared: token("--muted"),
+      up: "#E64B35", down: "#4DBBD5", track: ["#CCCCCC", "#A6A6A6"]
     };
   }
 
@@ -974,7 +974,9 @@
     const colours = screenColours();
     const key = stateKey(s) + "|" + JSON.stringify(colours);
     if (!lastCard || lastCard.key !== key) {
-      const model = build(s);
+      const model = !s.interactions && !s.showStructures
+        ? { ready: false, reason: "Use the merged interactions from panel A, or load a HYB-derived differential interactions TSV. Structure files alone do not supply HYB interactions." }
+        : build(s);
       lastCard = { key: key, model: model, svg: model.ready ? svg(s, model, colours) : "" };
     }
     return lastCard;
@@ -1007,10 +1009,10 @@
     };
     const out = [
       '<section class="data-card arcmap-card" id="arcmap-card">',
-      '<div class="card-title-row"><div><h2>C · Arc map</h2><span class="card-note">One or two structures, the differential interactions of a comparison and a gene track, as in a PARIS-style figure. Its padj cutoff is separate from the differential test\'s and also drives panels D to G. Files stay in this browser.</span></div></div>',
+      '<div class="card-title-row"><div><h2>C · Arc map</h2><span class="card-note">HYB-derived merged differential interactions: condition one above in red, condition two below in cyan. Arc height follows span; opacity follows −log10(padj), full at 20. Structures are optional overlays. Its padj cutoff is separate from the differential test\'s and also drives panels D to G. Files stay in this browser.</span></div></div>',
       '<div class="arcmap-files">',
-      fileRow("a", "Structure A (.dbn / .ct)", ".dbn,.db,.ct,.txt", s.a && s.a.name, s.a ? formatNumber(s.a.pairs.length) + " pairs · " + formatNumber(s.a.length) + " nt" : ""),
-      fileRow("b", "Structure B (optional)", ".dbn,.db,.ct,.txt", s.b && s.b.name, s.b ? formatNumber(s.b.pairs.length) + " pairs" : ""),
+      fileRow("a", "Reference structure A (optional; .dbn / .ct)", ".dbn,.db,.ct,.txt", s.a && s.a.name, s.a ? formatNumber(s.a.pairs.length) + " pairs · " + formatNumber(s.a.length) + " nt" : ""),
+      fileRow("b", "Reference structure B (optional)", ".dbn,.db,.ct,.txt", s.b && s.b.name, s.b ? formatNumber(s.b.pairs.length) + " pairs" : ""),
       fileRow("interactions", "Differential interactions (TSV)", ".tsv,.txt", s.interactions && s.interactions.name, s.interactions ? formatNumber(s.interactions.rows.length) + " rows" : ""),
       fileRow("annotation", "Gene annotation (GenBank, GFF, BED, TSV)", ".gb,.gbk,.genbank,.gff,.gff3,.gtf,.bed,.tsv,.txt", s.annotation && s.annotation.name, s.annotation ? formatNumber(s.annotation.features.length) + " features" : ""),
       "</div>",
@@ -1020,7 +1022,8 @@
       control("Condition two", "labelTwo", s.labelTwo, "label, e.g. ZASI"),
       select("Condition one cells are on", "oneOn", s.oneOn, [["a", "A's reference"], ["b", "B's reference"]]),
       select("Condition two cells are on", "twoOn", s.twoOn, [["a", "A's reference"], ["b", "B's reference"]]),
-      select("Structures", "mono", s.mono ? "mono" : "colour", [["mono", "Default colours"], ["colour", "A red, B blue"]]),
+      select("Structure overlay", "showStructures", s.showStructures ? "yes" : "no", [["no", "Off · HYB interactions only"], ["yes", "Show predicted structures"]]),
+      select("Structure colours", "mono", s.mono ? "mono" : "colour", [["mono", "Default colours"], ["colour", "A red, B blue"]]),
       // empty means the whole structure: the placeholder says so in words,
       // so that an empty field does not read as a disabled one
       control("From (nt)", "start", s.start, "Start (1)"),
@@ -1031,10 +1034,13 @@
       out.push('<p class="card-note">' + esc(model.reason) + "</p>");
     } else {
       out.push('<div class="arcmap-figure" data-arcmap-figure>' + cached.svg + "</div>");
-      out.push('<dl class="selection-stats stats-compact"><div><dt>Pairs A</dt><dd>' + formatNumber(model.stats.pairsA) + "</dd></div>" +
-        (s.b ? "<div><dt>Pairs B</dt><dd>" + formatNumber(model.stats.pairsB) + "</dd></div><div><dt>Shared</dt><dd>" + formatNumber(model.stats.shared) +
-          "</dd></div><div><dt>Only A · only B</dt><dd>" + formatNumber(model.stats.onlyA) + " · " + formatNumber(model.stats.onlyB) + "</dd></div>" : "") +
-        "<div><dt>Differential arcs</dt><dd>" + formatNumber(model.overlay.length) + "</dd></div></dl>");
+      out.push('<dl class="selection-stats stats-compact"><div><dt>Higher in ' + esc(s.labelOne || "condition one") + '</dt><dd>' +
+        formatNumber(model.overlay.filter(function (o) { return o.up; }).length) + '</dd></div><div><dt>Higher in ' +
+        esc(s.labelTwo || "condition two") + '</dt><dd>' + formatNumber(model.overlay.filter(function (o) { return !o.up; }).length) +
+        '</dd></div><div><dt>HYB differential arcs</dt><dd>' + formatNumber(model.overlay.length) + '</dd></div></dl>');
+      if (!model.overlay.length && !s.showStructures) {
+        out.push('<p class="card-note">No HYB interactions pass the current padj cutoff.</p>');
+      }
       model.notes.forEach(function (note) { out.push('<p class="card-note">' + esc(note) + "</p>"); });
       // K2: the card's download sits in an Export menu like every other card
       out.push('<div class="inline-actions"><details class="export-menu card-export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu"><button class="export-menu-item" type="button" role="menuitem" data-feature-action="arcmap-download-svg">Download arc map SVG</button></div></details></div>');
@@ -1063,7 +1069,9 @@
   }
 
   function setControl(arcMap, key, value) {
-    if (key === "mono") {
+    if (key === "showStructures") {
+      arcMap.showStructures = value === "yes";
+    } else if (key === "mono") {
       arcMap.mono = value === "mono";
     } else if (["padj", "labelOne", "labelTwo", "oneOn", "twoOn", "start", "end"].indexOf(key) >= 0) {
       arcMap[key] = value;

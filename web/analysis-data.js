@@ -207,6 +207,7 @@
       rnaY: pair ? pair.rnaTwo : "",
       binSize: 10,
       measure: "records",
+      palette: "colour",
       colourCap: "95",
       customCap: "",
       scale: "linear",
@@ -317,6 +318,10 @@
       cplfoldMaxPhase1: "3",
       cplfoldEnergyDelta: "5",
       cplfoldEnergyModel: "DP09",
+      irisK: "2",
+      irisC: "20",
+      irisFraction: "0.75",
+      irisKRange: "4 5 6 7",
       cplfoldAlpha: "0.5",
       cplfoldBeta: "0",
       cplfoldAllowPseudoknot: false,
@@ -1678,7 +1683,7 @@
     out.effectCap = absoluteEffects.length ? Math.max(.25, quantile(absoluteEffects, .95)) : 1;
     // similarity_heatmap.R caps the counts at their 95% quantile and lets
     // scale_fill_gradient span the data range: white at the smallest kept
-    // count (similarityFloor), forestgreen at the cap.
+    // count (similarityFloor), teal (#00A087) at the cap.
     out.similarityCap = similarityValues.length ? Math.max(1, quantile(similarityValues, .95)) : 1;
     out.similarityFloor = similarityValues.length ? similarityValues[0] : 0;
     return out;

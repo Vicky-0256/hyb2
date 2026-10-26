@@ -11,8 +11,8 @@
 (function () {
   "use strict";
 
-  const RED = [214, 69, 65];
-  const BLUE = [43, 108, 196];
+  const RED = [230, 75, 53];
+  const BLUE = [77, 187, 213];
   // exports keep the white publication palette; on screen the map takes the
   // site theme (screenColours), as the arc map does
   const PRINT = { background: "#ffffff", ink: "#222222", muted: "#6b7280", line: "#c7ced6", selection: "#111111", red: RED, blue: BLUE };
@@ -254,6 +254,9 @@
       [["both", "Both directions"], ["up", "Higher in " + labelA], ["down", "Higher in " + labelB]].map(function (option) {
         return '<option value="' + option[0] + '"' + (option[0] === show ? " selected" : "") + ">" + esc(option[1]) + "</option>";
       }).join("") + "</select></label></div>");
+    out.push('<div class="inline-actions">' + [["in", "Zoom in"], ["out", "Zoom out"], ["reset", "Reset zoom"]].map(function (item) {
+      return '<button class="quiet-button" type="button" data-feature-action="deseq-zoom" data-zoom="' + item[0] + '">' + item[1] + '</button>';
+    }).join("") + '<span class="card-note">Scroll to zoom · drag to pan · double-click to reset</span></div>');
     out.push('<div class="canvas-wrap deseq-canvas-wrap"><canvas id="deseq-panel-canvas" class="deseq-canvas" width="640" height="640" aria-label="Differential coverage map"></canvas></div>');
     // K2: the card's downloads sit in one Export menu; "Use in arc map" is an action
     out.push('<div class="inline-actions"><button class="button" type="button" data-feature-action="deseq-use-arcmap">Use in arc map</button>' +
@@ -265,7 +268,7 @@
       '</div></details></div>');
     out.push('<p class="card-note">Before reporting an interaction, check that every replicate supports it: click the same position in the effect map below to see each dataset\'s count. A small padj with a low mean count can still come from one replicate.</p>');
     if (deseq.arcMapFed && !stale) {
-      out.push('<p class="card-note">The arc map below had structures but no interaction table, so it now draws these merged interactions; the region structures (D, E) and folding energies (F, G) follow from it. Those panels use their own padj cutoff (0.01 by default), so they can show fewer interactions than this table.</p>');
+      out.push('<p class="card-note">The arc map below now draws these HYB-derived merged interactions; the region structures (D, E) and folding energies (F, G) follow from it. Those panels use their own padj cutoff (0.01 by default), so they can show fewer interactions than this table.</p>');
     }
     out.push('<div class="card-title-row"><h3>Merged interactions</h3><span class="card-note">' + num(rows.length) + " shown by padj" +
       (rows.length > TABLE_ROWS ? " (first " + TABLE_ROWS + " listed; the TSV has all)" : "") + "</span></div>");
@@ -301,15 +304,28 @@
     return step;
   }
 
-  function geometry(width, height, length) {
+  const mapViews = new WeakMap();
+  function changeMapView(result, factor, fx, fy, dx, dy) {
+    const full = mapLength(result), old = mapViews.get(result) || { x: 0, y: 0, span: full };
+    const span = Math.max(BIN, Math.min(full, Math.round(old.span * factor / BIN) * BIN));
+    const clamp = function (value) { return Math.max(0, Math.min(full - span, Math.round(value / BIN) * BIN)); };
+    const view = { x: clamp(old.x + (old.span - span) * fx + dx * old.span), y: clamp(old.y + (old.span - span) * fy + dy * old.span), span: span };
+    mapViews.set(result, view);
+    return view;
+  }
+
+  function geometry(width, height, length, view) {
+    const xStart = view ? view.x : 0, yStart = view ? view.y : 0;
+    length = view ? view.span : length;
     const left = 58;
     const top = 40;
     // below the map: tick labels, the axis title and the colour bar
     const size = Math.max(60, Math.min(width - left - 16, height - top - BOTTOM_SPACE));
     return {
-      left: left, top: top, size: size, length: length,
-      x: function (v) { return left + v / length * size; },
-      y: function (v) { return top + (1 - v / length) * size; },
+      left: left, top: top, size: size, length: length, xStart: xStart, yStart: yStart,
+      contains: function (x, y) { return x >= xStart && x < xStart + length && y >= yStart && y < yStart + length; },
+      x: function (v) { return left + (v - xStart) / length * size; },
+      y: function (v) { return top + (1 - (v - yStart) / length) * size; },
       cell: Math.max(0.6, BIN / length * size)
     };
   }
@@ -320,11 +336,10 @@
     }
     const style = getComputedStyle(document.documentElement);
     const token = function (name, fallback) { return style.getPropertyValue(name).trim() || fallback; };
-    const dark = document.documentElement.dataset.theme === "dark";
     return {
       background: token("--surface-subtle", PRINT.background), ink: token("--ink", PRINT.ink), muted: token("--muted", PRINT.muted),
       line: token("--line-strong", PRINT.line), selection: token("--ink", PRINT.selection),
-      red: dark ? [232, 96, 90] : RED, blue: dark ? [76, 143, 232] : BLUE
+      red: RED, blue: BLUE
     };
   }
 
@@ -357,7 +372,7 @@
 
   function drawPanel(context, width, height, comparison, result, show, selectedRow, colours) {
     const palette = colours || PRINT;
-    const g = geometry(width, height, mapLength(result));
+    const g = geometry(width, height, mapLength(result), mapViews.get(result));
     context.fillStyle = palette.background;
     context.fillRect(0, 0, width, height);
     context.fillStyle = palette.ink;
@@ -368,10 +383,11 @@
     context.lineWidth = 1;
     context.strokeRect(g.left - 0.5, g.top - 0.5, g.size + 1, g.size + 1);
     eachCell(result, show, function (x, y, colour, alpha) {
+      if (!g.contains(x, y)) { return; }
       context.fillStyle = "rgba(" + colour[0] + "," + colour[1] + "," + colour[2] + "," + alpha.toFixed(3) + ")";
       context.fillRect(g.x(x), g.y(y + BIN), g.cell, g.cell);
     }, palette);
-    if (selectedRow) {
+    if (selectedRow && g.contains(selectedRow.x, selectedRow.y)) {
       const r = Number(comparison.deseq && comparison.deseq.radius) || 0;
       context.strokeStyle = palette.selection;
       context.lineWidth = 1.5;
@@ -409,9 +425,11 @@
   // axis ticks and labels through a small drawing callback
   function axes(g, draw, comparison) {
     const step = niceStep(g.length);
-    for (let v = 0; v <= g.length; v += step) {
+    for (let v = Math.ceil(g.xStart / step) * step; v <= g.xStart + g.length; v += step) {
       draw("line", g.x(v), g.top + g.size, g.x(v), g.top + g.size + 5);
       draw("text", g.x(v), g.top + g.size + 18, 0, 0, String(v), "center");
+    }
+    for (let v = Math.ceil(g.yStart / step) * step; v <= g.yStart + g.length; v += step) {
       draw("line", g.left - 5, g.y(v), g.left, g.y(v));
       draw("text", g.left - 8, g.y(v) + 4, 0, 0, String(v), "right");
     }
@@ -477,11 +495,47 @@
     const context = canvas.getContext("2d");
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawPanel(context, width, height, comparison, deseq.result, deseq.show || "both", selectedInteraction(deseq), screenColours());
+    let drag = null;
+    const point = function (event) {
+      const box = canvas.getBoundingClientRect(), g = geometry(width, height, mapLength(deseq.result), mapViews.get(deseq.result));
+      return { x: event.clientX - box.left, y: event.clientY - box.top, g: g };
+    };
+    const redraw = function () { drawPanel(context, width, height, comparison, deseq.result, deseq.show || "both", selectedInteraction(deseq), screenColours()); };
+    canvas.onwheel = function (event) {
+      const p = point(event), fx = (p.x - p.g.left) / p.g.size, fy = 1 - (p.y - p.g.top) / p.g.size;
+      if (fx < 0 || fx > 1 || fy < 0 || fy > 1) { return; }
+      event.preventDefault();
+      changeMapView(deseq.result, event.deltaY > 0 ? 1.35 : .74, fx, fy, 0, 0);
+      redraw();
+    };
+    canvas.onpointerdown = function (event) {
+      if (event.button !== 0) { return; }
+      const p = point(event);
+      if (p.x < p.g.left || p.x > p.g.left + p.g.size || p.y < p.g.top || p.y > p.g.top + p.g.size) { return; }
+      drag = { x: p.x, y: p.y, moved: false, view: mapViews.get(deseq.result) };
+      canvas.setPointerCapture(event.pointerId);
+    };
+    canvas.onpointermove = function (event) {
+      if (!drag) { return; }
+      const p = point(event);
+      if (Math.hypot(p.x - drag.x, p.y - drag.y) < 4) { return; }
+      if (drag.view) { mapViews.set(deseq.result, drag.view); } else { mapViews.delete(deseq.result); }
+      changeMapView(deseq.result, 1, .5, .5, (drag.x - p.x) / p.g.size, (p.y - drag.y) / p.g.size);
+      drag.moved = true;
+      redraw();
+    };
+    canvas.onpointercancel = function () { drag = null; };
+    canvas.ondblclick = function () { mapViews.delete(deseq.result); redraw(); };
     canvas.onpointerup = function (event) {
+      const moved = drag && drag.moved;
+      drag = null;
+      if (canvas.hasPointerCapture(event.pointerId)) { canvas.releasePointerCapture(event.pointerId); }
+      if (moved) { return; }
       const box = canvas.getBoundingClientRect();
-      const g = geometry(width, height, mapLength(deseq.result));
-      const x = (event.clientX - box.left - g.left) / g.size * g.length;
-      const y = (1 - (event.clientY - box.top - g.top) / g.size) * g.length;
+      const g = geometry(width, height, mapLength(deseq.result), mapViews.get(deseq.result));
+      const x = g.xStart + (event.clientX - box.left - g.left) / g.size * g.length;
+      const y = g.yStart + (1 - (event.clientY - box.top - g.top) / g.size) * g.length;
+      if (!g.contains(x, y)) { return; }
       const rows = shownRows(deseq.result, deseq.show || "both");
       let best = null;
       let bestDistance = Infinity;
@@ -515,7 +569,7 @@
     const width = opts.width || 760;
     const height = opts.height || 820;
     const show = opts.show || deseq.show || "both";
-    const g = geometry(width, height, mapLength(result));
+    const g = geometry(width, height, mapLength(result), mapViews.get(result));
     const parts = [];
     const xml = function (text) { return esc(text); };
     parts.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + " " + height + '" width="' + width + '" height="' + height +
@@ -525,7 +579,7 @@
     parts.push('<rect x="' + (g.left - 0.5) + '" y="' + (g.top - 0.5) + '" width="' + (g.size + 1) + '" height="' + (g.size + 1) + '" fill="none" stroke="#c7ced6"/>');
     const cells = [];
     eachCell(result, show, function (x, y, colour, alpha) {
-      cells.push([x, y, colour, alpha]);
+      if (g.contains(x, y)) { cells.push([x, y, colour, alpha]); }
     });
     const limit = opts.maxCells || Infinity;
     const start = Math.max(0, cells.length - limit); // the most significant are last
@@ -670,10 +724,10 @@
         deseq.status = "done";
         deseq.selected = null;
         deseq.progress = "";
-        // an arc map with structures but no interaction table (the included
-        // example) draws this result right away
+        // Show completed HYB comparison results without requiring structures.
+        // Preserve a manually imported interaction table.
         deseq.arcMapFed = false;
-        if (window.Hyb2ArcMap && state.arcMap && !state.arcMap.interactions && (state.arcMap.a || state.arcMap.b)) {
+        if (window.Hyb2ArcMap && (!state.arcMap || !state.arcMap.interactions || state.arcMap.interactions.source === "comparison")) {
           useInArcMap(state, result);
           deseq.arcMapFed = true;
         }
@@ -760,6 +814,16 @@
   }
 
   function handleAction(state, action, element, api) {
+    if (action === "deseq-zoom") {
+      const result = state.comparison && state.comparison.deseq && state.comparison.deseq.result;
+      if (result) {
+        if (element.dataset.zoom === "reset") { mapViews.delete(result); }
+        else { changeMapView(result, element.dataset.zoom === "in" ? .5 : 2, .5, .5, 0, 0); }
+        api.render();
+      }
+      return true;
+    }
+
     if (!action || action.indexOf("deseq-") !== 0 || !state.comparison) {
       return false;
     }
@@ -827,6 +891,8 @@
     state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
     state.arcMap.interactions = window.Hyb2Deseq.arcMapInteractions(result.interactions,
       "Differential test · " + result.labels.A + " vs " + result.labels.B);
+    state.arcMap.interactions.source = "comparison";
+    state.arcMap.showStructures = false;
     state.arcMap.errors = Object.assign({}, state.arcMap.errors, { interactions: "" });
     state.arcMap.labelOne = result.labels.A;
     state.arcMap.labelTwo = result.labels.B;

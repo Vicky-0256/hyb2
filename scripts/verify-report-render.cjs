@@ -180,6 +180,20 @@ state.view = {
 
 const report = context.window.Hyb2Report;
 const html = report.render(state);
+{
+  const bwState = JSON.parse(JSON.stringify(state));
+  bwState.contact.palette = "monochrome";
+  const bwHtml = report.render(bwState);
+  const map = bwHtml.match(/<svg[^>]*class="[^"]*report-heatmap-svg[^"]*"[\s\S]*?<\/svg>/);
+  assert.ok(map, "monochrome report contains the contact map");
+  assert.match(map[0], /fill="rgb\(0, 0, 0\)"/, "maximum count is black in the report");
+  for (const match of map[0].matchAll(/(?:fill|stroke)="rgb\((\d+), (\d+), (\d+)\)"/g)) {
+    assert.equal(match[1], match[2]);
+    assert.equal(match[2], match[3]);
+  }
+  assert.match(bwHtml, /White and black/);
+}
+
 assert.match(html, /data-report-page/);
 assert.match(html, /assets\/hyb2-logo\.png/);
 assert.match(html, /Print \/ Save PDF/);
@@ -189,8 +203,8 @@ assert.match(html, /Print \/ Save PDF/);
 assert.match(html, /&lt;bad&gt;\.hyb/, "user-controlled file names must be escaped");
 assert.doesNotMatch(html, />undefined</, "report markup must not expose undefined values");
 // similarity_heatmap.R: a single-valued scale (floor = cap) maps to the
-// midpoint of the white-to-forestgreen CIELAB ramp, like scales::rescale.
-assert.match(html, /fill="rgb\(153, 197, 143\)"><title>[^<]*; similarity 1</,
+// midpoint of the white-to-teal CIELAB ramp, like scales::rescale.
+assert.match(html, /fill="rgb\(153, 208, 193\)"><title>[^<]*; similarity 1</,
   "the similarity heatmap must use similarity_heatmap.R's data-range colour scale");
 // the similarity panel is R's white unless the grey display panel is chosen
 const similaritySvg = function (markup) { return markup.slice(markup.lastIndexOf('<svg class="report-svg report-heatmap-svg"')); };

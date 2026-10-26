@@ -120,10 +120,11 @@
     const total = summary.validRecords || 1;
     return [
       '        <section class="data-card overview-types">',
-      '          <div class="card-title-row"><h2>Chimera types</h2><span class="card-kicker">Column 17 / inferred</span></div>',
+      '          <div class="card-title-row"><h2>Chimera patterns</h2><span class="card-kicker">HYB arm relationships</span></div>',
       '          <div class="type-split">',
       types.slice(0, 4).map(function (item) { return renderType(item.name, item.records / total, item.records); }).join(""),
       "          </div>",
+      window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.guide() : "",
       '          <button class="quiet-button overview-types-link" type="button" data-action="navigate" data-page="interactions">View interactions</button>',
       "        </section>"
     ].join("");
@@ -132,7 +133,8 @@
   function renderType(label, fraction, count) {
     return [
       '            <div class="type-item">',
-      "              <strong>" + escape(label) + "</strong>",
+      "              <strong>" + escape(window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(label) : label) + "</strong>",
+      window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.diagram(label) : "",
       '              <span class="type-value">' + format(count) + " records · " + percentFormatter.format(fraction) + "</span>",
       '              <div class="type-meter"><span style="width:' + (fraction * 100) + '%"></span></div>',
       "            </div>"
@@ -217,8 +219,8 @@
       '        <p class="notice">Lines beginning with <span class="mono">#</span> and blank lines are skipped. A valid record has at least 15 tab-separated columns, a name for each RNA arm, and positive one-based RNA start/end coordinates in columns 7–8 and 13–14.</p>',
       '        <div class="card-title-row"><h2>Counts</h2></div>',
       '        <p class="notice">Record count equals the number of valid rows. For collapsed HYB2 IDs, the second underscore-delimited ID field is retained separately as the source raw-read count, matching the bundled <span class="mono">collapse_hyb_2.sh</span> and <span class="mono">hybrid_stats_2</span> convention. It never changes Contact Map or Viewpoint row weighting. In the standard 17-column layout, column 16 is an <strong>Overlap Score</strong>, not a count. Cluster support is read only from legacy <span class="mono">count_total=…</span> metadata or an untyped legacy positive-integer column 16.</p>',
-      '        <div class="card-title-row"><h2>Chimera type</h2></div>',
-      '        <p class="notice">Column 17 is retained as the HYB2 chimera type. For legacy 15/16-column records without that field, the website deterministically derives the legacy Type_1–Type_13 or Intermolecular label from the two RNA arms, matching the bundled <span class="mono">hyb_chim_types.awk</span> rule.</p>',
+      '        <div class="card-title-row"><h2>Chimera patterns</h2></div>',
+      '        <p class="notice">Column 17 is retained as the HYB2 chimera type. For legacy 15/16-column records without that field, the website deterministically derives the corresponding arm-relationship pattern from the two RNA arms, matching the bundled <span class="mono">hyb_chim_types.awk</span> rule.</p>',
       '        <div class="card-title-row"><h2>Homodimer proxy</h2></div>',
       '        <p class="notice">A record is marked as the original HYB2 homodimer proxy only when both arms map to the same RNA and the standard overlap score in column 16 is at least 5. This flag is independent of the column 17 chimera type and is available as a filter.</p>',
       '        <div class="card-title-row"><h2>Pair normalisation</h2></div>',

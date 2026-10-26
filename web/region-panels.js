@@ -519,8 +519,8 @@
     });
   }
 
-  const COLOURS = { ink: "#222222", muted: "#6b7280", line: "#9aa3ad", pair: "#4b5563", one: "#c62828", two: "#1f4e9e",
-    unpaired: "#e5e7eb", paired: "#9ca3af", background: "#ffffff" };
+  const COLOURS = { ink: "#222222", muted: "#6b7280", line: "#9aa3ad", pair: "#595959", one: "#E64B35", two: "#4DBBD5",
+    windowOne: "#333333", windowTwo: "#999999", background: "#ffffff" };
 
   // one structure diagram in a box (x, y, w, h); returns SVG elements
   function panelSvg(panel, highlight, box, c) {
@@ -583,19 +583,17 @@
     s.bases.forEach(function (b) {
       const k = local(b.idx);
       const tip = b.pos + " " + b.base + (b.partner >= 0 ? " paired with " + s.bases[b.partner].pos : b.outside ? " paired outside with " + b.outside : " unpaired");
-      let fill = c.unpaired;
+      let fill = b.idx < s.win ? c.windowOne : c.windowTwo;
       let stroke = "none";
       if (b.outside) {
         fill = c.background;
         stroke = c.ink;
-      } else if (b.partner >= 0) {
-        fill = b.idx < s.win && b.partner >= s.win || b.idx >= s.win && b.partner < s.win ? highlight : c.paired;
       }
       out.push('<circle cx="' + px(k).toFixed(1) + '" cy="' + py(k).toFixed(1) + '" r="' + r.toFixed(1) + '" fill="' + fill + '"' +
         (stroke !== "none" ? ' stroke="' + stroke + '" stroke-width="0.9"' : "") + "><title>" + escapeXml(tip) + "</title></circle>");
       if (r >= 4.5) {
         out.push('<text x="' + px(k).toFixed(1) + '" y="' + (py(k) + 2.6).toFixed(1) + '" font-size="' + (r * 1.35).toFixed(1) +
-          '" text-anchor="middle" fill="' + (fill === highlight ? "#ffffff" : c.ink) + '">' + b.base + "</text>");
+          '" text-anchor="middle" fill="' + (fill === c.windowOne || fill === c.windowTwo ? "#ffffff" : c.ink) + '">' + b.base + "</text>");
       }
     });
     // window ends

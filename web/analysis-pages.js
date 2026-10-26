@@ -3,6 +3,10 @@
 
   const formatNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
+  function chimeraLabel(value) {
+    return window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(value) : value;
+  }
+
   function renderInteractions(state) {
     const filters = state.filters || window.Hyb2Data.defaultInteractionFilters();
     const rnas = state.summary.rnaNames || [];
@@ -28,7 +32,7 @@
         { value: "inter", label: "Inter-RNA" },
         { value: "homodimer", label: "Homodimer proxy (overlap ≥ 5)" }
       ], "interaction-filter"),
-      renderSelectControl("Chimera type", "chimeraType", filters.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "interaction-filter"),
+      renderSelectControl("Chimera pattern", "chimeraType", filters.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "interaction-filter"),
       renderSelectControl("Count mode", "countMode", filters.countMode, [
         { value: "support", label: "Cluster support" },
         { value: "records", label: "Records" }
@@ -133,7 +137,7 @@
         '<span class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + "</span>",
         '<span class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + "</span>",
         '<span class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + "</span>",
-        '<span title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + "</span>",
+        '<span title="' + attribute(chimeraLabel(record.chimeraType)) + '">' + escape(chimeraLabel(record.chimeraType)) + "</span>",
         '<span class="num">' + format(record.supportCount) + "</span>",
         '<span class="num">' + (record.dg === null ? "—" : format(record.dg)) + "</span>",
         "</button>"
@@ -149,7 +153,7 @@
       '<div class="drawer-section"><span class="detail-label">Sequence</span><code class="sequence-preview">' + escape(truncate(record.sequence, 180)) + "</code></div>",
       renderArmDetails("Arm 1", record.rnaOne, record.rnaOneStart, record.rnaOneEnd, record.rnaOneReadStart, record.rnaOneReadEnd, record.rnaOneEvalue),
       renderArmDetails("Arm 2", record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd, record.rnaTwoReadStart, record.rnaTwoReadEnd, record.rnaTwoEvalue),
-      '<dl class="detail-grid"><div><dt>ΔG (kcal/mol)</dt><dd>' + (record.dg === null ? "—" : format(record.dg)) + '</dd></div><div><dt>Cluster support</dt><dd>' + format(record.supportCount) + '</dd></div><div><dt>Source reads</dt><dd>' + (record.rawReadCount === null ? "—" : format(record.rawReadCount)) + '</dd></div><div><dt>Overlap score</dt><dd>' + (record.overlapScore === null ? "—" : format(record.overlapScore)) + '</dd></div><div><dt>Homodimer proxy</dt><dd>' + (record.isHomodimer ? "Yes (overlap ≥ 5)" : "No") + '</dd></div><div><dt>Chimera type</dt><dd>' + escape(record.chimeraType) + '</dd></div><div><dt>Type source</dt><dd>' + escape(record.chimeraTypeSource === "column_17" ? "Column 17" : "Inferred from arms") + '</dd></div><div><dt>Source line</dt><dd>' + format(record.lineNumber) + "</dd></div></dl>",
+      '<dl class="detail-grid"><div><dt>ΔG (kcal/mol)</dt><dd>' + (record.dg === null ? "—" : format(record.dg)) + '</dd></div><div><dt>Cluster support</dt><dd>' + format(record.supportCount) + '</dd></div><div><dt>Source reads</dt><dd>' + (record.rawReadCount === null ? "—" : format(record.rawReadCount)) + '</dd></div><div><dt>Overlap score</dt><dd>' + (record.overlapScore === null ? "—" : format(record.overlapScore)) + '</dd></div><div><dt>Homodimer proxy</dt><dd>' + (record.isHomodimer ? "Yes (overlap ≥ 5)" : "No") + '</dd></div><div><dt>Chimera pattern</dt><dd>' + escape(chimeraLabel(record.chimeraType)) + '</dd></div><div><dt>Type source</dt><dd>' + escape(record.chimeraTypeSource === "column_17" ? "Column 17" : "Inferred from arms") + '</dd></div><div><dt>Source line</dt><dd>' + format(record.lineNumber) + "</dd></div></dl>",
       '<div class="drawer-actions">',
       '<button class="button button-secondary" type="button" data-feature-action="record-contact" data-record-index="' + record.index + '">Open in Contact Map</button>',
       '<button class="button button-secondary" type="button" data-feature-action="record-region" data-record-index="' + record.index + '" data-arm="1">Explore RNA 1 region</button>',
@@ -221,6 +225,10 @@
         { value: "max", label: "Maximum" },
         { value: "custom", label: "Custom" }
       ], "contact-control"),
+      renderSelectControl("Palette", "palette", contact.palette || "colour", [
+        { value: "colour", label: "Colour" },
+        { value: "monochrome", label: "White and black" }
+      ], "contact-control"),
       renderSelectControl("Scale", "scale", contact.scale, [
         { value: "linear", label: "Linear" },
         { value: "log", label: "Log1p" }
@@ -230,7 +238,7 @@
         { value: "normalised", label: "Normalised pairs" },
         { value: "original", label: "Original arms (no swap)" }
       ], "contact-control"),
-      renderSelectControl("Chimera type", "chimeraType", contact.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "contact-control"),
+      renderSelectControl("Chimera pattern", "chimeraType", contact.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "contact-control"),
       renderSelectControl("Homodimer subset", "homodimer", contact.homodimer || "all", [
         { value: "all", label: "All records" },
         { value: "only", label: "Overlap score ≥ 5" },
@@ -249,7 +257,7 @@
         '<aside class="contact-workbench-side">',
         renderContactSelection(contact, matrix, selectedCell, state),
         '<div class="heatmap-card data-card">',
-        '<div class="heatmap-topline"><span class="card-kicker">Teal–violet sequential · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
+        '<div class="heatmap-topline"><span class="card-kicker">' + (contact.palette === "monochrome" ? "White and black" : "Mint–navy sequential") + ' · ' + escape(contact.scale === "log" ? "log1p display" : "linear display") + '</span><span class="heatmap-tooltip">Image exports use the currently visible extent.</span></div>',
         '<div class="heatmap-axis"><span>' + escape(contact.rnaX) + " · X axis</span><span>" + escape(contact.rnaY) + " · Y axis</span></div>",
         '<div class="heatmap-footer"><button class="quiet-button" type="button" data-feature-action="toggle-contact-data">' + (contact.showDataTable ? "Hide data table" : "Open data table") + "</button></div>",
         "</div>",
@@ -422,7 +430,7 @@
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
       ], "viewpoint-control"),
-      renderSelectControl("Chimera type", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera types" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: item.name }; })), "viewpoint-control"),
+      renderSelectControl("Chimera pattern", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "viewpoint-control"),
       renderSelectControl("Homodimer subset", "homodimer", viewpoint.homodimer || "all", [
         { value: "all", label: "All records" },
         { value: "only", label: "Overlap score ≥ 5" },
@@ -544,7 +552,7 @@
       result.ready ? [
         '<section class="comparison-summary data-card"><dl class="selection-stats"><div><dt>' + escape(comparison.conditionALabel) + ' datasets</dt><dd>' + format(groupA.length) + '</dd></div><div><dt>' + escape(comparison.conditionBLabel) + ' datasets</dt><dd>' + format(groupB.length) + '</dd></div><div><dt>Comparable bins</dt><dd>' + format(result.cells.length) + '</dd></div><div><dt>Similarity bins</dt><dd>' + format(result.conservedCells.length) + '</dd></div></dl></section>',
         '<section class="comparison-map-grid">',
-        renderComparisonMap("effect", "Descriptive · Mean log2 effect", comparison.conditionALabel + ' enriched → violet · ' + comparison.conditionBLabel + ' enriched → teal. Descriptive, not a test: bins with few records give strong colours by chance, so use the differential test (A) to judge a difference.', result),
+        renderComparisonMap("effect", "Descriptive · Mean log2 effect", comparison.conditionALabel + ' enriched → vermilion · ' + comparison.conditionBLabel + ' enriched → cyan. Descriptive, not a test: bins with few records give strong colours by chance, so use the differential test (A) to judge a difference.', result),
         renderComparisonMap("conserved", "B · Similarity heatmap", "Bins in both conditions" + (result.similarityMinimum > 1 ? " (≥ " + format(result.similarityMinimum) + " each)" : "") + "; the smaller raw count, white at the smallest (" + format(result.similarityFloor) + ") to green at the 95% quantile cap (" + format(result.similarityCap) + ")" + (comparison.similarityPanel === "grey" ? " on a grey panel." : "; on R's white panel the smallest bins do not show (choose the grey panel to see them)."), result),
         '</section>',
         renderComparisonSelection(selected, comparison, result, state),
@@ -625,6 +633,9 @@
     return [
       '<section class="comparison-map-card data-card">',
       '<div class="card-title-row"><div><h2>' + escape(title) + '</h2><span class="card-note">' + escape(note) + '</span></div><span class="card-kicker">' + format(kind === "effect" ? result.cells.length : result.conservedCells.length) + ' bins</span></div>',
+      '<div class="inline-actions">' + [["in", "Zoom in"], ["out", "Zoom out"], ["reset", "Reset zoom"]].map(function (item) {
+        return '<button class="quiet-button" type="button" data-feature-action="comparison-zoom" data-kind="' + kind + '" data-zoom="' + item[0] + '">' + item[1] + '</button>';
+      }).join("") + '<span class="card-note">Scroll to zoom · drag to pan · double-click to reset</span></div>',
       '<div class="canvas-wrap comparison-canvas-wrap"><canvas id="comparison-' + kind + '-canvas" class="comparison-canvas" width="720" height="520" data-comparison-map="' + kind + '" tabindex="0" aria-label="' + escape(title) + ' map"></canvas></div>',
       '</section>'
     ].join("");
@@ -887,7 +898,7 @@
       // with their full name in title, headers on one line
       '<div class="data-table-wrap"><table class="data-table region-records-table"><thead class="nowrap"><tr><th>Sequence ID</th><th>RNA 1</th><th class="num">Region 1 <span class="unit">(nt)</span></th><th>RNA 2</th><th class="num">Region 2 <span class="unit">(nt)</span></th><th>Chimera type</th><th class="num">Support</th></tr></thead><tbody>',
       records.slice(0, limit).map(function (record) {
-        return '<tr><td class="cell-truncate" title="' + attribute(record.id) + '">' + escape(record.id) + '</td><td class="cell-truncate" title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + '</td><td class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + '</td><td class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + '</td><td class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + '</td><td class="cell-truncate" title="' + attribute(record.chimeraType) + '">' + escape(record.chimeraType) + '</td><td class="num">' + format(record.supportCount) + "</td></tr>";
+        return '<tr><td class="cell-truncate" title="' + attribute(record.id) + '">' + escape(record.id) + '</td><td class="cell-truncate" title="' + attribute(record.rnaOne) + '">' + escape(record.rnaOne) + '</td><td class="num">' + range(record.rnaOneStart, record.rnaOneEnd) + '</td><td class="cell-truncate" title="' + attribute(record.rnaTwo) + '">' + escape(record.rnaTwo) + '</td><td class="num">' + range(record.rnaTwoStart, record.rnaTwoEnd) + '</td><td class="cell-truncate" title="' + attribute(chimeraLabel(record.chimeraType)) + '">' + escape(chimeraLabel(record.chimeraType)) + '</td><td class="num">' + format(record.supportCount) + "</td></tr>";
       }).join(""),
       "</tbody></table></div>",
       records.length > 20 ? '<div class="table-more"><button class="quiet-button" type="button" data-feature-action="region-toggle-records">' + (showAll ? "Show fewer records" : "Show " + format(Math.min(records.length, 100)) + " records") + '</button>' + (records.length > 100 && showAll ? '<span class="table-note">Showing the first 100 of ' + format(records.length) + " matching records. Export includes all local matches.</span>" : '<span class="table-note">Showing ' + format(Math.min(limit, records.length)) + " of " + format(records.length) + ". Export includes all local matches.</span>") + "</div>" : "",
@@ -906,9 +917,10 @@
     const rnas = state.summary.rnaNames || [];
     const sequenceInfo = getStructureSequence(state);
     const cplfold = structure.engine === "cplfold";
+    const iris = structure.engine === "iris";
     const cplfoldGuided = cplfold && structure.cplfoldEvidence === "hyb-blocks";
     syncStoredCplfoldCapacity(structure);
-    const sourceOptions = cplfoldGuided ? [
+    const sourceOptions = (cplfoldGuided || iris) ? [
       { value: "reference", label: "Reference region" }
     ] : [
       { value: "reference", label: "Reference region" },
@@ -917,7 +929,8 @@
     ];
     const engineOptions = [
       { value: "viennarna", label: "ViennaRNA · nested MFE" },
-      { value: "cplfold", label: "CPLfold · energy-guided folding" }
+      { value: "cplfold", label: "CPLfold · energy-guided folding" },
+      { value: "iris", label: "IRIS · evidence-guided ensemble" }
     ];
     const workflowOptions = [
       { value: "custom", label: "Custom engine and reference layout" },
@@ -931,8 +944,8 @@
       { value: "hyb-guided", label: "COMRADES(ViennaRNA)" },
       { value: "manual-hard-base-pairs", label: "Manual hard base pairs (expert)" }
     ];
-    const manualConstraintMode = !cplfold && structure.constraintMode === "manual-hard-base-pairs";
-    const guidedConstraintMode = !cplfold && structure.constraintMode === "hyb-guided";
+    const manualConstraintMode = !cplfold && !iris && structure.constraintMode === "manual-hard-base-pairs";
+    const guidedConstraintMode = !cplfold && !iris && structure.constraintMode === "hyb-guided";
     const selectableRecords = ((state.view && state.view.structureRecords) || []).slice(0, 500);
     const selectedStructureRecord = findRecord(state, structure.selectedRecordIndex);
     if (selectedStructureRecord && !selectableRecords.some(function (record) { return record.index === selectedStructureRecord.index; })) {
@@ -940,30 +953,32 @@
     }
     const result = structure.result;
     const length = sequenceInfo.sequence ? sequenceInfo.sequence.length : 0;
-    const lengthNotice = structureLengthNotice(length, structure.allowLarge, cplfold ? "cplfold" : "viennarna", structure);
+    const lengthNotice = structureLengthNotice(length, structure.allowLarge, iris ? "iris" : cplfold ? "cplfold" : "viennarna", structure);
     const running = structure.status === "running";
     const capacityRunning = running && structure.operation === "capacity";
     const largeEnsembleNeedsConsent = guidedConstraintMode && Number(structure.randomFoldCount) > 100 && !structure.allowLargeEnsemble;
     const cplfoldLengthUnavailable = cplfold && cplfoldCannotRun(length, structure);
-    const unavailable = !sequenceInfo.sequence || !!sequenceInfo.error ||
+    const irisIssue = iris && (length > 300 ? "IRIS browser limit is 300 nt; select a smaller region." : (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length) ? "IRIS requires HYB evidence inside the selected reference region." : "");
+    const unavailable = !!irisIssue || !sequenceInfo.sequence || !!sequenceInfo.error ||
       (cplfold ? cplfoldLengthUnavailable : (length > 3000 || (length > 2000 && !structure.allowLarge))) ||
       largeEnsembleNeedsConsent;
     // Why the Predict button is disabled, said next to it.
     const unavailableReason = !unavailable ? "" :
       !sequenceInfo.sequence ? "Choose an RNA and region, a HYB record or paste a sequence first." :
       sequenceInfo.error ? sequenceInfo.error :
+      irisIssue ? irisIssue :
       cplfold && cplfoldLengthUnavailable ? cplfoldRunReason(length, structure) :
-      !cplfold && length > 3000 ? "The browser folds at most 3,000 nt with ViennaRNA; choose a shorter region." :
-      !cplfold && length > 2000 && !structure.allowLarge ? "Tick the large-fold confirmation under Options to fold more than 2,000 nt." :
+      !cplfold && !iris && length > 3000 ? "The browser folds at most 3,000 nt with ViennaRNA; choose a shorter region." :
+      !cplfold && !iris && length > 2000 && !structure.allowLarge ? "Tick the large-fold confirmation under Options to fold more than 2,000 nt." :
       largeEnsembleNeedsConsent ? "Confirm the large ensemble under Options (more than 100 random folds) to run it." : "";
     const needsMeasure = cplfold && !cplfoldNativeAvailable() && cplfoldLengthUnavailable &&
       length <= cplfoldCapacity(structure).hardCeiling && !capacityRunning;
-    const methodBadge = cplfold
+    const methodBadge = iris ? "IRIS + ViennaRNA · Browser" : cplfold
       ? (cplfoldNativeAvailable() ? "CPLfold · Desktop runtime" : "CPLfold + Pyodide · Browser")
       : guidedConstraintMode
       ? "RNAcofold + constrained RNAfold · Browser"
       : (manualConstraintMode ? "ViennaRNA hard pairs · Browser" : "ViennaRNA MFE · Browser");
-    const actionLabel = cplfold
+    const actionLabel = iris ? "Predict IRIS ensemble" : cplfold
       ? "Predict CPLfold candidates"
       : guidedConstraintMode
       ? "Run HYB-guided ensemble"
@@ -981,29 +996,30 @@
       structure.source === "paste" ? '<label class="control-field"><span>Paste RNA sequence</span><textarea class="sequence-textarea" rows="6" data-feature="structure-control" data-key="pastedSequence" placeholder="ACGU…">' + escape(structure.pastedSequence || "") + "</textarea></label>" : "",
       guidedConstraintMode ? renderGuidedStructureSetup(structure, rnas, sequenceInfo, "sequence") : "",
       sequenceInfo.error ? '<div class="notice notice-warning">' + escape(sequenceInfo.error) + "</div>" : "",
-      renderStructureLengthBar(length, cplfold ? "cplfold" : "viennarna", structure, lengthNotice),
+      renderStructureLengthBar(length, iris ? "iris" : cplfold ? "cplfold" : "viennarna", structure, lengthNotice),
       renderStructurePreparation(sequenceInfo, structure)
     ].join("");
 
     const methodColumn = [
-      renderSelectControl("Folding workflow", "workflow", structure.workflow || "custom", workflowOptions, "structure-control"),
+      !iris ? renderSelectControl("Folding workflow", "workflow", structure.workflow || "custom", workflowOptions, "structure-control") : "",
       renderSelectControl("Prediction engine", "engine", structure.engine || "viennarna", engineOptions, "structure-control"),
-      !cplfold ? renderSelectControl("Folding mode", "constraintMode", structure.constraintMode || "none", constraintModeOptions, "structure-control") : "",
+      !cplfold && !iris ? renderSelectControl("Folding mode", "constraintMode", structure.constraintMode || "none", constraintModeOptions, "structure-control") : "",
       cplfold ? renderCplfoldSetup(structure, sequenceInfo, "method") : "",
-      renderStructureAbout(structure, cplfold, guidedConstraintMode, manualConstraintMode)
+      iris ? '<p class="card-note">IRIS redistributes HYB evidence, generates constrained structures, then selects a weighted ensemble. Uses one reference region; no files leave this browser. <a href="https://github.com/JY-Zhou/IRIS" target="_blank" rel="noopener noreferrer">IRIS source</a> · <a href="./vendor/iris/LICENSE" target="_blank" rel="noopener noreferrer">Licence</a></p>' : renderStructureAbout(structure, cplfold, guidedConstraintMode, manualConstraintMode)
     ].join("");
 
     const optionsColumn = [
-      !cplfold ? '<div class="control-grid structure-thermo-grid"><label class="control-field"><span>Temperature</span><input type="number" min="0" max="100" step="0.1" value="' + attribute(structure.temperature) + '" data-feature="structure-control" data-key="temperature" aria-label="Folding temperature in degrees Celsius"><small>°C</small></label><label class="control-field"><span>Minimum hairpin loop</span><input type="number" min="0" max="12" value="' + attribute(structure.minimumLoop) + '" data-feature="structure-control" data-key="minimumLoop" aria-label="Minimum unpaired bases in a hairpin loop"><small>unpaired bases</small></label></div>' : "",
+      iris ? renderIrisSetup(structure) : "",
+      !cplfold && !iris ? '<div class="control-grid structure-thermo-grid"><label class="control-field"><span>Temperature</span><input type="number" min="0" max="100" step="0.1" value="' + attribute(structure.temperature) + '" data-feature="structure-control" data-key="temperature" aria-label="Folding temperature in degrees Celsius"><small>°C</small></label><label class="control-field"><span>Minimum hairpin loop</span><input type="number" min="0" max="12" value="' + attribute(structure.minimumLoop) + '" data-feature="structure-control" data-key="minimumLoop" aria-label="Minimum unpaired bases in a hairpin loop"><small>unpaired bases</small></label></div>' : "",
       cplfold ? renderCplfoldSetup(structure, sequenceInfo, "options") : "",
       guidedConstraintMode ? renderGuidedStructureSetup(structure, rnas, sequenceInfo, "options") : "",
       manualConstraintMode ? '<div class="structure-constraint-editor"><label class="control-field" for="structure-constraint-text"><span>Manual hard base pairs</span><textarea id="structure-constraint-text" class="sequence-textarea" rows="5" maxlength="20000" spellcheck="false" autocapitalize="off" autocomplete="off" data-feature="structure-control" data-key="constraintText" aria-describedby="structure-constraint-help" placeholder="4-18\n7-15">' + escape(structure.constraintText || "") + '</textarea><small id="structure-constraint-help">One 1-based i-j pair per line, relative to the prepared sequence shown here. Pairs must be canonical, non-crossing, use each nucleotide once, and satisfy the minimum loop size.</small></label></div>' : "",
-      !cplfold && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : ""
+      !cplfold && !iris && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : ""
     ].join("");
 
     return [
-      '<div class="page-heading structure-page-heading"><div><h1>RNA Structure</h1><p>Fold a region with ViennaRNA or CPLfold, optionally guided by HYB evidence, in this browser.</p></div>' + (result ? renderStructureExportMenu(result) : "") + "</div>",
-      renderStructureCapacityStrip(structure),
+      '<div class="page-heading structure-page-heading"><div><h1>RNA Structure</h1><p>Fold a region with ViennaRNA, CPLfold or IRIS, optionally guided by HYB evidence, in this browser.</p></div>' + (result ? renderStructureExportMenu(result) : "") + "</div>",
+      iris ? '<p class="card-note">IRIS browser adaptation · up to 300 nt and 2,000 evidence rows · 37 °C · nested structures</p>' : renderStructureCapacityStrip(structure),
       '<details class="structure-setup-panel data-card" data-open-key="structure-setup"' + (setupOpen ? " open" : "") + (result ? ' data-has-result="true"' : "") + ">",
       '<summary class="structure-setup-summary"><span class="structure-setup-title">Setup</span><span class="structure-setup-line">' + escape(structureSetupSummary(structure, sequenceInfo, length, guidedConstraintMode, manualConstraintMode)) + '</span>' + (result ? '<span class="structure-setup-edit" aria-hidden="true">Edit setup</span>' : "") + "</summary>",
       '<div class="structure-setup-body">',
@@ -1034,7 +1050,7 @@
   // One line under the setup's title: what will run (or ran) on what.
   function structureSetupSummary(structure, sequenceInfo, length, guidedConstraintMode, manualConstraintMode) {
     const cplfold = structure.engine === "cplfold";
-    const parts = [cplfold ? "CPLfold" : (guidedConstraintMode ? "COMRADES(ViennaRNA)" : (manualConstraintMode ? "ViennaRNA · hard pairs" : "ViennaRNA · plain MFE"))];
+    const parts = [structure.engine === "iris" ? "IRIS ensemble" : cplfold ? "CPLfold" : (guidedConstraintMode ? "COMRADES(ViennaRNA)" : (manualConstraintMode ? "ViennaRNA · hard pairs" : "ViennaRNA · plain MFE"))];
     parts.push(sequenceInfo.label ? truncate(sequenceInfo.label, 60) : "no sequence yet");
     if (length) {
       parts.push(format(length) + " nt");
@@ -1045,7 +1061,7 @@
       parts.push(structure.cplfoldAllowPseudoknot === false ? "secondary only" : "pseudoknots allowed");
       parts.push("beam " + profileValue(structure.cplfoldBeam, "20"));
     } else {
-      parts.push(profileValue(structure.temperature, "37") + " °C");
+      parts.push((structure.engine === "iris" ? "37" : profileValue(structure.temperature, "37")) + " °C");
     }
     return parts.join(" · ");
   }
@@ -1173,7 +1189,9 @@
     let limitLabel = "ViennaRNA in this browser";
     let tone = "ok";
     let footnote = "";
-    if (engine === "cplfold" && cplfoldNativeAvailable()) {
+    if (engine === "iris") {
+      limit = 300; limitLabel = "IRIS in this browser"; tone = length > limit ? "over" : "ok";
+    } else if (engine === "cplfold" && cplfoldNativeAvailable()) {
       limit = cplfoldNativeMaxLength();
       limitLabel = "desktop CPLfold";
       tone = length > limit ? "over" : "ok";
@@ -1240,6 +1258,22 @@
   }
 
   // part "method": the evidence; part "options": topology and the advanced numbers.
+  function renderIrisSetup(structure) {
+    return '<div class="control-grid">' +
+      renderTextControl("Ensemble size K", "irisK", structure.irisK || "2", "2", "structure-control", "number", {min:1,max:3,step:1}) +
+      renderTextControl("Candidate count C", "irisC", structure.irisC || "20", "20", "structure-control", "number", {min:1,max:50,step:1}) +
+      renderTextControl("Support quantile", "irisFraction", structure.irisFraction || "0.75", "0.75", "structure-control", "number", {min:0,max:0.99,step:0.05}) +
+      renderTextControl("Stem lengths", "irisKRange", structure.irisKRange || "4 5 6 7", "4 5 6 7", "structure-control") +
+      '</div><p class="card-note">K selects 1–3 representative structures. C retains up to 50 candidates; higher values increase work. All compatible single- and double-stem constraints are considered within the browser limits.</p>';
+  }
+
+  function renderIrisEnsemble(result) {
+    return '<div class="structure-constraint-summary"><strong>IRIS weighted ensemble</strong><span>Select a member to update every structure view. Weights describe the fitted mixture, not confidence.</span></div>' +
+      '<div class="iris-ensemble-scroll"><table class="iris-ensemble-table"><thead><tr><th>Member</th><th>Weight</th><th>Energy (kcal/mol)</th><th>View</th></tr></thead><tbody>' +
+      (result.candidates || []).map(function(c,i) {return '<tr><td>'+(i+1)+'</td><td>'+Number(c.weight*100).toFixed(1)+'%</td><td>'+Number(c.energy).toFixed(2)+'</td><td><button class="button button-secondary" data-feature-action="select-iris-candidate" data-candidate-index="'+i+'" aria-pressed="'+(i===result.selectedCandidate)+'">'+(i===result.selectedCandidate?'Selected':'View member '+(i+1))+'</button></td></tr>';}).join('') +
+      '</tbody></table></div><p class="card-note">Ensemble mean energy: '+Number(result.ensemble.meanEnergy).toFixed(2)+' kcal/mol · '+format(result.ensemble.candidateCount)+' candidates · '+countLabel(result.ensemble.testedEnsembles,"ensemble")+' tested</p>';
+  }
+
   function renderCplfoldSetup(structure, sequenceInfo, part) {
     const guided = structure.cplfoldEvidence === "hyb-blocks";
     const allowPseudoknot = structure.cplfoldAllowPseudoknot !== false;
@@ -1461,6 +1495,7 @@
         cplfoldHasEvidence ? ['data-feature-action="download-cplfold-evidence"', "Download bonus matrix"] : null,
         ['data-feature-action="download-local-cplfold-input"' + LOCAL_INPUT_ATTRS, "Download local inputs"]
       ]] : null,
+      result.engine === "IRIS" ? ["IRIS", [['data-feature-action="download-iris-ensemble"', "Download weighted ensemble"]]] : null,
       guided ? ["COMRADES", [
         ['data-feature-action="download-structure-evidence"', "Download evidence"],
         ['data-feature-action="download-structure-constraints"', "Download constraints"],
@@ -1510,7 +1545,7 @@
         ? "Click a nucleotide marker to inspect it."
         : "Click along the sequence baseline, or focus it and use the arrow keys, to inspect a nucleotide.");
     const candidateCount = (result.candidates || []).length;
-    const modeNote = cplfold
+    const modeNote = result.engine === "IRIS" ? renderIrisEnsemble(result) : cplfold
       ? '<div class="structure-constraint-summary structure-cplfold-summary"><strong>' + escape(allowPseudoknot ? (result.topology === "pseudoknotted" ? "Pseudoknot candidate" : "Nested candidate") : "Pseudoknot search disabled") + '</strong><span>' + (allowPseudoknot ? "CPLfold ranked " + countLabel(candidateCount, "unique candidate") + ". Parentheses show phase-1 pairs; square brackets show the crossing phase-2 layer." : "CPLfold ranked " + countLabel(candidateCount, "phase-1 secondary-structure candidate") + ". No crossing Phase 2 layer was generated. Only Phase 1 secondary structures are ranked; beta is ignored.") + "</span></div>"
       : guided
       ? '<div class="structure-constraint-summary structure-evidence-summary"><strong>HYB-evidence-selected structure</strong><span>The selected ensemble member maximises the original nucleotide-summed COMRADES support score. Supported arcs are coloured by RNAcofold evidence; fitted hard-pair arcs remain thicker.</span></div>'
@@ -1522,13 +1557,13 @@
       '<div class="structure-result-grid">',
       '<div class="structure-result-main">' + renderStructureDiagramPanel(result, activeView, cplfold, allowPseudoknot, guided, manualConstrained, inspectorInstruction) + "</div>",
       '<div class="structure-result-side">',
-      '<section class="structure-result-summary" aria-label="' + (cplfold ? (allowPseudoknot ? "CPLfold pseudoknot candidate result" : "CPLfold pseudoknot-free result") : "ViennaRNA secondary-structure result") + '">',
-      '<div class="structure-metric"><span>' + (cplfold ? "Energy" : "MFE") + '</span><strong>' + formatEnergy(result.energy) + '</strong><small>kcal/mol' + (cplfold ? " · " + escape(result.parameters && result.parameters.energyModel || "DP09") : "") + '</small></div>',
+      '<section class="structure-result-summary" aria-label="' + (cplfold ? (allowPseudoknot ? "CPLfold pseudoknot candidate result" : "CPLfold pseudoknot-free result") : result.engine === "IRIS" ? "IRIS ensemble member result" : "ViennaRNA secondary-structure result") + '">',
+      '<div class="structure-metric"><span>' + (result.engine === "IRIS" || cplfold ? "Energy" : "MFE") + '</span><strong>' + formatEnergy(result.energy) + '</strong><small>kcal/mol' + (cplfold ? " · " + escape(result.parameters && result.parameters.energyModel || "DP09") : "") + '</small></div>',
       '<div class="structure-metric"><span>Base pairs</span><strong>' + format(pairs.length) + "</strong><small>" + (cplfold ? escape(result.topology || "nested") + " topology" : "non-crossing pairs") + "</small></div>",
       '<div class="structure-metric"><span>Unpaired bases</span><strong>' + format(result.unpaired) + "</strong><small>of " + format(result.sequence.length) + " nt</small></div>",
       cplfold
         ? '<div class="structure-metric"><span>Candidate</span><strong>#' + format((Number(result.selectedCandidate) || 0) + 1) + '</strong><small>' + escape(result.structureType === "pseudoknot" && allowPseudoknot ? "phase 1 + crossing phase 2" : (allowPseudoknot ? "phase 1 nested" : "phase 1 secondary")) + '</small></div>'
-        : '<div class="structure-metric"><span>Constraint mode</span><strong>' + (guided ? "HYB-guided" : (manualConstrained ? "Manual hard" : "None")) + "</strong><small>" + format(constraintCount) + " enforced pair" + (constraintCount === 1 ? "" : "s") + "</small></div>",
+        : '<div class="structure-metric"><span>Constraint mode</span><strong>' + (result.engine === "IRIS" ? "IRIS ensemble" : guided ? "HYB-guided" : (manualConstrained ? "Manual hard" : "None")) + "</strong><small>" + format(constraintCount) + " enforced pair" + (constraintCount === 1 ? "" : "s") + "</small></div>",
       guided ? '<div class="structure-metric"><span>COMRADES score</span><strong>' + format(result.comradesScore || 0) + '</strong><small>' + format(result.matchedEvidencePairs || 0) + " supported structure pairs</small></div>" : "",
       cplfold && Number(result.effectiveEnergy) !== Number(result.energy) ? '<div class="structure-metric"><span>Effective energy</span><strong>' + formatEnergy(result.effectiveEnergy) + '</strong><small>kcal/mol · beta-adjusted rank</small></div>' : "",
       '<div class="structure-metric"><span>Elapsed</span><strong>' + format(result.elapsedMs) + " ms</strong><small>" + (cplfold ? "runtime " + format(result.runtimeLoadMs) + " · fold " + format(result.foldElapsedMs) + " ms" : "local worker") + "</small></div>",
@@ -1583,7 +1618,7 @@
   // COMRADES ensemble and stem tables, and the method's scope.
   function renderStructureComputed(result, cplfold, guided) {
     const body = guided ? renderComradesResult(result) : (cplfold ? renderCplfoldStages(result) : "");
-    const scope = cplfold
+    const scope = result.engine === "IRIS" ? result.model + ". " + (result.warnings || []).join(" ") : cplfold
       ? "CPLfold ran in this browser without its compiled core; see About this method in the setup for the limits and the local run."
       : guided
       ? "This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring."
@@ -1734,12 +1769,12 @@
     const cplfold = result.engine === "CPLfold";
     const position = Number(selectedNucleotide);
     if (!Number.isInteger(position) || position < 1 || position > result.sequence.length) {
-      return '<section class="structure-nucleotide-inspector"><span class="drawer-kicker">Nucleotide inspector</span><p>' + (result.sequence.length <= 700 ? "Click a marker" : "Click or use the arrow keys along the sequence baseline") + ' to inspect a base and its ' + (cplfold ? "selected-candidate" : "MFE") + ' pairing partner.</p></section>';
+      return '<section class="structure-nucleotide-inspector"><span class="drawer-kicker">Nucleotide inspector</span><p>' + (result.sequence.length <= 700 ? "Click a marker" : "Click or use the arrow keys along the sequence baseline") + ' to inspect a base and its ' + (result.engine === "IRIS" || cplfold ? "selected-candidate" : "MFE") + ' pairing partner.</p></section>';
     }
     const pair = (result.pairs || []).find(function (entry) { return entry.left === position || entry.right === position; });
     const base = result.sequence.charAt(position - 1);
     if (!pair) {
-      return '<section class="structure-nucleotide-inspector"><span class="drawer-kicker">Nucleotide ' + format(position) + '</span><strong>' + escape(base) + '</strong><p>Unpaired in this ' + (cplfold ? "CPLfold candidate" : "ViennaRNA MFE structure") + '.</p></section>';
+      return '<section class="structure-nucleotide-inspector"><span class="drawer-kicker">Nucleotide ' + format(position) + '</span><strong>' + escape(base) + '</strong><p>Unpaired in this ' + (result.engine === "IRIS" ? "IRIS ensemble member" : cplfold ? "CPLfold candidate" : "ViennaRNA MFE structure") + '.</p></section>';
     }
     const partner = pair.left === position ? pair.right : pair.left;
     const partnerBase = pair.left === position ? pair.rightBase : pair.leftBase;
@@ -1748,7 +1783,7 @@
 
   function getStructureSequence(state) {
     const structure = state.structure;
-    const cplfoldGuided = structure.engine === "cplfold" && structure.cplfoldEvidence === "hyb-blocks";
+    const cplfoldGuided = structure.engine === "iris" || (structure.engine === "cplfold" && structure.cplfoldEvidence === "hyb-blocks");
     if (structure.status === "running" && structure.runningSequenceInfo) {
       return structure.runningSequenceInfo;
     }
@@ -2220,6 +2255,7 @@
   }
 
   function structureLengthNotice(length, allowLarge, engine, structure) {
+    if (engine === "iris") return "IRIS uses one reference region with HYB evidence (up to 300 nt).";
     if (engine === "cplfold") {
       if (cplfoldNativeAvailable()) {
         if (length > cplfoldNativeMaxLength()) {

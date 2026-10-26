@@ -975,11 +975,11 @@
 }
 
 .forna-structure-mount line.fornac-link[link_type="basepair"] {
-  stroke: #0060fe;
+  stroke: #3C5488;
 }
 
 .forna-structure-mount line.fornac-link[link_type="pseudoknot"] {
-  stroke: #9c05f8;
+  stroke: #E64B35;
   stroke-width: 2.5px;
   stroke-dasharray: 5 3;
 }
@@ -1239,3 +1239,44 @@
     display: none;
   }
 }
+
+/* Folded view: fornac owns wheel/touch zoom and background dragging. */
+.forna-view-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.forna-structure-mount {
+  cursor: grab;
+  touch-action: none;
+}
+.forna-structure-mount:active { cursor: grabbing; }
+[data-structure-diagram].is-expanded,
+[data-structure-diagram]:fullscreen {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  background: var(--surface);
+  overflow: hidden;
+}
+[data-structure-diagram].is-expanded .forna-structure-mount,
+[data-structure-diagram]:fullscreen .forna-structure-mount {
+  flex: 1;
+  min-height: 0;
+}
+[data-structure-diagram].is-expanded .forna-structure-mount svg,
+[data-structure-diagram]:fullscreen .forna-structure-mount svg {
+  min-height: 0;
+  height: 100%;
+}
+.forna-view-hint { margin: 8px 0 0; }
+
+[data-structure-diagram].is-expanded { position: fixed; inset: 0; z-index: 1000; margin: 0; border-radius: 0; }
+
+.iris-ensemble-scroll { overflow-x: auto; margin-top: 12px; }
+.iris-ensemble-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.iris-ensemble-table th, .iris-ensemble-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+.iris-ensemble-table th { font-size: 12px; color: var(--muted); }
+.iris-ensemble-table th:first-child, .iris-ensemble-table td:first-child { padding-left: 0; }
+.iris-ensemble-table td:last-child { white-space: nowrap; }

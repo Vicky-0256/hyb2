@@ -321,7 +321,7 @@
         escape((record.rnaOne || "") + " <-> " + (record.rnaTwo || "")),
         '<code>' + escape(range(record.rnaOneStart, record.rnaOneEnd)) + '</code>',
         '<code>' + escape(range(record.rnaTwoStart, record.rnaTwoEnd)) + '</code>',
-        escape(record.chimeraType || "Unknown"),
+        escape(window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(record.chimeraType) : record.chimeraType || "Unknown"),
         formatNumber(record.supportCount),
         record.dg == null ? "-" : formatNumber(record.dg)
       ];
@@ -413,7 +413,7 @@
           ["Selected cell", selectedCell ? range(selectedCell.x, selectedCell.x + number(matrix.binSize, 1) - 1) + " x " + range(selectedCell.y, selectedCell.y + number(matrix.binSize, 1) - 1) : "None"]
         ]) : '<div class="report-empty">' + escape(matrix && matrix.reason || "Generate a Contact Map from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + ' · Teal–violet sequential</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + ' · ' + (contact.palette === "monochrome" ? "White and black" : "Mint–navy sequential") + '</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
         matrix && matrix.resourceBudget ? '<p class="report-note" data-cites="S04 R12"><span class="report-cite">S04, R12</span> Adaptive browser budget: up to ' + formatNumber(matrix.maximumCells) + ' cells and ' + formatNumber(matrix.maximumBinContributions) + ' bin contributions for this device profile.</p>' : ""
       ].join("")
     );
@@ -450,7 +450,7 @@
           ["Total coverage", formatNumber(results.totalCoverage)]
         ]) : '<div class="report-empty">Generate Viewpoint coverage from the workspace to include its result here.</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#0060fe", viewpoint.selection && viewpoint.selection.start, results.rna || viewpoint.rna, viewpoint.measure === "support" ? "Cluster support" : "Records"), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#3C5488", viewpoint.selection && viewpoint.selection.start, results.rna || viewpoint.rna, viewpoint.measure === "support" ? "Cluster support" : "Records"), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
         results && results.binSizeAdjusted ? '<p class="report-note" data-cites="S05"><span class="report-cite">S05</span> The requested resolution was adjusted to ' + formatNumber(results.binSize) + ' nt to keep the browser profile within its maximum bin count.</p>' : ""
       ].join("")
     );
@@ -491,7 +491,7 @@
           ["Profile resolution", formatNumber(results.profileBinSize) + " nt"]
         ]) : '<div class="report-empty">Explore a region from the workspace to include its result here.</div>') + '</div>',
         "</div>",
-        results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#0060fe", null, region.rna, "Arm support"), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/region_profile.tsv") + '</div>' : "",
+        results && results.profile && results.profile.length ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable region profile</h3><span class="report-note-inline">' + escape(region.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.profile, maxSeriesValue(results.profile), "#3C5488", null, region.rna, "Arm support"), results.profile.length > MAX_VISUAL_BINS ? "Profile bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/region_profile.tsv") + '</div>' : "",
         '<div class="report-grid report-region-tables">',
         '<div class="report-subsection"><h3>Top partners</h3>' + (partnerRows.length ? table([long("Partner"), num("Records"), num("Support")], partnerRows) : '<div class="report-empty">No partner records are available for this region.</div>') + dataNote(context, "tables/region_partners.tsv") + '</div>',
         '<div class="report-subsection"><h3>Matching record sample</h3>' + (recordRows.length ? table(["Sequence ID", long("RNA 1"), num("Region 1"), long("RNA 2"), num("Region 2"), num("Support")], recordRows) : '<div class="report-empty">No matching records are available for this region.</div>') + '</div>',
@@ -1203,7 +1203,7 @@
     const clipped = number(displayMax) > cap;
     return {
       kind: "sequential",
-      colorAt: brandHeatColor,
+      colorAt: function (t) { return brandHeatColor(t, contact); },
       min: 0,
       max: top,
       ticks: axisTicks(0, top, 4),
@@ -1238,16 +1238,19 @@
       const height = Math.max(1, binSize / Math.max(1, yEnd - yStart) * plotHeight + 0.5);
       const ratio = cap ? Math.max(0, Math.min(1, visualCellValue(cell, contact) / cap)) : 0;
       const isSelected = selected && number(selected.x) === number(cell.x) && number(selected.y) === number(cell.y);
-      return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + brandHeatColor(ratio) + '"' + (isSelected ? ' stroke="#132c47" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + "; value " + formatNumber(cell.value)) + '</title></rect>';
+      return '<rect x="' + fixed(x) + '" y="' + fixed(y) + '" width="' + fixed(width) + '" height="' + fixed(height) + '" fill="' + brandHeatColor(ratio, contact) + '"' + (isSelected ? ' stroke="#222222" stroke-width="2"' : "") + '><title>' + escape(range(cell.x, number(cell.x) + binSize - 1) + " x " + range(cell.y, number(cell.y) + binSize - 1) + "; value " + formatNumber(cell.value)) + '</title></rect>';
     }).join("");
     const plot = { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight, titleX: -12 };
-    return [
+    const svg = [
       mapSvgOpen("report-heatmap-svg", "Printable contact map", "Contact map for " + (contact && contact.rnaX || "RNA X") + " and " + (contact && contact.rnaY || "RNA Y")),
-      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#f7fafb" stroke="' + FIGURE_LINE + '"></rect>',
+      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#ffffff" stroke="' + FIGURE_LINE + '"></rect>',
       rects,
       mapFrame(plot, { xStart: xStart, xEnd: xEnd, yStart: yStart, yEnd: yEnd }, [positionTitle(contact && contact.rnaX), positionTitle(contact && contact.rnaY)], contactLegend(cap, contact, matrix.max)),
       '</svg>'
     ].join("");
+    return contact && contact.palette === "monochrome"
+      ? svg.replaceAll(FIGURE_INK, "#222222").replaceAll(FIGURE_MUTED, "#666666").replaceAll(FIGURE_LINE, "#cccccc").replaceAll(FIGURE_GRID, "#eeeeee")
+      : svg;
   }
 
   function renderCoverageSvg(items, maximum, color, selectedStart, rna, measure) {
@@ -1265,7 +1268,7 @@
       const value = Math.max(0, number(bin.value));
       const height = maxValue ? value / maxValue * plot.height : 0;
       const selected = selectedStart != null && number(selectedStart) >= number(bin.start) && number(selectedStart) <= number(bin.end);
-      return '<rect x="' + fixed(plot.left + index * barWidth) + '" y="' + fixed(plot.top + plot.height - height) + '" width="' + fixed(Math.max(1, barWidth - 0.5)) + '" height="' + fixed(height) + '" fill="' + (selected ? "#9c05f8" : color) + '"><title>' + escape(range(bin.start, bin.end) + "; value " + formatNumber(value)) + '</title></rect>';
+      return '<rect x="' + fixed(plot.left + index * barWidth) + '" y="' + fixed(plot.top + plot.height - height) + '" width="' + fixed(Math.max(1, barWidth - 0.5)) + '" height="' + fixed(height) + '" fill="' + (selected ? "#E64B35" : color) + '"><title>' + escape(range(bin.start, bin.end) + "; value " + formatNumber(value)) + '</title></rect>';
     }).join("");
     return [
       '<svg class="report-svg report-coverage-svg" viewBox="0 0 760 212" role="img" aria-label="Printable coverage profile">',
@@ -1333,7 +1336,7 @@
     };
   }
 
-  // white at the smallest plotted count, forestgreen at the 95% quantile cap
+  // white at the smallest plotted count, teal (#00A087) at the 95% quantile cap
   function similarityLegend(result, comparison) {
     const cap = Math.max(1, number(result && result.similarityCap, 1));
     const floor = Math.min(cap, similarityFloorOf(result));
@@ -1510,22 +1513,30 @@
     return number(right.similarity) - number(left.similarity) || number(left.x) - number(right.x) || number(left.y) - number(right.y);
   }
 
-  // the Contact Map's "Teal–violet sequential" scale in its light (export)
-  // form from analysis-ui.js (K4); the older ramp when that is not loaded
-  function brandHeatColor(ratio) {
+  // the Contact Map's "Mint–navy sequential" scale in its light (export)
+  // form from analysis-ui.js (K4), with an identical standalone fallback
+  function brandHeatColor(ratio, contact) {
     const value = Math.max(0, Math.min(1, number(ratio)));
+    if (contact && contact.palette === "monochrome") {
+      const grey = Math.round(255 * (1 - Math.round(value * 1023) / 1023));
+      return "rgb(" + [grey, grey, grey].join(", ") + ")";
+    }
     if (typeof window !== "undefined" && window.Hyb2UI && typeof window.Hyb2UI.viridis === "function") {
       return window.Hyb2UI.viridis(value, "light");
     }
-    if (value < 0.5) {
-      return interpolateColor("#132c47", "#00a09d", value * 2);
-    }
-    return interpolateColor("#00a09d", "#6a4ff2", (value - 0.5) * 2);
+    const stops = [[145, 209, 194], [77, 187, 213], [0, 160, 135], [60, 84, 136]].map(srgbToLab);
+    const scaled = Math.round(value * 1023) / 1023 * (stops.length - 1);
+    const at = Math.min(stops.length - 2, Math.floor(scaled));
+    const t = scaled - at;
+    const rgb = labToSrgb([0, 1, 2].map(function (channel) {
+      return stops[at][channel] + (stops[at + 1][channel] - stops[at][channel]) * t;
+    }));
+    return "rgb(" + rgb.join(", ") + ")";
   }
 
   // similarity_heatmap.R: counts capped at the 95% quantile, then
-  // scale_fill_gradient(low = white, high = forestgreen) over the data range,
-  // so white is the smallest plotted count (not zero) and forestgreen the cap.
+  // the reference figure presents that range in white–teal (#00A087),
+  // so white is the smallest plotted count (not zero) and teal (#00A087) the cap.
   // A single-valued range maps to the midpoint, like scales::rescale().
   function conservedRatio(similarity, result) {
     const cap = Math.max(1, number(result && result.similarityCap, 1));
@@ -1550,7 +1561,7 @@
   // scales::pal_seq_gradient interpolates in CIELAB (farver, D65 white).
   function conservedColor(ratio) {
     const from = srgbToLab(hexRgb("#ffffff"));
-    const to = srgbToLab(hexRgb("#228b22"));
+    const to = srgbToLab(hexRgb("#00A087"));
     const t = Math.max(0, Math.min(1, number(ratio)));
     const rgb = labToSrgb([from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t]);
     return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
@@ -1593,8 +1604,8 @@
   function effectColor(value) {
     const bounded = Math.max(-1, Math.min(1, number(value)));
     return bounded >= 0
-      ? interpolateColor("#f5f8fa", "#6a4ff2", bounded)
-      : interpolateColor("#f5f8fa", "#00a09d", Math.abs(bounded));
+      ? interpolateColor("#f5f8fa", "#E64B35", bounded)
+      : interpolateColor("#f5f8fa", "#4DBBD5", Math.abs(bounded));
   }
 
   function interpolateColor(from, to, ratio) {

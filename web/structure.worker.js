@@ -21,6 +21,19 @@ self.onmessage = async function (event) {
   const message = event.data || {};
 
   try {
+    if (message.type === "iris-fold") {
+      if (!self.Hyb2Iris) importScripts(new URL("./iris-core.js", self.location.href).href);
+      self.Hyb2Iris.parameters(message.parameters);
+      const engine = await getEngine();
+      const started = Date.now();
+      const result = await self.Hyb2Iris.run(message, async function(sequence, constraints) {
+        await yieldToEventLoop();
+        return foldWithVienna(engine, sequence, 37, 3, constraints);
+      }, function(stage, percent) { postProgress(stage, percent); });
+      result.elapsedMs = Date.now() - started;
+      self.postMessage({type: "complete", result: result});
+      return;
+    }
     if (message.type === "comrades-fold") {
       await runComradesFold(message);
       return;

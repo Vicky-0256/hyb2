@@ -1,14 +1,17 @@
 :root {
   color-scheme: light;
-  /* The logo's colors (from the brand kit): cyan, electric
-     blue and purple. Cyan is too light for text or for fills under white
-     text on a light page, so light mode leads with the blue, dark mode
-     with the cyan under navy text. */
-  --cyan: #0be3ea;
-  --blue: #0060fe;
-  --purple: #9c05f8;
-  --navy: #132c47;
-  --brand-gradient: linear-gradient(90deg, var(--cyan), var(--blue) 50%, var(--purple));
+  /* Requested palette. Text uses contrast-safe shades where needed. */
+  --vermilion: #E64B35;
+  --cyan: #4DBBD5;
+  --teal: #00A087;
+  --navy: #3C5488;
+  --salmon: #F39B7F;
+  --slate: #8491B4;
+  --mint: #91D1C2;
+  --red: #DC0000;
+  --brown: #7E6148;
+  --taupe: #B09C85;
+  --brand-gradient: linear-gradient(90deg, var(--cyan), var(--teal) 50%, var(--vermilion));
   --canvas: #f3f7f8;
   --surface: #ffffff;
   --surface-subtle: #f7fafb;
@@ -17,20 +20,20 @@
   --muted-strong: #38516a;
   --line: #dce7ec;
   --line-strong: #c2d3db;
-  --primary: var(--blue);
-  --primary-hover: #0050d6;
-  /* Text on the blue button and blue used as text both clear WCAG 4.5:1. */
+  --primary: var(--navy);
+  --primary-hover: #30436d;
+  /* Button labels and text accents clear WCAG 4.5:1. */
   --primary-foreground: #ffffff;
-  --primary-ink: #0057e6;
+  --primary-ink: var(--navy);
   --primary-soft: #e8f0ff;
-  --accent: var(--purple);
-  --accent-hover: #7f04ca;
-  --accent-soft: #f4e8fe;
-  --success: #007b78;
+  --accent: #b33524;
+  --accent-hover: #942c1e;
+  --accent-soft: #fff0eb;
+  --success: #007561;
   --success-soft: #e3f7f6;
-  --warning: #9c5e12;
+  --warning: var(--brown);
   --warning-soft: #fff4e3;
-  --error: #b42318;
+  --error: var(--red);
   --error-soft: #fcecea;
   --shadow: 0 18px 46px rgb(19 44 71 / 7%);
   --shadow-tight: 0 2px 8px rgb(19 44 71 / 8%);
@@ -57,18 +60,18 @@
   --line: #2e4b66;
   --line-strong: #45647e;
   --primary: var(--cyan);
-  --primary-hover: #5ceef2;
+  --primary-hover: #91D1C2;
   --primary-foreground: #10263d;
   --primary-ink: var(--cyan);
   --primary-soft: #0d3a52;
-  --accent: #c97afd;
-  --accent-hover: #d897fe;
-  --accent-soft: #2a1c45;
-  --success: #43d1b0;
+  --accent: var(--salmon);
+  --accent-hover: #ffd0be;
+  --accent-soft: #442b29;
+  --success: var(--mint);
   --success-soft: #123f4b;
-  --warning: #f5b867;
+  --warning: #dac7b1;
   --warning-soft: #4a3518;
-  --error: #f29c96;
+  --error: #ffaaa0;
   --error-soft: #4a2524;
   --shadow: 0 18px 46px rgb(0 0 0 / 28%);
   --shadow-tight: 0 2px 8px rgb(0 0 0 / 28%);
@@ -1610,3 +1613,16 @@ a {
     margin-right: 0;
   }
 }
+
+.chimera-diagram { width: 100%; max-width: 310px; height: auto; display: block; margin: 6px 0; }
+.chimera-diagram text { fill: var(--muted-strong); font: 10px var(--font-sans); }
+.chimera-guide { margin: 16px 0; }
+.chimera-guide summary { cursor: pointer; color: var(--primary-ink); }
+.chimera-guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 12px; }
+.chimera-guide-grid > div { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.chimera-guide p { color: var(--muted); font-size: 12px; }
+.comparison-canvas { touch-action: none; cursor: grab; }
+.comparison-canvas:active { cursor: grabbing; }
+
+.deseq-canvas { touch-action: none; cursor: grab; }
+.deseq-canvas:active { cursor: grabbing; }

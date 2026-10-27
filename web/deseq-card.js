@@ -266,6 +266,7 @@
       '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="deseq-export-interactions">Export interactions TSV</button>' +
       '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="deseq-export-significant">Export significant cells TSV</button>' +
       '</div></details></div>');
+    if (window.Hyb2Batch) out.push(window.Hyb2Batch.renderMaps(comparison, stale));
     out.push('<p class="card-note">Before reporting an interaction, check that every replicate supports it: click the same position in the effect map below to see each dataset\'s count. A small padj with a low mean count can still come from one replicate.</p>');
     if (deseq.arcMapFed && !stale) {
       out.push('<p class="card-note">The arc map below now draws these HYB-derived merged interactions; the region structures (D, E) and folding energies (F, G) follow from it. Those panels use their own padj cutoff (0.01 by default), so they can show fewer interactions than this table.</p>');
@@ -977,6 +978,7 @@
     reportSection: reportSection,
     eligibility: eligibility,
     rnaPlan: rnaPlan,
+    inputKey: inputKey,
     collectArms: collectArms
   };
 })();

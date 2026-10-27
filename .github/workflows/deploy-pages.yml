@@ -102,6 +102,7 @@ jobs:
           node scripts/verify-region-panels.cjs
           # runs after the ViennaRNA build above, so RNAcofold is checked too
           node scripts/verify-folding-energy.cjs
+          node scripts/verify-batch-tools.cjs
           # the included example end to end (~15 s): Compare maps, differential
           # test, arc map, regions and RNAcofold energies vs the R pipeline
           node scripts/verify-example.cjs

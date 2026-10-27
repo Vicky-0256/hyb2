@@ -51,6 +51,7 @@
       renderTextControl("Minimum support", "minSupport", filters.minSupport, "1", "interaction-filter", "number"),
       "</div></details>",
       "</section>",
+      window.Hyb2Batch ? window.Hyb2Batch.renderEnergy(state) : "",
       filters.rna ? renderPartnerPanel(partners, filters, !interactions) : renderChooseRnaPanel(),
       renderInteractionTable(interactions, state),
       selectedRecord ? renderRecordDrawer(selectedRecord, state) : ""
@@ -1036,6 +1037,7 @@
         : '<button class="button" type="button" data-feature-action="predict-structure"' + (unavailable || capacityRunning ? " disabled" : "") + ">" + actionLabel + "</button>",
       capacityRunning ? '<p class="structure-run-reason" role="note">Wait for the capacity test above to finish.</p>' : "",
       !running && unavailableReason ? '<p class="structure-run-reason" role="note">Cannot run yet: ' + escape(unavailableReason) + "</p>" : "",
+      iris && sequenceInfo.irisDiagnostics && !running && unavailable ? renderIrisRecovery(sequenceInfo.irisDiagnostics) : "",
       needsMeasure && !running ? '<button class="button button-secondary structure-run-measure" type="button" data-feature-action="probe-cplfold-capacity">Measure this browser</button>' : "",
       !running && !unavailableReason && lengthNotice && !result ? '<p class="structure-run-note" role="note">' + escape(lengthNotice) + "</p>" : "",
       "</div>",
@@ -1258,6 +1260,12 @@
   }
 
   // part "method": the evidence; part "options": topology and the advanced numbers.
+  function renderIrisRecovery(diagnostics) {
+    const c = diagnostics.counts, region = diagnostics.suggestion;
+    return '<p class="card-note">HYB evidence: ' + format(c.total) + ' loaded; ' + format(c.sameRna) + ' with both arms on this RNA; ' + format(c.forward) + ' with forward coordinates; ' + format(c.contained) + ' fully inside this region.</p>' +
+      (region ? '<button class="button button-secondary" type="button" data-feature-action="use-iris-evidence-region">Use nearby HYB-supported region ' + escape(region.rna + ':' + region.start + '-' + region.end) + '</button><p class="card-note">Changes the interval only. Review it, then run IRIS. Having HYB evidence does not guarantee enough candidate structures for an ensemble.</p>' : '<p class="card-note">Choose another RNA or dataset containing a complete arm pair within 300 nt. Two separated regions are not supported by browser IRIS.</p>');
+  }
+
   function renderIrisSetup(structure) {
     return '<div class="control-grid">' +
       renderTextControl("Ensemble size K", "irisK", structure.irisK || "2", "2", "structure-control", "number", {min:1,max:3,step:1}) +
@@ -1669,7 +1677,7 @@
     // title and view switch share the first row; the explanation follows
     return '<section class="structure-diagram-panel"><div class="structure-diagram-heading"><div class="structure-diagram-title"><h3>' + titles[activeView] + '</h3></div><div class="structure-view-toolbar"><span class="structure-view-label">View</span><div class="structure-view-options" role="group" aria-label="RNA structure visualization view">' + options.map(function (option) {
       return '<button class="structure-view-option' + (option[0] === activeView ? " is-active" : '') + '" type="button" data-feature-action="set-structure-view" data-view-mode="' + option[0] + '" aria-pressed="' + (option[0] === activeView ? "true" : "false") + '">' + option[1] + "</button>";
-    }).join("") + '</div></div><p class="structure-diagram-copy"><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span> ' + structureViewCopy(activeView, cplfold, allowPseudoknot, guided, manualConstrained) + " " + inspectorInstruction + '</p></div><div class="structure-diagram" data-structure-diagram data-view-mode="' + activeView + '" aria-label="' + labels[activeView] + '"></div></section>';
+    }).join("") + (window.Hyb2StructureEditor ? '<button class="quiet-button" type="button" data-feature-action="toggle-structure-editor">Edit drawing / return to prediction</button>' : '') + '</div></div><p class="structure-diagram-copy"><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span> ' + structureViewCopy(activeView, cplfold, allowPseudoknot, guided, manualConstrained) + " " + inspectorInstruction + '</p></div><div class="structure-diagram" data-structure-diagram data-view-mode="' + activeView + '" aria-label="' + labels[activeView] + '"></div></section>';
   }
 
   // E9: five columns that fit the side column; the dot-bracket is the row's
@@ -1820,6 +1828,10 @@
             regions: regions,
             homodimerOnly: !cplfoldGuided && structure.evidenceLayout === "paired" && !!structure.homodimerOnly
           });
+          const irisDiagnostics = structure.engine === "iris" ? window.Hyb2Comrades.diagnoseIrisRegion(
+            evidence.records || [], regions[0],
+            referenceFasta.sequences.find(function (entry) { return entry.id === assembly.segments[0].referenceId; }).sequence.replace(/\s/g, "").length
+          ) : null;
           return {
             sequence: assembly.sequence,
             label: assembly.label,
@@ -1828,10 +1840,11 @@
             sourceEnd: assembly.segments[0].referenceEnd,
             sourceSegments: assembly.segments,
             assembly: assembly,
+            irisDiagnostics: irisDiagnostics,
             evidenceKind: cplfoldGuided ? "cplfold-hyb-blocks" : "vienna-rna-cofold",
             error: assembly.evidenceArms.length
               ? ""
-              : "No forward-strand HYB rows are fully contained in the selected region layout."
+              : (irisDiagnostics && irisDiagnostics.message || "No forward-strand HYB rows are fully contained in the selected region layout.")
           };
         } catch (error) {
           return { sequence: "", label: "", error: error && error.message ? error.message : (cplfoldGuided ? "The CPLfold HYB reference region is invalid." : "The HYB-guided reference layout is invalid.") };

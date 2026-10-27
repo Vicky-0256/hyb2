@@ -3120,6 +3120,7 @@
   // Stop the DESeq2 and RNAcofold workers a comparison may have started; a
   // reply from a stale run must not land in the next file's state.
   function stopAnalysisWorkers() {
+    if (window.Hyb2Batch) window.Hyb2Batch.stopAll();
     if (window.Hyb2DeseqCard && typeof window.Hyb2DeseqCard.stop === "function") {
       window.Hyb2DeseqCard.stop();
     }

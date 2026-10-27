@@ -23,7 +23,9 @@
 
     const viewMode = structureViewMode(state.structure.viewMode);
     state.structure.viewMode = viewMode;
-    if (viewMode === "folded") {
+    if (state.structure.editorEnabled && window.Hyb2StructureEditor) {
+      window.Hyb2StructureEditor.mount(target, state, api);
+    } else if (viewMode === "folded") {
       renderFornaDiagram(target, result);
     } else {
       target.replaceChildren(buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode));
@@ -247,6 +249,19 @@
   }
 
   function handleAction(action, state, api, element) {
+    if (action === "use-iris-evidence-region") {
+      if (!state.structure || state.structure.engine !== "iris" || state.structure.status === "running") return true;
+      // Recompute from the current data rather than trusting stale button coordinates.
+      const info = window.Hyb2Pages.getStructureSequence(state);
+      const region = info.irisDiagnostics && info.irisDiagnostics.suggestion;
+      if (!region) { api.showToast("No complete HYB arm pair fits the 300 nt IRIS browser limit for this RNA."); return true; }
+      if (window.Hyb2Structure) window.Hyb2Structure.reset(state, { clearConstraints: true });
+      Object.assign(state.structure, { start: String(region.start), end: String(region.end),
+        result: null, selectedNucleotide: null, status: "idle", message: "", progress: null });
+      api.render();
+      api.showToast("Region updated. Review the interval, then run IRIS.");
+      return true;
+    }
     if (action === "predict-structure") {
       if (!window.Hyb2Structure) {
         api.showToast("The local structure predictor is unavailable in this browser.");
@@ -278,7 +293,14 @@
       return true;
     }
 
+    if (action === "toggle-structure-editor") {
+      state.structure.editorEnabled = !state.structure.editorEnabled;
+      api.render();
+      return true;
+    }
+
     if (action === "set-structure-view") {
+      state.structure.editorEnabled = false;
       const viewMode = structureViewMode(element && element.dataset && element.dataset.viewMode);
       if (!state.structure) {
         return true;
@@ -1213,7 +1235,11 @@
     }
     const viewMode = structureViewMode(state.structure.viewMode);
     let svg = null;
-    if (viewMode !== "folded") {
+    if (state.structure.editorEnabled && window.Hyb2StructureEditor) {
+      const source = window.Hyb2StructureEditor.svg(window.Hyb2StructureEditor.session(state).data, null);
+      svg = new DOMParser().parseFromString(source, "image/svg+xml").documentElement;
+    }
+    if (!svg && viewMode !== "folded") {
       exportColors = LIGHT_EXPORT_COLORS;
       try {
         svg = buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode);

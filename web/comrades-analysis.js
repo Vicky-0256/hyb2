@@ -16,6 +16,36 @@
   const ORIGINAL_CONSTRAINT_LIMIT = 75;
   const CANONICAL_PAIRS = new Set(["AU", "UA", "CG", "GC", "GU", "UG"]);
 
+  // Diagnose selection failures without clipping arms or fabricating evidence.
+  function diagnoseIrisRegion(records, region, referenceLength) {
+    const counts = { total: records.length, sameRna: 0, forward: 0, contained: 0, tooWide: 0 };
+    let suggestion = null, bestDistance = Infinity;
+    records.forEach(function (record) {
+      if (record.rnaOne !== region.rna || record.rnaTwo !== region.rna) return;
+      counts.sameRna += 1;
+      if (!forwardRecord(record)) return;
+      counts.forward += 1;
+      const start = Math.min(record.rnaOneStart, record.rnaTwoStart);
+      const end = Math.max(record.rnaOneEnd, record.rnaTwoEnd);
+      if (start >= Number(region.start) && end <= Number(region.end)) counts.contained += 1;
+      if (end - start + 1 > 300) { counts.tooWide += 1; return; }
+      if (start < 1 || end > referenceLength) return;
+      const distance = Math.abs((start + end) / 2 - (Number(region.start) + Number(region.end)) / 2);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        // Retain local context around the nearest complete record, within 300 nt.
+        const windowStart = Math.max(1, Math.min(Math.floor((start + end - 299) / 2), referenceLength - 299));
+        suggestion = { rna: region.rna, start: windowStart, end: Math.min(referenceLength, windowStart + 299) };
+      }
+    });
+    const message = !counts.total ? "No HYB records are loaded for the active dataset selection." :
+      !counts.sameRna ? "No HYB rows have both arms on " + region.rna + ". IRIS requires one RNA region; cross-RNA interactions are not supported here." :
+      !counts.forward ? "All HYB rows on this RNA have reverse or invalid arm coordinates; this IRIS input adapter requires forward coordinates." :
+      !counts.contained ? "No complete HYB arm pair is inside " + region.rna + ":" + region.start + "-" + region.end + ". Both arms of each row must fit inside the same region (IRIS limit: 300 nt)." : "";
+    return { counts: counts, suggestion: suggestion, message: message +
+      (counts.forward && counts.tooWide === counts.forward ? " Every forward arm pair spans more than 300 nt, so none fits the browser limit." : "") };
+  }
+
   function prepareReferenceAssembly(records, fasta, options) {
     const settings = options || {};
     const regions = normaliseRegions(settings.regions || []);
@@ -472,6 +502,7 @@
     originalEvidenceLimit: ORIGINAL_EVIDENCE_LIMIT,
     originalConstraintLimit: ORIGINAL_CONSTRAINT_LIMIT,
     prepareReferenceAssembly: prepareReferenceAssembly,
+    diagnoseIrisRegion: diagnoseIrisRegion,
     mapCofoldPairs: mapCofoldPairs,
     aggregateEvidence: aggregateEvidence,
     selectFragmentEvidence: selectFragmentEvidence,

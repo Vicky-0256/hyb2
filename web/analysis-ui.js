@@ -2000,6 +2000,7 @@
   }
 
   function handleChange(state, element, api) {
+    if (window.Hyb2Batch && window.Hyb2Batch.handleInput(state, element)) { api.render(); return true; }
     const feature = element.dataset.feature;
     const key = element.dataset.key;
 
@@ -2173,6 +2174,7 @@
   }
 
   function handleInput(state, element) {
+    if (window.Hyb2Batch && window.Hyb2Batch.handleInput(state, element)) return true;
     const feature = element.dataset.feature;
     const key = element.dataset.key;
     if (!key) {
@@ -2275,6 +2277,7 @@
   }
 
   function handleAction(state, element, api) {
+    if (window.Hyb2Batch && window.Hyb2Batch.handleAction(state, element, api)) return true;
     const action = element.dataset.featureAction;
     if (!action) {
       return false;

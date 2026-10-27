@@ -30,11 +30,19 @@ an adaptation under GPL-3.0-or-later; it is not the upstream Python executable.
 ## Explicit browser scope and edge cases
 
 - One reference region, up to 300 nt and 2,000 HYB rows; no BAM parser.
+- Both forward-coordinate arms must be completely contained in that region.
+  When evidence is missing, the UI reports loaded, same-RNA, forward and
+  contained row counts. If a complete pair fits within 300 nt, it offers a
+  nearby interval on the selected RNA; applying it changes the interval only,
+  never clips arms or starts prediction automatically. Evidence availability
+  does not guarantee enough candidate structures for the requested ensemble.
 - C is 1–50 (default 20), K is 1–3 (default 2), with C >= K.
   Upstream only invokes the LASSO prefilter above 50 candidates, so that
   branch is outside this browser implementation's supported scope.
 - Support quantile defaults to 0.75; stem lengths default to 4, 5, 6, 7.
-- Up to 50 retained stems, 1,000 constrained folds and 20,000 ensembles.
+- Up to 1,000 constrained folds and 20,000 ensembles. There is no separate
+  stem-count cap: single stems and compatible stem pairs count toward the
+  fold limit, checked during enumeration before any folding starts.
   Requests exceeding limits fail clearly; evidence is never silently sampled.
 - Missing evidence, no stems, fewer candidates than K, and degenerate
   energy/support ranges fail explicitly. The upstream implementation can

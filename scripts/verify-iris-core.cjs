@@ -19,6 +19,24 @@ const candidates=[
 ];
 assert.deepEqual(iris.cluster(candidates,2).map(c=>c.energy),[-2,-3]);
 assert.throws(()=>iris.pick([candidates[0]],m,12,1),/zero range/);
+// More than 50 stems can be cheap: these share bases, so none can combine.
+const overlapping=Array.from({length:55},(_,i)=>({l:0,r:20+i,k:4}));
+const jobs=iris.collectConstraints(overlapping);
+assert.equal(jobs.length,55);
+assert.deepEqual(jobs,overlapping.map(s=>iris.constraintsFor([s])));
+assert.equal(iris.collectConstraints(Array.from({length:1000},(_,i)=>({l:0,r:20+i,k:4}))).length,1000);
+assert.throws(()=>iris.collectConstraints(Array.from({length:1001},(_,i)=>({l:0,r:20+i,k:4}))),/1,000 constrained folds/);
+// Compatible pairs, not just individual stems, count against the fold budget.
+const separate=Array.from({length:45},(_,i)=>({l:i*12,r:i*12+8,k:4}));
+assert.equal(iris.collectConstraints(separate.slice(0,44)).length,990);
+assert.throws(()=>iris.collectConstraints(separate),/1,000 constrained folds/);
+// Synthetic support reaches the former failure in collectStems itself.
+const denseSupport=Float64Array.from({length:10000},(_,i)=>(Math.floor(i/100)+i%100)%7===0?10:0.1);
+const denseStems=iris.collectStems('GC'.repeat(50),denseSupport,iris.parameters({}));
+assert.ok(denseStems.length>50);
+assert.throws(()=>iris.collectConstraints(denseStems),/1,000 constrained folds/);
+assert.equal(iris.parameters({}).fraction,0.75,'retain the upstream default');
+console.log('iris-fold-budget-without-stem-cap: ok');
 if(fs.existsSync('/tmp/hyb2-iris-reference-support.json')){
  const fixture=JSON.parse(fs.readFileSync('/tmp/hyb2-iris-test-result.json','utf8'));
  const expected=JSON.parse(fs.readFileSync('/tmp/hyb2-iris-reference-support.json','utf8'));

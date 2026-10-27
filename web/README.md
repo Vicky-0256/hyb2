@@ -245,3 +245,59 @@ is needed. See `../docs/iris-browser.md` for original-source attribution,
 browser limits, numerical parity tests and the differences from Python IRIS.
 The browser adaptation source is `iris-core.js`; the upstream licence is
 available at `vendor/iris/LICENSE`.
+
+## Batch exports and drawing editor
+
+- **Interactions → HYB binding energies** calculates column 3 for every valid
+  record in the current dataset, ignoring table filters. Mapped FASTA intervals
+  (1-based inclusive, columns 7–8 and 13–14) supply the two RNAcofold arms, as in
+  Lau's `hyb2fasta_bits_allRNAs.awk`; read-sequence slices are not substituted.
+  ViennaRNA runs at 37 °C, minimum loop 3, with CLI-style two-decimal energies.
+  Work runs in cancellable 64-record messages to a reused worker. Download the
+  updated HYB, or a ZIP with a per-row audit and parameters. Only column 3 is
+  replaced in the source File; comments, blank/invalid lines, extra columns and
+  line endings survive (gzip inputs produce an uncompressed HYB). Missing
+  references, reversed intervals, ambiguous bases and combined arms over 2,000
+  nt keep their previous column 3 and receive an audit reason. Runtime failures
+  and cancellation never publish a partial result. The loaded dataset is not
+  changed; load the downloaded HYB to analyse its updated energies.
+- **Compare → differential result → Export Top 10 local maps per direction**
+  ranks merged significant interactions by padj separately for up/down, keeping
+  the result order for ties. Fewer than ten interactions yields fewer maps.
+  Each interaction gets a ±150 nt window (minimum coordinate 1), one panel per
+  included replicate, 10-nt full-arm record counts and a shared white–black
+  scale. As in Lau's `contact_density_map_zoom.R`, the cap is a configurable pooled
+  quantile of all nonzero full-map replicate cells (Lau `-q`, 0–1, default
+  0.95; recorded in ZIP parameters and preview), with a ceiling for the
+  colour scale and CIELAB interpolation. Replicates retain their own RNA
+  coordinates, including any RNA substitution recorded by the test; this is
+  not sequence-aligned. ZIP includes one SVG and raw-count TSV per interaction,
+  an index, parameters and `preview.html` for offline viewing / printing to PDF.
+  Stale tests cannot be exported. Processing runs in a cancellable worker;
+  replicates over 50 million cell contributions or 1.5 million distinct cells fail explicitly.
+- **Structure result → Edit drawing / return to prediction** opens a browser
+  drawing editor with polygon/circular/linear layouts, selected-base/group
+  dragging and keyboard movement, pan/zoom, rotation/mirroring, base/pair/
+  backbone/background colours, base radius, pair width, numbering, title and
+  anchored draggable text annotations. Experimental scores now initialise base
+  colours using Lau's `plot_VARNA` RGB stops/interpolation (zero is white), with
+  an optional website palette. The legend distinguishes RNAcofold observations
+  from CPLfold bonus and IRIS support scores; these are original-prediction
+  values, never re-estimated after editing. Manual colours override the evidence
+  scale and can be reset with Restore evidence colours. Annotation tools include
+  region highlights, arrow/dot/triangle chemical-probe markers, selection from
+  a saved-annotation list for editing/removal, automatic 5′/3′, helix and hairpin
+  labels. Hairpin detection rejects crossing structures instead of guessing.
+  Group labels follow their bases when moved. All additions survive undo/redo,
+  JSON save/load and SVG/PNG export. It supports pair addition/removal,
+  50-step undo/redo, JSON save/load and edited CT/SVG exports. Existing SVG/PNG
+  image exports include the full edited drawing, without selection highlights.
+  CT/DBN prediction exports still represent the prediction: edited pairs do not
+  change its energy or evidence scores. Use **Export edited CT** for edited
+  topology. A different predicted sequence/structure starts a new drawing.
+  This is a browser editor, not the Java VARNA application: native VARNA
+  sessions, all VARNA layout algorithms and arbitrary VARNA annotation types
+  are not imported or reproduced. Drawing JSON is the editable session format.
+
+`node scripts/verify-batch-tools.cjs` covers reference extraction, column-only
+rewriting, map ranks/counts/caps/archives, drawing validation, CT and undo/redo.

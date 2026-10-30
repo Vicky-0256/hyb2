@@ -29,6 +29,9 @@
     // the first replicate of condition A on the Compare page
     primary: { file: "ZAFR_REP1_1in10.hyb.gz", label: "ZAFR_REP1", condition: "A", records: 22416 },
     reference: { file: "ZAFR.fasta" },
+    // the other lineage's genome, added to the same reference so RNA
+    // Structure can fold ZASI regions with the ZASI replicates as evidence
+    extraReferences: [{ file: "ZILM.fasta" }],
     replicates: [
       { file: "ZAFR_REP2_1in10.hyb.gz", label: "ZAFR_REP2", condition: "A", records: 34939 },
       { file: "ZILM_REP2_1in10.hyb.gz", label: "ZILM_REP2", condition: "B", records: 57636 },
@@ -56,6 +59,7 @@
   // every file the example references
   example.files = function () {
     const names = [example.primary.file, example.reference.file, example.arcMap.a, example.arcMap.b, example.arcMap.annotation]
+      .concat((example.extraReferences || []).map(function (item) { return item.file; }))
       .concat(example.replicates.map(function (item) { return item.file; }))
       .concat(example.downloads.map(function (item) { return item.file; }));
     return names.filter(function (name, index) { return names.indexOf(name) === index; });

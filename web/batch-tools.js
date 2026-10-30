@@ -155,7 +155,7 @@
 
   function stop(kind) {
     const job = jobs.get(kind);
-    if (job) { job.cancelled = true; if (job.worker) job.worker.terminate(); if (job.reject) job.reject(new Error('Cancelled')); jobs.delete(kind); if(job.status) {job.status.running=false;job.status.message='Cancelled; no partial output exported.';} }
+    if (job) { job.cancelled = true; if (job.worker) job.worker.terminate(); (job.workers || []).forEach(worker => worker.terminate()); if (job.reject) job.reject(new Error('Cancelled')); (job.rejects ? Array.from(job.rejects) : []).forEach(reject => reject(new Error('Cancelled'))); jobs.delete(kind); if(job.status) {job.status.running=false;job.status.message='Cancelled; no partial output exported.';} }
   }
   function stopAll() { Array.from(jobs.keys()).forEach(stop); }
   function callWorker(job, name, message, onProgress) {
@@ -169,48 +169,142 @@
     });
   }
   function progress(status, message, api) {status.message=message;api.render();}
+  function quietProgress(status, message, api) {
+    status.message=message;
+    const line=typeof document!=='undefined'&&document.querySelector?document.querySelector('[data-batch-energy-status]'):null;
+    if(line)line.textContent=message;else api.render();
+  }
+  // The energy tools work on the primary file only, so a header scope change
+  // (state.summary) must not reset or abort them.
+  const primaryOf = state => state.primarySummary || state.summary;
   function energyState(state) {
-    if (!state.hybEnergy || state.hybEnergy.summary !== state.summary || state.hybEnergy.fasta !== state.fasta || state.hybEnergy.mapping !== JSON.stringify(state.fasta && state.fasta.mapping)) {
-      stop('energy');state.hybEnergy={summary:state.summary,fasta:state.fasta,mapping:JSON.stringify(state.fasta && state.fasta.mapping),running:false,message:'',result:null};
+    if (!state.hybEnergy || state.hybEnergy.summary !== primaryOf(state) || state.hybEnergy.fasta !== state.fasta || state.hybEnergy.mapping !== JSON.stringify(state.fasta && state.fasta.mapping)) {
+      stop('energy');state.hybEnergy={summary:primaryOf(state),fasta:state.fasta,mapping:JSON.stringify(state.fasta && state.fasta.mapping),running:false,message:'',result:null};
     }
     return state.hybEnergy;
   }
+  // Engines for column 3. RNAcofold is what the HYB2 pipeline (sam2hyb) runs;
+  // CPLcofold runs as pure Python here (about 100x slower per record), so it
+  // gets fewer, memory-heavier workers and is best run on filtered records.
+  const ENERGY_ENGINES = {
+    rnacofold: {label:'RNAcofold (ViennaRNA), as the HYB2 pipeline',name:'ViennaRNA RNAcofold',worker:'folding-energy.worker.js',module:false,chunk:64,maxWorkers:8,maxLength:2000,msPerRecord:15,
+      message:pairs=>({type:'cofold-batch',pairs,temperature:37,minimumLoop:3})},
+    cplcofold: {label:'CPLcofold, nested (Turner energies)',name:'CPLcofold, pseudoknots off',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:1700,
+      message:pairs=>({type:'cplfold-energy-batch',pairs,allowPseudoknot:false,energyModel:'DP09'})},
+    'cplcofold-pk': {label:'CPLcofold with pseudoknots (experimental score)',name:'CPLcofold, pseudoknots allowed (DP09 ranking score)',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:2300,
+      message:pairs=>({type:'cplfold-energy-batch',pairs,allowPseudoknot:true,energyModel:'DP09'})}
+  };
+  function energySettings(state) {
+    if (!state.hybEnergySettings) state.hybEnergySettings={engine:'rnacofold',records:'all'};
+    return state.hybEnergySettings;
+  }
+  function energyEngine(state) { return ENERGY_ENGINES[energySettings(state).engine] || ENERGY_ENGINES.rnacofold; }
+  function energyWorkerCount(engine, chunks) {
+    const cores=Number(root.navigator && root.navigator.hardwareConcurrency)||2;
+    return Math.max(1,Math.min(engine.maxWorkers,cores-1,chunks));
+  }
+  function duration(ms) {
+    const seconds=Math.max(1,Math.round(ms/1000));
+    return seconds<90?seconds+' s':seconds<5400?Math.round(seconds/60)+' min':(seconds/3600).toFixed(1)+' h';
+  }
   function renderEnergy(state) {
-    const s=energyState(state);
-    return '<section class="data-card"><div class="card-title-row"><div><h2>HYB binding energies</h2><p class="card-note">Recalculate column 3 for all records in the current dataset, using mapped FASTA arms and RNAcofold at 37 °C. Table filters do not apply. Download a new HYB; the loaded dataset stays unchanged.</p></div></div><div class="inline-actions"><button class="button" data-feature-action="batch-energy-run"'+(s.running||!state.fasta?' disabled':'')+'>Calculate all binding energies</button>'+(s.running?'<button class="quiet-button" data-feature-action="batch-energy-cancel">Cancel</button>':'')+(s.result?'<button class="button button-secondary" data-feature-action="batch-energy-hyb">Download updated HYB</button><button class="quiet-button" data-feature-action="batch-energy-zip">Download HYB + audit ZIP</button>':'')+'</div><p class="card-note" role="status">'+esc(s.message||(!state.fasta?'Load and map a reference FASTA first.':'Unmapped, antisense, ambiguous or over-limit rows retain their original energy and are listed in the audit.'))+'</p></section>';
+    const s=energyState(state), settings=energySettings(state), engine=energyEngine(state);
+    const file=state.file&&state.file.name?' ('+esc(state.file.name)+')':'';
+    const records=Number(primaryOf(state)&&primaryOf(state).validRecords)||0;
+    const workers=energyWorkerCount(engine,Infinity);
+    const estimate=records?' All '+records.toLocaleString('en-US')+' records: about '+duration(records*engine.msPerRecord/workers)+' with '+workers+(workers===1?' worker':' parallel workers')+' here.':'';
+    const select=(key,label,value,options)=>'<label class="control-field"><span>'+label+'</span><select data-feature="batch-energy-setting" data-key="'+key+'"'+(s.running?' disabled':'')+'>'+options.map(o=>'<option value="'+o[0]+'"'+(o[0]===value?' selected':'')+'>'+esc(o[1])+'</option>').join('')+'</select></label>';
+    return '<section class="data-card"><div class="card-title-row"><div><h2>HYB binding energies</h2><p class="card-note">Recalculate column 3 (ΔG of the two arms, kcal/mol, 37 °C) for records of the primary file'+file+', from the mapped FASTA arms. Download a new HYB; the loaded dataset stays unchanged.</p></div></div>'+
+      '<div class="control-grid">'+select('engine','Engine',settings.engine,Object.keys(ENERGY_ENGINES).map(key=>[key,ENERGY_ENGINES[key].label]))+
+      select('records','Records',settings.records,[['all','All records of the primary file'],['filtered','Records matching the Interactions filters']])+'</div>'+
+      '<p class="card-note">'+esc((settings.engine==='rnacofold'?'The HYB2 pipeline\'s method.':settings.engine==='cplcofold'?'Same Turner energy model as RNAcofold, beam search; runs as pure Python in this browser, so it is slow.':'Adds CPLfold\'s pseudoknot phase: its DP09 pseudoknot term is an experimental ranking score, not a validated free energy.')+estimate+(settings.engine!=='rnacofold'?' For many records, filter first or use HYB2 Desktop / the cplcofold command.':''))+'</p>'+
+      '<div class="inline-actions"><button class="button" data-feature-action="batch-energy-run"'+(s.running||!state.fasta?' disabled':'')+'>Calculate binding energies</button>'+(s.running?'<button class="quiet-button" data-feature-action="batch-energy-cancel">Cancel</button>':'')+(s.result?'<button class="button button-secondary" data-feature-action="batch-energy-hyb">Download updated HYB</button><button class="quiet-button" data-feature-action="batch-energy-zip">Download HYB + audit ZIP</button>':'')+'</div><p class="card-note" role="status" data-batch-energy-status>'+esc(s.message||(!state.fasta?'Load and map a reference FASTA first.':'Unmapped, antisense, ambiguous, over-limit or unselected rows retain their original energy and are listed in the audit.'))+'</p></section>';
+  }
+  // Fold the prepared pairs on a pool of workers, chunk by chunk; energies
+  // come back in input order whatever worker finishes first.
+  async function foldPool(job, engine, prepared, onChunk) {
+    const starts=[];for(let start=0;start<prepared.length;start+=engine.chunk)starts.push(start);
+    const energies=new Array(prepared.length);let next=0,version='',failed=null;
+    const size=energyWorkerCount(engine,starts.length);
+    const url=(root.HYB2_ASSET_BASE || './')+engine.worker+'?build='+encodeURIComponent(root.HYB2_BUILD && root.HYB2_BUILD.commit || 'local');
+    job.workers=[];job.rejects=new Set();
+    const slot=async()=>{
+      const worker=engine.module?new Worker(url,{type:'module'}):new Worker(url);job.workers.push(worker);
+      while(next<starts.length&&!job.cancelled&&!failed){
+        const start=starts[next++], slice=prepared.slice(start,start+engine.chunk);
+        let reply;
+        try {
+          reply=await new Promise((resolve,reject)=>{job.rejects.add(reject);
+            worker.onerror=event=>{job.rejects.delete(reject);reject(new Error(event.message||'Energy worker failed'));};
+            worker.onmessage=event=>{const data=event.data;if(data.type==='progress')return;job.rejects.delete(reject);if(data.type==='error')reject(new Error(data.message));else resolve(data);};
+            worker.postMessage(engine.message(slice.map(item=>item.arms)));});
+        } catch (error) { failed=failed||error; throw error; }
+        if(!reply.energies||reply.energies.length!==slice.length){failed=new Error('Incomplete energy worker result');throw failed;}
+        slice.forEach((item,i)=>{energies[start+i]=reply.energies[i];});version=reply.version||version;onChunk(slice.length,size);
+      }
+    };
+    try { await Promise.all(Array.from({length:size},slot)); }
+    finally { job.workers.forEach(worker=>worker.terminate()); job.workers=[]; }
+    return {energies,version,workers:size};
   }
   async function runEnergy(state,api) {
-    stop('energy');const status=energyState(state), job={status,keepAlive:true};jobs.set('energy',job);status.running=true;status.result=null;
-    const file=state.file, fasta=state.fasta;
+    stop('energy');const status=energyState(state), job={status};jobs.set('energy',job);status.running=true;status.result=null;
+    const file=state.file, fasta=state.fasta, settings=Object.assign({},energySettings(state)), engine=energyEngine(state);
+    const unchanged=()=>primaryOf(state)!==status.summary || state.fasta!==fasta || JSON.stringify(fasta.mapping)!==status.mapping;
     try {
       if(!fasta)throw new Error('Load a mapped reference FASTA first.');
-      progress(status,'Reading all HYB records…',api);
-      const data=await api.queryHybrids({offset:0,limit:null,order:'file'});
+      progress(status,'Reading the HYB records…',api);
+      const primary=(state.datasets||[]).find(d=>d.primary);
+      const query={offset:0,limit:null,order:'file'};
+      if(primary)query.datasetIds=[primary.id];
+      const all=await api.queryHybrids(query);
+      const chosen=settings.records==='filtered'?await api.queryHybrids(Object.assign({},query,{filters:Object.assign({},state.filters||{})})):all;
       if(job.cancelled)return;
-      const records=data.rows||[];if(!records.length)throw new Error('No HYB records available.');
+      // Only the primary file is rewritten: rows of other merged datasets
+      // carry their own line numbers.
+      const onPrimary=r=>!r.datasetId||!primary||r.datasetId===primary.id;
+      const records=(all.rows||[]).filter(onPrimary);
+      if(!records.length)throw new Error('No HYB records available.');
+      const selected=new Set((chosen.rows||[]).filter(onPrimary).map(r=>r.lineNumber+'\u0000'+r.id));
       let source;
       if(file && typeof file.text==='function') {
         source=/\.gz$/i.test(file.name)?await new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text():await file.text();
       } else {source=records.map(r=>r.raw).join('\n')+'\n';}
-      const updates=new Map(), audit=['line\tid\tstatus\told_energy\tnew_energy\tnote'];let done=0,skipped=0,version='';
-      for(let start=0;start<records.length;start+=64){
-        if(job.cancelled)return;
-        if(state.summary!==status.summary || state.fasta!==fasta || JSON.stringify(fasta.mapping)!==status.mapping)throw new Error('Dataset or reference mapping changed; calculate again.');
-        const chunk=records.slice(start,start+64), prepared=[];
-        chunk.forEach((record,i)=>{const line=file?record.lineNumber:start+i+1;const old=record.raw.split('\t')[2];try{prepared.push({record,line,old,arms:prepareEnergy(record,fasta)});}catch(error){skipped++;audit.push([line,record.id,'unchanged',old,old,error.message].map(tsv).join('\t'));}});
-        if(prepared.length){const reply=await callWorker(job,'folding-energy.worker.js',{type:'cofold-batch',pairs:prepared.map(p=>p.arms),temperature:37,minimumLoop:3});version=reply.version;
-          if(!reply.energies||reply.energies.length!==prepared.length)throw new Error('Incomplete energy worker result');
-          prepared.forEach((item,i)=>{const energy=reply.energies[i];if(!Number.isFinite(energy))throw new Error('Invalid energy returned');updates.set(item.line,{raw:item.record.raw,energy});audit.push([item.line,item.record.id,'updated',item.old,energy.toFixed(2),''].map(tsv).join('\t'));done++;});}
-        progress(status,(Math.min(start+64,records.length))+' / '+records.length+' records checked; '+done+' energies calculated; '+skipped+' unchanged.',api);await pause();
-      }
       if(job.cancelled)return;
-      if(state.summary!==status.summary || state.fasta!==fasta || JSON.stringify(fasta.mapping)!==status.mapping)throw new Error('Dataset or reference mapping changed; calculate again.');
+      const audit=['line\tid\tstatus\told_energy\tnew_energy\tnote'], notes=new Array(records.length), prepared=[];
+      records.forEach((record,i)=>{
+        const line=file?record.lineNumber:i+1, old=record.raw.split('\t')[2];
+        if(!selected.has(record.lineNumber+'\u0000'+record.id)){notes[i]={line,record,old,note:'not selected by the Interactions filters'};return;}
+        try {
+          const arms=prepareEnergy(record,fasta);
+          if(arms[0].length+arms[1].length>engine.maxLength)throw new Error('Combined arms exceed the '+engine.maxLength.toLocaleString('en-US')+' nt '+(engine.module?'CPLcofold':'batch')+' limit');
+          notes[i]={line,record,old,item:prepared.length};prepared.push({arms});
+        } catch(error){notes[i]={line,record,old,note:error.message};}
+      });
+      const started=Date.now();let done=0,lastRender=0;
+      // progress rewrites only the status line: a full page render per update
+      // would hold the main thread and leave finished workers waiting
+      const report=workers=>{const left=prepared.length-done, rate=done/(Date.now()-started);
+        quietProgress(status,done.toLocaleString('en-US')+' / '+prepared.length.toLocaleString('en-US')+' energies calculated with '+engine.name+' on '+workers+(workers===1?' worker':' workers')+(done&&left?'; about '+duration(left/rate)+' left.':'.'),api);};
+      progress(status,'Starting '+engine.name+' for '+prepared.length.toLocaleString('en-US')+' records…',api);
+      const folded=prepared.length?await foldPool(job,engine,prepared,(count,workers)=>{done+=count;if(Date.now()-lastRender>400||done===prepared.length){lastRender=Date.now();if(unchanged())job.stale=true;report(workers);}}):{energies:[],version:'',workers:0};
+      if(job.cancelled)return;
+      if(job.stale||unchanged())throw new Error('Dataset or reference mapping changed; calculate again.');
+      const updates=new Map();let updated=0,skipped=0;
+      notes.forEach(entry=>{
+        if(entry.item===undefined){skipped++;audit.push([entry.line,entry.record.id,'unchanged',entry.old,entry.old,entry.note].map(tsv).join('\t'));return;}
+        const energy=folded.energies[entry.item];
+        if(!Number.isFinite(energy))throw new Error('Invalid energy returned');
+        updates.set(entry.line,{raw:entry.record.raw,energy});updated++;
+        audit.push([entry.line,entry.record.id,'updated',entry.old,energy.toFixed(2),''].map(tsv).join('\t'));
+      });
       const hyb=rewriteEnergy(source,updates);
-      status.result={hyb,audit:audit.join('\n')+'\n',metadata:{engine:'ViennaRNA RNAcofold',version,temperature:37,minimumLoop:3,updated:done,unchanged:skipped,validRecords:records.length,sourceFile:file&&file.name,reference:fasta.fileName,mapping:fasta.mapping,maximumCombinedArmLength:2000,completedAt:new Date().toISOString()}};
-      status.message=done+' energies updated; '+skipped+' valid rows unchanged. Comments and unparsed source lines are preserved. Download the audit for details.';
+      status.result={hyb,engine:settings.engine,audit:audit.join('\n')+'\n',metadata:{engine:engine.name,engineVersion:folded.version,temperature:37,minimumLoop:settings.engine==='rnacofold'?3:null,energyModel:settings.engine==='rnacofold'?'Turner 2004 (ViennaRNA default)':'CPLfold DP09',pseudoknots:settings.engine==='cplcofold-pk',records:settings.records==='filtered'?'interaction-filters':'all',filters:settings.records==='filtered'?Object.assign({},state.filters||{}):null,updated,unchanged:skipped,validRecords:records.length,workers:folded.workers,elapsedSeconds:Math.round((Date.now()-started)/100)/10,sourceFile:file&&file.name,reference:fasta.fileName,mapping:fasta.mapping,maximumCombinedArmLength:engine.maxLength,completedAt:new Date().toISOString()}};
+      status.message=updated.toLocaleString('en-US')+' energies updated with '+engine.name+' in '+duration(Date.now()-started)+'; '+skipped.toLocaleString('en-US')+' valid rows unchanged. Comments and unparsed source lines are preserved. Download the audit for details.';
     }catch(error){if(!job.cancelled)status.message='Energy calculation failed: '+error.message;}
-    finally{if(job.worker)job.worker.terminate();if(jobs.get('energy')===job){jobs.delete('energy');status.running=false;api.render();}}
+    finally{if(jobs.get('energy')===job){jobs.delete('energy');status.running=false;api.render();}}
   }
+
 
   async function runMaps(state,api) {
     stop('maps');const comparison=state.comparison,result=comparison.deseq.result;
@@ -234,6 +328,13 @@
     return '<label class="control-field"><span>Local map contrast quantile (Lau -q)</span><input type="number" min="0" max="1" step="0.01" data-feature="batch-map-quantile" data-key="quantile" value="'+esc(comparison.topMapQuantile == null ? '0.95' : comparison.topMapQuantile)+'"'+(s.running?' disabled':'')+'><small>0–1; default 0.95. Lower values increase contrast. One shared cap across all replicates.</small></label><div class="inline-actions"><button class="button button-secondary" data-feature-action="batch-maps-run"'+(stale||s.running?' disabled':'')+'>Export Top 10 local maps per direction · ZIP</button>'+(s.running?'<button class="quiet-button" data-feature-action="batch-maps-cancel">Cancel export</button>':'')+'</div><p class="card-note" role="status">'+esc(s.message||'Each map shows all included replicates separately, ±150 nt around the interaction, in white and black with the selected common count cap. ZIP contains SVGs, count tables and a printable preview.')+'</p>';
   }
   function handleInput(state, element) {
+    if (element.dataset.feature === 'batch-energy-setting') {
+      const settings = energySettings(state);
+      if (state.hybEnergy && state.hybEnergy.running) return true;
+      if (element.dataset.key === 'engine' && ENERGY_ENGINES[element.value]) settings.engine = element.value;
+      if (element.dataset.key === 'records' && (element.value === 'all' || element.value === 'filtered')) settings.records = element.value;
+      return true;
+    }
     if (element.dataset.feature !== 'batch-map-quantile' || !state.comparison) return false;
     if (state.comparison.topMaps && state.comparison.topMaps.running) return true;
     state.comparison.topMapQuantile = element.value;
@@ -248,8 +349,9 @@
     else if(action.endsWith('-cancel')){stop(action.includes('energy')?'energy':'maps');api.render();}
     else if(action==='batch-energy-hyb'||action==='batch-energy-zip'){
       const result=energyState(state).result;if(!result){api.showToast('Calculate energies first.');return true;}
-      if(action.endsWith('-hyb'))api.download('hyb2-energies.hyb',result.hyb,'text/plain');
-      else api.downloadBlob('hyb2-energies.zip',root.Hyb2Results.zip([{path:'energies.hyb',text:result.hyb},{path:'audit.tsv',text:result.audit},{path:'parameters.json',text:JSON.stringify(result.metadata,null,2)}],'hyb2-energies'));
+      const base='hyb2-energies-'+(result.engine||'rnacofold');
+      if(action.endsWith('-hyb'))api.download(base+'.hyb',result.hyb,'text/plain');
+      else api.downloadBlob(base+'.zip',root.Hyb2Results.zip([{path:'energies.hyb',text:result.hyb},{path:'audit.tsv',text:result.audit},{path:'parameters.json',text:JSON.stringify(result.metadata,null,2)}],base));
     }
     return true;
   }

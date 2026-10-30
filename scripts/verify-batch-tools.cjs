@@ -42,7 +42,7 @@ console.log('Batch energy, Top 10 map counts/ranking/exports, drawing validation
 
 // Exercise the async UI lifecycle: a reused worker, full-source export,
 // cancellation during input reading, and stale comparison rejection.
-(async()=>{
+const lifecycleTest=(async()=>{
  let workers=0, renders=0, downloaded=null;
  class TestWorker {
   constructor(){workers++;this.dead=false;}
@@ -97,7 +97,10 @@ const evidenceDrawing=E.initial(supported);
 assert.equal(evidenceDrawing.styles[1].fill,'#4747ff');
 assert.equal(evidenceDrawing.styles[4].fill,'#ffffff');
 assert.equal(evidenceDrawing.evidence.kind,'RNAcofold supporting observations');
-assert.equal(E.evidenceFor({...supported,engine:'CPLfold'}).kind,'CPLfold bonus score');
+// IRIS and CPLfold are coloured by COMRADES support scored from their RNAcofold evidence.
+const scoredByComrades=E.evidenceFor({...prediction,engine:'CPLfold',nucleotideSupport:[9,9,9,9,9,9,9,9,9],comradesEvidence:{pairs:[{one:2,two:8,count:3},{one:8,two:2,count:1},{one:4,two:6,count:7}]}});
+assert.deepEqual(Array.from(scoredByComrades.values),[0,4,0,0,0,0,0,4,0]);assert.equal(scoredByComrades.maximum,4);
+assert.equal(E.evidenceFor({...prediction,engine:'CPLfold',nucleotideSupport:[1,1,1,1,1,1,1,1,1]}),null);
 assert.equal(E.evidenceFor({...prediction,nucleotideSupport:[]}),null);
 const notes=E.autoAnnotations(evidenceDrawing,'helices');assert.equal(notes.length,1);assert.equal(notes[0].bases.length,6);
 const loops=E.autoAnnotations(evidenceDrawing,'hairpins');assert.equal(loops.length,1);assert.equal(loops[0].bases.join(','),'4,5,6');
@@ -111,3 +114,45 @@ assert.throws(()=>E.validate(invalidDrawing,prediction.sequence,prediction.dotBr
 const anchorBefore=E.anchor(evidenceDrawing,notes[0]);notes[0].bases.forEach(i=>{evidenceDrawing.points[i-1].x+=10;});
 assert.ok(Math.abs(E.anchor(evidenceDrawing,notes[0]).x-anchorBefore.x-10)<1e-9);
 console.log('Configurable quantiles, Lau evidence colours, region/probe validation and automatic annotations passed.');
+
+// Energy engines and the worker pool: RNAcofold on several workers, records
+// filtered by the Interactions filters, CPLcofold's batch message, and a
+// header scope change (state.summary) that leaves the card alone.
+lifecycleTest.then(async()=>{
+ const posted=[];let created=0;
+ class PoolWorker {
+  constructor(url,options){created++;this.url=url;this.options=options;this.dead=false;}
+  terminate(){this.dead=true;}
+  postMessage(message){posted.push({url:this.url,module:!!(this.options&&this.options.type==='module'),message});setTimeout(()=>{if(!this.dead)this.onmessage({data:{type:'result',version:'test',energies:new Float64Array(message.pairs.length).fill(message.type==='cplfold-energy-batch'?-7.5:-2.25)}});},1);}
+ }
+ context.Worker=PoolWorker;context.window.navigator={hardwareConcurrency:4};
+ const list=Array.from({length:300},(_,i)=>({...record,id:'p'+i,lineNumber:i+1,raw:record.raw.replace(/^r\t/,'p'+i+'\t')}));
+ const source=list.map(r=>r.raw).join('\n')+'\n';
+ const primarySummary={validRecords:300};
+ const state={summary:primarySummary,primarySummary,fasta,file:{name:'pool.hyb',text:async()=>source},filters:{search:'p1'}};
+ const queries=[];
+ const api={queryHybrids:async query=>{queries.push(query);return {rows:query.filters?list.filter(r=>r.id.startsWith('p1')):list};},render(){B.renderEnergy(state);},download(){},downloadBlob(){},showToast(){}};
+ const wait=async predicate=>{for(let i=0;i<300;i++){if(predicate())return;await new Promise(r=>setTimeout(r,10));}throw new Error('pool test timeout');};
+ // RNAcofold, all records: 300 / 64 = 5 chunks on min(8, 4 - 1, 5) = 3 workers
+ B.handleAction(state,{dataset:{featureAction:'batch-energy-run'}},api);
+ await wait(()=>!state.hybEnergy.running);
+ assert.equal(state.hybEnergy.result.metadata.updated,300);assert.equal(created,3,'three parallel RNAcofold workers');
+ assert.ok(posted.every(p=>p.message.type==='cofold-batch'&&!p.module));
+ assert.equal((state.hybEnergy.result.hyb.match(/\t-2.25\t/g)||[]).length,300,'every energy lands on its own line');
+ // a header scope change keeps the result
+ state.summary={validRecords:999};assert.ok(B.renderEnergy(state).includes('Download updated HYB'),'scope change keeps the energies');
+ // CPLcofold on the filtered records only
+ B.handleInput(state,{dataset:{feature:'batch-energy-setting',key:'engine'},value:'cplcofold'});
+ B.handleInput(state,{dataset:{feature:'batch-energy-setting',key:'records'},value:'filtered'});
+ created=0;posted.length=0;
+ B.handleAction(state,{dataset:{featureAction:'batch-energy-run'}},api);
+ await wait(()=>!state.hybEnergy.running);
+ const filtered=list.filter(r=>r.id.startsWith('p1')).length;
+ assert.equal(state.hybEnergy.result.metadata.updated,filtered);assert.equal(state.hybEnergy.result.metadata.unchanged,300-filtered);
+ assert.equal(state.hybEnergy.result.metadata.engine,'CPLcofold, pseudoknots off');
+ assert.ok(posted.every(p=>p.message.type==='cplfold-energy-batch'&&p.module&&p.message.allowPseudoknot===false&&/cplfold\.worker\.mjs/.test(p.url)));
+ assert.ok(created>=1&&created<=3);assert.ok(queries.some(q=>q.filters&&q.filters.search==='p1'));
+ assert.match(state.hybEnergy.result.audit,/not selected by the Interactions filters/);
+ assert.equal((state.hybEnergy.result.hyb.match(/\t-7.50\t/g)||[]).length,filtered);
+ console.log('Energy engines (RNAcofold pool, CPLcofold), filtered records and scope independence passed.');
+}).catch(error=>{console.error(error);process.exit(1);});

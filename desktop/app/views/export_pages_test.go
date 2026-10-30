@@ -397,6 +397,13 @@ func TestStructureExportsMatchWeb(t *testing.T) {
 	if got := stCTText("G", recs); got != "17 ENERGY = 0.00 G:1-17\n1\tG\t0\t2\t9\t1\n2\tG\t1\t3\t8\t2\n3\tG\t2\t4\t7\t3\n4\tA\t3\t5\t0\t4\n5\tA\t4\t6\t0\t5\n6\tA\t5\t7\t0\t6\n7\tC\t6\t8\t3\t7\n8\tC\t7\t9\t2\t8\n9\tC\t8\t10\t1\t9\n10\tA\t9\t11\t15\t10\n11\tG\t10\t12\t14\t11\n12\tC\t11\t13\t0\t12\n13\tA\t12\t14\t0\t13\n14\tA\t13\t15\t11\t14\n15\tG\t14\t16\t10\t15\n16\tC\t15\t17\t0\t16\n17\tU\t16\t0\t0\t17\n" {
 		t.Errorf("CPLfold ct %q", got)
 	}
+	if got := stBPSEQText("G", recs); got != "# G:1-17; energy 0.00\n1 G 9\n2 G 8\n3 G 7\n4 A 0\n5 A 0\n6 A 0\n7 C 3\n8 C 2\n9 C 1\n10 A 15\n11 G 14\n12 C 0\n13 A 0\n14 A 11\n15 G 10\n16 C 0\n17 U 0\n" {
+		t.Errorf("CPLfold bpseq %q", got)
+	}
+	if got := stVARNAText("G", recs); !strings.Contains(got, "  -sequenceDBN 'GGGAAACCCAGCAAGCU' \\\n  -structureDBN '(((...)))[[..]]..' \\\n") ||
+		!strings.Contains(got, "-title 'G:1-17'") || !strings.HasPrefix(got, "#!/bin/sh\n") {
+		t.Errorf("CPLfold varna %q", got)
+	}
 	// plain ViennaRNA MFE: no HYB evidence, even when a stored bonus is 0
 	energy := -1.005
 	vienna := structureRecord{WindowStart: 1, WindowEnd: 17, Sequence: seq, DBN: "(((...)))........", Energy: &energy,

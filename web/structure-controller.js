@@ -21,10 +21,11 @@
   }
 
   // Desktop only: its bundled runtime reports a separate sequence ceiling.
-  function nativeCplfoldActive() {
+  function nativeCplfoldActive(structure) {
     const desktop = window.Hyb2Desktop;
     return !!(desktop && desktop.enabled && desktop.capabilities &&
       desktop.capabilities.cplfoldNative === true &&
+      (!(structure && structure.cplfoldMode === "cofold") || desktop.capabilities.cplcofoldNative === true) &&
       typeof desktop.predictCplfold === "function");
   }
 
@@ -67,6 +68,7 @@
 
   function cplfoldProfileKey(structure) {
     return [
+      structure && structure.cplfoldMode === "cofold" ? "cofold" : "single",
       profileValue(structure.cplfoldEvidence, "hyb-blocks"),
       profileValue(structure.cplfoldBeam, "20"),
       profileValue(structure.cplfoldMaxPhase1, "3"),
@@ -113,7 +115,7 @@
   }
 
   function cplfoldLengthIssue(length, structure) {
-    if (nativeCplfoldActive()) {
+    if (nativeCplfoldActive(structure)) {
       const nativeMax = nativeCplfoldMaxLength();
       return length > nativeMax
         ? "Desktop CPLfold is limited to " + nativeMax + " nt by the bundled runtime. Select a shorter region."
@@ -153,6 +155,9 @@
     };
     if (["DP03", "DP09", "CC06", "CC09", "RE"].indexOf(parameters.energyModel) === -1) {
       throw new Error("Choose a supported CPLfold energy model.");
+    }
+    if (structure.cplfoldMode === "cofold" && ["DP03", "DP09"].indexOf(parameters.energyModel) === -1) {
+      throw new Error("CPLcofold supports DP03 and DP09 only.");
     }
     return parameters;
   }
@@ -249,9 +254,10 @@
     // Desktop uses the bundled Python/NumPy/Numba runtime for CPLfold. Keep
     // ViennaRNA and browser CPLfold on the worker path, and fall back to it
     // when a packaged runtime reports itself unavailable.
-    if (cplfold && nativeCplfoldActive()) {
+    if (cplfold && nativeCplfoldActive(structure)) {
       const nativeRequest = {
         sequence: sequenceInfo.sequence,
+        ...(sequenceInfo.cutpoint ? { cutpoint: sequenceInfo.cutpoint } : {}),
         evidence_mode: cplfoldGuided ? "hyb-blocks" : "none",
         evidence_arms: cplfoldGuided ? sequenceInfo.assembly.evidenceArms : [],
         parameters: Object.assign({}, cplfoldParameters)
@@ -272,32 +278,46 @@
           return;
         }
         if (nativeResult.ok === false) throw new Error(nativeResult.error || "Native CPLfold failed.");
-        structure.runningSequenceInfo = null;
-        structure.operation = null;
-        structure.status = "complete";
-        structure.progress = 100;
-        structure.message = "CPLfold completed with the desktop bundled NumPy/Numba runtime.";
-        structure.result = Object.assign({}, nativeResult, {
-          completedAt: new Date().toISOString(),
-          sequence: sequenceInfo.sequence,
-          label: sequenceInfo.label,
-          source: structure.source,
-          sourceRna: structure.source === "reference" ? sequenceInfo.sourceRna : "",
-          sourceStart: structure.source === "reference" ? sequenceInfo.sourceStart : null,
-          sourceEnd: structure.source === "reference" ? sequenceInfo.sourceEnd : null,
-          sourceSegments: sequenceInfo.sourceSegments || null,
+        if (sequenceInfo.cutpoint && (nativeResult.engine !== "CPLcofold" || nativeResult.cutpoint !== sequenceInfo.cutpoint || nativeResult.sequence !== sequenceInfo.sequence)) {
+          throw new Error("The native runtime did not preserve the two RNA strands. Update the runtime or use browser CPLcofold.");
+        }
+        const publish = function (evidence) {
+          if (!state.structure || state.structure.runId !== runId) return;
+          if (evidence) nativeResult.comradesEvidence = evidence;
+          structure.runningSequenceInfo = null;
+          structure.operation = null;
+          structure.status = "complete";
+          structure.progress = 100;
+          structure.message = nativeResult.engine + " completed with the desktop bundled NumPy/Numba runtime.";
+          structure.result = Object.assign({}, nativeResult, {
+            completedAt: new Date().toISOString(),
+            sequence: sequenceInfo.sequence,
+            label: sequenceInfo.label,
+            source: structure.source,
+            sourceRna: structure.source === "reference" ? sequenceInfo.sourceRna : "",
+            sourceStart: structure.source === "reference" ? sequenceInfo.sourceStart : null,
+            sourceEnd: structure.source === "reference" ? sequenceInfo.sourceEnd : null,
+            sourceSegments: sequenceInfo.sourceSegments || null,
+            evidenceDatasets: sequenceInfo.evidenceDatasets || [],
+            evidenceDatasetIds: sequenceInfo.evidenceDatasetIds || [],
             rawHybArms: snapshotRawHybArms(sequenceInfo),
-          assembly: sequenceInfo.assembly ? {
-            segments: sequenceInfo.assembly.segments,
-            linker: sequenceInfo.assembly.linker,
-            inputRecordCount: sequenceInfo.assembly.inputRecordCount,
-            eligibleRecordCount: sequenceInfo.assembly.eligibleRecordCount,
-            skipped: sequenceInfo.assembly.skipped,
-            homodimerOnly: sequenceInfo.assembly.homodimerOnly
-          } : null
-        });
-        api.render();
-        api.showToast(structure.message);
+            assembly: sequenceInfo.assembly ? {
+              segments: sequenceInfo.assembly.segments,
+              linker: sequenceInfo.assembly.linker,
+              inputRecordCount: sequenceInfo.assembly.inputRecordCount,
+              eligibleRecordCount: sequenceInfo.assembly.eligibleRecordCount,
+              skipped: sequenceInfo.assembly.skipped,
+              homodimerOnly: sequenceInfo.assembly.homodimerOnly
+            } : null
+          });
+          api.render();
+          api.showToast(structure.message);
+        };
+        if (cplfoldGuided && !sequenceInfo.cutpoint) {
+          scoreComradesSupport(state, structure, runId, sequenceInfo, api, publish);
+        } else {
+          publish(null);
+        }
       }).catch(function (error) {
         if (!state.structure || state.structure.runId !== runId) return;
         structure.runningSequenceInfo = null;
@@ -331,13 +351,27 @@
 
         if (message.type === "complete") {
           finishWorker(state, worker);
+          if (sequenceInfo.cutpoint && (!message.result || message.result.engine !== "CPLcofold" || message.result.cutpoint !== sequenceInfo.cutpoint || message.result.sequence !== sequenceInfo.sequence)) {
+            structure.runningSequenceInfo = null;
+            structure.operation = null;
+            rejectInput(structure, api, new Error("The worker did not preserve the two RNA strands. Reload the current CPLcofold runtime."));
+            return;
+          }
+          if (cplfold && cplfoldGuided && !sequenceInfo.cutpoint && message.result && !message.comradesScored) {
+            scoreComradesSupport(state, structure, runId, sequenceInfo, api, function (evidence) {
+              if (evidence) message.result.comradesEvidence = evidence;
+              message.comradesScored = true;
+              worker.onmessage({ data: message });
+            });
+            return;
+          }
           structure.runningSequenceInfo = null;
           structure.operation = null;
           const constraintCount = Math.max(0, Number(message.result && message.result.constraintCount) || 0);
           structure.status = "complete";
           structure.progress = 100;
-          structure.message = message.result && message.result.engine === "IRIS" ? "IRIS weighted ensemble predicted locally." : message.result && message.result.engine === "CPLfold"
-            ? "CPLfold completed locally with " + ((message.result.candidates || []).length) + " ranked candidate" + ((message.result.candidates || []).length === 1 ? "." : "s.")
+          structure.message = message.result && message.result.engine === "IRIS" ? "IRIS weighted ensemble predicted locally." : message.result && ["CPLfold", "CPLcofold"].indexOf(message.result.engine) !== -1
+            ? message.result.engine + " completed locally with " + ((message.result.candidates || []).length) + " ranked candidate" + ((message.result.candidates || []).length === 1 ? "." : "s.")
             : message.result && message.result.constraintMode === "hyb-guided"
             ? "COMRADES(ViennaRNA) completed locally from " + (message.result.evidence ? message.result.evidence.inputRecords : 0) + " eligible HYB record" + ((message.result.evidence && message.result.evidence.inputRecords === 1) ? "." : "s.")
             : (constraintCount
@@ -352,6 +386,8 @@
             sourceStart: structure.source === "reference" ? sequenceInfo.sourceStart : null,
             sourceEnd: structure.source === "reference" ? sequenceInfo.sourceEnd : null,
             sourceSegments: sequenceInfo.sourceSegments || null,
+            evidenceDatasets: sequenceInfo.evidenceDatasets || [],
+            evidenceDatasetIds: sequenceInfo.evidenceDatasetIds || [],
             rawHybArms: snapshotRawHybArms(sequenceInfo),
             assembly: sequenceInfo.assembly ? {
               segments: sequenceInfo.assembly.segments,
@@ -405,6 +441,7 @@
       } : cplfold ? {
         type: "cplfold",
         sequence: sequenceInfo.sequence,
+        ...(sequenceInfo.cutpoint ? { cutpoint: sequenceInfo.cutpoint } : {}),
         evidenceMode: cplfoldGuided ? "hyb-blocks" : "none",
         evidenceArms: cplfoldGuided ? sequenceInfo.assembly.evidenceArms : [],
         beamSize: cplfoldParameters.beamSize,
@@ -451,7 +488,7 @@
       api.showToast("Select CPLfold before measuring browser capacity.");
       return false;
     }
-    if (nativeCplfoldActive()) {
+    if (nativeCplfoldActive(structure)) {
       structure.message = "The desktop bundled NumPy/CPLfold runtime does not require a browser capacity test.";
       api.render();
       api.showToast(structure.message);
@@ -556,6 +593,7 @@
       worker.postMessage({
         type: "cplfold-capacity",
         probeLength: CPLFOLD_CAPACITY_PROBE_LENGTH,
+        cofold: structure.cplfoldMode === "cofold",
         evidenceMode: structure.cplfoldEvidence === "hyb-blocks" ? "hyb-blocks" : "none",
         beamSize: parameters.beamSize,
         maxPhase1: parameters.maxPhase1,
@@ -674,6 +712,7 @@
       worker.postMessage({
         type: "cplfold-bonus-matrix",
         sequence: prepared.sequence,
+        ...(prepared.cutpoint ? { cutpoint: prepared.cutpoint } : {}),
         evidenceMode: "hyb-blocks",
         evidenceArms: prepared.assembly.evidenceArms
       });
@@ -911,6 +950,40 @@
         capacity.message = "Browser capacity test cancelled. The " + (capacity.baselineLength || CPLFOLD_BASELINE_SEQUENCE_LENGTH) + " nt baseline remains available.";
       }
     }
+  }
+
+  // CPLfold results are coloured by COMRADES support: RNAcofold evidence from
+  // the same HYB records, scored per base against the selected candidate.
+  // A failure leaves the result uncoloured rather than losing the prediction.
+  function scoreComradesSupport(state, structure, runId, sequenceInfo, api, done) {
+    let worker;
+    try {
+      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "structure.worker.js");
+    } catch (error) {
+      done(null);
+      return;
+    }
+    state.structureWorker = worker;
+    worker.onmessage = function (event) {
+      const message = event.data || {};
+      if (!state.structure || state.structure.runId !== runId) {
+        finishWorker(state, worker);
+        return;
+      }
+      if (message.type === "progress") {
+        structure.progress = Math.max(structure.progress || 0, Math.min(99, Number(message.percent) || 0));
+        structure.message = "Scoring COMRADES HYB support · " + (message.stage || "RNAcofold evidence");
+        api.render();
+        return;
+      }
+      finishWorker(state, worker);
+      done(message.type === "complete" ? message.evidence : null);
+    };
+    worker.onerror = function () {
+      finishWorker(state, worker);
+      done(null);
+    };
+    worker.postMessage({ type: "comrades-evidence", evidenceArms: sequenceInfo.assembly.evidenceArms, sequence: sequenceInfo.sequence });
   }
 
   function finishWorker(state, worker) {

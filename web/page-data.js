@@ -93,6 +93,8 @@
     state.structure.rna = state.region.rna;
     state.structure.start = state.region.start;
     state.structure.end = state.region.end;
+    // a default region (capped to browser CPLfold's capacity until edited)
+    state.structure.defaultRegionEnd = state.region.end;
     const secondRna = pair ? pair.rnaTwo : state.region.rna;
     const secondExtent = hyb2Data.getRnaExtent(null, secondRna, summary);
     state.structure.secondRna = secondRna;
@@ -112,10 +114,40 @@
   }
 
   // Mapped reference length for an RNA in the current selection, or null.
+  // The primary dataset's reference, else any loaded dataset's (a comparison
+  // replicate on another genome).
   function referenceLength(state, rna) {
-    const reference = state.reference;
-    const mapped = reference && reference.mapped && reference.mapped[rna];
-    return mapped && Number.isSafeInteger(mapped.length) ? mapped.length : null;
+    const references = [state.reference].concat((state.datasets || []).map(function (dataset) { return dataset.reference; }));
+    for (let index = 0; index < references.length; index += 1) {
+      const mapped = references[index] && references[index].mapped && references[index].mapped[rna];
+      if (mapped && Number.isSafeInteger(mapped.length)) {
+        return mapped.length;
+      }
+    }
+    return null;
+  }
+
+  // The datasets whose HYB rows are RNA Structure evidence. "all": the
+  // selection, then every other loaded dataset with rows on the folded RNAs
+  // (so each lineage of a comparison brings all its replicates); "scope":
+  // the analysis scope only; a dataset id ("primary" included): that dataset.
+  function structureEvidenceIds(state, sel, rnas) {
+    const selected = (sel && sel.datasetIds || []).slice();
+    const choice = state.structure && state.structure.evidenceDatasets || "all";
+    if (choice === "scope") {
+      return selected;
+    }
+    if (choice !== "all" && (state.datasets || []).some(function (dataset) { return dataset.id === choice; })) {
+      return [choice];
+    }
+    const onRnas = function (id) {
+      const dataset = (state.datasets || []).find(function (item) { return item.id === id; });
+      return !!dataset && (dataset.rnaNames || []).some(function (rna) { return rnas.indexOf(rna) !== -1; });
+    };
+    // Selected datasets first, then the others; only those with rows on the folded RNAs.
+    const ids = selected.concat((state.datasets || []).map(function (dataset) { return dataset.id; })
+      .filter(function (id) { return selected.indexOf(id) === -1; })).filter(onRnas);
+    return ids.length ? ids : selected;
   }
 
   function hasReference(state, rna) {
@@ -148,7 +180,7 @@
           rnaNames: dataset.rnaNames || []
         },
         condition: prior ? prior.condition : (dataset.condition || (dataset.primary ? "A" : "B")),
-        label: prior ? prior.label : (dataset.primary ? "Primary" : dataset.label)
+        label: prior ? prior.label : (dataset.label || data().datasetLabel(dataset.fileName, dataset.primary ? "Primary" : ""))
       };
     });
     const changed = stableKey(next.map(function (dataset) { return [dataset.id, dataset.condition, dataset.label, dataset.summary.validRecords]; })) !==
@@ -410,15 +442,17 @@
 
     function contactTasks() {
       const contact = state.contact;
+      // One dataset per map, whatever the header merges.
+      const chosen = contact ? data().contactDataset(state) : null;
       if (!contact || !contact.rnaX || !contact.rnaY) {
         return [];
       }
-      const sel = selection();
+      const sel = chosen && chosen.id ? { datasetIds: [chosen.id] } : selection();
       const query = pick(contact, ["rnaX", "rnaY", "binSize", "measure", "orientation", "chimeraType", "homodimer"]);
       // Providers double the bin size until the map fits (a 10.8 kb genome
       // at 10 nt would otherwise be ~1.2 M cells).
       query.maxCells = CONTACT_MAX_CELLS;
-      const queryKey = baseKey() + "|" + stableKey(query);
+      const queryKey = baseKey() + "|" + stableKey(sel.datasetIds) + "|" + stableKey(query);
       const display = pick(contact, ["colourCap", "customCap", "scale"]);
       return [{
         name: "contact",
@@ -758,15 +792,23 @@
           return rna && list.indexOf(rna) === index;
         });
         const lengths = rnas.map(function (rna) { return referenceLength(state, rna); });
+        // The RNAs folded: region 2's only in a two-region layout.
+        const paired = (cplfold && structure.cplfoldMode === "cofold") || (!cplfold && structure.engine !== "iris" && structure.evidenceLayout === "paired");
+        const foldedRnas = paired ? rnas : [structure.rna];
+        const evidenceIds = guided ? structureEvidenceIds(state, sel, foldedRnas) : [];
+        const evidenceLabels = evidenceIds.map(function (id) {
+          const dataset = (state.datasets || []).find(function (item) { return item.id === id; });
+          return dataset ? dataset.label || dataset.fileName || id : id;
+        });
         tasks.push({
           name: "structureEvidence",
-          key: baseKey() + "|" + stableKey(rnas) + "|" + stableKey(lengths) + "|" + stableKey(state.reference && state.reference.mapping) + "|" + guided,
+          key: baseKey() + "|" + stableKey(rnas) + "|" + stableKey(lengths) + "|" + stableKey(state.reference && state.reference.mapping) + "|" + guided + "|" + stableKey(evidenceIds),
           present: function () { return !!view().structureEvidence; },
           fetch: function () {
             const sequences = Promise.all(rnas.map(function (rna) {
               return hasReference(state, rna) ? provider.getSequence(sel, { rna: rna }) : Promise.resolve(null);
             }));
-            const arms = guided ? provider.getArms(sel, {}) : Promise.resolve(null);
+            const arms = guided ? provider.getArms(evidenceIds.length ? { datasetIds: evidenceIds } : sel, {}) : Promise.resolve(null);
             return Promise.all([sequences, arms]).then(function (results) {
               const fasta = { sequences: [], mapping: {} };
               results[0].forEach(function (sequence, index) {
@@ -782,7 +824,9 @@
                 fasta: state.reference ? fasta : null,
                 records: results[1] ? providerApi().armsToRecords(results[1]) : null,
                 guided: guided,
-                rnas: rnas
+                rnas: rnas,
+                datasets: evidenceLabels,
+                datasetIds: evidenceIds
               };
             });
           },
@@ -964,11 +1008,16 @@
       });
     }
 
+    // query.datasetIds reads those datasets instead of the header's scope
+    // (the Contact Map's one dataset).
     function queryHybrids(query) {
       if (!hasSelection()) {
         return Promise.resolve({ total: 0, offset: 0, rows: [] });
       }
-      return provider.queryHybrids(selection(), query || {});
+      const options = Object.assign({}, query || {});
+      const ids = Array.isArray(options.datasetIds) && options.datasetIds.length ? options.datasetIds : null;
+      delete options.datasetIds;
+      return provider.queryHybrids(ids ? { datasetIds: ids } : selection(), options);
     }
 
     function findRecord(index) {

@@ -76,11 +76,38 @@ try {
   const noEvidence0 = await run({evidenceMode:"none",evidenceArms:[],alpha:0});
   const noEvidence1 = await run({evidenceMode:"none",evidenceArms:[],alpha:0.5});
   assert.deepEqual(noEvidence0.candidates,noEvidence1.candidates,"alpha needs an evidence matrix");
+  const dual = {
+    sequence: "GGGG&CCCC", maxPhase1: 12, energyDelta: 12,
+    evidenceArms: [{oneStart:1, oneEnd:4, twoStart:5, twoEnd:8}]
+  };
+  const dualA0 = await run({...dual, alpha:0});
+  const dualA1 = await run({...dual, alpha:0.5});
+  assert.equal(dualA1.engine, "CPLcofold");
+  assert.ok(dualA1.candidates.some(after => {
+    const before = dualA0.candidates.find(candidate => candidate.dotBracket === after.dotBracket);
+    return before && Math.abs(before.score - after.score) > 1e-6;
+  }), "cofold alpha must affect actual reads-guided search scores");
+  const dualB1 = await run({...dual, alpha:0.5, beta:0.5});
+  const dualPk = dualB1.candidates.filter(candidate => candidate.type === "pseudoknot");
+  assert.ok(dualPk.length > 0, "two-strand fixture must exercise real pseudoknot candidates");
+  for (const candidate of dualPk) {
+    const before = dualA1.candidates.find(item => item.dotBracket === candidate.dotBracket);
+    assert.ok(before);
+    assert.ok(Math.abs(before.energy - candidate.energy) < 1e-8);
+    assert.ok(Math.abs(candidate.effectiveEnergy - candidate.energy - 0.5 * candidate.phase1Energy) < 1e-8);
+    assert.equal(candidate.energyMetadata.energy_kind, "heuristic");
+    assert.equal(candidate.dotBracketWithBreak[4], "&");
+  }
+  const dualOff0 = await run({...dual, alpha:0.5, allowPseudoknot:false, beta:0});
+  const dualOff1 = await run({...dual, alpha:0.5, allowPseudoknot:false, beta:0.5});
+  assert.deepEqual(dualOff0.candidates, dualOff1.candidates, "cofold beta is ignored without pseudoknots");
   console.log(JSON.stringify({
     archiveSha256:a1.runtimeManifest.archiveSha256,
     alphaScoreChanges:common.map(([a,b])=>({before:a.score,after:b.score})),
     betaEnergyChecks:pk.map(c=>({energy:c.energy,phase1Energy:c.phase1Energy,effectiveEnergy:c.effectiveEnergy})),
-    betaDisabledControl:"passed",alphaNoEvidenceControl:"passed"
+    betaDisabledControl:"passed",alphaNoEvidenceControl:"passed",
+    cofoldAlphaScoreControl:"passed", cofoldPseudoknotCandidates:dualPk.length,
+    cofoldBetaEnergyControl:"passed", cofoldBetaDisabledControl:"passed"
   },null,2));
   console.log("cplfold-parameter-effects: ok");
 } finally {

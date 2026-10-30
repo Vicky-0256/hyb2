@@ -85,7 +85,9 @@ class CPLfoldEnergyIntegrationTests(unittest.TestCase):
             self.cplfold, "HotKnotsEnergy", return_value=_SelectiveEvaluator()
         ), mock.patch.object(
             self.cplfold, "phase1_fold", return_value=[("(...)", -1.0)]
-        ), mock.patch.object(self.cplfold, "phase2_fold") as phase2:
+        ), mock.patch.object(self.cplfold, "phase2_fold") as phase2, mock.patch.object(
+            self.cplfold, "turner_energy", return_value=-1.5
+        ) as turner:
             results = self.cplfold.two_phase_pseudoknot_fold(
                 "G" * 5,
                 verbose=False,
@@ -102,6 +104,9 @@ class CPLfoldEnergyIntegrationTests(unittest.TestCase):
         )
         self.assertEqual([item["type"] for item in results], ["phase1"])
         self.assertEqual(results[0]["structure"], "(...)")
+        # Pseudoknot-free candidates are ranked with Turner 2004, not the pseudoknot model.
+        turner.assert_called_once_with("GGGGG", "(...)")
+        self.assertEqual(results[0]["energy"], -1.5)
 
 
 if __name__ == "__main__":

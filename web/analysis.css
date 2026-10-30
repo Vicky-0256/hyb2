@@ -1392,3 +1392,19 @@
   margin-top: 12px;
 }
 
+
+/* Merged datasets: the row's dataset under its sequence ID. */
+.cell-with-dataset {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.cell-with-dataset .row-dataset {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -157,7 +157,7 @@
     const totalRows = number(summary.validRecords) + number(summary.invalidRecords);
     const validRatio = totalRows ? number(summary.validRecords) / totalRows : 0;
     const fasta = context.state.reference;
-    const mapped = fasta ? mappedFastaCount(fasta) : 0;
+    const mapped = fasta ? mappedFastaCount(fasta, summary.rnaNames) : 0;
     const fastaCount = fasta ? referenceSequenceCount(fasta) : 0;
     const fastaValue = fasta ? formatNumber(fastaCount) + (fastaCount === 1 ? " sequence" : " sequences") : "Optional / not loaded";
     const fastaDetail = fasta ? formatNumber(mapped) + " mapped HYB RNA names" : "Required for reference-based structure";
@@ -203,8 +203,8 @@
     const reference = state.reference || state.fasta;
     if (!reference) {
       items.push("No reference FASTA was loaded: RNA coordinates are not checked against a sequence.");
-    } else if (mappedFastaCount(reference) < names) {
-      items.push("Only " + formatNumber(mappedFastaCount(reference)) + " of " + formatNumber(names) + " HYB RNA names matched the reference FASTA (R08); coordinates of the others are not checked.");
+    } else if (mappedFastaCount(reference, summary.rnaNames) < names) {
+      items.push("Only " + formatNumber(mappedFastaCount(reference, summary.rnaNames)) + " of " + formatNumber(names) + " HYB RNA names matched the reference FASTA (R08); coordinates of the others are not checked.");
     }
     const comparison = state.comparison || {};
     if (comparison.result && comparison.result.ready) {
@@ -231,7 +231,7 @@
     const state = context.state;
     const summary = state.summary || {};
     const fasta = state.reference;
-    const fastaMapped = mappedFastaCount(fasta);
+    const fastaMapped = mappedFastaCount(fasta, summary.rnaNames);
     const sourceHyb = sourceHybMetadata(state);
     const sourceFasta = sourceFastaMetadata(state);
     return section(
@@ -244,9 +244,11 @@
         '<div class="report-subsection"><h3>HYB input</h3>' + definitionList([
           ["File", sourceHyb.fileName, true],
           ["Size", formatBytes(sourceHyb.fileSize)],
-          ["SHA-256", sourceHyb.sha256 || sourceHyb.sha256Status, true],
+          ["SHA-256", sourceHyb.datasets ? "Per file, listed below" : sourceHyb.sha256 || sourceHyb.sha256Status, !sourceHyb.datasets],
           ["Valid records", formatNumber(summary.validRecords)]
-        ]) + '</div>',
+        ]) + (sourceHyb.datasets ? '<ul class="report-dataset-files">' + sourceHyb.datasets.map(function (dataset) {
+          return '<li><strong>' + escape(dataset.label || dataset.fileName) + '</strong> <span class="is-mono">' + escape(dataset.fileName) + "</span> · " + escape(formatBytes(dataset.fileSize)) + " · " + escape(formatNumber(dataset.validRecords)) + ' records · SHA-256 <span class="is-mono">' + escape(dataset.sha256 || dataset.sha256Status) + "</span></li>";
+        }).join("") + "</ul>" : "") + '</div>',
         '<div class="report-subsection"><h3>Reference FASTA</h3>' + definitionList([
           ["File", sourceFasta ? sourceFasta.fileName : "Not loaded", !!sourceFasta],
           ["Size", sourceFasta ? formatBytes(sourceFasta.fileSize) : "Optional"],
@@ -413,7 +415,7 @@
           ["Selected cell", selectedCell ? range(selectedCell.x, selectedCell.x + number(matrix.binSize, 1) - 1) + " x " + range(selectedCell.y, selectedCell.y + number(matrix.binSize, 1) - 1) : "None"]
         ]) : '<div class="report-empty">' + escape(matrix && matrix.reason || "Generate a Contact Map from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
-        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + ' · ' + (contact.palette === "monochrome" ? "White and black" : "Mint–navy sequential") + '</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
+        ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable heatmap</h3><span class="report-note-inline">' + escape(contact.rnaX || "RNA X") + ' x ' + escape(contact.rnaY || "RNA Y") + ' · ' + escape(contactPaletteName(contact)) + '</span></div>' + visual + dataNote(context, "tables/contact_map_cells.tsv") + '</div>' : "",
         matrix && matrix.resourceBudget ? '<p class="report-note" data-cites="S04 R12"><span class="report-cite">S04, R12</span> Adaptive browser budget: up to ' + formatNumber(matrix.maximumCells) + ' cells and ' + formatNumber(matrix.maximumBinContributions) + ' bin contributions for this device profile.</p>' : ""
       ].join("")
     );
@@ -574,9 +576,9 @@
       ? safeCall(function () { return window.Hyb2Pages.getStructureSequence(state); }, null)
       : null;
     const ready = !!(result && result.sequence);
-    const cplfold = result && result.engine === "CPLfold";
+    const cplfold = result && (result.engine === "CPLfold" || result.engine === "CPLcofold");
     const candidateRows = cplfold && Array.isArray(result.candidates) ? result.candidates.slice(0, MAX_TABLE_ROWS).map(function (candidate, index) {
-      return [formatNumber(index + 1), escape(candidate.type || ""), escape(candidate.topology || "nested"), candidate.energy == null ? "-" : formatNumber(candidate.energy), formatNumber((candidate.pairs || []).length), formatNumber(candidate.crossingPairs || 0), '<code>' + escape(truncateText(candidate.dotBracket || "", 90)) + '</code>'];
+      return [formatNumber(index + 1), escape(candidate.type || ""), escape(candidate.topology || "nested"), candidate.energy == null ? "-" : formatNumber(candidate.energy), formatNumber((candidate.pairs || []).length), formatNumber(candidate.crossingPairs || 0), '<code>' + escape(truncateText(candidate.dotBracketWithBreak || candidate.dotBracket || "", 90)) + '</code>'];
     }) : [];
     const structureReportData = ready && window.Hyb2StructureUI && typeof window.Hyb2StructureUI.structureReport === "function"
       ? safeCall(function () { return window.Hyb2StructureUI.structureReport(state, result); }, null)
@@ -591,7 +593,7 @@
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Setup</h3>' + definitionList([
-          ["Engine", structure.engine === "cplfold" ? "CPLfold / Pyodide" : "ViennaRNA WebAssembly"],
+          ["Engine", result && result.engine || (structure.engine === "cplfold" ? (structure.cplfoldMode === "cofold" ? "CPLcofold" : "CPLfold") : "ViennaRNA WebAssembly")],
           ["Source", structure.source || "Not selected"],
           ["RNA", structure.rna || "-", true],
           ["Range", structure.start && structure.end ? range(structure.start, structure.end) : "-"],
@@ -609,8 +611,9 @@
         "</div>",
         ready ? '<div class="report-structure-result"><div class="report-subsection-heading"><h3>Printable secondary-structure view</h3><span class="report-note-inline">Arc layout used for the report snapshot</span></div><div class="report-structure-diagram" data-report-structure-diagram></div><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> The report uses a stable Arc layout so it prints consistently. Use the RNA Structure page SVG/PNG controls to export folded, radial, circular, or matrix views.</p>' + dataNote(context, "results/structure_prediction.json") + dataNote(context, "results/structure_prediction.dbn") + '</div>' : "",
         ready ? '<div class="report-grid report-analysis-grid">' : "",
-        ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.sequence || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12 R37"><span class="report-cite">S12, R37</span> The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
-        ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracket || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
+        ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.displaySequence || result.sequence || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12 R37"><span class="report-cite">S12, R37</span> The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
+        ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracketWithBreak || result.dotBracket || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
+        ready && result.cutpoint ? '<p class="report-note">Two RNA strands; &amp; marks the break after nucleotide ' + formatNumber(result.cutpoint) + '. Pair coordinates exclude this separator. ' + (result.energyMetadata && result.energyMetadata.energy_kind === "heuristic" ? 'Pseudoknot energies use an experimental ranking heuristic; they are not validated binding free energies.' : '') + '</p>' : "",
         ready ? "</div>" : "",
         cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table([num("Rank"), "Type", "Topology", num("Energy", "kcal/mol"), num("Pairs"), num("Crossing"), "Dot-bracket"], candidateRows) + '</div>' : "",
         ready && cplfold ? '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> CPLfold candidates preserve the selected pseudoknot setting and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain available from the RNA Structure page.</p>' : ""
@@ -1173,12 +1176,13 @@
   }
 
   // a binned map's frame: background, axes over inclusive nt coordinates
-  // (y grows downwards, as on the page), and the colour bar
+  // (y grows upwards from (0, 0) at the bottom left, as on the page), and
+  // the colour bar
   function mapFrame(plot, extent, titles, legend) {
     const xSpan = Math.max(1, extent.xEnd - extent.xStart);
     const ySpan = Math.max(1, extent.yEnd - extent.yStart);
     return xAxisSvg(plot, extent.xStart, extent.xEnd - 1, function (v) { return plot.left + (v - extent.xStart) / xSpan * plot.width; }, titles[0]) +
-      yAxisSvg(plot, extent.yStart, extent.yEnd - 1, function (v) { return plot.top + (v - extent.yStart) / ySpan * plot.height; }, titles[1], false) +
+      yAxisSvg(plot, extent.yStart, extent.yEnd - 1, function (v) { return plot.top + plot.height - (v - extent.yStart) / ySpan * plot.height; }, titles[1], false) +
       legendSvg(plot, legend);
   }
 
@@ -1233,7 +1237,7 @@
     const selected = contact && contact.selection;
     const rects = shown.map(function (cell) {
       const x = plotLeft + ((number(cell.x) - xStart) / Math.max(1, xEnd - xStart)) * plotWidth;
-      const y = plotTop + ((number(cell.y) - yStart) / Math.max(1, yEnd - yStart)) * plotHeight;
+      const y = plotTop + ((yEnd - number(cell.y) - binSize) / Math.max(1, yEnd - yStart)) * plotHeight;
       const width = Math.max(1, binSize / Math.max(1, xEnd - xStart) * plotWidth + 0.5);
       const height = Math.max(1, binSize / Math.max(1, yEnd - yStart) * plotHeight + 0.5);
       const ratio = cap ? Math.max(0, Math.min(1, visualCellValue(cell, contact) / cap)) : 0;
@@ -1243,7 +1247,7 @@
     const plot = { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight, titleX: -12 };
     const svg = [
       mapSvgOpen("report-heatmap-svg", "Printable contact map", "Contact map for " + (contact && contact.rnaX || "RNA X") + " and " + (contact && contact.rnaY || "RNA Y")),
-      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="#ffffff" stroke="' + FIGURE_LINE + '"></rect>',
+      '<rect x="' + plotLeft + '" y="' + plotTop + '" width="' + plotWidth + '" height="' + plotHeight + '" fill="' + (contact && contact.palette === "greys-inverted" ? "#000000" : "#ffffff") + '" stroke="' + FIGURE_LINE + '"></rect>',
       rects,
       mapFrame(plot, { xStart: xStart, xEnd: xEnd, yStart: yStart, yEnd: yEnd }, [positionTitle(contact && contact.rnaX), positionTitle(contact && contact.rnaY)], contactLegend(cap, contact, matrix.max)),
       '</svg>'
@@ -1301,7 +1305,7 @@
     const selected = comparison.selection;
     const rects = shown.map(function (cell) {
       const x = plotLeft + ((number(cell.x) - xStart) / Math.max(1, xEnd - xStart)) * plotWidth;
-      const y = plotTop + ((number(cell.y) - yStart) / Math.max(1, yEnd - yStart)) * plotHeight;
+      const y = plotTop + ((yEnd - number(cell.y) - binSize) / Math.max(1, yEnd - yStart)) * plotHeight;
       const width = Math.max(1, binSize / Math.max(1, xEnd - xStart) * plotWidth + 0.5);
       const height = Math.max(1, binSize / Math.max(1, yEnd - yStart) * plotHeight + 0.5);
       const ratio = mode === "conserved"
@@ -1359,6 +1363,9 @@
   }
 
   function sourceHybMetadata(state) {
+    if (window.Hyb2UI && typeof window.Hyb2UI.sourceHyb === "function") {
+      return window.Hyb2UI.sourceHyb(state);
+    }
     const summary = state.summary || {};
     return {
       fileName: summary.fileName || "",
@@ -1380,7 +1387,7 @@
       sha256: fasta.sha256 || null,
       sha256Status: fasta.sha256 ? "available" : (fasta.sha256Unavailable ? "unavailable" : "pending"),
       sequenceCount: referenceSequenceCount(fasta),
-      mappedRnas: mappedFastaCount(fasta)
+      mappedRnas: mappedFastaCount(fasta, (state.summary || {}).rnaNames)
     };
   }
 
@@ -1513,6 +1520,13 @@
     return number(right.similarity) - number(left.similarity) || number(left.x) - number(right.x) || number(left.y) - number(right.y);
   }
 
+  // the Contact Map's colour style, as named on that page
+  function contactPaletteName(contact) {
+    const palettes = typeof window !== "undefined" && window.Hyb2UI && window.Hyb2UI.contactPalettes || [];
+    const match = palettes.find(function (palette) { return palette.value === (contact && contact.palette); });
+    return match ? match.kicker : (contact && contact.palette === "monochrome" ? "White and black" : "Mint–navy sequential");
+  }
+
   // the Contact Map's "Mint–navy sequential" scale in its light (export)
   // form from analysis-ui.js (K4), with an identical standalone fallback
   function brandHeatColor(ratio, contact) {
@@ -1522,7 +1536,7 @@
       return "rgb(" + [grey, grey, grey].join(", ") + ")";
     }
     if (typeof window !== "undefined" && window.Hyb2UI && typeof window.Hyb2UI.viridis === "function") {
-      return window.Hyb2UI.viridis(value, "light");
+      return window.Hyb2UI.viridis(value, "light", contact && contact.palette);
     }
     const stops = [[145, 209, 194], [77, 187, 213], [0, 160, 135], [60, 84, 136]].map(srgbToLab);
     const scaled = Math.round(value * 1023) / 1023 * (stops.length - 1);
@@ -1620,8 +1634,11 @@
     return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
   }
 
-  function mappedFastaCount(fasta) {
-    return fasta && fasta.mapping ? Object.keys(fasta.mapping).filter(function (key) { return fasta.mapping[key]; }).length : 0;
+  // Matched names among `names` (the analysed RNAs) when given: the mapping
+  // also holds RNAs of datasets outside the analysis scope.
+  function mappedFastaCount(fasta, names) {
+    if (!fasta || !fasta.mapping) return 0;
+    return (names || Object.keys(fasta.mapping)).filter(function (key) { return fasta.mapping[key]; }).length;
   }
 
   function humanize(value) {

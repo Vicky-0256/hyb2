@@ -111,7 +111,8 @@ func TestExploreContactMapPickShowHybridsAndFold(t *testing.T) {
 	}
 	snapshot(t, tt, "explore-contact")
 
-	// Click the strongest cell: the plot starts 44 DIPs right of the map box.
+	// Click the strongest cell: the plot starts 44 DIPs right of the map box
+	// and y grows upwards from its bottom edge.
 	best := 0
 	for i, n := range d.count {
 		if n > d.count[best] {
@@ -124,7 +125,7 @@ func TestExploreContactMapPickShowHybridsAndFold(t *testing.T) {
 	}
 	gx := (float64(d.x[best]) + float64(d.bin)/2) / float64(d.lengthX)
 	gy := (float64(d.y[best]) + float64(d.bin)/2) / float64(d.lengthY)
-	tt.ClickAt(box.X+44+float32(gx)*mapSizeTarget, box.Y+float32(gy)*mapSizeTarget)
+	tt.ClickAt(box.X+44+float32(gx)*mapSizeTarget, box.Y+float32(1-gy)*mapSizeTarget)
 	tt.Frame()
 	if p.cm.picked != best {
 		t.Fatalf("picked %d, want %d (box %+v)", p.cm.picked, best, box)
@@ -133,7 +134,7 @@ func TestExploreContactMapPickShowHybridsAndFold(t *testing.T) {
 	if !tt.HasText("Arm 1 (X)") || !tt.HasText(span(x0, x1)) {
 		t.Fatalf("details missing: %q", tt.Texts())
 	}
-	tt.Move(box.X+44+float32(gx)*mapSizeTarget, box.Y+float32(gy)*mapSizeTarget)
+	tt.Move(box.X+44+float32(gx)*mapSizeTarget, box.Y+float32(1-gy)*mapSizeTarget)
 	tt.Frame()
 	if !strings.Contains(p.cm.hover, fmt.Sprintf("%d records", d.count[best])) {
 		t.Fatalf("hover %q", p.cm.hover)

@@ -494,6 +494,9 @@ func (p *explorePage) contactDetails(c *ui.Context, d *contactData) {
 			if ui.Button(c, "Fold this region").Tooltip("Open Structure with a window around this cell").Clicked() {
 				p.foldCell(d, s.picked)
 			}
+			if ui.Button(c, "Fold both arms (CPLcofold)").Tooltip("Open Structure with the two arms' ranges as two strands").Clicked() {
+				p.cofoldCell(d, s.picked)
+			}
 		})
 		if d.orientation == orientBoth && d.gene != d.gene2 {
 			ui.Text(c, "Show hybrids lists arm 1 on "+shortGene(d.gene)+"; the map also counts the reverse order.").
@@ -519,6 +522,17 @@ func (p *explorePage) showCellHybrids(d *contactData, x0, x1, y0, y1 int) {
 // and clamped to the gene: one window spanning both arms on one gene, else
 // arm 1's window (as the web page's fold request).
 func (p *explorePage) foldCell(d *contactData, i int) {
+	first, second := p.cellArms(d, i)
+	window := first
+	if d.gene == d.gene2 {
+		window = [2]int{min(first[0], second[0]), max(first[1], second[1])}
+	}
+	p.foldPrefill(d.gene, [][2]int{window}, "contact map")
+}
+
+// cellArms are the cell's two arm ranges, each padded by max(50, 2 bins)
+// and clamped to its gene.
+func (p *explorePage) cellArms(d *contactData, i int) (first, second [2]int) {
 	pad := max(50, 2*d.bin)
 	clamp := func(start, end, length int) [2]int {
 		start = max(1, start)
@@ -535,13 +549,19 @@ func (p *explorePage) foldCell(d *contactData, i int) {
 	if lengthY == 0 {
 		lengthY = d.lengthY
 	}
-	first := clamp(d.x[i]-pad, d.x[i]+d.bin-1+pad, lengthX)
-	second := clamp(d.y[i]-pad, d.y[i]+d.bin-1+pad, lengthY)
-	window := first
-	if d.gene == d.gene2 {
-		window = [2]int{min(first[0], second[0]), max(first[1], second[1])}
-	}
-	p.foldPrefill(d.gene, [][2]int{window}, "contact map")
+	return clamp(d.x[i]-pad, d.x[i]+d.bin-1+pad, lengthX), clamp(d.y[i]-pad, d.y[i]+d.bin-1+pad, lengthY)
+}
+
+// cofoldCell opens ⑤ Structure with the cell's two arm ranges (cellArms)
+// as the two strands of a CPLcofold fold (the web's "Send both regions to
+// CPLcofold"). Ranges that overlap are folded as two copies.
+func (p *explorePage) cofoldCell(d *contactData, i int) {
+	first, second := p.cellArms(d, i)
+	p.a.Navigate("structure", map[string]any{"prefill": map[string]any{
+		"regions": []core.Region{{GeneID: d.gene, Start: uint64(first[0]), End: uint64(first[1])},
+			{GeneID: d.gene2, Start: uint64(second[0]), End: uint64(second[1])}},
+		"selectionKey": p.a.Selected.Key, "source": "the contact map",
+	}})
 }
 
 // focusCell picks the cell holding (x, y) and zooms to the range around it.

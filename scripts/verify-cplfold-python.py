@@ -130,6 +130,11 @@ def main() -> None:
             ">HYB2_Web_prepared_sequence\n" + SEQUENCE + "\n", encoding="utf-8"
         )
 
+        # Test discovery order must not decide whether the broad logic suite
+        # compiles dozens of Numba signatures. Native execution is exercised
+        # explicitly by the CLI smoke below and verify-cplcofold-python.py.
+        unit_environment = environment.copy()
+        unit_environment["NUMBA_DISABLE_JIT"] = "1"
         unit_output = run(
             [
                 str(runner),
@@ -141,11 +146,11 @@ def main() -> None:
                 "-v",
             ],
             cwd=vendor,
-            environment=environment,
+            environment=unit_environment,
         )
         test_count = re.search(r"^Ran (\d+) tests?", unit_output, re.MULTILINE)
-        if test_count is None or int(test_count.group(1)) != 28:
-            raise SystemExit("CPLfold did not run the expected 28 regression tests")
+        if test_count is None or int(test_count.group(1)) < 28:
+            raise SystemExit("CPLfold did not run at least its 28 baseline regression tests")
         if re.search(r"^OK$", unit_output, re.MULTILINE) is None:
             raise SystemExit("CPLfold unit tests did not report success")
 
@@ -206,7 +211,7 @@ def main() -> None:
 
     print(
         "CPLfold Python verification passed: length guard, secure cache, "
-        "28 unit tests, "
+        f"{test_count.group(1)} pure-Python unit tests, "
         "FASTA and bonus-matrix file input, and real-JIT smoke."
     )
     print(f"Reference structure: {EXPECTED_STRUCTURE}")

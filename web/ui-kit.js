@@ -9,6 +9,7 @@
  *   Hyb2UiKit.legend.drawCanvas(ctx, opts)     K1: drawn into a canvas (PNG exports)
  *   K2: <details class="export-menu"> closes on an outside click, on Escape and
  *   after an item is chosen (one document-level listener, installed here).
+ *   Hyb2UiKit.canvasToPdf(canvas, wPt, hPt) a one-page PDF Blob of the canvas
  *   Hyb2UiKit.desktop                          K9: the one source of HYB2 Desktop
  *                                              copy, limits and installer links
  *
@@ -445,11 +446,70 @@
     }
   };
 
+  // A one-page PDF holding the canvas as a lossless image (Flate, via the
+  // browser's CompressionStream; JPEG at full quality where that is missing),
+  // widthPt x heightPt points.
+  async function canvasToPdf(canvas, widthPt, heightPt) {
+    const encoder = new TextEncoder();
+    const width = canvas.width;
+    const height = canvas.height;
+    let imageBytes;
+    let filter;
+    if (typeof CompressionStream === "function") {
+      const rgba = canvas.getContext("2d").getImageData(0, 0, width, height).data;
+      const rgb = new Uint8Array(width * height * 3);
+      for (let source = 0, target = 0; source < rgba.length; source += 4, target += 3) {
+        rgb[target] = rgba[source];
+        rgb[target + 1] = rgba[source + 1];
+        rgb[target + 2] = rgba[source + 2];
+      }
+      const stream = new Blob([rgb]).stream().pipeThrough(new CompressionStream("deflate"));
+      imageBytes = new Uint8Array(await new Response(stream).arrayBuffer());
+      filter = "/FlateDecode";
+    } else {
+      const jpeg = await new Promise(function (resolve, reject) {
+        canvas.toBlob(function (blob) { return blob ? resolve(blob) : reject(new Error("JPEG encoding failed")); }, "image/jpeg", 1);
+      });
+      imageBytes = new Uint8Array(await jpeg.arrayBuffer());
+      filter = "/DCTDecode";
+    }
+    const w = widthPt.toFixed(2);
+    const h = heightPt.toFixed(2);
+    const content = "q " + w + " 0 0 " + h + " 0 0 cm /Im0 Do Q";
+    const parts = [];
+    const offsets = [];
+    let length = 0;
+    const push = function (chunk) {
+      const bytes = typeof chunk === "string" ? encoder.encode(chunk) : chunk;
+      parts.push(bytes);
+      length += bytes.length;
+    };
+    const object = function (body) {
+      offsets.push(length);
+      push(offsets.length + " 0 obj\n" + body + "\nendobj\n");
+    };
+    push("%PDF-1.4\n");
+    object("<< /Type /Catalog /Pages 2 0 R >>");
+    object("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    object("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + w + " " + h + "] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>");
+    offsets.push(length);
+    push("4 0 obj\n<< /Type /XObject /Subtype /Image /Width " + width + " /Height " + height + " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter " + filter + " /Length " + imageBytes.length + " >>\nstream\n");
+    push(imageBytes);
+    push("\nendstream\nendobj\n");
+    object("<< /Length " + content.length + " >>\nstream\n" + content + "\nendstream");
+    const xref = length;
+    push("xref\n0 " + (offsets.length + 1) + "\n0000000000 65535 f \n" + offsets.map(function (offset) {
+      return String(offset).padStart(10, "0") + " 00000 n \n";
+    }).join("") + "trailer\n<< /Size " + (offsets.length + 1) + " /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF\n");
+    return new Blob(parts, { type: "application/pdf" });
+  }
+
   root.Hyb2UiKit = {
     niceTicks: niceTicks,
     formatTick: formatTick,
     legend: { html: html, svg: svg, drawCanvas: drawCanvas },
     closeExportMenus: function () { closeMenus(null); },
-    desktop: desktop
+    desktop: desktop,
+    canvasToPdf: canvasToPdf
   };
 }(typeof window !== "undefined" ? window : globalThis));

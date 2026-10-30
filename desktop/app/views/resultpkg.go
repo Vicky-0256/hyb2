@@ -640,6 +640,11 @@ func rpStructureFiles(base string, s reportStructure, step string, selected bool
 		"prediction": "computational prediction; not an experimental structure"}
 	if len(res.Records) == 1 {
 		body["sequence"], body["dotBracket"] = sequence.String(), dot.String()
+		if r := res.Records[0]; r.Cutpoint > 0 {
+			// CPLcofold: two strands; pairs are on the RNA when both regions are on one
+			body["cutpoint"], body["regions"], body["positionOffset"] = r.Cutpoint, r.Segments, nil
+			body["coordinates"] = "sequence and dotBracket are strand A then strand B (cutpoint nucleotides of A); pairs as drawn: RNA positions for two regions of one RNA, A+B indices for two RNAs"
+		}
 	} else {
 		body["sequence"], body["dotBracket"] = nil, nil
 		windows := make([]map[string]any, len(res.Records))

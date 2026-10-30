@@ -27,6 +27,24 @@ upstream text is preserved in `LICENSES/LinearFold-LICENSE.txt`.
 
 Source: https://github.com/LinearFold/LinearFold
 
+## LinearCoFold reference and cofold extension
+
+`CPLcofold_parser.py` and `Utils/cofold_energy.py` implement strand-break
+handling informed by LinearCoFold, reusing CPLfold's LinearFold-derived
+Turner scoring kernels and tables. The implementation uses a new Numba inside
+chart and lazy k-best enumeration. The reference is the LinearCoFold source
+archive distributed at https://doi.org/10.5281/zenodo.8153422 (source directory
+`VincentZhangHe-cofold-copartition-13c0beee5b11`). Its license is retained in
+`LICENSES/LinearCoFold-LICENSE.txt`.
+
+Credit: He Zhang, Sizhen Li, Ning Dai, Liang Zhang, David H. Mathews, and Liang
+Huang. "LinearCoFold and LinearCoPartition: linear-time algorithms for
+secondary structure prediction of interacting RNA molecules." Nucleic Acids
+Research 51(18), e94 (2023), https://doi.org/10.1093/nar/gkad664.
+
+The experimental cofold pseudoknot energy extension is a local CPLfold
+heuristic; it is not an energy model supplied or validated by LinearCoFold.
+
 ## HotKnots-derived energy evaluator and parameters
 
 `Utils/hotknots_energy.py` is a Python port/refactoring of the energy-calculation

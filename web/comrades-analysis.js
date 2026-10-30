@@ -62,11 +62,18 @@
         throw new Error("No mapped FASTA sequence is available for " + region.rna + ".");
       }
       const fullSequence = normaliseSequence(entry.sequence);
-      if (fullSequence.invalid.length) {
+      if (!settings.cofold && fullSequence.invalid.length) {
         throw new Error("The mapped FASTA sequence for " + region.rna + " contains unsupported symbols: " + fullSequence.invalid.join(", ") + ".");
       }
       if (region.end > fullSequence.sequence.length) {
         throw new Error("Region " + region.rna + ":" + region.start + "-" + region.end + " exceeds the mapped FASTA length of " + fullSequence.sequence.length + " nt.");
+      }
+      const selectedSequence = normaliseSequence(fullSequence.sequence.slice(region.start - 1, region.end));
+      // Cofold uses only the two selected windows. Unknown bases elsewhere in
+      // the reference (including a long gap between windows) are not input.
+      // Keep the legacy whole-reference validation for the other workflows.
+      if (settings.cofold && selectedSequence.invalid.length) {
+        throw new Error("Selected region " + region.rna + ":" + region.start + "-" + region.end + " contains unsupported symbols: " + selectedSequence.invalid.join(", ") + ".");
       }
       return {
         index: index,
@@ -74,13 +81,13 @@
         referenceId: entry.id,
         referenceStart: region.start,
         referenceEnd: region.end,
-        sequence: fullSequence.sequence.slice(region.start - 1, region.end),
+        sequence: selectedSequence.sequence,
         preparedStart: 0,
         preparedEnd: 0
       };
     });
 
-    const linker = segments.length === 2 ? originalLinker() : "";
+    const linker = segments.length === 2 && !settings.cofold ? originalLinker() : "";
     let preparedSequence = "";
     segments.forEach(function (segment, index) {
       if (index > 0) {
@@ -109,7 +116,7 @@
         return;
       }
 
-      const orientation = orientRecord(record, segments);
+      const orientation = orientRecord(record, segments, settings.cofold);
       if (!orientation) {
         skipped.outsideSelectedRegions += 1;
         return;
@@ -197,7 +204,7 @@
       record.rnaTwoStart <= record.rnaTwoEnd;
   }
 
-  function orientRecord(record, segments) {
+  function orientRecord(record, segments, includeIntramolecular) {
     const one = arm(record.rnaOne, record.rnaOneStart, record.rnaOneEnd);
     const two = arm(record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd);
 
@@ -213,6 +220,14 @@
     }
     if (armInSegment(two, segments[0]) && armInSegment(one, segments[1])) {
       return { first: two, second: one, firstSegment: segments[0], secondSegment: segments[1], reversed: true };
+    }
+    if (includeIntramolecular) {
+      const segment = segments.find(function (entry) {
+        return armInSegment(one, entry) && armInSegment(two, entry);
+      });
+      if (segment) {
+        return { first: one, second: two, firstSegment: segment, secondSegment: segment, reversed: false };
+      }
     }
     return null;
   }

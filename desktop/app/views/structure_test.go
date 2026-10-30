@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +12,8 @@ import (
 
 	"hyb2desktop/core"
 	"hyb2desktop/model"
+	"hyb2desktop/seqmap"
+	"hyb2desktop/widgets"
 )
 
 const (
@@ -233,6 +236,14 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	r, ok := tt.Find("Windows: start-end, one per line (1-based, inclusive)")
 	if !ok {
 		t.Fatal("no window field")
+	}
+	// The form scrolls above the pinned check: bring the window list into view.
+	if check, ok := tt.Find("Check before running"); ok && r.Y+r.H+40 > check.Y {
+		tt.Scroll(r.X+20, r.Y, 0, r.Y+r.H+40-check.Y+60)
+		tt.Frame()
+		if r, ok = tt.Find("Windows: start-end, one per line (1-based, inclusive)"); !ok || r.Y+r.H+40 > check.Y {
+			t.Fatalf("window list still hidden: %+v below %+v", r, check)
+		}
 	}
 	tt.ClickAt(r.X+20, r.Y+r.H+20)
 	tt.Frame()
@@ -476,5 +487,207 @@ func TestViennaEstimateNearMeasured(t *testing.T) {
 		if got := viennaSeconds([]int{m.nt}); got < m.seconds*0.8 || got > m.seconds*1.25 {
 			t.Errorf("%d nt: %.2f s, measured %.2f s", m.nt, got, m.seconds)
 		}
+	}
+}
+
+// CPLcofold: two regions as two strands, from Explore's contact map or the
+// form, with the chimeras or the sequence alone.
+func TestStructureCofoldForm(t *testing.T) {
+	a, f := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 900)
+	a.Navigate("structure", map[string]any{"prefill": map[string]any{
+		"regions":      []core.Region{{GeneID: africaGene, Start: 1, End: 45}, {GeneID: africaGene, Start: 1086, End: 1134}},
+		"selectionKey": "c:SUB", "source": "the contact map"}})
+	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	if p.engine != engineCPLcofold || p.region1 != "1-45" || p.region2 != "1086-1134" || p.gene2 != africaGene {
+		t.Fatalf("prefill %q %q %q %q", p.engine, p.region1, p.region2, p.gene2)
+	}
+	for _, text := range []string{"1  Region 1 (strand A)", "3  Region 2 (strand B)", "2 regions as two strands, 45 + 49 nt",
+		"• Chimeras with one arm in each region join the strands; chimeras with both arms in one region are evidence within it."} {
+		if !tt.HasText(text) {
+			t.Fatalf("lacks %q: %q", text, tt.Texts())
+		}
+	}
+	snapshot(t, tt, "structure-cofold")
+	if err := tt.Click("Run fold"); err != nil {
+		t.Fatal(err)
+	}
+	csSettle(a, tt)
+	started := f.startedKinds()
+	if len(started) != 1 {
+		t.Fatalf("started %d: %q", len(started), p.plan().problems)
+	}
+	req := started[0]
+	params := req.Parameters.(map[string]any)
+	if *req.Engine != "cplcofold" || *req.Mode != "cofold" || len(req.Windows) != 0 || len(req.Regions) != 2 ||
+		req.Regions[1] != (core.Region{GeneID: africaGene, Start: 1086, End: 1134}) || params["evidence"] != nil ||
+		params["allow_pseudoknot"] != false || *req.Workers != 1 {
+		t.Fatalf("request %+v params %+v", req, params)
+	}
+	// sequence only; the energy model and beam CPLcofold supports
+	p.seqOnly = true
+	if pl := p.plan(); pl.req.Parameters.(map[string]any)["evidence"] != "none" || len(pl.problems) != 0 {
+		t.Fatalf("sequence only %+v %q", pl.req.Parameters, pl.problems)
+	}
+	p.model, p.beam = "CC06", 500
+	if pl := p.plan(); len(pl.problems) != 2 {
+		t.Fatalf("model and beam problems %q", pl.problems)
+	}
+	p.model, p.beam = "DP09", 20
+	for text, want := range map[string]string{"": "Region 2: enter it as start-end, for example 1-45.",
+		"1086-1090": "Region 2: at least 10 nt.", "1-20000": "Region 2: 1-20000 is outside 1-10,807."} {
+		p.region2 = text
+		if pl := p.plan(); !slices.Contains(pl.problems, want) {
+			t.Fatalf("%q: %q", text, pl.problems)
+		}
+	}
+	// COMRADES(ViennaRNA) of the same two regions joined by the web's spacer
+	p.region2, p.seqOnly, p.engine, p.mode = "1086-1134", false, engineComrades, "paired"
+	tt.Frame()
+	for _, text := range []string{"Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)",
+		"Region 2 (strand B)", "• Only chimeras with one arm in each region are evidence; each is cofolded (RNAcofold)."} {
+		if !tt.HasText(text) {
+			t.Fatalf("lacks %q: %q", text, tt.Texts())
+		}
+	}
+	snapshot(t, tt, "structure-comrades-paired")
+	pl := p.plan()
+	if len(pl.problems) != 0 || *pl.req.Mode != "paired" || *pl.req.Engine != "comrades" || len(pl.req.Regions) != 2 ||
+		len(pl.req.Windows) != 0 || pl.span() != "45 + 49 nt" {
+		t.Fatalf("paired plan %+v %q", pl.req, pl.problems)
+	}
+	p.region1, p.region2 = "1-1500", "2000-3500"
+	if pl := p.plan(); !slices.Contains(pl.problems, "Both regions and the 100-nt spacer are 3,101 nt; COMRADES(ViennaRNA) folds at most 3,000 nt, as the web.") {
+		t.Fatalf("too long %q", pl.problems)
+	}
+	// a large ensemble needs the confirmation in this layout too
+	p.region1, p.region2, p.randomFolds = "1-45", "1086-1134", 500
+	if pl := p.plan(); !slices.Contains(pl.problems, "Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.") {
+		t.Fatalf("large ensemble %q", pl.problems)
+	}
+	p.randomFolds = 0
+	// two joined regions are a COMRADES layout only: changing the engine resets it
+	p.engine = engineVienna
+	p.engineChanged()
+	if pl := p.plan(); p.mode != "genome" || *pl.req.Mode != "genome" {
+		t.Fatalf("mode %q", p.mode)
+	}
+	// a window prefill goes back to CPLfold
+	p.engine = engineCPLcofold
+	a.Navigate("structure", map[string]any{"prefill": map[string]any{"gene": africaGene,
+		"windows": []map[string]any{{"start": 3000, "end": 3400}}}})
+	csSettle(a, tt)
+	if p.engine != engineCPLfold || p.mode != "windows" {
+		t.Fatalf("window prefill %q %q", p.engine, p.mode)
+	}
+}
+
+// A CPLcofold record is drawn on its RNA positions, written with '&' at
+// the strand break and counted only inside its two regions.
+func TestStructureCofoldRecord(t *testing.T) {
+	r := structureRecord{WindowStart: 1, WindowEnd: 14, Sequence: "GGGAAACCCUUUCC", DBN: "(((....)))..()",
+		Positions: []int{1, 2, 3, 4, 5, 6, 101, 102, 103, 104, 105, 106, 107, 108}, Cutpoint: 6,
+		Segments: []core.Region{{GeneID: "G", Start: 1, End: 6}, {GeneID: "G", Start: 101, End: 108}}}
+	pairs := stRecordPairs(r)
+	want := []stPair{{I: 3, J: 102}, {I: 2, J: 103}, {I: 1, J: 104}, {I: 107, J: 108}}
+	if !slices.Equal(pairs, want) {
+		t.Fatalf("pairs %+v", pairs)
+	}
+	if s, e := r.span(); s != 1 || e != 108 {
+		t.Fatalf("span %d-%d", s, e)
+	}
+	if got := r.ranges(); !slices.Equal(got, [][2]int{{1, 6}, {101, 108}}) {
+		t.Fatalf("ranges %v", got)
+	}
+	if r.localOf(102) != 8 || r.positionOf(8) != 102 || r.localOf(50) != 0 {
+		t.Fatal("position mapping")
+	}
+	if got := stDBNText("G", []structureRecord{r}); got != ">G:1-6 + G:101-108\nGGGAAA&CCCUUUCC\n(((...&.)))..()\n" {
+		t.Fatalf("dbn %q", got)
+	}
+	ct := strings.Split(stCTText("G", []structureRecord{r}), "\n")
+	if ct[0] != "14 ENERGY = NA G:1-6 + G:101-108" || ct[6] != "6\tA\t5\t0\t0\t6" || ct[7] != "7\tC\t0\t8\t0\t101" ||
+		ct[8] != "8\tC\t7\t9\t3\t102" {
+		t.Fatalf("ct %q", ct[:9])
+	}
+	// a whole-RNA fold is compared only inside the two regions
+	whole := structureRecord{WindowStart: 1, WindowEnd: 200, Sequence: strings.Repeat("A", 200), Pairs: [][2]int{{1, 104}, {50, 60}}}
+	_, _, stats := stCompare([]structureRecord{r}, []structureRecord{whole}, true)
+	if stats.PairsB != 1 || stats.Shared != 1 {
+		t.Fatalf("stats %+v", stats)
+	}
+	// the other views draw A+B indices; the folded layout drops the linker
+	res := &structureResult{Records: []structureRecord{r}}
+	vp, _, start, length, seq := stViewData(res, "all")
+	if start != 1 || length != 14 || seq != r.Sequence || len(vp) != 4 || vp[2] != (widgets.LayeredPair{I: 1, J: 10}) {
+		t.Fatalf("view %+v %d %d", vp, start, length)
+	}
+	// two RNAs: drawn on A+B indices, the .ct keeps each base's RNA position
+	two := r
+	two.Positions = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+	two.Segments = []core.Region{{GeneID: "G", Start: 1, End: 6}, {GeneID: "H", Start: 40, End: 47}}
+	if ct := strings.Split(stCTText("G", []structureRecord{two}), "\n"); ct[7] != "7\tC\t0\t8\t0\t40" {
+		t.Fatalf("two-RNA ct %q", ct[7])
+	}
+	// BPSEQ has no break: the comment names the strands, positions are local
+	if bp := strings.Split(stBPSEQText("G", []structureRecord{two}), "\n"); !strings.HasPrefix(bp[0], "# G:1-6 + H:40-47; two strands: A is 1-6, B 7-14;") {
+		t.Fatalf("two-RNA bpseq %q", bp[0])
+	}
+	// a two-strand B shown on another reference is plain pairs there
+	ref := strings.Repeat("ACGUUGCA", 25)
+	m, err := seqmap.Align(ref, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, _ := stMapRecords([]structureRecord{r}, m)
+	if mapped[0].Cutpoint != 0 || mapped[0].Positions != nil || len(stRecordPairs(mapped[0])) != 4 {
+		t.Fatalf("mapped %+v", mapped[0])
+	}
+	if vp, _, _, _, _ := stViewData(&structureResult{Records: mapped}, "all"); len(vp) != 4 {
+		t.Fatalf("mapped view %+v", vp)
+	}
+	coords := make([][2]float64, 17)
+	if got := stDropLinker(coords, 6); len(got) != 14 {
+		t.Fatalf("linker %d", len(got))
+	}
+}
+
+// A CPLcofold result in the viewer: arcs on the RNA, the folded view of two
+// strands, the dot-bracket with '&' and a two-strand CT.
+func TestStructureCofoldViewer(t *testing.T) {
+	a, f := openCS(t)
+	f.ops["read_structure"] = fixture(t, "structure_read_cofold.json")
+	f.ops["structure_layout"] = fixture(t, "structure_layout_cofold.json")
+	tt := ui.NewTester(a.View, 1100, 1400)
+	a.Navigate("structure", map[string]any{"structureId": "structure-cofold1"})
+	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	r := p.cache["structure-cofold1"].Records[0]
+	if r.Cutpoint != 81 || len(r.Positions) != 201 || r.Positions[81] != 1052 {
+		t.Fatalf("record cut %d positions %d", r.Cutpoint, len(r.Positions))
+	}
+	meta := p.metaLine(p.cache["structure-cofold1"])
+	if !strings.Contains(meta, "Engine CPLcofold") || !strings.Contains(meta, "48 pairs between them") {
+		t.Fatalf("meta %q", meta)
+	}
+	if !strings.Contains(p.dbnText, "&") || !strings.HasPrefix(p.dbnText, ">ZIKV_FrenchPolynesian_KJ776791-2_virusRNA:1-81 + ") {
+		t.Fatalf("dbn %q", p.dbnText)
+	}
+	if p.arcs.Start != 1 || p.arcs.End != 1171 {
+		t.Fatalf("arcs %v-%v", p.arcs.Start, p.arcs.End)
+	}
+	snapshot(t, tt, "structure-cofold-arcs")
+	p.view = "Folded"
+	csSettle(a, tt)
+	csSettle(a, tt)
+	if tt.HasText("The folded view draws one window: choose it above.") || !tt.HasText("Folded view of the base pairs") && p.layouts[stNestedDBN(nil, 1, 0)].err != "" {
+		t.Fatalf("folded %q", tt.Texts())
+	}
+	snapshot(t, tt, "structure-cofold-folded")
+	ct := strings.Split(stCTText("G", []structureRecord{r}), "\n")
+	if ct[81] != "81\tU\t80\t0\t"+strings.Split(ct[81], "\t")[4]+"\t81" || !strings.HasPrefix(ct[82], "82\t") ||
+		strings.Split(ct[82], "\t")[2] != "0" || strings.Split(ct[82], "\t")[5] != "1052" {
+		t.Fatalf("ct break %q %q", ct[81], ct[82])
 	}
 }

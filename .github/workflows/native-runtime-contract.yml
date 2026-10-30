@@ -1,0 +1,46 @@
+name: Native runtime release contract
+
+on:
+  pull_request:
+    paths:
+      - "desktop/scripts/acquire-native-runtime.py"
+      - "desktop/scripts/stage-native.py"
+      - "desktop/scripts/verify-native-release.py"
+      - "desktop/runtime/requirements-native.txt"
+      - "desktop/scripts/README-native-release.md"
+      - ".github/workflows/native-runtime-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# This matrix intentionally checks the portable-runtime tooling on every
+# target OS.  A release job must additionally provide a real, pinned archive
+# URL/SHA and wheelhouse; no placeholder binary is generated here.
+jobs:
+  tooling:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x86_64
+          - os: windows-2022
+            target: windows-x86_64
+          - os: macos-13
+            target: macos-x86_64
+          - os: macos-14
+            target: macos-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Compile and inspect acquisition tooling
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python -m py_compile desktop/scripts/acquire-native-runtime.py desktop/scripts/stage-native.py desktop/scripts/verify-native-release.py
+          python desktop/scripts/acquire-native-runtime.py --help > /dev/null
+          python -c "import sys; p=sys.argv[1]; assert p in {'windows-x86_64','linux-x86_64','macos-x86_64','macos-aarch64'}" "$TARGET"

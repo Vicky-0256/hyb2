@@ -115,11 +115,11 @@ func TestPreferencesRoundTripAndReset(t *testing.T) {
 	if LoadBudget(path) != (Budget{1, 1024}) || LoadTheme(path) != "dark" {
 		t.Fatal("rejected patch changed the file")
 	}
-	// Theme: set, then null resets to "system".
+	// Theme: set, then null resets to the default (light).
 	if _, err := ApplyPreferences(path, Obj{"theme": "light"}); err != nil || LoadTheme(path) != "light" {
 		t.Fatalf("theme: %v", err)
 	}
-	if _, err := ApplyPreferences(path, Obj{"theme": nil}); err != nil || LoadTheme(path) != "system" {
+	if _, err := ApplyPreferences(path, Obj{"theme": nil}); err != nil || LoadTheme(path) != DefaultTheme {
 		t.Fatalf("theme reset: %v", err)
 	}
 	if LoadBudget(path) != (Budget{1, 1024}) {
@@ -140,7 +140,7 @@ func TestPreferencesRoundTripAndReset(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if LoadBudget(path) != DefaultBudget() || LoadTheme(path) != "system" {
+	if LoadBudget(path) != DefaultBudget() || LoadTheme(path) != DefaultTheme {
 		t.Fatal("corrupt file is not the default")
 	}
 	if _, err := ApplyPreferences("", Obj{}); err == nil {

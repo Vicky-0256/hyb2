@@ -11,7 +11,8 @@ import (
 )
 
 // Cell is one square of a contact map in gene coordinates: arm 1 [X, X+W)
-// on the horizontal axis, arm 2 [Y, Y+H) on the vertical one.
+// on the horizontal axis, arm 2 [Y, Y+H) on the vertical one. The map puts
+// (0, 0) at the bottom left: Y grows upwards.
 type Cell struct {
 	X, Y, W, H float64
 	Color      ui.Color
@@ -145,7 +146,8 @@ func (h *Heatmap) Show(c *ui.Context, size float32, label string) HeatEvent {
 		v := h.view
 		sx := (v.X1 - v.X0) / float64(plot.W)
 		sy := (v.Y1 - v.Y0) / float64(plot.H)
-		h.SetView(Window{v.X0 - float64(dx)*sx, v.X1 - float64(dx)*sx, v.Y0 - float64(dy)*sy, v.Y1 - float64(dy)*sy})
+		// y grows upwards: dragging down shows larger coordinates
+		h.SetView(Window{v.X0 - float64(dx)*sx, v.X1 - float64(dx)*sx, v.Y0 + float64(dy)*sy, v.Y1 + float64(dy)*sy})
 	}
 	if box.DoubleClicked() {
 		h.ResetZoom()
@@ -276,7 +278,7 @@ func rasterCells(img *image.RGBA, cells []Cell, v Window, minCell float64, tile 
 		}
 		cw, ch := math.Max(cell.W*sx, least), math.Max(cell.H*sy, least)
 		x := (cell.X-v.X0)*sx - (cw-cell.W*sx)/2
-		y := (cell.Y-v.Y0)*sy - (ch-cell.H*sy)/2
+		y := (v.Y1-cell.Y-cell.H)*sy - (ch-cell.H*sy)/2
 		x0, y0 := int(math.Round(x)), int(math.Round(y))
 		x1, y1 := max(int(math.Round(x+cw)), x0+1), max(int(math.Round(y+ch)), y0+1)
 		x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, w), min(y1, hgt)
@@ -308,7 +310,7 @@ func rasterCells(img *image.RGBA, cells []Cell, v Window, minCell float64, tile 
 func (h *Heatmap) toGene(plot ui.Rect, px, py float32) (float64, float64) {
 	v := h.view
 	gx := v.X0 + float64((px-plot.X)/plot.W)*(v.X1-v.X0)
-	gy := v.Y0 + float64((py-plot.Y)/plot.H)*(v.Y1-v.Y0)
+	gy := v.Y1 - float64((py-plot.Y)/plot.H)*(v.Y1-v.Y0)
 	return gx, gy
 }
 
@@ -340,7 +342,7 @@ func (h *Heatmap) mark(area ui.Rect, cell Cell, pad float64) (ui.Rect, bool) {
 	if x1 < v.X0 || x0 > v.X1 || y1 < v.Y0 || y0 > v.Y1 {
 		return ui.Rect{}, false
 	}
-	r := ui.Rect{X: area.X + float32((x0-v.X0)*sx), Y: area.Y + float32((y0-v.Y0)*sy),
+	r := ui.Rect{X: area.X + float32((x0-v.X0)*sx), Y: area.Y + float32((v.Y1-y1)*sy),
 		W: float32(math.Max((x1-x0)*sx, 4)), H: float32(math.Max((y1-y0)*sy, 4))}
 	return r, true
 }
@@ -386,7 +388,7 @@ func (h *Heatmap) drawAxes(p *ui.Painter, r, area ui.Rect, t *ui.Theme) {
 		p.Text(px-float32(len(label))*3, area.Y+area.H+16, label, 10, t.TextMuted)
 	}
 	for _, y := range ticks(v.Y0, v.Y1) {
-		py := area.Y + float32((y-v.Y0)/(v.Y1-v.Y0))*area.H
+		py := area.Y + float32((v.Y1-y)/(v.Y1-v.Y0))*area.H
 		p.Line(area.X-4, py, area.X, py, 1, t.Border)
 		label := fmt.Sprint(int(y))
 		p.Text(r.X+2, py+3, label, 10, t.TextMuted)

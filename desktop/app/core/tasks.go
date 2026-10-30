@@ -1243,20 +1243,42 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 		return nil, err
 	}
 	if request.Mode == nil {
-		return nil, errors.New("structure mode is required (genome or windows)")
+		return nil, errors.New("structure mode is required (genome, windows or cofold)")
 	}
 	mode := *request.Mode
 	windows := request.Windows
 	if windows == nil {
 		windows = []Window{}
 	}
+	engine := "cplfold"
+	if request.Engine != nil {
+		engine = *request.Engine
+	}
+	// cofold (CPLcofold) and paired (COMRADES) fold two regions
+	twoRegions := mode == "cofold" || mode == "paired"
 	switch {
 	case mode == "genome" && len(windows) > 0:
 		return nil, errors.New("structure windows are only allowed in windows mode")
 	case mode == "windows" && len(windows) == 0:
 		return nil, errors.New("structure windows mode needs at least one window")
-	case mode != "genome" && mode != "windows":
-		return nil, errors.New("structure mode must be genome or windows")
+	case mode != "genome" && mode != "windows" && !twoRegions:
+		return nil, errors.New("structure mode must be genome, windows, cofold or paired")
+	case (mode == "cofold") != (engine == "cplcofold"):
+		return nil, errors.New("structure mode cofold goes with engine cplcofold")
+	case mode == "paired" && engine != "comrades":
+		return nil, errors.New("structure mode paired goes with engine comrades")
+	case twoRegions && (len(windows) > 0 || len(request.Regions) != 2):
+		return nil, errors.New("structure " + mode + " mode needs exactly two regions and no windows")
+	case !twoRegions && len(request.Regions) > 0:
+		return nil, errors.New("structure regions are only allowed in cofold and paired modes")
+	}
+	for _, r := range request.Regions {
+		if err := validateGeneID(r.GeneID); err != nil {
+			return nil, err
+		}
+		if r.Start < 1 || r.Start >= r.End {
+			return nil, fmt.Errorf("structure region %s:%d-%d must have 1 <= start < end", r.GeneID, r.Start, r.End)
+		}
 	}
 	if len(windows) > maxWindows {
 		return nil, fmt.Errorf("structure accepts at most %d windows", maxWindows)
@@ -1284,10 +1306,15 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 		"workers": max(workers, 1), "task_id": id, "run_dir": runDir,
 	}
 	if request.Engine != nil {
-		if *request.Engine != "cplfold" && *request.Engine != "viennarna" && *request.Engine != "comrades" {
-			return nil, errors.New("structure engine must be cplfold, viennarna or comrades")
+		switch *request.Engine {
+		case "cplfold", "cplcofold", "viennarna", "comrades":
+		default:
+			return nil, errors.New("structure engine must be cplfold, cplcofold, viennarna or comrades")
 		}
 		payload["engine"] = *request.Engine
+	}
+	if twoRegions {
+		payload["regions"] = request.Regions
 	}
 	return payload, nil
 }

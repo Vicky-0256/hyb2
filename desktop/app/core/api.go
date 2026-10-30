@@ -11,6 +11,13 @@ type Window struct {
 	End   uint64 `json:"end"`
 }
 
+// Region is one strand of a CPLcofold fold: a range of one RNA.
+type Region struct {
+	GeneID string `json:"gene_id"`
+	Start  uint64 `json:"start"`
+	End    uint64 `json:"end"`
+}
+
 // TaskStartRequest mirrors tasks::TaskStartRequest of the Tauri shell; it is
 // also what task-start.json stores for task_resume.
 type TaskStartRequest struct {
@@ -26,10 +33,12 @@ type TaskStartRequest struct {
 	SampleIDs   []string `json:"sample_ids,omitempty"`
 	GeneID      *string  `json:"gene_id,omitempty"`
 	Mode        *string  `json:"mode,omitempty"`
-	// Engine of a structure task: "cplfold" (default), "viennarna" or
-	// "comrades" (COMRADES(ViennaRNA)).
+	// Engine of a structure task: "cplfold" (default), "cplcofold" (mode
+	// "cofold", two Regions as two strands), "viennarna" or "comrades"
+	// (COMRADES(ViennaRNA)).
 	Engine     *string  `json:"engine,omitempty"`
 	Windows    []Window `json:"windows,omitempty"`
+	Regions    []Region `json:"regions,omitempty"`
 	Workers    *uint32  `json:"workers,omitempty"`
 	SamplesOne []string `json:"samples_one,omitempty"`
 	SamplesTwo []string `json:"samples_two,omitempty"`

@@ -79,6 +79,37 @@
   margin: 0;
 }
 
+/* Contact Map: data choices above, display choices beside the map */
+.control-section-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.contact-display-bar {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.contact-display-title {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.contact-display-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr));
+  gap: 12px;
+}
+
+.contact-display-bar .card-note {
+  margin: 8px 0 0;
+}
+
 .contact-workbench-side .heatmap-footer {
   display: grid;
   justify-items: start;

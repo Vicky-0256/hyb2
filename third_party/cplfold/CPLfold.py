@@ -9,7 +9,8 @@ Algorithm:
 1. Phase 1: Generate suboptimal structures using LinearFold with bonus matrix
 2. Phase 2: For each Phase 1 structure, mask paired positions and fold again
 3. Merge Phase 1 and Phase 2 structures to form pseudoknots
-4. Calculate energy with the HotKnots-derived Python DP/CC/RE evaluator and rank by effective energy
+4. Rank the candidates of a run with one energy model, without the bonus: Turner 2004 when
+   pseudoknots are off; the HotKnots-derived DP/CC/RE evaluator when they are on
 
 Key Parameters:
 - alpha: Scaling factor for COMRADES/PARIS bonus matrix (0.0-1.0)
@@ -42,62 +43,70 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from CPLfold_parser import BeamCKYParserHyper
 
 from Utils.hotknots_energy import HotKnotsEnergy
+from Utils.turner_energy import turner_energy
+from Utils.strand_layout import normalise_sequence
+
+
+def _structure_layout(structure: str) -> Tuple[str, Optional[int], List[Tuple[int, int]]]:
+    """Validate supported dot-bracket notation and remove its display nick.
+
+    Bracket families are balanced independently, so pseudoknots such as
+    ``([)]`` remain valid. Empty compact structures retain legacy behavior.
+    """
+    if not isinstance(structure, str):
+        raise ValueError("Structure must be a string")
+    boundary = None
+    if '&' in structure:
+        if structure.count('&') != 1:
+            raise ValueError("Structure accepts at most one '&' strand separator")
+        boundary = structure.index('&')
+        if boundary == 0 or boundary == len(structure) - 1:
+            raise ValueError("Structure strand separator must separate two nonempty strands")
+        structure = structure.replace('&', '')
+
+    pairs = []
+    stacks = {'(': [], '[': [], '{': []}
+    closing = {')': '(', ']': '[', '}': '{'}
+    for index, symbol in enumerate(structure):
+        if symbol in stacks:
+            stacks[symbol].append(index)
+        elif symbol in closing:
+            stack = stacks[closing[symbol]]
+            if not stack:
+                raise ValueError("Unbalanced structure brackets")
+            pairs.append((stack.pop(), index))
+        elif symbol != '.':
+            raise ValueError("Structure accepts only '.', '()', '[]', '{}' and '&'")
+    if any(stacks.values()):
+        raise ValueError("Unbalanced structure brackets")
+    return structure, boundary, pairs
 
 
 def structure_to_constraint(structure: str) -> str:
+    """Return a compact Phase 2 mask for a compact or strand-marked structure.
+
+    All paired positions in ``()``, ``[]`` and ``{}`` become ``.`` (forced
+    unpaired); dots become ``?`` (free). The optional ``&`` is omitted because
+    constraints use nucleotide coordinates. Malformed input raises ValueError.
     """
-    Convert a structure to constraint string for Phase 2 folding.
-
-    In the constraint string:
-    - Paired positions ('(' or ')') become '.' (forced unpaired - don't re-pair)
-    - Unpaired positions ('.') become '?' (free to form new pairs)
-
-    This allows Phase 2 to find new base pairs in unpaired regions that
-    may form pseudoknots with Phase 1 pairs.
-
-    Example:
-        Input:  ((((((((......)))))))).....................(((((....)))))...
-        Output: ........??????........?????????????????????.....[????]....???
-
-    Args:
-        structure: Phase 1 structure in dot-bracket notation
-
-    Returns:
-        Constraint string for Phase 2 folding
-    """
-    constraint = []
-    for c in structure:
-        if c == '(' or c == ')':
-            constraint.append('.')  # Force unpaired - don't re-pair these positions
-        else:
-            constraint.append('?')  # Free to form new pairs
-    return ''.join(constraint)
+    compact, _, _ = _structure_layout(structure)
+    return ''.join('?' if symbol == '.' else '.' for symbol in compact)
 
 
 def get_pairs_from_structure(structure: str) -> List[Tuple[int, int]]:
     """
-    Extract base pairs from a structure string.
+    Extract compact zero-based nucleotide pairs from a structure string.
 
     Args:
-        structure: Dot-bracket structure (supports (), [], {})
+        structure: Dot-bracket structure (supports (), [], {}), optionally
+                   containing one internal '&' strand separator.
 
     Returns:
-        List of (i, j) pairs where i < j
+        List of (i, j) pairs where i < j. '&' never occupies a coordinate.
+        Malformed separators, unsupported symbols or unbalanced brackets
+        raise ValueError. Valid single-strand pair ordering is unchanged.
     """
-    pairs = []
-    stacks = {'(': [], '[': [], '{': []}
-    closing = {')': '(', ']': '[', '}': '{'}
-
-    for i, c in enumerate(structure):
-        if c in stacks:
-            stacks[c].append(i)
-        elif c in closing:
-            opener = closing[c]
-            if stacks[opener]:
-                j = stacks[opener].pop()
-                pairs.append((j, i))
-
-    return pairs
+    return _structure_layout(structure)[2]
 
 
 def has_new_pairs(structure: str) -> bool:
@@ -162,31 +171,36 @@ def merge_structures(struct1: str, struct2: str) -> Optional[str]:
     """
     Merge Phase 1 and Phase 2 structures into a pseudoknotted structure.
 
-    Phase 1 structure uses () notation.
-    Phase 2 structure's pairs are converted to [] notation.
+    New Phase 2 pairs are converted to [] notation. Compact and strand-marked
+    inputs may be mixed: their nucleotide lengths must match, and a boundary
+    supplied by either input is preserved. Two explicit boundaries must agree.
 
     Args:
         struct1: Phase 1 structure (uses '(' and ')')
         struct2: Phase 2 structure (uses '(' and ')')
 
     Returns:
-        Merged structure with pseudoknot notation, or None if invalid
+        Merged structure, or None for malformed input, conflicting pairs or
+        boundaries, unequal nucleotide lengths, or a bracket collision that
+        cannot preserve the pair graph using the existing [] merge convention.
     """
-    if len(struct1) != len(struct2):
+    try:
+        compact1, boundary1, pairs1 = _structure_layout(struct1)
+        compact2, boundary2, pairs2 = _structure_layout(struct2)
+    except ValueError:
         return None
-
-    n = len(struct1)
-
-    # Get pairs from both structures
-    pairs1 = get_pairs_from_structure(struct1)
-    pairs2 = get_pairs_from_structure(struct2)
+    if len(compact1) != len(compact2):
+        return None
+    if boundary1 is not None and boundary2 is not None and boundary1 != boundary2:
+        return None
+    boundary = boundary1 if boundary1 is not None else boundary2
 
     # Check for conflicts
     if pairs_conflict(pairs1, pairs2):
         return None
 
     # Build merged structure
-    result = list(struct1)  # Start with Phase 1 structure
+    result = list(compact1)  # Work only in nucleotide coordinates.
 
     # Add Phase 2 pairs using [] notation
     for i, j in pairs2:
@@ -194,7 +208,14 @@ def merge_structures(struct1: str, struct2: str) -> Optional[str]:
             result[i] = '['
             result[j] = ']'
 
-    return ''.join(result)
+    merged = ''.join(result)
+    # Existing [] pairs or a pseudoknotted second input must not silently be
+    # re-paired when all newly added pairs use the Phase 2 bracket family.
+    if set(get_pairs_from_structure(merged)) != set(pairs1) | set(pairs2):
+        return None
+    if boundary is not None:
+        merged = merged[:boundary] + '&' + merged[boundary:]
+    return merged
 
 
 def phase1_fold(seq: str, parser: BeamCKYParserHyper,
@@ -272,7 +293,12 @@ def output_results(all_structures: List[Dict], seq: str,
     lines = []
 
     lines.append(f"Sequence: {seq}")
-    lines.append(f"Length: {len(seq)} nt")
+    lines.append(f"Length: {len(seq.replace('&', ''))} nt")
+    if '&' in seq:
+        lines.append("Strand lengths: " + " + ".join(str(len(part)) for part in seq.split('&')) + " nt")
+        lines.append("Cofold secondary structures: Turner 37 C; alpha guides search, beta adjusts pseudoknot ranking.")
+        if any(s.get('energy_metadata', {}).get('energy_kind') == 'heuristic' for s in all_structures):
+            lines.append("Pseudoknot ranking uses experimental Turner/DP cofold scores; these are not validated binding free energies.")
     lines.append("=" * 60)
     lines.append("")
 
@@ -353,8 +379,13 @@ def output_results(all_structures: List[Dict], seq: str,
             else:
                 if best['energy'] is not None and best_pk['energy'] is not None:
                     diff = best_pk['energy'] - best['energy']
-                    lines.append(f"  Energy difference from best: +{diff:.2f} kcal/mol")
-                    if diff > 0:
+                    heuristic = any(s.get('energy_metadata', {}).get('energy_kind') == 'heuristic'
+                                    for s in (best, best_pk))
+                    label = "Model score difference" if heuristic else "Energy difference"
+                    lines.append(f"  {label} from best: {diff:+.2f} kcal/mol")
+                    if heuristic:
+                        lines.append("  (Experimental cofold pseudoknot scores do not establish relative thermodynamic stability)")
+                    elif diff > 0:
                         lines.append("  (Pseudoknot is less stable than non-pseudoknot structure)")
                     else:
                         lines.append("  (Pseudoknot is more stable)")
@@ -388,7 +419,8 @@ def two_phase_pseudoknot_fold(seq: str,
                                bonus_matrix = None,
                                alpha: float = 0.0,
                                beta: float = 0.0,
-                               allow_pseudoknot: bool = True) -> List[Dict]:
+                               allow_pseudoknot: bool = True,
+                               cutpoint: Optional[int] = None) -> List[Dict]:
     """
     Main function: Two-phase pseudoknot prediction algorithm.
 
@@ -398,7 +430,8 @@ def two_phase_pseudoknot_fold(seq: str,
         energy_delta: Energy range for suboptimal structures
         max_phase1: Maximum Phase 1 structures to process
         max_phase2: Maximum Phase 2 structures per Phase 1
-        energy_model: Pseudoknot energy model (DP03, DP09, CC06, CC09, RE)
+        energy_model: Pseudoknot energy model (DP03, DP09, CC06, CC09, RE); used only when
+                      allow_pseudoknot is True. Pseudoknot-free runs rank with Turner 2004.
         output_file: Optional output file path
         verbose: Whether to print progress
         lv: Whether to use Vienna mode (True) or CONTRAfold mode (False)
@@ -411,10 +444,23 @@ def two_phase_pseudoknot_fold(seq: str,
         allow_pseudoknot: Whether to run Phase 2 and return pseudoknot candidates.
                          Defaults to True. When False, only Phase 1 secondary
                          structures are generated and returned.
+        cutpoint: Optional length of strand A for two-strand cofolding. The
+                  sequence may alternatively contain one '&'. Bonus matrices
+                  exclude the separator. Cofold preserves alpha and beta;
+                  cofold pseudoknot energies are explicitly experimental.
 
     Returns:
         List of structure dictionaries sorted by effective energy
     """
+    if cutpoint is not None or (isinstance(seq, str) and '&' in seq):
+        from CPLcofold import two_phase_cofold
+        return two_phase_cofold(
+            seq, cutpoint=cutpoint, beam_size=beam_size, energy_delta=energy_delta,
+            max_phase1=max_phase1, max_phase2=max_phase2, energy_model=energy_model,
+            output_file=output_file, verbose=verbose, lv=lv, bonus_matrix=bonus_matrix,
+            alpha=alpha, beta=beta, allow_pseudoknot=allow_pseudoknot,
+        )
+
     # Preprocess sequence
     seq = seq.upper().replace('T', 'U')
 
@@ -423,7 +469,7 @@ def two_phase_pseudoknot_fold(seq: str,
         print(f"Sequence length: {len(seq)}")
         print(f"Beam size: {beam_size}")
         print(f"Energy delta: {energy_delta}")
-        print(f"Energy model: {energy_model}")
+        print(f"Ranking energy model: {energy_model if allow_pseudoknot else 'Turner 2004'}")
         print(f"LinearFold mode: {'Vienna' if lv else 'CONTRAfold'}")
         print(f"Structure mode: {'Pseudoknot-enabled' if allow_pseudoknot else 'Pseudoknot-free'}")
         if bonus_matrix is not None:
@@ -472,8 +518,10 @@ def two_phase_pseudoknot_fold(seq: str,
             continue
         seen_structures.add(struct1)
 
-        # Calculate Phase 1 structure energy
-        energy1 = compute_energy_hotknots(seq, struct1, hk, energy_model)
+        # One model ranks all candidates of a run: the pseudoknot model when merged candidates
+        # can occur, Turner 2004 (the search's own nested model) when they cannot.
+        energy1 = (compute_energy_hotknots(seq, struct1, hk, energy_model) if allow_pseudoknot
+                   else turner_energy(seq, struct1))
 
         all_structures.append({
             'structure': struct1,
@@ -577,6 +625,12 @@ def two_phase_pseudoknot_fold(seq: str,
     return all_structures
 
 
+def cofold(sequence_a: str, sequence_b: str, **kwargs) -> List[Dict]:
+    """Predict two strands with CPLfold's alpha-guided two-phase/beta workflow."""
+    from CPLcofold import cofold as predict_cofold
+    return predict_cofold(sequence_a, sequence_b, **kwargs)
+
+
 def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
     """Load Hyb2's sparse, upper-triangle bonus-matrix TSV export.
 
@@ -647,6 +701,8 @@ def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
             )
         if not math.isfinite(value):
             raise SystemExit(f"CPLfold bonus matrix line {line_number} contains a non-finite score")
+        if abs(value) > np.finfo(np.float32).max:
+            raise SystemExit(f"CPLfold bonus matrix line {line_number} exceeds the supported float32 range")
 
         left, right = sorted((one, two))
         pair = (left, right)
@@ -670,99 +726,147 @@ def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
         )
     return matrix
 
-def main():
-    """Command line interface."""
+def main(argv=None, *, cofold_entry=False):
+    """Shared CLI; the dedicated entry requires two strands and cofold defaults."""
+    from Utils.cli_input import read_sequence_file
+    from Utils.cofold_options import mode_options
+
     parser = argparse.ArgumentParser(
-        description='Two-Phase LinearFold Pseudoknot Prediction',
+        prog="cplcofold" if cofold_entry else None,
+        description=("Two-strand CPLcofold prediction (default mode: pseudoknot)."
+                     if cofold_entry else "CPLfold single-strand and two-strand prediction (default mode: pseudoknot)."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python CPLfold.py -s GGCGCGGCACCGUCCGCGGAACAAACGG
-  python CPLfold.py -s GGCGCGGCACCGUCCGCGGAACAAACGG -o results.txt
-  python CPLfold.py -s GGCGCGGCACCGUCCGCGGAACAAACGG -b 200 -d 10.0
-  python CPLfold.py --sequence-file cplfold-input.fasta \
-    --bonus-matrix-file cplfold-bonus-matrix.tsv --alpha 0.5
+  bin/cplcofold --sequence 'GGG&CCC' --mode standard
+  bin/cplcofold --sequence GGG --sequence-two CCC --mode pseudoknot
+  bin/cplcofold --sequence-file two-strands.fasta --mode standard
+  bin/cplcofold --sequence 'GG&CC' --bonus-matrix-file bonus.tsv --alpha 1
+  bin/cplfold --sequence-file single-strand.fasta --alpha 0.5
 
-Energy Models:
-  DP03 - Dirks & Pierce 2003
-  DP09 - Dirks & Pierce 2009 (recommended)
-  CC06 - Cao & Chen 2006
-  CC09 - Cao & Chen 2009
-  RE   - Rivas & Eddy
+Modes and defaults:
+  pseudoknot (default): Phase 1 plus constrained Phase 2; max-phase1=10,
+    max-phase2=5, delta=5. Cofold pseudoknot scores are experimental.
+  standard: no Phase 2; max-phase1=1 and delta=0 unless explicitly overridden.
+  --no-pseudoknot is a compatibility flag: it disables Phase 2 without changing
+    candidate/window defaults. It conflicts with --mode pseudoknot.
+  Alpha defaults to 0 for every two-strand route and 0.5 for legacy single-strand
+    input. With a reads matrix, choose --alpha explicitly to guide the search.
+  Beta adjusts pseudoknot ranking: effective_energy = energy + beta * phase1_energy.
+    It does not alter physical energy and has no ranking effect without Phase 2.
 
-Energy Implementation:
-  Python port/refactoring based on HotKnots 2.0 energy-calculation code
-  and parameter files; no HotKnots executable is invoked at runtime.
-
-Beta Parameter:
-  The --beta parameter controls pseudoknot preference in ranking.
-  For pseudoknot structures:
-    effective_energy = pseudoknot_energy + beta * phase1_energy
-  Since RNA energies are negative, higher beta makes pseudoknots
-  appear more favorable, improving recall of pseudoknot structures.
-
-  Example: beta=0.5, phase1=-30, pseudoknot=-25
-    effective = -25 + 0.5*(-30) = -40 kcal/mol
-
-  Structure modes:
-    By default, Phase 2 searches for pseudoknots.
-    Use --no-pseudoknot to stop after Phase 1 and output only
-    pseudoknot-free secondary structures. In that mode, --beta is ignored.
+Energy models:
+  Cofold accepts DP03 or DP09 (default); ordinary cofold uses Turner 37 C.
+  Single-strand input also supports CC06, CC09 and RE. The packaged Python
+    HotKnots-derived evaluator does not invoke a HotKnots executable.
+  --model ranks pseudoknot runs. Pseudoknot-free single-strand runs rank every
+    candidate with Turner 2004 (ViennaRNA rules), the model of the search itself.
         """
     )
 
-    parser.add_argument('-s', '--sequence', required=True,
-                        help='RNA sequence (ACGU or ACGT)')
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('-s', '--sequence',
+                        help="RNA sequence (ACGU or ACGT), or two strands separated by '&'")
+    inputs.add_argument('--sequence-file', type=Path,
+                        help='Plain RNA/FASTA input; two records require cplcofold or --cofold')
+    parser.add_argument('--sequence-two', default=None,
+                        help='Second RNA strand; the first is supplied with --sequence')
+    parser.add_argument('--cutpoint', type=int, default=None,
+                        help='Length of strand A when --sequence contains A+B without a separator')
+    parser.add_argument('--cofold', action='store_true',
+                        help='Require two-strand input and allow two-record FASTA (implicit in cplcofold)')
+    parser.add_argument('--mode', choices=['standard', 'pseudoknot'], default=None,
+                        help='standard: ordinary cofold/MFE defaults; pseudoknot: two phases (default)')
     parser.add_argument('--bonus-matrix-file', type=str, default=None,
                         help='Sparse upper-triangle bonus matrix TSV file '
                              '(1-based prepared-sequence coordinates)')
-    parser.add_argument('--alpha', type=float, default=0.5,
-                        help='Bonus matrix scaling factor (default: 0.5)')
+    parser.add_argument('--alpha', type=float, default=None,
+                        help='Reads scaling factor (default: 0 for cofold; 0.5 for single-strand input)')
     parser.add_argument('-b', '--beam', type=int, default=100,
                         help='Beam size for LinearFold (default: 100)')
-    parser.add_argument('-d', '--delta', type=float, default=5.0,
-                        help='Energy delta for suboptimal structures (default: 5.0)')
-    parser.add_argument('-n1', '--max-phase1', type=int, default=10,
-                        help='Maximum Phase 1 structures (default: 10)')
+    parser.add_argument('-d', '--delta', type=float, default=None,
+                        help='Suboptimal energy window (default: 5; --mode standard: 0)')
+    parser.add_argument('-n1', '--max-phase1', type=int, default=None,
+                        help='Maximum Phase 1 structures (default: 10; --mode standard: 1)')
     parser.add_argument('-n2', '--max-phase2', type=int, default=5,
-                        help='Maximum Phase 2 structures per Phase 1 (default: 5)')
+                        help='Cofold Phase 2 candidates per Phase 1 (default: 5); legacy single-strand uses one Phase 2 fold')
     parser.add_argument('-o', '--output', type=str, default=None,
                         help='Output file path')
     parser.add_argument('-m', '--model', type=str, default='DP09',
-                        choices=['DP03', 'DP09', 'CC06', 'CC09', 'RE'],
-                        help='Pseudoknot energy model (default: DP09)')
+                        choices=['DP03', 'DP09'] if cofold_entry else ['DP03', 'DP09', 'CC06', 'CC09', 'RE'],
+                        help='Pseudoknot energy model for ranking when Phase 2 is on (default: DP09); '
+                             'pseudoknot-free runs rank with Turner 2004')
     parser.add_argument('--beta', type=float, default=0.0,
                         help='Pseudoknot energy bonus factor (default: 0.0). '
                              'For pseudoknots, effective_energy = pk_energy + beta * phase1_energy. '
-                             'Higher beta favors pseudoknots in ranking (improves recall).')
+                             'This changes ranking, not physical energy.')
     parser.add_argument('--no-pseudoknot', action='store_true',
                         help='Only generate pseudoknot-free secondary structures; '
                              'skip Phase 2 (default: pseudoknots enabled)')
     parser.add_argument('-q', '--quiet', action='store_true',
                         help='Suppress verbose output')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    sequence = (read_sequence_file(args.sequence_file, cofold=cofold_entry or args.cofold)
+                if args.sequence_file is not None else args.sequence)
+    if args.sequence_two is not None:
+        if '&' in sequence or '&' in args.sequence_two:
+            parser.error('--sequence-two requires two individual sequences without separators')
+        sequence = sequence + '&' + args.sequence_two
+    try:
+        sequence, cutpoint = normalise_sequence(sequence, args.cutpoint)
+    except ValueError as error:
+        parser.error(str(error))
+    if (cofold_entry or args.cofold) and cutpoint is None:
+        label = 'cplcofold' if cofold_entry else '--cofold'
+        parser.error(label + ' requires two strands, separated by &, --sequence-two, or --cutpoint')
+
+    # Validate known user options before invoking the folding implementation.
+    try:
+        explicit = {}
+        if args.no_pseudoknot:
+            explicit['allow_pseudoknot'] = False
+        if args.max_phase1 is not None:
+            explicit['max_phase1'] = args.max_phase1
+        if args.delta is not None:
+            explicit['energy_delta'] = args.delta
+        options = mode_options(args.mode, explicit)
+        options.setdefault('allow_pseudoknot', True)
+        options.setdefault('max_phase1', 10)
+        options.setdefault('energy_delta', 5.0)
+        alpha = args.alpha if args.alpha is not None else (0.0 if cutpoint is not None else 0.5)
+        for name, value in (('beam', args.beam), ('max-phase1', options['max_phase1']), ('max-phase2', args.max_phase2)):
+            minimum = 0 if name == 'beam' else 1
+            if value < minimum:
+                raise ValueError(f'--{name} must be an integer >= {minimum}')
+        for name, value in (('alpha', alpha), ('beta', args.beta), ('delta', options['energy_delta'])):
+            if not math.isfinite(value):
+                raise ValueError(f'--{name} must be finite')
+            if value < 0 and (cutpoint is not None or name == 'delta'):
+                raise ValueError(f'--{name} must be nonnegative')
+        if cutpoint is not None and args.model not in ('DP03', 'DP09'):
+            raise ValueError('Cofold supports DP03 or DP09; CC06, CC09 and RE are single-strand models')
+    except ValueError as error:
+        parser.error(str(error))
 
     bonus_matrix = None
     if args.bonus_matrix_file:
-        sequence = args.sequence.upper().replace('T', 'U')
         bonus_matrix = load_bonus_matrix_file(args.bonus_matrix_file, len(sequence))
 
-    # Run algorithm
-    results = two_phase_pseudoknot_fold(
-        seq=args.sequence,
-        beam_size=args.beam,
-        energy_delta=args.delta,
-        max_phase1=args.max_phase1,
-        max_phase2=args.max_phase2,
-        energy_model=args.model,
-        output_file=args.output,
-        verbose=not args.quiet,
-        bonus_matrix=bonus_matrix,
-        alpha=args.alpha,
-        beta=args.beta,
-        allow_pseudoknot=not args.no_pseudoknot
-    )
+    expected_input_errors = ()
+    if cutpoint is not None:
+        from CPLcofold import CofoldInputError
+        expected_input_errors = (CofoldInputError,)
+    try:
+        results = two_phase_pseudoknot_fold(
+            seq=sequence, beam_size=args.beam, energy_model=args.model,
+            max_phase2=args.max_phase2, output_file=args.output,
+            verbose=not args.quiet, bonus_matrix=bonus_matrix,
+            alpha=alpha, beta=args.beta, cutpoint=cutpoint, **options,
+        )
+    except expected_input_errors as error:
+        parser.error(str(error))
 
     # A completed fold is successful even when no pseudoknot candidate wins.
     # Keep a non-zero status only for the unexpected empty-result case.

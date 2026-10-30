@@ -244,7 +244,7 @@ def _validate_structures(manifest: Dict[str, Any], errors: List[str]) -> None:
         else: ids.add(item["id"])
         if "task_id" in item and (not isinstance(item.get("task_id"), str) or not _ID.match(item.get("task_id", ""))): errors.append(where + ".task_id is invalid")
         if "sample_ids" in item and (not isinstance(item.get("sample_ids"), list) or any(not isinstance(s, str) for s in item["sample_ids"])): errors.append(where + ".sample_ids must be an array of ids")
-        if "mode" in item and item.get("mode") not in ("genome", "windows"): errors.append(where + ".mode must be genome or windows")
+        if "mode" in item and item.get("mode") not in ("genome", "windows", "cofold", "paired"): errors.append(where + ".mode must be genome, windows, cofold or paired")
         if "windows" in item and (not isinstance(item.get("windows"), list) or any(not isinstance(w, dict) for w in item["windows"])): errors.append(where + ".windows must be an array of {start, end}")
         for key in ("parameters", "summary"):
             if key in item and not isinstance(item.get(key), dict): errors.append(where + "." + key + " must be an object")
@@ -601,14 +601,19 @@ def _structure_entry(root: Path, task_id: str, result: Dict[str, Any]) -> Option
     sample_ids = [s for s in sample_ids if isinstance(s, str)] if isinstance(sample_ids, list) else []
     windows = [{"start": int(w["start"]), "end": int(w["end"])} for w in raw.get("windows") or []
                if isinstance(w, dict) and type(w.get("start")) is int and type(w.get("end")) is int]
-    mode = raw.get("mode") if raw.get("mode") in ("genome", "windows") else "genome"
+    mode = raw.get("mode") if raw.get("mode") in ("genome", "windows", "cofold", "paired") else "genome"
+    # a CPLcofold result's two regions (RNA, start, end)
+    regions = [{"gene_id": r["gene_id"], "start": int(r["start"]), "end": int(r["end"])} for r in raw.get("regions") or []
+               if isinstance(r, dict) and isinstance(r.get("gene_id"), str) and type(r.get("start")) is int
+               and type(r.get("end")) is int] if mode in ("cofold", "paired") else []
     created = raw.get("created_at") if isinstance(raw.get("created_at"), str) and _DATE.match(raw["created_at"]) else _now()
     parameters = raw.get("parameters") if isinstance(raw.get("parameters"), dict) else {}
     summary = raw.get("summary") if isinstance(raw.get("summary"), dict) else (result.get("summary") if isinstance(result.get("summary"), dict) else {})
     return {"id": task_id, "task_id": task_id, "sample_ids": sample_ids,
             "gene_id": raw.get("gene_id") if isinstance(raw.get("gene_id"), str) else None,
             "mode": mode, "windows": windows, "parameters": json.loads(json.dumps(parameters)), "created_at": created,
-            "paths": paths, "summary": json.loads(json.dumps(summary))}
+            "paths": paths, "summary": json.loads(json.dumps(summary)),
+            **({"regions": regions} if regions else {})}
 
 
 def _comparison_entry(root: Path, task_id: str, result: Dict[str, Any]) -> Optional[Dict[str, Any]]:

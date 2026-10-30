@@ -86,6 +86,21 @@
       || clickAction('[data-action="navigate"][data-page="' + page + '"]');
   }
 
+  // Interactions with its search filter set to text (applied on change).
+  function searchRecords(text) {
+    navigateTo("interactions");
+    let tries = 0;
+    (function apply() {
+      const field = app && app.querySelector('[data-feature="interaction-filter"][data-key="search"]');
+      if (field) {
+        field.value = text;
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      }
+      if (tries++ < 40) window.setTimeout(apply, 50);
+    }());
+  }
+
   function activePage() {
     const active = app && app.querySelector(".sidebar .nav-button.is-active, .mobile-nav .nav-button.is-active");
     return active ? active.getAttribute("data-page") : null;
@@ -119,7 +134,7 @@
         '<div class="cmdk-panel" role="dialog" aria-modal="true" aria-label="Command palette">',
         '  <div class="cmdk-search">',
         '    <svg class="cmdk-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
-        '    <input type="text" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Jump to a page or run an action…">',
+        '    <input type="text" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Jump to a page, run an action, switch datasets or find records…">',
         '    <kbd>esc</kbd>',
         "  </div>",
         '  <div class="cmdk-body"><span class="cmdk-glider" aria-hidden="true"></span><ul id="cmdk-list" class="cmdk-list" role="listbox" aria-label="Commands"></ul></div>',
@@ -192,6 +207,27 @@
             icon: "page",
             current: id === page,
             run: function () { navigateTo(id); }
+          });
+        });
+      }
+
+      // The header's analysis scopes: merge all, a condition, or one dataset.
+      const scopeSelect = app && app.querySelector("#analysis-scope");
+      if (scopeSelect) {
+        Array.prototype.forEach.call(scopeSelect.options, function (option) {
+          out.push({
+            group: "Datasets",
+            label: "Analyse " + option.textContent.trim(),
+            hint: "",
+            icon: "page",
+            current: option.selected,
+            run: function () {
+              const select = app.querySelector("#analysis-scope");
+              if (select) {
+                select.value = option.value;
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            }
           });
         });
       }
@@ -324,6 +360,15 @@
       });
       if (query) {
         scored.sort(function (a, b) { return b.match.score - a.match.score || a.order - b.order; });
+      }
+      // Any query of two or more characters can also search the loaded HYB
+      // records (sequence ID, RNA name or hybrid sequence) on Interactions.
+      if (query.length >= 2 && app && app.querySelector(".workspace")) {
+        scored.push({
+          item: { group: "Records", label: "Find records matching \u201c" + query + "\u201d", hint: "", icon: "page", run: function () { searchRecords(query); } },
+          match: { score: -1, hits: [] },
+          order: items.length
+        });
       }
       filtered = scored.map(function (entry) { return entry.item; });
       if (!scored.length) {

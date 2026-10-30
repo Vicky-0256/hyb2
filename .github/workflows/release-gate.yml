@@ -1,0 +1,62 @@
+name: HYB2 Release Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'desktop/**'
+      - 'scripts/build-*.sh'
+      - 'scripts/verify-*.cjs'
+      - 'scripts/verify-*.mjs'
+      - 'scripts/verify-release-gate.sh'
+      - '.github/workflows/release-gate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: Browser engines and contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install pinned Emscripten
+        run: |
+          git clone --depth 1 --branch 3.1.57 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install 3.1.57
+          "$RUNNER_TEMP/emsdk/emsdk" activate 3.1.57
+      - name: Build and verify browser assets
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          bash scripts/build-vienna-wasm.sh
+          node scripts/verify-vienna-wasm.cjs web/vendor/viennarna/vienna-rna.js
+          bash scripts/build-cplfold-web.sh
+          node scripts/verify-cplfold-pyodide.mjs
+          node scripts/verify-cplfold-worker.mjs
+          node scripts/verify-structure-worker.cjs
+          node scripts/verify-structure-render.cjs
+          node scripts/verify-protocol-contract.cjs
+          node scripts/verify-ui-contract.cjs
+
+  native:
+    name: Native runtime preflight
+    # Native runtimes are intentionally not stored in Git. Run this gate for
+    # a release dispatch after the platform archive has been staged; browser
+    # pull requests must not fail merely because that private release input is
+    # absent from checkout.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Explain native runtime input
+        run: |
+          if [ ! -f desktop/resources/native/native-manifest.json ]; then
+            echo 'No native runtime staged. Build a verified CPython 3.11 archive for this runner and stage it before release.' >&2
+            echo 'See desktop/resources/README.md.' >&2
+            exit 1
+          fi
+      - name: Verify portable native runtime
+        run: python3 desktop/scripts/verify-native-release.py

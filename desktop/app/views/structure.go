@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -56,13 +57,15 @@ func init() {
 // ---- data
 
 type structureEntry struct {
-	ID         string         `json:"id"`
-	TaskID     string         `json:"task_id"`
-	SampleIDs  []string       `json:"sample_ids"`
-	Samples    []string       `json:"samples"`
-	GeneID     string         `json:"gene_id"`
-	Mode       string         `json:"mode"`
-	Windows    []core.Window  `json:"windows"`
+	ID        string        `json:"id"`
+	TaskID    string        `json:"task_id"`
+	SampleIDs []string      `json:"sample_ids"`
+	Samples   []string      `json:"samples"`
+	GeneID    string        `json:"gene_id"`
+	Mode      string        `json:"mode"`
+	Windows   []core.Window `json:"windows"`
+	// Regions are a CPLcofold fold's two strands (mode "cofold").
+	Regions    []core.Region  `json:"regions"`
 	Parameters map[string]any `json:"parameters"`
 	CreatedAt  string         `json:"created_at"`
 	Available  *bool          `json:"available"`
@@ -79,6 +82,12 @@ type structureRecord struct {
 	// Bonus is each pair's chimera evidence (HYB bonus), aligned with Pairs.
 	Bonus  []*float64 `json:"bonus"`
 	Energy *float64   `json:"energy"`
+	// A CPLcofold record (two strands): Positions is where each nucleotide
+	// is drawn (its RNA position, or its A+B index for two RNAs), Cutpoint
+	// the length of strand A and Segments the two regions.
+	Positions []int         `json:"positions"`
+	Cutpoint  int           `json:"cutpoint"`
+	Segments  []core.Region `json:"segments"`
 	// mapped, when set, are the pairs moved onto another reference
 	// (stMapRecords); they replace DBN and Pairs.
 	mapped []stPair
@@ -121,8 +130,63 @@ type structureResult struct {
 	Records []structureRecord `json:"records"`
 }
 
+// positionOf is where the record's k-th nucleotide (1-based) is drawn.
+func (r structureRecord) positionOf(k int) int {
+	if len(r.Positions) > 0 {
+		if k >= 1 && k <= len(r.Positions) {
+			return r.Positions[k-1]
+		}
+		return 0
+	}
+	start, _ := r.span()
+	return start + k - 1
+}
+
+// rnaPosition is the position of the record's k-th nucleotide on its own
+// RNA: for two strands, from the regions (a two-RNA or overlapping result
+// is drawn on A+B indices instead), else where it is drawn.
+func (r structureRecord) rnaPosition(k int) int {
+	if r.Cutpoint > 0 && len(r.Segments) == 2 {
+		if k <= r.Cutpoint {
+			return int(r.Segments[0].Start) + k - 1
+		}
+		return int(r.Segments[1].Start) + k - r.Cutpoint - 1
+	}
+	return r.positionOf(k)
+}
+
+// localOf is the 1-based index of the nucleotide drawn at pos, 0 if none.
+func (r structureRecord) localOf(pos int) int {
+	if len(r.Positions) > 0 {
+		for k, p := range r.Positions {
+			if p == pos {
+				return k + 1
+			}
+		}
+		return 0
+	}
+	start, _ := r.span()
+	if k := pos - start + 1; k >= 1 && k <= len(r.Sequence) {
+		return k
+	}
+	return 0
+}
+
+// ranges are the stretches of positions the record covers: its window, or
+// a CPLcofold record's two regions on one RNA.
+func (r structureRecord) ranges() [][2]int {
+	if len(r.Positions) > 0 && r.Cutpoint > 0 && r.Cutpoint < len(r.Positions) {
+		return [][2]int{{r.Positions[0], r.Positions[r.Cutpoint-1]}, {r.Positions[r.Cutpoint], r.Positions[len(r.Positions)-1]}}
+	}
+	start, end := r.span()
+	return [][2]int{{start, end}}
+}
+
 // span is the first and last position a record covers.
 func (r structureRecord) span() (int, int) {
+	if len(r.Positions) > 0 {
+		return slices.Min(r.Positions), slices.Max(r.Positions)
+	}
 	start := r.WindowStart
 	if start < 1 {
 		start = 1
@@ -169,6 +233,13 @@ func stParseDBN(dbn string, offset int) []stPair {
 func stRecordPairs(r structureRecord) []stPair {
 	if r.mapped != nil {
 		return r.mapped
+	}
+	if r.DBN != "" && len(r.Positions) == len(r.DBN) {
+		pairs := stParseDBN(r.DBN, 1)
+		for i := range pairs {
+			pairs[i].I, pairs[i].J = r.Positions[pairs[i].I-1], r.Positions[pairs[i].J-1]
+		}
+		return pairs
 	}
 	if r.DBN != "" {
 		return stParseDBN(r.DBN, r.WindowStart)
@@ -218,19 +289,28 @@ func stCompare(recordsA, recordsB []structureRecord, compare bool) ([]stPair, []
 	statsA, statsB := pairsA, pairsB
 	var s stStats
 	if compare {
-		spans := func(records []structureRecord) [][2]int {
-			out := make([][2]int, len(records))
+		// each record's ranges: a window, or a CPLcofold record's two regions,
+		// whose pairs may join them
+		spans := func(records []structureRecord) [][][2]int {
+			out := make([][][2]int, len(records))
 			for i, r := range records {
-				start, end := r.span()
-				out[i] = [2]int{start, end}
+				out[i] = r.ranges()
 			}
 			return out
 		}
-		inside := func(pairs []stPair, spans [][2]int) []stPair {
+		in := func(pos int, ranges [][2]int) bool {
+			for _, sp := range ranges {
+				if pos >= sp[0] && pos <= sp[1] {
+					return true
+				}
+			}
+			return false
+		}
+		inside := func(pairs []stPair, spans [][][2]int) []stPair {
 			var out []stPair
 			for _, pr := range pairs {
-				for _, sp := range spans {
-					if pr.I >= sp[0] && pr.J <= sp[1] {
+				for _, ranges := range spans {
+					if in(pr.I, ranges) && in(pr.J, ranges) {
 						out = append(out, pr)
 						break
 					}
@@ -240,10 +320,12 @@ func stCompare(recordsA, recordsB []structureRecord, compare bool) ([]stPair, []
 		}
 		spansA, spansB := spans(recordsA), spans(recordsB)
 		statsA, statsB = inside(pairsA, spansB), inside(pairsB, spansA)
-		cover := func(spans [][2]int) int {
+		cover := func(spans [][][2]int) int {
 			n := 0
-			for _, sp := range spans {
-				n += sp[1] - sp[0] + 1
+			for _, ranges := range spans {
+				for _, sp := range ranges {
+					n += sp[1] - sp[0] + 1
+				}
 			}
 			return n
 		}
@@ -354,7 +436,13 @@ type structurePage struct {
 	mode           string // "genome" | "windows"
 	windows        string
 	pseudoknot     bool
-	alpha, beam    float64
+	// seqOnly folds with CPLfold or CPLcofold from the sequence alone (the
+	// web's "sequence only" evidence mode).
+	seqOnly bool
+	// CPLcofold's two regions: strand A is region1 on gene, strand B region2
+	// on gene2 (the same RNA or another), each "start-end".
+	gene2, region1, region2 string
+	alpha, beam             float64
 	// the other CPLfold settings, as on the web RNA Structure page
 	phase1, delta, beta float64
 	model               string
@@ -425,7 +513,8 @@ func newStructurePage(a *App) *structurePage {
 
 func (p *structurePage) reset() {
 	p.gene, p.evidence, p.mode, p.windows = "", "", "genome", ""
-	p.pseudoknot = false
+	p.pseudoknot, p.seqOnly = false, false
+	p.gene2, p.region1, p.region2 = "", "", ""
 	p.resetFoldSettings()
 	p.prefillNote, p.startErr, p.lastTask, p.starting = "", "", "", false
 	p.structures, p.listErr, p.loading = nil, "", false
@@ -477,8 +566,28 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 				Start float64 `json:"start"`
 				End   float64 `json:"end"`
 			} `json:"windows"`
+			// Regions: fold these two regions as two strands with CPLcofold.
+			Regions []core.Region `json:"regions"`
 		}
-		if model.Decode(raw, &prefill) == nil {
+		err := model.Decode(raw, &prefill)
+		switch {
+		case err != nil:
+		case len(prefill.Regions) == 2:
+			r1, r2 := prefill.Regions[0], prefill.Regions[1]
+			p.engine, p.gene, p.gene2 = engineCPLcofold, r1.GeneID, r2.GeneID
+			p.region1, p.region2 = fmt.Sprintf("%d-%d", r1.Start, r1.End), fmt.Sprintf("%d-%d", r2.Start, r2.End)
+			if p.model != "DP03" && p.model != "DP09" {
+				p.model = stDefaultModel
+			}
+			if prefill.SelectionKey != "" {
+				p.evidence = prefill.SelectionKey
+			}
+			p.prefillNote = "Prefilled from " + nameOr(prefill.Source, "a fold request") +
+				" with both arms as two strands. Check the regions, then press Run fold below."
+		default:
+			if p.engine == engineCPLcofold {
+				p.engine = engineCPLfold // a window is one strand
+			}
 			if prefill.Gene != "" {
 				p.gene = prefill.Gene
 			}
@@ -702,7 +811,7 @@ func (p *structurePage) evidenceNames(e *structureEntry) string {
 
 func (p *structurePage) View(c *ui.Context) {
 	ui.Column(c).Fill().Padding(24).Gap(16).Children(func() {
-		PageHeader(c, "Structure", "Predict RNA secondary structure with CPLfold, using your samples' chimeric reads as evidence, and compare structures.")
+		PageHeader(c, "Structure", "Predict RNA secondary structure with CPLfold, CPLcofold or ViennaRNA, using your samples' chimeric reads as evidence, and compare structures.")
 		ui.Row(c).Grow(1).Gap(16).AlignItems(ui.Stretch).Children(func() {
 			// The form and results scroll; the check, Run fold and the
 			// fold's status stay pinned below them.
@@ -780,6 +889,12 @@ func (p *structurePage) viewer(c *ui.Context) {
 				}
 				if ui.Button(c, "Save .ct").Tooltip("Connectivity table, one block per window shown").Clicked() {
 					p.exportCT(a)
+				}
+				if ui.Button(c, "Save .bpseq").Tooltip("BPSEQ: position, base and partner, one block per window shown").Clicked() {
+					p.exportBPSEQ(a)
+				}
+				if ui.Button(c, "VARNA command…").Tooltip("A shell script that draws each window shown with VARNA").Clicked() {
+					p.exportVARNA(a)
 				}
 				if ui.Button(c, "Pairs TSV…").Tooltip("Every base pair shown, with its type, layer and chimera evidence").Clicked() {
 					p.exportPairsTSV(a)
@@ -1026,9 +1141,23 @@ func stDBNText(gene string, records []structureRecord) string {
 		if r.Energy != nil && !math.IsNaN(*r.Energy) && !math.IsInf(*r.Energy, 0) {
 			energy = " (" + jsFixed(*r.Energy, 2) + ")"
 		}
+		if c := r.Cutpoint; c > 0 && c < len(r.Sequence) && len(r.DBN) == len(r.Sequence) {
+			// CPLcofold: the two strands, '&' at the break, as the web's .dbn
+			fmt.Fprintf(&b, ">%s\n%s&%s\n%s&%s%s\n", stRegionsLabel(r.Segments), r.Sequence[:c], r.Sequence[c:], r.DBN[:c], r.DBN[c:], energy)
+			continue
+		}
 		fmt.Fprintf(&b, ">%s:%d-%d\n%s\n%s%s\n", gene, r.WindowStart, r.WindowEnd, r.Sequence, r.DBN, energy)
 	}
 	return b.String()
+}
+
+// stRegionsLabel: "ZIKV:1-45 + ZIKV:1086-1134".
+func stRegionsLabel(regions []core.Region) string {
+	parts := make([]string, len(regions))
+	for i, r := range regions {
+		parts[i] = fmt.Sprintf("%s:%d-%d", r.GeneID, r.Start, r.End)
+	}
+	return strings.Join(parts, " + ")
 }
 
 func (p *structurePage) statsTable(c *ui.Context, compare bool) {
@@ -1088,7 +1217,21 @@ func (p *structurePage) metaLine(a *structureResult) string {
 		if on, _ := m.Parameters["allow_pseudoknot"].(bool); on {
 			pk = "pseudoknots allowed"
 		}
-		parts = append(parts, fmt.Sprintf("%s, alpha %v", pk, m.Parameters["alpha"]))
+		if m.Parameters["evidence"] == "none" {
+			parts = append(parts, pk+", sequence only")
+		} else {
+			parts = append(parts, fmt.Sprintf("%s, alpha %v", pk, m.Parameters["alpha"]))
+		}
+		if len(a.Records) == 1 && a.Records[0].Cutpoint > 0 {
+			r := a.Records[0]
+			between := 0
+			for _, pr := range stParseDBN(r.DBN, 1) {
+				if pr.I <= r.Cutpoint && pr.J > r.Cutpoint {
+					between++
+				}
+			}
+			parts = append(parts, fmt.Sprintf("two strands %s, %d pair%s between them", stRegionsLabel(r.Segments), between, plural(between)))
+		}
 	}
 	if m.Timings.TotalS > 0 {
 		parts = append(parts, fmt.Sprintf("took %.1f s", m.Timings.TotalS))

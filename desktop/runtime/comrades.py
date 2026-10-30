@@ -115,6 +115,64 @@ def evidence_arms(hyb_paths: Sequence[Path], gene: str, sequence: str, start: in
     return arms, skipped
 
 
+# The web's spacer between two regions (comrades-analysis.js originalLinker):
+# HYB2's original 50 A + 50 T, as RNA.
+LINKER = "A" * 50 + "U" * 50
+
+
+def paired_arms(hyb_paths: Sequence[Path], regions: Sequence[Dict[str, Any]], prepared: str,
+                homodimer_only: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """The web's two-region layout (prepareReferenceAssembly with two regions,
+    not cofold): every record with one arm in each region, oriented region 1
+    first, in positions of ``prepared`` (region 1 + :data:`LINKER` + region 2).
+    ``regions`` carry gene_id, start, end and prepared_start."""
+    hybfile = _hybfile()
+    first, second = regions
+    names = [r["gene_id"].encode() for r in regions]
+    arms: List[Dict[str, Any]] = []
+    skipped = {"outsideSelectedRegions": 0, "homodimerFilter": 0, "invalidSequence": 0, "invalidRows": 0}
+
+    def inside(gene, s, e, index):
+        r = regions[index]
+        return gene == names[index] and r["start"] <= s and e <= r["end"]
+
+    def arm(s, e, index):
+        r = regions[index]
+        begin = r["prepared_start"] + s - r["start"]
+        return begin, prepared[begin - 1:begin + e - s]
+
+    for path in hyb_paths:
+        for line in _lines(path):
+            try:
+                record = hybfile.parse(line)
+            except ValueError:
+                skipped["invalidRows"] += 1
+                continue
+            if record is None:
+                continue
+            homodimer = record.gene1 == record.gene2 and record.overlap is not None and record.overlap >= 5
+            if homodimer_only and not homodimer:
+                skipped["homodimerFilter"] += 1
+                continue
+            one, two = (record.gene1, record.start1, record.end1), (record.gene2, record.start2, record.end2)
+            if inside(*one, 0) and inside(*two, 1):
+                pass
+            elif inside(*two, 0) and inside(*one, 1):
+                one, two = two, one
+            else:
+                skipped["outsideSelectedRegions"] += 1
+                continue
+            (start_one, seq_one), (start_two, seq_two) = arm(one[1], one[2], 0), arm(two[1], two[2], 1)
+            if set(seq_one + seq_two) - set("ACGU"):
+                skipped["invalidSequence"] += 1
+                continue
+            arms.append({"one": seq_one, "two": seq_two, "oneStart": start_one, "twoStart": start_two})
+            if len(arms) > MAX_EVIDENCE_RECORDS:
+                raise ValueError(f"These regions contain more than {MAX_EVIDENCE_RECORDS} eligible HYB rows. "
+                                 "Select smaller regions before running RNAcofold evidence generation.")
+    return arms, skipped
+
+
 # ---------------------------------------------------------------------------
 # the analysis core (comrades-analysis.js)
 # ---------------------------------------------------------------------------

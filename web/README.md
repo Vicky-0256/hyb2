@@ -25,6 +25,21 @@ is the dedicated `feature/cplfold-web` branch; `main` remains unchanged. Choose
 **GitHub Actions** as the publishing source in **Settings → Pages** before the
 first deployment.
 
+## Analysis scope
+
+Every loaded HYB file is analysed: after comparison datasets load, Overview,
+Interactions, Viewpoint, Region Explorer, RNA Structure and the Report read
+all loaded datasets merged (counts summed, rows concatenated), unless another
+scope was chosen in the header (all merged, one condition merged, or one
+dataset). The Contact Map is never merged: it draws the one dataset chosen in
+its Dataset control (default: the header's dataset when the scope is one,
+else the primary file), its RNA X/Y list that dataset's RNAs, and a selected
+cell's records and the parameter export name it. Overview's Per-dataset summary shows each file's
+records, source reads, RNAs and pairs, whether it is in the current scope, and
+condition totals. Compare keeps its own condition assignment. A Contact Map
+that exceeds the browser budget at the requested bin size doubles the bin size
+and says so. HYB binding energies rewrite the primary file only.
+
 ## Data access and embedding the analysis pages
 
 Analysis pages (Overview, Interactions, Contact Map, Viewpoint, Region
@@ -81,7 +96,7 @@ desktop build but are deprecated.
 
 The page has no analytics, API call, runtime CDN request, or server-side upload path. HYB data and folding inputs are processed in Web Workers and held in tab memory only. ViennaRNA, Pyodide, NumPy, and the CPLfold source archive are served from the same GitHub Pages artifact.
 
-The landing flow is intentionally two-stage: after the HYB file is parsed, the page stays on a local file-review screen. Users can add or replace the optional reference FASTA there, then click **Enter analysis** to open the workspace. Interaction tables and contact maps do not require FASTA; reference-based RNA structure and full-reference Viewpoint do.
+The landing flow is intentionally two-stage: after the HYB file is parsed, the page stays on a local file-review screen. Users can add or replace the optional reference FASTA there, then click **Enter analysis** to open the workspace. Interaction tables and contact maps do not require FASTA; reference-based RNA structure and full-reference Viewpoint do. Datasets on different genomes need each genome's sequence: choose several FASTA files at once, or use **Add FASTA** (Data panel or file-review screen) to join another file to the loaded reference instead of replacing it; matches already made, including manual ones, are kept.
 
 ## Shared UI conventions
 
@@ -158,10 +173,14 @@ ZAFR vs ZASI summary figure (`example.js`, files in
 decompressed by the parser worker (`DecompressionStream`; any `.hyb.gz` can
 be opened the same way), the African genome FASTA, CPLfold pseudoknot-free
 genome folds of both lineages (`ZAFR.dbn`, `ZILM.dbn`) and the NC_035889
-GenBank record. ZAFR_REP1 is the primary file; once it is parsed the other
+GenBank record (the ZASI genome FASTA joins the African one in a single
+reference). ZAFR_REP1 is the primary file; once it is parsed the other
 three replicates are fetched and parsed in workers for the Compare page
 (conditions ZAFR / ZASI, 10-nt bins, similarity minimum 10) and the arc map
-gets both folds and the gene track. When the differential test finishes, an
+gets both folds and the gene track. The analysis pages then read all four
+datasets merged (the header's scope selector also offers each condition
+merged and each dataset alone), and Overview lists every dataset with its own
+counts and each condition's totals. When the differential test finishes, an
 arc map that has structures but no interaction table draws its merged
 interactions, so panels A–G of the summary figure need no further file.
 Because the data are a subset the numbers are not the published ones; the
@@ -187,6 +206,7 @@ FASTA parsing removes layout whitespace only. Unsupported symbols are preserved 
 - For collapsed HYB2 IDs, the second underscore-delimited ID field is recovered separately as the source raw-read count. It is provenance/summary information, never a Contact Map or Viewpoint weight; those views count one per row in record mode or use explicitly selected legacy cluster support.
 - Legacy clustered 16-column files retain `count_total=…` metadata as cluster support. Positive-integer legacy column 16 inputs are marked as ambiguous in Validation because they lack the standard column-17 type field; zero, negative, or decimal numeric values are retained as overlap scores from a partial 17-column row.
 - The original HYB2 homodimer proxy is exposed separately from chimera type: both arms must name the same RNA and the column-16 overlap score must be at least 5.
+- The Contact Map has eight colour styles: Mint–navy (follows the page theme), White–red (Juicebox style), White–blue, Heat (yellow–red), Viridis, Magma reversed, White and black, and Black and white (inverted); every style but Mint–navy is drawn on its own paper (white, or black for the inverted greys) on screen and in exports. It downloads as SVG (vector), PDF (one page, lossless image), PNG (2×) and print PNG (4×), all in the chosen style and visible extent, plus the contact cells (TSV), the bins × bins matrix of the whole map (CSV) and the parameters (JSON).
 - The workspace includes interaction filtering by chimera type and homodimer proxy, a single large, zoomable contact map, a per-nucleotide Viewpoint graph, and local multi-file comparison maps. Viewpoint can use selected coordinates or the full mapped reference range after a matching FASTA is loaded.
 - The Compare page provides descriptive library-size-normalised effect sizes and the HYB2 similarity heatmap. The similarity heatmap follows `bin/plot_similarity_map` and `bin/similarity_heatmap.R` run on one merged contact map per condition: each condition's datasets are summed (as if their .hyb files were concatenated), bins below the chosen similarity minimum are dropped from each map, a bin present in both maps scores the smaller raw count, and the counts are capped at their 95% quantile and drawn with a white-to-`#00A087` gradient matching the summary figure over the data range (white is the smallest plotted count, not zero; teal is the cap; CIELAB interpolation as in ggplot2). As in R, those smallest bins vanish on the white panel; the "Similarity panel" option draws the map on ggplot's grey panel (#EBEBEB) instead, changing only the display. The similarity minimum is a display filter: it equals running `awk '$3 >= MIN'` on each condition's merged contact.txt before `plot_similarity_map` (1 keeps every bin, the HYB2 default). On the ZIKV human (Livefire1-3) vs mosquito (Aag1-2) data with minimum 30 it reproduces all 201,576 bins of that reproduction (one merged, filtered contact.txt per condition passed to `plot_similarity_map -a A -i B`) exactly. This one-map-per-condition definition is the same as `plot_similarity_map` with one file per side and HYB2 Desktop's `differential.py`, and it intentionally differs from `bin/hyb2_compare` with several replicates per side: hyb2_compare concatenates the replicate contact.txt files and pairs consecutive occurrences of each bin (A1/A2, A2/B1, B1/B2, ...), so its minima mix within-condition replicate pairs with between-condition ones. The comparison holds up to 1,500,000 distinct cells (4,000,000 dataset cells): a whole ~10.8 kb genome works at 10 nt (the included example covers 838,111 cells). Results above 100,000 cells keep each dataset's values in typed arrays and build a cell's per-dataset values on demand (look cells up with `Hyb2Data.comparisonCellAt(result, x, y)`; `cellMap` is only filled for smaller results), the canvas maps are drawn once into a cached layer, and the effect-map SVG keeps the 100,000 strongest bins. For a homodimer comparison (RNA X = RNA Y) a dataset without that RNA contributes its own RNA with the closest name (another strain's genome, as ZAFR vs ZILM) and is compared bin by bin on its own coordinates, as `bin/hyb2_compare` compares each dataset's contact map by position (`Hyb2Data.comparisonRnaPlan`); the page says so, and the differential test card below uses the same choice and lets you change it. It exports `hyb2-web.table.txt` plus the two-column, headerless `hyb2-web_names.table` expected by the existing `bin/DESeq_run.R`, and a separate extended metadata TSV for audit or custom R adapters. Counts that cannot survive the legacy R integer conversion are rejected instead of being rounded or silently converted to zero. Adjusted p-values on the Compare page come only from the in-browser differential test below (a port, not R; the pinned WebR package image remains behind its feasibility gate).
 - A recorded manual browser smoke ran the official WebR 0.6.0 release asset and base R 4.6.0 from a local static origin with `PostMessage`. The site does not vendor that runtime and deployment CI does not rerun the smoke. The stable package repository lacks DESeq2; a separate R-universe development probe for DESeq2 1.53.2 resolved 42 of 43 packages and missed `locfit`, but it is explicitly not evidence for the pinned DESeq2 1.52.0 target. Reproducible harness, recorded result, package-index snapshot, and release gate are in `vendor/webr-deseq2/` and `../scripts/webr-smoke/`.
@@ -211,10 +231,37 @@ structure page measures a representative local run when a longer request is
 needed and derives a conservative session-specific length recommendation. The
 bridge and worker retain a 500-nt hard safety ceiling because CPLfold allocates
 quadratic sequence-state arrays. CPLfold uses its bundled 37 °C energy tables;
-the separate ViennaRNA temperature control does not apply. HYB block evidence is currently restricted to
-one mapped reference region; this avoids the original Vienna workflow's 100-nt
-artificial spacer becoming foldable CPLfold sequence. Longer or Numba-accelerated
-CPLfold jobs use the local `bin/cplfold` command.
+the separate ViennaRNA temperature control does not apply. Choose **Folding
+layout → Two local regions · CPLcofold** in the CPLfold panel and enter each
+region's RNA name and inclusive start/end coordinates. The regions may come
+from the same RNA or different RNAs; the corresponding workflow presets keep
+CPLfold selected and preserve reads/alpha/beta/pseudoknot settings. The two
+extracted fragments are folded as separate strands, excluding the intervening
+reference sequence. Unknown symbols outside the selected windows do not
+prevent folding. Two pasted sequences are also supported. Region Explorer
+can transfer both an anchor and a bounded partner to CPLcofold. Without a
+transfer, region 2 starts as region 1's most-supported partner window: the
+201-nt window holding the most other arms of records with one arm in region 1
+(kept on the RNA's mapped extent), never a copy of region 1. RNA Structure folds any RNA that a loaded dataset
+maps to the reference, and its HYB evidence is, by default, every loaded
+dataset with rows on the folded RNAs (replicates merged); "HYB evidence from"
+can instead limit it to the header's analysis scope or to one dataset. The included example
+loads both genomes (ZAFR.fasta + ZILM.fasta) in one reference: ZAFR regions
+use ZAFR_REP1 + ZAFR_REP2 and ZASI regions ZILM_REP2 + ZILM_REP3; a ZAFR–ZASI
+CPLcofold pair has no chimeras joining the lineages, so its evidence stays
+within each strand. The sequence panel
+marks the chain break with & on both rows; positions exclude it. The drawing
+editor accepts two-strand results: no backbone joins the strands, automatic
+end labels name A 5′/3′ and B 5′/3′, and edited CT and DBN keep the break.
+Reference regions retain their eligible HYB reads with a
+real strand break and no artificial spacer. All matrix/pair coordinates refer
+to compact A+B; downloads preserve the break. Alpha guides both search phases,
+and beta ranks pseudoknot candidates. Two-strand models are DP03 and DP09;
+pseudoknot energies are explicitly experimental ranking heuristics. Capacity
+tests distinguish single- and two-strand modes and count total nucleotides.
+Longer or Numba-accelerated jobs use `bin/cplfold` for one RNA or
+`bin/cplcofold --mode standard|pseudoknot` for two RNAs. This cofold predictor
+is distinct from the ViennaRNA RNAcofold tool used to prepare COMRADES evidence.
 
 The vendored CPLfold snapshot has an unresolved combined-distribution licence
 boundary. Review `third_party/cplfold/THIRD_PARTY_NOTICES.md` and obtain the
@@ -248,12 +295,24 @@ available at `vendor/iris/LICENSE`.
 
 ## Batch exports and drawing editor
 
-- **Interactions → HYB binding energies** calculates column 3 for every valid
-  record in the current dataset, ignoring table filters. Mapped FASTA intervals
-  (1-based inclusive, columns 7–8 and 13–14) supply the two RNAcofold arms, as in
-  Lau's `hyb2fasta_bits_allRNAs.awk`; read-sequence slices are not substituted.
-  ViennaRNA runs at 37 °C, minimum loop 3, with CLI-style two-decimal energies.
-  Work runs in cancellable 64-record messages to a reused worker. Download the
+- **Interactions → HYB binding energies** calculates column 3 for the valid
+  records of the primary file: all of them, or only those matching the
+  Interactions filters (the others keep their energy, audited as not
+  selected). Mapped FASTA intervals (1-based inclusive, columns 7–8 and 13–14)
+  supply the two arms, as in Lau's `hyb2fasta_bits_allRNAs.awk`; read-sequence
+  slices are not substituted. Engines: **RNAcofold** (ViennaRNA, 37 °C,
+  minimum loop 3, CLI-style two-decimal energies; the HYB2 pipeline's
+  `sam2hyb` method and the default), **CPLcofold, nested** (Turner energies,
+  beam search; on the ZIKV example it matched RNAcofold on 10 of 13 records and
+  was up to 1.1 kcal/mol less negative on the others) and **CPLcofold with
+  pseudoknots** (adds CPLfold's experimental DP09 pseudoknot score).
+  CPLcofold runs as pure Python here, about 100 times slower per record
+  (≈ 1.7 s against ≈ 15 ms), and is limited to 500 nt per pair; filter first,
+  or use HYB2 Desktop or `bin/cplcofold` for whole files. Records are split
+  over parallel workers (up to 8 for RNAcofold, 4 for CPLcofold, one core
+  kept free): the 22,416-record ZAFR_REP1 example takes about a minute with
+  RNAcofold instead of six. Browser workers inherit the tab's priority, so a
+  Chrome window in the background runs several times slower. Download the
   updated HYB, or a ZIP with a per-row audit and parameters. Only column 3 is
   replaced in the source File; comments, blank/invalid lines, extra columns and
   line endings survive (gzip inputs produce an uncompressed HYB). Missing
@@ -276,28 +335,63 @@ available at `vendor/iris/LICENSE`.
   Stale tests cannot be exported. Processing runs in a cancellable worker;
   replicates over 50 million cell contributions or 1.5 million distinct cells fail explicitly.
 - **Structure result → Edit drawing / return to prediction** opens a browser
-  drawing editor with polygon/circular/linear layouts, selected-base/group
-  dragging and keyboard movement, pan/zoom, rotation/mirroring, base/pair/
-  backbone/background colours, base radius, pair width, numbering, title and
-  anchored draggable text annotations. Experimental scores now initialise base
-  colours using Lau's `plot_VARNA` RGB stops/interpolation (zero is white), with
-  an optional website palette. The legend distinguishes RNAcofold observations
-  from CPLfold bonus and IRIS support scores; these are original-prediction
-  values, never re-estimated after editing. Manual colours override the evidence
-  scale and can be reset with Restore evidence colours. Annotation tools include
-  region highlights, arrow/dot/triangle chemical-probe markers, selection from
-  a saved-annotation list for editing/removal, automatic 5′/3′, helix and hairpin
-  labels. Hairpin detection rejects crossing structures instead of guessing.
-  Group labels follow their bases when moved. All additions survive undo/redo,
-  JSON save/load and SVG/PNG export. It supports pair addition/removal,
-  50-step undo/redo, JSON save/load and edited CT/SVG exports. Existing SVG/PNG
-  image exports include the full edited drawing, without selection highlights.
-  CT/DBN prediction exports still represent the prediction: edited pairs do not
-  change its energy or evidence scores. Use **Export edited CT** for edited
-  topology. A different predicted sequence/structure starts a new drawing.
-  This is a browser editor, not the Java VARNA application: native VARNA
-  sessions, all VARNA layout algorithms and arbitrary VARNA annotation types
-  are not imported or reproduced. Drawing JSON is the editable session format.
+  drawing editor modelled on VARNA. Layouts: Radiate (VARNA's default: loops
+  as circles, straight helices, flat or circular exterior loop, top-level
+  domains spaced so they do not collide), the ViennaRNA RNA polygon, circular
+  and linear with arc pairs, each with adjustable base spacing; crossing pairs
+  are drawn but do not shape the layout. The editor opens with Radiate and
+  takes the full result width: a toolbar (undo/redo, zoom, layout, export),
+  the canvas, and a side panel whose style changes apply at once; on narrow
+  screens the panel moves below a canvas that stays in view. Plain scrolling
+  scrolls the page; Ctrl/⌘ + scroll or a pinch zooms. Selection: click a
+  base, Shift-click or Shift-drag a box to extend, double-click for its
+  domain (helix plus everything it closes) or expand to the enclosing domain;
+  drag or arrow-key bases (one undo step per drag), rotate a selection by any angle (domains
+  turn about their closing pair) or mirror it, rotate or mirror the whole
+  drawing, pan/zoom. Styles: per-base fill, letter and outline colours and
+  radius; per-pair colour and width; global pair style (simple, Leontis–Westhof
+  glyphs for cis Watson–Crick pairs: G·U a filled dot, other non-canonical
+  pairs an open circle; RNAViz; none), straight or arc pairs, font, letter
+  size, numbering interval/visibility/colour with outward ticks, backbone
+  colour/width, background and title colour/size. Base colours start
+  from COMRADES support for every engine: RNAcofold folds each eligible HYB
+  record's two arms, the intermolecular pairs are mapped to the prepared
+  sequence and counted once per record, and each base takes the count of the
+  pair it forms in the shown structure (0 when unpaired or unsupported).
+  COMRADES(ViennaRNA) scores its own result; IRIS and CPLfold results carry the
+  same RNAcofold evidence (37 °C, minimum hairpin 3) and are scored against
+  the selected candidate. A structure that shares no exact pair with the
+  evidence stays uncoloured, and the editor says so. Colours use Lau's
+  `plot_VARNA` RGB stops/interpolation over 0 to the structure's maximum
+  (zero is white), with an optional website palette; they are
+  original-prediction values, never re-estimated after editing. CPLfold's
+  bonus matrix still sets the arc-view pair opacity. A VARNA-style
+  colour map accepts one value per base or "position value" lines (e.g. SHAPE
+  reactivities) with automatic or fixed minimum/maximum, a caption and Lau,
+  website, heat, blue–white–red, greyscale or viridis palettes. Manual colours
+  override either scale; Restore evidence colours and Clear colours undo
+  them. Annotations: text anchored to selected bases, a helix or a loop (VARNA
+  B/H/L types) or a free position, each with its own colour and size; region
+  highlights with opacity and width; arrow/dot/triangle chemical-probe markers
+  with direction and intensity; automatic 5′/3′, helix and hairpin labels.
+  Hairpin detection rejects crossing structures instead of guessing. Group
+  labels follow their bases when moved. Pair addition/removal, 50-step
+  undo/redo and JSON save/load cover all of this. Exports: edited SVG and EPS
+  (opacity flattened onto the background), edited CT, BPSEQ and DBN (crossing
+  pairs as `[]`, `{}`, `<>`), and a VARNAcmd shell command that redraws the
+  structure in the Java VARNA application with the same colours, colour map,
+  highlights, annotations and probe marks (VARNA computes its own layout, so
+  dragged positions are not carried over). Existing SVG/PNG image exports
+  include the full edited drawing, without selection highlights. CT/DBN
+  prediction exports still represent the prediction: edited pairs do not
+  change its energy or evidence scores. A different predicted sequence/structure
+  starts a new drawing. This is a browser editor, not the Java VARNA
+  application: it has no NAView layout, does not read native VARNA session
+  files and does not record Leontis–Westhof edges for non-canonical pairs.
+  Drawing JSON is the editable session format.
 
 `node scripts/verify-batch-tools.cjs` covers reference extraction, column-only
 rewriting, map ranks/counts/caps/archives, drawing validation, CT and undo/redo.
+`node scripts/verify-structure-editor.cjs` checks the Radiate geometry on
+ViennaRNA structures (fixed backbone and pair lengths, no overlapping bases),
+domains, styles, annotations, colour maps and the EPS/BPSEQ/DBN/VARNA exports.

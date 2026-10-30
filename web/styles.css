@@ -1626,3 +1626,30 @@ a {
 
 .deseq-canvas { touch-action: none; cursor: grab; }
 .deseq-canvas:active { cursor: grabbing; }
+
+/* Overview: per-dataset counts and the header's analysis scope. */
+/* .data-table.per-dataset-table outranks workspace.css's .data-table cells */
+.data-table.per-dataset-table td,
+.data-table.per-dataset-table th[scope="col"]:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table.per-dataset-table th[scope="col"]:nth-child(2),
+.data-table.per-dataset-table td:nth-child(2) {
+  text-align: left;
+}
+
+.data-table .per-dataset-total th,
+.data-table .per-dataset-total td {
+  font-weight: 600;
+  border-top: 1px solid var(--line);
+}
+
+.header-scope select {
+  max-width: 260px;
+  min-height: 28px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+}

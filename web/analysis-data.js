@@ -205,6 +205,8 @@
     return {
       rnaX: pair ? pair.rnaOne : "",
       rnaY: pair ? pair.rnaTwo : "",
+      // one dataset, never merged: "" = the analysed dataset, else the primary
+      datasetId: "",
       binSize: 10,
       measure: "records",
       palette: "colour",
@@ -223,6 +225,24 @@
       zoomView: null,
       detailView: null
     };
+  }
+
+  // The Contact Map draws one dataset: the chosen one, else the header's
+  // scope when it is one dataset, else the primary file. Its RNA X/Y follow
+  // that dataset's RNAs. Returns { id, dataset, rnas }.
+  function contactDataset(state) {
+    const datasets = state.datasets || [];
+    const contact = state.contact || {};
+    const scope = (state.selection && state.selection.datasetIds) || [];
+    const byId = function (id) { return datasets.find(function (dataset) { return dataset.id === id; }); };
+    const dataset = byId(contact.datasetId) || (scope.length === 1 && byId(scope[0])) ||
+      datasets.find(function (item) { return item.primary; }) || byId(scope[0]) || null;
+    const rnas = dataset && dataset.rnaNames && dataset.rnaNames.length ? dataset.rnaNames : ((state.summary && state.summary.rnaNames) || []);
+    if (state.contact) {
+      if (rnas.indexOf(contact.rnaX) === -1) state.contact.rnaX = rnas[0] || "";
+      if (rnas.indexOf(contact.rnaY) === -1) state.contact.rnaY = rnas[0] || "";
+    }
+    return { id: dataset ? dataset.id : (scope[0] || ""), dataset: dataset, rnas: rnas };
   }
 
   function defaultRegionState(summary, records) {
@@ -259,6 +279,13 @@
     };
   }
 
+  // A dataset's default label: its file name without .hyb/.txt and .gz, so
+  // the primary file reads like the others ("ZILM_REP2_1in10").
+  function datasetLabel(fileName, fallback) {
+    const label = String(fileName || "").replace(/\.gz$/i, "").replace(/\.(hyb|txt)$/i, "");
+    return label || fallback || "Dataset";
+  }
+
   function defaultComparisonState(summary, records) {
     const pair = summary && summary.pairCounts && summary.pairCounts[0];
     return {
@@ -269,7 +296,7 @@
         summary: summary,
         records: records || [],
         condition: "A",
-        label: "Primary"
+        label: datasetLabel(summary.fileName, "Primary")
       }] : [],
       loading: null,
       error: "",
@@ -313,7 +340,12 @@
       randomSeed: "HYB2-Web",
       allowLargeEnsemble: false,
       allowLarge: false,
+      cplfoldMode: "single",
+      cplfoldSequenceTwo: "",
       cplfoldEvidence: "hyb-blocks",
+      // HYB evidence of RNA Structure: "all" loaded datasets on the folded
+      // RNAs (replicates merged), or the "primary" dataset only
+      evidenceDatasets: "all",
       cplfoldBeam: "20",
       cplfoldMaxPhase1: "3",
       cplfoldEnergyDelta: "5",
@@ -355,6 +387,48 @@
 
   // Extent of an RNA's arms. When no records are supplied (pages fed by a
   // DataProvider), the summary's rnaExtents map is used instead.
+  // The partner window of a region for a two-region fold: the window of
+  // `width` nt holding the most other arms of records that have one arm
+  // inside rna:start-end and the other outside it; null without such records.
+  function partnerWindow(records, rna, start, end, width) {
+    const size = Math.max(1, Number(width) || 201);
+    const first = Number(start), last = Number(end);
+    const arms = new Map();
+    (records || []).forEach(function (record) {
+      [[record.rnaOne, record.rnaOneStart, record.rnaOneEnd, record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd],
+       [record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd, record.rnaOne, record.rnaOneStart, record.rnaOneEnd]].forEach(function (side) {
+        if (side[0] !== rna || side[1] < first || side[2] > last) return;
+        if (side[3] === rna && side[4] <= last && side[5] >= first) return;
+        if (!arms.has(side[3])) arms.set(side[3], []);
+        arms.get(side[3]).push([side[4], side[5]]);
+      });
+    });
+    let best = null;
+    arms.forEach(function (list, partner) {
+      list.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+      for (let i = 0, j = 0; i < list.length; i += 1) {
+        // arms i..j-1 start within size nt of arm i and end inside the window
+        while (j < list.length && list[j][0] < list[i][0] + size) j += 1;
+        let count = 0;
+        for (let k = i; k < j; k += 1) if (list[k][1] <= list[i][0] + size - 1) count += 1;
+        if (!best || count > best.records) best = { rna: partner, start: list[i][0], end: list[i][0] + size - 1, records: count };
+      }
+    });
+    // Keep the window on the RNA: slide it back from the RNA's last mapped base.
+    const extent = best && getRnaExtent(records, best.rna);
+    if (extent && best.end > extent.max) {
+      best.start = Math.max(1, extent.max - size + 1);
+      best.end = extent.max;
+    }
+    return best;
+  }
+
+  // partnerWindow of the Structure page's region 1, from the loaded records.
+  function structurePartnerWindow(state) {
+    const structure = state && state.structure;
+    return structure ? partnerWindow(state.records, structure.rna, structure.start, structure.end) : null;
+  }
+
   function getRnaExtent(records, rna, summary) {
     if ((!records || !records.length) && summary && summary.rnaExtents) {
       const known = summary.rnaExtents[rna];
@@ -2329,7 +2403,24 @@
     };
   }
 
-  function recordsToCsv(records) {
+  // With several datasets in the analysis scope, label -> file name of each
+  // dataset by id (null for a single dataset): exports then say which file
+  // each row, and its line number, comes from.
+  function scopeDatasets(state) {
+    const scope = (state && state.selection && state.selection.datasetIds) || [];
+    if (scope.length < 2) {
+      return null;
+    }
+    return ((state && state.datasets) || []).reduce(function (byId, dataset) {
+      byId[dataset.id] = {
+        label: dataset.label || dataset.fileName || dataset.id,
+        fileName: dataset.fileName || ""
+      };
+      return byId;
+    }, {});
+  }
+
+  function recordsToCsv(records, datasets) {
     const rows = [[
       "sequence_id",
       "rna_1",
@@ -2348,6 +2439,9 @@
       "dG",
       "line"
     ]];
+    if (datasets) {
+      rows[0].splice(rows[0].length - 1, 0, "dataset", "dataset_file");
+    }
 
     records.forEach(function (record) {
       rows.push([
@@ -2368,6 +2462,10 @@
         record.dg === null ? "" : record.dg,
         record.lineNumber
       ]);
+      if (datasets) {
+        const dataset = datasets[record.datasetId] || {};
+        rows[rows.length - 1].splice(rows[0].length - 3, 0, dataset.label || record.datasetId || "", dataset.fileName || "");
+      }
     });
 
     return rows.map(function (row) {
@@ -2507,6 +2605,47 @@
     return rows.map(function (row) { return row.join("\t"); }).join("\n");
   }
 
+  // The map as a wide matrix: one row per RNA Y bin, one column per RNA X
+  // bin (bin starts, as in the contact cells TSV), each value the map's measure (0 for an empty
+  // bin), over the RNA extents of the map.
+  const MAX_MATRIX_EXPORT_CELLS = 4000000;
+  function contactMatrixToCsv(matrix) {
+    const cells = matrix && matrix.cells || [];
+    if (!cells.length) {
+      throw new Error("Generate a contact map with data before downloading.");
+    }
+    const bin = Math.max(1, Number(matrix.binSize) || 1);
+    const axis = function (key, low, high) {
+      let first = Infinity;
+      let last = -Infinity;
+      cells.forEach(function (cell) {
+        if (cell[key] < first) first = cell[key];
+        if (cell[key] > last) last = cell[key];
+      });
+      while (Number.isFinite(low) && first - bin >= low) first -= bin;
+      while (Number.isFinite(high) && last + bin <= high) last += bin;
+      const starts = [];
+      for (let start = first; start <= last; start += bin) starts.push(start);
+      return starts;
+    };
+    const xs = axis("x", matrix.xMin, matrix.xMax);
+    const ys = axis("y", matrix.yMin, matrix.yMax);
+    if (xs.length * ys.length > MAX_MATRIX_EXPORT_CELLS) {
+      throw new Error("The matrix would have " + (xs.length * ys.length).toLocaleString("en-US") + " cells; use larger bins for the matrix export, or the contact cells TSV.");
+    }
+    const column = new Map(xs.map(function (x, index) { return [x, index]; }));
+    const rowOf = new Map(ys.map(function (y, index) { return [y, index]; }));
+    const values = ys.map(function () { return new Array(xs.length).fill(0); });
+    cells.forEach(function (cell) {
+      const row = rowOf.get(cell.y);
+      const col = column.get(cell.x);
+      if (row !== undefined && col !== undefined) values[row][col] = cell.value;
+    });
+    return ["y_start/x_start," + xs.join(",")].concat(values.map(function (row, index) {
+      return ys[index] + "," + row.join(",");
+    })).join("\n");
+  }
+
   function csvCell(value) {
     return '"' + String(value == null ? "" : value).replace(/"/g, '""') + '"';
   }
@@ -2552,6 +2691,9 @@
     defaultComparisonState: defaultComparisonState,
     defaultStructureState: defaultStructureState,
     getRnaExtent: getRnaExtent,
+    partnerWindow: partnerWindow,
+    contactDataset: contactDataset,
+    structurePartnerWindow: structurePartnerWindow,
     getFilteredRecords: getFilteredRecords,
     filterRecords: filterRecords,
     getPartnerCounts: getPartnerCounts,
@@ -2595,10 +2737,13 @@
     extractReference: extractReference,
     normaliseFoldSequence: normaliseFoldSequence,
     recordsToCsv: recordsToCsv,
+    datasetLabel: datasetLabel,
+    scopeDatasets: scopeDatasets,
     recordsToHyb: recordsToHyb,
     rnaCountsToCsv: rnaCountsToCsv,
     rnaPairsToCsv: rnaPairsToCsv,
     contactToTsv: contactToTsv,
+    contactMatrixToCsv: contactMatrixToCsv,
     numberOrNull: numberOrNull
   };
 }());

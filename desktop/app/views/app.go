@@ -114,7 +114,7 @@ type Selection struct {
 
 // New makes the app state; pages are registered by RegisterPage.
 func New(b core.Backend, win Poster, dataDir string) *App {
-	a := &App{B: b, win: win, DataDir: dataDir, Page: "data", Tasks: map[string]model.Task{},
+	a := &App{B: b, win: win, DataDir: dataDir, Page: "data", theme: core.DefaultTheme, Tasks: map[string]model.Task{},
 		labels: map[string]string{}, pages: map[string]Page{},
 		SessionStart: time.Now().UTC().Format(time.RFC3339)}
 	a.recent = a.loadRecent()

@@ -8,52 +8,29 @@ import os
 from pathlib import Path
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "third_party/cplfold"))
+from Utils.cli_input import read_sequence_file as _read_sequence_file
+
 
 DEFAULT_MAX_SEQUENCE_LENGTH = 1000
 
 
-def _read_sequence_file(path: Path) -> str:
-    try:
-        contents = path.expanduser().read_text(encoding="utf-8")
-    except FileNotFoundError as error:
-        raise SystemExit(f"CPLfold sequence file was not found: {path}") from error
-    except UnicodeError as error:
-        raise SystemExit(f"CPLfold sequence file is not valid UTF-8: {path}") from error
-    except OSError as error:
-        raise SystemExit(f"Could not read CPLfold sequence file {path}: {error}") from error
-
-    header_count = 0
-    sequence_parts = []
-    for line in contents.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith(">"):
-            header_count += 1
-            if header_count > 1:
-                raise SystemExit(
-                    "CPLfold sequence files must contain exactly one FASTA record"
-                )
-            continue
-        sequence_parts.append("".join(stripped.split()))
-
-    sequence = "".join(sequence_parts)
-    if not sequence:
-        raise SystemExit(f"CPLfold sequence file contains no sequence: {path}")
-    return sequence
-
-
-def _sequence_arguments(arguments: list[str]) -> tuple[str | None, list[str]]:
+def _sequence_arguments(arguments: list[str], cofold: bool = False) -> tuple[str | None, list[str]]:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("-s", "--sequence")
     parser.add_argument("--sequence-file", type=Path)
+    parser.add_argument("--sequence-two")
+    parser.add_argument("--cofold", action="store_true")
     parsed, _ = parser.parse_known_args(arguments)
     if parsed.sequence is not None and parsed.sequence_file is not None:
         raise SystemExit("Use either --sequence or --sequence-file, not both")
     if parsed.sequence_file is None:
-        return parsed.sequence, list(arguments)
+        sequence = parsed.sequence
+        if sequence is not None and parsed.sequence_two is not None:
+            sequence += "&" + parsed.sequence_two
+        return sequence, list(arguments)
 
-    sequence = _read_sequence_file(parsed.sequence_file)
+    sequence = _read_sequence_file(parsed.sequence_file, cofold=cofold or parsed.cofold)
     forwarded = []
     skip_next = False
     for argument in arguments:
@@ -67,7 +44,8 @@ def _sequence_arguments(arguments: list[str]) -> tuple[str | None, list[str]]:
             continue
         forwarded.append(argument)
     forwarded.extend(["--sequence", sequence])
-    return sequence, forwarded
+    guard_sequence = sequence + "&" + parsed.sequence_two if parsed.sequence_two is not None else sequence
+    return guard_sequence, forwarded
 
 
 def _maximum_sequence_length() -> int:
@@ -102,17 +80,18 @@ def _default_numba_cache_directory() -> Path:
     return cache_directory
 
 
-def main() -> None:
+def main(cofold_entry: bool = False) -> None:
     repository = Path(__file__).resolve().parents[1]
-    entrypoint = repository / "third_party" / "cplfold" / "CPLfold.py"
+    entrypoint = repository / "third_party" / "cplfold" / ("CPLcofold.py" if cofold_entry else "CPLfold.py")
     if not entrypoint.is_file():
         raise SystemExit(f"Vendored CPLfold entry point is missing: {entrypoint}")
 
-    sequence, forwarded_arguments = _sequence_arguments(sys.argv[1:])
+    sequence, forwarded_arguments = _sequence_arguments(sys.argv[1:], cofold=cofold_entry)
     maximum = _maximum_sequence_length()
-    if sequence is not None and len(sequence.strip()) > maximum:
+    length = len("".join(sequence.split()).replace("&", "")) if sequence is not None else 0
+    if length > maximum:
         raise SystemExit(
-            f"CPLfold input is {len(sequence.strip())} nt; the Hyb2 safety limit is "
+            f"CPLfold input is {length} nt; the Hyb2 safety limit is "
             f"{maximum} nt. Set HYB2_CPLFOLD_MAX_NT explicitly to override it."
         )
 

@@ -34,6 +34,9 @@ const (
 // Themes accepted by the "theme" preference; "system" follows the OS.
 var Themes = []string{"system", "light", "dark"}
 
+// DefaultTheme is the theme until one is chosen: light, as the website.
+const DefaultTheme = "light"
+
 // Budget is a resource amount: the global scheduler budget or one task's claim.
 type Budget struct {
 	CPU   uint32 `json:"cpu"`
@@ -177,12 +180,12 @@ func LoadBudget(path string) Budget {
 	return DefaultBudget()
 }
 
-// LoadTheme is the stored theme, "system" when absent or unknown.
+// LoadTheme is the stored theme, DefaultTheme when absent or unknown.
 func LoadTheme(path string) string {
 	if theme, ok := readPrefs(path)["theme"].(string); ok && validTheme(theme) {
 		return theme
 	}
-	return "system"
+	return DefaultTheme
 }
 
 // LoadExternalLookup is the "external_lookup" preference: whether the
@@ -216,7 +219,7 @@ func DescribePreferences(path string) Obj {
 		"custom_budget":   custom && budget != nil,
 		"theme":           LoadTheme(path),
 		"external_lookup": LoadExternalLookup(path),
-		"defaults":        Obj{"budget": DefaultBudget(), "theme": "system", "external_lookup": false},
+		"defaults":        Obj{"budget": DefaultBudget(), "theme": DefaultTheme, "external_lookup": false},
 		"system":          systemInfo(mem),
 		"speed":           Obj{"measured_samples": len(LoadPerf(perfPath(path)))},
 	})

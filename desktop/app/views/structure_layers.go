@@ -160,6 +160,8 @@ func stMapRecords(records []structureRecord, m *seqmap.Map) (out []structureReco
 		bonus := stWeights([]structureRecord{r})
 		mapped := r
 		mapped.DBN, mapped.Pairs, mapped.Bonus, mapped.mapped = "", nil, nil, []stPair{}
+		// on A's coordinates the pairs are plain positions: no strands
+		mapped.Positions, mapped.Cutpoint, mapped.Segments = nil, 0, nil
 		for _, pr := range stRecordPairs(r) {
 			i, j := m.Pos(pr.I), m.Pos(pr.J)
 			if i == 0 || j == 0 {

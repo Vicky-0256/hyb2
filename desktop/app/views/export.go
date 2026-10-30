@@ -329,25 +329,26 @@ func (h heatSVG) SVG() (svg string, drawn, total int) {
 	fmt.Fprintf(&b, `<g clip-path="url(#%s)" shape-rendering="crispEdges">`, clipID)
 	for _, c := range inView {
 		x := left + (c.X-v.X0)*sx
-		y := top + (c.Y-v.Y0)*sy
 		minPx := h.MinCellPx
 		if minPx <= 0 {
 			minPx = 0.6
 		}
 		w := math.Max(c.W*sx, minPx)
 		hh := math.Max(c.H*sy, minPx)
+		// y grows upwards: (0, 0) at the bottom left
+		y := top + (v.Y1-c.Y)*sy - hh
 		fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" %s/>`, svgNum(x), svgNum(y), svgNum(w), svgNum(hh), svgFill("fill", c.Color))
 	}
 	b.WriteString(`</g>`)
 	fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" fill="none" stroke="%s"/>`, svgNum(left), svgNum(top), svgNum(size), svgNum(size), svgLine)
-	// Axes: X along the bottom, Y down the left side (gene coordinates).
+	// Axes: X along the bottom, Y up the left side (gene coordinates).
 	for _, x := range niceTicks(v.X0, v.X1, 5) {
 		px := left + (x-v.X0)*sx
 		fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(px), svgNum(top+size), svgNum(px), svgNum(top+size+4), svgLine)
 		fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="middle" fill="%s">%d</text>`, svgNum(px), svgNum(top+size+16), svgMuted, int(x))
 	}
 	for _, y := range niceTicks(v.Y0, v.Y1, 5) {
-		py := top + (y-v.Y0)*sy
+		py := top + (v.Y1-y)*sy
 		fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(left-4), svgNum(py), svgNum(left), svgNum(py), svgLine)
 		fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="end" fill="%s">%d</text>`, svgNum(left-6), svgNum(py+4), svgMuted, int(y))
 	}

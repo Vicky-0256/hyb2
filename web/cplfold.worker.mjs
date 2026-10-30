@@ -12,7 +12,7 @@ const CAPACITY_PROBE_LENGTH = 75;
 const RUNTIME_DIRECTORY = new URL("./vendor/pyodide-cplfold/", self.location.href);
 const PYODIDE_MODULE_URL = new URL("pyodide.mjs", RUNTIME_DIRECTORY);
 const EXPECTED_CPLFOLD_REVISION = "24bab52";
-const EXPECTED_BRIDGE_VERSION = "5";
+const EXPECTED_BRIDGE_VERSION = "6";
 const WORKER_BUILD = new URL(self.location.href).searchParams.get("build") || "local";
 
 let runtimePromise = null;
@@ -27,12 +27,18 @@ self.onmessage = async function (event) {
     await runBonusMatrixExport(message);
     return;
   }
+  if (message.type === "cplfold-energy-batch") {
+    await runEnergyBatch(message);
+    return;
+  }
   if (message.type !== "cplfold") {
     return;
   }
 
   try {
-    const sequence = String(message.sequence || "").toUpperCase().replace(/T/g, "U");
+    const input = normaliseInput(message);
+    const sequence = input.sequence;
+    const engine = input.cutpoint === undefined ? "CPLfold" : "CPLcofold";
     const maximumSequenceLength = requestedMaximum(message.maxSequenceLength);
     validateSequence(sequence, maximumSequenceLength);
     const requestStartedAt = Date.now();
@@ -44,15 +50,15 @@ self.onmessage = async function (event) {
     postProgress(
       message.evidenceMode === "hyb-blocks"
         ? "Building the HYB block bonus matrix"
-        : "Preparing sequence-only CPLfold",
+        : "Preparing sequence-only " + engine,
       46,
       { phase: "evidence" }
     );
     await yieldToEventLoop();
     postProgress(
       message.allowPseudoknot === false
-        ? "Running CPLfold phase 1 without pseudoknot search"
-        : "Running CPLfold phase 1 and pseudoknot phase 2",
+        ? "Running " + engine + " phase 1 without pseudoknot search"
+        : "Running " + engine + " phase 1 and pseudoknot phase 2",
       56,
       { phase: "cplfold" }
     );
@@ -60,6 +66,7 @@ self.onmessage = async function (event) {
     const startedAt = Date.now();
     const response = runtime.bridge.fold_json(JSON.stringify({
       sequence: sequence,
+      cutpoint: input.cutpoint,
       evidenceMode: message.evidenceMode,
       evidenceArms: message.evidenceArms || [],
       beamSize: message.beamSize,
@@ -99,11 +106,50 @@ self.onmessage = async function (event) {
   }
 };
 
+// HYB binding energies with CPLcofold: pairs [[armOne, armTwo], ...], each
+// folded sequence-only as two strands; replies with the selected
+// candidate's energy (kcal/mol) per pair, as the batch energy tool expects.
+async function runEnergyBatch(message) {
+  try {
+    const pairs = Array.isArray(message.pairs) ? message.pairs : [];
+    const runtime = await getRuntime();
+    const energies = new Float64Array(pairs.length);
+    for (let index = 0; index < pairs.length; index += 1) {
+      const input = normaliseInput({ sequence: pairs[index][0], sequenceTwo: pairs[index][1] });
+      validateSequence(input.sequence, HARD_MAX_SEQUENCE_LENGTH);
+      const result = JSON.parse(String(runtime.bridge.fold_json(JSON.stringify({
+        sequence: input.sequence,
+        cutpoint: input.cutpoint,
+        evidenceMode: "none",
+        evidenceArms: [],
+        energyModel: message.energyModel,
+        allowPseudoknot: message.allowPseudoknot === true,
+        maxSequenceLength: HARD_MAX_SEQUENCE_LENGTH
+      }))));
+      if (result.engineVersion !== EXPECTED_CPLFOLD_REVISION || result.bridgeVersion !== EXPECTED_BRIDGE_VERSION) {
+        throw new Error("The loaded CPLfold source does not match this web worker build.");
+      }
+      const energy = Number(result.energy);
+      if (!Number.isFinite(energy)) {
+        throw new Error("CPLcofold returned no energy for pair " + (index + 1) + ".");
+      }
+      energies[index] = Math.round(energy * 100) / 100;
+    }
+    self.postMessage({ type: "result", energies: energies, version: "CPLfold " + EXPECTED_CPLFOLD_REVISION }, [energies.buffer]);
+  } catch (error) {
+    self.postMessage({ type: "error", message: readableError(error) });
+  }
+}
+
 async function runCapacityProbe(message) {
   try {
+    if (message.cofold !== undefined && typeof message.cofold !== "boolean") {
+      throw new Error("cofold must be a boolean.");
+    }
     const requestStartedAt = Date.now();
     const probeLength = probeLengthValue(message.probeLength);
     const sequence = buildProbeSequence(probeLength);
+    const cutpoint = message.cofold === true ? Math.floor(probeLength / 2) : undefined;
     const evidenceMode = message.evidenceMode === "hyb-blocks" ? "hyb-blocks" : "none";
     const evidenceArms = evidenceMode === "hyb-blocks" ? buildProbeEvidenceArms(probeLength) : [];
     postProgress("Loading the local Python WebAssembly runtime", 5, {
@@ -127,6 +173,7 @@ async function runCapacityProbe(message) {
     const startedAt = Date.now();
     const response = runtime.bridge.fold_json(JSON.stringify({
       sequence: sequence,
+      cutpoint: cutpoint,
       evidenceMode: evidenceMode,
       evidenceArms: evidenceArms,
       beamSize: message.beamSize,
@@ -170,7 +217,8 @@ async function runCapacityProbe(message) {
         alpha: result.parameters && result.parameters.alpha,
         beta: result.parameters && result.parameters.beta,
         allowPseudoknot: result.parameters && result.parameters.allowPseudoknot,
-        evidenceMode: evidenceMode
+        evidenceMode: evidenceMode,
+        cofold: cutpoint !== undefined
       }
     });
   } catch (error) {
@@ -184,7 +232,8 @@ async function runCapacityProbe(message) {
 
 async function runBonusMatrixExport(message) {
   try {
-    const sequence = String(message.sequence || "").toUpperCase().replace(/T/g, "U");
+    const input = normaliseInput(message);
+    const sequence = input.sequence;
     const requestStartedAt = Date.now();
     postProgress("Loading the local Python WebAssembly runtime", 5, {
       phase: "runtime",
@@ -201,6 +250,7 @@ async function runBonusMatrixExport(message) {
     await yieldToEventLoop();
     const response = runtime.bridge.bonus_matrix_json(JSON.stringify({
       sequence: sequence,
+      cutpoint: input.cutpoint,
       evidenceMode: message.evidenceMode === "hyb-blocks" ? "hyb-blocks" : "none",
       evidenceArms: message.evidenceArms || []
     }));
@@ -366,6 +416,51 @@ function validateSequence(sequence, maximum) {
       " nt for this capacity-tested request. Run the browser capacity test again or select a shorter region."
     );
   }
+}
+
+// Keep all pair/read coordinates in compact A+B space. The nick is metadata,
+// never a nucleotide; validate it before loading the relatively large runtime.
+function normaliseInput(message) {
+  if (message.cofold !== undefined && typeof message.cofold !== "boolean") {
+    throw new Error("cofold must be a boolean.");
+  }
+  const clean = function (value) {
+    return String(value === undefined || value === null ? "" : value).replace(/\s/g, "").toUpperCase().replace(/T/g, "U");
+  };
+  let sequence = clean(message.sequence);
+  let cutpoint = message.cutpoint;
+  if (cutpoint === null) { cutpoint = undefined; }
+  if (message.sequenceTwo !== undefined && message.sequenceTwo !== null) {
+    const second = clean(message.sequenceTwo);
+    if (!sequence || !second || sequence.includes("&") || second.includes("&")) {
+      throw new Error("Supply two nonempty RNA strands without '&' when using sequenceTwo.");
+    }
+    if (cutpoint !== undefined && cutpoint !== sequence.length) {
+      throw new Error("cutpoint does not match the length of RNA A.");
+    }
+    cutpoint = sequence.length;
+    sequence += second;
+  } else if (sequence.includes("&")) {
+    const strands = sequence.split("&");
+    if (strands.length !== 2 || !strands[0] || !strands[1]) {
+      throw new Error("CPLcofold requires exactly two nonempty strands separated by '&'.");
+    }
+    if (cutpoint !== undefined && cutpoint !== strands[0].length) {
+      throw new Error("cutpoint does not match the '&' strand break.");
+    }
+    cutpoint = strands[0].length;
+    sequence = strands.join("");
+  }
+  if (!sequence || /[^ACGU]/.test(sequence)) {
+    throw new Error("CPLfold accepts nonempty RNA strands containing only A, C, G and U.");
+  }
+  if (cutpoint !== undefined && (!Number.isInteger(cutpoint) || cutpoint <= 0 || cutpoint >= sequence.length)) {
+    throw new Error("cutpoint must separate two nonempty RNA strands.");
+  }
+  if (message.cofold === true && cutpoint === undefined) {
+    throw new Error("CPLcofold requires two RNA strands and a strand break.");
+  }
+  return { sequence: sequence, cutpoint: cutpoint };
 }
 
 function probeLengthValue(value) {

@@ -14,12 +14,15 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+
+	"hyb2desktop/core"
 )
 
 const (
-	engineCPLfold  = "cplfold"
-	engineVienna   = "viennarna"
-	engineComrades = "comrades"
+	engineCPLfold   = "cplfold"
+	engineCPLcofold = "cplcofold"
+	engineVienna    = "viennarna"
+	engineComrades  = "comrades"
 	// the web's COMRADES(ViennaRNA) defaults and limits
 	stDefaultStems, stDefaultSeed = 75, "HYB2-Web"
 	stComradesMaxNT               = 3000
@@ -122,6 +125,10 @@ func (p *structurePage) comradesPlan(pl *foldPlan) {
 	if p.randomFolds > stLargeEnsemble && !p.allowLargeEnsemble {
 		pl.problems = append(pl.problems, "Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.")
 	}
+	if p.mode == "paired" {
+		p.pairedPlan(pl)
+		return
+	}
 	for _, n := range pl.lengths {
 		if n > stComradesMaxNT {
 			pl.problems = append(pl.problems, fmt.Sprintf("COMRADES(ViennaRNA) folds at most %s nt at a time, as the web: fold windows of that size.",
@@ -130,6 +137,33 @@ func (p *structurePage) comradesPlan(pl *foldPlan) {
 		}
 	}
 	viennaMemory(pl)
+}
+
+// stSpacerNT is the web's spacer between two COMRADES regions (50 A + 50 U).
+const stSpacerNT = 100
+
+// pairedPlan: COMRADES(ViennaRNA) of two regions joined by the spacer, the
+// web's long-range, intermolecular and homodimer layouts.
+func (p *structurePage) pairedPlan(pl *foldPlan) {
+	r1, r2, ok := p.twoRegions(pl)
+	mode := "paired"
+	pl.req.Mode, pl.req.Windows, pl.req.Regions = &mode, nil, []core.Region{r1, r2}
+	pl.what, pl.windows, pl.lengths = "2 regions joined by the spacer", nil, nil
+	pl.limits = []string{"The regions are joined by the web's 100-nt A/U spacer and folded together; the result keeps the two regions.",
+		"Only chimeras with one arm in each region are evidence; each is cofolded (RNAcofold).",
+		"No pseudoknots: ViennaRNA returns a nested structure."}
+	if !ok {
+		return
+	}
+	n1, n2 := int(r1.End-r1.Start+1), int(r2.End-r2.Start+1)
+	if n := n1 + stSpacerNT + n2; n > stComradesMaxNT {
+		pl.problems = append(pl.problems, fmt.Sprintf("Both regions and the 100-nt spacer are %s nt; COMRADES(ViennaRNA) folds at most %s nt, as the web.",
+			FormatNumber(int64(n)), FormatNumber(stComradesMaxNT)))
+	}
+	// the memory of the joined fold; the form shows the two regions
+	pl.lengths = []int{n1 + stSpacerNT + n2}
+	viennaMemory(pl)
+	pl.lengths = []int{n1, n2}
 }
 
 // comradesSeconds is a rough upper bound: one MFE per stem tried, for the

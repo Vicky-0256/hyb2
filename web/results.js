@@ -370,10 +370,12 @@
       scope: {
         kind: "session_snapshot",
         label: "Session report",
-        description: "Every analysis of this browser tab as currently configured, from one primary HYB file" +
+        description: "Every analysis of this browser tab as currently configured, from " +
+          ((summary.datasetIds || []).length > 1 ? summary.datasetIds.length + " HYB datasets merged (" + summary.fileName + ")"
+            : (!s.primarySummary || s.primarySummary.fileName === summary.fileName ? "one primary HYB file" : "one HYB dataset (" + summary.fileName + ")")) +
           ((s.comparison && s.comparison.datasets || []).length > 1 ? " and the Compare datasets" : "") +
           ". Not a selection of results: steps that were not run are listed as not_run.",
-        primaryDataset: summary.fileName || null,
+        primaryDataset: (s.primarySummary || summary).fileName || null,
         // written by the researcher on the Report page; never generated
         purpose: s.reportPurpose && String(s.reportPurpose).trim() ? { text: String(s.reportPurpose).trim().slice(0, 1000), source: "researcher" } : null
       },
@@ -484,7 +486,8 @@
       steps.reference.inputs.push(addInput({ role: "reference_fasta", fileName: reference.fileName || null, bytes: number(reference.fileSize), sha256: reference.sha256 || null,
         sha256Status: reference.sha256 ? "computed" : "pending" }));
       values.fasta_sequences = number(reference.sequenceCount !== undefined ? reference.sequenceCount : count(s.fasta && s.fasta.sequences));
-      values.mapped_rna_names = Object.keys(reference.mapping || {}).filter(function (k) { return reference.mapping[k]; }).length;
+      // Count only the analysed RNAs: the mapping also covers datasets outside the scope.
+      values.mapped_rna_names = (summary.rnaNames || Object.keys(reference.mapping || {})).filter(function (k) { return (reference.mapping || {})[k]; }).length;
       setStatus("reference", values.mapped_rna_names ? "ok" : "no_result", values.mapped_rna_names ? null : "No HYB RNA name matched a FASTA sequence.");
       const names = (summary.rnaNames || []).length;
       if (values.mapped_rna_names < names) {
@@ -779,17 +782,24 @@
       steps.structure.completedAt = sres.completedAt || null;
       const label = (structure.rna || "structure") + (structure.start ? ":" + structure.start + "-" + structure.end : "");
       record.structures.push(Object.assign(structureFile("results/structure_prediction.dbn", "RNA structure prediction (" + (sres.engine || structure.engine || "") + ")",
-        { name: label, sequence: sres.sequence, dotBracket: sres.dotBracket }), { step: steps.structure.id }));
-      const offset = number(structure.start) && structure.source === "reference" ? number(structure.start) - 1 : 0;
+        { name: label, sequence: sres.sequence, dotBracket: sres.dotBracket,
+          displaySequence: sres.displaySequence, dotBracketWithBreak: sres.dotBracketWithBreak }), { step: steps.structure.id }));
+      const offset = !sres.cutpoint && number(structure.start) && structure.source === "reference" ? number(structure.start) - 1 : 0;
       record.structures.push(structureJson("results/structure_prediction.json", "RNA structure prediction (base pairs, candidates)", {
         step: steps.structure.id, source: label, method: sres.engine || structure.engine || null, energy: number(sres.energy), energyUnit: sres.energyUnit || "kcal/mol",
         topology: sres.topology || null, crossingPairs: number(sres.crossingPairs || 0), sequence: sres.sequence, length: sres.sequence.length,
         dotBracket: sres.dotBracket || null, pairs: pairList(sres.pairs),
-        coordinates: "1-based positions on the folded sequence" + (offset ? "; add " + offset + " for the position on " + (structure.rna || "the RNA") : ""),
+        coordinates: sres.cutpoint ? "1-based compact A+B positions, excluding '&'; use sourceSegments for reference mapping" : "1-based positions on the folded sequence" + (offset ? "; add " + offset + " for the position on " + (structure.rna || "the RNA") : ""),
         positionOffset: offset,
+        ...(sres.cutpoint ? { cutpoint: sres.cutpoint, strandLengths: sres.strandLengths,
+          displaySequence: sres.displaySequence, dotBracketWithBreak: sres.dotBracketWithBreak,
+          sourceSegments: sres.sourceSegments || [], energyMetadata: sres.energyMetadata,
+          energyBreakdown: sres.energyBreakdown, effectiveEnergy: number(sres.effectiveEnergy),
+          parameters: sres.parameters } : {}),
         selectedCandidate: Array.isArray(sres.candidates) && sres.candidates.length ? (number(sres.selectedCandidate) || 0) + 1 : null,
         candidates: Array.isArray(sres.candidates) ? sres.candidates.map(function (c, index) {
-          return { rank: index + 1, type: c.type || null, topology: c.topology || null, energy: number(c.energy), pairs: pairList(c.pairs).length, crossingPairs: number(c.crossingPairs || 0), dotBracket: c.dotBracket || null };
+          return { rank: index + 1, type: c.type || null, topology: c.topology || null, energy: number(c.energy), pairs: pairList(c.pairs).length, crossingPairs: number(c.crossingPairs || 0), dotBracket: c.dotBracket || null,
+            ...(sres.cutpoint ? { dotBracketWithBreak: c.dotBracketWithBreak, effectiveEnergy: number(c.effectiveEnergy), energyMetadata: c.energyMetadata } : {}) };
         }) : [],
         prediction: "computational prediction; not an experimental structure"
       }));
@@ -833,7 +843,10 @@
     steps.parse.scope = "All rows of " + file;
     steps.reference.scope = reference ? (reference.fileName || "the FASTA") + " against the RNA names of " + file : null;
     steps.interactions.scope = "Valid records of " + file + " matching the S03 filters";
-    steps.contact_map.scope = contact.rnaX ? file + ": " + contact.rnaX + " × " + contact.rnaY + (values.contact_bin_size ? ", " + values.contact_bin_size + "-nt bins" : "") : null;
+    // the Contact Map draws one dataset, not the merged scope
+    const contactChoice = root.Hyb2Data && typeof root.Hyb2Data.contactDataset === "function" && s.datasets ? root.Hyb2Data.contactDataset(s) : null;
+    const contactFile = contactChoice && contactChoice.dataset ? contactChoice.dataset.fileName || contactChoice.dataset.label || file : file;
+    steps.contact_map.scope = contact.rnaX ? contactFile + ": " + contact.rnaX + " × " + contact.rnaY + (values.contact_bin_size ? ", " + values.contact_bin_size + "-nt bins" : "") : null;
     steps.viewpoint.scope = viewpoint.rna ? file + ": " + viewpoint.rna + (vr && vr.start ? " " + vr.start + "-" + vr.end : "") : null;
     steps.region.scope = region.rna ? file + ": " + region.rna + " " + (region.start || "?") + "-" + (region.end || "?") : null;
     steps.comparison.scope = conditionText ? "Datasets " + conditionText : null;
@@ -919,7 +932,7 @@
       });
       dotBracket = chars.join("");
     }
-    return { file: path, title: title, name: structure.name || null, length: length, text: ">" + (structure.name || title) + "\n" + (structure.sequence ? structure.sequence + "\n" : "") + dotBracket + "\n" };
+    return { file: path, title: title, name: structure.name || null, length: length, text: ">" + (structure.name || title) + "\n" + (structure.sequence ? (structure.displaySequence || structure.sequence) + "\n" : "") + (structure.dotBracketWithBreak || dotBracket) + "\n" };
   }
 
   // [[i, j]] from [[i, j]] or [{ left, right }]

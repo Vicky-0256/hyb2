@@ -30,8 +30,16 @@ self.onmessage = async function (event) {
         await yieldToEventLoop();
         return foldWithVienna(engine, sequence, 37, 3, constraints);
       }, function(stage, percent) { postProgress(stage, percent); });
+      result.comradesEvidence = await comradesSupportEvidence(engine, message.evidenceArms, message.sequence, 92, 7);
       result.elapsedMs = Date.now() - started;
       self.postMessage({type: "complete", result: result});
+      return;
+    }
+    if (message.type === "comrades-evidence") {
+      postProgress("Loading ViennaRNA RNAcofold engine", 2, { phase: "engine" });
+      const engine = await getEngine();
+      if (!message.sequence) throw new Error("COMRADES support scoring needs the prepared sequence.");
+      self.postMessage({ type: "complete", evidence: await comradesSupportEvidence(engine, message.evidenceArms, message.sequence, 5, 90) });
       return;
     }
     if (message.type === "comrades-fold") {
@@ -138,29 +146,8 @@ async function runComradesFold(message) {
   postProgress("Loading ViennaRNA RNAcofold engine", 4, { phase: "engine" });
   const engine = await getEngine();
   const startedAt = Date.now();
-  const mappedPairs = [];
-  let cofoldsWithIntermolecularPairs = 0;
-
-  for (let index = 0; index < evidenceArms.length; index += 1) {
-    const job = evidenceArms[index];
-    const cofold = cofoldWithVienna(engine, job.sequenceOne, job.sequenceTwo, temperature, minimumLoop);
-    const mapped = comrades.mapCofoldPairs(job, cofold.pairs);
-    if (mapped.length) {
-      cofoldsWithIntermolecularPairs += 1;
-      mappedPairs.push.apply(mappedPairs, mapped);
-    }
-    if (index === evidenceArms.length - 1 || index % Math.max(1, Math.floor(evidenceArms.length / 80)) === 0) {
-      postProgress(
-        "RNAcofold evidence " + (index + 1) + " / " + evidenceArms.length,
-        8 + Math.round(((index + 1) / evidenceArms.length) * 30),
-        { phase: "rna-cofold", completed: index + 1, total: evidenceArms.length }
-      );
-      await yieldToEventLoop();
-    }
-  }
-
-  const allEvidence = comrades.aggregateEvidence(mappedPairs);
-  const selectedEvidence = comrades.selectFragmentEvidence(allEvidence, 1, sequence.length);
+  const { mappedPairs, cofoldsWithIntermolecularPairs, allEvidence, selectedEvidence } =
+    await collectComradesEvidence(engine, comrades, evidenceArms, sequence.length, temperature, minimumLoop, 8, 30);
   const stems = comrades.mergeTouchingStems(selectedEvidence);
   const stemConstraints = comrades.stemsToConstraints(stems, constraintLimit);
   if (!selectedEvidence.length || !stemConstraints.length) {
@@ -234,6 +221,56 @@ async function runComradesFold(message) {
 
   postProgress("Preparing COMRADES evidence and ensemble result", 97, { phase: "complete" });
   self.postMessage({ type: "complete", result: result });
+}
+
+// COMRADES evidence: RNAcofold folds each HYB record's two arms, the
+// intermolecular pairs are mapped back to the reference and counted once per
+// record, and the strongest pairs inside the sequence are kept.
+async function collectComradesEvidence(engine, comrades, evidenceArms, sequenceLength, temperature, minimumLoop, startPercent, spanPercent) {
+  const mappedPairs = [];
+  let cofoldsWithIntermolecularPairs = 0;
+  for (let index = 0; index < evidenceArms.length; index += 1) {
+    const job = evidenceArms[index];
+    const cofold = cofoldWithVienna(engine, job.sequenceOne, job.sequenceTwo, temperature, minimumLoop);
+    const mapped = comrades.mapCofoldPairs(job, cofold.pairs);
+    if (mapped.length) {
+      cofoldsWithIntermolecularPairs += 1;
+      mappedPairs.push.apply(mappedPairs, mapped);
+    }
+    if (index === evidenceArms.length - 1 || index % Math.max(1, Math.floor(evidenceArms.length / 80)) === 0) {
+      postProgress(
+        "RNAcofold evidence " + (index + 1) + " / " + evidenceArms.length,
+        startPercent + Math.round(((index + 1) / evidenceArms.length) * spanPercent),
+        { phase: "rna-cofold", completed: index + 1, total: evidenceArms.length }
+      );
+      await yieldToEventLoop();
+    }
+  }
+  const allEvidence = comrades.aggregateEvidence(mappedPairs);
+  const selectedEvidence = comrades.selectFragmentEvidence(allEvidence, 1, sequenceLength);
+  return { mappedPairs, cofoldsWithIntermolecularPairs, allEvidence, selectedEvidence };
+}
+
+// The per-base support of IRIS and CPLfold results is scored the COMRADES way,
+// against the same RNAcofold evidence a COMRADES(ViennaRNA) run would use.
+// Prepared arm sequences are slices of the prepared sequence, so arms that
+// carry only coordinates are completed from it.
+async function comradesSupportEvidence(engine, evidenceArms, sequence, startPercent, spanPercent) {
+  const prepared = String(sequence || "").toUpperCase().replace(/T/g, "U");
+  const arms = normaliseEvidenceArms((Array.isArray(evidenceArms) ? evidenceArms : []).map(function (arm) {
+    return Object.assign({}, arm, {
+      sequenceOne: arm.sequenceOne || prepared.slice(Number(arm.oneStart) - 1, Number(arm.oneEnd)),
+      sequenceTwo: arm.sequenceTwo || prepared.slice(Number(arm.twoStart) - 1, Number(arm.twoEnd))
+    });
+  }));
+  const found = await collectComradesEvidence(engine, getComradesCore(), arms, prepared.length, 37, 3, startPercent, spanPercent);
+  return {
+    pairs: found.selectedEvidence.map(function (entry) { return { one: entry.one, two: entry.two, count: entry.count }; }),
+    inputRecords: arms.length,
+    cofoldsWithIntermolecularPairs: found.cofoldsWithIntermolecularPairs,
+    temperature: 37,
+    minimumLoop: 3
+  };
 }
 
 function getComradesCore() {

@@ -229,4 +229,20 @@ assert.equal(data.analyses.region.result.matchingRecords, 1);
 assert.equal(data.analyses.comparison.result.comparableBins, 1);
 assert.equal(data.analyses.structure.sourceHyb.fileName, "<bad>.hyb");
 
+const cofoldState = JSON.parse(JSON.stringify(state));
+cofoldState.structure.cplfoldMode = "cofold";
+Object.assign(cofoldState.structure.result, {
+  engine: "CPLcofold", cutpoint: 2, strandLengths: [2, 2],
+  displaySequence: "AC&GU", dotBracketWithBreak: "((&))",
+  energyMetadata: { energy_kind: "heuristic" }
+});
+cofoldState.structure.result.candidates[0].dotBracketWithBreak = "((&))";
+const cofoldHtml = report.render(cofoldState);
+assert.match(cofoldHtml, /CPLcofold/);
+assert.match(cofoldHtml, /AC&amp;GU/);
+assert.match(cofoldHtml, /\(\(&amp;\)\)/);
+assert.match(cofoldHtml, /Two RNA strands/);
+assert.match(cofoldHtml, /experimental ranking heuristic/);
+assert.match(cofoldHtml, /CPLfold candidates/, "cofold retains the candidate table");
+
 console.log("Report render contract passed.");

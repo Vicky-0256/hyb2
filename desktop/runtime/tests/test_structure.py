@@ -427,3 +427,201 @@ class ComradesRunTests(unittest.TestCase):
         (self.project / "data" / "a.hyb").write_text("")
         with self.assertRaisesRegex(ValueError, "chimeras have both arms inside"):
             self._run(task_id="empty")
+
+
+class CofoldRunTests(unittest.TestCase):
+    """engine "cplcofold": two regions as two strands, as the web's CPLcofold."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self.tmp.name) / "p.hyb2proj"
+        new_project(self.project, "Cofold")
+        (self.project / "data").mkdir()
+        self.one, self.two = _sequence(240, seed=3), _sequence(120, seed=8)
+        (self.project / "data" / "ref.fa").write_text(f">{GENE} test\n{self.one}\n>OTHER_RNA\n{self.two}\n")
+        row = "r{k}\tACGU\t.\t{g1}\t1\t20\t{a0}\t{a1}\t1e-5\t{g2}\t21\t40\t{b0}\t{b1}\t1e-5\t\t-10\tType_1\n"
+        rows = [row.format(k=k, g1=GENE, a0=5, a1=30, g2=GENE, b0=180, b1=205) for k in range(6)]      # between
+        rows += [row.format(k=10 + k, g1=GENE, a0=185, a1=200, g2=GENE, b0=8, b1=25) for k in range(3)]  # reversed
+        rows += [row.format(k=20 + k, g1=GENE, a0=2, a1=12, g2=GENE, b0=30, b1=40) for k in range(2)]    # region 1
+        rows += [row.format(k=30, g1=GENE, a0=5, a1=30, g2=GENE, b0=100, b1=120)]                        # outside
+        rows += [row.format(k=40 + k, g1=GENE, a0=5, a1=30, g2="OTHER_RNA", b0=60, b1=85) for k in range(4)]
+        (self.project / "data" / "a.hyb").write_text("".join(rows))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, regions, **extra):
+        request = {"operation": "structure_run", "project_path": str(self.project), "reference": "data/ref.fa",
+                   "hyb_paths": ["data/a.hyb"], "gene_id": regions[0][0], "engine": "cplcofold", "mode": "cofold",
+                   "regions": [{"gene_id": g, "start": s, "end": e} for g, s, e in regions]}
+        request.update(extra)
+        return handle(request, repo_root=ROOT)
+
+    def test_same_rna(self):
+        from desktop.runtime.structure import read_structure
+        result = self._run([(GENE, 1, 60), (GENE, 170, 230)], task_id="co1")
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "co1"
+        meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual((meta["engine"], meta["mode"]), ("CPLcofold", "cofold"))
+        rows = meta["records"][0]["evidence_rows"]
+        self.assertEqual((rows["between"], rows["within_one"], rows["within_two"]), (9, 2, 0))
+        self.assertEqual(meta["records"][0]["evidence"]["inputRecords"], 11)
+        dbn = (out / "structure.dbn").read_text().splitlines()
+        self.assertEqual(dbn[1], self.one[:60] + "&" + self.one[169:230])
+        self.assertEqual(dbn[2].index("&"), 60)
+        self.assertIn("CPLcofold pseudoknot-free, alpha 0.5", dbn[0])
+        # registered with its regions, and read back on the RNA's positions
+        from desktop.runtime.project import _structure_entry
+        entry = _structure_entry(self.project.resolve(), "co1", result)
+        self.assertEqual((entry["mode"], entry["regions"][1]), ("cofold", {"gene_id": GENE, "start": 170, "end": 230}))
+        manifest = json.loads((self.project / "project.json").read_text())
+        manifest["structures"] = [entry]
+        (self.project / "project.json").write_text(json.dumps(manifest))
+        record = read_structure(self.project, "co1")["records"][0]
+        self.assertEqual(record["cutpoint"], 60)
+        self.assertEqual(record["positions"][:2], [1, 2])
+        self.assertEqual(record["positions"][60], 170)
+        self.assertEqual((record["window_start"], record["window_end"]), (1, 230))
+        self.assertEqual(len(record["bonus"]), len(record["pairs"]))
+        for i, j in record["pairs"]:
+            self.assertTrue((1 <= i <= 60 or 170 <= i <= 230) and (1 <= j <= 60 or 170 <= j <= 230))
+
+    def test_two_rnas_and_sequence_only(self):
+        result = self._run([(GENE, 1, 60), ("OTHER_RNA", 50, 110)], task_id="co2")
+        self.assertTrue(result["ok"], result)
+        meta = json.loads((self.project / "structures" / "co2" / "meta.json").read_text())
+        self.assertEqual(meta["gene_id"], f"{GENE} + OTHER_RNA")
+        self.assertEqual(meta["records"][0]["evidence_rows"]["between"], 4)
+        alone = self._run([(GENE, 1, 60), ("OTHER_RNA", 50, 110)], task_id="co3", parameters={"evidence": "none"})
+        self.assertTrue(alone["ok"], alone)
+        meta = json.loads((self.project / "structures" / "co3" / "meta.json").read_text())
+        self.assertTrue(meta["evidence_inputs"]["rows"].startswith("none"))
+        self.assertEqual(meta["records"][0]["pairs_with_bonus"], 0)
+        self.assertIn("sequence only", (self.project / "structures" / "co3" / "structure.dbn").read_text())
+
+    def test_rejects(self):
+        for regions, extra in (([(GENE, 1, 60)], {}), ([(GENE, 1, 60), (GENE, 200, 300)], {}),
+                               ([(GENE, 1, 60), ("NOPE", 1, 30)], {}),
+                               ([(GENE, 1, 60), (GENE, 170, 230)], {"parameters": {"energy_model": "CC06"}}),
+                               ([(GENE, 1, 60), (GENE, 170, 230)], {"parameters": {"beam": 500}}),
+                               ([(GENE, 1, 60), (GENE, 170, 230)], {"mode": "windows"}),
+                               ([(GENE, 1, 60), (GENE, 170, 230)], {"parameters": {"evidence": "maybe"}})):
+            with self.assertRaises(ValueError, msg=(regions, extra)):
+                self._run(regions, task_id="bad", **extra)
+        # no chimera inside the regions: the task fails and says why
+        failed = self._run([(GENE, 100, 140), (GENE, 150, 168)], task_id="none")
+        self.assertFalse(failed["ok"])
+        self.assertIn("no chimeras have both arms", failed["error"])
+
+
+class SequenceOnlyTests(StructureRunTests):
+    """CPLfold with parameters.evidence "none": no chimera is read."""
+
+    def test_sequence_only(self):
+        result = handle(self._request(task_id="seq1", parameters={"evidence": "none"}), repo_root=ROOT)
+        self.assertTrue(result["ok"], result)
+        meta = json.loads((self.project / "structures" / "seq1" / "meta.json").read_text())
+        self.assertTrue(meta["evidence_inputs"]["rows"].startswith("none"))
+        self.assertEqual(meta["records"][0]["pairs_with_bonus"], 0)
+        # an empty .hyb is no obstacle
+        (self.project / "data" / "a.hyb").write_text("")
+        self.external.write_text("")
+        again = handle(self._request(task_id="seq2", parameters={"evidence": "none"}), repo_root=ROOT)
+        self.assertTrue(again["ok"], again)
+
+
+class PairedComradesTests(CofoldRunTests):
+    """engine "comrades", mode "paired": the web's two-region COMRADES layouts."""
+
+    def _paired(self, regions, **extra):
+        return self._run(regions, engine="comrades", mode="paired", **extra)
+
+    def test_long_range_and_intermolecular(self):
+        from desktop.runtime.project import _structure_entry
+        from desktop.runtime.structure import read_structure
+        result = self._paired([(GENE, 1, 60), (GENE, 170, 230)], task_id="pc1")
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "pc1"
+        meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual((meta["engine"], meta["mode"]), ("COMRADES(ViennaRNA)", "paired"))
+        # only chimeras with one arm in each region; region 1 rows are not used
+        self.assertIn("one arm in each region (9)", meta["evidence_inputs"]["rows"])
+        record = meta["records"][0]
+        self.assertEqual(record["comrades"]["evidence"]["inputRecords"], 9)
+        self.assertEqual((record["cutpoint"], record["length"]), (60, 121))
+        dbn = (out / "structure.dbn").read_text().splitlines()
+        self.assertEqual(dbn[1], self.one[:60] + "&" + self.one[169:230])
+        self.assertIn("COMRADES(ViennaRNA), 37 °C", dbn[0])
+        entry = _structure_entry(self.project.resolve(), "pc1", result)
+        self.assertEqual(entry["mode"], "paired")
+        manifest = json.loads((self.project / "project.json").read_text())
+        manifest["structures"] = [entry]
+        (self.project / "project.json").write_text(json.dumps(manifest))
+        read = read_structure(self.project, "pc1")["records"][0]
+        self.assertEqual(read["positions"][60], 170)
+        # the fitted stems are pairs of the structure, on the RNA
+        pairs = {tuple(p) for p in read["pairs"]}
+        self.assertTrue({tuple(p) for p in meta["parameters"]["hard_pairs"]} <= pairs)
+        inter = self._paired([(GENE, 1, 60), ("OTHER_RNA", 50, 110)], task_id="pc2")
+        self.assertTrue(inter["ok"], inter)
+        self.assertIn("one arm in each region (4)",
+                      json.loads((self.project / "structures" / "pc2" / "meta.json").read_text())["evidence_inputs"]["rows"])
+
+    def test_paired_rejects(self):
+        with self.assertRaisesRegex(ValueError, "one arm in each"):
+            self._paired([(GENE, 100, 140), (GENE, 150, 168)], task_id="none")
+        with self.assertRaises(ValueError):
+            self._run([(GENE, 1, 60), (GENE, 170, 230)], engine="viennarna", mode="paired", task_id="bad")
+        with self.assertRaisesRegex(ValueError, "exceeds the COMRADES"):
+            long = "".join(random.Random(1).choice("ACGU") for _ in range(3000))
+            (self.project / "data" / "ref.fa").write_text(f">{GENE} test\n{long}\n")
+            self._paired([(GENE, 1, 1500), (GENE, 1501, 3000)], task_id="long")
+
+
+class TwoStrandReviewTests(CofoldRunTests):
+    """Overlapping regions and counted evidence (code review fixes)."""
+
+    def test_overlapping_regions_are_drawn_on_ab_indices(self):
+        from desktop.runtime.project import _structure_entry
+        from desktop.runtime.structure import read_structure
+        # the homodimer layout: the same region twice
+        result = self._run([(GENE, 1, 60), (GENE, 1, 60)], task_id="ov1", engine="comrades", mode="paired")
+        self.assertTrue(result["ok"], result)
+        entry = _structure_entry(self.project.resolve(), "ov1", result)
+        manifest = json.loads((self.project / "project.json").read_text())
+        manifest["structures"] = [entry]
+        (self.project / "project.json").write_text(json.dumps(manifest))
+        record = read_structure(self.project, "ov1")["records"][0]
+        self.assertEqual(record["positions"], list(range(1, 121)))
+        self.assertEqual(len(set(record["positions"])), 120)
+        for i, j in record["pairs"]:
+            self.assertLess(i, j)
+        meta = json.loads((self.project / "structures" / "ov1" / "meta.json").read_text())
+        self.assertTrue(meta["records"][0]["overlapping_regions"])
+        # the .ct keeps each base's position on its RNA
+        ct = (self.project / "structures" / "ov1" / "structure.ct").read_text().splitlines()
+        self.assertEqual((ct[1].split("\t")[5], ct[61].split("\t")[5]), ("1", "1"))
+
+    def test_counted_evidence_matches_rows(self):
+        import numpy as np
+        module = _module()
+        arms = [(5, 30, 70, 95)] * 4 + [(2, 12, 30, 40)] * 2 + [(65, 80, 100, 110)]
+        counted = {}
+        for arm in arms:
+            counted[arm] = counted.get(arm, 0) + 1
+        rows, summary_rows = module.build_cofold_hyb_bonus_matrix(120, 60, arms)
+        blocks, summary_blocks = module.build_cofold_hyb_bonus_matrix(120, 60, counted)
+        self.assertLessEqual(float(np.abs(rows - blocks).max()), 1e-6)
+        for key in ("inputRecords", "uniqueBlocks", "meanArmLength"):
+            self.assertAlmostEqual(summary_rows[key], summary_blocks[key])
+        module.set_host_hard_max_sequence_length(5000)
+        seq = _sequence(120, seed=2)
+        common = {"sequence": seq[:60], "sequenceTwo": seq[60:], "evidenceMode": "hyb-blocks", "alpha": 0.5,
+                  "allowPseudoknot": False, "maxSequenceLength": 120}
+        by_rows = module.fold({**common, "evidenceArms": [dict(zip(("oneStart", "oneEnd", "twoStart", "twoEnd"), a)) for a in arms]})
+        by_blocks = module.fold({**common, "evidenceArmCounts": [[*a, n] for a, n in counted.items()]})
+        self.assertEqual(by_rows["dotBracket"], by_blocks["dotBracket"])
+        self.assertEqual(by_rows["evidence"]["inputRecords"], 7)
+        with self.assertRaises(ValueError):
+            module.fold({**common, "evidenceArmCounts": [[55, 65, 70, 80, 1]]})  # an arm across the break

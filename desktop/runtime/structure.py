@@ -11,10 +11,18 @@ Two modes share one request shape::
 * ``genome`` folds the whole reference sequence once (pseudoknot-free by
   default: Phase 1 only) with the HYB bonus of every intramolecular chimera
   of ``gene_id``.
+* ``cofold`` (engine ``cplcofold``) folds two regions as two strands with
+  CPLcofold: ``"regions": [{"gene_id", "start", "end"}, {...}]``, of one RNA
+  or of two RNAs of the samples' reference.  The evidence is every chimera
+  with one arm in each region, or both arms in one region, as the web's
+  two-region CPLcofold layout.
 * ``windows`` folds each window separately (pseudoknots allowed by default),
   with the chimeras whose two arms both lie inside that window, in a process
   pool: one window per process, ``numba.set_num_threads(1)``, and
   ``min(cpu, memory budget / per-window estimate, windows)`` workers.
+
+``parameters.evidence`` ``"none"`` folds the sequence alone (the web's
+sequence-only CPLfold); the samples then only give the reference.
 
 The .hyb files are streamed in the sidecar; arms never pass through the
 WebView.  Results go to ``<project>/structures/<task_id>/`` (structure.dbn,
@@ -29,6 +37,7 @@ import math
 import os
 import sys
 import time
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from multiprocessing import get_context
@@ -66,6 +75,10 @@ _BOUNDS = {
 _ALIASES = {"beamSize": "beam", "maxPhase1": "max_phase1", "energyDelta": "energy_delta", "delta": "energy_delta",
             "energyModel": "energy_model", "model": "energy_model", "allowPseudoknot": "allow_pseudoknot"}
 ENERGY_MODELS = {"DP03", "DP09", "CC06", "CC09", "RE"}
+# CPLcofold has no nicked CC/RE pseudoknot models, and the shared module's
+# beam bound (web/cplfold/cplfold_web.py fold).
+COFOLD_MODELS = {"DP03", "DP09"}
+COFOLD_MAX_BEAM = 200
 BRACKET_CLOSE = {")": "(", "]": "[", "}": "{", ">": "<"}
 
 # cplfold_web modules loaded in this process, keyed by source path.
@@ -254,6 +267,7 @@ def _parameters(raw: Any, mode: str) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     values: Dict[str, Any] = dict(DEFAULTS)
     values["allow_pseudoknot"] = False  # the web's default topology: secondary structure only
+    values["evidence"] = "hyb"
     for key, value in raw.items():
         key = _ALIASES.get(key, key)
         if key in _BOUNDS:
@@ -265,6 +279,10 @@ def _parameters(raw: Any, mode: str) -> Dict[str, Any]:
         elif key == "allow_pseudoknot":
             if not isinstance(value, bool):
                 raise ValueError("allow_pseudoknot must be a boolean")
+            values[key] = value
+        elif key == "evidence":
+            if value not in ("hyb", "none"):
+                raise ValueError("evidence must be 'hyb' (the chimeras) or 'none' (the sequence alone)")
             values[key] = value
         elif key == "energy_model":
             model = str(value).upper()
@@ -445,7 +463,10 @@ def _describe(params: Dict[str, Any]) -> str:
         hard = f", {len(params['hard_pairs'])} hard pairs" if params.get("hard_pairs") else ""
         return f"ViennaRNA MFE, {params['temperature']:g} °C, min loop {params['min_loop']}{hard}"
     mode = "pseudoknot" if params["allow_pseudoknot"] else "pseudoknot-free"
-    return f"CPLfold {mode}, alpha {params['alpha']}, beam {params['beam']}"
+    name = "CPLcofold" if params.get("engine") == "CPLcofold" else "CPLfold"
+    if params.get("evidence") == "none":
+        return f"{name} {mode}, sequence only, beam {params['beam']}"
+    return f"{name} {mode}, alpha {params['alpha']}, beam {params['beam']}"
 
 
 def _write_outputs(out_dir: Path, records: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, str]:
@@ -499,29 +520,8 @@ def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
 # entry point
 # ---------------------------------------------------------------------------
 
-def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Dict[str, Any]) -> Dict[str, Any]:
-    started = time.monotonic()
-    raw_path = request.get("project_path")
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        raise ValueError("project path must be a non-empty string")
-    project = Path(raw_path).expanduser().resolve()
-    errors = validate_project_directory(project)
-    if errors:
-        raise ValueError("invalid project: " + "; ".join(errors))
-    task_id = _safe_task_id(request.get("task_id"))
-    mode = request.get("mode", "genome")
-    if mode not in {"genome", "windows"}:
-        raise ValueError("mode must be 'genome' or 'windows'")
-    engine = request.get("engine", "cplfold")
-    if engine not in {"cplfold", "viennarna", "comrades"}:
-        raise ValueError("engine must be 'cplfold', 'viennarna' or 'comrades'")
-    if engine != "cplfold":
-        return _vienna_run(request, project, task_id, mode, state, started, engine)
-    params = _parameters(request.get("parameters"), mode)
-    inputs = _evidence_inputs(project, request)
-    gene_id, sequence = _reference_sequence(inputs["reference"], inputs["gene_id"])
-    windows = _windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
-
+def _memory_limits(request: Dict[str, Any]) -> Dict[str, Any]:
+    """CPLfold's length limits under the task's memory budget."""
     budget_mb = request.get("memory_budget_mb")
     if budget_mb is not None and (isinstance(budget_mb, bool) or not isinstance(budget_mb, int) or budget_mb < 64):
         raise ValueError("memory_budget_mb must be an integer >= 64")
@@ -539,7 +539,39 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     else:
         total = memory_snapshot().get("total_bytes")
         budget = int(total * CPLFOLD_MEMORY_FRACTION) if total else None
-    limits = cplfold_limits(budget)
+    return cplfold_limits(budget)
+
+
+def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Dict[str, Any]) -> Dict[str, Any]:
+    started = time.monotonic()
+    raw_path = request.get("project_path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("project path must be a non-empty string")
+    project = Path(raw_path).expanduser().resolve()
+    errors = validate_project_directory(project)
+    if errors:
+        raise ValueError("invalid project: " + "; ".join(errors))
+    task_id = _safe_task_id(request.get("task_id"))
+    mode = request.get("mode", "genome")
+    engine = request.get("engine", "cplfold")
+    if engine not in {"cplfold", "cplcofold", "viennarna", "comrades"}:
+        raise ValueError("engine must be 'cplfold', 'cplcofold', 'viennarna' or 'comrades'")
+    if (engine == "cplcofold") != (mode == "cofold"):
+        raise ValueError("mode 'cofold' goes with engine 'cplcofold'")
+    if mode == "paired" and engine != "comrades":
+        raise ValueError("mode 'paired' goes with engine 'comrades'")
+    if mode not in {"genome", "windows", "cofold", "paired"}:
+        raise ValueError("mode must be 'genome', 'windows', 'cofold' or 'paired'")
+    if engine == "cplcofold":
+        return _cofold_run(request, project, task_id, state, started, repo_root)
+    if engine != "cplfold":
+        return _vienna_run(request, project, task_id, mode, state, started, engine)
+    params = _parameters(request.get("parameters"), mode)
+    inputs = _evidence_inputs(project, request)
+    gene_id, sequence = _reference_sequence(inputs["reference"], inputs["gene_id"])
+    windows = _windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
+
+    limits = _memory_limits(request)
     key = "pseudoknot_max_nt" if params["allow_pseudoknot"] else "pseudoknot_free_max_nt"
     longest = max(end - start + 1 for start, end in windows)
     if longest > int(limits[key]):
@@ -580,14 +612,19 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     total_bytes = sum(path.stat().st_size for path in inputs["hyb_paths"])
     progress("evidence", "reading .hyb", 0, total_bytes, force=True)
     t0 = time.monotonic()
-    collected = module.collect_hyb_arms(
-        [str(path) for path in inputs["hyb_paths"]], gene_id, len(sequence),
-        windows=windows if mode == "windows" else None,
-        progress=lambda done: progress("evidence", "reading .hyb", done, total_bytes))
+    if params["evidence"] == "none":
+        # sequence only: no chimera is read, the fold has no bonus
+        collected = {"outOfRangeRows": 0}
+        counters = [Counter() for _ in windows]
+    else:
+        collected = module.collect_hyb_arms(
+            [str(path) for path in inputs["hyb_paths"]], gene_id, len(sequence),
+            windows=windows if mode == "windows" else None,
+            progress=lambda done: progress("evidence", "reading .hyb", done, total_bytes))
+        counters = collected["windows"] if mode == "windows" else [collected["genome"]]
+        if not any(counters):
+            raise ValueError(f"no intramolecular {gene_id} chimeras fall inside the requested region")
     evidence_seconds = time.monotonic() - t0
-    counters = collected["windows"] if mode == "windows" else [collected["genome"]]
-    if not any(counters):
-        raise ValueError(f"no intramolecular {gene_id} chimeras fall inside the requested region")
     progress("evidence", "done", total_bytes, total_bytes, force=True)
 
     # 2. fold
@@ -637,7 +674,8 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
         "evidence_inputs": {
             "samples": inputs["samples"],
             "hyb": [{"path": str(path), "size_bytes": path.stat().st_size} for path in inputs["hyb_paths"]],
-            "rows": "intramolecular chimeras (both arms on gene_id) whose arms lie inside the folded region",
+            "rows": "none: sequence only, no chimera is used" if params["evidence"] == "none"
+            else "intramolecular chimeras (both arms on gene_id) whose arms lie inside the folded region",
             "out_of_range_rows": collected.get("outOfRangeRows", 0),
         },
         "parameters": {**params, "linear_fold_mode": "Vienna", "max_phase2": 1},
@@ -689,6 +727,8 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     reference) or COMRADES(ViennaRNA) (engine "comrades", comrades.py: their
     chimeras inside each window are the evidence) of the whole RNA or each
     window."""
+    if mode == "paired":
+        return _paired_run(request, project, task_id, state, started)
     comrades = engine == "comrades"
     params = (_comrades if comrades else _vienna).parameters(request.get("parameters"))
     inputs = _evidence_inputs(project, request)
@@ -786,6 +826,330 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     return result
 
 
+# ---------------------------------------------------------------------------
+# CPLcofold: two regions as two strands (engine "cplcofold", mode "cofold")
+# ---------------------------------------------------------------------------
+
+def _cofold_regions(raw: Any, records: Dict[str, str]) -> List[Dict[str, Any]]:
+    """The two regions, checked against the reference sequences."""
+    if not isinstance(raw, list) or len(raw) != 2:
+        raise ValueError("cofold mode needs exactly two regions")
+    regions = []
+    for index, region in enumerate(raw, 1):
+        try:
+            gene, start, end = region["gene_id"], int(region["start"]), int(region["end"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"region {index} needs gene_id, start and end") from error
+        if not isinstance(gene, str) or gene not in records:
+            raise ValueError(f"region {index}: {gene} is not a sequence of the reference FASTA")
+        sequence = records[gene]
+        if not 1 <= start <= end <= len(sequence):
+            raise ValueError(f"region {index} ({start}-{end}) is outside 1-{len(sequence)} of {gene}")
+        if end - start + 1 < MIN_WINDOW_NT:
+            raise ValueError(f"region {index} is shorter than {MIN_WINDOW_NT} nt")
+        part = sequence[start - 1:end]
+        bad = sorted(set(part) - set("ACGU"))
+        if bad:
+            raise ValueError(f"region {index} ({gene}:{start}-{end}) contains unsupported symbols: " + ", ".join(bad))
+        regions.append({"gene_id": gene, "start": start, "end": end, "sequence": part})
+    regions[0]["prepared_start"], regions[0]["prepared_end"] = 1, len(regions[0]["sequence"])
+    regions[1]["prepared_start"] = len(regions[0]["sequence"]) + 1
+    regions[1]["prepared_end"] = len(regions[0]["sequence"]) + len(regions[1]["sequence"])
+    return regions
+
+
+def cofold_arms(rows, regions: List[Dict[str, Any]]) -> Tuple[Counter, Dict[str, int]]:
+    """The web's two-region CPLcofold evidence (comrades-analysis.js
+    prepareReferenceAssembly with cofold): a row whose arms lie one in each
+    region joins the strands (oriented region 1 first); otherwise a row with
+    both arms in one region is intramolecular evidence of that strand.  As
+    the web, the joining test comes first, so a row inside the overlap of two
+    overlapping regions joins them.  Returns blocks in A+B coordinates
+    (1-based inclusive) with their row counts."""
+    def inside(gene, s, e, region):
+        return gene == region["gene_id"] and s <= e and region["start"] <= s and e <= region["end"]
+
+    def prepared(s, e, region):
+        shift = region["prepared_start"] - region["start"]
+        return s + shift, e + shift
+
+    arms: Counter = Counter()
+    counts = {"between": 0, "within_one": 0, "within_two": 0, "outside": 0}
+    first, second = regions
+    for g1, a0, a1, g2, b0, b1 in rows:
+        if inside(g1, a0, a1, first) and inside(g2, b0, b1, second):
+            arms[prepared(a0, a1, first) + prepared(b0, b1, second)] += 1; counts["between"] += 1
+        elif inside(g2, b0, b1, first) and inside(g1, a0, a1, second):
+            arms[prepared(b0, b1, first) + prepared(a0, a1, second)] += 1; counts["between"] += 1
+        elif inside(g1, a0, a1, first) and inside(g2, b0, b1, first):
+            arms[prepared(a0, a1, first) + prepared(b0, b1, first)] += 1; counts["within_one"] += 1
+        elif inside(g1, a0, a1, second) and inside(g2, b0, b1, second):
+            arms[prepared(a0, a1, second) + prepared(b0, b1, second)] += 1; counts["within_two"] += 1
+        else:
+            counts["outside"] += 1
+    return arms, counts
+
+
+def _cofold_label(regions: List[Dict[str, Any]]) -> str:
+    return " + ".join(f"{r['gene_id']}:{r['start']}-{r['end']}" for r in regions)
+
+
+def regions_overlap(regions: List[Dict[str, Any]]) -> bool:
+    one, two = regions
+    return one["gene_id"] == two["gene_id"] and one["start"] <= two["end"] and two["start"] <= one["end"]
+
+
+def cofold_positions(regions: List[Dict[str, Any]]) -> List[int]:
+    """Where each A+B nucleotide is drawn: its RNA position when both regions
+    are on one RNA and do not overlap, else its A+B index (two RNAs share no
+    axis, and overlapping regions would give one position to two bases)."""
+    if regions[0]["gene_id"] == regions[1]["gene_id"] and not regions_overlap(regions):
+        return [p for r in regions for p in range(r["start"], r["end"] + 1)]
+    return list(range(1, regions[1]["prepared_end"] + 1))
+
+
+def _write_cofold_outputs(out_dir: Path, regions: List[Dict[str, Any]], record: Dict[str, Any],
+                          params: Dict[str, Any]) -> Dict[str, str]:
+    """structure.dbn with '&' at the strand break, pairs.tsv in A+B positions
+    with each end's RNA and position, and a two-strand .ct whose last column
+    is each base's position on its own RNA."""
+    cut = regions[0]["prepared_end"]
+    sequence, structure = record["sequence"], record["structure"]
+    energy = record["energy"]
+    energy_text = f"{energy:.2f}" if isinstance(energy, (int, float)) else "NA"
+    label = _cofold_label(regions)
+    dbn = (f">{label} {_describe(params)}, energy {energy_text}\n"
+           f"{sequence[:cut]}&{sequence[cut:]}\n{structure[:cut]}&{structure[cut:]}\n")
+    where = [(r["gene_id"], p) for r in regions for p in range(r["start"], r["end"] + 1)]
+    tsv = ["window_start\twindow_end\ti\tj\tbracket\tbonus\tgene_i\tposition_i\tgene_j\tposition_j\tintermolecular"]
+    partner = {}
+    for i, j, bracket, bonus in record["pairs"]:
+        partner[i], partner[j] = j, i
+        bonus_text = "" if bonus is None else repr(float(bonus))
+        (gi, pi), (gj, pj) = where[i - 1], where[j - 1]
+        tsv.append(f"1\t{len(sequence)}\t{i}\t{j}\t{bracket}\t{bonus_text}\t{gi}\t{pi}\t{gj}\t{pj}\t{int(i <= cut < j)}")
+    n = len(sequence)
+    ct = [f"{n}\tENERGY = {energy_text}\t{label}\n"]
+    for k, base in enumerate(sequence, 1):
+        # no backbone across the strand break
+        before = 0 if k == cut + 1 else k - 1
+        after = 0 if k == cut or k == n else k + 1
+        ct.append(f"{k}\t{base}\t{before}\t{after}\t{partner.get(k, 0)}\t{where[k - 1][1]}\n")
+    paths = {"dbn": out_dir / "structure.dbn", "pairs": out_dir / "pairs.tsv", "ct": out_dir / "structure.ct"}
+    _atomic_write_text(paths["dbn"], dbn)
+    _atomic_write_text(paths["pairs"], "\n".join(tsv) + "\n")
+    _atomic_write_text(paths["ct"], "".join(ct))
+    return {key: str(value) for key, value in paths.items()}
+
+
+def _finish_two_strand(*, task_id: str, mode: str, engine: str, engine_version: Any, run_dir: Path, out_dir: Path,
+                       progress: ProgressWriter, regions: List[Dict[str, Any]], record: Dict[str, Any],
+                       stored: Dict[str, Any], inputs: Dict[str, Any], hyb_used: bool, rows: str,
+                       extra_record: Dict[str, Any], extra_meta: Dict[str, Any], timings: Dict[str, float],
+                       fold_seconds: float) -> Dict[str, Any]:
+    """Write a two-strand result (CPLcofold, or COMRADES of two regions):
+    the files, meta.json, result.json and the project.json entry."""
+    progress("write", "writing results", None, None, units="none", force=True)
+    outputs = _write_cofold_outputs(out_dir, regions, record, stored)
+    cut = regions[0]["prepared_end"]
+    pairs = record["pairs"]
+    summary_record = _summary(record)
+    between = sum(1 for i, j, _, _ in pairs if i <= cut < j)
+    segments = [{key: r[key] for key in ("gene_id", "start", "end", "prepared_start", "prepared_end")} for r in regions]
+    summary_record.update({"cutpoint": cut, "segments": segments, "intermolecular_pairs": between,
+                           "overlapping_regions": regions_overlap(regions), **extra_record})
+    same_rna = regions[0]["gene_id"] == regions[1]["gene_id"]
+    gene_id = regions[0]["gene_id"] if same_rna else f"{regions[0]['gene_id']} + {regions[1]['gene_id']}"
+    drawn = ("RNA positions" if same_rna and not regions_overlap(regions) else
+             "A+B indices (two RNAs, or overlapping regions)")
+    meta = {
+        "version": 1, "task_id": task_id, "mode": mode, "engine": engine, "engine_version": engine_version,
+        "gene_id": gene_id, "reference": {"path": str(inputs["reference"])}, "regions": segments,
+        "evidence_inputs": {"samples": inputs["samples"],
+                            "hyb": [{"path": str(path), "size_bytes": path.stat().st_size} for path in inputs["hyb_paths"]]
+                            if hyb_used else [], "rows": rows},
+        "parameters": stored,
+        "coordinates": ("A+B: region 1 then region 2, 1-based inclusive (pairs.tsv i/j); "
+                        "gene_i/position_i give each end on its RNA; ct column 6 is the RNA position; "
+                        "pairs are drawn on " + drawn),
+        "windows": [{"start": r["start"], "end": r["end"]} for r in regions],
+        "workers": 1, "records": [summary_record],
+        "timings": timings,
+        "created_at": _now(), **extra_meta,
+    }
+    _atomic_write_json(out_dir / "meta.json", meta)
+    outputs["meta"] = str(out_dir / "meta.json")
+    relative_dir = f"structures/{task_id}"
+    summary = {"records": 1, "pairs": len(pairs), "pairs_with_bonus": summary_record["pairs_with_bonus"],
+               "pseudoknot_pairs": summary_record["pseudoknot_pairs"], "intermolecular_pairs": between,
+               "energy": record["energy"], "energies": [record["energy"]], "length": len(record["sequence"]),
+               "workers": 1, "timings": meta["timings"], "engine": engine}
+    result = {
+        "ok": True, "status": "succeeded", "task_id": task_id, "run_dir": str(run_dir),
+        "output": outputs["dbn"], "output_dir": str(out_dir), "outputs": outputs,
+        "performance": {**progress.work, "seconds": round(fold_seconds, 2)},
+        "structure": {"id": task_id, "task_id": task_id, "sample_ids": [sample["id"] for sample in inputs["samples"]],
+                      "gene_id": gene_id, "mode": mode, "windows": meta["windows"], "regions": segments,
+                      "parameters": stored, "created_at": meta["created_at"], "path": relative_dir,
+                      "paths": {key: f"{relative_dir}/{Path(value).name}" for key, value in outputs.items()},
+                      "summary": summary},
+        "summary": summary,
+    }
+    progress("done", "finished", None, None, units="none", force=True)
+    _atomic_write_json(run_dir / "result.json", result)
+    return result
+
+
+def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dict[str, Any],
+                started: float, repo_root: Optional[Path]) -> Dict[str, Any]:
+    """Two regions folded as two strands with CPLcofold (the web's
+    two-region CPLfold layout), with or without the chimeras."""
+    params = _parameters(request.get("parameters"), "cofold")
+    if params["energy_model"] not in COFOLD_MODELS:
+        raise ValueError("CPLcofold supports the DP03 and DP09 energy models only")
+    if params["beam"] > COFOLD_MAX_BEAM:
+        raise ValueError(f"CPLcofold beam size is at most {COFOLD_MAX_BEAM}")
+    inputs = _evidence_inputs(project, request)
+    records = {name: sequence.upper().replace("T", "U") for name, sequence in read_fasta(inputs["reference"])}
+    regions = _cofold_regions(request.get("regions"), records)
+    sequence = regions[0]["sequence"] + regions[1]["sequence"]
+    limits = _memory_limits(request)
+    key = "pseudoknot_max_nt" if params["allow_pseudoknot"] else "pseudoknot_free_max_nt"
+    if len(sequence) > int(limits[key]):
+        raise ValueError(f"{len(sequence)} nt exceeds the CPLfold limit of {limits[key]} nt for this memory budget "
+                         f"({'pseudoknot' if params['allow_pseudoknot'] else 'pseudoknot-free'}); choose shorter regions.")
+
+    run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
+    state.update(run_dir=run_dir, task_id=task_id)
+    out_dir = _real_child_dir(project / "structures", task_id, exist_ok=True)
+    progress = ProgressWriter(run_dir)
+    root = Path(repo_root or Path(__file__).resolve().parents[2]).resolve()
+    try:
+        module = load_cplfold_web(root)
+    except (FileNotFoundError, ImportError) as error:
+        result = {"ok": False, "status": "unavailable", "task_id": task_id, "run_dir": str(run_dir), "error": str(error)}
+        _atomic_write_json(run_dir / "result.json", result)
+        return result
+    progress.work = {"lengths": [len(sequence)], "beam": params["beam"], "workers": 1}
+
+    # 1. the evidence, as blocks with row counts (memory grows with the
+    #    distinct blocks, not with the read depth)
+    t0 = time.monotonic()
+    arms: Counter = Counter()
+    counts = {"between": 0, "within_one": 0, "within_two": 0, "outside": 0}
+    if params["evidence"] == "hyb":
+        total_bytes = sum(path.stat().st_size for path in inputs["hyb_paths"])
+        progress("evidence", "reading .hyb", 0, total_bytes, force=True)
+        rows = module.iter_hyb_rows([str(path) for path in inputs["hyb_paths"]], {r["gene_id"] for r in regions},
+                                    lambda done: progress("evidence", "reading .hyb", done, total_bytes))
+        arms, counts = cofold_arms(rows, regions)
+        if not arms:
+            raise ValueError(f"no chimeras have both arms inside {_cofold_label(regions)}")
+        progress("evidence", "done", total_bytes, total_bytes, force=True)
+    evidence_seconds = time.monotonic() - t0
+
+    # 2. fold with the shared module (the web's CPLcofold request)
+    progress("fold", "folding", 0, 1, units="windows", force=True)
+    if hasattr(module, "set_host_hard_max_sequence_length"):
+        module.set_host_hard_max_sequence_length(max(len(sequence), 1))
+    t0 = time.monotonic()
+    folded = module.fold({
+        "sequence": regions[0]["sequence"], "sequenceTwo": regions[1]["sequence"],
+        "evidenceMode": "hyb-blocks" if arms else "none",
+        "evidenceArmCounts": [[a, b, c, d, n] for (a, b, c, d), n in arms.items()],
+        "beamSize": params["beam"], "maxPhase1": params["max_phase1"], "energyDelta": params["energy_delta"],
+        "energyModel": params["energy_model"], "alpha": params["alpha"] if arms else 0.0, "beta": params["beta"],
+        "allowPseudoknot": params["allow_pseudoknot"], "maxSequenceLength": len(sequence)})
+    fold_seconds = time.monotonic() - t0
+    pairs = [(pair["left"], pair["right"], pair["bracket"], float(pair["bonusSupport"]) if arms else None)
+             for pair in folded["pairs"]]
+    evidence = {k: v for k, v in (folded.get("evidence") or {}).items()
+                if k not in ("bonusEntries", "nucleotideSupport")}
+    record = {"structure": folded["dotBracket"], "energy": folded.get("energy"), "type": folded.get("structureType"),
+              "pairs": pairs, "evidence": evidence, "sequence": sequence, "start": 1, "end": len(sequence),
+              "seconds": {"bonus": 0.0, "fold": round(fold_seconds, 2)}, "peak_rss_bytes": _peak_rss_bytes()}
+    rows_text = ("none: sequence only, no chimera is used" if params["evidence"] == "none" else
+                 f"chimeras with one arm in each region ({counts['between']}) or both arms in region 1 "
+                 f"({counts['within_one']}) or region 2 ({counts['within_two']})")
+    return _finish_two_strand(
+        task_id=task_id, mode="cofold", engine="CPLcofold", engine_version=getattr(module, "CPLFOLD_SOURCE_REVISION", None),
+        run_dir=run_dir, out_dir=out_dir, progress=progress, regions=regions, record=record,
+        stored={**params, "engine": "CPLcofold", "linear_fold_mode": "Vienna", "max_phase2": 1},
+        inputs=inputs, hyb_used=params["evidence"] == "hyb", rows=rows_text, extra_record={"evidence_rows": counts},
+        extra_meta={"limits": {key: limits.get(key) for key in ("pseudoknot_free_max_nt", "pseudoknot_max_nt",
+                                                                "memory_budget_bytes", "source")}},
+        timings={"evidence_s": round(evidence_seconds, 2), "fold_s": round(fold_seconds, 2),
+                 "total_s": round(time.monotonic() - started, 2)},
+        fold_seconds=fold_seconds)
+
+
+def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dict[str, Any],
+                started: float) -> Dict[str, Any]:
+    """COMRADES(ViennaRNA) of two regions (mode "paired"): the web's
+    long-range, intermolecular and homodimer layouts.  As the web, the
+    regions are joined by the 100-nt A/U spacer, every chimera with one arm
+    in each region is cofolded, and the joined sequence is folded; the result
+    keeps the two regions (pairs with a spacer base are left out and
+    counted), so it is stored and drawn as two strands."""
+    params = _comrades.parameters(request.get("parameters"))
+    inputs = _evidence_inputs(project, request)
+    records = {name: sequence.upper().replace("T", "U") for name, sequence in read_fasta(inputs["reference"])}
+    regions = _cofold_regions(request.get("regions"), records)
+    one, two = regions[0]["sequence"], regions[1]["sequence"]
+    prepared = one + _comrades.LINKER + two
+    if len(prepared) > _comrades.MAX_COMRADES_NT:
+        raise ValueError(f"{len(prepared)} nt (both regions and the 100-nt spacer) exceeds the COMRADES(ViennaRNA) "
+                         f"limit of {_comrades.MAX_COMRADES_NT} nt; choose shorter regions")
+    t0 = time.monotonic()
+    layout = [dict(regions[0], prepared_start=1), dict(regions[1], prepared_start=len(one) + len(_comrades.LINKER) + 1)]
+    arms, skipped = _comrades.paired_arms(inputs["hyb_paths"], layout, prepared, params["homodimer_only"])
+    if not arms:
+        raise ValueError(f"no chimeras have one arm in each of {_cofold_label(regions)}")
+    evidence_seconds = time.monotonic() - t0
+
+    run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
+    state.update(run_dir=run_dir, task_id=task_id)
+    out_dir = _real_child_dir(project / "structures", task_id, exist_ok=True)
+    progress = ProgressWriter(run_dir)
+    progress.work = {"lengths": [len(prepared)], "engine": "comrades", "workers": 1}
+    progress("fold", "folding", 0, 1, units="windows", force=True)
+    t0 = time.monotonic()
+    folded = _comrades.fold(prepared, arms, params)
+    fold_seconds = time.monotonic() - t0
+
+    # keep the two regions: A+B positions, without the spacer
+    low, high = len(one) + 1, len(one) + len(_comrades.LINKER)
+
+    def local(k: int) -> Optional[int]:
+        return k if k < low else (k - len(_comrades.LINKER) if k > high else None)
+
+    pairs = [(local(i), local(j), bracket, bonus) for i, j, bracket, bonus in folded["pairs"]
+             if local(i) is not None and local(j) is not None]
+    dot = ["."] * (len(one) + len(two))
+    for i, j, _, _ in pairs:
+        dot[i - 1], dot[j - 1] = "(", ")"
+    positions = cofold_positions(regions)
+    hard = [[positions[local(i) - 1], positions[local(j) - 1]] for i, j in folded["hard_pairs"]
+            if local(i) is not None and local(j) is not None]
+    record = dict(folded, structure="".join(dot), pairs=pairs, sequence=one + two, start=1, end=len(one) + len(two))
+    stored = {"engine": "COMRADES(ViennaRNA)", **{k: params[k] for k in ("temperature", "min_loop", "constraint_limit",
+                                                                       "random_folds", "seed", "homodimer_only")},
+              "layout": "two regions joined by the 100-nt A/U spacer", "hard_pairs": hard}
+    stored["seed"] = _comrades.seed_label(stored["seed"])
+    rows_text = (f"chimeras with one arm in each region ({len(arms)}), one RNAcofold each"
+                 + (", homodimer proxies only" if params["homodimer_only"] else ""))
+    return _finish_two_strand(
+        task_id=task_id, mode="paired", engine="COMRADES(ViennaRNA)", engine_version=_vienna.version(),
+        run_dir=run_dir, out_dir=out_dir, progress=progress, regions=regions, record=record, stored=stored,
+        inputs=inputs, hyb_used=True, rows=rows_text,
+        extra_record={"spacer_pairs_left_out": len(folded["pairs"]) - len(pairs),
+                      "energy_of": "region 1 + 100-nt A/U spacer + region 2, as folded"},
+        extra_meta={"evidence_skipped": skipped},
+        timings={"evidence_s": round(evidence_seconds, 2), "fold_s": round(fold_seconds, 2),
+                 "total_s": round(time.monotonic() - started, 2)},
+        fold_seconds=fold_seconds)
+
+
 def structure_run(request: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, Any]:
     """Bridge entry point.  Invalid requests raise ``ValueError``; failures after
     the run directory exists are reported in ``result.json`` and returned."""
@@ -840,6 +1204,10 @@ def parse_dbn(text: str) -> List[Dict[str, Any]]:
     records = []
     for index in range(0, len(lines), 3):
         header, sequence, structure = lines[index], lines[index + 1], lines[index + 2]
+        # a CPLcofold record marks the strand break with '&' in both lines
+        cutpoint = sequence.find("&") if "&" in sequence and sequence.find("&") == structure.find("&") else None
+        if cutpoint is not None:
+            sequence, structure = sequence.replace("&", ""), structure.replace("&", "")
         if not header.startswith(">") or len(sequence) != len(structure):
             raise ValueError("structure.dbn is malformed near record %d" % (index // 3 + 1))
         words = header[1:].split()
@@ -858,7 +1226,8 @@ def parse_dbn(text: str) -> List[Dict[str, Any]]:
             except (ValueError, IndexError):
                 energy = None
         records.append({"label": label, "window_start": start, "window_end": start + len(sequence) - 1,
-                        "sequence": sequence, "dbn": structure, "energy": energy})
+                        "sequence": sequence, "dbn": structure, "energy": energy,
+                        **({"cutpoint": cutpoint} if cutpoint is not None else {})})
     return records
 
 
@@ -880,6 +1249,32 @@ def _pair_bonus(path: Optional[Path]) -> Dict[Tuple[int, int, int], float]:
         except ValueError:
             continue
     return out
+
+
+def _read_cofold(entry: Dict[str, Any], meta: Dict[str, Any], parsed: List[Dict[str, Any]],
+                 bonus: Dict[Tuple[int, int, int], float]) -> Dict[str, Any]:
+    """A two-strand result (CPLcofold, or COMRADES of two regions): one
+    record over A+B, with ``positions`` (where
+    each nucleotide is drawn, see :func:`cofold_positions`), ``cutpoint`` and
+    the two ``segments``; ``pairs`` are in those positions."""
+    summary = (meta.get("records") or [{}])[0]
+    segments = summary.get("segments") or meta.get("regions") or []
+    if len(parsed) != 1 or len(segments) != 2:
+        raise ValueError("the CPLcofold result is malformed")
+    record = parsed[0]
+    positions = cofold_positions(segments)
+    if len(positions) != len(record["sequence"]):
+        raise ValueError("the CPLcofold result does not match its regions")
+    local = [(i, j) for i, j, _ in _pairs(record["dbn"])]
+    energy = summary["energy"] if "energy" in summary else record["energy"]
+    return {"structure": entry, "meta": meta, "records": [{
+        "window_start": min(positions), "window_end": max(positions),
+        "sequence": record["sequence"], "dbn": record["dbn"],
+        "pairs": [[positions[i - 1], positions[j - 1]] for i, j in local],
+        "bonus": [bonus.get((1, i, j)) for i, j in local] if bonus else None,
+        "energy": energy, "positions": positions, "cutpoint": summary.get("cutpoint", segments[0]["prepared_end"]),
+        "segments": segments,
+    }]}
 
 
 def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
@@ -906,6 +1301,8 @@ def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
         except ValueError:
             meta = {}
     parsed = parse_dbn(dbn_path.read_text(encoding="utf-8"))
+    if meta.get("mode") in ("cofold", "paired"):
+        return _read_cofold(entry, meta, parsed, _pair_bonus(_structure_file(project, entry, "pairs")))
     bonus = _pair_bonus(_structure_file(project, entry, "pairs"))
     summaries = meta.get("records") if isinstance(meta.get("records"), list) else []
     records = []

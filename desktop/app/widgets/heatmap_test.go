@@ -43,8 +43,9 @@ func TestHeatmapPickZoomAndReset(t *testing.T) {
 	}
 	tt := ui.NewTester(view, 500, 500)
 	snapshot(t, tt, "heatmap")
-	// Click the big blue cell: plot origin is (10+44, 10), 400 px for 10 kb.
-	tt.ClickAt(10+44+(5200.0/10000)*400, 10+(2200.0/10000)*400)
+	// Click the big blue cell: the plot's top left is (10+44, 10), 400 px
+	// for 10 kb, and y grows upwards from the bottom edge.
+	tt.ClickAt(10+44+(5200.0/10000)*400, 10+(1-2200.0/10000)*400)
 	tt.Frame()
 	if h.Picked != len(cells)-1 {
 		t.Fatalf("picked %d, last event %+v", h.Picked, last)
@@ -77,8 +78,9 @@ func TestMinCellIsHitWhereItShows(t *testing.T) {
 	}
 }
 
-// Cells are written where they are, later ones on top (blended), and a
-// zoomed window still shows a large cell that starts outside it.
+// Cells are written where they are, (0, 0) at the bottom left, later ones
+// on top (blended), and a zoomed window still shows a large cell that
+// starts outside it.
 func TestHeatmapRasterPlacesCells(t *testing.T) {
 	red, blue := ui.RGB(255, 0, 0), ui.RGBA(0, 0, 255, 0.5)
 	cells := []Cell{
@@ -93,13 +95,13 @@ func TestHeatmapRasterPlacesCells(t *testing.T) {
 	}
 	whole := image.NewRGBA(image.Rect(0, 0, 100, 100))
 	ix.raster(whole, cells, Window{0, 10000, 0, 10000}, 0)
-	if got := at(whole, 5, 5); got != [4]uint8{255, 0, 0, 255} {
+	if got := at(whole, 5, 94); got != [4]uint8{255, 0, 0, 255} {
 		t.Fatalf("big cell %v", got)
 	}
-	if got := at(whole, 15, 15); got != [4]uint8{127, 0, 128, 255} {
+	if got := at(whole, 15, 84); got != [4]uint8{127, 0, 128, 255} {
 		t.Fatalf("blue over red %v", got)
 	}
-	if got := at(whole, 90, 90); got[3] != 255 {
+	if got := at(whole, 90, 9); got[3] != 255 {
 		t.Fatalf("a cell smaller than a pixel is drawn one pixel wide: %v", got)
 	}
 	if got := at(whole, 50, 50); got[3] != 0 {
@@ -107,10 +109,10 @@ func TestHeatmapRasterPlacesCells(t *testing.T) {
 	}
 	zoom := image.NewRGBA(image.Rect(0, 0, 100, 100))
 	ix.raster(zoom, cells, Window{1900, 2100, 1900, 2100}, 0)
-	if got := at(zoom, 10, 10); got != [4]uint8{255, 0, 0, 255} {
+	if got := at(zoom, 10, 89); got != [4]uint8{255, 0, 0, 255} {
 		t.Fatalf("zoomed: big cell from outside the window %v", got)
 	}
-	if got := at(zoom, 90, 90); got[3] != 0 {
+	if got := at(zoom, 90, 9); got[3] != 0 {
 		t.Fatalf("zoomed: past the big cell %v", got)
 	}
 }

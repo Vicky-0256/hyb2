@@ -23,6 +23,19 @@ var (
 // stFoldedMax is the longest window the folded view lays out.
 const stFoldedMax = 30_000
 
+// stLinker unpaired nucleotides join the two strands of a CPLcofold result
+// for the folded layout (as the figure scripts' cofold_windows.py).
+const stLinker = 3
+
+// stDropLinker removes the linker's points from a layout of two strands
+// joined after cut nucleotides.
+func stDropLinker(coords [][2]float64, cut int) [][2]float64 {
+	if cut <= 0 || len(coords) < cut+stLinker {
+		return coords
+	}
+	return append(append([][2]float64{}, coords[:cut]...), coords[cut+stLinker:]...)
+}
+
 // stLayout is a folded layout, or why there is none.
 type stLayout struct {
 	coords  [][2]float64
@@ -35,6 +48,15 @@ type stLayout struct {
 func stViewData(a *structureResult, choice string) (pairs []widgets.LayeredPair, weights []float64, start, length int, seq string) {
 	records := stPickRecords(a.Records, choice)
 	w := stWeights(records)
+	if len(records) == 1 && records[0].Cutpoint > 0 && records[0].mapped == nil {
+		// CPLcofold: drawn on A+B indices, strand A then strand B
+		r := records[0]
+		for _, pr := range stParseDBN(r.DBN, 1) {
+			pairs = append(pairs, widgets.LayeredPair{I: pr.I, J: pr.J, Layer: pr.Layer})
+			weights = append(weights, w[[2]int{r.positionOf(pr.I), r.positionOf(pr.J)}])
+		}
+		return pairs, weights, 1, len(r.Sequence), r.Sequence
+	}
 	start, end := 0, 0
 	for _, r := range records {
 		s, e := r.span()
@@ -85,7 +107,15 @@ func (p *structurePage) otherView(c *ui.Context, a *structureResult) bool {
 			ui.Text(c, fmt.Sprintf("The folded view draws at most %s nt.", FormatNumber(stFoldedMax))).TextColor(t.TextMuted)
 			return true
 		}
-		l := p.layout(stNestedDBN(pairs, start, length))
+		dbn, cut := stNestedDBN(pairs, start, length), 0
+		if records := stPickRecords(a.Records, p.record); len(records) == 1 {
+			cut = records[0].Cutpoint
+		}
+		if cut > 0 {
+			// two strands: laid out joined by an unpaired linker, drawn without it
+			dbn = dbn[:cut] + strings.Repeat(".", stLinker) + dbn[cut:]
+		}
+		l := p.layout(dbn)
 		switch {
 		case l.err != "":
 			ui.Text(c, "Could not lay out the structure: "+ShortError(l.err)).TextColor(t.Danger)
@@ -94,7 +124,7 @@ func (p *structurePage) otherView(c *ui.Context, a *structureResult) bool {
 			ui.Text(c, "Laying out the structure…").TextColor(t.TextMuted)
 			return true
 		}
-		v.Coords = l.coords
+		v.Coords = stDropLinker(l.coords, cut)
 	}
 	v.Show(c.Key("st-view-"+p.view), 640, stColors(t), p.view+" view of the base pairs")
 	note := map[widgets.StructMode]string{
@@ -143,11 +173,18 @@ func (p *structurePage) exportViewSVG(a *structureResult, asPNG bool) {
 	pairs, weights, start, length, seq := stViewData(a, p.record)
 	v := &widgets.StructView{Mode: mode, Pairs: pairs, Weights: weights, Shade: p.shade, Start: start, Length: length, Sequence: seq}
 	if mode == widgets.ModeFolded {
-		l := p.layouts[stNestedDBN(pairs, start, length)]
+		dbn, cut := stNestedDBN(pairs, start, length), 0
+		if records := stPickRecords(a.Records, p.record); len(records) == 1 {
+			cut = records[0].Cutpoint
+		}
+		if cut > 0 {
+			dbn = dbn[:cut] + strings.Repeat(".", stLinker) + dbn[cut:]
+		}
+		l := p.layouts[dbn]
 		if l.coords == nil {
 			return
 		}
-		v.Coords = l.coords
+		v.Coords = stDropLinker(l.coords, cut)
 	}
 	title := fmt.Sprintf("%s · %s:%s · %s view", p.viewA, nameOr(stGene(a), "RNA"), span(start, start+length-1), strings.ToLower(p.view))
 	colors := stColors(ui.LightTheme())

@@ -160,6 +160,45 @@ func TestStructureRequestsAreValidated(t *testing.T) {
 	if err != nil || payload["engine"] != "viennarna" {
 		t.Fatalf("vienna payload %v %v", payload, err)
 	}
+	// CPLcofold: two regions as two strands
+	cofold := genome
+	cofold.Engine, cofold.Mode = ptr("cplcofold"), ptr("cofold")
+	cofold.Regions = []Region{{GeneID: "ZIKV_African", Start: 1, End: 45}, {GeneID: "ZIKV_African", Start: 1086, End: 1134}}
+	payload, err = TaskPayload(cofold, "/p", "a", run, claim)
+	if err != nil || payload["engine"] != "cplcofold" || payload["mode"] != "cofold" {
+		t.Fatalf("cofold payload %v %v", payload, err)
+	}
+	assertJSON(t, payload["regions"], `[{"gene_id":"ZIKV_African","start":1,"end":45},{"gene_id":"ZIKV_African","start":1086,"end":1134}]`)
+	for i, edit := range []func(*TaskStartRequest){
+		func(r *TaskStartRequest) { r.Regions = r.Regions[:1] },
+		func(r *TaskStartRequest) { r.Engine = ptr("cplfold") },
+		func(r *TaskStartRequest) { r.Mode = ptr("genome") },
+		func(r *TaskStartRequest) { r.Windows = []Window{{Start: 1, End: 30}} },
+		func(r *TaskStartRequest) { r.Regions = []Region{{GeneID: "a\nb", Start: 1, End: 30}, r.Regions[1]} },
+		func(r *TaskStartRequest) { r.Regions = []Region{{GeneID: "G", Start: 0, End: 30}, r.Regions[1]} },
+	} {
+		request := cofold
+		request.Regions = append([]Region(nil), cofold.Regions...)
+		edit(&request)
+		if _, err := TaskPayload(request, "/p", "a", run, big()); err == nil {
+			t.Fatalf("bad cofold request %d accepted", i)
+		}
+	}
+	// COMRADES of two regions (the web's long-range, intermolecular and homodimer layouts)
+	paired := cofold
+	paired.Engine, paired.Mode = ptr("comrades"), ptr("paired")
+	if payload, err = TaskPayload(paired, "/p", "a", run, claim); err != nil || payload["mode"] != "paired" || payload["regions"] == nil {
+		t.Fatalf("paired payload %v %v", payload, err)
+	}
+	paired.Engine = ptr("viennarna")
+	if _, err := TaskPayload(paired, "/p", "a", run, claim); err == nil {
+		t.Fatal("paired accepted for ViennaRNA MFE")
+	}
+	regions := good
+	regions.Regions = cofold.Regions
+	if _, err := TaskPayload(regions, "/p", "a", run, big()); err == nil {
+		t.Fatal("regions accepted outside cofold mode")
+	}
 	edits := []func(*TaskStartRequest){
 		func(r *TaskStartRequest) { r.Engine = ptr("unafold") },
 		func(r *TaskStartRequest) { r.SampleIDs = nil },

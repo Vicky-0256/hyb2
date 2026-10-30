@@ -63,6 +63,8 @@ download_and_verify "Pyodide-LICENSE.txt" "1f256ecad192880510e84ad60474eab758921
 
 cp "$source_directory/CPLfold.py" "$staging_directory/CPLfold.py"
 cp "$source_directory/CPLfold_parser.py" "$staging_directory/CPLfold_parser.py"
+cp "$source_directory/CPLcofold.py" "$staging_directory/CPLcofold.py"
+cp "$source_directory/CPLcofold_parser.py" "$staging_directory/CPLcofold_parser.py"
 cp "$bridge_source" "$staging_directory/cplfold_web.py"
 cp "$source_directory"/Utils/*.py "$staging_directory/Utils/"
 cp "$source_directory"/Utils/energy_params/* "$staging_directory/Utils/energy_params/"
@@ -70,6 +72,7 @@ cp "$source_directory/LICENSE" "$output_directory/CPLfold-LICENSE.txt"
 cp "$source_directory/THIRD_PARTY_NOTICES.md" "$output_directory/CPLfold-THIRD_PARTY_NOTICES.md"
 cp "$source_directory/LICENSES/GPL-2.0-or-later.txt" "$output_directory/CPLfold-GPL-2.0-or-later.txt"
 cp "$source_directory/LICENSES/LinearFold-LICENSE.txt" "$output_directory/CPLfold-LinearFold-LICENSE.txt"
+cp "$source_directory/LICENSES/LinearCoFold-LICENSE.txt" "$output_directory/CPLfold-LinearCoFold-LICENSE.txt"
 
 archive_staging="$build_directory/cplfold-python.zip"
 (
@@ -80,7 +83,7 @@ archive_staging="$build_directory/cplfold-python.zip"
 archive_hash="$(hyb2_sha256 "$archive_staging")"
 archive_file="cplfold-python-${archive_hash}.zip"
 cp "$archive_staging" "$output_directory/$archive_file"
-printf '{\n  "pyodide": "%s",\n  "python": "3.13.2",\n  "numpy": "2.2.5",\n  "cplfoldRevision": "24bab52",\n  "bridgeVersion": "5",\n  "buildCommit": "%s",\n  "cplfoldArchiveFile": "%s",\n  "cplfoldArchiveSha256": "%s"\n}\n' \
+printf '{\n  "pyodide": "%s",\n  "python": "3.13.2",\n  "numpy": "2.2.5",\n  "cplfoldRevision": "24bab52",\n  "bridgeVersion": "6",\n  "buildCommit": "%s",\n  "cplfoldArchiveFile": "%s",\n  "cplfoldArchiveSha256": "%s"\n}\n' \
   "$pyodide_version" "$build_commit" "$archive_file" "$archive_hash" > "$output_directory/build-manifest.json"
 
 # Record hashes for every shipped static asset, not only the Python archive.
@@ -93,7 +96,7 @@ manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 names = ["pyodide.mjs", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip",
          "pyodide-lock.json", "numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl",
          "Pyodide-LICENSE.txt", "CPLfold-LICENSE.txt", "CPLfold-THIRD_PARTY_NOTICES.md",
-         "CPLfold-GPL-2.0-or-later.txt", "CPLfold-LinearFold-LICENSE.txt",
+         "CPLfold-GPL-2.0-or-later.txt", "CPLfold-LinearFold-LICENSE.txt", "CPLfold-LinearCoFold-LICENSE.txt",
          manifest["cplfoldArchiveFile"]]
 manifest["assets"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names}
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

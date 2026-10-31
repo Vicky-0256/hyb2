@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .project import _atomic_write_json, _now, load_manifest, safe_relative_path
-from .samples import check_record, disk_estimate, resolve_record_path, read_stem, set_sample_stage
+from .samples import check_record, disk_estimate, gunzip_file, is_gzip, resolve_record_path, read_stem, set_sample_stage
 
 # Stages reported by hyb2pipe after mapping has finished.
 _POST_MAP_STAGES = {"filter", "blast", "rank", "hybrids", "annotate", "energy", "collapse", "dedup", "done"}
@@ -208,12 +208,24 @@ def _stage_writer(project: Path, sample: Dict[str, Any], task_id: str) -> Callab
 
 def _index_stage(project: Path, sample: Dict[str, Any], mark: Callable[..., Any], sample_dir: Path, stem: str, hyb_path: Path,
                  progress: "ProgressFile") -> Dict[str, Optional[str]]:
-    """contact.txt (when the sample has a gene_id) + analysis index; records outputs and stages.index."""
+    """contact.txt (when the sample has a gene_id) + analysis index; records outputs and stages.index.
+
+    A gzipped .hyb is first decompressed to ``<stem>.hyb`` in the sample
+    folder (the index reads records back by byte offset), which becomes the
+    sample's ``outputs.hyb``.
+    """
     coverage = importlib.import_module("hyb2analysis.coverage")
     index = importlib.import_module("hyb2analysis.index")
     sample_id = sample["id"]
     mark("index", "running")
     stage_outputs: Dict[str, Optional[str]] = {}
+    if is_gzip(hyb_path):
+        progress.write("index", "decompressing %s" % hyb_path.name)
+        plain = sample_dir / (stem + ".hyb")
+        if plain.resolve() == hyb_path.resolve():
+            raise ValueError("a gzipped .hyb cannot be decompressed onto itself: %s" % hyb_path)
+        hyb_path = gunzip_file(hyb_path, plain, lambda done, size: progress.write("index", "decompressing .hyb.gz", done, size))
+        stage_outputs["hyb"] = _relative(project, hyb_path)
     gene_id = sample.get("gene_id")
     if gene_id:
         progress.write("contact", "writing contact map for %s" % gene_id)
@@ -454,7 +466,7 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
         final = load_manifest(project)
         stages = next(s for s in final["samples"] if s["id"] == sample_id)["stages"]
         absolute = {key: str(project / value) for key, value in outputs.items() if value}
-        response = {"ok": True, "status": "succeeded", "output": str(hyb_path), "outputs": absolute, "counts": counts,
+        response = {"ok": True, "status": "succeeded", "output": absolute.get("hyb", str(hyb_path)), "outputs": absolute, "counts": counts,
                     "stages": stages, "index_status": index_status}
         seconds = progress.active_seconds()
         response["performance"] = {**progress.work, "seconds": round(seconds, 2),

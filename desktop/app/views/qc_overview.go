@@ -4,7 +4,8 @@ package views
 // (analysis_overview): four metric cards, the top RNAs and RNA pairs by
 // cluster support, chimera types and data quality, with the web's exports
 // (summary JSON, rna_counts.csv, rna_pairs.csv; the CSVs quote every cell,
-// as the web writes them).
+// as the web writes them), and the web's Import check: the invalid rows
+// each analysis index kept with their reason, and its validation CSV.
 
 import (
 	"encoding/json"
@@ -22,6 +23,10 @@ import (
 // ovTop is how many RNAs and pairs the page loads (the web keeps ten).
 const ovTop = 10
 
+// ovShownErrors is how many invalid rows the Import check lists; the
+// validation CSV has every row the indexes kept.
+const ovShownErrors = 8
+
 type ovCount struct {
 	Name           string  `json:"name,omitempty"`
 	Gene1          string  `json:"gene1,omitempty"`
@@ -38,6 +43,15 @@ type ovType struct {
 	Name    string `json:"name"`
 	Records int64  `json:"records"`
 	Support int64  `json:"support"`
+}
+
+// ovError is one invalid .hyb line an analysis index kept: its 1-based
+// line number, why it was rejected and its first 300 characters.
+type ovError struct {
+	Line     int64  `json:"line"`
+	Error    string `json:"error"`
+	Content  string `json:"content"`
+	SampleID string `json:"sample_id"`
 }
 
 // ovData is analysis_overview's result.
@@ -59,6 +73,10 @@ type ovData struct {
 	RNAs             []ovCount `json:"rnas"`
 	Pairs            []ovCount `json:"pairs"`
 	Types            []ovType  `json:"types"`
+	// Errors: the invalid rows with a reason (a bounded sample per index);
+	// OmittedErrors: invalid rows counted without one.
+	Errors        []ovError `json:"errors"`
+	OmittedErrors int64     `json:"omitted_errors"`
 }
 
 // qcOverview is the Overview's state; key is the project, selection and
@@ -179,6 +197,14 @@ func (p *qcPage) overview(c *ui.Context) {
 	})
 }
 
+// importCheck is the Import check card under the per-sample table, once
+// the Overview has loaded for the current selection.
+func (p *qcPage) importCheck(c *ui.Context) {
+	if d := p.ov.data; d != nil && p.ov.key == p.overviewKey() && len(p.a.SelectionIDs(p.a.Selected.Key)) > 0 {
+		Card(c, "Import check", func() { p.ovImportCheck(c, d) }).MinWidth(0)
+	}
+}
+
 func ovMetric(c *ui.Context, label, value, note string) {
 	t := c.Theme()
 	ui.Column(c).Gap(4).Padding(12, 14).Radius(8).Border(1, t.Border).Background(t.Surface).Grow(1).MinWidth(180).Basis(0).Children(func() {
@@ -289,6 +315,77 @@ func ovQuality(c *ui.Context, d *ovData) {
 	item(FormatNumber(d.Invalid), "invalid rows skipped")
 }
 
+// ovImportCheck is the web's Import check: valid, skipped and invalid
+// rows, the first invalid rows with their reason and the validation CSV.
+func (p *qcPage) ovImportCheck(c *ui.Context, d *ovData) {
+	t := c.Theme()
+	ui.Text(c, "What the parser found while reading the files: valid, skipped and invalid rows. A valid record has at least 15 tab-separated "+
+		"columns, a name for each RNA arm, and positive one-based RNA start/end coordinates.").FontSize(12).TextColor(t.TextMuted)
+	ui.Row(c).Gap(24).Wrap().Children(func() {
+		for _, item := range []struct {
+			value int64
+			label string
+		}{{d.Records, "Valid records"}, {d.Skipped, "Skipped comment and blank lines"}, {d.Invalid, "Invalid records"}} {
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Text(c, FormatNumber(item.value)).FontSize(18).Bold()
+				ui.Text(c, item.label).FontSize(12).TextColor(t.TextMuted)
+			})
+		}
+	})
+	if d.Invalid == 0 {
+		ui.Text(c, "No invalid data rows were found during local validation.").FontSize(12).TextColor(t.TextMuted)
+		return
+	}
+	ui.Text(c, FormatNumber(d.Invalid)+" invalid rows were skipped. The files remain usable with their valid records.").FontSize(12).TextColor(t.Warning)
+	if d.OmittedErrors > 0 {
+		ui.Text(c, fmt.Sprintf("The downloadable error sample contains the first %s invalid rows; %s additional invalid-row details were omitted to keep the analysis index small. "+
+			"The total invalid count above remains complete.", FormatNumber(int64(len(d.Errors))), FormatNumber(d.OmittedErrors))).FontSize(12).TextColor(t.Warning)
+	}
+	rows := d.Errors
+	if len(rows) > ovShownErrors {
+		rows = rows[:ovShownErrors]
+	}
+	if len(rows) > 0 {
+		ui.Row(c).Gap(8).Children(func() {
+			ui.Text(c, "Sample").FontSize(12).Bold().TextColor(t.TextMuted).Width(120)
+			ui.Text(c, "Line").FontSize(12).Bold().TextColor(t.TextMuted).Width(70).TextAlign(ui.End)
+			ui.Text(c, "Reason").FontSize(12).Bold().TextColor(t.TextMuted).Width(280)
+			ui.Text(c, "Content").FontSize(12).Bold().TextColor(t.TextMuted).Grow(1).Basis(0).MinWidth(0)
+		})
+	}
+	for _, e := range rows {
+		sample := p.ovSampleName(e.SampleID)
+		ui.Row(c).Gap(8).Children(func() {
+			ui.Text(c, sample).SingleLine().Tooltip(sample).Width(120)
+			ui.Text(c, FormatNumber(e.Line)).Width(70).TextAlign(ui.End).SingleLine()
+			ui.Text(c, e.Error).SingleLine().Tooltip(e.Error).Width(280)
+			ui.Text(c, e.Content).FontSize(12).TextColor(t.TextMuted).SingleLine().Tooltip(e.Content).Grow(1).Basis(0).MinWidth(0)
+		})
+	}
+	if len(d.Errors) > len(rows) {
+		ui.Text(c, FormatNumber(int64(len(d.Errors)-len(rows)))+" more in the CSV.").FontSize(12).TextColor(t.TextMuted)
+	}
+	ui.Row(c).Children(func() {
+		label, tip := "Download validation report…", "Every invalid row with its line number and reason"
+		if d.OmittedErrors > 0 {
+			label, tip = "Download error sample…", "The invalid rows kept with their line number and reason"
+		}
+		if ui.Button(c, label).Tooltip(tip).Clicked() {
+			p.exportValidationCSV(d)
+		}
+	})
+}
+
+// ovSampleName is a sample's name, or its id when it is not in the project.
+func (p *qcPage) ovSampleName(id string) string {
+	if p.a.Project != nil {
+		if s := p.a.Project.Sample(id); s != nil && s.Name != "" {
+			return s.Name
+		}
+	}
+	return nameOr(id, "—")
+}
+
 // ---- exports
 
 func (p *qcPage) overviewExportName(ext string, parts ...string) string {
@@ -330,6 +427,36 @@ func (p *qcPage) exportOverviewCSV(pairs bool) {
 		}
 		return ovRNAsCSV(d.RNAs), nil
 	})
+}
+
+// exportValidationCSV writes the web's validation report (line, error,
+// content; hyb2-validation-error-sample.csv when details were omitted),
+// with the sample each row came from as a last column.
+func (p *qcPage) exportValidationCSV(d *ovData) {
+	name := p.overviewExportName(".csv", "hyb2-validation-report")
+	if d.OmittedErrors > 0 {
+		name = p.overviewExportName(".csv", "hyb2-validation-error-sample")
+	}
+	rows := d.Errors
+	samples := make([]string, len(rows))
+	for i, e := range rows {
+		samples[i] = p.ovSampleName(e.SampleID)
+	}
+	saveExport(p.a, "Export the validation report", name, func() ([]byte, error) {
+		return ovValidationCSV(rows, samples), nil
+	})
+}
+
+func ovValidationCSV(rows []ovError, samples []string) []byte {
+	out := [][]string{{"line", "error", "content", "sample"}}
+	for i, e := range rows {
+		sample := ""
+		if i < len(samples) {
+			sample = samples[i]
+		}
+		out = append(out, []string{itoa64(e.Line), e.Error, e.Content, sample})
+	}
+	return quotedCSV(out)
 }
 
 func ovReads(r ovCount) string {

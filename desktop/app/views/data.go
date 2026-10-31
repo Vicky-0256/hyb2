@@ -157,6 +157,8 @@ type dataPage struct {
 	removeIDs  []string
 	allChecked bool
 	allowing   bool // trust_links in flight
+	// exampleBusy: add_example_data in flight
+	exampleBusy bool
 }
 
 func (p *dataPage) Show() {
@@ -625,6 +627,27 @@ func (p *dataPage) renameDialog(c *ui.Context) {
 	})
 }
 
+// addExample copies the bundled example data set (the web's "Try
+// example") into this empty project.
+func (p *dataPage) addExample() {
+	a := p.a
+	path := a.Project.Path
+	p.exampleBusy = true
+	a.Go(func() func() {
+		result, err := a.B.ProjectOp(path, "add_example_data", nil)
+		return func() {
+			p.exampleBusy = false
+			if err != nil {
+				a.Toast("Could not add the example: %v", err)
+				return
+			}
+			n, _ := result["samples"].([]any)
+			a.Toast("Example added: %s. Run all pending indexes them.", dataPlural(len(n), "sample", "samples"))
+			a.RefreshProject()
+		}
+	})
+}
+
 // ---- samples
 
 func (p *dataPage) samplesCard(c *ui.Context) {
@@ -710,6 +733,15 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 					"Import raw files… adds single files; Import sample sheet… reads a TSV/CSV (name, condition, replicate, files, reference). "+
 					"Then Run all pending makes the .hyb files.").
 					TextColor(t.TextMuted)
+				if len(a.Project.References) == 0 {
+					ui.Row(c).Gap(12).AlignItems(ui.Center).Padding(8, 0, 0, 0).Children(func() {
+						ui.Text(c, "No data yet? Try the ZIKV virion example, ZAFR vs ZASI.").Grow(1).Shrink(1).MinWidth(0)
+						if ui.Button(c, "Try example").Tooltip("Copy the bundled example data set (4 .hyb.gz replicates, 2 genomes) into this project").
+							Disabled(p.exampleBusy).Clicked() {
+							p.addExample()
+						}
+					})
+				}
 			})
 			return
 		}

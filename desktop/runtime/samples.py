@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
@@ -35,9 +36,11 @@ MiB = 1024 * 1024
 _MAX_SETTINGS_BYTES = 64_000
 
 # Suffix -> read format; longest suffix first so ".fastq.gz" wins over ".gz".
+# A gzipped .hyb keeps the format "hyb" (it is already mapped either way);
+# the index stage decompresses it into the sample's output folder.
 _READ_SUFFIXES = (
     (".fastq.gz", "fastq.gz"), (".fq.gz", "fastq.gz"), (".fasta.gz", "fasta.gz"), (".fa.gz", "fasta.gz"),
-    (".fastq", "fastq"), (".fq", "fastq"), (".fasta", "fasta"), (".fa", "fasta"), (".sam", "sam"), (".hyb", "hyb"),
+    (".hyb.gz", "hyb"), (".fastq", "fastq"), (".fq", "fastq"), (".fasta", "fasta"), (".fa", "fasta"), (".sam", "sam"), (".hyb", "hyb"),
 )
 _REFERENCE_SUFFIXES = (".fasta", ".fa", ".fna", ".fasta.gz", ".fa.gz", ".fna.gz")
 
@@ -82,12 +85,12 @@ def sha256_with_progress(path: Path, progress: Optional[Callable[[int, int], Non
 
 
 def detect_read_format(path: Path) -> str:
-    """fastq | fastq.gz | fasta | fasta.gz | sam | hyb, from the file name."""
+    """fastq | fastq.gz | fasta | fasta.gz | sam | hyb (also .hyb.gz), from the file name."""
     name = Path(path).name.lower()
     for suffix, fmt in _READ_SUFFIXES:
         if name.endswith(suffix):
             return fmt
-    raise ValueError("unrecognised read file type (expected .fastq/.fq/.fasta/.fa[.gz], .sam or .hyb): %s" % Path(path).name)
+    raise ValueError("unrecognised read file type (expected .fastq/.fq/.fasta/.fa[.gz], .sam or .hyb[.gz]): %s" % Path(path).name)
 
 
 def read_stem(path: Path) -> str:
@@ -127,10 +130,36 @@ class _Capped(io.RawIOBase):
         super().close()
 
 
-def _open_text(path: Path, limit: Optional[int] = None):
+def is_gzip(path: Path) -> bool:
+    """True when the file starts with the gzip magic bytes."""
     with Path(path).open("rb") as probe:
-        magic = probe.read(2)
-    if magic == b"\x1f\x8b":
+        return probe.read(2) == b"\x1f\x8b"
+
+
+def gunzip_file(source: Path, target: Path, progress: Optional[Callable[[int, int], None]] = None,
+                limit: Optional[int] = None) -> Path:
+    """Decompress ``source`` to ``target`` through a temporary file in the
+    same folder (replaced into place when complete), at most ``limit``
+    decompressed bytes; ``progress(compressed bytes read, total)``."""
+    source, target = Path(source), Path(target)
+    total = source.stat().st_size
+    fd, temp = tempfile.mkstemp(prefix=".gunzip-", suffix=".part", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "wb") as out, source.open("rb") as raw:
+            with _Capped(gzip.GzipFile(fileobj=raw, mode="rb"), limit or MAX_DECOMPRESSED, source.name) as handle:
+                for chunk in iter(lambda: handle.read(4 * MiB), b""):
+                    out.write(chunk)
+                    if progress is not None:
+                        progress(raw.tell(), total)
+        os.replace(temp, target)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+    return target
+
+
+def _open_text(path: Path, limit: Optional[int] = None):
+    if is_gzip(path):
         raw = io.BufferedReader(_Capped(gzip.open(path, "rb"), limit or MAX_DECOMPRESSED, Path(path).name), MiB)
         return io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
     return open(path, "r", encoding="utf-8", errors="replace")
@@ -469,7 +498,9 @@ def _new_sample(manifest: Dict[str, Any], record: Dict[str, Any], *, name: str, 
         "stages": _default_stages(record["format"]),
         "created_at": _now(),
     }
-    if record["format"] == "hyb" and record["mode"] == "copied":
+    # A copied plain .hyb is its own output; a .hyb.gz gets its output when
+    # the index stage decompresses it.
+    if record["format"] == "hyb" and record["mode"] == "copied" and not record["path"].lower().endswith(".gz"):
         sample["outputs"]["hyb"] = record["path"]
     if metadata:
         sample["metadata"] = metadata
@@ -1265,11 +1296,14 @@ def estimate_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
     reads = sample.get("reads", {})
     size = int(reads.get("size_bytes") or 0)
     fmt = reads.get("format", "")
-    uncompressed = int(size * GZ_EXPANSION) if fmt.endswith(".gz") else size
+    gzipped = fmt.endswith(".gz") or str(reads.get("path") or "").lower().endswith(".gz")
+    uncompressed = int(size * GZ_EXPANSION) if gzipped else size
     settings = sample.get("settings") or {}
     keep_sam = settings.get("keep_sam", "none") if settings.get("keep_sam") in SAM_FACTORS else "none"
     if fmt == "hyb":
-        temp, outputs = 0, int(size * (INDEX_FACTOR + CONTACT_FACTOR))
+        # a .hyb.gz is decompressed into the sample folder first
+        temp = 0
+        outputs = int(uncompressed * (INDEX_FACTOR + CONTACT_FACTOR)) + (uncompressed if gzipped else 0)
     else:
         temp = int(uncompressed * TEMP_FACTOR)
         hyb = int(uncompressed * HYB_FACTOR)

@@ -540,3 +540,39 @@ func TestDataPageImportFolder(t *testing.T) {
 	tt.Frame()
 	dataExpect(t, tt, "Imported 2 samples. Next: Run all pending.")
 }
+
+// A .hyb or .hyb.gz is already mapped: it needs no reference.
+func TestDataFolderHybNeedsNoReference(t *testing.T) {
+	d := dataFolderDialog{rows: []dataFolderRow{
+		{include: true, path: "/d/A_REP1.hyb", reference: dataNoReference},
+		{include: true, path: "/d/A_REP2.HYB.GZ", reference: dataNoReference},
+		{include: true, path: "/d/A_REP3.fastq.gz", reference: dataNoReference},
+	}}
+	if n := d.withoutReference(); n != 1 {
+		t.Fatalf("%d rows without reference", n)
+	}
+}
+
+// An empty project offers the example data set (add_example_data).
+func TestDataPageAddsExample(t *testing.T) {
+	f := newFake(t)
+	f.ops["list_samples"] = core.Obj{"ok": true, "path": "/projects/zikv.hyb2proj", "samples": []any{}, "conditions": []any{},
+		"references": []any{}, "normalized": []any{}}
+	f.ops["add_example_data"] = core.Obj{"ok": true, "samples": []any{1, 2, 3, 4}}
+	a := New(f, nil, "")
+	a.Open("/projects/zikv.hyb2proj")
+	waitFlush(a)
+	a.Navigate("data", nil)
+	waitFlush(a)
+	tt := ui.NewTester(a.View, 1100, 900)
+	dataExpect(t, tt, "No samples yet.", "No data yet? Try the ZIKV virion example, ZAFR vs ZASI.")
+	if err := tt.Click("Try example"); err != nil {
+		t.Fatal(err)
+	}
+	waitFlush(a)
+	tt.Frame()
+	if !strings.Contains(strings.Join(f.calls, ","), "op:add_example_data") {
+		t.Fatalf("calls %v", f.calls)
+	}
+	dataExpect(t, tt, "Example added: 4 samples. Run all pending indexes them.")
+}

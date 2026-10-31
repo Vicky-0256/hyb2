@@ -589,6 +589,8 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 			} `json:"windows"`
 			// Regions: fold these two regions as two strands with CPLcofold.
 			Regions []core.Region `json:"regions"`
+			// Record: fold this HYB record's own sequence.
+			Record *hybridRow `json:"record"`
 		}
 		err := model.Decode(raw, &prefill)
 		if err == nil {
@@ -596,6 +598,17 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 		}
 		switch {
 		case err != nil:
+		case prefill.Record != nil:
+			if p.engine == engineCPLcofold {
+				p.engine = engineCPLfold // a record is one strand
+			}
+			if prefill.SelectionKey != "" {
+				p.evidence = prefill.SelectionKey
+			}
+			p.setSource(stSourceRecord)
+			p.src.recordsKey, p.src.record, p.src.pending = "", nil, prefill.Record // read the records again, then choose it
+			p.prefillNote = "Prefilled from " + nameOr(prefill.Source, "a fold request") +
+				" with the record's own sequence. Check the engine, then press Run fold below."
 		case len(prefill.Regions) == 2:
 			r1, r2 := prefill.Regions[0], prefill.Regions[1]
 			p.engine, p.gene, p.gene2 = engineCPLcofold, r1.GeneID, r2.GeneID

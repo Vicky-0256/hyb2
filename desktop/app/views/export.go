@@ -267,6 +267,8 @@ type heatSVG struct {
 	// ID prefixes the element ids (unique per document when several
 	// figures share one page).
 	ID string
+	// Panel is the plot background (default a faint grey, "#f6f7f9").
+	Panel string
 }
 
 // SVG renders the map; drawn is the number of cells written, total the
@@ -325,7 +327,7 @@ func (h heatSVG) SVG() (svg string, drawn, total int) {
 	clipID := nameOr(h.ID, "heat") + "-clip"
 	fmt.Fprintf(&b, `<defs><clipPath id="%s"><rect x="%s" y="%s" width="%s" height="%s"/></clipPath></defs>`,
 		clipID, svgNum(left), svgNum(top), svgNum(size), svgNum(size))
-	fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" fill="#f6f7f9"/>`, svgNum(left), svgNum(top), svgNum(size), svgNum(size))
+	fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" fill="%s"/>`, svgNum(left), svgNum(top), svgNum(size), svgNum(size), nameOr(h.Panel, "#f6f7f9"))
 	fmt.Fprintf(&b, `<g clip-path="url(#%s)" shape-rendering="crispEdges">`, clipID)
 	for _, c := range inView {
 		x := left + (c.X-v.X0)*sx

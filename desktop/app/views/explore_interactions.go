@@ -805,28 +805,10 @@ func (p *explorePage) recordRegion(r hybridRow, armOne bool) {
 	p.tab = tabRegion
 }
 
-// recordFoldSpan is the longest intramolecular hybrid folded as one window
-// over both arms; a longer one, or an intermolecular one, folds its two
-// arms as CPLcofold strands.
-const recordFoldSpan = 500
-
-// recordFold opens ⑤ Structure with the hybrid's arms on the reference.
-// The web folds the read's own sequence; Structure has no record source
-// yet, so the prefill also carries the record ("record": name and
-// sequence) for when it does.
+// recordFold opens ⑤ Structure on the record's own sequence (the "HYB
+// record sequence" source), as the web's "Fold sequence" does.
 func (p *explorePage) recordFold(r hybridRow) {
-	record := map[string]any{"name": r.Name, "sequence": r.Sequence}
-	lo, hi := min(r.Start1, r.Start2), max(r.End1, r.End2)
-	if r.Gene1 == r.Gene2 && hi-lo+1 <= recordFoldSpan {
-		p.a.Navigate("structure", map[string]any{"prefill": map[string]any{
-			"gene": r.Gene1, "windows": []map[string]int{{"start": lo, "end": hi}},
-			"selectionKey": p.a.Selected.Key, "source": "an interaction record", "record": record,
-		}})
-		return
-	}
 	p.a.Navigate("structure", map[string]any{"prefill": map[string]any{
-		"regions": []core.Region{{GeneID: r.Gene1, Start: uint64(r.Start1), End: uint64(r.End1)},
-			{GeneID: r.Gene2, Start: uint64(r.Start2), End: uint64(r.End2)}},
-		"selectionKey": p.a.Selected.Key, "source": "an interaction record", "record": record,
+		"record": r, "selectionKey": p.a.Selected.Key, "source": "an interaction record",
 	}})
 }

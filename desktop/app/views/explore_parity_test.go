@@ -239,22 +239,13 @@ func TestInteractionRecordActions(t *testing.T) {
 		t.Fatalf("clipboard %q", tt.Clipboard())
 	}
 
-	// Fold: both arms of this hybrid on one RNA, close together: one window.
+	// Fold: the record's own sequence, as the web's "Fold sequence"
 	if err := tt.Click("Fold sequence"); err != nil {
 		t.Fatal(err)
 	}
 	prefill, _ := structureOptions(a)["prefill"].(map[string]any)
-	windows, _ := prefill["windows"].([]map[string]int)
-	if prefill["gene"] != r.Gene1 || len(windows) != 1 || windows[0]["start"] != min(r.Start1, r.Start2) ||
-		windows[0]["end"] != max(r.End1, r.End2) || prefill["record"].(map[string]any)["name"] != r.Name {
+	if got, _ := prefill["record"].(hybridRow); got.Name != r.Name || got.ID != r.ID || prefill["windows"] != nil {
 		t.Fatalf("prefill %v", prefill)
-	}
-	far := r
-	far.Start2, far.End2 = r.Start1+2000, r.Start1+2050
-	p.recordFold(far)
-	prefill, _ = structureOptions(a)["prefill"].(map[string]any)
-	if regions, _ := prefill["regions"].([]core.Region); len(regions) != 2 || regions[1].Start != uint64(far.Start2) {
-		t.Fatalf("far arms %v", prefill)
 	}
 
 	a.Navigate("explore", nil)

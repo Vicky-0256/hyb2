@@ -211,3 +211,14 @@ func TestCompareInteractionsTSVMatchesWeb(t *testing.T) {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
 }
+
+// The plot panel is faint grey by default; a figure can set it (the
+// similarity map's white or grey panel).
+func TestHeatSVGPanel(t *testing.T) {
+	view := widgets.Window{X0: 0, X1: 10, Y0: 0, Y1: 10}
+	plain, _, _ := heatSVG{View: view}.SVG()
+	grey, _, _ := heatSVG{View: view, Panel: "#ebebeb"}.SVG()
+	if !strings.Contains(plain, `fill="#f6f7f9"`) || !strings.Contains(grey, `fill="#ebebeb"`) || strings.Contains(grey, "#f6f7f9") {
+		t.Fatalf("panels:\n%s\n%s", plain, grey)
+	}
+}

@@ -195,6 +195,37 @@ func TestStructureRecordSequence(t *testing.T) {
 	}
 }
 
+// "Fold sequence" in Explore sends a record: Structure switches to the
+// record source and chooses it, offering it first when it is not among the
+// most supported records.
+func TestStructureRecordPrefill(t *testing.T) {
+	a, f := openCS(t)
+	f.queries["analysis_hybrids"] = fixture(t, "explore_hybrids.json")
+	tt := ui.NewTester(a.View, 1100, 1300)
+	a.Navigate("structure", nil)
+	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	p.engine = engineCPLcofold
+	p.setSource(stSourceRecord)
+	csSettle(a, tt)
+	listed := p.src.records[1]
+	a.Navigate("structure", map[string]any{"prefill": map[string]any{"record": listed, "source": "an interaction record"}})
+	csSettle(a, tt)
+	if p.src.kind != stSourceRecord || p.engine != engineCPLfold || p.src.record == nil || p.src.record.Name != listed.Name {
+		t.Fatalf("source %q engine %q record %+v", p.src.kind, p.engine, p.src.record)
+	}
+	other := listed
+	other.ID, other.Name, other.Sequence = 99999, "not_listed", "GGGGAAACCCCAAAGGGGAAACCCC"
+	a.Navigate("structure", map[string]any{"prefill": map[string]any{"record": other}})
+	csSettle(a, tt)
+	if p.src.record == nil || p.src.record.Name != "not_listed" || p.src.records[0].Name != "not_listed" {
+		t.Fatalf("record %+v first %q", p.src.record, p.src.records[0].Name)
+	}
+	if pl := p.plan(); len(pl.problems) != 0 || *pl.req.Sequence != other.Sequence {
+		t.Fatalf("plan %q", pl.problems)
+	}
+}
+
 // A result of a pasted or record sequence is listed by its source and
 // exports under its label.
 func TestStructurePastedResult(t *testing.T) {

@@ -283,8 +283,11 @@ type stSource struct {
 	pasted, pastedTwo string
 	// record is the chosen HYB record; records are the ones offered, read
 	// for recordsKey (the samples).
-	record     *hybridRow
-	records    []hybridRow
+	record  *hybridRow
+	records []hybridRow
+	// pending is a record sent by Explore: chosen once the records are read,
+	// and offered first when it is not among them.
+	pending    *hybridRow
 	recordsKey string
 	recordsErr string
 	loading    bool
@@ -386,6 +389,20 @@ func (p *structurePage) loadRecords() {
 				return
 			}
 			p.src.records = rows
+			if r := p.src.pending; r != nil {
+				p.src.pending = nil
+				found := false
+				for i := range rows {
+					if rows[i].ID == r.ID && rows[i].Name == r.Name {
+						p.src.record, found = &rows[i], true
+						break
+					}
+				}
+				if !found {
+					p.src.records = append([]hybridRow{*r}, rows...)
+					p.src.record = &p.src.records[0]
+				}
+			}
 		}
 	})
 }

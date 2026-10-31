@@ -690,8 +690,12 @@ func (p *comparePage) exportSimilaritySVG() {
 	cells, view := p.simHeat.Cells(), p.simHeat.View()
 	title := ctx.LabelA + " and " + ctx.LabelB + " · similarity heatmap"
 	gene := strings.Join(e.Genes, ", ")
+	panel := "#ffffff" // as similarity_heatmap.R, or ggplot's grey panel
+	if p.simPanel == cmpPanelGrey {
+		panel = "#ebebeb"
+	}
 	render := func() ([]byte, error) {
-		svg, _, _ := heatSVG{Cells: cells, View: view, Size: 520, Title: title, MaxCells: svgMaxCells,
+		svg, _, _ := heatSVG{Cells: cells, View: view, Size: 520, Title: title, MaxCells: svgMaxCells, Panel: panel,
 			XLabel: "Arm 1 · " + gene, YLabel: "Arm 2",
 			Note: fmt.Sprintf("Green: the smaller summed count of %s and %s (hyb2 plot_similarity_map), capped at the 95%% quantile (%g).",
 				ctx.LabelA, ctx.LabelB, result.Summary.SimilarityCap)}.SVG()
@@ -1145,8 +1149,20 @@ func (p *comparePage) exportQuickTSV() {
 	}
 	ctx := p.quickContext()
 	rows := append([]cmpQuickRow(nil), p.quickRows()...)
+	measure, values := "record counts", "per-million values"
+	if d.Measure == "support" {
+		measure = "cluster support"
+	}
+	if d.Normalisation == "none" {
+		values = "raw values"
+	}
+	pc := d.Pseudocount
+	if pc <= 0 {
+		pc = 1
+	}
 	comments := []string{"HYB2 quick view · " + ctx.LabelA + " (A) vs " + ctx.LabelB + " (B) · " + q.gene,
-		fmt.Sprintf("%d-nt bins; condition means of per-million values; log2_effect = log2((A + 1) / (B + 1)); raw = summed counts; no statistics", d.BinSize)}
+		fmt.Sprintf("%d-nt bins of %s; condition means of %s; log2_effect = log2((A + %g) / (B + %g)); raw = summed counts; no statistics",
+			d.BinSize, measure, values, pc, pc)}
 	saveExport(p.a, "Export the quick view", exportName(".tsv", ctx.LabelA, "vs", ctx.LabelB, "quick"), func() ([]byte, error) {
 		sort.Slice(rows, func(i, j int) bool {
 			if rows[i].X != rows[j].X {

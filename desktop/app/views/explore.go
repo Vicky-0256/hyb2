@@ -93,9 +93,10 @@ func newExplorePage(a *App) *explorePage {
 //
 // Options: {"tab": "interactions" | "contact" | "viewpoint" | "region"},
 // or Compare's {"view": "contact-map" | "region", "binSize": n, "x", "y",
-// "xEnd", "yEnd"} (the caller sets a.Selected first): the contact map
-// picks and zooms to the cell (x, y); the region opens arm 1 x..xEnd
-// against arm 2 y..yEnd on the same gene.
+// "xEnd", "yEnd", "gene2"} (the caller sets a.Selected first): the contact
+// map picks and zooms to the cell (x, y); the region opens arm 1 x..xEnd
+// against arm 2 y..yEnd, on gene2 for an inter-RNA result, else on the same
+// gene.
 func (p *explorePage) Show() {
 	opts := p.a.NavOptions
 	if opts == nil {
@@ -124,6 +125,10 @@ func (p *explorePage) Show() {
 	if !hasX {
 		return
 	}
+	gene2, _ := opts["gene2"].(string) // y is on RNA Y
+	if gene2 == "" {
+		gene2 = p.gene
+	}
 	switch p.tab {
 	case tabContact:
 		if bin := int(num(opts["binSize"])); bin > 0 {
@@ -134,15 +139,15 @@ func (p *explorePage) Show() {
 				}
 			}
 		}
-		p.cm.gene2 = p.gene
+		p.cm.gene2 = gene2
 		p.cm.focus = &[4]int{x, y, xEnd, yEnd}
 		p.cm.load.reset()
 	case tabRegion:
 		s := &p.rg
 		s.applyRange(max(1, x), max(xEnd, x))
 		if yEnd > 0 {
-			s.partner, s.partnerStart, s.partnerEnd = p.gene, coordText(max(1, y)), coordText(yEnd)
-			s.applied.partner, s.applied.partnerStart, s.applied.pEnd = p.gene, max(1, y), yEnd
+			s.partner, s.partnerStart, s.partnerEnd = gene2, coordText(max(1, y)), coordText(yEnd)
+			s.applied.partner, s.applied.partnerStart, s.applied.pEnd = gene2, max(1, y), yEnd
 		}
 	}
 }

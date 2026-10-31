@@ -365,6 +365,23 @@ func TestExploreNavigationFromCompare(t *testing.T) {
 	snapshot(t, tt, "explore-contact-focus")
 }
 
+// An inter-RNA cell from Compare puts y on RNA Y: the region's partner and
+// the contact map's Y gene follow "gene2".
+func TestExploreNavigationInterRNA(t *testing.T) {
+	a, f, p, tt := openExplore(t)
+	a.Navigate("explore", map[string]any{"view": "region", "selectionKey": "c:SUB", "gene": zikvGene, "gene2": "RNA_Y",
+		"binSize": 10, "x": 3000, "y": 50, "xEnd": 3009, "yEnd": 59})
+	settle(a, tt)
+	if p.rg.applied.partner != "RNA_Y" || f.last("analysis_region")["partner"] != "RNA_Y" {
+		t.Fatalf("partner %q payload %v", p.rg.applied.partner, f.last("analysis_region"))
+	}
+	a.Navigate("explore", map[string]any{"view": "contact-map", "gene2": "RNA_Y", "binSize": 100, "x": 3000, "y": 100})
+	settle(a, tt)
+	if p.tab != tabContact || p.contactGene2() != "RNA_Y" {
+		t.Fatalf("tab %d gene2 %q", p.tab, p.contactGene2())
+	}
+}
+
 // The web's Interactions filters reach analysis_hybrids; a row opens its
 // record card with the .hyb name and sequence.
 func TestExploreInteractionFiltersAndRecord(t *testing.T) {

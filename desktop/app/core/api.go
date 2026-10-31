@@ -36,12 +36,17 @@ type TaskStartRequest struct {
 	// Engine of a structure task: "cplfold" (default), "cplcofold" (mode
 	// "cofold", two Regions as two strands), "viennarna" or "comrades"
 	// (COMRADES(ViennaRNA)).
-	Engine     *string  `json:"engine,omitempty"`
-	Windows    []Window `json:"windows,omitempty"`
-	Regions    []Region `json:"regions,omitempty"`
-	Workers    *uint32  `json:"workers,omitempty"`
-	SamplesOne []string `json:"samples_one,omitempty"`
-	SamplesTwo []string `json:"samples_two,omitempty"`
+	Engine  *string  `json:"engine,omitempty"`
+	Windows []Window `json:"windows,omitempty"`
+	Regions []Region `json:"regions,omitempty"`
+	// Source of a structure task's sequence: "reference" (default, a region
+	// of the samples' reference), "paste" (Sequence, and SequenceTwo for
+	// CPLcofold's strand B) or "record" (Sequence is a HYB record's).
+	Source      *string  `json:"source,omitempty"`
+	SequenceTwo *string  `json:"sequence_two,omitempty"`
+	Workers     *uint32  `json:"workers,omitempty"`
+	SamplesOne  []string `json:"samples_one,omitempty"`
+	SamplesTwo  []string `json:"samples_two,omitempty"`
 	// ComparisonID names the Compare test of an energy task.
 	ComparisonID *string `json:"comparison_id,omitempty"`
 	CPU          *uint32 `json:"cpu,omitempty"`

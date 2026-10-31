@@ -24,6 +24,10 @@ Two modes share one request shape::
 ``parameters.evidence`` ``"none"`` folds the sequence alone (the web's
 sequence-only CPLfold); the samples then only give the reference.
 
+``"source": "paste" | "record"`` folds a pasted or HYB record ``sequence``
+(CPLcofold: ``sequence_two``) instead of a reference region; see
+:func:`_sequence_source` for when its chimeras are used.
+
 The .hyb files are streamed in the sidecar; arms never pass through the
 WebView.  Results go to ``<project>/structures/<task_id>/`` (structure.dbn,
 pairs.tsv, structure.ct, meta.json); the task's ``run_dir`` gets
@@ -373,6 +377,133 @@ def _evidence_inputs(project: Path, request: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# pasted and HYB record sequences (request "source": "paste" | "record")
+# ---------------------------------------------------------------------------
+
+def _clean_sequence(raw: Any) -> str:
+    """A pasted sequence read as the web does (normaliseFoldSequence): FASTA
+    header lines and whitespace dropped, upper case, T read as U."""
+    if not isinstance(raw, str):
+        raise ValueError("sequence must be text")
+    lines = [line for line in raw.replace("\r", "").split("\n") if not line.strip().startswith(">")]
+    return "".join("".join(lines).split()).upper().replace("T", "U")
+
+
+def _locate(strand: str, records: Dict[str, str]) -> Optional[Tuple[str, int, int]]:
+    """``(gene, start, end)`` where strand occurs in the reference, when it
+    occurs exactly once; None when absent or repeated."""
+    hits: List[Tuple[str, int, int]] = []
+    for name, sequence in records.items():
+        at = sequence.find(strand)
+        while at != -1 and len(hits) < 2:
+            hits.append((name, at + 1, at + len(strand)))
+            at = sequence.find(strand, at + 1)
+        if len(hits) > 1:
+            return None
+    return hits[0] if hits else None
+
+
+def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
+                     mode: str) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """A pasted or HYB record sequence (``sequence``, and for CPLcofold
+    ``sequence_two`` or one "A&B" sequence).  As the web, chimeras guide only
+    the fold of a reference region: when evidence is asked for and every
+    strand occurs exactly once in the samples' reference, it is folded as
+    that region (one window, or CPLcofold's two regions); otherwise from the
+    sequence alone (COMRADES, which needs chimeras, cannot run).  Returns
+    the request to run and the source to record (None: a reference region)."""
+    request = {key: value for key, value in request.items() if not key.startswith("_")}
+    source = request.get("source", "reference")
+    if source == "reference":
+        if request.get("sequence") is not None or request.get("sequence_two") is not None:
+            raise ValueError("a sequence needs source 'paste' or 'record'")
+        return request, None
+    if source not in ("paste", "record"):
+        raise ValueError("source must be 'reference', 'paste' or 'record'")
+    if mode not in ("genome", "cofold") or request.get("windows") or request.get("regions"):
+        raise ValueError("a pasted or HYB record sequence is folded whole, or as two strands with CPLcofold")
+    first = _clean_sequence(request.get("sequence"))
+    second = _clean_sequence(request["sequence_two"]) if request.get("sequence_two") is not None else ""
+    if mode == "cofold":
+        if source == "record":
+            raise ValueError("a HYB record sequence is one chimeric read, not two strands")
+        if "&" in first:
+            parts = first.split("&")
+            if len(parts) != 2 or second:
+                raise ValueError("give RNA A and RNA B separately, or one A&B sequence with RNA B empty")
+            first, second = parts
+        strands = [first, second]
+    elif second:
+        raise ValueError("sequence_two is only for CPLcofold")
+    else:
+        strands = [first]
+    what = "pasted sequence" if source == "paste" else "HYB record sequence"
+    for index, strand in enumerate(strands):
+        name = what if len(strands) == 1 else ("RNA A", "RNA B")[index]
+        bad = sorted(set(strand) - set("ACGU"))
+        if bad:
+            raise ValueError(f"the {name} may contain only A, C, G and U (T is read as U); found " + ", ".join(bad))
+        if len(strand) < MIN_WINDOW_NT:
+            raise ValueError(f"the {name} is shorter than {MIN_WINDOW_NT} nt")
+    label = "_".join(str(request.get("gene_id") or "pasted").split())
+    names = [label] if len(strands) == 1 else [label + "_A", label + "_B"]
+    params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
+    guided = engine == "comrades" or (engine in ("cplfold", "cplcofold") and params.get("evidence", "hyb") != "none")
+    found: List[Optional[Tuple[str, int, int]]] = []
+    if guided:
+        inputs = _evidence_inputs(project, request)
+        records = {name: sequence.upper().replace("T", "U") for name, sequence in read_fasta(inputs["reference"])}
+        found = [_locate(strand, records) for strand in strands]
+    out = {key: value for key, value in request.items() if key not in ("source", "sequence", "sequence_two")}
+    recorded: Dict[str, Any] = {"kind": source, "label": label, "lengths": [len(strand) for strand in strands]}
+    if found and all(found):
+        recorded["mapped_to"] = [f"{gene}:{start}-{end}" for gene, start, end in found]  # type: ignore[misc]
+        regions = [{"gene_id": gene, "start": start, "end": end} for gene, start, end in found]  # type: ignore[misc]
+        if mode == "cofold":
+            out["regions"] = regions
+        else:
+            out.update(gene_id=regions[0]["gene_id"], mode="windows", windows=[{"start": regions[0]["start"], "end": regions[0]["end"]}])
+        return out, recorded
+    if engine == "comrades":
+        raise ValueError(f"COMRADES(ViennaRNA) needs the chimeras of a reference region, and the {what} does not occur "
+                         "exactly once in the samples' reference: fold it with ViennaRNA MFE or sequence-only CPLfold, "
+                         "or choose Reference region")
+    if guided:
+        out["parameters"] = {**params, "evidence": "none"}
+        recorded["evidence"] = "none: the sequence does not occur exactly once in the samples' reference"
+    # folded from the sequence alone, under its label (two strands: two regions)
+    out["gene_id"], out["_strands"] = names[0], dict(zip(names, strands))
+    if mode == "cofold":
+        out["regions"] = [{"gene_id": name, "start": 1, "end": len(strand)} for name, strand in zip(names, strands)]
+    return out, recorded
+
+
+def _fold_sequence(request: Dict[str, Any], inputs: Dict[str, Any]) -> Tuple[str, str]:
+    """``(gene_id, sequence)`` to fold: a pasted or HYB record sequence, else
+    gene_id's reference sequence."""
+    strands = request.get("_strands")
+    if strands:
+        return request["gene_id"], strands[request["gene_id"]]
+    return _reference_sequence(inputs["reference"], inputs["gene_id"])
+
+
+def _record_source(result: Dict[str, Any], source: Dict[str, Any]) -> None:
+    """Name a pasted or HYB record sequence in a finished result: the
+    project.json entry's parameters, meta.json and result.json."""
+    entry = result["structure"]
+    entry["parameters"] = {**entry.get("parameters", {}), "sequence_source": source["kind"],
+                           "sequence_label": source["label"],
+                           **({"sequence_mapped_to": source["mapped_to"]} if "mapped_to" in source else {})}
+    meta_path = Path(result["outputs"]["meta"])
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["parameters"], meta["sequence_source"] = entry["parameters"], source
+    if "mapped_to" not in source and meta.get("mode") in ("genome", "windows"):
+        meta["coordinates"] = "1-based inclusive positions on the folded sequence (pairs.tsv i/j, ct column 6)"
+    _atomic_write_json(meta_path, meta)
+    _atomic_write_json(Path(result["run_dir"]) / "result.json", result)
+
+
+# ---------------------------------------------------------------------------
 # folding (runs in the sidecar for genome mode, in pool workers for windows)
 # ---------------------------------------------------------------------------
 
@@ -562,13 +693,15 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
         raise ValueError("mode 'paired' goes with engine 'comrades'")
     if mode not in {"genome", "windows", "cofold", "paired"}:
         raise ValueError("mode must be 'genome', 'windows', 'cofold' or 'paired'")
+    request, state["source"] = _sequence_source(request, project, engine, mode)
+    mode = request.get("mode", "genome")
     if engine == "cplcofold":
         return _cofold_run(request, project, task_id, state, started, repo_root)
     if engine != "cplfold":
         return _vienna_run(request, project, task_id, mode, state, started, engine)
     params = _parameters(request.get("parameters"), mode)
     inputs = _evidence_inputs(project, request)
-    gene_id, sequence = _reference_sequence(inputs["reference"], inputs["gene_id"])
+    gene_id, sequence = _fold_sequence(request, inputs)
     windows = _windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
 
     limits = _memory_limits(request)
@@ -732,7 +865,7 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     comrades = engine == "comrades"
     params = (_comrades if comrades else _vienna).parameters(request.get("parameters"))
     inputs = _evidence_inputs(project, request)
-    gene_id, sequence = _reference_sequence(inputs["reference"], inputs["gene_id"])
+    gene_id, sequence = _fold_sequence(request, inputs)
     sequence = sequence.upper().replace("T", "U")
     windows = _windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
     longest = max(end - start + 1 for start, end in windows)
@@ -1010,7 +1143,9 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     if params["beam"] > COFOLD_MAX_BEAM:
         raise ValueError(f"CPLcofold beam size is at most {COFOLD_MAX_BEAM}")
     inputs = _evidence_inputs(project, request)
-    records = {name: sequence.upper().replace("T", "U") for name, sequence in read_fasta(inputs["reference"])}
+    # pasted strands are their own records
+    records = request.get("_strands") or {name: sequence.upper().replace("T", "U")
+                                          for name, sequence in read_fasta(inputs["reference"])}
     regions = _cofold_regions(request.get("regions"), records)
     sequence = regions[0]["sequence"] + regions[1]["sequence"]
     limits = _memory_limits(request)
@@ -1155,7 +1290,10 @@ def structure_run(request: Dict[str, Any], repo_root: Optional[Path] = None) -> 
     the run directory exists are reported in ``result.json`` and returned."""
     state: Dict[str, Any] = {}
     try:
-        return _structure_run(request, repo_root, state)
+        result = _structure_run(request, repo_root, state)
+        if state.get("source") and result.get("ok"):
+            _record_source(result, state["source"])
+        return result
     except Exception as error:  # noqa: BLE001 - every failure must reach result.json
         run_dir = state.get("run_dir")
         if run_dir is None:

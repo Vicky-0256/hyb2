@@ -194,6 +194,40 @@ func TestStructureRequestsAreValidated(t *testing.T) {
 	if _, err := TaskPayload(paired, "/p", "a", run, claim); err == nil {
 		t.Fatal("paired accepted for ViennaRNA MFE")
 	}
+	// A pasted or HYB record sequence: one strand folded whole, or two with CPLcofold
+	pasted := genome
+	pasted.Source, pasted.Sequence, pasted.GeneID = ptr("paste"), ptr("ACGUACGUACGU"), ptr("pasted_sequence")
+	if payload, err = TaskPayload(pasted, "/p", "a", run, claim); err != nil || payload["source"] != "paste" ||
+		payload["sequence"] != "ACGUACGUACGU" || payload["sequence_two"] != nil {
+		t.Fatalf("pasted payload %v %v", payload, err)
+	}
+	strands := cofold
+	strands.Regions, strands.Source = nil, ptr("paste")
+	strands.Sequence, strands.SequenceTwo = ptr("GGGGAAAACC"), ptr("GGUUUUCCCC")
+	if payload, err = TaskPayload(strands, "/p", "a", run, claim); err != nil || payload["sequence_two"] != "GGUUUUCCCC" ||
+		payload["regions"] != nil {
+		t.Fatalf("pasted strands payload %v %v", payload, err)
+	}
+	for i, edit := range []func(*TaskStartRequest){
+		func(r *TaskStartRequest) { r.Source = ptr("clipboard") },
+		func(r *TaskStartRequest) { r.Source = nil },
+		func(r *TaskStartRequest) { r.Sequence = ptr("  ") },
+		func(r *TaskStartRequest) { r.Mode, r.Windows = ptr("windows"), []Window{{Start: 1, End: 30}} },
+		func(r *TaskStartRequest) { r.SequenceTwo = ptr("ACGU") },
+		func(r *TaskStartRequest) { r.Sequence = ptr(strings.Repeat("A", maxSequenceNT+1)) },
+		func(r *TaskStartRequest) {
+			r.Source, r.Engine, r.Mode, r.SequenceTwo = ptr("record"), ptr("cplcofold"), ptr("cofold"), ptr("ACGUACGUAC")
+		},
+		func(r *TaskStartRequest) {
+			r.Engine, r.Mode, r.Regions = ptr("comrades"), ptr("paired"), cofold.Regions
+		},
+	} {
+		request := pasted
+		edit(&request)
+		if _, err := TaskPayload(request, "/p", "a", run, big()); err == nil {
+			t.Fatalf("bad pasted request %d accepted", i)
+		}
+	}
 	regions := good
 	regions.Regions = cofold.Regions
 	if _, err := TaskPayload(regions, "/p", "a", run, big()); err == nil {

@@ -239,7 +239,8 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	}
 	// The form scrolls above the pinned check: bring the window list into view.
 	if check, ok := tt.Find("Check before running"); ok && r.Y+r.H+40 > check.Y {
-		tt.Scroll(r.X+20, r.Y, 0, r.Y+r.H+40-check.Y+60)
+		// scroll over the form, above the pinned check
+		tt.Scroll(r.X+20, min(r.Y, check.Y-40), 0, r.Y+r.H+40-check.Y+60)
 		tt.Frame()
 		if r, ok = tt.Find("Windows: start-end, one per line (1-based, inclusive)"); !ok || r.Y+r.H+40 > check.Y {
 			t.Fatalf("window list still hidden: %+v below %+v", r, check)

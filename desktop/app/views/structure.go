@@ -439,6 +439,9 @@ type structurePage struct {
 	// seqOnly folds with CPLfold or CPLcofold from the sequence alone (the
 	// web's "sequence only" evidence mode).
 	seqOnly bool
+	// src is the sequence source: a reference region, a HYB record or
+	// pasted sequences (structure_fold.go).
+	src stSource
 	// CPLcofold's two regions: strand A is region1 on gene, strand B region2
 	// on gene2 (the same RNA or another), each "start-end".
 	gene2, region1, region2 string
@@ -514,6 +517,7 @@ func newStructurePage(a *App) *structurePage {
 func (p *structurePage) reset() {
 	p.gene, p.evidence, p.mode, p.windows = "", "", "genome", ""
 	p.pseudoknot, p.seqOnly = false, false
+	p.src = stSource{}
 	p.gene2, p.region1, p.region2 = "", "", ""
 	p.resetFoldSettings()
 	p.prefillNote, p.startErr, p.lastTask, p.starting = "", "", "", false
@@ -570,6 +574,9 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 			Regions []core.Region `json:"regions"`
 		}
 		err := model.Decode(raw, &prefill)
+		if err == nil {
+			p.src.kind = stSourceReference // a prefill names reference regions
+		}
 		switch {
 		case err != nil:
 		case len(prefill.Regions) == 2:

@@ -9,9 +9,11 @@ package views
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
@@ -65,12 +67,18 @@ type foldPlan struct {
 	req    core.TaskStartRequest
 	memMB  uint64
 	what   string // "whole RNA" | "2 windows"
+	// source names a pasted or HYB record sequence for the task title,
+	// "pasted sequence, 90 nt"; "" for a reference region.
+	source string
 }
 
 // plan checks the form. Memory is checked against the task budget once it
 // is known (askWorkers reads it with the CPU budget).
 func (p *structurePage) plan() foldPlan {
 	a := p.a
+	if p.src.kind != stSourceReference {
+		return p.sequencePlan()
+	}
 	pl := foldPlan{gene: p.gene, length: a.Project.GeneLength(p.gene), ids: a.SelectionIDs(p.evidence),
 		evidence: a.SelectionLabel(p.evidence), what: "whole RNA"}
 	switch {
@@ -211,17 +219,7 @@ func (p *structurePage) twoRegions(pl *foldPlan) (r1, r2 core.Region, ok bool) {
 // two-region CPLfold layout (one RNA or two RNAs of one reference).
 func (p *structurePage) cofoldPlan(pl *foldPlan) {
 	r1, r2, ok := p.twoRegions(pl)
-	if p.model != "DP03" && p.model != "DP09" {
-		pl.problems = append(pl.problems, "CPLcofold uses the DP03 or DP09 energy model: choose one under Advanced settings.")
-	}
-	if int(p.beam) > stCofoldMaxBeam {
-		pl.problems = append(pl.problems, fmt.Sprintf("CPLcofold's beam size is at most %d: lower it under Advanced settings.", stCofoldMaxBeam))
-	}
-	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
-		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": p.pseudoknot}
-	if p.seqOnly {
-		params["evidence"] = "none"
-	}
+	params := p.cofoldParameters(pl)
 	mode, engine, one := "cofold", engineCPLcofold, uint32(1)
 	pl.req = core.TaskStartRequest{Kind: "structure", SampleIDs: pl.ids, GeneID: &pl.gene, Mode: &mode, Engine: &engine,
 		Regions: []core.Region{r1, r2}, Parameters: params, Workers: &one}
@@ -240,6 +238,385 @@ func (p *structurePage) cofoldPlan(pl *foldPlan) {
 	if !p.pseudoknot {
 		pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
 	}
+}
+
+// cofoldParameters are CPLcofold's settings, checked against the energy
+// models and beam it supports.
+func (p *structurePage) cofoldParameters(pl *foldPlan) map[string]any {
+	if p.model != "DP03" && p.model != "DP09" {
+		pl.problems = append(pl.problems, "CPLcofold uses the DP03 or DP09 energy model: choose one under Advanced settings.")
+	}
+	if int(p.beam) > stCofoldMaxBeam {
+		pl.problems = append(pl.problems, fmt.Sprintf("CPLcofold's beam size is at most %d: lower it under Advanced settings.", stCofoldMaxBeam))
+	}
+	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
+		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": p.pseudoknot}
+	if p.seqOnly {
+		params["evidence"] = "none"
+	}
+	return params
+}
+
+// ---- the sequence source
+
+// Sequence sources, as the web's RNA Structure page.
+const (
+	stSourceReference = "" // a region of a reference RNA (the default)
+	stSourceRecord    = "record"
+	stSourcePaste     = "paste"
+	// stRecordChoices is how many HYB records the source offers, as the web.
+	stRecordChoices = 500
+	// stViennaMaxNT is ViennaRNA MFE's longest sequence (desktop/runtime/vienna.py MAX_VIENNA_NT).
+	stViennaMaxNT = 30_000
+)
+
+var (
+	stSourceLabels = []string{"Reference region", "HYB record sequence", "Paste sequence"}
+	stSourceKinds  = []string{stSourceReference, stSourceRecord, stSourcePaste}
+)
+
+// stSource is what a fold reads its sequence from: a region of a reference
+// RNA (the form's RNA, windows or regions), the sequence of one HYB record
+// of the samples, or pasted sequences (RNA A and RNA B for CPLcofold).
+type stSource struct {
+	kind              string // one of stSourceKinds
+	pasted, pastedTwo string
+	// record is the chosen HYB record; records are the ones offered, read
+	// for recordsKey (the samples).
+	record     *hybridRow
+	records    []hybridRow
+	recordsKey string
+	recordsErr string
+	loading    bool
+}
+
+// stCleanSequence reads a pasted sequence as the web does
+// (normaliseFoldSequence): FASTA header lines and whitespace dropped, upper
+// case, T read as U. bad lists any other characters, once each.
+func stCleanSequence(text string) (seq string, bad []string) {
+	var b strings.Builder
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), ">") {
+			continue
+		}
+		for _, r := range line {
+			if unicode.IsSpace(r) {
+				continue
+			}
+			if r = unicode.ToUpper(r); r == 'T' {
+				r = 'U'
+			}
+			b.WriteRune(r)
+			if !strings.ContainsRune("ACGU", r) && !slices.Contains(bad, string(r)) {
+				bad = append(bad, string(r))
+			}
+		}
+	}
+	return b.String(), bad
+}
+
+// stStrand is one pasted strand, checked; "" with its problem in pl when
+// it cannot be folded. name says which strand ("RNA A").
+func stStrand(text, name string, pl *foldPlan) string {
+	seq, bad := stCleanSequence(text)
+	switch {
+	case len(bad) > 0:
+		pl.problems = append(pl.problems, fmt.Sprintf("%s: only A, C, G and U are accepted (T is read as U); remove %s.",
+			name, strings.Join(bad, ", ")))
+	case len(seq) < stCofoldMinNT:
+		pl.problems = append(pl.problems, fmt.Sprintf("%s: at least %d nt.", name, stCofoldMinNT))
+	default:
+		return seq
+	}
+	return ""
+}
+
+// stRecordName is how a HYB record is named: its read name (column 1 of
+// the .hyb line), else its row.
+func stRecordName(r hybridRow) string {
+	if name := strings.Join(strings.Fields(r.Name), "_"); name != "" {
+		return name
+	}
+	return fmt.Sprintf("#%d", r.ID)
+}
+
+// stRecordLabel is a record in the choice list, as the web's
+// "id · RNA one–RNA two", with its arms and reads.
+func stRecordLabel(r hybridRow) string {
+	return fmt.Sprintf("%s · %s %d–%d / %s %d–%d · %s read%s", stRecordName(r), r.Gene1, r.Start1, r.End1,
+		r.Gene2, r.Start2, r.End2, FormatNumber(int64(r.Reads)), plural(r.Reads))
+}
+
+// setSource switches the sequence source. A pasted or record sequence is
+// folded whole, so "What to fold" goes back to the whole RNA.
+func (p *structurePage) setSource(kind string) {
+	p.src.kind = kind
+	if kind != stSourceReference {
+		p.mode = "genome"
+	}
+}
+
+// loadRecords reads the HYB records offered for the samples (most
+// supported first), with their sequences, from the analysis index.
+func (p *structurePage) loadRecords() {
+	a := p.a
+	ids := a.SelectionIDs(p.evidence)
+	key := a.Project.Path + "\x00" + strings.Join(ids, "\x00")
+	if len(ids) == 0 || key == p.src.recordsKey {
+		return
+	}
+	// other samples, other records: the chosen one is chosen again
+	p.src.recordsKey, p.src.records, p.src.recordsErr, p.src.loading, p.src.record = key, nil, "", true, nil
+	path := a.Project.Path
+	a.Go(func() func() {
+		raw, err := a.B.Query(path, "analysis_hybrids", core.Obj{"sample_ids": ids, "filters": core.Obj{},
+			"limit": stRecordChoices, "offset": 0, "order": "support", "with_sequence": true})
+		var rows []hybridRow
+		if err == nil {
+			got, _ := raw.(map[string]any)
+			err = model.Decode(got["rows"], &rows)
+		}
+		return func() {
+			if p.src.recordsKey != key {
+				return
+			}
+			p.src.loading = false
+			if err != nil {
+				p.src.recordsErr = err.Error()
+				return
+			}
+			p.src.records = rows
+		}
+	})
+}
+
+// sequencePlan: a pasted or HYB record sequence folded whole, or two pasted
+// strands with CPLcofold. As the web, chimeras guide only the fold of a
+// reference region: the runtime folds a sequence found exactly once in the
+// samples' reference as that region, and any other from the sequence alone.
+func (p *structurePage) sequencePlan() foldPlan {
+	a := p.a
+	pl := foldPlan{ids: a.SelectionIDs(p.evidence), evidence: a.SelectionLabel(p.evidence)}
+	switch {
+	case len(a.SelectionOptions()) == 0:
+		pl.problems = append(pl.problems, "No sample has been analysed yet: run the pipeline on the Data page first, then come back.")
+	case len(pl.ids) == 0:
+		pl.problems = append(pl.problems, "Choose the samples: their reference is searched for the sequence.")
+	}
+	cofold, record := p.engine == engineCPLcofold, p.src.kind == stSourceRecord
+	var strands []string
+	switch {
+	case record && cofold:
+		pl.problems = append(pl.problems, "A HYB record is one chimeric read, not two strands: paste RNA A and RNA B for CPLcofold, or choose another engine.")
+	case record:
+		r := p.src.record
+		switch {
+		case r == nil:
+			pl.problems = append(pl.problems, "Choose the HYB record whose sequence to fold.")
+		case r.Sequence == "":
+			pl.problems = append(pl.problems, "This record's sequence cannot be read: its .hyb file changed after the index was built. "+
+				"Rebuild the index on the Data page, or paste the sequence.")
+		default:
+			if s := stStrand(r.Sequence, "The record's sequence", &pl); s != "" {
+				strands = []string{s}
+			}
+			pl.gene, pl.source = "record_"+stRecordName(*r), "HYB record "+stRecordName(*r)
+		}
+	case cofold:
+		one, two := p.src.pasted, p.src.pastedTwo
+		if strings.Contains(one, "&") && strings.TrimSpace(two) == "" {
+			one, two, _ = strings.Cut(one, "&") // A&B in the RNA A box
+		}
+		if strings.TrimSpace(one) == "" || strings.TrimSpace(two) == "" {
+			pl.problems = append(pl.problems, "Paste RNA A and RNA B, or A&B in the RNA A box.")
+		} else if s1, s2 := stStrand(one, "RNA A", &pl), stStrand(two, "RNA B", &pl); s1 != "" && s2 != "" {
+			strands = []string{s1, s2}
+		}
+		pl.gene, pl.source = "pasted", "pasted RNA A + RNA B"
+	default:
+		if strings.TrimSpace(p.src.pasted) == "" {
+			pl.problems = append(pl.problems, "Paste the RNA sequence to fold (A, C, G, U; T is read as U).")
+		} else if s := stStrand(p.src.pasted, "The pasted sequence", &pl); s != "" {
+			strands = []string{s}
+		}
+		pl.gene, pl.source = "pasted_sequence", "pasted sequence"
+	}
+	for _, s := range strands {
+		pl.lengths = append(pl.lengths, len(s))
+		pl.length += len(s)
+	}
+	if pl.length > 0 {
+		pl.source += ", " + pl.span()
+	}
+	source, mode, one := nameOr(p.src.kind, stSourcePaste), "genome", uint32(1)
+	pl.req = core.TaskStartRequest{Kind: "structure", SampleIDs: pl.ids, GeneID: &pl.gene, Mode: &mode, Source: &source, Workers: &one}
+	if len(strands) > 0 {
+		pl.req.Sequence = &strands[0]
+	}
+	if len(strands) == 2 {
+		pl.req.SequenceTwo = &strands[1]
+	}
+	pl.what = "the pasted sequence"
+	if record {
+		pl.what = "the record's sequence"
+	}
+	found := "Chimeras guide the fold only if the sequence occurs exactly once in the samples' reference: it is then folded as that region. " +
+		"Otherwise it is folded from the sequence alone."
+	switch p.engine {
+	case engineCPLcofold:
+		mode = "cofold"
+		engine := engineCPLcofold
+		pl.req.Engine, pl.req.Parameters = &engine, p.cofoldParameters(&pl)
+		pl.what, pl.pk = "2 pasted strands", p.pseudoknot
+		if len(strands) == 2 {
+			pl.memMB = core.StructureClaimMB(pl.length, p.pseudoknot, 1)
+			pl.req.MemMB = &pl.memMB
+		}
+		pl.limits = []string{"RNA A is strand A and RNA B strand B, each 5′→3′."}
+		if p.seqOnly {
+			pl.limits = append(pl.limits, "Sequence only: the chimeric reads are not used.")
+		} else {
+			pl.limits = append(pl.limits, "Chimeras guide the fold only if both strands occur exactly once in the samples' reference: "+
+				"they are then folded as those regions. Otherwise the strands are folded from the sequence alone.")
+		}
+		if !p.pseudoknot {
+			pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
+		}
+	case engineCPLfold:
+		params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
+			"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": false}
+		if p.seqOnly {
+			params["evidence"] = "none"
+		}
+		pl.req.Parameters = params
+		if len(strands) > 0 {
+			pl.memMB = StructureMemClaim(pl.req, pl.length, false)
+			pl.req.MemMB = &pl.memMB
+		}
+		pl.limits = []string{"Folded whole: no pseudoknots."}
+		if p.seqOnly {
+			pl.limits = append(pl.limits, "Sequence only: the chimeric reads are not used.")
+		} else {
+			pl.limits = append(pl.limits, found)
+		}
+	default: // ViennaRNA MFE, COMRADES(ViennaRNA)
+		p.viennaPlan(&pl)
+		if p.engine == engineComrades {
+			pl.limits = append([]string{"COMRADES(ViennaRNA) needs chimeras: the sequence must occur exactly once in the samples' " +
+				"reference, and is then folded as that region; otherwise the fold stops and says so."}, pl.limits...)
+		} else {
+			pl.limits = []string{"ViennaRNA MFE folds the sequence alone; hard pairs are positions on it.",
+				"No pseudoknots: ViennaRNA returns a nested structure."}
+			if pl.length > stViennaMaxNT {
+				pl.problems = append(pl.problems, fmt.Sprintf("ViennaRNA MFE folds at most %s nt; paste a shorter sequence.",
+					FormatNumber(stViennaMaxNT)))
+			}
+		}
+	}
+	if record {
+		pl.limits = append(pl.limits, "A HYB record's sequence is one chimeric read, both arms joined: not necessarily a whole RNA or a region of it.")
+	}
+	if pl.evidence != "" && p.engine != engineVienna && !(p.seqOnly && p.engine != engineComrades) {
+		pl.evidence += ", used only if the sequence occurs in their reference"
+	}
+	p.checkBudget(&pl)
+	return pl
+}
+
+// sourceField: where the sequence comes from, and the record or pasted
+// sequences when it is not a reference region.
+func (p *structurePage) sourceField(c *ui.Context, pl foldPlan) {
+	t := c.Theme()
+	cofold := p.engine == engineCPLcofold
+	labels, kinds := stSourceLabels, stSourceKinds
+	if cofold {
+		// a record is one chimeric read, not two strands
+		labels, kinds = []string{labels[0], labels[2]}, []string{kinds[0], kinds[2]}
+	}
+	current := labels[0]
+	for i, k := range kinds {
+		if k == p.src.kind {
+			current = labels[i]
+		}
+	}
+	label := "Sequence source"
+	if p.src.kind != stSourceReference {
+		label = "1  Sequence source"
+	}
+	Field(c, label, func() {
+		if ui.Select(c.Key("st-source"), &current, labels).FillWidth().Label("Sequence source").Changed() {
+			for i, l := range labels {
+				if l == current {
+					p.setSource(kinds[i])
+				}
+			}
+		}
+		switch p.src.kind {
+		case stSourceRecord:
+			p.recordChoice(c)
+		case stSourcePaste:
+			first := "Paste RNA sequence"
+			if cofold {
+				first = "RNA A sequence (strand A)"
+			}
+			ui.TextArea(c.Key("st-paste"), &p.src.pasted).Lines(3, 8).Font("monospace").Placeholder("ACGU…").Label(first)
+			if cofold {
+				ui.TextArea(c.Key("st-paste2"), &p.src.pastedTwo).Lines(2, 6).Font("monospace").Placeholder("ACGU…").
+					Label("RNA B sequence (strand B)")
+				ui.Text(c, "The first box is RNA A. Alternatively paste A&B there and leave RNA B empty.").
+					FontSize(12).TextColor(t.TextMuted)
+				ui.Checkbox(c.Key("st-pk"), &p.pseudoknot, "Allow pseudoknots")
+			} else {
+				ui.Text(c, "A, C, G and U; T is read as U, spaces and a FASTA header line are ignored.").
+					FontSize(12).TextColor(t.TextMuted)
+			}
+		}
+		if p.src.kind != stSourceReference && len(pl.lengths) > 0 {
+			ui.Text(c, pl.span()).FontSize(12).TextColor(t.TextMuted)
+		}
+	})
+}
+
+// recordChoice: the HYB records of the samples, most supported first.
+func (p *structurePage) recordChoice(c *ui.Context) {
+	t := c.Theme()
+	p.loadRecords()
+	switch {
+	case p.src.loading:
+		ui.Spinner(c).Label("Loading the HYB records…")
+		return
+	case p.src.recordsErr != "":
+		ui.Text(c, "Could not read the HYB records: "+p.src.recordsErr+". Check that the samples' index is built (Data page).").
+			FontSize(12).TextColor(t.Danger)
+		return
+	case len(p.src.records) == 0:
+		ui.Text(c, "No HYB records for these samples. Choose other samples, or paste the sequence.").
+			FontSize(12).TextColor(t.TextMuted)
+		return
+	}
+	labels := []string{"Choose a record"}
+	rows := map[string]int{}
+	current := labels[0]
+	for i, r := range p.src.records {
+		label := stRecordLabel(r)
+		if _, seen := rows[label]; seen {
+			label += fmt.Sprintf(" (row %d)", r.Index+1)
+		}
+		labels = append(labels, label)
+		rows[label] = i
+		if p.src.record != nil && p.src.record.Index == r.Index {
+			current = label
+		}
+	}
+	if ui.Select(c.Key("st-record"), &current, labels).FillWidth().Label("HYB record").Tooltip(current).Changed() {
+		p.src.record = nil
+		if i, ok := rows[current]; ok {
+			r := p.src.records[i]
+			p.src.record = &r
+		}
+	}
+	ui.Text(c, "Hybrid-read sequence: the chimeric sequence stored in the record, not necessarily a complete reference RNA or region.").
+		FontSize(12).Padding(8).Radius(6).Background(t.Warning.Alpha(0.10))
 }
 
 // span of the folded region: "10,807 nt" or "3,000 + 400 nt".
@@ -329,17 +706,21 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 	if twoRegions {
 		first = "1  Region 1 (strand A)"
 	}
-	Field(c, first, func() {
-		ui.Select(c.Key("st-gene"), &current, geneLabels).FillWidth().Label("RNA to fold").Tooltip(current).
-			OnChange(func() { p.gene = names[current] })
-		if pl.length > 0 {
-			// The full name, which the select may cut.
-			ui.Text(c, p.gene+" · "+FormatNumber(int64(pl.length))+" nt").FontSize(12).TextColor(t.TextMuted)
-		}
-		if twoRegions {
-			ui.TextInput(c.Key("st-region1"), &p.region1).Placeholder("start-end, e.g. 1-45").Label("Region 1")
-		}
-	})
+	p.sourceField(c, pl)
+	reference := p.src.kind == stSourceReference
+	if reference {
+		Field(c, first, func() {
+			ui.Select(c.Key("st-gene"), &current, geneLabels).FillWidth().Label("RNA to fold").Tooltip(current).
+				OnChange(func() { p.gene = names[current] })
+			if pl.length > 0 {
+				// The full name, which the select may cut.
+				ui.Text(c, p.gene+" · "+FormatNumber(int64(pl.length))+" nt").FontSize(12).TextColor(t.TextMuted)
+			}
+			if twoRegions {
+				ui.TextInput(c.Key("st-region1"), &p.region1).Placeholder("start-end, e.g. 1-45").Label("Region 1")
+			}
+		})
+	}
 	options := a.SelectionOptions()
 	var evLabels []string
 	keys := map[string]string{}
@@ -352,7 +733,12 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 		}
 	}
 	evidenceLabel := "2  Evidence: chimeric reads of"
-	if p.engine == engineVienna || (p.seqOnly && (p.engine == engineCPLfold || cofold)) {
+	switch {
+	case !reference && (p.engine == engineVienna || (p.seqOnly && (p.engine == engineCPLfold || cofold))):
+		evidenceLabel = "2  Samples (their chimeric reads are not used)"
+	case !reference:
+		evidenceLabel = "2  Evidence: chimeric reads of (used if the sequence is in their reference)"
+	case p.engine == engineVienna || (p.seqOnly && (p.engine == engineCPLfold || cofold)):
 		evidenceLabel = "2  Samples (their reference is folded)"
 	}
 	Field(c, evidenceLabel, func() {
@@ -371,6 +757,11 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 				Tooltip("As the web's sequence-only CPLfold; the samples then only give the reference")
 		}
 	})
+	if !reference {
+		// a pasted or record sequence is folded whole
+		p.engineField(c)
+		return
+	}
 	region2 := func(label string) {
 		second := ""
 		for l, name := range names {
@@ -450,10 +841,14 @@ func (p *structurePage) engineField(c *ui.Context) {
 }
 
 // engineChanged keeps "What to fold" valid for the new engine: two regions
-// joined by the spacer are a COMRADES layout only.
+// joined by the spacer are a COMRADES layout only. As the web, CPLcofold
+// takes pasted strands instead of a HYB record.
 func (p *structurePage) engineChanged() {
 	if p.mode == "paired" && p.engine != engineComrades {
 		p.mode = "genome"
+	}
+	if p.engine == engineCPLcofold && p.src.kind == stSourceRecord {
+		p.setSource(stSourcePaste)
 	}
 }
 
@@ -672,6 +1067,9 @@ func (p *structurePage) runFold() {
 	if p.seqOnly && (p.engine == engineCPLfold || p.engine == engineCPLcofold) {
 		title = strings.Replace(title, pl.evidence, "sequence only", 1)
 	}
+	if pl.source != "" {
+		title = stSourceTitle(p.engine, pl.source, p.seqOnly)
+	}
 	a.StartTask(pl.req, title, func(t model.Task, err error) {
 		p.starting = false
 		if err != nil {
@@ -682,6 +1080,18 @@ func (p *structurePage) runFold() {
 		p.lastTask = t.TaskID
 		p.pendingShow = t.TaskID
 	})
+}
+
+// stSourceTitle is the task title of a pasted or HYB record sequence:
+// "Structure (ViennaRNA) · pasted sequence, 90 nt".
+func stSourceTitle(engine, source string, seqOnly bool) string {
+	title := map[string]string{engineVienna: "Structure (ViennaRNA)", engineComrades: "Structure (COMRADES)",
+		engineCPLcofold: "Structure (CPLcofold)"}[engine]
+	title = nameOr(title, "Structure") + " · " + source
+	if seqOnly && (engine == engineCPLfold || engine == engineCPLcofold) {
+		title += " · sequence only"
+	}
+	return title
 }
 
 // running: this page's fold is starting, queued or running.
@@ -883,6 +1293,9 @@ func stSummaryText(e *structureEntry) string {
 
 // stWhat: "whole RNA · 10,807 nt" or "2 windows · 3,060 nt".
 func stWhat(e *structureEntry) string {
+	if source := stEntrySource(e); source != "" {
+		return source
+	}
 	switch e.Mode {
 	case "cofold":
 		return "2 regions as two strands · " + stRegionsLabel(e.Regions)
@@ -907,6 +1320,35 @@ func stWhat(e *structureEntry) string {
 		text += " (" + strings.Join(spans, ", ") + ")"
 	}
 	return text
+}
+
+// stEntrySource names a fold of a pasted or HYB record sequence, "pasted
+// sequence · 90 nt" or "pasted sequence, found at RNA:40-200 · 161 nt";
+// "" for a reference region.
+func stEntrySource(e *structureEntry) string {
+	kind, _ := e.Parameters["sequence_source"].(string)
+	if kind == "" {
+		return ""
+	}
+	what := "pasted sequence"
+	switch {
+	case e.Mode == "cofold":
+		what = "pasted RNA A + RNA B"
+	case kind == "record":
+		what = "HYB record sequence"
+		if label, _ := e.Parameters["sequence_label"].(string); label != "" {
+			what = "HYB record " + strings.TrimPrefix(label, "record_")
+		}
+	}
+	var mapped []string
+	if model.Decode(e.Parameters["sequence_mapped_to"], &mapped) == nil && len(mapped) > 0 {
+		what += ", found at " + strings.Join(mapped, " + ")
+	}
+	var s stSummary
+	if e.Summary != nil && model.Decode(e.Summary, &s) == nil && s.Length > 0 {
+		what += " · " + FormatNumber(int64(s.Length)) + " nt"
+	}
+	return what
 }
 
 func (p *structurePage) list(c *ui.Context) {
@@ -955,6 +1397,10 @@ func (p *structurePage) list(c *ui.Context) {
 				}
 				meta := "Evidence: " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
 				switch {
+				case stEntrySource(e) != "" && (e.Parameters["engine"] == "ViennaRNA" || e.Parameters["evidence"] == "none"):
+					// a pasted or record sequence folded alone: the samples gave nothing
+					engine, _ := e.Parameters["engine"].(string)
+					meta = nameOr(engine, "CPLfold") + " · sequence only · " + FormatTime(e.CreatedAt)
 				case e.Parameters["engine"] == "ViennaRNA":
 					meta = "ViennaRNA MFE · reference of " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
 				case e.Parameters["evidence"] == "none":

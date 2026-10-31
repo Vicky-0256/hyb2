@@ -52,6 +52,9 @@ const StartFile = "task-start.json"
 const (
 	maxWindows = 4096
 	maxSamples = 256
+	// maxSequenceNT bounds a pasted or HYB record sequence of a structure
+	// task; the runtime checks each engine's own limit.
+	maxSequenceNT = 100_000
 	// maxTasks bounds the in-memory table; the oldest finished task is
 	// dropped first (it stays readable from disk).
 	maxTasks = 256
@@ -1267,7 +1270,7 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 		return nil, errors.New("structure mode cofold goes with engine cplcofold")
 	case mode == "paired" && engine != "comrades":
 		return nil, errors.New("structure mode paired goes with engine comrades")
-	case twoRegions && (len(windows) > 0 || len(request.Regions) != 2):
+	case twoRegions && (len(windows) > 0 || len(request.Regions) != 2) && request.Sequence == nil:
 		return nil, errors.New("structure " + mode + " mode needs exactly two regions and no windows")
 	case !twoRegions && len(request.Regions) > 0:
 		return nil, errors.New("structure regions are only allowed in cofold and paired modes")
@@ -1313,10 +1316,53 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 		}
 		payload["engine"] = *request.Engine
 	}
-	if twoRegions {
+	if twoRegions && request.Sequence == nil {
 		payload["regions"] = request.Regions
 	}
+	if err := structureSequence(request, mode, windows, payload); err != nil {
+		return nil, err
+	}
 	return payload, nil
+}
+
+// structureSequence checks and copies a pasted or HYB record sequence: one
+// strand folded whole (genome mode), or two strands with CPLcofold.
+func structureSequence(request TaskStartRequest, mode string, windows []Window, payload Obj) error {
+	source := "reference"
+	if request.Source != nil {
+		source = *request.Source
+	}
+	switch {
+	case source != "reference" && source != "paste" && source != "record":
+		return errors.New("structure source must be reference, paste or record")
+	case source == "reference":
+		if request.Sequence != nil || request.SequenceTwo != nil {
+			return errors.New("a structure sequence needs source paste or record")
+		}
+		return nil
+	case request.Sequence == nil || strings.TrimSpace(*request.Sequence) == "":
+		return errors.New("structure source " + source + " needs a sequence")
+	case mode != "genome" && mode != "cofold":
+		return errors.New("a pasted or HYB record sequence is folded whole (genome mode) or as two strands (cofold)")
+	case len(windows) > 0 || len(request.Regions) > 0:
+		return errors.New("structure windows and regions are not allowed with a pasted or HYB record sequence")
+	case source == "record" && mode == "cofold":
+		return errors.New("a HYB record sequence is one chimeric read, not two strands")
+	case mode == "genome" && request.SequenceTwo != nil:
+		return errors.New("structure sequence_two is only allowed in cofold mode")
+	}
+	two := ""
+	if request.SequenceTwo != nil {
+		two = *request.SequenceTwo
+	}
+	if len(*request.Sequence)+len(two) > maxSequenceNT {
+		return fmt.Errorf("a structure sequence must be at most %d nt", maxSequenceNT)
+	}
+	payload["source"], payload["sequence"] = source, *request.Sequence
+	if request.SequenceTwo != nil {
+		payload["sequence_two"] = two
+	}
+	return nil
 }
 
 func comparePayload(request TaskStartRequest, project, id, runDir string) (Obj, error) {

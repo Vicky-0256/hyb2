@@ -433,6 +433,8 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
         "source": "hyb-rna-cofold-evidence", "inputRecords": len(arms), "cofoldsWithIntermolecularPairs": with_pairs,
         "mappedPairObservations": len(mapped), "uniqueBasePairs": len(all_evidence),
         "selectedBasePairs": len(selected), "rankedStems": len(stems), "requestedStemConstraints": len(constraints),
+        # the web's evidence table and download (at most ORIGINAL_EVIDENCE_LIMIT pairs, region positions)
+        "selectedEvidencePairs": [{"one": e["one"], "two": e["two"], "count": e["count"]} for e in selected],
         "acceptedStemConstraints": [{k: c[k] for k in ("id", "rank", "left", "right", "length", "support")} for c in best["accepted"]],
         "rejectedStemConstraints": best["rejected"], "evidenceLimit": ORIGINAL_EVIDENCE_LIMIT,
         "evidenceWeight": "one per eligible HYB row", "comradesScore": best["score"]["score"],

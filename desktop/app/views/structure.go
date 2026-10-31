@@ -88,6 +88,14 @@ type structureRecord struct {
 	Positions []int         `json:"positions"`
 	Cutpoint  int           `json:"cutpoint"`
 	Segments  []core.Region `json:"segments"`
+	// A CPLfold record: its candidates (best first; structure_details.go),
+	// the one shown (selectCandidate swaps DBN, Pairs, Bonus and Energy),
+	// each nucleotide's strongest HYB bonus and the window's bonus matrix
+	// TSV (empty when it was not written).
+	Candidates        []stCandidate `json:"candidates"`
+	SelectedCandidate int           `json:"selected_candidate"`
+	NucleotideSupport []float64     `json:"nucleotide_support"`
+	BonusMatrixPath   string        `json:"bonus_matrix_path"`
 	// mapped, when set, are the pairs moved onto another reference
 	// (stMapRecords); they replace DBN and Pairs.
 	mapped []stPair
@@ -120,11 +128,13 @@ type structureResult struct {
 			Rows string `json:"rows"`
 		} `json:"evidence_inputs"`
 		// Records are the windows' summaries; evidence.source is
-		// "hyb-block-intervals" when CPLfold folded with HYB evidence.
+		// "hyb-block-intervals" when CPLfold folded with HYB evidence;
+		// comrades is a COMRADES(ViennaRNA) window's evidence and ensemble.
 		Records []struct {
 			Evidence struct {
 				Source string `json:"source"`
 			} `json:"evidence"`
+			Comrades *stComrades `json:"comrades"`
 		} `json:"records"`
 	} `json:"meta"`
 	Records []structureRecord `json:"records"`
@@ -506,6 +516,13 @@ type structurePage struct {
 	// layers: B on A's coordinates, differential arcs, gene track
 	layers        stLayers
 	overlayLabels [2]string
+	// result details (structure_details.go): the CPLfold candidate table,
+	// the COMRADES tables' open state, and the records the arcs show (for
+	// the nucleotide inspector).
+	candTable               ui.ListState
+	candRow                 int
+	stemsOpen, evidenceOpen bool
+	shownA                  []structureRecord
 }
 
 func newStructurePage(a *App) *structurePage {
@@ -528,7 +545,7 @@ func (p *structurePage) reset() {
 	p.reading = map[string]bool{}
 	p.readErr = map[string]string{}
 	p.pendingPair, p.pairLabels, p.pendingShow = nil, nil, ""
-	p.arcsKey, p.dbnText, p.target = "", "", nil
+	p.arcsKey, p.dbnText, p.target, p.shownA = "", "", nil, nil
 	p.layers = newSTLayers()
 }
 
@@ -944,6 +961,8 @@ func (p *structurePage) viewer(c *ui.Context) {
 			if p.otherView(c, a) {
 				p.statsTable(c, false)
 				ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+				p.candidatesPanel(c, a)
+				p.comradesPanel(c, a)
 				return
 			}
 		}
@@ -990,11 +1009,21 @@ func (p *structurePage) viewer(c *ui.Context) {
 			height += 20
 		}
 		ev := p.arcs.Show(c.Key("st-arcs"), height, cmpRed, cmpBlue, t.TextMuted, "Arc diagram of base pairs")
-		info := fmt.Sprintf("%s–%s · wheel zooms, drag pans, double click resets", FormatNumber(int64(p.arcs.Start)), FormatNumber(int64(p.arcs.End)))
+		info := fmt.Sprintf("%s–%s · wheel zooms, drag pans, double click resets, click inspects a nucleotide (← → step)",
+			FormatNumber(int64(p.arcs.Start)), FormatNumber(int64(p.arcs.End)))
 		if ev.Hover {
-			info = "Position " + FormatNumber(int64(ev.Position)) + " · " + info
+			hover := stNucleotideText(p.shownA, ev.Position, nameOr(a.Meta.Engine, "CPLfold"))
+			info = nameOr(hover, "Position "+FormatNumber(int64(ev.Position))) + " · " + info
 		}
 		ui.Text(c, info).FontSize(11).TextColor(t.TextMuted)
+		if sel := p.arcs.Selected; sel > 0 {
+			if text := stNucleotideText(p.shownA, sel, nameOr(a.Meta.Engine, "CPLfold")); text != "" {
+				if b != nil {
+					text = "A · " + text
+				}
+				ui.Text(c, text).FontSize(12).Bold()
+			}
+		}
 		for _, note := range p.layers.notes {
 			ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
 		}
@@ -1003,6 +1032,8 @@ func (p *structurePage) viewer(c *ui.Context) {
 		}
 		p.statsTable(c, b != nil)
 		ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+		p.candidatesPanel(c, a)
+		p.comradesPanel(c, a)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Dot-bracket (A)").Bold().Grow(1)
 			if ui.Button(c, "Copy").Clicked() {
@@ -1039,6 +1070,7 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 	p.layers.notes = nil
 	geneA := stGene(a)
 	recordsA := stPickRecords(a.Records, p.record)
+	p.shownA = recordsA
 	var recordsB []structureRecord
 	if b != nil {
 		recordsB = stPickRecords(b.Records, p.record)

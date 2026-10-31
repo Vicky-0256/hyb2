@@ -39,6 +39,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -84,6 +85,13 @@ ENERGY_MODELS = {"DP03", "DP09", "CC06", "CC09", "RE"}
 COFOLD_MODELS = {"DP03", "DP09"}
 COFOLD_MAX_BEAM = 200
 BRACKET_CLOSE = {")": "(", "]": "[", "}": "{", ">": "<"}
+# CPLfold candidates kept per record for the desktop's candidate table (the
+# web lists them all: at most 20 phase-1 candidates, one phase 2 each).
+CANDIDATE_LIMIT = 40
+# The bonus matrix is written for a local CPLfold run (bin/cplfold
+# --bonus-matrix-file) up to this many upper-triangle cells (~50 MB).
+BONUS_EXPORT_MAX_CELLS = 2_000_000
+BONUS_TRANSFORM = "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p"
 
 # cplfold_web modules loaded in this process, keyed by source path.
 _MODULES: Dict[str, Any] = {}
@@ -522,11 +530,87 @@ def _pairs(structure: str) -> List[Tuple[int, int, str]]:
     return pairs
 
 
-def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Build the bonus from compressed arms and fold; returns a JSON-able record."""
+def _number(value: Any) -> Optional[float]:
+    """A JSON number from CPLfold's (possibly NumPy) value; None when absent or not finite."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _candidate(rank: int, raw: Dict[str, Any], structure: str,
+               pairs: List[Tuple[int, int, str, Optional[float]]]) -> Dict[str, Any]:
+    """One CPLfold candidate as the desktop lists it (the web's candidate:
+    energy, beta-adjusted effective energy, phase-1 energy, LinearFold
+    score), with each pair's HYB bonus aligned with the dot-bracket's pairs."""
+    knotted = sum(1 for pair in pairs if pair[2] != "()")
+    kind = str(raw.get("type") or "phase1")
+    with_bonus = any(pair[3] is not None for pair in pairs)
+    return {
+        "rank": rank, "type": kind, "topology": "pseudoknotted" if knotted or kind == "pseudoknot" else "nested",
+        "energy": _number(raw.get("energy")), "effective_energy": _number(raw.get("effective_energy")),
+        "phase1_energy": _number(raw.get("phase1_energy")), "score": _number(raw.get("score")),
+        "structure": structure, "pairs": len(pairs), "pseudoknot_pairs": knotted,
+        "pairs_with_bonus": sum(1 for pair in pairs if (pair[3] or 0) > 0),
+        "bonus": [pair[3] for pair in pairs] if with_bonus else None,
+    }
+
+
+def _bonus_header(length: int, label: str, cutpoint: Optional[int] = None) -> str:
+    """The web's bonus-matrix TSV header (web/structure-ui.js cplfoldEvidenceTsv),
+    which CPLfold.py load_bonus_matrix_file reads; the region line is a comment."""
+    lines = ["# HYB2 CPLfold bonus matrix", f"# region={label}", f"# sequence_length={length}",
+             "# coordinate_system=prepared-sequence-1-based-inclusive", f"# transform={BONUS_TRANSFORM}"]
+    if cutpoint is not None:
+        lines += [f"# cutpoint={cutpoint}", f"# strand_lengths={cutpoint},{length - cutpoint}",
+                  "# cofold_evidence_smoothing=within_each_strand"]
+    lines.append("prepared_position_1\tprepared_position_2\tlog1p_gaussian_hyb_bonus")
+    return "\n".join(lines) + "\n"
+
+
+def write_bonus_matrix(path: Path, bonus: Any, label: str) -> int:
+    """The sparse upper triangle of a dense bonus matrix, 1-based, eight
+    decimals as the web's export; returns the cells written."""
+    import numpy as np
+
+    n = int(bonus.shape[0])
+    temporary = path.with_name("." + path.name + ".tmp")
+    cells = 0
+    with open(temporary, "w", encoding="utf-8") as handle:
+        handle.write(_bonus_header(n, label))
+        for row in range(n - 1):
+            values = bonus[row, row + 1:]
+            columns = np.flatnonzero(values)
+            if columns.size:
+                handle.write("".join(f"{row + 1}\t{row + 2 + int(column)}\t{float(values[column]):.8f}\n"
+                                     for column in columns))
+                cells += int(columns.size)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    return cells
+
+
+def _nucleotide_support(bonus: Any) -> Optional[List[float]]:
+    """Each nucleotide's strongest HYB bonus (the web's nucleotideSupport)."""
+    if bonus is None:
+        return None
+    return [round(float(value), 6) for value in bonus.max(axis=1)]
+
+
+def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
+             bonus_path: Optional[str] = None, label: str = "") -> Dict[str, Any]:
+    """Build the bonus from compressed arms and fold; returns a JSON-able record.
+    With ``bonus_path`` the bonus matrix is also written there (when it is
+    small enough, see BONUS_EXPORT_MAX_CELLS)."""
     started = time.monotonic()
     bonus, evidence = module.build_hyb_bonus_matrix_fast(len(sequence), arms)
     bonus_seconds = time.monotonic() - started
+    bonus_file = None
+    if bonus_path and bonus is not None and int(evidence.get("nonzeroUpperTriangleCells") or 0) <= BONUS_EXPORT_MAX_CELLS:
+        write_bonus_matrix(Path(bonus_path), bonus, label)
+        bonus_file = Path(bonus_path).name
     started = time.monotonic()
     results = module.two_phase_pseudoknot_fold(
         seq=sequence, beam_size=params["beam"], energy_delta=params["energy_delta"],
@@ -537,18 +621,25 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any]) -> D
     fold_seconds = time.monotonic() - started
     if not results:
         raise ValueError("CPLfold did not produce a structure")
-    best = results[0]
-    structure = best["structure"]
     # bonus None: folded from the sequence alone, the pairs carry no HYB evidence
-    pairs = [(i, j, bracket, float(bonus[i - 1, j - 1]) if bonus is not None else None)
-             for i, j, bracket in _pairs(structure)]
+    candidates = []
+    for rank, raw in enumerate(results[:CANDIDATE_LIMIT]):
+        folded = [(i, j, bracket, float(bonus[i - 1, j - 1]) if bonus is not None else None)
+                  for i, j, bracket in _pairs(raw["structure"])]
+        candidates.append((raw, folded))
+    best, pairs = candidates[0]
+    support = _nucleotide_support(bonus)
     del bonus
     return {
-        "structure": structure,
+        "structure": best["structure"],
         "energy": best.get("energy"),
         "type": best.get("type"),
         "pairs": pairs,
         "evidence": evidence,
+        "candidates": [_candidate(rank, raw, raw["structure"], folded) for rank, (raw, folded) in enumerate(candidates)],
+        "candidates_found": len(results),
+        "nucleotide_support": support,
+        "bonus_matrix": bonus_file,
         "seconds": {"bonus": round(bonus_seconds, 2), "fold": round(fold_seconds, 2)},
         "peak_rss_bytes": _peak_rss_bytes(),
     }
@@ -566,10 +657,11 @@ def _worker_init(root: str) -> None:
 
 
 def _fold_window(root: str, index: int, sequence: str, blocks: List[Tuple[int, int, int, int]],
-                 weights: List[int], params: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+                 weights: List[int], params: Dict[str, Any], bonus_path: Optional[str] = None,
+                 label: str = "") -> Tuple[int, Dict[str, Any]]:
     module = load_cplfold_web(Path(root))
     arms = dict(zip(blocks, weights))
-    return index, fold_one(module, sequence, arms, params)
+    return index, fold_one(module, sequence, arms, params, bonus_path, label)
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +717,22 @@ def _write_outputs(out_dir: Path, records: List[Dict[str, Any]], params: Dict[st
     _atomic_write_text(paths["dbn"], "".join(dbn))
     _atomic_write_text(paths["pairs"], "\n".join(tsv) + "\n")
     _atomic_write_text(paths["ct"], "".join(ct))
+    _write_candidates(out_dir, records, paths)
     return {key: str(value) for key, value in paths.items()}
+
+
+def _write_candidates(out_dir: Path, records: List[Dict[str, Any]], paths: Dict[str, Path]) -> None:
+    """candidates.json: each CPLfold record's candidates (best first) and
+    its nucleotides' HYB support, aligned with the records of structure.dbn.
+    Nothing for engines without candidates (ViennaRNA, COMRADES)."""
+    if not any(record.get("candidates") for record in records):
+        return
+    body = {"version": 1, "records": [
+        {"start": record["start"], "end": record["end"], "candidates": record.get("candidates") or [],
+         "candidates_found": record.get("candidates_found", len(record.get("candidates") or [])),
+         "nucleotide_support": record.get("nucleotide_support")} for record in records]}
+    paths["candidates"] = out_dir / "candidates.json"
+    _atomic_write_json(paths["candidates"], body)
 
 
 def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -643,6 +750,8 @@ def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
             "nonzeroBonusCells", "maximumBonus", "truncationTail", "transform", "evidenceWeight")},
         "seconds": record["seconds"],
         "peak_rss_bytes": record.get("peak_rss_bytes"),
+        **({"candidates": len(record["candidates"]), "bonus_matrix": record.get("bonus_matrix")}
+           if record.get("candidates") else {}),
         **({"comrades": {"evidence": record["evidence"], "randomisation": record["randomisation"]}} if "randomisation" in record else {}),
     }
 
@@ -770,18 +879,22 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
         record.update({"start": start, "end": end, "gene_id": gene_id, "sequence": sequence[start - 1:end]})
         records[index] = record
 
+    # each window's bonus matrix, for a local CPLfold run of that window
+    bonus_paths = [str(out_dir / ("bonus_matrix.tsv" if len(windows) == 1 else f"bonus_matrix_{start}-{end}.tsv"))
+                   for start, end in windows]
+    labels = [f"{gene_id}:{start}-{end}" for start, end in windows]
     if workers <= 1:
         for index, ((start, end), arms) in enumerate(zip(windows, counters)):
             progress("fold", f"window {index + 1}/{len(windows)} ({start}-{end})" if mode == "windows" else "folding",
                      index, len(windows), units="windows", force=True)
-            finish(index, fold_one(module, sequence[start - 1:end], arms, params))
+            finish(index, fold_one(module, sequence[start - 1:end], arms, params, bonus_paths[index], labels[index]))
     else:
         done = 0
         context = get_context("spawn")
         with ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_worker_init,
                                  initargs=(str(root),)) as pool:
             futures = [pool.submit(_fold_window, str(root), index, sequence[start - 1:end],
-                                   list(arms.keys()), list(arms.values()), params)
+                                   list(arms.keys()), list(arms.values()), params, bonus_paths[index], labels[index])
                        for index, ((start, end), arms) in enumerate(zip(windows, counters))]
             progress("fold", f"0/{len(windows)} windows on {workers} workers", 0, len(windows), units="windows", force=True)
             for future in as_completed(futures):
@@ -1072,6 +1185,7 @@ def _write_cofold_outputs(out_dir: Path, regions: List[Dict[str, Any]], record: 
     _atomic_write_text(paths["dbn"], dbn)
     _atomic_write_text(paths["pairs"], "\n".join(tsv) + "\n")
     _atomic_write_text(paths["ct"], "".join(ct))
+    _write_candidates(out_dir, [record], paths)
     return {key: str(value) for key, value in paths.items()}
 
 
@@ -1198,10 +1312,31 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     fold_seconds = time.monotonic() - t0
     pairs = [(pair["left"], pair["right"], pair["bracket"], float(pair["bonusSupport"]) if arms else None)
              for pair in folded["pairs"]]
-    evidence = {k: v for k, v in (folded.get("evidence") or {}).items()
-                if k not in ("bonusEntries", "nucleotideSupport")}
+    raw_evidence = folded.get("evidence") or {}
+    evidence = {k: v for k, v in raw_evidence.items() if k not in ("bonusEntries", "nucleotideSupport")}
+    # the web's candidates, on A+B indices as the dot-bracket
+    candidates = []
+    for rank, candidate in enumerate((folded.get("candidates") or [])[:CANDIDATE_LIMIT]):
+        raw = {"type": candidate.get("type"), "energy": candidate.get("energy"),
+               "effective_energy": candidate.get("effectiveEnergy"), "phase1_energy": candidate.get("phase1Energy"),
+               "score": candidate.get("score")}
+        candidate_pairs = [(pair["left"], pair["right"], pair["bracket"], float(pair["bonusSupport"]) if arms else None)
+                           for pair in candidate.get("pairs") or []]
+        candidates.append(_candidate(rank, raw, candidate["dotBracket"], candidate_pairs))
+    bonus_file = None
+    entries = raw_evidence.get("bonusEntries") or []
+    if arms and entries and len(entries) <= BONUS_EXPORT_MAX_CELLS:
+        # the web's two-strand export: 17 significant digits, with the cutpoint
+        header = _bonus_header(len(sequence), _cofold_label(regions), regions[0]["prepared_end"])
+        _atomic_write_text(out_dir / "bonus_matrix.tsv", header + "".join(
+            f"{int(entry['one'])}\t{int(entry['two'])}\t{float(entry['value']):.17g}\n" for entry in entries))
+        bonus_file = "bonus_matrix.tsv"
+    support = folded.get("nucleotideSupport") if arms else None
     record = {"structure": folded["dotBracket"], "energy": folded.get("energy"), "type": folded.get("structureType"),
               "pairs": pairs, "evidence": evidence, "sequence": sequence, "start": 1, "end": len(sequence),
+              "candidates": candidates, "candidates_found": len(folded.get("candidates") or []),
+              "nucleotide_support": [round(float(value), 6) for value in support] if support else None,
+              "bonus_matrix": bonus_file,
               "seconds": {"bonus": 0.0, "fold": round(fold_seconds, 2)}, "peak_rss_bytes": _peak_rss_bytes()}
     rows_text = ("none: sequence only, no chimera is used" if params["evidence"] == "none" else
                  f"chimeras with one arm in each region ({counts['between']}) or both arms in region 1 "
@@ -1389,6 +1524,36 @@ def _pair_bonus(path: Optional[Path]) -> Dict[Tuple[int, int, int], float]:
     return out
 
 
+def _record_extras(project: Path, entry: Dict[str, Any], meta: Dict[str, Any], count: int) -> List[Dict[str, Any]]:
+    """Per record: ``candidates`` (best first, from candidates.json),
+    ``nucleotide_support`` and ``bonus_matrix_path`` (the window's bonus
+    matrix TSV, absolute, when it was written); empty for other engines."""
+    extras: List[Dict[str, Any]] = [{} for _ in range(count)]
+    # next to structure.dbn (project.json registers only the files every engine writes)
+    dbn = _structure_file(project, entry, "dbn")
+    path = dbn.parent / "candidates.json" if dbn is not None else None
+    if path is not None and path.is_file() and not path.is_symlink():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            loaded = {}
+        rows = loaded.get("records") if isinstance(loaded, dict) else None
+        for index, row in enumerate(rows if isinstance(rows, list) else []):
+            if index < count and isinstance(row, dict):
+                extras[index].update(candidates=row.get("candidates") or [], selected_candidate=0,
+                                     nucleotide_support=row.get("nucleotide_support"))
+    summaries = meta.get("records") if isinstance(meta.get("records"), list) else []
+    for index, summary in enumerate(summaries[:count]):
+        name = summary.get("bonus_matrix") if isinstance(summary, dict) else None
+        # a bare file name next to structure.dbn, never a path
+        if dbn is None or not isinstance(name, str) or not re.fullmatch(r"bonus_matrix[0-9_-]*\.tsv", name):
+            continue
+        target = dbn.parent / name
+        if target.is_file() and not target.is_symlink():
+            extras[index]["bonus_matrix_path"] = str(target)
+    return extras
+
+
 def _read_cofold(entry: Dict[str, Any], meta: Dict[str, Any], parsed: List[Dict[str, Any]],
                  bonus: Dict[Tuple[int, int, int], float]) -> Dict[str, Any]:
     """A two-strand result (CPLcofold, or COMRADES of two regions): one
@@ -1416,7 +1581,9 @@ def _read_cofold(entry: Dict[str, Any], meta: Dict[str, Any], parsed: List[Dict[
 
 
 def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
-    """``{structure, meta, records: [{window_start, window_end, sequence, dbn, pairs, bonus, energy}]}``.
+    """``{structure, meta, records: [{window_start, window_end, sequence, dbn, pairs, bonus, energy}]}``,
+    a CPLfold record also with ``candidates``, ``selected_candidate``,
+    ``nucleotide_support`` and ``bonus_matrix_path`` (:func:`_record_extras`).
 
     Coordinates are 1-based positions on the gene: ``window_start``/``window_end``
     bound each folded window and ``pairs`` lists ``[i, j]`` gene positions.
@@ -1439,8 +1606,11 @@ def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
         except ValueError:
             meta = {}
     parsed = parse_dbn(dbn_path.read_text(encoding="utf-8"))
+    extras = _record_extras(project, entry, meta, len(parsed))
     if meta.get("mode") in ("cofold", "paired"):
-        return _read_cofold(entry, meta, parsed, _pair_bonus(_structure_file(project, entry, "pairs")))
+        result = _read_cofold(entry, meta, parsed, _pair_bonus(_structure_file(project, entry, "pairs")))
+        result["records"][0].update(extras[0])
+        return result
     bonus = _pair_bonus(_structure_file(project, entry, "pairs"))
     summaries = meta.get("records") if isinstance(meta.get("records"), list) else []
     records = []
@@ -1457,5 +1627,6 @@ def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
             # chimera evidence (HYB bonus) of each pair, from pairs.tsv; null when unknown
             "bonus": [bonus.get((start, i, j)) for i, j in pairs] if bonus else None,
             "energy": energy,
+            **extras[index],
         })
     return {"structure": entry, "meta": meta, "records": records}

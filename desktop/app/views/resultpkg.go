@@ -642,6 +642,16 @@ func rpStructureFiles(base string, s reportStructure, step string, selected bool
 		"coordinates":    "1-based positions on " + s.Gene + " (pairs); sequence and dotBracket start at positionOffset + 1",
 		"positionOffset": offset, "selectedCandidate": nil, "candidates": []any{},
 		"prediction": "computational prediction; not an experimental structure"}
+	if len(res.Records) == 1 && len(res.Records[0].Candidates) > 0 {
+		// the web's candidates: rank and selectedCandidate from 1
+		r := res.Records[0]
+		candidates := make([]map[string]any, len(r.Candidates))
+		for k, c := range r.Candidates {
+			candidates[k] = map[string]any{"rank": k + 1, "type": rpNull(c.Type), "topology": rpNull(c.Topology), "energy": c.Energy,
+				"effectiveEnergy": c.EffectiveEnergy, "pairs": c.Pairs, "crossingPairs": c.PseudoknotPairs, "dotBracket": c.Structure}
+		}
+		body["selectedCandidate"], body["candidates"] = r.SelectedCandidate+1, candidates
+	}
 	if len(res.Records) == 1 {
 		body["sequence"], body["dotBracket"] = sequence.String(), dot.String()
 		if r := res.Records[0]; r.Cutpoint > 0 {

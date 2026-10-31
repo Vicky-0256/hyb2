@@ -406,6 +406,12 @@ class ComradesRunTests(unittest.TestCase):
         self.assertEqual(comrades["evidence"]["inputRecords"], 60)
         self.assertEqual(len(comrades["randomisation"]["structures"]), 4)
         self.assertGreater(meta["records"][0]["pairs_with_bonus"], 0)
+        # the evidence pairs behind the web's evidence table and download, strongest first
+        listed = comrades["evidence"]["selectedEvidencePairs"]
+        self.assertEqual(len(listed), comrades["evidence"]["selectedBasePairs"])
+        self.assertEqual([e["count"] for e in listed], sorted((e["count"] for e in listed), reverse=True))
+        self.assertTrue(all(1 <= e["one"] <= self.length and 1 <= e["two"] <= self.length for e in listed))
+        self.assertFalse((out / "candidates.json").exists())  # no CPLfold candidates
         # the accepted stem constraints are pairs of the structure
         dbn = (out / "structure.dbn").read_text().splitlines()
         self.assertIn("COMRADES(ViennaRNA), 37 °C, min loop 3, 3 randomised folds, seed s1", dbn[0])
@@ -486,6 +492,13 @@ class CofoldRunTests(unittest.TestCase):
         self.assertEqual(len(record["bonus"]), len(record["pairs"]))
         for i, j in record["pairs"]:
             self.assertTrue((1 <= i <= 60 or 170 <= i <= 230) and (1 <= j <= 60 or 170 <= j <= 230))
+        # the web's candidates (A+B indices) and two-strand bonus-matrix export
+        self.assertEqual(record["candidates"][0]["structure"], dbn[2].replace("&", ""))
+        self.assertEqual(len(record["nucleotide_support"]), 121)
+        text = Path(record["bonus_matrix_path"]).read_text()
+        self.assertIn("# cutpoint=60\n# strand_lengths=60,61\n", text)
+        cells = [line.split("\t") for line in text.splitlines() if line[0].isdigit()]
+        self.assertTrue(cells and all(1 <= int(a) < int(b) <= 121 for a, b, _ in cells))
 
     def test_two_rnas_and_sequence_only(self):
         result = self._run([(GENE, 1, 60), ("OTHER_RNA", 50, 110)], task_id="co2")
@@ -513,6 +526,110 @@ class CofoldRunTests(unittest.TestCase):
         failed = self._run([(GENE, 100, 140), (GENE, 150, 168)], task_id="none")
         self.assertFalse(failed["ok"])
         self.assertIn("no chimeras have both arms", failed["error"])
+
+
+def _register(project, task_id, result):
+    """Add a finished structure run to project.json, as register_task_run does."""
+    from desktop.runtime.project import _structure_entry
+    entry = _structure_entry(project.resolve(), task_id, result)
+    manifest = json.loads((project / "project.json").read_text())
+    manifest["structures"] = [*(manifest.get("structures") or []), entry]
+    (project / "project.json").write_text(json.dumps(manifest))
+
+
+class CandidateTests(unittest.TestCase):
+    """CPLfold candidates, nucleotide support and the bonus-matrix export
+    (the web's candidate table, "Download candidates" and "Download bonus matrix")."""
+    length = StructureRunTests.length
+    setUp, tearDown, _request = StructureRunTests.setUp, StructureRunTests.tearDown, StructureRunTests._request
+
+    def test_candidates_and_bonus_matrix(self):
+        import numpy as np
+        from desktop.runtime.structure import read_structure
+        params = {"beam": 30, "allow_pseudoknot": True, "max_phase1": 4}
+        result = handle(self._request(task_id="cand1", parameters=params), repo_root=ROOT)
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "cand1"
+        self.assertEqual(result["structure"]["paths"]["candidates"], "structures/cand1/candidates.json")
+        body = json.loads((out / "candidates.json").read_text())
+        candidates = body["records"][0]["candidates"]
+        self.assertGreaterEqual(len(candidates), 2)
+        self.assertEqual([c["rank"] for c in candidates], list(range(len(candidates))))
+        dbn = (out / "structure.dbn").read_text().splitlines()
+        best = candidates[0]
+        self.assertEqual(best["structure"], dbn[2])
+        for candidate in candidates:
+            self.assertEqual(len(candidate["structure"]), self.length)
+            self.assertEqual(candidate["pairs"], candidate["structure"].count("(") + candidate["structure"].count("["))
+            self.assertEqual(len(candidate["bonus"]), candidate["pairs"])
+            self.assertIsInstance(candidate["energy"], float)
+            self.assertIn("effective_energy", candidate)
+            self.assertIn(candidate["topology"], ("nested", "pseudoknotted"))
+        support = body["records"][0]["nucleotide_support"]
+        self.assertEqual(len(support), self.length)
+        self.assertGreater(max(support), 0)
+        meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual((meta["records"][0]["candidates"], meta["records"][0]["bonus_matrix"]),
+                         (len(candidates), "bonus_matrix.tsv"))
+        # the export is what bin/cplfold --bonus-matrix-file reads, and is the folded matrix
+        text = (out / "bonus_matrix.tsv").read_text()
+        self.assertTrue(text.startswith("# HYB2 CPLfold bonus matrix\n"))
+        self.assertIn(f"# sequence_length={self.length}\n", text)
+        sys_path = list(__import__("sys").path)
+        try:
+            __import__("sys").path.insert(0, str(ROOT / "third_party" / "cplfold"))
+            from CPLfold import load_bonus_matrix_file
+        finally:
+            __import__("sys").path[:] = sys_path
+        loaded = load_bonus_matrix_file(str(out / "bonus_matrix.tsv"), self.length)
+        module = _module()
+        arms = module.collect_hyb_arms([str(self.project / "data" / "a.hyb"), str(self.external)], GENE, self.length)
+        dense, _ = module.build_hyb_bonus_matrix_fast(self.length, arms["genome"])
+        np.fill_diagonal(dense, 0)
+        self.assertLessEqual(float(np.abs(loaded - dense).max()), 1e-7)
+        self.assertAlmostEqual(max(support), round(float(dense.max()), 6), places=5)
+        # read back for the desktop: candidates, support and the matrix file
+        _register(self.project, "cand1", result)
+        record = read_structure(self.project, "cand1")["records"][0]
+        self.assertEqual(len(record["candidates"]), len(candidates))
+        self.assertEqual(record["selected_candidate"], 0)
+        self.assertEqual(len(record["nucleotide_support"]), self.length)
+        self.assertEqual(record["bonus_matrix_path"], str((out / "bonus_matrix.tsv").resolve()))
+
+    def test_windows_and_sequence_only(self):
+        from desktop.runtime.structure import read_structure
+        windows = [{"start": 1, "end": 160}, {"start": 120, "end": 300}]
+        result = handle(self._request(task_id="cand2", mode="windows", windows=windows, workers=2,
+                                      parameters={"beam": 20}), repo_root=ROOT)
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "cand2"
+        self.assertTrue((out / "bonus_matrix_1-160.tsv").is_file())
+        self.assertIn("# sequence_length=181\n", (out / "bonus_matrix_120-300.tsv").read_text())
+        _register(self.project, "cand2", result)
+        records = read_structure(self.project, "cand2")["records"]
+        self.assertEqual([Path(r["bonus_matrix_path"]).name for r in records],
+                         ["bonus_matrix_1-160.tsv", "bonus_matrix_120-300.tsv"])
+        self.assertTrue(all(r["candidates"] for r in records))
+        # sequence only: candidates without bonus, no matrix
+        alone = handle(self._request(task_id="cand3", parameters={"evidence": "none", "beam": 20}), repo_root=ROOT)
+        self.assertTrue(alone["ok"], alone)
+        _register(self.project, "cand3", alone)
+        record = read_structure(self.project, "cand3")["records"][0]
+        self.assertTrue(record["candidates"])
+        self.assertIsNone(record["candidates"][0]["bonus"])
+        self.assertIsNone(record["nucleotide_support"])
+        self.assertNotIn("bonus_matrix_path", record)
+        self.assertFalse(list((self.project / "structures" / "cand3").glob("bonus_matrix*")))
+
+    def test_bonus_matrix_name_is_not_a_path(self):
+        from desktop.runtime.structure import read_structure
+        result = handle(self._request(task_id="cand4", parameters={"beam": 20}), repo_root=ROOT)
+        _register(self.project, "cand4", result)
+        meta_path = self.project / "structures" / "cand4" / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta["records"][0]["bonus_matrix"] = "../../project.json"
+        meta_path.write_text(json.dumps(meta))
+        self.assertNotIn("bonus_matrix_path", read_structure(self.project, "cand4")["records"][0])
 
 
 class SequenceOnlyTests(StructureRunTests):

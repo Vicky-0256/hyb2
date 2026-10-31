@@ -49,7 +49,68 @@ type reportData struct {
 	Ready    []string
 	// Notes are parts that could not be loaded.
 	Notes []string
+	// Purpose is the researcher's stated purpose; LeftOut the steps a
+	// selected-results report leaves out ("S12 RNA structure prediction")
+	// and Left its sections that are then not shown (withChoices).
+	Purpose string
+	LeftOut []string
+	Left    map[string]bool
 }
+
+// reportSections maps the report's sections to the result steps behind
+// them: a section is left out when all its steps are.
+var reportSections = map[string][]string{
+	"references": {"reference"},
+	"tests":      {"comparison", "differential_test"},
+	"structures": {"structure"},
+	"evidence":   {"literature_search"},
+}
+
+// withChoices is the report as the researcher chose it: the purpose, and
+// for a selected-results report the left-out steps' sections removed (the
+// folding energies too when S11 is left out). d itself is not changed.
+func (d *reportData) withChoices(ch reportChoices) *reportData {
+	out := *d
+	out.Purpose, out.LeftOut, out.Left = ch.purposeText(), nil, map[string]bool{}
+	cat := rpLoadCatalog()
+	for _, spec := range cat.Steps {
+		if ch.omitted(spec[1]) {
+			title := spec[2]
+			if t, ok := rpTitles[spec[0]]; ok {
+				title = t
+			}
+			out.LeftOut = append(out.LeftOut, spec[0]+" "+title)
+		}
+	}
+	for section, keys := range reportSections {
+		left := true
+		for _, key := range keys {
+			left = left && ch.omitted(key)
+		}
+		out.Left[section] = left
+	}
+	if out.Left["references"] {
+		out.References = nil
+	}
+	if out.Left["tests"] {
+		out.Tests = nil
+	} else if ch.omitted("folding_energy") {
+		out.Tests = append([]reportTest(nil), d.Tests...)
+		for i := range out.Tests {
+			out.Tests[i].Energy = nil
+		}
+	}
+	if out.Left["structures"] {
+		out.Structures = nil
+	}
+	if out.Left["evidence"] {
+		out.Evidence = nil
+	}
+	return &out
+}
+
+// reportLeftNote stands in for a section a selected-results report leaves out.
+const reportLeftNote = "Left out of this selected-results report by the researcher."
 
 type reportSample struct {
 	ID, Label, Condition, Replicate string
@@ -575,7 +636,8 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		StructureDetails                                       []reportHTMLStructure
 		EvidenceNote                                           string
 		Checks                                                 []string
-	}{reportData: d, Checks: d.reviewChecks(), EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
+		LeftNote                                               string
+	}{reportData: d, LeftNote: reportLeftNote, Checks: d.reviewChecks(), EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
 		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable(),
 		InputTable: d.inputTable(), SettingsTable: d.settingsTable(), FingerprintNote: reportFingerprintNote}
 	for i := range d.Tests {
@@ -617,6 +679,8 @@ body { margin: 0; background: #fff; color: var(--ink); font: 14px/1.5 -apple-sys
 main { max-width: 1000px; margin: 0 auto; padding: 32px 24px 48px; }
 header h1 { margin: 0 0 4px; font-size: 26px; }
 header p { margin: 0; color: var(--muted); }
+header p.purpose { margin-top: 10px; color: var(--ink); }
+header p.note { margin-top: 10px; }
 section { margin-top: 32px; }
 h2 { font-size: 19px; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 h3 { font-size: 16px; margin: 22px 0 4px; }
@@ -661,6 +725,8 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 <header>
 <h1>{{.Name}}</h1>
 <p>HYB2 Desktop project report · {{.Generated}}</p>
+{{if .Purpose}}<p class="purpose"><strong>Purpose:</strong> {{.Purpose}} <span class="muted">(written by the researcher)</span></p>{{end}}
+{{if .LeftOut}}<p class="note">Selected results report: {{join .LeftOut "; "}} left out. This is not the whole project.</p>{{end}}
 </header>
 {{range .Notes}}<p class="note">{{.}}</p>
 {{end}}
@@ -680,7 +746,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 
 <section id="references">
 <h2>References</h2>
-{{if .ReferenceTable.Rows}}{{template "table" .ReferenceTable}}{{else}}<p class="muted">No reference in this project.</p>{{end}}
+{{if .Left.references}}<p class="muted">{{.LeftNote}}</p>{{else if .ReferenceTable.Rows}}{{template "table" .ReferenceTable}}{{else}}<p class="muted">No reference in this project.</p>{{end}}
 </section>
 
 <section id="samples">
@@ -706,7 +772,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 
 <section id="differential-tests">
 <h2>Differential tests</h2>
-{{if .TestDetails}}{{template "table" .TestTable}}
+{{if .Left.tests}}<p class="muted">{{.LeftNote}}</p>{{else if .TestDetails}}{{template "table" .TestTable}}
 {{range .TestDetails}}<div class="test">
 <h3>{{.LabelA}} vs {{.LabelB}}</h3>
 <p class="meta">{{join .Genes ", "}} · {{.Params}} · log2 fold change = A / B · {{time .Created}} · {{.ID}}</p>
@@ -730,7 +796,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 
 <section id="structures">
 <h2>Structures</h2>
-{{if .StructureDetails}}{{template "table" .StructureTable}}
+{{if .Left.structures}}<p class="muted">{{.LeftNote}}</p>{{else if .StructureDetails}}{{template "table" .StructureTable}}
 {{range .StructureDetails}}<div class="structure">
 <h3>{{.Gene}}</h3>
 <p class="meta">{{.Line}}</p>
@@ -742,7 +808,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 
 <section id="external-sources">
 <h2>External sources and researcher notes</h2>
-{{if .Evidence}}{{range .Evidence}}<div class="evidence">
+{{if .Left.evidence}}<p class="muted">{{.LeftNote}}</p>{{else if .Evidence}}{{range .Evidence}}<div class="evidence">
 <h3>{{.Title}}</h3>
 <p class="boundary">{{.Boundary}}</p>
 <dl class="facts">{{range .Facts}}

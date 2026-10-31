@@ -264,7 +264,8 @@
             "sample_pipeline",
             "analysis_index",
             "hash_inputs",
-            "energy"
+            "energy",
+            "batch_energy"
           ]
         },
         "status": {

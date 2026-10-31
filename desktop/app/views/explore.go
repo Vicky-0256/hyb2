@@ -21,7 +21,8 @@ import (
 // analysis_region, each with sample_ids from the top bar's selection.
 //
 // Navigate("explore", {"tab": "interactions" | "contact" | "viewpoint" |
-// "region"}) opens a sub-page.
+// "region" | "energies"}) opens a sub-page; "energies" is the HYB binding
+// energies batch tool (batch_energy.go).
 //
 // "Fold this region" goes to ⑤ Structure with
 //
@@ -36,10 +37,11 @@ const (
 	tabContact
 	tabViewpoint
 	tabRegion
+	tabEnergies
 )
 
-var exploreTabs = []string{"Interactions", "Contact map", "Viewpoint", "Region"}
-var exploreTabIDs = []string{"interactions", "contact", "viewpoint", "region"}
+var exploreTabs = []string{"Interactions", "Contact map", "Viewpoint", "Region", "Binding energies"}
+var exploreTabIDs = []string{"interactions", "contact", "viewpoint", "region", "energies"}
 
 const (
 	allTypes    = "All types"
@@ -65,6 +67,7 @@ type explorePage struct {
 	cm contactState
 	vp viewpointState
 	rg regionState
+	be batchEnergyState // batch_energy.go
 }
 
 // exploreSummary is what the pickers need from analysis_summary.
@@ -318,6 +321,8 @@ func (p *explorePage) View(c *ui.Context) {
 			p.viewpointView(c.Key("tab-viewpoint"))
 		case tabRegion:
 			p.regionView(c.Key("tab-region"))
+		case tabEnergies:
+			p.batchEnergyView(c.Key("tab-energies"))
 		}
 	})
 }

@@ -4,9 +4,11 @@ package views
 // the page shows (manifest, references, samples with their index counts,
 // conditions, differential tests with their strongest interactions, and
 // structures), and "Export report…": the same sections as one
-// self-contained HTML file with inline SVG figures (report_html.go). The
-// two result packages ("For AI", "For analysis") are the web app's
-// hyb2-result/1.0 ZIPs (resultpkg.go).
+// self-contained HTML file with inline SVG figures (report_html.go), or
+// "Save PDF…", that file printed. The two result packages ("For AI", "For
+// analysis") are the web app's hyb2-result/1.0 ZIPs (resultpkg.go). The
+// researcher's purpose, a selected-results report and files left out of a
+// package shape every export (report_choices.go).
 
 import (
 	"encoding/json"
@@ -39,6 +41,10 @@ type reportPage struct {
 	data    *reportData
 	loading bool
 	again   bool // Show ran while loading
+	// steps are the whole project's result steps; choice what the
+	// researcher chose for the exports (report_choices.go).
+	steps  []reportStepRow
+	choice reportChoiceState
 }
 
 func (p *reportPage) Show() { p.load() }
@@ -61,7 +67,8 @@ func (p *reportPage) load() {
 		return
 	}
 	if p.project != a.Project.Path {
-		p.project, p.data = a.Project.Path, nil
+		p.project, p.data, p.steps = a.Project.Path, nil, nil
+		p.choice.reset()
 	}
 	in := reportInput{project: *a.Project, runtime: a.start.runtime, now: time.Now()}
 	path := a.Project.Path
@@ -69,12 +76,13 @@ func (p *reportPage) load() {
 	p.loading = true
 	a.Go(func() func() {
 		d := gatherReport(backend, in)
+		steps := reportStepRows(d)
 		return func() {
 			p.loading = false
 			if a.Project == nil || a.Project.Path != path {
 				return
 			}
-			p.data = d
+			p.data, p.steps = d, steps
 			if p.again {
 				p.again = false
 				p.load()
@@ -421,19 +429,24 @@ func (p *reportPage) export() {
 	if d == nil {
 		return
 	}
-	saveExport(p.a, "Export report", exportName("-report.html", d.Name), func() ([]byte, error) { return renderReportHTML(d) })
+	view := d.withChoices(p.choice.choices())
+	saveExport(p.a, "Export report", exportName("-report.html", d.Name), func() ([]byte, error) { return renderReportHTML(view) })
 }
 
-// exportPackage saves the web's hyb2-result-<audience>.zip for the project.
+// exportPackage saves the web's hyb2-result-<audience>.zip for the project,
+// with the researcher's choices.
 func (p *reportPage) exportPackage(audience string) {
 	d := p.data
 	if d == nil {
 		return
 	}
+	ch := p.choice.choices()
 	title := map[string]string{"ai": "Save the package for an AI assistant", "analysis": "Save the package for further analysis"}[audience]
 	saveExport(p.a, title, exportName(".zip", d.Name, "hyb2-result", audience), func() ([]byte, error) {
 		now := time.Now()
-		return buildResultRecord(d, now).zip(audience, now)
+		r := recordFor(d, ch, now)
+		r.exclude = ch.Exclude[audience]
+		return r.zip(audience, now)
 	})
 }
 
@@ -462,6 +475,9 @@ func (p *reportPage) View(c *ui.Context) {
 					Disabled(d == nil).Clicked() && d != nil {
 					p.exportPackage("analysis")
 				}
+				if ui.Button(c, "Save PDF…").Tooltip("Save the report as a PDF laid out for printing (A4)").Disabled(d == nil).Clicked() && d != nil {
+					p.exportPDF()
+				}
 				if ui.PrimaryButton(c, "Export report…").Tooltip("Save the report as one HTML file with its figures").Disabled(d == nil).Clicked() && d != nil {
 					p.export()
 				}
@@ -475,13 +491,27 @@ func (p *reportPage) View(c *ui.Context) {
 			for _, note := range d.Notes {
 				errorLine(c, note)
 			}
-			Card(c, "Project", func() { reportFacts(c, d.projectFacts()) })
+			full := d
+			d = d.withChoices(p.choice.choices())
+			left := func(section string, body func()) func() {
+				if !d.Left[section] {
+					return body
+				}
+				return func() { ui.Text(c, reportLeftNote).TextColor(t.TextMuted) }
+			}
+			Card(c, "Project", func() {
+				reportFacts(c, d.projectFacts())
+				if d.Purpose != "" {
+					ui.Text(c, "Purpose: "+d.Purpose).Padding(8, 10).Radius(6).Background(t.Surface)
+				}
+			})
+			Card(c, "Steps, scope and purpose", func() { p.choicesView(c) })
 			Card(c, "Before you report these results", func() {
 				for _, check := range d.reviewChecks() {
 					ui.Text(c, "• "+check).FontSize(12)
 				}
 			})
-			Card(c, "References", func() { reportTable(c, "references", d.referenceTable(), "No reference in this project.") })
+			Card(c, "References", left("references", func() { reportTable(c, "references", d.referenceTable(), "No reference in this project.") }))
 			Card(c, "Samples", func() {
 				reportTable(c, "samples", d.sampleTable(), "No sample in this project.")
 				ui.Text(c, "Hybrids and reads from each analysed sample's index; intra / inter are shares of hybrids.").FontSize(12).TextColor(t.TextMuted)
@@ -496,16 +526,17 @@ func (p *reportPage) View(c *ui.Context) {
 				}
 				ui.Text(c, reportFingerprintNote).FontSize(12).TextColor(t.TextMuted)
 			})
-			Card(c, "Differential tests", func() { p.testsView(c, d) })
-			Card(c, "Structures", func() {
+			Card(c, "Differential tests", left("tests", func() { p.testsView(c, d) }))
+			Card(c, "Structures", left("structures", func() {
 				reportTable(c, "structures", d.structureTable(), "No structure has been folded.")
 				for _, s := range d.Structures {
 					if s.Err != "" {
 						ui.Text(c, s.Gene+" ("+s.ID+"): "+s.Err).FontSize(12).TextColor(t.Danger)
 					}
 				}
-			})
-			Card(c, "External sources and researcher notes", func() { reportEvidenceView(c, d) })
+			}))
+			Card(c, "External sources and researcher notes", left("evidence", func() { reportEvidenceView(c, d) }))
+			Card(c, "Result packages", func() { p.packageView(c, full) })
 			Card(c, "Runtime", func() { reportFacts(c, d.runtimeFacts()) })
 		})
 	})

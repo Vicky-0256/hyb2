@@ -250,14 +250,14 @@ func TestArmPositionsOpenWhenSet(t *testing.T) {
 	}
 	waitFlush(a)
 	tt.Frame()
-	if !tt.HasText("ΔG and arm positions") || tt.HasText("Arm 1 from") {
+	if !tt.HasText("ΔG, e-value and arm positions") || tt.HasText("Arm 1 from") {
 		t.Fatal("arm filters open by default")
 	}
 	p := a.PageFor("explore").(*explorePage)
 	p.ix.x0 = "100"
 	tt.Frame()
 	tt.Frame()
-	if !tt.HasText("ΔG and arm positions (1 set)") || !tt.HasText("Arm 1 from") {
+	if !tt.HasText("ΔG, e-value and arm positions (1 set)") || !tt.HasText("Arm 1 from") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 }

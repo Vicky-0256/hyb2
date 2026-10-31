@@ -242,15 +242,14 @@ func (p *explorePage) regionView(c *ui.Context) {
 						p.foldRegion(d)
 					}
 					ui.Row(c).Grow(1)
-					if ui.Button(c, "Profile TSV…").Tooltip("Save the support profile as a tab-separated file").Clicked() {
-						p.exportRegionProfileTSV(d)
-					}
-					if ui.Button(c, "Interactions TSV…").Tooltip("Save the strongest interactions below").Disabled(len(d.rows) == 0).Clicked() && len(d.rows) > 0 {
-						p.exportRegionInteractionsTSV(d)
-					}
-					if ui.Button(c, "FASTA…").Tooltip("Save the region's reference sequence").Disabled(stReferenceOf(p.a.Project, d.gene) == "").Clicked() {
-						p.exportRegionFASTA(d)
-					}
+					exportMenu(c,
+						exportItem{"Records · CSV…", d.records == 0, func() { p.exportRegionRecords(d, false) }},
+						exportItem{"Records · HYB…", d.records == 0, func() { p.exportRegionRecords(d, true) }},
+						exportItem{"Profile · SVG…", false, func() { p.exportRegionProfileSVG(d) }},
+						exportItem{"Profile · TSV…", false, func() { p.exportRegionProfileTSV(d) }},
+						exportItem{"Strongest interactions · TSV…", len(d.rows) == 0, func() { p.exportRegionInteractionsTSV(d) }},
+						exportItem{"Sequence · FASTA…", stReferenceOf(p.a.Project, d.gene) == "", func() { p.exportRegionFASTA(d) }},
+						exportItem{"Parameters · JSON…", false, func() { p.exportRegionParams(d) }})
 				})
 			})
 			partnerCard(c, "Partners", d.partners, measureSupport)

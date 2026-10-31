@@ -153,9 +153,11 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 					stat(c, "Hybrids", FormatNumber(d.records))
 					stat(c, "Reads", FormatNumber(d.reads))
 					stat(c, "Arms", FormatNumber(d.arms))
-					if ui.Button(c, "Export TSV…").Tooltip("Save the coverage of every bin as a tab-separated file").Clicked() {
-						p.exportViewpointTSV()
-					}
+					exportMenu(c,
+						exportItem{"Plot · SVG…", false, p.exportViewpointSVG},
+						exportItem{"Plot · PNG…", false, p.exportViewpointPNG},
+						exportItem{"Coverage · TSV…", false, p.exportViewpointTSV},
+						exportItem{"Parameters · JSON…", false, p.exportViewpointParams})
 				})
 				_, height := p.a.ContentSize()
 				ev := s.profile.Show(c, clampF(height*0.42, 180, 520), "Viewpoint coverage of "+d.gene, profileColor(t))

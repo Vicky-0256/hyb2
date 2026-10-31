@@ -46,7 +46,11 @@ var (
 	measures         = []string{measureRecords, measureSupport, measureReads}
 	orientations     = []string{orientBoth, orientOriented}
 	scaleOptions     = []string{scaleLinear, scaleLog}
-	mapSizeTarget    = float32(430)
+	// contactPalettes are the web's first two colour styles: the theme's
+	// mint–navy ramp, and white to black on white paper.
+	contactPalettes = []string{"Mint–navy (follows theme)", "White and black"}
+	mapSizeTarget   = float32(430)
+	paperWhite      = ui.RGB(255, 255, 255)
 )
 
 type contactState struct {
@@ -59,7 +63,8 @@ type contactState struct {
 	colorCap    string
 	customCap   string
 	scale       string
-	dark        bool // the theme the cells were coloured for
+	palette     string // one of contactPalettes
+	dark        bool   // the theme the cells were coloured for
 
 	load loader
 	data *contactData
@@ -96,7 +101,7 @@ type contactData struct {
 
 func (s *contactState) init() {
 	s.bin, s.measure, s.orientation, s.typ, s.homodimer = binDefault, measureRecords, orientBoth, allTypes, homodimerOptions[0]
-	s.colorCap, s.scale = capOptions[1], scaleLinear
+	s.colorCap, s.scale, s.palette = capOptions[1], scaleLinear, contactPalettes[0]
 	s.heat = widgets.NewHeatmap()
 	s.picked = -1
 }
@@ -121,6 +126,20 @@ func (p *explorePage) contactKey() string {
 	return strings.Join([]string{p.sel, p.contactGene2(), s.bin, s.measure, s.orientation, s.typ, s.homodimer}, "\x00")
 }
 
+// mono: the white-and-black colour style.
+func (s *contactState) mono() bool { return s.palette == contactPalettes[1] }
+
+// paper is the map's background: white for the white-and-black style,
+// which prints on white paper, else the theme's (none).
+func (s *contactState) paper() ui.Color { return paperOf(s.mono()) }
+
+func paperOf(mono bool) ui.Color {
+	if mono {
+		return paperWhite
+	}
+	return ui.Color{}
+}
+
 // capChoice is the colour cap for colorCap: an option, or "Custom:<value>".
 func (s *contactState) capChoice() string {
 	if s.colorCap == capCustom {
@@ -143,7 +162,7 @@ func (p *explorePage) loadContact() {
 	s := &p.cm
 	path, ids, gene, gene2 := p.a.Project.Path, p.ids, p.gene, p.contactGene2()
 	bin, measure, orientation, typ, homodimer := s.bin, s.measure, s.orientation, s.typ, s.homodimer
-	colorCap, scale, dark := s.capChoice(), s.scale, s.dark
+	colorCap, scale, dark, mono := s.capChoice(), s.scale, s.dark, s.mono()
 	lengthX, lengthY := p.geneLength(gene), p.geneLength(gene2)
 	p.ensure(&s.load, p.contactKey(), func() (func(), error) {
 		var size int
@@ -165,12 +184,13 @@ func (p *explorePage) loadContact() {
 			}
 			d.records = recs.total
 		}
-		cells := d.cells(colorCap, scale, dark)
+		cells := d.cells(colorCap, scale, dark, mono)
 		return func() {
 			s.data = d
+			s.heat.Background = paperOf(mono)
 			s.heat.SetCells(cells, float64(d.lengthX), float64(d.lengthY))
 			s.picked = -1
-			if s.capChoice() != colorCap || s.scale != scale || s.dark != dark {
+			if s.capChoice() != colorCap || s.scale != scale || s.dark != dark || s.mono() != mono {
 				p.recolor() // changed while loading
 			}
 			if f := s.focus; f != nil {
@@ -302,8 +322,8 @@ func capCount(limit float64, scale string) float64 {
 }
 
 // cells colours every cell by its displayed value over the cap, on the
-// web's contact ramp of the theme.
-func (d *contactData) cells(choice, scale string, dark bool) []widgets.Cell {
+// web's contact ramp of the theme, or white to black (mono).
+func (d *contactData) cells(choice, scale string, dark, mono bool) []widgets.Cell {
 	limit := d.colorCap(choice, scale)
 	out := make([]widgets.Cell, len(d.count))
 	for i, n := range d.count {
@@ -311,9 +331,23 @@ func (d *contactData) cells(choice, scale string, dark bool) []widgets.Cell {
 		if limit > 0 {
 			ratio = display(n, scale) / limit
 		}
-		out[i] = widgets.Cell{X: float64(d.x[i]), Y: float64(d.y[i]), W: float64(d.bin), H: float64(d.bin), Color: contactColor(ratio, dark)}
+		out[i] = widgets.Cell{X: float64(d.x[i]), Y: float64(d.y[i]), W: float64(d.bin), H: float64(d.bin), Color: contactStyleColor(ratio, dark, mono)}
 	}
 	return out
+}
+
+// contactStyleColor is contactColor, or for the white-and-black style the
+// web's grey ramp (white at 0, black at the cap) whatever the theme.
+func contactStyleColor(ratio float64, dark, mono bool) ui.Color {
+	if !mono {
+		return contactColor(ratio, dark)
+	}
+	if math.IsNaN(ratio) {
+		ratio = 0
+	}
+	step := jsRound(math.Max(0, math.Min(1, ratio)) * (scaleSteps - 1))
+	grey := uint8(jsRound(255 * (1 - step/(scaleSteps-1))))
+	return ui.RGB(grey, grey, grey)
 }
 
 // cellRange is the inclusive gene range of a bin starting at x.
@@ -389,7 +423,8 @@ func (p *explorePage) recolor() {
 		return
 	}
 	view, picked := s.heat.View(), s.heat.Picked
-	s.heat.SetCells(s.data.cells(s.capChoice(), s.scale, s.dark), float64(s.data.lengthX), float64(s.data.lengthY))
+	s.heat.Background = s.paper()
+	s.heat.SetCells(s.data.cells(s.capChoice(), s.scale, s.dark, s.mono()), float64(s.data.lengthX), float64(s.data.lengthY))
 	s.heat.SetView(view)
 	s.heat.Picked = picked
 }
@@ -431,6 +466,7 @@ func (p *explorePage) contactLegend(c *ui.Context, d *contactData) {
 				})
 			}
 			picker(c, "cm-scale", "Scale", &s.scale, scaleOptions, 84).OnChange(p.recolor)
+			picker(c, "cm-palette", "Colour style", &s.palette, contactPalettes, 200).OnChange(p.recolor)
 		})
 		limit := capCount(d.colorCap(s.capChoice(), s.scale), s.scale)
 		ui.Column(c).Gap(4).Children(func() {
@@ -438,7 +474,7 @@ func (p *explorePage) contactLegend(c *ui.Context, d *contactData) {
 				steps := 48
 				for i := range steps {
 					w := r.W / float32(steps)
-					pt.Fill(ui.Rect{X: r.X + float32(i)*w, Y: r.Y, W: w + 0.5, H: r.H}, contactColor(float64(i)/float64(steps-1), t.Dark), 0)
+					pt.Fill(ui.Rect{X: r.X + float32(i)*w, Y: r.Y, W: w + 0.5, H: r.H}, contactStyleColor(float64(i)/float64(steps-1), t.Dark, s.mono()), 0)
 				}
 			})
 			ui.Row(c).Children(func() {
@@ -448,12 +484,13 @@ func (p *explorePage) contactLegend(c *ui.Context, d *contactData) {
 			})
 		})
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if ui.Button(c, "Export SVG…").Tooltip("Save the map as shown (cells in view)").Clicked() {
-				p.exportContactSVG()
-			}
-			if ui.Button(c, "Export TSV…").Tooltip("Save the cells in view as a tab-separated file").Clicked() {
-				p.exportContactTSV()
-			}
+			exportMenu(c,
+				exportItem{"Map · SVG…", false, p.exportContactSVG},
+				exportItem{"Map · PNG…", false, p.exportContactPNG},
+				exportItem{"Contact cells · TSV…", false, p.exportContactTSV},
+				exportItem{"Matrix · CSV (bins × bins)…", false, p.exportContactMatrix},
+				exportItem{"Selected cell records · CSV…", s.picked < 0 || s.picked >= len(d.count), p.exportContactCellRecords},
+				exportItem{"Parameters · JSON…", false, p.exportContactParams})
 		})
 	})
 }

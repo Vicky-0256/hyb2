@@ -808,6 +808,18 @@ def _search_table(index: _Index, query: str) -> str:
     over the same fields joined by spaces). The id and sequence are read from
     the sample's .hyb, which must be the file the index was built from.
     Returns the name of the temp table of their ids."""
+    return _found_table(index, query, lambda: _scan_search(index, query))
+
+
+def _evalue_table(index: _Index, max_evalue: float) -> str:
+    """The temp table of the hybrids whose arm e-values (.hyb columns 9 and
+    15) are all at most ``max_evalue``; a missing e-value passes, as the
+    web's maximum e-value filter."""
+    return _found_table(index, "\x00evalue:%r" % float(max_evalue), lambda: _scan_evalue(index, max_evalue))
+
+
+def _found_table(index: _Index, query: str, scan) -> str:
+    """The temp table of the ids ``scan`` finds, cached by (index, stamp, query)."""
     global _found_rows
     key = (str(index.path), index.stamp, query)
     with _lock:
@@ -815,7 +827,7 @@ def _search_table(index: _Index, query: str) -> str:
         if entry is not None and entry[0] is index:
             _found_tables.move_to_end(key)
             return entry[1]
-    found = _scan_search(index, query)
+    found = scan()
     table = "hyb2_found_%d" % next(_found_serial)
     index.con.execute("CREATE TEMP TABLE %s(id INTEGER PRIMARY KEY)" % table)
     index.con.executemany("INSERT INTO temp.%s VALUES (?)" % table, ((rid,) for rid in found))
@@ -840,8 +852,8 @@ def _search_table(index: _Index, query: str) -> str:
     return table
 
 
-def _scan_search(index: _Index, query: str) -> List[int]:
-    """The ids of the hybrids whose text contains ``query``, read from the .hyb."""
+def _checked_source(index: _Index, what: str) -> str:
+    """The sample's .hyb, which must be unchanged since the index was built."""
     meta = index.meta
     source = meta.get("source_path")
     try:
@@ -849,7 +861,41 @@ def _scan_search(index: _Index, query: str) -> List[int]:
     except OSError:
         stat = None
     if stat is None or stat.st_size != meta.get("source_size") or stat.st_mtime_ns != meta.get("source_mtime_ns"):
-        raise ValueError("search reads the sample's .hyb file, which has moved or changed since its index was built")
+        raise ValueError("%s reads the sample's .hyb file, which has moved or changed since its index was built" % what)
+    return source
+
+
+def _scan_evalue(index: _Index, max_evalue: float) -> List[int]:
+    """The ids of the hybrids with no arm e-value above ``max_evalue``, read from the .hyb."""
+    source = _checked_source(index, "the e-value filter")
+    found = []
+    with open(source, "rb") as handle:
+        for rid, offset in index.con.execute("SELECT id, offset FROM hybrids ORDER BY offset"):
+            handle.seek(offset)
+            cols = handle.readline().rstrip(b"\r\n").split(b"\t", 15)
+            if all(value is None or value <= max_evalue for value in (_evalue(cols, 8), _evalue(cols, 14))):
+                found.append(rid)
+    return found
+
+
+def _evalue(cols: List[bytes], k: int) -> Optional[float]:
+    """Column ``k`` of a split .hyb line as an optional number (the web's
+    parseOptionalNumber: none for empty, "." or not a finite number)."""
+    if len(cols) <= k:
+        return None
+    value = cols[k].strip()
+    if not value or value == b".":
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        return None
+    return number if number == number and abs(number) != float("inf") else None
+
+
+def _scan_search(index: _Index, query: str) -> List[int]:
+    """The ids of the hybrids whose text contains ``query``, read from the .hyb."""
+    source = _checked_source(index, "search")
     names, types = index.gene_names, index.type_names
     found = []
     with open(source, "rb") as handle:
@@ -916,6 +962,18 @@ def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, l
         query = search.strip().lower()
         if query:
             clauses.append("id IN temp.%s" % _search_table(index, query))
+    anchor = filters.get("anchor")
+    if anchor is not None:
+        part = _anchor_sql(index, anchor)
+        if part is None:
+            return None
+        clauses.append(part[0])
+        params.extend(part[1])
+    max_evalue = filters.get("max_evalue")
+    if max_evalue is not None:
+        if isinstance(max_evalue, bool) or not isinstance(max_evalue, (int, float)) or max_evalue != max_evalue:
+            raise ValueError("max_evalue must be a number")
+        clauses.append("id IN temp.%s" % _evalue_table(index, max_evalue))
     region = _region(filters.get("region"))
     if region is not None:
         x0, x1, y0, y1 = region
@@ -951,8 +1009,56 @@ def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, l
     return (" WHERE " + " AND ".join(clauses) if clauses else ""), params
 
 
-def _read_lines(source: Optional[str], meta: Dict[str, Any], offsets: List[int]) -> Dict[int, Tuple[str, str]]:
-    """(name, sequence) for rows, read back from the .hyb when it is unchanged."""
+def _anchor_sql(index: _Index, anchor: Any) -> Optional[Tuple[str, list]]:
+    """The ``region`` query's rows as a WHERE clause: an arm on ``gene``
+    overlapping (or, ``overlap`` ``"contained"``, inside) ``[start, end]``,
+    either arm order, the other arm on ``partner`` (inside ``[partner_start,
+    partner_end]`` when given). ``None`` when a gene is not in the index."""
+    if not isinstance(anchor, dict):
+        raise ValueError("anchor must be an object")
+    gene, partner = anchor.get("gene"), anchor.get("partner")
+    if not isinstance(gene, str) or not gene or (partner is not None and (not isinstance(partner, str) or not partner)):
+        raise ValueError("anchor gene and partner must be names")
+    lo, hi = _span(anchor.get("start"), "anchor start"), _span(anchor.get("end"), "anchor end")
+    if lo is None or hi is None or lo > hi:
+        raise ValueError("anchor needs a start not after its end")
+    plo, phi = _span(anchor.get("partner_start"), "anchor partner_start"), _span(anchor.get("partner_end"), "anchor partner_end")
+    if (plo is None) != (phi is None) or (plo is not None and (partner is None or plo > phi)):
+        raise ValueError("an anchor partner range needs a partner, a start and an end, start not after end")
+    rule = anchor.get("overlap") or "any"
+    if rule not in OVERLAP_RULES:
+        raise ValueError("anchor overlap must be 'any' or 'contained'")
+    g = index.gene(gene)
+    p = index.gene(partner) if partner is not None else None
+    if g is None or (partner is not None and p is None):
+        return None
+
+    def within(start: str, end: str, a: int, b: int) -> Tuple[str, list]:
+        if rule == "contained":
+            return "%s >= ? AND %s <= ?" % (start, end), [a, b]
+        return "%s <= ? AND %s >= ?" % (start, end), [b, a]
+
+    sides, params = [], []
+    for mine, other, arm, other_arm in (("g1", "g2", ("s1", "e1"), ("s2", "e2")), ("g2", "g1", ("s2", "e2"), ("s1", "e1"))):
+        sql, values = ["%s = ?" % mine], [g]
+        if p is not None:
+            sql.append("%s = ?" % other)
+            values.append(p)
+        clause, more = within(arm[0], arm[1], lo, hi)
+        sql.append(clause)
+        values += more
+        if plo is not None:
+            clause, more = within(other_arm[0], other_arm[1], plo, phi)
+            sql.append(clause)
+            values += more
+        sides.append("(%s)" % " AND ".join(sql))
+        params += values
+    return "(%s OR %s)" % tuple(sides), params
+
+
+def _read_lines(source: Optional[str], meta: Dict[str, Any], offsets: List[int]) -> Dict[int, tuple]:
+    """(name, sequence, arm 1 e-value, arm 2 e-value, line) for rows, read
+    back from the .hyb when it is unchanged."""
     if not source or not offsets:
         return {}
     try:
@@ -963,8 +1069,10 @@ def _read_lines(source: Optional[str], meta: Dict[str, Any], offsets: List[int])
         with open(source, "rb") as handle:
             for offset in sorted(set(offsets)):
                 handle.seek(offset)
-                cols = handle.readline().rstrip(b"\r\n").split(b"\t")
-                out[offset] = (cols[0].decode("utf-8", "replace"), cols[1].decode("utf-8", "replace") if len(cols) > 1 else "")
+                line = handle.readline().rstrip(b"\r\n")
+                cols = line.split(b"\t")
+                out[offset] = (cols[0].decode("utf-8", "replace"), cols[1].decode("utf-8", "replace") if len(cols) > 1 else "",
+                               _evalue(cols, 8), _evalue(cols, 14), line.decode("utf-8", "replace"))
         return out
     except OSError:
         return {}
@@ -1003,7 +1111,8 @@ def _after(expression: str, descending: bool, cursor: Tuple[Any, int]) -> Tuple[
 
 
 def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = None, limit: int = 100, offset: int = 0, *,
-            order: str = "file", with_sequence: bool = True) -> Dict[str, Any]:
+            order: str = "file", with_sequence: bool = True, with_raw: bool = False,
+            partners: bool = False, count_mode: str = "support") -> Dict[str, Any]:
     """Filtered hybrid rows across indexes.
 
     ``filters``: ``gene1``, ``gene2``, ``gene`` (either arm), ``partner`` (with
@@ -1013,11 +1122,20 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
     ``search`` (text, see ``_search_table``),
     ``region`` (``{"x": [s, e], "y": [s, e]}``, overlap with arm 1 / arm 2),
     ``types`` (list), ``min_reads``/``max_reads``, ``min_support``,
-    ``min_dg``/``max_dg`` (a row without dG never matches these).
+    ``min_dg``/``max_dg`` (a row without dG never matches these),
+    ``max_evalue`` (no arm e-value above it; read from the .hyb, see
+    ``_evalue_table``), ``anchor`` (``{gene, start, end, overlap?, partner?,
+    partner_start?, partner_end?}``: the rows ``region`` counts, see
+    ``_anchor_sql``).
     ``order``: ``file`` (index order, then file order), ``reads`` / ``support``
     (desc), ``position`` (arm 1 start), ``dg`` (asc, missing last).
     Returns ``{total, limit, offset, order, rows: [{index, id, name, sequence,
-    gene1, start1, end1, gene2, start2, end2, reads, support, dg, overlap, type}]}``.
+    evalue1, evalue2, gene1, start1, end1, gene2, start2, end2, reads, support,
+    dg, overlap, type}]}``; ``with_raw`` adds each row's .hyb line as ``raw``
+    (the web's HYB export). ``partners`` with a ``gene`` filter adds
+    ``partners: [{name, records, support}]``, the web's partner panel: the
+    other arm's RNA of each matching row, most first by ``count_mode``
+    (``support`` or ``records``).
     """
     filters = dict(filters or {})
     if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= MAX_LIMIT:
@@ -1026,6 +1144,8 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
         raise ValueError("offset must be a non-negative integer")
     if order not in _ORDERS:
         raise ValueError("order must be one of %s" % ", ".join(sorted(_ORDERS)))
+    if count_mode not in ("support", "records"):
+        raise ValueError("count_mode must be \"support\" or \"records\"")
     column, descending = _ORDERS[order]
     opened = _indexes(indexes)
     key = (tuple((str(index.path), index.stamp) for index in opened), json.dumps(filters, sort_keys=True, default=repr), order)
@@ -1073,19 +1193,46 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
             while len(_cursors) > _CURSOR_QUERIES:
                 _cursors.popitem(last=False)
     lookups: Dict[int, Dict[int, Tuple[str, str]]] = {}
-    if with_sequence:
+    if with_sequence or with_raw:
         for number, index in enumerate(opened):
             offs = [row[11] for _, n, row in merged if n == number]
             lookups[number] = _read_lines(index.meta.get("source_path"), index.meta, offs)
     out = []
     for _, number, row in merged:
         index = opened[number]
-        name, sequence = lookups.get(number, {}).get(row[11], (None, None))
-        out.append({"index": number, "id": row[0], "name": name, "sequence": sequence,
-                    "gene1": index.gene_names[row[1]], "start1": row[2], "end1": row[3],
-                    "gene2": index.gene_names[row[4]], "start2": row[5], "end2": row[6],
-                    "reads": row[7], "support": row[12], "dg": row[8], "overlap": row[9], "type": index.type_names.get(row[10])})
-    return {"total": total, "limit": limit, "offset": offset, "order": order, "rows": out}
+        name, sequence, evalue1, evalue2, line = lookups.get(number, {}).get(row[11], (None, None, None, None, None))
+        item = {"index": number, "id": row[0], "name": name, "sequence": sequence, "evalue1": evalue1, "evalue2": evalue2,
+                "gene1": index.gene_names[row[1]], "start1": row[2], "end1": row[3],
+                "gene2": index.gene_names[row[4]], "start2": row[5], "end2": row[6],
+                "reads": row[7], "support": row[12], "dg": row[8], "overlap": row[9], "type": index.type_names.get(row[10])}
+        if with_raw:
+            item["raw"] = line
+        out.append(item)
+    result = {"total": total, "limit": limit, "offset": offset, "order": order, "rows": out}
+    if partners and filters.get("gene") is not None:
+        result["partners"] = _partner_counts(opened, filters, count_mode)
+    return result
+
+
+def _partner_counts(opened: List[_Index], filters: Dict[str, Any], count_mode: str) -> List[Dict[str, Any]]:
+    """The other arm's RNA of the rows matching ``filters`` (with ``gene``),
+    with their record and support totals merged by name across indexes."""
+    totals: Dict[str, List[int]] = {}
+    for index in opened:
+        where = _filter_sql(index, filters)
+        g = index.gene(str(filters["gene"]))
+        if where is None or g is None:
+            continue
+        clause, params = where
+        for other, records, support in index.con.execute(
+                "SELECT CASE WHEN g1 = ? THEN g2 ELSE g1 END, count(*), sum(%s) FROM hybrids%s GROUP BY 1"
+                % (index.support_sql, clause), [g] + params):
+            entry = totals.setdefault(index.gene_names[other], [0, 0])
+            entry[0] += records
+            entry[1] += int(support or 0)
+    rank = 0 if count_mode == "records" else 1
+    rows = sorted(totals.items(), key=lambda item: (-item[1][rank], item[0]))
+    return [{"name": name, "records": records, "support": support} for name, (records, support) in rows]
 
 
 # --------------------------------------------------------------------------

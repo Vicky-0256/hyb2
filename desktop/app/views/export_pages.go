@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"image/png"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"hyb2desktop/core"
+	"hyb2desktop/model"
 	"hyb2desktop/widgets"
 )
 
@@ -77,6 +79,258 @@ func (p *explorePage) exportInteractions() {
 	saveExport(a, "Export interactions", exportName(".tsv", selectionName(a.Selected.Key), "interactions"), render)
 }
 
+// exportItem is one file of a page's Export menu.
+type exportItem struct {
+	label    string
+	disabled bool
+	run      func()
+}
+
+// exportMenu is a page's "Export" menu button, as the web's export menus.
+func exportMenu(c *ui.Context, items ...exportItem) ui.Element {
+	return ui.MenuButton(c, "Export", func(m *ui.Menu) {
+		for _, it := range items {
+			if m.Item(it.label).Disabled(it.disabled).Chosen() {
+				it.run()
+			}
+		}
+	})
+}
+
+// hybridsPageMax is the bridge's analysis_hybrids limit: the page size of
+// an export of every matching record.
+const hybridsPageMax = 10_000
+
+// pageHybrids reads every row fetch can give, page by page from offset 0,
+// handing each page to each; it stops at a short page or at the total.
+func pageHybrids(fetch func(offset int) ([]hybridRow, int, error), each func([]hybridRow) error) (int, error) {
+	count := 0
+	for {
+		rows, total, err := fetch(count)
+		if err != nil {
+			return count, err
+		}
+		if len(rows) > 0 {
+			if err := each(rows); err != nil {
+				return count, err
+			}
+		}
+		count += len(rows)
+		if len(rows) < hybridsPageMax || count >= total {
+			return count, nil
+		}
+	}
+}
+
+// allHybrids reads every hybrid matching filters, with its .hyb line, in
+// order (safe off the main thread).
+func (p *explorePage) allHybrids(path string, ids []string, filters core.Obj, order string, each func([]hybridRow) error) (int, error) {
+	return pageHybrids(func(offset int) ([]hybridRow, int, error) {
+		got, err := p.query(path, "analysis_hybrids", ids, core.Obj{
+			"filters": filters, "limit": hybridsPageMax, "offset": offset, "order": order, "with_sequence": false, "with_raw": true,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		var rows []hybridRow
+		if err := model.Decode(got["rows"], &rows); err != nil {
+			return nil, 0, err
+		}
+		return rows, int(num(got["total"])), nil
+	}, each)
+}
+
+// recordsCSVHeader is the web's recordsToCsv header less what the index
+// does not keep (support_source, chimera_type_source, line), with the
+// arms' e-values; "sample" ends it when several samples are merged.
+var recordsCSVHeader = []string{"sequence_id", "rna_1", "rna_1_start", "rna_1_end", "rna_2", "rna_2_start", "rna_2_end",
+	"support_count", "raw_read_count", "overlap_score", "homodimer_overlap_ge_5", "chimera_type", "dG", "rna_1_evalue", "rna_2_evalue"}
+
+// recordsCSV writes hybrids as the web's filtered-interactions.csv: every
+// cell quoted, rows joined by newlines (none after the last).
+type recordsCSV struct {
+	b    bytes.Buffer
+	ids  []string // the samples, for the sample column when several
+	rows int
+}
+
+func newRecordsCSV(ids []string) *recordsCSV {
+	w := &recordsCSV{ids: ids}
+	header := recordsCSVHeader
+	if len(ids) > 1 {
+		header = append(append([]string(nil), header...), "sample")
+	}
+	w.line(header)
+	return w
+}
+
+func (w *recordsCSV) line(cells []string) {
+	if w.b.Len() > 0 {
+		w.b.WriteByte('\n')
+	}
+	for i, cell := range cells {
+		if i > 0 {
+			w.b.WriteByte(',')
+		}
+		w.b.WriteString(`"` + strings.ReplaceAll(cell, `"`, `""`) + `"`)
+	}
+}
+
+func (w *recordsCSV) add(rows []hybridRow) error {
+	opt := func(v *float64) string {
+		if v == nil {
+			return ""
+		}
+		return jsNumber(*v)
+	}
+	for _, r := range rows {
+		reads := ""
+		if r.Reads > 0 { // none in the read id
+			reads = strconv.Itoa(r.Reads)
+		}
+		homodimer := "false"
+		if r.Gene1 == r.Gene2 && r.Overlap != nil && *r.Overlap >= 5 {
+			homodimer = "true"
+		}
+		cells := []string{r.Name, r.Gene1, strconv.Itoa(r.Start1), strconv.Itoa(r.End1), r.Gene2, strconv.Itoa(r.Start2), strconv.Itoa(r.End2),
+			strconv.Itoa(r.Support), reads, opt(r.Overlap), homodimer, r.Type, opt(r.DG), opt(r.EValue1), opt(r.EValue2)}
+		if len(w.ids) > 1 {
+			sample := ""
+			if r.Index < len(w.ids) {
+				sample = w.ids[r.Index]
+			}
+			cells = append(cells, sample)
+		}
+		w.line(cells)
+		w.rows++
+	}
+	return nil
+}
+
+// errHybChanged: a row without its .hyb line (the file changed since the
+// index was built).
+var errHybChanged = fmt.Errorf("a sample's .hyb file has changed since its analysis index was built; rebuild the index on the Data page")
+
+// recordsHYB writes hybrids as the web's filtered.hyb: each record's .hyb
+// line, a newline after each.
+type recordsHYB struct {
+	b    bytes.Buffer
+	rows int
+}
+
+func (w *recordsHYB) add(rows []hybridRow) error {
+	for _, r := range rows {
+		if r.Raw == "" {
+			return errHybChanged
+		}
+		w.b.WriteString(r.Raw)
+		w.b.WriteByte('\n')
+		w.rows++
+	}
+	return nil
+}
+
+// exportRecords writes every hybrid matching each filters object (one
+// after another) as CSV or HYB.
+func (p *explorePage) exportRecords(title, name string, filters []core.Obj, order string, hyb bool) {
+	path, ids := p.a.Project.Path, append([]string(nil), p.ids...)
+	saveExport(p.a, title, name, func() ([]byte, error) {
+		csvOut, hybOut := newRecordsCSV(ids), &recordsHYB{}
+		add := csvOut.add
+		if hyb {
+			add = hybOut.add
+		}
+		for _, f := range filters {
+			if _, err := p.allHybrids(path, ids, f, order, add); err != nil {
+				return nil, err
+			}
+		}
+		if hyb {
+			return hybOut.b.Bytes(), nil
+		}
+		return csvOut.b.Bytes(), nil
+	})
+}
+
+func (p *explorePage) exportFilteredCSV() {
+	s := &p.ix
+	p.exportRecords("Export the filtered records", exportName(".csv", selectionName(p.a.Selected.Key), "filtered-interactions"),
+		[]core.Obj{s.applied.payload()}, s.orderValue(), false)
+}
+
+func (p *explorePage) exportFilteredHYB() {
+	s := &p.ix
+	p.exportRecords("Export the filtered records", exportName(".hyb", selectionName(p.a.Selected.Key), "filtered"),
+		[]core.Obj{s.applied.payload()}, s.orderValue(), true)
+}
+
+// optFloat is a JSON number, or null for none.
+func optFloat(v *float64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+// optInt is a JSON number, or null for 0 (unset).
+func optInt(n int) any {
+	if n <= 0 {
+		return nil
+	}
+	return n
+}
+
+// optName is a JSON string, or null for "".
+func optName(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// exploreParams is the web's parameters JSON of an Explore view: what was
+// shown, from which samples, with which settings.
+func (p *explorePage) exploreParams(analysis string, parameters, result map[string]any) map[string]any {
+	a := p.a
+	return map[string]any{
+		"application": "HYB2 Desktop", "version": nameOr(reportAppVersion(), "development build"), "analysis": analysis,
+		"generatedLocally": true, "selection": a.SelectionLabel(a.Selected.Key), "samples": append([]string(nil), p.ids...),
+		"parameters": parameters, "result": result,
+	}
+}
+
+// saveJSON writes payload as indented JSON.
+func saveJSON(a *App, title, name string, payload any) {
+	saveExport(a, title, name, func() ([]byte, error) {
+		out, err := json.MarshalIndent(payload, "", "  ")
+		return append(out, '\n'), err
+	})
+}
+
+// interactionsParams are the Interactions view's settings (the web's
+// filters, with the desktop's reads and order).
+func (p *explorePage) interactionsParams() map[string]any {
+	s := &p.ix
+	f := s.applied
+	countMode := "support"
+	if s.countMode == countModes[1] {
+		countMode = "records"
+	}
+	parameters := map[string]any{
+		"rna": optName(f.gene1), "partner": optName(f.gene2), "orientedArms": f.oriented(), "scope": nameOr(f.scope, scopeLabels[0]),
+		"chimeraType": nameOr(f.typ, allTypes), "countMode": countMode, "search": f.search,
+		"armOneStart": optInt(f.x0), "armOneEnd": optInt(f.x1), "armTwoStart": optInt(f.y0), "armTwoEnd": optInt(f.y1),
+		"maxEvalue": optFloat(f.maxEvalue), "minDg": optFloat(f.minDG), "maxDg": optFloat(f.maxDG),
+		"minSupport": max(f.minSupport, 1), "minReads": max(f.minReads, 1), "order": s.orderValue(),
+	}
+	return p.exploreParams("interactions", parameters, map[string]any{"matchingRecords": s.total})
+}
+
+func (p *explorePage) exportInteractionsParams() {
+	saveJSON(p.a, "Export the interaction parameters", exportName(".json", selectionName(p.a.Selected.Key), "interactions-parameters"),
+		p.interactionsParams())
+}
+
 // ---- ③ Explore: contact map
 
 // contactInView returns the indexes of the cells in the map's view.
@@ -125,11 +379,8 @@ func (p *explorePage) exportContactSVG() {
 		return
 	}
 	// light colours whatever the theme, as the web's exports
-	cells, view := d.cells(s.capChoice(), s.scale, false), s.heat.View()
-	title := p.contactTitle()
-	note := fmt.Sprintf("Teal–violet scale, saturated at %s %s (%s, %s scale).",
-		formatCount(capCount(d.colorCap(s.capChoice(), s.scale), s.scale)),
-		strings.ToLower(d.measure), strings.ToLower(s.colorCap), strings.ToLower(s.scale))
+	cells, view := d.cells(s.capChoice(), s.scale, false, s.mono()), s.heat.View()
+	title, note := p.contactTitle(), p.contactNote()
 	render := func() ([]byte, error) {
 		// Weakest first, so a capped map keeps the strongest cells.
 		order := contactInView(d, view)
@@ -192,6 +443,184 @@ func contactTSV(bin int, records, support contactMeasure) []byte {
 		rows = append(rows, fmt.Sprintf("%d\t%d\t%d\t%d\t%d\t%d", x, x+bin-1, y, y+bin-1, records.count[i], supportAt[[2]int{x, y}]))
 	}
 	return []byte(strings.Join(rows, "\n"))
+}
+
+// contactNote says how the map's colours read.
+func (p *explorePage) contactNote() string {
+	s := &p.cm
+	d := s.data
+	style := "Teal–violet scale"
+	if s.mono() {
+		style = "White–black scale"
+	}
+	return fmt.Sprintf("%s, saturated at %s %s (%s, %s scale).", style,
+		formatCount(capCount(d.colorCap(s.capChoice(), s.scale), s.scale)),
+		strings.ToLower(d.measure), strings.ToLower(s.colorCap), strings.ToLower(s.scale))
+}
+
+// exportContactPNG draws the map as shown (its view, colour style and cap)
+// off screen in the light theme, with its title, axes and note.
+func (p *explorePage) exportContactPNG() {
+	s := &p.cm
+	d := s.data
+	if d == nil {
+		return
+	}
+	mono := s.mono()
+	cells, view := d.cells(s.capChoice(), s.scale, false, mono), s.heat.View()
+	title, note := p.contactTitle(), p.contactNote()
+	lengthX, lengthY := float64(d.lengthX), float64(d.lengthY)
+	axes := "X: arm 1 · " + d.gene + "    Y: arm 2 · " + d.gene2
+	saveExport(p.a, "Export the contact map", p.contactExportName(".png"), func() ([]byte, error) {
+		const size = 560
+		heat := widgets.NewHeatmap()
+		heat.Background = paperOf(mono)
+		heat.SetCells(cells, lengthX, lengthY)
+		heat.SetView(view)
+		return renderPNG(size+60, size+120, func(c *ui.Context) {
+			t := c.Theme()
+			ui.Text(c, title).FontSize(13).TextColor(t.Text)
+			heat.Show(c.Key("map"), size, "Contact map")
+			ui.Text(c, axes).FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, note).FontSize(11).TextColor(t.TextMuted)
+		})
+	})
+}
+
+// maxMatrixCells is the web's limit on a matrix export's cells.
+const maxMatrixCells = 4_000_000
+
+// exportContactMatrix writes the map as the web's contact-matrix.csv:
+// one row per arm 2 bin, one column per arm 1 bin, over the cells' extent.
+func (p *explorePage) exportContactMatrix() {
+	d := p.cm.data
+	if d == nil {
+		return
+	}
+	bin, x, y, count := d.bin, d.x, d.y, d.count
+	saveExport(p.a, "Export the contact matrix", p.contactExportName("_matrix.csv"), func() ([]byte, error) {
+		return contactMatrixCSV(bin, x, y, count)
+	})
+}
+
+// contactMatrixCSV is the web's contactMatrixToCsv: "y_start/x_start"
+// then the x bin starts; each row a y bin start then its values (0 for an
+// empty cell); no newline after the last row.
+func contactMatrixCSV(bin int, x, y, count []int) ([]byte, error) {
+	if len(count) == 0 {
+		return nil, fmt.Errorf("the contact map has no cells")
+	}
+	bin = max(bin, 1)
+	axis := func(values []int) []int {
+		first, last := slices.Min(values), slices.Max(values)
+		var out []int
+		for v := first; v <= last; v += bin {
+			out = append(out, v)
+		}
+		return out
+	}
+	xs, ys := axis(x), axis(y)
+	if n := len(xs) * len(ys); n > maxMatrixCells {
+		return nil, fmt.Errorf("the matrix would have %s cells; use larger bins for the matrix export, or the contact cells TSV", FormatNumber(int64(n)))
+	}
+	values := make([][]int, len(ys))
+	for i := range values {
+		values[i] = make([]int, len(xs))
+	}
+	for i := range count {
+		col, row := (x[i]-xs[0])/bin, (y[i]-ys[0])/bin
+		if row >= 0 && row < len(ys) && col >= 0 && col < len(xs) {
+			values[row][col] = count[i]
+		}
+	}
+	var b strings.Builder
+	b.WriteString("y_start/x_start")
+	for _, v := range xs {
+		b.WriteString("," + strconv.Itoa(v))
+	}
+	for i, row := range values {
+		b.WriteString("\n" + strconv.Itoa(ys[i]))
+		for _, v := range row {
+			b.WriteString("," + strconv.Itoa(v))
+		}
+	}
+	return []byte(b.String()), nil
+}
+
+// contactCellFilters are the analysis_hybrids filters of the hybrids in
+// cell i (both arms over its bins), as the map counts them: the reverse
+// arm order too for both orders of two RNAs.
+func contactCellFilters(d *contactData, i int) []core.Obj {
+	x0, x1 := d.x[i], d.x[i]+d.bin-1
+	y0, y1 := d.y[i], d.y[i]+d.bin-1
+	cell := func(gene1, gene2 string, x, y []int) core.Obj {
+		f := core.Obj{"gene1": gene1, "gene2": gene2, "region": core.Obj{"x": x, "y": y}}
+		if types := typesPayload(d.typ); types != nil {
+			f["types"] = types
+		}
+		if h := homodimerPayload(d.homodimer); h != "" && d.gene == d.gene2 {
+			f["homodimer"] = h
+		}
+		return f
+	}
+	out := []core.Obj{cell(d.gene, d.gene2, []int{x0, x1}, []int{y0, y1})}
+	if d.orientation == orientBoth && d.gene != d.gene2 {
+		out = append(out, cell(d.gene2, d.gene, []int{y0, y1}, []int{x0, x1}))
+	}
+	return out
+}
+
+// exportContactCellRecords writes the selected cell's hybrids as the web's
+// contact-cell-records.csv.
+func (p *explorePage) exportContactCellRecords() {
+	s := &p.cm
+	d := s.data
+	if d == nil || s.picked < 0 || s.picked >= len(d.count) {
+		return
+	}
+	x0, x1 := cellRange(d.x[s.picked], d.bin)
+	y0, y1 := cellRange(d.y[s.picked], d.bin)
+	name := exportName(".csv", selectionName(p.a.Selected.Key), "cell", fmt.Sprintf("%d-%d_x_%d-%d", x0, x1, y0, y1), "records")
+	p.exportRecords("Export the cell's records", name, contactCellFilters(d, s.picked), "file", false)
+}
+
+// exportContactParams writes the web's contact-map-parameters.json.
+func (p *explorePage) exportContactParams() {
+	s := &p.cm
+	d := s.data
+	if d == nil {
+		return
+	}
+	view := s.heat.View()
+	var customCap any
+	if v, err := strconv.ParseFloat(strings.TrimSpace(s.customCap), 64); err == nil && v > 0 && s.colorCap == capCustom {
+		customCap = v
+	}
+	var selected any
+	if s.picked >= 0 && s.picked < len(d.count) {
+		selected = map[string]any{"xStart": d.x[s.picked], "xEnd": d.x[s.picked] + d.bin - 1, "yStart": d.y[s.picked], "yEnd": d.y[s.picked] + d.bin - 1}
+	}
+	measure := map[string]string{measureRecords: "record-count", measureSupport: "cluster-support", measureReads: "read-count"}[d.measure]
+	palette := "colour"
+	if s.mono() {
+		palette = "monochrome"
+	}
+	requested := d.requested
+	if requested <= 0 {
+		requested = d.bin // not adjusted
+	}
+	parameters := map[string]any{
+		"rnaX": d.gene, "rnaY": d.gene2, "requestedBinSize": requested, "binSize": d.bin,
+		"binSizeAdjusted": d.adjusted, "measure": measure, "colourCap": s.colorCap, "customCap": customCap,
+		"effectiveColourCap": capCount(d.colorCap(s.capChoice(), s.scale), s.scale), "scale": strings.ToLower(s.scale), "palette": palette,
+		"orientation": map[string]string{orientBoth: "normalised", orientOriented: "original"}[d.orientation],
+		"chimeraType": nameOr(d.typ, allTypes), "homodimerSubset": nameOr(homodimerPayload(d.homodimer), "all"),
+		"exportedView": map[string]any{"xStart": math.Max(0, math.Floor(view.X0)), "xEnd": math.Ceil(view.X1),
+			"yStart": math.Max(0, math.Floor(view.Y0)), "yEnd": math.Ceil(view.Y1)},
+		"selectedCell": selected,
+	}
+	result := map[string]any{"cells": len(d.count), "recordsInMap": d.records, "maximum": d.max}
+	saveJSON(p.a, "Export the contact-map parameters", p.contactExportName("_parameters.json"), p.exploreParams("contact-map", parameters, result))
 }
 
 // ---- ④ Compare: the selected test
@@ -404,6 +833,231 @@ func (p *explorePage) exportViewpointTSV() {
 	saveExport(p.a, "Export the viewpoint", exportName(".tsv", selectionName(p.a.Selected.Key), shortName(d.gene), "viewpoint"), func() ([]byte, error) {
 		return tsvTable{Comments: comments, Header: []string{"start", "end", "mean_interaction_coverage"}, Rows: rows}.Bytes()
 	})
+}
+
+// profileSVG describes a coverage plot: bins [start, end] with a value
+// each, drawn as bars (bins thinner than a pixel merged per column, the
+// column showing the largest value, as widgets.Profile).
+type profileSVG struct {
+	Starts, Ends []int
+	Values       []float64
+	// Width and Height are the plot's size in px (defaults 960 and 240).
+	Width, Height float64
+	// Title, XLabel, YLabel and Note are plain text (escaped here).
+	Title, XLabel, YLabel, Note string
+	Color                       ui.Color
+}
+
+// profileOf copies a profile's bins.
+func profileOf(pr *widgets.Profile) (starts, ends []int, values []float64) {
+	for i := range pr.Len() {
+		start, end, v := pr.Bin(i)
+		starts, ends, values = append(starts, start), append(ends, end), append(values, v)
+	}
+	return starts, ends, values
+}
+
+func (s profileSVG) SVG() string {
+	width, height := s.Width, s.Height
+	if width <= 0 {
+		width = 960
+	}
+	if height <= 0 {
+		height = 240
+	}
+	const left, right, bottom = 58.0, 14.0, 42.0
+	top := 12.0
+	if s.Title != "" {
+		top = 30
+	}
+	noteH := 0.0
+	if s.Note != "" {
+		noteH = 18
+	}
+	fullW, fullH := left+width+right, top+height+bottom+noteH
+	lo, hi, peak := 0.0, 1.0, 0.0
+	if len(s.Starts) > 0 {
+		lo, hi = float64(s.Starts[0]), float64(s.Ends[len(s.Ends)-1]+1)
+	}
+	for _, v := range s.Values {
+		peak = math.Max(peak, v)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="0 0 %s %s" %s font-size="11">`,
+		svgNum(fullW), svgNum(fullH), svgNum(fullW), svgNum(fullH), svgFont)
+	fmt.Fprintf(&b, `<title>%s</title>`, svgText(nameOr(s.Title, "Coverage profile")))
+	b.WriteString(`<rect width="100%" height="100%" fill="#ffffff"/>`)
+	if s.Title != "" {
+		fmt.Fprintf(&b, `<text x="%s" y="18" font-size="13" font-weight="600" fill="%s">%s</text>`, svgNum(left), svgInk, svgText(s.Title))
+	}
+	fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" fill="#f6f7f9"/>`, svgNum(left), svgNum(top), svgNum(width), svgNum(height))
+	if peak > 0 && hi > lo {
+		scale := width / (hi - lo)
+		columns := int(math.Ceil(width))
+		tops := make([]float64, columns+1)
+		for i, v := range s.Values {
+			x0 := int((float64(s.Starts[i]) - lo) * scale)
+			x1 := int((float64(s.Ends[i]+1) - lo) * scale)
+			for x := max(x0, 0); x <= min(max(x1-1, x0), columns); x++ {
+				tops[x] = math.Max(tops[x], v)
+			}
+		}
+		fmt.Fprintf(&b, `<g %s shape-rendering="crispEdges">`, svgFill("fill", s.Color))
+		for x, v := range tops {
+			if v <= 0 {
+				continue
+			}
+			h := v / peak * (height - 4)
+			fmt.Fprintf(&b, `<rect x="%s" y="%s" width="1" height="%s"/>`, svgNum(left+float64(x)), svgNum(top+height-h), svgNum(h))
+		}
+		b.WriteString(`</g>`)
+		for _, x := range niceTicks(lo, hi, 6) {
+			px := left + (x-lo)*scale
+			fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(px), svgNum(top+height), svgNum(px), svgNum(top+height+4), svgLine)
+			fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="middle" fill="%s">%d</text>`, svgNum(px), svgNum(top+height+16), svgMuted, int(x))
+		}
+		for _, v := range []float64{0, peak / 2, peak} {
+			py := top + height - v/peak*(height-4)
+			fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(left-4), svgNum(py), svgNum(left), svgNum(py), svgLine)
+			fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="end" fill="%s">%s</text>`, svgNum(left-6), svgNum(py+4), svgMuted, trimFloat(v))
+		}
+	}
+	fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" fill="none" stroke="%s"/>`, svgNum(left), svgNum(top), svgNum(width), svgNum(height), svgLine)
+	if s.XLabel != "" {
+		fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="middle" fill="%s">%s</text>`, svgNum(left+width/2), svgNum(top+height+32), svgMuted, svgText(s.XLabel))
+	}
+	if s.YLabel != "" {
+		fmt.Fprintf(&b, `<text transform="translate(12 %s) rotate(-90)" text-anchor="middle" fill="%s">%s</text>`, svgNum(top+height/2), svgMuted, svgText(s.YLabel))
+	}
+	if s.Note != "" {
+		fmt.Fprintf(&b, `<text x="%s" y="%s" fill="%s">%s</text>`, svgNum(left), svgNum(top+height+bottom+12), svgMuted, svgText(s.Note))
+	}
+	b.WriteString(`</svg>`)
+	return b.String()
+}
+
+// profilePNG draws a profile off screen in the light theme, with a title
+// and a note, at twice its size.
+func profilePNG(starts, ends []int, values []float64, title, label, note string) ([]byte, error) {
+	pr := widgets.NewProfile()
+	pr.Set(starts, ends, values)
+	return renderPNG(1040, 320, func(c *ui.Context) {
+		t := c.Theme()
+		ui.Text(c, title).FontSize(13).TextColor(t.Text)
+		pr.Show(c.Key("profile"), 220, label, profileColor(t))
+		ui.Text(c, note).FontSize(11).TextColor(t.TextMuted)
+	})
+}
+
+// viewpointFigure is the viewpoint as its exports draw it.
+func (p *explorePage) viewpointFigure() (profileSVG, string) {
+	s := &p.vp
+	d := s.data
+	starts, ends, values := profileOf(s.profile)
+	fig := profileSVG{Starts: starts, Ends: ends, Values: values, Color: ui.LightTheme().Accent,
+		Title:  "HYB2 viewpoint · " + p.a.SelectionLabel(p.a.Selected.Key) + " · " + d.gene + ":" + span(d.start, d.end),
+		XLabel: d.gene + " (nt)", YLabel: "Mean " + strings.ToLower(d.measure) + " per nt",
+		Note: fmt.Sprintf("%d nt bins · partner: %s · type: %s · %s", d.bin, s.partner, s.typ, strings.ToLower(s.homodimer))}
+	return fig, exportName("", selectionName(p.a.Selected.Key), shortName(d.gene), "viewpoint")
+}
+
+func (p *explorePage) exportViewpointSVG() {
+	if p.vp.data == nil {
+		return
+	}
+	fig, name := p.viewpointFigure()
+	saveExport(p.a, "Export the viewpoint", name+".svg", func() ([]byte, error) { return svgFile(fig.SVG()), nil })
+}
+
+func (p *explorePage) exportViewpointPNG() {
+	if p.vp.data == nil {
+		return
+	}
+	fig, name := p.viewpointFigure()
+	saveExport(p.a, "Export the viewpoint", name+".png", func() ([]byte, error) {
+		return profilePNG(fig.Starts, fig.Ends, fig.Values, fig.Title, "Viewpoint coverage", fig.Note)
+	})
+}
+
+// exportViewpointParams writes the web's viewpoint-parameters.json.
+func (p *explorePage) exportViewpointParams() {
+	s := &p.vp
+	d := s.data
+	if d == nil {
+		return
+	}
+	var requested int
+	fmt.Sscanf(s.resolution, "%d", &requested)
+	measure := map[string]string{measureRecords: "record-count", measureSupport: "cluster-support", measureReads: "read-count"}[d.measure]
+	partner := ""
+	if s.partner != allPartners {
+		partner = s.partner
+	}
+	parameters := map[string]any{
+		"rna": d.gene, "partner": optName(partner), "chimeraType": nameOr(s.typ, allTypes), "homodimerSubset": nameOr(homodimerPayload(s.homodimer), "all"),
+		"requestedStart": optInt(s.from), "requestedEnd": optInt(s.to), "effectiveStart": d.start, "effectiveEnd": d.end,
+		"requestedBinSize": requested, "effectiveBinSize": d.bin, "measure": measure,
+	}
+	result := map[string]any{"matchingRecords": d.records, "reads": d.reads, "armContributions": d.arms}
+	saveJSON(p.a, "Export the viewpoint parameters", exportName(".json", selectionName(p.a.Selected.Key), shortName(d.gene), "viewpoint-parameters"),
+		p.exploreParams("viewpoint", parameters, result))
+}
+
+// regionAnchor is the analysis_hybrids anchor filter of the region's
+// hybrids (the rows analysis_region counts).
+func regionAnchor(d *regionData) core.Obj {
+	anchor := core.Obj{"gene": d.gene, "start": d.f.start, "end": d.f.end, "overlap": "any"}
+	if d.f.overlap == overlapRules[1] {
+		anchor["overlap"] = "contained"
+	}
+	if d.f.partner != "" {
+		anchor["partner"] = d.f.partner
+	}
+	if d.f.partnerStart > 0 {
+		anchor["partner_start"], anchor["partner_end"] = d.f.partnerStart, d.f.pEnd
+	}
+	filters := core.Obj{"anchor": anchor}
+	if types := typesPayload(d.f.typ); types != nil {
+		filters["types"] = types
+	}
+	return filters
+}
+
+// exportRegionRecords writes every hybrid of the region (not only the
+// strongest interactions listed) as the web's region-interactions.csv or
+// .hyb.
+func (p *explorePage) exportRegionRecords(d *regionData, hyb bool) {
+	ext := ".csv"
+	if hyb {
+		ext = ".hyb"
+	}
+	p.exportRecords("Export the region records", p.regionExportName(d, ext, "records"), []core.Obj{regionAnchor(d)}, "file", hyb)
+}
+
+func (p *explorePage) exportRegionProfileSVG(d *regionData) {
+	starts, ends, values := profileOf(p.rg.profile)
+	fig := profileSVG{Starts: starts, Ends: ends, Values: values, Color: ui.LightTheme().Accent,
+		Title:  "HYB2 region · " + p.a.SelectionLabel(p.a.Selected.Key) + " · " + d.gene + ":" + span(d.f.start, d.f.end),
+		XLabel: d.gene + " (nt)", YLabel: "Cluster support",
+		Note: fmt.Sprintf("%s · %d nt bins of the anchor arm", regionSubtitle(d.f), d.bin)}
+	saveExport(p.a, "Export the region profile", p.regionExportName(d, ".svg", "profile"), func() ([]byte, error) {
+		return svgFile(fig.SVG()), nil
+	})
+}
+
+// exportRegionParams writes the web's region-parameters.json.
+func (p *explorePage) exportRegionParams(d *regionData) {
+	overlap := "any"
+	if d.f.overlap == overlapRules[1] {
+		overlap = "contained"
+	}
+	parameters := map[string]any{
+		"rna": d.gene, "start": d.f.start, "end": d.f.end, "partner": optName(d.f.partner),
+		"partnerStart": optInt(d.f.partnerStart), "partnerEnd": optInt(d.f.pEnd), "overlapRule": overlap,
+		"chimeraType": nameOr(d.f.typ, allTypes), "effectiveProfileBinSize": d.bin,
+	}
+	result := map[string]any{"matchingRecords": d.records, "clusterSupport": d.support, "reads": d.reads, "partnerRnas": len(d.partners)}
+	saveJSON(p.a, "Export the region parameters", p.regionExportName(d, ".json", "parameters"), p.exploreParams("region", parameters, result))
 }
 
 func (p *explorePage) regionComments(d *regionData) []string {

@@ -21,11 +21,61 @@ import (
 // with HYB2_SNAPSHOT_DIR set the file is copied there for review.
 func exportClick(t *testing.T, a *App, tt *ui.Tester, button string) (string, string) {
 	t.Helper()
-	asked := pickSaveInto(t, t.TempDir())
-	if err := tt.Click(button); err != nil {
-		t.Fatal(err)
+	return exportWith(t, a, tt, func() {
+		if err := tt.Click(button); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// lastToast is the newest toast's text ("" for none).
+func lastToast(a *App) string {
+	if len(a.toasts) == 0 {
+		return ""
 	}
-	waitFlush(a)
+	return a.toasts[len(a.toasts)-1].Text
+}
+
+// waitToast flushes until a new toast shows (an export reports its end in
+// one), for up to ten seconds; before is lastToast before the action.
+func waitToast(a *App, before string) {
+	for range 1000 {
+		waitFlush(a)
+		if lastToast(a) != before {
+			return
+		}
+		sleepMS(10)
+	}
+}
+
+// exportMenuClick chooses item from the page's Export menu and returns the
+// file written.
+func exportMenuClick(t *testing.T, a *App, tt *ui.Tester, item string) (string, string) {
+	t.Helper()
+	return exportWith(t, a, tt, func() { chooseExport(t, tt, item) })
+}
+
+// chooseExport opens the page's Export menu and chooses item.
+func chooseExport(t *testing.T, tt *ui.Tester, item string) {
+	t.Helper()
+	r, ok := tt.Find("Export")
+	if !ok {
+		t.Fatalf("no Export menu: %q", tt.Texts())
+	}
+	tt.Press(r.X+r.W/2, r.Y+r.H/2)
+	tt.Release(r.X+r.W/2, r.Y+r.H/2)
+	if err := tt.ChooseMenuItem(item); err != nil {
+		t.Fatalf("%v (menu %q)", err, tt.Menu())
+	}
+	tt.Frame()
+}
+
+func exportWith(t *testing.T, a *App, tt *ui.Tester, click func()) (string, string) {
+	t.Helper()
+	asked := pickSaveInto(t, t.TempDir())
+	before := lastToast(a)
+	click()
+	waitToast(a, before)
 	text := readExport(t, asked)
 	path := (*asked)[0]
 	if want := "Saved " + path; len(a.toasts) == 0 || a.toasts[len(a.toasts)-1].Text != want {
@@ -56,7 +106,7 @@ func TestExploreInteractionsExportTSV(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(a, tt)
-	name, text := exportClick(t, a, tt, "Export TSV…")
+	name, text := exportMenuClick(t, a, tt, "Loaded rows · TSV…")
 	if name != "SUB_interactions.tsv" {
 		t.Fatalf("name %q", name)
 	}
@@ -80,7 +130,7 @@ func TestExploreContactExportSVGAndTSV(t *testing.T) {
 	if d == nil {
 		t.Fatal("no map")
 	}
-	name, svg := exportClick(t, a, tt, "Export SVG…")
+	name, svg := exportMenuClick(t, a, tt, "Map · SVG…")
 	if !strings.HasSuffix(name, ".svg") || !strings.HasPrefix(name, "SUB_ZIKV") {
 		t.Fatalf("name %q", name)
 	}
@@ -93,7 +143,7 @@ func TestExploreContactExportSVGAndTSV(t *testing.T) {
 	p.cm.heat.SetView(widgets.Window{X0: 0, X1: 2000, Y0: 0, Y1: 2000})
 	tt.Frame()
 	before := f.count("analysis_contact_bins")
-	_, text := exportClick(t, a, tt, "Export TSV…")
+	_, text := exportMenuClick(t, a, tt, "Contact cells · TSV…")
 	lines := strings.Split(text, "\n")
 	if len(lines) != len(d.count)+1 || lines[0] != "x_start\tx_end\ty_start\ty_end\trecords\tsupport_count" || strings.HasSuffix(text, "\n") {
 		t.Fatalf("%d lines for %d cells: %.200q", len(lines), len(d.count), text)
@@ -194,7 +244,7 @@ func TestExploreViewpointAndRegionExports(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(a, tt)
-	name, text := exportClick(t, a, tt, "Export TSV…")
+	name, text := exportMenuClick(t, a, tt, "Coverage · TSV…")
 	rows := tsvRecords(t, text)
 	if !strings.HasSuffix(name, "_viewpoint.tsv") || strings.Join(rows[0], ",") != "start,end,mean_interaction_coverage" ||
 		len(rows) != p.vp.profile.Len()+1 {
@@ -203,18 +253,18 @@ func TestExploreViewpointAndRegionExports(t *testing.T) {
 
 	p.exploreRegion(3000, 3600)
 	settle(a, tt)
-	name, text = exportClick(t, a, tt, "Profile TSV…")
+	name, text = exportMenuClick(t, a, tt, "Profile · TSV…")
 	if rows = tsvRecords(t, text); !strings.HasSuffix(name, "_profile.tsv") || rows[0][2] != "cluster_support" || len(rows) != p.rg.profile.Len()+1 {
 		t.Fatalf("%s: %q", name, rows[:1])
 	}
-	name, text = exportClick(t, a, tt, "Interactions TSV…")
+	name, text = exportMenuClick(t, a, tt, "Strongest interactions · TSV…")
 	if rows = tsvRecords(t, text); !strings.HasSuffix(name, "_interactions.tsv") || len(rows) != 26 || rows[0][7] != "hybrids" {
 		t.Fatalf("%s: %d rows %q", name, len(rows), rows[:1])
 	}
 	// The reference holds the RNA: FASTA as the web writes it.
 	seq := strings.Repeat("ACGU", 3000)
 	f.ops["read_reference_sequence"] = map[string]any{"ok": true, "sequence": seq}
-	name, text = exportClick(t, a, tt, "FASTA…")
+	name, text = exportMenuClick(t, a, tt, "Sequence · FASTA…")
 	want := ">" + zikvGene + ":3000-3600\n" + seq[2999:3600] + "\n"
 	if name != exportName(".fasta", zikvGene+"_3000-3600") || text != want {
 		t.Fatalf("%s:\n%q", name, text[:min(len(text), 120)])

@@ -878,7 +878,9 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
         if not isinstance(filters, dict):
             raise ValueError("filters must be an object")
         result = query.hybrids(paths, filters, opt_int("limit", 100), opt_int("offset", 0),
-                               order=opt_str("order") or "file", with_sequence=request.get("with_sequence", True) is not False)
+                               order=opt_str("order") or "file", with_sequence=request.get("with_sequence", True) is not False,
+                               with_raw=opt_bool("with_raw"), partners=opt_bool("partners"),
+                               count_mode=opt_str("count_mode") or "support")
     return {"ok": True, "operation": operation, "sample_ids": sample_ids, "indexes": [str(p) for p in paths], "result": result}
 
 

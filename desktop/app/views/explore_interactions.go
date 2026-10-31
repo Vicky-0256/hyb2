@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -22,6 +23,8 @@ var (
 	// scopeLabels are the web's interaction scopes; the homodimer proxy is
 	// both arms on one RNA with an overlap score of 5 or more.
 	scopeLabels = []string{"All interactions", "Intramolecular", "Intermolecular", "Homodimer proxy", "Not homodimer proxy"}
+	// countModes rank the partner panel, as the web's count mode.
+	countModes = []string{"Cluster support", "Records"}
 )
 
 // ixFilters are the filters applied (the inputs hold drafts until Apply).
@@ -29,13 +32,15 @@ type ixFilters struct {
 	// gene1, gene2 are the web's RNA and partner, either arm order; with an
 	// arm position (a contact map or region drill-down) they are arm 1 and
 	// arm 2. "" = any.
-	gene1, gene2   string
-	typ            string
-	scope          string // one of scopeLabels; "" = all
-	search         string
-	minReads       int
-	minSupport     int
-	minDG, maxDG   *float64
+	gene1, gene2 string
+	typ          string
+	scope        string // one of scopeLabels; "" = all
+	search       string
+	minReads     int
+	minSupport   int
+	minDG, maxDG *float64
+	// maxEvalue is the web's maximum e-value: no arm e-value above it.
+	maxEvalue      *float64
 	x0, x1, y0, y1 int // 0 = unset
 }
 
@@ -45,16 +50,23 @@ type interactionsState struct {
 	gene1, gene2, typ, order, scope string
 	search, minReads, minSupport    string
 	minDG, maxDG, x0, x1, y0, y1    string
+	maxEvalue                       string
 	inputErr                        string
-	// moreOpen shows the ΔG and arm position filters (open while one is set).
+	// moreOpen shows the ΔG, e-value and arm position filters (open while
+	// one is set).
 	moreOpen bool
+	// countMode ranks the partners (one of countModes); it filters nothing.
+	countMode string
 
 	load, more loader
 	key        string // the applied key the rows belong to
 	rows       []hybridRow
 	total      int
-	list       ui.ListState
-	chosen     int
+	// partners are the RNA's partners under the filters (the web's partner
+	// panel), when an RNA is chosen and the filters are not oriented.
+	partners []partnerTotal
+	list     ui.ListState
+	chosen   int
 }
 
 type hybridRow struct {
@@ -71,14 +83,19 @@ type hybridRow struct {
 	DG      *float64 `json:"dg"`
 	Overlap *float64 `json:"overlap"`
 	Type    string   `json:"type"`
-	// Name and Sequence are columns 1 and 2 of the .hyb line ("" when the
-	// file has changed since the index was built).
-	Name     string `json:"name"`
-	Sequence string `json:"sequence"`
+	// Name and Sequence are columns 1 and 2 of the .hyb line, EValue1 and
+	// EValue2 columns 9 and 15, Raw the whole line ("" or nil when the file
+	// has changed since the index was built).
+	Name     string   `json:"name"`
+	Sequence string   `json:"sequence"`
+	EValue1  *float64 `json:"evalue1"`
+	EValue2  *float64 `json:"evalue2"`
+	Raw      string   `json:"raw"`
 }
 
 func (s *interactionsState) init() {
 	s.gene1, s.gene2, s.typ, s.order, s.scope = anyGene, anyGene, allTypes, orderLabels[0], scopeLabels[0]
+	s.countMode = countModes[0]
 	s.applied.minReads, s.applied.minSupport = 1, 1
 	s.minReads, s.minSupport = "1", "1"
 	s.chosen = -1
@@ -101,7 +118,7 @@ func (s *interactionsState) apply(f ixFilters) {
 	}
 	s.search = f.search
 	s.minReads, s.minSupport = strconv.Itoa(max(f.minReads, 1)), strconv.Itoa(max(f.minSupport, 1))
-	s.minDG, s.maxDG = dgText(f.minDG), dgText(f.maxDG)
+	s.minDG, s.maxDG, s.maxEvalue = dgText(f.minDG), dgText(f.maxDG), dgText(f.maxEvalue)
 	s.x0, s.x1, s.y0, s.y1 = coordText(f.x0), coordText(f.x1), coordText(f.y0), coordText(f.y1)
 	s.inputErr = ""
 }
@@ -186,6 +203,9 @@ func (s *interactionsState) fromInputs() (ixFilters, error) {
 	if f.minDG != nil && f.maxDG != nil && *f.minDG > *f.maxDG {
 		return f, fmt.Errorf("the ΔG range's lower bound must not exceed its upper bound")
 	}
+	if f.maxEvalue, ok = parseDG(s.maxEvalue); !ok || f.maxEvalue != nil && *f.maxEvalue < 0 {
+		return f, fmt.Errorf("max e-value must be a number, 0 or more")
+	}
 	fields := []struct {
 		text string
 		into *int
@@ -257,6 +277,9 @@ func (f ixFilters) payload() core.Obj {
 	if f.maxDG != nil {
 		out["max_dg"] = *f.maxDG
 	}
+	if f.maxEvalue != nil {
+		out["max_evalue"] = *f.maxEvalue
+	}
 	region := core.Obj{}
 	if f.x0 > 0 || f.x1 > 0 {
 		region["x"] = []int{f.x0, orMax(f.x1)}
@@ -280,21 +303,33 @@ func orMax(n int) int {
 func (p *explorePage) interactionsKey() string {
 	s := &p.ix
 	f := s.applied
-	return fmt.Sprintf("%s\x00%+v\x00%s\x00%s\x00%s", p.sel, f, dgText(f.minDG), dgText(f.maxDG), s.orderValue())
+	f.minDG, f.maxDG, f.maxEvalue = nil, nil, nil // by value below, not by pointer
+	return fmt.Sprintf("%s\x00%+v\x00%s\x00%s\x00%s\x00%s", p.sel, f, dgText(s.applied.minDG), dgText(s.applied.maxDG),
+		dgText(s.applied.maxEvalue), s.orderValue())
 }
 
-func (p *explorePage) fetchHybrids(path string, ids []string, f ixFilters, order string, offset int) ([]hybridRow, int, error) {
-	got, err := p.query(path, "analysis_hybrids", ids, core.Obj{
-		"filters": f.payload(), "limit": interactionsPage, "offset": offset, "order": order, "with_sequence": true,
-	})
+// withPartners: the filters name an RNA, not arms, so the table has a
+// partner panel.
+func (f ixFilters) withPartners() bool { return f.gene1 != "" && !f.oriented() }
+
+func (p *explorePage) fetchHybrids(path string, ids []string, f ixFilters, order string, offset int) ([]hybridRow, int, []partnerTotal, error) {
+	payload := core.Obj{
+		"filters": f.payload(), "limit": interactionsPage, "offset": offset, "order": order, "with_sequence": true, "with_raw": true,
+	}
+	if offset == 0 && f.withPartners() {
+		payload["partners"] = true
+	}
+	got, err := p.query(path, "analysis_hybrids", ids, payload)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	var rows []hybridRow
 	if err := model.Decode(got["rows"], &rows); err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
-	return rows, int(num(got["total"])), nil
+	var partners []partnerTotal
+	_ = model.Decode(got["partners"], &partners)
+	return rows, int(num(got["total"])), partners, nil
 }
 
 func (p *explorePage) loadInteractions() {
@@ -302,12 +337,12 @@ func (p *explorePage) loadInteractions() {
 	key := p.interactionsKey()
 	path, ids, f, order := p.a.Project.Path, p.ids, s.applied, s.orderValue()
 	p.ensure(&s.load, key, func() (func(), error) {
-		rows, total, err := p.fetchHybrids(path, ids, f, order, 0)
+		rows, total, partners, err := p.fetchHybrids(path, ids, f, order, 0)
 		if err != nil {
 			return nil, err
 		}
 		return func() {
-			s.key, s.rows, s.total, s.chosen = key, rows, total, -1
+			s.key, s.rows, s.total, s.partners, s.chosen = key, rows, total, partners, -1
 			s.more.reset()
 			s.list.ScrollTo(0, ui.Start)
 		}, nil
@@ -319,7 +354,7 @@ func (p *explorePage) loadMoreInteractions() {
 	key, offset := s.key, len(s.rows)
 	path, ids, f, order := p.a.Project.Path, p.ids, s.applied, s.orderValue()
 	p.ensure(&s.more, fmt.Sprintf("%s\x00%d", key, offset), func() (func(), error) {
-		rows, total, err := p.fetchHybrids(path, ids, f, order, offset)
+		rows, total, _, err := p.fetchHybrids(path, ids, f, order, offset)
 		if err != nil {
 			return nil, err
 		}
@@ -357,6 +392,7 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 			picker(c, "ix-scope", "Scope", &s.scope, scopeLabels, 150).OnChange(s.applyPickers)
 			picker(c, "ix-type", "Chimera type", &s.typ, withAll(allTypes, p.summary.types), 130).OnChange(s.applyPickers)
 			picker(c, "ix-order", "Sort by", &s.order, orderLabels, 150)
+			picker(c, "ix-count-mode", "Count mode", &s.countMode, countModes, 140)
 			Field(c, "Search", func() {
 				ui.TextInput(c.Key("ix-search"), &s.search).Label("Search").Placeholder("ID, sequence, RNA, type").Width(170).OnSubmit(submit)
 			})
@@ -374,7 +410,7 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 			}
 		})
 		set := 0
-		for _, v := range []string{s.minDG, s.maxDG, s.x0, s.x1, s.y0, s.y1} {
+		for _, v := range []string{s.minDG, s.maxDG, s.maxEvalue, s.x0, s.x1, s.y0, s.y1} {
 			if strings.TrimSpace(v) != "" {
 				set++
 			}
@@ -382,7 +418,7 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 		if set > 0 {
 			s.moreOpen = true
 		}
-		label := "ΔG and arm positions"
+		label := "ΔG, e-value and arm positions"
 		if set > 0 {
 			label += fmt.Sprintf(" (%d set)", set)
 		}
@@ -394,11 +430,15 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 				Field(c, "ΔG to", func() {
 					ui.TextInput(c.Key("ix-dg1"), &s.maxDG).Label("ΔG to").Placeholder("kcal/mol").Width(90).OnSubmit(submit)
 				})
+				Field(c, "Max e-value", func() {
+					ui.TextInput(c.Key("ix-evalue"), &s.maxEvalue).Label("Max e-value").Placeholder("any").Width(90).OnSubmit(submit)
+				})
 				coordInput(c, "ix-x0", "Arm 1 from", &s.x0, "start").OnSubmit(submit)
 				coordInput(c, "ix-x1", "Arm 1 to", &s.x1, "end").OnSubmit(submit)
 				coordInput(c, "ix-y0", "Arm 2 from", &s.y0, "start").OnSubmit(submit)
 				coordInput(c, "ix-y1", "Arm 2 to", &s.y1, "end").OnSubmit(submit)
-				ui.Text(c, "A ΔG bound leaves out hybrids without ΔG. Positions are 1-based; Enter or Apply filters.").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "A ΔG bound leaves out hybrids without ΔG; a missing e-value passes. Positions are 1-based; Enter or Apply filters.").
+					FontSize(12).TextColor(t.TextMuted)
 			})
 		})
 		if s.inputErr != "" {
@@ -422,10 +462,16 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 			}
 			density := nameOr(p.a.Density, densityLabels[0])
 			ui.Select(c.Key("ix-density"), &density, densityLabels).Label("Table density").Width(170).OnChange(func() { p.a.setDensity(density) })
-			if ui.Button(c, "Export TSV…").Tooltip("Save the rows loaded as a tab-separated file").Disabled(len(s.rows) == 0).Clicked() && len(s.rows) > 0 {
-				p.exportInteractions()
-			}
+			none := s.key == "" || s.total == 0
+			exportMenu(c,
+				exportItem{"Filtered records · CSV…", none, p.exportFilteredCSV},
+				exportItem{"Filtered records · HYB…", none, p.exportFilteredHYB},
+				exportItem{"Loaded rows · TSV…", len(s.rows) == 0, p.exportInteractions},
+				exportItem{"Parameters · JSON…", false, p.exportInteractionsParams})
 		})
+		if s.applied.withPartners() && s.key != "" {
+			p.ixPartners(c)
+		}
 		p.hybridTable(c)
 		p.hybridDetail(c)
 	})
@@ -465,6 +511,9 @@ func describeFilters(f ixFilters) string {
 		parts = append(parts, "ΔG ≥ "+dgText(f.minDG))
 	case f.maxDG != nil:
 		parts = append(parts, "ΔG ≤ "+dgText(f.maxDG))
+	}
+	if f.maxEvalue != nil {
+		parts = append(parts, "e-value ≤ "+dgText(f.maxEvalue))
 	}
 	if f.x0 > 0 || f.x1 > 0 {
 		parts = append(parts, "arm 1 in "+rangeText(f.x0, f.x1))
@@ -613,8 +662,29 @@ func (p *explorePage) hybridDetail(c *ui.Context) {
 			}
 			stat(c, "ΔG", dg)
 			stat(c, "Overlap score", overlap)
+			if r.Raw != "" {
+				stat(c, "E-values", evalueText(r.EValue1)+" · "+evalueText(r.EValue2))
+			}
 			if len(p.ids) > 1 && r.Index < len(p.ids) {
 				stat(c, "Sample", p.ids[r.Index])
+			}
+		})
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, "Open in contact map").Tooltip("The map of arm 1's RNA against arm 2's, at this hybrid's cell").Clicked() {
+				p.recordContact(r)
+			}
+			if ui.Button(c, "Explore RNA 1 region").Tooltip("Region around arm 1, with arm 2's RNA as the partner").Clicked() {
+				p.recordRegion(r, true)
+			}
+			if ui.Button(c, "Explore RNA 2 region").Tooltip("Region around arm 2, with arm 1's RNA as the partner").Clicked() {
+				p.recordRegion(r, false)
+			}
+			if ui.Button(c, "Fold sequence").Tooltip("Open Structure with this hybrid's arms").Clicked() {
+				p.recordFold(r)
+			}
+			if ui.Button(c, "Copy record").Tooltip("Copy the hybrid's .hyb line").Disabled(r.Raw == "").Clicked() && r.Raw != "" {
+				c.WriteClipboard(r.Raw)
+				p.a.Toast("Record copied")
 			}
 		})
 		if r.Sequence == "" {
@@ -623,4 +693,140 @@ func (p *explorePage) hybridDetail(c *ui.Context) {
 		}
 		ui.Text(c, r.Sequence).FontSize(12).Selectable().TextColor(t.TextMuted)
 	})
+}
+
+func evalueText(v *float64) string {
+	if v == nil {
+		return "—"
+	}
+	return strconv.FormatFloat(*v, 'g', 3, 64)
+}
+
+// ixPartners is the web's partner panel: the chosen RNA's partners under
+// the filters, the top ten by the count mode; a click makes one the
+// partner filter.
+func (p *explorePage) ixPartners(c *ui.Context) {
+	s := &p.ix
+	t := c.Theme()
+	records := s.countMode == countModes[1]
+	partners := append([]partnerTotal(nil), s.partners...)
+	value := func(pt partnerTotal) int64 {
+		if records {
+			return pt.Records
+		}
+		return pt.Support
+	}
+	sort.SliceStable(partners, func(i, j int) bool {
+		if value(partners[i]) != value(partners[j]) {
+			return value(partners[i]) > value(partners[j])
+		}
+		return partners[i].Name < partners[j].Name
+	})
+	Card(c, shortGene(s.applied.gene1)+" interaction partners", func() {
+		ui.Text(c, s.countMode+" · click a partner to refine the table.").FontSize(12).TextColor(t.TextMuted)
+		if len(partners) == 0 {
+			ui.Text(c, "No records match the current filters.").TextColor(t.TextMuted)
+			return
+		}
+		top := max(value(partners[0]), 1)
+		for i, pt := range partners {
+			if i == 10 {
+				ui.Text(c, fmt.Sprintf("and %d more", len(partners)-10)).FontSize(12).TextColor(t.TextMuted)
+				break
+			}
+			row := ui.ButtonBase(c.Key("ix-partner-"+pt.Name)).Label("Partner "+pt.Name).Gap(8).AlignItems(ui.Center).Padding(2, 4).Radius(4).
+				Children(func() {
+					ui.Text(c, shortGene(pt.Name)).Width(190).SingleLine().Tooltip(pt.Name)
+					fraction := max(float32(value(pt))/float32(top), 0.03)
+					ui.Box(c).Grow(1).Height(8).Radius(4).Background(t.Border).Children(func() {
+						ui.Box(c).WidthPercent(fraction * 100).FillHeight().Radius(4).Background(t.Accent)
+					})
+					ui.Text(c, FormatNumber(value(pt))).FontSize(12).TextColor(t.TextMuted).Width(90).TextAlign(ui.End)
+				})
+			if row.Clicked() {
+				s.gene2 = pt.Name
+				s.applyPickers()
+			}
+		}
+	})
+}
+
+// selectGene makes gene the top bar's RNA (and its reference the one
+// selected); false, with a toast, when no reference of the project holds it.
+func (p *explorePage) selectGene(gene string) bool {
+	a := p.a
+	if gene != a.Selected.Gene {
+		reference, previous := a.Selected.ReferenceID, a.Selected.Gene
+		if ref := stReferenceOf(a.Project, gene); ref != "" {
+			a.Selected.ReferenceID = ref
+		}
+		a.Selected.Gene = gene
+		a.normalizeSelection()
+		if a.Selected.Gene != gene {
+			a.Selected.ReferenceID, a.Selected.Gene = reference, previous
+			a.normalizeSelection()
+			a.Toast("%s is not in the project's references", gene)
+			return false
+		}
+		a.saveUIState()
+	}
+	p.track()
+	return true
+}
+
+// recordContact opens the contact map of arm 1's RNA against arm 2's,
+// with every chimera type and hybrid, at the hybrid's cell (the web's
+// "Open in Contact Map").
+func (p *explorePage) recordContact(r hybridRow) {
+	if !p.selectGene(r.Gene1) {
+		return
+	}
+	s := &p.cm
+	s.gene2, s.typ, s.homodimer = r.Gene2, allTypes, homodimerOptions[0]
+	s.focus = &[4]int{r.Start1, r.Start2, r.End1, r.End2}
+	s.load.reset()
+	p.tab = tabContact
+}
+
+// recordRegion opens Region on one arm, with the other arm's RNA as the
+// partner (the web's "Explore RNA 1 / RNA 2 region").
+func (p *explorePage) recordRegion(r hybridRow, armOne bool) {
+	gene, start, end, partner := r.Gene1, r.Start1, r.End1, r.Gene2
+	if !armOne {
+		gene, start, end, partner = r.Gene2, r.Start2, r.End2, r.Gene1
+	}
+	if !p.selectGene(gene) {
+		return
+	}
+	s := &p.rg
+	s.applyRange(start, end)
+	s.partner, s.partnerStart, s.partnerEnd = partner, "", ""
+	s.applied.partner, s.applied.partnerStart, s.applied.pEnd = partner, 0, 0
+	p.tab = tabRegion
+}
+
+// recordFoldSpan is the longest intramolecular hybrid folded as one window
+// over both arms; a longer one, or an intermolecular one, folds its two
+// arms as CPLcofold strands.
+const recordFoldSpan = 500
+
+// recordFold opens ⑤ Structure with the hybrid's arms on the reference.
+// The web folds the read's own sequence; Structure has no record source
+// yet, so the prefill also carries the record ("record": name and
+// sequence) for when it does.
+func (p *explorePage) recordFold(r hybridRow) {
+	record := map[string]any{"name": r.Name, "sequence": r.Sequence}
+	lo, hi := min(r.Start1, r.Start2), max(r.End1, r.End2)
+	if r.Gene1 == r.Gene2 && hi-lo+1 <= recordFoldSpan {
+		p.a.Navigate("structure", map[string]any{"prefill": map[string]any{
+			"gene": r.Gene1, "windows": []map[string]int{{"start": lo, "end": hi}},
+			"selectionKey": p.a.Selected.Key, "source": "an interaction record", "record": record,
+		}})
+		return
+	}
+	p.a.Navigate("structure", map[string]any{"prefill": map[string]any{
+		"regions": []core.Region{{GeneID: r.Gene1, Start: uint64(r.Start1), End: uint64(r.End1)},
+			{GeneID: r.Gene2, Start: uint64(r.Start2), End: uint64(r.End2)}},
+		"selectionKey": p.a.Selected.Key, "source": "an interaction record", "record": record,
+	}})
 }

@@ -19,6 +19,9 @@ type exploreFake struct {
 	*fakeBackend
 	mu       sync.Mutex
 	payloads map[string][]core.Obj
+	// answer, when set, answers a query before the fixtures (ok false: the
+	// fixture answers).
+	answer func(operation string, payload core.Obj) (any, bool)
 }
 
 func (f *exploreFake) Query(path, operation string, payload core.Obj) (any, error) {
@@ -27,8 +30,20 @@ func (f *exploreFake) Query(path, operation string, payload core.Obj) (any, erro
 	raw, _ := json.Marshal(payload)
 	_ = json.Unmarshal(raw, &copied)
 	f.payloads[operation] = append(f.payloads[operation], copied)
+	answer := f.answer
 	f.mu.Unlock()
+	if answer != nil {
+		if got, ok := answer(operation, copied); ok {
+			return got, nil
+		}
+	}
 	return f.fakeBackend.Query(path, operation, payload)
+}
+
+func (f *exploreFake) all(operation string) []core.Obj {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]core.Obj(nil), f.payloads[operation]...)
 }
 
 func (f *exploreFake) last(operation string) core.Obj {

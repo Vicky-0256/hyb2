@@ -91,6 +91,65 @@ class AnalysisBridgeTest(unittest.TestCase):
         self.assertEqual(len(result["rows"]), 3)
         self.assertTrue(result["rows"][0]["name"])
 
+    def test_hybrids_evalue_filter_raw_lines_and_partners(self):
+        # the web's maximum e-value: no arm e-value (.hyb columns 9 and 15) above it
+        lines = HYB.read_text().splitlines()
+
+        def passes(line, cap):
+            values = []
+            for value in (line.split("\t")[8], line.split("\t")[14]):
+                try:
+                    values.append(float(value))
+                except ValueError:
+                    pass
+            return all(v <= cap for v in values)
+
+        for cap in (1e-10, 1e-20):
+            got = self.call(operation="analysis_hybrids", sample_ids=["S1"], filters={"max_evalue": cap}, limit=0)["result"]
+            self.assertEqual(got["total"], sum(passes(line, cap) for line in lines))
+        both = self.call(operation="analysis_hybrids", sample_ids=["S1", "S2"],
+                         filters={"max_evalue": 1e-10, "gene": "18S_rRNA"}, limit=5, with_raw=True)["result"]
+        for row in both["rows"]:
+            self.assertIn(row["raw"], lines)
+            self.assertTrue(passes(row["raw"], 1e-10))
+            self.assertEqual(row["evalue1"], float(row["raw"].split("\t")[8]))
+        plain = self.call(operation="analysis_hybrids", sample_ids=["S1"], limit=1)["result"]["rows"][0]
+        self.assertNotIn("raw", plain)
+        self.assertIsInstance(plain["evalue2"], float)
+        # the partner panel: the other arm's RNA of the rows, by support or records
+        by_support = self.call(operation="analysis_hybrids", sample_ids=["S1", "S2"], filters={"gene": "Zika_virusRNA"},
+                               limit=0, partners=True)["result"]
+        self.assertEqual(sum(p["records"] for p in by_support["partners"]), by_support["total"])
+        supports = [p["support"] for p in by_support["partners"]]
+        self.assertEqual(supports, sorted(supports, reverse=True))
+        by_records = self.call(operation="analysis_hybrids", sample_ids=["S1"], filters={"gene": "Zika_virusRNA"},
+                               limit=0, partners=True, count_mode="records")["result"]["partners"]
+        records = [p["records"] for p in by_records]
+        self.assertEqual(records, sorted(records, reverse=True))
+        self.assertEqual({p["name"]: p["records"] * 2 for p in by_records},
+                         {p["name"]: p["records"] for p in by_support["partners"]})
+        oriented = self.call(operation="analysis_hybrids", sample_ids=["S1"], filters={"gene1": "Zika_virusRNA"},
+                             limit=0, partners=True)["result"]
+        self.assertNotIn("partners", oriented)
+        # anchor: the rows the region query counts, for its records export
+        for region in ({"gene": "Zika_virusRNA", "start": 2000, "end": 2600},
+                       {"gene": "Zika_virusRNA", "start": 2000, "end": 2600, "overlap": "contained"},
+                       {"gene": "Zika_virusRNA", "start": 3000, "end": 3600, "partner": "18S_rRNA"},
+                       {"gene": "Zika_virusRNA", "start": 100, "end": 4000, "partner": "Zika_virusRNA",
+                        "partner_start": 5000, "partner_end": 9000}):
+            counted = self.call(operation="analysis_region", sample_ids=["S1", "S2"], limit=0, **region)["result"]
+            listed = self.call(operation="analysis_hybrids", sample_ids=["S1", "S2"], filters={"anchor": region}, limit=0)["result"]
+            self.assertGreater(counted["records"], 0, region)
+            self.assertEqual(listed["total"], counted["records"], region)
+        missing = self.call(operation="analysis_hybrids", sample_ids=["S1"], limit=0,
+                            filters={"anchor": {"gene": "nope", "start": 1, "end": 9}})["result"]
+        self.assertEqual(missing["total"], 0)
+        for bad in ({"filters": {"max_evalue": "1e-5"}}, {"count_mode": "reads"}, {"with_raw": "yes"},
+                    {"filters": {"anchor": {"gene": "Zika_virusRNA", "start": 9, "end": 1}}},
+                    {"filters": {"anchor": {"gene": "Zika_virusRNA", "start": 1, "end": 9, "partner_start": 1, "partner_end": 5}}}):
+            with self.assertRaises(ValueError, msg=bad):
+                self.call(operation="analysis_hybrids", sample_ids=["S1"], **bad)
+
     def test_viewpoint_and_region(self):
         single = self.call(operation="analysis_viewpoint", sample_ids=["S1"], gene="Zika_virusRNA", start=2000, end=2600,
                            bin_size=10)["result"]

@@ -14,7 +14,13 @@ package views
 // (an `energy` task, read_energy).
 //
 // "Quick view" is the descriptive comparison: the `compare_bins` query
-// (library-size normalised, no statistics).
+// (record counts or cluster support, per million or raw, no statistics).
+//
+// The settings follow the web Compare page: condition labels, RNA X and
+// RNA Y (an inter-RNA test when they differ), the quick view's measure and
+// normalisation and the similarity panel (white or grey). The exports
+// (map PNG, significant cells, the files for R / HYB2, parameters and the
+// top 10 local maps ZIP) are compare_export.go.
 //
 // Navigate options consumed by Show:
 //
@@ -25,7 +31,8 @@ package views
 //	explore:   {"view": "contact-map" | "region", "selectionKey": "c:AFR",
 //	            "sampleIds": [...], "gene": "<gene>", "binSize": 10,
 //	            "x": <arm 1 start>, "y": <arm 2 start>,
-//	            "xEnd": x+binSize-1, "yEnd": y+binSize-1}
+//	            "xEnd": x+binSize-1, "yEnd": y+binSize-1,
+//	            "gene2": "<RNA Y>" (inter-RNA results only: y is on it)}
 //	           The top bar's selection and gene are set to the same values
 //	           first, so Explore shows the right data even if it ignores the
 //	           focus fields.
@@ -74,6 +81,9 @@ type comparisonParams struct {
 	PadjCutoff *float64 `json:"padj_cutoff"`
 	SimMin     *float64 `json:"similarity_min"`
 	GeneID     *string  `json:"gene_id"`
+	// Gene2 is RNA Y of an inter-RNA test (x on GeneID or each sample's
+	// gene, y on Gene2); nil or the same gene for a homodimer map.
+	Gene2 *string `json:"gene2"`
 }
 
 type comparisonSummary struct {
@@ -141,6 +151,7 @@ type cmpQuickResult struct {
 	Gene     string     `json:"gene"`
 	BinSize  int        `json:"bin_size"`
 	Length   int        `json:"length"`
+	Length2  int        `json:"length2"`
 	Cells    int64      `json:"cells"`
 	LibraryA *float64   `json:"library_a"`
 	LibraryB *float64   `json:"library_b"`
@@ -153,13 +164,16 @@ type cmpQuickResult struct {
 	Log2     []*float64 `json:"log2ratio"`
 	// Effect is the web Compare page's log2((A + p) / (B + p)) on the
 	// condition means of per-million values (p = Pseudocount).
-	Effect      []*float64 `json:"effect"`
-	Pseudocount float64    `json:"pseudocount"`
+	Effect        []*float64 `json:"effect"`
+	Pseudocount   float64    `json:"pseudocount"`
+	Gene2         string     `json:"gene2"`
+	Measure       string     `json:"measure"`
+	Normalisation string     `json:"normalisation"`
 }
 
 type cmpQuickRow struct {
 	X, Y       int
-	A, B       float64  // condition values: mean per million of each group's datasets
+	A, B       float64  // condition values: mean (per million, or raw) of each group's datasets
 	RawA, RawB float64  // summed raw counts
 	Ratio      *float64 // log2 A/B (the web's effect)
 }
@@ -169,6 +183,27 @@ var quickBins = []string{"5 nt", "10 nt", "25 nt", "50 nt", "100 nt"}
 
 const quickMaxCells = 1_500_000
 
+// The web Compare page's map settings (web/analysis-pages.js): measure,
+// normalisation and similarity panel; the RNA pickers' first entries.
+const (
+	cmpMeasureRecords   = "Record count"
+	cmpMeasureSupport   = "Cluster support"
+	cmpNormaliseLibrary = "Per million (library size)"
+	cmpNormaliseNone    = "Raw mean count"
+	cmpPanelWhite       = "White (as similarity_heatmap.R)"
+	cmpPanelGrey        = "Light grey (shows bins at the minimum)"
+	cmpEachGene         = "Each sample's gene"
+	cmpSameAsX          = "Same as RNA X"
+)
+
+var (
+	cmpMeasures       = []string{cmpMeasureRecords, cmpMeasureSupport}
+	cmpNormalisations = []string{cmpNormaliseLibrary, cmpNormaliseNone}
+	cmpSimPanels      = []string{cmpPanelWhite, cmpPanelGrey}
+	// cmpGrey235 is the grey panel: ggplot theme_grey's #EBEBEB, as the web.
+	cmpGrey235 = ui.RGB(235, 235, 235)
+)
+
 // cmpContext names the two groups of a result for Locate / Region / Fold.
 type cmpContext struct {
 	KeyA, KeyB     string
@@ -176,6 +211,8 @@ type cmpContext struct {
 	GeneA, GeneB   string
 	LabelA, LabelB string
 	Bin, Pad       int
+	// Partner is RNA Y of an inter-RNA result ("" for a homodimer map).
+	Partner string
 }
 
 // cmpTarget is one row the actions act on.
@@ -207,6 +244,14 @@ type comparePage struct {
 	simMin     float64
 	settings   bool
 	runMsg     string
+	// labelA, labelB name the conditions ("" = the selection's name);
+	// geneX, geneY are RNA X and RNA Y ("" = each sample's gene, RNA X).
+	labelA, labelB string
+	geneX, geneY   string
+	measure        string  // quick view: cmpMeasures
+	normalise      string  // quick view: cmpNormalisations
+	simPanel       string  // cmpSimPanels
+	topQuantile    float64 // contrast quantile of the top 10 local maps (Lau -q)
 
 	comparisons []comparisonEntry
 	listErr     string
@@ -236,6 +281,9 @@ type comparePage struct {
 		keyA    string
 		keyB    string
 		gene    string
+		gene2   string
+		labelA  string
+		labelB  string
 		idsA    []string
 		idsB    []string
 		bin     string
@@ -265,6 +313,8 @@ func newComparePage(a *App) *comparePage {
 func (p *comparePage) reset() {
 	p.minCount, p.mergeRange, p.padj, p.simMin = 2, 100, 0.05, 1
 	p.keyA, p.keyB = "", ""
+	p.labelA, p.labelB, p.geneX, p.geneY = "", "", "", ""
+	p.measure, p.normalise, p.simPanel, p.topQuantile = cmpMeasureRecords, cmpNormaliseLibrary, cmpPanelWhite, 0.95
 	p.comparisons, p.listErr, p.loading = nil, "", false
 	p.mode, p.selectedID = cmpModeTest, ""
 	p.cache = map[string]*comparisonResult{}
@@ -499,10 +549,16 @@ func (p *comparePage) runTest() {
 		p.runMsg = "Run these samples first: " + strings.Join(missing, ", ")
 		return
 	}
-	labelA, labelB := a.SelectionLabel(p.keyA), a.SelectionLabel(p.keyB)
-	req := core.TaskStartRequest{Kind: "compare", SamplesOne: idsA, SamplesTwo: idsB,
-		Parameters: map[string]any{"min_count": int(p.minCount), "range": int(p.mergeRange), "padj_cutoff": p.padj,
-			"similarity_min": int(math.Max(1, p.simMin)), "label_one": labelA, "label_two": labelB}}
+	labelA, labelB := p.conditionLabels()
+	params := map[string]any{"min_count": int(p.minCount), "range": int(p.mergeRange), "padj_cutoff": p.padj,
+		"similarity_min": int(math.Max(1, p.simMin)), "label_one": labelA, "label_two": labelB}
+	if p.geneX != "" {
+		params["gene_id"] = p.geneX
+	}
+	if p.geneY != "" {
+		params["gene2"] = p.geneY
+	}
+	req := core.TaskStartRequest{Kind: "compare", SamplesOne: idsA, SamplesTwo: idsB, Parameters: params}
 	a.StartTask(req, "Differential test · "+labelA+" vs "+labelB, func(t model.Task, err error) {
 		if err != nil {
 			p.runMsg = "Could not start the test: " + err.Error()
@@ -512,6 +568,25 @@ func (p *comparePage) runTest() {
 		p.mode = cmpModeTest
 		p.row = -1
 	})
+}
+
+// conditionLabels are the condition labels of the settings, or the
+// selections' names where they are empty.
+func (p *comparePage) conditionLabels() (string, string) {
+	return nameOr(strings.TrimSpace(p.labelA), p.a.SelectionLabel(p.keyA)), nameOr(strings.TrimSpace(p.labelB), p.a.SelectionLabel(p.keyB))
+}
+
+// geneOptions are the genes of every reference, once each, for RNA X and Y.
+func (p *comparePage) geneOptions() []string {
+	var out []string
+	for _, r := range p.a.Project.References {
+		for _, s := range r.Sequences {
+			if !slices.Contains(out, s.Name) {
+				out = append(out, s.Name)
+			}
+		}
+	}
+	return out
 }
 
 func (p *comparePage) sampleName(id string) string {
@@ -573,10 +648,14 @@ func (p *comparePage) context(e *comparisonEntry) cmpContext {
 	if e.Parameters.Range != nil {
 		pad = int(*e.Parameters.Range)
 	}
-	return cmpContext{KeyA: keyFor(e.SamplesOne), KeyB: keyFor(e.SamplesTwo), IDsA: e.SamplesOne, IDsB: e.SamplesTwo,
+	ctx := cmpContext{KeyA: keyFor(e.SamplesOne), KeyB: keyFor(e.SamplesTwo), IDsA: e.SamplesOne, IDsB: e.SamplesTwo,
 		GeneA: geneFor(e.SamplesOne), GeneB: geneFor(e.SamplesTwo),
 		LabelA: nameOr(e.LabelOne, p.sampleNames(e.SamplesOne)), LabelB: nameOr(e.LabelTwo, p.sampleNames(e.SamplesTwo)),
 		Bin: 10, Pad: pad}
+	if g := e.Parameters.Gene2; g != nil && *g != "" && (*g != ctx.GeneA || *g != ctx.GeneB) {
+		ctx.Partner = *g
+	}
+	return ctx
 }
 
 func cmpSameSet(a, b []string) bool {
@@ -619,10 +698,14 @@ func (p *comparePage) locate(row cmpTarget, ctx cmpContext, view string) {
 		a.Selected.Key = key
 	}
 	a.normalizeSelection()
-	a.Navigate("explore", map[string]any{
+	options := map[string]any{
 		"view": view, "selectionKey": key, "sampleIds": append([]string(nil), ids...), "gene": gene,
 		"binSize": ctx.Bin, "x": row.X, "y": row.Y, "xEnd": row.X + ctx.Bin - 1, "yEnd": row.Y + ctx.Bin - 1,
-	})
+	}
+	if ctx.Partner != "" {
+		options["gene2"] = ctx.Partner // y is a position on RNA Y
+	}
+	a.Navigate("explore", options)
 }
 
 // planFold opens the confirmation for two window folds around a row.
@@ -699,10 +782,19 @@ func (p *comparePage) runQuick() {
 		p.runMsg = "A and B are the same selection."
 		return
 	}
-	gene := a.Selected.Gene
+	gene := nameOr(p.geneX, a.Selected.Gene)
 	if gene == "" {
-		p.runMsg = "Choose a gene in the top bar."
+		p.runMsg = "Choose a gene in the top bar or RNA X in the settings."
 		return
+	}
+	gene2 := nameOr(p.geneY, gene)
+	labelA, labelB := p.conditionLabels()
+	measure, normalisation := "records", "library"
+	if p.measure == cmpMeasureSupport {
+		measure = "support"
+	}
+	if p.normalise == cmpNormaliseNone {
+		normalisation = "none"
 	}
 	bin, _ := strconv.Atoi(strings.TrimSuffix(p.quick.bin, " nt"))
 	if bin <= 0 {
@@ -712,12 +804,14 @@ func (p *comparePage) runQuick() {
 	q.busy, q.err, q.data, q.rows, q.row = true, "", nil, nil, -1
 	q.seq++
 	seq := q.seq
-	q.keyA, q.keyB, q.gene, q.idsA, q.idsB = p.keyA, p.keyB, gene, idsA, idsB
+	q.keyA, q.keyB, q.gene, q.gene2, q.idsA, q.idsB = p.keyA, p.keyB, gene, gene2, idsA, idsB
+	q.labelA, q.labelB = labelA, labelB
 	p.mode = cmpModeQuick
 	path := a.Project.Path
 	a.Go(func() func() {
 		raw, err := a.B.Query(path, "compare_bins", core.Obj{"sample_ids_a": idsA, "sample_ids_b": idsB, "gene": gene,
-			"bin_size": bin, "max_cells": quickMaxCells, "orientation": "both", "normalisation": "library"})
+			"gene2": gene2, "bin_size": bin, "max_cells": quickMaxCells, "orientation": "both",
+			"measure": measure, "normalisation": normalisation})
 		var result cmpQuickResult
 		if err == nil {
 			err = model.Decode(raw, &result)
@@ -819,6 +913,39 @@ func (p *comparePage) controls(c *ui.Context) {
 						ui.Select(c.Key("cmp-bin"), &p.quick.bin, quickBins).Width(110).Label("Quick view bin")
 					})
 				})
+				ui.Row(c).Gap(16).Wrap().Children(func() {
+					Field(c, "Condition A label", func() {
+						ui.TextInput(c.Key("cmp-label-a"), &p.labelA).Placeholder(a.SelectionLabel(p.keyA)).Width(200).Label("Condition A label")
+					})
+					Field(c, "Condition B label", func() {
+						ui.TextInput(c.Key("cmp-label-b"), &p.labelB).Placeholder(a.SelectionLabel(p.keyB)).Width(200).Label("Condition B label")
+					})
+					genes := p.geneOptions()
+					rnaX, rnaY := nameOr(p.geneX, cmpEachGene), nameOr(p.geneY, cmpSameAsX)
+					Field(c, "RNA X", func() {
+						ui.Select(c.Key("cmp-rna-x"), &rnaX, append([]string{cmpEachGene}, genes...)).Width(220).Label("RNA X").OnChange(func() {
+							p.geneX = map[bool]string{true: "", false: rnaX}[rnaX == cmpEachGene]
+						})
+					})
+					Field(c, "RNA Y", func() {
+						ui.Select(c.Key("cmp-rna-y"), &rnaY, append([]string{cmpSameAsX}, genes...)).Width(220).Label("RNA Y").OnChange(func() {
+							p.geneY = map[bool]string{true: "", false: rnaY}[rnaY == cmpSameAsX]
+						})
+					})
+				})
+				ui.Row(c).Gap(16).Wrap().Children(func() {
+					Field(c, "Quick view measure", func() {
+						ui.Select(c.Key("cmp-measure"), &p.measure, cmpMeasures).Width(160).Label("Quick view measure")
+					})
+					Field(c, "Quick view normalisation", func() {
+						ui.Select(c.Key("cmp-normalise"), &p.normalise, cmpNormalisations).Width(210).Label("Quick view normalisation")
+					})
+					Field(c, "Similarity panel", func() {
+						ui.Select(c.Key("cmp-sim-panel"), &p.simPanel, cmpSimPanels).Width(280).Label("Similarity panel")
+					})
+				})
+				ui.Text(c, "Labels and RNAs apply to the next test and quick view. With RNA Y set to another RNA the test compares the inter-RNA map: x on RNA X, y on RNA Y, hybrids written Y × X counted with their arms swapped (as the web app). Measure and normalisation change the quick view only: the test always uses raw record counts. The similarity panel is display only: on white, as similarity_heatmap.R, cells at the smallest count barely show; the grey panel shows them.").
+					FontSize(12).TextColor(t.TextMuted)
 				ui.Text(c, "Only the differential test says whether a contact differs: it uses the replicates as the noise estimate and gives a padj per 10-nt cell, so it needs at least two biological replicates per condition. The quick view and the similarity heatmap only describe counts. The test follows hyb2_compare: DESeq2 Wald test (condition one vs two, alpha 0.01, independent filtering); cells with padj below the cutoff are significant, and significant cells within the merge range of a stronger one are merged into it. The similarity heatmap follows plot_similarity_map: each condition's replicates are summed into one map (as if their .hyb files were concatenated), cells below the similarity minimum are dropped from each map, and a cell in both maps shows the smaller count (1 keeps every cell, as hyb2 does).").
 					FontSize(12).TextColor(t.TextMuted)
 			})
@@ -990,8 +1117,12 @@ func (p *comparePage) results(c *ui.Context) {
 		}
 		ui.Column(c).Gap(2).Children(func() {
 			ui.Text(c, ctx.LabelA+" vs "+ctx.LabelB).FontSize(18).Bold()
+			genes := strings.Join(e.Genes, ", ")
+			if ctx.Partner != "" {
+				genes += " × " + ctx.Partner
+			}
 			ui.Text(c, fmt.Sprintf("%s · DESeq2 on %s cells (10 nt) · padj < %g · log2FC = A / B",
-				strings.Join(e.Genes, ", "), FormatNumber(s.CellsTested), cutoff)).FontSize(12).TextColor(t.TextMuted)
+				genes, FormatNumber(s.CellsTested), cutoff)).FontSize(12).TextColor(t.TextMuted)
 		})
 		sizeFactors := make([]string, len(s.SizeFactors))
 		for i, v := range s.SizeFactors {
@@ -1036,8 +1167,16 @@ func (p *comparePage) results(c *ui.Context) {
 					if ui.Button(c, "Export SVG…").Tooltip("Save the significant map as shown").Clicked() {
 						p.exportMapSVG()
 					}
+					if ui.Button(c, "Export PNG…").Tooltip("Save the significant map as shown, as a PNG").Clicked() {
+						p.exportMapPNG()
+					}
+				})
+				ui.Row(c).Gap(8).Children(func() {
 					if ui.Button(c, "Export TSV…").Tooltip("Save all merged interactions as a tab-separated file").Clicked() {
 						p.exportInteractionsTSV()
+					}
+					if ui.Button(c, "Significant cells…").Tooltip("Save every significant 10-nt cell (x, y, log2FoldChange, padj, baseMean)").Clicked() {
+						p.exportSignificantTSV()
 					}
 				})
 			})
@@ -1068,6 +1207,7 @@ func (p *comparePage) results(c *ui.Context) {
 			})
 		})
 	})
+	p.exportsCard(c, e)
 	p.similarityCard(c, e, result, ctx)
 	p.regionsCard(c.Key("cmp-regions"), e, ctx)
 	p.energyCard(c.Key("cmp-energy"), e, ctx)
@@ -1106,10 +1246,16 @@ func (p *comparePage) similarityCard(c *ui.Context, e *comparisonEntry, result *
 			ui.Text(c, fmt.Sprintf("The map shows the %s strongest of %s cells.", FormatNumber(n),
 				FormatNumber(result.Summary.SimilarityCells))).FontSize(12).TextColor(t.TextMuted)
 		}
-		// similarity_heatmap.R draws on white; keep the theme surface in dark mode
-		p.simHeat.Background = ui.Color{}
-		if t.Background.R >= 128 {
+		// similarity_heatmap.R draws on white; keep the theme surface in dark
+		// mode. The grey panel (ggplot's theme_grey, as the web's) shows the
+		// cells at the smallest count.
+		switch {
+		case p.simPanel == cmpPanelGrey:
+			p.simHeat.Background = cmpGrey235
+		case t.Background.R >= 128:
 			p.simHeat.Background = ui.RGB(255, 255, 255)
+		default:
+			p.simHeat.Background = ui.Color{}
 		}
 		p.simHeat.Show(c.Key("cmp-sim-heat"), p.mapSide(), "Similarity heatmap: cells in both groups, green by the smaller count")
 		ui.Row(c).Gap(8).Children(func() {
@@ -1216,6 +1362,9 @@ func (p *comparePage) mapLength(e *comparisonEntry, result *comparisonResult) in
 	length := 0
 	for _, g := range e.Genes {
 		length = cmpMax(length, p.a.Project.GeneLength(g))
+	}
+	if e.Parameters.Gene2 != nil && *e.Parameters.Gene2 != "" {
+		length = cmpMax(length, p.a.Project.GeneLength(*e.Parameters.Gene2))
 	}
 	if length == 0 {
 		length = int(result.Summary.MaxCoordinate) + 10
@@ -1330,7 +1479,13 @@ func (p *comparePage) actionRow(c *ui.Context, target *cmpTarget, ctx cmpContext
 		if ui.Button(c, "Region").Disabled(none).Tooltip("Open both arms in Region").Clicked() && !none {
 			p.locate(*target, ctx, "region")
 		}
-		if ui.Button(c, "Fold A & B").Disabled(none).Tooltip("Fold the window spanning both arms with A's and with B's evidence").Clicked() && !none {
+		// a window fold is on one RNA: not for an inter-RNA cell
+		pair := ctx.Partner != ""
+		tip := "Fold the window spanning both arms with A's and with B's evidence"
+		if pair {
+			tip = "The arms are on two RNAs; a window fold needs both on one"
+		}
+		if ui.Button(c, "Fold A & B").Disabled(none || pair).Tooltip(tip).Clicked() && !none && !pair {
 			p.planFold(*target, ctx)
 		}
 		if none {
@@ -1431,8 +1586,12 @@ func (p *comparePage) quickContext() cmpContext {
 	if q.data != nil && q.data.BinSize > 0 {
 		bin = q.data.BinSize
 	}
-	return cmpContext{KeyA: q.keyA, KeyB: q.keyB, IDsA: q.idsA, IDsB: q.idsB, GeneA: q.gene, GeneB: q.gene,
-		LabelA: p.a.SelectionLabel(q.keyA), LabelB: p.a.SelectionLabel(q.keyB), Bin: bin}
+	ctx := cmpContext{KeyA: q.keyA, KeyB: q.keyB, IDsA: q.idsA, IDsB: q.idsB, GeneA: q.gene, GeneB: q.gene,
+		LabelA: nameOr(q.labelA, p.a.SelectionLabel(q.keyA)), LabelB: nameOr(q.labelB, p.a.SelectionLabel(q.keyB)), Bin: bin}
+	if q.gene2 != "" && q.gene2 != q.gene {
+		ctx.Partner = q.gene2
+	}
+	return ctx
 }
 
 func (p *comparePage) quickView(c *ui.Context) {
@@ -1459,11 +1618,15 @@ func (p *comparePage) quickView(c *ui.Context) {
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Column(c).Gap(2).Grow(1).Children(func() {
 				ui.Text(c, "Quick view · "+ctx.LabelA+" vs "+ctx.LabelB).FontSize(18).Bold()
-				meta := fmt.Sprintf("%s · %d-nt bins · %s cells", q.gene, d.BinSize, FormatNumber(int64(len(d.X))))
+				genes := q.gene
+				if ctx.Partner != "" {
+					genes += " × " + ctx.Partner
+				}
+				meta := fmt.Sprintf("%s · %d-nt bins · %s cells", genes, d.BinSize, FormatNumber(int64(len(d.X))))
 				if d.LibraryA != nil && d.LibraryB != nil {
 					meta += " · libraries " + FormatNumber(int64(*d.LibraryA)) + " / " + FormatNumber(int64(*d.LibraryB))
 				}
-				ui.Text(c, meta+" · mean per million of each group's datasets, log2((A + 1) / (B + 1)) · no statistics; use the differential test for padj").
+				ui.Text(c, meta+" · "+quickValueNote(d)+" · no statistics; use the differential test for padj").
 					FontSize(12).TextColor(t.TextMuted)
 			})
 			if ui.Button(c, "Export TSV…").Tooltip("Save every bin as a tab-separated file").Disabled(len(rows) == 0).Clicked() && len(rows) > 0 {
@@ -1482,14 +1645,18 @@ func (p *comparePage) quickView(c *ui.Context) {
 				}
 				length += d.BinSize
 			}
+			length2 := length // y is on RNA Y for an inter-RNA map
+			if ctx.Partner != "" && d.Length2 > 0 {
+				length2 = d.Length2
+			}
 			// The cells come in the background; until then the map is empty.
-			q.heat.SetCells(nil, float64(length), float64(length))
+			q.heat.SetCells(nil, float64(length), float64(length2))
 			bin, dark, limit := d.BinSize, t.Dark, q.cap
 			p.a.Go(func() func() {
 				cells := cmpQuickCells(rows, bin, dark, limit)
 				return func() {
 					if q.heatKey == heatKey {
-						q.heat.SetCells(cells, float64(length), float64(length))
+						q.heat.SetCells(cells, float64(length), float64(length2))
 					}
 				}
 			})
@@ -1519,8 +1686,12 @@ func (p *comparePage) quickView(c *ui.Context) {
 				if len(rows) == 0 {
 					ui.Text(c, "No bin has hybrids in either group.").TextColor(t.TextMuted)
 				} else {
+					unit := "per M"
+					if d.Normalisation == "none" {
+						unit = "mean"
+					}
 					cols := []ui.TableColumn{{Title: "Arm 1 (nt)", Width: 112}, {Title: "Arm 2 (nt)", Width: 112},
-						{Title: "A per M", Width: 76, Align: ui.End}, {Title: "B per M", Width: 76, Align: ui.End}, {Title: "log2 A/B", Align: ui.End}}
+						{Title: "A " + unit, Width: 76, Align: ui.End}, {Title: "B " + unit, Width: 76, Align: ui.End}, {Title: "log2 A/B", Align: ui.End}}
 					q.table.Selected = &q.row
 					q.table.Key = func(i int) any { return [2]int{rows[i].X, rows[i].Y} }
 					ui.Table(c.Key("quick-table-"+q.rowsKey), &q.table, cols, len(rows), func(i, col int) {
@@ -1554,6 +1725,20 @@ func (p *comparePage) quickView(c *ui.Context) {
 			})
 		})
 	})
+}
+
+// quickValueNote says what the quick view's values are, as the web's
+// comparisonValueDescription and its effect's pseudocount.
+func quickValueNote(d *cmpQuickResult) string {
+	unit := "HYB records"
+	if d.Measure == "support" {
+		unit = "cluster-support units"
+	}
+	pseudo := trimFloat(d.Pseudocount)
+	if d.Normalisation == "none" {
+		return fmt.Sprintf("raw mean %s of each group's datasets, log2((A + %s) / (B + %s))", unit, pseudo, pseudo)
+	}
+	return fmt.Sprintf("mean per million %s of each group's datasets, log2((A + %s) / (B + %s))", unit, pseudo, pseudo)
 }
 
 // cmpQuickCells colours bins by the effect over its cap, as the web's

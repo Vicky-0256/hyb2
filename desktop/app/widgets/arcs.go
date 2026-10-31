@@ -32,6 +32,10 @@ type Arcs struct {
 	Mono ui.Color
 	// Features is a gene track drawn under the arcs (e.g. mature peptides).
 	Features []Feature
+	// Selected is the inspected position (0 for none), drawn as a marker:
+	// a click picks it, Left and Right step it while the diagram has the
+	// keyboard focus (the web's nucleotide inspector).
+	Selected int
 
 	shared map[Pair]bool
 	keyed  struct{ a, b int }
@@ -59,6 +63,26 @@ func (s *Arcs) Set(a, b []Pair, length int) {
 	s.A, s.B, s.Length = a, b, length
 	s.Start, s.End = 1, float64(length)
 	s.shared = nil
+	if s.Selected > length {
+		s.Selected = 0
+	}
+}
+
+// Step moves Selected by delta within the RNA (from the first position
+// shown when none is selected) and pans to keep it in view.
+func (s *Arcs) Step(delta int) {
+	if s.Length < 1 {
+		return
+	}
+	if s.Selected < 1 {
+		s.Selected = max(1, int(math.Ceil(s.Start)))
+	} else {
+		s.Selected = max(1, min(s.Length, s.Selected+delta))
+	}
+	if pos := float64(s.Selected); pos < s.Start || pos > s.End {
+		span := s.End - s.Start
+		s.setRange(pos-span/2, pos+span/2)
+	}
 }
 
 // Shared counts the pairs present in both structures.
@@ -97,7 +121,7 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 	if s.End <= s.Start {
 		s.Start, s.End = 1, math.Max(float64(s.Length), 2)
 	}
-	box := ui.Box(c.Key("arcs")).FillWidth().Height(h).Cursor(ui.CursorCrosshair).Role(ui.RoleImage).Label(label)
+	box := ui.Box(c.Key("arcs")).FillWidth().Height(h).Cursor(ui.CursorCrosshair).Role(ui.RoleImage).Label(label).Focusable()
 	var width float32
 	if b := box.Bounds(); b.W > 0 {
 		width = b.W
@@ -122,6 +146,18 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 	if px, _, over := box.PointerPosition(); over && width > 0 {
 		event.Position = int(math.Round(s.Start + float64(px/width)*(s.End-s.Start)))
 		event.Hover = true
+	}
+	switch {
+	case box.Clicked():
+		if event.Hover {
+			s.Selected = max(1, min(s.Length, event.Position))
+		} else {
+			s.Step(0) // Enter or Space: the first position shown
+		}
+	case box.Shortcut(0, ui.KeyLeft):
+		s.Step(-1)
+	case box.Shortcut(0, ui.KeyRight):
+		s.Step(1)
 	}
 	box.Draw(func(p *ui.Painter, r ui.Rect) {
 		p.Fill(r, t.Surface, 6)
@@ -255,6 +291,11 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 				p.StrokePath(overlay[key], key.width, key.color)
 			}
 			p.Line(r.X, base, r.X+r.W, base, 1, t.Border)
+			if pos := float64(s.Selected); s.Selected > 0 && pos >= s.Start && pos <= s.End {
+				sx := x(s.Selected)
+				p.Line(sx, r.Y+4, sx, r.Y+r.H-22-track, 1, t.Accent.Alpha(0.7))
+				p.Fill(ui.Rect{X: sx - 3, Y: base - 3, W: 6, H: 6}, t.Accent, 3)
+			}
 			// Gene track: alternating blocks with their names where they fit.
 			if track > 0 {
 				y := r.Y + r.H - 22 - trackHeight

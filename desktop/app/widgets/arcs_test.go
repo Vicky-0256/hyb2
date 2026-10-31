@@ -36,3 +36,29 @@ func TestArcsSharedAndRender(t *testing.T) {
 	}
 	snapshot(t, tt, "arcs-zoom")
 }
+
+func TestArcsInspectorStep(t *testing.T) {
+	s := &Arcs{}
+	s.Set(nil, nil, 1000)
+	s.setRange(100, 200)
+	s.Step(1) // nothing selected: the first position shown
+	if s.Selected != 100 {
+		t.Fatalf("selected %d", s.Selected)
+	}
+	s.Selected = 200
+	s.Step(1) // past the view: pans to keep it shown
+	if s.Selected != 201 || s.Start > 201 || s.End < 201 {
+		t.Fatalf("selected %d in %v-%v", s.Selected, s.Start, s.End)
+	}
+	s.Selected = 1
+	s.Step(-1)
+	if s.Selected != 1 {
+		t.Fatalf("below 1: %d", s.Selected)
+	}
+	// a shorter structure drops a selection beyond it
+	s.Selected = 80
+	s.Set(nil, nil, 50)
+	if s.Selected != 0 {
+		t.Fatalf("kept %d", s.Selected)
+	}
+}

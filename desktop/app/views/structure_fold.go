@@ -340,9 +340,9 @@ func stRecordName(r hybridRow) string {
 	return fmt.Sprintf("#%d", r.ID)
 }
 
-// stRecordLabel is a record in the choice list, as the web's
+// stHybridLabel is a record in the choice list, as the web's
 // "id · RNA one–RNA two", with its arms and reads.
-func stRecordLabel(r hybridRow) string {
+func stHybridLabel(r hybridRow) string {
 	return fmt.Sprintf("%s · %s %d–%d / %s %d–%d · %s read%s", stRecordName(r), r.Gene1, r.Start1, r.End1,
 		r.Gene2, r.Start2, r.End2, FormatNumber(int64(r.Reads)), plural(r.Reads))
 }
@@ -598,7 +598,7 @@ func (p *structurePage) recordChoice(c *ui.Context) {
 	rows := map[string]int{}
 	current := labels[0]
 	for i, r := range p.src.records {
-		label := stRecordLabel(r)
+		label := stHybridLabel(r)
 		if _, seen := rows[label]; seen {
 			label += fmt.Sprintf(" (row %d)", r.Index+1)
 		}

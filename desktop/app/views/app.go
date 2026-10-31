@@ -545,7 +545,8 @@ func (a *App) saveRecent() {
 // ---- tasks
 
 var kindLabels = map[string]string{"sample_pipeline": "Pipeline", "analysis_index": "Index", "structure": "Structure",
-	"compare": "Differential test", "energy": "Folding energy", "cplfold": "CPLfold", "validate_project": "Validation", "pipeline": "Pipeline"}
+	"compare": "Differential test", "energy": "Folding energy", "batch_energy": "Binding energies", "cplfold": "CPLfold",
+	"validate_project": "Validation", "pipeline": "Pipeline"}
 
 // TaskLabel names a task in lists and toasts.
 func (a *App) TaskLabel(t model.Task) string {

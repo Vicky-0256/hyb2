@@ -39,6 +39,7 @@ var TaskKinds = []string{
 	"structure",
 	"compare",
 	"energy",
+	"batch_energy",
 }
 
 var activeStates = []string{"queued", "running"}
@@ -360,6 +361,9 @@ func DefaultClaim(kind string, budget Budget) Budget {
 		claim = Budget{budget.CPU, 3072}
 	case "energy":
 		claim = Budget{1, 1024}
+	case "batch_energy":
+		// one cofold per worker process; CPLcofold folds of at most 500 nt
+		claim = Budget{budget.CPU, 2048}
 	default:
 		claim = Budget{1, 256}
 	}
@@ -374,7 +378,7 @@ func clampClaim(claim, budget Budget) Budget {
 // cpus), replaced by explicit cpu / mem_mb, which must fit inside the budget.
 func ClaimFor(request TaskStartRequest, budget Budget) (Budget, error) {
 	claim := DefaultClaim(request.Kind, budget)
-	if request.Kind == "structure" && request.Workers != nil {
+	if (request.Kind == "structure" || request.Kind == "batch_energy") && request.Workers != nil {
 		claim.CPU = min(max(*request.Workers, 1), max(budget.CPU, 1))
 	}
 	if request.CPU != nil {
@@ -421,6 +425,8 @@ func idPrefix(kind string) string {
 		return "compare-"
 	case "energy":
 		return "energy-"
+	case "batch_energy":
+		return "batch-energy-"
 	}
 	return ""
 }
@@ -1370,6 +1376,29 @@ func energyPayload(request TaskStartRequest, project, id, runDir string) (Obj, e
 	}, nil
 }
 
+func batchEnergyPayload(request TaskStartRequest, project, id, runDir string, claim Budget) (Obj, error) {
+	sample, err := required(request.SampleID, "batch_energy sample_id is required")
+	if err != nil {
+		return nil, err
+	}
+	if err := validateSampleID(sample); err != nil {
+		return nil, err
+	}
+	parameters, err := objectParameters(request)
+	if err != nil {
+		return nil, err
+	}
+	// Never more workers than the cpus granted to the task.
+	workers := claim.CPU
+	if request.Workers != nil {
+		workers = min(*request.Workers, claim.CPU)
+	}
+	return Obj{
+		"operation": "batch_energy_run", "project_path": project, "sample_id": sample,
+		"parameters": parameters, "workers": max(workers, 1), "task_id": id, "run_dir": runDir,
+	}, nil
+}
+
 // TaskPayload builds the allowlisted child request for request.Kind.
 func TaskPayload(request TaskStartRequest, project, id, runDir string, claim Budget) (Obj, error) {
 	switch request.Kind {
@@ -1415,6 +1444,8 @@ func TaskPayload(request TaskStartRequest, project, id, runDir string, claim Bud
 		return comparePayload(request, project, id, runDir)
 	case "energy":
 		return energyPayload(request, project, id, runDir)
+	case "batch_energy":
+		return batchEnergyPayload(request, project, id, runDir, claim)
 	}
 	return nil, errors.New(unsupportedKind)
 }

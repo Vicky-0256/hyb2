@@ -92,7 +92,12 @@ task drawer and Preferences.
    inputs. A new project can name its data folder on the start page.
 2. **QC**: per-sample and merged counts.
 3. **Explore**: contact map, interactions, viewpoint and region, from the
-   per-sample SQLite indexes.
+   per-sample SQLite indexes.  *Binding energies* is the web's HYB batch
+   tool: a `batch_energy` task recalculates column 3 of one sample's .hyb
+   (all records, or those matching the Interactions filters) with
+   RNAcofold, CPLcofold or CPLcofold with pseudoknots (the web batch's
+   settings) and writes `energies.hyb`, `audit.tsv`, `parameters.json`
+   and a ZIP of the three to its run folder (`runtime/batch_energy.py`).
 4. **Compare**: the DESeq2 differential test (numpy port, validated against
    R), hyb2's similarity heatmap of the two groups (bin/plot_similarity_map
    on each group's merged map; identical to the CLI on the ZIKV ZAFR vs ZILM
@@ -125,7 +130,13 @@ task drawer and Preferences.
    structures in one colour, and the reference's gene annotation (GenBank,
    GFF/GTF, BED or TSV, attached with "Gene annotation…") is drawn as a
    track; a GenBank file's own sequence is aligned to the reference first.
-6. **Report**: the project summary and its HTML export.
+6. **Report**: the project summary, its HTML export and Save PDF (that
+   file printed, A4), and the web's two result packages (For AI, For
+   further analysis).  As on the web, the researcher can state the purpose
+   of the analysis, untick steps for a selected-results report (every
+   export then leaves them out and says so), leave files out of a package
+   (listed in README.md and manifest.json) and copy the AI summary
+   (report.md).
 
 ## Checks
 

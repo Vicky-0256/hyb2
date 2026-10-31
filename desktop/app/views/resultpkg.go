@@ -136,6 +136,10 @@ type rpRecord struct {
 	Limitations []string
 	Literature  map[string]any
 	catalog     rpCatalog
+	// exclude are the paths the researcher leaves out of a package;
+	// omitted those files() left out (resultpkg_select.go).
+	exclude map[string]bool
+	omitted []string
 }
 
 func strPtr(s string) *string { return &s }
@@ -843,7 +847,7 @@ func (r *rpRecord) reportMarkdown() string {
 	w("# HYB2 analysis report")
 	w("")
 	w("- Scope: **%s**. %s", r.Scope["label"], r.Scope["description"])
-	w("- Purpose: not stated by the researcher.")
+	w("- Purpose: %s", r.purposeLine())
 	w("- Generated: %s by %s %s, locally on this computer.", r.GeneratedAt, r.Application["name"], r.Application["version"])
 	w("- Run: `%s` (changes when %s change).", r.Run["id"], r.Run["basis"])
 	w("- Schema: `%s`. Ids: S = step, R = result, T = table, F = figure, E = external source, W = warning, I = input.", r.Schema)
@@ -978,6 +982,10 @@ func (r *rpRecord) readme(audience string, files []rpFile) string {
 	w("%s from %s %s, generated %s.", what, r.Application["name"], r.Application["version"], r.GeneratedAt)
 	w("")
 	w("Scope: **%s**: %s", r.Scope["label"], r.Scope["description"])
+	if r.selected() {
+		w("")
+		w("**This is a selected-results package, not the whole project.**")
+	}
 	w("")
 	w("## Reading order")
 	w("")
@@ -1023,6 +1031,14 @@ func (r *rpRecord) readme(audience string, files []rpFile) string {
 		w("- `%s`: %s", f.Path, f.Description)
 	}
 	w("- `manifest.json`: file list with sizes and SHA-256.")
+	if len(r.omitted) > 0 {
+		w("")
+		w("## Left out by the researcher")
+		w("")
+		for _, path := range r.omitted {
+			w("- `%s`", path)
+		}
+	}
 	w("")
 	return b.String()
 }
@@ -1031,11 +1047,14 @@ func (r *rpRecord) readme(audience string, files []rpFile) string {
 // the manifest.
 func (r *rpRecord) files(audience string) []rpFile {
 	var out []rpFile
-	var tables []*rpTable
+	var tables, all []*rpTable
 	for _, t := range r.Tables {
 		for _, a := range t.Audience {
 			if a == audience {
-				tables = append(tables, t)
+				all = append(all, t)
+				if !r.leftOut(t.File) {
+					tables = append(tables, t)
+				}
 			}
 		}
 	}
@@ -1073,6 +1092,7 @@ func (r *rpRecord) files(audience string) []rpFile {
 			}
 		}
 	}
+	out = r.keepFiles(out, all)
 	return append([]rpFile{{"README.md", "text/markdown", r.readme(audience, out), "What the package contains, reading order, conventions, what is excluded."}}, out...)
 }
 
@@ -1085,7 +1105,7 @@ func (r *rpRecord) zip(audience string, now time.Time) ([]byte, error) {
 		entries = append(entries, map[string]any{"path": f.Path, "mediaType": f.MediaType, "bytes": len(f.Text), "sha256": hex.EncodeToString(sum[:]), "description": f.Description})
 	}
 	manifest := map[string]any{"schema": r.Schema, "run": r.Run, "generatedAt": r.GeneratedAt, "application": r.Application, "scope": r.Scope,
-		"files": entries, "leftOutByResearcher": []string{}, "note": "sha256 of each file's bytes."}
+		"files": entries, "leftOutByResearcher": nonNil(r.omitted), "note": "sha256 of each file's bytes."}
 	files = append(files, rpFile{"manifest.json", "application/json", rpJSON(manifest), "File list with sizes and SHA-256."})
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)

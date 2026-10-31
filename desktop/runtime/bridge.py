@@ -591,6 +591,10 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         # RNAcofold energies of a test's enriched interactions (desktop/runtime/energy.py).
         from .energy import energy_run
         return energy_run(request)
+    if operation == "batch_energy_run":
+        # Column 3 (binding energy) of a sample's .hyb, recalculated (desktop/runtime/batch_energy.py).
+        from .batch_energy import batch_energy_run
+        return batch_energy_run(request, repo_root)
     sample_result = _sample_ops(str(operation), request, repo_root)
     if sample_result is not None:
         return sample_result

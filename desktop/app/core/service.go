@@ -70,6 +70,9 @@ var ProjectOperations = []string{
 	// Files a project links outside its folder (desktop/runtime/trust.py).
 	"list_untrusted_links",
 	"trust_links",
+	// The bundled example data set, copied into an empty project
+	// (desktop/runtime/example.py).
+	"add_example_data",
 }
 
 // ServiceOptions configures a Service.

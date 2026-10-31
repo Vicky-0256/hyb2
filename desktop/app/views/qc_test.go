@@ -199,3 +199,38 @@ func TestQCOverviewShowsLoadError(t *testing.T) {
 		t.Fatal("Retry did not reload the overview")
 	}
 }
+
+// The Import check lists the invalid rows the indexes kept and exports
+// the web's validation report.
+func TestQCImportCheck(t *testing.T) {
+	a, _ := qcOpen(t, nil, true)
+	a.Navigate("qc", nil)
+	tt := ui.NewTester(a.View, 1100, 2000)
+	waitFlush(a)
+	tt.Frame()
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Import check", "Valid records", "Skipped comment and blank lines", "Invalid records",
+		"2 invalid rows were skipped. The files remain usable with their valid records.",
+		"invalid RNA coordinates", "SUB_REP1", "AFR_REP1", "Download validation report…")
+	if tt.HasText("additional invalid-row details were omitted") {
+		t.Fatalf("no details were omitted: %q", tt.Texts())
+	}
+	snapshot(t, tt, "qc-import-check")
+	name, text := exportClick(t, a, tt, "Download validation report…")
+	want := `"line","error","content","sample"` + "\n" +
+		`"12","expected at least 15 tab-separated columns, got 3","bad` + "\trow\there" + `","SUB_REP1"` + "\n" +
+		`"40","invalid RNA coordinates","x_1` + "\tAC\t1\t2\tZIKV\t0\t0" + `","AFR_REP1"`
+	if name != "SUB_hyb2-validation-report.csv" || text != want {
+		t.Fatalf("%s:\n%s", name, text)
+	}
+
+	// Details beyond the bounded sample: the web's error-sample wording.
+	qcFor(a).ov.data.OmittedErrors = 5
+	tt.Frame()
+	dataExpect(t, tt, "The downloadable error sample contains the first 2 invalid rows; 5 additional invalid-row details were omitted",
+		"Download error sample…")
+	if got := string(ovValidationCSV(nil, nil)); got != `"line","error","content","sample"` {
+		t.Fatalf("empty report %q", got)
+	}
+}

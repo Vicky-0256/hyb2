@@ -13,15 +13,16 @@ import (
 )
 
 type startState struct {
-	openPath   string
-	pasteOpen  bool // the "paste a path" section of Open is expanded
-	newParent  string
-	newName    string
-	dataFolder string // optional raw data folder to import after creating
-	status     string
-	creating   bool
-	runtimeErr string
-	runtime    string
+	openPath    string
+	pasteOpen   bool // the "paste a path" section of Open is expanded
+	exampleOpen bool // "What the example contains" is expanded
+	newParent   string
+	newName     string
+	dataFolder  string // optional raw data folder to import after creating
+	status      string
+	creating    bool
+	runtimeErr  string
+	runtime     string
 	// preparing: the bundled runtime is being unpacked (first launch);
 	// creating or opening a project waits for it.
 	preparing bool
@@ -286,6 +287,7 @@ func (a *App) startView(c *ui.Context) {
 					})
 				}
 			})
+			a.exampleStrip(c)
 			if s.runtime != "" {
 				ui.Text(c, s.runtime).FontSize(12).TextColor(t.TextMuted)
 			}
@@ -317,6 +319,59 @@ func (a *App) create(path, name string) {
 				a.pendingFolder, a.start.dataFolder = a.start.dataFolder, ""
 				a.Page = "data"
 			}
+			a.Open(path)
+		}
+	})
+}
+
+// ExampleProjectName names the example project (and its folder).
+const ExampleProjectName = "ZIKV virion example"
+
+// exampleSummary is the web's "What the example contains"
+// (web/app.js renderExampleStrip), for the desktop.
+const exampleSummary = "ZIKV virion RNA of the African lineage (ZAFR, replicates 1 and 2) and the Asian lineage " +
+	"(ZASI = ZILM, French Polynesian isolate, replicates 2 and 3): every 10th record of each replicate .hyb " +
+	"(133,457 records, 6.9 MB compressed), each on its own genome, with the NC_035889 gene track. " +
+	"The files are copied into a new project; Run all pending on the Data page indexes them, then QC, Explore, " +
+	"Compare and Structure work as with your own data. Because the data are a subset, the results reproduce the method, not the published numbers."
+
+// exampleStrip is the web's "Try example": a new project with the bundled
+// ZIKV example data set.
+func (a *App) exampleStrip(c *ui.Context) {
+	t := c.Theme()
+	s := &a.start
+	card(c, "", func() {
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Text(c, "No data yet? Try the ZIKV virion example, ZAFR vs ZASI.").Grow(1).Shrink(1).MinWidth(0)
+			if ui.Button(c, "Try example").Tooltip("Create a project with the example data in the folder under Save in").
+				Disabled(s.creating || s.preparing || s.newParent == "").Clicked() {
+				a.createExample(newProjectPath(s.newParent, ExampleProjectName))
+			}
+		})
+		ui.Collapsible(c.Key("start-example"), "What the example contains", &s.exampleOpen, func() {
+			ui.Text(c, "1-in-10 subset · 4 replicates").FontSize(12).Bold().TextColor(t.Accent)
+			ui.Text(c, exampleSummary).FontSize(12).TextColor(t.TextMuted)
+		})
+	})
+}
+
+// createExample makes a project at path and copies the example data set
+// into it (add_example_data), then opens its Data page.
+func (a *App) createExample(path string) {
+	a.start.creating = true
+	a.start.status = "Creating the example project " + path + "…"
+	a.Go(func() func() {
+		_, err := a.B.CreateProject(path, ExampleProjectName, "The example data set bundled with HYB2 Desktop.")
+		if err == nil {
+			_, err = a.B.ProjectOp(path, "add_example_data", nil)
+		}
+		return func() {
+			a.start.creating = false
+			if err != nil {
+				a.start.status = fmt.Sprintf("Could not create the example project: %v", err)
+				return
+			}
+			a.Page = "data"
 			a.Open(path)
 		}
 	})

@@ -10,7 +10,7 @@ import (
 )
 
 func TestProjectOpAllowlist(t *testing.T) {
-	if len(ProjectOperations) != 24 {
+	if len(ProjectOperations) != 25 {
 		t.Fatalf("%d project operations", len(ProjectOperations))
 	}
 	for _, operation := range ProjectOperations {

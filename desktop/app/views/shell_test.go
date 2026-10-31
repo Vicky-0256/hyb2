@@ -87,6 +87,38 @@ func TestStartPageCreatesProjectFolder(t *testing.T) {
 	}
 }
 
+// "Try example" creates a project with the bundled example data set and
+// opens its Data page; a failure is reported on the start page.
+func TestStartPageCreatesExample(t *testing.T) {
+	f := newFake(t)
+	a := New(f, nil, t.TempDir())
+	parent := t.TempDir()
+	a.start.newParent = parent
+	tt := ui.NewTester(a.View, 1100, 900)
+	dataExpect(t, tt, "No data yet? Try the ZIKV virion example, ZAFR vs ZASI.", "What the example contains")
+	if err := tt.Click("Try example"); err != nil {
+		t.Fatal(err)
+	}
+	waitFlush(a)
+	tt.Frame()
+	if !tt.HasText("Could not create the example project: unsupported project operation add_example_data") || a.Project != nil {
+		t.Fatalf("texts %q calls %v", tt.Texts(), f.calls)
+	}
+
+	f.ops["add_example_data"] = map[string]any{"ok": true, "samples": []any{1, 2, 3, 4}}
+	if err := tt.Click("Try example"); err != nil {
+		t.Fatal(err)
+	}
+	waitFlush(a)
+	waitFlush(a)
+	tt.Frame()
+	path := filepath.Join(parent, ExampleProjectName+ProjectSuffix)
+	got := strings.Join(f.calls, ",")
+	if !strings.Contains(got, "create:"+ExampleProjectName+",op:add_example_data,open:"+path) || a.Page != "data" {
+		t.Fatalf("page %q calls %s", a.Page, got)
+	}
+}
+
 // While the bundled runtime unpacks on first launch, creating or opening
 // a project would only fail with "still being prepared": the start page
 // says it is getting ready and waits.

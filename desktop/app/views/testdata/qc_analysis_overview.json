@@ -114,6 +114,23 @@
     "records": 2,
     "support": 2
    }
-  ]
+  ],
+  "errors": [
+   {
+    "line": 12,
+    "error": "expected at least 15 tab-separated columns, got 3",
+    "content": "bad\trow\there",
+    "index": 0,
+    "sample_id": "SUB_REP1"
+   },
+   {
+    "line": 40,
+    "error": "invalid RNA coordinates",
+    "content": "x_1\tAC\t1\t2\tZIKV\t0\t0",
+    "index": 1,
+    "sample_id": "AFR_REP1"
+   }
+  ],
+  "omitted_errors": 0
  }
 }

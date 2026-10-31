@@ -45,7 +45,9 @@ from . import hybfile
 FORMAT = "hyb2analysis-index"
 VERSION = 1
 _BATCH = 100_000
-_ERROR_SAMPLES = 20
+# Invalid lines kept with their reason (the web parser's ERROR_SAMPLE_LIMIT);
+# the invalid count itself is always complete.
+_ERROR_SAMPLES = 100
 
 PathLike = Union[str, "os.PathLike[str]"]
 

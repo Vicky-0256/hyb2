@@ -271,6 +271,11 @@ def _sample_ops_inner(operation: str, request: dict[str, Any], repo_root: Path |
         result = _samples.add_reference(path, Path(source) if source else None, input_id=request.get("input_id"),
                                         label=str(request.get("label") or ""), mode=str(request.get("mode") or "linked"))
         return {"ok": True, "path": str(path), **result}
+    if operation == "add_example_data":
+        # The web's "Try example": the bundled ZIKV data set, copied into an empty project.
+        from .example import add_example_data
+        path = _valid_project(request)
+        return {"ok": True, "path": str(path), **add_example_data(path, Path(repo_root or Path(__file__).resolve().parents[2]))}
     if operation == "read_reference_sequence":
         path = _valid_project(request)
         result = _samples.read_reference_sequence(path, str(request.get("reference_id") or ""), str(request.get("name") or ""))
@@ -841,6 +846,11 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
         result = query.summary(paths, lengths=lengths, pairs=with_pairs)
     elif operation == "analysis_overview":
         result = query.overview(paths, limit=opt_int("limit", None))
+        # The Import check names the sample each invalid line came from.
+        for error in result.get("errors") or []:
+            position = error.get("index")
+            if isinstance(position, int) and 0 <= position < len(sample_ids):
+                error["sample_id"] = sample_ids[position]
     elif operation == "analysis_contact_bins":
         result = query.contact_bins(paths, required_gene(), opt_int("bin_size", 10), request.get("region"), gene2=opt_str("gene2"),
                                     types=opt_types(), measure=opt_str("measure") or "records",

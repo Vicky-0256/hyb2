@@ -231,6 +231,7 @@ func (p *qcPage) page(c *ui.Context, ready []string) {
 				}
 			})
 		}).MinWidth(0)
+		p.importCheck(c)
 	})
 }
 

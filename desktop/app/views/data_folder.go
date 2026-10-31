@@ -172,11 +172,12 @@ func (d *dataFolderDialog) summary() string {
 }
 
 // withoutReference counts the included rows of reads with no reference
-// (a .hyb file is already mapped and needs none).
+// (a .hyb or .hyb.gz file is already mapped and needs none).
 func (d *dataFolderDialog) withoutReference() int {
 	n := 0
 	for _, r := range d.rows {
-		if r.include && r.reference == dataNoReference && !strings.HasSuffix(strings.ToLower(r.path), ".hyb") {
+		lower := strings.ToLower(r.path)
+		if r.include && r.reference == dataNoReference && !strings.HasSuffix(lower, ".hyb") && !strings.HasSuffix(lower, ".hyb.gz") {
 			n++
 		}
 	}

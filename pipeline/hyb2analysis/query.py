@@ -262,6 +262,9 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
     count), ``overlap_total, overlap_records``. Both lists are sorted by
     support, then name, and cut to ``limit`` when given; ``unique_rnas`` and
     ``unique_pairs`` count them all.
+    ``errors[]`` are the invalid lines each index kept, ``{line, error,
+    content, index}`` (``index``: position in ``indexes``); ``omitted_errors``
+    counts the invalid lines without such a detail.
     """
     if limit is not None and limit < 0:
         raise ValueError("limit must be zero or more")
@@ -280,7 +283,8 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
     totals = dict.fromkeys(("records", "support", "reads", "read_records", "with_dg", "overlap_records",
                             "homodimer_records", "homodimer_reads", "intra_records", "inter_records",
                             "invalid", "skipped"), 0)
-    for index in _indexes(indexes):
+    errors: List[Dict[str, Any]] = []
+    for position, index in enumerate(_indexes(indexes)):
         support = "support" if index.has_support else "1"
         rows = index.con.execute(
             "SELECT g1, g2, count(*), sum(%s), sum(reads), sum(reads > 0), sum(overlap), count(overlap), count(dg),"
@@ -308,6 +312,7 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
             entry[1] += sup
         totals["invalid"] += int(index.meta.get("invalid", 0))
         totals["skipped"] += int(index.meta.get("skipped", 0))
+        errors.extend(dict(error, index=position) for error in index.meta.get("errors", []))
 
     def number(value: float) -> Any:
         return int(value) if float(value).is_integer() else value
@@ -324,7 +329,8 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
                      lambda pair: {"gene1": pair[0], "gene2": pair[1]})
     type_rows = sorted(({"name": name, "records": r, "support": s} for name, (r, s) in types.items()),
                        key=lambda r: (-r["records"],) + name_key(r["name"]))
-    return dict(totals, unique_rnas=len(rnas), unique_pairs=len(pairs), rnas=rna_rows, pairs=pair_rows, types=type_rows)
+    return dict(totals, unique_rnas=len(rnas), unique_pairs=len(pairs), rnas=rna_rows, pairs=pair_rows, types=type_rows,
+                errors=errors, omitted_errors=max(0, totals["invalid"] - len(errors)))
 
 
 # --------------------------------------------------------------------------

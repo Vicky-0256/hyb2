@@ -61,6 +61,18 @@ same(rp.runs([]), []);
   loop.forEach(function (i) { assert.ok(Math.abs(Math.hypot(xy.x[i] - cx, xy.y[i] - cy) - 1) < 1e-9, "hexagon hairpin"); });
   const open = rp.simpleLayout("..........");
   assert.equal(open.x.length, 10);
+  // ViennaRNA 2.7.2 simple_xy_coordinates, shifted to start at (0, 0) and
+  // divided by its 15-unit step; ViennaRNA works in single precision
+  const vienna = {
+    "..((...))..": [[0.0000, 0.0000], [1.0000, 0.0000], [1.7660, 0.6428], [2.7509, 0.4691], [3.6338, -0.0003], [4.3531, 0.6943], [3.9148, 1.5931], [2.9245, 1.4539], [1.9397, 1.6276], [1.4397, 2.4936], [0.5000, 2.8356]],
+    "..........": [[0.0000, 0.0000], [1.0000, 0.0000], [1.8855, 0.4647], [2.4535, 1.2877], [2.5741, 2.2804], [2.2195, 3.2154], [1.4709, 3.8786], [0.5000, 4.1179], [-0.4709, 3.8786], [-1.2195, 3.2154]]
+  };
+  Object.keys(vienna).forEach(function (dbn) {
+    const got = rp.simpleLayout(dbn);
+    vienna[dbn].forEach(function (p, i) {
+      assert.ok(Math.hypot(got.x[i] - p[0], got.y[i] - p[1]) < 1e-3, "ViennaRNA simple layout " + dbn + " base " + (i + 1));
+    });
+  });
 }
 
 // ---- window summary

@@ -262,7 +262,10 @@
         begin = remember[v];
       }
     }
-    loop(0, n + 1);
+    // ViennaRNA 2.x (plotting/layouts.c, coords_simple) starts the exterior
+    // loop at (0, n); the 1.8 call (0, n + 1) adds a vertex and bends the
+    // exterior loop so far that large structures cross themselves.
+    loop(0, n);
     const x = new Float64Array(n);
     const y = new Float64Array(n);
     let alpha = 0;

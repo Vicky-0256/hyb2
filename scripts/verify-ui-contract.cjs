@@ -159,6 +159,48 @@ const contactSvg = context.window.Hyb2UI.buildContactSvg(contactExportState);
   }
 }
 
+// Contact Map display settings (scale, colour cap) keep the map and the zoom;
+// data settings rebuild it.
+for (const [key, value] of [["scale", "log"], ["colourCap", "max"], ["customCap", "7"]]) {
+  const display = JSON.parse(JSON.stringify(contactExportState));
+  const matrix = display.contact.matrix;
+  const view = display.contact.overviewView;
+  let renders = 0;
+  context.window.Hyb2UI.handleChange(display, { dataset: { feature: "contact-control", key: key }, value: value }, { render: function () { renders++; } });
+  assert.equal(renders, 1, key + " redraws once");
+  assert.equal(display.contact.matrix, matrix, key + " keeps the binned map");
+  assert.equal(display.contact.overviewView, view, key + " keeps the zoom");
+  assert.equal(display.contact[key], value);
+}
+{
+  const data = JSON.parse(JSON.stringify(contactExportState));
+  context.window.Hyb2UI.handleChange(data, { dataset: { feature: "contact-control", key: "binSize" }, value: "25" }, { render: function () {} });
+  assert.ok(data.contact.matrixStale || data.contact.matrix === null, "a data setting rebuilds the map");
+}
+
+// Contact Map colour styles: every style but the theme-following "colour"
+// is the same in both themes and prints on its own paper.
+{
+  const palettes = context.window.Hyb2UI.contactPalettes;
+  assert.ok(palettes.length >= 8, "the Contact Map offers several colour styles");
+  for (const palette of palettes) {
+    const ui = context.window.Hyb2UI;
+    if (palette.value !== "colour") {
+      assert.equal(ui.viridis(0.37, "light", palette.value), ui.viridis(0.37, "dark", palette.value), palette.value + " ignores the page theme");
+    }
+    assert.notEqual(ui.viridis(0, "light", palette.value), ui.viridis(1, "light", palette.value), palette.value + " spans a range");
+  }
+  assert.equal(context.window.Hyb2UI.viridis(0, "light", "reds"), "rgb(255, 255, 255)", "White–red starts white");
+  assert.equal(context.window.Hyb2UI.viridis(0, "light", "greys-inverted"), "rgb(0, 0, 0)", "inverted greys start black");
+  assert.equal(context.window.Hyb2UI.viridis(1, "light", "greys-inverted"), "rgb(255, 255, 255)");
+  const inverted = JSON.parse(JSON.stringify(contactExportState));
+  inverted.contact.palette = "greys-inverted";
+  assert.match(context.window.Hyb2UI.buildContactSvg(inverted), /<rect width="100%" height="100%" fill="#000000"/, "inverted greys export on black paper");
+  const reds = JSON.parse(JSON.stringify(contactExportState));
+  reds.contact.palette = "reds";
+  assert.match(context.window.Hyb2UI.buildContactSvg(reds), /<rect width="100%" height="100%" fill="#ffffff"/, "White–red exports on white paper");
+}
+
 assert.match(contactSvg, />120<\/text>/, "Contact SVG must label the top Y coordinate");
 assert.match(contactSvg, />159<\/text>/, "Contact SVG must label the bottom Y coordinate");
 assert.match(contactSvg, />RNA_A position \(nt\)<\/text>/, "Contact SVG must title the X axis");
@@ -268,9 +310,10 @@ assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 208, 193)", "t
     getImageData: function (x, y, w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
     putImageData: function (image, x, y) { put = { image: image, x: x, y: y }; }
   };
-  const geometry = { left: 0, top: 0, plotWidth: 10, plotHeight: 5, cellWidth: 0.5, cellHeight: 0.5, xStart: 0, yStart: 0 };
-  // cells are drawn 0.9 css px (1.8 device px) wide, so they overlap as with fillRect
-  const cells = [{ x: 0, y: 0, c: "rgb(1, 2, 3)" }, { x: 0, y: 0, c: "rgb(7, 8, 9)" }, { x: 10, y: 0, c: "rgb(4, 5, 6)" }];
+  const geometry = { left: 0, top: 0, plotWidth: 10, plotHeight: 5, cellWidth: 0.5, cellHeight: 0.5, xStart: 0, yStart: 0, yEnd: 10 };
+  // cells are drawn 0.9 css px (1.8 device px) wide, so they overlap as with fillRect;
+  // y grows upwards, so the top row holds the largest y
+  const cells = [{ x: 0, y: 10, c: "rgb(1, 2, 3)" }, { x: 0, y: 10, c: "rgb(7, 8, 9)" }, { x: 10, y: 10, c: "rgb(4, 5, 6)" }, { x: 0, y: 0, c: "rgb(10, 11, 12)" }];
   context.window.Hyb2UI.rasterComparisonCells(fake, { width: 10, height: 5 }, geometry, { binSize: 10 }, cells, 0.9, 0.9,
     function (cell) { return cell.c; });
   assert.ok(put && put.x === 0 && put.y === 0, "the plot area is written back");
@@ -278,6 +321,7 @@ assert.equal(context.window.Hyb2UI.conservedColor(0.5), "rgb(153, 208, 193)", "t
   assert.deepEqual(Array.from(px.slice(0, 4)), [7, 8, 9, 255], "the later cell wins its pixel");
   assert.deepEqual(Array.from(px.slice(4, 8)), [4, 5, 6, 255], "the next cell starts at its own device pixel");
   assert.deepEqual(Array.from(px.slice(12, 16)), [0, 0, 0, 0], "beyond the last cell nothing is written");
+  assert.deepEqual(Array.from(px.slice(80, 84)), [10, 11, 12, 255], "the bin at y = 0 sits one row below y = 10");
   void buffer;
 }
 {
@@ -443,11 +487,12 @@ assert.equal(context.window.Hyb2UI.moveComparisonSelection(comparisonState, "eff
 assert.equal(comparisonState.comparison.selection.x, 20);
 assert.equal(comparisonState.comparison.selection.y, 0);
 assert.equal(comparisonState.comparison.activeMap, "effect");
-assert.equal(context.window.Hyb2UI.moveComparisonSelection(comparisonState, "effect", "ArrowDown"), true);
+// y grows upwards on the maps: ArrowUp moves to a larger y
+assert.equal(context.window.Hyb2UI.moveComparisonSelection(comparisonState, "effect", "ArrowUp"), true);
 assert.equal(comparisonState.comparison.selection.x, 20);
 assert.equal(comparisonState.comparison.selection.y, 20);
 comparisonState.comparison.selection = null;
-assert.equal(context.window.Hyb2UI.moveComparisonSelection(comparisonState, "conserved", "ArrowDown"), true);
+assert.equal(context.window.Hyb2UI.moveComparisonSelection(comparisonState, "conserved", "ArrowUp"), true);
 assert.equal(comparisonState.comparison.selection.x, 20);
 assert.equal(comparisonState.comparison.selection.y, 20);
 assert.equal(comparisonState.comparison.activeMap, "conserved");

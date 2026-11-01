@@ -83,6 +83,12 @@ async function main() {
   assert.ok(r.candidates.every(c=>c.weight>=0 && c.pairs.length && Number.isFinite(c.energy)));
   assert.equal(r.dotBracket,r.candidates[0].dotBracket);
   assert.ok(r.ensemble.testedEnsembles>0);
+  // IRIS results carry RNAcofold evidence so the drawing is coloured by COMRADES support.
+  assert.equal(r.comradesEvidence.inputRecords,2);
+  assert.ok(Array.isArray(r.comradesEvidence.pairs)&&r.comradesEvidence.pairs.every(p=>p.one>=1&&p.two<=request.sequence.length&&p.count>=1));
+  const scored=await waitForTerminal(worker,[],{type:"comrades-evidence",sequence:request.sequence,evidenceArms:request.evidenceArms});
+  assert.equal(scored.type,"complete",scored.message);
+  assert.deepEqual(scored.evidence.pairs,r.comradesEvidence.pairs);
   fs.writeFileSync("/tmp/hyb2-iris-test-result.json",JSON.stringify({...r,sequence:request.sequence,label:"Synthetic IRIS test",rawHybArms:request.evidenceArms},null,2));
   console.log("iris-worker: ok",JSON.stringify(r.ensemble));
   for (const invalid of [{evidenceArms:[]},{sequence:"A".repeat(301)},{parameters:{K:4}},{parameters:{C:51}},{parameters:{fraction:1}}]) {

@@ -1,0 +1,279 @@
+{
+  "cases": [
+    {
+      "assertion_policy": "Require valid finite predictions and independent energy rescoring. The recorded energies/structures are observations only; do not require the implementations to remain different after future search improvements.",
+      "beams": [
+        0,
+        1,
+        20,
+        100
+      ],
+      "biological_provenance_verified": false,
+      "category": "diagnostic",
+      "id": "au_homopolymers_20_24",
+      "observations": [
+        {
+          "beam": 0,
+          "compared_sequence": "AAAAAAAAAAAAAAAAAAAA&UUUUUUUUUUUUUUUUUUUUUUUU",
+          "energy": -12.300000000000002,
+          "prediction_rescored_energy": -12.300000000000002,
+          "prediction_scoring_equal": true,
+          "reference_energy": -12.3,
+          "reference_rescored_energy": -12.300000000000002,
+          "reference_scoring_equal": true,
+          "reference_structure": "((((((((((((((((((((&.))))))))))))))))))))...",
+          "search_scoring_equal": true,
+          "status": "identical",
+          "structure": "((((((((((((((((((((&.))))))))))))))))))))..."
+        },
+        {
+          "beam": 1,
+          "compared_sequence": "AAAAAAAAAAAAAAAAAAAA&UUUUUUUUUUUUUUUUUUUUUUUU",
+          "energy": 0.0,
+          "prediction_rescored_energy": 0.0,
+          "prediction_scoring_equal": true,
+          "reference_energy": -12.0,
+          "reference_rescored_energy": -12.000000000000002,
+          "reference_scoring_equal": true,
+          "reference_structure": "(((((((((((((((((((.&))))))))))))))))))).....",
+          "search_scoring_equal": true,
+          "status": "energy_difference",
+          "structure": "....................&........................"
+        },
+        {
+          "beam": 20,
+          "compared_sequence": "AAAAAAAAAAAAAAAAAAAA&UUUUUUUUUUUUUUUUUUUUUUUU",
+          "energy": -12.300000000000002,
+          "prediction_rescored_energy": -12.300000000000002,
+          "prediction_scoring_equal": true,
+          "reference_energy": -12.3,
+          "reference_rescored_energy": -12.300000000000002,
+          "reference_scoring_equal": true,
+          "reference_structure": "((((((((((((((((((((&.))))))))))))))))))))...",
+          "search_scoring_equal": true,
+          "status": "identical",
+          "structure": "((((((((((((((((((((&.))))))))))))))))))))..."
+        },
+        {
+          "beam": 100,
+          "compared_sequence": "AAAAAAAAAAAAAAAAAAAA&UUUUUUUUUUUUUUUUUUUUUUUU",
+          "energy": -12.300000000000002,
+          "prediction_rescored_energy": -12.300000000000002,
+          "prediction_scoring_equal": true,
+          "reference_energy": -12.3,
+          "reference_rescored_energy": -12.300000000000002,
+          "reference_scoring_equal": true,
+          "reference_structure": "((((((((((((((((((((&.))))))))))))))))))))...",
+          "search_scoring_equal": true,
+          "status": "identical",
+          "structure": "((((((((((((((((((((&.))))))))))))))))))))..."
+        }
+      ],
+      "observed_run_utc": "2026-10-27T19:14:22.344001+00:00",
+      "parameters": {
+        "allow_pseudoknot": false,
+        "alpha": 0.0,
+        "beta": 0.0,
+        "energy_delta": 0.0,
+        "max_phase1": 1,
+        "verbose": false
+      },
+      "python_source_sha256": {
+        "third_party/cplfold/CPLcofold.py": "b05dd1e24b570a2ab8a9f2b82ce30945ebd6c9d1bb25b2c85e457b829b761277",
+        "third_party/cplfold/CPLcofold_parser.py": "1895c1946e0cbb5c44f4be7b1df6ef9a164b90d11e43adfbe7a5a5df4c55eb6c",
+        "third_party/cplfold/Utils/cofold_energy.py": "3db9671d5564f236f09261981231fabf6c0d5107ba2a2917829adf0adc33e920"
+      },
+      "reference_source_sha256": {
+        "src/LinearCoFold.cpp": "9eced9804ceac09ee60db6fb2eec3c6c703c1b9891cdc5d31d4f43675089d13c",
+        "src/LinearCoFold.h": "8ecf495081891ccb036f44036ed7b37fd9056578f998b8237d1cdf8970108306",
+        "src/LinearCoPartition.cpp": "0c1369d46715d8041106ebc3c24a3b0a10b48eff14d492e009b4ac820a94c21a",
+        "src/LinearCoPartition.h": "d68d2c4ce502eccd30a5a744db354fae374aa42b4be85da2a968ff14763b9470",
+        "src/Utils/energy_parameter.h": "3d68f5c08c997c9106853a207889ada3d64a03fc5f3dc751740556079d1c9b1d",
+        "src/Utils/feature_weight.h": "5fd1dc78c40fc6f0463e83cf12371ae65d34607a2d0b008dd06d4cbbc5d6fdba",
+        "src/Utils/intl11.h": "d52ef91e8e4a67c5a4503b58f1323d9b393dafa6c2aeb4c6e3a3463d686bcf5c",
+        "src/Utils/intl21.h": "4d62594477ac3174c2ca1c77c263598b286fd6cddece95a19fb1979a26878f18",
+        "src/Utils/intl22.h": "2fc33d7dcb05b84df5218dc17e48aac5e42a6d106f179a2ba12a43a7a4cb35cc",
+        "src/Utils/utility.h": "54377e6f8aa6225e1501dde4d148de5d57a889b2605491b87747602ea42c81e9",
+        "src/Utils/utility_v.h": "48b51117257da2e8f548cb7a17bf94e3f4170f00c2a5276d2b3589c1517d87f7",
+        "src/bpp.cpp": "7517f2d204b1bf85b7c79e29a922de3e442109868b324cc6626c025f2c913bf3"
+      },
+      "sequence_a": "AAAAAAAAAAAAAAAAAAAA",
+      "sequence_b": "UUUUUUUUUUUUUUUUUUUUUUUU",
+      "source_result": "artifacts/cplcofold-generated/pilot/results.json",
+      "source_result_sha256": "e6f3090df7be888ba10a2637d44e9dcc3a3678a30de4863af6359bc734222eee",
+      "sources": []
+    },
+    {
+      "assertion_policy": "Require valid finite predictions and independent energy rescoring. The recorded energies/structures are observations only; do not require the implementations to remain different after future search improvements.",
+      "beams": [
+        0,
+        1,
+        20,
+        100
+      ],
+      "biological_provenance_verified": false,
+      "category": "diagnostic",
+      "description": "A 32-base unpaired leader on a nicked exterior face exceeds the reference search transition bound; native energy primitives validate both reported energies.",
+      "id": "generated_054",
+      "observations": [
+        {
+          "beam": 0,
+          "compared_sequence": "CACUAUUGAAAUCCAAAAGAGACUUUUAACAAUAU&GCGAAGCGGACAGGCGGUCUUGUACGAUGCCUAAAGUGUGCGCUUGUGAUAGCGUACGCAGGAUCCCAGC",
+          "energy": -26.6,
+          "prediction_rescored_energy": -26.6,
+          "prediction_scoring_equal": true,
+          "reference_energy": -26.4,
+          "reference_rescored_energy": -26.400000000000006,
+          "reference_scoring_equal": true,
+          "reference_structure": ".....(((..((((........((((.........&..)))).....((((.(((......)))))))...(((((((((......))))))))).))))..))).",
+          "search_scoring_equal": true,
+          "status": "energy_difference",
+          "structure": ".....(((..((((.....................&...........(((((.((......)))))))...(((((((((......))))))))).))))..)))."
+        },
+        {
+          "beam": 1,
+          "compared_sequence": "CACUAUUGAAAUCCAAAAGAGACUUUUAACAAUAU&GCGAAGCGGACAGGCGGUCUUGUACGAUGCCUAAAGUGUGCGCUUGUGAUAGCGUACGCAGGAUCCCAGC",
+          "energy": -2.499999999999999,
+          "prediction_rescored_energy": -2.499999999999999,
+          "prediction_scoring_equal": true,
+          "reference_energy": -6.6,
+          "reference_rescored_energy": -6.6,
+          "reference_scoring_equal": true,
+          "reference_structure": ".......(..((((((..((.(((((...(.....&............................)...))))).).)..))).)))..).................",
+          "search_scoring_equal": true,
+          "status": "energy_difference",
+          "structure": "..((.(((.....))).)).........((.....&.......((.....((........))...))......))..............................."
+        },
+        {
+          "beam": 20,
+          "compared_sequence": "CACUAUUGAAAUCCAAAAGAGACUUUUAACAAUAU&GCGAAGCGGACAGGCGGUCUUGUACGAUGCCUAAAGUGUGCGCUUGUGAUAGCGUACGCAGGAUCCCAGC",
+          "energy": -26.6,
+          "prediction_rescored_energy": -26.6,
+          "prediction_scoring_equal": true,
+          "reference_energy": -26.4,
+          "reference_rescored_energy": -26.400000000000006,
+          "reference_scoring_equal": true,
+          "reference_structure": ".....(((..((((........((((.........&..)))).....((((.(((......)))))))...(((((((((......))))))))).))))..))).",
+          "search_scoring_equal": true,
+          "status": "energy_difference",
+          "structure": ".....(((..((((.....................&...........((((.(((......)))))))...(((((((((......))))))))).))))..)))."
+        },
+        {
+          "beam": 100,
+          "compared_sequence": "CACUAUUGAAAUCCAAAAGAGACUUUUAACAAUAU&GCGAAGCGGACAGGCGGUCUUGUACGAUGCCUAAAGUGUGCGCUUGUGAUAGCGUACGCAGGAUCCCAGC",
+          "energy": -26.6,
+          "prediction_rescored_energy": -26.6,
+          "prediction_scoring_equal": true,
+          "reference_energy": -26.4,
+          "reference_rescored_energy": -26.400000000000006,
+          "reference_scoring_equal": true,
+          "reference_structure": ".....(((..((((........((((.........&..)))).....((((.(((......)))))))...(((((((((......))))))))).))))..))).",
+          "search_scoring_equal": true,
+          "status": "energy_difference",
+          "structure": ".....(((..((((.....................&...........(((((.((......)))))))...(((((((((......))))))))).))))..)))."
+        }
+      ],
+      "observed_run_utc": "2026-10-27T19:17:29.683661+00:00",
+      "parameters": {
+        "allow_pseudoknot": false,
+        "alpha": 0.0,
+        "beta": 0.0,
+        "energy_delta": 0.0,
+        "max_phase1": 1,
+        "verbose": false
+      },
+      "sequence_a": "CACUAUUGAAAUCCAAAAGAGACUUUUAACAAUAU",
+      "sequence_b": "GCGAAGCGGACAGGCGGUCUUGUACGAUGCCUAAAGUGUGCGCUUGUGAUAGCGUACGCAGGAUCCCAGC",
+      "source_result": "artifacts/cplcofold-generated/full/results.json",
+      "source_result_sha256": "b702d5105eda2ba2cd48cd22df914f06c71b9e9d5bc04017e0a62ead867a1f66",
+      "sources": []
+    },
+    {
+      "assertion_policy": "Require valid finite predictions and independent energy rescoring. The recorded energies/structures are observations only; do not require the implementations to remain different after future search improvements.",
+      "beams": [
+        0,
+        1,
+        20,
+        100
+      ],
+      "biological_provenance_verified": false,
+      "category": "diagnostic",
+      "description": "Two distinct valid pair graphs have the same model energy; tie selection need not be identical.",
+      "id": "generated_076",
+      "observations": [
+        {
+          "beam": 0,
+          "compared_sequence": "GAUGCGAC&CGACGGGAUUCACGCGGCAGUACGACGCACGACGGCGAGCCGUGGACGUGGUGUGU",
+          "energy": -18.200000000000003,
+          "prediction_rescored_energy": -18.200000000000003,
+          "prediction_scoring_equal": true,
+          "reference_energy": -18.2,
+          "reference_rescored_energy": -18.199999999999996,
+          "reference_scoring_equal": true,
+          "reference_structure": "..(((...&((.((.......))))))).....((((((.(((.(.(....).).))).))))))",
+          "search_scoring_equal": true,
+          "status": "equal_energy_tie",
+          "structure": "..(((...&((.((.......))))))).....((((((.(((.(........).))).))))))"
+        },
+        {
+          "beam": 1,
+          "compared_sequence": "GAUGCGAC&CGACGGGAUUCACGCGGCAGUACGACGCACGACGGCGAGCCGUGGACGUGGUGUGU",
+          "energy": -12.9,
+          "prediction_rescored_energy": -12.9,
+          "prediction_scoring_equal": true,
+          "reference_energy": -3.3,
+          "reference_rescored_energy": -3.3,
+          "reference_scoring_equal": true,
+          "reference_structure": "..(((...&................))).....................................",
+          "search_scoring_equal": true,
+          "status": "energy_difference",
+          "structure": "(.(((...&.............))).)......((((((.((..(........)..)).))))))"
+        },
+        {
+          "beam": 20,
+          "compared_sequence": "GAUGCGAC&CGACGGGAUUCACGCGGCAGUACGACGCACGACGGCGAGCCGUGGACGUGGUGUGU",
+          "energy": -18.200000000000003,
+          "prediction_rescored_energy": -18.200000000000003,
+          "prediction_scoring_equal": true,
+          "reference_energy": -18.2,
+          "reference_rescored_energy": -18.199999999999996,
+          "reference_scoring_equal": true,
+          "reference_structure": "..(((...&((.((.......))))))).....((((((.(((.(.(....).).))).))))))",
+          "search_scoring_equal": true,
+          "status": "equal_energy_tie",
+          "structure": "..(((...&((.((.......))))))).....((((((.(((.(........).))).))))))"
+        },
+        {
+          "beam": 100,
+          "compared_sequence": "GAUGCGAC&CGACGGGAUUCACGCGGCAGUACGACGCACGACGGCGAGCCGUGGACGUGGUGUGU",
+          "energy": -18.200000000000003,
+          "prediction_rescored_energy": -18.200000000000003,
+          "prediction_scoring_equal": true,
+          "reference_energy": -18.2,
+          "reference_rescored_energy": -18.199999999999996,
+          "reference_scoring_equal": true,
+          "reference_structure": "..(((...&((.((.......))))))).....((((((.(((.(.(....).).))).))))))",
+          "search_scoring_equal": true,
+          "status": "equal_energy_tie",
+          "structure": "..(((...&((.((.......))))))).....((((((.(((.(........).))).))))))"
+        }
+      ],
+      "observed_run_utc": "2026-10-27T19:17:29.683661+00:00",
+      "parameters": {
+        "allow_pseudoknot": false,
+        "alpha": 0.0,
+        "beta": 0.0,
+        "energy_delta": 0.0,
+        "max_phase1": 1,
+        "verbose": false
+      },
+      "sequence_a": "GAUGCGAC",
+      "sequence_b": "CGACGGGAUUCACGCGGCAGUACGACGCACGACGGCGAGCCGUGGACGUGGUGUGU",
+      "source_result": "artifacts/cplcofold-generated/full/results.json",
+      "source_result_sha256": "b702d5105eda2ba2cd48cd22df914f06c71b9e9d5bc04017e0a62ead867a1f66",
+      "sources": []
+    }
+  ],
+  "description": "Persistent synthetic diagnostics for beam pruning, nicked-face search bounds and energy ties; recorded differences are observations, not requirements for future behavior.",
+  "schema_version": 1
+}

@@ -64,7 +64,7 @@
     error: null,
     // dark by default; the theme button switches, and a restored session
     // keeps the visitor's choice
-    theme: "dark",
+    theme: "light",
     density: "comfortable",
     toastTimer: null,
     pointerActionPending: false,
@@ -87,6 +87,8 @@
   let mountListeners = Object.create(null);
   let pendingCalls = [];
   let dependenciesLoading = null;
+  let committedInputRenderTimer = null;
+  let pointerSelect = null;
 
   const analysisPages = [
     { id: "overview", label: "Overview", shortLabel: "OV" },
@@ -117,6 +119,7 @@
     ["pointercancel", finishPointerAction],
     ["input", handleInput],
     ["change", handleChange],
+    ["focusout", handleControlFocusOut],
     ["keydown", handleKeydown],
     ["dragover", handleDragOver],
     ["dragleave", handleDragLeave],
@@ -193,6 +196,8 @@
     if (!app) {
       return;
     }
+    clearCommittedInputRender();
+    state.pointerActionPending = false;
     terminateWorker();
     cancelComparisonLoads();
     stopAnalysisWorkers();
@@ -216,6 +221,7 @@
     state.file = null;
     state.summary = null;
     state.records = [];
+    state.primarySummary = null;
     state.fasta = null;
     state.filters = null;
     state.interactionResults = [];
@@ -292,6 +298,7 @@
     app.addEventListener("pointercancel", finishPointerAction);
     app.addEventListener("input", handleInput);
     app.addEventListener("change", handleChange);
+    app.addEventListener("focusout", handleControlFocusOut);
     app.addEventListener("keydown", handleKeydown);
     app.addEventListener("dragover", handleDragOver);
     app.addEventListener("dragleave", handleDragLeave);
@@ -538,7 +545,9 @@
       state.activePage = workspacePages.some(function (page) { return page.id === candidate; })
         ? candidate
         : "overview";
-      if (state.activePage === "interactions" && state.filters) {
+      // A link carrying ?rna= / ?partner= sets those filters; the plain
+      // page link (sidebar, palette) keeps the ones already chosen.
+      if (state.activePage === "interactions" && state.filters && (query.has("rna") || query.has("partner"))) {
         state.filters.rna = query.get("rna") || "";
         state.filters.partner = query.get("partner") || "";
       }
@@ -641,6 +650,7 @@
       // flashing placeholders (provider calls are async even in the browser).
       if (renderedPage && renderedPage === state.activePage && !(options && options.immediate)) {
         app.classList.add("is-refreshing-data");
+        refreshHeaderScope();
         return;
       }
     }
@@ -738,7 +748,7 @@
       renderWaysToRun(),
       "  </main>",
       renderDialog(),
-      '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
+      renderToast(),
       "</div>"
     ].join("");
   }
@@ -1020,7 +1030,7 @@
       "    </div>",
       "  </div>",
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
-      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
+      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose an optional reference FASTA file">',
       '  <div class="dropzone" data-dropzone tabindex="0" aria-label="HYB input drop zone" aria-describedby="file-input-hint">',
       '    <div class="dropzone-content">',
       '      <span class="dropzone-kicker">HYB input</span>',
@@ -1163,7 +1173,7 @@
   }
 
   function renderPreparedFilePanel() {
-    const summary = state.summary || {};
+    const summary = state.primarySummary || state.summary || {};
     const fasta = state.fasta;
     const fastaLoad = state.fastaLoadSession;
     const loadingFile = fastaLoad && fastaLoad.file;
@@ -1202,14 +1212,15 @@
       '      <span class="prepared-file-kind prepared-file-kind-fasta">FASTA</span>',
       '      <div class="prepared-file-details"><strong' + (fasta || loadingFile ? "" : ' class="is-empty"') + ' title="' + escapeAttribute(fastaFileName) + '">' + escapeHtml(fastaFileName) + '</strong><span>' + escapeHtml(fastaDetail) + '</span></div>',
       '      <span class="prepared-file-status' + (fastaLoad ? " is-loading" : (fasta ? " is-ready" : " is-optional")) + '">' + fastaStatus + '</span>',
+      (fasta && !fastaLoad ? '      <button class="button button-secondary button-compact" type="button" data-action="add-fasta" title="Add another genome\'s FASTA to this reference">Add FASTA</button>' : "") +
       '      <button class="button button-secondary button-compact" type="button" data-action="choose-fasta">' + (fasta || fastaLoad ? "Replace FASTA" : "Add FASTA") + '</button>',
       "    </div>",
       "  </section>",
       renderExampleFileRows(),
-      '  <p class="prepared-file-note"><strong>FASTA is optional.</strong> Interaction tables and contact maps can run without it; reference-based structure and full-reference coordinate views need a mapped sequence. You can also add or replace it later from the Files panel.</p>',
+      '  <p class="prepared-file-note"><strong>FASTA is optional.</strong> Interaction tables and contact maps can run without it; reference-based structure and full-reference coordinate views need a mapped sequence. With several genomes, choose one FASTA per genome (several files at once); you can add or replace FASTA files later in the Data panel.</p>',
       renderExampleSetup(),
       '  <div class="prepared-file-actions"><button class="button button-secondary" type="button" data-action="reset-file">Choose another HYB</button></div>',
-      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose an optional reference FASTA file">',
+      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose an optional reference FASTA file">',
       '  <p class="privacy-note">Files are read and processed locally in this browser. This page has no upload endpoint.</p>',
       "</div></div>"
     ].join("");
@@ -1267,7 +1278,7 @@
       renderPage(),
       "    </div>",
       "  </main>",
-      '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
+      renderToast(),
       "</div>"
     ].join("");
     renderedPage = state.activePage;
@@ -1296,14 +1307,14 @@
       renderDialog(),
       '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Replace HYB file">',
       '  <input id="comparison-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" multiple aria-label="Add HYB datasets for comparison">',
-      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" aria-label="Choose a reference FASTA file">',
-      '  <div id="toast" class="toast" role="status" aria-live="polite"></div>',
+      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose a reference FASTA file">',
+      renderToast(),
       "</div>"
     ].join("");
   }
 
   function renderWorkspaceHeader() {
-    const summary = state.summary;
+    const summary = state.primarySummary || state.summary;
     return [
       '  <header class="workspace-header">',
       '    <div class="workspace-header-left">',
@@ -1328,17 +1339,222 @@
     ].join("");
   }
 
-  // The primary file is one of several when Compare has more datasets (the
-  // example loads four replicates): say so next to its name.
-  function renderHeaderDatasets() {
-    const others = (state.comparison && state.comparison.datasets || []).filter(function (dataset) {
-      return dataset.id !== PRIMARY_DATASET_ID;
+  // Which datasets the analysis pages read: every loaded dataset merged, one
+  // condition merged, or one dataset. [{ value: "id,id", label }]
+  function analysisScopes() {
+    const datasets = (state.comparison && state.comparison.datasets || []).filter(function (dataset) { return dataset && dataset.id; });
+    if (datasets.length < 2) {
+      return [];
+    }
+    const ids = function (list) { return list.map(function (dataset) { return dataset.id; }).join(","); };
+    const scopes = [{ value: ids(datasets), kind: "all", label: "All " + datasets.length + " datasets merged" }];
+    ["A", "B"].forEach(function (condition) {
+      const members = datasets.filter(function (dataset) { return dataset.condition === condition; });
+      if (members.length > 1 && members.length < datasets.length) {
+        const name = condition === "A" ? state.comparison.conditionALabel : state.comparison.conditionBLabel;
+        scopes.push({ value: ids(members), kind: condition, label: (name || "Condition " + condition) + " · " + members.length + " datasets merged" });
+      }
     });
-    if (!others.length) {
+    datasets.forEach(function (dataset) {
+      scopes.push({ value: dataset.id, label: dataset.label || dataset.fileName || dataset.id });
+    });
+    return scopes;
+  }
+
+  function currentScopeValue() {
+    return ((state.selection && state.selection.datasetIds) || [PRIMARY_DATASET_ID]).join(",");
+  }
+
+  // With several datasets loaded the header chooses what the pages analyse.
+  function renderHeaderDatasets() {
+    const scopes = analysisScopes();
+    if (!scopes.length) {
       return "";
     }
-    const names = others.map(function (dataset) { return dataset.fileName; }).join(", ");
-    return '        <button class="header-datasets" type="button" data-action="navigate" data-page="compare" title="' + escapeAttribute("Also on the Compare page: " + names) + '">+' + formatNumber(others.length) + " dataset" + (others.length === 1 ? "" : "s") + " on Compare</button>";
+    const current = currentScopeValue();
+    const options = scopes.some(function (scope) { return scope.value === current; })
+      ? scopes : [{ value: current, label: state.summary && state.summary.fileName || "Current selection" }].concat(scopes);
+    return '        <label class="header-scope"><span class="visually-hidden">Datasets analysed</span><select id="analysis-scope" title="Datasets merged by Overview, Interactions, Viewpoint, Region Explorer and the Report. Contact Map draws one dataset of its choice, RNA Structure takes its evidence as set by HYB evidence from, and Compare keeps its own conditions.">' +
+      options.map(function (scope) {
+        return '<option value="' + escapeAttribute(scope.value) + '"' + (scope.value === current ? " selected" : "") + ">" + escapeHtml(scope.label) + "</option>";
+      }).join("") + "</select></label>";
+  }
+
+  // The header's scope list while the page keeps its old markup during a data
+  // refresh: a scope or condition change shows at once.
+  function refreshHeaderScope() {
+    const current = typeof app.querySelector === "function" ? app.querySelector(".header-scope") : null;
+    if (!current || (document.activeElement && document.activeElement.id === "analysis-scope")) {
+      return;
+    }
+    const markup = renderHeaderDatasets();
+    if (!markup) {
+      return;
+    }
+    const holder = document.createElement("div");
+    holder.innerHTML = markup.trim();
+    if (holder.firstChild && holder.firstChild.outerHTML !== current.outerHTML) {
+      current.replaceWith(holder.firstChild);
+    }
+  }
+
+  // Analyse another set of datasets: its merged summary first (the pages
+  // need one to draw), then page state that keeps what still applies
+  // (carryScopeSettings); Compare, the arc-map files and the Structure setup
+  // carry over.
+  async function applyAnalysisScope(value, chosen) {
+    const ids = String(value || "").split(",").filter(Boolean);
+    if (!ids.length || !provider || ids.join(",") === currentScopeValue()) {
+      return;
+    }
+    if (chosen) {
+      state.analysisScopeChosen = true;
+      state.analysisScopeKind = scopeKind(ids.join(","));
+    }
+    const selection = { datasetIds: ids };
+    const results = await Promise.all([provider.getSummary(selection), provider.listDatasets()]);
+    if (!results[0]) {
+      return;
+    }
+    const kept = { comparison: state.comparison, arcMap: state.arcMap, structure: state.structure };
+    const previous = { filters: state.filters, region: state.region, viewpoint: state.viewpoint, contact: state.contact };
+    state.summary = results[0];
+    state.datasets = results[1] || [];
+    window.Hyb2PageData.initialisePageState(state, state.summary);
+    // Region Explorer and Viewpoint open on the primary file's RNA while it
+    // is analysed, not on whichever merged RNA has the most records.
+    if (ids.indexOf(PRIMARY_DATASET_ID) !== -1 && state.primarySummary && state.primarySummary !== state.summary) {
+      state.region = window.Hyb2Data.defaultRegionState(state.primarySummary, null);
+      state.viewpoint = window.Hyb2Data.defaultViewpointState(state.primarySummary, null);
+    }
+    state.comparison = kept.comparison;
+    state.arcMap = kept.arcMap;
+    if (kept.structure) {
+      state.structure = kept.structure;
+    }
+    carryScopeSettings(previous, state.summary.rnaNames || []);
+    pageData.setSelection(selection, { keepState: true });
+    render();
+    updateInteractionHash();
+    showToast("Analysing " + (ids.length === 1 ? "one dataset" : ids.length + " datasets merged") + ".");
+  }
+
+  // A scope change keeps each page's settings while its RNA is still in the
+  // scope (results are recomputed). Settings whose RNA left the scope are
+  // parked and come back on a later scope that has the RNA again, unless the
+  // page was changed in between.
+  const SCOPE_PARKED_KEYS = { filters: null, region: ["rna", "start", "end", "partner", "partnerStart", "partnerEnd", "overlap"], viewpoint: null, structure: ["rna", "start", "end"] };
+
+  function scopeSnapshot(page, value) {
+    const keys = SCOPE_PARKED_KEYS[page];
+    const copy = {};
+    Object.keys(value || {}).forEach(function (key) {
+      if ((keys ? keys.indexOf(key) !== -1 : true) && key !== "results" && key !== "selection" && key !== "result") copy[key] = value[key];
+    });
+    return JSON.stringify(copy);
+  }
+
+  function carryScopeSettings(previous, scopeRnas) {
+    const inScope = function (rna) { return !rna || scopeRnas.indexOf(rna) !== -1; };
+    const parked = state.scopeParked || (state.scopeParked = {});
+    if (previous.filters) {
+      // the RNA filter is parked like the pages below; the others always stay
+      state.filters = Object.assign({}, previous.filters, { rna: inScope(previous.filters.rna) ? previous.filters.rna : "" });
+      state.filters = Object.assign({}, scopeSettings("filters", previous.filters) || state.filters);
+      if (!inScope(state.filters.partner)) state.filters.partner = "";
+    }
+    if (previous.contact) {
+      const datasetKept = !previous.contact.datasetId || (state.datasets || []).some(function (dataset) { return dataset.id === previous.contact.datasetId; });
+      state.contact = Object.assign({}, previous.contact, {
+        datasetId: datasetKept ? previous.contact.datasetId : "",
+        matrix: null, selection: null, overviewSelection: null, zoomSelection: null, overviewView: null, zoomView: null, detailView: null
+      });
+    }
+    ["region", "viewpoint"].forEach(function (page) {
+      const before = previous[page];
+      const settings = scopeSettings(page, before);
+      if (settings) {
+        state[page] = Object.assign({}, settings, { results: null });
+        if (page === "viewpoint") state[page].selection = null;
+        if (!inScope(state[page].partner)) {
+          state[page].partner = "";
+          if (page === "region") { state[page].partnerStart = ""; state[page].partnerEnd = ""; }
+        }
+      }
+    });
+    const structure = state.structure;
+    if (structure) {
+      const before = { rna: structure.rna, start: structure.start, end: structure.end };
+      const region = window.Hyb2Data.defaultRegionState(state.summary, null);
+      const settings = scopeSettings("structure", before);
+      if (!settings && before.rna) {
+        Object.assign(structure, { rna: region.rna, start: region.start, end: region.end, defaultRegionEnd: region.end });
+        if (window.Hyb2Pages && window.Hyb2Pages.capDefaultStructureRegion) window.Hyb2Pages.capDefaultStructureRegion(structure);
+        if (parked.structure) parked.structure.snapshot = scopeSnapshot("structure", structure);
+      } else if (settings !== before) {
+        Object.assign(structure, settings);
+        delete structure.defaultRegionEnd;
+      }
+      if (structure.rna !== before.rna || structure.start !== before.start || structure.end !== before.end) {
+        structure.result = null;
+      }
+    }
+
+    // The settings a page keeps in the new scope: parked ones when the page
+    // was left as the last scope change set it, else `before` while its RNA
+    // is in the scope. null: the RNA left the scope; `before` is parked and
+    // the caller's defaults stand.
+    function scopeSettings(page, before) {
+      const entry = parked[page];
+      const untouched = !!entry && !!before && entry.snapshot === scopeSnapshot(page, before);
+      if (entry && !untouched) {
+        delete parked[page];
+      }
+      if (untouched && inScope(entry.settings.rna)) {
+        delete parked[page];
+        return entry.settings;
+      }
+      if (before && before.rna && inScope(before.rna)) {
+        return before;
+      }
+      if (before && before.rna) {
+        // still untouched since the last switch: keep the older parking
+        parked[page] = { settings: untouched ? entry.settings : before, snapshot: null };
+        const current = page === "structure" ? null : state[page];
+        if (current) parked[page].snapshot = scopeSnapshot(page, current);
+      }
+      return null;
+    }
+  }
+
+  // "All merged" or one condition's group, when that is the chosen scope (or
+  // nothing was chosen: all), so the scope keeps following later changes.
+  function scopeKind(value) {
+    const match = analysisScopes().find(function (scope) { return scope.value === value; });
+    return match && match.kind || null;
+  }
+
+  // Re-applies an "All merged" or condition scope after datasets are added,
+  // removed or reassigned: every loaded file stays analysed.
+  function analyseAllLoaded() {
+    const kind = state.analysisScopeChosen ? state.analysisScopeKind : "all";
+    if (!kind || !provider || typeof provider.listDatasets !== "function") {
+      return null;
+    }
+    // resolves true when the scope was re-applied
+    return provider.listDatasets().then(function (datasets) {
+      const excluded = state.comparison && state.comparison.excludedDatasetIds || {};
+      const conditions = {};
+      (state.comparison && state.comparison.datasets || []).forEach(function (dataset) { conditions[dataset.id] = dataset.condition; });
+      const ids = (datasets || []).filter(function (dataset) {
+        return !excluded[dataset.id] && (kind === "all" || (conditions[dataset.id] || dataset.condition) === kind);
+      }).map(function (dataset) { return dataset.id; });
+      const kindNow = state.analysisScopeChosen ? state.analysisScopeKind : "all";
+      if (kindNow === kind && ids.length && (kind !== "all" || ids.length > 1) && ids.join(",") !== currentScopeValue()) {
+        return applyAnalysisScope(ids.join(","), false).then(function () { return true; });
+      }
+      return false;
+    }).catch(function () { return false; });
   }
 
   function renderSidebarDatasets() {
@@ -1362,11 +1578,14 @@
 
   function renderSidebar() {
     const summary = state.summary;
+    // the scope the pages analyse: its label when several datasets merge
+    const scope = analysisScopes().find(function (item) { return item.value === currentScopeValue(); });
+    const scopeName = scope && currentScopeValue().indexOf(",") !== -1 ? scope.label : summary.fileName;
     return [
       '  <aside class="sidebar" aria-label="Workspace navigation">',
       '    <div class="sidebar-file">',
       '      <span class="sidebar-label">Data</span>',
-      '      <span class="sidebar-file-name" title="' + escapeAttribute(summary.fileName) + '">' + escapeHtml(summary.fileName) + "</span>",
+      '      <span class="sidebar-file-name" title="' + escapeAttribute(summary.fileName) + '">' + escapeHtml(scopeName) + "</span>",
       '      <span class="sidebar-file-info">' + formatBytes(summary.fileSize) + " · " + formatNumber(summary.validRecords) + " records</span>",
       renderSidebarDatasets(),
       "    </div>",
@@ -1511,6 +1730,10 @@
         drawerSection("The one exception you control", "<p>Related research on the RNA Structure page is off by default. When you turn it on, only the identifier and species you confirm are sent to EBI (RNAcentral and Europe PMC).</p>"),
         state.analysisEntered ? '<div class="drawer-links"><button class="quiet-button" type="button" data-action="navigate" data-page="privacy">Read the full privacy notes</button></div>' : ""
       ].join(""));
+    }
+
+    if (state.dialog === "clear-primary" || state.dialog === "replace-primary") {
+      return renderPrimaryFileDialog(state.dialog === "replace-primary");
     }
 
     if (state.dialog === "clear") {
@@ -1733,11 +1956,8 @@
       return;
     }
 
-    if (action === "choose-fasta") {
-      const input = document.getElementById("fasta-file-input");
-      if (input) {
-        input.click();
-      }
+    if (action === "choose-fasta" || action === "add-fasta") {
+      chooseFasta(action === "add-fasta");
       return;
     }
 
@@ -1928,6 +2148,13 @@
       return;
     }
 
+    if (action === "confirm-replace-hyb") {
+      state.dialog = null;
+      render();
+      chooseHyb();
+      return;
+    }
+
     if (action === "confirm-clear") {
       resetToLanding();
       window.setTimeout(function () {
@@ -1952,6 +2179,7 @@
   }
 
   function handlePointerDown(event) {
+    pointerSelect = event.target.closest("select");
     state.pointerActionPending = !!event.target.closest("button, a, [data-feature-action], [data-action]");
   }
 
@@ -1959,9 +2187,13 @@
     if (event && event.target && event.target.matches && event.target.matches('input[type="file"]')) {
       return;
     }
+    // A native select's opening click is not a committed selection. Keep
+    // the original control mounted until change, or focusout after cancel.
+    if (event && event.target && event.target.closest && event.target.closest("select")) {
+      return;
+    }
     const pendingRender = state.pendingCommittedInputRender;
     state.pointerActionPending = false;
-    state.pendingCommittedInputRender = false;
     if (!pendingRender) {
       return;
     }
@@ -1969,8 +2201,17 @@
       ? event.target.closest("[data-feature-action], [data-action]")
       : null;
     const action = target ? (target.dataset.featureAction || target.dataset.action || "") : "";
-    if (["choose-hyb", "choose-fasta", "choose-comparison-files", "replace-hyb"].indexOf(action) === -1) {
-      window.setTimeout(render, 0);
+    if (["choose-hyb", "choose-fasta", "add-fasta", "choose-comparison-files", "replace-hyb"].indexOf(action) === -1) {
+      queueCommittedInputRender();
+    } else {
+      clearCommittedInputRender();
+    }
+  }
+
+  function handleControlFocusOut(event) {
+    if (event.target && event.target.tagName === "SELECT") {
+      pointerSelect = null;
+      if (state.pendingCommittedInputRender) queueCommittedInputRender();
     }
   }
 
@@ -1978,9 +2219,21 @@
     // K8: a select's title is its current option's full text; keep it current
     // for pages that do not redraw on this change
     const changed = event.target;
+    if (changed && changed.tagName === "SELECT") {
+      // The change handler below renders the newly selected value. An older
+      // numeric/text commit must not render again or steal focus afterwards.
+      clearCommittedInputRender();
+    }
     if (changed && changed.tagName === "SELECT" && changed.hasAttribute("title") && changed.selectedOptions && changed.selectedOptions[0]) {
       changed.title = changed.selectedOptions[0].text;
     }
+    if (event.target.id === "analysis-scope") {
+      applyAnalysisScope(event.target.value, true).catch(function (error) {
+        showToast("Could not change the datasets analysed: " + (error && error.message ? error.message : "unknown error"));
+      });
+      return;
+    }
+
     if (event.target.id === "density-input") {
       state.density = event.target.value === "compact" ? "compact" : "comfortable";
       render();
@@ -1997,11 +2250,15 @@
     }
 
     if (event.target.id === "fasta-file-input") {
-      const file = event.target.files && event.target.files[0];
-      if (file) {
+      const files = event.target.files ? Array.from(event.target.files) : [];
+      const append = fastaAppendPending;
+      fastaAppendPending = false;
+      if (files.length) {
         if (state.summary) {
-          loadFasta(file);
+          const file = fastaUpload(files, append);
+          if (file) loadFasta(file);
         } else {
+          const file = combineFastaFiles(files, files.map(function (item) { return item.name; }));
           state.landingFastaFile = file;
           state.error = null;
           render();
@@ -2054,16 +2311,41 @@
   }
 
   function scheduleCommittedInputRender(source) {
+    // Keep the source argument for the shared change-handler contract; focus
+    // is deliberately read when the queued task runs, not from this old node.
     const activeElement = document.activeElement;
     const actionHasFocus = activeElement && activeElement.closest && activeElement.closest("button, a, [data-feature-action], [data-action]");
-    if (state.pointerActionPending || actionHasFocus) {
-      state.pendingCommittedInputRender = true;
+    state.pendingCommittedInputRender = true;
+    if (state.pointerActionPending || actionHasFocus || selectInteractionPending()) {
       return;
     }
-    const focused = focusIdentity(activeElement);
-    window.setTimeout(function () {
+    queueCommittedInputRender();
+  }
+
+  function selectInteractionPending() {
+    const activeElement = document.activeElement;
+    return !!(app && ((pointerSelect && app.contains(pointerSelect)) ||
+      (activeElement && activeElement.tagName === "SELECT" && app.contains(activeElement))));
+  }
+
+  function clearCommittedInputRender() {
+    if (committedInputRenderTimer !== null) window.clearTimeout(committedInputRenderTimer);
+    committedInputRenderTimer = null;
+    pointerSelect = null;
+    state.pendingCommittedInputRender = false;
+  }
+
+  function queueCommittedInputRender() {
+    if (committedInputRenderTimer !== null) return;
+    committedInputRenderTimer = window.setTimeout(function () {
+      committedInputRenderTimer = null;
+      if (!app || !state.pendingCommittedInputRender || state.pointerActionPending || selectInteractionPending()) return;
+      state.pendingCommittedInputRender = false;
+      // Focus may have moved by keyboard since this task was queued. In
+      // particular, never replace a select reached by Tab in the meantime.
+      const focused = focusIdentity(document.activeElement);
       render();
-      restoreFocus(focused, source);
+      restoreFocus(focused, null);
     }, 0);
   }
 
@@ -2286,6 +2568,7 @@
 
     try {
       let received = 0;
+      const extraReferences = (example.extraReferences || []).map(function (item) { return item.file; });
       const files = await Promise.all([example.primary.file, example.reference.file].map(function (name) {
         return fetchExampleFile(name, function (bytes) {
           if (state.exampleLoadSession !== session) {
@@ -2297,10 +2580,16 @@
           updateLoadingStatus("Loading example files · " + formatBytes(received) + " downloaded");
         });
       }));
+      // Both lineages' genomes go in one reference, each dataset mapping to its own.
+      const extraFiles = await Promise.all(extraReferences.map(function (name) { return fetchExampleFile(name); }));
       if (state.exampleLoadSession !== session) {
         return;
       }
       state.exampleLoadSession = null;
+      if (extraFiles.length) {
+        files[1] = createExampleFile(new Blob([files[1]].concat(extraFiles).flatMap(function (file) { return [file, "\n"]; })),
+          { fileName: [example.reference.file].concat(extraReferences).join(" + "), type: "text/plain" });
+      }
       startParsing(files[0], { referenceFile: files[1], example: true });
     } catch (error) {
       if (state.exampleLoadSession !== session) {
@@ -2476,6 +2765,7 @@
     state.records = [];
     state.filters = null;
     state.interactionResults = [];
+    state.primarySummary = null;
     state.interactionScrollTop = 0;
     state.selectedRecordIndex = null;
     state.contact = null;
@@ -2563,6 +2853,8 @@
               return;
             }
             state.summary = summary;
+            // the parsed file itself; state.summary follows the header's scope
+            state.primarySummary = summary;
             state.records = (message.records || []).map(function (record, index) {
               record.index = index;
               return record;
@@ -2580,6 +2872,7 @@
             state.structure.rna = state.region.rna;
             state.structure.start = state.region.start;
             state.structure.end = state.region.end;
+            state.structure.defaultRegionEnd = state.region.end;
             const structurePair = summary.pairCounts && summary.pairCounts[0];
             const secondStructureRna = structurePair ? structurePair.rnaTwo : state.region.rna;
             const secondStructureExtent = window.Hyb2Data.getRnaExtent(state.records, secondStructureRna);
@@ -2588,6 +2881,14 @@
             state.structure.secondEnd = secondStructureExtent
               ? Math.min(secondStructureExtent.max, secondStructureExtent.min + 200)
               : state.region.end;
+            // Two regions start from region 1's most-supported partner window,
+            // not from a copy of region 1.
+            const structurePartner = window.Hyb2Data.partnerWindow(state.records, state.structure.rna, state.structure.start, state.structure.end);
+            if (structurePartner) {
+              state.structure.secondRna = structurePartner.rna;
+              state.structure.secondStart = structurePartner.start;
+              state.structure.secondEnd = structurePartner.end;
+            }
             registerPrimaryDataset(file, summary, state.records);
             state.loading = null;
             state.analysisEntered = false;
@@ -2733,7 +3034,9 @@
       render: render,
       navigate: navigate,
       chooseFasta: chooseFasta,
+      addFasta: function () { chooseFasta(true); },
       chooseHyb: chooseHyb,
+      needsPrimaryFileWarning: needsPrimaryFileWarning,
       chooseComparisonFiles: chooseComparisonFiles,
       removeFasta: removeFasta,
       clearSession: clearSession,
@@ -2752,8 +3055,15 @@
       dataChanged: function () {
         if (provider && typeof provider.notifyChange === "function") provider.notifyChange();
       },
+      followAnalysisScope: analyseAllLoaded,
       removeDataset: function (datasetId) {
         if (state.shell && provider && typeof provider.removeDataset === "function") provider.removeDataset(datasetId);
+        // A removed dataset leaves the analysis scope at once.
+        const scope = currentScopeValue().split(",").filter(Boolean);
+        if (scope.indexOf(datasetId) !== -1) {
+          const rest = scope.filter(function (id) { return id !== datasetId; });
+          applyAnalysisScope((rest.length ? rest : [PRIMARY_DATASET_ID]).join(","), false).catch(function () {});
+        }
       },
       requestFold: function (request) {
         emit("requestFold", request);
@@ -2778,11 +3088,14 @@
       return;
     }
     provider.clear();
+    state.analysisScopeChosen = false;
+    state.analysisScopeKind = null;
+    state.scopeParked = null;
     provider.addDataset({
       id: PRIMARY_DATASET_ID,
       primary: true,
       condition: "A",
-      label: "Primary",
+      label: window.Hyb2Data.datasetLabel(summary.fileName || (file && file.name), "Primary"),
       fileName: summary.fileName || (file && file.name) || "",
       fileSize: summary.fileSize,
       summary: summary,
@@ -2792,6 +3105,47 @@
       provider.setReference(state.fasta);
     }
     pageData.setSelection({ datasetIds: [PRIMARY_DATASET_ID] }, { keepState: true });
+  }
+
+  // What else goes when the primary HYB file is removed or replaced: the
+  // session is built on it, so the Compare datasets, arc map files and results
+  // go with it (a replacement keeps the reference FASTA).
+  function primaryFileDependents(replacing) {
+    const others = (state.comparison && state.comparison.datasets || []).filter(function (dataset) { return dataset.id !== PRIMARY_DATASET_ID; }).length;
+    const arcMap = state.arcMap || {};
+    const arcFiles = ["a", "b", "interactions", "annotation"].filter(function (key) { return arcMap[key]; }).length;
+    const items = [];
+    if (others) items.push(others + (others === 1 ? " Compare dataset" : " Compare datasets"));
+    if (!replacing && state.fasta) items.push("the reference FASTA");
+    if (arcFiles) items.push(arcFiles + (arcFiles === 1 ? " arc map file" : " arc map files"));
+    items.push("every result");
+    return { others: others, arcFiles: arcFiles, items: items };
+  }
+
+  function renderPrimaryFileDialog(replacing) {
+    const name = (state.primarySummary || state.summary || {}).fileName || "the interaction data file";
+    const dependents = primaryFileDependents(replacing);
+    const list = dependents.items.length > 1 ? dependents.items.slice(0, -1).join(", ") + " and " + dependents.items[dependents.items.length - 1] : dependents.items[0];
+    const text = replacing
+      ? "The new file starts a new analysis: " + list + " are removed. The reference FASTA is kept."
+      : "This session is built on this file, so removing it starts over: " + list + " are removed too.";
+    return [
+      '<div class="pop-layer">',
+      '  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="primary-file-dialog-title" data-dialog>',
+      '    <h2 id="primary-file-dialog-title">' + (replacing ? "Replace " : "Remove ") + escapeHtml(name) + "?</h2>",
+      "    <p>" + escapeHtml(text) + (dependents.others ? " To drop a single Compare dataset, use Remove on the Compare page instead." : "") + " Export anything you want to keep first.</p>",
+      '    <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">Cancel</button>' +
+        (replacing
+          ? '<button class="button" type="button" data-action="confirm-replace-hyb">Choose a new file</button>'
+          : '<button class="button button-danger" type="button" data-action="confirm-clear">Remove and start over</button>') + "</div>",
+      "  </section>",
+      "</div>"
+    ].join("");
+  }
+
+  function needsPrimaryFileWarning() {
+    const dependents = primaryFileDependents(true);
+    return dependents.others > 0 || dependents.arcFiles > 0;
   }
 
   function chooseHyb() {
@@ -2808,11 +3162,48 @@
     }
   }
 
-  function chooseFasta() {
+  // Several FASTA files (one genome each) form one reference: chosen
+  // together, or added later with "Add FASTA" (append) instead of Replace.
+  let fastaAppendPending = false;
+
+  function chooseFasta(append) {
+    fastaAppendPending = append === true;
     const input = document.getElementById("fasta-file-input");
     if (input) {
       input.click();
     }
+  }
+
+  function combineFastaFiles(parts, names) {
+    if (parts.length === 1 && parts[0] instanceof File) {
+      return parts[0];
+    }
+    const pieces = [];
+    parts.forEach(function (part, index) {
+      if (index) pieces.push("\n");
+      pieces.push(part);
+    });
+    return new File(pieces, names.join(" + "), { type: "text/plain" });
+  }
+
+  // The file loadFasta reads: the chosen files, after the loaded reference's
+  // sequences when appending (its matches and manual edits are kept).
+  function fastaUpload(files, append) {
+    if (!append || !state.fasta) {
+      return combineFastaFiles(files, files.map(function (file) { return file.name; }));
+    }
+    const loadedNames = String(state.fasta.fileName || "").split(" + ");
+    const added = files.filter(function (file) { return loadedNames.indexOf(file.name) === -1; });
+    if (!added.length) {
+      showToast((files.length === 1 ? files[0].name + " is" : "These files are") + " already in the reference.");
+      return null;
+    }
+    const loaded = new Blob([(state.fasta.sequences || []).map(function (entry) {
+      return ">" + entry.header + "\n" + entry.sequence;
+    }).join("\n") + "\n"], { type: "text/plain" });
+    const combined = combineFastaFiles([loaded].concat(added), [state.fasta.fileName || "reference.fasta"].concat(added.map(function (file) { return file.name; })));
+    combined.previousMapping = Object.assign({}, state.fasta.mapping || {});
+    return combined;
   }
 
   function invalidateFastaLoad() {
@@ -2823,6 +3214,38 @@
     if (canRegisterDatasets() && typeof provider.setReference === "function") {
       provider.setReference(fasta);
     }
+  }
+
+  // RNAs of loaded comparison datasets that the reference FASTA also holds
+  // (another lineage's genome, e.g. the example's ZASI replicates on ZILM)
+  // join its mapping, by the same name matching; mapped RNAs keep their entry.
+  function mapDatasetReferences(rnaNames) {
+    const fasta = state.fasta;
+    if (!fasta || !fasta.mapping) {
+      return false;
+    }
+    const missing = (rnaNames || []).filter(function (rna) { return !fasta.mapping[rna]; });
+    const found = window.Hyb2Data.buildFastaMapping(missing, fasta.sequences || []);
+    let added = false;
+    Object.keys(found).forEach(function (rna) {
+      if (found[rna]) {
+        fasta.mapping[rna] = found[rna];
+        added = true;
+      }
+    });
+    return added;
+  }
+
+  function loadedDatasetRnaNames() {
+    const names = [];
+    if (provider && provider.datasets && typeof provider.datasets.forEach === "function") {
+      provider.datasets.forEach(function (dataset) {
+        ((dataset.summary && dataset.summary.rnaNames) || []).forEach(function (rna) {
+          if (names.indexOf(rna) === -1) names.push(rna);
+        });
+      });
+    }
+    return names;
   }
 
   function notifyReferenceMetadata() {
@@ -2887,6 +3310,13 @@
       })));
 
       const mapping = window.Hyb2Data.buildFastaMapping(primarySummary.rnaNames || [], sequences);
+      // Appended files keep the matches (and manual edits) already made.
+      Object.keys(file.previousMapping || {}).forEach(function (rna) {
+        const reference = file.previousMapping[rna];
+        if (reference && sequences.some(function (entry) { return entry.id === reference; })) {
+          mapping[rna] = reference;
+        }
+      });
       const mappingEditorRna = (primarySummary.rnaNames || []).find(function (rna) { return !mapping[rna]; }) || (primarySummary.rnaNames || [])[0] || "";
       loadedFasta = {
         fileName: file.name || "reference.fasta",
@@ -2904,6 +3334,7 @@
         return;
       }
       state.fasta = loadedFasta;
+      mapDatasetReferences(loadedDatasetRnaNames());
       setProviderReference(loadedFasta);
       if (state.viewpoint) {
         state.viewpoint.results = null;
@@ -2987,6 +3418,7 @@
     comparisonSession.result = null;
     comparisonSession.selection = null;
     render();
+    const failures = [];
 
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
@@ -3035,15 +3467,19 @@
           records: records,
           condition: assign[index] && assign[index].condition || "B",
           label: assign[index] && assign[index].label ||
-            (file.name ? file.name.replace(/\.gz$/i, "").replace(/\.(hyb|txt)$/i, "") : "Dataset " + (comparisonSession.datasets.length + index + 1))
+            window.Hyb2Data.datasetLabel(file.name, "Dataset " + (comparisonSession.datasets.length + index + 1))
         });
+        if (mapDatasetReferences(parsed.summary.rnaNames)) {
+          notifyReferenceMetadata();
+        }
         comparisonSession.result = null;
         comparisonSession.selection = null;
       } catch (error) {
         if (!comparisonSessionIsCurrent()) {
           return;
         }
-        comparisonSession.error = "Could not add " + (file.name || "one dataset") + ": " + (error && error.message ? error.message : "local parsing failed.");
+        failures.push((file.name || "one dataset") + ": " + (error && error.message ? error.message : "local parsing failed."));
+        comparisonSession.error = "Could not add " + failures.join(" · ");
       }
     }
 
@@ -3054,7 +3490,16 @@
     comparisonSession.result = null;
     state.comparisonLoadSession = null;
     render();
-    showToast("Comparison datasets were parsed locally.");
+    // Say how many files were added, and which failed, wherever they were
+    // added from; after the scope update so its own toast does not hide it.
+    const added = files.length - failures.length;
+    const message = failures.length
+      ? "Added " + added + " of " + files.length + (files.length === 1 ? " file" : " files") + ". Could not add " + failures.join(" · ")
+      : (files.length === 1 ? "Comparison dataset parsed locally." : "Comparison datasets were parsed locally.");
+    Promise.resolve(analyseAllLoaded()).then(function (scopeApplied) {
+      const scope = scopeApplied && analysisScopes().find(function (item) { return item.value === currentScopeValue(); });
+      showToast(scope ? message + " Analysing: " + scope.label + "." : message);
+    });
   }
 
   function parseComparisonFile(file) {
@@ -3120,6 +3565,7 @@
   // Stop the DESeq2 and RNAcofold workers a comparison may have started; a
   // reply from a stale run must not land in the next file's state.
   function stopAnalysisWorkers() {
+    if (window.Hyb2Batch) window.Hyb2Batch.stopAll();
     if (window.Hyb2DeseqCard && typeof window.Hyb2DeseqCard.stop === "function") {
       window.Hyb2DeseqCard.stop();
     }
@@ -3217,6 +3663,7 @@
     state.file = null;
     state.summary = null;
     state.records = [];
+    state.primarySummary = null;
     state.fasta = null;
     state.filters = null;
     state.interactionResults = [];
@@ -3267,6 +3714,7 @@
     state.file = null;
     state.summary = null;
     state.records = [];
+    state.primarySummary = null;
     state.fasta = null;
     state.filters = null;
     state.interactionResults = [];
@@ -3559,8 +4007,18 @@
     window.setTimeout(function () { URL.revokeObjectURL(url); }, 0);
   }
 
+  // The toast is part of the rendered markup: a render() while it is shown
+  // (a data refresh, a scope change) redraws it rather than blanking it.
+  function renderToast() {
+    const visible = !!state.toastMessage && Date.now() < (state.toastUntil || 0);
+    return '  <div id="toast" class="toast' + (visible ? " is-visible" : "") + '" role="status" aria-live="polite">' + (visible ? escapeHtml(state.toastMessage) : "") + "</div>";
+  }
+
   function showToast(message) {
     const toast = document.getElementById("toast");
+    const hold = toastHoldMs(message);
+    state.toastMessage = message;
+    state.toastUntil = Date.now() + hold;
     if (!toast) {
       return;
     }
@@ -3569,8 +4027,10 @@
     toast.classList.add("is-visible");
     window.clearTimeout(state.toastTimer);
     state.toastTimer = window.setTimeout(function () {
-      toast.classList.remove("is-visible");
-    }, toastHoldMs(message));
+      state.toastMessage = "";
+      const current = document.getElementById("toast");
+      if (current) current.classList.remove("is-visible");
+    }, hold);
   }
 
   // Long enough to read: 0.3 s per word plus 0.5 s, never shorter than the

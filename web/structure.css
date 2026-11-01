@@ -1280,3 +1280,165 @@
 .iris-ensemble-table th { font-size: 12px; color: var(--muted); }
 .iris-ensemble-table th:first-child, .iris-ensemble-table td:first-child { padding-left: 0; }
 .iris-ensemble-table td:last-child { white-space: nowrap; }
+
+/* Drawing editor: toolbar, canvas beside a scrolling control panel. */
+.structure-result-grid.is-editing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* clip, unlike hidden, keeps the sticky canvas working */
+.structure-result-grid.is-editing .structure-diagram-panel {
+  overflow: clip;
+}
+
+.structure-diagram .editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.editor-tool-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.editor-inline-field {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted-strong);
+  font-size: 0.85rem;
+}
+
+.editor-inline-field select {
+  max-width: 13rem;
+}
+
+.editor-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: baseline;
+  min-height: 1.6em;
+  margin: 6px 2px;
+}
+
+.editor-selection {
+  font-weight: 600;
+  color: var(--primary-ink);
+}
+
+.editor-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 12px;
+  align-items: start;
+}
+
+.editor-canvas {
+  height: min(72vh, 760px);
+  min-height: 420px;
+  overflow: hidden;
+  touch-action: none;
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  cursor: grab;
+}
+
+.editor-canvas svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.editor-canvas [data-editor-base],
+.editor-canvas [data-editor-annotation] {
+  cursor: move;
+}
+
+.editor-panel {
+  max-height: min(72vh, 760px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.editor-panel .control-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.editor-panel .control-field input,
+.editor-panel .control-field select {
+  min-height: 34px;
+}
+
+.editor-panel .inline-actions {
+  margin: 8px 0 4px;
+}
+
+.editor-help {
+  margin-top: 8px;
+}
+
+.editor-root {
+  container-type: inline-size;
+}
+
+/* Narrow editors stack the panel under a canvas that stays in view. */
+@container (max-width: 1000px) {
+  .editor-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .editor-canvas {
+    position: sticky;
+    top: 68px;
+    z-index: 2;
+    height: min(52vh, 560px);
+    min-height: 300px;
+    box-shadow: 0 6px 18px rgb(0 0 0 / 0.35);
+  }
+
+  .editor-panel {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .editor-panel .control-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+}
+
+.editor-section {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.editor-section > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted-strong);
+}
+
+.editor-section[open] > summary {
+  margin-bottom: 8px;
+}
+
+.editor-section textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+/* The & of a two-strand result's chain break in the sequence panel. */
+.seq-break {
+  color: var(--accent);
+  font-weight: 700;
+}

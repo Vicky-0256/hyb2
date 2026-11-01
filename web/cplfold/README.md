@@ -1,7 +1,15 @@
 # Browser CPLfold bridge
 
 `cplfold_web.py` adapts the vendored pure-Python CPLfold source to a small JSON
-API used by `cplfold.worker.mjs`. It also reproduces CPLfold's IRIS-style
+API used by `cplfold.worker.mjs`. Bridge version 6 also accepts two RNA strands
+as `sequence` plus `sequenceTwo`, an `A&B` string, or compact `sequence` plus
+integer `cutpoint`. Two-strand results identify `engine: "CPLcofold"`, retain
+compact sequence/pair coordinates, and include `displaySequence`,
+`dotBracketWithBreak`, `cutpoint`, and `strandLengths`. Cofold read support is
+clipped to the strand containing each arm; the matrix export follows the same
+rule. Energy metadata is retained, including experimental pseudoknot scoring.
+
+It also reproduces CPLfold's IRIS-style
 HYB/PARIS interval-to-bonus transform directly from the prepared HYB arms.
 The `bonus_matrix_json` operation exports that same transform as sparse
 upper-triangle entries for local `bin/cplfold` handoff without running a

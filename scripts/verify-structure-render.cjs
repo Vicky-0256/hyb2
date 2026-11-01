@@ -485,6 +485,15 @@ cplfoldWorker.onmessage({ data: { type: "complete", result: {
     }
   ]
 } } });
+// The CPLfold result waits for COMRADES support scored from RNAcofold evidence.
+const comradesWorker = workerInstances.at(-1);
+assert.equal(comradesWorker.url, "./structure.worker.js");
+assert.equal(comradesWorker.message.type, "comrades-evidence");
+assert.equal(comradesWorker.message.evidenceArms.length, 1);
+assert.equal(comradesWorker.message.sequence.length, 28);
+comradesWorker.onmessage({ data: { type: "complete", evidence: { pairs: [{ one: 3, two: 18, count: 2 }], inputRecords: 1, cofoldsWithIntermolecularPairs: 1, temperature: 37, minimumLoop: 3 } } });
+assert.equal(comradesWorker.terminated, true);
+assert.equal(cplfoldState.structure.result.comradesEvidence.pairs[0].count, 2);
 const cplfoldResultHtml = context.window.Hyb2Pages.renderStructure(cplfoldState);
 assert.match(cplfoldResultHtml, /Pseudoknot candidate/);
 assert.match(cplfoldResultHtml, /HYB-derived CPLfold bonus matrix/);

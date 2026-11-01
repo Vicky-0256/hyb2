@@ -16,6 +16,36 @@
   const ORIGINAL_CONSTRAINT_LIMIT = 75;
   const CANONICAL_PAIRS = new Set(["AU", "UA", "CG", "GC", "GU", "UG"]);
 
+  // Diagnose selection failures without clipping arms or fabricating evidence.
+  function diagnoseIrisRegion(records, region, referenceLength) {
+    const counts = { total: records.length, sameRna: 0, forward: 0, contained: 0, tooWide: 0 };
+    let suggestion = null, bestDistance = Infinity;
+    records.forEach(function (record) {
+      if (record.rnaOne !== region.rna || record.rnaTwo !== region.rna) return;
+      counts.sameRna += 1;
+      if (!forwardRecord(record)) return;
+      counts.forward += 1;
+      const start = Math.min(record.rnaOneStart, record.rnaTwoStart);
+      const end = Math.max(record.rnaOneEnd, record.rnaTwoEnd);
+      if (start >= Number(region.start) && end <= Number(region.end)) counts.contained += 1;
+      if (end - start + 1 > 300) { counts.tooWide += 1; return; }
+      if (start < 1 || end > referenceLength) return;
+      const distance = Math.abs((start + end) / 2 - (Number(region.start) + Number(region.end)) / 2);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        // Retain local context around the nearest complete record, within 300 nt.
+        const windowStart = Math.max(1, Math.min(Math.floor((start + end - 299) / 2), referenceLength - 299));
+        suggestion = { rna: region.rna, start: windowStart, end: Math.min(referenceLength, windowStart + 299) };
+      }
+    });
+    const message = !counts.total ? "No HYB records are loaded for the active dataset selection." :
+      !counts.sameRna ? "No HYB rows have both arms on " + region.rna + ". IRIS requires one RNA region; cross-RNA interactions are not supported here." :
+      !counts.forward ? "All HYB rows on this RNA have reverse or invalid arm coordinates; this IRIS input adapter requires forward coordinates." :
+      !counts.contained ? "No complete HYB arm pair is inside " + region.rna + ":" + region.start + "-" + region.end + ". Both arms of each row must fit inside the same region (IRIS limit: 300 nt)." : "";
+    return { counts: counts, suggestion: suggestion, message: message +
+      (counts.forward && counts.tooWide === counts.forward ? " Every forward arm pair spans more than 300 nt, so none fits the browser limit." : "") };
+  }
+
   function prepareReferenceAssembly(records, fasta, options) {
     const settings = options || {};
     const regions = normaliseRegions(settings.regions || []);
@@ -32,11 +62,18 @@
         throw new Error("No mapped FASTA sequence is available for " + region.rna + ".");
       }
       const fullSequence = normaliseSequence(entry.sequence);
-      if (fullSequence.invalid.length) {
+      if (!settings.cofold && fullSequence.invalid.length) {
         throw new Error("The mapped FASTA sequence for " + region.rna + " contains unsupported symbols: " + fullSequence.invalid.join(", ") + ".");
       }
       if (region.end > fullSequence.sequence.length) {
         throw new Error("Region " + region.rna + ":" + region.start + "-" + region.end + " exceeds the mapped FASTA length of " + fullSequence.sequence.length + " nt.");
+      }
+      const selectedSequence = normaliseSequence(fullSequence.sequence.slice(region.start - 1, region.end));
+      // Cofold uses only the two selected windows. Unknown bases elsewhere in
+      // the reference (including a long gap between windows) are not input.
+      // Keep the legacy whole-reference validation for the other workflows.
+      if (settings.cofold && selectedSequence.invalid.length) {
+        throw new Error("Selected region " + region.rna + ":" + region.start + "-" + region.end + " contains unsupported symbols: " + selectedSequence.invalid.join(", ") + ".");
       }
       return {
         index: index,
@@ -44,13 +81,13 @@
         referenceId: entry.id,
         referenceStart: region.start,
         referenceEnd: region.end,
-        sequence: fullSequence.sequence.slice(region.start - 1, region.end),
+        sequence: selectedSequence.sequence,
         preparedStart: 0,
         preparedEnd: 0
       };
     });
 
-    const linker = segments.length === 2 ? originalLinker() : "";
+    const linker = segments.length === 2 && !settings.cofold ? originalLinker() : "";
     let preparedSequence = "";
     segments.forEach(function (segment, index) {
       if (index > 0) {
@@ -79,7 +116,7 @@
         return;
       }
 
-      const orientation = orientRecord(record, segments);
+      const orientation = orientRecord(record, segments, settings.cofold);
       if (!orientation) {
         skipped.outsideSelectedRegions += 1;
         return;
@@ -167,7 +204,7 @@
       record.rnaTwoStart <= record.rnaTwoEnd;
   }
 
-  function orientRecord(record, segments) {
+  function orientRecord(record, segments, includeIntramolecular) {
     const one = arm(record.rnaOne, record.rnaOneStart, record.rnaOneEnd);
     const two = arm(record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd);
 
@@ -183,6 +220,14 @@
     }
     if (armInSegment(two, segments[0]) && armInSegment(one, segments[1])) {
       return { first: two, second: one, firstSegment: segments[0], secondSegment: segments[1], reversed: true };
+    }
+    if (includeIntramolecular) {
+      const segment = segments.find(function (entry) {
+        return armInSegment(one, entry) && armInSegment(two, entry);
+      });
+      if (segment) {
+        return { first: one, second: two, firstSegment: segment, secondSegment: segment, reversed: false };
+      }
     }
     return null;
   }
@@ -472,6 +517,7 @@
     originalEvidenceLimit: ORIGINAL_EVIDENCE_LIMIT,
     originalConstraintLimit: ORIGINAL_CONSTRAINT_LIMIT,
     prepareReferenceAssembly: prepareReferenceAssembly,
+    diagnoseIrisRegion: diagnoseIrisRegion,
     mapCofoldPairs: mapCofoldPairs,
     aggregateEvidence: aggregateEvidence,
     selectFragmentEvidence: selectFragmentEvidence,

@@ -5,7 +5,7 @@
 (function (root) {
   "use strict";
   const EPS = 2 ** -23;
-  const LIMITS = { length: 300, records: 2000, stems: 50, folds: 1000, candidates: 50, ensembles: 20000 };
+  const LIMITS = { length: 300, records: 2000, folds: 1000, candidates: 50, ensembles: 20000 };
   const VALID = new Set(["AU", "UA", "GC", "CG", "GU", "UG"]);
   function integer(value, min, max, name) {
     const n = Number(value);
@@ -60,7 +60,6 @@
     const clean=[];
     for(const s of stems) if(!clean.some(t=>s.l>=t.l&&s.l+s.k<=t.l+t.k&&s.r>=t.r&&s.r+s.k<=t.r+t.k)) clean.push(s);
     if(!clean.length) throw new Error("IRIS found no supported canonical stems at these settings.");
-    if(clean.length>LIMITS.stems) throw new Error("IRIS browser limit: too many supported stems. Select a smaller region or a higher support quantile.");
     return clean;
   }
   function constraintsFor(stems) {
@@ -72,6 +71,20 @@
     }
     for(const a of pairs) for(const b of pairs) if(a.left<b.left&&b.left<a.right&&a.right<b.right) return null;
     return pairs;
+  }
+  function collectConstraints(stems) {
+    const constraints=[];
+    function add(group) {
+      const pairs=constraintsFor(group);
+      if(!pairs) return;
+      // Bound actual folding jobs while enumerating, before allocating a large
+      // list or starting any folds. Stem count alone does not measure the work.
+      if(constraints.length>=LIMITS.folds) throw new Error("IRIS browser limit: more than 1,000 constrained folds. Select a smaller region or a higher support quantile.");
+      constraints.push(pairs);
+    }
+    for(const stem of stems) add([stem]);
+    for(let i=0;i<stems.length;i++) for(let j=i+1;j<stems.length;j++) add([stems[i],stems[j]]);
+    return constraints;
   }
   function pairKeys(candidate) { return new Set(candidate.pairs.map(p=>p.left+":"+p.right)); }
   function distance(a,b) { let same=0; for(const k of a) if(b.has(k)) same++;return a.size+b.size-2*same; }
@@ -149,9 +162,7 @@
     const p=parameters(request.parameters),n=sequence.length;
     progress("Redistributing HYB evidence",8);
     const support=supportMatrix(n,request.evidenceArms),stems=collectStems(sequence,support,p);
-    const constraints=stems.map(s=>constraintsFor([s]));
-    for(let i=0;i<stems.length;i++) for(let j=i+1;j<stems.length;j++) {const c=constraintsFor([stems[i],stems[j]]);if(c) constraints.push(c);}
-    if(constraints.length>LIMITS.folds) throw new Error("IRIS browser limit: too many constrained folds. Select a smaller region.");
+    const constraints=collectConstraints(stems);
     const candidates=[];
     for(let i=0;i<constraints.length;i++) {
       candidates.push(await fold(sequence,constraints[i]));
@@ -163,7 +174,7 @@
     const chosen=pick(leaders,support,n,p.K);
     const ensemble=chosen.indices.map((i,k)=>({...leaders[i],weight:chosen.proportions[k],coefficient:chosen.weights[k]})).sort((a,b)=>b.weight-a.weight);
     const selected=ensemble[0];
-    return {...selected,engine:"IRIS",engineVersion:"1.0-browser.1",algorithm:"IRIS evidence-guided ensemble",
+    return {...selected,engine:"IRIS",engineVersion:"1.0-browser.2",algorithm:"IRIS evidence-guided ensemble",
       model:"IRIS browser adaptation; Gaussian HYB support, constrained ViennaRNA candidates, average-linkage clustering and Bayesian ensemble selection",
       temperature:37,minimumLoop:3,constraintMode:"iris-ensemble",
       constraintSource:"iris-hyb-stems",evidenceMode:"hyb-blocks",evidenceSource:"iris-gaussian-support",
@@ -172,7 +183,7 @@
       evidence:{inputRecords:request.evidenceArms.length,stemCount:stems.length},
       warnings:["Browser adaptation: HYB arms replace BAM input; C ≤ 50, so the upstream LASSO prefilter is not needed. Tie-breaking can differ from scikit-learn."]};
   }
-  const api={run,parameters,supportMatrix,collectStems,constraintsFor,cluster,nnls,pick,LIMITS};
+  const api={run,parameters,supportMatrix,collectStems,constraintsFor,collectConstraints,cluster,nnls,pick,LIMITS};
   root.Hyb2Iris=api;
   if(typeof module!=="undefined"&&module.exports) module.exports=api;
 }(typeof self!=="undefined"?self:globalThis));

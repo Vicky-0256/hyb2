@@ -19,7 +19,7 @@ from typing import Any
 
 
 CPLFOLD_SOURCE_REVISION = "24bab52"
-BRIDGE_VERSION = "5"
+BRIDGE_VERSION = "6"
 DEFAULT_MAX_SEQUENCE_LENGTH = 75
 BROWSER_HARD_MAX_SEQUENCE_LENGTH = 500
 # Native hosts (HYB2 Desktop) may raise the ceiling via
@@ -122,6 +122,43 @@ def _bonus_export_sequence(value: Any) -> str:
     return sequence
 
 
+def _request_sequence_layout(
+    payload: dict[str, Any], maximum: int = DEFAULT_MAX_SEQUENCE_LENGTH, *, export: bool = False
+) -> tuple[str, int | None]:
+    """Validate two-strand input while retaining the single-strand contract.
+
+    All downstream coordinates omit ``&``.  The nick is the length of A,
+    never an additional character in the sequence or bonus matrix.
+    """
+    raw = payload.get("sequence")
+    second = payload.get("sequenceTwo")
+    cutpoint = payload.get("cutpoint")
+    requested_cofold = payload.get("cofold", False)
+    if not isinstance(requested_cofold, bool):
+        raise ValueError("cofold must be a boolean.")
+    is_cofold = second is not None or cutpoint is not None or requested_cofold or (
+        isinstance(raw, str) and "&" in raw
+    )
+    validate = _bonus_export_sequence if export else lambda value: _sequence(value, maximum)
+    if not is_cofold:
+        return validate(raw), None
+
+    from Utils.strand_layout import normalise_sequence
+
+    if not isinstance(raw, str) or (second is not None and not isinstance(second, str)):
+        raise ValueError("CPLcofold requires two RNA sequence strings.")
+    if second is not None:
+        if "&" in raw or "&" in second:
+            raise ValueError("Supply sequence and sequenceTwo without '&', or one sequence containing '&'.")
+        raw = raw + "&" + second
+    # The shared validator requires an actual integer (not bool, float or a
+    # numeric string), and checks it against a literal '&' after normalisation.
+    sequence, cutpoint = normalise_sequence(raw, cutpoint)
+    if cutpoint is None:
+        raise ValueError("CPLcofold requires two nonempty strands, using sequenceTwo, '&' or cutpoint.")
+    return validate(sequence), cutpoint
+
+
 def set_host_hard_max_sequence_length(value: int) -> None:
     """Raise the hard ceiling for a native host; not used by the browser."""
     global _hard_max_sequence_length
@@ -139,7 +176,9 @@ def _request_maximum(value: Any) -> int:
     )
 
 
-def _normalise_arms(raw_arms: Any, sequence_length: int) -> list[tuple[int, int, int, int]]:
+def _normalise_arms(
+    raw_arms: Any, sequence_length: int, cutpoint: int | None = None
+) -> list[tuple[int, int, int, int]]:
     if raw_arms is None:
         return []
     if not isinstance(raw_arms, list):
@@ -154,10 +193,13 @@ def _normalise_arms(raw_arms: Any, sequence_length: int) -> list[tuple[int, int,
         if not isinstance(arm, dict):
             raise ValueError(f"HYB evidence row {index + 1} is invalid.")
         try:
-            one_start = int(arm["oneStart"])
-            one_end = int(arm["oneEnd"])
-            two_start = int(arm["twoStart"])
-            two_end = int(arm["twoEnd"])
+            values = [arm[key] for key in ("oneStart", "oneEnd", "twoStart", "twoEnd")]
+            if cutpoint is None:
+                one_start, one_end, two_start, two_end = map(int, values)
+            else:
+                one_start, one_end, two_start, two_end = (
+                    _integer(value, 1, sequence_length, "HYB arm coordinate") for value in values
+                )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"HYB evidence row {index + 1} has invalid prepared coordinates.") from error
         if not (
@@ -165,8 +207,34 @@ def _normalise_arms(raw_arms: Any, sequence_length: int) -> list[tuple[int, int,
             and 1 <= two_start <= two_end <= sequence_length
         ):
             raise ValueError(f"HYB evidence row {index + 1} falls outside the prepared sequence.")
+        if cutpoint is not None and (
+            one_start <= cutpoint < one_end or two_start <= cutpoint < two_end
+        ):
+            raise ValueError(f"HYB evidence row {index + 1}: an individual read arm cannot cross the strand break.")
         arms.append((one_start, one_end, two_start, two_end))
     return arms
+
+
+def _normalise_arm_counts(raw: Any, sequence_length: int, cutpoint: int) -> dict:
+    """``[[one_start, one_end, two_start, two_end, rows], ...]`` as a block ->
+    row count mapping, checked as ``_normalise_arms`` checks rows."""
+    if not isinstance(raw, list):
+        raise ValueError("HYB evidence counts must be an array.")
+    counts: Counter = Counter()
+    for index, item in enumerate(raw):
+        try:
+            if len(item) != 5:
+                raise ValueError
+            a, b, c, d = (_integer(value, 1, sequence_length, "HYB arm coordinate") for value in item[:4])
+            rows = _integer(item[4], 1, 2**53, "HYB row count")
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"HYB evidence block {index + 1} is invalid.") from error
+        if not (a <= b and c <= d):
+            raise ValueError(f"HYB evidence block {index + 1} falls outside the prepared sequence.")
+        if a <= cutpoint < b or c <= cutpoint < d:
+            raise ValueError(f"HYB evidence block {index + 1}: an individual read arm cannot cross the strand break.")
+        counts[(a, b, c, d)] += rows
+    return dict(counts)
 
 
 def build_hyb_bonus_matrix(
@@ -331,6 +399,126 @@ def build_hyb_bonus_matrix_export(
         "bonusEntries": entries,
         "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
     }
+
+
+def _cofold_evidence_summary(
+    sequence_length: int, cutpoint: int, arms: Any
+) -> dict[str, Any]:
+    """``arms`` is a list of (one_start, one_end, two_start, two_end) rows or
+    a mapping from such a block to its row count."""
+    summary = build_hyb_bonus_matrix_export(sequence_length, [])
+    summary.update({
+        "coordinateSystem": "compact A+B, 1-based inclusive input; '&' has no coordinate",
+        "cutpoint": cutpoint,
+        "strandLengths": [cutpoint, sequence_length - cutpoint],
+        "strandBounded": True,
+    })
+    counts = _compress_arms(arms)
+    if counts:
+        rows = sum(counts.values())
+        mean_length = sum(w * (b - a + 1 + d - c + 1) for (a, b, c, d), w in counts.items()) / (2.0 * rows)
+        summary.update({
+            "source": "hyb-block-intervals",
+            "transform": "Strand-bounded IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
+            "inputRecords": rows,
+            "uniqueBlocks": len(counts),
+            "meanArmLength": mean_length,
+            "gaussianStandardDeviation": mean_length / 6.0,
+            "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
+        })
+    return summary
+
+
+def build_cofold_hyb_bonus_matrix(
+    sequence_length: int, cutpoint: int, arms: Any
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    """Use the shared native/browser cofold transform, clipping at the nick.
+
+    ``arms`` is a list of rows, or (native hosts with many chimeras) a
+    mapping from a block to its row count: the same matrix without one
+    entry per row."""
+    from Utils.cofold_bonus import build_cofold_bonus_matrix
+
+    summary = _cofold_evidence_summary(sequence_length, cutpoint, arms)
+    if not arms:
+        return None, summary
+    if isinstance(arms, dict):
+        bonus = _weighted_cofold_bonus(sequence_length, cutpoint, arms)
+    else:
+        bonus = build_cofold_bonus_matrix(sequence_length, cutpoint, arms)
+    summary.update(bonus_matrix_listing(bonus))
+    summary.update({
+        "nonzeroBonusCells": int(np.count_nonzero(bonus)),
+        "nonzeroUpperTriangleCells": len(summary["bonusEntries"]),
+        "maximumBonus": float(np.max(bonus)),
+    })
+    return bonus, summary
+
+
+def _weighted_cofold_bonus(sequence_length: int, cutpoint: int, counts: dict) -> np.ndarray:
+    """Utils.cofold_bonus.build_cofold_bonus_matrix for blocks with row counts
+    (it compresses repeated rows the same way)."""
+    from Utils.cofold_bonus import _accumulate_support
+
+    blocks = list(counts)
+    weights = [float(counts[block]) for block in blocks]
+    rows = sum(weights)
+    sigma = sum(w * (b - a + 1 + d - c + 1) for (a, b, c, d), w in zip(blocks, weights)) / (12.0 * rows)
+    return _accumulate_support(int(sequence_length), int(cutpoint), np.asarray(blocks, dtype=np.int64),
+                               np.asarray(weights, dtype=np.float64), sigma).astype(np.float32)
+
+
+def _cofold_bonus_matrix_export(
+    sequence_length: int, cutpoint: int, arms: list[tuple[int, int, int, int]]
+) -> dict[str, Any]:
+    """Sparse equivalent of Utils.cofold_bonus for validated input arms.
+
+    Accumulate in float64 and cast after log1p, exactly as the cofold builder
+    does.  Each vector is normalised within its own strand.  Keeping only
+    positive Gaussian entries avoids a dense N-by-N export allocation, without
+    truncating small nonzero terms before repeated evidence is accumulated.
+    """
+    summary = _cofold_evidence_summary(sequence_length, cutpoint, arms)
+    if not arms:
+        return summary
+    sigma = sum(b - a + 1 + d - c + 1 for a, b, c, d in arms) / (12.0 * len(arms))
+    upper_support: dict[tuple[int, int], float] = {}
+    diagonal = np.zeros(sequence_length, dtype=np.float64)
+
+    def gaussian(start: int, end: int):
+        lower, upper = (0, cutpoint) if start <= cutpoint else (cutpoint, sequence_length)
+        positions = np.arange(lower, upper, dtype=np.int64)
+        values = np.exp(-0.5 * ((positions - ((start - 1) + end) / 2.0) / sigma) ** 2)
+        values /= np.max(values)
+        return [(int(position), float(value)) for position, value in zip(positions, values) if value > 0.0]
+
+    for (a, b, c, d), weight in Counter(arms).items():
+        first, second = gaussian(a, b), gaussian(c, d)
+        for i, one in first:
+            for j, two in second:
+                value = float(weight) * one * two
+                if value == 0.0:
+                    continue
+                if i == j:
+                    diagonal[i] += value
+                    diagonal[i] += value
+                else:
+                    key = (min(i, j), max(i, j))
+                    upper_support[key] = upper_support.get(key, 0.0) + value
+
+    diagonal_bonus = np.log1p(np.where(diagonal >= 1e-6, diagonal, 0.0)).astype(np.float32)
+    entries = [
+        {"one": i + 1, "two": j + 1, "value": float(np.float32(np.log1p(value)))}
+        for (i, j), value in sorted(upper_support.items()) if value >= 1e-6
+    ]
+    maximum = max(float(np.max(diagonal_bonus)), max((entry["value"] for entry in entries), default=0.0))
+    summary.update({
+        "nonzeroBonusCells": int(np.count_nonzero(diagonal_bonus)) + 2 * len(entries),
+        "nonzeroUpperTriangleCells": len(entries),
+        "maximumBonus": maximum,
+        "bonusEntries": entries,
+    })
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -525,17 +713,19 @@ def _open_hyb(path: Any):
     return gzip.open(text, "rb") if text.endswith(".gz") else open(text, "rb")
 
 
-def iter_hyb_arms(paths: Any, gene_id: str | None = None, progress: Any = None):
-    """Stream intramolecular HYB rows as ``(gene, a0, a1, b0, b1)``.
+def iter_hyb_rows(paths: Any, genes: Any = None, progress: Any = None, *, intramolecular: bool = False):
+    """Stream HYB rows as ``(gene_one, a0, a1, gene_two, b0, b1)``.
 
-    A row is intramolecular when both arms map to the same gene (columns 4
-    and 10); with ``gene_id`` only that gene is kept.  Coordinates are the
-    reference positions in columns 7-8 and 13-14 (1-based inclusive).
-    ``progress(bytes_done)`` is called about every 4 MiB.
+    With ``genes`` (names) only rows whose two arms map to those genes
+    (columns 4 and 10) are kept; with ``intramolecular`` only rows whose arms
+    map to one gene.  Coordinates are the reference positions in columns 7-8
+    and 13-14 (1-based inclusive).  ``progress(bytes_done)`` is called about
+    every 4 MiB.
     """
 
     if isinstance(paths, (str, os.PathLike)):
         paths = [paths]
+    wanted = None if genes is None else {str(gene).encode("utf-8") for gene in genes}
     base = 0
     reported = 0
     for path in paths:
@@ -549,18 +739,32 @@ def iter_hyb_arms(paths: Any, gene_id: str | None = None, progress: Any = None):
                     reported = done
                     progress(done)
                 fields = raw.split(b"\t", 14)
-                if len(fields) < 14 or fields[3] != fields[9]:
+                if len(fields) < 14 or (intramolecular and fields[3] != fields[9]):
                     continue
-                gene = fields[3].decode("utf-8", "replace")
-                if gene_id is not None and gene != gene_id:
+                if wanted is not None and (fields[3] not in wanted or fields[9] not in wanted):
                     continue
                 try:
-                    yield gene, int(fields[6]), int(fields[7]), int(fields[12]), int(fields[13])
+                    a0, a1, b0, b1 = int(fields[6]), int(fields[7]), int(fields[12]), int(fields[13])
                 except ValueError:
                     continue
+                one = fields[3].decode("utf-8", "replace")
+                two = one if fields[9] == fields[3] else fields[9].decode("utf-8", "replace")
+                yield one, a0, a1, two, b0, b1
         base += os.path.getsize(path)
     if progress is not None:
         progress(base)
+
+
+def iter_hyb_arms(paths: Any, gene_id: str | None = None, progress: Any = None):
+    """Stream intramolecular HYB rows as ``(gene, a0, a1, b0, b1)``.
+
+    A row is intramolecular when both arms map to the same gene (columns 4
+    and 10); with ``gene_id`` only that gene is kept (see ``iter_hyb_rows``).
+    """
+
+    genes = None if gene_id is None else [gene_id]
+    for gene, a0, a1, _two, b0, b1 in iter_hyb_rows(paths, genes, progress, intramolecular=True):
+        yield gene, a0, a1, b0, b1
 
 
 def collect_hyb_arms(
@@ -657,14 +861,23 @@ def _candidate(
     raw: dict[str, Any],
     index: int,
     bonus_matrix: np.ndarray | None,
+    cutpoint: int | None = None,
 ) -> dict[str, Any]:
     structure = str(raw.get("structure") or "")
+    phase1 = raw.get("phase1_struct")
+    phase2 = raw.get("phase2_struct")
+    if cutpoint is not None:
+        from Utils.strand_layout import strip_structure_break
+
+        structure = strip_structure_break(structure, cutpoint, len(sequence))
+        phase1 = strip_structure_break(phase1, cutpoint, len(sequence)) if phase1 is not None else None
+        phase2 = strip_structure_break(phase2, cutpoint, len(sequence)) if phase2 is not None else None
     if len(structure) != len(sequence):
         raise ValueError("CPLfold returned a structure with the wrong length.")
     pairs = _pairs(sequence, structure, bonus_matrix)
     crossing_pairs = _crossing_pair_count(pairs)
     structure_type = str(raw.get("type") or "phase1")
-    return {
+    candidate = {
         "index": index,
         "dotBracket": structure,
         "type": structure_type,
@@ -673,36 +886,71 @@ def _candidate(
         "effectiveEnergy": raw.get("effective_energy"),
         "phase1Energy": raw.get("phase1_energy"),
         "score": raw.get("score"),
-        "phase1Structure": raw.get("phase1_struct"),
-        "phase2Structure": raw.get("phase2_struct"),
+        "phase1Structure": phase1,
+        "phase2Structure": phase2,
         "pairs": pairs,
         "crossingPairs": crossing_pairs,
         "unpaired": len(sequence) - 2 * len(pairs),
     }
+    if cutpoint is not None:
+        from Utils.strand_layout import add_strand_break
+
+        for pair in pairs:
+            for side in ("left", "right"):
+                position = pair[side]
+                pair[side + "Strand"] = "A" if position <= cutpoint else "B"
+                pair[side + "StrandPosition"] = position if position <= cutpoint else position - cutpoint
+            pair["intermolecular"] = pair["left"] <= cutpoint < pair["right"]
+        candidate.update({
+            "dotBracketWithBreak": add_strand_break(structure, cutpoint),
+            "phase1StructureWithBreak": add_strand_break(phase1, cutpoint) if phase1 is not None else None,
+            "phase2StructureWithBreak": add_strand_break(phase2, cutpoint) if phase2 is not None else None,
+            "cutpoint": cutpoint,
+            "strandLengths": [cutpoint, len(sequence) - cutpoint],
+            "intermolecularPairs": sum(pair["intermolecular"] for pair in pairs),
+            "energyMetadata": dict(raw.get("energy_metadata", {})),
+            "energyBreakdown": dict(raw.get("energy_breakdown", {})),
+            "readSupport": raw.get("read_support", 0.0),
+            "readBonus": raw.get("read_bonus", 0.0),
+        })
+        if "phase2_association_cost" in raw:
+            candidate["phase2AssociationCost"] = raw["phase2_association_cost"]
+    return candidate
 
 
 def fold(payload: dict[str, Any]) -> dict[str, Any]:
     maximum_sequence_length = _request_maximum(payload.get("maxSequenceLength"))
-    sequence = _sequence(payload.get("sequence"), maximum_sequence_length)
+    sequence, cutpoint = _request_sequence_layout(payload, maximum_sequence_length)
     beam_size = _integer(payload.get("beamSize", 20), 1, 200, "Beam size")
     max_phase1 = _integer(payload.get("maxPhase1", 3), 1, 20, "Phase-1 candidate count")
     energy_delta = _number(payload.get("energyDelta", 5), 0.0, 50.0, "Energy delta")
-    alpha = _number(payload.get("alpha", 0.5), 0.0, 1.0, "Evidence alpha")
+    alpha = _number(payload.get("alpha", 0.5 if cutpoint is None else 0.0), 0.0, 1.0, "Evidence alpha")
     beta = _number(payload.get("beta", 0.0), 0.0, 1.0, "Pseudoknot beta")
     allow_pseudoknot = payload.get("allowPseudoknot", True)
     if not isinstance(allow_pseudoknot, bool):
         raise ValueError("allowPseudoknot must be a boolean.")
     energy_model = str(payload.get("energyModel", "DP09")).upper()
+    if cutpoint is not None and energy_model not in {"DP03", "DP09"}:
+        raise ValueError("CPLcofold supports only DP03 or DP09; nicked CC/RE pseudoknot models are not implemented.")
     if energy_model not in ENERGY_MODELS:
         raise ValueError("Energy model must be one of DP03, DP09, CC06, CC09 or RE.")
 
     evidence_mode = str(payload.get("evidenceMode", "none"))
     if evidence_mode not in {"none", "hyb-blocks"}:
         raise ValueError("CPLfold evidence mode must be 'none' or 'hyb-blocks'.")
-    arms = _normalise_arms(payload.get("evidenceArms"), len(sequence)) if evidence_mode == "hyb-blocks" else []
+    counted = payload.get("evidenceArmCounts")
+    if counted is not None and evidence_mode == "hyb-blocks":
+        # native hosts: blocks with row counts (CPLcofold only), not one entry per row
+        if cutpoint is None:
+            raise ValueError("evidenceArmCounts is for two-strand CPLcofold requests.")
+        arms = _normalise_arm_counts(counted, len(sequence), cutpoint)
+    else:
+        arms = _normalise_arms(payload.get("evidenceArms"), len(sequence), cutpoint) if evidence_mode == "hyb-blocks" else []
     if evidence_mode == "hyb-blocks" and not arms:
         raise ValueError("No eligible HYB rows are fully contained in the selected reference region.")
-    if arms and _NUMBA_AVAILABLE:
+    if cutpoint is not None:
+        bonus_matrix, evidence = build_cofold_hyb_bonus_matrix(len(sequence), cutpoint, arms)
+    elif arms and _NUMBA_AVAILABLE:
         # Native hosts: same transform without one n-by-n outer product per
         # block (values agree with the dense builder to ~1e-6).
         bonus_matrix, evidence = build_hyb_bonus_matrix_fast(len(sequence), arms)
@@ -710,7 +958,14 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         bonus_matrix, evidence = build_hyb_bonus_matrix(len(sequence), arms)
 
-    raw_candidates = two_phase_pseudoknot_fold(
+    fold_function = two_phase_pseudoknot_fold
+    layout_parameters = {}
+    if cutpoint is not None:
+        from CPLcofold import two_phase_cofold
+
+        fold_function = two_phase_cofold
+        layout_parameters["cutpoint"] = cutpoint
+    raw_candidates = fold_function(
         seq=sequence,
         beam_size=beam_size,
         energy_delta=energy_delta,
@@ -724,9 +979,10 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
         alpha=alpha,
         beta=beta,
         allow_pseudoknot=allow_pseudoknot,
+        **layout_parameters,
     )
     candidates = [
-        _candidate(sequence, candidate, index, bonus_matrix)
+        _candidate(sequence, candidate, index, bonus_matrix, cutpoint)
         for index, candidate in enumerate(raw_candidates)
     ]
     if not candidates:
@@ -734,9 +990,10 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
 
     best = candidates[0]
     nucleotide_support = evidence.pop("nucleotideSupport", [0.0] * len(sequence))
-    return {
+    result = {
         "algorithm": "CPLfold two-phase pseudoknot prediction" if allow_pseudoknot else "CPLfold pseudoknot-free secondary-structure prediction",
-        "model": f"LinearFold Vienna-mode scoring with CPLfold/HotKnots {energy_model} energy ranking",
+        "model": (f"LinearFold Vienna-mode scoring with CPLfold/HotKnots {energy_model} energy ranking" if allow_pseudoknot
+                  else "LinearFold Vienna-mode scoring with Turner 2004 energy ranking"),
         "engine": "CPLfold",
         "engineVersion": CPLFOLD_SOURCE_REVISION,
         "bridgeVersion": BRIDGE_VERSION,
@@ -781,20 +1038,36 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
         "nucleotideSupport": nucleotide_support,
         "maximumNucleotideSupport": max(nucleotide_support, default=0.0),
     }
+    if cutpoint is not None:
+        from Utils.strand_layout import add_strand_break
+
+        result.update({
+            "algorithm": "CPLcofold two-strand two-phase pseudoknot prediction" if allow_pseudoknot else "CPLcofold pseudoknot-free two-strand prediction",
+            "model": f"Nick-aware Turner cofold scoring; experimental Turner/{energy_model} strand-graph pseudoknot ranking",
+            "engine": "CPLcofold",
+            "displaySequence": add_strand_break(sequence, cutpoint),
+        })
+        for key in ("dotBracketWithBreak", "phase1StructureWithBreak", "phase2StructureWithBreak",
+                    "cutpoint", "strandLengths", "intermolecularPairs", "energyMetadata", "energyBreakdown",
+                    "readSupport", "readBonus", "phase2AssociationCost"):
+            if key in best:
+                result[key] = best[key]
+    return result
 
 
 def bonus_matrix(payload: dict[str, Any]) -> dict[str, Any]:
     """Prepare the exact sparse bonus matrix used by a guided local run."""
 
-    sequence = _bonus_export_sequence(payload.get("sequence"))
+    sequence, cutpoint = _request_sequence_layout(payload, export=True)
     evidence_mode = str(payload.get("evidenceMode", "none"))
     if evidence_mode not in {"none", "hyb-blocks"}:
         raise ValueError("CPLfold evidence mode must be 'none' or 'hyb-blocks'.")
-    arms = _normalise_arms(payload.get("evidenceArms"), len(sequence)) if evidence_mode == "hyb-blocks" else []
+    arms = _normalise_arms(payload.get("evidenceArms"), len(sequence), cutpoint) if evidence_mode == "hyb-blocks" else []
     if evidence_mode == "hyb-blocks" and not arms:
         raise ValueError("No eligible HYB rows are fully contained in the selected reference region.")
-    evidence = build_hyb_bonus_matrix_export(len(sequence), arms)
-    return {
+    evidence = (build_hyb_bonus_matrix_export(len(sequence), arms) if cutpoint is None
+                else _cofold_bonus_matrix_export(len(sequence), cutpoint, arms))
+    result = {
         "engine": "CPLfold",
         "engineVersion": CPLFOLD_SOURCE_REVISION,
         "bridgeVersion": BRIDGE_VERSION,
@@ -802,6 +1075,16 @@ def bonus_matrix(payload: dict[str, Any]) -> dict[str, Any]:
         "evidenceMode": evidence_mode,
         "evidence": evidence,
     }
+    if cutpoint is not None:
+        from Utils.strand_layout import add_strand_break
+
+        result.update({
+            "engine": "CPLcofold",
+            "displaySequence": add_strand_break(sequence, cutpoint),
+            "cutpoint": cutpoint,
+            "strandLengths": [cutpoint, len(sequence) - cutpoint],
+        })
+    return result
 
 
 def fold_json(payload_json: str) -> str:
@@ -824,6 +1107,7 @@ __all__ = [
     "build_hyb_bonus_matrix_fast",
     "collect_hyb_arms",
     "iter_hyb_arms",
+    "iter_hyb_rows",
     "bonus_matrix",
     "bonus_matrix_json",
     "fold",

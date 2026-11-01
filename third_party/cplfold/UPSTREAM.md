@@ -12,6 +12,18 @@ other ignored local artifacts.
 
 ## Hyb2-local changes after import
 
+- The `CPLcofold` branch adds `CPLcofold.py`, a strand-aware Numba parser,
+  lazy k-best candidate enumeration, a strand-bounded reads bonus builder,
+  and cofold energies. Alpha guides both phases; beta retains the existing
+  pseudoknot reranking formula. The cofold pseudoknot Turner/DP extension
+  is explicitly experimental, with model metadata on every result. Its
+  strand-graph scoring follows covalent links at strand breaks and uses one
+  Turner local-energy baseline for connected and disconnected candidates.
+  Numeric guards reject overflowing search/ranking values.
+- The CLI accepts `A&B`, `--sequence-two`, `--cutpoint`, and an explicitly
+  selected two-record FASTA (`bin/cplfold --cofold --sequence-file ...`).
+  Nucleotide and bonus coordinates omit `&`. The original single-strand
+  parser and HotKnots evaluator are retained.
 - `CPLfold.py` treats a completed Phase-1-only prediction as CLI success.
 - `CPLfold.py` supports explicit pseudoknot-free prediction through
   `--no-pseudoknot` and `allow_pseudoknot=False`.

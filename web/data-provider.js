@@ -17,6 +17,8 @@
  *   DatasetInfo = { id, label, fileName, fileSize|null, sha256|null,
  *     sha256Unavailable: bool, condition: "A"|"B"|null, primary: bool,
  *     validRecords, supportInteractions, rnaNames: string[],
+ *     rawReadInteractions?, uniqueRNAs?, uniquePairs?, invalidRecords?,
+ *     homodimerRecords?,      // optional per-dataset Overview counts
  *     reference: null | { fileName, fileSize|null, sha256|null,
  *       sha256Unavailable: bool, sequenceCount,
  *       mapping: { [rna]: referenceId },
@@ -681,6 +683,11 @@
         validRecords: dataset.summary.validRecords || 0,
         supportInteractions: dataset.summary.supportInteractions || 0,
         rnaNames: (dataset.summary.rnaNames || []).slice(),
+        rawReadInteractions: dataset.summary.rawReadCountRecords ? dataset.summary.rawReadInteractions || 0 : null,
+        uniqueRNAs: dataset.summary.uniqueRNAs || 0,
+        uniquePairs: dataset.summary.uniquePairs || 0,
+        invalidRecords: dataset.summary.invalidRecords || 0,
+        homodimerRecords: dataset.summary.homodimerRecords || 0,
         reference: self.referenceInfo(dataset.summary.rnaNames || [])
       };
     });
@@ -709,10 +716,11 @@
     let binSize = requestedBinSize;
     let bins = null;
     // Like the analysis backend: double the bin size until the map fits
-    // maxCells (also retried when the browser cell budget is exceeded).
+    // maxCells (also retried when the browser's cell or bin-contribution
+    // budget is exceeded, as merged replicates can).
     for (let attempt = 0; attempt < 12; attempt += 1) {
       bins = data.buildContactBins(rows, Object.assign({}, contact, { binSize: binSize }));
-      const tooManyCells = bins.ready ? bins.x.length > maxCells : /distinct cells/.test(bins.reason || "");
+      const tooManyCells = bins.ready ? bins.x.length > maxCells : /distinct cells|bin contributions/.test(bins.reason || "");
       if (!tooManyCells || maxCells === Infinity) {
         break;
       }

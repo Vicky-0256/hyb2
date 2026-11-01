@@ -9,13 +9,38 @@
   const SCALE_STEPS = 1024;
   const scaleLuts = { light: null, dark: null };
 
+  // Contact Map colour styles, low to high counts. "colour" follows the page
+  // theme; the others are drawn on white paper on screen and in exports, so
+  // the same map reads the same everywhere. ColorBrewer Reds/Blues/YlOrRd
+  // and the matplotlib viridis/magma anchors.
+  const CONTACT_PALETTES = [
+    { value: "colour", label: "Mint–navy (follows theme)", kicker: "Mint–navy sequential" },
+    { value: "reds", label: "White–red (Juicebox style)", kicker: "White–red sequential", stops: [[255, 255, 255], [252, 187, 161], [251, 106, 74], [203, 24, 29], [103, 0, 13]] },
+    { value: "blues", label: "White–blue", kicker: "White–blue sequential", stops: [[247, 251, 255], [198, 219, 239], [107, 174, 214], [33, 113, 181], [8, 48, 107]] },
+    { value: "heat", label: "Heat (yellow–red)", kicker: "Yellow–red heat", stops: [[255, 255, 204], [254, 217, 118], [253, 141, 60], [227, 26, 28], [128, 0, 38]] },
+    { value: "viridis", label: "Viridis (colour-blind safe)", kicker: "Viridis", stops: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]] },
+    { value: "magma", label: "Magma, reversed", kicker: "Magma (reversed)", stops: [[252, 253, 191], [252, 137, 97], [183, 55, 121], [81, 18, 124], [0, 0, 4]] },
+    { value: "monochrome", label: "White and black", kicker: "White and black" },
+    { value: "greys-inverted", label: "Black and white (inverted)", kicker: "Black and white" }
+  ];
+
+  function contactPalette(value) {
+    return CONTACT_PALETTES.find(function (palette) { return palette.value === value; }) || CONTACT_PALETTES[0];
+  }
+
+  // Every style but the theme-following "colour" prints on white paper.
+  function paperPalette(value) {
+    return contactPalette(value).value !== "colour";
+  }
+
   // One entry per step: rgb triplets for viridisRgb() and opaque RGBA pixels
   // (little-endian ABGR) for the canvas fast path. Built on first use, after
   // the CIELAB helpers below are initialised.
   function scaleLut(dark, palette) {
-    const key = palette === "monochrome" ? "monochrome" : dark ? "dark" : "light";
+    const entry = contactPalette(palette);
+    const key = entry.value === "colour" ? (dark ? "dark" : "light") : entry.value;
     if (!scaleLuts[key]) {
-      const stops = (dark ? BRAND_SCALE_DARK : BRAND_SCALE).map(srgbToLab);
+      const stops = (entry.stops || (dark ? BRAND_SCALE_DARK : BRAND_SCALE)).map(srgbToLab);
       const rgb = new Uint8Array(SCALE_STEPS * 3);
       const pixels = new Uint32Array(SCALE_STEPS);
       for (let index = 0; index < SCALE_STEPS; index += 1) {
@@ -23,7 +48,7 @@
         const at = Math.min(stops.length - 2, Math.floor(scaled));
         const t = scaled - at;
         const grey = Math.round(255 * (1 - index / (SCALE_STEPS - 1)));
-        const colour = palette === "monochrome" ? [grey, grey, grey] : labToSrgb([0, 1, 2].map(function (channel) {
+        const colour = entry.value === "monochrome" ? [grey, grey, grey] : entry.value === "greys-inverted" ? [255 - grey, 255 - grey, 255 - grey] : labToSrgb([0, 1, 2].map(function (channel) {
           return stops[at][channel] + (stops[at + 1][channel] - stops[at][channel]) * t;
         }));
         rgb[index * 3] = colour[0];
@@ -64,6 +89,9 @@
   // Changing a map control keeps the current map on screen, dimmed and
   // marked stale; page-data.js fetches the new bins through the provider
   // (the query key changed) and the map swaps in when it is ready.
+  // Contact Map settings that only change how the map is drawn.
+  const CONTACT_DISPLAY_KEYS = ["palette", "scale", "colourCap", "customCap"];
+
   function rebuildContact(state, api) {
     const contact = state.contact;
     contact.selection = null;
@@ -413,12 +441,13 @@
     const binSize = matrix.binSize;
     const xStart = geometry.xStart;
     const yStart = geometry.yStart;
+    const yEnd = geometry.yEnd;
     const paint = function (cell) {
       const visualValue = log ? Math.log1p(cell.value) : cell.value;
       const ratio = cap ? Math.max(0, Math.min(1, visualValue / cap)) : 0;
       const color = lut[Math.round(ratio * lastLut)];
       const x0 = ((cell.x - xStart) / binSize) * cellWidth;
-      const y0 = ((cell.y - yStart) / binSize) * cellHeight;
+      const y0 = ((yEnd - cell.y) / binSize) * cellHeight;
       const left = Math.max(0, Math.floor(x0));
       const right = Math.min(width, Math.ceil(x0 + spanX));
       const top = Math.max(0, Math.floor(y0));
@@ -443,7 +472,6 @@
     } else {
       const cells = matrix.cells;
       const xEnd = geometry.xEnd;
-      const yEnd = geometry.yEnd;
       for (let index = 0; index < cells.length; index += 1) {
         const cell = cells[index];
         if (cell.x >= xStart && cell.x <= xEnd && cell.y >= yStart && cell.y <= yEnd) {
@@ -462,8 +490,8 @@
   // off-page canvas; without it the page canvas in the current theme.
   function drawContactStageCanvas(state, canvas, stage, exportSize) {
     const matrix = state.contact.matrix;
-    const theme = exportSize || state.contact.palette === "monochrome" ? "light" : undefined;
-    const dimensions = exportSize ? prepareExportCanvas(canvas, exportSize.width, exportSize.height) : prepareCanvas(canvas);
+    const theme = exportSize || paperPalette(state.contact.palette) ? "light" : undefined;
+    const dimensions = exportSize ? prepareExportCanvas(canvas, exportSize.width, exportSize.height, exportSize.scale) : prepareCanvas(canvas);
     const context = dimensions.context;
     const colors = contactColors(state.contact, theme);
     const ink = colors.ink;
@@ -490,7 +518,7 @@
       context.lineWidth = 2;
       context.strokeRect(
         geometry.left + ((selection.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth + 1,
-        geometry.top + ((selection.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight + 1,
+        geometry.top + rowOffset(geometry, selection.y, matrix.binSize) + 1,
         Math.max(2, geometry.cellWidth - 2),
         Math.max(2, geometry.cellHeight - 2)
       );
@@ -499,7 +527,7 @@
     const drag = exportSize ? null : state.contact.stageDrag;
     if (drag && drag.stage === stage && drag.end && state.contact.stageDragMoved) {
       const x = geometry.left + (Math.min(drag.x, drag.end.x) - geometry.xStart) / matrix.binSize * geometry.cellWidth;
-      const y = geometry.top + (Math.min(drag.y, drag.end.y) - geometry.yStart) / matrix.binSize * geometry.cellHeight;
+      const y = geometry.top + rowOffset(geometry, Math.max(drag.y, drag.end.y), matrix.binSize);
       const width = (Math.abs(drag.x - drag.end.x) / matrix.binSize + 1) * geometry.cellWidth;
       const height = (Math.abs(drag.y - drag.end.y) / matrix.binSize + 1) * geometry.cellHeight;
       context.fillStyle = "rgba(0,96,254,0.18)";
@@ -628,7 +656,9 @@
     return {
       box: { left: geometry.left, top: geometry.top, width: geometry.plotWidth, height: geometry.plotHeight },
       x: coordinateTicks(geometry.xStart, geometry.xEnd + binSize - 1, geometry.plotWidth, false),
-      y: coordinateTicks(yLabels.top, yLabels.bottom, geometry.plotHeight, true),
+      y: coordinateTicks(yLabels.top, yLabels.bottom, geometry.plotHeight, true).map(function (tick) {
+        return { offset: geometry.plotHeight - tick.offset, label: tick.label };
+      }),
       xTitle: positionTitle(state.contact.rnaX),
       yTitle: positionTitle(state.contact.rnaY)
     };
@@ -793,8 +823,18 @@
       return null;
     }
     const xIndex = Math.min(geometry.xCount - 1, Math.max(0, Math.floor((x - geometry.left) / geometry.cellWidth)));
-    const yIndex = Math.min(geometry.yCount - 1, Math.max(0, Math.floor((y - geometry.top) / geometry.cellHeight)));
-    return { x: geometry.xStart + xIndex * matrix.binSize, y: geometry.yStart + yIndex * matrix.binSize };
+    return { x: geometry.xStart + xIndex * matrix.binSize, y: rowBin(geometry, y - geometry.top, matrix.binSize) };
+  }
+
+  // y grows upwards, (0, 0) at the bottom left: the px from the plot top to
+  // the row of bin y, and the bin of the row at a px offset from the top
+  function rowOffset(geometry, y, binSize) {
+    return (geometry.yEnd - y) / binSize * geometry.cellHeight;
+  }
+
+  function rowBin(geometry, offset, binSize) {
+    const index = Math.min(geometry.yCount - 1, Math.max(0, Math.floor(offset / geometry.cellHeight)));
+    return geometry.yEnd - index * binSize;
   }
 
   function getContactStageSelection(state, stage) {
@@ -893,8 +933,8 @@
     let y = current.y;
     if (key === "ArrowLeft") x -= matrix.binSize;
     if (key === "ArrowRight") x += matrix.binSize;
-    if (key === "ArrowUp") y -= matrix.binSize;
-    if (key === "ArrowDown") y += matrix.binSize;
+    if (key === "ArrowUp") y += matrix.binSize;
+    if (key === "ArrowDown") y -= matrix.binSize;
     selectContactStagePoint(state, stage, {
       x: clampBin(x, view.xStart, view.xEnd, matrix.binSize),
       y: clampBin(y, view.yStart, view.yEnd, matrix.binSize)
@@ -902,11 +942,13 @@
   }
 
   // a detached canvas for a PNG export, at twice the css size
-  function prepareExportCanvas(canvas, width, height) {
-    canvas.width = Math.round(width * 2);
-    canvas.height = Math.round(height * 2);
+  // scale: device pixels per css pixel (2 by default; 3 for print exports)
+  function prepareExportCanvas(canvas, width, height, scale) {
+    const ratio = scale || 2;
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
     const context = canvas.getContext("2d");
-    context.setTransform(2, 0, 0, 2, 0, 0);
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
     return { context: context, width: width, height: height };
   }
 
@@ -1472,6 +1514,19 @@
     const theme = opts.theme;
     const dark = theme ? theme === "dark" : isDarkTheme();
     const result = state.comparison.result;
+    // on the page the canvas is as tall as its width needs for a square plot
+    if (!exporting) {
+      const cssWidth = canvas.getBoundingClientRect().width;
+      if (cssWidth > 0) {
+        const cssHeight = Math.max(320, Math.min(900, comparisonSquareHeight(cssWidth))) + "px";
+        if (canvas.style.height !== cssHeight) {
+          canvas.style.height = cssHeight;
+          if (canvas.parentElement && canvas.parentElement.classList.contains("comparison-canvas-wrap")) {
+            canvas.parentElement.style.height = cssHeight;
+          }
+        }
+      }
+    }
     const dimensions = prepareCanvas(canvas);
     const context = dimensions.context;
     const colours = exporting ? exportColors(theme) : null;
@@ -1524,7 +1579,7 @@
         context.lineWidth = 2;
         context.strokeRect(
           geometry.left + ((selected.x - geometry.xStart) / result.binSize) * geometry.cellWidth + 1,
-          geometry.top + ((selected.y - geometry.yStart) / result.binSize) * geometry.cellHeight + 1,
+          geometry.top + rowOffset(geometry, selected.y, result.binSize) + 1,
           Math.max(2, geometry.cellWidth - 2),
           Math.max(2, geometry.cellHeight - 2)
         );
@@ -1650,7 +1705,13 @@
     };
     return {
       x: axis(geometry.xStart, geometry.xCount, geometry.left, geometry.plotWidth),
-      y: axis(geometry.yStart, geometry.yCount, geometry.top, geometry.plotHeight)
+      // y grows upwards: the first position sits at the bottom
+      y: axis(geometry.yStart, geometry.yCount, geometry.top, geometry.plotHeight).map(function (mark) {
+        return Object.assign({}, mark, {
+          at: 2 * geometry.top + geometry.plotHeight - mark.at,
+          edge: mark.edge === "start" ? "end" : mark.edge === "end" ? "start" : ""
+        });
+      })
     };
   }
 
@@ -1735,8 +1796,15 @@
   // below the plot: tick labels, the axis title, then the colour bar (~56 px)
   const COMPARISON_LEGEND_OFFSET = 46;
   const COMPARISON_BOTTOM_SPACE = 104;
+  const COMPARISON_LEFT = 66;
+  const COMPARISON_RIGHT = 16;
+  const COMPARISON_TOP = 30;
+  // the canvas height that makes the plot of a canvas this wide square
+  function comparisonSquareHeight(width) {
+    return Math.round(width - COMPARISON_LEFT - COMPARISON_RIGHT + COMPARISON_TOP + COMPARISON_BOTTOM_SPACE);
+  }
   const COMPARISON_EXPORT_WIDTH = 720;
-  const COMPARISON_EXPORT_HEIGHT = 560;
+  const COMPARISON_EXPORT_HEIGHT = comparisonSquareHeight(COMPARISON_EXPORT_WIDTH);
 
   function drawComparisonCells(context, dimensions, geometry, result, kind, cells, surface, panel, line, theme) {
     const dark = theme ? theme === "dark" : isDarkTheme();
@@ -1776,7 +1844,7 @@
     let previous = "";
     cells.forEach(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
-      const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
+      const y = geometry.top + rowOffset(geometry, cell.y, result.binSize);
       const colour = colourOf(cell);
       if (colour !== previous) {
         context.fillStyle = colour;
@@ -1820,7 +1888,7 @@
         }
       }
       const x = offsetX + ((cell.x - geometry.xStart) / result.binSize) * cellWidth;
-      const y = offsetY + ((cell.y - geometry.yStart) / result.binSize) * cellHeight;
+      const y = offsetY + ((geometry.yEnd - cell.y) / result.binSize) * cellHeight;
       const x0 = Math.max(0, Math.floor(x));
       const y0 = Math.max(0, Math.floor(y));
       const x1 = Math.min(plotWidth, Math.max(x0 + 1, Math.round(x + spanX)));
@@ -1837,11 +1905,15 @@
     const xEnd = view ? view.xEnd : Math.floor(result.xMax / result.binSize) * result.binSize;
     const yStart = view ? view.yStart : Math.floor(result.yMin / result.binSize) * result.binSize;
     const yEnd = view ? view.yEnd : Math.floor(result.yMax / result.binSize) * result.binSize;
-    // room above for the title, below for the x axis and the colour bar
-    const left = 66;
-    const top = 30;
-    const plotWidth = Math.max(120, width - left - 16);
-    const plotHeight = Math.max(120, height - top - COMPARISON_BOTTOM_SPACE);
+    // room above for the title, below for the x axis and the colour bar; the
+    // plot is square (as hyb2_compare's maps), centred in any spare width
+    const availableWidth = Math.max(120, width - COMPARISON_LEFT - COMPARISON_RIGHT);
+    const availableHeight = Math.max(120, height - COMPARISON_TOP - COMPARISON_BOTTOM_SPACE);
+    const side = Math.min(availableWidth, availableHeight);
+    const left = COMPARISON_LEFT + Math.floor((availableWidth - side) / 2);
+    const top = COMPARISON_TOP;
+    const plotWidth = side;
+    const plotHeight = side;
     const xCount = Math.max(1, Math.round((xEnd - xStart) / result.binSize) + 1);
     const yCount = Math.max(1, Math.round((yEnd - yStart) / result.binSize) + 1);
     return {
@@ -1873,8 +1945,7 @@
       return null;
     }
     const xIndex = Math.min(geometry.xCount - 1, Math.max(0, Math.floor((x - geometry.left) / geometry.cellWidth)));
-    const yIndex = Math.min(geometry.yCount - 1, Math.max(0, Math.floor((y - geometry.top) / geometry.cellHeight)));
-    const cell = window.Hyb2Data.comparisonCellAt(result, geometry.xStart + xIndex * result.binSize, geometry.yStart + yIndex * result.binSize);
+    const cell = window.Hyb2Data.comparisonCellAt(result, geometry.xStart + xIndex * result.binSize, rowBin(geometry, y - geometry.top, result.binSize));
     return kind === "conserved" && cell && !(cell.similarity > 0) ? null : cell;
   }
 
@@ -1917,8 +1988,8 @@
       cells.forEach(function (cell) {
         const candidate = key === "ArrowLeft" ? cell.x < current.x
           : key === "ArrowRight" ? cell.x > current.x
-            : key === "ArrowUp" ? cell.y < current.y
-              : cell.y > current.y;
+            : key === "ArrowUp" ? cell.y > current.y
+              : cell.y < current.y;
         if (candidate && (!best || before(cell, best))) {
           best = cell;
         }
@@ -1936,24 +2007,66 @@
 
   function applyLegacyWorkflow(state, key, value) {
     const structure = state.structure;
+    if (key === "engine" && value === "cplfold" && structure.source === "reference") {
+      structure.cplfoldMode = structure.evidenceLayout === "paired" ? "cofold" : "single";
+    }
+    if (key === "cplfoldMode") {
+      structure.evidenceLayout = value === "cofold" ? "paired" : "single";
+      structure.homodimerOnly = false;
+      if (value === "cofold" && !structure.secondRna) structure.secondRna = structure.rna;
+      // A second region that copies the first would fold a fragment with itself.
+      if (value === "cofold" && structure.secondRna === structure.rna &&
+          Number(structure.secondStart) === Number(structure.start) && Number(structure.secondEnd) === Number(structure.end)) {
+        const partner = window.Hyb2Data && window.Hyb2Data.structurePartnerWindow(state);
+        if (partner) {
+          structure.secondRna = partner.rna;
+          structure.secondStart = partner.start;
+          structure.secondEnd = partner.end;
+        }
+      }
+    }
+    if (["cplfoldMode", "engine"].indexOf(key) !== -1 && structure.engine === "cplfold" && structure.cplfoldMode === "cofold") {
+      if (["DP03", "DP09"].indexOf(structure.cplfoldEnergyModel) === -1) structure.cplfoldEnergyModel = "DP09";
+      if (structure.source === "record") structure.source = "paste";
+    }
     if (key !== "workflow") {
-      if (["engine", "source", "constraintMode", "evidenceLayout", "homodimerOnly", "secondRna"].indexOf(key) !== -1) {
+      if (["engine", "source", "constraintMode", "evidenceLayout", "homodimerOnly", "secondRna", "cplfoldMode"].indexOf(key) !== -1) {
         structure.workflow = "custom";
+        if (structure.engine === "cplfold") structure.homodimerOnly = false;
       }
       if (key === "rna" && ["long-intramolecular", "homodimer"].indexOf(structure.workflow) !== -1) {
         structure.secondRna = structure.rna;
       }
+      if (structure.engine === "cplfold" && structure.workflow === "homodimer") {
+        if (key === "start") structure.secondStart = structure.start;
+        if (key === "end") structure.secondEnd = structure.end;
+        if (["secondStart", "secondEnd"].indexOf(key) !== -1) {
+          structure.workflow = "custom";
+          structure.homodimerOnly = false;
+        }
+      }
       return;
     }
-    if (value === "custom") return;
-    structure.engine = "viennarna";
+    if (value === "custom") {
+      if (structure.engine === "cplfold") structure.homodimerOnly = false;
+      return;
+    }
+    const cplfold = structure.engine === "cplfold";
+    if (cplfold) {
+      structure.cplfoldMode = value === "short-intramolecular" ? "single" : "cofold";
+      if (structure.cplfoldMode === "cofold" && ["DP03", "DP09"].indexOf(structure.cplfoldEnergyModel) === -1) {
+        structure.cplfoldEnergyModel = "DP09";
+      }
+    } else {
+      structure.engine = "viennarna";
+    }
     structure.source = "reference";
-    structure.constraintMode = "hyb-guided";
+    structure.constraintMode = cplfold ? "none" : "hyb-guided";
     structure.evidenceLayout = value === "short-intramolecular" ? "single" : "paired";
     structure.homodimerOnly = value === "homodimer";
     if (value === "long-intramolecular" || value === "homodimer") {
       structure.secondRna = structure.rna;
-    } else if (value === "intermolecular" && structure.secondRna === structure.rna) {
+    } else if (value === "intermolecular" && (structure.secondRna === structure.rna || (cplfold && !structure.secondRna))) {
       structure.secondRna = (state.summary.rnaNames || []).find(function (rna) { return rna !== structure.rna; }) || "";
     }
     if (value === "homodimer") {
@@ -1963,10 +2076,14 @@
   }
 
   function structureControlChangesSequence(key) {
-    return ["workflow", "engine", "source", "rna", "start", "end", "pastedSequence", "selectedRecordIndex", "evidenceLayout", "secondRna", "secondStart", "secondEnd", "homodimerOnly", "cplfoldEvidence"].indexOf(key) !== -1;
+    return ["workflow", "engine", "source", "rna", "start", "end", "pastedSequence", "cplfoldSequenceTwo", "cplfoldMode", "selectedRecordIndex", "evidenceLayout", "secondRna", "secondStart", "secondEnd", "homodimerOnly", "cplfoldEvidence", "evidenceDatasets"].indexOf(key) !== -1;
   }
 
   function resetStructureForControl(state, key) {
+    // the user's own region: no longer a default to cap
+    if (state.structure && ["rna", "start", "end", "source"].indexOf(key) !== -1) {
+      delete state.structure.defaultRegionEnd;
+    }
     if (window.Hyb2Structure) {
       window.Hyb2Structure.reset(state, { clearConstraints: structureControlChangesSequence(key) });
     }
@@ -2000,6 +2117,7 @@
   }
 
   function handleChange(state, element, api) {
+    if (window.Hyb2Batch && window.Hyb2Batch.handleInput(state, element)) { api.render(); return true; }
     const feature = element.dataset.feature;
     const key = element.dataset.key;
 
@@ -2041,7 +2159,9 @@
 
     if (feature === "contact-control") {
       state.contact[key] = element.value;
-      if (key === "palette") {
+      // Display settings recolour the binned map (cached) and keep the zoom
+      // and the selected cell; data settings rebuild the map.
+      if (CONTACT_DISPLAY_KEYS.indexOf(key) !== -1) {
         api.render();
         return true;
       }
@@ -2095,6 +2215,10 @@
       state.comparison.result = null;
       state.comparison.selection = null;
       api.render();
+      // A condition scope ("ZASI · merged") follows the reassignment.
+      if (key === "condition" && typeof api.followAnalysisScope === "function") {
+        api.followAnalysisScope();
+      }
       return true;
     }
 
@@ -2173,6 +2297,7 @@
   }
 
   function handleInput(state, element) {
+    if (window.Hyb2Batch && window.Hyb2Batch.handleInput(state, element)) return true;
     const feature = element.dataset.feature;
     const key = element.dataset.key;
     if (!key) {
@@ -2192,6 +2317,9 @@
     }
     if (feature === "contact-control" && state.contact) {
       state.contact[key] = element.value;
+      if (CONTACT_DISPLAY_KEYS.indexOf(key) !== -1) {
+        return true;
+      }
       state.contact.matrix = null;
       state.contact.selection = null;
       state.contact.overviewSelection = null;
@@ -2275,6 +2403,7 @@
   }
 
   function handleAction(state, element, api) {
+    if (window.Hyb2Batch && window.Hyb2Batch.handleAction(state, element, api)) return true;
     const action = element.dataset.featureAction;
     if (!action) {
       return false;
@@ -2370,6 +2499,12 @@
       }
       state.structure.source = "record";
       state.structure.selectedRecordIndex = Number(element.dataset.recordIndex);
+      if (state.structure.engine === "cplfold") {
+        state.structure.cplfoldMode = "single";
+        state.structure.evidenceLayout = "single";
+        state.structure.workflow = "custom";
+        state.structure.homodimerOnly = false;
+      }
       // A raw HYB record supplies its read sequence, not a mapped reference
       // interval. Reference-coordinate evidence must therefore be disabled.
       if (state.structure.constraintMode === "hyb-guided") {
@@ -2394,7 +2529,7 @@
       // Exports need every matching row, fetched through the DataProvider.
       fetchAllRows(api, { filters: Object.assign({}, state.filters || {}) }, function (rows) {
         if (action === "export-filtered-csv") {
-          api.download("filtered-interactions.csv", window.Hyb2Data.recordsToCsv(rows), "text/csv");
+          api.download("filtered-interactions.csv", window.Hyb2Data.recordsToCsv(rows, window.Hyb2Data.scopeDatasets(state)), "text/csv");
           api.showToast("Filtered interaction CSV downloaded locally.");
         } else {
           api.download("filtered.hyb", window.Hyb2Data.recordsToHyb(rows), "text/plain");
@@ -2474,6 +2609,7 @@
       }
       const contact = state.contact;
       fetchAllRows(api, {
+        datasetIds: window.Hyb2Data && window.Hyb2Data.contactDataset ? [window.Hyb2Data.contactDataset(state).id].filter(Boolean) : undefined,
         cell: {
           rnaX: contact.rnaX,
           rnaY: contact.rnaY,
@@ -2503,15 +2639,53 @@
       return true;
     }
 
-    if (action === "contact-download-png") {
+    if (action === "contact-export-matrix") {
+      try {
+        api.download("contact-matrix.csv", window.Hyb2Data.contactMatrixToCsv(state.contact.matrix), "text/csv");
+        api.showToast("Contact matrix CSV downloaded locally.");
+      } catch (error) {
+        api.showToast(error && error.message ? error.message : "The contact matrix could not be written.");
+      }
+      return true;
+    }
+
+    if (action === "contact-download-pdf") {
       if (!ensureVisualExport(state, "contact", api)) {
         return true;
       }
+      const pdfCanvas = lightExportCanvas("contact-export-canvas");
+      if (!pdfCanvas) {
+        api.showToast("The visual canvas is unavailable. Render the analysis and try again.");
+        return true;
+      }
+      drawContactStageCanvas(state, pdfCanvas, getContactExportStage(state), Object.assign({ scale: 3 }, CONTACT_EXPORT_SIZE));
+      api.showToast("Preparing the contact-map PDF…");
+      if (!window.Hyb2UiKit || typeof window.Hyb2UiKit.canvasToPdf !== "function") {
+        pdfCanvas.remove();
+        api.showToast("PDF export is unavailable here. Try the SVG or PNG export instead.");
+        return true;
+      }
+      window.Hyb2UiKit.canvasToPdf(pdfCanvas, CONTACT_EXPORT_SIZE.width * 0.75, CONTACT_EXPORT_SIZE.height * 0.75).then(function (blob) {
+        api.downloadBlob("contact-map.pdf", blob);
+        api.showToast("Contact PDF downloaded locally.");
+      }).catch(function () {
+        api.showToast("This browser could not create the PDF. Try the SVG or PNG export instead.");
+      }).then(function () {
+        pdfCanvas.remove();
+      });
+      return true;
+    }
+
+    if (action === "contact-download-png" || action === "contact-download-png-print") {
+      if (!ensureVisualExport(state, "contact", api)) {
+        return true;
+      }
+      const print = action === "contact-download-png-print";
       const exportCanvas = lightExportCanvas("contact-export-canvas");
       if (exportCanvas) {
-        drawContactStageCanvas(state, exportCanvas, getContactExportStage(state), CONTACT_EXPORT_SIZE);
+        drawContactStageCanvas(state, exportCanvas, getContactExportStage(state), print ? Object.assign({ scale: 4 }, CONTACT_EXPORT_SIZE) : CONTACT_EXPORT_SIZE);
       }
-      downloadCanvasPng("contact-map.png", api, exportCanvas ? exportCanvas.id : "contact-overview-canvas", "Contact PNG downloaded locally.", "contact-overview-canvas");
+      downloadCanvasPng(print ? "contact-map-print.png" : "contact-map.png", api, exportCanvas ? exportCanvas.id : "contact-overview-canvas", print ? "Print-resolution contact PNG downloaded locally." : "Contact PNG downloaded locally.", "contact-overview-canvas");
       if (exportCanvas) {
         exportCanvas.remove();
       }
@@ -2788,6 +2962,11 @@
       return true;
     }
 
+    if (action === "add-fasta") {
+      api.addFasta();
+      return true;
+    }
+
     if (action === "edit-fasta-mapping") {
       if (!state.fasta) {
         return true;
@@ -2831,6 +3010,13 @@
     }
 
     if (action === "replace-hyb") {
+      // Replacing the primary file drops the Compare datasets and arc maps:
+      // say so first.
+      if (typeof api.needsPrimaryFileWarning === "function" && api.needsPrimaryFileWarning()) {
+        state.dialog = "replace-primary";
+        api.render();
+        return true;
+      }
       state.dialog = null;
       api.render();
       api.chooseHyb();
@@ -2838,7 +3024,7 @@
     }
 
     if (action === "clear-hyb") {
-      state.dialog = "clear";
+      state.dialog = "clear-primary";
       api.render();
       return true;
     }
@@ -2883,6 +3069,15 @@
         return true;
       }
       if (action === "region-send-structure") {
+        const cplfold = state.structure.engine === "cplfold";
+        const partner = cplfold ? window.Hyb2Pages.getRegionPartner(state.region) : null;
+        const partnerCoordinatesEntered = [state.region.partnerStart, state.region.partnerEnd].some(function (value) {
+          return value !== undefined && value !== null && String(value).trim() !== "";
+        });
+        if (cplfold && !partner && partnerCoordinatesEntered) {
+          api.showToast("Enter a partner RNA and valid 1-based start/end coordinates for the second region, or clear both partner coordinates to fold one region.");
+          return true;
+        }
         if (window.Hyb2Structure) {
           window.Hyb2Structure.reset(state, { clearConstraints: true });
         }
@@ -2890,6 +3085,19 @@
         state.structure.rna = state.region.rna;
         state.structure.start = reference.start;
         state.structure.end = reference.end;
+        delete state.structure.defaultRegionEnd;
+        if (cplfold) {
+          state.structure.workflow = "custom";
+          state.structure.cplfoldMode = partner ? "cofold" : "single";
+          state.structure.evidenceLayout = partner ? "paired" : "single";
+          state.structure.secondRna = partner ? partner.rna : "";
+          state.structure.secondStart = partner ? partner.start : "";
+          state.structure.secondEnd = partner ? partner.end : "";
+          state.structure.homodimerOnly = false;
+          if (partner && ["DP03", "DP09"].indexOf(state.structure.cplfoldEnergyModel) === -1) {
+            state.structure.cplfoldEnergyModel = "DP09";
+          }
+        }
         api.navigate("structure");
       }
       if (action === "region-download-fasta") {
@@ -2907,7 +3115,7 @@
 
     if (action === "region-export-csv" || action === "region-export-hyb") {
       const records = state.region.results ? state.region.results.records : [];
-      const content = action === "region-export-csv" ? window.Hyb2Data.recordsToCsv(records) : window.Hyb2Data.recordsToHyb(records);
+      const content = action === "region-export-csv" ? window.Hyb2Data.recordsToCsv(records, window.Hyb2Data.scopeDatasets(state)) : window.Hyb2Data.recordsToHyb(records);
       const fileName = action === "region-export-csv" ? "region-interactions.csv" : "region-interactions.hyb";
       api.download(fileName, content, action === "region-export-csv" ? "text/csv" : "text/plain");
       api.showToast("Region results downloaded locally.");
@@ -2927,9 +3135,12 @@
         return true;
       }
       if (action === "copy-structure-sequence") {
-        api.copyText(info.sequence, "Prepared RNA sequence copied to the clipboard.");
+        api.copyText(info.displaySequence || info.sequence, "Prepared RNA sequence copied to the clipboard.");
       } else {
-        api.download("structure-input.fasta", ">HYB2_Web_prepared_sequence\n" + info.sequence + "\n", "text/plain");
+        const fasta = info.cutpoint
+          ? ">HYB2_Web_RNA_A\n" + info.sequence.slice(0, info.cutpoint) + "\n>HYB2_Web_RNA_B\n" + info.sequence.slice(info.cutpoint) + "\n"
+          : ">HYB2_Web_prepared_sequence\n" + info.sequence + "\n";
+        api.download("structure-input.fasta", fasta, "text/plain");
         api.showToast("Structure input FASTA downloaded locally.");
       }
       return true;
@@ -2943,10 +3154,15 @@
   const VIEWPOINT_EXPORT_SIZE = { width: 1040, height: 320 };
 
   function contactColors(contact, theme) {
-    if (contact.palette === "monochrome") {
+    const palette = contactPalette(contact.palette).value;
+    if (palette === "monochrome") {
       return { surface: "#ffffff", ink: "#222222", muted: "#666666", line: "#cccccc", primary: "#222222", accent: "#666666" };
     }
-    return exportColors(theme);
+    // black paper: empty bins read as zero, like the white of the other styles
+    if (palette === "greys-inverted") {
+      return { surface: "#000000", ink: "#f2f2f2", muted: "#b3b3b3", line: "#4d4d4d", primary: "#f2f2f2", accent: "#b3b3b3" };
+    }
+    return exportColors(paperPalette(palette) ? "light" : theme);
   }
 
   function buildContactSvg(state) {
@@ -2964,7 +3180,7 @@
       const visualValue = state.contact.scale === "log" ? Math.log1p(cell.value) : cell.value;
       const ratio = geometry.cap ? Math.max(0, Math.min(1, visualValue / geometry.cap)) : 0;
       const x = geometry.left + ((cell.x - geometry.xStart) / matrix.binSize) * geometry.cellWidth;
-      const y = geometry.top + ((cell.y - geometry.yStart) / matrix.binSize) * geometry.cellHeight;
+      const y = geometry.top + rowOffset(geometry, cell.y, matrix.binSize);
       return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + viridis(ratio, "light", state.contact.palette) + '"/>';
     }).join("");
 
@@ -3030,7 +3246,7 @@
       return cell.x >= geometry.xStart && cell.x <= geometry.xEnd && cell.y >= geometry.yStart && cell.y <= geometry.yEnd;
     }).map(function (cell) {
       const x = geometry.left + ((cell.x - geometry.xStart) / result.binSize) * geometry.cellWidth;
-      const y = geometry.top + ((cell.y - geometry.yStart) / result.binSize) * geometry.cellHeight;
+      const y = geometry.top + rowOffset(geometry, cell.y, result.binSize);
       return '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + (geometry.cellWidth + .4).toFixed(2) + '" height="' + (geometry.cellHeight + .4).toFixed(2) + '" fill="' + effectColor(cell.effect / Math.max(.01, result.effectCap), "light") + '"/>';
     }).join("");
     return [
@@ -3130,6 +3346,11 @@
       version: "0.5.0",
       buildCommit: buildCommit(),
       analysis: "contact-map",
+      dataset: (function () {
+        if (!window.Hyb2Data || typeof window.Hyb2Data.contactDataset !== "function") return null;
+        const chosen = window.Hyb2Data.contactDataset(state);
+        return chosen.dataset ? { id: chosen.dataset.id, label: chosen.dataset.label || "", fileName: chosen.dataset.fileName || "" } : null;
+      }()),
       generatedLocally: true,
       sourceHyb: sourceHyb(state),
       parameters: {
@@ -3318,7 +3539,7 @@
 
   function sourceHyb(state) {
     const summary = state.summary || {};
-    return {
+    const source = {
       fileName: summary.fileName || "",
       fileSize: summary.fileSize == null ? null : summary.fileSize,
       sha256: summary.sha256 || null,
@@ -3326,6 +3547,31 @@
         ? "available"
         : (summary.sha256Unavailable ? "unavailable" : "pending")
     };
+    // Several datasets merged: there is no single file to fingerprint, so
+    // name each one with its own size, SHA-256 and record count.
+    const scope = (state.selection && state.selection.datasetIds) || [];
+    if (scope.length > 1) {
+      source.sha256Status = "per-dataset";
+      source.datasets = (state.datasets || []).filter(function (dataset) {
+        return scope.indexOf(dataset.id) !== -1;
+      }).map(function (dataset) {
+        // The primary file is fingerprinted after it is registered.
+        const primary = dataset.primary ? state.primarySummary || {} : {};
+        const sha256 = dataset.sha256 || primary.sha256 || null;
+        const unavailable = dataset.sha256Unavailable || primary.sha256Unavailable;
+        return {
+          id: dataset.id,
+          label: dataset.label || "",
+          condition: dataset.condition || null,
+          fileName: dataset.fileName || "",
+          fileSize: dataset.fileSize == null ? null : dataset.fileSize,
+          sha256: sha256,
+          sha256Status: sha256 ? "available" : (unavailable ? "unavailable" : "pending"),
+          validRecords: dataset.validRecords == null ? null : dataset.validRecords
+        };
+      });
+    }
+    return source;
   }
 
   // Reference provenance from DataProvider.listDatasets() (DatasetInfo.reference).
@@ -3638,7 +3884,9 @@
   }
 
   window.Hyb2UI = {
+    contactPalettes: CONTACT_PALETTES.map(function (palette) { return { value: palette.value, label: palette.label, kicker: palette.kicker }; }),
     afterRender: afterRender,
+    sourceHyb: sourceHyb,
     handleInput: handleInput,
     handleChange: handleChange,
     handleAction: handleAction,

@@ -928,4 +928,20 @@ assert.ok(Date.now() - disjointComparisonStartedAt < 5000,
   assert.equal(data.cellIndex(0, 30000, 0, 30000, 10).dense, false);
 }
 
+// the Contact Map as a bins x bins matrix over the RNA extents, zeros filled
+{
+  const csv = data.contactMatrixToCsv({ binSize: 10, xMin: 1, xMax: 40, yMin: 1, yMax: 25,
+    cells: [{ x: 11, y: 1, value: 3 }, { x: 21, y: 11, value: 5 }] });
+  assert.deepEqual(csv.split("\n"), [
+    "y_start/x_start,1,11,21,31",
+    "1,0,3,0,0",
+    "11,0,0,5,0",
+    "21,0,0,0,0"
+  ]);
+  assert.throws(function () { data.contactMatrixToCsv({ binSize: 1, cells: [] }); }, /Generate a contact map/);
+  assert.throws(function () {
+    data.contactMatrixToCsv({ binSize: 1, xMin: 1, xMax: 3000, yMin: 1, yMax: 3000, cells: [{ x: 1, y: 1, value: 1 }] });
+  }, /use larger bins/);
+}
+
 process.stdout.write("analysis-data-contract: ok\n");

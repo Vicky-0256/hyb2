@@ -21,9 +21,11 @@
       return;
     }
 
-    const viewMode = structureViewMode(state.structure.viewMode);
+    const viewMode = resultViewMode(result, state.structure.viewMode);
     state.structure.viewMode = viewMode;
-    if (viewMode === "folded") {
+    if (state.structure.editorEnabled && window.Hyb2StructureEditor) {
+      window.Hyb2StructureEditor.mount(target, state, api);
+    } else if (viewMode === "folded") {
       renderFornaDiagram(target, result);
     } else {
       target.replaceChildren(buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode));
@@ -247,6 +249,20 @@
   }
 
   function handleAction(action, state, api, element) {
+    if (action === "use-iris-evidence-region") {
+      if (!state.structure || state.structure.engine !== "iris" || state.structure.status === "running") return true;
+      // Recompute from the current data rather than trusting stale button coordinates.
+      const info = window.Hyb2Pages.getStructureSequence(state);
+      const region = info.irisDiagnostics && info.irisDiagnostics.suggestion;
+      if (!region) { api.showToast("No complete HYB arm pair fits the 300 nt IRIS browser limit for this RNA."); return true; }
+      if (window.Hyb2Structure) window.Hyb2Structure.reset(state, { clearConstraints: true });
+      delete state.structure.defaultRegionEnd;
+      Object.assign(state.structure, { start: String(region.start), end: String(region.end),
+        result: null, selectedNucleotide: null, status: "idle", message: "", progress: null });
+      api.render();
+      api.showToast("Region updated. Review the interval, then run IRIS.");
+      return true;
+    }
     if (action === "predict-structure") {
       if (!window.Hyb2Structure) {
         api.showToast("The local structure predictor is unavailable in this browser.");
@@ -278,12 +294,20 @@
       return true;
     }
 
+    if (action === "toggle-structure-editor") {
+      // Two-strand results draw both strands, with no backbone across the break.
+      state.structure.editorEnabled = !state.structure.editorEnabled;
+      api.render();
+      return true;
+    }
+
     if (action === "set-structure-view") {
+      state.structure.editorEnabled = false;
       const viewMode = structureViewMode(element && element.dataset && element.dataset.viewMode);
       if (!state.structure) {
         return true;
       }
-      state.structure.viewMode = viewMode;
+      state.structure.viewMode = resultViewMode(state.structure.result, viewMode);
       api.render();
       return true;
     }
@@ -301,7 +325,7 @@
     }
     if (action === "select-cplfold-candidate") {
       const candidateIndex = Number(element && element.dataset && element.dataset.candidateIndex);
-      if (!result || result.engine !== "CPLfold" || !selectCplfoldCandidate(result, candidateIndex)) {
+      if (!result || !isCplfoldResult(result) || !selectCplfoldCandidate(result, candidateIndex)) {
         api.showToast("That CPLfold candidate is unavailable.");
         return true;
       }
@@ -327,7 +351,7 @@
       } else {
         revealDiagram();
       }
-      api.showToast("CPLfold candidate " + (candidateIndex + 1) + " selected.");
+      api.showToast(result.engine + " candidate " + (candidateIndex + 1) + " selected.");
       return true;
     }
     if (!result || [
@@ -355,7 +379,7 @@
       api.showToast("IRIS weighted ensemble downloaded locally."); return true;
     }
     if (action === "copy-structure-dot-bracket") {
-      api.copyText(result.dotBracket, "Dot-bracket notation copied to the clipboard.");
+      api.copyText(withStrandBreak(result.dotBracket, result.cutpoint), "Dot-bracket notation copied to the clipboard.");
       return true;
     }
 
@@ -455,7 +479,9 @@
 
     api.download(
       "cplfold-input.fasta",
-      ">HYB2_Web_prepared_sequence\n" + sequence + "\n",
+      (prepared && prepared.cutpoint || result && result.cutpoint)
+        ? ">HYB2_Web_RNA_A\n" + sequence.slice(0, prepared && prepared.cutpoint || result.cutpoint) + "\n>HYB2_Web_RNA_B\n" + sequence.slice(prepared && prepared.cutpoint || result.cutpoint) + "\n"
+        : ">HYB2_Web_prepared_sequence\n" + sequence + "\n",
       "text/plain"
     );
 
@@ -490,6 +516,10 @@
       "--sequence-file",
       "cplfold-input.fasta"
     ];
+    if (structure && structure.cplfoldMode === "cofold") {
+      command[0] = "bin/cplcofold";
+      command.push("--mode", structure.cplfoldAllowPseudoknot === false ? "standard" : "pseudoknot");
+    }
     if (guided) {
       command.push("--bonus-matrix-file", "cplfold-bonus-matrix.tsv");
     }
@@ -519,6 +549,9 @@
     result.selectedCandidate = index;
     if (result.engine === "IRIS") { result.constraints = candidate.constraints || []; result.constraintCount = result.constraints.length; }
     result.dotBracket = candidate.dotBracket;
+    ["dotBracketWithBreak", "phase1StructureWithBreak", "phase2StructureWithBreak", "energyMetadata", "energyBreakdown", "intermolecularPairs"].forEach(function (key) {
+      if (candidate[key] !== undefined) result[key] = candidate[key];
+    });
     result.pairs = candidate.pairs || [];
     result.unpaired = candidate.unpaired;
     result.energy = candidate.energy;
@@ -536,7 +569,7 @@
   function structureReport(state, result) {
     const constraintCount = Math.max(0, Number(result.constraintCount) || 0);
     const guided = result.constraintMode === "hyb-guided";
-    const cplfold = result.engine === "CPLfold";
+    const cplfold = isCplfoldResult(result);
     const cplfoldAllowsPseudoknot = cplfold && resultAllowsPseudoknot(result);
     const allowPseudoknot = resultAllowsPseudoknot(result);
     const capacity = cplfold && state.structure && state.structure.cplfoldCapacity
@@ -559,7 +592,9 @@
       version: "0.5.0",
       buildCommit: window.HYB2_BUILD && window.HYB2_BUILD.commit || null,
       generatedLocally: true,
-      sourceHyb: {
+      // The files the fold's HYB evidence came from (else the analysis scope);
+      // with several, Hyb2UI.sourceHyb lists each file.
+      sourceHyb: window.Hyb2UI && typeof window.Hyb2UI.sourceHyb === "function" ? window.Hyb2UI.sourceHyb(evidenceSourceState(state, result)) : {
         fileName: state.summary.fileName,
         fileSize: state.summary.fileSize == null ? null : state.summary.fileSize,
         sha256: state.summary.sha256 || null,
@@ -567,6 +602,7 @@
           ? "available"
           : (state.summary.sha256Unavailable ? "unavailable" : "pending")
       },
+      evidenceDatasets: result.evidenceDatasets || [],
       sourceFasta: result.source === "reference" && state.reference ? {
         fileName: state.reference.fileName,
         fileSize: state.reference.fileSize == null ? null : state.reference.fileSize,
@@ -579,6 +615,9 @@
         label: result.label,
         type: result.source,
         sequence: result.sequence,
+        displaySequence: withStrandBreak(result.sequence, result.cutpoint),
+        cutpoint: result.cutpoint || null,
+        strandLengths: result.strandLengths || [result.sequence.length],
         rna: result.sourceRna || null,
         start: result.sourceStart == null ? null : result.sourceStart,
         end: result.sourceEnd == null ? null : result.sourceEnd,
@@ -607,6 +646,12 @@
         constraintCount: constraintCount,
         constraints: result.constraints || [],
         dotBracket: result.dotBracket,
+        dotBracketWithBreak: withStrandBreak(result.dotBracket, result.cutpoint),
+        cutpoint: result.cutpoint || null,
+        strandLengths: result.strandLengths || [result.sequence.length],
+        energyMetadata: result.energyMetadata || null,
+        energyBreakdown: result.energyBreakdown || null,
+        intermolecularPairs: result.intermolecularPairs || 0,
         pairs: result.pairs,
         elapsedMs: result.elapsedMs,
         runtimeLoadMs: cplfold ? result.runtimeLoadMs : null,
@@ -664,6 +709,10 @@
     };
   }
 
+  function isCplfoldResult(result) {
+    return !!result && (result.engine === "CPLfold" || result.engine === "CPLcofold");
+  }
+
   function resultAllowsPseudoknot(result) {
     return !!result && result.allowPseudoknot !== false &&
       !(result.parameters && result.parameters.allowPseudoknot === false);
@@ -671,6 +720,7 @@
 
   function cplfoldProfileKey(structure) {
     return [
+      structure && structure.cplfoldMode === "cofold" ? "cofold" : "single",
       profileValue(structure && structure.cplfoldEvidence, "hyb-blocks"),
       profileValue(structure && structure.cplfoldBeam, "20"),
       profileValue(structure && structure.cplfoldMaxPhase1, "3"),
@@ -686,6 +736,16 @@
     return value === undefined || value === null || value === "" ? fallback : String(value);
   }
 
+  function withStrandBreak(text, cutpoint) {
+    const compact = String(text || "").replace(/&/g, "");
+    return Number.isInteger(cutpoint) && cutpoint > 0 && cutpoint < compact.length
+      ? compact.slice(0, cutpoint) + "&" + compact.slice(cutpoint) : compact;
+  }
+
+  function resultViewMode(result, value) {
+    return result && result.cutpoint ? (value === "matrix" ? "matrix" : "arc") : structureViewMode(value);
+  }
+
   function structureViewMode(value) {
     return ["folded", "arc", "radial", "circular", "matrix"].indexOf(value) > -1 ? value : "folded";
   }
@@ -695,7 +755,7 @@
   }
 
   function buildStructureDiagram(result, selectedNucleotide, viewMode) {
-    switch (structureViewMode(viewMode)) {
+    switch (resultViewMode(result, viewMode)) {
       case "radial":
         return buildRadialDiagram(result, selectedNucleotide);
       case "circular":
@@ -717,7 +777,7 @@
     const length = sequence.length || 1;
     const colors = colorTokens();
     const guided = result.constraintMode === "hyb-guided";
-    const cplfold = result.engine === "CPLfold";
+    const cplfold = isCplfoldResult(result);
     const cplfoldAllowsPseudoknot = cplfold && resultAllowsPseudoknot(result);
     const cplfoldEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
     const maximumEvidence = Math.max(0, Number(cplfoldEvidence ? result.evidence.maximumBonus : result.maximumNucleotideSupport) || 0);
@@ -737,7 +797,15 @@
       ? (cplfoldAllowsPseudoknot ? "Selected CPLfold RNA structure with pseudoknot layers" : "Selected CPLfold pseudoknot-free RNA structure")
       : "Predicted non-crossing RNA base pairs"));
     svg.appendChild(element("rect", { x: 0, y: 0, width: width, height: height, rx: 8, fill: colors.surface }));
-    svg.appendChild(element("line", { x1: left, y1: baseline, x2: right, y2: baseline, stroke: colors.line, "stroke-width": 1.5 }));
+    if (result.cutpoint) {
+      const nick = (xFor(result.cutpoint, length, left, right) + xFor(result.cutpoint + 1, length, left, right)) / 2;
+      const halfGap = Math.min(9, (right - left) / Math.max(2, length - 1) * 0.3);
+      svg.appendChild(element("line", { x1: left, y1: baseline, x2: nick - halfGap, y2: baseline, stroke: colors.line, "stroke-width": 1.5, "data-strand": "A" }));
+      svg.appendChild(element("line", { x1: nick + halfGap, y1: baseline, x2: right, y2: baseline, stroke: colors.line, "stroke-width": 1.5, "data-strand": "B" }));
+      svg.appendChild(element("text", { x: nick, y: baseline + 35, "text-anchor": "middle", fill: colors.muted, "font-size": 11, "data-chain-break": String(result.cutpoint) }, "A | B"));
+    } else {
+      svg.appendChild(element("line", { x1: left, y1: baseline, x2: right, y2: baseline, stroke: colors.line, "stroke-width": 1.5 }));
+    }
 
     (result.pairs || []).forEach(function (pair) {
       const hardConstraint = hardPairs.has(pair.left + ":" + pair.right);
@@ -810,7 +878,7 @@
     const length = Math.max(1, sequence.length);
     const colors = colorTokens();
     const pairs = result.pairs || [];
-    const svg = structureSvg(width, height, "Radial diagram for " + length + " nucleotide RNA secondary structure", result.engine === "CPLfold" ? "Selected CPLfold radial structure" : "Predicted radial RNA secondary structure", colors);
+    const svg = structureSvg(width, height, "Radial diagram for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold radial structure" : "Predicted radial RNA secondary structure", colors);
     const hardPairs = structureHardPairs(result);
 
     [0.25, 0.5, 0.75].forEach(function (ratio) {
@@ -874,7 +942,7 @@
     const length = Math.max(1, sequence.length);
     const colors = colorTokens();
     const pairs = result.pairs || [];
-    const svg = structureSvg(width, height, "Circular diagram for " + length + " nucleotide RNA secondary structure", result.engine === "CPLfold" ? "Selected CPLfold circular structure" : "Predicted circular RNA secondary structure", colors);
+    const svg = structureSvg(width, height, "Circular diagram for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold circular structure" : "Predicted circular RNA secondary structure", colors);
     const hardPairs = structureHardPairs(result);
 
     svg.appendChild(element("circle", {
@@ -932,7 +1000,7 @@
     const length = Math.max(1, sequence.length);
     const colors = colorTokens();
     const pairs = result.pairs || [];
-    const svg = structureSvg(width, height, "Base-pair matrix for " + length + " nucleotide RNA secondary structure", result.engine === "CPLfold" ? "Selected CPLfold base-pair matrix" : "Predicted RNA base-pair matrix", colors);
+    const svg = structureSvg(width, height, "Base-pair matrix for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold base-pair matrix" : "Predicted RNA base-pair matrix", colors);
     const hardPairs = structureHardPairs(result);
 
     svg.appendChild(element("rect", {
@@ -1022,7 +1090,7 @@
     const constraints = hardPairs || structureHardPairs(result);
     const support = Number(pair.evidenceSupport) || 0;
     const guided = result.constraintMode === "hyb-guided";
-    const cplfold = result.engine === "CPLfold";
+    const cplfold = isCplfoldResult(result);
     const cplfoldEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
     const maximumEvidence = Math.max(0, Number(cplfoldEvidence ? result.evidence.maximumBonus : result.maximumNucleotideSupport) || 0);
     const hardConstraint = constraints.has(pair.left + ":" + pair.right);
@@ -1038,7 +1106,7 @@
   }
 
   function structurePairTitle(result, pair, style) {
-    const cplfold = result.engine === "CPLfold";
+    const cplfold = isCplfoldResult(result);
     const guided = result.constraintMode === "hyb-guided";
     const cplfoldEvidence = cplfold && result.evidence && result.evidence.source === "hyb-block-intervals";
     const prefix = cplfold
@@ -1134,7 +1202,7 @@
   function structureMarker(result, position, x, y, colors, selectedNucleotide, radius) {
     const sequence = result.sequence || "";
     const selected = Number(selectedNucleotide) === position;
-    const evidenceDriven = result.constraintMode === "hyb-guided" || (result.engine === "CPLfold" && result.evidence && result.evidence.source === "hyb-block-intervals");
+    const evidenceDriven = result.constraintMode === "hyb-guided" || (isCplfoldResult(result) && result.evidence && result.evidence.source === "hyb-block-intervals");
     const marker = element("circle", {
       cx: Number(x).toFixed(2),
       cy: Number(y).toFixed(2),
@@ -1211,9 +1279,13 @@
     if (!shown || !result) {
       return null;
     }
-    const viewMode = structureViewMode(state.structure.viewMode);
+    const viewMode = resultViewMode(result, state.structure.viewMode);
     let svg = null;
-    if (viewMode !== "folded") {
+    if (state.structure.editorEnabled && window.Hyb2StructureEditor) {
+      const source = window.Hyb2StructureEditor.svg(window.Hyb2StructureEditor.session(state).data, null);
+      svg = new DOMParser().parseFromString(source, "image/svg+xml").documentElement;
+    }
+    if (!svg && viewMode !== "folded") {
       exportColors = LIGHT_EXPORT_COLORS;
       try {
         svg = buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode);
@@ -1353,7 +1425,7 @@
           cx: x.toFixed(2),
           cy: baseline,
           r: length <= 120 ? 4.5 : 3.2,
-          fill: selected ? colors.accent : ((result.constraintMode === "hyb-guided" || (result.engine === "CPLfold" && result.evidence && result.evidence.source === "hyb-block-intervals")) ? nucleotideEvidenceColor(result, position, colors) : colors.surface),
+          fill: selected ? colors.accent : ((result.constraintMode === "hyb-guided" || (isCplfoldResult(result) && result.evidence && result.evidence.source === "hyb-block-intervals")) ? nucleotideEvidenceColor(result, position, colors) : colors.surface),
           stroke: selected ? colors.accent : colors.muted,
           "stroke-width": selected ? 2.3 : 1.1,
           "data-structure-position": position,
@@ -1459,7 +1531,7 @@
     const startX = settings.x == null ? 44 : settings.x;
     const y = settings.y == null ? 24 : settings.y;
     const guided = result.constraintMode === "hyb-guided";
-    const cplfold = result.engine === "CPLfold";
+    const cplfold = isCplfoldResult(result);
     const cplfoldAllowsPseudoknot = cplfold && resultAllowsPseudoknot(result);
     const spacing = settings.spacing == null ? ((guided || cplfold) ? 132 : 98) : settings.spacing;
     const items = cplfold
@@ -1554,14 +1626,14 @@
 
   function dotBracketFile(result) {
     const energy = Number.isFinite(Number(result.energy)) ? " (" + Number(result.energy).toFixed(2) + ")" : "";
-    return ">" + (result.label || ("HYB2_Web_" + (result.engine || "ViennaRNA_MFE"))) + "\n" + result.sequence + "\n" + result.dotBracket + energy + "\n";
+    return ">" + (result.label || ("HYB2_Web_" + (result.engine || "ViennaRNA_MFE"))) + "\n" + withStrandBreak(result.sequence, result.cutpoint) + "\n" + withStrandBreak(result.dotBracket, result.cutpoint) + energy + "\n";
   }
 
   function basePairTsv(result) {
     const hardPairs = new Set((result.constraints || []).map(function (pair) {
       return pair.left + ":" + pair.right;
     }));
-    const cplfold = result.engine === "CPLfold";
+    const cplfold = isCplfoldResult(result);
     const guided = result.constraintMode === "hyb-guided";
     const evidenceKind = cplfold
       ? (result.evidence && result.evidence.source === "hyb-block-intervals" ? "log1p_hyb_bonus" : "none")
@@ -1569,6 +1641,7 @@
     // Keep the original ViennaRNA columns first for downstream compatibility,
     // then add engine-neutral, explicitly typed fields.
     const rows = [["left_position", "left_base", "right_position", "right_base", "pair_type", "hard_constraint", "rna_cofold_evidence", "mfe_kcal_per_mol", "evidence_kind", "evidence_support", "pair_layer", "selected_energy_kcal_per_mol", "engine"]];
+    if (result.cutpoint) rows[0].push("cutpoint", "left_strand", "left_strand_position", "right_strand", "right_strand_position");
     (result.pairs || []).forEach(function (pair) {
       const support = Number(pair.evidenceSupport) || 0;
       rows.push([
@@ -1586,6 +1659,9 @@
         Number.isFinite(Number(result.energy)) ? Number(result.energy).toFixed(2) : "",
         result.engine || "ViennaRNA"
       ]);
+      if (result.cutpoint) rows[rows.length - 1].push(result.cutpoint,
+        pair.left <= result.cutpoint ? "A" : "B", pair.left <= result.cutpoint ? pair.left : pair.left - result.cutpoint,
+        pair.right <= result.cutpoint ? "A" : "B", pair.right <= result.cutpoint ? pair.right : pair.right - result.cutpoint);
     });
     return rows.map(function (row) { return row.join("\t"); }).join("\n") + "\n";
   }
@@ -1639,8 +1715,9 @@
       "# transform=IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
       ["prepared_position_1", "prepared_position_2", "log1p_gaussian_hyb_bonus"].join("\t")
     ];
+    if (result.cutpoint) rows.splice(4, 0, "# cutpoint=" + result.cutpoint, "# strand_lengths=" + result.cutpoint + "," + (sequenceLength - result.cutpoint), "# cofold_evidence_smoothing=within_each_strand");
     (evidence.bonusEntries || []).forEach(function (entry) {
-      rows.push([entry.one, entry.two, Number(entry.value).toFixed(8)].join("\t"));
+      rows.push([entry.one, entry.two, result.cutpoint ? Number(entry.value).toPrecision(17) : Number(entry.value).toFixed(8)].join("\t"));
     });
     return rows.join("\n") + "\n";
   }
@@ -1659,9 +1736,11 @@
         candidate.score == null ? "" : candidate.score,
         (candidate.pairs || []).length,
         candidate.crossingPairs || 0,
-        candidate.dotBracket
+        withStrandBreak(candidate.dotBracket, result.cutpoint)
       ]);
+      if (result.cutpoint) rows[rows.length - 1].push(result.cutpoint);
     });
+    if (result.cutpoint) rows[0].push("cutpoint");
     return rows.map(function (row) { return row.join("\t"); }).join("\n") + "\n";
   }
 
@@ -1678,13 +1757,36 @@
       rows.push([
         position,
         sequence.charAt(position - 1),
-        position === 1 ? 0 : position - 1,
-        position === sequence.length ? 0 : position + 1,
+        position === 1 || position === result.cutpoint + 1 ? 0 : position - 1,
+        position === sequence.length || position === result.cutpoint ? 0 : position + 1,
         pairLookup.get(position) || 0,
         position
       ].join("\t"));
     }
     return rows.join("\n") + "\n";
+  }
+
+  // The state as seen by the evidence datasets of a guided fold, so its
+  // provenance names those files rather than the current header scope.
+  function evidenceSourceState(state, result) {
+    const ids = result.evidenceDatasetIds || [];
+    const datasets = (state.datasets || []).filter(function (dataset) { return ids.indexOf(dataset.id) !== -1; });
+    if (!datasets.length) {
+      return state;
+    }
+    const fingerprint = function (dataset) {
+      return dataset.sha256 || (dataset.primary && state.primarySummary && state.primarySummary.sha256) || null;
+    };
+    const summary = datasets.length === 1 ? {
+      fileName: datasets[0].fileName,
+      fileSize: datasets[0].fileSize,
+      sha256: fingerprint(datasets[0]),
+      sha256Unavailable: !!datasets[0].sha256Unavailable
+    } : {
+      fileName: datasets.map(function (dataset) { return dataset.fileName; }).join(" + "),
+      fileSize: datasets.reduce(function (total, dataset) { return total + (Number(dataset.fileSize) || 0); }, 0)
+    };
+    return Object.assign({}, state, { summary: summary, selection: { datasetIds: datasets.map(function (dataset) { return dataset.id; }) } });
   }
 
   window.Hyb2StructureUI = {

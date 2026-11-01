@@ -30,6 +30,7 @@
       renderMetric("Unique RNAs", format(summary.uniqueRNAs), "Distinct RNA names across both arms"),
       renderMetric("RNA pairs", format(summary.uniquePairs), "RNA arm order is normalised for summary"),
       "      </section>",
+      renderPerDataset(state),
       summary.ambiguousColumn16Records ? '<section class="notice notice-warning"><strong>Legacy column 16 detected.</strong> ' + format(summary.ambiguousColumn16Records) + ' 16-column rows contain a positive integer in column 16 without a chimera-type column. They are treated as legacy cluster support, following the bundled HYB2 merge format. If these rows are instead truncated standard 17-column records, add column 17 before analysis.</section>' : "",
       '      <section class="overview-grid">',
       renderTopRnas(summary.rnaCounts),
@@ -50,11 +51,56 @@
     ].join("");
   }
 
+  // Every loaded dataset with its own counts, which of them this page merges,
+  // and each condition's datasets added up (as the desktop's per-sample table).
+  function renderPerDataset(state) {
+    const datasets = state.datasets || [];
+    if (datasets.length < 2) {
+      return "";
+    }
+    const analysed = (state.selection && state.selection.datasetIds) || [];
+    const comparison = state.comparison || {};
+    const conditionName = function (condition) {
+      return condition === "A" ? (comparison.conditionALabel || "Condition A") : condition === "B" ? (comparison.conditionBLabel || "Condition B") : "—";
+    };
+    const cell = function (value) { return value == null ? "—" : format(value); };
+    const row = function (name, condition, item, included, total) {
+      return "<tr" + (total ? ' class="per-dataset-total"' : "") + "><th scope=\"row\">" + escape(name) + "</th><td>" + escape(condition) + "</td><td>" + cell(item.validRecords) +
+        "</td><td>" + cell(item.rawReadInteractions) + "</td><td>" + cell(item.uniqueRNAs) + "</td><td>" + cell(item.uniquePairs) + "</td><td>" + included + "</td></tr>";
+    };
+    const sum = function (list, field) {
+      return list.some(function (item) { return item[field] == null; }) ? null : list.reduce(function (total, item) { return total + (Number(item[field]) || 0); }, 0);
+    };
+    const rows = datasets.map(function (dataset) {
+      return row(dataset.label || dataset.fileName || dataset.id, conditionName(dataset.condition), dataset, analysed.indexOf(dataset.id) !== -1 ? "Yes" : "No", false);
+    });
+    ["A", "B"].forEach(function (condition) {
+      const members = datasets.filter(function (dataset) { return dataset.condition === condition; });
+      if (members.length > 1) {
+        rows.push(row(conditionName(condition) + " · " + members.length + " merged", conditionName(condition),
+          { validRecords: sum(members, "validRecords"), rawReadInteractions: sum(members, "rawReadInteractions"), uniqueRNAs: null, uniquePairs: null },
+          members.every(function (dataset) { return analysed.indexOf(dataset.id) !== -1; }) ? "Yes"
+            : members.some(function (dataset) { return analysed.indexOf(dataset.id) !== -1; }) ? "Partly" : "No", true));
+      }
+    });
+    return [
+      '      <section class="data-card per-dataset-card">',
+      '        <div class="card-title-row"><h2>Per-dataset summary</h2><span class="card-kicker">' + format(analysed.length) + " of " + format(datasets.length) + " datasets analysed</span></div>",
+      '        <p class="card-note">This page and the other analysis pages merge the datasets marked Yes; choose others in the header. Condition rows add up their datasets (RNAs and pairs are not additive).</p>',
+      '        <div class="table-scroll"><table class="data-table per-dataset-table"><thead><tr><th scope="col">Dataset</th><th scope="col">Condition</th><th scope="col">HYB records</th><th scope="col">Source reads</th><th scope="col">RNAs</th><th scope="col">RNA pairs</th><th scope="col">Analysed</th></tr></thead><tbody>',
+      rows.join(""),
+      "        </tbody></table></div>",
+      "      </section>"
+    ].join("");
+  }
+
   function renderReferenceStatus(state) {
     // state.reference is DatasetInfo.reference from DataProvider.listDatasets().
     const embedded = state.shell === false;
     if (state.reference) {
-      const mapped = Object.keys(state.reference.mapping || {}).length;
+      // The mapping also covers RNAs of datasets outside the analysis scope.
+      const mapping = state.reference.mapping || {};
+      const mapped = (state.summary.rnaNames || []).filter(function (rna) { return mapping[rna]; }).length;
       return [
         '      <section class="overview-callout overview-callout--compact" aria-label="Reference FASTA status">',
         '        <p class="overview-callout-line"><strong>Reference sequences loaded</strong><span>' + format(state.reference.sequenceCount) + (state.reference.sequenceCount === 1 ? " FASTA sequence · " : " FASTA sequences · ") + format(mapped) + " of " + format(state.summary.rnaNames.length) + " HYB RNA names matched locally.</span></p>",
@@ -186,7 +232,7 @@
       "        </div>",
       "      </div>",
       '      <section class="validation-card">',
-      "        <h2>" + escape(summary.fileName) + " is ready</h2>",
+      "        <h2>" + escape((summary.datasetIds || []).length > 1 ? summary.datasetIds.length + " datasets are ready (counts added up)" : summary.fileName + " is ready") + "</h2>",
       '        <p class="validation-intro">The parser expects at least 15 tab-separated fields, RNA names in both arms, and positive one-based RNA start/end coordinates. Standard HYB2 17-column annotations are retained explicitly.</p>',
       '        <div class="validation-summary">',
       renderValidationItem(summary.validRecords, "Valid records"),
@@ -198,12 +244,32 @@
       renderValidationItem(summary.rawReadCountRecords || 0, "IDs with collapsed-read count"),
       renderValidationItem(summary.homodimerRecords || 0, "Homodimer-proxy records"),
       "        </div>",
+      renderValidationPerDataset(state),
       notices.join(""),
       '        <div class="validation-actions">',
       '          <button class="button" type="button" data-action="navigate" data-page="overview">Continue with ' + format(summary.validRecords) + " valid records</button>",
       summary.invalidRecords ? '<button class="button button-secondary" type="button" data-action="download-validation">' + (summary.errorSampleTruncated ? "Download error sample" : "Download validation report") + '</button>' : "",
       "        </div>",
       "      </section>"
+    ].join("");
+  }
+
+  // Merged datasets: each file's own parse result, so a bad file stands out.
+  function renderValidationPerDataset(state) {
+    const datasets = state.datasets || [];
+    const analysed = (state.selection && state.selection.datasetIds) || [];
+    const shown = datasets.filter(function (dataset) { return analysed.indexOf(dataset.id) !== -1; });
+    if (shown.length < 2) {
+      return "";
+    }
+    const cell = function (value) { return value == null ? "—" : format(value); };
+    return [
+      '        <div class="table-scroll"><table class="data-table per-dataset-table"><thead><tr><th scope="col">File</th><th scope="col">Dataset</th><th scope="col">Valid records</th><th scope="col">Invalid rows</th><th scope="col">Homodimer-proxy</th></tr></thead><tbody>',
+      shown.map(function (dataset) {
+        return "<tr><th scope=\"row\">" + escape(dataset.fileName || dataset.id) + "</th><td>" + escape(dataset.label || "") + "</td><td>" + cell(dataset.validRecords) +
+          "</td><td>" + cell(dataset.invalidRecords) + "</td><td>" + cell(dataset.homodimerRecords) + "</td></tr>";
+      }).join(""),
+      "        </tbody></table></div>"
     ].join("");
   }
 

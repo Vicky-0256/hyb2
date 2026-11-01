@@ -295,6 +295,26 @@ assert.match(structureJson.coordinates, /add 10 for the position on RNA_A/);
 assert.equal(structureJson.selectedCandidate, 2, "candidate numbers are 1-based");
 assert.deepEqual(structureJson.candidates.map(function (c) { return [c.rank, c.pairs, c.energy]; }), [[1, 1, -1], [2, 3, -1.2]]);
 assert.ok(byPath(ai, "results/structure_prediction.dbn") && byPath(analysis, "results/structure_prediction.json"));
+const dualState = JSON.parse(JSON.stringify(full));
+Object.assign(dualState.structure, { engine: "cplfold", cplfoldMode: "cofold" });
+Object.assign(dualState.structure.result, {
+  engine: "CPLcofold", cutpoint: 4, strandLengths: [4, 4],
+  displaySequence: "GGGA&AACC", dotBracketWithBreak: "(((.&.)))",
+  sourceSegments: [{ preparedStart:1, preparedEnd:4, rna:"RNA_A", start:11, end:14 },
+                   { preparedStart:5, preparedEnd:8, rna:"RNA_B", start:21, end:24 }],
+  energyMetadata: { energy_kind: "heuristic" }
+});
+const dualRecord = R.build(dualState, { interactionRows:records, interactionTotal:3 });
+const dualFiles = R.files(dualRecord, "ai");
+const dualJson = JSON.parse(byPath(dualFiles, "results/structure_prediction.json").text);
+assert.equal(dualJson.cutpoint, 4);
+assert.equal(dualJson.positionOffset, 0, "a dual-reference result has no single global reference offset");
+assert.deepEqual(dualJson.strandLengths, [4, 4]);
+assert.equal(dualJson.sourceSegments.length, 2);
+assert.equal(dualJson.energyMetadata.energy_kind, "heuristic");
+const dualDbn = byPath(dualFiles, "results/structure_prediction.dbn");
+assert.match(dualDbn.text, /GGGA&AACC\n\(\(\(\.&\.\)\)\)/);
+assert.equal(dualRecord.structures.find(item => item.file === dualDbn.path).length, 8);
 const summaryJson = JSON.parse(byPath(ai, "summary.json").text);
 assert.deepEqual(summaryJson.results, JSON.parse(JSON.stringify(record.results)), "summary.json results = record");
 assert.deepEqual(summaryJson.steps.map(function (s) { return s.status; }), JSON.parse(JSON.stringify(record.steps.map(function (s) { return s.status; }))));

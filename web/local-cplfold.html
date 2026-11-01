@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Run HYB2 CPLfold inputs locally with FASTA and optional HYB-derived bonus matrix files." />
-    <meta name="theme-color" content="#132c47" />
+    <meta name="theme-color" content="#f3f7f8" />
     <link rel="icon" href="./assets/hyb2-logo.png" type="image/png" />
     <title>Run CPLfold Locally - HYB2 Web Lite</title>
     <link rel="stylesheet" href="./styles.css" />
@@ -40,7 +40,7 @@
             <span class="drawer-kicker">1. Prepare inputs in the web app</span>
             <h2>Download the generated files</h2>
             <p>Keep your RNA Structure tab open. After selecting CPLfold, click <strong>Download local inputs</strong> below the sequence preview.</p>
-            <div class="cplfold-guide-file"><code>cplfold-input.fasta</code><span>Always downloaded. It contains the prepared single-record sequence.</span></div>
+            <div class="cplfold-guide-file"><code>cplfold-input.fasta</code><span>Always downloaded. It preserves the prepared sequence and, for CPLcofold, the two RNA strands.</span></div>
             <div class="cplfold-guide-file"><code>cplfold-bonus-matrix.tsv</code><span>Downloaded for HYB-guided mode. It stores the sparse 1-based bonus matrix built from all eligible HYB rows in the selected reference region.</span></div>
           </article>
 
@@ -78,6 +78,7 @@ python -m pip install -r requirements/cplfold-core.txt</code></pre>
   --alpha 0.5 \
   --output cplfold-results.txt</code></pre>
             <p class="cplfold-guide-note">Sequence-only mode can omit <code>--bonus-matrix-file</code> and <code>--alpha</code>.</p>
+            <p class="cplfold-guide-note">For two RNAs, use <code>bin/cplcofold --mode standard --sequence-file cplfold-input.fasta</code>. Select <code>--mode pseudoknot</code> to include pseudoknot candidates, and supply the downloaded matrix with an explicit <code>--alpha</code> for reads guidance. Copy the command shown in the structure panel to reproduce all selected search settings.</p>
           </article>
 
           <article class="local-run-card local-run-card-wide">

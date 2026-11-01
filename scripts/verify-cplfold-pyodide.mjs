@@ -36,7 +36,7 @@ assert.equal(manifest.pyodide, "0.29.4");
 assert.equal(manifest.python, "3.13.2");
 assert.equal(manifest.numpy, "2.2.5");
 assert.equal(manifest.cplfoldRevision, "24bab52");
-assert.equal(manifest.bridgeVersion, "5");
+assert.equal(manifest.bridgeVersion, "6");
 assert.match(manifest.cplfoldArchiveFile, /^cplfold-python-[a-f0-9]{64}\.zip$/);
 const archivePath = path.join(runtimeDirectory, manifest.cplfoldArchiveFile);
 assert.ok(fs.statSync(archivePath).size > 0);
@@ -75,7 +75,7 @@ const exportContract = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify
   evidenceMode: "hyb-blocks",
   evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }]
 }))));
-assert.equal(exportContract.bridgeVersion, "5");
+assert.equal(exportContract.bridgeVersion, "6");
 assert.equal(exportContract.evidence.inputRecords, 1);
 assert.ok(exportContract.evidence.bonusEntries.length > 0);
 assert.ok(exportContract.evidence.bonusEntries.every(function (entry) { return entry.one < entry.two; }));
@@ -106,7 +106,7 @@ const result = JSON.parse(String(bridge.fold_json(JSON.stringify({
 
 assert.equal(result.engine, "CPLfold");
 assert.equal(result.engineVersion, "24bab52");
-assert.equal(result.bridgeVersion, "5");
+assert.equal(result.bridgeVersion, "6");
 assert.equal(result.allowPseudoknot, true);
 assert.equal(result.dotBracket, "..(((((..[[[[)))))......]]]]");
 assert.equal(result.topology, "pseudoknotted");

@@ -58,6 +58,20 @@ Since RNA energies are negative, higher beta favors pseudoknots in ranking.
 
 ## Usage
 
+This branch also provides **two-strand CPLcofold** in Python with Numba
+acceleration, preserving alpha-guided reads and beta pseudoknot ranking:
+
+```python
+from CPLfold import cofold
+results = cofold("GGGG", "CCCC", alpha=0.5, beta=0.3, verbose=False)
+```
+
+Supply a symmetric `bonus_matrix` to apply reads guidance; alpha alone adds
+no evidence. CLI input accepts `-s 'GGGG&CCCC'`. Nested cofold uses Turner
+energies; cofold pseudoknots use an explicitly **experimental Turner/DP
+ranking heuristic**, reported in each candidate's `energy_metadata`.
+See [the cofold API, reads coordinates, and model limitations](../../docs/cplfold-python.md#two-strand-cplcofold-python-and-numba).
+
 ### Command Line
 
 ```bash

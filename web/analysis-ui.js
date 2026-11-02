@@ -789,10 +789,15 @@
     const yCount = Math.max(1, Math.round((view.yEnd - view.yStart) / matrix.binSize) + 1);
     // room for the y ticks and title (left), the colour bar (top,
     // contactLegendOptions) and the x ticks and title (bottom)
-    const left = 68;
+    const availableWidth = Math.max(96, width - 68 - 16);
+    const availableHeight = Math.max(96, height - 52 - 48);
+    // one nucleotide is the same length on both axes: square cells, and the
+    // plot is centred in the space left over on the longer side
+    const cell = Math.min(availableWidth / xCount, availableHeight / yCount);
+    const plotWidth = cell * xCount;
+    const plotHeight = cell * yCount;
+    const left = 68 + (availableWidth - plotWidth) / 2;
     const top = 52;
-    const plotWidth = Math.max(96, width - left - 16);
-    const plotHeight = Math.max(96, height - top - 48);
     return {
       left: left,
       top: top,
@@ -2159,6 +2164,14 @@
 
     if (feature === "contact-control") {
       state.contact[key] = element.value;
+      // Most bins hold one or two records, so a percentile cap saturates the
+      // map at a few records and log1p barely changes it. Until a cap is
+      // chosen, the cap follows the scale: log1p uses the maximum.
+      if (key === "colourCap") {
+        state.contact.colourCapChosen = true;
+      } else if (key === "scale" && !state.contact.colourCapChosen) {
+        state.contact.colourCap = element.value === "log" ? "max" : "95";
+      }
       // Display settings recolour the binned map (cached) and keep the zoom
       // and the selected cell; data settings rebuild the map.
       if (CONTACT_DISPLAY_KEYS.indexOf(key) !== -1) {

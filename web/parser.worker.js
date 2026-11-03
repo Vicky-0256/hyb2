@@ -266,8 +266,10 @@ async function gzipMemberByHeaders(file, start, limit, produced, onBytes) {
       if (!header && p !== file.size && !(p >= padding && p <= padding + 8)) {
         continue;
       }
-      // a header byte pattern inside compressed data fails here and the scan goes on
-      if (await inflateRange(file, start, p, produced, null)) {
+      // a header byte pattern inside compressed data fails here and the scan
+      // goes on; so does an end short of the output already passed on (a
+      // decompressor that read on through later members before raising)
+      if (await inflateRange(file, start, p, produced, null) >= produced) {
         await inflateRange(file, start, p, produced, onBytes);
         return p;
       }
@@ -288,9 +290,10 @@ async function zeroPaddingStart(file) {
   return from + i;
 }
 
-// Decompresses file[start, end) as one gzip member: true when it is exactly
-// one complete member. With onBytes, its output after the first skip bytes is
-// passed on (progress at end).
+// Decompresses file[start, end): the output length when it decompresses
+// cleanly (one member, or several where the decompressor reads on through
+// them), -1 when it does not. With onBytes, the output after the first skip
+// bytes is passed on (progress at end).
 async function inflateRange(file, start, end, skip, onBytes) {
   const reader = file.slice(start, end).stream().pipeThrough(new DecompressionStream("gzip")).getReader();
   let seen = 0;
@@ -298,7 +301,7 @@ async function inflateRange(file, start, end, skip, onBytes) {
     while (true) {
       const next = await reader.read();
       if (next.done) {
-        return true;
+        return seen;
       }
       const chunk = next.value;
       if (onBytes && seen + chunk.byteLength > skip) {
@@ -307,7 +310,7 @@ async function inflateRange(file, start, end, skip, onBytes) {
       seen += chunk.byteLength;
     }
   } catch (error) {
-    return false;
+    return -1;
   }
 }
 

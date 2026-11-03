@@ -493,6 +493,8 @@ assert.equal(comradesWorker.message.evidenceArms.length, 1);
 assert.equal(comradesWorker.message.sequence.length, 28);
 comradesWorker.onmessage({ data: { type: "complete", evidence: { pairs: [{ one: 3, two: 18, count: 2 }], inputRecords: 1, cofoldsWithIntermolecularPairs: 1, temperature: 37, minimumLoop: 3 } } });
 assert.equal(comradesWorker.terminated, true);
+assert.equal(cplfoldWorker.terminated, false, "a finished CPLfold run keeps its worker and loaded runtime");
+assert.equal(cplfoldState.structureWorker, null);
 assert.equal(cplfoldState.structure.result.comradesEvidence.pairs[0].count, 2);
 const cplfoldResultHtml = context.window.Hyb2Pages.renderStructure(cplfoldState);
 assert.match(cplfoldResultHtml, /Pseudoknot candidate/);
@@ -545,8 +547,8 @@ const preResultInputApi = {
 };
 const preResultWorkersBefore = workerInstances.length;
 assert.equal(context.window.Hyb2StructureUI.handleAction("download-local-cplfold-input", preResultCplfoldState, preResultInputApi), true);
-assert.equal(workerInstances.length, preResultWorkersBefore + 1);
-const bonusMatrixWorker = workerInstances.at(-1);
+assert.equal(workerInstances.length, preResultWorkersBefore, "the bonus-matrix export reuses the loaded CPLfold worker");
+const bonusMatrixWorker = cplfoldWorker;
 assert.equal(bonusMatrixWorker.message.type, "cplfold-bonus-matrix");
 assert.equal(bonusMatrixWorker.message.evidenceArms.length, 1);
 bonusMatrixWorker.onmessage({ data: { type: "bonus-matrix-complete", result: {

@@ -146,7 +146,6 @@ async function runCapacityProbe(message) {
     if (message.cofold !== undefined && typeof message.cofold !== "boolean") {
       throw new Error("cofold must be a boolean.");
     }
-    const requestStartedAt = Date.now();
     const probeLength = probeLengthValue(message.probeLength);
     const sequence = buildProbeSequence(probeLength);
     const cutpoint = message.cofold === true ? Math.floor(probeLength / 2) : undefined;
@@ -159,6 +158,10 @@ async function runCapacityProbe(message) {
     const runtimeStartedAt = Date.now();
     const runtime = await getRuntime();
     const runtimeLoadMs = Date.now() - runtimeStartedAt;
+    // The page starts its probe timeout here, and elapsedMs excludes the
+    // one-off runtime load: the probe measures folding, not downloads.
+    self.postMessage({ type: "runtime-ready", operation: "capacity", runtimeLoadMs: runtimeLoadMs });
+    const requestStartedAt = Date.now();
 
     postProgress("Preparing a representative " + probeLength + " nt sequence", 46, {
       phase: "capacity",

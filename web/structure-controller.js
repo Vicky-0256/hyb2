@@ -262,7 +262,13 @@
         evidence_arms: cplfoldGuided ? sequenceInfo.assembly.evidenceArms : [],
         parameters: Object.assign({}, cplfoldParameters)
       };
+      const nativeJob = { runId: runId };
+      state.nativeCplfoldJob = nativeJob;
+      const releaseNativeJob = function () {
+        if (state.nativeCplfoldJob === nativeJob) state.nativeCplfoldJob = null;
+      };
       window.Hyb2Desktop.predictCplfold(nativeRequest).then(function (nativeResult) {
+        releaseNativeJob();
         if (!state.structure || state.structure.runId !== runId) return;
         if (!nativeResult || nativeResult.status === "unavailable") {
           // Re-enter the browser path by clearing the native-only marker. The
@@ -290,6 +296,7 @@
           structure.progress = 100;
           structure.message = nativeResult.engine + " completed with the desktop bundled NumPy/Numba runtime.";
           structure.result = Object.assign({}, nativeResult, {
+            runId: runId,
             completedAt: new Date().toISOString(),
             sequence: sequenceInfo.sequence,
             label: sequenceInfo.label,
@@ -319,6 +326,7 @@
           publish(null);
         }
       }).catch(function (error) {
+        releaseNativeJob();
         if (!state.structure || state.structure.runId !== runId) return;
         structure.runningSequenceInfo = null;
         structure.operation = null;
@@ -330,9 +338,10 @@
       return true;
     }
 
+    let worker = null;
     try {
-      const worker = cplfold
-        ? new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" })
+      worker = cplfold
+        ? acquireCplfoldWorker(state)
         : new Worker((window.HYB2_ASSET_BASE || "./") + "structure.worker.js");
       state.structureWorker = worker;
 
@@ -378,6 +387,7 @@
               ? "ViennaRNA MFE structure predicted locally with " + constraintCount + " manual hard base-pair constraint" + (constraintCount === 1 ? "." : "s.")
               : "ViennaRNA MFE structure predicted locally.");
           structure.result = Object.assign({}, message.result || {}, {
+            runId: runId,
             completedAt: new Date().toISOString(),
             sequence: sequenceInfo.sequence,
             label: sequenceInfo.label,
@@ -407,7 +417,7 @@
         }
 
         if (message.type === "error") {
-          finishWorker(state, worker);
+          discardWorker(state, worker);
           structure.runningSequenceInfo = null;
           structure.operation = null;
           structure.status = "error";
@@ -423,7 +433,7 @@
         if (!state.structure || state.structure.runId !== runId) {
           return;
         }
-        finishWorker(state, worker);
+        discardWorker(state, worker);
         structure.runningSequenceInfo = null;
         structure.operation = null;
         structure.status = "error";
@@ -470,6 +480,9 @@
       });
       return true;
     } catch (error) {
+      if (worker) {
+        discardWorker(state, worker);
+      }
       structure.status = "error";
       structure.progress = 0;
       structure.operation = null;
@@ -524,8 +537,7 @@
 
     let worker;
     try {
-      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
-      state.structureWorker = worker;
+      worker = acquireCplfoldWorker(state);
     } catch (error) {
       return failCapacityProbe(state, null, runId, api, error && error.message
         ? error.message
@@ -535,6 +547,12 @@
     worker.onmessage = function (event) {
       const message = event.data || {};
       if (!state.structure || state.structure.runId !== runId) {
+        return;
+      }
+      if (message.type === "runtime-ready") {
+        // The first request in a page loads Pyodide and NumPy; the 60 s
+        // budget covers the probe itself, not that one-off download.
+        startCapacityTimeout();
         return;
       }
       if (message.type === "progress") {
@@ -578,10 +596,13 @@
       failCapacityProbe(state, worker, runId, api, "The browser CPLfold capacity worker stopped unexpectedly. Confirm that the generated Pyodide assets are available.");
     };
 
-    const schedule = typeof window.setTimeout === "function"
-      ? window.setTimeout.bind(window)
-      : (typeof setTimeout === "function" ? setTimeout : null);
-    if (schedule) {
+    function startCapacityTimeout() {
+      const schedule = typeof window.setTimeout === "function"
+        ? window.setTimeout.bind(window)
+        : (typeof setTimeout === "function" ? setTimeout : null);
+      if (!schedule || capacity.timeoutId != null) {
+        return;
+      }
       capacity.timeoutId = schedule(function () {
         if (state.structure && state.structure.runId === runId) {
           failCapacityProbe(state, worker, runId, api, "The browser CPLfold capacity test exceeded 60 seconds and was stopped. The 75 nt baseline remains available.");
@@ -645,8 +666,7 @@
 
     let worker;
     try {
-      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
-      state.structureWorker = worker;
+      worker = acquireCplfoldWorker(state);
     } catch (error) {
       structure.status = "error";
       structure.operation = null;
@@ -683,7 +703,7 @@
         return;
       }
       if (message.type === "error") {
-        finishWorker(state, worker);
+        discardWorker(state, worker);
         structure.status = "error";
         structure.operation = null;
         structure.progress = 0;
@@ -698,7 +718,7 @@
       if (!state.structure || state.structure.runId !== runId) {
         return;
       }
-      finishWorker(state, worker);
+      discardWorker(state, worker);
       structure.status = "error";
       structure.operation = null;
       structure.progress = 0;
@@ -717,7 +737,7 @@
         evidenceArms: prepared.assembly.evidenceArms
       });
     } catch (error) {
-      finishWorker(state, worker);
+      discardWorker(state, worker);
       structure.status = "error";
       structure.operation = null;
       structure.progress = 0;
@@ -736,7 +756,8 @@
     }
     clearCapacityTimeout(state);
     if (worker) {
-      finishWorker(state, worker);
+      // A stuck or failed probe cannot be interrupted inside Pyodide.
+      discardWorker(state, worker);
     }
     const structure = state.structure;
     const capacity = ensureCplfoldCapacity(structure);
@@ -934,9 +955,9 @@
     const wasCapacityProbe = structure && structure.status === "running" && structure.operation === "capacity";
     clearCapacityTimeout(state);
     if (state.structureWorker) {
-      state.structureWorker.terminate();
-      state.structureWorker = null;
+      discardWorker(state, state.structureWorker);
     }
+    cancelNativeCplfold(state);
     if (structure && structure.status === "running") {
       structure.runId = (structure.runId || 0) + 1;
       structure.status = "idle";
@@ -986,10 +1007,53 @@
     worker.postMessage({ type: "comrades-evidence", evidenceArms: sequenceInfo.assembly.evidenceArms, sequence: sequenceInfo.sequence });
   }
 
+  // One long-lived CPLfold module worker per page keeps Pyodide, NumPy and
+  // the CPLfold source loaded across predictions, capacity probes and
+  // bonus-matrix exports. Only cancel and errors terminate it; the next
+  // request then starts a fresh worker.
+  let cplfoldWorker = null;
+
+  function acquireCplfoldWorker(state) {
+    if (!cplfoldWorker) {
+      cplfoldWorker = new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
+    }
+    state.structureWorker = cplfoldWorker;
+    return cplfoldWorker;
+  }
+
+  // A finished request releases its worker; the CPLfold worker stays alive.
   function finishWorker(state, worker) {
+    if (worker !== cplfoldWorker) {
+      worker.terminate();
+    }
+    if (state.structureWorker === worker) {
+      state.structureWorker = null;
+    }
+  }
+
+  function discardWorker(state, worker) {
+    if (worker === cplfoldWorker) {
+      cplfoldWorker = null;
+    }
     worker.terminate();
     if (state.structureWorker === worker) {
       state.structureWorker = null;
+    }
+  }
+
+  // Desktop native CPLfold runs outside this page, so cancelling must ask the
+  // desktop to stop the job; bumping runId alone only ignores its answer.
+  function cancelNativeCplfold(state) {
+    const job = state.nativeCplfoldJob;
+    state.nativeCplfoldJob = null;
+    const desktop = window.Hyb2Desktop;
+    if (!job || !desktop || typeof desktop.cancelCplfold !== "function") {
+      return;
+    }
+    try {
+      Promise.resolve(desktop.cancelCplfold(job)).catch(function () { /* runId already drops the late answer */ });
+    } catch (error) {
+      /* runId already drops the late answer */
     }
   }
 

@@ -1093,3 +1093,57 @@ process.stdout.write("ui-contract: ok\n");
   }
 }
 console.log('skip-link-routing: ok');
+
+// Downloads: the blob URL outlives click() so Safari and Firefox can finish a
+// large download, and names built from FASTA IDs are made safe first.
+// Fingerprints: large files (or any file without WebCrypto) are hashed in
+// slices, never read whole.
+{
+  const between = function (startText, endText) {
+    const start = appSource.indexOf(startText);
+    const end = appSource.indexOf(endText, start);
+    assert.ok(start >= 0 && end > start, "app.js holds " + startText);
+    return appSource.slice(start, end);
+  };
+  const downloadSource = between("  function downloadBlob(fileName, blob) {", "  // The toast is part of the rendered markup");
+  const digestSource = between("  const DIGEST_WHOLE_FILE_BYTES", "  function clearSession() {");
+  assert.match(digestSource, /window\.crypto\.subtle && size <= DIGEST_WHOLE_FILE_BYTES/, "only files up to the ceiling go to WebCrypto whole");
+  const timers = [];
+  const revoked = [];
+  const clicked = [];
+  const sandbox = vm.createContext({
+    URL: { createObjectURL: function () { return "blob:" + (clicked.length + 1); }, revokeObjectURL: function (url) { revoked.push(url); } },
+    document: { body: { appendChild: function () {} }, createElement: function () {
+      return { click: function () { clicked.push(this.download); }, remove: function () {} };
+    } },
+    window: { setTimeout: function (fn, ms) { timers.push({ fn: fn, ms: ms }); }, crypto: null }
+  });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), sandbox, { filename: "analysis-data.js" });
+  vm.runInContext(downloadSource + digestSource + "\nthis.downloadBlob = downloadBlob; this.digestFile = digestFile;", sandbox, { filename: "app.js (download, digest)" });
+  sandbox.downloadBlob("sp|P1|ZIKV:1-20.fasta", {});
+  assert.deepEqual(clicked, ["sp_P1_ZIKV_1-20.fasta"], "the browser download name is sanitised");
+  assert.deepEqual(revoked, [], "the blob URL is not revoked when click() returns");
+  assert.ok(timers.length === 1 && timers[0].ms >= 30000, "the blob URL lives at least 30 s");
+  timers[0].fn();
+  assert.deepEqual(revoked, ["blob:1"]);
+
+  const crypto = require("node:crypto");
+  const bytes = crypto.randomBytes(17 * 1024 * 1024 + 17);
+  const slices = [];
+  const sliced = {
+    size: bytes.length,
+    arrayBuffer: function () { throw new Error("the file must not be read whole"); },
+    slice: function (start, end) {
+      slices.push(end - start);
+      return { arrayBuffer: async function () { return bytes.buffer.slice(bytes.byteOffset + start, bytes.byteOffset + end); } };
+    }
+  };
+  sandbox.digestFile(sliced).then(function (hash) {
+    assert.equal(hash, crypto.createHash("sha256").update(bytes).digest("hex"), "the sliced SHA-256 matches node:crypto");
+    assert.ok(slices.length === 3 && slices.every(function (size) { return size <= 8 * 1024 * 1024; }), "the file is read in 8 MB slices");
+    console.log("download-and-digest: ok");
+  }).catch(function (error) {
+    console.error(error);
+    process.exit(1);
+  });
+}

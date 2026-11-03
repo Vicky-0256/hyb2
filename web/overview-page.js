@@ -179,7 +179,11 @@
   function renderType(label, fraction, count) {
     return [
       '            <div class="type-item">',
-      "              <strong>" + escape(window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(label) : label) + "</strong>",
+      // the type's HYB2 code over its name, in the name's grid cell; a value
+      // with no code of its own (Unclassified, a custom column 17) once
+      "              <strong>" + (window.Hyb2ChimeraTypes && window.Hyb2ChimeraTypes.code(label) !== window.Hyb2ChimeraTypes.label(label)
+        ? '<span class="chimera-code">' + escape(window.Hyb2ChimeraTypes.code(label)) + "</span>" : "") +
+        escape(window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(label) : label) + "</strong>",
       window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.diagram(label) : "",
       '              <span class="type-value">' + format(count) + " records · " + percentFormatter.format(fraction) + "</span>",
       '              <div class="type-meter"><span style="width:' + (fraction * 100) + '%"></span></div>',

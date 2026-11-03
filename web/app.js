@@ -921,6 +921,7 @@
       }).join("") + "</div>";
     }
     const versions = desktopVersions(kit);
+    const debFile = (kit.platforms.filter(function (item) { return item.id === "linux-deb"; })[0] || { file: "" }).file;
     return [
       '<div class="desktop-downloads">',
       versions.latest,
@@ -928,8 +929,10 @@
       '<p class="desktop-download-unavailable">' + escapeHtml(kit.unavailable) + "</p>",
       '<details class="desktop-first-launch" data-open-key="desktop-first-launch"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["desktop-first-launch"] ? " open" : "") + ">",
       "<summary>First launch (unsigned app)</summary>",
-      "<p><strong>macOS:</strong> the first time, macOS blocks the app. Open System Settings → Privacy &amp; Security and choose Open Anyway next to HYB2 Desktop.</p>",
-      "<p><strong>Windows:</strong> SmartScreen may warn about an unrecognised app. Choose More info → Run anyway.</p>",
+      "<p>HYB2 Desktop is not yet signed with an Apple or Microsoft developer certificate, so macOS and Windows warn the first time it opens. The warning concerns the missing signature; you can check the download against the checksums below.</p>",
+      "<p><strong>macOS:</strong> drag HYB2 Desktop to Applications and open it once. When macOS says it cannot verify the app, choose Done. Then open System Settings → Privacy &amp; Security, scroll down and choose Open Anyway next to HYB2 Desktop, and confirm with your password. Later launches open normally. Alternatively, run <code>xattr -dr com.apple.quarantine \"/Applications/HYB2 Desktop.app\"</code> in Terminal.</p>",
+      "<p><strong>Windows:</strong> if the browser holds the download, choose Keep. When SmartScreen shows “Windows protected your PC”, choose More info → Run anyway.</p>",
+      "<p><strong>Linux:</strong> no warning. Install the .deb with <code>sudo apt install ./" + escapeHtml(debFile) + "</code>, or unpack the .tar.gz and run <code>./hyb2-desktop</code> inside it.</p>",
       "</details>",
       '<p class="desktop-download-meta"><a href="' + escapeAttribute(kit.checksumsUrl()) + '">Checksums (' + escapeHtml(kit.checksumsFile) + ")</a>" +
         '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl + "/latest") + '">Release notes</a>' +
@@ -3639,15 +3642,29 @@
     textArea.remove();
   }
 
+  // Files up to this size go to WebCrypto in one buffer; larger ones (or
+  // any file when WebCrypto is missing, e.g. plain-http hosting) are hashed
+  // in DIGEST_SLICE_BYTES slices so the whole file never sits in memory.
+  const DIGEST_WHOLE_FILE_BYTES = 128 * 1024 * 1024;
+  const DIGEST_SLICE_BYTES = 8 * 1024 * 1024;
+
   async function digestFile(file) {
-    if (!window.crypto || !window.crypto.subtle) {
+    const size = Number(file && file.size) || 0;
+    if (window.crypto && window.crypto.subtle && size <= DIGEST_WHOLE_FILE_BYTES) {
+      const buffer = await file.arrayBuffer();
+      const digest = await window.crypto.subtle.digest("SHA-256", buffer);
+      return Array.from(new Uint8Array(digest)).map(function (byte) {
+        return byte.toString(16).padStart(2, "0");
+      }).join("");
+    }
+    if (!window.Hyb2Data || typeof window.Hyb2Data.createSha256 !== "function" || typeof file.slice !== "function") {
       return "";
     }
-    const buffer = await file.arrayBuffer();
-    const digest = await window.crypto.subtle.digest("SHA-256", buffer);
-    return Array.from(new Uint8Array(digest)).map(function (byte) {
-      return byte.toString(16).padStart(2, "0");
-    }).join("");
+    const hasher = window.Hyb2Data.createSha256();
+    for (let offset = 0; offset < size; offset += DIGEST_SLICE_BYTES) {
+      hasher.update(new Uint8Array(await file.slice(offset, Math.min(size, offset + DIGEST_SLICE_BYTES)).arrayBuffer()));
+    }
+    return hasher.hex();
   }
 
   function clearSession() {
@@ -3983,6 +4000,10 @@
   }
 
   function downloadBlob(fileName, blob) {
+    // names can carry FASTA IDs or RNA names ("sp|P12345|X", "chr1:100")
+    fileName = window.Hyb2Data && typeof window.Hyb2Data.safeFileName === "function"
+      ? window.Hyb2Data.safeFileName(fileName)
+      : String(fileName || "download");
     if (window.Hyb2Desktop && window.Hyb2Desktop.enabled && typeof window.Hyb2Desktop.saveFile === "function") {
       Promise.resolve(window.Hyb2Desktop.saveFile(fileName, blob)).then(function (handled) {
         if (!handled) {
@@ -3996,6 +4017,8 @@
     browserDownloadBlob(fileName, blob);
   }
 
+  const DOWNLOAD_URL_LIFETIME_MS = 60000;
+
   function browserDownloadBlob(fileName, blob) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -4004,7 +4027,10 @@
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    window.setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+    // Safari and Firefox read the blob after click() returns; revoking at
+    // once can cut a large download short, so each URL lives for a minute
+    // (two quick downloads in a row each keep their own).
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, DOWNLOAD_URL_LIFETIME_MS);
   }
 
   // The toast is part of the rendered markup: a render() while it is shown

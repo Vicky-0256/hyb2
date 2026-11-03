@@ -248,6 +248,53 @@ async function parseFile(file, globals) {
   // a .gz name that is already plain text (a server that decoded it) parses as text
   const decoded = await parseFile(new File([text], "fixture.hyb.gz"), streams);
   assert.equal(decoded.message.summary.validRecords, 3);
+  // multi-member gzip: `cat a.gz b.gz` (also the same member twice) and
+  // bgzip/BGZF blocks lose no records; DecompressionStream alone stops (or
+  // throws) at the end of the first member
+  const zlib = require("node:zlib");
+  const lines = [];
+  for (let index = 0; index < 4000; index += 1) {
+    lines.push(line({ id: (index + 1) + "_" + (1 + (index % 9)), rnaTwo: index % 3 ? "RNA_B" : "RNA_A" }));
+  }
+  const firstHalf = lines.slice(0, 1500).join("\n") + "\n";
+  const secondHalf = lines.slice(1500).join("\n") + "\n";
+  const ids = function (result) { return result.message.records.map(function (r) { return r.id; }).join(","); };
+  const reference = await parseFile(new File([firstHalf + secondHalf], "all.hyb"), streams);
+  const joined = Buffer.concat([zlib.gzipSync(Buffer.from(firstHalf)), zlib.gzipSync(Buffer.from(secondHalf))]);
+  const joinedResult = await parseFile(new File([joined], "joined.hyb.gz"), streams);
+  assert.equal(joinedResult.message.summary.validRecords, 4000, "both members of cat a.gz b.gz are read");
+  assert.equal(ids(joinedResult), ids(reference));
+  assert.ok(joinedResult.progress.every(function (m) { return m.processedBytes <= joined.length; }));
+  const twice = Buffer.concat([zlib.gzipSync(Buffer.from(firstHalf)), zlib.gzipSync(Buffer.from(firstHalf)), zlib.gzipSync(Buffer.from(secondHalf)), Buffer.alloc(512)]);
+  const twiceResult = await parseFile(new File([twice], "twice.hyb.gz"), streams);
+  assert.equal(twiceResult.message.summary.validRecords, 5500, "a repeated member and zero padding are handled");
+  // BGZF: blocks of <= 64 KB input, each a gzip member with a BC extra field
+  const bgzf = function (text) {
+    const source = Buffer.from(text);
+    const blocks = [];
+    for (let at = 0; at <= source.length; at += 20000) {
+      const deflated = zlib.deflateRawSync(source.subarray(at, Math.min(source.length, at + 20000)));
+      const header = Buffer.from([0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 0xff, 6, 0, 66, 67, 2, 0, 0, 0]);
+      header.writeUInt16LE(header.length + deflated.length + 8 - 1, 16);
+      const trailer = Buffer.alloc(8);
+      trailer.writeUInt32LE(zlib.crc32 ? zlib.crc32(source.subarray(at, Math.min(source.length, at + 20000))) : 0, 0);
+      trailer.writeUInt32LE(Math.min(source.length, at + 20000) - at, 4);
+      blocks.push(header, deflated, trailer);
+    }
+    return Buffer.concat(blocks);
+  };
+  if (zlib.crc32) {
+    const blocked = bgzf(firstHalf + secondHalf);
+    assert.ok(zlib.gunzipSync(blocked).toString() === firstHalf + secondHalf, "the BGZF fixture is valid gzip");
+    const blockedResult = await parseFile(new File([blocked], "blocked.hyb.gz"), streams);
+    assert.equal(blockedResult.message.summary.validRecords, 4000, "every BGZF block is read");
+    assert.equal(ids(blockedResult), ids(reference));
+    // BGZF followed by an ordinary member
+    const mixed = Buffer.concat([bgzf(firstHalf), zlib.gzipSync(Buffer.from(secondHalf))]);
+    assert.equal(ids(await parseFile(new File([mixed], "mixed.hyb.gz"), streams)), ids(reference));
+  }
+  // a truncated member still fails loudly
+  await assert.rejects(parseFile(new File([joined.subarray(0, joined.length - 40)], "cut.hyb.gz"), streams));
   // without DecompressionStream a gzip file gets a clear error
   await assert.rejects(parseFile(new File([gzip], "fixture.hyb.gz")), /cannot decompress gzip files/);
   process.stdout.write("parser-contract: ok\n");

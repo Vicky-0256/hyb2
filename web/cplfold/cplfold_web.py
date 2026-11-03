@@ -739,16 +739,20 @@ def iter_hyb_rows(paths: Any, genes: Any = None, progress: Any = None, *, intram
                     reported = done
                     progress(done)
                 fields = raw.split(b"\t", 14)
-                if len(fields) < 14 or (intramolecular and fields[3] != fields[9]):
+                if len(fields) < 14:
                     continue
-                if wanted is not None and (fields[3] not in wanted or fields[9] not in wanted):
+                # padded RNA names match, as hyb2analysis.hybfile.parse strips them
+                gene_one, gene_two = fields[3].strip(), fields[9].strip()
+                if intramolecular and gene_one != gene_two:
+                    continue
+                if wanted is not None and (gene_one not in wanted or gene_two not in wanted):
                     continue
                 try:
                     a0, a1, b0, b1 = int(fields[6]), int(fields[7]), int(fields[12]), int(fields[13])
                 except ValueError:
                     continue
-                one = fields[3].decode("utf-8", "replace")
-                two = one if fields[9] == fields[3] else fields[9].decode("utf-8", "replace")
+                one = gene_one.decode("utf-8", "replace")
+                two = one if gene_two == gene_one else gene_two.decode("utf-8", "replace")
                 yield one, a0, a1, two, b0, b1
         base += os.path.getsize(path)
     if progress is not None:

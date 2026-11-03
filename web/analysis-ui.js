@@ -230,10 +230,15 @@
 
     const interactions = state.view && state.view.interactions;
     const rowHeight = state.density === "compact" ? 38 : 46;
-    const start = Math.max(0, Math.floor(table.scrollTop / rowHeight) - 4);
-    const visible = Math.ceil(table.clientHeight / rowHeight) + 8;
-    const rows = window.Hyb2Pages.interactionWindow(interactions, start, visible);
-    rowsContainer.style.transform = "translateY(" + (start * rowHeight) + "px)";
+    const total = interactions ? interactions.total : 0;
+    const view = window.Hyb2Pages.interactionTableWindow(total, rowHeight, table.scrollTop, table.clientHeight);
+    const start = view.start;
+    const rows = window.Hyb2Pages.interactionWindow(interactions, start, view.count);
+    const spacer = table.querySelector(".virtual-table-spacer");
+    if (spacer && spacer.style.height !== view.spacer + "px") {
+      spacer.style.height = view.spacer + "px";
+    }
+    rowsContainer.style.transform = "translateY(" + view.offset + "px)";
     if (rows) {
       rowsContainer.innerHTML = window.Hyb2Pages.renderVirtualRows(rows);
       return;
@@ -3114,7 +3119,7 @@
         api.navigate("structure");
       }
       if (action === "region-download-fasta") {
-        api.download(reference.id + "_" + reference.start + "-" + reference.end + ".fasta", ">" + reference.id + ":" + reference.start + "-" + reference.end + "\n" + reference.sequence + "\n", "text/plain");
+        api.download(window.Hyb2Data.safeFileName(reference.id + "_" + reference.start + "-" + reference.end + ".fasta"), ">" + reference.id + ":" + reference.start + "-" + reference.end + "\n" + reference.sequence + "\n", "text/plain");
         api.showToast("Region FASTA downloaded locally.");
       }
       return true;

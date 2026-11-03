@@ -944,4 +944,127 @@ assert.ok(Date.now() - disjointComparisonStartedAt < 5000,
   }, /use larger bins/);
 }
 
+// download names from FASTA IDs are safe on every OS
+assert.equal(data.safeFileName("sp|P12345|ZIKV/NS1:a*b?\"c<d>e\u0001_1-200.fasta"), "sp_P12345_ZIKV_NS1_a_b__c_d_e__1-200.fasta");
+assert.equal(data.safeFileName("..\\..\\x.txt "), "_.._x.txt");
+assert.equal(data.safeFileName(""), "download");
+assert.equal(data.safeFileName("plain-name_1.csv"), "plain-name_1.csv");
+assert.equal(data.safeFileName("a".repeat(400) + ".fasta").length, 180);
+assert.ok(data.safeFileName("a".repeat(400) + ".fasta").endsWith(".fasta"));
+{
+  // the desktop adapter keeps its own copy (it loads first); both agree
+  const adapter = fs.readFileSync(path.join(repository, "web", "desktop-adapter.js"), "utf8");
+  assert.match(adapter, /suggested_name: safeFileName\(fileName\)/);
+  const desktopContext = vm.createContext({ window: { __TAURI__: { core: { invoke: async function (name, args) { if (name === "file_save_dialog") desktopContext.saved = args; return { saved: true }; } } } },
+    FileReader: function () { this.readAsDataURL = function () { this.result = "data:x;base64,QQ=="; this.onload(); }; }, Blob: function () {} });
+  vm.runInContext(adapter, desktopContext);
+  desktopContext.window.Hyb2Desktop.saveFile("chr1:10-20|x.fasta", new desktopContext.Blob()).then(function () {
+    assert.equal(desktopContext.saved.request.suggested_name, data.safeFileName("chr1:10-20|x.fasta"));
+  });
+}
+
+// incremental SHA-256 equals node:crypto for any split of the input
+{
+  const crypto = require("node:crypto");
+  [0, 1, 55, 56, 63, 64, 65, 119, 120, 1000, 200003].forEach(function (length) {
+    const bytes = crypto.randomBytes(length);
+    const expected = crypto.createHash("sha256").update(bytes).digest("hex");
+    const whole = data.createSha256();
+    whole.update(new Uint8Array(bytes));
+    assert.equal(whole.hex(), expected, "SHA-256 of " + length + " bytes");
+    const split = data.createSha256();
+    for (let at = 0; at < length;) {
+      const step = 1 + Math.floor(Math.random() * 97);
+      split.update(new Uint8Array(bytes.subarray(at, Math.min(length, at + step))));
+      at += step;
+    }
+    assert.equal(split.hex(), expected, "SHA-256 of " + length + " bytes in slices");
+  });
+}
+
+// search matches a chimera type as stored (Type_3), as shown (Type 3) and by
+// its pattern name when ui-kit.js has defined the labels
+{
+  const typed = [{ id: "r1", sequence: "", rnaOne: "A", rnaTwo: "A", chimeraType: "Type_3", overlapScore: null },
+    { id: "r2", sequence: "", rnaOne: "A", rnaTwo: "B", chimeraType: "Intermolecular", overlapScore: null }];
+  const search = function (text) {
+    return data.filterRecords(typed, Object.assign(data.defaultInteractionFilters(), { search: text })).map(function (r) { return r.id; }).join(",");
+  };
+  assert.equal(search("Type_3"), "r1");
+  assert.equal(search("type 3"), "r1");
+  assert.equal(search("intermolecular"), "r2");
+  context.window.Hyb2ChimeraTypes = { label: function (value) { return value === "Type_3" ? "Overlap · 5′ arm starts first" : value; } };
+  assert.equal(search("overlap · 5′"), "r1");
+  delete context.window.Hyb2ChimeraTypes;
+}
+
+// partnerWindow: the O(n log n) scan returns what the former per-arm rescan
+// returned, and one partner with 50k arms sharing a start stays fast
+{
+  const legacyPartnerWindow = function (records, rna, start, end, width) {
+    const size = Math.max(1, Number(width) || 201);
+    const first = Number(start), last = Number(end);
+    const arms = new Map();
+    (records || []).forEach(function (record) {
+      [[record.rnaOne, record.rnaOneStart, record.rnaOneEnd, record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd],
+       [record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd, record.rnaOne, record.rnaOneStart, record.rnaOneEnd]].forEach(function (side) {
+        if (side[0] !== rna || side[1] < first || side[2] > last) return;
+        if (side[3] === rna && side[4] <= last && side[5] >= first) return;
+        if (!arms.has(side[3])) arms.set(side[3], []);
+        arms.get(side[3]).push([side[4], side[5]]);
+      });
+    });
+    let best = null;
+    arms.forEach(function (list, partner) {
+      list.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+      for (let i = 0, j = 0; i < list.length; i += 1) {
+        while (j < list.length && list[j][0] < list[i][0] + size) j += 1;
+        let count = 0;
+        for (let k = i; k < j; k += 1) if (list[k][1] <= list[i][0] + size - 1) count += 1;
+        if (!best || count > best.records) best = { rna: partner, start: list[i][0], end: list[i][0] + size - 1, records: count };
+      }
+    });
+    const extent = best && data.getRnaExtent(records, best.rna);
+    if (extent && best.end > extent.max) {
+      best.start = Math.max(1, extent.max - size + 1);
+      best.end = extent.max;
+    }
+    return best;
+  };
+  let seed = 12345;
+  const random = function (limit) {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % limit;
+  };
+  const rnas = ["A", "B", "C"];
+  for (let round = 0; round < 300; round += 1) {
+    const records = [];
+    const n = 1 + random(80);
+    const span = 50 + random(1500);
+    for (let r = 0; r < n; r += 1) {
+      const oneStart = 1 + random(span), twoStart = 1 + random(span);
+      // a few malformed arms (end before start) keep the comparison honest
+      const oneEnd = oneStart + random(60) - (random(20) === 0 ? 10 : 0);
+      const twoEnd = twoStart + random(60) - (random(20) === 0 ? 10 : 0);
+      records.push({ rnaOne: rnas[random(3)], rnaOneStart: oneStart, rnaOneEnd: oneEnd,
+        rnaTwo: rnas[random(3)], rnaTwoStart: twoStart, rnaTwoEnd: twoEnd });
+    }
+    const from = 1 + random(span), to = from + random(400);
+    const width = [undefined, 1, 5, 25, 201][random(5)];
+    assert.deepEqual(JSON.parse(JSON.stringify(data.partnerWindow(records, "A", from, to, width))),
+      JSON.parse(JSON.stringify(legacyPartnerWindow(records, "A", from, to, width))),
+      "partnerWindow matches the former scan (round " + round + ")");
+  }
+  const crowded = [];
+  for (let r = 0; r < 50000; r += 1) {
+    crowded.push({ rnaOne: "miR-1", rnaOneStart: 1, rnaOneEnd: 22, rnaTwo: "target", rnaTwoStart: 1 + (r % 3), rnaTwoEnd: 25 + (r % 7) });
+  }
+  const started = process.hrtime.bigint();
+  const crowdedWindow = data.partnerWindow(crowded, "miR-1", 1, 22);
+  const crowdedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.equal(crowdedWindow.records, 50000);
+  assert.equal(crowdedWindow.rna, "target");
+  assert.ok(crowdedMs < 500, "partnerWindow over 50k arms at one start takes " + crowdedMs.toFixed(0) + " ms (< 500 ms)");
+}
+
 process.stdout.write("analysis-data-contract: ok\n");

@@ -25,6 +25,25 @@ assert.ok(batch.panels[0].samples[0].cells.every(c=>c[2]===2));
 assert.equal(batch.panels[0].samples[1].cells.length,0);
 assert.equal(batch.cap,2);assert.equal(B.histogramQuantile(new Map([[1,1],[4,1]]),.95),3.8499999999999996);
 const result={labels:{A:'Alpha',B:'Beta'},datasets:[],summary:{parameters:{}},completedAt:'now'};
+// bins start at 0: contacts at nt 1-9 (bin 0) stay in a window clamped to 1,
+// while the drawn axis and interactions.tsv keep the 1-based lower bound
+{
+  assert.equal(regions[10].binX1,0);assert.equal(regions[10].binY1,0);
+  const nearStart=B.mapBatch([{id:'s',label:'S',condition:'A',rnaX:'r',rnaY:'r',arms:new Int32Array([1,5,3,8])}],[regions[10]]);
+  assert.equal(JSON.stringify(nearStart.panels[0].samples[0].cells),'[[0,0,1]]');
+  assert.match(B.mapSvg(nearStart.panels[0],nearStart.cap,{A:'A',B:'B'},nearStart.quantile),/>1<\/text>/);
+}
+// colour as Lau/contact_density_map_zoom.R: pmin(count, quant) on limits
+// c(0, ceiling(quant)); an integer quantile reaches black, a fractional one
+// stops at a dark grey and the legend says so
+{
+  const panel={region:regions[10],samples:[{id:'a',label:'A',condition:'A',rnaX:'r',rnaY:'r',cells:[[10,20,9]]}]};
+  const whole=B.mapSvg(panel,2,{A:'A',B:'B'},2);
+  assert.ok(whole.includes('fill="rgb(0,0,0)"'));assert.match(whole,/common white–black cap 2</);
+  const fractional=B.mapSvg(panel,4,{A:'A',B:'B'},3.8499999999999996);
+  assert.ok(!fractional.includes('fill="rgb(0,0,0)"'));
+  assert.match(fractional,/white–black scale 0–4, counts clipped at 3\.85 \(darkest grey, not black\)/);
+}
 const files=B.mapFiles(batch,result),drawing=files.find(f=>f.path.endsWith('.svg')).text;
 assert.ok(drawing.includes('A &lt;unsafe&gt;'));assert.ok(drawing.includes('No contacts in this window'));
 assert.ok(files.find(f=>f.path==='preview.html'));assert.ok(files.find(f=>f.path.endsWith('.tsv')).text.includes('\t2\n'));

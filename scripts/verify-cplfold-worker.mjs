@@ -89,6 +89,14 @@ assert.equal(capacityCompletion.sample.length, 25);
 assert.ok(capacityCompletion.sample.foldElapsedMs >= 0);
 assert.equal(capacityCompletion.parameters.beamSize, 1);
 assert.match(capacityCompletion.runtimeManifest.archiveSha256, /^[a-f0-9]{64}$/);
+// One worker keeps its runtime: the probe reuses it, reports ready before the
+// fold (the page starts its timeout then) and excludes the load from elapsedMs.
+const readyIndex = messages.findIndex(function (message) { return message.type === "runtime-ready"; });
+assert.ok(readyIndex >= 0, "the capacity probe must report when the runtime is ready");
+assert.ok(readyIndex < messages.indexOf(capacityCompletion));
+assert.ok(!messages.some(function (message) { return message.type === "progress" && message.phase === "source"; }),
+  "a second request in the same worker must not reload the CPLfold source");
+assert.ok(capacityCompletion.elapsedMs >= capacityCompletion.sample.foldElapsedMs);
 
 messages.length = 0;
 await self.onmessage({

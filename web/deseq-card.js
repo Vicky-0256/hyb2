@@ -189,9 +189,11 @@
       field("Significant if padj below", "padjCutoff", deseq.padjCutoff, "Cells with padj below this are significant (independent filtering uses alpha 0.01, as DESeq_run.R)"),
       '</div>',
       '<div class="deseq-include"><span class="card-note">Datasets in the test:</span>' + (comparison.datasets || []).map(function (dataset) {
-        const on = !(deseq.excluded || {})[dataset.id];
-        return '<label class="deseq-include-item"><input type="checkbox" data-feature="deseq-include" data-dataset-id="' + esc(dataset.id) + '"' + (on ? " checked" : "") + "> " +
-          esc(dataset.label || dataset.fileName || dataset.id) + " <span class=\"card-note\">(" + esc(dataset.condition === "A" ? labelA : labelB) + ")</span></label>";
+        // a dataset with no condition is left out by assignedDatasets
+        const assigned = dataset.condition === "A" || dataset.condition === "B";
+        const on = assigned && !(deseq.excluded || {})[dataset.id];
+        return '<label class="deseq-include-item"><input type="checkbox" data-feature="deseq-include" data-dataset-id="' + esc(dataset.id) + '"' + (on ? " checked" : "") + (assigned ? "" : " disabled") + "> " +
+          esc(dataset.label || dataset.fileName || dataset.id) + " <span class=\"card-note\">(" + esc(!assigned ? "not in the test" : dataset.condition === "A" ? labelA : labelB) + ")</span></label>";
       }).join("") + "</div>"
     ];
     const substituted = plan.filter(function (item) { return item.substituted; });
@@ -547,7 +549,10 @@
           best = row;
         }
       });
-      if (best && bestDistance <= Math.max(Number(deseq.radius) || 0, 10, 4 * g.length / g.size)) {
+      // the merge range the shown result was computed with, not the live input
+      const parameters = deseq.result.summary && deseq.result.summary.parameters || {};
+      const range = Number(parameters.range);
+      if (best && bestDistance <= Math.max(Number.isFinite(range) ? range : Number(deseq.radius) || 0, 10, 4 * g.length / g.size)) {
         deseq.selected = best.direction + ":" + best.x + ":" + best.y;
         if (api) {
           api.render();
@@ -890,6 +895,10 @@
   // the merged interactions of this result
   function useInArcMap(state, result) {
     state.arcMap = state.arcMap || window.Hyb2ArcMap.defaultState();
+    // a table file still being read must not replace these interactions
+    if (window.Hyb2ArcMap.cancelLoad) {
+      window.Hyb2ArcMap.cancelLoad(state.arcMap, "interactions");
+    }
     state.arcMap.interactions = window.Hyb2Deseq.arcMapInteractions(result.interactions,
       "Differential test · " + result.labels.A + " vs " + result.labels.B);
     state.arcMap.interactions.source = "comparison";

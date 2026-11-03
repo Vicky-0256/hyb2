@@ -94,15 +94,35 @@
     // Average linkage, with cluster sizes used for each merge (Lance–Williams update).
     const d=Array.from({length:n},()=>new Float64Array(n));
     for(let i=0;i<n;i++) for(let j=i+1;j<n;j++) d[i][j]=d[j][i]=distance(sets[i],sets[j]);
-    const groups=new Map(candidates.map((_,i)=>[i,[i]]));
-    while(groups.size>C) {
-      let best=Infinity, a=-1,b=-1;
-      for(const i of groups.keys()) for(const j of groups.keys()) if(i<j&&d[i][j]<best) {best=d[i][j];a=i;b=j;}
-      const ga=groups.get(a),gb=groups.get(b);
-      for(const j of groups.keys()) if(j!==a&&j!==b) d[a][j]=d[j][a]=(d[a][j]*ga.length+d[b][j]*gb.length)/(ga.length+gb.length);
-      groups.set(a,ga.concat(gb));groups.delete(b);
+    // Each merge takes the first (i, j), i < j, in row-major order at the
+    // smallest distance. Every row caches its first nearest later neighbour,
+    // so a merge scans n row minima, not the n x n matrix (as desktop iris.py).
+    const members=candidates.map((_,i)=>[i]), alive=new Uint8Array(n).fill(1);
+    const best=new Float64Array(n).fill(Infinity), arg=new Int32Array(n).fill(-1);
+    function refresh(r) {
+      let m=Infinity,k=-1;const row=d[r];
+      for(let j=r+1;j<n;j++) if(alive[j]&&row[j]<m) {m=row[j];k=j;}
+      best[r]=m;arg[r]=k;
     }
-    return Array.from(groups.values(),indices=>candidates[indices.reduce((best,i)=>candidates[i].energy<candidates[best].energy?i:best,indices[0])]);
+    for(let r=0;r<n;r++) refresh(r);
+    for(let count=n;count>C;count--) {
+      let a=-1,m=Infinity;
+      for(let r=0;r<n;r++) if(alive[r]&&best[r]<m) {m=best[r];a=r;}
+      const b=arg[a],ga=members[a],gb=members[b];
+      for(let j=0;j<n;j++) if(alive[j]&&j!==a&&j!==b) d[a][j]=d[j][a]=(d[a][j]*ga.length+d[b][j]*gb.length)/(ga.length+gb.length);
+      members[a]=ga.concat(gb);members[b]=null;alive[b]=0;best[b]=Infinity;arg[b]=-1;
+      refresh(a);
+      // Rows before a: their entry for a changed and the one for b went.
+      for(let r=0;r<a;r++) {
+        if(!alive[r]) continue;
+        if(arg[r]===a||arg[r]===b) {refresh(r);continue;}
+        const v=d[r][a];
+        if(v<best[r]||(v===best[r]&&a<arg[r])) {best[r]=v;arg[r]=a;}
+      }
+      // Rows between a and b lost b.
+      for(let r=a+1;r<b;r++) if(alive[r]&&arg[r]===b) refresh(r);
+    }
+    return members.filter(Boolean).map(indices=>candidates[indices.reduce((best,i)=>candidates[i].energy<candidates[best].energy?i:best,indices[0])]);
   }
   function solve(matrix,rhs) {
     const n=rhs.length,a=matrix.map((row,i)=>row.concat(rhs[i]));

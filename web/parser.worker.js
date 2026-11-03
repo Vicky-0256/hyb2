@@ -111,6 +111,184 @@ async function isGzip(file) {
   return head[0] === 0x1f && head[1] === 0x8b;
 }
 
+// A gzip file can hold several members back to back: bgzip output (BGZF,
+// blocks of at most 64 KB) or `cat a.gz b.gz`. DecompressionStream reads one
+// member and then errors on the bytes after it, so members are decompressed
+// one at a time. BGZF blocks state their own length (BSIZE); for any other
+// member the end is the first gzip trailer after it whose ISIZE equals the
+// output length just read and that is followed by the end of the file,
+// another gzip header or zero padding.
+const GZIP_TRAILER_SCAN_BYTES = 4 * 1024 * 1024;
+const BGZF_READ_BYTES = 4 * 1024 * 1024;
+
+async function readGzipMembers(file, onBytes) {
+  let memberStart = 0;
+  while (memberStart < file.size) {
+    const head = new Uint8Array(await file.slice(memberStart, Math.min(file.size, memberStart + 18)).arrayBuffer());
+    if (head.length >= 18 && bgzfBlockSize(head, 0)) {
+      memberStart = await readBgzfBlocks(file, memberStart, onBytes);
+    } else if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
+      memberStart = await readGzipMember(file, memberStart, onBytes);
+    } else if (await isZeroPadding(file, memberStart)) {
+      return;
+    } else {
+      throw new Error((file.name || "The file") + " has data after its last gzip member that is not gzip; decompress it with gunzip and load the text file.");
+    }
+  }
+}
+
+// BSIZE + 1 of the BGZF block at bytes[at], or 0 when it is not one (the BC
+// extra subfield comes first, as bgzip and htslib write it).
+function bgzfBlockSize(bytes, at) {
+  if (bytes[at] !== 0x1f || bytes[at + 1] !== 0x8b || bytes[at + 2] !== 8 || !(bytes[at + 3] & 4)) {
+    return 0;
+  }
+  const extraLength = bytes[at + 10] | (bytes[at + 11] << 8);
+  if (extraLength < 6 || bytes[at + 12] !== 66 || bytes[at + 13] !== 67 || bytes[at + 14] !== 2 || bytes[at + 15] !== 0) {
+    return 0;
+  }
+  return (bytes[at + 16] | (bytes[at + 17] << 8)) + 1;
+}
+
+// Decompresses consecutive BGZF blocks from start (a few MB at a time, the
+// blocks of one read in parallel); returns where the first non-BGZF member
+// begins, or file.size.
+async function readBgzfBlocks(file, start, onBytes) {
+  let offset = start;
+  while (offset < file.size) {
+    const buffer = new Uint8Array(await file.slice(offset, Math.min(file.size, offset + BGZF_READ_BYTES)).arrayBuffer());
+    const blocks = [];
+    let at = 0;
+    let other = false;
+    while (at + 18 <= buffer.length) {
+      const size = bgzfBlockSize(buffer, at);
+      if (!size) {
+        other = true;
+        break;
+      }
+      if (at + size > buffer.length) {
+        if (offset + at + size > file.size) {
+          throw new Error((file.name || "The file") + " ends inside a BGZF block; the gzip file looks truncated.");
+        }
+        break;
+      }
+      blocks.push({ bytes: buffer.subarray(at, at + size), end: offset + at + size });
+      at += size;
+    }
+    const outputs = await Promise.all(blocks.map(function (block) { return inflateGzipBytes(block.bytes); }));
+    outputs.forEach(function (parts, index) {
+      parts.forEach(function (part) { onBytes(part, blocks[index].end); });
+    });
+    offset += at;
+    if (other || !blocks.length) {
+      return offset;
+    }
+  }
+  return offset;
+}
+
+// One complete gzip member held in memory, decompressed to its parts.
+async function inflateGzipBytes(bytes) {
+  const stream = new DecompressionStream("gzip");
+  const writer = stream.writable.getWriter();
+  const writing = writer.write(bytes).then(function () { return writer.close(); });
+  writing.catch(function () {});
+  const reader = stream.readable.getReader();
+  const parts = [];
+  while (true) {
+    const next = await reader.read();
+    if (next.done) {
+      break;
+    }
+    parts.push(next.value);
+  }
+  await writing;
+  return parts;
+}
+
+// Streams one gzip member from start; returns where the next member begins
+// (file.size after the last one).
+async function readGzipMember(file, start, onBytes) {
+  let fed = start;
+  let produced = 0;
+  const reader = file.slice(start).stream().pipeThrough(new TransformStream({
+    transform: function (chunk, controller) {
+      fed += chunk.byteLength;
+      controller.enqueue(chunk);
+    }
+  })).pipeThrough(new DecompressionStream("gzip")).getReader();
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) {
+        break;
+      }
+      produced += next.value.byteLength;
+      onBytes(next.value, Math.min(fed, file.size));
+    }
+  } catch (error) {
+    // the usual way a member that is followed by another one ends
+    const end = await findGzipMemberEnd(file, start, fed, produced);
+    if (end === null) {
+      throw error;
+    }
+    return end;
+  }
+  // A decompressor that stops quietly at the first member's end would drop
+  // the members after it, so check that the trailer really ends the file.
+  if (await gzipTrailerEndsAt(file, file.size, produced)) {
+    return file.size;
+  }
+  const end = await findGzipMemberEnd(file, start, fed, produced);
+  return end === null ? file.size : end;
+}
+
+async function gzipTrailerEndsAt(file, end, produced) {
+  if (end < 8) {
+    return false;
+  }
+  const bytes = new Uint8Array(await file.slice(end - 4, end).arrayBuffer());
+  return ((bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0) === produced % 4294967296;
+}
+
+// The first end of a member starting at start, at or before limit (the
+// decompressor stopped within the last chunks it was given, so the search
+// starts GZIP_TRAILER_SCAN_BYTES before limit and widens back to start).
+async function findGzipMemberEnd(file, start, limit, produced) {
+  const isize = produced % 4294967296;
+  const lowest = start + 20;
+  let top = Math.min(file.size, limit);
+  while (top >= lowest) {
+    const from = Math.max(lowest, top - GZIP_TRAILER_SCAN_BYTES);
+    // trailer ends p in [from, top]; read the 4 ISIZE bytes before and 3 after
+    const sliceStart = from - 4;
+    const bytes = new Uint8Array(await file.slice(sliceStart, Math.min(file.size, top + 3)).arrayBuffer());
+    for (let p = from; p <= top; p += 1) {
+      const i = p - sliceStart;
+      if (((bytes[i - 4] | (bytes[i - 3] << 8) | (bytes[i - 2] << 16) | (bytes[i - 1] << 24)) >>> 0) !== isize) {
+        continue;
+      }
+      if (p === file.size || bytes[i] === 0 || (bytes[i] === 0x1f && bytes[i + 1] === 0x8b && bytes[i + 2] === 8)) {
+        return p;
+      }
+    }
+    top = from - 1;
+  }
+  return null;
+}
+
+async function isZeroPadding(file, start) {
+  for (let offset = start; offset < file.size; offset += BGZF_READ_BYTES) {
+    const bytes = new Uint8Array(await file.slice(offset, Math.min(file.size, offset + BGZF_READ_BYTES)).arrayBuffer());
+    for (let i = 0; i < bytes.length; i += 1) {
+      if (bytes[i] !== 0) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 async function readFileInChunks(file, onChunk) {
   const decoder = new TextDecoder();
   const gzip = await isGzip(file);
@@ -119,19 +297,21 @@ async function readFileInChunks(file, onChunk) {
     throw new Error("This browser cannot decompress gzip files; decompress " + (file.name || "the file") + " first.");
   }
 
-  if (typeof file.stream === "function") {
+  if (gzip) {
     // progress counts compressed bytes read, so it stays within file.size
-    let processedBytes = 0;
-    let stream = file.stream();
-    if (gzip) {
-      stream = stream.pipeThrough(new TransformStream({
-        transform: function (chunk, controller) {
-          processedBytes += chunk.byteLength;
-          controller.enqueue(chunk);
-        }
-      })).pipeThrough(new DecompressionStream("gzip"));
+    await readGzipMembers(file, function (bytes, processedBytes) {
+      onChunk(decoder.decode(bytes, { stream: true }), processedBytes);
+    });
+    const tail = decoder.decode();
+    if (tail) {
+      onChunk(tail, file.size);
     }
-    const reader = stream.getReader();
+    return;
+  }
+
+  if (typeof file.stream === "function") {
+    let processedBytes = 0;
+    const reader = file.stream().getReader();
 
     while (true) {
       const next = await reader.read();
@@ -139,9 +319,7 @@ async function readFileInChunks(file, onChunk) {
         break;
       }
 
-      if (!gzip) {
-        processedBytes += next.value.byteLength;
-      }
+      processedBytes += next.value.byteLength;
       onChunk(decoder.decode(next.value, { stream: true }), processedBytes);
     }
 

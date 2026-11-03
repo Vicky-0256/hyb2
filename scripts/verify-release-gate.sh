@@ -33,6 +33,7 @@ node scripts/verify-cplfold-worker.mjs
 echo '[4/7] Verify structure worker against ViennaRNA'
 node scripts/verify-structure-worker.cjs
 node scripts/verify-structure-render.cjs
+node scripts/verify-cplfold-worker-lifecycle.cjs
 
 echo '[5/7] Verify application contracts'
 node scripts/verify-protocol-contract.cjs

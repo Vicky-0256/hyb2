@@ -238,6 +238,58 @@ same(rp.runs([]), []);
   assert.equal(viaFasta.regions[0].panels[1].summary.X0, 133);
 }
 
+// ---- a window of A inside a region B lacks: B's window is unmapped (not
+// A's coordinates reused on B), B's panel is left out with a warning
+{
+  // B lacks A positions 301-900, a run of C that B (no C at all) cannot match
+  const seqB = randomRNA(23, 900).replace(/C/g, "G");
+  const seqA = seqB.slice(0, 300) + "C".repeat(600) + seqB.slice(300);
+  const pairsA = helix(448, 1305, 6);
+  const state = arc.defaultState();
+  state.a = arc.parseStructure(">A\n" + seqA + "\n" + dotBracket(1500, pairsA) + "\n", "A.dbn");
+  state.b = arc.parseStructure(">B\n" + seqB + "\n" + dotBracket(900, []) + "\n", "B.dbn");
+  state.labelOne = "L1";
+  state.labelTwo = "L2";
+  state.interactions = arc.parseInteractions("direction\tx\ty\tlog2FoldChange\tpadj\n" + "up\t440\t1290\t5\t1e-6\n", "i.tsv");
+  const model = rp.select(state, rp.defaultState());
+  assert.equal(model.ready, true, model.reason);
+  const A = model.regions[0];
+  assert.equal(A.unmappedB, true);
+  assert.equal(A.panels.length, 1);
+  assert.equal(A.panels[0].structure, "a");
+  assert.match(A.note, /^Warning: window 433–468 of A has no aligned position in B within 50 nt/);
+  assert.match(rp.renderCard(state, rp.defaultState()), /cannot be placed on B/);
+  assert.match(rp.svg(model), /^<svg/);
+  rp.panelsTsv(model);
+}
+
+// ---- a FASTA read that finishes after another file was chosen is dropped
+{
+  const ui = { regionPanels: rp.defaultState(), arcMap: arc.defaultState() };
+  let renders = 0;
+  const api = { render: function () { renders += 1; } };
+  const resolvers = [];
+  const file = function (name) {
+    return { name: name, text: function () { return new Promise(function (resolve) { resolvers.push(resolve); }); } };
+  };
+  rp.handleChange(ui, { dataset: { feature: "regions-fasta", key: "fastaA" }, files: [file("old.fa")] }, api);
+  rp.handleChange(ui, { dataset: { feature: "regions-fasta", key: "fastaA" }, files: [file("new.fa")] }, api);
+  resolvers[1](">new\nACGU\n");
+  resolvers[0](">old\nGGGG\n");
+  setTimeout(function () {
+    assert.equal(ui.regionPanels.fastaA.name, "new.fa", "the late old read does not replace the newer file");
+    assert.equal(renders, 1);
+    // a clear also drops a pending read
+    rp.handleChange(ui, { dataset: { feature: "regions-fasta", key: "fastaB" }, files: [file("b.fa")] }, api);
+    rp.handleAction(ui, { dataset: { featureAction: "regions-fasta-clear", key: "fastaB" } }, api);
+    resolvers[2](">b\nACGU\n");
+    setTimeout(function () {
+      assert.equal(ui.regionPanels.fastaB, null);
+      process.stdout.write("region-panels: fasta tokens ok\n");
+    }, 0);
+  }, 0);
+}
+
 // ---- real data (optional)
 const real = process.env.HYB2_PANELS_REAL;
 if (real) {

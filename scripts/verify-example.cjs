@@ -291,6 +291,28 @@ function comparisonTableTiming(result) {
   const firstWindow = pages.comparisonTableWindow(result.cells.length, pages.comparisonRowHeight(), 0, 640);
   assert.equal((first.match(/class="comparison-row/g) || []).length, firstWindow.count, "only the visible window of bins is rendered");
   assert.ok(firstWindow.count > 0 && firstWindow.count < 60, "the window holds " + firstWindow.count + " bins, not the whole table");
+  // The Interactions table caps its spacer like the Compare table, so the
+  // last of millions of records is still reachable (Chrome stops laying out
+  // near 33.5M px, Firefox near 17.9M px).
+  [[3000000, 46, 900], [3000000, 38, 517], [12, 46, 900], [0, 46, 900]].forEach(function (setup) {
+    const total = setup[0], rowHeight = setup[1], viewport = setup[2];
+    const top = pages.interactionTableWindow(total, rowHeight, 0, viewport);
+    assert.ok(top.spacer <= 17000000, "the Interactions spacer stays under the Firefox limit (" + top.spacer + " px)");
+    assert.equal(top.start, 0);
+    assert.equal(top.offset, 0);
+    const bottom = pages.interactionTableWindow(total, rowHeight, top.spacer, viewport);
+    assert.equal(bottom.start + bottom.count, total, "scrolling to the end shows the last record (" + total + " records)");
+    if (total * rowHeight <= top.spacer) {
+      assert.equal(top.spacer, total * rowHeight, "a table that fits keeps one pixel per pixel");
+    }
+    if (total) {
+      // the last record's row bottom sits at or inside the viewport bottom
+      const lastBottom = bottom.offset + (total - bottom.start) * rowHeight;
+      assert.ok(lastBottom <= Math.max(top.spacer, viewport) + 1 && lastBottom >= Math.min(top.spacer, viewport) - 1 - rowHeight, "the last record lines up with the end of the scroll range");
+      const middle = pages.interactionTableWindow(total, rowHeight, (top.spacer - viewport) / 2, viewport);
+      assert.ok(Math.abs(middle.start - total / 2) <= viewport / rowHeight + 10, "half way down shows the middle records");
+    }
+  });
   let slowest = 0;
   for (let round = 0; round < 5; round += 1) {
     comparison.tableScrollTop = round * 150000 * pages.comparisonRowHeight();

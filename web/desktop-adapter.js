@@ -19,6 +19,18 @@
     return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
   }
 
+  // Same rules as Hyb2Data.safeFileName (this file loads before it): the
+  // suggested name may come from a FASTA ID or RNA name.
+  function safeFileName(value) {
+    var name = String(value == null ? "" : value).replace(/[|/\\:*?"<>\u0000-\u001f\u007f]/g, "_").replace(/^[\s.]+|[\s.]+$/g, "");
+    if (name.length > 180) {
+      var dot = name.lastIndexOf(".");
+      var extension = dot > 0 && name.length - dot <= 12 ? name.slice(dot) : "";
+      name = name.slice(0, 180 - extension.length) + extension;
+    }
+    return name || "download";
+  }
+
   function blobToBase64(blob) {
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
@@ -59,7 +71,7 @@
       if (!desktopEnabled) return false;
       var data = await blobToBase64(blob);
       var result = await invoke("file_save_dialog", {
-        request: { suggested_name: String(fileName || "download"), data_base64: data }
+        request: { suggested_name: safeFileName(fileName), data_base64: data }
       });
       return !!(result && typeof result === "object" && typeof result.saved === "boolean");
     },
@@ -76,6 +88,21 @@
         return { ok: false, status: "unavailable", error: "The native task bridge is not available in this build." };
       }
       return invoke("cplfold_predict", { request: request || {} });
+    },
+    /*
+     * Cancel hook for a running predictCplfold job ({ runId } of the page's
+     * request). The page already ignores the late answer; this asks the shell
+     * to stop the native job. A shell without a cplfold_cancel command
+     * rejects the call, which resolves to false here.
+     */
+    cancelCplfold: async function (job) {
+      if (!desktopEnabled) return false;
+      try {
+        await invoke("cplfold_cancel", { request: { run_id: job && job.runId != null ? job.runId : null } });
+        return true;
+      } catch (error) {
+        return false;
+      }
     }
   };
   window.Hyb2Desktop = desktop;

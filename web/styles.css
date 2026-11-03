@@ -613,6 +613,10 @@ a {
   color: var(--muted-strong);
 }
 
+.desktop-first-launch code {
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 520px) {
   .desktop-download-groups {
     grid-template-columns: minmax(0, 1fr);
@@ -1620,6 +1624,10 @@ a {
 .chimera-guide summary { cursor: pointer; color: var(--primary-ink); }
 .chimera-guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 12px; }
 .chimera-guide-grid > div { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+/* the type's HYB2 code over its name */
+.type-item .chimera-code { font-family: inherit; }
+.chimera-guide-grid .chimera-code,
+.type-item .chimera-code { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
 .chimera-guide p { color: var(--muted); font-size: 12px; }
 .comparison-canvas { touch-action: none; cursor: grab; }
 .comparison-canvas:active { cursor: grabbing; }

@@ -47,7 +47,10 @@
       .map((item, index) => ({direction, rank: index + 1, x: item.row.x, y: item.row.y,
         padj: item.row.padj, log2FoldChange: item.row.log2FoldChange,
         x1: Math.max(1, item.row.x - 150), x2: item.row.x + 150,
-        y1: Math.max(1, item.row.y - 150), y2: item.row.y + 150})));
+        y1: Math.max(1, item.row.y - 150), y2: item.row.y + 150,
+        // contact bins start at 0 (bin 0 holds nt 1-9): the bin filter's lower
+        // bounds may reach 0 while the drawn axis stays 1-based
+        binX1: Math.max(0, item.row.x - 150), binY1: Math.max(0, item.row.y - 150)})));
   }
 
   function contrastQuantile(value) {
@@ -100,7 +103,8 @@
         const r = panel.region, cells = [];
         for (let j = 0; j < bins.x.length; j++) {
           // ggplot geom_tile centres each tile on the contact.txt coordinate.
-          if (bins.x[j] >= r.x1 && bins.x[j] <= r.x2 && bins.y[j] >= r.y1 && bins.y[j] <= r.y2)
+          if (bins.x[j] >= (r.binX1 == null ? r.x1 : r.binX1) && bins.x[j] <= r.x2 &&
+              bins.y[j] >= (r.binY1 == null ? r.y1 : r.binY1) && bins.y[j] <= r.y2)
             cells.push([bins.x[j], bins.y[j], bins.count[j]]);
         }
         panel.samples.push({id: sample.id, label: sample.label, condition: sample.condition,
@@ -115,14 +119,20 @@
   function mapSvg(panel, cap, labels, quantile) {
     const r = panel.region, width = Math.max(1, panel.samples.length) * 300, height = 390;
     const title = 'Top ' + r.rank + ' · Higher in ' + labels[r.direction === 'up' ? 'A' : 'B'];
-    let out = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+width+' '+height+'" width="'+width+'" height="'+height+'" role="img"><title>'+esc(title)+'</title><rect width="100%" height="100%" fill="white"/><g font-family="sans-serif" fill="#222"><text x="18" y="24" font-size="16">'+esc(title)+'</text><text x="18" y="45" font-size="12">padj '+esc(r.padj.toPrecision(4))+' · 10 nt bins · raw records · common white–black cap '+cap+'</text>';
+    // As Lau/contact_density_map_zoom.R: fill = pmin(count, quant) on a
+    // white-black scale with limits c(0, ceiling(quant)). With a fractional
+    // quantile the clipped cells stop short of black; say so in the legend.
+    const clip = quantile == null ? cap : quantile;
+    const scaleNote = clip === cap ? 'common white–black cap ' + cap
+      : 'common white–black scale 0–' + cap + ', counts clipped at ' + Number(clip.toPrecision(4)) + ' (darkest grey, not black)';
+    let out = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+width+' '+height+'" width="'+width+'" height="'+height+'" role="img"><title>'+esc(title)+'</title><rect width="100%" height="100%" fill="white"/><g font-family="sans-serif" fill="#222"><text x="18" y="24" font-size="16">'+esc(title)+'</text><text x="18" y="45" font-size="12">padj '+esc(r.padj.toPrecision(4))+' · 10 nt bins · raw records · '+esc(scaleNote)+'</text>';
     panel.samples.forEach((sample, index) => {
       const left = index * 300 + 48, top = 104, size = 220;
       const sx = x => left + (x - r.x1)/(r.x2-r.x1)*size;
       const sy = y => top + size - (y - r.y1)/(r.y2-r.y1)*size;
       out += '<text x="'+(index*300+12)+'" y="70" font-size="12">'+esc(sample.label)+'</text><text x="'+(index*300+12)+'" y="88" font-size="10">'+esc(sample.rnaX+' × '+sample.rnaY)+'</text><defs><clipPath id="panel'+index+'"><rect x="'+left+'" y="'+top+'" width="'+size+'" height="'+size+'"/></clipPath></defs><g clip-path="url(#panel'+index+')">';
       sample.cells.forEach(([x,y,count]) => {
-        const lightness = 100 * (1 - Math.min(count,quantile == null ? cap : quantile)/cap);
+        const lightness = 100 * (1 - Math.min(count,clip)/cap);
         const luminance = lightness > 8 ? Math.pow((lightness+16)/116,3) : lightness/903.3;
         const grey = Math.round(255 * (luminance <= .0031308 ? 12.92*luminance : 1.055*Math.pow(luminance,1/2.4)-.055));
         out += '<rect x="'+sx(x-5)+'" y="'+sy(y+5)+'" width="'+(size*10/(r.x2-r.x1))+'" height="'+(size*10/(r.y2-r.y1))+'" fill="rgb('+grey+','+grey+','+grey+')"><title>'+x+', '+y+': '+count+'</title></rect>';
@@ -294,7 +304,8 @@
       notes.forEach(entry=>{
         if(entry.item===undefined){skipped++;audit.push([entry.line,entry.record.id,'unchanged',entry.old,entry.old,entry.note].map(tsv).join('\t'));return;}
         const energy=folded.energies[entry.item];
-        if(!Number.isFinite(energy))throw new Error('Invalid energy returned');
+        // one bad value leaves its row unchanged rather than failing the run (as the desktop)
+        if(!Number.isFinite(energy)){skipped++;audit.push([entry.line,entry.record.id,'unchanged',entry.old,entry.old,'invalid energy returned'].map(tsv).join('\t'));return;}
         updates.set(entry.line,{raw:entry.record.raw,energy});updated++;
         audit.push([entry.line,entry.record.id,'updated',entry.old,energy.toFixed(2),''].map(tsv).join('\t'));
       });

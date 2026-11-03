@@ -179,6 +179,37 @@ function fakeFetch(responses, calls) {
     assert.equal(big.cards[1].status, "unexpected_response");
   }
 
+  // Null or malformed Europe PMC rows are skipped, not fatal.
+  {
+    const state = stateFor();
+    Object.assign(E.ensure(state), { enabled: true, confirmed: true });
+    const result = await E.lookup(state, api, Object.assign({ fetch: fakeFetch([
+      { status: 200, body: ebiHit.json },
+      { status: 200, body: { hitCount: 3, resultList: { result: [null, "x", [], { id: "123", source: "MED", title: "Kept" }] } } }
+    ], []) }, timing));
+    assert.equal(result.cards[1].status, "success");
+    assert.equal(result.cards[1].entries.length, 1, "null and non-object Europe PMC rows are skipped");
+    assert.equal(result.cards[1].entries[0].title, "Kept");
+    assert.equal(state.evidence.running, false);
+  }
+
+  // A throw inside the lookup resets running and shows the error.
+  {
+    const state = stateFor();
+    Object.assign(E.ensure(state), { enabled: true, confirmed: true });
+    const broken = { now: () => { throw new Error("clock broke"); }, sleep: async () => {} };
+    const result = await E.lookup(state, api, Object.assign({ fetch: fakeFetch([], []) }, broken));
+    assert.equal(state.evidence.running, false, "a thrown lookup must not stay running");
+    assert.match(result.error, /clock broke/);
+    assert.match(state.evidence.message, /could not finish: clock broke/);
+    assert.match(E.renderPanel(state), /could not finish: clock broke/);
+    const again = await E.lookup(state, api, Object.assign({ fetch: fakeFetch([
+      { status: 200, body: ebiHit.json },
+      { status: 200, body: { hitCount: 0, resultList: { result: [] } } }
+    ], []) }, timing));
+    assert.equal(again.cards.length, 2, "a later lookup is not refused as already running");
+  }
+
   // Cancel mid-request, and a session cleared while a request is out.
   {
     const state = stateFor();

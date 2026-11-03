@@ -322,6 +322,30 @@ async function parseFile(file, globals) {
     "cat a.gz b.gz is read when the decompressor raises before handing over the first member's output");
   assert.equal((await parseFile(new File([twice], "twice.hyb.gz"), withholding)).message.summary.validRecords, 5500);
   await assert.rejects(parseFile(new File([joined.subarray(0, joined.length - 40)], "cut.hyb.gz"), withholding));
+  // The other way round (the CI runner's Node): read on through every member
+  // as zlib does, and raise only at trailing zero padding.
+  class ConcatenatingDecompressionStream {
+    constructor() {
+      const parts = [];
+      const stream = new TransformStream({
+        transform: function (chunk) { parts.push(Buffer.from(chunk)); },
+        flush: function (controller) {
+          const all = Buffer.concat(parts);
+          controller.enqueue(new Uint8Array(zlib.gunzipSync(all)));
+          let end = all.length;
+          while (end > 0 && all[end - 1] === 0) end -= 1;
+          if (all.length - end > 8) throw new Error("Trailing junk found after the end of the compressed stream");
+        }
+      });
+      this.writable = stream.writable;
+      this.readable = stream.readable;
+    }
+  }
+  const concatenating = { TransformStream: TransformStream, DecompressionStream: ConcatenatingDecompressionStream };
+  assert.equal(ids(await parseFile(new File([joined], "joined.hyb.gz"), concatenating)), ids(reference),
+    "cat a.gz b.gz is read once when the decompressor reads on through members");
+  assert.equal((await parseFile(new File([twice], "twice.hyb.gz"), concatenating)).message.summary.validRecords, 5500,
+    "members are not read twice when the decompressor reads on through them and raises at the padding");
   // a truncated member still fails loudly
   await assert.rejects(parseFile(new File([joined.subarray(0, joined.length - 40)], "cut.hyb.gz"), streams));
   // without DecompressionStream a gzip file gets a clear error

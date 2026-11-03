@@ -88,3 +88,28 @@ func TestBatchEnergyStartsTaskAndSavesOutputs(t *testing.T) {
 		t.Fatalf("saved %q as %v", got, fmt.Sprint(*asked))
 	}
 }
+
+// The run-time estimate's record count is kept per project, sample and
+// index: a rebuilt index counts again.
+func TestBatchEnergyCountsFollowTheIndex(t *testing.T) {
+	a, _, p, tt := openExplore(t)
+	a.Navigate("explore", map[string]any{"tab": "energies"})
+	settle(a, tt)
+	old := p.batchCountKey(p.ids[0])
+	if _, ok := p.be.counts[old]; !ok || len(p.be.counts) != 1 {
+		t.Fatalf("counts %v", p.be.counts)
+	}
+	s := a.Project.Sample(p.ids[0])
+	stage := s.Stages["index"]
+	stage.UpdatedAt += "-rebuilt"
+	s.Stages["index"] = stage
+	settle(a, tt)
+	if _, ok := p.be.counts[p.batchCountKey(p.ids[0])]; !ok || len(p.be.counts) != 2 {
+		t.Fatalf("a rebuilt index was not counted again: %v", p.be.counts)
+	}
+	p.be.countsFor = "/projects/other.hyb2proj"
+	p.loadBatchInputs(p.ids[0])
+	if len(p.be.counts) != 0 {
+		t.Fatalf("another project's counts kept: %v", p.be.counts)
+	}
+}

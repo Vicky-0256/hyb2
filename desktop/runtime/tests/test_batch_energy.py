@@ -71,7 +71,9 @@ class BatchEnergyTests(unittest.TestCase):
         result, run = self._run("batch-energy-1", parameters={"engine": "rnacofold"})
         self.assertTrue(result["ok"], result)
         self.assertEqual((result["summary"]["updated"], result["summary"]["unchanged"]), (2, 2))
-        one = cofold(self.seq_a[9:30], self.seq_a[199:222])
+        self.assertTrue(result["message"].endswith("; 2 valid rows unchanged. Comments and unparsed source lines are preserved. "
+                                                   "Download the audit for details."), result["message"])
+        one =cofold(self.seq_a[9:30], self.seq_a[199:222])
         four = cofold(self.seq_a[49:70], self.seq_b[99:125].replace("T", "U"))
         out = (run / "energies.hyb").read_bytes().decode()
         want = list(self.lines)
@@ -110,6 +112,13 @@ class BatchEnergyTests(unittest.TestCase):
         self.assertEqual([r[2] for r in audit], ["unchanged", "unchanged", "unchanged", "updated"])
         self.assertEqual(audit[0][5], "not selected by the Interactions filters")
         self.assertEqual(json.loads((run / "parameters.json").read_text())["filters"], {"min_reads": 3})
+        # the Interactions page's RNA with arm positions (web semantics): the
+        # RNA on either arm, each range on its own arm
+        for task, filters, want in (("batch-energy-3", {"gene": GENE_B, "region": {"x": [50, 60]}}, "4_6"),
+                                    ("batch-energy-4", {"gene": GENE_A, "region": {"y": [195, 200]}}, "1_1")):
+            result, run = self._run(task, parameters={"engine": "rnacofold", "records": "filtered", "filters": filters})
+            self.assertTrue(result["ok"], result)
+            self.assertEqual([r[1] for r in self._audit(run) if r[2] == "updated"], [want], filters)
         # a .hyb changed after its index was built is refused
         self.hyb.write_bytes(self.hyb.read_bytes() + b"\n")
         stale, _ = self._run("batch-energy-2", parameters={"records": "filtered", "filters": {}})
@@ -144,6 +153,57 @@ class BatchEnergyTests(unittest.TestCase):
         result, run = self._run("batch-energy-1", parameters={"records": "filtered", "filters": {}})
         self.assertFalse(result["ok"])
         self.assertIn("no analysis index", json.loads((run / "result.json").read_text())["error"])
+
+    def test_non_finite_energy_keeps_the_row(self):
+        from unittest import mock
+
+        from desktop.runtime import batch_energy
+
+        real = batch_energy.fold_pairs
+
+        def fold(root, engine, pairs):
+            values = real(root, engine, pairs)
+            return [float("nan")] + values[1:]
+
+        with mock.patch.object(batch_energy, "fold_pairs", fold):
+            result, run = self._run("batch-energy-1", parameters={"engine": "rnacofold"})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual((result["summary"]["updated"], result["summary"]["unchanged"]), (1, 3))
+        audit = self._audit(run)
+        self.assertEqual((audit[0][2], audit[0][4], audit[0][5]), ("unchanged", "-10.5", "invalid energy returned"))
+        self.assertEqual(audit[3][2], "updated")
+        out = (run / "energies.hyb").read_bytes().decode().splitlines(keepends=True)
+        self.assertEqual(out[1], self.lines[1])  # its energy is kept
+
+    def test_failing_chunk_cancels_the_others(self):
+        from concurrent.futures import Future
+        from unittest import mock
+
+        from desktop.runtime import batch_energy
+
+        pools = []
+
+        class Pool:
+            def __init__(self, *args, **kwargs):
+                self.futures, self.shutdowns = [], []
+                pools.append(self)
+
+            def submit(self, fn, root, engine, start, pairs):
+                future = Future()
+                if not self.futures:
+                    future.set_exception(RuntimeError("fold crashed"))
+                self.futures.append(future)  # the others never finish
+                return future
+
+            def shutdown(self, wait=True, cancel_futures=False):
+                self.shutdowns.append((wait, cancel_futures))
+
+        with mock.patch.object(batch_energy, "ProcessPoolExecutor", Pool), \
+                mock.patch.dict(batch_energy.ENGINES["rnacofold"], {"chunk": 1}):
+            result, run = self._run("batch-energy-1", parameters={"engine": "rnacofold"}, workers=2)
+        self.assertFalse(result["ok"])
+        self.assertIn("fold crashed", json.loads((run / "result.json").read_text())["error"])
+        self.assertEqual(pools[0].shutdowns, [(False, True)])
 
     def _mkrun(self, task_id):
         run = self.project / "runs" / task_id

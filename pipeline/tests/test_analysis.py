@@ -137,6 +137,23 @@ class IndexQueryTest(unittest.TestCase):
         with self.assertRaises(Exception):
             con.execute("CREATE TABLE x (a)")
 
+    def test_rebuilt_index_keeps_the_old_connection_open(self):
+        # A thread still querying the old _Index after a rebuild must not hit
+        # "Cannot operate on a closed database".
+        import os
+
+        copy = Path(self.tmp.name) / "rebuilt.hyb2idx"
+        copy.write_bytes(self.index.read_bytes())
+        old = query._get(copy)
+        query.hybrids([copy], {"search": "zika"}, limit=1)  # a cached search table on it
+        stat = copy.stat()
+        os.utime(copy, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        new = query._get(copy)
+        self.assertIsNot(new, old)
+        self.assertEqual(old.con.execute("SELECT count(*) FROM hybrids").fetchone()[0], self.meta["records"])
+        self.assertFalse(any(entry[0] is old for entry in query._found_tables.values()))
+        self.assertEqual(query.summary([copy])["merged"]["records"], self.meta["records"])
+
     def test_meta_and_summary(self):
         self.assertEqual(self.meta["records"], 10411)
         self.assertEqual(self.meta["invalid"], 0)
@@ -255,6 +272,36 @@ class IndexQueryTest(unittest.TestCase):
         self.assertIsNone(both["rows"][0]["name"])
         self.assertEqual(query.hybrids([self.index], {"gene1": "Unknown"})["total"], 0)
 
+    def test_hybrids_record_details_id_and_either(self):
+        """The web drawer's details (read coordinates, type source, line) and
+        the ``id`` and ``either`` filters."""
+        lines = HYB.read_text().splitlines()
+        rid = 7
+        got = query.hybrids([self.index], {"id": rid}, limit=5, with_line=True)
+        self.assertEqual(got["total"], 1)
+        row = got["rows"][0]
+        cols = lines[rid - 1].split("\t")
+        self.assertEqual((row["id"], row["line"]), (rid, rid))
+        self.assertEqual((row["read_start1"], row["read_end1"], row["read_start2"], row["read_end2"]),
+                         tuple(float(cols[k]) for k in (4, 5, 10, 11)))
+        self.assertEqual(row["type_source"], "column_17")
+        self.assertNotIn("line", query.hybrids([self.index], {"id": rid}, limit=1)["rows"][0])
+        self.assertEqual(query._type_source(b"a\tb\tc\td\te\tf\tg\th\ti\tj\tk\tl\tm\tn\to".split(b"\t")), "inferred")
+        self.assertEqual(query._type_source(b"1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11\t12\t13\t14\t15\t\t7\tType_1".split(b"\t")),
+                         "column_17")
+        # either: both arm orders of an inter-RNA cell
+        one = {"gene1": "Zika_virusRNA", "gene2": "18S_rRNA"}
+        two = {"gene1": "18S_rRNA", "gene2": "Zika_virusRNA"}
+        total = lambda f: query.hybrids([self.index], f, limit=0)["total"]
+        self.assertEqual(total({"either": [one, two]}), total(one) + total(two))
+        self.assertEqual(total({"either": [one, {"gene1": "Unknown"}]}), total(one))
+        self.assertEqual(total({"either": [{"gene1": "Unknown"}]}), 0)
+        self.assertEqual(total({"either": [one, {}]}), total({}))
+        with self.assertRaises(ValueError):
+            query.hybrids([self.index], {"either": {"gene1": "x"}})
+        with self.assertRaises(ValueError):
+            query.hybrids([self.index], {"id": "7"})
+
     def test_bad_arguments(self):
         with self.assertRaises(ValueError):
             query.contact_bins([self.index], "Zika_virusRNA", 0)
@@ -275,6 +322,7 @@ class IndexQueryTest(unittest.TestCase):
         hyb.write_text("# comment\n\n" + good + "\nbroken\tline\n" + good.replace("\t", "\t", 1) + "\n")
         meta = index.build(hyb, Path(self.tmp.name) / "mixed.hyb2idx")
         self.assertEqual((meta["records"], meta["invalid"], meta["skipped"]), (2, 1, 2))
+        self.assertEqual((meta["skipped_comment"], meta["skipped_blank"]), (1, 1))
 
 
     def test_an_endless_line_fails_instead_of_loading_whole(self):
@@ -601,10 +649,17 @@ class ViewpointRegionTest(unittest.TestCase):
         self.check_viewpoint(result, brute_viewpoint(recs, "18S_rRNA", 1, 1900, 10, partner="Zika_virusRNA"))
         merged = query.viewpoint([self.index, self.half], "Zika_virusRNA", 3000, 3400, bin_size=5)
         self.check_viewpoint(merged, brute_viewpoint(recs + self.half_records, "Zika_virusRNA", 3000, 3400, 5))
-        # defaults: observed start to the reference length; the bin grows past 30,000 bins
+        # defaults: the observed start to the observed end (the web's); the
+        # full mapped reference is 1 to the reference length
         whole = query.viewpoint([self.index], "Zika_virusRNA", lengths={"Zika_virusRNA": 10807})
+        observed_end = max(max(r.end1 for r in recs if r.gene1 == b"Zika_virusRNA"),
+                           max(r.end2 for r in recs if r.gene2 == b"Zika_virusRNA"))
         self.assertEqual((whole["start"], whole["end"]), (min(min(r.start1 for r in recs if r.gene1 == b"Zika_virusRNA"),
-                                                              min(r.start2 for r in recs if r.gene2 == b"Zika_virusRNA")), 10807))
+                                                              min(r.start2 for r in recs if r.gene2 == b"Zika_virusRNA")), observed_end))
+        full = query.viewpoint([self.index], "Zika_virusRNA", 500, 600, lengths={"Zika_virusRNA": 10807}, full_reference=True)
+        self.assertEqual((full["start"], full["end"]), (1, 10807))
+        self.assertEqual(query.viewpoint([self.index], "Zika_virusRNA", full_reference=True)["bins"]["value"], [])
+        # the bin grows past 30,000 bins
         wide = query.viewpoint([self.index], "Zika_virusRNA", 1, 90_000, lengths={"Zika_virusRNA": 90_000})
         self.assertTrue(wide["adjusted"])
         self.assertEqual(wide["bin_size"], 3)
@@ -726,6 +781,13 @@ class SupportTest(unittest.TestCase):
             self.assertEqual(ids({"gene": "H", "partner": "G"}), ["d_1"])
             self.assertEqual(ids({"gene": "G", "partner": "G"}), ["a_5", "b_1", "c_2"])
             self.assertEqual(ids({"gene": "G", "partner": "nope"}), [])
+            # with arm positions too (web/analysis-data.js filterRecords): the
+            # RNA stays on either arm, each range applies to its own arm
+            self.assertEqual(ids({"gene": "H", "region": {"x": [1, 20]}}), ["d_1"])
+            self.assertEqual(ids({"gene": "H", "region": {"y": [1, 4]}}), [])
+            self.assertEqual(ids({"gene": "H", "partner": "G", "region": {"x": [15, 20], "y": [5, 10]}}), ["d_1"])
+            self.assertEqual(ids({"gene": "G", "region": {"y": [101, 101]}}), ["a_5", "b_1", "c_2"])
+            self.assertEqual(ids({"partner": "G", "region": {"x": [25, 30]}}), ["b_1"])
             self.assertEqual(ids({}, "support"), ["a_5", "b_1", "c_2", "d_1"])
             self.assertEqual(query.hybrids([path], {}, order="support")["rows"][0]["support"], 4)
             # id, sequence, RNA names, type and overlap, joined by spaces, any case
@@ -758,6 +820,37 @@ class SupportTest(unittest.TestCase):
             hyb.write_bytes(hyb.read_bytes() + b"\n")
             with self.assertRaises(ValueError):
                 query.hybrids([path], {"search": "new"})
+            query.close_all()
+
+    def test_import_check_counts(self):
+        """The web's Import check: skipped comment and blank lines apart,
+        standard 17-column records, legacy column-16 counts, per-index parts;
+        an index built before the split reports None for them."""
+        import json
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            hyb = Path(tmp) / "f.hyb"
+            hyb.write_bytes(b"# head\n  # indented\n\n \n" + self.line("a_5", "\t4") + self.line("b_1", "\tcount_total=3")
+                            + self.line("c_2", "\t\t7\tType_1") + self.line("d_2", "\t6\tType_1") + self.line("e", "")
+                            + b"bad\tline\n")
+            path = Path(tmp) / "f.hyb2idx"
+            meta = index.build(hyb, path)
+            self.assertEqual((meta["skipped"], meta["skipped_comment"], meta["skipped_blank"]), (4, 2, 2))
+            self.assertEqual((meta["canonical_records"], meta["legacy_column16"]), (2, 1))
+            view = query.overview([path, path])
+            self.assertEqual((view["skipped_comment"], view["skipped_blank"], view["canonical_records"],
+                              view["legacy_column16"], view["read_records"]), (4, 4, 4, 2, 8))
+            self.assertEqual(view["indexes"], [{"records": 5, "invalid": 1, "homodimer_records": 2}] * 2)
+            part = query.summary([path], pairs=False)["indexes"][0]
+            self.assertEqual((part["unique_rnas"], part["unique_pairs"], part["records_with_reads"]), (1, 1, 4))
+            query.close_all()
+            con = sqlite3.connect(path)
+            con.execute("DELETE FROM meta WHERE key IN ('skipped_comment', 'skipped_blank', 'canonical_records', 'legacy_column16')")
+            con.commit()
+            con.close()
+            old = query.overview([path])
+            self.assertEqual((old["skipped"], old["skipped_comment"], old["canonical_records"]), (4, None, None))
+            self.assertEqual(json.loads(json.dumps(old))["legacy_column16"], None)
             query.close_all()
 
     def test_names_sort_as_the_web(self):

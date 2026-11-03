@@ -78,7 +78,9 @@
       "min": 1,
       "max": 10807
      }
-    }
+    },
+    "unique_rnas": 1,
+    "unique_pairs": 1
    },
    {
     "index": "/projects/zikv.hyb2proj/samples/SUB_REP2/SUB_REP2.index.sqlite",
@@ -144,7 +146,9 @@
       "min": 1,
       "max": 10807
      }
-    }
+    },
+    "unique_rnas": 1,
+    "unique_pairs": 1
    },
    {
     "index": "/projects/zikv.hyb2proj/samples/AFR_REP1/AFR_REP1.index.sqlite",
@@ -240,7 +244,9 @@
       "min": 1,
       "max": 10807
      }
-    }
+    },
+    "unique_rnas": 1,
+    "unique_pairs": 1
    },
    {
     "index": "/projects/zikv.hyb2proj/samples/AFR_REP2/AFR_REP2.index.sqlite",
@@ -336,7 +342,9 @@
       "min": 1,
       "max": 10807
      }
-    }
+    },
+    "unique_rnas": 1,
+    "unique_pairs": 1
    },
    {
     "index": "/projects/zikv.hyb2proj/samples/ZBRA_REP1/ZBRA_REP1.index.sqlite",
@@ -432,7 +440,9 @@
       "min": 1,
       "max": 10807
      }
-    }
+    },
+    "unique_rnas": 1,
+    "unique_pairs": 1
    },
    {
     "index": "/projects/zikv.hyb2proj/samples/ZBRA_REP2/ZBRA_REP2.index.sqlite",
@@ -528,7 +538,9 @@
       "min": 1,
       "max": 10807
      }
-    }
+    },
+    "unique_rnas": 1,
+    "unique_pairs": 1
    }
   ],
   "merged": {

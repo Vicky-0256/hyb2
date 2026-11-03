@@ -137,8 +137,12 @@ def _build(con: sqlite3.Connection, hyb: Path, total_bytes: int, progress) -> Di
     genes: Dict[bytes, List[int]] = {}   # name -> [id, max_end, records, reads, min_start]
     types: Dict[bytes, List[int]] = {}   # name -> [id, records, reads]
     pairs: Dict[Tuple[int, int], List[int]] = {}
-    counters = {"records": 0, "invalid": 0, "skipped": 0, "reads": 0, "records_with_reads": 0, "with_dg": 0,
-                "intra_records": 0, "inter_records": 0, "support": 0}
+    # "skipped" counts comment and blank lines together (older indexes have
+    # only it); canonical_records and legacy_column16 are the web parser's
+    # canonicalRecords and ambiguousColumn16Records.
+    counters = {"records": 0, "invalid": 0, "skipped": 0, "skipped_comment": 0, "skipped_blank": 0, "reads": 0,
+                "records_with_reads": 0, "with_dg": 0, "intra_records": 0, "inter_records": 0, "support": 0,
+                "canonical_records": 0, "legacy_column16": 0}
     errors: List[Dict] = []
 
     def gene_id(name: bytes, start: int, end: int, reads: int) -> int:
@@ -164,7 +168,9 @@ def _build(con: sqlite3.Connection, hyb: Path, total_bytes: int, progress) -> Di
             here = offset
             offset += len(line)
             parsed = _fast_parse(line.split(b"\t"))
-            if parsed is None:
+            if parsed is not None:
+                counters["canonical_records"] += 1
+            else:
                 try:
                     record = hybfile.parse(line)
                 except ValueError as error:
@@ -175,8 +181,12 @@ def _build(con: sqlite3.Connection, hyb: Path, total_bytes: int, progress) -> Di
                     continue
                 if record is None:
                     counters["skipped"] += 1
+                    counters["skipped_comment" if line.strip() else "skipped_blank"] += 1
                     continue
                 parsed = tuple(record)
+                canonical, legacy = hybfile.layout(line)
+                counters["canonical_records"] += canonical
+                counters["legacy_column16"] += legacy
             g1n, s1, e1, g2n, s2, e2, reads, dg, overlap, ctype, support = parsed
             g1 = gene_id(g1n, s1, e1, reads)
             g2 = gene_id(g2n, s2, e2, reads)

@@ -168,8 +168,19 @@ func (p *reportPage) packageView(c *ui.Context, d *reportData) {
 		ui.Segmented(c.Key("pkg-audience"), &s.audience, "For AI", "For further analysis").Label("Package")
 		ui.Spacer(c)
 		if s.audience == 0 && ui.Button(c, "Copy AI summary (report.md)").Tooltip("The template report.md, with your purpose and step selection").Clicked() {
-			c.WriteClipboard(recordFor(d, ch, time.Now()).reportMarkdown())
-			p.a.Toast("AI summary copied")
+			// recordFor reads the tests' significant.tsv: off the main
+			// thread, and the clipboard is written in the next frame.
+			a, project := p.a, p.project
+			a.Go(func() func() {
+				text := recordFor(d, ch, time.Now()).reportMarkdown()
+				return func() {
+					if p.project != project {
+						return
+					}
+					a.copyText(text)
+					a.Toast("AI summary copied")
+				}
+			})
 		}
 		if ui.PrimaryButton(c, "Save ZIP…").Clicked() {
 			p.exportPackage(audience)

@@ -110,7 +110,12 @@ def _get(path: PathLike) -> _Index:
         if index is not None and index.stamp == (stat.st_size, stat.st_mtime_ns):
             return index
         if index is not None:
-            index.con.close()
+            # The index was rebuilt. Other threads may still be querying the
+            # old _Index, so its connection is not closed here: it closes
+            # when the last of them lets go of it (sqlite3 closes a
+            # connection when it is garbage collected). Its cached search
+            # tables are forgotten so the cache no longer holds it.
+            _forget_found(index)
         index = _open[key] = _Index(p)
         return index
 
@@ -156,6 +161,9 @@ def _single_summary(index: _Index, with_pairs: bool = True) -> Dict[str, Any]:
         "with_dg": meta["with_dg"], "intra_records": meta["intra_records"], "inter_records": meta["inter_records"],
         "invalid": meta["invalid"], "skipped": meta["skipped"], "errors": meta.get("errors", []),
         "genes": genes, "types": types,
+        # the web's per-dataset uniqueRNAs / uniquePairs (pairs in either arm order count once)
+        "unique_rnas": len(genes),
+        "unique_pairs": con.execute("SELECT count(*) FROM (SELECT DISTINCT min(g1, g2), max(g1, g2) FROM pairs)").fetchone()[0],
     }
     if with_pairs:
         out["pairs"] = pairs
@@ -233,6 +241,8 @@ def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = Non
 # overview (the web's Overview page and its rna_counts.csv / rna_pairs.csv)
 
 _COUNT_FIELDS = ("records", "support", "reads", "read_records", "overlap_total", "overlap_records")
+# index meta counters added after version 1 shipped (absent from older indexes)
+_SPLIT_COUNTS = ("skipped_comment", "skipped_blank", "canonical_records", "legacy_column16")
 
 
 # The web sorts names with localeCompare: ICU's root collation, in which
@@ -265,6 +275,11 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
     ``errors[]`` are the invalid lines each index kept, ``{line, error,
     content, index}`` (``index``: position in ``indexes``); ``omitted_errors``
     counts the invalid lines without such a detail.
+    ``skipped`` is comment and blank lines together; ``skipped_comment``,
+    ``skipped_blank``, ``canonical_records`` (standard 17/18-column records)
+    and ``legacy_column16`` (the web's ambiguousColumn16Records) are ``None``
+    when an index was built before they were counted. ``indexes[]`` has each
+    index's own ``records, invalid, homodimer_records``.
     """
     if limit is not None and limit < 0:
         raise ValueError("limit must be zero or more")
@@ -283,8 +298,11 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
     totals = dict.fromkeys(("records", "support", "reads", "read_records", "with_dg", "overlap_records",
                             "homodimer_records", "homodimer_reads", "intra_records", "inter_records",
                             "invalid", "skipped"), 0)
+    split: Dict[str, Optional[int]] = dict.fromkeys(_SPLIT_COUNTS, 0)
+    parts: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
     for position, index in enumerate(_indexes(indexes)):
+        before = dict(totals)
         support = "support" if index.has_support else "1"
         rows = index.con.execute(
             "SELECT g1, g2, count(*), sum(%s), sum(reads), sum(reads > 0), sum(overlap), count(overlap), count(dg),"
@@ -312,6 +330,11 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
             entry[1] += sup
         totals["invalid"] += int(index.meta.get("invalid", 0))
         totals["skipped"] += int(index.meta.get("skipped", 0))
+        for name in _SPLIT_COUNTS:
+            value = index.meta.get(name)
+            split[name] = None if value is None or split[name] is None else split[name] + int(value)
+        parts.append({"records": totals["records"] - before["records"], "invalid": int(index.meta.get("invalid", 0)),
+                      "homodimer_records": totals["homodimer_records"] - before["homodimer_records"]})
         errors.extend(dict(error, index=position) for error in index.meta.get("errors", []))
 
     def number(value: float) -> Any:
@@ -329,8 +352,16 @@ def overview(indexes: Sequence[PathLike], limit: Optional[int] = None) -> Dict[s
                      lambda pair: {"gene1": pair[0], "gene2": pair[1]})
     type_rows = sorted(({"name": name, "records": r, "support": s} for name, (r, s) in types.items()),
                        key=lambda r: (-r["records"],) + name_key(r["name"]))
-    return dict(totals, unique_rnas=len(rnas), unique_pairs=len(pairs), rnas=rna_rows, pairs=pair_rows, types=type_rows,
-                errors=errors, omitted_errors=max(0, totals["invalid"] - len(errors)))
+    return dict(totals, **split, unique_rnas=len(rnas), unique_pairs=len(pairs), rnas=rna_rows, pairs=pair_rows,
+                types=type_rows, indexes=parts, errors=errors, omitted_errors=max(0, totals["invalid"] - len(errors)))
+
+
+def rna_names(indexes: Sequence[PathLike]) -> List[str]:
+    """The distinct RNA names of the indexes, in the web's name order."""
+    names = set()
+    for index in _indexes(indexes):
+        names.update(index.genes)
+    return sorted(names, key=_name_key)
 
 
 # --------------------------------------------------------------------------
@@ -794,6 +825,14 @@ _FOUND_ROWS = 20_000_000
 _found_serial = itertools.count()
 
 
+def _forget_found(index: _Index) -> None:
+    """Drop the cache entries of ``index``'s search tables (call under
+    ``_lock``); the tables go with its connection."""
+    global _found_rows
+    for key in [k for k, entry in _found_tables.items() if entry[0] is index]:
+        _found_rows -= _found_tables.pop(key)[2]
+
+
 def _drop_found(index: _Index, table: str) -> None:
     try:
         index.con.execute("DROP TABLE IF EXISTS temp.%s" % table)
@@ -968,6 +1007,33 @@ def _filter_sql(index: _Index, filters: Dict[str, Any]) -> Optional[Tuple[str, l
         query = search.strip().lower()
         if query:
             clauses.append("id IN temp.%s" % _search_table(index, query))
+    if filters.get("id") is not None:
+        rid = filters["id"]
+        if isinstance(rid, bool) or not isinstance(rid, int):
+            raise ValueError("id must be an integer")
+        clauses.append("id = ?")
+        params.append(rid)
+    either = filters.get("either")
+    if either is not None:
+        if not isinstance(either, list) or not all(isinstance(item, dict) for item in either):
+            raise ValueError("either must be a list of filter objects")
+        sides: List[str] = []
+        side_params: list = []
+        every = False
+        for item in either:
+            part = _filter_sql(index, item)
+            if part is None:
+                continue
+            if not part[0]:
+                every = True  # this side matches every row
+                break
+            sides.append("(%s)" % part[0][len(" WHERE "):])
+            side_params.extend(part[1])
+        if not every:
+            if not sides:
+                return None
+            clauses.append("(%s)" % " OR ".join(sides))
+            params.extend(side_params)
     anchor = filters.get("anchor")
     if anchor is not None:
         part = _anchor_sql(index, anchor)
@@ -1062,9 +1128,37 @@ def _anchor_sql(index: _Index, anchor: Any) -> Optional[Tuple[str, list]]:
     return "(%s OR %s)" % tuple(sides), params
 
 
-def _read_lines(source: Optional[str], meta: Dict[str, Any], offsets: List[int]) -> Dict[int, tuple]:
-    """(name, sequence, arm 1 e-value, arm 2 e-value, line) for rows, read
-    back from the .hyb when it is unchanged."""
+def _type_source(cols: List[bytes]) -> str:
+    """Where a line's chimera type comes from, as the web's parseAnnotations:
+    ``column_17`` when the HYB2 layout names one (column 17, or column 18 of
+    sam2hyb's 18 columns with an empty column 16), else ``inferred``."""
+    if len(cols) >= 18 and not cols[15].strip():
+        named = cols[17]
+    elif len(cols) >= 17:
+        named = cols[16]
+    else:
+        return "inferred"
+    return "column_17" if named.strip() else "inferred"
+
+
+def _line_number(source: str, offset: int) -> int:
+    """The 1-based line of the .hyb starting at byte ``offset``."""
+    count, left = 0, offset
+    with open(source, "rb") as handle:
+        while left > 0:
+            chunk = handle.read(min(left, 1 << 22))
+            if not chunk:
+                break
+            count += chunk.count(b"\n")
+            left -= len(chunk)
+    return count + 1
+
+
+def _read_lines(source: Optional[str], meta: Dict[str, Any], offsets: List[int], line_numbers: bool = False) -> Dict[int, Dict[str, Any]]:
+    """What the index does not keep of each row, read back from the .hyb
+    when it is unchanged: ``{name, sequence, evalue1, evalue2, raw,
+    read_start1, read_end1, read_start2, read_end2, type_source}`` and, with
+    ``line_numbers``, ``line``."""
     if not source or not offsets:
         return {}
     try:
@@ -1077,8 +1171,15 @@ def _read_lines(source: Optional[str], meta: Dict[str, Any], offsets: List[int])
                 handle.seek(offset)
                 line = handle.readline().rstrip(b"\r\n")
                 cols = line.split(b"\t")
-                out[offset] = (cols[0].decode("utf-8", "replace"), cols[1].decode("utf-8", "replace") if len(cols) > 1 else "",
-                               _evalue(cols, 8), _evalue(cols, 14), line.decode("utf-8", "replace"))
+                out[offset] = {"name": cols[0].decode("utf-8", "replace"),
+                               "sequence": cols[1].decode("utf-8", "replace") if len(cols) > 1 else "",
+                               "evalue1": _evalue(cols, 8), "evalue2": _evalue(cols, 14), "raw": line.decode("utf-8", "replace"),
+                               "read_start1": _evalue(cols, 4), "read_end1": _evalue(cols, 5),
+                               "read_start2": _evalue(cols, 10), "read_end2": _evalue(cols, 11),
+                               "type_source": _type_source(cols)}
+        if line_numbers:
+            for offset, item in out.items():
+                item["line"] = _line_number(source, offset)
         return out
     except OSError:
         return {}
@@ -1118,7 +1219,7 @@ def _after(expression: str, descending: bool, cursor: Tuple[Any, int]) -> Tuple[
 
 def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = None, limit: int = 100, offset: int = 0, *,
             order: str = "file", with_sequence: bool = True, with_raw: bool = False,
-            partners: bool = False, count_mode: str = "support") -> Dict[str, Any]:
+            partners: bool = False, count_mode: str = "support", with_line: bool = False) -> Dict[str, Any]:
     """Filtered hybrid rows across indexes.
 
     ``filters``: ``gene1``, ``gene2``, ``gene`` (either arm), ``partner`` (with
@@ -1132,13 +1233,19 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
     ``max_evalue`` (no arm e-value above it; read from the .hyb, see
     ``_evalue_table``), ``anchor`` (``{gene, start, end, overlap?, partner?,
     partner_start?, partner_end?}``: the rows ``region`` counts, see
-    ``_anchor_sql``).
+    ``_anchor_sql``), ``id`` (a row id: that row of each index), ``either``
+    (a list of filter objects: the rows matching any of them, e.g. both arm
+    orders of a contact map cell).
     ``order``: ``file`` (index order, then file order), ``reads`` / ``support``
     (desc), ``position`` (arm 1 start), ``dg`` (asc, missing last).
     Returns ``{total, limit, offset, order, rows: [{index, id, name, sequence,
-    evalue1, evalue2, gene1, start1, end1, gene2, start2, end2, reads, support,
-    dg, overlap, type}]}``; ``with_raw`` adds each row's .hyb line as ``raw``
-    (the web's HYB export). ``partners`` with a ``gene`` filter adds
+    evalue1, evalue2, read_start1, read_end1, read_start2, read_end2,
+    type_source, gene1, start1, end1, gene2, start2, end2, reads, support,
+    dg, overlap, type}]}`` (the read coordinates are the .hyb's columns 5, 6,
+    11 and 12; ``type_source`` is ``column_17`` or ``inferred``, as the web's
+    record); ``with_raw`` adds each row's .hyb line as ``raw``
+    (the web's HYB export), ``with_line`` its 1-based line number as ``line``
+    (a scan of the file up to the row, so meant for a row or a few). ``partners`` with a ``gene`` filter adds
     ``partners: [{name, records, support}]``, the web's partner panel: the
     other arm's RNA of each matching row, most first by ``count_mode``
     (``support`` or ``records``).
@@ -1198,21 +1305,26 @@ def hybrids(indexes: Sequence[PathLike], filters: Optional[Dict[str, Any]] = Non
                 del entry["ends"][min(entry["ends"])]
             while len(_cursors) > _CURSOR_QUERIES:
                 _cursors.popitem(last=False)
-    lookups: Dict[int, Dict[int, Tuple[str, str]]] = {}
-    if with_sequence or with_raw:
+    lookups: Dict[int, Dict[int, Dict[str, Any]]] = {}
+    if with_sequence or with_raw or with_line:
         for number, index in enumerate(opened):
             offs = [row[11] for _, n, row in merged if n == number]
-            lookups[number] = _read_lines(index.meta.get("source_path"), index.meta, offs)
+            lookups[number] = _read_lines(index.meta.get("source_path"), index.meta, offs, with_line)
     out = []
     for _, number, row in merged:
         index = opened[number]
-        name, sequence, evalue1, evalue2, line = lookups.get(number, {}).get(row[11], (None, None, None, None, None))
-        item = {"index": number, "id": row[0], "name": name, "sequence": sequence, "evalue1": evalue1, "evalue2": evalue2,
+        read = lookups.get(number, {}).get(row[11], {})
+        item = {"index": number, "id": row[0], "name": read.get("name"), "sequence": read.get("sequence"),
+                "evalue1": read.get("evalue1"), "evalue2": read.get("evalue2"),
+                "read_start1": read.get("read_start1"), "read_end1": read.get("read_end1"),
+                "read_start2": read.get("read_start2"), "read_end2": read.get("read_end2"), "type_source": read.get("type_source"),
                 "gene1": index.gene_names[row[1]], "start1": row[2], "end1": row[3],
                 "gene2": index.gene_names[row[4]], "start2": row[5], "end2": row[6],
                 "reads": row[7], "support": row[12], "dg": row[8], "overlap": row[9], "type": index.type_names.get(row[10])}
         if with_raw:
-            item["raw"] = line
+            item["raw"] = read.get("raw")
+        if with_line:
+            item["line"] = read.get("line")
         out.append(item)
     result = {"total": total, "limit": limit, "offset": offset, "order": order, "rows": out}
     if partners and filters.get("gene") is not None:
@@ -1351,13 +1463,17 @@ def _partner_rows(partners: Dict[str, List[int]]) -> List[Dict[str, Any]]:
 
 def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = None, end: Optional[int] = None, *,
               partner: Optional[str] = None, types: Optional[Sequence[str]] = None, measure: str = "records",
-              bin_size: int = 1, lengths: Optional[Dict[str, int]] = None, homodimer: Optional[str] = None) -> Dict[str, Any]:
+              bin_size: int = 1, lengths: Optional[Dict[str, int]] = None, homodimer: Optional[str] = None,
+              full_reference: bool = False) -> Dict[str, Any]:
     """Interaction coverage along ``gene`` (the viewpoint) and its partners.
 
     Every arm on ``gene`` (both arms of an intramolecular hybrid) adds its
     weight (1 per record, its cluster support or its reads, by ``measure``) to each
     nucleotide it covers inside ``[start, end]`` (inclusive; default: the
-    observed start to the reference length).  ``bin_size`` > 1 reports the
+    observed start to the observed end, as the web's Viewpoint).
+    ``full_reference`` is the web's "Full mapped reference": 1 to the
+    reference length in ``lengths`` (``start``/``end`` are ignored; nothing
+    when the length is unknown).  ``bin_size`` > 1 reports the
     mean per nucleotide of each bin, as the web Viewpoint does; the bin grows
     so there are at most 30,000 bins (``adjusted``).
 
@@ -1376,8 +1492,11 @@ def viewpoint(indexes: Sequence[PathLike], gene: str, start: Optional[int] = Non
     low, observed_max, length = _anchor_range(opened, gene, lengths)
     lo = _span(start, "start")
     hi = _span(end, "end")
-    lo = lo if lo is not None else (low if low is not None else 1)
-    hi = hi if hi is not None else length
+    if full_reference:
+        lo, hi = 1, lengths.get(gene)
+    else:
+        lo = lo if lo is not None else (low if low is not None else 1)
+        hi = hi if hi is not None else observed_max
     if hi is not None and lo > hi:
         raise ValueError("start must not exceed end")
     out = {"gene": gene, "partner": partner, "length": length, "measure": measure, "requested_bin_size": bin_size,

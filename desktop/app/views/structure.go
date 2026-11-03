@@ -96,22 +96,47 @@ type structureRecord struct {
 	SelectedCandidate int           `json:"selected_candidate"`
 	NucleotideSupport []float64     `json:"nucleotide_support"`
 	BonusMatrixPath   string        `json:"bonus_matrix_path"`
+	// Arms are the window's HYB evidence drawn under the arcs (arms.json):
+	// its rows, unique arm blocks and the most frequent blocks as
+	// [a0, a1, b0, b1, rows] in window coordinates.
+	Arms *stArms `json:"arms"`
 	// mapped, when set, are the pairs moved onto another reference
 	// (stMapRecords); they replace DBN and Pairs.
 	mapped []stPair
 }
 
 // stWeights maps the records' pairs to their chimera bonus.
+// Keys are stPairKey's (lower position first).
 func stWeights(records []structureRecord) map[[2]int]float64 {
 	out := map[[2]int]float64{}
 	for _, r := range records {
 		for i, pr := range r.Pairs {
 			if i < len(r.Bonus) && r.Bonus[i] != nil {
-				out[pr] = *r.Bonus[i]
+				out[stPairKey(pr[0], pr[1])] = *r.Bonus[i]
 			}
 		}
 	}
 	return out
+}
+
+// stPairKey is a pair's key, lower position first: a CPLcofold record whose
+// region 2 lies before region 1 on the RNA (the runtime keeps the regions'
+// order) draws strand A after strand B, so its pairs come I > J.
+func stPairKey(i, j int) [2]int {
+	if i > j {
+		i, j = j, i
+	}
+	return [2]int{i, j}
+}
+
+// stNormalise orders each record's pairs lower position first (stPairKey),
+// as the arcs, the statistics and the exports expect.
+func stNormalise(result *structureResult) {
+	for k := range result.Records {
+		for i, pr := range result.Records[k].Pairs {
+			result.Records[k].Pairs[i] = stPairKey(pr[0], pr[1])
+		}
+	}
 }
 
 type structureResult struct {
@@ -126,15 +151,43 @@ type structureResult struct {
 		} `json:"timings"`
 		EvidenceInputs struct {
 			Rows string `json:"rows"`
+			// Hyb are the .hyb files the fold read (the report's inputs).
+			Hyb []struct {
+				Path      string `json:"path"`
+				SizeBytes int64  `json:"size_bytes"`
+			} `json:"hyb"`
 		} `json:"evidence_inputs"`
+		// Reference is the FASTA the sequence came from.
+		Reference struct {
+			Path string `json:"path"`
+		} `json:"reference"`
+		// EnergyMetadata is a CPLcofold fold's energy model and kind (the
+		// web's energyMetadata; energy_kind "heuristic" is an experimental
+		// pseudoknot energy).
+		EnergyMetadata map[string]any `json:"energy_metadata"`
 		// Records are the windows' summaries; evidence.source is
 		// "hyb-block-intervals" when CPLfold folded with HYB evidence;
 		// comrades is a COMRADES(ViennaRNA) window's evidence and ensemble.
 		Records []struct {
 			Evidence struct {
-				Source string `json:"source"`
+				Source            string `json:"source"`
+				InputRecords      int    `json:"inputRecords"`
+				UniqueBlocks      int    `json:"uniqueBlocks"`
+				NonzeroBonusCells int    `json:"nonzeroBonusCells"`
+				// NonzeroUpperTriangleCells is the web's count (i < j);
+				// nil in results folded before it was kept.
+				NonzeroUpperTriangleCells *int    `json:"nonzeroUpperTriangleCells"`
+				MaximumBonus              float64 `json:"maximumBonus"`
 			} `json:"evidence"`
+			// Candidates is how many CPLfold candidates the window kept.
+			Candidates int `json:"candidates"`
+			Seconds    struct {
+				Bonus float64 `json:"bonus"`
+				Fold  float64 `json:"fold"`
+			} `json:"seconds"`
 			Comrades *stComrades `json:"comrades"`
+			// Iris is an IRIS window's weighted ensemble (structure_iris.go).
+			Iris *stIris `json:"iris"`
 		} `json:"records"`
 	} `json:"meta"`
 	Records []structureRecord `json:"records"`
@@ -247,7 +300,9 @@ func stRecordPairs(r structureRecord) []stPair {
 	if r.DBN != "" && len(r.Positions) == len(r.DBN) {
 		pairs := stParseDBN(r.DBN, 1)
 		for i := range pairs {
-			pairs[i].I, pairs[i].J = r.Positions[pairs[i].I-1], r.Positions[pairs[i].J-1]
+			// lower position first: strand B may be drawn before strand A
+			key := stPairKey(r.Positions[pairs[i].I-1], r.Positions[pairs[i].J-1])
+			pairs[i].I, pairs[i].J = key[0], key[1]
 		}
 		return pairs
 	}
@@ -256,9 +311,52 @@ func stRecordPairs(r structureRecord) []stPair {
 	}
 	out := make([]stPair, len(r.Pairs))
 	for i, pr := range r.Pairs {
-		out[i] = stPair{I: pr[0], J: pr[1]}
+		key := stPairKey(pr[0], pr[1])
+		out[i] = stPair{I: key[0], J: key[1]}
 	}
 	return out
+}
+
+// localPair is pair pr's 1-based indices in the record (A+B for two
+// strands), lower first, and whether that swapped its ends (strand B drawn
+// before strand A); 0 for an end the record does not hold.
+func (r structureRecord) localPair(pr stPair) (i, j int, swapped bool) {
+	i, j = r.localOf(pr.I), r.localOf(pr.J)
+	if i > j && j >= 1 {
+		return j, i, true
+	}
+	return i, j, false
+}
+
+// stLocalAxis: a two-strand record drawn on its A+B indices rather than RNA
+// positions (two RNAs, or overlapping regions of one; cofold_positions), so
+// gene coordinates (the annotation, differential arcs, another result's
+// positions) do not apply to it.
+func stLocalAxis(r structureRecord) bool {
+	return r.Cutpoint > 0 && r.mapped == nil && stRegionsLocal(r.Segments)
+}
+
+// stRegionsLocal: two regions a two-strand fold draws on A+B indices.
+func stRegionsLocal(regions []core.Region) bool {
+	if len(regions) != 2 {
+		return false
+	}
+	one, two := regions[0], regions[1]
+	return one.GeneID != two.GeneID || (one.Start <= two.End && two.Start <= one.End)
+}
+
+// stChainGap is the arcs' chain break of a two-strand record on RNA
+// positions: From is strand A's position next to the break and To strand
+// B's (From > To when region 2 lies before region 1; widgets.Gap).
+func stChainGap(r structureRecord) widgets.Gap {
+	c, n := r.Cutpoint, len(r.Positions)
+	if c <= 0 || c >= n || r.mapped != nil {
+		return widgets.Gap{}
+	}
+	if aStart, bEnd := r.Positions[0], r.Positions[n-1]; bEnd < aStart {
+		return widgets.Gap{From: aStart, To: bEnd} // strand B first on the axis
+	}
+	return widgets.Gap{From: r.Positions[c-1], To: r.Positions[c]}
 }
 
 // stPickRecords: all records, or the one window "start-end".
@@ -437,15 +535,32 @@ func stParseWindows(text string, length int) ([]core.Window, []string) {
 
 type structurePage struct {
 	// shade colors arcs by chimera evidence (HYB bonus).
-	shade   bool
-	a       *App
-	project string
+	shade bool
+	// the result details' collapsible parts (structure_result.go) and the
+	// bonus heatmaps read so far and being read, by matrix file and length
+	// (loadHeat)
+	pairListOpen, computedOpen bool
+	heatCache                  map[string]*stHeat
+	heatReading                map[string]bool
+	a                          *App
+	project                    string
 
 	// form
 	gene, evidence string
-	mode           string // "genome" | "windows"
-	windows        string
-	pseudoknot     bool
+	// pinned are the samples a prefill named ("sampleIds", Explore after
+	// Compare): the evidence instead of evidence's, until the evidence or
+	// the top bar's Samples are chosen again (structure_evidence.go).
+	pinned []string
+	// topGene and topKey are the top bar's RNA and Samples last followed
+	// (followTopBar).
+	topGene, topKey string
+	mode            string // "genome" | "windows"
+	windows         string
+	pseudoknot      bool
+	// topology is the "Structure topology" radio's value and lastPK the
+	// pseudoknot setting it last showed (structure_fold.go whatToFold)
+	topology string
+	lastPK   bool
 	// seqOnly folds with CPLfold or CPLcofold from the sequence alone (the
 	// web's "sequence only" evidence mode).
 	seqOnly bool
@@ -498,6 +613,7 @@ type structurePage struct {
 	// folded view's, by nested dot-bracket.
 	view        string
 	layouts     map[string]stLayout
+	sv          stViewState
 	cache       map[string]*structureResult
 	reading     map[string]bool
 	readErr     map[string]string
@@ -509,6 +625,8 @@ type structurePage struct {
 	arcsKey     string
 	stats       stStats
 	dbnText     string
+	// shownB is the B whose pairs the arcs hold ("" for none: B unread, still aligning or not comparable)
+	shownB string
 	// research is the Related research panel below the viewer and
 	// target the result it binds saved cards to (set by syncArcs).
 	research *researchPanel
@@ -523,6 +641,21 @@ type structurePage struct {
 	candRow                 int
 	stemsOpen, evidenceOpen bool
 	shownA                  []structureRecord
+
+	// iris: the IRIS settings and region check (structure_iris.go)
+	iris stIrisState
+
+	// setup: the folding workflow and the sequence preview (structure_setup.go)
+	setup stSetup
+
+	// editing shows the drawing editor (drawing_page.go) on A's window;
+	// drawing is the session shown (drawingKey names it) and drawings every
+	// session opened, by stDrawingKey, so switching result, window or
+	// candidate and back restores its edits.
+	editing    bool
+	drawing    *drawingEditor
+	drawingKey string
+	drawings   map[string]*drawingEditor
 }
 
 func newStructurePage(a *App) *structurePage {
@@ -533,6 +666,7 @@ func newStructurePage(a *App) *structurePage {
 
 func (p *structurePage) reset() {
 	p.gene, p.evidence, p.mode, p.windows = "", "", "genome", ""
+	p.topGene, p.topKey, p.pinned = "", "", nil
 	p.pseudoknot, p.seqOnly = false, false
 	p.src = stSource{}
 	p.gene2, p.region1, p.region2 = "", "", ""
@@ -540,13 +674,16 @@ func (p *structurePage) reset() {
 	p.prefillNote, p.startErr, p.lastTask, p.starting = "", "", "", false
 	p.structures, p.listErr, p.loading = nil, "", false
 	p.viewA, p.viewB, p.record = "", "", "all"
-	p.view, p.layouts = stViewLabels[0], map[string]stLayout{}
+	p.view, p.layouts, p.sv = stViewLabels[0], map[string]stLayout{}, stViewState{}
+	p.editing, p.drawing, p.drawingKey, p.drawings = false, nil, "", nil
 	p.cache = map[string]*structureResult{}
 	p.reading = map[string]bool{}
 	p.readErr = map[string]string{}
 	p.pendingPair, p.pairLabels, p.pendingShow = nil, nil, ""
-	p.arcsKey, p.dbnText, p.target, p.shownA = "", "", nil, nil
+	p.arcsKey, p.dbnText, p.target, p.shownA, p.shownB = "", "", nil, nil, ""
+	p.heatCache, p.heatReading = nil, nil
 	p.layers = newSTLayers()
+	p.setup = stSetup{}
 }
 
 func (p *structurePage) Show() {
@@ -558,12 +695,7 @@ func (p *structurePage) Show() {
 		p.project = a.Project.Path
 		p.reset()
 	}
-	if p.gene == "" || a.Project.GeneLength(p.gene) == 0 {
-		p.gene = a.Selected.Gene
-	}
-	if len(a.SelectionIDs(p.evidence)) == 0 {
-		p.evidence = a.Selected.Key
-	}
+	p.followTopBar(true)
 	if opts := a.NavOptions; opts != nil {
 		p.applyOptions(opts)
 		a.NavOptions = nil
@@ -575,6 +707,24 @@ func (p *structurePage) Show() {
 		p.loadComparisons()
 	}
 	p.research.Show()
+}
+
+// followTopBar takes the top bar's RNA and Samples when they change, as
+// Explore follows them; a choice made on the form afterwards (or a
+// prefill, applied after this) stays until the top bar changes again. An
+// empty or unknown form value takes the top bar's too when the page is
+// shown (fill).
+func (p *structurePage) followTopBar(fill bool) {
+	a := p.a
+	if a.Project == nil {
+		return
+	}
+	if gene := a.Selected.Gene; gene != p.topGene || (fill && (p.gene == "" || a.Project.GeneLength(p.gene) == 0)) {
+		p.topGene, p.gene = gene, gene
+	}
+	if key := a.Selected.Key; key != p.topKey || (fill && len(p.evidenceIDs()) == 0) {
+		p.topKey, p.evidence, p.pinned = key, key, nil
+	}
 }
 
 func (p *structurePage) applyOptions(opts map[string]any) {
@@ -591,10 +741,14 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 			Regions []core.Region `json:"regions"`
 			// Record: fold this HYB record's own sequence.
 			Record *hybridRow `json:"record"`
+			// SampleIDs: exactly these samples are the evidence (Explore
+			// with the samples Compare pinned).
+			SampleIDs []string `json:"sampleIds"`
 		}
 		err := model.Decode(raw, &prefill)
 		if err == nil {
-			p.src.kind = stSourceReference // a prefill names reference regions
+			p.src.kind = stSourceReference        // a prefill names reference regions
+			defer p.pinSamples(prefill.SampleIDs) // after the selection key
 		}
 		switch {
 		case err != nil:
@@ -775,6 +929,7 @@ func (p *structurePage) ensureRead(id string) {
 		if err == nil {
 			err = model.Decode(raw, &result)
 		}
+		stNormalise(&result)
 		return func() {
 			if a.Project == nil || a.Project.Path != path {
 				return
@@ -787,46 +942,6 @@ func (p *structurePage) ensureRead(id string) {
 			p.cache[id] = &result
 		}
 	})
-}
-
-// evidenceMismatch says why the evidence cannot be used for the chosen RNA:
-// its samples are mapped to another reference (their chimeras name other
-// sequences). "" when they match or the RNA's reference is unknown.
-func (p *structurePage) evidenceMismatch() string {
-	a := p.a
-	if a.Project == nil || p.gene == "" {
-		return ""
-	}
-	var want *model.Reference
-	for i, r := range a.Project.References {
-		for _, s := range r.Sequences {
-			if s.Name == p.gene {
-				want = &a.Project.References[i]
-			}
-		}
-	}
-	if want == nil {
-		return ""
-	}
-	name := func(r *model.Reference) string {
-		if r.Label != "" {
-			return r.Label
-		}
-		return r.ID
-	}
-	for _, id := range a.SelectionIDs(p.evidence) {
-		s := a.Project.Sample(id)
-		if s == nil || s.ReferenceID == "" || s.ReferenceID == want.ID {
-			continue
-		}
-		other := s.ReferenceID
-		if r := a.Project.Reference(other); r != nil {
-			other = name(r)
-		}
-		return fmt.Sprintf("%s is mapped to %s, not to %s (the reference of this RNA). Choose evidence mapped to %s.",
-			a.SelectionLabel(p.evidence), other, name(want), name(want))
-	}
-	return ""
 }
 
 func (p *structurePage) evidenceNames(e *structureEntry) string {
@@ -847,17 +962,40 @@ func (p *structurePage) evidenceNames(e *structureEntry) string {
 // ---- view
 
 func (p *structurePage) View(c *ui.Context) {
+	if p.a.Project != nil && p.a.Project.Path == p.project {
+		p.followTopBar(false) // the top bar changed while this page is shown
+	}
 	ui.Column(c).Fill().Padding(24).Gap(16).Children(func() {
 		PageHeader(c, "Structure", "Predict RNA secondary structure with CPLfold, CPLcofold or ViennaRNA, using your samples' chimeric reads as evidence, and compare structures.")
+		// The form takes about a third of a wide window. A narrow window
+		// puts it above the viewer in one scroll; a short one scrolls the
+		// check and Run fold with the form, which pinned below it would
+		// leave the form a few lines.
+		w, h := p.a.ContentSize()
+		side := clampF(w*0.3, 354, 460)
+		pinned := h >= 700
+		if w < 860 {
+			ui.Scroll(c.Key("st-stack")).Grow(1).Gap(16).Children(func() {
+				p.form(c)
+				p.list(c)
+				p.runPanel(c)
+				p.viewer(c)
+				p.research.View(c, p.researchTarget())
+			})
+			return
+		}
 		ui.Row(c).Grow(1).Gap(16).AlignItems(ui.Stretch).Children(func() {
-			// The form and results scroll; the check, Run fold and the
-			// fold's status stay pinned below them.
-			ui.Column(c).Width(354).Gap(12).Children(func() {
+			ui.Column(c).Width(side).Gap(12).Children(func() {
 				ui.Scroll(c.Key("st-side")).Grow(1).Padding(0, 14, 0, 0).Gap(16).Children(func() {
 					p.form(c)
 					p.list(c)
+					if !pinned {
+						p.runPanel(c)
+					}
 				})
-				p.runPanel(c)
+				if pinned {
+					p.runPanel(c)
+				}
 			})
 			ui.Scroll(c.Key("st-main")).Grow(1).Gap(16).Children(func() {
 				p.viewer(c)
@@ -899,8 +1037,13 @@ func (p *structurePage) viewer(c *ui.Context) {
 					}
 				})
 			}
-			if a != nil && ui.Checkbox(c.Key("st-shade"), &p.shade, "Shade by chimera support").
-				Tooltip("Arc opacity follows the pair's HYB bonus: faint arcs have little chimera evidence").Changed() {
+			// A alone is drawn in the web's pair styles, whose opacity already
+			// follows the HYB bonus (the web has no such switch): the switch
+			// is for A and B, or A in one colour, in the arc view.
+			_, otherView := stViewModes[p.view]
+			if a != nil && (b != nil || (p.layers.mono && !otherView)) &&
+				ui.Checkbox(c.Key("st-shade"), &p.shade, "Shade by chimera support").
+					Tooltip("Arc opacity follows the pair's HYB bonus: faint arcs have little chimera evidence").Changed() {
 				p.arcs.Shade = p.shade
 			}
 			if p.viewB != "" && ui.Button(c, "Clear B").Clicked() {
@@ -910,9 +1053,15 @@ func (p *structurePage) viewer(c *ui.Context) {
 				if ui.Button(c, "Save .dbn").Clicked() {
 					p.saveDBN(a)
 				}
+				// while B is read or aligned the arcs hold A alone: wait for it
+				wait := p.exportWait(a, b)
 				for _, asPNG := range []bool{false, true} {
 					label := map[bool]string{false: "Export SVG…", true: "Export PNG…"}[asPNG]
-					if ui.Button(c.Key(label), label).Tooltip("Save the view as shown, in light colours").Clicked() {
+					tip := "Save the view as shown, in light colours"
+					if wait != "" {
+						tip = wait + "; the view saves once B is shown"
+					}
+					if ui.Button(c.Key(label), label).Disabled(wait != "").Tooltip(tip).Clicked() && wait == "" {
 						_, other := stViewModes[p.view]
 						switch {
 						case other && b == nil:
@@ -967,14 +1116,24 @@ func (p *structurePage) viewer(c *ui.Context) {
 			return
 		}
 		if b == nil {
+			p.defaultView(a)
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "View").FontSize(12).Bold().TextColor(t.TextMuted)
-				ui.Select(c.Key("st-view"), &p.view, stViewLabels).Width(140).Label("View")
+				ui.Select(c.Key("st-view"), &p.view, stViewChoices(a)).Width(140).Label("View").OnChange(func() { p.editing = false })
+				p.drawingButton(c, a)
 			})
-			if p.otherView(c, a) {
-				p.statsTable(c, false)
+			if p.editing && !stTwoStrand(a) {
+				p.drawingView(c, a)
 				ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
 				p.candidatesPanel(c, a)
+				p.comradesPanel(c, a)
+				return
+			}
+			if p.otherView(c, a) {
+				ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+				p.evidenceProvenance(c, a)
+				p.candidatesPanel(c, a)
+				p.resultDetails(c, a)
 				p.comradesPanel(c, a)
 				return
 			}
@@ -982,6 +1141,17 @@ func (p *structurePage) viewer(c *ui.Context) {
 		p.layerControls(c, stGene(a))
 		p.syncArcs(a, b)
 		p.arcs.Mono = p.monoColor(t)
+		// A alone: the web's pair styles and the raw HYB arms under the arcs
+		var rawLabel, rawNote string
+		p.arcs.StylesA = nil
+		if b == nil && p.arcs.Mono.A == 0 {
+			p.arcs.StylesA = stArcStyles(a, p.shownA, stShownPairs(p.shownA, stHardPairs(a)), t)
+			if len(p.overlayLabels) == 0 || p.overlayLabels[0] == "" {
+				var raw []widgets.OverlayArc
+				raw, rawLabel, rawNote = stRawArms(p.shownA, t)
+				p.arcs.Overlay = raw
+			}
+		}
 		metaA := p.entry(p.viewA)
 		labelA := "A · " + p.viewA
 		if metaA != nil {
@@ -995,6 +1165,16 @@ func (p *structurePage) viewer(c *ui.Context) {
 			}
 		}
 		ui.Row(c).Gap(14).Wrap().Children(func() {
+			if b == nil && p.arcs.Mono.A == 0 {
+				ui.Text(c, "Predicted structure · above").FontSize(12).Bold().TextColor(t.TextMuted)
+				stArcLegend(c, a)
+				if len(p.arcs.Overlay) > 0 && rawLabel != "" {
+					stLegend(c, t.Accent, rawLabel)
+				} else if rawLabel != "" {
+					ui.Text(c, rawLabel).FontSize(12).TextColor(t.TextMuted)
+				}
+				return
+			}
 			colorA, colorB := cmpRed, cmpBlue
 			if p.layers.mono {
 				colorA, colorB = t.Text, t.Text
@@ -1014,6 +1194,12 @@ func (p *structurePage) viewer(c *ui.Context) {
 				stLegend(c, cmpBlue, p.overlayLabels[1])
 			}
 		})
+		if rawNote != "" {
+			ui.Text(c, rawNote).FontSize(11).TextColor(t.TextMuted)
+		}
+		if b == nil {
+			ui.Text(c, stViewCopy(a, "arc")).FontSize(12).TextColor(t.TextMuted)
+		}
 		height := float32(340)
 		if b != nil || len(p.arcs.Overlay) > 0 {
 			height = 440
@@ -1029,12 +1215,9 @@ func (p *structurePage) viewer(c *ui.Context) {
 			info = nameOr(hover, "Position "+FormatNumber(int64(ev.Position))) + " · " + info
 		}
 		ui.Text(c, info).FontSize(11).TextColor(t.TextMuted)
-		if sel := p.arcs.Selected; sel > 0 {
+		if sel := p.arcs.Selected; sel > 0 && b != nil {
 			if text := stNucleotideText(p.shownA, sel, nameOr(a.Meta.Engine, "CPLfold")); text != "" {
-				if b != nil {
-					text = "A · " + text
-				}
-				ui.Text(c, text).FontSize(12).Bold()
+				ui.Text(c, "A · "+text).FontSize(12).Bold()
 			}
 		}
 		for _, note := range p.layers.notes {
@@ -1042,6 +1225,14 @@ func (p *structurePage) viewer(c *ui.Context) {
 		}
 		if p.stats.DifferentCover {
 			ui.Text(c, "Pair statistics count pairs inside the regions both structures cover.").FontSize(12).TextColor(t.TextMuted)
+		}
+		if b == nil {
+			ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+			p.evidenceProvenance(c, a)
+			p.candidatesPanel(c, a)
+			p.resultDetails(c, a)
+			p.comradesPanel(c, a)
+			return
 		}
 		p.statsTable(c, b != nil)
 		ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
@@ -1084,14 +1275,20 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 	geneA := stGene(a)
 	recordsA := stPickRecords(a.Records, p.record)
 	p.shownA = recordsA
+	// a two-RNA or overlapping two-strand A is drawn on its A+B indices:
+	// nothing in RNA positions lines up with it
+	local := slices.ContainsFunc(recordsA, stLocalAxis)
 	var recordsB []structureRecord
 	if b != nil {
 		recordsB = stPickRecords(b.Records, p.record)
 		if p.record != "all" && len(recordsB) == 0 {
 			recordsB = b.Records
 		}
-		// B folded on another reference: move it onto A's coordinates.
-		if geneB := stGene(b); geneB != "" && geneA != "" && geneB != geneA {
+		if why := stCompareBlock(a, b); why != "" {
+			p.layers.notes = append(p.layers.notes, "B is not shown: "+why)
+			recordsB = nil
+		} else if geneB := stGene(b); geneB != "" && geneA != "" && geneB != geneA {
+			// B folded on another reference: move it onto A's coordinates.
 			m, ok := p.geneMap(geneB, geneA)
 			switch {
 			case ok && m != nil:
@@ -1131,8 +1328,8 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 		gene = a.Structure.GeneID
 	}
 	length := p.a.Project.GeneLength(gene)
-	if length < end {
-		length = end
+	if length < end || local {
+		length = end // A+B indices: the RNA's length does not apply
 	}
 	toArcs := func(pairs []stPair) []widgets.Pair {
 		out := make([]widgets.Pair, len(pairs))
@@ -1152,13 +1349,17 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 	}
 	p.arcs.WeightA, p.arcs.WeightB = weights(pairsA, recordsA), weights(pairsB, recordsB)
 	p.arcs.Shade = p.shade
-	overlay, labels, note, _ := p.overlayArcs(geneA)
-	p.arcs.Overlay, p.overlayLabels = overlay, labels
-	if note != "" {
-		p.layers.notes = append(p.layers.notes, note)
+	p.arcs.Overlay, p.overlayLabels, p.arcs.Features = nil, [2]string{}, nil
+	if local {
+		p.layers.notes = append(p.layers.notes, stLocalAxisNote)
+	} else {
+		overlay, labels, note, _ := p.overlayArcs(geneA)
+		p.arcs.Overlay, p.overlayLabels = overlay, labels
+		if note != "" {
+			p.layers.notes = append(p.layers.notes, note)
+		}
 	}
-	p.arcs.Features = nil
-	if an := p.annotation(geneA); an != nil {
+	if an := p.annotation(geneA); an != nil && !local {
 		p.arcs.Features = an.features
 		if an.err != "" {
 			p.layers.notes = append(p.layers.notes, "Gene annotation: "+an.err)
@@ -1166,12 +1367,104 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 			p.layers.notes = append(p.layers.notes, an.note)
 		}
 	}
+	// CPLcofold, two regions of one RNA, A alone: the web's A+B arcs, the
+	// positions between the regions taking no room
+	// (strand B first when region 2 lies before region 1)
+	p.arcs.Gap = widgets.Gap{}
+	if b == nil && len(recordsA) == 1 {
+		p.arcs.Gap = stChainGap(recordsA[0])
+	}
+	// the arcs (and so the exports) hold B only once it is drawn
+	p.shownB = ""
+	if b != nil && recordsB != nil {
+		p.shownB = p.viewB
+	}
 	p.arcs.Start, p.arcs.End = float64(start), float64(end)
 	if end-start < 20 {
 		p.arcs.Start, p.arcs.End = 1, float64(length)
 	}
 	p.dbnText = stDBNText(gene, recordsA)
 	p.target = &researchTarget{StructureID: p.viewA, Record: p.record, Digest: researchDigest(recordsA), Gene: gene}
+}
+
+// stLocalAxisNote says why a two-RNA or overlapping two-strand A has no
+// gene track or differential arcs.
+const stLocalAxisNote = "This two-strand result is drawn on its A+B indices (two RNAs, or overlapping regions of one), " +
+	"so the gene annotation and differential arcs, which are in RNA positions, are not drawn."
+
+// stCompareBlock is why B cannot be compared with A ("" when it can): a
+// two-RNA or overlapping two-strand result is drawn on its A+B indices,
+// which only line up with another such result of the same regions.
+func stCompareBlock(a, b *structureResult) string {
+	if a == nil || b == nil {
+		return ""
+	}
+	return stAxisBlock(stResultRegions(a), stResultRegions(b))
+}
+
+// stResultRegions are a two-strand result's regions, nil for one strand.
+func stResultRegions(r *structureResult) []core.Region {
+	for _, rec := range r.Records {
+		if rec.Cutpoint > 0 && len(rec.Segments) == 2 {
+			return rec.Segments
+		}
+	}
+	if len(r.Structure.Regions) == 2 {
+		return r.Structure.Regions
+	}
+	return nil
+}
+
+// compareAsBBlock is why listed result e cannot be compared as B with the
+// A shown ("" when it can).
+func (p *structurePage) compareAsBBlock(e *structureEntry) string {
+	var regionsA []core.Region
+	if a := p.cache[p.viewA]; a != nil {
+		regionsA = stResultRegions(a)
+	} else if ea := p.entry(p.viewA); ea != nil && len(ea.Regions) == 2 {
+		regionsA = ea.Regions
+	}
+	var regionsB []core.Region
+	if len(e.Regions) == 2 {
+		regionsB = e.Regions
+	}
+	return stAxisBlock(regionsA, regionsB)
+}
+
+// exportWait is why the arc exports wait ("" when they can run): B is
+// still being read, or aligned onto A's reference, so the arcs hold A
+// alone. B that cannot be shown (unreadable, unaligned, not comparable)
+// does not hold them: they save A alone, named and labelled so (arcSpec).
+func (p *structurePage) exportWait(a, b *structureResult) string {
+	if p.viewB == "" || p.readErr[p.viewB] != "" || stCompareBlock(a, b) != "" {
+		return ""
+	}
+	if b == nil {
+		return "B is still loading"
+	}
+	if geneA, geneB := stGene(a), stGene(b); geneA != "" && geneB != "" && geneA != geneB {
+		if _, ok := p.geneMap(geneB, geneA); !ok && p.layers.mapErr[geneB+">"+geneA] == "" {
+			return "B is still being aligned to A's reference"
+		}
+	}
+	return ""
+}
+
+// stAxisBlock compares the regions of A and B (nil for one strand).
+func stAxisBlock(a, b []core.Region) string {
+	localA, localB := stRegionsLocal(a), stRegionsLocal(b)
+	if !localA && !localB {
+		return ""
+	}
+	same := localA && localB
+	for i := 0; same && i < 2; i++ {
+		same = a[i].GeneID == b[i].GeneID && a[i].Start == b[i].Start && a[i].End == b[i].End
+	}
+	if same {
+		return ""
+	}
+	return "a two-RNA or overlapping two-strand result is drawn on its A+B indices, not RNA positions, " +
+		"so its pairs and pair statistics cannot be compared with another result's. Compare it with a fold of the same two regions."
 }
 
 // researchTarget is the result A shown, if its arcs are current.
@@ -1258,6 +1551,8 @@ func (p *structurePage) metaLine(a *structureResult) string {
 	if m.Engine == "COMRADES(ViennaRNA)" && m.Parameters != nil {
 		parts = append(parts, fmt.Sprintf("%v °C, minimum loop %v, %v randomised folds, seed %v, %d stem pairs fitted",
 			m.Parameters["temperature"], m.Parameters["min_loop"], m.Parameters["random_folds"], m.Parameters["seed"], len(stHardPairs(a))))
+	} else if m.Engine == "IRIS" && m.Parameters != nil {
+		parts = append(parts, stIrisMetaLine(a))
 	} else if m.Engine == "ViennaRNA" && m.Parameters != nil {
 		text := fmt.Sprintf("MFE, %v °C, minimum loop %v", m.Parameters["temperature"], m.Parameters["min_loop"])
 		if n := len(stHardPairs(a)); n > 0 {
@@ -1296,8 +1591,9 @@ func (p *structurePage) metaLine(a *structureResult) string {
 
 func (p *structurePage) saveDBN(a *structureResult) {
 	gene := nameOr(a.Meta.GeneID, a.Structure.GeneID)
-	text := stDBNText(gene, a.Records)
-	name := exportName(".dbn", nameOr(gene, "structure"), p.viewA)
+	// the records shown (all windows, or the one chosen), as the other exports
+	text := stDBNText(gene, stPickRecords(a.Records, p.record))
+	name := stExportFiles["dbn"]
 	app := p.a
 	app.Go(func() func() {
 		path := PickSave("Save the dot-bracket file", name)

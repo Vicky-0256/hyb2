@@ -187,28 +187,41 @@ def _hyb2_reference_name(header: str) -> str:
     return line.replace("__", "_unknown_")
 
 
-def read_fasta_sequences(path: Path) -> List[Dict[str, Any]]:
+_FASTA_BASES = frozenset("ACGTU \t\r\n\v\f")
+
+
+def read_fasta_sequences(path: Path, symbols: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Sequence names (first header word) and lengths of a FASTA(.gz) file.
 
     When the reference uses hyb2 ``|``-separated headers the names are reported
     the way the pipeline rewrites them (and ``unknown``/``pseudogene`` records,
     which the pipeline drops, are omitted), so they match .hyb gene IDs.
+
+    ``symbols``, when given, receives the web's check of the sequences
+    (``parseFasta``'s invalidCharacters): ``entries``, how many reported
+    sequences hold a symbol other than A, C, G, T or U (any case), and
+    ``characters``, those symbols upper-cased.
     """
     headers: List[str] = []
     lengths: List[int] = []
+    unsupported: List[set] = []
     with _open_text(path) as handle:
         for is_header, text in _fasta_lines(handle, Path(path).name):
             if is_header:
-                headers.append(text); lengths.append(0)
+                headers.append(text); lengths.append(0); unsupported.append(set())
             elif headers:
                 lengths[-1] += len(text)
+                if symbols is not None and text:
+                    unsupported[-1].update(set(text.upper()) - _FASTA_BASES)
             elif text:
                 raise ValueError("reference is not a FASTA file: %s" % Path(path).name)
     if not headers:
         raise ValueError("reference FASTA contains no sequences: %s" % Path(path).name)
     formatted = any("|" in header for header in headers)
     sequences = []
-    for header, length in zip(headers, lengths):
+    found: set = set()
+    entries = 0
+    for header, length, bad in zip(headers, lengths, unsupported):
         if formatted:
             name = _hyb2_reference_name(header).split()[0] if header else ""
             if "unknown" in name or "pseudogene" in name:
@@ -216,6 +229,11 @@ def read_fasta_sequences(path: Path) -> List[Dict[str, Any]]:
         else:
             name = header.split()[0] if header else ""
         sequences.append({"name": name, "length": length})
+        if bad:
+            entries += 1
+            found |= bad
+    if symbols is not None:
+        symbols.update({"entries": entries, "characters": sorted(found)})
     return sequences
 
 
@@ -407,9 +425,10 @@ def _prepare_reference(root: Path, source: Path, mode: str, label: str) -> Tuple
     source = Path(source).expanduser().resolve()
     if not source.is_file():
         raise ValueError("reference file does not exist: %s" % source)
-    sequences = read_fasta_sequences(source)  # before copying: fail fast on a non-FASTA
+    symbols: Dict[str, Any] = {}
+    sequences = read_fasta_sequences(source, symbols)  # before copying: fail fast on a non-FASTA
     prepared = _prepare_file(root, source, mode)
-    extra = {"label": (label or read_stem(source))[:200], "sequences": sequences}
+    extra = {"label": (label or read_stem(source))[:200], "sequences": sequences, "unsupported_symbols": symbols}
     return prepared, extra
 
 
@@ -422,6 +441,7 @@ def _register_reference(manifest: Dict[str, Any], root: Path, prepared: _Prepare
     reference = {"id": _slug_id(extra["label"], [r.get("id") for r in manifest["references"]], "ref"), "label": extra["label"]}
     reference.update({key: record[key] for key in ("path", "mode", "size_bytes", "mtime", "quick_hash", "sha256")})
     reference["sequences"] = extra["sequences"]
+    reference["unsupported_symbols"] = extra["unsupported_symbols"]
     manifest["references"].append(reference)
     return reference, False
 
@@ -458,6 +478,12 @@ def update_reference(root: Path, reference_id: str, *, label: Any = None, source
             record = prepared.finalize(root)
             reference.update({key: record[key] for key in ("path", "mode", "size_bytes", "mtime", "quick_hash", "sha256")})
             reference["sequences"] = extra["sequences"]
+            reference["unsupported_symbols"] = extra["unsupported_symbols"]
+            # manual name matches naming a sequence the new FASTA lacks are dropped
+            names = {sequence["name"] for sequence in extra["sequences"]}
+            matches = reference.get("matches")
+            if isinstance(matches, dict):
+                reference["matches"] = {rna: name for rna, name in matches.items() if not name or name in names}
         return reference
     return _mutate_manifest(root, mutate)
 
@@ -655,26 +681,73 @@ def set_sample_stage(root: Path, sample_id: str, stage: str, status: str, *, tas
 # --------------------------------------------------------------------------- stale stages and listing
 
 ACTIVE_STAGE_STATUSES = ("queued", "running")
+# Task records still live: a cancelled task is "cancelling" until its child exits.
+ACTIVE_TASK_STATUSES = ("queued", "running", "cancelling")
 # Status of the stage's task in runs/<task_id>/status.json (written only by the
-# desktop task scheduler) -> what a still-"active" stage is shown as.  queued/running
-# task records may belong to a live task and are left alone.
+# desktop task scheduler) -> what a still-"active" stage is shown as.  Live
+# task records are left alone.
 _STALE_STAGE_STATUS = {"interrupted": "interrupted", "cancelled": "cancelled", "failed": "failed",
                        "succeeded": "interrupted", None: "interrupted"}
+_OWNER_LOCK = "owner.lock"
+
+
+def _run_dir_owned(run_dir: Path) -> bool:
+    """Whether a live process (any instance) holds ``run_dir/owner.lock``, as the
+    desktop scheduler's runDirLocked: an flock on POSIX, an unshared handle on
+    Windows.  No lock file means no owner."""
+    path = Path(run_dir) / _OWNER_LOCK
+    if os.name == "nt":
+        try:
+            with open(path, "rb"):
+                return False
+        except PermissionError:
+            return True  # the owner opened it without sharing
+        except OSError:
+            return False
+    import fcntl
+    try:
+        # Not followed or blocked on: a copied project may plant anything here.
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return False
+    try:
+        import stat
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        except OSError:
+            return False
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
 
 
 def _task_status(root: Path, task_id: Any) -> Optional[str]:
-    """``status`` from ``runs/<task_id>/status.json``; None when the record is absent or unreadable."""
+    """``status`` from ``runs/<task_id>/status.json``; None when the record is absent or unreadable.
+
+    A live-looking record (queued, running, cancelling) whose owner lock is free
+    belongs to a process that exited: it reads as ``interrupted`` (``cancelled``
+    when it was being cancelled), as the desktop scheduler reads it."""
     if not isinstance(task_id, str) or not _ID.match(task_id):
         return None
-    status_path = Path(root) / "runs" / task_id / "status.json"
+    run_dir = Path(root) / "runs" / task_id
+    status_path = run_dir / "status.json"
     try:
-        if status_path.is_symlink() or not status_path.is_file():
+        if run_dir.is_symlink() or status_path.is_symlink() or not status_path.is_file():
             return None
         data = json.loads(status_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     status = data.get("status") if isinstance(data, dict) else None
-    return status if isinstance(status, str) else None
+    if not isinstance(status, str):
+        return None
+    if status in ACTIVE_TASK_STATUSES and not _run_dir_owned(run_dir):
+        return "cancelled" if status == "cancelling" else "interrupted"
+    return status
 
 
 def _task_sample(root: Path, task_id: str) -> Optional[str]:
@@ -696,12 +769,12 @@ def active_sample_tasks(root: Path, sample: Dict[str, Any]) -> List[str]:
     found = set()
     for stage in (sample.get("stages") or {}).values() if isinstance(sample.get("stages"), dict) else ():
         if isinstance(stage, dict) and stage.get("status") in ACTIVE_STAGE_STATUSES \
-                and _task_status(root, stage.get("task_id")) in ACTIVE_STAGE_STATUSES:
+                and _task_status(root, stage.get("task_id")) in ACTIVE_TASK_STATUSES:
             found.add(stage["task_id"])
     runs = Path(root) / "runs"
     if runs.is_dir() and not runs.is_symlink():
         for entry in runs.iterdir():
-            if entry.name not in found and _task_status(root, entry.name) in ACTIVE_STAGE_STATUSES \
+            if entry.name not in found and _task_status(root, entry.name) in ACTIVE_TASK_STATUSES \
                     and _task_sample(root, entry.name) == sample.get("id"):
                 found.add(entry.name)
     return sorted(found)
@@ -717,7 +790,7 @@ def stale_stages(root: Path, manifest: Dict[str, Any]) -> List[Tuple[str, str, O
             if not isinstance(stage, dict) or stage.get("status") not in ACTIVE_STAGE_STATUSES:
                 continue
             task_status = _task_status(root, stage.get("task_id"))
-            if task_status in ACTIVE_STAGE_STATUSES:
+            if task_status in ACTIVE_TASK_STATUSES:
                 continue
             new = _STALE_STAGE_STATUS.get(task_status, "interrupted")
             stale.append((sample.get("id"), name, stage.get("task_id"), new))
@@ -1201,6 +1274,14 @@ def read_reference_sequence(root: Path, reference_id: str, name: str) -> Dict[st
     if status == "missing":
         raise ValueError("reference file is missing: %s" % detail)
     path = resolve_record_path(root, reference)
+    # A manual name match (name_matching.py) says which sequence an RNA uses.
+    from .name_matching import manual_matches
+    matches = manual_matches(reference)
+    requested = name
+    if name in matches:
+        if not matches[name]:
+            raise ValueError("%s is marked as not matched in reference %s" % (name, reference_id))
+        name = matches[name]
     # Streamed twice (names depend on whether any header is hyb2-formatted)
     # so only the wanted sequence is held, never the whole (maybe gzip) file.
     with _open_text(path) as handle:
@@ -1210,8 +1291,11 @@ def read_reference_sequence(root: Path, reference_id: str, name: str) -> Dict[st
         for is_header, text in itertools.chain(_fasta_lines(handle, path.name), [(True, "")]):
             if is_header:
                 if current == name:
-                    return {"reference_id": reference_id, "name": name, "header": header,
-                            "length": size, "sequence": "".join(chunks)}
+                    result = {"reference_id": reference_id, "name": requested, "header": header,
+                              "length": size, "sequence": "".join(chunks)}
+                    if name != requested:
+                        result["sequence_name"] = name
+                    return result
                 header = text
                 current = (_hyb2_reference_name(header).split() or [""])[0] if formatted else (header.split() or [""])[0]
                 chunks, size = [], 0

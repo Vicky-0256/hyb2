@@ -18,6 +18,7 @@ package views
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -426,7 +427,7 @@ func (p *structurePage) overlayArcs(gene string) (arcs []widgets.OverlayArc, lab
 			mapped = append(mapped, g)
 		}
 	}
-	up, down := 0, 0
+	up, down, lost := 0, 0, 0
 	for _, row := range result.Interactions {
 		if row.Padj == nil || *row.Padj >= l.padj {
 			continue
@@ -440,23 +441,39 @@ func (p *structurePage) overlayArcs(gene string) (arcs []widgets.OverlayArc, lab
 		if m := maps[k]; m != nil {
 			i, j = m.Nearest(i, 10), m.Nearest(j, 10)
 			if i == 0 || j == 0 {
+				lost++
 				continue
 			}
 		}
-		arcs = append(arcs, widgets.OverlayArc{I: i, J: j, Up: k == 0, Color: color.Alpha(0.85), Width: 1.3})
+		arcs = append(arcs, widgets.OverlayArc{I: i, J: j, Up: k == 0, Color: color.Alpha(float32(stArcOpacity(*row.Padj))), Width: 1.3})
 		if k == 0 {
 			up++
 		} else {
 			down++
 		}
 	}
-	note = fmt.Sprintf("Differential arcs: %s interactions with padj < %g, %s %s (above) and %s %s (below).",
+	note = fmt.Sprintf("Differential arcs: %s interactions with padj < %g, %s %s (above) and %s %s (below)",
 		FormatNumber(int64(up+down)), l.padj, FormatNumber(int64(up)), labels[0], FormatNumber(int64(down)), labels[1])
+	if lost > 0 {
+		note += "; " + FormatNumber(int64(lost)) + " with an unaligned end left out."
+	} else {
+		note += "."
+	}
 	if len(mapped) > 0 {
 		note += " " + strings.Join(stUnique(mapped), ", ") + " cells moved onto " + gene + " by alignment."
 	}
 	return arcs, labels, note, true
 }
+
+// stArcOpacity is a differential arc's opacity, as the web arc map's:
+// −log10 padj / 20, from 0.08 to 1.
+func stArcOpacity(padj float64) float64 {
+	return math.Max(0.08, math.Min(1, -math.Log10(math.Max(padj, 1e-300))/20))
+}
+
+// stArcMapNote is the web arc map card's note on the differential arcs
+// (arc-map.js), without what concerns its files and panels.
+const stArcMapNote = "HYB-derived merged differential interactions: condition one above in red, condition two below in blue. Arc height follows span; opacity follows −log10(padj), full at 20. Its padj cutoff is separate from the differential test's."
 
 func stUnique(items []string) []string {
 	seen := map[string]bool{}
@@ -535,6 +552,9 @@ func (p *structurePage) layerControls(c *ui.Context, gene string) {
 			p.loadAnnotation(gene, true)
 		}
 	})
+	if l.overlayID != "" {
+		ui.Text(c, stArcMapNote).FontSize(12).TextColor(t.TextMuted)
+	}
 }
 
 // monoColor is the structures' colour when drawn in one colour.

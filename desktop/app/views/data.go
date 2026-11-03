@@ -94,6 +94,7 @@ type dataAddDialog struct {
 	paths     []string
 	names     []string
 	reference string // label shown in the select
+	refID     string // the reference it stands for (syncRef)
 	condition string
 	replicate string
 	gene      string
@@ -108,7 +109,8 @@ type dataEditDialog struct {
 	name      string
 	condition string
 	replicate string
-	reference string
+	reference string // label shown in the select
+	refID     string // the reference it stands for (syncRef)
 	gene      string
 	status    string
 	busy      bool
@@ -119,6 +121,7 @@ type dataSetRefDialog struct {
 	open      bool
 	ids       []string
 	reference string // label shown in the select
+	refID     string // the reference it stands for (syncRef)
 	status    string
 	busy      bool
 }
@@ -128,10 +131,14 @@ type dataRenameDialog struct {
 	id     string
 	label  string
 	status string
+	busy   bool // update_reference in flight: Save sends one update
 }
 
 type dataPage struct {
 	a *App
+	// tableRoom is the table's scroller width last frame: the table fills
+	// it, or scrolls when its columns need more.
+	tableRoom float32
 	// checked holds the sample check boxes by id (pointers stay bound).
 	checked map[string]*bool
 	// inputs: check_inputs items by "<kind>:<id>"; checkSummary the line
@@ -140,7 +147,7 @@ type dataPage struct {
 	checkedOpen  int // a.opened whose inputs were checked
 	checkSeq     int // only the latest check's answer is shown
 	checkSummary string
-	checking     bool
+	checking     int // non-quiet checks in flight ("Check inputs" waits)
 	// runningFor maps a sample to the task this session started for it,
 	// until the manifest's stages name it.
 	runningFor map[string]string
@@ -159,11 +166,22 @@ type dataPage struct {
 	allowing   bool // trust_links in flight
 	// exampleBusy: add_example_data in flight
 	exampleBusy bool
+	// match is the Name matching dialog, reproOpen the Reproducibility one
+	// (data_matching.go).
+	match     dataMatchDialog
+	reproOpen bool
 }
 
 func (p *dataPage) Show() {
 	if q := qcFor(p.a); q != nil {
 		q.ensureStats()
+	}
+	// The QC Overview's "Review mapping" opens the name matching of the
+	// samples its callout counts: the top bar's selection.
+	if section, _ := p.a.NavOptions["section"].(string); section == "data-mapping" {
+		a := p.a
+		a.NavOptions = nil
+		p.openMatching(a.SelectionIDs(a.Selected.Key), a.SelectionLabel(a.Selected.Key))
 	}
 }
 
@@ -354,15 +372,19 @@ func dataFormatBytes(n int64) string {
 	return fmt.Sprintf("%.1f %s", size, units[unit])
 }
 
-// dataFormatCompact: 1.5 M, 224 k, 757 (HD.formatCompact).
+// dataFormatCompact: 1.5 M, 224 k, 757 (HD.formatCompact). A count that
+// rounds up to the next unit shows in it: 999,600 is "1.0 M", not
+// "1000 k"; 9,960,000 is "10 M", not "10.0 M".
 func dataFormatCompact(n int64) string {
+	thousands := math.Round(float64(n) / 1e3)
+	millions := math.Round(float64(n)/1e5) / 10 // to one decimal
 	switch {
-	case n >= 10_000_000:
-		return fmt.Sprintf("%.0f M", float64(n)/1e6)
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1f M", float64(n)/1e6)
+	case thousands >= 1000 && millions >= 10:
+		return fmt.Sprintf("%.0f M", math.Round(float64(n)/1e6))
+	case thousands >= 1000:
+		return fmt.Sprintf("%.1f M", millions)
 	case n >= 10_000:
-		return fmt.Sprintf("%.0f k", math.Round(float64(n)/1e3))
+		return fmt.Sprintf("%.0f k", thousands)
 	}
 	return FormatNumber(n)
 }
@@ -436,21 +458,65 @@ func dataInputChip(c *ui.Context, item dataInputItem) {
 
 func dataRefName(r model.Reference) string { return nameOr(r.Label, r.ID) }
 
-func (p *dataPage) refLabels() []string {
-	var out []string
-	for _, r := range p.a.Project.References {
-		out = append(out, dataRefName(r))
+// dataRefLabels are the select labels of refs, in order and unique: a
+// label two references share gets " · " and the file name (or, when that
+// still collides, the id), so two references labelled "genome" stay two
+// choices.
+func dataRefLabels(refs []model.Reference) []string {
+	count := map[string]int{}
+	for _, r := range refs {
+		count[dataRefName(r)]++
+	}
+	out := make([]string, len(refs))
+	seen := map[string]bool{}
+	for i, r := range refs {
+		label := dataRefName(r)
+		if count[label] > 1 {
+			if file := dataBasename(r.Path); file != "—" {
+				label += " · " + file
+			}
+		}
+		if seen[label] || (label != dataRefName(r) && count[label] > 0) {
+			label = dataRefName(r) + " · " + r.ID
+		}
+		seen[label] = true
+		out[i] = label
 	}
 	return out
 }
 
+func (p *dataPage) refLabels() []string { return dataRefLabels(p.a.Project.References) }
+
+// refByLabel is the reference a select label (refLabels) stands for.
 func (p *dataPage) refByLabel(label string) *model.Reference {
-	for i, r := range p.a.Project.References {
-		if dataRefName(r) == label {
+	for i, l := range p.refLabels() {
+		if l == label {
 			return &p.a.Project.References[i]
 		}
 	}
 	return nil
+}
+
+// syncRef keeps a dialog's reference select (*label) and the reference id
+// it stands for (*id) together: a label the user chose sets the id; a label
+// that no longer names a reference (renamed, or made unique by a new
+// reference of the same label) is shown again from the id. Saving uses
+// the id, so editing a sample never switches its reference by label. The
+// none label (the edit dialog's "—") clears the id.
+func (p *dataPage) syncRef(label, id *string, none string) {
+	if *label == none {
+		*id = ""
+		return
+	}
+	if r := p.refByLabel(*label); r != nil {
+		*id = r.ID
+		return
+	}
+	if *id != "" && p.a.Project.Reference(*id) != nil {
+		*label = dataRefLabel(p.a, *id)
+	}
+	// otherwise the id stays: a reference just added is in the project
+	// once it is read again
 }
 
 func dataErrText(err error) string {
@@ -471,19 +537,21 @@ func (p *dataPage) View(c *ui.Context) {
 		p.checkedOpen, p.inputs, p.checkSummary = a.opened, nil, ""
 		p.checkInputsQuiet()
 	}
-	if folder := a.pendingFolder; folder != "" && a.Project != nil {
-		a.pendingFolder = "" // chosen on the start page with a new project
-		p.scanFolder(folder)
+	if pending := a.pendingFolder; pending.folder != "" && a.Project != nil {
+		a.pendingFolder = pendingFolder{} // chosen on the start page with a new project
+		if pending.project == a.Project.Path {
+			p.scanFolder(pending.folder)
+		}
 	}
 	if q := qcFor(a); q != nil {
 		q.ensureStats()
 	}
 	ui.Column(c).Fill().MinWidth(0).Padding(24).Gap(16).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Basis(320).Children(func() {
 				PageHeader(c, "Data", "References and samples of this project. Raw files are linked in place unless copied.")
 			})
-			if ui.Button(c, "Check inputs").Disabled(p.checking).Clicked() {
+			if ui.Button(c, "Check inputs").Disabled(p.checking > 0).Clicked() {
 				p.runCheck(false)
 			}
 			if ui.Button(c, "Import sample sheet…").Clicked() {
@@ -511,6 +579,8 @@ func (p *dataPage) View(c *ui.Context) {
 	p.setRefDialog(c)
 	p.renameDialog(c)
 	p.removeDialog(c)
+	p.matchingDialog(c)
+	p.reproDialog(c)
 }
 
 // ---- references
@@ -527,8 +597,11 @@ func (p *dataPage) referencesCard(c *ui.Context) {
 		})
 		refs := a.Project.References
 		if len(refs) == 0 {
-			ui.Text(c, "No reference yet. Add the FASTA the reads were (or will be) mapped to; sample sheets add theirs automatically.").
-				TextColor(t.TextMuted)
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Text(c, "No reference yet. Add the FASTA the reads were (or will be) mapped to; sample sheets add theirs automatically.").
+					TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0)
+				p.reproButton(c)
+			})
 			return
 		}
 		for _, r := range refs {
@@ -552,7 +625,76 @@ func (p *dataPage) referencesCard(c *ui.Context) {
 				if ui.Button(c, "Rename…").Tooltip("Change the reference's label").Clicked() {
 					p.rename = dataRenameDialog{open: true, id: r.ID, label: dataRefName(r)}
 				}
+				if ui.Button(c, "Replace…").Label("Replace " + dataRefName(r) + "'s FASTA").
+					Tooltip("Use another FASTA for this reference; its samples keep it").Clicked() {
+					p.replaceReference(r)
+				}
+				// Only a reference no sample uses can go (the runtime refuses
+				// the others).
+				if len(p.referenceUsers(r.ID)) == 0 && ui.Button(c, "Remove").Label("Remove reference "+dataRefName(r)).
+					Tooltip("Remove this reference from the project (the file itself stays)").Clicked() {
+					p.removeReference(r)
+				}
 			})
+		}
+		p.matchingSection(c)
+	})
+}
+
+// referenceUsers are the samples that use reference id.
+func (p *dataPage) referenceUsers(id string) []string {
+	var users []string
+	for _, s := range p.a.Project.Samples {
+		if s.ReferenceID == id {
+			users = append(users, s.Label())
+		}
+	}
+	return users
+}
+
+// replaceReference is the web's Replace for the reference FASTA: the
+// reference keeps its id and label (update_reference re-reads the
+// sequences; manual name matches to sequences the new file lacks go).
+func (p *dataPage) replaceReference(r model.Reference) {
+	a := p.a
+	path, id, name := a.Project.Path, r.ID, dataRefName(r)
+	a.Go(func() func() {
+		paths := PickFiles("Choose the FASTA for "+name, false)
+		if len(paths) == 0 {
+			return nil
+		}
+		_, err := a.B.ProjectOp(path, "update_reference", core.Obj{"reference_id": id, "source": paths[0]})
+		return func() {
+			if err != nil {
+				a.Toast("Could not replace the reference: %v", err)
+				return
+			}
+			a.Toast("Reference replaced: %s", name)
+			if q := qcFor(a); q != nil {
+				q.match.invalidate()
+			}
+			a.RefreshProject()
+		}
+	})
+}
+
+// removeReference is the web's Remove for the reference FASTA; the
+// runtime refuses a reference samples still use.
+func (p *dataPage) removeReference(r model.Reference) {
+	a := p.a
+	path, id, name := a.Project.Path, r.ID, dataRefName(r)
+	a.Go(func() func() {
+		_, err := a.B.ProjectOp(path, "remove_reference", core.Obj{"reference_id": id})
+		return func() {
+			if err != nil {
+				a.Toast("Could not remove the reference: %v", err)
+				return
+			}
+			a.Toast("Reference removed: %s", name)
+			if q := qcFor(a); q != nil {
+				q.match.invalidate()
+			}
+			a.RefreshProject()
 		}
 	})
 }
@@ -582,8 +724,8 @@ func (p *dataPage) addReference() {
 			} else {
 				a.Toast("Reference added: %s", name)
 			}
-			if p.add.open && p.add.reference == "" {
-				p.add.reference = name
+			if p.add.open && p.add.refID == "" && r.ID != "" {
+				p.add.reference, p.add.refID = dataRefLabel(a, r.ID), r.ID
 			}
 			a.RefreshProject()
 		}
@@ -608,11 +750,13 @@ func (p *dataPage) renameDialog(c *ui.Context) {
 					d.open = false
 				}
 				label := strings.TrimSpace(d.label)
-				if ui.PrimaryButton(c, "Save").Disabled(label == "").Clicked() {
+				if ui.PrimaryButton(c, "Save").Disabled(label == "" || d.busy).Clicked() && !d.busy {
 					path, id := a.Project.Path, d.id
+					d.busy, d.status = true, ""
 					a.Go(func() func() {
 						_, err := a.B.ProjectOp(path, "update_reference", core.Obj{"reference_id": id, "label": label})
 						return func() {
+							d.busy = false
 							if err != nil {
 								d.status = err.Error()
 								return
@@ -689,10 +833,7 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 					p.openSetRef(noRef)
 				}
 			}
-			removeLabel := "Remove"
-			if len(selected) > 0 {
-				removeLabel = "Remove selected"
-			}
+			// Shown once samples are selected (as the run button names them).
 			// The runtime refuses too: a running task would keep writing into
 			// a sample re-added under the same name.
 			busy := 0
@@ -701,17 +842,19 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 					busy++
 				}
 			}
-			remove := ui.Button(c, removeLabel).Disabled(len(selected) == 0 || busy > 0)
-			if busy > 0 {
-				remove = remove.Tooltip(fmt.Sprintf("%s queued or running: cancel or wait before removing",
-					dataPlural(busy, "selected sample is", "selected samples are")))
-			}
-			if remove.Clicked() {
-				p.removeIDs = nil
-				for _, s := range selected {
-					p.removeIDs = append(p.removeIDs, s.ID)
+			if len(selected) > 0 {
+				remove := ui.Button(c, "Remove selected").Disabled(busy > 0)
+				if busy > 0 {
+					remove = remove.Tooltip(fmt.Sprintf("%s queued or running: cancel or wait before removing",
+						dataPlural(busy, "selected sample is", "selected samples are")))
 				}
-				p.removeOpen = true
+				if remove.Clicked() && busy == 0 {
+					p.removeIDs = nil
+					for _, s := range selected {
+						p.removeIDs = append(p.removeIDs, s.ID)
+					}
+					p.removeOpen = true
+				}
 			}
 			runLabel := fmt.Sprintf("Run all pending (%d)", len(pending))
 			if len(selected) > 0 {
@@ -761,7 +904,7 @@ func (p *dataPage) samplesTable(c *ui.Context, samples []model.Sample) {
 		{Title: "Sample", MinWidth: 130},
 		{Title: "Condition", Width: 84},
 		{Title: "Rep", Width: 50, Align: ui.End},
-		{Title: "Raw file", Width: 136},
+		{Title: "Raw file", MinWidth: 136},
 		{Title: "Stages", Width: 226},
 		{Title: "Hybrids", Width: 70, Align: ui.End},
 		{Title: "", ID: "actions", Width: 88},
@@ -770,7 +913,8 @@ func (p *dataPage) samplesTable(c *ui.Context, samples []model.Sample) {
 	p.table.Label = func(i int) string { return samples[i].Label() }
 	// The scroller keeps the columns' widths out of the page's minimum
 	// width: a narrow window scrolls the table, not the page.
-	ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Grow(1).MinHeight(140).Children(func() { p.sampleRows(c, samples, cols, stats, statsLoading) })
+	scroller := ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Grow(1).MinHeight(140).Children(func() { p.sampleRows(c, samples, cols, stats, statsLoading) })
+	p.tableRoom = scroller.LayoutBounds().W
 }
 
 func (p *dataPage) sampleRows(c *ui.Context, samples []model.Sample, cols []ui.TableColumn, stats map[string]qcStats, statsLoading bool) {
@@ -843,7 +987,7 @@ func (p *dataPage) sampleRows(c *ui.Context, samples []model.Sample, cols []ui.T
 		case 7:
 			p.rowAction(c, s, task, active)
 		}
-	}).Width(dataColumnsWidth(cols)).Grow(1)
+	}).Width(max(dataColumnsWidth(cols), p.tableRoom)).Grow(1)
 }
 
 // dataColumnsWidth: the columns' widths, a shared column at its MinWidth:
@@ -1016,20 +1160,22 @@ func (p *dataPage) runDialog(c *ui.Context) {
 			if e := d.time; e != nil && e.Seconds > 0 {
 				ui.Row(c).Gap(8).Children(func() {
 					ui.Text(c, "Estimated time").TextColor(t.TextMuted).Width(130)
-					ui.Text(c, "about "+FormatDuration(e.Seconds)).Bold()
+					ui.Text(c, "about "+FormatDurationRange(e.Low, e.High)).Bold()
 				})
 				basis := fmt.Sprintf("From the speed measured on this computer (%d CPUs).", e.CPU)
 				switch {
 				case e.Measured == 0:
-					basis = fmt.Sprintf("Rough: nothing measured on this computer yet (%d CPUs); the first finished sample calibrates it.", e.CPU)
+					basis = fmt.Sprintf("Rough: nothing measured on this computer yet (%d CPUs), so the range comes from an Apple M1 Pro; the first finished sample calibrates it.", e.CPU)
 				case e.Measured < e.Samples:
-					basis = fmt.Sprintf("Partly measured on this computer (%d of %d samples' formats; %d CPUs).", e.Measured, e.Samples, e.CPU)
+					basis = fmt.Sprintf("Partly measured on this computer (%d of %d samples' formats; %d CPUs); the rest come from an Apple M1 Pro.", e.Measured, e.Samples, e.CPU)
 				}
 				ui.Text(c, basis).FontSize(12).TextColor(t.TextMuted)
+				if e.Samples > 1 {
+					ui.Text(c, fmt.Sprintf("In total, for %d samples. They map one at a time, so a sample waits in the queue for the ones before it; the longest takes about %s on its own.",
+						e.Samples, FormatDuration(e.Longest))).FontSize(12).TextColor(t.TextMuted)
+				}
 			}
-			ui.Text(c, "Each sample runs mapping → .hyb → analysis index as one task; tasks wait in the queue when the CPU / memory budget (Preferences) is used up. "+
-				"While one sample maps, the next one already prepares its reads.").
-				FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, dataRunText(a.Project, d.ids)).FontSize(12).TextColor(t.TextMuted)
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Cancel").Clicked() {
 					d.open = false
@@ -1045,6 +1191,28 @@ func (p *dataPage) runDialog(c *ui.Context) {
 			})
 		})
 	})
+}
+
+// dataRunText says what a run does: a .hyb sample is only indexed, raw
+// reads are mapped first.
+func dataRunText(pr *model.Project, ids []string) string {
+	hyb, raw := 0, 0
+	for _, id := range ids {
+		if s := pr.Sample(id); s != nil && s.Reads.Format == "hyb" {
+			hyb++
+		} else if s != nil {
+			raw++
+		}
+	}
+	queue := "tasks wait in the queue when the CPU / memory budget (Preferences) is used up."
+	switch {
+	case raw == 0:
+		return "Each .hyb sample is indexed for analysis as one task; " + queue
+	case hyb == 0:
+		return "Each sample runs mapping → .hyb → analysis index as one task; " + queue + " While one sample maps, the next one already prepares its reads."
+	}
+	return "Each raw-read sample runs mapping → .hyb → analysis index as one task, and each .hyb sample is indexed for analysis; " + queue +
+		" While one sample maps, the next one already prepares its reads."
 }
 
 func (p *dataPage) startRuns(ids []string) {
@@ -1161,16 +1329,16 @@ func (p *dataPage) openEdit(id string) {
 	if s == nil {
 		return
 	}
-	reference := ""
+	reference, refID := "", ""
 	if r := p.a.Project.Reference(s.ReferenceID); r != nil {
-		reference = dataRefName(*r)
+		reference, refID = dataRefLabel(p.a, r.ID), r.ID
 	}
 	replicate := ""
 	if s.Replicate != nil {
 		replicate = dataReplicate(s.Replicate)
 	}
 	p.edit = dataEditDialog{open: true, id: id, name: s.Label(), condition: s.Condition, replicate: replicate,
-		reference: reference, gene: s.GeneID}
+		reference: reference, refID: refID, gene: s.GeneID}
 }
 
 // dataParseReplicate: "" is none; otherwise a positive whole number.
@@ -1242,6 +1410,7 @@ func (p *dataPage) editDialog(c *ui.Context) {
 			if d.reference == "" {
 				d.reference = "—"
 			}
+			p.syncRef(&d.reference, &d.refID, "—")
 			Field(c, "Reference", func() {
 				ui.Select(c.Key("edit-reference"), &d.reference, refs).Label("Reference")
 			})
@@ -1276,8 +1445,9 @@ func (p *dataPage) saveEdit() {
 		return
 	}
 	var referenceID any
-	if r := p.refByLabel(d.reference); r != nil {
-		referenceID = r.ID
+	p.syncRef(&d.reference, &d.refID, "—")
+	if d.refID != "" {
+		referenceID = d.refID
 	}
 	gene := d.gene
 	if gene == "—" {
@@ -1309,7 +1479,7 @@ func (p *dataPage) openSetRef(samples []model.Sample) {
 		d.ids = append(d.ids, s.ID)
 	}
 	if refs := p.refLabels(); len(refs) > 0 {
-		d.reference = refs[0]
+		d.reference, d.refID = refs[0], p.a.Project.References[0].ID
 	}
 	p.setRef = d
 }
@@ -1328,6 +1498,7 @@ func (p *dataPage) setRefDialog(c *ui.Context) {
 		}
 	}
 	refs := p.refLabels()
+	p.syncRef(&d.reference, &d.refID, "")
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c).Width(460).Gap(12).Children(func() {
 			ui.Text(c, "Set the reference of "+dataPlural(len(names), "sample", "samples")).FontSize(18).Bold()
@@ -1347,7 +1518,7 @@ func (p *dataPage) setRefDialog(c *ui.Context) {
 				if ui.Button(c, "Cancel").Disabled(d.busy).Clicked() {
 					d.open = false
 				}
-				if ui.PrimaryButton(c, "Set reference").Disabled(d.busy || p.refByLabel(d.reference) == nil || len(names) == 0).Clicked() {
+				if ui.PrimaryButton(c, "Set reference").Disabled(d.busy || d.refID == "" || len(names) == 0).Clicked() {
 					p.saveSetRef()
 				}
 			})
@@ -1360,7 +1531,8 @@ func (p *dataPage) setRefDialog(c *ui.Context) {
 func (p *dataPage) saveSetRef() {
 	a := p.a
 	d := &p.setRef
-	r := p.refByLabel(d.reference)
+	p.syncRef(&d.reference, &d.refID, "")
+	r := p.a.Project.Reference(d.refID)
 	if r == nil {
 		return
 	}
@@ -1421,13 +1593,16 @@ func (p *dataPage) importRaw() {
 			for i, path := range paths {
 				names[i] = dataReadSuffix.ReplaceAllString(filepath.Base(path), "")
 			}
-			reference := ""
+			reference, refID := "", ""
 			if r := a.Project.Reference(a.Selected.ReferenceID); r != nil {
-				reference = dataRefName(*r)
+				refID = r.ID
 			} else if len(a.Project.References) > 0 {
-				reference = dataRefName(a.Project.References[0])
+				refID = a.Project.References[0].ID
 			}
-			p.add = dataAddDialog{open: true, paths: paths, names: names, reference: reference, mode: dataStorageModes[0]}
+			if refID != "" {
+				reference = dataRefLabel(a, refID)
+			}
+			p.add = dataAddDialog{open: true, paths: paths, names: names, reference: reference, refID: refID, mode: dataStorageModes[0]}
 		}
 	})
 }
@@ -1438,6 +1613,7 @@ func (p *dataPage) addDialog(c *ui.Context) {
 	if !d.open {
 		return
 	}
+	p.syncRef(&d.reference, &d.refID, "")
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c).Width(620).Gap(12).Children(func() {
 			ui.Text(c, "Import "+dataPlural(len(d.paths), "file", "files")).FontSize(18).Bold()
@@ -1512,7 +1688,8 @@ func (p *dataPage) addDialog(c *ui.Context) {
 func (p *dataPage) addSamples() {
 	a := p.a
 	d := &p.add
-	r := p.refByLabel(d.reference)
+	p.syncRef(&d.reference, &d.refID, "")
+	r := p.a.Project.Reference(d.refID)
 	if r == nil {
 		d.status = "Choose the reference for these samples (needed for mapping)."
 		return
@@ -1786,7 +1963,7 @@ func (p *dataPage) runCheck(quiet bool) {
 	p.checkSeq++
 	seq := p.checkSeq
 	if !quiet {
-		p.checking = true
+		p.checking++
 	}
 	a.Go(func() func() {
 		result, err := a.B.ProjectOp(path, "check_inputs", nil)
@@ -1800,7 +1977,7 @@ func (p *dataPage) runCheck(quiet bool) {
 		}
 		return func() {
 			if !quiet {
-				p.checking = false
+				p.checking--
 			}
 			if seq != p.checkSeq || a.Project == nil || a.Project.Path != path {
 				return
@@ -1865,6 +2042,12 @@ func (p *dataPage) relink(item dataInputItem) {
 			}
 			delete(p.inputs, item.Kind+":"+item.ID)
 			a.Toast("Relinked %s.", dataBasename(paths[0]))
+			if item.Kind == "reference" {
+				// the new FASTA's sequences are matched again, as after Replace
+				if q := qcFor(a); q != nil {
+					q.match.invalidate()
+				}
+			}
 			a.RefreshProject()
 		}
 	})

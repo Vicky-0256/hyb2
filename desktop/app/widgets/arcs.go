@@ -32,13 +32,30 @@ type Arcs struct {
 	Mono ui.Color
 	// Features is a gene track drawn under the arcs (e.g. mature peptides).
 	Features []Feature
+	// StylesA, when aligned with A and there is no B, draw each of A's
+	// arcs in its own colour, width and opacity (the web's pair styles by
+	// engine: CPLfold layers, COMRADES evidence, ViennaRNA pair types).
+	StylesA []ArcStyle
 	// Selected is the inspected position (0 for none), drawn as a marker:
 	// a click picks it, Left and Right step it while the diagram has the
 	// keyboard focus (the web's nucleotide inspector).
 	Selected int
+	// Gap, when Gap.From and Gap.To are more than 1 apart, is a chain
+	// break: the positions between Gap.From (strand A's position next to
+	// the break) and Gap.To (strand B's) take no room, so two regions of
+	// one RNA (CPLcofold) draw side by side, as the web's A+B arcs, with
+	// the backbone broken there. From > To when strand B lies before
+	// strand A on the RNA (region 2 before region 1).
+	Gap Gap
 
 	shared map[Pair]bool
 	keyed  struct{ a, b int }
+}
+
+// ArcStyle is how one arc is drawn.
+type ArcStyle struct {
+	Color ui.Color
+	Width float32
 }
 
 // OverlayArc is one extra arc (1-based positions, I < J).
@@ -47,6 +64,82 @@ type OverlayArc struct {
 	Up    bool
 	Color ui.Color
 	Width float32
+}
+
+// Gap is a chain break between two drawn stretches (see Arcs.Gap).
+type Gap struct{ From, To int }
+
+// Bounds are the last position before the gap and the first after it on
+// the axis, whichever strand each belongs to.
+func (g Gap) Bounds() (lo, hi int) { return min(g.From, g.To), max(g.From, g.To) }
+
+// on reports whether the gap collapses anything.
+func (g Gap) on() bool {
+	lo, hi := g.Bounds()
+	return hi > lo+1
+}
+
+// Label is the chain break's label: "A | B", or "B | A" when strand B is
+// drawn first.
+func (g Gap) Label() string {
+	if g.From > g.To {
+		return "B | A"
+	}
+	return "A | B"
+}
+
+// Axis is where position pos draws along the axis: pos itself, or, past a
+// gap, as if the second stretch followed the first.
+func (g Gap) Axis(pos float64) float64 {
+	lo, hi := g.Bounds()
+	switch {
+	case !g.on() || pos <= float64(lo):
+		return pos
+	case pos >= float64(hi):
+		return pos - float64(hi-lo-1)
+	}
+	return float64(lo) + (pos-float64(lo))/float64(hi-lo)
+}
+
+// Position is the position drawn at axis value v (Axis's inverse).
+func (g Gap) Position(v float64) float64 {
+	lo, hi := g.Bounds()
+	switch {
+	case !g.on() || v <= float64(lo):
+		return v
+	case v >= float64(lo+1):
+		return v + float64(hi-lo-1)
+	}
+	return float64(lo) + (v-float64(lo))*float64(hi-lo)
+}
+
+// Ticks are round positions from start to end, about n of them, none
+// inside the gap: each strand keeps its own positions.
+func (g Gap) Ticks(start, end float64, n int) []float64 {
+	span := g.Axis(end) - g.Axis(start)
+	if span <= 0 || n < 1 {
+		return nil
+	}
+	step := math.Pow(10, math.Floor(math.Log10(span/5)))
+	for _, m := range []float64{1, 2, 5, 10} {
+		if span/(step*m) <= float64(n) {
+			step *= m
+			break
+		}
+	}
+	var ticks []float64
+	add := func(lo, hi float64) {
+		for pos := math.Ceil(lo/step) * step; pos <= hi; pos += step {
+			ticks = append(ticks, pos)
+		}
+	}
+	if lo, hi := g.Bounds(); g.on() && start < float64(hi) && end > float64(lo) {
+		add(start, math.Min(end, float64(lo)))
+		add(math.Max(start, float64(hi)), end)
+		return ticks
+	}
+	add(start, end)
+	return ticks
 }
 
 // Feature is one block of the gene track (1-based, inclusive).
@@ -79,9 +172,13 @@ func (s *Arcs) Step(delta int) {
 	} else {
 		s.Selected = max(1, min(s.Length, s.Selected+delta))
 	}
+	// over the chain break: from the last position before it to the first after
+	if lo, hi := s.Gap.Bounds(); s.Gap.on() && s.Selected > lo && s.Selected < hi {
+		s.Selected = map[bool]int{true: hi, false: lo}[delta >= 0]
+	}
 	if pos := float64(s.Selected); pos < s.Start || pos > s.End {
-		span := s.End - s.Start
-		s.setRange(pos-span/2, pos+span/2)
+		at, span := s.Gap.Axis(pos), s.Gap.Axis(s.End)-s.Gap.Axis(s.Start)
+		s.setAxis(at-span/2, at+span/2)
 	}
 }
 
@@ -130,21 +227,25 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 		if ev.Kind != ui.InputScroll || width <= 0 {
 			return false
 		}
-		at := s.Start + float64(ev.X/width)*(s.End-s.Start)
+		g := s.Gap
+		a0, a1 := g.Axis(s.Start), g.Axis(s.End)
+		at := a0 + float64(ev.X/width)*(a1-a0)
 		factor := math.Pow(1.0015, float64(ev.DY))
-		s.setRange(at-(at-s.Start)*factor, at+(s.End-at)*factor)
+		s.setAxis(at-(at-a0)*factor, at+(a1-at)*factor)
 		return true
 	})
 	if dx, _, ok := box.Dragged(); ok && dx != 0 && width > 0 {
-		shift := -float64(dx) / float64(width) * (s.End - s.Start)
-		s.setRange(s.Start+shift, s.End+shift)
+		a0, a1 := s.Gap.Axis(s.Start), s.Gap.Axis(s.End)
+		shift := -float64(dx) / float64(width) * (a1 - a0)
+		s.setAxis(a0+shift, a1+shift)
 	}
 	if box.DoubleClicked() {
 		s.setRange(1, float64(s.Length))
 	}
 	event := ArcEvent{}
 	if px, _, over := box.PointerPosition(); over && width > 0 {
-		event.Position = int(math.Round(s.Start + float64(px/width)*(s.End-s.Start)))
+		a0, a1 := s.Gap.Axis(s.Start), s.Gap.Axis(s.End)
+		event.Position = int(math.Round(s.Gap.Position(a0 + float64(px/width)*(a1-a0))))
 		event.Hover = true
 	}
 	switch {
@@ -173,8 +274,10 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 		if !below {
 			base = r.Y + r.H - 22 - track
 		}
-		span := s.End - s.Start
-		x := func(pos int) float32 { return r.X + float32((float64(pos)-s.Start)/span)*r.W }
+		g := s.Gap
+		a0 := g.Axis(s.Start)
+		span := g.Axis(s.End) - a0
+		x := func(pos int) float32 { return r.X + float32((g.Axis(float64(pos))-a0)/span)*r.W }
 		p.Clip(r, 6, func() {
 			if s.RegionEnd > s.RegionStart {
 				x0, x1 := x(s.RegionStart), x(s.RegionEnd)
@@ -200,6 +303,34 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 				b := int(math.Ceil(weights[index] / maxWeight * (buckets - 1)))
 				return max(0, min(buckets-1, b))
 			}
+			// A alone with a style per arc: one path per style.
+			styled := len(s.StylesA) == len(s.A) && len(s.A) > 0 && len(s.B) == 0 && s.Mono.A == 0
+			drawStyled := func() {
+				paths := map[ArcStyle]*ui.Path{}
+				var order []ArcStyle
+				for index, pr := range s.A {
+					if !s.visible(pr.I, pr.J) {
+						continue
+					}
+					style := s.StylesA[index]
+					path := paths[style]
+					if path == nil {
+						path = &ui.Path{}
+						paths[style] = path
+						order = append(order, style)
+					}
+					x0, x1 := x(min(pr.I, pr.J)), x(max(pr.I, pr.J)) // a pair given I > J still arcs up
+					height := min((x1-x0)/2, maxUp)
+					k := float32(0.5523)
+					mid, rx := (x0+x1)/2, (x1-x0)/2
+					path.MoveTo(x0, base).
+						CubeTo(x0, base-height*k, mid-rx*k, base-height, mid, base-height).
+						CubeTo(mid+rx*k, base-height, x1, base-height*k, x1, base)
+				}
+				for _, style := range order {
+					p.StrokePath(paths[style], max(style.Width, 0.5), style.Color)
+				}
+			}
 			draw := func(pairs []Pair, up bool, color ui.Color, onlyShared bool) {
 				weights := s.WeightA
 				if !up {
@@ -208,13 +339,13 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 				var paths [buckets]ui.Path
 				var counts [buckets]int
 				for index, pr := range pairs {
-					if float64(pr.J) < s.Start || float64(pr.I) > s.End {
+					if !s.visible(pr.I, pr.J) {
 						continue
 					}
 					if s.shared[pr] != onlyShared {
 						continue
 					}
-					x0, x1 := x(pr.I), x(pr.J)
+					x0, x1 := x(min(pr.I, pr.J)), x(max(pr.I, pr.J)) // a pair given I > J still arcs up
 					height := (x1 - x0) / 2
 					limit := maxUp
 					if !up {
@@ -250,7 +381,11 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 			if s.Mono.A > 0 {
 				colorA, colorB, colorShared = s.Mono, s.Mono, s.Mono
 			}
-			draw(s.A, true, colorA, false)
+			if styled {
+				drawStyled()
+			} else {
+				draw(s.A, true, colorA, false)
+			}
 			draw(s.B, false, colorB, false)
 			draw(s.A, true, colorShared, true)
 			draw(s.B, false, colorShared, true)
@@ -263,7 +398,7 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 			overlay := map[overlayKey]*ui.Path{}
 			var order []overlayKey
 			for _, o := range s.Overlay {
-				if float64(o.J) < s.Start || float64(o.I) > s.End {
+				if !s.visible(o.I, o.J) {
 					continue
 				}
 				key := overlayKey{o.Color, max(o.Width, 1), o.Up}
@@ -273,7 +408,7 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 					overlay[key] = path
 					order = append(order, key)
 				}
-				x0, x1 := x(o.I), x(o.J)
+				x0, x1 := x(min(o.I, o.J)), x(max(o.I, o.J))
 				limit, dir := maxUp, float32(-1)
 				if !o.Up {
 					limit, dir = maxDown, 1
@@ -290,7 +425,16 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 			for _, key := range order {
 				p.StrokePath(overlay[key], key.width, key.color)
 			}
-			p.Line(r.X, base, r.X+r.W, base, 1, t.Border)
+			if lo, hi := g.Bounds(); g.on() && float64(lo) >= s.Start && float64(hi) <= s.End {
+				// the chain break, as the web's "A | B"
+				nick := (x(lo) + x(hi)) / 2
+				half := min(9, max(3, (x(hi)-x(lo))*0.3))
+				p.Line(r.X, base, nick-half, base, 1, t.Border)
+				p.Line(nick+half, base, r.X+r.W, base, 1, t.Border)
+				p.Text(nick-13, base+14, g.Label(), 10, t.TextMuted)
+			} else {
+				p.Line(r.X, base, r.X+r.W, base, 1, t.Border)
+			}
 			if pos := float64(s.Selected); s.Selected > 0 && pos >= s.Start && pos <= s.End {
 				sx := x(s.Selected)
 				p.Line(sx, r.Y+4, sx, r.Y+r.H-22-track, 1, t.Accent.Alpha(0.7))
@@ -316,15 +460,11 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 			}
 		})
 		// Ticks along the bottom.
-		step := math.Pow(10, math.Floor(math.Log10(span/5)))
-		for _, m := range []float64{1, 2, 5, 10} {
-			if span/(step*m) <= 8 {
-				step *= m
-				break
-			}
-		}
-		for pos := math.Ceil(s.Start/step) * step; pos <= s.End; pos += step {
+		for _, pos := range g.Ticks(s.Start, s.End, 8) {
 			px := x(int(pos))
+			if lo, hi := g.Bounds(); g.on() && math.Abs(float64(px-(x(lo)+x(hi))/2)) < 24 {
+				continue // the chain break's label is there
+			}
 			p.Line(px, r.Y+r.H-18, px, r.Y+r.H-14, 1, t.Border)
 			label := fmt.Sprint(int(pos))
 			p.Text(px-float32(len(label))*3, r.Y+r.H-3, label, 10, t.TextMuted)
@@ -334,7 +474,12 @@ func (s *Arcs) Show(c *ui.Context, h float32, colorA, colorB, colorShared ui.Col
 }
 
 func (s *Arcs) setRange(start, end float64) {
-	length := math.Max(float64(s.Length), 2)
+	s.setAxis(s.Gap.Axis(start), s.Gap.Axis(end))
+}
+
+// setAxis shows axis values start to end (see Gap.Axis).
+func (s *Arcs) setAxis(start, end float64) {
+	length := math.Max(s.Gap.Axis(float64(s.Length)), 2)
 	// at least 20 nt shown, but never more than the RNA
 	span := math.Min(math.Max(20, end-start), length-1)
 	if start+span > length {
@@ -343,5 +488,11 @@ func (s *Arcs) setRange(start, end float64) {
 	if start < 1 {
 		start = 1
 	}
-	s.Start, s.End = start, start+span
+	s.Start, s.End = s.Gap.Position(start), s.Gap.Position(start+span)
+}
+
+// visible: an arc between positions i and j (either order) reaches into
+// the range shown.
+func (s *Arcs) visible(i, j int) bool {
+	return float64(max(i, j)) >= s.Start && float64(min(i, j)) <= s.End
 }

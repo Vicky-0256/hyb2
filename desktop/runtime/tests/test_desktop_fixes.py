@@ -87,6 +87,16 @@ class ComradesSeedTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "longer than"):
                 comrades.evidence_arms([path], "G", "ACGU", 1, 4)
 
+    def test_evidence_keeps_twenty_record_ids_a_pair(self):
+        from desktop.runtime import comrades
+        mapped = [(1, 9, f"r{k}") for k in range(25)] + [(2, 8, None), (2, 8, "x")]
+        entries = comrades.aggregate_evidence(mapped)
+        self.assertEqual([(e["one"], e["two"], e["count"]) for e in entries], [(1, 9, 25), (2, 8, 2)])
+        self.assertEqual(entries[0]["recordIds"], [f"r{k}" for k in range(20)])
+        self.assertEqual(entries[1]["recordIds"], ["x"])
+        self.assertEqual(comrades._record_id(b"read7\tACGU", 3), "read7")
+        self.assertEqual(comrades._record_id(b"\tACGU", 3), "line_3")
+
     def test_seed_is_trimmed_and_cut_as_the_web(self):
         from desktop.runtime import comrades
         # String(seed).trim().slice(0, 128): UTF-16 units, JavaScript whitespace
@@ -243,6 +253,34 @@ class CplfoldLimitTests(unittest.TestCase):
         module.set_host_hard_max_sequence_length(1000)
         self.assertEqual(module._request_maximum(1000), 1000)
         self.assertEqual(len(module._sequence("A" * 900, 1000)), 900)
+
+
+class TaskMainTests(unittest.TestCase):
+    """The single-shot task bridge always leaves a result.json the shell can show."""
+
+    def run_main(self, handler):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = Path(tmp) / "task-request.json"
+            request.write_text(json.dumps({"operation": "validate_project", "path": tmp}))
+            argv = ["bridge", "--request", str(request)]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(bridge, "handle", handler), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out, mock.patch("sys.stderr", new_callable=io.StringIO):
+                code = bridge.main()
+            return code, json.loads((Path(tmp) / "result.json").read_text()), json.loads(out.getvalue())
+
+    def test_an_unexpected_exception_is_reported(self):
+        def boom(request, repo_root=None):
+            raise KeyError("sample_id")
+        code, result, printed = self.run_main(boom)
+        self.assertEqual(code, 1)
+        self.assertEqual(result, {"ok": False, "error": "KeyError: 'sample_id'"})
+        self.assertEqual(printed, result)
+
+    def test_a_result_with_odd_values_still_succeeds(self):
+        code, result, printed = self.run_main(lambda request, repo_root=None: {"ok": True, "path": Path("/x/y"), "nan": float("nan"), "name": "é"})
+        self.assertEqual(code, 0)
+        self.assertEqual(result, {"ok": True, "path": "/x/y", "nan": None, "name": "é"})
+        self.assertEqual(printed, result)
 
 
 if __name__ == "__main__":

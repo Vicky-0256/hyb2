@@ -65,6 +65,7 @@ ENGINES: Dict[str, Dict[str, Any]] = {
 CPLCOFOLD_SETTINGS = {"beamSize": 20, "energyDelta": 5, "maxPhase1": 3, "energyModel": "DP09", "alpha": 0.0, "beta": 0.0}
 BATCH_LIMIT = 2000
 AUDIT_HEADER = "line\tid\tstatus\told_energy\tnew_energy\tnote"
+INVALID_ENERGY_NOTE = "invalid energy returned"
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 _BASES = re.compile(r"^[ACGU]+$")
 
@@ -193,6 +194,18 @@ def fold_pairs(root: str, engine: str, pairs: List[Tuple[str, str]]) -> List[flo
 
 def _fold_chunk(root: str, engine: str, start: int, pairs: List[Tuple[str, str]]) -> Tuple[int, List[float]]:
     return start, fold_pairs(root, engine, pairs)
+
+
+def _abandon_pool(pool: ProcessPoolExecutor) -> None:
+    """Shut pool down after a failure: cancel the queued chunks, stop the
+    workers still folding and do not wait for them."""
+    processes = list((getattr(pool, "_processes", None) or {}).values())
+    pool.shutdown(wait=False, cancel_futures=True)
+    for process in processes:
+        try:
+            process.terminate()
+        except (OSError, AttributeError, ValueError):
+            pass
 
 
 def _worker_init(root: str, engine: str) -> None:
@@ -356,14 +369,21 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
             done += len(pairs[start:start + chunk])
             report()
     else:
-        with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"), initializer=_worker_init,
-                                 initargs=(str(root), params["engine"])) as pool:
+        pool = ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"), initializer=_worker_init,
+                                   initargs=(str(root), params["engine"]))
+        try:
             futures = [pool.submit(_fold_chunk, str(root), params["engine"], start, pairs[start:start + chunk]) for start in starts]
             for future in as_completed(futures):
                 start, values = future.result()
                 energies[start:start + len(values)] = values
                 done += len(values)
                 report()
+        except BaseException:
+            # one failing chunk fails the run now: the chunks not started
+            # are dropped and the run does not wait for the running ones
+            _abandon_pool(pool)
+            raise
+        pool.shutdown(wait=True)
     fold_seconds = time.monotonic() - fold_started
 
     # 3. the updated .hyb (only column 3 of updated rows), audit and parameters
@@ -378,7 +398,11 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
             continue
         energy = energies[item]
         if energy is None or not math.isfinite(energy):
-            raise ValueError("Invalid energy returned")
+            # one bad fold keeps its row's energy (noted in the audit)
+            # instead of failing the whole run
+            unchanged += 1
+            audit.append("\t".join(_tsv(v) for v in (line_no, rid, "unchanged", old, old, INVALID_ENERGY_NOTE)))
+            continue
         updates[line_no] = (old, energy)
         updated += 1
         audit.append("\t".join(_tsv(v) for v in (line_no, rid, "updated", old, "%.2f" % energy, "")))
@@ -423,7 +447,7 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
                "engine_name": engine["name"], "records": params["records"], "sample_id": sample_id,
                "source_file": hyb_path.name, "workers": workers}
     message = (f"{updated:,} energies updated with {engine['name']} in {_duration(time.monotonic() - started)}; "
-               f"{unchanged:,} valid rows unchanged. Comments and unparsed source lines are preserved.")
+               f"{unchanged:,} valid rows unchanged. Comments and unparsed source lines are preserved. Download the audit for details.")
     result = {"ok": True, "status": "succeeded", "task_id": task_id, "run_dir": str(run_dir), "output": str(out_hyb),
               "outputs": {"hyb": str(out_hyb), "audit": str(run_dir / "audit.tsv"), "parameters": str(run_dir / "parameters.json"),
                           "zip": str(archive)},

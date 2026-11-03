@@ -256,6 +256,24 @@ class InterRnaCompareTests(unittest.TestCase):
         self.assertEqual({(k >> 32, k & 0xFFFFFFFF): int(c) for k, c in zip(keys.tolist(), counts.tolist())},
                          {(0, 20): 1, (10, 20): 2})
 
+    def test_pair_cells_skip_malformed_rows(self):
+        from desktop.runtime import compare
+
+        hyb = Path(self.tmp.name) / "huge.hyb"
+        out = Path(self.tmp.name) / "huge.contact.txt"
+        tail = "\t1e-5\t\t-10\tType_1\n"
+        hyb.write_text(f"r1\tA\t.\t{GENE_X}\t1\t2\t5\t14\t1\t{GENE_Y}\t1\t2\t21\t29{tail}"
+                       f"r2\tA\t.\t{GENE_X}\t1\t2\t1\t{2 ** 40}\t1\t{GENE_Y}\t1\t2\t1\t{2 ** 40}{tail}"  # would be 10^22 cells
+                       f"r3\tA\t.\t{GENE_X}\t1\t2\t{2 ** 31}\t{2 ** 31}\t1\t{GENE_Y}\t1\t2\t1\t1{tail}"  # overflows the key
+                       f"r4\tA\t.\t{GENE_X}\t1\t2\t1\t20000\t1\t{GENE_Y}\t1\t2\t1\t9{tail}")  # an arm of 20,000 nt
+        skipped = {}
+        keys, counts, records = compare.pair_cells(hyb, GENE_X, GENE_Y, skipped)
+        self.assertEqual((records, skipped), (1, {"out_of_range": 3}))
+        self.assertEqual({(k >> 32, k & 0xFFFFFFFF): int(c) for k, c in zip(keys.tolist(), counts.tolist())},
+                         {(0, 20): 1, (10, 20): 1})
+        self.assertEqual(compare.write_pair_contact(hyb, GENE_X, GENE_Y, out), 1)
+        self.assertIn("# 3 malformed rows skipped", out.read_text())
+
     def test_run_writes_pair_maps_and_exports(self):
         out = self._run()
         summary = json.loads((out / "summary.json").read_text())

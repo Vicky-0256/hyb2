@@ -35,7 +35,9 @@ package views
 //	            "gene2": "<RNA Y>" (inter-RNA results only: y is on it)}
 //	           The top bar's selection and gene are set to the same values
 //	           first, so Explore shows the right data even if it ignores the
-//	           focus fields.
+//	           focus fields. selectionKey is "c:<condition>" or "s:<sample>",
+//	           never "all": the A / B pickers offer GroupOptions, which leave
+//	           every-sample merge out.
 //	structure: {"pair": [taskIdA, taskIdB], "pairLabels": [labelA, labelB]}
 //	           (Fold A & B: the Structure page shows A above, B below once
 //	           both finish).
@@ -98,6 +100,12 @@ type comparisonSummary struct {
 	SizeFactors      []float64 `json:"size_factors"`
 	SimilarityCells  int64     `json:"similarity_cells"`
 	SimilarityCap    float64   `json:"similarity_cap"`
+	// CellsTotal (cells with a count in any sample) is in summary.json
+	// only; Timings.TotalS is the run time.
+	CellsTotal int64 `json:"cells_total"`
+	Timings    struct {
+		TotalS *float64 `json:"total_s"`
+	} `json:"timings"`
 }
 
 type comparisonEntry struct {
@@ -263,6 +271,7 @@ type comparePage struct {
 	cache      map[string]*comparisonResult
 	reading    map[string]bool
 	readErr    map[string]string
+	readGen    int // bumped by clearResults; an older read's answer is dropped
 
 	direction int // 0 all, 1 higher in A (up), 2 higher in B (down)
 	table     ui.ListState
@@ -299,6 +308,8 @@ type comparePage struct {
 
 	foldOpen bool
 	fold     cmpFoldPlan
+	// arcMapFed is the test "Use in arc map" last sent to the Structure page.
+	arcMapFed string
 
 	// panels of the selected test (compare_panels.go)
 	panels cmpPanels
@@ -317,9 +328,7 @@ func (p *comparePage) reset() {
 	p.measure, p.normalise, p.simPanel, p.topQuantile = cmpMeasureRecords, cmpNormaliseLibrary, cmpPanelWhite, 0.95
 	p.comparisons, p.listErr, p.loading = nil, "", false
 	p.mode, p.selectedID = cmpModeTest, ""
-	p.cache = map[string]*comparisonResult{}
-	p.reading = map[string]bool{}
-	p.readErr = map[string]string{}
+	p.clearResults()
 	p.direction, p.row = 0, -1
 	p.table.Selected = &p.row
 	p.heat = widgets.NewHeatmap()
@@ -336,8 +345,19 @@ func (p *comparePage) reset() {
 	p.quick.heatKey, p.quick.rowsKey = "", ""
 	p.quick.rows, p.quick.seq = nil, p.quick.seq+1
 	p.foldOpen = false
+	p.arcMapFed = ""
 	p.runMsg = ""
 	p.panels.reset()
+}
+
+// clearResults forgets the read tests and the views drawn from them; reads
+// still in flight are dropped when they answer.
+func (p *comparePage) clearResults() {
+	p.cache = map[string]*comparisonResult{}
+	p.reading = map[string]bool{}
+	p.readErr = map[string]string{}
+	p.readGen++
+	p.heatKey, p.simKey, p.shownKey = "", "", ""
 }
 
 func (p *comparePage) Show() {
@@ -361,7 +381,7 @@ func (p *comparePage) Show() {
 
 // defaultGroups picks the first two conditions (or selections) for A and B.
 func (p *comparePage) defaultGroups() {
-	options := p.a.SelectionOptions()
+	options := p.a.GroupOptions()
 	var conditions []SelectionOption
 	keys := map[string]bool{}
 	for _, o := range options {
@@ -448,6 +468,10 @@ func (p *comparePage) entry(id string) *comparisonEntry {
 	return nil
 }
 
+// cmpReadLimit is how many significant cells (the most significant) the
+// page reads, draws and exports as the map.
+const cmpReadLimit = 250_000
+
 // ensureResult reads the selected comparison once.
 func (p *comparePage) ensureResult() {
 	a := p.a
@@ -455,16 +479,16 @@ func (p *comparePage) ensureResult() {
 	if id == "" || p.entry(id) == nil || p.cache[id] != nil || p.reading[id] || p.readErr[id] != "" || a.Project == nil {
 		return
 	}
-	path := a.Project.Path
+	path, gen := a.Project.Path, p.readGen
 	p.reading[id] = true
 	a.Go(func() func() {
-		raw, err := a.B.ProjectOp(path, "read_comparison", core.Obj{"comparison_id": id, "limit": 250000})
+		raw, err := a.B.ProjectOp(path, "read_comparison", core.Obj{"comparison_id": id, "limit": cmpReadLimit})
 		var result comparisonResult
 		if err == nil {
 			err = model.Decode(raw, &result)
 		}
 		return func() {
-			if a.Project == nil || a.Project.Path != path {
+			if a.Project == nil || a.Project.Path != path || p.readGen != gen {
 				return
 			}
 			delete(p.reading, id)
@@ -861,7 +885,7 @@ func (p *comparePage) controls(c *ui.Context) {
 	a := p.a
 	t := c.Theme()
 	Card(c, "", func() {
-		options := a.SelectionOptions()
+		options := a.GroupOptions()
 		if len(options) < 2 {
 			ui.Text(c, "Comparisons need two analysed conditions or samples. Set conditions on the Data page and run the samples.").TextColor(t.TextMuted)
 			return
@@ -901,7 +925,7 @@ func (p *comparePage) controls(c *ui.Context) {
 						ui.NumberInput(c.Key("cmp-min"), &p.minCount, 0, 1e6, 1).Width(110).Label("Minimum count")
 					})
 					Field(c, "Merge range (nt)", func() {
-						ui.NumberInput(c.Key("cmp-range"), &p.mergeRange, 0, 10000, 10).Width(110).Label("Merge range")
+						ui.NumberInput(c.Key("cmp-range"), &p.mergeRange, 0, 100000, 10).Width(110).Label("Merge range")
 					})
 					Field(c, "padj cutoff", func() {
 						ui.NumberInput(c.Key("cmp-padj"), &p.padj, 0.0001, 1, 0.01).Width(110).Label("padj cutoff")
@@ -982,8 +1006,7 @@ func (p *comparePage) list(c *ui.Context) {
 		ui.Row(c).Children(func() {
 			ui.Text(c, "Differential tests").FontSize(16).Bold().Grow(1)
 			if ui.Button(c, "Refresh").Clicked() {
-				p.cache = map[string]*comparisonResult{}
-				p.readErr = map[string]string{}
+				p.clearResults()
 				p.loadList()
 			}
 		})
@@ -1109,7 +1132,11 @@ func (p *comparePage) results(c *ui.Context) {
 	if p.row >= len(shown) {
 		p.row = -1
 	}
+	stale := !p.inputsCurrent(e)
 	Card(c, "", func() {
+		if stale {
+			ui.Text(c, cmpStaleNotice).FontSize(12).TextColor(t.Warning)
+		}
 		s := result.Summary
 		cutoff := 0.05
 		if e.Parameters.PadjCutoff != nil {
@@ -1124,21 +1151,16 @@ func (p *comparePage) results(c *ui.Context) {
 			ui.Text(c, fmt.Sprintf("%s · DESeq2 on %s cells (10 nt) · padj < %g · log2FC = A / B",
 				genes, FormatNumber(s.CellsTested), cutoff)).FontSize(12).TextColor(t.TextMuted)
 		})
-		sizeFactors := make([]string, len(s.SizeFactors))
-		for i, v := range s.SizeFactors {
-			sizeFactors[i] = fmt.Sprintf("%.2f", v)
-		}
+		// the web card's statistics (deseq-card.js renderResult)
 		ui.Row(c).Gap(10).Wrap().Children(func() {
-			cmpStat(c, "Significant cells", FormatNumber(s.Significant), t.Text)
-			cmpStat(c, "Higher in "+ctx.LabelA, FormatNumber(s.SignificantUp), cmpRed)
-			cmpStat(c, "Higher in "+ctx.LabelB, FormatNumber(s.SignificantDown), cmpBlue)
-			cmpStat(c, "Interactions A / B", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text).
-				Tooltip("Merged interactions higher in A / higher in B")
-			if n := len(e.SamplesOne); n > 0 && n < len(sizeFactors) {
-				cmpStat(c, "Size factors A · B", strings.Join(sizeFactors[:n], " ")+" · "+strings.Join(sizeFactors[n:], " "), t.Text).
-					Tooltip("DESeq2 size factors, in sample order: " + strings.Join(append(append([]string{}, e.SamplesOne...), e.SamplesTwo...), ", "))
-			} else {
-				cmpStat(c, "Size factors", strings.Join(sizeFactors, " "), t.Text)
+			cmpFact(c, "Cells tested", cmpCellsTested(s, e.Parameters.MinCount), t.Text)
+			cmpFact(c, "Significant (padj < "+jsNumber(cutoff)+")", FormatNumber(s.Significant)+" cells", t.Text)
+			cmpFact(c, "Higher in "+ctx.LabelA, FormatNumber(s.SignificantUp)+" cells · "+FormatNumber(s.InteractionsUp)+" interactions", cmpRed)
+			cmpFact(c, "Higher in "+ctx.LabelB, FormatNumber(s.SignificantDown)+" cells · "+FormatNumber(s.InteractionsDown)+" interactions", cmpBlue)
+			cmpFact(c, "Size factors", cmpSizeFactors(s.SizeFactors, " · "), t.Text).
+				Tooltip("DESeq2 size factors, in sample order: " + p.sampleNames(append(append([]string{}, e.SamplesOne...), e.SamplesTwo...)))
+			if s.Timings.TotalS != nil {
+				cmpFact(c, "Run time", cmpSeconds(*s.Timings.TotalS), t.Text)
 			}
 		})
 		ui.Text(c, "padj is corrected over every tested cell. Before reporting an interaction, check that each replicate supports it (open the region in Explore for each sample): a small padj with a low mean count can still come from one replicate.").
@@ -1155,30 +1177,49 @@ func (p *comparePage) results(c *ui.Context) {
 				} else {
 					p.heat.Highlight = widgets.Cell{}
 				}
-				ev := p.heat.Show(c.Key("cmp-heat"), p.mapSide(), "Significant cells: red higher in A, blue higher in B; stronger colour, smaller padj")
-				if ev.Clicked >= 0 {
-					cells := p.heat.Cells()
-					cell := cells[ev.Clicked]
-					p.pickNearest(shown, cell.X, cell.Y, ctx)
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+					if ui.Button(c, "Zoom in").Clicked() {
+						cmpZoom(p.heat, 0.5)
+					}
+					if ui.Button(c, "Zoom out").Clicked() {
+						cmpZoom(p.heat, 2)
+					}
+					if ui.Button(c, "Reset zoom").Clicked() {
+						p.heat.ResetZoom()
+					}
+					ui.Text(c, "Scroll to zoom · drag to pan · double-click to reset").FontSize(12).TextColor(t.TextMuted)
+				})
+				ev := p.heat.Show(c.Key("cmp-heat"), p.mapSide(), "Differential coverage map: red higher in A, blue higher in B; opacity by −log10 padj")
+				if ev.Point {
+					v := p.heat.View()
+					p.pickNearest(shown, ev.PX, ev.PY, cmpPickReach(ctx.Pad, v.X1-v.X0, float64(p.mapSide())))
 					p.heat.Picked = -1
 				}
-				cmpLegend(c, ctx.LabelA, ctx.LabelB)
+				cmpPadjLegend(c, ctx.LabelA, ctx.LabelB)
 				ui.Row(c).Gap(8).Children(func() {
-					if ui.Button(c, "Export SVG…").Tooltip("Save the significant map as shown").Clicked() {
+					if ui.PrimaryButton(c, "Use in arc map").Tooltip("Draw these merged interactions as the Structure page's differential arcs").Clicked() {
+						p.useInArcMap(e)
+					}
+				})
+				ui.Row(c).Gap(8).Children(func() {
+					if ui.Button(c, "Download map SVG…").Tooltip("Save the differential coverage map as shown").Clicked() {
 						p.exportMapSVG()
 					}
-					if ui.Button(c, "Export PNG…").Tooltip("Save the significant map as shown, as a PNG").Clicked() {
+					if ui.Button(c, "Download map PNG…").Tooltip("Save the differential coverage map as shown, as a PNG").Clicked() {
 						p.exportMapPNG()
 					}
 				})
 				ui.Row(c).Gap(8).Children(func() {
-					if ui.Button(c, "Export TSV…").Tooltip("Save all merged interactions as a tab-separated file").Clicked() {
+					if ui.Button(c, "Export interactions TSV…").Tooltip("Save all merged interactions as a tab-separated file").Clicked() {
 						p.exportInteractionsTSV()
 					}
-					if ui.Button(c, "Significant cells…").Tooltip("Save every significant 10-nt cell (x, y, log2FoldChange, padj, baseMean)").Clicked() {
+					if ui.Button(c, "Export significant cells TSV…").Tooltip("Save every significant 10-nt cell (x, y, log2FoldChange, padj, baseMean)").Clicked() {
 						p.exportSignificantTSV()
 					}
 				})
+				if p.arcMapFed == e.ID && !stale {
+					ui.Text(c, cmpArcMapNote).FontSize(12).TextColor(t.TextMuted).Width(p.mapSide() + 44)
+				}
 			})
 			ui.Column(c).Gap(8).Grow(1).MinWidth(320).Children(func() {
 				ui.Row(c).Gap(8).Wrap().Children(func() {
@@ -1189,7 +1230,7 @@ func (p *comparePage) results(c *ui.Context) {
 						p.row = -1
 					}
 				})
-				p.interactionTable(c, shown)
+				p.interactionTable(c, shown, ctx)
 				var target *cmpTarget
 				if row := p.pickedInteraction(shown); row != nil {
 					target = &cmpTarget{X: row.X, Y: row.Y, HigherInB: row.LFC != nil && *row.LFC < 0}
@@ -1207,7 +1248,7 @@ func (p *comparePage) results(c *ui.Context) {
 			})
 		})
 	})
-	p.exportsCard(c, e)
+	p.exportsCard(c, e, stale)
 	p.similarityCard(c, e, result, ctx)
 	p.regionsCard(c.Key("cmp-regions"), e, ctx)
 	p.energyCard(c.Key("cmp-energy"), e, ctx)
@@ -1306,19 +1347,41 @@ func cmpStat(c *ui.Context, label, value string, color ui.Color) ui.Element {
 	})
 }
 
-func cmpLegend(c *ui.Context, labelA, labelB string) {
+// cmpFact is one of the test's statistics: a label over its value.
+func cmpFact(c *ui.Context, label, value string, color ui.Color) ui.Element {
 	t := c.Theme()
-	ui.Row(c).Gap(14).Children(func() {
-		for _, item := range []struct {
-			color ui.Color
-			label string
-		}{{cmpRed, "higher in " + labelA}, {cmpBlue, "higher in " + labelB}} {
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Box(c).Size(12, 12).Radius(3).Background(item.color)
-				ui.Text(c, item.label).FontSize(12).TextColor(t.TextMuted)
-			})
-		}
+	return ui.Column(c).Gap(2).Padding(8, 12).Radius(8).Background(t.Surface).MinWidth(120).Shrink(1).Children(func() {
+		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, value).FontSize(14).Bold().TextColor(color)
 	})
+}
+
+// cmpZoom zooms a map around its centre (the web's Zoom in / Zoom out).
+func cmpZoom(h *widgets.Heatmap, factor float64) {
+	v := h.View()
+	cx, cy := (v.X0+v.X1)/2, (v.Y0+v.Y1)/2
+	hw, hh := (v.X1-v.X0)*factor/2, (v.Y1-v.Y0)*factor/2
+	h.SetView(widgets.Window{X0: cx - hw, X1: cx + hw, Y0: cy - hh, Y1: cy + hh})
+}
+
+// useInArcMap is the web's "Use in arc map": the Structure page draws the
+// test's merged interactions as its differential arcs (with its own padj
+// cutoff).
+func (p *comparePage) useInArcMap(e *comparisonEntry) {
+	a := p.a
+	st, ok := a.PageFor("structure").(*structurePage)
+	if !ok {
+		return
+	}
+	st.layers.cmpStale = true // the list may predate this test
+	a.Navigate("structure", nil)
+	st.setOverlay(e.ID)
+	// as the web's (showStructures = false): the structures in one colour,
+	// even when another test was drawn before
+	st.layers.mono = true
+	p.arcMapFed = e.ID
+	a.Toast("The arc map now draws the %s merged interactions (its own padj filter, %g, applies).",
+		FormatNumber(e.Summary.Interactions), st.layers.padj)
 }
 
 // shownInteractions: sorted by padj, filtered by direction (cached).
@@ -1358,47 +1421,17 @@ func (p *comparePage) syncHeatmap(e *comparisonEntry, result *comparisonResult) 
 	p.heat.SetCells(cmpSignificantCells(result, p.direction), float64(p.mapLength(e, result)), float64(p.mapLength(e, result)))
 }
 
-func (p *comparePage) mapLength(e *comparisonEntry, result *comparisonResult) int {
-	length := 0
-	for _, g := range e.Genes {
-		length = cmpMax(length, p.a.Project.GeneLength(g))
-	}
-	if e.Parameters.Gene2 != nil && *e.Parameters.Gene2 != "" {
-		length = cmpMax(length, p.a.Project.GeneLength(*e.Parameters.Gene2))
-	}
-	if length == 0 {
-		length = int(result.Summary.MaxCoordinate) + 10
-	}
-	return length
+// mapLength is the map's extent, as the web's: the largest coordinate of
+// the test plus one cell.
+func (p *comparePage) mapLength(_ *comparisonEntry, result *comparisonResult) int {
+	return cmpMapLength(result.Summary)
 }
 
-// cmpSignificantCells colours the significant 10-nt cells: red higher in A,
-// blue higher in B, alpha by -log10 padj; weakest first so strong cells
-// stay on top.
+// cmpSignificantCells colours the significant 10-nt cells (cmpCells): red
+// higher in A, blue higher in B, opacity by −log10 padj; weakest first so
+// strong cells stay on top.
 func cmpSignificantCells(result *comparisonResult, direction int) []widgets.Cell {
-	cells := result.Cells
-	out := make([]widgets.Cell, 0, len(cells.X))
-	for i := len(cells.X) - 1; i >= 0; i-- {
-		if i >= len(cells.Y) || i >= len(cells.LFC) || cells.LFC[i] == nil {
-			continue
-		}
-		lfc := *cells.LFC[i]
-		if (direction == 1 && lfc < 0) || (direction == 2 && lfc > 0) {
-			continue
-		}
-		padj := 1e-300
-		if i < len(cells.Padj) && cells.Padj[i] != nil && *cells.Padj[i] > 0 {
-			padj = math.Max(*cells.Padj[i], 1e-300)
-		}
-		strength := math.Min(1, -math.Log10(padj)/20)
-		color := cmpBlue
-		if lfc > 0 {
-			color = cmpRed
-		}
-		out = append(out, widgets.Cell{X: float64(cells.X[i]), Y: float64(cells.Y[i]), W: 10, H: 10,
-			Color: color.Alpha(float32(0.2 + 0.8*strength))})
-	}
-	return out
+	return cmpWidgetCells(cmpCells(result, direction))
 }
 
 func (p *comparePage) pickedInteraction(shown []cmpInteraction) *cmpInteraction {
@@ -1408,55 +1441,75 @@ func (p *comparePage) pickedInteraction(shown []cmpInteraction) *cmpInteraction 
 	return nil
 }
 
-// pickNearest chooses the cmpInteraction nearest a clicked cell, within the
-// merge range.
-func (p *comparePage) pickNearest(shown []cmpInteraction, x, y float64, ctx cmpContext) {
+// pickNearest chooses the cmpInteraction whose cell centre is nearest a
+// clicked point (web deseq-card.js onpointerup), within reach.
+func (p *comparePage) pickNearest(shown []cmpInteraction, x, y, reach float64) {
+	if i := cmpNearest(shown, x, y, reach); i >= 0 {
+		p.row = i
+	}
+}
+
+// cmpNearest is the index of the row whose cell centre is nearest (x, y) by
+// the larger axis distance, -1 when none is within reach.
+func cmpNearest(shown []cmpInteraction, x, y, reach float64) int {
 	best, bestDistance := -1, math.Inf(1)
 	for i, row := range shown {
-		d := math.Max(math.Abs(float64(row.X)-x), math.Abs(float64(row.Y)-y))
+		d := math.Max(math.Abs(float64(row.X)+5-x), math.Abs(float64(row.Y)+5-y))
 		if d < bestDistance {
 			best, bestDistance = i, d
 		}
 	}
-	if best >= 0 && bestDistance <= math.Max(float64(ctx.Pad), 10) {
-		p.row = best
+	if best >= 0 && bestDistance <= reach {
+		return best
 	}
+	return -1
 }
 
-func (p *comparePage) interactionTable(c *ui.Context, shown []cmpInteraction) {
+// cmpPickReach is the web's pick distance: the merge range, at least one
+// cell, and at least 4 pixels of the map (span nt shown on side pixels).
+func cmpPickReach(radius int, span, side float64) float64 {
+	reach := math.Max(float64(radius), 10)
+	if side > 0 {
+		reach = math.Max(reach, 4*span/side)
+	}
+	return reach
+}
+
+func (p *comparePage) interactionTable(c *ui.Context, shown []cmpInteraction, ctx cmpContext) {
 	t := c.Theme()
 	if len(shown) == 0 {
 		ui.Text(c, "No significant interaction in this direction.").TextColor(t.TextMuted)
 		return
 	}
-	cols := []ui.TableColumn{{Title: "Arm 1 (nt)", Width: 112}, {Title: "Arm 2 (nt)", Width: 112},
-		{Title: "log2 A/B", Width: 76, Align: ui.End}, {Title: "padj", Width: 72, Align: ui.End}, {Title: "Mean count", Align: ui.End}}
+	// the web card's columns (deseq-card.js renderResult)
+	cols := []ui.TableColumn{{Title: "Higher in", Width: 110}, {Title: "Arm 1 (x, nt)", Width: 112}, {Title: "Arm 2 (y, nt)", Width: 112},
+		{Title: "log2 " + ctx.LabelA + "/" + ctx.LabelB, Width: 110, Align: ui.End}, {Title: "padj", Width: 72, Align: ui.End},
+		{Title: "Mean count (normalised)", Align: ui.End}}
 	p.table.Selected = &p.row
 	p.table.Key = func(i int) any { return fmt.Sprintf("%d_%d_%s", shown[i].X, shown[i].Y, shown[i].Direction) }
 	ui.Table(c.Key("cmp-table-"+p.shownKey), &p.table, cols, len(shown), func(i, col int) {
 		row := shown[i]
+		up := row.Direction == "up"
 		switch col {
 		case 0:
-			ui.Text(c, fmt.Sprintf("%d–%d", row.X, row.X+9)).SingleLine()
-		case 1:
-			ui.Text(c, fmt.Sprintf("%d–%d", row.Y, row.Y+9)).SingleLine()
-		case 2:
-			color := cmpBlue
-			if row.LFC != nil && *row.LFC > 0 {
-				color = cmpRed
+			label, color := ctx.LabelB, cmpBlue
+			if up {
+				label, color = ctx.LabelA, cmpRed
 			}
-			text := ui.Text(c, cmpFloat(row.LFC, "%.2f"))
+			text := ui.Text(c, label).SingleLine()
 			if i != p.row { // the chosen row's text takes the accent's text color
 				text.TextColor(color)
 			}
+		case 1:
+			ui.Text(c, FormatNumber(int64(row.X))+"–"+FormatNumber(int64(row.X+9))).SingleLine()
+		case 2:
+			ui.Text(c, FormatNumber(int64(row.Y))+"–"+FormatNumber(int64(row.Y+9))).SingleLine()
 		case 3:
-			ui.Text(c, cmpFloat(row.Padj, "%.1e"))
+			ui.Text(c, cmpFixed(row.LFC, 2))
 		case 4:
-			if row.BaseMean == nil {
-				ui.Text(c, "—")
-			} else {
-				ui.Text(c, FormatNumber(int64(math.Round(*row.BaseMean))))
-			}
+			ui.Text(c, cmpPadjText(row.Padj))
+		case 5:
+			ui.Text(c, cmpFixed(row.BaseMean, 1))
 		}
 	}).Height(p.mapSide() - 40).Label("Merged interactions")
 }

@@ -36,6 +36,10 @@ var AnalysisOperations = []string{
 	"analysis_viewpoint",
 	"analysis_region",
 	"analysis_overview",
+	// IRIS's check of a region before a run (desktop/runtime/iris.py)
+	"analysis_iris_region",
+	// HYB RNA names vs reference sequence names (desktop/runtime/name_matching.py)
+	"analysis_reference_matching",
 }
 
 // ProjectOperations are the short control-lane operations on project.json;
@@ -44,6 +48,8 @@ var ProjectOperations = []string{
 	"add_reference",
 	"update_reference",
 	"remove_reference",
+	// a manual RNA name match on a reference (desktop/runtime/name_matching.py)
+	"set_reference_match",
 	"add_sample",
 	"update_sample",
 	"remove_sample",
@@ -404,7 +410,9 @@ func (s *Service) TaskStatus(projectPath, taskID string) (Obj, error) {
 }
 
 // addRemaining sets "seconds_left" on running sample pipelines whose time
-// left can be estimated.
+// left can be estimated, and on sample pipelines "fraction_done", the share
+// of the whole pipeline done (below 1 until it finishes). A sample past its
+// estimate gets "over_estimate" instead of "seconds_left".
 func (s *Service) addRemaining(tasks []Obj) {
 	var history []PerfRecord
 	loaded := false
@@ -417,20 +425,30 @@ func (s *Service) addRemaining(tasks []Obj) {
 		if !loaded {
 			history, loaded = LoadPerf(perfPath(s.prefsPath)), true
 		}
-		left, ok := remainingSeconds(history, progress, s.tasks.Budget().CPU)
+		left, over, ok := sampleRemaining(history, progress, s.tasks.Budget().CPU, time.Now())
 		if kind == "structure" {
 			left, ok = foldRemaining(history, progress, time.Now())
+			over = false
 		}
-		if ok {
+		if !ok {
+			continue
+		}
+		if over {
+			// past the estimate: no time left to promise
+			task["over_estimate"] = true
+		} else {
 			task["seconds_left"] = math.Round(left)
+		}
+		if total, known := sampleTotal(history, progress, s.tasks.Budget().CPU); known && kind == "sample_pipeline" && total > 0 {
+			task["fraction_done"] = math.Min(math.Max(1-left/total, 0), 0.99)
 		}
 	}
 }
 
-// EstimateFold is the expected time of a structure fold of these window
-// lengths (the whole RNA: one), from this computer's measured speed.
-func (s *Service) EstimateFold(lengths []int, beam, workers int) FoldEstimate {
-	return EstimateFold(LoadPerf(perfPath(s.prefsPath)), lengths, beam, workers)
+// EstimateFold is the expected time of a structure fold, from this
+// computer's measured speed.
+func (s *Service) EstimateFold(job FoldJob) FoldEstimate {
+	return EstimateFold(LoadPerf(perfPath(s.prefsPath)), job)
 }
 
 // EstimatePipelines is the expected time of running these samples' pipelines

@@ -19,7 +19,6 @@ import (
 
 	"hyb2desktop/core"
 	"hyb2desktop/model"
-	"hyb2desktop/widgets"
 )
 
 // reportFake answers read_comparison by comparison_id from
@@ -87,7 +86,11 @@ func TestReportPageSections(t *testing.T) {
 		"Conditions", "AFR_REP1, AFR_REP2", "2 of 2", "573,541",
 		// Differential tests with their strongest interactions.
 		"Differential tests", "AFR (2 merged) vs BRA (2 merged)", "SUB (2 merged) vs AFR (2 merged)", "1,023,236", "82,132",
-		"25,276 / 56,856", "742 / 1,547", "Interactions A / B", "Top 10 merged interactions by padj", "5,720–5,729", "3,890–3,899", "No significant interaction.",
+		"25,276 / 56,856", "742 / 1,547", "Interactions A / B", "Strongest merged interactions", "5,720", "3,890", "No significant interaction.",
+		// The web report's facts of each test, and its method note.
+		"Differential test (DESeq2 Wald test)", "Datasets", "Min count · merge range · padj", "2 · 100 nt · 0.05", "1,023,236 of 1,121,855",
+		"82,132 (25,276 higher in AFR (2 merged), 56,856 higher in BRA (2 merged))", "742 higher in AFR (2 merged), 1,547 higher in BRA (2 merged)",
+		"Current inputs", reportMethodNote,
 		"DESeq2 · min count 2 · merge range 100 nt · padj < 0.05",
 		// Structures and runtime.
 		"Structures", "1 window · 3,170–6,229", "AFR_REP1 + AFR_REP2", "1,055", "-452.0 kcal/mol",
@@ -103,13 +106,19 @@ func TestReportPageSections(t *testing.T) {
 		}
 	}
 	afr := p.data.Tests[0]
-	if len(afr.Top) != reportTopInteractions || len(afr.Cells) != 400 || afr.CellsTotal != 82132 || afr.Length != 10807 {
+	if len(afr.Top) != reportTopInteractions || len(afr.Cells) != 400 || afr.CellsTotal != 82132 || afr.Length != 10810 {
 		t.Fatalf("test: %d top, %d cells of %d, length %d", len(afr.Top), len(afr.Cells), afr.CellsTotal, afr.Length)
 	}
 	for i := 1; i < len(afr.Top); i++ {
 		if cmpPadj(afr.Top[i].Padj) < cmpPadj(afr.Top[i-1].Padj) {
 			t.Fatalf("top not sorted by padj at %d", i)
 		}
+	}
+	if !strings.HasPrefix(afr.Datasets, "AFR_REP1 (AFR (2 merged)), AFR_REP2 (AFR (2 merged)), ") || afr.RNAX == "" {
+		t.Fatalf("datasets %q, rna %q", afr.Datasets, afr.RNAX)
+	}
+	if got := afr.topTable().Rows[0]; len(got) != 5 || got[0] != "AFR (2 merged)" && got[0] != "BRA (2 merged)" {
+		t.Fatalf("top row %q", got)
 	}
 	st := p.data.Structures[0]
 	if len(st.Arcs) != 1055 || st.Start != 3170 || st.End != 6229 {
@@ -182,8 +191,10 @@ func TestReportExportHTML(t *testing.T) {
 	for _, want := range []string{"<!DOCTYPE html>", `<section id="project">`, `<section id="references">`, `<section id="samples">`,
 		`<section id="conditions">`, `<section id="pipeline">`, `<section id="differential-tests">`,
 		"cfdf0a3a09b60d85c2900d07c983c2b2827591c7e4fc9c02e9475db6874a13d7", "Quick fingerprint: SHA-256 of the file size", `<section id="structures">`,
-		"ZIKV &lt;b&gt;&#34;GUI&#34;&lt;/b&gt; &amp; co", "AFR (2 merged) vs BRA (2 merged)", "Top 10 merged interactions by padj",
-		"5,720–5,729", "The 400 strongest of 82,132 cells are drawn.", "Arc diagram of 1,055 base pairs, 3,170–6,229.",
+		"ZIKV &lt;b&gt;&#34;GUI&#34;&lt;/b&gt; &amp; co", "AFR (2 merged) vs BRA (2 merged)", "<h4>Strongest merged interactions</h4>",
+		"<dt>Cells tested</dt><dd>1,023,236 of 1,121,855</dd>", "<dt>Current inputs</dt>", "<h4>Differential test (DESeq2 Wald test)</h4>",
+		"A · Differential coverage map", "−log10 padj (opacity); colour: direction", "The differential test is HYB2 Desktop&#39;s numpy port",
+		"5,720", "Showing the 400 most significant of 82,132 cells for printing", "Arc diagram of 1,055 base pairs, 3,170–6,229.",
 		"-452.0 kcal/mol", "HYB2 Desktop: 0.1.0-test", "@media print"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report lacks %q", want)
@@ -210,7 +221,7 @@ func TestReportExportHTML(t *testing.T) {
 	if n := strings.Count(svgs[0], "<rect"); n < 400 {
 		t.Fatalf("map has %d rects", n)
 	}
-	if !strings.Contains(svgs[1], "<path") || !strings.Contains(svgs[0], `id="test1-clip"`) || !strings.Contains(svgs[1], `id="structure1-clip"`) {
+	if !strings.Contains(svgs[1], "<path") || !strings.Contains(svgs[0], `id="hyb2-legend-test1"`) || !strings.Contains(svgs[1], `id="structure1-clip"`) {
 		t.Fatal("figure ids or arcs missing")
 	}
 }
@@ -254,9 +265,9 @@ func TestReportRunSettings(t *testing.T) {
 }
 
 func TestReportHTMLCapsAndEmpty(t *testing.T) {
-	var cells []widgets.Cell
+	var cells []cmpCell
 	for i := range 30_000 {
-		cells = append(cells, widgets.Cell{X: float64(i % 1000 * 10), Y: float64(i / 1000 * 10), W: 10, H: 10, Color: cmpRed})
+		cells = append(cells, cmpCell{X: i % 1000 * 10, Y: i / 1000 * 10, Up: true, Alpha: 1})
 	}
 	d := &reportData{Name: "Caps", Generated: "2026-10-14 12:00", Tests: []reportTest{{ID: "t", LabelA: "A<1>", LabelB: "B", Cells: cells,
 		CellsTotal: 30_000, Length: 10_000, Summary: comparisonSummary{Significant: 30_000}}}}
@@ -270,10 +281,10 @@ func TestReportHTMLCapsAndEmpty(t *testing.T) {
 		t.Fatalf("%d figures", len(svgs))
 	}
 	xmlWellFormed(t, svgs[0])
-	if n := strings.Count(svgs[0], `fill="#d64541"`); n != reportMaxCells {
+	if n := strings.Count(svgs[0], `fill-opacity="1.000"`); n != reportMaxCells {
 		t.Fatalf("%d cells drawn", n)
 	}
-	for _, want := range []string{"The 20,000 strongest of 30,000 cells are drawn.", "A&lt;1&gt; vs B", "No significant interaction.",
+	for _, want := range []string{"Showing the 20,000 most significant of 30,000 cells for printing;", "A&lt;1&gt; vs B", "No significant interaction.",
 		"No structure has been folded.", "No sample in this project.", "development build"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("lacks %q", want)

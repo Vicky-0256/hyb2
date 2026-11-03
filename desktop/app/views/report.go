@@ -62,13 +62,15 @@ func (p *reportPage) load() {
 	if a.Project == nil {
 		return
 	}
-	if p.loading {
-		p.again = true
-		return
-	}
+	// A project switch clears the page first, even while an earlier read is
+	// in flight, so another project's report never shows or exports.
 	if p.project != a.Project.Path {
 		p.project, p.data, p.steps = a.Project.Path, nil, nil
 		p.choice.reset()
+	}
+	if p.loading {
+		p.again = true
+		return
 	}
 	in := reportInput{project: *a.Project, runtime: a.start.runtime, now: time.Now()}
 	path := a.Project.Path
@@ -79,10 +81,11 @@ func (p *reportPage) load() {
 		steps := reportStepRows(d)
 		return func() {
 			p.loading = false
-			if a.Project == nil || a.Project.Path != path {
-				return
+			// A stale answer (the project changed) is dropped, but a Show
+			// that came meanwhile still reads the current project.
+			if a.Project != nil && a.Project.Path == path && p.project == path {
+				p.data, p.steps = d, steps
 			}
-			p.data, p.steps = d, steps
 			if p.again {
 				p.again = false
 				p.load()
@@ -330,6 +333,8 @@ func reportReadTest(b core.Backend, pr *model.Project, e comparisonEntry, label 
 	}
 	x := reportTest{ID: e.ID, LabelA: nameOr(e.LabelOne, names(e.SamplesOne)), LabelB: nameOr(e.LabelTwo, names(e.SamplesTwo)),
 		Genes: e.Genes, Params: cmpParamsText(&e), Created: e.CreatedAt, Summary: e.Summary, Entry: e}
+	x.Datasets = cmpDatasets(&e, label, x.LabelA, x.LabelB)
+	x.RNAX, x.RNAY = cmpAxisGenes(pr, &e) // as the Compare page's map
 	if e.Available != nil && !*e.Available {
 		x.Err = "the result files are missing"
 		return x
@@ -343,13 +348,17 @@ func reportReadTest(b core.Backend, pr *model.Project, e comparisonEntry, label 
 		x.Err = err.Error()
 		return x
 	}
+	x.Current = cmpInputsCurrent(pr, &e) // only a result that was read is current
 	if result.Summary.CellsTested > 0 {
 		x.Summary = result.Summary // summary.json, as Compare shows it
 	}
 	top := append([]cmpInteraction(nil), result.Interactions...)
 	sort.SliceStable(top, func(i, j int) bool { return cmpPadj(top[i].Padj) < cmpPadj(top[j].Padj) })
-	x.Top, x.All = top[:min(len(top), reportTopInteractions)], top
-	x.Cells = cmpSignificantCells(&result, 0)
+	x.Top, x.All = top[:min(len(top), reportTopInteractions)], result.Interactions
+	x.Cells = cmpCells(&result, 0)
+	if rel := e.Paths["significant"]; rel != "" && pr.Path != "" {
+		x.SignificantFile = filepath.Join(pr.Path, filepath.FromSlash(rel))
+	}
 	x.CellsTotal = max(result.CellsTotal, int64(len(x.Cells)))
 	x.SimCells = cmpSimilarityCells(&result)
 	// the folding energies, when computed (an older runtime may not know the operation)
@@ -359,12 +368,7 @@ func reportReadTest(b core.Backend, pr *model.Project, e comparisonEntry, label 
 			x.Energy = &energy
 		}
 	}
-	for _, g := range e.Genes {
-		x.Length = max(x.Length, pr.GeneLength(g))
-	}
-	if x.Length == 0 {
-		x.Length = int(x.Summary.MaxCoordinate) + 10
-	}
+	x.Length = cmpMapLength(x.Summary) // as the web's map
 	return x
 }
 
@@ -457,8 +461,8 @@ func (p *reportPage) View(c *ui.Context) {
 	d := p.data
 	ui.Scroll(c.Key("report-scroll")).Fill().Children(func() {
 		ui.Column(c).Padding(24).Gap(16).Children(func() {
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Basis(320).Children(func() {
 					PageHeader(c, "Report", "The project at a glance: data, counts, differential tests and structures.")
 				})
 				if p.loading {
@@ -556,14 +560,8 @@ func (p *reportPage) testsView(c *ui.Context, d *reportData) {
 				ui.Text(c, x.LabelA+" vs "+x.LabelB).FontSize(16).Bold()
 				ui.Text(c, strings.Join(x.Genes, ", ")+" · "+x.Params+" · log2 fold change = A / B · "+FormatTime(x.Created)).FontSize(12).TextColor(t.TextMuted)
 			})
-			s := x.Summary
-			ui.Row(c).Gap(10).Wrap().Children(func() {
-				cmpStat(c, "Significant cells", FormatNumber(s.Significant), t.Text)
-				cmpStat(c, "Higher in "+x.LabelA, FormatNumber(s.SignificantUp), cmpRed)
-				cmpStat(c, "Higher in "+x.LabelB, FormatNumber(s.SignificantDown), cmpBlue)
-				cmpStat(c, "Interactions A / B", FormatNumber(s.InteractionsUp)+" / "+FormatNumber(s.InteractionsDown), t.Text).
-					Tooltip("Merged interactions higher in A / higher in B")
-			})
+			ui.Text(c, "Differential test (DESeq2 Wald test)").Bold()
+			reportFacts(c, x.Facts())
 			if x.Err != "" {
 				errorLine(c, "Could not read the results: "+x.Err)
 				return
@@ -572,10 +570,11 @@ func (p *reportPage) testsView(c *ui.Context, d *reportData) {
 				ui.Text(c, "No significant interaction.").TextColor(t.TextMuted)
 				return
 			}
-			ui.Text(c, fmt.Sprintf("Top %d merged interactions by padj", len(x.Top))).Bold()
+			ui.Text(c, "Strongest merged interactions").Bold()
 			reportTable(c, "top-"+x.ID, x.topTable(), "")
 		})
 	}
+	ui.Text(c, reportMethodNote).FontSize(12).TextColor(t.TextMuted)
 }
 
 func reportEvidenceView(c *ui.Context, d *reportData) {

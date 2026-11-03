@@ -185,10 +185,12 @@ func TestShellNavigationSelectionAndTasks(t *testing.T) {
 			t.Fatalf("shell lacks %q: %q", text, tt.Texts())
 		}
 	}
-	// Conditions come first; the selection defaults to the first.
+	// All merged, then the conditions; the project's saved selection is the
+	// first condition (TestSelectionScopes has the default).
 	options := a.SelectionOptions()
-	if len(options) < 3 || options[0].Key != "c:SUB" || !strings.Contains(options[0].Label, "2 replicates merged") {
-		t.Fatalf("options %+v", options)
+	if len(options) < 4 || options[0].Key != AllSelection || options[1].Key != "c:SUB" || !strings.Contains(options[1].Label, "2 datasets merged") ||
+		a.Selected.Key != "c:SUB" {
+		t.Fatalf("options %+v, selected %q", options, a.Selected.Key)
 	}
 	if got := a.SelectionIDs("c:AFR"); len(got) != 2 {
 		t.Fatalf("AFR ids %v", got)
@@ -237,6 +239,10 @@ func TestShellNavigationSelectionAndTasks(t *testing.T) {
 func TestPreferencesDialog(t *testing.T) {
 	a, _ := openFixture(t)
 	tt := ui.NewTester(a.View, 1100, 720)
+	// the top bar fits itself to the window once the first frame has
+	// measured it; click where the settled bar shows the button
+	tt.Frame()
+	tt.Frame()
 	if err := tt.Click("Preferences"); err != nil {
 		t.Fatal(err)
 	}
@@ -252,6 +258,17 @@ func TestFormatDuration(t *testing.T) {
 	for seconds, want := range map[float64]string{0.2: "1 s", 42: "42 s", 84.8: "1 min 25 s", 120: "2 min", 1500: "25 min", 7500: "2 h 05 min"} {
 		if got := FormatDuration(seconds); got != want {
 			t.Errorf("%v: %q, want %q", seconds, got, want)
+		}
+	}
+}
+
+func TestFormatDurationRange(t *testing.T) {
+	for _, c := range []struct {
+		low, high float64
+		want      string
+	}{{167, 418, "3–7 min"}, {200, 210, "3 min 25 s"}, {20, 50, "20 s – 50 s"}, {1800, 4000, "30 min – 1 h 07 min"}} {
+		if got := FormatDurationRange(c.low, c.high); got != c.want {
+			t.Errorf("%v–%v: %q, want %q", c.low, c.high, got, c.want)
 		}
 	}
 }
@@ -282,14 +299,14 @@ func TestArmPositionsOpenWhenSet(t *testing.T) {
 	}
 	waitFlush(a)
 	tt.Frame()
-	if !tt.HasText("ΔG, e-value and arm positions") || tt.HasText("Arm 1 from") {
+	if !tt.HasText("ΔG, e-value and arm positions") || tt.HasText("Arm 1 start") {
 		t.Fatal("arm filters open by default")
 	}
 	p := a.PageFor("explore").(*explorePage)
 	p.ix.x0 = "100"
 	tt.Frame()
 	tt.Frame()
-	if !tt.HasText("ΔG, e-value and arm positions (1 set)") || !tt.HasText("Arm 1 from") {
+	if !tt.HasText("ΔG, e-value and arm positions (1 set)") || !tt.HasText("Arm 1 start") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 }

@@ -15,7 +15,7 @@ func TestStatusAndCancelCheckTheProject(t *testing.T) {
 	if _, err := s.Status(id, b); err == nil {
 		t.Errorf("task of project a returned under project b")
 	}
-	if c, err := s.Cancel(id, b); err == nil && c["status"] == "cancelled" {
+	if c, err := s.Cancel(id, b); err == nil && (c["status"] == "cancelled" || c["status"] == "cancelling") {
 		t.Errorf("cancel under project b killed project a's task")
 	}
 	if live, err := s.Status(id, a); err != nil || live["status"] != "running" {

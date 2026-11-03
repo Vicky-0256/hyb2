@@ -18,13 +18,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"hyb2desktop/widgets"
 )
 
 //go:embed resultschema/*.json
@@ -327,18 +326,16 @@ func buildResultRecord(d *reportData, now time.Time) *rpRecord {
 			values["similarity_bins"] = x.Summary.SimilarityCells
 		}
 		status("comparison", "ok", "Desktop tests are saved with their similarity heatmap; the effect map (quick view) is not saved.")
-		names := func(ids []string) string {
-			out := make([]string, len(ids))
-			for i, id := range ids {
-				out[i] = nameOr(labels[id], id)
-			}
-			return strings.Join(out, ", ")
-		}
-		scope := fmt.Sprintf("Test %s: %s (A: %s) vs %s (B: %s); %s; 10-nt cells", x.ID, x.LabelA, names(e.SamplesOne), x.LabelB, names(e.SamplesTwo), strings.Join(x.Genes, ", "))
-		steps["comparison"].Scope, steps["differential_test"].Scope = strPtr(scope), strPtr(scope)
+		// as the web's scopes: "Datasets AFR_REP1 (AFR), …"
+		steps["comparison"].Scope = strPtr("Datasets " + x.Datasets)
+		steps["differential_test"].Scope = strPtr("Datasets " + x.Datasets + "; 10-nt cells")
 		p := e.Parameters
 		steps["differential_test"].Parameters = map[string]any{"minCount": p.MinCount, "mergeRange": p.Range, "padjCutoff": p.PadjCutoff,
-			"binSize": 10, "method": "DESeq2 1.46 Wald test (HYB2 Desktop numpy port); hyb2_compare interaction merge"}
+			"independentFilteringAlpha": 0.01, "binSize": 10, "method": "DESeq2 1.46 Wald test (HYB2 Desktop numpy port); hyb2_compare interaction merge"}
+		cutoff := 0.05
+		if p.PadjCutoff != nil {
+			cutoff = *p.PadjCutoff
+		}
 		if x.Created != "" {
 			steps["differential_test"].CompletedAt = strPtr(x.Created)
 		}
@@ -349,29 +346,39 @@ func buildResultRecord(d *reportData, now time.Time) *rpRecord {
 			values["cells_tested"], values["significant_cells"], values["significant_cells_a"], values["significant_cells_b"] =
 				s.CellsTested, s.Significant, s.SignificantUp, s.SignificantDown
 			values["interactions_a"], values["interactions_b"] = s.InteractionsUp, s.InteractionsDown
-			st := "ok"
+			st, detail := "ok", ""
 			if s.Significant == 0 {
 				st = "no_result"
 			}
-			status("differential_test", st, "")
+			if !x.Current {
+				st, detail = "stale", "The Compare inputs changed after this run."
+				warn("differential_test", "The differential test result is from earlier Compare inputs; run it again before reporting.")
+			}
+			status("differential_test", st, detail)
 			var newest [][]string
 			for _, it := range x.All {
 				newest = append(newest, rpInteractionRow(it))
 			}
 			table("differential_test", &rpTable{File: "tables/differential_interactions.tsv", Title: "Merged differential interactions of the S08 test",
-				Audience: []string{"ai", "analysis"}, Scope: fmt.Sprintf("all %d merged interactions of test %s", len(newest), x.ID),
+				Audience: []string{"ai", "analysis"}, Scope: fmt.Sprintf("all %d merged interactions with padj < %s", len(newest), jsNumber(cutoff)),
 				Header: []string{"direction", "x", "y", "log2FoldChange", "padj", "baseMean"}, Rows: newest})
 			if len(d.Tests) > 1 {
 				table("differential_test", &rpTable{File: "tables/differential_interactions_all_tests.tsv", Title: "Merged differential interactions of every test",
 					Audience: []string{"analysis"}, Scope: fmt.Sprintf("all merged interactions of the %d tests", len(d.Tests)),
 					Header: []string{"test", "direction", "x", "y", "log2FoldChange", "padj", "baseMean"}, Rows: all})
 			}
-			if len(x.Cells) > 0 {
-				cells, length, title := x.Cells, x.Length, "A · Differential coverage map · "+x.LabelA+" vs "+x.LabelB
+			// the figure draws every significant cell, as the web's: those of
+			// significant.tsv, else the report's (capped) read
+			cells := x.Cells
+			if rows, err := rpSignificantRows(x.SignificantFile); err == nil {
+				table("differential_test", &rpTable{File: "tables/differential_significant_cells.tsv", Title: "Significant cells", Audience: []string{"analysis"},
+					Scope: fmt.Sprintf("all %d significant cells, in padj order", s.Significant), Header: []string{"x", "y", "log2FoldChange", "padj", "baseMean"}, Rows: rows})
+				cells = rpSignificantCells(rows)
+			}
+			if len(cells) > 0 {
+				panel := cmpPanel{Cells: cells, Length: x.Length, LabelA: x.LabelA, LabelB: x.LabelB, RNAX: x.RNAX, RNAY: x.RNAY}
 				figure("differential_test", &rpFigure{File: "figures/A_differential_map.svg", Title: "A · Differential coverage map", SVG: func() string {
-					svg, _, _ := heatSVG{Cells: cells, View: widgets.Window{X0: 0, X1: float64(length), Y0: 0, Y1: float64(length)}, Size: 520,
-						Title: title, MaxCells: svgMaxCells, XLabel: "Arm 1", YLabel: "Arm 2",
-						Note: "Red: higher in A; blue: higher in B; stronger colour, smaller padj."}.SVG()
+					svg, _, _ := panel.SVG()
 					return string(svgFile(svg))
 				}})
 			}
@@ -541,8 +548,57 @@ func rpNewestStructure(list []reportStructure) reportStructure {
 	return best
 }
 
+// rpInteractionRow is a row of the web's interactionsToTsv.
 func rpInteractionRow(it cmpInteraction) []string {
-	return []string{it.Direction, strconv.Itoa(it.X), strconv.Itoa(it.Y), rpPtr(it.LFC), rpPtr(it.Padj), rpPtr(it.BaseMean)}
+	return []string{it.Direction, strconv.Itoa(it.X), strconv.Itoa(it.Y), cmpTSVNumber(it.LFC), cmpTSVNumber(it.Padj), cmpTSVNumber(it.BaseMean)}
+}
+
+// rpSignificantRows are the rows of the web's significantToTsv, read from
+// the test's significant.tsv (in padj order).
+func rpSignificantRows(file string) ([][]string, error) {
+	if file == "" {
+		return nil, os.ErrNotExist
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	tsv, err := cmpSignificantTSV(raw)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimRight(string(tsv), "\n"), "\n")
+	rows := make([][]string, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		rows = append(rows, strings.Split(line, "\t"))
+	}
+	return rows, nil
+}
+
+// rpSignificantCells are the cells to draw (cmpCells) of significant cells
+// rows x, y, log2FoldChange, padj, baseMean; "NA" is a missing number.
+func rpSignificantCells(rows [][]string) []cmpCell {
+	var r comparisonResult
+	number := func(s string) *float64 {
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil || math.IsNaN(v) {
+			return nil
+		}
+		return &v
+	}
+	for _, row := range rows {
+		if len(row) < 4 {
+			continue
+		}
+		x, errX := strconv.Atoi(row[0])
+		y, errY := strconv.Atoi(row[1])
+		if errX != nil || errY != nil {
+			continue
+		}
+		r.Cells.X, r.Cells.Y = append(r.Cells.X, x), append(r.Cells.Y, y)
+		r.Cells.LFC, r.Cells.Padj = append(r.Cells.LFC, number(row[2])), append(r.Cells.Padj, number(row[3]))
+	}
+	return cmpCells(&r, 0)
 }
 
 func rpPtr(v *float64) string {

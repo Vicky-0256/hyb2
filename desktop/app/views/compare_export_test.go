@@ -29,7 +29,7 @@ func TestCompareMapPNG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b := img.Bounds(); b.Dx() != 1200 || b.Dy() != 1360 {
+	if b := img.Bounds(); b.Dx() != 1200 || b.Dy() != 1440 {
 		t.Fatalf("size %v", b)
 	}
 }
@@ -187,7 +187,7 @@ func TestCompareSettings(t *testing.T) {
 		t.Fatalf("started %+v (%q)", started, p.runMsg)
 	}
 	params := started[0].Parameters.(map[string]any)
-	if params["label_one"] != "African" || params["label_two"] != "BRA (2 merged)" ||
+	if params["label_one"] != "African" || params["label_two"] != "BRA · 2 datasets merged" ||
 		params["gene_id"] != "ZIKV_African_KX377335-1_virusRNA" || params["gene2"] != "ZIKV_Brazilian_MF073357-1_virusRNA" {
 		t.Fatalf("params %+v", params)
 	}
@@ -206,7 +206,7 @@ func TestCompareSettings(t *testing.T) {
 	if ctx := p.quickContext(); ctx.LabelA != "African" || ctx.Partner != "ZIKV_Brazilian_MF073357-1_virusRNA" {
 		t.Fatalf("quick context %+v", ctx)
 	}
-	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "Quick view · African vs BRA (2 merged)") {
+	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "Quick view · African vs BRA · 2 datasets merged") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	if err := tt.Click("Back to tests"); err != nil {
@@ -229,7 +229,7 @@ func TestCompareSettings(t *testing.T) {
 	if p.simHeat.Background != cmpGrey235 {
 		t.Fatalf("grey panel %+v", p.simHeat.Background)
 	}
-	for _, text := range []string{"Export PNG…", "Significant cells…", "Count table…", "names.table…", "Sample metadata…",
+	for _, text := range []string{"Download map PNG…", "Export significant cells TSV…", "Count table…", "names.table…", "Sample metadata…",
 		"Parameters JSON…", "Top 10 local maps per direction · ZIP…"} {
 		if !tt.HasText(text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())

@@ -33,12 +33,24 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"hyb2desktop/model"
 	"hyb2desktop/widgets"
 )
 
 // cmpExportFiles are the runtime's export files (compare.py EXPORT_FILES).
 var cmpExportFiles = map[string]string{"counts": "counts.table.txt", "names": "names.table",
 	"metadata": "sample_metadata.tsv", "top_maps": "top_maps.json"}
+
+// cmpExportNames are the web's file names (deseq-card.js handleAction,
+// batch-tools.js runMaps, analysis-ui.js comparison-export-*). The count
+// and names tables name the app that wrote them, as the web's "hyb2-web"
+// ones do.
+var cmpExportNames = map[string]string{
+	"interactions": "hyb2-differential-interactions.tsv", "significant": "hyb2-differential-significant.tsv",
+	"map_svg": "hyb2-differential-map.svg", "map_png": "hyb2-differential-map.png", "top_maps": "hyb2-top10-local-maps.zip",
+	"parameters": "comparison-parameters.json", "counts": "hyb2-desktop.table.txt", "names": "hyb2-desktop_names.table",
+	"metadata": "deseq2-sample-metadata.tsv",
+}
 
 // cmpTopMaps is top_maps.json.
 type cmpTopMaps struct {
@@ -117,7 +129,7 @@ func (p *comparePage) exportCopy(key, title, name string) {
 // significantToTsv: x y log2FoldChange padj baseMean in padj order, numbers
 // as JavaScript prints them (significant.tsv already holds them so).
 func (p *comparePage) exportSignificantTSV() {
-	e, _, ctx, ok := p.exportTarget()
+	e, _, _, ok := p.exportTarget()
 	if !ok {
 		return
 	}
@@ -125,7 +137,7 @@ func (p *comparePage) exportSignificantTSV() {
 	if file == "" {
 		return
 	}
-	saveExport(p.a, "Export significant cells", exportName(".tsv", ctx.LabelA, "vs", ctx.LabelB, "significant"), func() ([]byte, error) {
+	saveExport(p.a, "Export significant cells", cmpExportNames["significant"], func() ([]byte, error) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			return nil, err
@@ -175,8 +187,43 @@ func slicesIndex(list []string, s string) int {
 	return -1
 }
 
-// exportMapPNG draws the significant map off screen in the light theme,
-// as shown (zoom and direction), at twice its size as the web's PNG.
+// mapPanel is the map as shown (zoom and direction) for panelSvg.
+func (p *comparePage) mapPanel(result *comparisonResult, ctx cmpContext) cmpPanel {
+	rnaX, rnaY := cmpAxisGenes(p.a.Project, p.entry(p.selectedID))
+	return cmpPanel{Cells: cmpCells(result, p.direction), Length: cmpMapLength(result.Summary), View: p.heat.View(),
+		LabelA: ctx.LabelA, LabelB: ctx.LabelB, RNAX: rnaX, RNAY: rnaY}
+}
+
+// cmpAxisGenes name a test's map axes, the same on the Compare page and in
+// the report: RNA X is the test's gene_id, else A's first sample's gene,
+// else its first gene; RNA Y is gene2, else RNA X.
+func cmpAxisGenes(pr *model.Project, e *comparisonEntry) (string, string) {
+	if e == nil {
+		return "", ""
+	}
+	x := ""
+	if g := e.Parameters.GeneID; g != nil && *g != "" {
+		x = *g
+	} else if pr != nil {
+		for _, id := range e.SamplesOne {
+			if s := pr.Sample(id); s != nil && s.GeneID != "" {
+				x = s.GeneID
+				break
+			}
+		}
+	}
+	if x == "" && len(e.Genes) > 0 {
+		x = e.Genes[0]
+	}
+	y := x
+	if g := e.Parameters.Gene2; g != nil && *g != "" {
+		y = *g
+	}
+	return x, y
+}
+
+// exportMapPNG draws the map off screen in the light theme, as shown (zoom
+// and direction), at twice its size as the web's PNG.
 func (p *comparePage) exportMapPNG() {
 	e, result, ctx, ok := p.exportTarget()
 	if !ok {
@@ -185,15 +232,15 @@ func (p *comparePage) exportMapPNG() {
 	cells := append([]widgets.Cell(nil), p.heat.Cells()...)
 	view := p.heat.View()
 	length := float64(p.mapLength(e, result))
-	directions := []string{"", " · higher in A only", " · higher in B only"}
-	title := "Differential coverage map · " + ctx.LabelA + " vs " + ctx.LabelB + directions[min(max(p.direction, 0), 2)]
+	title := "Differential coverage map · " + ctx.LabelA + " vs " + ctx.LabelB
 	axis := cmpAxisLabel(e)
-	saveExport(p.a, "Export the significant map", exportName(".png", ctx.LabelA, "vs", ctx.LabelB, "map"), func() ([]byte, error) {
-		return cmpMapPNG(cells, view, length, title, axis, ctx.LabelA, ctx.LabelB)
-	})
+	// drawn on the main thread (see exportArcsPNG)
+	data, err := cmpMapPNG(cells, view, length, title, axis, ctx.LabelA, ctx.LabelB)
+	saveExport(p.a, "Export the differential coverage map", cmpExportNames["map_png"], func() ([]byte, error) { return data, err })
 }
 
-// cmpMapPNG draws a significant map with its title, axes note and legend.
+// cmpMapPNG draws a differential coverage map with its title, axes note
+// and colour bar.
 func cmpMapPNG(cells []widgets.Cell, view widgets.Window, length float64, title, axis, labelA, labelB string) ([]byte, error) {
 	heat := widgets.NewHeatmap()
 	heat.MinCell = 3
@@ -201,12 +248,12 @@ func cmpMapPNG(cells []widgets.Cell, view widgets.Window, length float64, title,
 	if view.X1 > view.X0 && view.Y1 > view.Y0 {
 		heat.SetView(view)
 	}
-	return renderPNG(600, 680, func(c *ui.Context) {
+	return renderPNG(600, 720, func(c *ui.Context) {
 		t := c.Theme()
 		ui.Text(c, title).FontSize(13).Bold().TextColor(t.Text)
 		ui.Text(c, axis).FontSize(11).TextColor(t.TextMuted)
 		heat.Show(c.Key("map"), 560, title)
-		cmpLegend(c, labelA, labelB)
+		cmpPadjLegend(c, labelA, labelB)
 	})
 }
 
@@ -242,6 +289,7 @@ type cmpParamsJSON struct {
 	} `json:"parameters"`
 	DifferentialTest struct {
 		Method     string `json:"method"`
+		Validation string `json:"validation"`
 		Parameters struct {
 			MinCount                  *float64 `json:"minCount"`
 			MergeRange                *float64 `json:"mergeRange"`
@@ -251,11 +299,71 @@ type cmpParamsJSON struct {
 			Measure                   string   `json:"measure"`
 		} `json:"parameters"`
 		Result struct {
+			Current     bool               `json:"current"`
 			CompletedAt string             `json:"completedAt"`
 			Datasets    []cmpParamsDataset `json:"datasets"`
-			Summary     comparisonSummary  `json:"summary"`
+			Summary     cmpSummaryJSON     `json:"summary"`
 		} `json:"result"`
 	} `json:"differentialTest"`
+}
+
+// cmpSummaryJSON is a test's summary with the web's camelCase keys (its
+// deseq.js summary; timings in milliseconds).
+type cmpSummaryJSON struct {
+	Samples    []cmpSummarySample `json:"samples"`
+	Parameters struct {
+		MinCount   *float64 `json:"minCount"`
+		Range      *float64 `json:"range"`
+		Alpha      float64  `json:"alpha"`
+		PadjCutoff *float64 `json:"padjCutoff"`
+		BinSize    int      `json:"binSize"`
+	} `json:"parameters"`
+	CellsTotal       int64     `json:"cellsTotal"`
+	CellsTested      int64     `json:"cellsTested"`
+	Significant      int64     `json:"significant"`
+	SignificantUp    int64     `json:"significantUp"`
+	SignificantDown  int64     `json:"significantDown"`
+	Interactions     int64     `json:"interactions"`
+	InteractionsUp   int64     `json:"interactionsUp"`
+	InteractionsDown int64     `json:"interactionsDown"`
+	SizeFactors      []float64 `json:"sizeFactors"`
+	MaxCoordinate    int64     `json:"maxCoordinate"`
+	SimilarityCells  int64     `json:"similarityCells"`
+	SimilarityCap    float64   `json:"similarityCap"`
+	Engine           string    `json:"engine"`
+	Timings          struct {
+		TotalMs *int64 `json:"totalMs"`
+	} `json:"timings"`
+}
+
+type cmpSummarySample struct {
+	Name      string `json:"name"`
+	Condition string `json:"condition"`
+}
+
+// cmpSummaryCamel is s with the web's keys; the samples in the test's
+// order, condition "one" (A) or "two" (B).
+func cmpSummaryCamel(e *comparisonEntry, s comparisonSummary, name func(string) string) cmpSummaryJSON {
+	var out cmpSummaryJSON
+	for _, id := range e.SamplesOne {
+		out.Samples = append(out.Samples, cmpSummarySample{name(id), "one"})
+	}
+	for _, id := range e.SamplesTwo {
+		out.Samples = append(out.Samples, cmpSummarySample{name(id), "two"})
+	}
+	out.Parameters.MinCount, out.Parameters.Range, out.Parameters.PadjCutoff = e.Parameters.MinCount, e.Parameters.Range, e.Parameters.PadjCutoff
+	out.Parameters.Alpha, out.Parameters.BinSize = 0.01, 10
+	out.CellsTotal, out.CellsTested = s.CellsTotal, s.CellsTested
+	out.Significant, out.SignificantUp, out.SignificantDown = s.Significant, s.SignificantUp, s.SignificantDown
+	out.Interactions, out.InteractionsUp, out.InteractionsDown = s.Interactions, s.InteractionsUp, s.InteractionsDown
+	out.SizeFactors, out.MaxCoordinate = s.SizeFactors, s.MaxCoordinate
+	out.SimilarityCells, out.SimilarityCap = s.SimilarityCells, s.SimilarityCap
+	out.Engine = "HYB2 Desktop's numpy port of the DESeq2 1.46 Wald test (hyb2analysis.deseq)"
+	if s.Timings.TotalS != nil {
+		ms := int64(math.Round(*s.Timings.TotalS * 1000))
+		out.Timings.TotalMs = &ms
+	}
+	return out
 }
 
 type cmpParamsDataset struct {
@@ -307,18 +415,25 @@ func (p *comparePage) exportParamsJSON() {
 	pr.SimilarityMethod = "HYB2 plot_similarity_map on one merged raw map per condition (differential.py): min(A, B) of bins present in both; similarityMinimum = awk $3 >= MIN on each merged map"
 	dt := &out.DifferentialTest
 	dt.Method = "DESeq2 1.46 Wald test, condition A (condition_one) vs B, HYB2 Desktop's numpy port (hyb2analysis.deseq); hyb2_compare interaction merge"
+	dt.Validation = cmpValidation
 	dt.Parameters.MinCount, dt.Parameters.MergeRange, dt.Parameters.PadjCutoff = e.Parameters.MinCount, e.Parameters.Range, e.Parameters.PadjCutoff
 	dt.Parameters.IndependentFilteringAlpha, dt.Parameters.BinSize, dt.Parameters.Measure = 0.01, 10, "record-count"
-	dt.Result.CompletedAt, dt.Result.Datasets, dt.Result.Summary = e.CreatedAt, out.Datasets, result.Summary
-	saveExport(p.a, "Export the parameters", exportName(".json", ctx.LabelA, "vs", ctx.LabelB, "parameters"), func() ([]byte, error) {
+	dt.Result.Current = p.inputsCurrent(e)
+	dt.Result.CompletedAt, dt.Result.Datasets = e.CreatedAt, out.Datasets
+	dt.Result.Summary = cmpSummaryCamel(e, result.Summary, p.sampleName)
+	saveExport(p.a, "Export the parameters", cmpExportNames["parameters"], func() ([]byte, error) {
 		return json.MarshalIndent(out, "", "  ")
 	})
 }
 
 // exportTopMapsZIP writes the web's "Top 10 local maps per direction" ZIP.
 func (p *comparePage) exportTopMapsZIP() {
-	e, _, ctx, ok := p.exportTarget()
+	e, _, _, ok := p.exportTarget()
 	if !ok {
+		return
+	}
+	if !p.inputsCurrent(e) {
+		p.a.Toast("%s", cmpStaleNotice)
 		return
 	}
 	probability := p.topQuantile
@@ -332,7 +447,7 @@ func (p *comparePage) exportTopMapsZIP() {
 	}
 	test := map[string]any{"minCount": e.Parameters.MinCount, "range": e.Parameters.Range, "alpha": 0.01,
 		"padjCutoff": e.Parameters.PadjCutoff, "binSize": 10}
-	saveExport(p.a, "Export the top 10 local maps", exportName(".zip", ctx.LabelA, "vs", ctx.LabelB, "top10-local-maps"), func() ([]byte, error) {
+	saveExport(p.a, "Export the top 10 local maps", cmpExportNames["top_maps"], func() ([]byte, error) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			return nil, err
@@ -548,31 +663,7 @@ func jsPrecision(v float64, digits int) string {
 	if v < 0 {
 		sign, v = "-", -v
 	}
-	var keep string
-	e := 0
-	if v == 0 {
-		keep = strings.Repeat("0", digits)
-	} else {
-		// the exact decimal digits of v (a float64 has at most 767 of them)
-		mant, exp, _ := strings.Cut(strconv.FormatFloat(v, 'e', 800, 64), "e")
-		e, _ = strconv.Atoi(exp)
-		all := strings.Replace(mant, ".", "", 1)
-		keep = all[:digits]
-		if all[digits] >= '5' {
-			b := []byte(keep)
-			i := len(b) - 1
-			for ; i >= 0 && b[i] == '9'; i-- {
-				b[i] = '0'
-			}
-			if i < 0 {
-				b = append([]byte{'1'}, b[:len(b)-1]...)
-				e++
-			} else {
-				b[i]++
-			}
-			keep = string(b)
-		}
-	}
+	keep, e := jsDigits(v, digits)
 	if e < -6 || e >= digits {
 		out := keep[:1]
 		if digits > 1 {
@@ -595,7 +686,8 @@ func jsPrecision(v float64, digits int) string {
 // ---- view
 
 // exportsCard: the files for R or HYB2, the parameters and the local maps.
-func (p *comparePage) exportsCard(c *ui.Context, e *comparisonEntry) {
+// A stale test (cmpStaleNotice) has no local maps ZIP, as the web's.
+func (p *comparePage) exportsCard(c *ui.Context, e *comparisonEntry, stale bool) {
 	t := c.Theme()
 	Card(c, "", func() {
 		ui.Text(c, "Exports").FontSize(16).Bold()
@@ -603,13 +695,13 @@ func (p *comparePage) exportsCard(c *ui.Context, e *comparisonEntry) {
 			FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Gap(8).Wrap().Children(func() {
 			if ui.Button(c, "Count table…").Tooltip("HYB2-compatible raw count table (feature_id x_y, one column per sample)").Clicked() {
-				p.exportCopy("counts", "Export the count table", "hyb2-desktop.table.txt")
+				p.exportCopy("counts", "Export the count table", cmpExportNames["counts"])
 			}
 			if ui.Button(c, "names.table…").Tooltip("HYB2's two-column names table: sample, condition_one or condition_two").Clicked() {
-				p.exportCopy("names", "Export names.table", "hyb2-desktop_names.table")
+				p.exportCopy("names", "Export names.table", cmpExportNames["names"])
 			}
 			if ui.Button(c, "Sample metadata…").Tooltip("sample_id, condition, condition_label, file_name").Clicked() {
-				p.exportCopy("metadata", "Export the sample metadata", "deseq2-sample-metadata.tsv")
+				p.exportCopy("metadata", "Export the sample metadata", cmpExportNames["metadata"])
 			}
 			if ui.Button(c, "Parameters JSON…").Tooltip("The test's parameters and result, and this page's settings").Clicked() {
 				p.exportParamsJSON()
@@ -619,7 +711,11 @@ func (p *comparePage) exportsCard(c *ui.Context, e *comparisonEntry) {
 			Field(c, "Local map contrast quantile (Lau -q)", func() {
 				ui.NumberInput(c.Key("cmp-topq"), &p.topQuantile, 0, 1, 0.01).Width(110).Label("Local map contrast quantile")
 			})
-			if ui.Button(c, "Top 10 local maps per direction · ZIP…").Tooltip("SVG maps, raw-count TSVs and a printable preview.html").Clicked() {
+			tip := "SVG maps, raw-count TSVs and a printable preview.html"
+			if stale {
+				tip = cmpStaleNotice
+			}
+			if ui.Button(c, "Top 10 local maps per direction · ZIP…").Tooltip(tip).Disabled(stale).Clicked() && !stale {
 				p.exportTopMapsZIP()
 			}
 		})

@@ -81,7 +81,8 @@ func TestRealStackHeadless(t *testing.T) {
 	}
 	app.RefreshProject()
 	waitFor(t, app, tt, func() bool { s := app.Project.Sample(sample); return s != nil && s.IsReady() })
-	if keys := app.SelectionOptions(); len(keys) == 0 || keys[0].Key != "c:test" {
+	// a condition of one sample is left to that sample, as the web's scopes
+	if keys := app.SelectionOptions(); len(keys) == 0 || keys[0].Key != "s:"+sample || app.Selected.Key != keys[0].Key {
 		t.Fatalf("selection options %+v", keys)
 	}
 }

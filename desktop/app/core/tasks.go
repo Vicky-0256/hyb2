@@ -42,7 +42,12 @@ var TaskKinds = []string{
 	"batch_energy",
 }
 
-var activeStates = []string{"queued", "running"}
+// activeStates are the states of a task that has not finished. A cancelled
+// running task stays "cancelling" until its child has been reaped; the
+// monitor then records the final state (cancelled, or succeeded when the
+// child completed as the cancel landed), so no snapshot shows an outcome
+// that changes afterwards.
+var activeStates = []string{"queued", "running", "cancelling"}
 
 // resumableStates are the terminal states ResumeTask accepts.
 var resumableStates = []string{"interrupted", "failed", "cancelled"}
@@ -481,7 +486,7 @@ func (s *Scheduler) Prepare(request TaskStartRequest, project string, resumedFro
 	stored.ProjectPath = root
 	data, err := json.Marshal(payload)
 	if err == nil {
-		err = os.WriteFile(requestFile, data, 0o644)
+		err = writeFileAtomic(requestFile, data)
 	}
 	if err == nil {
 		err = writeAtomic(runDir, StartFile, stored)
@@ -595,6 +600,7 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 	lock, err := lockRunDir(task.RunDir)
 	if err != nil {
 		s.mu.Unlock()
+		_ = os.RemoveAll(task.RunDir) // never registered: leave no orphan run
 		return nil, fmt.Errorf("cannot lock task directory: %w", err)
 	}
 	entry.lock = lock
@@ -602,6 +608,7 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 	if err := entry.persist(id); err != nil {
 		entry.unlock()
 		s.mu.Unlock()
+		_ = os.RemoveAll(task.RunDir)
 		return nil, fmt.Errorf("cannot save task status: %w", err)
 	}
 	s.tasks[id] = entry
@@ -827,21 +834,24 @@ func (s *Scheduler) monitor(m started) {
 		s.mu.Unlock()
 		return
 	}
-	takenByShutdown := e.cmd != m.cmd
-	if !takenByShutdown {
-		// Still ours (not taken by shutdown): record how it ended.
-		e.cmd = nil
-		e.exitCode = exitCode
-	} else {
-		waitError = nil
+	if e.cmd != m.cmd {
+		// Taken by ShutdownAll, which records and finishes it.
+		s.mu.Unlock()
+		return
 	}
-	if e.status == "cancelled" && waitError == nil && e.exitCode != nil && *e.exitCode == 0 &&
-		isRegularFile(filepath.Join(m.runDir, "result.json")) {
-		// The child finished as the cancel landed: it wrote its result
-		// (atomically, last) and exited 0, so its outputs are complete.
-		// Exit 0 alone is not enough: a killed group's parent can exit 0
-		// once its children die.
-		e.status, e.err = "succeeded", nil
+	e.cmd = nil
+	e.exitCode = exitCode
+	if e.status == "cancelling" {
+		if waitError == nil && e.exitCode != nil && *e.exitCode == 0 &&
+			isRegularFile(filepath.Join(m.runDir, "result.json")) {
+			// The child finished as the cancel landed: it wrote its result
+			// (atomically, last) and exited 0, so its outputs are complete.
+			// Exit 0 alone is not enough: a killed group's parent can exit 0
+			// once its children die.
+			e.status, e.err = "succeeded", nil
+		} else {
+			e.status = "cancelled"
+		}
 	}
 	if slices.Contains(activeStates, e.status) {
 		ok := waitError == nil && e.exitCode != nil && *e.exitCode == 0
@@ -876,10 +886,7 @@ func (s *Scheduler) monitor(m started) {
 	}
 	s.mu.Unlock()
 	s.schedule()
-	if !takenByShutdown {
-		// ShutdownAll finishes the tasks it takes.
-		m.onFinish(m.project, m.id)
-	}
+	m.onFinish(m.project, m.id)
 }
 
 func resultError(result any) string {
@@ -936,6 +943,9 @@ func readDisk(id, runDir string) (Obj, error) {
 	state, _ := status.(string)
 	if (!present || slices.Contains(activeStates, state)) && !runDirLocked(runDir) {
 		object["status"] = "interrupted"
+		if state == "cancelling" {
+			object["status"] = "cancelled" // its owner exited while it was being cancelled
+		}
 		if object["error"] == nil {
 			object["error"] = "the application stopped before this task finished"
 		}
@@ -1072,7 +1082,9 @@ func (s *Scheduler) Cancel(id, project string) (Obj, error) {
 				s.mu.Unlock()
 				return nil, err
 			}
-			e.status = "cancelled"
+			// Active until the monitor has reaped the child and chosen
+			// between cancelled and succeeded.
+			e.status = "cancelling"
 			e.err = &message
 			if err := e.persist(id); err != nil {
 				s.mu.Unlock()
@@ -1093,47 +1105,75 @@ func (s *Scheduler) Cancel(id, project string) (Obj, error) {
 
 // ShutdownAll kills every running task (application exit) and records
 // running and queued tasks as interrupted, so they can be resumed next
-// session. Later submissions are refused. Their onFinish runs before it
-// returns, so they can still be registered while the runtime is up.
+// session; a task the user was cancelling ends cancelled. Later submissions
+// are refused. Their onFinish runs before it returns, so they can still be
+// registered while the runtime is up.
 func (s *Scheduler) ShutdownAll() {
 	s.shuttingDown.Store(true)
 	type finish struct {
 		project, id string
 		onFinish    OnFinish
 	}
+	type taken struct {
+		id     string
+		e      *taskState
+		exited chan struct{}
+		output any
+	}
 	var finishes []finish
-	s.mu.Lock()
-	for id, e := range s.tasks {
-		var message string
-		var onFinish OnFinish
-		switch {
-		case e.pending != nil:
-			onFinish = e.pending.onFinish
-			e.pending = nil
-			message = "the application exited before this queued task started"
-		case e.cmd != nil:
-			onFinish = e.onFinish
-			_ = killTree(e.cmd.Process.Pid)
-			// The monitor reaps the child; it does not need the lock for that.
-			select {
-			case <-e.exited:
-			case <-time.After(5 * time.Second):
-			}
-			e.cmd = nil
-			message = "the application exited while this task was running"
-		default:
-			continue
-		}
+	var running []*taken
+	end := func(id string, e *taskState, message string) {
 		now := time.Now()
 		stamp := iso(now)
-		e.status = "interrupted"
-		e.err = &message
+		if e.status == "cancelling" {
+			e.status = "cancelled" // the user's cancel stands
+		} else {
+			e.status = "interrupted"
+			e.err = &message
+		}
 		e.finished = now
 		e.finishedAt = &stamp
 		_ = e.persist(id)
-		if onFinish != nil {
-			finishes = append(finishes, finish{e.project, id, onFinish})
+	}
+	s.mu.Lock()
+	for id, e := range s.tasks {
+		switch {
+		case e.pending != nil:
+			if onFinish := e.pending.onFinish; onFinish != nil {
+				finishes = append(finishes, finish{e.project, id, onFinish})
+			}
+			e.pending = nil
+			end(id, e, "the application exited before this queued task started")
+		case e.cmd != nil:
+			if e.onFinish != nil {
+				finishes = append(finishes, finish{e.project, id, e.onFinish})
+			}
+			_ = killTree(e.cmd.Process.Pid)
+			// Taken from the monitor, which now only reaps the child.
+			e.cmd = nil
+			running = append(running, &taken{id: id, e: e, exited: e.exited})
 		}
+	}
+	s.mu.Unlock()
+	// Every child was killed at once; wait for them together (5 s in all),
+	// without the lock, so status reads and cancels still answer.
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	expired := false
+	for _, r := range running {
+		if !expired {
+			select {
+			case <-r.exited:
+			case <-deadline.C:
+				expired = true
+			}
+		}
+		r.output = outputField(readResult(r.e.runDir))
+	}
+	s.mu.Lock()
+	for _, r := range running {
+		r.e.output = r.output
+		end(r.id, r.e, "the application exited while this task was running")
 	}
 	s.mu.Unlock()
 	for _, f := range finishes {
@@ -1280,6 +1320,11 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 		return nil, errors.New("structure " + mode + " mode needs exactly two regions and no windows")
 	case !twoRegions && len(request.Regions) > 0:
 		return nil, errors.New("structure regions are only allowed in cofold and paired modes")
+	case engine == "iris" && (twoRegions || len(windows) > 1):
+		// IRIS: one reference region with its chimeras (desktop/runtime/iris.py)
+		return nil, errors.New("structure engine iris folds one region: the whole RNA, or one window")
+	case engine == "iris" && request.Source != nil && *request.Source != "reference":
+		return nil, errors.New("structure engine iris needs source reference (a region with its chimeras)")
 	}
 	for _, r := range request.Regions {
 		if err := validateGeneID(r.GeneID); err != nil {
@@ -1316,9 +1361,9 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 	}
 	if request.Engine != nil {
 		switch *request.Engine {
-		case "cplfold", "cplcofold", "viennarna", "comrades":
+		case "cplfold", "cplcofold", "viennarna", "comrades", "iris":
 		default:
-			return nil, errors.New("structure engine must be cplfold, cplcofold, viennarna or comrades")
+			return nil, errors.New("structure engine must be cplfold, cplcofold, viennarna, comrades or iris")
 		}
 		payload["engine"] = *request.Engine
 	}

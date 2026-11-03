@@ -16,9 +16,9 @@ Two modes share one request shape::
   or of two RNAs of the samples' reference.  The evidence is every chimera
   with one arm in each region, or both arms in one region, as the web's
   two-region CPLcofold layout.
-* ``windows`` folds each window separately (pseudoknots allowed by default),
-  with the chimeras whose two arms both lie inside that window, in a process
-  pool: one window per process, ``numba.set_num_threads(1)``, and
+* ``windows`` folds each window separately (pseudoknot-free by default, as
+  the whole RNA; ``allow_pseudoknot`` turns pseudoknots on), with the
+  chimeras whose two arms both lie inside that window, in a process pool: one window per process, ``numba.set_num_threads(1)``, and
   ``min(cpu, memory budget / per-window estimate, windows)`` workers.
 
 ``parameters.evidence`` ``"none"`` folds the sequence alone (the web's
@@ -41,13 +41,15 @@ import math
 import os
 import re
 import sys
+import tempfile
 import time
 from collections import Counter
+from contextlib import contextmanager
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from multiprocessing import get_context
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .detector import CPLFOLD_MEMORY_FRACTION, cplfold_limits, cplfold_memory_estimate, memory_snapshot
 from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
@@ -321,6 +323,10 @@ def _windows(raw: Any, length: int) -> List[Tuple[int, int]]:
             raise ValueError(f"window {index + 1} ({start}-{end}) is outside 1-{length}")
         if end - start + 1 < MIN_WINDOW_NT:
             raise ValueError(f"window {index + 1} is shorter than {MIN_WINDOW_NT} nt")
+        if (start, end) in windows:
+            # one result per window: a repeat would fold twice and overwrite its files
+            raise ValueError(f"window {index + 1} ({start}-{end}) repeats window {windows.index((start, end)) + 1}; "
+                             "give each window once")
         windows.append((start, end))
     return windows
 
@@ -428,6 +434,8 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
         return request, None
     if source not in ("paste", "record"):
         raise ValueError("source must be 'reference', 'paste' or 'record'")
+    if engine == "iris":
+        raise ValueError("IRIS uses one reference region with HYB evidence: choose Reference region")
     if mode not in ("genome", "cofold") or request.get("windows") or request.get("regions"):
         raise ValueError("a pasted or HYB record sequence is folded whole, or as two strands with CPLcofold")
     first = _clean_sequence(request.get("sequence"))
@@ -557,6 +565,26 @@ def _candidate(rank: int, raw: Dict[str, Any], structure: str,
     }
 
 
+@contextmanager
+def _atomic_writer(path: Path) -> Iterator[Any]:
+    """A text handle whose content replaces ``path`` when the block ends.  The
+    temporary file has a unique name (two writers of one directory never
+    share it) and is removed when the block fails."""
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            yield handle
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
 def _bonus_header(length: int, label: str, cutpoint: Optional[int] = None) -> str:
     """The web's bonus-matrix TSV header (web/structure-ui.js cplfoldEvidenceTsv),
     which CPLfold.py load_bonus_matrix_file reads; the region line is a comment."""
@@ -575,9 +603,8 @@ def write_bonus_matrix(path: Path, bonus: Any, label: str) -> int:
     import numpy as np
 
     n = int(bonus.shape[0])
-    temporary = path.with_name("." + path.name + ".tmp")
     cells = 0
-    with open(temporary, "w", encoding="utf-8") as handle:
+    with _atomic_writer(path) as handle:
         handle.write(_bonus_header(n, label))
         for row in range(n - 1):
             values = bonus[row, row + 1:]
@@ -586,9 +613,6 @@ def write_bonus_matrix(path: Path, bonus: Any, label: str) -> int:
                 handle.write("".join(f"{row + 1}\t{row + 2 + int(column)}\t{float(values[column]):.8f}\n"
                                      for column in columns))
                 cells += int(columns.size)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
     return cells
 
 
@@ -664,17 +688,47 @@ def _fold_window(root: str, index: int, sequence: str, blocks: List[Tuple[int, i
     return index, fold_one(module, sequence, arms, params, bonus_path, label)
 
 
+def run_in_pool(workers: int, function: Callable[..., Any], jobs: Sequence[Tuple[Any, ...]],
+                on_result: Callable[[Any], None], *, initializer: Optional[Callable[..., None]] = None,
+                initargs: Tuple[Any, ...] = ()) -> None:
+    """``function(*job)`` of each job in ``workers`` spawned processes,
+    ``on_result`` called with each result as it finishes.  The first failure
+    is raised at once: the queued jobs are cancelled and the running ones
+    stopped, rather than waited for as leaving ``with ProcessPoolExecutor``
+    would."""
+    pool = ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"), initializer=initializer,
+                               initargs=initargs)
+    try:
+        futures = [pool.submit(function, *job) for job in jobs]
+        for future in as_completed(futures):
+            on_result(future.result())
+    except BaseException:
+        _stop_pool(pool)
+        raise
+    pool.shutdown(wait=True)
+
+
+def _stop_pool(pool: ProcessPoolExecutor) -> None:
+    """Cancel a pool's queued jobs and end its workers without waiting
+    for the jobs they run."""
+    processes = list((getattr(pool, "_processes", None) or {}).values())
+    pool.shutdown(wait=False, cancel_futures=True)
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+    for process in processes:
+        process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+
+
 # ---------------------------------------------------------------------------
 # output
 # ---------------------------------------------------------------------------
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    temporary = path.with_name("." + path.name + ".tmp")
-    with open(temporary, "w", encoding="utf-8") as handle:
+    with _atomic_writer(path) as handle:
         handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
 
 
 def _describe(params: Dict[str, Any]) -> str:
@@ -682,6 +736,9 @@ def _describe(params: Dict[str, Any]) -> str:
     if params.get("engine") == "COMRADES(ViennaRNA)":
         return (f"COMRADES(ViennaRNA), {params['temperature']:g} °C, min loop {params['min_loop']}, "
                 f"{params['random_folds']} randomised folds, seed {_comrades.seed_label(params['seed'])}")
+    if params.get("engine") == "IRIS":
+        return (f"IRIS ensemble member 1 (heaviest), K {params['K']}, C {params['C']}, support quantile "
+                f"{params['fraction']:g}, stem lengths {params['kRange']}, {params['temperature']:g} °C, min loop {params['min_loop']}")
     if params.get("engine") == "ViennaRNA":
         hard = f", {len(params['hard_pairs'])} hard pairs" if params.get("hard_pairs") else ""
         return f"ViennaRNA MFE, {params['temperature']:g} °C, min loop {params['min_loop']}{hard}"
@@ -718,7 +775,44 @@ def _write_outputs(out_dir: Path, records: List[Dict[str, Any]], params: Dict[st
     _atomic_write_text(paths["pairs"], "\n".join(tsv) + "\n")
     _atomic_write_text(paths["ct"], "".join(ct))
     _write_candidates(out_dir, records, paths)
+    _write_arms(out_dir, records, paths)
     return {key: str(value) for key, value in paths.items()}
+
+
+# The raw HYB arms drawn under the arc diagram (the web's "Raw HYB
+# interactions · below"): at most this many interval blocks per window.
+ARMS_SHOWN = 2000
+
+
+def _arms_sample(counter: Any) -> Dict[str, Any]:
+    """A window's evidence for display: its HYB rows, its unique arm blocks
+    and the ARMS_SHOWN most frequent blocks as [a0, a1, b0, b1, rows] in
+    window coordinates (1-based, inclusive)."""
+    items = sorted(counter.items(), key=lambda item: (-item[1], item[0])) if counter else []
+    return {"rows": int(sum(counter.values())) if counter else 0, "unique": len(items),
+            "shown": [[int(a0), int(a1), int(b0), int(b1), int(n)] for (a0, a1, b0, b1), n in items[:ARMS_SHOWN]]}
+
+
+def _write_arms(out_dir: Path, records: List[Dict[str, Any]], paths: Dict[str, Path]) -> None:
+    """arms.json: each record's evidence sample (:func:`_arms_sample`),
+    aligned with the records of structure.dbn.  As the web's rawHybArms:
+    written whenever the fold maps the samples' chimeras onto the sequence
+    (CPLfold with HYB evidence, CPLcofold of two regions, COMRADES, IRIS),
+    so a record with no row says so; nothing for ViennaRNA and
+    sequence-only CPLfold, which map none."""
+    if not any(isinstance(record.get("arms"), dict) for record in records):
+        return
+    paths["arms"] = out_dir / "arms.json"
+    _atomic_write_json(paths["arms"], {"version": 1,
+                                       "records": [record.get("arms") or _arms_sample(None) for record in records]})
+
+
+def _blocks(arms: List[Dict[str, Any]], move: Optional[Callable[[int], int]] = None) -> Counter:
+    """COMRADES evidence arms ({one, two, oneStart, twoStart}) as interval
+    blocks with their row counts; ``move`` maps each position."""
+    move = move or (lambda k: k)
+    return Counter((move(a["oneStart"]), move(a["oneStart"] + len(a["one"]) - 1),
+                    move(a["twoStart"]), move(a["twoStart"] + len(a["two"]) - 1)) for a in arms)
 
 
 def _write_candidates(out_dir: Path, records: List[Dict[str, Any]], paths: Dict[str, Path]) -> None:
@@ -747,7 +841,7 @@ def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
         "long_range_pairs_gt_1000": sum(1 for pair in pairs if pair[1] - pair[0] > 1000),
         "evidence": {key: evidence.get(key) for key in (
             "source", "builder", "inputRecords", "uniqueBlocks", "meanArmLength", "gaussianStandardDeviation",
-            "nonzeroBonusCells", "maximumBonus", "truncationTail", "transform", "evidenceWeight")},
+            "nonzeroBonusCells", "nonzeroUpperTriangleCells", "maximumBonus", "truncationTail", "transform", "evidenceWeight")},
         "seconds": record["seconds"],
         "peak_rss_bytes": record.get("peak_rss_bytes"),
         **({"candidates": len(record["candidates"]), "bonus_matrix": record.get("bonus_matrix")}
@@ -794,8 +888,8 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     task_id = _safe_task_id(request.get("task_id"))
     mode = request.get("mode", "genome")
     engine = request.get("engine", "cplfold")
-    if engine not in {"cplfold", "cplcofold", "viennarna", "comrades"}:
-        raise ValueError("engine must be 'cplfold', 'cplcofold', 'viennarna' or 'comrades'")
+    if engine not in {"cplfold", "cplcofold", "viennarna", "comrades", "iris"}:
+        raise ValueError("engine must be 'cplfold', 'cplcofold', 'viennarna', 'comrades' or 'iris'")
     if (engine == "cplcofold") != (mode == "cofold"):
         raise ValueError("mode 'cofold' goes with engine 'cplcofold'")
     if mode == "paired" and engine != "comrades":
@@ -806,6 +900,9 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     mode = request.get("mode", "genome")
     if engine == "cplcofold":
         return _cofold_run(request, project, task_id, state, started, repo_root)
+    if engine == "iris":
+        from .iris import structure_run as _iris_run  # IRIS: one reference region (iris.py)
+        return _iris_run(request, project, task_id, mode, state, started)
     if engine != "cplfold":
         return _vienna_run(request, project, task_id, mode, state, started, engine)
     params = _parameters(request.get("parameters"), mode)
@@ -848,7 +945,8 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     workers = min(cpu, memory_workers, len(windows))
     if requested_workers is not None:
         workers = min(workers, requested_workers)
-    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"), "workers": workers}
+    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"), "workers": workers,
+                     "pseudoknot": params["allow_pseudoknot"], "guided": params["evidence"] == "hyb"}
 
     # 1. stream the evidence
     total_bytes = sum(path.stat().st_size for path in inputs["hyb_paths"])
@@ -877,6 +975,8 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     def finish(index: int, record: Dict[str, Any]) -> None:
         start, end = windows[index]
         record.update({"start": start, "end": end, "gene_id": gene_id, "sequence": sequence[start - 1:end]})
+        if params["evidence"] != "none":
+            record["arms"] = _arms_sample(counters[index])  # sequence only maps no chimera
         records[index] = record
 
     # each window's bonus matrix, for a local CPLfold run of that window
@@ -890,19 +990,20 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
             finish(index, fold_one(module, sequence[start - 1:end], arms, params, bonus_paths[index], labels[index]))
     else:
         done = 0
-        context = get_context("spawn")
-        with ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_worker_init,
-                                 initargs=(str(root),)) as pool:
-            futures = [pool.submit(_fold_window, str(root), index, sequence[start - 1:end],
-                                   list(arms.keys()), list(arms.values()), params, bonus_paths[index], labels[index])
-                       for index, ((start, end), arms) in enumerate(zip(windows, counters))]
-            progress("fold", f"0/{len(windows)} windows on {workers} workers", 0, len(windows), units="windows", force=True)
-            for future in as_completed(futures):
-                index, record = future.result()
-                finish(index, record)
-                done += 1
-                progress("fold", f"{done}/{len(windows)} windows on {workers} workers", done, len(windows),
-                         units="windows", force=True)
+
+        def folded(result: Tuple[int, Dict[str, Any]]) -> None:
+            nonlocal done
+            finish(*result)
+            done += 1
+            progress("fold", f"{done}/{len(windows)} windows on {workers} workers", done, len(windows),
+                     units="windows", force=True)
+
+        progress("fold", f"0/{len(windows)} windows on {workers} workers", 0, len(windows), units="windows", force=True)
+        run_in_pool(workers, _fold_window,
+                    [(str(root), index, sequence[start - 1:end], list(arms.keys()), list(arms.values()), params,
+                      bonus_paths[index], labels[index])
+                     for index, ((start, end), arms) in enumerate(zip(windows, counters))],
+                    folded, initializer=_worker_init, initargs=(str(root),))
     fold_seconds = time.monotonic() - t0
 
     # 3. write
@@ -967,6 +1068,32 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     return result
 
 
+def _comrades_evidence(progress: ProgressWriter, hyb_paths: Sequence[Path],
+                       read: Callable[[Callable[[int], None]], Any]) -> Any:
+    """``read(report)`` of the COMRADES evidence, the .hyb bytes read
+    reported as the "evidence" stage."""
+    total = sum(path.stat().st_size for path in hyb_paths)
+    progress("evidence", "reading .hyb", 0, total, force=True)
+    found = read(lambda done: progress("evidence", "reading .hyb", done, total))
+    progress("evidence", "done", total, total, force=True)
+    return found
+
+
+# The share of a COMRADES fold's progress given to the RNAcofold evidence;
+# the constrained ViennaRNA fits take the rest.
+_COFOLD_SHARE = 0.5
+
+
+def _comrades_progress(progress: ProgressWriter, what: str, index: int, count: int) -> Callable[[str, int, int], None]:
+    """:func:`comrades.fold`'s progress as the "fold" stage: window
+    ``index`` of ``count`` advances from ``index`` to ``index + 1`` windows."""
+    def report(stage: str, done: int, total: int) -> None:
+        part = done / total if total else 1.0
+        share = _COFOLD_SHARE * part if stage == "RNAcofold evidence" else _COFOLD_SHARE + (1 - _COFOLD_SHARE) * part
+        progress("fold", f"{what}: {stage} {done}/{total}", round(index + share, 4), count, units="windows")
+    return report
+
+
 def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str, state: Dict[str, Any],
                 started: float, engine: str) -> Dict[str, Any]:
     """ViennaRNA MFE (engine "viennarna", vienna.py: the samples only give the
@@ -993,29 +1120,36 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
         raise ValueError("hard pair(s) " + ", ".join(outside) + " are not inside a folded window")
     local = [_vienna.check_hard_pairs(pairs, sequence[start - 1:end], params["min_loop"], start)
              for pairs, (start, end) in zip(per_window, windows)]
-    arms = []
-    if comrades:
-        for start, end in windows:
-            found, _ = _comrades.evidence_arms(inputs["hyb_paths"], gene_id, sequence, start, end, params["homodimer_only"])
-            if not found:
-                raise ValueError(f"no {gene_id} chimeras have both arms inside {start}-{end}")
-            arms.append(found)
 
     run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
     state.update(run_dir=run_dir, task_id=task_id)
     out_dir = _real_child_dir(project / "structures", task_id, exist_ok=True)
     progress = ProgressWriter(run_dir)
     progress.work = {"lengths": [end - start + 1 for start, end in windows], "engine": engine, "workers": 1}
+    arms = []
+    t0 = time.monotonic()
+    if comrades:
+        # every window's chimeras in one pass over the .hyb files
+        arms = [found for found, _ in _comrades_evidence(
+            progress, inputs["hyb_paths"], lambda report: _comrades.window_arms(
+                inputs["hyb_paths"], gene_id, sequence, windows, params["homodimer_only"], report))]
+        for found, (start, end) in zip(arms, windows):
+            if not found:
+                raise ValueError(f"no {gene_id} chimeras have both arms inside {start}-{end}")
+    evidence_seconds = time.monotonic() - t0
     records: List[Dict[str, Any]] = []
     t0 = time.monotonic()
     for index, ((start, end), pairs) in enumerate(zip(windows, local)):
-        progress("fold", f"window {index + 1}/{len(windows)} ({start}-{end})" if mode == "windows" else "folding",
-                 index, len(windows), units="windows", force=True)
+        what = f"window {index + 1}/{len(windows)} ({start}-{end})" if mode == "windows" else "folding"
+        progress("fold", what, index, len(windows), units="windows", force=True)
         if comrades:
-            record = _comrades.fold(sequence[start - 1:end], arms[index], params)
+            record = _comrades.fold(sequence[start - 1:end], arms[index], params,
+                                    _comrades_progress(progress, what, index, len(windows)))
         else:
             record = _vienna.fold(sequence[start - 1:end], params, pairs)
         record.update({"start": start, "end": end, "gene_id": gene_id, "sequence": sequence[start - 1:end]})
+        if comrades:
+            record["arms"] = _arms_sample(_blocks(arms[index]))  # window positions
         records.append(record)
     fold_seconds = time.monotonic() - t0
 
@@ -1044,7 +1178,8 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
         "coordinates": "1-based inclusive positions on the gene_id reference sequence (windows, pairs.tsv i/j, ct column 6)",
         "windows": [{"start": start, "end": end} for start, end in windows],
         "workers": 1, "records": summaries,
-        "timings": {"evidence_s": 0.0, "fold_s": round(fold_seconds, 2), "total_s": round(time.monotonic() - started, 2)},
+        "timings": {"evidence_s": round(evidence_seconds, 2), "fold_s": round(fold_seconds, 2),
+                    "total_s": round(time.monotonic() - started, 2)},
         "created_at": _now(),
     }
     _atomic_write_json(out_dir / "meta.json", meta)
@@ -1186,6 +1321,7 @@ def _write_cofold_outputs(out_dir: Path, regions: List[Dict[str, Any]], record: 
     _atomic_write_text(paths["pairs"], "\n".join(tsv) + "\n")
     _atomic_write_text(paths["ct"], "".join(ct))
     _write_candidates(out_dir, [record], paths)
+    _write_arms(out_dir, [record], paths)
     return {key: str(value) for key, value in paths.items()}
 
 
@@ -1279,7 +1415,8 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
         result = {"ok": False, "status": "unavailable", "task_id": task_id, "run_dir": str(run_dir), "error": str(error)}
         _atomic_write_json(run_dir / "result.json", result)
         return result
-    progress.work = {"lengths": [len(sequence)], "beam": params["beam"], "workers": 1}
+    progress.work = {"lengths": [len(sequence)], "beam": params["beam"], "workers": 1,
+                     "pseudoknot": params["allow_pseudoknot"], "guided": params["evidence"] == "hyb"}
 
     # 1. the evidence, as blocks with row counts (memory grows with the
     #    distinct blocks, not with the read depth)
@@ -1337,6 +1474,9 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
               "candidates": candidates, "candidates_found": len(folded.get("candidates") or []),
               "nucleotide_support": [round(float(value), 6) for value in support] if support else None,
               "bonus_matrix": bonus_file,
+              # the web's rawHybArms in A+B positions: none mapped for a sequence-only
+              # fold of two reference regions, not attached for pasted strands
+              "arms": None if request.get("_strands") else _arms_sample(arms),
               "seconds": {"bonus": 0.0, "fold": round(fold_seconds, 2)}, "peak_rss_bytes": _peak_rss_bytes()}
     rows_text = ("none: sequence only, no chimera is used" if params["evidence"] == "none" else
                  f"chimeras with one arm in each region ({counts['between']}) or both arms in region 1 "
@@ -1347,7 +1487,10 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
         stored={**params, "engine": "CPLcofold", "linear_fold_mode": "Vienna", "max_phase2": 1},
         inputs=inputs, hyb_used=params["evidence"] == "hyb", rows=rows_text, extra_record={"evidence_rows": counts},
         extra_meta={"limits": {key: limits.get(key) for key in ("pseudoknot_free_max_nt", "pseudoknot_max_nt",
-                                                                "memory_budget_bytes", "source")}},
+                                                                "memory_budget_bytes", "source")},
+                    # the selected candidate's energy model and kind (the web's
+                    # energyMetadata: "heuristic" for an experimental pseudoknot energy)
+                    "energy_metadata": dict(folded.get("energyMetadata") or {})},
         timings={"evidence_s": round(evidence_seconds, 2), "fold_s": round(fold_seconds, 2),
                  "total_s": round(time.monotonic() - started, 2)},
         fold_seconds=fold_seconds)
@@ -1370,21 +1513,22 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     if len(prepared) > _comrades.MAX_COMRADES_NT:
         raise ValueError(f"{len(prepared)} nt (both regions and the 100-nt spacer) exceeds the COMRADES(ViennaRNA) "
                          f"limit of {_comrades.MAX_COMRADES_NT} nt; choose shorter regions")
-    t0 = time.monotonic()
-    layout = [dict(regions[0], prepared_start=1), dict(regions[1], prepared_start=len(one) + len(_comrades.LINKER) + 1)]
-    arms, skipped = _comrades.paired_arms(inputs["hyb_paths"], layout, prepared, params["homodimer_only"])
-    if not arms:
-        raise ValueError(f"no chimeras have one arm in each of {_cofold_label(regions)}")
-    evidence_seconds = time.monotonic() - t0
 
     run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
     state.update(run_dir=run_dir, task_id=task_id)
     out_dir = _real_child_dir(project / "structures", task_id, exist_ok=True)
     progress = ProgressWriter(run_dir)
     progress.work = {"lengths": [len(prepared)], "engine": "comrades", "workers": 1}
+    t0 = time.monotonic()
+    layout = [dict(regions[0], prepared_start=1), dict(regions[1], prepared_start=len(one) + len(_comrades.LINKER) + 1)]
+    arms, skipped = _comrades_evidence(progress, inputs["hyb_paths"], lambda report: _comrades.paired_arms(
+        inputs["hyb_paths"], layout, prepared, params["homodimer_only"], report))
+    if not arms:
+        raise ValueError(f"no chimeras have one arm in each of {_cofold_label(regions)}")
+    evidence_seconds = time.monotonic() - t0
     progress("fold", "folding", 0, 1, units="windows", force=True)
     t0 = time.monotonic()
-    folded = _comrades.fold(prepared, arms, params)
+    folded = _comrades.fold(prepared, arms, params, _comrades_progress(progress, "folding", 0, 1))
     fold_seconds = time.monotonic() - t0
 
     # keep the two regions: A+B positions, without the spacer
@@ -1399,9 +1543,11 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     for i, j, _, _ in pairs:
         dot[i - 1], dot[j - 1] = "(", ")"
     positions = cofold_positions(regions)
-    hard = [[positions[local(i) - 1], positions[local(j) - 1]] for i, j in folded["hard_pairs"]
+    # on the RNA, i < j also when region 2 lies before region 1
+    hard = [sorted((positions[local(i) - 1], positions[local(j) - 1])) for i, j in folded["hard_pairs"]
             if local(i) is not None and local(j) is not None]
-    record = dict(folded, structure="".join(dot), pairs=pairs, sequence=one + two, start=1, end=len(one) + len(two))
+    record = dict(folded, structure="".join(dot), pairs=pairs, sequence=one + two, start=1, end=len(one) + len(two),
+                  arms=_arms_sample(_blocks(arms, local)))  # A+B positions, without the spacer
     stored = {"engine": "COMRADES(ViennaRNA)", **{k: params[k] for k in ("temperature", "min_loop", "constraint_limit",
                                                                        "random_folds", "seed", "homodimer_only")},
               "layout": "two regions joined by the 100-nt A/U spacer", "hard_pairs": hard}
@@ -1504,24 +1650,45 @@ def parse_dbn(text: str) -> List[Dict[str, Any]]:
     return records
 
 
-def _pair_bonus(path: Optional[Path]) -> Dict[Tuple[int, int, int], float]:
-    """``(window_start, i, j) -> bonus`` from a pairs.tsv of :func:`_write_outputs`."""
-    out: Dict[Tuple[int, int, int], float] = {}
+PairBonus = Dict[Tuple[int, Optional[int], int, int], float]
+
+
+def _pair_bonus(path: Optional[Path]) -> PairBonus:
+    """``(window_start, window_end, i, j) -> bonus`` from a pairs.tsv of
+    :func:`_write_outputs`: keyed by the whole window, as nested windows
+    (1-500 and 1-1000) share a start.  A file without a window_end column
+    gives ``None`` for it (see :func:`_bonus_of`)."""
+    out: PairBonus = {}
     if path is None:
         return out
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return out
+    header = lines[0].split("\t") if lines else []
+    try:
+        columns = [header.index(name) for name in ("window_start", "i", "j", "bonus")]
+    except ValueError:
+        columns = [0, 2, 3, 5]  # the order every pairs.tsv was written in
+    end_column = header.index("window_end") if "window_end" in header else None
     for line in lines[1:]:
         cells = line.split("\t")
-        if len(cells) < 6:
+        if len(cells) <= max(columns + [end_column or 0]):
             continue
         try:
-            out[(int(cells[0]), int(cells[2]), int(cells[3]))] = float(cells[5])
+            start, i, j, bonus = (cells[k] for k in columns)
+            end = int(cells[end_column]) if end_column is not None else None
+            out[(int(start), end, int(i), int(j))] = float(bonus)
         except ValueError:
             continue
     return out
+
+
+def _bonus_of(bonus: PairBonus, start: int, end: int, i: int, j: int) -> Optional[float]:
+    """A pair's bonus in window ``start``-``end``, also from a pairs.tsv
+    without window_end."""
+    value = bonus.get((start, end, i, j))
+    return bonus.get((start, None, i, j)) if value is None else value
 
 
 def _record_extras(project: Path, entry: Dict[str, Any], meta: Dict[str, Any], count: int) -> List[Dict[str, Any]]:
@@ -1542,6 +1709,16 @@ def _record_extras(project: Path, entry: Dict[str, Any], meta: Dict[str, Any], c
             if index < count and isinstance(row, dict):
                 extras[index].update(candidates=row.get("candidates") or [], selected_candidate=0,
                                      nucleotide_support=row.get("nucleotide_support"))
+    arms = dbn.parent / "arms.json" if dbn is not None else None
+    if arms is not None and arms.is_file() and not arms.is_symlink():
+        try:
+            loaded = json.loads(arms.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            loaded = {}
+        rows = loaded.get("records") if isinstance(loaded, dict) else None
+        for index, row in enumerate(rows if isinstance(rows, list) else []):
+            if index < count and isinstance(row, dict):
+                extras[index]["arms"] = row
     summaries = meta.get("records") if isinstance(meta.get("records"), list) else []
     for index, summary in enumerate(summaries[:count]):
         name = summary.get("bonus_matrix") if isinstance(summary, dict) else None
@@ -1555,7 +1732,7 @@ def _record_extras(project: Path, entry: Dict[str, Any], meta: Dict[str, Any], c
 
 
 def _read_cofold(entry: Dict[str, Any], meta: Dict[str, Any], parsed: List[Dict[str, Any]],
-                 bonus: Dict[Tuple[int, int, int], float]) -> Dict[str, Any]:
+                 bonus: PairBonus) -> Dict[str, Any]:
     """A two-strand result (CPLcofold, or COMRADES of two regions): one
     record over A+B, with ``positions`` (where
     each nucleotide is drawn, see :func:`cofold_positions`), ``cutpoint`` and
@@ -1570,11 +1747,13 @@ def _read_cofold(entry: Dict[str, Any], meta: Dict[str, Any], parsed: List[Dict[
         raise ValueError("the CPLcofold result does not match its regions")
     local = [(i, j) for i, j, _ in _pairs(record["dbn"])]
     energy = summary["energy"] if "energy" in summary else record["energy"]
+    n = len(record["sequence"])
     return {"structure": entry, "meta": meta, "records": [{
         "window_start": min(positions), "window_end": max(positions),
         "sequence": record["sequence"], "dbn": record["dbn"],
-        "pairs": [[positions[i - 1], positions[j - 1]] for i, j in local],
-        "bonus": [bonus.get((1, i, j)) for i, j in local] if bonus else None,
+        # i < j also when region 2 lies before region 1 on the RNA
+        "pairs": [sorted((positions[i - 1], positions[j - 1])) for i, j in local],
+        "bonus": [_bonus_of(bonus, 1, n, i, j) for i, j in local] if bonus else None,
         "energy": energy, "positions": positions, "cutpoint": summary.get("cutpoint", segments[0]["prepared_end"]),
         "segments": segments,
     }]}
@@ -1625,7 +1804,8 @@ def read_structure(project: Path, structure_id: str) -> Dict[str, Any]:
             "window_start": start, "window_end": start + len(record["sequence"]) - 1,
             "sequence": record["sequence"], "dbn": record["dbn"], "pairs": pairs,
             # chimera evidence (HYB bonus) of each pair, from pairs.tsv; null when unknown
-            "bonus": [bonus.get((start, i, j)) for i, j in pairs] if bonus else None,
+            "bonus": [_bonus_of(bonus, start, start + len(record["sequence"]) - 1, i, j) for i, j in pairs]
+            if bonus else None,
             "energy": energy,
             **extras[index],
         })

@@ -12,6 +12,7 @@ import (
 	"html"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode"
@@ -32,7 +33,7 @@ func saveExport(a *App, title, name string, render func() ([]byte, error)) {
 		}
 		data, err := render()
 		if err == nil {
-			err = os.WriteFile(path, data, 0o644)
+			err = writeFileAtomic(path, data)
 		}
 		return func() {
 			if err != nil {
@@ -42,6 +43,30 @@ func saveExport(a *App, title, name string, render func() ([]byte, error)) {
 			a.Toast("Saved %s", path)
 		}
 	})
+}
+
+// writeFileAtomic writes data to a temporary file next to path and renames
+// it over path, so a failed write leaves a file being replaced untouched.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(0o644)
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(name, path)
+	}
+	if err != nil {
+		os.Remove(name)
+	}
+	return err
 }
 
 // exportName makes a file name from parts: letters and digits (any
@@ -387,6 +412,8 @@ type arcSVG struct {
 	Mono ui.Color
 	// Features is the gene track under the arcs.
 	Features []widgets.Feature
+	// Gap is a chain break the axis skips (widgets.Arcs.Gap).
+	Gap widgets.Gap
 }
 
 var (
@@ -430,11 +457,13 @@ func (s arcSVG) SVG() (svg string, drawn int) {
 	}
 	legendY := top + plotH + track + 36
 	height := legendY + 10
-	span := float64(end - start)
+	g := s.Gap
+	a0 := g.Axis(float64(start))
+	span := g.Axis(float64(end)) - a0
 	if span <= 0 {
 		span = 1
 	}
-	x := func(pos int) float64 { return left + (float64(pos)-float64(start))/span*plotW }
+	x := func(pos int) float64 { return left + (g.Axis(float64(pos))-a0)/span*plotW }
 
 	inA := make(map[widgets.Pair]bool, len(s.A))
 	for _, p := range s.A {
@@ -526,7 +555,20 @@ func (s arcSVG) SVG() (svg string, drawn int) {
 		}
 	}
 	b.WriteString(`</g>`)
-	fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(left), svgNum(base), svgNum(left+plotW), svgNum(base), svgLine)
+	if lo, hi := g.Bounds(); hi > lo+1 && lo >= start && hi <= end {
+		// the chain break, as the web's "A | B" ("B | A" when strand B is first)
+		nick := (x(lo) + x(hi)) / 2
+		half := math.Min(9, math.Max(3, (x(hi)-x(lo))*0.3))
+		first, second := "A", "B"
+		if g.From > g.To {
+			first, second = "B", "A"
+		}
+		fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s" data-strand="%s"/>`, svgNum(left), svgNum(base), svgNum(nick-half), svgNum(base), svgLine, first)
+		fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s" data-strand="%s"/>`, svgNum(nick+half), svgNum(base), svgNum(left+plotW), svgNum(base), svgLine, second)
+		fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="middle" font-size="10" fill="%s" data-chain-break="%d">%s</text>`, svgNum(nick), svgNum(base+16), svgMuted, lo, g.Label())
+	} else {
+		fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(left), svgNum(base), svgNum(left+plotW), svgNum(base), svgLine)
+	}
 	if track > 0 {
 		y := top + plotH + 2
 		for index, f := range s.Features {
@@ -547,7 +589,11 @@ func (s arcSVG) SVG() (svg string, drawn int) {
 		}
 	}
 	axisY := top + plotH + track
-	for _, pos := range niceTicks(float64(start), float64(end), 8) {
+	ticks := niceTicks(float64(start), float64(end), 8)
+	if lo, hi := g.Bounds(); hi > lo+1 {
+		ticks = g.Ticks(float64(start), float64(end), 8)
+	}
+	for _, pos := range ticks {
 		px := x(int(pos))
 		fmt.Fprintf(&b, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s"/>`, svgNum(px), svgNum(axisY+2), svgNum(px), svgNum(axisY+6), svgLine)
 		fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="middle" fill="%s">%d</text>`, svgNum(px), svgNum(axisY+18), svgMuted, int(pos))

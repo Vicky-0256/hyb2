@@ -92,7 +92,7 @@ func TestOverBudgetTasksQueueAndStartInOrder(t *testing.T) {
 		t.Fatalf("second %v", snap)
 	}
 	// Freeing the budget starts the head of the queue with its grant.
-	if snap, _ := s.Cancel(first, ""); snap["status"] != "cancelled" {
+	if snap, _ := s.Cancel(first, ""); snap["status"] != "cancelling" {
 		t.Fatalf("first %v", snap)
 	}
 	snap = waitFor(t, s, second, project, func(s Obj) bool { return s["status"] == "running" })
@@ -291,7 +291,7 @@ func TestCancellationReapsChildAndKeepsCancelledStatus(t *testing.T) {
 		func(string, string) { count.Add(1) }); err != nil {
 		t.Fatal(err)
 	}
-	if snap, err := s.Cancel(id, ""); err != nil || snap["status"] != "cancelled" {
+	if snap, err := s.Cancel(id, ""); err != nil || snap["status"] != "cancelling" {
 		t.Fatalf("%v %v", snap, err)
 	}
 	for range 200 {
@@ -408,7 +408,7 @@ func TestCancelKillsWholeProcessTree(t *testing.T) {
 			t.Fatalf("process %d is not running before cancel", pid)
 		}
 	}
-	if snap, err := s.Cancel(id, ""); err != nil || snap["status"] != "cancelled" {
+	if snap, err := s.Cancel(id, ""); err != nil || snap["status"] != "cancelling" {
 		t.Fatalf("%v %v", snap, err)
 	}
 	assertGone(t, pids)

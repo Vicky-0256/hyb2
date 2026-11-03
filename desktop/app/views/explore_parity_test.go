@@ -74,7 +74,7 @@ func TestInteractionsEvalueFilterAndPartners(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !tt.HasText("max e-value must be a number, 0 or more") {
+	if !tt.HasText("maximum e-value must be a number, 0 or more") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	s.maxEvalue = ""
@@ -270,10 +270,11 @@ func TestInteractionRecordActions(t *testing.T) {
 	}
 	settle(a, tt)
 	d := p.cm.data
-	if p.tab != tabContact || d == nil || p.cm.gene2 != r.Gene2 || p.cm.picked < 0 {
-		t.Fatalf("tab %d data %v picked %d", p.tab, d != nil, p.cm.picked)
+	sel := p.cm.cmap.Selection
+	if p.tab != tabContact || d == nil || p.cm.gene2 != r.Gene2 || sel == nil || p.cm.cmap.Zoomed() {
+		t.Fatalf("tab %d data %v selection %v", p.tab, d != nil, sel)
 	}
-	if x, y := d.x[p.cm.picked], d.y[p.cm.picked]; x != r.Start1/d.bin*d.bin || y != r.Start2/d.bin*d.bin {
+	if x, y := sel[0], sel[1]; x != r.Start1/d.bin*d.bin || y != r.Start2/d.bin*d.bin {
 		t.Fatalf("picked cell %d,%d for arms at %d,%d", x, y, r.Start1, r.Start2)
 	}
 
@@ -316,10 +317,14 @@ func TestContactExportsAndColourStyle(t *testing.T) {
 	}
 
 	// The selected cell's records: one query over both arms' bins.
-	s.picked = 0
+	s.cmap.Selection = &[2]int{d.x[0], d.y[0]}
 	tt.Frame()
 	f.setAnswer(syntheticHybrids(3))
-	name, text := exportMenuClick(t, a, tt, "Selected cell records · CSV…")
+	name, text := exportWith(t, a, tt, func() {
+		if err := tt.Click("Export records"); err != nil {
+			t.Fatal(err)
+		}
+	})
 	sent := f.last("analysis_hybrids")
 	filters := sent["filters"].(map[string]any)
 	region := filters["region"].(map[string]any)
@@ -329,20 +334,20 @@ func TestContactExportsAndColourStyle(t *testing.T) {
 	}
 	two := *d
 	two.gene2 = "other"
-	if got := contactCellFilters(&two, 0); len(got) != 2 || got[1]["gene1"] != "other" {
+	if got := contactCellFilters(&two, [2]int{d.x[0], d.y[0]}); len(got) != 2 || got[1]["gene1"] != "other" {
 		t.Fatalf("both orders %v", got)
 	}
 
 	// White and black: grey cells on white paper, in the exports too.
-	s.palette = contactPalettes[1]
+	s.palette = "White and black"
 	p.recolor()
 	tt.Frame()
-	if c := s.heat.Cells()[0].Color; c.R != c.G || c.G != c.B || s.heat.Background != paperWhite {
-		t.Fatalf("cell %v background %v", c, s.heat.Background)
+	if c := s.cmap.Cells()[0].Color; c.R != c.G || c.G != c.B || s.cmap.Colors.Surface != paperWhite {
+		t.Fatalf("cell %v surface %v", c, s.cmap.Colors.Surface)
 	}
-	_, svg := exportMenuClick(t, a, tt, "Map · SVG…")
-	if !strings.Contains(svg, "White–black scale") {
-		t.Fatalf("svg note: %.300s", svg)
+	_, svg := exportMenuClick(t, a, tt, "Map · SVG (vector)…")
+	if !strings.Contains(svg, `<rect width="100%" height="100%" fill="#ffffff"/>`) || !strings.Contains(svg, "Record count (linear)") {
+		t.Fatalf("svg: %.300s", svg)
 	}
 	_, text = exportMenuClick(t, a, tt, "Parameters · JSON…")
 	var params map[string]any

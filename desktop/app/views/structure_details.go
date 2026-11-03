@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -76,6 +77,8 @@ type stCount struct {
 	One   int `json:"one"`
 	Two   int `json:"two"`
 	Count int `json:"count"`
+	// RecordIDs are up to 20 of the HYB records behind the count.
+	RecordIDs []string `json:"recordIds"`
 }
 
 type stEnsembleEntry struct {
@@ -106,7 +109,7 @@ func (r *structureRecord) selectCandidate(k int) bool {
 	})
 	r.Pairs = make([][2]int, len(pairs))
 	for i, pr := range pairs {
-		r.Pairs[i] = [2]int{r.positionOf(pr.I), r.positionOf(pr.J)}
+		r.Pairs[i] = stPairKey(r.positionOf(pr.I), r.positionOf(pr.J)) // strand B may be drawn first
 	}
 	r.Bonus = nil
 	if len(c.Bonus) == len(pairs) {
@@ -156,21 +159,37 @@ func stRecordLabel(gene string, r structureRecord) string {
 	return fmt.Sprintf("%s:%d-%d", nameOr(gene, "RNA"), start, end)
 }
 
-// stCandidatesHeader is the web's cplfold-candidates.tsv header, with
-// pseudoknot_pairs (pairs outside the primary layer) for crossing_pairs and
-// the region folded; a CPLcofold record adds the cutpoint as the web.
+// stCandidatesHeader is the web's cplfold-candidates.tsv header; a
+// CPLcofold record adds the cutpoint as the web, and the desktop adds the
+// region folded last (the web folds one region, so it has no such column).
 var stCandidatesHeader = []string{"rank", "selected", "type", "topology", "energy_kcal_per_mol", "effective_energy_kcal_per_mol",
-	"phase1_energy_kcal_per_mol", "linear_fold_score", "base_pairs", "pseudoknot_pairs", "dot_bracket", "region"}
+	"phase1_energy_kcal_per_mol", "linear_fold_score", "base_pairs", "crossing_pairs", "dot_bracket"}
+
+// stCrossingPairs is the web's crossingPairs: how many pairs of a
+// dot-bracket cross at least one other pair.
+func stCrossingPairs(dbn string) int {
+	pairs := stParseDBN(dbn, 1)
+	crossing := map[stPair]bool{}
+	for a, x := range pairs {
+		for _, y := range pairs[a+1:] {
+			if (x.I < y.I && y.I < x.J && x.J < y.J) || (y.I < x.I && x.I < y.J && y.J < x.J) {
+				crossing[x], crossing[y] = true, true
+			}
+		}
+	}
+	return len(crossing)
+}
 
 func stCandidatesRows(gene string, records []structureRecord) [][]string {
 	cofold := false
 	for _, r := range records {
 		cofold = cofold || r.Cutpoint > 0
 	}
-	header := stCandidatesHeader
+	header := append([]string{}, stCandidatesHeader...)
 	if cofold {
-		header = append(append([]string{}, header...), "cutpoint")
+		header = append(header, "cutpoint")
 	}
+	header = append(header, "region")
 	rows := [][]string{header}
 	for _, r := range records {
 		for k, c := range r.Candidates {
@@ -183,12 +202,11 @@ func stCandidatesRows(gene string, records []structureRecord) [][]string {
 				dot = dot[:r.Cutpoint] + "&" + dot[r.Cutpoint:] // the web's withStrandBreak
 			}
 			row := []string{strconv.Itoa(k + 1), selected, c.Type, c.Topology, stOptional(c.Energy), stOptional(c.EffectiveEnergy),
-				stOptional(c.Phase1Energy), stOptional(c.Score), strconv.Itoa(c.Pairs), strconv.Itoa(c.PseudoknotPairs), dot,
-				stRecordLabel(gene, r)}
+				stOptional(c.Phase1Energy), stOptional(c.Score), strconv.Itoa(c.Pairs), strconv.Itoa(stCrossingPairs(c.Structure)), dot}
 			if cofold {
 				row = append(row, strconv.Itoa(r.Cutpoint))
 			}
-			rows = append(rows, row)
+			rows = append(rows, append(row, stRecordLabel(gene, r)))
 		}
 	}
 	return rows
@@ -230,6 +248,10 @@ func stCandidatesJSON(id, engine, gene string, records []structureRecord) ([]byt
 // candidatesPanel lists the CPLfold candidates of the window shown; a
 // row shows that candidate in every view, the statistics and the exports.
 func (p *structurePage) candidatesPanel(c *ui.Context, a *structureResult) {
+	if stEngine(a) == "IRIS" {
+		p.irisPanel(c, a) // its members are the record's candidates
+		return
+	}
 	t := c.Theme()
 	records := stPickRecords(a.Records, p.record)
 	total := 0
@@ -245,17 +267,18 @@ func (p *structurePage) candidatesPanel(c *ui.Context, a *structureResult) {
 			ui.Text(c, "CPLfold candidates").Bold().Grow(1)
 			if ui.Button(c, "Candidates TSV…").Tooltip("Every candidate: energy, effective (beta-adjusted) energy, pairs and dot-bracket").Clicked() {
 				rows := stCandidatesRows(gene, records)
-				saveExport(p.a, "Save the CPLfold candidates", p.exportName(a, "_candidates.tsv"), func() ([]byte, error) {
+				saveExport(p.a, "Save the CPLfold candidates", stExportFiles["candidates"], func() ([]byte, error) {
 					return webTSV(rows), nil
 				})
 			}
 			if ui.Button(c, "Candidates JSON…").Tooltip("Every candidate with each pair's HYB bonus").Clicked() {
 				id, engine := p.viewA, nameOr(a.Meta.Engine, "CPLfold")
-				saveExport(p.a, "Save the CPLfold candidates", p.exportName(a, "_candidates.json"), func() ([]byte, error) {
+				saveExport(p.a, "Save the CPLfold candidates", stExportFiles["candidates_json"], func() ([]byte, error) {
 					return stCandidatesJSON(id, engine, gene, records)
 				})
 			}
 			p.bonusMatrixButton(c, a)
+			p.localInputsButton(c, a)
 		})
 		index := p.shownRecord(a)
 		if index < 0 {
@@ -321,23 +344,18 @@ func (p *structurePage) bonusMatrixButton(c *ui.Context, a *structureResult) {
 		tip = "Not written for this result (more than 2,000,000 cells, or folded by an older version)"
 	}
 	if ui.Button(c, "Bonus matrix TSV…").Disabled(path == "").Tooltip(tip).Clicked() {
-		r := a.Records[index]
-		name := exportName("_bonus_matrix.tsv", nameOr(stGene(a), "structure"), p.viewA)
-		if len(a.Records) > 1 {
-			name = exportName("_bonus_matrix.tsv", nameOr(stGene(a), "structure"), p.viewA, fmt.Sprintf("%d-%d", r.WindowStart, r.WindowEnd))
-		}
-		saveExport(p.a, "Save the CPLfold bonus matrix", name, func() ([]byte, error) { return os.ReadFile(path) })
+		saveExport(p.a, "Save the CPLfold bonus matrix", stExportFiles["bonus"], func() ([]byte, error) { return os.ReadFile(path) })
 	}
 }
 
 // ---- COMRADES(ViennaRNA)
 
-// stEvidenceRows is the web's rna-cofold-evidence.tsv (no record ids are
-// kept on the desktop).
+// stEvidenceRows is the web's rna-cofold-evidence.tsv (a result folded
+// before the record ids were kept has none).
 func stEvidenceRows(cm *stComrades) [][]string {
 	rows := [][]string{{"prepared_position_1", "prepared_position_2", "hyb_row_observations", "example_record_ids"}}
 	for _, e := range cm.Evidence.Pairs {
-		rows = append(rows, []string{strconv.Itoa(e.One), strconv.Itoa(e.Two), strconv.Itoa(e.Count), ""})
+		rows = append(rows, []string{strconv.Itoa(e.One), strconv.Itoa(e.Two), strconv.Itoa(e.Count), strings.Join(e.RecordIDs, ",")})
 	}
 	return rows
 }
@@ -395,39 +413,25 @@ func (p *structurePage) comradesPanel(c *ui.Context, a *structureResult) {
 	ui.Column(c).Gap(8).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, "COMRADES result").Bold().Grow(1)
-			base := nameOr(stGene(a), "structure")
 			for _, d := range []struct {
-				label, tip, suffix string
-				rows               func(*stComrades) [][]string
+				label, tip, file string
+				rows             func(*stComrades) [][]string
 			}{
-				{"Evidence TSV…", "RNAcofold evidence pairs (region positions) and their HYB-row observations", "_rna_cofold_evidence.tsv", stEvidenceRows},
-				{"Constraints TSV…", "The F stem constraints, accepted and rejected", "_folding_constraints.tsv", stConstraintRows},
-				{"Ensemble TSV…", "Every fold of the ensemble with its COMRADES score", "_structure_ensemble.tsv", stEnsembleRows},
+				{"Evidence TSV…", "RNAcofold evidence pairs (region positions) and their HYB-row observations", "evidence", stEvidenceRows},
+				{"Constraints TSV…", "The F stem constraints, accepted and rejected", "constraints", stConstraintRows},
+				{"Ensemble TSV…", "Every fold of the ensemble with its COMRADES score", "ensemble", stEnsembleRows},
 			} {
 				if ui.Button(c.Key(d.label), d.label).Tooltip(d.tip).Clicked() {
 					rows := d.rows(cm)
-					saveExport(p.a, "Save the COMRADES "+d.label[:len(d.label)-len(" TSV…")], exportName(d.suffix, base, p.viewA),
+					saveExport(p.a, "Save the COMRADES "+d.label[:len(d.label)-len(" TSV…")], stExportFiles[d.file],
 						func() ([]byte, error) { return webTSV(rows), nil })
 				}
 			}
 		})
 		ui.Text(c, fmt.Sprintf("COMRADES score %s · %s supported structure pair%s · selected fold: %s",
 			jsNumber(ev.Score), FormatNumber(int64(ev.MatchedPairs)), plural(ev.MatchedPairs), stRunLabel(rnd.SelectedRun))).FontSize(13)
-		ui.Text(c, fmt.Sprintf("1 · RNAcofold evidence: %s unique pairs from %s eligible HYB rows · 2 · ranked stems: %s, top %s fitted · "+
-			"3 · accepted constraints: %s stems · 4 · ensemble: %s structures (ranked fold + %s seeded random orders, seed %s)",
-			FormatNumber(int64(ev.UniqueBasePairs)), FormatNumber(int64(ev.InputRecords)), FormatNumber(int64(ev.RankedStems)),
-			FormatNumber(int64(ev.RequestedStemConstraints)), FormatNumber(int64(len(ev.Accepted))),
-			FormatNumber(int64(len(rnd.Structures))), FormatNumber(int64(max(len(rnd.Structures)-1, 0))), nameOr(rnd.Seed, "—"))).
-			FontSize(12).TextColor(t.TextMuted)
-		stSmallTable(c, "Structure ensemble (best first)", []string{"Fold", "Score", "Matched", "Energy", "Stems"}, min(len(rnd.Structures), 12),
-			func(i int) []string {
-				e := rnd.Structures[i]
-				label := stRunLabel(e.Run)
-				if e.Run == rnd.SelectedRun {
-					label += " (shown)"
-				}
-				return []string{label, jsNumber(e.Score), strconv.Itoa(e.MatchedPairs), stEnergyCell(e.Energy), strconv.Itoa(len(e.Accepted))}
-			})
+		stComradesStages(c, cm)
+		stComradesBars(c, cm)
 		if len(rnd.Structures) > 12 {
 			ui.Text(c, fmt.Sprintf("The top 12 of %d folds; Ensemble TSV has them all.", len(rnd.Structures))).FontSize(11).TextColor(t.TextMuted)
 		}
@@ -525,7 +529,7 @@ func stNucleotideText(records []structureRecord, pos int, engine string) string 
 			}
 			text += ")"
 			for i, rp := range r.Pairs {
-				if rp == [2]int{pr.I, pr.J} && i < len(r.Bonus) && r.Bonus[i] != nil {
+				if stPairKey(rp[0], rp[1]) == [2]int{pr.I, pr.J} && i < len(r.Bonus) && r.Bonus[i] != nil {
 					text += " · " + supportLabel + " " + stSupportText(*r.Bonus[i])
 					break
 				}

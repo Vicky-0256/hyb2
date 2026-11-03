@@ -76,6 +76,17 @@ class SparseBonusTests(unittest.TestCase):
                          [(e["one"], e["two"]) for e in summary["bonusEntries"]])
         self.assertEqual(len(listing["nucleotideSupport"]), 60)
 
+    def test_hyb_streaming_strips_padded_rna_names(self):
+        # as hyb2analysis.hybfile.parse: " GENE " in columns 4 and 10 is GENE
+        tail = "\t1e-5\t\t-10\tType_1\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "padded.hyb"
+            path.write_text(f"r1\tACGU\t-1\t {GENE} \t1\t5\t10\t14\t1e-5\t{GENE}  \t1\t5\t30\t34{tail}"
+                            f"r2\tACGU\t-1\t{GENE}\t1\t5\t10\t14\t1e-5\t OTHER\t1\t5\t30\t34{tail}")
+            self.assertEqual(list(self.web.iter_hyb_arms([path], GENE)), [(GENE, 10, 14, 30, 34)])
+            self.assertEqual(list(self.web.iter_hyb_rows([path], [GENE, "OTHER"])),
+                             [(GENE, 10, 14, GENE, 30, 34), (GENE, 10, 14, "OTHER", 30, 34)])
+
     def test_empty_evidence(self):
         bonus, summary = self.web.build_hyb_bonus_matrix_fast(50, [])
         self.assertIsNone(bonus)
@@ -180,7 +191,7 @@ class StructureRunTests(unittest.TestCase):
         self.assertEqual(set(progress) >= {"stage", "detail", "bytes_done", "bytes_total", "updated_at"}, True)
         self.assertEqual(result["structure"]["path"], "structures/genome1")
         # What was folded and how long it took feed the desktop's estimates.
-        self.assertEqual(progress["work"], {"lengths": [self.length], "beam": 50, "workers": 1})
+        self.assertEqual(progress["work"], {"lengths": [self.length], "beam": 50, "workers": 1, "pseudoknot": False, "guided": True})
         performance = result["performance"]
         self.assertEqual((performance["lengths"], performance["beam"], performance["workers"]), ([self.length], 50, 1))
         self.assertGreater(performance["seconds"], 0)
@@ -207,7 +218,7 @@ class StructureRunTests(unittest.TestCase):
         with mock.patch.object(structure, "load_cplfold_web", lambda root: Spy(real(root))):
             result = handle(self._request(task_id="evwork", parameters={"beam": 50}), repo_root=ROOT)
         self.assertTrue(result["ok"], result)
-        self.assertEqual(seen, [{"lengths": [self.length], "beam": 50, "workers": 1}])
+        self.assertEqual(seen, [{"lengths": [self.length], "beam": 50, "workers": 1, "pseudoknot": False, "guided": True}])
 
     def test_windows_parallel_matches_serial(self):
         windows = [{"start": 1, "end": 160}, {"start": 120, "end": 300}, {"start": 200, "end": 320}]
@@ -411,7 +422,13 @@ class ComradesRunTests(unittest.TestCase):
         self.assertEqual(len(listed), comrades["evidence"]["selectedBasePairs"])
         self.assertEqual([e["count"] for e in listed], sorted((e["count"] for e in listed), reverse=True))
         self.assertTrue(all(1 <= e["one"] <= self.length and 1 <= e["two"] <= self.length for e in listed))
+        # each with up to 20 of its HYB record ids (the web's example_record_ids)
+        self.assertTrue(all(1 <= len(e["recordIds"]) <= min(20, e["count"]) for e in listed))
         self.assertFalse((out / "candidates.json").exists())  # no CPLfold candidates
+        # the raw HYB arms under the arcs (the web's rawHybArms), window positions
+        sample = json.loads((out / "arms.json").read_text())["records"][0]
+        self.assertEqual((sample["rows"], sum(b[4] for b in sample["shown"])), (60, 60))
+        self.assertTrue(all(1 <= b[0] <= b[1] <= self.length and 1 <= b[2] <= b[3] <= self.length for b in sample["shown"]))
         # the accepted stem constraints are pairs of the structure
         dbn = (out / "structure.dbn").read_text().splitlines()
         self.assertIn("COMRADES(ViennaRNA), 37 °C, min loop 3, 3 randomised folds, seed s1", dbn[0])
@@ -429,10 +446,11 @@ class ComradesRunTests(unittest.TestCase):
                       {"parameters": {"hard_pairs": []}}):
             with self.assertRaises(ValueError, msg=extra):
                 self._run(task_id="bad", **extra)
-        # no chimera inside the window: refused before anything runs
+        # no chimera inside the window: the task fails and says why
         (self.project / "data" / "a.hyb").write_text("")
-        with self.assertRaisesRegex(ValueError, "chimeras have both arms inside"):
-            self._run(task_id="empty")
+        failed = self._run(task_id="empty")
+        self.assertFalse(failed["ok"])
+        self.assertIn("chimeras have both arms inside", failed["error"])
 
 
 class CofoldRunTests(unittest.TestCase):
@@ -477,6 +495,8 @@ class CofoldRunTests(unittest.TestCase):
         self.assertEqual(dbn[1], self.one[:60] + "&" + self.one[169:230])
         self.assertEqual(dbn[2].index("&"), 60)
         self.assertIn("CPLcofold pseudoknot-free, alpha 0.5", dbn[0])
+        # the web's energyMetadata (energy model and kind) of the selected candidate
+        self.assertIsInstance(meta["energy_metadata"], dict)
         # registered with its regions, and read back on the RNA's positions
         from desktop.runtime.project import _structure_entry
         entry = _structure_entry(self.project.resolve(), "co1", result)
@@ -499,6 +519,10 @@ class CofoldRunTests(unittest.TestCase):
         self.assertIn("# cutpoint=60\n# strand_lengths=60,61\n", text)
         cells = [line.split("\t") for line in text.splitlines() if line[0].isdigit()]
         self.assertTrue(cells and all(1 <= int(a) < int(b) <= 121 for a, b, _ in cells))
+        self.assertEqual(meta["records"][0]["evidence"]["nonzeroUpperTriangleCells"], len(cells))
+        # the raw HYB arms in A+B positions: every row used as evidence
+        self.assertEqual(record["arms"]["rows"], 11)
+        self.assertTrue(all(1 <= b[0] <= b[1] <= 121 and 1 <= b[2] <= b[3] <= 121 for b in record["arms"]["shown"]))
 
     def test_two_rnas_and_sequence_only(self):
         result = self._run([(GENE, 1, 60), ("OTHER_RNA", 50, 110)], task_id="co2")
@@ -511,7 +535,13 @@ class CofoldRunTests(unittest.TestCase):
         meta = json.loads((self.project / "structures" / "co3" / "meta.json").read_text())
         self.assertTrue(meta["evidence_inputs"]["rows"].startswith("none"))
         self.assertEqual(meta["records"][0]["pairs_with_bonus"], 0)
+        # the desktop's estimate charges no bonus matrix to a sequence-only fold
+        self.assertEqual((alone["performance"]["guided"], alone["performance"]["pseudoknot"]), (False, False))
+        self.assertTrue(result["performance"]["guided"])
         self.assertIn("sequence only", (self.project / "structures" / "co3" / "structure.dbn").read_text())
+        # as the web's: no eligible record mapped, rather than not attached
+        arms = json.loads((self.project / "structures" / "co3" / "arms.json").read_text())
+        self.assertEqual(arms["records"], [{"rows": 0, "unique": 0, "shown": []}])
 
     def test_rejects(self):
         for regions, extra in (([(GENE, 1, 60)], {}), ([(GENE, 1, 60), (GENE, 200, 300)], {}),
@@ -595,6 +625,13 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(record["selected_candidate"], 0)
         self.assertEqual(len(record["nucleotide_support"]), self.length)
         self.assertEqual(record["bonus_matrix_path"], str((out / "bonus_matrix.tsv").resolve()))
+        # the raw HYB arms drawn under the arcs: every row, most frequent block first
+        shown = record["arms"]["shown"]
+        self.assertEqual(record["arms"]["rows"], sum(arms["genome"].values()))
+        self.assertEqual(record["arms"]["unique"], len(arms["genome"]))
+        self.assertEqual(sum(block[4] for block in shown), record["arms"]["rows"])
+        self.assertEqual([block[4] for block in shown], sorted((block[4] for block in shown), reverse=True))
+        self.assertTrue(all(1 <= b[0] <= b[1] <= self.length and 1 <= b[2] <= b[3] <= self.length for b in shown))
 
     def test_windows_and_sequence_only(self):
         from desktop.runtime.structure import read_structure
@@ -641,6 +678,8 @@ class SequenceOnlyTests(StructureRunTests):
         meta = json.loads((self.project / "structures" / "seq1" / "meta.json").read_text())
         self.assertTrue(meta["evidence_inputs"]["rows"].startswith("none"))
         self.assertEqual(meta["records"][0]["pairs_with_bonus"], 0)
+        # as the web's sequence-only CPLfold: no raw HYB data attached
+        self.assertFalse((self.project / "structures" / "seq1" / "arms.json").exists())
         # an empty .hyb is no obstacle
         (self.project / "data" / "a.hyb").write_text("")
         self.external.write_text("")
@@ -677,6 +716,9 @@ class PairedComradesTests(CofoldRunTests):
         (self.project / "project.json").write_text(json.dumps(manifest))
         read = read_structure(self.project, "pc1")["records"][0]
         self.assertEqual(read["positions"][60], 170)
+        # the raw HYB arms in A+B positions without the spacer: region 1, then region 2
+        self.assertEqual(read["arms"]["rows"], 9)
+        self.assertTrue(all(1 <= b[0] <= b[1] <= 60 < b[2] <= b[3] <= 121 for b in read["arms"]["shown"]))
         # the fitted stems are pairs of the structure, on the RNA
         pairs = {tuple(p) for p in read["pairs"]}
         self.assertTrue({tuple(p) for p in meta["parameters"]["hard_pairs"]} <= pairs)
@@ -686,8 +728,9 @@ class PairedComradesTests(CofoldRunTests):
                       json.loads((self.project / "structures" / "pc2" / "meta.json").read_text())["evidence_inputs"]["rows"])
 
     def test_paired_rejects(self):
-        with self.assertRaisesRegex(ValueError, "one arm in each"):
-            self._paired([(GENE, 100, 140), (GENE, 150, 168)], task_id="none")
+        failed = self._paired([(GENE, 100, 140), (GENE, 150, 168)], task_id="none")
+        self.assertFalse(failed["ok"])
+        self.assertIn("one arm in each", failed["error"])
         with self.assertRaises(ValueError):
             self._run([(GENE, 1, 60), (GENE, 170, 230)], engine="viennarna", mode="paired", task_id="bad")
         with self.assertRaisesRegex(ValueError, "exceeds the COMRADES"):

@@ -22,8 +22,9 @@ import (
 // (the strongest are kept).
 const reportMaxCells = 20_000
 
-// reportTopInteractions is how many merged interactions each test lists.
-const reportTopInteractions = 10
+// reportTopInteractions is how many merged interactions each test lists
+// (the web report's MAX_TABLE_ROWS).
+const reportTopInteractions = 12
 
 type reportData struct {
 	Name, Path, Description       string
@@ -144,16 +145,26 @@ type reportTest struct {
 	Summary            comparisonSummary
 	// Top are the strongest merged interactions (by padj).
 	Top []cmpInteraction
-	// Cells are the significant cells read, coloured, weakest first.
-	Cells      []widgets.Cell
+	// Cells are the significant cells read, weakest first.
+	Cells      []cmpCell
 	CellsTotal int64
+	// Datasets lists the samples with their condition; Current is whether
+	// the samples are as they were when the test ran (cmpInputsCurrent;
+	// false when the result could not be read).
+	Datasets string
+	Current  bool
+	// RNAX, RNAY name the map's axes.
+	RNAX, RNAY string
+	// SignificantFile is the test's significant.tsv ("" when missing).
+	SignificantFile string
 	// SimCells is the similarity heatmap read (nil for tests made before it).
 	SimCells []widgets.Cell
 	// Energy is the test's folding-energy result (nil when not computed).
 	Energy *energyResult
 	Length int
 	Err    string
-	// Entry is the test as listed; All its merged interactions by padj.
+	// Entry is the test as listed; All its merged interactions in the
+	// result's (merge) order.
 	Entry comparisonEntry
 	All   []cmpInteraction
 }
@@ -355,23 +366,56 @@ func (d *reportData) testTable() reportTableData {
 	return t
 }
 
+// topTable is the web report's "Strongest merged interactions".
 func (x *reportTest) topTable() reportTableData {
-	t := reportTableData{Cols: []reportCol{{Title: "#", Width: 32, Num: true}, {Title: "Arm 1 (nt)", Width: 110}, {Title: "Arm 2 (nt)", Width: 110},
-		{Title: "Higher in", Width: 0}, {Title: "log2 A/B", Width: 76, Num: true}, {Title: "padj", Width: 76, Num: true}, {Title: "Mean count", Width: 84, Num: true}}}
-	for i, r := range x.Top {
+	t := reportTableData{Cols: []reportCol{{Title: "Higher in", Width: 0}, {Title: "x", Width: 70, Num: true}, {Title: "y", Width: 70, Num: true},
+		{Title: "log2 A/B", Width: 76, Num: true}, {Title: "padj", Width: 76, Num: true}}}
+	for _, r := range x.Top {
 		higher := x.LabelA
-		if r.Direction == "down" || (r.LFC != nil && *r.LFC < 0) {
+		if r.Direction != "up" {
 			higher = x.LabelB
 		}
-		mean := "—"
-		if r.BaseMean != nil && !math.IsNaN(*r.BaseMean) {
-			mean = FormatNumber(int64(math.Round(*r.BaseMean)))
-		}
-		t.Rows = append(t.Rows, []string{fmt.Sprint(i + 1), span(r.X, r.X+9), span(r.Y, r.Y+9), higher,
-			cmpFloat(r.LFC, "%.2f"), cmpFloat(r.Padj, "%.1e"), mean})
+		t.Rows = append(t.Rows, []string{higher, FormatNumber(int64(r.X)), FormatNumber(int64(r.Y)), cmpFixed(r.LFC, 2), cmpPadjText(r.Padj)})
 	}
 	return t
 }
+
+// Facts is the web report's definition list of a test.
+func (x *reportTest) Facts() [][2]string {
+	s, p := x.Summary, x.Entry.Parameters
+	num := func(v *float64) string {
+		if v == nil {
+			return "—"
+		}
+		return jsNumber(*v)
+	}
+	tested := FormatNumber(s.CellsTested)
+	if s.CellsTotal > 0 {
+		tested += " of " + FormatNumber(s.CellsTotal)
+	}
+	return [][2]string{
+		{"Datasets", nameOr(x.Datasets, "—")},
+		{"Min count · merge range · padj", num(p.MinCount) + " · " + num(p.Range) + " nt · " + num(p.PadjCutoff)},
+		{"Cells tested", tested},
+		{"Significant cells", fmt.Sprintf("%s (%s higher in %s, %s higher in %s)", FormatNumber(s.Significant), FormatNumber(s.SignificantUp), x.LabelA,
+			FormatNumber(s.SignificantDown), x.LabelB)},
+		{"Merged interactions", fmt.Sprintf("%s higher in %s, %s higher in %s", FormatNumber(s.InteractionsUp), x.LabelA, FormatNumber(s.InteractionsDown), x.LabelB)},
+		{"Size factors", nameOr(cmpSizeFactors(s.SizeFactors, ", "), "—")},
+		{"Current inputs", x.currentText()},
+	}
+}
+
+// currentText is the "Current inputs" value; a result that could not be
+// read is not current.
+func (x *reportTest) currentText() string {
+	if x.Err != "" {
+		return "No (" + x.Err + ")"
+	}
+	return cmpCurrentText(x.Current)
+}
+
+// reportMethodNote closes the tests, as the web report's method note.
+const reportMethodNote = "The differential test is HYB2 Desktop's numpy port of the DESeq2 1.46 Wald test (hyb2analysis.deseq), run on this computer. " + cmpValidation
 
 func reportEnergy(e *float64) string {
 	if e == nil || math.IsNaN(*e) {
@@ -548,18 +592,33 @@ func (d *reportData) runtimeFacts() [][2]string {
 
 // ---- figures
 
+// panel is the test's differential coverage map, as the web report draws
+// it (panelSvg at 640 × 660).
+func (x *reportTest) panel(id string) cmpPanel {
+	return cmpPanel{Cells: x.Cells, Length: x.Length, LabelA: x.LabelA, LabelB: x.LabelB, RNAX: x.RNAX, RNAY: x.RNAY,
+		Width: 640, Height: 660, MaxCells: reportMaxCells, ID: id}
+}
+
 func (x *reportTest) figure(id string) (template.HTML, string) {
 	if len(x.Cells) == 0 {
 		return "", ""
 	}
-	length := float64(max(x.Length, 1))
-	svg, drawn, _ := heatSVG{Cells: x.Cells, View: widgets.Window{X0: 0, X1: length, Y0: 0, Y1: length}, Size: 360,
-		MaxCells: reportMaxCells, MinCellPx: 2.5, ID: id, XLabel: "Arm 1 (nt)", YLabel: "Arm 2 (nt)"}.SVG()
-	caption := fmt.Sprintf("Significant 10-nt cells: red higher in %s, blue higher in %s; stronger colour, smaller padj.", x.LabelA, x.LabelB)
+	svg, drawn, _ := x.panel(id).SVG()
+	caption := ""
 	if total := max(x.CellsTotal, int64(len(x.Cells))); int64(drawn) < total {
-		caption += fmt.Sprintf(" The %s strongest of %s cells are drawn.", FormatNumber(int64(drawn)), FormatNumber(total))
+		caption = fmt.Sprintf("Showing the %s most significant of %s cells for printing; ", FormatNumber(int64(drawn)), FormatNumber(total)) + reportCellsElsewhere(total)
 	}
-	return template.HTML(svg), caption //nolint:gosec // generated and escaped by heatSVG
+	return template.HTML(svg), caption //nolint:gosec // generated and escaped by cmpPanel
+}
+
+// reportCellsElsewhere says where all total cells are: the Compare page's
+// SVG export draws the cells it read (cmpReadLimit), its significant cells
+// TSV and the result package's map have every one.
+func reportCellsElsewhere(total int64) string {
+	if total <= cmpReadLimit {
+		return "the Compare page's SVG export has all."
+	}
+	return fmt.Sprintf("the Compare page's SVG export has the %s most significant; its significant cells TSV and the result package's map have all.", FormatNumber(cmpReadLimit))
 }
 
 func (x *reportTest) similarityFigure(id string) (template.HTML, string) {
@@ -637,7 +696,8 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		EvidenceNote                                           string
 		Checks                                                 []string
 		LeftNote                                               string
-	}{reportData: d, LeftNote: reportLeftNote, Checks: d.reviewChecks(), EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
+		MethodNote                                             string
+	}{reportData: d, LeftNote: reportLeftNote, MethodNote: reportMethodNote, Checks: d.reviewChecks(), EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
 		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable(),
 		InputTable: d.inputTable(), SettingsTable: d.settingsTable(), FingerprintNote: reportFingerprintNote}
 	for i := range d.Tests {
@@ -684,6 +744,7 @@ header p.note { margin-top: 10px; }
 section { margin-top: 32px; }
 h2 { font-size: 19px; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 h3 { font-size: 16px; margin: 22px 0 4px; }
+h4 { font-size: 14px; margin: 14px 0 6px; }
 p.meta, figcaption, .muted { color: var(--muted); font-size: 12.5px; }
 p.meta { margin: 0 0 10px; }
 dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 0; }
@@ -776,22 +837,18 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 {{range .TestDetails}}<div class="test">
 <h3>{{.LabelA}} vs {{.LabelB}}</h3>
 <p class="meta">{{join .Genes ", "}} · {{.Params}} · log2 fold change = A / B · {{time .Created}} · {{.ID}}</p>
-<div class="stats">
-<div class="stat"><span>Cells tested</span><b>{{count .Summary.CellsTested}}</b></div>
-<div class="stat"><span>Significant cells</span><b>{{count .Summary.Significant}}</b></div>
-<div class="stat"><span>Higher in {{.LabelA}}</span><b class="up">{{count .Summary.SignificantUp}}</b></div>
-<div class="stat"><span>Higher in {{.LabelB}}</span><b class="down">{{count .Summary.SignificantDown}}</b></div>
-<div class="stat"><span>Interactions A / B</span><b>{{count .Summary.InteractionsUp}} / {{count .Summary.InteractionsDown}}</b></div>
-</div>
+<h4>Differential test (DESeq2 Wald test)</h4>
+<dl class="facts">{{range .Facts}}
+<dt>{{index . 0}}</dt><dd>{{index . 1}}</dd>{{end}}
+</dl>
 {{if .Err}}<p class="note">Could not read the results: {{.Err}}</p>{{end}}
-<div class="cols">
-{{if .Figure}}<figure>{{.Figure}}<figcaption>{{.Caption}}</figcaption></figure>{{end}}
-{{if .Table.Rows}}<div class="table"><p class="meta">Top {{len .Table.Rows}} merged interactions by padj</p>{{template "rows" .Table}}</div>{{else}}<p class="muted">No significant interaction.</p>{{end}}
-</div>
+{{if .Table.Rows}}<div class="table"><h4>Strongest merged interactions</h4>{{template "rows" .Table}}</div>{{else}}<p class="muted">No significant interaction.</p>{{end}}
+{{if .Figure}}<h4>A · Differential coverage map <span class="muted">red = higher in {{.LabelA}}; blue = higher in {{.LabelB}}; opacity by −log10 padj</span></h4>
+<figure>{{.Figure}}{{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}</figure>{{end}}
 {{if .SimFigure}}<div class="cols"><figure>{{.SimFigure}}<figcaption>{{.SimCaption}}</figcaption></figure></div>{{end}}
 {{if .EnergyFigure}}<figure>{{.EnergyFigure}}<figcaption>{{.EnergyCaption}}</figcaption></figure>{{end}}
 </div>
-{{end}}{{else}}<p class="muted">No differential test has been run.</p>{{end}}
+{{end}}<p class="meta">{{$.MethodNote}}</p>{{else}}<p class="muted">No differential test has been run.</p>{{end}}
 </section>
 
 <section id="structures">

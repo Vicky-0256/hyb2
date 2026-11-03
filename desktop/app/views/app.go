@@ -82,6 +82,21 @@ type App struct {
 	lightTheme, darkTheme *ui.Theme
 	palette               paletteState
 	helpOpen              bool
+	// motion is the Motion preference (motion.go): "" follows the
+	// system, "full" or "reduced".
+	motion string
+	// systemReduce is the system's Reduce Motion as of the last frame.
+	systemReduce bool
+	// privacyOpen shows Privacy over the start page (a project shows it as
+	// a page).
+	privacyOpen bool
+	// clipboard is text for the clipboard in the next frame (copyText).
+	clipboard *string
+	// autoKey is the selection normalizeSelection last chose by itself.
+	autoKey string
+	// chord is the "g" of a go-to chord, pressed at chordAt.
+	chord   bool
+	chordAt time.Time
 	// Density is the Interactions table's rows: densityLabels[0] or [1].
 	Density string
 	lookup  lookupPref // external_lookup (evidence.go)
@@ -89,11 +104,12 @@ type App struct {
 	// content is the page area of the previous frame (charts size to it).
 	content ui.Rect
 	// pendingFolder is a data folder chosen with a new project; the Data
-	// page scans it once the project is open.
-	pendingFolder string
+	// page scans it once that project (and no other) is open.
+	pendingFolder pendingFolder
 	recent        []Recent
 
 	toasts   []appToast
+	uiSaves  uiSaver
 	pollOnce sync.Once
 	pollStop chan struct{}
 	mu       sync.Mutex // guards pending (written from goroutines)
@@ -108,7 +124,7 @@ type App struct {
 type Selection struct {
 	ReferenceID string
 	Gene        string
-	// Key is "c:<condition>" or "s:<sample id>".
+	// Key is AllSelection, "c:<condition>" or "s:<sample id>".
 	Key string
 }
 
@@ -118,6 +134,7 @@ func New(b core.Backend, win Poster, dataDir string) *App {
 		labels: map[string]string{}, pages: map[string]Page{},
 		SessionStart: time.Now().UTC().Format(time.RFC3339)}
 	a.recent = a.loadRecent()
+	a.motion = a.loadMotion()
 	for _, p := range append(append([]PageInfo(nil), Pages...), HelpPages...) {
 		if factory := pageFactories[p.ID]; factory != nil {
 			a.pages[p.ID] = factory(a)
@@ -203,11 +220,19 @@ func (a *App) ToastAs(id, format string, args ...any) {
 
 // ---- project
 
+// pendingFolder is a data folder to scan into the project at path.
+type pendingFolder struct {
+	project, folder string
+}
+
 // Open opens a project directory and shows it.
 func (a *App) Open(path string) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return
+	}
+	if a.pendingFolder.project != path {
+		a.pendingFolder = pendingFolder{} // chosen for a project this Open replaces
 	}
 	a.start.status = "Opening " + path + "…"
 	a.opening++
@@ -219,6 +244,7 @@ func (a *App) Open(path string) {
 				if seq != a.opening {
 					return // a later Open replaced this one
 				}
+				a.pendingFolder = pendingFolder{}
 				a.start.status = openError(err)
 				a.Toast("Could not open the project: %v", err)
 			}
@@ -232,6 +258,11 @@ func (a *App) Open(path string) {
 			a.start.status = ""
 			if listErr == nil {
 				applySamples(project, listed)
+			}
+			if a.pendingFolder.project == path {
+				a.pendingFolder.project = project.Path // as the project reports it
+			} else {
+				a.pendingFolder = pendingFolder{}
 			}
 			a.setProject(project)
 		}
@@ -281,6 +312,7 @@ func (a *App) setProject(p *model.Project) {
 	a.Project = p
 	a.opened++
 	a.Tasks = map[string]model.Task{}
+	a.autoKey = ""
 	a.restoreUIState()
 	a.normalizeSelection()
 	a.remember(p.Path, p.Name)
@@ -288,12 +320,17 @@ func (a *App) setProject(p *model.Project) {
 	a.showPage()
 }
 
-// Close returns to the start page.
+// Close returns to the start page; the next project opens on Data unless
+// its saved state names another page.
 func (a *App) Close() {
 	a.opened++ // a reply for the closed project is not this one's
 	a.Project = nil
 	a.Tasks = map[string]model.Task{}
+	a.pendingFolder = pendingFolder{}
 	a.drawerOpen = false
+	a.Page = "data"
+	a.NavOptions = nil
+	a.chord = false
 }
 
 // RefreshProject reloads samples, references and conditions.
@@ -301,11 +338,11 @@ func (a *App) RefreshProject() {
 	if a.Project == nil {
 		return
 	}
-	path := a.Project.Path
+	path, gen := a.Project.Path, a.opened
 	a.Go(func() func() {
 		listed, err := a.B.ProjectOp(path, "list_samples", nil)
 		return func() {
-			if a.Project == nil || a.Project.Path != path {
+			if !a.current(path, gen) {
 				return
 			}
 			if err != nil {
@@ -313,7 +350,11 @@ func (a *App) RefreshProject() {
 				return
 			}
 			applySamples(a.Project, listed)
+			before := a.Selected
 			a.normalizeSelection()
+			if a.Selected != before {
+				a.saveUIState() // a removed sample or reference changed it
+			}
 		}
 	})
 }
@@ -325,22 +366,36 @@ type SelectionOption struct {
 	Key, Label, Group string
 }
 
-// SelectionOptions: conditions with analysed samples, then analysed samples.
+// AllSelection is the selection key of every analysed sample merged (the
+// web's "All N datasets merged" scope).
+const AllSelection = "all"
+
+// SelectionOptions: every analysed sample merged (two or more), the
+// conditions merging some of them, then analysed samples. As the web's
+// scopes (app.js analysisScopes), a condition of one sample is left to that
+// sample and one holding every sample to "All".
 func (a *App) SelectionOptions() []SelectionOption {
+	return a.selectionOptions(false)
+}
+
+// selectionOptions are SelectionOptions; groups (Compare's) keeps every
+// condition with an analysed sample and leaves out AllSelection.
+func (a *App) selectionOptions(groups bool) []SelectionOption {
 	if a.Project == nil {
 		return nil
 	}
 	var out []SelectionOption
+	all := len(a.SelectionIDs(AllSelection))
+	if all > 1 && !groups {
+		out = append(out, SelectionOption{Key: AllSelection, Label: a.SelectionLabel(AllSelection), Group: "All"})
+	}
 	for _, cond := range a.Project.Conditions {
-		n := len(a.SelectionIDs("c:" + cond.Name))
-		if n == 0 {
+		key := "c:" + cond.Name
+		n := len(a.SelectionIDs(key))
+		if n == 0 || !groups && (n == 1 || all > 1 && n == all) {
 			continue
 		}
-		label := fmt.Sprintf("%s · %d replicates merged", cond.Name, n)
-		if n == 1 {
-			label = cond.Name + " · 1 sample"
-		}
-		out = append(out, SelectionOption{Key: "c:" + cond.Name, Label: label, Group: "Conditions"})
+		out = append(out, SelectionOption{Key: key, Label: a.SelectionLabel(key), Group: "Conditions"})
 	}
 	for _, s := range a.Project.Samples {
 		if !s.IsReady() {
@@ -355,6 +410,35 @@ func (a *App) SelectionOptions() []SelectionOption {
 	return out
 }
 
+// GroupOptions are the groups two of which Compare contrasts: every
+// condition with an analysed sample, then the samples; not AllSelection.
+func (a *App) GroupOptions() []SelectionOption {
+	return a.selectionOptions(true)
+}
+
+// SelectionLabels are the options' labels for a picker that tells them
+// apart by label: a label already taken gets " (2)", " (3)"… so that two
+// samples labelled alike both stay choosable.
+func SelectionLabels(options []SelectionOption) []string {
+	out := make([]string, len(options))
+	own := map[string]bool{} // the labels as given, which a suffix avoids
+	for _, o := range options {
+		own[o.Label] = true
+	}
+	taken := map[string]bool{}
+	for i, o := range options {
+		label := o.Label
+		for n := 2; taken[label]; n++ {
+			if label = fmt.Sprintf("%s (%d)", o.Label, n); own[label] {
+				label = o.Label // " (n)" is another option's own label
+			}
+		}
+		taken[label] = true
+		out[i] = label
+	}
+	return out
+}
+
 // SelectionIDs are the analysed sample ids behind a selection key.
 func (a *App) SelectionIDs(key string) []string {
 	if a.Project == nil {
@@ -362,6 +446,12 @@ func (a *App) SelectionIDs(key string) []string {
 	}
 	var ids []string
 	switch {
+	case key == AllSelection:
+		for _, s := range a.Project.Samples {
+			if s.IsReady() {
+				ids = append(ids, s.ID)
+			}
+		}
 	case strings.HasPrefix(key, "c:"):
 		name := key[2:]
 		for _, cond := range a.Project.Conditions {
@@ -382,15 +472,18 @@ func (a *App) SelectionIDs(key string) []string {
 	return ids
 }
 
-// SelectionLabel names a selection key.
+// SelectionLabel names a selection key, in the options' (and the web's)
+// words.
 func (a *App) SelectionLabel(key string) string {
 	switch {
+	case key == AllSelection:
+		return fmt.Sprintf("All %d datasets merged", len(a.SelectionIDs(key)))
 	case strings.HasPrefix(key, "c:"):
 		n := len(a.SelectionIDs(key))
 		if n == 1 {
-			return key[2:] + " (1 sample)"
+			return key[2:] + " · 1 dataset"
 		}
-		return fmt.Sprintf("%s (%d merged)", key[2:], n)
+		return fmt.Sprintf("%s · %d datasets merged", key[2:], n)
 	case strings.HasPrefix(key, "s:"):
 		if a.Project != nil {
 			if s := a.Project.Sample(key[2:]); s != nil {
@@ -440,11 +533,17 @@ func (a *App) normalizeSelection() {
 	for _, o := range options {
 		found = found || o.Key == a.Selected.Key
 	}
-	if !found {
+	// every analysed sample merged when there are several, as the web
+	// analyses all loaded datasets until a scope is chosen (app.js
+	// analyseAllLoaded); else the one sample. A key chosen here gives way to
+	// "All" once a second sample is analysed.
+	auto := a.Selected.Key != "" && a.Selected.Key == a.autoKey
+	if !found || auto && len(options) > 0 && options[0].Key == AllSelection {
 		a.Selected.Key = ""
 		if len(options) > 0 {
 			a.Selected.Key = options[0].Key
 		}
+		a.autoKey = a.Selected.Key
 	}
 }
 
@@ -493,7 +592,48 @@ func (a *App) saveUIState() {
 		"density": a.Density}
 	state["desktop"] = desktop
 	a.Project.UIState = state
-	go func() { _, _ = a.B.UpdateUIState(path, state) }()
+	a.uiSaves.save(a, path, state)
+}
+
+// uiSaver writes ui_state one save at a time, in order; a save asked for
+// while one is written replaces any still waiting, so the latest is the
+// last written.
+type uiSaver struct {
+	mu      sync.Mutex
+	writing bool
+	next    *uiSave
+}
+
+type uiSave struct {
+	path  string
+	state map[string]any
+}
+
+func (s *uiSaver) save(a *App, path string, state map[string]any) {
+	s.mu.Lock()
+	s.next = &uiSave{path, state}
+	if s.writing {
+		s.mu.Unlock()
+		return
+	}
+	s.writing = true
+	s.mu.Unlock()
+	go func() {
+		for {
+			s.mu.Lock()
+			job := s.next
+			s.next = nil
+			if job == nil {
+				s.writing = false
+				s.mu.Unlock()
+				return
+			}
+			s.mu.Unlock()
+			if _, err := a.B.UpdateUIState(job.path, job.state); err != nil {
+				a.post(func() { a.ToastAs("ui-state", "Could not save the page and selection of the project: %v", err) })
+			}
+		}
+	}()
 }
 
 // ---- recent projects
@@ -539,7 +679,7 @@ func (a *App) saveRecent() {
 	}
 	raw, _ := json.MarshalIndent(a.recent, "", "  ")
 	_ = os.MkdirAll(a.DataDir, 0o755)
-	_ = os.WriteFile(filepath.Join(a.DataDir, "recent.json"), raw, 0o644)
+	_ = core.WriteFileAtomic(filepath.Join(a.DataDir, "recent.json"), raw)
 }
 
 // ---- tasks
@@ -705,7 +845,7 @@ func (a *App) ResumeTaskThen(id, label string, done func(model.Task, error)) {
 	if a.Project == nil {
 		return
 	}
-	path := a.Project.Path
+	path, gen := a.Project.Path, a.opened
 	a.Go(func() func() {
 		snapshot, err := a.B.ResumeTask(path, id)
 		var t model.Task
@@ -713,7 +853,10 @@ func (a *App) ResumeTaskThen(id, label string, done func(model.Task, error)) {
 			err = model.Decode(snapshot, &t)
 		}
 		return func() {
-			if a.Project == nil || a.Project.Path != path {
+			if !a.current(path, gen) {
+				if done != nil {
+					done(t, errProjectChanged)
+				}
 				return
 			}
 			if err == nil {
@@ -740,11 +883,11 @@ func (a *App) RefreshTasks() {
 	if a.Project == nil {
 		return
 	}
-	path := a.Project.Path
+	path, gen := a.Project.Path, a.opened
 	a.Go(func() func() {
 		list, err := a.B.ListTasks(path)
 		return func() {
-			if err != nil || a.Project == nil || a.Project.Path != path {
+			if err != nil || !a.current(path, gen) {
 				return
 			}
 			for _, item := range list {
@@ -753,9 +896,33 @@ func (a *App) RefreshTasks() {
 					a.storeTask(t)
 				}
 			}
+			if a.staleStages() {
+				// Listing marked a task of an exited session interrupted
+				// after the samples were read: read them again.
+				a.RefreshProject()
+			}
 			a.ensurePolling()
 		}
 	})
+}
+
+// staleStages: a sample stage is shown queued or running for a task known
+// to have finished.
+func (a *App) staleStages() bool {
+	if a.Project == nil {
+		return false
+	}
+	for _, s := range a.Project.Samples {
+		for _, stage := range s.Stages {
+			if stage.Status != "running" && stage.Status != "queued" {
+				continue
+			}
+			if t, ok := a.Tasks[stage.TaskID]; ok && !t.Active() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TaskFinished listeners run on the main thread when a task leaves the
@@ -765,8 +932,29 @@ var taskFinishedHooks []func(a *App, t model.Task)
 // OnTaskFinished registers a hook (pages register theirs at init).
 func OnTaskFinished(fn func(a *App, t model.Task)) { taskFinishedHooks = append(taskFinishedHooks, fn) }
 
+// taskStage orders a task's states: one only moves forward, so a snapshot
+// read before a later one (a poll racing a cancel) is older when its stage
+// is lower.
+func taskStage(status string) int {
+	switch status {
+	case "queued":
+		return 0
+	case "running":
+		return 1
+	case "cancelling":
+		return 2
+	}
+	return 3 // finished
+}
+
+// storeTask records a snapshot unless it is older than the one held: a
+// finished task never returns to running, nor a cancelling one, so the
+// finish hooks run once.
 func (a *App) storeTask(t model.Task) {
 	previous, known := a.Tasks[t.TaskID]
+	if known && taskStage(t.Status) < taskStage(previous.Status) {
+		return
+	}
 	a.Tasks[t.TaskID] = t
 	if known && previous.Active() && !t.Active() {
 		id := "task:" + t.TaskID
@@ -795,49 +983,52 @@ func (a *App) ensurePolling() {
 		return
 	}
 	a.pollOnce.Do(func() {
-		a.pollStop = make(chan struct{})
+		stop := make(chan struct{})
+		a.pollStop = stop
 		go func() {
 			ticker := time.NewTicker(1500 * time.Millisecond)
 			defer ticker.Stop()
 			for {
 				select {
-				case <-a.pollStop:
+				case <-stop:
 					return
 				case <-ticker.C:
 				}
-				done := make(chan []string, 1)
+				// the main thread answers; a closed window never does
+				type active struct {
+					path string
+					gen  int
+					ids  []string
+				}
+				done := make(chan active, 1)
 				a.post(func() {
-					var ids []string
+					var got active
 					if a.Project != nil {
+						got.path, got.gen = a.Project.Path, a.opened
 						for _, t := range a.ActiveTasks() {
-							ids = append(ids, t.TaskID)
+							got.ids = append(got.ids, t.TaskID)
 						}
 					}
-					done <- ids
+					done <- got
 				})
-				ids := <-done
-				if len(ids) == 0 {
+				var got active
+				select {
+				case <-stop:
+					return
+				case got = <-done:
+				}
+				if len(got.ids) == 0 {
 					continue
 				}
-				a.pollTasks(ids)
+				a.pollTasks(got.path, got.gen, got.ids)
 			}
 		}()
 	})
 }
 
-func (a *App) pollTasks(ids []string) {
-	path := ""
-	pathCh := make(chan string, 1)
-	a.post(func() {
-		if a.Project != nil {
-			pathCh <- a.Project.Path
-		} else {
-			pathCh <- ""
-		}
-	})
-	if path = <-pathCh; path == "" {
-		return
-	}
+// pollTasks reads the status of tasks ids of the project opened as
+// generation gen at path.
+func (a *App) pollTasks(path string, gen int, ids []string) {
 	var snapshots []model.Task
 	for _, id := range ids {
 		snapshot, err := a.B.TaskStatus(path, id)
@@ -850,7 +1041,7 @@ func (a *App) pollTasks(ids []string) {
 		}
 	}
 	a.post(func() {
-		if a.Project == nil || a.Project.Path != path {
+		if !a.current(path, gen) {
 			return
 		}
 		for _, t := range snapshots {

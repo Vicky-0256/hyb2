@@ -202,7 +202,8 @@ func openResearch(t *testing.T, lookup bool) (*App, *researchFake, *ui.Tester, *
 	a, cs := openCS(t)
 	f := &researchFake{csFake: cs, lookup: lookup, cancel: make(chan struct{})}
 	a.B = f
-	tt := ui.NewTester(a.View, 1100, 2000)
+	// tall: the result details come before Related research
+	tt := ui.NewTester(a.View, 1100, 4000)
 	a.Navigate("structure", map[string]any{"structureId": structA})
 	csSettle(a, tt)
 	csSettle(a, tt)

@@ -32,8 +32,7 @@ func init() {
 		}
 		switch t.Kind {
 		case "energy":
-			p.panels.energy = map[string]*energyResult{}
-			p.panels.energyErr = map[string]string{}
+			p.panels.clearEnergy()
 			p.loadEnergy(p.selectedID)
 		case "structure":
 			// a new whole-RNA fold: list the folds again when the card shows
@@ -63,13 +62,34 @@ type cmpPanels struct {
 	energy                map[string]*energyResult
 	energyBusy            map[string]bool
 	energyErr             map[string]string
-	energyMsg             string
-	violins               map[string][2]violinStats // id/length/side -> statistics (computed once)
+	// energySeq is each id's read_energy in flight; an answer whose number
+	// is no longer there (cleared, or read again) is dropped. energyNext
+	// only grows, also across reset.
+	energySeq  map[string]int
+	energyNext int
+	energyMsg  string
+	violins    map[string][2]violinStats // id/length/side -> statistics (computed once)
 }
 
 func (s *cmpPanels) reset() {
-	*s = cmpPanels{padj: 0.01, reach: 50, flank: 15, choice: map[string]int{}, energyLen: 40, energyPadj: 0.01,
-		energy: map[string]*energyResult{}, energyBusy: map[string]bool{}, energyErr: map[string]string{}}
+	next := s.energyNext
+	*s = cmpPanels{padj: 0.01, reach: 50, flank: 15, choice: map[string]int{}, energyLen: 40, energyPadj: 0.01}
+	s.energyNext = next
+	s.clearEnergy()
+}
+
+// clearEnergy forgets every read energy result, error and read in flight.
+func (s *cmpPanels) clearEnergy() {
+	s.energy, s.energyBusy, s.energyErr = map[string]*energyResult{}, map[string]bool{}, map[string]string{}
+	s.energySeq = map[string]int{}
+}
+
+// clearEnergyOf forgets one test's energy result, error and read in flight.
+func (s *cmpPanels) clearEnergyOf(id string) {
+	delete(s.energy, id)
+	delete(s.energyBusy, id)
+	delete(s.energyErr, id)
+	delete(s.energySeq, id)
 }
 
 // ---- loading
@@ -198,6 +218,9 @@ func (p *comparePage) loadEnergy(id string) {
 		length, _ = strconv.Atoi(strings.TrimSuffix(s.energyPick, " nt"))
 	}
 	s.energyBusy[id] = true
+	s.energyNext++
+	seq := s.energyNext
+	s.energySeq[id] = seq
 	path := a.Project.Path
 	a.Go(func() func() {
 		payload := core.Obj{"comparison_id": id}
@@ -210,10 +233,11 @@ func (p *comparePage) loadEnergy(id string) {
 			err = model.Decode(raw, &res)
 		}
 		return func() {
-			if a.Project == nil || a.Project.Path != path {
+			if a.Project == nil || a.Project.Path != path || s.energySeq[id] != seq {
 				return
 			}
 			delete(s.energyBusy, id)
+			delete(s.energySeq, id)
 			if err != nil {
 				s.energyErr[id] = err.Error()
 				return
@@ -462,7 +486,7 @@ func (p *comparePage) energyCard(c *ui.Context, e *comparisonEntry, ctx cmpConte
 				Field(c, "Show", func() {
 					ui.Select(c.Key("cmp-en-show"), &current, options).Width(100).Label("Fragment length shown").OnChange(func() {
 						s.energyPick = current
-						delete(s.energy, e.ID)
+						s.clearEnergyOf(e.ID)
 						p.loadEnergy(e.ID)
 					})
 				})

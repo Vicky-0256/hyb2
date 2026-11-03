@@ -201,7 +201,7 @@ func TestFoldEstimateLive(t *testing.T) {
 		t.Fatalf("no reference sequence %s", gene)
 	}
 	for round := 1; round <= 3; round++ {
-		estimate := service.EstimateFold([]int{length}, 100, 1)
+		estimate := service.EstimateFold(core.FoldJob{Lengths: []int{length}, Beam: 100, Workers: 1, Guided: true})
 		mode := "genome"
 		mem := core.StructureClaimMB(length, false, 1)
 		started := time.Now()

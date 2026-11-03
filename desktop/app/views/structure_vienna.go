@@ -70,6 +70,10 @@ func (p *structurePage) viennaPlan(pl *foldPlan) {
 	engine := p.engine
 	pl.req.Engine = &engine
 	pl.pk = false
+	if p.engine == engineIRIS {
+		p.irisPlan(pl) // structure_iris.go
+		return
+	}
 	if p.engine == engineComrades {
 		p.comradesPlan(pl)
 		return
@@ -218,10 +222,10 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 					ui.Text(c, help).FontSize(12).TextColor(t.TextMuted)
 				})
 			}
-			row("st-temp", "Temperature (°C)", &p.temperature, 0, 100, 1, "Folding temperature, 0 to 100 °C. Default 37.")
+			row("st-temp", "Temperature (°C)", &p.temperature, 0, 100, 0.1, "Folding temperature, 0 to 100 °C. Default 37.")
 			row("st-loop", "Minimum hairpin loop", &p.minLoop, 0, 12, 1, "Fewest unpaired bases closing a hairpin, 0 to 12. Default 3.")
 			if comrades {
-				row("st-stems", "Evidence stem constraints", &p.stems, 1, 75, 1, "Strongest RNAcofold stems tried as hard pairs, 1 to 75. Default 75.")
+				row("st-stems", "Ranked stem constraints", &p.stems, 1, 75, 1, "Strongest RNAcofold stems tried as hard pairs, 1 to 75. Original default: 75.")
 				row("st-random", "Randomised folds", &p.randomFolds, 0, 1000, 1,
 					"Extra fits with the stems in seeded random orders, 0 to 1000; each takes about as long as the ranked fit. Default 0.")
 				if p.randomFolds > stLargeEnsemble {

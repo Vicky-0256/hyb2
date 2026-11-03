@@ -115,6 +115,10 @@ type HeatEvent struct {
 	// X, Y are the gene coordinates under the pointer when Hover is true.
 	X, Y  float64
 	Hover bool
+	// Point is true for a click anywhere in the plot (on a cell or not),
+	// PX, PY its gene coordinates.
+	Point  bool
+	PX, PY float64
 }
 
 const axisPad = 44
@@ -156,6 +160,7 @@ func (h *Heatmap) Show(c *ui.Context, size float32, label string) HeatEvent {
 			h.dragging = false
 		} else if px, py, over := box.PointerPosition(); over && plot.Contains(px, py) {
 			gx, gy := h.toGene(plot, px, py)
+			event.Point, event.PX, event.PY = true, gx, gy
 			// A cell drawn larger than it is (MinCell) is hit where it shows.
 			padX := float64(h.MinCell/2) * (h.view.X1 - h.view.X0) / float64(plot.W)
 			padY := float64(h.MinCell/2) * (h.view.Y1 - h.view.Y0) / float64(plot.H)

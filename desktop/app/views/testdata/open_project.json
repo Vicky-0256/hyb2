@@ -403,10 +403,7 @@
      "explore": "contact-map",
      "qc": "samples"
     },
-    "selection": {
-     "kind": "condition",
-     "id": "AFR"
-    },
+    "selection": "c:SUB",
     "reference_id": "ZAFR",
     "gene": "ZIKV_African_KX377335-1_virusRNA",
     "compare": {

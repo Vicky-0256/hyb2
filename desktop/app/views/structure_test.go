@@ -58,7 +58,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	readB, listAB, removed := stFixtureB(t)
 	f.structures[structB] = readB
 	f.ops["list_structures"] = listAB
-	tt := ui.NewTester(a.View, 1100, 1400)
+	tt := ui.NewTester(a.View, 1100, 2400) // tall: Results sits under the longer form
 	// The tasks drawer's "View structure".
 	a.Navigate("structure", map[string]any{"structureId": structA})
 	csSettle(a, tt)
@@ -66,8 +66,14 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	if p.viewA != structA || a.NavOptions != nil {
 		t.Fatalf("viewA %q", p.viewA)
 	}
+	// one strand opens folded, as the web; the arcs are a choice away
+	if p.view != "Folded" || !tt.HasText("Folded RNA structure") {
+		t.Fatalf("view %q", p.view)
+	}
+	p.view = "Arc"
+	tt.Frame()
 	for _, text := range []string{"New fold", "Results", "1 window · 3,060 nt (3,170–6,229)", "1,055 base pairs · -452.0 kcal/mol", "Evidence: AFR_REP1 + AFR_REP2 · " + FormatTime("2026-10-14T15:07:24Z"),
-		"Viewer", "A · AFR_REP1 + AFR_REP2", "Length (nt)", "3,060", "1,055", "-452.0 kcal/mol", "Dot-bracket (A)"} {
+		"Viewer", "Predicted structure · above", "phase 1", "Base pairs", "1,055", "Unpaired bases", "of 3,060 nt", "-452.02", "Sequence / dot-bracket", "Base-pair list (1,055)"} {
 		if !tt.HasText(text) {
 			t.Fatalf("structure page lacks %q: %q", text, tt.Texts())
 		}
@@ -76,7 +82,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 		t.Fatalf("arcs %d pairs, %v-%v of %d", len(p.arcs.A), p.arcs.Start, p.arcs.End, p.arcs.Length)
 	}
 	// The form estimates the whole-RNA fold (built-in rate, no history).
-	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 19 s (rough; the first fold after installing also prepares the folding engine, about 1 min more)",
+	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 1 min 50 s (rough; the first fold after installing also prepares the folding engine, about 2–4 min more)",
 		"about 15.9 GB of the 24.0 GB tasks may use"} {
 		if !tt.HasText(text) {
 			t.Fatalf("no fold check %q: %q", text, tt.Texts())
@@ -90,7 +96,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	tt.Frame()
 	found := false
 	for _, text := range tt.Texts() {
-		found = found || text == "about 4 s (rough; the first fold after installing also prepares the folding engine, about 1 min more)"
+		found = found || text == "about 12 s (rough; the first fold after installing also prepares the folding engine, about 2–4 min more)"
 	}
 	if !found {
 		t.Fatalf("no windows estimate: %q", tt.Texts())
@@ -100,13 +106,16 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	waitFlush(a)
 	tt.Frame()
 	snapshot(t, tt, "structure")
-	// Copy the dot-bracket.
-	if err := tt.Click("Copy"); err != nil {
+	// Copy the dot-bracket: the web's "Copy dot-bracket" copies the structure alone
+	if err := tt.Click("Copy dot-bracket"); err != nil {
 		t.Fatal(err)
 	}
-	// the web's .dbn: the energy follows the structure, two decimals
-	if got := tt.Clipboard(); !strings.HasPrefix(got, ">ZIKV_African_KX377335-1_virusRNA:3170-6229\n") || !strings.Contains(got, " (-452.02)\n") {
+	if got := tt.Clipboard(); got != p.cache[structA].Records[0].DBN {
 		t.Fatalf("clipboard %.80q", got)
+	}
+	// the .dbn file keeps the header and the energy, two decimals
+	if !strings.HasPrefix(p.dbnText, ">ZIKV_African_KX377335-1_virusRNA:3170-6229\n") || !strings.Contains(p.dbnText, " (-452.02)\n") {
+		t.Fatalf("dbn text %.80q", p.dbnText)
 	}
 	// Compare as B: shared pairs and pairs only in A / B.
 	if err := tt.Click("Compare as B"); err != nil {
@@ -192,14 +201,14 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	if p.mode != "windows" || p.pseudoknot || p.windows != "3000-3400" || p.evidence != "c:BRA" {
 		t.Fatalf("prefill %q %v %q %q", p.mode, p.pseudoknot, p.windows, p.evidence)
 	}
-	if !tt.HasText("Prefilled from the contact map. Check the window, then press Run fold below.") || !tt.HasText("Allow pseudoknots in the windows") {
+	if !tt.HasText("Prefilled from the contact map. Check the window, then press Run fold below.") || !tt.HasText("Allow pseudoknots: run Phase 2 to search for crossing base pairs") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	snapshot(t, tt, "structure-prefill")
 
 	// Evidence mapped to another reference than the RNA's: the check says
 	// why and Run fold stays disabled.
-	mismatch := "BRA (2 merged) is mapped to ZBRA, not to ZAFR (the reference of this RNA). Choose evidence mapped to ZAFR."
+	mismatch := "BRA · 2 datasets merged is mapped to ZBRA, not to ZAFR (the reference of this RNA). Choose evidence mapped to ZAFR."
 	if !tt.HasText("Cannot run yet:") || !tt.HasText("• "+mismatch) {
 		t.Fatalf("no mismatch notice: %q", tt.Texts())
 	}
@@ -220,6 +229,8 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 		"1-10":    "• 1-10 is shorter than 20 nt (windows are start-end, at least 20 nt).",
 		"1-20000": "• 1-20000 is outside 1-10807 (windows are start-end, at least 20 nt).",
 		"  \n  ":  "• Add at least one window, one per line as start-end within 1-10,807.",
+		// the runtime refuses a repeated window (one result per window)
+		"1-500\n600-700\n500-1": "• Window 1-500 is listed more than once; give each window once.",
 	} {
 		p.windows = text
 		tt.Frame()
@@ -260,7 +271,7 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 		len(req.Windows) != 2 || req.Windows[1] != (core.Window{Start: 5000, End: 5600}) {
 		t.Fatalf("request %+v params %+v", req, params)
 	}
-	if a.TaskLabel(a.Tasks["structure-2"]) != "Structure · BRA (2 merged) · 2 windows" || p.prefillNote != "" {
+	if a.TaskLabel(a.Tasks["structure-2"]) != "Structure · BRA · 2 datasets merged · 2 windows" || p.prefillNote != "" {
 		t.Fatalf("label %q note %q", a.TaskLabel(a.Tasks["structure-2"]), p.prefillNote)
 	}
 	// No evidence.
@@ -345,6 +356,14 @@ func TestStructureShadeByChimeraSupport(t *testing.T) {
 	if positive == 0 {
 		t.Fatal("no chimera-supported pair")
 	}
+	// A alone is in the web's pair styles, already shaded by HYB bonus:
+	// as the web, no switch
+	if _, ok := tt.Find("Shade by chimera support"); ok {
+		t.Fatal("shade switch shown for A alone")
+	}
+	// in one colour the arcs lose those styles: the switch shades them
+	p.view, p.layers.mono = "Arc", true
+	tt.Frame()
 	if err := tt.Click("Shade by chimera support"); err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +460,7 @@ func TestStructureComradesForm(t *testing.T) {
 	}
 	p.advancedOpen = true
 	tt.Frame()
-	for _, text := range []string{"Evidence stem constraints", "Randomised folds", "Seed", "Evidence", "SUB (2 merged)",
+	for _, text := range []string{"Ranked stem constraints", "Original default: 75.", "Randomised folds", "Seed", "Evidence", "SUB · 2 datasets merged",
 		"75 stems · 0 randomised folds · seed HYB2-Web", "• COMRADES(ViennaRNA) folds at most 3,000 nt at a time, as the web: fold windows of that size."} {
 		if !strings.Contains(strings.Join(tt.Texts(), "\n"), text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())
@@ -608,8 +627,8 @@ func TestStructureCofoldRecord(t *testing.T) {
 		t.Fatalf("dbn %q", got)
 	}
 	ct := strings.Split(stCTText("G", []structureRecord{r}), "\n")
-	if ct[0] != "14 ENERGY = NA G:1-6 + G:101-108" || ct[6] != "6\tA\t5\t0\t0\t6" || ct[7] != "7\tC\t0\t8\t0\t101" ||
-		ct[8] != "8\tC\t7\t9\t3\t102" {
+	if ct[0] != "14 ENERGY = NA G:1-6 + G:101-108" || ct[6] != "6\tA\t5\t0\t0\t6" || ct[7] != "7\tC\t0\t8\t0\t7" ||
+		ct[8] != "8\tC\t7\t9\t3\t8" {
 		t.Fatalf("ct %q", ct[:9])
 	}
 	// a whole-RNA fold is compared only inside the two regions
@@ -624,12 +643,23 @@ func TestStructureCofoldRecord(t *testing.T) {
 	if start != 1 || length != 14 || seq != r.Sequence || len(vp) != 4 || vp[2] != (widgets.LayeredPair{I: 1, J: 10}) {
 		t.Fatalf("view %+v %d %d", vp, start, length)
 	}
-	// two RNAs: drawn on A+B indices, the .ct keeps each base's RNA position
+	// two RNAs: drawn on A+B indices; the .ct numbers A+B as the web
 	two := r
 	two.Positions = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
 	two.Segments = []core.Region{{GeneID: "G", Start: 1, End: 6}, {GeneID: "H", Start: 40, End: 47}}
-	if ct := strings.Split(stCTText("G", []structureRecord{two}), "\n"); ct[7] != "7\tC\t0\t8\t0\t40" {
+	if ct := strings.Split(stCTText("G", []structureRecord{two}), "\n"); ct[7] != "7\tC\t0\t8\t0\t7" {
 		t.Fatalf("two-RNA ct %q", ct[7])
+	}
+	// the pairs TSV: the web's A+B positions and strand columns, then each end's RNA position
+	table := stPairsTable([]structureRecord{r}, "CPLcofold", nil, false)
+	if got := strings.Join(table[0][13:], ","); got != "cutpoint,left_strand,left_strand_position,right_strand,right_strand_position,left_rna,left_rna_position,right_rna,right_rna_position" {
+		t.Fatalf("pairs header %q", got)
+	}
+	if got := strings.Join(table[1], ","); got != "1,G,10,U,G–U,no,,,none,0,primary,,CPLcofold,6,A,1,B,4,G,1,G,104" {
+		t.Fatalf("pairs row %q", got)
+	}
+	if got := strings.Join(stPairsTable([]structureRecord{two}, "CPLcofold", nil, false)[4], ","); !strings.HasSuffix(got, ",6,B,7,B,8,H,46,H,47") {
+		t.Fatalf("two-RNA pairs row %q", got)
 	}
 	// BPSEQ has no break: the comment names the strands, positions are local
 	if bp := strings.Split(stBPSEQText("G", []structureRecord{two}), "\n"); !strings.HasPrefix(bp[0], "# G:1-6 + H:40-47; two strands: A is 1-6, B 7-14;") {
@@ -672,23 +702,105 @@ func TestStructureCofoldViewer(t *testing.T) {
 	if !strings.Contains(meta, "Engine CPLcofold") || !strings.Contains(meta, "48 pairs between them") {
 		t.Fatalf("meta %q", meta)
 	}
+	// the web's chain-break note and pseudoknot-off note; the experimental
+	// pseudoknot energy warning only for a "heuristic" energy
+	texts := strings.Join(tt.Texts(), "\n")
+	for _, want := range []string{"CPLcofold · two RNA molecules · A 81 nt + B 120 nt. Chain break after position 81; coordinates exclude &. Arc view shows the separate backbones.",
+		"phase-1 secondary-structure candidate", "No crossing Phase 2 layer was generated. Only Phase 1 secondary structures are ranked; beta is ignored."} {
+		if !strings.Contains(texts, want) {
+			t.Fatalf("lacks %q: %q", want, tt.Texts())
+		}
+	}
+	const warning = "Experimental pseudoknot energy (Turner/DP09). This ranking score is not a validated binding free energy."
+	if tt.HasText(warning) {
+		t.Fatal("warning without energy metadata")
+	}
+	p.cache["structure-cofold1"].Meta.EnergyMetadata = map[string]any{"energy_kind": "heuristic", "energy_model": "Turner/DP09"}
+	tt.Frame()
+	if !tt.HasText(warning) || !tt.HasText("kcal/mol · Turner/DP09") {
+		t.Fatalf("no warning %q", tt.Texts())
+	}
+	p.cache["structure-cofold1"].Meta.EnergyMetadata = nil
+	tt.Frame()
 	if !strings.Contains(p.dbnText, "&") || !strings.HasPrefix(p.dbnText, ">ZIKV_FrenchPolynesian_KJ776791-2_virusRNA:1-81 + ") {
 		t.Fatalf("dbn %q", p.dbnText)
 	}
 	if p.arcs.Start != 1 || p.arcs.End != 1171 {
 		t.Fatalf("arcs %v-%v", p.arcs.Start, p.arcs.End)
 	}
+	// as the web's A+B arcs: the positions between the regions take no
+	// room, the backbone breaks at "A | B"
+	if p.arcs.Gap != (widgets.Gap{From: 81, To: 1052}) || p.arcs.Gap.Axis(1052) != 82 || p.arcs.Gap.Position(82) != 1052 {
+		t.Fatalf("gap %+v", p.arcs.Gap)
+	}
+	for _, tick := range p.arcs.Gap.Ticks(1, 1171, 8) {
+		if tick > 81 && tick < 1052 {
+			t.Fatalf("tick %v inside the gap", tick)
+		}
+	}
+	if svg, _ := func() (string, int) { spec, _ := p.arcSpec(p.cache["structure-cofold1"]); return spec.SVG() }(); !strings.Contains(svg, `data-chain-break="81">A | B<`) ||
+		!strings.Contains(svg, `data-strand="B"`) {
+		t.Fatalf("svg lacks the chain break")
+	}
 	snapshot(t, tt, "structure-cofold-arcs")
+	// two strands: Arc (the default) and Matrix only, as the web
+	if p.view != "Arc" || !slices.Equal(stViewChoices(p.cache["structure-cofold1"]), []string{"Arc", "Matrix"}) {
+		t.Fatalf("view %q of %q", p.view, stViewChoices(p.cache["structure-cofold1"]))
+	}
 	p.view = "Folded"
 	csSettle(a, tt)
-	csSettle(a, tt)
-	if tt.HasText("The folded view draws one window: choose it above.") || !tt.HasText("Folded view of the base pairs") && p.layouts[stNestedDBN(nil, 1, 0)].err != "" {
-		t.Fatalf("folded %q", tt.Texts())
+	if p.view != "Arc" {
+		t.Fatalf("view %q offered for two strands", p.view)
 	}
-	snapshot(t, tt, "structure-cofold-folded")
+	p.view = "Matrix"
+	csSettle(a, tt)
+	if !tt.HasText("Base-pair matrix") || !tt.HasText("Matrix view of the base pairs") {
+		t.Fatalf("matrix %q", tt.Texts())
+	}
+	// the matrix draws the strands on their A+B indices; a click there
+	// inspects the RNA position the arcs show
+	v, _ := p.stStructView(nil, p.cache["structure-cofold1"], widgets.ModeMatrix, ui.LightTheme(), false)
+	if v.Start != 1 || v.Length != 201 || stArcPosition(p.shownA, 82) != 1052 || stViewPosition(p.shownA, 1052) != 82 {
+		t.Fatalf("matrix %d+%d", v.Start, v.Length)
+	}
+	snapshot(t, tt, "structure-cofold-matrix")
 	ct := strings.Split(stCTText("G", []structureRecord{r}), "\n")
 	if ct[81] != "81\tU\t80\t0\t"+strings.Split(ct[81], "\t")[4]+"\t81" || !strings.HasPrefix(ct[82], "82\t") ||
-		strings.Split(ct[82], "\t")[2] != "0" || strings.Split(ct[82], "\t")[5] != "1052" {
+		strings.Split(ct[82], "\t")[2] != "0" || strings.Split(ct[82], "\t")[5] != "82" {
 		t.Fatalf("ct break %q %q", ct[81], ct[82])
+	}
+}
+
+// The web's "Structure topology" for the whole RNA and windows: the choice
+// reaches the fold request, and the memory claim follows the pseudoknot model.
+func TestStructureTopologyWholeRNA(t *testing.T) {
+	a, _ := openCS(t)
+	tt := ui.NewTester(a.View, 1100, 2400)
+	a.Navigate("structure", nil)
+	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	free := p.plan()
+	if free.req.Parameters.(map[string]any)["allow_pseudoknot"] != false || p.mode != "genome" {
+		t.Fatalf("default %v %q", free.req.Parameters.(map[string]any)["allow_pseudoknot"], p.mode)
+	}
+	if err := tt.Click("Allow pseudoknots: run Phase 2 to search for crossing base pairs"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Frame()
+	knotted := p.plan()
+	if !p.pseudoknot || knotted.req.Parameters.(map[string]any)["allow_pseudoknot"] != true || knotted.memMB <= free.memMB {
+		t.Fatalf("pseudoknot %v, params %v, memory %d vs %d", p.pseudoknot, knotted.req.Parameters.(map[string]any)["allow_pseudoknot"], knotted.memMB, free.memMB)
+	}
+	if !tt.HasText("the whole RNA, 10,807 nt, pseudoknots allowed") {
+		t.Fatalf("plan text %q", tt.Texts())
+	}
+	if err := tt.Click("Secondary structure only: Phase 1 candidates, no pseudoknot search"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Frame()
+	if p.pseudoknot {
+		t.Fatal("still pseudoknotted")
 	}
 }

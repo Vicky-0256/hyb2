@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -27,7 +28,8 @@ import (
 // "Fold this region" goes to ⑤ Structure with
 //
 //	{"prefill": {"gene": string, "windows": []map[string]int{{"start": s, "end": e}},
-//	             "selectionKey": "c:<condition>" | "s:<sample>", "source": "contact map" | "region"}}
+//	             "selectionKey": "all" | "c:<condition>" | "s:<sample>", "source": "contact map" | "region",
+//	             "sampleIds": []string (only while Explore shows pinned samples, see pinned)}}
 func init() {
 	RegisterPageFactory("explore", func(a *App) Page { return newExplorePage(a) })
 }
@@ -59,6 +61,14 @@ type explorePage struct {
 	sel  string
 	ids  []string
 	gene string
+	// pinned are the samples Compare asked for ("sampleIds"), or the
+	// contact map's dataset for its drill-downs, when they are not what the
+	// top bar's selection (pinnedKey) holds, e.g. a tested group that is not
+	// one condition; they are used while that selection stays chosen.
+	// pinnedFrom says where they came from ("Compare", "the contact map").
+	pinned     []string
+	pinnedKey  string
+	pinnedFrom string
 
 	summary exploreSummary
 	sumLoad loader
@@ -91,18 +101,24 @@ func newExplorePage(a *App) *explorePage {
 
 // Show applies navigation options; data loads as the view needs it.
 //
-// Options: {"tab": "interactions" | "contact" | "viewpoint" | "region"},
+// Options: {"tab": "interactions" | "contact" | "viewpoint" | "region" |
+// "energies"},
 // or Compare's {"view": "contact-map" | "region", "binSize": n, "x", "y",
 // "xEnd", "yEnd", "gene2"} (the caller sets a.Selected first): the contact
 // map picks and zooms to the cell (x, y); the region opens arm 1 x..xEnd
 // against arm 2 y..yEnd, on gene2 for an inter-RNA result, else on the same
-// gene.
+// gene (without "yEnd", any partner range is cleared). Compare's
+// "sampleIds" are the tested group's samples: when the selection does not
+// hold exactly those, Explore queries them instead (pinSamples).
 func (p *explorePage) Show() {
 	opts := p.a.NavOptions
 	if opts == nil {
 		return
 	}
 	p.a.NavOptions = nil
+	if raw, ok := opts["sampleIds"]; ok {
+		p.pinSamples(sampleIDList(raw), "Compare")
+	}
 	p.track()
 	tab, _ := opts["tab"].(string)
 	switch view, _ := opts["view"].(string); view {
@@ -140,14 +156,18 @@ func (p *explorePage) Show() {
 			}
 		}
 		p.cm.gene2 = gene2
-		p.cm.focus = &[4]int{x, y, xEnd, yEnd}
+		p.cm.focus, p.cm.focusZoom = &[4]int{x, y, xEnd, yEnd}, true
 		p.cm.load.reset()
 	case tabRegion:
 		s := &p.rg
 		s.applyRange(max(1, x), max(xEnd, x))
 		if yEnd > 0 {
-			s.partner, s.partnerStart, s.partnerEnd = gene2, coordText(max(1, y)), coordText(yEnd)
-			s.applied.partner, s.applied.partnerStart, s.applied.pEnd = gene2, max(1, y), yEnd
+			s.setPartner(gene2, max(1, y), yEnd)
+		} else {
+			// no partner range: none is left from before (an inter-RNA
+			// result keeps its RNA Y as the partner)
+			partner, _ := opts["gene2"].(string)
+			s.setPartner(partner, 0, 0)
 		}
 	}
 }
@@ -214,6 +234,13 @@ func (p *explorePage) query(path, operation string, ids []string, payload core.O
 func (p *explorePage) track() {
 	a := p.a
 	ids := a.SelectionIDs(a.Selected.Key)
+	if p.pinned != nil {
+		if a.Selected.Key == p.pinnedKey {
+			ids = p.pinned
+		} else {
+			p.pinned = nil // the selection changed in the top bar
+		}
+	}
 	stamp := []string{a.Project.Path, a.Selected.Gene}
 	for _, id := range ids {
 		updated := ""
@@ -228,10 +255,67 @@ func (p *explorePage) track() {
 	}
 	geneChanged := a.Selected.Gene != p.gene
 	p.sel, p.ids, p.gene = sel, ids, a.Selected.Gene
-	p.cm.selectionChanged(p.gene, geneChanged)
+	// the contact map draws one dataset: a change of the others keeps it
+	if stamp := p.contactStamp(); geneChanged || stamp != p.cm.stamp {
+		p.cm.stamp = stamp
+		p.cm.selectionChanged(p.gene, geneChanged)
+	}
 	p.ix.selectionChanged()
-	p.vp.selectionChanged()
+	p.vp.selectionChanged(geneChanged)
 	p.rg.selectionChanged(geneChanged, p.geneLength(p.gene))
+}
+
+// pinSamples uses ids (their analysed samples, from source) instead of
+// the selection's when the selection does not hold exactly them; selection
+// keys are every sample ("all"), a condition or one sample, so a group of
+// samples cannot be one.
+func (p *explorePage) pinSamples(ids []string, source string) {
+	a := p.a
+	var ready []string
+	for _, id := range ids {
+		if s := a.Project.Sample(id); s != nil && s.IsReady() && !slices.Contains(ready, id) {
+			ready = append(ready, id)
+		}
+	}
+	selected := a.SelectionIDs(a.Selected.Key)
+	if len(ready) == 0 || (len(ready) == len(selected) && cmpSameSet(ready, selected)) {
+		p.pinned, p.pinnedKey, p.pinnedFrom = nil, "", ""
+		return
+	}
+	p.pinned, p.pinnedKey, p.pinnedFrom = ready, a.Selected.Key, source
+}
+
+// sampleIDList reads a "sampleIds" option ([]string, or []any from JSON).
+func sampleIDList(raw any) []string {
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		var out []string
+		for _, x := range v {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// samplesLabel names the samples queried: the selection's label, or the
+// pinned samples' names.
+func (p *explorePage) samplesLabel() string {
+	if p.pinned == nil {
+		return p.a.SelectionLabel(p.a.Selected.Key)
+	}
+	names := make([]string, len(p.pinned))
+	for i, id := range p.pinned {
+		names[i] = id
+		if s := p.a.Project.Sample(id); s != nil {
+			names[i] = s.Label()
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 func (p *explorePage) loadSummary() {
@@ -298,18 +382,29 @@ func (p *explorePage) View(c *ui.Context) {
 	p.track()
 	ui.Column(c).Fill().Padding(20, 24).Gap(14).Children(func() {
 		ui.Row(c).Gap(16).AlignItems(ui.Center).Wrap().Children(func() {
-			ui.Column(c).Grow(1).Gap(2).Children(func() {
+			ui.Column(c).Grow(1).Basis(320).Gap(2).Children(func() {
 				ui.Text(c, "Explore").FontSize(24).Bold()
-				note := "Selection: " + a.SelectionLabel(a.Selected.Key) + " · change it in the top bar."
-				if p.summary.records > 0 {
-					note = fmt.Sprintf("Selection: %s · %s hybrids, %s reads · change it in the top bar.",
-						a.SelectionLabel(a.Selected.Key), FormatNumber(p.summary.records), FormatNumber(p.summary.reads))
+				what, change := "Selection: "+a.SelectionLabel(a.Selected.Key), " · change it in the top bar."
+				if p.pinned != nil {
+					what, change = "Samples from "+nameOr(p.pinnedFrom, "Compare")+": "+p.samplesLabel(), ""
 				}
-				ui.Text(c, note).TextColor(t.TextMuted).SingleLine()
+				note := what + change
+				if p.summary.records > 0 {
+					note = fmt.Sprintf("%s · %s hybrids, %s reads%s", what, FormatNumber(p.summary.records), FormatNumber(p.summary.reads), change)
+				}
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, note).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
+					if p.pinned != nil && ui.Button(c, "Use the selection").
+						Tooltip("Show "+a.SelectionLabel(a.Selected.Key)+", the top bar's selection, instead").Clicked() {
+						p.pinned, p.pinnedKey, p.pinnedFrom = nil, "", ""
+						p.track()
+					}
+				})
 			})
 			ui.Segmented(c.Key("explore-tabs"), &p.tab, exploreTabs...).Label("Explore views")
 		})
-		if len(p.ids) == 0 || p.gene == "" {
+		// the binding energies need a sample, not an RNA
+		if len(p.ids) == 0 || (p.gene == "" && p.tab != tabEnergies) {
 			p.emptyState(c)
 			return
 		}
@@ -332,12 +427,21 @@ func (p *explorePage) View(c *ui.Context) {
 	})
 }
 
+// emptyState says what is missing: an analysed sample in the project, one
+// in the selection, or an RNA.
 func (p *explorePage) emptyState(c *ui.Context) {
 	Card(c, "", func() {
-		ui.Text(c, "No analysed sample yet. Run a sample on the Data page; it appears here when its analysis index is built.").
-			TextColor(c.Theme().TextMuted)
-		if ui.PrimaryButton(c, "Go to Data").Clicked() {
-			p.a.Navigate("data", nil)
+		muted := c.Theme().TextMuted
+		switch {
+		case len(p.a.SelectionIDs(AllSelection)) == 0:
+			ui.Text(c, "No analysed sample yet. Run a sample on the Data page; it appears here when its analysis index is built.").TextColor(muted)
+			if ui.PrimaryButton(c, "Go to Data").Clicked() {
+				p.a.Navigate("data", nil)
+			}
+		case len(p.ids) == 0:
+			ui.Text(c, "The selection has no analysed sample. Choose another selection in the top bar.").TextColor(muted)
+		default:
+			ui.Text(c, "Choose an RNA in the top bar to explore it.").TextColor(muted)
 		}
 	})
 }
@@ -456,7 +560,7 @@ func withAll(all string, names []string) []string {
 
 // typesPayload: nil for all types, else the one chosen.
 func typesPayload(choice string) []string {
-	if choice == "" || choice == allTypes {
+	if choice == "" || choice == allTypes || choice == allPattern {
 		return nil
 	}
 	return []string{choice}
@@ -476,10 +580,49 @@ func (p *explorePage) foldPrefill(gene string, windows [][2]int, source string) 
 	for _, w := range windows {
 		list = append(list, map[string]int{"start": w[0], "end": w[1]})
 	}
-	p.a.Navigate("structure", map[string]any{"prefill": map[string]any{
-		"gene": gene, "windows": list, "selectionKey": p.a.Selected.Key, "source": source,
-	}})
+	p.toStructure(map[string]any{"gene": gene, "windows": list, "source": source})
+}
+
+// toStructure navigates to ⑤ Structure with prefill, plus the selection
+// key and, while Explore shows pinned samples, their ids ("sampleIds").
+func (p *explorePage) toStructure(prefill map[string]any) {
+	prefill["selectionKey"] = p.a.Selected.Key
+	if p.pinned != nil {
+		prefill["sampleIds"] = append([]string(nil), p.pinned...)
+	}
+	p.a.Navigate("structure", map[string]any{"prefill": prefill})
 }
 
 // profileColor is the bar color of coverage plots.
 func profileColor(t *ui.Theme) ui.Color { return t.Accent }
+
+// webFormat is the web Explore's format(): at most two decimals (rounded
+// half away from zero), thousands grouped, as Intl.NumberFormat("en-US",
+// {maximumFractionDigits: 2}); "—" for none.
+func webFormat(v *float64) string {
+	if v == nil {
+		return "—"
+	}
+	text := jsFixed(*v, 2)
+	if strings.ContainsAny(text, "eIN") { // past 1e21, or not a number
+		return text
+	}
+	text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	sign := ""
+	if rest, ok := strings.CutPrefix(text, "-"); ok {
+		sign, text = "-", rest
+	}
+	whole, fraction, _ := strings.Cut(text, ".")
+	n, _ := strconv.ParseInt(whole, 10, 64)
+	out := FormatNumber(n)
+	if fraction != "" {
+		out += "." + fraction
+	}
+	if out == "0" {
+		sign = ""
+	}
+	return sign + out
+}
+
+// webFormatValue is webFormat of a value.
+func webFormatValue(v float64) string { return webFormat(&v) }

@@ -34,8 +34,8 @@ type TaskStartRequest struct {
 	GeneID      *string  `json:"gene_id,omitempty"`
 	Mode        *string  `json:"mode,omitempty"`
 	// Engine of a structure task: "cplfold" (default), "cplcofold" (mode
-	// "cofold", two Regions as two strands), "viennarna" or "comrades"
-	// (COMRADES(ViennaRNA)).
+	// "cofold", two Regions as two strands), "viennarna", "comrades"
+	// (COMRADES(ViennaRNA)) or "iris" (one region: genome, or one window).
 	Engine  *string  `json:"engine,omitempty"`
 	Windows []Window `json:"windows,omitempty"`
 	Regions []Region `json:"regions,omitempty"`
@@ -87,8 +87,8 @@ type Backend interface {
 
 	// The expected time of running these samples' pipelines (perf.go).
 	EstimatePipelines(inputs []PipelineInput) PipelineEstimate
-	// The expected time of a structure fold of these window lengths.
-	EstimateFold(lengths []int, beam, workers int) FoldEstimate
+	// The expected time of a structure fold (perf.go).
+	EstimateFold(job FoldJob) FoldEstimate
 
 	// project_op: one of the PROJECT_OPERATIONS allowlist on the control
 	// lane; payload must not contain "operation" or "path".

@@ -64,6 +64,13 @@ TOP_FLANK = 150
 _SHIFT = 1 << 32
 _CHUNK = 16384
 _MAX_SAFE = 2 ** 53 - 1  # Number.isSafeInteger
+# Bounds of an inter-RNA map's rows, past which a row is malformed (and
+# skipped): a position fits the 32-bit half of a cell key, and an arm spans
+# at most _MAX_ARM nt, so one row adds at most (_MAX_ARM / BIN + 1)^2 cells;
+# a batch is folded into the map before it holds _BATCH_CELLS cells.
+_MAX_POSITION = 2 ** 31 - 1
+_MAX_ARM = 10_000
+_BATCH_CELLS = 1 << 22
 
 
 def _pipeline_path(repo_root: Optional[Path]) -> None:
@@ -188,13 +195,17 @@ def _coordinate(field: bytes) -> Optional[int]:
     return value if 1 <= value <= _MAX_SAFE else None
 
 
-def _pair_arms(handle, gene_x: bytes, gene_y: bytes) -> Iterable[Tuple[int, int, int, int]]:
+def _pair_arms(handle, gene_x: bytes, gene_y: bytes,
+               skipped: Optional[Dict[str, int]] = None) -> Iterable[Tuple[int, int, int, int]]:
     """(x start, x end, y start, y end) of the X x Y hybrids, Y x X ones swapped.
 
     Rows the web's parser rejects are skipped as it skips them: blank and
     ``#`` lines, fewer than 15 tab-separated columns, an empty RNA name, a
     coordinate that is not a whole number >= 1, or an arm whose start is
-    after its end.
+    after its end.  An X x Y row with a position past ``_MAX_POSITION`` or
+    an arm longer than ``_MAX_ARM`` nt is malformed: it is skipped too (a
+    single one would otherwise fill memory) and counted in
+    ``skipped["out_of_range"]``.
     """
     from hyb2analysis import hybfile
 
@@ -217,15 +228,21 @@ def _pair_arms(handle, gene_x: bytes, gene_y: bytes) -> Iterable[Tuple[int, int,
         arms = [_coordinate(columns[k]) for k in (6, 7, 12, 13)]
         if any(value is None for value in arms) or arms[0] > arms[1] or arms[2] > arms[3]:
             continue
+        if max(arms) > _MAX_POSITION or arms[1] - arms[0] >= _MAX_ARM or arms[3] - arms[2] >= _MAX_ARM:
+            if skipped is not None:
+                skipped["out_of_range"] = skipped.get("out_of_range", 0) + 1
+            continue
         yield (arms[2], arms[3], arms[0], arms[1]) if swap else (arms[0], arms[1], arms[2], arms[3])
 
 
-def pair_cells(hyb: Path, gene_x: str, gene_y: str) -> Tuple[np.ndarray, np.ndarray, int]:
+def pair_cells(hyb: Path, gene_x: str, gene_y: str,
+               skipped: Optional[Dict[str, int]] = None) -> Tuple[np.ndarray, np.ndarray, int]:
     """``(keys, counts, records)`` of the 10-nt X x Y cells of a .hyb.
 
     Each hybrid adds one to every cell its x arm x y arm covers (bins
     ``floor(position / 10)``, as binArms); ``keys`` pack ``x << 32 | y`` of
-    the cell starts, sorted.
+    the cell starts, sorted.  Malformed rows (``_pair_arms``) are left out
+    and counted in ``skipped``.
     """
     if gene_x == gene_y:
         raise ValueError("an inter-RNA map needs two different RNAs")
@@ -246,13 +263,15 @@ def pair_cells(hyb: Path, gene_x: str, gene_y: str) -> Tuple[np.ndarray, np.ndar
         parts_counts.append(counts)
 
     batch: List[Tuple[int, int, int, int]] = []
+    cells = 0
     with open(hyb, "rb") as handle:
-        for arms in _pair_arms(handle, gene_x.encode("utf-8"), gene_y.encode("utf-8")):
+        for arms in _pair_arms(handle, gene_x.encode("utf-8"), gene_y.encode("utf-8"), skipped):
             batch.append(arms)
             records += 1
-            if len(batch) >= _CHUNK:
+            cells += (arms[1] // BIN - arms[0] // BIN + 1) * (arms[3] // BIN - arms[2] // BIN + 1)
+            if len(batch) >= _CHUNK or cells >= _BATCH_CELLS:
                 flush(batch)
-                batch = []
+                batch, cells = [], 0
     if batch:
         flush(batch)
     if not parts_keys:
@@ -266,8 +285,12 @@ def pair_cells(hyb: Path, gene_x: str, gene_y: str) -> Tuple[np.ndarray, np.ndar
 def write_pair_contact(hyb: Path, gene_x: str, gene_y: str, out: Path) -> int:
     """Write the X x Y cells as a contact.txt (``x y count`` by x, then y);
     returns the number of hybrids counted."""
-    keys, counts, records = pair_cells(hyb, gene_x, gene_y)
+    skipped: Dict[str, int] = {}
+    keys, counts, records = pair_cells(hyb, gene_x, gene_y, skipped)
     lines = ["# hybrids between %s and %s\n" % (gene_x, gene_y), "x\ty\tcount\n"]
+    if skipped.get("out_of_range"):
+        lines.insert(1, "# %d malformed rows skipped (a position past %d or an arm longer than %d nt)\n"
+                     % (skipped["out_of_range"], _MAX_POSITION, _MAX_ARM))
     lines.extend("%d\t%d\t%d\n" % (key >> 32, key & 0xFFFFFFFF, count)
                  for key, count in zip(keys.tolist(), counts.tolist()))
     tmp = out.with_name("." + out.name + ".tmp")

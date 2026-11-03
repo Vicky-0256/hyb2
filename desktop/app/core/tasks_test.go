@@ -160,6 +160,27 @@ func TestStructureRequestsAreValidated(t *testing.T) {
 	if err != nil || payload["engine"] != "viennarna" {
 		t.Fatalf("vienna payload %v %v", payload, err)
 	}
+	// IRIS: one reference region, the whole RNA or one window
+	irisReq := good
+	irisReq.Engine, irisReq.Parameters = ptr("iris"), map[string]any{"K": 2, "C": 20, "fraction": 0.75, "kRange": "4 5 6 7"}
+	if payload, err = TaskPayload(irisReq, "/p", "a", run, claim); err != nil || payload["engine"] != "iris" || payload["mode"] != "windows" {
+		t.Fatalf("iris payload %v %v", payload, err)
+	}
+	for i, edit := range []func(*TaskStartRequest){
+		func(r *TaskStartRequest) { r.Windows = []Window{{Start: 1, End: 300}, {Start: 400, End: 600}} },
+		func(r *TaskStartRequest) {
+			r.Mode, r.Regions = ptr("paired"), []Region{{GeneID: "G", Start: 1, End: 30}, {GeneID: "G", Start: 50, End: 90}}
+		},
+		func(r *TaskStartRequest) {
+			r.Mode, r.Windows, r.Source, r.Sequence = ptr("genome"), nil, ptr("paste"), ptr("ACGU")
+		},
+	} {
+		request := irisReq
+		edit(&request)
+		if _, err := TaskPayload(request, "/p", "a", run, big()); err == nil {
+			t.Fatalf("bad iris request %d accepted", i)
+		}
+	}
 	// CPLcofold: two regions as two strands
 	cofold := genome
 	cofold.Engine, cofold.Mode = ptr("cplcofold"), ptr("cofold")

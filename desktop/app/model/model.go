@@ -198,11 +198,17 @@ type Task struct {
 	FinishedAt  string    `json:"finished_at"`
 	Progress    *Progress `json:"progress"`
 	SecondsLeft *float64  `json:"seconds_left"`
-	ResumedFrom string    `json:"resumed_from"`
-	Output      any       `json:"output"`
+	// FractionDone is a sample pipeline's share done over all its stages.
+	FractionDone *float64 `json:"fraction_done"`
+	// OverEstimate: the sample has run longer than estimated, so there is
+	// no time left to show.
+	OverEstimate bool   `json:"over_estimate"`
+	ResumedFrom  string `json:"resumed_from"`
+	Output       any    `json:"output"`
 }
 
-var activeStatuses = map[string]bool{"queued": true, "running": true}
+// activeStatuses: a "cancelling" task is still active until its child is reaped.
+var activeStatuses = map[string]bool{"queued": true, "running": true, "cancelling": true}
 
 func (t Task) Active() bool { return activeStatuses[t.Status] }
 

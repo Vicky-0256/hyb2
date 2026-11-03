@@ -82,6 +82,21 @@ def legacy_annotations(cols: list) -> "tuple[int, Optional[float]]":
     return 1, None
 
 
+def layout(line: bytes) -> "tuple[bool, bool]":
+    """``(canonical, legacy_column16)`` of a line ``parse`` accepted, as the
+    web parser counts them: a standard HYB2 17/18-column record, or a 15/16-
+    column one whose column 16 is a positive integer read as cluster support
+    (``ambiguousColumn16``: it may be a truncated 17-column record)."""
+    cols = line.rstrip(b"\r\n").split(b"\t")
+    if len(cols) >= 17:
+        return True, False
+    tail = [value.strip() for value in cols[15:]]
+    if _COUNT_TOTAL.search(b";".join(tail)):
+        return False, False
+    column16 = tail[0] if tail else b""
+    return False, bool(_DIGITS.match(column16)) and 1 <= int(column16) <= _SAFE_INTEGER
+
+
 def _coordinate(value: bytes) -> int:
     value = value.strip()
     if not _DIGITS.match(value):

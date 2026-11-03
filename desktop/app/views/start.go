@@ -16,6 +16,7 @@ type startState struct {
 	openPath    string
 	pasteOpen   bool // the "paste a path" section of Open is expanded
 	exampleOpen bool // "What the example contains" is expanded
+	focusName   bool // the project name takes the focus in the next frame
 	newParent   string
 	newName     string
 	dataFolder  string // optional raw data folder to import after creating
@@ -149,6 +150,8 @@ func (a *App) startView(c *ui.Context) {
 				ui.Row(c).Gap(12).AlignItems(ui.End).Children(func() {
 					Logo(c, 44)
 					ui.Text(c, "Desktop").FontSize(22).TextColor(t.TextMuted).Padding(0, 0, 4, 0)
+					ui.Spacer(c)
+					a.localChip(c) // the web's landing header
 				})
 				ui.Text(c, "From raw chimeric reads (FASTQ) to hybrids, interactions and RNA structure — all on this computer.").TextColor(t.TextMuted)
 			})
@@ -177,7 +180,11 @@ func (a *App) startView(c *ui.Context) {
 				card(c, "Start a new project", func() {
 					ui.Text(c, "Use this the first time you analyse a data set.").FontSize(12).TextColor(t.TextMuted)
 					Field(c, "Project name", func() {
-						ui.TextInput(c.Key("new-name"), &s.newName).Placeholder("e.g. ZIKV virion RNA").Label("Project name")
+						name := ui.TextInput(c.Key("new-name"), &s.newName).Placeholder("e.g. ZIKV virion RNA").Label("Project name")
+						if s.focusName { // the palette's New project
+							s.focusName = false
+							name.Focus().ScrollIntoView()
+						}
 					})
 					Field(c, "Save in", func() {
 						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -244,15 +251,7 @@ func (a *App) startView(c *ui.Context) {
 						ProjectSuffix+" and that contains project.json.").FontSize(12).TextColor(t.TextMuted)
 					ui.Row(c).Gap(8).Children(func() {
 						if ui.PrimaryButton(c, "Choose project folder…").Disabled(s.preparing).Clicked() {
-							a.Go(func() func() {
-								path := PickFolder("Open a HYB2 project folder (" + ProjectSuffix + ")")
-								return func() {
-									if path != "" {
-										s.openPath = path
-										a.Open(path)
-									}
-								}
-							})
+							a.chooseProject()
 						}
 					})
 					ui.Collapsible(c.Key("open-paste"), "Or paste a folder path", &s.pasteOpen, func() {
@@ -295,6 +294,19 @@ func (a *App) startView(c *ui.Context) {
 	})
 }
 
+// chooseProject asks for a project folder and opens it.
+func (a *App) chooseProject() {
+	a.Go(func() func() {
+		path := PickFolder("Open a HYB2 project folder (" + ProjectSuffix + ")")
+		return func() {
+			if path != "" {
+				a.start.openPath = path
+				a.Open(path)
+			}
+		}
+	})
+}
+
 func (a *App) create(path, name string) {
 	a.start.creating = true
 	a.start.status = "Creating " + path + "…"
@@ -316,7 +328,7 @@ func (a *App) create(path, name string) {
 			}
 			a.start.newName = ""
 			if a.start.dataFolder != "" {
-				a.pendingFolder, a.start.dataFolder = a.start.dataFolder, ""
+				a.pendingFolder, a.start.dataFolder = pendingFolder{path, a.start.dataFolder}, ""
 				a.Page = "data"
 			}
 			a.Open(path)
@@ -361,6 +373,14 @@ func (a *App) createExample(path string) {
 	a.start.creating = true
 	a.start.status = "Creating the example project " + path + "…"
 	a.Go(func() func() {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			if entries, _ := os.ReadDir(path); len(entries) > 0 {
+				return func() {
+					a.start.creating = false
+					a.start.status = "The folder is not empty; choose an empty or new folder."
+				}
+			}
+		}
 		_, err := a.B.CreateProject(path, ExampleProjectName, "The example data set bundled with HYB2 Desktop.")
 		if err == nil {
 			_, err = a.B.ProjectOp(path, "add_example_data", nil)
@@ -497,11 +517,21 @@ func (a *App) prefsDialog(c *ui.Context) {
 			})
 			ui.Divider(c)
 			a.themePref(c)
+			a.motionPref(c)
 			ui.Divider(c)
 			a.lookupPrefs(c)
 		})
 	})
 }
+
+// The lookup switch's notice; the Privacy page says the same.
+const (
+	lookupOffText    = "Off by default. Used by Structure › Related research."
+	lookupNoticeText = "When you look up related research, HYB2 sends the public identifier and species you type — nothing else — " +
+		"to RNAcentral (EMBL-EBI) over the internet. No sequence, structure, read file or project data is sent."
+	lookupCaveatText = "Even public identifiers can reveal what you are working on. Summaries are AI-generated background, " +
+		"not a validation of your results."
+)
 
 // lookupPrefs is the external public-data lookup switch, its first-enable
 // notice, the connection test and the cache.
@@ -522,14 +552,12 @@ func (a *App) lookupPrefs(c *ui.Context) {
 		})
 		ui.Text(c, "Allow external public-data lookups (RNAcentral)").Bold().Grow(1).Shrink(1).MinWidth(0)
 	})
-	ui.Text(c, "Off by default. Used by Structure › Related research.").FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, lookupOffText).FontSize(12).TextColor(t.TextMuted)
 	if p.lookupNotice {
 		ui.Column(c.Key("pref-lookup-notice")).Gap(8).Padding(10).Radius(8).Background(t.Warning.Alpha(0.12)).Children(func() {
 			ui.Text(c, "Before you turn this on").Bold()
-			ui.Text(c, "When you look up related research, HYB2 sends the public identifier and species you type — nothing else — "+
-				"to RNAcentral (EMBL-EBI) over the internet. No sequence, structure, read file or project data is sent.").FontSize(12)
-			ui.Text(c, "Even public identifiers can reveal what you are working on. Summaries are AI-generated background, "+
-				"not a validation of your results.").FontSize(12)
+			ui.Text(c, lookupNoticeText).FontSize(12)
+			ui.Text(c, lookupCaveatText).FontSize(12)
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Not now").Clicked() {
 					p.lookupNotice = false

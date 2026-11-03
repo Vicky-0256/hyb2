@@ -110,7 +110,7 @@ func TestExploreInteractionsExportTSV(t *testing.T) {
 	if name != "SUB_interactions.tsv" {
 		t.Fatalf("name %q", name)
 	}
-	if !strings.Contains(text, "# HYB2 interactions · selection SUB (2 merged)\n") || !strings.Contains(text, "# 40 of 1724 rows") {
+	if !strings.Contains(text, "# HYB2 interactions · selection SUB · 2 datasets merged\n") || !strings.Contains(text, "# 40 of 1724 rows") {
 		t.Fatalf("comments %.300q", text)
 	}
 	records := tsvRecords(t, text)
@@ -130,7 +130,7 @@ func TestExploreContactExportSVGAndTSV(t *testing.T) {
 	if d == nil {
 		t.Fatal("no map")
 	}
-	name, svg := exportMenuClick(t, a, tt, "Map · SVG…")
+	name, svg := exportMenuClick(t, a, tt, "Map · SVG (vector)…")
 	if !strings.HasSuffix(name, ".svg") || !strings.HasPrefix(name, "SUB_ZIKV") {
 		t.Fatalf("name %q", name)
 	}
@@ -140,7 +140,7 @@ func TestExploreContactExportSVGAndTSV(t *testing.T) {
 	}
 	// Zoomed in or not, the TSV has every cell, as the web's contact-map.tsv:
 	// the hybrids and the cluster support of each, whatever the measure.
-	p.cm.heat.SetView(widgets.Window{X0: 0, X1: 2000, Y0: 0, Y1: 2000})
+	p.cm.cmap.SetView(&widgets.BinView{XStart: 0, XEnd: 2000, YStart: 0, YEnd: 2000})
 	tt.Frame()
 	before := f.count("analysis_contact_bins")
 	_, text := exportMenuClick(t, a, tt, "Contact cells · TSV…")
@@ -170,42 +170,39 @@ func TestContactTSVMatchesWeb(t *testing.T) {
 
 func TestCompareExportTSVAndSVG(t *testing.T) {
 	a, _ := openCS(t)
-	tt := ui.NewTester(a.View, 1100, 1400)
+	tt := ui.NewTester(a.View, 1100, 1800)
 	a.Navigate("compare", nil)
 	csSettle(a, tt)
-	name, text := exportClick(t, a, tt, "Export TSV…")
-	if name != "AFR__2_merged_vs_BRA__2_merged_interactions.tsv" {
+	name, text := exportClick(t, a, tt, "Export interactions TSV…")
+	if name != "hyb2-differential-interactions.tsv" {
 		t.Fatalf("name %q", name)
 	}
-	// the web's interactions.tsv: no comments, up rows then down rows in the
-	// result's order, numbers as JavaScript's String(number)
+	// the web's interactions.tsv: no comments, rows in the result's order,
+	// numbers as JavaScript's String(number)
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	cp := a.PageFor("compare").(*comparePage)
 	result := cp.cache[cp.selectedID]
 	if len(lines) != 301 || lines[0] != "direction\tx\ty\tlog2FoldChange\tpadj\tbaseMean" {
 		t.Fatalf("%d lines, header %q", len(lines), lines[0])
 	}
-	var up, down []cmpInteraction
-	for _, r := range result.Interactions {
+	up := 0
+	for i, r := range result.Interactions {
 		if r.Direction == "up" {
-			up = append(up, r)
-		} else {
-			down = append(down, r)
+			up++
 		}
-	}
-	for i, r := range append(up, down...) {
 		want := strings.Join([]string{r.Direction, strconv.Itoa(r.X), strconv.Itoa(r.Y), jsNumber(*r.LFC), jsNumber(*r.Padj), jsNumber(*r.BaseMean)}, "\t")
 		if lines[i+1] != want {
 			t.Fatalf("line %d %q, want %q", i+1, lines[i+1], want)
 		}
 	}
-	if len(up) == 0 || len(down) == 0 {
-		t.Fatalf("%d up, %d down", len(up), len(down))
+	if up == 0 || up == len(result.Interactions) {
+		t.Fatalf("%d up of %d", up, len(result.Interactions))
 	}
-	_, svg := exportClick(t, a, tt, "Export SVG…")
+	name, svg := exportClick(t, a, tt, "Download map SVG…")
 	xmlWellFormed(t, svg)
-	if n := strings.Count(svg, `fill="#d64541"`) + strings.Count(svg, `fill="#2b6cc4"`); n != 1500 {
-		t.Fatalf("%d cells", n)
+	if n := strings.Count(svg, `fill-opacity=`); name != "hyb2-differential-map.svg" || n != 1500 ||
+		!strings.Contains(svg, "Differential coverage map · AFR (2 merged) vs BRA (2 merged)") || !strings.Contains(svg, "−log10 padj (opacity); colour: direction") {
+		t.Fatalf("%s: %d cells", name, n)
 	}
 }
 
@@ -214,11 +211,17 @@ func TestStructureExportArcsSVG(t *testing.T) {
 	readB, listAB, _ := stFixtureB(t)
 	f.structures[structB] = readB
 	f.ops["list_structures"] = listAB
-	tt := ui.NewTester(a.View, 1100, 1400)
+	tt := ui.NewTester(a.View, 1100, 2400) // tall: Results sits under the longer form
 	a.Navigate("structure", map[string]any{"structureId": structA})
 	csSettle(a, tt)
+	p := a.PageFor("structure").(*structurePage)
+	if p.view != "Folded" {
+		t.Fatalf("one strand opens in the folded view, not %q", p.view)
+	}
+	p.view = "Arc"
+	tt.Frame()
 	name, svg := exportClick(t, a, tt, "Export SVG…")
-	if name != "ZIKV_African_KX377335-1_virusRNA_"+structA+".svg" {
+	if name != "rna-secondary-structure-arcs.svg" {
 		t.Fatalf("name %q", name)
 	}
 	xmlWellFormed(t, svg)
@@ -244,7 +247,7 @@ func TestExploreViewpointAndRegionExports(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(a, tt)
-	name, text := exportMenuClick(t, a, tt, "Coverage · TSV…")
+	name, text := exportMenuClick(t, a, tt, "Coverage bins · TSV…")
 	rows := tsvRecords(t, text)
 	if !strings.HasSuffix(name, "_viewpoint.tsv") || strings.Join(rows[0], ",") != "start,end,mean_interaction_coverage" ||
 		len(rows) != p.vp.profile.Len()+1 {
@@ -309,7 +312,7 @@ func TestStructureExportCTPairsAndReport(t *testing.T) {
 
 	name, ct := exportClick(t, a, tt, "Save .ct")
 	lines := strings.Split(strings.TrimSuffix(ct, "\n"), "\n")
-	if !strings.HasSuffix(name, ".ct") || len(lines) != len(r.Sequence)+1 || !strings.HasPrefix(lines[0], strconv.Itoa(len(r.Sequence))+" ENERGY = ") {
+	if name != "rna-secondary-structure.ct" || len(lines) != len(r.Sequence)+1 || !strings.HasPrefix(lines[0], strconv.Itoa(len(r.Sequence))+" ENERGY = ") {
 		t.Fatalf("%s: %d lines, header %q", name, len(lines), lines[0])
 	}
 	// every pair is listed from both ends; the last column is the position
@@ -333,7 +336,7 @@ func TestStructureExportCTPairsAndReport(t *testing.T) {
 
 	name, text := exportClick(t, a, tt, "Pairs TSV…")
 	rows := tsvRecords(t, text)
-	if !strings.HasSuffix(name, "_pairs.tsv") || len(rows) != len(pairs)+1 || strings.Join(rows[0], ",") != strings.Join(stPairsHeader, ",") ||
+	if name != "rna-secondary-structure-pairs.tsv" || len(rows) != len(pairs)+1 || strings.Join(rows[0], ",") != strings.Join(stPairsHeader, ",") ||
 		strings.HasPrefix(text, "#") {
 		t.Fatalf("%s: %d rows for %d pairs, header %q", name, len(rows), len(pairs), rows[0])
 	}
@@ -353,9 +356,16 @@ func TestStructureExportCTPairsAndReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	windows := report["windows"].([]any)
-	if !strings.HasSuffix(name, "_report.json") || report["structure_id"] != structA || len(windows) != len(res.Records) ||
+	if name != "rna-secondary-structure-report.json" || report["structure_id"] != structA || len(windows) != len(res.Records) ||
 		windows[0].(map[string]any)["base_pairs"] != float64(len(pairs)) {
 		t.Fatalf("%s: %.400s", name, text)
+	}
+	// the web's sections: the pair list, the selected candidate, the inputs, the view
+	prediction, _ := report["prediction"].(map[string]any)
+	visualization, _ := report["visualization"].(map[string]any)
+	if list, _ := prediction["pairs"].([]any); len(list) != len(pairs) || prediction["selectedCandidateIndex"] != 0.0 ||
+		visualization["viewMode"] != strings.ToLower(p.view) || report["sourceHyb"] == nil {
+		t.Fatalf("web sections: %v %v %v", prediction["selectedCandidateIndex"], visualization, report["sourceHyb"])
 	}
 }
 
@@ -379,7 +389,7 @@ func TestStructureOtherViews(t *testing.T) {
 		snapshot(t, tt, "structure-"+strings.ToLower(view))
 		name, svg := exportClick(t, a, tt, "Export SVG…")
 		xmlWellFormed(t, svg)
-		if !strings.HasSuffix(name, "_"+strings.ToLower(view)+".svg") || !strings.Contains(svg, strings.ToLower(view)+" view") {
+		if name != "rna-secondary-structure-"+strings.ToLower(view)+".svg" || !strings.Contains(svg, strings.ToLower(view)+" view") {
 			t.Fatalf("%s: %.300s", name, svg)
 		}
 		want := map[string]string{"Circular": "<line", "Radial": "<path", "Matrix": "<circle"}[view]
@@ -404,6 +414,7 @@ func TestStructureOtherViews(t *testing.T) {
 		xs[i], ys[i] = 1000*math.Cos(angle), 1000*math.Sin(angle)
 	}
 	f.ops["structure_layout"] = core.Obj{"ok": true, "x": xs, "y": ys}
+	p.layouts = map[string]stLayout{} // asked before the fake could answer
 	tt.Frame()
 	waitFlush(a)
 	tt.Frame()
@@ -417,7 +428,7 @@ func TestStructureOtherViews(t *testing.T) {
 		t.Fatalf("folded svg has %d lines for %d nt", strings.Count(svg, "<line"), length)
 	}
 	// B shows the arc comparison only
-	p.view = "Arcs"
+	p.view = "Arc"
 	tt.Frame()
 }
 

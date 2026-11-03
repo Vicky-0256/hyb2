@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
 	"hyb2desktop/core"
+	"hyb2desktop/model"
 )
 
 // dataCall is one ProjectOp the page made.
@@ -445,6 +447,91 @@ func TestDataPageEditSample(t *testing.T) {
 	}
 }
 
+// Two references with one label stay two choices, and saving a sample keeps
+// its reference by id (it used to switch to the first "genome").
+func TestDataPageDuplicateReferenceLabels(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	for i := range a.Project.References {
+		a.Project.References[i].Label = "genome"
+	}
+	page := a.PageFor("data").(*dataPage)
+	if got := strings.Join(page.refLabels(), "|"); got != "genome · ZAFR.fasta|genome · ZBRA.fasta" {
+		t.Fatalf("labels %q", got)
+	}
+	if got := dataRefLabels([]model.Reference{{ID: "a", Label: "g", Path: "/x/r.fa"}, {ID: "b", Label: "g", Path: "/y/r.fa"}}); strings.Join(got, "|") != "g · r.fa|g · b" {
+		t.Fatalf("same file names: %q", got)
+	}
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	dataClick(t, tt, a, "Edit sample ZBRA_REP1")
+	if page.edit.reference != "genome · ZBRA.fasta" || page.edit.refID != "ZBRA" {
+		t.Fatalf("edit reference %q %q", page.edit.reference, page.edit.refID)
+	}
+	dataClick(t, tt, a, "Save")
+	calls := f.callsOf("update_sample")
+	if len(calls) != 1 || calls[0]["changes"].(core.Obj)["reference_id"] != "ZBRA" {
+		t.Fatalf("update %v", calls)
+	}
+	// a label that stops naming a reference (renamed meanwhile) is shown
+	// again from the id; "—" clears it
+	page.edit = dataEditDialog{reference: "old name", refID: "ZBRA"}
+	page.syncRef(&page.edit.reference, &page.edit.refID, "—")
+	if page.edit.refID != "ZBRA" || page.edit.reference != dataRefLabel(a, "ZBRA") {
+		t.Fatalf("resync %+v", page.edit)
+	}
+	page.edit.reference = "—"
+	page.syncRef(&page.edit.reference, &page.edit.refID, "—")
+	if page.edit.refID != "" {
+		t.Fatalf("none kept %q", page.edit.refID)
+	}
+}
+
+// Relinking a reference loads the name matching again (as Replace), the
+// rename dialog sends one update however often Save is clicked, and an
+// earlier Check inputs answer does not end a later one's busy state.
+func TestDataPageRelinkRenameAndChecks(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	page := a.PageFor("data").(*dataPage)
+	q := qcFor(a)
+	seq := q.match.seq
+	dataPick(t, "/data/moved/ZAFR.fasta")
+	page.relink(dataInputItem{Kind: "reference", ID: "ZAFR", Path: "/data/zikv/ZAFR.fasta"})
+	waitFlush(a)
+	if q.match.seq == seq {
+		t.Fatal("relinking a reference kept the name matching")
+	}
+	if calls := f.callsOf("update_reference"); len(calls) != 1 || calls[0]["source"] != "/data/moved/ZAFR.fasta" {
+		t.Fatalf("relink %v", calls)
+	}
+
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	page.rename = dataRenameDialog{open: true, id: "ZAFR", label: "Africa"}
+	page.rename.busy = true // an update in flight
+	tt.Frame()
+	_ = tt.Click("Save")
+	waitFlush(a)
+	if calls := f.callsOf("update_reference"); len(calls) != 1 {
+		t.Fatalf("busy rename sent another update: %v", calls)
+	}
+	page.rename.busy = false
+	tt.Frame()
+	dataClick(t, tt, a, "Save")
+	if calls := f.callsOf("update_reference"); len(calls) != 2 || calls[1]["label"] != "Africa" || page.rename.busy {
+		t.Fatalf("rename %v busy %v", calls, page.rename.busy)
+	}
+
+	page.runCheck(false)
+	page.runCheck(false)
+	if page.checking != 2 {
+		t.Fatalf("checking %d", page.checking)
+	}
+	waitFlush(a)
+	if page.checking != 0 {
+		t.Fatalf("checking %d after both answers", page.checking)
+	}
+}
+
 func TestDataPageImportRawFiles(t *testing.T) {
 	a, f := dataOpen(t, "list_samples.json")
 	tt := ui.NewTester(a.View, 1100, 720)
@@ -481,7 +568,9 @@ func TestDataFormatting(t *testing.T) {
 			t.Errorf("bytes %d: %q, want %q", n, got, want)
 		}
 	}
-	for n, want := range map[int64]string{757: "757", 9999: "9,999", 224154: "224 k", 1302094: "1.3 M", 12_000_000: "12 M"} {
+	for n, want := range map[int64]string{757: "757", 9999: "9,999", 224154: "224 k", 1302094: "1.3 M", 12_000_000: "12 M",
+		// a count that rounds into the next unit shows in it
+		999_499: "999 k", 999_600: "1.0 M", 9_940_000: "9.9 M", 9_960_000: "10 M"} {
 		if got := dataFormatCompact(n); got != want {
 			t.Errorf("compact %d: %q, want %q", n, got, want)
 		}
@@ -575,4 +664,35 @@ func TestDataPageAddsExample(t *testing.T) {
 		t.Fatalf("calls %v", f.calls)
 	}
 	dataExpect(t, tt, "Example added: 4 samples. Run all pending indexes them.")
+}
+
+// TestDataPageSampleProgress: a running sample's bar covers the whole
+// pipeline, so it moves while mapping reports no bytes, with the time left.
+func TestDataPageSampleProgress(t *testing.T) {
+	a, f := dataOpen(t, "data_list_samples_mixed.json")
+	f.mu.Lock()
+	f.tasks = append(f.tasks, core.Obj{"task_id": "sample-pipeline-1791990260455", "kind": "sample_pipeline",
+		"status": "running", "started_at": "2026-10-14T15:00:00Z", "fraction_done": 0.4, "seconds_left": 125.0,
+		"progress": map[string]any{"stage": "map", "detail": ""}})
+	f.mu.Unlock()
+	a.RefreshTasks()
+	waitFlush(a)
+	tt := ui.NewTester(a.View, 1100, 720)
+	tt.Frame()
+	dataExpect(t, tt, "40% done · about 2 min 5 s left · map")
+	snapshot(t, tt, "data-sample-progress")
+
+	// Past its estimate: no time left, the bar keeps its share.
+	f.mu.Lock()
+	task := f.tasks[len(f.tasks)-1]
+	task["fraction_done"], task["over_estimate"] = 0.74, true
+	delete(task, "seconds_left")
+	progress := task["progress"].(map[string]any)
+	progress["updated_at"] = time.Now().Add(-150 * time.Second).UTC().Format(time.RFC3339)
+	f.mu.Unlock()
+	a.RefreshTasks()
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "74% done · map 2 min 30 s so far, longer than estimated")
+	snapshot(t, tt, "data-sample-over-estimate")
 }

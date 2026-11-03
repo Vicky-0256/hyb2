@@ -110,8 +110,13 @@ func TestCompareResultsAndActions(t *testing.T) {
 		t.Fatalf("selected %q", p.selectedID)
 	}
 	for _, text := range []string{"Differential tests", "AFR (2 merged) vs BRA (2 merged)", "SUB (2 merged) vs AFR (2 merged)",
-		"82,132", "25,276", "56,856", "742 / 1,547", "Interactions A / B", "1.08 1.69 · 1.14 0.54", "Merged interactions (300)",
-		"The map shows the 1,500 strongest of 82,132 significant cells."} {
+		"82,132", "Cells tested", "1,023,236 of 1,121,855 (the rest have a total count of 2 or less)", "Significant (padj < 0.05)", "82,132 cells",
+		"25,276 cells · 742 interactions", "56,856 cells · 1,547 interactions", "1.0846 · 1.6905 · 1.1376 · 0.5441", "Run time", "23.3 s",
+		"Merged interactions (300)", "The map shows the 1,500 strongest of 82,132 significant cells.",
+		// the web card's controls, colour bar and table
+		"Zoom in", "Zoom out", "Reset zoom", "Scroll to zoom · drag to pan · double-click to reset", "−log10 padj (opacity); colour: direction",
+		"Use in arc map", "Higher in", "Arm 1 (x, nt)", "log2 AFR (2 merged)/BRA (2 merged)", "Mean count (normalised)",
+		"5.39e-15", "686.6", "-7.51"} {
 		if !tt.HasText(text) {
 			t.Fatalf("compare page lacks %q: %q", text, tt.Texts())
 		}
@@ -138,8 +143,29 @@ func TestCompareResultsAndActions(t *testing.T) {
 	tt.Frame()
 	tt.Frame()
 
+	// Zoom in, out and back.
+	full := p.heat.View()
+	if err := tt.Click("Zoom in"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if v := p.heat.View(); v.X1-v.X0 != (full.X1-full.X0)/2 {
+		t.Fatalf("zoomed %+v from %+v", v, full)
+	}
+	_ = tt.Click("Zoom out")
+	tt.Frame()
+	if p.heat.View() != full {
+		t.Fatalf("zoomed out %+v", p.heat.View())
+	}
+	_ = tt.Click("Zoom in")
+	_ = tt.Click("Reset zoom")
+	tt.Frame()
+	if p.heat.Zoomed() {
+		t.Fatal("reset kept the zoom")
+	}
+
 	// A row click highlights the cmpInteraction on the map (padded by the merge range).
-	if err := tt.Click("5720–5729"); err != nil {
+	if err := tt.Click("5,720–5,729"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -220,6 +246,45 @@ func TestCompareResultsAndActions(t *testing.T) {
 		t.Fatalf("label %q", a.TaskLabel(a.Tasks["structure-1"]))
 	}
 
+	// Use in arc map: the Structure page draws the test as its differential arcs.
+	a.Navigate("compare", nil)
+	csSettle(a, tt)
+	if err := tt.Click("Use in arc map"); err != nil {
+		t.Fatal(err)
+	}
+	csSettle(a, tt)
+	if !tt.HasText("The arc map now draws the 2,289 merged interactions (its own padj filter, 0.01, applies).") {
+		t.Fatalf("no toast: %q", tt.Texts())
+	}
+	if a.Page != "structure" || sp.layers.overlayID != "compare-1791998444625" || !sp.layers.mono {
+		t.Fatalf("page %q overlay %q", a.Page, sp.layers.overlayID)
+	}
+	// Sent again, the structures go back to one colour, as the web's.
+	sp.layers.mono = false
+	a.Navigate("compare", nil)
+	csSettle(a, tt)
+	if !tt.HasText(cmpArcMapNote) || tt.HasText(cmpStaleNotice) {
+		t.Fatalf("no arc map note: %q", tt.Texts())
+	}
+	_ = tt.Click("Use in arc map")
+	csSettle(a, tt)
+	if !sp.layers.mono {
+		t.Fatal("Use in arc map kept the structures in colour")
+	}
+	// Changed settings for the same groups: the result is stale, its
+	// arc map note and local maps ZIP gone.
+	a.Navigate("compare", nil)
+	p.keyA, p.keyB = "c:AFR", "c:BRA"
+	p.padj = 0.01
+	csSettle(a, tt)
+	if !tt.HasText(cmpStaleNotice) || tt.HasText(cmpArcMapNote) {
+		t.Fatalf("not stale: %q", tt.Texts())
+	}
+	if p.inputsCurrent(p.entry(p.selectedID)) {
+		t.Fatal("the stale test is current")
+	}
+	p.padj = 0.05
+
 	// The drawer's "View results" selects a comparison.
 	a.Navigate("compare", map[string]any{"comparisonId": "compare-1791998358218"})
 	csSettle(a, tt)
@@ -271,10 +336,10 @@ func TestCompareRunTestAndValidation(t *testing.T) {
 	params := req.Parameters.(map[string]any)
 	if req.Kind != "compare" || strings.Join(req.SamplesOne, ",") != "AFR_REP1,AFR_REP2" || strings.Join(req.SamplesTwo, ",") != "ZBRA_REP1,ZBRA_REP2" ||
 		params["min_count"] != 3 || params["range"] != 50 || params["padj_cutoff"] != 0.01 || params["similarity_min"] != 1 ||
-		params["label_one"] != "AFR (2 merged)" || params["label_two"] != "BRA (2 merged)" || req.ProjectPath != "/projects/zikv.hyb2proj" {
+		params["label_one"] != "AFR · 2 datasets merged" || params["label_two"] != "BRA · 2 datasets merged" || req.ProjectPath != "/projects/zikv.hyb2proj" {
 		t.Fatalf("request %+v params %+v", req, params)
 	}
-	for _, text := range []string{"Differential test · AFR (2 merged) vs BRA (2 merged)", "The test is running; results appear here when it finishes.", "Cancel"} {
+	for _, text := range []string{"Differential test · AFR · 2 datasets merged vs BRA · 2 datasets merged", "The test is running; results appear here when it finishes.", "Cancel"} {
 		if !tt.HasText(text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())
 		}
@@ -349,7 +414,7 @@ func TestCompareQuickView(t *testing.T) {
 		t.Fatal(err)
 	}
 	csSettle(a, tt)
-	if !tt.HasText("Quick view · SUB (2 merged) vs AFR (2 merged)") {
+	if !tt.HasText("Quick view · SUB · 2 datasets merged vs AFR · 2 datasets merged") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	rows := p.quickRows()

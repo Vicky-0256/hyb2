@@ -2,11 +2,13 @@ package views
 
 // ② QC: per-sample counts from the analysis indexes (one analysis_summary
 // call for all analysed samples, as HD.loadStats does), with the replicates
-// of each condition merged below them. The counts are also what the Data
-// page's "Hybrids" column shows.
+// of each condition merged below them: the web Overview's per-dataset
+// table, its columns first. The counts are also what the Data page's
+// "Hybrids" column shows.
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,19 +27,26 @@ func init() {
 			return
 		}
 		if q := qcFor(a); q != nil {
-			q.loadedKey, q.ov.key = "", ""
+			q.invalidate()
 		}
 	})
 }
 
 // qcStats is one index's part of analysis_summary (or a merged sum).
+// ReadRecords counts the records whose ID carries a collapsed-read count
+// (the web's rawReadCountRecords): with none, Reads is shown as "—".
+// UniqueRNAs and UniquePairs are one index's own (nil when merged: they
+// are not additive).
 type qcStats struct {
-	Records int64     `json:"records"`
-	Reads   int64     `json:"reads"`
-	WithDG  int64     `json:"with_dg"`
-	Intra   int64     `json:"intra_records"`
-	Inter   int64     `json:"inter_records"`
-	Types   []qcCount `json:"types"`
+	Records     int64     `json:"records"`
+	Reads       int64     `json:"reads"`
+	ReadRecords int64     `json:"records_with_reads"`
+	WithDG      int64     `json:"with_dg"`
+	Intra       int64     `json:"intra_records"`
+	Inter       int64     `json:"inter_records"`
+	Types       []qcCount `json:"types"`
+	UniqueRNAs  *int64    `json:"unique_rnas"`
+	UniquePairs *int64    `json:"unique_pairs"`
 }
 
 type qcCount struct {
@@ -62,6 +71,7 @@ func qcMerge(parts []qcStats) qcStats {
 	for _, p := range parts {
 		out.Records += p.Records
 		out.Reads += p.Reads
+		out.ReadRecords += p.ReadRecords
 		out.WithDG += p.WithDG
 		out.Intra += p.Intra
 		out.Inter += p.Inter
@@ -78,22 +88,32 @@ func qcMerge(parts []qcStats) qcStats {
 	return out
 }
 
+// qcRow is a sample, or a condition's analysed samples added up (cond).
 type qcRow struct {
-	header string // section title, or "" for a data row
 	sample string // sample id
 	cond   string // condition name (merged row)
 }
 
 type qcPage struct {
 	a *App
+	// tableRoom is the table's scroller width last frame: the table fills
+	// it, or scrolls when its columns need more.
+	tableRoom float32
+	// guideOpen: the chimera patterns' "How to read these patterns".
+	guideOpen bool
 	// stats by sample id; loadedKey is the project path and the ready ids
-	// they were loaded for.
+	// they were loaded for. gen counts invalidations: an answer to a load
+	// started before one (a run finished meanwhile) is dropped.
 	stats     map[string]qcStats
 	loadedKey string
 	loading   bool
+	gen       int
 	err       string
 	table     ui.ListState
 	ov        qcOverview
+	// match is the reference name matching (data_matching.go), shared
+	// with the Data page.
+	match refMatching
 }
 
 func qcFor(a *App) *qcPage {
@@ -135,7 +155,7 @@ func (p *qcPage) ensureStats() {
 		return
 	}
 	p.loading, p.err = true, ""
-	path := a.Project.Path
+	path, gen := a.Project.Path, p.gen
 	a.Go(func() func() {
 		result, err := a.B.Query(path, "analysis_summary", core.Obj{"sample_ids": ids, "pairs": false})
 		var parts []qcStats
@@ -145,7 +165,9 @@ func (p *qcPage) ensureStats() {
 		}
 		return func() {
 			p.loading = false
-			if a.Project == nil || a.Project.Path != path {
+			// another project, or counts from before a run finished: the
+			// next frame loads them again
+			if a.Project == nil || a.Project.Path != path || gen != p.gen {
 				return
 			}
 			p.loadedKey = key
@@ -162,9 +184,18 @@ func (p *qcPage) ensureStats() {
 	})
 }
 
+// invalidate makes the counts, the Overview and the name matching load
+// again; answers to loads already running are dropped.
+func (p *qcPage) invalidate() {
+	p.gen++
+	p.loadedKey = ""
+	p.ov.invalidate()
+	p.match.invalidate()
+}
+
 func (p *qcPage) refresh() {
 	p.stats = map[string]qcStats{}
-	p.loadedKey, p.ov.key = "", ""
+	p.invalidate()
 	p.ensureStats()
 }
 
@@ -172,6 +203,7 @@ func (p *qcPage) View(c *ui.Context) {
 	a := p.a
 	p.ensureStats()
 	p.ensureOverview()
+	p.ensureMatching(a.SelectionIDs(a.Selected.Key))
 	ready := qcReadyIDs(a)
 	// The page scrolls: the Overview comes first and the table below it
 	// takes the height of its rows.
@@ -182,8 +214,8 @@ func (p *qcPage) page(c *ui.Context, ready []string) {
 	a := p.a
 	t := c.Theme()
 	ui.Column(c).FillWidth().MinWidth(0).Padding(24).Gap(16).Children(func() {
-		ui.Row(c).Gap(12).Children(func() {
-			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+		ui.Row(c).Gap(12).Wrap().Children(func() {
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Basis(320).Children(func() {
 				PageHeader(c, "Quality control", "Analysed samples: library size and chimera composition.")
 			})
 			if len(ready) > 0 {
@@ -221,10 +253,20 @@ func (p *qcPage) page(c *ui.Context, ready []string) {
 		if len(a.SelectionIDs(a.Selected.Key)) > 0 {
 			p.overview(c)
 		}
-		Card(c, "Per-sample summary", func() {
+		Card(c, "", func() {
+			selection := a.SelectionIDs(a.Selected.Key)
+			analysed := 0
+			for _, id := range ready {
+				if slices.Contains(selection, id) {
+					analysed++
+				}
+			}
+			qcCardTitle(c, "Per-dataset summary", FormatNumber(int64(analysed))+" of "+FormatNumber(int64(len(ready)))+" datasets analysed")
+			ui.Text(c, "This page, Explore and Structure's evidence merge the datasets marked Yes; choose others in the top bar (Compare and the Report choose their own). "+
+				"Condition rows add up their datasets (RNAs and pairs are not additive).").FontSize(12).TextColor(t.TextMuted)
 			p.summaryTable(c, ready)
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Percentages are of hybrids. Merged rows add up the analysed replicates of each condition.").
+				ui.Text(c, "Hybrids / reads divides HYB records by source reads; the percentages are of HYB records.").
 					FontSize(12).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0)
 				if ui.Button(c, "Export TSV…").Tooltip("Save the table, every chimera type as a column").Disabled(len(p.stats) == 0).Clicked() && len(p.stats) > 0 {
 					p.exportTable(ready)
@@ -255,23 +297,45 @@ func (p *qcPage) qcTypeNames(ready []string) []string {
 	return names
 }
 
+// rows: every analysed sample, then each condition with more than one of
+// them added up (the web's per-dataset table).
 func (p *qcPage) rows(ready []string) []qcRow {
-	a := p.a
-	rows := []qcRow{{header: "Samples"}}
+	var rows []qcRow
 	for _, id := range ready {
 		rows = append(rows, qcRow{sample: id})
 	}
-	var conds []qcRow
-	for _, cond := range a.Project.Conditions {
-		if len(a.SelectionIDs("c:"+cond.Name)) > 0 {
-			conds = append(conds, qcRow{cond: cond.Name})
+	for _, cond := range p.a.Project.Conditions {
+		if len(p.a.SelectionIDs("c:"+cond.Name)) > 1 {
+			rows = append(rows, qcRow{cond: cond.Name})
 		}
 	}
-	if len(conds) > 0 {
-		rows = append(rows, qcRow{header: "Conditions (replicates merged)"})
-		rows = append(rows, conds...)
-	}
 	return rows
+}
+
+// members are a row's samples.
+func (p *qcPage) members(r qcRow) []string {
+	if r.sample != "" {
+		return []string{r.sample}
+	}
+	return p.a.SelectionIDs("c:" + r.cond)
+}
+
+// qcAnalysed is the web's Analysed column: whether the top bar's
+// selection merges a row's samples.
+func qcAnalysed(selection, members []string) string {
+	in := 0
+	for _, id := range members {
+		if slices.Contains(selection, id) {
+			in++
+		}
+	}
+	switch {
+	case in == 0:
+		return "No"
+	case in == len(members):
+		return "Yes"
+	}
+	return "Partly"
 }
 
 // statsFor returns a row's counts; ok is false while any part is missing.
@@ -281,7 +345,7 @@ func (p *qcPage) statsFor(r qcRow) (qcStats, bool) {
 		return s, ok
 	}
 	var parts []qcStats
-	for _, id := range p.a.SelectionIDs("c:" + r.cond) {
+	for _, id := range p.members(r) {
 		s, ok := p.stats[id]
 		if !ok {
 			return qcStats{}, false
@@ -291,6 +355,8 @@ func (p *qcPage) statsFor(r qcRow) (qcStats, bool) {
 	return qcMerge(parts), len(parts) > 0
 }
 
+// qcPercent is part/total with one decimal ("—" for no total); the report
+// pages use it. The QC page writes shares as the web does (webPercent).
 func qcPercent(part, total int64) string {
 	if total == 0 {
 		return "—"
@@ -298,14 +364,47 @@ func qcPercent(part, total int64) string {
 	return fmt.Sprintf("%.1f%%", 100*float64(part)/float64(total))
 }
 
+// qcShare is webPercent of part/total, "—" for no total.
+func qcShare(part, total int64) string {
+	if total == 0 {
+		return "—"
+	}
+	return webPercent(float64(part) / float64(total))
+}
+
+// webPercent formats a fraction as the web's Intl percent with at most one
+// decimal: "50%", "54.7%", "0.1%", "1,250%".
+func webPercent(fraction float64) string {
+	tenths := int64(fraction*1000 + 0.5)
+	if fraction < 0 {
+		tenths = -int64(-fraction*1000 + 0.5)
+	}
+	whole, decimal := tenths/10, tenths%10
+	if decimal < 0 {
+		decimal = -decimal
+	}
+	out := FormatNumber(whole)
+	if tenths < 0 && whole == 0 {
+		out = "-0"
+	}
+	if decimal != 0 {
+		out += "." + strconv.FormatInt(decimal, 10)
+	}
+	return out + "%"
+}
+
 func (p *qcPage) summaryTable(c *ui.Context, ready []string) {
 	types := p.qcTypeNames(ready)
 	rows := p.rows(ready)
 	cols := []ui.TableColumn{
-		{Title: "Sample", MinWidth: 110},
-		{Title: "Hybrids", Width: 128, Align: ui.End},
-		{Title: "Reads", Width: 84, Align: ui.End},
-		{Title: "Reads / hybrid", Width: 112, Align: ui.End},
+		{Title: "Dataset", MinWidth: 150},
+		{Title: "Condition", Width: 84},
+		{Title: "HYB records", Width: 128, Align: ui.End},
+		{Title: "Source reads", Width: 112, Align: ui.End},
+		{Title: "RNAs", Width: 64, Align: ui.End},
+		{Title: "RNA pairs", Width: 92, Align: ui.End},
+		{Title: "Analysed", Width: 92},
+		{Title: "Hybrids / reads", Width: 132, Align: ui.End},
 		{Title: "With ΔG", Width: 76, Align: ui.End},
 		{Title: "Intra", Width: 72, Align: ui.End},
 		{Title: "Inter", Width: 64, Align: ui.End},
@@ -313,12 +412,13 @@ func (p *qcPage) summaryTable(c *ui.Context, ready []string) {
 	for _, name := range types {
 		cols = append(cols, qcTableColumn(name))
 	}
-	// The inline bar is scaled within each section (merged rows are sums).
+	// The inline bar is scaled within samples and within conditions (merged
+	// rows are sums).
 	maxSample, maxCond := int64(1), int64(1)
 	for _, r := range rows {
 		s, ok := p.statsFor(r)
 		switch {
-		case !ok || r.header != "":
+		case !ok:
 		case r.sample != "" && s.Records > maxSample:
 			maxSample = s.Records
 		case r.cond != "" && s.Records > maxCond:
@@ -327,29 +427,26 @@ func (p *qcPage) summaryTable(c *ui.Context, ready []string) {
 	}
 	p.table.Key = func(i int) any {
 		r := rows[i]
-		return r.header + "|" + r.sample + "|" + r.cond
+		return r.sample + "|" + r.cond
 	}
-	p.table.Header = func(i int) bool { return rows[i].header != "" }
 	p.table.Label = func(i int) string {
 		if r := rows[i]; r.cond != "" {
 			return r.cond
 		}
-		return rows[i].header + rows[i].sample
+		return rows[i].sample
 	}
 	// The scroller keeps the columns' widths out of the page's minimum
 	// width: a narrow window scrolls the table, not the page.
-	ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Height(qcTableHeight(len(rows))).Children(func() { p.summaryRows(c, cols, rows, types, maxSample, maxCond) })
+	scroller := ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Height(qcTableHeight(len(rows))).Children(func() { p.summaryRows(c, cols, rows, types, maxSample, maxCond) })
+	p.tableRoom = scroller.LayoutBounds().W
 }
 
 func (p *qcPage) summaryRows(c *ui.Context, cols []ui.TableColumn, rows []qcRow, types []string, maxSample, maxCond int64) {
 	a := p.a
 	t := c.Theme()
+	selection := a.SelectionIDs(a.Selected.Key)
 	ui.Table(c, &p.table, cols, len(rows), func(row, col int) {
 		r := rows[row]
-		if r.header != "" {
-			ui.Text(c, r.header).Bold().FontSize(12).TextColor(t.TextMuted).SingleLine()
-			return
-		}
 		var sample *model.Sample
 		if r.sample != "" {
 			sample = a.Project.Sample(r.sample)
@@ -364,17 +461,21 @@ func (p *qcPage) summaryRows(c *ui.Context, cols []ui.TableColumn, rows []qcRow,
 						a.Selected.Key = "s:" + id
 						a.Navigate("explore", nil)
 					}
-					detail := nameOr(sample.Condition, "no condition")
 					if sample.Replicate != nil {
-						detail += " · rep " + dataReplicate(sample.Replicate)
+						ui.Text(c, "rep "+dataReplicate(sample.Replicate)).FontSize(11).TextColor(t.TextMuted).SingleLine()
 					}
-					ui.Text(c, detail).FontSize(11).TextColor(t.TextMuted).SingleLine()
 				} else {
-					ui.Text(c, r.cond).Bold().SingleLine()
-					ui.Text(c, dataPlural(len(a.SelectionIDs("c:"+r.cond)), "replicate", "replicates")).FontSize(11).TextColor(t.TextMuted).SingleLine()
+					label := r.cond + " · " + FormatNumber(int64(len(p.members(r)))) + " merged"
+					ui.Text(c, label).Bold().SingleLine().Tooltip(label)
 				}
 			})
 		case 1:
+			cond := r.cond
+			if sample != nil {
+				cond = nameOr(sample.Condition, "—")
+			}
+			ui.Text(c, cond).SingleLine().Tooltip(cond)
+		case 2:
 			if !ok {
 				label := "—"
 				if p.loading {
@@ -395,6 +496,8 @@ func (p *qcPage) summaryRows(c *ui.Context, cols []ui.TableColumn, rows []qcRow,
 				ui.Row(c).Width(width).Height(8).Radius(2).Background(t.Accent.Alpha(0.7))
 				ui.Text(c, FormatNumber(s.Records)).SingleLine()
 			})
+		case qcColAnalysed:
+			ui.Text(c, qcAnalysed(selection, p.members(r))).SingleLine()
 		default:
 			if !ok {
 				ui.Text(c, "—").TextColor(t.TextMuted)
@@ -402,7 +505,7 @@ func (p *qcPage) summaryRows(c *ui.Context, cols []ui.TableColumn, rows []qcRow,
 			}
 			ui.Text(c, qcCell(s, col, types)).SingleLine()
 		}
-	}).Width(dataColumnsWidth(cols)).Grow(1)
+	}).Width(max(dataColumnsWidth(cols), p.tableRoom)).Grow(1)
 }
 
 // qcTableHeight fits the table's rows (two-line cells) up to 560 px; more
@@ -415,40 +518,65 @@ func qcTableColumn(name string) ui.TableColumn {
 	return ui.TableColumn{Title: strings.ReplaceAll(name, "_", " "), ID: "type:" + name, Width: 64, Align: ui.End}
 }
 
-// The columns after Sample and Hybrids, in qcCell's numbering.
+// The columns after Dataset, Condition and HYB records, in qcCell's
+// numbering: the web's columns, then the desktop's.
 const (
-	qcColReads = 2 + iota
-	qcColPerHybrid
+	qcColReads = 3 + iota
+	qcColRNAs
+	qcColPairs
+	qcColAnalysed
+	qcColHybridsPerRead
 	qcColDG
 	qcColIntra
 	qcColInter
 	qcColTypes
 )
 
+// qcReads is a row's source reads, "—" when no ID carries a read count
+// (the web's Overview).
+func qcReads(s qcStats) string {
+	if s.ReadRecords == 0 {
+		return "—"
+	}
+	return FormatNumber(s.Reads)
+}
+
+func qcOptional(v *int64) string {
+	if v == nil {
+		return "—"
+	}
+	return FormatNumber(*v)
+}
+
 func qcCell(s qcStats, col int, types []string) string {
 	switch col {
 	case qcColReads:
-		return FormatNumber(s.Reads)
-	case qcColPerHybrid:
-		if s.Records == 0 {
+		return qcReads(s)
+	case qcColRNAs:
+		return qcOptional(s.UniqueRNAs)
+	case qcColPairs:
+		return qcOptional(s.UniquePairs)
+	case qcColHybridsPerRead:
+		if s.ReadRecords == 0 || s.Reads == 0 {
 			return "—"
 		}
-		return fmt.Sprintf("%.2f", float64(s.Reads)/float64(s.Records))
+		return fmt.Sprintf("%.2f", float64(s.Records)/float64(s.Reads))
 	case qcColDG:
-		return qcPercent(s.WithDG, s.Records)
+		return qcShare(s.WithDG, s.Records)
 	case qcColIntra:
-		return qcPercent(s.Intra, s.Records)
+		return qcShare(s.Intra, s.Records)
 	case qcColInter:
-		return qcPercent(s.Inter, s.Records)
+		return qcShare(s.Inter, s.Records)
 	}
 	if i := col - qcColTypes; i >= 0 && i < len(types) {
-		return qcPercent(s.typeRecords(types[i]), s.Records)
+		return qcShare(s.typeRecords(types[i]), s.Records)
 	}
 	return ""
 }
 
 // exportTable writes the table as TSV with raw counts beside the shares,
-// and every chimera type (the page shows the four largest).
+// and every chimera type (the page shows the four largest). Reads are
+// empty when no ID carries a read count, RNAs and pairs for merged rows.
 func (p *qcPage) exportTable(ready []string) {
 	a := p.a
 	var types []string
@@ -461,12 +589,19 @@ func (p *qcPage) exportTable(ready []string) {
 			}
 		}
 	}
-	header := []string{"row", "sample", "condition", "replicates", "hybrids", "reads", "with_dg", "intra", "inter"}
+	optional := func(v *int64) string {
+		if v == nil {
+			return ""
+		}
+		return itoa64(*v)
+	}
+	selection := a.SelectionIDs(a.Selected.Key)
+	header := []string{"row", "sample", "condition", "replicates", "hybrids", "reads", "rnas", "rna_pairs", "analysed", "with_dg", "intra", "inter"}
 	header = append(header, types...)
 	var rows [][]string
 	for _, r := range p.rows(ready) {
 		s, ok := p.statsFor(r)
-		if r.header != "" || !ok {
+		if !ok {
 			continue
 		}
 		kind, sample, cond, n := "sample", r.sample, r.cond, 1
@@ -475,9 +610,14 @@ func (p *qcPage) exportTable(ready []string) {
 				cond = m.Condition
 			}
 		} else {
-			kind, n = "condition", len(a.SelectionIDs("c:"+r.cond))
+			kind, n = "condition", len(p.members(r))
 		}
-		row := []string{kind, sample, cond, strconv.Itoa(n), itoa64(s.Records), itoa64(s.Reads), itoa64(s.WithDG), itoa64(s.Intra), itoa64(s.Inter)}
+		reads := ""
+		if s.ReadRecords > 0 {
+			reads = itoa64(s.Reads)
+		}
+		row := []string{kind, sample, cond, strconv.Itoa(n), itoa64(s.Records), reads, optional(s.UniqueRNAs), optional(s.UniquePairs),
+			qcAnalysed(selection, p.members(r)), itoa64(s.WithDG), itoa64(s.Intra), itoa64(s.Inter)}
 		for _, name := range types {
 			row = append(row, itoa64(s.typeRecords(name)))
 		}

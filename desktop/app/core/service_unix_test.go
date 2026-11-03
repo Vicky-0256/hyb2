@@ -34,7 +34,7 @@ time.sleep(60)`
 	}
 	id := snap["task_id"].(string)
 	pids := readPids(t, filepath.Join(project, "runs", id, "pids"), 2)
-	if snap, err := s.CancelTask(project, id); err != nil || snap["status"] != "cancelled" {
+	if snap, err := s.CancelTask(project, id); err != nil || snap["status"] != "cancelling" {
 		t.Fatalf("%v %v", snap, err)
 	}
 	assertGone(t, pids)

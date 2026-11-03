@@ -9,6 +9,7 @@ package views
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -79,8 +80,8 @@ func (p *structurePage) plan() foldPlan {
 	if p.src.kind != stSourceReference {
 		return p.sequencePlan()
 	}
-	pl := foldPlan{gene: p.gene, length: a.Project.GeneLength(p.gene), ids: a.SelectionIDs(p.evidence),
-		evidence: a.SelectionLabel(p.evidence), what: "whole RNA"}
+	pl := foldPlan{gene: p.gene, length: a.Project.GeneLength(p.gene), ids: p.evidenceIDs(),
+		evidence: p.evidenceLabel(), what: "whole RNA"}
 	switch {
 	case pl.gene == "" || pl.length == 0:
 		pl.problems = append(pl.problems, "Choose the RNA to fold.")
@@ -93,6 +94,7 @@ func (p *structurePage) plan() foldPlan {
 			pl.problems = append(pl.problems, msg)
 		}
 	}
+	p.workflowProblems(&pl)
 	if p.engine == engineCPLcofold {
 		p.cofoldPlan(&pl)
 		p.checkBudget(&pl)
@@ -112,6 +114,13 @@ func (p *structurePage) plan() foldPlan {
 		for _, e := range errs {
 			pl.problems = append(pl.problems, e+" (windows are start-end, at least 20 nt).")
 		}
+		// one result per window: the runtime refuses a repeated window
+		seen := map[core.Window]int{}
+		for _, w := range windows {
+			if seen[w]++; seen[w] == 2 {
+				pl.problems = append(pl.problems, fmt.Sprintf("Window %d-%d is listed more than once; give each window once.", w.Start, w.End))
+			}
+		}
 		if len(errs) == 0 && len(windows) == 0 && pl.length > 0 {
 			pl.problems = append(pl.problems, fmt.Sprintf("Add at least one window, one per line as start-end within 1-%s.", FormatNumber(int64(pl.length))))
 		}
@@ -127,8 +136,13 @@ func (p *structurePage) plan() foldPlan {
 			pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
 		}
 	} else if pl.length > 0 {
-		pl.lengths = []int{pl.length}
-		pl.limits = append(pl.limits, "Whole-RNA folds cannot contain pseudoknots; fold windows to allow them.")
+		// the web's "Structure topology" applies to the whole RNA too; its
+		// memory then follows the pseudoknot model (CPLfoldMemoryMB)
+		pl.lengths, pl.pk = []int{pl.length}, p.pseudoknot
+		params["allow_pseudoknot"] = p.pseudoknot
+		if !p.pseudoknot {
+			pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
+		}
 	}
 	if p.seqOnly && p.engine == engineCPLfold {
 		pl.limits = append(pl.limits, "Sequence only: the chimeric reads are not used; the samples only give the reference.")
@@ -363,7 +377,7 @@ func (p *structurePage) setSource(kind string) {
 // supported first), with their sequences, from the analysis index.
 func (p *structurePage) loadRecords() {
 	a := p.a
-	ids := a.SelectionIDs(p.evidence)
+	ids := p.evidenceIDs()
 	key := a.Project.Path + "\x00" + strings.Join(ids, "\x00")
 	if len(ids) == 0 || key == p.src.recordsKey {
 		return
@@ -413,7 +427,7 @@ func (p *structurePage) loadRecords() {
 // samples' reference as that region, and any other from the sequence alone.
 func (p *structurePage) sequencePlan() foldPlan {
 	a := p.a
-	pl := foldPlan{ids: a.SelectionIDs(p.evidence), evidence: a.SelectionLabel(p.evidence)}
+	pl := foldPlan{ids: p.evidenceIDs(), evidence: p.evidenceLabel()}
 	switch {
 	case len(a.SelectionOptions()) == 0:
 		pl.problems = append(pl.problems, "No sample has been analysed yet: run the pipeline on the Data page first, then come back.")
@@ -550,6 +564,9 @@ func (p *structurePage) sourceField(c *ui.Context, pl foldPlan) {
 		// a record is one chimeric read, not two strands
 		labels, kinds = []string{labels[0], labels[2]}, []string{kinds[0], kinds[2]}
 	}
+	if p.engine == engineIRIS {
+		labels, kinds = labels[:1], kinds[:1] // a region with its chimeras
+	}
 	current := labels[0]
 	for i, k := range kinds {
 		if k == p.src.kind {
@@ -654,6 +671,7 @@ func (pl foldPlan) span() string {
 
 func (p *structurePage) form(c *ui.Context) {
 	t := c.Theme()
+	p.syncWorkflow()
 	pl := p.plan()
 	card := Card(c, "New fold", func() {
 		intro := "Predict the secondary structure of one RNA, guided by the chimeric reads of your samples."
@@ -665,8 +683,12 @@ func (p *structurePage) form(c *ui.Context) {
 		if p.prefillNote != "" {
 			ui.Text(c, p.prefillNote).FontSize(12).Padding(8).Radius(6).Background(t.Accent.Alpha(0.10))
 		}
+		p.workflowField(c)
 		p.inputs(c, pl)
-		if p.engine != engineCPLfold && p.engine != engineCPLcofold {
+		p.previewPanel(c, pl)
+		if p.engine == engineIRIS {
+			p.irisAdvanced(c)
+		} else if p.engine != engineCPLfold && p.engine != engineCPLcofold {
 			p.viennaAdvanced(c)
 		} else {
 			p.advanced(c)
@@ -739,14 +761,14 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 		})
 	}
 	options := a.SelectionOptions()
-	var evLabels []string
+	// unique labels: two samples of one label and condition stay apart
+	evLabels := SelectionLabels(options)
 	keys := map[string]string{}
 	currentEv := ""
-	for _, o := range options {
-		evLabels = append(evLabels, o.Label)
-		keys[o.Label] = o.Key
+	for i, o := range options {
+		keys[evLabels[i]] = o.Key
 		if o.Key == p.evidence {
-			currentEv = o.Label
+			currentEv = evLabels[i]
 		}
 	}
 	evidenceLabel := "2  Evidence: chimeric reads of"
@@ -765,8 +787,16 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 			return
 		}
 		ui.Select(c.Key("st-evidence"), &currentEv, evLabels).FillWidth().Label("Evidence").
-			OnChange(func() { p.evidence = keys[currentEv] })
-		if len(pl.ids) > 0 {
+			OnChange(func() { p.evidence, p.pinned = keys[currentEv], nil })
+		switch {
+		case p.pinned != nil:
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Text(c, "Samples sent with the fold request: "+p.sampleNames(pl.ids)).FontSize(12).TextColor(t.TextMuted).Grow(1)
+				if ui.Button(c, "Use the selection").Tooltip("Take the evidence chosen above instead").Clicked() {
+					p.pinned = nil
+				}
+			})
+		case len(pl.ids) > 0:
 			ui.Text(c, "Samples: "+p.sampleNames(pl.ids)).FontSize(12).TextColor(t.TextMuted)
 		}
 		if p.engine == engineCPLfold || cofold {
@@ -820,12 +850,8 @@ func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 	t := c.Theme()
 	Field(c, "3  What to fold", func() {
 		ui.RadioGroup(c.Key("st-mode"), func() {
-			ui.Radio(c, &p.mode, "genome", "The whole RNA (no pseudoknots)")
-			windows := "Regions (windows), pseudoknots possible"
-			if p.engine != engineCPLfold {
-				windows = "Regions (windows)"
-			}
-			ui.Radio(c, &p.mode, "windows", windows)
+			ui.Radio(c, &p.mode, "genome", "The whole RNA")
+			ui.Radio(c, &p.mode, "windows", "Regions (windows)")
 			if p.engine == engineComrades {
 				ui.Radio(c, &p.mode, "paired", "Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)")
 			}
@@ -839,9 +865,22 @@ func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 				ui.Text(c, pl.what+": "+pl.span()).FontSize(12).TextColor(t.TextMuted)
 			}
 		})
-		if p.engine == engineCPLfold {
-			ui.Checkbox(c.Key("st-pk"), &p.pseudoknot, "Allow pseudoknots in the windows")
-		}
+	}
+	if p.engine == engineCPLfold && p.mode != "paired" {
+		// the web's "Structure topology", for the whole RNA and windows alike
+		Field(c, "Structure topology", func() {
+			// p.topology follows p.pseudoknot when something else set it
+			if p.topology == "" || p.pseudoknot != p.lastPK {
+				p.topology = map[bool]string{true: "pseudoknot", false: "secondary"}[p.pseudoknot]
+			}
+			ui.RadioGroup(c.Key("st-topology"), func() {
+				ui.Radio(c, &p.topology, "pseudoknot", "Allow pseudoknots: run Phase 2 to search for crossing base pairs")
+				ui.Radio(c, &p.topology, "secondary", "Secondary structure only: Phase 1 candidates, no pseudoknot search")
+			}).Label("Structure topology")
+			p.pseudoknot = p.topology == "pseudoknot"
+			p.lastPK = p.pseudoknot
+			ui.Text(c, "CPLfold can search crossing pairs. ViennaRNA remains pseudoknot-free.").FontSize(12).TextColor(t.TextMuted)
+		})
 	}
 }
 
@@ -853,6 +892,7 @@ func (p *structurePage) engineField(c *ui.Context) {
 			ui.Radio(c, &p.engine, engineCPLcofold, "CPLcofold, two regions as two strands (one RNA or two RNAs)").OnChange(p.engineChanged)
 			ui.Radio(c, &p.engine, engineVienna, "ViennaRNA MFE, the sequence alone (optional hard pairs)").OnChange(p.engineChanged)
 			ui.Radio(c, &p.engine, engineComrades, "COMRADES(ViennaRNA), guided by RNAcofold of the chimeras").OnChange(p.engineChanged)
+			ui.Radio(c, &p.engine, engineIRIS, "IRIS · evidence-guided ensemble").OnChange(p.engineChanged)
 		}).Label("Engine")
 	})
 }
@@ -866,6 +906,9 @@ func (p *structurePage) engineChanged() {
 	}
 	if p.engine == engineCPLcofold && p.src.kind == stSourceRecord {
 		p.setSource(stSourcePaste)
+	}
+	if p.engine == engineIRIS {
+		p.setSource(stSourceReference) // as the web: IRIS folds a reference region
 	}
 }
 
@@ -901,7 +944,7 @@ func (p *structurePage) advanced(c *ui.Context) {
 				"How many partial structures CPLfold keeps per position. Larger is slower. Default 20, as on the web.")
 			row("st-phase1", "Phase-1 candidates", &p.phase1, 1, 20, 1,
 				"Candidate structures carried from the first phase into the second. Default 3.")
-			row("st-delta", "Energy window", &p.delta, 0, 50, 1,
+			row("st-delta", "Energy window", &p.delta, 0, 50, 0.5,
 				"kcal/mol above the best structure within which candidates are kept. Default 5.")
 			row("st-beta", "Pseudoknot beta", &p.beta, 0, 1, 0.05,
 				"Weight of the pseudoknot energy term, 0 to 1. Default 0.")
@@ -963,6 +1006,9 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 			what := pl.what + ", " + pl.span()
 			if pl.what == "whole RNA" {
 				what = "the whole RNA, " + pl.span() + ", without pseudoknots"
+				if pl.pk {
+					what = "the whole RNA, " + pl.span() + ", pseudoknots allowed"
+				}
 			} else if pl.pk {
 				what += ", pseudoknots allowed"
 			}
@@ -987,11 +1033,14 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 			line("Engine", fmt.Sprintf("COMRADES(ViennaRNA), %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
 			line("Time", "up to about "+FormatDuration(p.comradesSeconds(lengths))+" (one ViennaRNA fold per stem tried, per order)")
 		}
+		if p.engine == engineIRIS && len(pl.lengths) > 0 {
+			p.irisCheckLines(line, pl)
+		}
 		if p.est != nil && (p.engine == engineCPLfold || p.engine == engineCPLcofold) {
 			time := "about " + FormatDuration(p.est.Seconds) + " (measured on this computer)"
 			if !p.est.Measured {
 				time = "about " + FormatDuration(p.est.Seconds) + " (rough; the first fold after installing also " +
-					"prepares the folding engine, about 1 min more)"
+					"prepares the folding engine, about 2–4 min more)"
 			}
 			line("Time", time)
 		}
@@ -1011,10 +1060,14 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 				ui.Text(c, "• "+msg).FontSize(12).TextColor(t.Danger)
 			}
 		}
+		p.irisRecovery(c, pl)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Shortcut: "+cmdName()+"+Enter").FontSize(12).TextColor(t.TextMuted).Grow(1)
 			busy := p.running()
 			label := "Run fold"
+			if p.engine == engineIRIS {
+				label = "Predict IRIS ensemble"
+			}
 			if busy {
 				label = "Fold running…"
 			}
@@ -1048,14 +1101,15 @@ func (p *structurePage) estimate(pl foldPlan) {
 		// two strands fold as one A+B sequence
 		lengths, workers = []int{pl.lengths[0] + pl.lengths[1]}, 1
 	}
-	key := fmt.Sprint(lengths, int(p.beam), workers, pl.pk)
+	// the bonus matrix is part of a guided fold's time
+	job := core.FoldJob{Lengths: lengths, Beam: int(p.beam), Workers: workers, Pseudoknot: pl.pk, Guided: !p.seqOnly}
+	key := fmt.Sprint(job)
 	if key == p.estKey {
 		return
 	}
 	p.estKey, p.est = key, nil
-	beam := int(p.beam)
 	a.Go(func() func() {
-		e := a.B.EstimateFold(lengths, beam, workers)
+		e := a.B.EstimateFold(job)
 		return func() {
 			if p.estKey == key {
 				p.est = &e
@@ -1078,6 +1132,8 @@ func (p *structurePage) runFold() {
 		title = "Structure (ViennaRNA) · " + pl.what
 	case engineComrades:
 		title = "Structure (COMRADES) · " + pl.evidence + " · " + pl.what
+	case engineIRIS:
+		title = "Structure (IRIS) · " + pl.evidence + " · " + pl.what
 	case engineCPLcofold:
 		title = "Structure (CPLcofold) · " + pl.evidence + " · " + stRegionsLabel(pl.req.Regions)
 	}
@@ -1190,6 +1246,10 @@ func (p *structurePage) status(c *ui.Context) {
 					TextColor(t.TextMuted).Selectable()
 			})
 		})
+	case "cancelling":
+		box(t.Border, func() {
+			ui.Text(c, "Cancelling the fold…").Bold()
+		})
 	case "cancelled":
 		box(t.Border, func() {
 			ui.Text(c, "Fold cancelled").Bold()
@@ -1225,11 +1285,13 @@ func stStageText(task model.Task) string {
 		return "Reading the chimeric reads…"
 	case "fold":
 		if pr.BytesTotal != nil && *pr.BytesTotal > 1 && pr.BytesDone != nil {
-			return fmt.Sprintf("Folding: %.0f of %.0f windows done", *pr.BytesDone, *pr.BytesTotal)
+			return fmt.Sprintf("Folding: %.0f of %.0f windows done", math.Floor(*pr.BytesDone), *pr.BytesTotal) // a window counts once finished
 		}
 		return "Folding…"
 	case "write":
 		return "Saving the results…"
+	case "iris":
+		return nameOr(pr.Detail, "Predicting the IRIS ensemble…") // the web's IRIS stages
 	}
 	return "Folding…"
 }
@@ -1250,6 +1312,9 @@ func stTimeLine(task model.Task) string {
 
 // stExplain turns a fold's error into what happened and what to do.
 func stExplain(err string) (what, next string) {
+	if what, next, ok := stIrisExplain(err); ok {
+		return what, next
+	}
 	low := strings.ToLower(err)
 	switch {
 	case strings.Contains(low, "exceeds the cplfold limit"):
@@ -1424,6 +1489,8 @@ func (p *structurePage) list(c *ui.Context) {
 					engine, _ := e.Parameters["engine"].(string)
 					meta = nameOr(engine, "CPLfold") + " · sequence only · reference of " +
 						nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
+				case e.Parameters["engine"] == "IRIS":
+					meta = "IRIS ensemble · evidence: " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
 				case e.Parameters["engine"] == "CPLcofold":
 					meta = "CPLcofold · evidence: " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
 				}
@@ -1442,7 +1509,12 @@ func (p *structurePage) list(c *ui.Context) {
 					if isB {
 						ui.Badge(c, "B · compared").Background(cmpBlue.Alpha(0.15)).TextColor(cmpBlue)
 					} else if p.viewA != "" && !isA {
-						if ui.Button(c, "Compare as B").Clicked() {
+						// A+B indices line up only with a fold of the same two regions
+						why, tip := p.compareAsBBlock(e), "Overlay this result below A and compare their pairs"
+						if why != "" {
+							tip = "Not comparable with A: " + why
+						}
+						if ui.Button(c, "Compare as B").Disabled(why != "").Tooltip(tip).Clicked() {
 							p.viewB = e.ID
 							p.ensureRead(e.ID)
 						}

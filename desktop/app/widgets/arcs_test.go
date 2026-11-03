@@ -37,6 +37,42 @@ func TestArcsSharedAndRender(t *testing.T) {
 	snapshot(t, tt, "arcs-zoom")
 }
 
+// Strand B (100-200) drawn before strand A (500-600): the gap still
+// collapses 201-499, stepping crosses it, and a pair given I > J still
+// draws and is not culled.
+func TestArcsGapStrandBFirst(t *testing.T) {
+	s := &Arcs{Gap: Gap{From: 500, To: 200}}
+	s.Set([]Pair{{148, 529}, {529, 148}}, nil, 600)
+	if lo, hi := s.Gap.Bounds(); lo != 200 || hi != 500 || !s.Gap.on() || s.Gap.Label() != "B | A" || (Gap{From: 81, To: 1052}).Label() != "A | B" {
+		t.Fatalf("bounds %d-%d", lo, hi)
+	}
+	if s.Gap.Axis(500) != 201 || s.Gap.Position(201) != 500 || s.Gap.Axis(600) != 301 {
+		t.Fatalf("axis %v", s.Gap.Axis(500))
+	}
+	s.setRange(100, 600)
+	if s.Start != 100 || s.End != 600 {
+		t.Fatalf("range %v-%v", s.Start, s.End)
+	}
+	s.Selected = 200
+	s.Step(1)
+	if s.Selected != 500 {
+		t.Fatalf("stepped into the gap: %d", s.Selected)
+	}
+	s.Step(-1)
+	if s.Selected != 200 {
+		t.Fatalf("stepped back into the gap: %d", s.Selected)
+	}
+	s.Start, s.End = 500, 600
+	if !s.visible(529, 148) || !s.visible(148, 529) || s.visible(100, 140) {
+		t.Fatal("visible")
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		th := c.Theme()
+		s.Show(c, 280, ui.RGB(214, 69, 65), ui.RGB(43, 108, 196), th.Text, "arcs")
+	}, 720, 320)
+	tt.Frame()
+}
+
 func TestArcsInspectorStep(t *testing.T) {
 	s := &Arcs{}
 	s.Set(nil, nil, 1000)

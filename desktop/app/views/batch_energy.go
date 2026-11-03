@@ -11,6 +11,7 @@ package views
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,15 +25,32 @@ import (
 // batchEngines are the web's engines: value, label and what to know.
 var batchEngines = [][3]string{
 	{"rnacofold", "RNAcofold (ViennaRNA), as the HYB2 pipeline", "The HYB2 pipeline's method; combined arms up to 2,000 nt."},
-	{"cplcofold", "CPLcofold, nested (Turner energies)", "Same Turner energy model as RNAcofold, beam search (DP09, beam 20, energy delta 5, 3 phase-1 candidates); combined arms up to 500 nt. Slower: filter first for large files."},
+	{"cplcofold", "CPLcofold, nested (Turner energies)", "Same Turner energy model as RNAcofold, beam search (DP09, beam 20, energy delta 5, 3 phase-1 candidates); combined arms up to 500 nt."},
 	{"cplcofold-pk", "CPLcofold with pseudoknots (experimental score)", "Adds CPLfold's pseudoknot phase: its DP09 pseudoknot term is an experimental ranking score, not a validated free energy; combined arms up to 500 nt."},
 }
+
+// batchEngineCost is the web's per-engine time per record (ms) and records
+// per job (ENERGY_ENGINES msPerRecord, chunk), for the run-time estimate.
+var batchEngineCost = map[string][2]int{"rnacofold": {15, 64}, "cplcofold": {1700, 4}, "cplcofold-pk": {2300, 4}}
+
+// batchNoReference is the web's note when there is no mapped FASTA.
+const batchNoReference = "Load and map a reference FASTA first."
 
 var batchRecordLabels = []string{"All records of the sample", "Records matching the Interactions filters"}
 
 type batchEnergyState struct {
 	sample, engine, records string
 	err                     string
+	// cpus are the CPUs tasks may use (Preferences), the task's workers;
+	// counts the records of each sample (analysis_summary), by
+	// batchCountKey: the project, the sample and its index, so a rebuilt
+	// index or another project counts again; countsFor is the project the
+	// counts are of (another one clears them).
+	cpus      int
+	cpusAsked bool
+	countLoad loader
+	counts    map[string]int64
+	countsFor string
 	// result is the newest finished task's result.json (keyed by task id).
 	resultFor string
 	result    *batchEnergyResult
@@ -63,20 +81,95 @@ func batchEngineOf(label string) [3]string {
 }
 
 func (p *explorePage) batchSampleLabels() ([]string, map[string]string) {
-	labels := make([]string, 0, len(p.ids))
-	ids := map[string]string{}
-	for _, id := range p.ids {
-		label := id
-		if s := p.a.Project.Sample(id); s != nil {
-			label = s.Label()
-		}
-		if _, taken := ids[label]; taken {
-			label += " (" + id + ")"
-		}
-		labels = append(labels, label)
-		ids[label] = id
+	return p.sampleLabels(p.ids)
+}
+
+// batchHasReference: the sample's reference is in the project, so its arms
+// can be cut from it.
+func (p *explorePage) batchHasReference(id string) bool {
+	s := p.a.Project.Sample(id)
+	return s != nil && s.ReferenceID != "" && p.a.Project.Reference(s.ReferenceID) != nil
+}
+
+// loadBatchInputs asks for the task's CPUs once and the sample's records.
+func (p *explorePage) loadBatchInputs(sample string) {
+	s := &p.be
+	a := p.a
+	if !s.cpusAsked {
+		s.cpusAsked = true
+		a.Go(func() func() {
+			cpus := 1
+			if prefs, err := a.B.Preferences(); err == nil {
+				if budget, _ := prefs["budget"].(map[string]any); budget != nil {
+					cpus = max(1, int(num(budget["cpu"])))
+				}
+			}
+			return func() { s.cpus = cpus }
+		})
 	}
-	return labels, ids
+	if sample == "" {
+		return
+	}
+	path := a.Project.Path
+	if s.countsFor != path {
+		s.counts, s.countsFor = nil, path
+	}
+	key := p.batchCountKey(sample)
+	if _, done := s.counts[key]; done {
+		return
+	}
+	p.ensure(&s.countLoad, key, func() (func(), error) {
+		got, err := p.query(path, "analysis_summary", []string{sample}, core.Obj{"pairs": false})
+		if err != nil {
+			return nil, err
+		}
+		merged, _ := got["merged"].(map[string]any)
+		records := int64(num(merged["records"]))
+		return func() {
+			if s.counts == nil {
+				s.counts = map[string]int64{}
+			}
+			s.counts[key] = records
+		}, nil
+	})
+}
+
+// batchCountKey keys a sample's record count: the project, the sample and
+// its index (stage time and file), as the top bar's selection stamp.
+func (p *explorePage) batchCountKey(sample string) string {
+	index := ""
+	if s := p.a.Project.Sample(sample); s != nil {
+		index = s.Stages["index"].UpdatedAt + "\x00" + s.Outputs.Index
+	}
+	return p.a.Project.Path + "\x00" + sample + "\x00" + index
+}
+
+// batchEstimate is the web's run-time estimate of all the sample's
+// records, " All N records: about … with W parallel workers here." ("" while
+// unknown).
+func batchEstimate(engine string, records int64, cpus int) string {
+	cost, ok := batchEngineCost[engine]
+	if !ok || records <= 0 || cpus <= 0 {
+		return ""
+	}
+	workers := int64(max(1, min(int64(cpus), (records+int64(cost[1])-1)/int64(cost[1]))))
+	text := fmt.Sprintf(" All %s records: about %s with %d", FormatNumber(records), batchDuration(float64(records*int64(cost[0]))/float64(workers)), workers)
+	if workers == 1 {
+		return text + " worker here."
+	}
+	return text + " parallel workers here."
+}
+
+// batchDuration is the web's duration(ms): seconds, minutes or hours.
+func batchDuration(ms float64) string {
+	seconds := max(1, math.Round(ms/1000))
+	switch {
+	case seconds < 90:
+		return fmt.Sprintf("%.0f s", seconds)
+	case seconds < 5400:
+		return fmt.Sprintf("%.0f min", math.Round(seconds/60))
+	}
+	return fmt.Sprintf("%.1f h", seconds/3600)
 }
 
 func (p *explorePage) batchEnergyView(c *ui.Context) {
@@ -91,6 +184,9 @@ func (p *explorePage) batchEnergyView(c *ui.Context) {
 	}
 	engine := batchEngineOf(s.engine)
 	filtered := s.records == batchRecordLabels[1]
+	sample := ids[s.sample]
+	p.loadBatchInputs(sample)
+	hasReference := sample != "" && p.batchHasReference(sample)
 	ui.Scroll(c.Key("be-scroll")).Grow(1).Children(func() {
 		ui.Column(c).Gap(12).Children(func() {
 			Card(c, "HYB binding energies", func() {
@@ -107,17 +203,23 @@ func (p *explorePage) batchEnergyView(c *ui.Context) {
 					picker(c, "be-engine", "Engine", &s.engine, names, 300)
 					picker(c, "be-records", "Records", &s.records, batchRecordLabels, 280)
 					if ui.PrimaryButton(c, "Calculate binding energies").Tooltip("Runs as a task; progress and Cancel show here and in the task list").
-						Disabled(running > 0 || len(labels) == 0).Clicked() {
-						p.runBatchEnergy(ids[s.sample], engine, filtered)
+						Disabled(running > 0 || len(labels) == 0 || !hasReference).Clicked() {
+						p.runBatchEnergy(sample, engine, filtered)
 					}
 				})
-				note := engine[2]
+				note := engine[2] + batchEstimate(engine[0], s.counts[p.batchCountKey(sample)], s.cpus)
+				if engine[0] != "rnacofold" {
+					note += " For many records, filter first or use the cplcofold command."
+				}
 				if filtered {
 					note += " Records: " + nameOr(describeFilters(p.ix.applied), "the Interactions filters (none set: every record)") + "."
 				}
 				ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
-				ui.Text(c, "Unmapped, antisense, ambiguous, over-limit or unselected rows keep their energy and are listed in the audit. Comments and unparsed lines are kept as they are.").
-					FontSize(12).TextColor(t.TextMuted)
+				status := "Unmapped, antisense, ambiguous, over-limit or unselected rows retain their original energy and are listed in the audit."
+				if !hasReference {
+					status = batchNoReference
+				}
+				ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
 				if s.err != "" {
 					errorLine(c, s.err)
 				}

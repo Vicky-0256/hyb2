@@ -51,6 +51,9 @@ func stStatesFixture(t *testing.T, results int) (*App, *csFake, *ui.Tester) {
 // stTaskState gives the fold started from the form the status.
 func stTaskState(a *App, tt *ui.Tester, task model.Task) {
 	task.TaskID, task.Kind = "structure-1", "structure"
+	if previous, ok := a.Tasks[task.TaskID]; ok && taskStage(task.Status) < taskStage(previous.Status) {
+		delete(a.Tasks, task.TaskID) // a new fold under the same id (storeTask keeps the later state)
+	}
 	a.storeTask(task)
 	csSettle(a, tt)
 }

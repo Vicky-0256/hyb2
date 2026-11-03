@@ -141,6 +141,16 @@ class AnalysisBridgeTest(unittest.TestCase):
             listed = self.call(operation="analysis_hybrids", sample_ids=["S1", "S2"], filters={"anchor": region}, limit=0)["result"]
             self.assertGreater(counted["records"], 0, region)
             self.assertEqual(listed["total"], counted["records"], region)
+        # the record drawer's line, by the row's id; both arm orders of a cell
+        first = self.call(operation="analysis_hybrids", sample_ids=["S1"], limit=1, offset=4)["result"]["rows"][0]
+        line = self.call(operation="analysis_hybrids", sample_ids=["S1"], filters={"id": first["id"]}, limit=1,
+                         with_line=True)["result"]["rows"][0]
+        self.assertEqual((line["id"], line["line"], line["type_source"]), (first["id"], 5, first["type_source"]))
+        self.assertIn("read_start1", first)
+        cell = [{"gene1": "Zika_virusRNA", "gene2": "18S_rRNA"}, {"gene1": "18S_rRNA", "gene2": "Zika_virusRNA"}]
+        either = self.call(operation="analysis_hybrids", sample_ids=["S1"], filters={"either": cell}, limit=0)["result"]
+        self.assertEqual(either["total"], sum(self.call(operation="analysis_hybrids", sample_ids=["S1"], filters=side,
+                                                        limit=0)["result"]["total"] for side in cell))
         missing = self.call(operation="analysis_hybrids", sample_ids=["S1"], limit=0,
                             filters={"anchor": {"gene": "nope", "start": 1, "end": 9}})["result"]
         self.assertEqual(missing["total"], 0)
@@ -157,6 +167,13 @@ class AnalysisBridgeTest(unittest.TestCase):
                            bin_size=10, measure="reads", types=["Type_1"])["result"]
         self.assertEqual((single["start"], single["end"], single["bin_size"]), (2000, 2600, 10))
         self.assertEqual(len(single["bins"]["value"]), 61)
+        # the web's "Full mapped reference" needs a reference length (this
+        # project has none): no bins, rather than the observed range
+        full = self.call(operation="analysis_viewpoint", sample_ids=["S1"], gene="Zika_virusRNA", start=2000, end=2600,
+                         full_reference=True)["result"]
+        observed = self.call(operation="analysis_viewpoint", sample_ids=["S1"], gene="Zika_virusRNA")["result"]
+        self.assertEqual((full["start"], full["end"], full["bins"]["value"]), (1, None, []))
+        self.assertEqual(observed["end"], observed["length"])  # the observed end
         self.assertGreater(single["records"], 0)
         self.assertEqual(merged["measure"], "reads")
         self.assertLess(merged["records"], 2 * single["records"])

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # Repository sources copied into every runtime (verify-native-release checks they are current).
 # web/assets/examples is the example data set (desktop/runtime/example.py).
 SOURCE_DIRS = ['desktop/runtime', 'desktop/task-runner', 'desktop/spec', 'third_party/cplfold', 'web/cplfold', 'pipeline',
-               'web/assets/examples']
+               'web/assets/examples', 'third_party/iris']
 PINS = {"numpy": "1.24.4", "numba": "0.58.1", "llvmlite": "0.41.1"}
 PROBE = '''import json,sys,platform,numpy,numba,llvmlite
 @numba.njit

@@ -77,42 +77,96 @@ def _lines(path: Path) -> Iterable[bytes]:
         yield from _hybfile().lines(handle)
 
 
+def _new_skipped() -> Dict[str, int]:
+    return {"outsideSelectedRegions": 0, "homodimerFilter": 0, "invalidSequence": 0, "invalidRows": 0}
+
+
+# progress is reported about every this many lines
+_PROGRESS_LINES = 4096
+
+
+def _records(hyb_paths: Sequence[Path], homodimer_only: bool, skipped: Sequence[Dict[str, int]],
+             progress: Optional[Callable[[int], None]] = None) -> Iterable[Tuple[bytes, int, Any]]:
+    """``(line, number, record)`` of every parsed row of the .hyb files, read
+    once, that passes the homodimer filter; the invalid and filtered rows
+    are counted in each of ``skipped``.  ``progress(bytes_done)`` is given
+    the bytes read so far (compressed bytes for .gz, as the file sizes)."""
+    hybfile = _hybfile()
+    base = 0
+    for path in hyb_paths:
+        path = Path(path)
+        with open(path, "rb") as raw:
+            handle = gzip.GzipFile(fileobj=raw, mode="rb") if path.name.endswith(".gz") else raw
+            try:
+                for number, line in enumerate(hybfile.lines(handle), 1):
+                    if progress is not None and number % _PROGRESS_LINES == 0:
+                        progress(base + raw.tell())
+                    try:
+                        record = hybfile.parse(line)
+                    except ValueError:
+                        for counts in skipped:
+                            counts["invalidRows"] += 1
+                        continue
+                    if record is None:
+                        continue
+                    homodimer = record.gene1 == record.gene2 and record.overlap is not None and record.overlap >= 5
+                    if homodimer_only and not homodimer:
+                        for counts in skipped:
+                            counts["homodimerFilter"] += 1
+                        continue
+                    yield line, number, record
+            finally:
+                if handle is not raw:
+                    handle.close()
+        base += path.stat().st_size
+        if progress is not None:
+            progress(base)
+
+
+def _record_id(line: bytes, number: int) -> str:
+    """The web's record id (parser.worker.js): column 1, else "line_<n>"."""
+    first = line.split(b"\t", 1)[0].strip()
+    return first.decode("utf-8", "replace") if first else f"line_{number}"
+
+
+def window_arms(hyb_paths: Sequence[Path], gene: str, sequence: str, windows: Sequence[Tuple[int, int]],
+                homodimer_only: bool = False, progress: Optional[Callable[[int], None]] = None
+                ) -> List[Tuple[List[Dict[str, Any]], Dict[str, int]]]:
+    """Per window ``(start, end)``: the arms of every record with both arms
+    on ``gene`` inside it, in window positions (1 = ``start``), file order,
+    and its skipped rows.  The .hyb files are read once for all windows;
+    ``progress`` as :func:`_records`."""
+    name = gene.encode()
+    found: List[List[Dict[str, Any]]] = [[] for _ in windows]
+    skipped = [_new_skipped() for _ in windows]
+    regions = [sequence[start - 1:end] for start, end in windows]
+    for line, number, record in _records(hyb_paths, homodimer_only, skipped, progress):
+        on_gene = record.gene1 == name and record.gene2 == name
+        for index, (start, end) in enumerate(windows):
+            if not (on_gene and start <= record.start1 and record.end1 <= end
+                    and start <= record.start2 and record.end2 <= end):
+                skipped[index]["outsideSelectedRegions"] += 1
+                continue
+            region = regions[index]
+            one = region[record.start1 - start:record.end1 - start + 1]
+            two = region[record.start2 - start:record.end2 - start + 1]
+            if set(one + two) - set("ACGU"):
+                skipped[index]["invalidSequence"] += 1
+                continue
+            arms = found[index]
+            arms.append({"one": one, "two": two, "oneStart": record.start1 - start + 1,
+                         "twoStart": record.start2 - start + 1, "recordId": _record_id(line, number)})
+            if len(arms) > MAX_EVIDENCE_RECORDS:
+                raise ValueError(f"This region contains more than {MAX_EVIDENCE_RECORDS} eligible HYB rows. "
+                                 "Select a smaller region before running RNAcofold evidence generation.")
+    return list(zip(found, skipped))
+
+
 def evidence_arms(hyb_paths: Sequence[Path], gene: str, sequence: str, start: int, end: int,
                   homodimer_only: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """The arms of every record with both arms on ``gene`` inside
     ``start``-``end``, in region positions (1 = ``start``), file order."""
-    hybfile = _hybfile()
-    name = gene.encode()
-    arms: List[Dict[str, Any]] = []
-    skipped = {"outsideSelectedRegions": 0, "homodimerFilter": 0, "invalidSequence": 0, "invalidRows": 0}
-    region = sequence[start - 1:end]
-    for path in hyb_paths:
-        for line in _lines(path):
-            try:
-                record = hybfile.parse(line)
-            except ValueError:
-                skipped["invalidRows"] += 1
-                continue
-            if record is None:
-                continue
-            homodimer = record.gene1 == record.gene2 and record.overlap is not None and record.overlap >= 5
-            if homodimer_only and not homodimer:
-                skipped["homodimerFilter"] += 1
-                continue
-            if not (record.gene1 == name and record.gene2 == name and start <= record.start1 and record.end1 <= end
-                    and start <= record.start2 and record.end2 <= end):
-                skipped["outsideSelectedRegions"] += 1
-                continue
-            one = region[record.start1 - start:record.end1 - start + 1]
-            two = region[record.start2 - start:record.end2 - start + 1]
-            if set(one + two) - set("ACGU"):
-                skipped["invalidSequence"] += 1
-                continue
-            arms.append({"one": one, "two": two, "oneStart": record.start1 - start + 1, "twoStart": record.start2 - start + 1})
-            if len(arms) > MAX_EVIDENCE_RECORDS:
-                raise ValueError(f"This region contains more than {MAX_EVIDENCE_RECORDS} eligible HYB rows. "
-                                 "Select a smaller region before running RNAcofold evidence generation.")
-    return arms, skipped
+    return window_arms(hyb_paths, gene, sequence, [(start, end)], homodimer_only)[0]
 
 
 # The web's spacer between two regions (comrades-analysis.js originalLinker):
@@ -121,16 +175,16 @@ LINKER = "A" * 50 + "U" * 50
 
 
 def paired_arms(hyb_paths: Sequence[Path], regions: Sequence[Dict[str, Any]], prepared: str,
-                homodimer_only: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+                homodimer_only: bool = False, progress: Optional[Callable[[int], None]] = None
+                ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """The web's two-region layout (prepareReferenceAssembly with two regions,
     not cofold): every record with one arm in each region, oriented region 1
     first, in positions of ``prepared`` (region 1 + :data:`LINKER` + region 2).
-    ``regions`` carry gene_id, start, end and prepared_start."""
-    hybfile = _hybfile()
-    first, second = regions
+    ``regions`` carry gene_id, start, end and prepared_start; ``progress``
+    as :func:`_records`."""
     names = [r["gene_id"].encode() for r in regions]
     arms: List[Dict[str, Any]] = []
-    skipped = {"outsideSelectedRegions": 0, "homodimerFilter": 0, "invalidSequence": 0, "invalidRows": 0}
+    skipped = _new_skipped()
 
     def inside(gene, s, e, index):
         r = regions[index]
@@ -141,35 +195,24 @@ def paired_arms(hyb_paths: Sequence[Path], regions: Sequence[Dict[str, Any]], pr
         begin = r["prepared_start"] + s - r["start"]
         return begin, prepared[begin - 1:begin + e - s]
 
-    for path in hyb_paths:
-        for line in _lines(path):
-            try:
-                record = hybfile.parse(line)
-            except ValueError:
-                skipped["invalidRows"] += 1
-                continue
-            if record is None:
-                continue
-            homodimer = record.gene1 == record.gene2 and record.overlap is not None and record.overlap >= 5
-            if homodimer_only and not homodimer:
-                skipped["homodimerFilter"] += 1
-                continue
-            one, two = (record.gene1, record.start1, record.end1), (record.gene2, record.start2, record.end2)
-            if inside(*one, 0) and inside(*two, 1):
-                pass
-            elif inside(*two, 0) and inside(*one, 1):
-                one, two = two, one
-            else:
-                skipped["outsideSelectedRegions"] += 1
-                continue
-            (start_one, seq_one), (start_two, seq_two) = arm(one[1], one[2], 0), arm(two[1], two[2], 1)
-            if set(seq_one + seq_two) - set("ACGU"):
-                skipped["invalidSequence"] += 1
-                continue
-            arms.append({"one": seq_one, "two": seq_two, "oneStart": start_one, "twoStart": start_two})
-            if len(arms) > MAX_EVIDENCE_RECORDS:
-                raise ValueError(f"These regions contain more than {MAX_EVIDENCE_RECORDS} eligible HYB rows. "
-                                 "Select smaller regions before running RNAcofold evidence generation.")
+    for line, number, record in _records(hyb_paths, homodimer_only, [skipped], progress):
+        one, two = (record.gene1, record.start1, record.end1), (record.gene2, record.start2, record.end2)
+        if inside(*one, 0) and inside(*two, 1):
+            pass
+        elif inside(*two, 0) and inside(*one, 1):
+            one, two = two, one
+        else:
+            skipped["outsideSelectedRegions"] += 1
+            continue
+        (start_one, seq_one), (start_two, seq_two) = arm(one[1], one[2], 0), arm(two[1], two[2], 1)
+        if set(seq_one + seq_two) - set("ACGU"):
+            skipped["invalidSequence"] += 1
+            continue
+        arms.append({"one": seq_one, "two": seq_two, "oneStart": start_one, "twoStart": start_two,
+                     "recordId": _record_id(line, number)})
+        if len(arms) > MAX_EVIDENCE_RECORDS:
+            raise ValueError(f"These regions contain more than {MAX_EVIDENCE_RECORDS} eligible HYB rows. "
+                             "Select smaller regions before running RNAcofold evidence generation.")
     return arms, skipped
 
 
@@ -207,12 +250,20 @@ def map_cofold_pairs(job: Dict[str, Any], pairs: Sequence[Tuple[int, int]]) -> L
             for left, right in pairs if 1 <= left <= first < right <= total]
 
 
-def aggregate_evidence(mapped: Iterable[Tuple[int, int]]) -> List[Dict[str, int]]:
+def aggregate_evidence(mapped: Iterable[Tuple[Any, ...]]) -> List[Dict[str, Any]]:
+    """Observations per (one, two), strongest first; an observation may carry
+    its HYB record id as a third item, and each pair keeps the first 20
+    (``recordIds``, the web's aggregateEvidence)."""
     counts: Dict[Tuple[int, int], int] = {}
-    for one, two in mapped:
+    ids: Dict[Tuple[int, int], List[str]] = {}
+    for item in mapped:
+        one, two = item[0], item[1]
         if one >= 1 and two >= 1 and one != two:
             counts[(one, two)] = counts.get((one, two), 0) + 1
-    entries = [{"one": one, "two": two, "count": n} for (one, two), n in counts.items()]
+            kept = ids.setdefault((one, two), [])
+            if len(item) > 2 and item[2] is not None and len(kept) < 20:
+                kept.append(str(item[2]))
+    entries = [{"one": one, "two": two, "count": n, "recordIds": ids[(one, two)]} for (one, two), n in counts.items()]
     return sorted(entries, key=lambda e: (-e["count"], e["one"], e["two"]))
 
 
@@ -382,12 +433,15 @@ def _fit(sequence: str, ordered, params: Dict[str, Any]):
 def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
          progress: Optional[Callable[[str, int, int], None]] = None) -> Dict[str, Any]:
     """The web's COMRADES(ViennaRNA) result for one region: a record in the
-    shape of structure.fold_one's, with the evidence and the ensemble."""
+    shape of structure.fold_one's, with the evidence and the ensemble.
+    ``progress(stage, done, total)`` follows the RNAcofold evidence
+    ("RNAcofold evidence", one per arm) then the constrained ViennaRNA fits
+    ("constrained folds": the rank-order fit and each randomised one)."""
     started = time.monotonic()
     sequence = sequence.upper().replace("T", "U")
     if not arms:
         raise ValueError("No HYB records have both arms inside the selected region.")
-    mapped: List[Tuple[int, int]] = []
+    mapped: List[Tuple[int, int, Optional[str]]] = []
     with_pairs = 0
     cache: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
     for index, job in enumerate(arms):
@@ -397,7 +451,7 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
         pairs = map_cofold_pairs(job, cache[key])
         if pairs:
             with_pairs += 1
-            mapped.extend(pairs)
+            mapped.extend((one, two, job.get("recordId")) for one, two in pairs)
         if progress and (index == len(arms) - 1 or index % max(1, len(arms) // 80) == 0):
             progress("RNAcofold evidence", index + 1, len(arms))
     all_evidence = aggregate_evidence(mapped)
@@ -416,11 +470,14 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
         candidates.append({"result": result, "accepted": accepted, "rejected": rejected, "run": run,
                            "randomised": randomised, "score": score})
 
+    fits = params["random_folds"] + 1
     annotate(_fit(sequence, constraints, params), 0, False)
-    for run in range(1, params["random_folds"] + 1):
+    if progress:
+        progress("constrained folds", 1, fits)
+    for run in range(1, fits):
         annotate(_fit(sequence, seeded_shuffle(constraints, f"{params['seed']}:{run}"), params), run, True)
         if progress:
-            progress("randomised folds", run, params["random_folds"])
+            progress("constrained folds", run + 1, fits)
     candidates.sort(key=lambda c: (-c["score"]["score"], -c["score"]["matched_pairs"], c["result"]["energy"], c["run"]))
     best = candidates[0]
     result = dict(best["result"])
@@ -434,7 +491,8 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
         "mappedPairObservations": len(mapped), "uniqueBasePairs": len(all_evidence),
         "selectedBasePairs": len(selected), "rankedStems": len(stems), "requestedStemConstraints": len(constraints),
         # the web's evidence table and download (at most ORIGINAL_EVIDENCE_LIMIT pairs, region positions)
-        "selectedEvidencePairs": [{"one": e["one"], "two": e["two"], "count": e["count"]} for e in selected],
+        "selectedEvidencePairs": [{"one": e["one"], "two": e["two"], "count": e["count"],
+                                   "recordIds": e.get("recordIds") or []} for e in selected],
         "acceptedStemConstraints": [{k: c[k] for k in ("id", "rank", "left", "right", "length", "support")} for c in best["accepted"]],
         "rejectedStemConstraints": best["rejected"], "evidenceLimit": ORIGINAL_EVIDENCE_LIMIT,
         "evidenceWeight": "one per eligible HYB row", "comradesScore": best["score"]["score"],

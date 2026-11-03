@@ -30,6 +30,19 @@ REFERENCE_NAMES = {"ZAFR": "ZIKV_African_KX377335-1_virusRNA", "ZBRA": "ZIKV_Bra
                    "Zika": "ZIKV-PE243-2015_virusRNA"}
 
 
+_OWNER_LOCKS = []  # held for the test process's life, as a live task's owner does
+
+
+def hold_owner_lock(run_dir: Path) -> None:
+    """Take ``run_dir/owner.lock`` as the desktop scheduler does for a live task."""
+    if os.name == "nt":
+        raise unittest.SkipTest("the owner lock is an unshared Windows handle the tests cannot take")
+    import fcntl
+    handle = open(Path(run_dir) / "owner.lock", "a+b")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    _OWNER_LOCKS.append(handle)
+
+
 def _write_gz(path: Path, text: str) -> None:
     # mtime=0: rewriting the same text must give the same bytes (the gzip
     # header otherwise embeds the current second, which made dedup flaky).
@@ -318,10 +331,12 @@ class RemoveWhileRunningTests(ProjectTestCase):
         self.call("add_sample", source=str(self.reads()), reference=str(self.reference()))
         return self.manifest()["samples"][0]
 
-    def task(self, task_id, status, sample_id=None):
+    def task(self, task_id, status, sample_id=None, live=True):
         run = self.project / "runs" / task_id
         run.mkdir(parents=True)
         (run / "status.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+        if live and status in samples.ACTIVE_TASK_STATUSES:
+            hold_owner_lock(run)
         if sample_id:
             (run / "task-start.json").write_text(json.dumps({"kind": "sample_pipeline", "sample_id": sample_id}), encoding="utf-8")
 
@@ -335,6 +350,25 @@ class RemoveWhileRunningTests(ProjectTestCase):
         (self.project / "runs" / "t-live" / "status.json").write_text('{"status": "interrupted"}', encoding="utf-8")
         self.call("remove_sample", sample_id=sample["id"])
         self.assertEqual(self.manifest()["samples"], [])
+
+    def test_a_task_whose_owner_exited_is_not_live(self):
+        # status.json still says running/cancelling, but no process holds owner.lock
+        sample = self.add()
+        samples.set_sample_stage(self.project, sample["id"], "map", "running", task_id="t-dead")
+        self.task("t-dead", "running", live=False)
+        self.task("t-stopping", "cancelling", live=False)
+        self.assertEqual(samples._task_status(self.project, "t-dead"), "interrupted")
+        self.assertEqual(samples._task_status(self.project, "t-stopping"), "cancelled")
+        self.assertEqual(samples.active_sample_tasks(self.project, self.manifest()["samples"][0]), [])
+        self.assertEqual([s[1:] for s in samples.stale_stages(self.project, self.manifest())], [("map", "t-dead", "interrupted")])
+        self.call("remove_sample", sample_id=sample["id"])
+
+    def test_a_cancelling_task_is_still_live(self):
+        sample = self.add()
+        samples.set_sample_stage(self.project, sample["id"], "map", "running", task_id="t-stopping")
+        self.task("t-stopping", "cancelling")
+        self.assertEqual(samples.active_sample_tasks(self.project, self.manifest()["samples"][0]), ["t-stopping"])
+        self.assertEqual(samples.stale_stages(self.project, self.manifest()), [])
 
     def test_a_queued_task_that_has_not_started_blocks_removal(self):
         sample = self.add()

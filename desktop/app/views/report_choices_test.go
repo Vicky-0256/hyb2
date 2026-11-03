@@ -114,6 +114,12 @@ func TestReportSelectedResultsPackage(t *testing.T) {
 	if err := tt.Click("Copy AI summary (report.md)"); err != nil {
 		t.Fatal(err)
 	}
+	// the record (which reads significant.tsv) is built off the UI thread
+	if clip := tt.Clipboard(); clip != "" {
+		t.Fatalf("copied on the UI thread: %.80s", clip)
+	}
+	waitFlush(a)
+	tt.Frame()
 	if clip := tt.Clipboard(); !strings.HasPrefix(clip, "# HYB2 analysis report") || !strings.Contains(clip, "Selected results report") ||
 		strings.Contains(clip, "| S12 |") {
 		t.Fatalf("clipboard %.400s", clip)

@@ -54,7 +54,7 @@ func TestStructureCandidateSelection(t *testing.T) {
 	if !slices.Equal(rows[0][:4], []string{"rank", "selected", "type", "topology"}) || len(rows) != 3 {
 		t.Fatalf("rows %q", rows)
 	}
-	if want := []string{"2", "yes", "pseudoknot", "pseudoknotted", "-2.5", "-2", "-1.5", "7", "4", "2", "((.[[.)).]].", "G:101-112"}; !slices.Equal(rows[2], want) {
+	if want := []string{"2", "yes", "pseudoknot", "pseudoknotted", "-2.5", "-2", "-1.5", "7", "4", "4", "((.[[.)).]].", "G:101-112"}; !slices.Equal(rows[2], want) {
 		t.Fatalf("row %q", rows[2])
 	}
 	if rows[1][1] != "no" {
@@ -94,8 +94,8 @@ func TestStructureCandidateSelection(t *testing.T) {
 	if !co.selectCandidate(1) || !slices.Equal(co.Pairs, [][2]int{{1, 104}, {2, 103}}) || co.Bonus != nil {
 		t.Fatalf("cofold %+v", co)
 	}
-	if rows := stCandidatesRows("G", []structureRecord{co}); rows[0][len(rows[0])-1] != "cutpoint" || rows[2][10] != "((....&..))...." ||
-		rows[2][11] != "G:1-6 + G:101-108" || rows[2][12] != "6" {
+	if rows := stCandidatesRows("G", []structureRecord{co}); !slices.Equal(rows[0][9:], []string{"crossing_pairs", "dot_bracket", "cutpoint", "region"}) ||
+		rows[2][10] != "((....&..))...." || rows[2][11] != "6" || rows[2][12] != "G:1-6 + G:101-108" {
 		t.Fatalf("cofold rows %q", rows)
 	}
 }
@@ -106,7 +106,7 @@ func TestStructureComradesRows(t *testing.T) {
 		"acceptedStemConstraints": [{"id": "F1", "rank": 2, "left": 10, "right": 50, "length": 4, "support": 9}],
 		"rejectedStemConstraints": [{"id": "F2", "rank": 3, "reason": "overlap"}],
 		"comradesScore": 18, "matchedEvidencePairs": 4,
-		"selectedEvidencePairs": [{"one": 10, "two": 50, "count": 5}, {"one": 11, "two": 49, "count": 4}]},
+		"selectedEvidencePairs": [{"one": 10, "two": 50, "count": 5, "recordIds": ["r1", "line_7"]}, {"one": 11, "two": 49, "count": 4}]},
 		"randomisation": {"requestedFolds": 1, "seed": "s1", "selectedRun": 1,
 		"structures": [{"run": 1, "randomised": true, "energy": -12.5, "comradesScore": 18, "matchedEvidencePairs": 4,
 			"acceptedStemConstraints": ["F1", "F3"], "rejectedStemConstraints": 1, "dotBracket": "((..))"},
@@ -115,7 +115,7 @@ func TestStructureComradesRows(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &cm); err != nil {
 		t.Fatal(err)
 	}
-	if got := string(webTSV(stEvidenceRows(&cm))); got != "prepared_position_1\tprepared_position_2\thyb_row_observations\texample_record_ids\n10\t50\t5\t\n11\t49\t4\t\n" {
+	if got := string(webTSV(stEvidenceRows(&cm))); got != "prepared_position_1\tprepared_position_2\thyb_row_observations\texample_record_ids\n10\t50\t5\tr1,line_7\n11\t49\t4\t\n" {
 		t.Fatalf("evidence %q", got)
 	}
 	if got := stConstraintRows(&cm); !slices.Equal(got[1], []string{"F1", "2", "F 10 50 4", "10", "50", "4", "9", "yes"}) ||
@@ -178,15 +178,16 @@ func TestStructureResultDetailsViewer(t *testing.T) {
 	// clicking the diagram inspects a nucleotide; the arrow keys step it
 	p.arcs.Selected = 3171
 	tt.Frame()
-	if !slices.ContainsFunc(tt.Texts(), func(s string) bool {
-		return strings.HasPrefix(s, "Nucleotide 3,171 ") && strings.Contains(s, "unpaired")
+	// the web's inspector card: the position, then what it pairs with
+	if !tt.HasText("Nucleotide 3,171") || !slices.ContainsFunc(tt.Texts(), func(s string) bool {
+		return strings.Contains(s, "unpaired in this CPLfold candidate")
 	}) {
 		t.Fatalf("no inspector: %q", tt.Texts())
 	}
 	p.arcs.Step(-1)
 	tt.Frame()
-	if !slices.ContainsFunc(tt.Texts(), func(s string) bool {
-		return strings.HasPrefix(s, "Nucleotide 3,170 ") && strings.Contains(s, "paired with 3,190")
+	if !tt.HasText("Nucleotide 3,170") || !slices.ContainsFunc(tt.Texts(), func(s string) bool {
+		return strings.Contains(s, "paired with 3,190")
 	}) {
 		t.Fatalf("no partner: %q", tt.Texts())
 	}
@@ -208,10 +209,26 @@ func TestStructureResultDetailsViewer(t *testing.T) {
 	a.Navigate("structure", map[string]any{"structureId": structB})
 	csSettle(a, tt)
 	for _, text := range []string{"COMRADES result", "COMRADES score 18 · 4 supported structure pairs · selected fold: ranked",
-		"Evidence TSV…", "Constraints TSV…", "Ensemble TSV…", "Structure ensemble (best first)", "ranked (shown)", "Accepted stem constraints (1)"} {
+		"Evidence TSV…", "Constraints TSV…", "Ensemble TSV…", "Accepted stem constraints (1)",
+		"1 · RNAcofold evidence", "40 unique pairs", "60 eligible HYB rows; one observation per row", "2 · Ranked stems", "5 stems",
+		"Top 3 sent to compatibility fitting", "3 · Accepted constraints", "1 stem", "4 enforced base pairs", "4 · Structure ensemble",
+		"1 structure", "ranked fold + 0 seeded random orders", "#1 · ranked",
+		// the web's two metric cards and its scope sentence
+		"Constraint mode", "HYB-guided", "COMRADES score", "How this was computed"} {
 		if !tt.HasText(text) {
 			t.Fatalf("COMRADES lacks %q: %q", text, tt.Texts())
 		}
+	}
+	if got := stComputedScope(p.cache[structB]); !strings.HasPrefix(got, "This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence") {
+		t.Fatalf("scope %q", got)
+	}
+	if got := stComputedScope(&structureResult{}); got != "" {
+		t.Fatalf("CPLfold scope %q", got)
+	}
+	vienna := &structureResult{}
+	vienna.Meta.Engine = "ViennaRNA"
+	if got := stComputedScope(vienna); got != "ViennaRNA minimum-free-energy fold on this computer, without base-pair constraints." {
+		t.Fatalf("ViennaRNA scope %q", got)
 	}
 	if tt.HasText("CPLfold candidates") {
 		t.Fatal("candidates shown for COMRADES")

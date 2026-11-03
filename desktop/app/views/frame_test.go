@@ -165,7 +165,7 @@ func TestTableDensity(t *testing.T) {
 	a.Navigate("explore", map[string]any{"tab": "interactions"})
 	settle(a, tt)
 	box := func() float32 {
-		r, ok := tt.Find("2")
+		r, ok := tt.Find("100002_1") // the second row's Sequence ID
 		if !ok {
 			t.Fatalf("no row: %q", tt.Texts())
 		}

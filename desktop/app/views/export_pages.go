@@ -6,8 +6,10 @@ package views
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/json"
 	"fmt"
+	"image"
 	"image/png"
 	"math"
 	"slices"
@@ -233,7 +235,12 @@ func (w *recordsHYB) add(rows []hybridRow) error {
 // exportRecords writes every hybrid matching each filters object (one
 // after another) as CSV or HYB.
 func (p *explorePage) exportRecords(title, name string, filters []core.Obj, order string, hyb bool) {
-	path, ids := p.a.Project.Path, append([]string(nil), p.ids...)
+	p.exportRecordsOf(p.ids, title, name, filters, order, hyb)
+}
+
+// exportRecordsOf is exportRecords over the samples ids.
+func (p *explorePage) exportRecordsOf(ids []string, title, name string, filters []core.Obj, order string, hyb bool) {
+	path, ids := p.a.Project.Path, append([]string(nil), ids...)
 	saveExport(p.a, title, name, func() ([]byte, error) {
 		csvOut, hybOut := newRecordsCSV(ids), &recordsHYB{}
 		add := csvOut.add
@@ -333,17 +340,25 @@ func (p *explorePage) exportInteractionsParams() {
 
 // ---- ③ Explore: contact map
 
-// contactInView returns the indexes of the cells in the map's view.
-func contactInView(d *contactData, v widgets.Window) []int {
-	var out []int
-	for i := range d.count {
-		x, y := float64(d.x[i]), float64(d.y[i])
-		if x+float64(d.bin) < v.X0 || x > v.X1 || y+float64(d.bin) < v.Y0 || y > v.Y1 {
-			continue
-		}
-		out = append(out, i)
-	}
-	return out
+// contactExportSize is the web's CONTACT_EXPORT_SIZE: the map, its axes,
+// colour bar and title, in CSS pixels.
+const (
+	contactExportWidth  = 900
+	contactExportHeight = 916
+)
+
+// contactExportMenu is the web's Export menu of the Contact Map.
+func (p *explorePage) contactExportMenu(c *ui.Context) {
+	none := p.cm.data == nil || len(p.cm.data.count) == 0
+	// the menu leaves the keyboard focus on the map
+	exportMenu(c,
+		exportItem{"Map · SVG (vector)…", none, p.exportContactSVG},
+		exportItem{"Map · PDF…", none, p.exportContactPDF},
+		exportItem{"Map · PNG…", none, func() { p.exportContactPNG(false) }},
+		exportItem{"Map · PNG, print resolution…", none, func() { p.exportContactPNG(true) }},
+		exportItem{"Contact cells · TSV…", none, p.exportContactTSV},
+		exportItem{"Matrix · CSV (bins × bins)…", none, p.exportContactMatrix},
+		exportItem{"Parameters · JSON…", p.cm.data == nil, p.exportContactParams}).KeepFocus()
 }
 
 func (p *explorePage) contactExportName(ext string) string {
@@ -363,39 +378,238 @@ func shortName(gene string) string {
 	return gene
 }
 
-func (p *explorePage) contactTitle() string {
-	d := p.cm.data
-	genes := d.gene
-	if d.gene2 != d.gene {
-		genes += " × " + d.gene2
+// contactExportMap is the map as shown (its view, selection and display
+// settings) for an export: light colours whatever the theme, as the web's.
+func (p *explorePage) contactExportMap() (*widgets.ContactMap, widgets.MapGeometry, widgets.MapColors) {
+	s := &p.cm
+	d := s.data
+	style := s.style().value
+	m := widgets.NewContactMap()
+	m.SetCells(d.cells(s.capChoice(), s.scale, false, style), d.bin, d.base)
+	if s.cmap.Zoomed() {
+		v := s.cmap.View()
+		m.SetView(&v)
 	}
-	return fmt.Sprintf("%s · %s · %d nt bins", p.a.SelectionLabel(p.a.Selected.Key), genes, d.bin)
+	if sel := s.cmap.Selection; sel != nil {
+		copied := *sel
+		m.Selection = &copied
+	}
+	colors := contactPaper(style)
+	if colors.Surface.A == 0 {
+		colors = lightExportColors
+	}
+	m.Colors = colors
+	g := m.Geometry(contactExportWidth, contactExportHeight)
+	m.Legend = d.legend(s.capChoice(), s.scale, false, style, g.PlotWidth)
+	m.XTitle, m.YTitle = d.gene+" position (nt)", d.gene2+" position (nt)"
+	return m, g, colors
 }
 
+// contactExportTitle is "RNA X × RNA Y", shortened to leave the colour bar
+// its room.
+func (p *explorePage) contactExportTitle(g widgets.MapGeometry) string {
+	d := p.cm.data
+	return widgets.FitLabel(d.gene+" × "+d.gene2, (g.PlotWidth-widgets.LegendWidth(g.PlotWidth)-16)*0.8)
+}
+
+// contactImage draws the export map at scale device pixels per CSS pixel.
+func (p *explorePage) contactImage(scale float32) *image.RGBA {
+	m, g, colors := p.contactExportMap()
+	title := p.contactExportTitle(g)
+	return ui.Render(func(c *ui.Context) {
+		c.SetTheme(ui.LightTheme())
+		ui.Box(c).Size(contactExportWidth, contactExportHeight).Draw(func(pt *ui.Painter, r ui.Rect) {
+			m.Paint(pt, r, g)
+			pt.RichText(r.X+g.Left, r.Y+4, 0, ui.Span{Text: title, Size: 14, Weight: 600, Color: colors.Ink})
+		})
+	}, contactExportWidth, contactExportHeight, scale)
+}
+
+// exportContactPNG is the web's Map · PNG (twice the CSS size), or with
+// print the print-resolution PNG (four times).
+func (p *explorePage) exportContactPNG(print bool) {
+	if p.cm.data == nil {
+		return
+	}
+	scale, name := float32(2), ".png"
+	if print {
+		scale, name = 4, "_print.png"
+	}
+	img := p.contactImage(scale)
+	saveExport(p.a, "Export the contact map", p.contactExportName(name), func() ([]byte, error) {
+		var b bytes.Buffer
+		if err := png.Encode(&b, img); err != nil {
+			return nil, err
+		}
+		return b.Bytes(), nil
+	})
+}
+
+// exportContactPDF is the web's Map · PDF: the map at three times its CSS
+// size as a lossless image on one page of 0.75 pt per CSS pixel.
+func (p *explorePage) exportContactPDF() {
+	if p.cm.data == nil {
+		return
+	}
+	img := p.contactImage(3)
+	saveExport(p.a, "Export the contact map", p.contactExportName(".pdf"), func() ([]byte, error) {
+		return imagePDF(img, contactExportWidth*0.75, contactExportHeight*0.75)
+	})
+}
+
+// imagePDF is a one-page PDF holding img (Flate-compressed RGB),
+// widthPt x heightPt points (web/ui-kit.js canvasToPdf).
+func imagePDF(img *image.RGBA, widthPt, heightPt float64) ([]byte, error) {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	rgb := make([]byte, 0, w*h*3)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		row := img.Pix[(y-b.Min.Y)*img.Stride:]
+		for x := range w {
+			// image.RGBA is premultiplied; exports are opaque
+			rgb = append(rgb, row[x*4], row[x*4+1], row[x*4+2])
+		}
+	}
+	var packed bytes.Buffer
+	zw := zlib.NewWriter(&packed)
+	if _, err := zw.Write(rgb); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	wPt, hPt := strconv.FormatFloat(widthPt, 'f', 2, 64), strconv.FormatFloat(heightPt, 'f', 2, 64)
+	content := "q " + wPt + " 0 0 " + hPt + " 0 0 cm /Im0 Do Q"
+	var out bytes.Buffer
+	var offsets []int
+	object := func(body string) {
+		offsets = append(offsets, out.Len())
+		fmt.Fprintf(&out, "%d 0 obj\n%s\nendobj\n", len(offsets), body)
+	}
+	out.WriteString("%PDF-1.4\n")
+	object("<< /Type /Catalog /Pages 2 0 R >>")
+	object("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+	object("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + wPt + " " + hPt + "] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>")
+	offsets = append(offsets, out.Len())
+	fmt.Fprintf(&out, "4 0 obj\n<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\nstream\n", w, h, packed.Len())
+	out.Write(packed.Bytes())
+	out.WriteString("\nendstream\nendobj\n")
+	object(fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content))
+	xref := out.Len()
+	fmt.Fprintf(&out, "xref\n0 %d\n0000000000 65535 f \n", len(offsets)+1)
+	for _, o := range offsets {
+		fmt.Fprintf(&out, "%010d 00000 n \n", o)
+	}
+	fmt.Fprintf(&out, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(offsets)+1, xref)
+	return out.Bytes(), nil
+}
+
+// exportContactSVG is the web's buildContactSvg: the cells of the export
+// view, the frame, the colour bar, the axes and the title.
 func (p *explorePage) exportContactSVG() {
 	s := &p.cm
 	d := s.data
 	if d == nil {
 		return
 	}
-	// light colours whatever the theme, as the web's exports
-	cells, view := d.cells(s.capChoice(), s.scale, false, s.mono()), s.heat.View()
-	title, note := p.contactTitle(), p.contactNote()
-	render := func() ([]byte, error) {
-		// Weakest first, so a capped map keeps the strongest cells.
-		order := contactInView(d, view)
-		sort.SliceStable(order, func(i, j int) bool { return d.count[order[i]] < d.count[order[j]] })
-		sorted := make([]widgets.Cell, 0, len(order))
-		for _, i := range order {
-			if i < len(cells) {
-				sorted = append(sorted, cells[i])
-			}
+	m, g, colors := p.contactExportMap()
+	title := p.contactExportTitle(g)
+	cells := d.cells(s.capChoice(), s.scale, false, s.style().value)
+	saveExport(p.a, "Export the contact map", p.contactExportName(".svg"), func() ([]byte, error) {
+		return svgFile(contactSVG(d, m, g, colors, cells, title)), nil
+	})
+}
+
+func contactSVG(d *contactData, m *widgets.ContactMap, g widgets.MapGeometry, colors widgets.MapColors, cells []widgets.Cell, title string) string {
+	var b strings.Builder
+	num := func(v float32) string { return strconv.FormatFloat(float64(v), 'f', 2, 32) }
+	v, bin := g.View, float32(d.bin)
+	// svgFile adds the XML declaration
+	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d">`,
+		contactExportWidth, contactExportHeight, contactExportWidth, contactExportHeight)
+	fmt.Fprintf(&b, `<rect width="100%%" height="100%%" %s/>`, svgFill("fill", colors.Surface))
+	fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" %s/>`, num(g.Left), num(g.Top), num(g.PlotWidth), num(g.PlotHeight), svgFill("fill", colors.Surface))
+	for i := range d.count {
+		if d.x[i] < v.XStart || d.x[i] > v.XEnd || d.y[i] < v.YStart || d.y[i] > v.YEnd {
+			continue
 		}
-		svg, _, _ := heatSVG{Cells: sorted, View: view, Size: 520, Title: title, MaxCells: svgMaxCells,
-			XLabel: "Arm 1 · " + d.gene, YLabel: "Arm 2 · " + d.gene2, Note: note}.SVG()
-		return svgFile(svg), nil
+		x := g.Left + float32(d.x[i]-v.XStart)/bin*g.Cell
+		y := g.Top + float32(v.YEnd-d.y[i])/bin*g.Cell
+		fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" %s/>`, num(x), num(y), num(g.Cell+0.4), num(g.Cell+0.4), svgFill("fill", cells[i].Color))
 	}
-	saveExport(p.a, "Export the contact map", p.contactExportName(".svg"), render)
+	fmt.Fprintf(&b, `<rect x="%s" y="%s" width="%s" height="%s" fill="none" %s stroke-width="1"/>`, num(g.Left), num(g.Top), num(g.PlotWidth), num(g.PlotHeight), svgFill("stroke", colors.Ink))
+	b.WriteString(legendSVG(m.Legend, g, colors))
+	b.WriteString(contactAxesSVG(d, g, colors, m.XTitle, m.YTitle))
+	fmt.Fprintf(&b, `<text x="%s" y="18" font-family="%s" font-size="14" font-weight="600" %s>%s</text>`, num(g.Left), svgText(axisFontFamily), svgFill("fill", colors.Ink), svgText(title))
+	b.WriteString("</svg>")
+	return b.String()
+}
+
+const axisFontFamily = `ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`
+
+// legendSVG is web/ui-kit.js legend.svg for a horizontal colour bar.
+func legendSVG(l widgets.Legend, g widgets.MapGeometry, colors widgets.MapColors) string {
+	width := widgets.LegendWidth(g.PlotWidth)
+	x, y := g.Left+g.PlotWidth-width, float32(4)
+	var b strings.Builder
+	fmt.Fprintf(&b, `<g class="chart-legend" transform="translate(%s,%s)" font-family="%s" font-size="10">`, svgNum(float64(x)), svgNum(float64(y)), svgText(axisFontFamily))
+	b.WriteString(`<defs><linearGradient id="hyb2-legend-contact" x1="0" y1="0" x2="1" y2="0">`)
+	for i := 0; i <= 16; i++ {
+		t := float64(i) / 16
+		fmt.Fprintf(&b, `<stop offset="%.4f" %s/>`, t, svgFill("stop-color", l.ColorAt(t)))
+	}
+	b.WriteString(`</linearGradient></defs>`)
+	if l.Title != "" {
+		fmt.Fprintf(&b, `<text x="0" y="10" %s font-weight="600">%s</text>`, svgFill("fill", colors.Ink), svgText(l.Title))
+	}
+	fmt.Fprintf(&b, `<rect x="0" y="14" width="%s" height="10" fill="url(#hyb2-legend-contact)" %s stroke-width="0.5"/>`, svgNum(float64(width)), svgFill("stroke", colors.Muted))
+	for _, value := range l.Ticks {
+		f := 0.0
+		if l.Max > 0 {
+			f = math.Max(0, math.Min(1, value/l.Max))
+		}
+		tx := float64(width) * f
+		anchor := "middle"
+		if f <= 0.001 {
+			anchor = "start"
+		} else if f >= 0.999 {
+			anchor = "end"
+		}
+		fmt.Fprintf(&b, `<line x1="%.1f" x2="%.1f" y1="24" y2="28" %s/>`, tx, tx, svgFill("stroke", colors.Muted))
+		fmt.Fprintf(&b, `<text x="%.1f" y="38" text-anchor="%s" %s>%s</text>`, tx, anchor, svgFill("fill", colors.Ink), svgText(l.Format(value)))
+	}
+	b.WriteString("</g>")
+	return b.String()
+}
+
+// contactAxesSVG is the web's svgAxes for the map.
+func contactAxesSVG(d *contactData, g widgets.MapGeometry, colors widgets.MapColors, xTitle, yTitle string) string {
+	var b strings.Builder
+	bottom := g.Top + g.PlotHeight
+	fmt.Fprintf(&b, `<g font-family="%s" font-size="11">`, svgText(axisFontFamily))
+	xs := widgets.CoordinateTicks(g.View.XStart, g.View.XEnd+d.bin-1, g.PlotWidth, false)
+	for i, tick := range xs {
+		x := svgNum(float64(g.Left + tick.Offset))
+		anchor := "middle"
+		if i == 0 {
+			anchor = "start"
+		} else if i == len(xs)-1 {
+			anchor = "end"
+		}
+		fmt.Fprintf(&b, `<line x1="%s" x2="%s" y1="%s" y2="%s" %s/>`, x, x, svgNum(float64(bottom)), svgNum(float64(bottom+4)), svgFill("stroke", colors.Muted))
+		fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="%s" %s>%s</text>`, x, svgNum(float64(bottom+16)), anchor, svgFill("fill", colors.Muted), svgText(tick.Label))
+	}
+	for _, tick := range widgets.CoordinateTicks(g.View.YStart, g.View.YEnd+d.bin-1, g.PlotHeight, true) {
+		y := svgNum(float64(g.Top + g.PlotHeight - tick.Offset))
+		fmt.Fprintf(&b, `<line x1="%s" x2="%s" y1="%s" y2="%s" %s/>`, svgNum(float64(g.Left-4)), svgNum(float64(g.Left)), y, y, svgFill("stroke", colors.Muted))
+		fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="end" dominant-baseline="middle" %s>%s</text>`, svgNum(float64(g.Left-7)), y, svgFill("fill", colors.Muted), svgText(tick.Label))
+	}
+	fmt.Fprintf(&b, `<text x="%s" y="%s" text-anchor="middle" font-weight="600" %s>%s</text>`, svgNum(float64(g.Left+g.PlotWidth/2)), svgNum(float64(bottom+34)),
+		svgFill("fill", colors.Ink), svgText(widgets.FitLabel(xTitle, g.PlotWidth)))
+	fmt.Fprintf(&b, `<text transform="translate(13 %s) rotate(-90)" text-anchor="middle" dominant-baseline="middle" font-weight="600" %s>%s</text>`,
+		svgNum(float64(g.Top+g.PlotHeight/2)), svgFill("fill", colors.Ink), svgText(widgets.FitLabel(yTitle, g.PlotHeight)))
+	b.WriteString("</g>")
+	return b.String()
 }
 
 // exportContactTSV writes every cell of the map as the web's
@@ -407,11 +621,11 @@ func (p *explorePage) exportContactTSV() {
 		return
 	}
 	render := func() ([]byte, error) {
-		records, err := p.contactCells(d, measureRecords)
+		records, err := p.contactCells(d, cmRecords)
 		if err != nil {
 			return nil, err
 		}
-		support, err := p.contactCells(d, measureSupport)
+		support, err := p.contactCells(d, cmSupport)
 		if err != nil {
 			return nil, err
 		}
@@ -443,48 +657,6 @@ func contactTSV(bin int, records, support contactMeasure) []byte {
 		rows = append(rows, fmt.Sprintf("%d\t%d\t%d\t%d\t%d\t%d", x, x+bin-1, y, y+bin-1, records.count[i], supportAt[[2]int{x, y}]))
 	}
 	return []byte(strings.Join(rows, "\n"))
-}
-
-// contactNote says how the map's colours read.
-func (p *explorePage) contactNote() string {
-	s := &p.cm
-	d := s.data
-	style := "Teal–violet scale"
-	if s.mono() {
-		style = "White–black scale"
-	}
-	return fmt.Sprintf("%s, saturated at %s %s (%s, %s scale).", style,
-		formatCount(capCount(d.colorCap(s.capChoice(), s.scale), s.scale)),
-		strings.ToLower(d.measure), strings.ToLower(s.colorCap), strings.ToLower(s.scale))
-}
-
-// exportContactPNG draws the map as shown (its view, colour style and cap)
-// off screen in the light theme, with its title, axes and note.
-func (p *explorePage) exportContactPNG() {
-	s := &p.cm
-	d := s.data
-	if d == nil {
-		return
-	}
-	mono := s.mono()
-	cells, view := d.cells(s.capChoice(), s.scale, false, mono), s.heat.View()
-	title, note := p.contactTitle(), p.contactNote()
-	lengthX, lengthY := float64(d.lengthX), float64(d.lengthY)
-	axes := "X: arm 1 · " + d.gene + "    Y: arm 2 · " + d.gene2
-	saveExport(p.a, "Export the contact map", p.contactExportName(".png"), func() ([]byte, error) {
-		const size = 560
-		heat := widgets.NewHeatmap()
-		heat.Background = paperOf(mono)
-		heat.SetCells(cells, lengthX, lengthY)
-		heat.SetView(view)
-		return renderPNG(size+60, size+120, func(c *ui.Context) {
-			t := c.Theme()
-			ui.Text(c, title).FontSize(13).TextColor(t.Text)
-			heat.Show(c.Key("map"), size, "Contact map")
-			ui.Text(c, axes).FontSize(11).TextColor(t.TextMuted)
-			ui.Text(c, note).FontSize(11).TextColor(t.TextMuted)
-		})
-	})
 }
 
 // maxMatrixCells is the web's limit on a matrix export's cells.
@@ -547,12 +719,12 @@ func contactMatrixCSV(bin int, x, y, count []int) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// contactCellFilters are the analysis_hybrids filters of the hybrids in
-// cell i (both arms over its bins), as the map counts them: the reverse
-// arm order too for both orders of two RNAs.
-func contactCellFilters(d *contactData, i int) []core.Obj {
-	x0, x1 := d.x[i], d.x[i]+d.bin-1
-	y0, y1 := d.y[i], d.y[i]+d.bin-1
+// contactCellFilters are the analysis_hybrids filters of the hybrids in the
+// bin at sel (both arms over its bins), as the map counts them: the reverse
+// arm order too for normalised pairs of two RNAs.
+func contactCellFilters(d *contactData, sel [2]int) []core.Obj {
+	x0, x1 := sel[0], sel[0]+d.bin-1
+	y0, y1 := sel[1], sel[1]+d.bin-1
 	cell := func(gene1, gene2 string, x, y []int) core.Obj {
 		f := core.Obj{"gene1": gene1, "gene2": gene2, "region": core.Obj{"x": x, "y": y}}
 		if types := typesPayload(d.typ); types != nil {
@@ -571,17 +743,33 @@ func contactCellFilters(d *contactData, i int) []core.Obj {
 }
 
 // exportContactCellRecords writes the selected cell's hybrids as the web's
-// contact-cell-records.csv.
+// contact-cell-records.csv (Export records).
 func (p *explorePage) exportContactCellRecords() {
 	s := &p.cm
 	d := s.data
-	if d == nil || s.picked < 0 || s.picked >= len(d.count) {
+	if d == nil || s.cmap.Selection == nil {
 		return
 	}
-	x0, x1 := cellRange(d.x[s.picked], d.bin)
-	y0, y1 := cellRange(d.y[s.picked], d.bin)
+	sel := *s.cmap.Selection
+	x0, x1 := cellRange(sel[0], d.bin)
+	y0, y1 := cellRange(sel[1], d.bin)
 	name := exportName(".csv", selectionName(p.a.Selected.Key), "cell", fmt.Sprintf("%d-%d_x_%d-%d", x0, x1, y0, y1), "records")
-	p.exportRecords("Export the cell's records", name, contactCellFilters(d, s.picked), "file", false)
+	p.exportRecordsOf(d.ids, "Export the cell's records", name, contactCellFilters(d, sel), "file", false)
+}
+
+// capCode is the web's colourCap value for a cap option.
+func capCode(option string) string {
+	switch option {
+	case capOptions[0]:
+		return "90"
+	case capOptions[1]:
+		return "95"
+	case capOptions[2]:
+		return "99"
+	case capMaximum:
+		return "max"
+	}
+	return "custom"
 }
 
 // exportContactParams writes the web's contact-map-parameters.json.
@@ -591,36 +779,40 @@ func (p *explorePage) exportContactParams() {
 	if d == nil {
 		return
 	}
-	view := s.heat.View()
 	var customCap any
 	if v, err := strconv.ParseFloat(strings.TrimSpace(s.customCap), 64); err == nil && v > 0 && s.colorCap == capCustom {
 		customCap = v
 	}
-	var selected any
-	if s.picked >= 0 && s.picked < len(d.count) {
-		selected = map[string]any{"xStart": d.x[s.picked], "xEnd": d.x[s.picked] + d.bin - 1, "yStart": d.y[s.picked], "yEnd": d.y[s.picked] + d.bin - 1}
+	var selected, view any
+	if sel := s.cmap.Selection; sel != nil {
+		selected = map[string]any{"xStart": sel[0], "xEnd": sel[0] + d.bin - 1, "yStart": sel[1], "yEnd": sel[1] + d.bin - 1}
 	}
-	measure := map[string]string{measureRecords: "record-count", measureSupport: "cluster-support", measureReads: "read-count"}[d.measure]
-	palette := "colour"
-	if s.mono() {
-		palette = "monochrome"
+	if len(d.count) > 0 {
+		v := s.cmap.View()
+		view = map[string]any{"stage": "overview", "xStart": v.XStart, "xEnd": v.XEnd + d.bin - 1, "yStart": v.YStart, "yEnd": v.YEnd + d.bin - 1}
 	}
+	measure := map[string]string{cmRecords: "record-count", cmSupport: "cluster-support", cmReads: "read-count"}[d.measure]
 	requested := d.requested
 	if requested <= 0 {
 		requested = d.bin // not adjusted
 	}
+	scale := "linear"
+	if s.scale == scaleLog {
+		scale = "log"
+	}
 	parameters := map[string]any{
 		"rnaX": d.gene, "rnaY": d.gene2, "requestedBinSize": requested, "binSize": d.bin,
-		"binSizeAdjusted": d.adjusted, "measure": measure, "colourCap": s.colorCap, "customCap": customCap,
-		"effectiveColourCap": capCount(d.colorCap(s.capChoice(), s.scale), s.scale), "scale": strings.ToLower(s.scale), "palette": palette,
+		"binSizeAdjusted": d.adjusted, "measure": measure, "colourCap": capCode(s.colorCap), "customCap": customCap,
+		"effectiveColourCap": d.colorCap(s.capChoice(), s.scale), "scale": scale, "palette": s.style().value,
 		"orientation": map[string]string{orientBoth: "normalised", orientOriented: "original"}[d.orientation],
-		"chimeraType": nameOr(d.typ, allTypes), "homodimerSubset": nameOr(homodimerPayload(d.homodimer), "all"),
-		"exportedView": map[string]any{"xStart": math.Max(0, math.Floor(view.X0)), "xEnd": math.Ceil(view.X1),
-			"yStart": math.Max(0, math.Floor(view.Y0)), "yEnd": math.Ceil(view.Y1)},
-		"selectedCell": selected,
+		"chimeraType": map[bool]string{true: "all", false: d.typ}[d.typ == allTypes], "homodimerSubset": nameOr(homodimerPayload(d.homodimer), "all"),
+		"exportedView": view, "selectedCell": selected,
 	}
-	result := map[string]any{"cells": len(d.count), "recordsInMap": d.records, "maximum": d.max}
-	saveJSON(p.a, "Export the contact-map parameters", p.contactExportName("_parameters.json"), p.exploreParams("contact-map", parameters, result))
+	result := map[string]any{"cells": len(d.count), "recordsInMap": d.recordsTotal, "clusterSupport": d.supportTotal, "maximum": d.max}
+	params := p.exploreParams("contact-map", parameters, result)
+	// the one dataset drawn, as the web's "dataset"
+	params["samples"], params["dataset"] = append([]string(nil), d.ids...), p.contactDatasetJSON(d)
+	saveJSON(p.a, "Export the contact-map parameters", p.contactExportName("_parameters.json"), params)
 }
 
 // ---- ④ Compare: the selected test
@@ -634,52 +826,40 @@ func (p *comparePage) exportTarget() (*comparisonEntry, *comparisonResult, cmpCo
 }
 
 // exportInteractionsTSV writes the merged interactions as the web's
-// interactions.tsv: the up rows then the down rows, in the result's order,
-// numbers as JavaScript prints them.
+// interactions.tsv: in the result's order (the merge's, by padj), numbers
+// as JavaScript prints them.
 func (p *comparePage) exportInteractionsTSV() {
-	_, result, ctx, ok := p.exportTarget()
+	_, result, _, ok := p.exportTarget()
 	if !ok {
 		return
 	}
 	rows := append([]cmpInteraction(nil), result.Interactions...)
 	render := func() ([]byte, error) { return cmpInteractionsTSV(rows), nil }
-	saveExport(p.a, "Export merged interactions", exportName(".tsv", ctx.LabelA, "vs", ctx.LabelB, "interactions"), render)
+	saveExport(p.a, "Export merged interactions", cmpExportNames["interactions"], render)
 }
 
 // cmpInteractionsTSV is the web's interactionsToTsv: direction x y
 // log2FoldChange padj baseMean, "NA" for a missing number.
 func cmpInteractionsTSV(rows []cmpInteraction) []byte {
-	num := func(v *float64) string {
-		if v == nil || math.IsNaN(*v) {
-			return "NA"
-		}
-		return jsNumber(*v)
-	}
-	sorted := append([]cmpInteraction(nil), rows...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Direction == "up" && sorted[j].Direction != "up" })
 	out := [][]string{{"direction", "x", "y", "log2FoldChange", "padj", "baseMean"}}
-	for _, r := range sorted {
-		out = append(out, []string{r.Direction, strconv.Itoa(r.X), strconv.Itoa(r.Y), num(r.LFC), num(r.Padj), num(r.BaseMean)})
+	for _, r := range rows {
+		out = append(out, []string{r.Direction, strconv.Itoa(r.X), strconv.Itoa(r.Y), cmpTSVNumber(r.LFC), cmpTSVNumber(r.Padj), cmpTSVNumber(r.BaseMean)})
 	}
 	return webTSV(out)
 }
 
+// exportMapSVG writes the map as shown (zoom and direction) as the web's
+// panelSvg.
 func (p *comparePage) exportMapSVG() {
-	e, _, ctx, ok := p.exportTarget()
+	_, result, ctx, ok := p.exportTarget()
 	if !ok {
 		return
 	}
-	cells, view := p.heat.Cells(), p.heat.View()
-	directions := []string{"", " · higher in A only", " · higher in B only"}
-	title := ctx.LabelA + " vs " + ctx.LabelB + " · significant cells" + directions[min(max(p.direction, 0), 2)]
-	gene := strings.Join(e.Genes, ", ")
-	render := func() ([]byte, error) {
-		svg, _, _ := heatSVG{Cells: cells, View: view, Size: 520, Title: title, MaxCells: svgMaxCells,
-			XLabel: "Arm 1 · " + gene, YLabel: "Arm 2",
-			Note: "Red: higher in " + ctx.LabelA + "; blue: higher in " + ctx.LabelB + "; stronger colour, smaller padj."}.SVG()
+	panel := p.mapPanel(result, ctx)
+	saveExport(p.a, "Export the differential coverage map", cmpExportNames["map_svg"], func() ([]byte, error) {
+		svg, _, _ := panel.SVG()
 		return svgFile(svg), nil
-	}
-	saveExport(p.a, "Export the significant map", exportName(".svg", ctx.LabelA, "vs", ctx.LabelB, "map"), render)
+	})
 }
 
 func (p *comparePage) exportSimilaritySVG() {
@@ -732,7 +912,7 @@ func (p *structurePage) exportArcsPNG(a *structureResult) {
 	spec, name := p.arcSpec(a)
 	arcs := &widgets.Arcs{A: spec.A, B: spec.B, Length: p.arcs.Length, WeightA: append([]float64(nil), p.arcs.WeightA...),
 		WeightB: append([]float64(nil), p.arcs.WeightB...), Shade: p.arcs.Shade, Start: float64(spec.Start), End: float64(spec.End),
-		Overlay: spec.Overlay, Mono: spec.Mono, Features: spec.Features}
+		Overlay: spec.Overlay, Mono: spec.Mono, Features: spec.Features, Gap: spec.Gap}
 	height := float32(340)
 	if len(spec.B) > 0 || len(spec.Overlay) > 0 {
 		height = 440
@@ -740,34 +920,36 @@ func (p *structurePage) exportArcsPNG(a *structureResult) {
 	if len(spec.Features) > 0 {
 		height += 20
 	}
-	saveExport(p.a, "Export the arc diagram", name+".png", func() ([]byte, error) {
-		return renderPNG(1000, int(height)+64, func(c *ui.Context) {
-			t := c.Theme()
-			ui.Text(c, spec.Title).FontSize(13).TextColor(t.Text)
-			ui.Row(c).Gap(14).Wrap().Children(func() {
-				colorA, colorB := cmpRed, cmpBlue
-				if spec.Mono != (ui.Color{}) {
-					colorA, colorB = spec.Mono, spec.Mono
+	// drawn here, on the main thread: off-screen renders share the text
+	// atlas with the window, so they must not run on another goroutine
+	data, err := renderPNG(1000, int(height)+64, func(c *ui.Context) {
+		t := c.Theme()
+		ui.Text(c, spec.Title).FontSize(13).TextColor(t.Text)
+		ui.Row(c).Gap(14).Wrap().Children(func() {
+			colorA, colorB := cmpRed, cmpBlue
+			if spec.Mono != (ui.Color{}) {
+				colorA, colorB = spec.Mono, spec.Mono
+			}
+			stLegend(c, colorA, spec.LabelA)
+			if spec.LabelB != "" {
+				stLegend(c, colorB, spec.LabelB)
+				if spec.Mono == (ui.Color{}) {
+					stLegend(c, t.TextMuted, "in both")
 				}
-				stLegend(c, colorA, spec.LabelA)
-				if spec.LabelB != "" {
-					stLegend(c, colorB, spec.LabelB)
-					if spec.Mono == (ui.Color{}) {
-						stLegend(c, t.TextMuted, "in both")
-					}
-				}
-				if len(spec.Overlay) > 0 {
-					stLegend(c, cmpRed, spec.OverlayUpLabel)
-					stLegend(c, cmpBlue, spec.OverlayDown)
-				}
-			})
-			arcs.Show(c.Key("arcs"), height, cmpRed, cmpBlue, t.TextMuted, "Arc diagram of base pairs")
+			}
+			if len(spec.Overlay) > 0 {
+				stLegend(c, cmpRed, spec.OverlayUpLabel)
+				stLegend(c, cmpBlue, spec.OverlayDown)
+			}
 		})
+		arcs.Show(c.Key("arcs"), height, cmpRed, cmpBlue, t.TextMuted, "Arc diagram of base pairs")
 	})
+	saveExport(p.a, "Export the arc diagram", name+".png", func() ([]byte, error) { return data, err })
 }
 
 // renderPNG draws view off screen in the light theme, width×height at
-// twice the size, as a PNG.
+// twice the size, as a PNG. Call it on the main thread: the off-screen
+// frame shares the text atlas with the window.
 func renderPNG(width, height int, view func(c *ui.Context)) ([]byte, error) {
 	img := ui.Render(func(c *ui.Context) {
 		c.SetTheme(ui.LightTheme())
@@ -790,7 +972,9 @@ func (p *structurePage) arcSpec(a *structureResult) (arcSVG, string) {
 		labelA = "A · " + p.evidenceNames(e)
 	}
 	labelB := ""
-	if p.viewB != "" {
+	// B only when the arcs hold it (read, aligned and comparable)
+	withB := p.viewB != "" && p.shownB == p.viewB
+	if withB {
 		labelB = "B · " + p.viewB
 		if e := p.entry(p.viewB); e != nil {
 			labelB = "B · " + p.evidenceNames(e)
@@ -801,12 +985,13 @@ func (p *structurePage) arcSpec(a *structureResult) (arcSVG, string) {
 		Start: start, End: end, Width: 1000, Title: fmt.Sprintf("%s · %s–%s", gene, FormatNumber(int64(start)), FormatNumber(int64(end))),
 		LabelA: labelA, LabelB: labelB,
 		Overlay: append([]widgets.OverlayArc(nil), p.arcs.Overlay...), OverlayUpLabel: p.overlayLabels[0], OverlayDown: p.overlayLabels[1],
-		Features: append([]widgets.Feature(nil), p.arcs.Features...)}
+		Features: append([]widgets.Feature(nil), p.arcs.Features...), Gap: p.arcs.Gap}
 	if p.layers.mono {
 		spec.Mono = ui.RGB(34, 34, 34)
 	}
-	name := exportName("", gene, p.viewA)
-	if p.viewB != "" {
+	name := strings.TrimSuffix(stViewFile("arc", ".svg"), ".svg") // the web's
+	if withB {
+		// A against B, which the web has not
 		name = exportName("", gene, p.viewA, "vs", p.viewB)
 	}
 	return spec, name
@@ -978,9 +1163,9 @@ func (p *explorePage) exportViewpointPNG() {
 		return
 	}
 	fig, name := p.viewpointFigure()
-	saveExport(p.a, "Export the viewpoint", name+".png", func() ([]byte, error) {
-		return profilePNG(fig.Starts, fig.Ends, fig.Values, fig.Title, "Viewpoint coverage", fig.Note)
-	})
+	// drawn on the main thread (see exportArcsPNG)
+	data, err := profilePNG(fig.Starts, fig.Ends, fig.Values, fig.Title, "Viewpoint coverage", fig.Note)
+	saveExport(p.a, "Export the viewpoint", name+".png", func() ([]byte, error) { return data, err })
 }
 
 // exportViewpointParams writes the web's viewpoint-parameters.json.
@@ -992,7 +1177,7 @@ func (p *explorePage) exportViewpointParams() {
 	}
 	var requested int
 	fmt.Sscanf(s.resolution, "%d", &requested)
-	measure := map[string]string{measureRecords: "record-count", measureSupport: "cluster-support", measureReads: "read-count"}[d.measure]
+	measure := map[string]string{"records": "record-count", "support": "cluster-support", "reads": "read-count"}[measurePayload(d.measure)]
 	partner := ""
 	if s.partner != allPartners {
 		partner = s.partner
@@ -1220,11 +1405,9 @@ func stCTText(gene string, records []structureRecord) string {
 			if pos == r.Cutpoint+1 && r.Cutpoint > 0 {
 				prev = 0
 			}
-			natural := pos
-			if r.Cutpoint > 0 {
-				natural = r.rnaPosition(pos) // as the runtime's structure.ct
-			}
-			fmt.Fprintf(&b, "%d\t%c\t%d\t%d\t%d\t%d\n", pos, r.Sequence[pos-1], prev, next, partner[pos], natural)
+			// a CPLcofold record too, as the web (A+B, the & left out); the
+			// RNA positions are in the pairs TSV
+			fmt.Fprintf(&b, "%d\t%c\t%d\t%d\t%d\t%d\n", pos, r.Sequence[pos-1], prev, next, partner[pos], pos)
 		}
 	}
 	return b.String()
@@ -1240,13 +1423,16 @@ func stEnergyText(v *float64, none string) string {
 
 // stHardPairs are a result's ViennaRNA hard pairs (meta parameters).
 func stHardPairs(a *structureResult) map[[2]int]bool {
+	if iris := stIrisHardPairs(a); iris != nil {
+		return iris // the constraints of the IRIS member shown
+	}
 	out := map[[2]int]bool{}
 	list, _ := a.Meta.Parameters["hard_pairs"].([]any)
 	for _, item := range list {
 		if pr, ok := item.([]any); ok && len(pr) == 2 {
 			i, _ := pr[0].(float64)
 			j, _ := pr[1].(float64)
-			out[[2]int{int(i), int(j)}] = true
+			out[stPairKey(int(i), int(j))] = true // as the pairs, lower position first
 		}
 	}
 	return out
@@ -1277,8 +1463,52 @@ var stPairsHeader = []string{"left_position", "left_base", "right_position", "ri
 	"rna_cofold_evidence", "mfe_kcal_per_mol", "evidence_kind", "evidence_support", "pair_layer",
 	"selected_energy_kcal_per_mol", "engine"}
 
+// stPairsTwoStrandHeader are the columns a two-strand (CPLcofold) result
+// adds: the web's cutpoint and each end's strand and position on it, then
+// (desktop only) each end's RNA and position on that RNA.
+var stPairsTwoStrandHeader = []string{"cutpoint", "left_strand", "left_strand_position", "right_strand", "right_strand_position",
+	"left_rna", "left_rna_position", "right_rna", "right_rna_position"}
+
+// stPairsTable is the header and rows of the pairs TSV.
+func stPairsTable(records []structureRecord, engine string, hard map[[2]int]bool, hybEvidence bool) [][]string {
+	header := stPairsHeader
+	for _, r := range records {
+		if r.Cutpoint > 0 {
+			header = append(append([]string{}, stPairsHeader...), stPairsTwoStrandHeader...)
+			break
+		}
+	}
+	return append([][]string{header}, stPairsRows(records, engine, hard, hybEvidence)...)
+}
+
+// stStrandCells are a two-strand pair's stPairsTwoStrandHeader cells, i and
+// j its A+B positions.
+func stStrandCells(r structureRecord, i, j int) []string {
+	cut := r.Cutpoint
+	strand := func(k int) (string, int) {
+		if k <= cut {
+			return "A", k
+		}
+		return "B", k - cut
+	}
+	rna := func(k int) string {
+		if len(r.Segments) == 2 {
+			if k <= cut {
+				return r.Segments[0].GeneID
+			}
+			return r.Segments[1].GeneID
+		}
+		return ""
+	}
+	si, pi := strand(i)
+	sj, pj := strand(j)
+	return []string{strconv.Itoa(cut), si, strconv.Itoa(pi), sj, strconv.Itoa(pj),
+		rna(i), strconv.Itoa(r.rnaPosition(i)), rna(j), strconv.Itoa(r.rnaPosition(j))}
+}
+
 // stPairsRows are the web's rna-secondary-structure-pairs.tsv rows, in
-// gene positions, sorted by the left position. evidence_kind is the
+// gene positions (a two-strand record: the web's A+B positions, with
+// stStrandCells), sorted by the left position. evidence_kind is the
 // result's: log1p_hyb_bonus for CPLfold with HYB evidence,
 // rna_cofold_observations for COMRADES(ViennaRNA), none otherwise (support
 // 0); the ViennaRNA columns rna_cofold_evidence and mfe_kcal_per_mol are
@@ -1322,8 +1552,21 @@ func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool,
 			if hard[[2]int{pr.I, pr.J}] {
 				fixed = "yes"
 			}
-			rows = append(rows, row{pr.I, []string{strconv.Itoa(pr.I), left, strconv.Itoa(pr.J), right, left + "–" + right, fixed,
-				cofold, mfe, kind, support, layer, energy, engine}})
+			i, j := pr.I, pr.J
+			if r.Cutpoint > 0 {
+				// the web's prepared (A+B) positions, strand A's end first
+				// when region 2 lies before region 1 on the RNA
+				var swapped bool
+				if i, j, swapped = r.localPair(pr); swapped {
+					left, right = right, left
+				}
+			}
+			cells := []string{strconv.Itoa(i), left, strconv.Itoa(j), right, left + "–" + right, fixed,
+				cofold, mfe, kind, support, layer, energy, engine}
+			if r.Cutpoint > 0 {
+				cells = append(cells, stStrandCells(r, i, j)...)
+			}
+			rows = append(rows, row{i, cells})
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].left < rows[j].left })
@@ -1334,13 +1577,32 @@ func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool,
 	return out
 }
 
-func (p *structurePage) exportName(a *structureResult, ext string) string {
-	return exportName(ext, nameOr(a.Meta.GeneID, a.Structure.GeneID), p.viewA)
+// stExportFiles are the Structure downloads' file names, the web's fixed
+// names (structure-ui.js); .bpseq, the VARNA script and the candidates
+// JSON, which the web's result has not, are named alike.
+var stExportFiles = map[string]string{
+	"dbn": "rna-secondary-structure.dbn", "ct": "rna-secondary-structure.ct", "bpseq": "rna-secondary-structure.bpseq",
+	"varna": "rna-secondary-structure-varna.sh", "pairs": "rna-secondary-structure-pairs.tsv",
+	"report": "rna-secondary-structure-report.json", "evidence": "rna-cofold-evidence.tsv",
+	"constraints": "hyb-guided-folding-constraints.tsv", "ensemble": "hyb-guided-structure-ensemble.tsv",
+	"bonus": "cplfold-bonus-matrix.tsv", "candidates": "cplfold-candidates.tsv", "candidates_json": "cplfold-candidates.json",
+	"iris": "iris-ensemble.tsv",
+}
+
+// stViewFile is the web's file name of a view's SVG or PNG (ext ".svg" or
+// ".png"): rna-secondary-structure-arcs.svg, -folded, -radial, -circular,
+// -matrix.
+func stViewFile(view, ext string) string {
+	stem := strings.ToLower(view)
+	if stem == "arc" {
+		stem = "arcs"
+	}
+	return "rna-secondary-structure-" + stem + ext
 }
 
 func (p *structurePage) exportCT(a *structureResult) {
 	gene, records := nameOr(a.Meta.GeneID, a.Structure.GeneID), stPickRecords(a.Records, p.record)
-	saveExport(p.a, "Save the CT file", p.exportName(a, ".ct"), func() ([]byte, error) {
+	saveExport(p.a, "Save the CT file", stExportFiles["ct"], func() ([]byte, error) {
 		return []byte(stCTText(gene, records)), nil
 	})
 }
@@ -1404,14 +1666,14 @@ func stVARNAText(gene string, records []structureRecord) string {
 
 func (p *structurePage) exportBPSEQ(a *structureResult) {
 	gene, records := nameOr(a.Meta.GeneID, a.Structure.GeneID), stPickRecords(a.Records, p.record)
-	saveExport(p.a, "Save the BPSEQ file", p.exportName(a, ".bpseq"), func() ([]byte, error) {
+	saveExport(p.a, "Save the BPSEQ file", stExportFiles["bpseq"], func() ([]byte, error) {
 		return []byte(stBPSEQText(gene, records)), nil
 	})
 }
 
 func (p *structurePage) exportVARNA(a *structureResult) {
 	gene, records := nameOr(a.Meta.GeneID, a.Structure.GeneID), stPickRecords(a.Records, p.record)
-	saveExport(p.a, "Save the VARNA command", p.exportName(a, "_varna.sh"), func() ([]byte, error) {
+	saveExport(p.a, "Save the VARNA command", stExportFiles["varna"], func() ([]byte, error) {
 		return []byte(stVARNAText(gene, records)), nil
 	})
 }
@@ -1419,8 +1681,8 @@ func (p *structurePage) exportVARNA(a *structureResult) {
 func (p *structurePage) exportPairsTSV(a *structureResult) {
 	records, engine, hard := stPickRecords(a.Records, p.record), nameOr(a.Meta.Engine, "CPLfold"), stHardPairs(a)
 	evidence := stHybEvidence(a)
-	saveExport(p.a, "Save the base pairs", p.exportName(a, "_pairs.tsv"), func() ([]byte, error) {
-		return webTSV(append([][]string{stPairsHeader}, stPairsRows(records, engine, hard, evidence)...)), nil
+	saveExport(p.a, "Save the base pairs", stExportFiles["pairs"], func() ([]byte, error) {
+		return webTSV(stPairsTable(records, engine, hard, evidence)), nil
 	})
 }
 
@@ -1451,7 +1713,12 @@ func (p *structurePage) exportReport(a *structureResult) {
 		"mode": nameOr(a.Meta.Mode, a.Structure.Mode), "parameters": a.Meta.Parameters, "evidence_samples": a.Structure.Samples,
 		"created_at": a.Structure.CreatedAt, "total_seconds": a.Meta.Timings.TotalS, "summary": a.Structure.Summary, "windows": windows,
 	}
-	saveExport(p.a, "Save the structure report", p.exportName(a, "_report.json"), func() ([]byte, error) {
+	if iris := p.irisReport(a); iris != nil {
+		payload["iris"] = iris
+	}
+	p.stReportWeb(a, payload) // the web's sections (structure_report.go)
+	saveExport(p.a, "Save the structure report", stExportFiles["report"], func() ([]byte, error) {
+		payload["sourceHyb"], payload["sourceFasta"] = stReportInputs(a)
 		out, err := json.MarshalIndent(payload, "", "  ")
 		return append(out, '\n'), err
 	})

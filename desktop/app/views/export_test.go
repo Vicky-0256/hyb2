@@ -61,6 +61,54 @@ func readExport(t *testing.T, asked *[]string) string {
 	return string(raw)
 }
 
+// saveExport replaces a chosen file through a temporary file and a rename:
+// the old file stays whole when the new one cannot be written, and no
+// temporary file is left behind.
+func TestSaveExportReplacesAtomically(t *testing.T) {
+	a := New(newFake(t), nil, "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "table.tsv")
+	if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pickSaveInto(t, dir)
+	listing := func() []string {
+		entries, _ := os.ReadDir(dir)
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+	saveExport(a, "Export", "table.tsv", func() ([]byte, error) { return []byte("new\n"), nil })
+	waitFlush(a)
+	if raw, _ := os.ReadFile(path); string(raw) != "new\n" {
+		t.Fatalf("not replaced: %q", raw)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o644 {
+		t.Fatalf("mode %v", info.Mode())
+	}
+	if names := listing(); len(names) != 1 {
+		t.Fatalf("left behind %v", names)
+	}
+	// a write that fails (here the directory is read-only) keeps the old file
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	saveExport(a, "Export", "table.tsv", func() ([]byte, error) { return []byte("lost\n"), nil })
+	waitFlush(a)
+	if raw, _ := os.ReadFile(path); string(raw) != "new\n" {
+		t.Fatalf("old file damaged: %q", raw)
+	}
+	if names := listing(); len(names) != 1 {
+		t.Fatalf("left behind %v", names)
+	}
+	if err := writeFileAtomic(path, []byte("lost\n")); err == nil {
+		t.Fatal("wrote into a read-only directory")
+	}
+}
+
 func TestTSVQuotesTabsNewlinesAndQuotes(t *testing.T) {
 	table := tsvTable{
 		Comments: []string{"first line\nsecond line", "plain"},
@@ -202,11 +250,12 @@ func TestCompareInteractionsTSVMatchesWeb(t *testing.T) {
 		{Direction: "down", X: 0, Y: 2220, LFC: f(-3.83531835132079), Padj: f(0.00002120333486596111), BaseMean: f(29.56968483743743)},
 		{Direction: "up", X: 10, Y: 2220, LFC: f(4.905582335739226), Padj: f(2.5203360745034645e-12), BaseMean: nil},
 	}
+	// in the result's (merge) order, as the web and differential.py write it
 	want := "direction\tx\ty\tlog2FoldChange\tpadj\tbaseMean\n" +
-		"up\t60\t310\t4.433926817464807\t2.6603136482030757e-23\t430.3326360217795\n" +
-		"up\t10\t2220\t4.905582335739226\t2.5203360745034645e-12\tNA\n" +
 		"down\t0\t10\t-8.776445444752918\t0.0000011796673442258842\t28.05259848605843\n" +
-		"down\t0\t2220\t-3.83531835132079\t0.00002120333486596111\t29.56968483743743\n"
+		"up\t60\t310\t4.433926817464807\t2.6603136482030757e-23\t430.3326360217795\n" +
+		"down\t0\t2220\t-3.83531835132079\t0.00002120333486596111\t29.56968483743743\n" +
+		"up\t10\t2220\t4.905582335739226\t2.5203360745034645e-12\tNA\n"
 	if got := string(cmpInteractionsTSV(rows)); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}

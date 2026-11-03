@@ -16,6 +16,7 @@ import math
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 import subprocess
 import os
@@ -289,6 +290,12 @@ def _sample_ops_inner(operation: str, request: dict[str, Any], repo_root: Path |
     if operation == "remove_reference":
         path = _valid_project(request)
         return {"ok": True, "path": str(path), "reference": _samples.remove_reference(path, str(request.get("reference_id")))}
+    if operation == "set_reference_match":
+        # The web's "Apply mapping" / "Mark as not matched" (name_matching.py).
+        from .name_matching import set_reference_match
+        path = _valid_project(request)
+        reference = set_reference_match(path, str(request.get("reference_id") or ""), request.get("rna"), request.get("sequence"))
+        return {"ok": True, "path": str(path), "reference": reference}
     if operation == "add_sample":
         path = _valid_project(request)
         source, reference = _optional_str(request, "source"), _optional_str(request, "reference")
@@ -690,7 +697,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
 # --- analysis queries (R3): aggregated results from per-sample SQLite indexes ---
 
 _ANALYSIS_OPS = {"analysis_summary", "analysis_overview", "analysis_contact_bins", "analysis_hybrids", "analysis_top",
-                 "analysis_viewpoint", "analysis_region", "compare_bins", "analysis_compare_bins"}
+                 "analysis_viewpoint", "analysis_region", "compare_bins", "analysis_compare_bins",
+                 "analysis_iris_region", "analysis_reference_matching"}
 
 
 def _analysis_module(repo_root: Path | None) -> Any:
@@ -747,7 +755,9 @@ def _sample_index_paths(project: Path, manifest: dict[str, Any], sample_ids: Any
 
 
 def _reference_lengths(manifest: dict[str, Any], sample_ids: list[str]) -> dict[str, int]:
-    """Gene name -> length from the references of the given samples (project references[].sequences)."""
+    """Gene name -> length from the references of the given samples (project
+    references[].sequences, with their manual name matches: name_matching.py)."""
+    from .name_matching import reference_lengths
     references = {r.get("id"): r for r in manifest.get("references") or [] if isinstance(r, dict)}
     lengths: dict[str, int] = {}
     wanted = set(sample_ids)
@@ -755,10 +765,8 @@ def _reference_lengths(manifest: dict[str, Any], sample_ids: list[str]) -> dict[
         if not isinstance(sample, dict) or sample.get("id") not in wanted:
             continue
         reference = references.get(sample.get("reference_id"))
-        for sequence in (reference or {}).get("sequences") or []:
-            if isinstance(sequence, dict) and isinstance(sequence.get("name"), str) \
-                    and type(sequence.get("length")) is int and sequence["length"] >= 0:
-                lengths.setdefault(sequence["name"], sequence["length"])
+        for name, length in reference_lengths(reference or {}).items():
+            lengths.setdefault(name, length)
     return lengths
 
 
@@ -855,6 +863,12 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
             position = error.get("index")
             if isinstance(position, int) and 0 <= position < len(sample_ids):
                 error["sample_id"] = sample_ids[position]
+    elif operation == "analysis_reference_matching":
+        # The web's Name matching: HYB RNA names vs reference sequence names.
+        from .name_matching import reference_matching
+        project, manifest = _analysis_project(request)
+        by_sample = dict(zip(sample_ids, paths))
+        result = reference_matching(project, manifest, sample_ids, lambda sample_id: query.rna_names([by_sample[sample_id]]))
     elif operation == "analysis_contact_bins":
         result = query.contact_bins(paths, required_gene(), opt_int("bin_size", 10), request.get("region"), gene2=opt_str("gene2"),
                                     types=opt_types(), measure=opt_str("measure") or "records",
@@ -867,12 +881,17 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
     elif operation == "analysis_viewpoint":
         result = query.viewpoint(paths, required_gene(), opt_int("start", None), opt_int("end", None), partner=opt_str("partner"),
                                  types=opt_types(), measure=opt_str("measure") or "records", bin_size=opt_int("bin_size", 1),
-                                 lengths=lengths, homodimer=opt_str("homodimer"))
+                                 lengths=lengths, homodimer=opt_str("homodimer"), full_reference=opt_bool("full_reference"))
     elif operation == "analysis_region":
         result = query.region(paths, required_gene(), opt_int("start", None), opt_int("end", None), partner=opt_str("partner"),
                               partner_start=opt_int("partner_start", None), partner_end=opt_int("partner_end", None),
                               overlap=opt_str("overlap") or "any", types=opt_types(), limit=opt_int("limit", 100),
                               measure=opt_str("measure") or "support")
+    elif operation == "analysis_iris_region":
+        # IRIS's check of a region before a run (iris.py diagnose_indexes)
+        from .iris import diagnose_indexes
+        gene = required_gene()
+        result = diagnose_indexes(paths, gene, opt_int("start", None), opt_int("end", None), lengths.get(gene))
     else:
         filters = {} if request.get("filters") is None else request["filters"]
         if not isinstance(filters, dict):
@@ -880,7 +899,7 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
         result = query.hybrids(paths, filters, opt_int("limit", 100), opt_int("offset", 0),
                                order=opt_str("order") or "file", with_sequence=request.get("with_sequence", True) is not False,
                                with_raw=opt_bool("with_raw"), partners=opt_bool("partners"),
-                               count_mode=opt_str("count_mode") or "support")
+                               count_mode=opt_str("count_mode") or "support", with_line=opt_bool("with_line"))
     return {"ok": True, "operation": operation, "sample_ids": sample_ids, "indexes": [str(p) for p in paths], "result": result}
 
 
@@ -965,14 +984,39 @@ def main() -> int:
         result = handle(json.loads(raw), repo_root=args.repo_root)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         result = {"ok": False, "error": str(error)}
+    except Exception as error:  # noqa: BLE001 - the task's result must say why it failed
+        traceback.print_exc(file=sys.stderr)
+        result = {"ok": False, "error": "%s: %s" % (error.__class__.__name__, error)}
+    result, text = _encode_result(result)
     result_file = args.result_file or (args.request.parent / "result.json" if args.request and args.request.name == "task-request.json" else None)
     if result_file is not None:
         try:
-            _atomic_write_json(result_file, _json_safe(result))
+            _atomic_write_json(result_file, result)
         except OSError as error:
             print("cannot write result file: %s" % error, file=sys.stderr)
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0 if result.get("ok") else 1
+    try:
+        print(text)
+    except (OSError, ValueError) as error:  # result.json, written first, is what the shell reads
+        print("cannot print the result: %s" % error, file=sys.stderr)
+    return 0 if result.get("ok") is True else 1
+
+
+def _encode_result(result: Any) -> tuple[dict[str, Any], str]:
+    """A task result as plain JSON values and its one-line text: numpy
+    scalars as numbers, NaN/Infinity as null, any other value as its str,
+    so encoding never turns a result into a crash."""
+    def fallback(value: Any) -> Any:
+        try:
+            return _json_default(value)
+        except TypeError:
+            return str(value)
+    if not isinstance(result, dict):
+        result = {"ok": False, "error": "the task returned %s, not a JSON object" % type(result).__name__}
+    try:
+        text = json.dumps(_json_safe(result), ensure_ascii=True, sort_keys=True, allow_nan=False, default=fallback)
+    except (TypeError, ValueError) as error:  # e.g. a circular value
+        text = json.dumps({"ok": False, "error": "the result could not be encoded: %s" % error}, ensure_ascii=True, sort_keys=True)
+    return json.loads(text), text
 
 
 if __name__ == "__main__":

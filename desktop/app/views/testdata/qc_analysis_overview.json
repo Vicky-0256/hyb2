@@ -14,6 +14,10 @@
   "inter_records": 4024,
   "invalid": 2,
   "skipped": 2,
+  "skipped_comment": 1,
+  "skipped_blank": 1,
+  "canonical_records": 44830,
+  "legacy_column16": 0,
   "unique_rnas": 2,
   "unique_pairs": 2,
   "rnas": [
@@ -131,6 +135,18 @@
     "sample_id": "AFR_REP1"
    }
   ],
-  "omitted_errors": 0
+  "omitted_errors": 0,
+  "indexes": [
+   {
+    "records": 20000,
+    "invalid": 1,
+    "homodimer_records": 300
+   },
+   {
+    "records": 24832,
+    "invalid": 1,
+    "homodimer_records": 313
+   }
+  ]
  }
 }

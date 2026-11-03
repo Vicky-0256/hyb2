@@ -60,7 +60,7 @@ func openPanels(t *testing.T) (*App, *pnFake) {
 
 func TestComparePanelsRegionsAndEnergy(t *testing.T) {
 	a, f := openPanels(t)
-	tt := ui.NewTester(a.View, 1100, 3200)
+	tt := ui.NewTester(a.View, 1100, 3600)
 	a.Navigate("compare", nil)
 	csSettle(a, tt)
 	p := a.PageFor("compare").(*comparePage)
@@ -185,7 +185,7 @@ func TestComparePanelsWithoutFolds(t *testing.T) {
 	a, f := openPanels(t)
 	f.ops["list_structures"] = core.Obj{"structures": []any{}}
 	f.ops["read_energy"] = core.Obj{"lengths": []any{}, "summary": nil, "rows": nil}
-	tt := ui.NewTester(a.View, 1100, 3200)
+	tt := ui.NewTester(a.View, 1100, 3600)
 	a.Navigate("compare", nil)
 	csSettle(a, tt)
 	for _, text := range []string{"Fold the whole RNA of each lineage on the Structure page (New fold → whole RNA) to draw the regions.",

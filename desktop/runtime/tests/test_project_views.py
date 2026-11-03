@@ -11,6 +11,7 @@ from desktop.runtime.bridge import MAX_BONUS_ENTRIES, _dumps_line, cap_bonus_ent
 from desktop.runtime.project import load_manifest, new_project, validate_manifest
 from desktop.runtime.samples import add_reference, add_sample, set_sample_stage, stage_summary
 from desktop.runtime.tests.test_structure import GENE, _hyb_rows, _sequence
+from desktop.runtime.tests.test_samples import hold_owner_lock
 
 ROOT = Path(__file__).resolve().parents[3]
 HYB = ROOT / "pipeline/tests/golden/testData.hyb"
@@ -26,6 +27,8 @@ def write_status(project: Path, task_id: str, status: str, kind: str = "structur
     run_dir = project / "runs" / task_id
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "status.json").write_text(json.dumps({"task_id": task_id, "kind": kind, "status": status}))
+    if status in ("queued", "running"):
+        hold_owner_lock(run_dir)  # a live task's owner holds its lock
     return run_dir
 
 

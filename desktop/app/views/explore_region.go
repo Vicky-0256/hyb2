@@ -12,9 +12,21 @@ import (
 )
 
 // Region: hybrids with an arm on gene:[start, end] (either arm order),
-// optionally with the other arm on a partner range (analysis_region).
+// optionally with the other arm on a partner range (analysis_region), the
+// region's reference sequence, and its matching records (analysis_hybrids
+// with the region's anchor filter, so the same set the region counts).
 
 const regionRows = 200
+
+// regionRecordRows are the web's matching records: 20 shown, 100 at most.
+const (
+	regionRecordsShort = 20
+	regionRecordsLong  = 100
+)
+
+// regionSequencePreview is the web's SEQUENCE_PREVIEW: the first 300 nt
+// are shown (Copy takes them all).
+const regionSequencePreview = 300
 
 var overlapRules = []string{"Any overlap", "Fully contained"}
 
@@ -35,8 +47,23 @@ type regionState struct {
 	load    loader
 	data    *regionData
 	profile *widgets.Profile
-	list    ui.ListState
 	hover   int
+
+	// the matching records (the first regionRecordsLong) and their total
+	recLoad  loader
+	records  []hybridRow
+	recTotal int
+	showAll  bool
+	recList  ui.ListState
+
+	// seq is the region's reference sequence (seqErr when unavailable),
+	// read for seqKey; seqWant is the key the region wants now, so the
+	// panel never shows an old region's (or reference's) bases.
+	seqLoad loader
+	seq     string
+	seqErr  string
+	seqKey  string
+	seqWant string
 }
 
 type regionData struct {
@@ -48,6 +75,7 @@ type regionData struct {
 	hasDistinct, exact bool
 	partners           []partnerTotal
 	bin                int
+	adjusted           bool
 	rows               []regionRow
 }
 
@@ -100,6 +128,17 @@ func (s *regionState) applyRange(start, end int) {
 	s.applied.start, s.applied.end = start, end
 	s.start, s.end = coordText(start), coordText(end)
 	s.inputErr = ""
+}
+
+// setPartner sets the partner ("" = any) and its range (0, 0 = none),
+// inputs and applied.
+func (s *regionState) setPartner(partner string, start, end int) {
+	s.partner = partner
+	if partner == "" {
+		s.partner = allPartners
+	}
+	s.partnerStart, s.partnerEnd = coordText(start), coordText(end)
+	s.applied.partner, s.applied.partnerStart, s.applied.pEnd = partner, start, end
 }
 
 func (s *regionState) fromInputs() (regionFilters, error) {
@@ -172,13 +211,107 @@ func (p *explorePage) loadRegion() {
 		_ = model.Decode(got["partners"], &d.partners)
 		_ = model.Decode(got["rows"], &d.rows)
 		profile, _ := got["profile"].(map[string]any)
-		d.bin = int(num(profile["bin_size"]))
+		d.bin, d.adjusted = int(num(profile["bin_size"])), profile["adjusted"] == true
 		starts, ends, values := ints(profile["start"]), ints(profile["end"]), floats(profile["value"])
 		return func() {
 			s.data = d
 			s.profile.Set(starts, ends, values)
 		}, nil
 	})
+}
+
+// loadRegionRecords lists the region's records (the first 100, in file
+// order as the web's) with the anchor filter of the set the region counts.
+func (p *explorePage) loadRegionRecords(d *regionData) {
+	s := &p.rg
+	path, ids, filters := p.a.Project.Path, p.ids, regionAnchor(d)
+	key := fmt.Sprintf("%s\x00%s\x00%+v", p.sel, d.gene, d.f)
+	p.ensure(&s.recLoad, key, func() (func(), error) {
+		rows, total, err := p.fetchRecords(path, ids, filters)
+		if err != nil {
+			return nil, err
+		}
+		return func() {
+			// a new region starts with the short list again
+			s.records, s.recTotal, s.showAll = rows, total, false
+			s.recList.ScrollTo(0, ui.Start)
+		}, nil
+	})
+}
+
+func (p *explorePage) fetchRecords(path string, ids []string, filters core.Obj) ([]hybridRow, int, error) {
+	got, err := p.query(path, "analysis_hybrids", ids, core.Obj{
+		"filters": filters, "limit": regionRecordsLong, "offset": 0, "order": "file", "with_sequence": true}) // the .hyb names
+	if err != nil {
+		return nil, 0, err
+	}
+	var rows []hybridRow
+	if err := model.Decode(got["rows"], &rows); err != nil {
+		return nil, 0, err
+	}
+	return rows, int(num(got["total"])), nil
+}
+
+// regionSequenceRange is the region clamped to its gene's reference.
+func (p *explorePage) regionSequenceRange(d *regionData) (int, int) {
+	start, end := max(1, d.f.start), d.f.end
+	if length := p.geneLength(d.gene); length > 0 {
+		end = min(end, length)
+	}
+	return start, end
+}
+
+// regionRefStamp is the version of reference ref: its file (replaced or
+// relinked through update_reference) and the name matching's invalidation
+// count (set_reference_match), so a change reads the sequence again.
+func regionRefStamp(a *App, ref string) string {
+	r := a.Project.Reference(ref)
+	if r == nil {
+		return ""
+	}
+	match := 0
+	if q := qcFor(a); q != nil {
+		match = q.match.seq
+	}
+	return fmt.Sprintf("%s\x00%d\x00%s\x00%s\x00%d", r.Path, r.SizeBytes, r.QuickHash, r.SHA256, match)
+}
+
+// loadRegionSequence reads the region's reference sequence.
+func (p *explorePage) loadRegionSequence(d *regionData) {
+	s := &p.rg
+	a := p.a
+	ref := stReferenceOf(a.Project, d.gene)
+	start, end := p.regionSequenceRange(d)
+	key := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d-%d", a.Project.Path, ref, regionRefStamp(a, ref), d.gene, start, end)
+	if key != s.seqWant {
+		// a new region or reference: drop the old bases until it loads
+		s.seqWant, s.seq, s.seqErr, s.seqKey = key, "", "", ""
+	}
+	path, gene := a.Project.Path, d.gene
+	p.ensure(&s.seqLoad, key, func() (func(), error) {
+		seq, problem := "", ""
+		if ref == "" {
+			problem = "no reference"
+		} else if raw, err := a.B.ProjectOp(path, "read_reference_sequence", core.Obj{"reference_id": ref, "name": gene}); err != nil {
+			problem = err.Error()
+		} else {
+			whole, _ := raw["sequence"].(string)
+			whole = strings.ToUpper(strings.Join(strings.Fields(whole), ""))
+			if start <= end && end <= len(whole) {
+				seq = whole[start-1 : end]
+			} else {
+				problem = fmt.Sprintf("the reference sequence of %s (%d nt) does not cover the region", gene, len(whole))
+			}
+		}
+		return func() { s.seq, s.seqErr, s.seqKey = seq, problem, key }, nil
+	})
+}
+
+// retryRegionSequence reads the sequence again after a failed read.
+func (p *explorePage) retryRegionSequence() {
+	s := &p.rg
+	s.seqLoad.reset()
+	s.seqWant, s.seq, s.seqErr, s.seqKey = "", "", "", ""
 }
 
 func (p *explorePage) regionView(c *ui.Context) {
@@ -196,17 +329,21 @@ func (p *explorePage) regionView(c *ui.Context) {
 	ui.Scroll(c).Grow(1).Children(func() {
 		ui.Column(c).Gap(14).Children(func() {
 			ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
-				coordInput(c, "rg-start", "Start", &s.start, "start").OnSubmit(submit)
-				coordInput(c, "rg-end", "End", &s.end, "end").OnSubmit(submit)
+				coordInput(c, "rg-start", "Start", &s.start, "Start").OnSubmit(submit)
+				coordInput(c, "rg-end", "End", &s.end, "End").OnSubmit(submit)
+				picker(c, "rg-overlap", "Overlap rule", &s.overlap, overlapRules, 150)
 				picker(c, "rg-partner", "Partner", &s.partner, withAll(allPartners, p.genes()), 190)
-				coordInput(c, "rg-pstart", "Partner start", &s.partnerStart, "optional").OnSubmit(submit)
-				coordInput(c, "rg-pend", "Partner end", &s.partnerEnd, "optional").OnSubmit(submit)
-				picker(c, "rg-overlap", "Overlap", &s.overlap, overlapRules, 150)
-				picker(c, "rg-type", "Chimera type", &s.typ, withAll(allTypes, p.summary.types), 130)
+				coordInput(c, "rg-pstart", "Partner start", &s.partnerStart, "Optional").OnSubmit(submit)
+				coordInput(c, "rg-pend", "Partner end", &s.partnerEnd, "Optional").OnSubmit(submit)
+				p.patternPicker(c, "rg-type", &s.typ, 230, nil)
 				if ui.PrimaryButton(c, "Explore").Clicked() {
 					submit()
 				}
+				if d := s.data; d != nil && ui.Button(c, "Fold this region").Clicked() {
+					p.foldRegion(d)
+				}
 			})
+			ui.Text(c, "Coordinates remain inclusive, matching the HYB record display.").FontSize(12).TextColor(t.TextMuted)
 			if s.inputErr != "" {
 				errorLine(c, s.inputErr)
 			}
@@ -215,31 +352,41 @@ func (p *explorePage) regionView(c *ui.Context) {
 			if d == nil {
 				return
 			}
+			p.loadRegionRecords(d)
+			p.loadRegionSequence(d)
 			Card(c, "", func() {
 				ui.Row(c).Gap(24).Wrap().AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
-						ui.Text(c, "Region "+span(d.f.start, d.f.end)+" nt").FontSize(16).Bold()
-						ui.Text(c, d.gene+" · "+regionSubtitle(d.f)).FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, d.gene+":"+span(d.f.start, d.f.end)).FontSize(16).Bold()
+						note := fmt.Sprintf("%s matching records · profile bins %s nt", FormatNumber(d.records), FormatNumber(int64(d.bin)))
+						if d.f.partner != "" && d.f.partnerStart > 0 {
+							note += " · " + d.f.partner + ":" + span(d.f.partnerStart, d.f.pEnd)
+						}
+						ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, regionSubtitle(d.f)).FontSize(12).TextColor(t.TextMuted)
 					})
-					stat(c, "Hybrids", FormatNumber(d.records))
 					stat(c, "Cluster support", FormatNumber(d.support))
-					stat(c, "Reads", FormatNumber(d.reads))
-					stat(c, "Partners", FormatNumber(int64(len(d.partners))))
+					stat(c, "Partner RNAs", FormatNumber(int64(len(d.partners))))
 				})
-				ev := s.profile.Show(c, 140, "Cluster support along "+d.gene, profileColor(t))
-				s.hover = ev.Hover
-				readout := fmt.Sprintf("Cluster support of the matching hybrids per %d nt bin of the anchor arm.", d.bin)
-				if i := s.hover; i >= 0 && i < s.profile.Len() {
-					start, end, v := s.profile.Bin(i)
-					readout = fmt.Sprintf("%s · %s support", span(start, end), trimFloat(v))
+				if d.adjusted {
+					notice(c, fmt.Sprintf("The profile resolution was increased to %s nt per bin to keep this plot responsive.", FormatNumber(int64(d.bin))))
 				}
-				ui.Text(c, readout).FontSize(12).TextColor(t.TextMuted)
+				ui.Row(c).Gap(16).Wrap().AlignItems(ui.Start).Children(func() {
+					ui.Column(c).Grow(2).Basis(420).Gap(6).Children(func() {
+						ev := s.profile.Show(c, 160, "Cluster support along "+d.gene, profileColor(t))
+						s.hover = ev.Hover
+						readout := fmt.Sprintf("Cluster support of the matching hybrids per %d nt bin of the anchor arm.", d.bin)
+						if i := s.hover; i >= 0 && i < s.profile.Len() {
+							start, end, v := s.profile.Bin(i)
+							readout = fmt.Sprintf("%s · %s support", span(start, end), webFormatValue(v))
+						}
+						ui.Text(c, readout).FontSize(12).TextColor(t.TextMuted)
+					})
+					partnerCard(c, "Top partners", d.partners, measureSupport, 8).Grow(1).Basis(300)
+				})
 				ui.Row(c).Gap(8).Children(func() {
-					if ui.PrimaryButton(c, "Show hybrids").Tooltip("Interactions with arm 1 in this region").Clicked() {
+					if ui.PrimaryButton(c, "Show hybrids").Tooltip("The region's records in Interactions").Clicked() {
 						p.showRegionHybrids(d)
-					}
-					if ui.Button(c, "Fold this region").Clicked() {
-						p.foldRegion(d)
 					}
 					ui.Row(c).Grow(1)
 					exportMenu(c,
@@ -252,12 +399,13 @@ func (p *explorePage) regionView(c *ui.Context) {
 						exportItem{"Parameters · JSON…", false, func() { p.exportRegionParams(d) }})
 				})
 			})
-			partnerCard(c, "Partners", d.partners, measureSupport)
-			p.regionTable(c, d)
+			p.regionReference(c, d)
+			p.regionRecords(c, d)
 		})
 	})
 }
 
+// regionSubtitle says which hybrids the region holds.
 func regionSubtitle(f regionFilters) string {
 	parts := []string{"either arm"}
 	if f.overlap == overlapRules[1] {
@@ -270,89 +418,167 @@ func regionSubtitle(f regionFilters) string {
 		}
 		parts = append(parts, partner)
 	}
-	if f.typ != "" && f.typ != allTypes {
-		parts = append(parts, f.typ)
+	if f.typ != "" && f.typ != allTypes && f.typ != allPattern {
+		parts = append(parts, patternName(f.typ))
 	}
 	return strings.Join(parts, " · ")
 }
 
-func (p *explorePage) regionTable(c *ui.Context, d *regionData) {
+// regionReference is the web's reference panel: the region's sequence in
+// groups, with Copy, Structure and FASTA actions.
+func (p *explorePage) regionReference(c *ui.Context, d *regionData) {
 	s := &p.rg
 	t := c.Theme()
-	title := fmt.Sprintf("Strongest interactions (%d)", len(d.rows))
-	if d.hasDistinct {
-		title = fmt.Sprintf("Strongest interactions (%d of %s distinct)", len(d.rows), FormatNumber(d.distinct))
-	}
-	Card(c, title, func() {
-		ui.Text(c, "Hybrids with the same genes, arm coordinates and type are merged; by reads.").FontSize(12).TextColor(t.TextMuted)
-		if !d.exact {
-			notice(c, "The order over several samples is approximate near the end of this list.")
+	Card(c, "", func() {
+		if s.seqKey == "" || s.seqKey != s.seqWant {
+			// still loading: no bases, so Copy and Send act on nothing old
+			loadingLine(c, &s.seqLoad, "the reference sequence")
+			return
 		}
-		rows := d.rows
-		// One RNA in every row: name it once and give its columns to the arms.
-		oneGene := len(rows) > 0
-		for _, r := range rows {
-			if r.Gene1 != rows[0].Gene1 || r.Gene2 != rows[0].Gene1 {
-				oneGene = false
-				break
+		if s.seq == "" && s.seqErr != "" && s.seqErr != "no reference" {
+			ui.Text(c, "Reference sequence unavailable").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, "Could not read the reference sequence: "+ShortError(s.seqErr)).TextColor(t.Danger)
+			if ui.Button(c, "Retry").Tooltip("Read the reference sequence again").Clicked() {
+				p.retryRegionSequence()
 			}
+			return
 		}
-		all := []ui.TableColumn{
-			{Title: "Gene 1", MinWidth: 80}, {Title: "Arm 1 (nt)", Width: 140, Align: ui.End},
-			{Title: "Gene 2", MinWidth: 80}, {Title: "Arm 2 (nt)", Width: 140, Align: ui.End},
-			{Title: "Type", Width: 90}, {Title: "Hybrids", Width: 80, Align: ui.End}, {Title: "Reads", Width: 80, Align: ui.End},
+		if s.seq == "" {
+			ui.Text(c, "Reference sequence unavailable").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, "Add a reference FASTA to extract this region.").FontSize(16).Bold()
+			ui.Text(c, "Observed HYB coordinates remain available without a FASTA, but they do not provide the full reference sequence.").
+				FontSize(12).TextColor(t.TextMuted)
+			return
 		}
-		var cols []ui.TableColumn
-		var index []int
-		for i, col := range all {
-			if oneGene && (i == 0 || i == 2) {
-				continue
+		start, end := p.regionSequenceRange(d)
+		ui.Text(c, "Reference sequence").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, d.gene+":"+span(start, end)).FontSize(16).Bold()
+		lines, more := groupedSequence(s.seq, start)
+		ui.Column(c).Gap(2).Children(func() {
+			for _, line := range lines {
+				ui.Row(c).Gap(10).Children(func() {
+					ui.Text(c, line[0]).FontSize(12).Font("monospace").TextColor(t.TextMuted).Width(64).TextAlign(ui.End)
+					ui.Text(c, line[1]).FontSize(12).Font("monospace").Selectable()
+				})
 			}
-			if oneGene && (i == 1 || i == 3) {
-				col.Width, col.MinWidth = 0, 120
-			}
-			cols, index = append(cols, col), append(index, i)
+		})
+		if more != "" {
+			ui.Text(c, more).FontSize(12).TextColor(t.TextMuted)
 		}
-		if oneGene {
-			ui.Text(c, "Both arms of every interaction listed are on "+rows[0].Gene1+".").FontSize(12).TextColor(t.TextMuted)
-		}
-		ui.Table(c.Key("rg-table"), &s.list, cols, len(rows), func(row, col int) {
-			r := rows[row]
-			col = index[col]
-			text := ""
-			switch col {
-			case 0:
-				text = r.Gene1
-			case 1:
-				text = span(r.Start1, r.End1)
-			case 2:
-				text = r.Gene2
-			case 3:
-				text = span(r.Start2, r.End2)
-			case 4:
-				text = r.Type
-			case 5:
-				text = FormatNumber(r.Records)
-			case 6:
-				text = FormatNumber(r.Reads)
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, "Copy sequence").Clicked() {
+				c.WriteClipboard(s.seq)
+				p.a.Toast("Sequence copied")
 			}
-			ui.Text(c, text).SingleLine().Padding(3, 6)
-		}).Height(280).Label("Region interactions").Children(func() {
-			if len(rows) == 0 {
-				ui.Text(c, "No hybrids in this region.").TextColor(t.TextMuted).Padding(12)
+			if d.f.partner != "" && d.f.partnerStart > 0 {
+				if ui.Button(c, "Send both regions to CPLcofold").Tooltip("Fold the region and the partner range as two strands").Clicked() {
+					p.cofoldRegion(d)
+				}
+			} else if ui.Button(c, "Send to RNA Structure").Clicked() {
+				p.foldRegion(d)
+			}
+			if ui.Button(c, "Download FASTA").Clicked() {
+				p.exportRegionFASTA(d)
 			}
 		})
 	})
 }
 
-// showRegionHybrids lists the hybrids with arm 1 in the region (and arm 2
-// on the partner range) in Interactions.
-func (p *explorePage) showRegionHybrids(d *regionData) {
-	f := ixFilters{gene1: d.gene, gene2: d.f.partner, typ: d.f.typ, minReads: 1, x0: d.f.start, x1: d.f.end}
-	if d.f.partnerStart > 0 {
-		f.y0, f.y1 = d.f.partnerStart, d.f.pEnd
+// groupedSequence is the web's renderGroupedSequence: the first 300 nt in
+// lines of 50, groups of 10, each line led by its first coordinate
+// ({position, groups}); more is the note when the region is longer.
+func groupedSequence(seq string, start int) (lines [][2]string, more string) {
+	shown := seq[:min(len(seq), regionSequencePreview)]
+	for offset := 0; offset < len(shown); offset += 50 {
+		var groups []string
+		for group := offset; group < min(len(shown), offset+50); group += 10 {
+			groups = append(groups, shown[group:min(group+10, offset+50, len(shown))])
+		}
+		lines = append(lines, [2]string{FormatNumber(int64(start + offset)), strings.Join(groups, " ")})
 	}
-	p.ix.apply(f)
+	if len(seq) > len(shown) {
+		more = fmt.Sprintf("Showing the first %s of %s nt. Copy sequence and Download FASTA use the whole region.",
+			FormatNumber(int64(len(shown))), FormatNumber(int64(len(seq))))
+	}
+	return lines, more
+}
+
+// regionRecords is the web's Matching records: the region's records, 20
+// shown, 100 on request.
+func (p *explorePage) regionRecords(c *ui.Context, d *regionData) {
+	s := &p.rg
+	t := c.Theme()
+	Card(c, "Matching records", func() {
+		loadingLine(c, &s.recLoad, "the matching records")
+		limit := regionRecordsShort
+		if s.showAll {
+			limit = regionRecordsLong
+		}
+		rows := s.records[:min(len(s.records), limit)]
+		cols := []ui.TableColumn{
+			{Title: "Sequence ID", Width: 190}, {Title: "RNA 1", MinWidth: 80}, {Title: "Region 1 (nt)", Width: 130, Align: ui.End},
+			{Title: "RNA 2", MinWidth: 80}, {Title: "Region 2 (nt)", Width: 130, Align: ui.End},
+			{Title: "Chimera type", Width: 200}, {Title: "Support", Width: 80, Align: ui.End},
+		}
+		ui.Table(c.Key("rg-records"), &s.recList, cols, len(rows), func(row, col int) {
+			r := rows[row]
+			text, tip := "", ""
+			switch col {
+			case 0:
+				text = r.Name
+				if text == "" {
+					text = "#" + FormatNumber(r.ID)
+				}
+				tip = text
+			case 1:
+				text, tip = r.Gene1, r.Gene1
+			case 2:
+				text = span(r.Start1, r.End1)
+			case 3:
+				text, tip = r.Gene2, r.Gene2
+			case 4:
+				text = span(r.Start2, r.End2)
+			case 5:
+				text, tip = patternName(r.Type), patternCodeLabel(r.Type)
+			case 6:
+				text = FormatNumber(int64(r.Support))
+			}
+			el := ui.Text(c, text).SingleLine().Padding(3, 6)
+			if tip != "" {
+				el.Tooltip(tip)
+			}
+		}).Height(min(float32(len(rows)+1)*30+12, 420)).Label("Matching records").Children(func() {
+			if len(rows) == 0 && !s.recLoad.busy() {
+				ui.Text(c, "No matching records.").TextColor(t.TextMuted).Padding(12)
+			}
+		})
+		if s.recTotal > regionRecordsShort {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				label := fmt.Sprintf("Show %s records", FormatNumber(int64(min(s.recTotal, regionRecordsLong))))
+				if s.showAll {
+					label = "Show fewer records"
+				}
+				if ui.Button(c, label).Clicked() {
+					s.showAll = !s.showAll
+				}
+				note := fmt.Sprintf("Showing %s of %s. Export includes all local matches.",
+					FormatNumber(int64(min(limit, s.recTotal))), FormatNumber(int64(s.recTotal)))
+				if s.showAll && s.recTotal > regionRecordsLong {
+					note = fmt.Sprintf("Showing the first %s of %s matching records. Export includes all local matches.",
+						FormatNumber(regionRecordsLong), FormatNumber(int64(s.recTotal)))
+				}
+				ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+			})
+		}
+	})
+}
+
+// showRegionHybrids lists the region's own hybrids (either arm, by its
+// overlap rule, the other on the partner range) in Interactions.
+func (p *explorePage) showRegionHybrids(d *regionData) {
+	anchor := ixAnchor{gene: d.gene, start: d.f.start, end: d.f.end, partner: d.f.partner,
+		pStart: d.f.partnerStart, pEnd: d.f.pEnd, contained: d.f.overlap == overlapRules[1]}
+	p.ix.apply(ixFilters{typ: d.f.typ, minReads: 1, minSupport: 1, anchor: anchor})
 	p.tab = tabInteractions
 }
 
@@ -371,4 +597,20 @@ func (p *explorePage) foldRegion(d *regionData) {
 		windows = append(windows, clamp(d.f.partnerStart, d.f.pEnd))
 	}
 	p.foldPrefill(d.gene, windows, "region")
+}
+
+// cofoldRegion opens ⑤ Structure with the region and the partner range as
+// the two strands of a CPLcofold fold (the web's "Send both regions to
+// CPLcofold"), each clamped to its gene.
+func (p *explorePage) cofoldRegion(d *regionData) {
+	clamp := func(gene string, start, end int) core.Region {
+		if length := p.geneLength(gene); length > 0 {
+			end = min(end, length)
+		}
+		return core.Region{GeneID: gene, Start: uint64(max(1, start)), End: uint64(max(1, end))}
+	}
+	p.toStructure(map[string]any{
+		"regions": []core.Region{clamp(d.gene, d.f.start, d.f.end), clamp(d.f.partner, d.f.partnerStart, d.f.pEnd)},
+		"source":  "region",
+	})
 }

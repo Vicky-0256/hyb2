@@ -39,6 +39,10 @@ func writeFileAtomic(path string, data []byte) error {
 	return err
 }
 
+// WriteFileAtomic is writeFileAtomic for the shell's own settings files
+// (a crash mid-write leaves the old file, never a truncated one).
+func WriteFileAtomic(path string, data []byte) error { return writeFileAtomic(path, data) }
+
 // isRegularFile: path itself (not a symlink's target) is a regular file.
 func isRegularFile(path string) bool {
 	info, err := os.Lstat(path)

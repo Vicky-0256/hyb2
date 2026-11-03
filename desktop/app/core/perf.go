@@ -30,8 +30,10 @@ type PerfRecord struct {
 	Units    float64 `json:"units,omitempty"`
 	Parallel int     `json:"parallel,omitempty"`
 	// Work is what EstimateFold charges for these windows (foldWork): the
-	// fold's rate is Seconds / Work. Older records lack it.
-	Work float64 `json:"work,omitempty"`
+	// fold's rate is Seconds / Work. WorkModel is the foldWorkModel that
+	// charged it: a record of another model (or none) is not used.
+	Work      float64 `json:"work,omitempty"`
+	WorkModel int     `json:"work_model,omitempty"`
 }
 
 const (
@@ -51,10 +53,20 @@ const (
 
 // priorSecondsPerMB are seconds per MB of input at 10 CPUs (Apple M1 Pro,
 // ZIKV SPLASH reads; fastq.gz: 3 M reads, 160 MB in 76 s, and a full 2 GB
-// sample in ~15 min). A .hyb input is only indexed: 362 MB in 37 s.
+// sample in ~15 min). fasta.gz is the median of 7 collapsed ZIKV samples
+// (226-418 MB, 0.51-0.95 s/MB); fasta keeps the fasta.gz/fasta ratio of the
+// earlier rates. A .hyb input is only indexed: 362 MB in 37 s.
 var priorSecondsPerMB = map[string]float64{
-	"fastq.gz": 0.47, "fastq": 0.078, "fasta.gz": 0.4, "fasta": 0.07, "sam": 0.02, "hyb": indexSecondsPerMB,
+	"fastq.gz": 0.47, "fastq": 0.078, "fasta.gz": 0.65, "fasta": 0.11, "sam": 0.02, "hyb": indexSecondsPerMB,
 }
+
+// A built-in rate is one computer's; the range shown for it runs from
+// priorLow to priorHigh times the estimate (measured on the M1 Pro: 0.8 to
+// 1.5 times the median, and a slower or busier computer adds to the top).
+const (
+	priorLow  = 0.8
+	priorHigh = 2.0
+)
 
 // indexSecondsPerMB is the analysis index build per MB of .hyb (measured:
 // 362 MB in 37 s).
@@ -65,6 +77,22 @@ const indexSecondsPerMB = 0.1
 // ~15%, map ~82%, the rest ~3%).
 var sampleStageWeights = map[string][2]float64{
 	"check": {0, 0}, "reference": {0, 0}, "reads": {0, 0.15}, "map": {0.15, 0.82},
+}
+
+// fastaStageWeights are the same for collapsed FASTA reads, which have no
+// reads stage and many more hybrids to annotate (measured on two ZIKV
+// samples: map 77-79%, the rest 21-23%).
+var fastaStageWeights = map[string][2]float64{
+	"check": {0, 0}, "reference": {0, 0}, "map": {0, 0.78},
+}
+
+// stageWeights is the weight table for a format and the share of the time
+// after mapping.
+func stageWeights(format string) (map[string][2]float64, float64) {
+	if format == "fasta" || format == "fasta.gz" {
+		return fastaStageWeights, 0.22
+	}
+	return sampleStageWeights, 0.03
 }
 
 var perfMu sync.Mutex
@@ -144,6 +172,8 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 			Lengths    []int   `json:"lengths"`
 			Beam       int     `json:"beam"`
 			Workers    int     `json:"workers"`
+			Pseudoknot bool    `json:"pseudoknot"`
+			Guided     *bool   `json:"guided"`
 			// ViennaRNA and COMRADES folds are not CPLfold's speed.
 			Engine string `json:"engine"`
 			// The run compiled Numba kernels: its time is not the speed.
@@ -160,8 +190,9 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 	case "sample_pipeline":
 		record.Format, record.InputBytes, record.CPU = p.Format, p.InputBytes, p.CPU
 	case "structure":
-		record.Units, record.Parallel = FoldUnits(p.Lengths, p.Beam), foldParallel(len(p.Lengths), p.Workers)
-		record.Work = foldWork(p.Lengths, p.Beam, p.Workers)
+		job := FoldJob{Lengths: p.Lengths, Beam: p.Beam, Workers: p.Workers, Pseudoknot: p.Pseudoknot, Guided: p.Guided == nil || *p.Guided}
+		record.Units, record.Parallel = FoldUnits(job), foldParallel(len(p.Lengths), p.Workers)
+		record.Work, record.WorkModel = foldWork(job), foldWorkModel
 		if record.Units <= 0 {
 			return PerfRecord{}, false
 		}
@@ -174,25 +205,65 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 // ---- structure folds
 
 const (
-	// CPLfold time grows as length^1.7 and linearly with the beam (measured
-	// on an Apple M1 Pro, one core, beam 100: 1000 nt 1.5 s, 2000 nt 5 s,
-	// 5000 nt 21 s, 10,807 nt 81 s; pseudoknots barely change it).
-	foldExponent = 1.7
+	// CPLfold time grows as length^1.85 and as beam^0.3 (measured on an
+	// Apple M1 Pro, one core, kernels already compiled: beam 20, 2000 nt
+	// 3.0 s, 4000 nt 10 s, 10,807 nt 71 s; beam 100, 4000 nt 22 s, 10,807
+	// nt 112 s). A long fold grows faster than its beam search alone.
+	foldExponent     = 1.85
+	foldBeamExponent = 0.3
 	// priorFoldSeconds is the time of one unit (1000 nt, beam 100).
-	priorFoldSeconds = 1.45
+	priorFoldSeconds = 1.37
+	// foldPseudoknot is the pseudoknot search (phase 2) on top of phase 1:
+	// measured 1.1 to 1.45 times the pseudoknot-free fold, more for longer
+	// sequences (the whole 10,807-nt genome at beam 20: 94 s, not 71 s).
+	foldPseudoknot = 1.35
+	// bonusSeconds builds the HYB bonus matrix, per (1000 nt)^2 of the
+	// folded length: it is dense (measured 33-43 s for the whole 10,807-nt
+	// ZIKV genome with 735,000 chimeras).
+	bonusSeconds = 0.325
 	// foldOverhead covers starting the task and reading the .hyb evidence.
-	foldOverhead = 2.0
+	foldOverhead = 3.0
+	// foldWorkModel versions the work FoldUnits charges: a rate measured
+	// with another model does not calibrate this one.
+	foldWorkModel = 2
 )
 
-// FoldUnits is the work of folding windows of these lengths:
-// sum of (length/1000)^1.7 x beam/100.
-func FoldUnits(lengths []int, beam int) float64 {
+// FoldJob is a structure fold to estimate: the lengths of its windows (one
+// for the whole RNA, or two strands folded as one), the beam, how many
+// windows run at once, whether pseudoknots are searched and whether a HYB
+// bonus matrix is built (not a sequence-only fold).
+type FoldJob struct {
+	Lengths    []int
+	Beam       int
+	Workers    int
+	Pseudoknot bool
+	Guided     bool
+}
+
+// FoldUnits is the work of folding the windows, in units of
+// priorFoldSeconds: per window (length/1000)^1.85 x (beam/100)^0.3, times
+// foldPseudoknot when pseudoknots are searched, plus the bonus matrix when
+// guided.
+func FoldUnits(job FoldJob) float64 {
+	var units float64
+	for _, n := range job.Lengths {
+		units += foldUnit(n, job)
+	}
+	return units
+}
+
+func foldUnit(n int, job FoldJob) float64 {
+	beam := job.Beam
 	if beam <= 0 {
 		beam = 20 // the runtime's default (structure.DEFAULTS, as the web page)
 	}
-	var units float64
-	for _, n := range lengths {
-		units += math.Pow(float64(n)/1000, foldExponent) * float64(beam) / 100
+	kb := float64(n) / 1000
+	units := math.Pow(kb, foldExponent) * math.Pow(float64(beam)/100, foldBeamExponent)
+	if job.Pseudoknot {
+		units *= foldPseudoknot
+	}
+	if job.Guided {
+		units += bonusSeconds / priorFoldSeconds * kb * kb
 	}
 	return units
 }
@@ -207,19 +278,13 @@ type FoldEstimate struct {
 	Measured bool    `json:"measured"`
 }
 
-// EstimateFold is the expected time of folding windows of these lengths
-// (one for the whole RNA), at most workers at once, from this computer's
-// recent folds or the built-in rate.
-func EstimateFold(history []PerfRecord, lengths []int, beam, workers int) FoldEstimate {
+// EstimateFold is the expected time of a fold, from this computer's recent
+// folds (their seconds per unit of work) or the built-in rate.
+func EstimateFold(history []PerfRecord, job FoldJob) FoldEstimate {
 	var rates []float64
 	for i := len(history) - 1; i >= 0 && len(rates) < perfRecent; i-- {
-		r := history[i]
-		switch {
-		case r.Kind != "structure" || r.Seconds <= 0:
-		case r.Work > 0:
+		if r := history[i]; r.Kind == "structure" && r.Seconds > 0 && r.Work > 0 && r.WorkModel == foldWorkModel {
 			rates = append(rates, r.Seconds/r.Work)
-		case r.Units > 0: // older record: assumes the windows spread evenly
-			rates = append(rates, r.Seconds*float64(max(r.Parallel, 1))/r.Units)
 		}
 	}
 	rate, measured := priorFoldSeconds, false
@@ -227,37 +292,50 @@ func EstimateFold(history []PerfRecord, lengths []int, beam, workers int) FoldEs
 		sort.Float64s(rates)
 		rate, measured = rates[len(rates)/2], true
 	}
-	return FoldEstimate{Seconds: foldWork(lengths, beam, workers)*rate + foldOverhead, Measured: measured}
+	return FoldEstimate{Seconds: foldWork(job)*rate + foldOverhead, Measured: measured}
 }
 
-// foldWork is the work of folding windows of these lengths at most workers
-// at once: spread over the workers, but never less than the largest window.
-func foldWork(lengths []int, beam, workers int) float64 {
+// foldWork is the work of folding the windows at most Workers at once:
+// spread over the workers, but never less than the largest window.
+func foldWork(job FoldJob) float64 {
 	largest := 0
-	for _, n := range lengths {
+	for _, n := range job.Lengths {
 		largest = max(largest, n)
 	}
-	return math.Max(FoldUnits(lengths, beam)/float64(foldParallel(len(lengths), workers)), FoldUnits([]int{largest}, beam))
+	return math.Max(FoldUnits(job)/float64(foldParallel(len(job.Lengths), job.Workers)), foldUnit(largest, job))
+}
+
+// foldJob is the fold a progress names (work: {lengths, beam, workers,
+// pseudoknot, guided}); a runtime that does not say is taken as
+// pseudoknot-free and guided, its defaults.
+func foldJob(work map[string]any) FoldJob {
+	job := FoldJob{Guided: true}
+	raw, _ := work["lengths"].([]any)
+	for _, v := range raw {
+		if n, ok := v.(float64); ok && n > 0 {
+			job.Lengths = append(job.Lengths, int(n))
+		}
+	}
+	beam, _ := work["beam"].(float64)
+	workers, _ := work["workers"].(float64)
+	job.Beam, job.Workers = int(beam), int(workers)
+	job.Pseudoknot, _ = work["pseudoknot"].(bool)
+	if guided, ok := work["guided"].(bool); ok {
+		job.Guided = guided
+	}
+	return job
 }
 
 // foldRemaining is the time left of a running fold from its progress
 // ({stage, bytes_done, bytes_total, updated_at, work: {lengths, beam,
-// workers}}), or false.
+// workers, pseudoknot, guided}}), or false.
 func foldRemaining(history []PerfRecord, progress Obj, now time.Time) (float64, bool) {
 	work, _ := progress["work"].(map[string]any)
-	raw, _ := work["lengths"].([]any)
-	var lengths []int
-	for _, v := range raw {
-		if n, ok := v.(float64); ok && n > 0 {
-			lengths = append(lengths, int(n))
-		}
-	}
-	if len(lengths) == 0 {
+	job := foldJob(work)
+	if len(job.Lengths) == 0 {
 		return 0, false
 	}
-	beam, _ := work["beam"].(float64)
-	workers, _ := work["workers"].(float64)
-	total := EstimateFold(history, lengths, int(beam), int(workers)).Seconds
+	total := EstimateFold(history, job).Seconds
 	switch stage, _ := progress["stage"].(string); stage {
 	case "evidence":
 		return total, true
@@ -265,9 +343,9 @@ func foldRemaining(history []PerfRecord, progress Obj, now time.Time) (float64, 
 	default:
 		return 0, false
 	}
-	if len(lengths) > 1 {
+	if len(job.Lengths) > 1 {
 		done, _ := progress["bytes_done"].(float64)
-		return total * (1 - math.Min(done/float64(len(lengths)), 1)), true
+		return total * (1 - math.Min(done/float64(len(job.Lengths)), 1)), true
 	}
 	// One fold reports nothing until it ends: time since it started.
 	at, err := time.Parse(time.RFC3339, fmt.Sprint(progress["updated_at"]))
@@ -321,6 +399,13 @@ type PipelineEstimate struct {
 	Measured int    `json:"measured"`
 	Samples  int    `json:"samples"`
 	CPU      uint32 `json:"cpu"`
+	// Low and High bound Seconds: equal to it when every sample is
+	// measured, wider for the samples on a built-in rate.
+	Low  float64 `json:"low"`
+	High float64 `json:"high"`
+	// Longest is the longest single sample. Samples map one at a time, so
+	// a later one waits in the queue for the ones before it.
+	Longest float64 `json:"longest"`
 }
 
 // EstimatePipelines adds up the samples' times. With several samples the
@@ -331,29 +416,59 @@ func EstimatePipelines(history []PerfRecord, inputs []PipelineInput, cpu uint32)
 	for _, in := range inputs {
 		seconds, measured := SampleEstimate(history, in.Format, in.InputBytes, cpu)
 		e.Seconds += seconds
+		e.Longest = math.Max(e.Longest, seconds)
 		if measured {
 			e.Measured++
+			e.Low += seconds
+			e.High += seconds
+		} else {
+			e.Low += seconds * priorLow
+			e.High += seconds * priorHigh
 		}
 	}
 	return e
 }
 
-// remainingSeconds is the time left of a running sample pipeline from its
-// progress ({stage, detail, bytes_done, bytes_total, work}), or false when
-// unknown (waiting for the map slot, unknown stage or input).
-func remainingSeconds(history []PerfRecord, progress Obj, cpu uint32) (float64, bool) {
+// sampleTotal is the expected active time of the sample pipeline that wrote
+// this progress, or false when its input is unknown.
+func sampleTotal(history []PerfRecord, progress Obj, cpu uint32) (float64, bool) {
 	work, _ := progress["work"].(map[string]any)
 	format, _ := work["format"].(string)
 	inputBytes, _ := work["input_bytes"].(float64)
-	stage, _ := progress["stage"].(string)
-	detail, _ := progress["detail"].(string)
-	if format == "" || inputBytes <= 0 || len(detail) >= 7 && detail[:7] == "waiting" {
+	if format == "" || inputBytes <= 0 {
 		return 0, false
 	}
 	if c, ok := work["cpu"].(float64); ok && c >= 1 {
 		cpu = uint32(c)
 	}
 	total, _ := SampleEstimate(history, format, int64(inputBytes), cpu)
+	return total, true
+}
+
+// remainingSeconds is the time left of a running sample pipeline from its
+// progress ({stage, detail, bytes_done, bytes_total, updated_at, work}), or
+// false when unknown (waiting for the map slot, unknown stage or input).
+// A stage that reports no bytes (mapping FASTA reads) counts its time from
+// updated_at, which it writes once when it starts.
+func remainingSeconds(history []PerfRecord, progress Obj, cpu uint32, now time.Time) (float64, bool) {
+	left, _, ok := sampleRemaining(history, progress, cpu, now)
+	return left, ok
+}
+
+// sampleRemaining is remainingSeconds and whether a stage that reports no
+// bytes has run longer than its estimate. Such a stage's share done grows
+// with its time up to 90%, then ever more slowly towards 100% (95% at twice
+// the estimate, 97% at three times), so its bar keeps moving and the time
+// left never reaches the end of the stage.
+func sampleRemaining(history []PerfRecord, progress Obj, cpu uint32, now time.Time) (left float64, over, ok bool) {
+	stage, _ := progress["stage"].(string)
+	detail, _ := progress["detail"].(string)
+	total, ok := sampleTotal(history, progress, cpu)
+	if !ok || len(detail) >= 7 && detail[:7] == "waiting" {
+		return 0, false, false
+	}
+	work, _ := progress["work"].(map[string]any)
+	format, _ := work["format"].(string)
 	done, size := -1.0, -1.0
 	if d, ok := progress["bytes_done"].(float64); ok {
 		if t, ok := progress["bytes_total"].(float64); ok && t > 0 {
@@ -365,22 +480,30 @@ func remainingSeconds(history []PerfRecord, progress Obj, cpu uint32) (float64, 
 		case format == "hyb":
 			// Indexing is all the pipeline does with a .hyb.
 			if stage == "index" && size > 0 {
-				return math.Max(total*(1-done/size), 1), true
+				return math.Max(total*(1-done/size), 1), false, true
 			}
-			return total, true
+			return total, false, true
 		case stage == "index" && size > 0:
 			// The .hyb the pipeline wrote: its size is the stage's work.
-			return math.Max(indexSecondsPerMB*(size-done)/1e6, 1), true
+			return math.Max(indexSecondsPerMB*(size-done)/1e6, 1), false, true
 		}
 	}
-	weights, ok := sampleStageWeights[stage]
+	table, after := stageWeights(format)
+	weights, ok := table[stage]
 	if !ok {
-		// Past mapping: seconds left.
-		return math.Max(total*0.03*0.5, 1), true
+		// Past mapping: half of the time after mapping is left.
+		return math.Max(total*after*0.5, 1), false, true
 	}
 	share := weights[0]
 	if size > 0 {
 		share += weights[1] * done / size
+	} else if at, err := time.Parse(time.RFC3339, fmt.Sprint(progress["updated_at"])); err == nil && weights[1] > 0 {
+		x := math.Max(now.Sub(at).Seconds(), 0) / (total * weights[1])
+		over = x > 1
+		if x > 0.9 {
+			x = 0.9 + 0.1*(x-0.9)/(x-0.9+1)
+		}
+		share += weights[1] * x
 	}
-	return total * (1 - share), true
+	return math.Max(total*(1-share), 1), over, true
 }

@@ -435,8 +435,15 @@
       (d.cutpoint?'# Two strands: A is 1-'+d.cutpoint+', B '+(d.cutpoint+1)+'-'+d.sequence.length+'; VARNA draws them as one chain.\n':'')+
       'java -cp VARNA.jar fr.orsay.lri.varna.applications.VARNAcmd \\\n'+args.map(a=>'  '+a.join(' ')).join(' \\\n')+'\n';
   }
+  // A drawing belongs to one prediction: the same sequence and dot-bracket
+  // from another engine, candidate, run or evidence set starts afresh.
+  function sessionKey(result){
+    const evidence=evidenceFor(result);
+    return [result.sequence,result.dotBracket,result.engine||'',result.selectedCandidate==null?'':result.selectedCandidate,
+      result.runId==null?'':result.runId,result.completedAt||'',result.label||'',evidence?evidence.values.join(','):''].join('\n');
+  }
   function session(state){
-    const result=state.structure.result,key=result.sequence+'\n'+result.dotBracket;
+    const result=state.structure.result,key=sessionKey(result);
     if(!state.structure.drawing||state.structure.drawing.key!==key)state.structure.drawing={key,data:initial(result),undo:[],redo:[],selection:[1,1],view:null};
     return state.structure.drawing;
   }
@@ -660,5 +667,5 @@
     const support=comradesSupport(result),evidencePairs=result.comradesEvidence?result.comradesEvidence.pairs.length:0;
     sync();draw();message(support&&!support.some(v=>v>0)?'COMRADES support: none of the '+(result.pairs||[]).length+' pairs in this structure matches '+(evidencePairs?'any of the '+evidencePairs+' RNAcofold evidence pairs':'the RNAcofold evidence')+', so every base scores 0 and keeps the default colour.':status());
   }
-  root.Hyb2StructureEditor={supportColor,mapColor,evidenceFor,applyEvidence,parseValues,colorMap,clearColors,autoAnnotations,anchor,layout,pairsFrom,dotBracket,domainOf,parentOf,helixOf,loopOf,initial,validate,svg,eps,ct,bpseq,editedDbn,varnaCommand,undo,redo,session,mount};
+  root.Hyb2StructureEditor={supportColor,mapColor,evidenceFor,applyEvidence,parseValues,colorMap,clearColors,autoAnnotations,anchor,layout,pairsFrom,dotBracket,domainOf,parentOf,helixOf,loopOf,initial,validate,svg,eps,ct,bpseq,editedDbn,varnaCommand,undo,redo,sessionKey,session,mount};
 })(typeof window!=='undefined'?window:self);

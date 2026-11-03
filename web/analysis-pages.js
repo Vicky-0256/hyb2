@@ -98,11 +98,9 @@
     // Initial row window only; the table height comes from CSS and
     // bindVirtualTable re-windows rows from the real clientHeight.
     const viewportHeight = 960;
-    const scrollTop = state.interactionScrollTop || 0;
-    const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 4);
-    const visible = Math.ceil(viewportHeight / rowHeight) + 8;
     const total = interactions ? interactions.total : 0;
-    const rows = interactionWindow(interactions, start, visible);
+    const view = interactionTableWindow(total, rowHeight, state.interactionScrollTop || 0, viewportHeight);
+    const rows = interactionWindow(interactions, view.start, view.count);
     const note = !interactions
       ? "Loading matching records…"
       : interactions.error
@@ -115,13 +113,37 @@
       '<div class="virtual-table-frame">',
       '<div class="virtual-table-head" role="row"><span>' + (rowDatasetLabels ? "Sequence ID · dataset" : "Sequence ID") + '</span><span>RNA 1</span><span class="num">Region 1 <span class="unit">(nt)</span></span><span>RNA 2</span><span class="num">Region 2 <span class="unit">(nt)</span></span><span>Chimera type</span><span class="num" title="Cluster support: records merged into this one">Support</span><span class="num">ΔG <span class="unit">(kcal/mol)</span></span></div>',
       '<div class="virtual-table" data-virtual-table role="region" aria-label="Interaction records" tabindex="0">',
-      '<div class="virtual-table-spacer" style="height:' + (total * rowHeight) + 'px"></div>',
-      '<div class="virtual-table-rows" data-virtual-rows style="transform:translateY(' + (start * rowHeight) + 'px)">',
+      '<div class="virtual-table-spacer" style="height:' + view.spacer + 'px"></div>',
+      '<div class="virtual-table-rows" data-virtual-rows style="transform:translateY(' + view.offset + 'px)">',
       renderVirtualRows(rows || []),
       "</div></div>",
       "</div>",
       "</section>"
     ].join("");
+  }
+
+  // Which records a scroll position shows. Same scheme as the Compare table
+  // (comparisonTableWindow): the spacer is capped below the browser's
+  // tallest layout box and the scroll position maps linearly onto all
+  // records, so the last record stays reachable past ~33.5M px (Chrome,
+  // Safari) or ~17.9M px (Firefox).
+  function interactionTableWindow(total, rowHeight, scrollTop, viewportHeight) {
+    const margin = 4;
+    const content = Math.max(0, total) * rowHeight;
+    const spacer = Math.min(content, comparisonMaxScrollHeight());
+    const viewport = Math.max(1, viewportHeight);
+    const maxScroll = Math.max(0, spacer - viewport);
+    const top = Math.max(0, Math.min(maxScroll, scrollTop || 0));
+    const virtualTop = spacer < content && maxScroll > 0 ? top * (content - viewport) / maxScroll : top;
+    const first = Math.floor(virtualTop / rowHeight);
+    const start = Math.max(0, Math.min(Math.max(0, total - 1), first - margin));
+    const count = Math.max(0, Math.min(total - start, Math.ceil(viewport / rowHeight) + 2 * margin));
+    return {
+      spacer: spacer,
+      start: start,
+      count: count,
+      offset: top + start * rowHeight - virtualTop
+    };
   }
 
   // Rows [start, start + count) from the loaded queryHybrids window, or null
@@ -2652,6 +2674,7 @@
     hasMappedReference: hasMappedReference,
     regionReference: regionReference,
     getRegionPartner: getRegionPartner,
-    interactionWindow: interactionWindow
+    interactionWindow: interactionWindow,
+    interactionTableWindow: interactionTableWindow
   };
 }());

@@ -84,6 +84,28 @@ function randomRNA(seed, n) {
   }
 }
 
+// ---- alignment: a large length difference widens the band past the 64 MB
+// traceback cap; it is refused at once (no huge allocation, no RangeError)
+{
+  const short = randomRNA(11, 10000);
+  const long = randomRNA(13, 40000);
+  for (const pair of [[short, long], [long, short]]) {
+    const started = Date.now();
+    assert.throws(function () { arc.align(pair[0], pair[1]); }, function (error) {
+      return /differ in length by 30,000 nt \((10,000 vs 40,000|40,000 vs 10,000) nt\)/.test(error.message) &&
+        /64 MB/.test(error.message);
+    });
+    assert.ok(Date.now() - started < 1000, "refused without running the DP");
+  }
+  // a moderate difference still aligns (2-bit packed traceback)
+  const base = randomRNA(17, 8000);
+  const longer = base.slice(0, 4000) + randomRNA(19, 1500) + base.slice(4000);
+  const map = arc.align(base, longer);
+  assert.equal(arc.mapPosition(map, 1), 1);
+  assert.equal(arc.mapPosition(map, 4001), 5501);
+  assert.equal(arc.mapPosition(map, 8000), 9500);
+}
+
 // ---- structures: dbn with windows, ct
 {
   const dbn = arc.parseStructure(">gene:101-110 -3.2\nGGGAAACCCU\n(((...))).\n>gene:201-206\nGGAACC\n((..))\n", "w.dbn");
@@ -282,6 +304,29 @@ if (real) {
   assert.equal(onB.overlay.filter(function (o) { return !o.up; }).length, 1243);
   state.twoOn = "a";
   fs.writeFileSync(path.join(real, "arc-map.svg"), arc.svg(state, model));
+}
+
+// ---- a file read that finishes after another file was chosen for the same
+// slot is dropped; cancelLoad (Use in arc map) drops a pending table read
+{
+  const state = arc.defaultState();
+  const resolvers = [];
+  const file = function (name) {
+    return { name: name, text: function () { return new Promise(function (resolve) { resolvers.push(resolve); }); } };
+  };
+  const first = arc.loadFile(state, "a", file("old.dbn"));
+  const second = arc.loadFile(state, "a", file("new.dbn"));
+  const table = arc.loadFile(state, "interactions", file("late.tsv"));
+  arc.cancelLoad(state, "interactions");
+  resolvers[1](">new\nGGGAAACCCU\n(((...))).\n");
+  resolvers[0](">old\nGGAACC\n((..))\n");
+  resolvers[2]("x\ty\tpadj\tdirection\n10\t20\t0.001\tup\n");
+  Promise.all([first, second, table]).then(function () {
+    assert.equal(state.a.name, "new.dbn", "the late old read does not replace the newer file");
+    assert.equal(state.a.length, 10);
+    assert.equal(state.interactions, null, "a cancelled read is not applied");
+    process.stdout.write("arc-map: load tokens ok\n");
+  });
 }
 
 process.stdout.write("arc-map: ok\n");

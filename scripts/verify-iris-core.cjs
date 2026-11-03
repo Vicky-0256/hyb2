@@ -45,4 +45,51 @@ if(fs.existsSync('/tmp/hyb2-iris-reference-support.json')){
  assert.ok(actual.every((x,i)=>Math.abs(x-expected[i])<1e-12));
  console.log('iris-original-support-matrix: ok');
 }
+// cluster caches each row's nearest later neighbour; it must merge exactly
+// as the former full-matrix scan (first minimum in row-major order).
+function referenceCluster(candidates,C){
+ if(candidates.length<=C) return candidates;
+ const keys=c=>new Set(c.pairs.map(p=>p.left+':'+p.right));
+ const dist=(a,b)=>{let same=0;for(const k of a) if(b.has(k)) same++;return a.size+b.size-2*same;};
+ const sets=candidates.map(keys),n=candidates.length;
+ const d=Array.from({length:n},()=>new Float64Array(n));
+ for(let i=0;i<n;i++) for(let j=i+1;j<n;j++) d[i][j]=d[j][i]=dist(sets[i],sets[j]);
+ const groups=new Map(candidates.map((_,i)=>[i,[i]]));
+ while(groups.size>C){
+  let best=Infinity,a=-1,b=-1;
+  for(const i of groups.keys()) for(const j of groups.keys()) if(i<j&&d[i][j]<best){best=d[i][j];a=i;b=j;}
+  const ga=groups.get(a),gb=groups.get(b);
+  for(const j of groups.keys()) if(j!==a&&j!==b) d[a][j]=d[j][a]=(d[a][j]*ga.length+d[b][j]*gb.length)/(ga.length+gb.length);
+  groups.set(a,ga.concat(gb));groups.delete(b);
+ }
+ return Array.from(groups.values(),idx=>candidates[idx.reduce((best,i)=>candidates[i].energy<candidates[best].energy?i:best,idx[0])]);
+}
+let seed=12345;
+const rand=()=>((seed=Math.imul(seed,1103515245)+12345>>>0)/4294967296);
+function randomCandidates(n,universe,maxPairs,energyLevels){
+ return Array.from({length:n},(_,id)=>{
+  const pairs=[];const used=new Set();const count=Math.floor(rand()*(maxPairs+1));
+  for(let k=0;k<count;k++){const p=Math.floor(rand()*universe);if(!used.has(p)){used.add(p);pairs.push({left:p+1,right:p+200});}}
+  return {id,energy:-Math.floor(rand()*energyLevels),pairs};
+ });
+}
+for(let trial=0;trial<300;trial++){
+ const n=2+Math.floor(rand()*60),universe=1+Math.floor(rand()*6);
+ const cands=randomCandidates(n,universe,Math.min(universe,4),3);
+ const C=1+Math.floor(rand()*Math.min(n,50));
+ assert.deepEqual(iris.cluster(cands,C).map(c=>c.id),referenceCluster(cands,C).map(c=>c.id),'tie-heavy trial '+trial);
+}
+{
+ const cands=randomCandidates(300,12,6,5);
+ for(const C of [1,20,50]) assert.deepEqual(iris.cluster(cands,C).map(c=>c.id),referenceCluster(cands,C).map(c=>c.id),'n=300, C='+C);
+ const large=randomCandidates(1000,40,10,8);
+ const started=Date.now();
+ const leaders=iris.cluster(large,20);
+ const elapsed=Date.now()-started;
+ assert.equal(leaders.length,20);
+ assert.ok(elapsed<5000,'clustering 1000 candidates took '+elapsed+' ms');
+ const refStarted=Date.now();
+ assert.deepEqual(leaders.map(c=>c.id),referenceCluster(large,20).map(c=>c.id),'n=1000 matches the full scan');
+ console.log('iris-cluster-row-minima: ok (n=1000: '+elapsed+' ms; full scan '+(Date.now()-refStarted)+' ms)');
+}
 console.log('iris-core: ok');

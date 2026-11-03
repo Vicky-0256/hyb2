@@ -20,7 +20,11 @@
 
   const BAND = 300;
   const MAX_ALIGN = 400000;
-  const MAX_TRACE = 400000000; // bytes of traceback a seeded band may use
+  // traceback memory cap: 2-bit cells, 4 per byte, so 64 MB holds 256 M
+  // band cells (400 kb at equal length fits; a large length difference
+  // widens the band and is refused before anything is allocated)
+  const MAX_TRACE_BYTES = 64 * 1024 * 1024;
+  const MAX_TRACE = MAX_TRACE_BYTES * 4; // band cells
   const LOW_IDENTITY = 0.8;
 
   // ---- alignment
@@ -117,6 +121,12 @@
       throw new Error("sequences longer than 400,000 nt are not aligned");
     }
     const w = BAND + Math.abs(n - m);
+    if ((n + 1) * (2 * w + 2) > MAX_TRACE) {
+      throw new Error("the sequences differ in length by " + Math.abs(n - m).toLocaleString("en-US") +
+        " nt (" + n.toLocaleString("en-US") + " vs " + m.toLocaleString("en-US") +
+        " nt); the banded alignment would need more than " + (MAX_TRACE_BYTES / 1048576) +
+        " MB, so it is not run");
+    }
     // a large end indel at about equal length puts the path off the
     // diagonal: widen the band on that side by the k-mer offset
     let offset = seedOffset(a, b);
@@ -134,7 +144,8 @@
     const width = 2 * w + Math.abs(offset) + 2;
     let prev = new Int32Array(width).fill(NEG);
     let cur = new Int32Array(width).fill(NEG);
-    const trace = new Uint8Array((n + 1) * width);
+    // 2-bit directions (0 diagonal, 1 up, 2 left), four cells per byte
+    const trace = new Uint8Array(Math.ceil((n + 1) * width / 4));
     const codesA = new Uint8Array(n);
     const codesB = new Uint8Array(m);
     for (let i = 0; i < n; i += 1) {
@@ -145,7 +156,8 @@
     }
     for (let j = rowLo[0]; j <= rowHi[0]; j += 1) {
       prev[j - rowLo[0]] = -3 * j;
-      trace[j - rowLo[0]] = 2;
+      const t = j - rowLo[0];
+      trace[t >> 2] |= 2 << ((t & 3) << 1);
     }
     for (let i = 1; i <= n; i += 1) {
       const l = rowLo[i];
@@ -183,7 +195,10 @@
           dir = 1;
         }
         cur[k] = best;
-        trace[rowBase + k] = dir;
+        if (dir) {
+          const t = rowBase + k;
+          trace[t >> 2] |= dir << ((t & 3) << 1);
+        }
       }
       const swap = prev;
       prev = cur;
@@ -198,7 +213,8 @@
     while (i > 0 || j > 0) {
       let dir = 2;
       if (i > 0 && j >= rowLo[i] && j <= rowHi[i]) {
-        dir = trace[i * width + j - rowLo[i]];
+        const t = i * width + j - rowLo[i];
+        dir = (trace[t >> 2] >> ((t & 3) << 1)) & 3;
       } else if (i > 0) {
         dir = 1;
       }
@@ -1051,8 +1067,31 @@
 
   // ---- state changes (called from analysis-ui.js)
 
+  // per-slot load tokens: a file read that finishes after another file was
+  // chosen for the same slot (or the slot was filled another way) is dropped
+  const loadTokens = new WeakMap();
+
+  function nextToken(arcMap, key) {
+    let tokens = loadTokens.get(arcMap);
+    if (!tokens) {
+      tokens = {};
+      loadTokens.set(arcMap, tokens);
+    }
+    tokens[key] = (tokens[key] || 0) + 1;
+    return tokens[key];
+  }
+
+  // cancelLoad(arcMap, key): a pending read for key no longer applies
+  function cancelLoad(arcMap, key) {
+    nextToken(arcMap, key);
+  }
+
   function loadFile(arcMap, key, file) {
+    const token = nextToken(arcMap, key);
     return file.text().then(function (text) {
+      if (loadTokens.get(arcMap)[key] !== token) {
+        return;
+      }
       arcMap.errors[key] = "";
       try {
         if (key === "a" || key === "b") {
@@ -1094,6 +1133,7 @@
     cachedModel: cachedModel,
     renderCard: renderCard,
     loadFile: loadFile,
+    cancelLoad: cancelLoad,
     setControl: setControl
   };
 })();

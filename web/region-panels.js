@@ -405,8 +405,15 @@
     if (!map) {
       return [from, to];
     }
+    // an end with no aligned position within 50 nt has no place on B: the
+    // window is unmapped (A's coordinate is not B's)
     const nearest = arcApi().mapNearest;
-    return [Math.max(1, nearest(map, from, 50) || from), Math.min(length, nearest(map, to, 50) || to)];
+    const start = nearest(map, from, 50);
+    const end = nearest(map, to, 50);
+    if (!start || !end) {
+      return null;
+    }
+    return [Math.max(1, start), Math.min(length, end)];
   }
 
   // select(arcMap, rp) -> { ready, reason, notes, regions: [{ label, up, candidates, chosen, auto, windows, panels }] }
@@ -465,6 +472,13 @@
       const wb = [mapWindow(ctx.mapAB, X0, X1, ctx.lengthB), Y0 === null ? [null, null] : mapWindow(ctx.mapAB, Y0, Y1, ctx.lengthB)];
       const panelA = { structure: "a", lineage: labels.one, name: arcMap.a.name, title: arcMap.a.title,
         summary: windowSummary(ctx.ptA, ctx.seqA, X0, X1, Y0, Y1) };
+      if (!wb[0] || !wb[1]) {
+        region.unmappedB = true;
+        region.note = (region.note ? region.note + " " : "") + "Warning: window " + (!wb[0] ? X0 + "–" + X1 : Y0 + "–" + Y1) +
+          " of A has no aligned position in B within 50 nt of an end, so it cannot be placed on B; the " + labels.two + " (B) panel is not drawn.";
+        region.panels = [panelA];
+        return;
+      }
       const panelB = { structure: "b", lineage: labels.two, name: arcMap.b.name, title: arcMap.b.title,
         summary: windowSummary(ctx.ptB, ctx.seqB, wb[0][0], wb[0][1], wb[1][0], wb[1][1]) };
       region.panels = up ? [panelA, panelB] : [panelB, panelA];
@@ -752,6 +766,20 @@
     return state.regionPanels;
   }
 
+  // per-slot FASTA read tokens: a read that finishes after another file was
+  // chosen for (or cleared from) the same slot is dropped
+  const fastaTokens = new WeakMap();
+
+  function nextFastaToken(rp, key) {
+    let tokens = fastaTokens.get(rp);
+    if (!tokens) {
+      tokens = {};
+      fastaTokens.set(rp, tokens);
+    }
+    tokens[key] = (tokens[key] || 0) + 1;
+    return tokens[key];
+  }
+
   function handleChange(state, element, api) {
     const feature = element.dataset && element.dataset.feature;
     if (feature === "regions-control") {
@@ -776,7 +804,11 @@
       const key = element.dataset.key;
       const file = element.files && element.files[0];
       if (file) {
+        const token = nextFastaToken(rp, key);
         file.text().then(function (text) {
+          if (fastaTokens.get(rp)[key] !== token) {
+            return;
+          }
           rp.errors[key] = "";
           try {
             rp[key] = parseFasta(text, file.name);
@@ -798,6 +830,7 @@
     }
     const rp = ensure(state);
     if (action === "regions-fasta-clear") {
+      nextFastaToken(rp, element.dataset.key);
       rp[element.dataset.key] = null;
       api.render();
       return true;

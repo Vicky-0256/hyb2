@@ -69,6 +69,20 @@ close(Math.exp(fe.logGamma(10)), 362880, 1e-12, "gamma(10)");
   assert.ok(Number.isNaN(zero.p), "all-zero differences give NA");
   assert.equal(zero.note, undefined, "R gives NaN without stopping when the differences are all zero");
   assert.equal(fe.pairedTTest(a, b).note, undefined);
+  // two pairs are enough for R (df = 1): t.test(c(1, 3), c(0, 1), paired = TRUE)
+  // gives t = 3, p = 0.2048328 (1 - 2 atan(3) / pi); one pair is NA
+  const two = fe.summarise([
+    { side: "enriched_in_one", dG_one: 1, dG_two: 0 }, { side: "enriched_in_one", dG_one: 3, dG_two: 1 },
+    { side: "enriched_in_two", dG_one: 1, dG_two: 0 }]);
+  assert.equal(two[0].n, 2);
+  assert.equal(two[0].df, 1);
+  close(two[0].t, 3, 1e-12, "t at n = 2");
+  close(two[0].p, 1 - 2 * Math.atan(3) / Math.PI, 1e-9, "p at n = 2");
+  assert.equal(two[1].n, 1);
+  assert.ok(Number.isNaN(two[1].p), "one pair: NA");
+  const flatTwo = fe.summarise([{ side: "enriched_in_one", dG_one: 2, dG_two: 1 }, { side: "enriched_in_one", dG_one: 3, dG_two: 2 }])[0];
+  assert.ok(Number.isNaN(flatTwo.p));
+  assert.equal(flatTwo.note, "differences are constant", "R: data are essentially constant");
   const box = fe.boxStats([1, 2, 3, 4, 5, 6, 7, 8, 9, 50]);
   assert.equal(box.outliers.length, 1);
   assert.equal(box.high, 9);

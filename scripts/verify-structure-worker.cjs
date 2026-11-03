@@ -35,7 +35,29 @@ const shimSource = `
   parentPort.on("message", function (data) { global.self.onmessage({ data }); });
 `;
 
+// cofoldWithVienna frees every allocated buffer when a later allocation fails.
+function verifyCofoldAllocationCleanup() {
+  const vm = require("node:vm");
+  const sandbox = { URL, self: { location: { href: "file:///web/structure.worker.js" } } };
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(workerSource, "utf8") + "\nself.cofoldWithVienna = cofoldWithVienna;", sandbox, { filename: workerSource });
+  for (const failAt of [2, 3]) {
+    let next = 0;
+    const live = new Set();
+    const engine = {
+      lengthBytesUTF8: (value) => value.length,
+      stringToUTF8: function () {},
+      _malloc: function () { next += 1; if (next === failAt) return 0; live.add(next * 16); return next * 16; },
+      _free: function (pointer) { assert.ok(live.delete(pointer), "freed an unallocated pointer"); }
+    };
+    assert.throws(() => sandbox.self.cofoldWithVienna(engine, "GGG", "CCC", 37, 3), /could not allocate/);
+    assert.equal(live.size, 0, "allocation " + failAt + " failing must not leak earlier buffers");
+  }
+  process.stdout.write("structure-worker-cofold-allocation-cleanup: ok\n");
+}
+
 async function main() {
+  verifyCofoldAllocationCleanup();
   const generatedAsset = path.resolve(__dirname, "..", "web", "vendor", "viennarna", "vienna-rna.js");
   if (!fs.existsSync(generatedAsset)) {
     const worker = new Worker(shimSource, { eval: true });

@@ -218,7 +218,10 @@
     if (!json || typeof json.hitCount !== "number" || !Array.isArray(list)) {
       return { status: "unexpected_response", detail: "Europe PMC answered without a result list." };
     }
-    const entries = list.slice(0, MAX_ENTRIES).map(function (paper) {
+    // Skip null or non-object rows instead of failing the whole lookup.
+    const entries = list.filter(function (paper) {
+      return paper && typeof paper === "object" && !Array.isArray(paper);
+    }).slice(0, MAX_ENTRIES).map(function (paper) {
       const source = /^[A-Z]{3}$/.test(String(paper.source || "")) ? paper.source : "MED";
       const id = /^[A-Za-z0-9]{1,20}$/.test(String(paper.id || "")) ? paper.id : null;
       return {
@@ -435,6 +438,7 @@
     const timer = setTimeout(function () { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
     const requestedAt = new Date().toISOString();
     const cards = [];
+    let failure = null;
     try {
       const ebiRaw = await getJson(ebiUrl(query.identifier, query.taxon), controller.signal, fetchImpl, now, sleep);
       ebiRaw.timedOut = timedOut;
@@ -444,16 +448,21 @@
         pmcRaw.timedOut = timedOut;
         cards.push(makeCard("pmc", query, requestedAt, outcome(pmcRaw, classifyEuropePmc), binding));
       }
+    } catch (error) {
+      failure = error;
     } finally {
       clearTimeout(timer);
       if (activeController === controller) activeController = null;
+      evidence.running = false;
     }
     // A cleared session or a new file drops late answers.
     if (state.evidence !== evidence) return { dropped: true };
-    evidence.running = false;
     evidence.cards = cards.concat(evidence.cards).slice(0, 24);
+    if (failure) {
+      evidence.message = "The public lookup could not finish: " + clip(failure && failure.message || String(failure), 160);
+    }
     api.render();
-    return { cards: cards };
+    return failure ? { cards: cards, error: evidence.message } : { cards: cards };
   }
 
   function cancel() {
@@ -493,7 +502,14 @@
       api.render();
       return true;
     }
-    if (action === "evidence-lookup") { lookup(state, api); return true; }
+    if (action === "evidence-lookup") {
+      lookup(state, api).catch(function (error) {
+        evidence.running = false;
+        evidence.message = "The public lookup could not finish: " + clip(error && error.message || String(error), 160);
+        api.render();
+      });
+      return true;
+    }
     if (action === "evidence-cancel") { cancel(); return true; }
     if (action === "evidence-remove") {
       const id = element.getAttribute("data-evidence-id");

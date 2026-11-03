@@ -360,7 +360,9 @@
       const x = rows.filter(function (r) { return r.side === side; });
       const one = x.map(function (r) { return r.dG_one; });
       const two = x.map(function (r) { return r.dG_two; });
-      const test = x.length >= 3 ? pairedTTest(one, two) : { n: x.length, meanOne: mean(one), meanTwo: mean(two), meanDiff: mean(one) - mean(two), t: NaN, df: NaN, p: NaN };
+      // R's t.test(paired = TRUE) runs from 2 pairs (df = 1); below that R
+      // stops with "not enough 'x' observations"
+      const test = x.length >= 2 ? pairedTTest(one, two) : { n: x.length, meanOne: mean(one), meanTwo: mean(two), meanDiff: mean(one) - mean(two), t: NaN, df: NaN, p: NaN };
       return Object.assign({ side: side, one: one, two: two }, test);
     });
   }

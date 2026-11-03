@@ -141,4 +141,23 @@ assert.match(evidenceCommand,/-colorMap '0;4;0;/);assert.match(evidenceCommand,/
   assert.match(E.varnaCommand(d),/Two strands: A is 1-9, B 10-18/);
 }
 
+// The drawing session follows the prediction, not just sequence and dot-bracket.
+{
+  const base={sequence:'GGGAAACCC',dotBracket:'(((...)))',pairs:E.pairsFrom('(((...)))'),engine:'CPLfold',selectedCandidate:0,runId:1,completedAt:'t1',label:'one',
+    comradesEvidence:{pairs:[{one:1,two:9,count:3}]}};
+  const state={structure:{result:base}};
+  const first=E.session(state);first.data.title='edited';
+  assert.equal(E.session(state),first,'the same result keeps its drawing');
+  const changes=[{engine:'CPLcofold'},{selectedCandidate:1},{runId:2},{completedAt:'t2'},{label:'two'},{comradesEvidence:{pairs:[{one:2,two:8,count:5}]}},{comradesEvidence:null}];
+  for(const change of changes){
+    state.structure.drawing=first;
+    state.structure.result=Object.assign({},base,change);
+    const next=E.session(state);
+    assert.notEqual(next,first,'a new '+Object.keys(change)[0]+' starts a new drawing');
+    assert.notEqual(next.data.title,'edited');
+  }
+  state.structure.result=Object.assign({},base,{comradesEvidence:null});
+  assert.equal(E.session(state).data.evidence,undefined,'no stale evidence colours from the earlier result');
+}
+
 console.log('Drawing editor: Radiate/linear/circular layouts, domains, styles, annotations, colour maps and EPS/BPSEQ/DBN/VARNA exports passed.');

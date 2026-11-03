@@ -549,6 +549,62 @@ async function workerAndCard() {
   assert.match(card.renderCard(state), /padj cutoff must be/);
   state.comparison.deseq.padjCutoff = "0.05";
 
+  // clicking the map picks the nearest interaction within the merge range the
+  // shown result used (summary.parameters.range), not the live input
+  {
+    const noop = function () { return { width: 0 }; };
+    const canvasStub = {
+      width: 0, height: 0,
+      getBoundingClientRect: function () { return { left: 0, top: 0, width: 640, height: 640 }; },
+      getContext: function () { return new Proxy({}, { get: function () { return noop; }, set: function () { return true; } }); },
+      setPointerCapture: function () {}, hasPointerCapture: function () { return false; }, releasePointerCapture: function () {}
+    };
+    documentStub.getElementById = function (id) { return id === "deseq-panel-canvas" ? canvasStub : null; };
+    const L = Math.max(10, (result.summary.maxCoordinate || 0) + 10);
+    const size = Math.min(640 - 58 - 16, 640 - 40 - 104);
+    const nearest = function (x, y) {
+      return result.interactions.reduce(function (best, row) {
+        return Math.min(best, Math.max(Math.abs(row.x + 5 - x), Math.abs(row.y + 5 - y)));
+      }, Infinity);
+    };
+    const threshold = Math.max(result.summary.parameters.range, 10, 4 * L / size);
+    let spot = null;
+    for (let gx = 0.02; gx < 1 && !spot; gx += 0.04) {
+      for (let gy = 0.02; gy < 1 && !spot; gy += 0.04) {
+        const d = nearest(gx * L, gy * L);
+        if (d > threshold + 20) {
+          spot = { x: gx * L, y: gy * L };
+        }
+      }
+    }
+    assert.ok(spot, "a point of the map far from every interaction");
+    const click = function () {
+      state.comparison.deseq.selected = null;
+      card.draw(state, { render: function () {} });
+      canvasStub.onpointerup({ pointerId: 1, clientX: 58 + spot.x / L * size, clientY: 40 + (1 - spot.y / L) * size });
+      return state.comparison.deseq.selected;
+    };
+    state.comparison.deseq.radius = "100000000";
+    assert.equal(click(), null, "a larger live merge range does not widen the pick");
+    const kept = result.summary.parameters.range;
+    result.summary.parameters.range = 100000000;
+    assert.ok(click(), "the result's own merge range sets the tolerance");
+    result.summary.parameters.range = kept;
+    state.comparison.deseq.radius = "100";
+    state.comparison.deseq.selected = null;
+    documentStub.getElementById = function () { return null; };
+  }
+
+  // a dataset with no condition is not in the test and says so
+  {
+    const loose = { comparison: Object.assign({}, state.comparison, { datasets: state.comparison.datasets.concat([ds("loose", "", [afr])]) }) };
+    const item = card.renderCard(loose).match(/<label class="deseq-include-item"><input[^>]*data-dataset-id="loose"[^>]*> loose <span class="card-note">\(([^)]*)\)/);
+    assert.ok(item, "the unassigned dataset is listed");
+    assert.equal(item[1], "not in the test");
+    assert.match(item[0], / disabled>/);
+    assert.doesNotMatch(item[0], / checked/);
+  }
+
   // run() without Worker: arms read through api.getArms, test on a timer
   const armsTable = function (arms, rna) {
     const n = arms.length / 4;

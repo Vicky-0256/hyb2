@@ -436,13 +436,20 @@
       '<rect x="' + (spans[2] + 60) + '" y="35" width="' + (spans[3] - spans[2]) + '" height="12" rx="3" fill="#E64B35"/>' +
       '<text x="65" y="60">' + (value === "Intermolecular" ? "Separate RNA references" : "Reference position →") + '</text></svg>';
   }
+  // the HYB2 classification code a pattern is stored under: "Type 1" for
+  // Type_1, "Intermolecular" for two RNAs
+  function chimeraCode(value) {
+    const key = String(value).replace(/^Type[_ ]?(\d+)$/i, "Type_$1");
+    return key.replace(/^Type_(\d+)$/, "Type $1");
+  }
   root.Hyb2ChimeraTypes = {
     label: function (value) { return chimeraInfo(value)[0]; },
+    code: chimeraCode,
     diagram: chimeraDiagram,
     guide: function () {
       return '<details class="chimera-guide"><summary>How to read these patterns</summary><p>5′ and 3′ identify the two arms in the read. Their positions are shown on the reference, not as a predicted fold. Shared boundaries follow the source coordinate comparisons exactly.</p><div class="chimera-guide-grid">' +
-        Object.keys(chimeraPatterns).map(function (key) { const info = chimeraInfo(key); return '<div><strong>' + escapeText(info[0]) + '</strong>' + chimeraDiagram(key) + '<p>' + escapeText(info[2]) + '</p></div>'; }).join("") +
-        '</div><p>Source: HYB2 bin/chim_types and bin/hyb_chim_types.awk (Lau). Original classification codes remain in data exports.</p></details>';
+        Object.keys(chimeraPatterns).map(function (key) { const info = chimeraInfo(key); return '<div><span class="chimera-code">' + escapeText(chimeraCode(key)) + '</span><strong>' + escapeText(info[0]) + '</strong>' + chimeraDiagram(key) + '<p>' + escapeText(info[2]) + '</p></div>'; }).join("") +
+        '</div><p>Source: HYB2 bin/chim_types and bin/hyb_chim_types.awk (Lau). Each pattern shows its HYB2 classification code (Type 1 to Type 13, Intermolecular), the code the data exports, the .hyb files and HYB2 Desktop use.</p></details>';
     }
   };
 

@@ -323,16 +323,19 @@ function normaliseEvidenceArms(value) {
 }
 
 function cofoldWithVienna(engine, sequenceOne, sequenceTwo, temperature, minimumLoop) {
-  const onePointer = allocateString(engine, sequenceOne);
-  const twoPointer = allocateString(engine, sequenceTwo);
-  const structureBytes = sequenceOne.length + sequenceTwo.length + 1;
-  const structurePointer = engine._malloc(structureBytes);
-  if (!structurePointer) {
-    engine._free(twoPointer);
-    engine._free(onePointer);
-    throw new Error("ViennaRNA WebAssembly could not allocate enough memory for RNAcofold.");
-  }
+  // Every buffer is freed in finally, so a failed later allocation does not
+  // leak the earlier ones.
+  let onePointer = 0;
+  let twoPointer = 0;
+  let structurePointer = 0;
   try {
+    onePointer = allocateString(engine, sequenceOne);
+    twoPointer = allocateString(engine, sequenceTwo);
+    const structureBytes = sequenceOne.length + sequenceTwo.length + 1;
+    structurePointer = engine._malloc(structureBytes);
+    if (!structurePointer) {
+      throw new Error("ViennaRNA WebAssembly could not allocate enough memory for RNAcofold.");
+    }
     const energy = engine._hyb2_vienna_cofold(
       onePointer,
       twoPointer,
@@ -352,9 +355,9 @@ function cofoldWithVienna(engine, sequenceOne, sequenceTwo, temperature, minimum
       pairs: dotBracketPairs(combined, dotBracket)
     };
   } finally {
-    engine._free(structurePointer);
-    engine._free(twoPointer);
-    engine._free(onePointer);
+    if (structurePointer) engine._free(structurePointer);
+    if (twoPointer) engine._free(twoPointer);
+    if (onePointer) engine._free(onePointer);
   }
 }
 

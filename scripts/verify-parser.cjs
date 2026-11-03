@@ -293,6 +293,35 @@ async function parseFile(file, globals) {
     const mixed = Buffer.concat([bgzf(firstHalf), zlib.gzipSync(Buffer.from(secondHalf))]);
     assert.equal(ids(await parseFile(new File([mixed], "mixed.hyb.gz"), streams)), ids(reference));
   }
+  // Runtimes differ in how much output DecompressionStream hands over before
+  // it raises at the end of the first member (Node 26 all of it; the CI
+  // runner's Node raised with output still held back). The worst case, no
+  // output at all before the error, must lose nothing either.
+  class WithholdingDecompressionStream {
+    constructor(format) {
+      const parts = [];
+      const stream = new TransformStream({
+        transform: function (chunk) { parts.push(chunk); },
+        flush: async function (controller) {
+          const out = [];
+          const reader = new Blob(parts).stream().pipeThrough(new DecompressionStream(format)).getReader();
+          while (true) {
+            const next = await reader.read(); // throws before anything is enqueued
+            if (next.done) break;
+            out.push(next.value);
+          }
+          out.forEach(function (chunk) { controller.enqueue(chunk); });
+        }
+      });
+      this.writable = stream.writable;
+      this.readable = stream.readable;
+    }
+  }
+  const withholding = { TransformStream: TransformStream, DecompressionStream: WithholdingDecompressionStream };
+  assert.equal(ids(await parseFile(new File([joined], "joined.hyb.gz"), withholding)), ids(reference),
+    "cat a.gz b.gz is read when the decompressor raises before handing over the first member's output");
+  assert.equal((await parseFile(new File([twice], "twice.hyb.gz"), withholding)).message.summary.validRecords, 5500);
+  await assert.rejects(parseFile(new File([joined.subarray(0, joined.length - 40)], "cut.hyb.gz"), withholding));
   // a truncated member still fails loudly
   await assert.rejects(parseFile(new File([joined.subarray(0, joined.length - 40)], "cut.hyb.gz"), streams));
   // without DecompressionStream a gzip file gets a clear error

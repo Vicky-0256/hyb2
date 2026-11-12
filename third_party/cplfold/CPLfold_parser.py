@@ -562,10 +562,13 @@ def beam_prune_deterministic(beam_arr, beam_scores, count, k):
     new_count = 0
     temp_arr = beam_arr[:count].copy()
     temp_scores = beam_scores[:count].copy()
-    # Keep candidates >= threshold, but limit to k to prevent buffer overflow
-    # When multiple candidates have the same threshold score, we must cap at k
+    # Keep every candidate scoring at least the k-th best, ties included, as LinearFold's
+    # beam_prune does (it erases only the candidates strictly below the threshold).  Capping
+    # the ties at k dropped them by index, which made the search lose good paths whenever
+    # scores tie (e.g. alpha = 0, where every score is a whole number of 0.01 kcal/mol).
+    # The buffers hold all candidates of a position (at most n), so ties cannot overflow them.
     for idx in range(count):
-        if temp_scores[idx] >= threshold and new_count < k:
+        if temp_scores[idx] >= threshold:
             beam_arr[new_count] = temp_arr[idx]
             beam_scores[new_count] = temp_scores[idx]
             new_count += 1
@@ -2205,8 +2208,8 @@ class BeamCKYParserHyper:
         c_splits = np.zeros(n, dtype=np.int32)
 
         beam_arr = np.zeros(n, dtype=np.int32)
-        max_beam = min(self.beam, n)
-        m_beam_idx = np.zeros((n, max_beam), dtype=np.int32)
+        # M beam of each position: the kept candidates, ties included, so up to n of them
+        m_beam_idx = np.zeros((n, n), dtype=np.int32)
         m_beam_count = np.zeros(n, dtype=np.int32)
 
         # Bonus matrix - initialize if not set
@@ -2444,8 +2447,8 @@ class BeamCKYParserHyper:
         c_splits = np.zeros(n, dtype=np.int32)
 
         beam_arr = np.zeros(n, dtype=np.int32)
-        max_beam = min(self.beam, n)
-        m_beam_idx = np.zeros((n, max_beam), dtype=np.int32)
+        # M beam of each position: the kept candidates, ties included, so up to n of them
+        m_beam_idx = np.zeros((n, n), dtype=np.int32)
         m_beam_count = np.zeros(n, dtype=np.int32)
 
         # Bonus matrix - initialize if not set

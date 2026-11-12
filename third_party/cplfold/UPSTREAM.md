@@ -30,6 +30,18 @@ other ignored local artifacts.
 - `tests/test_cli_exit_status.py` locks that exit-status behavior.
 - `CPLfold.py` accepts Hyb2's sparse bonus-matrix TSV export through
   `--bonus-matrix-file` and applies it with `--alpha`.
+- `CPLfold_parser.py` beam pruning (`beam_prune_deterministic`) keeps every
+  candidate that scores at least the k-th best, ties included, as LinearFold's
+  `beam_prune` does (it erases only the candidates strictly below the
+  threshold). Upstream capped the kept set at k, dropping tied candidates by
+  index; with integer Turner scores (alpha = 0) this lost good paths: the
+  10,807-nt ZIKV PE243 genome at beam 100 folded to -3413.2 kcal/mol, and
+  to -3722.1 with ties kept (RNAfold MFE -3866.4). On 50 random RNAs of
+  120-600 nt at alpha 0 the mean gap to the MFE fell from 1.38 to 0.25
+  kcal/mol; with a non-integer bonus (no ties) the structures are identical.
+  The M-beam index is now n x n (int32) so that ties cannot overflow it.
+  Folds with many ties (alpha = 0, long RNAs) take longer: about 2.7 times
+  for the ZIKV genome at beam 100. This change is not upstream yet.
 - `CPLfold_parser.py` compiles the outside pass with Numba. The new
   `_outside_kernel` and its `_outside_*` scoring helpers are verbatim copies
   of `BeamCKYParserHyper._outside` and its methods, with `self` dropped and

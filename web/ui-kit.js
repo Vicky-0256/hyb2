@@ -309,14 +309,14 @@
   // (cplfold_limits) allows floor(sqrt((budget - base) / bytes_per_nt2)) nt,
   // the budget being 75 % of memory. The site quotes the pseudoknot-free
   // figure for an 8 GB computer, rounded down to 100 nt.
-  const DESKTOP_FOLD_MODEL = { baseBytes: 192 * 1024 * 1024, bytesPerNt2Free: 144, memoryFraction: 0.75, exampleGb: 8 };
+  const DESKTOP_FOLD_MODEL = { baseBytes: 192 * 1024 * 1024, bytesPerNt2Free: 148, memoryFraction: 0.75, exampleGb: 8 };
   const DESKTOP_LIMITS = {
     webCplfoldNt: 500,
     cplfoldExampleGb: DESKTOP_FOLD_MODEL.exampleGb,
     cplfoldExampleNt: Math.floor(Math.sqrt((DESKTOP_FOLD_MODEL.exampleGb * Math.pow(1024, 3) * DESKTOP_FOLD_MODEL.memoryFraction -
       DESKTOP_FOLD_MODEL.baseBytes) / DESKTOP_FOLD_MODEL.bytesPerNt2Free) / 100) * 100
   };
-  // "about 6,500 nt with 8 GB of memory"
+  // "about 6,400 nt with 8 GB of memory"
   DESKTOP_LIMITS.cplfoldText = "about " + formatTick(DESKTOP_LIMITS.cplfoldExampleNt) + " nt with " + DESKTOP_LIMITS.cplfoldExampleGb + " GB of memory";
   const DESKTOP_CTA = {
     "raw-reads": "Starting from raw reads (FASTQ, FASTA or SAM)? HYB2 Desktop maps them and writes the .hyb file.",

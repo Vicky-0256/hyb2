@@ -6,8 +6,8 @@ import "math"
 // (cplfold_memory_estimate): base + c * n^2 bytes, c per structure mode.
 const (
 	cplfoldBaseBytes        = 192 * 1024 * 1024
-	cplfoldBytesPerNt2Free  = 144.0
-	cplfoldBytesPerNt2Knots = 196.0
+	cplfoldBytesPerNt2Free  = 148.0
+	cplfoldBytesPerNt2Knots = 200.0
 )
 
 // CPLfoldMemoryMB is the estimated peak memory of one fold of length nt,

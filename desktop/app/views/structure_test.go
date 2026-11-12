@@ -83,7 +83,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	}
 	// The form estimates the whole-RNA fold (built-in rate, no history).
 	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 1 min 50 s (rough; the first fold after installing also prepares the folding engine, about 2–4 min more)",
-		"about 15.9 GB of the 24.0 GB tasks may use"} {
+		"about 16.3 GB of the 24.0 GB tasks may use"} {
 		if !tt.HasText(text) {
 			t.Fatalf("no fold check %q: %q", text, tt.Texts())
 		}
@@ -376,7 +376,7 @@ func TestStructureShadeByChimeraSupport(t *testing.T) {
 
 func TestStructureMemoryClaim(t *testing.T) {
 	genome := core.TaskStartRequest{Kind: "structure"}
-	if got := StructureMemClaim(genome, 10807, false); got != 16231 {
+	if got := StructureMemClaim(genome, 10807, false); got != 16677 {
 		t.Fatalf("genome claim %d MiB", got)
 	}
 	workers := uint32(2)

@@ -137,7 +137,7 @@ const landing = mountSite(site);
 const html = landing.innerHTML;
 has(html, /<h2 id="landing-ways-title" class="landing-ways-title">Two ways to run HYB2<\/h2>/);
 has(html, /Up to 500 nt after a capacity test/, "Web's CPLfold limit comes from K9");
-has(html, /Set by memory, about 6,500 nt with 8 GB of memory; native, no capacity test/, "Desktop's CPLfold limit comes from K9");
+has(html, /Set by memory, about 6,400 nt with 8 GB of memory; native, no capacity test/, "Desktop's CPLfold limit comes from K9");
 has(html, /HYB2 Desktop is not available for public download yet\./);
 has(html, /Installers planned for macOS · Apple silicon, Windows · 64-bit, Linux \(\.deb, \.tar\.gz\)\./);
 hasNot(html, /github\.com\/Vicky-0256\/hyb2/, "no link to the private repository while downloads are not public");
@@ -193,7 +193,7 @@ assert.equal(site.location.hash, "", "the address does not change");
 has(landing.innerHTML, /class="dialog drawer desktop-drawer"/, "the Desktop drawer opens");
 has(landing.innerHTML, /class="landing/, "the current page stays");
 has(landing.innerHTML, /<table class="desktop-compare">/);
-has(landing.innerHTML, /Native CPLfold\.<\/strong> Set by memory, about 6,500 nt with 8 GB of memory \(browser: 500 nt\), no capacity test/);
+has(landing.innerHTML, /Native CPLfold\.<\/strong> Set by memory, about 6,400 nt with 8 GB of memory \(browser: 500 nt\), no capacity test/);
 click(landing, { "data-action": "close-dialog" });
 hasNot(landing.innerHTML, /desktop-drawer/);
 

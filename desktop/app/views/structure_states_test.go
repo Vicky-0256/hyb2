@@ -169,7 +169,7 @@ func TestStructureFoldStates(t *testing.T) {
 	p.gene = africaGene
 	p.budgetMB = 8192
 	tt.Frame()
-	expect(tt, "Cannot run yet:", "• This fold needs about 15.9 GB of memory but tasks may use 8.0 GB. "+
+	expect(tt, "Cannot run yet:", "• This fold needs about 16.3 GB of memory but tasks may use 8.0 GB. "+
 		"Fold shorter windows, fewer windows at once (Advanced), or raise Memory in Preferences.")
 	p.budgetMB = 24576
 

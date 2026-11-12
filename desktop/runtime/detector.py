@@ -33,9 +33,11 @@ DEFAULT_CPLFOLD_MAX_NT = 1000
 # beam 100, max_phase1 1), peak RSS above the idle process:
 #   pseudoknot-free: 2 kb 0.52 GiB, 4 kb 2.03 GiB  -> 131-137 B/nt^2
 #   pseudoknot:      2 kb 0.70 GiB, 4 kb 2.55 GiB  -> 171-188 B/nt^2
-# The values below add a few percent of headroom.
+# The values below add a few percent of headroom, and 4 B/nt^2 for the int32
+# n x n M-beam index, which keeps tied candidates since the beam pruning
+# follows LinearFold (it was n x beam before).
 CPLFOLD_BASE_BYTES = 192 * 1024 * 1024
-CPLFOLD_BYTES_PER_NT2 = {False: 144.0, True: 196.0}
+CPLFOLD_BYTES_PER_NT2 = {False: 148.0, True: 200.0}
 # Share of physical memory one fold may use when no budget is given; the
 # same default as the desktop scheduler's task budget.
 CPLFOLD_MEMORY_FRACTION = 0.75

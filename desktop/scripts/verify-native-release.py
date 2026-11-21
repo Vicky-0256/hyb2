@@ -36,6 +36,23 @@ def safe_relative(value):
             and all(part not in ("", ".", "..") for part in value.split("/")))
 
 
+def verify_sources(repository, files, staging):
+    expected = set(staging.source_files(repository))
+    bundled = {name for name in files if staging.is_project_source(name)}
+    if expected != bundled:
+        missing = sorted(expected - bundled)
+        extra = sorted(bundled - expected)
+        issues = []
+        if missing:
+            issues.append("missing bundled sources: " + ", ".join(missing))
+        if extra:
+            issues.append("unexpected bundled sources: " + ", ".join(extra))
+        raise ValueError("\n".join(issues))
+    for name in sorted(expected):
+        if hashlib.sha256((repository / name).read_bytes()).hexdigest() != files[name]:
+            raise ValueError(f"bundled source is stale (re-run stage-native.py): {name}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--resource-root", type=Path, default=ROOT / "desktop/resources/native")
@@ -68,9 +85,15 @@ def main() -> int:
     if not interpreter.is_file(): return fail(f"bundled interpreter missing: {interpreter}")
     files = manifest.get("files", {})
     if not isinstance(files, dict) or not files: return fail("manifest files index is missing or empty")
+    spec = importlib.util.spec_from_file_location("native_stage", Path(__file__).with_name("stage-native.py"))
+    staging = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(staging)
     for path in root.rglob("*"):
-        if path.is_symlink() and not path.resolve().is_relative_to(root):
-            return fail(f"external or broken resource symlink: {path}")
+        if path.is_symlink():
+            if not path.resolve().is_relative_to(root):
+                return fail(f"external or broken resource symlink: {path}")
+            if staging.is_project_source(path.relative_to(root).as_posix()):
+                return fail(f"unexpected symlink in bundled project sources: {path}")
     actual_files = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and not p.is_symlink() and p != manifest_path}
     if actual_files != set(files): return fail("manifest file inventory does not match resource contents")
     for rel, digest in files.items():
@@ -79,16 +102,10 @@ def main() -> int:
         path = root / rel
         if not path.is_file() or path.is_symlink(): return fail(f"manifest file missing or symlinked: {rel}")
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest: return fail(f"SHA256 mismatch: {rel}")
-    # The bundle carries a copy of the repository sources; a stale copy silently
-    # ships an old bridge protocol, so every staged source must match the repo.
-    stage_spec = importlib.util.spec_from_file_location("native_stage_dirs", Path(__file__).with_name("stage-native.py"))
-    stage_module = importlib.util.module_from_spec(stage_spec)
-    stage_spec.loader.exec_module(stage_module)
-    for rel, digest in files.items():
-        if any(rel.startswith(prefix + "/") for prefix in stage_module.SOURCE_DIRS) or rel == "bin/cplfold":
-            source = ROOT / rel
-            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
-                return fail(f"bundled source is stale (re-run stage-native.py): {rel}")
+    try:
+        verify_sources(ROOT, files, staging)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return fail(str(error))
     # Nothing in the runtime may name a path on the machine that built it.
     checks = manifest.get("checks") if isinstance(manifest.get("checks"), dict) else {}
     for value in [checks.get("base_prefix"), *(checks.get("module_paths") or [])]:
@@ -96,15 +113,12 @@ def main() -> int:
             return fail(f"manifest records a build-machine path: {value}")
     if platform.system() != "Windows":
         for script in sorted((interpreter.parent).iterdir()):
-            if script.is_file() and not script.is_symlink() and stage_module.host_shebang(script):
+            if script.is_file() and not script.is_symlink() and staging.host_shebang(script):
                 return fail(f"script starts a build-machine interpreter: {script.relative_to(root).as_posix()}")
     for rel in LICENSE_FILES:
         if not (root / rel).is_file(): return fail(f"required license notice missing: {rel}")
     # Use the same real JIT/reference-fold checks as staging. The probe uses an
     # isolated interpreter, validates module origins, and keeps caches in temp.
-    spec = importlib.util.spec_from_file_location("native_stage", Path(__file__).with_name("stage-native.py"))
-    staging = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(staging)
     try:
         details = staging.smoke(root, interpreter, portable=True)
     except (OSError, ValueError, subprocess.SubprocessError) as error:

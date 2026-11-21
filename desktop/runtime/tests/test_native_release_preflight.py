@@ -1,6 +1,8 @@
 import importlib.util
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,11 +13,16 @@ ROOT = Path(__file__).resolve().parents[2]
 CHECK = ROOT / 'scripts' / 'verify-native-release.py'
 
 
-def load_stage():
-    spec = importlib.util.spec_from_file_location('native_stage_under_test', ROOT / 'scripts' / 'stage-native.py')
+def load_script(path):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_stage():
+    return load_script(ROOT / 'scripts' / 'stage-native.py')
+
 
 class NativeReleasePreflightTests(unittest.TestCase):
     def test_missing_resource_fails_with_acquisition_instructions(self):
@@ -31,6 +38,97 @@ class NativeReleasePreflightTests(unittest.TestCase):
             p = subprocess.run([sys.executable, str(CHECK), '--resource-root', d], text=True, capture_output=True)
         self.assertEqual(p.returncode, 2)
         self.assertIn('not portable standalone', p.stderr)
+
+
+class PackagedSourceTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.repo = self.root / 'source'
+        self.native = self.root / 'native'
+        self.stage = load_stage()
+        self.verify = load_script(CHECK)
+        self.web = load_script(ROOT.parent / 'scripts' / 'bundle_sources.py')
+        for directory in self.stage.SOURCE_DIRS:
+            (self.repo / directory).mkdir(parents=True)
+        self.write('bin/cplfold')
+        self.write('web/cplfold/cplfold_web.py')
+        for name in (*self.web.WEB_MODULES, *self.web.WEB_NOTICES):
+            self.write('third_party/cplfold/' + name)
+        self.shared = 'third_party/cplfold/Utils/shared.py'
+        self.write(self.shared, 'original')
+        self.write('third_party/cplfold/Utils/energy_params/tracked.dat')
+        self.write('pipeline/main.py')
+        self.write('pipeline/tests/fixture.py')
+        self.write('pipeline/data/local.txt')
+        self.write('pipeline/__pycache__/bytecode.pyc')
+
+    def write(self, name, content='sample'):
+        path = self.repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding='utf-8')
+
+    def track_sources(self):
+        if not shutil.which('git'):
+            self.skipTest('Git checkout test needs Git')
+        subprocess.run(['git', 'init', '-q'], cwd=self.repo, check=True)
+        subprocess.run(['git', 'add', '-f', '.'], cwd=self.repo, check=True)
+
+    def manifest(self):
+        return {p.relative_to(self.native).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in self.native.rglob('*') if p.is_file()}
+
+    def check_selection(self):
+        self.stage.stage_sources(self.repo, self.native)
+        files = self.manifest()
+        self.verify.verify_sources(self.repo, files, self.stage)
+        self.assertNotIn('pipeline/tests/fixture.py', files)
+        self.assertNotIn('pipeline/data/local.txt', files)
+        self.assertNotIn('pipeline/__pycache__/bytecode.pyc', files)
+        package, assets = self.root / 'browser', self.root / 'assets'
+        self.web.stage_web_sources(self.repo, package, assets)
+        for root in (self.native / 'third_party/cplfold', package):
+            self.assertEqual((root / 'Utils/shared.py').read_text(), 'local edit')
+            self.assertTrue((root / 'Utils/energy_params/tracked.dat').is_file())
+            self.assertFalse((root / 'Utils/peer.py').exists())
+            self.assertFalse((root / 'Utils/energy_params/peer.dat').exists())
+        self.assertTrue((package / 'cplfold_web.py').is_file())
+        self.assertTrue((assets / 'CPLfold-LICENSE.txt').is_file())
+
+    def test_checkout_packages_tracked_paths_with_working_tree_contents(self):
+        self.track_sources()
+        self.write(self.shared, 'local edit')
+        self.write('third_party/cplfold/Utils/peer.py')
+        self.write('third_party/cplfold/Utils/energy_params/peer.dat')
+        self.check_selection()
+
+    def test_source_archive_needs_no_git_metadata(self):
+        self.write(self.shared, 'local edit')
+        self.check_selection()
+
+    def test_preflight_finds_missing_extra_and_changed_sources(self):
+        self.track_sources()
+        self.stage.stage_sources(self.repo, self.native)
+        original = self.manifest()
+        self.write('pipeline/added.py')
+        subprocess.run(['git', 'add', 'pipeline/added.py'], cwd=self.repo, check=True)
+        with self.assertRaisesRegex(ValueError, r'missing bundled sources: pipeline/added\.py'):
+            self.verify.verify_sources(self.repo, original, self.stage)
+        shutil.copy2(self.repo / 'pipeline/added.py', self.native / 'pipeline/added.py')
+        (self.native / 'pipeline/extra.py').write_text('extra')
+        with self.assertRaisesRegex(ValueError, r'unexpected bundled sources: pipeline/extra\.py'):
+            self.verify.verify_sources(self.repo, self.manifest(), self.stage)
+        (self.native / 'pipeline/extra.py').unlink()
+        self.write('pipeline/added.py', 'changed after staging')
+        with self.assertRaisesRegex(ValueError, r'bundled source is stale.*pipeline/added\.py'):
+            self.verify.verify_sources(self.repo, self.manifest(), self.stage)
+
+    def test_removed_tracked_input_is_reported(self):
+        self.track_sources()
+        (self.repo / self.shared).unlink()
+        with self.assertRaisesRegex(ValueError, 'package source is missing.*Utils/shared.py'):
+            self.stage.stage_sources(self.repo, self.native)
 
 
 @unittest.skipIf(os.name == 'nt', 'console scripts are launchers on Windows')

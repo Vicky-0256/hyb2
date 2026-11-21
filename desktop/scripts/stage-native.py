@@ -14,6 +14,9 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from bundle_sources import selected_files
+
 # Repository sources copied into every runtime (verify-native-release checks they are current).
 # web/assets/examples is the example data set (desktop/runtime/example.py).
 SOURCE_DIRS = ['desktop/runtime', 'desktop/task-runner', 'desktop/spec', 'third_party/cplfold', 'web/cplfold', 'pipeline',
@@ -27,6 +30,21 @@ assert total(numpy.arange(10)) == 45
 assert total.nopython_signatures
 print(json.dumps({"python":platform.python_version(),"base_prefix":sys.base_prefix,"numpy":numpy.__version__,"numba":numba.__version__,"llvmlite":llvmlite.__version__,"numba_jit":True,"module_paths":[numpy.__file__,numba.__file__,llvmlite.__file__]}))
 '''
+
+
+def source_files(repository):
+    return selected_files(repository, SOURCE_DIRS, ['bin/cplfold'])
+
+
+def is_project_source(name):
+    return name == 'bin/cplfold' or any(name == prefix or name.startswith(prefix + '/') for prefix in SOURCE_DIRS)
+
+
+def stage_sources(repository, stage):
+    for name in source_files(repository):
+        destination = stage / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repository / name, destination)
 
 
 def run(args, cwd, env):
@@ -265,11 +283,7 @@ def main():
             import shlex
             interpreter.write_text('#!/bin/sh\nexec ' + shlex.quote(str(args.development_python.absolute())) + ' \"$@\"\n')
             interpreter.chmod(0o755)
-        for relative in SOURCE_DIRS:
-            shutil.copytree(ROOT / relative, stage / relative,
-                            ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.nbc', '*.nbi', 'tests', 'data'))
-        (stage / 'bin').mkdir()
-        shutil.copy2(ROOT / 'bin/cplfold', stage / 'bin/cplfold')
+        stage_sources(ROOT, stage)
         if args.bowtie2:
             for binary in sorted((args.bowtie2 / 'bin').iterdir()):
                 shutil.copy2(binary, stage / 'bin' / binary.name)

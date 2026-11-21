@@ -1,3 +1,22 @@
+# Runtime packages copy working-tree files. Keep text sources LF on every checkout.
+/bin/cplfold text eol=lf
+/desktop/runtime/** text=auto eol=lf
+/desktop/spec/** text=auto eol=lf
+/desktop/task-runner/** text=auto eol=lf
+/pipeline/** text=auto eol=lf
+/third_party/cplfold/** text=auto eol=lf
+/third_party/iris/** text=auto eol=lf
+/web/cplfold/** text=auto eol=lf
+
+# The runtime source selector excludes these test and data directories.
+/desktop/runtime/tests/** !text !eol
+/pipeline/tests/** !text !eol
+/third_party/cplfold/data/** !text !eol
+/third_party/cplfold/tests/** !text !eol
+
+# Preserve the original bytes of the bundled example inputs, including gzip files.
+/web/assets/examples/** -text
+
 # Golden pipeline outputs are compared byte-for-byte on every OS.
 pipeline/tests/golden/** -text
 data/*.sam -text

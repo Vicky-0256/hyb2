@@ -10,8 +10,6 @@ final_directory="$repository_root/web/vendor/pyodide-cplfold"
 # runtime untouched.
 output_directory="$(dirname "$final_directory")/.pyodide-cplfold.staging.$$"
 previous_directory="$(dirname "$final_directory")/.pyodide-cplfold.previous.$$"
-source_directory="$repository_root/third_party/cplfold"
-bridge_source="$repository_root/web/cplfold/cplfold_web.py"
 pyodide_version="$PYODIDE_VERSION"
 pyodide_base_url="https://cdn.jsdelivr.net/pyodide/v${pyodide_version}/full"
 pyodide_license_url="https://raw.githubusercontent.com/pyodide/pyodide/${pyodide_version}/LICENSE"
@@ -176,11 +174,7 @@ download_and_verify "pyodide-lock.json" "14d2c2dba101277999e17135e653d8f15389ad1
 download_and_verify "numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl" "800c98edc0c864dfa49f07005680c699b4b42b84eae1f8cb19d35b3634e7f05c" "$pyodide_base_url/numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl"
 download_and_verify "Pyodide-LICENSE.txt" "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5" "$pyodide_license_url"
 
-cp "$source_directory/CPLfold.py" "$staging_directory/CPLfold.py"
-cp "$source_directory/CPLfold_parser.py" "$staging_directory/CPLfold_parser.py"
-cp "$source_directory/CPLcofold.py" "$staging_directory/CPLcofold.py"
-cp "$source_directory/CPLcofold_parser.py" "$staging_directory/CPLcofold_parser.py"
-cp "$bridge_source" "$staging_directory/cplfold_web.py"
+python3 "$repository_root/scripts/bundle_sources.py" "$staging_directory" "$output_directory"
 
 # The ViennaRNA wheel goes into a directory named after its own SHA-256, so a
 # new wheel has a new URL: GitHub Pages caches files for about ten minutes,
@@ -193,14 +187,6 @@ vienna_asset="$vienna_directory/$vienna_wheel"
 # builds are not carried over.)
 mkdir -p "$output_directory/$vienna_directory"
 cp "$vienna_source" "$output_directory/$vienna_asset"
-cp "$source_directory"/Utils/*.py "$staging_directory/Utils/"
-cp "$source_directory"/Utils/energy_params/* "$staging_directory/Utils/energy_params/"
-cp "$source_directory/LICENSE" "$output_directory/CPLfold-LICENSE.txt"
-cp "$source_directory/THIRD_PARTY_NOTICES.md" "$output_directory/CPLfold-THIRD_PARTY_NOTICES.md"
-cp "$source_directory/LICENSES/GPL-2.0-or-later.txt" "$output_directory/CPLfold-GPL-2.0-or-later.txt"
-cp "$source_directory/LICENSES/LinearFold-LICENSE.txt" "$output_directory/CPLfold-LinearFold-LICENSE.txt"
-cp "$source_directory/LICENSES/LinearCoFold-LICENSE.txt" "$output_directory/CPLfold-LinearCoFold-LICENSE.txt"
-cp "$source_directory/LICENSES/ViennaRNA-COPYING.txt" "$output_directory/CPLfold-ViennaRNA-COPYING.txt"
 
 archive_staging="$build_directory/cplfold-python.zip"
 # Sorted entries, fixed timestamps, fixed file modes and a fixed compression

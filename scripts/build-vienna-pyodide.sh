@@ -161,7 +161,9 @@ printf 'Building RNAlib…\n'
 emmake make -C src/ViennaRNA -j"${HYB2_BUILD_JOBS:-4}" > "${build}/make.log" 2>&1 \
   || { tail -40 "${build}/make.log" >&2; exit 1; }
 printf 'Compiling the Python wrapper…\n'
+# CPython's inline assertions include __FILE__ in the side module.
 em++ -c ${COMMON_FLAGS} -Oz -fno-strict-aliasing -Wno-unused-label -Wno-unused-variable \
+  "-ffile-prefix-map=${python_include}=cpython/include" "-ffile-prefix-map=${source_directory}=." \
   -I"${python_include}" -DVRNA_WITH_NAVIEW_LAYOUT -DVRNA_WITH_SVM -DVRNA_LOG_NO_DEBUG_RNALIB \
   -I"${source_directory}/src" -I"${source_directory}/src/ViennaRNA" \
   interfaces/Python/RNA_wrap.cpp -o "${build}/RNA_wrap.o"

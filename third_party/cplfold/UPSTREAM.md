@@ -30,18 +30,40 @@ other ignored local artifacts.
 - `tests/test_cli_exit_status.py` locks that exit-status behavior.
 - `CPLfold.py` accepts Hyb2's sparse bonus-matrix TSV export through
   `--bonus-matrix-file` and applies it with `--alpha`.
-- `CPLfold_parser.py` beam pruning (`beam_prune_deterministic`) keeps every
-  candidate that scores at least the k-th best, ties included, as LinearFold's
-  `beam_prune` does (it erases only the candidates strictly below the
-  threshold). Upstream capped the kept set at k, dropping tied candidates by
-  index; with integer Turner scores (alpha = 0) this lost good paths: the
-  10,807-nt ZIKV PE243 genome at beam 100 folded to -3413.2 kcal/mol, and
-  to -3722.1 with ties kept (RNAfold MFE -3866.4). On 50 random RNAs of
-  120-600 nt at alpha 0 the mean gap to the MFE fell from 1.38 to 0.25
-  kcal/mol; with a non-integer bonus (no ties) the structures are identical.
-  The M-beam index is now n x n (int32) so that ties cannot overflow it.
-  Folds with many ties (alpha = 0, long RNAs) take longer: about 2.7 times
-  for the ZIKV genome at beam 100. This change is not upstream yet.
+- `CPLfold_parser.py` beam pruning (`beam_prune_deterministic`) follows
+  LinearFold's `beam_prune`: with beam k, the threshold is the (k+1)-th best
+  score (LinearFold calls `quickselect(scores, 0, size - 1, size - beam)`,
+  whose last argument is a 1-based ascending rank) and only the candidates
+  strictly below it are erased. So k+1 candidates survive when the scores are
+  distinct, plus every candidate tied with the threshold; beam 0 does not
+  prune. `tests/test_beam_prune.py` pins the rule. Upstream kept exactly k,
+  dropping tied candidates by index; with integer Turner scores (alpha = 0)
+  this lost good paths. Three rules were measured side by side on 2026-11-15
+  (pseudoknot-free, alpha 0, beam 100): the upstream cap, the intermediate
+  rule of commit `8bd0ad4` (threshold at the k-th best score, ties kept: one
+  candidate narrower than LinearFold) and the exact rule. The 10,807-nt ZIKV
+  PE243 genome folds to -3413.2, -3722.1 and -3717.5 kcal/mol (RNAfold MFE
+  -3866.4, not re-measured). On 50 random RNAs (`random.Random(7)`, ten each
+  of 120, 200, 300, 400 and 600 nt) the mean gap to the RNAfold MFE is 1.38,
+  0.25 and 0.24 kcal/mol. A beam search is not monotone in its width: the
+  exact rule is 4.6 kcal/mol above the intermediate one on the ZIKV genome
+  and lower on one of the 50 RNAs (the other 49 structures are identical).
+  Fold time does not change measurably: the ZIKV fold takes 71 to 79 s of CPU
+  time with every rule (JIT warm, one thread, a loaded machine, two or three
+  runs each), of which the beam search itself is 4.1 s with the cap and 4.3
+  to 4.7 s with the exact rule. The "about 2.7 times" of commit `8bd0ad4`
+  (239 s against 89 s) timed a freshly edited copy without a warm-up, so it
+  included that copy's JIT compilation. Because the exact rule keeps one
+  candidate more than upstream even without ties, structures can differ from
+  upstream with a non-integer bonus too (under the intermediate rule they
+  were identical). The M-beam index is n x n (int32) so that the survivors
+  cannot overflow it. The score a candidate is ranked by
+  (`beam_prune_score`) also follows LinearFold: a candidate whose exterior
+  prefix `bestC[i - 1]` is unreachable gets `VALUE_MIN`, so such candidates
+  tie and are not pruned against each other. A prefix is unreachable only
+  under forced-pair constraints (`(`/`)` passed to `parse(seq, cons=...)`);
+  Hyb2 itself passes only `.`/`?` masks, for which results are unchanged.
+  These changes are not upstream yet.
 - `CPLfold_parser.py` compiles the outside pass with Numba. The new
   `_outside_kernel` and its `_outside_*` scoring helpers are verbatim copies
   of `BeamCKYParserHyper._outside` and its methods, with `self` dropped and

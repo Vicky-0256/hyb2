@@ -553,20 +553,37 @@ def score_dangle_right(nuci, nucj_1, nucj, dangle_right_arr):
 # Beam pruning with deterministic sorting
 # ============================================================================
 
+@njit(cache=True, inline='always')
+def beam_prune_score(prefix, score):
+    # LinearFold's beam_prune ranks a candidate (i, j) by bestC[i - 1] + score, except that
+    # `if ((k >= 0) && (bestC[k].score == VALUE_MIN)) newscore = VALUE_MIN;`: a candidate
+    # whose exterior prefix is unreachable ranks last, tied with every other such candidate
+    # (when the threshold falls among them, none is erased).  A prefix is unreachable only
+    # under forced-pair constraints.  Adding the float sentinel instead ranked those
+    # candidates by their own score in steps of the float spacing at 1e18 (128).  The test
+    # is a margin, not equality, because C = C + P can leave sentinel + score in C.
+    if prefix <= VALUE_MIN_FLOAT + 1e10:
+        return VALUE_MIN_FLOAT
+    return prefix + score
+
 @njit(cache=True)
 def beam_prune_deterministic(beam_arr, beam_scores, count, k):
-    if count <= k:
+    # k = 0 means no beam: LinearFold prunes only when beam > 0 and size > beam.
+    if k <= 0 or count <= k:
         return count
     sorted_scores = np.sort(beam_scores[:count])[::-1]
-    threshold = sorted_scores[k - 1]
+    # LinearFold's beam_prune takes quickselect(scores, 0, size - 1, size - beam), whose last
+    # argument is a 1-based ascending rank: the threshold is the (size - beam)-th smallest
+    # score, i.e. the (k + 1)-th best, and only the candidates strictly below it are erased.
+    # So k + 1 candidates survive when the scores are distinct, plus every candidate tied
+    # with the threshold.  Capping the kept set at k dropped ties by index, which made the
+    # search lose good paths whenever scores tie (e.g. alpha = 0, where every score is a
+    # whole number of 0.01 kcal/mol).  The buffers hold all candidates of a position (at
+    # most n), so the survivors cannot overflow them.
+    threshold = sorted_scores[k]
     new_count = 0
     temp_arr = beam_arr[:count].copy()
     temp_scores = beam_scores[:count].copy()
-    # Keep every candidate scoring at least the k-th best, ties included, as LinearFold's
-    # beam_prune does (it erases only the candidates strictly below the threshold).  Capping
-    # the ties at k dropped them by index, which made the search lose good paths whenever
-    # scores tie (e.g. alpha = 0, where every score is a whole number of 0.01 kcal/mol).
-    # The buffers hold all candidates of a position (at most n), so ties cannot overflow them.
     for idx in range(count):
         if temp_scores[idx] >= threshold:
             beam_arr[new_count] = temp_arr[idx]
@@ -632,7 +649,7 @@ def parse_loop_vienna(
             if scores[idx] > value_min:
                 beam_arr[h_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[h_count] = prefix + scores[idx]
+                beam_scores[h_count] = beam_prune_score(prefix, scores[idx])
                 h_count += 1
 
         h_count = beam_prune_deterministic(beam_arr, beam_scores, h_count, beam)
@@ -741,7 +758,7 @@ def parse_loop_vienna(
             if scores[idx] > value_min:
                 beam_arr[multi_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[multi_count] = prefix + scores[idx]
+                beam_scores[multi_count] = beam_prune_score(prefix, scores[idx])
                 multi_count += 1
 
         multi_count = beam_prune_deterministic(beam_arr, beam_scores, multi_count, beam)
@@ -795,7 +812,7 @@ def parse_loop_vienna(
             if scores[idx] > value_min:
                 beam_arr[p_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[p_count] = prefix + scores[idx]
+                beam_scores[p_count] = beam_prune_score(prefix, scores[idx])
                 p_count += 1
 
         p_count = beam_prune_deterministic(beam_arr, beam_scores, p_count, beam)
@@ -930,7 +947,7 @@ def parse_loop_vienna(
             if scores[idx] > value_min:
                 beam_arr[m2_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[m2_count] = prefix + scores[idx]
+                beam_scores[m2_count] = beam_prune_score(prefix, scores[idx])
                 m2_count += 1
 
         m2_count = beam_prune_deterministic(beam_arr, beam_scores, m2_count, beam)
@@ -988,7 +1005,7 @@ def parse_loop_vienna(
             if scores[idx] > value_min:
                 beam_arr[m_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[m_count] = prefix + scores[idx]
+                beam_scores[m_count] = beam_prune_score(prefix, scores[idx])
                 m_count += 1
 
         m_count = beam_prune_deterministic(beam_arr, beam_scores, m_count, beam)
@@ -1065,7 +1082,7 @@ def parse_loop_contrafold(
             if scores[idx] > value_min:
                 beam_arr[h_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[h_count] = prefix + scores[idx]
+                beam_scores[h_count] = beam_prune_score(prefix, scores[idx])
                 h_count += 1
 
         h_count = beam_prune_deterministic(beam_arr, beam_scores, h_count, beam)
@@ -1159,7 +1176,7 @@ def parse_loop_contrafold(
             if scores[idx] > value_min:
                 beam_arr[multi_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[multi_count] = prefix + scores[idx]
+                beam_scores[multi_count] = beam_prune_score(prefix, scores[idx])
                 multi_count += 1
 
         multi_count = beam_prune_deterministic(beam_arr, beam_scores, multi_count, beam)
@@ -1217,7 +1234,7 @@ def parse_loop_contrafold(
             if scores[idx] > value_min:
                 beam_arr[p_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[p_count] = prefix + scores[idx]
+                beam_scores[p_count] = beam_prune_score(prefix, scores[idx])
                 p_count += 1
 
         p_count = beam_prune_deterministic(beam_arr, beam_scores, p_count, beam)
@@ -1380,7 +1397,7 @@ def parse_loop_contrafold(
             if scores[idx] > value_min:
                 beam_arr[m2_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[m2_count] = prefix + scores[idx]
+                beam_scores[m2_count] = beam_prune_score(prefix, scores[idx])
                 m2_count += 1
 
         m2_count = beam_prune_deterministic(beam_arr, beam_scores, m2_count, beam)
@@ -1444,7 +1461,7 @@ def parse_loop_contrafold(
             if scores[idx] > value_min:
                 beam_arr[m_count] = i
                 prefix = c_scores[i - 1] if i > 0 else np.float64(0.0)
-                beam_scores[m_count] = prefix + scores[idx]
+                beam_scores[m_count] = beam_prune_score(prefix, scores[idx])
                 m_count += 1
 
         m_count = beam_prune_deterministic(beam_arr, beam_scores, m_count, beam)

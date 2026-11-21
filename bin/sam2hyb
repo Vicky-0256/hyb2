@@ -1,91 +1,84 @@
-#!/bin/bash -e
-#sam2hyb takes an input SAM file with compulsory additional TAGs: AS and NM (needed for score) and the database used for mapping, 
-#filters and converts it into hyb format compatible with further downstream analysis pipelines
+#!/bin/bash
+# Convert a SAM file with AS and NM tags to HYB. With -e 1 the legacy
+# energy engine is ViennaRNA RNAcofold for all structure modes (-r).
+set -eo pipefail
 
-#input sam file, input db file, output file prefix
-#sam2hyb -i 45391.sam -d ~/Virus_Structure/ZIKV_Align/Genome_Filled/db/ZBRA/ZBRA_Filled.fasta -o test_sam2hyb
-
-#hval=value - hybrid selection threshold (default=0.1)
-#gmax=value - max gap/overlap between hybrid bits (4)
-#hmax=value - max hits per hybrid (default=10)
 hval=0.1
 gmax=4
 hmax=10
-
-#ENERGY=1 (print predicted folding energy) ENERGY=0 (saves times, doesn't print folding energy)
 ENERGY=1
-#FOLD is accepted for compatibility: the dG of each hybrid is always
-#ViennaRNA's (RNAcofold of the two arms); FOLD=0 no longer runs UNAFold
-FOLD=1
-
-# parsing command line options
-while getopts "i:d:o:v:g:h:r:e:" OPTION
-do
-     case $OPTION in
-         i) SAM=$OPTARG ;;
-         d) DB=$OPTARG ;;
-         o) OUT=$OPTARG ;;
-         v) hval=$OPTARG ;;
-         g) gmax=$OPTARG;;
-         h) hmax=$OPTARG;;
-	 e) ENERGY=$OPTARG ;;
-	 r) FOLD=$OPTARG ;;
-	 ?) 
-
-             echo "incorrect option"
-             exit 0
-             ;;
-     esac
+while getopts "i:d:o:v:g:h:r:e:" option; do
+    case "$option" in
+        i) SAM=$OPTARG ;;
+        d) DB=$OPTARG ;;
+        o) OUT=$OPTARG ;;
+        v) hval=$OPTARG ;;
+        g) gmax=$OPTARG ;;
+        h) hmax=$OPTARG ;;
+        r) : ;;  # compatibility with the structure-folding option
+        e) ENERGY=$OPTARG ;;
+        *) exit 2 ;;
+    esac
 done
+shift $((OPTIND - 1))
+if [[ $# != 0 || ! -f "${SAM:-}" || -z "${OUT:-}" || ! "$ENERGY" =~ ^[01]$ ]]; then
+    echo "Usage: sam2hyb -i reads.sam -o output-prefix [-d reference.fasta] [-e 0|1]" >&2
+    exit 2
+fi
+if [[ "$ENERGY" == 1 && ! -f "${DB:-}" ]]; then
+    echo "sam2hyb: -e 1 requires a readable reference FASTA (-d): ${DB:-missing}" >&2
+    exit 2
+fi
+
+# Some legacy helpers derive filenames with shell substitutions. Give them
+# local basenames even when the user's paths contain spaces or '.hyb'.
+case "$SAM" in /*) ;; *) SAM="$PWD/$SAM" ;; esac
+case "${DB:-}" in /*|"") ;; *) DB="$PWD/$DB" ;; esac
+case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
+bin_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+export PATH="$PATH:$bin_dir"
+work=$(mktemp -d "$(dirname -- "$OUT")/.sam2hyb.XXXXXXXX")
+cleanup() {
+    if [[ -e "$work/.publishing" ]]; then
+        echo "sam2hyb: interrupted publication; recover staged files and originals in $work" >&2
+    else
+        rm -rf -- "$work"
+    fi
+}
+trap cleanup EXIT
+cd -- "$work"
+ln -s -- "$SAM" input.sam
 
 echo "Processing SAM file..."
+sam2blast_3 input.sam > read.blast
+collapse_blast_2.sh read.blast > read.collapse.blast
+mtophits_blast read.collapse.blast > read_mtophits.blast
+create_reference_file.pl read_mtophits.blast > read_mtophits.ref
+remove_duplicate_hits_blast.pl read_mtophits.ref read_mtophits.blast | rm_blast_dup > read_singleE.blast
+blast_stats_2 read_singleE.blast > read_singleE.blast_stats.txt
+get_mtop_hybrids.pl BLAST_THRESHOLD="$hval" MODE=2 MAX_OVERLAP="$gmax" MAX_HITS_PER_SEQUENCE="$hmax" OUTPUT_FORMAT=HYB read.blast > read_hits.txt
+getseqs_sam read_hits.txt input.sam > read_hybrids.fasta
+txt2hyb.awk read_hybrids.fasta read_hits.txt > read_hybrids.hyb
+remove_duplicate_hybrids_hOH5_2.pl PREFER_MIM=1 read_mtophits.ref read_hybrids.hyb > read_ua.hyb
 
-#Filtering and transforming input SAM file
-#sam_filt $SAM > ${SAM/.sam/.filt.sam}
-
-#Scoring and converting filtered SAM file to blast format, collapse same sequence reads, filter for high confidence reads, remove duplicates, and compile into hyb format with fasta sequence for each entry, coordinates, and score
-sam2blast_3 $SAM > $OUT".blast"
-collapse_blast_2.sh $OUT".blast" > $OUT".collapse.blast"
-mtophits_blast $OUT".collapse.blast" > $OUT"_mtophits.blast"
-create_reference_file.pl $OUT"_mtophits.blast" > $OUT"_mtophits.ref"
-remove_duplicate_hits_blast.pl $OUT"_mtophits.ref" $OUT"_mtophits.blast" | rm_blast_dup > $OUT"_singleE.blast"
-blast_stats_2 $OUT"_singleE.blast" > $OUT"_singleE.blast_stats.txt"
-get_mtop_hybrids.pl BLAST_THRESHOLD=$hval MODE=2 MAX_OVERLAP=$gmax MAX_HITS_PER_SEQUENCE=$hmax OUTPUT_FORMAT=HYB $OUT".blast" > $OUT"_TEMP_FILE1_TXT"
-getseqs_sam $OUT"_TEMP_FILE1_TXT" $SAM > $OUT"_hybrids.fasta" 
-txt2hyb.awk $OUT"_hybrids.fasta" $OUT"_TEMP_FILE1_TXT" > $OUT"_hybrids.hyb"
-remove_duplicate_hybrids_hOH5_2.pl PREFER_MIM=1 $OUT"_mtophits.ref" $OUT"_hybrids.hyb" > $OUT"_hybrids_ua.hyb"
-
-#Create database using input fasta file, calculate folding energy for each entry in hyb file, and collapse same sequence reads
-#if [ ! -e ${DB/fasta/tab} ]
-#then
-#	echo "Making database..."
-#	make_hyb_db_2 $DB 2>&1 > /dev/null
-#fi
-if [ "$ENERGY" == "1" ]
-then
-	hyb2fasta_bits_allRNAs.awk ${DB/fasta/tab} $OUT"_hybrids_ua.hyb"
-	paste -d "&" $OUT"_hybrids_ua.bit_1.fasta" $OUT"_hybrids_ua.bit_2.fasta" | RNAcofold --noconv --noPS | sed 's/&>/-/g;s/&//g;s/>//g;s/ /\t/g' > $OUT"_hybrids_ua.vienna"
-
-	add_dG_hyb_2.pl $OUT"_hybrids_ua.hyb" $OUT"_hybrids_ua.vienna" > $OUT"_hybrids_ua_dg.hyb"
-	collapse_hyb_2.sh $OUT"_hybrids_ua_dg.hyb" | filter_homopolymers.awk | hyb_mapped_position_overlaps_3.awk | hyb_chim_types.awk > $OUT".hyb"
-else
-	collapse_hyb_2.sh $OUT"_hybrids_ua.hyb" | filter_homopolymers.awk | hyb_mapped_position_overlaps_3.awk | hyb_chim_types.awk > $OUT".hyb"
+hybrids=read_ua.hyb
+if [[ "$ENERGY" == 1 ]]; then
+    awk -f "$bin_dir/sam2hyb_cofold.awk" "$DB" "$hybrids" > pairs.fa
+    if [[ -s pairs.fa ]]; then
+        RNAcofold --noconv --noPS < pairs.fa > cofold.vienna || {
+            rc=$?
+            echo "sam2hyb: RNAcofold exited with status $rc" >&2
+            exit "$rc"
+        }
+    else
+        : > cofold.vienna
+    fi
+    add_dG_hyb_2.pl "$hybrids" cofold.vienna pairs.fa > read_dg.hyb
+    hybrids=read_dg.hyb
 fi
-awk '$16>=5' $OUT".hyb" > $OUT"_homodimers.hyb"
-# make_nicer_vienna_hOH5.awk $OUT"_hybrids_ua.vienna" > $OUT"_hybrids_ua.viennad"
-hybrid_stats_2 $OUT".hyb" > $OUT"_hybrids.hyb_stats.txt"
+collapse_hyb_2.sh "$hybrids" | filter_homopolymers.awk | hyb_mapped_position_overlaps_3.awk | hyb_chim_types.awk > result.hyb
+awk '$16>=5' result.hyb > homodimers.hyb
+hybrid_stats_2 result.hyb > stats.txt
 
+python "$bin_dir/sam2hyb_publish.py" "$OUT" "$SAM" "${DB:-}"
 echo "Converted to hyb format."
-
-#Clear intermediate files
-#rm ${SAM/.sam/.filt.sam}
-rm $OUT".blast" $OUT"_singleE.blast" $OUT"_singleE.blast_stats.txt"
-rm $OUT"_TEMP_FILE1_TXT" $OUT"_hybrids_ua.hyb" $OUT"_hybrids.hyb"
-rm $OUT"_hybrids.fasta" $OUT"_mtophits.blast" $OUT"_mtophits.ref"
-rm $OUT".temp.blast" $OUT".count.blast" $OUT".collapse.blast"
-if [ "$ENERGY" == "1" ]
-then
-	rm $OUT"_hybrids_ua.bit_1.fasta" $OUT"_hybrids_ua.bit_2.fasta" $OUT"_hybrids_ua.vienna" $OUT"_hybrids_ua_dg.hyb" $OUT"_hybrids_ua_dg.temp.hyb" $OUT"_hybrids_ua_dg.count.hyb"
-else
-	rm $OUT"_hybrids_ua.temp.hyb" $OUT"_hybrids_ua.count.hyb"
-fi

@@ -21,7 +21,7 @@ async function main() {
     printErr: function () {}
   });
 
-  ["_hyb2_vienna_mfe", "_hyb2_vienna_mfe_constrained", "_hyb2_vienna_cofold", "_hyb2_vienna_version", "_malloc", "_free", "lengthBytesUTF8", "stringToUTF8", "UTF8ToString"].forEach(function (name) {
+  ["_hyb2_vienna_mfe", "_hyb2_vienna_mfe_constrained", "_hyb2_vienna_cofold", "_hyb2_vienna_duplex", "_hyb2_vienna_version", "_malloc", "_free", "lengthBytesUTF8", "stringToUTF8", "UTF8ToString"].forEach(function (name) {
     assert.equal(typeof module[name], "function", "Expected exported Emscripten API " + name);
   });
 
@@ -96,6 +96,31 @@ async function main() {
       module._free(cofoldStructurePointer);
       module._free(secondArmPointer);
       module._free(firstArmPointer);
+    }
+    // RNAduplex (RNA.duplexfold): GGGGGG & CCCCCC pair end to end; AAAA & AAAA
+    // cannot pair (".&.", 100000 kcal/mol, no pairs).
+    const duplexPairsPointer = module._malloc(4 * 2 * 6);
+    const duplexCountPointer = module._malloc(4);
+    const duplexOne = writeString(module, "GGGGGG");
+    const duplexTwo = writeString(module, "CCCCCC");
+    const noneOne = writeString(module, "AAAA");
+    const noneTwo = writeString(module, "AAAA");
+    try {
+      const duplexEnergy = module._hyb2_vienna_duplex(duplexOne, duplexTwo, 37, duplexPairsPointer, 6, duplexCountPointer);
+      assert.equal(Number.isFinite(duplexEnergy) && duplexEnergy < 0, true, "Expected a negative RNAduplex dG");
+      assert.equal(module.HEAP32[duplexCountPointer >>> 2], 6, "Expected six RNAduplex pairs");
+      const duplexPairs = [];
+      for (let k = 0; k < 6; k += 1) {
+        duplexPairs.push(module.HEAPU32[(duplexPairsPointer >>> 2) + 2 * k] + "," + module.HEAPU32[(duplexPairsPointer >>> 2) + 2 * k + 1]);
+      }
+      assert.deepEqual(duplexPairs.sort(), ["1,6", "2,5", "3,4", "4,3", "5,2", "6,1"]);
+      const noneEnergy = module._hyb2_vienna_duplex(noneOne, noneTwo, 37, duplexPairsPointer, 4, duplexCountPointer);
+      assert.equal(module.HEAP32[duplexCountPointer >>> 2], 0, "Expected no RNAduplex pair between A arms");
+      assert.equal(noneEnergy, 100000);
+      assert.equal(Number.isNaN(module._hyb2_vienna_duplex(duplexOne, duplexTwo, 37, duplexPairsPointer, 2, duplexCountPointer)), true,
+        "Too small a pair buffer must be refused");
+    } finally {
+      [noneTwo, noneOne, duplexTwo, duplexOne, duplexCountPointer, duplexPairsPointer].forEach(function (pointer) { module._free(pointer); });
     }
     process.stdout.write("vienna-wasm-smoke: ok\n");
   } finally {

@@ -262,6 +262,11 @@
 
 .structure-setup-col {
   display: grid;
+  /* one track that may shrink below its content: with the default auto
+     track, the open "Preview sequence" block (lines of 60 nt that do not
+     wrap) set the column's width and pushed a phone page 84 px wide; now
+     the block scrolls sideways inside the column */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 12px;
   min-width: 0;
@@ -475,6 +480,15 @@
   flex: 1 1 26ch;
 }
 
+/* structure.css stacks this card in a column at 640 px and below, where
+   the 26ch basis above is a height: it stretched a one-line heading to an
+   89 px row. The text keeps its own height there. */
+@media (max-width: 640px) {
+  .cplfold-local-cta > div {
+    flex: 0 0 auto;
+  }
+}
+
 /* E2: length against the current engine's limit. */
 .structure-length-bar {
   display: grid;
@@ -594,11 +608,15 @@
 }
 
 @media (max-width: 767px) {
+  /* opaque: the bar has no backdrop blur, so a see-through one let the
+     form's text show through it and through the disabled button. It sits
+     on the phone navigation (54px): a gap between them showed a strip of
+     the form too. */
   .structure-setup-panel .structure-run-bar {
     position: sticky;
     z-index: 2;
-    bottom: 56px;
-    background: color-mix(in srgb, var(--surface) 96%, transparent);
+    bottom: 54px;
+    background: var(--surface);
     box-shadow: 0 -12px 24px -20px rgb(19 44 71 / 35%);
   }
 
@@ -621,11 +639,26 @@
     order: 3;
   }
 
-  /* inputs stay clear of the sticky run bar and the phone navigation */
+  /* whatever takes keyboard focus in the setup stays clear of the sticky
+     run bar and the phone navigation: the fields, and the fold summaries,
+     buttons and links between them (Tab used to land on "Advanced
+     settings" underneath the bar), and the sequence preview, which Tab
+     stops at because it scrolls sideways */
   .structure-setup-panel input,
   .structure-setup-panel select,
-  .structure-setup-panel textarea {
+  .structure-setup-panel textarea,
+  .structure-setup-panel summary,
+  .structure-setup-panel button,
+  .structure-setup-panel a[href],
+  .structure-setup-panel [tabindex],
+  .structure-setup-panel .structure-sequence {
     scroll-margin-bottom: 200px;
+  }
+
+  /* the bar's own buttons are already in view: no extra scroll for them */
+  .structure-setup-panel .structure-run-bar button,
+  .structure-setup-panel .structure-run-bar a[href] {
+    scroll-margin-bottom: 0;
   }
 }
 
@@ -718,6 +751,21 @@
   min-height: 0;
 }
 
+/* The zoom buttons above the canvas and the hint below it live in the same
+   box, so the fixed box height above pushed the canvas out of its bottom
+   (104 px on a phone, 43 px at 1440), where the panel cut it off. The box
+   takes its height from its content and the canvas keeps the size it had
+   (the box height less its 12 px of padding). Full screen and the in-page
+   expanded view size the canvas by flex, which ignores this height. */
+.structure-diagram[data-view-mode="folded"]:has(> .forna-structure-mount) {
+  height: auto;
+  min-height: 0;
+}
+
+.structure-diagram[data-view-mode="folded"] > .forna-structure-mount {
+  height: calc(max(360px, min(70vh, 720px)) - 12px);
+}
+
 .structure-result-title {
   display: flex;
   flex-wrap: wrap;
@@ -746,10 +794,19 @@
   min-width: 0;
 }
 
+/* The badge sits inline at the start of the copy. structure.css still sizes
+   it as the heading's right-hand item (52% wide, right-aligned), which
+   forced a two-line, right-aligned pill; here it takes the width it needs,
+   reads from the left, and a 10px radius stays a pill on one line and
+   becomes a rounded box when a phone wraps it. */
 .structure-diagram-copy .method-badge {
+  max-width: 100%;
   min-height: 0;
   margin-right: 4px;
   padding: 1px 6px;
+  justify-content: flex-start;
+  border-radius: 10px;
+  text-align: left;
   vertical-align: 1px;
 }
 
@@ -766,6 +823,12 @@
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* "swipe sideways" line for the arc view: shown only where the drawing is
+   wider than its box (the phone rule below) */
+.structure-scroll-hint {
+  display: none;
 }
 
 @media (max-width: 719px) {
@@ -790,6 +853,37 @@
     padding: 0;
   }
 
+  /* the canvas height on a phone (see the one-column rule above) */
+  .structure-diagram[data-view-mode="folded"] > .forna-structure-mount {
+    height: max(360px, min(60vh, 520px));
+  }
+
+  /* the hint under the canvas, now in view, lines up with the heading text
+     (this box has no side padding on a phone) */
+  .structure-diagram[data-view-mode="folded"] > .forna-view-hint {
+    margin: 8px 12px 10px;
+  }
+
+  /* Arc view: squeezed into a phone's width the 920 px drawing came out at
+     38 %, with 3 px markers and 4 px labels. It keeps its drawn size here
+     and scrolls sideways inside its own box; structure-ui.js keeps the
+     scroll position when a marker tap redraws the page and adds the hint
+     line. :has(> svg) leaves the drawing editor's box alone. */
+  .structure-diagram[data-view-mode="arc"]:has(> svg) {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .structure-diagram[data-view-mode="arc"] > svg {
+    width: 920px;
+    max-width: none;
+  }
+
+  .structure-diagram-panel .structure-scroll-hint {
+    display: block;
+    margin: 6px 12px 0;
+  }
+
   .structure-diagram-heading {
     padding: 12px 12px 0;
   }
@@ -797,6 +891,20 @@
   .structure-diagram-heading .structure-view-toolbar {
     flex: 1 1 100%;
   }
+}
+
+/* ② The untouched default setup fell back to sequence only
+   (analysis-pages.js syncDefaultStructureEvidence): why, and the way back. */
+.structure-evidence-fallback {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  line-height: 1.5;
+}
+
+.structure-evidence-fallback .quiet-button {
+  border-color: var(--line);
+  background: var(--surface);
 }
 
 /* E9: five-column candidate table that fits the side column. */
@@ -813,8 +921,13 @@
   overflow-x: auto;
 }
 
+/* Rank, Energy, Pairs and Status are sized to their content; Topology gets
+   the rest, and the table's least width leaves it the 126px its widest chip
+   ("pseudoknotted") needs. Narrower than that, the table scrolls in its wrap
+   instead of clipping the chip. */
 .cplfold-candidate-table {
   width: 100%;
+  min-width: 412px;
   table-layout: fixed;
 }
 
@@ -827,23 +940,66 @@
 
 .cplfold-candidate-table th:nth-child(1),
 .cplfold-candidate-table td:nth-child(1) {
-  width: 52px;
+  width: 48px;
 }
 
 .cplfold-candidate-table th:nth-child(3),
 .cplfold-candidate-table td:nth-child(3) {
-  width: 72px;
+  width: 64px;
 }
 
 .cplfold-candidate-table th:nth-child(4),
 .cplfold-candidate-table td:nth-child(4) {
-  width: 52px;
+  width: 54px;
+}
+
+.cplfold-candidate-table th:nth-child(5),
+.cplfold-candidate-table td:nth-child(5) {
+  width: 120px;
 }
 
 .cplfold-candidate-table td:nth-child(2),
 .cplfold-candidate-table td:nth-child(5) {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Phones: tighter cells and a two-line Status ("View / structure") keep all
+   five columns inside a 390px screen; below that the wrap scrolls. */
+@media (max-width: 719px) {
+  .cplfold-candidate-table {
+    min-width: 346px;
+  }
+
+  .cplfold-candidate-table th,
+  .cplfold-candidate-table td {
+    padding-right: 5px;
+    padding-left: 5px;
+  }
+
+  .cplfold-candidate-table th:nth-child(1),
+  .cplfold-candidate-table td:nth-child(1) {
+    width: 40px;
+  }
+
+  .cplfold-candidate-table th:nth-child(3),
+  .cplfold-candidate-table td:nth-child(3) {
+    width: 54px;
+  }
+
+  .cplfold-candidate-table th:nth-child(4),
+  .cplfold-candidate-table td:nth-child(4) {
+    width: 48px;
+  }
+
+  .cplfold-candidate-table th:nth-child(5),
+  .cplfold-candidate-table td:nth-child(5) {
+    width: 84px;
+  }
+
+  .cplfold-candidate-table .candidate-view-state {
+    white-space: normal;
+  }
 }
 
 .cplfold-candidate-row {
@@ -966,4 +1122,44 @@
   border-radius: 2px;
   background: color-mix(in srgb, var(--accent, #E64B35) 30%, transparent);
   color: inherit;
+}
+
+/* P4: the ring views (radial, circular) and the matrix are drawn 650-760
+   units wide. A phone fits them in ~370 px; with the drawn height of 650 px
+   the picture was letterboxed (~150 px blank above the legend) and its
+   11-unit labels came out 6 px tall. The box now follows the drawing's own
+   proportions, and the ring and legend labels are drawn larger so they
+   read at about 11 px (legend items are spaced for it: structure-ui.js
+   legend roomy). */
+@media (max-width: 767px) {
+  .structure-diagram:is([data-view-mode="radial"], [data-view-mode="circular"], [data-view-mode="matrix"]) > svg {
+    height: auto;
+  }
+
+  .structure-diagram:is([data-view-mode="radial"], [data-view-mode="circular"]) > svg .structure-ring-label,
+  .structure-diagram:is([data-view-mode="radial"], [data-view-mode="circular"]) > svg .structure-legend-label {
+    font-size: 20px;
+  }
+}
+
+/* Short phones (390x500, landscape): header, a sticky Predict bar with a
+   two-line note and the tab bar took ~42% of the height. There the bar
+   stays in the flow at the end of the setup instead of following the
+   scroll, and focus needs no extra room for it. */
+@media (max-width: 767px) and (max-height: 560px) {
+  .structure-setup-panel .structure-run-bar {
+    position: static;
+    box-shadow: none;
+  }
+
+  .structure-setup-panel input,
+  .structure-setup-panel select,
+  .structure-setup-panel textarea,
+  .structure-setup-panel summary,
+  .structure-setup-panel button,
+  .structure-setup-panel a[href],
+  .structure-setup-panel [tabindex],
+  .structure-setup-panel .structure-sequence {
+    scroll-margin-bottom: 70px;
+  }
 }

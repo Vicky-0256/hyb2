@@ -78,7 +78,9 @@ def main() -> None:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                timeout=30,
+                # As in run(): a heavily loaded machine can take over 30 s
+                # just to start Python and import NumPy/Numba.
+                timeout=300,
             )
             if (
                 oversized.returncode == 0
@@ -116,7 +118,9 @@ def main() -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=30,
+            # As in run(): with NUMBA_DISABLE_JIT this pure-Python fold
+            # timed out at 30 s once under a load average above 130.
+            timeout=300,
         )
         if no_pseudoknot.returncode != 0:
             raise SystemExit(

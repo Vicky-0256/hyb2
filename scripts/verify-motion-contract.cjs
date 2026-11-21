@@ -250,3 +250,55 @@ assert.equal(noStorage.root.dataset.motion, 'full');
 noStorage.sync();
 assert.equal(noStorage.root.dataset.motion, 'full');
 console.log('motion-preferences: ok');
+
+// ------------------------------------------------- palette theme switch
+// The palette's "Switch to dark/light theme" used to open the Display panel
+// to press its switch, and left the panel open (g c then did nothing until
+// Esc). It presses a proxy inside #app instead. motion.js swallows that
+// click, starts the reveal at the control and presses it again a frame
+// later, so the proxy must still be in the document then.
+{
+  const interactionJs = read("interaction.js");
+  const slice = (name) => {
+    const start = interactionJs.indexOf("  function " + name + "(");
+    assert.ok(start !== -1, "interaction.js must define " + name + "()");
+    return interactionJs.slice(start, interactionJs.indexOf("\n  }\n", start) + 5);
+  };
+  assert.match(interactionJs, /label: root\.dataset\.theme === "dark" \? "Switch to light theme" : "Switch to dark theme",[\s\S]{0,80}run: function \(\) \{ toggleTheme\(\); \}/,
+    "the palette's theme command switches the theme directly");
+  assert.match(motionJs, /closest\('\[data-action="toggle-theme"\]'\)[\s\S]*?startViewTransition\(function \(\) \{[\s\S]*?toggle\.click\(\);/,
+    "motion.js presses the theme control again inside its view transition");
+  const palette = (displayPanelOpen) => {
+    const clicks = [];
+    const control = (action) => ({
+      action, style: {}, attrs: {}, parent: null,
+      setAttribute(name, value) { this.attrs[name] = value; },
+      getBoundingClientRect: () => ({ left: 1300, top: 10, width: 40, height: 40 }),
+      click() { clicks.push(this.attrs["data-action"] || this.action); },
+      remove() { this.parent = null; }
+    });
+    const page = { children: [], appendChild(node) { node.parent = page; page.children.push(node); } };
+    const sandbox = {
+      app: {
+        firstElementChild: page,
+        appendChild() { throw new Error("a child of #app would run the render observers"); },
+        querySelector: (selector) => selector === '[data-action="open-display"]' ? control("open-display")
+          : selector === '[data-action="toggle-theme"]' && displayPanelOpen ? control("toggle-theme") : null
+      },
+      document: { createElement: () => control("") }
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(slice("clickAction") + slice("toggleTheme") + "toggleTheme();", sandbox);
+    return { clicks, page };
+  };
+  const direct = palette(false);
+  assert.deepEqual(direct.clicks, ["toggle-theme"], "the theme switches without opening the Display panel");
+  assert.equal(direct.page.children.length, 1, "through a proxy inside the page");
+  assert.equal(direct.page.children[0].parent, direct.page, "that stays for motion.js's second press (the redraw removes it)");
+  assert.equal(direct.page.children[0].style.left, "1320px", "the reveal starts at the header's Display button");
+  const open = palette(true);
+  assert.deepEqual(open.clicks, ["toggle-theme"], "with the Display panel open, its own switch is pressed");
+  assert.equal(open.page.children.length, 0);
+  assert.match(interactionCss, /\.theme-proxy \{[^}]*position: fixed;[^}]*pointer-events: none;/, "the proxy takes no space and no pointer");
+  console.log('palette-theme: ok');
+}

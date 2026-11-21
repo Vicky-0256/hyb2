@@ -142,7 +142,7 @@ lifecycleTest.then(async()=>{
  class PoolWorker {
   constructor(url,options){created++;this.url=url;this.options=options;this.dead=false;}
   terminate(){this.dead=true;}
-  postMessage(message){posted.push({url:this.url,module:!!(this.options&&this.options.type==='module'),message});setTimeout(()=>{if(!this.dead)this.onmessage({data:{type:'result',version:'test',energies:new Float64Array(message.pairs.length).fill(message.type==='cplfold-energy-batch'?-7.5:-2.25)}});},1);}
+  postMessage(message){posted.push({url:this.url,module:!!(this.options&&this.options.type==='module'),message});setTimeout(()=>{if(!this.dead)this.onmessage({data:{type:'result',version:'test',energies:(e=>{if(message.type==='duplex-batch')e[0]=NaN;return e;})(new Float64Array(message.pairs.length).fill(message.type==='cplfold-energy-batch'?-7.5:message.type==='duplex-batch'?-4.5:-2.25))}});},1);}
  }
  context.Worker=PoolWorker;context.window.navigator={hardwareConcurrency:4};
  const list=Array.from({length:300},(_,i)=>({...record,id:'p'+i,lineNumber:i+1,raw:record.raw.replace(/^r\t/,'p'+i+'\t')}));
@@ -152,6 +152,17 @@ lifecycleTest.then(async()=>{
  const queries=[];
  const api={queryHybrids:async query=>{queries.push(query);return {rows:query.filters?list.filter(r=>r.id.startsWith('p1')):list};},render(){B.renderEnergy(state);},download(){},downloadBlob(){},showToast(){}};
  const wait=async predicate=>{for(let i=0;i<300;i++){if(predicate())return;await new Promise(r=>setTimeout(r,10));}throw new Error('pool test timeout');};
+ // RNAduplex, the pipeline's method, is the default: 300 records are one
+ // chunk of 500; a pair with no duplex (NaN) keeps its energy
+ B.handleAction(state,{dataset:{featureAction:'batch-energy-run'}},api);
+ await wait(()=>!state.hybEnergy.running);
+ assert.equal(state.hybEnergy.result.metadata.engine,'ViennaRNA RNAduplex');
+ assert.equal(state.hybEnergy.result.metadata.updated,299);assert.equal(created,1,'one RNAduplex worker for one chunk');
+ assert.ok(posted.every(p=>p.message.type==='duplex-batch'&&!p.module&&/folding-energy\.worker\.js/.test(p.url)));
+ assert.match(state.hybEnergy.result.audit,/RNAduplex found no pair between the arms/);
+ assert.equal((state.hybEnergy.result.hyb.match(/\t-4.50\t/g)||[]).length,299);
+ B.handleInput(state,{dataset:{feature:'batch-energy-setting',key:'engine'},value:'rnacofold'});
+ created=0;posted.length=0;
  // RNAcofold, all records: 300 / 64 = 5 chunks on min(8, 4 - 1, 5) = 3 workers
  B.handleAction(state,{dataset:{featureAction:'batch-energy-run'}},api);
  await wait(()=>!state.hybEnergy.running);
@@ -173,5 +184,5 @@ lifecycleTest.then(async()=>{
  assert.ok(created>=1&&created<=3);assert.ok(queries.some(q=>q.filters&&q.filters.search==='p1'));
  assert.match(state.hybEnergy.result.audit,/not selected by the Interactions filters/);
  assert.equal((state.hybEnergy.result.hyb.match(/\t-7.50\t/g)||[]).length,filtered);
- console.log('Energy engines (RNAcofold pool, CPLcofold), filtered records and scope independence passed.');
+ console.log('Energy engines (RNAduplex default, RNAcofold pool, CPLcofold), filtered records and scope independence passed.');
 }).catch(error=>{console.error(error);process.exit(1);});

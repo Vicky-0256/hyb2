@@ -346,6 +346,30 @@ async function parseFile(file, globals) {
     "cat a.gz b.gz is read once when the decompressor reads on through members");
   assert.equal((await parseFile(new File([twice], "twice.hyb.gz"), concatenating)).message.summary.validRecords, 5500,
     "members are not read twice when the decompressor reads on through them and raises at the padding");
+  // Zero padding after the last member can be any length (tar and tape
+  // blocking, disk images): well past 64 KB, and past the 1 MB the parser
+  // reads at a time when it looks for where the padding starts. One member
+  // and several, under each decompressor behaviour.
+  const single = zlib.gzipSync(Buffer.from(firstHalf + secondHalf));
+  const decompressors = [["native", streams], ["withholding", withholding], ["concatenating", concatenating]];
+  for (const zeros of [512, 70000, 200000, 1024 * 1024 + 3]) {
+    for (const [members, body] of [[1, single], [2, joined]]) {
+      for (const [name, globals] of decompressors) {
+        const padded = Buffer.concat([body, Buffer.alloc(zeros)]);
+        assert.equal(ids(await parseFile(new File([padded], "padded.hyb.gz"), globals)), ids(reference),
+          members + " gzip member(s) followed by " + zeros + " zero bytes are read (" + name + " decompressor)");
+      }
+    }
+  }
+  // an empty last member ends in 9 zero bytes of its own, which run into the padding
+  for (const zeros of [512, 70000]) {
+    const padded = Buffer.concat([single, zlib.gzipSync(Buffer.alloc(0)), Buffer.alloc(zeros)]);
+    assert.equal(ids(await parseFile(new File([padded], "padded.hyb.gz"), streams)), ids(reference),
+      "an empty member followed by " + zeros + " zero bytes is read");
+    assert.equal(ids(await parseFile(new File([padded], "padded.hyb.gz"), withholding)), ids(reference));
+  }
+  // zeros between members are not padding: still an error
+  await assert.rejects(parseFile(new File([Buffer.concat([single, Buffer.alloc(70000), single])], "gap.hyb.gz"), streams));
   // a truncated member still fails loudly
   await assert.rejects(parseFile(new File([joined.subarray(0, joined.length - 40)], "cut.hyb.gz"), streams));
   // without DecompressionStream a gzip file gets a clear error

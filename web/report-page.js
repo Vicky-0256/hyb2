@@ -10,6 +10,7 @@
   const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
   function render(state) {
+    noteExportFocus();
     const context = getReportContext(state || {});
     return [
       '<article class="report-page" data-report-page>',
@@ -44,6 +45,8 @@
     if (typeof document === "undefined") {
       return;
     }
+    settleExportPanel(state);
+    measureContents();
     const target = document.querySelector("[data-report-structure-diagram]");
     if (!target || !window.Hyb2StructureUI || typeof window.Hyb2StructureUI.buildStructureDiagram !== "function") {
       return;
@@ -64,6 +67,111 @@
       }
     } catch (error) {
       target.textContent = "The printable structure diagram is unavailable. Use the Structure page SVG export.";
+    }
+  }
+
+  // ---- The sticky Contents panel is one line on a phone, two on a desktop
+  // and three beside the sidebar on a tablet, so its height is measured, not
+  // assumed: report.css stops a Contents jump (scroll-margin-top of each
+  // part heading) just below the panel. The height goes on the article's
+  // parent, which the offline HTML copy does not take with it; that copy
+  // keeps the stylesheet's own figure.
+  let contentsObserver = null;
+
+  function measureContents() {
+    if (contentsObserver) {
+      contentsObserver.disconnect();
+      contentsObserver = null;
+    }
+    const page = document.querySelector("[data-report-page]");
+    const contents = page && typeof page.querySelector === "function" ? page.querySelector(".report-contents") : null;
+    const host = page ? page.parentNode : null;
+    if (!contents || !host || !host.style || typeof host.style.setProperty !== "function") {
+      return;
+    }
+    const apply = function () {
+      const height = Math.ceil(contents.offsetHeight || 0);
+      if (height > 0) {
+        host.style.setProperty("--report-contents-now", height + "px");
+        // P3: report.css's scroll-padding on <html> (the scroller) reads it
+        // too, so Tab does not leave a focused control under the panel
+        if (document.documentElement && document.documentElement.style) {
+          document.documentElement.style.setProperty("--report-contents-now", height + "px");
+        }
+      }
+    };
+    apply();
+    if (typeof ResizeObserver === "function") {
+      contentsObserver = new ResizeObserver(apply);
+      contentsObserver.observe(contents);
+    }
+  }
+
+  // ---- The export panel opens between the hero and the contents, below the
+  // fold on a phone, and app.js redraws the whole page for every report
+  // action, which leaves focus on <body>. So the panel is brought into view
+  // and focused when it opens, a redraw keeps focus on the control that had
+  // it, and Close gives focus back to the Export button.
+  let exportShown = null;    // the state.reportExport the reader was taken to
+  let exportFocus = null;    // the panel control that had focus before this redraw
+  let exportClosing = false; // the last click was the panel's Close
+
+  if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    // capture phase: app.js closes the panel and redraws in the bubble phase
+    document.addEventListener("click", function (event) {
+      exportClosing = !!(event.target && event.target.closest && event.target.closest('[data-action="report-export-close"]'));
+    }, true);
+  }
+
+  // render() runs while the page it replaces is still in the document
+  function noteExportFocus() {
+    exportFocus = null;
+    const node = typeof document !== "undefined" ? document.activeElement : null;
+    if (node && typeof node.closest === "function" && node.closest("[data-report-export-panel]")) {
+      exportFocus = { action: node.getAttribute("data-action") || "", path: node.getAttribute("data-path") || "" };
+    }
+  }
+
+  // whether the first `lead` pixels of a node are on screen, below the header
+  function inView(node, lead) {
+    const top = node.getBoundingClientRect().top;
+    const header = parseFloat(window.getComputedStyle(node).scrollMarginTop) || 0;
+    return top >= header - 1 && top + lead <= window.innerHeight;
+  }
+
+  function settleExportPanel(state) {
+    const exp = state && state.reportExport || null;
+    const panel = exp ? document.querySelector("[data-report-export-panel]") : null;
+    const focusLost = !document.activeElement || document.activeElement === document.body;
+    if (!panel) {
+      const opener = exportShown && exportClosing && focusLost ? document.querySelector(".report-export-menu > summary") : null;
+      exportShown = null;
+      exportClosing = false;
+      if (opener) {
+        opener.focus({ preventScroll: true });
+        if (!inView(opener, opener.offsetHeight)) {
+          opener.scrollIntoView({ block: "center", behavior: "instant" });
+        }
+      }
+      return;
+    }
+    const title = panel.querySelector("[data-report-export-title]") || panel;
+    if (exp !== exportShown) {
+      exportShown = exp;
+      // In view means its heading, description and buttons: 260 px, of a
+      // panel that is still preparing too, since its buttons come with the
+      // files. Instant: that redraw would cancel a smooth scroll.
+      if (!inView(panel, exp.status === "preparing" ? 260 : Math.min(panel.offsetHeight, 260))) {
+        panel.scrollIntoView({ block: "start", behavior: "instant" });
+      }
+      title.focus({ preventScroll: true });
+      return;
+    }
+    if (exportFocus && focusLost) {
+      const again = exportFocus.action ? Array.prototype.filter.call(panel.querySelectorAll("[data-action]"), function (node) {
+        return node.getAttribute("data-action") === exportFocus.action && (node.getAttribute("data-path") || "") === exportFocus.path && !node.disabled;
+      })[0] : null;
+      (again || title).focus({ preventScroll: true });
     }
   }
 
@@ -191,13 +299,13 @@
     const summary = state.summary || {};
     const items = [];
     items.push("These results describe " + (summary.fileName || "the loaded HYB file") + " only: " + formatNumber(summary.validRecords || 0) +
-      " valid records (R01; " + formatNumber(summary.invalidRecords || 0) + " invalid rows skipped, R02). Counts are not normalised against other experiments.");
+      ((summary.validRecords || 0) === 1 ? " valid record (R01; " : " valid records (R01; ") + formatNumber(summary.invalidRecords || 0) + ((summary.invalidRecords || 0) === 1 ? " invalid row skipped, R02)." : " invalid rows skipped, R02).") + " Counts are not normalised against other experiments.");
     const inferred = summary.inferredChimeraTypeRecords || 0;
     if (inferred) {
-      items.push("Chimera types of " + formatNumber(inferred) + " records (R06) were inferred by HYB2 because the file has no type column; check them before reporting type proportions.");
+      items.push((inferred === 1 ? "The chimera type of 1 record (R06) was" : "Chimera types of " + formatNumber(inferred) + " records (R06) were") + " inferred by HYB2 because the file has no type column; check them before reporting type proportions.");
     }
     if (summary.ambiguousColumn16Records) {
-      items.push(formatNumber(summary.ambiguousColumn16Records) + " rows have a legacy column 16 that may hold a raw-read count or cluster support; confirm how the file was produced.");
+      items.push(formatNumber(summary.ambiguousColumn16Records) + (summary.ambiguousColumn16Records === 1 ? " row has" : " rows have") + " a legacy column 16 that may hold a raw-read count or cluster support; confirm how the file was produced.");
     }
     const names = (summary.rnaNames || []).length;
     const reference = state.reference || state.fasta;
@@ -208,11 +316,13 @@
     }
     const comparison = state.comparison || {};
     if (comparison.result && comparison.result.ready) {
-      items.push("Compare effect and similarity maps (S07) are descriptive; only the differential test (S08, a JavaScript port of DESeq2, with replicates in each condition) gives adjusted p-values. Check its result against R before claiming a difference.");
+      items.push("Compare effect and similarity maps (S07) are descriptive; only the differential test (S08, a JavaScript port of DESeq2 that estimates noise from the replicates) gives adjusted p-values. Check its result against R before claiming a difference.");
     }
     const structure = state.structure || {};
     if (structure.result && structure.result.sequence) {
-      items.push("The RNA structure (S12) is a computational prediction guided by chimeric reads; support key helices with independent evidence (for example probing or mutation) before stating them.");
+      items.push(structureGuidedByReads(structure.result)
+        ? "The RNA structure (S12) is a computational prediction guided by chimeric reads; support key helices with independent evidence (for example probing or mutation) before stating them."
+        : "The RNA structure (S12) is a computational prediction from the sequence alone; no HYB evidence guided it. Support key helices with independent evidence (for example probing or mutation) before stating them.");
     }
     const cards = window.Hyb2Evidence ? safeCall(function () { return window.Hyb2Evidence.reportCards(state); }, []) : [];
     if (cards.length) {
@@ -301,7 +411,8 @@
     const rows = (Array.isArray(items) ? items : []).slice(0, 8).map(function (item) {
       return [escape(item.name || ""), formatNumber(item.records), formatNumber(item.support)];
     });
-    return rows.length ? table([long("RNA"), num("Records"), num("Support")], rows) : '<div class="report-empty">No RNA summary is available.</div>';
+    // per-arm tallies (a record with both arms on one RNA counts twice), as the Overview card
+    return rows.length ? table([long("RNA"), num("Records", "per arm"), num("Support", "per arm")], rows) : '<div class="report-empty">No RNA summary is available.</div>';
   }
 
   function renderTopPairTable(items) {
@@ -342,7 +453,7 @@
       "interactions",
       "Interactions",
       "Filtered record view",
-      stepBadge(context, "interactions", formatNumber(total) + " matches"),
+      stepBadge(context, "interactions", formatNumber(total) + (total === 1 ? " match" : " matches")),
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Current filters</h3>' + (filterEntries.length ? definitionList(filterEntries) : '<div class="report-empty">No additional filters; all valid records are included.</div>') + '</div>',
@@ -381,6 +492,17 @@
     );
   }
 
+  // which datasets the Contact Map read: the merged scope or one dataset
+  function contactDataLabel(state) {
+    const data = typeof window !== "undefined" && window.Hyb2Data;
+    if (!data || typeof data.contactDataset !== "function" || !Array.isArray(state.datasets) || !state.datasets.length) return "Primary file";
+    const chosen = data.contactDataset(state);
+    if (chosen.merged) {
+      return chosen.label + " (" + chosen.datasets.map(function (d) { return d.label || d.fileName || d.id; }).join(", ") + ")";
+    }
+    return (chosen.label || "Primary file") + (state.datasets.length > 1 ? " only" : "");
+  }
+
   function renderContactMap(context) {
     const state = context.state;
     const contact = state.contact || {};
@@ -407,6 +529,7 @@
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Parameters</h3>' + parameterList(params.parameters) + '</div>',
         '<div class="report-subsection"><h3>Result</h3>' + (ready ? definitionList([
+          ["Map data", contactDataLabel(state)],
           ["Cells · R10", formatNumber(matrix.cells.length)],
           ["Records used · R11", formatNumber(matrix.recordsUsed)],
           ["Total support", formatNumber(matrix.totalSupport)],
@@ -450,7 +573,7 @@
           ["Mapped arms", formatNumber(results.armContributions)],
           ["Maximum coverage · R14", formatNumber(results.max)],
           ["Total coverage", formatNumber(results.totalCoverage)]
-        ]) : '<div class="report-empty">Generate Viewpoint coverage from the workspace to include its result here.</div>') + '</div>',
+        ]) : '<div class="report-empty">' + escape(results && results.reason || "Generate Viewpoint coverage from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
         ready ? '<div class="report-visual-wrap"><div class="report-subsection-heading"><h3>Printable coverage profile</h3><span class="report-note-inline">' + escape(results.rna || viewpoint.rna || "RNA") + '</span></div>' + visualBlock(renderCoverageSvg(results.bins, results.max, "#3C5488", viewpoint.selection && viewpoint.selection.start, results.rna || viewpoint.rna, viewpoint.measure === "support" ? "Cluster support" : "Records"), results.bins.length > MAX_VISUAL_BINS ? "Coverage bars downsampled to " + formatNumber(MAX_VISUAL_BINS) + " buckets for printing." : "") + dataNote(context, "tables/viewpoint_bins.tsv") + '</div>' : "",
         results && results.binSizeAdjusted ? '<p class="report-note" data-cites="S05"><span class="report-cite">S05</span> The requested resolution was adjusted to ' + formatNumber(results.binSize) + ' nt to keep the browser profile within its maximum bin count.</p>' : ""
@@ -486,7 +609,7 @@
       [
         '<div class="report-grid report-analysis-grid">',
         '<div class="report-subsection"><h3>Parameters</h3>' + parameterList(params.parameters) + '</div>',
-        '<div class="report-subsection"><h3>Result</h3>' + (results ? definitionList([
+        '<div class="report-subsection"><h3>Result</h3>' + (results && results.invalid ? '<div class="report-empty">' + escape(results.reason) + '</div>' : results ? definitionList([
           ["Matching records · R15", formatNumber((results.records || []).length)],
           ["Cluster support · R16", formatNumber(results.support)],
           ["Partner RNAs · R17", formatNumber((results.partners || []).length)],
@@ -578,13 +701,19 @@
     const ready = !!(result && result.sequence);
     const cplfold = result && (result.engine === "CPLfold" || result.engine === "CPLcofold");
     const candidateRows = cplfold && Array.isArray(result.candidates) ? result.candidates.slice(0, MAX_TABLE_ROWS).map(function (candidate, index) {
-      return [formatNumber(index + 1), escape(candidate.type || ""), escape(candidate.topology || "nested"), candidate.energy == null ? "-" : formatNumber(candidate.energy), formatNumber((candidate.pairs || []).length), formatNumber(candidate.crossingPairs || 0), '<code>' + escape(truncateText(candidate.dotBracketWithBreak || candidate.dotBracket || "", 90)) + '</code>'];
+      return [formatNumber(index + 1), escape(candidate.type || ""), escape(candidate.topology || "nested"), candidate.energy == null ? "-" : formatEnergy(candidate.energy), formatNumber((candidate.pairs || []).length), formatNumber(candidate.crossingPairs || 0), '<code>' + escape(truncateText(candidate.dotBracketWithBreak || candidate.dotBracket || "", 90)) + '</code>'];
     }) : [];
     const structureReportData = ready && window.Hyb2StructureUI && typeof window.Hyb2StructureUI.structureReport === "function"
       ? safeCall(function () { return window.Hyb2StructureUI.structureReport(state, result); }, null)
       : null;
     const source = ready ? (structureReportData && structureReportData.source || {}) : {};
     const prediction = ready ? (structureReportData && structureReportData.prediction || {}) : {};
+    // A two-region fold (CPLcofold strands A and B) lists both regions; before
+    // a result exists the Setup shows the two regions currently chosen.
+    const fromReference = !structure.source || structure.source === "reference";
+    const regions = ready ? (window.Hyb2Results && window.Hyb2Results.structureRegions ? window.Hyb2Results.structureRegions(result) : null)
+      : (structure.engine === "cplfold" && structure.cplfoldMode === "cofold" && structure.source === "reference"
+        ? [{ rna: structure.rna, start: structure.start, end: structure.end }, { rna: structure.secondRna, start: structure.secondStart, end: structure.secondEnd }] : null);
     return section(
       "structure",
       "RNA Structure",
@@ -595,14 +724,18 @@
         '<div class="report-subsection"><h3>Setup</h3>' + definitionList([
           ["Engine", result && result.engine || (structure.engine === "cplfold" ? (structure.cplfoldMode === "cofold" ? "CPLcofold" : "CPLfold") : "ViennaRNA WebAssembly")],
           ["Source", structure.source || "Not selected"],
-          ["RNA", structure.rna || "-", true],
-          ["Range", structure.start && structure.end ? range(structure.start, structure.end) : "-"],
+          // a pasted sequence or a HYB record has no reference RNA and range
+          regions ? ["Region 1 RNA", regions[0].rna || "-", true] : ["RNA", fromReference && structure.rna || "-", true],
+          regions ? ["Region 1 range", range(regions[0].start, regions[0].end)] : ["Range", fromReference && structure.start && structure.end ? range(structure.start, structure.end) : "-"],
+          regions ? ["Region 2 RNA", regions[1].rna || "-", true] : null,
+          regions ? ["Region 2 range", range(regions[1].start, regions[1].end)] : null,
           ["Constraint mode", structure.constraintMode || "none"],
+          ["HYB evidence", ready ? structureEvidenceLabel(result) : "-"],
           ["Pseudoknot search", structure.engine === "cplfold" ? (structure.cplfoldAllowPseudoknot === false ? "Disabled" : "Allowed") : "Outside ViennaRNA mode"]
         ]) + '</div>',
         '<div class="report-subsection"><h3>Result</h3>' + (ready ? definitionList([
           ["Prepared sequence · R37", formatNumber(result.sequence.length) + " nt"],
-          ["Energy · R38", result.energy == null ? "-" : formatNumber(result.energy) + " " + (result.energyUnit || "kcal/mol")],
+          ["Energy · R38", result.energy == null ? "-" : formatEnergy(result.energy) + " " + (result.energyUnit || "kcal/mol")],
           ["Topology", prediction.topology || result.topology || "nested"],
           ["Base pairs · R39", formatNumber((result.pairs || []).length)],
           ["Crossing pairs · R40", formatNumber(result.crossingPairs || 0)],
@@ -616,7 +749,7 @@
         ready && result.cutpoint ? '<p class="report-note">Two RNA strands; &amp; marks the break after nucleotide ' + formatNumber(result.cutpoint) + '. Pair coordinates exclude this separator. ' + (result.energyMetadata && result.energyMetadata.energy_kind === "heuristic" ? 'Pseudoknot energies use an experimental ranking heuristic; they are not validated binding free energies.' : '') + '</p>' : "",
         ready ? "</div>" : "",
         cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table([num("Rank"), "Type", "Topology", num("Energy", "kcal/mol"), num("Pairs"), num("Crossing"), "Dot-bracket"], candidateRows) + '</div>' : "",
-        ready && cplfold ? '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> CPLfold candidates preserve the selected pseudoknot setting and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain available from the RNA Structure page.</p>' : ""
+        ready && cplfold ? '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> CPLfold candidates preserve the selected pseudoknot setting' + (structureGuidedByReads(result) ? ' and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain' : '. No HYB evidence guided this fold (sequence only). The complete candidate export remains') + ' available from the RNA Structure page.</p>' : ""
       ].join("")
     );
   }
@@ -700,7 +833,7 @@
     return {
       application: "HYB2 Web Lite",
       version: REPORT_VERSION,
-      buildCommit: window.HYB2_BUILD && window.HYB2_BUILD.commit || null,
+      buildCommit: window.HYB2_BUILD && window.HYB2_BUILD.commit || "unknown",
       generatedLocally: true,
       generatedAt: context.generatedAt,
       reportScope: {
@@ -873,7 +1006,7 @@
     const audience = t ? (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") : "analysis";
     const label = t ? t.id + " " + file : file;
     const detail = t ? t.scope : st ? st.title : FULL_ONLY[file];
-    return '<p class="report-data-note">Data: <code>' + escape(label) + "</code> · " + escape(detail) + ' <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + audience + '" data-path="' + escape(file) + '">Download</button></p>';
+    return '<p class="report-data-note">Data: <code>' + escape(label) + "</code> · " + escape(detail) + ' <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + audience + '" data-path="' + escape(file) + '" aria-label="Download ' + escape(file) + '">Download</button></p>';
   }
 
   // "R22 Cells tested 4,321 · R23 ..." for a step
@@ -899,8 +1032,10 @@
     const done = full.steps.filter(function (step) { return step.status === "ok" || step.status === "no_result"; }).length;
     const stepRows = full.steps.map(function (step) {
       const kept = !selected || record.steps.some(function (item) { return item.id === step.id; });
-      const box = '<input class="report-select" type="checkbox" data-action="report-select" data-step="' + escape(step.key) + '"' + (kept ? " checked" : "") +
-        (step.key === "parse" ? " disabled" : "") + ' aria-label="Include ' + escape(step.id + " " + step.title) + ' in the report">';
+      // the label only widens the 13 px box's tap area on a touch screen
+      // (report.css .report-tick); the box keeps its own aria-label
+      const box = '<label class="report-tick"><input class="report-select" type="checkbox" data-action="report-select" data-step="' + escape(step.key) + '"' + (kept ? " checked" : "") +
+        (step.key === "parse" ? " disabled" : "") + ' aria-label="Include ' + escape(step.id + " " + step.title) + ' in the report"></label>';
       return [box + ' <code>' + escape(step.id) + "</code>", escape(step.title) + (kept ? "" : ' <em class="report-left-out">left out</em>'), stepBadge({ record: full }, step.key),
         escape(step.scope || "—"), step.completedAt ? timeTag(step.completedAt) : escape(step.status === "ok" || step.status === "no_result" ? "from current inputs" : "—"), escape(pageText(step.detail || ""))];
     });
@@ -932,7 +1067,7 @@
     });
     const tableRows = record.tables.map(function (t) {
       return ['<code>' + escape(t.id) + "</code>", '<code>' + escape(t.step) + "</code>", escape(t.title), escape(t.scope),
-        "<code>" + escape(t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '">Download</button>'];
+        "<code>" + escape(t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '" aria-label="Download ' + escape(t.file) + '">Download</button>'];
     });
     return section(
       "results-index",
@@ -985,7 +1120,7 @@
         return svg ? '<div class="report-visual-wrap"><div class="report-subsection-heading">' + heading + "</div>" + visualBlock(svg, "") + "</div>" : "";
       }).join("");
       const data = tables.length ? '<p class="report-data-note">Data: ' + tables.map(function (t) {
-        return "<code>" + escape(t.id + " " + t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '">Download</button>';
+        return "<code>" + escape(t.id + " " + t.file) + '</code> <button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + (t.audience.indexOf("analysis") >= 0 ? "analysis" : "ai") + '" data-path="' + escape(t.file) + '" aria-label="Download ' + escape(t.file) + '">Download</button>';
       }).join(" · ") + "</p>" : "";
       return '<div class="report-subsection report-figure-panel"><div class="report-subsection-heading report-step-heading"><h3>' + escape(pair[1]) + "</h3>" + stepBadge(context, pair[0]) + "</div>" +
         (body || '<div class="report-empty">' + escape(pageText(step.detail || step.statusText)) + "</div>") + resultRefs(context, pair[0]) + data + "</div>";
@@ -1009,7 +1144,9 @@
     }
     const text = EXPORT_TEXT[exp.audience];
     const out = ['<section class="report-export-panel" aria-label="Export ' + escape(text[0]) + '" data-report-export-panel>',
-      '<div class="report-subsection-heading"><h2>Export · ' + escape(text[0]) + '</h2><button class="quiet-button" type="button" data-action="report-export-close">Close</button></div>',
+      // focused when the panel opens (settleExportPanel). No id: app.js would
+      // then put focus back by id after a redraw, and scroll the page to it
+      '<div class="report-subsection-heading"><h2 tabindex="-1" data-report-export-title>Export · ' + escape(text[0]) + '</h2><button class="quiet-button" type="button" data-action="report-export-close">Close</button></div>',
       '<p class="report-note">' + escape(text[1]) + "</p>"];
     // a step still being prepared would be exported as pending, not as a result
     if (context.record && context.record.scope.kind === "selected_results") {
@@ -1027,22 +1164,34 @@
     } else if (exp.status === "error") {
       out.push('<p class="notice notice-error">' + escape(exp.error || "The export could not be prepared.") + "</p>");
     } else if (exp.status === "ready") {
-      const total = exp.list.reduce(function (sum, f) { return sum + (f.excluded ? 0 : f.bytes); }, 0);
-      out.push('<div class="report-export-actions"><button class="button" type="button" data-action="report-export-zip">Download all (' + escape(formatBytes(total)) + ", ZIP)</button>" +
+      out.push('<div class="report-export-actions"><button class="button" type="button" data-action="report-export-zip">Download all (about ' + escape(formatBytes(packageSize(context, exp.list), 3)) + ", ZIP)</button>" +
         (exp.audience === "ai" ? '<button class="button button-secondary" type="button" data-action="report-export-copy">Copy AI summary (report.md)</button>' : "") + "</div>");
       out.push(table(["Include", "File", "Contents and fields", num("Size"), ""], exp.list.map(function (f) {
-        const box = '<input type="checkbox" data-action="report-export-toggle" data-path="' + escape(f.path) + '"' + (f.excluded ? "" : " checked") + (f.required ? " disabled" : "") +
-          ' aria-label="Include ' + escape(f.path) + '">';
+        const box = '<label class="report-tick"><input type="checkbox" data-action="report-export-toggle" data-path="' + escape(f.path) + '"' + (f.excluded ? "" : " checked") + (f.required ? " disabled" : "") +
+          ' aria-label="Include ' + escape(f.path) + '"></label>';
         const fields = f.fields && f.fields.length ? '<details class="report-fields"><summary>' + formatNumber(f.fields.length) + (f.fields.length === 1 ? " field" : " fields") + "</summary><code>" +
           f.fields.map(escape).join("</code> <code>") + "</code></details>" : "";
         return [box, "<code>" + escape(f.path) + "</code>" + (f.excluded ? ' <em class="report-left-out">left out</em>' : ""), escape(f.description) + fields, escape(formatBytes(f.bytes)),
-          f.excluded ? "" : '<button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + escape(exp.audience) + '" data-path="' + escape(f.path) + '">Download</button>'];
+          f.excluded ? "" : '<button class="quiet-button" type="button" data-action="report-export-file" data-audience="' + escape(exp.audience) + '" data-path="' + escape(f.path) + '" aria-label="Download ' + escape(f.path) + '">Download</button>'];
       })));
       out.push(exp.list.some(function (f) { return f.excluded; }) ? '<p class="report-note">Files you leave out are listed in manifest.json and README.md as left out by the researcher; data_dictionary.json then describes only the tables that stay. README.md and manifest.json are always included.</p>' : "");
       out.push('<p class="report-note"><strong>Not included:</strong> the input files themselves (only names and SHA-256), local paths, and anything outside this tab. Everything is built in this browser; nothing is uploaded. Sharing a file is a separate step you take yourself.</p>');
     }
     out.push("</section>");
     return out.join("");
+  }
+
+  // The size of the ZIP before it is built: the files kept, manifest.json
+  // (written at download time, when each file is hashed) and the ZIP's own
+  // records. app.js downloads it as zip(files, "hyb2-result").
+  function packageSize(context, list) {
+    const kept = list.filter(function (f) { return !f.excluded && f.path !== "manifest.json"; });
+    const content = kept.reduce(function (sum, f) { return sum + f.bytes; }, 0);
+    if (!context.record || !window.Hyb2Results || typeof window.Hyb2Results.packageBytes !== "function") {
+      return content;
+    }
+    const left = list.filter(function (f) { return f.excluded; }).map(function (f) { return f.path; });
+    return safeCall(function () { return window.Hyb2Results.packageBytes(kept, context.record, "hyb2-result", left); }, content);
   }
 
   function section(id, title, kicker, status, body) {
@@ -1636,6 +1785,16 @@
 
   // Matched names among `names` (the analysed RNAs) when given: the mapping
   // also holds RNAs of datasets outside the analysis scope.
+  // Whether chimeric reads shaped a structure result, and how: one rule for
+  // the page and the exported files (results.js).
+  function structureGuidedByReads(result) {
+    return Boolean(window.Hyb2Results && window.Hyb2Results.structureGuidedByReads(result));
+  }
+
+  function structureEvidenceLabel(result) {
+    return window.Hyb2Results ? window.Hyb2Results.structureEvidenceLabel(result) : "-";
+  }
+
   function mappedFastaCount(fasta, names) {
     if (!fasta || !fasta.mapping) return 0;
     return (names || Object.keys(fasta.mapping)).filter(function (key) { return fasta.mapping[key]; }).length;
@@ -1658,6 +1817,13 @@
     return String(value == null || value === "" ? "-" : value);
   }
 
+  // Energies as the RNA Structure page and the DBN/CT files show them:
+  // two decimals, ASCII minus ("-25.50").
+  function formatEnergy(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed.toFixed(2) : "-";
+  }
+
   function formatNumber(value, fallback) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? numberFormatter.format(parsed) : (fallback == null ? "-" : String(fallback));
@@ -1669,12 +1835,14 @@
     return new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 }).format(parsed);
   }
 
-  function formatBytes(value) {
+  // digits: significant digits of a rounded size ("about 847 KB")
+  function formatBytes(value, digits) {
     const bytes = Number(value);
     if (!Number.isFinite(bytes) || bytes <= 0) return "-";
     const units = ["B", "KB", "MB", "GB"];
     const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-    return numberFormatter.format(bytes / Math.pow(1024, index)) + " " + units[index];
+    const formatter = digits ? new Intl.NumberFormat("en-US", { maximumSignificantDigits: digits }) : numberFormatter;
+    return formatter.format(bytes / Math.pow(1024, index)) + " " + units[index];
   }
 
   // page display only, in the viewer's local time: "16 Oct 2026, 23:54 (UTC+1)".

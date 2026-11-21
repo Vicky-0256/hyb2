@@ -348,6 +348,38 @@
     }
   }
 
+  // RNAduplex dG of one and two (pairs between the arms only), rounded to 2
+  // decimals; NaN when the arms form no pair (RNAduplex's ".&.")
+  function duplex(module, one, two, temperature) {
+    if (typeof module._hyb2_vienna_duplex !== "function") {
+      throw new Error("This ViennaRNA WebAssembly build has no RNAduplex (hyb2_vienna_duplex): rebuild it with scripts/build-vienna-wasm.sh.");
+    }
+    let p1 = 0;
+    let p2 = 0;
+    let pp = 0;
+    let pc = 0;
+    try {
+      p1 = writeString(module, one);
+      p2 = writeString(module, two);
+      const capacity = Math.max(1, Math.min(one.length, two.length));
+      pp = module._malloc(8 * capacity);
+      pc = module._malloc(4);
+      if (!pp || !pc) {
+        throw new Error("ViennaRNA WebAssembly could not allocate memory.");
+      }
+      const energy = module._hyb2_vienna_duplex(p1, p2, temperature === undefined ? TEMPERATURE : temperature, pp, capacity, pc);
+      if (!Number.isFinite(energy)) {
+        throw new Error("RNAduplex failed for " + one + "&" + two);
+      }
+      return module.HEAP32[pc >>> 2] > 0 ? Math.round(energy * 100) / 100 : NaN;
+    } finally {
+      if (pc) { module._free(pc); }
+      if (pp) { module._free(pp); }
+      if (p2) { module._free(p2); }
+      if (p1) { module._free(p1); }
+    }
+  }
+
   // results(jobs, energies) -> rows with dG_one, dG_two
   function attach(jobs, energies) {
     return jobs.map(function (job, k) {
@@ -707,6 +739,7 @@
     fragment: fragment,
     buildJobs: buildJobs,
     cofold: cofold,
+    duplex: duplex,
     attach: attach,
     summarise: summarise,
     toTsv: toTsv,

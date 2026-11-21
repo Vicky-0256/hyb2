@@ -424,3 +424,11 @@
     transition: none;
   }
 }
+
+/* Arc-map controls: nine fields. With 150px auto-fill tracks a 1920px
+   window held eight, so "To (nt)" wrapped alone onto a second row. 128px
+   auto-fit tracks put all nine on one row there; narrower windows wrap
+   into balanced rows as before. */
+.arcmap-control-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 128px), 1fr));
+}

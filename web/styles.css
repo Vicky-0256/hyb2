@@ -552,6 +552,19 @@ a {
   justify-content: center;
 }
 
+/* Touch screens and phone widths: the text links are 17px high, too small
+   to tap reliably. They get a 32px box; the text size stays. */
+@media (pointer: coarse), (max-width: 767px) {
+  .desktop-download-link:not(.button),
+  .desktop-download-meta a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    min-height: 32px;
+  }
+}
+
 .desktop-first-launch summary,
 .desktop-versions summary {
   cursor: pointer;
@@ -915,6 +928,32 @@ a {
   grid-row: 1;
 }
 
+/* Once a FASTA is loaded the row has two buttons, "Add FASTA" and "Replace
+   FASTA". Both were placed in the one button cell, so the second covered the
+   first. A row with both puts them on a second line under the file name,
+   side by side: the card has room for only one button beside the name. */
+.prepared-file-row:has(> [data-action="add-fasta"]) {
+  grid-template-columns: 56px auto minmax(0, 1fr) 68px;
+  row-gap: 10px;
+}
+
+.prepared-file-row:has(> [data-action="add-fasta"]) > .prepared-file-details {
+  grid-column: 2 / 4;
+}
+
+.prepared-file-row:has(> [data-action="add-fasta"]) > button {
+  grid-row: 2;
+  justify-self: start;
+}
+
+.prepared-file-row > [data-action="add-fasta"] {
+  grid-column: 2;
+}
+
+.prepared-file-row > [data-action="add-fasta"] ~ button {
+  grid-column: 3;
+}
+
 .prepared-file-kind {
   display: inline-flex;
   align-items: center;
@@ -1251,6 +1290,21 @@ a {
   text-decoration: underline;
 }
 
+/* Touch screens and phone widths: "Download" is 17px high, too small to tap
+   reliably. Each link gets a 32px box, and the rows' own gap goes so the
+   list grows by 8px a row instead of 15px. */
+@media (pointer: coarse), (max-width: 767px) {
+  .example-files {
+    gap: 0;
+  }
+
+  .example-file-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+  }
+}
+
 .example-note {
   color: var(--muted);
   font-size: 12px;
@@ -1277,7 +1331,15 @@ a {
   border-bottom: 1px solid var(--line);
 }
 
+/* D11: in the narrow landing column at 1024 px the copy was squeezed to one
+   word per line beside the actions; below ~240 px it lets the actions take
+   their own row instead. */
+.reference-upload {
+  flex-wrap: wrap;
+}
+
 .reference-upload-copy {
+  flex: 1 1 240px;
   min-width: 0;
 }
 
@@ -1629,13 +1691,21 @@ a {
 .chimera-guide-grid .chimera-code,
 .type-item .chimera-code { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
 .chimera-guide p { color: var(--muted); font-size: 12px; }
-.comparison-canvas { touch-action: none; cursor: grab; }
+.comparison-canvas { touch-action: pan-y; cursor: grab; }
 .comparison-canvas:active { cursor: grabbing; }
 
-.deseq-canvas { touch-action: none; cursor: grab; }
+.deseq-canvas { touch-action: pan-y; cursor: grab; }
 .deseq-canvas:active { cursor: grabbing; }
 
 /* Overview: per-dataset counts and the header's analysis scope. */
+/* The per-dataset tables (Overview, Import check) scroll inside their own
+   box on a narrow screen, like layout.css's .report-table-scroll */
+.table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 /* .data-table.per-dataset-table outranks workspace.css's .data-table cells */
 .data-table.per-dataset-table td,
 .data-table.per-dataset-table th[scope="col"]:not(:first-child) {

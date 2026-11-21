@@ -27,6 +27,18 @@
   const AI_INTERACTION_ROWS = 2000;
   const MAX_ANALYSIS_ROWS = 1000000;
 
+  // Table scopes as the Report shows them and manifest.json stores them:
+  // "all 10,807 bins", "1 partner", "0 partners", "top 10 of 1,234 RNAs".
+  function countText(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US") : String(value);
+  }
+  function allScope(count, singular, plural) {
+    return count === 1 ? "1 " + singular : (count ? "all " : "") + countText(count) + " " + plural;
+  }
+  function topScope(shown, total, singular, plural) {
+    return "top " + countText(shown) + " of " + countText(total) + " " + (total === 1 ? singular : plural);
+  }
+
   const STATUS = {
     ok: "Completed with results",
     no_result: "Completed; no result met the criteria",
@@ -82,8 +94,8 @@
     ["R25", "significant_cells_b", "differential_test", "Significant cells higher in B", "cells", "R23 cells with log2 fold change A/B < 0."],
     ["R26", "interactions_a", "differential_test", "Merged interactions higher in A", "interactions", "Significant cells higher in A merged within the S08 merge range (hyb2_compare)."],
     ["R27", "interactions_b", "differential_test", "Merged interactions higher in B", "interactions", "Significant cells higher in B merged within the S08 merge range (hyb2_compare)."],
-    ["R28", "arc_pairs_a", "arc_map", "Base pairs of structure A", "pairs", "Base pairs of the arc map's structure A."],
-    ["R29", "arc_pairs_b", "arc_map", "Base pairs of structure B", "pairs", "Base pairs of the arc map's structure B, on A's coordinates."],
+    ["R28", "arc_pairs_a", "arc_map", "Base pairs of structure A where B is defined", "pairs", "Base pairs of the arc map's structure A that lie inside a span structure B covers (the basis for shared pairs); with no structure B, every pair of A. The full count is in results/structure_A.json."],
+    ["R29", "arc_pairs_b", "arc_map", "Base pairs of structure B on A's coordinates where A is defined", "pairs", "Base pairs of the arc map's structure B moved onto A's coordinates (pairs with an unaligned end are left out) that lie inside a span structure A covers (the basis for shared pairs). The full count of B, on its own sequence, is in results/structure_B.json and can be larger."],
     ["R30", "arc_interactions", "arc_map", "Interactions drawn on the arc map", "interactions", "Differential interactions drawn under the arc map's padj cutoff."],
     ["R31", "region_a", "region_structures", "Region A (higher in condition one)", "interaction", "Chosen interaction for panel D as arm1↔arm2 (nt, A coordinates)."],
     ["R32", "region_b", "region_structures", "Region B (higher in condition two)", "interaction", "Chosen interaction for panel E as arm1↔arm2 (nt, A coordinates)."],
@@ -249,8 +261,10 @@
     rna: ["string", "", "RNA name."],
     records: ["integer", "records", "Number of records."],
     support: ["number", "support units", "Sum of cluster support."],
-    x: ["integer", "nt", "Bin start on the x RNA (arm 1), 1-based."],
-    y: ["integer", "nt", "Bin start on the y RNA (arm 2), 1-based."],
+    dataset: ["string", "", "Label of the dataset (HYB file) the record comes from; written when several datasets are merged."],
+    dataset_file: ["string", "", "File name of that dataset; line is a line of this file."],
+    x: ["integer", "nt", "HYB2 bin key on the x RNA (arm 1): floor(position / bin size) × bin size, as in HYB2 contact.txt. The bin holds 1-based positions max(1, x) to min(x + bin size − 1, RNA length); the first bin's key is 0."],
+    y: ["integer", "nt", "HYB2 bin key on the y RNA (arm 2), as x."],
     value: ["number", "", "Cell value in the S04 measure."],
     bin_start: ["integer", "nt", "Bin start, 1-based inclusive."],
     bin_end: ["integer", "nt", "Bin end, 1-based inclusive."],
@@ -365,7 +379,7 @@
     const summary = s.summary || {};
     const record = {
       schema: SCHEMA,
-      application: { name: "HYB2 Web Lite", version: APP_VERSION, buildCommit: root.HYB2_BUILD && root.HYB2_BUILD.commit || null },
+      application: { name: "HYB2 Web Lite", version: APP_VERSION, buildCommit: root.HYB2_BUILD && root.HYB2_BUILD.commit || "unknown" },
       generatedAt: o.generatedAt || new Date().toISOString(),
       scope: {
         kind: "session_snapshot",
@@ -447,8 +461,19 @@
 
     // S01 parse
     if (s.summary) {
+      // Several datasets merged: there is no single file to fingerprint, so
+      // the merged set's digest is not_computed (it would stay "pending" for
+      // ever) and each file is listed with its own.
+      const scopeIds = s.selection && Array.isArray(s.selection.datasetIds) ? s.selection.datasetIds : [];
+      const scopeFiles = scopeIds.length > 1 ? (s.datasets || []).filter(function (d) { return scopeIds.indexOf(d.id) !== -1; }).map(function (d) {
+        const own = d.primary ? s.primarySummary || {} : {};
+        const digest = d.sha256 || own.sha256 || null;
+        return { fileName: d.fileName || null, bytes: number(d.fileSize), sha256: digest,
+          sha256Status: digest ? "computed" : (d.sha256Unavailable || own.sha256Unavailable ? "unavailable" : "pending"), records: number(d.validRecords) };
+      }) : [];
       const primary = addInput({ role: "primary_hyb", fileName: summary.fileName || null, bytes: number(summary.fileSize), sha256: summary.sha256 || null,
-        sha256Status: summary.sha256 ? "computed" : (summary.sha256Unavailable ? "unavailable" : "pending"), records: number(summary.validRecords) });
+        sha256Status: summary.sha256 ? "computed" : scopeFiles.length ? "not_computed" : (summary.sha256Unavailable ? "unavailable" : "pending"), records: number(summary.validRecords),
+        ...(scopeFiles.length ? { files: scopeFiles } : {}) });
       steps.parse.inputs.push(primary);
       setStatus("parse", "ok");
       values.valid_records = number(summary.validRecords);
@@ -467,15 +492,21 @@
         warn("parse", summary.ambiguousColumn16Records + " rows have a legacy column 16 that may hold a raw-read count or cluster support.");
       }
       const rnaCounts = Array.isArray(summary.rnaCounts) ? summary.rnaCounts : [];
+      // Per-arm tallies, as the Overview card and rna_counts.csv: a record with
+      // both arms on one RNA adds 2 here and 1 in top_rna_pairs.tsv.
       addTable("parse", {
         file: "tables/top_rnas.tsv", title: "Top RNAs by cluster support", audience: ["ai", "analysis"],
-        scope: "top " + rnaCounts.length + " of " + (values.unique_rnas === null ? "?" : values.unique_rnas) + " RNAs by support (the parser keeps the top 10)",
+        scope: topScope(rnaCounts.length, values.unique_rnas === null ? "?" : values.unique_rnas, "RNA", "RNAs") + " by support (each record counts once per arm; the parser keeps the top 10)",
+        columnText: {
+          records: ["integer", "records", "Number of records, counted once per arm on the RNA: a record with both arms on this RNA counts twice."],
+          support: ["number", "support units", "Sum of cluster support, added once per arm on the RNA: a record with both arms on this RNA adds its support twice."]
+        },
         make: () => tsv(["name", "records", "support"], rnaCounts.map(function (r) { return [r.name, r.records, r.support]; }))
       });
       const pairCounts = Array.isArray(summary.pairCounts) ? summary.pairCounts : [];
       addTable("parse", {
         file: "tables/top_rna_pairs.tsv", title: "Top RNA pairs by cluster support", audience: ["ai", "analysis"],
-        scope: "top " + pairCounts.length + " of " + (values.rna_pairs === null ? "?" : values.rna_pairs) + " pairs by support",
+        scope: topScope(pairCounts.length, values.rna_pairs === null ? "?" : values.rna_pairs, "pair", "pairs") + " by support",
         make: () => tsv(["rna_1", "rna_2", "records", "support"], pairCounts.map(function (r) { return [r.rnaOne, r.rnaTwo, r.records, r.support]; }))
       });
     }
@@ -510,16 +541,19 @@
       setStatus("interactions", total ? "ok" : "no_result");
       const rows = Array.isArray(o.interactionRows) ? o.interactionRows : null;
       if (rows && root.Hyb2Data && typeof root.Hyb2Data.recordsToCsv === "function") {
+        // several files merged: dataset / dataset_file columns name each row's
+        // file (its `line` is a line of that file), as in the Interactions CSV
+        const rowDatasets = typeof root.Hyb2Data.scopeDatasets === "function" ? root.Hyb2Data.scopeDatasets(s) : null;
         addTable("interactions", {
           file: "tables/interactions.tsv", title: "Records matching the current filters", audience: ["analysis"],
-          scope: rows.length < total ? "first " + rows.length + " of " + total + " filtered records" : "all " + total + " filtered records",
-          make: () => csvToTsv(root.Hyb2Data.recordsToCsv(rows.slice(0, MAX_ANALYSIS_ROWS)))
+          scope: rows.length < total ? "first " + countText(rows.length) + " of " + countText(total) + " filtered records" : allScope(total, "filtered record", "filtered records"),
+          make: () => csvToTsv(root.Hyb2Data.recordsToCsv(rows.slice(0, MAX_ANALYSIS_ROWS), rowDatasets))
         });
         const topCount = Math.min(rows.length, AI_INTERACTION_ROWS);
         addTable("interactions", {
           file: "tables/interactions_top.tsv", title: "Filtered records with the highest support", audience: ["ai"],
-          scope: "top " + topCount + " of " + total + " filtered records by support (the analysis package has all)",
-          make: () => csvToTsv(root.Hyb2Data.recordsToCsv(rows.slice().sort(function (left, right) { return (right.supportCount || 0) - (left.supportCount || 0); }).slice(0, AI_INTERACTION_ROWS)))
+          scope: topScope(topCount, total, "filtered record", "filtered records") + " by support (the analysis package has all)",
+          make: () => csvToTsv(root.Hyb2Data.recordsToCsv(rows.slice().sort(function (left, right) { return (right.supportCount || 0) - (left.supportCount || 0); }).slice(0, AI_INTERACTION_ROWS), rowDatasets))
         });
       }
     } else if (s.summary) {
@@ -544,7 +578,7 @@
       }
       addTable("contact_map", {
         file: "tables/contact_map_cells.tsv", title: "Contact map cells (" + (contact.rnaX || "") + " × " + (contact.rnaY || "") + ")",
-        audience: matrix.cells.length <= 20000 ? ["ai", "analysis"] : ["analysis"], scope: "all " + matrix.cells.length + " non-empty cells",
+        audience: matrix.cells.length <= 20000 ? ["ai", "analysis"] : ["analysis"], scope: allScope(matrix.cells.length, "non-empty cell", "non-empty cells"),
         make: () => tsv(["x", "y", "value", "records", "support"], matrix.cells.map(function (c) { return [c.x, c.y, c.value, c.records, c.support]; }))
       });
     } else if (contact.rnaX && contact.rnaY) {
@@ -561,7 +595,7 @@
       values.viewpoint_max_coverage = number(vr.max);
       setStatus("viewpoint", vr.bins.length && vr.max ? "ok" : "no_result");
       addTable("viewpoint", {
-        file: "tables/viewpoint_bins.tsv", title: "Viewpoint coverage of " + (vr.rna || viewpoint.rna || ""), audience: ["ai", "analysis"], scope: "all " + vr.bins.length + " bins",
+        file: "tables/viewpoint_bins.tsv", title: "Viewpoint coverage of " + (vr.rna || viewpoint.rna || ""), audience: ["ai", "analysis"], scope: allScope(vr.bins.length, "bin", "bins"),
         make: () => tsv(["bin_start", "bin_end", "coverage"], vr.bins.map(function (b) { return [b.start, b.end, b.value]; }))
       });
     } else if (vr && vr.reason) {
@@ -581,14 +615,17 @@
       setStatus("region", rr.records.length ? "ok" : "no_result");
       if (Array.isArray(rr.profile) && rr.profile.length) {
         addTable("region", {
-          file: "tables/region_profile.tsv", title: "Region coverage profile of " + region.rna, audience: ["ai", "analysis"], scope: "all " + rr.profile.length + " bins (" + (rr.profileBinSize || "?") + " nt)",
+          file: "tables/region_profile.tsv", title: "Region coverage profile of " + region.rna, audience: ["ai", "analysis"], scope: allScope(rr.profile.length, "bin", "bins") + " (" + (rr.profileBinSize || "?") + " nt)",
           make: () => tsv(["bin_start", "bin_end", "coverage"], rr.profile.map(function (b) { return [b.start, b.end, b.value]; }))
         });
       }
       addTable("region", {
-        file: "tables/region_partners.tsv", title: "Partner RNAs of the region", audience: ["ai", "analysis"], scope: "all " + (rr.partners || []).length + " partners",
+        file: "tables/region_partners.tsv", title: "Partner RNAs of the region", audience: ["ai", "analysis"], scope: allScope((rr.partners || []).length, "partner", "partners"),
         make: () => tsv(["name", "records", "support"], (rr.partners || []).map(function (p) { return [p.name, p.records, p.support]; }))
       });
+    } else if (region.rna && rr && rr.invalid) {
+      // an unusable typed range was not queried; the reason says what to fix
+      setStatus("region", "not_run", rr.reason);
     } else if (region.rna && (!rr || rr.reason)) {
       setStatus("region", "pending", rr && rr.reason || "The region result is still being prepared.");
     }
@@ -605,12 +642,14 @@
         return;
       }
       const ds = dataset.summary || {};
-      steps.comparison.inputs.push(addInput({ role: "compare_dataset", fileName: dataset.fileName || null, bytes: number(dataset.fileSize || ds.fileSize), sha256: ds.sha256 || null,
-        sha256Status: ds.sha256 ? "computed" : "not_computed", records: number(ds.validRecords), label: dataset.label || null, condition: dataset.condition === "B" ? "B" : "A" }));
+      // the digest is kept on the dataset entry (page-data.js), not its summary
+      const digest = dataset.sha256 || ds.sha256 || null;
+      steps.comparison.inputs.push(addInput({ role: "compare_dataset", fileName: dataset.fileName || null, bytes: number(dataset.fileSize || ds.fileSize), sha256: digest,
+        sha256Status: digest ? "computed" : (dataset.sha256Unavailable ? "unavailable" : "not_computed"), records: number(ds.validRecords), label: dataset.label || null, condition: dataset.condition === "B" ? "B" : "A" }));
     });
     if (datasets.length) {
       addTable("comparison", {
-        file: "tables/compare_datasets.tsv", title: "Compare datasets and conditions", audience: ["ai", "analysis"], scope: "all " + datasets.length + " datasets",
+        file: "tables/compare_datasets.tsv", title: "Compare datasets and conditions", audience: ["ai", "analysis"], scope: allScope(datasets.length, "dataset", "datasets"),
         make: () => tsv(["file", "label", "condition", "condition_label", "valid_records"], datasets.map(function (d) {
           return [d.fileName, d.label || "", d.condition === "B" ? "B" : "A", d.condition === "B" ? labelB : labelA, d.summary ? d.summary.validRecords : null];
         }))
@@ -624,9 +663,11 @@
       values.similarity_bins = count(cr.conservedCells);
       setStatus("comparison", cr.cells.length ? "ok" : "no_result");
       addTable("comparison", {
-        file: "tables/compare_cells.tsv", title: "Effect map cells (descriptive)", audience: ["analysis"], scope: "all " + cr.cells.length + " comparable bins",
+        file: "tables/compare_cells.tsv", title: "Effect map cells (descriptive)", audience: ["analysis"], scope: allScope(cr.cells.length, "comparable bin", "comparable bins"),
         make: () => tsv(["x", "y", "condition_a", "condition_b", "log2_effect", "similarity", "datasets_present"], cr.cells.map(function (c) {
-          return [c.x, c.y, c.conditionA, c.conditionB, c.effect, c.similarity, c.presentDatasets];
+          // 6 significant digits, as comparison.tsv
+          const sig = root.Hyb2Data && typeof root.Hyb2Data.formatSignificant === "function" ? root.Hyb2Data.formatSignificant : function (v) { return v; };
+          return [c.x, c.y, sig(c.conditionA), sig(c.conditionB), sig(c.effect), sig(c.similarity), c.presentDatasets];
         }))
       });
     } else if (datasets.length > 1) {
@@ -661,15 +702,20 @@
         if (!current) {
           warn("differential_test", "The differential test result is from earlier Compare inputs; run it again before reporting.");
         }
+        // one condition with a single replicate: the run is allowed, with its caveat
+        const caveat = root.Hyb2DeseqCard && typeof root.Hyb2DeseqCard.resultCaveat === "function" ? safe(function () { return root.Hyb2DeseqCard.resultCaveat(dr); }, "") : "";
+        if (caveat) {
+          warn("differential_test", caveat);
+        }
         if (root.Hyb2Deseq) {
           addTable("differential_test", {
             file: "tables/differential_interactions.tsv", title: "Merged differential interactions", audience: ["ai", "analysis"],
-            scope: "all " + (dr.interactions || []).length + " merged interactions with padj < " + steps.differential_test.parameters.padjCutoff,
+            scope: allScope((dr.interactions || []).length, "merged interaction", "merged interactions") + " with padj < " + steps.differential_test.parameters.padjCutoff,
             make: () => root.Hyb2Deseq.interactionsToTsv(dr.interactions)
           });
           addTable("differential_test", {
             file: "tables/differential_significant_cells.tsv", title: "Significant cells", audience: ["analysis"],
-            scope: "all " + (sm.significant || 0) + " significant cells, in padj order", make: () => root.Hyb2Deseq.significantToTsv(dr.significant)
+            scope: allScope(sm.significant || 0, "significant cell", "significant cells") + ", in padj order", make: () => root.Hyb2Deseq.significantToTsv(dr.significant)
           });
         }
         if (root.Hyb2DeseqCard && typeof root.Hyb2DeseqCard.panelSvg === "function") {
@@ -732,7 +778,7 @@
         });
         steps.region_structures.parameters = model.options ? JSON.parse(JSON.stringify(model.options)) : {};
         setStatus("region_structures", chosen.length ? "ok" : "no_result");
-        addTable("region_structures", { file: "tables/regions.tsv", title: "Chosen regions D, E", audience: ["ai", "analysis"], scope: chosen.length + " regions", make: () => panels.regionsTsv(model) });
+        addTable("region_structures", { file: "tables/regions.tsv", title: "Chosen regions D, E", audience: ["ai", "analysis"], scope: countText(chosen.length) + (chosen.length === 1 ? " region" : " regions"), make: () => panels.regionsTsv(model) });
         if (chosen.length) {
           addFigure("region_structures", { file: "figures/DE_region_structures.svg", title: "D, E · Region structures", svg: function () { return panels.svg(model); } });
         }
@@ -760,7 +806,7 @@
         steps.folding_energy.completedAt = energy.results.completedAt || null;
         const labels = { one: arcMap && arcMap.labelOne || "condition one", two: arcMap && arcMap.labelTwo || "condition two" };
         addTable("folding_energy", { file: "tables/folding_energy.tsv", title: "RNAcofold energies per interaction", audience: ["ai", "analysis"],
-          scope: "all " + energy.results.rows.length + " folded interactions", make: () => fe.toTsv(energy.results) });
+          scope: allScope(energy.results.rows.length, "folded interaction", "folded interactions"), make: () => fe.toTsv(energy.results) });
         addTable("folding_energy", { file: "tables/folding_energy_tests.tsv", title: "Paired t-tests", audience: ["ai", "analysis"], scope: "both sides", make: () => fe.statsTsv(energy.results, labels) });
         if (stats.some(function (x) { return x.n > 0; })) {
           addFigure("folding_energy", { file: "figures/FG_folding_energy.svg", title: "F, G · Folding energy", svg: function () { return fe.svg(energy.results, labels); } });
@@ -771,8 +817,19 @@
     // S12 structure
     const structure = s.structure || {};
     const sres = structure.result;
-    steps.structure.parameters = { engine: structure.engine || null, source: structure.source || null, rna: structure.rna || null, start: number(structure.start), end: number(structure.end),
-      constraintMode: structure.constraintMode || "none", pseudoknots: structure.engine === "cplfold" ? structure.cplfoldAllowPseudoknot !== false : null };
+    // hybEvidence: whether chimeric reads shaped the fold. constraintMode is
+    // ViennaRNA's setting only: a CPLfold run guided by HYB blocks has "none".
+    // Two reference regions (CPLcofold, or a paired ViennaRNA layout): both are
+    // named; a one-region fold keeps rna/start/end only.
+    const sregions = structureRegions(sres);
+    // A pasted sequence or a HYB record was not cut from a reference: the
+    // RNA and range still held in the settings are not what was folded.
+    const sourceName = structure.source === "paste" ? "pasted sequence" : structure.source === "record" ? "HYB record sequence" : null;
+    steps.structure.parameters = { engine: structure.engine || null, source: structure.source || null,
+      rna: sourceName ? null : structure.rna || null, start: sourceName ? null : number(structure.start), end: sourceName ? null : number(structure.end),
+      ...(sregions ? { rna: sregions[0].rna, start: sregions[0].start, end: sregions[0].end, secondRna: sregions[1].rna, secondStart: sregions[1].start, secondEnd: sregions[1].end } : {}),
+      constraintMode: structure.constraintMode || "none", hybEvidence: sres && sres.sequence ? structureEvidenceLabel(sres) : null,
+      pseudoknots: structure.engine === "cplfold" ? structure.cplfoldAllowPseudoknot !== false : null };
     if (sres && sres.sequence) {
       values.structure_length = sres.sequence.length;
       values.structure_energy = number(sres.energy);
@@ -780,17 +837,21 @@
       values.structure_crossing_pairs = number(sres.crossingPairs || 0);
       setStatus("structure", "ok");
       steps.structure.completedAt = sres.completedAt || null;
-      const label = (structure.rna || "structure") + (structure.start ? ":" + structure.start + "-" + structure.end : "");
+      const label = sregions ? sregions.map(function (r) { return r.rna + ":" + r.start + "-" + r.end; }).join(" + ")
+        : sourceName || (structure.rna || "structure") + (structure.start ? ":" + structure.start + "-" + structure.end : "");
       record.structures.push(Object.assign(structureFile("results/structure_prediction.dbn", "RNA structure prediction (" + (sres.engine || structure.engine || "") + ")",
         { name: label, sequence: sres.sequence, dotBracket: sres.dotBracket,
           displaySequence: sres.displaySequence, dotBracketWithBreak: sres.dotBracketWithBreak }), { step: steps.structure.id }));
-      const offset = !sres.cutpoint && number(structure.start) && structure.source === "reference" ? number(structure.start) - 1 : 0;
+      // one offset maps positions back to the RNA only for a single reference region
+      const offset = !sres.cutpoint && !sregions && number(structure.start) && structure.source === "reference" ? number(structure.start) - 1 : 0;
       record.structures.push(structureJson("results/structure_prediction.json", "RNA structure prediction (base pairs, candidates)", {
         step: steps.structure.id, source: label, method: sres.engine || structure.engine || null, energy: number(sres.energy), energyUnit: sres.energyUnit || "kcal/mol",
         topology: sres.topology || null, crossingPairs: number(sres.crossingPairs || 0), sequence: sres.sequence, length: sres.sequence.length,
         dotBracket: sres.dotBracket || null, pairs: pairList(sres.pairs),
-        coordinates: sres.cutpoint ? "1-based compact A+B positions, excluding '&'; use sourceSegments for reference mapping" : "1-based positions on the folded sequence" + (offset ? "; add " + offset + " for the position on " + (structure.rna || "the RNA") : ""),
+        coordinates: sres.cutpoint ? "1-based compact A+B positions, excluding '&'; use sourceSegments for reference mapping"
+          : "1-based positions on the folded sequence" + (offset ? "; add " + offset + " for the position on " + (structure.rna || "the RNA") : (sregions ? "; use sourceSegments for reference mapping" : "")),
         positionOffset: offset,
+        ...(sregions && !sres.cutpoint ? { sourceSegments: sres.sourceSegments } : {}),
         ...(sres.cutpoint ? { cutpoint: sres.cutpoint, strandLengths: sres.strandLengths,
           displaySequence: sres.displaySequence, dotBracketWithBreak: sres.dotBracketWithBreak,
           sourceSegments: sres.sourceSegments || [], energyMetadata: sres.energyMetadata,
@@ -843,9 +904,11 @@
     steps.parse.scope = "All rows of " + file;
     steps.reference.scope = reference ? (reference.fileName || "the FASTA") + " against the RNA names of " + file : null;
     steps.interactions.scope = "Valid records of " + file + " matching the S03 filters";
-    // the Contact Map draws one dataset, not the merged scope
+    // the Contact Map draws the merged scope, or the one dataset picked on its page
     const contactChoice = root.Hyb2Data && typeof root.Hyb2Data.contactDataset === "function" && s.datasets ? root.Hyb2Data.contactDataset(s) : null;
-    const contactFile = contactChoice && contactChoice.dataset ? contactChoice.dataset.fileName || contactChoice.dataset.label || file : file;
+    const contactFile = contactChoice && contactChoice.merged
+      ? contactChoice.datasets.length + " datasets merged (" + contactChoice.datasets.map(function (d) { return d.fileName || d.label; }).join(", ") + ")"
+      : contactChoice && contactChoice.dataset ? contactChoice.dataset.fileName || contactChoice.dataset.label || file : file;
     steps.contact_map.scope = contact.rnaX ? contactFile + ": " + contact.rnaX + " × " + contact.rnaY + (values.contact_bin_size ? ", " + values.contact_bin_size + "-nt bins" : "") : null;
     steps.viewpoint.scope = viewpoint.rna ? file + ": " + viewpoint.rna + (vr && vr.start ? " " + vr.start + "-" + vr.end : "") : null;
     steps.region.scope = region.rna ? file + ": " + region.rna + " " + (region.start || "?") + "-" + (region.end || "?") : null;
@@ -856,7 +919,9 @@
     steps.arc_map.scope = arcMap && arcMap.a ? "Structure A " + (arcMap.a.name || "") + (arcMap.b ? ", structure B " + (arcMap.b.name || "") + " on A's coordinates" : "") + (arcMap.interactions ? "; interactions " + (arcMap.interactions.name || "") : "") : null;
     steps.region_structures.scope = steps.arc_map.scope ? "Interactions of S09 with padj below the region cutoff; A coordinates" : null;
     steps.folding_energy.scope = steps.arc_map.scope ? "Interactions of S09 with padj below the S11 cutoff, each folded with both lineages' sequences" : null;
-    steps.structure.scope = sres && sres.sequence ? (structure.rna || "sequence") + (structure.start ? " " + structure.start + "-" + structure.end : "") + ", " + sres.sequence.length + " nt" : null;
+    steps.structure.scope = sres && sres.sequence ? (sregions ? sregions.map(function (r) { return r.rna + " " + r.start + "-" + r.end; }).join(" + ")
+      : sourceName || (structure.rna || "sequence") + (structure.start ? " " + structure.start + "-" + structure.end : "")) + ", " + sres.sequence.length + " nt; " +
+      (structureGuidedByReads(sres) ? "guided by HYB evidence (" + structureEvidenceLabel(sres) + ")" : "sequence only, no HYB evidence") : null;
     steps.literature_search.scope = record.literatureSearch.status === "not_run" ? null : "Cards added to the report by the researcher";
 
     // results, in catalog order, every one present
@@ -942,6 +1007,32 @@
     }).filter(function (p) { return Number.isFinite(p[0]) && Number.isFinite(p[1]); });
   }
 
+  // Whether chimeric reads shaped a structure result: a CPLfold/CPLcofold
+  // bonus matrix, a COMRADES (ViennaRNA) constraint, or the IRIS ensemble.
+  // A sequence-only fold must never be reported as read-guided.
+  function structureGuidedByReads(result) {
+    return Boolean(result && (
+      result.constraintMode === "hyb-guided" ||
+      result.engine === "IRIS" ||
+      (result.evidence && result.evidence.source === "hyb-block-intervals")
+    ));
+  }
+
+  // The two reference regions of a two-region fold (CPLcofold strands A and B,
+  // or the paired ViennaRNA layout), as folded; null for any other result.
+  function structureRegions(result) {
+    const segments = result && Array.isArray(result.sourceSegments) ? result.sourceSegments : [];
+    if (segments.length !== 2 || !segments.every(function (s) { return s && s.rna && number(s.referenceStart) && number(s.referenceEnd); })) return null;
+    return segments.map(function (s) { return { rna: s.rna, start: number(s.referenceStart), end: number(s.referenceEnd) }; });
+  }
+
+  function structureEvidenceLabel(result) {
+    if (!structureGuidedByReads(result)) return "None (sequence only)";
+    if (result.engine === "IRIS") return "IRIS weighted ensemble";
+    if (result.constraintMode === "hyb-guided") return "COMRADES constraints (ViennaRNA)";
+    return "HYB block bonus matrix";
+  }
+
   function structureJson(path, title, body) {
     return { file: path, step: body.step, title: title, length: body.length || null, text: JSON.stringify(Object.assign({ $schema: "schema/structure.schema.json", schema: SCHEMA }, body), null, 2) + "\n" };
   }
@@ -1004,6 +1095,10 @@
       if (result.unit === "p-value") {
         return result.value.toExponential(2);
       }
+      // energies read as the structure page and the DBN/CT files print them
+      if (result.unit === "kcal/mol") {
+        return result.value.toFixed(2);
+      }
       return Number.isInteger(result.value) ? result.value.toLocaleString("en-US") : String(Number(result.value.toPrecision(6)));
     }
     return String(result.value);
@@ -1021,7 +1116,7 @@
     lines.push("- Primary dataset: `" + (record.scope.primaryDataset || "none") + "`");
     lines.push("- Purpose: " + (record.scope.purpose ? record.scope.purpose.text + " (written by the researcher)" : "not stated by the researcher."));
     lines.push("- Generated: " + record.generatedAt + " by " + record.application.name + " " + record.application.version +
-      (record.application.buildCommit ? " (build " + record.application.buildCommit.slice(0, 12) + ")" : "") + ", locally in a browser tab.");
+      (record.application.buildCommit && record.application.buildCommit !== "unknown" ? " (build " + record.application.buildCommit.slice(0, 12) + ")" : "") + ", locally in a browser tab.");
     lines.push("- Run: `" + record.run.id + "` (changes when " + record.run.basis + " change).");
     lines.push("- Schema: `" + record.schema + "`. Ids: S = step, R = result, T = table, F = figure, E = external source, W = warning, I = input.");
     lines.push("");
@@ -1063,7 +1158,12 @@
     lines.push("");
     record.inputs.forEach(function (input) {
       lines.push("- **" + input.id + "** " + input.role + ": `" + (input.fileName || "unnamed") + "`" + (input.records !== undefined && input.records !== null ? ", " + input.records.toLocaleString("en-US") + " valid records" : "") +
-        (input.sha256 ? ", SHA-256 `" + input.sha256 + "`" : input.sha256Status ? ", SHA-256 " + input.sha256Status : "") + (input.condition ? ", condition " + input.condition + (input.label ? " (" + input.label + ")" : "") : ""));
+        (input.sha256 ? ", SHA-256 `" + input.sha256 + "`" : input.sha256Status ? ", SHA-256 " + input.sha256Status : "") + (input.condition ? ", condition " + input.condition + (input.label ? " (" + input.label + ")" : "") : "") +
+        (Array.isArray(input.files) ? " for the merged set; one digest per file:" : ""));
+      (input.files || []).forEach(function (file) {
+        lines.push("  - `" + (file.fileName || "unnamed") + "`" + (file.records !== null ? ", " + file.records.toLocaleString("en-US") + " valid records" : "") +
+          ", SHA-256 " + (file.sha256 ? "`" + file.sha256 + "`" : file.sha256Status));
+      });
     });
     lines.push("");
     lines.push("## External sources");
@@ -1144,7 +1244,7 @@
       schema: SCHEMA,
       run: record.run,
       conventions: {
-        coordinates: "1-based, inclusive, on each RNA's own sequence; contact-map and comparison x/y are bin starts",
+        coordinates: "1-based, inclusive, on each RNA's own sequence; contact-map and comparison x/y are HYB2 bin keys (floor(position / bin size) × bin size, as in HYB2 contact.txt; the first key is 0 and that bin holds positions 1 to bin size − 1)",
         missing: { tsv: "NA", json: null },
         notRun: "status not_run; values null, never 0",
         statusVocabulary: STATUS,
@@ -1263,7 +1363,7 @@
       record.figures.forEach(function (f) {
         const text = safe(f.svg, "");
         if (text) {
-          out.push({ path: f.file, mediaType: "image/svg+xml", text: text, description: f.id + " " + f.title + "." });
+          out.push({ path: f.file, mediaType: "image/svg+xml", text: /\n$/.test(text) ? text : text + "\n", description: f.id + " " + f.title + "." });
         }
       });
     }
@@ -1298,11 +1398,34 @@
       const bytes = utf8(f.text);
       return sha256(bytes).then(function (digest) { return { path: f.path, mediaType: f.mediaType, bytes: bytes.length, sha256: digest, description: f.description }; });
     })).then(function (entries) {
-      const manifest = { schema: SCHEMA, run: record.run, generatedAt: record.generatedAt, application: record.application, scope: record.scope, files: entries,
-        leftOutByResearcher: list.omitted || [],
-        note: "sha256 is null where this browser offers no digest API." };
-      return list.concat([{ path: "manifest.json", mediaType: "application/json", text: json(manifest), description: "File list with sizes and SHA-256." }]);
+      return list.concat([{ path: "manifest.json", mediaType: "application/json", text: json(manifestOf(record, entries, list.omitted)), description: "File list with sizes and SHA-256." }]);
     });
+  }
+
+  function manifestOf(record, entries, omitted) {
+    return { schema: SCHEMA, run: record.run, generatedAt: record.generatedAt, application: record.application, scope: record.scope, files: entries,
+      leftOutByResearcher: omitted || [],
+      note: "sha256 is null where this browser offers no digest API." };
+  }
+
+  // packageBytes(entries, record, folder, omitted) -> the size of the ZIP that
+  // zip(withManifest(files, record), folder) builds, known before a file is
+  // hashed. entries are the files kept, as { path, mediaType, bytes,
+  // description }. The ZIP stores without compressing and a SHA-256 is 64
+  // characters whatever it says, so this is the content, manifest.json and 76
+  // bytes plus twice its name for each file, and 22 to end. It is exact for
+  // the record the package is built from; an entry without mediaType, or a
+  // record built at another moment, moves it by a few bytes.
+  function packageBytes(entries, record, folder, omitted) {
+    const prefix = folder ? folder.replace(/\/?$/, "/") : "";
+    const digest = root.crypto && root.crypto.subtle ? new Array(65).join("0") : null;
+    const listed = entries.map(function (f) {
+      return { path: f.path, mediaType: f.mediaType || "application/json", bytes: f.bytes, sha256: digest, description: f.description };
+    });
+    const manifest = { path: "manifest.json", bytes: utf8(json(manifestOf(record, listed, omitted))).length };
+    return listed.concat([manifest]).reduce(function (sum, f) {
+      return sum + 76 + 2 * utf8(prefix + f.path).length + f.bytes;
+    }, 22);
   }
 
   let crcTable = null;
@@ -1404,8 +1527,12 @@
     build: build,
     files: files,
     reportMarkdown: reportMarkdown,
+    structureGuidedByReads: structureGuidedByReads,
+    structureEvidenceLabel: structureEvidenceLabel,
+    structureRegions: structureRegions,
     formatValue: formatValue,
     withManifest: withManifest,
+    packageBytes: packageBytes,
     crc32: crc32,
     zipBytes: zipBytes,
     zip: zip,

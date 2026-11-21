@@ -60,6 +60,46 @@
   white-space: nowrap;
 }
 
+/* D11: the arm diagram took up to 310 px of the ~350 px card, leaving the
+   pattern name one or two words per line ("Touching · 3′ / arm first").
+   The diagram keeps a fixed 150 px column spanning the name and count rows;
+   the name gets the rest, so the card is shorter and the Top RNA pairs card
+   beside it is no longer stretched far past its table. */
+.overview-types .type-item {
+  grid-template-columns: minmax(0, 1fr) 150px;
+  align-items: center;
+  row-gap: 4px;
+}
+
+.overview-types .type-item > strong {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: end;
+}
+
+.overview-types .type-item > .chimera-diagram {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  margin: 0;
+}
+
+.overview-types .type-item > .type-value {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+}
+
+.overview-types .type-item > .type-meter {
+  grid-row: 3;
+  margin-top: 4px;
+}
+
+@media (max-width: 420px) {
+  .overview-types .type-item {
+    grid-template-columns: minmax(0, 1fr) 120px;
+  }
+}
+
 /* Top RNA pairs in the narrower column: fixed number columns, the two RNA
    columns share the rest (K3: names truncate with a title). */
 .overview-pairs-table {
@@ -157,13 +197,18 @@
 }
 
 /* ---- D6 page-heading export menu (K2) on Overview and Interactions. When
-   the heading stacks (<=900px) the menu sits at the left edge, so its list
-   opens rightwards instead of off-screen. */
+   the heading stacks the menu sits at the left edge, so its list opens
+   rightwards instead of off-screen. responsive.css stacks .page-heading at
+   <=767px; from 768px the menu is at the right edge and keeps ui-kit.css's
+   right-aligned list (a 900px breakpoint here opened it past the right edge
+   on tablets). */
 @media (max-width: 900px) {
   .heading-export .export-menu > summary {
     margin-top: 0;
   }
+}
 
+@media (max-width: 767px) {
   .heading-export .export-menu-list {
     right: auto;
     left: 0;
@@ -256,4 +301,21 @@
 
 .format-raw-reads {
   margin-bottom: 16px;
+}
+
+/* ---- D14 Interactions header and rows share one column template. Rows
+   are <button>s, which size to their content rather than stretching, so
+   above ~1500px the head's fr columns grew while the rows' stayed at their
+   minimums. Stretch the rows to the rows container like the head. */
+.virtual-table-rows > .virtual-row {
+  width: 100%;
+}
+
+/* "Sequence ID · dataset" is wider than its 120px column: wrap it onto two
+   lines instead of cutting it to "SEQUENCE ID · D…". */
+.virtual-table-head > span:first-child {
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 3px 0;
 }

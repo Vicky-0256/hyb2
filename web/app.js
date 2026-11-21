@@ -89,6 +89,25 @@
   let dependenciesLoading = null;
   let committedInputRenderTimer = null;
   let pointerSelect = null;
+  // the select a key was pressed on since it took focus (its list may be open)
+  let keyedSelect = null;
+  // Display settings remembered in this browser (restoreDisplayPreferences)
+  const DISPLAY_KEYS = { theme: "hyb2-web-theme", density: "hyb2-web-density" };
+  const DISPLAY_VALUES = { theme: ["light", "dark"], density: ["comfortable", "compact"] };
+  // actions pressed while the page's data catches up with an edit, run in
+  // order once it is current
+  let actionsAwaitingData = [];
+  // a clipboard write started in the click, waiting for its text (copyText)
+  let clipboardSlot = null;
+  // the control render() must leave mounted, set by redrawKeepingFocus()
+  let renderKeep = null;
+  // the nav button pressed from the keyboard, focused again on its page
+  let pendingNavFocus = null;
+  // the text field in focus and the value it last held committed
+  let typedEntry = null;
+  // the field whose uncommitted text a redraw has already shown on the page
+  let typingShown = null;
+  let typingRedrawTimer = null;
 
   const analysisPages = [
     { id: "overview", label: "Overview", shortLabel: "OV" },
@@ -119,6 +138,7 @@
     ["pointercancel", finishPointerAction],
     ["input", handleInput],
     ["change", handleChange],
+    ["focusin", handleControlFocusIn],
     ["focusout", handleControlFocusOut],
     ["keydown", handleKeydown],
     ["dragover", handleDragOver],
@@ -281,13 +301,16 @@
     state.canRequestFold = !shell && typeof settings.onRequestFold === "function";
     state.analysisEntered = !shell;
     state.activePage = shell ? "landing" : normaliseEmbeddedPage(settings.page);
+    if (shell) {
+      restoreDisplayPreferences();
+    }
     if (!shell) {
       app.classList.add("hyb2-embedded");
     }
     pageData = window.Hyb2PageData.createController({
       state: state,
       initialiseOnSelection: !shell,
-      onUpdate: function () { rerenderPreservingFocus(); },
+      onUpdate: function () { redrawKeepingFocus(); },
       onError: function (error) { emit("error", error); }
     });
     pageData.setProvider(provider);
@@ -298,6 +321,7 @@
     app.addEventListener("pointercancel", finishPointerAction);
     app.addEventListener("input", handleInput);
     app.addEventListener("change", handleChange);
+    app.addEventListener("focusin", handleControlFocusIn);
     app.addEventListener("focusout", handleControlFocusOut);
     app.addEventListener("keydown", handleKeydown);
     app.addEventListener("dragover", handleDragOver);
@@ -532,6 +556,12 @@
 
     if (!state.summary || !state.analysisEntered) {
       state.activePage = "landing";
+      // a reload loses the tab's data: a page address left in the URL would
+      // name a page that is not shown
+      if (state.shell && route && route !== "landing") {
+        restoreRouteHash("");
+        lastRouteHash = "";
+      }
       return;
     }
 
@@ -545,6 +575,10 @@
       state.activePage = workspacePages.some(function (page) { return page.id === candidate; })
         ? candidate
         : "overview";
+      if (state.activePage !== candidate) {
+        restoreRouteHash("#/workspace/overview");
+        lastRouteHash = "#/workspace/overview";
+      }
       // A link carrying ?rna= / ?partner= sets those filters; the plain
       // page link (sidebar, palette) keeps the ones already chosen.
       if (state.activePage === "interactions" && state.filters && (query.has("rna") || query.has("partner"))) {
@@ -557,6 +591,10 @@
     state.activePage = ["methods", "file-format", "privacy", "validation"].indexOf(route) > -1
       ? route
       : "overview";
+    if (state.activePage !== route) {
+      restoreRouteHash("#/workspace/overview");
+      lastRouteHash = "#/workspace/overview";
+    }
   }
 
   function openDesktopDrawer() {
@@ -575,11 +613,16 @@
   }
 
   function handleMotionChange() {
-    if (state.dialog === "display") render();
+    if (state.dialog === "display") renderKeepingDrawerFocus();
   }
 
   function handleHashChange() {
     const previousPage = state.activePage;
+    // Back or Forward while a drawer is open leaves the drawer: it belongs
+    // to the page it was opened on
+    if (state.dialog && window.location.hash !== DESKTOP_HASH && window.location.hash !== "#main-content") {
+      state.dialog = null;
+    }
     syncRoute();
     render();
     if (previousPage !== state.activePage) {
@@ -611,24 +654,252 @@
     partialRenderFrame = window.requestAnimationFrame(function () {
       partialRenderFrame = 0;
       if (state.activePage === "report") {
-        const focused = focusIdentity(document.activeElement);
-        render({ immediate: true });
-        if (focused) {
-          restoreFocus(focused, null);
-        }
+        redrawKeepingFocus({ immediate: true });
       }
     });
   }
 
-  function rerenderPreservingFocus() {
+  // A redraw that was not asked for by the control in focus: after a field
+  // was committed, or when the page's data arrived. The control being used
+  // stays mounted and the page is redrawn around it (swapAround): a field
+  // being typed in keeps its text, caret and pending change, and a select in
+  // use keeps its open list. Without such a control, or when the new page has
+  // no matching place for it, the page is replaced and focus moves to the
+  // new control with the same identity.
+  function redrawKeepingFocus(options) {
     if (!app) {
       return;
     }
-    const focused = focusIdentity(document.activeElement);
-    render();
-    if (focused) {
+    const active = document.activeElement;
+    const focused = focusIdentity(active);
+    const select = selectInUse();
+    const keep = select || (focused && isTextEntry(active) ? active : null);
+    rememberOpenSections();
+    const openMenus = openUnkeyedSections();
+    const keeping = keep ? { node: keep, identity: focusIdentity(keep), required: !!select, kept: false } : null;
+    renderKeep = keeping;
+    const shownPage = renderedPage;
+    try {
+      render(options);
+    } finally {
+      renderKeep = null;
+    }
+    // a page that arrived with its data took focus itself (settleFocus)
+    if (renderedPage !== shownPage) {
+      typingShown = null;
+      return;
+    }
+    reopenUnkeyedSections(openMenus);
+    if (select) {
+      // the select itself was left as it is: it is redrawn after its change
+      // or when focus leaves it (handleChange, handleControlFocusOut)
+      state.pendingCommittedInputRender = true;
+      return;
+    }
+    if (focused && !(keeping && keeping.kept && keep === active)) {
       restoreFocus(focused, null);
     }
+    // Pages read a field's text as it is typed, so this redraw may show
+    // lengths and counts for half a number, or for the old one when typing
+    // starts after it. Once the page was redrawn around a field, it follows
+    // the typing in that field (handleInput) instead of waiting for it to
+    // be left.
+    typingShown = focused && isTextEntry(active) && document.activeElement === active ? active : null;
+  }
+
+  // RNA Structure's setup line, length and run check read the typed region
+  // directly, so they follow typing there from the first key. Other pages
+  // query their data on commit.
+  function followTyping(element) {
+    const live = element && element.dataset && element.dataset.feature === "structure-control";
+    if (typingShown !== element && !live) {
+      return;
+    }
+    if (typingRedrawTimer !== null) window.clearTimeout(typingRedrawTimer);
+    typingRedrawTimer = window.setTimeout(function () {
+      typingRedrawTimer = null;
+      if (app && (typingShown === element || live) && document.activeElement === element && app.contains(element)) {
+        redrawKeepingFocus();
+      }
+    }, 350);
+  }
+
+  // A drawer redrawn by one of its own controls (Display: theme, motion,
+  // density) keeps focus on that control's place; the control may have
+  // changed its action, so it is found by position in the page.
+  function renderKeepingDrawerFocus() {
+    const active = document.activeElement;
+    const inDrawer = app && active && app.contains(active) && typeof active.closest === "function" && active.closest("[data-dialog]");
+    const identity = inDrawer ? { tag: active.tagName, path: elementPath(active), id: active.id || "" } : null;
+    render();
+    if (!identity || (document.activeElement && document.activeElement !== document.body && app.contains(document.activeElement))) {
+      return;
+    }
+    const again = (identity.id && document.getElementById(identity.id)) || findPlainControl(document, { tag: identity.tag, path: identity.path });
+    if (again && typeof again.focus === "function") {
+      again.focus({ preventScroll: true });
+    }
+  }
+
+  // A press that opens or closes a section is followed by its toggle event
+  // only a task later; a redraw in between would draw the section as it was.
+  function rememberOpenSections() {
+    if (!app || typeof app.querySelectorAll !== "function" || !window.Hyb2OpenSections) {
+      return;
+    }
+    Array.from(app.querySelectorAll("details[data-open-key]")).forEach(function (section) {
+      if (section.dataset.openKey) {
+        window.Hyb2OpenSections[section.dataset.openKey] = section.open;
+      }
+    });
+  }
+
+  // Puts `markup` on the page. With a control to keep (redrawKeepingFocus)
+  // the page is drawn around it. Returns false, with the page as it was,
+  // when that control is a select in use and cannot be drawn around: the
+  // page then waits for the select.
+  function writePage(markup) {
+    if (renderKeep && swapAround(app, markup, renderKeep)) {
+      renderKeep.kept = true;
+      announceRedraw();
+      return true;
+    }
+    if (renderKeep && renderKeep.required) {
+      return false;
+    }
+    const before = document.activeElement;
+    const pressed = before && before !== document.body && app.contains(before) ? focusIdentity(before) : null;
+    // a drawer's own controls are found again by renderKeepingDrawerFocus
+    if (pressed && typeof before.closest === "function" && before.closest("[data-dialog]")) pressed.inDrawer = true;
+    const lost = !before || before === document.body || !!pressed;
+    app.innerHTML = markup;
+    settleFocus(pressed, lost);
+    return true;
+  }
+
+  // Replacing the page drops the control in focus to the document, and the
+  // next Tab would start again at the brand link. On another page focus goes
+  // to the nav button that was pressed (it keeps its place in the sidebar)
+  // or to the page's main region, as after the command palette. On the same
+  // page it goes to the control that replaced the one in focus. A drawer
+  // opening or closing is left to interaction.js, which returns focus.
+  function settleFocus(pressed, lost) {
+    const active = document.activeElement;
+    if (!lost || (active && active !== document.body && active.isConnected)) {
+      return;
+    }
+    const pageNow = state.summary && state.analysisEntered ? state.activePage : null;
+    const nav = pendingNavFocus;
+    if (pageNow !== renderedPage) {
+      pendingNavFocus = null;
+      if (!state.shell || state.dialog) {
+        return;
+      }
+      const navButton = nav && nav.page === pageNow
+        ? app.querySelector(nav.place + ' [data-action="navigate"][data-page="' + nav.page + '"]')
+        : null;
+      const target = navButton && navButton.getClientRects().length ? navButton : document.getElementById("main-content");
+      if (target && typeof target.focus === "function") {
+        target.focus({ preventScroll: true });
+      }
+      return;
+    }
+    if (pressed && !pressed.inDrawer && (state.dialog || null) === (renderedDialog || null)) {
+      restoreFocus(pressed, null, { preventScroll: true });
+    }
+  }
+
+  // A redraw around a kept control leaves #app's own children in place, so
+  // the render hooks that watch them (interaction.js decorate: header
+  // Search button, sidebar key hints; motion.js) are told by this event.
+  function announceRedraw() {
+    if (typeof app.dispatchEvent === "function" && typeof window.CustomEvent === "function") {
+      app.dispatchEvent(new window.CustomEvent("hyb2:redrawn"));
+    }
+  }
+
+  // Menus and other sections without a data-open-key are not part of the
+  // page's stored state: a redraw the user did not ask for draws them closed.
+  // The open ones are found again by their class and position.
+  function unkeyedSections() {
+    return app && typeof app.querySelectorAll === "function"
+      ? Array.from(app.querySelectorAll("details:not([data-open-key])"))
+      : [];
+  }
+
+  function openUnkeyedSections() {
+    const sections = unkeyedSections();
+    return sections.map(function (section, index) {
+      return section.open ? { index: index, className: section.className, count: sections.length } : null;
+    }).filter(Boolean);
+  }
+
+  function reopenUnkeyedSections(open) {
+    if (!open.length) {
+      return;
+    }
+    const sections = unkeyedSections();
+    open.forEach(function (entry) {
+      const section = sections[entry.index];
+      if (section && sections.length === entry.count && section.className === entry.className && !section.open) {
+        section.open = true;
+      }
+    });
+  }
+
+  function syncAttributes(element, twin) {
+    Array.from(element.attributes).forEach(function (attribute) {
+      if (!twin.hasAttribute(attribute.name)) element.removeAttribute(attribute.name);
+    });
+    Array.from(twin.attributes).forEach(function (attribute) {
+      if (element.getAttribute(attribute.name) !== attribute.value) element.setAttribute(attribute.name, attribute.value);
+    });
+  }
+
+  // Draws `markup` in `host` without detaching keeping.node: the node and its
+  // ancestors stay (the ancestors take the new attributes) and everything
+  // beside them is replaced. Detaching a field fires its change and blur
+  // events and drops its caret; detaching a select closes its list. Returns
+  // false, with the page untouched, when the new page has no control of the
+  // same identity at the same depth, or holds another value for a field the
+  // user has not edited.
+  function swapAround(host, markup, keeping) {
+    const keep = keeping.node;
+    if (!keep || typeof document.createElement !== "function" || typeof host.contains !== "function" || !host.contains(keep)) {
+      return false;
+    }
+    const template = document.createElement("template");
+    template.innerHTML = markup;
+    const fresh = template.content;
+    const twin = fresh ? findControl(fresh, keeping.identity) : null;
+    if (!twin || twin.tagName !== keep.tagName || twin.type !== keep.type) {
+      return false;
+    }
+    if (isTextEntry(keep) && !keeping.identity.dirty && keep.value !== twin.value) {
+      return false;
+    }
+    const kept = [];
+    const twins = [];
+    for (let node = keep; node && node !== host; node = node.parentNode) kept.push(node);
+    for (let node = twin; node && node !== fresh; node = node.parentNode) twins.push(node);
+    if (kept.length !== twins.length || kept.some(function (node, index) { return node.tagName !== twins[index].tagName; })) {
+      return false;
+    }
+    let parent = host;
+    let freshParent = fresh;
+    for (let index = kept.length - 1; index >= 0; index -= 1) {
+      const stay = kept[index];
+      const stayTwin = twins[index];
+      while (parent.firstChild !== stay) parent.removeChild(parent.firstChild);
+      while (parent.lastChild !== stay) parent.removeChild(parent.lastChild);
+      while (freshParent.firstChild !== stayTwin) parent.insertBefore(freshParent.firstChild, stay);
+      while (stayTwin.nextSibling) parent.appendChild(stayTwin.nextSibling);
+      // a select in use is left exactly as it is
+      if (index > 0 || isTextEntry(stay)) syncAttributes(stay, stayTwin);
+      parent = stay;
+      freshParent = stayTwin;
+    }
+    return true;
   }
 
   // options.immediate: draw now with the data on hand (and again when the
@@ -639,12 +910,21 @@
       return;
     }
     const token = ++dataWaitToken;
-    const pendingData = requestPageData();
+    let pendingData = requestPageData();
+    // RNA Structure's untouched default setup is settled once its data is
+    // current (analysis-pages.js syncDefaultStructureEvidence). A changed
+    // evidence mode needs other data, asked for at once. The Report shows
+    // the same setup, so it is settled there as well.
+    if (!pendingData && (state.activePage === "structure" || state.activePage === "report") && state.analysisEntered && state.summary && state.structure &&
+        window.Hyb2Pages && window.Hyb2Pages.syncDefaultStructureEvidence && window.Hyb2Pages.syncDefaultStructureEvidence(state)) {
+      pendingData = requestPageData();
+    }
     if (pendingData) {
       pendingData.then(function () {
-        if (token === dataWaitToken) {
-          rerenderPreservingFocus();
+        if (token !== dataWaitToken) {
+          return;
         }
+        redrawKeepingFocus();
       });
       // Keep the current page on screen while its data refreshes instead of
       // flashing placeholders (provider calls are async even in the browser).
@@ -666,7 +946,9 @@
     // the theme is set first: cards that read theme colours while building
     // their markup (the arc map) must see the new one
     document.documentElement.dataset.theme = state.theme;
-    app.innerHTML = workspaceOpen ? renderWorkspace() : renderLanding();
+    if (!writePage(workspaceOpen ? renderWorkspace() : renderLanding())) {
+      return;
+    }
     renderedPage = workspaceOpen ? state.activePage : null;
     if (workspaceOpen) {
       revealActiveMobileNav(navScrollLeft, previousPage !== renderedPage);
@@ -1032,8 +1314,8 @@
       "      <p>Choose one HYB file. After it is parsed, you can add a reference FASTA before entering analysis.</p>",
       "    </div>",
       "  </div>",
-      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
-      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose an optional reference FASTA file">',
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" tabindex="-1" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
+      '  <input id="fasta-file-input" class="visually-hidden" type="file" tabindex="-1" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose an optional reference FASTA file">',
       '  <div class="dropzone" data-dropzone tabindex="0" aria-label="HYB input drop zone" aria-describedby="file-input-hint">',
       '    <div class="dropzone-content">',
       '      <span class="dropzone-kicker">HYB input</span>',
@@ -1223,7 +1505,7 @@
       '  <p class="prepared-file-note"><strong>FASTA is optional.</strong> Interaction tables and contact maps can run without it; reference-based structure and full-reference coordinate views need a mapped sequence. With several genomes, choose one FASTA per genome (several files at once); you can add or replace FASTA files later in the Data panel.</p>',
       renderExampleSetup(),
       '  <div class="prepared-file-actions"><button class="button button-secondary" type="button" data-action="reset-file">Choose another HYB</button></div>',
-      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose an optional reference FASTA file">',
+      '  <input id="fasta-file-input" class="visually-hidden" type="file" tabindex="-1" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose an optional reference FASTA file">',
       '  <p class="privacy-note">Files are read and processed locally in this browser. This page has no upload endpoint.</p>',
       "</div></div>"
     ].join("");
@@ -1274,7 +1556,7 @@
       renderedPage = null;
       return;
     }
-    app.innerHTML = [
+    if (!writePage([
       '<div class="workspace workspace-embedded">',
       '  <main class="workspace-main" aria-label="' + escapeAttribute(pageTitle(state.activePage)) + '">',
       '    <div class="content-wrap">',
@@ -1283,7 +1565,9 @@
       "  </main>",
       renderToast(),
       "</div>"
-    ].join("");
+    ].join(""))) {
+      return;
+    }
     renderedPage = state.activePage;
     if (window.Hyb2UI) {
       window.Hyb2UI.afterRender(state, featureApi());
@@ -1308,22 +1592,25 @@
       "  </main>",
       renderMobileNav(),
       renderDialog(),
-      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Replace HYB file">',
-      '  <input id="comparison-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" multiple aria-label="Add HYB datasets for comparison">',
-      '  <input id="fasta-file-input" class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose a reference FASTA file">',
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" tabindex="-1" accept=".hyb,.txt,.gz,text/plain" aria-label="Replace HYB file">',
+      '  <input id="comparison-file-input" class="visually-hidden" type="file" tabindex="-1" accept=".hyb,.txt,.gz,text/plain" multiple aria-label="Add HYB datasets for comparison">',
+      '  <input id="fasta-file-input" class="visually-hidden" type="file" tabindex="-1" accept=".fa,.fasta,.fna,.fas,text/plain" multiple aria-label="Choose a reference FASTA file">',
       renderToast(),
       "</div>"
     ].join("");
   }
 
   function renderWorkspaceHeader() {
-    const summary = state.primarySummary || state.summary;
+    // the analysed scope, as in renderSidebar: one dataset shows its file, a merged scope its label
+    const summary = state.summary;
+    const scope = analysisScopes().find(function (item) { return item.value === currentScopeValue(); });
+    const scopeName = scope && currentScopeValue().indexOf(",") !== -1 ? scope.label : summary.fileName;
     return [
       '  <header class="workspace-header">',
       '    <div class="workspace-header-left">',
       renderBrand(),
       '      <div class="header-file">',
-      '        <span class="header-file-name" title="' + escapeAttribute(summary.fileName) + '">' + escapeHtml(summary.fileName) + "</span>",
+      '        <span class="header-file-name" title="' + escapeAttribute(summary.fileName) + '">' + escapeHtml(scopeName) + "</span>",
       '        <span class="ready-chip">Ready</span>',
       renderHeaderDatasets(),
       "      </div>",
@@ -1368,8 +1655,9 @@
     return ((state.selection && state.selection.datasetIds) || [PRIMARY_DATASET_ID]).join(",");
   }
 
-  // With several datasets loaded the header chooses what the pages analyse.
-  function renderHeaderDatasets() {
+  // The scope choices as <option>s, the current one selected; "" with fewer
+  // than two datasets.
+  function scopeOptionsMarkup() {
     const scopes = analysisScopes();
     if (!scopes.length) {
       return "";
@@ -1377,10 +1665,31 @@
     const current = currentScopeValue();
     const options = scopes.some(function (scope) { return scope.value === current; })
       ? scopes : [{ value: current, label: state.summary && state.summary.fileName || "Current selection" }].concat(scopes);
+    return options.map(function (scope) {
+      return '<option value="' + escapeAttribute(scope.value) + '"' + (scope.value === current ? " selected" : "") + ">" + escapeHtml(scope.label) + "</option>";
+    }).join("");
+  }
+
+  // With several datasets loaded the header chooses what the pages analyse.
+  function renderHeaderDatasets() {
+    const options = scopeOptionsMarkup();
+    if (!options) {
+      return "";
+    }
     return '        <label class="header-scope"><span class="visually-hidden">Datasets analysed</span><select id="analysis-scope" title="Datasets merged by Overview, Interactions, Viewpoint, Region Explorer and the Report. Contact Map draws one dataset of its choice, RNA Structure takes its evidence as set by HYB evidence from, and Compare keeps its own conditions.">' +
-      options.map(function (scope) {
-        return '<option value="' + escapeAttribute(scope.value) + '"' + (scope.value === current ? " selected" : "") + ">" + escapeHtml(scope.label) + "</option>";
-      }).join("") + "</select></label>";
+      options + "</select></label>";
+  }
+
+  // The same choice in the Data drawer. A phone's header has no room for the
+  // select (responsive.css hides .header-file there), so the drawer is the
+  // touch route to it; it is there at every width.
+  function renderDrawerScope() {
+    const options = scopeOptionsMarkup();
+    if (!options) {
+      return "";
+    }
+    return drawerSection("Datasets analysed", '<label class="control-field drawer-scope"><span class="visually-hidden">Datasets analysed</span><select id="analysis-scope-drawer">' + options + "</select></label>" +
+      "<p>Overview, Interactions, Viewpoint, Region Explorer and the Report merge these datasets. Contact Map, RNA Structure and Compare keep their own choice.</p>");
   }
 
   // The header's scope list while the page keeps its old markup during a data
@@ -1488,6 +1797,9 @@
     const structure = state.structure;
     if (structure) {
       const before = { rna: structure.rna, start: structure.start, end: structure.end };
+      // a default region is parked as one (not a snapshot key), so it is
+      // capped again when it comes back
+      if (structure.defaultRegionEnd != null) before.defaultRegionEnd = structure.defaultRegionEnd;
       const region = window.Hyb2Data.defaultRegionState(state.summary, null);
       const settings = scopeSettings("structure", before);
       if (!settings && before.rna) {
@@ -1495,8 +1807,11 @@
         if (window.Hyb2Pages && window.Hyb2Pages.capDefaultStructureRegion) window.Hyb2Pages.capDefaultStructureRegion(structure);
         if (parked.structure) parked.structure.snapshot = scopeSnapshot("structure", structure);
       } else if (settings !== before) {
-        Object.assign(structure, settings);
+        // parked settings come back as they were left: the user's own
+        // region stays as set, a default region is still a default
         delete structure.defaultRegionEnd;
+        Object.assign(structure, settings);
+        if (window.Hyb2Pages && window.Hyb2Pages.capDefaultStructureRegion) window.Hyb2Pages.capDefaultStructureRegion(structure);
       }
       if (structure.rna !== before.rna || structure.start !== before.start || structure.end !== before.end) {
         structure.result = null;
@@ -1718,6 +2033,33 @@
     return window.Hyb2Overview.render(state);
   }
 
+  // The Display settings (theme, table density; motion.js keeps motion) are
+  // remembered in this browser for the next visit. Nothing else the user
+  // loads or computes is stored. Storage may be missing or blocked: the
+  // settings then last for this tab only. The embedded desktop view follows
+  // its host instead.
+  function restoreDisplayPreferences() {
+    Object.keys(DISPLAY_KEYS).forEach(function (name) {
+      try {
+        const saved = window.localStorage.getItem(DISPLAY_KEYS[name]);
+        if (DISPLAY_VALUES[name].indexOf(saved) !== -1) state[name] = saved;
+      } catch (error) {
+        // no storage: the default stands
+      }
+    });
+  }
+
+  function saveDisplayPreference(name, value) {
+    if (!state.shell) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(DISPLAY_KEYS[name], value);
+    } catch (error) {
+      // no storage: the choice lasts for this tab
+    }
+  }
+
   function renderDialog() {
     if (!state.dialog) {
       return "";
@@ -1728,7 +2070,7 @@
         drawerSection("What happens to your files", "<ul class=\"drawer-list\">" +
           "<li>HYB and FASTA files are read by this tab; there is no upload step and no server.</li>" +
           "<li>Results are kept in this tab’s memory only. Refreshing the page or starting over removes them.</li>" +
-          "<li>Nothing is stored in the browser between visits, and the site has no analytics.</li>" +
+          "<li>Your files and results are never stored in the browser. Only your Display settings (theme, motion, table density) and the measured RNA Structure size limit are kept, so they apply on your next visit. The site has no analytics.</li>" +
           "</ul>"),
         drawerSection("The one exception you control", "<p>Related research on the RNA Structure page is off by default. When you turn it on, only the identifier and species you confirm are sent to EBI (RNAcentral and Europe PMC).</p>"),
         state.analysisEntered ? '<div class="drawer-links"><button class="quiet-button" type="button" data-action="navigate" data-page="privacy">Read the full privacy notes</button></div>' : ""
@@ -1753,6 +2095,7 @@
 
     if (state.dialog === "files" && state.summary) {
       return renderDrawer("files", "Data", "The files this session is analysing, how their RNA names match the reference, and how to reproduce the results.",
+        renderDrawerScope() +
         window.Hyb2Pages.getFilesDialogBody(state) +
         drawerSection("Start over", '<p>Removes every loaded file and result from this tab and returns to the start page.</p><div class="inline-actions"><button class="button button-danger" type="button" data-action="start-over">Start over…</button></div>', "drawer-danger"));
     }
@@ -1835,7 +2178,7 @@
     viewpoint: ["Viewpoint", [
       "Pick one region of an RNA and see where along the RNA its partners bind.",
       "Peaks are positions that pair with your viewpoint more often than elsewhere.",
-      "Click a bar to inspect those records."
+      "Select a bar to inspect those records."
     ]],
     region: ["Region Explorer", [
       "Enter a range of an RNA to list every record that touches it and its main partners.",
@@ -1924,13 +2267,65 @@
     // motion.js flips the preference after this handler; redraw the
     // Display panel's choice once it has.
     if (event.target.closest("[data-motion-toggle]")) {
-      window.setTimeout(render, 0);
+      window.setTimeout(renderKeepingDrawerFocus, 0);
       return;
     }
 
     const featureNode = event.target.closest("[data-feature-action]");
-    if (featureNode && window.Hyb2UI.handleAction(state, featureNode, featureApi())) {
-      return;
+    if (featureNode) {
+      // The press that commits a field also lands on this control. The page's
+      // settings have changed but its data (a region's sequence, a matrix)
+      // still belongs to the old ones until the queued redraw asks for it:
+      // the action runs once that data is current.
+      // A file chooser needs none of that data and must open inside the
+      // click (browsers refuse it later); a copy starts its clipboard write
+      // in the click and hands it the text once the data is current.
+      const featureAction = featureNode.dataset.featureAction;
+      // (also while the page's data is still refreshing after an edit
+      // committed with Enter or Tab, whose redraw has already run)
+      const waitsForData = (state.pendingCommittedInputRender || app.classList.contains("is-refreshing-data")) &&
+        ACTIONS_WITHOUT_DATA.indexOf(featureAction) === -1;
+      const loading = waitsForData ? requestPageData() : null;
+      if (loading) {
+        const slot = /^copy-/.test(featureAction) ? openClipboardSlot() : null;
+        actionsAwaitingData.push({ node: featureNode, slot: slot, hash: window.location.hash });
+        if (actionsAwaitingData.length === 1) {
+          let rounds = 0;
+          const run = function () {
+            // a field changed again while the data loaded: wait for the
+            // data of the latest settings (a few rounds at most)
+            const again = requestPageData();
+            if (again && rounds < 3) {
+              rounds += 1;
+              again.then(run, run);
+              return;
+            }
+            const queued = actionsAwaitingData;
+            actionsAwaitingData = [];
+            queued.forEach(function (entry) {
+              try {
+                // the user has moved to another page meanwhile: drop it
+                if (entry.hash === window.location.hash) {
+                  clipboardSlot = entry.slot;
+                  window.Hyb2UI.handleAction(state, entry.node, featureApi());
+                }
+              } catch (error) {
+                console.error(error);
+              } finally {
+                if (entry.slot && !entry.slot.settled) {
+                  entry.slot.cancel();
+                }
+                clipboardSlot = null;
+              }
+            });
+          };
+          loading.then(run, run);
+        }
+        return;
+      }
+      if (window.Hyb2UI.handleAction(state, featureNode, featureApi())) {
+        return;
+      }
     }
 
     const actionNode = event.target.closest("[data-action]");
@@ -2015,7 +2410,8 @@
 
     if (action === "toggle-theme") {
       state.theme = state.theme === "light" ? "dark" : "light";
-      render();
+      saveDisplayPreference("theme", state.theme);
+      renderKeepingDrawerFocus();
       return;
     }
 
@@ -2024,6 +2420,13 @@
       if (typeof actionNode.closest === "function" && actionNode.closest("[data-dialog]")) {
         state.dialog = null;
       }
+      // a nav button used from the keyboard keeps focus on the new page; a
+      // go-to chord (interaction.js clicks the button) or another link
+      // leaves focus on the page's main region (settleFocus)
+      const navPlace = document.activeElement === actionNode && actionNode.classList.contains("nav-button") && typeof actionNode.closest === "function"
+        ? (actionNode.closest(".mobile-nav") ? ".mobile-nav" : actionNode.closest(".sidebar") ? ".sidebar" : null)
+        : null;
+      pendingNavFocus = navPlace ? { page: actionNode.dataset.page, place: navPlace } : null;
       navigate(actionNode.dataset.page);
       return;
     }
@@ -2183,7 +2586,9 @@
 
   function handlePointerDown(event) {
     pointerSelect = event.target.closest("select");
-    state.pointerActionPending = !!event.target.closest("button, a, [data-feature-action], [data-action]");
+    // the redraw a committed field asked for waits for this press's click:
+    // replacing the pressed control in between would lose the click
+    state.pointerActionPending = !!event.target.closest("button, a, summary, [data-feature-action], [data-action]");
   }
 
   function finishPointerAction(event) {
@@ -2211,14 +2616,69 @@
     }
   }
 
+  function handleControlFocusIn(event) {
+    const target = event.target;
+    if (isTextEntry(target) && !(typedEntry && typedEntry.node === target)) {
+      typedEntry = { node: target, value: target.value };
+    }
+    revealSideways(target);
+  }
+
+  // Keyboard focus on a control that a sideways-scrolling box (a wide table,
+  // a strip of links) shows only in part: browsers scroll such a box only for
+  // a control that is entirely out of view, so the rest is brought in here.
+  function revealSideways(target) {
+    if (!target || typeof target.matches !== "function" || typeof window.getComputedStyle !== "function" || !target.matches(":focus-visible")) {
+      return;
+    }
+    for (let box = target.parentElement; box && box !== app; box = box.parentElement) {
+      if (box.scrollWidth <= box.clientWidth + 1) {
+        continue;
+      }
+      const overflow = window.getComputedStyle(box).overflowX;
+      if (overflow !== "auto" && overflow !== "scroll") {
+        continue;
+      }
+      const outer = box.getBoundingClientRect();
+      const inner = target.getBoundingClientRect();
+      const edge = 8;
+      if (inner.width > box.clientWidth - 2 * edge) {
+        return; // wider than the box (a whole table row): nothing to align
+      }
+      if (inner.right > outer.left + box.clientWidth - edge) {
+        box.scrollLeft += inner.right - (outer.left + box.clientWidth - edge);
+      } else if (inner.left < outer.left + edge) {
+        box.scrollLeft -= outer.left + edge - inner.left;
+      }
+      return;
+    }
+  }
+
   function handleControlFocusOut(event) {
     if (event.target && event.target.tagName === "SELECT") {
-      pointerSelect = null;
+      // the select just pressed with the pointer is the one taking focus
+      if (pointerSelect === event.target || !event.relatedTarget || pointerSelect !== event.relatedTarget) pointerSelect = null;
+      if (keyedSelect === event.target) keyedSelect = null;
       if (state.pendingCommittedInputRender) queueCommittedInputRender();
     }
   }
 
   function handleChange(event) {
+    const changed = event.target;
+    if (isTextEntry(changed)) {
+      typedEntry = { node: changed, value: changed.value };
+    }
+    // A select changed from the keyboard keeps focus through the redraw its
+    // change causes, so the next key still goes to it.
+    const focusedSelect = changed && changed.tagName === "SELECT" && document.activeElement === changed ? focusIdentity(changed) : null;
+    applyChange(event);
+    if (focusedSelect && app && typeof app.contains === "function" && !app.contains(changed) &&
+        (!document.activeElement || document.activeElement === document.body)) {
+      restoreFocus(focusedSelect, null);
+    }
+  }
+
+  function applyChange(event) {
     // K8: a select's title is its current option's full text; keep it current
     // for pages that do not redraw on this change
     const changed = event.target;
@@ -2230,7 +2690,7 @@
     if (changed && changed.tagName === "SELECT" && changed.hasAttribute("title") && changed.selectedOptions && changed.selectedOptions[0]) {
       changed.title = changed.selectedOptions[0].text;
     }
-    if (event.target.id === "analysis-scope") {
+    if (event.target.id === "analysis-scope" || event.target.id === "analysis-scope-drawer") {
       applyAnalysisScope(event.target.value, true).catch(function (error) {
         showToast("Could not change the datasets analysed: " + (error && error.message ? error.message : "unknown error"));
       });
@@ -2239,7 +2699,8 @@
 
     if (event.target.id === "density-input") {
       state.density = event.target.value === "compact" ? "compact" : "comfortable";
-      render();
+      saveDisplayPreference("density", state.density);
+      renderKeepingDrawerFocus();
       return;
     }
 
@@ -2307,6 +2768,7 @@
       return;
     }
     window.Hyb2UI.handleInput(state, element);
+    followTyping(element);
   }
 
   function isTextEntry(element) {
@@ -2319,22 +2781,33 @@
     const activeElement = document.activeElement;
     const actionHasFocus = activeElement && activeElement.closest && activeElement.closest("button, a, [data-feature-action], [data-action]");
     state.pendingCommittedInputRender = true;
-    if (state.pointerActionPending || actionHasFocus || selectInteractionPending()) {
+    if (state.pointerActionPending || actionHasFocus) {
       return;
     }
     queueCommittedInputRender();
   }
 
-  function selectInteractionPending() {
-    const activeElement = document.activeElement;
-    return !!(app && ((pointerSelect && app.contains(pointerSelect)) ||
-      (activeElement && activeElement.tagName === "SELECT" && app.contains(activeElement))));
+  // The select that is being used: pressed with the pointer, or given a key
+  // since it took focus, so its list may be open. A select that focus only
+  // passed to with Tab is not in use and may be redrawn.
+  function selectInUse() {
+    if (!app || typeof app.contains !== "function") {
+      return null;
+    }
+    if (pointerSelect && app.contains(pointerSelect)) {
+      return pointerSelect;
+    }
+    return keyedSelect && keyedSelect === document.activeElement && app.contains(keyedSelect) ? keyedSelect : null;
   }
 
   function clearCommittedInputRender() {
     if (committedInputRenderTimer !== null) window.clearTimeout(committedInputRenderTimer);
     committedInputRenderTimer = null;
+    if (typingRedrawTimer !== null) window.clearTimeout(typingRedrawTimer);
+    typingRedrawTimer = null;
+    typingShown = null;
     pointerSelect = null;
+    keyedSelect = null;
     state.pendingCommittedInputRender = false;
   }
 
@@ -2342,13 +2815,11 @@
     if (committedInputRenderTimer !== null) return;
     committedInputRenderTimer = window.setTimeout(function () {
       committedInputRenderTimer = null;
-      if (!app || !state.pendingCommittedInputRender || state.pointerActionPending || selectInteractionPending()) return;
+      if (!app || !state.pendingCommittedInputRender || state.pointerActionPending) return;
       state.pendingCommittedInputRender = false;
-      // Focus may have moved by keyboard since this task was queued. In
-      // particular, never replace a select reached by Tab in the meantime.
-      const focused = focusIdentity(document.activeElement);
-      render();
-      restoreFocus(focused, null);
+      // Focus may have moved since this task was queued: it is read now, and
+      // the field typed in or the select opened meanwhile stays mounted.
+      redrawKeepingFocus();
     }, 0);
   }
 
@@ -2359,28 +2830,146 @@
     return {
       id: element.id || "",
       feature: element.dataset && element.dataset.feature || "",
-      key: element.dataset && element.dataset.key || ""
+      key: element.dataset && element.dataset.key || "",
+      row: controlRow(element),
+      action: element.dataset && (element.dataset.featureAction || element.dataset.action) || "",
+      openKey: element.tagName === "SUMMARY" && element.parentElement && element.parentElement.dataset ? element.parentElement.dataset.openKey || "" : "",
+      focusKey: element.dataset && element.dataset.focusKey || "",
+      tag: element.tagName,
+      path: elementPath(element),
+      line: elementLine(element),
+      typed: isTextEntry(element) ? element : null,
+      // typed text not yet committed by a change event
+      dirty: !!(typedEntry && typedEntry.node === element && isTextEntry(element) && element.value !== typedEntry.value)
     };
   }
 
-  function restoreFocus(identity, source) {
-    let replacement = identity && identity.id ? document.getElementById(identity.id) : null;
-    if (!replacement && identity && identity.feature) {
-      replacement = Array.from(document.querySelectorAll("[data-feature]")).find(function (element) {
-        return element.dataset.feature === identity.feature && element.dataset.key === identity.key;
-      });
+  // What tells apart controls that share a feature and key, such as one
+  // select per dataset: their other data attributes.
+  function controlRow(element) {
+    const data = element && element.dataset || {};
+    return Object.keys(data).filter(function (name) { return name !== "feature" && name !== "key"; }).sort().map(function (name) {
+      return name + "=" + data[name];
+    }).join("&");
+  }
+
+  // child indices from the app host down to element
+  function elementPath(element) {
+    const path = [];
+    for (let node = element; node && node !== app && node.parentElement; node = node.parentElement) {
+      path.unshift(Array.prototype.indexOf.call(node.parentElement.children, node));
     }
+    return path;
+  }
+
+  // the containers around element by tag and first class (no state classes),
+  // from the app host down: "ASIDE.sidebar>NAV.nav-group"
+  function elementLine(element) {
+    const line = [];
+    for (let node = element && element.parentElement; node && node !== app; node = node.parentElement) {
+      line.unshift(node.tagName + "." + String(node.className && node.classList ? node.classList[0] || "" : ""));
+    }
+    return line.join(">");
+  }
+
+  // A control without id or data-feature (a section's summary, a plain
+  // button): found again by its section, its action, or its place.
+  function findPlainControl(root, identity) {
+    if (identity.openKey) {
+      const section = Array.from(root.querySelectorAll("details[data-open-key]")).find(function (element) { return element.dataset.openKey === identity.openKey; });
+      const summary = section && section.querySelector("summary");
+      if (summary) return summary;
+    }
+    if (identity.action) {
+      const same = Array.from(root.querySelectorAll("[data-feature-action], [data-action]")).filter(function (element) {
+        return element.tagName === identity.tag && (element.dataset.featureAction || element.dataset.action) === identity.action;
+      });
+      if (same.length === 1) return same[0];
+      // buttons that share an action (a view switch, one button per row)
+      // differ in their other data attributes, such as data-view-mode
+      const sameRow = same.filter(function (element) { return controlRow(element) === identity.row; });
+      if (sameRow.length === 1) return sameRow[0];
+      // the same nav button in the sidebar and the phone menu: the one in
+      // the same container, even when items before it came or went
+      const sameLine = sameRow.filter(function (element) { return elementLine(element) === identity.line; });
+      if (sameLine.length === 1) return sameLine[0];
+    }
+    const twin = findFocusTwin(root, identity);
+    if (twin) return twin;
+    if (root !== document || !app || !identity.path || !identity.path.length) {
+      return null;
+    }
+    let node = app;
+    for (let index = 0; index < identity.path.length && node; index += 1) {
+      node = node.children ? node.children[identity.path[index]] : null;
+    }
+    return node && node.tagName === identity.tag ? node : null;
+  }
+
+  function findControl(root, identity) {
+    if (!identity || !root || typeof root.querySelectorAll !== "function") {
+      return null;
+    }
+    if (identity.id) {
+      const byId = Array.from(root.querySelectorAll("[id]")).find(function (element) { return element.id === identity.id; });
+      if (byId) return byId;
+    }
+    if (!identity.feature) {
+      return identity.tag ? findPlainControl(root, identity) : null;
+    }
+    const matches = Array.from(root.querySelectorAll("[data-feature]")).filter(function (element) {
+      return element.dataset.feature === identity.feature && (element.dataset.key || "") === identity.key;
+    });
+    return matches.find(function (element) { return controlRow(element) === identity.row; }) || matches[0] || findFocusTwin(root, identity);
+  }
+
+  // A control that a press replaces with another (Predict and Cancel, Run
+  // and Running…) names the place they share in data-focus-key: focus moves
+  // to whichever of them the page now shows.
+  function findFocusTwin(root, identity) {
+    if (!identity.focusKey) {
+      return null;
+    }
+    return Array.from(root.querySelectorAll("[data-focus-key]")).find(function (element) {
+      return element.dataset.focusKey === identity.focusKey;
+    }) || null;
+  }
+
+  // A redraw that replaced the page built every field anew, and a new field
+  // takes focus with its caret at the start: digits typed next would land
+  // before the ones already there. The field being typed in is therefore put
+  // back when the redraw did not change its value, or when it holds text the
+  // user has not committed yet, so its caret, selection and undo history stay.
+  function keepTypedEntry(typed, replacement, dirty) {
+    if (!typed || typed === replacement || typed.isConnected || typeof replacement.replaceWith !== "function" ||
+        typed.tagName !== replacement.tagName || typed.type !== replacement.type ||
+        (!dirty && typed.value !== replacement.value)) {
+      return replacement;
+    }
+    syncAttributes(typed, replacement);
+    replacement.replaceWith(typed);
+    return typed;
+  }
+
+  function restoreFocus(identity, source, focusOptions) {
+    let replacement = findControl(document, identity);
     if (!replacement && source && source.dataset) {
       replacement = Array.from(document.querySelectorAll("[data-feature]")).find(function (element) {
         return element.dataset.feature === source.dataset.feature && element.dataset.key === source.dataset.key;
       });
     }
+    if (replacement && identity && identity.typed) {
+      replacement = keepTypedEntry(identity.typed, replacement, identity.dirty);
+    }
     if (replacement && typeof replacement.focus === "function") {
-      replacement.focus();
+      replacement.focus(focusOptions);
     }
   }
 
   function handleKeydown(event) {
+    if (event.target && event.target.tagName === "SELECT" && ["Tab", "Shift", "Control", "Alt", "Meta"].indexOf(event.key) === -1) {
+      keyedSelect = event.target;
+    }
     const dropzone = event.target.closest("[data-dropzone]");
     const actionableRow = event.target.closest("tr[data-feature-action]");
 
@@ -2541,7 +3130,7 @@
   function renderRawReadsPanel() {
     return [
       '<div class="file-card"><div class="file-card-inner raw-reads-panel">',
-      '  <input id="hyb-file-input" class="visually-hidden" type="file" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
+      '  <input id="hyb-file-input" class="visually-hidden" type="file" tabindex="-1" accept=".hyb,.txt,.gz,text/plain" aria-label="Choose a HYB file">',
       renderRawReadsBody(true),
       "</div></div>"
     ].join("");
@@ -2911,19 +3500,25 @@
               setRouteHash(pending.route && pending.route !== "landing" ? "#/workspace/" + String(pending.route).replace(/^workspace\//, "") : "#/workspace/overview");
               state.analysisEntered = true;
             }
+            // The analysed scope may have moved to several merged datasets
+            // before the hash is ready: the file is still this session's
+            // primary, and its fingerprint is kept with it.
+            const stillPrimary = function () {
+              return state.summary === summary || state.primarySummary === summary;
+            };
             digestFile(file).then(function (hash) {
-              if (state.summary === summary) {
-                state.summary.sha256 = hash;
-                state.summary.sha256Unavailable = !hash;
+              if (stillPrimary()) {
+                summary.sha256 = hash;
+                summary.sha256Unavailable = !hash;
                 updatePrimaryFingerprint(hash);
                 if (state.dialog === "files" || !state.analysisEntered) {
                   render();
                 }
               }
             }).catch(function () {
-              if (state.summary === summary) {
-                state.summary.sha256 = "";
-                state.summary.sha256Unavailable = true;
+              if (stillPrimary()) {
+                summary.sha256 = "";
+                summary.sha256Unavailable = true;
                 updatePrimaryFingerprint("");
                 if (state.dialog === "files" || !state.analysisEntered) {
                   render();
@@ -3614,7 +4209,48 @@
     history.replaceState(null, "", "#/workspace/interactions" + (suffix ? "?" + suffix : ""));
   }
 
+  const ACTIONS_WITHOUT_DATA = ["choose-comparison-files"];
+
+  // A clipboard write that must start inside a click but whose text comes
+  // later: a ClipboardItem holding a promise keeps the click's permission.
+  // Null where the browser cannot do that (copyText then writes as usual).
+  function openClipboardSlot() {
+    if (!navigator.clipboard || typeof navigator.clipboard.write !== "function" || typeof window.ClipboardItem !== "function") {
+      return null;
+    }
+    const slot = { settled: false, confirmation: "" };
+    const text = new Promise(function (resolve, reject) {
+      slot.fill = function (value, confirmation) {
+        slot.settled = true;
+        slot.confirmation = confirmation;
+        resolve(new Blob([value], { type: "text/plain" }));
+      };
+      slot.cancel = function () {
+        slot.settled = true;
+        reject(new Error("nothing to copy"));
+      };
+    });
+    let item;
+    try {
+      item = new window.ClipboardItem({ "text/plain": text });
+    } catch (error) {
+      return null;
+    }
+    slot.written = navigator.clipboard.write([item]);
+    slot.written.then(function () {
+      if (slot.confirmation) showToast(slot.confirmation);
+    }, function () {
+      if (slot.confirmation) showToast("Could not copy to the clipboard. Press the button again.");
+    });
+    text.catch(function () {});
+    return slot;
+  }
+
   function copyText(text, confirmation) {
+    if (clipboardSlot && !clipboardSlot.settled) {
+      clipboardSlot.fill(text, confirmation);
+      return;
+    }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () {
         showToast(confirmation);
@@ -3702,6 +4338,17 @@
     state.error = null;
     releaseProviderData();
     setRouteHash("#/");
+    focusStartPage();
+  }
+
+  // After starting over the control that did it is gone: focus the start page.
+  function focusStartPage() {
+    window.setTimeout(function () {
+      const main = document.getElementById("main-content");
+      if (main && (!document.activeElement || document.activeElement === document.body)) {
+        main.focus({ preventScroll: true });
+      }
+    }, 60);
   }
 
   // Website shell: forget every registered dataset and the selection.
@@ -3755,6 +4402,7 @@
     state.dialog = null;
     releaseProviderData();
     setRouteHash("#/");
+    focusStartPage();
   }
 
   function terminateWorker() {
@@ -3768,18 +4416,15 @@
   }
 
   function downloadSummary() {
+    // A merged scope has no single file to hash: Hyb2UI.sourceHyb lists each
+    // file with its own SHA-256 (sha256Status "per-dataset").
+    const source = window.Hyb2UI.sourceHyb(state);
     const payload = {
       application: "HYB2 Web Lite",
       version: "0.5.0",
-      buildCommit: window.HYB2_BUILD && window.HYB2_BUILD.commit || null,
-      sourceFile: {
-        name: state.summary.fileName,
-        bytes: state.summary.fileSize,
-        sha256: state.summary.sha256 || null,
-        sha256Status: state.summary.sha256
-          ? "available"
-          : (state.summary.sha256Unavailable ? "unavailable" : "pending")
-      },
+      buildCommit: window.HYB2_BUILD && window.HYB2_BUILD.commit || "unknown",
+      sourceFile: Object.assign({ name: source.fileName, bytes: source.fileSize, sha256: source.sha256, sha256Status: source.sha256Status },
+        source.datasets ? { files: source.datasets } : {}),
       analysis: "overview",
       generatedLocally: true,
       summary: state.summary
@@ -3824,7 +4469,7 @@
     const sampled = !!state.summary.errorSampleTruncated;
     downloadText(sampled ? "hyb2-validation-error-sample.csv" : "hyb2-validation-report.csv", csv, "text/csv");
     showToast(sampled
-      ? "Validation error sample downloaded locally; the Validation page shows how many details were omitted."
+      ? "Validation error sample downloaded locally; the Import check page shows how many details were omitted."
       : "Validation report downloaded locally.");
   }
 
@@ -3995,6 +4640,10 @@
   }
 
   function downloadText(fileName, content, type) {
+    // every text export (JSON, SVG, TSV, FASTA ...) ends with a newline
+    if (typeof content === "string" && content && content.charAt(content.length - 1) !== "\n") {
+      content += "\n";
+    }
     const blob = new Blob([content], { type: type + ";charset=utf-8" });
     downloadBlob(fileName, blob);
   }
@@ -4045,13 +4694,15 @@
     const hold = toastHoldMs(message);
     state.toastMessage = message;
     state.toastUntil = Date.now() + hold;
-    if (!toast) {
-      return;
-    }
-
-    toast.textContent = message;
-    toast.classList.add("is-visible");
+    // D11: the hide timer is set even when no #toast is on the page yet (a
+    // message raised mid-render, e.g. "Comparison datasets were parsed
+    // locally."); the next render drew it from state and nothing took it
+    // down, so it stayed over the Data drawer.
     window.clearTimeout(state.toastTimer);
+    if (toast) {
+      toast.textContent = message;
+      toast.classList.add("is-visible");
+    }
     state.toastTimer = window.setTimeout(function () {
       state.toastMessage = "";
       const current = document.getElementById("toast");
@@ -4068,7 +4719,7 @@
 
   function pageTitle(page) {
     const allPages = workspacePages.concat([
-      { id: "validation", label: "Validation" },
+      { id: "validation", label: "Import check" },
       { id: "methods", label: "Methods" },
       { id: "file-format", label: "File format" },
       { id: "privacy", label: "Privacy" }

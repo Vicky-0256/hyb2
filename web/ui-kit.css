@@ -178,6 +178,13 @@ th.num,
   white-space: nowrap;
 }
 
+/* a row header names its row (a file, a dataset): shown as written, never in
+   the capitals of a column label, since file names are case-sensitive */
+tbody th[scope="row"] {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 /* in a table cell the max-width: 0 trick lets the column's width decide;
    anywhere else the element truncates within the space it has */
 td.cell-truncate,

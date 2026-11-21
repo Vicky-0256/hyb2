@@ -3,6 +3,9 @@
 
   const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
   const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
+  // Chimera pattern shares sit in one list: always one decimal ("1.0%",
+  // "55.5%", "0.9%"), never "1%" beside "55.5%".
+  const shareFormatter = new Intl.NumberFormat("en-US", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
   function render(state) {
     const summary = state.summary;
@@ -86,7 +89,7 @@
     return [
       '      <section class="data-card per-dataset-card">',
       '        <div class="card-title-row"><h2>Per-dataset summary</h2><span class="card-kicker">' + format(analysed.length) + " of " + format(datasets.length) + " datasets analysed</span></div>",
-      '        <p class="card-note">This page and the other analysis pages merge the datasets marked Yes; choose others in the header. Condition rows add up their datasets (RNAs and pairs are not additive).</p>',
+      '        <p class="card-note">This page and the other analysis pages merge the datasets marked Yes; choose others under Datasets analysed in the Data panel. Condition rows add up their datasets (RNAs and pairs are not additive).</p>',
       '        <div class="table-scroll"><table class="data-table per-dataset-table"><thead><tr><th scope="col">Dataset</th><th scope="col">Condition</th><th scope="col">HYB records</th><th scope="col">Source reads</th><th scope="col">RNAs</th><th scope="col">RNA pairs</th><th scope="col">Analysed</th></tr></thead><tbody>',
       rows.join(""),
       "        </tbody></table></div>",
@@ -185,7 +188,7 @@
         ? '<span class="chimera-code">' + escape(window.Hyb2ChimeraTypes.code(label)) + "</span>" : "") +
         escape(window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(label) : label) + "</strong>",
       window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.diagram(label) : "",
-      '              <span class="type-value">' + format(count) + " records · " + percentFormatter.format(fraction) + "</span>",
+      '              <span class="type-value">' + format(count) + " records · " + shareFormatter.format(fraction) + "</span>",
       '              <div class="type-meter"><span style="width:' + (fraction * 100) + '%"></span></div>',
       "            </div>"
     ].join("");
@@ -231,7 +234,7 @@
     return [
       '      <div class="page-heading">',
       "        <div>",
-      "          <h1>Validation</h1>",
+      "          <h1>Import check</h1>",
       "          <p>Format checks completed in this browser while the file was read.</p>",
       "        </div>",
       "      </div>",
@@ -343,7 +346,7 @@
       '      <div class="page-heading"><div><h1>Privacy</h1><p>What happens to data opened in HYB2 Web Lite.</p></div></div>',
       '      <section class="data-card">',
       '        <div class="card-title-row"><h2>Local by design</h2><span class="card-kicker">No backend</span></div>',
-      '        <div class="notice">HYB2 Web Lite is a static GitHub Pages application. The selected HYB file is passed from the file picker to a Web Worker inside the same browser tab. No upload, analytics call, cloud save, or persistent browser database is used.</div>',
+      '        <div class="notice">HYB2 Web Lite is a static GitHub Pages application. The selected HYB file is passed from the file picker to a Web Worker inside the same browser tab. No upload, analytics call or cloud save is used, and files and results are never stored in the browser. Browser storage (localStorage) keeps only the Display settings (theme, motion, table density) and the measured RNA Structure size limit, so they apply on the next visit; clearing this site’s data removes them.</div>',
       '        <div class="card-title-row"><h2>Optional public lookups</h2><span class="card-kicker">Off by default</span></div>',
       '        <div class="notice">Related research on the RNA Structure page is the only feature that contacts another service. It stays off until you turn it on. Each lookup sends only the public identifier you confirm, plus its species to EBI Search, by GET to www.ebi.ac.uk (EBI Search and Europe PMC). HYB files, sequences, structures and file names are never sent, and results stay in this tab.</div>',
       '        <div class="card-title-row"><h2>Session lifetime</h2></div>',

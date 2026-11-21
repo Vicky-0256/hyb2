@@ -127,6 +127,12 @@
   overflow-wrap: normal;
 }
 
+/* the panel's one grid column may shrink below a 50 nt line, so on a phone
+   the sequence scrolls inside its own box instead of widening the page */
+.reference-panel {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .reference-sequence--grouped .sequence-line {
   display: block;
 }
@@ -144,26 +150,81 @@
   margin-top: 8px;
 }
 
-/* B12: Region records follow K3. Column widths: the ID narrow, the RNA
-   names share what is left; below 760px the table scrolls in its card
-   instead of folding names onto two lines */
+/* B12: Region records follow K3. Column widths: each narrow column fits
+   its own one-line header (monospace caps: characters * (1ch + the .06em
+   tracking), the 20px cell padding and 4px to spare) so no header runs
+   into its neighbour; the two RNA names share what is left. Below 960px
+   the table scrolls in its card instead of folding names onto two lines */
 .region-records-table {
-  min-width: 760px;
+  min-width: 960px;
   table-layout: fixed;
 }
 
-.region-records-table th:nth-child(1) { width: 9%; }
-.region-records-table th:nth-child(2),
-.region-records-table th:nth-child(4) { width: 27%; }
+.region-records-table th:nth-child(1) { width: calc(11ch + .66em + 24px); }
+/* "Region n (nt)": the unit sits 4px off its label */
 .region-records-table th:nth-child(3),
-.region-records-table th:nth-child(5) { width: 11%; }
-.region-records-table th:nth-child(6) { width: 8%; }
-.region-records-table th:nth-child(7) { width: 7%; }
+.region-records-table th:nth-child(5) { width: calc(13ch + .78em + 28px); }
+/* Chimera type is read in full, on two lines after its "·" ("Separated ·" /
+   "5′ arm first"; three for the longest overlap labels), not cut to an
+   ellipsis whose rest sat in a title no touch screen shows. 118px holds its
+   header and 14 characters of the cells' 12px monospace; the cell's right
+   padding is trimmed (Support, next to it, is right-aligned). */
+.region-records-table th:nth-child(6) { width: 118px; }
+.region-records-table th:nth-child(7) { width: calc(7ch + .42em + 24px); }
 
 .region-records-table .cell-truncate {
   max-width: none;
 }
 
+.region-records-table td.chimera-cell {
+  padding-right: 6px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Interactions shows it the same way. Its rows are exactly 46px (38px
+   compact; fix-overview.css D7, the virtual window depends on it), which
+   holds two lines, so the column is as wide as the longest half of any
+   label (16 characters) and the two-line clamp only ever meets a label the
+   file brought itself. The table's least width grows by the same 22px. */
+.virtual-table-head,
+.virtual-row {
+  grid-template-columns: 120px minmax(150px, 1fr) 100px minmax(150px, 1fr) 100px minmax(118px, .5fr) 64px 104px;
+  min-width: 1062px;
+}
+
+.virtual-table-frame > .virtual-table {
+  min-width: 1062px;
+}
+
+.virtual-row .chimera-cell {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .region-records .card-title-row .export-menu-list {
   right: 0;
+}
+
+/* B13: at 1024 the 960px table overflowed an 832px card with no visible
+   scrollbar (Chimera cut, Support out of reach). Its fixed-layout narrow
+   columns need ~550px, so let it fit down to 760px: the two RNA names are
+   ellipsised (full name in each cell's title). Narrower still it scrolls in
+   its own wrapper, with edge shadows as the scroll cue. */
+.region-records-table {
+  min-width: 760px;
+}
+
+.region-records .data-table-wrap {
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--surface) 30%, transparent) left / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--surface) 30%, transparent) right / 24px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--ink) 18%, transparent), transparent) left / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--ink) 18%, transparent), transparent) right / 12px 100% no-repeat scroll;
 }

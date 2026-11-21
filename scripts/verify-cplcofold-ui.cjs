@@ -119,6 +119,9 @@ assert.equal(current.structure.result.cutpoint, 3); assert.equal(current.structu
 assert.equal(ui.handleAction("select-cplfold-candidate", current, api, {dataset: {candidateIndex: "1"}}), true);
 assert.equal(current.structure.result.dotBracketWithBreak, "...&..."); assert.equal(current.structure.result.energyMetadata.energy_kind, "heuristic");
 assert.match(pages.renderStructureResult(current.structure.result, null, "folded", true), /Experimental pseudoknot energy/);
+// A fold that no HYB row guided is labelled so under the result title; a HYB-guided one is not.
+assert.match(pages.renderStructureResult(current.structure.result, null, "folded", true), /class="card-note structure-result-evidence">Sequence only: no HYB evidence guided this fold\./);
+assert.doesNotMatch(pages.renderStructureResult({...current.structure.result, evidence: {source: "hyb-block-intervals", bonusEntries: []}}, null, "folded", true), /Sequence only: no HYB evidence/);
 assert.doesNotMatch(pages.renderStructureResult(current.structure.result, null, "folded", true), /data-view-mode="folded"|data-view-mode="circular"|toggle-structure-editor/);
 ui.selectCplfoldCandidate(current.structure.result, 0);
 const report = ui.structureReport(current, current.structure.result);
@@ -349,5 +352,12 @@ assert.equal(selectedRecord.structure.homodimerOnly, false);
 assert.equal(selectedRecord.structure.cplfoldEvidence, "none");
 assert.equal(selectedRecord.structure.constraintMode, "none");
 assert.equal(api.navigations.at(-1), "structure");
+
+// Leaving the default setup's sequence-only fallback is the user's own choice of HYB evidence.
+const fallback = state({cplfoldMode: "single", source: "reference", rna: "A", start: 1, end: 75, defaultRegionEnd: 201, evidenceFallback: "A|1|75|", evidenceSeen: "none"});
+assert.equal(ui.handleAction("structure-use-hyb-evidence", fallback, api), true);
+assert.deepEqual(plain([fallback.structure.cplfoldEvidence, fallback.structure.evidenceChosen, fallback.structure.evidenceFallback === undefined, fallback.structure.source]), ["hyb-blocks", true, true, "reference"]);
+assert.equal(pages.syncDefaultStructureEvidence(fallback), false);
+assert.equal(fallback.structure.cplfoldEvidence, "hyb-blocks", "the default-setup fallback leaves a chosen evidence mode alone");
 
 console.log("cplcofold-ui-controller-export-contract: ok");

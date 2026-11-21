@@ -42,6 +42,13 @@ self.onmessage = async function (event) {
       self.postMessage({ type: "complete", evidence: await comradesSupportEvidence(engine, message.evidenceArms, message.sequence, 5, 90) });
       return;
     }
+    if (message.type === "rnacofold-pairs") {
+      postProgress("Loading ViennaRNA RNAcofold engine", 2, { phase: "engine" });
+      const engine = await getEngine();
+      if (!message.sequence) throw new Error("The rnacofold read support needs the prepared sequence.");
+      self.postMessage({ type: "complete", evidence: await rnacofoldPairEvidence(engine, message.evidenceArms, message.sequence) });
+      return;
+    }
     if (message.type === "comrades-fold") {
       await runComradesFold(message);
       return;
@@ -255,17 +262,48 @@ async function collectComradesEvidence(engine, comrades, evidenceArms, sequenceL
 // against the same RNAcofold evidence a COMRADES(ViennaRNA) run would use.
 // Prepared arm sequences are slices of the prepared sequence, so arms that
 // carry only coordinates are completed from it.
-async function comradesSupportEvidence(engine, evidenceArms, sequence, startPercent, spanPercent) {
-  const prepared = String(sequence || "").toUpperCase().replace(/T/g, "U");
-  const arms = normaliseEvidenceArms((Array.isArray(evidenceArms) ? evidenceArms : []).map(function (arm) {
+function preparedComradesArms(evidenceArms, prepared) {
+  return normaliseEvidenceArms((Array.isArray(evidenceArms) ? evidenceArms : []).map(function (arm) {
     return Object.assign({}, arm, {
       sequenceOne: arm.sequenceOne || prepared.slice(Number(arm.oneStart) - 1, Number(arm.oneEnd)),
       sequenceTwo: arm.sequenceTwo || prepared.slice(Number(arm.twoStart) - 1, Number(arm.twoEnd))
     });
   }));
+}
+
+async function comradesSupportEvidence(engine, evidenceArms, sequence, startPercent, spanPercent) {
+  const prepared = String(sequence || "").toUpperCase().replace(/T/g, "U");
+  const arms = preparedComradesArms(evidenceArms, prepared);
   const found = await collectComradesEvidence(engine, getComradesCore(), arms, prepared.length, 37, 3, startPercent, spanPercent);
   return {
     pairs: found.selectedEvidence.map(function (entry) { return { one: entry.one, two: entry.two, count: entry.count }; }),
+    inputRecords: arms.length,
+    cofoldsWithIntermolecularPairs: found.cofoldsWithIntermolecularPairs,
+    temperature: 37,
+    minimumLoop: 3
+  };
+}
+
+// CPLfold's rnacofold read support: the same RNAcofold evidence, but every
+// pair, since the bonus matrix uses all of them and not only the strongest
+// that the COMRADES constraint fit keeps.
+async function rnacofoldPairEvidence(engine, evidenceArms, sequence) {
+  const prepared = String(sequence || "").toUpperCase().replace(/T/g, "U");
+  const arms = preparedComradesArms(evidenceArms, prepared);
+  const found = await collectComradesEvidence(engine, getComradesCore(), arms, prepared.length, 37, 3, 5, 90);
+  return {
+    pairs: found.allEvidence
+      .filter(function (entry) { return entry.one !== entry.two; })
+      .map(function (entry) { return [entry.one, entry.two, entry.count]; }),
+    // the same cofolds give the COMRADES support score of the result, as
+    // comradesSupportEvidence would, so the page need not cofold them again
+    support: {
+      pairs: found.selectedEvidence.map(function (entry) { return { one: entry.one, two: entry.two, count: entry.count }; }),
+      inputRecords: arms.length,
+      cofoldsWithIntermolecularPairs: found.cofoldsWithIntermolecularPairs,
+      temperature: 37,
+      minimumLoop: 3
+    },
     inputRecords: arms.length,
     cofoldsWithIntermolecularPairs: found.cofoldsWithIntermolecularPairs,
     temperature: 37,

@@ -98,6 +98,11 @@
   font-size: 13px;
 }
 
+/* no usable row: the fold cannot be guided, so the count is not a success */
+.guided-input-summary.is-empty strong {
+  color: var(--warning);
+}
+
 .cplfold-controls {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
   background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));

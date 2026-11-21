@@ -365,6 +365,21 @@ body.cmdk-locked {
   overflow: hidden;
 }
 
+/* The palette's "Switch to dark/light theme" presses this instead of opening
+   the Display panel: a point on the header's Display button, from which
+   motion.js grows the theme reveal. */
+.theme-proxy {
+  position: fixed;
+  width: 0;
+  min-width: 0;
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* ------------------------------------------------------------------ */
 /* Go-to chord: HUD + hints on the sidebar                             */
 /* ------------------------------------------------------------------ */
@@ -387,6 +402,44 @@ body.cmdk-locked {
   border-color: var(--primary);
   background: var(--primary-soft);
   color: var(--primary-ink);
+}
+
+/* Icon rail (below 1200 px, and phone landscape): the hidden hint must not
+   take room beside the short label, which pushed that label 9 px off the
+   others, nor stick out of the 59 px button when shown. It sits in the
+   button's corner instead. */
+@media (max-width: 1199px) {
+  .sidebar .nav-button {
+    position: relative;
+    /* the press ripple still clips (.nav-button overflow: hidden); the
+       margin lets the shortcut badge show just past the button edge */
+    overflow: clip;
+    overflow-clip-margin: 7px;
+  }
+
+  .sidebar .nav-kbd {
+    position: absolute;
+    /* D11: the visible rail box is the 34 px .nav-button-short centred in
+       the transparent 51 px button, so a corner badge sat across that box's
+       right edge. It now sits just right of the box, as a superscript, in
+       the rail's spare margin (button right edge + 6 px, inside the 68 px
+       rail). */
+    top: 2px;
+    right: -6px;
+    /* hidden, it slides down instead of right: no sideways overflow in the rail */
+    transform: translateY(3px);
+    margin: 0;
+    min-width: 0;
+    padding: 0 3px;
+    font-size: 9px;
+    line-height: 13px;
+  }
+
+  .sidebar .nav-button:hover .nav-kbd,
+  .sidebar .nav-button:focus-visible .nav-kbd,
+  .is-chording .sidebar .nav-kbd {
+    transform: none;
+  }
 }
 
 .is-chording .sidebar .nav-button:nth-of-type(n) .nav-kbd {
@@ -669,5 +722,36 @@ body.is-scrolled .workspace-header {
   :root:not([data-motion="full"]) .cmdk-glider,
   :root:not([data-motion="full"]) .chord-hud {
     transition: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Touch: hit areas of at least 32 px                                  */
+/* ------------------------------------------------------------------ */
+
+/* On touch screens and phones, small text links, checkbox labels and
+   disclosure summaries were 17-23 px tall. A mouse at desktop width keeps
+   the original look. */
+@media (pointer: coarse), (max-width: 767px) {
+  .report-contents ol {
+    row-gap: 0;
+  }
+
+  .report-contents a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+  }
+
+  .deseq-include-item {
+    min-height: 32px;
+  }
+
+  /* :where() adds no specificity: summaries with their own padding or
+     height (Setup, Export buttons) keep it. */
+  :where(details > summary:not(.button)) {
+    box-sizing: border-box;
+    min-height: 32px;
+    padding-block: 6px;
   }
 }

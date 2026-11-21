@@ -19,6 +19,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "third_party" / "cplfold"
+# The worker compiles every cofold kernel from a cold Numba cache: about four
+# minutes on an idle laptop, and well past five when other suites share the CPU.
+COMMAND_TIMEOUT_SECONDS = 900
 REFERENCE_CASES = (
     ("GGGCCC", 3, "((()))", -2.5),
     ("GGGGCCCC", 4, "(((())))", -5.8),
@@ -196,7 +199,7 @@ def worker() -> None:
 def run(command: list[str], environment: dict[str, str], *, success: bool = True) -> str:
     completed = subprocess.run(command, cwd=ROOT, env=environment, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               check=False, timeout=300)
+                               check=False, timeout=COMMAND_TIMEOUT_SECONDS)
     if (completed.returncode == 0) != success:
         raise SystemExit(f"Unexpected command status {completed.returncode}: {command}\n{completed.stdout}")
     return completed.stdout

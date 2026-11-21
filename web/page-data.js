@@ -127,6 +127,17 @@
     return null;
   }
 
+  // Last valid coordinate of an RNA for a typed range (null when no mapped
+  // reference gives its length), and the pair of them for the Region Explorer.
+  function coordinateLimit(state, rna) {
+    const extents = state.summary && state.summary.rnaExtents || {};
+    return data().coordinateLimit(referenceLength(state, rna), extents[rna] || null);
+  }
+
+  function regionLimits(state, region) {
+    return { limit: coordinateLimit(state, region.rna), partnerLimit: region.partner ? coordinateLimit(state, region.partner) : null };
+  }
+
   // The datasets whose HYB rows are RNA Structure evidence. "all": the
   // selection, then every other loaded dataset with rows on the folded RNAs
   // (so each lineage of a comparison brings all its replicates); "scope":
@@ -421,6 +432,26 @@
       if (selectedIndex !== null && selectedIndex !== undefined && !Number.isNaN(Number(selectedIndex))) {
         tasks.push(recordByIndexTask("selectedRecord", Number(selectedIndex)));
       }
+      // The binding-energy panel estimates its run for the records it would
+      // fold. With "Records matching the Interactions filters" these are the
+      // primary file's matches (the run's own query), not the scope's.
+      if (state.hybEnergySettings && state.hybEnergySettings.records === "filtered") {
+        const primary = (state.datasets || []).find(function (dataset) { return dataset.primary; });
+        const ids = primary ? [primary.id] : sel.datasetIds;
+        const countKey = stableKey(ids) + "|" + stableKey(filters);
+        tasks.push({
+          name: "energySelection",
+          key: epoch + "|" + countKey,
+          present: function () { return !!view().energySelection; },
+          fetch: function () {
+            return provider.queryHybrids({ datasetIds: ids }, { filters: filters, offset: 0, limit: 1 }).then(function (result) {
+              return { key: countKey, total: result.total };
+            });
+          },
+          apply: function (value) { view().energySelection = value; },
+          fallback: function () { view().energySelection = { key: countKey, total: null }; }
+        });
+      }
       return tasks;
     }
 
@@ -442,12 +473,12 @@
 
     function contactTasks() {
       const contact = state.contact;
-      // One dataset per map, whatever the header merges.
+      // The header's scope merged, or the one dataset picked on the page.
       const chosen = contact ? data().contactDataset(state) : null;
       if (!contact || !contact.rnaX || !contact.rnaY) {
         return [];
       }
-      const sel = chosen && chosen.id ? { datasetIds: [chosen.id] } : selection();
+      const sel = chosen && chosen.ids && chosen.ids.length ? { datasetIds: chosen.ids } : selection();
       const query = pick(contact, ["rnaX", "rnaY", "binSize", "measure", "orientation", "chimeraType", "homodimer"]);
       // Providers double the bin size until the map fits (a 10.8 kb genome
       // at 10 nt would otherwise be ~1.2 M cells).
@@ -523,12 +554,24 @@
         return [];
       }
       const sel = selection();
+      // A partner range has no meaning without a partner RNA (coordinates are
+      // per RNA), so it is never kept or sent without one.
+      if (!region.partner && (region.partnerStart || region.partnerEnd)) {
+        region.partnerStart = "";
+        region.partnerEnd = "";
+      }
       const params = pick(region, ["rna", "start", "end", "partner", "partnerStart", "partnerEnd", "overlap"]);
+      const limits = regionLimits(state, region);
       const tasks = [{
         name: "region",
-        key: baseKey() + "|" + stableKey(params),
+        key: baseKey() + "|" + stableKey(params) + "|" + limits.limit + "|" + limits.partnerLimit,
         present: function () { return !!state.region && !!state.region.results; },
         fetch: function () {
+          // An unusable or out-of-range request is not sent; the page says why.
+          const issue = data().regionRangeIssue(params, limits);
+          if (issue) {
+            return Promise.resolve(Object.assign(data().regionResultsFromRecords([], {}), { invalid: true, reason: issue }));
+          }
           if (!data().regionQuery(params)) {
             return Promise.resolve(data().regionResultsFromRecords([], params));
           }
@@ -647,12 +690,32 @@
         return;
       }
       if (job.worker) {
-        job.worker.terminate();
+        retireWorker(job.worker, job.answered);
         job.worker = null;
       }
       if (job.reject) {
         job.reject(abortError());
       }
+    }
+
+    // A superseded worker that has not answered yet is still loading its
+    // scripts: stopping it then cancels those downloads (they show up as
+    // aborted requests). It is stopped at its first message instead, or
+    // after a few seconds if it never sends one.
+    function retireWorker(worker, answered) {
+      if (answered) {
+        worker.terminate();
+        return;
+      }
+      const stopNow = function () {
+        root.clearTimeout(timer);
+        worker.onmessage = null;
+        worker.onerror = null;
+        worker.terminate();
+      };
+      const timer = root.setTimeout(stopNow, 5000);
+      worker.onmessage = stopNow;
+      worker.onerror = stopNow;
     }
 
     // The comparison through comparison.worker.js: each dataset's packed
@@ -713,6 +776,7 @@
           worker.onmessage = function (event) {
             const message = event.data || {};
             answered = true;
+            job.answered = true;
             if (!current()) {
               return;
             }
@@ -1062,6 +1126,8 @@
     initialisePageState: initialisePageState,
     freshView: freshView,
     referenceLength: referenceLength,
+    coordinateLimit: coordinateLimit,
+    regionLimits: regionLimits,
     hasReference: hasReference,
     windowRows: windowRows,
     syncComparisonDatasets: syncComparisonDatasets

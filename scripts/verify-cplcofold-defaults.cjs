@@ -21,12 +21,19 @@ assert.equal(edge.end,10807);assert.equal(edge.start,10607);
 const other=D.partnerWindow([rec(10,30,40,60,'A','B'),rec(15,35,45,65,'A','B')],'A',1,201);
 assert.equal(other.rna,'B');assert.equal(other.records,2);
 
-// The Contact Map draws one dataset, never the header's merge.
+// The Contact Map merges the header's scope by default, or draws the one dataset picked on its page.
 {
   const datasets=[{id:'primary',primary:true,label:'ZAFR_REP1',rnaNames:['AFR']},{id:'c1',label:'ZILM_REP2',rnaNames:['ILM']}];
   const state={datasets,selection:{datasetIds:['primary','c1']},summary:{rnaNames:['AFR','ILM']},contact:{datasetId:'',rnaX:'ILM',rnaY:'ILM'}};
   let chosen=D.contactDataset(state);
-  assert.equal(chosen.id,'primary');assert.equal(state.contact.rnaX,'AFR','RNA X follows the dataset');
+  assert.equal(chosen.merged,true,'several datasets in scope are merged by default');
+  assert.equal(chosen.id,'');assert.equal(chosen.dataset,null);assert.deepEqual(Array.from(chosen.ids),['primary','c1']);
+  assert.deepEqual(Array.from(chosen.rnas),['AFR','ILM'],'RNA X/Y list the RNAs of every merged dataset');
+  assert.equal(state.contact.rnaX,'ILM','a merged RNA stays selected');
+  assert.match(chosen.label,/All 2 datasets in scope merged/);
+  state.contact.datasetId='primary';chosen=D.contactDataset(state);
+  assert.equal(chosen.id,'primary');assert.equal(chosen.merged,false);assert.deepEqual(Array.from(chosen.ids),['primary']);
+  assert.equal(state.contact.rnaX,'AFR','RNA X follows the picked dataset');
   state.contact.datasetId='c1';chosen=D.contactDataset(state);
   assert.equal(chosen.id,'c1');assert.deepEqual(Array.from(chosen.rnas),['ILM']);assert.equal(state.contact.rnaY,'ILM');
   state.contact.datasetId='';state.selection={datasetIds:['c1']};

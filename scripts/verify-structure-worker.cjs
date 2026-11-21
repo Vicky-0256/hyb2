@@ -171,6 +171,32 @@ async function main() {
     assert.ok(messages.some(function (message) {
       return message.type === "progress" && message.details && message.details.phase === "rna-cofold";
     }));
+
+    // CPLfold's rnacofold read support: every RNAcofold pair, from arms that
+    // carry only coordinates (as the page sends them), plus the COMRADES
+    // support evidence of the same cofolds.
+    const coordinateArms = [
+      { recordId: "read-1", oneStart: 1, oneEnd: 6, twoStart: 11, twoEnd: 16 },
+      { recordId: "read-2", oneStart: 1, oneEnd: 6, twoStart: 11, twoEnd: 16 }
+    ];
+    const pairsMessage = await waitForTerminal(worker, messages, {
+      type: "rnacofold-pairs", sequence: "GGGGGGAAAACCCCCC", evidenceArms: coordinateArms
+    });
+    assert.equal(pairsMessage.type, "complete", pairsMessage.message);
+    const pairEvidence = pairsMessage.evidence;
+    assert.ok(pairEvidence.pairs.length > 0);
+    pairEvidence.pairs.forEach(function (pair) {
+      assert.equal(pair.length, 3);
+      const [one, two, count] = pair;
+      assert.ok(one >= 1 && one <= 6 && two >= 11 && two <= 16, "a pair must join the two arms: " + pair);
+      assert.equal(count, 2, "both reads give the same cofold");
+    });
+    const supportMessage = await waitForTerminal(worker, messages, {
+      type: "comrades-evidence", sequence: "GGGGGGAAAACCCCCC", evidenceArms: coordinateArms
+    });
+    assert.equal(supportMessage.type, "complete", supportMessage.message);
+    assert.deepEqual(pairEvidence.support, supportMessage.evidence,
+      "the support returned with the pairs must equal a separate COMRADES support run");
     process.stdout.write("structure-worker-integration: ok\n");
   } finally {
     await worker.terminate();

@@ -396,13 +396,35 @@ assert.equal(data.getFilteredRecords(invalidFilterState).length, 0,
 invalidFilterState.filters.armOneStart = "1.5";
 assert.equal(data.getFilteredRecords(invalidFilterState).length, 0,
   "fractional interaction coordinates must be rejected");
-// A negative e-value cap matches no records, including those without e-values.
+// A negative e-value cap is impossible: it matches nothing (also records
+// without e-values) and the Interactions page names it in a notice, like a
+// negative or reversed arm range and a reversed dG range.
 {
   const noEvalue = Object.assign({}, regionRecord, { rnaOneEvalue: null, rnaTwoEvalue: null });
   const capState = { records: [regionRecord, noEvalue], filters: Object.assign(data.defaultInteractionFilters(), { maxEvalue: "-1" }) };
   assert.equal(data.getFilteredRecords(capState).length, 0, "a negative Maximum e-value matches no record");
   capState.filters.maxEvalue = "";
   assert.equal(data.getFilteredRecords(capState).length, 2, "a cleared Maximum e-value filters nothing");
+  const pagesSandbox = vm.createContext({ console: console, document: { querySelector: function () { return null; }, documentElement: { dataset: {} } },
+    getComputedStyle: function () { return { getPropertyValue: function () { return "#123456"; } }; }, window: {} });
+  ["analysis-data.js", "comrades-analysis.js", "analysis-pages.js"].forEach(function (file) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "web", file), "utf8"), pagesSandbox, { filename: file });
+  });
+  const notice = function (overrides) {
+    const html = pagesSandbox.window.Hyb2Pages.renderInteractions({
+      summary: { rnaNames: ["A"], chimeraTypes: [] }, records: [],
+      filters: Object.assign(pagesSandbox.window.Hyb2Data.defaultInteractionFilters(), overrides),
+      view: { interactions: { records: [], total: 0, partners: [] } }
+    });
+    const match = html.match(/data-range-issue="interactions">([^<]*)/);
+    return match ? match[1] : "";
+  };
+  assert.match(notice({ maxEvalue: "-1" }), /^Maximum e-value -1 is below 0.*No record can match until this is corrected\.$/);
+  assert.match(notice({ armOneStart: "-50" }), /^Arm 1 start and Arm 1 end must be whole numbers/);
+  assert.match(notice({ armOneStart: "5000", armOneEnd: "100" }), /^Arm 1 start 5,000 is after Arm 1 end 100\./);
+  assert.match(notice({ armTwoStart: "0" }), /^Arm 2 start and Arm 2 end must be whole numbers/);
+  assert.match(notice({ minDg: "-5", maxDg: "-20" }), /^Minimum dG -5 is greater than Maximum dG -20\./);
+  assert.equal(notice({ maxEvalue: "0", armOneStart: "5", armOneEnd: "5" }), "", "possible filters get no notice");
 }
 
 // Viewpoint coverage is inclusive per nucleotide, including both arms of a

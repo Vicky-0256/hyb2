@@ -118,6 +118,11 @@
   display: flex;
   width: 240px;
   flex-direction: column;
+  /* Short viewports (phone landscape: 639 px of nav in 300-330 px) scroll
+     the nav inside the sidebar, so every page stays reachable. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   padding: 20px 13px 18px;
   border-right: 1px solid var(--line);
   background: var(--surface);
@@ -419,6 +424,19 @@
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 16px;
+}
+
+/* P1: a title column holding a user label with no spaces
+   ("ZIKV_African_Huh7_infected_48h_replicate") shrinks and wraps the label
+   instead of pushing the kicker and the page past the screen edge. */
+.card-title-row > :not(.card-kicker) {
+  min-width: 0;
+}
+
+.card-title-row h2,
+.card-title-row h3,
+.card-title-row .card-note {
+  overflow-wrap: anywhere;
 }
 
 .card-title-row h2,
@@ -758,6 +776,13 @@
 .toast.is-visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+/* D11: with a right-hand drawer open (Data, Help, Display, Privacy) the
+   toast moves to the left corner so it does not sit over the drawer. */
+body:has(.drawer-layer) .toast {
+  right: auto;
+  left: 20px;
 }
 
 .mobile-nav {

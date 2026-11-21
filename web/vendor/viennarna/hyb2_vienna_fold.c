@@ -2,8 +2,9 @@
  * Minimal browser-facing wrapper around RNAlib's global MFE API.
  *
  * The binding exposes global single-sequence MFE folding, hard-pair constrained
- * folding, and the two-strand RNAcofold operation used to derive HYB-guided
- * evidence.  Keeping these operations narrow makes their memory boundary
+ * folding, the two-strand RNAcofold operation used to derive HYB-guided
+ * evidence, and RNAduplex (intermolecular pairs only), the HYB2 pipeline's
+ * dG of a hybrid and its read-support pairs.  Keeping these operations narrow makes their memory boundary
  * auditable from the Web Worker.
  */
 
@@ -14,6 +15,7 @@
 
 #include <ViennaRNA/fold_compound.h>
 #include <ViennaRNA/constraints/hard.h>
+#include <ViennaRNA/duplex.h>
 #include <ViennaRNA/mfe/global.h>
 #include <ViennaRNA/model.h>
 
@@ -345,4 +347,93 @@ hyb2_vienna_cofold(const char *sequence_one,
   free(complex_sequence);
 
   return isfinite(mfe) ? (double)mfe : NAN;
+}
+
+/*
+ * Reproduce `RNA.duplexfold(A, B)` (RNAduplex, intermolecular pairs only) for
+ * two RNA arms.  Returns the duplex dG in kcal/mol and writes its base pairs
+ * as flattened, 1-based [i0, j0, i1, j1, ...] with i in arm A and j in arm B;
+ * *pair_count_out is their number.  RNAduplex reports a pairless duplex
+ * (".&.", 100000 kcal/mol) when the arms cannot pair: the energy is returned
+ * as it is and *pair_count_out is 0.  NaN signals invalid input, a structure
+ * that does not fit the arms, or too small an output buffer.
+ */
+HYB2_EXPORT
+double
+hyb2_vienna_duplex(const char   *sequence_one,
+                   const char   *sequence_two,
+                   double       temperature_celsius,
+                   unsigned int *pairs_out,
+                   size_t       pairs_capacity,
+                   int          *pair_count_out)
+{
+  const size_t length_one = sequence_one ? strlen(sequence_one) : 0;
+  const size_t length_two = sequence_two ? strlen(sequence_two) : 0;
+  const double saved_temperature = vrna_md_defaults_temperature_get();
+  duplexT hit;
+  const char *separator;
+  size_t left_length, right_length, opens = 0, closes = 0, x, y;
+  size_t *open_positions = NULL;
+  double energy;
+
+  if ((!valid_rna_sequence(sequence_one)) ||
+      (!valid_rna_sequence(sequence_two)) ||
+      (!pair_count_out) ||
+      (!isfinite(temperature_celsius)) ||
+      (temperature_celsius < -273.15) ||
+      (temperature_celsius > 100.))
+    return NAN;
+
+  *pair_count_out = 0;
+  vrna_md_defaults_temperature(temperature_celsius);
+  hit = duplexfold(sequence_one, sequence_two);
+  vrna_md_defaults_temperature(saved_temperature);
+  energy = hit.energy;
+
+  separator = hit.structure ? strchr(hit.structure, '&') : NULL;
+  if (!separator) {
+    free(hit.structure);
+    return NAN;
+  }
+
+  left_length = (size_t)(separator - hit.structure);
+  right_length = strlen(separator + 1);
+  for (x = 0; x < left_length; x++)
+    opens += hit.structure[x] == '(';
+  for (y = 0; y < right_length; y++)
+    closes += separator[1 + y] == ')';
+
+  if (opens != closes || opens > pairs_capacity ||
+      (opens && ((hit.i < (int)left_length) || (hit.i > (int)length_one) || (hit.j < 1) ||
+                 ((size_t)hit.j + right_length - 1 > length_two)))) {
+    free(hit.structure);
+    return NAN;
+  }
+
+  if (opens) {
+    size_t k = 0;
+    open_positions = calloc(opens, sizeof(size_t));
+    if ((!open_positions) || (!pairs_out)) {
+      free(open_positions);
+      free(hit.structure);
+      return NAN;
+    }
+    /* the arm-A pairs, 5' to 3', close on arm B from its 3' end back */
+    for (x = 0; x < left_length; x++)
+      if (hit.structure[x] == '(')
+        open_positions[k++] = (size_t)hit.i - left_length + 1 + x;
+    k = opens;
+    for (y = 0; y < right_length; y++) {
+      if (separator[1 + y] == ')') {
+        k--;
+        pairs_out[2 * k] = (unsigned int)open_positions[k];
+        pairs_out[2 * k + 1] = (unsigned int)(hit.j + y);
+      }
+    }
+    free(open_positions);
+  }
+
+  *pair_count_out = (int)opens;
+  free(hit.structure);
+  return energy;
 }

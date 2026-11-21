@@ -220,6 +220,16 @@
     justify-self: start;
   }
 
+  /* the two-button FASTA row (styles.css) keeps this layout's narrower
+     first column and its status in the last column */
+  .prepared-file-row:has(> [data-action="add-fasta"]) {
+    grid-template-columns: 48px auto minmax(0, 1fr) 68px;
+  }
+
+  .prepared-file-row:has(> [data-action="add-fasta"]) > .prepared-file-status {
+    grid-column: 4;
+  }
+
   .prepared-next-step {
     align-items: stretch;
     flex-direction: column;
@@ -323,8 +333,9 @@
     overflow-x: auto;
     padding: 8px 12px;
     border-top: 1px solid var(--line);
-    background: color-mix(in srgb, var(--surface) 94%, transparent);
-    backdrop-filter: blur(14px);
+    /* opaque (--surface is set per theme): a 94% see-through bar let the
+       page's text show through the tab labels */
+    background: var(--surface);
     scrollbar-width: none;
   }
 
@@ -332,15 +343,20 @@
     display: none;
   }
 
-  /* Faded edges say there are more tabs to scroll to: sticky overlays at
-     each end, shown only while there is more in that direction. */
+  /* Faded edges say there are more tabs to scroll to, shown only while
+     there is more in that direction. They are fixed to the viewport's left
+     and right edges (the bar is full width, fixed and untransformed), not
+     sticky: sticky offsets in Chrome are inset by the 12px scroller padding
+     and an ::after past the content box could not reach the right edge, so
+     the fades sat inside the labels. 53px = the bar's 54px less its top
+     border. */
   .mobile-nav::before,
   .mobile-nav::after {
-    position: sticky;
-    z-index: 1;
-    flex: 0 0 28px;
-    align-self: stretch;
-    margin: -8px 0;
+    position: fixed;
+    z-index: 13;
+    bottom: 0;
+    width: 28px;
+    height: 53px;
     opacity: 0;
     content: "";
     pointer-events: none;
@@ -349,15 +365,11 @@
 
   .mobile-nav::before {
     left: 0;
-    margin-right: -28px;
-    margin-left: -12px;
     background: linear-gradient(to right, var(--surface), transparent);
   }
 
   .mobile-nav::after {
     right: 0;
-    margin-right: -12px;
-    margin-left: -28px;
     background: linear-gradient(to left, var(--surface), transparent);
   }
 

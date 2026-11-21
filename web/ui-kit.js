@@ -122,6 +122,24 @@
     return out;
   }
 
+  // Shortens a 10 px label to about `room` px with an ellipsis (an
+  // estimate: SVG text is not measured here).
+  function fitChars(text, room) {
+    const max = Math.max(4, Math.floor(room / 5.6));
+    return text.length > max ? text.slice(0, max - 1) + "\u2026" : text;
+  }
+
+  function fitCanvas(ctx, text, room) {
+    if (typeof ctx.measureText !== "function" || ctx.measureText(text).width <= room) {
+      return text;
+    }
+    let cut = text.length;
+    while (cut > 1 && ctx.measureText(text.slice(0, cut) + "\u2026").width > room) {
+      cut -= 1;
+    }
+    return text.slice(0, cut) + "\u2026";
+  }
+
   function html(opts) {
     const o = settings(opts);
     const vertical = o.orientation === "vertical";
@@ -176,8 +194,9 @@
         parts.push('<text x="0" y="' + (top + o.height + 14) + '" fill="' + o.muted + '">' + escapeText(o.lowLabel || "") + "</text>");
         parts.push('<text x="0" y="' + (top - 18) + '" fill="' + o.muted + '">' + escapeText(o.highLabel || "") + "</text>");
       } else {
-        parts.push('<text x="0" y="' + (top + o.height + 28) + '" fill="' + o.muted + '">' + escapeText(o.lowLabel || "") + "</text>");
-        parts.push('<text x="' + o.width + '" y="' + (top + o.height + 28) + '" text-anchor="end" fill="' + o.muted + '">' + escapeText(o.highLabel || "") + "</text>");
+        // the two ends share one line: each keeps to its half of the bar
+        parts.push('<text x="0" y="' + (top + o.height + 28) + '" fill="' + o.muted + '">' + escapeText(fitChars(o.lowLabel || "", o.width / 2 - 6)) + "</text>");
+        parts.push('<text x="' + o.width + '" y="' + (top + o.height + 28) + '" text-anchor="end" fill="' + o.muted + '">' + escapeText(fitChars(o.highLabel || "", o.width / 2 - 6)) + "</text>");
       }
     }
     parts.push("</g>");
@@ -238,9 +257,9 @@
         ctx.fillText(o.highLabel || "", 0, top - 18);
       } else {
         ctx.textAlign = "left";
-        ctx.fillText(o.lowLabel || "", 0, top + o.height + 28);
+        ctx.fillText(fitCanvas(ctx, o.lowLabel || "", o.width / 2 - 6), 0, top + o.height + 28);
         ctx.textAlign = "right";
-        ctx.fillText(o.highLabel || "", o.width, top + o.height + 28);
+        ctx.fillText(fitCanvas(ctx, o.highLabel || "", o.width / 2 - 6), o.width, top + o.height + 28);
       }
     }
     ctx.restore();

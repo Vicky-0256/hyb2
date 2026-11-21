@@ -52,7 +52,7 @@ async function dispatch(payload, target = null) {
     const done = messages.find(message => message.type === expected);
     assert.ok(done, "the actual Pyodide worker must finish " + payload.type);
     assert.equal(done.result.engine, "CPLcofold");
-    assert.equal(done.result.bridgeVersion, "6");
+    assert.equal(done.result.bridgeVersion, "7");
     completedRuns += 1;
     return done.result;
   } finally {

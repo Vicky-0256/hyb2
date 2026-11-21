@@ -15,6 +15,38 @@
 }
 
 /* ------------------------------------------------------------------ */
+/* Keyboard focus stops clear of the fixed bars                        */
+/* ------------------------------------------------------------------ */
+
+/* Tab scrolls a control only just into view, which can be under the fixed
+   header (60px) or, on phones, under the fixed page nav (54px). These
+   margins make that scroll stop 12px clear of both. :where() keeps the
+   specificity at zero, so a page with a sticky bar of its own overrides
+   them with any plain selector. */
+:where(.workspace-main) :where(a[href], button, input, select, textarea, summary, [tabindex="0"]) {
+  scroll-margin-top: calc(var(--header-h, 60px) + 12px);
+}
+
+@media (max-width: 767px) {
+  :where(.workspace-main) :where(a[href], button, input, select, textarea, summary, [tabindex="0"]) {
+    scroll-margin-bottom: 66px;
+  }
+}
+
+/* Compare: the section nav (48px) sticks under the header. */
+:where(.compare-subnav ~ *) :where(a[href], button, input, select, textarea, summary, [tabindex="0"]) {
+  scroll-margin-top: calc(var(--header-h, 60px) + 60px);
+}
+
+/* A field that holds a value selects its text when Tab reaches it. In
+   Chrome that cancels the smooth scroll (html, styles.css) that was bringing
+   the field into view, so it stayed under a bar. While keyboard focus is on
+   a control the page scrolls at once instead. */
+html:has(:focus-visible) {
+  scroll-behavior: auto;
+}
+
+/* ------------------------------------------------------------------ */
 /* Control grids                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -332,6 +364,79 @@
     padding: 0 8px;
     white-space: nowrap;
   }
+
+  /* The palette's trigger stays as an icon button: on a phone it is the
+     only route to search and the commands (there is no ⌘K). interaction.css
+     hides it and already drops its label and key hint at this width. */
+  .workspace-header .cmdk-trigger {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 40px;
+    min-height: 40px;
+    border-color: transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted-strong);
+  }
+
+  .workspace-header .cmdk-trigger svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+/* Tablets and small laptops: the toolbar keeps its width, and the left side
+   ran under it (logo squeezed, chips on top of each other at 768-1010px, the
+   file name cut to a letter up to 1100px). So the logo and the toolbar keep
+   their width and the dataset choice gives way first. Up to 1099px "Ready"
+   goes, and the file name goes while the dataset choice is there (the Data
+   drawer lists the files); up to 1023px "Local only" goes as on a phone and
+   the palette's trigger loses its key hint. */
+@media (min-width: 768px) {
+  .workspace-header-left > :first-child,
+  .workspace-header .toolbar-actions {
+    flex-shrink: 0;
+  }
+
+  .workspace-header .header-file {
+    margin-right: 10px;
+  }
+
+  .workspace-header .header-scope {
+    min-width: 0;
+  }
+
+  .workspace-header .header-scope select {
+    max-width: min(260px, 100%);
+  }
+}
+
+/* from 1024px the file name gives way before the dataset choice */
+@media (min-width: 1024px) {
+  .workspace-header .header-scope {
+    flex-shrink: 0;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1099px) {
+  .workspace-header .ready-chip,
+  .workspace-header .header-file:has(.header-scope) .header-file-name {
+    display: none;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .workspace-header .local-chip,
+  .workspace-header .local-chip + .toolbar-divider,
+  .workspace-header .cmdk-trigger kbd {
+    display: none;
+  }
+
+  .workspace-header .cmdk-trigger {
+    width: 36px;
+    justify-content: center;
+    padding: 0;
+  }
 }
 
 /* Card kickers are short labels ("2 local files", "Local memory"); keep
@@ -629,6 +734,22 @@
     display: inline-flex;
     align-items: center;
     padding: 0 8px;
+  }
+}
+
+/* With Help kept, the landing header's brand and three actions are 342px
+   wide: at 360px that is 14px more than the header holds, so the last
+   button ran past the page margin. Up to 380px (they fit from 382px) the
+   logo takes the phone workspace header's 84px and the actions sit 4px
+   apart. */
+@media (max-width: 380px) {
+  .landing-header .brand-mark {
+    width: 84px;
+    flex-basis: 84px;
+  }
+
+  .landing-header .header-actions {
+    gap: 4px;
   }
 }
 

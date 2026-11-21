@@ -48,13 +48,47 @@
     });
   }
 
+  // Empty or repeated condition / dataset labels make the test's checkboxes,
+  // panels and exports ambiguous ("SAME (ZASI)" twice). Returns one message
+  // per problem, [] when every label is set and unique.
+  function labelIssues(comparison) {
+    const issues = [];
+    const key = function (text) { return String(text == null ? "" : text).trim().toLowerCase(); };
+    const labelA = comparison.conditionALabel;
+    const labelB = comparison.conditionBLabel;
+    if (typeof labelA === "string" && !labelA.trim()) issues.push("The Condition A label is empty.");
+    if (typeof labelB === "string" && !labelB.trim()) issues.push("The Condition B label is empty.");
+    if (key(labelA) && key(labelA) === key(labelB)) issues.push("Condition A and Condition B have the same label (" + String(labelA).trim() + ").");
+    const seen = Object.create(null);
+    (comparison.datasets || []).filter(function (dataset) {
+      return dataset && (dataset.condition === "A" || dataset.condition === "B");
+    }).forEach(function (dataset) {
+      if (typeof dataset.label === "string" && !dataset.label.trim()) {
+        issues.push("The dataset " + (dataset.fileName || dataset.id) + " has an empty label.");
+        return;
+      }
+      const name = key(dataset.label || dataset.fileName || dataset.id);
+      (seen[name] = seen[name] || []).push(dataset);
+    });
+    Object.keys(seen).forEach(function (name) {
+      const group = seen[name];
+      if (group.length > 1) {
+        issues.push(group.length + " datasets have the label " + String(group[0].label || group[0].fileName).trim() + " (" + group.map(function (dataset) { return dataset.fileName || dataset.id; }).join(", ") + ").");
+      }
+    });
+    return issues;
+  }
+
   function eligibility(comparison) {
     const assigned = assignedDatasets(comparison);
     const nA = assigned.filter(function (dataset) { return dataset.condition === "A"; }).length;
     const nB = assigned.length - nA;
+    const labels = labelIssues(comparison);
     let reason = "";
     if (comparison.loading) {
       reason = "Finish parsing the selected datasets first.";
+    } else if (labels.length) {
+      reason = "Give every condition and dataset its own label: " + labels[0];
     } else if (!comparison.rnaX || !comparison.rnaY) {
       reason = "Choose RNA X and RNA Y above.";
     } else if (!nA || !nB) {
@@ -65,6 +99,30 @@
       reason = "At least one condition needs two or more replicates.";
     }
     return { ok: !reason, reason: reason, nA: nA, nB: nB, assigned: assigned };
+  }
+
+  // One condition has a single replicate. The run is allowed, as in DESeq2:
+  // with m samples and two coefficients the dispersion is still estimable
+  // from m - 2 residual degrees of freedom, but only the replicated condition
+  // informs it. Returns the caveat shown with such a run (card, Report,
+  // exports), or "" when both conditions are replicated.
+  function replicateCaveat(nA, nB, labelA, labelB) {
+    if (nA < 1 || nB < 1 || nA + nB < 3 || (nA > 1 && nB > 1)) {
+      return "";
+    }
+    const single = nA === 1 ? labelA : labelB;
+    const other = nA === 1 ? labelB : labelA;
+    return single + " has one replicate (" + nA + " + " + nB + "). The test still runs, as DESeq2 does with one unreplicated condition, but the noise is estimated from the " +
+      Math.max(nA, nB) + " " + other + " replicates alone and " + single + " is assumed to vary as much. Expect few or no significant cells; a real difference cannot be told from one unusual sample. " +
+      "Treat this result as exploratory and add a second " + single + " replicate before reporting it.";
+  }
+
+  // The caveat of a finished run, from the datasets it used.
+  function resultCaveat(result) {
+    const datasets = result && Array.isArray(result.datasets) ? result.datasets : [];
+    const nA = datasets.filter(function (dataset) { return dataset.condition === "A"; }).length;
+    const labels = result && result.labels || {};
+    return replicateCaveat(nA, datasets.length - nA, labels.A || "Condition A", labels.B || "Condition B");
   }
 
   function similarity(left, right) {
@@ -210,10 +268,18 @@
     });
     const params = parameters(deseq);
     params.errors.forEach(function (message) { out.push('<p class="notice notice-error">' + esc(message) + "</p>"); });
+    labelIssues(comparison).forEach(function (message) { out.push('<p class="notice notice-error" data-deseq-label-issue>' + esc(message) + " The test needs a distinct label for each condition and dataset.</p>"); });
+    // said before the run; a current result repeats it beside its numbers
+    const caveat = check.ok ? replicateCaveat(check.nA, check.nB, labelA, labelB) : "";
+    if (caveat && !(result && !stale)) {
+      out.push('<p class="notice notice-warning" data-deseq-caveat>' + esc(caveat) + "</p>");
+    }
     out.push('<div class="control-actions">' +
       (running
-        ? '<button class="button" type="button" disabled>Running…</button><button class="quiet-button" type="button" data-feature-action="deseq-cancel">Cancel</button>'
-        : '<button class="button" type="button" data-feature-action="deseq-run"' + (check.ok && !params.errors.length ? "" : " disabled") + ">Run differential test</button>") +
+        // aria-disabled, not disabled: the Run button pressed from the
+        // keyboard becomes this one and keeps focus while the test runs
+        ? '<button class="button" type="button" aria-disabled="true" data-focus-key="deseq-run">Running…</button><button class="quiet-button" type="button" data-feature-action="deseq-cancel" data-focus-key="deseq-run">Cancel</button>'
+        : '<button class="button" type="button" data-feature-action="deseq-run" data-focus-key="deseq-run"' + (check.ok && !params.errors.length ? "" : " disabled") + ">Run differential test</button>") +
       '<span class="control-hint" data-deseq-progress aria-live="polite">' + esc(running ? deseq.progress || "Starting…" : (check.ok ? "" : check.reason)) + "</span></div>");
     if (deseq.error) {
       out.push('<p class="notice notice-error">' + esc(deseq.error) + "</p>");
@@ -241,6 +307,9 @@
     const out = [];
     if (stale) {
       out.push('<p class="notice notice-warning">Datasets, conditions or parameters changed after this result was computed; run the test again to update it.</p>');
+    }
+    if (resultCaveat(result)) {
+      out.push('<p class="notice notice-warning" data-deseq-caveat>' + esc(resultCaveat(result)) + "</p>");
     }
     out.push('<dl class="selection-stats deseq-stats">' + [
       ["Cells tested", num(s.cellsTested) + " of " + num(s.cellsTotal) + " (the rest have a total count of " + num(s.parameters.minCount) + " or less)"],
@@ -373,6 +442,18 @@
     }
   }
 
+  // Long condition names: the title is cut with an ellipsis to the canvas.
+  function fitTitle(context, text, room) {
+    if (typeof context.measureText !== "function" || context.measureText(text).width <= room) {
+      return text;
+    }
+    let cut = text.length;
+    while (cut > 1 && context.measureText(text.slice(0, cut) + "\u2026").width > room) {
+      cut -= 1;
+    }
+    return text.slice(0, cut) + "\u2026";
+  }
+
   function drawPanel(context, width, height, comparison, result, show, selectedRow, colours) {
     const palette = colours || PRINT;
     const g = geometry(width, height, mapLength(result), mapViews.get(result));
@@ -381,7 +462,8 @@
     context.fillStyle = palette.ink;
     context.font = "600 13px Inter, Arial, sans-serif";
     context.textAlign = "left";
-    context.fillText("Differential coverage map · " + (comparison.conditionALabel || "Condition A") + " vs " + (comparison.conditionBLabel || "Condition B"), g.left, 20);
+    const title = "Differential coverage map · " + (comparison.conditionALabel || "Condition A") + " vs " + (comparison.conditionBLabel || "Condition B");
+    context.fillText(fitTitle(context, title, width - g.left - 8), g.left, 20);
     context.strokeStyle = palette.line;
     context.lineWidth = 1;
     context.strokeRect(g.left - 0.5, g.top - 0.5, g.size + 1, g.size + 1);
@@ -581,7 +663,12 @@
     parts.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + " " + height + '" width="' + width + '" height="' + height +
       '" font-family="Inter, Arial, sans-serif" font-size="11" role="img" aria-label="Differential coverage map">');
     parts.push('<rect width="100%" height="100%" fill="#ffffff"/>');
-    parts.push('<text x="' + g.left + '" y="20" font-size="13" font-weight="600" fill="#222222">' + xml("Differential coverage map · " + (comparison.conditionALabel || "Condition A") + " vs " + (comparison.conditionBLabel || "Condition B")) + "</text>");
+    // P1: long condition labels ran the title past the SVG's right edge; a
+    // title wider than the room left is fitted to it (about 7 px a character)
+    const title = "Differential coverage map · " + (comparison.conditionALabel || "Condition A") + " vs " + (comparison.conditionBLabel || "Condition B");
+    const titleRoom = width - g.left - 12;
+    const titleFit = title.length * 7 > titleRoom ? ' textLength="' + titleRoom + '" lengthAdjust="spacingAndGlyphs"' : "";
+    parts.push('<text x="' + g.left + '" y="20" font-size="' + (titleFit ? 12 : 13) + '" font-weight="600" fill="#222222"' + titleFit + ">" + xml(title) + "</text>");
     parts.push('<rect x="' + (g.left - 0.5) + '" y="' + (g.top - 0.5) + '" width="' + (g.size + 1) + '" height="' + (g.size + 1) + '" fill="none" stroke="#c7ced6"/>');
     const cells = [];
     eachCell(result, show, function (x, y, colour, alpha) {
@@ -925,6 +1012,8 @@
         current: result.inputKey === inputKey(comparison),
         completedAt: result.completedAt || null,
         datasets: result.datasets,
+        // set when one condition had a single replicate (see replicateCaveat)
+        caveat: resultCaveat(result) || null,
         summary: result.summary
       } : null
     };
@@ -953,6 +1042,7 @@
     const panel = panelSvg(comparison, { maxCells: REPORT_CELLS, show: "both", width: 640, height: 660 });
     const top = result.interactions.slice().sort(function (left, right) { return left.padj - right.padj; }).slice(0, h.maxRows || 12);
     return [
+      resultCaveat(result) ? '<p class="notice notice-warning" data-deseq-caveat>' + h.escape(resultCaveat(result)) + "</p>" : "",
       '<div class="report-grid report-analysis-grid">',
       '<div class="report-subsection"><h3>Differential test (DESeq2 Wald test)</h3>' + h.definitionList([
         ["Datasets", result.datasets.map(function (d) { return (d.label || d.fileName) + " (" + (d.condition === "A" ? labelA : labelB) + ")"; }).join(", ")],
@@ -963,7 +1053,7 @@
         ["Size factors", s.sizeFactors.map(function (v) { return v.toFixed(4); }).join(", ")],
         ["Current inputs", result.inputKey === inputKey(comparison) ? "Yes" : "No (inputs changed after the run)"]
       ]) + "</div>",
-      '<div class="report-subsection"><h3>Strongest merged interactions</h3>' + h.table(["Higher in", "x", "y", "log2 A/B", "padj"], top.map(function (row) {
+      '<div class="report-subsection"><h3>Strongest merged interactions</h3>' + h.table(["Higher in", { label: "x", num: true }, { label: "y", num: true }, { label: "log2 A/B", num: true }, { label: "padj", num: true }], top.map(function (row) {
         return [h.escape(row.direction === "up" ? labelA : labelB), h.formatNumber(row.x), h.formatNumber(row.y), fixed(row.log2FoldChange, 2), padjText(row.padj)];
       })) + "</div>",
       "</div>",
@@ -986,6 +1076,9 @@
     reportData: reportData,
     reportSection: reportSection,
     eligibility: eligibility,
+    labelIssues: labelIssues,
+    replicateCaveat: replicateCaveat,
+    resultCaveat: resultCaveat,
     rnaPlan: rnaPlan,
     inputKey: inputKey,
     collectArms: collectArms

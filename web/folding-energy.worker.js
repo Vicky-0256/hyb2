@@ -1,8 +1,10 @@
 /*
- * RNAcofold batches for the Folding energy card (folding-energy.js).
+ * RNAcofold and RNAduplex batches for the Folding energy card and the HYB
+ * binding energies tool (folding-energy.js).
  *
  * Loads the ViennaRNA WebAssembly build (vendor/viennarna) and folds each
- * pair of arms joined with "&", reporting progress.  Sequences never leave
+ * pair of arms, reporting progress; an RNAduplex pair whose arms form no pair
+ * comes back as NaN.  Sequences never leave
  * the browser tab.
  */
 
@@ -46,7 +48,7 @@ function getEngine() {
 
 self.onmessage = async function (event) {
   const message = event.data || {};
-  if (message.type !== "cofold-batch") {
+  if (message.type !== "cofold-batch" && message.type !== "duplex-batch") {
     return;
   }
   try {
@@ -54,9 +56,11 @@ self.onmessage = async function (event) {
     const version = engine.UTF8ToString(engine._hyb2_vienna_version());
     const pairs = message.pairs || [];
     const energies = new Float64Array(pairs.length);
-    const fold = self.Hyb2FoldingEnergy.cofold;
+    const duplex = message.type === "duplex-batch";
+    const fold = duplex ? self.Hyb2FoldingEnergy.duplex : self.Hyb2FoldingEnergy.cofold;
     for (let k = 0; k < pairs.length; k += 1) {
-      energies[k] = fold(engine, pairs[k][0], pairs[k][1], message.temperature, message.minimumLoop);
+      energies[k] = duplex ? fold(engine, pairs[k][0], pairs[k][1], message.temperature)
+        : fold(engine, pairs[k][0], pairs[k][1], message.temperature, message.minimumLoop);
       if (k % 25 === 24) {
         self.postMessage({ type: "progress", done: k + 1, total: pairs.length });
       }

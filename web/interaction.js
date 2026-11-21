@@ -286,12 +286,7 @@
         label: root.dataset.theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
         hint: "",
         icon: "theme",
-        // the theme switch lives in the Display panel
-        run: function () {
-          if (!clickAction('[data-action="toggle-theme"]') && clickAction('[data-action="open-display"]')) {
-            window.requestAnimationFrame(function () { clickAction('[data-action="toggle-theme"]'); });
-          }
-        }
+        run: function () { toggleTheme(); }
       });
       out.push({
         group: "General",
@@ -435,8 +430,26 @@
         return;
       }
       close(true);
+      const route = window.location.hash;
       // Let the palette leave before the app re-renders.
-      window.setTimeout(item.run, 0);
+      window.setTimeout(function () {
+        item.run();
+        // The palette's field is gone, so keyboard focus would fall to the
+        // document. It goes to the page a command opened, or back to where
+        // it was before the palette when the command left the page in place.
+        window.setTimeout(function () {
+          const active = document.activeElement;
+          if (openState || (active && active !== document.body && !layer.contains(active))) {
+            return;
+          }
+          const target = window.location.hash === route && returnFocus && returnFocus !== document.body && returnFocus.isConnected
+            ? returnFocus
+            : document.getElementById("main-content");
+          if (target && typeof target.focus === "function") {
+            target.focus({ preventScroll: true });
+          }
+        }, 120);
+      }, 0);
     }
 
     function open(prefill) {
@@ -492,6 +505,33 @@
       toggle: function () { if (openState) { close(); } else { open(); } },
       isOpen: function () { return openState; }
     };
+  }
+
+  // app.js switches the theme on a [data-action="toggle-theme"] click inside
+  // #app, and the only such control sits in the Display panel. Opening the
+  // panel to press it left the panel open over the page, so the palette
+  // presses a proxy instead. motion.js grows its reveal from the pressed
+  // control and presses it again a frame later: the proxy sits on the
+  // header's Display button and stays until the redraw removes it. It goes
+  // inside the page root, which the render observers on #app do not watch.
+  function toggleTheme() {
+    if (!app || clickAction('[data-action="toggle-theme"]')) {
+      return;
+    }
+    const proxy = document.createElement("button");
+    proxy.type = "button";
+    proxy.className = "theme-proxy";
+    proxy.tabIndex = -1;
+    proxy.setAttribute("aria-hidden", "true");
+    proxy.setAttribute("data-action", "toggle-theme");
+    const origin = app.querySelector('[data-action="open-display"]');
+    if (origin) {
+      const rect = origin.getBoundingClientRect();
+      proxy.style.left = rect.left + rect.width / 2 + "px";
+      proxy.style.top = rect.top + rect.height / 2 + "px";
+    }
+    (app.firstElementChild || app).appendChild(proxy);
+    proxy.click();
   }
 
   function toggleMotion() {
@@ -572,6 +612,16 @@
       return;
     }
 
+    // While the record drawer lies over the table, Tab cycles inside it
+    // rather than walking the rows it hides (Esc or × closes it).
+    if (key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      const drawer = openDrawer();
+      if (drawer && drawer.contains(document.activeElement) && drawerCoversTable(drawer)) {
+        trapFocus(drawer, event);
+        return;
+      }
+    }
+
     // Esc also closes the non-modal panels, unless it is clearing a field
     // outside them or app.js already used it to close a dialog.
     if (key === "Escape" && !escClosedDialog) {
@@ -643,7 +693,7 @@
   // Canvas lens: crosshair + floating readout that follows the pointer
   // ------------------------------------------------------------------
 
-  const DEFAULT_READOUT = /^Hover a cell/;
+  const DEFAULT_READOUT = /^Hover (or tap )?a cell/;
   const lens = document.createElement("div");
   lens.className = "canvas-lens";
   lens.setAttribute("aria-hidden", "true");
@@ -861,6 +911,24 @@
     return app && app.querySelector('.record-drawer [data-feature-action="close-record"]');
   }
 
+  function openDrawer() {
+    return app && app.querySelector(".record-drawer:not(.is-leaving)");
+  }
+
+  // The drawer covers the table when it spans the middle of the table card
+  // (bottom sheet on phones, panel over the table on tablets). The card,
+  // not a row: on a phone the rows are wider than the screen and scroll.
+  function drawerCoversTable(drawer) {
+    const table = app && app.querySelector(".interaction-table-card");
+    if (!drawer || !table) {
+      return false;
+    }
+    const box = drawer.getBoundingClientRect();
+    const rect = table.getBoundingClientRect();
+    const middle = rect.left + rect.width / 2;
+    return middle >= box.left && middle <= box.right;
+  }
+
   function focusAfterRender(selector) {
     window.requestAnimationFrame(function () {
       const target = app && app.querySelector(selector);
@@ -879,7 +947,21 @@
     }
     if (control.matches('[data-feature-action="open-record"]')) {
       openedRecord = control.getAttribute("data-record-index");
-      focusAfterRender('.virtual-row[data-record-index="' + openedRecord + '"]');
+      const rowSelector = '.virtual-row[data-record-index="' + openedRecord + '"]';
+      // Wide screens: the drawer sits beside the row, so focus stays on the
+      // row. Phones and tablets: it lies over the table, and Tab would walk
+      // the rows under it, so focus goes into the drawer instead.
+      window.requestAnimationFrame(function () {
+        const drawer = openDrawer();
+        if (drawer && drawerCoversTable(drawer)) {
+          const close = closePanelButton();
+          if (close && (!document.activeElement || document.activeElement === document.body || !drawer.contains(document.activeElement))) {
+            close.focus({ preventScroll: true });
+          }
+        } else {
+          focusAfterRender(rowSelector);
+        }
+      });
     } else {
       focusAfterRender(openedRecord !== null ? '.virtual-row[data-record-index="' + openedRecord + '"]' : ".interaction-table-card");
     }
@@ -936,6 +1018,37 @@
       dialogReturnFocus = null;
     }
     lastDialog = dialogKey;
+    keepSidebarScroll();
+  }
+
+  // Short viewports (phone landscape) scroll the sidebar's nav
+  // (workspace.css). Each render replaces the sidebar, which would jump back
+  // to the top, so keep its scroll position and bring the current page in.
+  let sidebarScrollTop = 0;
+  document.addEventListener("scroll", function (event) {
+    const target = event.target;
+    if (target && target.classList && target.classList.contains("sidebar")) {
+      sidebarScrollTop = target.scrollTop;
+    }
+  }, true);
+
+  function keepSidebarScroll() {
+    const sidebar = app.querySelector(".sidebar");
+    if (!sidebar || sidebar.scrollHeight <= sidebar.clientHeight) {
+      return;
+    }
+    sidebar.scrollTop = sidebarScrollTop;
+    const active = sidebar.querySelector(".nav-button.is-active");
+    if (active) {
+      const box = sidebar.getBoundingClientRect();
+      const rect = active.getBoundingClientRect();
+      if (rect.top < box.top) {
+        sidebar.scrollTop += rect.top - box.top - 8;
+      } else if (rect.bottom > box.bottom) {
+        sidebar.scrollTop += rect.bottom - box.bottom + 8;
+      }
+    }
+    sidebarScrollTop = sidebar.scrollTop;
   }
 
   function boot() {
@@ -944,6 +1057,8 @@
       return;
     }
     new MutationObserver(decorate).observe(app, { childList: true });
+    // app.js redraws around a kept control without replacing #app's children
+    app.addEventListener("hyb2:redrawn", decorate);
     if (app.firstElementChild) {
       decorate();
     }

@@ -31,14 +31,36 @@ Every loaded HYB file is analysed: after comparison datasets load, Overview,
 Interactions, Viewpoint, Region Explorer, RNA Structure and the Report read
 all loaded datasets merged (counts summed, rows concatenated), unless another
 scope was chosen in the header (all merged, one condition merged, or one
-dataset). The Contact Map is never merged: it draws the one dataset chosen in
-its Dataset control (default: the header's dataset when the scope is one,
-else the primary file), its RNA X/Y list that dataset's RNAs, and a selected
-cell's records and the parameter export name it. Overview's Per-dataset summary shows each file's
+dataset). The Contact Map follows the same scope: by default it merges the
+datasets in scope ("All N datasets in scope merged", counts summed); its
+Dataset control can instead pick one dataset. The page ("Map data: ..."), the
+report's Contact Map section, the S04 scope and the parameter export name the
+datasets the map read, and RNA X/Y list their RNAs. Overview's Per-dataset summary shows each file's
 records, source reads, RNAs and pairs, whether it is in the current scope, and
 condition totals. Compare keeps its own condition assignment. A Contact Map
 that exceeds the browser budget at the requested bin size doubles the bin size
 and says so. HYB binding energies rewrite the primary file only.
+
+## Export conventions
+
+- Coordinates are 1-based and inclusive on each RNA. Binned contact exports
+  (`contact-map.tsv`, `contact-matrix.csv` headers, `comparison.tsv`, and the
+  result package's `contact_map_cells.tsv` / `compare_cells.tsv` x and y) keep
+  HYB2's bin keys, `floor(position / bin size) × bin size` as in HYB2
+  `contact.txt` and the DESeq2 table, so the first key is 0 and that bin holds
+  positions 1 to bin size − 1. `x_end`/`y_end` are start + bin size − 1,
+  clamped to the RNA length for the last bin (10800-10807 for a 10,807-nt RNA
+  in 20-nt bins). Viewpoint and Region profile bins start at 1 (1-10, 11-20).
+  The contact and comparison parameter JSONs repeat this as `binCoordinates`.
+- Missing values: empty in CSV, `NA` in TSV, `null` in JSON.
+- Numbers: comparison means, effects and similarities have 6 significant
+  digits; kcal/mol energies and CPLfold scores have 2 decimals. The
+  differential test TSVs keep full precision to match HYB2 Desktop.
+- When several datasets are merged, record exports (Interactions and Region
+  CSV, the package's `interactions.tsv` and `interactions_top.tsv`) add
+  `dataset` and `dataset_file` columns; `line` is a line of that file.
+- Every text download ends with a newline; FASTA downloads use RNA letters (U).
+- `buildCommit` is the deployed commit, or `"unknown"` in a local copy.
 
 ## Data access and embedding the analysis pages
 
@@ -214,7 +236,7 @@ FASTA parsing removes layout whitespace only. Unsupported symbols are preserved 
 - The Compare page also holds an **Arc map**: one or two structures (.dbn, windows placed by `name:start-end` headers, or .ct), the merged differential interactions of a comparison (HYB2 Desktop `interactions.tsv` or hyb2_compare `*_enrichment.txt`; padj cutoff, higher in condition one above, two below) and a gene track (GenBank, GFF3/GTF, BED or TSV), drawn as a PARIS-style SVG. Structure B, the cells of either condition and a GenBank annotation may sit on another reference (another strain): they are moved onto A's coordinates by a banded global alignment of the sequences (`arc-map.js`, the same algorithm as HYB2 Desktop's `seqmap`), and shared pairs are counted on A's coordinates. On the ZIKV ZAFR and ZILM genome folds it maps ZILM i to ZAFR i-1 after the indel at 72 and draws the 378 / 1,243 interactions with padj < 0.01 of the AFR vs ILM virion test; NC_035889's mature peptides land on ZAFR one nucleotide earlier.
 - Below the arc map, two cards use the same files. **Region structures (D, E)** (`region-panels.js`) picks, for each direction, the most significant interaction (padj cutoff, sorted by padj) that the enriched lineage's own structure forms (a pair within ±reach nt of both arms, B's pairs moved onto A by alignment), cuts windows (extent of those pairs ± flank) from both structures and draws them joined by a 3-nt linker (ViennaRNA's simple polygon layout), with inter-window pairs in the lineage colour and bases paired outside hollow; a dropdown overrides the interaction. It reproduces `select_regions_cplfold.py` / `window_from_structure.py` exactly on the ZIKV folds. **Folding energy (F, G)** (`folding-energy.js`, `folding-energy.worker.js`) folds 2 × L-nt fragments of every significant interaction with RNAcofold (ViennaRNA WebAssembly, 37 °C) in both lineages and draws violins with a paired t-test (Student t via the regularised incomplete beta); on AFR vs ILM all 1,616 × 2 energies equal the RNAcofold CLI's and the p-values equal R's. FASTA references can be loaded when a structure file has no sequence. Checks: `scripts/verify-region-panels.cjs`, `scripts/verify-folding-energy.cjs` (`HYB2_PANELS_REAL=<dir>` for the real data).
 - Standard ViennaRNA MFE and RNAcofold are built as one static WebAssembly asset during deployment. HYB-guided structure mode runs one RNAcofold observation per eligible HYB row, aggregates base-pair frequencies, merges touching pairs into ranked stems, fits compatible hard constraints iteratively, optionally evaluates up to 1,000 seeded random orders, scores every result by COMRADES support, and colours the selected structure by evidence. UNAFold remains an optional external CLI compatibility path.
-- Pure-Python CPLfold is available as a separate browser engine. Sequence-only mode predicts nested and pseudoknotted candidates. HYB-guided mode converts the two prepared intervals from every eligible HYB row into CPLfold's IRIS-style Gaussian, symmetric outer-product, thresholded `log1p` bonus matrix; overlap score and collapsed source-read count are never reused as weights. The result includes a bonus-matrix view, switchable ranked candidates, pseudoknot-aware arc layers, CT/DBN/SVG/PNG output, base-pair TSV, bonus TSV, candidate TSV, and a provenance report.
+- Pure-Python CPLfold is available as a separate browser engine. Sequence-only mode predicts nested and pseudoknotted candidates. HYB-guided mode converts the two prepared intervals from every eligible HYB row into CPLfold's thresholded `log1p` bonus matrix, by default with the IRIS-style Gaussian symmetric outer product; the Read support setting can instead count every pair between the two arms (optionally divided by the square root of the arm lengths) or only the pairs RNAcofold forms between them, as COMRADES does (docs/cplfold-python.md). Overlap score and collapsed source-read count are never reused as weights. The result includes a bonus-matrix view, switchable ranked candidates, pseudoknot-aware arc layers, CT/DBN/SVG/PNG output, base-pair TSV, bonus TSV, candidate TSV, and a provenance report.
 
 ## Local structure prediction
 

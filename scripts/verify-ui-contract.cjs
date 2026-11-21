@@ -124,9 +124,33 @@ const contactExportState = {
   }
 };
 const contactExportParameters = context.window.Hyb2UI.contactParameters(contactExportState);
-assert.deepEqual(JSON.parse(JSON.stringify(contactExportParameters.parameters.exportedView)), {
-  stage: "overview", xStart: 20, xEnd: 49, yStart: 120, yEnd: 159
-});
+{
+  const exported = JSON.parse(JSON.stringify(contactExportParameters.parameters.exportedView));
+  delete exported.coordinates;
+  assert.deepEqual(exported, {
+    stage: "overview", xStart: 20, xEnd: 49, yStart: 120, yEnd: 159,
+    firstBinXStart: 20, lastBinXEnd: 49, firstBinYStart: 120, lastBinYEnd: 159, rnaXLength: null, rnaYLength: null
+  });
+}
+// D4: a map drawn with larger bins than requested (cell budget) records both
+// sizes, uses the drawn bins for coordinates and clips the view to the RNA
+{
+  const adjusted = JSON.parse(JSON.stringify(contactExportState));
+  adjusted.contact.overviewView = null;
+  adjusted.contact.selection = { x: 10800, y: 0 };
+  adjusted.contact.matrix = { xMin: 1, xMax: 10807, yMin: 1, yMax: 10807, binSize: 20, length: 10807, cap: 1, max: 1,
+    cells: [{ x: 10800, y: 0, value: 1 }] };
+  const p = context.window.Hyb2UI.contactParameters(adjusted).parameters;
+  assert.equal(p.binSize, 10);
+  assert.equal(p.requestedBinSize, 10);
+  assert.equal(p.effectiveBinSize, 20);
+  assert.equal(p.binSizeAdjusted, true);
+  assert.equal(p.exportedView.xStart, 1);
+  assert.equal(p.exportedView.xEnd, 10807, "the view end is clipped to the RNA length");
+  assert.equal(p.exportedView.lastBinXEnd, 10819, "the last bin edge matches contact-map.tsv");
+  assert.equal(p.exportedView.firstBinXStart, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(p.selectedCell)), { xStart: 10800, xEnd: 10819, yStart: 0, yEnd: 19 });
+}
 assert.deepEqual(JSON.parse(JSON.stringify(contactExportParameters.parameters.selectedCell)), {
   xStart: 30, xEnd: 39, yStart: 130, yEnd: 139
 });
@@ -219,9 +243,8 @@ assert.match(contactSvg, />RNA_B position \(nt\)<\/text>/, "Contact SVG must tit
 contactExportState.contact.overviewView = null;
 contactExportState.contact.overviewView = { xStart: 10, xEnd: 60, yStart: 110, yEnd: 170 };
 const overviewExport = context.window.Hyb2UI.contactParameters(contactExportState);
-assert.deepEqual(JSON.parse(JSON.stringify(overviewExport.parameters.exportedView)), {
-  stage: "overview", xStart: 10, xEnd: 69, yStart: 110, yEnd: 179
-}, "the single map export must describe the visible overview canvas");
+assert.deepEqual(["stage", "xStart", "xEnd", "yStart", "yEnd"].map(function (key) { return overviewExport.parameters.exportedView[key]; }),
+  ["overview", 10, 69, 110, 179], "the single map export must describe the visible overview canvas");
 
 const reproducibilityState = {
   summary: { fileName: "primary.hyb", fileSize: 321, sha256: "primary-sha" },
@@ -584,6 +607,36 @@ assert.equal(
 );
 assert.equal(regionState.region.results, null, "exploring a region should invalidate its cached result before rendering");
 
+// Region Explorer partner range: a typed range is kept when it fits the new
+// Partner RNA, cleared with a note when it lies outside it, and cleared
+// without a Partner RNA (coordinates are per RNA).
+{
+  const dataSandbox = vm.createContext({ window: {} });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), dataSandbox, { filename: "analysis-data.js" });
+  const previousData = context.window.Hyb2Data;
+  const previousPageData = context.window.Hyb2PageData;
+  context.window.Hyb2Data = Object.assign({}, previousData, { coordinateRangeIssue: dataSandbox.window.Hyb2Data.coordinateRangeIssue });
+  context.window.Hyb2PageData = { coordinateLimit: function (state, rna) { return rna === "RNA_SHORT" ? 100 : 1000; } };
+  const partnerApi = { toasts: [], render: function () {}, showToast: function (message) { this.toasts.push(message); } };
+  const partnerState = { region: { rna: "RNA_A", start: "1", end: "50", partner: "RNA_LONG", partnerStart: "200", partnerEnd: "400", results: {} } };
+  const choosePartner = function (value) {
+    context.window.Hyb2UI.handleChange(partnerState, { dataset: { feature: "region-control", key: "partner" }, value: value }, partnerApi);
+    return [partnerState.region.partner, partnerState.region.partnerStart, partnerState.region.partnerEnd];
+  };
+  assert.deepEqual(choosePartner("RNA_OTHER"), ["RNA_OTHER", "200", "400"], "a range that fits the new Partner RNA is kept");
+  assert.deepEqual(partnerApi.toasts, []);
+  assert.deepEqual(choosePartner("RNA_SHORT"), ["RNA_SHORT", "", ""], "a range outside the new Partner RNA is cleared");
+  assert.deepEqual(partnerApi.toasts, ["Partner start and end cleared: they are outside RNA_SHORT (1–100)."]);
+  partnerState.region.partnerStart = "10";
+  partnerState.region.partnerEnd = "";
+  assert.deepEqual(choosePartner("RNA_LONG"), ["RNA_LONG", "10", ""], "a half-typed range is left for its own message");
+  partnerState.region.partnerEnd = "20";
+  assert.deepEqual(choosePartner(""), ["", "", ""], "no Partner RNA: no partner range");
+  assert.equal(partnerState.region.results, null);
+  context.window.Hyb2Data = previousData;
+  context.window.Hyb2PageData = previousPageData;
+}
+
 context.window.Hyb2Data = {
   findFastaEntry: function (fasta, rna) {
     const id = fasta && fasta.mapping && fasta.mapping[rna];
@@ -794,8 +847,10 @@ assert.match(fs.readFileSync(path.join(repository, "web", "cplfold", "cplfold_we
 assert.match(fs.readFileSync(path.join(repository, "third_party", "cplfold", "CPLfold.py"), "utf8"), /--no-pseudoknot/);
 assert.doesNotMatch(analysisPagesSource, /rnas\.map[\s\S]{0,300}fasta\.sequences\.map/,
   "FASTA mapping controls must not build an RNA-by-reference Cartesian option set");
-assert.match(appSource, /function handleHashChange\(\)\s*{\s*const previousPage = state\.activePage;\s*syncRoute\(\);\s*render\(\);[\s\S]*?previousPage !== state\.activePage[\s\S]*?window\.scrollTo\(0, 0\)/,
+assert.match(appSource, /function handleHashChange\(\)\s*{\s*const previousPage = state\.activePage;[\s\S]{0,400}?syncRoute\(\);\s*render\(\);[\s\S]*?previousPage !== state\.activePage[\s\S]*?window\.scrollTo\(0, 0\)/,
   "page navigation must reveal the new page heading instead of retaining another page's scroll offset");
+assert.match(appSource, /function handleHashChange\(\)\s*{\s*const previousPage = state\.activePage;[\s\S]{0,300}?if \(state\.dialog[^)]*\) {\s*state\.dialog = null;\s*}\s*syncRoute\(\);/,
+  "Back or Forward closes an open drawer before the new route is drawn");
 assert.doesNotMatch(appSource, /<div class="pop-layer" data-action="close-dialog">/);
 assert.match(appSource, /dialogLayer && event\.target === dialogLayer/);
 assert.match(appSource, /state\.dialog === "files" && state\.summary/,
@@ -836,11 +891,20 @@ assert.match(fastaLoaderSource, /catch \(error\) \{\s*if \(loadedFasta\) \{\s*if
   "FASTA hash failures must update only the same retained reference object");
 assert.match(fastaLoaderSource, /loadedFasta\.sha256Unavailable = true;[\s\S]*?render\(\);[\s\S]*?fingerprint is unavailable/,
   "a FASTA hash failure must leave an explicit terminal unavailable state");
-assert.match(appSource, /digestFile\(file\)\.then[\s\S]*?state\.summary\.sha256Unavailable = !hash;[\s\S]*?\.catch[\s\S]*?state\.summary\.sha256Unavailable = true;/,
+assert.match(appSource, /stillPrimary = function \(\) \{\s*return state\.summary === summary \|\| state\.primarySummary === summary;[\s\S]*?digestFile\(file\)\.then[\s\S]*?if \(stillPrimary\(\)\) \{\s*summary\.sha256 = hash;\s*summary\.sha256Unavailable = !hash;[\s\S]*?\.catch[\s\S]*?summary\.sha256Unavailable = true;/,
   "primary HYB hashing must handle failures without an unhandled rejection or a permanent pending label");
 assert.match(analysisPagesSource, /sha256Unavailable \? "Unavailable" : "Calculating locally…"/,
   "the Files drawer must distinguish terminal hash failure from pending calculation");
 assert.match(indexSource, /<script src="\.\/build-info\.js" defer><\/script>/);
+// every text download ends with a newline; a local copy writes buildCommit "unknown"
+assert.match(appSource, /function downloadText\(fileName, content, type\) \{[\s\S]{0,200}content \+= "\\n";/);
+assert.doesNotMatch(appSource + reportPageSource, /HYB2_BUILD\.commit \|\| null/);
+assert.match(appSource, /HYB2_BUILD\.commit \|\| "unknown"/);
+// the Region FASTA uses RNA letters, like the Structure FASTA
+assert.match(fs.readFileSync(path.join(repository, "web", "analysis-ui.js"), "utf8"), /region-download-fasta[\s\S]{0,400}\.replace\(\/T\/g, "U"\)\.replace\(\/t\/g, "u"\)/);
+// the Contact Map names the datasets it reads; merged scope is the default option
+assert.match(analysisPagesSource, /datasets in scope merged/);
+assert.match(analysisPagesSource, /data-contact-scope>Map data: /);
 assert.match(appSource, /data-action="start-over"/,
   "the Data panel must expose a start-over action");
 assert.match(appSource, /action === "start-over"\) \{\s*state\.dialog = "clear";/,
@@ -1094,6 +1158,197 @@ process.stdout.write("ui-contract: ok\n");
 }
 console.log('skip-link-routing: ok');
 
+// RNA Structure's default region is capped to what browser CPLfold can fold
+// before the page derives anything from it: its first draw can be the only
+// one (the Report has already loaded the page's data), and a scope change
+// that brings a parked default region back keeps it a default. A region the
+// user set is never capped.
+{
+  const sandbox = vm.createContext({
+    console: console,
+    document: { querySelector: function () { return null; }, documentElement: { dataset: {} } },
+    getComputedStyle: function () { return { getPropertyValue: function () { return "#123456"; } }; },
+    window: { Hyb2Data: {
+      normaliseFoldSequence: function (value) { return { sequence: String(value || "").toUpperCase().replace(/T/g, "U"), invalid: [] }; },
+      defaultRegionState: function (summary) { return { rna: summary.rnaNames[0], start: 1, end: 201 }; }
+    } }
+  });
+  ["comrades-analysis.js", "analysis-pages.js"].forEach(function (file) {
+    vm.runInContext(fs.readFileSync(path.join(repository, "web", file), "utf8"), sandbox, { filename: file });
+  });
+  const pages = sandbox.window.Hyb2Pages;
+  const structurePage = function (structure) {
+    return {
+      summary: { rnaNames: ["A"] }, records: [], datasets: [], reference: { mapping: { A: "A" } },
+      view: { structureEvidence: { guided: true, rnas: ["A"],
+        records: [{ id: "near", index: 0, rnaOne: "A", rnaOneStart: 5, rnaOneEnd: 12, rnaTwo: "A", rnaTwoStart: 40, rnaTwoEnd: 47 },
+          { id: "far", index: 1, rnaOne: "A", rnaOneStart: 20, rnaOneEnd: 27, rnaTwo: "A", rnaTwoStart: 150, rnaTwoEnd: 157 }],
+        fasta: { mapping: { A: "A" }, sequences: [{ id: "A", sequence: "GGGAAACCCU".repeat(30) }] } } },
+      structure: Object.assign({ engine: "cplfold", cplfoldMode: "single", cplfoldEvidence: "hyb-blocks", source: "reference", rna: "A", start: 1, end: 201,
+        status: "idle", result: null, viewMode: "folded" }, structure)
+    };
+  };
+  const untouched = structurePage({ defaultRegionEnd: 201 });
+  const firstDraw = pages.renderStructure(untouched);
+  assert.equal(untouched.structure.end, 75, "an untouched default region is capped at the 75 nt browser baseline");
+  // the setup line prints a HYB-guided range as the sequence-only one below: en dash
+  assert.match(firstDraw, /A:1–75 · 75 nt/, "the first draw of RNA Structure already shows the capped default region");
+  assert.doesNotMatch(firstDraw, /201 nt/, "the first draw must not describe the uncapped default region");
+  assert.doesNotMatch(firstDraw, /data-feature-action="predict-structure"[^>]* disabled/, "the capped default region can be predicted from the first draw");
+  const chosen = structurePage({});
+  assert.match(pages.renderStructure(chosen), /A:1–201 · 201 nt/, "a region the user set is drawn as set");
+  assert.equal(chosen.structure.end, 201, "a region the user set is not capped");
+
+  const scopeStart = appSource.indexOf("  const SCOPE_PARKED_KEYS");
+  const scopeEnd = appSource.indexOf("  // \"All merged\" or one condition's group", scopeStart);
+  assert.ok(scopeStart >= 0 && scopeEnd > scopeStart, "app.js holds carryScopeSettings");
+  vm.runInContext(appSource.slice(scopeStart, scopeEnd), sandbox, { filename: "app.js (scope settings)" });
+  const switchScope = function (structure, rnas) {
+    sandbox.state.summary = { rnaNames: rnas };
+    sandbox.carryScopeSettings({}, rnas);
+    return JSON.parse(JSON.stringify([structure.rna, structure.start, structure.end, structure.defaultRegionEnd === undefined ? null : structure.defaultRegionEnd]));
+  };
+  // never opened RNA Structure: the default region is still uncapped when its RNA leaves the scope
+  sandbox.state = { structure: structurePage({ defaultRegionEnd: 201 }).structure };
+  assert.deepEqual(switchScope(sandbox.state.structure, ["B"]), ["B", 1, 75, 201], "a scope without the RNA gets a capped default region");
+  assert.deepEqual(switchScope(sandbox.state.structure, ["A", "B"]), ["A", 1, 75, 201], "a parked default region comes back capped and still a default");
+  sandbox.state = { structure: structurePage({ start: 10, end: 190 }).structure };
+  switchScope(sandbox.state.structure, ["B"]);
+  assert.deepEqual(switchScope(sandbox.state.structure, ["A", "B"]), ["A", 10, 190, null], "a parked region the user set comes back as set");
+
+  // The untouched default setup is runnable: when its default region holds no
+  // eligible HYB row, CPLfold's default evidence becomes sequence only, the
+  // setup says so and offers the way back. A region or an evidence mode the
+  // user chose keeps the disabled Predict and its reason.
+  const sync = pages.syncDefaultStructureEvidence;
+  assert.equal(typeof sync, "function", "analysis-pages.js exports syncDefaultStructureEvidence");
+  const farOnly = function (structure) {
+    const page = structurePage(structure);
+    page.view.structureEvidence.records = page.view.structureEvidence.records.filter(function (record) { return record.id === "far"; });
+    return page;
+  };
+  // analysis-data.js extractReference, as far as a sequence-only draw needs it
+  sandbox.window.Hyb2Data.extractReference = function (fasta, rna, start, end) {
+    const entry = fasta.sequences.find(function (item) { return item.id === fasta.mapping[rna]; });
+    return entry ? { id: entry.id, start: Number(start), end: Number(end), sequence: entry.sequence.slice(Number(start) - 1, Number(end)) } : null;
+  };
+  // what page-data.js loads for the mode now set
+  const reload = function (page) { page.view.structureEvidence.guided = page.structure.cplfoldEvidence === "hyb-blocks"; };
+  const disabledPredict = /data-feature-action="predict-structure"[^>]* disabled/;
+  const fallbackNote = /class="notice structure-evidence-fallback"[^>]*>.*No HYB row lies fully inside the default region \(1–75\).*data-feature-action="structure-use-hyb-evidence"/;
+
+  const supported = structurePage({ defaultRegionEnd: 201 });
+  assert.equal(sync(supported), false, "a default region that holds HYB rows keeps the HYB evidence");
+  assert.equal(supported.structure.cplfoldEvidence, "hyb-blocks");
+  assert.doesNotMatch(pages.renderStructure(supported), /structure-evidence-fallback/);
+
+  const empty = farOnly({ defaultRegionEnd: 201 });
+  assert.equal(sync(empty), true, "a default region without HYB rows changes the evidence mode");
+  assert.deepEqual([empty.structure.end, empty.structure.cplfoldEvidence, !!empty.structure.evidenceFallback, !!empty.structure.evidenceChosen], [75, "none", true, false],
+    "the capped default region falls back to sequence only, as a default");
+  reload(empty);
+  assert.equal(sync(empty), false, "the fallback is stable");
+  const fallbackDraw = pages.renderStructure(empty);
+  assert.match(fallbackDraw, /A:1–75 · 75 nt · sequence only/, "the setup line names the sequence-only fold");
+  assert.match(fallbackDraw, fallbackNote, "the setup says why it is sequence only and offers the way back");
+  assert.doesNotMatch(fallbackDraw, disabledPredict, "the untouched default setup can be predicted");
+
+  // the region is edited (analysis-ui.js clears defaultRegionEnd): the HYB default is back
+  delete empty.structure.defaultRegionEnd;
+  empty.structure.end = 60;
+  assert.equal(sync(empty), true, "a region the user set brings the default evidence back");
+  assert.deepEqual([empty.structure.cplfoldEvidence, empty.structure.evidenceFallback, !!empty.structure.evidenceChosen], ["hyb-blocks", undefined, false]);
+  reload(empty);
+  assert.equal(sync(empty), false, "a region the user set is never given the fallback");
+  const userRegionDraw = pages.renderStructure(empty);
+  assert.match(userRegionDraw, disabledPredict, "a user-set region without HYB rows keeps Predict disabled");
+  assert.match(userRegionDraw, /Cannot run yet: No forward-strand HYB rows are fully contained/, "and says why");
+  assert.doesNotMatch(userRegionDraw, /structure-evidence-fallback/);
+
+  // the evidence mode is picked by hand: from then on it is the user's
+  const picked = farOnly({ defaultRegionEnd: 201 });
+  sync(picked);
+  reload(picked);
+  picked.structure.cplfoldEvidence = "hyb-blocks";
+  reload(picked);
+  assert.equal(sync(picked), false, "an evidence mode the user picked is not changed back");
+  assert.deepEqual([picked.structure.cplfoldEvidence, picked.structure.evidenceChosen, picked.structure.evidenceFallback], ["hyb-blocks", true, undefined]);
+  assert.match(pages.renderStructure(picked), disabledPredict, "a picked HYB evidence mode without rows keeps Predict disabled");
+  const sequenceOnly = farOnly({ defaultRegionEnd: 201, cplfoldEvidence: "none" });
+  reload(sequenceOnly);
+  assert.equal(sync(sequenceOnly), false);
+  assert.doesNotMatch(pages.renderStructure(sequenceOnly), /structure-evidence-fallback/, "sequence only the user picked carries no fallback note");
+  const oneDataset = farOnly({ defaultRegionEnd: 201, evidenceDatasets: "d2" });
+  assert.equal(sync(oneDataset), false, "a HYB evidence dataset the user picked is not replaced by sequence only");
+  assert.equal(oneDataset.structure.cplfoldEvidence, "hyb-blocks");
+
+  // a result on screen is not touched; the fallback follows a new default region
+  const folded = farOnly({ defaultRegionEnd: 201 });
+  sync(folded);
+  reload(folded);
+  folded.structure.rna = "B";
+  folded.structure.result = { sequence: "GGGAAACCC" };
+  assert.equal(sync(folded), false, "a setup that holds a result is left as it ran");
+  assert.equal(folded.structure.cplfoldEvidence, "none");
+  folded.structure.result = null;
+  assert.equal(sync(folded), true, "another default region is checked again from the HYB default");
+  assert.equal(folded.structure.cplfoldEvidence, "hyb-blocks");
+
+  assert.match(appSource, /let pendingData = requestPageData\(\);[\s\S]{0,400}if \(!pendingData && \(state\.activePage === "structure" \|\| state\.activePage === "report"\)[\s\S]{0,200}syncDefaultStructureEvidence\(state\)\) \{\s*pendingData = requestPageData\(\);/,
+    "app.js settles the default evidence on current data, on RNA Structure and on the Report that shows the same setup, and then loads what the new mode needs");
+  assert.match(analysisPagesSource, /Sequence only: no HYB evidence guided this fold\./, "a CPLfold result without HYB evidence is labelled sequence only");
+}
+console.log('structure-default-region-cap: ok');
+
+// D5: switching default regions to two local regions (CPLcofold) keeps their
+// combined length within the CPLfold length gate, and region 2 is region 1's
+// HYB partner window; regions the user set are left alone
+{
+  const sandbox = vm.createContext({ Intl, Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, Uint8Array, Float64Array, window: {} });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), sandbox, { filename: "analysis-data.js" });
+  vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-ui.js"), "utf8"), sandbox, { filename: "analysis-ui.js" });
+  sandbox.window.Hyb2Structure = {
+    validateLength: function (length) { return length > 75 ? "above the 75 nt baseline" : ""; },
+    reset: function () {}
+  };
+  const rec = function (a, b, c, d) {
+    return { rnaOne: "A", rnaOneStart: a, rnaOneEnd: b, rnaTwo: "A", rnaTwoStart: c, rnaTwoEnd: d, supportCount: 1 };
+  };
+  const setup = function (extra) {
+    return {
+      summary: { rnaNames: ["A"] },
+      records: [rec(5, 20, 5000, 5020), rec(8, 22, 5005, 5025), rec(60, 70, 9000, 9010)],
+      structure: Object.assign({ engine: "cplfold", cplfoldMode: "single", source: "reference", rna: "A", start: 1, end: 75,
+        defaultRegionEnd: 201, secondRna: "A", secondStart: 10607, secondEnd: 10807, workflow: "custom", cplfoldEnergyModel: "DP09" }, extra || {})
+    };
+  };
+  const change = function (state, key, value) {
+    sandbox.window.Hyb2UI.handleChange(state, { dataset: { feature: "structure-control", key: key }, value: value, type: "select-one" }, { render: function () {}, showToast: function () {} });
+  };
+  const fitted = setup();
+  change(fitted, "cplfoldMode", "cofold");
+  const s = fitted.structure;
+  const total = (s.end - s.start + 1) + (s.secondEnd - s.secondStart + 1);
+  assert.ok(total <= 75, "default CPLcofold regions fit the 75 nt gate (" + total + " nt)");
+  assert.deepEqual([s.start, s.end], [1, 38], "region 1 keeps its start and half the length");
+  assert.ok(s.secondStart <= 5000 && s.secondEnd >= 5025 && s.secondRna === "A", "region 2 is the partner window with HYB rows");
+  change(fitted, "cplfoldMode", "single");
+  assert.deepEqual([fitted.structure.start, fitted.structure.end], [1, 75], "back to one region restores the default region 1");
+  // no row joins region 1 to a short window: both regions move to the rows
+  const far = setup();
+  far.records = [rec(5, 60, 5000, 5060), rec(300, 320, 900, 925), rec(302, 318, 905, 920)];
+  change(far, "cplfoldMode", "cofold");
+  const f = far.structure;
+  assert.ok((f.end - f.start + 1) + (f.secondEnd - f.secondStart + 1) <= 75, "the moved regions fit the gate");
+  assert.ok(f.start <= 300 && f.end >= 320 && f.secondStart <= 900 && f.secondEnd >= 925, "both regions hold the short HYB rows: " + [f.start, f.end, f.secondStart, f.secondEnd]);
+  const userSet = setup({ secondRegionEdited: true });
+  change(userSet, "cplfoldMode", "cofold");
+  assert.deepEqual([userSet.structure.end, userSet.structure.secondStart, userSet.structure.secondEnd], [75, 10607, 10807],
+    "a region 2 the user set is not moved");
+  console.log("structure-default-cofold-regions: ok");
+}
+console.log('structure-default-evidence-fallback: ok');
+
 // Downloads: the blob URL outlives click() so Safari and Firefox can finish a
 // large download, and names built from FASTA IDs are made safe first.
 // Fingerprints: large files (or any file without WebCrypto) are hashed in
@@ -1146,4 +1401,28 @@ console.log('skip-link-routing: ok');
     console.error(error);
     process.exit(1);
   });
+}
+
+// Fitting two default cofold regions to the length limit only ever shortens
+// region 2: a short region 2 (B:1-101 of a 120 nt RNA) must not grow past
+// its RNA's end when no HYB row joins the regions.
+{
+  const W = path.join(repository, "web");
+  const ctx = vm.createContext({ window: {}, self: {}, console: console });
+  vm.runInContext(fs.readFileSync(path.join(W, "analysis-data.js"), "utf8"), ctx);
+  const src = fs.readFileSync(path.join(W, "analysis-ui.js"), "utf8");
+  const cut = function (name) {
+    const start = src.indexOf("  function " + name + "(");
+    assert.ok(start >= 0, name + " is in analysis-ui.js");
+    return src.slice(start, src.indexOf("\n  }\n", start) + 4);
+  };
+  ctx.window.Hyb2Structure = { validateLength: function (n) { return n > 600 ? "too long" : ""; } };
+  const fit = vm.runInContext("(function(){" + cut("foldableCplfoldLength") + cut("fitDefaultCofoldRegions") +
+    ";return fitDefaultCofoldRegions;})()", ctx);
+  const state = { records: [], structure: { engine: "cplfold", cplfoldMode: "cofold", source: "reference", defaultRegionEnd: 1000,
+    rna: "A", start: 1, end: 1000, secondRna: "B", secondStart: 1, secondEnd: 101, workflow: "custom" } };
+  fit(state);
+  assert.equal(state.structure.end, 300, "region 1 is cut to half the limit");
+  assert.equal(state.structure.secondEnd, 101, "region 2 keeps its shorter end");
+  console.log("cofold-region-fit: ok");
 }

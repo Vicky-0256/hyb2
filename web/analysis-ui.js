@@ -240,7 +240,23 @@
     }
     rowsContainer.style.transform = "translateY(" + view.offset + "px)";
     if (rows) {
+      // The same window is not drawn again: a scroll of a few pixels must not
+      // replace the row under a press or the row that has keyboard focus.
+      const key = start + ":" + view.count + ":" + total + ":" + (rows[0] ? rows[0].index : "") + ":" + rows.length;
+      if (rowsContainer.dataset.window === key) {
+        return;
+      }
+      // Tab past the last drawn row scrolls the table, which draws the next
+      // window: focus stays on the same record.
+      const focused = rowsContainer.contains(document.activeElement) ? document.activeElement.dataset.recordIndex : null;
+      rowsContainer.dataset.window = key;
       rowsContainer.innerHTML = window.Hyb2Pages.renderVirtualRows(rows);
+      if (focused != null) {
+        const again = Array.from(rowsContainer.children).find(function (row) { return row.dataset.recordIndex === focused; });
+        if (again) {
+          again.focus({ preventScroll: true });
+        }
+      }
       return;
     }
     if (api && typeof api.loadInteractionWindow === "function") {
@@ -280,7 +296,7 @@
       canvas.addEventListener("pointerleave", function () {
         const tooltip = document.querySelector('[data-contact-tooltip="' + stage + '"]');
         if (tooltip) {
-          tooltip.textContent = "Hover a cell for coordinates and counts.";
+          tooltip.textContent = "Hover or tap a cell for coordinates and counts.";
         }
       });
 
@@ -323,6 +339,10 @@
           zoomContactStageView(state, stage, point, 0.5);
         }
         renderAndFocus(api, "#contact-" + stage + "-canvas");
+        // A tap has no hover, so show the tapped cell's readout after the render.
+        if (!moved && state.contact.matrix) {
+          updateContactStageTooltip(state, stage, point);
+        }
       });
 
       canvas.addEventListener("pointercancel", function () {
@@ -627,8 +647,14 @@
     return (value - first + 0.5) / (last - first + 1) * length;
   }
 
-  function coordinateTicks(first, last, length, vertical) {
-    return axisTickValues(first, last, length, format, vertical ? 22 : null).map(function (value) {
+  // rnaLength (optional): bins sit on a grid anchored at 0, so the plotted
+  // span [first, last] can start at 0 and run past the RNA's last nucleotide
+  // (bins 0-19 … 10800-10819 on a 10,807-nt RNA). Positions are 1-based: the
+  // ticks are labelled from 1 to the RNA length and placed on the same grid.
+  function coordinateTicks(first, last, length, vertical, rnaLength) {
+    const from = Math.max(first, 1);
+    const to = rnaLength >= from ? Math.min(last, rnaLength) : last;
+    return axisTickValues(from, to, length, format, vertical ? 22 : null).map(function (value) {
       return { offset: coordinateOffset(value, first, last, length), label: format(value) };
     });
   }
@@ -656,12 +682,13 @@
   }
 
   function contactAxes(state, geometry) {
-    const binSize = state.contact.matrix.binSize;
+    const matrix = state.contact.matrix;
+    const binSize = matrix.binSize;
     const yLabels = contactYAxisLabels(geometry, binSize);
     return {
       box: { left: geometry.left, top: geometry.top, width: geometry.plotWidth, height: geometry.plotHeight },
-      x: coordinateTicks(geometry.xStart, geometry.xEnd + binSize - 1, geometry.plotWidth, false),
-      y: coordinateTicks(yLabels.top, yLabels.bottom, geometry.plotHeight, true).map(function (tick) {
+      x: coordinateTicks(geometry.xStart, geometry.xEnd + binSize - 1, geometry.plotWidth, false, Number(matrix.lengthX || matrix.length) || 0),
+      y: coordinateTicks(yLabels.top, yLabels.bottom, geometry.plotHeight, true, Number(matrix.lengthY || matrix.length2 || matrix.length) || 0).map(function (tick) {
         return { offset: geometry.plotHeight - tick.offset, label: tick.label };
       }),
       xTitle: positionTitle(state.contact.rnaX),
@@ -750,10 +777,15 @@
     const room = function (value) { return fixedRoom || String(labelOf(value)).length * 6.5 + 12; };
     const last = ticks[ticks.length - 1];
     const kept = [ticks[0]];
+    // On a horizontal axis (no fixedRoom) the first label is left-aligned and
+    // the last right-aligned (drawCanvasAxes), so each spans its full width
+    // inward, not half: "8,000" next to an end label "10,807" overlapped.
+    const edgeRoom = function (value) { return fixedRoom ? room(value) / 2 : room(value) - 6; };
     for (let index = 1; index < ticks.length - 1; index += 1) {
       const value = ticks[index];
       const previous = kept[kept.length - 1];
-      if (at(value) - at(previous) >= (room(value) + room(previous)) / 2 && at(last) - at(value) >= (room(value) + room(last)) / 2) {
+      const previousRoom = previous === ticks[0] ? edgeRoom(previous) : room(previous) / 2;
+      if (at(value) - at(previous) >= room(value) / 2 + previousRoom && at(last) - at(value) >= room(value) / 2 + edgeRoom(last)) {
         kept.push(value);
       }
     }
@@ -1596,7 +1628,7 @@
       }
     }
     // K5 axes: ticks on round positions and "<RNA> position (nt)" titles
-    const marks = comparisonAxisMarks(result, geometry);
+    const marks = comparisonAxisMarks(result, geometry, comparisonLengths(state));
     const bottom = geometry.top + geometry.plotHeight;
     context.lineWidth = 1;
     context.strokeStyle = muted;
@@ -1664,7 +1696,7 @@
         kind: "sequential",
         min: floor,
         max: flat ? floor + 1 : cap,
-        ticks: flat ? [floor] : spacedTicks(kit.niceTicks(floor, cap, 4)),
+        ticks: flat ? [floor] : endSpacedTicks(kit.niceTicks(floor, cap, 4)),
         colorAt: function (t) { return conservedColor(flat ? .5 : t, theme); },
         format: function (value) { return (!flat && value >= cap ? "≥ " : "") + kit.formatTick(value); },
         title: "Similarity · smaller raw count of A and B"
@@ -1690,12 +1722,27 @@
 
   // tick positions in px along each axis: niceTicks over the plotted
   // nucleotides, thinned so that labels do not touch
-  function comparisonAxisMarks(result, geometry) {
+  // Mapped reference lengths of the two compared RNAs (0 when unknown).
+  function comparisonLengths(state) {
+    const read = window.Hyb2PageData && window.Hyb2PageData.referenceLength;
+    const comparison = state && state.comparison || {};
+    return {
+      x: read && comparison.rnaX ? read(state, comparison.rnaX) || 0 : 0,
+      y: read && comparison.rnaY ? read(state, comparison.rnaY) || 0 : 0
+    };
+  }
+
+  function comparisonAxisMarks(result, geometry, lengths) {
     const kit = window.Hyb2UiKit;
-    const axis = function (start, count, origin, length) {
+    // Bins sit on a grid anchored at 0 and the last one may run past the RNA
+    // (10800-10809 on a 10,807-nt RNA). Positions are 1-based: the labels run
+    // from 1 to the RNA length, when the result carries it, on the same grid.
+    const axis = function (start, count, origin, length, rnaLength) {
       const span = count * result.binSize;
       const last = start + span - 1;
-      const values = kit ? kit.niceTicks(start, last, length < 260 ? 4 : 5) : [start, last];
+      const from = Math.max(start, 1);
+      const to = rnaLength >= from ? Math.min(last, rnaLength) : last;
+      const values = kit ? kit.niceTicks(from, to, length < 260 ? 4 : 5) : [from, to];
       const at = function (value) { return origin + (value - start) / span * length; };
       // labels at least 50 px apart, 60 px from the (end-anchored) last one
       let previous = origin;
@@ -1714,9 +1761,9 @@
       });
     };
     return {
-      x: axis(geometry.xStart, geometry.xCount, geometry.left, geometry.plotWidth),
+      x: axis(geometry.xStart, geometry.xCount, geometry.left, geometry.plotWidth, Number(lengths && lengths.x || result.lengthX || result.length) || 0),
       // y grows upwards: the first position sits at the bottom
-      y: axis(geometry.yStart, geometry.yCount, geometry.top, geometry.plotHeight).map(function (mark) {
+      y: axis(geometry.yStart, geometry.yCount, geometry.top, geometry.plotHeight, Number(lengths && lengths.y || result.lengthY || result.length2 || result.length) || 0).map(function (mark) {
         return Object.assign({}, mark, {
           at: 2 * geometry.top + geometry.plotHeight - mark.at,
           edge: mark.edge === "start" ? "end" : mark.edge === "end" ? "start" : ""
@@ -1725,8 +1772,11 @@
     };
   }
 
-  // interior ticks too close to an end are dropped: the end labels are wider
-  function spacedTicks(ticks) {
+  // interior ticks too close to an end are dropped: the end labels are wider.
+  // (Was a second "spacedTicks": being declared later in this scope it
+  // replaced the pixel-aware one above for every caller, so the contact and
+  // viewpoint axes only got this 18% rule and "8,000" ran into "10,807".)
+  function endSpacedTicks(ticks) {
     if (ticks.length < 3) {
       return ticks;
     }
@@ -2016,6 +2066,99 @@
   }
 
   function applyLegacyWorkflow(state, key, value) {
+    applyLegacyWorkflowSettings(state, key, value);
+    if (["cplfoldMode", "workflow", "engine"].indexOf(key) !== -1) {
+      const structure = state.structure;
+      // back to one region: the default region 1 the fit replaced returns
+      if (structure && structure.cofoldFitFrom && !(structure.engine === "cplfold" && structure.cplfoldMode === "cofold")) {
+        if (structure.defaultRegionEnd != null) {
+          structure.start = structure.cofoldFitFrom.start;
+          structure.end = structure.cofoldFitFrom.end;
+        }
+        delete structure.cofoldFitFrom;
+      }
+      fitDefaultCofoldRegions(state);
+    }
+  }
+
+  // The longest sequence the CPLfold length gate accepts now (the browser
+  // baseline, a measured capacity or the desktop limit), or 0 when unknown.
+  function foldableCplfoldLength(structure) {
+    const gate = window.Hyb2Structure && window.Hyb2Structure.validateLength;
+    if (typeof gate !== "function") return 0;
+    let low = 0;
+    let high = 20000;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (!gate(middle, false, "cplfold", structure)) low = middle; else high = middle - 1;
+    }
+    return low;
+  }
+
+  // Two default regions (neither edited) are kept within what CPLcofold can
+  // fold now, so switching to two regions does not start with Predict
+  // disabled: region 1 keeps its start and at most half of the length, and
+  // region 2 is region 1's best-supported partner window in the rest; when no
+  // HYB row joins them, both move to the two short windows holding the most
+  // rows (cofoldWindows), else region 2 is shortened. Regions the user set are
+  // left alone; going back to one region restores the default region 1.
+  function fitDefaultCofoldRegions(state) {
+    const structure = state.structure;
+    if (!structure || structure.engine !== "cplfold" || structure.cplfoldMode !== "cofold" || structure.source !== "reference" ||
+        structure.defaultRegionEnd == null || structure.secondRegionEdited) {
+      return;
+    }
+    const start = Number(structure.start);
+    const end = Number(structure.end);
+    const secondStart = Number(structure.secondStart);
+    const secondEnd = Number(structure.secondEnd);
+    const limit = foldableCplfoldLength(structure);
+    if (![start, end, secondStart, secondEnd].every(Number.isFinite) || limit < 2 ||
+        (end - start + 1) + (secondEnd - secondStart + 1) <= limit) {
+      return;
+    }
+    const homodimer = structure.workflow === "homodimer";
+    const firstLength = Math.max(1, Math.min(end - start + 1, homodimer ? Math.floor(limit / 2) : Math.ceil(limit / 2)));
+    const width = homodimer ? firstLength : limit - firstLength;
+    if (!structure.cofoldFitFrom) structure.cofoldFitFrom = { start: structure.start, end: structure.end };
+    structure.end = start + firstLength - 1;
+    structure.result = null;
+    if (homodimer) {
+      structure.secondStart = structure.start;
+      structure.secondEnd = structure.end;
+      return;
+    }
+    const partner = window.Hyb2Data && typeof window.Hyb2Data.structurePartnerWindow === "function"
+      ? window.Hyb2Data.structurePartnerWindow(state, width) : null;
+    const partnerFits = partner && partner.records > 0 && (
+      structure.workflow === "long-intramolecular" ? partner.rna === structure.rna
+        : structure.workflow === "intermolecular" ? partner.rna !== structure.rna
+          : true);
+    if (partnerFits) {
+      structure.secondRna = partner.rna;
+      structure.secondStart = partner.start;
+      structure.secondEnd = partner.end;
+      return;
+    }
+    // no HYB row joins region 1 to a window of that size: move both regions
+    // to the two short windows that hold the most HYB rows
+    const pair = window.Hyb2Data && typeof window.Hyb2Data.structureCofoldWindows === "function"
+      ? window.Hyb2Data.structureCofoldWindows(state, limit,
+        structure.workflow === "long-intramolecular" ? "same" : structure.workflow === "intermolecular" ? "other" : "any")
+      : null;
+    if (pair && pair.records > 0) {
+      structure.start = pair.first.start;
+      structure.end = pair.first.end;
+      structure.secondRna = pair.second.rna;
+      structure.secondStart = pair.second.start;
+      structure.secondEnd = pair.second.end;
+    } else {
+      // only ever shortened: region 2 may already be shorter than width
+      structure.secondEnd = Math.min(secondEnd, secondStart + width - 1);
+    }
+  }
+
+  function applyLegacyWorkflowSettings(state, key, value) {
     const structure = state.structure;
     if (key === "engine" && value === "cplfold" && structure.source === "reference") {
       structure.cplfoldMode = structure.evidenceLayout === "paired" ? "cofold" : "single";
@@ -2093,6 +2236,9 @@
     // the user's own region: no longer a default to cap
     if (state.structure && ["rna", "start", "end", "source"].indexOf(key) !== -1) {
       delete state.structure.defaultRegionEnd;
+    }
+    if (state.structure && ["secondRna", "secondStart", "secondEnd"].indexOf(key) !== -1) {
+      state.structure.secondRegionEdited = true;
     }
     if (window.Hyb2Structure) {
       window.Hyb2Structure.reset(state, { clearConstraints: structureControlChangesSequence(key) });
@@ -2243,8 +2389,21 @@
     if (feature === "region-control") {
       state.region[key] = element.value;
       if (key === "partner") {
-        state.region.partnerStart = "";
-        state.region.partnerEnd = "";
+        // A typed partner range is kept when it fits the new Partner RNA. It
+        // is cleared without one (coordinates are per RNA) and, with a note,
+        // when it lies outside the new RNA.
+        const names = { start: "Partner start", end: "Partner end", paired: true };
+        const limit = element.value && window.Hyb2PageData ? window.Hyb2PageData.coordinateLimit(state, element.value) : null;
+        const outside = !!element.value && !!limit &&
+          !window.Hyb2Data.coordinateRangeIssue(state.region.partnerStart, state.region.partnerEnd, names) &&
+          !!window.Hyb2Data.coordinateRangeIssue(state.region.partnerStart, state.region.partnerEnd, Object.assign({ limit: limit }, names));
+        if (!element.value || outside) {
+          state.region.partnerStart = "";
+          state.region.partnerEnd = "";
+        }
+        if (outside) {
+          api.showToast("Partner start and end cleared: they are outside " + element.value + " (1–" + limit.toLocaleString("en-US") + ").");
+        }
       }
       state.region.results = null;
       api.render();
@@ -2627,7 +2786,7 @@
       }
       const contact = state.contact;
       fetchAllRows(api, {
-        datasetIds: window.Hyb2Data && window.Hyb2Data.contactDataset ? [window.Hyb2Data.contactDataset(state).id].filter(Boolean) : undefined,
+        datasetIds: window.Hyb2Data && window.Hyb2Data.contactDataset ? (window.Hyb2Data.contactDataset(state).ids || []).filter(Boolean) : undefined,
         cell: {
           rnaX: contact.rnaX,
           rnaY: contact.rnaY,
@@ -2878,7 +3037,8 @@
       if (!ensureVisualExport(state, "comparison", api)) {
         return true;
       }
-      api.download("comparison.tsv", window.Hyb2Data.comparisonToTsv(state.comparison.result), "text/tab-separated-values");
+      api.download("comparison.tsv", window.Hyb2Data.comparisonToTsv(state.comparison.result,
+        window.Hyb2Data.comparisonRnaLengths(state.comparison, state.fasta, state.summary && state.summary.rnaExtents)), "text/tab-separated-values");
       api.showToast("Comparison TSV downloaded locally.");
       return true;
     }
@@ -3119,7 +3279,8 @@
         api.navigate("structure");
       }
       if (action === "region-download-fasta") {
-        api.download(window.Hyb2Data.safeFileName(reference.id + "_" + reference.start + "-" + reference.end + ".fasta"), ">" + reference.id + ":" + reference.start + "-" + reference.end + "\n" + reference.sequence + "\n", "text/plain");
+        // RNA letters (U), like the RNA Structure FASTA; a DNA reference's T becomes U
+        api.download(window.Hyb2Data.safeFileName(reference.id + "_" + reference.start + "-" + reference.end + ".fasta"), ">" + reference.id + ":" + reference.start + "-" + reference.end + "\n" + String(reference.sequence).replace(/T/g, "U").replace(/t/g, "u") + "\n", "text/plain");
         api.showToast("Region FASTA downloaded locally.");
       }
       return true;
@@ -3148,8 +3309,8 @@
 
     if (action === "copy-structure-sequence" || action === "structure-download-fasta") {
       const info = window.Hyb2Pages.getStructureSequence(state);
-      if (!info.sequence) {
-        api.showToast("Choose a valid sequence first.");
+      if (!info.sequence || info.invalidSequence) {
+        api.showToast(info.invalidSequence && info.error ? "Fix the sequence first: " + info.error : "Choose a valid sequence first.");
         return true;
       }
       if (action === "copy-structure-sequence") {
@@ -3278,14 +3439,14 @@
       shown.length < visible.length
         ? '<text x="' + (geometry.left + geometry.plotWidth) + '" y="' + (geometry.top + geometry.plotHeight + COMPARISON_LEGEND_OFFSET + 10) + '" text-anchor="end" font-family="system-ui, sans-serif" font-size="10" fill="' + colors.muted + '">the ' + format(shown.length) + ' strongest of ' + format(visible.length) + ' visible bins</text>'
         : '',
-      comparisonAxesSvg(state.comparison, result, geometry, colors),
+      comparisonAxesSvg(state.comparison, result, geometry, colors, comparisonLengths(state)),
       window.Hyb2UiKit ? window.Hyb2UiKit.legend.svg(comparisonLegendOptions(state.comparison, result, "effect", "light", geometry, colors)) : '',
       '</svg>'
     ].join("");
   }
 
-  function comparisonAxesSvg(comparison, result, geometry, colors) {
-    const marks = comparisonAxisMarks(result, geometry);
+  function comparisonAxesSvg(comparison, result, geometry, colors, lengths) {
+    const marks = comparisonAxisMarks(result, geometry, lengths);
     const bottom = geometry.top + geometry.plotHeight;
     const parts = ['<g font-family="system-ui, sans-serif" font-size="11" fill="' + colors.muted + '">'];
     marks.x.forEach(function (mark) {
@@ -3349,12 +3510,23 @@
     return false;
   }
 
+  // How the binned exports give coordinates (written into their parameters JSON)
+  const BIN_COORDINATES_NOTE = "In {table}, x_start/y_start (and the matrix headers) are HYB2 bin keys: floor(position / bin size) × bin size, " +
+    "as in HYB2 contact.txt, so the first bin's key is 0. A bin holds the 1-based, inclusive positions max(1, start) to end; " +
+    "x_end/y_end are start + bin size − 1, clamped to the RNA length for the last bin. Viewpoint and Region profile bins are 1-based (1-10, 11-20, ...).";
+
   function contactParameters(state) {
     const rawCustomCap = String(state.contact.customCap == null ? "" : state.contact.customCap).trim();
     const parsedCustomCap = rawCustomCap ? Number(rawCustomCap) : null;
     const customCap = Number.isFinite(parsedCustomCap) && parsedCustomCap > 0 ? parsedCustomCap : null;
     const matrix = state.contact.matrix;
-    const binSize = Number(state.contact.binSize);
+    const requestedBinSize = Number(state.contact.binSize);
+    // the map may use larger bins than requested to stay within the cell
+    // budget ("10 nt · using 20 nt"); coordinates below use the bins it drew
+    const binSize = matrix && Number(matrix.binSize) > 0 ? Number(matrix.binSize) : requestedBinSize;
+    const lengthX = matrix ? Number(matrix.lengthX || matrix.length) : NaN;
+    const lengthY = matrix ? Number(matrix.lengthY || matrix.length2 || matrix.length) : NaN;
+    const clampEnd = function (end, length) { return Number.isFinite(length) && length > 0 ? Math.min(end, length) : end; };
     const hasExtent = matrix && [matrix.xMin, matrix.xMax, matrix.yMin, matrix.yMax].every(Number.isFinite);
     const view = hasExtent ? getContactView(state) : null;
     const exportStage = hasExtent ? getContactExportStage(state) : null;
@@ -3367,14 +3539,21 @@
       dataset: (function () {
         if (!window.Hyb2Data || typeof window.Hyb2Data.contactDataset !== "function") return null;
         const chosen = window.Hyb2Data.contactDataset(state);
+        if (chosen.merged) {
+          return { merged: true, label: chosen.label, datasets: chosen.datasets.map(function (dataset) { return { id: dataset.id, label: dataset.label || "", fileName: dataset.fileName || "" }; }) };
+        }
         return chosen.dataset ? { id: chosen.dataset.id, label: chosen.dataset.label || "", fileName: chosen.dataset.fileName || "" } : null;
       }()),
       generatedLocally: true,
       sourceHyb: sourceHyb(state),
+      binCoordinates: BIN_COORDINATES_NOTE.replace("{table}", "contact-map.tsv and contact-matrix.csv (row and column headers)"),
       parameters: {
         rnaX: state.contact.rnaX,
         rnaY: state.contact.rnaY,
-        binSize: binSize,
+        binSize: requestedBinSize,
+        requestedBinSize: requestedBinSize,
+        effectiveBinSize: matrix && Number(matrix.binSize) > 0 ? Number(matrix.binSize) : null,
+        binSizeAdjusted: Boolean(matrix && Number(matrix.binSize) > 0 && Number(matrix.binSize) !== requestedBinSize),
         measure: state.contact.measure === "support" ? "cluster-support" : "record-count",
         colourCap: state.contact.colourCap,
         customCap: state.contact.colourCap === "custom" ? customCap : null,
@@ -3386,10 +3565,19 @@
         homodimerSubset: state.contact.homodimer || "all",
         exportedView: view ? {
           stage: exportStage,
-          xStart: view.xStart,
-          xEnd: view.xEnd + binSize - 1,
-          yStart: view.yStart,
-          yEnd: view.yEnd + binSize - 1
+          // bins start at multiples of the bin size, so the first bin edge is 0
+          // and the last can pass the RNA end (as in contact-map.tsv)
+          coordinates: "xStart-yEnd: 1-based positions within each RNA; firstBin*/lastBin*: bin edges as in contact-map.tsv",
+          xStart: Math.max(1, view.xStart),
+          xEnd: clampEnd(view.xEnd + binSize - 1, lengthX),
+          yStart: Math.max(1, view.yStart),
+          yEnd: clampEnd(view.yEnd + binSize - 1, lengthY),
+          firstBinXStart: view.xStart,
+          lastBinXEnd: view.xEnd + binSize - 1,
+          firstBinYStart: view.yStart,
+          lastBinYEnd: view.yEnd + binSize - 1,
+          rnaXLength: Number.isFinite(lengthX) && lengthX > 0 ? lengthX : null,
+          rnaYLength: Number.isFinite(lengthY) && lengthY > 0 ? lengthY : null
         } : null,
         selectedCell: selected ? {
           xStart: selected.x,
@@ -3513,6 +3701,7 @@
           clusterSupport: Number(summary.supportInteractions) || 0
         };
       }),
+      binCoordinates: BIN_COORDINATES_NOTE.replace("{table}", "comparison.tsv"),
       parameters: {
         conditionALabel: comparison.conditionALabel || "Condition A",
         conditionBLabel: comparison.conditionBLabel || "Condition B",
@@ -3682,7 +3871,8 @@
   }
 
   function buildCommit() {
-    return window.HYB2_BUILD && window.HYB2_BUILD.commit || null;
+    // a local or development copy has no build-info.js commit
+    return window.HYB2_BUILD && window.HYB2_BUILD.commit || "unknown";
   }
 
   function contactYAxisLabels(geometry, binSize) {

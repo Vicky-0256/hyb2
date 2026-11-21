@@ -193,11 +193,15 @@
     }
     return state.hybEnergy;
   }
-  // Engines for column 3. RNAcofold is what the HYB2 pipeline (sam2hyb) runs;
+  // Engines for column 3. RNAduplex (pairs between the two arms only) is the
+  // HYB2 pipeline's dG column and the default; RNAcofold is ViennaRNA's MFE
+  // cofold, in which each arm may also pair with itself.
   // CPLcofold runs as pure Python here (about 100x slower per record), so it
   // gets fewer, memory-heavier workers and is best run on filtered records.
   const ENERGY_ENGINES = {
-    rnacofold: {label:'RNAcofold (ViennaRNA), as the HYB2 pipeline',name:'ViennaRNA RNAcofold',worker:'folding-energy.worker.js',module:false,chunk:64,maxWorkers:8,maxLength:2000,msPerRecord:15,
+    rnaduplex: {label:'RNAduplex (ViennaRNA), as the HYB2 pipeline',name:'ViennaRNA RNAduplex',worker:'folding-energy.worker.js',module:false,chunk:500,maxWorkers:8,maxLength:2000,msPerRecord:3,
+      message:pairs=>({type:'duplex-batch',pairs,temperature:37})},
+    rnacofold: {label:'RNAcofold (ViennaRNA)',name:'ViennaRNA RNAcofold',worker:'folding-energy.worker.js',module:false,chunk:64,maxWorkers:8,maxLength:2000,msPerRecord:15,
       message:pairs=>({type:'cofold-batch',pairs,temperature:37,minimumLoop:3})},
     cplcofold: {label:'CPLcofold, nested (Turner energies)',name:'CPLcofold, pseudoknots off',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:1700,
       message:pairs=>({type:'cplfold-energy-batch',pairs,allowPseudoknot:false,energyModel:'DP09'})},
@@ -205,10 +209,10 @@
       message:pairs=>({type:'cplfold-energy-batch',pairs,allowPseudoknot:true,energyModel:'DP09'})}
   };
   function energySettings(state) {
-    if (!state.hybEnergySettings) state.hybEnergySettings={engine:'rnacofold',records:'all'};
+    if (!state.hybEnergySettings) state.hybEnergySettings={engine:'rnaduplex',records:'all'};
     return state.hybEnergySettings;
   }
-  function energyEngine(state) { return ENERGY_ENGINES[energySettings(state).engine] || ENERGY_ENGINES.rnacofold; }
+  function energyEngine(state) { return ENERGY_ENGINES[energySettings(state).engine] || ENERGY_ENGINES.rnaduplex; }
   function energyWorkerCount(engine, chunks) {
     const cores=Number(root.navigator && root.navigator.hardwareConcurrency)||2;
     return Math.max(1,Math.min(engine.maxWorkers,cores-1,chunks));
@@ -221,13 +225,23 @@
     const s=energyState(state), settings=energySettings(state), engine=energyEngine(state);
     const file=state.file&&state.file.name?' ('+esc(state.file.name)+')':'';
     const records=Number(primaryOf(state)&&primaryOf(state).validRecords)||0;
-    const workers=energyWorkerCount(engine,Infinity);
-    const estimate=records?' All '+records.toLocaleString('en-US')+' records: about '+duration(records*engine.msPerRecord/workers)+' with '+workers+(workers===1?' worker':' parallel workers')+' here.':'';
+    // The estimate follows the Records choice: the filtered count is the
+    // primary file's matches (page-data.js, the query the run makes) and the
+    // workers are counted as the run counts them, from the number of chunks.
+    const filtered=settings.records==='filtered', primary=(state.datasets||[]).find(d=>d.primary);
+    const countKey=JSON.stringify(primary?[primary.id]:(state.selection&&state.selection.datasetIds)||[])+'|'+JSON.stringify(Object.assign({},state.filters||(root.Hyb2Data&&root.Hyb2Data.defaultInteractionFilters())));
+    const counted=state.view&&state.view.energySelection;
+    const count=filtered?(counted&&counted.key===countKey?counted.total:undefined):records;
+    const workers=energyWorkerCount(engine,Math.max(1,Math.ceil((count||0)/engine.chunk)));
+    const time=ms=>ms<5000?'a few seconds':'about '+duration(ms);
+    const estimate=filtered&&count===undefined?' Counting the records of the primary file that match the Interactions filters…'
+      :filtered&&count===0?' No record of the primary file matches the Interactions filters, so nothing would be recalculated.'
+      :count?' '+(filtered?(count===1?'The 1 record':'The '+count.toLocaleString('en-US')+' records')+' of the primary file matching the Interactions filters':'All '+count.toLocaleString('en-US')+' records')+': '+time(count*engine.msPerRecord/workers)+' with '+workers+(workers===1?' worker':' parallel workers')+' here.':'';
     const select=(key,label,value,options)=>'<label class="control-field"><span>'+label+'</span><select data-feature="batch-energy-setting" data-key="'+key+'"'+(s.running?' disabled':'')+'>'+options.map(o=>'<option value="'+o[0]+'"'+(o[0]===value?' selected':'')+'>'+esc(o[1])+'</option>').join('')+'</select></label>';
     return '<section class="data-card"><div class="card-title-row"><div><h2>HYB binding energies</h2><p class="card-note">Recalculate column 3 (ΔG of the two arms, kcal/mol, 37 °C) for records of the primary file'+file+', from the mapped FASTA arms. Download a new HYB; the loaded dataset stays unchanged.</p></div></div>'+
       '<div class="control-grid">'+select('engine','Engine',settings.engine,Object.keys(ENERGY_ENGINES).map(key=>[key,ENERGY_ENGINES[key].label]))+
       select('records','Records',settings.records,[['all','All records of the primary file'],['filtered','Records matching the Interactions filters']])+'</div>'+
-      '<p class="card-note">'+esc((settings.engine==='rnacofold'?'The HYB2 pipeline\'s method.':settings.engine==='cplcofold'?'Same Turner energy model as RNAcofold, beam search; runs as pure Python in this browser, so it is slow.':'Adds CPLfold\'s pseudoknot phase: its DP09 pseudoknot term is an experimental ranking score, not a validated free energy.')+estimate+(settings.engine!=='rnacofold'?' For many records, filter first or use HYB2 Desktop / the cplcofold command.':''))+'</p>'+
+      '<p class="card-note">'+esc((settings.engine==='rnaduplex'?'The HYB2 pipeline\'s method for the dG column: only pairs between the two arms (ViennaRNA RNAduplex, 37 °C); combined arms up to 2,000 nt. Arms that form no pair keep their energy.':settings.engine==='rnacofold'?'ViennaRNA\'s MFE cofold, in which each arm may also pair with itself; the HYB2 pipeline uses RNAduplex.':settings.engine==='cplcofold'?'Same Turner energy model as RNAcofold, beam search; runs as pure Python in this browser, so it is slow.':'Adds CPLfold\'s pseudoknot phase: its DP09 pseudoknot term is an experimental ranking score, not a validated free energy.')+estimate+(settings.engine!=='rnacofold'?' For many records, filter first or use HYB2 Desktop / the cplcofold command.':''))+'</p>'+
       '<div class="inline-actions"><button class="button" data-feature-action="batch-energy-run"'+(s.running||!state.fasta?' disabled':'')+'>Calculate binding energies</button>'+(s.running?'<button class="quiet-button" data-feature-action="batch-energy-cancel">Cancel</button>':'')+(s.result?'<button class="button button-secondary" data-feature-action="batch-energy-hyb">Download updated HYB</button><button class="quiet-button" data-feature-action="batch-energy-zip">Download HYB + audit ZIP</button>':'')+'</div><p class="card-note" role="status" data-batch-energy-status>'+esc(s.message||(!state.fasta?'Load and map a reference FASTA first.':'Unmapped, antisense, ambiguous, over-limit or unselected rows retain their original energy and are listed in the audit.'))+'</p></section>';
   }
   // Fold the prepared pairs on a pool of workers, chunk by chunk; energies
@@ -305,12 +319,12 @@
         if(entry.item===undefined){skipped++;audit.push([entry.line,entry.record.id,'unchanged',entry.old,entry.old,entry.note].map(tsv).join('\t'));return;}
         const energy=folded.energies[entry.item];
         // one bad value leaves its row unchanged rather than failing the run (as the desktop)
-        if(!Number.isFinite(energy)){skipped++;audit.push([entry.line,entry.record.id,'unchanged',entry.old,entry.old,'invalid energy returned'].map(tsv).join('\t'));return;}
+        if(!Number.isFinite(energy)){skipped++;audit.push([entry.line,entry.record.id,'unchanged',entry.old,entry.old,settings.engine==='rnaduplex'?'RNAduplex found no pair between the arms':'invalid energy returned'].map(tsv).join('\t'));return;}
         updates.set(entry.line,{raw:entry.record.raw,energy});updated++;
         audit.push([entry.line,entry.record.id,'updated',entry.old,energy.toFixed(2),''].map(tsv).join('\t'));
       });
       const hyb=rewriteEnergy(source,updates);
-      status.result={hyb,engine:settings.engine,audit:audit.join('\n')+'\n',metadata:{engine:engine.name,engineVersion:folded.version,temperature:37,minimumLoop:settings.engine==='rnacofold'?3:null,energyModel:settings.engine==='rnacofold'?'Turner 2004 (ViennaRNA default)':'CPLfold DP09',pseudoknots:settings.engine==='cplcofold-pk',records:settings.records==='filtered'?'interaction-filters':'all',filters:settings.records==='filtered'?Object.assign({},state.filters||{}):null,updated,unchanged:skipped,validRecords:records.length,workers:folded.workers,elapsedSeconds:Math.round((Date.now()-started)/100)/10,sourceFile:file&&file.name,reference:fasta.fileName,mapping:fasta.mapping,maximumCombinedArmLength:engine.maxLength,completedAt:new Date().toISOString()}};
+      status.result={hyb,engine:settings.engine,audit:audit.join('\n')+'\n',metadata:{engine:engine.name,engineVersion:folded.version,temperature:37,minimumLoop:settings.engine==='rnacofold'?3:null,energyModel:settings.engine==='rnacofold'?'Turner 2004 (ViennaRNA default)':settings.engine==='rnaduplex'?'Turner 2004 (ViennaRNA default), intermolecular pairs only, as the HYB2 pipeline':'CPLfold DP09',pseudoknots:settings.engine==='cplcofold-pk',records:settings.records==='filtered'?'interaction-filters':'all',filters:settings.records==='filtered'?Object.assign({},state.filters||{}):null,updated,unchanged:skipped,validRecords:records.length,workers:folded.workers,elapsedSeconds:Math.round((Date.now()-started)/100)/10,sourceFile:file&&file.name,reference:fasta.fileName,mapping:fasta.mapping,maximumCombinedArmLength:engine.maxLength,completedAt:new Date().toISOString()}};
       status.message=updated.toLocaleString('en-US')+' energies updated with '+engine.name+' in '+duration(Date.now()-started)+'; '+skipped.toLocaleString('en-US')+' valid rows unchanged. Comments and unparsed source lines are preserved. Download the audit for details.';
     }catch(error){if(!job.cancelled)status.message='Energy calculation failed: '+error.message;}
     finally{if(jobs.get('energy')===job){jobs.delete('energy');status.running=false;api.render();}}

@@ -120,15 +120,28 @@ async function isGzip(file) {
 // another gzip header or zero padding.
 const GZIP_TRAILER_SCAN_BYTES = 4 * 1024 * 1024;
 const BGZF_READ_BYTES = 4 * 1024 * 1024;
+const ZERO_PADDING_SCAN_BYTES = 1024 * 1024;
+// the most zero bytes a member can end in: the 8 trailer bytes (CRC-32 and
+// ISIZE of an empty member) and up to 2 bytes of an end-of-block code
+const GZIP_MEMBER_ZERO_TAIL_BYTES = 10;
 
 async function readGzipMembers(file, onBytes) {
+  // looked for at most once per file, and only when a member's end has to be
+  // searched for
+  let padding = null;
+  const paddingStart = function () {
+    if (padding === null) {
+      padding = zeroPaddingStart(file);
+    }
+    return padding;
+  };
   let memberStart = 0;
   while (memberStart < file.size) {
     const head = new Uint8Array(await file.slice(memberStart, Math.min(file.size, memberStart + 18)).arrayBuffer());
     if (head.length >= 18 && bgzfBlockSize(head, 0)) {
       memberStart = await readBgzfBlocks(file, memberStart, onBytes);
     } else if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
-      memberStart = await readGzipMember(file, memberStart, onBytes);
+      memberStart = await readGzipMember(file, memberStart, onBytes, paddingStart);
     } else if (await isZeroPadding(file, memberStart)) {
       return;
     } else {
@@ -207,8 +220,9 @@ async function inflateGzipBytes(bytes) {
 }
 
 // Streams one gzip member from start; returns where the next member begins
-// (file.size after the last one).
-async function readGzipMember(file, start, onBytes) {
+// (file.size after the last one). paddingStart() resolves to where the file's
+// trailing zero bytes begin.
+async function readGzipMember(file, start, onBytes, paddingStart) {
   let fed = start;
   let produced = 0;
   const reader = file.slice(start).stream().pipeThrough(new TransformStream({
@@ -232,7 +246,7 @@ async function readGzipMember(file, start, onBytes) {
     // raising (all of it, some or none), so the length read cannot locate the
     // trailer: the member is found by decompressing it alone, up to each
     // following gzip header in turn.
-    const member = await gzipMemberByHeaders(file, start, fed, produced, onBytes);
+    const member = await gzipMemberByHeaders(file, start, fed, produced, onBytes, await paddingStart());
     if (member === null) {
       throw error;
     }
@@ -251,19 +265,20 @@ async function readGzipMember(file, start, onBytes) {
 // over all of its output: the first following gzip header (or the end of the
 // file, or zero padding) up to which the member decompresses cleanly on its
 // own. The output past the produced bytes already passed on goes to onBytes.
-// null when no such end exists (a damaged member).
-async function gzipMemberByHeaders(file, start, limit, produced, onBytes) {
+// padding is where the file's trailing zero bytes begin. null when no such
+// end exists (a damaged member).
+async function gzipMemberByHeaders(file, start, limit, produced, onBytes, padding) {
   const top = Math.min(file.size, limit);
-  const padding = await zeroPaddingStart(file);
   for (let from = start + 18; from <= top; from += GZIP_TRAILER_SCAN_BYTES) {
     const to = Math.min(top, from + GZIP_TRAILER_SCAN_BYTES);
     const bytes = new Uint8Array(await file.slice(from, Math.min(file.size, to + 3)).arrayBuffer());
     for (let i = 0; from + i <= to; i += 1) {
       const p = from + i;
       const header = bytes[i] === 0x1f && bytes[i + 1] === 0x8b && bytes[i + 2] === 8;
-      // the member's trailer may itself end in zero bytes (its length's high
-      // bytes), so its end can lie up to 8 bytes into the zero run
-      if (!header && p !== file.size && !(p >= padding && p <= padding + 8)) {
+      // the member may itself end in zero bytes (its length's high bytes; an
+      // empty member's whole trailer and the last byte or two of its deflate
+      // data), so its end can lie a few bytes into the zero run
+      if (!header && p !== file.size && !(p >= padding && p <= padding + GZIP_MEMBER_ZERO_TAIL_BYTES)) {
         continue;
       }
       // a header byte pattern inside compressed data fails here and the scan
@@ -279,15 +294,24 @@ async function gzipMemberByHeaders(file, start, limit, produced, onBytes) {
 }
 
 // Where the zero bytes that end the file begin (file.size when it does not
-// end in zeros); only the last 64 KB are looked at.
+// end in zeros). The padding can be any length (tar and tape blocking, disk
+// images), so the file is read backwards a chunk at a time until a non-zero
+// byte turns up.
 async function zeroPaddingStart(file) {
-  const from = Math.max(0, file.size - 65536);
-  const bytes = new Uint8Array(await file.slice(from, file.size).arrayBuffer());
-  let i = bytes.length;
-  while (i > 0 && bytes[i - 1] === 0) {
-    i -= 1;
+  let end = file.size;
+  while (end > 0) {
+    const from = Math.max(0, end - ZERO_PADDING_SCAN_BYTES);
+    const bytes = new Uint8Array(await file.slice(from, end).arrayBuffer());
+    let i = bytes.length;
+    while (i > 0 && bytes[i - 1] === 0) {
+      i -= 1;
+    }
+    if (i > 0) {
+      return from + i;
+    }
+    end = from;
   }
-  return from + i;
+  return 0;
 }
 
 // Decompresses file[start, end): the output length when it decompresses

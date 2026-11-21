@@ -1032,7 +1032,7 @@
       fileRow("interactions", "Differential interactions (TSV)", ".tsv,.txt", s.interactions && s.interactions.name, s.interactions ? formatNumber(s.interactions.rows.length) + " rows" : ""),
       fileRow("annotation", "Gene annotation (GenBank, GFF, BED, TSV)", ".gb,.gbk,.genbank,.gff,.gff3,.gtf,.bed,.tsv,.txt", s.annotation && s.annotation.name, s.annotation ? formatNumber(s.annotation.features.length) + " features" : ""),
       "</div>",
-      '<div class="comparison-control-grid">',
+      '<div class="comparison-control-grid arcmap-control-grid">',
       control("padj <", "padj", s.padj, "0.01"),
       control("Condition one", "labelOne", s.labelOne, "label, e.g. ZAFR"),
       control("Condition two", "labelTwo", s.labelTwo, "label, e.g. ZASI"),

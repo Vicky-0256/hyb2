@@ -356,6 +356,13 @@ async function main() {
     assert.equal(parsed[index].summary.validRecords, EXPECTED.records[item.label], item.label + " records");
     assert.equal(parsed[index].summary.invalidRecords, 0, item.label + " has no invalid records");
     assert.equal(item.records, EXPECTED.records[item.label], "manifest record count of " + item.label);
+    // Top RNAs are per-arm tallies (the Overview card and the export's data
+    // dictionary say so): every example record has both arms on one virus
+    // RNA, so the RNA counts twice the file's records and its pair once
+    const top = parsed[index].summary;
+    assert.equal(top.rnaCounts.length, 1, item.label + " has one RNA");
+    assert.equal(top.rnaCounts[0].records, 2 * EXPECTED.records[item.label], item.label + " per-arm records of its RNA");
+    assert.equal(top.pairCounts[0].records, EXPECTED.records[item.label], item.label + " records of its RNA pair");
   });
   log("parsed " + parsed.map(function (p) { return p.summary.validRecords; }).join(" + ") + " records");
 

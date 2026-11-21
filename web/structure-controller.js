@@ -9,6 +9,13 @@
   const CPLFOLD_CAPACITY_TARGET_MS = 45000;
   const CPLFOLD_CAPACITY_SAFETY_FACTOR = 0.65;
   const CPLFOLD_CAPACITY_TIMEOUT_MS = 60000;
+  // How the HYB chimeras become the bonus matrix (web/cplfold/cplfold_web.py SUPPORT_KERNELS).
+  const CPLFOLD_SUPPORT_KERNELS = ["gaussian", "block", "block-normalized", "rnacofold", "duplex"];
+  // Kernels whose pairs the ViennaRNA worker computes first: CPLfold receives
+  // them as evidencePairs. rnacofold's cofolds also give the COMRADES support
+  // shown with the result. duplex is computed inside CPLfold with ViennaRNA's
+  // Python module (vendor/pyodide-cplfold, as on the desktop).
+  const CPLFOLD_PAIR_KERNELS = ["rnacofold"];
 
   // Preserve the mapped input intervals for display alongside this result.
   // These are raw record arms, not inferred base pairs or bonus-matrix cells.
@@ -151,10 +158,14 @@
       alpha: parseBoundedNumber(structure.cplfoldAlpha, 0, 1, "Evidence alpha"),
       beta: parseBoundedNumber(structure.cplfoldBeta, 0, 1, "Pseudoknot beta"),
       allowPseudoknot: structure.cplfoldAllowPseudoknot !== false,
-      energyModel: String(structure.cplfoldEnergyModel || "DP09").toUpperCase()
+      energyModel: String(structure.cplfoldEnergyModel || "DP09").toUpperCase(),
+      supportKernel: String(structure.cplfoldKernel || "gaussian")
     };
     if (["DP03", "DP09", "CC06", "CC09", "RE"].indexOf(parameters.energyModel) === -1) {
       throw new Error("Choose a supported CPLfold energy model.");
+    }
+    if (CPLFOLD_SUPPORT_KERNELS.indexOf(parameters.supportKernel) === -1) {
+      throw new Error("Choose a supported CPLfold read-support kernel.");
     }
     if (structure.cplfoldMode === "cofold" && ["DP03", "DP09"].indexOf(parameters.energyModel) === -1) {
       throw new Error("CPLcofold supports DP03 and DP09 only.");
@@ -221,6 +232,9 @@
     }
     if (!cplfold && hybGuided) {
       try {
+        if (structure.foldProgram === "mfold") {
+          throw new Error("mfold 3.6 cannot run in a browser: run COMRADES(mfold) in HYB2 Desktop or with hyb2 … -r 2, or choose ViennaRNA as the folding program.");
+        }
         if (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length) {
           throw new Error("No eligible forward-strand HYB records are fully contained in the selected region layout.");
         }
@@ -240,6 +254,9 @@
     cancel(state);
 
     const runId = (structure.runId || 0) + 1;
+    // Wall-clock start: the worker's own elapsedMs omits queueing, worker
+    // start-up and RNAcofold support collection; results report this one.
+    const predictStartedAt = Date.now();
     structure.runId = runId;
     structure.status = "running";
     structure.operation = "prediction";
@@ -297,6 +314,8 @@
           structure.message = nativeResult.engine + " completed with the desktop bundled NumPy/Numba runtime.";
           structure.result = Object.assign({}, nativeResult, {
             runId: runId,
+            elapsedMs: Date.now() - predictStartedAt,
+            engineElapsedMs: nativeResult.elapsedMs,
             completedAt: new Date().toISOString(),
             sequence: sequenceInfo.sequence,
             label: sequenceInfo.label,
@@ -339,6 +358,8 @@
     }
 
     let worker = null;
+    // rnacofold kernel: the COMRADES support evidence of the pre-step's cofolds
+    let rnacofoldSupport = null;
     try {
       worker = cplfold
         ? acquireCplfoldWorker(state)
@@ -366,6 +387,10 @@
             rejectInput(structure, api, new Error("The worker did not preserve the two RNA strands. Reload the current CPLcofold runtime."));
             return;
           }
+          if (cplfold && cplfoldGuided && !sequenceInfo.cutpoint && message.result && !message.comradesScored && rnacofoldSupport) {
+            message.result.comradesEvidence = rnacofoldSupport;
+            message.comradesScored = true;
+          }
           if (cplfold && cplfoldGuided && !sequenceInfo.cutpoint && message.result && !message.comradesScored) {
             scoreComradesSupport(state, structure, runId, sequenceInfo, api, function (evidence) {
               if (evidence) message.result.comradesEvidence = evidence;
@@ -388,6 +413,8 @@
               : "ViennaRNA MFE structure predicted locally.");
           structure.result = Object.assign({}, message.result || {}, {
             runId: runId,
+            elapsedMs: Date.now() - predictStartedAt,
+            engineElapsedMs: message.result && message.result.elapsedMs,
             completedAt: new Date().toISOString(),
             sequence: sequenceInfo.sequence,
             label: sequenceInfo.label,
@@ -444,7 +471,7 @@
         api.render();
       };
 
-      worker.postMessage(iris ? {
+      const request = iris ? {
         type: "iris-fold", sequence: sequenceInfo.sequence,
         evidenceArms: sequenceInfo.assembly.evidenceArms,
         parameters: { K: structure.irisK, C: structure.irisC, fraction: structure.irisFraction, kRange: structure.irisKRange }
@@ -461,6 +488,7 @@
         alpha: cplfoldParameters.alpha,
         beta: cplfoldParameters.beta,
         allowPseudoknot: cplfoldParameters.allowPseudoknot,
+        supportKernel: cplfoldParameters.supportKernel,
         maxSequenceLength: cplfold ? cplfoldMaximumLength(structure) : undefined
       } : hybGuided ? {
         type: "comrades-fold",
@@ -477,7 +505,17 @@
         minimumLoop: minimumLoop,
         temperature: temperature,
         constraints: constraints
-      });
+      };
+      if (cplfold && cplfoldGuided && CPLFOLD_PAIR_KERNELS.indexOf(cplfoldParameters.supportKernel) !== -1) {
+        collectKernelPairs(cplfoldParameters.supportKernel, state, structure, runId, sequenceInfo, api, function (pairs, support) {
+          state.structureWorker = worker;
+          rnacofoldSupport = support;
+          request.evidencePairs = pairs;
+          worker.postMessage(request);
+        });
+      } else {
+        worker.postMessage(request);
+      }
       return true;
     } catch (error) {
       if (worker) {
@@ -729,13 +767,24 @@
     };
 
     try {
-      worker.postMessage({
+      const kernel = CPLFOLD_SUPPORT_KERNELS.indexOf(structure.cplfoldKernel) === -1 ? "gaussian" : structure.cplfoldKernel;
+      const request = {
         type: "cplfold-bonus-matrix",
         sequence: prepared.sequence,
         ...(prepared.cutpoint ? { cutpoint: prepared.cutpoint } : {}),
         evidenceMode: "hyb-blocks",
-        evidenceArms: prepared.assembly.evidenceArms
-      });
+        evidenceArms: prepared.assembly.evidenceArms,
+        supportKernel: kernel
+      };
+      if (CPLFOLD_PAIR_KERNELS.indexOf(kernel) !== -1) {
+        collectKernelPairs(kernel, state, structure, runId, prepared, api, function (pairs) {
+          state.structureWorker = worker;
+          request.evidencePairs = pairs;
+          worker.postMessage(request);
+        });
+      } else {
+        worker.postMessage(request);
+      }
     } catch (error) {
       discardWorker(state, worker);
       structure.status = "error";
@@ -1005,6 +1054,57 @@
       done(null);
     };
     worker.postMessage({ type: "comrades-evidence", evidenceArms: sequenceInfo.assembly.evidenceArms, sequence: sequenceInfo.sequence });
+  }
+
+  // The rnacofold support kernel needs the RNAcofold pairs (COMRADES'
+  // evidence) of every eligible chimera. The ViennaRNA worker computes them
+  // first and CPLfold receives them as evidencePairs; done(pairs, support)
+  // runs only when they arrive for this run. support is the COMRADES support
+  // evidence of the same cofolds, which scoreComradesSupport would otherwise
+  // compute again after the fold.
+  function collectKernelPairs(kernel, state, structure, runId, sequenceInfo, api, done) {
+    const program = "RNAcofold";
+    const fail = function (message) {
+      if (!state.structure || state.structure.runId !== runId) return;
+      structure.runningSequenceInfo = null;
+      structure.operation = null;
+      structure.status = "error";
+      structure.progress = 0;
+      structure.message = message || program + " could not compute the read support of the HYB chimeras.";
+      api.render();
+    };
+    let worker;
+    try {
+      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "structure.worker.js");
+    } catch (error) {
+      fail("This browser cannot start the ViennaRNA worker that the " + kernel + " read support needs.");
+      return;
+    }
+    state.structureWorker = worker;
+    worker.onmessage = function (event) {
+      const message = event.data || {};
+      if (!state.structure || state.structure.runId !== runId) {
+        finishWorker(state, worker);
+        return;
+      }
+      if (message.type === "progress") {
+        structure.progress = Math.max(2, Math.min(40, Math.round((Number(message.percent) || 0) * 0.4)));
+        structure.message = program + " read support · " + (message.stage || program + " evidence");
+        api.render();
+        return;
+      }
+      finishWorker(state, worker);
+      if (message.type === "complete" && message.evidence && Array.isArray(message.evidence.pairs)) {
+        done(message.evidence.pairs, message.evidence.support || null);
+      } else {
+        fail(message.message);
+      }
+    };
+    worker.onerror = function () {
+      finishWorker(state, worker);
+      fail("The ViennaRNA worker stopped while computing the " + kernel + " read support.");
+    };
+    worker.postMessage({ type: "rnacofold-pairs", evidenceArms: sequenceInfo.assembly.evidenceArms, sequence: sequenceInfo.sequence });
   }
 
   // One long-lived CPLfold module worker per page keeps Pyodide, NumPy and

@@ -487,8 +487,34 @@ async function workerAndCard() {
   assert.match(card.eligibility(state.comparison).reason, /at least three datasets/);
   state.comparison.datasets.splice(1, 0, ds("ZAFR_REP2", "A", [afr, "host"]));
   assert.equal(card.eligibility(state.comparison).ok, true, "2 + 1 replicates are enough");
+  // ... to run, but an unreplicated condition is said on the card before the run
+  assert.match(card.replicateCaveat(2, 1, "ZAFR", "ZILM"), /^ZILM has one replicate \(2 \+ 1\)\. .*noise is estimated from the 2 ZAFR replicates alone.*exploratory.*second ZILM replicate/);
+  assert.match(card.renderCard(state), /<p class="notice notice-warning" data-deseq-caveat>ZILM has one replicate \(2 \+ 1\)/, "a 2 + 1 test warns before it runs");
+  assert.equal(card.replicateCaveat(2, 2, "ZAFR", "ZILM"), "");
+  assert.equal(card.replicateCaveat(1, 1, "ZAFR", "ZILM"), "", "1 + 1 cannot run: its reason is the eligibility text");
   state.comparison.datasets.push(ds("ZILM_REP3", "B", [ilm]));
   assert.equal(card.eligibility(state.comparison).ok, true);
+  assert.doesNotMatch(card.renderCard(state), /data-deseq-caveat/, "2 + 2 replicates carry no caveat");
+  // empty or repeated labels keep the test from running
+  {
+    const labels = state.comparison.datasets.map(function (d) { return d.label; });
+    state.comparison.datasets[2].label = "SAME"; state.comparison.datasets[3].label = "same ";
+    assert.equal(card.eligibility(state.comparison).ok, false);
+    assert.match(card.eligibility(state.comparison).reason, /2 datasets have the label SAME/);
+    assert.match(card.renderCard(state), /data-deseq-label-issue[^>]*>2 datasets have the label SAME[\s\S]*Run differential test/);
+    assert.match(card.renderCard(state), /data-feature-action="deseq-run"[^>]* disabled/);
+    state.comparison.datasets[2].label = labels[2]; state.comparison.datasets[3].label = labels[3];
+    state.comparison.datasets[0].label = "  ";
+    assert.match(card.eligibility(state.comparison).reason, /has an empty label/);
+    state.comparison.datasets[0].label = labels[0];
+    state.comparison.conditionBLabel = "zafr";
+    assert.match(card.labelIssues(state.comparison)[0], /same label/);
+    state.comparison.conditionBLabel = "";
+    assert.match(card.labelIssues(state.comparison)[0], /Condition B label is empty/);
+    state.comparison.conditionBLabel = "ZILM";
+    assert.deepEqual(card.labelIssues(state.comparison), []);
+    assert.equal(card.eligibility(state.comparison).ok, true);
+  }
   state.comparison.datasets.push(ds("primary", "A", ["other"]));
   card.handleChange(state, { dataset: { feature: "deseq-include", datasetId: "primary" }, checked: false }, { render: function () {} });
   assert.equal(card.rnaPlan(state.comparison).length, 4, "a dataset left out of the test is not used");
@@ -537,6 +563,19 @@ async function workerAndCard() {
     visualBlock: function (svg) { return svg; } };
   assert.match(card.reportSection(state.comparison, helpers), /Differential test \(DESeq2 Wald test\)/);
   assert.equal(card.reportData(state.comparison).result.summary.cellsTested, result.summary.cellsTested);
+  // A result computed with one unreplicated condition keeps its caveat on the
+  // card, in the Report section and in the exported parameters.
+  assert.equal(card.parameters(state.comparison).result.caveat, null, "2 + 2: no caveat");
+  assert.doesNotMatch(card.reportSection(state.comparison, helpers), /data-deseq-caveat/);
+  {
+    const fullDatasets = result.datasets;
+    result.datasets = fullDatasets.filter(function (d) { return d.id !== "ZAFR_REP2"; });
+    assert.match(card.resultCaveat(result), /^ZAFR has one replicate \(1 \+ 2\)/);
+    assert.match(card.renderCard(state), /data-deseq-caveat>ZAFR has one replicate \(1 \+ 2\)/);
+    assert.match(card.reportSection(state.comparison, helpers), /data-deseq-caveat>ZAFR has one replicate \(1 \+ 2\)/);
+    assert.match(card.parameters(state.comparison).result.caveat, /^ZAFR has one replicate \(1 \+ 2\)/);
+    result.datasets = fullDatasets;
+  }
 
   // empty or non-numeric fields are rejected, not read as 0
   state.comparison.deseq.minCount = "";

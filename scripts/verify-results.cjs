@@ -147,6 +147,10 @@ assert.equal(bare.scope.purpose, null, "no purpose typed: null");
 record.results.forEach(function (r) { assert.ok(R.NATURE_TEXT[r.nature], r.id + " has a known nature"); });
 assert.equal(result(record, "R23").nature, "statistical_test");
 assert.equal(result(record, "R38").nature, "prediction");
+// energies print with two decimals, as the structure page and DBN/CT do
+assert.equal(R.formatValue({ value: -25.5, unit: "kcal/mol" }), "-25.50");
+assert.equal(R.formatValue({ value: -3502.4, unit: "kcal/mol" }), "-3502.40");
+assert.equal(R.formatValue({ value: 1.23456789, unit: "" }), "1.23457", "other values keep their precision");
 assert.equal(result(record, "R20").nature, "descriptive");
 assert.equal(record.steps.find(function (s) { return s.key === "structure"; }).completedAt, "2026-10-16T12:34:56.000Z");
 assert.equal(record.steps.find(function (s) { return s.key === "contact_map"; }).completedAt, null, "computed on demand: no completion time");
@@ -240,6 +244,27 @@ const schemaFor = function (list, fileText) {
 assert.ok(R.files(record, "ai").some(function (f) { return f.path === "results/structure_prediction_method.json"; }), "the method's own record is kept, unchecked");
 // fields per file, for the export preview
 assert.deepEqual(Array.from(byPath(ai, "tables/top_rnas.tsv").fields), ["name", "records", "support"]);
+// top_rnas.tsv holds the parser's per-arm tallies (a record with both arms on
+// one RNA counts twice, so a value can exceed R01): its scope and columns say
+// so, and the per-pair table keeps the plain per-record wording
+const dictionaryTable = function (file) { return JSON.parse(byPath(ai, "data_dictionary.json").text).tables.find(function (t) { return t.file === file; }); };
+const describes = function (file, column) { return dictionaryTable(file).columns.find(function (c) { return c.name === column; }).description; };
+assert.match(dictionaryTable("tables/top_rnas.tsv").scope, /each record counts once per arm/);
+// table scopes (Report data notes, manifest.json, data_dictionary.json): a
+// count of one is singular, larger counts have thousands separators
+const tableScope = function (rec, file) { return rec.tables.find(function (t) { return t.file === file; }).scope; };
+assert.equal(tableScope(record, "tables/viewpoint_bins.tsv"), "1 bin");
+assert.equal(tableScope(record, "tables/contact_map_cells.tsv"), "all 2 non-empty cells");
+assert.equal(tableScope(record, "tables/compare_cells.tsv"), "1 comparable bin");
+assert.equal(tableScope(record, "tables/compare_datasets.tsv"), "all 2 datasets");
+assert.equal(tableScope(record, "tables/interactions.tsv"), "all 3 filtered records");
+const manyBins = Object.assign({}, full, { viewpoint: { rna: "RNA_A", results: Object.assign({}, full.viewpoint.results, { end: 108070, max: 1,
+  bins: Array.from({ length: 10807 }, function (_, i) { return { start: i * 10 + 1, end: i * 10 + 10, value: i % 2 }; }) }) } });
+assert.equal(tableScope(R.build(manyBins, { generatedAt: "2026-10-16T00:00:00.000Z", interactionRows: records, interactionTotal: 3 }), "tables/viewpoint_bins.tsv"), "all 10,807 bins");
+assert.match(describes("tables/top_rnas.tsv", "records"), /once per arm.*both arms on this RNA counts twice/);
+assert.match(describes("tables/top_rnas.tsv", "support"), /once per arm.*both arms on this RNA adds its support twice/);
+assert.equal(describes("tables/top_rna_pairs.tsv", "records"), "Number of records.");
+assert.match(report.render(empty), /Records <span class="unit">per arm<\/span>/, "the Report's top RNA table says per arm");
 assert.ok(byPath(ai, "summary.json").fields.indexOf("results") >= 0);
 assert.ok(byPath(ai, "report.md").fields.indexOf("Results") >= 0);
 // leaving files out: README and manifest stay, and both say what was left out
@@ -300,12 +325,23 @@ Object.assign(dualState.structure, { engine: "cplfold", cplfoldMode: "cofold" })
 Object.assign(dualState.structure.result, {
   engine: "CPLcofold", cutpoint: 4, strandLengths: [4, 4],
   displaySequence: "GGGA&AACC", dotBracketWithBreak: "(((.&.)))",
-  sourceSegments: [{ preparedStart:1, preparedEnd:4, rna:"RNA_A", start:11, end:14 },
-                   { preparedStart:5, preparedEnd:8, rna:"RNA_B", start:21, end:24 }],
+  sourceSegments: [{ preparedStart:1, preparedEnd:4, rna:"RNA_A", referenceStart:11, referenceEnd:14 },
+                   { preparedStart:5, preparedEnd:8, rna:"RNA_B", referenceStart:21, referenceEnd:24 }],
   energyMetadata: { energy_kind: "heuristic" }
 });
 const dualRecord = R.build(dualState, { interactionRows:records, interactionTotal:3 });
 const dualFiles = R.files(dualRecord, "ai");
+// A two-region fold names both regions: S12 scope, report.md parameters,
+// provenance.json and the structure name. Region 2 used to be left out.
+const dualMd = byPath(dualFiles, "report.md").text;
+assert.match(dualMd, /\| S12 \| RNA structure prediction \| `ok` \| RNA_A 11-14 \+ RNA_B 21-24, 8 nt; sequence only, no HYB evidence \|/, "report.md S12 scope names both regions");
+assert.match(dualMd, /\*\*S12\*\* [^\n]*rna = RNA_A; start = 11; end = 14; secondRna = RNA_B; secondStart = 21; secondEnd = 24;/, "report.md parameters name both regions");
+const dualParameters = JSON.parse(byPath(dualFiles, "provenance.json").text).steps.find(function (s) { return s.id === "S12"; }).parameters;
+assert.deepEqual([dualParameters.rna, dualParameters.start, dualParameters.end, dualParameters.secondRna, dualParameters.secondStart, dualParameters.secondEnd], ["RNA_A", 11, 14, "RNA_B", 21, 24], "provenance.json names both regions");
+assert.equal(JSON.parse(byPath(dualFiles, "results/structure_prediction.json").text).source, "RNA_A:11-14 + RNA_B:21-24");
+assert.deepEqual(JSON.parse(JSON.stringify(R.structureRegions(dualState.structure.result))), [{ rna: "RNA_A", start: 11, end: 14 }, { rna: "RNA_B", start: 21, end: 24 }]);
+assert.equal(R.structureRegions(full.structure.result), null, "a one-region fold has no region list");
+assert.ok(!("secondRna" in JSON.parse(byPath(ai, "provenance.json").text).steps.find(function (s) { return s.id === "S12"; }).parameters), "a one-region fold keeps rna/start/end only");
 const dualJson = JSON.parse(byPath(dualFiles, "results/structure_prediction.json").text);
 assert.equal(dualJson.cutpoint, 4);
 assert.equal(dualJson.positionOffset, 0, "a dual-reference result has no single global reference offset");
@@ -315,6 +351,49 @@ assert.equal(dualJson.energyMetadata.energy_kind, "heuristic");
 const dualDbn = byPath(dualFiles, "results/structure_prediction.dbn");
 assert.match(dualDbn.text, /GGGA&AACC\n\(\(\(\.&\.\)\)\)/);
 assert.equal(dualRecord.structures.find(item => item.file === dualDbn.path).length, 8);
+// A pasted sequence was not cut from a reference: the RNA and range left in
+// the settings by an earlier reference fold are not reported for it.
+{
+  const pastedState = JSON.parse(JSON.stringify(full));
+  pastedState.structure.source = "paste";
+  const pastedFiles = R.files(R.build(pastedState, { interactionRows:records, interactionTotal:3 }), "ai");
+  assert.match(byPath(pastedFiles, "report.md").text, /\| S12 \| RNA structure prediction \| `ok` \| pasted sequence, 8 nt; sequence only, no HYB evidence \|/, "report.md S12 scope names a pasted sequence");
+  const pastedParameters = JSON.parse(byPath(pastedFiles, "provenance.json").text).steps.find(function (s) { return s.id === "S12"; }).parameters;
+  assert.deepEqual([pastedParameters.source, pastedParameters.rna, pastedParameters.start, pastedParameters.end], ["paste", null, null, null]);
+  const pastedJson = JSON.parse(byPath(pastedFiles, "results/structure_prediction.json").text);
+  assert.equal(pastedJson.source, "pasted sequence"); assert.equal(pastedJson.positionOffset, 0);
+}
+// Two reference regions folded as one sequence (paired ViennaRNA layout, no
+// strand break): one offset cannot map both, so the segments are exported.
+{
+  const pairedState = JSON.parse(JSON.stringify(dualState));
+  Object.assign(pairedState.structure, { engine: "viennarna" });
+  Object.assign(pairedState.structure.result, { engine: "ViennaRNA", cutpoint: null });
+  const pairedJson = JSON.parse(byPath(R.files(R.build(pairedState, { interactionRows:records, interactionTotal:3 }), "ai"), "results/structure_prediction.json").text);
+  assert.equal(pairedJson.positionOffset, 0); assert.equal(pairedJson.sourceSegments.length, 2);
+  assert.match(pairedJson.coordinates, /use sourceSegments for reference mapping/);
+}
+// Whether HYB evidence guided the fold is said in report.md (which "Copy AI
+// summary" copies) and provenance.json: constraintMode alone reads "none"
+// for a sequence-only fold and for a CPLfold run guided by HYB blocks.
+assert.match(md, /\| S12 \| RNA structure prediction \| `ok` \| RNA_A 11-18, 8 nt; sequence only, no HYB evidence \|/, "report.md names a sequence-only fold");
+assert.match(md, /\*\*S12\*\* [^\n]*hybEvidence = None \(sequence only\)/, "report.md parameters state the HYB evidence");
+const structureParameters = function (list) {
+  return JSON.parse(byPath(list, "provenance.json").text).steps.find(function (s) { return s.id === "S12"; }).parameters;
+};
+assert.equal(structureParameters(ai).hybEvidence, "None (sequence only)");
+[[{ evidence: { source: "hyb-block-intervals" } }, "HYB block bonus matrix"],
+  [{ constraintMode: "hyb-guided" }, "COMRADES constraints (ViennaRNA)"],
+  [{ engine: "IRIS" }, "IRIS weighted ensemble"]].forEach(function (guidedCase) {
+  const guidedState = JSON.parse(JSON.stringify(full));
+  Object.assign(guidedState.structure.result, guidedCase[0]);
+  const guidedFiles = R.files(R.build(guidedState, { interactionRows: records, interactionTotal: 3 }), "ai");
+  const guidedMd = byPath(guidedFiles, "report.md").text;
+  assert.ok(guidedMd.indexOf("8 nt; guided by HYB evidence (" + guidedCase[1] + ") |") > 0, guidedCase[1] + " in the report.md scope");
+  assert.ok(guidedMd.indexOf("hybEvidence = " + guidedCase[1]) > 0 && guidedMd.indexOf("sequence only") < 0, guidedCase[1] + " is not called sequence only");
+  assert.equal(structureParameters(guidedFiles).hybEvidence, guidedCase[1]);
+});
+assert.equal(R.structureGuidedByReads(null), false);
 const summaryJson = JSON.parse(byPath(ai, "summary.json").text);
 assert.deepEqual(summaryJson.results, JSON.parse(JSON.stringify(record.results)), "summary.json results = record");
 assert.deepEqual(summaryJson.steps.map(function (s) { return s.status; }), JSON.parse(JSON.stringify(record.steps.map(function (s) { return s.status; }))));
@@ -339,6 +418,73 @@ dictionary.tables.forEach(function (t) { t.columns.forEach(function (c) { assert
 const provenance = JSON.parse(byPath(ai, "provenance.json").text);
 assert.equal(provenance.inputs[1].sha256, "ab".repeat(32));
 assert.equal(provenance.inputs[0].sha256Status, "pending", "a digest not yet computed is pending, not empty");
+assert.ok(!("files" in provenance.inputs[0]), "a single-file scope lists no merged files");
+// A merged scope has no single file to hash: its digest is not_computed
+// (never a permanent "pending") and each merged file carries its own; a
+// Compare dataset's digest is read from the dataset entry.
+const mergedState = JSON.parse(JSON.stringify(full));
+mergedState.selection = { datasetIds: ["primary", "d2"] };
+mergedState.primarySummary = { fileName: "sample.hyb", sha256: "11".repeat(32) };
+mergedState.datasets = [{ id: "primary", primary: true, fileName: "sample.hyb", fileSize: 10, validRecords: 120 },
+  { id: "d2", fileName: "other.hyb", fileSize: 20, validRecords: 80, sha256: "22".repeat(32) },
+  { id: "d3", fileName: "unused.hyb", fileSize: 30, validRecords: 5, sha256: "33".repeat(32) }];
+mergedState.comparison.datasets[1].sha256 = "22".repeat(32);
+const mergedFiles = R.files(R.build(mergedState, { interactionRows: records, interactionTotal: 3 }), "ai");
+const mergedInputs = JSON.parse(byPath(mergedFiles, "provenance.json").text).inputs;
+assert.equal(mergedInputs[0].sha256Status, "not_computed");
+assert.deepEqual(mergedInputs[0].files, [
+  { fileName: "sample.hyb", bytes: 10, sha256: "11".repeat(32), sha256Status: "computed", records: 120 },
+  { fileName: "other.hyb", bytes: 20, sha256: "22".repeat(32), sha256Status: "computed", records: 80 }]);
+const mergedCompare = mergedInputs.find(function (i) { return i.role === "compare_dataset"; });
+assert.deepEqual([mergedCompare.sha256, mergedCompare.sha256Status], ["22".repeat(32), "computed"]);
+const mergedMd = byPath(mergedFiles, "report.md").text;
+assert.match(mergedMd, /\*\*I01\*\* primary_hyb: [^\n]*SHA-256 not_computed for the merged set; one digest per file:\n  - `sample\.hyb`, 120 valid records, SHA-256 `(11){32}`\n  - `other\.hyb`, 80 valid records, SHA-256 `(22){32}`\n/);
+assert.doesNotMatch(mergedMd, /SHA-256 pending/);
+// merged records: interactions(.tsv/_top.tsv) get the Interactions CSV's dataset columns
+{
+  const H = context.window.Hyb2Data;
+  const seen = [];
+  const saved = { recordsToCsv: H.recordsToCsv, scopeDatasets: H.scopeDatasets };
+  H.scopeDatasets = function (s) { return s.selection && s.selection.datasetIds.length > 1 ? { primary: { label: "S", fileName: "sample.hyb" } } : null; };
+  H.recordsToCsv = function (records, datasets) { seen.push(datasets); return "sequence_id" + (datasets ? ",dataset,dataset_file" : "") + ",line\n"; };
+  const mergedAi = R.files(R.build(mergedState, { interactionRows: records, interactionTotal: 3 }), "ai");
+  assert.match(byPath(mergedAi, "tables/interactions_top.tsv").text, /^sequence_id\tdataset\tdataset_file\tline\n/);
+  assert.ok(seen.length && seen.every(function (d) { return d && d.primary.fileName === "sample.hyb"; }), "the merged scope's datasets reach recordsToCsv");
+  Object.assign(H, saved);
+  if (!saved.scopeDatasets) delete H.scopeDatasets;
+}
+assert.equal(JSON.parse(byPath(ai, "summary.json").text).application.buildCommit, "0123456789abcdef0123");
+{
+  const commit = context.window.HYB2_BUILD;
+  context.window.HYB2_BUILD = { commit: null };
+  const local = R.files(R.build(full, { interactionRows: records, interactionTotal: 3 }), "ai");
+  assert.equal(JSON.parse(byPath(local, "summary.json").text).application.buildCommit, "unknown", "a local copy writes buildCommit unknown");
+  assert.doesNotMatch(byPath(local, "report.md").text, /build unknown/);
+  context.window.HYB2_BUILD = commit;
+}
+assert.match(dictionary.conventions.coordinates, /HYB2 bin keys/);
+assert.deepEqual(schemaCheck.validate(R.SCHEMAS["schema/provenance.schema.json"], JSON.parse(byPath(mergedFiles, "provenance.json").text)), []);
+// A differential test run with one unreplicated condition carries the card's
+// caveat (deseq-card.js resultCaveat) as a warning into report.md and summary.json.
+const caveatState = JSON.parse(JSON.stringify(full));
+caveatState.comparison.deseq = { status: "done", minCount: "2", radius: "100", padjCutoff: "0.05",
+  result: { summary: { cellsTested: 5, significant: 0, significantUp: 0, significantDown: 0, interactionsUp: 0, interactionsDown: 0 }, interactions: [],
+    labels: { A: "Control", B: "Treated" }, datasets: [{ id: "primary", condition: "A" }, { id: "d2", condition: "B" }, { id: "d3", condition: "B" }] } };
+context.window.Hyb2DeseqCard = { parameters: function () { return { result: { current: true } }; },
+  resultCaveat: function (result) { return result.datasets.length === 3 ? "Control has one replicate (1 + 2). Treat this result as exploratory." : ""; } };
+const caveatRecord = R.build(caveatState, { interactionRows: records, interactionTotal: 3 });
+delete context.window.Hyb2DeseqCard;
+const caveatWarning = caveatRecord.warnings.find(function (w) { return /one replicate/.test(w.text); });
+assert.ok(caveatWarning && caveatWarning.step === "S08", "the single-replicate caveat is a warning of the differential test");
+assert.ok(byPath(R.files(caveatRecord, "ai"), "report.md").text.indexOf("Control has one replicate (1 + 2). Treat this result as exploratory.") > 0, "the caveat is in report.md");
+assert.ok(JSON.parse(byPath(R.files(caveatRecord, "ai"), "summary.json").text).warnings.some(function (w) { return w.id === caveatWarning.id; }), "and in summary.json");
+assert.ok(!record.warnings.some(function (w) { return /one replicate/.test(w.text); }));
+// A Region Explorer range that was not queried (page-data.js marks it
+// invalid) is not_run with the reason, never a 0-record result.
+const invalidRegion = JSON.parse(JSON.stringify(full));
+invalidRegion.region = { rna: "RNA_A", start: "300", end: "200", results: { records: [], support: 0, partners: [], profile: [], invalid: true, reason: "Start 300 is after End 200. The start must not be after the end." } };
+const invalidRegionStep = R.build(invalidRegion, { interactionRows: records, interactionTotal: 3 }).steps.find(function (s) { return s.key === "region"; });
+assert.deepEqual([invalidRegionStep.status, invalidRegionStep.detail], ["not_run", "Start 300 is after End 200. The start must not be after the end."]);
 assert.ok(byPath(analysis, "results/structure_prediction.dbn").text.indexOf("(((..)))") > 0);
 assert.ok(byPath(ai, "README.md").text.indexOf("never 0") > 0);
 

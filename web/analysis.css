@@ -10,6 +10,9 @@
   margin-top: 4px;
   color: var(--muted);
   font-size: 12px;
+  /* P1: notes repeat user labels ("Cells higher in <label>"); a label with
+     no spaces wraps instead of widening the page */
+  overflow-wrap: anywhere;
 }
 
 .analysis-controls {
@@ -175,6 +178,11 @@
 
 .interaction-table-card > .card-title-row {
   padding: 0 22px;
+}
+
+/* the empty-state line shown instead of the table when nothing matches */
+.interaction-table-card > .interaction-empty {
+  padding: 14px 22px 22px;
 }
 
 .virtual-table-head,
@@ -354,6 +362,26 @@
   text-align: right;
 }
 
+/* P1: a stat named after a user label ("Higher in
+   ZIKV_African_Huh7_infected_48h_replicate") shrinks and wraps instead of
+   pushing its row, and the page, past the card */
+.detail-list > div > :is(dt, dd),
+.detail-grid > div > :is(dt, dd),
+.selection-stats > div > :is(dt, dd),
+.region-totals > div > :is(dt, dd) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* the value keeps whole numbers ("8,353"): only the label breaks inside a word */
+.detail-list > div > dd,
+.detail-grid > div > dd,
+.selection-stats > div > dd,
+.region-totals > div > dd {
+  min-width: auto;
+  overflow-wrap: break-word;
+}
+
 .detail-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   padding: 17px 0;
@@ -431,7 +459,10 @@
   height: min(68vh, 650px);
   min-height: 380px;
   cursor: crosshair;
-  touch-action: none;
+  /* A swipe that starts vertically scrolls the page (the map is ~82% of a
+     phone's width); a tap selects a cell, and a drag that starts sideways
+     still draws a selection box in any direction. */
+  touch-action: pan-y;
 }
 
 .contact-navigator {
@@ -672,7 +703,8 @@
   width: 100%;
   height: 286px;
   cursor: crosshair;
-  touch-action: none;
+  /* only a tap selects a bar: vertical swipes scroll the page */
+  touch-action: pan-y;
 }
 
 .comparison-note {
@@ -748,6 +780,13 @@
 
 .comparison-summary .selection-stats > div {
   display: block;
+  min-width: 0;
+}
+
+/* P1: the condition names head these stats; a name with no spaces wraps */
+.comparison-summary .selection-stats dt,
+.comparison-summary .selection-stats dd {
+  overflow-wrap: anywhere;
 }
 
 .comparison-summary .selection-stats dd {
@@ -776,7 +815,8 @@
   width: 100%;
   height: 390px;
   cursor: crosshair;
-  touch-action: none;
+  /* vertical swipes scroll the page; a drag that starts sideways pans */
+  touch-action: pan-y;
 }
 
 .comparison-selection {
@@ -1108,10 +1148,15 @@
 
 @media (max-width: 900px) {
   .heatmap-layout,
-  .region-results,
   .viewpoint-layout,
   .comparison-map-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* keep the base minmax(0, 1fr): a bare 1fr track grows to the records
+     table's min-content width and the page scrolls sideways on a phone */
+  .region-results {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .selection-card {
@@ -1248,11 +1293,21 @@
 .contact-navigator { grid-template-columns: minmax(0, 1fr); }
 .contact-stage-canvas { height: min(70vh, 720px); min-height: 380px; }
 .contact-stage-note { min-height: 0; }
-.contact-stage-heading-actions { display: flex; align-items: center; gap: 12px; }
-.contact-stage-heading-actions .card-kicker { max-width: none; }
+.contact-stage-heading-actions { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* The range label is two RNA names long. It wraps inside its row: as one
+   nowrap line it set the card's minimum width, which pushed "Reset zoom" and
+   the canvas past the screen edge once a cell was chosen. */
+.contact-stage-heading-actions .card-kicker { max-width: none; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.contact-stage-heading > :first-child,
+.contact-stage-heading-actions .quiet-button { flex: none; }
+/* The card's one column never grows past the card, whatever a child holds. */
+.contact-stage { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 767px) {
   .contact-stage-canvas { height: 420px; min-height: 300px; }
   .contact-stage-heading { flex-wrap: wrap; }
+  /* phone: the range and "Reset zoom" take their own full-width line */
+  .contact-stage-heading-actions { flex: 1 1 100%; justify-content: space-between; }
+  .contact-stage-heading-actions .card-kicker { text-align: left; }
 }
 
 /* Contact maps use a square plotting surface so equal X/Y spans stay visually comparable. */
@@ -1345,8 +1400,40 @@
 .region-panel { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .region-panel h3 { margin: 0; font-size: 1rem; }
 .region-panel select { max-width: 100%; }
+/* P1: the panel title and the picker's label repeat the condition names */
+.region-panel h3,
+.region-panel .control-field > span { overflow-wrap: anywhere; }
+.region-panel .control-field { min-width: 0; }
+.region-panel select { min-width: 0; width: 100%; }
 .region-figure, .energy-figure { overflow-x: auto; margin: 12px 0; }
 .region-figure svg, .energy-figure svg { width: 100%; height: auto; display: block; border-radius: 8px; }
+
+/* Arc map and region structures in a narrow card: the figure shrank with the
+   card until its labels were 3-4px high on a phone (5-7px on a tablet). In
+   a box under 720px (phones, tablets; 644px at an 820px window) the figure
+   keeps a readable width and the box scrolls sideways (the page does not);
+   a line above the figure says so. A wider box (832px at a 1024px window,
+   1050px at 1440px) is unchanged: the whole figure stays in view. */
+.arcmap-figure, .region-figure { container-type: inline-size; overscroll-behavior-x: contain; }
+.arcmap-figure::before, .region-figure::before {
+  position: sticky;
+  left: 0;
+  display: none;
+  width: max-content;
+  max-width: 100cqw;
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  content: "Scroll sideways to see the whole figure.";
+}
+/* 880px: the arc map's smallest labels (10 units of 1000) are 8.8px.
+   1050px: the region figure's width at a 1440px window, where its base
+   letters (6.4 units of 870) are 7.7px and its labels 11px. */
+@container (max-width: 719px) {
+  .arcmap-figure svg { min-width: 880px; }
+  .region-figure svg { min-width: 1050px; }
+  .arcmap-figure::before, .region-figure::before { display: block; }
+}
 
 /* Differential test (deseq-card.js) */
 .deseq-card { margin-top: 16px; }
@@ -1356,13 +1443,17 @@
 .deseq-panel-title { align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .deseq-show { min-width: 180px; }
 .deseq-canvas-wrap { max-width: 720px; aspect-ratio: 1 / 1.03; margin: 8px 0 12px; }
-.deseq-canvas { display: block; width: 100%; height: 100%; border-radius: 8px; cursor: crosshair; touch-action: none; }
+.deseq-canvas { display: block; width: 100%; height: 100%; border-radius: 8px; cursor: crosshair; touch-action: pan-y; }
 .deseq-table { max-height: 420px; overflow: auto; }
 .deseq-table tr[data-feature-action] { cursor: pointer; }
 .deseq-table tr.is-selected td { background: var(--surface-selected, color-mix(in srgb, var(--primary) 12%, transparent)); }
 .deseq-include { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin: 10px 0; }
 .deseq-include-item { display: inline-flex; gap: 6px; align-items: center; }
 .deseq-include-item { font-size: 13px; }
+/* P1: a long dataset or condition label with no spaces wraps inside the
+   card instead of widening the page */
+.deseq-include-item { flex-wrap: wrap; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.deseq-include-item > .card-note { display: inline; margin-top: 0; min-width: 0; }
 
 /* Compare: progress while comparison.worker.js builds the maps */
 .comparison-progress {

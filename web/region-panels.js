@@ -645,8 +645,17 @@
       region.panels.forEach(function (panel, column) {
         const x = 10 + column * (cellW + 10);
         const s = panel.summary;
-        parts.push('<text x="' + x + '" y="' + (top + 34) + '" font-size="12" font-weight="600" fill="' + c.ink + '">' +
-          escapeXml(panel.lineage + " structure · " + windowsText(s)) + "</text>");
+        // a long condition name is shortened so the caption keeps to its
+        // panel's column (about 6.8 units a character at 12 px semibold);
+        // the full caption is the text's tooltip
+        const caption = panel.lineage + " structure · " + windowsText(s);
+        const room = Math.floor(cellW / 6.8);
+        const tail = " structure · " + windowsText(s);
+        const keep = Math.max(4, room - tail.length - 1);
+        const shown = caption.length <= room || keep >= panel.lineage.length ? caption
+          : panel.lineage.slice(0, keep) + "\u2026" + tail;
+        parts.push('<text x="' + x + '" y="' + (top + 34) + '" font-size="12" font-weight="600" fill="' + c.ink + '"><title>' + escapeXml(caption) + "</title>" +
+          escapeXml(shown) + "</text>");
         parts.push('<rect x="' + x + '" y="' + (top + head) + '" width="' + cellW + '" height="' + cellH + '" fill="none" stroke="#e5e7eb"/>');
         parts.push(panelSvg(panel, highlight, { x: x, y: top + head, w: cellW, h: cellH }, c));
         const lines = [(s.merged ? s.pairsX + " pairs in the window" : s.between + " inter-window pairs · " + s.pairsX + " in X · " + s.pairsY + " in Y") +

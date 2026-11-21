@@ -244,5 +244,221 @@ assert.match(cofoldHtml, /\(\(&amp;\)\)/);
 assert.match(cofoldHtml, /Two RNA strands/);
 assert.match(cofoldHtml, /experimental ranking heuristic/);
 assert.match(cofoldHtml, /CPLfold candidates/, "cofold retains the candidate table");
+// A two-region (reference) CPLcofold fold lists both regions in the Setup card.
+const twoRegionState = JSON.parse(JSON.stringify(cofoldState));
+twoRegionState.structure.result.sourceSegments = [
+  { rna: "RNA_A", referenceStart: 1, referenceEnd: 2, preparedStart: 1, preparedEnd: 2 },
+  { rna: "RNA_B", referenceStart: 7, referenceEnd: 8, preparedStart: 3, preparedEnd: 4 }];
+const twoRegionHtml = report.render(twoRegionState);
+assert.match(twoRegionHtml, /<dt>Region 1 RNA<\/dt>\s*<dd[^>]*>RNA_A<\/dd>[\s\S]*<dt>Region 1 range<\/dt>\s*<dd[^>]*>1-2<\/dd>[\s\S]*<dt>Region 2 RNA<\/dt>\s*<dd[^>]*>RNA_B<\/dd>[\s\S]*<dt>Region 2 range<\/dt>\s*<dd[^>]*>7-8<\/dd>/, "both regions in the Setup card");
+assert.match(html, /<dt>RNA<\/dt>\s*<dd[^>]*>RNA_A<\/dd>[\s\S]*<dt>Range<\/dt>\s*<dd[^>]*>1-4<\/dd>/, "a one-region fold keeps RNA / Range");
+assert.doesNotMatch(html, /<dt>Region 2 RNA<\/dt>/);
 
-console.log("Report render contract passed.");
+// A fold that no HYB evidence guided must never be reported as read-guided.
+// The fixture's CPLfold result carries no evidence, so it is sequence only.
+assert.match(html, /prediction from the sequence alone; no HYB evidence guided it/, "a sequence-only fold is named as such in the limitations");
+assert.doesNotMatch(html, /guided by chimeric reads/, "a sequence-only fold is not called read-guided");
+assert.match(html, /<dt>HYB evidence<\/dt>\s*<dd[^>]*>None \(sequence only\)<\/dd>/, "the Setup list states the HYB evidence used");
+assert.match(html, /No HYB evidence guided this fold \(sequence only\)/);
+assert.doesNotMatch(html, /HYB bonus-matrix provenance/, "no bonus-matrix provenance without a bonus matrix");
+[
+  [{ evidence: { source: "hyb-block-intervals" } }, "HYB block bonus matrix", /HYB bonus-matrix provenance/],
+  [{ constraintMode: "hyb-guided", engine: "ViennaRNA WebAssembly" }, "COMRADES constraints \\(ViennaRNA\\)", null],
+  [{ engine: "IRIS" }, "IRIS weighted ensemble", null]
+].forEach(function (guidedCase) {
+  const guidedState = JSON.parse(JSON.stringify(state));
+  Object.assign(guidedState.structure.result, guidedCase[0]);
+  const guidedHtml = report.render(guidedState);
+  assert.match(guidedHtml, /computational prediction guided by chimeric reads/, guidedCase[1] + ": a read-guided fold is named as such");
+  assert.doesNotMatch(guidedHtml, /from the sequence alone/, guidedCase[1]);
+  assert.match(guidedHtml, new RegExp("<dt>HYB evidence</dt>\\s*<dd[^>]*>" + guidedCase[1] + "</dd>"), guidedCase[1] + " in the Setup list");
+  if (guidedCase[2]) assert.match(guidedHtml, guidedCase[2]);
+});
+
+// ---- Export panel (Report -> Export -> For people / For AI / For further analysis)
+const read = function (file) { return fs.readFileSync(path.join(repository, "web", file), "utf8"); };
+
+// On a phone the panel opened below the fold with focus on <body>, so the
+// tap seemed to do nothing. report-page.js now brings it into view and
+// focuses its heading; a redraw keeps focus on the control that had it and
+// Close gives it back to the Export button. Run against a stand-in document.
+{
+  const listeners = [];
+  const element = function (attrs, top, height, inPanel) {
+    return {
+      attrs: attrs || {}, inPanel: !!inPanel, scrolled: [], disabled: false, offsetHeight: height || 44,
+      getAttribute: function (name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+      getBoundingClientRect: function () { return { top: top || 0, height: height || 44 }; },
+      focus: function (options) { doc.activeElement = this; this.focusOptions = options; },
+      // a copy: the options object belongs to the page's realm
+      scrollIntoView: function (options) { this.scrolled.push(Object.assign({}, options)); },
+      closest: function (selector) {
+        if (selector === "[data-report-export-panel]") return this.inPanel ? this : null;
+        return selector === '[data-action="' + this.attrs["data-action"] + '"]' ? this : null;
+      }
+    };
+  };
+  const panelAt = function (top, height, controls) {
+    const panel = element({}, top, height, true);
+    panel.title = element({}, top + 22, 26, true);
+    panel.querySelector = function (selector) { return selector === "[data-report-export-title]" ? panel.title : null; };
+    panel.querySelectorAll = function () { return controls || []; };
+    return panel;
+  };
+  const doc = {
+    body: element(), panel: null, summary: element({}, -300, 44),
+    addEventListener: function (type, listener, capture) { listeners.push([type, listener, capture]); },
+    querySelector: function (selector) {
+      return selector === "[data-report-export-panel]" ? doc.panel : selector === ".report-export-menu > summary" ? doc.summary : null;
+    }
+  };
+  doc.activeElement = doc.body;
+  context.document = doc;
+  context.window.innerHeight = 844;
+  context.window.getComputedStyle = function () { return { scrollMarginTop: "72px" }; };
+  vm.runInContext(read("report-page.js"), context, { filename: "report-page.js" });
+  const live = context.window.Hyb2Report;
+  const click = function (target) { listeners.forEach(function (entry) { if (entry[0] === "click") entry[1]({ target: target }); }); };
+  // app.js: render() builds the markup while the old page is in the document,
+  // replaces it (focus falls to <body>), then calls afterRender()
+  const redraw = function (panel) {
+    live.render(state);
+    doc.activeElement = doc.body;
+    doc.panel = panel;
+    live.afterRender(state);
+  };
+  assert.ok(listeners.some(function (entry) { return entry[0] === "click" && entry[2] === true; }),
+    "Close is read in the capture phase, before app.js redraws");
+
+  // chosen on a phone: the panel is at 873 px in an 844 px viewport
+  state.reportExport = { audience: "ai", status: "preparing", list: [], error: "" };
+  const opened = panelAt(873, 283);
+  redraw(opened);
+  assert.deepEqual(opened.scrolled, [{ block: "start", behavior: "instant" }],
+    "a chosen export scrolls its panel into view at once (a smooth scroll is cancelled by the next redraw)");
+  assert.equal(doc.activeElement, opened.title, "and focuses the panel heading");
+  assert.equal(opened.title.focusOptions.preventScroll, true);
+
+  // the package's files arrive: same export, new markup
+  state.reportExport.status = "ready";
+  const ready = panelAt(72, 2835);
+  doc.activeElement = opened.title;
+  redraw(ready);
+  assert.equal(doc.activeElement, ready.title, "focus stays on the heading when the files arrive");
+  assert.deepEqual(ready.scrolled, [], "a redraw of the same export does not scroll again");
+
+  // leaving a file out redraws: focus stays on that box
+  const box = element({ "data-action": "report-export-toggle", "data-path": "tables/b.tsv" }, 400, 20, true);
+  const after = [element({ "data-action": "report-export-toggle", "data-path": "tables/a.tsv" }, 0, 0, true),
+    element({ "data-action": "report-export-toggle", "data-path": "tables/b.tsv" }, 0, 0, true)];
+  doc.activeElement = box;
+  redraw(panelAt(72, 2900, after));
+  assert.equal(doc.activeElement, after[1], "a redraw gives focus back to the control that had it");
+  assert.equal(after[1].focusOptions.preventScroll, true);
+
+  // focus elsewhere on the page is not taken
+  doc.activeElement = element({ "data-action": "report-select" }, 900, 20);
+  redraw(panelAt(72, 2900, after));
+  assert.equal(doc.activeElement, doc.body, "focus outside the panel is left alone");
+
+  // Close: focus returns to the Export button, brought back into view
+  const close = element({ "data-action": "report-export-close" }, 80, 30, true);
+  click(close);
+  state.reportExport = null;
+  doc.activeElement = close;
+  redraw(null);
+  assert.equal(doc.activeElement, doc.summary, "Close gives focus back to the Export button");
+  assert.deepEqual(doc.summary.scrolled, [{ block: "center", behavior: "instant" }]);
+
+  // a panel that is already on screen (desktop: 638 px of 900) is not moved
+  context.window.innerHeight = 900;
+  state.reportExport = { audience: "people", status: "ready", list: [], error: "" };
+  const desktop = panelAt(638, 176);
+  redraw(desktop);
+  assert.deepEqual(desktop.scrolled, [], "a panel already in view is focused without scrolling");
+  assert.equal(doc.activeElement, desktop.title);
+
+  // ...but one that is still preparing will grow: its buttons must fit too
+  state.reportExport = { audience: "ai", status: "preparing", list: [], error: "" };
+  const growing = panelAt(720, 150);
+  redraw(growing);
+  assert.deepEqual(growing.scrolled, [{ block: "start", behavior: "instant" }], "room is made for the buttons of a panel still preparing");
+
+  // closed by another action (a step is unticked): the Export button does not take focus
+  doc.summary.scrolled = [];
+  click(element({ "data-action": "report-select" }, 900, 20));
+  state.reportExport = null;
+  doc.activeElement = doc.body;
+  redraw(null);
+  assert.equal(doc.activeElement, doc.body, "only Close moves focus to the Export button");
+  assert.deepEqual(doc.summary.scrolled, []);
+
+  // the heading can take focus, and has no id: app.js restores focus by id
+  // after a redraw without preventScroll, which would pull the page back
+  state.reportExport = { audience: "people", status: "ready", list: [], error: "" };
+  const panelHtml = live.render(state).match(/<section class="report-export-panel"[\s\S]*?<\/section>/)[0];
+  assert.match(panelHtml, /<h2 tabindex="-1" data-report-export-title>Export · For people<\/h2>/);
+  assert.doesNotMatch(panelHtml, /<h2[^>]*\bid=/);
+  state.reportExport = null;
+}
+
+// On a phone the Export menu was as wide as its 96 px button: ui-kit.css
+// loads after report.css, so .report-export-menu { position: static } lost to
+// .export-menu { position: relative } and the list stayed anchored to the button.
+{
+  const sheets = Array.from(read("index.html").matchAll(/href="\.\/([\w-]+\.css)"/g), function (match) { return match[1]; });
+  assert.ok(sheets.indexOf("ui-kit.css") > sheets.indexOf("report.css"), "ui-kit.css loads after report.css");
+  assert.match(read("ui-kit.css"), /\n\.export-menu \{\s*position: relative;/);
+  const phone = read("report.css").match(/@media \(max-width: 680px\) \{[\s\S]*?\n\}\n/)[0];
+  assert.match(phone, /\.report-actions \.report-export-menu \{\s*position: static;/,
+    "the phone rule needs two classes to outrank ui-kit.css's .export-menu");
+  assert.match(phone, /\.report-export-menu \.export-menu-list \{\s*right: auto;\s*left: 0;\s*width: min\(320px, 100%\);\s*min-width: 0;/,
+    "the list takes the actions row's width, up to 320px");
+}
+
+// The Import check page is titled as its sidebar entry, and a row header
+// (a file name, a dataset label) is shown as written.
+{
+  const overview = read("overview-page.js");
+  assert.match(overview, /<h1>Import check<\/h1>/);
+  assert.doesNotMatch(overview, /<h1>Validation<\/h1>/);
+  assert.match(read("app.js"), /id: "validation", label: "Import check"/, "the sidebar calls the page Import check");
+  assert.match(overview, /<th scope=\\"row\\">" \+ escape\(dataset\.fileName/, "the File column is a row header");
+  assert.match(read("ui-kit.css"), /tbody th\[scope="row"\] \{\s*letter-spacing: 0;\s*text-transform: none;/,
+    "row headers are not upper-cased: file names are case-sensitive");
+}
+
+// "Download all (…, ZIP)" states the size of the ZIP: the files, manifest.json
+// and the ZIP's own records. It used to add up the files only.
+context.TextEncoder = TextEncoder;
+context.window.crypto = globalThis.crypto;
+const results = context.window.Hyb2Results;
+const exportRecord = results.build(state, {});
+const exportFiles = results.files(exportRecord, "ai", { exclude: { "report.md": true } });
+const exportEntries = exportFiles.map(function (file) {
+  return { path: file.path, mediaType: file.mediaType, description: file.description, bytes: Buffer.byteLength(file.text) };
+});
+state.reportExport = { audience: "ai", status: "ready", error: "", list: exportEntries.map(function (entry) {
+  return { path: entry.path, description: entry.description, fields: [], bytes: entry.bytes, excluded: false, required: false };
+}).concat([{ path: "report.md", description: "", fields: [], bytes: 999, excluded: true, required: false },
+  { path: "manifest.json", description: "", fields: [], bytes: 0, excluded: false, required: true }]) };
+const zipLabel = context.window.Hyb2Report.render(state).match(/data-action="report-export-zip">([^<]*)</)[1];
+state.reportExport = null;
+
+results.withManifest(exportFiles, exportRecord).then(function (packaged) {
+  const actual = results.zipBytes(packaged, "hyb2-result").length;
+  assert.equal(JSON.parse(packaged[packaged.length - 1].text).leftOutByResearcher[0], "report.md");
+  assert.equal(results.packageBytes(exportEntries, exportRecord, "hyb2-result", exportFiles.omitted), actual,
+    "packageBytes gives the size of the ZIP before it is built");
+  // the panel's list carries no media types, so the page's figure is within a few bytes per file
+  const listed = exportEntries.map(function (entry) { return { path: entry.path, description: entry.description, bytes: entry.bytes }; });
+  assert.ok(Math.abs(results.packageBytes(listed, exportRecord, "hyb2-result", exportFiles.omitted) - actual) <= 10 * listed.length);
+  const content = exportEntries.reduce(function (sum, entry) { return sum + entry.bytes; }, 0);
+  assert.ok(actual > content, "the ZIP is larger than its files");
+  const shown = zipLabel.match(/^Download all \(about ([\d.,]+) (B|KB|MB), ZIP\)$/);
+  assert.ok(shown, "the size on the button is marked as approximate: " + zipLabel);
+  const shownBytes = Number(shown[1].replace(/,/g, "")) * Math.pow(1024, ["B", "KB", "MB"].indexOf(shown[2]));
+  assert.ok(Math.abs(shownBytes - actual) <= actual * 0.006, zipLabel + " must be the ZIP's size (" + actual + " B) to three digits");
+  assert.ok(Math.abs(shownBytes - content) > actual * 0.006, "the fixture must tell the ZIP's size from the sum of its files");
+  console.log("Report render contract passed.");
+});

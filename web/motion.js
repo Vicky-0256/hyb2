@@ -904,6 +904,8 @@
       return;
     }
     new MutationObserver(onRender).observe(app, { childList: true });
+    // app.js redraws around a kept control without replacing #app's children
+    app.addEventListener("hyb2:redrawn", onRender);
     if (app.firstElementChild) {
       onRender();
     }

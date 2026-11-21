@@ -15,3 +15,26 @@
     display: none;
   }
 }
+
+/* Up to 859px (phone landscape, small tablets) the dataset choice was cut
+   to "All 4 datasets merge"; "Desktop app" gives way to it (still in Help). */
+@media (min-width: 768px) and (max-width: 859px) {
+  .workspace-header:has(.header-scope) .desktop-entry {
+    display: none;
+  }
+}
+
+/* Tap targets on touch screens and narrow layouts are at least 32px tall:
+   structure result views, the header dataset select, Compare's "Remove"
+   and the landing "Local only" chip were 28-29px. Wide pointer layouts keep
+   their denser controls. */
+@media (pointer: coarse), (max-width: 1024px) {
+  .structure-view-option,
+  .header-scope select,
+  #analysis-scope,
+  /* doubled class: outranks fix-compare.css's 28px rule, loaded later */
+  .comparison-dataset-table td.compare-dataset-action .quiet-button.quiet-button,
+  .local-chip {
+    min-height: 32px;
+  }
+}

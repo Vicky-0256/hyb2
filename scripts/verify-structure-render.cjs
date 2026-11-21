@@ -199,12 +199,19 @@ assert.equal(context.window.Hyb2StructureUI.handleAction("set-structure-view", s
 }, { dataset: { viewMode: "radial" } }), true);
 assert.equal(state.structure.viewMode, "radial");
 assert.equal(viewRenderCount, 1);
+const longResult = Object.assign({}, state.structure.result, { sequence: "A".repeat(701) });
 const longResultHtml = context.window.Hyb2Pages.renderStructureResult
-  ? context.window.Hyb2Pages.renderStructureResult(Object.assign({}, state.structure.result, { sequence: "A".repeat(701) }), null)
+  ? context.window.Hyb2Pages.renderStructureResult(longResult, null, "arc")
   : "";
 if (longResultHtml) {
   assert.match(longResultHtml, /sequence baseline/);
-  assert.doesNotMatch(longResultHtml, /Click a nucleotide marker/);
+  assert.doesNotMatch(longResultHtml, /Select a nucleotide marker/);
+  // wording that fits touch screens too
+  assert.doesNotMatch(longResultHtml, /Click (a|along|or)/);
+  // The folded drawing has no markers to pick: its inspector says where to go.
+  const foldedHtml = context.window.Hyb2Pages.renderStructureResult(longResult, null, "folded");
+  assert.match(foldedHtml, /switch to the Arc, Radial, Circular or Matrix view/);
+  assert.doesNotMatch(foldedHtml, /Select a marker to inspect|use the arrow keys along the sequence baseline to inspect/);
 }
 
 const report = context.window.Hyb2StructureUI.structureReport(state, state.structure.result);
@@ -288,6 +295,25 @@ assert.equal(workerInstances.at(-1).message.randomFoldCount, 10);
 assert.equal(workerInstances.at(-1).message.seed, "guided-contract");
 context.window.Hyb2Structure.cancel(guidedState);
 
+// Folding program: ViennaRNA runs in the browser; mfold 3.6 is offered for
+// HYB2 Desktop and the command line, and refuses to start here.
+assert.match(guidedSetupHtml, /Folding program/);
+assert.match(guidedSetupHtml, /mfold 3\.6 · HYB2 Desktop or command line/);
+assert.doesNotMatch(guidedSetupHtml, /mfold 3\.6 cannot run in a browser/);
+guidedState.structure.foldProgram = "mfold";
+const mfoldSetupHtml = context.window.Hyb2Pages.renderStructure(guidedState);
+assert.match(mfoldSetupHtml, /mfold 3\.6 cannot run in a browser/);
+assert.match(mfoldSetupHtml, /hyb2 … -r 2/);
+assert.match(mfoldSetupHtml, /<option value="mfold" selected/);
+const mfoldWorkersBefore = workerInstances.length;
+const mfoldToasts = [];
+context.window.Hyb2Structure.predict(guidedState, { render: function () {}, showToast: function (m) { mfoldToasts.push(m); } });
+assert.equal(workerInstances.length, mfoldWorkersBefore, "mfold started a browser worker");
+assert.match(String(guidedState.structure.message) + mfoldToasts.join(" "), /mfold 3\.6 cannot run in a browser/);
+guidedState.structure.foldProgram = "viennarna";
+guidedState.structure.status = "idle";
+guidedState.structure.message = "";
+
 guidedState.structure.status = "complete";
 guidedState.structure.result = {
   algorithm: "COMRADES(ViennaRNA)",
@@ -351,7 +377,9 @@ assert.equal(guidedReport.methodScope.supportBasedStructureScoring, true);
 assert.equal(guidedReport.methodScope.unafoldExecution, "external-cli-only");
 assert.match(context.window.Hyb2StructureUI.evidenceTsv(guidedState.structure.result), /1\t16\t2\tread-1/);
 assert.match(context.window.Hyb2StructureUI.constraintsTsv(guidedState.structure.result), /F 1 16 1/);
-assert.match(context.window.Hyb2StructureUI.ensembleTsv(guidedState.structure.result), /1\tyes\tyes\t-8\.2\t4/);
+assert.match(context.window.Hyb2StructureUI.ensembleTsv(guidedState.structure.result), /1\tyes\tyes\t-8\.20\t4/);
+// float32 energies from ViennaRNA print with two decimals, not -11.899999618530273
+assert.match(context.window.Hyb2StructureUI.ensembleTsv({ randomisation: { selectedRun: 0, structures: [{ run: 0, energy: Math.fround(-11.9), comradesScore: 1, matchedEvidencePairs: 0, rejectedStemConstraints: 0, dotBracket: "..." }] } }), /\t-11\.90\t1\t/);
 
 const cplfoldState = structureState("none", "");
 cplfoldState.summary = { rnaNames: ["RNA_A"], fileName: "cplfold.hyb", fileSize: 84, sha256: "cplfold-sha" };
@@ -589,6 +617,10 @@ assert.equal(cplfoldReport.prediction.foldElapsedMs, 300);
 assert.equal(cplfoldReport.prediction.evidenceMode, "hyb-blocks");
 assert.match(context.window.Hyb2StructureUI.cplfoldEvidenceTsv(cplfoldState.structure.result), /3\t20\t0\.800000/);
 assert.match(context.window.Hyb2StructureUI.cplfoldCandidatesTsv(cplfoldState.structure.result), /2\tyes\tphase1\tnested/);
+// energies and the fold score: 2 decimals (as the pairs TSV), NA when missing
+context.window.Hyb2StructureUI.cplfoldCandidatesTsv(cplfoldState.structure.result).trim().split("\n").slice(1).forEach(function (line) {
+  line.split("\t").slice(4, 8).forEach(function (cell) { assert.match(cell, /^(-?\d+\.\d{2}|NA)$/, "candidate energy/score cell " + cell); });
+});
 const cplfoldPairsTsv = context.window.Hyb2StructureUI.basePairTsv(cplfoldState.structure.result);
 assert.match(cplfoldPairsTsv, /rna_cofold_evidence\tmfe_kcal_per_mol\tevidence_kind\tevidence_support/);
 assert.match(cplfoldPairsTsv, /\t\tlog1p_hyb_bonus\t0\.2\tprimary\t-4\.10\tCPLfold/);

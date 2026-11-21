@@ -30,11 +30,42 @@
     } else {
       target.replaceChildren(buildStructureDiagram(result, state.structure.selectedNucleotide, viewMode));
       bindNucleotideMarkers(target, state, api);
+      if (viewMode === "arc") {
+        keepSidewaysScroll(target, result);
+      }
     }
     observeDiagramSize(target);
     if (revealedResults && !revealedResults.has(result)) {
       revealedResults.add(result);
       revealNewResult(result);
+    }
+  }
+
+  // On a phone the arc view keeps its drawn width and scrolls sideways in
+  // its box (fix-structure.css). Tapping a marker redraws the whole page,
+  // so the new box takes over the old one's scroll position; a new result
+  // starts from the left. The line above the box (shown by the same phone
+  // rule) says that it scrolls.
+  let arcScroll = { result: null, left: 0 };
+
+  function keepSidewaysScroll(target, result) {
+    if (arcScroll.result === result) {
+      target.scrollLeft = arcScroll.left;
+    } else {
+      arcScroll = { result: result, left: 0 };
+    }
+    if (typeof target.addEventListener === "function") {
+      target.addEventListener("scroll", function () {
+        arcScroll.left = target.scrollLeft;
+      }, { passive: true });
+    }
+    const before = target.previousElementSibling;
+    const hinted = before && before.classList && before.classList.contains("structure-scroll-hint");
+    if (!hinted && target.parentNode && typeof target.parentNode.insertBefore === "function") {
+      const hint = document.createElement("p");
+      hint.className = "card-note structure-scroll-hint";
+      hint.textContent = "This diagram is wider than the screen: swipe sideways to see the rest.";
+      target.parentNode.insertBefore(hint, target);
     }
   }
 
@@ -82,9 +113,11 @@
     }
   }
 
+  // Energies read the same on this page, on the Report and in the DBN/CT
+  // files: two decimals and an ASCII minus ("-25.50").
   function formatEnergyText(value) {
     const number = Number(value);
-    return Number.isFinite(number) ? number.toFixed(1).replace("-", "\u2212") : "—";
+    return Number.isFinite(number) ? number.toFixed(2) : "—";
   }
 
   // E6: the diagram follows its container's width (window resize, setup
@@ -263,6 +296,23 @@
       api.showToast("Region updated. Review the interval, then run IRIS.");
       return true;
     }
+    if (action === "structure-use-hyb-evidence") {
+      // Back from the default setup's sequence-only fallback (analysis-pages.js
+      // syncDefaultStructureEvidence). From here the evidence mode is the
+      // user's own, so Predict waits for a region that holds HYB rows.
+      if (!state.structure || state.structure.status === "running") return true;
+      if (window.Hyb2Structure) window.Hyb2Structure.reset(state, { clearConstraints: true });
+      delete state.structure.evidenceFallback;
+      state.structure.evidenceChosen = true;
+      state.structure.cplfoldEvidence = "hyb-blocks";
+      state.structure.source = "reference";
+      api.render();
+      // the button is gone: focus moves to the control it changed
+      const control = typeof document !== "undefined" && typeof document.querySelector === "function"
+        ? document.querySelector('[data-feature="structure-control"][data-key="cplfoldEvidence"]') : null;
+      if (control && typeof control.focus === "function") control.focus();
+      return true;
+    }
     if (action === "predict-structure") {
       if (!window.Hyb2Structure) {
         api.showToast("The local structure predictor is unavailable in this browser.");
@@ -374,7 +424,7 @@
 
     if (action === "download-iris-ensemble" && result.engine === "IRIS") {
       const rows = [["member", "selected", "weight", "coefficient", "energy_kcal_per_mol", "dot_bracket"]];
-      (result.candidates || []).forEach(function(c,i) { rows.push([i+1, i === result.selectedCandidate ? "yes" : "no", c.weight, c.coefficient, c.energy, c.dotBracket]); });
+      (result.candidates || []).forEach(function(c,i) { rows.push([i+1, i === result.selectedCandidate ? "yes" : "no", c.weight, c.coefficient, Number.isFinite(Number(c.energy)) ? Number(c.energy).toFixed(2) : c.energy, c.dotBracket]); });
       api.download("iris-ensemble.tsv", rows.map(function(row) { return row.join("\t"); }).join("\n") + "\n", "text/tab-separated-values");
       api.showToast("IRIS weighted ensemble downloaded locally."); return true;
     }
@@ -590,7 +640,7 @@
       iris: result.engine === "IRIS" ? {parameters: result.parameters, ensemble: result.ensemble, members: result.candidates, selectedMember: result.selectedCandidate, warnings: result.warnings} : undefined,
       application: "HYB2 Web Lite",
       version: "0.5.0",
-      buildCommit: window.HYB2_BUILD && window.HYB2_BUILD.commit || null,
+      buildCommit: window.HYB2_BUILD && window.HYB2_BUILD.commit || "unknown",
       generatedLocally: true,
       // The files the fold's HYB evidence came from (else the analysis scope);
       // with several, Hyb2UI.sourceHyb lists each file.
@@ -928,7 +978,7 @@
     appendSelectedRingRay(svg, length, centerX, centerY, radius, selectedNucleotide, colors);
     appendCircularTicks(svg, length, centerX, centerY, radius, colors);
     appendRingMarkers(svg, result, selectedNucleotide, centerX, centerY, radius, colors);
-    legend(svg, colors, result, { x: 44, y: 24 });
+    legend(svg, colors, result, { x: 44, y: 24, roomy: true });
     return svg;
   }
 
@@ -985,7 +1035,7 @@
     appendSelectedRingRay(svg, length, centerX, centerY, radius, selectedNucleotide, colors);
     appendCircularTicks(svg, length, centerX, centerY, radius, colors);
     appendRingMarkers(svg, result, selectedNucleotide, centerX, centerY, radius, colors);
-    legend(svg, colors, result, { x: 44, y: 24 });
+    legend(svg, colors, result, { x: 44, y: 24, roomy: true });
     return svg;
   }
 
@@ -1164,12 +1214,25 @@
   }
 
   function appendCircularTicks(svg, length, centerX, centerY, radius, colors) {
+    // P4: the first and last positions meet at the top of the ring, where
+    // "1" and "600" were drawn over each other; they now sit either side of
+    // the top tick ("600 | 1"), reading clockwise.
+    const endsMeet = length > 1 && 1 / length < 0.08;
     tickPositions(length).forEach(function (position) {
       const inner = circlePoint(position, length, centerX, centerY, radius + 4);
       const outer = circlePoint(position, length, centerX, centerY, radius + 13);
-      const label = circlePoint(position, length, centerX, centerY, radius + 28);
+      const label = circlePoint(position, length, centerX, centerY, radius + 32);
+      let anchor = "middle";
+      let labelX = label.x;
+      if (endsMeet && position === 1) {
+        anchor = "start";
+        labelX = outer.x + 4;
+      } else if (endsMeet && position === length) {
+        anchor = "end";
+        labelX = outer.x - 4;
+      }
       svg.appendChild(element("line", { x1: inner.x, y1: inner.y, x2: outer.x, y2: outer.y, stroke: colors.muted, "stroke-width": 1 }));
-      svg.appendChild(element("text", { x: label.x, y: label.y + 4, fill: colors.muted, "font-size": 11, "text-anchor": "middle", "font-family": "ui-monospace, monospace" }, String(position)));
+      svg.appendChild(element("text", { class: "structure-ring-label", x: labelX, y: label.y + 4, fill: colors.muted, "font-size": 11, "text-anchor": anchor, "font-family": "ui-monospace, monospace" }, String(position)));
     });
   }
 
@@ -1541,10 +1604,13 @@
       : guided
       ? [{ label: "high evidence", color: colors.warning }, { label: "low evidence", color: colors.primary }, { label: "MFE only", color: colors.lineStrong }]
       : [{ label: "G–C", color: colors.primary }, { label: "A–U", color: colors.accent }, { label: "G–U", color: colors.muted }];
-    items.forEach(function (item, index) {
-      const x = startX + index * spacing;
+    // settings.roomy (ring views): each item leaves room for its label at
+    // the larger phone size (fix-structure.css, about 20 units of monospace)
+    let x = startX;
+    items.forEach(function (item) {
       svg.appendChild(element("line", { x1: x, y1: y, x2: x + 17, y2: y, stroke: item.color, "stroke-width": 2.5, "stroke-linecap": "round" }));
-      svg.appendChild(element("text", { x: x + 24, y: y + 4, fill: colors.muted, "font-size": 11, "font-family": "ui-monospace, monospace" }, item.label));
+      svg.appendChild(element("text", { class: "structure-legend-label", x: x + 24, y: y + 4, fill: colors.muted, "font-size": 11, "font-family": "ui-monospace, monospace" }, item.label));
+      x += settings.roomy ? Math.max(spacing, 24 + item.label.length * 12.5 + 20) : spacing;
     });
   }
 
@@ -1694,7 +1760,8 @@
         entry.run,
         entry.randomised ? "yes" : "no",
         entry.run === randomisation.selectedRun ? "yes" : "no",
-        entry.energy,
+        // ViennaRNA energies are float32; print them as the UI, DBN and CT do
+        Number.isFinite(Number(entry.energy)) && entry.energy !== null && entry.energy !== "" ? Number(entry.energy).toFixed(2) : "",
         entry.comradesScore,
         entry.matchedEvidencePairs,
         (entry.acceptedStemConstraints || []).join(","),
@@ -1708,18 +1775,26 @@
   function cplfoldEvidenceTsv(result) {
     const evidence = result.evidence || {};
     const sequenceLength = result.sequence ? String(result.sequence).length : Number(evidence.sequenceLength) || 0;
+    const kernel = evidence.supportKernel || "gaussian";
+    // The value column keeps its name for every support kernel; the comments say which one built it.
     const rows = [
       "# HYB2 CPLfold bonus matrix",
       "# sequence_length=" + sequenceLength,
       "# coordinate_system=prepared-sequence-1-based-inclusive",
-      "# transform=IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
-      ["prepared_position_1", "prepared_position_2", "log1p_gaussian_hyb_bonus"].join("\t")
+      "# transform=" + (kernel !== "gaussian" && evidence.transform ? evidence.transform
+        : "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p")
     ];
-    if (result.cutpoint) rows.splice(4, 0, "# cutpoint=" + result.cutpoint, "# strand_lengths=" + result.cutpoint + "," + (sequenceLength - result.cutpoint), "# cofold_evidence_smoothing=within_each_strand");
+    if (kernel !== "gaussian") rows.push("# support_kernel=" + kernel);
+    if (result.cutpoint) rows.push("# cutpoint=" + result.cutpoint, "# strand_lengths=" + result.cutpoint + "," + (sequenceLength - result.cutpoint), "# cofold_evidence_smoothing=within_each_strand");
+    rows.push(["prepared_position_1", "prepared_position_2", "log1p_gaussian_hyb_bonus"].join("\t"));
     (evidence.bonusEntries || []).forEach(function (entry) {
       rows.push([entry.one, entry.two, result.cutpoint ? Number(entry.value).toPrecision(17) : Number(entry.value).toFixed(8)].join("\t"));
     });
     return rows.join("\n") + "\n";
+  }
+
+  function kcal(value) {
+    return value != null && value !== "" && Number.isFinite(Number(value)) ? Number(value).toFixed(2) : "NA";
   }
 
   function cplfoldCandidatesTsv(result) {
@@ -1730,10 +1805,11 @@
         index === Number(result.selectedCandidate || 0) ? "yes" : "no",
         candidate.type,
         candidate.topology,
-        candidate.energy == null ? "" : candidate.energy,
-        candidate.effectiveEnergy == null ? "" : candidate.effectiveEnergy,
-        candidate.phase1Energy == null ? "" : candidate.phase1Energy,
-        candidate.score == null ? "" : candidate.score,
+        // kcal/mol (and the kcal/mol-scale fold score) to 2 decimals, as the pairs TSV; NA when missing
+        kcal(candidate.energy),
+        kcal(candidate.effectiveEnergy),
+        kcal(candidate.phase1Energy),
+        kcal(candidate.score),
         (candidate.pairs || []).length,
         candidate.crossingPairs || 0,
         withStrandBreak(candidate.dotBracket, result.cutpoint)

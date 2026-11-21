@@ -128,6 +128,25 @@
   font-size: 18px;
 }
 
+/* report-page.js brings the panel into view and focuses its heading when an
+   export is chosen, and gives focus back to the Export button on Close: both
+   stop clear of the fixed header */
+.report-export-panel,
+.report-export-menu > summary {
+  scroll-margin-top: calc(var(--header-h, 60px) + 12px);
+}
+
+.hyb2-embedded .report-export-panel,
+.hyb2-embedded .report-export-menu > summary {
+  scroll-margin-top: 12px;
+}
+
+.report-export-panel h2:focus-visible {
+  outline: 2px solid var(--primary-ink);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 .report-export-actions {
   display: flex;
   flex-wrap: wrap;
@@ -210,12 +229,91 @@
   border-bottom: 2px solid var(--report-ink);
   color: var(--report-ink);
   font-size: 22px;
-  scroll-margin-top: calc(var(--header-h, 60px) + var(--report-contents-h, 76px) + 20px);
+  /* --report-contents-now is the Contents panel's measured height
+     (report-page.js measureContents): the panel wraps to three lines beside
+     the sidebar on a tablet, where the fixed --report-contents-h left the
+     heading 40 px under it. The fixed figure stays as the fallback (and for
+     the offline copy, which has no script). */
+  scroll-margin-top: calc(var(--header-h, 60px) + var(--report-contents-now, var(--report-contents-h, 76px)) + 20px);
 }
 
 .hyb2-embedded .report-part,
 .report-offline-main .report-part {
-  scroll-margin-top: calc(var(--report-contents-h, 76px) + 20px);
+  scroll-margin-top: calc(var(--report-contents-now, var(--report-contents-h, 76px)) + 20px);
+}
+
+/* P3: Tab and Shift+Tab left focused controls under the sticky Contents bar
+   (under the fixed header). scroll-margin only moves a scroll that happens; a control that is on
+   screen but under the header and Contents bar counts as visible and is
+   not scrolled at all. scroll-padding on the scroller takes the bars out
+   of the visible area, so focusing such a control does scroll it clear. */
+html:has(.workspace-main [data-report-page]) {
+  scroll-padding-top: calc(var(--header-h, 60px) + var(--report-contents-now, 76px) + 12px);
+}
+
+@media (max-width: 767px) {
+  html:has(.workspace-main [data-report-page]) {
+    scroll-padding-bottom: 66px;
+  }
+}
+
+/* the padding now clears the bars, so the per-element margins above only
+   add the gap (scroll-margin and scroll-padding add up). Specific enough
+   to beat layout.css's header margin, which loads after this file. */
+html:has(.workspace-main [data-report-page]) [data-report-page] :is(a[href], button, input, select, textarea, summary, [tabindex="0"]) {
+  scroll-margin-top: 8px;
+  scroll-margin-bottom: 0;
+}
+
+html:has(.workspace-main [data-report-page]) .report-part {
+  scroll-margin-top: 8px;
+}
+
+html:has(.workspace-main [data-report-page]) :is(.report-export-panel, .report-export-menu > summary) {
+  scroll-margin-top: 8px;
+}
+
+/* P3: a short landscape phone (844 x 390) wrapped Contents to three lines,
+   141 px of a 390 px screen; it takes the phone's single scrolling row. */
+@media screen and (max-height: 520px) {
+  .report-page {
+    --report-contents-h: 46px;
+  }
+
+  .report-contents {
+    flex-wrap: nowrap;
+    gap: 12px;
+    padding: 9px 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .report-contents::-webkit-scrollbar {
+    display: none;
+  }
+
+  .report-contents ol {
+    flex-wrap: nowrap;
+    gap: 16px;
+  }
+
+  .report-contents li {
+    white-space: nowrap;
+  }
+
+  .report-contents > .report-note-inline {
+    display: none;
+  }
+}
+
+/* The offline copy has no script to measure its Contents panel, which wraps
+   to two or three lines between phone and desktop widths (up to 128 px):
+   the fixed figure covers the tallest case there. */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .report-offline-main .report-page {
+    --report-contents-h: 128px;
+  }
 }
 
 .report-part span {
@@ -303,7 +401,9 @@
 
 .report-hero-meta code,
 .report-table code,
-.report-sequence code {
+.report-sequence code,
+.report-data-note code,
+.report-review-list code {
   font-family: var(--font-mono);
 }
 
@@ -536,6 +636,40 @@
   font-weight: 500;
 }
 
+/* per-file rows continue the definition list above them; file names and
+   64-character SHA-256 digests wrap inside the card */
+.report-dataset-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-dataset-files li {
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--report-line);
+  overflow-wrap: anywhere;
+  color: var(--report-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.report-dataset-files strong {
+  color: var(--report-ink);
+  font-weight: 650;
+}
+
+.report-dataset-files .is-mono {
+  color: var(--report-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+}
+
+/* the digest takes its own line, so it breaks at the same place in every row */
+.report-dataset-files .is-mono:last-child {
+  display: block;
+}
+
 .report-table-wrap {
   width: 100%;
   margin-top: 12px;
@@ -590,6 +724,17 @@
   overflow-wrap: normal;
 }
 
+/* Name-led summary tables (top RNAs, top RNA pairs: at most four columns)
+   show the whole name on every screen; a report is read, not hovered, and
+   an RNA name cut to "ZIKV_FrenchPolynesian_KJ776791-2_..." cannot be cited. */
+.report-table td.cell-truncate:first-child:nth-last-child(-n + 4),
+.report-table td.cell-truncate:first-child:nth-last-child(-n + 4) + td.cell-truncate {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .report-table code {
   overflow-wrap: anywhere;
   color: var(--report-ink);
@@ -612,6 +757,17 @@
   display: block;
   width: 100%;
   height: auto;
+}
+
+/* P1: the differential map (deseq-card.js panelSvg) comes with a fixed
+   640 x 660 size and no class; on a phone the box cut off its right side
+   and title. It scales to the box like the report's own figures. */
+.report-visual > svg:not(.report-svg) {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  margin: 0 auto;
 }
 
 .report-visual .report-note-inline {
@@ -706,15 +862,19 @@
     margin-top: 18px;
   }
 
-  /* the menu opens from the left edge of the actions row, inside the screen */
-  .report-export-menu {
+  /* the menu opens from the left edge of the actions row, inside the screen.
+     Two classes: ui-kit.css loads after this file, and its .export-menu
+     { position: relative } left the list anchored to the Export button,
+     as wide as the button */
+  .report-actions .report-export-menu {
     position: static;
   }
 
   .report-export-menu .export-menu-list {
     right: auto;
     left: 0;
-    min-width: min(300px, 100%);
+    width: min(320px, 100%);
+    min-width: 0;
   }
 
   .report-page {
@@ -935,6 +1095,65 @@
   overflow-wrap: anywhere;
 }
 
+/* P2: a number never breaks mid-digit ("5,72 / 0", "5.42e- / 5"); when the
+   names and numbers no longer fit, the table scrolls inside its box. */
+.report-subsection:not(.report-subsection--table) .report-table td.num {
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+/* the name column beside such numbers keeps a readable width (a condition
+   name was squeezed to six letters a line); the table scrolls instead */
+@media screen and (max-width: 767px) {
+  .report-subsection:not(.report-subsection--table) .report-table:has(td.num) td:first-child:not(.num) {
+    min-width: 16ch;
+  }
+}
+
+/* P1: a heading note that repeats a user label with no spaces
+   ("red = higher in ZIKV_African_Huh7_infected_48h_replicate") wraps under
+   its title instead of widening the page or cutting the title. */
+.report-subsection-heading {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.report-subsection-heading > * {
+  min-width: 0;
+}
+
+.report-note-inline {
+  overflow-wrap: anywhere;
+}
+
+/* A phone has no hover title, so a name cut to "ZIKV_…" cannot be told
+   from its neighbour: as in print, names wrap in full. The unit drops under
+   its header to leave the name room. A record table scrolls inside its card
+   anyway, so its names keep a width that reads in a few lines; a summary
+   table that leads with its names (top RNAs, pairs, partners) stays within
+   the card with its counts in view. */
+@media screen and (max-width: 767px) {
+  .report-table th .unit {
+    display: block;
+    margin-left: 0;
+  }
+
+  .report-table td.cell-truncate {
+    min-width: 28ch;
+    max-width: none;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .report-table td.cell-truncate:first-child,
+  .report-table td.cell-truncate:first-child + .cell-truncate {
+    min-width: 9ch;
+    word-break: break-all;
+  }
+}
+
 /* Researcher checks: one plain sentence each. */
 .report-review-list {
   display: grid;
@@ -997,6 +1216,88 @@
   font-size: var(--text-label);
 }
 
+/* Export file list on a phone or tablet. As a five-column table it needs
+   about 740 px: in a phone's 320 px box only "Include" and "File" showed,
+   in rows 100 px tall, and Size and Download took a sideways scroll (on a
+   tablet, Download). The table fits its box from about 930 px of window
+   width; below 960 px each file is a block: tick box, name and Download on
+   one line, then its size and what it holds. The column headings stay for
+   screen readers only. */
+@media screen and (max-width: 960px) {
+  /* the tick box now sits at the box's left edge: the box clips 10 px
+     further out so the tick box's enlarged tap area (.report-tick) is whole */
+  .report-export-panel .report-table-scroll {
+    width: auto;
+    max-width: none;
+    margin: 0 -10px;
+    padding: 0 10px;
+  }
+
+  .report-export-panel .report-table,
+  .report-export-panel .report-table tbody {
+    display: block;
+    min-width: 0;
+  }
+
+  .report-export-panel .report-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .report-export-panel .report-table tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 10px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--report-line);
+  }
+
+  .report-export-panel .report-table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .report-export-panel .report-table td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .report-export-panel .report-table td:nth-child(1) {
+    grid-area: 1 / 1;
+  }
+
+  .report-export-panel .report-table td:nth-child(2) {
+    grid-area: 1 / 2;
+  }
+
+  /* a long path wraps instead of pushing Download off the screen */
+  .report-export-panel .report-table td:nth-child(2) code {
+    white-space: normal;
+  }
+
+  .report-export-panel .report-table td:nth-child(5) {
+    grid-area: 1 / 3;
+  }
+
+  .report-export-panel .report-table td:nth-child(4) {
+    grid-area: 2 / 2 / auto / 4;
+    color: var(--report-muted);
+    text-align: left;
+  }
+
+  .report-export-panel .report-table td:nth-child(3) {
+    grid-area: 3 / 2 / auto / 4;
+    margin-top: 2px;
+    overflow-wrap: anywhere;
+  }
+}
+
 .report-selected-note {
   display: flex;
   flex-wrap: wrap;
@@ -1007,5 +1308,20 @@
 @media print {
   .report-select {
     display: none !important;
+  }
+}
+
+/* The step and export-file tick boxes are 13 px. On a touch screen the
+   label around each one takes taps within 10 px of it (a 33 px target or
+   more). The label stays an inline box: its padding above and below takes
+   no room in the line and the side margins give the side padding back, so
+   the box stays where it was, and an emptied label (print, the offline
+   copy) takes no room. */
+@media (pointer: coarse), (max-width: 767px) {
+  .report-tick {
+    position: relative;
+    z-index: 1;
+    margin: 0 -10px;
+    padding: 10px;
   }
 }

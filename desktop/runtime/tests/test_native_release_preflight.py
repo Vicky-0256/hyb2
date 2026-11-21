@@ -54,7 +54,7 @@ class PackagedSourceTests(unittest.TestCase):
             (self.repo / directory).mkdir(parents=True)
         self.write('bin/cplfold')
         self.write('web/cplfold/cplfold_web.py')
-        for name in (*self.web.WEB_MODULES, *self.web.WEB_NOTICES):
+        for name in (*self.web.REQUIRED_CPLFOLD_MODULES, *self.web.WEB_NOTICES):
             self.write('third_party/cplfold/' + name)
         self.shared = 'third_party/cplfold/Utils/shared.py'
         self.write(self.shared, 'original')
@@ -105,7 +105,66 @@ class PackagedSourceTests(unittest.TestCase):
 
     def test_source_archive_needs_no_git_metadata(self):
         self.write(self.shared, 'local edit')
+        self.write('third_party/cplfold/archive_helper.py', 'number = 1\n')
+        self.write('web/cplfold/bridge_support/nested.py', 'number = 2\n')
         self.check_selection()
+        self.assertTrue((self.root / 'browser/archive_helper.py').is_file())
+        self.assertTrue((self.root / 'browser/bridge_support/nested.py').is_file())
+
+    def test_new_core_and_bridge_modules_import_from_both_packages(self):
+        self.write('third_party/cplfold/CPLfold_parser.py', 'from new_core_helper import value\n')
+        self.write('third_party/cplfold/new_core_helper.py', 'from new_core_package.nested import value\n')
+        self.write('third_party/cplfold/new_core_package/__init__.py', '')
+        self.write('third_party/cplfold/new_core_package/nested.py', 'from split_support.core import value\n')
+        self.write('third_party/cplfold/split_support/core.py', 'value = 70\n')
+        self.write('web/cplfold/cplfold_web.py',
+                   'from CPLfold_parser import value\nfrom bridge_helper import increment\nmarker = value + increment\n')
+        self.write('web/cplfold/bridge_helper.py', 'from bridge_package.nested import increment\n')
+        self.write('web/cplfold/bridge_package/__init__.py', '')
+        self.write('web/cplfold/bridge_package/nested.py', 'from split_support.bridge import increment\n')
+        self.write('web/cplfold/split_support/bridge.py', 'increment = 3\n')
+        excluded = ['example.py', 'example_with_paris.py', 'extract_paris_scores.py', 'docs/conf.py',
+                    'tests/test_local.py', 'data/record.py', 'build-product.so']
+        for name in excluded:
+            self.write('third_party/cplfold/' + name)
+        self.track_sources()
+        self.write('third_party/cplfold/untracked_core.py')
+        self.write('web/cplfold/untracked_bridge.py')
+
+        self.stage.stage_sources(self.repo, self.native)
+        self.verify.verify_sources(self.repo, self.manifest(), self.stage)
+        package = self.root / 'browser'
+        self.web.stage_web_sources(self.repo, package, self.root / 'assets')
+        for name in [*excluded, 'untracked_core.py', 'untracked_bridge.py']:
+            self.assertFalse((package / name).exists(), name)
+        self.assertFalse((self.native / 'third_party/cplfold/untracked_core.py').exists())
+        self.assertFalse((self.native / 'web/cplfold/untracked_bridge.py').exists())
+
+        # Isolated interpreters have no import path into the original fixture.
+        archive = shutil.make_archive(str(self.root / 'browser-modules'), 'zip', root_dir=package)
+        browser_probe = 'import sys; sys.path.insert(0, sys.argv[1]); import cplfold_web; print(cplfold_web.marker)'
+        native_probe = ('import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); '
+                        'from desktop.runtime.structure import load_cplfold_web; '
+                        'print(load_cplfold_web(Path(sys.argv[2])).marker)')
+        for args in ([browser_probe, archive], [native_probe, str(ROOT.parent), str(self.native)]):
+            result = subprocess.run([sys.executable, '-I', '-B', '-c', *args],
+                                    cwd=self.root, text=True, capture_output=True)
+            self.assertEqual((result.returncode, result.stdout.strip()), (0, '73'), result.stderr)
+
+    def test_conflicting_module_and_package_do_not_overwrite_each_other(self):
+        self.write('third_party/cplfold/ambiguous.py')
+        for child in ('__init__.py', 'nested.py'):
+            with self.subTest(child=child):
+                name = 'web/cplfold/ambiguous/' + child
+                self.write(name)
+                with self.assertRaisesRegex(ValueError, 'conflicting browser modules: .*ambiguous'):
+                    self.web.stage_web_sources(self.repo, self.root / 'browser', self.root / 'assets')
+                (self.repo / name).unlink()
+
+    def test_browser_still_requires_utils(self):
+        shutil.rmtree(self.repo / 'third_party/cplfold/Utils')
+        with self.assertRaisesRegex(ValueError, 'missing: third_party/cplfold/Utils'):
+            self.web.stage_web_sources(self.repo, self.root / 'browser', self.root / 'assets')
 
     def test_preflight_finds_missing_extra_and_changed_sources(self):
         self.track_sources()

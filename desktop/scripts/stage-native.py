@@ -15,11 +15,11 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from bundle_sources import selected_files
+from bundle_sources import CPLFOLD_SOURCE_DIRS, selected_files
 
 # Repository sources copied into every runtime (verify-native-release checks they are current).
 # web/assets/examples is the example data set (desktop/runtime/example.py).
-SOURCE_DIRS = ['desktop/runtime', 'desktop/task-runner', 'desktop/spec', 'third_party/cplfold', 'web/cplfold', 'pipeline',
+SOURCE_DIRS = ['desktop/runtime', 'desktop/task-runner', 'desktop/spec', *CPLFOLD_SOURCE_DIRS, 'pipeline',
                'web/assets/examples', 'third_party/iris']
 PINS = {"numpy": "1.24.4", "numba": "0.58.1", "llvmlite": "0.41.1"}
 PROBE = '''import json,sys,platform,numpy,numba,llvmlite

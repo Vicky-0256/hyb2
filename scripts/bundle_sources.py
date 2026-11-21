@@ -10,7 +10,7 @@ EXCLUDED_DIRS = {".git", "__pycache__", "tests", "data"}
 EXCLUDED_SUFFIXES = (".pyc", ".pyo", ".nbc", ".nbi")
 
 
-def selected_files(root, directories, required_files):
+def selected_files(root, directories, required_files, *, include=None):
     """List package inputs. An extracted source archive supplies its own file tree."""
     root = Path(root).resolve()
     for name in directories:
@@ -44,6 +44,8 @@ def selected_files(root, directories, required_files):
         if (EXCLUDED_DIRS.intersection(parts) or parts[-1] == ".DS_Store"
                 or parts[-1].endswith(EXCLUDED_SUFFIXES)):
             continue
+        if include is not None and name not in required_files and not include(name):
+            continue
         source = root / name
         if not source.is_file() or not source.resolve().is_relative_to(root):
             raise ValueError(f"package source is missing or outside the source tree: {name}")
@@ -52,7 +54,11 @@ def selected_files(root, directories, required_files):
 
 
 CPLFOLD = "third_party/cplfold"
-WEB_MODULES = ("CPLfold.py", "CPLfold_parser.py", "CPLcofold.py", "CPLcofold_parser.py")
+WEB_BRIDGE = "web/cplfold"
+CPLFOLD_SOURCE_DIRS = (CPLFOLD, WEB_BRIDGE)
+REQUIRED_CPLFOLD_MODULES = ("CPLfold.py", "CPLfold_parser.py", "CPLcofold.py", "CPLcofold_parser.py")
+# These upstream command-line programs use example data or the optional BAM toolchain.
+LOCAL_PROGRAMS = {"example.py", "example_with_paris.py", "extract_paris_scores.py"}
 WEB_NOTICES = {
     "LICENSE": "CPLfold-LICENSE.txt",
     "THIRD_PARTY_NOTICES.md": "CPLfold-THIRD_PARTY_NOTICES.md",
@@ -63,20 +69,49 @@ WEB_NOTICES = {
 }
 
 
+def web_package_path(name):
+    source_root = WEB_BRIDGE if name.startswith(WEB_BRIDGE + "/") else CPLFOLD
+    relative = PurePosixPath(name).relative_to(source_root)
+    if source_root == CPLFOLD:
+        if relative.as_posix() in LOCAL_PROGRAMS:
+            return None
+        if relative.parts[:2] == ("Utils", "energy_params"):
+            return relative
+    if (relative.suffix == ".py" and relative.parts[0] not in {"docs", "examples", "LICENSES"}
+            and not any(part.startswith(".") for part in relative.parts)):
+        return relative
+    return None
+
+
 def stage_web_sources(root, package, assets):
-    bridge = "web/cplfold/cplfold_web.py"
+    if not (root / CPLFOLD / "Utils").is_dir():
+        raise ValueError(f"package source directory is missing: {CPLFOLD}/Utils")
     notices = {f"{CPLFOLD}/{name}": destination for name, destination in WEB_NOTICES.items()}
-    fixed = [bridge, *(f"{CPLFOLD}/{name}" for name in WEB_MODULES), *notices]
-    for name in selected_files(root, [f"{CPLFOLD}/Utils"], fixed):
+    required = [f"{WEB_BRIDGE}/cplfold_web.py", *(f"{CPLFOLD}/{name}" for name in REQUIRED_CPLFOLD_MODULES), *notices]
+    modules = {CPLFOLD: {}, WEB_BRIDGE: {}}
+    destinations = {}
+    for name in selected_files(root, CPLFOLD_SOURCE_DIRS, required, include=web_package_path):
         if name in notices:
-            destination = assets / notices[name]
-        elif name == bridge:
-            destination = package / "cplfold_web.py"
+            destinations[name] = assets / notices[name]
         else:
-            relative = PurePosixPath(name).relative_to(CPLFOLD)
-            if relative.suffix != ".py" and relative.parts[:2] != ("Utils", "energy_params"):
-                continue
-            destination = package / relative
+            relative = web_package_path(name)
+            destinations[name] = package / relative
+            if relative.suffix == ".py":
+                parts = relative.with_suffix("").parts
+                module = parts[:-1] if len(parts) > 1 and parts[-1] == "__init__" else parts
+                source_root = WEB_BRIDGE if name.startswith(WEB_BRIDGE + "/") else CPLFOLD
+                modules[source_root][module] = name
+
+    # Both native import roots share one directory in the browser archive. Preserve
+    # split namespace packages, but reject a module or regular package from one
+    # root masking all or part of the same import path from the other.
+    for own, other in ((CPLFOLD, WEB_BRIDGE), (WEB_BRIDGE, CPLFOLD)):
+        for module, name in modules[own].items():
+            for length in range(1, len(module) + 1):
+                competing = modules[other].get(module[:length])
+                if competing is not None:
+                    raise ValueError(f"conflicting browser modules: {name} and {competing}")
+    for name, destination in destinations.items():
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / name, destination)
 

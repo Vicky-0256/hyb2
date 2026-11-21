@@ -1,29 +1,28 @@
-#!/bin/bash -e 
+#!/bin/bash
+set -e
+usage() { echo "usage: plot_viewpoint -i input.hyb -d reference.fasta -a gene [-2 reference.fasta -b gene]" >&2; exit 2; }
 
 # parsing command line options
-while getopts "i:d:a:b:" OPTION
+while getopts "i:d:1:2:a:b:" OPTION
 do
      case $OPTION in
          i) HYB=$OPTARG ;;
-         d) DB_1=$OPTARG ;;
+         d|1) DB_1=$OPTARG ;;
+         2) DB_2=$OPTARG ;;
          a) GENE_1=$OPTARG ;;
          b) GENE_2=$OPTARG ;;
-         ?)
-
-             echo "incorrect option"
-             exit 0
-             ;;
+         *) usage ;;
      esac
 done
-
-
-if [ -z $DB_2 ]
-then
-	 DB_2=$DB_1
-fi
+shift $((OPTIND - 1))
+[[ $# == 0 && -n "$HYB" && -n "$DB_1" && -n "$GENE_1" ]] || usage
+DB_2=${DB_2:-$DB_1}
+for input in "$HYB" "$DB_1" "$DB_2"; do
+	[[ -f "$input" && -r "$input" ]] || { echo "Cannot read viewpoint input: $input" >&2; exit 1; }
+done
 
 #Create file with ID and length of RNA
-LEN_1=$(expr $(grep -A1 $GENE_1 $DB_1 | awk 'FNR==2' | wc -c) - 1)
+LEN_1=$(expr $(grep -A1 -- "$GENE_1" "$DB_1" | awk 'FNR==2' | wc -c) - 1)
 echo -e $GENE_1"\t"$LEN_1 > $GENE_1".length.txt"
 
 #Convert hyb to blast format to calculate coverage of $GENE_1 and $GENE_1 interactions per nt position
@@ -49,7 +48,7 @@ then
 	grep $GENE_1 $HYB | grep $GENE_2 | hyb2blast.awk > ${HYB/.hyb/"_"$GENE_1"_"$GENE_2".blast"}
 	blast2gplot.pl EXP=${HYB/.hyb/"_"$GENE_2} N_GENES=1 REF_BLAST_FILE=$GENE_1"_ref.blast" BLAST_FILE=${HYB/.hyb/"_"$GENE_1"_"$GENE_2".blast"} GENE_LENGTHS_FILE=$GENE_1".length.txt"
 
-	LEN_2=$(expr $(grep -A1 $GENE_2 $DB_2 | awk 'FNR==2' | wc -c) - 1)
+	LEN_2=$(expr $(grep -A1 -- "$GENE_2" "$DB_2" | awk 'FNR==2' | wc -c) - 1)
 	echo -e $GENE_2"\t"$LEN_2 > $GENE_2".length.txt"
 
 	hyb2blast.awk $HYB | grep $GENE_2 | head -n1 > $GENE_2"_ref.blast"
@@ -59,8 +58,7 @@ then
 	viewpoint_graph.R ${HYB/.hyb/"_"$GENE_2"_"$GENE_1".gplot"}
 #Plot $GENE_2 viewpoint
 	viewpoint_graph.R ${HYB/.hyb/"_"$GENE_1"_"$GENE_2".gplot"}
+	rm -f -- "$GENE_2.length.txt" "${GENE_2}_ref.blast" "${HYB%.hyb}_${GENE_1}_${GENE_2}.blast"
 fi
 
-rm $GENE_1*".length.txt"
-rm $GENE_1*"_ref.blast"
-rm ${HYB/.hyb/"_"$GENE_1"_"$GENE_2".blast"}
+rm -f -- "$GENE_1.length.txt" "${GENE_1}_ref.blast"

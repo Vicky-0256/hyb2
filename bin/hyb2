@@ -1,4 +1,5 @@
-#!/bin/bash -e
+#!/bin/bash
+set -e
 #hyb2
 #takes aligned proximity ligation reads from different mapping tools in the SAM format to be processed in the hyb pipeline
 #generates a list of chimeric interactions with their coordinates, sequence, and folding energy
@@ -17,7 +18,7 @@ hmax=10
 LIMIT=0.95
 ENERGY=0
 FOLD=1
-VARNA="$(VARNAcmd.sh)"
+VARNA=$(VARNAcmd.sh 2>/dev/null) || VARNA=
 
 # Help message function
 print_help() {
@@ -28,7 +29,8 @@ print_help() {
     echo "hyb2 -i <Input.Fastq/SAM> -d <Fasta_File> -o <Output_ID> -a <GENE_ID_1> -x <START_COORD_1> -y <START_COORD_2> -l <Length_of_Fragments>"
     echo "Options:"
     echo "  -i   Input Fastq/SAM file"
-    echo "  -d   Fasta file used for mapping"
+    echo "  -d, -1   First reference FASTA used for mapping and folding"
+    echo "  -2   Optional second reference FASTA (defaults to the first)"
     echo "  -o   Output ID"
     echo "  -v   BLAST threshold (default=0.1)"
     echo "  -m   Maximum overlap (default=4)"
@@ -85,11 +87,12 @@ print_help() {
 }
 
 # parsing command line options
-while getopts "i:d:o:v:m:h:a:b:q:x:y:l:j:r:e:" OPTION
+while getopts "i:d:1:2:o:v:m:h:a:b:q:x:y:l:j:r:e:" OPTION
 do
      case $OPTION in
          i) IN_FILE=$OPTARG ;;
-         d) DB_1=$OPTARG ;;
+         d|1) DB_1=$OPTARG ;;
+         2) DB_2=$OPTARG ;;
          o) OUT=$OPTARG ;;
          v) hval=$OPTARG ;;
          m) gmax=$OPTARG;;
@@ -103,17 +106,25 @@ do
 	 j) VARNA=$OPTARG ;;
 	 e) ENERGY=$OPTARG ;;
 	 r) FOLD=$OPTARG ;;
-         ?)
-
-             echo "incorrect option"
-             exit 0
-             ;;
+         *) echo "Invalid hyb2 option or missing value." >&2; exit 2 ;;
      esac
 done
 
-if (( $OPTIND == 1 )); then
+if (( $# == 0 )); then
      print_help
 fi
+shift $((OPTIND - 1))
+if (( $# )); then echo "Unexpected hyb2 argument: $1" >&2; exit 2; fi
+if [[ -z "$IN_FILE" ]]; then echo "hyb2 requires an input file (-i)." >&2; exit 2; fi
+for coordinate in "$X_COORD" "$Y_COORD" "$LEN"; do
+	if [[ -n "$coordinate" && ( ! "$coordinate" =~ ^[0-9]+$ || "$coordinate" =~ ^0+$ ) ]]; then
+		echo "Coordinates and fragment length must be positive integers." >&2
+		exit 2
+	fi
+done
+if [[ -n "$X_COORD" ]]; then X_COORD=$((10#$X_COORD)); fi
+if [[ -n "$Y_COORD" ]]; then Y_COORD=$((10#$Y_COORD)); fi
+if [[ -n "$LEN" ]]; then LEN=$((10#$LEN)); fi
 
 #UNAFold (-r 0) and mfold (-r 2) folding need a program that applies forced
 #pairs: stop now rather than after mapping (unafold_check, mfold_check)
@@ -135,50 +146,53 @@ fi
 #Process SAM files to Hyb format
 
 #Reformat reference sequence files
-if grep -qm1 '|' $DB_1
+if [[ -n "$DB_1" ]] && grep -qm1 '|' -- "$DB_1"
 then
-	fasta_hyb2_formatting -i $DB_1
+	fasta_hyb2_formatting -i "$DB_1"
 	DB_1=${DB_1/.fasta/.hyb.fasta}
 fi
 
-if [ ! -z $DB_2 ]
+if [[ -n "$DB_2" ]]
 then
-	if grep -qm1 '|' $DB_2
+	if grep -qm1 '|' -- "$DB_2"
 	then
-		fasta_hyb2_formatting -i $DB_2
+		fasta_hyb2_formatting -i "$DB_2"
 		DB_2=${DB_2/.fasta/.hyb.fasta}
 	fi
 fi
 
-if [ -z $DB_2 ]
+if [[ -z "$DB_2" ]]
 then
         DB_2=$DB_1
 fi
 
 #If input is in fastq/gz or fasta format, convert to SAM using bowtie2
-if [ ! -f $OUT".hyb" ] && [[ "$IN_FILE"  == *fastq.gz ]]
+if [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  == *fastq.gz ]]
 then
-	if bowtie2_fastq.gz2sam -i $IN_FILE -d $DB_1 -o $OUT
+	if bowtie2_fastq.gz2sam -i "$IN_FILE" -d "$DB_1" -o "$OUT"
         then
                 echo "SAM file generated"
         else
                 echo "Error! Aborting! Check input arguments." 1>&2
+                exit 1
         fi
-elif [ ! -f $OUT".hyb" ] && [[ "$IN_FILE"  == *fastq ]]
+elif [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  == *fastq ]]
 then
-	if bowtie2_fastq2sam -i $IN_FILE -d $DB_1 -o $OUT
+	if bowtie2_fastq2sam -i "$IN_FILE" -d "$DB_1" -o "$OUT"
 	then
 		echo "SAM file generated"
 	else
 		echo "Error! Aborting! Check input arguments." 1>&2
+		exit 1
 	fi
-elif [ ! -f $OUT".hyb" ] && [[ "$IN_FILE"  == *fasta ]]
+elif [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  == *fasta ]]
 then
-	if bowtie2_fasta2sam -i $IN_FILE -d $DB_1 -o $OUT
+	if bowtie2_fasta2sam -i "$IN_FILE" -d "$DB_1" -o "$OUT"
 	then
 		echo "SAM file generated"
 	else
 		echo "Error! Aborting! Check input arguments." 1>&2
+		exit 1
 	fi
 fi
 
@@ -191,22 +205,25 @@ then
 fi
 
 #Convert SAM to Hyb Format
-if [ ! -f $OUT".hyb" ] && [[ "$IN_FILE"  != *sam ]]
+if [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  != *sam ]]
 then
-	if sam2hyb -i $SAM -d $DB_1 -o $OUT -v $hval -g $gmax -e $ENERGY -r $ENERGY_FOLD
+	if sam2hyb -i "$SAM" -d "$DB_1" -o "$OUT" -v "$hval" -g "$gmax" -e "$ENERGY" -r "$ENERGY_FOLD"
 	then
 		echo "Hyb File Generated."
 	else
 		echo "Error! Aborting! Check input arguments." 1>&2
+		exit 1
 	fi
-elif [ ! -f $OUT".hyb" ] && [[ "$IN_FILE"  == *sam ]]
+elif [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  == *sam ]]
 then
-	sam_filt $IN_FILE > ${SAM/.sam/.filt.sam} && mv ${SAM/.sam/.filt.sam} $SAM
-	if sam2hyb -i $SAM -d $DB_1 -o $OUT -v $hval -g $gmax -e $ENERGY -r $ENERGY_FOLD
+	sam_filt "$IN_FILE" > "${SAM/.sam/.filt.sam}"
+	mv -- "${SAM/.sam/.filt.sam}" "$SAM"
+	if sam2hyb -i "$SAM" -d "$DB_1" -o "$OUT" -v "$hval" -g "$gmax" -e "$ENERGY" -r "$ENERGY_FOLD"
 	then
 		echo "Hyb File Generated."
         else
                 echo "Error! Aborting! Check input arguments." 1>&2
+                exit 1
         fi
 else
 	echo "Hyb File Exist. Next Step."
@@ -245,23 +262,18 @@ else
 fi
 
 #Plot viewpoint graphs of selected genes
-if [ -z $GENE_2 ]
-then
-	plot_viewpoint -i $OUT".hyb" -1 $DB_1 -2 $DB_2 -a $GENE_1
-else
-	plot_viewpoint -i $OUT".hyb" -1 $DB_1 -2 $DB_2 -a $GENE_1 -b $GENE_2
+if [[ -n "$GENE_1" && -n "$DB_1" ]]; then
+	viewpoint_args=(-i "$OUT.hyb" -a "$GENE_1" -1 "$DB_1")
+	if [[ -n "$GENE_2" ]]; then viewpoint_args+=(-b "$GENE_2" -2 "$DB_2"); fi
+	plot_viewpoint "${viewpoint_args[@]}"
 fi
 #Step3 --------------------------------------------------------------------------------------------------------------------------------------------------
 #Generate RNA Secondary Structure of selected strands
-if [ ! -z $X_COORD ] && [ ! -z $LEN ] && [ -z $GENE_2 ] && [ -z $Y_COORD ]
-then
-	hyb2_fold -i $OUT".hyb" -a $GENE_1 -1 $DB_1 -x $X_COORD -l $LEN -j $VARNA -r $FOLD
-elif [ ! -z $X_COORD ] && [ ! -z $LEN ] && [ -z $GENE_2 ] && [ ! -z $Y_COORD ]
-then
-	hyb2_fold -i $OUT".hyb" -a $GENE_1 -1 $DB_1 -x $X_COORD -y $Y_COORD -l $LEN -j $VARNA -r $FOLD
-elif [ ! -z $X_COORD ] && [ ! -z $LEN ] && [ ! -z $GENE_2 ] && [ ! -z $Y_COORD ]
-then
-	hyb2_fold -i $OUT".hyb" -a $GENE_1 -b $GENE_2 -1 $DB_1 -2 $DB_2 -x $X_COORD -y $Y_COORD -l $LEN -j $VARNA -r $FOLD
+if [[ -n "$X_COORD" && -n "$LEN" && ( -z "$GENE_2" || -n "$Y_COORD" ) ]]; then
+	fold_args=(-i "$OUT.hyb" -a "$GENE_1" -1 "$DB_1" -x "$X_COORD" -l "$LEN" -j "$VARNA" -r "$FOLD")
+	if [[ -n "$Y_COORD" ]]; then fold_args+=(-y "$Y_COORD"); fi
+	if [[ -n "$GENE_2" ]]; then fold_args+=(-b "$GENE_2" -2 "$DB_2"); fi
+	hyb2_fold "${fold_args[@]}"
 else
 	echo "No Options Specified to Generate Secondary Structure." 1>&2
 fi

@@ -4,6 +4,9 @@
 # MFE does not contain.  Exit 0 when it works; otherwise say why on stderr
 # and exit 1.  MFOLD names another mfold script.
 
+set -e
+CHECK_CT=$(cd "$(dirname "$0")" && pwd -P)/comrades_ct.awk
+if [[ ! -r "$CHECK_CT" ]]; then CHECK_CT=$(command -v comrades_ct.awk); fi
 DIR=$(mktemp -d "${TMPDIR:-/tmp}/mfold_check.XXXXXX") || exit 1
 trap 'rm -rf "$DIR"' EXIT
 printf ">t\nGGGGAAAACCCCAUUUUUUUUUUUAAAAAAAAAA\n" > "$DIR/t.fa"
@@ -14,9 +17,8 @@ if ! mfold_fold "$DIR/t.fa" "$DIR/t.aux" "$DIR/t.ct" 2> "$DIR/err"; then
 	echo "Install it with: conda install -c bioconda mfold, or use ViennaRNA (-r 1)." 1>&2
 	exit 1
 fi
-FORCED=$(awk 'NR > 1 && (($1 == 14 && $5 == 34) || ($1 == 15 && $5 == 33) || ($1 == 16 && $5 == 32)) {n++} END {print n + 0}' "$DIR/t.ct")
-if [ "$FORCED" != "3" ]; then
-	echo "mfold mode (-r 2): mfold ignored a forced base pair, so the chimera constraints would have no effect. Use ViennaRNA (-r 1)." 1>&2
+if ! LC_ALL=C awk -v constraints="$DIR/t.aux" -f "$CHECK_CT" "$DIR/t.fa" "$DIR/t.ct"; then
+	echo "mfold mode (-r 2): the test CT is incomplete or lacks forced pairs. Use ViennaRNA (-r 1)." >&2
 	exit 1
 fi
 exit 0

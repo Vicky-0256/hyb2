@@ -3,10 +3,22 @@ name: Python pipeline (Windows, Linux, macOS)
 on:
   pull_request:
     paths:
+      - "bin/comradesFold2"
+      - "bin/comradesMakeConstraints_2"
+      - "bin/comrades_ct.awk"
+      - "bin/Ct2B_GK_3.pl"
+      - "bin/hyb2"
+      - "bin/hyb2_fold"
+      - "bin/mfold_check"
+      - "bin/mfold_fold"
+      - "bin/plot_VARNA"
+      - "bin/plot_viewpoint"
+      - "bin/unafold_check"
       - "pipeline/**"
       - "data/**"
       - "desktop/runtime/**"
       - "desktop/scripts/acquire-bowtie2.py"
+      - "scripts/bundle_sources.py"
       - "third_party/cplfold/**"
       - ".github/workflows/pipeline-crossplatform.yml"
   workflow_dispatch:

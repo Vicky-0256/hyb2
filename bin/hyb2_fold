@@ -1,4 +1,5 @@
-#!/bin/bash -e
+#!/bin/bash
+set -e
 #hyb2_fold, folding based on comradesFold
 
 #create input hyb and fasta files for long-range comradesFold (intramolecular) / folding between 2 independent RNA strands (intermolecular)
@@ -14,28 +15,38 @@
 #basepair scores of the chimeras use ViennaRNA's RNAcofold, as FOLD=1)
 
 FOLD=1
-VARNA="$(VARNAcmd.sh)"
+VARNA=$(VARNAcmd.sh 2>/dev/null) || VARNA=
+usage() { echo "usage: hyb2_fold -i input.hyb -a gene -d reference.fasta -x start -l length [-b gene -2 reference.fasta] [-y start] [-r 0|1|2] [-j jar] [-0 0|1]" >&2; exit 2; }
 
 # parsing command line options
-while getopts "i:a:b:d:x:y:l:j:0:r:" OPTION
+while getopts "i:a:b:d:1:2:x:y:l:j:0:r:" OPTION
 do
 	case $OPTION in
 		i) IN_FILE=$OPTARG ;;
 		a) GENE_1=$OPTARG ;;
 		b) GENE_2=$OPTARG ;;
-		d) FASTA_1=$OPTARG ;;
+		d|1) FASTA_1=$OPTARG ;;
+		2) FASTA_2=$OPTARG ;;
 		x) X_COORD=$OPTARG ;;
 		y) Y_COORD=$OPTARG ;;
 		l) LEN=$OPTARG ;;
                 j) VARNA=$OPTARG ;;
                 0) INTERACTIVE=$OPTARG ;;
 		r) FOLD=$OPTARG ;;
-		?) 
-
-		echo "incorrect option"
-		exit 0
-		;;
+		*) usage ;;
 	esac
+done
+shift $((OPTIND - 1))
+[[ $# == 0 && "$IN_FILE" == *.hyb && -n "$GENE_1" && -n "$FASTA_1" &&
+   "$X_COORD" =~ ^[0-9]+$ && "$LEN" =~ ^[0-9]+$ && ( -z "$Y_COORD" || "$Y_COORD" =~ ^[0-9]+$ ) ]] || usage
+X_COORD=$((10#$X_COORD))
+LEN=$((10#$LEN))
+[[ $X_COORD -gt 0 && $LEN -gt 0 ]] || usage
+if [[ -n "$Y_COORD" ]]; then Y_COORD=$((10#$Y_COORD)); [[ $Y_COORD -gt 0 ]] || usage; fi
+if [[ -n "$GENE_2" && "$GENE_2" != "$GENE_1" && -z "$Y_COORD" ]]; then usage; fi
+FASTA_2=${FASTA_2:-$FASTA_1}
+for source in "$IN_FILE" "$FASTA_1" "$FASTA_2"; do
+	[[ -f "$source" && -r "$source" ]] || { echo "Cannot read input: $source" >&2; exit 1; }
 done
 
 #UNAFold and mfold modes need a folding program that applies forced pairs
@@ -53,21 +64,16 @@ then
 	PAIR_FOLD=1
 fi
 
-#Copy input Fasta into current directory
-cp $FASTA_1 ./
-if [ ! -z $FASTA_2 ]
-then
-	cp $FASTA_2 ./
-fi
-
-if [ -z $FASTA_2 ]
-then
-	FASTA_2=$FASTA_1
-fi
-
-#Redirect input fasta as copied file in current directory
-FASTA_1=${FASTA_1##*/}
-FASTA_2=${FASTA_2##*/}
+# Read each reference from its original path. Two different references may
+# have the same basename or already be in the output directory.
+check_output_paths() {
+	for source in "$IN_FILE" "$FASTA_1" "$FASTA_2"; do
+		if [[ "$source" -ef "$OUT_FASTA" || "$source" -ef "$OUT_FILE" ]]; then
+			echo "Fold output would overwrite an input: $source" >&2
+			exit 1
+		fi
+	done
+}
 
 #If Y_COORD specified larger than X_COORD for intramolecular folding, stop
 if [ -z $GENE_2 ] && [ ! -z $Y_COORD ] && [ "$X_COORD" -gt "$Y_COORD" ]
@@ -84,17 +90,18 @@ then
 	X2=$(($X_COORD+$LEN-1))
 	OUT_FILE=${IN_FILE/.hyb/_$GENE_1"_"$X1"-"$X2.hyb}
 	OUT_FASTA=$GENE_1"_"$X1"-"$X2.fasta
+	check_output_paths
 
 #transforming hyb data
-	awk -v GENE=$GENE_1 -v X1=$X1 -v X2=$X2 -v X_COORD=$X_COORD -v LEN=$LEN '{if ($4~GENE && $10~GENE && $7>=X1 && $8<=X2 && $13>=X1 && $14<=X2) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-X_COORD+1"\t"$8-X_COORD+1"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-X_COORD+1"\t"$14-X_COORD+1}' $IN_FILE > $OUT_FILE
+	awk -v GENE=$GENE_1 -v X1=$X1 -v X2=$X2 -v X_COORD=$X_COORD -v LEN=$LEN '{if ($4~GENE && $10~GENE && $7>=X1 && $8<=X2 && $13>=X1 && $14<=X2) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-X_COORD+1"\t"$8-X_COORD+1"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-X_COORD+1"\t"$14-X_COORD+1}' "$IN_FILE" > "$OUT_FILE"
 
 #extracting fasta sequence 
-	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=$X1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' > $OUT_FASTA
+	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' "$FASTA_1" | grep -A1 $GENE_1 | awk -v b=$X1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' > "$OUT_FASTA"
 
 #folding
 	SPAN=$LEN
-	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN
-	comradesFold2 -c ${OUT_FILE/.hyb/.1-$(($SPAN))_folding_constraints.txt} -i $OUT_FASTA -r $FOLD
+	comradesMakeConstraints_2 -i "$OUT_FILE" -f "$OUT_FASTA" -b 1 -e "$SPAN"
+	comradesFold2 -c "${OUT_FILE/.hyb/.1-${SPAN}_folding_constraints.txt}" -i "$OUT_FASTA" -r "$FOLD"
 
 #Long-range intramolecular / Homodimer folding -----------------------------------------------------------------------------------------------------------
 elif [ -z $GENE_2 ]
@@ -106,25 +113,26 @@ then
 	Y2=$(($Y_COORD+$LEN-1))
 	OUT_FILE=${IN_FILE/.hyb/_$GENE1"_"$X1"-"$X2"_"$Y1-$Y2.hyb}
 	OUT_FASTA=$GENE_1"_"$X1"-"$X2"_"$Y1-$Y2.fasta
+	check_output_paths
 
 #transforming hyb data
-	awk -v GENE=$GENE_1 -v X1=$X1 -v X2=$X2 -v Y1=$Y1 -v Y2=$Y2 -v X_COORD=$X_COORD -v Y_COORD=$Y_COORD -v LEN=$LEN '{if ($4~GENE && $10~GENE && $7>=X1 && $8<=X2 && $13>=Y1 && $14<=Y2) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-X_COORD+1"\t"$8-X_COORD+1"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-Y_COORD+LEN+101"\t"$14-Y_COORD+LEN+101; if ($4~GENE && $10~GENE && $13>=X1 && $14<=X2 && $7>=Y1 && $8<=Y2) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-Y_COORD+LEN+101"\t"$8-Y_COORD+LEN+101"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-X_COORD+1"\t"$14-X_COORD+1}' $IN_FILE > $OUT_FILE
+	awk -v GENE=$GENE_1 -v X1=$X1 -v X2=$X2 -v Y1=$Y1 -v Y2=$Y2 -v X_COORD=$X_COORD -v Y_COORD=$Y_COORD -v LEN=$LEN '{if ($4~GENE && $10~GENE && $7>=X1 && $8<=X2 && $13>=Y1 && $14<=Y2) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-X_COORD+1"\t"$8-X_COORD+1"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-Y_COORD+LEN+101"\t"$14-Y_COORD+LEN+101; if ($4~GENE && $10~GENE && $13>=X1 && $14<=X2 && $7>=Y1 && $8<=Y2) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-Y_COORD+LEN+101"\t"$8-Y_COORD+LEN+101"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-X_COORD+1"\t"$14-X_COORD+1}' "$IN_FILE" > "$OUT_FILE"
 
 #extracting fasta sequence
-	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=$X1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' > $OUT_FASTA
+	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' "$FASTA_1" | grep -A1 $GENE_1 | awk -v b=$X1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' > "$OUT_FASTA"
 #padding
 #        awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=1 -v e=100 '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> $OUT_FASTA
 	echo 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT' >> $OUT_FASTA
 #2nd strand sequence
-	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=$Y1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> $OUT_FASTA
+	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' "$FASTA_1" | grep -A1 $GENE_1 | awk -v b=$Y1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> "$OUT_FASTA"
 
 #merging fasta sequence
 	awk 'NF' $OUT_FASTA | awk 'BEGIN{i=1}{line[i++]=$0}END{print line[1]"\n"line[2] line[3] line[5]}' > ${OUT_FASTA/.fasta/.tmp} && mv ${OUT_FASTA/.fasta/.tmp} $OUT_FASTA
 
 #folding
 	SPAN=$(($LEN+$LEN+100))
-	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $PAIR_FOLD
-	comradesFold2 -c ${OUT_FILE/.hyb/.1-$(($SPAN))_folding_constraints.txt} -i $OUT_FASTA -r $FOLD
+	comradesMakeConstraints_2 -i "$OUT_FILE" -f "$OUT_FASTA" -b 1 -e "$SPAN" -r "$PAIR_FOLD"
+	comradesFold2 -c "${OUT_FILE/.hyb/.1-${SPAN}_folding_constraints.txt}" -i "$OUT_FASTA" -r "$FOLD"
 
 #Homodimer folding --------------------------------------------------------------------------------------------------------------------------------------
 elif [[ $GENE_1 == $GENE_2 ]]
@@ -136,55 +144,57 @@ then
 	Y2=$(($Y_COORD+$LEN-1))
 	OUT_FILE=${IN_FILE/.hyb/_$GENE_1"_"$X1"-"$X2"_"homodimer.hyb}
 	OUT_FASTA=$GENE_1"_"$X1"-"$X2"_"homodimer.fasta
+	check_output_paths
 
 #transforming hyb data
-	awk -v X1=$X1 -v X2=$X2 -v Y1=$Y1 -v Y2=$Y2 -v X_COORD=$X_COORD -v Y_COORD=$Y_COORD -v LEN=$LEN '{if ($7>=X1 && $8<=X2 && $13>=Y1 && $14<=Y2 && $16>=5) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-X_COORD+1"\t"$8-X_COORD+1"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-Y_COORD+LEN+101"\t"$14-Y_COORD+LEN+101; if ($13>=X1 && $14<=X2 && $7>=Y1 && $8<=Y2 && $16>=5) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-Y_COORD+LEN+101"\t"$8-Y_COORD+LEN+101"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-X_COORD+1"\t"$14-X_COORD+1}' $IN_FILE > $OUT_FILE
+	awk -v X1=$X1 -v X2=$X2 -v Y1=$Y1 -v Y2=$Y2 -v X_COORD=$X_COORD -v Y_COORD=$Y_COORD -v LEN=$LEN '{if ($7>=X1 && $8<=X2 && $13>=Y1 && $14<=Y2 && $16>=5) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-X_COORD+1"\t"$8-X_COORD+1"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-Y_COORD+LEN+101"\t"$14-Y_COORD+LEN+101; if ($13>=X1 && $14<=X2 && $7>=Y1 && $8<=Y2 && $16>=5) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-Y_COORD+LEN+101"\t"$8-Y_COORD+LEN+101"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-X_COORD+1"\t"$14-X_COORD+1}' "$IN_FILE" > "$OUT_FILE"
 
 #extracting fasta sequence
-	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=$X1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' > $OUT_FASTA
+	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' "$FASTA_1" | grep -A1 $GENE_1 | awk -v b=$X1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' > "$OUT_FASTA"
 #padding
 #	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=1 -v e=100 '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> $OUT_FASTA
         echo 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT' >> $OUT_FASTA
 #2nd strand sequence
-	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=$Y1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> $OUT_FASTA
+	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' "$FASTA_1" | grep -A1 $GENE_1 | awk -v b=$Y1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> "$OUT_FASTA"
 
 #merging fasta sequence
 	awk 'NF' $OUT_FASTA | awk 'BEGIN{i=1}{line[i++]=$0}END{print line[1]"\n"line[2] line[3] line[5]}' > ${OUT_FASTA/.fasta/.tmp} && mv ${OUT_FASTA/.fasta/.tmp} $OUT_FASTA
 
 #folding
 	SPAN=$(($LEN+$LEN+100))
-	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $PAIR_FOLD
-	comradesFold2 -c ${OUT_FILE/.hyb/.1-$(($SPAN))_folding_constraints.txt} -i $OUT_FASTA -r $FOLD
+	comradesMakeConstraints_2 -i "$OUT_FILE" -f "$OUT_FASTA" -b 1 -e "$SPAN" -r "$PAIR_FOLD"
+	comradesFold2 -c "${OUT_FILE/.hyb/.1-${SPAN}_folding_constraints.txt}" -i "$OUT_FASTA" -r "$FOLD"
 
 else
 
 #Intermolecular folding ---------------------------------------------------------------------------------------------------------------------------------
 #filtering data, defining start and end positions
-	sed -n "/$GENE_1/p" $IN_FILE | sed -n "/$GENE_2/p" > ${IN_FILE/.hyb/_$GENE_1"_"$GENE_2.hyb}
+	sed -n "/$GENE_1/p" "$IN_FILE" | sed -n "/$GENE_2/p" > ${IN_FILE/.hyb/_$GENE_1"_"$GENE_2.hyb}
 	X1=$(($X_COORD))
 	X2=$(($X_COORD+$LEN-1))
 	Y1=$(($Y_COORD))
 	Y2=$(($Y_COORD+$LEN-1))
 	OUT_FILE=${IN_FILE/.hyb/_$GENE_1"-"$X1-$X2"_"$GENE_2"-"$Y1-$Y2.hyb}
 	OUT_FASTA=$GENE_1"-"$X1-$X2"_"$GENE_2"-"$Y1-$Y2.fasta
+	check_output_paths
 
 #transforming hyb data
-	awk -v GENE_1=$GENE_1 -v GENE_2=$GENE_2 -v X1=$X1 -v X2=$X2 -v Y1=$Y1 -v Y2=$Y2 -v X_COORD=$X_COORD -v Y_COORD=$Y_COORD -v LEN=$LEN '{if ($4~GENE_1 && $7>=X1 && $8<=X2 && $10~GENE_2 && $13>=Y1 && $14<=Y2) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-X_COORD+1"\t"$8-X_COORD+1"\t"$9"\t"$4"\t"$11"\t"12"\t"$13-Y_COORD+LEN+101"\t"$14-Y_COORD+LEN+101; if ($10~GENE_1 && $13>=X1 && $14<=X2 && $4~GENE_2 && $7>=Y1 && $8<=Y2) print $1"\t"$2"\t"$3"\t"$10"\t"$5"\t"$6"\t"$7-Y_COORD+LEN+101"\t"$8-Y_COORD+LEN+101"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-X_COORD+1"\t"$14-X_COORD+1}' $IN_FILE > $OUT_FILE
+	awk -v GENE_1=$GENE_1 -v GENE_2=$GENE_2 -v X1=$X1 -v X2=$X2 -v Y1=$Y1 -v Y2=$Y2 -v X_COORD=$X_COORD -v Y_COORD=$Y_COORD -v LEN=$LEN '{if ($4~GENE_1 && $7>=X1 && $8<=X2 && $10~GENE_2 && $13>=Y1 && $14<=Y2) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7-X_COORD+1"\t"$8-X_COORD+1"\t"$9"\t"$4"\t"$11"\t"12"\t"$13-Y_COORD+LEN+101"\t"$14-Y_COORD+LEN+101; if ($10~GENE_1 && $13>=X1 && $14<=X2 && $4~GENE_2 && $7>=Y1 && $8<=Y2) print $1"\t"$2"\t"$3"\t"$10"\t"$5"\t"$6"\t"$7-Y_COORD+LEN+101"\t"$8-Y_COORD+LEN+101"\t"$9"\t"$10"\t"$11"\t"12"\t"$13-X_COORD+1"\t"$14-X_COORD+1}' "$IN_FILE" > "$OUT_FILE"
 
 #extracting fasta sequence
-	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=$X1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' > $OUT_FASTA
+	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' "$FASTA_1" | grep -A1 $GENE_1 | awk -v b=$X1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' > "$OUT_FASTA"
 #padding
 #	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_1 | grep -A1 $GENE_1 | awk -v b=1 -v e=100 '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> $OUT_FASTA
         echo 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT' >> $OUT_FASTA
 #second RNA fragment
-	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' $FASTA_2 | grep -A1 $GENE_2 | awk -v b=$Y1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> $OUT_FASTA
+	awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' "$FASTA_2" | grep -A1 $GENE_2 | awk -v b=$Y1 -v e=$LEN '{if (/^>/) {print $1} else {print substr($0,b,e)}}' >> "$OUT_FASTA"
 
 #merging fasta sequences with padding in between, create space for folding
 	awk 'NF' $OUT_FASTA | awk 'BEGIN{i=1}{line[i++]=$0}END{print line[1]"\n"line[2] line[3] line[5]}' > ${OUT_FASTA/.fasta/.tmp} && mv ${OUT_FASTA/.fasta/.tmp} $OUT_FASTA
 #folding
 	SPAN=$(($LEN+$LEN+100))
-	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $PAIR_FOLD
-	comradesFold2 -c ${OUT_FILE/.hyb/.1-$(($SPAN))_folding_constraints.txt} -i $OUT_FASTA -r $FOLD
+	comradesMakeConstraints_2 -i "$OUT_FILE" -f "$OUT_FASTA" -b 1 -e "$SPAN" -r "$PAIR_FOLD"
+	comradesFold2 -c "${OUT_FILE/.hyb/.1-${SPAN}_folding_constraints.txt}" -i "$OUT_FASTA" -r "$FOLD"
 fi
 
 echo "Calculating Basepair Scores..."
@@ -192,10 +202,7 @@ echo "Calculating Basepair Scores..."
 #Clear intermediate files (hybrid-ss-min's; mfold_fold keeps its own in a temporary folder)
 if [ "$FOLD" == "0" ]
 then
-	rm *plot
-	rm *aux
-	rm *ext
-	rm *run
+	rm -f -- "$OUT_FASTA".*.plot "$OUT_FASTA".*.ext "$OUT_FASTA".run
 fi
 
 #calculating basepair scores for all files (high -m setting to avoid capping scores at any particular value)
@@ -223,35 +230,22 @@ name=$(cat ${OUT_FILE/.hyb/_names_scores.txt} | sort -k2,2nr | head -n1 | awk '{
 cat ${vname/.VARNA_scores.txt/.vienna}; echo Open ${vname/.VARNA_scores.txt/.vienna} in VARNA for more customization options
 cat ${OUT_FILE/.hyb/_names_scores.txt} | sort -k2,2nr | head -n1 | while read name score; do awk '{print log($1+1)/log(2)}' $name | sed 's/-inf/0/g;s/^-.*/0/g' > ${name/_scores.txt/_log2scores.txt} ; echo Load ${name/_scores.txt/_log2scores.txt} as colour coding score in VARNA ; done
 
-if [ ! -z $VARNA ]
-then
+if [[ -n "$VARNA" ]]; then
 	echo "Plotting RNA Secondary Structure..."
+	plot_args=(-i "${vname/.VARNA_scores.txt/.ct}" -j "$VARNA" -s "${name/_scores.txt/_log2scores.txt}" -x "$X_COORD" -l "$LEN")
+	if [[ -n "$Y_COORD" ]]; then plot_args+=(-y "$Y_COORD"); fi
+	if [[ "$INTERACTIVE" == 1 ]]; then plot_args+=(-0 1); fi
+	plot_VARNA "${plot_args[@]}"
+	if [[ "$INTERACTIVE" != 1 && ! -f "${IN_FILE/hyb/}${vname/.VARNA_scores.txt/_plot.svg}" ]]; then
+		echo "VARNA did not produce the requested plot." >&2
+		exit 1
+	fi
+	echo "Plotting Concluded"
+elif [[ "$INTERACTIVE" == 1 ]]; then
+	echo "Interactive plotting requires a configured VARNA jar or -j." >&2
+	exit 1
 else
 	echo "Use Option -j to Plot RNA Secondary Structure"
-fi
-
-if [ "$INTERACTIVE" = "1" ]
-then
-	if [ -z $Y_COORD ]
-	then
-		plot_VARNA -i ${vname/.VARNA_scores.txt/.ct} -j $VARNA -s ${name/_scores.txt/_log2scores.txt} -x $X_COORD -l $LEN -0 1
-	else
-        	plot_VARNA -i ${vname/.VARNA_scores.txt/.ct} -j $VARNA -s ${name/_scores.txt/_log2scores.txt} -x $X_COORD -y $Y_COORD -l $LEN -0 1
-	fi
-else
-        if [ -z $Y_COORD ]
-        then
-                plot_VARNA -i ${vname/.VARNA_scores.txt/.ct} -j $VARNA -s ${name/_scores.txt/_log2scores.txt} -x $X_COORD -l $LEN
-        else
-                plot_VARNA -i ${vname/.VARNA_scores.txt/.ct} -j $VARNA -s ${name/_scores.txt/_log2scores.txt} -x $X_COORD -y $Y_COORD -l $LEN
-	fi
-fi
-
-if [ -f ${IN_FILE/hyb/}${vname/.VARNA_scores.txt/_plot.svg} ] || [ "$INTERACTIVE" = "1" ]
-then
-	echo "Plotting Concluded"
-else
-	echo "Error! Something went wrong."
 fi
 
 echo "randomized parrallel RNA folding to fold RNA 1000 times using computer cluster:"

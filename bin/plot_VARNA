@@ -56,10 +56,10 @@ then
 else
         if [ "$INTERACTIVE" = "1" ]
         then
-                java -jar $VARNA -i $IN_FILE -bpStyle simple -colorMap $colorscores -colorMapMin "0" -colorMapMax "$smax" -colorMapStyle "$colorStyle" -title "$header" -spaceBetweenBases "0.6"
+                java -jar "$VARNA" -i $IN_FILE -bpStyle simple -colorMap $colorscores -colorMapMin "0" -colorMapMax "$smax" -colorMapStyle "$colorStyle" -title "$header" -spaceBetweenBases "0.6"
                 echo "Modify base numbers: svg_mod_coord.sh -i svg -x start_coord -y 2nd_strand_coord(only if it exist) -l length_of_fragment"
         else
-                java -jar $VARNA -i $IN_FILE -bpStyle simple -colorMap $colorscores -colorMapMin "0" -colorMapMax "$smax" -colorMapStyle "$colorStyle" -title "$header" -spaceBetweenBases "0.6" -o ${IN_FILE/ct/svg}
+                java -jar "$VARNA" -i $IN_FILE -bpStyle simple -colorMap $colorscores -colorMapMin "0" -colorMapMax "$smax" -colorMapStyle "$colorStyle" -title "$header" -spaceBetweenBases "0.6" -o ${IN_FILE/ct/svg}
                 if [ -z $Y_COORD ]
                 then
                         svg_mod_coord.sh -i ${IN_FILE/ct/svg} -x $X_COORD -l $LEN -p ${SCORE%%__*txt}

@@ -3,126 +3,188 @@
 #$ -V
 #$ -t 1-1000
 
-# comradesFold2 -c constraints.txt -i in.fasta
-# format of constraint file: F TAB i TAB j TAB k (hybrid-ss-min prefers constraints with length k>=3)
-# -s 1, shuffle constraints
-# -o <TEXT>, append TEXT to output file name
-# see hybrid-ss-min -h for details 
-# -r 1, use ViennaRNA, 0 use UNAFold (a full UNAFold hybrid-ss-min: the
-#   OligoArrayAux one ignores forced pairs, so unafold_check stops the run;
-#   HYBRID_SS_MIN names another executable), 2 use mfold 3.6 (mfold_fold;
-#   conda install -c bioconda mfold; mfold_check tests it first)
+# comradesFold2 -c constraints.txt -i in.fasta [-o suffix] [-s 1] [-r 0|1|2]
+# Try each F i j k helix in order, optionally shuffled. Keep a helix only
+# when the structure satisfies it and every previously accepted constraint.
+# -r 1 uses ViennaRNA (default), 0 full UNAFold, and 2 mfold 3.6.
+set -eo pipefail
+usage() { echo "usage: comradesFold2 -c constraints.txt -i in.fasta [-o suffix] [-s 1] [-r 0|1|2]" >&2; exit 1; }
 
 FOLD=1
-
-# parsing command line options
-while getopts "c:i:o:s:r:" OPTION
-do
-     case $OPTION in
-         c) IN_CONSTRAINTS=$OPTARG ;;
-         i) IN_FASTA=$OPTARG ;;
-         o) OUTPUT_ID=$OPTARG ;;
-         s) SHUFFLING=$OPTARG;;
-	 r) FOLD=$OPTARG ;;
-	 ?) 
-
-             echo "incorrect option"
-             exit 0
-             ;;
-     esac
+IN_CONSTRAINTS=
+IN_FASTA=
+OUTPUT_ID=
+SHUFFLING=
+while getopts "c:i:o:s:r:" option; do
+	case "$option" in
+		c) IN_CONSTRAINTS=$OPTARG ;;
+		i) IN_FASTA=$OPTARG ;;
+		o) OUTPUT_ID=$OPTARG ;;
+		s) SHUFFLING=$OPTARG ;;
+		r) FOLD=$OPTARG ;;
+		*) usage ;;
+	esac
 done
-
-case "$FOLD" in
-      1) ;;
-      0) unafold_check || exit 1 ;;
-      2) mfold_check || exit 1 ;;
-      *) echo "-r must be 1 (ViennaRNA), 0 (UNAFold) or 2 (mfold)"; exit 1 ;;
+shift $((OPTIND-1))
+[[ -n "$IN_CONSTRAINTS" && -n "$IN_FASTA" && $# == 0 ]] || usage
+case "$FOLD" in 0|1|2) ;; *) usage ;; esac
+case "${SGE_TASK_ID:-}" in
+	""|0|undefined) task= ;;
+	*[!0-9]*) echo "Invalid SGE_TASK_ID." >&2; exit 1 ;;
+	*) task=$SGE_TASK_ID ;;
 esac
-HYBRID_SS_MIN=${HYBRID_SS_MIN:-hybrid-ss-min}
 
-if [ ! -z $SGE_TASK_ID ] ; then
-    if [ "$SGE_TASK_ID" -gt "0" ] ; then
-        cp $IN_CONSTRAINTS $IN_CONSTRAINTS$SGE_TASK_ID
-        cp $IN_FASTA $IN_FASTA$SGE_TASK_ID
-    fi
+fasta=$IN_FASTA$task
+constraints=$IN_CONSTRAINTS$task
+aux=$fasta.aux
+ct=$fasta.ct
+vienna=$fasta.vienna
+accepted=$constraints.accepted
+shuffled=$constraints.shuf
+outputs=("$ct" "$vienna" "$aux" "$accepted" "$shuffled")
+if [[ -n "$OUTPUT_ID" ]]; then outputs+=("$ct.$OUTPUT_ID" "$vienna.$OUTPUT_ID" "$aux.$OUTPUT_ID"); fi
+locks=("$fasta.fold.lock" "$constraints.fold.lock")
+if [[ "$IN_FASTA" -ef "$IN_CONSTRAINTS" ]]; then usage; fi
+if [[ -n "$task" ]] && [[ "$fasta" -ef "$IN_CONSTRAINTS" || "$fasta" -ef "$IN_FASTA" ||
+                          "$constraints" -ef "$IN_FASTA" || "$constraints" -ef "$IN_CONSTRAINTS" ]]; then
+	echo "An SGE output would overwrite an input." >&2
+	exit 1
 fi
-
-SHUFFLED_CONSTRAINTS=$IN_CONSTRAINTS$SGE_TASK_ID".shuf"
-ACCEPTED_CONSTRAINTS=$IN_CONSTRAINTS$SGE_TASK_ID".accepted"
-CURRENT_CONSTRAINTS=$IN_FASTA$SGE_TASK_ID".aux"
-CT_OUTPUT=$IN_FASTA$SGE_TASK_ID".ct"
-VIENNA_OUTPUT=$IN_FASTA$SGE_TASK_ID".vienna"
-
-echo "Welcome to comradesFold2"
-echo
-echo "Input fasta file: " $IN_FASTA
-echo "Input constraints file: " $IN_CONSTRAINTS
-echo "Creating constraints file: " $CURRENT_CONSTRAINTS
-echo "Creating shuffled constraints file: " $SHUFFLED_CONSTRAINTS
-
-if [ "$CURRENT_CONSTRAINTS" == "$IN_CONSTRAINTS" ]; then
-        echo "Please name your constraint file something else... Exiting."
-        exit 1
-fi
-
-rm -f $ACCEPTED_CONSTRAINTS $CURRENT_CONSTRAINTS
-
-# chosing shuffling option
-if [ "$SHUFFLING" = "1" ]; then
-        sort -R $IN_CONSTRAINTS > $SHUFFLED_CONSTRAINTS
-else
-        cp $IN_CONSTRAINTS $SHUFFLED_CONSTRAINTS
-fi
-
-WC=`cat $SHUFFLED_CONSTRAINTS | wc -l`
-
-# echo "Fitting constraints, ERROR messages accepted."
-
-for (( i=1; i<=$WC; i++ )); do
-      awk -v curr=$CURRENT_CONSTRAINTS -v i=$i 'NR==i{print $0 >> curr}' $SHUFFLED_CONSTRAINTS
-      if [ "$FOLD" == "1" ]; then
-            cat $IN_FASTA$SGE_TASK_ID | RNAfold --noconv --noPS --commands=$CURRENT_CONSTRAINTS | sed 's/&>/-/g;s/&//g' | b2ct | sed 's/ENERGY =/dG =/g' > $CT_OUTPUT 2>&1 > /dev/null
-      elif [ "$FOLD" == "2" ]; then
-            mfold_fold $IN_FASTA$SGE_TASK_ID $CURRENT_CONSTRAINTS $CT_OUTPUT
-      else
-            "$HYBRID_SS_MIN" -c $IN_FASTA$SGE_TASK_ID
-      fi
-#      CT_FILE_LENGTH=`cat $CT_OUTPUT | wc -l`
-#      if [ "$CT_FILE_LENGTH" -gt "1" ]; then
-
-      TEST_CT_FILE=`awk 'BEGIN{fnd=0}NR==FNR{a=$2;b=$3}NR!=FNR && $1==a && $5==b{fnd++}END{print fnd}' $CURRENT_CONSTRAINTS $CT_OUTPUT`
-      if [ "$TEST_CT_FILE" == "1" ]; then
-            cat $CURRENT_CONSTRAINTS > $ACCEPTED_CONSTRAINTS 
-      else 
-            if [ -e "$ACCEPTED_CONSTRAINTS" ]; then
-                  cat $ACCEPTED_CONSTRAINTS > $CURRENT_CONSTRAINTS
-            else
-                  rm -f $CURRENT_CONSTRAINTS
-            fi
-      fi
+for out in "${outputs[@]}" "${locks[@]}"; do
+	if [[ "$out" -ef "$IN_FASTA" || "$out" -ef "$IN_CONSTRAINTS" || -d "$out" ]]; then
+		echo "Fold output conflicts with an input or directory: $out" >&2
+		exit 1
+	fi
 done
+# The shell holds both locks while its children run. A competing job must
+# stop before clearing results. OS locks also release if the job is killed.
+for lock in "${locks[@]}"; do
+	if [[ -L "$lock" || ( -e "$lock" && ( ! -f "$lock" || -s "$lock" ) ) ]]; then
+		echo "Cannot use fold lock: $lock" >&2
+		exit 1
+	fi
+done
+exec 8>>"${locks[0]}" 9>>"${locks[1]}"
+perl -MFcntl=:flock -e '
+	for my $n (8, 9) {
+		my $path = $ARGV[$n-8];
+		open my $fd, ">&", $n or die "Cannot open fold lock: $!\n";
+		flock($fd, LOCK_EX | LOCK_NB) or die "Fold output is busy ($path): $!\n";
+		my @held = stat($fd);
+		my @current = stat($path);
+		die "Fold output changed while acquiring $path. Retry.\n"
+			unless @current && $held[0] == $current[0] && $held[1] == $current[1];
+	}' "${locks[@]}"
+work=
+pending=
+cleanup() {
+	status=$?
+	if [[ -n "$work" ]]; then rm -rf -- "$work"; fi
+	if [[ -n "$pending" ]]; then rm -f -- "$pending"; fi
+	if [[ $status != 0 ]]; then rm -f -- "${outputs[@]}"; fi
+	rm -f -- "${locks[@]}"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+rm -f -- "${outputs[@]}"
+work=$(mktemp -d "${fasta}.fold.XXXXXX")
 
-# final folding
-cat $ACCEPTED_CONSTRAINTS > $CURRENT_CONSTRAINTS
-if [ "$FOLD" == "1" ]; then
-      cat $IN_FASTA$SGE_TASK_ID | RNAfold --noconv --noPS --commands=$CURRENT_CONSTRAINTS | sed 's/&>/-/g;s/&//g' > $VIENNA_OUTPUT
-      cat $VIENNA_OUTPUT | b2ct | sed 's/ENERGY =/dG =/g' > $CT_OUTPUT
-elif [ "$FOLD" == "2" ]; then
-      if [ -s "$CURRENT_CONSTRAINTS" ]; then
-            mfold_fold $IN_FASTA$SGE_TASK_ID $CURRENT_CONSTRAINTS $CT_OUTPUT
-      else
-            mfold_fold $IN_FASTA$SGE_TASK_ID - $CT_OUTPUT
-      fi
-      Ct2B_GK_3.pl HYBRID_SS_MIN=1 $CT_OUTPUT > $VIENNA_OUTPUT
+if [[ -n "$task" ]]; then
+	cp -- "$IN_FASTA" "$fasta"
+	cp -- "$IN_CONSTRAINTS" "$constraints"
+fi
+[[ -s "$fasta" ]] || { echo "Missing or empty FASTA: $fasta" >&2; exit 1; }
+first_only=0
+case "$FOLD" in
+	0) unafold_check ;;
+	2) first_only=1; mfold_check ;;
+esac
+check_ct=$(cd "$(dirname "$0")" && pwd -P)/comrades_ct.awk
+# Grid Engine runs a spooled copy of this script with the installed bin on PATH.
+if [[ ! -r "$check_ct" ]]; then check_ct=$(command -v comrades_ct.awk); fi
+echo "Welcome to comradesFold2"
+echo "Input fasta file: $fasta"
+echo "Input constraints file: $constraints"
+
+if [[ "$SHUFFLING" == 1 ]]; then
+	sort -R -- "$constraints" > "$work/shuffled"
 else
-      "$HYBRID_SS_MIN" -c $IN_FASTA$SGE_TASK_ID
-      Ct2B_GK_3.pl HYBRID_SS_MIN=1 $CT_OUTPUT > $VIENNA_OUTPUT
+	cp -- "$constraints" "$work/shuffled"
 fi
+: > "$work/accepted"
 
-if [ "$OUTPUT_ID" != "" ]; then
-     cp $CT_OUTPUT $CT_OUTPUT"."$OUTPUT_ID
-     cp $CURRENT_CONSTRAINTS $CURRENT_CONSTRAINTS"."$OUTPUT_ID
-     cp $VIENNA_OUTPUT $VIENNA_OUTPUT"."$OUTPUT_ID
+# Exit 42 from mfold_fold or the CT check means an explicitly incompatible
+# constraint. Only trial folds may skip it. All other tool errors abort.
+fold_structure() {
+	local phase=$1 commands=$2 status=0 vienna_record= mfold_aux=-
+	local -a flags=(--noconv --noPS)
+	incompatible=0
+	rm -f -- "$work/result.ct" "$work/result.vienna"
+	case "$FOLD" in
+		1)
+			if [[ -s "$commands" ]]; then flags+=("--commands=$commands"); fi
+			RNAfold "${flags[@]}" < "$fasta" > "$work/rnafold.out" 2> "$work/rnafold.err" || status=$?
+			if [[ $status == 1 && "$phase" == trial && ! -s "$work/rnafold.out" ]] &&
+			   grep -Fq 'Supplied structure constraints create empty solution set' "$work/rnafold.err"; then
+				incompatible=1
+				return
+			fi
+			cat "$work/rnafold.err" >&2
+			if [[ $status != 0 ]]; then echo "RNAfold failed with exit status $status." >&2; exit 1; fi
+			sed 's/&>/-/g;s/&//g' "$work/rnafold.out" > "$work/result.vienna"
+			vienna_record=$work/result.vienna
+			b2ct < "$vienna_record" | sed 's/ENERGY =/dG =/g' > "$work/result.ct"
+			;;
+		2)
+			if [[ -s "$commands" ]]; then mfold_aux=$commands; fi
+			mfold_fold "$fasta" "$mfold_aux" "$work/result.ct" < /dev/null || status=$?
+			if [[ $status == 42 && "$phase" == trial ]]; then incompatible=1; return; fi
+			if [[ $status != 0 ]]; then echo "mfold_fold failed with exit status $status." >&2; exit 1; fi
+			;;
+		0)
+			# hybrid-ss-min reads and writes named files next to its input.
+			cp -- "$commands" "$aux"
+			rm -f -- "$ct"
+			"${HYBRID_SS_MIN:-hybrid-ss-min}" -c "$fasta" < /dev/null
+			mv -- "$ct" "$work/result.ct"
+			;;
+	esac
+	if [[ "$phase" == final && "$FOLD" != 1 ]]; then
+		vienna_record=$work/result.vienna
+		Ct2B_GK_3.pl HYBRID_SS_MIN=1 "$work/result.ct" > "$vienna_record"
+	fi
+	status=0
+	LC_ALL=C awk -v first_only="$first_only" -v constraints="$commands" -v vienna="$vienna_record" \
+		-f "$check_ct" "$fasta" "$work/result.ct" || status=$?
+	if [[ $status == 42 && "$phase" == trial ]]; then incompatible=1; return; fi
+	if [[ $status != 0 ]]; then echo "Fold produced an invalid result or lost accepted constraints." >&2; exit 1; fi
+}
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+	[[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
+	cp -- "$work/accepted" "$work/candidate"
+	printf '%s\n' "$line" >> "$work/candidate"
+	fold_structure trial "$work/candidate"
+	if [[ $incompatible == 0 ]]; then mv -- "$work/candidate" "$work/accepted"; fi
+done < "$work/shuffled"
+fold_structure final "$work/accepted"
+
+# Stage each completed file on its destination filesystem before publishing.
+publish() {
+	local source=$1 dest=$2
+	pending=$(mktemp "${dest}.tmp.XXXXXX")
+	cat -- "$source" > "$pending"
+	chmod =rw "$pending"
+	mv -f -- "$pending" "$dest"
+	pending=
+}
+publish "$work/accepted" "$aux"
+publish "$work/accepted" "$accepted"
+publish "$work/shuffled" "$shuffled"
+publish "$work/result.ct" "$ct"
+publish "$work/result.vienna" "$vienna"
+if [[ -n "$OUTPUT_ID" ]]; then
+	publish "$work/result.ct" "$ct.$OUTPUT_ID"
+	publish "$work/result.vienna" "$vienna.$OUTPUT_ID"
+	publish "$work/accepted" "$aux.$OUTPUT_ID"
 fi
-
-

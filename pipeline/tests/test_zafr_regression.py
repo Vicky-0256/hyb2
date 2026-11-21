@@ -85,7 +85,7 @@ class ZafrRegressionTest(unittest.TestCase):
         sam = result.sam
         self.assertTrue(sam and Path(sam).is_file())
         if _has_viennarna():
-            result = run(sam, self.reference, self.tmp / "sam/zafr_2m", _options(energy=True))
+            result = run(sam, self.reference, self.tmp / "sam/zafr_2m", _options(energy=True, energy_engine="rnacofold"))
             self._check(result, "sam_e1")
         else:
             result = run(sam, self.reference, self.tmp / "sam/zafr_2m", _options())

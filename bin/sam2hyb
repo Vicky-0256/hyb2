@@ -14,7 +14,8 @@ hmax=10
 
 #ENERGY=1 (print predicted folding energy) ENERGY=0 (saves times, doesn't print folding energy)
 ENERGY=1
-#FOLD=1 (ViennaRNA) as default, specify FOLD=0 to use UNAFold
+#FOLD is accepted for compatibility: the dG of each hybrid is always
+#ViennaRNA's (RNAcofold of the two arms); FOLD=0 no longer runs UNAFold
 FOLD=1
 
 # parsing command line options
@@ -63,13 +64,7 @@ remove_duplicate_hybrids_hOH5_2.pl PREFER_MIM=1 $OUT"_mtophits.ref" $OUT"_hybrid
 if [ "$ENERGY" == "1" ]
 then
 	hyb2fasta_bits_allRNAs.awk ${DB/fasta/tab} $OUT"_hybrids_ua.hyb"
-	if [ "$FOLD" == "1" ]
-	then
-		paste -d "&" $OUT"_hybrids_ua.bit_1.fasta" $OUT"_hybrids_ua.bit_2.fasta" | RNAcofold --noconv --noPS | sed 's/&>/-/g;s/&//g;s/>//g;s/ /\t/g' > $OUT"_hybrids_ua.vienna"
-	else
-		hybrid-min $OUT"_hybrids_ua.bit_1.fasta" $OUT"_hybrids_ua.bit_2.fasta" 2>&1 > /dev/null
-		Ct2B_GK_3.pl $OUT"_hybrids_ua.bit_1.fasta-"$OUT"_hybrids_ua.bit_2.fasta.ct" > $OUT"_hybrids_ua.vienna"
-	fi
+	paste -d "&" $OUT"_hybrids_ua.bit_1.fasta" $OUT"_hybrids_ua.bit_2.fasta" | RNAcofold --noconv --noPS | sed 's/&>/-/g;s/&//g;s/>//g;s/ /\t/g' > $OUT"_hybrids_ua.vienna"
 
 	add_dG_hyb_2.pl $OUT"_hybrids_ua.hyb" $OUT"_hybrids_ua.vienna" > $OUT"_hybrids_ua_dg.hyb"
 	collapse_hyb_2.sh $OUT"_hybrids_ua_dg.hyb" | filter_homopolymers.awk | hyb_mapped_position_overlaps_3.awk | hyb_chim_types.awk > $OUT".hyb"

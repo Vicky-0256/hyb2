@@ -5,7 +5,7 @@
 
 # Ct2B_GK_2.pl: version modified to always print the nucleotide sequence, even if it's the same as in the previous record
 
-# Ct2B_GK.pl: Modified Zuker's Ct2B.pl program that can handle .ct files produced by hybrid-min (instead of hybrid-ss-min)
+# Ct2B_GK.pl: Modified Zuker's Ct2B.pl program that can handle .ct files produced by hybrid-min (instead of hybrid-ss-min)  # legacy-name: HYB2 now uses it with HYBRID_SS_MIN=1 only
 # There are two changes: 
 # 1. it allows different numbers of nucleotides in each sequence
 # 2. it reads sequence names from 8th column in header lines (instead of 5th column)
@@ -19,7 +19,7 @@
 # INPUT: Use standard input or give file name on the command line.
 # OUTPUT: standard output
 
-my $HYBRID_SS_MIN = 0; # set this to 0 to use with hybrid-min output; set to 1 to use with hybrid-ss-min output
+my $HYBRID_SS_MIN = 0; # set this to 0 to use with hybrid-min output; set to 1 to use with hybrid-ss-min output  # legacy-name: original option
 
 eval '$'.$1.'$2;' while $ARGV[0] =~ /^([A-Za-z_0-9]+=)(.*)/ && shift;
 

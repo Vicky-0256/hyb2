@@ -4,6 +4,7 @@ The golden files were produced by the legacy ``sam_filt`` + ``sam2hyb -e 0``
 on ``data/testData.sam`` (macOS one-true-awk 20200816, LANG=C.UTF-8).
 """
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -140,6 +141,182 @@ def _fake_folder(pairs):
     return [None if len(a) % 7 == 0 else -(len(a) * 3 + len(b)) / 4.0 for a, b in pairs]
 
 
+class DuplexEnergyTest(unittest.TestCase):
+    """The .hyb dG column from ViennaRNA's RNAduplex (the default engine)."""
+
+    def _hyb(self):
+        hyb = (HERE / "golden/testData.hyb").read_text().splitlines()[:200] \
+            if (HERE / "golden/testData.hyb").exists() else None
+        if not hyb:
+            self.skipTest("no golden testData.hyb")
+        return hyb
+
+    def test_line_energies_do_not_depend_on_read_names(self):
+        reference = list(inputs.iter_lines(ROOT / "data/Zika_18S_formatted.fasta"))
+        lines = [line for line in self._hyb() if line and not line.startswith("#")][:60]
+        renamed = ["read:%d/abc\t%s" % (i, line.split("\t", 1)[1]) for i, line in enumerate(lines)]
+        fold = lambda pairs: [-(len(a) + len(b)) / 4.0 for a, b in pairs]  # noqa: E731
+        with tempfile.TemporaryDirectory() as tmp:
+            outs = []
+            for name, body in (("a", lines), ("b", renamed)):
+                src, dst = Path(tmp) / (name + ".tsv"), Path(tmp) / (name + ".out")
+                src.write_text("".join(line + "\n" for line in body))
+                energy.add_line_energies_file(src, dst, reference, fold, chunk=7)
+                outs.append([line.split("\t")[2] for line in dst.read_text().splitlines()])
+        self.assertEqual(outs[0], outs[1])
+        self.assertTrue(all(value != "." for value in outs[0]), outs[0][:5])
+
+    def test_missing_vienna_stops_before_mapping(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"RNA": None}), \
+                mock.patch.object(energy.shutil, "which", lambda name: None):
+            path = Path(tmp) / "in.sam"
+            path.write_text((ROOT / "data/testData.sam").read_text()[:20000])
+            with self.assertRaises(energy.EnergyUnavailable) as caught:
+                sam2hyb(path, ROOT / "data/Zika_18S_formatted.fasta", Path(tmp) / "out/x", Options(energy=True))
+            self.assertIn("RNAduplex", str(caught.exception))
+            self.assertFalse((Path(tmp) / "out/x.work").exists() and any((Path(tmp) / "out/x.work").iterdir()))
+
+    @unittest.skipUnless(_has_viennarna(), "ViennaRNA Python package not installed")
+    def test_rnaduplex_values(self):
+        pairs = [("GGGAAACCCUUUGGG", "CCCAAAGGGUUUCCC"), ("AAAAAAAA", "AAAAAAAA"), ("", "ACGU"),
+                 ("GCGCGCATAT", "ATATGCGCGC")]
+        values = energy.duplex_folder(1)(pairs)
+        self.assertAlmostEqual(values[0], -28.1, places=1)
+        self.assertIsNone(values[1])  # no pair (RNAduplex: ".&.", 100000)
+        self.assertIsNone(values[2])  # empty arm: not folded
+        self.assertAlmostEqual(values[3], -16.0, places=1)  # T read as U
+        many = [(a, b) for a, b in pairs if a] * 300
+        self.assertEqual(energy.duplex_folder(4)(many), energy.duplex_folder(1)(many))
+
+    @unittest.skipUnless(_has_viennarna() and shutil.which("RNAduplex"), "needs ViennaRNA and the RNAduplex program")
+    def test_rnaduplex_program_matches_the_module(self):
+        pairs = [("GGGAAACCCUUUGGG", "CCCAAAGGGUUUCCC"), ("AAAAAAAA", "AAAAAAAA"), ("", "ACGU"),
+                 ("GCGCGCATAT", "ATATGCGCGC")]
+        self.assertEqual(energy._duplex_cli_chunk(shutil.which("RNAduplex"), pairs), energy.duplex_folder(1)(pairs))
+
+    def test_unknown_engine_is_refused(self):
+        with self.assertRaises(ValueError):
+            energy.engine_folder("mfold")
+
+
+def _fake_duplex_folder(workers=None):
+    """Stand-in for RNAduplex in the run tests: dG = -(len(a) + len(b)) / 4."""
+    return lambda pairs: [-(len(a) + len(b)) / 4.0 for a, b in pairs]
+
+
+def _no_duplex_folder(workers=None):
+    raise energy.EnergyUnavailable("the dG column needs the ViennaRNA Python package or RNAduplex on PATH")
+
+
+class DuplexRunTest(unittest.TestCase):
+    """Result.energy and resuming across energy settings."""
+
+    def test_provenance(self):
+        record = energy.provenance("rnaduplex")
+        self.assertEqual(record["engine"], "rnaduplex")
+        self.assertEqual(record["program"], "ViennaRNA RNAduplex")
+        if _has_viennarna():
+            import RNA
+            self.assertEqual(record["version"], RNA.__version__)
+
+    def test_energy_settings_resume_earlier_stages(self):
+        from unittest import mock
+        from hyb2pipe import pipeline as pipeline_module
+        sam_in, ref = ROOT / "data/testData.sam", ROOT / "data/Zika_18S_formatted.fasta"
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(energy, "duplex_folder", _fake_duplex_folder):
+            on = Options(energy=True)
+            fresh = run(sam_in, ref, Path(tmp) / "fresh/x", on)
+            expected = energy.provenance("rnaduplex")
+            self.assertEqual(fresh.energy, expected)
+            dg = [line.split("\t")[2] for line in fresh.hyb.read_text().splitlines() if not line.startswith("#")]
+            self.assertTrue(dg and all(value.startswith("-") for value in dg), dg[:5])
+
+            # an energy=False run interrupted in its last stage, its checkpoint
+            # rewritten in the format from before energy_key
+            out = Path(tmp) / "out/x"
+            with mock.patch.object(pipeline_module, "_annotate", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    run(sam_in, ref, out)
+            ck_path = Path(str(out) + ".checkpoint.json")
+            old = json.loads(ck_path.read_text())
+            del old["energy_key"]
+            old["options"]["energy"] = False
+            ck_path.write_text(json.dumps(old))
+            stages = []
+            resumed = run(sam_in, ref, out, on, progress=lambda stage, detail: stages.append(stage))
+            self.assertEqual(stages, ["energy", "annotate", "done"])
+            self.assertEqual(resumed.hyb.read_bytes(), fresh.hyb.read_bytes())
+            self.assertEqual(resumed.counts, fresh.counts)
+            self.assertEqual(resumed.energy, expected)
+            # a finished run reports the recorded provenance
+            stages = []
+            again = run(sam_in, ref, out, on, progress=lambda stage, detail: stages.append(stage))
+            self.assertEqual(stages, ["done"])
+            self.assertEqual(again.energy, expected)
+            # energy off again: the work files are gone, so it reruns from the start
+            stages = []
+            off = run(sam_in, ref, out, progress=lambda stage, detail: stages.append(stage))
+            self.assertIn("blast", stages)
+            self.assertIsNone(off.energy)
+            self.assertEqual(off.hyb.read_bytes(), (HERE / "golden/testData.hyb").read_bytes())
+
+            # a changed option other than energy still restarts
+            out2 = Path(tmp) / "out2/x"
+            with mock.patch.object(pipeline_module, "_annotate", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    run(sam_in, ref, out2)
+            stages = []
+            run(sam_in, ref, out2, Options(energy=True, max_hits=9), progress=lambda stage, detail: stages.append(stage))
+            self.assertIn("blast", stages)
+            self.assertIn("hybrids", stages)
+
+    def test_resume_past_energy_needs_no_vienna(self):
+        from unittest import mock
+        from hyb2pipe import energy_stage_pending
+        from hyb2pipe import pipeline as pipeline_module
+        sam_in, ref = ROOT / "data/testData.sam", ROOT / "data/Zika_18S_formatted.fasta"
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out/x"
+            on = Options(energy=True)
+            self.assertTrue(energy_stage_pending(sam_in, ref, out, on))
+            self.assertFalse(energy_stage_pending(sam_in, ref, out, Options()))
+            # the energy stage finishes, then the run is interrupted in annotate
+            with mock.patch.object(energy, "duplex_folder", _fake_duplex_folder), \
+                    mock.patch.object(pipeline_module, "_annotate", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    run(sam_in, ref, out, on)
+            self.assertFalse(energy_stage_pending(sam_in, ref, out, Options(energy=True)))
+            self.assertTrue(energy_stage_pending(sam_in, ref, out, Options(energy=True, resume=False)))
+            self.assertTrue(energy_stage_pending(sam_in, ref, out, Options(energy=True, energy_engine="rnacofold")))
+            self.assertTrue(energy_stage_pending(sam_in, ref, out, Options(energy=True, max_hits=9)))
+            expected = energy.provenance("rnaduplex")
+            with mock.patch.object(energy, "duplex_folder", _no_duplex_folder):
+                stages = []
+                resumed = run(sam_in, ref, out, Options(energy=True), progress=lambda stage, detail: stages.append(stage))
+                self.assertEqual(stages, ["annotate", "done"])
+                self.assertEqual(resumed.energy, expected)  # the recorded provenance
+                self.assertFalse(resumed.energy_ran)
+                again = run(sam_in, ref, out, Options(energy=True))
+                self.assertEqual(again.energy, expected)
+                self.assertFalse(again.energy_ran)
+                self.assertFalse(energy_stage_pending(sam_in, ref, out, Options(energy=True)))
+            dg = [line.split("\t")[2] for line in resumed.hyb.read_text().splitlines() if not line.startswith("#")]
+            self.assertTrue(dg and all(value.startswith("-") for value in dg), dg[:5])
+
+            # a fresh run without a dG engine still stops before mapping
+            fresh = Path(tmp) / "fresh/x"
+            stages = []
+            with mock.patch.object(energy, "duplex_folder", _no_duplex_folder):
+                with self.assertRaises(energy.EnergyUnavailable):
+                    run(sam_in, ref, fresh, Options(energy=True), progress=lambda stage, detail: stages.append(stage))
+            self.assertFalse(set(stages) & {"map", "blast", "hybrids", "energy", "annotate"}, stages)
+            self.assertFalse(Path(str(fresh) + ".work").exists())
+            with mock.patch.object(energy, "duplex_folder", _fake_duplex_folder):
+                ran = run(sam_in, ref, fresh, on)
+            self.assertTrue(ran.energy_ran)
+
+
 class StreamingTest(unittest.TestCase):
     """The bounded-memory stages against the in-memory ports, with tiny
     memory budgets so every external sort spills to disk."""
@@ -175,7 +352,7 @@ class StreamingTest(unittest.TestCase):
         body = [line for line in self.filtered if not line.startswith("@")][:30000]
         header = [line for line in self.filtered if line.startswith("@")]
         # the same reads twice, far apart: repeated read IDs reach the energy step
-        result = self._compare(header + body + body[:8000], Options(memory_mb=1, energy=True), _fake_folder)
+        result = self._compare(header + body + body[:8000], Options(memory_mb=1, energy=True, energy_engine="rnacofold"), _fake_folder)
         self.assertGreater(result.counts["hybrids"], 0)
 
     def test_energy_file_matches_in_memory(self):

@@ -178,7 +178,11 @@ To get familiar with the command line arguements, it could be broadly explained 
 
 -j location of VARNAcmd.jar
 
--r select preferred RNA folding algorithm (default=1 (ViennaRNA), 0 for UNAFold (software not allowed to be distributed here))
+-r select preferred RNA folding algorithm (default=1 (ViennaRNA), 0 for UNAFold (software not allowed to be distributed here), 2 for mfold 3.6)
+
+mfold mode (`-r 2`) folds the structures with mfold 3.6 (`conda install -c bioconda mfold`), which applies the chimera constraints as forced base pairs; `bin/mfold_check` tests this before folding. mfold has no duplex folding, so in this mode the `.hyb` dG column and the chimeras' basepair scores use ViennaRNA's RNAcofold, as in `-r 1`. `bin/mfold_fold` runs each fold in a temporary folder with links to mfold's energy tables (the bioconda build finds them only in the current folder); `MFOLD` names another mfold script.
+
+UNAFold mode needs the full UNAFold `hybrid-ss-min`, which applies the chimera constraints as forced base pairs. The `hybrid-ss-min` of OligoArrayAux (the conda `oligoarrayaux` package, installed for `hybrid-min`) silently ignores forced pairs, so `-r 0` stops with an error when it is the one found (`bin/unafold_check` tests this before folding). Put the full UNAFold's `hybrid-ss-min` first on `PATH`, or set `HYBRID_SS_MIN` to it, or use ViennaRNA (`-r 1`).
 
 ##
 ### Analysis of short-range intramolecular interactions:

@@ -8,7 +8,10 @@
 # -s 1, shuffle constraints
 # -o <TEXT>, append TEXT to output file name
 # see hybrid-ss-min -h for details 
-# -r 1, use ViennaRNA, 0 use UNAFold
+# -r 1, use ViennaRNA, 0 use UNAFold (a full UNAFold hybrid-ss-min: the
+#   OligoArrayAux one ignores forced pairs, so unafold_check stops the run;
+#   HYBRID_SS_MIN names another executable), 2 use mfold 3.6 (mfold_fold;
+#   conda install -c bioconda mfold; mfold_check tests it first)
 
 FOLD=1
 
@@ -28,6 +31,14 @@ do
              ;;
      esac
 done
+
+case "$FOLD" in
+      1) ;;
+      0) unafold_check || exit 1 ;;
+      2) mfold_check || exit 1 ;;
+      *) echo "-r must be 1 (ViennaRNA), 0 (UNAFold) or 2 (mfold)"; exit 1 ;;
+esac
+HYBRID_SS_MIN=${HYBRID_SS_MIN:-hybrid-ss-min}
 
 if [ ! -z $SGE_TASK_ID ] ; then
     if [ "$SGE_TASK_ID" -gt "0" ] ; then
@@ -71,8 +82,10 @@ for (( i=1; i<=$WC; i++ )); do
       awk -v curr=$CURRENT_CONSTRAINTS -v i=$i 'NR==i{print $0 >> curr}' $SHUFFLED_CONSTRAINTS
       if [ "$FOLD" == "1" ]; then
             cat $IN_FASTA$SGE_TASK_ID | RNAfold --noconv --noPS --commands=$CURRENT_CONSTRAINTS | sed 's/&>/-/g;s/&//g' | b2ct | sed 's/ENERGY =/dG =/g' > $CT_OUTPUT 2>&1 > /dev/null
+      elif [ "$FOLD" == "2" ]; then
+            mfold_fold $IN_FASTA$SGE_TASK_ID $CURRENT_CONSTRAINTS $CT_OUTPUT
       else
-            hybrid-ss-min -c $IN_FASTA$SGE_TASK_ID
+            "$HYBRID_SS_MIN" -c $IN_FASTA$SGE_TASK_ID
       fi
 #      CT_FILE_LENGTH=`cat $CT_OUTPUT | wc -l`
 #      if [ "$CT_FILE_LENGTH" -gt "1" ]; then
@@ -94,8 +107,15 @@ cat $ACCEPTED_CONSTRAINTS > $CURRENT_CONSTRAINTS
 if [ "$FOLD" == "1" ]; then
       cat $IN_FASTA$SGE_TASK_ID | RNAfold --noconv --noPS --commands=$CURRENT_CONSTRAINTS | sed 's/&>/-/g;s/&//g' > $VIENNA_OUTPUT
       cat $VIENNA_OUTPUT | b2ct | sed 's/ENERGY =/dG =/g' > $CT_OUTPUT
+elif [ "$FOLD" == "2" ]; then
+      if [ -s "$CURRENT_CONSTRAINTS" ]; then
+            mfold_fold $IN_FASTA$SGE_TASK_ID $CURRENT_CONSTRAINTS $CT_OUTPUT
+      else
+            mfold_fold $IN_FASTA$SGE_TASK_ID - $CT_OUTPUT
+      fi
+      Ct2B_GK_3.pl HYBRID_SS_MIN=1 $CT_OUTPUT > $VIENNA_OUTPUT
 else
-      hybrid-ss-min -c $IN_FASTA$SGE_TASK_ID
+      "$HYBRID_SS_MIN" -c $IN_FASTA$SGE_TASK_ID
       Ct2B_GK_3.pl HYBRID_SS_MIN=1 $CT_OUTPUT > $VIENNA_OUTPUT
 fi
 

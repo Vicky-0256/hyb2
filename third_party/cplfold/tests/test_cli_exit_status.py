@@ -1,10 +1,15 @@
 """Regression tests for CPLfold command-line exit semantics."""
 
+import os
 import sys
 import unittest
 from unittest import mock
 
-import CPLfold
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+import CPLfold  # noqa: E402
 
 
 class CPLfoldCliExitStatusTests(unittest.TestCase):

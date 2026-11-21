@@ -10,7 +10,7 @@
 #heatmap 2nd_fasta_file_if_different_from_1st -a GENE_ID_of_interest -b 2nd_GENE_ID_of interest_if_different -q Upperlimit%_for_heatmap_chimeric_count 
 #RNA folding -x START_COORD_of_1st_strand/gene -y START_COORD_of_2nd_strand/gene -l length_of_fragments -j directory_of_VARNAcmd.jar
 
-#FOLD=1 for ViennaRNA, 0 for UNAFold
+#FOLD=1 for ViennaRNA, 0 for UNAFold, 2 for mfold 3.6 (structures; dG as FOLD=1)
 hval=0.1
 gmax=4
 hmax=10
@@ -41,7 +41,7 @@ print_help() {
     echo "  -l   Length of fragments for zoomed-in contact and folding"
     echo "  -j   Directory of VARNAcmd.jar (default set when installing hyb2)"
     echo "  -e   Calculate Folding Energy: 1 to calculate, 0 to skip and save on runtime (default=0)"
-    echo "  -r   Folding Algorithm: 1 for ViennaRNA, 0 for UNAFold (if installed separately) (default=1)"
+    echo "  -r   Folding Algorithm: 1 for ViennaRNA, 0 for UNAFold (if installed separately), 2 for mfold 3.6 (conda install -c bioconda mfold) (default=1)"
     echo " "
     echo "To only plot contact density map after generating hyb output:"
     echo "hyb2 -i <Output.hyb> -a <GENE_ID_1>"
@@ -65,7 +65,7 @@ print_help() {
     echo "  -x   Start coordinate of 1st strand/gene for folding"
     echo "  -y   Start coordinate of 2nd strand/gene for folding"
     echo "  -j   Directory of VARNAcmd.jar (default set when installing hyb2)"
-    echo "  -r   Folding Algorithm: 1 for ViennaRNA, 0 for UNAFold (if installed separately) (default=1)"
+    echo "  -r   Folding Algorithm: 1 for ViennaRNA, 0 for UNAFold (if installed separately), 2 for mfold 3.6 (conda install -c bioconda mfold) (default=1)"
     echo "  -0   Interactive Mode for VARNA Pop-up: 0 to disable, 1 to activate (default=0)"
     echo " "
     echo "To start GUI:"
@@ -113,6 +113,22 @@ done
 
 if (( $OPTIND == 1 )); then
      print_help
+fi
+
+#UNAFold (-r 0) and mfold (-r 2) folding need a program that applies forced
+#pairs: stop now rather than after mapping (unafold_check, mfold_check)
+case "$FOLD" in
+	1) ;;
+	0) if [ ! -z $X_COORD ] && [ ! -z $LEN ]; then unafold_check || exit 1; fi ;;
+	2) if [ ! -z $X_COORD ] && [ ! -z $LEN ]; then mfold_check || exit 1; fi ;;
+	*) echo "-r must be 1 (ViennaRNA), 0 (UNAFold) or 2 (mfold)" 1>&2; exit 1 ;;
+esac
+#the .hyb dG column (sam2hyb): mfold has no duplex folding, so mode 2 uses
+#RNAcofold, as mode 1
+ENERGY_FOLD=$FOLD
+if [ "$FOLD" == "2" ]
+then
+	ENERGY_FOLD=1
 fi
 
 #Step1 --------------------------------------------------------------------------------------------------------------------------------------------------
@@ -177,7 +193,7 @@ fi
 #Convert SAM to Hyb Format
 if [ ! -f $OUT".hyb" ] && [[ "$IN_FILE"  != *sam ]]
 then
-	if sam2hyb -i $SAM -d $DB_1 -o $OUT -v $hval -g $gmax -e $ENERGY -r $FOLD
+	if sam2hyb -i $SAM -d $DB_1 -o $OUT -v $hval -g $gmax -e $ENERGY -r $ENERGY_FOLD
 	then
 		echo "Hyb File Generated."
 	else
@@ -186,7 +202,7 @@ then
 elif [ ! -f $OUT".hyb" ] && [[ "$IN_FILE"  == *sam ]]
 then
 	sam_filt $IN_FILE > ${SAM/.sam/.filt.sam} && mv ${SAM/.sam/.filt.sam} $SAM
-	if sam2hyb -i $SAM -d $DB_1 -o $OUT -v $hval -g $gmax -e $ENERGY -r $FOLD
+	if sam2hyb -i $SAM -d $DB_1 -o $OUT -v $hval -g $gmax -e $ENERGY -r $ENERGY_FOLD
 	then
 		echo "Hyb File Generated."
         else

@@ -30,7 +30,9 @@ and the collapse steps are external sorts (sorted chunks merged with
   the 33M-read ZAFR_REP1) and are deleted at the end.
 - `<out>.checkpoint.json` records finished stages. Rerunning the same
   command (same input, reference and options) continues after the last
-  finished stage; `--no-resume` starts over.
+  finished stage; `--no-resume` starts over. A rerun that changes only the
+  energy settings (`-e`, `--energy-engine`) keeps the stages before `energy`
+  while their work files are still there.
 - `-p` (Bowtie2 threads and worker processes) defaults to
   `$HYB2_TASK_CPUS`, else all CPUs.
 - With `--json-progress`, long stages also print
@@ -74,6 +76,15 @@ It deliberately differs from the legacy scripts in four places:
 
 - `-h` (maximum hits) is honoured. The legacy `hyb2` wrapper never passed it
   on to `sam2hyb`.
+- With `-e 1`, dG comes from ViennaRNA's RNAduplex (37 °C, pairs between
+  the two arms only, the hybridisation step of the original Hyb pipeline)
+  for each line's own two arms, so it does not depend on the read-name
+  format. Arms that form no pair get an empty dG. `--energy-engine
+  rnacofold` gives the legacy hyb2 behaviour (RNAcofold, keyed by the first
+  two `_` fields of the read ID). The desktop app always runs with `-e 1`
+  and RNAduplex. `Result.energy` (and the checkpoint's `energy` stage)
+  records the engine, program, ViennaRNA version, parameters and scope; it
+  is `None` without `-e 1`.
 - With `-e 1`, dG is written as a plain `%.2f` number. The legacy `sed`
   wrote a TAB inside the value whenever |dG| < 10, which shifted every later
   column.
@@ -89,13 +100,20 @@ It deliberately differs from the legacy scripts in four places:
   PATH. It prefers `bowtie2-align-s` / `bowtie2-build-s`, because the
   `bowtie2` wrapper needs Perl. The desktop runtime ships these binaries;
   see `desktop/scripts/acquire-bowtie2.py`.
-- **ViennaRNA:** needed only for `-e 1`. The pipeline uses the Python `RNA`
-  module, or `RNAcofold` on the PATH if the module is missing. The desktop
+- **ViennaRNA:** needed for `-e 1` (and so for every desktop sample run).
+  The pipeline uses the Python `RNA` module, or `RNAduplex` (`RNAcofold`
+  with `--energy-engine rnacofold`) on the PATH if the module is missing. A
+  run without it stops before mapping; a run resumed past its `energy` stage
+  (same energy settings) does not need it, and
+  `energy_stage_pending(input, reference, out, options)` tells which, from
+  the checkpoint alone. `Result.energy_ran` says whether this invocation
+  computed the dG column. The desktop
   runtime bundles the ViennaRNA 2.7.2 wheel, which exists for Windows, macOS
   and Linux. ViennaRNA's licence allows free redistribution with credit; a
-  commercial product needs the authors' permission. In-process cofolding
-  is spread over one worker process per CPU: about 12 s for the 10k hybrids
-  in `testData.sam`, against 63 s in a single process.
+  commercial product needs the authors' permission. In-process RNAduplex
+  (and cofolding) is spread over one worker process per CPU: about 13 s for
+  the 10k hybrids in `testData.sam` on 10 workers. Cite Lorenz et al. (2011),
+  ViennaRNA Package 2.0, Algorithms Mol Biol 6:26.
 
 Steps 2 and 3 of `hyb2` (contact maps, viewpoint, folding) are already
 provided by the web and desktop analysis pages. `hyb2_compare` (R/DESeq2) has

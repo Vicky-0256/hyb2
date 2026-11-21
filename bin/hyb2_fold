@@ -10,7 +10,8 @@
 
 #if GENE_1 sequence length > GENE_2, -a GENE_1 -1 FASTA_1
 #LEN=length of fragment for folding
-#FOLD=1, ViennaRNA, 0 for UNAFold
+#FOLD=1, ViennaRNA, 0 for UNAFold, 2 for mfold 3.6 (structures only: the
+#basepair scores of the chimeras use ViennaRNA's RNAcofold, as FOLD=1)
 
 FOLD=1
 VARNA="$(VARNAcmd.sh)"
@@ -36,6 +37,21 @@ do
 		;;
 	esac
 done
+
+#UNAFold and mfold modes need a folding program that applies forced pairs
+case "$FOLD" in
+	1) ;;
+	0) unafold_check || exit 1 ;;
+	2) mfold_check || exit 1 ;;
+	*) echo "-r must be 1 (ViennaRNA), 0 (UNAFold) or 2 (mfold)" 1>&2; exit 1 ;;
+esac
+#the chimeras' basepair scores (comradesMakeConstraints_2): mfold has no
+#duplex folding, so mode 2 scores them with RNAcofold
+PAIR_FOLD=$FOLD
+if [ "$FOLD" == "2" ]
+then
+	PAIR_FOLD=1
+fi
 
 #Copy input Fasta into current directory
 cp $FASTA_1 ./
@@ -107,7 +123,7 @@ then
 
 #folding
 	SPAN=$(($LEN+$LEN+100))
-	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $FOLD
+	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $PAIR_FOLD
 	comradesFold2 -c ${OUT_FILE/.hyb/.1-$(($SPAN))_folding_constraints.txt} -i $OUT_FASTA -r $FOLD
 
 #Homodimer folding --------------------------------------------------------------------------------------------------------------------------------------
@@ -137,7 +153,7 @@ then
 
 #folding
 	SPAN=$(($LEN+$LEN+100))
-	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $FOLD
+	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $PAIR_FOLD
 	comradesFold2 -c ${OUT_FILE/.hyb/.1-$(($SPAN))_folding_constraints.txt} -i $OUT_FASTA -r $FOLD
 
 else
@@ -167,14 +183,14 @@ else
 	awk 'NF' $OUT_FASTA | awk 'BEGIN{i=1}{line[i++]=$0}END{print line[1]"\n"line[2] line[3] line[5]}' > ${OUT_FASTA/.fasta/.tmp} && mv ${OUT_FASTA/.fasta/.tmp} $OUT_FASTA
 #folding
 	SPAN=$(($LEN+$LEN+100))
-	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $FOLD
+	comradesMakeConstraints_2 -i $OUT_FILE -f $OUT_FASTA -b 1 -e $SPAN -r $PAIR_FOLD
 	comradesFold2 -c ${OUT_FILE/.hyb/.1-$(($SPAN))_folding_constraints.txt} -i $OUT_FASTA -r $FOLD
 fi
 
 echo "Calculating Basepair Scores..."
 
-#Clear intermediate files
-if [ "$FOLD" != "1" ]
+#Clear intermediate files (hybrid-ss-min's; mfold_fold keeps its own in a temporary folder)
+if [ "$FOLD" == "0" ]
 then
 	rm *plot
 	rm *aux

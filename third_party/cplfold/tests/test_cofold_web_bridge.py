@@ -56,7 +56,7 @@ class CofoldWebBridgeTests(unittest.TestCase):
         expected = dict(
             algorithm="CPLfold pseudoknot-free secondary-structure prediction",
             model="LinearFold Vienna-mode scoring with Turner 2004 energy ranking",
-            engine="CPLfold", engineVersion="24bab52", bridgeVersion="6", allowPseudoknot=False,
+            engine="CPLfold", engineVersion="24bab52", bridgeVersion="7", allowPseudoknot=False,
             runtime="Pyodide 0.29.4; Python 3.13.2; NumPy 2.2.5; Numba identity fallback",
             maxSequenceLength=75, sequence=sequence, dotBracket=structure, pairs=pairs,
             unpaired=3, energy=energy, effectiveEnergy=energy, phase1Energy=energy, score=-1.2,
@@ -65,9 +65,11 @@ class CofoldWebBridgeTests(unittest.TestCase):
             constraintMode="none", constraintSource="none", constraintCount=0, constraints=[],
             evidenceMode="none", evidenceSource="none", selectedCandidate=0, candidates=[candidate],
             parameters=dict(beamSize=5, energyDelta=0.0, maxPhase1=1, energyModel="DP09",
-                            alpha=0.0, beta=0.0, allowPseudoknot=False, linearFoldMode="Vienna", maxPhase2=1),
+                            alpha=0.0, beta=0.0, allowPseudoknot=False, supportKernel="gaussian",
+                            linearFoldMode="Vienna", maxPhase2=1),
             evidence=dict(source="none", inputRecords=0, uniqueBlocks=0, nonzeroBonusCells=0,
-                          nonzeroUpperTriangleCells=0, maximumBonus=0.0, bonusEntries=[], evidenceWeight="none"),
+                          nonzeroUpperTriangleCells=0, maximumBonus=0.0, bonusEntries=[], evidenceWeight="none",
+                          supportKernel="gaussian"),
             nucleotideSupport=[0.0]*9, maximumNucleotideSupport=0.0,
         )
         self.assertEqual(bridge.fold(request(sequence=sequence)), expected)
@@ -256,7 +258,7 @@ print(json.dumps({'structure': result['dotBracketWithBreak'], 'version': result[
         environment = dict(os.environ, CPLFOLD_FORCE_PURE_PYTHON="1", PYTHONDONTWRITEBYTECODE="1")
         completed = subprocess.run([sys.executable, "-c", code, str(CORE), str(BRIDGE.parent)],
                                    env=environment, capture_output=True, text=True, check=True, timeout=30)
-        self.assertEqual(json.loads(completed.stdout), {"structure": "(((&)))", "version": "6"})
+        self.assertEqual(json.loads(completed.stdout), {"structure": "(((&)))", "version": "7"})
 
 
 if __name__ == "__main__":

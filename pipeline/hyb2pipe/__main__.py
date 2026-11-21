@@ -25,6 +25,9 @@ def main(argv=None) -> int:
     parser.add_argument("-m", dest="max_overlap", type=float, default=4, help="maximum overlap (4)")
     parser.add_argument("-h", dest="max_hits", type=int, default=10, help="maximum hits per sequence (10)")
     parser.add_argument("-e", dest="energy", type=int, choices=(0, 1), default=0, help="1 = add folding energy")
+    parser.add_argument("--energy-engine", choices=("rnaduplex", "rnacofold"), default="rnaduplex",
+                        help="dG with -e 1: rnaduplex (ViennaRNA, intermolecular pairs as Hyb; default) "
+                             "or rnacofold (legacy hyb2)")
     parser.add_argument("-p", dest="threads", type=int, default=None, help="Bowtie2 threads")
     parser.add_argument("--keep-sam", choices=("none", "gz", "plain"), default="none",
                         help="also write <out>.sam (plain) or <out>.sam.gz (gz); default none")
@@ -47,6 +50,7 @@ def main(argv=None) -> int:
 
     options = Options(blast_threshold=args.blast_threshold, max_overlap=args.max_overlap,
                       max_hits=args.max_hits, energy=bool(args.energy), threads=args.threads,
+                      energy_engine=args.energy_engine,
                       keep_sam=args.keep_sam, tmp_dir=args.tmp_dir, resume=not args.no_resume)
     if args.memory_mb:
         options.memory_mb = args.memory_mb

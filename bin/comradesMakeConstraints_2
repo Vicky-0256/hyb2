@@ -6,7 +6,7 @@
 # -b, start coordinate of fragment to be folded
 # -e, end coordinate of fragment to be folded
 # -n, number of folding constraints to output (default 75)
-# -r, 1=ViennaRNA, 0=UNAFold
+# -r, accepted for compatibility: the read pairs are always ViennaRNA's (RNAcofold)
 NUM_CONSTRAINTS=75
 FOLD=1
 
@@ -52,12 +52,7 @@ awk -v b=$BEGIN -v e=$END 'BEGIN{FS="\t"}{print ">" $1 "\n" substr($2,b,e-b+1)}'
 
 # calculating comrades scores
 hyb2fasta_bits_allRNAs.awk $REF_TAB $IN_HYB
-if [ "$FOLD" == "1" ]
-then
-	paste -d "&" $BIT_1 $BIT_2 | RNAcofold --noconv --noPS | sed 's/&>/-/g;s/&//g' | b2ct | sed 's/ENERGY =/dG =/g' > $CT
-else
-	hybrid-min $BIT_1 $BIT_2 2>&1 > /dev/null
-fi
+paste -d "&" $BIT_1 $BIT_2 | RNAcofold --noconv --noPS | sed 's/&>/-/g;s/&//g' | b2ct | sed 's/ENERGY =/dG =/g' > $CT
 ct2bps_2.awk $CT | histogram.pl > $BASEPAIR_SCORES
 
 # converting basepair scores to folding constraints

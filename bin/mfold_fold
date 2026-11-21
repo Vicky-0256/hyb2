@@ -1,0 +1,61 @@
+#!/bin/bash
+# mfold_fold: fold one sequence with mfold 3.6, applying forced and
+# prohibited base pairs, and write its minimum free energy structure as a
+# .ct file in hybrid-ss-min's layout (header "N<TAB>dG = E<TAB>name").
+#
+#   mfold_fold <in.fasta> <constraints.aux|-> <out.ct>
+#
+# Constraints are hybrid-ss-min / mfold lines: "F i j k" forces the helix
+# i-j, i+1-j-1, ... (k pairs); "P i j k" prohibits pairs; tabs or spaces.
+# "-" folds without constraints.  Used by comradesFold2 -r 2.
+#
+# mfold writes many files named after the sequence, and the bioconda build
+# finds its energy tables only in the current directory, so every fold runs
+# in a fresh temporary directory with links to the tables (mfold_datdir).
+# MFOLD names another mfold script (default: mfold on PATH).
+#
+# Exit 0 with <out.ct> written; otherwise <out.ct> is removed and the exit
+# status is 1 (mfold missing, no folding, or no energy tables).
+
+IN=$1
+AUX=$2
+OUT=$3
+EXE=${MFOLD:-mfold}
+
+if [ -z "$IN" ] || [ -z "$AUX" ] || [ -z "$OUT" ]; then
+	echo "usage: mfold_fold <in.fasta> <constraints.aux|-> <out.ct>" 1>&2
+	exit 1
+fi
+rm -f "$OUT"
+if ! command -v "$EXE" > /dev/null 2>&1; then
+	echo "mfold was not found (conda install -c bioconda mfold)." 1>&2
+	exit 1
+fi
+DATDIR=$(PATH="$(dirname "$(command -v "$EXE")"):$PATH" mfold_datdir 2> /dev/null | sed -e 's@/$@@')
+if [ -z "$DATDIR" ] || ! ls "$DATDIR"/*.dat > /dev/null 2>&1; then
+	echo "mfold's energy tables were not found (mfold_datdir: '$DATDIR')." 1>&2
+	exit 1
+fi
+
+DIR=$(mktemp -d "${TMPDIR:-/tmp}/mfold_fold.XXXXXX") || exit 1
+trap 'rm -rf "$DIR"' EXIT
+for table in "$DATDIR"/*.dat; do
+	ln -s "$table" "$DIR/"
+done
+# one record: the first sequence of the FASTA, its name kept for the header
+awk 'BEGIN{n=0} /^>/{n++; if (n > 1) exit; print; next} n==1{gsub(/[ \t\r]/, ""); print}' "$IN" > "$DIR/s.seq"
+NAME=$(head -1 "$DIR/s.seq" | awk '{sub(/^>/, ""); print $1}')
+ARGS=(SEQ=s.seq NA=RNA MAX=1)
+if [ "$AUX" != "-" ]; then
+	tr '\t' ' ' < "$AUX" > "$DIR/s.aux"
+	ARGS+=(AUX=s.aux)
+fi
+( cd "$DIR" && "$EXE" "${ARGS[@]}" > mfold.out 2>&1 )
+
+if [ ! -s "$DIR/s.ct" ]; then
+	exit 1
+fi
+# mfold: "N  dG = -8.70  [initially -8.40] name"; keep the first structure
+awk -v name="$NAME" 'NR == 1 {n = $1; split($0, a, "="); split(a[2], e, " "); printf "%d\tdG = %s\t%s\n", n, e[1], name; next}
+	NR <= n + 1 {print}' "$DIR/s.ct" > "$OUT"
+exit 0

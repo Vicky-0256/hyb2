@@ -1,5 +1,10 @@
-"""Optional folding energy (``sam2hyb -e 1``): ``hyb2fasta_bits_allRNAs.awk``,
-``RNAcofold`` and ``add_dG_hyb_2.pl``.
+"""Folding energy of each hybrid's two arms, the .hyb dG column (``-e 1``).
+
+Default: ViennaRNA's ``RNAduplex`` on each hybrid's two arms
+(``duplex_folder``, ``add_line_energies_file``), which, like the original Hyb
+pipeline's dG, forms intermolecular pairs only.  Legacy hyb2: ``RNAcofold``
+with ``hyb2fasta_bits_allRNAs.awk`` and ``add_dG_hyb_2.pl``
+(``energy_engine="rnacofold"``).
 
 Deliberate fix: the legacy ``sed 's/ /\\t/g'`` turned RNAcofold's ``( -9.50)``
 into a dG value with an embedded TAB, shifting every later column for
@@ -189,6 +194,148 @@ def default_folder(workers: Optional[int] = None) -> Folder:
             return values
         return fold
     raise EnergyUnavailable("folding energy needs the ViennaRNA Python package or RNAcofold on PATH")
+
+
+# ---------------------------------------------------------------------------
+# RNAduplex (ViennaRNA): intermolecular pairs of each hybrid's two arms, the
+# model of the original Hyb pipeline's dG column
+# ---------------------------------------------------------------------------
+
+ENGINES = ("rnaduplex", "rnacofold")
+DEFAULT_ENGINE = "rnaduplex"
+# RNAduplex's dG when the two arms form no pair (".&.", 100000 kcal/mol)
+_NO_HYBRID = 1000.0
+DUPLEX_CHUNK = 2000
+
+
+def _vienna_version() -> Optional[str]:
+    try:
+        import RNA  # type: ignore
+    except Exception:
+        return None
+    version = getattr(RNA, "__version__", None)
+    return str(version) if version else None
+
+
+def provenance(engine: str, executable: Optional[str] = None) -> Dict[str, object]:
+    """How the dG column is computed, for the run record (``Result.energy``)."""
+    if engine == "rnaduplex":
+        return {"engine": "rnaduplex", "program": "ViennaRNA RNAduplex", "version": _vienna_version(),
+                "executable": executable, "parameters": "RNA, 37 \u00b0C (ViennaRNA defaults)",
+                "scope": "each hybrid's two arms, intermolecular pairs only"}
+    return {"engine": "rnacofold", "program": "ViennaRNA RNAcofold", "version": _vienna_version(),
+            "executable": None, "parameters": "ViennaRNA defaults (37 \u00b0C)",
+            "scope": "hybrid bits, keyed by read ID (legacy hyb2)"}
+
+
+def _duplex_value(energy: float, structure: str) -> Optional[float]:
+    if "(" not in structure or energy != energy or energy >= _NO_HYBRID:
+        return None
+    return energy
+
+
+def _duplex_chunk(pairs: Sequence[Tuple[str, str]]) -> List[Optional[float]]:
+    """RNAduplex dG of each pair (ViennaRNA's Python module); None for an empty
+    arm or arms that form no pair."""
+    import RNA  # type: ignore
+
+    values: List[Optional[float]] = []
+    for a, b in pairs:
+        if not a or not b:
+            values.append(None)
+            continue
+        hit = RNA.duplexfold(a.upper().replace("T", "U"), b.upper().replace("T", "U"))
+        values.append(_duplex_value(hit.energy, hit.structure))
+    return values
+
+
+def _duplex_cli_chunk(executable: str, pairs: Sequence[Tuple[str, str]]) -> List[Optional[float]]:
+    """As ``_duplex_chunk`` with the ``RNAduplex`` program, which reads the two
+    arms of each pair as consecutive sequences."""
+    values: List[Optional[float]] = [None] * len(pairs)
+    todo = [i for i, (a, b) in enumerate(pairs) if a and b]
+    if not todo:
+        return values
+    text = "".join(">%d\n%s\n>%d\n%s\n" % (i, pairs[i][0].upper().replace("T", "U"), i,
+                                               pairs[i][1].upper().replace("T", "U")) for i in todo)
+    try:
+        done = subprocess.run([executable, "--noconv"], input=text, capture_output=True, text=True, check=True)
+    except OSError as error:
+        raise EnergyUnavailable("RNAduplex could not be started (%s): %s" % (executable, error)) from error
+    except subprocess.CalledProcessError as error:
+        raise EnergyUnavailable("RNAduplex failed with exit status %d." % error.returncode) from error
+    rows = [line for line in done.stdout.splitlines() if "&" in line]
+    if len(rows) != len(todo):
+        raise EnergyUnavailable("RNAduplex returned %d duplexes for %d pairs" % (len(rows), len(todo)))
+    for i, row in zip(todo, rows):
+        match = re.search(r"\(\s*(-?\d+(?:\.\d+)?)\)\s*$", row)
+        if not match:
+            raise EnergyUnavailable("RNAduplex wrote an unreadable line: %r" % row)
+        values[i] = _duplex_value(float(match.group(1)), row.split()[0])
+    return values
+
+
+def duplex_folder(workers: Optional[int] = None) -> Folder:
+    """RNAduplex dG of each pair: ViennaRNA's Python module over ``workers``
+    processes (default one per CPU), else an ``RNAduplex`` executable.  Each
+    pair is independent, so the result does not depend on the chunking or
+    the number of workers."""
+    try:
+        import RNA  # type: ignore  # noqa: F401
+    except ImportError:
+        exe = shutil.which("RNAduplex")
+        if not exe:
+            raise EnergyUnavailable("the dG column needs the ViennaRNA Python package or RNAduplex on PATH")
+        return lambda pairs: _duplex_cli_chunk(exe, list(pairs))
+
+    def fold(pairs):
+        pairs = list(pairs)
+        count = max(1, min(workers or os.cpu_count() or 1, -(-len(pairs) // 500)))
+        if count == 1:
+            return _duplex_chunk(pairs)
+        size = max(100, min(DUPLEX_CHUNK, -(-len(pairs) // (count * 4))))
+        chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
+        with ProcessPoolExecutor(max_workers=count) as pool:
+            return [value for chunk in pool.map(_duplex_chunk, chunks) for value in chunk]
+    return fold
+
+
+def engine_folder(engine: str, workers: Optional[int] = None) -> Folder:
+    """The folder of a dG engine: ``rnaduplex`` (default) or ``rnacofold``."""
+    if engine == "rnaduplex":
+        return duplex_folder(workers)
+    if engine == "rnacofold":
+        return default_folder(workers)
+    raise ValueError("energy_engine must be one of %s: %r" % (", ".join(ENGINES), engine))
+
+
+def add_line_energies_file(src: Path, dst: Path, fasta_lines: Iterable[str], folder: Folder,
+                           chunk: int = 50000) -> None:
+    """dG of each hybrid line's own two arms, ``chunk`` lines at a time.
+    Unlike ``add_energies_file`` (legacy add_dG_hyb_2.pl, keyed by the first
+    two '_'-parts of the read ID), nothing depends on the read-name format."""
+    from .collapse import iter_file
+
+    table = reference_table(fasta_lines)
+    with open(dst, "w", encoding="utf-8", newline="\n") as out:
+        def flush(lines: List[str]) -> None:
+            pairs = [None if _passthrough(line.split("\t")) else bit_pair(line, table) for line in lines]
+            energies = iter(folder([(p[1], p[2]) for p in pairs if p is not None]))
+            for line, pair in zip(lines, pairs):
+                cols = line.split("\t")
+                if _passthrough(cols):
+                    out.write(line + "\n")
+                    continue
+                value = next(energies) if pair is not None else None
+                out.write(_with_dg(cols, "" if value is None else "%.2f" % value) + "\n")
+
+        batch: List[str] = []
+        for line in iter_file(src):
+            batch.append(line)
+            if len(batch) >= chunk:
+                flush(batch)
+                batch = []
+        flush(batch)
 
 
 def add_energies(hyb_lines: Sequence[str], fasta_lines: Iterable[str], folder: Optional[Folder] = None,

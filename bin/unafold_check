@@ -1,0 +1,44 @@
+#!/bin/bash
+# unafold_check: can hybrid-ss-min fold with forced base pairs?
+#
+# The UNAFold mode (-r 0 of hyb2, hyb2_fold and comradesFold2) gives the
+# chimera constraints to hybrid-ss-min as forced pairs ("F i j k" lines of
+# a .aux file, read with -c).  The hybrid-ss-min of OligoArrayAux (the
+# conda/bioconda "oligoarrayaux" package) is a
+# cut-down UNAFold: it accepts -c and applies prohibitions ("P" lines) but
+# silently ignores forced pairs, so every structure would be the
+# unconstrained MFE.  This folds a 34-nt test sequence with one forced
+# helix the MFE does not contain and checks that the helix is there.
+#
+# Exit 0 when forced pairs work; otherwise print why to stderr and exit 1.
+# HYBRID_SS_MIN names the executable (default: hybrid-ss-min on PATH).
+
+EXE=${HYBRID_SS_MIN:-hybrid-ss-min}
+
+if ! command -v "$EXE" > /dev/null 2>&1; then
+	echo "UNAFold mode (-r 0): hybrid-ss-min was not found. Install the full UNAFold, or use ViennaRNA (-r 1)." 1>&2
+	exit 1
+fi
+
+DIR=$(mktemp -d "${TMPDIR:-/tmp}/unafold_check.XXXXXX") || exit 1
+trap 'rm -rf "$DIR"' EXIT
+
+# MFE: 1-12..4-9 and 14-33..21-26; forced: 14-34, 15-33, 16-32 (U-A)
+printf ">t\nGGGGAAAACCCCAUUUUUUUUUUUAAAAAAAAAA\n" > "$DIR/t.fa"
+printf "F\t14\t34\t3\n" > "$DIR/t.fa.aux"
+( cd "$DIR" && "$EXE" -n RNA -c t.fa > /dev/null 2>&1 )
+
+if [ ! -s "$DIR/t.fa.ct" ]; then
+	echo "UNAFold mode (-r 0): $EXE did not fold a test sequence with constraints. Use ViennaRNA (-r 1)." 1>&2
+	exit 1
+fi
+
+FORCED=$(awk 'NR > 1 && (($1 == 14 && $5 == 34) || ($1 == 15 && $5 == 33) || ($1 == 16 && $5 == 32)) {n++} END {print n + 0}' "$DIR/t.fa.ct")
+if [ "$FORCED" != "3" ]; then
+	VERSION=$("$EXE" -V 2>&1 | head -1)
+	echo "UNAFold mode (-r 0): $EXE ($VERSION) ignores forced base pairs, so the chimera constraints would have no effect." 1>&2
+	echo "This is the cut-down hybrid-ss-min of OligoArrayAux. Install the full UNAFold and put its hybrid-ss-min first on PATH" 1>&2
+	echo "(or set HYBRID_SS_MIN to it), or use ViennaRNA (-r 1)." 1>&2
+	exit 1
+fi
+exit 0

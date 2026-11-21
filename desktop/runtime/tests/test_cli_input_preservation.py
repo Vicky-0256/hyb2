@@ -102,9 +102,10 @@ printf '%s\\n' "$first" "$second" > "$CAPTURE/references"''')
 
     def test_filtered_sam_is_separate_from_source_on_success_and_failure(self):
         self.tool("sam2hyb", '''
-while getopts 'i:d:o:v:g:e:r:' opt; do
-    case "$opt" in i) input=$OPTARG;; o) output=$OPTARG;; esac
+while getopts 'i:d:o:v:g:h:e:r:' opt; do
+    case "$opt" in i) input=$OPTARG;; o) output=$OPTARG;; h) max_hits=$OPTARG;; esac
 done
+test "$max_hits" = 7 || exit 2
 cp -- "$input" "$CAPTURE/filtered"
 test "${FAIL_CONVERSION:-0}" = 0 || exit 9
 : > "$output.hyb"''')
@@ -119,7 +120,7 @@ test "${FAIL_CONVERSION:-0}" = 0 || exit 9
                 if fail and not alias:
                     published.write_bytes(b"last complete filtered output\n")
                 self.env["FAIL_CONVERSION"] = str(int(fail))
-                result = self.run_command("hyb2", "-i", source, "-o", prefix)
+                result = self.run_command("hyb2", "-i", source, "-o", prefix, "-h", "7")
                 self.assertEqual(result.returncode == 0, not fail, result.stderr)
                 self.assertEqual(source.read_bytes(), SAM.encode())
                 filtered = (self.root / "filtered").read_text()

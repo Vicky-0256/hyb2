@@ -205,7 +205,7 @@ if [[ "$IN_FILE" == *.hyb ]]; then
 fi
 SAM=$OUT.sam
 convert_sam() {
-    sam2hyb -i "$1" -d "$DB_1" -o "$OUT" -v "$hval" -g "$gmax" -e "$ENERGY" -r "$ENERGY_FOLD" || {
+    sam2hyb -i "$1" -d "$DB_1" -o "$OUT" -v "$hval" -g "$gmax" -h "$hmax" -e "$ENERGY" -r "$ENERGY_FOLD" || {
         echo "SAM conversion failed." >&2
         return 1
     }

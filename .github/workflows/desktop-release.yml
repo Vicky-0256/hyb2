@@ -10,7 +10,8 @@ on:
       - "third_party/iris/**"
       - "web/cplfold/**"
       - "web/assets/examples/**"
-      - "bin/cplfold"
+      - "bin/**"
+      - "scripts/verify-folding-cli.py"
       - "scripts/bundle_sources.py"
       - ".github/workflows/publish-desktop.yml"
       - ".github/workflows/desktop-release.yml"
@@ -81,7 +82,10 @@ jobs:
       - uses: actions/checkout@v6
       - name: Check public folding commands
         if: runner.os == 'Linux'
-        run: python3 -B -m unittest desktop.runtime.tests.test_comrades_cli desktop.runtime.tests.test_hyb2_fold_cli
+        run: |
+          "$CONDA/bin/conda" create --yes --prefix "$RUNNER_TEMP/folding-cli" \
+            --override-channels --strict-channel-priority -c conda-forge -c bioconda viennarna=2.6.4 mfold=3.6
+          PATH="$RUNNER_TEMP/folding-cli/bin:$PATH" python3 -B scripts/verify-folding-cli.py
       - name: The tag is the app version
         if: inputs.release_installers
         run: |

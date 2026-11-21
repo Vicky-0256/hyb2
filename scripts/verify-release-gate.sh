@@ -20,7 +20,7 @@ if ! command -v emcc >/dev/null 2>&1; then
 fi
 
 echo '[1/5] Check the public folding commands'
-python3 -B -m unittest desktop.runtime.tests.test_comrades_cli desktop.runtime.tests.test_hyb2_fold_cli
+python3 -B scripts/verify-folding-cli.py
 
 echo '[2/5] Build ViennaRNA WebAssembly'
 bash scripts/build-vienna-wasm.sh

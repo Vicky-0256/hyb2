@@ -161,6 +161,51 @@ class PackagedSourceTests(unittest.TestCase):
                     self.web.stage_web_sources(self.repo, self.root / 'browser', self.root / 'assets')
                 (self.repo / name).unlink()
 
+    def test_package_resources_load_in_native_and_browser_from_archive_and_git(self):
+        sources = {'shared_catalog': 'third_party/cplfold', 'bridge_catalog': 'web/cplfold'}
+        for name, source in sources.items():
+            prefix = f'{source}/{name}'
+            self.write(prefix + '/__init__.py', '')
+            self.write(prefix + '/defaults.json', '{"marker": 271}')
+            self.write(prefix + '/data/current', name)
+        self.write('third_party/cplfold/notes/local.txt')
+        self.write('third_party/cplfold/data/sample.json')
+        for mode in ('archive', 'checkout'):
+            with self.subTest(mode=mode):
+                if mode == 'checkout':
+                    self.track_sources()
+                    self.write('web/cplfold/bridge_catalog/untracked.json')
+                native, browser = self.root / mode / 'native', self.root / mode / 'browser'
+                self.stage.stage_sources(self.repo, native)
+                self.web.stage_web_sources(self.repo, browser, self.root / mode / 'assets')
+                self.assertFalse((browser / 'notes/local.txt').exists())
+                self.assertFalse((browser / 'data/sample.json').exists())
+                self.assertFalse((browser / 'bridge_catalog/untracked.json').exists())
+                self.assertFalse((native / 'web/cplfold/bridge_catalog/untracked.json').exists())
+                archive = shutil.make_archive(str(self.root / mode / 'source'), 'zip', root_dir=browser)
+                probe = ('import sys, json; from importlib.resources import files; '
+                         'sys.path.insert(0, sys.argv[1]); root = files(sys.argv[2]); '
+                         'print(json.loads((root / "defaults.json").read_text())["marker"], '
+                         '(root / "data" / "current").read_text())')
+                for name, source in sources.items():
+                    for path in (native / source, archive):
+                        result = subprocess.run([sys.executable, '-I', '-B', '-c', probe, path, name],
+                                                cwd=self.root, text=True, capture_output=True)
+                        self.assertEqual((result.returncode, result.stdout.strip()),
+                                         (0, '271 ' + name), result.stderr)
+
+    def test_namespace_resource_collisions_are_reported_before_staging(self):
+        self.write('third_party/cplfold/catalog/core.py')
+        self.write('third_party/cplfold/catalog/defaults')
+        for suffix in ('defaults', 'defaults/current', '__init__.py'):
+            with self.subTest(suffix=suffix):
+                name = 'web/cplfold/catalog/' + suffix
+                self.write(name)
+                with self.assertRaisesRegex(ValueError, 'conflicting browser .*catalog'):
+                    self.web.stage_web_sources(self.repo, self.root / 'browser', self.root / 'assets')
+                self.assertFalse((self.root / 'browser').exists())
+                (self.repo / name).unlink()
+
     def test_browser_still_requires_utils(self):
         shutil.rmtree(self.repo / 'third_party/cplfold/Utils')
         with self.assertRaisesRegex(ValueError, 'missing: third_party/cplfold/Utils'):

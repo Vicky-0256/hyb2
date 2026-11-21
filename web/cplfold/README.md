@@ -30,6 +30,9 @@ The browser runtime is intentionally conservative:
   checked against its SHA-256 manifest in the worker before import. Increment
   `BRIDGE_VERSION` in the bridge, worker and build manifest whenever that
   packaged interface changes. GitHub Actions publishes the same-origin assets.
+- Put shared runtime resources inside a Python package under `third_party/cplfold/`
+  or `web/cplfold/` and track them in Git. Both builds include package files,
+  including nested `data/` directories. Top-level example datasets are excluded.
 
 CPLfold's own code is GPL-2.0-or-later (`third_party/cplfold/LICENSE`); the
 LinearFold terms of its parser and the remaining licensing question are

@@ -1156,14 +1156,17 @@
   function renderDesktopDownloads(options) {
     const kit = desktopKit();
     const settings = options || {};
+    const platforms = kit.downloadsAvailable
+      ? kit.platforms.filter(function (item) { return kit.downloadUrl(item); })
+      : kit.platforms;
     const groups = [
       { os: "mac", name: "macOS" },
       { os: "windows", name: "Windows" },
       { os: "linux", name: "Linux" }
     ].map(function (group) {
-      group.platforms = kit.platforms.filter(function (item) { return item.os === group.os; });
+      group.platforms = platforms.filter(function (item) { return item.os === group.os; });
       return group;
-    });
+    }).filter(function (group) { return group.platforms.length; });
 
     if (!kit.downloadsAvailable) {
       const planned = groups.map(function (group) {
@@ -1180,6 +1183,8 @@
     }
 
     const mine = kit.detectPlatform();
+    const checksums = kit.checksumsUrl();
+    const notes = kit.releaseNotesUrl();
     const link = function (item, primary) {
       return '<a class="' + (primary ? "button desktop-download-primary" : "desktop-download-link") + '" href="' + escapeAttribute(kit.downloadUrl(item)) +
         '" data-platform="' + escapeAttribute(item.id) + '"' + (primary ? "" : ' aria-label="Download for ' + escapeAttribute(item.label) + '"') + ">" +
@@ -1193,34 +1198,52 @@
       }).filter(Boolean);
       choices = link(mine, true) +
         (others.length ? '<p class="desktop-download-others">Download for another system: ' + others.join('<span aria-hidden="true"> · </span>') + "</p>" : "");
-    } else {
+    } else if (groups.length) {
       choices = '<div class="desktop-download-groups">' + groups.map(function (group) {
         return '<div class="desktop-download-group"><span>' + escapeHtml(group.name) + "</span>" +
           group.platforms.map(function (item) {
             return '<a class="button button-secondary button-compact desktop-download-link" href="' + escapeAttribute(kit.downloadUrl(item)) + '" data-platform="' + escapeAttribute(item.id) + '" aria-label="Download for ' + escapeAttribute(item.label) + '">Download ' +
-              escapeHtml(group.platforms.length > 1 ? item.label.split(" · ").pop() : "") + "</a>";
+              escapeHtml(group.os === "linux" ? item.label.split(" · ").pop() : "") + "</a>";
           }).join("") + "</div>";
       }).join("") + "</div>";
+    } else {
+      choices = '<p class="desktop-downloads-status">' +
+        (notes ? "No installers are available for this release." : "No desktop releases have been published yet.") + "</p>";
     }
     const versions = desktopVersions(kit);
-    const debFile = (kit.platforms.filter(function (item) { return item.id === "linux-deb"; })[0] || { file: "" }).file;
+    const meta = [];
+    if (checksums) meta.push('<a href="' + escapeAttribute(checksums) + '">Checksums (' + escapeHtml(kit.checksumsFile) + ")</a>");
+    if (notes) meta.push('<a href="' + escapeAttribute(notes) + '">Release notes</a>');
+    meta.push('<a href="' + escapeAttribute(kit.releasesUrl) + '">All releases</a>');
     return [
       '<div class="desktop-downloads">',
       versions.latest,
       choices,
-      '<p class="desktop-download-unavailable">' + escapeHtml(kit.unavailable) + "</p>",
-      '<details class="desktop-first-launch" data-open-key="desktop-first-launch"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["desktop-first-launch"] ? " open" : "") + ">",
-      "<summary>First launch (unsigned app)</summary>",
-      "<p>HYB2 Desktop is not yet signed with an Apple or Microsoft developer certificate, so macOS and Windows warn the first time it opens. The warning concerns the missing signature; you can check the download against the checksums below.</p>",
-      "<p><strong>macOS:</strong> drag HYB2 Desktop to Applications and open it once. When macOS says it cannot verify the app, choose Done. Then open System Settings → Privacy &amp; Security, scroll down and choose Open Anyway next to HYB2 Desktop, and confirm with your password. Later launches open normally. Alternatively, run <code>xattr -dr com.apple.quarantine \"/Applications/HYB2 Desktop.app\"</code> in Terminal.</p>",
-      "<p><strong>Windows:</strong> if the browser holds the download, choose Keep. When SmartScreen shows “Windows protected your PC”, choose More info → Run anyway.</p>",
-      "<p><strong>Linux:</strong> no warning. Install the .deb with <code>sudo apt install ./" + escapeHtml(debFile) + "</code>, or unpack the .tar.gz and run <code>./hyb2-desktop</code> inside it.</p>",
-      "</details>",
-      '<p class="desktop-download-meta"><a href="' + escapeAttribute(kit.checksumsUrl()) + '">Checksums (' + escapeHtml(kit.checksumsFile) + ")</a>" +
-        '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl + "/latest") + '">Release notes</a>' +
-        '<span aria-hidden="true"> · </span><a href="' + escapeAttribute(kit.releasesUrl) + '">All releases</a></p>',
+      groups.length ? '<p class="desktop-download-unavailable">' + escapeHtml(kit.unavailable) + "</p>" : "",
+      desktopFirstLaunch(platforms, checksums),
+      '<p class="desktop-download-meta">' + meta.join('<span aria-hidden="true"> · </span>') + "</p>",
       versions.earlier,
       "</div>"
+    ].join("");
+  }
+
+  function desktopFirstLaunch(platforms, checksums) {
+    if (!platforms.length) return "";
+    const hasMac = platforms.some(function (item) { return item.os === "mac"; });
+    const hasWindows = platforms.some(function (item) { return item.os === "windows"; });
+    const linuxInstall = platforms.filter(function (item) { return item.os === "linux"; }).map(function (item) {
+      return item.id === "linux-deb" ? "install the .deb with <code>sudo apt install ./" + escapeHtml(item.file) + "</code>" :
+        "unpack the .tar.gz and run <code>./hyb2-desktop</code> inside it";
+    });
+    return [
+      '<details class="desktop-first-launch" data-open-key="desktop-first-launch"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["desktop-first-launch"] ? " open" : "") + ">",
+      "<summary>First launch (unsigned app)</summary>",
+      hasMac || hasWindows ? "<p>HYB2 Desktop is not yet signed with an Apple or Microsoft developer certificate, so macOS and Windows warn the first time it opens." +
+        (checksums ? " You can verify the download using the checksums below." : "") + "</p>" : "",
+      hasMac ? "<p><strong>macOS:</strong> drag HYB2 Desktop to Applications and open it once. When macOS says it cannot verify the app, choose Done. Then open System Settings → Privacy &amp; Security, scroll down and choose Open Anyway next to HYB2 Desktop, and confirm with your password. Later launches open normally. Alternatively, run <code>xattr -dr com.apple.quarantine \"/Applications/HYB2 Desktop.app\"</code> in Terminal.</p>" : "",
+      hasWindows ? "<p><strong>Windows:</strong> if the browser holds the download, choose Keep. When SmartScreen shows “Windows protected your PC”, choose More info → Run anyway.</p>" : "",
+      linuxInstall.length ? "<p><strong>Linux:</strong> " + linuxInstall.join(", or ") + ".</p>" : "",
+      "</details>"
     ].join("");
   }
 
@@ -1242,7 +1265,7 @@
         return '<a class="desktop-download-link" href="' + escapeAttribute(kit.releaseDownloadUrl(release.tag, item)) + '" data-platform="' + escapeAttribute(item.id) +
           '" aria-label="Download ' + escapeAttribute(release.tag) + " for " + escapeAttribute(item.label) + '">' + escapeHtml(item.label) + "</a>";
       });
-      links.push('<a class="desktop-download-link" href="' + escapeAttribute(kit.releasesUrl + "/tag/" + encodeURIComponent(release.tag)) + '">Release notes</a>');
+      links.push('<a class="desktop-download-link" href="' + escapeAttribute(kit.releaseNotesUrl(release)) + '">Release notes</a>');
       return '<li><span class="desktop-version-name">' + escapeHtml(release.tag) + "</span>" +
         (date(release) ? ' <span class="desktop-version-date">' + escapeHtml(date(release)) + "</span>" : "") +
         '<span class="desktop-version-links">' + links.join('<span aria-hidden="true"> · </span>') + "</span></li>";

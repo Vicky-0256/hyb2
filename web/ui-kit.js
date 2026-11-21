@@ -372,7 +372,7 @@
     isInsideDesktop: function () {
       return !!(root.Hyb2Desktop && root.Hyb2Desktop.enabled);
     },
-    // the first platform for this computer's OS (Linux: the .deb), or null.
+    // The first published installer for this OS (Linux prefers the .deb).
     // iPadOS Safari reports a Mac; a touch screen with several touch points
     // tells it apart (Macs report 0).
     detectPlatform: function (userAgent, maxTouchPoints) {
@@ -385,11 +385,18 @@
       }
       const os = text.indexOf("mac") !== -1 ? "mac" : text.indexOf("win") !== -1 ? "windows" :
         text.indexOf("linux") !== -1 && text.indexOf("android") === -1 ? "linux" : "";
-      return desktop.platforms.filter(function (item) { return item.os === os; })[0] || null;
+      return desktop.platforms.find(function (item) { return item.os === os && desktop.downloadUrl(item); }) || null;
     },
     downloadUrl: function (platform) {
       const file = typeof platform === "string" ? platform : platform && platform.file;
-      return desktop.downloadsAvailable && file ? desktop.releasesUrl + "/latest/download/" + file : "";
+      if (!desktop.downloadsAvailable || !file) return "";
+      const release = desktop.releases()[0];
+      if (release) {
+        return release.files.includes(file) ? desktop.releaseDownloadUrl(release.tag, file) : "";
+      }
+      // A missing catalog uses GitHub's live latest release; an empty catalog
+      // means we know there are no published files.
+      return Array.isArray(root.HYB2_RELEASES) ? "" : desktop.releasesUrl + "/latest/download/" + file;
     },
     checksumsUrl: function () {
       return desktop.downloadUrl(desktop.checksumsFile);
@@ -409,6 +416,12 @@
       return desktop.downloadsAvailable && tag && file
         ? desktop.releasesUrl + "/download/" + encodeURIComponent(tag) + "/" + file : "";
     },
+    releaseNotesUrl: function (release) {
+      if (!desktop.downloadsAvailable) return "";
+      const selected = release || desktop.releases()[0];
+      if (selected) return desktop.releasesUrl + "/tag/" + encodeURIComponent(selected.tag);
+      return Array.isArray(root.HYB2_RELEASES) ? "" : desktop.releasesUrl + "/latest";
+    },
     // <a class="desktop-cta" data-action="open-desktop">: the app opens the
     // Desktop drawer on click (and calls preventDefault). Without that handler
     // the link goes to the release page, or nowhere while downloads are private.
@@ -416,9 +429,9 @@
       if (desktop.isInsideDesktop() || !DESKTOP_CTA[context]) {
         return "";
       }
-      const href = desktop.downloadsAvailable ? desktop.releasesUrl + "/latest" : "#hyb2-desktop";
-      const label = desktop.downloadsAvailable ? "Get HYB2 Desktop" : "About HYB2 Desktop";
-      return '<a class="desktop-cta" href="' + href + '" data-action="open-desktop" data-desktop-context="' +
+      const href = desktop.releaseNotesUrl() || "#hyb2-desktop";
+      const label = desktop.platforms.some(function (item) { return desktop.downloadUrl(item); }) ? "Get HYB2 Desktop" : "About HYB2 Desktop";
+      return '<a class="desktop-cta" href="' + escapeText(href) + '" data-action="open-desktop" data-desktop-context="' +
         escapeText(context) + '">' + escapeText(DESKTOP_CTA[context]) + " <strong>" + label + "</strong></a>";
     }
   };

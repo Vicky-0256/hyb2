@@ -246,16 +246,68 @@ const releases = [
   { tag: "v9.1.0", published: "2026-02-10", files: ["HYB2-Desktop-Windows-x64-Setup.exe"] },
   { tag: "v9.0.0", published: "2026-02-01", files: ["HYB2-Desktop-macOS-arm64.dmg"] }
 ];
-const versions = mountSite(createContext({ releases, hash: "#hyb2-desktop" })).innerHTML;
+const versions = mountSite(createContext({ releases, hash: "#hyb2-desktop", userAgent: "Windows NT 10.0" })).innerHTML;
 has(versions, /<p class="desktop-download-version">Latest version <strong>v9\.1\.0<\/strong>/);
 assert.ok(versions.indexOf("desktop-download-version") < versions.indexOf("desktop-download-primary"), "the latest version is named over the download button");
+has(versions, /class="button desktop-download-primary" href="[^"]*\/download\/v9\.1\.0\/HYB2-Desktop-Windows-x64-Setup\.exe" data-platform="win-x64"/);
+has(versions, /href="[^"]*\/tag\/v9\.1\.0">Release notes<\/a>/);
+hasNot(versions, /\/download\/v9\.1\.0\/HYB2-Desktop-(?:macOS|Linux)|\/releases\/latest|SHA256SUMS|checksums below/);
 has(versions, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases">All releases<\/a>/);
 has(versions, /<summary>Earlier versions \(1\)<\/summary>/);
 has(versions, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/download\/v9\.0\.0\/HYB2-Desktop-macOS-arm64\.dmg"/);
 has(versions, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/tag\/v9\.0\.0">Release notes<\/a>/);
 hasNot(versions, /releases\/download\/v9\.0\.0\/HYB2-Desktop-Windows/);
 const hidden = mountSite(createContext({ releases, downloadsHidden: true, hash: "#hyb2-desktop" })).innerHTML;
-hasNot(hidden, /releases\/download\/|desktop-versions/, "hidden downloads list no versions either");
+hasNot(hidden, /github\.com\/Vicky-0256\/hyb2\/releases|desktop-versions|desktop-download-primary/, "hidden downloads have no public links");
+
+const mac = mountSite(createContext({ releases })).innerHTML;
+hasNot(mac, /desktop-download-primary/, "this release has no macOS installer");
+has(mac, /class="desktop-download-groups"/, "the available Windows installer remains accessible");
+const linuxTar = [{ tag: "v9.2", files: ["HYB2-Desktop-Linux-x64.tar.gz", "SHA256SUMS.txt"] }];
+const linux = mountSite(createContext({ releases: linuxTar, userAgent: "X11; Linux x86_64" })).innerHTML;
+has(linux, /class="button desktop-download-primary" href="[^"]*\/download\/v9\.2\/HYB2-Desktop-Linux-x64\.tar\.gz" data-platform="linux-tar"/);
+has(linux, /href="[^"]*\/download\/v9\.2\/SHA256SUMS\.txt"/);
+hasNot(linux, /linux-deb|sudo apt install|\/releases\/latest/);
+
+const empty = mountSite(createContext({ releases: [] })).innerHTML;
+has(empty, /No desktop releases have been published yet/);
+hasNot(empty, /desktop-download-primary|\/releases\/latest|>Release notes<|>Checksums \(/);
+const notesOnly = mountSite(createContext({ releases: [{ tag: "v9.3", files: [] }] })).innerHTML;
+has(notesOnly, /No installers are available for this release/);
+has(notesOnly, /href="[^"]*\/tag\/v9\.3">Release notes<\/a>/);
+hasNot(notesOnly, /desktop-download-primary|\/releases\/latest|>Checksums \(/);
+
+function rawActions(options) {
+  const host = mountSite(createContext(options));
+  const dropzone = new FakeElement("div");
+  host.listeners.drop[0]({
+    target: { closest: function () { return dropzone; } }, preventDefault: function () {},
+    dataTransfer: { files: [{ name: "sample.fastq" }] }
+  });
+  const actions = /<div class="raw-reads-actions">([\s\S]*?)<\/div>/.exec(host.innerHTML);
+  assert.ok(actions, "dropping a FASTQ opens the raw-reads handoff");
+  return actions[1];
+}
+hasNot(rawActions({ releases }), /Download for/, "raw-reads handoff on a Mac with only Windows published");
+has(rawActions({ releases, userAgent: "Windows NT 10.0" }), /href="[^"]*\/download\/v9\.1\.0\/HYB2-Desktop-Windows-x64-Setup\.exe">Download for Windows/);
+has(rawActions({}), /\/releases\/latest\/download\/HYB2-Desktop-macOS-arm64\.dmg/);
+hasNot(rawActions({ releases, downloadsHidden: true }), /\/releases\/|Download for/);
+
+// Exercise the catalog shipped in this build as well as partial-release fixtures.
+const snapshot = { window: {} };
+vm.runInNewContext(fs.readFileSync(web("releases.js"), "utf8"), snapshot);
+const published = snapshot.window.HYB2_RELEASES;
+const catalog = mountSite(createContext({ releases: published, hash: "#hyb2-desktop" })).innerHTML;
+published.forEach(function (release, index) {
+  const base = "https://github.com/Vicky-0256/hyb2/releases";
+  const tag = encodeURIComponent(release.tag);
+  assert.ok(catalog.includes('href="' + base + "/tag/" + tag + '">Release notes</a>'), release.tag);
+  release.files.filter(function (file) {
+    return /\.(dmg|exe|deb|tar\.gz)$/.test(file) || (index === 0 && file === "SHA256SUMS.txt");
+  }).forEach(function (file) {
+    assert.ok(catalog.includes('href="' + base + "/download/" + tag + "/" + file + '"'), release.tag + ": " + file);
+  });
+});
 
 // ---- A18: inside HYB2 Desktop no page offers HYB2 Desktop
 const inside = createContext({ desktop: { enabled: true } });

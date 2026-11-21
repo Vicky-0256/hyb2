@@ -131,6 +131,14 @@ assert.equal(desk.releaseDownloadUrl("v0.1.4", desk.platforms[1]), "https://gith
 assert.equal(desk.releases().length, 0, "no web/releases.js loaded: no versions");
 context.window.HYB2_RELEASES = [{ tag: "v0.2.0", published: "2026-11-01", files: ["HYB2-Desktop-macOS-arm64.dmg"] }, { tag: "broken" }, null];
 assert.equal(desk.releases().map(function (release) { return release.tag; }).join(","), "v0.2.0", "malformed entries are left out");
+assert.equal(desk.downloadUrl(desk.platforms[0]), "https://github.com/Vicky-0256/hyb2/releases/download/v0.2.0/HYB2-Desktop-macOS-arm64.dmg");
+assert.equal(desk.downloadUrl(desk.platforms[1]), "");
+assert.equal(desk.checksumsUrl(), "");
+assert.equal(desk.detectPlatform("Windows NT 10.0"), null);
+assert.equal(desk.releaseNotesUrl(), "https://github.com/Vicky-0256/hyb2/releases/tag/v0.2.0");
+context.window.HYB2_RELEASES = [];
+assert.equal(desk.downloadUrl(desk.platforms[0]), "");
+assert.equal(desk.releaseNotesUrl(), "");
 delete context.window.HYB2_RELEASES;
 // the generated list, as committed, names only installers the release workflow builds
 const releasesSource = fs.readFileSync(web("releases.js"), "utf8");

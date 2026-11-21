@@ -145,25 +145,28 @@ fi
 #Step1 --------------------------------------------------------------------------------------------------------------------------------------------------
 #Process SAM files to Hyb format
 
-#Reformat reference sequence files
-if [[ -n "$DB_1" ]] && grep -qm1 '|' -- "$DB_1"
-then
-	fasta_hyb2_formatting -i "$DB_1"
-	DB_1=${DB_1/.fasta/.hyb.fasta}
-fi
-
-if [[ -n "$DB_2" ]]
-then
-	if grep -qm1 '|' -- "$DB_2"
-	then
-		fasta_hyb2_formatting -i "$DB_2"
-		DB_2=${DB_2/.fasta/.hyb.fasta}
-	fi
-fi
-
-if [[ -z "$DB_2" ]]
-then
-        DB_2=$DB_1
+# Keep all original paths reserved when deriving either formatted reference.
+original_ref_1=$DB_1
+original_ref_2=$DB_2
+for input in "$IN_FILE" "$original_ref_1" "$original_ref_2"; do
+    [[ -z "$input" || ( -f "$input" && -r "$input" ) ]] || { echo "Cannot read input: $input" >&2; exit 1; }
+done
+prepare_reference() {
+    local source=$1 status
+    shift
+    if grep -q '|' < "$source"; then
+        fasta_hyb2_formatting -P -i "$source" -p "$IN_FILE" -p "$original_ref_1" -p "$original_ref_2" "$@"
+    else
+        status=$?
+        [[ $status == 1 ]] || return "$status"
+        printf '%s\n' "$source"
+    fi
+}
+if [[ -n "$original_ref_1" ]]; then DB_1=$(prepare_reference "$original_ref_1"); fi
+if [[ -z "$original_ref_2" || "$original_ref_2" -ef "$original_ref_1" ]]; then
+    DB_2=$DB_1
+else
+    DB_2=$(prepare_reference "$original_ref_2" -p "$DB_1")
 fi
 
 #If input is in fastq/gz or fasta format, convert to SAM using bowtie2
@@ -196,49 +199,50 @@ then
 	fi
 fi
 
-SAM=$OUT".sam"
-
-if [[ "$IN_FILE"  == *hyb ]]
-then
-	OUT=${IN_FILE/.hyb/}
-	echo "Hyb Format As Input Detected"
+if [[ "$IN_FILE" == *.hyb ]]; then
+    OUT=${IN_FILE%.hyb}
+    echo "Hyb Format As Input Detected"
 fi
-
-#Convert SAM to Hyb Format
-if [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  != *sam ]]
-then
-	if sam2hyb -i "$SAM" -d "$DB_1" -o "$OUT" -v "$hval" -g "$gmax" -e "$ENERGY" -r "$ENERGY_FOLD"
-	then
-		echo "Hyb File Generated."
-	else
-		echo "Error! Aborting! Check input arguments." 1>&2
-		exit 1
-	fi
-elif [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  == *sam ]]
-then
-	sam_filt "$IN_FILE" > "${SAM/.sam/.filt.sam}"
-	mv -- "${SAM/.sam/.filt.sam}" "$SAM"
-	if sam2hyb -i "$SAM" -d "$DB_1" -o "$OUT" -v "$hval" -g "$gmax" -e "$ENERGY" -r "$ENERGY_FOLD"
-	then
-		echo "Hyb File Generated."
-        else
-                echo "Error! Aborting! Check input arguments." 1>&2
-                exit 1
+SAM=$OUT.sam
+convert_sam() {
+    sam2hyb -i "$1" -d "$DB_1" -o "$OUT" -v "$hval" -g "$gmax" -e "$ENERGY" -r "$ENERGY_FOLD" || {
+        echo "SAM conversion failed." >&2
+        return 1
+    }
+    [[ -f "$OUT.hyb" ]] || { echo "SAM conversion did not produce $OUT.hyb." >&2; return 1; }
+    echo "Hyb File Generated."
+}
+if [[ -f "$OUT.hyb" ]]; then
+    echo "Hyb File Exist. Next Step."
+elif [[ "$IN_FILE" == *.sam ]]; then
+    (
+        work=$(mktemp -d "${SAM}.filter.XXXXXX")
+        trap 'rm -rf -- "$work"' EXIT
+        trap 'exit 1' HUP INT TERM
+        filtered=$work/filtered.sam
+        sam_filt "$IN_FILE" > "$filtered"
+        [[ ! -d "$SAM" ]] || { echo "SAM output is a directory: $SAM" >&2; exit 1; }
+        convert_sam "$filtered"
+        # Publish the traditional filtered .sam only after successful conversion
+        # and only if that path is separate from every input.
+        if [[ ! "$SAM" -ef "$IN_FILE" && ! "$SAM" -ef "$original_ref_1" && ! "$SAM" -ef "$original_ref_2" ]]; then
+            mv -f -- "$filtered" "$SAM"
         fi
+    )
 else
-	echo "Hyb File Exist. Next Step."
+    convert_sam "$SAM"
 fi
 
 #Step2 --------------------------------------------------------------------------------------------------------------------------------------------------
 #Plot contact density map of selected genes
 if [ ! -z $GENE_1 ]
 then
-	hyb2_coverage -i $OUT".hyb" -q $LIMIT -a $GENE_1
+	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1"
 fi
 
 if [ ! -z $GENE_2 ]
 then
-	hyb2_coverage -i $OUT".hyb" -q $LIMIT -a $GENE_1 -b $GENE_2
+	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1" -b "$GENE_2"
 else
 	echo "To plot contact density map of second gene, add to command: -b <GENE_ID_2>." 1>&2
 fi
@@ -246,17 +250,17 @@ fi
 if [ -z $GENE_2 ] && [ -z $Y_COORD ] && [ ! -z $LEN ]
 then
 	X_END=$(($X_COORD+$LEN-1))
-	hyb2_coverage -i $OUT".hyb" -q $LIMIT -a $GENE_1 -w $X_COORD -x $X_END -y $X_COORD -z $X_END
+	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1" -w "$X_COORD" -x "$X_END" -y "$X_COORD" -z "$X_END"
 elif [ -z $GENE_2 ] && [ ! -z $Y_COORD ] && [ ! -z $LEN ]
 then
 	X_END=$(($X_COORD+$LEN-1))
 	Y_END=$(($Y_COORD+$LEN-1))
-	hyb2_coverage -i $OUT".hyb" -q $LIMIT -a $GENE_1 -w $X_COORD -x $X_END -y $Y_COORD -z $Y_END
+	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1" -w "$X_COORD" -x "$X_END" -y "$Y_COORD" -z "$Y_END"
 elif [ ! -z $GENE_2 ] && [ ! -z $Y_COORD ] && [ ! -z $LEN ]
 then
 	X_END=$(($X_COORD+$LEN-1))
 	Y_END=$(($Y_COORD+$LEN-1))
-	hyb2_coverage -i $OUT".hyb" -q $LIMIT -a $GENE_1 -b $GENE_2 -w $X_COORD -x $X_END -y $Y_COORD -z $Y_END
+	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1" -b "$GENE_2" -w "$X_COORD" -x "$X_END" -y "$Y_COORD" -z "$Y_END"
 else
 	echo "To plot zoomed-in contact density map, add to command: -x <X_Coord> -y <Y_Coord> -l <Length>." 1>&2
 fi

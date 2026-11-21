@@ -1,22 +1,61 @@
-#!/bin/bash -e
-
-#fasta_hyb2_formatting -i human.fasta
-
-# parsing command line options
-while getopts "i:" OPTION
-do
-     case $OPTION in
-         i) DB=$OPTARG ;;
-         ?)
-
-             echo "incorrect option"
-             exit 0
-             ;;
-     esac
+#!/bin/bash
+set -e
+# Format a reference beside its source. The caller can request the actual
+# output path with -P and reserve another input with each -p path.
+usage() { echo "usage: fasta_hyb2_formatting -i reference.fasta [-P] [-p protected-input ...]" >&2; exit 2; }
+input=
+print_path=
+protected=()
+while getopts "i:p:P" option; do
+    case "$option" in
+        i) input=$OPTARG ;;
+        p) protected+=("$OPTARG") ;;
+        P) print_path=1 ;;
+        *) usage ;;
+    esac
 done
+shift $((OPTIND - 1))
+[[ $# == 0 && -n "$input" ]] || usage
+[[ -f "$input" && -r "$input" ]] || { echo "Cannot read FASTA: $input" >&2; exit 1; }
 
-sed 's/_/-/g;s/protein-coding/mRNA/g;s/|/_/g;s/__/_unknown_/g' $DB > ${DB/.fasta/.tmp}
-awk '{if(NR==1) {print $0} else {if($0 ~ /^>/) {print "\n"$0} else {printf $0}}}' ${DB/.fasta/.tmp} > ${DB/.fasta/.tmp2}
-sed '/unknown/,+1 d;/pseudogene/,+1 d' ${DB/.fasta/.tmp2} > ${DB/.fasta/.hyb.fasta}
+case "$input" in
+    *.[fF][aA]|*.[fF][aA][sS][tT][aA]) output=${input%.*}.hyb.fasta ;;
+    *) output=$input.hyb.fasta ;;
+esac
+protected+=("$input")
+while :; do
+    conflict=
+    for path in "${protected[@]}"; do
+        if [[ "$output" -ef "$path" ]]; then conflict=1; break; fi
+    done
+    [[ -n "$conflict" ]] || break
+    output=${output%.fasta}.formatted.fasta
+done
+[[ ! -d "$output" ]] || { echo "FASTA output is a directory: $output" >&2; exit 1; }
+staged=$(mktemp "${output}.tmp.XXXXXX")
+trap 'rm -f -- "$staged"' EXIT
+trap 'exit 1' HUP INT TERM
 
-rm ${DB/.fasta/.tmp2} ${DB/.fasta/.tmp}
+# Flatten kept records and apply the original identifier substitutions. Doing
+# this in one pass also works with POSIX awk and wrapped or CRLF input.
+LC_ALL=C awk '{
+    sub(/\r$/, "")
+    gsub(/_/, "-")
+    gsub(/protein-coding/, "mRNA")
+    gsub(/[|]/, "_")
+    gsub(/__/, "_unknown_")
+    if (/^>/) {
+        if (keep) printf "\n"
+        seen = 1
+        keep = $0 !~ /unknown|pseudogene/
+        if (keep) print
+    } else if (keep) {
+        printf "%s", $0
+    } else if (!seen && $0 !~ /^[[:space:]]*$/) {
+        exit 1
+    }
+}
+END { if (!seen) exit 1 }' < "$input" > "$staged" || { echo "Could not format FASTA: $input" >&2; exit 1; }
+chmod =rw "$staged"
+mv -f -- "$staged" "$output"
+if [[ -n "$print_path" ]]; then printf '%s\n' "$output"; fi

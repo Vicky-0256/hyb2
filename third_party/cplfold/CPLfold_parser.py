@@ -2034,6 +2034,17 @@ def _outside_kernel(n, nucs, next_pair, lv,
                     beta_manners[idx_multi] = MANNER_P_eq_MULTI
 
 
+# Without Numba (the browser runs CPLfold in Pyodide, where `numba` is an identity
+# decorator shim) the two Vienna kernels above would run as Python on NumPy scalars.
+# Utils.pure_kernels computes the same recursions on Python lists, bit-identically;
+# the Numba build keeps the kernels above unchanged.
+import numba as _numba_module
+if not hasattr(_numba_module, "__version__") and os.environ.get("CPLFOLD_PURE_KERNELS", "1") != "0":
+    from Utils import pure_kernels as _pure_kernels
+    parse_loop_vienna = _pure_kernels.wrap_parse_loop_vienna(parse_loop_vienna)
+    _outside_kernel = _pure_kernels.wrap_outside_kernel(_outside_kernel)
+
+
 class BeamCKYParserHyper:
     """Ultra-optimized BeamCKY parser with flat arrays and PARIS bonus support."""
 

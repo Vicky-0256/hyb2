@@ -1,7 +1,8 @@
 package core
 
-// Preferences (contract R6): the resource budget, the UI theme and whether
-// external public-data lookups are allowed (EVIDENCE.md), stored in
+// Preferences (contract R6): the resource budget, the UI theme, whether
+// external public-data lookups are allowed (EVIDENCE.md) and the mfold to
+// use (MfoldEnv), stored in
 // preferences.json in the application config directory. Unknown keys are
 // preserved so later preferences can share the file.
 //
@@ -195,6 +196,39 @@ func LoadExternalLookup(path string) bool {
 	return on
 }
 
+// MfoldEnv names the mfold 3.6 script for Python (desktop/runtime/mfold.py
+// find, COMRADES(mfold)). The app sets it on task processes from the mfold
+// preference: a desktop app started from the Finder never sees a shell's
+// environment.
+const MfoldEnv = "HYB2_MFOLD"
+
+// LoadMfold is the mfold preference: the path of the mfold script, "" to
+// search PATH and the usual conda and Homebrew locations.
+func LoadMfold(path string) string {
+	value, _ := readPrefs(path)["mfold"].(string)
+	return strings.TrimSpace(value)
+}
+
+// cleanToolPath is a program path preference (key, naming program) as
+// stored: "" (search), else an absolute path ("~/" expanded).
+func cleanToolPath(value, key, program string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if value == "~" || strings.HasPrefix(value, "~/") || strings.HasPrefix(value, `~\`) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand ~ in the %s path: %w", program, err)
+		}
+		value = filepath.Join(home, value[1:])
+	}
+	if !filepath.IsAbs(value) {
+		return "", fmt.Errorf("%s must be the full path of the %s executable", key, program)
+	}
+	return filepath.Clean(value), nil
+}
+
 func validTheme(theme string) bool {
 	for _, t := range Themes {
 		if t == theme {
@@ -219,7 +253,8 @@ func DescribePreferences(path string) Obj {
 		"custom_budget":   custom && budget != nil,
 		"theme":           LoadTheme(path),
 		"external_lookup": LoadExternalLookup(path),
-		"defaults":        Obj{"budget": DefaultBudget(), "theme": DefaultTheme, "external_lookup": false},
+		"mfold":           LoadMfold(path),
+		"defaults":        Obj{"budget": DefaultBudget(), "theme": DefaultTheme, "external_lookup": false, "mfold": ""},
 		"system":          systemInfo(mem),
 		"speed":           Obj{"measured_samples": len(LoadPerf(perfPath(path)))},
 	})
@@ -229,7 +264,8 @@ func DescribePreferences(path string) Obj {
 var prefsMu sync.Mutex
 
 // ApplyPreferences applies a patch `{budget?: {cpu?, mem_mb?} | null,
-// theme?: "system"|"light"|"dark" | null, external_lookup?: bool | null}`, writes the file atomically and
+// theme?: "system"|"light"|"dark" | null, external_lookup?: bool | null,
+// mfold?: path | "" | null}`, writes the file atomically and
 // returns the new budget. Omitted fields keep their value; null resets to
 // the default. Unknown keys and invalid values are rejected without
 // touching the file.
@@ -245,7 +281,7 @@ func applyPreferences(path string, patch Obj, apply func(Budget)) (Budget, error
 		return Budget{}, errors.New("cannot resolve the application config directory")
 	}
 	for key := range patch {
-		if key != "budget" && key != "theme" && key != "external_lookup" {
+		if key != "budget" && key != "theme" && key != "external_lookup" && key != "mfold" {
 			return Budget{}, fmt.Errorf("unknown preference %q", key)
 		}
 	}
@@ -310,6 +346,25 @@ func applyPreferences(path string, patch Obj, apply func(Budget)) (Budget, error
 			stored["external_lookup"] = on
 		} else {
 			return Budget{}, errors.New("external_lookup must be true, false or null")
+		}
+	}
+	for _, tool := range [][2]string{{"mfold", "mfold"}} {
+		raw, present := patch[tool[0]]
+		if !present {
+			continue
+		}
+		text, ok := raw.(string)
+		if raw != nil && !ok {
+			return Budget{}, fmt.Errorf("%s must be a path, \"\" or null", tool[0])
+		}
+		clean, err := cleanToolPath(text, tool[0], tool[1])
+		if err != nil {
+			return Budget{}, err
+		}
+		if clean == "" {
+			delete(stored, tool[0])
+		} else {
+			stored[tool[0]] = clean
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

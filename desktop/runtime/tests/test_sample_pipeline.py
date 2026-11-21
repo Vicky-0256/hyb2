@@ -1,6 +1,7 @@
 """End-to-end ``sample_pipeline_run`` on the pipeline test data (contract R2)."""
 import gzip
 import json
+import re
 import os
 import shutil
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from desktop.runtime.bridge import handle
 from desktop.runtime.project import new_project, validate_manifest
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SAM = ROOT / "data" / "testData.sam"
@@ -63,6 +65,18 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertEqual(validate_manifest(manifest), [])
         return next(s for s in manifest["samples"] if s["id"] == sample_id)
 
+    def test_run_without_vienna_stops_before_mapping(self):
+        import shutil
+        import sys
+        from unittest import mock
+        sample = self.add(SAM, condition="test", replicate=1)
+        with mock.patch.dict(sys.modules, {"RNA": None}), mock.patch.object(shutil, "which", lambda name: None):
+            result, _ = self.run_sample(sample["id"], "sample-novienna")
+        self.assertFalse(result["ok"], result)
+        self.assertIn("RNAduplex", result["error"])
+        self.assertEqual(self.sample(sample["id"])["stages"]["hyb"]["status"], "failed")
+        self.assertIsNone(self.sample(sample["id"])["outputs"].get("hyb"))
+
     def test_linked_sam_sample_matches_golden_and_updates_stages(self):
         sample = self.add(SAM, condition="test", replicate=1)
         self.assertIsNone(sample["gene_id"], "three-sequence reference has no default gene")
@@ -70,7 +84,15 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         produced = Path(result["output"])
         self.assertEqual(produced.parent, (self.project / "samples" / sample["id"]).resolve())
-        self.assertEqual(produced.read_bytes(), GOLDEN.read_bytes())
+        # the legacy golden file, except the dG column (col 3): sample runs
+        # always fill it with RNAduplex's dG of the two arms
+        got, want = produced.read_text().splitlines(), GOLDEN.read_text().splitlines()
+        self.assertEqual(len(got), len(want))
+        strip = lambda line: line.split("\t")[:2] + line.split("\t")[3:]  # noqa: E731
+        self.assertEqual([strip(line) for line in got], [strip(line) for line in want])
+        dg = [line.split("\t")[2] for line in got]
+        self.assertTrue(all(value == "." or re.fullmatch(r"-?\d+\.\d\d", value) for value in dg), dg[:5])
+        self.assertGreater(sum(value != "." for value in dg), len(dg) * 0.9)
         self.assertEqual(result["counts"]["hybrids"], 10411)
         stored = self.sample(sample["id"])
         self.assertEqual(stored["stages"]["map"]["status"], "skipped")
@@ -79,6 +101,9 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertIn(stored["stages"]["index"]["status"], ("skipped", "succeeded"))
         self.assertEqual(stored["outputs"]["hyb"], "samples/%s/testData.hyb" % sample["id"])
         self.assertEqual(stored["outputs"]["stats"], "samples/%s/testData_hybrids.hyb_stats.txt" % sample["id"])
+        # how the dG column was computed is kept with the sample (provenance)
+        self.assertEqual((stored["energy"]["engine"], stored["energy"]["source"]), ("rnaduplex", "computed"))
+        self.assertEqual(stored["energy"]["scope"], "each hybrid's two arms, intermolecular pairs only")
         progress = json.loads((run_dir / "progress.json").read_text(encoding="utf-8"))
         self.assertEqual(progress["stage"], "done")
         self.assertEqual(set(progress), {"stage", "detail", "bytes_done", "bytes_total", "updated_at", "work"})
@@ -92,6 +117,7 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertGreater(performance["seconds"], 0)
         self.assertIn("hybrids", performance["stage_seconds"])
         self.assertNotIn("wait", performance["stage_seconds"])
+        self.assertEqual(performance["energy"], {"engine": "rnaduplex", "ran": True})
         # The shell-owned status.json + result.json still register as a project run.
         (run_dir / "status.json").write_text(json.dumps({"task_id": "sample-t1", "kind": "sample_pipeline", "status": "succeeded"}))
         run = self.call("register_task_run", task_id="sample-t1")["run"]
@@ -161,6 +187,7 @@ class SamplePipelineTest(unittest.TestCase):
         self.assertEqual(contact.name, "given.Zika_virusRNA.contact.txt")
         self.assertEqual(contact.read_text(), "contact given.hyb Zika_virusRNA\n")
         self.assertEqual((self.project / stored["outputs"]["index"]).read_bytes(), b"SQLite stub")
+        self.assertNotIn("energy", stored, "an imported .hyb keeps its own dG")
 
     @unittest.skipUnless(_bowtie2_dir(), "Bowtie2 is not available")
     def tiny_fastq(self, name="tiny.fastq.gz"):

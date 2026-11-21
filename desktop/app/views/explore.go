@@ -82,10 +82,12 @@ type explorePage struct {
 
 // exploreSummary is what the pickers need from analysis_summary.
 type exploreSummary struct {
-	genes   []string
-	types   []string
-	records int64
-	reads   int64
+	genes []string
+	// geneRecords: the hybrids of each gene in the samples queried
+	geneRecords map[string]int64
+	types       []string
+	records     int64
+	reads       int64
 	// extents: the observed arm range of each gene {smallest start, largest end}
 	extents map[string][2]int
 }
@@ -255,7 +257,7 @@ func (p *explorePage) track() {
 	}
 	geneChanged := a.Selected.Gene != p.gene
 	p.sel, p.ids, p.gene = sel, ids, a.Selected.Gene
-	// the contact map draws one dataset: a change of the others keeps it
+	// a change of samples the contact map does not draw keeps it
 	if stamp := p.contactStamp(); geneChanged || stamp != p.cm.stamp {
 		p.cm.stamp = stamp
 		p.cm.selectionChanged(p.gene, geneChanged)
@@ -328,15 +330,18 @@ func (p *explorePage) loadSummary() {
 		merged, _ := got["merged"].(map[string]any)
 		var s exploreSummary
 		var genes []struct {
-			Name string `json:"name"`
+			Name    string  `json:"name"`
+			Records float64 `json:"records"`
 		}
 		var types []struct {
 			Name string `json:"name"`
 		}
 		_ = model.Decode(merged["genes"], &genes)
 		_ = model.Decode(merged["types"], &types)
+		s.geneRecords = map[string]int64{}
 		for _, g := range genes {
 			s.genes = append(s.genes, g.Name)
+			s.geneRecords[g.Name] += int64(g.Records)
 		}
 		for _, t := range types {
 			s.types = append(s.types, t.Name)
@@ -350,8 +355,36 @@ func (p *explorePage) loadSummary() {
 				}
 			}
 		}
-		return func() { p.summary = s }, nil
+		return func() {
+			p.summary = s
+			p.preferPopulatedGene()
+		}, nil
 	})
+}
+
+// preferPopulatedGene: when the app chose the RNA itself (the reference's
+// first sequence, e.g. a decoy) and the samples have no hybrid on it, the
+// RNA with the most hybrids (of the project's references) is shown
+// instead, as the web lists only RNAs present in the data. An RNA the user
+// picked is kept.
+func (p *explorePage) preferPopulatedGene() {
+	a := p.a
+	gene := a.Selected.Gene
+	if a.Project == nil || gene == "" || gene != a.autoGene || p.summary.geneRecords[gene] > 0 {
+		return
+	}
+	best, most := "", int64(0)
+	for _, g := range p.summary.genes {
+		if n := p.summary.geneRecords[g]; n > most && stReferenceOf(a.Project, g) != "" {
+			best, most = g, n
+		}
+	}
+	if best == "" {
+		return
+	}
+	if p.selectGene(best) {
+		a.autoGene = a.Selected.Gene
+	}
 }
 
 // geneLength is the reference length of a gene (0 when unknown).

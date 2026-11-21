@@ -34,6 +34,8 @@ type dataFolderScan struct {
 	Duplicates []struct {
 		Path string `json:"path"`
 		Kept string `json:"kept"`
+		// Reason: "gz" (a plain copy of a .gz) or "same content"
+		Reason string `json:"reason"`
 	} `json:"duplicates"`
 	Ignored map[string]int `json:"ignored"`
 }
@@ -137,8 +139,19 @@ func (p *dataPage) applyScan(scan dataFolderScan) {
 		d.rows = append(d.rows, row)
 	}
 	d.skipped = nil
-	if n := len(scan.Duplicates); n > 0 {
-		d.skipped = append(d.skipped, dataPlural(n, "uncompressed copy", "uncompressed copies")+" of .gz files (the .gz is used)")
+	gz, same := 0, []string{}
+	for _, dup := range scan.Duplicates {
+		if dup.Reason == "same content" {
+			same = append(same, filepath.Base(dup.Path)+" (same content as "+filepath.Base(dup.Kept)+")")
+		} else {
+			gz++
+		}
+	}
+	if gz > 0 {
+		d.skipped = append(d.skipped, dataPlural(gz, "uncompressed copy", "uncompressed copies")+" of .gz files (the .gz is used)")
+	}
+	if len(same) > 0 {
+		d.skipped = append(d.skipped, strings.Join(same, ", "))
 	}
 	kinds := make([]string, 0, len(scan.Ignored))
 	for kind := range scan.Ignored {
@@ -343,12 +356,28 @@ func (p *dataPage) confirmFolder() {
 				d.status = "Import failed: " + err.Error()
 				return
 			}
-			var added, skipped []any
+			var added []any
+			var skipped []struct {
+				Path   string `json:"path"`
+				Kept   string `json:"kept"`
+				Reason string `json:"reason"`
+			}
 			_ = model.Decode(result["samples"], &added)
 			_ = model.Decode(result["skipped"], &skipped)
 			message := fmt.Sprintf("Imported %s", dataPlural(len(added), "sample", "samples"))
-			if len(skipped) > 0 {
-				message += fmt.Sprintf(", %d already in the project", len(skipped))
+			present, same := 0, []string{}
+			for _, s := range skipped {
+				if s.Kept != "" {
+					same = append(same, filepath.Base(s.Path)+" (same content as "+filepath.Base(s.Kept)+")")
+				} else {
+					present++
+				}
+			}
+			if present > 0 {
+				message += fmt.Sprintf(", %d already in the project", present)
+			}
+			if len(same) > 0 {
+				message += "; not imported: " + strings.Join(same, ", ")
 			}
 			a.Toast("%s. Next: Run all pending.", message)
 			d.open, d.status = false, ""

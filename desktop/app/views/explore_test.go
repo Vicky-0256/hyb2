@@ -127,7 +127,7 @@ func TestExploreContactMapPickShowHybridsAndFold(t *testing.T) {
 		t.Fatalf("tab %d data %v err %q texts %q", p.tab, p.cm.data, p.cm.load.err, tt.Texts())
 	}
 	sent := f.mapQuery()
-	if fmt.Sprint(sent["sample_ids"]) != "[SUB_REP1]" || sent["gene"] != zikvGene || sent["max_cells"] != float64(contactMaxCells) {
+	if fmt.Sprint(sent["sample_ids"]) != "[SUB_REP1 SUB_REP2]" || sent["gene"] != zikvGene || sent["max_cells"] != float64(contactMaxCells) {
 		t.Fatalf("contact payload %v", sent)
 	}
 	d := p.cm.data
@@ -185,8 +185,8 @@ func TestExploreContactMapPickShowHybridsAndFold(t *testing.T) {
 	if fmt.Sprint(filters["region"]) != fmt.Sprintf("map[x:[%d %d] y:[%d %d]]", x0, x1, y0, y1) || filters["gene1"] != zikvGene {
 		t.Fatalf("hybrid filters %v", filters)
 	}
-	// the map's one dataset, not the selection's two
-	if fmt.Sprint(sentHybrids["sample_ids"]) != "[SUB_REP1]" || !strings.Contains(strings.Join(tt.Texts(), "|"), "Samples from the contact map: SUB_REP1") {
+	// the map's datasets: the selection's two merged, so nothing is pinned
+	if fmt.Sprint(sentHybrids["sample_ids"]) != "[SUB_REP1 SUB_REP2]" || strings.Contains(strings.Join(tt.Texts(), "|"), "Samples from the contact map") {
 		t.Fatalf("hybrids of %v: %q", sentHybrids["sample_ids"], tt.Texts())
 	}
 
@@ -209,9 +209,9 @@ func TestExploreContactMapPickShowHybridsAndFold(t *testing.T) {
 	start := max(1, min(d.x[best], d.y[best])-pad)
 	end := min(10807, max(d.x[best], d.y[best])+d.bin-1+pad)
 	prefill := structureOptions(a)["prefill"].(map[string]any)
-	// the samples Explore shows (pinned by Show hybrids) go along
+	// the selection goes along (the merged map pinned nothing)
 	want := fmt.Sprint(map[string]any{"gene": zikvGene, "windows": []map[string]int{{"start": start, "end": end}},
-		"selectionKey": "c:SUB", "source": "contact map", "sampleIds": []string{"SUB_REP1"}})
+		"selectionKey": "c:SUB", "source": "contact map"})
 	if fmt.Sprint(prefill) != want {
 		t.Fatalf("prefill %v, want %v", prefill, want)
 	}
@@ -332,8 +332,8 @@ func TestExploreFollowsSelection(t *testing.T) {
 	settle(a, tt)
 	sent := f.mapQuery()
 	// the map of records, and the cluster support on its bins, of the new
-	// selection's first sample (one dataset per map)
-	if f.count("analysis_contact_bins") != before+2 || fmt.Sprint(sent["sample_ids"]) != "[AFR_REP1]" {
+	// selection's samples merged
+	if f.count("analysis_contact_bins") != before+2 || fmt.Sprint(sent["sample_ids"]) != "[AFR_REP1 AFR_REP2]" {
 		t.Fatalf("no reload for the new selection: %d calls, last %v", f.count("analysis_contact_bins"), sent)
 	}
 	if p.cm.cmap.Selection != nil {

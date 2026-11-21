@@ -57,19 +57,35 @@ type Stage struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
+// SampleEnergy is samples[].energy: hyb2pipe's Result.energy for the run
+// that wrote the sample's .hyb.
+type SampleEnergy struct {
+	Engine     string `json:"engine"` // rnaduplex or rnacofold; older samples: hybrid-min (legacy-name:)
+	Program    string `json:"program"`
+	Version    string `json:"version"`
+	Executable string `json:"executable"`
+	Parameters string `json:"parameters"`
+	Scope      string `json:"scope"`
+	Source     string `json:"source"`
+	RecordedAt string `json:"recorded_at"`
+}
+
 type Sample struct {
-	ID           string           `json:"id"`
-	Name         string           `json:"name"`
-	Condition    string           `json:"condition"`
-	Replicate    any              `json:"replicate"`
-	ReferenceID  string           `json:"reference_id"`
-	GeneID       string           `json:"gene_id"`
-	Reads        Reads            `json:"reads"`
-	Outputs      Outputs          `json:"outputs"`
-	Stages       map[string]Stage `json:"stages"`
-	Ready        bool             `json:"ready"`
-	StageSummary string           `json:"stage_summary"`
-	CreatedAt    string           `json:"created_at"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Condition   string           `json:"condition"`
+	Replicate   any              `json:"replicate"`
+	ReferenceID string           `json:"reference_id"`
+	GeneID      string           `json:"gene_id"`
+	Reads       Reads            `json:"reads"`
+	Outputs     Outputs          `json:"outputs"`
+	Stages      map[string]Stage `json:"stages"`
+	// Energy is how the last pipeline run computed the .hyb dG column (nil
+	// for an imported .hyb or a sample analysed before it was recorded).
+	Energy       *SampleEnergy `json:"energy"`
+	Ready        bool          `json:"ready"`
+	StageSummary string        `json:"stage_summary"`
+	CreatedAt    string        `json:"created_at"`
 }
 
 // IsReady: the sample has an analysis index (it can be explored).

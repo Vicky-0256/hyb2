@@ -62,6 +62,7 @@ func (a *App) loadTheme() {
 			return func() {
 				if err == nil {
 					a.setTheme(got)
+					a.setMfold(got)
 				}
 			}
 		})
@@ -634,7 +635,7 @@ var pageHelp = map[string][]string{
 		"Binding energies recalculates the ΔG column of one sample's .hyb with RNAcofold or CPLcofold, as a task; the sample's own file is not changed."},
 	"compare": {"Contrast two conditions with replicates: the differential test (DESeq2) says whether a contact differs; the quick view only describes normalised counts.",
 		"Pick a merged interaction to locate it, open its region or fold both conditions."},
-	"structure": {"Predict a secondary structure with CPLfold, CPLcofold, ViennaRNA MFE, COMRADES(ViennaRNA) or IRIS; all but ViennaRNA MFE can be guided by the selected samples' chimeric reads.",
+	"structure": {"Predict a secondary structure with CPLfold, CPLcofold, ViennaRNA MFE, COMRADES (ViennaRNA or mfold) or IRIS; all but ViennaRNA MFE can be guided by the selected samples' chimeric reads.",
 		"Long RNAs fold in windows; the page says how long a fold should take before it starts."},
 	"report":      {"The project at a glance: data, counts, differential tests and structures, as one HTML file to share, a PDF to print, or a ZIP for an AI assistant or for further analysis."},
 	"methods":     {"How each number on the analysis pages is calculated, in the order of the pages."},
@@ -722,7 +723,7 @@ var methodsText = []textSection{
 	{"Compare", "The differential test is a port of the DESeq2 1.46 Wald test on the 10-nt contact maps of the replicates, followed by hyb2_compare's merge of significant cells into interactions. The quick view is descriptive: each dataset is scaled to counts per million of its library, each condition is the mean of its datasets, and the effect is log2((A + 1) / (B + 1)); it has no statistics."},
 	{"RNA structure", "CPLfold predicts the structure with the web app's defaults: beam 20, 3 phase-1 candidates, an energy window of 5 kcal/mol, evidence weight α 0.5, pseudoknot penalty β 0, pseudoknots off (candidates ranked with Turner 2004; the DP09 model ranks them when pseudoknots are on); Advanced changes them. Evidence comes from the selected samples' chimeric reads on the folded region. Long RNAs fold in windows. " +
 		"ViennaRNA MFE (2.7.2, Turner 2004 parameters) folds the sequence alone at a chosen temperature and minimum hairpin loop, with optional hard base pairs enforced in every loop. " +
-		"COMRADES(ViennaRNA) cofolds each chimera inside the region with RNAcofold, merges the strongest 1,001 intermolecular pairs into stems, fits up to 75 stems as hard pairs in ranked and seeded random orders, and keeps the structure whose pairs carry the most evidence (at most 3,000 nt)."},
+		"COMRADES(ViennaRNA) cofolds each chimera inside the region with RNAcofold, merges the strongest 1,001 intermolecular pairs into stems, fits up to 75 stems as hard pairs in ranked and seeded random orders, and keeps the structure whose pairs carry the most evidence (at most 3,000 nt). Its folding program is ViennaRNA (bundled) or mfold 3.6 (installed separately; Preferences › mfold), which applies the stems as forced pairs at 37 °C."},
 }
 
 // privacyText is what the desktop does with your data, as the web's

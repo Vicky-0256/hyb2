@@ -172,7 +172,7 @@ func stNestedDBN(pairs []widgets.LayeredPair, start, length int) string {
 }
 
 // stComradesResult: a COMRADES(ViennaRNA) result (the web's "hyb-guided").
-func stComradesResult(a *structureResult) bool { return stEngine(a) == "COMRADES(ViennaRNA)" }
+func stComradesResult(a *structureResult) bool { return stIsComrades(stEngine(a)) }
 
 // stEvidenceColor is the web's evidenceColor: high evidence (at least 0.55
 // of the strongest) in the warning colour, low in the primary colour, none

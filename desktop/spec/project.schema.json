@@ -944,6 +944,71 @@
           },
           "description": "Extra sample sheet columns."
         },
+        "energy": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "How the last pipeline run computed the .hyb dG column (hyb2pipe Result.energy). Absent for imported .hyb files and samples analysed before it was recorded.",
+          "required": [
+            "engine"
+          ],
+          "properties": {
+            "engine": {
+              "type": "string",
+              "minLength": 1,
+              "description": "rnaduplex or rnacofold (samples analysed by earlier versions: another program name)."
+            },
+            "program": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "executable": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parameters": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "recorded_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "created_at": {
           "$ref": "#/$defs/dateTime"
         }

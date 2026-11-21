@@ -205,7 +205,8 @@
     return {
       rnaX: pair ? pair.rnaOne : "",
       rnaY: pair ? pair.rnaTwo : "",
-      // one dataset, never merged: "" = the analysed dataset, else the primary
+      // "" = the header's scope (merged when it holds several datasets),
+      // else one dataset's id
       datasetId: "",
       binSize: 10,
       measure: "records",
@@ -227,22 +228,37 @@
     };
   }
 
-  // The Contact Map draws one dataset: the chosen one, else the header's
-  // scope when it is one dataset, else the primary file. Its RNA X/Y follow
-  // that dataset's RNAs. Returns { id, dataset, rnas }.
+  // The Contact Map follows the header's scope like the other analysis
+  // pages: several datasets in scope are merged (counts summed) unless the
+  // Dataset control picks one of them. With no scope it draws the primary
+  // file. Its RNA X/Y follow the drawn datasets' RNAs. Returns
+  // { id, dataset, datasets, ids, merged, label, rnas }: id "" and dataset
+  // null when merged; ids are the dataset ids the map reads.
   function contactDataset(state) {
     const datasets = state.datasets || [];
     const contact = state.contact || {};
     const scope = (state.selection && state.selection.datasetIds) || [];
     const byId = function (id) { return datasets.find(function (dataset) { return dataset.id === id; }); };
-    const dataset = byId(contact.datasetId) || (scope.length === 1 && byId(scope[0])) ||
-      datasets.find(function (item) { return item.primary; }) || byId(scope[0]) || null;
-    const rnas = dataset && dataset.rnaNames && dataset.rnaNames.length ? dataset.rnaNames : ((state.summary && state.summary.rnaNames) || []);
+    const inScope = scope.map(byId).filter(Boolean);
+    const picked = byId(contact.datasetId);
+    const merged = !picked && inScope.length > 1;
+    const dataset = merged ? null : (picked || (inScope.length === 1 && inScope[0]) ||
+      datasets.find(function (item) { return item.primary; }) || inScope[0] || null);
+    const drawn = merged ? inScope : (dataset ? [dataset] : []);
+    const names = [];
+    drawn.forEach(function (item) {
+      (item.rnaNames || []).forEach(function (name) { if (names.indexOf(name) === -1) names.push(name); });
+    });
+    const rnas = names.length ? names : ((state.summary && state.summary.rnaNames) || []);
     if (state.contact) {
       if (rnas.indexOf(contact.rnaX) === -1) state.contact.rnaX = rnas[0] || "";
       if (rnas.indexOf(contact.rnaY) === -1) state.contact.rnaY = rnas[0] || "";
     }
-    return { id: dataset ? dataset.id : (scope[0] || ""), dataset: dataset, rnas: rnas };
+    const ids = drawn.length ? drawn.map(function (item) { return item.id; }) : scope.slice(0, 1);
+    const label = merged
+      ? "All " + drawn.length + " datasets in scope merged"
+      : (dataset ? dataset.label || dataset.fileName || dataset.id : "");
+    return { id: merged ? "" : (dataset ? dataset.id : (scope[0] || "")), dataset: dataset, datasets: drawn, ids: ids, merged: merged, label: label, rnas: rnas };
   }
 
   function defaultRegionState(summary, records) {
@@ -336,6 +352,9 @@
       secondEnd: "",
       homodimerOnly: false,
       constraintLimit: "75",
+      // the program that fits the COMRADES stems: "viennarna" (in this
+      // browser) or "mfold" (mfold 3.6, HYB2 Desktop or the command line)
+      foldProgram: "viennarna",
       randomFoldCount: "0",
       randomSeed: "HYB2-Web",
       allowLargeEnsemble: false,
@@ -343,6 +362,9 @@
       cplfoldMode: "single",
       cplfoldSequenceTwo: "",
       cplfoldEvidence: "hyb-blocks",
+      // How the HYB chimeras become CPLfold's bonus matrix B_ij
+      // (web/cplfold/cplfold_web.py SUPPORT_KERNELS)
+      cplfoldKernel: "gaussian",
       // HYB evidence of RNA Structure: "all" loaded datasets on the folded
       // RNAs (replicates merged), or the "primary" dataset only
       evidenceDatasets: "all",
@@ -571,9 +593,83 @@
   }
 
   // partnerWindow of the Structure page's region 1, from the loaded records.
-  function structurePartnerWindow(state) {
+  // width: the partner region's length (default 201 nt)
+  function structurePartnerWindow(state, width) {
     const structure = state && state.structure;
-    return structure ? partnerWindow(state.records, structure.rna, structure.start, structure.end) : null;
+    return structure ? partnerWindow(state.records, structure.rna, structure.start, structure.end, width) : null;
+  }
+
+  // Two regions (one on `rna`) whose lengths add up to at most `limit` and
+  // that hold the most HYB rows with one arm in each: CPLcofold's default
+  // when the browser can fold only a short combined length. Only rows whose
+  // two arms fit in `limit` together can lie inside such regions, so the
+  // windows are built and scored from those rows alone. partner: "same",
+  // "other" or "any" RNA for region 2. Returns { first, second, records }
+  // with { rna, start, end } regions (region 1 the 5′ one on a shared RNA),
+  // or null when no row fits.
+  function cofoldWindows(records, rna, limit, partner) {
+    const size = Math.floor(Number(limit));
+    if (!rna || !(size >= 2)) return null;
+    const rows = [];
+    const lastMapped = new Map();
+    (records || []).forEach(function (record) {
+      const one = { rna: record.rnaOne, start: Number(record.rnaOneStart), end: Number(record.rnaOneEnd) };
+      const two = { rna: record.rnaTwo, start: Number(record.rnaTwoStart), end: Number(record.rnaTwoEnd) };
+      [one, two].forEach(function (arm) {
+        if (Number.isFinite(arm.end) && !(lastMapped.get(arm.rna) >= arm.end)) lastMapped.set(arm.rna, arm.end);
+      });
+      if (one.rna !== rna && two.rna !== rna) return;
+      if (![one.start, one.end, two.start, two.end].every(Number.isFinite)) return;
+      const same = one.rna === two.rna;
+      if ((partner === "same" && !same) || (partner === "other" && same)) return;
+      if (same && one.start <= two.end && two.start <= one.end) return;
+      let first = one.rna === rna ? one : two;
+      let second = first === one ? two : one;
+      if (same && second.start < first.start) { const swap = first; first = second; second = swap; }
+      if ((first.end - first.start + 1) + (second.end - second.start + 1) > size) return;
+      rows.push([first, second]);
+    });
+    if (!rows.length) return null;
+    // bounded work: the rows with the shortest arms first
+    rows.sort(function (left, right) {
+      return (left[0].end - left[0].start + left[1].end - left[1].start) - (right[0].end - right[0].start + right[1].end - right[1].start) ||
+        left[0].start - right[0].start || left[1].start - right[1].start;
+    });
+    const pool = rows.slice(0, 2000);
+    const inside = function (arm, region) { return arm.rna === region.rna && arm.start >= region.start && arm.end <= region.end; };
+    let best = null;
+    pool.forEach(function (row) {
+      const spare = size - (row[0].end - row[0].start + 1) - (row[1].end - row[1].start + 1);
+      const padFirst = Math.floor(spare / 2);
+      const padSecond = spare - padFirst;
+      // spare length around each arm, kept on the RNA's mapped span
+      const pad = function (arm, extra) {
+        let start = Math.max(1, arm.start - Math.floor(extra / 2));
+        let end = arm.end + (extra - (arm.start - start));
+        const last = Math.max(arm.end, lastMapped.get(arm.rna) || arm.end);
+        if (end > last) { start = Math.max(1, start - (end - last)); end = last; }
+        return { rna: arm.rna, start: start, end: end };
+      };
+      let first = pad(row[0], padFirst);
+      let second = pad(row[1], padSecond);
+      if (first.rna === second.rna && first.end >= second.start) {
+        first = { rna: row[0].rna, start: row[0].start, end: row[0].end };
+        second = { rna: row[1].rna, start: row[1].start, end: row[1].end };
+      }
+      let count = 0;
+      pool.forEach(function (other) {
+        if ((inside(other[0], first) && inside(other[1], second)) || (inside(other[0], second) && inside(other[1], first))) count += 1;
+      });
+      if (!best || count > best.records || (count === best.records && first.start < best.first.start)) {
+        best = { first: first, second: second, records: count };
+      }
+    });
+    return best;
+  }
+
+  function structureCofoldWindows(state, limit, partner) {
+    const structure = state && state.structure;
+    return structure ? cofoldWindows(state.records, structure.rna, limit, partner) : null;
   }
 
   function getRnaExtent(records, rna, summary) {
@@ -654,7 +750,10 @@
       return String(entry[0] == null ? "" : entry[0]).trim() && entry[1] === null;
     });
 
-    if (hasInvalidCoordinate || (armOneStart !== null && armOneEnd !== null && armOneStart > armOneEnd) ||
+    // an impossible filter (the page names it in a notice) matches nothing,
+    // also records without e-values
+    if (hasInvalidCoordinate || (maxEvalue !== null && maxEvalue < 0) ||
+        (armOneStart !== null && armOneEnd !== null && armOneStart > armOneEnd) ||
         (armTwoStart !== null && armTwoEnd !== null && armTwoStart > armTwoEnd)) {
       return [];
     }
@@ -1460,6 +1559,9 @@
     if (viewpoint.rangeMode === "reference" && !hasReference) {
       return null;
     }
+    if (viewpointRangeIssue(viewpoint, options)) {
+      return null;
+    }
     const invalidRequestedRange = !useReferenceRange && (
       (String(viewpoint.start == null ? "" : viewpoint.start).trim() && requestedStart === null) ||
       (String(viewpoint.end == null ? "" : viewpoint.end).trim() && requestedEnd === null)
@@ -1488,6 +1590,12 @@
     const useReferenceRange = viewpoint.rangeMode === "reference" && reference;
     if (viewpoint.rangeMode === "reference" && !reference) {
       return emptyViewpointResults();
+    }
+    // An unusable typed range says why (shown beside the fields and in the
+    // report) instead of an unexplained empty page.
+    const rangeIssue = viewpointRangeIssue(viewpoint, options);
+    if (rangeIssue) {
+      return Object.assign(emptyViewpointResults(), { reason: rangeIssue });
     }
     const invalidRequestedRange = !useReferenceRange && (
       (String(viewpoint.start == null ? "" : viewpoint.start).trim() && requestedStart === null) ||
@@ -1638,7 +1746,7 @@
     (results && results.bins ? results.bins : []).forEach(function (bin) {
       rows.push([bin.start, bin.end, bin.value]);
     });
-    return rows.map(function (row) { return row.join("\t"); }).join("\n");
+    return textLines(rows.map(function (row) { return row.join("\t"); }));
   }
 
   // Results up to this size keep the original object shape (own `datasets`
@@ -2340,33 +2448,65 @@
     };
   }
 
-  function comparisonToTsv(result) {
+  // x_start/y_start are HYB2 bin keys (see contactToTsv); x_end/y_end are
+  // clamped to lengths.x / lengths.y (the RNA lengths) when given. Values
+  // have 6 significant digits.
+  function comparisonToTsv(result, lengths) {
     const rows = [["x_start", "x_end", "y_start", "y_end", "condition_a_mean", "condition_b_mean", "log2_effect", "datasets_present", "condition_a_raw", "condition_b_raw", "similarity"]];
     if (!result || !result.cells) {
-      return rows[0].join("\t");
+      return textLines([rows[0].join("\t")]);
     }
+    const lengthX = lengths && lengths.x;
+    const lengthY = lengths && lengths.y;
     result.cells.forEach(function (cell) {
       rows.push([
         cell.x,
-        cell.x + result.binSize - 1,
+        binEnd(cell.x, result.binSize, lengthX),
         cell.y,
-        cell.y + result.binSize - 1,
-        cell.conditionA,
-        cell.conditionB,
-        cell.effect,
+        binEnd(cell.y, result.binSize, lengthY),
+        formatSignificant(cell.conditionA),
+        formatSignificant(cell.conditionB),
+        formatSignificant(cell.effect),
         cell.presentDatasets,
-        cell.rawA,
-        cell.rawB,
-        cell.similarity
+        formatSignificant(cell.rawA),
+        formatSignificant(cell.rawB),
+        formatSignificant(cell.similarity)
       ]);
     });
-    return rows.map(function (row) { return row.join("\t"); }).join("\n");
+    return textLines(rows.map(function (row) { return row.join("\t"); }));
+  }
+
+  // RNA X / RNA Y lengths of a comparison for clamping its last bins: the
+  // longest of the RNAs the datasets use (another strain's genome in a
+  // homodimer map), from the reference FASTA, else the furthest mapped arm
+  // end in `extents` (summary.rnaExtents). null when unknown.
+  function comparisonRnaLengths(comparison, fasta, extents) {
+    const plan = comparisonRnaPlan(comparison);
+    const lengthOf = function (rna) {
+      const entry = fasta ? findFastaEntry(fasta, rna) : null;
+      if (entry && entry.sequence) return entry.sequence.length;
+      const extent = extents && extents[rna];
+      return extent && Number.isFinite(extent.max) ? extent.max : null;
+    };
+    const longest = function (names) {
+      let best = null;
+      for (let i = 0; i < names.length; i += 1) {
+        const length = lengthOf(names[i]);
+        if (length === null) return null;
+        best = best === null ? length : Math.max(best, length);
+      }
+      return best;
+    };
+    const config = comparison || {};
+    const xs = plan.length ? plan.map(function (item) { return item.rnaX; }) : [config.rnaX];
+    const ys = plan.length ? plan.map(function (item) { return item.rnaY; }) : [config.rnaY];
+    return { x: longest(xs.filter(Boolean)), y: longest(ys.filter(Boolean)) };
   }
 
   function comparisonSelectedToTsv(comparison, selected, binSizeValue) {
     const rows = [["x_start", "x_end", "y_start", "y_end", "dataset_id", "label", "condition", "file_name", "raw_value", "analysis_value"]];
     if (!comparison || !selected) {
-      return rows[0].join("\t");
+      return textLines([rows[0].join("\t")]);
     }
     const binSize = Number(binSizeValue) > 0 ? Number(binSizeValue) : Number(comparison.binSize) || 1;
     const present = Object.create(null);
@@ -2388,14 +2528,14 @@
         value ? value.value : 0
       ]);
     });
-    return rows.map(function (row) { return row.map(tsvCell).join("\t"); }).join("\n");
+    return textLines(rows.map(function (row) { return row.map(tsvCell).join("\t"); }));
   }
 
   function comparisonCountMatrixToTsv(comparison, result) {
     const datasets = comparison && comparison.datasets || [];
     const rows = [["feature_id"].concat(datasets.map(function (dataset) { return dataset.id; }))];
     if (!result || !result.ready || !Array.isArray(result.cells)) {
-      return rows[0].map(tsvCell).join("\t");
+      return textLines([rows[0].map(tsvCell).join("\t")]);
     }
     result.cells.slice().sort(function (left, right) {
       return left.x - right.x || left.y - right.y;
@@ -2408,16 +2548,16 @@
         return validateLegacyRCount(rawCount, featureId, dataset.id);
       })));
     });
-    return rows.map(function (row) { return row.map(tsvCell).join("\t"); }).join("\n");
+    return textLines(rows.map(function (row) { return row.map(tsvCell).join("\t"); }));
   }
 
   function comparisonLegacyNamesToTsv(comparison) {
-    return (comparison && comparison.datasets || []).map(function (dataset) {
+    return textLines((comparison && comparison.datasets || []).map(function (dataset) {
       return [
         dataset.id,
         dataset.condition === "A" ? "condition_one" : "condition_two"
       ].map(tsvCell).join("\t");
-    }).join("\n");
+    }));
   }
 
   function comparisonSampleMetadataToTsv(comparison) {
@@ -2430,11 +2570,39 @@
         dataset.fileName || dataset.summary && dataset.summary.fileName || ""
       ]);
     });
-    return rows.map(function (row) { return row.map(tsvCell).join("\t"); }).join("\n");
+    return textLines(rows.map(function (row) { return row.map(tsvCell).join("\t"); }));
   }
 
   function tsvCell(value) {
     return String(value == null ? "" : value).replace(/[\t\r\n]+/g, " ");
+  }
+
+  // Text table exports end with exactly one newline (POSIX text files; `wc -l`
+  // and `cat a b` behave). An empty table stays empty.
+  function textLines(lines) {
+    return lines.length ? lines.join("\n") + "\n" : "";
+  }
+
+  // A number for a TSV export: integers as they are, other values to
+  // `digits` significant digits (default 6; JavaScript's own exponent form
+  // below 1e-6), NA when missing or not finite.
+  function formatSignificant(value, digits) {
+    const number = typeof value === "number" ? value : (value === null || value === undefined || value === "" ? NaN : Number(value));
+    if (!Number.isFinite(number)) {
+      return "NA";
+    }
+    if (Number.isInteger(number)) {
+      return String(number);
+    }
+    return String(Number(number.toPrecision(digits || 6)));
+  }
+
+  // a bin's last 1-based position: the bin key + bin size − 1, clamped to
+  // the RNA length when it is known (the last bin of a 10,807-nt RNA in
+  // 20-nt bins is 10800-10807, not 10800-10819)
+  function binEnd(start, binSize, length) {
+    const end = Number(start) + Number(binSize) - 1;
+    return Number.isFinite(Number(length)) && Number(length) > 0 ? Math.min(end, Number(length)) : end;
   }
 
   function validateLegacyRCount(value, featureId, sampleId) {
@@ -2567,14 +2735,22 @@
     };
   }
 
+  // A pasted or stored sequence as A/C/G/U text. FASTA header lines (">")
+  // are skipped; on the sequence lines, whitespace and digits are removed,
+  // so GenBank/EMBL-style text ("1 gggaaa ... 61 uuu...") keeps only its
+  // bases. records = number of FASTA headers; removedNumbers = whether any
+  // digit was removed (callers say so).
   function normaliseFoldSequence(input) {
     const lines = String(input || "").replace(/\r/g, "").split("\n");
-    const raw = lines.filter(function (line) { return line.trim().charAt(0) !== ">"; }).join("");
-    const sequence = raw.replace(/\s+/g, "").toUpperCase().replace(/T/g, "U");
+    const isHeader = function (line) { return line.trim().charAt(0) === ">"; };
+    const raw = lines.filter(function (line) { return !isHeader(line); }).join("");
+    const sequence = raw.replace(/[\s\d]+/g, "").toUpperCase().replace(/T/g, "U");
     const invalid = sequence.match(/[^ACGU]/g);
     return {
       sequence: sequence,
-      invalid: invalid ? Array.from(new Set(invalid)) : []
+      invalid: invalid ? Array.from(new Set(invalid)) : [],
+      records: lines.filter(isHeader).length,
+      removedNumbers: /\d/.test(raw)
     };
   }
 
@@ -2643,9 +2819,7 @@
       }
     });
 
-    return rows.map(function (row) {
-      return row.map(csvCell).join(",");
-    }).join("\n");
+    return csvRows(rows);
   }
 
   function recordsToHyb(records) {
@@ -2760,24 +2934,30 @@
   }
 
   function csvRows(rows) {
-    return rows.map(function (row) {
+    return textLines(rows.map(function (row) {
       return row.map(csvCell).join(",");
-    }).join("\n");
+    }));
   }
 
+  // x_start/y_start are HYB2 bin keys, floor(position / bin size) × bin
+  // size as in HYB2 contact.txt (so the first is 0); a bin holds the 1-based
+  // positions max(1, start)..end, and the last bin's end is clamped to the
+  // RNA length (matrix.length / length2) when it is known.
   function contactToTsv(matrix) {
     const rows = [["x_start", "x_end", "y_start", "y_end", "records", "support_count"]];
+    const lengthX = matrix.lengthX || matrix.length;
+    const lengthY = matrix.lengthY || matrix.length2 || matrix.length;
     matrix.cells.sort(function (left, right) { return left.x - right.x || left.y - right.y; }).forEach(function (cell) {
       rows.push([
         cell.x,
-        cell.x + matrix.binSize - 1,
+        binEnd(cell.x, matrix.binSize, lengthX),
         cell.y,
-        cell.y + matrix.binSize - 1,
+        binEnd(cell.y, matrix.binSize, lengthY),
         cell.records,
         cell.support
       ]);
     });
-    return rows.map(function (row) { return row.join("\t"); }).join("\n");
+    return textLines(rows.map(function (row) { return row.join("\t"); }));
   }
 
   // The map as a wide matrix: one row per RNA Y bin, one column per RNA X
@@ -2816,9 +2996,9 @@
       const col = column.get(cell.x);
       if (row !== undefined && col !== undefined) values[row][col] = cell.value;
     });
-    return ["y_start/x_start," + xs.join(",")].concat(values.map(function (row, index) {
+    return textLines(["y_start/x_start," + xs.join(",")].concat(values.map(function (row, index) {
       return ys[index] + "," + row.join(",");
-    })).join("\n");
+    })));
   }
 
   function csvCell(value) {
@@ -2837,6 +3017,101 @@
   function coordinateOrNull(value) {
     const parsed = numberOrNull(value);
     return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null;
+  }
+
+  // Last valid coordinate of an RNA for a typed range: its mapped reference
+  // length, or null when no reference gives the length. Records that reach
+  // past a (mismatched) reference keep their own coordinates valid.
+  function coordinateLimit(referenceLength, extent) {
+    if (!Number.isSafeInteger(referenceLength) || referenceLength < 1) {
+      return null;
+    }
+    return Math.max(referenceLength, extent && Number.isSafeInteger(extent.max) ? extent.max : 0);
+  }
+
+  // Why a typed start/end pair cannot be used, or "" when it can. Coordinates
+  // are whole numbers from 1 to the RNA's last position, start <= end.
+  // settings: start/end = the field names used in the message; limit = last
+  // valid position (null when unknown); rna = its name; paired = both fields
+  // or neither must be filled. Blank fields are otherwise left to the caller.
+  function coordinateRangeIssue(startValue, endValue, settings) {
+    const options = settings || {};
+    const startName = options.start || "Start";
+    const endName = options.end || "End";
+    const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : null;
+    const text = function (value) { return value.toLocaleString("en-US"); };
+    const allowed = limit ? "whole numbers from 1 to " + text(limit) : "whole numbers, 1 or more";
+    const start = coordinateOrNull(startValue);
+    const end = coordinateOrNull(endValue);
+    if ((String(startValue == null ? "" : startValue).trim() && start === null) ||
+        (String(endValue == null ? "" : endValue).trim() && end === null)) {
+      return startName + " and " + endName + " must be " + allowed + ".";
+    }
+    if (options.paired && (start === null) !== (end === null)) {
+      return "Enter both " + startName + " and " + endName + ", or clear both.";
+    }
+    if (start !== null && end !== null && start > end) {
+      return startName + " " + text(start) + " is after " + endName + " " + text(end) + ". The start must not be after the end.";
+    }
+    if (limit && Math.max(start || 0, end || 0) > limit) {
+      return (end !== null && end > limit ? endName + " " + text(end) : startName + " " + text(start)) +
+        " is beyond the last position of " + (options.rna || "this RNA") + " (" + text(limit) + "). Use " + allowed + ".";
+    }
+    return "";
+  }
+
+  // Why the Viewpoint's typed Start/End cannot be used, or "". The full
+  // mapped reference mode ignores both fields.
+  function viewpointRangeIssue(viewpoint, context) {
+    const options = context || {};
+    if (!viewpoint || viewpoint.rangeMode === "reference") {
+      return "";
+    }
+    const issue = coordinateRangeIssue(viewpoint.start, viewpoint.end, {
+      limit: coordinateLimit(options.referenceLength, options.extent), rna: viewpoint.rna
+    });
+    // A blank Start or End falls back to the first or last coordinate in the data.
+    const extent = options.extent || null;
+    const start = coordinateOrNull(viewpoint.start);
+    const end = coordinateOrNull(viewpoint.end);
+    if (issue || !extent || (start === null) === (end === null)) {
+      return issue;
+    }
+    if (start !== null && start > extent.max) {
+      return "Start " + start.toLocaleString("en-US") + " is after the last coordinate in the data for " + (viewpoint.rna || "this RNA") + " (" + Number(extent.max).toLocaleString("en-US") + "). Enter a smaller Start.";
+    }
+    if (end !== null && end < extent.min) {
+      return "End " + end.toLocaleString("en-US") + " is before the first coordinate in the data for " + (viewpoint.rna || "this RNA") + " (" + Number(extent.min).toLocaleString("en-US") + "). Enter a larger End.";
+    }
+    return "";
+  }
+
+  // Why the Region Explorer's typed ranges cannot be used, or "".
+  // limits: { limit, partnerLimit } = last valid position of the anchor and
+  // of the partner RNA (null when unknown). A partner range needs a partner
+  // RNA: coordinates are per RNA.
+  function regionRangeIssue(region, limits) {
+    const query = region || {};
+    const options = limits || {};
+    const issue = coordinateRangeIssue(query.start, query.end, { limit: options.limit, rna: query.rna });
+    if (issue) {
+      return issue;
+    }
+    // the anchor range is required (regionQuery): a blank field is said, not
+    // silently ignored
+    const blank = function (value) { return !String(value == null ? "" : value).trim(); };
+    if (query.rna && (blank(query.start) || blank(query.end))) {
+      const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : null;
+      const which = blank(query.start) && blank(query.end) ? "Start and End" : blank(query.start) ? "Start" : "End";
+      return "Enter " + which + " to explore a region: whole numbers from 1" + (limit ? " to " + limit.toLocaleString("en-US") : " or more") + ".";
+    }
+    const partnerTyped = [query.partnerStart, query.partnerEnd].some(function (value) { return String(value == null ? "" : value).trim(); });
+    if (partnerTyped && !query.partner) {
+      return "Choose a Partner RNA before entering Partner start and Partner end: coordinates belong to one RNA.";
+    }
+    return coordinateRangeIssue(query.partnerStart, query.partnerEnd, {
+      start: "Partner start", end: "Partner end", limit: options.partnerLimit, rna: query.partner, paired: true
+    });
   }
 
   function matchesHomodimerSubset(record, subset) {
@@ -2871,6 +3146,8 @@
     createSha256: createSha256,
     contactDataset: contactDataset,
     structurePartnerWindow: structurePartnerWindow,
+    cofoldWindows: cofoldWindows,
+    structureCofoldWindows: structureCofoldWindows,
     getFilteredRecords: getFilteredRecords,
     filterRecords: filterRecords,
     getPartnerCounts: getPartnerCounts,
@@ -2904,6 +3181,9 @@
     comparisonRnaPlan: comparisonRnaPlan,
     comparisonCellAt: comparisonCellAt,
     comparisonToTsv: comparisonToTsv,
+    comparisonRnaLengths: comparisonRnaLengths,
+    formatSignificant: formatSignificant,
+    binEnd: binEnd,
     comparisonSelectedToTsv: comparisonSelectedToTsv,
     comparisonCountMatrixToTsv: comparisonCountMatrixToTsv,
     comparisonLegacyNamesToTsv: comparisonLegacyNamesToTsv,
@@ -2921,6 +3201,10 @@
     rnaPairsToCsv: rnaPairsToCsv,
     contactToTsv: contactToTsv,
     contactMatrixToCsv: contactMatrixToCsv,
-    numberOrNull: numberOrNull
+    numberOrNull: numberOrNull,
+    coordinateLimit: coordinateLimit,
+    coordinateRangeIssue: coordinateRangeIssue,
+    viewpointRangeIssue: viewpointRangeIssue,
+    regionRangeIssue: regionRangeIssue
   };
 }());

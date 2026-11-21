@@ -1,5 +1,7 @@
 import io
 import json
+import os
+import sys
 import random
 import tempfile
 import unittest
@@ -141,6 +143,44 @@ class BatchEnergyTests(unittest.TestCase):
         self.assertEqual(audit[0][4], "%.2f" % round(want["energy"], 2))
         meta = json.loads((run / "parameters.json").read_text())
         self.assertEqual((meta["energyModel"], meta["pseudoknots"], meta["maximumCombinedArmLength"]), ("CPLfold DP09", False, 500))
+
+    def test_rnaduplex_engine(self):
+        """RNAduplex, as the pipeline's dG column (bundled ViennaRNA); arms that
+        form no pair keep the row's energy."""
+        from unittest import mock
+
+        import RNA
+
+        result, run = self._run("batch-energy-1", parameters={"engine": "rnaduplex"}, workers=2)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual((result["summary"]["updated"], result["summary"]["unchanged"]), (2, 2))
+        self.assertEqual(result["summary"]["engine_name"], "ViennaRNA RNAduplex")
+        dg = lambda a, b: "%.2f" % RNA.duplexfold(a, b).energy  # noqa: E731
+        out = (run / "energies.hyb").read_bytes().decode()
+        want = list(self.lines)
+        want[1] = want[1].replace("\t-10.5\t", "\t%s\t" % dg(self.seq_a[9:30], self.seq_a[199:222]), 1)
+        want[5] = want[5].replace("\t.\t", "\t%s\t" % dg(self.seq_a[49:70], self.seq_b[99:125].replace("T", "U")), 1)
+        self.assertEqual(out, "".join(want))
+        meta = json.loads((run / "parameters.json").read_text())
+        self.assertEqual((meta["engineVersion"], meta["executable"], meta["cplcofold"]), ("ViennaRNA " + RNA.__version__, None, None))
+        self.assertTrue((run / "hyb2-energies-rnaduplex.zip").is_file())
+
+        # arms with no pair: kept, and the audit says why
+        from desktop.runtime import batch_energy
+        energy = batch_energy._pipe_energy(ROOT)
+        with mock.patch.object(energy, "duplex_folder", lambda workers=None: lambda pairs: [None] * len(pairs)):
+            result, run = self._run("batch-energy-2", parameters={"engine": "rnaduplex"})
+        self.assertEqual((result["summary"]["updated"], result["summary"]["unchanged"]), (0, 4))
+        self.assertEqual(self._audit(run)[0][5], "RNAduplex found no pair between the arms")
+
+        # without ViennaRNA the run fails and says so
+        def missing(workers=None):
+            raise energy.EnergyUnavailable("the dG column needs the ViennaRNA Python package or RNAduplex on PATH")
+
+        with mock.patch.object(energy, "duplex_folder", missing):
+            result, run = self._run("batch-energy-3", parameters={"engine": "rnaduplex"})
+        self.assertFalse(result["ok"])
+        self.assertIn("RNAduplex", result["error"])
 
     def test_rejects_bad_requests(self):
         base = {"operation": "batch_energy_run", "project_path": str(self.project), "sample_id": self.sample}

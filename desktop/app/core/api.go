@@ -11,6 +11,16 @@ type Window struct {
 	End   uint64 `json:"end"`
 }
 
+// EnergyCheck is pipeline_energy_check's answer for one sample. Problem
+// non-empty: the run cannot compute the dG column (it must not start);
+// Note: how it is computed when that needs saying.
+type EnergyCheck struct {
+	NeedsEngine bool   `json:"needs_engine"`
+	Engine      string `json:"engine"`
+	Problem     string `json:"problem"`
+	Note        string `json:"note"`
+}
+
 // Region is one strand of a CPLcofold fold: a range of one RNA.
 type Region struct {
 	GeneID string `json:"gene_id"`
@@ -93,6 +103,12 @@ type Backend interface {
 	// project_op: one of the PROJECT_OPERATIONS allowlist on the control
 	// lane; payload must not contain "operation" or "path".
 	ProjectOp(path, operation string, payload Obj) (Obj, error)
+	// pipeline_energy_check (control lane): how each sample's
+	// sample_pipeline run (resumed, or fresh) would compute the .hyb dG
+	// column, decided by Python as the run will (sample_run.build_options:
+	// per-sample settings; RNAduplex, bundled with ViennaRNA).
+	// Every id has an answer, or the call fails.
+	PipelineEnergyCheck(path string, sampleIDs []string, resuming bool) (map[string]EnergyCheck, error)
 	// analysis_query: an allowlisted analysis operation on the compute lane;
 	// returns the bridge's `result` field (as the Tauri command does).
 	Query(projectPath, operation string, payload Obj) (any, error)

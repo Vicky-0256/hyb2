@@ -258,7 +258,17 @@ class WorkerProcessTests(unittest.TestCase):
             worker.describe("fake-rate-%d" % i)
         times = [c["t"] for c in worker.calls()]
         gaps = [b - a for a, b in zip(times, times[1:])]
-        self.assertGreaterEqual(min(gaps), 0.45, gaps)
+        # The limiter spaces call *starts* in the client by MIN_INTERVAL; the
+        # fake server records when each call *arrives*, after a delivery delay
+        # that varies under heavy load (seen: 0.62 s then 0.44 s). So check
+        # the cumulative spacing, which one late arrival cannot hide, and each
+        # gap against a looser bound. With no limiter the gaps are only the
+        # round trip of one call, and both checks fail.
+        interval, jitter = mcp_client.MIN_INTERVAL, 0.2
+        self.assertEqual(len(times), 5, times)
+        for k in range(1, len(times)):
+            self.assertGreaterEqual(times[k] - times[0], k * interval - jitter, gaps)
+        self.assertGreaterEqual(min(gaps), interval - jitter, gaps)
 
     def test_unsupported_operations(self):
         worker = Worker(self)

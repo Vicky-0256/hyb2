@@ -255,6 +255,25 @@ class CplfoldLimitTests(unittest.TestCase):
         self.assertEqual(len(module._sequence("A" * 900, 1000)), 900)
 
 
+class PeakMemoryTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "macOS footprint accounting")
+    def test_peak_includes_memory_macos_does_not_keep_resident(self):
+        from desktop.runtime import structure
+
+        block = bytearray(64 * 1024 * 1024)
+        for offset in range(0, len(block), 4096):
+            block[offset] = 1
+        footprint = structure._darwin_peak_footprint_bytes()
+        self.assertGreaterEqual(footprint, len(block))
+        self.assertGreaterEqual(structure._peak_rss_bytes(), footprint)
+
+    def test_peak_falls_back_to_resident_size_when_footprint_is_unreadable(self):
+        from desktop.runtime import structure
+
+        with mock.patch.object(structure, "_darwin_peak_footprint_bytes", return_value=0):
+            self.assertGreater(structure._peak_rss_bytes(), 0)
+
+
 class TaskMainTests(unittest.TestCase):
     """The single-shot task bridge always leaves a result.json the shell can show."""
 

@@ -99,6 +99,8 @@ type qcPage struct {
 	// tableRoom is the table's scroller width last frame: the table fills
 	// it, or scrolls when its columns need more.
 	tableRoom float32
+	// roomTries counts the redraws asked for while the scroller has no width.
+	roomTries int
 	// guideOpen: the chimera patterns' "How to read these patterns".
 	guideOpen bool
 	// stats by sample id; loadedKey is the project path and the ready ids
@@ -253,7 +255,10 @@ func (p *qcPage) page(c *ui.Context, ready []string) {
 		if len(a.SelectionIDs(a.Selected.Key)) > 0 {
 			p.overview(c)
 		}
-		Card(c, "", func() {
+		// Keyed: the rows above come and go as the counts and the Overview
+		// load, which would otherwise shift its place, and with it its
+		// elements' state (the table's scroller).
+		Card(c.Key("qc-summary"), "", func() {
 			selection := a.SelectionIDs(a.Selected.Key)
 			analysed := 0
 			for _, id := range ready {
@@ -438,7 +443,7 @@ func (p *qcPage) summaryTable(c *ui.Context, ready []string) {
 	// The scroller keeps the columns' widths out of the page's minimum
 	// width: a narrow window scrolls the table, not the page.
 	scroller := ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Height(qcTableHeight(len(rows))).Children(func() { p.summaryRows(c, cols, rows, types, maxSample, maxCond) })
-	p.tableRoom = scroller.LayoutBounds().W
+	trackTableRoom(c, scroller.LayoutBounds().W, &p.tableRoom, &p.roomTries)
 }
 
 func (p *qcPage) summaryRows(c *ui.Context, cols []ui.TableColumn, rows []qcRow, types []string, maxSample, maxCond int64) {

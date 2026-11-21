@@ -58,6 +58,9 @@ var ProjectOperations = []string{
 	"import_sample_rows",
 	"check_inputs",
 	"disk_estimate",
+	// How a sample_pipeline run computes the .hyb dG column, and whether it
+	// can (desktop/runtime/sample_run.py; PipelineEnergyCheck).
+	"pipeline_energy_check",
 	"list_samples",
 	"list_structures",
 	"read_structure",
@@ -123,9 +126,9 @@ func NewService(rt *Runtime, opts ServiceOptions) *Service {
 	tasks.SetBudget(LoadBudget(opts.PreferencesPath))
 	s := &Service{
 		rt: rt, tasks: tasks, prefsPath: opts.PreferencesPath, logf: logf,
-		taskCommand: func(rt *Runtime, task *Prepared) *exec.Cmd {
-			return BridgeCommand(rt.Bridge.Python, rt.Bridge.Root, task.RequestFile, rt.ComputeEnv)
-		},
+	}
+	s.taskCommand = func(rt *Runtime, task *Prepared) *exec.Cmd {
+		return BridgeCommand(rt.Bridge.Python, rt.Bridge.Root, task.RequestFile, s.taskEnv(rt.ComputeEnv))
 	}
 	cacheDir, logDir := opts.EvidenceCacheDir, opts.EvidenceLogDir
 	s.evidence = newEvidenceService(func() (SidecarSpec, error) {
@@ -288,6 +291,45 @@ func (s *Service) ProjectOp(path, operation string, payload Obj) (Obj, error) {
 		return nil, err
 	}
 	return s.call(Control, request)
+}
+
+// taskEnv is a task process's environment beyond the app's own: the
+// runtime's and the mfold preference as HYB2_MFOLD (COMRADES(mfold)).
+func (s *Service) taskEnv(base []string) []string {
+	env := append([]string(nil), base...)
+	if mfold := LoadMfold(s.prefsPath); mfold != "" {
+		env = append(env, MfoldEnv+"="+mfold)
+	}
+	return env
+}
+
+// PipelineEnergyCheck is pipeline_energy_check: how each sample's run
+// would compute the .hyb dG column.
+func (s *Service) PipelineEnergyCheck(path string, sampleIDs []string, resuming bool) (map[string]EnergyCheck, error) {
+	ids := append([]string{}, sampleIDs...)
+	payload := Obj{"sample_ids": ids, "resuming": resuming}
+	response, err := s.ProjectOp(path, "pipeline_energy_check", payload)
+	if err != nil {
+		return nil, err
+	}
+	return decodeEnergyCheck(response, ids)
+}
+
+// decodeEnergyCheck reads pipeline_energy_check's samples; a sample left
+// unanswered is an error, never a pass.
+func decodeEnergyCheck(response Obj, ids []string) (map[string]EnergyCheck, error) {
+	var out struct {
+		Samples map[string]EnergyCheck `json:"samples"`
+	}
+	if err := model.Decode(response, &out); err != nil {
+		return nil, fmt.Errorf("pipeline_energy_check: %w", err)
+	}
+	for _, id := range ids {
+		if _, ok := out.Samples[id]; !ok {
+			return nil, fmt.Errorf("pipeline_energy_check gave no answer for sample %s", id)
+		}
+	}
+	return out.Samples, nil
 }
 
 // analysisRequest accepts {project_path, operation, ...} for one of the

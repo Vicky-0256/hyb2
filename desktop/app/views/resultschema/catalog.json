@@ -297,17 +297,17 @@
       "R28",
       "arc_pairs_a",
       "arc_map",
-      "Base pairs of structure A",
+      "Base pairs of structure A where B is defined",
       "pairs",
-      "Base pairs of the arc map's structure A."
+      "Base pairs of the arc map's structure A that lie inside a span structure B covers (the basis for shared pairs); with no structure B, every pair of A. The full count is in results/structure_A.json."
     ],
     [
       "R29",
       "arc_pairs_b",
       "arc_map",
-      "Base pairs of structure B",
+      "Base pairs of structure B on A's coordinates where A is defined",
       "pairs",
-      "Base pairs of the arc map's structure B, on A's coordinates."
+      "Base pairs of the arc map's structure B moved onto A's coordinates (pairs with an unaligned end are left out) that lie inside a span structure A covers (the basis for shared pairs). The full count of B, on its own sequence, is in results/structure_B.json and can be larger."
     ],
     [
       "R30",

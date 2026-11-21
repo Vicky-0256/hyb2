@@ -437,3 +437,41 @@ func TestQCReferenceCallout(t *testing.T) {
 	}
 	dataExpect(t, tt, "Reference sequences loaded")
 }
+
+// The summary table fills its scroller, whose width is only known a frame
+// late and was forgotten when the rows above the card came and went: the
+// columns must not sit at their minimum width for a frame, neither when
+// the page is first shown nor when the counts and the Overview arrive.
+func TestQCTableKeepsItsWidth(t *testing.T) {
+	gate := make(chan struct{})
+	a, _ := qcOpen(t, gate, true)
+	a.Navigate("qc", nil)
+	tt := ui.NewTester(a.View, 1900, 1500) // wider than the table's columns
+	// still is where a fixed column is, the same for the frames that follow.
+	still := func(what string) {
+		t.Helper()
+		at, ok := tt.Find("Hybrids / reads")
+		if !ok {
+			t.Fatalf("%s: no table: %q", what, tt.Texts())
+		}
+		for i := 1; i <= 3; i++ {
+			tt.Frame()
+			if next, _ := tt.Find("Hybrids / reads"); next.X != at.X {
+				t.Fatalf("%s: the column moved from x=%v to x=%v in frame %d", what, at.X, next.X, i)
+			}
+		}
+	}
+	still("first shown")
+	room := qcFor(a).tableRoom
+	if room == 0 {
+		t.Fatal("the table's room is not known after the first frames")
+	}
+	close(gate)
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Type 2", "Top interacting RNAs") // the type columns and the Overview are in
+	still("counts loaded")
+	if got := qcFor(a).tableRoom; got != room {
+		t.Fatalf("the table's room went from %v to %v", room, got)
+	}
+}

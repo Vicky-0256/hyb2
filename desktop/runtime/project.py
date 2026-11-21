@@ -347,6 +347,13 @@ def _validate_references_samples(manifest: Dict[str, Any], errors: List[str]) ->
             else:
                 for key, value in outputs.items():
                     if value is not None and not safe_relative_path(value): errors.append(where + ".outputs." + str(key) + " must be a project-relative path or null")
+        if item.get("energy") is not None:
+            energy = item.get("energy")
+            if not isinstance(energy, dict) or not isinstance(energy.get("engine"), str) or not energy.get("engine"):
+                errors.append(where + ".energy must be an object with an engine")
+            else:
+                for key, value in energy.items():
+                    if value is not None and not isinstance(value, str): errors.append(where + ".energy." + str(key) + " must be a string or null")
         if "stages" in item:
             stages = item.get("stages")
             if not isinstance(stages, dict): errors.append(where + ".stages must be an object")

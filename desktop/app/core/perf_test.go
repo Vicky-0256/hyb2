@@ -13,14 +13,17 @@ func near(a, b float64) bool { return math.Abs(a-b) <= 1e-6*math.Max(1, math.Abs
 
 func TestSampleEstimatePriorAndMeasured(t *testing.T) {
 	// No history: the built-in rate, scaled by CPUs.
+	// The energy stage (RNAduplex dG) adds 1.0 s + 2000 MB x 135
+	// hybrids/MB x 1.15 ms = 311.5 s at 10 CPUs.
 	seconds, measured := SampleEstimate(nil, "fastq.gz", 2_000_000_000, 10)
-	if measured || !near(seconds, sampleOverhead+940) {
+	if energy := energySeconds("fastq.gz", 2_000_000_000, 10); measured || !near(energy, 1.0+2000*135*1.15e-3) || !near(seconds, sampleOverhead+940+energy) {
 		t.Fatalf("prior %v %v", seconds, measured)
 	}
-	if half, _ := SampleEstimate(nil, "fastq.gz", 2_000_000_000, 5); !near(half, sampleOverhead+940*math.Pow(2, perfCPUExponent)) {
+	if half, _ := SampleEstimate(nil, "fastq.gz", 2_000_000_000, 5); !near(half, sampleOverhead+(940+2000*135*1.15e-3)*math.Pow(2, perfCPUExponent)+1.0) {
 		t.Fatalf("5 cpus %v", half)
 	}
 	// Measured runs of the same format win (median; other formats ignored).
+	// They predate the energy stage (no Energy): its modelled time is added.
 	history := []PerfRecord{
 		{Kind: "sample_pipeline", Format: "fastq.gz", InputBytes: 100e6, CPU: 10, Seconds: 30},
 		{Kind: "sample_pipeline", Format: "fastq.gz", InputBytes: 100e6, CPU: 10, Seconds: 50},
@@ -28,7 +31,7 @@ func TestSampleEstimatePriorAndMeasured(t *testing.T) {
 		{Kind: "sample_pipeline", Format: "fastq", InputBytes: 100e6, CPU: 10, Seconds: 999},
 	}
 	seconds, measured = SampleEstimate(history, "fastq.gz", 1e9, 10)
-	if !measured || !near(seconds, sampleOverhead+(80-sampleOverhead)*5) { // median rate: the 200 MB run
+	if !measured || !near(seconds, sampleOverhead+(80+energySeconds("fastq.gz", 200e6, 10)-sampleOverhead)*5) { // median rate: the 200 MB run
 		t.Fatalf("measured %v %v", seconds, measured)
 	}
 	// A run measured with 5 CPUs counts as faster with 10.
@@ -36,8 +39,17 @@ func TestSampleEstimatePriorAndMeasured(t *testing.T) {
 	if !near(seconds, sampleOverhead+(10-sampleOverhead)*math.Pow(0.5, perfCPUExponent)) {
 		t.Fatalf("scaled %v", seconds)
 	}
+	// A run measured with the energy stage is taken as it is.
+	withEnergy := []PerfRecord{{Kind: "sample_pipeline", Format: "fastq.gz", InputBytes: 100e6, CPU: 10, Seconds: 50, Energy: true}}
+	if seconds, _ = SampleEstimate(withEnergy, "fastq.gz", 200e6, 10); !near(seconds, sampleOverhead+(50-sampleOverhead)*2) {
+		t.Fatalf("measured with energy %v", seconds)
+	}
+	// testData.sam (31.4 MB, 10,411 hybrids): RNAduplex measured 13.0 s
+	if energy := energySeconds("sam", 31_367_322, 10); math.Abs(energy-13.0) > 0.5 || energySeconds("hyb", 1e9, 10) != 0 {
+		t.Fatalf("sam energy %v", energy)
+	}
 	e := EstimatePipelines(history, []PipelineInput{{"fastq.gz", 1e9}, {"sam", 1e9}}, 10)
-	if e.Samples != 2 || e.Measured != 1 || !near(e.Seconds, sampleOverhead+(80-sampleOverhead)*5+sampleOverhead+20) {
+	if e.Samples != 2 || e.Measured != 1 || !near(e.Seconds, sampleOverhead+(80+energySeconds("fastq.gz", 200e6, 10)-sampleOverhead)*5+sampleOverhead+20+energySeconds("sam", 1e9, 10)) {
 		t.Fatalf("batch %+v", e)
 	}
 }
@@ -45,14 +57,18 @@ func TestSampleEstimatePriorAndMeasured(t *testing.T) {
 func TestRemainingSeconds(t *testing.T) {
 	work := map[string]any{"format": "fastq.gz", "input_bytes": 1e9, "cpu": 10.0}
 	total, _ := SampleEstimate(nil, "fastq.gz", 1e9, 10)
+	// the stage weights share the time without the dG stage, which is ahead
+	energy := energySeconds("fastq.gz", 1e9, 10)
+	base := total - energy
 	cases := []struct {
 		progress Obj
 		want     float64
 		ok       bool
 	}{
 		{Obj{"stage": "check", "work": work}, total, true},
-		{Obj{"stage": "reads", "work": work, "bytes_done": 50.0, "bytes_total": 100.0}, total * (1 - 0.075), true},
-		{Obj{"stage": "map", "work": work, "bytes_done": 100.0, "bytes_total": 100.0}, total * 0.03, true},
+		{Obj{"stage": "reads", "work": work, "bytes_done": 50.0, "bytes_total": 100.0}, base*(1-0.075) + energy, true},
+		{Obj{"stage": "map", "work": work, "bytes_done": 100.0, "bytes_total": 100.0}, base*0.03 + energy, true},
+		{Obj{"stage": "energy", "work": work}, base*0.015 + energy*0.5, true},
 		{Obj{"stage": "map", "detail": "waiting: another sample is mapping", "work": work}, 0, false},
 		{Obj{"stage": "map"}, 0, false},
 	}
@@ -88,8 +104,39 @@ func TestPerfHistoryFile(t *testing.T) {
 	os.MkdirAll(run, 0o755)
 	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":true,"performance":{"format":"fastq.gz","input_bytes":160000000,"cpu":10,"seconds":76.5,"stage_seconds":{"map":66}}}`), 0o644)
 	record, ok := perfFromResult("sample_pipeline", run)
-	if !ok || record.Format != "fastq.gz" || record.InputBytes != 160000000 || record.CPU != 10 || record.Seconds != 76.5 {
+	if !ok || record.Format != "fastq.gz" || record.InputBytes != 160000000 || record.CPU != 10 || record.Seconds != 76.5 || record.Energy {
 		t.Fatalf("%+v %v", record, ok)
+	}
+	// a run with the energy stage says so
+	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":true,"performance":{"format":"fastq.gz","input_bytes":160000000,"cpu":10,"seconds":78,"stage_seconds":{"map":66,"energy":1.5}}}`), 0o644)
+	if record, ok = perfFromResult("sample_pipeline", run); !ok || !record.Energy {
+		t.Fatalf("energy run %+v %v", record, ok)
+	}
+	// performance.energy decides when present
+	for _, c := range []struct {
+		energy  string
+		seconds float64
+		with    bool
+	}{
+		{`{"engine":"rnaduplex","ran":true}`, 78, true},
+		// resumed past the stage: no key, the model is added later
+		{`{"engine":"rnaduplex","ran":false}`, 76.5, false},
+		// an old run's RNAcofold time is not RNAduplex's: taken out
+		{`{"engine":"rnacofold","ran":true}`, 76.5, false},
+		{`{"engine":null,"ran":true}`, 76.5, false},
+	} {
+		stages := `{"map":66,"energy":1.5}`
+		if c.energy == `{"engine":"rnaduplex","ran":false}` {
+			stages = `{"map":66}`
+		}
+		seconds := 78.0
+		if stages == `{"map":66}` {
+			seconds = 76.5
+		}
+		os.WriteFile(filepath.Join(run, "result.json"), []byte(fmt.Sprintf(`{"ok":true,"performance":{"format":"fastq.gz","input_bytes":160000000,"cpu":10,"seconds":%v,"stage_seconds":%s,"energy":%s}}`, seconds, stages, c.energy)), 0o644)
+		if record, ok = perfFromResult("sample_pipeline", run); !ok || record.Energy != c.with || !near(record.Seconds, c.seconds) {
+			t.Fatalf("energy %s: %+v %v", c.energy, record, ok)
+		}
 	}
 	os.WriteFile(filepath.Join(run, "result.json"), []byte(`{"ok":false,"performance":{"format":"fastq","input_bytes":1,"seconds":1}}`), 0o644)
 	if _, ok := perfFromResult("sample_pipeline", run); ok {
@@ -291,11 +338,15 @@ func TestIndexStageEstimates(t *testing.T) {
 }
 
 // Collapsed FASTA reads: the built-in rate matches the 319 MB ZIKV sample
-// (204 s measured on the M1 Pro), a built-in rate gives a range and a
-// measured one a single value, and the time after mapping is 22% of it.
+// (204 s measured on the M1 Pro before the energy stage, which RNAduplex
+// makes about 870 s for its 760,000 hybrids), a built-in rate gives a range
+// and a measured one a single value, and the time after mapping is 22% of
+// the time without the dG stage, plus that stage.
 func TestFastaEstimates(t *testing.T) {
 	seconds, measured := SampleEstimate(nil, "fasta.gz", 319_415_770, priorCPU)
-	if measured || seconds < 190 || seconds > 230 {
+	energy := energySeconds("fasta.gz", 319_415_770, priorCPU)
+	base := seconds - energy
+	if measured || base < 200 || base > 250 || energy < 800 || energy > 950 {
 		t.Fatalf("fasta.gz prior %v", seconds)
 	}
 	e := EstimatePipelines(nil, []PipelineInput{{"fasta.gz", 319_415_770}}, priorCPU)
@@ -308,10 +359,10 @@ func TestFastaEstimates(t *testing.T) {
 		t.Fatalf("measured range %+v", e)
 	}
 	work := map[string]any{"format": "fasta.gz", "input_bytes": 319_415_770.0, "cpu": 10.0}
-	if left, ok := remainingSeconds(nil, Obj{"stage": "map", "work": work, "bytes_done": 100.0, "bytes_total": 100.0}, 10, time.Now()); !ok || !near(left, seconds*0.22) {
+	if left, ok := remainingSeconds(nil, Obj{"stage": "map", "work": work, "bytes_done": 100.0, "bytes_total": 100.0}, 10, time.Now()); !ok || !near(left, base*0.22+energy) {
 		t.Fatalf("fasta.gz mapped: %v", left)
 	}
-	if left, ok := remainingSeconds(nil, Obj{"stage": "annotate", "work": work}, 10, time.Now()); !ok || !near(left, seconds*0.11) {
+	if left, ok := remainingSeconds(nil, Obj{"stage": "annotate", "work": work}, 10, time.Now()); !ok || !near(left, base*0.11) {
 		t.Fatalf("fasta.gz annotating: %v", left)
 	}
 	// Mapping FASTA reports no bytes: the time since the stage started counts.
@@ -321,8 +372,8 @@ func TestFastaEstimates(t *testing.T) {
 		t.Fatalf("fasta.gz mapping for 60 s: %v of %v", left, seconds)
 	}
 	started["updated_at"] = now.Add(-time.Hour).UTC().Format(time.RFC3339)
-	if left, ok := remainingSeconds(nil, started, 10, now); !ok || left <= seconds*0.22 || left > seconds*0.23 {
-		t.Fatalf("fasta.gz mapping far past its estimate: %v, want just over the 22%% after mapping", left)
+	if left, ok := remainingSeconds(nil, started, 10, now); !ok || left <= base*0.22+energy || left > base*0.23+energy {
+		t.Fatalf("fasta.gz mapping far past its estimate: %v, want just over the 22%% after mapping plus dG", left)
 	}
 }
 
@@ -340,7 +391,10 @@ func TestAddRemainingFractionDone(t *testing.T) {
 		{"kind": "sample_pipeline", "status": "running", "progress": map[string]any{"stage": "map", "detail": "waiting: another sample is mapping", "work": work}}}
 	s.addRemaining(tasks)
 	early, mid, late := tasks[0]["fraction_done"].(float64), tasks[1]["fraction_done"].(float64), tasks[2]["fraction_done"].(float64)
-	if early > 0.02 || mid < 0.3 || mid > 0.45 || late < 0.77 || late > 0.79 {
+	// mapping is ~0.78 of the time without the dG stage, which is most of the total
+	total, _ := SampleEstimate(nil, "fasta.gz", 319_415_770, 10)
+	mapShare := 0.78 * (total - energySeconds("fasta.gz", 319_415_770, 10)) / total
+	if early > 0.02 || !near(math.Round(mid*100)/100, math.Round(80/total*100)/100) || late < mapShare*0.98 || late > mapShare {
 		t.Fatalf("fractions %v %v %v", early, mid, late)
 	}
 	if _, ok := tasks[3]["fraction_done"]; ok {
@@ -355,13 +409,13 @@ func TestAddRemainingFractionDone(t *testing.T) {
 	// Past the estimate the bar still moves, more slowly, and stays below
 	// the end of mapping.
 	mapping, _ := SampleEstimate(nil, "fasta.gz", 319_415_770, 10)
-	mapping *= 0.78
+	mapping = (mapping - energySeconds("fasta.gz", 319_415_770, 10)) * 0.78
 	var previous float64
 	for i, x := range []float64{0.5, 0.9, 0.97, 1.05, 1.2, 1.5, 2} {
 		one := []Obj{task(time.Duration(x * mapping * float64(time.Second)))}
 		s.addRemaining(one)
 		f := one[0]["fraction_done"].(float64)
-		if f <= previous || f >= 0.78 {
+		if f <= previous || f >= mapShare {
 			t.Fatalf("step %d (%.1f of the mapping estimate): %v after %v", i, x, f, previous)
 		}
 		if over := one[0]["over_estimate"] == true; over != (x > 1) {

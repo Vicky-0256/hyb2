@@ -574,6 +574,8 @@ type structurePage struct {
 	// the other CPLfold settings, as on the web RNA Structure page
 	phase1, delta, beta float64
 	model               string
+	// kernel is how the chimeras become the bonus matrix (stKernels); "" is the default
+	kernel string
 	// engine is engineCPLfold or engineVienna; the ViennaRNA settings
 	// (structure_vienna.go).
 	engine               string
@@ -582,6 +584,9 @@ type structurePage struct {
 	stems, randomFolds   float64
 	seed                 string
 	homodimerOnly        bool
+	// foldProgram fits the COMRADES stems: foldViennaRNA ("" too) or
+	// foldMfold (COMRADES(mfold), mfold_pref.go).
+	foldProgram string
 	// allowLargeEnsemble confirms more than 100 randomised folds, as the web.
 	allowLargeEnsemble bool
 	workers            float64
@@ -1548,7 +1553,7 @@ func (p *structurePage) statsTable(c *ui.Context, compare bool) {
 func (p *structurePage) metaLine(a *structureResult) string {
 	m := a.Meta
 	parts := []string{"Engine " + nameOr(m.Engine, "CPLfold")}
-	if m.Engine == "COMRADES(ViennaRNA)" && m.Parameters != nil {
+	if stIsComrades(m.Engine) && m.Parameters != nil {
 		parts = append(parts, fmt.Sprintf("%v °C, minimum loop %v, %v randomised folds, seed %v, %d stem pairs fitted",
 			m.Parameters["temperature"], m.Parameters["min_loop"], m.Parameters["random_folds"], m.Parameters["seed"], len(stHardPairs(a))))
 	} else if m.Engine == "IRIS" && m.Parameters != nil {
@@ -1567,7 +1572,11 @@ func (p *structurePage) metaLine(a *structureResult) string {
 		if m.Parameters["evidence"] == "none" {
 			parts = append(parts, pk+", sequence only")
 		} else {
-			parts = append(parts, fmt.Sprintf("%s, alpha %v", pk, m.Parameters["alpha"]))
+			text := fmt.Sprintf("%s, alpha %v", pk, m.Parameters["alpha"])
+			if k, _ := m.Parameters["support_kernel"].(string); k != "" && k != stDefaultKernel {
+				text += ", " + stKernelLabel(k) + " read support"
+			}
+			parts = append(parts, text)
 		}
 		if len(a.Records) == 1 && a.Records[0].Cutpoint > 0 {
 			r := a.Records[0]

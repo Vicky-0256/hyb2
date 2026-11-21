@@ -23,6 +23,9 @@ const (
 	engineCPLcofold = "cplcofold"
 	engineVienna    = "viennarna"
 	engineComrades  = "comrades"
+	// the COMRADES folding programs (comrades.py FOLD_PROGRAMS)
+	foldViennaRNA = "viennarna"
+	foldMfold     = "mfold"
 	// the web's COMRADES(ViennaRNA) defaults and limits
 	stDefaultStems, stDefaultSeed = 75, "HYB2-Web"
 	stComradesMaxNT               = 3000
@@ -115,19 +118,64 @@ func viennaMemory(pl *foldPlan) {
 // stLargeEnsemble is the most randomised folds run without confirming.
 const stLargeEnsemble = 100
 
-// comradesPlan: the web's COMRADES(ViennaRNA) settings and limits.
+// comradesProgram is the program the COMRADES stems are fitted with.
+func (p *structurePage) comradesProgram() string {
+	if p.foldProgram == foldMfold {
+		return foldMfold
+	}
+	return foldViennaRNA
+}
+
+// comradesName is the engine's name for the folding program, as the
+// runtime names its results (comrades.engine_name).
+func (p *structurePage) comradesName() string {
+	if p.comradesProgram() == foldMfold {
+		return "COMRADES(mfold)"
+	}
+	return "COMRADES(ViennaRNA)"
+}
+
+// comradesProgramName names the fitting program in sentences.
+func (p *structurePage) comradesProgramName() string {
+	if p.comradesProgram() == foldMfold {
+		return "mfold"
+	}
+	return "ViennaRNA"
+}
+
+// comradesMfoldProblems: mfold must be found, at 37 °C and minimum loop 3.
+func (p *structurePage) comradesMfoldProblems(pl *foldPlan) {
+	if p.comradesProgram() != foldMfold {
+		return
+	}
+	if _, problem := p.a.appMfold(); problem != "" {
+		pl.problems = append(pl.problems, problem)
+	}
+	if p.temperature != mfoldTemperature {
+		pl.problems = append(pl.problems, "mfold folds at 37 °C only (its version 3.0 energies): set Temperature to 37, or fold with ViennaRNA.")
+	}
+	if int(p.minLoop) != mfoldMinLoop {
+		pl.problems = append(pl.problems, "mfold's minimum hairpin loop is fixed at 3: set Minimum hairpin loop to 3, or fold with ViennaRNA.")
+	}
+}
+
+// comradesPlan: the web's COMRADES(ViennaRNA) settings and limits, or
+// COMRADES(mfold)'s.
 func (p *structurePage) comradesPlan(pl *foldPlan) {
 	seed := strings.TrimSpace(p.seed)
 	pl.req.Parameters = map[string]any{"temperature": p.temperature, "min_loop": int(p.minLoop),
-		"constraint_limit": int(p.stems), "random_folds": int(p.randomFolds), "seed": seed, "homodimer_only": p.homodimerOnly}
+		"constraint_limit": int(p.stems), "random_folds": int(p.randomFolds), "seed": seed, "homodimer_only": p.homodimerOnly,
+		"fold_program": p.comradesProgram()}
 	pl.limits = []string{"Each chimera inside a window is cofolded (RNAcofold); its intermolecular pairs are the evidence, merged into stems.",
-		"Stems are added as hard pairs one by one, ranked by support, then in seeded random orders; the structure matching most evidence wins.",
-		"No pseudoknots: ViennaRNA returns a nested structure."}
+		"Stems are added as hard pairs one by one, ranked by support, then in seeded random orders, each fitted with " + p.comradesProgramName() +
+			"; the structure matching most evidence wins.",
+		"No pseudoknots: " + p.comradesProgramName() + " returns a nested structure."}
+	p.comradesMfoldProblems(pl)
 	if seed == "" {
 		pl.problems = append(pl.problems, "Enter a reproducibility seed for the randomised constraint orders.")
 	}
 	if p.randomFolds > stLargeEnsemble && !p.allowLargeEnsemble {
-		pl.problems = append(pl.problems, "Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.")
+		pl.problems = append(pl.problems, "Confirm the large ensemble under COMRADES settings (more than 100 randomised folds) to run it.")
 	}
 	if p.mode == "paired" {
 		p.pairedPlan(pl)
@@ -135,8 +183,8 @@ func (p *structurePage) comradesPlan(pl *foldPlan) {
 	}
 	for _, n := range pl.lengths {
 		if n > stComradesMaxNT {
-			pl.problems = append(pl.problems, fmt.Sprintf("COMRADES(ViennaRNA) folds at most %s nt at a time, as the web: fold windows of that size.",
-				FormatNumber(stComradesMaxNT)))
+			pl.problems = append(pl.problems, fmt.Sprintf("%s folds at most %s nt at a time, as the web: fold windows of that size.",
+				p.comradesName(), FormatNumber(stComradesMaxNT)))
 			break
 		}
 	}
@@ -155,14 +203,15 @@ func (p *structurePage) pairedPlan(pl *foldPlan) {
 	pl.what, pl.windows, pl.lengths = "2 regions joined by the spacer", nil, nil
 	pl.limits = []string{"The regions are joined by the web's 100-nt A/U spacer and folded together; the result keeps the two regions.",
 		"Only chimeras with one arm in each region are evidence; each is cofolded (RNAcofold).",
-		"No pseudoknots: ViennaRNA returns a nested structure."}
+		"No pseudoknots: " + p.comradesProgramName() + " returns a nested structure."}
+	p.comradesMfoldProblems(pl)
 	if !ok {
 		return
 	}
 	n1, n2 := int(r1.End-r1.Start+1), int(r2.End-r2.Start+1)
 	if n := n1 + stSpacerNT + n2; n > stComradesMaxNT {
-		pl.problems = append(pl.problems, fmt.Sprintf("Both regions and the 100-nt spacer are %s nt; COMRADES(ViennaRNA) folds at most %s nt, as the web.",
-			FormatNumber(int64(n)), FormatNumber(stComradesMaxNT)))
+		pl.problems = append(pl.problems, fmt.Sprintf("Both regions and the 100-nt spacer are %s nt; %s folds at most %s nt, as the web.",
+			FormatNumber(int64(n)), p.comradesName(), FormatNumber(stComradesMaxNT)))
 	}
 	// the memory of the joined fold; the form shows the two regions
 	pl.lengths = []int{n1 + stSpacerNT + n2}
@@ -173,7 +222,20 @@ func (p *structurePage) pairedPlan(pl *foldPlan) {
 // comradesSeconds is a rough upper bound: one MFE per stem tried, for the
 // ranked order and each randomised one.
 func (p *structurePage) comradesSeconds(lengths []int) float64 {
+	if p.comradesProgram() == foldMfold {
+		return mfoldSeconds(lengths) * p.stems * (1 + p.randomFolds)
+	}
 	return viennaSeconds(lengths) * p.stems * (1 + p.randomFolds)
+}
+
+// mfoldSeconds is the time of one mfold fold of each length (measured
+// anchor, plus mfold's start-up of about a second).
+func mfoldSeconds(lengths []int) float64 {
+	total := 0.0
+	for _, n := range lengths {
+		total += 1 + mfoldRefSeconds*math.Pow(float64(n)/mfoldRefNT, mfoldTimeExponent)
+	}
+	return total
 }
 
 // windowsOrWhole are the folded ranges.
@@ -200,7 +262,8 @@ func viennaSeconds(lengths []int) float64 {
 func (p *structurePage) viennaSettingsChanged() bool {
 	changed := p.temperature != stDefaultTemp || int(p.minLoop) != stDefaultLoop
 	if p.engine == engineComrades {
-		changed = changed || int(p.stems) != stDefaultStems || p.randomFolds != 0 || p.seed != stDefaultSeed || p.homodimerOnly
+		changed = changed || int(p.stems) != stDefaultStems || p.randomFolds != 0 || p.seed != stDefaultSeed || p.homodimerOnly ||
+			p.comradesProgram() != foldViennaRNA
 	}
 	return changed
 }
@@ -211,8 +274,15 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 	t := c.Theme()
 	changed := p.viennaSettingsChanged()
 	comrades := p.engine == engineComrades
-	ui.Collapsible(c.Key("st-vienna"), "ViennaRNA settings", &p.advancedOpen, func() {
+	title := "ViennaRNA settings"
+	if comrades {
+		title = "COMRADES settings"
+	}
+	ui.Collapsible(c.Key("st-vienna"), title, &p.advancedOpen, func() {
 		ui.Column(c).Gap(10).Padding(6, 0, 0, 0).Children(func() {
+			if comrades {
+				p.foldProgramField(c)
+			}
 			row := func(key, label string, value *float64, lo, hi, step float64, help string) {
 				ui.Column(c).Gap(2).Children(func() {
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -241,12 +311,13 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 			if ui.Button(c, "Reset to defaults").Disabled(!changed).Clicked() {
 				p.temperature, p.minLoop = stDefaultTemp, stDefaultLoop
 				p.stems, p.randomFolds, p.seed, p.homodimerOnly, p.allowLargeEnsemble = stDefaultStems, 0, stDefaultSeed, false, false
+				p.foldProgram = foldViennaRNA
 			}
 		})
 	})
 	if comrades {
-		summary := fmt.Sprintf("%g °C · minimum loop %d · %d stems · %d randomised folds · seed %s",
-			p.temperature, int(p.minLoop), int(p.stems), int(p.randomFolds), p.seed)
+		summary := fmt.Sprintf("%s · %g °C · minimum loop %d · %d stems · %d randomised folds · seed %s",
+			p.comradesProgramName(), p.temperature, int(p.minLoop), int(p.stems), int(p.randomFolds), p.seed)
 		if p.homodimerOnly {
 			summary += " · homodimer proxies only"
 		}
@@ -273,4 +344,39 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 		summary += " · defaults"
 	}
 	ui.Text(c, summary).FontSize(12).TextColor(color)
+}
+
+// foldProgramField: the program the COMRADES stems are fitted with,
+// ViennaRNA (bundled) or mfold 3.6 (installed separately; 37 °C, minimum
+// loop 3), and whether mfold is found.
+func (p *structurePage) foldProgramField(c *ui.Context) {
+	t := c.Theme()
+	Field(c, "Folding program", func() {
+		p.foldProgram = p.comradesProgram()
+		changed := func() {
+			if p.foldProgram == foldMfold {
+				// mfold's fixed settings
+				p.temperature, p.minLoop = mfoldTemperature, mfoldMinLoop
+			}
+		}
+		ui.Radio(c, &p.foldProgram, foldViennaRNA, "ViennaRNA (bundled)").OnChange(changed)
+		ui.Radio(c, &p.foldProgram, foldMfold, "mfold 3.6 (installed separately)").OnChange(changed)
+		if p.comradesProgram() != foldMfold {
+			ui.Text(c, "Fits the stems with ViennaRNA's constrained MFE, as the web.").FontSize(12).TextColor(t.TextMuted)
+			return
+		}
+		path, problem := p.a.appMfold()
+		if path != "" {
+			ui.Text(c, "Using "+path+". mfold applies each stem as forced base pairs; it folds at 37 °C with minimum loop 3, "+
+				"and is slower than ViennaRNA (about 7 s per fold at 1,000 nt).").FontSize(12).TextColor(t.TextMuted)
+			return
+		}
+		ui.Text(c, problem).FontSize(12).TextColor(t.Danger)
+	})
+}
+
+// stIsComrades: a result engine name of COMRADES, with either folding
+// program ("COMRADES(ViennaRNA)", "COMRADES(mfold)").
+func stIsComrades(engine string) bool {
+	return strings.HasPrefix(engine, "COMRADES(")
 }

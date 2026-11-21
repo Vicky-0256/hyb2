@@ -13,6 +13,7 @@ from desktop.runtime import samples
 from desktop.runtime.bridge import handle
 from desktop.runtime.project import import_input, load_manifest, new_project, validate_manifest, validate_project_directory
 
+
 ROOT = Path(__file__).resolve().parents[3]
 # The real map lives beside the checkout (outside git); fall back to an embedded copy.
 ZIKV_MAP = next((p / "ZIKV_dataset_map.tsv" for p in ROOT.parents if (p / "ZIKV_dataset_map.tsv").is_file()), ROOT / "missing.tsv")
@@ -509,7 +510,7 @@ class DataFolderTests(ProjectTestCase):
         self.assertEqual(samples._split_replicate("ctrl-rep12_trimmed"), ("ctrl-rep12", "ctrl", 12))
         self.assertEqual(samples._split_replicate("Sample"), ("Sample", None, None))
         _write_gz(self.data / "S_R1.fastq.gz", "@r\nACGT\n+\nIIII\n")
-        _write_gz(self.data / "S_R2.fastq.gz", "@r\nACGT\n+\nIIII\n")
+        _write_gz(self.data / "S_R2.fastq.gz", "@r\nTGCA\n+\nIIII\n")  # the other mate: other reads
         result = samples.scan_data_folder(self.data)
         self.assertTrue(all(any("paired-end" in n for n in s["notes"]) for s in result["samples"]), result)
         self.assertTrue(all(any("no reference" in n for n in s["notes"]) for s in result["samples"]))
@@ -533,6 +534,25 @@ class DataFolderTests(ProjectTestCase):
         self.assertEqual(first["reads"]["mode"], "linked")
         again = self.call("import_sample_rows", rows=rows)
         self.assertEqual(len(again["skipped"]), len(rows))
+
+    def test_identical_files_are_proposed_once(self):
+        """A copy under another name: the scan proposes it once and says so;
+        an import of both names the file it matched, not the project."""
+        fastq = "".join("@r%d\nACGTACGT\n+\nIIIIIIII\n" % i for i in range(5))
+        (self.data / "ok_rep1.fastq").write_text(fastq, encoding="utf-8")
+        (self.data / "ok_rep2.fastq").write_text(fastq, encoding="utf-8")
+        (self.data / "ok_rep3.fastq").write_text(fastq.replace("ACGTACGT", "ACGTACGA"), encoding="utf-8")  # same size, other reads
+        scan = samples.scan_data_folder(self.data)
+        self.assertEqual(sorted(Path(s["path"]).name for s in scan["samples"]), ["ok_rep1.fastq", "ok_rep3.fastq"])
+        self.assertEqual([(Path(d["path"]).name, Path(d["kept"]).name, d["reason"]) for d in scan["duplicates"]],
+                         [("ok_rep2.fastq", "ok_rep1.fastq", "same content")])
+        rows = [{"path": str(self.data / name), "name": name.split(".")[0]} for name in ("ok_rep1.fastq", "ok_rep2.fastq")]
+        result = self.call("import_sample_rows", rows=rows)
+        self.assertEqual(len(result["samples"]), 1)
+        self.assertEqual([(s["reason"], Path(s["kept"]).name) for s in result["skipped"]],
+                         [("same content as another file of this import", "ok_rep1.fastq")])
+        again = self.call("import_sample_rows", rows=rows[:1])
+        self.assertEqual([s["reason"] for s in again["skipped"]], ["already in project"])
 
     def test_import_rows_rejects_bad_rows_atomically(self):
         good = self.reads("a.fastq.gz")

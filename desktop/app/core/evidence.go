@@ -116,7 +116,11 @@ func EvidenceSpec(b Bridge, cacheDir, logDir string) SidecarSpec {
 // EvidenceService runs the evidence worker lazily and keeps the project
 // cards. It is safe for concurrent use; worker calls are serialized.
 type EvidenceService struct {
-	mu      sync.Mutex
+	mu sync.Mutex
+	// callMu serializes calls, so a call waiting for the worker checks the
+	// external_lookup preference only once it is its turn: turning lookups
+	// off then stops calls that were already waiting, not only the running one.
+	callMu  sync.Mutex
 	sidecar *Sidecar
 	closed  bool
 	// spec builds the worker's sidecar (tests replace it).
@@ -151,6 +155,8 @@ func (e *EvidenceService) worker() (*Sidecar, error) {
 
 // call sends one request; the response must be an object with ok=true.
 func (e *EvidenceService) call(request Obj) (map[string]json.RawMessage, error) {
+	e.callMu.Lock()
+	defer e.callMu.Unlock()
 	if !e.enabled() {
 		return nil, ErrExternalLookupOff
 	}
@@ -158,8 +164,20 @@ func (e *EvidenceService) call(request Obj) (map[string]json.RawMessage, error) 
 	if err != nil {
 		return nil, err
 	}
-	raw, err := sidecar.Request(request)
+	// Lookups turned off after the check above: SetPreferences stores the
+	// preference and then cancels, so the request is either not sent or
+	// cancelled in flight.
+	stillOn := true
+	raw, err := sidecar.RequestIf(request, func() bool { stillOn = e.enabled(); return stillOn })
+	if !stillOn {
+		return nil, ErrExternalLookupOff
+	}
 	if err != nil {
+		// Turned off once the request was sent: SetPreferences cancelled
+		// it, which is the preference, not the user's Cancel.
+		if errors.Is(err, ErrSidecarCancelled) && !e.enabled() {
+			return nil, ErrExternalLookupOff
+		}
 		return nil, err
 	}
 	var response map[string]json.RawMessage

@@ -10,6 +10,7 @@ from desktop.runtime import samples
 from desktop.runtime.bridge import handle
 from desktop.runtime.project import new_project, validate_manifest
 
+
 ROOT = Path(__file__).resolve().parents[3]
 GOLDEN = ROOT / "pipeline" / "tests" / "golden" / "testData.hyb"
 EXAMPLE = ROOT / "web" / "assets" / "examples" / "zikv-virion"

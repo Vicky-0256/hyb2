@@ -297,6 +297,49 @@ func TestEvidenceTimeoutAndCancelRestartWorker(t *testing.T) {
 	s.CancelEvidence()
 }
 
+// Turning lookups off also stops a lookup that was waiting for the worker
+// behind the running one: it must not start a new worker afterwards.
+func TestEvidenceLookupOffStopsWaitingCall(t *testing.T) {
+	f := evidenceService(t, 30*time.Second, true)
+	s := f.s
+	slow := make(chan error, 1)
+	go func() {
+		_, err := s.DescribeRNA(f.project, "slow", "9606", true, false)
+		slow <- err
+	}()
+	time.Sleep(400 * time.Millisecond)
+	waiting := make(chan error, 1)
+	go func() {
+		_, err := s.DescribeRNA(f.project, "hsa-mir-21", "9606", true, false)
+		waiting <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if _, err := s.SetPreferences(Obj{"external_lookup": false}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-slow:
+		// cancelled in flight by the preference: lookups are off, not
+		// "cancelled by the user"
+		if !errors.Is(err, ErrExternalLookupOff) {
+			t.Fatalf("running call: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("turning lookups off did not end the running call")
+	}
+	select {
+	case err := <-waiting:
+		if !errors.Is(err, ErrExternalLookupOff) {
+			t.Fatalf("waiting call: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting call did not end")
+	}
+	if s.evidence.pid() != 0 {
+		t.Fatal("a worker was started after lookups were turned off")
+	}
+}
+
 func readPid(t *testing.T, path string) int {
 	t.Helper()
 	data, err := os.ReadFile(path)

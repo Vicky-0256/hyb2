@@ -19,9 +19,9 @@ import (
 // the Data controls, the map with its Display bar, the selected region, the
 // data table and the method note.
 //
-// As the web's, the map draws one dataset whatever the selection merges
-// (contactDatasetID); its exports, Show hybrids and Explore region use that
-// dataset too.
+// As the web's, the map draws the selection's datasets merged when it has
+// several, or one dataset chosen in the Dataset picker (contactDatasetIDs);
+// its exports, Show hybrids and Explore region use those datasets too.
 
 const (
 	// contactMaxCells is the web page's limit (web/page-data.js): the backend
@@ -79,7 +79,7 @@ func contactPalettes() []string {
 
 type contactState struct {
 	// dataset is the sample chosen in the Dataset picker ("" = the
-	// default, see contactDatasetID); stamp is the dataset drawn and its
+	// default, see contactDatasetIDs); stamp is the datasets drawn and their
 	// index (contactStamp), so a change of the other samples keeps the map.
 	dataset     string
 	stamp       string
@@ -192,17 +192,28 @@ func (p *explorePage) contactDatasets() []string {
 	return p.a.SelectionIDs(AllSelection)
 }
 
-// contactDatasetID is the one sample the map draws, as the web's
-// contactDataset: the chosen one, else the selection's when it is one
-// sample, else the selection's first (the desktop has no primary file).
-func (p *explorePage) contactDatasetID() string {
+// contactMergedLabel is the Dataset picker's option for the selection's
+// datasets merged, worded as the web's.
+func contactMergedLabel(n int) string {
+	return fmt.Sprintf("All %d datasets in scope merged", n)
+}
+
+// contactMerged: the map draws the selection's samples merged, as the web's
+// contactDataset by default when its scope has several datasets.
+func (p *explorePage) contactMerged() bool {
 	if p.cm.dataset != "" && slicesIndex(p.contactDatasets(), p.cm.dataset) >= 0 {
-		return p.cm.dataset
+		return false
 	}
-	if len(p.ids) > 0 {
-		return p.ids[0]
+	return len(p.ids) > 1
+}
+
+// contactDatasetIDs are the samples the map draws: the one chosen in the
+// Dataset picker, else the selection's (merged when it has several).
+func (p *explorePage) contactDatasetIDs() []string {
+	if p.cm.dataset != "" && slicesIndex(p.contactDatasets(), p.cm.dataset) >= 0 {
+		return []string{p.cm.dataset}
 	}
-	return ""
+	return append([]string(nil), p.ids...)
 }
 
 // contactStamp identifies the map's data: the project, the gene and the
@@ -212,12 +223,15 @@ func (p *explorePage) contactStamp() string {
 	if a.Project == nil {
 		return ""
 	}
-	id := p.contactDatasetID()
-	updated := ""
-	if s := a.Project.Sample(id); s != nil {
-		updated = s.Stages["index"].UpdatedAt + s.Outputs.Index
+	parts := []string{a.Project.Path, a.Selected.Gene}
+	for _, id := range p.contactDatasetIDs() {
+		updated := ""
+		if s := a.Project.Sample(id); s != nil {
+			updated = s.Stages["index"].UpdatedAt + s.Outputs.Index
+		}
+		parts = append(parts, id+"@"+updated)
 	}
-	return strings.Join([]string{a.Project.Path, a.Selected.Gene, id + "@" + updated}, "|")
+	return strings.Join(parts, "|")
 }
 
 // sampleLabels are the samples' names for a picker (a repeated name gets
@@ -240,20 +254,36 @@ func (p *explorePage) sampleLabels(ids []string) ([]string, map[string]string) {
 }
 
 // contactDatasetJSON is the web's parameters "dataset" of the map: its
-// sample's id, label and .hyb file name (null for none).
+// sample's id, label and .hyb file name, or for a merged map {merged, label,
+// datasets} (null for none).
 func (p *explorePage) contactDatasetJSON(d *contactData) any {
-	if len(d.ids) != 1 {
+	one := func(id string) map[string]any {
+		s := p.a.Project.Sample(id)
+		if s == nil {
+			return nil
+		}
+		file := ""
+		if s.Outputs.Hyb != "" {
+			file = filepath.Base(s.Outputs.Hyb)
+		}
+		return map[string]any{"id": s.ID, "label": s.Label(), "fileName": file}
+	}
+	switch {
+	case len(d.ids) == 1:
+		if m := one(d.ids[0]); m != nil {
+			return m
+		}
 		return nil
+	case len(d.ids) > 1:
+		datasets := []any{}
+		for _, id := range d.ids {
+			if m := one(id); m != nil {
+				datasets = append(datasets, m)
+			}
+		}
+		return map[string]any{"merged": true, "label": contactMergedLabel(len(d.ids)), "datasets": datasets}
 	}
-	s := p.a.Project.Sample(d.ids[0])
-	if s == nil {
-		return nil
-	}
-	file := ""
-	if s.Outputs.Hyb != "" {
-		file = filepath.Base(s.Outputs.Hyb)
-	}
-	return map[string]any{"id": s.ID, "label": s.Label(), "fileName": file}
+	return nil
 }
 
 // pinContactDataset makes the map's dataset the samples Explore shows (for
@@ -302,12 +332,12 @@ func homodimerPayload(option string) string {
 
 func (p *explorePage) loadContact() {
 	s := &p.cm
-	id := p.contactDatasetID()
-	if id == "" {
+	ids := p.contactDatasetIDs()
+	if len(ids) == 0 {
 		return
 	}
 	s.stamp = p.contactStamp() // a dataset chosen here is the one drawn
-	path, ids, gene, gene2 := p.a.Project.Path, []string{id}, p.gene, p.contactGene2()
+	path, gene, gene2 := p.a.Project.Path, p.gene, p.contactGene2()
 	bin, measure, orientation, typ, homodimer := s.bin, s.measure, s.orientation, patternCode(s.typ, p.summary.types), s.homodimer
 	lengthX, lengthY := p.geneLength(gene), p.geneLength(gene2)
 	p.ensure(&s.load, p.contactKey(), func() (func(), error) {
@@ -629,9 +659,19 @@ func (p *explorePage) contactControls(c *ui.Context) {
 			if datasets := p.contactDatasets(); len(datasets) > 1 {
 				labels, byLabel := p.sampleLabels(datasets)
 				chosen := ""
-				for _, label := range labels {
-					if byLabel[label] == p.contactDatasetID() {
-						chosen = label
+				if len(p.ids) > 1 {
+					merged := contactMergedLabel(len(p.ids))
+					labels = append([]string{merged}, labels...)
+					byLabel[merged] = ""
+					if p.contactMerged() {
+						chosen = merged
+					}
+				}
+				if ids := p.contactDatasetIDs(); chosen == "" && len(ids) == 1 {
+					for _, label := range labels {
+						if byLabel[label] == ids[0] {
+							chosen = label
+						}
 					}
 				}
 				picker(c, "cm-dataset", "Dataset", &chosen, labels, 200).OnChange(func() { s.dataset = byLabel[chosen] })
@@ -676,10 +716,27 @@ func (p *explorePage) contactControls(c *ui.Context) {
 			ui.Text(c, "Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click the map, or Reset zoom above it, to return to the full extent.").
 				FontSize(12).TextColor(t.TextMuted).Grow(1)
 		})
-		if len(p.ids) > 1 {
-			ui.Text(c, "Contact Map draws one dataset of its choice.").FontSize(12).TextColor(t.TextMuted)
+		if note := p.contactScopeNote(); note != "" {
+			ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
 		}
 	})
+}
+
+// contactScopeNote is the web's "Map data:" line under the Data controls:
+// the merged datasets, or the one drawn ("" with one dataset to choose).
+func (p *explorePage) contactScopeNote() string {
+	if len(p.contactDatasets()) < 2 {
+		return ""
+	}
+	ids := p.contactDatasetIDs()
+	if len(ids) == 0 {
+		return ""
+	}
+	labels, _ := p.sampleLabels(ids)
+	if p.contactMerged() {
+		return "Map data: " + contactMergedLabel(len(ids)) + " (" + strings.Join(labels, ", ") + ")"
+	}
+	return "Map data: " + labels[0] + " only"
 }
 
 // contactStage is the map card: its extent, the Display bar, the map and

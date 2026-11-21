@@ -7,7 +7,7 @@ from pathlib import Path
 from desktop.runtime.bridge import handle
 from desktop.runtime.project import _structure_entry, new_project
 
-from .test_structure import GENE, ROOT, _sequence
+from desktop.runtime.tests.test_structure import GENE, ROOT, _sequence
 
 ROW = "r{k}\tACGU\t.\t{g1}\t1\t20\t{a0}\t{a1}\t1e-5\t{g2}\t21\t40\t{b0}\t{b1}\t1e-5\t\t-10\tType_1\n"
 
@@ -117,6 +117,31 @@ class SequenceSourceTests(unittest.TestCase):
         meta = self._meta("co3")
         self.assertEqual(meta["sequence_source"]["mapped_to"], [f"{GENE}:1-80", "OTHER_RNA:41-100"])
         self.assertEqual(meta["records"][0]["evidence_rows"]["between"], 4)
+
+    def test_cplcofold_duplex_runs_within_the_task_cpus(self):
+        # RNAduplex read support forks one process per worker: CPLcofold must not start
+        # more than the task's CPU claim (HYB2_TASK_CPUS)
+        import os
+        from unittest import mock
+        from desktop.runtime import structure
+        real = structure.load_cplfold_web
+        sent = []
+
+        def load(root):
+            module = real(root)
+            fold = module.fold
+
+            def spy(payload):
+                sent.append(payload)
+                return fold(payload)
+            module.fold = spy
+            return module
+        cofold = {"engine": "cplcofold", "mode": "cofold", "gene_id": "pasted"}
+        with mock.patch.object(structure, "load_cplfold_web", load), \
+                mock.patch.dict(os.environ, {"HYB2_TASK_CPUS": "1"}):
+            result = self._run(task_id="cpu1", sequence=self.foreign[:50], sequence_two=self.foreign[50:], **cofold)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual([p.get("duplexWorkers") for p in sent], [1])
 
     def test_rejects(self):
         for extra in ({"sequence": self.foreign[:30] + "N"}, {"sequence": "ACGUACG"}, {"sequence": 5},

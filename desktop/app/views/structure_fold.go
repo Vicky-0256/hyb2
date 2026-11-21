@@ -10,6 +10,9 @@ package views
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,17 +33,95 @@ const (
 	stDefaultDelta  = 5
 	stDefaultBeta   = 0
 	stDefaultModel  = "DP09"
+	stDefaultKernel = "gaussian"
 )
 
 // stModels are CPLfold's energy models, labelled as on the web page.
 var (
 	stModels      = []string{"DP09", "DP03", "CC06", "CC09", "RE"}
 	stModelLabels = []string{"DP09", "DP03", "CC06", "CC09", "RE (Rivas–Eddy)"}
+	// stKernels are the read-support kernels of the shared CPLfold module
+	// (web/cplfold/cplfold_web.py SUPPORT_KERNELS), labelled as on the web page.
+	stKernels      = []string{"gaussian", "block", "block-normalized", "rnacofold", "duplex"}
+	stKernelLabels = []string{"Gaussian around arm centres · IRIS (default)", "Full arm blocks",
+		"Full arm blocks ÷ √(arm lengths)", "RNAcofold pairs of each read · COMRADES",
+		"RNAduplex pairs, saturating · COMRADES"}
 )
 
+// stKernelLabel is a kernel's short name in summaries.
+func stKernelLabel(kernel string) string {
+	switch kernel {
+	case "block":
+		return "full arm block"
+	case "block-normalized":
+		return "normalised full arm block"
+	case "rnacofold":
+		return "RNAcofold pair"
+	case "duplex":
+		return "RNAduplex pair (saturating)"
+	}
+	return "Gaussian"
+}
+
+// toolPrefixes are where external tools (mfold) are usually installed,
+// searched after PATH: an app started from the Finder or the Dock has a
+// short system PATH without conda or Homebrew.
+var toolPrefixes = []string{"~/miniforge3", "~/mambaforge", "~/miniconda3", "~/anaconda3", "~/opt/miniconda3",
+	"~/opt/anaconda3", "/opt/conda", "/opt/homebrew", "/opt/homebrew/Caskroom/miniforge/base", "/usr/local"}
+
+// goos is runtime.GOOS (a variable, so tests can be Windows).
+var goos = runtime.GOOS
+
+// executableFile: path is a file this OS (goos) would run.
+func executableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	if goos == "windows" {
+		// Windows has no execute bits: a file with an executable extension
+		// (PATHEXT, as exec.LookPath on Windows) runs.
+		pathext := os.Getenv("PATHEXT")
+		if pathext == "" {
+			pathext = ".com;.exe;.bat;.cmd"
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		return ext != "" && slices.Contains(strings.Split(strings.ToLower(pathext), ";"), ext)
+	}
+	return info.Mode().Perm()&0o111 != 0
+}
+
+func expandHome(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(path, "~"))
+		}
+	}
+	return path
+}
+
+// toolAnswer is a cached tool search answer (mfoldCache): the path found,
+// or the reason there is none.
+type toolAnswer struct {
+	path, problem string
+	at            time.Time
+}
+
+// toolTTL is how long an answer is reused (a variable for tests);
+// toolCacheMax bounds the entries (typing a path asks for each prefix of
+// it).
+var toolTTL = time.Second
+
+const toolCacheMax = 16
+
+// supportKernel is the form's kernel, the default when unset.
+func (p *structurePage) supportKernel() string {
+	return nameOr(p.kernel, stDefaultKernel)
+}
+
 func (p *structurePage) resetFoldSettings() {
-	p.alpha, p.beam, p.phase1, p.delta, p.beta, p.model =
-		stDefaultAlpha, stDefaultBeam, stDefaultPhase1, stDefaultDelta, stDefaultBeta, stDefaultModel
+	p.alpha, p.beam, p.phase1, p.delta, p.beta, p.model, p.kernel =
+		stDefaultAlpha, stDefaultBeam, stDefaultPhase1, stDefaultDelta, stDefaultBeta, stDefaultModel, stDefaultKernel
 	if p.engine == "" {
 		p.engine, p.temperature, p.minLoop = engineCPLfold, stDefaultTemp, stDefaultLoop
 		p.stems, p.randomFolds, p.seed = stDefaultStems, 0, stDefaultSeed
@@ -49,7 +130,8 @@ func (p *structurePage) resetFoldSettings() {
 
 func (p *structurePage) foldSettingsChanged() bool {
 	return p.alpha != stDefaultAlpha || int(p.beam) != stDefaultBeam || int(p.phase1) != stDefaultPhase1 ||
-		p.delta != stDefaultDelta || p.beta != stDefaultBeta || p.model != stDefaultModel
+		p.delta != stDefaultDelta || p.beta != stDefaultBeta || p.model != stDefaultModel ||
+		p.supportKernel() != stDefaultKernel
 }
 
 // foldPlan is the fold the form describes, checked.
@@ -101,7 +183,8 @@ func (p *structurePage) plan() foldPlan {
 		return pl
 	}
 	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
-		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": false}
+		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": false,
+		"support_kernel": p.supportKernel()}
 	if p.seqOnly && p.engine == engineCPLfold {
 		params["evidence"] = "none"
 	}
@@ -264,7 +347,8 @@ func (p *structurePage) cofoldParameters(pl *foldPlan) map[string]any {
 		pl.problems = append(pl.problems, fmt.Sprintf("CPLcofold's beam size is at most %d: lower it under Advanced settings.", stCofoldMaxBeam))
 	}
 	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
-		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": p.pseudoknot}
+		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": p.pseudoknot,
+		"support_kernel": p.supportKernel()}
 	if p.seqOnly {
 		params["evidence"] = "none"
 	}
@@ -515,7 +599,8 @@ func (p *structurePage) sequencePlan() foldPlan {
 		}
 	case engineCPLfold:
 		params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
-			"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": false}
+			"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": false,
+			"support_kernel": p.supportKernel()}
 		if p.seqOnly {
 			params["evidence"] = "none"
 		}
@@ -533,7 +618,7 @@ func (p *structurePage) sequencePlan() foldPlan {
 	default: // ViennaRNA MFE, COMRADES(ViennaRNA)
 		p.viennaPlan(&pl)
 		if p.engine == engineComrades {
-			pl.limits = append([]string{"COMRADES(ViennaRNA) needs chimeras: the sequence must occur exactly once in the samples' " +
+			pl.limits = append([]string{p.comradesName() + " needs chimeras: the sequence must occur exactly once in the samples' " +
 				"reference, and is then folded as that region; otherwise the fold stops and says so."}, pl.limits...)
 		} else {
 			pl.limits = []string{"ViennaRNA MFE folds the sequence alone; hard pairs are positions on it.",
@@ -891,7 +976,7 @@ func (p *structurePage) engineField(c *ui.Context) {
 			ui.Radio(c, &p.engine, engineCPLfold, "CPLfold, guided by the chimeric reads").OnChange(p.engineChanged)
 			ui.Radio(c, &p.engine, engineCPLcofold, "CPLcofold, two regions as two strands (one RNA or two RNAs)").OnChange(p.engineChanged)
 			ui.Radio(c, &p.engine, engineVienna, "ViennaRNA MFE, the sequence alone (optional hard pairs)").OnChange(p.engineChanged)
-			ui.Radio(c, &p.engine, engineComrades, "COMRADES(ViennaRNA), guided by RNAcofold of the chimeras").OnChange(p.engineChanged)
+			ui.Radio(c, &p.engine, engineComrades, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras").OnChange(p.engineChanged)
 			ui.Radio(c, &p.engine, engineIRIS, "IRIS · evidence-guided ensemble").OnChange(p.engineChanged)
 		}).Label("Engine")
 	})
@@ -919,6 +1004,9 @@ func (p *structurePage) advanced(c *ui.Context) {
 	changed := p.foldSettingsChanged()
 	summary := fmt.Sprintf("Evidence weight %.2f · beam %d · phase 1 %d · energy window %g · %s · beta %.2f",
 		p.alpha, int(p.beam), int(p.phase1), p.delta, p.model, p.beta)
+	if k := p.supportKernel(); k != stDefaultKernel {
+		summary += " · " + stKernelLabel(k) + " read support"
+	}
 	if p.mode == "windows" {
 		summary += fmt.Sprintf(" · %d window%s at once", int(p.workers), plural(int(p.workers)))
 	}
@@ -972,6 +1060,34 @@ func (p *structurePage) advanced(c *ui.Context) {
 				})
 				ui.Text(c, "Energy model that ranks candidates when pseudoknots are on. Default DP09. Pseudoknot-free folds rank with Turner 2004.").FontSize(12).TextColor(t.TextMuted)
 			})
+			// sequence-only folds use no reads, so the kernel does not apply
+			if !(p.seqOnly && p.engine == engineCPLfold) {
+				ui.Column(c).Gap(2).Children(func() {
+					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "Read support (B_ij)").FontSize(12).Bold().Width(150)
+						i := 0
+						for k, kernel := range stKernels {
+							if kernel == p.supportKernel() {
+								i = k
+							}
+						}
+						label := stKernelLabels[i]
+						if ui.Select(c.Key("st-kernel"), &label, stKernelLabels).Grow(1).Label("Read support").Changed() {
+							for k, l := range stKernelLabels {
+								if l == label {
+									p.kernel = stKernels[k]
+								}
+							}
+						}
+					})
+					ui.Text(c, "How each chimera becomes the bonus on base pairs: a Gaussian around its two arm centres (IRIS), "+
+						"every pair between its two arms, the same divided by √(arm lengths), or only the pairs RNAcofold forms "+
+						"between its arms (COMRADES); each is then taken as log(1 + x). RNAduplex counts the reads whose two arms "+
+						"hybridise into each pair (COMRADES' evidence) and saturates the count C as 3.6 C / (C + q) kcal/mol. "+
+						"The kernels give different amounts of support on the same reads, so choose the evidence weight for each "+
+						"kernel separately. Default Gaussian.").FontSize(12).TextColor(t.TextMuted)
+				})
+			}
 			if p.mode == "windows" {
 				row("st-workers", "Windows at once", &p.workers, 1, 256, 1,
 					"Windows folded in parallel; each needs its own memory. Default: your CPU budget.")
@@ -1030,8 +1146,8 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 			if p.mode == "paired" && len(lengths) == 2 {
 				lengths = []int{lengths[0] + stSpacerNT + lengths[1]} // folded joined
 			}
-			line("Engine", fmt.Sprintf("COMRADES(ViennaRNA), %g °C, minimum loop %d", p.temperature, int(p.minLoop)))
-			line("Time", "up to about "+FormatDuration(p.comradesSeconds(lengths))+" (one ViennaRNA fold per stem tried, per order)")
+			line("Engine", fmt.Sprintf("%s, %g °C, minimum loop %d", p.comradesName(), p.temperature, int(p.minLoop)))
+			line("Time", "up to about "+FormatDuration(p.comradesSeconds(lengths))+" (one "+p.comradesProgramName()+" fold per stem tried, per order)")
 		}
 		if p.engine == engineIRIS && len(pl.lengths) > 0 {
 			p.irisCheckLines(line, pl)

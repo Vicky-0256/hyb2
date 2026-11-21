@@ -144,30 +144,29 @@ func TestComparePanelsRegionsAndEnergy(t *testing.T) {
 
 	// exports
 	asked := pickSaveInto(t, t.TempDir())
-	p.exportRegionsSVG(p.context(p.entry(p.selectedID)))
-	waitFlush(a)
-	svg := readExport(t, asked)
+	export := func(action func(cmpContext)) string {
+		t.Helper()
+		before := lastToast(a)
+		action(p.context(p.entry(p.selectedID)))
+		waitToast(a, before)
+		return readExport(t, asked)
+	}
+	svg := export(p.exportRegionsSVG)
 	xmlWellFormed(t, svg)
 	keepExport(t, "export-regions.svg", svg)
 	if !strings.Contains(svg, "Region A · higher in AFR (2 merged)") || strings.Count(svg, "<circle") != 2*142+2*94 {
 		t.Fatalf("regions svg: %d circles", strings.Count(svg, "<circle"))
 	}
-	p.exportRegionsTSV(p.context(p.entry(p.selectedID)))
-	waitFlush(a)
-	if tsv := readExport(t, asked); strings.Count(tsv, "\n") != 2+1+2*142+2*94 || !strings.Contains(tsv, "Region A\tAFR (2 merged)\t2\tAFR (2 merged)\tstructure-zafr\tX\t342\tA\t79.47\t495.70\t\t274") {
+	if tsv := export(p.exportRegionsTSV); strings.Count(tsv, "\n") != 2+1+2*142+2*94 || !strings.Contains(tsv, "Region A\tAFR (2 merged)\t2\tAFR (2 merged)\tstructure-zafr\tX\t342\tA\t79.47\t495.70\t\t274") {
 		t.Fatalf("regions tsv:\n%.600s", tsv)
 	}
-	p.exportEnergySVG(p.context(p.entry(p.selectedID)))
-	waitFlush(a)
-	svg = readExport(t, asked)
+	svg = export(p.exportEnergySVG)
 	xmlWellFormed(t, svg)
 	keepExport(t, "export-energy.svg", svg)
 	if strings.Count(svg, "<polygon") != 8 || !strings.Contains(svg, "paired t-test p = 5.7e-37") || !strings.Contains(svg, "p = 2.4e-73") {
 		t.Fatalf("energy svg: %d polygons", strings.Count(svg, "<polygon"))
 	}
-	p.exportEnergyTSV(p.context(p.entry(p.selectedID)))
-	waitFlush(a)
-	if tsv := readExport(t, asked); strings.Count(tsv, "\n") != 4+1+1616 || !strings.Contains(tsv, "length\tside\tx\ty\tlog2FoldChange\tpadj\tdG_one\tdG_two") {
+	if tsv := export(p.exportEnergyTSV); strings.Count(tsv, "\n") != 4+1+1616 || !strings.Contains(tsv, "length\tside\tx\ty\tlog2FoldChange\tpadj\tdG_one\tdG_two") {
 		t.Fatalf("energy tsv:\n%.400s", tsv)
 	}
 }

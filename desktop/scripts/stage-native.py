@@ -34,6 +34,50 @@ def run(args, cwd, env):
                           check=True, timeout=300).stdout
 
 
+def inside(root, path):
+    """``path`` relative to the runtime root, in POSIX form."""
+    return Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
+
+
+RELOCATABLE_SHEBANG = (b'#!/bin/sh\n'
+                       b"'''exec' \"$(dirname -- \"$(realpath -- \"$0\")\")/python3\" \"$0\" \"$@\"\n"
+                       b"' '''\n")
+
+
+def host_shebang(path):
+    """The interpreter a script's first line names by absolute path, or None.
+
+    ``/bin/sh`` and ``/usr/bin/env`` exist on every POSIX target; any other
+    absolute interpreter is a file on the machine that built the runtime.
+    """
+    with open(path, 'rb') as handle:
+        first = handle.readline(4096)
+    if not first.startswith(b'#!'):
+        return None
+    words = first[2:].split()
+    interpreter = words[0].decode('utf-8', 'replace') if words else ''
+    return None if interpreter in ('/bin/sh', '/usr/bin/env') else interpreter
+
+
+def relocate_scripts(python_root):
+    """Point pip-installed console scripts at the interpreter beside them.
+
+    pip writes the installing interpreter's absolute path into each script, so
+    the scripts stop working once the runtime moves and they carry the build
+    machine's path into the archive. The replacement is the form the
+    standalone CPython distribution uses for its own scripts.
+    """
+    changed = []
+    directory = Path(python_root) / 'bin'
+    for script in sorted(directory.iterdir()) if directory.is_dir() else []:
+        if script.is_symlink() or not script.is_file() or host_shebang(script) is None:
+            continue
+        body = script.read_bytes()
+        script.write_bytes(RELOCATABLE_SHEBANG + body[body.index(b'\n') + 1:])
+        changed.append(script.name)
+    return changed
+
+
 def smoke(root, executable, portable):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('PYTHON', 'NUMBA')) and k not in ('VIRTUAL_ENV',)}
@@ -52,6 +96,10 @@ def smoke(root, executable, portable):
             for path in [details['base_prefix'], *details['module_paths']]:
                 if not Path(path).resolve().is_relative_to(root.resolve()):
                     raise ValueError(f'Runtime depends on host files: {path}')
+            # Record where the modules sit inside the runtime, not where the
+            # runtime sat on the build machine.
+            details['base_prefix'] = inside(root, details['base_prefix'])
+            details['module_paths'] = [inside(root, path) for path in details['module_paths']]
         output = run([str(executable), '-B', str(root / 'bin/cplfold'), '--sequence',
                       'GGCGCGGCACCGUCCGCGGAACAAACGG', '--beam', '20',
                       '--max-phase1', '3', '--max-phase2', '2'], root, env)
@@ -208,6 +256,8 @@ def main():
             for entry in (stage / 'python').rglob('*'):
                 if entry.is_symlink() and not entry.resolve().is_relative_to((stage / 'python').resolve()):
                     raise ValueError(f'Standalone Python has external symlink: {entry}')
+            if os.name != 'nt':
+                relocate_scripts(stage / 'python')
         else:
             interpreter.parent.mkdir(parents=True)
             if os.name == 'nt':

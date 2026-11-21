@@ -396,6 +396,14 @@ assert.equal(data.getFilteredRecords(invalidFilterState).length, 0,
 invalidFilterState.filters.armOneStart = "1.5";
 assert.equal(data.getFilteredRecords(invalidFilterState).length, 0,
   "fractional interaction coordinates must be rejected");
+// A negative e-value cap matches no records, including those without e-values.
+{
+  const noEvalue = Object.assign({}, regionRecord, { rnaOneEvalue: null, rnaTwoEvalue: null });
+  const capState = { records: [regionRecord, noEvalue], filters: Object.assign(data.defaultInteractionFilters(), { maxEvalue: "-1" }) };
+  assert.equal(data.getFilteredRecords(capState).length, 0, "a negative Maximum e-value matches no record");
+  capState.filters.maxEvalue = "";
+  assert.equal(data.getFilteredRecords(capState).length, 2, "a cleared Maximum e-value filters nothing");
+}
 
 // Viewpoint coverage is inclusive per nucleotide, including both arms of a
 // same-RNA record. A mapped reference range retains uncovered zero-value bins.
@@ -453,6 +461,37 @@ viewpointState.viewpoint.start = "1.5";
 assert.equal(data.getViewpointResults(viewpointState).ready, false, "viewpoint coordinates must be positive integers");
 viewpointState.viewpoint.start = "0";
 assert.equal(data.getViewpointResults(viewpointState).ready, false, "zero is not a valid viewpoint coordinate");
+// An unusable typed range says why: whole numbers from 1 to the RNA's last
+// position (its mapped reference length), start <= end. Nothing out of range
+// is accepted silently; valid input gives no message.
+assert.match(data.getViewpointResults(viewpointState).reason, /^Start and End must be whole numbers from 1 to \d+\.$/);
+assert.equal(data.coordinateLimit(10807, { min: 1, max: 10805 }), 10807);
+assert.equal(data.coordinateLimit(100, { min: 1, max: 140 }), 140, "records past a mismatched reference keep their coordinates valid");
+assert.equal(data.coordinateLimit(null, { min: 1, max: 140 }), null, "no reference: the RNA length is unknown");
+assert.equal(data.coordinateRangeIssue("1", "10807", { limit: 10807 }), "");
+assert.equal(data.coordinateRangeIssue("", "", { limit: 10807 }), "", "blank fields are left to the caller");
+assert.equal(data.coordinateRangeIssue("3000", "2000", { limit: 10807 }), "Start 3,000 is after End 2,000. The start must not be after the end.");
+["0", "-5", "1.5"].forEach(function (value) {
+  assert.equal(data.coordinateRangeIssue(value, "50", { limit: 10807 }), "Start and End must be whole numbers from 1 to 10,807.");
+  assert.equal(data.coordinateRangeIssue(value, "", { start: "Arm 1 start", end: "Arm 1 end" }), "Arm 1 start and Arm 1 end must be whole numbers, 1 or more.");
+});
+assert.equal(data.coordinateRangeIssue("1", "999999", { limit: 10807, rna: "RNA_A" }), "End 999,999 is beyond the last position of RNA_A (10,807). Use whole numbers from 1 to 10,807.");
+assert.equal(data.coordinateRangeIssue("1", "999999", {}), "", "without a known length only the form is checked");
+assert.equal(data.coordinateRangeIssue("5", "", { paired: true, start: "Partner start", end: "Partner end" }), "Enter both Partner start and Partner end, or clear both.");
+assert.equal(data.viewpointRangeIssue({ rna: "RNA_A", rangeMode: "coordinates", start: "1", end: "999999" }, { referenceLength: 10807, extent: { min: 1, max: 10800 } }),
+  "End 999,999 is beyond the last position of RNA_A (10,807). Use whole numbers from 1 to 10,807.");
+assert.equal(data.viewpointRangeIssue({ rna: "RNA_A", rangeMode: "reference", start: "0", end: "999999" }, { referenceLength: 10807 }), "", "the full-reference mode ignores Start and End");
+assert.equal(data.viewpointRange({ rna: "RNA_A", rangeMode: "coordinates", start: "1", end: "999999" }, { referenceLength: 10807, extent: { min: 1, max: 10800 } }), null, "an out-of-range viewpoint is not queried");
+assert.match(data.viewpointRangeIssue({ rna: "RNA_A", start: "500", end: "" }, { extent: { min: 1, max: 140 } }), /^Start 500 is after the last coordinate in the data for RNA_A \(140\)/);
+assert.equal(data.regionRangeIssue({ rna: "RNA_A", start: "1", end: "201", partner: "", partnerStart: "", partnerEnd: "" }, { limit: 10807 }), "");
+assert.equal(data.regionRangeIssue({ rna: "RNA_A", start: "", end: "" }, { limit: 10807 }), "Enter Start and End to explore a region: whole numbers from 1 to 10,807.");
+assert.equal(data.regionRangeIssue({ rna: "RNA_A", start: "5", end: " " }, {}), "Enter End to explore a region: whole numbers from 1 or more.");
+assert.equal(data.regionRangeIssue({ rna: "", start: "", end: "" }, { limit: 10807 }), "", "no RNA (no data): nothing to say");
+assert.equal(data.regionRangeIssue({ rna: "RNA_A", start: "10800", end: "20000" }, { limit: 10807 }), "End 20,000 is beyond the last position of RNA_A (10,807). Use whole numbers from 1 to 10,807.");
+assert.equal(data.regionRangeIssue({ rna: "RNA_A", start: "300", end: "200" }, { limit: 10807 }), "Start 300 is after End 200. The start must not be after the end.");
+assert.match(data.regionRangeIssue({ rna: "RNA_A", start: "1", end: "201", partner: "", partnerStart: "10000", partnerEnd: "10807" }, { limit: 10807 }), /^Choose a Partner RNA before entering Partner start and Partner end/);
+assert.equal(data.regionRangeIssue({ rna: "RNA_A", start: "1", end: "201", partner: "RNA_B", partnerStart: "10000", partnerEnd: "10900" }, { limit: 10807, partnerLimit: 10676 }),
+  "Partner end 10,900 is beyond the last position of RNA_B (10,676). Use whole numbers from 1 to 10,676.");
 viewpointState.viewpoint.start = "";
 viewpointState.viewpoint.end = "";
 const observedViewpoint = data.getViewpointResults(viewpointState);
@@ -591,6 +630,38 @@ assert.match(csvLines[0], /"raw_read_count"/);
 assert.match(csvLines[0], /"homodimer_overlap_ge_5"/);
 assert.match(csvLines[1], /"9"/);
 assert.match(csvLines[1], /"true"/);
+// every text table export ends with exactly one newline
+[
+  csv,
+  data.recordsToCsv([homodimer], {}),
+  data.contactToTsv({ binSize: 10, cells: [{ x: 1, y: 11, records: 1, support: 2 }] }),
+  data.viewpointToTsv({ bins: [{ start: 1, end: 10, value: 0.5 }] }),
+  data.viewpointToTsv(null),
+  data.comparisonToTsv(null),
+  data.comparisonSelectedToTsv(null, null)
+].forEach(function (text, index) {
+  assert.ok(/[^\n]\n$/.test(text), "text export " + index + " must end with exactly one newline");
+});
+assert.equal(data.comparisonLegacyNamesToTsv({ datasets: [] }), "", "an empty names table stays empty");
+// merged records name their dataset next to `line`
+{
+  const merged = data.recordsToCsv([Object.assign({}, homodimer, { datasetId: "d2" })], { d2: { label: "ZAFR_REP2", fileName: "ZAFR_REP2.hyb.gz" } }).split("\n");
+  assert.match(merged[0], /"dataset","dataset_file","line"$/);
+  assert.match(merged[1], /"ZAFR_REP2","ZAFR_REP2\.hyb\.gz","[0-9]+"$/);
+}
+// bin coordinates: HYB2 bin keys (first key 0), the last bin's end clamped to the RNA length
+{
+  const lines = data.contactToTsv({ binSize: 20, length: 10807, length2: 10807, cells: [{ x: 0, y: 20, records: 1, support: 1 }, { x: 10800, y: 10780, records: 2, support: 2 }] }).split("\n");
+  assert.equal(lines[1], "0\t19\t20\t39\t1\t1");
+  assert.equal(lines[2], "10800\t10807\t10780\t10799\t2\t2", "the last bin ends at the RNA end");
+  assert.equal(data.binEnd(10800, 20, null), 10819, "no length: no clamp");
+  const compared = data.comparisonToTsv({ binSize: 10, cells: [{ x: 10800, y: 0, conditionA: 36.616151788477524, conditionB: 0, effect: 5.233280360557341, presentDatasets: 2, rawA: 2, rawB: 0, similarity: 0 },
+    { x: 0, y: 0, conditionA: 1.234567890123e-9, conditionB: NaN, effect: -0.1, presentDatasets: 1, rawA: 1, rawB: 0, similarity: 0 }] }, { x: 10807, y: 10807 }).split("\n");
+  assert.equal(compared[1], "10800\t10807\t0\t9\t36.6162\t0\t5.23328\t2\t2\t0\t0", "6 significant digits, clamped last bin");
+  assert.equal(compared[2], "0\t9\t0\t9\t1.23457e-9\tNA\t-0.1\t1\t1\t0\t0", "exponent form for tiny values, NA when not finite");
+  assert.equal(data.formatSignificant(838111), "838111");
+  assert.deepEqual(JSON.parse(JSON.stringify(data.comparisonRnaLengths({ rnaX: "A", rnaY: "B", datasets: [] }, null, { A: { max: 120 }, B: { max: 90 } }))), { x: 120, y: 90 });
+}
 
 // Overview count exports include every record, retain missing provenance as a
 // blank value, and use the same arm/pair aggregation semantics as the parser.
@@ -603,12 +674,12 @@ assert.equal(data.rnaCountsToCsv(overviewCountRecords), [
   '"rna","arm_occurrences","source_reads","source_read_count_arms","cluster_support","overlap_score_total","overlap_score_arms"',
   '"RNA_A","4","16","3","8","12","3"',
   '"RNA_B","2","4","1","4","2","1"'
-].join("\n"));
+].join("\n") + "\n");
 assert.equal(data.rnaPairsToCsv(overviewCountRecords), [
   '"rna_1","rna_2","hyb_records","source_reads","source_read_count_records","cluster_support","overlap_score_total","overlap_score_records"',
   '"RNA_A","RNA_B","2","4","1","4","2","1"',
   '"RNA_A","RNA_A","1","6","1","2","5","1"'
-].join("\n"));
+].join("\n") + "\n");
 assert.match(data.rnaPairsToCsv([record({ rnaOne: 'RNA,"quoted"', rnaTwo: "RNA_B" })]), /"RNA,""quoted"""/,
   "Overview count exports must CSV-escape RNA names");
 
@@ -701,18 +772,18 @@ const deSeq2Comparison = {
 assert.equal(data.comparisonCountMatrixToTsv(deSeq2Comparison, comparison), [
   "feature_id\ta\tb\tabsent",
   "0_0\t2\t1\t0"
-].join("\n"), "DESeq2 export must use raw integer counts and explicit zeroes, not condition means or normalised values");
+].join("\n") + "\n", "DESeq2 export must use raw integer counts and explicit zeroes, not condition means or normalised values");
 assert.equal(data.comparisonSampleMetadataToTsv(deSeq2Comparison), [
   "sample_id\tcondition\tcondition_label\tfile_name",
   "a\tcondition_one\tControl\ta.hyb",
   "b\tcondition_two\tTreatment\tb.hyb",
   "absent\tcondition_two\tTreatment\tabsent.hyb"
-].join("\n"), "DESeq2 metadata columns must follow count-matrix sample order and retain condition labels");
+].join("\n") + "\n","DESeq2 metadata columns must follow count-matrix sample order and retain condition labels");
 assert.equal(data.comparisonLegacyNamesToTsv(deSeq2Comparison), [
   "a\tcondition_one",
   "b\tcondition_two",
   "absent\tcondition_two"
-].join("\n"), "Legacy HYB2 names.table must contain exactly two columns without a header");
+].join("\n") + "\n","Legacy HYB2 names.table must contain exactly two columns without a header");
 
 const legacyCountBoundaryComparison = {
   datasets: [{ id: "a" }]
@@ -725,7 +796,7 @@ function comparisonResultWithRawCount(rawValue) {
 }
 assert.equal(
   data.comparisonCountMatrixToTsv(legacyCountBoundaryComparison, comparisonResultWithRawCount(2147483647)),
-  "feature_id\ta\n0_0\t2147483647",
+  "feature_id\ta\n0_0\t2147483647\n",
   "The largest legacy R integer count must remain exportable without rounding"
 );
 assert.throws(
@@ -868,6 +939,7 @@ assert.ok(Date.now() - disjointComparisonStartedAt < 5000,
   assert.equal(large.cells[0].x, 0);
   assert.equal(large.cells[1].y, 10, "cells are sorted by x, then y");
   const matrix = data.comparisonCountMatrixToTsv({ datasets: [{ id: "large-a" }, { id: "large-b" }] }, large).split("\n");
+  assert.equal(matrix.pop(), "", "the count table ends with exactly one newline");
   assert.equal(matrix.length, 1 + large.cells.length);
   assert.equal(matrix[1], "0_0\t1\t0");
 }
@@ -936,8 +1008,9 @@ assert.ok(Date.now() - disjointComparisonStartedAt < 5000,
     "y_start/x_start,1,11,21,31",
     "1,0,3,0,0",
     "11,0,0,5,0",
-    "21,0,0,0,0"
-  ]);
+    "21,0,0,0,0",
+    ""
+  ], "the matrix CSV ends with exactly one newline");
   assert.throws(function () { data.contactMatrixToCsv({ binSize: 1, cells: [] }); }, /Generate a contact map/);
   assert.throws(function () {
     data.contactMatrixToCsv({ binSize: 1, xMin: 1, xMax: 3000, yMin: 1, yMax: 3000, cells: [{ x: 1, y: 1, value: 1 }] });

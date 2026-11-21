@@ -75,6 +75,10 @@ type dataRunDialog struct {
 	err      string
 	time     *core.PipelineEstimate
 	leftOut  []string // samples not started: no reference
+	// energy is pipeline_energy_check's answer for ids (how their .hyb dG
+	// column is computed), energyErr why there is none; Start waits for it.
+	energy    map[string]core.EnergyCheck
+	energyErr error
 }
 
 type dataSheetDialog struct {
@@ -139,6 +143,8 @@ type dataPage struct {
 	// tableRoom is the table's scroller width last frame: the table fills
 	// it, or scrolls when its columns need more.
 	tableRoom float32
+	// roomTries counts the redraws asked for while the scroller has no width.
+	roomTries int
 	// checked holds the sample check boxes by id (pointers stay bound).
 	checked map[string]*bool
 	// inputs: check_inputs items by "<kind>:<id>"; checkSummary the line
@@ -588,7 +594,9 @@ func (p *dataPage) View(c *ui.Context) {
 func (p *dataPage) referencesCard(c *ui.Context) {
 	a := p.a
 	t := c.Theme()
-	Card(c, "", func() {
+	// Keyed, as is the samples card: the check summary arriving above them
+	// would otherwise shift their places, and with them their elements' state.
+	Card(c.Key("data-references"), "", func() {
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Text(c, "References").FontSize(16).Bold().Grow(1)
 			if ui.Button(c, "Add reference…").Clicked() {
@@ -809,7 +817,7 @@ func (p *dataPage) samplesCard(c *ui.Context) {
 			pending = append(pending, s)
 		}
 	}
-	Card(c, "", func() {
+	Card(c.Key("data-samples"), "", func() {
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Text(c, fmt.Sprintf("Samples (%d)", len(samples))).FontSize(16).Bold()
 			if len(samples) > 0 {
@@ -914,7 +922,26 @@ func (p *dataPage) samplesTable(c *ui.Context, samples []model.Sample) {
 	// The scroller keeps the columns' widths out of the page's minimum
 	// width: a narrow window scrolls the table, not the page.
 	scroller := ui.ScrollHorizontal(c).AlignItems(ui.Stretch).Grow(1).MinHeight(140).Children(func() { p.sampleRows(c, samples, cols, stats, statsLoading) })
-	p.tableRoom = scroller.LayoutBounds().W
+	trackTableRoom(c, scroller.LayoutBounds().W, &p.tableRoom, &p.roomTries)
+}
+
+// trackTableRoom keeps a table scroller's width (room, laid out last frame)
+// in *known, which the table fills: there is none in the scroller's first
+// frame, so it keeps the one known and asks for another frame while the
+// table was laid out without it, or it would show at its columns' minimum
+// width until the next event. A scroller that stays zero wide (a collapsed
+// container) gets a few frames (*tries), not a redraw on every frame.
+func trackTableRoom(c *ui.Context, room float32, known *float32, tries *int) {
+	switch {
+	case room > 0 && *known == 0:
+		c.Invalidate()
+	case room == 0 && *tries < 5:
+		*tries++
+		c.Invalidate()
+	}
+	if room > 0 {
+		*known, *tries = room, 0
+	}
 }
 
 func (p *dataPage) sampleRows(c *ui.Context, samples []model.Sample, cols []ui.TableColumn, stats map[string]qcStats, statsLoading bool) {
@@ -1088,12 +1115,14 @@ func (p *dataPage) runSamples(samples []model.Sample) {
 			err = model.Decode(result, &estimate)
 		}
 		timing := a.B.EstimatePipelines(inputs)
+		energy, energyErr := a.B.PipelineEnergyCheck(path, ids, false)
 		return func() {
 			if a.Project == nil || a.Project.Path != path || !sameIDs(p.run.ids, ids) {
 				return
 			}
 			p.run.loading = false
 			p.run.time = &timing
+			p.run.energy, p.run.energyErr = energy, energyErr
 			if err != nil {
 				p.run.err = err.Error()
 				return
@@ -1176,6 +1205,13 @@ func (p *dataPage) runDialog(c *ui.Context) {
 				}
 			}
 			ui.Text(c, dataRunText(a.Project, d.ids)).FontSize(12).TextColor(t.TextMuted)
+			problems, notes, refused := p.energyLines(d)
+			for _, line := range problems {
+				ui.Text(c, line).FontSize(12).TextColor(t.Danger)
+			}
+			for _, line := range notes {
+				ui.Text(c, line).FontSize(12).TextColor(t.TextMuted)
+			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Cancel").Clicked() {
 					d.open = false
@@ -1184,13 +1220,76 @@ func (p *dataPage) runDialog(c *ui.Context) {
 				if d.estimate != nil && !d.estimate.Fits {
 					label = "Start anyway"
 				}
-				if ui.PrimaryButton(c, label).Disabled(d.loading).Clicked() {
+				if ui.PrimaryButton(c, label).Disabled(d.loading || refused).Clicked() {
 					d.open = false
 					p.startRuns(d.ids)
 				}
 			})
 		})
 	})
+}
+
+// energyLines are the run dialog's dG lines from pipeline_energy_check:
+// each problem and note once (with the samples it concerns when not all
+// do), and whether Start is refused by energyRefusal, the policy the start
+// itself applies: no answer yet, a failed check, or any problem.
+func (p *dataPage) energyLines(d *dataRunDialog) (problems, notes []string, refused bool) {
+	if d.loading {
+		return nil, nil, true
+	}
+	if d.energyErr != nil {
+		return []string{"Cannot start: " + energyRefusal(nil, d.energyErr, "").Error() + "."}, nil, true
+	}
+	group := func(text func(id string) string) []string {
+		var order []string
+		names := map[string][]string{}
+		for _, id := range d.ids {
+			line := text(id)
+			if line == "" {
+				continue
+			}
+			if _, seen := names[line]; !seen {
+				order = append(order, line)
+			}
+			name := id
+			if s := p.a.Project.Sample(id); s != nil {
+				name = s.Label()
+			}
+			names[line] = append(names[line], name)
+		}
+		out := make([]string, 0, len(order))
+		for _, line := range order {
+			if len(names[line]) < len(d.ids) {
+				line = strings.Join(names[line], ", ") + ": " + line
+			}
+			out = append(out, line)
+		}
+		return out
+	}
+	problems = group(func(id string) string {
+		if err := energyRefusal(d.energy, nil, id); err != nil {
+			return err.Error()
+		}
+		return ""
+	})
+	notes = group(func(id string) string { return d.energy[id].Note })
+	return problems, notes, len(problems) > 0
+}
+
+// taskSample is the sample a pipeline task ran for (the one whose stage
+// names it), or nil.
+func taskSample(pr *model.Project, taskID string) *model.Sample {
+	if pr == nil || taskID == "" {
+		return nil
+	}
+	for i := range pr.Samples {
+		for _, st := range pr.Samples[i].Stages {
+			if st.TaskID == taskID {
+				return &pr.Samples[i]
+			}
+		}
+	}
+	return nil
 }
 
 // dataRunText says what a run does: a .hyb sample is only indexed, raw
@@ -1256,6 +1355,8 @@ func (p *dataPage) resumeSamples(samples []model.Sample) {
 	if len(leftOut) > 0 {
 		a.Toast("%s", noReferenceText(leftOut, len(samples) > 0))
 	}
+	// StartTask and ResumeTaskThen check the dG computation first
+	// (energyRefusals) and answer a refusal like any other error.
 	for _, s := range samples {
 		stage, _ := p.problem(s)
 		sampleID, name := s.ID, s.Label()

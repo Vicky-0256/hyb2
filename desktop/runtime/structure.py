@@ -71,7 +71,14 @@ DEFAULTS = {
     "energy_delta": 5.0,
     "beta": 0.0,
     "energy_model": "DP09",
+    "support_kernel": "gaussian",
 }
+# The shared module's support kernels (web/cplfold/cplfold_web.py SUPPORT_KERNELS).
+SUPPORT_KERNELS = ("gaussian", "block", "block-normalized", "rnacofold", "duplex")
+# Tasks saved before RNAduplex counted the read support: the old name of the
+# duplex kernel, and the executable path they could carry (now ignored).
+LEGACY_SUPPORT_KERNELS = {"hybridmin": "duplex"}  # legacy-name: kernel of tasks saved before RNAduplex
+LEGACY_PARAMETERS = ("hybrid_min", "hybridMin")  # legacy-name: hybrid-min path of tasks saved before RNAduplex
 _BOUNDS = {
     "alpha": (0.0, 1.0, float),
     "beam": (1, 1000, int),
@@ -80,7 +87,8 @@ _BOUNDS = {
     "beta": (0.0, 1.0, float),
 }
 _ALIASES = {"beamSize": "beam", "maxPhase1": "max_phase1", "energyDelta": "energy_delta", "delta": "energy_delta",
-            "energyModel": "energy_model", "model": "energy_model", "allowPseudoknot": "allow_pseudoknot"}
+            "energyModel": "energy_model", "model": "energy_model", "allowPseudoknot": "allow_pseudoknot",
+            "supportKernel": "support_kernel"}
 ENERGY_MODELS = {"DP03", "DP09", "CC06", "CC09", "RE"}
 # CPLcofold has no nicked CC/RE pseudoknot models, and the shared module's
 # beam bound (web/cplfold/cplfold_web.py fold).
@@ -107,13 +115,38 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _darwin_peak_footprint_bytes() -> int:
+    """Largest memory footprint this process has had, as macOS accounts it.
+
+    ``ru_maxrss`` counts only pages resident in RAM, and macOS compresses idle
+    pages instead of keeping them resident, so on a loaded machine it reports
+    well under half of what a genome fold needs. The kernel's footprint figure
+    includes compressed pages. Returns 0 when it cannot be read.
+    """
+    try:
+        import ctypes
+
+        fields = 35  # rusage_info_v4: a 16-byte UUID, then 35 unsigned 64-bit counters
+        buffer = (ctypes.c_uint64 * (2 + fields))()
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        libproc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+        libproc.proc_pid_rusage.restype = ctypes.c_int
+        if libproc.proc_pid_rusage(os.getpid(), 4, ctypes.byref(buffer)) != 0:
+            return 0
+        return int(buffer[2 + 28])  # ri_lifetime_max_phys_footprint
+    except (OSError, AttributeError, ValueError):
+        return 0
+
+
 def _peak_rss_bytes() -> int:
     try:
         import resource  # POSIX only; Windows has no getrusage
     except ImportError:
         return 0
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return int(value if sys.platform == "darwin" else value * 1024)
+    if sys.platform == "darwin":
+        return max(int(value), _darwin_peak_footprint_bytes())
+    return int(value * 1024)
 
 
 def load_cplfold_web(root: Path) -> Any:
@@ -303,6 +336,13 @@ def _parameters(raw: Any, mode: str) -> Dict[str, Any]:
             if model not in ENERGY_MODELS:
                 raise ValueError("energy_model must be one of DP03, DP09, CC06, CC09 or RE")
             values[key] = model
+        elif key == "support_kernel":
+            value = LEGACY_SUPPORT_KERNELS.get(value, value)
+            if value not in SUPPORT_KERNELS:
+                raise ValueError("support_kernel must be one of " + ", ".join(SUPPORT_KERNELS))
+            values[key] = value
+        elif key in LEGACY_PARAMETERS:
+            continue
         else:
             raise ValueError(f"unknown structure parameter: {key}")
     return values
@@ -481,7 +521,7 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
             out.update(gene_id=regions[0]["gene_id"], mode="windows", windows=[{"start": regions[0]["start"], "end": regions[0]["end"]}])
         return out, recorded
     if engine == "comrades":
-        raise ValueError(f"COMRADES(ViennaRNA) needs the chimeras of a reference region, and the {what} does not occur "
+        raise ValueError(f"COMRADES needs the chimeras of a reference region, and the {what} does not occur "
                          "exactly once in the samples' reference: fold it with ViennaRNA MFE or sequence-only CPLfold, "
                          "or choose Reference region")
     if guided:
@@ -585,11 +625,15 @@ def _atomic_writer(path: Path) -> Iterator[Any]:
         raise
 
 
-def _bonus_header(length: int, label: str, cutpoint: Optional[int] = None) -> str:
+def _bonus_header(length: int, label: str, cutpoint: Optional[int] = None,
+                  transform: str = BONUS_TRANSFORM, kernel: str = "gaussian") -> str:
     """The web's bonus-matrix TSV header (web/structure-ui.js cplfoldEvidenceTsv),
-    which CPLfold.py load_bonus_matrix_file reads; the region line is a comment."""
+    which CPLfold.py load_bonus_matrix_file reads; the region line is a comment.
+    The value column keeps its name for every support kernel."""
     lines = ["# HYB2 CPLfold bonus matrix", f"# region={label}", f"# sequence_length={length}",
-             "# coordinate_system=prepared-sequence-1-based-inclusive", f"# transform={BONUS_TRANSFORM}"]
+             "# coordinate_system=prepared-sequence-1-based-inclusive", f"# transform={transform}"]
+    if kernel != "gaussian":
+        lines.append(f"# support_kernel={kernel}")
     if cutpoint is not None:
         lines += [f"# cutpoint={cutpoint}", f"# strand_lengths={cutpoint},{length - cutpoint}",
                   "# cofold_evidence_smoothing=within_each_strand"]
@@ -597,7 +641,8 @@ def _bonus_header(length: int, label: str, cutpoint: Optional[int] = None) -> st
     return "\n".join(lines) + "\n"
 
 
-def write_bonus_matrix(path: Path, bonus: Any, label: str) -> int:
+def write_bonus_matrix(path: Path, bonus: Any, label: str, transform: str = BONUS_TRANSFORM,
+                       kernel: str = "gaussian") -> int:
     """The sparse upper triangle of a dense bonus matrix, 1-based, eight
     decimals as the web's export; returns the cells written."""
     import numpy as np
@@ -605,7 +650,7 @@ def write_bonus_matrix(path: Path, bonus: Any, label: str) -> int:
     n = int(bonus.shape[0])
     cells = 0
     with _atomic_writer(path) as handle:
-        handle.write(_bonus_header(n, label))
+        handle.write(_bonus_header(n, label, transform=transform, kernel=kernel))
         for row in range(n - 1):
             values = bonus[row, row + 1:]
             columns = np.flatnonzero(values)
@@ -624,16 +669,28 @@ def _nucleotide_support(bonus: Any) -> Optional[List[float]]:
 
 
 def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
-             bonus_path: Optional[str] = None, label: str = "") -> Dict[str, Any]:
+             bonus_path: Optional[str] = None, label: str = "",
+             cofold_progress: Optional[Callable[[int, int], None]] = None,
+             duplex_workers: Optional[int] = None) -> Dict[str, Any]:
     """Build the bonus from compressed arms and fold; returns a JSON-able record.
     With ``bonus_path`` the bonus matrix is also written there (when it is
-    small enough, see BONUS_EXPORT_MAX_CELLS)."""
+    small enough, see BONUS_EXPORT_MAX_CELLS).  ``cofold_progress(done, total)``
+    follows the RNAcofold step of the rnacofold kernel and the RNAduplex step
+    of the duplex kernel, which runs ``duplex_workers`` processes (None: the
+    CPU count)."""
     started = time.monotonic()
-    bonus, evidence = module.build_hyb_bonus_matrix_fast(len(sequence), arms)
+    kernel = params.get("support_kernel", "gaussian")
+    if kernel == "gaussian":
+        bonus, evidence = module.build_hyb_bonus_matrix_fast(len(sequence), arms)
+    else:
+        extra = {"duplex_workers": duplex_workers} if kernel == "duplex" else {}
+        bonus, evidence = module.build_support_bonus_matrix(len(sequence), arms, kernel, sequence=sequence,
+                                                            progress=cofold_progress, **extra)
+    evidence["supportKernel"] = kernel
     bonus_seconds = time.monotonic() - started
     bonus_file = None
     if bonus_path and bonus is not None and int(evidence.get("nonzeroUpperTriangleCells") or 0) <= BONUS_EXPORT_MAX_CELLS:
-        write_bonus_matrix(Path(bonus_path), bonus, label)
+        write_bonus_matrix(Path(bonus_path), bonus, label, evidence.get("transform") or BONUS_TRANSFORM, kernel)
         bonus_file = Path(bonus_path).name
     started = time.monotonic()
     results = module.two_phase_pseudoknot_fold(
@@ -669,6 +726,10 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
     }
 
 
+# the read-support step that runs before the fold, named in its progress
+_PAIR_STEP = {"rnacofold": "RNAcofold read support", "duplex": "RNAduplex read support"}
+
+
 def _worker_init(root: str) -> None:
     os.environ["NUMBA_NUM_THREADS"] = "1"
     try:
@@ -685,7 +746,8 @@ def _fold_window(root: str, index: int, sequence: str, blocks: List[Tuple[int, i
                  label: str = "") -> Tuple[int, Dict[str, Any]]:
     module = load_cplfold_web(Path(root))
     arms = dict(zip(blocks, weights))
-    return index, fold_one(module, sequence, arms, params, bonus_path, label)
+    # windows fold in parallel worker processes, which compute their duplexes in-process
+    return index, fold_one(module, sequence, arms, params, bonus_path, label, duplex_workers=1)
 
 
 def run_in_pool(workers: int, function: Callable[..., Any], jobs: Sequence[Tuple[Any, ...]],
@@ -733,8 +795,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 def _describe(params: Dict[str, Any]) -> str:
     """The .dbn header's account of how a record was folded."""
-    if params.get("engine") == "COMRADES(ViennaRNA)":
-        return (f"COMRADES(ViennaRNA), {params['temperature']:g} °C, min loop {params['min_loop']}, "
+    if str(params.get("engine", "")).startswith("COMRADES("):
+        return (f"{params['engine']}, {params['temperature']:g} °C, min loop {params['min_loop']}, "
                 f"{params['random_folds']} randomised folds, seed {_comrades.seed_label(params['seed'])}")
     if params.get("engine") == "IRIS":
         return (f"IRIS ensemble member 1 (heaviest), K {params['K']}, C {params['C']}, support quantile "
@@ -746,7 +808,9 @@ def _describe(params: Dict[str, Any]) -> str:
     name = "CPLcofold" if params.get("engine") == "CPLcofold" else "CPLfold"
     if params.get("evidence") == "none":
         return f"{name} {mode}, sequence only, beam {params['beam']}"
-    return f"{name} {mode}, alpha {params['alpha']}, beam {params['beam']}"
+    kernel = params.get("support_kernel", "gaussian")
+    support = "" if kernel == "gaussian" else f", {kernel} support"
+    return f"{name} {mode}, alpha {params['alpha']}, beam {params['beam']}{support}"
 
 
 def _write_outputs(out_dir: Path, records: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, str]:
@@ -840,7 +904,7 @@ def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
         "pseudoknot_pairs": sum(1 for pair in pairs if pair[2] != "()"),
         "long_range_pairs_gt_1000": sum(1 for pair in pairs if pair[1] - pair[0] > 1000),
         "evidence": {key: evidence.get(key) for key in (
-            "source", "builder", "inputRecords", "uniqueBlocks", "meanArmLength", "gaussianStandardDeviation",
+            "source", "builder", "supportKernel", "inputRecords", "uniqueBlocks", "meanArmLength", "gaussianStandardDeviation",
             "nonzeroBonusCells", "nonzeroUpperTriangleCells", "maximumBonus", "truncationTail", "transform", "evidenceWeight")},
         "seconds": record["seconds"],
         "peak_rss_bytes": record.get("peak_rss_bytes"),
@@ -987,7 +1051,11 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
         for index, ((start, end), arms) in enumerate(zip(windows, counters)):
             progress("fold", f"window {index + 1}/{len(windows)} ({start}-{end})" if mode == "windows" else "folding",
                      index, len(windows), units="windows", force=True)
-            finish(index, fold_one(module, sequence[start - 1:end], arms, params, bonus_paths[index], labels[index]))
+            def cofold_progress(done: int, total: int, index: int = index) -> None:
+                progress("fold", f"{_PAIR_STEP.get(params.get('support_kernel'), 'read support')} "
+                         f"{done:,}/{total:,} arm blocks", index, len(windows), units="windows")
+            finish(index, fold_one(module, sequence[start - 1:end], arms, params, bonus_paths[index], labels[index],
+                                   cofold_progress, duplex_workers=cpu))
     else:
         done = 0
 
@@ -1111,7 +1179,9 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     longest = max(end - start + 1 for start, end in windows)
     limit = _comrades.MAX_COMRADES_NT if comrades else _vienna.MAX_VIENNA_NT
     if longest > limit:
-        raise ValueError(f"{longest} nt exceeds the {'COMRADES(ViennaRNA)' if comrades else 'ViennaRNA'} limit of {limit} nt; fold windows")
+        raise ValueError(f"{longest} nt exceeds the {_comrades.engine_name(params) if comrades else 'ViennaRNA'} limit of {limit} nt; fold windows")
+    if comrades:
+        _comrades._folder(params)  # a missing mfold fails before the evidence is read
     # each hard pair applies to the windows that hold both its ends
     hard = params.get("hard_pairs", [])
     per_window = [[(i, j) for i, j in hard if start <= i and j <= end] for start, end in windows]
@@ -1154,12 +1224,12 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     fold_seconds = time.monotonic() - t0
 
     progress("write", "writing results", None, None, units="none", force=True)
-    name = "COMRADES(ViennaRNA)" if comrades else "ViennaRNA"
+    name = _comrades.engine_name(params) if comrades else "ViennaRNA"
     if comrades:
         # the stem constraints the chosen structures were fitted with, on the RNA
         hard = [(record["start"] + i - 1, record["start"] + j - 1) for record in records for i, j in record["hard_pairs"]]
         stored = {"engine": name, **{k: params[k] for k in ("temperature", "min_loop", "constraint_limit", "random_folds",
-                                                              "seed", "homodimer_only")}}
+                                                              "seed", "homodimer_only", "fold_program")}}
         stored["seed"] = _comrades.seed_label(stored["seed"])  # stored as UTF-8 text
     else:
         stored = {"engine": name, "temperature": params["temperature"], "min_loop": params["min_loop"]}
@@ -1167,7 +1237,8 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     outputs = _write_outputs(out_dir, records, stored)
     summaries = [_summary(record) for record in records]
     meta = {
-        "version": 1, "task_id": task_id, "mode": mode, "engine": name, "engine_version": _vienna.version(),
+        "version": 1, "task_id": task_id, "mode": mode, "engine": name,
+        "engine_version": _comrades.fold_program_version(params) if comrades else _vienna.version(),
         "gene_id": gene_id, "reference": {"path": str(inputs["reference"]), "length": len(sequence)},
         "evidence_inputs": {"samples": inputs["samples"],
                             "hyb": [{"path": str(path), "size_bytes": path.stat().st_size} for path in inputs["hyb_paths"]] if comrades else [],
@@ -1383,6 +1454,13 @@ def _finish_two_strand(*, task_id: str, mode: str, engine: str, engine_version: 
     return result
 
 
+def _task_cpus() -> int:
+    """The CPUs this task may use: the CPU count, capped by HYB2_TASK_CPUS."""
+    cpu = os.cpu_count() or 1
+    task_cpus = _env_int("HYB2_TASK_CPUS")
+    return max(1, min(cpu, task_cpus)) if task_cpus is not None else cpu
+
+
 def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dict[str, Any],
                 started: float, repo_root: Optional[Path]) -> Dict[str, Any]:
     """Two regions folded as two strands with CPLcofold (the web's
@@ -1445,7 +1523,10 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
         "evidenceArmCounts": [[a, b, c, d, n] for (a, b, c, d), n in arms.items()],
         "beamSize": params["beam"], "maxPhase1": params["max_phase1"], "energyDelta": params["energy_delta"],
         "energyModel": params["energy_model"], "alpha": params["alpha"] if arms else 0.0, "beta": params["beta"],
-        "allowPseudoknot": params["allow_pseudoknot"], "maxSequenceLength": len(sequence)})
+        "allowPseudoknot": params["allow_pseudoknot"], "maxSequenceLength": len(sequence),
+        "supportKernel": params.get("support_kernel", "gaussian"),
+        # RNAduplex runs in parallel: no more processes than the task's CPU claim
+        "duplexWorkers": _task_cpus()})
     fold_seconds = time.monotonic() - t0
     pairs = [(pair["left"], pair["right"], pair["bracket"], float(pair["bonusSupport"]) if arms else None)
              for pair in folded["pairs"]]
@@ -1464,7 +1545,9 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     entries = raw_evidence.get("bonusEntries") or []
     if arms and entries and len(entries) <= BONUS_EXPORT_MAX_CELLS:
         # the web's two-strand export: 17 significant digits, with the cutpoint
-        header = _bonus_header(len(sequence), _cofold_label(regions), regions[0]["prepared_end"])
+        header = _bonus_header(len(sequence), _cofold_label(regions), regions[0]["prepared_end"],
+                               transform=raw_evidence.get("transform") or BONUS_TRANSFORM,
+                               kernel=params.get("support_kernel", "gaussian"))
         _atomic_write_text(out_dir / "bonus_matrix.tsv", header + "".join(
             f"{int(entry['one'])}\t{int(entry['two'])}\t{float(entry['value']):.17g}\n" for entry in entries))
         bonus_file = "bonus_matrix.tsv"
@@ -1505,13 +1588,14 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     keeps the two regions (pairs with a spacer base are left out and
     counted), so it is stored and drawn as two strands."""
     params = _comrades.parameters(request.get("parameters"))
+    _comrades._folder(params)  # a missing mfold fails before the evidence is read
     inputs = _evidence_inputs(project, request)
     records = {name: sequence.upper().replace("T", "U") for name, sequence in read_fasta(inputs["reference"])}
     regions = _cofold_regions(request.get("regions"), records)
     one, two = regions[0]["sequence"], regions[1]["sequence"]
     prepared = one + _comrades.LINKER + two
     if len(prepared) > _comrades.MAX_COMRADES_NT:
-        raise ValueError(f"{len(prepared)} nt (both regions and the 100-nt spacer) exceeds the COMRADES(ViennaRNA) "
+        raise ValueError(f"{len(prepared)} nt (both regions and the 100-nt spacer) exceeds the COMRADES "
                          f"limit of {_comrades.MAX_COMRADES_NT} nt; choose shorter regions")
 
     run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
@@ -1548,14 +1632,14 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
             if local(i) is not None and local(j) is not None]
     record = dict(folded, structure="".join(dot), pairs=pairs, sequence=one + two, start=1, end=len(one) + len(two),
                   arms=_arms_sample(_blocks(arms, local)))  # A+B positions, without the spacer
-    stored = {"engine": "COMRADES(ViennaRNA)", **{k: params[k] for k in ("temperature", "min_loop", "constraint_limit",
-                                                                       "random_folds", "seed", "homodimer_only")},
+    stored = {"engine": _comrades.engine_name(params), **{k: params[k] for k in ("temperature", "min_loop", "constraint_limit",
+                                                                       "random_folds", "seed", "homodimer_only", "fold_program")},
               "layout": "two regions joined by the 100-nt A/U spacer", "hard_pairs": hard}
     stored["seed"] = _comrades.seed_label(stored["seed"])
     rows_text = (f"chimeras with one arm in each region ({len(arms)}), one RNAcofold each"
                  + (", homodimer proxies only" if params["homodimer_only"] else ""))
     return _finish_two_strand(
-        task_id=task_id, mode="paired", engine="COMRADES(ViennaRNA)", engine_version=_vienna.version(),
+        task_id=task_id, mode="paired", engine=_comrades.engine_name(params), engine_version=_comrades.fold_program_version(params),
         run_dir=run_dir, out_dir=out_dir, progress=progress, regions=regions, record=record, stored=stored,
         inputs=inputs, hyb_used=True, rows=rows_text,
         extra_record={"spacer_pairs_left_out": len(folded["pairs"]) - len(pairs),

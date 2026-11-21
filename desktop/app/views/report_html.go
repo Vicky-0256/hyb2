@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"math"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -117,6 +118,8 @@ type reportSample struct {
 	ID, Label, Condition, Replicate string
 	Reads, Format, Stages           string
 	Ready                           bool
+	// DG is where the .hyb dG column came from (hybDGSource).
+	DG hybDG
 	// Counts is the sample's analysis_summary part (nil when not analysed).
 	Counts *qcStats
 }
@@ -128,6 +131,27 @@ type reportFile struct {
 type reportSettings struct {
 	Sample, Settings string
 	Note             string // e.g. the reads changed after the run
+	DG               string // hybDG.Source of the sample's .hyb dG column
+}
+
+// energyNote names the .hyb dG sources, with the references for the
+// samples' dG sources (dgCitation; "" when there is no sample).
+func (d *reportData) energyNote() string {
+	if len(d.Settings) == 0 {
+		return ""
+	}
+	note := ".hyb dG: computed by HYB2 Desktop's pipeline (ViennaRNA RNAduplex on the two arms; earlier versions used other " +
+		"programs, named per sample), kept from an imported .hyb file, or not computed (analysed before HYB2 Desktop recorded it)."
+	var cites []string
+	for _, s := range d.Settings {
+		if c := dgCitation(s.DG); c != "" && !slices.Contains(cites, c) {
+			cites = append(cites, c)
+		}
+	}
+	if len(cites) > 0 {
+		note += " dG values: cite " + strings.Join(cites, "; ")
+	}
+	return note
 }
 
 type reportCondition struct {
@@ -690,7 +714,7 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		Facts, Runtime                                         [][2]string
 		ReferenceTable, SampleTable, ConditionTable, TestTable reportTableData
 		StructureTable, InputTable, SettingsTable              reportTableData
-		FingerprintNote                                        string
+		FingerprintNote, EnergyNote                            string
 		TestDetails                                            []reportHTMLTest
 		StructureDetails                                       []reportHTMLStructure
 		EvidenceNote                                           string
@@ -699,7 +723,7 @@ func renderReportHTML(d *reportData) ([]byte, error) {
 		MethodNote                                             string
 	}{reportData: d, LeftNote: reportLeftNote, MethodNote: reportMethodNote, Checks: d.reviewChecks(), EvidenceNote: reportEvidenceNote, Facts: d.exportFacts(), Runtime: d.runtimeFacts(), ReferenceTable: d.referenceTable(),
 		SampleTable: d.sampleTable(), ConditionTable: d.conditionTable(), TestTable: d.testTable(), StructureTable: d.structureTable(),
-		InputTable: d.inputTable(), SettingsTable: d.settingsTable(), FingerprintNote: reportFingerprintNote}
+		InputTable: d.inputTable(), SettingsTable: d.settingsTable(), FingerprintNote: reportFingerprintNote, EnergyNote: d.energyNote()}
 	for i := range d.Tests {
 		x := &d.Tests[i]
 		fig, caption := x.figure(fmt.Sprintf("test%d", i+1))
@@ -829,6 +853,7 @@ footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
 {{if .InputTable.Rows}}{{template "table" .InputTable}}{{else}}<p class="muted">No input file in this project.</p>{{end}}
 {{if .SettingsTable.Rows}}{{template "table" .SettingsTable}}{{end}}
 <p class="meta">{{.FingerprintNote}}</p>
+{{with .EnergyNote}}<p class="meta">{{.}}</p>{{end}}
 </section>
 
 <section id="differential-tests">

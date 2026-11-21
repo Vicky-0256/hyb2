@@ -20,10 +20,13 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"hyb2desktop/model"
 )
 
 //go:embed resultschema/*.json
@@ -134,7 +137,10 @@ type rpRecord struct {
 	Warnings    []map[string]string
 	Limitations []string
 	Literature  map[string]any
-	catalog     rpCatalog
+	// HybEnergy is provenance methods.hybEnergy: per sample, where the
+	// .hyb dG column came from (hybEnergyMethod).
+	HybEnergy map[string]any
+	catalog   rpCatalog
 	// exclude are the paths the researcher leaves out of a package;
 	// omitted those files() left out (resultpkg_select.go).
 	exclude map[string]bool
@@ -211,8 +217,10 @@ func buildResultRecord(d *reportData, now time.Time) *rpRecord {
 		if s.Counts != nil {
 			in["records"] = s.Counts.Records
 		}
+		in["hybDG"] = s.DG.Text
 		input("parse", in)
 	}
+	r.HybEnergy = hybEnergyMethod(d.Samples)
 	if len(d.Ready) > 0 {
 		var parts []qcStats
 		var rows [][]string
@@ -861,8 +869,9 @@ func (r *rpRecord) provenance() map[string]any {
 		"inputs": inputs, "steps": r.stepsJSON(true),
 		"methods": map[string]any{"parsing": "HYB2 analysis index (hyb2analysis, the web parser's rules)",
 			"differentialTest": "DESeq2 1.46 Wald test, numpy port; hyb2_compare interaction merge",
-			"foldingEnergy":    "ViennaRNA RNAcofold, 37 °C, default parameters",
-			"structure":        "CPLfold (evidence-guided), ViennaRNA MFE or COMRADES(ViennaRNA)"},
+			"foldingEnergy":    "ViennaRNA RNAcofold, 37 °C, default parameters (Compare's interaction energies)",
+			"hybEnergy":        r.HybEnergy,
+			"structure":        "CPLfold (evidence-guided), ViennaRNA MFE or COMRADES (ViennaRNA or mfold)"},
 		"reproducibility": "Versions, parameters and input names are recorded so results can be traced. Re-running needs the same input files; the package does not contain them."}
 }
 
@@ -904,6 +913,95 @@ func deref(s *string, fallback string) string {
 		return fallback
 	}
 	return *s
+}
+
+// ViennaCitation is the reference for the ViennaRNA dG values (RNAduplex,
+// RNAcofold).
+const ViennaCitation = "R. Lorenz et al. (2011) ViennaRNA Package 2.0. Algorithms Mol Biol 6:26."
+
+// UNAFoldCitation is the reference for the dG of samples analysed by
+// earlier versions with UNAFold's program (legacyDGEngine).
+const UNAFoldCitation = "N. R. Markham & M. Zuker (2008) UNAFold: software for nucleic acid folding and hybridization. Methods Mol Biol 453:3-31."
+
+// legacyDGEngine is the dG engine of samples analysed before RNAduplex.
+const legacyDGEngine = "hybrid-min" // legacy-name: dG engine of samples analysed before RNAduplex
+
+// dgCitation is the reference for a hybDG.Source ("" when none).
+func dgCitation(source string) string {
+	switch source {
+	case "rnaduplex", "rnacofold":
+		return ViennaCitation
+	case legacyDGEngine:
+		return UNAFoldCitation
+	}
+	return ""
+}
+
+// hybDG is where a sample's .hyb dG column (column 3) came from.
+type hybDG struct {
+	// Source: rnaduplex, rnacofold, legacyDGEngine, imported or not_computed.
+	Source, Version, Text string
+}
+
+// hybDGSource reads samples[].energy: computed by this app's pipeline
+// (RNAduplex; earlier versions RNAcofold or legacyDGEngine), kept from an
+// imported .hyb, or not recorded (analysed before the app recorded it, or
+// with energies off).
+func hybDGSource(s model.Sample) hybDG {
+	if s.Reads.Format == "hyb" {
+		return hybDG{Source: "imported", Text: "from the imported .hyb file"}
+	}
+	e := s.Energy
+	if e == nil || e.Engine == "" || !s.HasHyb() {
+		return hybDG{Source: "not_computed", Text: "not computed"}
+	}
+	// "RNA, 37 °C (ViennaRNA defaults)" -> without the note.
+	params := strings.TrimSpace(e.Parameters)
+	if i := strings.LastIndex(params, " ("); i > 0 && strings.HasSuffix(params, ")") {
+		params = params[:i]
+	}
+	join := func(parts ...string) string {
+		var out []string
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		return strings.Join(out, ", ")
+	}
+	switch e.Engine {
+	case "rnaduplex":
+		program := strings.TrimSpace(nameOr(e.Program, "ViennaRNA RNAduplex") + " " + e.Version)
+		return hybDG{Source: "rnaduplex", Version: e.Version, Text: join(program, nameOr(params, "RNA, 37 °C"), e.Scope)}
+	case legacyDGEngine:
+		program := strings.TrimSpace(nameOr(e.Program, "UNAFold") + " " + e.Version)
+		return hybDG{Source: legacyDGEngine, Version: e.Version, Text: join(program, nameOr(params, "RNA, 37 °C, 1 M Na+"), e.Scope)}
+	case "rnacofold":
+		program := strings.TrimSpace(nameOr(e.Program, "ViennaRNA RNAcofold") + " " + e.Version)
+		// ViennaRNA defaults; only the temperature is worth naming.
+		return hybDG{Source: "rnacofold", Version: e.Version, Text: join(program, "37 °C")}
+	}
+	program := strings.TrimSpace(nameOr(e.Program, e.Engine) + " " + e.Version)
+	return hybDG{Source: e.Engine, Version: e.Version, Text: join(program, params, e.Scope)}
+}
+
+// hybEnergyMethod is provenance methods.hybEnergy, with the references
+// for the samples' dG sources (dgCitation), joined by "; ".
+func hybEnergyMethod(samples []reportSample) map[string]any {
+	list := []map[string]any{}
+	var cites []string
+	for _, s := range samples {
+		list = append(list, map[string]any{"sample": s.ID, "label": s.Label, "source": s.DG.Source, "version": rpNull(s.DG.Version), "text": s.DG.Text})
+		if c := dgCitation(s.DG.Source); c != "" && !slices.Contains(cites, c) {
+			cites = append(cites, c)
+		}
+	}
+	citation := any(nil)
+	if len(cites) > 0 {
+		citation = strings.Join(cites, "; ")
+	}
+	return map[string]any{"description": "The .hyb dG column (column 3, kcal/mol) of each sample: computed by HYB2 Desktop's pipeline, " +
+		"kept from an imported .hyb file, or not computed.", "samples": list, "citation": citation}
 }
 
 // reportMarkdown is the web's template report.md for the record.
@@ -983,7 +1081,14 @@ func (r *rpRecord) reportMarkdown() string {
 		if l, _ := in["label"].(string); l != "" {
 			line += " (" + l + ")"
 		}
+		if dg, _ := in["hybDG"].(string); dg != "" {
+			line += "; .hyb dG " + dg
+		}
 		w("%s", line)
+	}
+	if c, _ := r.HybEnergy["citation"].(string); c != "" {
+		w("")
+		w("The .hyb dG values: cite %s", c)
 	}
 	w("")
 	w("## External sources")

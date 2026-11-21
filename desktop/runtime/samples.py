@@ -25,7 +25,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 from .project import (_ID, _mutate_manifest, _now, READ_FORMATS, STAGE_NAMES, copy_into_project, is_absolute_path,
                       load_manifest, safe_relative_path, validate_project_directory)
@@ -652,10 +652,16 @@ class StaleSampleError(ValueError):
     """A task updating a sample that was removed (and maybe re-added) since it started."""
 
 
+_KEEP = object()  # set_sample_stage: leave samples[].energy as it is
+
+
 def set_sample_stage(root: Path, sample_id: str, stage: str, status: str, *, task_id: Optional[str] = None,
                      outputs: Optional[Dict[str, Optional[str]]] = None, extra_stages: Optional[Dict[str, str]] = None,
-                     claim: bool = True, created_at: Optional[str] = None) -> Dict[str, Any]:
+                     claim: bool = True, created_at: Optional[str] = None, energy: Any = _KEEP) -> Dict[str, Any]:
     """Atomically update one (or more) stage statuses and output paths of a sample.
+
+    ``energy`` (when given) replaces the sample's ``energy`` record: how its
+    .hyb dG column was computed (sample_run.energy_record); None removes it.
 
     A task's first update claims the sample (``claim``); later ones
     (``claim=False``) need a stage of the sample to still carry ``task_id``,
@@ -674,6 +680,11 @@ def set_sample_stage(root: Path, sample_id: str, stage: str, status: str, *, tas
             stages[name] = {"status": value, "task_id": task_id, "updated_at": stamp}
         if outputs:
             sample.setdefault("outputs", {}).update(outputs)
+        if energy is not _KEEP:
+            if energy is None:
+                sample.pop("energy", None)
+            else:
+                sample["energy"] = dict(energy)
         return sample
     return _mutate_manifest(Path(root), mutate)
 
@@ -1013,17 +1024,23 @@ def _import_planned(root: Path, planned: List[Dict[str, Any]], references: Dict[
                 ref_ids[path] = reference["id"]
                 (reused_refs if existing else added_refs).append(reference["id"])
             added, skipped = [], []
+            sources: Dict[str, str] = {}  # sample id -> its file, for the samples added here
             for plan, prep in prepared_samples:
                 duplicate = next((s for s in manifest["samples"] if _same_file(prep.record, s.get("reads", {}))), None)
                 if duplicate is not None:
                     prep.discard()
-                    skipped.append({"id": duplicate["id"], "path": str(plan["source"]), "reason": "already in project"})
+                    entry = {"id": duplicate["id"], "path": str(plan["source"]), "reason": "already in project"}
+                    if duplicate["id"] in sources:
+                        # another file of this import with the same content
+                        entry.update(reason="same content as another file of this import", kept=sources[duplicate["id"]])
+                    skipped.append(entry)
                     continue
                 record = prep.finalize(root)
                 sample = _new_sample(manifest, record, name=plan["name"], condition=plan["condition"], replicate=plan["replicate"],
                                      reference_id=ref_ids.get(plan["reference"]) if plan["reference"] else None,
                                      gene_id=plan["gene_id"], settings={}, metadata=plan["metadata"])
                 added.append(sample)
+                sources[sample["id"]] = str(plan["source"])
             return {"samples": added, "skipped": skipped, "references_added": added_refs, "references_reused": reused_refs}
         return _mutate_manifest(root, mutate)
     finally:
@@ -1109,7 +1126,10 @@ def scan_data_folder(folder: Path) -> Dict[str, Any]:
     """Propose samples and references for the files of a data folder.
 
     Reads (FASTQ, read FASTA, SAM, .hyb) become one sample each; the same
-    reads both plain and gzipped are proposed once (the .gz). Condition and
+    reads both plain and gzipped are proposed once (the .gz), and files with
+    the same content (size and quick_hash, as the import's duplicate check)
+    once, the first by name; the others are listed under ``duplicates``
+    with ``reason`` "gz" or "same content". Condition and
     replicate come from the file name (``<condition>_REP<n>``,
     ``<condition><n>``). A reference FASTA whose name starts the sample's
     name is matched (longest first); samples left over get the single
@@ -1155,7 +1175,25 @@ def scan_data_folder(folder: Path) -> Dict[str, Any]:
         paths.sort(key=lambda p: (not p.name.lower().endswith(".gz"), p.name))
         chosen.append(paths[0])
         for other in paths[1:]:
-            duplicates.append({"path": str(other), "kept": str(paths[0])})
+            duplicates.append({"path": str(other), "kept": str(paths[0]), "reason": "gz"})
+    # Identical files (a copy under another name): the import would skip all
+    # but one, so they are not proposed.  Only files of one size are hashed.
+    by_size: Dict[int, List[Path]] = {}
+    for path in chosen:
+        by_size.setdefault(path.stat().st_size, []).append(path)
+    copies: Set[Path] = set()
+    for size, paths in by_size.items():
+        if len(paths) < 2:
+            continue
+        first: Dict[str, Path] = {}
+        for path in sorted(paths, key=lambda p: (str(p.parent), p.name)):
+            digest = quick_hash(path, size)
+            if digest in first:
+                copies.add(path)
+                duplicates.append({"path": str(path), "kept": str(first[digest]), "reason": "same content"})
+            else:
+                first[digest] = path
+    chosen = [path for path in chosen if path not in copies]
 
     ref_stems = sorted(((read_stem(path).lower(), path) for path in references), key=lambda item: -len(item[0]))
     samples: List[Dict[str, Any]] = []

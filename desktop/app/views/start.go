@@ -436,15 +436,35 @@ type prefsState struct {
 	// External public-data lookups (EVIDENCE.md).
 	lookup       bool
 	lookupNotice bool // the first-enable notice is open
-	testing      bool
-	testMsg      string
-	testErr      bool
+	// mfold is the mfold path being edited ("" searches).
+	mfold  string
+	saving int // preference saves not yet stored
+	// saveSeq numbers the saves; lastSave is closed when the latest one has
+	// returned. Each save waits for the one before, so two quick changes
+	// are stored in the order they were made.
+	saveSeq  int
+	lastSave chan struct{}
+	// stored is the last preferences read or saved: after a failed save
+	// whose stored values cannot be read either, the patched keys go back
+	// to it.
+	stored  core.Obj
+	testing bool
+	testMsg string
+	testErr bool
 }
 
 func (a *App) openPrefs() {
 	a.prefsOpen = true
-	a.prefs = prefsState{loading: true}
+	// A save from before the dialog was closed may still be running: keep
+	// its bookkeeping so its answer lands on the same counters, and read
+	// the preferences only after it has been stored.
+	old := a.prefs
+	a.prefs = prefsState{loading: true, saving: old.saving, saveSeq: old.saveSeq, lastSave: old.lastSave, stored: old.stored}
+	prev := old.lastSave
 	a.Go(func() func() {
+		if prev != nil {
+			<-prev
+		}
 		got, err := a.B.Preferences()
 		return func() { a.applyPrefs(got, err) }
 	})
@@ -456,6 +476,7 @@ func (a *App) applyPrefs(got core.Obj, err error) {
 		a.prefs.err = err.Error()
 		return
 	}
+	a.prefs.stored = got
 	budget, _ := got["budget"].(map[string]any)
 	system, _ := got["system"].(map[string]any)
 	a.prefs.cpu, _ = budget["cpu"].(float64)
@@ -469,8 +490,10 @@ func (a *App) applyPrefs(got core.Obj, err error) {
 	speed, _ := got["speed"].(map[string]any)
 	a.prefs.measured, _ = speed["measured_samples"].(float64)
 	a.prefs.lookup, _ = got["external_lookup"].(bool)
+	a.prefs.mfold, _ = got["mfold"].(string)
 	a.setLookup(got)
 	a.setTheme(got)
+	a.setMfold(got)
 }
 
 func (a *App) prefsDialog(c *ui.Context) {
@@ -518,6 +541,8 @@ func (a *App) prefsDialog(c *ui.Context) {
 			ui.Divider(c)
 			a.themePref(c)
 			a.motionPref(c)
+			ui.Divider(c)
+			a.mfoldPrefs(c)
 			ui.Divider(c)
 			a.lookupPrefs(c)
 		})
@@ -571,7 +596,7 @@ func (a *App) lookupPrefs(c *ui.Context) {
 		})
 	}
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		if ui.Button(c, "Test connection").Disabled(!p.lookup || p.testing).Tooltip("Start the RNAcentral helper on this computer and list its tools (RNAcentral itself is not contacted)").Clicked() {
+		if ui.Button(c, "Test connection").Disabled(!p.lookup || p.testing || p.saving > 0).Tooltip("Start the RNAcentral helper on this computer and list its tools (RNAcentral itself is not contacted)").Clicked() {
 			a.testLookup()
 		}
 		if ui.Button(c, "Clear cache").Tooltip("Forget the RNAcentral answers kept on this computer").Clicked() {
@@ -623,18 +648,83 @@ func (a *App) testLookup() {
 	})
 }
 
+// savePrefs stores a preference patch. Test connection reads the stored
+// lookup preference, so it waits (p.saving) until the save has landed; after
+// a failed save the dialog shows the preferences as stored.
+// Saves are stored one after another in the order they were made, and
+// only the latest one's answer updates the dialog.
 func (a *App) savePrefs(patch core.Obj) {
+	p := &a.prefs
+	p.saving++
+	p.saveSeq++
+	seq := p.saveSeq
+	prev, done := p.lastSave, make(chan struct{})
+	p.lastSave = done
 	a.Go(func() func() {
+		if prev != nil {
+			<-prev
+		}
 		got, err := a.B.SetPreferences(patch)
+		// After a failed save, show what is actually stored rather than
+		// guessing from the patch.
+		var stored core.Obj
+		var storedErr error
+		if err != nil {
+			stored, storedErr = a.B.Preferences()
+		}
+		close(done)
 		return func() {
+			p.saving--
+			latest := seq == p.saveSeq
 			if err != nil {
+				if latest {
+					if storedErr == nil {
+						a.applyPrefs(stored, nil)
+					} else {
+						a.restorePatched(patch)
+					}
+				}
 				a.Toast("Could not save preferences: %v", err)
 				return
 			}
-			a.applyPrefs(got, nil)
+			if latest {
+				a.applyPrefs(got, nil)
+			} else {
+				p.stored = got
+			}
 			a.Toast("Preferences saved")
 		}
 	})
+}
+
+// restorePatched puts every key of a patch that could not be saved back to
+// the last stored preferences (p.stored), when what is stored now cannot
+// be read. Without them, a lookup switch goes back to the opposite.
+func (a *App) restorePatched(patch core.Obj) {
+	p := &a.prefs
+	if p.stored == nil {
+		if on, ok := patch["external_lookup"].(bool); ok {
+			p.lookup = !on
+		}
+		return
+	}
+	for key := range patch {
+		switch key {
+		case "budget":
+			budget, _ := p.stored["budget"].(map[string]any)
+			p.cpu, _ = budget["cpu"].(float64)
+			p.memMB, _ = budget["mem_mb"].(float64)
+			p.custom, _ = p.stored["custom_budget"].(bool)
+		case "external_lookup":
+			p.lookup, _ = p.stored["external_lookup"].(bool)
+			a.setLookup(p.stored)
+		case "theme":
+			a.setTheme(p.stored)
+		case "mfold":
+			p.mfold, _ = p.stored["mfold"].(string)
+			a.setMfold(p.stored)
+		}
+	}
 }
 
 func maxFloat(x, y float64) float64 {

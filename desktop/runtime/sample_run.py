@@ -135,6 +135,41 @@ _PIPELINE_BOUNDS = {"blast_threshold": (0.0, 10.0, float), "max_overlap": (0, 10
                     "threads": (1, 256, int), "memory_mb": (64, 1_048_576, int)}
 
 
+# Text fields of hyb2pipe's Result.energy kept in samples[].energy.
+_ENERGY_KEYS = ("engine", "program", "version", "executable", "parameters", "scope")
+
+
+def energy_record(result: Any) -> Optional[Dict[str, Any]]:
+    """How the run computed the .hyb dG column (hyb2pipe Result.energy), as
+    stored in ``samples[].energy``; None when the pipeline computed none or
+    does not say."""
+    info = getattr(result, "energy", None)
+    if not isinstance(info, dict) or not isinstance(info.get("engine"), str) or not info["engine"]:
+        return None
+    record: Dict[str, Any] = {key: (str(info[key]) if info.get(key) is not None else None) for key in _ENERGY_KEYS}
+    record["source"] = "computed"
+    record["recorded_at"] = _now()
+    return record
+
+
+def energy_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """The Options energy fields of a sample run (shared by build_options and
+    the ``pipeline_energy_check`` operation): ``energy``, and when it is on
+    ``energy_engine``.
+
+    The .hyb dG column is always computed, with ViennaRNA's RNAduplex on each
+    hybrid's two arms (intermolecular pairs only, as the original Hyb
+    pipeline).  ViennaRNA is bundled, so every platform uses the same engine;
+    other keys of ``settings`` (an executable path an earlier version saved)
+    are ignored.  Raises ValueError for invalid settings."""
+    values: Dict[str, Any] = {"energy": True, "energy_engine": "rnaduplex"}
+    if settings.get("energy") is not None:
+        if not isinstance(settings["energy"], bool):
+            raise ValueError("pipeline parameter energy must be a boolean")
+        values["energy"] = settings["energy"]
+    return values
+
+
 def build_options(options_cls: Any, settings: Dict[str, Any]) -> "tuple[Any, list[str]]":
     """Bounded Options from sample settings; keys the installed Options lacks are reported, not passed."""
     fields = {field.name for field in dataclasses.fields(options_cls)}
@@ -145,11 +180,11 @@ def build_options(options_cls: Any, settings: Dict[str, Any]) -> "tuple[Any, lis
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not lo <= value <= hi or (kind is int and value != int(value)):
                 raise ValueError("pipeline parameter out of bounds: " + key)
             values[key] = kind(value)
-    for key in ("energy", "resume"):
-        if key in settings and settings[key] is not None:
-            if not isinstance(settings[key], bool):
-                raise ValueError("pipeline parameter %s must be a boolean" % key)
-            values[key] = settings[key]
+    values.update(energy_settings(settings))
+    if settings.get("resume") is not None:
+        if not isinstance(settings["resume"], bool):
+            raise ValueError("pipeline parameter resume must be a boolean")
+        values["resume"] = settings["resume"]
     if settings.get("keep_sam") is not None:
         if settings["keep_sam"] not in ("none", "gz", "plain"):
             raise ValueError("keep_sam must be none, gz or plain")
@@ -161,6 +196,87 @@ def build_options(options_cls: Any, settings: Dict[str, Any]) -> "tuple[Any, lis
         values["tmp_dir"] = Path(tmp)
     ignored = sorted(key for key in values if key not in fields)
     return options_cls(**{key: value for key, value in values.items() if key in fields}), ignored
+
+
+def _energy_check_entry(needs: bool = False, engine: Optional[str] = None, problem: Optional[str] = None,
+                        note: Optional[str] = None) -> Dict[str, Any]:
+    return {"needs_engine": needs, "engine": engine, "problem": problem, "note": note}
+
+
+def pipeline_energy_check(project: Path, sample_ids: Optional[List[str]], resuming: bool,
+                          repo_root: Path) -> Dict[str, Any]:
+    """``pipeline_energy_check``: per sample, the dG engine a
+    ``sample_pipeline_run`` would use (same resolution as build_options),
+    and whether it needs one that is missing (``needs_engine`` with a
+    ``problem``).  Reads only: no run, no manifest or checkpoint writes.
+    ``resuming``: a run resumed past its energy stage (checkpoint with the
+    same energy settings) needs none."""
+    project = Path(project).resolve()
+    manifest = load_manifest(project)
+    by_id = {s.get("id"): s for s in manifest.get("samples", [])}
+    references = {r.get("id"): r for r in manifest.get("references", [])}
+    ids = list(sample_ids) if sample_ids is not None else [s.get("id") for s in manifest.get("samples", [])]
+    package = Path(repo_root).resolve() / "pipeline"
+    if str(package) not in sys.path:
+        sys.path.insert(0, str(package))
+    out: Dict[str, Any] = {}
+    for sample_id in ids:
+        sample = by_id.get(sample_id)
+        if sample is None:
+            out[sample_id] = _energy_check_entry(problem="unknown sample")
+            continue
+        out[sample_id] = _energy_check_one(project, sample, references, resuming)
+    return {"samples": out}
+
+
+def _energy_check_one(project: Path, sample: Dict[str, Any], references: Dict[Any, Any],
+                      resuming: bool) -> Dict[str, Any]:
+    reads_record = sample.get("reads") or {}
+    if reads_record.get("format") == "hyb":
+        return _energy_check_entry()  # an imported .hyb keeps its own dG column
+    settings = dict(sample.get("settings") or {})
+    try:
+        plan = energy_settings(settings)
+    except ValueError as error:
+        return _energy_check_entry(problem=str(error))
+    if not plan["energy"]:
+        return _energy_check_entry()
+    engine = plan["energy_engine"]
+    try:
+        from hyb2pipe import energy as pipe_energy
+    except ImportError:
+        return _energy_check_entry(needs=True, engine=engine, problem="the Python HYB2 pipeline is not bundled")
+    problem: Optional[str] = None
+    try:
+        pipe_energy.engine_folder(engine, 1)
+    except pipe_energy.EnergyUnavailable as error:
+        problem = str(error)
+    if resuming and not _energy_stage_pending(project, sample, references, settings):
+        return _energy_check_entry(engine=engine)
+    return _energy_check_entry(needs=True, engine=engine, problem=problem)
+
+
+def _energy_stage_pending(project: Path, sample: Dict[str, Any], references: Dict[Any, Any],
+                          settings: Dict[str, Any]) -> bool:
+    """hyb2pipe.energy_stage_pending for the run's out_prefix and Options;
+    True when that cannot be told (the run would then resolve its dG engine)."""
+    try:
+        from hyb2pipe import Options
+        from hyb2pipe import energy_stage_pending
+    except ImportError:
+        return True
+    reference = references.get(sample.get("reference_id")) if sample.get("reference_id") is not None else None
+    if reference is None:
+        return True
+    try:
+        reads_path = resolve_record_path(project, sample["reads"])
+        reference_path = resolve_record_path(project, reference)
+        options, _ = build_options(Options, settings)
+        sample_dir = project / "samples" / str(sample.get("id"))
+        out_prefix = sample_dir / _safe_component(sample.get("name") or read_stem(reads_path))
+        return energy_stage_pending(reads_path, reference_path, out_prefix, options)
+    except Exception:  # noqa: BLE001 - untrusted link, bad record, ...: the run decides
+        return True
 
 
 def _safe_component(value: str) -> str:
@@ -400,6 +516,9 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
     outputs: Dict[str, Optional[str]] = {}
     counts: Dict[str, Any] = {}
     ignored: list = []
+    # response["performance"]["energy"]: the dG engine, and whether the
+    # energy stage ran in this invocation (not when resumed past it)
+    energy_run: Dict[str, Any] = {"engine": None, "ran": False}
     previous_handler = _install_term_handler()
     slot = MapSlot(os.environ.get("HYB2_MAP_SLOT"))
     try:
@@ -422,6 +541,8 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
                 mark("map", "running", extra_stages={"hyb": "pending", "index": "pending"})
 
             def on_progress(stage: str, detail: str = "", *extra: Any) -> None:
+                if stage == "energy":
+                    energy_run["ran"] = True
                 if stage == "map":
                     slot.acquire(lambda: progress.write("map", "waiting: another sample is mapping"))
                 if stage in _POST_MAP_STAGES:
@@ -444,6 +565,12 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
                 pass
             result = run_pipeline(reads_path, reference_path, out_prefix, options, on_progress, log=sys.stderr, **kwargs)
             hyb_path = Path(result.hyb)
+            if getattr(options, "energy", False):
+                energy_run["engine"] = getattr(options, "energy_engine", None)
+                if isinstance(getattr(result, "energy_ran", None), bool):
+                    energy_run["ran"] = result.energy_ran
+            else:
+                energy_run["ran"] = False
             counts = dict(getattr(result, "counts", {}) or {})
             outputs = {"hyb": _relative(project, result.hyb), "homodimers": _relative(project, result.homodimers),
                        "stats": _relative(project, result.stats)}
@@ -451,7 +578,8 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
             if fmt != "sam":
                 done_stages["map"] = "succeeded"
             state.stage = "index"
-            mark("index", "pending", outputs=outputs, extra_stages=done_stages)
+            # Replaces any earlier run's record; None (no dG computed) clears it.
+            mark("index", "pending", outputs=outputs, extra_stages=done_stages, energy=energy_record(result))
 
         # ---- contact + index (hyb2analysis, optional) -----------------------
         state.stage = "index"
@@ -470,7 +598,8 @@ def run_sample_pipeline(project: Path, sample_id: str, task_id: str, run_dir: Pa
                     "stages": stages, "index_status": index_status}
         seconds = progress.active_seconds()
         response["performance"] = {**progress.work, "seconds": round(seconds, 2),
-                                   "stage_seconds": {k: round(v, 2) for k, v in progress.stage_seconds.items() if k}}
+                                   "stage_seconds": {k: round(v, 2) for k, v in progress.stage_seconds.items() if k},
+                                   "energy": dict(energy_run)}
         if ignored:
             response["ignored_parameters"] = ignored
         return finish(response)

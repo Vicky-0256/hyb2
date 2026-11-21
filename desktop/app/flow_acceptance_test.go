@@ -67,7 +67,11 @@ func flowSample(a *views.App, name string) *model.Sample {
 func flowStage(s *model.Sample, name string) string { return s.Stages[name].Status }
 
 // flowIdle frames until n tasks besides before exist and none is queued
-// or running.
+// or running, and then until the project read after they ended is the one
+// shown. That read runs in the background and takes as long as the machine
+// is busy (a fixed 300 ms was not always enough), so the wait is for what
+// it brings: flowAgrees. A project that still disagrees after two minutes
+// is left to the caller's checks, which say what differs.
 func flowIdle(d *driver, what string, before map[string]bool, n int, timeout time.Duration) {
 	d.until(what, timeout, func() bool {
 		fresh := 0
@@ -79,9 +83,40 @@ func flowIdle(d *driver, what string, before map[string]bool, n int, timeout tim
 		return fresh >= n && len(d.a.ActiveTasks()) == 0
 	})
 	d.a.RefreshProject()
+	for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(100 * time.Millisecond) {
+		d.frame()
+		if flowAgrees(d.a) || time.Now().After(deadline) {
+			break
+		}
+	}
 	d.frame()
-	time.Sleep(300 * time.Millisecond)
-	d.frame()
+}
+
+// flowAgrees reports whether every sample's stages say what its latest
+// finished pipeline task came to: an index for one that succeeded, else a
+// stage with the task's status (failed, cancelled).
+func flowAgrees(a *views.App) bool {
+	for i := range a.Project.Samples {
+		s := &a.Project.Samples[i]
+		task, ok := flowTask(a, s)
+		if !ok || task.Active() {
+			continue
+		}
+		if task.Status == "succeeded" {
+			if flowStage(s, "index") != "succeeded" {
+				return false
+			}
+			continue
+		}
+		shown := false
+		for _, stage := range s.Stages {
+			shown = shown || stage.Status == task.Status
+		}
+		if !shown {
+			return false
+		}
+	}
+	return true
 }
 
 // flowTask is the sample's latest pipeline task, found by its label (a
@@ -236,7 +271,7 @@ func TestAcceptanceFlow(t *testing.T) {
 	// 4. Cancel: run the big sample alone and cancel it while it maps.
 	d.click("Select big_rep1")
 	d.click("Run selected (1)")
-	d.until("estimate big", 60*time.Second, func() bool { return d.has("Start") })
+	d.until("estimate big", 5*time.Minute, d.runReady)
 	if d.has("Start anyway") {
 		d.click("Start anyway")
 	} else {
@@ -278,7 +313,7 @@ func TestAcceptanceFlow(t *testing.T) {
 	}
 	before := flowTaskIDs(app)
 	d.click("Run selected (4)")
-	d.until("estimate 3", 60*time.Second, func() bool { return d.has("Run 3 samples") })
+	d.until("estimate 3", 5*time.Minute, func() bool { return d.has("Run 3 samples") && d.runReady() })
 	leftOut := d.has("noref_rep1 is left out: it has no reference. Use Set reference… in its row.")
 	d.shot("flow-run-dialog")
 	if d.has("Start anyway") {
@@ -362,6 +397,16 @@ func TestAcceptanceFlow(t *testing.T) {
 	d.click("Allow external public-data lookups (RNAcentral)")
 	d.until("notice", 10*time.Second, func() bool { return d.has("Before you turn this on") })
 	d.click("Turn on")
+	// Turn on saves the preference in the background and Test connection
+	// reads the saved one. The app keeps Test connection disabled until the
+	// save has landed (views/start.go, prefsState.saving); wait for the saved
+	// value and the closed notice here so a click on the still-disabled
+	// button is not mistaken for a test that never answered.
+	d.until("lookups saved on", 2*time.Minute, func() bool {
+		prefs, err := s.service.Preferences()
+		on, _ := prefs["external_lookup"].(bool)
+		return err == nil && on && !d.has("Before you turn this on")
+	})
 	d.click("Test connection")
 	d.until("connection test", 90*time.Second, func() bool {
 		return !d.has("Testing") && (d.has("Could not") || d.has("tools") || d.has("RNAcentral"))
@@ -440,7 +485,8 @@ func TestAcceptanceFlow(t *testing.T) {
 	reportOK := d.has("5 (1 analysed)")
 	// The settings ok_rep1 was run with come from its real checkpoint; a
 	// failed sample is not shown as "not run".
-	settingsOK := d.has("blast_threshold 0.1 · max_overlap 4 · max_hits 10 · energy off · pipeline format ")
+	// Desktop runs always write dG with RNAduplex.
+	settingsOK := d.has("blast_threshold 0.1 · max_overlap 4 · max_hits 10 · energy on (rnaduplex) · pipeline format ")
 	failedOK := d.has("no hybrids: the last run failed at map")
 	record("reopen_report", map[string]any{"partial_shown": reportOK, "settings_shown": settingsOK, "failed_run_shown": failedOK})
 	if !reportOK {

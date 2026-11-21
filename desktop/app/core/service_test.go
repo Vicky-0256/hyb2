@@ -10,7 +10,7 @@ import (
 )
 
 func TestProjectOpAllowlist(t *testing.T) {
-	if len(ProjectOperations) != 26 {
+	if len(ProjectOperations) != 27 {
 		t.Fatalf("%d project operations", len(ProjectOperations))
 	}
 	for _, operation := range ProjectOperations {
@@ -42,6 +42,33 @@ func TestProjectOpAllowlist(t *testing.T) {
 	}
 	if _, err := s.ProjectOp("/p", "list_samples", nil); err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Fatalf("no runtime: %v", err)
+	}
+}
+
+// pipeline_energy_check goes through the project allowlist, and an answer
+// that leaves a sample out (or an older runtime without the operation)
+// is an error, never a pass.
+func TestPipelineEnergyCheck(t *testing.T) {
+	s := NewService(nil, ServiceOptions{})
+	if _, err := s.PipelineEnergyCheck("/p", []string{"a"}, false); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("no runtime: %v", err)
+	}
+	if _, err := s.PipelineEnergyCheck(" ", []string{"a"}, false); err == nil {
+		t.Fatal("no project path accepted")
+	}
+	response := Obj{"ok": true, "samples": map[string]any{
+		"a": map[string]any{"needs_engine": true, "engine": "rnaduplex", "problem": nil, "note": nil},
+		"b": map[string]any{"needs_engine": true, "engine": "rnaduplex", "problem": "not found", "note": nil},
+	}}
+	got, err := decodeEnergyCheck(response, []string{"a", "b"})
+	if err != nil || !got["a"].NeedsEngine || got["a"].Engine != "rnaduplex" || got["a"].Problem != "" || got["b"].Problem != "not found" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := decodeEnergyCheck(response, []string{"a", "c"}); err == nil || !strings.Contains(err.Error(), "sample c") {
+		t.Fatalf("missing sample: %v", err)
+	}
+	if _, err := decodeEnergyCheck(Obj{"ok": true}, []string{"a"}); err == nil {
+		t.Fatal("no samples accepted")
 	}
 }
 
@@ -247,5 +274,111 @@ func TestServiceValidateTaskEndToEnd(t *testing.T) {
 	}
 	if _, err := s.StartTask(TaskStartRequest{ProjectPath: project, Kind: "validate_project"}); err == nil {
 		t.Fatal("task started after shutdown")
+	}
+}
+
+// pipeline_energy_check against the real bridge: the Go request and
+// decoding match Python's operation (desktop/runtime/sample_run.py).
+func TestPipelineEnergyCheckBridge(t *testing.T) {
+	s := newTestService(t)
+	project := createProject(t, s)
+	dir := t.TempDir()
+	reads := filepath.Join(dir, "reads.fastq")
+	ref := filepath.Join(dir, "ref.fasta")
+	for path, text := range map[string]string{reads: "@r1\nACGTACGTAC\n+\nIIIIIIIIII\n", ref: ">g\nACGTACGTACGTACGT\n"} {
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(name string, settings Obj) string {
+		t.Helper()
+		added, err := s.ProjectOp(project, "add_sample", Obj{"source": reads, "name": name, "reference": ref, "settings": settings})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sample, _ := added["sample"].(map[string]any)
+		id, _ := sample["id"].(string)
+		if id == "" {
+			t.Fatalf("add_sample: %v", added)
+		}
+		return id
+	}
+	plain := add("plain", nil)
+	off := add("off", Obj{"energy": false})
+	checks, err := s.PipelineEnergyCheck(project, []string{plain, off, "nope"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the bundled runtime has ViennaRNA: RNAduplex, nothing missing
+	if c := checks[plain]; !c.NeedsEngine || c.Engine != "rnaduplex" || c.Problem != "" {
+		t.Fatalf("plain: %+v", c)
+	}
+	if c := checks[off]; c.NeedsEngine || c.Problem != "" {
+		t.Fatalf("energy false: %+v", c)
+	}
+	if c := checks["nope"]; c.Problem != "unknown sample" {
+		t.Fatalf("unknown sample: %+v", c)
+	}
+	if _, err := s.PipelineEnergyCheck(project, []string{plain}, true); err != nil {
+		t.Fatalf("resuming: %v", err)
+	}
+	if env := s.taskEnv([]string{"A=1"}); len(env) != 1 {
+		t.Fatalf("task env %v", env)
+	}
+}
+
+// The preference of earlier versions for the dG program is gone: a patch
+// naming it is refused, and a stored one is kept in the file but not shown.
+func TestRemovedDGProgramPreference(t *testing.T) {
+	const old = "hybrid_min" // legacy-name: preference of versions before RNAduplex
+	path := filepath.Join(t.TempDir(), "config", PrefsFileName)
+	if _, err := ApplyPreferences(path, Obj{old: "/opt/x/bin/prog"}); err == nil {
+		t.Fatal("the removed preference was accepted")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"`+old+`": "/opt/x/bin/prog", "theme": "dark"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := DescribePreferences(path)[old]; present {
+		t.Fatal("the removed preference is shown")
+	}
+	if _, err := ApplyPreferences(path, Obj{"theme": "light"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readJSON(t, path); got["theme"] != "light" || got[old] != "/opt/x/bin/prog" {
+		t.Fatalf("file %v", got)
+	}
+}
+
+// The mfold preference (COMRADES(mfold)): stored as a path, kept
+// apart from it, and given to task processes as HYB2_MFOLD.
+func TestMfoldPreference(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config", PrefsFileName)
+	if LoadMfold(path) != "" || DescribePreferences(path)["mfold"] != "" {
+		t.Fatal("default is not the search")
+	}
+	if _, err := ApplyPreferences(path, Obj{"mfold": " /opt/m/bin/mfold "}); err != nil {
+		t.Fatal(err)
+	}
+	if LoadMfold(path) != filepath.Clean("/opt/m/bin/mfold") {
+		t.Fatalf("stored %q", LoadMfold(path))
+	}
+	for _, bad := range []any{"bin/mfold", 3} {
+		if _, err := ApplyPreferences(path, Obj{"mfold": bad}); err == nil || !strings.Contains(err.Error(), "mfold") {
+			t.Fatalf("accepted %v (%v)", bad, err)
+		}
+	}
+	s := &Service{prefsPath: path}
+	env := strings.Join(s.taskEnv([]string{"A=1"}), "\n")
+	if !strings.Contains(env, MfoldEnv+"="+filepath.Clean("/opt/m/bin/mfold")) {
+		t.Fatalf("task env %q", env)
+	}
+	if _, err := ApplyPreferences(path, Obj{"mfold": nil}); err != nil || LoadMfold(path) != "" {
+		t.Fatalf("clear: %v %q", err, LoadMfold(path))
+	}
+	if strings.Contains(strings.Join(s.taskEnv(nil), "\n"), MfoldEnv) {
+		t.Fatal("cleared preference still in the task env")
 	}
 }

@@ -285,11 +285,11 @@ class InterRnaCompareTests(unittest.TestCase):
         self.assertEqual(len(contacts), 4)
         self.assertTrue(all(f"{GENE_X}__{GENE_Y}" in path.name for path in contacts))
         self.assertTrue(all(item["records"] == 1500 + extra for item, extra in zip(summary["inputs"], (260, 240, 0, 0))))
-        counts = (out / "counts.table.txt").read_text().split("\n")
+        counts = (out / "counts.table.txt").read_text().splitlines()
         self.assertEqual(counts[0], "feature_id\t" + "\t".join(self.ids))
         self.assertEqual(len(counts) - 1, summary["cells_total"])
-        self.assertEqual((out / "names.table").read_text(), "\n".join(
-            f"{i}\t{'condition_one' if k < 2 else 'condition_two'}" for k, i in enumerate(self.ids)))
+        self.assertEqual((out / "names.table").read_text(), "".join(
+            f"{i}\t{'condition_one' if k < 2 else 'condition_two'}\n" for k, i in enumerate(self.ids)))
         self.assertTrue((out / "sample_metadata.tsv").read_text().startswith(
             "sample_id\tcondition\tcondition_label\tfile_name\n" + f"{self.ids[0]}\tcondition_one\tA\ta1.hyb"))
         maps = json.loads((out / "top_maps.json").read_text())

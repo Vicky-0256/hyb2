@@ -455,7 +455,7 @@ func TestStructureComradesForm(t *testing.T) {
 	a.Navigate("structure", nil)
 	csSettle(a, tt)
 	p := a.PageFor("structure").(*structurePage)
-	if err := tt.Click("COMRADES(ViennaRNA), guided by RNAcofold of the chimeras"); err != nil {
+	if err := tt.Click("COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras"); err != nil {
 		t.Fatal(err)
 	}
 	p.advancedOpen = true
@@ -473,13 +473,13 @@ func TestStructureComradesForm(t *testing.T) {
 	// more than 100 randomised folds wait for the large-ensemble consent
 	p.mode, p.windows, p.randomFolds = "windows", "2800-3300", 150
 	tt.Frame()
-	if !tt.HasText("• Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.") ||
+	if !tt.HasText("• Confirm the large ensemble under COMRADES settings (more than 100 randomised folds) to run it.") ||
 		!tt.HasText("I understand that up to 1,000 serial folds may take a long time; Cancel stops them.") {
 		t.Fatalf("no large-ensemble consent: %q", tt.Texts())
 	}
 	p.allowLargeEnsemble = true
 	tt.Frame()
-	if tt.HasText("• Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.") {
+	if tt.HasText("• Confirm the large ensemble under COMRADES settings (more than 100 randomised folds) to run it.") {
 		t.Fatal("the consent did not lift the block")
 	}
 	p.mode, p.windows, p.randomFolds, p.seed, p.homodimerOnly = "windows", "2800-3300", 5, " run1 ", true
@@ -583,7 +583,7 @@ func TestStructureCofoldForm(t *testing.T) {
 	}
 	// a large ensemble needs the confirmation in this layout too
 	p.region1, p.region2, p.randomFolds = "1-45", "1086-1134", 500
-	if pl := p.plan(); !slices.Contains(pl.problems, "Confirm the large ensemble under ViennaRNA settings (more than 100 randomised folds) to run it.") {
+	if pl := p.plan(); !slices.Contains(pl.problems, "Confirm the large ensemble under COMRADES settings (more than 100 randomised folds) to run it.") {
 		t.Fatalf("large ensemble %q", pl.problems)
 	}
 	p.randomFolds = 0

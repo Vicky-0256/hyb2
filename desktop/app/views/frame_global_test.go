@@ -234,7 +234,7 @@ func TestPageCommandsFollowButtons(t *testing.T) {
 }
 
 func TestPaletteHelpTexts(t *testing.T) {
-	for _, engine := range []string{"CPLfold", "CPLcofold", "ViennaRNA MFE", "COMRADES(ViennaRNA)", "IRIS"} {
+	for _, engine := range []string{"CPLfold", "CPLcofold", "ViennaRNA MFE", "COMRADES (ViennaRNA or mfold)", "IRIS"} {
 		if !strings.Contains(pageHelp["structure"][0], engine) {
 			t.Errorf("Structure help lacks %s", engine)
 		}

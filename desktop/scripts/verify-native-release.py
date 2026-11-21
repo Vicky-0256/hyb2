@@ -89,6 +89,15 @@ def main() -> int:
             source = ROOT / rel
             if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
                 return fail(f"bundled source is stale (re-run stage-native.py): {rel}")
+    # Nothing in the runtime may name a path on the machine that built it.
+    checks = manifest.get("checks") if isinstance(manifest.get("checks"), dict) else {}
+    for value in [checks.get("base_prefix"), *(checks.get("module_paths") or [])]:
+        if not safe_relative(value):
+            return fail(f"manifest records a build-machine path: {value}")
+    if platform.system() != "Windows":
+        for script in sorted((interpreter.parent).iterdir()):
+            if script.is_file() and not script.is_symlink() and stage_module.host_shebang(script):
+                return fail(f"script starts a build-machine interpreter: {script.relative_to(root).as_posix()}")
     for rel in LICENSE_FILES:
         if not (root / rel).is_file(): return fail(f"required license notice missing: {rel}")
     # Use the same real JIT/reference-fold checks as staging. The probe uses an

@@ -27,7 +27,7 @@ from .detector import cplfold_max_nt, detect_runtime
 from .project import _atomic_write_json, is_absolute_path, load_manifest, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
 from . import samples as _samples
 from . import trust as _trust
-from .sample_run import ProgressFile, run_sample_index, run_sample_pipeline
+from .sample_run import ProgressFile, pipeline_energy_check, run_sample_index, run_sample_pipeline
 import importlib.util
 
 _RUNNER_PATH = Path(__file__).resolve().parents[1] / "task-runner" / "runner.py"
@@ -411,6 +411,16 @@ def _sample_ops_inner(operation: str, request: dict[str, Any], repo_root: Path |
                                         concurrency=request.get("concurrency", 1), tmp_dir=Path(tmp_dir) if tmp_dir else None,
                                         include_completed=request.get("include_completed") is True)
         return {"ok": True, "path": str(path), **result}
+    if operation == "pipeline_energy_check":
+        # Read-only: the dG engine each sample's run would use and whether it
+        # is missing (desktop/runtime/sample_run.py).
+        path = _valid_project(request)
+        resuming = request.get("resuming", False)
+        if not isinstance(resuming, bool):
+            raise ValueError("resuming must be a boolean")
+        result = pipeline_energy_check(path, _id_list(request.get("sample_ids"), "sample_ids"), resuming,
+                                       Path(repo_root or Path(__file__).resolve().parents[2]))
+        return {"ok": True, "path": str(path), **result}
     if operation == "hash_inputs":
         path = _valid_project(request)
         ids = _id_list(request.get("ids"), "ids")
@@ -510,7 +520,11 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
             "beta": params.get("beta", 0),
             "allowPseudoknot": allow,
             "maxSequenceLength": max_nt,
+            # rnacofold: the bundled ViennaRNA cofolds the arms when the page sends no pairs
+            "supportKernel": params.get("supportKernel", "gaussian"),
         }
+        if request.get("evidencePairs") is not None:
+            payload["evidencePairs"] = request.get("evidencePairs")
         result = module.fold(payload)
         cap_bonus_entries(result)
         result["runtime"] = "HYB2 Desktop bundled Python/NumPy/Numba"

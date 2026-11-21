@@ -27,6 +27,9 @@ func (f *themeFake) SetPreferences(patch core.Obj) (core.Obj, error) {
 	if theme, ok := patch["theme"].(string); ok {
 		f.theme = theme
 	}
+	if _, err := f.fakeBackend.SetPreferences(patch); err != nil {
+		return nil, err
+	}
 	return f.Preferences()
 }
 

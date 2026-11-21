@@ -184,6 +184,14 @@ func (s *Sidecar) spawn() (*proc, error) {
 
 // Request sends one request and returns the raw `response` object.
 func (s *Sidecar) Request(request any) (json.RawMessage, error) {
+	return s.RequestIf(request, nil)
+}
+
+// RequestIf is Request, sent only if allowed() still holds once a Cancel
+// can reach the request: a caller that changes what allowed() reads and
+// then calls Cancel either stops the request here or cancels it in flight.
+// A request that is not allowed returns ErrSidecarCancelled.
+func (s *Sidecar) RequestIf(request any, allowed func() bool) (json.RawMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed.Load() {
@@ -220,6 +228,9 @@ func (s *Sidecar) Request(request any) (json.RawMessage, error) {
 			s.proc = nil
 		}
 		return nil, errShuttingDown
+	}
+	if allowed != nil && !allowed() {
+		return nil, fmt.Errorf("%s sidecar: %w", s.spec.Name, ErrSidecarCancelled)
 	}
 	timer := time.NewTimer(s.spec.Timeout)
 	defer timer.Stop()

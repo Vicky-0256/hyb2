@@ -37,7 +37,7 @@ func stIsCPL(a *structureResult) bool {
 // stGuided: the fold used HYB evidence (a CPLfold bonus matrix, or
 // COMRADES' RNAcofold evidence).
 func stGuided(a *structureResult) bool {
-	if stEngine(a) == "COMRADES(ViennaRNA)" {
+	if stIsComrades(stEngine(a)) {
 		return true
 	}
 	return stIsCPL(a) && a.Meta.Parameters["evidence"] != "none"
@@ -164,7 +164,7 @@ func stArcStyles(a *structureResult, records []structureRecord, pairs []stPairIn
 	}
 	for i, pr := range pairs {
 		switch {
-		case engine == "COMRADES(ViennaRNA)":
+		case stIsComrades(engine):
 			color, width, alpha := t.TextMuted, typeWidth(pr), float32(0.34)
 			if pr.Bonus > 0 {
 				color, width, alpha = t.Accent, 1.6, 0.9
@@ -211,7 +211,7 @@ func stArcStyles(a *structureResult, records []structureRecord, pairs []stPairIn
 func stArcLegend(c *ui.Context, a *structureResult) {
 	t := c.Theme()
 	switch {
-	case stEngine(a) == "COMRADES(ViennaRNA)":
+	case stIsComrades(stEngine(a)):
 		stLegend(c, t.Warning, "high evidence")
 		stLegend(c, t.Accent, "low evidence")
 		stLegend(c, t.TextMuted, "MFE only")
@@ -429,7 +429,7 @@ func (p *structurePage) resultMetrics(c *ui.Context, a *structureResult, records
 				}
 			}
 			metric("Candidate", "#"+strconv.Itoa(r.SelectedCandidate+1), phase)
-		case engine == "COMRADES(ViennaRNA)":
+		case stIsComrades(engine):
 			n := 0
 			for _, pr := range pairs {
 				if pr.Hard {
@@ -499,7 +499,7 @@ func stModeNote(a *structureResult, records []structureRecord) (string, string) 
 			}
 		}
 		return title, ranked + "Parentheses show phase-1 pairs; square brackets show the crossing phase-2 layer."
-	case stEngine(a) == "COMRADES(ViennaRNA)":
+	case stIsComrades(stEngine(a)):
 		return "HYB-evidence-selected structure", "The selected ensemble member maximises the original nucleotide-summed COMRADES support score. Supported arcs are coloured by RNAcofold evidence; fitted hard-pair arcs remain thicker."
 	case stEngine(a) == "IRIS":
 		return "", "" // the weighted ensemble table is its note (structure_iris.go)
@@ -517,8 +517,8 @@ func (p *structurePage) nucleotideInspector(c *ui.Context, a *structureResult, r
 	what := "ViennaRNA MFE structure"
 	if stIsCPL(a) {
 		what = stEngine(a) + " candidate"
-	} else if stEngine(a) == "COMRADES(ViennaRNA)" {
-		what = "COMRADES(ViennaRNA) structure"
+	} else if stIsComrades(stEngine(a)) {
+		what = stEngine(a) + " structure"
 	} else if stEngine(a) == "IRIS" {
 		what = "IRIS ensemble member"
 	}
@@ -656,6 +656,8 @@ func stComputedScope(a *structureResult) string {
 	switch stEngine(a) {
 	case "COMRADES(ViennaRNA)":
 		return "This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring."
+	case "COMRADES(mfold)":
+		return "The COMRADES path with mfold 3.6 fitting the stems: RNAcofold evidence, ranked F-stem constraints applied as mfold forced pairs, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring."
 	case "ViennaRNA":
 		if len(stHardPairs(a)) > 0 {
 			return "ViennaRNA minimum-free-energy fold on this computer, with the hard pairs you entered."

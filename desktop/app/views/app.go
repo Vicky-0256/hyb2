@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -94,13 +95,19 @@ type App struct {
 	clipboard *string
 	// autoKey is the selection normalizeSelection last chose by itself.
 	autoKey string
+	// autoGene is the RNA normalizeSelection last chose by itself (the
+	// reference's first); Explore swaps it for the RNA with the most
+	// hybrids when it has none (preferPopulatedGene).
+	autoGene string
 	// chord is the "g" of a go-to chord, pressed at chordAt.
 	chord   bool
 	chordAt time.Time
 	// Density is the Interactions table's rows: densityLabels[0] or [1].
 	Density string
 	lookup  lookupPref // external_lookup (evidence.go)
-	start   startState
+	// mfold is the mfold preference ("" searches; mfold_pref.go).
+	mfold string
+	start startState
 	// content is the page area of the previous frame (charts size to it).
 	content ui.Rect
 	// pendingFolder is a data folder chosen with a new project; the Data
@@ -527,6 +534,7 @@ func (a *App) normalizeSelection() {
 		if len(genes) > 0 {
 			a.Selected.Gene = genes[0].Name
 		}
+		a.autoGene = a.Selected.Gene
 	}
 	options := a.SelectionOptions()
 	found = false
@@ -741,7 +749,11 @@ func (a *App) StartTask(req core.TaskStartRequest, label string, done func(model
 	path, gen := a.Project.Path, a.opened
 	req.ProjectPath = path
 	a.Go(func() func() {
-		snapshot, err := a.B.StartTask(req)
+		var snapshot core.Obj
+		err := a.energyRefusals(path, []string{pipelineSampleID(req)}, false)[0]
+		if err == nil {
+			snapshot, err = a.B.StartTask(req)
+		}
 		var t model.Task
 		if err == nil {
 			err = model.Decode(snapshot, &t)
@@ -763,6 +775,8 @@ func (a *App) StartTask(req core.TaskStartRequest, label string, done func(model
 			}
 			if done != nil {
 				done(t, err)
+			} else if err != nil {
+				a.Toast("Could not start: %v", err)
 			}
 		}
 	})
@@ -776,12 +790,19 @@ func (a *App) StartTasksInOrder(reqs []core.TaskStartRequest, labels []string, d
 		return
 	}
 	path, gen := a.Project.Path, a.opened
+	ids := make([]string, len(reqs))
 	for i := range reqs {
 		reqs[i].ProjectPath = path
+		ids[i] = pipelineSampleID(reqs[i])
 	}
 	go func() {
+		refused := a.energyRefusals(path, ids, false)
 		for i, req := range reqs {
-			snapshot, err := a.B.StartTask(req)
+			var snapshot core.Obj
+			err := refused[i]
+			if err == nil {
+				snapshot, err = a.B.StartTask(req)
+			}
 			var t model.Task
 			if err == nil {
 				err = model.Decode(snapshot, &t)
@@ -836,6 +857,70 @@ func (a *App) CancelTask(id string) {
 	})
 }
 
+// pipelineSampleID is the sample a sample_pipeline request runs, "" for
+// any other request.
+func pipelineSampleID(req core.TaskStartRequest) string {
+	if req.Kind != "sample_pipeline" || req.SampleID == nil {
+		return ""
+	}
+	return *req.SampleID
+}
+
+// resumeSampleID is the sample whose pipeline task id resumes (its stages
+// name the task), "" when id is another kind of task or names no sample.
+func (a *App) resumeSampleID(id string) string {
+	if t, ok := a.Tasks[id]; ok && t.Kind != "sample_pipeline" {
+		return ""
+	}
+	if s := taskSample(a.Project, id); s != nil {
+		return s.ID
+	}
+	return ""
+}
+
+// energyRefusals asks pipeline_energy_check, off the UI thread, about the
+// samples ids name ("" for a request that is no sample pipeline) and
+// returns each one's energyRefusal (nil for ""). Python decides, as the
+// run itself will (per-sample settings, a resumed run's checkpoints,
+// Windows' RNAcofold): every sample_pipeline start and resume asks first.
+func (a *App) energyRefusals(path string, ids []string, resuming bool) []error {
+	refused := make([]error, len(ids))
+	var ask []string
+	for _, id := range ids {
+		if id != "" && !slices.Contains(ask, id) {
+			ask = append(ask, id)
+		}
+	}
+	if len(ask) == 0 {
+		return refused
+	}
+	checks, err := a.B.PipelineEnergyCheck(path, ask, resuming)
+	for i, id := range ids {
+		if id != "" {
+			refused[i] = energyRefusal(checks, err, id)
+		}
+	}
+	return refused
+}
+
+// energyRefusal is the one policy on a pipeline_energy_check answer: a
+// check that failed (an older runtime without the operation, too) or left
+// the sample out cannot say the run will work, and a sample with a problem
+// cannot compute its .hyb dG column; either way it does not start.
+func energyRefusal(checks map[string]core.EnergyCheck, err error, id string) error {
+	if err != nil {
+		return fmt.Errorf("could not check how the .hyb dG column is computed: %v", err)
+	}
+	check, ok := checks[id]
+	switch {
+	case !ok:
+		return fmt.Errorf("could not check how the .hyb dG column is computed for %s", id)
+	case check.Problem != "":
+		return errors.New(check.Problem)
+	}
+	return nil
+}
+
 // ResumeTask restarts an interrupted or failed task.
 func (a *App) ResumeTask(id string) { a.ResumeTaskThen(id, "", nil) }
 
@@ -846,8 +931,13 @@ func (a *App) ResumeTaskThen(id, label string, done func(model.Task, error)) {
 		return
 	}
 	path, gen := a.Project.Path, a.opened
+	sampleID := a.resumeSampleID(id)
 	a.Go(func() func() {
-		snapshot, err := a.B.ResumeTask(path, id)
+		var snapshot core.Obj
+		err := a.energyRefusals(path, []string{sampleID}, true)[0]
+		if err == nil {
+			snapshot, err = a.B.ResumeTask(path, id)
+		}
 		var t model.Task
 		if err == nil {
 			err = model.Decode(snapshot, &t)

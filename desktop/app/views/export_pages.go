@@ -810,7 +810,7 @@ func (p *explorePage) exportContactParams() {
 	}
 	result := map[string]any{"cells": len(d.count), "recordsInMap": d.recordsTotal, "clusterSupport": d.supportTotal, "maximum": d.max}
 	params := p.exploreParams("contact-map", parameters, result)
-	// the one dataset drawn, as the web's "dataset"
+	// the datasets drawn, as the web's "dataset"
 	params["samples"], params["dataset"] = append([]string(nil), d.ids...), p.contactDatasetJSON(d)
 	saveJSON(p.a, "Export the contact-map parameters", p.contactExportName("_parameters.json"), params)
 }
@@ -1521,7 +1521,7 @@ func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool,
 	switch {
 	case cplfold && hybEvidence:
 		kind = "log1p_hyb_bonus"
-	case engine == "COMRADES(ViennaRNA)":
+	case stIsComrades(engine):
 		// the web folds COMRADES with its ViennaRNA engine and names that
 		kind, engine = "rna_cofold_observations", "ViennaRNA"
 	}

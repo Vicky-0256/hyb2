@@ -29,7 +29,7 @@ func stDrawingSource(a *structureResult, r structureRecord) (*drawingSource, err
 		src.Pairs = append(src.Pairs, drawPair{Left: min(pr.I, pr.J), Right: max(pr.I, pr.J)})
 	}
 	src.Pairs = drSortedPairs(src.Pairs)
-	if stEngine(a) == "COMRADES(ViennaRNA)" {
+	if stIsComrades(stEngine(a)) {
 		src.Support = make([]float64, n)
 		for _, pr := range stShownPairs([]structureRecord{r}, nil) {
 			i, j := r.localOf(pr.I), r.localOf(pr.J)

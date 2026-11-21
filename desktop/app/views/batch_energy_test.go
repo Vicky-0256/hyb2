@@ -17,7 +17,7 @@ func TestBatchEnergyStartsTaskAndSavesOutputs(t *testing.T) {
 	if p.tab != tabEnergies {
 		t.Fatalf("tab %d", p.tab)
 	}
-	for _, text := range []string{"HYB binding energies", "Sample", "Engine", "Records", "RNAcofold (ViennaRNA), as the HYB2 pipeline", "Calculate binding energies"} {
+	for _, text := range []string{"HYB binding energies", "Sample", "Engine", "Records", "RNAduplex (ViennaRNA), as the HYB2 pipeline", "Calculate binding energies"} {
 		if !tt.HasText(text) {
 			t.Fatalf("binding energies lack %q: %q", text, tt.Texts())
 		}
@@ -25,10 +25,10 @@ func TestBatchEnergyStartsTaskAndSavesOutputs(t *testing.T) {
 	snapshot(t, tt, "explore-energies")
 
 	// CPLcofold on the rows matching the Interactions filters
-	p.be.engine, p.be.records = batchEngines[1][1], batchRecordLabels[1]
+	p.be.engine, p.be.records = batchEngines[2][1], batchRecordLabels[1]
 	p.ix.applied.minReads = 3
 	tt.Frame()
-	if !tt.HasText("Records: ≥ 3 reads.") && !tt.HasText(batchEngines[1][2]+" Records: ≥ 3 reads.") {
+	if !tt.HasText("Records: ≥ 3 reads.") && !tt.HasText(batchEngines[2][2]+" Records: ≥ 3 reads.") {
 		t.Fatalf("filters not described: %q", tt.Texts())
 	}
 	if err := tt.Click("Calculate binding energies"); err != nil {
@@ -111,5 +111,27 @@ func TestBatchEnergyCountsFollowTheIndex(t *testing.T) {
 	p.loadBatchInputs(p.ids[0])
 	if len(p.be.counts) != 0 {
 		t.Fatalf("another project's counts kept: %v", p.be.counts)
+	}
+}
+
+// RNAduplex, the pipeline's dG method, is the default engine: bundled, it
+// starts with nothing installed (PATH empty).
+func TestBatchEnergyRNAduplexDefault(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	a, f, p, tt := openExplore(t)
+	a.Navigate("explore", map[string]any{"tab": "energies"})
+	settle(a, tt)
+	if p.be.engine != batchEngines[0][1] || !tt.HasText("RNAduplex (ViennaRNA), as the HYB2 pipeline") {
+		t.Fatalf("default %q: %q", p.be.engine, tt.Texts())
+	}
+	if err := tt.Click("Calculate binding energies"); err != nil {
+		t.Fatal(err)
+	}
+	settle(a, tt)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	params, _ := json.Marshal(f.started[0].Parameters)
+	if len(f.started) != 1 || string(params) != `{"engine":"rnaduplex","records":"all"}` {
+		t.Fatalf("request %s", params)
 	}
 }

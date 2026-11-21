@@ -114,6 +114,227 @@ func dataClick(t *testing.T, tt *ui.Tester, a *App, label string) {
 	tt.Frame()
 }
 
+// dgMissing is the runtime's energy check problem without ViennaRNA
+// (hyb2pipe.energy.duplex_folder).
+const dgMissing = "the dG column needs the ViennaRNA Python package or RNAduplex on PATH"
+
+// withoutVienna makes the fake runtime one without ViennaRNA.
+func withoutVienna(f *dataFake) {
+	f.mu.Lock()
+	f.dgProblem = dgMissing
+	f.mu.Unlock()
+}
+
+// rawSample is list_samples' raw sample id, which the fake's
+// PipelineEnergyCheck reads as Python reads project.json.
+func rawSample(f *dataFake, id string) map[string]any {
+	for _, s := range f.ops["list_samples"]["samples"].([]any) {
+		if s := s.(map[string]any); s["id"] == id {
+			return s
+		}
+	}
+	return nil
+}
+
+// startErr is a sample_pipeline start of id from any page, and its error.
+func startErr(a *App, id string) error {
+	var got error
+	answered := false
+	a.StartTask(core.TaskStartRequest{Kind: "sample_pipeline", SampleID: &id}, "", func(_ model.Task, err error) { got, answered = err, true })
+	waitFlush(a)
+	if !answered {
+		return errors.New("no answer")
+	}
+	return got
+}
+
+// resumeErr is a resume of task id (the task drawer's), and its error.
+func resumeErr(a *App, id string) error {
+	var got error
+	answered := false
+	a.ResumeTaskThen(id, "", func(_ model.Task, err error) { got, answered = err, true })
+	waitFlush(a)
+	if !answered {
+		return errors.New("no answer")
+	}
+	return got
+}
+
+// Mapped samples write a .hyb file whose dG column comes from RNAduplex:
+// when the runtime's check says it is missing, the run dialog shows that and
+// cannot start; once it is there, the dialog opened again starts.
+func TestDataRunNeedsTheDGEngine(t *testing.T) {
+	a, f := dataOpen(t, "list_samples.json")
+	withoutVienna(f)
+	tt := ui.NewTester(a.View, 1100, 720)
+	waitFlush(a)
+	tt.Frame()
+	dataClick(t, tt, a, "Select SUB_REP1")
+	dataClick(t, tt, a, "Run selected (1)")
+	dataExpect(t, tt, "Run 1 sample", dgMissing)
+	if len(f.energyCalls) != 1 || f.energyCalls[0].resuming || strings.Join(f.energyCalls[0].ids, ",") != "SUB_REP1" {
+		t.Fatalf("energy checks %+v", f.energyCalls)
+	}
+	dataClick(t, tt, a, "Start")
+	if len(f.started) != 0 {
+		t.Fatalf("started without the dG engine: %+v", f.started)
+	}
+	f.mu.Lock()
+	f.dgProblem = ""
+	f.mu.Unlock()
+	dataClick(t, tt, a, "Cancel")
+	dataClick(t, tt, a, "Run selected (1)")
+	if tt.HasText(dgMissing) {
+		t.Fatalf("still says the engine is missing: %q", tt.Texts())
+	}
+	dataClick(t, tt, a, "Start")
+	waitFlush(a)
+	if len(f.started) != 1 {
+		t.Fatalf("not started: %+v", f.started)
+	}
+}
+
+// setGOOS makes the test run as on goos v.
+func setGOOS(t *testing.T, v string) {
+	t.Helper()
+	old := goos
+	goos = v
+	t.Cleanup(func() { goos = old })
+}
+
+// Resume (row, Retry failed, task drawer) and any other sample_pipeline
+// start ask the backend's check first, as the run dialog does: without the
+// dG engine nothing reaches the backend's task API and the toast says why.
+func TestDataResumeNeedsTheDGEngine(t *testing.T) {
+	a, f := dataOpen(t, "data_list_samples_mixed.json")
+	withoutVienna(f)
+	tt := ui.NewTester(a.View, 1100, 720)
+	waitFlush(a)
+	tt.Frame()
+	// SUB_REP2 failed in its hyb stage (the fake would answer "not resumable")
+	dataClick(t, tt, a, "Resume")
+	waitFlush(a)
+	tt.Frame()
+	dataExpect(t, tt, "Could not resume SUB_REP2: "+dgMissing)
+	if tt.HasText("not resumable") {
+		t.Fatalf("resume reached the backend: %q", tt.Texts())
+	}
+	if n := len(f.energyCalls); n == 0 || !f.energyCalls[n-1].resuming {
+		t.Fatalf("resume checked %+v", f.energyCalls)
+	}
+	// the task drawer's Resume goes through App.ResumeTaskThen
+	if err := resumeErr(a, "sample-pipeline-1791990260455"); err == nil || !strings.Contains(err.Error(), "ViennaRNA") {
+		t.Fatalf("drawer resume of SUB_REP2's task: %v", err)
+	}
+	// a .hyb sample's pipeline (index only) needs no dG engine: it reaches the backend
+	if err := resumeErr(a, "sample-pipeline-1791990260486"); err == nil || err.Error() != "not resumable" {
+		t.Fatalf("AFR_REP1's resume: %v", err)
+	}
+	// a fresh start from any page
+	if err := startErr(a, "SUB_REP1"); err == nil || len(f.started) != 0 {
+		t.Fatalf("start: err %v, started %+v", err, f.started)
+	}
+	if err := startErr(a, "AFR_REP1"); err != nil || len(f.started) != 1 || *f.started[0].SampleID != "AFR_REP1" {
+		t.Fatalf("start: err %v, started %+v", err, f.started)
+	}
+}
+
+// A resumed sample whose hyb stage succeeded still computes its dG column
+// unless the energy checkpoint is done: the check is asked (resuming) and
+// refuses, it is not skipped on the hyb stage (finding: wrong pass).
+func TestDataResumeAfterHybStillChecks(t *testing.T) {
+	a, f := dataOpen(t, "data_list_samples_mixed.json")
+	withoutVienna(f)
+	stages := rawSample(f, "SUB_REP2")["stages"].(map[string]any)
+	stages["hyb"].(map[string]any)["status"] = "succeeded"
+	stages["index"] = map[string]any{"status": "failed", "task_id": "sample-pipeline-1791990260455"}
+	a.RefreshProject()
+	waitFlush(a)
+	if s := a.Project.Sample("SUB_REP2"); dataStage(*s, "hyb").Status != "succeeded" {
+		t.Fatalf("fixture: %+v", s.Stages)
+	}
+	if err := resumeErr(a, "sample-pipeline-1791990260455"); err == nil || !strings.Contains(err.Error(), "ViennaRNA") {
+		t.Fatalf("resume after the hyb stage passed: %v", err)
+	}
+	last := f.energyCalls[len(f.energyCalls)-1]
+	if !last.resuming || strings.Join(last.ids, ",") != "SUB_REP2" {
+		t.Fatalf("check %+v", last)
+	}
+	// the energy checkpoint done: no dG engine is needed
+	stages["energy"] = map[string]any{"status": "succeeded"}
+	if err := resumeErr(a, "sample-pipeline-1791990260455"); err == nil || err.Error() != "not resumable" {
+		t.Fatalf("resume after the energy stage: %v", err)
+	}
+}
+
+// Per-sample settings decide, as in the run: energy false needs no engine,
+// and an executable path an earlier version saved does not matter.
+func TestDataRunHonoursSampleSettings(t *testing.T) {
+	a, f := dataOpen(t, "data_list_samples_mixed.json")
+	withoutVienna(f)
+	rawSample(f, "SUB_REP2")["settings"] = map[string]any{"energy": false}
+	if err := startErr(a, "SUB_REP2"); err != nil {
+		t.Fatalf("energy false refused: %v", err)
+	}
+	if err := startErr(a, "SUB_REP1"); err == nil {
+		t.Fatal("started without the dG engine")
+	}
+	if len(f.started) != 1 {
+		t.Fatalf("started %+v", f.started)
+	}
+}
+
+// One policy: a check that cannot be made (an older runtime without the
+// operation) refuses the dialog, StartTask, StartTasksInOrder and
+// ResumeTaskThen alike, with the same error, and nothing starts.
+func TestDataEnergyCheckErrorRefusesEverywhere(t *testing.T) {
+	a, f := dataOpen(t, "data_list_samples_mixed.json")
+	f.energyErr = errors.New("unsupported project operation pipeline_energy_check")
+	tt := ui.NewTester(a.View, 1100, 720)
+	waitFlush(a)
+	tt.Frame()
+	want := "could not check how the .hyb dG column is computed: unsupported project operation pipeline_energy_check"
+	dataClick(t, tt, a, "Select SUB_REP1")
+	dataClick(t, tt, a, "Run selected (1)")
+	dataExpect(t, tt, "Cannot start: "+want)
+	dataClick(t, tt, a, "Start")
+	waitFlush(a)
+	var errs []string
+	if err := startErr(a, "SUB_REP1"); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := resumeErr(a, "sample-pipeline-1791990260455"); err != nil {
+		errs = append(errs, err.Error())
+	}
+	sub := "SUB_REP1"
+	a.StartTasksInOrder([]core.TaskStartRequest{{Kind: "sample_pipeline", SampleID: &sub}}, nil, func(_ int, _ model.Task, err error) {
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+	})
+	waitFlush(a)
+	if len(errs) != 3 || errs[0] != want || errs[1] != want || errs[2] != want {
+		t.Fatalf("errors %q", errs)
+	}
+	if len(f.started) != 0 {
+		t.Fatalf("started %+v", f.started)
+	}
+	// other kinds are not asked about
+	before := len(f.energyCalls)
+	a.StartTask(coreTask("structure"), "", nil)
+	waitFlush(a)
+	if len(f.energyCalls) != before || len(f.started) != 1 {
+		t.Fatalf("checks %+v, started %+v", f.energyCalls[before:], f.started)
+	}
+	// a problem for one of several samples is named with it in the dialog
+	f.energyErr = nil
+	f.energy = map[string]core.EnergyCheck{"SUB_REP2": {Problem: "no dG for you"}}
+	dataClick(t, tt, a, "Cancel")
+	dataClick(t, tt, a, "Select SUB_REP2")
+	dataClick(t, tt, a, "Run selected (2)")
+	dataExpect(t, tt, "Run 2 samples", "SUB_REP2: no dG for you")
+}
+
 func TestDataPageSamplesAndRun(t *testing.T) {
 	a, f := dataOpen(t, "list_samples.json")
 	tt := ui.NewTester(a.View, 1100, 720)

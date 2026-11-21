@@ -8,6 +8,10 @@ strongest 1,001 are merged into stems, the stems become hard-pair
 constraints, and ViennaRNA MFE folds are fitted with the constraints added
 one by one (in rank order, then in seeded random orders). The structure
 whose pairs carry the most evidence wins.
+
+``fold_program: "mfold"`` fits the constraints with mfold 3.6 instead of
+ViennaRNA (COMRADES(mfold), mfold.py; at 37 °C, minimum loop 3); the
+evidence is RNAcofold in both.
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from . import vienna
+from . import mfold, vienna
 
 ORIGINAL_EVIDENCE_LIMIT = 1001
 MAX_EVIDENCE_RECORDS = 50_000
@@ -27,13 +31,26 @@ MAX_RANDOM_FOLDS = 1000
 MAX_COMRADES_NT = 3000
 CANONICAL = vienna.CANONICAL
 DEFAULTS = {"temperature": 37.0, "min_loop": 3, "constraint_limit": 75, "random_folds": 0, "seed": "HYB2-Web",
-            "homodimer_only": False}
+            "homodimer_only": False, "fold_program": "viennarna"}
+# the program the stem constraints are fitted with, and the engine name it gives
+FOLD_PROGRAMS = {"viennarna": "COMRADES(ViennaRNA)", "mfold": "COMRADES(mfold)"}
+
+
+def engine_name(params: Dict[str, Any]) -> str:
+    return FOLD_PROGRAMS[params.get("fold_program", "viennarna")]
+
+
+def fold_program_version(params: Dict[str, Any]) -> str:
+    """The fitting program's version (RNAcofold, the evidence, is ViennaRNA's)."""
+    if params.get("fold_program") == "mfold":
+        return "mfold " + (mfold.version() or "unknown") + "; RNAcofold: ViennaRNA " + vienna.version()
+    return vienna.version()
 
 
 def parameters(raw: Any) -> Dict[str, Any]:
     """The web's COMRADES(ViennaRNA) settings, checked as structure-controller.js."""
     raw = raw if isinstance(raw, dict) else {}
-    known = {"temperature", "min_loop", "constraint_limit", "random_folds", "seed", "homodimer_only"}
+    known = {"temperature", "min_loop", "constraint_limit", "random_folds", "seed", "homodimer_only", "fold_program"}
     unknown = set(raw) - known
     if unknown:
         raise ValueError("unknown COMRADES parameter: " + ", ".join(sorted(unknown)))
@@ -54,6 +71,15 @@ def parameters(raw: Any) -> Dict[str, Any]:
         if not isinstance(raw["homodimer_only"], bool):
             raise ValueError("homodimer_only must be a boolean")
         out["homodimer_only"] = raw["homodimer_only"]
+    if "fold_program" in raw:
+        if raw["fold_program"] not in FOLD_PROGRAMS:
+            raise ValueError("fold_program must be viennarna or mfold")
+        out["fold_program"] = raw["fold_program"]
+    if out["fold_program"] == "mfold":
+        if out["min_loop"] != mfold.MIN_LOOP:
+            raise ValueError(f"mfold's minimum hairpin loop is fixed at {mfold.MIN_LOOP}; set Minimum hairpin loop to {mfold.MIN_LOOP}.")
+        if out["temperature"] != mfold.TEMPERATURE:
+            raise ValueError("mfold folds at 37 °C only (its version 3.0 energies); set Temperature to 37 or fold with ViennaRNA.")
     return out
 
 
@@ -413,7 +439,22 @@ def score_structure_pairs(pairs, evidence, length: int) -> Dict[str, Any]:
 # the fold (runComradesFold)
 # ---------------------------------------------------------------------------
 
-def _fit(sequence: str, ordered, params: Dict[str, Any]):
+def _folder(params: Dict[str, Any]) -> Callable[..., Dict[str, Any]]:
+    """The constrained MFE fold of the fitting program: vienna.fold or mfold.fold
+    (mfold found once, so a missing mfold fails before any fold)."""
+    if params.get("fold_program") != "mfold":
+        return vienna.fold
+    try:
+        executable = mfold.find()
+        mfold.data_dir(executable)
+    except mfold.MfoldUnavailable as error:
+        raise ValueError(str(error)) from error
+    return lambda sequence, p, pairs: mfold.fold(sequence, p, pairs, executable=executable)
+
+
+def _fit(sequence: str, ordered, params: Dict[str, Any], folder: Optional[Callable[..., Dict[str, Any]]] = None):
+    folder = folder or vienna.fold
+    program = "mfold" if params.get("fold_program") == "mfold" else "vienna"
     accepted, rejected, result = [], [], None
     for candidate in ordered:
         ok, reason, pairs = validate_constraint_set(accepted + [candidate], sequence, params["min_loop"])
@@ -421,12 +462,12 @@ def _fit(sequence: str, ordered, params: Dict[str, Any]):
             rejected.append({"id": candidate["id"], "rank": candidate["rank"], "reason": reason})
             continue
         try:
-            result = vienna.fold(sequence, params, pairs)
+            result = folder(sequence, params, pairs)
             accepted.append(candidate)
         except ValueError:
-            rejected.append({"id": candidate["id"], "rank": candidate["rank"], "reason": "vienna-incompatible"})
+            rejected.append({"id": candidate["id"], "rank": candidate["rank"], "reason": program + "-incompatible"})
     if result is None:
-        result = vienna.fold(sequence, params, [])
+        result = folder(sequence, params, [])
     return result, accepted, rejected
 
 
@@ -471,11 +512,12 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
                            "randomised": randomised, "score": score})
 
     fits = params["random_folds"] + 1
-    annotate(_fit(sequence, constraints, params), 0, False)
+    folder = _folder(params)
+    annotate(_fit(sequence, constraints, params, folder), 0, False)
     if progress:
         progress("constrained folds", 1, fits)
     for run in range(1, fits):
-        annotate(_fit(sequence, seeded_shuffle(constraints, f"{params['seed']}:{run}"), params), run, True)
+        annotate(_fit(sequence, seeded_shuffle(constraints, f"{params['seed']}:{run}"), params, folder), run, True)
         if progress:
             progress("constrained folds", run + 1, fits)
     candidates.sort(key=lambda c: (-c["score"]["score"], -c["score"]["matched_pairs"], c["result"]["energy"], c["run"]))
@@ -484,7 +526,7 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
     support = best["score"]["pair_support"]
     # the pair "bonus" the desktop shades arcs by: each pair's RNAcofold evidence count
     result["pairs"] = [(i, j, bracket, float(support[k])) for k, (i, j, bracket, _) in enumerate(result["pairs"])]
-    result["type"] = "COMRADES(ViennaRNA)"
+    result["type"] = engine_name(params)
     result["hard_pairs"] = [list(p) for p in flatten(best["accepted"])]
     result["evidence"] = {
         "source": "hyb-rna-cofold-evidence", "inputRecords": len(arms), "cofoldsWithIntermolecularPairs": with_pairs,

@@ -4,15 +4,18 @@ Bridge operation ``batch_energy_run`` (a task).  Request::
 
     {"operation": "batch_energy_run", "project_path": ..., "task_id": ..., "run_dir": ...,
      "sample_id": ..., "workers": 4,
-     "parameters": {"engine": "rnacofold" | "cplcofold" | "cplcofold-pk",
+     "parameters": {"engine": "rnaduplex" | "rnacofold" | "cplcofold" | "cplcofold-pk",
                     "records": "all" | "filtered", "filters": {<analysis_hybrids filters>}}}
 
 As the web's "HYB binding energies" tool (web/batch-tools.js): the two arms
 of each chosen record are cut from the sample's reference (columns 4, 7, 8
 and 10, 13, 14; 1-based, inclusive, T read as U) and cofolded with
 
-* ``rnacofold``: ViennaRNA RNAcofold MFE, default model (37 C), as the HYB2
-  pipeline's sam2hyb;
+* ``rnaduplex``: ViennaRNA RNAduplex (intermolecular pairs only, 37 C), as
+  the HYB2 pipeline computes the dG column (hyb2pipe.energy).  A pair whose
+  arms form no pair keeps its energy (noted in the audit);
+* ``rnacofold``: ViennaRNA RNAcofold MFE, default model (37 C), the legacy
+  hyb2 pipeline's method, in which each arm may also pair with itself;
 * ``cplcofold``: CPLcofold (``two_phase_cofold`` through
   web/cplfold/cplfold_web.py) with the web batch's settings: DP09, no HYB
   evidence, beam 20, energy delta 5, three phase-1 candidates, pseudoknots
@@ -25,7 +28,7 @@ page's) in the sample's analysis index, which must be built from the
 current .hyb.  Only column 3 of updated rows changes (two decimals);
 comments, invalid rows, extra columns and line endings are kept.  Rows
 that are unmapped, antisense, ambiguous, over the length limit (2,000 nt
-of both arms for RNAcofold, 500 for CPLcofold) or not chosen keep their
+of both arms for RNAduplex and RNAcofold, 500 for CPLcofold) or not chosen keep their
 energy and are listed in the audit.
 
 The run directory gets ``energies.hyb``, ``audit.tsv`` (line id status
@@ -55,6 +58,7 @@ from .structure import ProgressWriter, _evidence_inputs, _now, _resolve_run_dir,
 
 # The web batch's engines: label, combined arm limit, pairs per job.
 ENGINES: Dict[str, Dict[str, Any]] = {
+    "rnaduplex": {"name": "ViennaRNA RNAduplex", "max_length": 2000, "chunk": 2000},
     "rnacofold": {"name": "ViennaRNA RNAcofold", "max_length": 2000, "chunk": 64},
     "cplcofold": {"name": "CPLcofold, pseudoknots off", "max_length": 500, "chunk": 4, "pseudoknots": False},
     "cplcofold-pk": {"name": "CPLcofold, pseudoknots allowed (DP09 ranking score)", "max_length": 500, "chunk": 4,
@@ -66,6 +70,7 @@ CPLCOFOLD_SETTINGS = {"beamSize": 20, "energyDelta": 5, "maxPhase1": 3, "energyM
 BATCH_LIMIT = 2000
 AUDIT_HEADER = "line\tid\tstatus\told_energy\tnew_energy\tnote"
 INVALID_ENERGY_NOTE = "invalid energy returned"
+NO_HYBRID_NOTE = "RNAduplex found no pair between the arms"
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 _BASES = re.compile(r"^[ACGU]+$")
 
@@ -84,7 +89,7 @@ def _parameters(raw: Any) -> Dict[str, Any]:
         raise ValueError("unknown batch energy parameters: " + ", ".join(unknown))
     engine = raw.get("engine", "rnacofold")
     if engine not in ENGINES:
-        raise ValueError("engine must be rnacofold, cplcofold or cplcofold-pk")
+        raise ValueError("engine must be rnaduplex, rnacofold, cplcofold or cplcofold-pk")
     records = raw.get("records", "all")
     if records not in ("all", "filtered"):
         raise ValueError("records must be 'all' or 'filtered'")
@@ -221,8 +226,18 @@ def _worker_init(root: str, engine: str) -> None:
     load_cplfold_web(Path(root))
 
 
+def _pipe_energy(root: Path) -> Any:
+    """hyb2pipe.energy, whose RNAduplex folder the pipeline's dG column uses."""
+    package = Path(root) / "pipeline"
+    if str(package) not in sys.path:
+        sys.path.insert(0, str(package))
+    from hyb2pipe import energy
+
+    return energy
+
+
 def engine_version(root: Path, engine: str) -> Optional[str]:
-    if engine == "rnacofold":
+    if engine in ("rnaduplex", "rnacofold"):
         from .energy import vienna_version
 
         version = vienna_version()
@@ -306,6 +321,7 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
         raise ValueError("sample_id is required")
     params = _parameters(request.get("parameters"))
     engine = ENGINES[params["engine"]]
+    duplex = params["engine"] == "rnaduplex"
     inputs = _evidence_inputs(project, {"sample_ids": [sample_id]})
     hyb_path, reference = inputs["hyb_paths"][0], inputs["reference"]
     sample = next(s for s in load_manifest(project).get("samples") or [] if isinstance(s, dict) and s.get("id") == sample_id)
@@ -323,7 +339,7 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
 
     # 1. the records, their arms or why they keep their energy
     total_bytes = hyb_path.stat().st_size
-    label = "CPLcofold" if params["engine"] != "rnacofold" else "batch"
+    label = "CPLcofold" if params["engine"].startswith("cplcofold") else "batch"
     notes: List[Tuple[int, str, str, Optional[int], str]] = []  # line, id, old, item, note
     pairs: List[Tuple[str, str]] = []
     with _open_hyb(hyb_path) as handle:
@@ -351,7 +367,7 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
     energies: List[Optional[float]] = [None] * len(pairs)
     chunk = engine["chunk"]
     starts = list(range(0, len(pairs), chunk))
-    workers = _workers(request, max(len(starts), 1))
+    workers = _workers(request, max(len(pairs) // 500 if duplex else len(starts), 1))
     fold_started = time.monotonic()
     done = 0
 
@@ -363,7 +379,18 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
                  f"worker{'s' if workers != 1 else ''}{tail}", done, len(pairs), units="records")
 
     progress("fold", f"starting {engine['name']} for {len(pairs):,} records", 0, len(pairs), units="records", force=True)
-    if workers <= 1:
+    if duplex:
+        # the pipeline's RNAduplex folder, chunk by chunk; None: the arms form no pair
+        energy_module = _pipe_energy(root)
+        try:
+            folder = energy_module.duplex_folder(workers)
+        except energy_module.EnergyUnavailable as error:
+            raise ValueError(str(error)) from error
+        for start in starts:
+            energies[start:start + chunk] = folder(pairs[start:start + chunk])
+            done += len(pairs[start:start + chunk])
+            report()
+    elif workers <= 1:
         for start in starts:
             energies[start:start + chunk] = fold_pairs(str(root), params["engine"], pairs[start:start + chunk])
             done += len(pairs[start:start + chunk])
@@ -401,7 +428,8 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
             # one bad fold keeps its row's energy (noted in the audit)
             # instead of failing the whole run
             unchanged += 1
-            audit.append("\t".join(_tsv(v) for v in (line_no, rid, "unchanged", old, old, INVALID_ENERGY_NOTE)))
+            note = NO_HYBRID_NOTE if duplex and energy is None else INVALID_ENERGY_NOTE
+            audit.append("\t".join(_tsv(v) for v in (line_no, rid, "unchanged", old, old, note)))
             continue
         updates[line_no] = (old, energy)
         updated += 1
@@ -425,9 +453,11 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
         "engineVersion": engine_version(root, params["engine"]),
         "temperature": 37,
         "minimumLoop": 3 if params["engine"] == "rnacofold" else None,
-        "energyModel": "Turner 2004 (ViennaRNA default)" if params["engine"] == "rnacofold" else "CPLfold DP09",
+        "energyModel": {"rnacofold": "Turner 2004 (ViennaRNA default)",
+                        "rnaduplex": "Turner 2004 (ViennaRNA default), intermolecular pairs only, as the HYB2 pipeline"}.get(params["engine"], "CPLfold DP09"),
         "pseudoknots": params["engine"] == "cplcofold-pk",
-        "cplcofold": dict(CPLCOFOLD_SETTINGS, evidence="none") if params["engine"] != "rnacofold" else None,
+        "cplcofold": dict(CPLCOFOLD_SETTINGS, evidence="none") if params["engine"].startswith("cplcofold") else None,
+        "executable": None,  # every engine runs in-process
         "records": "interaction-filters" if params["records"] == "filtered" else "all",
         "filters": params["filters"],
         "updated": updated, "unchanged": unchanged, "validRecords": len(notes),

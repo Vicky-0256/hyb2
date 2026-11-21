@@ -1,5 +1,7 @@
 import gzip
 import json
+import sys
+import shutil
 import os
 import random
 import tempfile
@@ -451,6 +453,107 @@ class ComradesRunTests(unittest.TestCase):
         failed = self._run(task_id="empty")
         self.assertFalse(failed["ok"])
         self.assertIn("chimeras have both arms inside", failed["error"])
+
+
+class ComradesMfoldTests(ComradesRunTests):
+    """COMRADES(mfold): fold_program "mfold" fits the stems with mfold 3.6."""
+
+    def _fake(self, honours=True):
+        """A stand-in mfold: the MFE is ViennaRNA's with the forced pairs of
+        s.aux (or without them, when honours is False), written as mfold's .ct."""
+        directory = Path(self.tmp.name) / ("mfold" if honours else "mfold-ignores")
+        (directory / "bin").mkdir(parents=True)
+        (directory / "share" / "mfold").mkdir(parents=True)
+        (directory / "share" / "mfold" / "stack.dat").write_text("x")
+        script = directory / "bin" / "mfold"
+        script.write_text(f"""#!{sys.executable}
+import sys, os
+sys.path.insert(0, {str(ROOT)!r})
+if sys.argv[1:] == ["-V"]:
+    print("mfold version 3.6"); sys.exit(0)
+assert os.path.exists("stack.dat"), "tables not linked"
+seq = "".join(l.strip() for l in open("s.seq") if not l.startswith(">"))
+pairs = []
+if {honours!r} and os.path.exists("s.aux"):
+    pairs = [tuple(int(x) for x in l.split()[1:3]) for l in open("s.aux")]
+from desktop.runtime import vienna
+r = vienna.fold(seq, {{"temperature": 37.0, "min_loop": 3}}, pairs)
+with open("s.ct", "w") as out:
+    out.write(f"{{len(seq)}}\\t dG = {{r['energy']:.2f}}   [initially {{r['energy']:.2f}}] s\\n")
+    partner = {{}}
+    for i, j, _, _ in r["pairs"]:
+        partner[i], partner[j] = j, i
+    for k, base in enumerate(seq, 1):
+        out.write(f"{{k}}\\t{{base}}\\t{{k - 1}}\\t{{k + 1}}\\t{{partner.get(k, 0)}}\\t{{k}}\\t0\\t0\\n")
+""")
+        script.chmod(0o755)
+        return str(script)
+
+    def test_mfold_fits_the_stems(self):
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"HYB2_MFOLD": self._fake()}):
+            result = self._run(task_id="m1", parameters={"fold_program": "mfold"})
+        self.assertTrue(result["ok"], result)
+        out = self.project / "structures" / "m1"
+        meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual(meta["engine"], "COMRADES(mfold)")
+        self.assertEqual(meta["parameters"]["fold_program"], "mfold")
+        self.assertTrue(meta["engine_version"].startswith("mfold 3.6; RNAcofold: ViennaRNA "), meta["engine_version"])
+        self.assertIn("COMRADES(mfold), 37 °C, min loop 3", (out / "structure.dbn").read_text().splitlines()[0])
+        pairs = {(int(r.split("\t")[2]), int(r.split("\t")[3])) for r in (out / "pairs.tsv").read_text().splitlines()[1:]}
+        self.assertTrue(meta["parameters"]["hard_pairs"])
+        self.assertTrue({tuple(p) for p in meta["parameters"]["hard_pairs"]} <= pairs)
+        # the same stems and structure as ViennaRNA, which the fake folds with
+        vienna_run = self._run(task_id="v1")
+        self.assertTrue(vienna_run["ok"], vienna_run)
+        vienna_meta = json.loads((self.project / "structures" / "v1" / "meta.json").read_text())
+        self.assertEqual(vienna_meta["parameters"]["fold_program"], "viennarna")
+        self.assertEqual(meta["parameters"]["hard_pairs"], vienna_meta["parameters"]["hard_pairs"])
+
+    def test_mfold_that_ignores_forced_pairs_accepts_none(self):
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"HYB2_MFOLD": self._fake(honours=False)}):
+            result = self._run(task_id="m2", parameters={"fold_program": "mfold"})
+        self.assertTrue(result["ok"], result)
+        meta = json.loads((self.project / "structures" / "m2" / "meta.json").read_text())
+        comrades = meta["records"][0]["comrades"]
+        # a stem is accepted only when the folded structure holds it
+        self.assertTrue({tuple(p) for p in meta["parameters"]["hard_pairs"]} <=
+                        {(int(r.split("\t")[2]), int(r.split("\t")[3])) for r in
+                         (self.project / "structures" / "m2" / "pairs.tsv").read_text().splitlines()[1:]})
+        self.assertTrue(all(r["reason"] in ("mfold-incompatible", "crossing-pairs", "reused-endpoint", "minimum-loop",
+                                            "non-canonical", "outside-sequence")
+                            for r in comrades["evidence"]["rejectedStemConstraints"]))
+
+    def test_mfold_rejects(self):
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"HYB2_MFOLD": self._fake()}):
+            for parameters in ({"fold_program": "mfold", "min_loop": 4}, {"fold_program": "mfold", "temperature": 25},
+                               {"fold_program": "unafold"}):
+                with self.assertRaises(ValueError, msg=parameters):
+                    self._run(task_id="bad", parameters=parameters)
+        # no mfold: the request fails before reading the chimeras, saying how to install it
+        with mock.patch.dict(os.environ, {"HYB2_MFOLD": str(Path(self.tmp.name) / "gone")}):
+            with self.assertRaisesRegex(ValueError, "not an executable file"):
+                self._run(task_id="none", parameters={"fold_program": "mfold"})
+
+    @unittest.skipUnless(shutil.which("mfold") or os.environ.get("HYB2_MFOLD") or
+                         Path("/opt/homebrew/Caskroom/miniforge/base/envs/hyb2-mfold/bin/mfold").exists(),
+                         "needs mfold 3.6 (conda install -c bioconda mfold)")
+    def test_real_mfold(self):
+        from desktop.runtime import mfold
+
+        record = mfold.fold("GGGGAAAACCCCAUUUUUUUUUUUAAAAAAAAAA", {"temperature": 37.0, "min_loop": 3},
+                            [(14, 34), (15, 33), (16, 32)])
+        self.assertEqual(record["structure"], "((((....)))).(((((((((...)))))))))")
+        self.assertEqual(record["energy"], -7.9)
+        # G1-A34 cannot pair: mfold finds no structure (or one without it), so the fit rejects it
+        with self.assertRaisesRegex(ValueError, "lacks hard pair|found no structure"):
+            mfold.fold("GGGGAAAACCCCAUUUUUUUUUUUAAAAAAAAAA", {"temperature": 37.0, "min_loop": 3}, [(1, 34)])
+        self.assertEqual(mfold.version(), "3.6")
 
 
 class CofoldRunTests(unittest.TestCase):

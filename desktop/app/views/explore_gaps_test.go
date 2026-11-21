@@ -6,23 +6,26 @@ import (
 	"testing"
 )
 
-// The contact map draws one dataset, as the web's: the selection's first by
-// default, another from the Dataset picker; its drill-downs use it.
-func TestContactMapDrawsOneDataset(t *testing.T) {
+// The contact map draws the selection's datasets merged by default, as the
+// web's, or one dataset from the Dataset picker; its drill-downs use them.
+func TestContactMapDatasets(t *testing.T) {
 	a, f, p, tt := openExplore(t)
 	tt.SetSize(1400, 1400)
 	settle(a, tt)
-	if got := fmt.Sprint(f.mapQuery()["sample_ids"]); got != "[SUB_REP1]" {
-		t.Fatalf("default dataset %s", got)
+	if got := fmt.Sprint(f.mapQuery()["sample_ids"]); got != "[SUB_REP1 SUB_REP2]" || !p.contactMerged() {
+		t.Fatalf("default datasets %s", got)
 	}
-	for _, text := range []string{"Dataset", "Contact Map draws one dataset of its choice."} {
+	for _, text := range []string{"Dataset", "All 2 datasets in scope merged", "Map data: All 2 datasets in scope merged (SUB_REP1, SUB_REP2)"} {
 		if !tt.HasText(text) {
 			t.Fatalf("no %q: %q", text, tt.Texts())
 		}
 	}
+	if got := fmt.Sprint(p.contactDatasetJSON(p.cm.data)); !strings.HasPrefix(got, "map[datasets:[map[fileName:SUB_REP1.hyb id:SUB_REP1") || !strings.Contains(got, "merged:true") {
+		t.Fatalf("merged parameters dataset %s", got)
+	}
 	p.cm.dataset = "AFR_REP1" // another analysed sample, outside the selection
 	settle(a, tt)
-	if got := fmt.Sprint(f.mapQuery()["sample_ids"]); got != "[AFR_REP1]" || p.contactDatasetID() != "AFR_REP1" {
+	if got := fmt.Sprint(f.mapQuery()["sample_ids"]); got != "[AFR_REP1]" || p.contactMerged() || !tt.HasText("Map data: AFR_REP1 only") {
 		t.Fatalf("chosen dataset %s", got)
 	}
 	d := p.cm.data
@@ -44,12 +47,12 @@ func TestContactMapDrawsOneDataset(t *testing.T) {
 	if f.count("analysis_contact_bins") != n || p.cm.cmap.Selection == nil {
 		t.Fatal("pinning the map's dataset reloaded the map")
 	}
-	// one sample selected: no picker note, and that sample is the map's
+	// one sample selected: no merged option, and that sample is the map's
 	p.pinned, p.cm.dataset, p.tab = nil, "", tabContact
 	a.Selected.Key = "s:SUB_REP2"
 	settle(a, tt)
-	if got := fmt.Sprint(f.mapQuery()["sample_ids"]); got != "[SUB_REP2]" || tt.HasText("Contact Map draws one dataset of its choice.") {
-		t.Fatalf("one-sample selection: %s", got)
+	if got := fmt.Sprint(f.mapQuery()["sample_ids"]); got != "[SUB_REP2]" || tt.HasText("All 2 datasets in scope merged") || !tt.HasText("Map data: SUB_REP2 only") {
+		t.Fatalf("one-sample selection: %s %q", got, tt.Texts())
 	}
 }
 
@@ -115,14 +118,16 @@ func TestBindingEnergiesEstimateAndReference(t *testing.T) {
 	a, _, p, tt := openExplore(t)
 	a.Navigate("explore", map[string]any{"tab": "energies"})
 	settle(a, tt)
+	p.be.engine = batchEngines[1][1] // RNAcofold
+	tt.Frame()
 	// 1,724 records at the web's 15 ms on the budget's 10 CPUs
-	note := batchEngines[0][2] + " All 1,724 records: about 3 s with 10 parallel workers here."
+	note := batchEngines[1][2] + " All 1,724 records: about 3 s with 10 parallel workers here."
 	if !tt.HasText(note) {
 		t.Fatalf("no estimate %q: %q", note, tt.Texts())
 	}
-	p.be.engine = batchEngines[1][1]
+	p.be.engine = batchEngines[2][1]
 	tt.Frame()
-	if !tt.HasText(batchEngines[1][2] + " All 1,724 records: about 5 min with 10 parallel workers here. For many records, filter first or use the cplcofold command.") {
+	if !tt.HasText(batchEngines[2][2] + " All 1,724 records: about 5 min with 10 parallel workers here. For many records, filter first or use the cplcofold command.") {
 		t.Fatalf("no CPLcofold hint: %q", tt.Texts())
 	}
 	for _, c := range []struct {

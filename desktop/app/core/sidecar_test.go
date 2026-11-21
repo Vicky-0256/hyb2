@@ -24,13 +24,22 @@ for line in sys.stdin:
     print(json.dumps({"id": msg["id"], "response": {"ok": True, "echo": req}}), flush=True)
 `
 
-// testPython is the interpreter for the stand-in sidecar: the staged
-// runtime when present, else python3 (or python, as on Windows) on PATH.
+// testPython uses the staged runtime, then HYB2_PYTHON, then Python on PATH.
 func testPython(t *testing.T) string {
 	t.Helper()
 	staged := pythonIn(filepath.Join(repoRoot(t), "desktop", "resources", "native"))
 	if isFile(staged) {
 		return staged
+	}
+	if configured := os.Getenv("HYB2_PYTHON"); configured != "" {
+		path, err := exec.LookPath(configured)
+		if err == nil {
+			path, err = filepath.Abs(path)
+		}
+		if err != nil {
+			t.Fatalf("HYB2_PYTHON %q: %v", configured, err)
+		}
+		return path
 	}
 	for _, name := range []string{"python3", "python"} {
 		if path, err := exec.LookPath(name); err == nil {
@@ -111,7 +120,8 @@ func TestTimeoutKillsAndRestarts(t *testing.T) {
 // buffer: the timeout still ends it, and Shutdown does not wait on it.
 func TestTimeoutWhileWriteBlocks(t *testing.T) {
 	s := NewSidecar(SidecarSpec{Name: "stuck", Program: testPython(t),
-		Args: []string{"-c", "import time; time.sleep(60)"}, Dir: os.TempDir(), Timeout: time.Second})
+		Args: []string{"-c", "import time; time.sleep(60)"}, Dir: os.TempDir(),
+		Env: []string{"PYTHONDONTWRITEBYTECODE=1"}, Timeout: time.Second})
 	done := make(chan error, 1)
 	go func() {
 		_, err := s.Request(map[string]any{"op": "x", "blob": strings.Repeat("a", 1<<20)})
@@ -142,7 +152,7 @@ func TestOversizedLineFailsRequest(t *testing.T) {
 	t.Cleanup(func() { maxResponseLine = saved })
 	script := "import sys\nsys.stdin.readline()\nsys.stdout.write('x' * (4 << 20) + '\\n'); sys.stdout.flush()\nimport time; time.sleep(30)\n"
 	s := NewSidecar(SidecarSpec{Name: "huge", Program: testPython(t), Args: []string{"-c", script},
-		Dir: os.TempDir(), Timeout: 10 * time.Second})
+		Dir: os.TempDir(), Env: []string{"PYTHONDONTWRITEBYTECODE=1"}, Timeout: 10 * time.Second})
 	t.Cleanup(s.Shutdown)
 	_, err := s.Request(map[string]any{"op": "x"})
 	if err == nil || !strings.Contains(err.Error(), "longer than 1 MB") {
@@ -232,5 +242,24 @@ func TestBridgeResult(t *testing.T) {
 	}
 	if _, err := bridgeResult(json.RawMessage(`[1]`)); err == nil {
 		t.Fatal("non-object accepted")
+	}
+}
+
+// RequestIf checks allowed() after a Cancel can reach the request: false
+// sends nothing, and a Cancel right after a true answer ends the request.
+func TestRequestIfChecksAfterCancelCanReachIt(t *testing.T) {
+	s := echo(t, 20*time.Second)
+	if _, err := s.RequestIf(map[string]any{"op": "no"}, func() bool { return false }); !errors.Is(err, ErrSidecarCancelled) {
+		t.Fatalf("not allowed: %v", err)
+	}
+	if s.pid() != 0 {
+		t.Fatal("a process was started for a request that was not allowed")
+	}
+	_, err := s.RequestIf(map[string]any{"op": "late"}, func() bool { s.Cancel(); return true })
+	if !errors.Is(err, ErrSidecarCancelled) {
+		t.Fatalf("cancelled right after the check: %v", err)
+	}
+	if out, err := s.Request(map[string]any{"op": "after"}); err != nil || decode(t, out)["echo"].(map[string]any)["op"] != "after" {
+		t.Fatalf("next request: %s %v", out, err)
 	}
 }

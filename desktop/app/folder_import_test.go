@@ -88,7 +88,7 @@ func TestFolderImportFlow(t *testing.T) {
 
 	// 3. Run all pending, with the time estimate shown first.
 	d.click("Run all pending (14)")
-	d.until("run dialog", 5*time.Minute, func() bool { return d.has("Estimated time") && d.has("Start") })
+	d.until("run dialog", 5*time.Minute, func() bool { return d.has("Estimated time") && d.runReady() })
 	estimate := ""
 	for _, text := range d.tt.Texts() {
 		if strings.HasPrefix(text, "about ") {

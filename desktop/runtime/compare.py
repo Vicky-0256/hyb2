@@ -308,24 +308,29 @@ def _tsv_cell(value: Any) -> str:
     return re.sub(r"[\t\r\n]+", " ", "" if value is None else str(value))
 
 
+def _text_lines(lines: Sequence[str]) -> str:
+    """analysis-data.js textLines: every line ends with a newline; none is ""."""
+    return "".join(line + "\n" for line in lines)
+
+
 def _condition(flag: bool) -> str:
     return "condition_one" if flag else "condition_two"
 
 
 def count_table_text(keys: np.ndarray, table: np.ndarray, sample_ids: Sequence[str]) -> str:
     """comparisonCountMatrixToTsv: ``feature_id`` then one raw-count column per
-    sample, one ``x_y`` row per cell by x then y; no final newline."""
+    sample, one ``x_y`` row per cell by x then y; every line ends with a newline."""
     rows = ["\t".join(["feature_id"] + [_tsv_cell(s) for s in sample_ids])]
     xs = (keys >> 32).tolist()
     ys = (keys & 0xFFFFFFFF).tolist()
     for x, y, counts in zip(xs, ys, table.tolist()):
         rows.append("%d_%d\t" % (x, y) + "\t".join(str(int(v)) for v in counts))
-    return "\n".join(rows)
+    return _text_lines(rows)
 
 
 def names_table_text(sample_ids: Sequence[str], condition_one: Sequence[bool]) -> str:
     """comparisonLegacyNamesToTsv: ``id<TAB>condition_one|two`` lines, no header."""
-    return "\n".join(_tsv_cell(s) + "\t" + _condition(flag) for s, flag in zip(sample_ids, condition_one))
+    return _text_lines([_tsv_cell(s) + "\t" + _condition(flag) for s, flag in zip(sample_ids, condition_one)])
 
 
 def metadata_text(inputs: Sequence[Dict[str, Any]], condition_one: Sequence[bool], label_one: str,
@@ -335,7 +340,7 @@ def metadata_text(inputs: Sequence[Dict[str, Any]], condition_one: Sequence[bool
     for item, flag in zip(inputs, condition_one):
         rows.append("\t".join(_tsv_cell(v) for v in (item["id"], _condition(flag), label_one if flag else label_two,
                                                     item.get("file_name") or "")))
-    return "\n".join(rows)
+    return _text_lines(rows)
 
 
 def top_regions(interactions: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:

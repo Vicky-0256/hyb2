@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -25,6 +26,16 @@ type fakeBackend struct {
 	uiState core.Obj
 	// queryErr, when set, is the error of every analysis query.
 	queryErr error
+	// energy, energyErr: PipelineEnergyCheck's answers (see there);
+	// energyCalls the checks asked.
+	energy      map[string]core.EnergyCheck
+	energyErr   error
+	energyCalls []energyCall
+	// dgProblem is the energy check's problem for every sample that computes
+	// dG (the runtime without ViennaRNA); "" when the engine is there.
+	dgProblem string
+	// mfold is the stored mfold preference.
+	mfold string
 }
 
 func fixture(t testing.TB, name string) core.Obj {
@@ -139,11 +150,71 @@ func (f *fakeBackend) ListTasks(string) ([]core.Obj, error) {
 	return append([]core.Obj(nil), f.tasks...), nil
 }
 func (f *fakeBackend) Preferences() (core.Obj, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return core.Obj{"ok": true, "budget": core.Obj{"cpu": 10.0, "mem_mb": 24576.0}, "custom_budget": false,
-		"system": core.Obj{"cpus": 10.0, "mem_mb": 32768.0}}, nil
+		"system": core.Obj{"cpus": 10.0, "mem_mb": 32768.0}, "mfold": f.mfold}, nil
 }
-func (f *fakeBackend) SetPreferences(patch core.Obj) (core.Obj, error) { return f.Preferences() }
-func (f *fakeBackend) Shutdown()                                       {}
+func (f *fakeBackend) SetPreferences(patch core.Obj) (core.Obj, error) {
+	if raw, present := patch["mfold"]; present {
+		value, _ := raw.(string)
+		f.mu.Lock()
+		f.mfold = strings.TrimSpace(value)
+		f.mu.Unlock()
+	}
+	return f.Preferences()
+}
+func (f *fakeBackend) Shutdown() {}
+
+// energyCall is one PipelineEnergyCheck the views made.
+type energyCall struct {
+	ids      []string
+	resuming bool
+}
+
+// PipelineEnergyCheck answers from f.energy (a test's own answers by sample
+// id) or f.energyErr (an older runtime without the operation); else it
+// stands in for Python's sample_run.build_options on list_samples' raw
+// samples: a .hyb sample, settings.energy false, or a resumed run whose
+// energy stage succeeded computes no dG; the others use RNAduplex, with
+// f.dgProblem when the test makes ViennaRNA missing.
+func (f *fakeBackend) PipelineEnergyCheck(path string, ids []string, resuming bool) (map[string]core.EnergyCheck, error) {
+	f.mu.Lock()
+	f.energyCalls = append(f.energyCalls, energyCall{append([]string(nil), ids...), resuming})
+	err, answers, problem := f.energyErr, f.energy, f.dgProblem
+	raw, _ := f.ops["list_samples"]["samples"].([]any)
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]core.EnergyCheck{}
+	for _, id := range ids {
+		if answer, ok := answers[id]; ok {
+			out[id] = answer
+			continue
+		}
+		var sample map[string]any
+		for _, s := range raw {
+			if s, _ := s.(map[string]any); s["id"] == id {
+				sample = s
+			}
+		}
+		out[id] = fakeEnergyCheck(sample, resuming, problem)
+	}
+	return out, nil
+}
+
+func fakeEnergyCheck(sample map[string]any, resuming bool, problem string) core.EnergyCheck {
+	reads, _ := sample["reads"].(map[string]any)
+	settings, _ := sample["settings"].(map[string]any)
+	stages, _ := sample["stages"].(map[string]any)
+	energyStage, _ := stages["energy"].(map[string]any)
+	if sample == nil || reads["format"] == "hyb" || settings["energy"] == false ||
+		(resuming && energyStage["status"] == "succeeded") {
+		return core.EnergyCheck{}
+	}
+	return core.EnergyCheck{NeedsEngine: true, Engine: "rnaduplex", Problem: problem}
+}
 
 var _ core.Backend = (*fakeBackend)(nil)
 

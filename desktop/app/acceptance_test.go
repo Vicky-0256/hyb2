@@ -187,7 +187,7 @@ func TestAcceptance(t *testing.T) {
 				break
 			}
 		}
-		d.until("disk estimate", 5*time.Minute, func() bool { return d.has("Start") })
+		d.until("disk estimate", 5*time.Minute, d.runReady)
 		d.shot("accept-disk-estimate")
 		if d.has("Start anyway") {
 			d.click("Start anyway")
@@ -307,7 +307,7 @@ func TestAcceptance(t *testing.T) {
 
 	// 5. The pages show them.
 	app.Navigate("compare", map[string]any{"comparisonId": result.Comparisons["AFR vs BRA"]})
-	d.until("compare page", 2*time.Minute, func() bool { return d.has("Significant cells") })
+	d.until("compare page", 2*time.Minute, func() bool { return d.has("Significant (padj < ") })
 	d.shot("accept-compare")
 	app.Navigate("structure", map[string]any{"structureId": result.Structures["AFR"]})
 	d.until("structure page", 2*time.Minute, func() bool { return d.has("Base pairs") })

@@ -246,6 +246,18 @@ func TestReportRunSettings(t *testing.T) {
 	if want := "blast_threshold 0.1 · max_overlap 4 · max_hits 10 · energy off · pipeline format 2026-10-14"; text != want || note != "" {
 		t.Fatalf("settings %q, note %q", text, note)
 	}
+	// newer runs: hyb2pipe keeps the dG setting in energy_key
+	current := `{"version": 1, "input": {"path": "/data/ok_rep1.fastq", "size": 6089196, "mtime": 1792136794.1215298},
+		"options": {"blast_threshold": 0.1, "max_overlap": 4, "max_hits": 10, "keep_sam": "none",
+		"source": "fastq", "work": "/x/ok_rep1.work", "format": "2026-10-14"},
+		"energy_key": {"energy": true, "engine": "rnaduplex"}, "stages": {}}`
+	if err := os.WriteFile(filepath.Join(project, "samples", "ok", "ok_rep1.checkpoint.json"), []byte(current), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	text, _ = reportRunSettings(project, s)
+	if want := "blast_threshold 0.1 · max_overlap 4 · max_hits 10 · energy on (rnaduplex) · pipeline format 2026-10-14"; text != want {
+		t.Fatalf("settings with energy_key %q", text)
+	}
 	s.Reads.SizeBytes++
 	if _, note := reportRunSettings(project, s); !strings.Contains(note, "now differs from the one this run used") {
 		t.Fatalf("changed reads not noted: %q", note)

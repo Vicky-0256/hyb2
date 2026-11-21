@@ -76,21 +76,48 @@ func (d *driver) until(what string, timeout time.Duration, ok func() bool) {
 	d.t.Fatalf("%s: timed out; texts %q", what, d.tt.Texts())
 }
 
+// find returns the box of the element showing text once it has been the
+// same for three frames running (or absent for three). A page can lay
+// itself out differently for one frame as its content arrives (a table
+// sized by a width measured a frame late had its columns 300 px to the
+// left), and a press aimed at that frame's box is released on nothing in
+// the next, so nothing is clicked. A box that keeps moving is taken as it
+// is after about a second.
+func (d *driver) find(text string) (ui.Rect, bool) {
+	d.frame()
+	box, ok := d.tt.Find(text)
+	for same, tries := 0, 0; same < 2 && tries < 40; tries++ {
+		if tries >= 4 {
+			// still moving: leave the work behind it time to arrive
+			time.Sleep(25 * time.Millisecond)
+		}
+		d.frame()
+		next, found := d.tt.Find(text)
+		if found == ok && next == box {
+			same++
+		} else {
+			same = 0
+		}
+		box, ok = next, found
+	}
+	return box, ok
+}
+
 func (d *driver) click(text string) {
 	d.t.Helper()
-	d.frame()
-	if err := d.tt.Click(text); err != nil {
+	r, ok := d.find(text)
+	if !ok {
 		d.shot("click-failed")
-		d.t.Fatalf("click %q: %v; texts %q", text, err, d.tt.Texts())
+		d.t.Fatalf("click %q: no element shows it; texts %q", text, d.tt.Texts())
 	}
+	d.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
 	d.frame()
 }
 
 // clickField focuses the input under a visible field label.
 func (d *driver) clickField(label string) {
 	d.t.Helper()
-	d.frame()
-	r, ok := d.tt.Find(label)
+	r, ok := d.find(label)
 	if !ok {
 		d.t.Fatalf("no field %q", label)
 	}
@@ -115,6 +142,14 @@ func (d *driver) has(text string) bool {
 		}
 	}
 	return false
+}
+
+// runReady reports whether the run dialog's Start (Start anyway when the
+// disk is short) can be pressed: the button is shown from the dialog's
+// first frame but disabled while the disk space is estimated, and a press
+// then starts nothing.
+func (d *driver) runReady() bool {
+	return d.has("Start") && !d.has("Estimating disk space")
 }
 
 func (d *driver) shot(name string) {
@@ -193,7 +228,7 @@ func TestEndToEnd(t *testing.T) {
 			break
 		}
 	}
-	d.until("disk estimate", 60*time.Second, func() bool { return d.has("Start") })
+	d.until("disk estimate", 5*time.Minute, d.runReady)
 	d.shot("disk-estimate")
 	if d.has("Start anyway") {
 		d.click("Start anyway")
@@ -223,7 +258,7 @@ func TestEndToEnd(t *testing.T) {
 	app.Navigate("compare", nil)
 	d.click("Run differential test")
 	d.until("compare finishes", 20*time.Minute, func() bool { return d.tasksDone("compare", 1) })
-	d.until("compare result", 2*time.Minute, func() bool { return d.has("Significant cells") })
+	d.until("compare result", 2*time.Minute, func() bool { return d.has("Significant (padj < ") })
 	d.shot("compare")
 	lap("differential test")
 

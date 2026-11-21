@@ -34,6 +34,10 @@ type PerfRecord struct {
 	// charged it: a record of another model (or none) is not used.
 	Work      float64 `json:"work,omitempty"`
 	WorkModel int     `json:"work_model,omitempty"`
+	// Energy: a sample pipeline's time includes the .hyb dG (energy) stage.
+	// Records from before that stage existed lack it: SampleEstimate adds
+	// the modelled energy time to their rate (energySeconds).
+	Energy bool `json:"energy,omitempty"`
 }
 
 const (
@@ -56,8 +60,46 @@ const (
 // sample in ~15 min). fasta.gz is the median of 7 collapsed ZIKV samples
 // (226-418 MB, 0.51-0.95 s/MB); fasta keeps the fasta.gz/fasta ratio of the
 // earlier rates. A .hyb input is only indexed: 362 MB in 37 s.
+// These rates were measured before the energy stage existed: SampleEstimate
+// adds energySeconds to them.
 var priorSecondsPerMB = map[string]float64{
 	"fastq.gz": 0.47, "fastq": 0.078, "fasta.gz": 0.65, "fasta": 0.11, "sam": 0.02, "hyb": indexSecondsPerMB,
+}
+
+// The energy stage computes each hybrid's dG with ViennaRNA's RNAduplex,
+// chunks of pairs over one process per CPU (hyb2pipe duplex_folder).
+// Measured on the M1 Pro with testData.sam's 10,411 hybrids (arms 43 and 54
+// nt on average): 3.1 ms a pair on one core, 1.25 ms a pair with 10
+// workers (13.0 s), which includes starting the worker processes
+// (energyOverhead).
+const (
+	// energyPairSeconds is one pair at priorCPU CPUs (cpuScale for others).
+	energyPairSeconds = 1.15e-3
+	energyOverhead    = 1.0
+)
+
+// priorHybridsPerMB is the .hyb hybrids per MB of input, so the energy
+// stage scales with the input like the other rates. Measured: sam is
+// testData.sam's 332; fastq.gz the ZIKV SPLASH samples' 131-141 (1.7-2.1
+// GB, 224,000-300,000 hybrids) and fastq the same samples uncompressed
+// (21-23); fasta.gz the median of 5 collapsed ZIKV samples (1877-3594,
+// 226-418 MB); fasta takes the fasta.gz/fasta ratio of their rates. A .hyb
+// input is only indexed: it has no energy stage.
+var priorHybridsPerMB = map[string]float64{
+	"fastq.gz": 135, "fastq": 22, "fasta.gz": 2380, "fasta": 400, "sam": 332,
+}
+
+// energySeconds is the energy stage's modelled time for inputBytes of
+// format with cpu CPUs (0 for a .hyb input).
+func energySeconds(format string, inputBytes int64, cpu uint32) float64 {
+	if format == "hyb" {
+		return 0
+	}
+	perMB, ok := priorHybridsPerMB[format]
+	if !ok {
+		perMB = priorHybridsPerMB["fastq.gz"]
+	}
+	return energyOverhead + perMB*float64(inputBytes)/1e6*energyPairSeconds*cpuScale(priorCPU, cpu)
 }
 
 // A built-in rate is one computer's; the range shown for it runs from
@@ -176,6 +218,15 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 			Guided     *bool   `json:"guided"`
 			// ViennaRNA and COMRADES folds are not CPLfold's speed.
 			Engine string `json:"engine"`
+			// A sample pipeline's time per stage: "energy" when it ran.
+			StageSeconds map[string]float64 `json:"stage_seconds"`
+			// A sample pipeline's dG stage: its engine ("rnaduplex",
+			// "rnacofold" or null) and whether it ran in this run (not
+			// skipped by a resume). Absent from older results.
+			Energy *struct {
+				Engine *string `json:"engine"`
+				Ran    bool    `json:"ran"`
+			} `json:"energy"`
 			// The run compiled Numba kernels: its time is not the speed.
 			Compiled bool `json:"compiled"`
 		} `json:"performance"`
@@ -189,6 +240,18 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 	switch kind {
 	case "sample_pipeline":
 		record.Format, record.InputBytes, record.CPU = p.Format, p.InputBytes, p.CPU
+		switch {
+		case p.Energy == nil:
+			// older result: the stage ran when it was timed
+			_, record.Energy = p.StageSeconds["energy"]
+		case p.Energy.Ran && p.Energy.Engine != nil && *p.Energy.Engine == "rnaduplex":
+			record.Energy = true
+		default:
+			// another engine's dG (another speed) or a stage this run did
+			// not run (resumed past it): keep the other stages' time only,
+			// and SampleEstimate adds the modelled RNAduplex time to it.
+			record.Seconds -= p.StageSeconds["energy"]
+		}
 	case "structure":
 		job := FoldJob{Lengths: p.Lengths, Beam: p.Beam, Workers: p.Workers, Pseudoknot: p.Pseudoknot, Guided: p.Guided == nil || *p.Guided}
 		record.Units, record.Parallel = FoldUnits(job), foldParallel(len(p.Lengths), p.Workers)
@@ -371,7 +434,13 @@ func SampleEstimate(history []PerfRecord, format string, inputBytes int64, cpu u
 	for i := len(history) - 1; i >= 0 && len(rates) < perfRecent; i-- {
 		r := history[i]
 		if r.Kind == "sample_pipeline" && r.Format == format && r.InputBytes > 0 && r.Seconds > 0 {
-			rates = append(rates, math.Max(r.Seconds-sampleOverhead, 0)/float64(r.InputBytes)*cpuScale(r.CPU, cpu))
+			seconds := r.Seconds
+			if !r.Energy {
+				// measured before the energy stage: its speed still holds
+				// for the other stages, which the stage only adds to
+				seconds += energySeconds(format, r.InputBytes, r.CPU)
+			}
+			rates = append(rates, math.Max(seconds-sampleOverhead, 0)/float64(r.InputBytes)*cpuScale(r.CPU, cpu))
 		}
 	}
 	if len(rates) > 0 {
@@ -382,7 +451,7 @@ func SampleEstimate(history []PerfRecord, format string, inputBytes int64, cpu u
 	if !ok {
 		perMB = priorSecondsPerMB["fastq.gz"]
 	}
-	return sampleOverhead + perMB*float64(inputBytes)/1e6*cpuScale(priorCPU, cpu), false
+	return sampleOverhead + perMB*float64(inputBytes)/1e6*cpuScale(priorCPU, cpu) + energySeconds(format, inputBytes, cpu), false
 }
 
 // PipelineInput is one sample to estimate.
@@ -488,22 +557,38 @@ func sampleRemaining(history []PerfRecord, progress Obj, cpu uint32, now time.Ti
 			return math.Max(indexSecondsPerMB*(size-done)/1e6, 1), false, true
 		}
 	}
+	// The stage weights were measured without the dG stage, which RNAduplex
+	// makes the longest one: its modelled time (energySeconds) is kept apart.
+	inputBytes, _ := work["input_bytes"].(float64)
+	energyCPU := cpu
+	if c, ok := work["cpu"].(float64); ok && c >= 1 {
+		energyCPU = uint32(c)
+	}
+	energy := math.Min(energySeconds(format, int64(inputBytes), energyCPU), total*0.95)
+	base := total - energy
 	table, after := stageWeights(format)
 	weights, ok := table[stage]
 	if !ok {
-		// Past mapping: half of the time after mapping is left.
-		return math.Max(total*after*0.5, 1), false, true
+		// Past mapping: half of the rest of that stage's share is left, plus
+		// the dG stage when it is still ahead.
+		switch stage {
+		case "energy":
+			return math.Max(base*after*0.5+energy*0.5, 1), false, true
+		case "blast", "hybrids":
+			return math.Max(base*after*0.5+energy, 1), false, true
+		}
+		return math.Max(base*after*0.5, 1), false, true
 	}
 	share := weights[0]
 	if size > 0 {
 		share += weights[1] * done / size
 	} else if at, err := time.Parse(time.RFC3339, fmt.Sprint(progress["updated_at"])); err == nil && weights[1] > 0 {
-		x := math.Max(now.Sub(at).Seconds(), 0) / (total * weights[1])
+		x := math.Max(now.Sub(at).Seconds(), 0) / (base * weights[1])
 		over = x > 1
 		if x > 0.9 {
 			x = 0.9 + 0.1*(x-0.9)/(x-0.9+1)
 		}
 		share += weights[1] * x
 	}
-	return math.Max(total*(1-share), 1), over, true
+	return math.Max(base*(1-share)+energy, 1), over, true
 }

@@ -179,7 +179,7 @@ func gatherReport(b core.Backend, in reportInput) *reportData {
 			rep = dataReplicate(s.Replicate)
 		}
 		d.Samples = append(d.Samples, reportSample{ID: s.ID, Label: s.Label(), Condition: s.Condition, Replicate: rep,
-			Reads: s.Reads.Path, Format: s.Reads.Format, Stages: s.StageSummary, Ready: s.IsReady(), Counts: counts[s.ID]})
+			Reads: s.Reads.Path, Format: s.Reads.Format, Stages: s.StageSummary, Ready: s.IsReady(), Counts: counts[s.ID], DG: hybDGSource(s)})
 	}
 	d.Inputs, d.Settings = reportProvenance(pr)
 	for _, c := range pr.Conditions {
@@ -255,7 +255,8 @@ func reportProvenance(pr *model.Project) ([]reportFile, []reportSettings) {
 				Size: dataFormatBytes(s.Reads.SizeBytes), Fingerprint: reportFingerprint(s.Reads.SHA256, s.Reads.QuickHash)})
 		}
 		text, note := reportRunSettings(pr.Path, s)
-		settings = append(settings, reportSettings{Sample: s.Label(), Settings: text, Note: note})
+		dg := hybDGSource(s)
+		settings = append(settings, reportSettings{Sample: s.Label(), Settings: text + "\n.hyb dG: " + dg.Text, Note: note, DG: dg.Source})
 	}
 	return inputs, settings
 }
@@ -268,6 +269,12 @@ type reportCheckpoint struct {
 		Mtime float64 `json:"mtime"`
 	} `json:"input"`
 	Options map[string]any `json:"options"`
+	// EnergyKey is the dG setting of newer runs (hyb2pipe keeps
+	// it out of options); older checkpoints have options.energy instead.
+	EnergyKey *struct {
+		Energy bool    `json:"energy"`
+		Engine *string `json:"engine"`
+	} `json:"energy_key"`
 }
 
 // reportOptionKeys are the checkpoint options that change the hybrids, in
@@ -308,10 +315,23 @@ func reportRunSettings(project string, s model.Sample) (string, string) {
 			continue
 		}
 		text := fmt.Sprint(value)
+		if key == "energy" && ck.EnergyKey != nil {
+			continue // shown from energy_key below
+		}
 		if b, isBool := value.(bool); isBool {
 			text = map[bool]string{true: "on", false: "off"}[b]
 		}
 		parts = append(parts, key+" "+text)
+	}
+	if e := ck.EnergyKey; e != nil {
+		text := "energy off"
+		if e.Energy {
+			text = "energy on"
+			if e.Engine != nil && *e.Engine != "" {
+				text += " (" + *e.Engine + ")"
+			}
+		}
+		parts = append(parts, text)
 	}
 	if format, ok := ck.Options["format"].(string); ok && format != "" {
 		parts = append(parts, "pipeline format "+format)
@@ -529,6 +549,9 @@ func (p *reportPage) View(c *ui.Context) {
 					reportTable(c, "settings", d.settingsTable(), "")
 				}
 				ui.Text(c, reportFingerprintNote).FontSize(12).TextColor(t.TextMuted)
+				if note := d.energyNote(); note != "" {
+					ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+				}
 			})
 			Card(c, "Differential tests", left("tests", func() { p.testsView(c, d) }))
 			Card(c, "Structures", left("structures", func() {

@@ -397,7 +397,7 @@ func stEnsembleRows(cm *stComrades) [][]string {
 // stems and the evidence pairs, with the web's three downloads.
 func (p *structurePage) comradesPanel(c *ui.Context, a *structureResult) {
 	t := c.Theme()
-	if a.Meta.Engine != "COMRADES(ViennaRNA)" {
+	if !stIsComrades(a.Meta.Engine) {
 		return
 	}
 	index := p.shownRecord(a)
@@ -515,7 +515,7 @@ func stNucleotideText(records []structureRecord, pos int, engine string) string 
 		}
 		text := "Nucleotide " + FormatNumber(int64(pos)) + " " + base(pos)
 		supportLabel := "chimera support"
-		if engine == "COMRADES(ViennaRNA)" {
+		if stIsComrades(engine) {
 			supportLabel = "RNAcofold evidence"
 		}
 		for _, pr := range stRecordPairs(r) {

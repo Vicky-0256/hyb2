@@ -21,6 +21,7 @@ used.  Its minimum hairpin loop is fixed at 3.
 from __future__ import annotations
 
 import glob
+import math
 import os
 import re
 import shutil
@@ -40,9 +41,15 @@ TEMPERATURE = 37.0
 # mfold is slower than ViennaRNA and refolds once per accepted stem
 MAX_MFOLD_NT = 3000
 TIMEOUT_S = 3600
+_CT_HEADER = re.compile(r"\s*([0-9]+)\s+dG\s*=\s*"
+                        r"([+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=\s|$)")
 
 
-class MfoldUnavailable(RuntimeError):
+class MfoldError(RuntimeError):
+    """The folding program failed or produced an invalid result."""
+
+
+class MfoldUnavailable(MfoldError):
     """No usable mfold."""
 
 
@@ -112,23 +119,43 @@ def version(executable: Optional[str] = None) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _pairs_from_ct(path: Path) -> Tuple[float, int, List[Tuple[int, int]]]:
-    """The first structure of an mfold .ct: its energy, length and pairs (i < j)."""
-    lines = path.read_text(errors="replace").splitlines()
-    if not lines:
-        raise ValueError("mfold wrote an empty structure file.")
-    header = lines[0].split()
-    length = int(header[0])
-    match = re.search(r"dG\s*=\s*(-?\d+(?:\.\d+)?)", lines[0])
-    if not match:
-        raise ValueError("mfold's structure file has no free energy.")
-    pairs = []
-    for line in lines[1:length + 1]:
-        cols = line.split()
-        i, j = int(cols[0]), int(cols[4])
+def _pairs_from_ct(path: Path, sequence: str) -> Tuple[float, List[Tuple[int, int]]]:
+    """Read the first complete CT structure for this single linear sequence."""
+    length = len(sequence)
+    partners = []
+    with path.open(encoding="utf-8", errors="replace") as ct:
+        header = _CT_HEADER.match(ct.readline())
+        if not header:
+            raise ValueError("Invalid mfold CT header.")
+        energy = float(header[2])
+        if not math.isfinite(energy):
+            raise ValueError("Invalid mfold CT free energy.")
+        if int(header[1]) != length:
+            raise ValueError(f"mfold folded {header[1]} nt of a {length} nt sequence.")
+        for i, base in enumerate(sequence, 1):
+            cols = ct.readline().split()
+            numbers = cols[:1] + cols[2:6]
+            if len(cols) < 6 or not all(c.isascii() and c.isdecimal() for c in numbers):
+                raise ValueError(f"Missing or invalid mfold CT row {i}.")
+            index, prev, following, partner, number = map(int, numbers)
+            if (index, prev, following, number) != (i, i - 1, i + 1 if i < length else 0, i):
+                raise ValueError(f"Invalid nucleotide indices in mfold CT row {i}.")
+            if cols[1].upper().replace("T", "U") != base:
+                raise ValueError(f"mfold CT row {i} disagrees with the input sequence.")
+            if partner == i or partner > length:
+                raise ValueError(f"Invalid partner in mfold CT row {i}.")
+            partners.append(partner)
+
+    pairs, closing = [], []
+    for i, j in enumerate(partners, 1):
+        if j and partners[j - 1] != i:
+            raise ValueError(f"Non-reciprocal pairing in mfold CT row {i}.")
         if j > i:
             pairs.append((i, j))
-    return float(match.group(1)), length, pairs
+            closing.append(j)
+        elif j and (not closing or closing.pop() != i):
+            raise ValueError(f"Crossing pairs in mfold CT row {i}.")
+    return energy, pairs
 
 
 def _dot_bracket(length: int, pairs: Sequence[Tuple[int, int]]) -> str:
@@ -140,9 +167,11 @@ def _dot_bracket(length: int, pairs: Sequence[Tuple[int, int]]) -> str:
 
 def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, int]] = (),
          executable: Optional[str] = None) -> Dict[str, Any]:
-    """One mfold MFE fold with ``hard_pairs`` forced; a record in the shape of
-    vienna.fold's.  Raises ValueError when mfold's structure lacks a hard
-    pair (it cannot satisfy them all), MfoldUnavailable without mfold."""
+    """Return an MFE fold with the requested hard pairs in vienna.fold's format.
+
+    Infeasible constraints raise ValueError so COMRADES can try another stem.
+    Tool failures and malformed structures raise MfoldError.
+    """
     sequence = sequence.upper().replace("T", "U")
     if not sequence:
         raise ValueError("there is no sequence to fold")
@@ -152,7 +181,7 @@ def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, 
         raise ValueError(f"mfold's minimum hairpin loop is fixed at {MIN_LOOP}; set Minimum hairpin loop to {MIN_LOOP}.")
     if float(params.get("temperature", TEMPERATURE)) != TEMPERATURE:
         raise ValueError("mfold folds at 37 °C only (its version 3.0 energies); set Temperature to 37 or fold with ViennaRNA.")
-    executable = executable or find()
+    executable = str(Path(executable or find()).resolve())
     tables = data_dir(executable)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="hyb2-mfold-") as name:
@@ -174,19 +203,28 @@ def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, 
         except OSError as error:
             raise MfoldUnavailable(f"mfold could not be started ({executable}): {error}") from error
         except subprocess.TimeoutExpired as error:
-            raise ValueError(f"mfold did not finish within {TIMEOUT_S // 60} minutes.") from error
+            raise MfoldError(f"mfold did not finish within {TIMEOUT_S // 60} minutes.") from error
         ct = directory / "s.ct"
-        if not ct.is_file() or ct.stat().st_size == 0:
-            tail = " / ".join((done.stdout or "").strip().splitlines()[-2:])
-            raise ValueError("mfold found no structure" + (f" ({tail})" if tail else "") + ".")
-        energy, length, pairs = _pairs_from_ct(ct)
-    if length != len(sequence):
-        raise ValueError(f"mfold folded {length} nt of a {len(sequence)} nt sequence.")
+        has_ct = ct.is_file() and ct.stat().st_size > 0
+        if done.returncode or not has_ct:
+            output = "\n".join((done.stdout or "", done.stderr or ""))
+            if not has_ct and done.returncode in (0, 1) and re.search(r"\bno foldings?\b", output, re.IGNORECASE):
+                # mfold 3.6 reports infeasible constraints this way. COMRADES can try the next stem.
+                raise ValueError("mfold found no structure.")
+            message = "mfold failed" if has_ct else "mfold did not produce a CT structure"
+            if done.returncode:
+                message += f" (exit status {done.returncode})"
+            tail = " / ".join((done.stderr or done.stdout or "").strip().splitlines()[-2:])
+            raise MfoldError(message + (f": {tail}" if tail else "."))
+        try:
+            energy, pairs = _pairs_from_ct(ct, sequence)
+        except (OSError, ValueError) as error:
+            raise MfoldError(str(error)) from error
     missing = set(hard_pairs) - set(pairs)
     if missing:
         raise ValueError("mfold's structure lacks hard pair(s) " + ", ".join(f"{i}-{j}" for i, j in sorted(missing)))
     return {
-        "structure": _dot_bracket(length, pairs),
+        "structure": _dot_bracket(len(sequence), pairs),
         "energy": round(energy, 2),
         "type": "constrained MFE" if hard_pairs else "MFE",
         "pairs": [(i, j, "()", None) for i, j in pairs],

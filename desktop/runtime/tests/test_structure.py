@@ -484,7 +484,7 @@ with open("s.ct", "w") as out:
     for i, j, _, _ in r["pairs"]:
         partner[i], partner[j] = j, i
     for k, base in enumerate(seq, 1):
-        out.write(f"{{k}}\\t{{base}}\\t{{k - 1}}\\t{{k + 1}}\\t{{partner.get(k, 0)}}\\t{{k}}\\t0\\t0\\n")
+        out.write(f"{{k}}\\t{{base}}\\t{{k - 1}}\\t{{k + 1 if k < len(seq) else 0}}\\t{{partner.get(k, 0)}}\\t{{k}}\\t0\\t0\\n")
 """)
         script.chmod(0o755)
         return str(script)

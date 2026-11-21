@@ -22,9 +22,11 @@ on:
       - 'scripts/verify-release-gate.sh'
       - 'scripts/bundle_sources.py'
       - 'scripts/json-schema-lite.cjs'
+      - 'scripts/write-releases.mjs'
       - 'third_party/cplfold/**'
       - '.github/workflows/deploy-pages.yml'
       - '.github/workflows/desktop-release.yml'
+      - '.github/workflows/publish-desktop.yml'
       - '.github/workflows/release-gate.yml'
 
 permissions:

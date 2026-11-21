@@ -8,7 +8,8 @@
 //   GITHUB_TOKEN=... node scripts/write-releases.mjs [owner/repo]
 //
 // Without a token the GitHub API allows 60 requests an hour. If the API
-// cannot be read, web/releases.js is left as it is and the script warns.
+// cannot be read, a local checkout keeps its snapshot. The Pages build
+// fails so that an outage cannot replace the published list with stale data.
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -30,7 +31,7 @@ try {
   list = await response.json();
 } catch (error) {
   console.warn("write-releases: could not read the releases of " + repo + " (" + error.message + "); web/releases.js unchanged");
-  process.exit(0);
+  process.exit(process.env.GITHUB_ACTIONS === "true" ? 1 : 0);
 }
 
 const releases = list

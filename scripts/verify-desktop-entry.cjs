@@ -88,7 +88,7 @@ function createContext(options) {
     kitSource = kitSource.replace("const DESKTOP_DOWNLOADS_PUBLIC = true;", "const DESKTOP_DOWNLOADS_PUBLIC = false;");
   }
   if (settings.releases) {
-    vm.runInContext(fs.readFileSync(web("releases.js"), "utf8"), context, { filename: "releases.js" });
+    context.HYB2_RELEASES = settings.releases;
   }
   if (!settings.withoutKit) {
     vm.runInContext(kitSource, context, { filename: "ui-kit.js" });
@@ -240,28 +240,22 @@ assert.equal(opened.location.hash, "");
   hasNot(page, /desktop-download-version|desktop-versions/, "no version list without web/releases.js");
 });
 
-// ---- the version list (web/releases.js): the latest version over the
-// downloads, each earlier version with its own installers (skipped while
-// web/releases.js lists no release)
-const publishedReleases = (function () { const c = { window: {} }; vm.runInNewContext(fs.readFileSync(web("releases.js"), "utf8"), c); return c.window.HYB2_RELEASES; }());
-if (publishedReleases.length) {
-  const releases = publishedReleases;
-  const page = mountSite(createContext({ releases: true, hash: "#hyb2-desktop" })).innerHTML;
-  has(page, new RegExp('<p class="desktop-download-version">Latest version <strong>' + releases[0].tag.replace(/\./g, "\\.") + "</strong>"));
-  assert.ok(page.indexOf("desktop-download-version") < page.indexOf("desktop-download-primary"), "the latest version is named over the download button");
-  has(page, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases">All releases<\/a>/);
-  if (releases.length > 1) {
-    has(page, new RegExp("<summary>Earlier versions \\(" + (releases.length - 1) + "\\)</summary>"));
-    releases.slice(1).forEach(function (release) {
-      release.files.filter(function (file) { return /\.(dmg|exe|deb|tar\.gz)$/.test(file); }).forEach(function (file) {
-        assert.ok(page.indexOf('href="https://github.com/Vicky-0256/hyb2/releases/download/' + release.tag + "/" + file + '"') > -1, release.tag + ": " + file);
-      });
-      assert.ok(page.indexOf('href="https://github.com/Vicky-0256/hyb2/releases/tag/' + release.tag + '">Release notes</a>') > -1, release.tag + " release notes");
-    });
-  }
-  const hidden = mountSite(createContext({ releases: true, downloadsHidden: true, hash: "#hyb2-desktop" })).innerHTML;
-  hasNot(hidden, /releases\/download\/|desktop-versions/, "hidden downloads list no versions either");
-}
+// Render the same release records the build writes to web/releases.js.
+// This also covers releases with installers for only some platforms.
+const releases = [
+  { tag: "v9.1.0", published: "2026-02-10", files: ["HYB2-Desktop-Windows-x64-Setup.exe"] },
+  { tag: "v9.0.0", published: "2026-02-01", files: ["HYB2-Desktop-macOS-arm64.dmg"] }
+];
+const versions = mountSite(createContext({ releases, hash: "#hyb2-desktop" })).innerHTML;
+has(versions, /<p class="desktop-download-version">Latest version <strong>v9\.1\.0<\/strong>/);
+assert.ok(versions.indexOf("desktop-download-version") < versions.indexOf("desktop-download-primary"), "the latest version is named over the download button");
+has(versions, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases">All releases<\/a>/);
+has(versions, /<summary>Earlier versions \(1\)<\/summary>/);
+has(versions, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/download\/v9\.0\.0\/HYB2-Desktop-macOS-arm64\.dmg"/);
+has(versions, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/tag\/v9\.0\.0">Release notes<\/a>/);
+hasNot(versions, /releases\/download\/v9\.0\.0\/HYB2-Desktop-Windows/);
+const hidden = mountSite(createContext({ releases, downloadsHidden: true, hash: "#hyb2-desktop" })).innerHTML;
+hasNot(hidden, /releases\/download\/|desktop-versions/, "hidden downloads list no versions either");
 
 // ---- A18: inside HYB2 Desktop no page offers HYB2 Desktop
 const inside = createContext({ desktop: { enabled: true } });

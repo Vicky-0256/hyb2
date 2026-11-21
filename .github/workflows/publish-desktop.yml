@@ -25,6 +25,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify that the release commit is on main
+        run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -50,3 +54,14 @@ jobs:
             [ -n "$artifact_id" ] || continue
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
           done <<< "$artifact_ids"
+
+  refresh-pages:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Refresh the website's desktop release list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-pages.yml --ref main --repo "$GITHUB_REPOSITORY"

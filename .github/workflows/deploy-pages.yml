@@ -21,9 +21,11 @@ on:
       - "scripts/verify-*.mjs"
       - "scripts/verify-browser-release.sh"
       - "scripts/json-schema-lite.cjs"
+      - "scripts/write-releases.mjs"
       - "scripts/webr-smoke/**"
       - ".github/workflows/deploy-pages.yml"
       - ".github/workflows/desktop-release.yml"
+      - ".github/workflows/publish-desktop.yml"
       - ".github/workflows/release-gate.yml"
   workflow_dispatch:
 
@@ -53,6 +55,11 @@ jobs:
       - name: Record build provenance
         run: |
           printf 'window.HYB2_BUILD = { commit: "%s" };\n' "$GITHUB_SHA" > web/build-info.js
+
+      - name: Read published desktop releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/write-releases.mjs
 
       - name: Build pinned ViennaRNA WebAssembly engine
         env:
@@ -90,7 +97,6 @@ jobs:
           node scripts/verify-report-render.cjs
           node scripts/verify-results.cjs
           node scripts/verify-ui-kit.cjs
-          node scripts/verify-desktop-entry.cjs
           node scripts/verify-deseq.cjs
           node scripts/verify-arc-map.cjs
           node scripts/verify-region-panels.cjs
@@ -134,7 +140,10 @@ jobs:
 
       - name: Version static assets for browser cache refresh
         run: |
+          releases_hash=$(sha256sum web/releases.js | cut -d ' ' -f 1)
+          sed -i "s#\./releases\.js\"#./releases.js?build=${releases_hash}\"#" web/index.html
           sed -i -E "s#(\./[^\"?]+\.(css|js))\"#\1?build=${GITHUB_SHA}\"#g" web/index.html
+          grep -Fq "releases.js?build=${releases_hash}" web/index.html
           grep -q "app.js?build=${GITHUB_SHA}" web/index.html
           grep -q "styles.css?build=${GITHUB_SHA}" web/index.html
 

@@ -955,6 +955,12 @@ const pagesDeploy = workflowSection(workflowSource, "deploy:");
 const pagesDesktop = workflowSection(workflowSource, "desktop:");
 const desktopWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/desktop-release.yml"), "utf8");
 const releaseWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/release-gate.yml"), "utf8");
+const publishWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/publish-desktop.yml"), "utf8");
+const refreshPages = workflowSection(publishWorkflow, "refresh-pages:");
+assert.match(pagesBuild, /^\s*run: node scripts\/write-releases\.mjs\s*$/m,
+  "Pages must build the published desktop version list");
+assert.match(refreshPages, /^\s*needs:\s*publish\s*$/m, "refresh the website after the desktop release exists");
+assert.match(refreshPages, /gh workflow run deploy-pages\.yml --ref main\b/, "refresh the website from main");
 [
   actionStep(pagesBuild, "actions/configure-pages"),
   actionStep(pagesBuild, "actions/upload-pages-artifact"),
@@ -1045,7 +1051,7 @@ function pagesTracks(file) {
 }
 const browserGatePath = "scripts/verify-browser-release.sh";
 const browserGate = fs.readFileSync(path.join(repository, browserGatePath), "utf8");
-for (const input of [browserGatePath, ".gitattributes", "bin/plot_hybrids_3.awk"]) {
+for (const input of [browserGatePath, "scripts/write-releases.mjs", ".gitattributes", "bin/plot_hybrids_3.awk"]) {
   assert.ok(pagesTracks(input), "changes to " + input + " must trigger Pages");
 }
 for (const job of [pagesBuild, workflowSection(releaseWorkflow, "browser:")]) {

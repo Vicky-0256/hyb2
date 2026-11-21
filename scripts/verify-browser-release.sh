@@ -10,6 +10,7 @@ node scripts/verify-structure-render.cjs
 node scripts/verify-cplfold-worker-lifecycle.cjs
 node scripts/verify-protocol-contract.cjs
 node scripts/verify-ui-contract.cjs
+node scripts/verify-desktop-entry.cjs
 node scripts/verify-analysis-data.cjs
 
 test -s web/vendor/viennarna/vienna-rna.js

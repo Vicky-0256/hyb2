@@ -8,7 +8,7 @@ INPUT <- as.character(args[1])
 
 
 # read data
-data <- data.table::fread(INPUT,header=F,sep="\t")
+data <- data.table::fread(file=INPUT, header=FALSE, sep="\t", skip=1)
 colnames(data) <- c('Nucleotide_position', 'Chimera_count')
 
 # plot bar chart

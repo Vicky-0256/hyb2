@@ -1,43 +1,21 @@
 #!/bin/bash
-#modify coords of svg file from VARNA RNA Structure
-
-#parsing command line options
-while getopts "i:x:y:l:p:" OPTION
-do
-        case $OPTION in
-                i) IN_FILE=$OPTARG ;;
-                x) X_COORD=$OPTARG ;;
-                y) Y_COORD=$OPTARG ;;
-                l) LEN=$OPTARG ;;
-		p) PREFIX=$OPTARG ;;
-                ?)
-
-                echo "incorrect option"
-                exit 0
-                ;;
-        esac
+# Relabel VARNA's numbered bases in the coordinates of the selected windows.
+set -e
+input= x= y= len= prefix=
+while getopts "i:x:y:l:p:" opt; do
+	case "$opt" in i) input=$OPTARG;; x) x=$OPTARG;; y) y=$OPTARG;; l) len=$OPTARG;; p) prefix=$OPTARG;; *) exit 2;; esac
 done
-
-#OUT_FILE=${IN_FILE/.svg/_plot.svg}
-X=$(($X_COORD-1))
-
-if [ -z $PREFIX ]
-then
-	OUT_FILE=${IN_FILE/.svg/_plot.svg}
-else
-	OUT_FILE=$PREFIX"."${IN_FILE/.svg/_plot.svg}
-fi
-
-if [ -z $Y_COORD ]
-then
-        awk -v X=$X '{split($10,a,"<"); split(a[1],b,">"); if ($10~/text/ && $10!~/>[A-Z]</ && $6~/7.5/) print $0" >"b[2]+X"</text>"; else print $0}' $IN_FILE | awk '{if ($10~/text/ && $10!~/>[A-Z]</ && $6~/7.5/) $10=" "; print $0}' > $OUT_FILE
-	sed 's/stroke-width="1.0"/stroke-width="0.25"/g' $OUT_FILE > $OUT_FILE".tmp" && mv $OUT_FILE".tmp" $OUT_FILE
-elif [ -z $X_COORD ] && [ -z $Y_COORD ]
-then
-        sed 's/stroke-width="1.0"/stroke-width="0.25"/g' $IN_FILE > $OUT_FILE
-else
-        Y=$(($Y_COORD-1))
-        awk -v X=$X -v Y=$Y -v L=$LEN '{split($10,a,"<"); split(a[1],b,">"); if ($10~/text/ && $10!~/>[A-Z]</ && $6~/7.5/ && b[2]<=L) print $0" >"b[2]+X"</text>"; else if ($10~/text/ && $10!~/>[A-Z]</ && $6~/7.5/ && b[2]>L && b[2]<=L+100) print $0" "$10; else if ($10~/text/ && $10!~/>[A-Z]</ && $6~/7.5/ && b[2]>L+100) print $0" >"b[2]+Y-L-100"</text>"; else print $0}' $IN_FILE | awk '{if ($10~/text/ && $10!~/>[A-Z]</ && $6~/7.5/) $10=" "; print $0}' > $OUT_FILE
-        sed 's/stroke-width="1.0"/stroke-width="0.25"/g' $OUT_FILE > $OUT_FILE".tmp" && mv $OUT_FILE".tmp" $OUT_FILE
-fi
-
+out=${input%.svg}_plot.svg
+if [[ -n "$prefix" ]]; then out=$prefix.${out##*/}; fi
+awk -v x="${x:-1}" -v y="$y" -v len="$len" '
+	{
+		if ($10~/text/ && $10!~/>[A-Z]</ && $6~/7.5/) {
+			split($10, tags, "<"); split(tags[1], number, ">"); pos=number[2]+0
+			if (y=="" || pos<=len) suffix=" >" pos+x-1 "</text>"
+			else if (pos<=len+100) suffix=" " $10
+			else suffix=" >" pos+y-len-101 "</text>"
+			$10=" "; $0=$0 suffix
+		}
+		gsub(/stroke-width="1.0"/,"stroke-width=\"0.25\"")
+		print
+	}' "$input" > "$out"

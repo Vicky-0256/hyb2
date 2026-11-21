@@ -1,64 +1,71 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 usage() { echo "usage: plot_viewpoint -i input.hyb -d reference.fasta -a gene [-2 reference.fasta -b gene]" >&2; exit 2; }
-
-# parsing command line options
-while getopts "i:d:1:2:a:b:" OPTION
-do
-     case $OPTION in
-         i) HYB=$OPTARG ;;
-         d|1) DB_1=$OPTARG ;;
-         2) DB_2=$OPTARG ;;
-         a) GENE_1=$OPTARG ;;
-         b) GENE_2=$OPTARG ;;
-         *) usage ;;
-     esac
+hyb= ref= ref2= gene= other=
+while getopts "i:d:1:2:a:b:" opt; do
+	case "$opt" in i) hyb=$OPTARG;; d|1) ref=$OPTARG;; 2) ref2=$OPTARG;; a) gene=$OPTARG;; b) other=$OPTARG;; *) usage;; esac
 done
-shift $((OPTIND - 1))
-[[ $# == 0 && -n "$HYB" && -n "$DB_1" && -n "$GENE_1" ]] || usage
-DB_2=${DB_2:-$DB_1}
-for input in "$HYB" "$DB_1" "$DB_2"; do
-	[[ -f "$input" && -r "$input" ]] || { echo "Cannot read viewpoint input: $input" >&2; exit 1; }
+shift $((OPTIND-1))
+[[ $# == 0 && "$hyb" == *.hyb && -n "$ref" && -n "$gene" ]] || usage
+ref2=${ref2:-$ref}
+prefix=${hyb%.hyb}
+single=${prefix}_$gene
+homo=${prefix}_${gene}_homodimers
+cross=${prefix}_${gene}_$other
+first=${prefix}_${other}_$gene
+second=$cross
+if [[ "$gene" == "$other" && ! "$ref" -ef "$ref2" ]]; then first=${first}_ref1; second=${second}_ref2; fi
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/hyb2-viewpoint.XXXXXX")
+plots=("$single" "${prefix}_homodimers_$gene")
+if [[ -n "$other" ]]; then plots+=("$first" "$second"); fi
+outputs=("$single.blast" "$homo.blast")
+for stem in "${plots[@]}"; do outputs+=("$stem.gplot" "${stem}_viewpoint.pdf"); done
+for path in "${outputs[@]}"; do
+	[[ ! "$path" -ef "$hyb" && ! "$path" -ef "$ref" && ! "$path" -ef "$ref2" && ! -d "$path" ]] || { echo "Output conflicts with input: $path" >&2; exit 1; }
 done
+cleanup() {
+	local rc=$?
+	rm -rf -- "$work"
+	if [[ $rc != 0 ]]; then rm -f -- "${outputs[@]}"; fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+rm -f -- "${outputs[@]}"
+for path in "$hyb" "$ref" "$ref2"; do [[ -f "$path" && -r "$path" ]] || { echo "Cannot read viewpoint input: $path" >&2; exit 1; }; done
+len=$(fasta_record.awk -v id="$gene" -v length_only=1 "$ref")
+if [[ -n "$other" ]]; then len2=$(fasta_record.awk -v id="$other" -v length_only=1 "$ref2"); fi
 
-#Create file with ID and length of RNA
-LEN_1=$(expr $(grep -A1 -- "$GENE_1" "$DB_1" | awk 'FNR==2' | wc -c) - 1)
-echo -e $GENE_1"\t"$LEN_1 > $GENE_1".length.txt"
-
-#Convert hyb to blast format to calculate coverage of $GENE_1 and $GENE_1 interactions per nt position
-hyb2blast.awk $HYB | grep $GENE_1 | head -n1 > $GENE_1"_ref.blast"
-awk -v GENE_1=$GENE_1 '$4~GENE_1 && $10~GENE_1' $HYB | hyb2blast.awk > ${HYB/.hyb/"_"$GENE_1".blast"}
-blast2gplot.pl EXP=${HYB/.hyb/} N_GENES=1 REF_BLAST_FILE=$GENE_1"_ref.blast" BLAST_FILE=${HYB/.hyb/"_"$GENE_1".blast"} GENE_LENGTHS_FILE=$GENE_1".length.txt"
-
-#Plot $GENE_1 viewpoint of $GENE_1 interactions using gplot output 
-viewpoint_graph.R ${HYB/.hyb/"_"$GENE_1".gplot"}
-
-#Calculate coverage of $GENE_1 homodimers per nt position
-#Plot $GENE_1 viewpoint of $GENE_1 homodimers
-if [ -s ${HYB/.hyb/_homodimers.hyb} ]
-then
-	awk -v GENE_1=$GENE_1 '$4~GENE_1 && $10~GENE_1' ${HYB/.hyb/_homodimers.hyb} | hyb2blast.awk > ${HYB/.hyb/"_"$GENE_1"_homodimers.blast"}
-	blast2gplot.pl EXP=${HYB/.hyb/_homodimers} N_GENES=1 REF_BLAST_FILE=$GENE_1"_ref.blast" BLAST_FILE=${HYB/.hyb/"_"$GENE_1"_homodimers.blast"} GENE_LENGTHS_FILE=$GENE_1".length.txt"
-	viewpoint_graph.R ${HYB/.hyb/"_homodimers_"$GENE_1".gplot"}
+select_arms() {
+	awk -F '\t' -v a="@$2" -v b="@$3" '(("@" $4)==a && ("@" $10)==b) || (("@" $4)==b && ("@" $10)==a)' "$1" | hyb2blast.awk
+}
+draw() {
+	local blast=$1 id=$2 length=$3 stem=$4 role=${5:-0}
+	# The legacy BLAST exporter emits the two arms in HYB order and keeps
+	# increasing intervals. Range differences avoid iterating over each hit.
+	awk -F '\t' -v id="@$id" -v n="$length" -v label="$stem" -v role="$role" '
+		("@" $2)==id && (!role || (NR%2 ? 1 : 2)==role) && $10+0>$9+0 {
+			start=($9<1 ? 1 : $9); stop=($10>n ? n : $10)
+			if (start<=stop) {delta[start]++; delta[stop+1]--}
+		}
+		END {print "#" label "_" n; for(i=1;i<=n;i++){total+=delta[i]; print i "\t" total}}' "$blast" > "$work/coverage"
+	mv -- "$work/coverage" "$stem.gplot"
+	viewpoint_graph.R "$stem.gplot"
+	[[ -s "${stem}_viewpoint.pdf" ]] || { echo "Viewpoint renderer did not produce ${stem}_viewpoint.pdf" >&2; exit 1; }
+}
+select_arms "$hyb" "$gene" "$gene" > "$single.blast"
+draw "$single.blast" "$gene" "$len" "$single"
+if [[ -s "${prefix}_homodimers.hyb" ]]; then
+	select_arms "${prefix}_homodimers.hyb" "$gene" "$gene" > "$homo.blast"
+	draw "$homo.blast" "$gene" "$len" "${prefix}_homodimers_$gene"
 fi
-
-#Calculate coverage of $GENE_1 and $GENE_2 interactions per nt position
-if [ ! -z $GENE_2 ]
-then
-	grep $GENE_1 $HYB | grep $GENE_2 | hyb2blast.awk > ${HYB/.hyb/"_"$GENE_1"_"$GENE_2".blast"}
-	blast2gplot.pl EXP=${HYB/.hyb/"_"$GENE_2} N_GENES=1 REF_BLAST_FILE=$GENE_1"_ref.blast" BLAST_FILE=${HYB/.hyb/"_"$GENE_1"_"$GENE_2".blast"} GENE_LENGTHS_FILE=$GENE_1".length.txt"
-
-	LEN_2=$(expr $(grep -A1 -- "$GENE_2" "$DB_2" | awk 'FNR==2' | wc -c) - 1)
-	echo -e $GENE_2"\t"$LEN_2 > $GENE_2".length.txt"
-
-	hyb2blast.awk $HYB | grep $GENE_2 | head -n1 > $GENE_2"_ref.blast"
-	blast2gplot.pl EXP=${HYB/.hyb/"_"$GENE_1} N_GENES=1 REF_BLAST_FILE=$GENE_2"_ref.blast" BLAST_FILE=${HYB/.hyb/"_"$GENE_1"_"$GENE_2".blast"} GENE_LENGTHS_FILE=$GENE_2".length.txt"
-
-#Plot $GENE_1 viewpoint of $GENE_1 and $GENE_2 interactions
-	viewpoint_graph.R ${HYB/.hyb/"_"$GENE_2"_"$GENE_1".gplot"}
-#Plot $GENE_2 viewpoint
-	viewpoint_graph.R ${HYB/.hyb/"_"$GENE_1"_"$GENE_2".gplot"}
-	rm -f -- "$GENE_2.length.txt" "${GENE_2}_ref.blast" "${HYB%.hyb}_${GENE_1}_${GENE_2}.blast"
+if [[ -n "$other" ]]; then
+	select_arms "$hyb" "$gene" "$other" > "$work/cross.blast"
+	if [[ "$gene" == "$other" && ! "$ref" -ef "$ref2" ]]; then
+		draw "$work/cross.blast" "$gene" "$len" "$first" 1
+		draw "$work/cross.blast" "$other" "$len2" "$second" 2
+	else
+		draw "$work/cross.blast" "$gene" "$len" "$first"
+		if [[ "$first" != "$second" ]]; then draw "$work/cross.blast" "$other" "$len2" "$second"; fi
+	fi
 fi
-
-rm -f -- "$GENE_1.length.txt" "${GENE_1}_ref.blast"

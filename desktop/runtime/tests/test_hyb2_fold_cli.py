@@ -31,7 +31,7 @@ class Hyb2FoldCliTests(unittest.TestCase):
             "r2\tGGGGCCCC\t-1.0\talpha\t1\t4\t1\t4\t0\tbeta\t5\t8\t9\t12\t0\t10\n")
         for renderer in ("contact_density_map_indiv.R", "cdm_indiv_zoom.R", "cdm_2genes.R"):
             self.tool(renderer, "exit 0")
-        self.tool("viewpoint_graph.R", 'test -s "$1"')
+        self.tool("viewpoint_graph.R", 'test -s "$1"\nprintf pdf > "${1%.gplot}_viewpoint.pdf"')
         self.tool("VARNAcmd.sh", "exit 0")
         self.tool("java", '''
 test "$1" = "-jar"
@@ -125,3 +125,173 @@ NR == 2 {n = length($0); print n, "ENERGY = 0.0", name
         done = self.invoke("hyb2", "-i", "sample.hyb", "-a", "alpha")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("Analysis completed.", done.stdout)
+
+    def enable_scoring(self):
+        (self.tools / "comradesMakeConstraints_2").unlink()
+        self.tool("RNAcofold", """awk 'NR%2 {print; next}
+            {print; dot=$0; gsub(/[^&]/,".",dot)
+             if ($0=="GGGG&CCCC") dot="((((&))))"; print dot " (-3.00)"}'""")
+        self.tool("RNAfold", """awk 'NR%2 {print; next}
+            {print; dot=$0; gsub(/./,".",dot)
+             if ($0=="GGGGAAAACCCC") dot="((((....))))"; print dot " (-3.00)"}'""")
+        self.tool("b2ct", """awk 'NR%3==1 {name=substr($1,2)}
+            NR%3==2 {seq=$0}
+            NR%3==0 {
+                n=length(seq); d=0
+                for(i=1;i<=n;i++) {c=substr($1,i,1); pair[i]=0
+                    if(c=="(") stack[++d]=i
+                    if(c==")") {j=stack[d--]; pair[i]=j; pair[j]=i}}
+                print n,"ENERGY = -3.0",name
+                for(i=1;i<=n;i++) print i,substr(seq,i,1),i-1,(i<n?i+1:0),pair[i],i
+            }'""")
+
+    def test_nested_hyb_with_spaces_matches_plain_scores_through_public_fold(self):
+        self.enable_scoring()
+        nested = self.root / "data.hyb" / "sub folder" / "sample one.hyb"
+        nested.parent.mkdir(parents=True)
+        shutil.copyfile(self.root / "sample.hyb", nested)
+        results = []
+        for source in (self.root / "sample.hyb", nested):
+            done = self.invoke("hyb2_fold", "-i", source, "-a", "alpha", "-d", self.first,
+                               "-x", "1", "-l", "12", "-j", "path with spaces.jar")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            prefix = source.with_suffix("")
+            scores = Path(str(prefix) + "_alpha_1-12.basepair_scores.txt")
+            names = Path(str(prefix) + "_alpha_1-12_names_scores.txt")
+            results.append((scores.read_bytes(), names.read_text().rstrip().rsplit("\t", 1)[1]))
+            self.assertTrue(Path(str(prefix) + ".alpha_1-12.fasta_plot.svg").is_file())
+        expected = b"1\t12\t1\n2\t11\t1\n3\t10\t1\n4\t9\t1\n"
+        self.assertEqual(results, [(expected, "8"), (expected, "8")])
+
+    def test_score_faults_abort_and_remove_stale_or_partial_public_results(self):
+        self.enable_scoring()
+        for tool, body in (("RNAcofold", "exit 9"), ("RNAcofold", "exit 0"), ("b2ct", "exit 11"),
+                           ("combine_hyb_merge_touching.pl", "exit 12"), ("bp_score.sh", "exit 14")):
+            with self.subTest(tool=tool, body=body):
+                path = self.tools / tool
+                original = path.read_bytes() if path.exists() else None
+                products = [self.root / name for name in (
+                    "alpha_1-12.fasta.ct", "alpha_1-12.fasta.vienna", "sample_alpha_1-12.basepair_scores.txt",
+                    "sample_alpha_1-12.1-12_folding_constraints.txt", "sample_alpha_1-12.1-12_folding_constraints.txt.accepted",
+                    "sample_alpha_1-12_names_scores.txt", "sample__alpha_1-12.fasta.VARNA_log2scores.txt")]
+                for product in products:
+                    product.write_text("last run")
+                self.tool(tool, body)
+                done = self.fold("hyb2", "-d", self.first)
+                self.assertNotEqual(done.returncode, 0, done.stdout)
+                self.assertNotIn("Analysis completed.", done.stdout)
+                self.assertEqual([p.name for p in products if p.exists()], [])
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(original)
+
+    def test_valid_zero_scores_for_unpaired_arms_and_empty_selection(self):
+        self.enable_scoring()
+        self.first.write_text(">alpha\nAAAAAAAAAAAA\n")
+        scores = self.root / "sample_alpha_1-12.basepair_scores.txt"
+        for empty in (False, True):
+            with self.subTest(empty=empty):
+                if empty:
+                    (self.root / "sample.hyb").write_text("")
+                    self.tool("RNAcofold", "exit 33")
+                done = self.fold("hyb2_fold", "-d", self.first)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(scores.read_bytes(), b"")
+                self.assertEqual(self.ct_sequence("alpha_1-12.fasta.ct"), "A" * 12)
+
+    def test_reference_identity_wrapping_and_bounds(self):
+        self.first.write_bytes(b">alpha.extra\nAAAAAAAAAAAA\n>alpha descriptive text\r\nGGGG\r\nAAAA\r\nCCCC\r\n")
+        self.second.write_text(">alpha different source\nCCCC\nAAAA\nGGGG\n")
+        before = [p.read_bytes() for p in (self.first, self.second)]
+        done = self.fold("hyb2_fold", "-d", self.first, "-2", self.second, "-b", "alpha", "-y", "1")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        combined = self.ct_sequence("alpha-1-12_alpha-1-12.fasta.ct")
+        self.assertEqual((len(combined), combined[:12], combined[-12:]), (124, "GGGGAAAACCCC", "CCCCAAAAGGGG"))
+        for args, output in (
+                (("-x", "2"), "alpha_2-13.fasta.ct"),
+                (("-2", self.second, "-b", "alpha", "-y", "2"), "alpha-1-12_alpha-2-13.fasta.ct"),
+                (("-a", "alph"), "alph_1-12.fasta.ct")):
+            with self.subTest(args=args):
+                (self.root / output).write_text("stale")
+                done = self.fold("hyb2_fold", "-d", self.first, *args)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertFalse((self.root / output).exists())
+        self.assertEqual(before, [p.read_bytes() for p in (self.first, self.second)])
+        with self.first.open("a") as f:
+            f.write(">alpha another copy\nAAAAAAAAAAAA\n")
+        self.assertNotEqual(self.fold("hyb2_fold", "-d", self.first).returncode, 0)
+
+    def test_viewpoint_exact_wrapped_reference_with_spaces_and_same_id_channels(self):
+        nested = self.root / "input dir" / "sample one.hyb"
+        nested.parent.mkdir()
+        shutil.copyfile(self.root / "sample.hyb", nested)
+        self.first.write_text(">alphax\nAAAA\n>alpha description\nGGGG\nAAAA\nCCCC\n")
+        done = self.invoke("plot_viewpoint", "-i", nested, "-a", "alpha", "-d", self.first)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        prefix = nested.with_suffix("")
+        coverage = Path(str(prefix) + "_alpha.gplot").read_text().splitlines()[1:]
+        self.assertEqual([int(row.split()[1]) for row in coverage], [1]*4 + [0]*4 + [1]*4)
+        self.second.write_text(">alpha another reference\nAAAAAA\nAAAAAAAA\n")
+        done = self.invoke("plot_viewpoint", "-i", nested, "-a", "alpha", "-1", self.first,
+                           "-b", "alpha", "-2", self.second)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for channel, expected_len in ((1, 12), (2, 14)):
+            gplot = Path(str(prefix) + f"_alpha_alpha_ref{channel}.gplot")
+            self.assertEqual(len(gplot.read_text().splitlines()) - 1, expected_len)
+
+    @unittest.skipUnless(all(shutil.which(t) for t in ("RNAfold", "RNAcofold", "b2ct")), "requires native ViennaRNA/b2ct")
+    def test_real_public_score_equivalence_and_failing_cofold(self):
+        for name in ("comradesMakeConstraints_2", "RNAfold", "b2ct"):
+            (self.tools / name).unlink()
+        nested = self.root / "project.hyb" / "data sets" / "sample one.hyb"
+        nested.parent.mkdir(parents=True)
+        shutil.copy2(self.root / "sample.hyb", nested)
+        outputs = []
+        for path in (self.root / "sample.hyb", nested):
+            done = self.invoke("hyb2", "-i", path, "-a", "alpha", "-d", self.first, "-x", "1", "-l", "12")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("Analysis completed.", done.stdout)
+            saved = Path(str(path.with_suffix("")) + "_alpha_1-12.basepair_scores.txt")
+            outputs.append(saved.read_bytes())
+        self.assertEqual(outputs[0], b"1\t12\t1\n2\t11\t1\n3\t10\t1\n4\t9\t1\n")
+        self.assertEqual(outputs[0], outputs[1])
+        self.tool("RNAcofold", 'echo "injected scoring failure" >&2; exit 9')
+        done = self.invoke("hyb2", "-i", nested, "-a", "alpha", "-d", self.first, "-x", "1", "-l", "12")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("injected scoring failure", done.stderr)
+        self.assertNotIn("Analysis completed.", done.stdout)
+        self.assertFalse(saved.exists())
+        self.assertFalse((self.root / "alpha_1-12.fasta.ct").exists())
+
+    def test_standalone_scorer_rejects_truncated_windows_in_any_reference_record(self):
+        self.enable_scoring()
+        source = self.root / "sample.hyb"
+        self.first.write_text(">alpha details\nGGGGAAAA\nCCCC\n>beta\nGGGG\n")
+        scores = self.root / "sample.basepair_scores.txt"
+        fragment = self.first.parent / "ref_1-12.fasta"
+        for out in (scores, fragment):
+            out.write_text("stale")
+        done = self.invoke("comradesMakeConstraints_2", "-i", source, "-f", self.first, "-b", "1", "-e", "12")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("beta (4 bases)", done.stderr)
+        self.assertFalse(scores.exists())
+        self.assertFalse(fragment.exists())
+        self.first.write_text(">alpha details\nGGGGAAAA\nCCCC\n>beta\nGGGGAAAACCCC\n")
+        done = self.invoke("comradesMakeConstraints_2", "-i", source, "-f", self.first, "-b", "1", "-e", "12")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(fragment.read_text().splitlines(), [">alpha", "GGGGAAAACCCC", ">beta", "GGGGAAAACCCC"])
+        self.assertEqual(scores.read_text().splitlines(), [f"{i}\t{13-i}\t2" for i in range(1, 5)])
+
+    def test_numeric_reference_identifiers_are_distinct(self):
+        self.first.write_text(">1\nAAA\n>01 exact\nGGGG\nAAAA\nCCCC\n")
+        src = self.root / "sample.hyb"
+        original = src.read_text().splitlines()[0]
+        src.write_text(original.replace("alpha", "01") + "\n" + original.replace("alpha", "1") + "\n")
+        done = self.invoke("plot_viewpoint", "-i", src, "-d", self.first, "-a", "01")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        values = (self.root / "sample_01.gplot").read_text().splitlines()[1:]
+        self.assertEqual([int(r.split()[1]) for r in values], [1]*4+[0]*4+[1]*4)
+        done = self.invoke("hyb2_fold", "-i", src, "-d", self.first, "-a", "01", "-x", "1", "-l", "12")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.ct_sequence("01_1-12.fasta.ct"), "GGGGAAAACCCC")

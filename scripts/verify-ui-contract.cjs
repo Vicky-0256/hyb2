@@ -933,12 +933,57 @@ assert.match(workflowSource, /GITHUB_SHA[\s\S]*?> web\/build-info\.js/,
   "the Pages artifact must record the exact deployed Git commit");
 assert.match(workflowSource, /Version static assets for browser cache refresh[\s\S]*?app\.js\?build=\$\{GITHUB_SHA\}[\s\S]*?styles\.css\?build=\$\{GITHUB_SHA\}/,
   "the deployed HTML must version CSS and JavaScript URLs with the exact Git commit");
-assert.match(workflowSource, /Configure GitHub Pages[\s\S]*?if: \$\{\{ vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true' \}\}/,
-  "Pages configuration must remain behind the CPLfold redistribution approval gate");
-assert.match(workflowSource, /Upload GitHub Pages artifact[\s\S]*?if: \$\{\{ vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true' \}\}/,
-  "the browser CPLfold artifact must not be published without explicit licence approval");
-assert.match(workflowSource, /deploy:\s*\n\s*if: \$\{\{ vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true' \}\}/,
-  "the deploy job must remain behind the CPLfold redistribution approval gate");
+function workflowSection(source, header) {
+  const lines = source.split(/\r?\n/);
+  const start = lines.findIndex(line => line.trim() === header);
+  assert.notEqual(start, -1, "missing workflow section " + header);
+  const indent = lines[start].search(/\S/);
+  let end = start + 1;
+  while (end < lines.length && (/^\s*(?:#|$)/.test(lines[end]) || lines[end].search(/\S/) > indent)) end += 1;
+  return lines.slice(start + 1, end).join("\n");
+}
+
+function actionStep(job, action) {
+  const steps = workflowSection(job, "steps:").split(/^\s*- /m);
+  const step = steps.find(text => text.split("\n").some(line => line.trim().startsWith("uses: " + action + "@")));
+  assert.ok(step, "expected workflow action " + action);
+  return step;
+}
+
+const pagesBuild = workflowSection(workflowSource, "build:");
+const pagesDeploy = workflowSection(workflowSource, "deploy:");
+const pagesDesktop = workflowSection(workflowSource, "desktop:");
+const desktopWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/desktop-release.yml"), "utf8");
+const releaseWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/release-gate.yml"), "utf8");
+[
+  actionStep(pagesBuild, "actions/configure-pages"),
+  actionStep(pagesBuild, "actions/upload-pages-artifact"),
+  pagesDeploy
+].forEach(function (section) {
+  const condition = section.match(/^\s*if:\s*\$\{\{([^\n]+?)\}\}\s*$/m);
+  assert.ok(condition, "Pages publication must have an explicit condition");
+  assert.doesNotMatch(condition[1], /\|\|/, "a publication condition must require both checks");
+  const clauses = condition[1].split("&&").map(clause => clause.trim().replace(/\s*==\s*/g, " == "));
+  assert.ok(clauses.includes("github.ref == 'refs/heads/main'"), "Pages publication must require main");
+  assert.ok(clauses.includes("vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true'"),
+    "Pages publication must require CPLfold redistribution approval");
+  if (section === pagesDeploy) assert.doesNotMatch(condition[1], /\b(always|failure|cancelled)\s*\(/,
+    "Pages deployment requires successful dependencies");
+});
+assert.match(pagesDesktop, /^\s*uses:\s*\.\/\.github\/workflows\/desktop-release\.yml\s*$/m,
+  "Pages must call the desktop package workflow from the event commit");
+const deployNeeds = pagesDeploy.match(/^[ \t]*needs:[ \t]*(?:\[([^\]]+)\])?[ \t]*$/m);
+assert.ok(deployNeeds, "Pages deployment must declare its required jobs");
+const requiredJobs = deployNeeds[1] ? deployNeeds[1].split(",").map(name => name.trim())
+  : Array.from(workflowSection(pagesDeploy, "needs:").matchAll(/^\s*-\s*(\S+)/gm), match => match[1]);
+for (const job of ["build", "desktop"]) assert.ok(requiredJobs.includes(job), "Pages deployment must wait for " + job);
+for (const job of [pagesBuild, workflowSection(desktopWorkflow, "package:")]) {
+  const checkout = actionStep(job, "actions/checkout");
+  const ref = checkout.match(/^\s*ref:\s*(.+)$/m);
+  if (ref) assert.match(ref[1], /^\$\{\{\s*github\.sha\s*\}\}\s*$/, "both builds must use the event commit");
+  const checkoutRepo = checkout.match(/^\s*repository:\s*(.+)$/m);
+  if (checkoutRepo) assert.match(checkoutRepo[1], /^\$\{\{\s*github\.repository\s*\}\}\s*$/, "both builds must use this repository");
+}
 assert.match(analysisPagesSource, /Git commit:/,
   "the Files drawer must display deployed build provenance");
 assert.match(appSource, /data-action="load-example"/,
@@ -981,14 +1026,43 @@ assert.match(reportCssSource, /@media print/,
   "the report must have print-specific CSS");
 assert.match(reportCssSource, /\.workspace-header[\s\S]*\.sidebar[\s\S]*\.report-actions/,
   "print CSS must remove workspace chrome and report-only controls");
-assert.match(workflowSource, /scripts\/verify-report-render\.cjs/,
-  "the deployment workflow must track report render changes");
-assert.match(workflowSource, /node scripts\/verify-report-render\.cjs/,
-  "the deployment workflow must run the report render contract");
-["verify-deseq", "verify-arc-map", "verify-region-panels", "verify-folding-energy"].forEach(function (script) {
-  assert.ok(workflowSource.includes('"scripts/' + script + '.cjs"'), "the deployment workflow must track " + script);
-  assert.ok(workflowSource.includes("node scripts/" + script + ".cjs"), "the deployment workflow must run " + script);
-});
+const pushPaths = workflowSection(workflowSection(workflowSource, "push:"), "paths:");
+const pathFilters = Array.from(pushPaths.matchAll(/^\s*-\s*["']?([^"'#\s]+)["']?/gm), match => match[1]);
+function pagesTracks(file) {
+  // The Pages filters use literal paths, * and **. Later negative filters can exclude a match.
+  let included = false;
+  for (const filter of pathFilters) {
+    const exclude = filter.startsWith("!");
+    const glob = exclude ? filter.slice(1) : filter;
+    const expression = glob.split(/(\*\*|\*)/).map(part => {
+      if (part === "**") return ".*";
+      if (part === "*") return "[^/]*";
+      return part.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
+    }).join("");
+    if (new RegExp("^" + expression + "$").test(file)) included = !exclude;
+  }
+  return included;
+}
+const browserGatePath = "scripts/verify-browser-release.sh";
+const browserGate = fs.readFileSync(path.join(repository, browserGatePath), "utf8");
+for (const input of [browserGatePath, ".gitattributes", "bin/plot_hybrids_3.awk"]) {
+  assert.ok(pagesTracks(input), "changes to " + input + " must trigger Pages");
+}
+for (const job of [pagesBuild, workflowSection(releaseWorkflow, "browser:")]) {
+  assert.match(job, /^\s*bash scripts\/verify-browser-release\.sh\s*$/m, "both workflows must run the shared browser checks");
+}
+const directChecks = ["verify-report-render.cjs", "verify-deseq.cjs", "verify-arc-map.cjs",
+  "verify-region-panels.cjs", "verify-folding-energy.cjs"];
+const sharedChecks = ["verify-vienna-wasm.cjs", "verify-cplfold-pyodide.mjs", "verify-cplfold-worker.mjs",
+  "verify-structure-worker.cjs", "verify-structure-render.cjs", "verify-cplfold-worker-lifecycle.cjs",
+  "verify-protocol-contract.cjs", "verify-ui-contract.cjs", "verify-analysis-data.cjs"];
+for (const [source, checks] of [[pagesBuild, directChecks], [browserGate, sharedChecks]]) {
+  const commands = source.split(/\r?\n/).map(line => line.trim().split(/\s+/).slice(0, 2).join(" "));
+  for (const check of checks) {
+    assert.ok(pagesTracks("scripts/" + check), "the deployment workflow must track " + check);
+    assert.ok(commands.includes("node scripts/" + check), "the deployment workflow must run " + check);
+  }
+}
 assert.ok(workflowSource.indexOf("bash scripts/build-vienna-wasm.sh") < workflowSource.indexOf("node scripts/verify-folding-energy.cjs"),
   "verify-folding-energy must run after the ViennaRNA build so it folds instead of skipping");
 

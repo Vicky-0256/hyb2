@@ -3,9 +3,12 @@ name: Native runtime release contract
 on:
   pull_request:
     paths:
+      - ".gitattributes"
       - "desktop/scripts/acquire-native-runtime.py"
       - "desktop/scripts/stage-native.py"
+      - "scripts/bundle_sources.py"
       - "desktop/scripts/verify-native-release.py"
+      - "desktop/runtime/tests/test_native_release_preflight.py"
       - "desktop/runtime/requirements-native.txt"
       - "desktop/scripts/README-native-release.md"
       - ".github/workflows/native-runtime-contract.yml"
@@ -27,9 +30,9 @@ jobs:
             target: linux-x86_64
           - os: windows-2022
             target: windows-x86_64
-          - os: macos-13
+          - os: macos-15-intel
             target: macos-x86_64
-          - os: macos-14
+          - os: macos-15
             target: macos-aarch64
     runs-on: ${{ matrix.os }}
     steps:
@@ -38,9 +41,20 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile and inspect acquisition tooling
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          python -m py_compile desktop/scripts/acquire-native-runtime.py desktop/scripts/stage-native.py desktop/scripts/verify-native-release.py
+          python -m py_compile scripts/bundle_sources.py desktop/scripts/acquire-native-runtime.py desktop/scripts/stage-native.py desktop/scripts/verify-native-release.py
           python desktop/scripts/acquire-native-runtime.py --help > /dev/null
-          python -c "import sys; p=sys.argv[1]; assert p in {'windows-x86_64','linux-x86_64','macos-x86_64','macos-aarch64'}" "$TARGET"
+          python - <<'PYTHON'
+          import os, platform
+          system = {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}[platform.system()]
+          machine = platform.machine().lower()
+          arch = {"arm64": "aarch64", "amd64": "x86_64"}.get(machine, machine)
+          actual = f"{system}-{arch}"
+          if actual != os.environ["TARGET"]:
+              raise SystemExit(f"Expected {os.environ['TARGET']}, running on {actual}")
+          PYTHON
+      - name: Test native runtime preflight and source selection
+        run: python -B -m unittest desktop.runtime.tests.test_native_release_preflight

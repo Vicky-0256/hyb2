@@ -73,16 +73,16 @@ cd hyb2/
 bin/hyb2_install_macOS-arm
 ```
 
-### Experimental Python CPLfold branch
+### CPLfold on the command line, web and desktop
 
-The `feature/cplfold-python` branch vendors the audited CPLfold Python source
-and provides `bin/cplfold` as a guarded local CLI. Its core predictor requires
+The repository vendors the CPLfold Python source in `third_party/cplfold`
+and provides `bin/cplfold` as a local CLI. Its core predictor requires
 NumPy and Numba but does not require a native HotKnots executable. See
 [`docs/cplfold-python.md`](docs/cplfold-python.md) for installation, verification,
 runtime limits, browser boundaries, and third-party licensing notes.
 
-The separate `feature/cplfold-web` branch adds this predictor to the static
-GitHub Pages application. It runs through a same-origin Pyodide worker, accepts
+The website and desktop package this source from the same checkout.
+On the website the predictor runs in a same-origin Pyodide worker, accepts
 an optional HYB-derived block bonus matrix, and visualises/ranks nested and
 pseudoknotted candidates. The browser path uses a measured session-specific
 recommendation above a 75 nt baseline, with a 500 nt hard safety ceiling

@@ -20,8 +20,11 @@ The repository workflow at `.github/workflows/deploy-pages.yml` builds and
 verifies this directory. Public artifact upload and deployment stay disabled
 unless the repository Actions variable `CPLFOLD_DISTRIBUTION_APPROVED` is set
 to `true`. Set it only after the CPLfold combined-distribution boundary below
-has qualified licence review or the required permission. The published source
-is the dedicated `feature/cplfold-web` branch; `main` remains unchanged. Choose
+has qualified licence review or the required permission. Pushes to `CPLcofold`
+run the browser and desktop release checks. Pages publishes from `main`
+after the browser checks and the Windows, Linux and macOS desktop
+package checks pass for the same commit. Desktop installers are published
+by pushing a version tag that matches `desktop/app/mygo.json`. Choose
 **GitHub Actions** as the publishing source in **Settings → Pages** before the
 first deployment.
 

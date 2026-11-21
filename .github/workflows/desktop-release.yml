@@ -3,11 +3,16 @@ name: Desktop app with bundled runtime (Windows, Linux, macOS)
 on:
   pull_request:
     paths:
-      - "desktop/app/**"
-      - "desktop/scripts/**"
-      - "desktop/runtime/**"
+      - ".gitattributes"
+      - "desktop/**"
       - "pipeline/**"
       - "third_party/cplfold/**"
+      - "third_party/iris/**"
+      - "web/cplfold/**"
+      - "web/assets/examples/**"
+      - "bin/cplfold"
+      - "scripts/bundle_sources.py"
+      - ".github/workflows/publish-desktop.yml"
       - ".github/workflows/desktop-release.yml"
   workflow_dispatch:
     inputs:
@@ -15,11 +20,12 @@ on:
         description: "Keep the full desktop build for debugging (uses Actions storage)"
         type: boolean
         default: false
-  # A version tag (v<mygo.json version>) also publishes the installers as a
-  # GitHub release; the web app's download links point at its latest one.
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      release_installers:
+        description: "Build and upload the versioned installers for the tag publisher"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,7 +60,7 @@ jobs:
             python: python/bin/python3
             cpython: cpython-3.11.17+20261009-x86_64-unknown-linux-gnu-install_only.tar.gz
             sha256: 035b0ccfe7f3d38ab3ddab505290d200c6a265b95fbd5fac76c358751d6bb6a8
-          - os: macos-14
+          - os: macos-15
             target: macos-aarch64
             release_name: HYB2-Desktop-macOS-arm64
             go_platform: darwin/arm64
@@ -74,10 +80,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: The tag is the app version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: inputs.release_installers
         run: |
           version=$(python3 -c 'import json; print(json.load(open("desktop/app/mygo.json"))["version"])')
-          test "$GITHUB_REF_NAME" = "v$version" || { echo "tag $GITHUB_REF_NAME, but mygo.json says $version"; exit 1; }
+          test "$GITHUB_REF" = "refs/tags/v$version" || { echo "tag $GITHUB_REF_NAME, but mygo.json says $version"; exit 1; }
       - uses: actions/setup-go@v6
         with:
           go-version-file: desktop/app/go.mod
@@ -112,7 +118,7 @@ jobs:
           python ../scripts/pack-runtime.py --platform ${{ matrix.resource_dir }}
           # Releases ship the installers: the .dmg on macOS, NSIS Setup.exe on
           # Windows, .tar.gz and .deb on Linux; other runs skip the disk image.
-          if [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = true ]; then
+          if [ "${{ inputs.release_installers }}" = true ]; then
             go tool mygo build -platform ${{ matrix.go_platform }}
           else
             go tool mygo build -platform ${{ matrix.go_platform }} -skip-dmg
@@ -139,7 +145,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
       - name: Collect the release files under stable names
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: inputs.release_installers
         working-directory: desktop/app/build/${{ matrix.resource_dir }}
         run: |
           out="$RUNNER_TEMP/release"
@@ -156,45 +162,9 @@ jobs:
           esac
           ls -la "$out"
       - uses: actions/upload-artifact@v4
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: inputs.release_installers
         with:
           name: release-${{ matrix.target }}
           path: ${{ runner.temp }}/release/
-          retention-days: 1  # only the publish job below reads it
+          retention-days: 1  # only the tag publisher reads it
           if-no-files-found: error
-
-  publish:
-    # Only for a version tag, after all three platforms packaged and passed.
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: release-*
-          path: release
-          merge-multiple: true
-      - name: Publish the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cd release
-          sha256sum -- * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "HYB2 Desktop $GITHUB_REF_NAME" \
-            --notes-file ../desktop/RELEASE_NOTES.md -- *
-      - name: Remove temporary artifacts after publishing the release
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          artifact_ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
-            --jq '.artifacts[] | select(.name == "release-windows-x86_64" or .name == "release-linux-x86_64" or .name == "release-macos-aarch64") | .id')
-          while IFS= read -r artifact_id; do
-            [ -n "$artifact_id" ] || continue
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
-          done <<< "$artifact_ids"

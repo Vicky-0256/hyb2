@@ -1,9 +1,16 @@
 name: HYB2 Release Gate
 
 on:
+  push:
+    branches:
+      - CPLcofold
   workflow_dispatch:
+  workflow_call:
   pull_request:
     paths:
+      - '.gitattributes'
+      - 'bin/cplfold'
+      - 'bin/plot_hybrids_3.awk'
       - 'web/**'
       - 'desktop/**'
       - 'scripts/build-*.sh'
@@ -11,8 +18,13 @@ on:
       - 'scripts/pyodide-toolchain.env'
       - 'scripts/verify-*.cjs'
       - 'scripts/verify-*.mjs'
+      - 'scripts/verify-browser-release.sh'
       - 'scripts/verify-release-gate.sh'
+      - 'scripts/bundle_sources.py'
+      - 'scripts/json-schema-lite.cjs'
       - 'third_party/cplfold/**'
+      - '.github/workflows/deploy-pages.yml'
+      - '.github/workflows/desktop-release.yml'
       - '.github/workflows/release-gate.yml'
 
 permissions:
@@ -34,7 +46,6 @@ jobs:
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           bash scripts/build-vienna-wasm.sh
-          node scripts/verify-vienna-wasm.cjs web/vendor/viennarna/vienna-rna.js
       # after the 3.1.57 build, as in deploy-pages.yml, so setup-python does
       # not change that step's environment
       - name: Set up Python 3.13 for the Pyodide build
@@ -59,30 +70,10 @@ jobs:
       - name: Build and verify browser assets
         run: |
           bash scripts/build-cplfold-web.sh
-          node scripts/verify-cplfold-pyodide.mjs
-          node scripts/verify-cplfold-worker.mjs
-          node scripts/verify-structure-worker.cjs
-          node scripts/verify-structure-render.cjs
-          node scripts/verify-protocol-contract.cjs
-          node scripts/verify-ui-contract.cjs
+          bash scripts/verify-browser-release.sh
 
   native:
-    name: Native runtime preflight
-    # Native runtimes are intentionally not stored in Git. Run this gate for
-    # a release dispatch after the platform archive has been staged; browser
-    # pull requests must not fail merely because that private release input is
-    # absent from checkout.
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: macos-14
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v6
-      - name: Explain native runtime input
-        run: |
-          if [ ! -f desktop/resources/native/native-manifest.json ]; then
-            echo 'No native runtime staged. Build a verified CPython 3.11 archive for this runner and stage it before release.' >&2
-            echo 'See desktop/resources/README.md.' >&2
-            exit 1
-          fi
-      - name: Verify portable native runtime
-        run: python3 desktop/scripts/verify-native-release.py
+    name: Native desktop packages
+    # PRs with desktop inputs and version tags have their own package job.
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/CPLcofold'
+    uses: ./.github/workflows/desktop-release.yml

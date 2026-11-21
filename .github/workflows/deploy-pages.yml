@@ -3,45 +3,28 @@ name: Deploy HYB2 Web Lite
 on:
   push:
     branches:
-      - feature/cplfold-web
+      - main
     paths:
+      - ".gitattributes"
       - "web/**"
-      - "scripts/build-vienna-wasm.sh"
-      - "scripts/build-cplfold-web.sh"
-      - "scripts/build-vienna-pyodide.sh"
+      - "desktop/**"
+      - "pipeline/**"
+      - "third_party/cplfold/**"
+      - "third_party/iris/**"
+      - "bin/cplfold"
+      - "bin/plot_hybrids_3.awk"
+      - "scripts/bundle_sources.py"
+      - "scripts/build-*.sh"
       - "scripts/pyodide-build-requirements.txt"
       - "scripts/pyodide-toolchain.env"
-      - "scripts/verify-vienna-wasm.cjs"
-      - "scripts/verify-comrades-analysis.cjs"
-      - "scripts/verify-webr-feasibility.cjs"
-      - "scripts/verify-parser.cjs"
-      - "scripts/verify-structure-worker.cjs"
-      - "scripts/verify-iris-*.cjs"
-      - "scripts/verify-structure-render.cjs"
-      - "scripts/verify-cplfold-pyodide.mjs"
-      - "scripts/verify-cplfold-worker.mjs"
-      - "scripts/verify-cplfold-parameters.mjs"
-      - "scripts/verify-cplcofold-ui.cjs"
-      - "scripts/verify-cplcofold-local-regions.mjs"
-      - "scripts/verify-analysis-data.cjs"
-      - "scripts/verify-ui-contract.cjs"
-      - "scripts/verify-input-select-events.cjs"
-      - "scripts/verify-motion-contract.cjs"
-      - "scripts/verify-evidence.cjs"
-      - "scripts/verify-report-render.cjs"
-      - "scripts/verify-deseq.cjs"
-      - "scripts/verify-arc-map.cjs"
-      - "scripts/verify-region-panels.cjs"
-      - "scripts/verify-folding-energy.cjs"
-      - "scripts/verify-batch-tools.cjs"
-      - "scripts/verify-example.cjs"
-      - "scripts/verify-results.cjs"
-      - "scripts/verify-ui-kit.cjs"
-      - "scripts/verify-desktop-entry.cjs"
+      - "scripts/verify-*.cjs"
+      - "scripts/verify-*.mjs"
+      - "scripts/verify-browser-release.sh"
       - "scripts/json-schema-lite.cjs"
       - "scripts/webr-smoke/**"
-      - "third_party/cplfold/**"
       - ".github/workflows/deploy-pages.yml"
+      - ".github/workflows/desktop-release.yml"
+      - ".github/workflows/release-gate.yml"
   workflow_dispatch:
 
 permissions:
@@ -54,6 +37,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  desktop:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-release.yml
+
   build:
     runs-on: ubuntu-latest
     outputs:
@@ -76,11 +64,9 @@ jobs:
           "$hyb2_emsdk_directory/emsdk" activate "$EMSDK_VERSION"
           source "$hyb2_emsdk_directory/emsdk_env.sh"
           bash scripts/build-vienna-wasm.sh
-          node scripts/verify-structure-worker.cjs
           node scripts/verify-iris-core.cjs
           node scripts/verify-iris-worker.cjs
           node scripts/verify-iris-ui.cjs
-          node scripts/verify-structure-render.cjs
           node scripts/verify-cplcofold-ui.cjs
 
       - name: Verify static application
@@ -96,10 +82,8 @@ jobs:
           node --check scripts/webr-smoke/spike.mjs
           node --check web/cplfold.worker.mjs
           node scripts/verify-parser.cjs
-          node scripts/verify-analysis-data.cjs
           node scripts/verify-comrades-analysis.cjs
           node scripts/verify-webr-feasibility.cjs
-          node scripts/verify-ui-contract.cjs
           node scripts/verify-input-select-events.cjs
           node scripts/verify-motion-contract.cjs
           node scripts/verify-evidence.cjs
@@ -144,8 +128,7 @@ jobs:
           test -s web/vendor/pyodide-cplfold/CPLfold-THIRD_PARTY_NOTICES.md
           test -s web/vendor/pyodide-cplfold/CPLfold-GPL-2.0-or-later.txt
           test -s web/vendor/pyodide-cplfold/CPLfold-LinearFold-LICENSE.txt
-          node scripts/verify-cplfold-pyodide.mjs
-          node scripts/verify-cplfold-worker.mjs
+          bash scripts/verify-browser-release.sh
           node scripts/verify-cplfold-parameters.mjs
           node scripts/verify-cplcofold-local-regions.mjs
 
@@ -156,12 +139,12 @@ jobs:
           grep -q "styles.css?build=${GITHUB_SHA}" web/index.html
 
       - name: Configure GitHub Pages
-        if: ${{ vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
+        if: ${{ github.ref == 'refs/heads/main' && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
         uses: actions/configure-pages@v5
 
       - name: Upload GitHub Pages artifact
         id: pages-artifact
-        if: ${{ vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
+        if: ${{ github.ref == 'refs/heads/main' && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
         uses: actions/upload-pages-artifact@v4
         with:
           path: ./web
@@ -174,7 +157,7 @@ jobs:
           echo "Set the repository Actions variable CPLFOLD_DISTRIBUTION_APPROVED=true only after redistribution permission or qualified licence review." >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    if: ${{ vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
+    if: ${{ github.ref == 'refs/heads/main' && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
     permissions:
       contents: read
       pages: write
@@ -184,7 +167,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, desktop]
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

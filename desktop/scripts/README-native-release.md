@@ -49,12 +49,15 @@ Numba and CPLfold smoke test and records the target platform in the manifest.
 |---|---|---|
 | Windows 11 x64 | `windows-2022` | `windows-x86_64` |
 | Ubuntu x64 | `ubuntu-22.04` | `linux-x86_64` |
-| macOS Intel | `macos-13` | `macos-x86_64` |
-| macOS Apple Silicon | `macos-14` | `macos-aarch64` |
+| macOS Intel (tooling checks) | `macos-15-intel` | `macos-x86_64` |
+| macOS Apple Silicon | `macos-15` | `macos-aarch64` |
 
-Each job must publish the staged `native-manifest.json` and the archive SHA256
-as build artifacts.  A missing URL/SHA or an unavailable target wheel is a
-failed release, never a reason to fall back to a host virtualenv.
+Windows x64, Linux x64 and macOS Apple Silicon build and unpack the desktop
+application. Each packaged runtime contains its source manifest and ships
+with its archive SHA-256. The Pages deployment and the manual release gate
+reuse these package checks. The version-tag workflow publishes the installers
+after the browser and all three desktop platforms pass. Missing pinned
+archives or wheels fail the package job.
 
 ## Bowtie2
 
@@ -67,8 +70,14 @@ installs.
 
 `stage-native.py --bowtie2 DIR` copies them to `bin/` and checks them by
 building an index and aligning a probe read. `verify-native-release.py`
-fails if Bowtie2 is missing, and if any repository source copied into the
-bundle (the `SOURCE_DIRS` list in `stage-native.py`) is stale.
+compares the full set of packaged project files and their SHA-256 digests
+against the current sources. It also requires Bowtie2.
+
+The native and browser builds select paths from the Git index and read the
+contents from the working tree. Local edits to tracked files are included.
+Stage a new source with `git add` to include it in a checkout build. For an
+extracted source archive without Git metadata, the archive's file tree
+supplies the package inputs under the same directory and cache exclusions.
 
 Bowtie2 publishes no macOS x86_64 build. An Intel Mac release needs a
 self-built binary, or that target ships without FASTQ mapping (SAM input

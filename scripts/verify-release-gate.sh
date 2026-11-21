@@ -19,38 +19,16 @@ if ! command -v emcc >/dev/null 2>&1; then
   exit 2
 fi
 
-echo '[1/7] Build and verify ViennaRNA WebAssembly'
+echo '[1/4] Build ViennaRNA WebAssembly'
 bash scripts/build-vienna-wasm.sh
-node scripts/verify-vienna-wasm.cjs web/vendor/viennarna/vienna-rna.js
 
-echo '[2/7] Build browser CPLfold/Pyodide runtime, with the ViennaRNA Python module'
+echo '[2/4] Build browser CPLfold/Pyodide runtime with the ViennaRNA Python module'
 bash scripts/build-vienna-pyodide.sh
 bash scripts/build-cplfold-web.sh
 
-echo '[3/7] Verify browser CPLfold runtime'
-node scripts/verify-cplfold-pyodide.mjs
-node scripts/verify-cplfold-worker.mjs
+echo '[3/4] Verify browser engines, application contracts and release assets'
+bash scripts/verify-browser-release.sh
 
-echo '[4/7] Verify structure worker against ViennaRNA'
-node scripts/verify-structure-worker.cjs
-node scripts/verify-structure-render.cjs
-node scripts/verify-cplfold-worker-lifecycle.cjs
-
-echo '[5/7] Verify application contracts'
-node scripts/verify-protocol-contract.cjs
-node scripts/verify-ui-contract.cjs
-node scripts/verify-analysis-data.cjs
-
-echo '[6/7] Verify native desktop runtime'
+echo '[4/4] Verify native desktop runtime'
 python3 desktop/scripts/verify-native-release.py
-
-echo '[7/7] Verify release asset inventory'
-test -s web/vendor/viennarna/vienna-rna.js
-test -s web/vendor/viennarna/vienna-rna.wasm
-test -s web/vendor/pyodide-cplfold/pyodide.mjs
-test -s web/vendor/pyodide-cplfold/pyodide.asm.wasm
-vienna_wheel="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["packages"]["viennarna"]["file_name"])' web/vendor/pyodide-cplfold/pyodide-lock.json)"
-[[ "$vienna_wheel" =~ ^viennarna-[0-9a-f]{16}/viennarna-2\.7\.2-cp313-cp313-pyemscripten_2025_0_wasm32\.whl$ ]]
-test -s "web/vendor/pyodide-cplfold/$vienna_wheel"
-test -s desktop/resources/native/native-manifest.json
 echo 'HYB2 release gate: PASS'

@@ -1,6 +1,6 @@
 # CPLfold Python integration
 
-The `feature/cplfold-python` branch includes a source snapshot of CPLfold at
+HYB2 includes a source snapshot of CPLfold at
 `third_party/cplfold`. The snapshot was imported from
 `https://github.com/Vicky-0256/CPLfold.git`, branch
 `feature/pseudoknot-free-mode`, commit
@@ -14,9 +14,9 @@ a standard-library-only implementation: the complete predictor requires NumPy
 and Numba, and Numba uses LLVM JIT compilation. ViennaRNA is optional. SciPy
 and pysam are needed only by the optional PARIS BAM extraction script.
 
-The `feature/cplfold-python` branch adds the reproducible local CLI layer. The
-separate `feature/cplfold-web` branch packages the same pure-Python sources,
-parameters, Pyodide 0.29.4, and NumPy 2.2.5 as a static GitHub Pages artifact.
+The local CLI, desktop runtime and GitHub Pages application share the vendored
+Python sources and parameters. The Pages build packages them with Pyodide
+0.29.4 and NumPy 2.2.5.
 Pyodide does not provide Numba, so the browser bridge uses identity `njit`
 decorators. The local CLI remains the supported route for longer workloads.
 The browser measures a conservative session recommendation above a 75-nt

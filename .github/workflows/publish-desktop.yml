@@ -1,0 +1,52 @@
+name: Publish HYB2 Desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    uses: ./.github/workflows/release-gate.yml
+
+  package:
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      release_installers: true
+
+  publish:
+    needs: [browser, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd release
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "HYB2 Desktop $GITHUB_REF_NAME" \
+            --notes-file ../desktop/RELEASE_NOTES.md -- *
+      - name: Remove temporary artifacts after publishing the release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name == "release-windows-x86_64" or .name == "release-linux-x86_64" or .name == "release-macos-aarch64") | .id')
+          while IFS= read -r artifact_id; do
+            [ -n "$artifact_id" ] || continue
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
+          done <<< "$artifact_ids"

@@ -3,6 +3,8 @@ name: Verify CPLfold Python
 on:
   push:
     branches:
+      - main
+      - CPLcofold
       - feature/cplfold-python
     paths:
       - "third_party/cplfold/**"

@@ -17,17 +17,19 @@ EXPECTED_STRUCTURE = "..(((((..[[[[)))))......]]]]"
 EXPECTED_ENERGY_LINE = "Energy: -8.02 kcal/mol"
 
 
-def run(command: list[str], *, cwd: Path, environment: dict[str, str]) -> str:
+def run(command: list[str], *, cwd: Path, environment: dict[str, str], timeout: int = 300) -> str:
     completed = subprocess.run(
         command,
         cwd=cwd,
         env=environment,
-        check=True,
+        check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        timeout=300,
+        timeout=timeout,
     )
+    if completed.returncode:
+        raise SystemExit(f"Command exited with status {completed.returncode}: {command}\n{completed.stdout}")
     return completed.stdout
 
 
@@ -43,7 +45,7 @@ def main() -> None:
     ]
     runner = next((candidate for candidate in candidates if candidate and candidate.is_file()), Path(sys.executable))
     probe = subprocess.run(
-        [str(runner), "-c", "import numpy, numba"],
+        [str(runner), "-B", "-c", "import numpy, numba"],
         cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, check=False,
     )
@@ -56,7 +58,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="hyb2-cplfold-numba-") as cache:
         environment = os.environ.copy()
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        environment.pop("NUMBA_DISABLE_JIT", None)
+        environment["NUMBA_DISABLE_JIT"] = "0"
+        environment.pop("CPLFOLD_PYTHON_OUTSIDE", None)
+        # The native parity process and CLI smoke tests can reuse compiled signatures.
+        environment["NUMBA_CACHE_DIR"] = str(Path(cache) / "jit-cache")
 
         oversized_sequence = "A" * 1001
         oversized_file = Path(cache) / "oversized-input.fasta"
@@ -127,16 +132,13 @@ def main() -> None:
                 "A valid Phase-1-only fold incorrectly returned command failure"
             )
 
-        environment["NUMBA_CACHE_DIR"] = str(Path(cache) / "jit-cache")
-
         sequence_file = Path(cache) / "cplfold-input.fasta"
         sequence_file.write_text(
             ">HYB2_Web_prepared_sequence\n" + SEQUENCE + "\n", encoding="utf-8"
         )
 
-        # Test discovery order must not decide whether the broad logic suite
-        # compiles dozens of Numba signatures. Native execution is exercised
-        # explicitly by the CLI smoke below and verify-cplcofold-python.py.
+        # Keep the broad logic suite interpreted. The parity test enables
+        # nopython compilation in its own child for the inside and outside kernels.
         unit_environment = environment.copy()
         unit_environment["NUMBA_DISABLE_JIT"] = "1"
         unit_output = run(
@@ -151,12 +153,16 @@ def main() -> None:
             ],
             cwd=vendor,
             environment=unit_environment,
+            timeout=600,
         )
         test_count = re.search(r"^Ran (\d+) tests?", unit_output, re.MULTILINE)
         if test_count is None or int(test_count.group(1)) < 28:
             raise SystemExit("CPLfold did not run at least its 28 baseline regression tests")
         if re.search(r"^OK$", unit_output, re.MULTILINE) is None:
             raise SystemExit("CPLfold unit tests did not report success")
+        parity = re.search(r"CPLfold nopython parity passed \([^\r\n)]+\)", unit_output)
+        if parity is None:
+            raise SystemExit("CPLfold unit tests did not verify the compiled kernels against the pure kernels")
 
         smoke_output = run(
             [
@@ -215,9 +221,10 @@ def main() -> None:
 
     print(
         "CPLfold Python verification passed: length guard, secure cache, "
-        f"{test_count.group(1)} pure-Python unit tests, "
+        f"{test_count.group(1)} unit tests, "
         "FASTA and bonus-matrix file input, and real-JIT smoke."
     )
+    print(parity.group(0))
     print(f"Reference structure: {EXPECTED_STRUCTURE}")
     print("Reference DP09 energy: -8.0204 kcal/mol (CLI rounded to -8.02).")
 

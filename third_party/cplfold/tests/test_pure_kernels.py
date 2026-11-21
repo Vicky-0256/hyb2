@@ -14,13 +14,13 @@ matrix, tiny sequences and forced-pair constraints exercise the pruning and
 boundary rules that a few full folds leave untouched.  The full two-phase
 folds are compared as ``repr`` of every float.
 
-When Numba itself is importable, a third run uses the real JIT kernels on a
-small subset.  ``parse_loop_vienna`` is compiled with fastmath=True, so it
+When Numba is installed, a third run enables JIT on a small subset and
+requires nopython signatures on both kernels after execution.
+``parse_loop_vienna`` is compiled with fastmath=True, so it
 may differ from Python by a few ulps: that run compares structures and
 energies rounded to 1e-6, not bytes.
 """
 
-import functools
 import json
 import os
 import subprocess
@@ -28,12 +28,13 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from importlib.machinery import PathFinder
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 RUNNER = textwrap.dedent(r'''
-    import hashlib, io, contextlib, json, random, sys, types
+    import hashlib, io, contextlib, json, os, random, sys, types
     import numpy as np
 
     MODE = sys.argv[2]                        # "stub": identity numba; "numba": the real JIT
@@ -47,11 +48,25 @@ RUNNER = textwrap.dedent(r'''
         sys.modules["numba"] = stub
     else:
         import numba
-        assert hasattr(numba, "__version__")
+        from numba.core.registry import CPUDispatcher
+        if numba.config.DISABLE_JIT:
+            raise AssertionError("Native parity requires an enabled Numba JIT")
     sys.path.insert(0, sys.argv[1])
     import CPLfold_parser
     from CPLfold_parser import BeamCKYParserHyper
     from CPLfold import two_phase_pseudoknot_fold
+
+    native_kernels = {}
+    pure = MODE == "stub" and os.environ.get("CPLFOLD_PURE_KERNELS") == "1"
+    expected_module = "Utils.pure_kernels" if pure else "CPLfold_parser"
+    for name in ("parse_loop_vienna", "_outside_kernel"):
+        kernel = getattr(CPLfold_parser, name)
+        if kernel.__module__ != expected_module:
+            raise AssertionError(f"{name} resolved to {kernel.__module__}, expected {expected_module}")
+        if MODE == "numba":
+            if not isinstance(kernel, CPUDispatcher):
+                raise AssertionError(f"{name} is not a Numba CPU dispatcher")
+            native_kernels[name] = kernel
 
     STATE = ("_scores", "_manners", "_splits", "_l1s", "_l2s", "_c_scores", "_c_manners", "_c_splits",
              "_beta_scores", "_beta_manners", "_beta_splits", "_beta_l1s", "_beta_l2s",
@@ -195,8 +210,13 @@ RUNNER = textwrap.dedent(r'''
         if MODE == "stub":
             folds.append(floats(fold))
         folds_coarse.append([length, coarse(fold)])
-    print(json.dumps({"pure": CPLfold_parser.parse_loop_vienna.__module__, "raw": raw, "folds": folds,
-                      "foldsCoarse": folds_coarse}, sort_keys=True))
+    compiled = {}
+    for name, kernel in native_kernels.items():
+        if not kernel.nopython_signatures:
+            raise AssertionError(f"{name} did not execute a nopython signature during parity checks")
+        compiled[name] = len(kernel.nopython_signatures)
+    print(json.dumps({"raw": raw, "folds": folds, "foldsCoarse": folds_coarse,
+                      "compiled": compiled}, sort_keys=True))
 ''')
 
 
@@ -207,7 +227,10 @@ NUMBA_CACHE = Path(tempfile.gettempdir()) / "cplfold-test-pure-kernels-numba-cac
 
 def _start(pure: bool, root: Path = ROOT, mode: str = "stub") -> subprocess.Popen:
     env = dict(os.environ, CPLFOLD_PURE_KERNELS="1" if pure else "0", PYTHONDONTWRITEBYTECODE="1",
-               NUMBA_CACHE_DIR=str(NUMBA_CACHE))
+               NUMBA_CACHE_DIR=os.environ.get("NUMBA_CACHE_DIR") or str(NUMBA_CACHE))
+    env.pop("CPLFOLD_PYTHON_OUTSIDE", None)
+    if mode == "numba":
+        env["NUMBA_DISABLE_JIT"] = "0"
     # Output to files, not pipes: a full pipe would stall a run started in
     # parallel until the one before it is read.
     out, err = tempfile.TemporaryFile("w+"), tempfile.TemporaryFile("w+")
@@ -231,17 +254,12 @@ def _run(pure: bool, root: Path = ROOT, mode: str = "stub") -> dict:
     return _finish(_start(pure, root, mode))
 
 
-def _numba_available() -> bool:
-    done = subprocess.run([sys.executable, "-c", "import numba, sys; sys.exit(0 if hasattr(numba, '__version__') else 1)"],
-                          env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), capture_output=True, timeout=300, check=False)
-    return done.returncode == 0
-
-
-@functools.lru_cache(maxsize=None)
 def _all_runs() -> dict:
     """The three runs, started together (they are independent processes)."""
     processes = {"original": _start(False), "pure": _start(True)}
-    if _numba_available():
+    # Other test modules may have installed an identity stub in sys.modules.
+    # An installed but broken Numba must report its import error in the child.
+    if PathFinder.find_spec("numba") is not None:
         processes["numba"] = _start(False, ROOT, "numba")
     try:
         return {name: _finish(process) for name, process in processes.items()}
@@ -252,11 +270,12 @@ def _all_runs() -> dict:
 
 
 class PureKernelsMatchTheNumbaKernels(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.runs = _all_runs()
+
     def test_same_parser_state_and_folds(self):
-        runs = _all_runs()
-        original, pure = runs["original"], runs["pure"]
-        self.assertEqual(original["pure"], "CPLfold_parser", "CPLFOLD_PURE_KERNELS=0 must keep the original kernels")
-        self.assertNotEqual(pure["pure"], "CPLfold_parser", "without Numba the pure kernels must be used")
+        original, pure = self.runs["original"], self.runs["pure"]
         self.assertTrue(all(original["folds"]), "every fold must give structures")
         self.assertEqual(len(original["raw"]), len(pure["raw"]))
         for before, after in zip(original["raw"], pure["raw"]):
@@ -272,12 +291,9 @@ class PureKernelsMatchTheNumbaKernels(unittest.TestCase):
         self.assertGreater(len({case["alpha"] for case in constrained}), 1)
 
     def test_numba_jit_kernels_agree(self):
-        runs = _all_runs()
-        if "numba" not in runs:
-            self.skipTest("numba is not importable")
-        jit, pure = runs["numba"], runs["pure"]
-        self.assertEqual(jit["pure"], "CPLfold_parser")
-        self.assertNotEqual(pure["pure"], "CPLfold_parser")
+        if "numba" not in self.runs:
+            self.skipTest("Numba is not installed")
+        jit, pure = self.runs["numba"], self.runs["pure"]
         by_index = {case["index"]: case for case in pure["raw"]}
         self.assertTrue(jit["raw"])
         for case in jit["raw"]:
@@ -287,6 +303,8 @@ class PureKernelsMatchTheNumbaKernels(unittest.TestCase):
         self.assertTrue(jit["foldsCoarse"])
         for length, fold in jit["foldsCoarse"]:
             self.assertEqual(fold, by_length[length], f"numba two-phase fold differs (length {length})")
+        signature_counts = ", ".join(f"{name}={count}" for name, count in jit["compiled"].items())
+        print(f"CPLfold nopython parity passed ({signature_counts})")
 
 
 if __name__ == "__main__":

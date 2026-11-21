@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -17,10 +18,16 @@ globalThis.self = {
 
 // Node's Fetch implementation does not read file: URLs. The browser worker
 // uses fetch for same-origin files, so provide only that narrow local adapter.
+// Any other URL is refused and recorded: these tests run offline, and in Node
+// Pyodide falls back to downloading a package it cannot read locally (from
+// its cdnUrl, the jsDelivr CDN unless packageBaseUrl is set), so a regression
+// must fail here rather than download.
+const networkRequests = [];
 globalThis.fetch = async function (input, options) {
   const url = new URL(typeof input === "string" ? input : input.url);
   if (url.protocol !== "file:") {
-    return nativeFetch(input, options);
+    networkRequests.push(url.href);
+    throw new TypeError("verify-cplfold-worker blocks network access: " + url.href);
   }
   try {
     const bytes = fs.readFileSync(fileURLToPath(url));
@@ -30,8 +37,80 @@ globalThis.fetch = async function (input, options) {
   }
 };
 
-await import(pathToFileURL(workerPath).href + "?worker-contract=1");
+const workerModule = await import(pathToFileURL(workerPath).href + "?worker-contract=1");
 assert.equal(typeof self.onmessage, "function");
+
+// The Pyodide options: over http(s) a deployed build cache-busts the lock and
+// keeps the wheels resolving against the runtime directory; a local build and
+// file: (these Node tests) keep Pyodide's default lock location.
+{
+  const { pyodideOptionsFor } = workerModule;
+  const runtimeUrl = "https://example.org/hyb2/vendor/pyodide-cplfold/";
+  assert.deepEqual(pyodideOptionsFor(runtimeUrl, "abc123"), {
+    indexURL: runtimeUrl,
+    lockFileURL: runtimeUrl + "pyodide-lock.json?build=abc123",
+    packageBaseUrl: runtimeUrl
+  });
+  assert.deepEqual(pyodideOptionsFor("http://localhost:8769/vendor/pyodide-cplfold/", "abc123").lockFileURL,
+    "http://localhost:8769/vendor/pyodide-cplfold/pyodide-lock.json?build=abc123");
+  assert.deepEqual(pyodideOptionsFor(runtimeUrl, "local"), { indexURL: runtimeUrl });
+  // file: always pins packageBaseUrl to the local directory (a decoded path
+  // with a trailing slash), so Node never falls back to the CDN.
+  for (const build of ["abc123", "local", ""]) {
+    assert.deepEqual(pyodideOptionsFor("file:///opt/site%20copy/vendor/pyodide-cplfold/", build),
+      { indexURL: "/opt/site copy/vendor/pyodide-cplfold/", packageBaseUrl: "/opt/site copy/vendor/pyodide-cplfold/" });
+  }
+  assert.deepEqual(pyodideOptionsFor("file:///opt/runtime", "local"),
+    { indexURL: "/opt/runtime/", packageBaseUrl: "/opt/runtime/" });
+}
+
+// Failure messages: the package, the first real error line, and the advice.
+{
+  const { packageFailureMessage } = workerModule;
+  // A non-OK response: missing file or a server error during a deploy.
+  const missing = packageFailureMessage("viennarna", [
+    "The following error occurred while loading viennarna:",
+    "Failed to load 'https://example.org/vendor/pyodide-cplfold/viennarna-0123456789abcdef/viennarna.whl': request failed."
+  ]);
+  assert.match(missing, /viennarna/);
+  assert.match(missing, /request failed\. The file could not be downloaded \(missing or server error\)/);
+  assert.doesNotMatch(missing, /\.\./, "a trailing period in the detail must not double up");
+  assert.match(missing, /build-vienna-pyodide\.sh/);
+  assert.match(missing, /reload the page/);
+  assert.doesNotMatch(missing, /missing from this site/);
+  // The lock has no entry for the package: also a build problem.
+  const unlisted = packageFailureMessage("viennarna", ["Error: No known package with name 'viennarna'"]);
+  assert.match(unlisted, /No known package with name 'viennarna'\. This site's pyodide-lock\.json does not list it/);
+  assert.match(unlisted, /build-vienna-pyodide\.sh, then scripts\/build-cplfold-web\.sh/);
+  const unlistedNumpy = packageFailureMessage("numpy", ["No known package with name 'numpy'"]);
+  assert.match(unlistedNumpy, /run scripts\/build-cplfold-web\.sh;/);
+  assert.doesNotMatch(unlistedNumpy, /build-vienna-pyodide/);
+  // Real integrity/digest errors (Node, or a browser that names them).
+  const integrity = packageFailureMessage("viennarna", [
+    "The following error occurred while loading viennarna:",
+    "Failed to find a valid digest in the 'integrity' attribute for resource 'viennarna.whl'"
+  ]);
+  assert.match(integrity, /integrity/);
+  assert.match(integrity, /inconsistent/);
+  assert.match(integrity, /reload the page/);
+  assert.doesNotMatch(integrity, /build-vienna-pyodide/);
+  // Browsers report an SRI mismatch of fetch(url, {integrity}) as the same
+  // generic TypeError as a network failure: Chrome, Firefox, Safari.
+  for (const [error, text] of [
+    ["TypeError: Failed to fetch", "Failed to fetch"],
+    ["TypeError: NetworkError when attempting to fetch resource.", "NetworkError when attempting to fetch resource"],
+    ["TypeError: Load failed", "Load failed"]
+  ]) {
+    const network = packageFailureMessage("viennarna", ["The following error occurred while loading viennarna:", error]);
+    assert.equal(network, "The local ViennaRNA Python module (viennarna) could not be loaded: " + text
+      + ". A network problem or inconsistent deployed files (a partial or ongoing deploy): reload the page.");
+  }
+  const other = packageFailureMessage("numpy", ["RuntimeError: something else."]);
+  assert.match(other, /numpy could not be loaded: something else\. Check the connection/);
+  assert.doesNotMatch(other, /\n/);
+  assert.match(packageFailureMessage("numpy", ["x".repeat(300)]), /x\.\.\. Check/, "a truncated detail keeps its ellipsis");
+  assert.match(packageFailureMessage("numpy", []), /numpy could not be loaded: Pyodide did not report it as loaded/);
+}
 
 await self.onmessage({
   data: {
@@ -57,7 +136,7 @@ assert.equal(failure, undefined, failure && failure.message);
 assert.ok(messages.some(function (message) { return message.type === "progress" && message.phase === "source"; }));
 const completion = messages.find(function (message) { return message.type === "complete"; });
 assert.ok(completion, "the actual worker message path must return a completed fold");
-assert.equal(completion.result.bridgeVersion, "6");
+assert.equal(completion.result.bridgeVersion, "7");
 assert.equal(completion.result.engineVersion, "24bab52");
 assert.equal(completion.result.allowPseudoknot, true);
 assert.equal(completion.result.dotBracket, "..(((((..[[[[)))))......]]]]");
@@ -65,6 +144,58 @@ assert.equal(completion.result.maxSequenceLength, 75);
 assert.match(completion.result.runtimeManifest.archiveSha256, /^[a-f0-9]{64}$/);
 assert.ok(completion.result.elapsedMs >= completion.result.foldElapsedMs);
 assert.ok(completion.result.elapsedMs >= completion.result.runtimeLoadMs);
+
+// The duplex read support loads ViennaRNA's Python module on first use and
+// computes the pairs in the worker; no evidencePairs are sent.
+messages.length = 0;
+await self.onmessage({
+  data: {
+    type: "cplfold-bonus-matrix",
+    sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+    evidenceMode: "hyb-blocks",
+    supportKernel: "duplex",
+    evidenceArms: [
+      { oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 },
+      { oneStart: 4, oneEnd: 9, twoStart: 19, twoEnd: 24 },
+      { oneStart: 1, oneEnd: 10, twoStart: 15, twoEnd: 28 }
+    ]
+  }
+});
+const duplexFailure = messages.find(function (message) { return message.type === "error"; });
+assert.equal(duplexFailure, undefined, duplexFailure && duplexFailure.message);
+assert.ok(messages.some(function (message) { return message.type === "progress" && message.phase === "viennarna"; }));
+assert.ok(messages.some(function (message) {
+  return message.type === "progress" && message.phase === "rna-duplex" && message.completed === 3 && message.total === 3;
+}), "the duplex step reports its blocks");
+const duplexExport = messages.find(function (message) { return message.type === "bonus-matrix-complete"; });
+assert.equal(duplexExport.result.evidence.supportKernel, "duplex");
+assert.equal(duplexExport.result.evidence.duplexesWithPairs, 3);
+assert.equal(duplexExport.result.evidence.bonusEntries.length, 5);
+
+messages.length = 0;
+await self.onmessage({
+  data: {
+    type: "cplfold",
+    sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+    evidenceMode: "hyb-blocks",
+    supportKernel: "duplex",
+    evidenceArms: [
+      { oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 },
+      { oneStart: 4, oneEnd: 9, twoStart: 19, twoEnd: 24 }
+    ],
+    beamSize: 20, maxPhase1: 2, energyDelta: 5, energyModel: "DP09", alpha: 0.5, beta: 0, allowPseudoknot: true
+  }
+});
+const duplexFoldFailure = messages.find(function (message) { return message.type === "error"; });
+assert.equal(duplexFoldFailure, undefined, duplexFoldFailure && duplexFoldFailure.message);
+const stages = messages.filter(function (message) { return message.type === "progress"; }).map(function (message) { return message.phase; });
+assert.ok(stages.indexOf("rna-duplex") !== -1 && stages.indexOf("rna-duplex") < stages.indexOf("cplfold"),
+  "RNAduplex progress comes before the fold stage: " + stages.join(","));
+assert.equal(messages.find(function (message) { return message.type === "complete"; }).result.evidence.supportKernel, "duplex");
+
+// The fold stage is posted once: by the pair callback after the last block,
+// and otherwise (no block reached the callback) once fold_json returns.
+assert.equal(stages.filter(function (phase) { return phase === "cplfold"; }).length, 1, stages.join(","));
 
 messages.length = 0;
 await self.onmessage({
@@ -113,7 +244,7 @@ const matrixFailure = messages.find(function (message) { return message.type ===
 assert.equal(matrixFailure, undefined, matrixFailure && matrixFailure.message);
 const matrixCompletion = messages.find(function (message) { return message.type === "bonus-matrix-complete"; });
 assert.ok(matrixCompletion, "the worker must export the HYB bonus matrix independently of a fold");
-assert.equal(matrixCompletion.result.bridgeVersion, "6");
+assert.equal(matrixCompletion.result.bridgeVersion, "7");
 assert.equal(matrixCompletion.result.evidence.inputRecords, 1);
 assert.ok(matrixCompletion.result.evidence.bonusEntries.length > 0);
 
@@ -261,6 +392,82 @@ assert.match(energyBatch.version, /^CPLfold /);
 messages.length = 0;
 await self.onmessage({ data: { type: "cplfold-energy-batch", pairs: [["ACGN", "GCU"]] } });
 assert.ok(messages.find(message => message.type === "error"), "invalid bases fail the batch");
+
+// A failed ViennaRNA load: Pyodide resolves loadPackage without the package,
+// so the worker must say which package failed and why, and a retry after the
+// files are fixed must succeed.  Runs on a copy of the runtime; web/vendor is
+// untouched.  This exercises Node's own loader (fs reads, then Pyodide's
+// unpack of the wheel), which skips the lock's SHA-256 integrity check that
+// a browser fetch applies; the browser's wording for that is covered by the
+// packageFailureMessage unit tests above.
+//  1. Wheel missing (in the lock, absent on disk): Pyodide in Node would retry
+//     it from cdnUrl; with packageBaseUrl pinned to the runtime directory that
+//     retry stays local, so the load fails offline with no http(s) request
+//     (the fetch guard above refuses and records any).
+//  2. Wheel truncated (an interrupted or partial deploy): "not a zip file".
+//  3. Wheel restored: the retry succeeds in the same worker.
+{
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hyb2-cplfold-retry-"));
+  try {
+    const runtimeSource = path.join(repository, "web", "vendor", "pyodide-cplfold");
+    const runtimeCopy = path.join(scratch, "web", "vendor", "pyodide-cplfold");
+    fs.cpSync(runtimeSource, runtimeCopy, { recursive: true });
+    const workerCopy = path.join(scratch, "web", "cplfold.worker.mjs");
+    fs.copyFileSync(workerPath, workerCopy);
+    const lock = JSON.parse(fs.readFileSync(path.join(runtimeCopy, "pyodide-lock.json"), "utf8"));
+    const wheel = path.join(runtimeCopy, lock.packages.viennarna.file_name);
+    const goodWheel = fs.readFileSync(wheel);
+    fs.rmSync(wheel);
+
+    self.location.href = pathToFileURL(workerCopy).href + "?build=local";
+    await import(pathToFileURL(workerCopy).href + "?worker-retry=1");
+    const duplexRequest = {
+      type: "cplfold-bonus-matrix",
+      sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+      evidenceMode: "hyb-blocks",
+      supportKernel: "duplex",
+      evidenceArms: [
+        { oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 },
+        { oneStart: 4, oneEnd: 9, twoStart: 19, twoEnd: 24 },
+        { oneStart: 1, oneEnd: 10, twoStart: 15, twoEnd: 28 }
+      ]
+    };
+    networkRequests.length = 0;
+    messages.length = 0;
+    await self.onmessage({ data: duplexRequest });
+    assert.deepEqual(networkRequests, [], "a missing local wheel must not be fetched from the network");
+    const missingFailure = messages.find(message => message.type === "error");
+    assert.ok(missingFailure, "a missing ViennaRNA wheel must fail the request");
+    assert.match(missingFailure.message, /ViennaRNA Python module \(viennarna\) could not be loaded/);
+    assert.match(missingFailure.message, /ENOENT|no such file/i);
+    assert.match(missingFailure.message, /could not be downloaded \(missing or server error\)/);
+    assert.match(missingFailure.message, /build-vienna-pyodide\.sh/);
+    assert.ok(!messages.some(message => message.type === "bonus-matrix-complete"));
+
+    fs.writeFileSync(wheel, goodWheel.subarray(0, 100000));
+    messages.length = 0;
+    await self.onmessage({ data: duplexRequest });
+    const loadFailure = messages.find(message => message.type === "error");
+    assert.ok(loadFailure, "a truncated ViennaRNA wheel must fail the request");
+    assert.match(loadFailure.message, /ViennaRNA Python module \(viennarna\) could not be loaded/);
+    assert.match(loadFailure.message, /is not a zip file/);
+    assert.match(loadFailure.message, /inconsistent.*reload the page/);
+    assert.doesNotMatch(loadFailure.message, /build-vienna-pyodide/);
+    assert.ok(!messages.some(message => message.type === "bonus-matrix-complete"));
+
+    fs.writeFileSync(wheel, goodWheel);
+    messages.length = 0;
+    await self.onmessage({ data: duplexRequest });
+    const retryFailure = messages.find(message => message.type === "error");
+    assert.equal(retryFailure, undefined, retryFailure && retryFailure.message);
+    const retried = messages.find(message => message.type === "bonus-matrix-complete");
+    assert.ok(retried, "the retry after restoring the wheel must succeed");
+    assert.equal(retried.result.evidence.duplexesWithPairs, 3);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+assert.deepEqual(networkRequests, [], "the worker tests must not touch the network");
 
 globalThis.fetch = nativeFetch;
 delete globalThis.self;

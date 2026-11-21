@@ -23,7 +23,8 @@ echo '[1/7] Build and verify ViennaRNA WebAssembly'
 bash scripts/build-vienna-wasm.sh
 node scripts/verify-vienna-wasm.cjs web/vendor/viennarna/vienna-rna.js
 
-echo '[2/7] Build browser CPLfold/Pyodide runtime'
+echo '[2/7] Build browser CPLfold/Pyodide runtime, with the ViennaRNA Python module'
+bash scripts/build-vienna-pyodide.sh
 bash scripts/build-cplfold-web.sh
 
 echo '[3/7] Verify browser CPLfold runtime'
@@ -48,5 +49,8 @@ test -s web/vendor/viennarna/vienna-rna.js
 test -s web/vendor/viennarna/vienna-rna.wasm
 test -s web/vendor/pyodide-cplfold/pyodide.mjs
 test -s web/vendor/pyodide-cplfold/pyodide.asm.wasm
+vienna_wheel="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["packages"]["viennarna"]["file_name"])' web/vendor/pyodide-cplfold/pyodide-lock.json)"
+[[ "$vienna_wheel" =~ ^viennarna-[0-9a-f]{16}/viennarna-2\.7\.2-cp313-cp313-pyemscripten_2025_0_wasm32\.whl$ ]]
+test -s "web/vendor/pyodide-cplfold/$vienna_wheel"
 test -s desktop/resources/native/native-manifest.json
 echo 'HYB2 release gate: PASS'

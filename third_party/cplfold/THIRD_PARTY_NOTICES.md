@@ -60,6 +60,37 @@ The snapshot does not contain or execute the native HotKnots program. Runtime
 independence does not remove the source and parameter provenance or its license
 obligations.
 
+## ViennaRNA-derived parameters and optional runtime use
+
+`Utils/energy_parameter.py` holds Turner 2004 nearest-neighbour values taken
+from the ViennaRNA Package; its header states "feature values from ViennaRNA".
+`Utils/utility_v.py` implements the Vienna-model feature functions that use
+them, and `Utils/turner_energy.py` evaluates nested structures with ViennaRNA's
+double-dangle convention so that its result equals ViennaRNA's
+`eval_structure` (Turner 2004, dangles=2). These files reach CPLfold through
+the LinearFold-V tables of the LinearFold-derived parser.
+
+`CPLfold_parser.py` also imports the ViennaRNA Python module (`RNA`) when it is
+installed and uses `fold_compound(...).eval_structure` to re-evaluate a
+structure; without the module it falls back to its own evaluation. The snapshot
+does not contain ViennaRNA source code or binaries.
+
+The ViennaRNA Package is credited to Ronny Lorenz, Ivo L. Hofacker and the
+other ViennaRNA authors at the Institute for Theoretical Chemistry, University
+of Vienna. Its `COPYING` notice permits research, educational and commercial
+use and modification so long as the package and any derived works are not
+redistributed for any fee other than media costs, and proper credit is given to
+the authors and the Institute for Theoretical Chemistry of the University of
+Vienna; it asks that the authors be contacted before inclusion in a commercial
+product. The upstream text (ViennaRNA 2.7.2) is preserved in
+`LICENSES/ViennaRNA-COPYING.txt`.
+
+Credit: Lorenz R, Bernhart SH, Höner zu Siederdissen C, Tafer H, Flamm C,
+Stadler PF, Hofacker IL. "ViennaRNA Package 2.0." Algorithms for Molecular
+Biology 6, 26 (2011), https://doi.org/10.1186/1748-7188-6-26.
+
+Source: https://github.com/ViennaRNA/ViennaRNA
+
 ## Compatibility review required
 
 The GPL prohibits adding further downstream restrictions, while the LinearFold
@@ -68,6 +99,7 @@ LinearFold-derived parser and HotKnots-derived evaluator into one Python
 program, publishing the combined snapshot may require an explicit compatible
 license or exception from the LinearFold copyright holders. CPLfold's own code
 and the HotKnots-derived files are both GPL-2.0-or-later, so this question
-concerns the LinearFold terms only. Recording both texts is necessary
-attribution, but it is not itself a compatibility determination or legal
-advice.
+concerns the LinearFold terms and the ViennaRNA terms that the LinearFold-V
+tables carry with them, which have the same no-fee and credit conditions.
+Recording these texts is necessary attribution, but it is not itself a
+compatibility determination or legal advice.

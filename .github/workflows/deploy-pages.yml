@@ -8,6 +8,9 @@ on:
       - "web/**"
       - "scripts/build-vienna-wasm.sh"
       - "scripts/build-cplfold-web.sh"
+      - "scripts/build-vienna-pyodide.sh"
+      - "scripts/pyodide-build-requirements.txt"
+      - "scripts/pyodide-toolchain.env"
       - "scripts/verify-vienna-wasm.cjs"
       - "scripts/verify-comrades-analysis.cjs"
       - "scripts/verify-webr-feasibility.cjs"
@@ -30,6 +33,7 @@ on:
       - "scripts/verify-arc-map.cjs"
       - "scripts/verify-region-panels.cjs"
       - "scripts/verify-folding-energy.cjs"
+      - "scripts/verify-batch-tools.cjs"
       - "scripts/verify-example.cjs"
       - "scripts/verify-results.cjs"
       - "scripts/verify-ui-kit.cjs"
@@ -112,6 +116,24 @@ jobs:
           # the included example end to end (~15 s): Compare maps, differential
           # test, arc map, regions and RNAcofold energies vs the R pipeline
           node scripts/verify-example.cjs
+
+      - name: Set up Python 3.13 for the Pyodide build
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Cache the Pyodide build toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build-tools/pyodide-venv
+            .build-tools/pyodide-xbuildenv
+          # the exact Python (the venv links to it) and the pins only, so an
+          # edit elsewhere in the build script keeps the cache
+          key: pyodide-toolchain-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('scripts/pyodide-toolchain.env', 'scripts/pyodide-build-requirements.txt') }}
+      - name: Build the ViennaRNA Pyodide wheel
+        run: |
+          HYB2_PYTHON313="$(command -v python3.13 || command -v python3)" bash scripts/build-vienna-pyodide.sh
 
       - name: Build and verify pinned browser CPLfold runtime
         run: |

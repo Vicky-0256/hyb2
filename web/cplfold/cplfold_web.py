@@ -19,7 +19,7 @@ from typing import Any
 
 
 CPLFOLD_SOURCE_REVISION = "24bab52"
-BRIDGE_VERSION = "6"
+BRIDGE_VERSION = "7"
 DEFAULT_MAX_SEQUENCE_LENGTH = 75
 BROWSER_HARD_MAX_SEQUENCE_LENGTH = 500
 # Native hosts (HYB2 Desktop) may raise the ceiling via
@@ -706,6 +706,617 @@ def bonus_matrix_listing(bonus: np.ndarray | None) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Support kernels.
+#
+# The chimeras of a fold become its bonus matrix B in one of five ways.  Each
+# sums one contribution per eligible HYB row (repeated coordinates once, with
+# their row count as weight w).  The first four zero cells below 1e-6 and apply
+# log1p; duplex saturates its counts instead (below).  The transforms do not
+# equalise the kernels: on the same reads their total support differs
+# several-fold (block > gaussian > block-normalized), so an alpha chosen for
+# one kernel does not carry over to another.
+#
+#   gaussian          Gaussian arm profiles (sigma = mean arm length / 6, each
+#                     normalised to peak 1), symmetric outer product: the
+#                     support of IRIS (extract_paris_scores.py).  Default.
+#   block             every position of one arm against every position of the
+#                     other, w per cell.
+#   block-normalized  as block, w / sqrt(len one * len two) per cell.
+#   rnacofold         the two arm sequences are cofolded with RNAcofold, as the
+#                     COMRADES procedure does, and each intermolecular pair it
+#                     forms counts w; no other cell receives support.
+#   duplex            C_ij, the rows whose two arms hybridise (ViennaRNA
+#                     RNAduplex: intermolecular pairs only, as the hybrid
+#                     step of COMRADES' comradesMakeConstraints) with the
+#                     pair (i, j), saturated instead of log1p:
+#                     B_ij = s C_ij / (C_ij + q), q the mean C of the n/3
+#                     best-supported pairs, s = SATURATING_SCALE kcal/mol.
+#                     The manuscript's B for every analysis except the IRIS
+#                     benchmark.  Native hosts compute the duplexes with
+#                     ViennaRNA's Python module; other hosts pass the counts
+#                     as evidencePairs.
+# ---------------------------------------------------------------------------
+
+SUPPORT_KERNELS = ("gaussian", "block", "block-normalized", "rnacofold", "duplex")
+PAIR_KERNELS = ("rnacofold", "duplex")
+# B = s C / (C + q): s calibrated so that alpha is the ratio of the bonus of the
+# folded structure to its free energy (kernel_experiments/config.py BONUS_SCALE,
+# Vienna backend); q the mean count of the round(n x SATURATING_TOP) best pairs.
+SATURATING_SCALE = 3.6
+SATURATING_TOP = 1.0 / 3.0
+DEFAULT_SUPPORT_KERNEL = "gaussian"
+SUPPORT_TRANSFORMS = {
+    "gaussian": "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
+    "block": "Full arm blocks, w per cell of arm one x arm two; symmetric; threshold 1e-6; log1p",
+    "block-normalized": "Full arm blocks, w / sqrt(len one x len two) per cell; symmetric; threshold 1e-6; log1p",
+    "rnacofold": "RNAcofold intermolecular pairs of the two arms, w per pair (COMRADES evidence); symmetric; log1p",
+    "duplex": "RNAduplex pairs of the two arms, C = rows per pair (COMRADES evidence); symmetric; "
+                 "s C / (C + q), s = 3.6 kcal/mol, q = mean C of the n/3 best-supported pairs",
+}
+# The COMRADES(ViennaRNA) evidence settings (desktop/runtime/comrades.py, web/structure.worker.js).
+RNACOFOLD_TEMPERATURE = 37.0
+RNACOFOLD_MIN_LOOP = 3
+MAX_EVIDENCE_PAIRS = 5_000_000
+_EVIDENCE_WEIGHT = "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights"
+
+
+def support_kernel(value: Any) -> str:
+    """The requested support kernel; None or "" is the default."""
+    kernel = DEFAULT_SUPPORT_KERNEL if value is None or value == "" else str(value).strip().lower()
+    if kernel not in SUPPORT_KERNELS:
+        raise ValueError("Support kernel must be one of " + ", ".join(SUPPORT_KERNELS) + ".")
+    return kernel
+
+
+def _empty_support(kernel: str) -> dict[str, Any]:
+    return {
+        "source": "none",
+        "supportKernel": kernel,
+        "inputRecords": 0,
+        "uniqueBlocks": 0,
+        "nonzeroBonusCells": 0,
+        "nonzeroUpperTriangleCells": 0,
+        "maximumBonus": 0.0,
+        "bonusEntries": [],
+        "evidenceWeight": "none",
+    }
+
+
+def _checked_blocks(sequence_length: int, arms: Any) -> Counter:
+    compressed = _compress_arms(arms)
+    for one_start, one_end, two_start, two_end in compressed:
+        if not (1 <= one_start <= one_end <= sequence_length and 1 <= two_start <= two_end <= sequence_length):
+            raise ValueError("HYB evidence falls outside the prepared sequence.")
+    return compressed
+
+
+def _block_cell_value(block: tuple[int, int, int, int], weight: float, normalized: bool) -> float:
+    one_start, one_end, two_start, two_end = block
+    if not normalized:
+        return float(weight)
+    return float(weight) / math.sqrt((one_end - one_start + 1) * (two_end - two_start + 1))
+
+
+def _summary(sequence_length: int, kernel: str, compressed: Counter, bonus_cells: int, upper_cells: int,
+             maximum: float) -> dict[str, Any]:
+    records = sum(compressed.values())
+    arm_total = sum(w * ((b - a + 1) + (d - c + 1)) for (a, b, c, d), w in compressed.items())
+    return {
+        "source": "hyb-block-intervals",
+        "supportKernel": kernel,
+        "transform": SUPPORT_TRANSFORMS[kernel],
+        "coordinateSystem": "prepared-sequence, 1-based inclusive input",
+        "inputRecords": int(records),
+        "uniqueBlocks": len(compressed),
+        "meanArmLength": arm_total / (2.0 * records),
+        "nonzeroBonusCells": int(bonus_cells),
+        "nonzeroUpperTriangleCells": int(upper_cells),
+        "maximumBonus": float(maximum),
+        "evidenceWeight": _EVIDENCE_WEIGHT,
+    }
+
+
+def _finish_support(support: np.ndarray) -> np.ndarray:
+    support[support < np.float32(1e-6)] = np.float32(0.0)
+    return np.log1p(support, out=support)
+
+
+def _dense_counts(bonus: np.ndarray) -> tuple[int, int, float]:
+    nonzero = int(np.count_nonzero(bonus))
+    diagonal = int(np.count_nonzero(np.diagonal(bonus)))
+    return nonzero, (nonzero - diagonal) // 2, float(bonus.max()) if bonus.size else 0.0
+
+
+def _block_rows(sequence_length: int, compressed: Counter, normalized: bool):
+    """Yield ``(row, values)`` for every row that a block covers, values the
+    float32 support of that row before the threshold and log1p.
+
+    Each row of HYB evidence is the rectangle arm one x arm two plus its
+    transpose.  Summing the rectangles cell by cell costs their total area
+    (about 10^9 cells for a genome's reads); a sweep over the rows instead
+    keeps one difference vector over the columns, changed only where a
+    rectangle starts or ends, and takes one cumulative sum per covered row.
+    The vector is float64 so that a value and its cancelling end leave no
+    residue near the 1e-6 threshold, and it is reset whenever no rectangle is
+    open.
+    """
+    n = sequence_length
+    blocks = np.array(list(compressed.keys()), dtype=np.int64).reshape(-1, 4) - 1  # 0-based inclusive
+    weights = np.array(list(compressed.values()), dtype=np.float64)
+    if normalized:
+        weights = weights / np.sqrt((blocks[:, 1] - blocks[:, 0] + 1.0) * (blocks[:, 3] - blocks[:, 2] + 1.0))
+    one_start, one_end, two_start, two_end = blocks.T
+    # the rectangle (rows arm one, columns arm two) and its transpose
+    row_start = np.concatenate([one_start, two_start])
+    row_end = np.concatenate([one_end, two_end]) + 1
+    column_start = np.concatenate([two_start, one_start])
+    column_end = np.concatenate([two_end, one_end]) + 1
+    value = np.concatenate([weights, weights])
+    event_row = np.concatenate([row_start, row_start, row_end, row_end])
+    event_column = np.concatenate([column_start, column_end, column_start, column_end])
+    event_value = np.concatenate([value, -value, -value, value])
+    event_open = np.concatenate([np.ones(row_start.size), np.zeros(row_start.size),
+                                 -np.ones(row_end.size), np.zeros(row_end.size)]).astype(np.int64)
+    order = np.argsort(event_row, kind="stable")
+    event_row, event_column = event_row[order], event_column[order]
+    event_value, event_open = event_value[order], event_open[order]
+    bounds = np.searchsorted(event_row, np.arange(n + 1))
+    difference = np.zeros(n + 1, dtype=np.float64)
+    open_rectangles = 0
+    for row in range(n):
+        first, last = bounds[row], bounds[row + 1]
+        if first < last:
+            np.add.at(difference, event_column[first:last], event_value[first:last])
+            open_rectangles += int(event_open[first:last].sum())
+            if open_rectangles == 0:
+                difference[:] = 0.0
+        if open_rectangles:
+            yield row, np.cumsum(difference[:n]).astype(np.float32)
+
+
+def build_block_bonus_matrix(
+    sequence_length: int, arms: Any, *, normalized: bool = False
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    """Full arm blocks: each row adds its value to every cell of arm one x
+    arm two and of its transpose, so a cell inside both arms (overlapping
+    arms) gets it twice, as the Gaussian outer product does."""
+    kernel = "block-normalized" if normalized else "block"
+    compressed = _checked_blocks(sequence_length, arms)
+    if not compressed:
+        return None, _empty_support(kernel)
+    support = np.zeros((sequence_length, sequence_length), dtype=np.float32)
+    for row, values in _block_rows(sequence_length, compressed, normalized):
+        support[row] = values
+    bonus = _finish_support(support)
+    return bonus, _summary(sequence_length, kernel, compressed, *_dense_counts(bonus))
+
+
+def _block_bonus_export(sequence_length: int, arms: Any, normalized: bool) -> dict[str, Any]:
+    """Sparse upper-triangle export of ``build_block_bonus_matrix``, one row
+    at a time, so no sequence_length x sequence_length array is allocated."""
+    kernel = "block-normalized" if normalized else "block"
+    compressed = _checked_blocks(sequence_length, arms)
+    if not compressed:
+        return _empty_support(kernel)
+    entries: list[dict[str, Any]] = []
+    diagonal_cells = 0
+    maximum = 0.0
+    threshold = np.float32(1e-6)
+    for row, values in _block_rows(sequence_length, compressed, normalized):
+        if values[row] >= threshold:
+            diagonal_cells += 1
+            maximum = max(maximum, float(np.log1p(values[row])))
+        upper = values[row + 1:]
+        columns = np.flatnonzero(upper >= threshold)
+        if columns.size:
+            logged = np.log1p(upper[columns])
+            maximum = max(maximum, float(logged.max()))
+            entries.extend({"one": row + 1, "two": row + 2 + column, "value": value}
+                           for column, value in zip(columns.tolist(), logged.tolist()))
+    summary = _summary(sequence_length, kernel, compressed, diagonal_cells + 2 * len(entries), len(entries), maximum)
+    summary["bonusEntries"] = entries
+    return summary
+
+
+def _dot_bracket_pairs(structure: str) -> list[tuple[int, int]]:
+    stack, pairs = [], []
+    for position, character in enumerate(structure, 1):
+        if character == "(":
+            stack.append(position)
+        elif character == ")":
+            pairs.append((stack.pop(), position))
+    return pairs
+
+
+def rnacofold_pair_counts(
+    sequence: str,
+    arms: Any,
+    *,
+    temperature: float = RNACOFOLD_TEMPERATURE,
+    min_loop: int = RNACOFOLD_MIN_LOOP,
+    progress: Any = None,
+) -> tuple[Counter, dict[str, Any]]:
+    """COMRADES evidence: each row's two arms cofolded with RNAcofold.
+
+    Returns ``{(i, j): rows}`` (1-based, i < j) for the intermolecular pairs of
+    every cofold, and a summary.  Identical blocks fold identically, so each
+    unique block is cofolded once and counted with its row count.  Needs
+    ViennaRNA's Python module; the browser computes the same pairs in its
+    ViennaRNA worker and passes them as ``evidencePairs``.
+    """
+    try:
+        import RNA  # noqa: PLC0415
+    except ImportError as error:
+        raise ValueError("The rnacofold support kernel needs ViennaRNA's Python module; "
+                         "supply evidencePairs computed by the host instead.") from error
+    compressed = _checked_blocks(len(sequence), arms)
+    model = RNA.md()
+    model.temperature = float(temperature)
+    model.min_loop_size = int(min_loop)
+    counts: Counter = Counter()
+    with_pairs = 0
+    for index, (block, weight) in enumerate(compressed.items()):
+        one_start, one_end, two_start, two_end = block
+        one, two = sequence[one_start - 1:one_end], sequence[two_start - 1:two_end]
+        compound = RNA.fold_compound(one + "&" + two, model, RNA.OPTION_MFE | RNA.OPTION_HYBRID)
+        structure, energy = compound.mfe_dimer()
+        structure = structure.replace("&", "")
+        if not math.isfinite(energy) or len(structure) != len(one) + len(two):
+            raise ValueError("ViennaRNA RNAcofold returned an invalid two-strand structure.")
+        found = 0
+        for left, right in _dot_bracket_pairs(structure):
+            if left <= len(one) < right:
+                i, j = one_start + left - 1, two_start + right - len(one) - 1
+                if i != j:
+                    counts[(min(i, j), max(i, j))] += weight
+                    found += 1
+        if found:
+            with_pairs += weight
+        if progress is not None and ((index + 1) % 256 == 0 or index + 1 == len(compressed)):
+            progress(index + 1, len(compressed))
+    return counts, {
+        "cofoldedBlocks": len(compressed),
+        "cofoldsWithIntermolecularPairs": int(with_pairs),
+        "temperature": float(temperature),
+        "minimumLoop": int(min_loop),
+    }
+
+
+DUPLEX_CHUNK = 1000
+# below this many blocks the duplexes are computed in this process
+DUPLEX_PARALLEL_MIN = 4000
+# in one process, progress is reported every this many blocks
+DUPLEX_PROGRESS_STEP = 100
+
+
+def _duplex_chunk(sequence: str, blocks: list) -> tuple[Counter, int]:
+    """Intermolecular pairs (genome i < j) of each block's RNAduplex duplex,
+    weighted by the block's row count, and the rows whose arms formed one."""
+    import RNA  # noqa: PLC0415
+
+    counts: Counter = Counter()
+    with_pairs = 0
+    for (one_start, one_end, two_start, two_end), weight in blocks:
+        hit = RNA.duplexfold(sequence[one_start - 1:one_end], sequence[two_start - 1:two_end])
+        left, _, right = hit.structure.partition("&")
+        opens = [k for k, ch in enumerate(left) if ch == "("]
+        if not opens:
+            # arms that cannot pair, e.g. both purine-rich: RNAduplex returns
+            # ".&." with dG 100000; they add nothing
+            continue
+        closes = [k for k, ch in enumerate(right) if ch == ")"]
+        if len(opens) != len(closes) or not math.isfinite(hit.energy):
+            raise ValueError("ViennaRNA RNAduplex returned an invalid duplex.")
+        # the duplex covers one[i - len(left) + 1 .. i] and two[j .. j + len(right) - 1] (1-based)
+        first_one = one_start + hit.i - len(left)
+        first_two = two_start + hit.j - 1
+        found = 0
+        for left_index, right_index in zip(opens, reversed(closes)):
+            i, j = first_one + left_index, first_two + right_index
+            if i != j:
+                counts[(min(i, j), max(i, j))] += weight
+                found += 1
+        if found:
+            with_pairs += weight
+    return counts, with_pairs
+
+
+def _duplex_workers(workers: int | None) -> int:
+    """Parallel duplex processes: ``workers``, else HYB2_DUPLEX_WORKERS, else
+    one per CPU.  One where processes cannot be forked (Windows, the browser)."""
+    if sys.platform in ("win32", "emscripten"):
+        return 1
+    try:
+        import multiprocessing  # noqa: PLC0415
+
+        if "fork" not in multiprocessing.get_all_start_methods():
+            return 1
+    except ImportError:
+        return 1
+    if workers is None:
+        try:
+            workers = int(os.environ.get("HYB2_DUPLEX_WORKERS") or 0) or (os.cpu_count() or 1)
+        except ValueError as error:
+            raise ValueError("HYB2_DUPLEX_WORKERS must be a whole number.") from error
+    return max(1, int(workers))
+
+
+def _duplex_forked(sequence: str, blocks: list, workers: int, progress: Any) -> tuple[Counter, int]:
+    """``_duplex_chunk`` over forked processes.  Forking passes the sequence and
+    the blocks without pickling a function (this module is loaded from its
+    file, so a child could not import it by name); each child sends back the
+    counts of its chunks."""
+    import multiprocessing  # noqa: PLC0415
+
+    context = multiprocessing.get_context("fork")
+    chunks = [blocks[start:start + DUPLEX_CHUNK] for start in range(0, len(blocks), DUPLEX_CHUNK)]
+    results = context.Queue()
+
+    def run(share: list) -> None:
+        try:
+            for chunk in share:
+                results.put(("chunk", len(chunk), _duplex_chunk(sequence, chunk)))
+        except BaseException as error:  # noqa: BLE001
+            results.put(("error", 0, f"{type(error).__name__}: {error}"))
+
+    processes = [context.Process(target=run, args=(chunks[index::workers],), daemon=True)
+                 for index in range(workers)]
+    for process in processes:
+        process.start()
+    counts: Counter = Counter()
+    with_pairs = done = received = 0
+    try:
+        while received < len(chunks):
+            kind, size, value = results.get()
+            if kind == "error":
+                raise ValueError(f"ViennaRNA RNAduplex failed in a worker process: {value}")
+            partial, rows = value
+            counts.update(partial)
+            with_pairs += rows
+            done += size
+            received += 1
+            if progress is not None:
+                progress(done, len(blocks))
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join()
+    return counts, with_pairs
+
+
+def duplex_pair_counts(sequence: str, arms: Any, *, progress: Any = None,
+                       workers: int | None = None) -> tuple[Counter, dict[str, Any]]:
+    """COMRADES evidence C_ij: each row's two arms hybridised with ViennaRNA's
+    RNAduplex, which forms intermolecular pairs only, as the hybrid step of
+    COMRADES' comradesMakeConstraints does.
+
+    Returns ``{(i, j): rows}`` (1-based, i < j) and a summary.  Each unique
+    block is hybridised once and counted with its row count.  Arms that cannot
+    pair add nothing.  From DUPLEX_PARALLEL_MIN blocks on, the blocks are
+    shared among ``workers`` forked processes where the platform forks.
+    Needs ViennaRNA's Python module; other hosts pass the counts as
+    ``evidencePairs``.
+    """
+    try:
+        import RNA  # noqa: PLC0415
+    except ImportError as error:
+        raise ValueError("The duplex support kernel needs ViennaRNA's Python module; "
+                         "supply evidencePairs computed by the host instead.") from error
+    blocks = sorted(_checked_blocks(len(sequence), arms).items())
+    workers = min(_duplex_workers(workers), max(1, -(-len(blocks) // DUPLEX_CHUNK)))
+    if workers > 1 and len(blocks) >= DUPLEX_PARALLEL_MIN:
+        counts, with_pairs = _duplex_forked(sequence, blocks, workers, progress)
+    else:
+        workers = 1
+        counts, with_pairs = Counter(), 0
+        for start in range(0, len(blocks), DUPLEX_PROGRESS_STEP):
+            partial, rows = _duplex_chunk(sequence, blocks[start:start + DUPLEX_PROGRESS_STEP])
+            counts.update(partial)
+            with_pairs += rows
+            if progress is not None:
+                progress(min(start + DUPLEX_PROGRESS_STEP, len(blocks)), len(blocks))
+    return counts, {"hybridisedBlocks": len(blocks), "duplexesWithPairs": int(with_pairs),
+                    "duplexWorkers": workers,
+                    "pairCounter": "ViennaRNA %s RNAduplex, 37 C" % getattr(RNA, "__version__", "?")}
+
+
+
+def saturating_q(sequence_length: int, pair_counts: Counter) -> float:
+    """The mean count of the round(n x SATURATING_TOP) best-supported pairs."""
+    top = sorted(pair_counts.values(), reverse=True)[:max(1, round(sequence_length * SATURATING_TOP))]
+    return float(sum(top)) / len(top) if top else 0.0
+
+
+def resolve_q(sequence_length: int, pair_counts: Counter, q: Any = None) -> float:
+    """``q`` as given, else ``saturating_q`` of this fold.
+
+    q sets the count at which a pair reaches half of SATURATING_SCALE, so it
+    fixes what alpha means.  Derived from the fold itself it changes with the
+    folded length: the ZIKV genome gives q near 1,233 while a 400 nt window of
+    the same reads gives a far smaller one, and the same alpha is then a much
+    stronger bonus in the window.  Pass the q of the longer fold to compare
+    alphas across lengths, or to fold a region on the genome's scale."""
+    if q is None:
+        return saturating_q(sequence_length, pair_counts)
+    try:
+        value = float(q)
+    except (TypeError, ValueError) as error:
+        raise ValueError("saturatingQ must be a number.") from error
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError("saturatingQ must be a positive, finite number.")
+    return value
+
+
+def _pair_counts_for(kernel: str, sequence: str, arms: Any, progress: Any = None,
+                     duplex_workers: int | None = None) -> tuple[Counter, dict[str, Any]]:
+    if kernel == "duplex":
+        return duplex_pair_counts(sequence, arms, progress=progress, workers=duplex_workers)
+    return rnacofold_pair_counts(sequence, arms, progress=progress)
+
+
+def _normalise_evidence_pairs(raw: Any, sequence_length: int) -> Counter:
+    """``[{one, two, count}, ...]`` or ``[[one, two, count], ...]`` (1-based)
+    as ``{(i, j): count}`` with i < j; repeated pairs are summed."""
+    if not isinstance(raw, list):
+        raise ValueError("evidencePairs must be an array.")
+    if len(raw) > MAX_EVIDENCE_PAIRS:
+        raise ValueError(f"evidencePairs is limited to {MAX_EVIDENCE_PAIRS:,} pairs.")
+    counts: Counter = Counter()
+    for index, item in enumerate(raw):
+        try:
+            values = (item["one"], item["two"], item["count"]) if isinstance(item, dict) else tuple(item)
+            if len(values) != 3:
+                raise ValueError
+            one = _integer(values[0], 1, sequence_length, "Evidence pair position")
+            two = _integer(values[1], 1, sequence_length, "Evidence pair position")
+            count = _integer(values[2], 1, 2**53, "Evidence pair count")
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"Evidence pair {index + 1} is invalid.") from error
+        if one == two:
+            raise ValueError(f"Evidence pair {index + 1} pairs a position with itself.")
+        counts[(min(one, two), max(one, two))] += count
+    return counts
+
+
+def _pair_summary(sequence_length: int, compressed: Counter, pair_counts: Counter, bonus_cells: int,
+                  upper_cells: int, maximum: float, kernel: str = "rnacofold",
+                  q: Any = None) -> dict[str, Any]:
+    if compressed:
+        summary = _summary(sequence_length, kernel, compressed, bonus_cells, upper_cells, maximum)
+    else:
+        summary = _empty_support(kernel)
+        summary.update({"transform": SUPPORT_TRANSFORMS[kernel], "nonzeroBonusCells": int(bonus_cells),
+                        "nonzeroUpperTriangleCells": int(upper_cells), "maximumBonus": float(maximum)})
+    summary["supportedPairs"] = len(pair_counts)
+    if kernel == "duplex":
+        # The q actually used, not a fresh one: a caller that passes the
+        # genome's q must not be told the window's.
+        summary.update({"saturatingScale": SATURATING_SCALE,
+                        "saturatingQ": resolve_q(sequence_length, pair_counts, q)})
+    return summary
+
+
+def _request_duplex(payload: dict[str, Any]) -> dict[str, Any]:
+    """Native hosts' duplex setting: ``duplexWorkers`` (None: one per CPU)."""
+    workers = payload.get("duplexWorkers")
+    if workers is not None:
+        workers = _integer(workers, 1, 1024, "duplex workers")
+    return {"duplex_workers": workers}
+
+
+def _request_pairs(payload: dict[str, Any], kernel: str, evidence_mode: str, sequence_length: int) -> Counter | None:
+    """The host's pair counts (``evidencePairs``) for a pair kernel: RNAcofold
+    pairs for rnacofold, RNAduplex pairs for duplex; None when it sent
+    none, so they are computed here."""
+    raw = payload.get("evidencePairs")
+    if raw is None or kernel not in PAIR_KERNELS or evidence_mode != "hyb-blocks":
+        return None
+    return _normalise_evidence_pairs(raw, sequence_length)
+
+
+def _pair_value(kernel: str, count: Any, q: float) -> Any:
+    """The bonus of a pair with ``count`` rows: log1p, or s C / (C + q)."""
+    if kernel == "duplex":
+        return np.float32(SATURATING_SCALE) * count / (count + np.float32(q))
+    return np.log1p(count)
+
+
+def build_pair_bonus_matrix(
+    sequence_length: int, pair_counts: Counter, arms: Any = None, kernel: str = "rnacofold",
+    q: Any = None,
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    """A pair kernel's matrix: each counted pair gets ``log1p`` of its rows
+    (rnacofold) or s C / (C + q) (duplex); every other cell is zero.
+
+    ``q`` as in ``resolve_q``: None derives it from this fold, a number holds
+    it fixed so the same alpha means the same bonus across fold lengths."""
+    compressed = _checked_blocks(sequence_length, arms or [])
+    if not pair_counts:
+        return None, _pair_summary(sequence_length, compressed, pair_counts, 0, 0, 0.0, kernel, q)
+    support = np.zeros((sequence_length, sequence_length), dtype=np.float32)
+    ones = np.fromiter((i - 1 for i, _ in pair_counts), dtype=np.int64, count=len(pair_counts))
+    twos = np.fromiter((j - 1 for _, j in pair_counts), dtype=np.int64, count=len(pair_counts))
+    rows = np.fromiter(pair_counts.values(), dtype=np.float32, count=len(pair_counts))
+    if kernel == "duplex":
+        rows = _pair_value(kernel, rows, resolve_q(sequence_length, pair_counts, q)).astype(np.float32)
+        support[ones, twos] = rows
+        support[twos, ones] = rows
+        bonus = support
+    else:
+        support[ones, twos] = rows
+        support[twos, ones] = rows
+        bonus = _finish_support(support)
+    return bonus, _pair_summary(sequence_length, compressed, pair_counts, *_dense_counts(bonus), kernel, q)
+
+
+def _pair_bonus_export(sequence_length: int, pair_counts: Counter, arms: Any = None,
+                       kernel: str = "rnacofold", q: Any = None) -> dict[str, Any]:
+    """Sparse upper-triangle export of ``build_pair_bonus_matrix``."""
+    compressed = _checked_blocks(sequence_length, arms or [])
+    scale = resolve_q(sequence_length, pair_counts, q)
+    entries = [{"one": i, "two": j, "value": float(_pair_value(kernel, np.float32(rows), scale))}
+               for (i, j), rows in sorted(pair_counts.items())]
+    summary = _pair_summary(sequence_length, compressed, pair_counts, 2 * len(entries), len(entries),
+                            max((entry["value"] for entry in entries), default=0.0), kernel, scale)
+    summary["bonusEntries"] = entries
+    return summary
+
+
+def build_support_bonus_matrix(
+    sequence_length: int,
+    arms: Any,
+    kernel: str = DEFAULT_SUPPORT_KERNEL,
+    *,
+    cutpoint: int | None = None,
+    sequence: str | None = None,
+    pairs: Counter | None = None,
+    progress: Any = None,
+    duplex_workers: int | None = None,
+    q: Any = None,
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    """The bonus matrix of ``arms`` under ``kernel``, without per-cell listing.
+
+    ``arms`` is a list of ``(one_start, one_end, two_start, two_end)`` rows or
+    a mapping from a block to its row count.  For two strands (``cutpoint``)
+    every arm already lies on one strand, so a full block stays on its
+    strands; the Gaussian kernel is clipped at the nick.  The rnacofold kernel
+    uses ``pairs`` when given, otherwise it cofolds the arms of ``sequence``,
+    calling ``progress(blocks_done, blocks)`` as it goes; the duplex kernel
+    likewise hybridises them with RNAduplex (``duplex_workers`` processes) and
+    takes ``q`` as in ``resolve_q``.
+    """
+    kernel = support_kernel(kernel)
+    if kernel == "gaussian":
+        if cutpoint is not None:
+            bonus, summary = build_cofold_hyb_bonus_matrix(sequence_length, cutpoint, arms)
+        else:
+            bonus, summary = build_hyb_bonus_matrix_fast(sequence_length, arms)
+    elif kernel in ("block", "block-normalized"):
+        bonus, summary = build_block_bonus_matrix(sequence_length, arms, normalized=kernel == "block-normalized")
+    else:
+        extra: dict[str, Any] = {}
+        if pairs is None and not _compress_arms(arms):
+            pairs = Counter()
+        elif pairs is None:
+            if sequence is None:
+                raise ValueError(f"The {kernel} support kernel needs the sequence or evidencePairs.")
+            pairs, extra = _pair_counts_for(kernel, sequence, arms, progress=progress,
+                                            duplex_workers=duplex_workers)
+        bonus, summary = build_pair_bonus_matrix(sequence_length, pairs, arms, kernel, q)
+        summary.update(extra)
+    summary["supportKernel"] = kernel
+    if cutpoint is not None:
+        summary.update({
+            "coordinateSystem": "compact A+B, 1-based inclusive input; '&' has no coordinate",
+            "cutpoint": cutpoint,
+            "strandLengths": [cutpoint, sequence_length - cutpoint],
+            "strandBounded": True,
+        })
+    return bonus, summary
+
+
 def _open_hyb(path: Any):
     import gzip
 
@@ -922,7 +1533,7 @@ def _candidate(
     return candidate
 
 
-def fold(payload: dict[str, Any]) -> dict[str, Any]:
+def fold(payload: dict[str, Any], progress: Any = None) -> dict[str, Any]:
     maximum_sequence_length = _request_maximum(payload.get("maxSequenceLength"))
     sequence, cutpoint = _request_sequence_layout(payload, maximum_sequence_length)
     beam_size = _integer(payload.get("beamSize", 20), 1, 200, "Beam size")
@@ -952,7 +1563,14 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
         arms = _normalise_arms(payload.get("evidenceArms"), len(sequence), cutpoint) if evidence_mode == "hyb-blocks" else []
     if evidence_mode == "hyb-blocks" and not arms:
         raise ValueError("No eligible HYB rows are fully contained in the selected reference region.")
-    if cutpoint is not None:
+    kernel = support_kernel(payload.get("supportKernel"))
+    pairs = _request_pairs(payload, kernel, evidence_mode, len(sequence))
+    if kernel != "gaussian":
+        bonus_matrix, evidence = build_support_bonus_matrix(
+            len(sequence), arms, kernel, cutpoint=cutpoint, sequence=sequence, pairs=pairs,
+            q=payload.get("saturatingQ"), progress=progress, **_request_duplex(payload))
+        evidence.update(bonus_matrix_listing(bonus_matrix))
+    elif cutpoint is not None:
         bonus_matrix, evidence = build_cofold_hyb_bonus_matrix(len(sequence), cutpoint, arms)
     elif arms and _NUMBA_AVAILABLE:
         # Native hosts: same transform without one n-by-n outer product per
@@ -961,6 +1579,7 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
         evidence.update(bonus_matrix_listing(bonus_matrix))
     else:
         bonus_matrix, evidence = build_hyb_bonus_matrix(len(sequence), arms)
+    evidence["supportKernel"] = kernel
 
     fold_function = two_phase_pseudoknot_fold
     layout_parameters = {}
@@ -1035,6 +1654,7 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
             "alpha": alpha,
             "beta": beta,
             "allowPseudoknot": allow_pseudoknot,
+            "supportKernel": kernel,
             "linearFoldMode": "Vienna",
             "maxPhase2": 1,
         },
@@ -1059,7 +1679,7 @@ def fold(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def bonus_matrix(payload: dict[str, Any]) -> dict[str, Any]:
+def bonus_matrix(payload: dict[str, Any], progress: Any = None) -> dict[str, Any]:
     """Prepare the exact sparse bonus matrix used by a guided local run."""
 
     sequence, cutpoint = _request_sequence_layout(payload, export=True)
@@ -1069,14 +1689,35 @@ def bonus_matrix(payload: dict[str, Any]) -> dict[str, Any]:
     arms = _normalise_arms(payload.get("evidenceArms"), len(sequence), cutpoint) if evidence_mode == "hyb-blocks" else []
     if evidence_mode == "hyb-blocks" and not arms:
         raise ValueError("No eligible HYB rows are fully contained in the selected reference region.")
-    evidence = (build_hyb_bonus_matrix_export(len(sequence), arms) if cutpoint is None
-                else _cofold_bonus_matrix_export(len(sequence), cutpoint, arms))
+    kernel = support_kernel(payload.get("supportKernel"))
+    if kernel == "gaussian":
+        evidence = (build_hyb_bonus_matrix_export(len(sequence), arms) if cutpoint is None
+                    else _cofold_bonus_matrix_export(len(sequence), cutpoint, arms))
+    elif kernel in ("block", "block-normalized"):
+        evidence = _block_bonus_export(len(sequence), arms, kernel == "block-normalized")
+    else:
+        pairs = _request_pairs(payload, kernel, evidence_mode, len(sequence))
+        extra: dict[str, Any] = {}
+        if pairs is None:
+            pairs, extra = (_pair_counts_for(kernel, sequence, arms, progress=progress, **_request_duplex(payload))
+                            if arms else (Counter(), {}))
+        evidence = _pair_bonus_export(len(sequence), pairs, arms, kernel, payload.get("saturatingQ"))
+        evidence.update(extra)
+    evidence["supportKernel"] = kernel
+    if kernel != "gaussian" and cutpoint is not None:
+        evidence.update({
+            "coordinateSystem": "compact A+B, 1-based inclusive input; '&' has no coordinate",
+            "cutpoint": cutpoint,
+            "strandLengths": [cutpoint, len(sequence) - cutpoint],
+            "strandBounded": True,
+        })
     result = {
         "engine": "CPLfold",
         "engineVersion": CPLFOLD_SOURCE_REVISION,
         "bridgeVersion": BRIDGE_VERSION,
         "sequence": sequence,
         "evidenceMode": evidence_mode,
+        "supportKernel": kernel,
         "evidence": evidence,
     }
     if cutpoint is not None:
@@ -1091,24 +1732,33 @@ def bonus_matrix(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def fold_json(payload_json: str) -> str:
+# ``progress(blocks_done, blocks)``, when given, is called while the rnacofold
+# or duplex kernel computes its pairs (the browser worker reports it).
+def fold_json(payload_json: str, progress: Any = None) -> str:
     payload = json.loads(payload_json)
     if not isinstance(payload, dict):
         raise ValueError("The CPLfold request must be a JSON object.")
-    return json.dumps(fold(payload), separators=(",", ":"), allow_nan=False)
+    return json.dumps(fold(payload, progress), separators=(",", ":"), allow_nan=False)
 
 
-def bonus_matrix_json(payload_json: str) -> str:
+def bonus_matrix_json(payload_json: str, progress: Any = None) -> str:
     payload = json.loads(payload_json)
     if not isinstance(payload, dict):
         raise ValueError("The CPLfold bonus-matrix request must be a JSON object.")
-    return json.dumps(bonus_matrix(payload), separators=(",", ":"), allow_nan=False)
+    return json.dumps(bonus_matrix(payload, progress), separators=(",", ":"), allow_nan=False)
 
 
 __all__ = [
+    "SUPPORT_KERNELS",
+    "build_block_bonus_matrix",
     "build_hyb_bonus_matrix",
     "build_hyb_bonus_matrix_export",
     "build_hyb_bonus_matrix_fast",
+    "build_pair_bonus_matrix",
+    "build_support_bonus_matrix",
+    "rnacofold_pair_counts",
+    "duplex_pair_counts",
+    "support_kernel",
     "collect_hyb_arms",
     "iter_hyb_arms",
     "iter_hyb_rows",

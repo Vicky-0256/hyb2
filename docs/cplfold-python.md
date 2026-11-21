@@ -28,6 +28,46 @@ reference intervals once to the original CPLfold/IRIS-style Gaussian,
 symmetric outer-product and `log1p` bonus transform. The browser does not use
 HYB overlap score or collapsed source-read count as matrix weights.
 
+The request field `supportKernel` (the "Read support (B_ij)" setting on the web
+and desktop pages; `support_kernel` for desktop structure tasks) chooses how a
+row becomes support. Every kernel sums one contribution per row. The first four
+zero cells below 1e-6 and apply `log1p`; `duplex` saturates its counts:
+
+| `supportKernel` | Each row adds |
+|---|---|
+| `gaussian` (default) | a Gaussian around each arm centre (sigma = mean arm length / 6, peak 1), symmetric outer product: the IRIS support |
+| `block` | 1 to every pair between its two arms |
+| `block-normalized` | 1 / sqrt(arm one length x arm two length) to every pair between its two arms |
+| `rnacofold` | 1 to each intermolecular pair that RNAcofold (37 °C, minimum loop 3) forms between its two arm sequences: the COMRADES evidence |
+| `duplex` | 1 to the count C_ij of each pair that ViennaRNA's RNAduplex (37 °C, intermolecular pairs only) forms between its two arms; then B_ij = s C_ij / (C_ij + q), s = 3.6 kcal/mol, q = the mean C of the round(n/3) best-supported pairs |
+
+`duplex` is the support of the HYB2 manuscript for every analysis except the
+IRIS benchmark. Arms that cannot pair (RNAduplex's `.&.`) add nothing. Native
+hosts compute the duplexes with ViennaRNA's Python module (bundled with the
+desktop runtime); from 4,000 unique arm blocks on, the blocks go in chunks of
+1,000 to `duplexWorkers` forked processes (default: `HYB2_DUPLEX_WORKERS`, else
+one per CPU; one process on Windows). The browser runs the same code: the CPLfold
+worker loads ViennaRNA's own Python module, built for Pyodide by
+`scripts/build-vienna-pyodide.sh` (about 1.9 MB, loaded on first use), and
+gives the same pairs as the desktop. A host may instead pass the counts as
+`evidencePairs`.
+Tasks saved with the old kernel name `hybridmin` run as `duplex`.
+
+`log1p` compresses each cell but does not put the kernels on one scale. On the
+ZILM virion reads of genome positions 1-1200, the summed upper-triangle support
+is 2.27 x 10^6 for `block`, 1.13 x 10^6 for `gaussian` and 0.42 x 10^6 for
+`block-normalized`, so the same alpha weights the reads differently under each
+kernel. Choose alpha for each kernel separately (for example by held-out
+icSHAPE log-likelihood, or by the chimeric consistency score) before comparing
+kernels.
+
+`rnacofold` needs ViennaRNA's Python module. Native hosts cofold the arms
+themselves; the browser computes the pairs in its ViennaRNA worker and passes
+them as `evidencePairs` (`[[one, two, rows], ...]`, 1-based). For two strands
+every arm lies on one strand, so the block kernels stay on their strands as the
+Gaussian does. A bonus-matrix export records a non-default kernel in a
+`# support_kernel=` comment and in its `# transform=` line.
+
 ## Install and run
 
 Use CPython 3.11 for the maintained CI environment. The same pinned dependency

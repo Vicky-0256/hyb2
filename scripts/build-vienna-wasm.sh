@@ -4,6 +4,10 @@
 #
 # Requirements: curl, tar, shasum/sha256sum, pkg-config and an active Emscripten SDK
 # (emcc, emconfigure, emmake). The deployment workflow supplies the pinned SDK.
+#
+# HYB2_VIENNA_TARBALL may name a local copy of the ViennaRNA source tarball
+# (it must exist); when it is unset the release is downloaded.  Its SHA-256 is
+# checked either way.
 
 set -euo pipefail
 
@@ -56,12 +60,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
-hyb2_tarball_path="${hyb2_build_directory}/${VIENNA_TARBALL}"
+if [[ -n "${HYB2_VIENNA_TARBALL:-}" ]]; then
+  if [[ ! -f "${HYB2_VIENNA_TARBALL}" ]]; then
+    printf 'HYB2_VIENNA_TARBALL names a missing file: %s (unset it to download the release)\n' "${HYB2_VIENNA_TARBALL}" >&2
+    exit 1
+  fi
+  hyb2_tarball_path="${HYB2_VIENNA_TARBALL}"
+else
+  hyb2_tarball_path="${hyb2_build_directory}/${VIENNA_TARBALL}"
+fi
 hyb2_source_directory="${hyb2_build_directory}/ViennaRNA-${VIENNA_VERSION}"
 
-printf 'Downloading ViennaRNA %s source…\n' "${VIENNA_VERSION}"
-curl --fail --location --retry 3 --silent --show-error \
-  --output "${hyb2_tarball_path}" "${VIENNA_SOURCE_URL}"
+if [[ "${hyb2_tarball_path}" == "${HYB2_VIENNA_TARBALL:-}" ]]; then
+  printf 'Using local ViennaRNA %s source: %s\n' "${VIENNA_VERSION}" "${hyb2_tarball_path}"
+else
+  printf 'Downloading ViennaRNA %s source…\n' "${VIENNA_VERSION}"
+  curl --fail --location --retry 3 --silent --show-error \
+    --output "${hyb2_tarball_path}" "${VIENNA_SOURCE_URL}"
+fi
 hyb2_actual_sha256="$(hyb2_sha256 "${hyb2_tarball_path}")"
 if [[ "${hyb2_actual_sha256}" != "${VIENNA_SHA256}" ]]; then
   printf 'ViennaRNA source SHA-256 mismatch: expected %s, got %s\n' "${VIENNA_SHA256}" "${hyb2_actual_sha256}" >&2
@@ -115,7 +131,7 @@ emcc "${WRAPPER_SOURCE}" "${hyb2_library}" \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=67108864 \
   -s NO_EXIT_RUNTIME=1 \
-  -s EXPORTED_FUNCTIONS='["_hyb2_vienna_mfe","_hyb2_vienna_mfe_constrained","_hyb2_vienna_cofold","_hyb2_vienna_version","_malloc","_free"]' \
+  -s EXPORTED_FUNCTIONS='["_hyb2_vienna_mfe","_hyb2_vienna_mfe_constrained","_hyb2_vienna_cofold","_hyb2_vienna_duplex","_hyb2_vienna_version","_malloc","_free"]' \
   -s EXPORTED_RUNTIME_METHODS='["lengthBytesUTF8","stringToUTF8","UTF8ToString"]' \
   "-DHYB2_VIENNA_VERSION=\"${VIENNA_VERSION}\"" \
   -o "${OUTPUT_DIRECTORY}/vienna-rna.js"

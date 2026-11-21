@@ -28,7 +28,10 @@ const runtimeDirectory = path.join(repository, "web", "vendor", "pyodide-cplfold
 const manifest = JSON.parse(fs.readFileSync(path.join(runtimeDirectory, "build-manifest.json"), "utf8"));
 assert.ok(manifest.assets && Object.keys(manifest.assets).length >= 11, "build must record all shipped asset hashes");
 for (const [filename, digest] of Object.entries(manifest.assets)) {
-  assert.match(filename, /^[A-Za-z0-9_.-]+$/, "asset paths must be single file names");
+  // Single file names, plus the one hash-named directory of the ViennaRNA wheel.
+  assert.match(filename, /^(?:viennarna-[a-f0-9]{16}\/)?[A-Za-z0-9_][A-Za-z0-9_.-]*$/,
+    "asset paths must be single file names or viennarna-<hash>/<wheel>");
+  assert.ok(!filename.split("/").includes(".."), filename + " must stay inside the runtime directory");
   assert.match(digest, /^[a-f0-9]{64}$/);
   assert.equal(createHash("sha256").update(fs.readFileSync(path.join(runtimeDirectory, filename))).digest("hex"), digest, filename + " hash mismatch");
 }
@@ -36,7 +39,7 @@ assert.equal(manifest.pyodide, "0.29.4");
 assert.equal(manifest.python, "3.13.2");
 assert.equal(manifest.numpy, "2.2.5");
 assert.equal(manifest.cplfoldRevision, "24bab52");
-assert.equal(manifest.bridgeVersion, "6");
+assert.equal(manifest.bridgeVersion, "7");
 assert.match(manifest.cplfoldArchiveFile, /^cplfold-python-[a-f0-9]{64}\.zip$/);
 const archivePath = path.join(runtimeDirectory, manifest.cplfoldArchiveFile);
 assert.ok(fs.statSync(archivePath).size > 0);
@@ -44,8 +47,19 @@ const archiveBytes = fs.readFileSync(archivePath);
 assert.equal(createHash("sha256").update(archiveBytes).digest("hex"), manifest.cplfoldArchiveSha256);
 
 const moduleUrl = pathToFileURL(path.join(runtimeDirectory, "pyodide.mjs")).href;
+// Offline: in Node, Pyodide retries a package file it cannot read locally
+// from cdnUrl (packageBaseUrl, else the jsDelivr CDN).  Pin packageBaseUrl to
+// the runtime directory, as the worker does, and refuse any http(s) fetch so
+// a missing file fails here instead of being downloaded.
+const nativeFetch = globalThis.fetch;
+const networkRequests = [];
+globalThis.fetch = async function (input) {
+  const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  networkRequests.push(href);
+  throw new TypeError("verify-cplfold-pyodide blocks network access: " + href);
+};
 const { loadPyodide } = await import(moduleUrl);
-const pyodide = await loadPyodide({ indexURL: runtimeDirectory + path.sep });
+const pyodide = await loadPyodide({ indexURL: runtimeDirectory + path.sep, packageBaseUrl: runtimeDirectory + path.sep });
 await pyodide.loadPackage("numpy");
 
 pyodide.FS.writeFile("/tmp/cplfold-python.zip", archiveBytes);
@@ -75,7 +89,7 @@ const exportContract = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify
   evidenceMode: "hyb-blocks",
   evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }]
 }))));
-assert.equal(exportContract.bridgeVersion, "6");
+assert.equal(exportContract.bridgeVersion, "7");
 assert.equal(exportContract.evidence.inputRecords, 1);
 assert.ok(exportContract.evidence.bonusEntries.length > 0);
 assert.ok(exportContract.evidence.bonusEntries.every(function (entry) { return entry.one < entry.two; }));
@@ -106,7 +120,7 @@ const result = JSON.parse(String(bridge.fold_json(JSON.stringify({
 
 assert.equal(result.engine, "CPLfold");
 assert.equal(result.engineVersion, "24bab52");
-assert.equal(result.bridgeVersion, "6");
+assert.equal(result.bridgeVersion, "7");
 assert.equal(result.allowPseudoknot, true);
 assert.equal(result.dotBracket, "..(((((..[[[[)))))......]]]]");
 assert.equal(result.topology, "pseudoknotted");
@@ -123,6 +137,72 @@ assert.equal(result.constraintMode, "none");
 assert.equal(result.constraintSource, "none");
 assert.equal(result.evidenceMode, "hyb-blocks");
 assert.equal(result.evidenceSource, "hyb-block-bonus-matrix");
+
+// Precomputed pairs passed as evidencePairs (the page still sends RNAcofold
+// pairs this way from structure.worker.js; RNAduplex pairs are computed here
+// in Pyodide with the viennarna package, tested below): the counts saturate
+// as 3.6 C / (C + q), q the mean of the top third of counts.
+const duplexExport = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify({
+  sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+  evidenceMode: "hyb-blocks",
+  supportKernel: "duplex",
+  evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }],
+  evidencePairs: [[3, 25, 2], [4, 24, 4], [5, 23, 10]]
+}))));
+assert.equal(duplexExport.evidence.supportKernel, "duplex");
+assert.ok(Math.abs(duplexExport.evidence.saturatingQ - 16 / 3) < 1e-6);
+const duplexValues = Object.fromEntries(duplexExport.evidence.bonusEntries.map(function (entry) { return [entry.one + "," + entry.two, entry.value]; }));
+[[3, 25, 2], [4, 24, 4], [5, 23, 10]].forEach(function ([i, j, c]) {
+  assert.ok(Math.abs(duplexValues[i + "," + j] - 3.6 * c / (c + 16 / 3)) < 1e-5, "saturated duplex bonus at " + i + "," + j);
+});
+assert.throws(function () {
+  bridge.bonus_matrix_json(JSON.stringify({
+    sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG", evidenceMode: "hyb-blocks", supportKernel: "duplex",
+    evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }]
+  }));
+}, /evidencePairs/);
+
+// With ViennaRNA's own Python module (scripts/build-vienna-pyodide.sh) the
+// browser computes the duplex pairs itself, exactly as the desktop does: the
+// expected values are the native runtime's for the same request.
+assert.equal(manifest.viennarna, "2.7.2");
+const lock = JSON.parse(fs.readFileSync(path.join(runtimeDirectory, "pyodide-lock.json"), "utf8"));
+// The wheel is content-addressed (viennarna-<first 16 hex of its SHA-256>/),
+// so a cached old wheel can never meet a new lock after a deploy.
+const viennaFile = lock.packages.viennarna.file_name;
+const viennaMatch = /^viennarna-([a-f0-9]{16})\/(viennarna-2\.7\.2-cp313-cp313-pyemscripten_2025_0_wasm32\.whl)$/.exec(viennaFile);
+assert.ok(viennaMatch, "the lock must name the hash-named ViennaRNA wheel, not " + viennaFile);
+const viennaDigest = createHash("sha256").update(fs.readFileSync(path.join(runtimeDirectory, viennaFile))).digest("hex");
+assert.equal(viennaDigest.slice(0, 16), viennaMatch[1], "the wheel directory must be named after the wheel's SHA-256");
+assert.equal(lock.packages.viennarna.sha256, viennaDigest);
+assert.equal(manifest.assets[viennaFile], viennaDigest);
+assert.deepEqual(fs.readdirSync(runtimeDirectory).filter(function (name) { return name.startsWith("viennarna-"); }),
+  [viennaFile.split("/")[0]], "stale ViennaRNA wheels or directories must be removed");
+await pyodide.loadPackage("viennarna");
+const vienna = JSON.parse(String(pyodide.runPython([
+  "import RNA, json",
+  "d = RNA.duplexfold('GGGAAACCCUUUGGG', 'CCCAAAGGGUUUCCC')",
+  "n = RNA.duplexfold('AAAA', 'AAAA')",
+  "s, e = RNA.cofold('GGGGGG&CCCCCC')",
+  "json.dumps([RNA.__version__, d.structure, round(d.energy, 2), n.structure, s, round(e, 2)])"
+].join("\n"))));
+assert.deepEqual(vienna, ["2.7.2", "(((((((((((((((&)))))))))))))))", -28.1, ".&.", "(((((())))))", -12.4]);
+const browserDuplex = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify({
+  sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
+  evidenceMode: "hyb-blocks",
+  supportKernel: "duplex",
+  evidenceArms: [
+    { oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 },
+    { oneStart: 4, oneEnd: 9, twoStart: 19, twoEnd: 24 },
+    { oneStart: 1, oneEnd: 10, twoStart: 15, twoEnd: 28 }
+  ]
+}))));
+assert.equal(browserDuplex.evidence.pairCounter, "ViennaRNA 2.7.2 RNAduplex, 37 C");
+assert.equal(browserDuplex.evidence.duplexesWithPairs, 3);
+assert.ok(Math.abs(browserDuplex.evidence.saturatingQ - 1.2) < 1e-9);
+assert.deepEqual(browserDuplex.evidence.bonusEntries.map(function (entry) {
+  return [entry.one, entry.two, Math.round(entry.value * 1e6) / 1e6];
+}), [[3, 18, 1.636364], [4, 17, 1.636364], [5, 16, 1.636364], [6, 15, 1.636364], [6, 22, 2.25]]);
 
 assert.throws(function () {
   bridge.fold_json(JSON.stringify({
@@ -177,4 +257,6 @@ assert.throws(function () {
 }, /hard safety ceiling of 500 nt/);
 
 bridge.destroy();
+assert.deepEqual(networkRequests, [], "the Pyodide smoke test must not touch the network");
+globalThis.fetch = nativeFetch;
 process.stdout.write("cplfold-pyodide-smoke: ok\n");

@@ -14,3 +14,6 @@ desktop/resources/native-*/
 desktop/resources/native-stage-*/
 desktop/resources/*.tar.gz
 desktop/resources/*.zip
+
+# build-cplfold-web.sh staging, previous-runtime and lock directories
+web/vendor/.pyodide-cplfold.*/

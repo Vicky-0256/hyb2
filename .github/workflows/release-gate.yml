@@ -7,9 +7,12 @@ on:
       - 'web/**'
       - 'desktop/**'
       - 'scripts/build-*.sh'
+      - 'scripts/pyodide-build-requirements.txt'
+      - 'scripts/pyodide-toolchain.env'
       - 'scripts/verify-*.cjs'
       - 'scripts/verify-*.mjs'
       - 'scripts/verify-release-gate.sh'
+      - 'third_party/cplfold/**'
       - '.github/workflows/release-gate.yml'
 
 permissions:
@@ -27,11 +30,34 @@ jobs:
           git clone --depth 1 --branch 3.1.57 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
           "$RUNNER_TEMP/emsdk/emsdk" install 3.1.57
           "$RUNNER_TEMP/emsdk/emsdk" activate 3.1.57
-      - name: Build and verify browser assets
+      - name: Build and verify the ViennaRNA WebAssembly engine
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           bash scripts/build-vienna-wasm.sh
           node scripts/verify-vienna-wasm.cjs web/vendor/viennarna/vienna-rna.js
+      # after the 3.1.57 build, as in deploy-pages.yml, so setup-python does
+      # not change that step's environment
+      - name: Set up Python 3.13 for the Pyodide build
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Cache the Pyodide build toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build-tools/pyodide-venv
+            .build-tools/pyodide-xbuildenv
+          # the exact Python (the venv links to it) and the pins only, so an
+          # edit elsewhere in the build script keeps the cache
+          key: pyodide-toolchain-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('scripts/pyodide-toolchain.env', 'scripts/pyodide-build-requirements.txt') }}
+      # its own step, so emsdk 3.1.57's environment (EMSDK*, PATH) does not
+      # reach Pyodide's Emscripten
+      - name: Build the ViennaRNA Pyodide wheel
+        run: |
+          HYB2_PYTHON313="$(command -v python3.13 || command -v python3)" bash scripts/build-vienna-pyodide.sh
+      - name: Build and verify browser assets
+        run: |
           bash scripts/build-cplfold-web.sh
           node scripts/verify-cplfold-pyodide.mjs
           node scripts/verify-cplfold-worker.mjs

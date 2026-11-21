@@ -12,7 +12,7 @@ const CAPACITY_PROBE_LENGTH = 75;
 const RUNTIME_DIRECTORY = new URL("./vendor/pyodide-cplfold/", self.location.href);
 const PYODIDE_MODULE_URL = new URL("pyodide.mjs", RUNTIME_DIRECTORY);
 const EXPECTED_CPLFOLD_REVISION = "24bab52";
-const EXPECTED_BRIDGE_VERSION = "6";
+const EXPECTED_BRIDGE_VERSION = "7";
 const WORKER_BUILD = new URL(self.location.href).searchParams.get("build") || "local";
 
 let runtimePromise = null;
@@ -45,25 +45,37 @@ self.onmessage = async function (event) {
     postProgress("Loading the local Python WebAssembly runtime", 5, { phase: "runtime" });
     const runtimeStartedAt = Date.now();
     const runtime = await getRuntime();
+    await ensureVienna(runtime, message);
     const runtimeLoadMs = Date.now() - runtimeStartedAt;
 
+    const foldStage = message.allowPseudoknot === false
+      ? "Running " + engine + " phase 1 without pseudoknot search"
+      : "Running " + engine + " phase 1 and pseudoknot phase 2";
+    const vienna = needsVienna(message);
     postProgress(
-      message.evidenceMode === "hyb-blocks"
+      vienna
+        ? viennaStage(message) + " for the HYB read support"
+        : message.evidenceMode === "hyb-blocks"
         ? "Building the HYB block bonus matrix"
         : "Preparing sequence-only " + engine,
       46,
       { phase: "evidence" }
     );
     await yieldToEventLoop();
-    postProgress(
-      message.allowPseudoknot === false
-        ? "Running " + engine + " phase 1 without pseudoknot search"
-        : "Running " + engine + " phase 1 and pseudoknot phase 2",
-      56,
-      { phase: "cplfold" }
-    );
+    let foldStagePosted = false;
+    const postFoldStage = function () {
+      if (!foldStagePosted) {
+        foldStagePosted = true;
+        postProgress(foldStage, 56, { phase: "cplfold" });
+      }
+    };
+    if (!vienna) {
+      postFoldStage();
+    }
 
     const startedAt = Date.now();
+    // The rnacofold / duplex pairs are computed inside this call; their
+    // progress (46-55 %) arrives through pairProgress, then the fold stage.
     const response = runtime.bridge.fold_json(JSON.stringify({
       sequence: sequence,
       cutpoint: input.cutpoint,
@@ -76,14 +88,19 @@ self.onmessage = async function (event) {
       alpha: message.alpha,
       beta: message.beta,
       allowPseudoknot: message.allowPseudoknot !== false,
+      supportKernel: message.supportKernel || "gaussian",
+      ...(Array.isArray(message.evidencePairs) ? { evidencePairs: message.evidencePairs } : {}),
       maxSequenceLength: maximumSequenceLength
-    }));
+    }), vienna ? pairProgress(message, 46, 55, postFoldStage) : undefined);
+    // If no HYB block reached the pair callback (it never fired), the fold
+    // stage is still reported, once fold_json returns, before the result.
+    postFoldStage();
     const result = JSON.parse(String(response));
     result.foldElapsedMs = Date.now() - startedAt;
     result.runtimeLoadMs = runtimeLoadMs;
     result.elapsedMs = Date.now() - requestStartedAt;
     result.runtimeManifest = {
-      buildCommit: runtime.manifest.buildCommit,
+      buildCommit: runtime.manifest.buildCommit || "unknown",
       archiveSha256: runtime.manifest.cplfoldArchiveSha256
     };
     if (result.engineVersion !== EXPECTED_CPLFOLD_REVISION || result.bridgeVersion !== EXPECTED_BRIDGE_VERSION) {
@@ -208,7 +225,7 @@ async function runCapacityProbe(message) {
       runtimeLoadMs: runtimeLoadMs,
       elapsedMs: Date.now() - requestStartedAt,
       runtimeManifest: {
-        buildCommit: runtime.manifest.buildCommit,
+        buildCommit: runtime.manifest.buildCommit || "unknown",
         archiveSha256: runtime.manifest.cplfoldArchiveSha256
       },
       hardware: browserHardwareProfile(),
@@ -244,6 +261,7 @@ async function runBonusMatrixExport(message) {
     });
     const runtimeStartedAt = Date.now();
     const runtime = await getRuntime();
+    await ensureVienna(runtime, message, "bonus-matrix");
     const runtimeLoadMs = Date.now() - runtimeStartedAt;
 
     postProgress("Building the HYB block bonus matrix for local download", 58, {
@@ -255,13 +273,15 @@ async function runBonusMatrixExport(message) {
       sequence: sequence,
       cutpoint: input.cutpoint,
       evidenceMode: message.evidenceMode === "hyb-blocks" ? "hyb-blocks" : "none",
-      evidenceArms: message.evidenceArms || []
-    }));
+      evidenceArms: message.evidenceArms || [],
+      supportKernel: message.supportKernel || "gaussian",
+      ...(Array.isArray(message.evidencePairs) ? { evidencePairs: message.evidencePairs } : {})
+    }), needsVienna(message) ? pairProgress(message, 58, 94, null, "bonus-matrix") : undefined);
     const result = JSON.parse(String(response));
     result.runtimeLoadMs = runtimeLoadMs;
     result.elapsedMs = Date.now() - requestStartedAt;
     result.runtimeManifest = {
-      buildCommit: runtime.manifest.buildCommit,
+      buildCommit: runtime.manifest.buildCommit || "unknown",
       archiveSha256: runtime.manifest.cplfoldArchiveSha256
     };
     if (result.engineVersion !== EXPECTED_CPLFOLD_REVISION || result.bridgeVersion !== EXPECTED_BRIDGE_VERSION) {
@@ -289,6 +309,113 @@ function getRuntime() {
   return runtimePromise;
 }
 
+// GitHub Pages caches files for about ten minutes and Pyodide fetches
+// pyodide-lock.json itself, so over http(s) the lock gets this build's
+// cache-buster: a fresh index.html must not pair with a cached old lock (the
+// ViennaRNA wheel it names lives under a hash-named directory, so the lock
+// alone decides which wheel is fetched).  packageBaseUrl is passed explicitly
+// so the wheels still resolve against the runtime directory, not the query.
+// Under file: (Node tests) Pyodide reads the lock with fs, where a query
+// string would break the path, so the default lock location is kept; but
+// packageBaseUrl is always set there too, to the same directory as a decoded
+// path with a trailing slash.  In Node, Pyodide 0.29.4 retries a package file
+// it cannot read locally from cdnUrl, and cdnUrl = packageBaseUrl ?? the
+// jsDelivr CDN: without it a missing wheel would be downloaded from the
+// internet instead of failing.  (Node's loader strips "file://" without
+// percent-decoding, so a path is used, not a file: URL.)
+// Pure (no worker globals) so scripts/verify-cplfold-worker.mjs can check it.
+// indexURL is a file path under file: (Pyodide reads it with fs there).
+export function pyodideOptionsFor(runtimeDirectoryUrl, build) {
+  const directory = new URL(runtimeDirectoryUrl);
+  if (directory.protocol === "file:") {
+    let local = decodeURIComponent(directory.pathname);
+    if (!local.endsWith("/")) {
+      local += "/";
+    }
+    return { indexURL: local, packageBaseUrl: local };
+  }
+  const options = { indexURL: directory.href };
+  if ((directory.protocol === "http:" || directory.protocol === "https:") && build && build !== "local") {
+    const lockUrl = new URL("pyodide-lock.json", directory);
+    lockUrl.searchParams.set("build", build);
+    options.lockFileURL = lockUrl.href;
+    options.packageBaseUrl = directory.href;
+  }
+  return options;
+}
+
+function pyodideOptions() {
+  return pyodideOptionsFor(RUNTIME_DIRECTORY.href, WORKER_BUILD);
+}
+
+// Pyodide 0.29.4's loadPackage does not reject when a package fails: it logs
+// "Failed to load <name>" and resolves with an array that omits it.  This
+// captures the error log, checks the package really loaded and throws an
+// Error that names the package and the first underlying error.
+export async function loadPinnedPackage(pyodide, name) {
+  const errors = [];
+  let loaded;
+  try {
+    loaded = await pyodide.loadPackage(name, {
+      errorCallback: function (line) { errors.push(String(line)); },
+      messageCallback: function () {}
+    });
+  } catch (error) {
+    errors.push(error && error.message ? String(error.message) : String(error));
+  }
+  // A package loaded earlier is not in the returned array, only in loadedPackages.
+  const present = (Array.isArray(loaded) && loaded.some(function (entry) { return entry && entry.name === name; }))
+    || Boolean(pyodide.loadedPackages && pyodide.loadedPackages[name]);
+  if (present) {
+    return;
+  }
+  throw new Error(packageFailureMessage(name, errors));
+}
+
+// One line (readableError keeps only the last line of a message): the
+// package, the first real error line, then what to do about it.
+const BROWSER_FETCH_FAILURE = /\b(?:Failed to fetch|NetworkError when attempting to fetch resource|Load failed)\b/;
+
+export function packageFailureMessage(name, errors) {
+  // Drop one trailing period (the advice adds its own), not an ellipsis.
+  const detail = (firstErrorLine(errors) || "Pyodide did not report it as loaded").replace(/([^.])\.$/, "$1");
+  const label = name === "viennarna" ? "The local ViennaRNA Python module (viennarna)" : "The pinned Pyodide package " + name;
+  const head = label + " could not be loaded: " + detail + (detail.endsWith("...") ? " " : ". ");
+  const build = "if you built the site locally, run "
+    + (name === "viennarna" ? "scripts/build-vienna-pyodide.sh, then " : "") + "scripts/build-cplfold-web.sh; on the deployed site, reload the page.";
+  if (/No known package with name/i.test(detail)) {
+    return head + "This site's pyodide-lock.json does not list it: " + build;
+  }
+  // "request failed" is any non-OK response: a missing file, or a 5xx while
+  // the site is being redeployed.
+  if (/\b404\b|not found|ENOENT|no such file|request failed/i.test(detail)) {
+    return head + "The file could not be downloaded (missing or server error): " + build;
+  }
+  // A browser reports a failed fetch(url, {integrity}) SRI check with the same
+  // generic TypeError as a network failure (Chrome, Firefox, Safari wording).
+  if (BROWSER_FETCH_FAILURE.test(detail)) {
+    return head + "A network problem or inconsistent deployed files (a partial or ongoing deploy): reload the page.";
+  }
+  if (/integrity|digest|sha-?256|not a zip file|BadZipFile|ReadError/i.test(detail)) {
+    return head + "The deployed runtime files are inconsistent with each other (a partial or ongoing deploy); reload the page.";
+  }
+  return head + "Check the connection and reload the page; if it keeps failing, the deployed runtime files may be inconsistent.";
+}
+
+// Pyodide logs "The following error occurred while loading <name>:" and then
+// the error (often a Python traceback, whose last line is the useful one).
+function firstErrorLine(errors) {
+  for (const entry of errors || []) {
+    const lines = String(entry).split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean);
+    if (!lines.length || /^The following error occurred while loading/i.test(lines[0]) && lines.length === 1) {
+      continue;
+    }
+    const line = lines[lines.length - 1].replace(/^(?:[A-Za-z_.]*Error|Exception):\s*/, "");
+    return line.length > 240 ? line.slice(0, 237) + "..." : line;
+  }
+  return "";
+}
+
 async function initialiseRuntime() {
   if (typeof WebAssembly !== "object") {
     throw new Error("This browser does not provide WebAssembly, which is required for browser CPLfold.");
@@ -303,15 +430,12 @@ async function initialiseRuntime() {
 
   let pyodide;
   try {
-    const runtimeIndex = RUNTIME_DIRECTORY.protocol === "file:"
-      ? decodeURIComponent(RUNTIME_DIRECTORY.pathname)
-      : RUNTIME_DIRECTORY.href;
-    pyodide = await loadPyodide({ indexURL: runtimeIndex });
-    postProgress("Loading the pinned local NumPy package", 22, { phase: "numpy" });
-    await pyodide.loadPackage("numpy");
+    pyodide = await loadPyodide(pyodideOptions());
   } catch (error) {
-    throw new Error("The pinned Pyodide or NumPy assets could not be initialised from this site.");
+    throw new Error("The pinned Pyodide assets could not be initialised from this site.");
   }
+  postProgress("Loading the pinned local NumPy package", 22, { phase: "numpy" });
+  await loadPinnedPackage(pyodide, "numpy");
 
   postProgress("Loading the vendored pure-Python CPLfold source", 34, { phase: "source" });
   let sourceBundle;
@@ -343,6 +467,61 @@ async function initialiseRuntime() {
   } catch (error) {
     throw new Error("The pure-Python CPLfold source could not be imported in Pyodide.");
   }
+}
+
+// The rnacofold and duplex read-support kernels run ViennaRNA's own Python
+// module (import RNA) on each chimera's arms, as the desktop does. Its wheel
+// (scripts/build-vienna-pyodide.sh) is loaded on first use only: about 1.9 MB,
+// checked by Pyodide against the SHA-256 in pyodide-lock.json.
+const VIENNA_KERNELS = ["rnacofold", "duplex"];
+let viennaPromise = null;
+
+function needsVienna(message) {
+  return message.evidenceMode === "hyb-blocks"
+    && VIENNA_KERNELS.indexOf(message.supportKernel) !== -1
+    && !Array.isArray(message.evidencePairs);
+}
+
+function viennaStage(message) {
+  return message.supportKernel === "duplex" ? "RNAduplex of each chimera's arms" : "RNAcofold of each chimera's arms";
+}
+
+// progress(blocksDone, blocks) for the bridge: the pair step's share of the
+// bar runs from `from` to `to` %; done() follows the last block.
+function pairProgress(message, from, to, done, operation) {
+  const stage = viennaStage(message);
+  return function (completed, total) {
+    const finished = Number(completed) >= Number(total);
+    postProgress(stage + " " + Number(completed).toLocaleString("en-US") + " / " + Number(total).toLocaleString("en-US"),
+      from + Math.round((to - from) * Math.min(1, Number(completed) / Math.max(1, Number(total)))),
+      Object.assign({ phase: message.supportKernel === "duplex" ? "rna-duplex" : "rna-cofold",
+        completed: Number(completed), total: Number(total) }, operation ? { operation: operation } : {}));
+    if (finished && done) {
+      done();
+    }
+  };
+}
+
+async function ensureVienna(runtime, message, operation) {
+  if (!needsVienna(message)) {
+    return;
+  }
+  if (!viennaPromise) {
+    postProgress("Loading the local ViennaRNA Python module", 40, Object.assign({ phase: "viennarna" },
+      operation ? { operation: operation } : {}));
+    viennaPromise = loadPinnedPackage(runtime.pyodide, "viennarna").then(function () {
+      try {
+        runtime.pyodide.runPython("import RNA");
+      } catch (error) {
+        const lines = String(error && error.message || error).split(/\r?\n/).filter(function (line) { return line.trim(); });
+        throw new Error("The local ViennaRNA Python module (viennarna) loaded but import RNA failed: "
+          + (lines.length ? lines[lines.length - 1].trim() : "unknown error") + ". Rebuild it with scripts/build-vienna-pyodide.sh, then scripts/build-cplfold-web.sh.");
+      }
+    });
+    // Reset on failure so the next request retries the load.
+    viennaPromise.catch(function () { viennaPromise = null; });
+  }
+  await viennaPromise;
 }
 
 async function loadVerifiedSourceBundle() {

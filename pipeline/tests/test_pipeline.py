@@ -5,10 +5,12 @@ on ``data/testData.sam`` (macOS one-true-awk 20200816, LANG=C.UTF-8).
 """
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -207,6 +209,72 @@ def _fake_duplex_folder(workers=None):
 
 def _no_duplex_folder(workers=None):
     raise energy.EnergyUnavailable("the dG column needs the ViennaRNA Python package or RNAduplex on PATH")
+
+
+class EnergyBackendTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+        self.ref = self.base / "reference.fa"
+        self.ref.write_text(">toy\n" + "ACGT" * 40 + "\n")
+        self.sam = self.base / "reads.sam"
+        read = "ACGT" * 10
+        self.sam.write_text("@SQ\tSN:toy\tLN:160\n"
+                            f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n"
+                            f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n")
+
+    def test_original_positional_options_work_through_sam2hyb(self):
+        args = (0.1, 4, 10, True, 2, "plain", self.base / "work", 8, False)
+        options = Options(*args)
+        self.assertEqual((options.blast_threshold, options.max_overlap, options.max_hits, options.energy,
+                          options.threads, options.keep_sam, options.tmp_dir, options.memory_mb, options.resume), args)
+        self.assertEqual(options.energy_engine, "rnaduplex")
+        self.assertEqual(Options(*args, energy_engine="rnacofold").energy_engine, "rnacofold")
+        with mock.patch.object(energy, "duplex_folder", side_effect=_fake_duplex_folder) as select:
+            result = sam2hyb(self.sam, self.ref, self.base / "legacy", options)
+        select.assert_called_once_with(2)
+        self.assertEqual(result.counts["hybrids"], 1)
+
+    def test_cli_run_and_resume_keep_the_selected_program_and_version(self):
+        for engine, program in (("rnaduplex", "RNAduplex"), ("rnacofold", "RNAcofold")):
+            with self.subTest(engine=engine):
+                executable = str(self.base / program)
+                options = Options(energy=True, threads=1, energy_engine=engine)
+                out = self.base / engine
+                checkpoint = Path(str(out) + ".checkpoint.json")
+
+                def invoke(args, **kwargs):
+                    self.assertEqual(args[0], executable)
+                    if args[1:] == ["--version"]:
+                        return subprocess.CompletedProcess(args, 0, program + " 2.7.3-test\n")
+                    self.assertIn("--noconv", args)
+                    self.assertIn("ACG", kwargs["input"])
+                    return subprocess.CompletedProcess(args, 0, "((((&)))) (-3.50)\n")
+
+                with mock.patch.dict(sys.modules, {"RNA": None}), \
+                        mock.patch.object(energy.shutil, "which", return_value=executable) as which, \
+                        mock.patch.object(energy.subprocess, "run", side_effect=invoke) as command:
+                    result = run(self.sam, self.ref, out, options)
+                which.assert_called_once_with(program)
+                self.assertEqual(result.hyb.read_text().split("\t")[2], "-3.50")
+                self.assertEqual(result.energy["engine"], engine)
+                self.assertEqual(result.energy["executable"], executable)
+                self.assertEqual(result.energy["version"], "2.7.3-test")
+                self.assertEqual(command.call_count, 2)  # the version and the actual fold
+                saved = json.loads(checkpoint.read_text())
+                self.assertEqual(saved["stages"]["energy"]["provenance"], result.energy)
+                with mock.patch.object(energy, "engine_folder", side_effect=AssertionError("selected on resume")), \
+                        mock.patch.object(energy, "provenance", side_effect=AssertionError("probed on resume")):
+                    resumed = run(self.sam, self.ref, out, options)
+                    self.assertFalse(resumed.energy_ran)
+                    self.assertEqual(resumed.energy, result.energy)
+                    del saved["stages"]["energy"]["provenance"]
+                    checkpoint.write_text(json.dumps(saved))
+                    legacy = run(self.sam, self.ref, out, options)
+                self.assertEqual(legacy.energy["engine"], engine)
+                self.assertIsNone(legacy.energy["version"])
+                self.assertIsNone(legacy.energy["executable"])
 
 
 class DuplexRunTest(unittest.TestCase):

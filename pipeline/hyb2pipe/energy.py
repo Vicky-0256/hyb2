@@ -25,6 +25,18 @@ from . import awk
 Folder = Callable[[Sequence[Tuple[str, str]]], List[Optional[float]]]
 
 
+class _CommandFolder:
+    """Use the same executable for every chunk and for the run record."""
+
+    def __init__(self, executable: str,
+                 fold_chunk: Callable[[str, Sequence[Tuple[str, str]]], List[Optional[float]]]) -> None:
+        self.executable = os.path.abspath(executable)
+        self._fold_chunk = fold_chunk
+
+    def __call__(self, pairs: Sequence[Tuple[str, str]]) -> List[Optional[float]]:
+        return self._fold_chunk(self.executable, list(pairs))
+
+
 class EnergyUnavailable(RuntimeError):
     pass
 
@@ -160,6 +172,17 @@ def _vienna_chunk(pairs: Sequence[Tuple[str, str]]) -> List[float]:
     return [RNA.fold_compound(a + "&" + b).mfe_dimer()[1] for a, b in pairs]
 
 
+def _cofold_cli_chunk(executable: str, pairs: Sequence[Tuple[str, str]]) -> List[Optional[float]]:
+    if not pairs:
+        return []
+    text = "".join(">p%d\n%s&%s\n" % (i, a, b) for i, (a, b) in enumerate(pairs))
+    done = subprocess.run([executable, "--noconv", "--noPS"], input=text, capture_output=True, text=True, check=True)
+    values = [float(m) for m in re.findall(r"\(\s*(-?\d+\.\d+)\)\s*$", done.stdout, re.M)]
+    if len(values) != len(pairs):
+        raise EnergyUnavailable("RNAcofold returned %d energies for %d pairs" % (len(values), len(pairs)))
+    return values
+
+
 def default_folder(workers: Optional[int] = None) -> Folder:
     """ViennaRNA Python bindings (spread over ``workers`` processes, default one
     per CPU), else an
@@ -183,16 +206,7 @@ def default_folder(workers: Optional[int] = None) -> Folder:
         pass
     exe = shutil.which("RNAcofold")
     if exe:
-        def fold(pairs):
-            if not pairs:
-                return []
-            text = "".join(">p%d\n%s&%s\n" % (i, a, b) for i, (a, b) in enumerate(pairs))
-            done = subprocess.run([exe, "--noconv", "--noPS"], input=text, capture_output=True, text=True, check=True)
-            values = [float(m) for m in re.findall(r"\(\s*(-?\d+\.\d+)\)\s*$", done.stdout, re.M)]
-            if len(values) != len(pairs):
-                raise EnergyUnavailable("RNAcofold returned %d energies for %d pairs" % (len(values), len(pairs)))
-            return values
-        return fold
+        return _CommandFolder(exe, _cofold_cli_chunk)
     raise EnergyUnavailable("folding energy needs the ViennaRNA Python package or RNAcofold on PATH")
 
 
@@ -217,15 +231,31 @@ def _vienna_version() -> Optional[str]:
     return str(version) if version else None
 
 
-def provenance(engine: str, executable: Optional[str] = None) -> Dict[str, object]:
-    """How the dG column is computed, for the run record (``Result.energy``)."""
+def describe_engine(engine: str, executable: Optional[str] = None, version: Optional[str] = None) -> Dict[str, object]:
+    """Describe the energy settings without requiring an installed backend."""
     if engine == "rnaduplex":
-        return {"engine": "rnaduplex", "program": "ViennaRNA RNAduplex", "version": _vienna_version(),
+        return {"engine": "rnaduplex", "program": "ViennaRNA RNAduplex", "version": version,
                 "executable": executable, "parameters": "RNA, 37 \u00b0C (ViennaRNA defaults)",
                 "scope": "each hybrid's two arms, intermolecular pairs only"}
-    return {"engine": "rnacofold", "program": "ViennaRNA RNAcofold", "version": _vienna_version(),
-            "executable": None, "parameters": "ViennaRNA defaults (37 \u00b0C)",
+    return {"engine": "rnacofold", "program": "ViennaRNA RNAcofold", "version": version,
+            "executable": executable, "parameters": "ViennaRNA defaults (37 \u00b0C)",
             "scope": "hybrid bits, keyed by read ID (legacy hyb2)"}
+
+
+def provenance(engine: str, executable: Optional[str] = None, *, folder: Optional[Folder] = None) -> Dict[str, object]:
+    """Record the ViennaRNA module version or the selected command's path and version."""
+    if isinstance(folder, _CommandFolder):
+        executable = folder.executable
+    if executable is None:
+        return describe_engine(engine, version=_vienna_version())
+    try:
+        result = subprocess.run([executable, "--version"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, encoding="utf-8", errors="replace", timeout=3, check=True)
+        match = re.search(r"\b(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?)", result.stdout)
+        version = match.group(1) if match else None
+    except (OSError, subprocess.SubprocessError):
+        version = None
+    return describe_engine(engine, executable=executable, version=version)
 
 
 def _duplex_value(energy: float, structure: str) -> Optional[float]:
@@ -286,7 +316,7 @@ def duplex_folder(workers: Optional[int] = None) -> Folder:
         exe = shutil.which("RNAduplex")
         if not exe:
             raise EnergyUnavailable("the dG column needs the ViennaRNA Python package or RNAduplex on PATH")
-        return lambda pairs: _duplex_cli_chunk(exe, list(pairs))
+        return _CommandFolder(exe, _duplex_cli_chunk)
 
     def fold(pairs):
         pairs = list(pairs)

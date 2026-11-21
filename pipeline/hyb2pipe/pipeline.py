@@ -68,12 +68,12 @@ class Options:
     max_overlap: float = 4  # -m / -g
     max_hits: int = 10  # -h (the legacy hyb2 wrapper never forwarded it)
     energy: bool = False  # -e
-    energy_engine: str = "rnaduplex"  # "rnaduplex" (ViennaRNA, intermolecular as Hyb) or "rnacofold" (legacy hyb2)
     threads: Optional[int] = None  # Bowtie2 threads and worker processes (default: default_threads())
     keep_sam: str = "none"  # "none" | "gz" | "plain": also write <out>.sam(.gz)
     tmp_dir: Optional[Path] = None  # work and external-sort files (default: <out>.work/)
     memory_mb: int = field(default_factory=default_memory_mb)  # budget for in-memory sort chunks and count tables
     resume: bool = True  # continue from <out>.checkpoint.json when it matches
+    energy_engine: str = "rnaduplex"  # "rnaduplex" (ViennaRNA, intermolecular as Hyb) or "rnacofold" (legacy hyb2)
 
 
 @dataclass
@@ -92,14 +92,14 @@ class Result:
     energy_ran: bool = False
 
 
-def _recorded_energy(ck: "_Checkpoint", current: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The provenance of the dG column: as recorded by the energy stage that
-    wrote it (a resumed run), else ``current``."""
-    if current is None:
+def _recorded_energy(ck: "_Checkpoint", options: Options) -> Optional[Dict[str, Any]]:
+    """Read the provenance from the energy stage that wrote the dG column."""
+    if not options.energy:
         return None
     record = ck.data["stages"].get("energy") or {}
     recorded = record.get("provenance")
-    return recorded if isinstance(recorded, dict) else current
+    # Older checkpoints did not record the executable or its version.
+    return recorded if isinstance(recorded, dict) else energy.describe_engine(options.energy_engine)
 
 
 class _NeedBlastTable(Exception):
@@ -427,12 +427,9 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
     # invocation (a run resumed past it needs none), and then before mapping:
     # a run that cannot write dG stops at once.
     folder = None
-    provenance: Optional[Dict[str, Any]] = None
     ran_energy = False
-    if options.energy:
-        if _energy_pending(ck):
-            folder = energy.engine_folder(options.energy_engine, _threads(options))
-        provenance = energy.provenance(options.energy_engine)
+    if options.energy and _energy_pending(ck):
+        folder = energy.engine_folder(options.energy_engine, _threads(options))
     if not ck.data["stages"] and work.exists():
         shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True, exist_ok=True)
@@ -450,7 +447,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
         return Result(hyb=Path(str(out_prefix) + ".hyb"), homodimers=Path(str(out_prefix) + "_homodimers.hyb"),
                       stats=Path(str(out_prefix) + "_hybrids.hyb_stats.txt"),
                       sam=Path(sam_info) if sam_info else None, reference=reference, counts=counts,
-                      energy=_recorded_energy(ck, provenance))
+                      energy=_recorded_energy(ck, options))
 
     # ---- collapse (FASTQ only)
     reads = input_path
@@ -573,6 +570,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
             if folder is None:
                 # its record went stale during this run (an output vanished)
                 folder = energy.engine_folder(options.energy_engine, threads)
+            provenance = energy.provenance(options.energy_engine, folder=folder)
             ran_energy = True
             if options.energy_engine == "rnaduplex":
                 progress("energy", "RNAduplex dG of each hybrid's arms")
@@ -594,7 +592,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
     shutil.rmtree(work, ignore_errors=True)
     progress("done", "%d hybrids" % counts["hybrids"])
     return Result(hyb=paths["hyb"], homodimers=paths["homodimers"], stats=paths["stats"], sam=sam_kept,
-                  reference=reference, counts=counts, energy=_recorded_energy(ck, provenance),
+                  reference=reference, counts=counts, energy=_recorded_energy(ck, options),
                   energy_ran=ran_energy)
 
 

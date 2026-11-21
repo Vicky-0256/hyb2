@@ -82,9 +82,12 @@ It deliberately differs from the legacy scripts in four places:
   format. Arms that form no pair get an empty dG. `--energy-engine
   rnacofold` gives the legacy hyb2 behaviour (RNAcofold, keyed by the first
   two `_` fields of the read ID). The desktop app always runs with `-e 1`
-  and RNAduplex. `Result.energy` (and the checkpoint's `energy` stage)
-  records the engine, program, ViennaRNA version, parameters and scope; it
-  is `None` without `-e 1`.
+  and RNAduplex. `Result.energy` and the checkpoint's `energy` stage record
+  the engine, program, ViennaRNA version, parameters and scope. For a CLI run,
+  `executable` is the path used to calculate dG and `version` comes from
+  that program's `--version` output. For a Python run, `executable` is
+  `None` and `version` comes from the module. Missing version information
+  stays `None` on resume. With energy off, `Result.energy` is `None`.
 - With `-e 1`, dG is written as a plain `%.2f` number. The legacy `sed`
   wrote a TAB inside the value whenever |dG| < 10, which shifted every later
   column.

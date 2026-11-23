@@ -4,62 +4,72 @@ on:
   push:
     branches:
       - main
+      - integration/unified-release
     paths:
       - ".gitattributes"
       - "web/**"
       - "desktop/**"
       - "pipeline/**"
-      - "third_party/cplfold/**"
-      - "third_party/iris/**"
-      - "bin/cplfold"
-      - "bin/plot_hybrids_3.awk"
-      - "scripts/bundle_sources.py"
-      - "scripts/build-*.sh"
-      - "scripts/pyodide-build-requirements.txt"
-      - "scripts/pyodide-toolchain.env"
-      - "scripts/verify-*.cjs"
-      - "scripts/verify-*.mjs"
-      - "scripts/verify-browser-release.sh"
-      - "scripts/json-schema-lite.cjs"
-      - "scripts/write-releases.mjs"
-      - "scripts/webr-smoke/**"
-      - ".github/workflows/deploy-pages.yml"
-      - ".github/workflows/desktop-release.yml"
-      - ".github/workflows/publish-desktop.yml"
-      - ".github/workflows/release-gate.yml"
+      - "third_party/**"
+      - "bin/**"
+      - "data/**"
+      - "requirements/**"
+      - "scripts/**"
+      - ".github/workflows/**"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Prepare a Pages artifact for this invoking release tag"
+        type: string
+      browser_only:
+        description: "The caller schedules native package checks separately"
+        type: boolean
+    outputs:
+      pages_artifact_id:
+        value: ${{ jobs.build.outputs.pages_artifact_id }}
+      pages_artifact_name:
+        value: ${{ jobs.build.outputs.pages_artifact_name }}
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "github-pages"
-  cancel-in-progress: false
 
 jobs:
   desktop:
+    if: ${{ !inputs.browser_only }}
     permissions:
       contents: read
     uses: ./.github/workflows/desktop-release.yml
 
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
     outputs:
       pages_artifact_id: ${{ steps.pages-artifact.outputs.artifact_id }}
+      pages_artifact_name: ${{ steps.site.outputs.name }}
+      release_catalog_sha256: ${{ steps.releases.outputs.sha256 }}
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Record build provenance
+      - name: Record event commit and primary tag
+        id: site
         run: |
-          printf 'window.HYB2_BUILD = { commit: "%s" };\n' "$GITHUB_SHA" > web/build-info.js
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node -e 'console.log("window.HYB2_BUILD = " + JSON.stringify({commit: process.env.GITHUB_SHA, releaseTag: process.env.RELEASE_TAG}) + ";")' > web/build-info.js
+          echo "name=github-pages-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Read published desktop releases
+        id: releases
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/write-releases.mjs
+        run: |
+          node scripts/write-releases.mjs
+          echo "sha256=$(sha256sum web/releases.js | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
       - name: Build pinned ViennaRNA WebAssembly engine
         env:
@@ -71,41 +81,6 @@ jobs:
           "$hyb2_emsdk_directory/emsdk" activate "$EMSDK_VERSION"
           source "$hyb2_emsdk_directory/emsdk_env.sh"
           bash scripts/build-vienna-wasm.sh
-          node scripts/verify-iris-core.cjs
-          node scripts/verify-iris-worker.cjs
-          node scripts/verify-iris-ui.cjs
-          node scripts/verify-cplcofold-ui.cjs
-
-      - name: Verify static application
-        run: |
-          test -f web/index.html
-          test -s web/build-info.js
-          test -s web/vendor/viennarna/vienna-rna.js
-          test -s web/vendor/viennarna/vienna-rna.wasm
-          test -s web/vendor/viennarna/COPYING-ViennaRNA.txt
-          for file in web/*.js; do
-            node --check "$file"
-          done
-          node --check scripts/webr-smoke/spike.mjs
-          node --check web/cplfold.worker.mjs
-          node scripts/verify-parser.cjs
-          node scripts/verify-comrades-analysis.cjs
-          node scripts/verify-webr-feasibility.cjs
-          node scripts/verify-input-select-events.cjs
-          node scripts/verify-motion-contract.cjs
-          node scripts/verify-evidence.cjs
-          node scripts/verify-report-render.cjs
-          node scripts/verify-results.cjs
-          node scripts/verify-ui-kit.cjs
-          node scripts/verify-deseq.cjs
-          node scripts/verify-arc-map.cjs
-          node scripts/verify-region-panels.cjs
-          # runs after the ViennaRNA build above, so RNAcofold is checked too
-          node scripts/verify-folding-energy.cjs
-          node scripts/verify-batch-tools.cjs
-          # the included example end to end (~15 s): Compare maps, differential
-          # test, arc map, regions and RNAcofold energies vs the R pipeline
-          node scripts/verify-example.cjs
 
       - name: Set up Python 3.13 for the Pyodide build
         id: setup-python
@@ -125,37 +100,46 @@ jobs:
         run: |
           HYB2_PYTHON313="$(command -v python3.13 || command -v python3)" bash scripts/build-vienna-pyodide.sh
 
-      - name: Build and verify pinned browser CPLfold runtime
+      - name: Build pinned browser CPLfold runtime
         run: |
           bash scripts/build-cplfold-web.sh
           test -s web/vendor/pyodide-cplfold/pyodide.mjs
           test -s web/vendor/pyodide-cplfold/pyodide.asm.wasm
           test -s web/vendor/pyodide-cplfold/numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl
           test -s web/vendor/pyodide-cplfold/CPLfold-THIRD_PARTY_NOTICES.md
+          test -s web/vendor/pyodide-cplfold/CPLfold-GPL-3.0-or-later.txt
           test -s web/vendor/pyodide-cplfold/CPLfold-GPL-2.0-or-later.txt
           test -s web/vendor/pyodide-cplfold/CPLfold-LinearFold-LICENSE.txt
-          bash scripts/verify-browser-release.sh
-          node scripts/verify-cplfold-parameters.mjs
-          node scripts/verify-cplcofold-local-regions.mjs
 
       - name: Version static assets for browser cache refresh
         run: |
           releases_hash=$(sha256sum web/releases.js | cut -d ' ' -f 1)
           sed -i "s#\./releases\.js\"#./releases.js?build=${releases_hash}\"#" web/index.html
           sed -i -E "s#(\./[^\"?]+\.(css|js))\"#\1?build=${GITHUB_SHA}\"#g" web/index.html
+          # Module imports do not inherit the worker URL's build query.
+          sed -i "s#\./support-kernels.js\"#./support-kernels.js?build=${GITHUB_SHA}\"#" web/cplfold.worker.mjs
+          sed -i -E "s#(\./(support-kernels|iris-core|comrades-analysis)\.js)\"#\1?build=${GITHUB_SHA}\"#g" web/structure.worker.js
+          grep -Fq "support-kernels.js?build=${GITHUB_SHA}" web/structure.worker.js
+          grep -Fq "support-kernels.js?build=${GITHUB_SHA}" web/cplfold.worker.mjs
           grep -Fq "releases.js?build=${releases_hash}" web/index.html
           grep -q "app.js?build=${GITHUB_SHA}" web/index.html
           grep -q "styles.css?build=${GITHUB_SHA}" web/index.html
 
+      - name: Verify the final site and shared source packaging contract
+        run: |
+          python3 -B -m unittest desktop.runtime.tests.test_native_release_preflight
+          bash scripts/verify-browser-release.sh
+
       - name: Configure GitHub Pages
-        if: ${{ github.ref == 'refs/heads/main' && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
+        if: ${{ (inputs.release_tag == github.ref_name && startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
         uses: actions/configure-pages@v5
 
       - name: Upload GitHub Pages artifact
         id: pages-artifact
-        if: ${{ github.ref == 'refs/heads/main' && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
+        if: ${{ (inputs.release_tag == github.ref_name && startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
         uses: actions/upload-pages-artifact@v4
         with:
+          name: ${{ steps.site.outputs.name }}
           path: ./web
           retention-days: 1
 
@@ -167,24 +151,43 @@ jobs:
 
   deploy:
     if: ${{ github.ref == 'refs/heads/main' && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
+    needs: [build, desktop]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     permissions:
       contents: read
       pages: write
       id-token: write
       actions: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: [build, desktop]
     steps:
-      - name: Deploy to GitHub Pages
+      - uses: actions/checkout@v6
+      - name: Do not deploy a superseded main build
+        run: |
+          git fetch --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+      - name: Do not deploy a stale release catalog
+        id: release-catalog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_CATALOG_SHA256: ${{ needs.build.outputs.release_catalog_sha256 }}
+        run: node scripts/write-releases.mjs --check-main-deployment
+      - name: Deploy the fully verified main build
         id: deployment
+        if: steps.release-catalog.outputs.current == 'true'
         uses: actions/deploy-pages@v4
-      - name: Remove the temporary artifact after deployment
-        if: ${{ success() && needs.build.outputs.pages_artifact_id != '' }}
+        with:
+          artifact_name: ${{ needs.build.outputs.pages_artifact_name }}
+      - name: Remove the temporary site after deployment
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_ID: ${{ needs.build.outputs.pages_artifact_id }}
         run: gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
+      - name: Explain stale catalog skip
+        if: steps.release-catalog.outputs.current != 'true'
+        run: echo "A newer desktop release changed the catalog after this site was built; the tag publisher owns the current Pages artifact." >> "$GITHUB_STEP_SUMMARY"

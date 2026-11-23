@@ -43,6 +43,27 @@ macOS use the corresponding Unix platform identifier.  Never run `stage-native`
 with a runtime downloaded for another OS or architecture: it executes a real
 Numba and CPLfold smoke test and records the target platform in the manifest.
 
+## Which project revision is in the runtime?
+
+`source_id` identifies the CPython archive. `project_commit` in
+`native-manifest.json` identifies the **packaged project files**, not CPython,
+the wheels or Bowtie2. In a release job, leave the event's `GITHUB_SHA` set
+for both staging and preflight. Each command requires it to equal checkout
+`HEAD` and requires the staged project file names and raw bytes to match that
+commit. Preflight also checks the manifest's recorded revision, its file
+inventory and SHA-256 hashes, and the current project sources. Re-stage an
+old runtime without `project_commit`; do not add a SHA by hand.
+
+The native and browser builds take paths from the Git index and bytes from
+the working tree. They support ordinary Git files, not Git symlinks or
+submodules in the source inputs. `.gitattributes` preserves the required
+checkout bytes on Windows; release checks do not normalize line endings.
+For local builds, leave `GITHUB_SHA` **unset**. A clean set of packaged files
+gets the full `HEAD` commit; edits, staged additions or staged deletions get
+`local`. Changes outside those inputs don't affect the label. Use `git add`
+to include a new input. An extracted source archive with no Git metadata
+uses the same directory and cache exclusions and is always labeled `local`.
+
 ## Required release matrix
 
 | target | runner | platform argument |
@@ -55,9 +76,15 @@ Numba and CPLfold smoke test and records the target platform in the manifest.
 Windows x64, Linux x64 and macOS Apple Silicon build and unpack the desktop
 application. Each packaged runtime contains its source manifest and ships
 with its archive SHA-256. The Pages deployment and the manual release gate
-reuse these package checks. The version-tag workflow publishes the installers
-after the browser and all three desktop platforms pass. Missing pinned
-archives or wheels fail the package job.
+reuse these package checks. Missing pinned archives or wheels fail the package
+job even when distribution is disabled.
+
+The tag workflow builds and checks the versioned installers on the runners.
+It uploads them only if the repository Actions variable
+`CPLFOLD_DISTRIBUTION_APPROVED` is `true`. Creating the GitHub Release also
+requires a matching version tag on a commit on `main` and passing browser
+and desktop checks. The manual `upload_debug_build` option requires the same
+approval: that artifact contains the full bundled runtime too.
 
 ## Bowtie2
 
@@ -70,14 +97,7 @@ installs.
 
 `stage-native.py --bowtie2 DIR` copies them to `bin/` and checks them by
 building an index and aligning a probe read. `verify-native-release.py`
-compares the full set of packaged project files and their SHA-256 digests
-against the current sources. It also requires Bowtie2.
-
-The native and browser builds select paths from the Git index and read the
-contents from the working tree. Local edits to tracked files are included.
-Stage a new source with `git add` to include it in a checkout build. For an
-extracted source archive without Git metadata, the archive's file tree
-supplies the package inputs under the same directory and cache exclusions.
+requires Bowtie2 and repeats that check.
 
 Bowtie2 publishes no macOS x86_64 build. An Intel Mac release needs a
 self-built binary, or that target ships without FASTQ mapping (SAM input

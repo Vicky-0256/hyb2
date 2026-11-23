@@ -5,9 +5,16 @@ on:
     branches:
       - main
       - CPLcofold
+      - integration/unified-release
       - feature/cplfold-python
     paths:
       - "third_party/cplfold/**"
+      - "web/cplfold/**"
+      - "pipeline/hyb2analysis/__init__.py"
+      - "pipeline/hyb2analysis/engine_parameters.py"
+      - "pipeline/hyb2analysis/iris_parameters.py"
+      - "pipeline/hyb2analysis/support_kernels.py"
+      - "scripts/bundle_sources.py"
       - "bin/cplfold"
       - "requirements/cplfold-core.txt"
       - "scripts/verify-cplfold-python.py"
@@ -16,6 +23,12 @@ on:
   pull_request:
     paths:
       - "third_party/cplfold/**"
+      - "web/cplfold/**"
+      - "pipeline/hyb2analysis/__init__.py"
+      - "pipeline/hyb2analysis/engine_parameters.py"
+      - "pipeline/hyb2analysis/iris_parameters.py"
+      - "pipeline/hyb2analysis/support_kernels.py"
+      - "scripts/bundle_sources.py"
       - "bin/cplfold"
       - "requirements/cplfold-core.txt"
       - "scripts/verify-cplfold-python.py"
@@ -51,3 +64,6 @@ jobs:
             exit 1
           fi
           python scripts/verify-cplfold-python.py
+
+      - name: Check that a core-only change reaches both runtime packages
+        run: python -B -m unittest desktop.runtime.tests.test_native_release_preflight.PackagedSourceTests.test_core_update_reaches_both_packages

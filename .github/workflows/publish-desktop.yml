@@ -10,7 +10,13 @@ permissions:
 
 jobs:
   browser:
-    uses: ./.github/workflows/release-gate.yml
+    permissions:
+      contents: read
+      pages: write
+    uses: ./.github/workflows/deploy-pages.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+      browser_only: true
 
   package:
     uses: ./.github/workflows/desktop-release.yml
@@ -18,6 +24,7 @@ jobs:
       release_installers: true
 
   publish:
+    if: ${{ vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
     needs: [browser, package]
     runs-on: ubuntu-latest
     permissions:
@@ -28,7 +35,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Verify that the release commit is on main
-        run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
+        env:
+          PAGES_ARTIFACT_ID: ${{ needs.browser.outputs.pages_artifact_id }}
+        run: |
+          test -n "$PAGES_ARTIFACT_ID"
+          test "$(git rev-parse "$GITHUB_REF^{commit}")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -38,6 +50,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          node scripts/write-releases.mjs --check-installers release
           cd release
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
@@ -55,13 +68,38 @@ jobs:
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
           done <<< "$artifact_ids"
 
-  refresh-pages:
-    needs: publish
+  deploy:
+    needs: [browser, publish]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     permissions:
+      contents: read
+      pages: write
+      id-token: write
       actions: write
     steps:
-      - name: Refresh the website's desktop release list
+      - uses: actions/checkout@v6
+      - name: Do not replace a newer published version
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/write-releases.mjs --check-deployment
+      - name: Promote the exact site verified before publication
+        id: deployment
+        if: steps.version.outputs.current == 'true'
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: ${{ needs.browser.outputs.pages_artifact_name }}
+      - name: Remove the temporary site after promotion or supersession
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run deploy-pages.yml --ref main --repo "$GITHUB_REPOSITORY"
+          ARTIFACT_ID: ${{ needs.browser.outputs.pages_artifact_id }}
+        run: gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"

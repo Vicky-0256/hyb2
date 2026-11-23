@@ -15,12 +15,15 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from bundle_sources import CPLFOLD_SOURCE_DIRS, selected_files
+from bundle_sources import CPLFOLD_SOURCE_DIRS, REQUIRED_FOLD_SOURCES, package_build_commit, selected_files
 
 # Repository sources copied into every runtime (verify-native-release checks they are current).
 # web/assets/examples is the example data set (desktop/runtime/example.py).
 SOURCE_DIRS = ['desktop/runtime', 'desktop/task-runner', 'desktop/spec', *CPLFOLD_SOURCE_DIRS, 'pipeline',
                'web/assets/examples', 'third_party/iris']
+SOURCE_FILES = ['bin/cplfold', *REQUIRED_FOLD_SOURCES, 'pipeline/hyb2analysis/iris.py', 'pipeline/hyb2analysis/reference.py']
+BOWTIE_BINARIES = [name + ('.exe' if os.name == 'nt' else '') for name in ('bowtie2-align-s', 'bowtie2-build-s')]
+BOWTIE_FILES = {'third_party/bowtie2/LICENSE', 'third_party/bowtie2/VERSION', *('bin/' + n for n in BOWTIE_BINARIES)}
 PINS = {"numpy": "1.24.4", "numba": "0.58.1", "llvmlite": "0.41.1"}
 PROBE = '''import json,sys,platform,numpy,numba,llvmlite
 @numba.njit
@@ -33,18 +36,44 @@ print(json.dumps({"python":platform.python_version(),"base_prefix":sys.base_pref
 
 
 def source_files(repository):
-    return selected_files(repository, SOURCE_DIRS, ['bin/cplfold'])
+    return selected_files(repository, SOURCE_DIRS, SOURCE_FILES)
 
 
 def is_project_source(name):
-    return name == 'bin/cplfold' or any(name == prefix or name.startswith(prefix + '/') for prefix in SOURCE_DIRS)
+    # Only the acquired interpreter/wheels and Bowtie2 are external inputs.
+    # A stray file outside the normal source directories must not evade verification.
+    return not name.startswith('python/') and name not in BOWTIE_FILES
 
 
 def stage_sources(repository, stage):
-    for name in source_files(repository):
+    names = source_files(repository)
+    for name in names:
         destination = stage / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repository / name, destination)
+    return names
+
+
+def native_build_commit(repository, stage, names, requested_sha):
+    return package_build_commit(repository, {name: stage / name for name in names}, requested_sha,
+                                directories=SOURCE_DIRS, required_files=SOURCE_FILES, select=set, package='native')
+
+
+def verify_project_sources(repository, stage, files, requested_sha):
+    """Check final inventory and bytes against the checkout; independently derive the revision from staged bytes."""
+    expected = set(source_files(repository))
+    bundled = {name for name in files if is_project_source(name)}
+    if expected != bundled:
+        issues = []
+        if expected - bundled:
+            issues.append('missing bundled sources: ' + ', '.join(sorted(expected - bundled)))
+        if bundled - expected:
+            issues.append('unexpected bundled sources: ' + ', '.join(sorted(bundled - expected)))
+        raise ValueError('\n'.join(issues))
+    for name in sorted(expected):
+        if hashlib.sha256((repository / name).read_bytes()).hexdigest() != files[name]:
+            raise ValueError(f'bundled source is stale (re-run stage-native.py): {name}')
+    return native_build_commit(repository, stage, sorted(bundled), requested_sha)
 
 
 def run(args, cwd, env):
@@ -124,6 +153,22 @@ def smoke(root, executable, portable):
         if '..(((((..[[[[)))))......]]]]' not in output or 'Energy: -8.02 kcal/mol' not in output:
             raise ValueError('CPLfold native smoke did not match reference structure/energy:\n' + output)
         details['cplfold_reference_fold'] = 'passed'
+        # The CLI does not import the app's Python bridge. Exercise it from
+        # the staged directory so omitted dependencies and old Gaussians fail.
+        probe = '''import sys
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd()))
+from desktop.runtime.structure import load_cplfold_web
+from pipeline.hyb2analysis.iris import support_matrix
+blocks = [(1, 9, 23, 31)] * 2 + [(7, 12, 27, 34)]
+fields = ("oneStart", "oneEnd", "twoStart", "twoEnd")
+iris = support_matrix(40, [dict(zip(fields, b)) for b in blocks])
+bonus, _ = load_cplfold_web(Path.cwd()).build_hyb_bonus_matrix_fast(40, blocks)
+if not (2**-23 < iris[0, 20] < 1e-6 and abs(iris - bonus).max() < 1e-12):
+    raise ValueError("packaged IRIS and CPLfold Gaussian support mismatch")
+'''
+        run([str(executable), '-I', '-B', '-c', probe], root, env)
+        details['gaussian_parity'] = 'passed'
         details['bowtie2'] = bowtie2_smoke(root, cache)
         details['viennarna'] = viennarna_smoke(root, executable, env)
         details['evidence'] = evidence_smoke(root, executable, env, portable)
@@ -266,6 +311,11 @@ def main():
         stage.mkdir()
         relative_python = Path('python/python.exe' if os.name == 'nt' else 'python/bin/python3')
         interpreter = stage / relative_python
+        names = stage_sources(ROOT, stage)
+        requested_sha = os.environ.get('GITHUB_SHA')
+        if requested_sha is not None:
+            # Do not copy a large interpreter or execute project code from a mismatched checkout.
+            native_build_commit(ROOT, stage, names, requested_sha)
         if portable:
             source_dir = args.standalone_python.resolve()
             if (source_dir / 'pyvenv.cfg').exists():
@@ -283,10 +333,9 @@ def main():
             import shlex
             interpreter.write_text('#!/bin/sh\nexec ' + shlex.quote(str(args.development_python.absolute())) + ' \"$@\"\n')
             interpreter.chmod(0o755)
-        stage_sources(ROOT, stage)
         if args.bowtie2:
-            for binary in sorted((args.bowtie2 / 'bin').iterdir()):
-                shutil.copy2(binary, stage / 'bin' / binary.name)
+            for name in BOWTIE_BINARIES:
+                shutil.copy2(args.bowtie2 / 'bin' / name, stage / 'bin' / name)
             (stage / 'third_party/bowtie2').mkdir(parents=True)
             for name in ('LICENSE', 'VERSION'):
                 shutil.copy2(args.bowtie2 / name, stage / 'third_party/bowtie2' / name)
@@ -304,11 +353,15 @@ def main():
                     'source_id': args.source_id if portable else str(args.development_python.absolute()),
                     'checks': details, 'files': {}}
         for file in sorted(stage.rglob('*')):
+            if file.is_symlink() and not file.relative_to(stage).as_posix().startswith('python/'):
+                raise ValueError(f'unexpected symlink outside the staged Python: {file}')
             if file.is_file() and not file.is_symlink():
                 manifest['files'][file.relative_to(stage).as_posix()] = hashlib.sha256(file.read_bytes()).hexdigest()
+        manifest['project_commit'] = verify_project_sources(ROOT, stage, manifest['files'], requested_sha)
         (stage / 'native-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         stage.rename(output)
-    print(json.dumps({'output': str(output), 'portable': portable, 'checks': details}, indent=2))
+    print(json.dumps({'output': str(output), 'portable': portable, 'project_commit': manifest['project_commit'],
+                      'checks': details}, indent=2))
 
 
 if __name__ == '__main__':
@@ -318,3 +371,5 @@ if __name__ == '__main__':
         print(error.stdout, file=sys.stderr)
         print(error.stderr, file=sys.stderr)
         raise SystemExit(error.returncode)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'native staging failed: {error}')

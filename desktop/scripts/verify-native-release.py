@@ -5,16 +5,20 @@ This command intentionally rejects development-external-python staging.  It is
 safe to run from CI before building the desktop app (go tool mygo build).
 """
 from __future__ import annotations
-import argparse, hashlib, json, platform, subprocess, sys, re, importlib.util
+import argparse, hashlib, json, os, platform, subprocess, sys, re, importlib.util
 from pathlib import PurePosixPath, PureWindowsPath
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location("native_stage", Path(__file__).with_name("stage-native.py"))
+staging = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(staging)
 PINS = {"numpy":"1.24.4", "numba":"0.58.1", "llvmlite":"0.41.1"}
 EXPECTED = "..(((((..[[[[)))))......]]]]"
 LICENSE_FILES = ["third_party/bowtie2/LICENSE",
                  "third_party/cplfold/THIRD_PARTY_NOTICES.md",
                  "third_party/cplfold/LICENSES/LinearFold-LICENSE.txt",
+                 "third_party/cplfold/LICENSES/GPL-3.0-or-later.txt",
                  "third_party/cplfold/LICENSES/GPL-2.0-or-later.txt"]
 
 
@@ -34,23 +38,6 @@ def safe_relative(value):
             and "\0" not in value and not PureWindowsPath(value).drive
             and not PurePosixPath(value).is_absolute()
             and all(part not in ("", ".", "..") for part in value.split("/")))
-
-
-def verify_sources(repository, files, staging):
-    expected = set(staging.source_files(repository))
-    bundled = {name for name in files if staging.is_project_source(name)}
-    if expected != bundled:
-        missing = sorted(expected - bundled)
-        extra = sorted(bundled - expected)
-        issues = []
-        if missing:
-            issues.append("missing bundled sources: " + ", ".join(missing))
-        if extra:
-            issues.append("unexpected bundled sources: " + ", ".join(extra))
-        raise ValueError("\n".join(issues))
-    for name in sorted(expected):
-        if hashlib.sha256((repository / name).read_bytes()).hexdigest() != files[name]:
-            raise ValueError(f"bundled source is stale (re-run stage-native.py): {name}")
 
 
 def main() -> int:
@@ -85,27 +72,29 @@ def main() -> int:
     if not interpreter.is_file(): return fail(f"bundled interpreter missing: {interpreter}")
     files = manifest.get("files", {})
     if not isinstance(files, dict) or not files: return fail("manifest files index is missing or empty")
-    spec = importlib.util.spec_from_file_location("native_stage", Path(__file__).with_name("stage-native.py"))
-    staging = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(staging)
+    actual_files = set()
     for path in root.rglob("*"):
+        rel = path.relative_to(root).as_posix()
         if path.is_symlink():
             if not path.resolve().is_relative_to(root):
                 return fail(f"external or broken resource symlink: {path}")
-            if staging.is_project_source(path.relative_to(root).as_posix()):
-                return fail(f"unexpected symlink in bundled project sources: {path}")
-    actual_files = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and not p.is_symlink() and p != manifest_path}
+            if not rel.startswith('python/'):
+                return fail(f"unexpected symlink outside the staged Python: {path}")
+        elif path.is_file() and rel != 'native-manifest.json':
+            actual_files.add(rel)
     if actual_files != set(files): return fail("manifest file inventory does not match resource contents")
+    try:
+        revision = staging.verify_project_sources(ROOT, root, files, os.environ.get('GITHUB_SHA'))
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return fail(str(error))
+    if manifest.get('project_commit') != revision:
+        return fail(f"project_commit mismatch: expected {revision!r}, got {manifest.get('project_commit')!r}; re-stage the runtime")
     for rel, digest in files.items():
         if not safe_relative(rel) or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
             return fail("invalid manifest file path or SHA256")
         path = root / rel
         if not path.is_file() or path.is_symlink(): return fail(f"manifest file missing or symlinked: {rel}")
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest: return fail(f"SHA256 mismatch: {rel}")
-    try:
-        verify_sources(ROOT, files, staging)
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        return fail(str(error))
     # Nothing in the runtime may name a path on the machine that built it.
     checks = manifest.get("checks") if isinstance(manifest.get("checks"), dict) else {}
     for value in [checks.get("base_prefix"), *(checks.get("module_paths") or [])]:
@@ -135,7 +124,7 @@ def main() -> int:
         return fail(f"evidence runtime does not match requirements-evidence.txt: {evidence}")
     if not details.get("bowtie2"):
         return fail("Bowtie2 is not bundled: stage with --bowtie2 <acquire-bowtie2.py output>")
-    print(json.dumps({"ok":True,"resource_root":str(root),"portable":True,"platform":platform.system(),"architecture":expected_arch,"runtime":details,"cplfold":"passed"}, indent=2))
+    print(json.dumps({"ok":True,"project_commit":revision,"resource_root":str(root),"portable":True,"platform":platform.system(),"architecture":expected_arch,"runtime":details,"cplfold":"passed"}, indent=2))
     return 0
 
 if __name__ == "__main__": sys.exit(main())

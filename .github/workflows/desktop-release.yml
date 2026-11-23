@@ -11,6 +11,8 @@ on:
       - "web/cplfold/**"
       - "web/assets/examples/**"
       - "bin/**"
+      - "data/**"
+      - "requirements/**"
       - "scripts/verify-folding-cli.py"
       - "scripts/bundle_sources.py"
       - ".github/workflows/publish-desktop.yml"
@@ -18,13 +20,13 @@ on:
   workflow_dispatch:
     inputs:
       upload_debug_build:
-        description: "Keep the full desktop build for debugging (uses Actions storage)"
+        description: "Upload the full desktop build for debugging (requires redistribution approval)"
         type: boolean
         default: false
   workflow_call:
     inputs:
       release_installers:
-        description: "Build and upload the versioned installers for the tag publisher"
+        description: "Build versioned installers for the tag publisher (upload requires redistribution approval)"
         type: boolean
         default: false
 
@@ -80,11 +82,13 @@ jobs:
       CPYTHON_URL: https://github.com/astral-sh/python-build-standalone/releases/download/20261009/${{ matrix.cpython }}
     steps:
       - uses: actions/checkout@v6
+      - name: Verify build uses the invoking commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Check public folding commands
         if: runner.os == 'Linux'
         run: |
           "$CONDA/bin/conda" create --yes --prefix "$RUNNER_TEMP/folding-cli" \
-            --override-channels --strict-channel-priority -c conda-forge -c bioconda viennarna=2.6.4 mfold=3.6
+            --override-channels --strict-channel-priority -c conda-forge -c bioconda viennarna=2.6.4 mfold=3.6 bowtie2=2.5.5
           PATH="$RUNNER_TEMP/folding-cli/bin:$PATH" python3 -B scripts/verify-folding-cli.py
       - name: The tag is the app version
         if: inputs.release_installers
@@ -97,6 +101,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Generate support-kernel choices for the native UI
+        run: python -B scripts/export-support-kernels.py
       - name: Acquire the verified CPython
         run: python desktop/scripts/acquire-native-runtime.py --platform ${{ matrix.target }} --url "$CPYTHON_URL" --sha256 ${{ matrix.sha256 }} --output "$RUNNER_TEMP/cpython"
       - name: Install the pinned wheels into it
@@ -123,55 +129,39 @@ jobs:
           # The runtime ships as one archive (MyGo leaves hidden files such as
           # numpy/.dylibs out of resources); the app unpacks it on first launch.
           python ../scripts/pack-runtime.py --platform ${{ matrix.resource_dir }}
-          # Releases ship the installers: the .dmg on macOS, NSIS Setup.exe on
-          # Windows, .tar.gz and .deb on Linux; other runs skip the disk image.
-          if [ "${{ inputs.release_installers }}" = true ]; then
-            go tool mygo build -platform ${{ matrix.go_platform }}
-          else
-            go tool mygo build -platform ${{ matrix.go_platform }} -skip-dmg
-          fi
+          go tool mygo build -platform ${{ matrix.go_platform }}
           find build -maxdepth 3
           du -sh build/*
-      - name: Unpack and import the runtime shipped in the package
-        working-directory: desktop/app
+      - name: Collect the release files under stable names
+        working-directory: desktop/app/build/${{ matrix.resource_dir }}
         run: |
-          archive=$(find build -name native.tar.gz -print -quit)
-          test -n "$archive" || { echo "native.tar.gz is not in the package"; exit 1; }
-          echo "shipped archive: $archive"
-          HYB2_PACKED_RUNTIME="$(dirname "$archive")" go test -run TestPackedRuntime -v .
-          test "$(find build -name '*.pyc' | wc -l)" -eq 0
-      # The whole build tree (app bundle plus installers, each carrying the
-      # runtime) is several hundred MB per target; uploading it for every pull
-      # request filled the account's artifact storage and blocked the Pages
-      # deploy. Manual runs must opt in; tags upload release-* below.
+          out="$RUNNER_TEMP/release"
+          name="${{ matrix.release_name }}"
+          mkdir "$out"
+          copy_one() { local to="$1"; shift; [[ $# == 1 && -s "$1" ]] || { echo "expected exactly one installer for $to" >&2; return 1; }; cp -- "$1" "$to"; }
+          shopt -s nullglob
+          case "${{ matrix.target }}" in
+            macos-*) copy_one "$out/$name.dmg" *.dmg ;;
+            windows-*) copy_one "$out/$name-Setup.exe" *Setup*.exe ;;
+            linux-*)
+              copy_one "$out/$name.tar.gz" hyb2-desktop-*-linux-*.tar.gz
+              copy_one "$out/$name.deb" *.deb ;;
+          esac
+          ls -la "$out"
+      - name: Verify each final installer, including both Linux formats
+        run: python -B desktop/scripts/verify-installer.py "$RUNNER_TEMP/release/"*
+      # A debug artifact distributes the same bundled runtime.
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch' && inputs.upload_debug_build
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_debug_build && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
         with:
           name: hyb2-desktop-${{ matrix.target }}
           path: desktop/app/build/
           retention-days: 1
           if-no-files-found: error
-      - name: Collect the release files under stable names
-        if: inputs.release_installers
-        working-directory: desktop/app/build/${{ matrix.resource_dir }}
-        run: |
-          out="$RUNNER_TEMP/release"
-          name="${{ matrix.release_name }}"
-          mkdir -p "$out"
-          one() { set -- $1; test -f "$1" || { echo "missing: $1" >&2; ls -la >&2; exit 1; }; printf '%s' "$1"; }
-          shopt -s nullglob
-          case "${{ matrix.target }}" in
-            macos-*) cp "$(one "*.dmg")" "$out/$name.dmg" ;;
-            windows-*) cp "$(one "*Setup*.exe")" "$out/$name-Setup.exe" ;;
-            linux-*)
-              cp "$(one "hyb2-desktop-*-linux-*.tar.gz")" "$out/$name.tar.gz"
-              cp "$(one "*.deb")" "$out/$name.deb" ;;
-          esac
-          ls -la "$out"
       - uses: actions/upload-artifact@v4
-        if: inputs.release_installers
+        if: ${{ inputs.release_installers && vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true' }}
         with:
           name: release-${{ matrix.target }}
           path: ${{ runner.temp }}/release/
-          retention-days: 1  # only the tag publisher reads it
+          retention-days: 1  # temporary handoff to the tag publisher
           if-no-files-found: error

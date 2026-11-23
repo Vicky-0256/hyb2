@@ -2,17 +2,18 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-node scripts/verify-vienna-wasm.cjs web/vendor/viennarna/vienna-rna.js
-node scripts/verify-cplfold-pyodide.mjs
-node scripts/verify-cplfold-worker.mjs
-node scripts/verify-structure-worker.cjs
-node scripts/verify-structure-render.cjs
-node scripts/verify-cplfold-worker-lifecycle.cjs
-node scripts/verify-protocol-contract.cjs
-node scripts/verify-ui-contract.cjs
-node scripts/verify-desktop-entry.cjs
-node scripts/verify-analysis-data.cjs
+for file in web/*.js web/*.mjs scripts/webr-smoke/spike.mjs; do node --check "$file"; done
+python3 -B scripts/bundle_sources.py --verify web/vendor/pyodide-cplfold
+for check in scripts/verify-*.cjs scripts/verify-*.mjs; do
+  echo "Checking $check"
+  case "$check" in
+    scripts/verify-vienna-wasm.cjs) node "$check" web/vendor/viennarna/vienna-rna.js ;;
+    *) node "$check" ;;
+  esac
+done
 
+test -s web/build-info.js
+test -s web/vendor/viennarna/COPYING-ViennaRNA.txt
 test -s web/vendor/viennarna/vienna-rna.js
 test -s web/vendor/viennarna/vienna-rna.wasm
 test -s web/vendor/pyodide-cplfold/pyodide.mjs

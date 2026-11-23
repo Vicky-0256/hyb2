@@ -101,6 +101,7 @@ context.window.Hyb2StructureUI = {
   }
 };
 
+vm.runInContext(fs.readFileSync(path.join(repository, "web", "support-kernels.js"), "utf8"), context, { filename: "support-kernels.js" });
 vm.runInContext(fs.readFileSync(path.join(repository, "web", "results.js"), "utf8"), context, { filename: "results.js" });
 vm.runInContext(fs.readFileSync(path.join(repository, "web", "report-page.js"), "utf8"), context, { filename: "report-page.js" });
 
@@ -251,7 +252,8 @@ twoRegionState.structure.result.sourceSegments = [
   { rna: "RNA_B", referenceStart: 7, referenceEnd: 8, preparedStart: 3, preparedEnd: 4 }];
 const twoRegionHtml = report.render(twoRegionState);
 assert.match(twoRegionHtml, /<dt>Region 1 RNA<\/dt>\s*<dd[^>]*>RNA_A<\/dd>[\s\S]*<dt>Region 1 range<\/dt>\s*<dd[^>]*>1-2<\/dd>[\s\S]*<dt>Region 2 RNA<\/dt>\s*<dd[^>]*>RNA_B<\/dd>[\s\S]*<dt>Region 2 range<\/dt>\s*<dd[^>]*>7-8<\/dd>/, "both regions in the Setup card");
-assert.match(html, /<dt>RNA<\/dt>\s*<dd[^>]*>RNA_A<\/dd>[\s\S]*<dt>Range<\/dt>\s*<dd[^>]*>1-4<\/dd>/, "a one-region fold keeps RNA / Range");
+assert.match(html, /<dt>RNA<\/dt>\s*<dd[^>]*>-<\/dd>[\s\S]*<dt>Range<\/dt>\s*<dd[^>]*>-<\/dd>/,
+  "a saved result without source coordinates does not borrow the current form's RNA or range");
 assert.doesNotMatch(html, /<dt>Region 2 RNA<\/dt>/);
 
 // A fold that no HYB evidence guided must never be reported as read-guided.

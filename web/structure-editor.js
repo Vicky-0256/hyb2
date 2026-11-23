@@ -36,12 +36,11 @@
     return interpolate(PALETTES[e.palette]||PALETTES.brand,Math.max(0,Math.min(1,(value-e.minimum)/(e.maximum-e.minimum))));
   }
   function textOn(fill){const r=parseInt(fill.slice(1,3),16),g=parseInt(fill.slice(3,5),16),b=parseInt(fill.slice(5,7),16);return (.2126*r+.7152*g+.0722*b)<125?'#ffffff':'#222222';}
-  // COMRADES support for every engine: a base takes the number of HYB records
-  // whose RNAcofold pair is the pair it forms in this structure (0 when
-  // unpaired or unsupported), as comrades-analysis.js scoreStructurePairs does.
-  // COMRADES(ViennaRNA) results carry it already; IRIS and CPLfold results
-  // carry the RNAcofold evidence, scored here against the shown candidate.
+  // Each paired endpoint takes the raw count for its pair in the shown
+  // candidate. A pair-guided fold already has these counts from its arm model;
+  // the other paths use the independent RNAcofold evidence as before.
   function comradesSupport(result){
+    if(Array.isArray(result.comradesPairCounts))return root.Hyb2Comrades.rawNucleotideSupport(result);
     if(result.constraintMode==='hyb-guided'&&Array.isArray(result.nucleotideSupport))return Array.from({length:result.sequence.length},(_,i)=>Math.max(0,Number(result.nucleotideSupport[i])||0));
     const evidence=result.comradesEvidence;
     if(!evidence||!Array.isArray(evidence.pairs))return null;
@@ -55,8 +54,8 @@
     const values=comradesSupport(result);
     if(!values)return null;
     const maximum=values.reduce((a,b)=>Math.max(a,b),0);
-    if(!maximum)return null;
-    return {values,maximum,kind:'RNAcofold supporting observations',palette:'lau',source:'COMRADES support'};
+    const model=Array.isArray(result.comradesPairCounts)?root.Hyb2Comrades.pairCountSource(result):'RNAcofold';
+    return {values,maximum,kind:model+' supporting observations',palette:'lau',source:'COMRADES support'};
   }
   function applyEvidence(drawing, evidence, palette='lau') {
     if(!evidence)throw new Error('This prediction has no experimental support scores.');
@@ -270,7 +269,7 @@
     }
     if(value.evidence){const e=value.evidence,user=e.minimum!=null;
       if(!Array.isArray(e.values)||e.values.length!==sequence.length||!Number.isFinite(e.maximum)||!PALETTES[e.palette]||typeof e.kind!=='string'||e.kind.length>100||
-        (user?!(Number.isFinite(e.minimum)&&e.maximum>e.minimum)||e.values.some(v=>v!=null&&!Number.isFinite(v)):(e.maximum<=0||e.values.some(v=>!Number.isFinite(v)||v<0||v>e.maximum))))throw new Error('Invalid evidence colours.');
+        (user?!(Number.isFinite(e.minimum)&&e.maximum>e.minimum)||e.values.some(v=>v!=null&&!Number.isFinite(v)):(e.maximum<0||e.values.some(v=>!Number.isFinite(v)||v<0||v>e.maximum))))throw new Error('Invalid evidence colours.');
     }
     return clone(value);
   }
@@ -418,12 +417,13 @@
       ['-bpStyle',d.pairStyle||'simple'],['-background',d.background],['-backbone',d.backbone],['-bp',(d.pairs[0]&&d.pairs[0].color)||'#3C5488'],
       ['-periodNum',String(d.numbering===false?0:d.numberInterval)],['-baseNum',d.numberColor||'#444444'],['-resolution','4.0'],['-o','hyb2-drawing.svg']];
     const e=d.evidence;
-    if(e&&!e.overrides){const min=e.minimum==null?0:e.minimum,stops=PALETTES[e.palette]||PALETTES.brand;
+    const exportMap=e&&!e.overrides&&e.maximum>(e.minimum??0);
+    if(exportMap){const min=e.minimum==null?0:e.minimum,stops=PALETTES[e.palette]||PALETTES.brand;
       args.push(['-colorMap',q(e.values.map(v=>num(v==null?min:v)).join(';'))],['-colorMapMin',num(min)],['-colorMapMax',num(e.maximum)],
         ['-colorMapStyle',q(stops.map(([t,c])=>num(min+t*(e.maximum-min))+':'+c).join(','))],['-colorMapCaption',q(clean(e.kind))]);
     }
     const groups=new Map();
-    Object.entries(d.styles).forEach(([i,s])=>{if(e&&!e.overrides&&e.values[i-1]!=null&&!s.outline)return;const key='fill='+s.fill+',outline='+(s.outline||'#3C5488')+',label='+s.text+',number='+(d.numberColor||'#444444');groups.set(key,(groups.get(key)||[]).concat(Number(i)));});
+    Object.entries(d.styles).forEach(([i,s])=>{if(exportMap&&e.values[i-1]!=null&&!s.outline)return;const key='fill='+s.fill+',outline='+(s.outline||'#3C5488')+',label='+s.text+',number='+(d.numberColor||'#444444');groups.set(key,(groups.get(key)||[]).concat(Number(i)));});
     Array.from(groups).forEach(([key,list],k)=>args.push(['-basesStyle'+(k+1),q(key)],['-applyBasesStyle'+(k+1)+'on',q(ranges(list))]));
     const regions=d.annotations.filter(a=>a.kind==='region'),probes=d.annotations.filter(a=>a.kind==='probe'),texts=d.annotations.filter(a=>a.kind!=='region'&&a.kind!=='probe'&&a.text);
     if(regions.length)args.push(['-highlightRegion',q(regions.map(a=>a.base+'-'+a.end+':radius='+num((a.width||32)/2)+',fill='+a.color+',outline='+a.color).join(';'))]);
@@ -665,7 +665,8 @@
     host.addEventListener('keydown',event=>{const base=event.target.closest('[data-editor-base]');if(!base||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();const i=Number(base.dataset.editorBase);if(i<s.selection[0]||i>s.selection[1])s.selection=[i,i];checkpoint(s);const step=event.shiftKey?10:1;move(event.key==='ArrowLeft'?-step:event.key==='ArrowRight'?step:0,event.key==='ArrowUp'?-step:event.key==='ArrowDown'?step:0);sync();draw();host.querySelector('[data-editor-base="'+i+'"]').focus();});
     // Say why a structure with HYB evidence stays uncoloured.
     const support=comradesSupport(result),evidencePairs=result.comradesEvidence?result.comradesEvidence.pairs.length:0;
-    sync();draw();message(support&&!support.some(v=>v>0)?'COMRADES support: none of the '+(result.pairs||[]).length+' pairs in this structure matches '+(evidencePairs?'any of the '+evidencePairs+' RNAcofold evidence pairs':'the RNAcofold evidence')+', so every base scores 0 and keeps the default colour.':status());
+    const source=Array.isArray(result.comradesPairCounts)?'the '+root.Hyb2Comrades.pairCountSource(result)+' evidence':(evidencePairs?'any of the '+evidencePairs+' RNAcofold evidence pairs':'the RNAcofold evidence');
+    sync();draw();message(support&&!support.some(v=>v>0)?'COMRADES support: none of the '+(result.pairs||[]).length+' pairs in this structure matches '+source+'. Every base has a raw count of 0 (white on the evidence scale).':status());
   }
   root.Hyb2StructureEditor={supportColor,mapColor,evidenceFor,applyEvidence,parseValues,colorMap,clearColors,autoAnnotations,anchor,layout,pairsFrom,dotBracket,domainOf,parentOf,helixOf,loopOf,initial,validate,svg,eps,ct,bpseq,editedDbn,varnaCommand,undo,redo,sessionKey,session,mount};
 })(typeof window!=='undefined'?window:self);

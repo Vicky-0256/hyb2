@@ -40,7 +40,8 @@ function harness() {
   class Host {
     constructor() {
       this.listeners = new Map(); this.controls = []; this.renders = 0; this.dataset = {};
-      this.classList = {add() {}, remove() {}};
+      const classes = new Set();
+      this.classList = {add: key => classes.add(key), remove: key => classes.delete(key), contains: key => classes.has(key)};
     }
     addEventListener(type, listener) {
       if (!this.listeners.has(type)) this.listeners.set(type, []);
@@ -50,6 +51,7 @@ function harness() {
     contains(node) { return this.controls.includes(node) && node.isConnected; }
     querySelector() { return null; }
     set innerHTML(value) {
+      this.html = value;
       this.renders++;
       this.controls.forEach(control => { control.isConnected = false; });
       if (context && context.document.activeElement && !context.document.activeElement.isConnected) context.document.activeElement = null;
@@ -60,9 +62,18 @@ function harness() {
       for (const key of ["workflow", "engine"]) add("select", "select-one", {feature: "structure-control", key}, appState.structure[key]);
       add("button", "button", {featureAction: "test-action"});
       add("summary", "", {});
-      for (const action of ["choose-hyb", "choose-fasta"]) add("button", "button", {action});
-      for (const featureAction of ["choose-comparison-files", "replace-hyb"]) add("button", "button", {featureAction});
+      for (const action of ["choose-hyb", "choose-fasta", "add-fasta"]) add("button", "button", {action});
+      for (const featureAction of ["choose-comparison-files", "replace-hyb", "apply-fasta-mapping", "remove-current-fasta-mapping"]) add("button", "button", {featureAction});
       for (const id of ["hyb-file-input", "fasta-file-input", "comparison-file-input"]) add("input", "file", {}, "", id);
+      // Export/candidate controls come from the real page markup below, not
+      // private app functions. The DOM stand-in only routes their clicks.
+      for (const match of value.matchAll(/<(button|input|tr)\b([^>]*)>/g)) {
+        const dataset = Object.fromEntries(Array.from(match[2].matchAll(/\bdata-([\w-]+)="([^"]*)"/g),
+          attr => [attr[1].replace(/-([a-z])/g, (_, char) => char.toUpperCase()), attr[2]]));
+        if (/^report-/.test(dataset.action) || dataset.featureAction === "select-cplfold-candidate") {
+          add(match[1], match[1] === "input" ? "checkbox" : "button", dataset);
+        }
+      }
     }
     get(key) { return this.controls.find(control => control.dataset.key === key || control.dataset.action === key || control.dataset.featureAction === key || control.id === key); }
     emit(type, target, extra = {}) {
@@ -72,7 +83,7 @@ function harness() {
   }
   const host = new Host();
   context = {
-    console, Intl, URLSearchParams, navigator: {}, HYB2_AUTO_MOUNT: false,
+    console, Intl, URLSearchParams, File, Blob, TextEncoder, crypto: globalThis.crypto, navigator: {}, HYB2_AUTO_MOUNT: false,
     setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); }, addEventListener() {}, removeEventListener() {},
     document: {
@@ -89,7 +100,8 @@ function harness() {
         Object.assign(appState.structure, {rna: "A", secondRna: "B", start: "3", end: "6", secondStart: "15", secondEnd: "18"});
         // data.pending: a page-data fetch still under way (the app keeps the
         // page on screen and redraws when it resolves)
-        return {setProvider() {}, ensure() { return data.pending; }, destroy() {}};
+        return {setProvider() {}, ensure() { return data.pending; }, destroy() {},
+          queryHybrids() { return data.queryError ? Promise.reject(data.queryError) : Promise.resolve({rows: [], total: 0}); }};
       }
     },
     // Stand-in rendering retains the relevant browser effect: innerHTML
@@ -97,7 +109,7 @@ function harness() {
     Hyb2Pages: {renderStructure() { return "<form></form>"; }}
   };
   context.window = context; vm.createContext(context);
-  for (const file of ["analysis-data.js", "analysis-ui.js"]) vm.runInContext(fs.readFileSync(path.join(root, "web", file), "utf8"), context, {filename: file});
+  for (const file of ["support-kernels.js", "analysis-data.js", "analysis-ui.js"]) vm.runInContext(fs.readFileSync(path.join(root, "web", file), "utf8"), context, {filename: file});
   const handleAction = context.Hyb2UI.handleAction;
   context.Hyb2UI.handleAction = (state, element, api) => {
     if (element.dataset.featureAction === "test-action") { actions.push({mounted: element.isConnected, start: state.structure.start}); return true; }
@@ -338,5 +350,119 @@ for (const [action, id] of [["choose-hyb", "hyb-file-input"], ["choose-fasta", "
     assert.equal(h.host.get("end"), field);
     assert.deepEqual([current.value, current.selectionStart, current.selectionEnd], [field.value, 0, field.value.length], "value and select-all survive");
   }
-  console.log("input-select-event-contract: ok (30 event sequences)");
+  // The first pipe in an appended file changes the original A_B's HYB ID to
+  // A-B. Rebuild automatic matches, but never reinterpret a physical choice.
+  for (const action of [null, "apply-fasta-mapping", "remove-current-fasta-mapping"]) {
+    const h = harness(), state = h.state();
+    state.file = new File([""], "fixture.hyb");
+    state.summary.rnaNames = ["A_B", "A-B"];
+    const upload = async (text, name, append) => {
+      h.host.emit("click", h.host.get(append ? "add-fasta" : "choose-fasta"));
+      const input = h.host.get("fasta-file-input");
+      input.files = [new File([text], name)];
+      h.host.emit("change", input);
+      await new Promise(resolve => setImmediate(resolve));
+    };
+    const bases = rna => h.context.Hyb2Data.extractReference(state.fasta, rna)?.sequence ?? null;
+    const c = "C".repeat(12), a = "A".repeat(12);
+    await upload(">A_B\n" + c, "plain.fa", false);
+    assert.equal(bases("A_B"), c);
+    if (action) {
+      state.fasta.mappingEditorRna = "A_B"; state.fasta.mappingEditorReference = "A_B";
+      h.host.emit("click", h.host.get(action));
+    }
+    await upload(">A|B\n" + a, "piped.fa", true);
+    assert.equal(bases("A-B"), c, "the appended reference contains both physical records");
+    assert.equal(bases("A_B"), !action ? a : action === "apply-fasta-mapping" ? c : null, String(action));
+  }
+  // An open export panel does not pin the report to the candidate that was
+  // selected when it opened. Exercise mounted app listeners, real result
+  // serialization and real ZIP bytes; only the provider and save sink stand in.
+  const waitFor = async predicate => {
+    const deadline = Date.now() + 5000;
+    while (!predicate()) {
+      assert.ok(Date.now() < deadline, "report action must settle");
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  };
+  const unzip = async blob => {
+    const bytes = Buffer.from(await blob.arrayBuffer()), files = {};
+    let at = 0;
+    while (bytes.readUInt32LE(at) === 0x04034b50) {
+      assert.equal(bytes.readUInt16LE(at + 8), 0, "stored ZIP entries");
+      const size = bytes.readUInt32LE(at + 18), length = bytes.readUInt16LE(at + 26), extra = bytes.readUInt16LE(at + 28);
+      const name = bytes.subarray(at + 30, at + 30 + length).toString().replace(/^hyb2-result\//, "");
+      const start = at + 30 + length + extra;
+      files[name] = bytes.subarray(start, start + size).toString(); at = start + size;
+    }
+    return files;
+  };
+  for (const audience of ["ai", "analysis"]) {
+    const h = harness(), state = h.state(), downloads = [], copies = [];
+    const excludedFile = audience === "ai" ? "report.md" : "tables/top_rnas.tsv";
+    for (const file of ["analysis-pages.js", "structure-ui.js", "results.js", "report-page.js"]) {
+      vm.runInContext(fs.readFileSync(path.join(root, "web", file), "utf8"), h.context, {filename: file});
+    }
+    h.context.Hyb2Desktop = {enabled: true, saveFile(name, blob) { downloads.push({name, blob}); return Promise.resolve(true); }};
+    h.context.navigator.clipboard = {writeText(text) { copies.push(text); return Promise.resolve(); }};
+    state.summary = {fileName: "candidates.hyb", rnaNames: ["A", "B"], validRecords: 0, invalidRecords: 0};
+    state.view = {report: {filteredTotal: 0, filteredSample: [], partnerCounts: []}};
+    const pair = (left, right) => ({left, right, leftBase: "G", rightBase: "C", type: "G–C", layer: "primary"});
+    const first = {dotBracket: "(......)", energy: -1, pairs: [pair(1, 8)], unpaired: 6, type: "phase1", topology: "nested", crossingPairs: 0};
+    const second = {...first, dotBracket: "((....))", energy: -2, pairs: [pair(1, 8), pair(2, 7)], unpaired: 4};
+    Object.assign(state.structure, {engine: "cplfold", cplfoldMode: "cofold", source: "paste", pastedSequence: "GGGG", cplfoldSequenceTwo: "CCCC", cplfoldEvidence: "none",
+      status: "complete", result: {...first, engine: "CPLcofold", source: "paste", sequence: "GGGGCCCC", cutpoint: 4,
+        strandLengths: [4, 4], selectedCandidate: 0, candidates: [first, second], evidence: {source: "none"}}});
+    const click = dataset => {
+      const control = h.host.controls.find(node => Object.entries(dataset).every(([key, value]) => node.dataset[key] === value));
+      assert.ok(control, "rendered control " + JSON.stringify(dataset)); h.host.emit("click", control);
+    };
+    const save = async dataset => {
+      const before = downloads.length; click(dataset); await waitFor(() => downloads.length > before); return downloads.at(-1).blob;
+    };
+    const select = index => {
+      h.controller.navigate("structure");
+      click({featureAction: "select-cplfold-candidate", candidateIndex: String(index)});
+      h.controller.navigate("report");
+      assert.match(h.host.html, new RegExp('data-result="R38">-' + (index + 1) + '\\.00<'), "report page uses the selected energy");
+    };
+    const assertCandidate = (text, index) => {
+      const result = JSON.parse(text);
+      assert.deepEqual([result.selectedCandidate, result.energy], [index + 1, -(index + 1)], audience + ": download agrees with the selected candidate");
+    };
+    h.controller.navigate("report");
+    click({action: "report-export", audience}); await waitFor(() => state.reportExport?.status === "ready");
+    click({action: "report-export-toggle", path: excludedFile});
+    select(1);
+    // Each export route must be first after a switch: another route must
+    // not repair its stale cache and hide a regression.
+    assertCandidate(await (await save({action: "report-export-file", audience, path: "results/structure_prediction.json"})).text(), 1);
+    for (const index of [0, 1]) {
+      select(index); // ZIP is first after each switch: no file download to repair a stale cache.
+      const files = await unzip(await save({action: "report-export-zip"}));
+      assertCandidate(files["results/structure_prediction.json"], index);
+      assert.equal(JSON.parse(files["summary.json"]).results.find(result => result.id === "R38").value, -(index + 1));
+      assert.equal(files[excludedFile], undefined);
+      assert.deepEqual(JSON.parse(files["manifest.json"]).leftOutByResearcher, [excludedFile], "the user's exclusions survive refreshed exports");
+      assert.equal(state.reportExport.list.find(file => file.path === excludedFile).excluded, true);
+    }
+    if (audience === "ai") {
+      select(0);
+      click({action: "report-export-copy"}); await waitFor(() => copies.length > 0);
+      assert.match(copies.at(-1), /\| R38 \| S12 \| Predicted free energy \| -1\.00 \|/, "the copied AI summary is current too");
+    }
+    h.data.queryError = new Error("Synthetic report refresh failure");
+    for (const action of ["report-export-file", "report-export-zip", ...(audience === "ai" ? ["report-export-copy"] : [])]) {
+      const beforeFailure = [downloads.length, copies.length];
+      state.toastMessage = "";
+      click(action === "report-export-file" ? {action, audience, path: "results/structure_prediction.json"} : {action});
+      await waitFor(() => state.toastMessage === "Synthetic report refresh failure" || downloads.length > beforeFailure[0] || copies.length > beforeFailure[1]);
+      assert.deepEqual([downloads.length, copies.length], beforeFailure, action + ": failed refresh must not export a cached candidate");
+    }
+    h.data.queryError = null;
+    click({action: "report-export-close"}); select(0);
+    assertCandidate(await (await save({action: "report-export-file", audience: "analysis", path: "results/structure_prediction.json"})).text(), 0);
+    h.controller.destroy();
+  }
+  console.log("input-select-event-contract: ok (FASTA append and current-candidate report file/ZIP exports)");
 })().catch(error => { console.error(error); process.exit(1); });

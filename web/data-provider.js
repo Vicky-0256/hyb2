@@ -84,11 +84,13 @@
  *     -> rows [{ x, y, xEnd, yEnd, count, records, support }] (largest first)
  *
  * getSequence(selection, query) -> null | Sequence
- *   query = { rna, start?, end? } (1-based inclusive; end is clamped to the
- *   reference length; omitted bounds mean the full sequence)
+ *   query = { rna, start?, end? } (1-based inclusive reference code points;
+ *   end is clamped to the reference length; omitted bounds mean the full sequence)
  *   Sequence = { rna, referenceId, header, start, end, length, sequence,
- *     invalidCharacters: [] }. null when the RNA has no mapped reference or
- *   the interval is invalid.
+ *     invalidCharacters: [] }. length is the full mapped reference length;
+ *   sequence retains DNA T and unsupported symbols, and invalidCharacters
+ *   lists the distinct unsupported symbols in that interval. null when the
+ *   RNA has no mapped reference or the interval is invalid.
  *
  * getArms(selection, query) -> Arms (columnar)
  *   query = { rna?, partner?, chimeraType?, homodimer?, start?, end? }
@@ -413,11 +415,7 @@
   }
 
   function invalidCharacters(sequence) {
-    const seen = Object.create(null);
-    String(sequence || "").toUpperCase().replace(/[ACGUT]/g, "").split("").forEach(function (character) {
-      seen[character] = true;
-    });
-    return Object.keys(seen);
+    return Array.from(new Set(sequence.match(/[^ACGTUacgtu]/gu) || []));
   }
 
   /*
@@ -514,6 +512,8 @@
   // sequences: [{ id, header, sequence }], mapping: { rna: id } }). The shell
   // may keep editing its mapping; call notifyChange() afterwards.
   BrowserProvider.prototype.setReference = function (fasta) {
+    // An embedded host can supply plain records without going through parseFasta.
+    if (fasta) globalThis.Hyb2FoldText.indexFasta(fasta.sequences);
     this.reference = fasta || null;
     this.changed();
   };
@@ -603,16 +603,16 @@
     if (!fasta) {
       return null;
     }
-    const data = this.analysis();
-    const mapping = {};
-    const mapped = {};
-    Object.keys(fasta.mapping || {}).forEach(function (rna) {
-      mapping[rna] = fasta.mapping[rna];
-    });
+    // Take one index for this snapshot, including when the embedded host
+    // supplies mutable records that cannot be cached across calls.
+    const index = globalThis.Hyb2FoldText.indexFasta(fasta.sequences);
+    const mapping = Object.assign(Object.create(null), fasta.mapping);
+    const mapped = Object.create(null);
     (rnaNames || Object.keys(mapping)).forEach(function (rna) {
-      const entry = data.findFastaEntry(fasta, rna);
+      const entry = index.find(rna, fasta.mapping);
       if (entry) {
-        mapped[rna] = { referenceId: entry.id, length: entry.sequence.length };
+        mapping[rna] = entry.id;
+        mapped[rna] = { referenceId: entry.id, length: globalThis.Hyb2FoldText.reference(entry).length };
       }
     });
     return {
@@ -732,7 +732,7 @@
     const fasta = this.reference;
     const lengthOf = function (rna, fallback) {
       const entry = fasta ? data.findFastaEntry(fasta, rna) : null;
-      return entry ? entry.sequence.length : fallback;
+      return entry ? globalThis.Hyb2FoldText.reference(entry).length : fallback;
     };
     const extents = (await this.getSummary(selection)).rnaExtents || {};
     bins.gene = contact.rnaX;
@@ -869,7 +869,7 @@
       header: reference.header,
       start: reference.start,
       end: reference.end,
-      length: entry.sequence.length,
+      length: globalThis.Hyb2FoldText.reference(entry).length,
       sequence: reference.sequence,
       invalidCharacters: invalidCharacters(reference.sequence)
     };

@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 import sys
 import types
 from collections import Counter
@@ -19,16 +18,11 @@ from typing import Any
 
 
 CPLFOLD_SOURCE_REVISION = "24bab52"
-BRIDGE_VERSION = "7"
+BRIDGE_VERSION = "8"
 DEFAULT_MAX_SEQUENCE_LENGTH = 75
 BROWSER_HARD_MAX_SEQUENCE_LENGTH = 500
-# Native hosts (HYB2 Desktop) may raise the ceiling via
-# set_host_hard_max_sequence_length(); the browser never calls it, so the
-# Pyodide build keeps the 500 nt bound.
-_hard_max_sequence_length = BROWSER_HARD_MAX_SEQUENCE_LENGTH
 BONUS_EXPORT_MAX_SEQUENCE_LENGTH = 5_000
 MAX_EVIDENCE_RECORDS = 50_000
-ENERGY_MODELS = {"DP03", "DP09", "CC06", "CC09", "RE"}
 BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">"}
 LAYER_NAMES = {
     "(": "primary",
@@ -68,7 +62,12 @@ def _install_numba_fallback() -> None:
 _install_numba_fallback()
 
 import numpy as np  # noqa: E402
-from CPLfold import two_phase_pseudoknot_fold  # noqa: E402
+import cplfold  # noqa: E402
+from cplfold.bonus import cofold_counts, gaussian_bonus_matrix, gaussian_bonus_stripes, gaussian_sigma, mean_arm_length  # noqa: E402
+from cplfold.sequence import add_strand_break, normalise_sequence, strip_structure_break  # noqa: E402
+from hyb2analysis.fold_text import FOLD_TEXT, fold_text  # noqa: E402
+from hyb2analysis.engine_parameters import engine_parameters, task_allow_pseudoknot  # noqa: E402
+from hyb2analysis.support_kernels import DEFAULT_SUPPORT_KERNEL, PAIR_MODELS, SUPPORT_KERNELS  # noqa: E402
 
 
 def _number(value: Any, minimum: float, maximum: float, label: str) -> float:
@@ -90,41 +89,7 @@ def _integer(value: Any, minimum: int, maximum: int, label: str) -> int:
     return int(parsed)
 
 
-def _sequence(value: Any, maximum: int = DEFAULT_MAX_SEQUENCE_LENGTH) -> str:
-    sequence = re.sub(r"\s+", "", str(value or "")).upper().replace("T", "U")
-    if not sequence:
-        raise ValueError("CPLfold requires an RNA sequence.")
-    if re.search(r"[^ACGU]", sequence):
-        raise ValueError("CPLfold accepts only A, C, G and U.")
-    if len(sequence) > _hard_max_sequence_length:
-        if _hard_max_sequence_length == BROWSER_HARD_MAX_SEQUENCE_LENGTH:
-            raise ValueError(
-                f"Browser CPLfold has a hard safety ceiling of {BROWSER_HARD_MAX_SEQUENCE_LENGTH} nt in this pure-Python Pyodide build."
-            )
-        raise ValueError(f"CPLfold has a hard safety ceiling of {_hard_max_sequence_length} nt in this runtime.")
-    if len(sequence) > maximum:
-        raise ValueError(
-            f"Browser CPLfold is limited to {maximum} nt for this capacity-tested request."
-        )
-    return sequence
-
-
-def _bonus_export_sequence(value: Any) -> str:
-    sequence = re.sub(r"\s+", "", str(value or "")).upper().replace("T", "U")
-    if not sequence:
-        raise ValueError("CPLfold requires an RNA sequence.")
-    if re.search(r"[^ACGU]", sequence):
-        raise ValueError("CPLfold accepts only A, C, G and U.")
-    if len(sequence) > BONUS_EXPORT_MAX_SEQUENCE_LENGTH:
-        raise ValueError(
-            f"Bonus-matrix export is limited to {BONUS_EXPORT_MAX_SEQUENCE_LENGTH:,} nt in the browser."
-        )
-    return sequence
-
-
-def _request_sequence_layout(
-    payload: dict[str, Any], maximum: int = DEFAULT_MAX_SEQUENCE_LENGTH, *, export: bool = False
-) -> tuple[str, int | None]:
+def _request_sequence_layout(payload: dict[str, Any]) -> tuple[str, int | None]:
     """Validate two-strand input while retaining the single-strand contract.
 
     All downstream coordinates omit ``&``.  The nick is the length of A,
@@ -139,11 +104,13 @@ def _request_sequence_layout(
     is_cofold = second is not None or cutpoint is not None or requested_cofold or (
         isinstance(raw, str) and "&" in raw
     )
-    validate = _bonus_export_sequence if export else lambda value: _sequence(value, maximum)
     if not is_cofold:
-        return validate(raw), None
-
-    from Utils.strand_layout import normalise_sequence
+        sequence = fold_text(raw)
+        if not sequence:
+            raise ValueError("CPLfold requires an RNA sequence.")
+        if set(sequence).difference(FOLD_TEXT["alphabet"]):
+            raise ValueError("CPLfold accepts only A, C, G and U.")
+        return sequence, None
 
     if not isinstance(raw, str) or (second is not None and not isinstance(second, str)):
         raise ValueError("CPLcofold requires two RNA sequence strings.")
@@ -156,24 +123,7 @@ def _request_sequence_layout(
     sequence, cutpoint = normalise_sequence(raw, cutpoint)
     if cutpoint is None:
         raise ValueError("CPLcofold requires two nonempty strands, using sequenceTwo, '&' or cutpoint.")
-    return validate(sequence), cutpoint
-
-
-def set_host_hard_max_sequence_length(value: int) -> None:
-    """Raise the hard ceiling for a native host; not used by the browser."""
-    global _hard_max_sequence_length
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError("Host CPLfold hard maximum must be a positive integer.")
-    _hard_max_sequence_length = value
-
-
-def _request_maximum(value: Any) -> int:
-    return _integer(
-        DEFAULT_MAX_SEQUENCE_LENGTH if value is None else value,
-        1,
-        _hard_max_sequence_length,
-        "Browser CPLfold maximum sequence length",
-    )
+    return sequence, cutpoint
 
 
 def _normalise_arms(
@@ -238,194 +188,50 @@ def _normalise_arm_counts(raw: Any, sequence_length: int, cutpoint: int) -> dict
 
 
 def build_hyb_bonus_matrix(
-    sequence_length: int, arms: list[tuple[int, int, int, int]]
+    sequence_length: int, arms: Any, *, cutpoint: int | None = None
 ) -> tuple[np.ndarray | None, dict[str, Any]]:
-    """Reproduce CPLfold's IRIS-style HYB/PARIS block-to-bonus transform.
-
-    Coordinates are 1-based inclusive in the web data model.  They are
-    converted to zero-based half-open block centres before Gaussian spreading,
-    matching ``extract_paris_scores.py``.  Every eligible HYB row contributes
-    once; duplicate coordinate blocks are compressed with an integer weight.
-    """
-
-    if not arms:
-        return None, {
-            "source": "none",
-            "inputRecords": 0,
-            "uniqueBlocks": 0,
-            "nonzeroBonusCells": 0,
-            "nonzeroUpperTriangleCells": 0,
-            "maximumBonus": 0.0,
-            "bonusEntries": [],
-            "evidenceWeight": "none",
-        }
-
-    arm_lengths = [end - start + 1 for arm in arms for start, end in ((arm[0], arm[1]), (arm[2], arm[3]))]
-    standard_deviation = max(float(np.mean(arm_lengths)) / 6.0, 1e-6)
-    positions = np.arange(sequence_length, dtype=np.float32)
-    support = np.zeros((sequence_length, sequence_length), dtype=np.float32)
-    compressed = Counter(arms)
-
-    for (one_start, one_end, two_start, two_end), weight in compressed.items():
-        one_mean = ((one_start - 1) + one_end) / 2.0
-        two_mean = ((two_start - 1) + two_end) / 2.0
-        one_support = np.exp(-0.5 * ((positions - one_mean) / standard_deviation) ** 2)
-        two_support = np.exp(-0.5 * ((positions - two_mean) / standard_deviation) ** 2)
-        one_support /= np.max(one_support)
-        two_support /= np.max(two_support)
-        contribution = np.outer(one_support, two_support)
-        support += np.float32(weight) * (contribution + contribution.T)
-
-    support[support < np.float32(1e-6)] = np.float32(0.0)
-    bonus = np.log1p(support).astype(np.float32, copy=False)
-    maximum = float(np.max(bonus)) if bonus.size else 0.0
-    nucleotide_support = np.max(bonus, axis=1).tolist() if bonus.size else []
-    bonus_entries = [
-        {"one": int(one + 1), "two": int(two + 1), "value": float(bonus[one, two])}
-        for one, two in zip(*np.nonzero(np.triu(bonus, k=1)))
-    ]
-    return bonus, {
-        "source": "hyb-block-intervals",
-        "transform": "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
-        "coordinateSystem": "prepared-sequence, 1-based inclusive input",
-        "inputRecords": len(arms),
-        "uniqueBlocks": len(compressed),
-        "meanArmLength": float(np.mean(arm_lengths)),
-        "gaussianStandardDeviation": standard_deviation,
-        "nonzeroBonusCells": int(np.count_nonzero(bonus)),
-        "nonzeroUpperTriangleCells": len(bonus_entries),
-        "maximumBonus": maximum,
-        "bonusEntries": bonus_entries,
-        "nucleotideSupport": nucleotide_support,
-        "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
-    }
+    """The parser matrix together with the per-cell listing used on the web."""
+    bonus, summary = build_hyb_bonus_matrix_fast(sequence_length, arms, cutpoint=cutpoint)
+    if bonus is not None:
+        summary.update(bonus_matrix_listing(bonus))
+    return bonus, summary
 
 
 def build_hyb_bonus_matrix_export(
-    sequence_length: int, arms: list[tuple[int, int, int, int]]
+    sequence_length: int, arms: Any, cutpoint: int | None = None
 ) -> dict[str, Any]:
-    """Build the sparse TSV representation without allocating an n-by-n array.
-
-    Folding still uses ``build_hyb_bonus_matrix`` because the parser needs a
-    dense matrix.  Downloads only need non-zero upper-triangle cells, so this
-    path keeps the same float32 arithmetic while avoiding a second quadratic
-    allocation and permits local handoff for sequences above the browser fold
-    ceiling.
-    """
-
-    if not arms:
-        return {
-            "source": "none",
-            "inputRecords": 0,
-            "uniqueBlocks": 0,
-            "nonzeroBonusCells": 0,
-            "nonzeroUpperTriangleCells": 0,
-            "maximumBonus": 0.0,
-            "bonusEntries": [],
-            "evidenceWeight": "none",
-        }
-
-    arm_lengths = [
-        end - start + 1
-        for arm in arms
-        for start, end in ((arm[0], arm[1]), (arm[2], arm[3]))
-    ]
-    standard_deviation = max(float(np.mean(arm_lengths)) / 6.0, 1e-6)
-    positions = np.arange(sequence_length, dtype=np.float32)
-    compressed = Counter(arms)
-    upper_support: dict[tuple[int, int], np.float32] = {}
-    diagonal_support = np.zeros(sequence_length, dtype=np.float32)
-
-    for (one_start, one_end, two_start, two_end), weight in compressed.items():
-        one_mean = ((one_start - 1) + one_end) / 2.0
-        two_mean = ((two_start - 1) + two_end) / 2.0
-        one_support = np.exp(-0.5 * ((positions - one_mean) / standard_deviation) ** 2)
-        two_support = np.exp(-0.5 * ((positions - two_mean) / standard_deviation) ** 2)
-        one_support /= np.max(one_support)
-        two_support /= np.max(two_support)
-        active = np.flatnonzero((one_support > 0) | (two_support > 0))
-        weight32 = np.float32(weight)
-
-        for position in active:
-            diagonal_contribution = weight32 * np.float32(
-                np.float32(one_support[position] * two_support[position]) * np.float32(2.0)
-            )
-            diagonal_support[position] = np.float32(
-                diagonal_support[position] + diagonal_contribution
-            )
-
-        for offset, left in enumerate(active[:-1]):
-            for right in active[offset + 1:]:
-                contribution = weight32 * np.float32(
-                    np.float32(one_support[left] * two_support[right])
-                    + np.float32(one_support[right] * two_support[left])
-                )
-                if contribution == 0:
-                    continue
-                key = (int(left), int(right))
-                upper_support[key] = np.float32(
-                    upper_support.get(key, np.float32(0.0)) + contribution
-                )
-
-    threshold = np.float32(1e-6)
-    diagonal_bonus = np.log1p(np.where(diagonal_support >= threshold, diagonal_support, 0.0)).astype(
-        np.float32, copy=False
-    )
-    entries = []
-    for (left, right), support in sorted(upper_support.items()):
-        if support < threshold:
-            continue
-        entries.append({
-            "one": left + 1,
-            "two": right + 1,
-            "value": float(np.log1p(np.float32(support))),
-        })
-
-    maximum = float(np.max(diagonal_bonus)) if diagonal_bonus.size else 0.0
-    if entries:
-        maximum = max(maximum, max(float(entry["value"]) for entry in entries))
-    nonzero_diagonal = int(np.count_nonzero(diagonal_bonus))
-    return {
-        "source": "hyb-block-intervals",
-        "transform": "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
-        "coordinateSystem": "prepared-sequence, 1-based inclusive input",
-        "inputRecords": len(arms),
-        "uniqueBlocks": len(compressed),
-        "meanArmLength": float(np.mean(arm_lengths)),
-        "gaussianStandardDeviation": standard_deviation,
-        "nonzeroBonusCells": nonzero_diagonal + 2 * len(entries),
-        "nonzeroUpperTriangleCells": len(entries),
-        "maximumBonus": maximum,
-        "bonusEntries": entries,
-        "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
-    }
-
-
-def _cofold_evidence_summary(
-    sequence_length: int, cutpoint: int, arms: Any
-) -> dict[str, Any]:
-    """``arms`` is a list of (one_start, one_end, two_start, two_end) rows or
-    a mapping from such a block to its row count."""
-    summary = build_hyb_bonus_matrix_export(sequence_length, [])
-    summary.update({
-        "coordinateSystem": "compact A+B, 1-based inclusive input; '&' has no coordinate",
-        "cutpoint": cutpoint,
-        "strandLengths": [cutpoint, sequence_length - cutpoint],
-        "strandBounded": True,
-    })
-    counts = _compress_arms(arms)
+    """Emit nonzero upper-triangle cells, without materializing the fold matrix."""
+    counts = _checked_blocks(sequence_length, arms) if cutpoint is None else cofold_counts(sequence_length, cutpoint, arms)
+    summary = _gaussian_summary(sequence_length, cutpoint, counts)
+    entries = summary["bonusEntries"] = []
     if counts:
-        rows = sum(counts.values())
-        mean_length = sum(w * (b - a + 1 + d - c + 1) for (a, b, c, d), w in counts.items()) / (2.0 * rows)
+        for start, stripe in gaussian_bonus_stripes(sequence_length, cutpoint, counts, summary["gaussianStandardDeviation"]):
+            for i, values in enumerate(stripe, start):
+                summary["nonzeroBonusCells"] += int(values[i] != 0)
+                summary["maximumBonus"] = max(summary["maximumBonus"], float(values[i:].max()))
+                for j in np.flatnonzero(values[i + 1:]) + i + 1:
+                    entries.append({"one": i + 1, "two": int(j + 1), "value": float(values[j])})
+    summary["nonzeroBonusCells"] += 2 * len(entries)
+    summary["nonzeroUpperTriangleCells"] = len(entries)
+    return summary
+
+
+def _gaussian_summary(
+    sequence_length: int, cutpoint: int | None, counts: Counter
+) -> dict[str, Any]:
+    summary = _empty_support("gaussian")
+    if counts:
+        summary = _summary(sequence_length, "gaussian", counts, 0, 0, 0.0)
+        summary["gaussianStandardDeviation"] = gaussian_sigma(counts)
+    if cutpoint is not None:
         summary.update({
-            "source": "hyb-block-intervals",
-            "transform": "Strand-bounded IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
-            "inputRecords": rows,
-            "uniqueBlocks": len(counts),
-            "meanArmLength": mean_length,
-            "gaussianStandardDeviation": mean_length / 6.0,
-            "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
+            "coordinateSystem": "compact A+B, 1-based inclusive input; '&' has no coordinate",
+            "cutpoint": cutpoint,
+            "strandLengths": [cutpoint, sequence_length - cutpoint],
+            "strandBounded": True,
         })
+        if counts:
+            summary["transform"] = "Strand-bounded " + summary["transform"]
     return summary
 
 
@@ -437,177 +243,11 @@ def build_cofold_hyb_bonus_matrix(
     ``arms`` is a list of rows, or (native hosts with many chimeras) a
     mapping from a block to its row count: the same matrix without one
     entry per row."""
-    from Utils.cofold_bonus import build_cofold_bonus_matrix
-
-    summary = _cofold_evidence_summary(sequence_length, cutpoint, arms)
-    if not arms:
-        return None, summary
-    if isinstance(arms, dict):
-        bonus = _weighted_cofold_bonus(sequence_length, cutpoint, arms)
-    else:
-        bonus = build_cofold_bonus_matrix(sequence_length, cutpoint, arms)
-    summary.update(bonus_matrix_listing(bonus))
-    summary.update({
-        "nonzeroBonusCells": int(np.count_nonzero(bonus)),
-        "nonzeroUpperTriangleCells": len(summary["bonusEntries"]),
-        "maximumBonus": float(np.max(bonus)),
-    })
-    return bonus, summary
+    return build_hyb_bonus_matrix(sequence_length, arms, cutpoint=cutpoint)
 
 
-def _weighted_cofold_bonus(sequence_length: int, cutpoint: int, counts: dict) -> np.ndarray:
-    """Utils.cofold_bonus.build_cofold_bonus_matrix for blocks with row counts
-    (it compresses repeated rows the same way)."""
-    from Utils.cofold_bonus import _accumulate_support
-
-    blocks = list(counts)
-    weights = [float(counts[block]) for block in blocks]
-    rows = sum(weights)
-    sigma = sum(w * (b - a + 1 + d - c + 1) for (a, b, c, d), w in zip(blocks, weights)) / (12.0 * rows)
-    return _accumulate_support(int(sequence_length), int(cutpoint), np.asarray(blocks, dtype=np.int64),
-                               np.asarray(weights, dtype=np.float64), sigma).astype(np.float32)
-
-
-def _cofold_bonus_matrix_export(
-    sequence_length: int, cutpoint: int, arms: list[tuple[int, int, int, int]]
-) -> dict[str, Any]:
-    """Sparse equivalent of Utils.cofold_bonus for validated input arms.
-
-    Accumulate in float64 and cast after log1p, exactly as the cofold builder
-    does.  Each vector is normalised within its own strand.  Keeping only
-    positive Gaussian entries avoids a dense N-by-N export allocation, without
-    truncating small nonzero terms before repeated evidence is accumulated.
-    """
-    summary = _cofold_evidence_summary(sequence_length, cutpoint, arms)
-    if not arms:
-        return summary
-    sigma = sum(b - a + 1 + d - c + 1 for a, b, c, d in arms) / (12.0 * len(arms))
-    upper_support: dict[tuple[int, int], float] = {}
-    diagonal = np.zeros(sequence_length, dtype=np.float64)
-
-    def gaussian(start: int, end: int):
-        lower, upper = (0, cutpoint) if start <= cutpoint else (cutpoint, sequence_length)
-        positions = np.arange(lower, upper, dtype=np.int64)
-        values = np.exp(-0.5 * ((positions - ((start - 1) + end) / 2.0) / sigma) ** 2)
-        values /= np.max(values)
-        return [(int(position), float(value)) for position, value in zip(positions, values) if value > 0.0]
-
-    for (a, b, c, d), weight in Counter(arms).items():
-        first, second = gaussian(a, b), gaussian(c, d)
-        for i, one in first:
-            for j, two in second:
-                value = float(weight) * one * two
-                if value == 0.0:
-                    continue
-                if i == j:
-                    diagonal[i] += value
-                    diagonal[i] += value
-                else:
-                    key = (min(i, j), max(i, j))
-                    upper_support[key] = upper_support.get(key, 0.0) + value
-
-    diagonal_bonus = np.log1p(np.where(diagonal >= 1e-6, diagonal, 0.0)).astype(np.float32)
-    entries = [
-        {"one": i + 1, "two": j + 1, "value": float(np.float32(np.log1p(value)))}
-        for (i, j), value in sorted(upper_support.items()) if value >= 1e-6
-    ]
-    maximum = max(float(np.max(diagonal_bonus)), max((entry["value"] for entry in entries), default=0.0))
-    summary.update({
-        "nonzeroBonusCells": int(np.count_nonzero(diagonal_bonus)) + 2 * len(entries),
-        "nonzeroUpperTriangleCells": len(entries),
-        "maximumBonus": maximum,
-        "bonusEntries": entries,
-    })
-    return summary
-
-
-# ---------------------------------------------------------------------------
-# Sparse (windowed) bonus matrix for long sequences.
-#
-# Same transform as ``build_hyb_bonus_matrix`` -- Gaussian arm blocks with
-# sigma = mean arm length / 6, each arm normalised to peak 1, symmetric outer
-# product, cells below 1e-6 zeroed, log1p -- but each block is evaluated only
-# where it can matter.  A block of weight w is truncated where one arm factor
-# drops below ``tail / w`` (about +-5.7 sigma for w = 1, growing with
-# sqrt(log w)), so every dropped cell contribution is below ``tail``.  The
-# dense builder materialises one n-by-n outer product per unique block, which
-# is quadratic per block; this one is O(window^2) per block.
-# ---------------------------------------------------------------------------
-
-DEFAULT_SPARSE_TAIL = 1e-7
 # The identity fallback installed above has no __version__.
 _NUMBA_AVAILABLE = hasattr(sys.modules.get("numba"), "__version__")
-
-from numba import njit  # noqa: E402  (real Numba, or the identity fallback above)
-
-
-def _block_half_width(weight: float, standard_deviation: float, tail: float) -> int:
-    ratio = max(float(weight), 1.0) / tail
-    return int(math.ceil(standard_deviation * math.sqrt(2.0 * math.log(ratio)))) if ratio > 1.0 else 0
-
-
-# cache=False: this module is loaded under several names (spec_from_file_location),
-# and a cached Numba environment would record an unimportable module name.
-@njit(cache=False)
-def _accumulate_gaussian_blocks(support, blocks, weights, standard_deviation, tail):  # pragma: no cover - JIT
-    n = support.shape[0]
-    for k in range(blocks.shape[0]):
-        one_mean = ((blocks[k, 0] - 1) + blocks[k, 1]) / 2.0
-        two_mean = ((blocks[k, 2] - 1) + blocks[k, 3]) / 2.0
-        weight = weights[k]
-        ratio = max(weight, 1.0) / tail
-        half = 0
-        if ratio > 1.0:
-            half = int(math.ceil(standard_deviation * math.sqrt(2.0 * math.log(ratio))))
-        one_centre = int(math.floor(one_mean + 0.5))
-        two_centre = int(math.floor(two_mean + 0.5))
-        one_lo = max(0, one_centre - half)
-        one_hi = min(n - 1, one_centre + half)
-        two_lo = max(0, two_centre - half)
-        two_hi = min(n - 1, two_centre + half)
-        if one_lo > one_hi or two_lo > two_hi:
-            continue
-        # Peak normalisation over integer positions, as in the dense builder.
-        one_peak = 0.0
-        for x in range(one_lo, one_hi + 1):
-            value = math.exp(-0.5 * ((x - one_mean) / standard_deviation) ** 2)
-            if value > one_peak:
-                one_peak = value
-        two_peak = 0.0
-        for y in range(two_lo, two_hi + 1):
-            value = math.exp(-0.5 * ((y - two_mean) / standard_deviation) ** 2)
-            if value > two_peak:
-                two_peak = value
-        if one_peak <= 0.0 or two_peak <= 0.0:
-            continue
-        for x in range(one_lo, one_hi + 1):
-            gx = weight * math.exp(-0.5 * ((x - one_mean) / standard_deviation) ** 2) / one_peak
-            for y in range(two_lo, two_hi + 1):
-                contribution = gx * math.exp(-0.5 * ((y - two_mean) / standard_deviation) ** 2) / two_peak
-                support[x, y] += contribution
-                support[y, x] += contribution
-
-
-def _accumulate_gaussian_blocks_numpy(support, blocks, weights, standard_deviation, tail) -> None:
-    """Vectorised fallback used when Numba is unavailable (e.g. Pyodide)."""
-    n = support.shape[0]
-    for (one_start, one_end, two_start, two_end), weight in zip(blocks.tolist(), weights.tolist()):
-        half = _block_half_width(weight, standard_deviation, tail)
-        means = (((one_start - 1) + one_end) / 2.0, ((two_start - 1) + two_end) / 2.0)
-        factors = []
-        for mean in means:
-            centre = int(math.floor(mean + 0.5))
-            lo, hi = max(0, centre - half), min(n - 1, centre + half)
-            if lo > hi:
-                break
-            values = np.exp(-0.5 * ((np.arange(lo, hi + 1, dtype=np.float64) - mean) / standard_deviation) ** 2)
-            factors.append((lo, hi, values / values.max()))
-        if len(factors) != 2:
-            continue
-        (one_lo, one_hi, one), (two_lo, two_hi, two) = factors
-        contribution = (weight * np.outer(one, two)).astype(np.float32)
-        support[one_lo:one_hi + 1, two_lo:two_hi + 1] += contribution
-        support[two_lo:two_hi + 1, one_lo:one_hi + 1] += contribution.T
 
 
 def _compress_arms(arms: Any) -> Counter:
@@ -622,72 +262,20 @@ def build_hyb_bonus_matrix_fast(
     sequence_length: int,
     arms: Any,
     *,
-    tail: float = DEFAULT_SPARSE_TAIL,
+    cutpoint: int | None = None,
     use_numba: bool | None = None,
 ) -> tuple[np.ndarray | None, dict[str, Any]]:
-    """Long-sequence variant of ``build_hyb_bonus_matrix``.
-
-    ``arms`` is an iterable of ``(one_start, one_end, two_start, two_end)``
-    tuples (1-based inclusive, prepared-sequence coordinates) or a mapping /
-    ``Counter`` from such a tuple to its row count, e.g. the output of
-    ``collect_hyb_arms``.  Returns the dense float32 bonus matrix the parser
-    needs (allocated once; log1p is applied in place) and an evidence summary.
-    Per-cell bonusEntries are not listed (a genome has millions); use
-    ``bonus_matrix_upper_entries`` when needed.
-    """
-
-    compressed = _compress_arms(arms)
-    if not compressed:
-        return None, {
-            "source": "none",
-            "inputRecords": 0,
-            "uniqueBlocks": 0,
-            "nonzeroBonusCells": 0,
-            "nonzeroUpperTriangleCells": 0,
-            "maximumBonus": 0.0,
-            "evidenceWeight": "none",
-        }
-    for one_start, one_end, two_start, two_end in compressed:
-        if not (
-            1 <= one_start <= one_end <= sequence_length
-            and 1 <= two_start <= two_end <= sequence_length
-        ):
-            raise ValueError("HYB evidence falls outside the prepared sequence.")
-
-    blocks = np.array(list(compressed.keys()), dtype=np.int64).reshape(-1, 4)
-    weights = np.array(list(compressed.values()), dtype=np.float64)
-    records = float(weights.sum())
-    arm_length_total = float(
-        np.sum(weights * ((blocks[:, 1] - blocks[:, 0] + 1) + (blocks[:, 3] - blocks[:, 2] + 1)))
-    )
-    mean_arm_length = arm_length_total / (2.0 * records)
-    standard_deviation = max(mean_arm_length / 6.0, 1e-6)
-
-    support = np.zeros((sequence_length, sequence_length), dtype=np.float32)
-    jit = _NUMBA_AVAILABLE if use_numba is None else use_numba
-    if jit:
-        _accumulate_gaussian_blocks(support, blocks, weights, standard_deviation, float(tail))
-    else:
-        _accumulate_gaussian_blocks_numpy(support, blocks, weights, standard_deviation, float(tail))
-    support[support < np.float32(1e-6)] = np.float32(0.0)
-    bonus = np.log1p(support, out=support)
-    nonzero = int(np.count_nonzero(bonus))
-    nonzero_diagonal = int(np.count_nonzero(np.diagonal(bonus)))
-    return bonus, {
-        "source": "hyb-block-intervals",
-        "transform": "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
-        "builder": "sparse-window" + ("-numba" if jit else "-numpy"),
-        "truncationTail": float(tail),
-        "coordinateSystem": "prepared-sequence, 1-based inclusive input",
-        "inputRecords": int(records),
-        "uniqueBlocks": len(compressed),
-        "meanArmLength": mean_arm_length,
-        "gaussianStandardDeviation": standard_deviation,
-        "nonzeroBonusCells": nonzero,
-        "nonzeroUpperTriangleCells": (nonzero - nonzero_diagonal) // 2,
-        "maximumBonus": float(bonus.max()) if bonus.size else 0.0,
-        "evidenceWeight": "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights",
-    }
+    """Build the parser's matrix from rows or block counts, without a per-cell listing."""
+    counts = _checked_blocks(sequence_length, arms) if cutpoint is None else cofold_counts(sequence_length, cutpoint, arms)
+    summary = _gaussian_summary(sequence_length, cutpoint, counts)
+    if not counts:
+        return None, summary
+    jit = _NUMBA_AVAILABLE and use_numba is not False
+    bonus = gaussian_bonus_matrix(sequence_length, cutpoint, counts, summary["gaussianStandardDeviation"], jit)
+    nonzero, upper, maximum = _dense_counts(bonus)
+    summary.update(builder="row-stripes-" + ("numba" if jit else "numpy"), nonzeroBonusCells=nonzero,
+                   nonzeroUpperTriangleCells=upper, maximumBonus=maximum)
+    return bonus, summary
 
 
 def bonus_matrix_listing(bonus: np.ndarray | None) -> dict[str, Any]:
@@ -709,10 +297,10 @@ def bonus_matrix_listing(bonus: np.ndarray | None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Support kernels.
 #
-# The chimeras of a fold become its bonus matrix B in one of five ways.  Each
+# The chimeras of a fold become its bonus matrix B in one of five ways. Each
 # sums one contribution per eligible HYB row (repeated coordinates once, with
-# their row count as weight w).  The first four zero cells below 1e-6 and apply
-# log1p; duplex saturates its counts instead (below).  The transforms do not
+# their row count as weight w).  The first three zero cells below 1e-6 and apply
+# log1p; the Vienna pair kernels saturate their counts instead. The transforms do not
 # equalise the kernels: on the same reads their total support differs
 # several-fold (block > gaussian > block-normalized), so an alpha chosen for
 # one kernel does not carry over to another.
@@ -723,9 +311,6 @@ def bonus_matrix_listing(bonus: np.ndarray | None) -> dict[str, Any]:
 #   block             every position of one arm against every position of the
 #                     other, w per cell.
 #   block-normalized  as block, w / sqrt(len one * len two) per cell.
-#   rnacofold         the two arm sequences are cofolded with RNAcofold, as the
-#                     COMRADES procedure does, and each intermolecular pair it
-#                     forms counts w; no other cell receives support.
 #   duplex            C_ij, the rows whose two arms hybridise (ViennaRNA
 #                     RNAduplex: intermolecular pairs only, as the hybrid
 #                     step of COMRADES' comradesMakeConstraints) with the
@@ -736,27 +321,23 @@ def bonus_matrix_listing(bonus: np.ndarray | None) -> dict[str, Any]:
 #                     benchmark.  Native hosts compute the duplexes with
 #                     ViennaRNA's Python module; other hosts pass the counts
 #                     as evidencePairs.
+#   comrades          same transform, but C counts the cross-arm pairs of the
+#                     joint RNAcofold MFE, including competition from arm hairpins.
 # ---------------------------------------------------------------------------
 
-SUPPORT_KERNELS = ("gaussian", "block", "block-normalized", "rnacofold", "duplex")
-PAIR_KERNELS = ("rnacofold", "duplex")
 # B = s C / (C + q): s calibrated so that alpha is the ratio of the bonus of the
 # folded structure to its free energy (kernel_experiments/config.py BONUS_SCALE,
 # Vienna backend); q the mean count of the round(n x SATURATING_TOP) best pairs.
 SATURATING_SCALE = 3.6
 SATURATING_TOP = 1.0 / 3.0
-DEFAULT_SUPPORT_KERNEL = "gaussian"
 SUPPORT_TRANSFORMS = {
-    "gaussian": "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p",
+    "gaussian": "IRIS Gaussian arm blocks; symmetric float64 accumulation; threshold 2^-23; log1p",
     "block": "Full arm blocks, w per cell of arm one x arm two; symmetric; threshold 1e-6; log1p",
     "block-normalized": "Full arm blocks, w / sqrt(len one x len two) per cell; symmetric; threshold 1e-6; log1p",
-    "rnacofold": "RNAcofold intermolecular pairs of the two arms, w per pair (COMRADES evidence); symmetric; log1p",
-    "duplex": "RNAduplex pairs of the two arms, C = rows per pair (COMRADES evidence); symmetric; "
-                 "s C / (C + q), s = 3.6 kcal/mol, q = mean C of the n/3 best-supported pairs",
+    **{kernel: f"{model} cross-arm pairs, C = observed pair counts; symmetric; "
+               "s C / (C + q), s = 3.6 kcal/mol, q = mean C of the n/3 best-supported pairs"
+       for kernel, model in PAIR_MODELS.items()},
 }
-# The COMRADES(ViennaRNA) evidence settings (desktop/runtime/comrades.py, web/structure.worker.js).
-RNACOFOLD_TEMPERATURE = 37.0
-RNACOFOLD_MIN_LOOP = 3
 MAX_EVIDENCE_PAIRS = 5_000_000
 _EVIDENCE_WEIGHT = "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights"
 
@@ -801,7 +382,6 @@ def _block_cell_value(block: tuple[int, int, int, int], weight: float, normalize
 def _summary(sequence_length: int, kernel: str, compressed: Counter, bonus_cells: int, upper_cells: int,
              maximum: float) -> dict[str, Any]:
     records = sum(compressed.values())
-    arm_total = sum(w * ((b - a + 1) + (d - c + 1)) for (a, b, c, d), w in compressed.items())
     return {
         "source": "hyb-block-intervals",
         "supportKernel": kernel,
@@ -809,7 +389,7 @@ def _summary(sequence_length: int, kernel: str, compressed: Counter, bonus_cells
         "coordinateSystem": "prepared-sequence, 1-based inclusive input",
         "inputRecords": int(records),
         "uniqueBlocks": len(compressed),
-        "meanArmLength": arm_total / (2.0 * records),
+        "meanArmLength": mean_arm_length(compressed),
         "nonzeroBonusCells": int(bonus_cells),
         "nonzeroUpperTriangleCells": int(upper_cells),
         "maximumBonus": float(maximum),
@@ -919,70 +499,6 @@ def _block_bonus_export(sequence_length: int, arms: Any, normalized: bool) -> di
     return summary
 
 
-def _dot_bracket_pairs(structure: str) -> list[tuple[int, int]]:
-    stack, pairs = [], []
-    for position, character in enumerate(structure, 1):
-        if character == "(":
-            stack.append(position)
-        elif character == ")":
-            pairs.append((stack.pop(), position))
-    return pairs
-
-
-def rnacofold_pair_counts(
-    sequence: str,
-    arms: Any,
-    *,
-    temperature: float = RNACOFOLD_TEMPERATURE,
-    min_loop: int = RNACOFOLD_MIN_LOOP,
-    progress: Any = None,
-) -> tuple[Counter, dict[str, Any]]:
-    """COMRADES evidence: each row's two arms cofolded with RNAcofold.
-
-    Returns ``{(i, j): rows}`` (1-based, i < j) for the intermolecular pairs of
-    every cofold, and a summary.  Identical blocks fold identically, so each
-    unique block is cofolded once and counted with its row count.  Needs
-    ViennaRNA's Python module; the browser computes the same pairs in its
-    ViennaRNA worker and passes them as ``evidencePairs``.
-    """
-    try:
-        import RNA  # noqa: PLC0415
-    except ImportError as error:
-        raise ValueError("The rnacofold support kernel needs ViennaRNA's Python module; "
-                         "supply evidencePairs computed by the host instead.") from error
-    compressed = _checked_blocks(len(sequence), arms)
-    model = RNA.md()
-    model.temperature = float(temperature)
-    model.min_loop_size = int(min_loop)
-    counts: Counter = Counter()
-    with_pairs = 0
-    for index, (block, weight) in enumerate(compressed.items()):
-        one_start, one_end, two_start, two_end = block
-        one, two = sequence[one_start - 1:one_end], sequence[two_start - 1:two_end]
-        compound = RNA.fold_compound(one + "&" + two, model, RNA.OPTION_MFE | RNA.OPTION_HYBRID)
-        structure, energy = compound.mfe_dimer()
-        structure = structure.replace("&", "")
-        if not math.isfinite(energy) or len(structure) != len(one) + len(two):
-            raise ValueError("ViennaRNA RNAcofold returned an invalid two-strand structure.")
-        found = 0
-        for left, right in _dot_bracket_pairs(structure):
-            if left <= len(one) < right:
-                i, j = one_start + left - 1, two_start + right - len(one) - 1
-                if i != j:
-                    counts[(min(i, j), max(i, j))] += weight
-                    found += 1
-        if found:
-            with_pairs += weight
-        if progress is not None and ((index + 1) % 256 == 0 or index + 1 == len(compressed)):
-            progress(index + 1, len(compressed))
-    return counts, {
-        "cofoldedBlocks": len(compressed),
-        "cofoldsWithIntermolecularPairs": int(with_pairs),
-        "temperature": float(temperature),
-        "minimumLoop": int(min_loop),
-    }
-
-
 DUPLEX_CHUNK = 1000
 # below this many blocks the duplexes are computed in this process
 DUPLEX_PARALLEL_MIN = 4000
@@ -990,30 +506,48 @@ DUPLEX_PARALLEL_MIN = 4000
 DUPLEX_PROGRESS_STEP = 100
 
 
-def _duplex_chunk(sequence: str, blocks: list) -> tuple[Counter, int]:
-    """Intermolecular pairs (genome i < j) of each block's RNAduplex duplex,
-    weighted by the block's row count, and the rows whose arms formed one."""
-    import RNA  # noqa: PLC0415
+def _duplex_offsets(one: str, two: str):
+    """RNAduplex returns a local interaction; offsets are relative to each full arm."""
+    import RNA
 
+    hit = RNA.duplexfold(one, two)
+    left, _, right = hit.structure.partition("&")
+    opens = [k for k, ch in enumerate(left) if ch == "("]
+    closes = [k for k, ch in enumerate(right) if ch == ")"]
+    if len(opens) != len(closes) or not math.isfinite(hit.energy):
+        raise ValueError("ViennaRNA RNAduplex returned an invalid duplex.")
+    for i, j in zip(opens, reversed(closes)):
+        yield hit.i - len(left) + i, hit.j - 1 + j
+
+
+def _cofold_offsets(one: str, two: str):
+    """Both arms may fold internally; report only pairs across the cut, once."""
+    import RNA
+
+    md = RNA.md()
+    md.temperature = 37.0
+    md.min_loop_size = 3
+    fc = RNA.fold_compound(one + "&" + two, md, RNA.OPTION_MFE | RNA.OPTION_HYBRID)
+    structure, energy = fc.mfe_dimer()
+    compact = structure.replace("&", "")
+    if len(compact) != len(one) + len(two) or not math.isfinite(energy):
+        raise ValueError("ViennaRNA RNAcofold returned an invalid two-strand structure.")
+    partner = RNA.ptable(compact)
+    for i in range(1, len(one) + 1):
+        j = partner[i]
+        if j > len(one):
+            yield i - 1, j - len(one) - 1
+
+
+def _pair_chunk(sequence: str, blocks: list, kernel: str) -> tuple[Counter, int]:
+    """Map arm offsets to ordered reference coordinates, weighted by row multiplicity."""
+    offsets = {"RNAcofold": _cofold_offsets, "RNAduplex": _duplex_offsets}[PAIR_MODELS[kernel]]
     counts: Counter = Counter()
     with_pairs = 0
     for (one_start, one_end, two_start, two_end), weight in blocks:
-        hit = RNA.duplexfold(sequence[one_start - 1:one_end], sequence[two_start - 1:two_end])
-        left, _, right = hit.structure.partition("&")
-        opens = [k for k, ch in enumerate(left) if ch == "("]
-        if not opens:
-            # arms that cannot pair, e.g. both purine-rich: RNAduplex returns
-            # ".&." with dG 100000; they add nothing
-            continue
-        closes = [k for k, ch in enumerate(right) if ch == ")"]
-        if len(opens) != len(closes) or not math.isfinite(hit.energy):
-            raise ValueError("ViennaRNA RNAduplex returned an invalid duplex.")
-        # the duplex covers one[i - len(left) + 1 .. i] and two[j .. j + len(right) - 1] (1-based)
-        first_one = one_start + hit.i - len(left)
-        first_two = two_start + hit.j - 1
         found = 0
-        for left_index, right_index in zip(opens, reversed(closes)):
-            i, j = first_one + left_index, first_two + right_index
+        for a, b in offsets(sequence[one_start - 1:one_end], sequence[two_start - 1:two_end]):
+            i, j = one_start + a, two_start + b
             if i != j:
                 counts[(min(i, j), max(i, j))] += weight
                 found += 1
@@ -1042,55 +576,77 @@ def _duplex_workers(workers: int | None) -> int:
     return max(1, int(workers))
 
 
-def _duplex_forked(sequence: str, blocks: list, workers: int, progress: Any) -> tuple[Counter, int]:
-    """``_duplex_chunk`` over forked processes.  Forking passes the sequence and
+def _pairs_forked(sequence: str, blocks: list, kernel: str, workers: int, progress: Any) -> tuple[Counter, int]:
+    """``_pair_chunk`` over forked processes. Forking passes the sequence and
     the blocks without pickling a function (this module is loaded from its
     file, so a child could not import it by name); each child sends back the
     counts of its chunks."""
     import multiprocessing  # noqa: PLC0415
+    from multiprocessing.connection import wait
 
     context = multiprocessing.get_context("fork")
     chunks = [blocks[start:start + DUPLEX_CHUNK] for start in range(0, len(blocks), DUPLEX_CHUNK)]
-    results = context.Queue()
 
-    def run(share: list) -> None:
+    def run(sender, share: list) -> None:
         try:
             for chunk in share:
-                results.put(("chunk", len(chunk), _duplex_chunk(sequence, chunk)))
+                sender.send((len(chunk), _pair_chunk(sequence, chunk, kernel)))
         except BaseException as error:  # noqa: BLE001
-            results.put(("error", 0, f"{type(error).__name__}: {error}"))
+            sender.send((0, f"{type(error).__name__}: {error}"))
 
-    processes = [context.Process(target=run, args=(chunks[index::workers],), daemon=True)
-                 for index in range(workers)]
-    for process in processes:
-        process.start()
+    readers = {}
     counts: Counter = Counter()
-    with_pairs = done = received = 0
+    with_pairs = done = 0
+    failure = f"ViennaRNA {PAIR_MODELS[kernel]} failed in a worker process"
     try:
-        while received < len(chunks):
-            kind, size, value = results.get()
-            if kind == "error":
-                raise ValueError(f"ViennaRNA RNAduplex failed in a worker process: {value}")
-            partial, rows = value
-            counts.update(partial)
-            with_pairs += rows
-            done += size
-            received += 1
-            if progress is not None:
-                progress(done, len(blocks))
+        for index in range(workers):
+            # Only this child inherits the write end. Its death produces EOF,
+            # even halfway through a message while other workers are running.
+            reader, sender = context.Pipe(duplex=False)
+            process = context.Process(target=run, args=(sender, chunks[index::workers]), daemon=True)
+            try:
+                process.start()
+            except BaseException:
+                reader.close()
+                raise
+            finally:
+                sender.close()
+            readers[reader] = process
+        while readers:
+            for reader in wait(readers):
+                try:
+                    size, value = reader.recv()
+                except EOFError:
+                    process = readers.pop(reader)
+                    reader.close()
+                    process.join()
+                    if process.exitcode:
+                        raise ValueError(f"{failure}: exit code {process.exitcode}") from None
+                    continue
+                except OSError as error:
+                    raise ValueError(f"{failure}: incomplete result") from error
+                if not size:
+                    raise ValueError(f"{failure}: {value}")
+                partial, rows = value
+                counts.update(partial)
+                with_pairs += rows
+                done += size
+                if progress is not None:
+                    progress(done, len(blocks))
+        if done != len(blocks):
+            raise ValueError(f"{failure}: incomplete result")
     finally:
-        for process in processes:
+        for reader, process in readers.items():
+            reader.close()
             if process.is_alive():
                 process.terminate()
             process.join()
     return counts, with_pairs
 
 
-def duplex_pair_counts(sequence: str, arms: Any, *, progress: Any = None,
-                       workers: int | None = None) -> tuple[Counter, dict[str, Any]]:
-    """COMRADES evidence C_ij: each row's two arms hybridised with ViennaRNA's
-    RNAduplex, which forms intermolecular pairs only, as the hybrid step of
-    COMRADES' comradesMakeConstraints does.
+def arm_pair_counts(sequence: str, arms: Any, *, kernel: str, progress: Any = None,
+                    workers: int | None = None) -> tuple[Counter, dict[str, Any]]:
+    """Raw C_ij of the chosen Vienna model, before scoring or saturation.
 
     Returns ``{(i, j): rows}`` (1-based, i < j) and a summary.  Each unique
     block is hybridised once and counted with its row count.  Arms that cannot
@@ -1099,28 +655,35 @@ def duplex_pair_counts(sequence: str, arms: Any, *, progress: Any = None,
     Needs ViennaRNA's Python module; other hosts pass the counts as
     ``evidencePairs``.
     """
+    if kernel not in PAIR_MODELS:
+        raise ValueError("Arm pair counts require a 'comrades' or 'duplex' support kernel.")
     try:
         import RNA  # noqa: PLC0415
     except ImportError as error:
-        raise ValueError("The duplex support kernel needs ViennaRNA's Python module; "
+        raise ValueError(f"The {kernel} support kernel needs ViennaRNA's Python module; "
                          "supply evidencePairs computed by the host instead.") from error
     blocks = sorted(_checked_blocks(len(sequence), arms).items())
     workers = min(_duplex_workers(workers), max(1, -(-len(blocks) // DUPLEX_CHUNK)))
     if workers > 1 and len(blocks) >= DUPLEX_PARALLEL_MIN:
-        counts, with_pairs = _duplex_forked(sequence, blocks, workers, progress)
+        counts, with_pairs = _pairs_forked(sequence, blocks, kernel, workers, progress)
     else:
         workers = 1
         counts, with_pairs = Counter(), 0
         for start in range(0, len(blocks), DUPLEX_PROGRESS_STEP):
-            partial, rows = _duplex_chunk(sequence, blocks[start:start + DUPLEX_PROGRESS_STEP])
+            partial, rows = _pair_chunk(sequence, blocks[start:start + DUPLEX_PROGRESS_STEP], kernel)
             counts.update(partial)
             with_pairs += rows
             if progress is not None:
                 progress(min(start + DUPLEX_PROGRESS_STEP, len(blocks)), len(blocks))
     return counts, {"hybridisedBlocks": len(blocks), "duplexesWithPairs": int(with_pairs),
                     "duplexWorkers": workers,
-                    "pairCounter": "ViennaRNA %s RNAduplex, 37 C" % getattr(RNA, "__version__", "?")}
+                    "pairCounter": f"ViennaRNA {getattr(RNA, '__version__', '?')} {PAIR_MODELS[kernel]}, 37 C"}
 
+
+def duplex_pair_counts(sequence: str, arms: Any, *, progress: Any = None,
+                       workers: int | None = None) -> tuple[Counter, dict[str, Any]]:
+    """Public RNAduplex counter; unlike RNAcofold, arms cannot fold internally."""
+    return arm_pair_counts(sequence, arms, kernel="duplex", progress=progress, workers=workers)
 
 
 def saturating_q(sequence_length: int, pair_counts: Counter) -> float:
@@ -1149,13 +712,6 @@ def resolve_q(sequence_length: int, pair_counts: Counter, q: Any = None) -> floa
     return value
 
 
-def _pair_counts_for(kernel: str, sequence: str, arms: Any, progress: Any = None,
-                     duplex_workers: int | None = None) -> tuple[Counter, dict[str, Any]]:
-    if kernel == "duplex":
-        return duplex_pair_counts(sequence, arms, progress=progress, workers=duplex_workers)
-    return rnacofold_pair_counts(sequence, arms, progress=progress)
-
-
 def _normalise_evidence_pairs(raw: Any, sequence_length: int) -> Counter:
     """``[{one, two, count}, ...]`` or ``[[one, two, count], ...]`` (1-based)
     as ``{(i, j): count}`` with i < j; repeated pairs are summed."""
@@ -1180,86 +736,77 @@ def _normalise_evidence_pairs(raw: Any, sequence_length: int) -> Counter:
     return counts
 
 
-def _pair_summary(sequence_length: int, compressed: Counter, pair_counts: Counter, bonus_cells: int,
-                  upper_cells: int, maximum: float, kernel: str = "rnacofold",
-                  q: Any = None) -> dict[str, Any]:
+def score_evidence_pairs(counts: Counter, pairs: Any) -> dict[str, Any]:
+    """Sum both endpoints as in Lau's bp_score.sh (make_VARNA_scores_2.sh -m 1000000)."""
+    matched = [counts.get((min(i, j), max(i, j)), 0) for i, j in pairs]
+    return {"comradesPairCounts": matched, "comradesScore": 2 * sum(min(c, 1_000_000) for c in matched)}
+
+
+def _pair_summary(kernel: str, sequence_length: int, compressed: Counter, pair_counts: Counter, bonus_cells: int,
+                  upper_cells: int, maximum: float, q: float) -> dict[str, Any]:
     if compressed:
         summary = _summary(sequence_length, kernel, compressed, bonus_cells, upper_cells, maximum)
     else:
         summary = _empty_support(kernel)
         summary.update({"transform": SUPPORT_TRANSFORMS[kernel], "nonzeroBonusCells": int(bonus_cells),
                         "nonzeroUpperTriangleCells": int(upper_cells), "maximumBonus": float(maximum)})
-    summary["supportedPairs"] = len(pair_counts)
-    if kernel == "duplex":
-        # The q actually used, not a fresh one: a caller that passes the
-        # genome's q must not be told the window's.
-        summary.update({"saturatingScale": SATURATING_SCALE,
-                        "saturatingQ": resolve_q(sequence_length, pair_counts, q)})
+    summary.update({"supportedPairs": len(pair_counts), "saturatingScale": SATURATING_SCALE, "saturatingQ": q})
     return summary
 
 
-def _request_duplex(payload: dict[str, Any]) -> dict[str, Any]:
+def _request_duplex_workers(payload: dict[str, Any]) -> int | None:
     """Native hosts' duplex setting: ``duplexWorkers`` (None: one per CPU)."""
     workers = payload.get("duplexWorkers")
     if workers is not None:
         workers = _integer(workers, 1, 1024, "duplex workers")
-    return {"duplex_workers": workers}
+    return workers
 
 
-def _request_pairs(payload: dict[str, Any], kernel: str, evidence_mode: str, sequence_length: int) -> Counter | None:
-    """The host's pair counts (``evidencePairs``) for a pair kernel: RNAcofold
-    pairs for rnacofold, RNAduplex pairs for duplex; None when it sent
-    none, so they are computed here."""
-    raw = payload.get("evidencePairs")
-    if raw is None or kernel not in PAIR_KERNELS or evidence_mode != "hyb-blocks":
-        return None
-    return _normalise_evidence_pairs(raw, sequence_length)
+def _request_pairs(payload: dict[str, Any], kernel: str, sequence: str, arms: Any, progress: Any):
+    """One raw table for both the bonus and every candidate's structure score."""
+    if not arms:
+        return Counter(), {}
+    if "evidencePairs" in payload:
+        return _normalise_evidence_pairs(payload["evidencePairs"], len(sequence)), {"pairCounter": "host-supplied evidencePairs"}
+    return arm_pair_counts(sequence, arms, kernel=kernel, progress=progress, workers=_request_duplex_workers(payload))
 
 
-def _pair_value(kernel: str, count: Any, q: float) -> Any:
-    """The bonus of a pair with ``count`` rows: log1p, or s C / (C + q)."""
-    if kernel == "duplex":
-        return np.float32(SATURATING_SCALE) * count / (count + np.float32(q))
-    return np.log1p(count)
+def _pair_value(count: Any, q: float) -> Any:
+    return np.float32(SATURATING_SCALE) * count / (count + np.float32(q))
 
 
 def build_pair_bonus_matrix(
-    sequence_length: int, pair_counts: Counter, arms: Any = None, kernel: str = "rnacofold",
+    sequence_length: int, pair_counts: Counter, arms: Any = None, kernel: str | None = None,
     q: Any = None,
 ) -> tuple[np.ndarray | None, dict[str, Any]]:
-    """A pair kernel's matrix: each counted pair gets ``log1p`` of its rows
-    (rnacofold) or s C / (C + q) (duplex); every other cell is zero.
+    """With an explicit pair model, each counted pair gets s C / (C + q).
 
     ``q`` as in ``resolve_q``: None derives it from this fold, a number holds
     it fixed so the same alpha means the same bonus across fold lengths."""
+    if kernel not in PAIR_MODELS:
+        raise ValueError("Pair bonus matrices require an explicit 'comrades' or 'duplex' support kernel.")
     compressed = _checked_blocks(sequence_length, arms or [])
+    scale = resolve_q(sequence_length, pair_counts, q)
     if not pair_counts:
-        return None, _pair_summary(sequence_length, compressed, pair_counts, 0, 0, 0.0, kernel, q)
-    support = np.zeros((sequence_length, sequence_length), dtype=np.float32)
+        return None, _pair_summary(kernel, sequence_length, compressed, pair_counts, 0, 0, 0.0, scale)
+    bonus = np.zeros((sequence_length, sequence_length), dtype=np.float32)
     ones = np.fromiter((i - 1 for i, _ in pair_counts), dtype=np.int64, count=len(pair_counts))
     twos = np.fromiter((j - 1 for _, j in pair_counts), dtype=np.int64, count=len(pair_counts))
     rows = np.fromiter(pair_counts.values(), dtype=np.float32, count=len(pair_counts))
-    if kernel == "duplex":
-        rows = _pair_value(kernel, rows, resolve_q(sequence_length, pair_counts, q)).astype(np.float32)
-        support[ones, twos] = rows
-        support[twos, ones] = rows
-        bonus = support
-    else:
-        support[ones, twos] = rows
-        support[twos, ones] = rows
-        bonus = _finish_support(support)
-    return bonus, _pair_summary(sequence_length, compressed, pair_counts, *_dense_counts(bonus), kernel, q)
+    values = _pair_value(rows, scale)
+    bonus[ones, twos] = values
+    bonus[twos, ones] = values
+    return bonus, _pair_summary(kernel, sequence_length, compressed, pair_counts, *_dense_counts(bonus), scale)
 
 
-def _pair_bonus_export(sequence_length: int, pair_counts: Counter, arms: Any = None,
-                       kernel: str = "rnacofold", q: Any = None) -> dict[str, Any]:
+def _pair_bonus_export(kernel: str, sequence_length: int, pair_counts: Counter, arms: Any, q: Any) -> dict[str, Any]:
     """Sparse upper-triangle export of ``build_pair_bonus_matrix``."""
     compressed = _checked_blocks(sequence_length, arms or [])
     scale = resolve_q(sequence_length, pair_counts, q)
-    entries = [{"one": i, "two": j, "value": float(_pair_value(kernel, np.float32(rows), scale))}
+    entries = [{"one": i, "two": j, "value": float(_pair_value(np.float32(rows), scale))}
                for (i, j), rows in sorted(pair_counts.items())]
-    summary = _pair_summary(sequence_length, compressed, pair_counts, 2 * len(entries), len(entries),
-                            max((entry["value"] for entry in entries), default=0.0), kernel, scale)
+    summary = _pair_summary(kernel, sequence_length, compressed, pair_counts, 2 * len(entries), len(entries),
+                            max((entry["value"] for entry in entries), default=0.0), scale)
     summary["bonusEntries"] = entries
     return summary
 
@@ -1281,11 +828,8 @@ def build_support_bonus_matrix(
     ``arms`` is a list of ``(one_start, one_end, two_start, two_end)`` rows or
     a mapping from a block to its row count.  For two strands (``cutpoint``)
     every arm already lies on one strand, so a full block stays on its
-    strands; the Gaussian kernel is clipped at the nick.  The rnacofold kernel
-    uses ``pairs`` when given, otherwise it cofolds the arms of ``sequence``,
-    calling ``progress(blocks_done, blocks)`` as it goes; the duplex kernel
-    likewise hybridises them with RNAduplex (``duplex_workers`` processes) and
-    takes ``q`` as in ``resolve_q``.
+    strands; the Gaussian kernel is clipped at the nick. The Vienna kernels
+    use ``pairs`` when given, otherwise they compute them from ``sequence``.
     """
     kernel = support_kernel(kernel)
     if kernel == "gaussian":
@@ -1302,8 +846,7 @@ def build_support_bonus_matrix(
         elif pairs is None:
             if sequence is None:
                 raise ValueError(f"The {kernel} support kernel needs the sequence or evidencePairs.")
-            pairs, extra = _pair_counts_for(kernel, sequence, arms, progress=progress,
-                                            duplex_workers=duplex_workers)
+            pairs, extra = arm_pair_counts(sequence, arms, kernel=kernel, progress=progress, workers=duplex_workers)
         bonus, summary = build_pair_bonus_matrix(sequence_length, pairs, arms, kernel, q)
         summary.update(extra)
     summary["supportKernel"] = kernel
@@ -1332,7 +875,10 @@ def iter_hyb_rows(paths: Any, genes: Any = None, progress: Any = None, *, intram
     map to one gene.  Coordinates are the reference positions in columns 7-8
     and 13-14 (1-based inclusive).  ``progress(bytes_done)`` is called about
     every 4 MiB.
+    Native file input uses the staged pipeline parser. Browser JSON input
+    has already passed through parser.worker.js and does not import it.
     """
+    from hyb2analysis import hybfile
 
     if isinstance(paths, (str, os.PathLike)):
         paths = [paths]
@@ -1344,27 +890,25 @@ def iter_hyb_rows(paths: Any, genes: Any = None, progress: Any = None, *, intram
         with _open_hyb(path) as handle:
             # For .gz report compressed bytes so progress matches file sizes.
             compressed = getattr(handle, "fileobj", None)
-            for raw in handle:
+            for raw in hybfile.lines(handle):
                 done = base + compressed.tell() if compressed is not None else done + len(raw)
                 if progress is not None and done - reported >= 4 << 20:
                     reported = done
                     progress(done)
-                fields = raw.split(b"\t", 14)
-                if len(fields) < 14:
+                try:
+                    record = hybfile.parse(raw)
+                except ValueError:
                     continue
-                # padded RNA names match, as hyb2analysis.hybfile.parse strips them
-                gene_one, gene_two = fields[3].strip(), fields[9].strip()
+                if record is None:
+                    continue
+                gene_one, gene_two = record.gene1, record.gene2
                 if intramolecular and gene_one != gene_two:
                     continue
                 if wanted is not None and (gene_one not in wanted or gene_two not in wanted):
                     continue
-                try:
-                    a0, a1, b0, b1 = int(fields[6]), int(fields[7]), int(fields[12]), int(fields[13])
-                except ValueError:
-                    continue
                 one = gene_one.decode("utf-8", "replace")
                 two = one if gene_two == gene_one else gene_two.decode("utf-8", "replace")
-                yield one, a0, a1, two, b0, b1
+                yield one, record.start1, record.end1, two, record.start2, record.end2
         base += os.path.getsize(path)
     if progress is not None:
         progress(base)
@@ -1482,8 +1026,6 @@ def _candidate(
     phase1 = raw.get("phase1_struct")
     phase2 = raw.get("phase2_struct")
     if cutpoint is not None:
-        from Utils.strand_layout import strip_structure_break
-
         structure = strip_structure_break(structure, cutpoint, len(sequence))
         phase1 = strip_structure_break(phase1, cutpoint, len(sequence)) if phase1 is not None else None
         phase2 = strip_structure_break(phase2, cutpoint, len(sequence)) if phase2 is not None else None
@@ -1508,8 +1050,6 @@ def _candidate(
         "unpaired": len(sequence) - 2 * len(pairs),
     }
     if cutpoint is not None:
-        from Utils.strand_layout import add_strand_break
-
         for pair in pairs:
             for side in ("left", "right"):
                 position = pair[side]
@@ -1533,84 +1073,102 @@ def _candidate(
     return candidate
 
 
-def fold(payload: dict[str, Any], progress: Any = None) -> dict[str, Any]:
-    maximum_sequence_length = _request_maximum(payload.get("maxSequenceLength"))
-    sequence, cutpoint = _request_sequence_layout(payload, maximum_sequence_length)
-    beam_size = _integer(payload.get("beamSize", 20), 1, 200, "Beam size")
-    max_phase1 = _integer(payload.get("maxPhase1", 3), 1, 20, "Phase-1 candidate count")
-    energy_delta = _number(payload.get("energyDelta", 5), 0.0, 50.0, "Energy delta")
-    alpha = _number(payload.get("alpha", 0.5 if cutpoint is None else 0.0), 0.0, 1.0, "Evidence alpha")
-    beta = _number(payload.get("beta", 0.0), 0.0, 1.0, "Pseudoknot beta")
-    allow_pseudoknot = payload.get("allowPseudoknot", True)
-    if not isinstance(allow_pseudoknot, bool):
-        raise ValueError("allowPseudoknot must be a boolean.")
-    energy_model = str(payload.get("energyModel", "DP09")).upper()
-    if cutpoint is not None and energy_model not in {"DP03", "DP09"}:
-        raise ValueError("CPLcofold supports only DP03 or DP09; nicked CC/RE pseudoknot models are not implemented.")
-    if energy_model not in ENERGY_MODELS:
-        raise ValueError("Energy model must be one of DP03, DP09, CC06, CC09 or RE.")
-
-    evidence_mode = str(payload.get("evidenceMode", "none"))
-    if evidence_mode not in {"none", "hyb-blocks"}:
+def _request_evidence(payload: dict[str, Any], length: int, cutpoint: int | None):
+    mode = str(payload.get("evidenceMode", "none"))
+    if mode == "none":
+        return mode, []
+    if mode != "hyb-blocks":
         raise ValueError("CPLfold evidence mode must be 'none' or 'hyb-blocks'.")
     counted = payload.get("evidenceArmCounts")
-    if counted is not None and evidence_mode == "hyb-blocks":
-        # native hosts: blocks with row counts (CPLcofold only), not one entry per row
+    if counted is not None:
         if cutpoint is None:
             raise ValueError("evidenceArmCounts is for two-strand CPLcofold requests.")
-        arms = _normalise_arm_counts(counted, len(sequence), cutpoint)
+        arms = _normalise_arm_counts(counted, length, cutpoint)
     else:
-        arms = _normalise_arms(payload.get("evidenceArms"), len(sequence), cutpoint) if evidence_mode == "hyb-blocks" else []
-    if evidence_mode == "hyb-blocks" and not arms:
+        arms = _normalise_arms(payload.get("evidenceArms"), length, cutpoint)
+    if not arms:
         raise ValueError("No eligible HYB rows are fully contained in the selected reference region.")
+    return mode, arms
+
+
+def fold_prepared(sequence: str, cutpoint: int | None, bonus: np.ndarray | None, *, pseudoknots: bool,
+                  energy_model: str, alpha: float, beta: float, beam_size: int, energy_delta: float,
+                  max_phase1: int) -> list[dict[str, Any]]:
+    """Fold a prepared Hyb2 task; the web and desktop hosts both call this.
+
+    ``sequence`` is compact (no '&'); ``cutpoint`` separates two strands and
+    ``bonus`` uses the same compact coordinates. Hyb2 tasks keep one Phase-2
+    structure per Phase-1 candidate. Returns candidate dicts, best first.
+    """
+    predictions = cplfold.fold(
+        sequence if cutpoint is None else add_strand_break(sequence, cutpoint),
+        pseudoknots=pseudoknots, energy_model=energy_model, bonus=bonus, alpha=alpha, beta=beta,
+        beam_size=beam_size, energy_delta=energy_delta, max_phase1=max_phase1, max_phase2=1)
+    return [prediction.as_dict() for prediction in predictions]
+
+
+def fold(payload: dict[str, Any], progress: Any = None, *, host: str = "web",
+         hard_max_length: int = BROWSER_HARD_MAX_SEQUENCE_LENGTH) -> dict[str, Any]:
+    """The caller selects the parameter catalog and length ceiling, never the JSON request."""
+    if isinstance(hard_max_length, bool) or not isinstance(hard_max_length, int) or hard_max_length < 1:
+        raise ValueError("Host CPLfold hard maximum must be a positive integer.")
+    label = "Browser CPLfold" if host == "web" else "CPLfold"
+    requested = payload.get("maxSequenceLength")
+    maximum_sequence_length = _integer(DEFAULT_MAX_SEQUENCE_LENGTH if requested is None else requested,
+                                       1, hard_max_length, f"{label} maximum sequence length")
+    sequence, cutpoint = _request_sequence_layout(payload)
+    if len(sequence) > hard_max_length:
+        runtime = "this pure-Python Pyodide build" if host == "web" else "this runtime"
+        raise ValueError(f"{label} has a hard safety ceiling of {hard_max_length} nt in {runtime}.")
+    if len(sequence) > maximum_sequence_length:
+        raise ValueError(f"{label} is limited to {maximum_sequence_length} nt for this capacity-tested request.")
+
+    engine = engine_parameters(host)["cplfold" if cutpoint is None else "cplcofold"]
+    ranges, defaults = engine["ranges"], engine["defaults"]
+    beam_size = _integer(payload.get("beamSize", defaults["beamSize"]), *ranges["beamSize"], "Beam size")
+    max_phase1 = _integer(payload.get("maxPhase1", defaults["maxPhase1"]), *ranges["maxPhase1"], "Phase-1 candidate count")
+    energy_delta = _number(payload.get("energyDelta", defaults["energyDelta"]), *ranges["energyDelta"], "Energy delta")
+    alpha = _number(payload.get("alpha", defaults["alpha"]), *ranges["alpha"], "Evidence alpha")
+    beta = _number(payload.get("beta", defaults["beta"]), *ranges["beta"], "Pseudoknot beta")
+    allow_pseudoknot = task_allow_pseudoknot(payload, default=defaults["allowPseudoknot"])
+    energy_model = str(payload.get("energyModel", engine["defaultModel"])).upper()
+    models = [option["value"] for option in engine["models"]]
+    if energy_model not in models:
+        if cutpoint is not None:
+            raise ValueError("CPLcofold supports only " + " or ".join(sorted(models)) + ".")
+        raise ValueError("Energy model must be one of " + ", ".join(models) + ".")
+
+    evidence_mode, arms = _request_evidence(payload, len(sequence), cutpoint)
     kernel = support_kernel(payload.get("supportKernel"))
-    pairs = _request_pairs(payload, kernel, evidence_mode, len(sequence))
+    counts = None
     if kernel != "gaussian":
+        count_summary = {}
+        if kernel in PAIR_MODELS and arms:
+            counts, count_summary = _request_pairs(payload, kernel, sequence, arms, progress)
         bonus_matrix, evidence = build_support_bonus_matrix(
-            len(sequence), arms, kernel, cutpoint=cutpoint, sequence=sequence, pairs=pairs,
-            q=payload.get("saturatingQ"), progress=progress, **_request_duplex(payload))
+            len(sequence), arms, kernel, cutpoint=cutpoint, pairs=counts, q=payload.get("saturatingQ"))
+        evidence.update(count_summary)
         evidence.update(bonus_matrix_listing(bonus_matrix))
     elif cutpoint is not None:
         bonus_matrix, evidence = build_cofold_hyb_bonus_matrix(len(sequence), cutpoint, arms)
-    elif arms and _NUMBA_AVAILABLE:
-        # Native hosts: same transform without one n-by-n outer product per
-        # block (values agree with the dense builder to ~1e-6).
-        bonus_matrix, evidence = build_hyb_bonus_matrix_fast(len(sequence), arms)
-        evidence.update(bonus_matrix_listing(bonus_matrix))
     else:
         bonus_matrix, evidence = build_hyb_bonus_matrix(len(sequence), arms)
     evidence["supportKernel"] = kernel
 
-    fold_function = two_phase_pseudoknot_fold
-    layout_parameters = {}
-    if cutpoint is not None:
-        from CPLcofold import two_phase_cofold
-
-        fold_function = two_phase_cofold
-        layout_parameters["cutpoint"] = cutpoint
-    raw_candidates = fold_function(
-        seq=sequence,
-        beam_size=beam_size,
-        energy_delta=energy_delta,
-        max_phase1=max_phase1,
-        max_phase2=1,
-        energy_model=energy_model,
-        output_file=None,
-        verbose=False,
-        lv=True,
-        bonus_matrix=bonus_matrix,
-        alpha=alpha,
-        beta=beta,
-        allow_pseudoknot=allow_pseudoknot,
-        **layout_parameters,
-    )
+    raw_candidates = fold_prepared(
+        sequence, cutpoint, bonus_matrix, pseudoknots=allow_pseudoknot, energy_model=energy_model,
+        alpha=alpha, beta=beta, beam_size=beam_size, energy_delta=energy_delta, max_phase1=max_phase1)
     candidates = [
-        _candidate(sequence, candidate, index, bonus_matrix, cutpoint)
-        for index, candidate in enumerate(raw_candidates)
+        _candidate(sequence, raw, index, bonus_matrix, cutpoint)
+        for index, raw in enumerate(raw_candidates)
     ]
     if not candidates:
         raise ValueError("CPLfold did not produce a structure for this sequence and parameter set.")
 
+    if counts is not None:
+        for candidate in candidates:
+            selected = ((p["left"], p["right"]) for p in candidate["pairs"])
+            candidate.update(score_evidence_pairs(counts, selected))
     best = candidates[0]
     nucleotide_support = evidence.pop("nucleotideSupport", [0.0] * len(sequence))
     result = {
@@ -1662,9 +1220,9 @@ def fold(payload: dict[str, Any], progress: Any = None) -> dict[str, Any]:
         "nucleotideSupport": nucleotide_support,
         "maximumNucleotideSupport": max(nucleotide_support, default=0.0),
     }
+    if counts is not None:
+        result.update(comradesPairCounts=best["comradesPairCounts"], comradesScore=best["comradesScore"])
     if cutpoint is not None:
-        from Utils.strand_layout import add_strand_break
-
         result.update({
             "algorithm": "CPLcofold two-strand two-phase pseudoknot prediction" if allow_pseudoknot else "CPLcofold pseudoknot-free two-strand prediction",
             "model": f"Nick-aware Turner cofold scoring; experimental Turner/{energy_model} strand-graph pseudoknot ranking",
@@ -1682,26 +1240,18 @@ def fold(payload: dict[str, Any], progress: Any = None) -> dict[str, Any]:
 def bonus_matrix(payload: dict[str, Any], progress: Any = None) -> dict[str, Any]:
     """Prepare the exact sparse bonus matrix used by a guided local run."""
 
-    sequence, cutpoint = _request_sequence_layout(payload, export=True)
-    evidence_mode = str(payload.get("evidenceMode", "none"))
-    if evidence_mode not in {"none", "hyb-blocks"}:
-        raise ValueError("CPLfold evidence mode must be 'none' or 'hyb-blocks'.")
-    arms = _normalise_arms(payload.get("evidenceArms"), len(sequence), cutpoint) if evidence_mode == "hyb-blocks" else []
-    if evidence_mode == "hyb-blocks" and not arms:
-        raise ValueError("No eligible HYB rows are fully contained in the selected reference region.")
+    sequence, cutpoint = _request_sequence_layout(payload)
+    if len(sequence) > BONUS_EXPORT_MAX_SEQUENCE_LENGTH:
+        raise ValueError(f"Bonus-matrix export is limited to {BONUS_EXPORT_MAX_SEQUENCE_LENGTH:,} nt in the browser.")
+    evidence_mode, arms = _request_evidence(payload, len(sequence), cutpoint)
     kernel = support_kernel(payload.get("supportKernel"))
     if kernel == "gaussian":
-        evidence = (build_hyb_bonus_matrix_export(len(sequence), arms) if cutpoint is None
-                    else _cofold_bonus_matrix_export(len(sequence), cutpoint, arms))
+        evidence = build_hyb_bonus_matrix_export(len(sequence), arms, cutpoint)
     elif kernel in ("block", "block-normalized"):
         evidence = _block_bonus_export(len(sequence), arms, kernel == "block-normalized")
     else:
-        pairs = _request_pairs(payload, kernel, evidence_mode, len(sequence))
-        extra: dict[str, Any] = {}
-        if pairs is None:
-            pairs, extra = (_pair_counts_for(kernel, sequence, arms, progress=progress, **_request_duplex(payload))
-                            if arms else (Counter(), {}))
-        evidence = _pair_bonus_export(len(sequence), pairs, arms, kernel, payload.get("saturatingQ"))
+        pairs, extra = _request_pairs(payload, kernel, sequence, arms, progress)
+        evidence = _pair_bonus_export(kernel, len(sequence), pairs, arms, payload.get("saturatingQ"))
         evidence.update(extra)
     evidence["supportKernel"] = kernel
     if kernel != "gaussian" and cutpoint is not None:
@@ -1721,8 +1271,6 @@ def bonus_matrix(payload: dict[str, Any], progress: Any = None) -> dict[str, Any
         "evidence": evidence,
     }
     if cutpoint is not None:
-        from Utils.strand_layout import add_strand_break
-
         result.update({
             "engine": "CPLcofold",
             "displaySequence": add_strand_break(sequence, cutpoint),
@@ -1732,8 +1280,7 @@ def bonus_matrix(payload: dict[str, Any], progress: Any = None) -> dict[str, Any
     return result
 
 
-# ``progress(blocks_done, blocks)``, when given, is called while the rnacofold
-# or duplex kernel computes its pairs (the browser worker reports it).
+# ``progress(blocks_done, blocks)`` reports the duplex kernel's pair counting.
 def fold_json(payload_json: str, progress: Any = None) -> str:
     payload = json.loads(payload_json)
     if not isinstance(payload, dict):
@@ -1756,8 +1303,9 @@ __all__ = [
     "build_hyb_bonus_matrix_fast",
     "build_pair_bonus_matrix",
     "build_support_bonus_matrix",
-    "rnacofold_pair_counts",
+    "arm_pair_counts",
     "duplex_pair_counts",
+    "score_evidence_pairs",
     "support_kernel",
     "collect_hyb_arms",
     "iter_hyb_arms",

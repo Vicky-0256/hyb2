@@ -54,6 +54,27 @@ async function run(overrides) {
   return done.result;
 }
 try {
+  for (const request of [{type: "cplfold", sequence: "GGGAAACCC"}, {type: "cplfold", sequence: "GGG&CCC"},
+    {type: "cplfold-capacity"}, {type: "cplfold-energy-batch", pairs: [["GGG", "CCC"]]}]) {
+    for (const allowPseudoknot of ["false", "true", 0, 1, null]) {
+      messages.length = 0;
+      await self.onmessage({data: {...request, allowPseudoknot}});
+      assert.deepEqual(messages.map(m => m.type), ["error"], "invalid topology must not start the runtime");
+      assert.match(messages[0].message, /allowPseudoknot must be a boolean/);
+    }
+  }
+  for (const [sequence, alpha] of [["GGGGCCCC", 0.5], ["GGGG&CCCC", 0]]) {
+    messages.length = 0;
+    await self.onmessage({data: {type: "cplfold", sequence}});
+    const done = messages.find(m => m.type === "complete");
+    assert.ok(done, messages.find(m => m.type === "error")?.message);
+    const p = done.result.parameters;
+    assert.equal(p.allowPseudoknot, false);
+    assert.equal(done.result.allowPseudoknot, false);
+    assert.ok(done.result.candidates.every(c => c.type === "phase1" && c.crossingPairs === 0));
+    assert.match(messages.find(m => m.phase === "cplfold").stage, /without pseudoknot search/);
+    assert.deepEqual([p.beamSize, p.maxPhase1, p.energyDelta, p.alpha, p.beta], [20, 3, 5, alpha, 0]);
+  }
   const a0 = await run({alpha:0});
   const a1 = await run({alpha:0.5});
   const common = a1.candidates.map(c => [a0.candidates.find(d => d.dotBracket === c.dotBracket), c])

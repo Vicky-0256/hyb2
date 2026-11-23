@@ -44,7 +44,7 @@ context.window.Hyb2Data = {
   }
 };
 // results.js reads window.*; report-page.js needs the helpers below
-load(context, ["results.js"]);
+load(context, ["support-kernels.js", "results.js"]);
 context.window.Hyb2UI = {};
 // the Structure page's own report (structure-ui.js), exported unchanged
 context.window.Hyb2StructureUI = { structureReport: function (state, result) { return { application: "HYB2 Web Lite", engine: result.engine, dotBracket: result.dotBracket }; } };
@@ -62,6 +62,12 @@ const empty = { summary: summary, filters: {}, view: { report: { filteredTotal: 
 const bare = R.build(empty, { generatedAt: "2026-10-16T00:00:00.000Z" });
 const status = function (record, key) { return record.steps.find(function (s) { return s.key === key; }).status; };
 const result = function (record, id) { return record.results.find(function (r) { return r.id === id; }); };
+for (const [structure, expected] of [[{engine: "cplfold"}, false],
+  [{engine: "cplfold", cplfoldAllowPseudoknot: "false"}, null],
+  [{engine: "cplfold", cplfoldAllowPseudoknot: false, result: {engine: "CPLfold"}}, true]]) {
+  const record = R.build({...empty, structure});
+  assert.equal(record.steps.find(s => s.key === "structure").parameters.pseudoknots, expected);
+}
 assert.equal(bare.schema, "hyb2-result/1.0");
 assert.equal(bare.steps.length, R.STEPS.length);
 assert.equal(bare.results.length, R.RESULTS.length, "every catalog result is listed, run or not");
@@ -113,7 +119,7 @@ const full = {
     deseq: { status: "error", error: "Each condition needs at least two replicates.", minCount: "2", radius: "100", padjCutoff: "0.05" }
   },
   reportPurpose: "  Which RNA_A contacts change on treatment? | check  ",
-  structure: { engine: "vienna", source: "reference", rna: "RNA_A", start: 11, end: 18, result: { engine: "ViennaRNA", sequence: "GGGAAACC", dotBracket: "(((..)))", energy: -1.2, pairs: [[1, 8], [2, 7], [3, 6]], crossingPairs: 0, selectedCandidate: 1, completedAt: "2026-10-16T12:34:56.000Z",
+  structure: { engine: "vienna", source: "reference", rna: "RNA_B", start: 101, end: 108, result: { engine: "ViennaRNA", source: "reference", sourceRna: "RNA_A", sourceStart: 11, sourceEnd: 18, sequence: "GGGAAACC", dotBracket: "(((..)))", energy: -1.2, pairs: [[1, 8], [2, 7], [3, 6]], crossingPairs: 0, selectedCandidate: 1, completedAt: "2026-10-16T12:34:56.000Z",
     candidates: [{ type: "mfe", topology: "nested", energy: -1.0, pairs: [[1, 8]], crossingPairs: 0, dotBracket: "(......)" }, { type: "suboptimal", topology: "nested", energy: -1.2, pairs: [{ left: 1, right: 8 }, { left: 2, right: 7 }, { left: 3, right: 6 }], crossingPairs: 0, dotBracket: "(((..)))" }] } },
   evidence: { cards: [{ status: "no_match", include_in_report: false, hit_count: 0, entries: [] }] }
 };
@@ -355,7 +361,10 @@ assert.equal(dualRecord.structures.find(item => item.file === dualDbn.path).leng
 // the settings by an earlier reference fold are not reported for it.
 {
   const pastedState = JSON.parse(JSON.stringify(full));
-  pastedState.structure.source = "paste";
+  pastedState.structure.result.source = "paste";
+  delete pastedState.structure.result.sourceRna;
+  delete pastedState.structure.result.sourceStart;
+  delete pastedState.structure.result.sourceEnd;
   const pastedFiles = R.files(R.build(pastedState, { interactionRows:records, interactionTotal:3 }), "ai");
   assert.match(byPath(pastedFiles, "report.md").text, /\| S12 \| RNA structure prediction \| `ok` \| pasted sequence, 8 nt; sequence only, no HYB evidence \|/, "report.md S12 scope names a pasted sequence");
   const pastedParameters = JSON.parse(byPath(pastedFiles, "provenance.json").text).steps.find(function (s) { return s.id === "S12"; }).parameters;

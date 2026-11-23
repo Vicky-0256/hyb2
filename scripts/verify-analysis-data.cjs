@@ -6,6 +6,7 @@ const path = require("node:path");
 const os = require("node:os");
 const vm = require("node:vm");
 const childProcess = require("node:child_process");
+const coordinateCases = require("../desktop/runtime/tests/coordinate_cases.json");
 
 const repository = path.resolve(__dirname, "..");
 const context = vm.createContext({
@@ -22,6 +23,7 @@ const context = vm.createContext({
   window: {}
 });
 
+vm.runInContext(fs.readFileSync(path.join(repository, "web", "support-kernels.js"), "utf8"), context);
 vm.runInContext(
   fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"),
   context,
@@ -112,22 +114,41 @@ assert.equal(defaultStructure.cplfoldCapacity.baselineLength, 75);
 assert.equal(defaultStructure.cplfoldCapacity.recommendedLength, 75);
 assert.equal(defaultStructure.cplfoldCapacity.hardCeiling, 500);
 
-const gappedFasta = data.parseFasta(">RNA_gap\nAC-G 1U\n");
-assert.equal(gappedFasta[0].sequence, "AC-G1U",
+const gappedFasta = data.parseFasta("\ufeff>RNA_gap\rac-\u0085g 1tß\r");
+assert.equal(gappedFasta[0].sequence, "AC-G1Tß",
   "FASTA symbols must be preserved so downstream reference coordinates never shift silently");
-assert.deepEqual(Array.from(gappedFasta[0].invalidCharacters), ["-", "1"]);
+assert.deepEqual(Array.from(gappedFasta[0].invalidCharacters), ["-", "1", "ß"]);
+
+assert.throws(() => data.parseFasta(">A first\nACGU\n>A second\nUUUU"), /duplicate.*A/i);
+const mapped = { mapping: { A: "B", B: "" }, sequences: data.parseFasta(">A\nCCCCC\n>B other\n🧬ATGATGATGATG") };
+assert.equal(data.findFastaEntry(mapped, "B"), null);
+assert.equal(data.extractReference(mapped, "A", 3, 12).sequence, "TGATGATGAT");
+assert.equal(data.extractReference(mapped, "A").end, 13);
+assert.throws(() => data.extractReference({ ...mapped, sequences: [...mapped.sequences, mapped.sequences[1]] }, "A"), /duplicate.*B/i);
 
 const duplicateNameMapping = data.buildFastaMapping(["RNA_A"], [
-  { id: "header_match", header: "RNA_A" },
+  { id: "header_match", header: "RNA_A description" },
   { id: "RNA_A", header: "different_header" }
 ]);
 assert.equal(duplicateNameMapping.RNA_A, "header_match",
-  "an exact full-header match must retain precedence over a later identifier-only match");
+  "an imported record's physical ID does not outrank the HYB ID from its original header");
 const pipeNameMapping = data.buildFastaMapping(["Zika_virusRNA"], [
   { id: "Zika|virusRNA", header: "Zika|virusRNA", sequence: "ACGU" }
 ]);
 assert.equal(pipeNameMapping.Zika_virusRNA, "Zika|virusRNA",
   "pipe-delimited FASTA IDs should match underscore-delimited HYB names");
+assert.throws(() => data.parseFasta(">x_y\n\n>x-y\nACGU\n>last|trigger\nG"), /duplicate FASTA ID.*x-y/i,
+  "validate rewritten IDs even on empty records before filtering them");
+const hiddenTrigger = data.parseFasta(">x_y\nCC\n>empty|trigger\n");
+for (const sequences of [hiddenTrigger, JSON.parse(JSON.stringify(hiddenTrigger))]) {
+  assert.equal(data.extractReference({ sequences }, "x-y").sequence, "CC");
+  assert.equal(data.extractReference({ sequences }, "x_y"), null);
+}
+const mutableRecords = [{ id: "x_y", header: "x_y", sequence: "CC" }, { id: "x-y", header: "x-y", sequence: "AA" }];
+assert.equal(data.extractReference({ sequences: mutableRecords }, "x_y").sequence, "CC");
+mutableRecords[1].header += " pipe|in-description";
+assert.throws(() => data.extractReference({ sequences: mutableRecords, mapping: { other: "x_y" } }, "other"), /duplicate FASTA ID.*x-y/i,
+  "an imported list is rechecked even on an explicit physical lookup");
 const mappingSize = 20000;
 const mappingRnas = Array.from({ length: mappingSize }, function (_, index) { return "RNA_" + index; });
 const mappingSequences = mappingRnas.map(function (rna) { return { id: rna, header: rna + " description" }; });
@@ -407,7 +428,7 @@ assert.equal(data.getFilteredRecords(invalidFilterState).length, 0,
   assert.equal(data.getFilteredRecords(capState).length, 2, "a cleared Maximum e-value filters nothing");
   const pagesSandbox = vm.createContext({ console: console, document: { querySelector: function () { return null; }, documentElement: { dataset: {} } },
     getComputedStyle: function () { return { getPropertyValue: function () { return "#123456"; } }; }, window: {} });
-  ["analysis-data.js", "comrades-analysis.js", "analysis-pages.js"].forEach(function (file) {
+  ["support-kernels.js", "analysis-data.js", "comrades-analysis.js", "analysis-pages.js"].forEach(function (file) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "web", file), "utf8"), pagesSandbox, { filename: file });
   });
   const notice = function (overrides) {
@@ -493,10 +514,25 @@ assert.equal(data.coordinateLimit(null, { min: 1, max: 140 }), null, "no referen
 assert.equal(data.coordinateRangeIssue("1", "10807", { limit: 10807 }), "");
 assert.equal(data.coordinateRangeIssue("", "", { limit: 10807 }), "", "blank fields are left to the caller");
 assert.equal(data.coordinateRangeIssue("3000", "2000", { limit: 10807 }), "Start 3,000 is after End 2,000. The start must not be after the end.");
-["0", "-5", "1.5"].forEach(function (value) {
-  assert.equal(data.coordinateRangeIssue(value, "50", { limit: 10807 }), "Start and End must be whole numbers from 1 to 10,807.");
+// Range queries allow omitted bounds; direct assembly requires coordinates.
+const invalidCoordinates = coordinateCases.invalid
+  .filter(value => value !== null && (typeof value !== "string" || value.trim() !== ""))
+  .concat(coordinateCases.nonFinite.map(Number));
+for (const value of invalidCoordinates) {
   assert.equal(data.coordinateRangeIssue(value, "", { start: "Arm 1 start", end: "Arm 1 end" }), "Arm 1 start and Arm 1 end must be whole numbers, 1 or more.");
-});
+  for (const [start, end] of [[value, "50"], ["1", value]]) {
+    assert.equal(data.coordinateRangeIssue(start, end, {limit: 10807}), "Start and End must be whole numbers from 1 to 10,807.",
+      `raw bounds ${JSON.stringify([start, end])} (${typeof value})`);
+    assert.equal(data.extractReference(viewpointState.fasta, "RNA_A", start, end), null);
+  }
+}
+for (const {input: [start, end]} of coordinateCases.validWindows.concat(coordinateCases.safeMaximumWindows)) {
+  assert.equal(data.coordinateRangeIssue(start, end, {}), "");
+}
+assert.equal(data.coordinateRangeIssue(null, null, {}), "", "shared range queries retain null as an omitted bound");
+assert.deepEqual(data.extractReference(viewpointState.fasta, "RNA_A", null, null), data.extractReference(viewpointState.fasta, "RNA_A"));
+assert.deepEqual(data.extractReference(viewpointState.fasta, "RNA_A", null, "5"), data.extractReference(viewpointState.fasta, "RNA_A", "1", "5"));
+assert.deepEqual(data.extractReference(viewpointState.fasta, "RNA_A", "2", null), data.extractReference(viewpointState.fasta, "RNA_A", "2", "8"));
 assert.equal(data.coordinateRangeIssue("1", "999999", { limit: 10807, rna: "RNA_A" }), "End 999,999 is beyond the last position of RNA_A (10,807). Use whole numbers from 1 to 10,807.");
 assert.equal(data.coordinateRangeIssue("1", "999999", {}), "", "without a known length only the form is checked");
 assert.equal(data.coordinateRangeIssue("5", "", { paired: true, start: "Partner start", end: "Partner end" }), "Enter both Partner start and Partner end, or clear both.");

@@ -76,7 +76,7 @@ function createContext() {
   context.globalThis = context;
   vm.createContext(context);
   [
-    "desktop-adapter.js", "analysis-data.js", "example.js", "data-provider.js", "page-data.js", "comrades-analysis.js",
+    "support-kernels.js", "desktop-adapter.js", "analysis-data.js", "example.js", "data-provider.js", "page-data.js", "comrades-analysis.js",
     "analysis-pages.js", "analysis-ui.js", "overview-page.js", "report-page.js", "app.js"
   ].forEach(function (file) {
     vm.runInContext(fs.readFileSync(web(file), "utf8"), context, { filename: file });

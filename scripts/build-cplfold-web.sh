@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+python3 -B "$repository_root/scripts/export-support-kernels.py"
 # shellcheck source=pyodide-toolchain.env
 source "$repository_root/scripts/pyodide-toolchain.env"
 final_directory="$repository_root/web/vendor/pyodide-cplfold"
@@ -13,7 +14,6 @@ previous_directory="$(dirname "$final_directory")/.pyodide-cplfold.previous.$$"
 pyodide_version="$PYODIDE_VERSION"
 pyodide_base_url="https://cdn.jsdelivr.net/pyodide/v${pyodide_version}/full"
 pyodide_license_url="https://raw.githubusercontent.com/pyodide/pyodide/${pyodide_version}/LICENSE"
-build_commit="${GITHUB_SHA:-local}"
 vendor_directory="$(dirname "$final_directory")"
 # One build at a time: two concurrent swaps race (one mv finds its source
 # gone, or a staging directory lands inside the new runtime), and the sweep
@@ -35,8 +35,8 @@ fi
 
 # ViennaRNA's Python module for Pyodide (scripts/build-vienna-pyodide.sh):
 # the duplex read-support kernel imports RNA in the browser as the desktop
-# does.  (The page still sends RNAcofold pairs from its ViennaRNA worker, and
-# the HYB dG tool uses vendor/viennarna.)  It is added to pyodide-lock.json,
+# does. The separate COMRADES and HYB dG tools use vendor/viennarna.
+# The Python wheel is added to pyodide-lock.json,
 # so the worker loads it with pyodide.loadPackage("viennarna") and Pyodide
 # checks its SHA-256.  Checked first, so a missing wheel fails before any
 # download or change under web/vendor.
@@ -134,7 +134,7 @@ build_directory="$(mktemp -d)"
 download_directory="$build_directory/downloads"
 staging_directory="$build_directory/cplfold"
 
-mkdir -p "$download_directory" "$staging_directory/Utils/energy_params" "$output_directory"
+mkdir -p "$download_directory" "$staging_directory/cplfold/_internal/energy_params" "$output_directory"
 # keep the runtime directory's own .gitignore (it ignores everything else)
 if [[ -f "$final_directory/.gitignore" ]]; then
   cp -p "$final_directory/.gitignore" "$output_directory/.gitignore"
@@ -174,7 +174,7 @@ download_and_verify "pyodide-lock.json" "14d2c2dba101277999e17135e653d8f15389ad1
 download_and_verify "numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl" "800c98edc0c864dfa49f07005680c699b4b42b84eae1f8cb19d35b3634e7f05c" "$pyodide_base_url/numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl"
 download_and_verify "Pyodide-LICENSE.txt" "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5" "$pyodide_license_url"
 
-python3 "$repository_root/scripts/bundle_sources.py" "$staging_directory" "$output_directory"
+build_commit="$(python3 "$repository_root/scripts/bundle_sources.py" "$staging_directory" "$output_directory")"
 
 # The ViennaRNA wheel goes into a directory named after its own SHA-256, so a
 # new wheel has a new URL: GitHub Pages caches files for about ten minutes,
@@ -218,7 +218,7 @@ PY_ARCHIVE
 archive_hash="$(hyb2_sha256 "$archive_staging")"
 archive_file="cplfold-python-${archive_hash}.zip"
 cp "$archive_staging" "$output_directory/$archive_file"
-printf '{\n  "pyodide": "%s",\n  "python": "3.13.2",\n  "numpy": "2.2.5",\n  "cplfoldRevision": "24bab52",\n  "bridgeVersion": "7",\n  "buildCommit": "%s",\n  "cplfoldArchiveFile": "%s",\n  "cplfoldArchiveSha256": "%s"\n}\n' \
+printf '{\n  "pyodide": "%s",\n  "python": "3.13.2",\n  "numpy": "2.2.5",\n  "cplfoldRevision": "24bab52",\n  "bridgeVersion": "8",\n  "buildCommit": "%s",\n  "cplfoldArchiveFile": "%s",\n  "cplfoldArchiveSha256": "%s"\n}\n' \
   "$pyodide_version" "$build_commit" "$archive_file" "$archive_hash" > "$output_directory/build-manifest.json"
 
 python3 - "$output_directory" "$vienna_asset" <<'PY_VIENNA_LOCK'
@@ -245,7 +245,7 @@ manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 names = ["pyodide.mjs", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip",
          "pyodide-lock.json", "numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl",
          "Pyodide-LICENSE.txt", "CPLfold-LICENSE.txt", "CPLfold-THIRD_PARTY_NOTICES.md",
-         "CPLfold-GPL-2.0-or-later.txt", "CPLfold-LinearFold-LICENSE.txt", "CPLfold-LinearCoFold-LICENSE.txt",
+         "CPLfold-GPL-3.0-or-later.txt", "CPLfold-GPL-2.0-or-later.txt", "CPLfold-LinearFold-LICENSE.txt", "CPLfold-LinearCoFold-LICENSE.txt",
          "CPLfold-ViennaRNA-COPYING.txt",
          sys.argv[2],
          manifest["cplfoldArchiveFile"]]

@@ -72,12 +72,35 @@ async function main() {
  const request={type:"iris-fold",sequence:"GGCGCGGCACCGUCCGCGGAACAAACGG",evidenceArms:[
  {oneStart:3,oneEnd:8,twoStart:13,twoEnd:18},
  {oneStart:10,oneEnd:14,twoStart:23,twoEnd:27}
- ],parameters:{K:2,C:20,fraction:0.75,kRange:"4 5 6 7"}};
+ ],parameters:{K:2,C:20,fraction:0.75,kRange:new Uint8Array([7,5,6,5,4])}};
  try {
+  const unknown=await waitForTerminal(worker,[],{...request,parameters:{K:2,stemLength:4,beam:20}});
+  assert.equal(unknown.type,"error","an IRIS task must not ignore a parameter from another engine or a range label");
+  assert.equal(unknown.message,"unknown IRIS parameter: beam, stemLength");
+  for(const kRange of ["1_2","0xA","4,"," \t",["4,6"]]) {
+   const refused=await waitForTerminal(worker,[],{...request,parameters:{kRange}});
+   assert.equal(refused.type,"error");
+   assert.match(refused.message,/IRIS stem length/,JSON.stringify(kRange));
+  }
+  const scalars=require("../desktop/runtime/tests/iris_scalars.json");
+  for(const [parameters,want] of scalars.valid) {
+   const reply=await waitForTerminal(worker,[],{...request,parameters});
+   assert.equal(reply.type,"complete",reply.message);
+   assert.deepEqual(reply.result.parameters,{...want,kRange:[4,5,6,7]},JSON.stringify(parameters));
+  }
+  for(const [field,{values,message}] of Object.entries(scalars.invalid)) {
+   for(const value of [...values,NaN,Infinity,-Infinity]) {
+    const reply=await waitForTerminal(worker,[],{...request,parameters:{[field]:value}});
+    assert.equal(reply.type,"error",`${field}: ${JSON.stringify(value)}`);
+    assert.equal(reply.message,message);
+   }
+  }
+  console.log("iris-worker-scalar-parameters: ok");
   const response=await waitForTerminal(worker,[],request);
   assert.equal(response.type,"complete",response.message);
   const r=response.result;
   assert.equal(r.engine,"IRIS");
+  assert.deepEqual(r.parameters.kRange,[4,5,6,7]);
   assert.equal(r.candidates.length,2);
   assert.ok(Math.abs(r.candidates.reduce((s,c)=>s+c.weight,0)-1)<1e-10);
   assert.ok(r.candidates.every(c=>c.weight>=0 && c.pairs.length && Number.isFinite(c.energy)));

@@ -4,22 +4,43 @@
  */
 (function (root) {
   "use strict";
+  if (!globalThis.Hyb2EngineParameters && typeof module !== "undefined" && module.exports) require("./support-kernels.js");
+  const {ranges, defaults, parameterKeys, kRangeGrammar} = globalThis.Hyb2EngineParameters.iris;
+  const stemList = new RegExp(kRangeGrammar.list), stemNumber = new RegExp(kRangeGrammar.number, "g");
+  if (!kRangeGrammar.scalar) throw new Error("IRIS scalar grammar is missing from the engine catalog.");
+  const scalarText = new RegExp(kRangeGrammar.scalar);
   const EPS = 2 ** -23;
-  const LIMITS = { length: 300, records: 2000, folds: 1000, candidates: 50, ensembles: 20000 };
+  const LIMITS = { length: 300, records: 2000, folds: 1000, candidates: ranges.C[1], ensembles: 20000 };
   const VALID = new Set(["AU", "UA", "GC", "CG", "GU", "UG"]);
+  function scalar(value) {
+    if (typeof value === "number") return value;
+    return typeof value === "string" && scalarText.test(value) ? Number(value) : NaN;
+  }
   function integer(value, min, max, name) {
-    const n = Number(value);
+    const n = scalar(value);
     if (!Number.isInteger(n) || n < min || n > max) throw new Error(name + " must be an integer from " + min + " to " + max + ".");
     return n;
   }
+  function stemLengths(value) {
+    if (value == null || value === "") value = defaults.kRange;
+    const [min, max] = ranges.stemLength;
+    let lengths;
+    if (typeof value === "string" && stemList.test(value)) lengths = value.match(stemNumber).map(Number);
+    else if (Array.isArray(value) || ArrayBuffer.isView(value)) lengths = Array.from(value);
+    if (!lengths?.length || !lengths.every(n => Number.isInteger(n) && n >= min && n <= max)) {
+      throw new Error(`IRIS stem length must be an integer from ${min} to ${max}.`);
+    }
+    return [...new Set(lengths)].sort((a, b) => a - b);
+  }
   function parameters(value) {
-    const p = value || {};
-    const K = integer(p.K == null ? 2 : p.K, 1, 3, "IRIS ensemble size K");
-    const C = integer(p.C == null ? 20 : p.C, K, LIMITS.candidates, "IRIS candidate count C");
-    const fraction = Number(p.fraction == null ? 0.75 : p.fraction);
-    if (!Number.isFinite(fraction) || fraction < 0 || fraction >= 1) throw new Error("IRIS support quantile must be at least 0 and below 1.");
-    const kRange = Array.from(new Set(String(p.kRange || "4 5 6 7").trim().split(/[ ,]+/).map(k => integer(k, 2, 12, "IRIS stem length")))).sort((a,b)=>a-b);
-    return { K, C, fraction, kRange };
+    const p = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const unknown = Object.keys(p).filter(key => !parameterKeys.includes(key)).sort();
+    if (unknown.length) throw new Error("unknown IRIS parameter: " + unknown.join(", "));
+    const K = integer(p.K ?? defaults.K, ...ranges.K, "IRIS ensemble size K");
+    const C = integer(p.C ?? defaults.C, Math.max(K, ranges.C[0]), ranges.C[1], "IRIS candidate count C");
+    const fraction = scalar(p.fraction ?? defaults.fraction);
+    if (!Number.isFinite(fraction) || fraction < ranges.fraction[0] || fraction >= ranges.fraction[1]) throw new Error(`IRIS support quantile must be at least ${ranges.fraction[0]} and below ${ranges.fraction[1]}.`);
+    return { K, C, fraction, kRange: stemLengths(p.kRange) };
   }
   function supportMatrix(n, arms) {
     if (!Array.isArray(arms) || !arms.length) throw new Error("IRIS requires HYB evidence within the selected reference region.");
@@ -177,8 +198,8 @@
     return {...best,lambda,testedEnsembles:count};
   }
   async function run(request, fold, progress) {
-    const sequence=String(request.sequence||"").toUpperCase().replace(/T/g,"U");
-    if(!/^[ACGU]+$/.test(sequence)||sequence.length>LIMITS.length) throw new Error("IRIS requires 1–300 canonical RNA nucleotides.");
+    const sequence=globalThis.Hyb2FoldText.readSequence(request.sequence);
+    if(!sequence||sequence.length>LIMITS.length) throw new Error("IRIS requires 1–300 canonical RNA nucleotides.");
     const p=parameters(request.parameters),n=sequence.length;
     progress("Redistributing HYB evidence",8);
     const support=supportMatrix(n,request.evidenceArms),stems=collectStems(sequence,support,p);
@@ -201,7 +222,7 @@
       candidates:ensemble,selectedCandidate:0,parameters:p,
       ensemble:{meanEnergy:chosen.energy,meanSupport:chosen.meanSupport,lambda:chosen.lambda,testedEnsembles:chosen.testedEnsembles,candidateCount:leaders.length,generatedCount:candidates.length},
       evidence:{inputRecords:request.evidenceArms.length,stemCount:stems.length},
-      warnings:["Browser adaptation: HYB arms replace BAM input; C ≤ 50, so the upstream LASSO prefilter is not needed. Tie-breaking can differ from scikit-learn."]};
+      warnings:[`Browser adaptation: HYB arms replace BAM input; C ≤ ${ranges.C[1]}. The upstream LASSO prefilter is not used. Tie-breaking can differ from scikit-learn.`]};
   }
   const api={run,parameters,supportMatrix,collectStems,constraintsFor,collectConstraints,cluster,nnls,pick,LIMITS};
   root.Hyb2Iris=api;

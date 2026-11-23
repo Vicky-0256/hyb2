@@ -5,6 +5,7 @@
  * loaded from same-origin build artifacts. Input data never leaves this
  * worker or the browser tab.
  */
+import "./support-kernels.js";
 
 const BASELINE_SEQUENCE_LENGTH = 75;
 const HARD_MAX_SEQUENCE_LENGTH = 500;
@@ -12,7 +13,7 @@ const CAPACITY_PROBE_LENGTH = 75;
 const RUNTIME_DIRECTORY = new URL("./vendor/pyodide-cplfold/", self.location.href);
 const PYODIDE_MODULE_URL = new URL("pyodide.mjs", RUNTIME_DIRECTORY);
 const EXPECTED_CPLFOLD_REVISION = "24bab52";
-const EXPECTED_BRIDGE_VERSION = "7";
+const EXPECTED_BRIDGE_VERSION = "8";
 const WORKER_BUILD = new URL(self.location.href).searchParams.get("build") || "local";
 
 let runtimePromise = null;
@@ -39,24 +40,26 @@ self.onmessage = async function (event) {
     const input = normaliseInput(message);
     const sequence = input.sequence;
     const engine = input.cutpoint === undefined ? "CPLfold" : "CPLcofold";
+    const allowPseudoknot = globalThis.Hyb2CplfoldSettings.readTopology(input.cutpoint !== undefined, message.allowPseudoknot);
+    const kernel = requestedSupportKernel(message.supportKernel);
+    const vienna = needsVienna(message, kernel);
     const maximumSequenceLength = requestedMaximum(message.maxSequenceLength);
-    validateSequence(sequence, maximumSequenceLength);
+    validateSequenceLength(sequence, maximumSequenceLength);
     const requestStartedAt = Date.now();
     postProgress("Loading the local Python WebAssembly runtime", 5, { phase: "runtime" });
     const runtimeStartedAt = Date.now();
     const runtime = await getRuntime();
-    await ensureVienna(runtime, message);
+    if (vienna) await ensureVienna(runtime);
     const runtimeLoadMs = Date.now() - runtimeStartedAt;
 
-    const foldStage = message.allowPseudoknot === false
-      ? "Running " + engine + " phase 1 without pseudoknot search"
-      : "Running " + engine + " phase 1 and pseudoknot phase 2";
-    const vienna = needsVienna(message);
+    const foldStage = allowPseudoknot
+      ? "Running " + engine + " phase 1 and pseudoknot phase 2"
+      : "Running " + engine + " phase 1 without pseudoknot search";
     postProgress(
       vienna
-        ? viennaStage(message) + " for the HYB read support"
+        ? pairStage(kernel) + " for the HYB read support"
         : message.evidenceMode === "hyb-blocks"
-        ? "Building the HYB block bonus matrix"
+        ? "Building the HYB bonus matrix"
         : "Preparing sequence-only " + engine,
       46,
       { phase: "evidence" }
@@ -74,7 +77,7 @@ self.onmessage = async function (event) {
     }
 
     const startedAt = Date.now();
-    // The rnacofold / duplex pairs are computed inside this call; their
+    // When arm pairs are computed inside this call, their
     // progress (46-55 %) arrives through pairProgress, then the fold stage.
     const response = runtime.bridge.fold_json(JSON.stringify({
       sequence: sequence,
@@ -87,11 +90,12 @@ self.onmessage = async function (event) {
       energyModel: message.energyModel,
       alpha: message.alpha,
       beta: message.beta,
-      allowPseudoknot: message.allowPseudoknot !== false,
-      supportKernel: message.supportKernel || "gaussian",
-      ...(Array.isArray(message.evidencePairs) ? { evidencePairs: message.evidencePairs } : {}),
+      allowPseudoknot,
+      supportKernel: kernel,
+      evidencePairs: message.evidencePairs,
+      saturatingQ: message.saturatingQ,
       maxSequenceLength: maximumSequenceLength
-    }), vienna ? pairProgress(message, 46, 55, postFoldStage) : undefined);
+    }), vienna ? pairProgress(kernel, 46, 55, postFoldStage) : undefined);
     // If no HYB block reached the pair callback (it never fired), the fold
     // stage is still reported, once fold_json returns, before the result.
     postFoldStage();
@@ -106,11 +110,14 @@ self.onmessage = async function (event) {
     if (result.engineVersion !== EXPECTED_CPLFOLD_REVISION || result.bridgeVersion !== EXPECTED_BRIDGE_VERSION) {
       throw new Error("The loaded CPLfold source does not match this web worker build.");
     }
+    if (!result.evidence || result.evidence.supportKernel !== kernel) {
+      throw new Error("The CPLfold runtime did not use the requested read-support kernel. Reload the runtime.");
+    }
 
     postProgress(
-      message.allowPseudoknot === false
-        ? "Preparing pseudoknot-free secondary-structure candidates"
-        : "Preparing pseudoknot candidates and arc layers",
+      allowPseudoknot
+        ? "Preparing pseudoknot candidates and arc layers"
+        : "Preparing pseudoknot-free secondary-structure candidates",
       96,
       { phase: "result" }
     );
@@ -128,19 +135,20 @@ self.onmessage = async function (event) {
 // candidate's energy (kcal/mol) per pair, as the batch energy tool expects.
 async function runEnergyBatch(message) {
   try {
+    const allowPseudoknot = globalThis.Hyb2CplfoldSettings.readTopology(true, message.allowPseudoknot);
     const pairs = Array.isArray(message.pairs) ? message.pairs : [];
     const runtime = await getRuntime();
     const energies = new Float64Array(pairs.length);
     for (let index = 0; index < pairs.length; index += 1) {
       const input = normaliseInput({ sequence: pairs[index][0], sequenceTwo: pairs[index][1] });
-      validateSequence(input.sequence, HARD_MAX_SEQUENCE_LENGTH);
+      validateSequenceLength(input.sequence, HARD_MAX_SEQUENCE_LENGTH);
       const result = JSON.parse(String(runtime.bridge.fold_json(JSON.stringify({
         sequence: input.sequence,
         cutpoint: input.cutpoint,
         evidenceMode: "none",
         evidenceArms: [],
         energyModel: message.energyModel,
-        allowPseudoknot: message.allowPseudoknot === true,
+        allowPseudoknot,
         maxSequenceLength: HARD_MAX_SEQUENCE_LENGTH
       }))));
       if (result.engineVersion !== EXPECTED_CPLFOLD_REVISION || result.bridgeVersion !== EXPECTED_BRIDGE_VERSION) {
@@ -160,9 +168,11 @@ async function runEnergyBatch(message) {
 
 async function runCapacityProbe(message) {
   try {
+    const kernel = requestedSupportKernel(message.supportKernel);
     if (message.cofold !== undefined && typeof message.cofold !== "boolean") {
       throw new Error("cofold must be a boolean.");
     }
+    const allowPseudoknot = globalThis.Hyb2CplfoldSettings.readTopology(message.cofold === true, message.allowPseudoknot);
     const probeLength = probeLengthValue(message.probeLength);
     const sequence = buildProbeSequence(probeLength);
     const cutpoint = message.cofold === true ? Math.floor(probeLength / 2) : undefined;
@@ -174,6 +184,7 @@ async function runCapacityProbe(message) {
     });
     const runtimeStartedAt = Date.now();
     const runtime = await getRuntime();
+    if (needsVienna({evidenceMode}, kernel)) await ensureVienna(runtime, "capacity");
     const runtimeLoadMs = Date.now() - runtimeStartedAt;
     // The page starts its probe timeout here, and elapsedMs excludes the
     // one-off runtime load: the probe measures folding, not downloads.
@@ -196,13 +207,14 @@ async function runCapacityProbe(message) {
       cutpoint: cutpoint,
       evidenceMode: evidenceMode,
       evidenceArms: evidenceArms,
+      supportKernel: kernel,
       beamSize: message.beamSize,
       maxPhase1: message.maxPhase1,
       energyDelta: message.energyDelta,
       energyModel: message.energyModel,
       alpha: message.alpha,
       beta: message.beta,
-      allowPseudoknot: message.allowPseudoknot !== false,
+      allowPseudoknot,
       maxSequenceLength: HARD_MAX_SEQUENCE_LENGTH
     }));
     const result = JSON.parse(String(response));
@@ -238,6 +250,7 @@ async function runCapacityProbe(message) {
         beta: result.parameters && result.parameters.beta,
         allowPseudoknot: result.parameters && result.parameters.allowPseudoknot,
         evidenceMode: evidenceMode,
+        supportKernel: result.parameters && result.parameters.supportKernel,
         cofold: cutpoint !== undefined
       }
     });
@@ -254,6 +267,8 @@ async function runBonusMatrixExport(message) {
   try {
     const input = normaliseInput(message);
     const sequence = input.sequence;
+    const kernel = requestedSupportKernel(message.supportKernel);
+    const vienna = needsVienna(message, kernel);
     const requestStartedAt = Date.now();
     postProgress("Loading the local Python WebAssembly runtime", 5, {
       phase: "runtime",
@@ -261,10 +276,10 @@ async function runBonusMatrixExport(message) {
     });
     const runtimeStartedAt = Date.now();
     const runtime = await getRuntime();
-    await ensureVienna(runtime, message, "bonus-matrix");
+    if (vienna) await ensureVienna(runtime, "bonus-matrix");
     const runtimeLoadMs = Date.now() - runtimeStartedAt;
 
-    postProgress("Building the HYB block bonus matrix for local download", 58, {
+    postProgress(vienna ? pairStage(kernel) + " for the bonus matrix" : "Building the HYB bonus matrix for local download", 58, {
       phase: "evidence",
       operation: "bonus-matrix"
     });
@@ -274,9 +289,10 @@ async function runBonusMatrixExport(message) {
       cutpoint: input.cutpoint,
       evidenceMode: message.evidenceMode === "hyb-blocks" ? "hyb-blocks" : "none",
       evidenceArms: message.evidenceArms || [],
-      supportKernel: message.supportKernel || "gaussian",
-      ...(Array.isArray(message.evidencePairs) ? { evidencePairs: message.evidencePairs } : {})
-    }), needsVienna(message) ? pairProgress(message, 58, 94, null, "bonus-matrix") : undefined);
+      supportKernel: kernel,
+      evidencePairs: message.evidencePairs,
+      saturatingQ: message.saturatingQ
+    }), vienna ? pairProgress(kernel, 58, 94, null, "bonus-matrix") : undefined);
     const result = JSON.parse(String(response));
     result.runtimeLoadMs = runtimeLoadMs;
     result.elapsedMs = Date.now() - requestStartedAt;
@@ -286,6 +302,9 @@ async function runBonusMatrixExport(message) {
     };
     if (result.engineVersion !== EXPECTED_CPLFOLD_REVISION || result.bridgeVersion !== EXPECTED_BRIDGE_VERSION) {
       throw new Error("The loaded CPLfold source does not match this web worker build.");
+    }
+    if (!result.evidence || result.evidence.supportKernel !== kernel) {
+      throw new Error("The CPLfold runtime did not export the requested read-support kernel. Reload the runtime.");
     }
 
     postProgress("Preparing the downloadable FASTA and bonus matrix", 96, {
@@ -469,32 +488,39 @@ async function initialiseRuntime() {
   }
 }
 
-// The rnacofold and duplex read-support kernels run ViennaRNA's own Python
-// module (import RNA) on each chimera's arms, as the desktop does. Its wheel
-// (scripts/build-vienna-pyodide.sh) is loaded on first use only: about 1.9 MB,
-// checked by Pyodide against the SHA-256 in pyodide-lock.json.
-const VIENNA_KERNELS = ["rnacofold", "duplex"];
-let viennaPromise = null;
-
-function needsVienna(message) {
-  return message.evidenceMode === "hyb-blocks"
-    && VIENNA_KERNELS.indexOf(message.supportKernel) !== -1
-    && !Array.isArray(message.evidencePairs);
+function requestedSupportKernel(value) {
+  const kernel = value == null || value === "" ? globalThis.Hyb2SupportKernels.defaultKernel : String(value).trim().toLowerCase();
+  if (!kernelOption(kernel)) {
+    throw new Error("Choose a supported CPLfold read-support kernel.");
+  }
+  return kernel;
 }
 
-function viennaStage(message) {
-  return message.supportKernel === "duplex" ? "RNAduplex of each chimera's arms" : "RNAcofold of each chimera's arms";
+// Both pair estimators use the same locally bundled, SHA-verified ViennaRNA wheel.
+let viennaPromise = null;
+
+function kernelOption(kernel) {
+  return globalThis.Hyb2SupportKernels.options.find(option => option.value === kernel);
+}
+
+function needsVienna(message, kernel) {
+  // Only omission requests an arm fold. Pass explicit counts, including []
+  // and invalid inputs, to the bridge for exactly the same validation as native.
+  return message.evidenceMode === "hyb-blocks" && !!kernelOption(kernel).pairModel && message.evidencePairs === undefined;
+}
+
+function pairStage(kernel) {
+  return kernelOption(kernel).pairModel + " of each chimera's arms";
 }
 
 // progress(blocksDone, blocks) for the bridge: the pair step's share of the
 // bar runs from `from` to `to` %; done() follows the last block.
-function pairProgress(message, from, to, done, operation) {
-  const stage = viennaStage(message);
+function pairProgress(kernel, from, to, done, operation) {
   return function (completed, total) {
     const finished = Number(completed) >= Number(total);
-    postProgress(stage + " " + Number(completed).toLocaleString("en-US") + " / " + Number(total).toLocaleString("en-US"),
+    postProgress(pairStage(kernel) + " " + Number(completed).toLocaleString("en-US") + " / " + Number(total).toLocaleString("en-US"),
       from + Math.round((to - from) * Math.min(1, Number(completed) / Math.max(1, Number(total)))),
-      Object.assign({ phase: message.supportKernel === "duplex" ? "rna-duplex" : "rna-cofold",
+      Object.assign({ phase: kernelOption(kernel).pairModel === "RNAcofold" ? "rna-cofold" : "rna-duplex",
         completed: Number(completed), total: Number(total) }, operation ? { operation: operation } : {}));
     if (finished && done) {
       done();
@@ -502,10 +528,7 @@ function pairProgress(message, from, to, done, operation) {
   };
 }
 
-async function ensureVienna(runtime, message, operation) {
-  if (!needsVienna(message)) {
-    return;
-  }
+async function ensureVienna(runtime, operation) {
   if (!viennaPromise) {
     postProgress("Loading the local ViennaRNA Python module", 40, Object.assign({ phase: "viennarna" },
       operation ? { operation: operation } : {}));
@@ -579,13 +602,7 @@ function requestedMaximum(value) {
   return maximum;
 }
 
-function validateSequence(sequence, maximum) {
-  if (!sequence) {
-    throw new Error("Choose a valid RNA sequence first.");
-  }
-  if (/[^ACGU]/.test(sequence)) {
-    throw new Error("CPLfold accepts only A, C, G and U.");
-  }
+function validateSequenceLength(sequence, maximum) {
   if (sequence.length > HARD_MAX_SEQUENCE_LENGTH) {
     throw new Error(
       "Browser CPLfold has a hard safety ceiling of " + HARD_MAX_SEQUENCE_LENGTH +
@@ -607,7 +624,11 @@ function normaliseInput(message) {
     throw new Error("cofold must be a boolean.");
   }
   const clean = function (value) {
-    return String(value === undefined || value === null ? "" : value).replace(/\s/g, "").toUpperCase().replace(/T/g, "U");
+    if (value != null && typeof value !== "string") throw new Error("RNA sequence must be text.");
+    const { sequence, invalid } = globalThis.Hyb2FoldText.read(value);
+    const bad = invalid.filter(base => base !== "&"); // the strand layout below validates the separator
+    if (bad.length) throw new Error("RNA sequence contains unsupported symbols: " + bad.join(", "));
+    return sequence;
   };
   let sequence = clean(message.sequence);
   let cutpoint = message.cutpoint;
@@ -633,8 +654,8 @@ function normaliseInput(message) {
     cutpoint = strands[0].length;
     sequence = strands.join("");
   }
-  if (!sequence || /[^ACGU]/.test(sequence)) {
-    throw new Error("CPLfold accepts nonempty RNA strands containing only A, C, G and U.");
+  if (!sequence) {
+    throw new Error("CPLfold requires a nonempty RNA sequence.");
   }
   if (cutpoint !== undefined && (!Number.isInteger(cutpoint) || cutpoint <= 0 || cutpoint >= sequence.length)) {
     throw new Error("cutpoint must separate two nonempty RNA strands.");

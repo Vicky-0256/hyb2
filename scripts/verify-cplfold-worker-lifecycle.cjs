@@ -27,11 +27,12 @@ const window = {
   clearTimeout: function (id) { if (timers[id - 1]) timers[id - 1].cleared = true; },
   Hyb2Pages: {
     getStructureSequence: function (state) {
-      return { sequence: state.sequence, label: "test", sourceSegments: null, evidenceDatasets: [], evidenceDatasetIds: [] };
+      return { sequence: state.sequence, label: "test", assembly: state.assembly, sourceSegments: null, evidenceDatasets: [], evidenceDatasetIds: [] };
     }
   }
 };
 const context = vm.createContext({ Worker: FakeWorker, window: window, Promise: Promise });
+vm.runInContext(fs.readFileSync(path.join(repository, "web", "support-kernels.js"), "utf8"), context);
 vm.runInContext(fs.readFileSync(path.join(repository, "web", "structure-controller.js"), "utf8"), context, { filename: "structure-controller.js" });
 const S = window.Hyb2Structure;
 
@@ -108,13 +109,71 @@ assert.equal(S.predict(state, api), true);
 const fifth = workers[4];
 fifth.onmessage({ data: complete });
 const prepared = { sequence: state.sequence, assembly: { evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }] } };
+const prediction = state.structure.result;
 let exported = null;
 assert.equal(S.downloadCplfoldBonusMatrix(state, api, prepared, function (result) { exported = result; }), true);
 assert.equal(workers.length, 5);
 assert.equal(fifth.messages.at(-1).type, "cplfold-bonus-matrix");
+const matrixRequests = fifth.messages.length;
+assert.equal(S.downloadCplfoldBonusMatrix(state, api, prepared), false, "a second export cannot replace an active request");
+assert.equal(fifth.messages.length, matrixRequests);
 fifth.onmessage({ data: { type: "bonus-matrix-complete", result: { ok: true } } });
-assert.deepEqual(JSON.parse(JSON.stringify(exported)), { ok: true });
+fifth.onmessage({ data: { type: "bonus-matrix-complete", result: { stale: true } } });
+assert.deepEqual(exported, { ok: true }, "completion releases the request; late replies cannot download again");
+assert.equal(state.structure.result, prediction);
+assert.equal(state.structure.status, "complete");
+assert.equal(state.structureWorker, null);
 assert.equal(fifth.terminated, false);
+
+// Cancel A during post-scoring. B reuses the prediction worker, not A's scorer.
+for (const scoreFails of [false, true]) {
+  const active = cplfoldState();
+  active.structure.cplfoldEvidence = "hyb-blocks";
+  active.assembly = prepared.assembly;
+  assert.equal(S.predict(active, api), true);
+  fifth.onmessage({ data: complete });
+  const oldScorer = active.structureWorker;
+  assert.equal(oldScorer.messages.at(-1).type, "comrades-evidence");
+  S.cancel(active);
+  active.sequence = "AAAAACCCCC";
+  assert.equal(S.predict(active, api), true);
+  assert.equal(active.structureWorker, fifth);
+  const toastCount = toasts.length;
+  oldScorer.onerror();
+  oldScorer.onmessage({ data: { type: "complete", evidence: { label: "A" } } });
+  assert.equal(active.structure.status, "running");
+  assert.equal(active.structure.result, null);
+  assert.equal(active.structureWorker, fifth);
+  assert.equal(toasts.length, toastCount);
+
+  fifth.onmessage({ data: { type: "complete", result: { engine: "CPLfold", dotBracket: ".........." } } });
+  const scorer = active.structureWorker;
+  if (scoreFails) scorer.onerror();
+  else scorer.onmessage({ data: { type: "complete", evidence: { label: "B" } } });
+  assert.equal(active.structure.status, "complete");
+  assert.equal(active.structure.result.sequence, "AAAAACCCCC");
+  assert.equal(active.structure.result.dotBracket, "..........");
+  assert.equal(active.structure.result.comradesEvidence?.label, scoreFails ? undefined : "B");
+  assert.equal(toasts.length, toastCount + 1);
+}
+
+// Workspace teardown releases an idle runtime, unlike ordinary cancellation.
+S.cancel(state);
+assert.equal(fifth.terminated, false);
+S.terminate(state);
+assert.equal(fifth.terminated, true, "unmount must release the idle Pyodide worker");
+const remounted = cplfoldState();
+remounted.structure.cplfoldEvidence = "hyb-blocks";
+remounted.assembly = prepared.assembly;
+assert.equal(S.predict(remounted, api), true);
+const fresh = remounted.structureWorker;
+assert.notEqual(fresh, fifth);
+fresh.onmessage({ data: complete });
+const scoring = remounted.structureWorker;
+assert.equal(scoring.messages.at(-1).type, "comrades-evidence");
+S.terminate(remounted);
+assert.equal(scoring.terminated, true, "unmount must cancel active post-scoring");
+assert.equal(fresh.terminated, true, "the idle runtime must also stop during post-scoring teardown");
 
 // Desktop native CPLfold: cancel asks the shell to stop the job.
 (async function () {
@@ -128,8 +187,9 @@ assert.equal(fifth.terminated, false);
     cancelCplfold: function (job) { cancelled.push(job); return Promise.resolve(true); }
   };
   const nativeState = cplfoldState();
+  const beforeNative = workers.length;
   assert.equal(S.predict(nativeState, api), true);
-  assert.equal(workers.length, 5, "native CPLfold does not start a browser worker");
+  assert.equal(workers.length, beforeNative, "native CPLfold does not start a browser worker");
   const runId = nativeState.structure.runId;
   S.cancel(nativeState);
   assert.equal(cancelled.length, 1, "cancelling a native job calls the desktop cancel hook");

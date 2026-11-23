@@ -1053,14 +1053,16 @@
   // its first coordinate; the first 300 nt are shown (Copy takes them all)
   const SEQUENCE_PREVIEW = 300;
   function renderGroupedSequence(sequence, start) {
-    const value = String(sequence || "");
+    const text = String(sequence || "");
+    const value = /[\uD800-\uDBFF]/.test(text) ? Array.from(text) : text;
     const shown = value.slice(0, SEQUENCE_PREVIEW);
     const first = Number(start) || 1;
     const lines = [];
     for (let offset = 0; offset < shown.length; offset += 50) {
       const groups = [];
       for (let group = offset; group < Math.min(shown.length, offset + 50); group += 10) {
-        groups.push(escape(shown.slice(group, Math.min(group + 10, offset + 50))));
+        const bases = shown.slice(group, Math.min(group + 10, offset + 50));
+        groups.push(escape(typeof bases === "string" ? bases : bases.join("")));
       }
       lines.push('<span class="sequence-line"><span class="sequence-position" aria-hidden="true">' + format(first + offset) + "</span>" + groups.join(" ") + "</span>");
     }
@@ -1178,6 +1180,9 @@
     ];
     const manualConstraintMode = !cplfold && !iris && structure.constraintMode === "manual-hard-base-pairs";
     const guidedConstraintMode = !cplfold && !iris && structure.constraintMode === "hyb-guided";
+    const thermo = globalThis.Hyb2EngineParameters[guidedConstraintMode ? "comrades" : "vienna"];
+    const { temperature = thermo.defaults.temperature, minimumLoop = thermo.defaults.minLoopSize,
+      randomFoldCount = globalThis.Hyb2EngineParameters.comrades.defaults.randomFoldCount } = structure;
     const selectableRecords = ((state.view && state.view.structureRecords) || []).slice(0, 500);
     const selectedStructureRecord = findRecord(state, structure.selectedRecordIndex);
     if (selectedStructureRecord && !selectableRecords.some(function (record) { return record.index === selectedStructureRecord.index; })) {
@@ -1188,7 +1193,7 @@
     const lengthNotice = structureLengthNotice(length, structure.allowLarge, iris ? "iris" : cplfold ? "cplfold" : "viennarna", structure, sequenceInfo.cutpoint);
     const running = structure.status === "running";
     const capacityRunning = running && structure.operation === "capacity";
-    const largeEnsembleNeedsConsent = guidedConstraintMode && Number(structure.randomFoldCount) > 100 && !structure.allowLargeEnsemble;
+    const largeEnsembleNeedsConsent = guidedConstraintMode && Number(randomFoldCount) > 100 && !structure.allowLargeEnsemble;
     const cplfoldLengthUnavailable = cplfold && cplfoldCannotRun(length, structure);
     const irisIssue = iris && (length > 300 ? "IRIS browser limit is 300 nt; select a smaller region." : (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length) ? "IRIS requires HYB evidence inside the selected reference region." : "");
     const unavailable = !!irisIssue || !sequenceInfo.sequence || !!sequenceInfo.error ||
@@ -1253,7 +1258,7 @@
 
     const optionsColumn = [
       iris ? renderIrisSetup(structure) : "",
-      !cplfold && !iris ? '<div class="control-grid structure-thermo-grid"><label class="control-field"><span>Temperature</span><input type="number" min="0" max="100" step="0.1" value="' + attribute(structure.temperature) + '" data-feature="structure-control" data-key="temperature" aria-label="Folding temperature in degrees Celsius"><small>°C</small></label><label class="control-field"><span>Minimum hairpin loop</span><input type="number" min="0" max="12" value="' + attribute(structure.minimumLoop) + '" data-feature="structure-control" data-key="minimumLoop" aria-label="Minimum unpaired bases in a hairpin loop"><small>unpaired bases</small></label></div>' : "",
+      !cplfold && !iris ? '<div class="control-grid structure-thermo-grid"><label class="control-field"><span>Temperature</span><input type="number" ' + rangeAttributes(thermo.ranges.temperature) + ' step="0.1" value="' + attribute(temperature) + '" data-feature="structure-control" data-key="temperature" aria-label="Folding temperature in degrees Celsius"><small>°C</small></label><label class="control-field"><span>Minimum hairpin loop</span><input type="number" ' + rangeAttributes(thermo.ranges.minLoopSize) + ' value="' + attribute(minimumLoop) + '" data-feature="structure-control" data-key="minimumLoop" aria-label="Minimum unpaired bases in a hairpin loop"><small>unpaired bases</small></label></div>' : "",
       cplfold ? renderCplfoldSetup(structure, sequenceInfo, "options") : "",
       guidedConstraintMode ? renderGuidedStructureSetup(structure, rnas, sequenceInfo, "options") : "",
       manualConstraintMode ? '<div class="structure-constraint-editor"><label class="control-field" for="structure-constraint-text"><span>Manual hard base pairs</span><textarea id="structure-constraint-text" class="sequence-textarea" rows="5" maxlength="20000" spellcheck="false" autocapitalize="off" autocomplete="off" data-feature="structure-control" data-key="constraintText" aria-describedby="structure-constraint-help" placeholder="4-18\n7-15">' + escape(structure.constraintText || "") + '</textarea><small id="structure-constraint-help">One 1-based i-j pair per line, relative to the prepared sequence shown here. Pairs must be canonical, non-crossing, use each nucleotide once, and satisfy the minimum loop size.</small></label></div>' : "",
@@ -1328,11 +1333,13 @@
     }
     if (cplfold) {
       const assembly = sequenceInfo.assembly;
-      parts.push(structure.cplfoldEvidence === "none" ? "sequence only" : "HYB blocks (" + countLabel(assembly ? assembly.eligibleRecordCount : 0, "row") + ")");
-      parts.push(structure.cplfoldAllowPseudoknot === false ? "secondary only" : "pseudoknots allowed");
-      parts.push("beam " + profileValue(structure.cplfoldBeam, "20"));
+      parts.push(structure.cplfoldEvidence === "none" ? "sequence only" : "HYB evidence (" + countLabel(assembly ? assembly.eligibleRecordCount : 0, "row") + ")");
+      const pk = globalThis.Hyb2CplfoldSettings.formTopology(structure);
+      parts.push(pk === null ? "choose a structure topology" : pk ? "pseudoknots allowed" : "secondary only");
+      parts.push("beam " + profileValue(structure.cplfoldBeam, cplfoldCatalog(structure).defaults.beamSize));
     } else {
-      parts.push((structure.engine === "iris" ? "37" : profileValue(structure.temperature, "37")) + " °C");
+      const { temperature = globalThis.Hyb2EngineParameters[guidedConstraintMode ? "comrades" : "vienna"].defaults.temperature } = structure;
+      parts.push((structure.engine === "iris" ? "37" : temperature) + " °C");
     }
     if ((sequenceInfo.evidenceDatasets || []).length) {
       parts.push("evidence " + sequenceInfo.evidenceDatasets.join(" + "));
@@ -1511,11 +1518,20 @@
 
   // "About this method ▸": the long explanations, one fold per method.
   function renderStructureAbout(structure, cplfold, guidedConstraintMode, manualConstraintMode) {
-    const allowPseudoknot = structure.cplfoldAllowPseudoknot !== false;
+    const allowPseudoknot = cplfold && globalThis.Hyb2CplfoldSettings.formTopology(structure);
     const guided = structure.cplfoldEvidence === "hyb-blocks";
     const cofold = cplfold && structure.cplfoldMode === "cofold";
+    if (allowPseudoknot === null) return '<p class="card-note">Choose a structure topology before folding or downloading local inputs.</p>';
+    let localRun = "";
+    if (cplfold) {
+      try {
+        localRun = 'Run <code>' + escape(cplfoldLocalCommand(structure, guided)) + '</code> locally.';
+      } catch (error) {
+        localRun = escape(error.message);
+      }
+    }
     const status = cofold
-      ? '<div class="fold-status fold-status-cplfold"><strong>CPLcofold · two RNA molecules</strong><p>Nested candidates use Turner cofold energies at 37 °C. Optional pseudoknot search uses experimental Turner/DP03 or DP09 ranking scores, not validated binding free energies. HYB evidence stays within each arm’s strand.</p></div>'
+      ? '<div class="fold-status fold-status-cplfold"><strong>CPLcofold · two RNA molecules</strong><p>Nested candidates use Turner cofold energies at 37 °C. Optional pseudoknot search uses experimental Turner/' + escape(cplfoldCatalog(structure).models.map(option => option.value).sort().join(" or ")) + ' ranking scores, not validated binding free energies. In guided mode, the two arms of a read can map to the same strand or to different strands.</p></div>'
       : cplfold
       ? '<div class="fold-status fold-status-cplfold"><strong>Pure-Python CPLfold mode</strong><p>' + (allowPseudoknot ? "LinearFold generates phase-1 candidates; a second constrained phase searches for crossing base pairs, and CPLfold/HotKnots energy models rank nested and pseudoknotted structures." : "LinearFold generates phase-1 secondary-structure candidates and skips the constrained Phase 2 pseudoknot search; Turner 2004 energies rank the candidates.") + " The computation runs in a dedicated Pyodide worker.</p></div>"
       : guidedConstraintMode
@@ -1524,7 +1540,7 @@
       ? '<div class="fold-status fold-status-constraints"><strong>Manual hard-pair mode</strong><p>ViennaRNA will enforce the pairs you enter before calculating the MFE. HYB2 Web Lite does not infer these pairs from HYB or RNAcofold evidence.</p></div>'
       : '<div class="fold-status fold-status-mfe"><strong>Plain minimum-free-energy mode</strong><p>Runs the deployed ViennaRNA WebAssembly engine in a dedicated worker without base-pair constraints.</p></div>';
     const scope = cplfold
-      ? '<p>CPLfold runs here without its fast compiled core, so this browser folds short regions only: ' + escape(cplfoldLimitSentence(cplfoldCapacity(structure))) + '. With HYB evidence, each eligible record adds a bonus that pulls the bases of its two arms together. This is the vendored pure-Python CPLfold implementation running without Numba JIT. The capacity test measures a representative local run and estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. HYB-guided mode converts each eligible row\'s two prepared intervals into the original IRIS-style Gaussian, symmetric, log1p bonus matrix. For longer or Numba-accelerated runs, use Download local inputs: it exports the prepared FASTA and, in HYB-guided mode, the same sparse bonus matrix as <code>cplfold-bonus-matrix.tsv</code>. Run <code>' + escape(cplfoldLocalCommand(structure, guided)) + '</code> locally. Sequence-only mode requires only the FASTA. CPLfold\'s own code is GPL-2.0-or-later; its LinearFold-derived parser keeps LinearFold\'s terms (see the repository\'s third-party notices).</p><p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. The worker is released after each result to return its memory; later runs reinitialise from the browser cache. Results and candidates remain in this tab.</p>' + renderCplfoldLocalCta(guided)
+      ? '<p>The browser runs pure-Python CPLfold without Numba JIT: ' + escape(cplfoldLimitSentence(cplfoldCapacity(structure))) + '. The capacity test estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. In HYB-guided mode, the selected read-support kernel sets the folding bonus. For longer or Numba-accelerated runs, Download local inputs exports the prepared FASTA and, for guided runs, the sparse <code>cplfold-bonus-matrix.tsv</code>. ' + localRun + ' Sequence-only mode requires only the FASTA. CPLfold\'s own code is GPL-3.0-or-later; its LinearFold-derived parser keeps LinearFold\'s terms (see the repository\'s third-party notices).</p><p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. Results and candidates remain in this tab.</p>' + renderCplfoldLocalCta(guided)
       : guidedConstraintMode
       ? "<p>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. UNAFold remains an optional external CLI compatibility path, and pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</p>"
       : "<p>Choose COMRADES(ViennaRNA) to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</p>";
@@ -1545,13 +1561,34 @@
       (region ? '<button class="button button-secondary" type="button" data-feature-action="use-iris-evidence-region">Use nearby HYB-supported region ' + escape(region.rna + ':' + region.start + '-' + region.end) + '</button><p class="card-note">Changes the interval only. Review it, then run IRIS. Having HYB evidence does not guarantee enough candidate structures for an ensemble.</p>' : '<p class="card-note">Choose another RNA or dataset containing a complete arm pair within 300 nt. Two separated regions are not supported by browser IRIS.</p>');
   }
 
+  function rangeAttributes([min, max]) {
+    return 'min="' + attribute(min) + '" max="' + attribute(max) + '"';
+  }
+
+  function numberBounds([min, max], step) {
+    return { min, max, step };
+  }
+
+  function inRange([min, max]) {
+    return option => Number(option.value) >= min && Number(option.value) <= max;
+  }
+
+  function numericPresets(defaultValue, range, labels) {
+    return Object.entries({ ...labels, [defaultValue]: "browser default" })
+      .map(([value, label]) => ({ value, label: value + " · " + label })).filter(inRange(range));
+  }
+
   function renderIrisSetup(structure) {
+    const {ranges, defaults} = globalThis.Hyb2EngineParameters.iris;
+    // Like the native picker, show hundredths, below the exclusive upper bound.
+    const [lower, upper] = ranges.fraction;
+    const fraction = numberBounds([lower, (Math.ceil(upper * 100) - 1) / 100], 0.05);
     return '<div class="control-grid">' +
-      renderTextControl("Ensemble size K", "irisK", structure.irisK || "2", "2", "structure-control", "number", {min:1,max:3,step:1}) +
-      renderTextControl("Candidate count C", "irisC", structure.irisC || "20", "20", "structure-control", "number", {min:1,max:50,step:1}) +
-      renderTextControl("Support quantile", "irisFraction", structure.irisFraction || "0.75", "0.75", "structure-control", "number", {min:0,max:0.99,step:0.05}) +
-      renderTextControl("Stem lengths", "irisKRange", structure.irisKRange || "4 5 6 7", "4 5 6 7", "structure-control") +
-      '</div><p class="card-note">K selects 1–3 representative structures. C retains up to 50 candidates; higher values increase work. All compatible single- and double-stem constraints are considered within the browser limits.</p>';
+      renderTextControl("Ensemble size K", "irisK", structure.irisK || defaults.K, defaults.K, "structure-control", "number", numberBounds(ranges.K, 1)) +
+      renderTextControl("Candidate count C", "irisC", structure.irisC || defaults.C, defaults.C, "structure-control", "number", numberBounds([Math.max(ranges.C[0], Number(structure.irisK) || defaults.K), ranges.C[1]], 1)) +
+      renderTextControl("Support quantile", "irisFraction", structure.irisFraction ?? defaults.fraction, defaults.fraction, "structure-control", "number", fraction) +
+      renderTextControl("Stem lengths", "irisKRange", structure.irisKRange || defaults.kRange, defaults.kRange, "structure-control") +
+      '</div><p class="card-note">K selects ' + ranges.K.join('–') + ' representative structures. C retains up to ' + ranges.C[1] + ' candidates; higher values increase work. All compatible single- and double-stem constraints are considered within the browser limits.</p>';
   }
 
   function renderIrisEnsemble(result) {
@@ -1561,68 +1598,82 @@
       '</tbody></table></div><p class="card-note">Ensemble mean energy: '+Number(result.ensemble.meanEnergy).toFixed(2)+' kcal/mol · '+format(result.ensemble.candidateCount)+' candidates · '+countLabel(result.ensemble.testedEnsembles,"ensemble")+' tested</p>';
   }
 
+  function cplfoldKernelOption(kernel) {
+    return globalThis.Hyb2SupportKernels.options.find(option => option.value === kernel);
+  }
+
+  function cplfoldCatalog(structure) {
+    return globalThis.Hyb2EngineParameters[structure && structure.cplfoldMode === "cofold" ? "cplcofold" : "cplfold"];
+  }
+
   function renderCplfoldSetup(structure, sequenceInfo, part) {
     const guided = structure.cplfoldEvidence === "hyb-blocks";
-    const allowPseudoknot = structure.cplfoldAllowPseudoknot !== false;
+    const allowPseudoknot = globalThis.Hyb2CplfoldSettings.formTopology(structure);
     const assembly = sequenceInfo.assembly;
     if (part === "method") {
+      const kernel = profileValue(structure.cplfoldKernel, globalThis.Hyb2SupportKernels.defaultKernel);
+      const kernelOptions = globalThis.Hyb2SupportKernels.options.slice();
+      const validKernel = kernelOptions.some(function (option) { return option.value === kernel; });
+      if (!validKernel) kernelOptions.unshift({ value: "", label: "Choose a supported kernel", disabled: true });
       return [
         '<section class="guided-fold-controls cplfold-controls" aria-label="CPLfold setup">',
         renderSelectControl("Experimental evidence", "cplfoldEvidence", structure.cplfoldEvidence || "hyb-blocks", [
-          { value: "hyb-blocks", label: "HYB block bonus matrix" },
+          { value: "hyb-blocks", label: "HYB-guided bonus matrix" },
           { value: "none", label: "Sequence only" }
         ], "structure-control"),
         // syncDefaultStructureEvidence chose sequence only: say so, with the way back
         structure.evidenceFallback && !guided ? '<div class="notice structure-evidence-fallback" role="note"><span>No HYB row lies fully inside the default region (' + range(structure.start, structure.end) + '), so this fold uses the sequence only. Set a region that holds HYB rows to use them.</span><button class="quiet-button" type="button" data-feature-action="structure-use-hyb-evidence">Switch back to HYB evidence</button></div>' : "",
-        guided ? renderSelectControl("Read support (B_ij)", "cplfoldKernel", structure.cplfoldKernel || "gaussian", [
-          { value: "gaussian", label: "Gaussian around arm centres · IRIS (default)" },
-          { value: "block", label: "Full arm blocks" },
-          { value: "block-normalized", label: "Full arm blocks ÷ √(arm lengths)" },
-          { value: "rnacofold", label: "RNAcofold pairs of each read · COMRADES" },
-          { value: "duplex", label: "RNAduplex pairs, saturating · COMRADES (as HYB2 Desktop)" }
-        ], "structure-control") : "",
-        guided ? '<p class="card-note">' + escape(cplfoldKernelNote(structure.cplfoldKernel)) + '</p>' : "",
-        guided ? '<div class="guided-input-summary' + (assembly && assembly.eligibleRecordCount ? "" : " is-empty") + '"><strong>' + format(assembly ? assembly.eligibleRecordCount : 0) + ' eligible HYB row' + (assembly && assembly.eligibleRecordCount === 1 ? "" : "s") + '</strong><span>one contribution per row · overlap_score and collapsed raw-read count are not weights · ' + (structure.cplfoldMode === "cofold" ? "two RNA regions; read support stays within each strand" : "single reference region") + '</span></div>' : "",
+        guided ? renderSelectControl("Read support (B_ij)", "cplfoldKernel", validKernel ? kernel : "", kernelOptions, "structure-control") : "",
+        guided ? '<p class="card-note">' + (validKernel ? escape(cplfoldKernelNote(kernel)) : "The previously selected kernel is unavailable. Choose a read-support method before folding or exporting a bonus matrix.") + '</p>' : "",
+        guided ? '<div class="guided-input-summary' + (assembly && assembly.eligibleRecordCount ? "" : " is-empty") + '"><strong>' + format(assembly ? assembly.eligibleRecordCount : 0) + ' eligible HYB row' + (assembly && assembly.eligibleRecordCount === 1 ? "" : "s") + '</strong><span>overlap_score and collapsed raw-read count are not weights · ' + (structure.cplfoldMode === "cofold" ? "two RNA regions; each read arm maps to one strand" : "single reference region") + '</span></div>' : "",
         guided ? renderEvidenceDatasets(structure, sequenceInfo) : "",
         guided && structure.cplfoldMode === "cofold" && structure.workflow === "homodimer" && structure.homodimerOnly ? '<p class="card-note">Homodimer filter active: only HYB rows marked as homodimers (overlap score ≥ 5) contribute. Choose another workflow or Custom to include all eligible rows.</p>' : "",
         "</section>"
       ].join("");
     }
+    const { ranges, defaults, models, defaultModel } = cplfoldCatalog(structure);
+    const model = String(structure.cplfoldEnergyModel || defaultModel).toUpperCase();
+    const validModel = models.some(option => option.value === model);
     return [
       renderCplfoldTopologyControl(allowPseudoknot),
       '<details class="structure-advanced" data-open-key="cplfold-advanced"' + openAttr("cplfold-advanced") + '>',
       '<summary>Advanced settings <span class="structure-advanced-values">' + escape(cplfoldAdvancedSummary(structure)) + '</span></summary>',
       '<p class="card-note">Defaults suit most RNAs. Evidence alpha sets how strongly HYB evidence pulls bases together (0 = energy only); beam and phase-1 candidates trade speed for a broader search; the energy window keeps candidates within that many kcal/mol of the best.</p>',
       '<div class="control-grid">',
-      renderSelectControl("Beam size", "cplfoldBeam", String(structure.cplfoldBeam || "20"), [
-        { value: "10", label: "10 · faster" },
-        { value: "20", label: "20 · browser default" },
-        { value: "50", label: "50 · slower" }
-      ], "structure-control"),
-      renderSelectControl("Phase-1 candidates", "cplfoldMaxPhase1", String(structure.cplfoldMaxPhase1 || "3"), [
-        { value: "1", label: "1 · quickest" },
-        { value: "3", label: "3 · browser default" },
-        { value: "5", label: "5 · broader search" }
-      ], "structure-control"),
+      renderSelectControl("Beam size", "cplfoldBeam", String(structure.cplfoldBeam ?? defaults.beamSize),
+        numericPresets(defaults.beamSize, ranges.beamSize, { 10: "faster", 50: "slower" }), "structure-control"),
+      renderSelectControl("Phase-1 candidates", "cplfoldMaxPhase1", String(structure.cplfoldMaxPhase1 ?? defaults.maxPhase1),
+        numericPresets(defaults.maxPhase1, ranges.maxPhase1, { 1: "quickest", 5: "broader search" }), "structure-control"),
       "</div>",
-      '<div class="control-grid">' + renderTextControl("Energy window", "cplfoldEnergyDelta", structure.cplfoldEnergyDelta || "5", "5", "structure-control", "number", { min: 0, max: 50, step: 0.5 }) + renderSelectControl("Energy model", "cplfoldEnergyModel", structure.cplfoldEnergyModel || "DP09", [
-        { value: "DP09", label: "DP09 · recommended" },
-        { value: "DP03", label: "DP03" },
-        { value: "CC06", label: "CC06" },
-        { value: "CC09", label: "CC09" },
-        { value: "RE", label: "Rivas–Eddy" }
-      ].filter(function (option) { return structure.cplfoldMode !== "cofold" || ["DP03", "DP09"].indexOf(option.value) !== -1; }), "structure-control") + "</div>",
-      '<div class="control-grid">' + renderTextControl("Evidence alpha", "cplfoldAlpha", structure.cplfoldAlpha || "0.5", "0.5", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + renderTextControl("Pseudoknot beta", "cplfoldBeta", structure.cplfoldBeta || "0", "0", "structure-control", "number", { min: 0, max: 1, step: 0.05 }) + "</div>",
+      '<div class="control-grid">' + renderTextControl("Energy window", "cplfoldEnergyDelta", structure.cplfoldEnergyDelta ?? defaults.energyDelta, defaults.energyDelta, "structure-control", "number", numberBounds(ranges.energyDelta, 0.5)) + renderSelectControl("Energy model", "cplfoldEnergyModel", validModel ? model : "", validModel ? models : [{value: "", label: "Choose a supported model", disabled: true}, ...models], "structure-control") + "</div>",
+      '<div class="control-grid">' + renderTextControl("Evidence alpha", "cplfoldAlpha", structure.cplfoldAlpha ?? defaults.alpha, defaults.alpha, "structure-control", "number", numberBounds(ranges.alpha, 0.05)) + renderTextControl("Pseudoknot beta", "cplfoldBeta", structure.cplfoldBeta ?? defaults.beta, defaults.beta, "structure-control", "number", numberBounds(ranges.beta, 0.05)) + "</div>",
       '</details>'
     ].join("");
   }
 
+  // Result labels include historical matrices; they are not the list of selectable kernels.
   function cplfoldKernelLabel(kernel) {
-    return { "block": "full arm blocks", "block-normalized": "full arm blocks ÷ √(arm lengths)",
-      "rnacofold": "RNAcofold pairs", "duplex": "RNAduplex pairs (saturating)" }[kernel] || "Gaussian arm support";
+    if (!kernel || kernel === "gaussian") return "Gaussian arm support";
+    const labels = { "block": "full arm blocks", "block-normalized": "full arm blocks ÷ √(arm lengths)",
+      "rnacofold": "RNAcofold pairs", "duplex": "RNAduplex pairs (saturating)", "comrades": "COMRADES (RNAcofold, saturating)" };
+    return Object.hasOwn(labels, kernel) ? labels[kernel] : cplfoldKernelOption(kernel)?.label || kernel;
   }
 
-  // What each read-support kernel adds to B_ij; every kernel then takes log(1 + x).
+  function cplfoldBonusKind(evidence) {
+    if (evidence?.source !== "hyb-block-intervals") return "none";
+    const kernel = evidence.supportKernel || "gaussian"; // historical results omitted the Gaussian kernel
+    if (Number.isFinite(evidence.saturatingQ) || ["duplex", "comrades"].includes(kernel)) return "saturating_hyb_bonus";
+    if (["block", "block-normalized", "gaussian", "rnacofold"].includes(kernel)) return "log1p_hyb_bonus";
+    return "hyb_bonus";
+  }
+
+  function cplfoldBonusLabel(evidence, pairDetail) {
+    const kind = cplfoldBonusKind(evidence);
+    if (kind === "saturating_hyb_bonus") return pairDetail ? "saturating pair bonus" : "saturating bonus";
+    return kind === "log1p_hyb_bonus" ? "log1p bonus" : "HYB bonus";
+  }
+
+  // What each read-support kernel adds to B_ij.
   // The kernels differ in total support, so alpha is not comparable across them.
   function cplfoldKernelNote(kernel) {
     return cplfoldKernelDescription(kernel) +
@@ -1635,12 +1686,14 @@
         return "Each read adds 1 to every base pair between its two arms, so all registers of a helix between the arms get the same support.";
       case "block-normalized":
         return "Each read adds 1 / √(length of arm 1 × length of arm 2) to every base pair between its two arms, so a read's total grows with the square root of its block area rather than with the area.";
-      case "rnacofold":
-        return "The two arms of each read are cofolded with RNAcofold (37 °C), as COMRADES does; only the pairs it forms get support. RNAcofold runs once per read before CPLfold starts.";
       case "duplex":
-        return "The two arms of each read are paired with RNAduplex (37 °C, pairs between the arms only), the HYB2 pipeline's method; each base pair counts the reads that form it, and the count C becomes 3.6 C / (C + q) kcal/mol, q the mean of the top third of the counts. RNAduplex runs once per read before CPLfold starts.";
-      default:
+      case "comrades":
+        return (kernel === "comrades" ? "RNAcofold allows pairing within and between the two arms of a read at 37 °C. Only pairs between the arms count." : "RNAduplex pairs the two arms of each read at 37 °C without allowing pairs within either arm.") +
+          " The raw count C for each pair gives the saturating bonus B = 3.6 C / (C + q), where q is the count at half the maximum bonus. Each endpoint of a predicted pair adds min(C, 1,000,000) to the COMRADES score. The cap does not affect the bonus or drawing colours.";
+      case "gaussian":
         return "Each read adds a Gaussian around its two arm centres (σ = mean arm length / 6), as IRIS does; helices through the centres get the most support.";
+      default:
+        return "Read support method: " + cplfoldKernelLabel(kernel) + ".";
     }
   }
 
@@ -1651,13 +1704,14 @@
 
   // "beam 20 · 3 candidates · ±5 kcal/mol · DP09 · alpha 0.5 · beta 0 · defaults"
   function cplfoldAdvancedSummary(structure) {
+    const { defaults: d, defaultModel } = cplfoldCatalog(structure);
     const values = {
-      beam: String(structure.cplfoldBeam || "20"), phase1: String(structure.cplfoldMaxPhase1 || "3"),
-      delta: String(structure.cplfoldEnergyDelta || "5"), model: String(structure.cplfoldEnergyModel || "DP09"),
-      alpha: String(structure.cplfoldAlpha || "0.5"), beta: String(structure.cplfoldBeta || "0")
+      beam: structure.cplfoldBeam ?? d.beamSize, phase1: structure.cplfoldMaxPhase1 ?? d.maxPhase1,
+      delta: structure.cplfoldEnergyDelta ?? d.energyDelta, model: structure.cplfoldEnergyModel || defaultModel,
+      alpha: structure.cplfoldAlpha ?? d.alpha, beta: structure.cplfoldBeta ?? d.beta
     };
-    const defaults = values.beam === "20" && values.phase1 === "3" && Number(values.delta) === 5 && values.model === "DP09" &&
-      Number(values.alpha) === 0.5 && Number(values.beta) === 0;
+    const defaults = Number(values.beam) === d.beamSize && Number(values.phase1) === d.maxPhase1 && Number(values.delta) === d.energyDelta &&
+      values.model === defaultModel && Number(values.alpha) === globalThis.Hyb2EngineParameters.cplfold.defaults.alpha && Number(values.beta) === d.beta;
     return "beam " + values.beam + " · " + values.phase1 + " candidates · ±" + values.delta + " kcal/mol · " + values.model +
       " · alpha " + values.alpha + " · beta " + values.beta + (defaults ? " · defaults" : " · changed");
   }
@@ -1674,7 +1728,7 @@
         value: "false",
         title: "Secondary structure only",
         description: "Run Phase 1 candidates and skip pseudoknot search.",
-        selected: !allowPseudoknot
+        selected: allowPseudoknot === false
       }
     ];
     return '<fieldset class="cplfold-topology-control" aria-describedby="cplfold-topology-help"><legend>Structure topology</legend><div class="cplfold-topology-options" role="radiogroup" aria-label="CPLfold pseudoknot mode">' + options.map(function (option) {
@@ -1683,33 +1737,7 @@
   }
 
   function cplfoldLocalCommand(structure, guided) {
-    if (window.Hyb2StructureUI && typeof window.Hyb2StructureUI.localCplfoldCommand === "function") {
-      return window.Hyb2StructureUI.localCplfoldCommand(structure, guided);
-    }
-
-    const command = ["bin/cplfold", "--sequence-file", "cplfold-input.fasta"];
-    if (structure && structure.cplfoldMode === "cofold") {
-      command[0] = "bin/cplcofold";
-      command.push("--mode", structure.cplfoldAllowPseudoknot === false ? "standard" : "pseudoknot");
-    }
-    if (guided) {
-      command.push("--bonus-matrix-file", "cplfold-bonus-matrix.tsv");
-    }
-    command.push(
-      "--beam", profileValue(structure && structure.cplfoldBeam, "20"),
-      "--delta", profileValue(structure && structure.cplfoldEnergyDelta, "5"),
-      "--max-phase1", profileValue(structure && structure.cplfoldMaxPhase1, "3"),
-      "--max-phase2", "1",
-      "--model", profileValue(structure && structure.cplfoldEnergyModel, "DP09").toUpperCase(),
-      "--beta", profileValue(structure && structure.cplfoldBeta, "0")
-    );
-    if (guided) {
-      command.push("--alpha", profileValue(structure && structure.cplfoldAlpha, "0.5"));
-    }
-    if (structure && structure.cplfoldAllowPseudoknot === false) {
-      command.push("--no-pseudoknot");
-    }
-    return command.join(" ");
+    return globalThis.Hyb2CplfoldSettings.localCommand(structure, guided);
   }
 
   function formatCplfoldCommand(command) {
@@ -1741,7 +1769,8 @@
   function renderGuidedStructureSetup(structure, rnas, sequenceInfo, part) {
     const paired = structure.evidenceLayout === "paired";
     const assembly = sequenceInfo.assembly;
-    const randomFoldCount = Number(structure.randomFoldCount) || 0;
+    const { ranges, defaults } = globalThis.Hyb2EngineParameters.comrades;
+    const { randomFoldCount = defaults.randomFoldCount, constraintLimit = defaults.constraintLimit } = structure;
     if (part === "sequence") {
       return [
         '<section class="guided-fold-controls" aria-label="HYB-guided reference layout">',
@@ -1766,13 +1795,10 @@
         { value: "mfold", label: "mfold 3.6 · HYB2 Desktop or command line" }
       ], "structure-control") + "</div>",
       structure.foldProgram === "mfold" ? '<p class="card-note structure-mfold-note">mfold 3.6 cannot run in a browser. It applies the ranked stems as forced base pairs (the hybrid-ss-min of OligoArrayAux ignores them) at 37 °C with minimum loop 3. Run COMRADES(mfold) in HYB2 Desktop (Structure › COMRADES settings › Folding program › mfold 3.6), or on the command line with <code>hyb2 … -r 2</code>. Install mfold with <code>conda create -n mfold -c conda-forge -c bioconda mfold</code>. Choose ViennaRNA to fold here.</p>' : "",
-      '<div class="control-grid"><label class="control-field"><span>Ranked stem constraints</span><input type="number" min="1" max="75" step="1" value="' + attribute(structure.constraintLimit || "75") + '" data-feature="structure-control" data-key="constraintLimit"><small>Original default: 75</small></label>',
-      renderSelectControl("Randomised folds", "randomFoldCount", String(structure.randomFoldCount || "0"), [
-        { value: "0", label: "0 · ranked fold only" },
-        { value: "10", label: "10 · quick ensemble" },
-        { value: "100", label: "100 · extended ensemble" },
-        { value: "1000", label: "1,000 · original cluster scale" }
-      ], "structure-control") + "</div>",
+      '<div class="control-grid"><label class="control-field"><span>Ranked stem constraints</span><input type="number" ' + rangeAttributes(ranges.constraintLimit) + ' step="1" value="' + attribute(constraintLimit) + '" data-feature="structure-control" data-key="constraintLimit"><small>Default: ' + format(defaults.constraintLimit) + '</small></label>',
+      renderSelectControl("Randomised folds", "randomFoldCount", String(randomFoldCount),
+        Object.entries({ [defaults.randomFoldCount]: "default", 0: "ranked fold only", 10: "quick ensemble", 100: "extended ensemble", 1000: "original cluster scale" })
+          .map(([value, label]) => ({ value, label: format(Number(value)) + " · " + label })).filter(inRange(ranges.randomFoldCount)), "structure-control") + "</div>",
       randomFoldCount > 0 ? '<label class="control-field"><span>Randomisation seed</span><input type="text" maxlength="128" value="' + attribute(structure.randomSeed || "HYB2-Web") + '" data-feature="structure-control" data-key="randomSeed"><small>Seeded Fisher–Yates ordering makes the browser ensemble reproducible.</small></label>' : "",
       randomFoldCount > 100 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLargeEnsemble"' + (structure.allowLargeEnsemble ? " checked" : "") + '><span>I understand that 1,000 serial browser folds may take a long time; Cancel terminates the worker immediately.</span></label>' : "",
       "</section>"
@@ -1806,7 +1832,7 @@
       sequenceInfo.note ? '<p class="card-note structure-sequence-note" role="note">' + escape(sequenceInfo.note) + "</p>" : "",
       '<details class="structure-preview" data-open-key="structure-preview"' + openAttr("structure-preview") + ">",
       "<summary>Preview sequence" + (sequenceInfo.label ? ' <span class="structure-preview-label">' + escape(truncate(displaySequenceLabel(sequenceInfo.label), 48)) + "</span>" : "") + "</summary>",
-      sequenceInfo.assembly ? renderAssemblyPreview(sequenceInfo.assembly, sequenceInfo.evidenceKind) : "",
+      sequenceInfo.assembly ? renderAssemblyPreview(sequenceInfo.assembly, structure) : '<p class="card-note">No HYB evidence in this input.</p>',
       sequenceInfo.cutpoint ? '<p class="card-note">RNA A: 1–' + format(sequenceInfo.cutpoint) + ' · RNA B: ' + format(sequenceInfo.cutpoint + 1) + '–' + format(sequenceInfo.sequence.length) + ' · chain break after A (coordinates exclude &amp;).</p>' : "",
       renderAlignedSequence(sequenceInfo.sequence, null, null, "structure-sequence", sequenceInfo.cutpoint),
       '<div class="sequence-actions"><button class="button button-secondary" type="button" data-feature-action="copy-structure-sequence"' + off + '>Copy sequence</button><button class="button button-secondary" type="button" data-feature-action="structure-download-fasta"' + off + '>Download FASTA</button>' +
@@ -1816,7 +1842,7 @@
     ].join("");
   }
 
-  const LOCAL_INPUT_ATTRS = ' aria-label="Download local CPLfold inputs" title="Download prepared FASTA and HYB bonus matrix for local bin/cplfold"';
+  const LOCAL_INPUT_ATTRS = ' aria-label="Download local CPLfold inputs" title="Download prepared FASTA for local folding; guided inputs also include the HYB bonus matrix"';
 
   // K2 export menu in the page heading, shown once a result exists; items
   // are [attributes, label] grouped under a heading.
@@ -1839,7 +1865,8 @@
       ]] : null,
       result.engine === "IRIS" ? ["IRIS", [['data-feature-action="download-iris-ensemble"', "Download weighted ensemble"]]] : null,
       guided ? ["COMRADES", [
-        ['data-feature-action="download-structure-evidence"', "Download evidence"],
+        result.evidence && Array.isArray(result.evidence.scoredEvidencePairs) ? ['data-feature-action="download-structure-scored-evidence"', "Download all scored evidence pairs"] : null,
+        ['data-feature-action="download-structure-evidence"', "Download constraint shortlist"],
         ['data-feature-action="download-structure-constraints"', "Download constraints"],
         ['data-feature-action="download-structure-ensemble"', "Download ensemble"]
       ]] : null,
@@ -1855,16 +1882,27 @@
       }).join("") + "</div></details>";
   }
 
-  function renderAssemblyPreview(assembly, evidenceKind) {
-    const contribution = evidenceKind === "cplfold-hyb-blocks"
-      ? " will contribute one interval-block observation to the CPLfold bonus matrix."
-      : " will contribute one RNAcofold observation each.";
+  function renderAssemblyPreview(assembly, structure) {
+    let use = "";
+    if (structure.engine === "iris") {
+      use = "IRIS will redistribute arm support with a Gaussian before fitting an ensemble.";
+    } else if (structure.engine === "cplfold" && structure.cplfoldEvidence === "hyb-blocks") {
+      const kernel = profileValue(structure.cplfoldKernel, globalThis.Hyb2SupportKernels.defaultKernel);
+      const option = cplfoldKernelOption(kernel);
+      const method = structure.cplfoldMode === "cofold" ? "CPLcofold" : "CPLfold";
+      use = option ? "Selected for the " + method + " bonus matrix: " + option.label + "." : "Choose a supported kernel.";
+    } else if (structure.engine !== "cplfold" && structure.constraintMode === "hyb-guided") {
+      use = "COMRADES will use RNAcofold pairs between read arms to rank stem constraints.";
+    }
+    const evidence = !use ? "No HYB evidence in this input." : assembly.eligibleRecordCount
+      ? countLabel(assembly.eligibleRecordCount, "eligible HYB row") + ". " + use
+      : "No eligible HYB rows in the selected region layout.";
     return [
       '<section class="assembly-preview"><span class="drawer-kicker">Prepared reference layout</span><div class="assembly-segments">',
       (assembly.segments || []).map(function (segment) {
         return '<span><strong>' + escape(segment.rna) + "</strong> " + range(segment.referenceStart, segment.referenceEnd) + " → prepared " + range(segment.preparedStart, segment.preparedEnd) + "</span>";
       }).join(assembly.linker ? '<span class="assembly-linker">100 nt A/U spacer</span>' : ""),
-      '</div><p>' + format(assembly.eligibleRecordCount) + ' eligible HYB row' + (assembly.eligibleRecordCount === 1 ? "" : "s") + contribution + "</p></section>"
+      '</div><p>' + escape(evidence) + "</p></section>"
     ].join("");
   }
 
@@ -1873,6 +1911,7 @@
   function renderStructureResult(result, selectedNucleotide, viewMode, editing, sequenceInfo) {
     const pairs = result.pairs || [];
     const cplfold = isCplfoldResult(result);
+    const rawCounts = cplfold && result.comradesPairCounts;
     const allowPseudoknot = resultAllowsPseudoknot(result);
     const constraintCount = Math.max(0, Number(result.constraintCount) || 0);
     const manualConstrained = result.constraintMode === "hard-base-pairs" && constraintCount > 0;
@@ -1890,7 +1929,7 @@
     const modeNote = result.engine === "IRIS" ? renderIrisEnsemble(result) : cplfold
       ? '<div class="structure-constraint-summary structure-cplfold-summary"><strong>' + escape(allowPseudoknot ? (result.topology === "pseudoknotted" ? "Pseudoknot candidate" : "Nested candidate") : "Pseudoknot search disabled") + '</strong><span>' + (allowPseudoknot ? escape(result.engine) + " ranked " + countLabel(candidateCount, "unique candidate") + ". Parentheses show phase-1 pairs; square brackets show the crossing phase-2 layer." : escape(result.engine) + " ranked " + countLabel(candidateCount, "phase-1 secondary-structure candidate") + ". No crossing Phase 2 layer was generated. Only Phase 1 secondary structures are ranked; beta is ignored.") + "</span></div>"
       : guided
-      ? '<div class="structure-constraint-summary structure-evidence-summary"><strong>HYB-evidence-selected structure</strong><span>The selected ensemble member maximises the original nucleotide-summed COMRADES support score. Supported arcs are coloured by RNAcofold evidence; fitted hard-pair arcs remain thicker.</span></div>'
+      ? '<div class="structure-constraint-summary structure-evidence-summary"><strong>HYB-evidence-selected structure</strong><span>The selected ensemble member maximises the recorded COMRADES support score. Supported arcs are coloured by RNAcofold evidence; fitted hard-pair arcs remain thicker.</span></div>'
       : (manualConstrained ? '<div class="structure-constraint-summary"><strong>Manual hard-pair result</strong><span>ViennaRNA enforced ' + format(constraintCount) + " user-entered pair" + (constraintCount === 1 ? "" : "s") + ". These pairs were not generated from HYB interaction evidence.</span></div>" : "");
     return [
       '<section class="structure-result-panel data-card" aria-labelledby="structure-result-heading">',
@@ -1909,7 +1948,7 @@
       cplfold
         ? '<div class="structure-metric"><span>Candidate</span><strong>#' + format((Number(result.selectedCandidate) || 0) + 1) + '</strong><small>' + escape(result.structureType === "pseudoknot" && allowPseudoknot ? "phase 1 + crossing phase 2" : (allowPseudoknot ? "phase 1 nested" : "phase 1 secondary")) + '</small></div>'
         : '<div class="structure-metric"><span>Constraint mode</span><strong>' + (result.engine === "IRIS" ? "IRIS ensemble" : guided ? "HYB-guided" : (manualConstrained ? "Manual hard" : "None")) + "</strong><small>" + format(constraintCount) + " enforced pair" + (constraintCount === 1 ? "" : "s") + "</small></div>",
-      guided ? '<div class="structure-metric"><span>COMRADES score</span><strong>' + format(result.comradesScore || 0) + '</strong><small>' + format(result.matchedEvidencePairs || 0) + " supported structure pairs</small></div>" : "",
+      guided || rawCounts ? '<div class="structure-metric"><span>COMRADES score</span><strong>' + format(result.comradesScore) + '</strong><small>' + (rawCounts ? window.Hyb2Comrades.pairCountSource(result) + " counts" : format(result.matchedEvidencePairs || 0) + " supported structure pairs") + (rawCounts || result.evidence?.scoringVersion === "all-pairs-capped-v1" ? " · up to 1,000,000 per paired endpoint" : " · scoring version not recorded") + "</small></div>" : "",
       cplfold && Number(result.effectiveEnergy) !== Number(result.energy) ? '<div class="structure-metric"><span>Effective energy</span><strong>' + formatEnergy(result.effectiveEnergy) + '</strong><small>kcal/mol · beta-adjusted rank</small></div>' : "",
       '<div class="structure-metric"><span>Elapsed</span><strong>' + format(result.elapsedMs) + " ms</strong><small>" + (cplfold ? (Number(result.runtimeLoadMs) > 0 ? "runtime load " + format(result.runtimeLoadMs) + " ms · " : "") + (Number.isFinite(Number(result.foldElapsedMs)) && result.foldElapsedMs !== null ? "fold " + format(result.foldElapsedMs) + " ms" : "local fold") : "local worker") + "</small></div>",
       "</section>",
@@ -1920,9 +1959,10 @@
       "</div>",
       "</div>",
       '<section class="structure-alignment" aria-label="Sequence and dot-bracket"><div class="structure-alignment-heading"><span class="drawer-kicker">Sequence / dot-bracket</span><button class="button button-secondary button-compact" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button></div>' + renderAlignedSequence(result.sequence, result.dotBracket, selectedNucleotide, "structure-output-code", result.cutpoint) + "</section>",
-      '<details class="base-pair-details"><summary>Base-pair list (' + format(pairs.length) + ")</summary>" + (pairs.length ? '<ol class="base-pair-list">' + pairs.map(function (pair) {
+      '<details class="base-pair-details"><summary>Base-pair list (' + format(pairs.length) + ")</summary>" + (pairs.length ? '<ol class="base-pair-list">' + pairs.map(function (pair, index) {
         const isHardConstraint = requestedPairs.has(pair.left + ":" + pair.right);
-        const evidenceLabel = (guided || cplfold) && Number(pair.evidenceSupport) > 0 ? " · evidence " + formatEvidence(pair.evidenceSupport) : "";
+        const evidenceLabel = rawCounts ? " · raw count " + format(rawCounts[index]) + " · bonus " + formatEvidence(pair.bonusSupport) :
+          (guided || cplfold) && Number(pair.evidenceSupport) > 0 ? " · evidence " + formatEvidence(pair.evidenceSupport) : "";
         const pairLabel = cplfold ? escape(pair.layer || "primary") : (isHardConstraint ? "Hard pair" : "MFE pair");
         return '<li' + (isHardConstraint ? ' class="hard-constraint-pair"' : "") + "><span>" + format(pair.left) + " " + escape(pair.leftBase) + "</span><span>" + escape(pair.type) + "</span><span>" + format(pair.right) + " " + escape(pair.rightBase) + "</span><span>" + pairLabel + evidenceLabel + "</span></li>";
       }).join("") + "</ol>" : '<p class="empty-inline">The selected predictor did not place any base pairs.</p>') + "</details>",
@@ -1983,7 +2023,7 @@
     const descriptions = {
       folded: "The RNA backbone is laid out as a folded molecule: paired bases form stem rungs while unpaired bases open into hairpin and internal loops.",
       arc: cplfold
-        ? (allowPseudoknot ? "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects HYB bonus support when enabled." : "The arc diagram shows the pseudoknot-free Phase-1 candidate; opacity reflects HYB bonus support when enabled.")
+        ? (allowPseudoknot ? "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects pair support when enabled." : "The arc diagram shows the pseudoknot-free Phase-1 candidate; opacity reflects pair support when enabled.")
         : (guided ? "Arc colour intensity shows aggregated RNAcofold evidence; fitted constraint arcs are thicker." : (manualConstrained ? "Manual hard-pair arcs are thicker and marked in the base-pair list; all other arcs minimise free energy around them." : "Each arc represents a ViennaRNA MFE base pair.")),
       radial: "Pairs are drawn from the sequence perimeter toward the centre so long-range contacts and nested depth can be compared at a glance.",
       circular: "The sequence runs around a circular backbone; chords make long-range and crossing contacts easy to scan.",
@@ -2049,7 +2089,7 @@
       '<section class="comrades-result cplfold-result" aria-label="CPLfold candidate search result">',
       '<div class="comrades-stage-grid">',
       '<div><span>1 · HYB blocks</span><strong>' + countLabel(evidence.inputRecords, "row") + '</strong><small>' + (evidence.source === "hyb-block-intervals" ? format(evidence.uniqueBlocks) + " unique prepared interval blocks" : "sequence-only run") + '</small></div>',
-      '<div><span>2 · Bonus matrix</span><strong>' + format(evidence.nonzeroUpperTriangleCells || 0) + ' upper-triangle cells</strong><small>maximum log1p bonus ' + formatEvidence(maximumBonus) + (evidence.source === "hyb-block-intervals" ? " · " + escape(cplfoldKernelLabel(evidence.supportKernel)) : "") + '</small></div>',
+      '<div><span>2 · Bonus matrix</span><strong>' + format(evidence.nonzeroUpperTriangleCells || 0) + ' upper-triangle cells</strong><small>' + (evidence.source === "hyb-block-intervals" ? 'maximum ' + cplfoldBonusLabel(evidence, false) + ' ' + formatEvidence(maximumBonus) + " · " + escape(cplfoldKernelLabel(evidence.supportKernel)) : "No HYB bonus") + '</small></div>',
       '<div><span>3 · ' + (allowPseudoknot ? "Two-phase search" : "Secondary search") + '</span><strong>' + countLabel(candidates.length, "candidate") + '</strong><small>' + (allowPseudoknot ? "beam " + format(result.parameters && result.parameters.beamSize) + ' · ΔE ' + formatEvidence(result.parameters && result.parameters.energyDelta) : "Phase 2 skipped · beta ignored") + '</small></div>',
       '<div><span>4 · Selected topology</span><strong>' + escape(result.topology || "nested") + '</strong><small>' + (allowPseudoknot ? format(result.crossingPairs || 0) + ' base pairs participate in crossings' : "pseudoknot-free candidate") + '</small></div>',
       "</div>",
@@ -2062,6 +2102,7 @@
   function renderCplfoldBonusMap(result) {
     const evidence = result.evidence || {};
     const entries = evidence.bonusEntries || [];
+    const scale = cplfoldBonusLabel(evidence, true);
     const length = Math.max(1, result.sequence.length);
     const maximum = Math.max(1e-12, Number(evidence.maximumBonus) || 0);
     const size = 240;
@@ -2079,11 +2120,11 @@
       colorAt: function (t) { return "rgba(156, 5, 248, " + Math.max(0.08, t).toFixed(3) + ")"; },
       min: 0,
       max: maximum,
-      title: "log1p bonus",
+      title: scale,
       lowLabel: "low",
       highLabel: "high"
     }) : "";
-    return '<div class="cplfold-bonus-visual"><div class="cplfold-bonus-label"><span class="drawer-kicker">HYB-derived CPLfold bonus matrix</span><p>Upper triangle · prepared-sequence coordinates · colour intensity is log1p Gaussian block support.</p></div><svg viewBox="0 0 ' + size + " " + size + '" role="img" aria-label="CPLfold HYB bonus matrix"><line x1="' + inset + '" y1="' + inset + '" x2="' + (inset + span) + '" y2="' + (inset + span) + '" stroke="currentColor" opacity="0.18"/><g>' + marks + '</g><text x="' + inset + '" y="14">1</text><text x="' + (inset + span) + '" y="14" text-anchor="end">' + length + '</text><text x="4" y="' + (inset + span) + '">' + length + "</text></svg>" + legend + "</div>";
+    return '<div class="cplfold-bonus-visual"><div class="cplfold-bonus-label"><span class="drawer-kicker">HYB-derived CPLfold bonus matrix</span><p>Upper triangle · prepared-sequence coordinates · colour intensity is ' + scale + '.</p></div><svg viewBox="0 0 ' + size + " " + size + '" role="img" aria-label="CPLfold HYB bonus matrix"><line x1="' + inset + '" y1="' + inset + '" x2="' + (inset + span) + '" y2="' + (inset + span) + '" stroke="currentColor" opacity="0.18"/><g>' + marks + '</g><text x="' + inset + '" y="14">1</text><text x="' + (inset + span) + '" y="14" text-anchor="end">' + length + '</text><text x="4" y="' + (inset + span) + '">' + length + "</text></svg>" + legend + "</div>";
   }
 
   function renderComradesResult(result) {
@@ -2109,7 +2150,8 @@
       '<details class="base-pair-details"><summary>Accepted stem constraints (' + format(constraints.length) + ")</summary>" + (constraints.length ? '<div class="data-table-wrap"><table class="data-table compact-table"><thead><tr><th>Rank</th><th>F constraint</th><th>Length</th><th>Evidence support</th></tr></thead><tbody>' + constraints.slice(0, 75).map(function (constraint) {
         return "<tr><td>" + format(constraint.rank) + "</td><td><code>F " + format(constraint.left) + " " + format(constraint.right) + " " + format(constraint.length) + "</code></td><td>" + format(constraint.length) + "</td><td>" + format(constraint.support) + "</td></tr>";
       }).join("") + "</tbody></table></div>" : '<p class="empty-inline">No evidence stem was compatible with this sequence.</p>') + "</details>",
-      '<details class="base-pair-details"><summary>Top RNAcofold evidence pairs (' + format((evidence.selectedBasePairs || []).length) + ")</summary>" + ((evidence.selectedBasePairs || []).length ? '<div class="data-table-wrap"><table class="data-table compact-table"><thead><tr><th>Prepared left</th><th>Prepared right</th><th>HYB-row observations</th></tr></thead><tbody>' + evidence.selectedBasePairs.slice(0, 100).map(function (pair) {
+      Array.isArray(evidence.scoredEvidencePairs) ? '<p class="card-note">Scores use all ' + format(evidence.scoredEvidencePairs.length) + ' distinct pairs (both arm orientations combined). Only the constraint shortlist is used to build stems.</p>' : '<p class="card-note">The complete scored evidence set was not recorded in this result.</p>',
+      '<details class="base-pair-details"><summary>RNAcofold constraint shortlist (' + format((evidence.selectedBasePairs || []).length) + ")</summary>" + ((evidence.selectedBasePairs || []).length ? '<div class="data-table-wrap"><table class="data-table compact-table"><thead><tr><th>Prepared arm 1</th><th>Prepared arm 2</th><th>HYB-row observations</th></tr></thead><tbody>' + evidence.selectedBasePairs.slice(0, 100).map(function (pair) {
         return "<tr><td>" + format(pair.one) + "</td><td>" + format(pair.two) + "</td><td>" + format(pair.count) + "</td></tr>";
       }).join("") + "</tbody></table></div>" : '<p class="empty-inline">No RNAcofold evidence pairs were retained.</p>') + "</details>",
       "</section>"
@@ -2183,6 +2225,8 @@
           if (normalised.records > 1) {
             throw new Error("The " + box[0] + " box has " + normalised.records + " FASTA records (lines starting with >). Put one strand in each box, or both as A&B in the RNA A box with RNA B empty.");
           }
+          const invalid = normalised.invalid.filter(base => !(box[0] === "RNA A" && base === "&"));
+          if (invalid.length) throw new Error(box[0] + " contains unsupported characters: " + invalid.join(", "));
           if (normalised.removedNumbers && normalised.sequence) {
             cofoldNotes.push("Position numbers and spaces were removed from the " + box[0] + " sequence lines (GenBank/EMBL style).");
           }
@@ -2198,8 +2242,10 @@
       } else {
         throw new Error("CPLcofold requires two reference regions or two pasted RNA strands; a chimeric HYB record is not a two-molecule input.");
       }
-      if (!first || !second) throw new Error("CPLcofold requires nonempty RNA A and RNA B sequences.");
-      if (/[^ACGU]/.test(first + second)) throw new Error("Both RNA strands must contain only A, C, G and U (T is converted to U).");
+      const minimum = globalThis.Hyb2FoldText.minSequenceNt;
+      if (first.length < minimum || second.length < minimum) {
+        throw new Error(`CPLcofold requires at least ${minimum} nt in each RNA A and RNA B sequence.`);
+      }
       return {
         sequence: first + second, displaySequence: first + "&" + second,
         cutpoint: first.length, strandLengths: [first.length, second.length], label: label,
@@ -2208,7 +2254,6 @@
         sourceStart: assembly ? assembly.segments[0].referenceStart : null,
         sourceEnd: assembly ? assembly.segments[0].referenceEnd : null,
         sourceSegments: assembly ? assembly.segments : null, assembly: assembly,
-        evidenceKind: guided ? "cplfold-hyb-blocks" : "none",
         evidenceDatasets: guided && state.view && state.view.structureEvidence ? state.view.structureEvidence.datasets || [] : [],
         evidenceDatasetIds: guided && state.view && state.view.structureEvidence ? state.view.structureEvidence.datasetIds || [] : [],
         error: guided && (!assembly || !assembly.evidenceArms.length) ? "No eligible forward-strand HYB rows are fully contained in the two RNA regions." : ""
@@ -2230,15 +2275,28 @@
     }
     for (let index = 0; index < regions.length; index += 1) {
       const region = regions[index];
-      const id = fasta && fasta.mapping && fasta.mapping[region.rna] || region.rna;
-      const entry = fasta && (fasta.sequences || []).find(function (item) { return item.id === id; });
-      const limit = entry ? String(entry.sequence || "").replace(/\s/g, "").length : null;
-      const blank = [region.start, region.end].some(function (value) { return !String(value == null ? "" : value).trim(); });
-      const issue = required && blank
-        ? "Enter " + region.startName + " and " + region.endName + (limit ? ": whole numbers from 1 to " + limit.toLocaleString("en-US") + "." : ".")
-        : check(region.start, region.end, { start: region.startName, end: region.endName, limit: limit, rna: region.rna });
+      let entry;
+      try { entry = globalThis.Hyb2FoldText.findFastaEntry(fasta, region.rna); }
+      catch (error) { return error.message; }
+      const limit = entry ? globalThis.Hyb2FoldText.reference(entry).length : null;
+      const issue = check(region.start, region.end, { start: region.startName, end: region.endName, limit: limit, rna: region.rna });
       if (issue) {
         return issue;
+      }
+      // Convert only after the shared boundary has checked the original types.
+      const start = String(region.start ?? "").trim(), end = String(region.end ?? "").trim();
+      // Structure fields may be omitted or cleared, but explicit null is not
+      // a coordinate (the shared range API uses null for open-ended queries).
+      if (region.start === null || region.end === null || (required && (!start || !end))) {
+        return "Enter " + region.startName + " and " + region.endName + (limit ? ": whole numbers from 1 to " + limit.toLocaleString("en-US") + "." : ".");
+      }
+      // Two regions define separate fragments; two blank bounds request the whole RNA.
+      if (entry) {
+        const nt = (Number(end) || limit) - (Number(start) || 1) + 1;
+        const explicitWindow = regions.length === 1 && (start || end);
+        const minimum = explicitWindow ? globalThis.Hyb2FoldText.minWindowNt : globalThis.Hyb2FoldText.minSequenceNt;
+        const label = regions.length === 2 ? `reference fragment ${index + 1}` : explicitWindow ? "reference window" : "reference sequence";
+        if (nt < minimum) return `The ${label} is ${nt} nt; select at least ${minimum} nt.`;
       }
     }
     return "";
@@ -2299,7 +2357,7 @@
           });
           const irisDiagnostics = structure.engine === "iris" ? window.Hyb2Comrades.diagnoseIrisRegion(
             evidence.records || [], regions[0],
-            referenceFasta.sequences.find(function (entry) { return entry.id === assembly.segments[0].referenceId; }).sequence.replace(/\s/g, "").length
+            globalThis.Hyb2FoldText.reference(globalThis.Hyb2FoldText.findFastaEntry(referenceFasta, structure.rna)).length
           ) : null;
           return {
             sequence: assembly.sequence,
@@ -2312,7 +2370,6 @@
             irisDiagnostics: irisDiagnostics,
             evidenceDatasets: evidence.datasets || [],
             evidenceDatasetIds: evidence.datasetIds || [],
-            evidenceKind: cplfoldGuided ? "cplfold-hyb-blocks" : "vienna-rna-cofold",
             error: assembly.evidenceArms.length
               ? ""
               : (irisDiagnostics && irisDiagnostics.message || "No forward-strand HYB rows are fully contained in the selected region layout.")
@@ -2321,23 +2378,18 @@
           return { sequence: "", label: "", error: error && error.message ? error.message : (cplfoldGuided ? "The CPLfold HYB reference region is invalid." : "The HYB-guided reference layout is invalid.") };
         }
       }
-      const reference = window.Hyb2Data.extractReference(referenceFasta, structure.rna, structure.start, structure.end);
-      if (!reference) {
+      const entry = window.Hyb2Data.findFastaEntry(referenceFasta, structure.rna);
+      if (!entry) {
         return { sequence: "", label: "", error: "Choose a mapped RNA and valid reference coordinates." };
       }
-      const normalised = window.Hyb2Data.normaliseFoldSequence(reference.sequence);
-      return {
-        sequence: normalised.sequence,
-        // plain digits and a hyphen: this label names the sequence in the
-        // exported FASTA, DBN and CT headers (the page shows it through
-        // displaySequenceLabel)
-        label: reference.id + ":" + reference.start + "-" + reference.end,
-        sourceRna: structure.rna,
-        sourceStart: reference.start,
-        sourceEnd: reference.end,
-        invalidSequence: normalised.invalid.length > 0,
-        error: normalised.invalid.length ? "Unsupported characters: " + normalised.invalid.join(", ") : ""
-      };
+      const reference = globalThis.Hyb2FoldText.reference(entry);
+      const start = Number(structure.start) || 1, end = Number(structure.end) || reference.length;
+      try {
+        return { sequence: reference.window(start, end), label: structure.rna + ":" + start + "-" + end,
+          sourceRna: structure.rna, sourceStart: start, sourceEnd: end, error: "" };
+      } catch (error) {
+        return { sequence: "", label: "", invalidSequence: true, error: error.message };
+      }
     }
 
     if (structure.source === "record") {
@@ -2345,12 +2397,15 @@
       if (!record) {
         return { sequence: "", label: "", error: "Choose a HYB record sequence." };
       }
-      const normalised = window.Hyb2Data.normaliseFoldSequence(record.sequence);
+      const normalised = window.Hyb2Data.normaliseFoldSequence(record.sequence, false);
+      const minimum = globalThis.Hyb2FoldText.minSequenceNt;
+      const issue = normalised.invalid.length ? "Unsupported characters: " + normalised.invalid.join(", ")
+        : normalised.sequence.length < minimum ? `The HYB record sequence is ${normalised.sequence.length} nt; select at least ${minimum} nt.` : "";
       return {
         sequence: normalised.sequence,
         label: record.id + " · HYB record sequence",
-        invalidSequence: normalised.invalid.length > 0,
-        error: normalised.invalid.length ? "Unsupported characters: " + normalised.invalid.join(", ") : ""
+        invalidSequence: !!issue,
+        error: issue
       };
     }
 
@@ -2365,11 +2420,6 @@
     };
   }
 
-  // The shortest sequence that can form a base pair: a hairpin closes a loop
-  // of at least 3 unpaired bases (ViennaRNA and CPLfold), so 5 nt. Both
-  // engines accept shorter input but can only return it unpaired.
-  const MIN_PASTED_LENGTH = 5;
-
   // Why a pasted single sequence cannot be folded, or "". Several FASTA
   // records are refused rather than joined or cut to the first: folding a
   // record the user did not choose would look like a valid result.
@@ -2380,8 +2430,9 @@
     if (normalised.invalid.length) {
       return "Only A, C, G and U are accepted (T is read as U). Unsupported characters: " + normalised.invalid.join(", ");
     }
-    if (normalised.sequence && normalised.sequence.length < MIN_PASTED_LENGTH) {
-      return "The pasted sequence is " + normalised.sequence.length + " nt. Paste at least " + MIN_PASTED_LENGTH + " nt: a base pair needs at least 3 unpaired bases between its two partners.";
+    const minimum = globalThis.Hyb2FoldText.minPastedNt;
+    if (normalised.sequence.length < minimum) {
+      return `The pasted sequence is ${normalised.sequence.length} nt. Paste at least ${minimum} nt.`;
     }
     return "";
   }
@@ -2490,9 +2541,9 @@
     const preview = rnas.slice(0, 100);
     return [
       '<div class="fasta-mapping">',
-      '<p class="card-note">Each RNA name in the HYB file is paired with the reference sequence of the same name. To fix one, pick the RNA, type the reference ID it should use, and apply.</p>',
+      '<p class="card-note">RNA names match the IDs used by the HYB2 pipeline. If any FASTA header contains a pipe (|), HYB2 rewrites IDs across the whole reference. To override a match, pick the RNA and apply the original FASTA ID you want.</p>',
       '<div class="control-grid"><label class="control-field"><span>HYB RNA</span><input type="search" list="fasta-rna-suggestions" value="' + attribute(editorRna) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorRna"><datalist id="fasta-rna-suggestions">' + rnas.slice(0, 500).map(function (rna) { return '<option value="' + attribute(rna) + '"></option>'; }).join("") + '</datalist></label>',
-      '<label class="control-field"><span>FASTA reference ID</span><input type="search" list="fasta-reference-suggestions" value="' + attribute(editorReference) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorReference"><datalist id="fasta-reference-suggestions">' + fasta.sequences.slice(0, 500).map(function (entry) { return '<option value="' + attribute(entry.id) + '"></option>'; }).join("") + '</datalist></label></div>',
+      '<label class="control-field"><span>FASTA reference ID</span><input type="search" list="fasta-reference-suggestions" value="' + attribute(editorReference) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorReference"><datalist id="fasta-reference-suggestions">' + fasta.sequences.slice(0, 500).map(function (entry) { return '<option value="' + attribute(entry.id) + '">' + escape(entry.header || entry.id) + '</option>'; }).join("") + '</datalist></label></div>',
       '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="apply-fasta-mapping">Apply mapping</button><button class="quiet-button" type="button" data-feature-action="remove-current-fasta-mapping">Mark as not matched</button><button class="quiet-button" type="button" data-feature-action="export-fasta-mapping">Export matches</button></div>',
       '<div class="mapping-rows">' + preview.map(function (rna) {
         const mapped = fasta.mapping[rna] || "Not matched";
@@ -2539,7 +2590,7 @@
       '<label class="' + fieldClass + '"><span>' + escape(label) + "</span>",
       '<select' + (current ? ' title="' + attribute(current.label) + '"' : "") + ' data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '">',
       available.map(function (option) {
-        return '<option value="' + attribute(option.value) + '"' + (String(option.value) === String(value) ? " selected" : "") + ">" + escape(option.label) + "</option>";
+        return '<option value="' + attribute(option.value) + '"' + (String(option.value) === String(value) ? " selected" : "") + (option.disabled ? " disabled" : "") + ">" + escape(option.label) + "</option>";
       }).join(""),
       "</select></label>"
     ].join("");
@@ -2675,17 +2726,7 @@
   }
 
   function cplfoldProfileKey(structure) {
-    return [
-      structure && structure.cplfoldMode === "cofold" ? "cofold" : "single",
-      profileValue(structure && structure.cplfoldEvidence, "hyb-blocks"),
-      profileValue(structure && structure.cplfoldBeam, "20"),
-      profileValue(structure && structure.cplfoldMaxPhase1, "3"),
-      profileValue(structure && structure.cplfoldEnergyDelta, "5"),
-      profileValue(structure && structure.cplfoldEnergyModel, "DP09").toUpperCase(),
-      profileValue(structure && structure.cplfoldAlpha, "0.5"),
-      profileValue(structure && structure.cplfoldBeta, "0"),
-      profileValue(structure && structure.cplfoldAllowPseudoknot, true) === "false" ? "nested" : "pseudoknot"
-    ].join("|");
+    return globalThis.Hyb2CplfoldSettings.profileKey(structure);
   }
 
   // The measured CPLfold limit is kept in this browser (localStorage) per
@@ -3020,6 +3061,7 @@
     renderVirtualRows: renderVirtualRows,
     getStructureSequence: getStructureSequence,
     cplfoldLocalCommand: cplfoldLocalCommand,
+    cplfoldBonusKind: cplfoldBonusKind,
     getFilesDialogBody: getFilesDialogBody,
     findRecord: findRecord,
     hasMappedReference: hasMappedReference,

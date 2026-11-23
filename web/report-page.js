@@ -693,15 +693,18 @@
 
   function renderStructure(context) {
     const state = context.state;
-    const structure = state.structure || {};
+    const structure = window.Hyb2Results && typeof window.Hyb2Results.structureSetup === "function"
+      ? window.Hyb2Results.structureSetup(state.structure || {}) : state.structure || {};
     const result = structure.result;
     const sequenceInfo = !result && window.Hyb2Pages && typeof window.Hyb2Pages.getStructureSequence === "function"
       ? safeCall(function () { return window.Hyb2Pages.getStructureSequence(state); }, null)
       : null;
     const ready = !!(result && result.sequence);
     const cplfold = result && (result.engine === "CPLfold" || result.engine === "CPLcofold");
+    const pk = structure.engine === "cplfold" ? globalThis.Hyb2CplfoldSettings.formTopology(structure) : null;
+    const scoredCandidates = cplfold && result.candidates?.some(c => c.comradesScore != null);
     const candidateRows = cplfold && Array.isArray(result.candidates) ? result.candidates.slice(0, MAX_TABLE_ROWS).map(function (candidate, index) {
-      return [formatNumber(index + 1), escape(candidate.type || ""), escape(candidate.topology || "nested"), candidate.energy == null ? "-" : formatEnergy(candidate.energy), formatNumber((candidate.pairs || []).length), formatNumber(candidate.crossingPairs || 0), '<code>' + escape(truncateText(candidate.dotBracketWithBreak || candidate.dotBracket || "", 90)) + '</code>'];
+      return [formatNumber(index + 1), escape(candidate.type || ""), escape(candidate.topology || "nested"), candidate.energy == null ? "-" : formatEnergy(candidate.energy), formatNumber((candidate.pairs || []).length), formatNumber(candidate.crossingPairs || 0), ...(scoredCandidates ? [candidate.comradesScore == null ? "–" : formatNumber(candidate.comradesScore)] : []), '<code>' + escape(truncateText(candidate.dotBracketWithBreak || candidate.dotBracket || "", 90)) + '</code>'];
     }) : [];
     const structureReportData = ready && window.Hyb2StructureUI && typeof window.Hyb2StructureUI.structureReport === "function"
       ? safeCall(function () { return window.Hyb2StructureUI.structureReport(state, result); }, null)
@@ -731,7 +734,7 @@
           regions ? ["Region 2 range", range(regions[1].start, regions[1].end)] : null,
           ["Constraint mode", structure.constraintMode || "none"],
           ["HYB evidence", ready ? structureEvidenceLabel(result) : "-"],
-          ["Pseudoknot search", structure.engine === "cplfold" ? (structure.cplfoldAllowPseudoknot === false ? "Disabled" : "Allowed") : "Outside ViennaRNA mode"]
+          ["Pseudoknot search", structure.engine === "cplfold" ? (pk === null ? "Invalid setting" : pk ? "Allowed" : "Disabled") : "Outside ViennaRNA mode"]
         ]) + '</div>',
         '<div class="report-subsection"><h3>Result</h3>' + (ready ? definitionList([
           ["Prepared sequence · R37", formatNumber(result.sequence.length) + " nt"],
@@ -739,7 +742,8 @@
           ["Topology", prediction.topology || result.topology || "nested"],
           ["Base pairs · R39", formatNumber((result.pairs || []).length)],
           ["Crossing pairs · R40", formatNumber(result.crossingPairs || 0)],
-          ["Selected candidate", cplfold ? formatNumber(number(result.selectedCandidate, 0) + 1) : "MFE"]
+          result.comradesScore != null ? ["COMRADES score", formatNumber(result.comradesScore)] : null,
+          ["Selected candidate", result.constraintMode === "hyb-guided" ? "COMRADES ensemble" : (cplfold || result.engine === "IRIS" ? formatNumber(number(result.selectedCandidate, 0) + 1) : "MFE")]
         ]) : '<div class="report-empty">' + escape(sequenceInfo && sequenceInfo.error || "Run a structure prediction from the workspace to include its result here.") + '</div>') + '</div>',
         "</div>",
         ready ? '<div class="report-structure-result"><div class="report-subsection-heading"><h3>Printable secondary-structure view</h3><span class="report-note-inline">Arc layout used for the report snapshot</span></div><div class="report-structure-diagram" data-report-structure-diagram></div><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> The report uses a stable Arc layout so it prints consistently. Use the RNA Structure page SVG/PNG controls to export folded, radial, circular, or matrix views.</p>' + dataNote(context, "results/structure_prediction.json") + dataNote(context, "results/structure_prediction.dbn") + '</div>' : "",
@@ -748,7 +752,7 @@
         ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracketWithBreak || result.dotBracket || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
         ready && result.cutpoint ? '<p class="report-note">Two RNA strands; &amp; marks the break after nucleotide ' + formatNumber(result.cutpoint) + '. Pair coordinates exclude this separator. ' + (result.energyMetadata && result.energyMetadata.energy_kind === "heuristic" ? 'Pseudoknot energies use an experimental ranking heuristic; they are not validated binding free energies.' : '') + '</p>' : "",
         ready ? "</div>" : "",
-        cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table([num("Rank"), "Type", "Topology", num("Energy", "kcal/mol"), num("Pairs"), num("Crossing"), "Dot-bracket"], candidateRows) + '</div>' : "",
+        cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table([num("Rank"), "Type", "Topology", num("Energy", "kcal/mol"), num("Pairs"), num("Crossing"), ...(scoredCandidates ? [num("COMRADES score")] : []), "Dot-bracket"], candidateRows) + '</div>' : "",
         ready && cplfold ? '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> CPLfold candidates preserve the selected pseudoknot setting' + (structureGuidedByReads(result) ? ' and HYB bonus-matrix provenance. The complete candidate and bonus-matrix exports remain' : '. No HYB evidence guided this fold (sequence only). The complete candidate export remains') + ' available from the RNA Structure page.</p>' : ""
       ].join("")
     );
@@ -910,7 +914,8 @@
           } : { ready: false, reason: "Not generated" },
           differentialTest: window.Hyb2DeseqCard ? jsonSafe(window.Hyb2DeseqCard.reportData(comparison), 6, 100) : null
         },
-        structure: jsonSafe(structurePayload, 5, 1000)
+        // This is the method's data export, not the bounded print preview.
+        structure: structurePayload
       },
       resultRecord: context.record ? jsonSafe({ schema: context.record.schema, scope: context.record.scope, steps: context.record.steps.map(function (step) { return { id: step.id, key: step.key, status: step.status, detail: step.detail }; }), results: context.record.results, warnings: context.record.warnings }, 5, 200) : null,
       externalSources: window.Hyb2Evidence ? jsonSafe(safeCall(function () { return window.Hyb2Evidence.reportCards(reportState); }, []), 6, 50) : [],
@@ -1575,7 +1580,7 @@
       end: structure.end || null,
       constraintMode: structure.constraintMode || "none",
       cplfoldEvidence: structure.cplfoldEvidence || null,
-      cplfoldAllowPseudoknot: structure.cplfoldAllowPseudoknot !== false
+      cplfoldAllowPseudoknot: structure.engine === "cplfold" ? globalThis.Hyb2CplfoldSettings.formTopology(structure) : null
     };
   }
 

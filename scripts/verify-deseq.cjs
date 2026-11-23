@@ -671,11 +671,18 @@ async function workerAndCard() {
   assert.equal(deseqState.status, "error");
   assert.match(deseqState.error, /ZILM_REP3 has no .* records.*size factors cannot be computed/);
   assert.equal(deseqState.result, null);
-  // stop() abandons a run: the late timer does not store a result
+  // Cancel after the arms read: the pending fallback must not even start binning.
+  const calls = { bin: 0, compare: 0 };
+  cardWindow.Hyb2Deseq = { ...D,
+    binArms(...args) { calls.bin++; return D.binArms(...args); },
+    compare(...args) { calls.compare++; return D.compare(...args); }
+  };
   card.run(state, runApi(null));
   await settle(0);
-  card.stop();
+  card.handleAction(state, "deseq-cancel", { dataset: {} }, runApi(null));
   await settle(150);
+  assert.deepEqual(calls, { bin: 0, compare: 0 });
+  assert.equal(deseqState.status, "idle");
   assert.equal(deseqState.result, null, "a stopped run does not store its result");
   // an uninterrupted run stores one
   card.run(state, runApi(null));
@@ -684,6 +691,8 @@ async function workerAndCard() {
   }
   assert.equal(deseqState.status, "done", deseqState.error);
   assert.ok(deseqState.result.summary.interactionsUp >= 1);
+  assert.deepEqual(calls, { bin: 4, compare: 1 });
+  cardWindow.Hyb2Deseq = D;
 
   // split tasks give the same numbers as one task
   {

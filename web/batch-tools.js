@@ -17,9 +17,10 @@
       if (!entry) throw new Error("No mapped FASTA for " + name);
       if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start)
         throw new Error("Invalid or antisense reference interval");
-      if (end > entry.sequence.length) throw new Error("Interval exceeds FASTA length");
-      const sequence = entry.sequence.slice(start - 1, end).toUpperCase().replace(/T/g, "U");
-      if (!/^[ACGU]+$/.test(sequence)) throw new Error("Unsupported or ambiguous reference bases");
+      const reference = globalThis.Hyb2FoldText.reference(entry);
+      if (end > reference.length) throw new Error("Interval exceeds FASTA length");
+      const { sequence, invalid } = globalThis.Hyb2FoldText.read(reference.rawWindow(start, end));
+      if (invalid.length) throw new Error("Unsupported or ambiguous reference bases");
       return sequence;
     });
     if (arms[0].length + arms[1].length > 2000) throw new Error("Combined arms exceed the 2,000 nt batch limit");
@@ -30,14 +31,18 @@
   // extra columns and original line endings when the source File exists.
   function rewriteEnergy(source, updates) {
     let line = 0;
-    return source.replace(/[^\r\n]+|\r\n|\n|\r/g, part => {
+    const missing = new Set(updates.keys());
+    const rewritten = source.replace(/[^\r\n]+|\r\n|\n|\r/g, part => {
       if (/^[\r\n]/.test(part)) { line++; return part; }
       const update = updates.get(line + 1);
       if (!update) return part;
       const raw = line === 0 ? part.replace(/^\uFEFF/, "") : part;
       if (raw !== update.raw) throw new Error("Source row changed at line " + (line + 1));
+      missing.delete(line + 1);
       return part.replace(/^([^\t]*\t[^\t]*\t)[^\t]*/, (_, prefix) => prefix + update.energy.toFixed(2));
     });
+    if (missing.size) throw new Error("Source row missing at line " + missing.values().next().value);
+    return rewritten;
   }
 
   function topRegions(interactions) {
@@ -274,6 +279,9 @@
   async function runEnergy(state,api) {
     stop('energy');const status=energyState(state), job={status};jobs.set('energy',job);status.running=true;status.result=null;
     const file=state.file, fasta=state.fasta, settings=Object.assign({},energySettings(state)), engine=energyEngine(state);
+    // Selection and provenance must share the launch-time filters, even if
+    // the Interactions controls change while queries or workers are running.
+    const filters=settings.records==='filtered'?Object.assign({},state.filters||root.Hyb2Data.defaultInteractionFilters()):null;
     const unchanged=()=>primaryOf(state)!==status.summary || state.fasta!==fasta || JSON.stringify(fasta.mapping)!==status.mapping;
     try {
       if(!fasta)throw new Error('Load a mapped reference FASTA first.');
@@ -282,7 +290,7 @@
       const query={offset:0,limit:null,order:'file'};
       if(primary)query.datasetIds=[primary.id];
       const all=await api.queryHybrids(query);
-      const chosen=settings.records==='filtered'?await api.queryHybrids(Object.assign({},query,{filters:Object.assign({},state.filters||{})})):all;
+      const chosen=filters?await api.queryHybrids(Object.assign({},query,{filters})):all;
       if(job.cancelled)return;
       // Only the primary file is rewritten: rows of other merged datasets
       // carry their own line numbers.
@@ -292,7 +300,7 @@
       const selected=new Set((chosen.rows||[]).filter(onPrimary).map(r=>r.lineNumber+'\u0000'+r.id));
       let source;
       if(file && typeof file.text==='function') {
-        source=/\.gz$/i.test(file.name)?await new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text():await file.text();
+        source=(await callWorker(job,'parser.worker.js',{type:'read-text',file})).text;
       } else {source=records.map(r=>r.raw).join('\n')+'\n';}
       if(job.cancelled)return;
       const audit=['line\tid\tstatus\told_energy\tnew_energy\tnote'], notes=new Array(records.length), prepared=[];
@@ -324,7 +332,7 @@
         audit.push([entry.line,entry.record.id,'updated',entry.old,energy.toFixed(2),''].map(tsv).join('\t'));
       });
       const hyb=rewriteEnergy(source,updates);
-      status.result={hyb,engine:settings.engine,audit:audit.join('\n')+'\n',metadata:{engine:engine.name,engineVersion:folded.version,temperature:37,minimumLoop:settings.engine==='rnacofold'?3:null,energyModel:settings.engine==='rnacofold'?'Turner 2004 (ViennaRNA default)':settings.engine==='rnaduplex'?'Turner 2004 (ViennaRNA default), intermolecular pairs only, as the HYB2 pipeline':'CPLfold DP09',pseudoknots:settings.engine==='cplcofold-pk',records:settings.records==='filtered'?'interaction-filters':'all',filters:settings.records==='filtered'?Object.assign({},state.filters||{}):null,updated,unchanged:skipped,validRecords:records.length,workers:folded.workers,elapsedSeconds:Math.round((Date.now()-started)/100)/10,sourceFile:file&&file.name,reference:fasta.fileName,mapping:fasta.mapping,maximumCombinedArmLength:engine.maxLength,completedAt:new Date().toISOString()}};
+      status.result={hyb,engine:settings.engine,audit:audit.join('\n')+'\n',metadata:{engine:engine.name,engineVersion:folded.version,temperature:37,minimumLoop:settings.engine==='rnacofold'?3:null,energyModel:settings.engine==='rnacofold'?'Turner 2004 (ViennaRNA default)':settings.engine==='rnaduplex'?'Turner 2004 (ViennaRNA default), intermolecular pairs only, as the HYB2 pipeline':'CPLfold DP09',pseudoknots:settings.engine==='cplcofold-pk',records:settings.records==='filtered'?'interaction-filters':'all',filters,updated,unchanged:skipped,validRecords:records.length,workers:folded.workers,elapsedSeconds:Math.round((Date.now()-started)/100)/10,sourceFile:file&&file.name,reference:fasta.fileName,mapping:fasta.mapping,maximumCombinedArmLength:engine.maxLength,completedAt:new Date().toISOString()}};
       status.message=updated.toLocaleString('en-US')+' energies updated with '+engine.name+' in '+duration(Date.now()-started)+'; '+skipped.toLocaleString('en-US')+' valid rows unchanged. Comments and unparsed source lines are preserved. Download the audit for details.';
     }catch(error){if(!job.cancelled)status.message='Energy calculation failed: '+error.message;}
     finally{if(jobs.get('energy')===job){jobs.delete('energy');status.running=false;api.render();}}

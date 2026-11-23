@@ -8,9 +8,9 @@
 
 "use strict";
 
+importScripts(new URL("./support-kernels.js", self.location.href).href);
 const MAX_SEQUENCE_LENGTH = 3000;
 const MAX_EVIDENCE_RECORDS = 50000;
-const MAX_RANDOM_FOLDS = 1000;
 const ENGINE_DIRECTORY = new URL("./vendor/viennarna/", self.location.href).href;
 const ENGINE_GLUE_URL = new URL("vienna-rna.js", ENGINE_DIRECTORY).href;
 const COMRADES_CORE_URL = new URL("./comrades-analysis.js", self.location.href).href;
@@ -23,30 +23,19 @@ self.onmessage = async function (event) {
   try {
     if (message.type === "iris-fold") {
       if (!self.Hyb2Iris) importScripts(new URL("./iris-core.js", self.location.href).href);
-      self.Hyb2Iris.parameters(message.parameters);
-      const engine = await getEngine();
       const started = Date.now();
       const result = await self.Hyb2Iris.run(message, async function(sequence, constraints) {
         await yieldToEventLoop();
-        return foldWithVienna(engine, sequence, 37, 3, constraints);
+        return foldWithVienna(await getEngine(), sequence, 37, 3, constraints);
       }, function(stage, percent) { postProgress(stage, percent); });
-      result.comradesEvidence = await comradesSupportEvidence(engine, message.evidenceArms, message.sequence, 92, 7);
+      result.comradesEvidence = await comradesSupportEvidence(message.evidenceArms, message.sequence, 92, 7);
       result.elapsedMs = Date.now() - started;
       self.postMessage({type: "complete", result: result});
       return;
     }
     if (message.type === "comrades-evidence") {
       postProgress("Loading ViennaRNA RNAcofold engine", 2, { phase: "engine" });
-      const engine = await getEngine();
-      if (!message.sequence) throw new Error("COMRADES support scoring needs the prepared sequence.");
-      self.postMessage({ type: "complete", evidence: await comradesSupportEvidence(engine, message.evidenceArms, message.sequence, 5, 90) });
-      return;
-    }
-    if (message.type === "rnacofold-pairs") {
-      postProgress("Loading ViennaRNA RNAcofold engine", 2, { phase: "engine" });
-      const engine = await getEngine();
-      if (!message.sequence) throw new Error("The rnacofold read support needs the prepared sequence.");
-      self.postMessage({ type: "complete", evidence: await rnacofoldPairEvidence(engine, message.evidenceArms, message.sequence) });
+      self.postMessage({ type: "complete", evidence: await comradesSupportEvidence(message.evidenceArms, message.sequence, 5, 90) });
       return;
     }
     if (message.type === "comrades-fold") {
@@ -57,11 +46,8 @@ self.onmessage = async function (event) {
       return;
     }
 
-    const sequence = String(message.sequence || "").toUpperCase();
-    const minimumLoop = normaliseMinimumLoop(message.minimumLoop);
-    const temperature = normaliseTemperature(message.temperature);
-
-    validateSequence(sequence);
+    const sequence = readViennaSequence(message.sequence);
+    const { temperature, minimumLoop } = readViennaParameters(message, globalThis.Hyb2EngineParameters.vienna);
     const constraints = normaliseConstraints(message.constraints, sequence, minimumLoop);
     self.postMessage({ type: "progress", stage: "Loading ViennaRNA folding engine", percent: 7 });
     const engine = await getEngine();
@@ -136,15 +122,14 @@ async function initialiseEngine() {
 }
 
 async function runComradesFold(message) {
-  const sequence = String(message.sequence || "").toUpperCase();
-  const minimumLoop = normaliseMinimumLoop(message.minimumLoop);
-  const temperature = normaliseTemperature(message.temperature);
+  const sequence = readViennaSequence(message.sequence);
+  const settings = globalThis.Hyb2EngineParameters.comrades;
+  const { temperature, minimumLoop } = readViennaParameters(message, settings);
   const evidenceArms = normaliseEvidenceArms(message.evidenceArms);
-  const randomFoldCount = boundedInteger(message.randomFoldCount, 0, MAX_RANDOM_FOLDS, 0, "Random-fold count");
-  const constraintLimit = boundedInteger(message.constraintLimit, 1, 75, 75, "Constraint count");
+  const randomFoldCount = boundedInteger(message, settings, "randomFoldCount", "Random-fold count");
+  const constraintLimit = boundedInteger(message, settings, "constraintLimit", "Constraint count");
   const seed = String(message.seed || "HYB2-Web").slice(0, 128);
 
-  validateSequence(sequence);
   if (!evidenceArms.length) {
     throw new Error("No forward-strand HYB records are fully contained in the selected reference region layout.");
   }
@@ -153,8 +138,12 @@ async function runComradesFold(message) {
   postProgress("Loading ViennaRNA RNAcofold engine", 4, { phase: "engine" });
   const engine = await getEngine();
   const startedAt = Date.now();
-  const { mappedPairs, cofoldsWithIntermolecularPairs, allEvidence, selectedEvidence } =
+  const { mappedPairs, cofoldsWithIntermolecularPairs, eligibleEvidence } =
     await collectComradesEvidence(engine, comrades, evidenceArms, sequence.length, temperature, minimumLoop, 8, 30);
+  // Rank only the strongest 1,001 pairs for constraints. Score every fold
+  // against all in-range observations, including pairs outside that shortlist.
+  const selectedEvidence = eligibleEvidence.slice(0, comrades.originalEvidenceLimit);
+  const pairSupport = comrades.indexPairSupport(eligibleEvidence);
   const stems = comrades.mergeTouchingStems(selectedEvidence);
   const stemConstraints = comrades.stemsToConstraints(stems, constraintLimit);
   if (!selectedEvidence.length || !stemConstraints.length) {
@@ -180,13 +169,13 @@ async function runComradesFold(message) {
       });
     }
   );
-  const candidates = [annotateComradesCandidate(deterministic, comrades, selectedEvidence, 0, false)];
+  const candidates = [annotateComradesCandidate(deterministic, comrades, pairSupport, 0, false)];
   await yieldToEventLoop();
 
   for (let run = 1; run <= randomFoldCount; run += 1) {
     const shuffled = comrades.seededShuffle(stemConstraints, seed + ":" + run);
     const fitted = await fitConstraintOrder(engine, comrades, sequence, shuffled, temperature, minimumLoop);
-    candidates.push(annotateComradesCandidate(fitted, comrades, selectedEvidence, run, true));
+    candidates.push(annotateComradesCandidate(fitted, comrades, pairSupport, run, true));
     postProgress("Randomised fold " + run + " / " + randomFoldCount, 60 + Math.round((run / Math.max(1, randomFoldCount)) * 32), {
       phase: "randomised-folds", completed: run, total: randomFoldCount
     });
@@ -209,7 +198,14 @@ async function runComradesFold(message) {
     inputRecords: evidenceArms.length,
     cofoldsWithIntermolecularPairs: cofoldsWithIntermolecularPairs,
     mappedPairObservations: mappedPairs.length,
-    uniqueBasePairs: allEvidence.length,
+    uniqueBasePairs: eligibleEvidence.length,
+    // indexPairSupport sums both arm orientations before the endpoint cap.
+    // Save the exact scorer input, not just the ranked, oriented shortlist.
+    scoringVersion: "all-pairs-capped-v1",
+    scoredEvidencePairs: Array.from(pairSupport, function ([key, count]) {
+      const [one, two] = key.split(":").map(Number);
+      return { one, two, count };
+    }),
     selectedBasePairs: selectedEvidence,
     rankedStems: stems,
     requestedStemConstraints: stemConstraints.length,
@@ -232,7 +228,7 @@ async function runComradesFold(message) {
 
 // COMRADES evidence: RNAcofold folds each HYB record's two arms, the
 // intermolecular pairs are mapped back to the reference and counted once per
-// record, and the strongest pairs inside the sequence are kept.
+// record. Keep the complete, ranked evidence inside the prepared sequence.
 async function collectComradesEvidence(engine, comrades, evidenceArms, sequenceLength, temperature, minimumLoop, startPercent, spanPercent) {
   const mappedPairs = [];
   let cofoldsWithIntermolecularPairs = 0;
@@ -253,9 +249,10 @@ async function collectComradesEvidence(engine, comrades, evidenceArms, sequenceL
       await yieldToEventLoop();
     }
   }
-  const allEvidence = comrades.aggregateEvidence(mappedPairs);
-  const selectedEvidence = comrades.selectFragmentEvidence(allEvidence, 1, sequenceLength);
-  return { mappedPairs, cofoldsWithIntermolecularPairs, allEvidence, selectedEvidence };
+  const eligibleEvidence = comrades.aggregateEvidence(mappedPairs).filter(function (entry) {
+    return entry.one <= sequenceLength && entry.two <= sequenceLength;
+  });
+  return { mappedPairs, cofoldsWithIntermolecularPairs, eligibleEvidence };
 }
 
 // The per-base support of IRIS and CPLfold results is scored the COMRADES way,
@@ -271,39 +268,13 @@ function preparedComradesArms(evidenceArms, prepared) {
   }));
 }
 
-async function comradesSupportEvidence(engine, evidenceArms, sequence, startPercent, spanPercent) {
-  const prepared = String(sequence || "").toUpperCase().replace(/T/g, "U");
+async function comradesSupportEvidence(evidenceArms, sequence, startPercent, spanPercent) {
+  const prepared = globalThis.Hyb2FoldText.readSequence(sequence);
+  if (!prepared) throw new Error("COMRADES support scoring needs the prepared sequence.");
   const arms = preparedComradesArms(evidenceArms, prepared);
-  const found = await collectComradesEvidence(engine, getComradesCore(), arms, prepared.length, 37, 3, startPercent, spanPercent);
+  const found = await collectComradesEvidence(await getEngine(), getComradesCore(), arms, prepared.length, 37, 3, startPercent, spanPercent);
   return {
-    pairs: found.selectedEvidence.map(function (entry) { return { one: entry.one, two: entry.two, count: entry.count }; }),
-    inputRecords: arms.length,
-    cofoldsWithIntermolecularPairs: found.cofoldsWithIntermolecularPairs,
-    temperature: 37,
-    minimumLoop: 3
-  };
-}
-
-// CPLfold's rnacofold read support: the same RNAcofold evidence, but every
-// pair, since the bonus matrix uses all of them and not only the strongest
-// that the COMRADES constraint fit keeps.
-async function rnacofoldPairEvidence(engine, evidenceArms, sequence) {
-  const prepared = String(sequence || "").toUpperCase().replace(/T/g, "U");
-  const arms = preparedComradesArms(evidenceArms, prepared);
-  const found = await collectComradesEvidence(engine, getComradesCore(), arms, prepared.length, 37, 3, 5, 90);
-  return {
-    pairs: found.allEvidence
-      .filter(function (entry) { return entry.one !== entry.two; })
-      .map(function (entry) { return [entry.one, entry.two, entry.count]; }),
-    // the same cofolds give the COMRADES support score of the result, as
-    // comradesSupportEvidence would, so the page need not cofold them again
-    support: {
-      pairs: found.selectedEvidence.map(function (entry) { return { one: entry.one, two: entry.two, count: entry.count }; }),
-      inputRecords: arms.length,
-      cofoldsWithIntermolecularPairs: found.cofoldsWithIntermolecularPairs,
-      temperature: 37,
-      minimumLoop: 3
-    },
+    pairs: found.eligibleEvidence.map(function (entry) { return { one: entry.one, two: entry.two, count: entry.count }; }),
     inputRecords: arms.length,
     cofoldsWithIntermolecularPairs: found.cofoldsWithIntermolecularPairs,
     temperature: 37,
@@ -337,7 +308,7 @@ function normaliseEvidenceArms(value) {
     const sequenceTwo = String(job && job.sequenceTwo || "").toUpperCase();
     const oneStart = Number(job && job.oneStart);
     const twoStart = Number(job && job.twoStart);
-    if (!sequenceOne || !sequenceTwo || /[^ACGU]/.test(sequenceOne + sequenceTwo)) {
+    if (!sequenceOne || !sequenceTwo || Array.from(sequenceOne + sequenceTwo).some(base => !globalThis.Hyb2FoldText.alphabet.includes(base))) {
       throw new Error("Prepared HYB arm " + (index + 1) + " contains an invalid RNA sequence.");
     }
     if (sequenceOne.length + sequenceTwo.length > MAX_SEQUENCE_LENGTH) {
@@ -497,15 +468,13 @@ function postProgress(stage, percent, details) {
   });
 }
 
-function boundedInteger(value, minimum, maximum, fallback, label) {
-  if (value === undefined || value === null || value === "") {
-    return fallback;
-  }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+function boundedInteger(message, { ranges, defaults }, key, label) {
+  const [minimum, maximum] = ranges[key];
+  const value = Object.hasOwn(message, key) ? message[key] : defaults[key];
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
     throw new Error(label + " must be a whole number from " + minimum + " to " + maximum + ".");
   }
-  return parsed;
+  return value;
 }
 
 function foldWithVienna(engine, sequence, temperature, minimumLoop, constraints) {
@@ -647,16 +616,15 @@ function dotBracketPairs(sequence, dotBracket) {
   return pairs.sort(function (first, second) { return first.left - second.left; });
 }
 
-function validateSequence(sequence) {
+function readViennaSequence(input) {
+  const sequence = globalThis.Hyb2FoldText.readSequence(input);
   if (!sequence) {
     throw new Error("Choose a non-empty RNA sequence first.");
   }
   if (sequence.length > MAX_SEQUENCE_LENGTH) {
     throw new Error("ViennaRNA WebAssembly supports sequences up to " + MAX_SEQUENCE_LENGTH + " nt in HYB2 Web Lite.");
   }
-  if (/[^ACGU]/.test(sequence)) {
-    throw new Error("ViennaRNA folding accepts only A, C, G and U in this workspace.");
-  }
+  return sequence;
 }
 
 function normaliseConstraints(value, sequence, minimumLoop) {
@@ -714,14 +682,18 @@ function normaliseConstraints(value, sequence, minimumLoop) {
   return constraints;
 }
 
-function normaliseMinimumLoop(value) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 12 ? parsed : 3;
-}
-
-function normaliseTemperature(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : 37;
+function readViennaParameters(message, { ranges, defaults }) {
+  const temperature = Object.hasOwn(message, "temperature") ? message.temperature : defaults.temperature;
+  const [minTemp, maxTemp] = ranges.temperature;
+  if (!Number.isFinite(temperature) || temperature < minTemp || temperature > maxTemp) {
+    throw new Error(`Folding temperature must be a number from ${minTemp} to ${maxTemp} °C.`);
+  }
+  const minimumLoop = Object.hasOwn(message, "minimumLoop") ? message.minimumLoop : defaults.minLoopSize;
+  const [minLoop, maxLoop] = ranges.minLoopSize;
+  if (!Number.isInteger(minimumLoop) || minimumLoop < minLoop || minimumLoop > maxLoop) {
+    throw new Error(`Minimum hairpin loop must be a whole number from ${minLoop} to ${maxLoop}.`);
+  }
+  return { temperature, minimumLoop };
 }
 
 function yieldToEventLoop() {

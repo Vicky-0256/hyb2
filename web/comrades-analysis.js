@@ -3,6 +3,7 @@
 
   const api = factory();
   if (typeof module === "object" && module.exports) {
+    if (!globalThis.Hyb2FoldText) require("./support-kernels.js");
     module.exports = api;
   }
   if (root) {
@@ -57,23 +58,14 @@
     }
 
     const segments = regions.map(function (region, index) {
-      const entry = findReferenceEntry(fasta, region.rna);
+      const entry = globalThis.Hyb2FoldText.findFastaEntry(fasta, region.rna);
       if (!entry) {
         throw new Error("No mapped FASTA sequence is available for " + region.rna + ".");
       }
-      const fullSequence = normaliseSequence(entry.sequence);
-      if (!settings.cofold && fullSequence.invalid.length) {
-        throw new Error("The mapped FASTA sequence for " + region.rna + " contains unsupported symbols: " + fullSequence.invalid.join(", ") + ".");
-      }
-      if (region.end > fullSequence.sequence.length) {
-        throw new Error("Region " + region.rna + ":" + region.start + "-" + region.end + " exceeds the mapped FASTA length of " + fullSequence.sequence.length + " nt.");
-      }
-      const selectedSequence = normaliseSequence(fullSequence.sequence.slice(region.start - 1, region.end));
-      // Cofold uses only the two selected windows. Unknown bases elsewhere in
-      // the reference (including a long gap between windows) are not input.
-      // Keep the legacy whole-reference validation for the other workflows.
-      if (settings.cofold && selectedSequence.invalid.length) {
-        throw new Error("Selected region " + region.rna + ":" + region.start + "-" + region.end + " contains unsupported symbols: " + selectedSequence.invalid.join(", ") + ".");
+      const sequence = globalThis.Hyb2FoldText.reference(entry).window(region.start, region.end, settings.cofold);
+      const minimum = regions.length === 1 ? globalThis.Hyb2FoldText.minWindowNt : globalThis.Hyb2FoldText.minSequenceNt;
+      if (sequence.length < minimum) {
+        throw new Error(`Reference region ${index + 1} is ${sequence.length} nt; select at least ${minimum} nt.`);
       }
       return {
         index: index,
@@ -81,13 +73,13 @@
         referenceId: entry.id,
         referenceStart: region.start,
         referenceEnd: region.end,
-        sequence: selectedSequence.sequence,
+        sequence: sequence,
         preparedStart: 0,
         preparedEnd: 0
       };
     });
 
-    const linker = segments.length === 2 && !settings.cofold ? originalLinker() : "";
+    const linker = segments.length === 2 && !settings.cofold ? globalThis.Hyb2FoldText.readSequence(originalLinker(), "COMRADES spacer") : "";
     let preparedSequence = "";
     segments.forEach(function (segment, index) {
       if (index > 0) {
@@ -124,7 +116,7 @@
 
       const first = preparedArm(orientation.first, orientation.firstSegment, preparedSequence);
       const second = preparedArm(orientation.second, orientation.secondSegment, preparedSequence);
-      if (!first || !second || /[^ACGU]/.test(first.sequence + second.sequence)) {
+      if (!first || !second) { // both arms are slices of the checked segments
         skipped.invalidSequence += 1;
         return;
       }
@@ -166,29 +158,13 @@
   function normaliseRegions(regions) {
     return regions.map(function (region, index) {
       const rna = String(region && region.rna || "").trim();
-      const start = Number(region && region.start);
-      const end = Number(region && region.end);
-      if (!rna || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) {
+      const start = globalThis.Hyb2FoldText.coordinateOrNull(region && region.start);
+      const end = globalThis.Hyb2FoldText.coordinateOrNull(region && region.end);
+      if (!rna || start === null || end === null || end < start) {
         throw new Error("Reference region " + (index + 1) + " must have an RNA name and 1-based start/end coordinates.");
       }
       return { rna: rna, start: start, end: end };
     });
-  }
-
-  function findReferenceEntry(fasta, rna) {
-    const mappedId = fasta.mapping && fasta.mapping[rna] || rna;
-    return fasta.sequences.find(function (entry) {
-      return entry.id === mappedId;
-    }) || null;
-  }
-
-  function normaliseSequence(value) {
-    const sequence = String(value || "").replace(/\s+/g, "").toUpperCase().replace(/T/g, "U");
-    const matches = sequence.match(/[^ACGU]/g);
-    return {
-      sequence: sequence,
-      invalid: matches ? Array.from(new Set(matches)) : []
-    };
   }
 
   function originalLinker() {
@@ -477,7 +453,7 @@
     };
   }
 
-  function scoreStructurePairs(pairs, evidence, sequenceLength) {
+  function indexPairSupport(evidence) {
     const support = new Map();
     (evidence || []).forEach(function (entry) {
       const left = Math.min(entry.one, entry.two);
@@ -485,8 +461,19 @@
       const key = left + ":" + right;
       support.set(key, (support.get(key) || 0) + (Number(entry.count) || 0));
     });
+    return support;
+  }
 
+  // Lau's bp_score.sh passes -m 1000000 to make_VARNA_scores_2.sh.
+  // The scalar counts both endpoints; drawing colours retain the full count.
+  function pairScoreContribution(count) {
+    return 2 * Math.min(count, 1_000_000);
+  }
+
+  function scoreStructurePairs(pairs, evidence, sequenceLength) {
+    const support = evidence instanceof Map ? evidence : indexPairSupport(evidence);
     const nucleotideSupport = Array.from({ length: Math.max(0, Number(sequenceLength) || 0) }, function () { return 0; });
+    let comradesScore = 0;
     let matchedPairSupport = 0;
     let matchedPairs = 0;
     const annotatedPairs = (pairs || []).map(function (pair) {
@@ -494,6 +481,7 @@
       const right = Math.max(Number(pair.left), Number(pair.right));
       const evidenceSupport = support.get(left + ":" + right) || 0;
       if (evidenceSupport > 0) {
+        comradesScore += pairScoreContribution(evidenceSupport);
         matchedPairSupport += evidenceSupport;
         matchedPairs += 1;
         if (left >= 1 && left <= nucleotideSupport.length) nucleotideSupport[left - 1] = evidenceSupport;
@@ -506,10 +494,27 @@
       pairs: annotatedPairs,
       matchedPairs: matchedPairs,
       matchedPairSupport: matchedPairSupport,
-      comradesScore: matchedPairSupport * 2,
+      comradesScore: comradesScore,
       nucleotideSupport: nucleotideSupport,
       maximumNucleotideSupport: nucleotideSupport.reduce(function (maximum, value) { return Math.max(maximum, value); }, 0)
     };
+  }
+
+  // Both pair kernels supply the raw count for each pair of this candidate,
+  // not the transformed CPLfold bonus at that position in the matrix.
+  function rawNucleotideSupport(result) {
+    const values = Array(result.sequence.length).fill(0);
+    result.pairs.forEach(function (pair, index) {
+      values[pair.left - 1] = values[pair.right - 1] = result.comradesPairCounts[index];
+    });
+    return values;
+  }
+
+  function pairCountSource(result) {
+    if (result.evidence.pairCounter === "host-supplied evidencePairs") return "host-supplied";
+    const kernel = result.evidence.supportKernel;
+    if (!kernel) return "RNAduplex";
+    return globalThis.Hyb2SupportKernels.options.find(option => option.value === kernel)?.pairModel || "recorded pair";
   }
 
   return {
@@ -527,6 +532,10 @@
     flattenConstraintPairs: flattenConstraintPairs,
     validateConstraintSet: validateConstraintSet,
     seededShuffle: seededShuffle,
+    indexPairSupport: indexPairSupport,
+    pairScoreContribution: pairScoreContribution,
+    pairCountSource: pairCountSource,
+    rawNucleotideSupport: rawNucleotideSupport,
     scoreStructurePairs: scoreStructurePairs
   };
 }));

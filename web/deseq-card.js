@@ -838,6 +838,9 @@
       const transfer = samples.map(function (sample) { return sample.arms.buffer; });
       if (typeof Worker === "undefined") {
         setTimeout(function () {
+          if (token !== runToken) {
+            return;
+          }
           try {
             const D = window.Hyb2Deseq;
             finish(D.compare(samples.map(function (sample) { return { name: sample.name, cells: D.binArms(sample.arms, BIN) }; }), conditionOne, options));

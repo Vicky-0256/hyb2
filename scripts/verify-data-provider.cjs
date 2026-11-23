@@ -42,7 +42,7 @@ function loadAnalysisContext() {
     window: {}
   });
   context.globalThis = context;
-  ["analysis-data.js", "data-provider.js", "page-data.js"].forEach(function (file) {
+  ["support-kernels.js", "analysis-data.js", "comrades-analysis.js", "data-provider.js", "page-data.js"].forEach(function (file) {
     vm.runInContext(fs.readFileSync(web(file), "utf8"), context, { filename: file });
   });
   return context;
@@ -52,6 +52,65 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+async function verifyReferenceCoordinates(context) {
+  const { Hyb2Data: data, Hyb2Provider, Hyb2Comrades } = context.window;
+  const rules = context.Hyb2FoldText;
+  const sequences = data.parseFasta(">X\n🧬acgtcatgcaag\n>Y\nttgc");
+  const fasta = { sequences, mapping: data.buildFastaMapping(["X", "Y"], sequences) };
+  const records = [{ id: "cross", rnaOne: "X", rnaOneStart: 3, rnaOneEnd: 5, rnaTwo: "Y", rnaTwoStart: 1, rnaTwoEnd: 3, supportCount: 1 }];
+  const provider = new Hyb2Provider.BrowserProvider({ data });
+  provider.addDataset({ id: "test", summary: { rnaNames: ["X", "Y"] }, records });
+  provider.setReference(fasta);
+  const read = (rna, start, end) => provider.getSequence("test", { rna, start, end });
+
+  const mapped = (await provider.listDatasets())[0].reference.mapped;
+  assert.deepEqual([mapped.X.length, mapped.Y.length], [13, 4]);
+  for (const [x, y, lx, ly] of [["X", "Y", 13, 4], ["Y", "X", 4, 13]]) {
+    const bins = await provider.getContactBins("test", { rnaX: x, rnaY: y, binSize: 1 });
+    assert.deepEqual([bins.lengthX, bins.lengthY, bins.length, bins.length2], [lx, ly, lx, ly]);
+  }
+  const full = await read("X");
+  assert.deepEqual([full.start, full.end, full.length, full.sequence, plain(full.invalidCharacters)], [1, 13, 13, "🧬ACGTCATGCAAG", ["🧬"]]);
+  const first = await read("X", 1, 1);
+  assert.deepEqual([first.sequence, plain(first.invalidCharacters)], ["🧬", ["🧬"]]);
+  const preview = await read("X", 3, 12);
+  assert.deepEqual([preview.sequence, preview.length, plain(preview.invalidCharacters)], ["CGTCATGCAA", 13, []]);
+  const tail = await read("X", 12, 99);
+  assert.deepEqual([tail.start, tail.end, tail.sequence], [12, 13, "AG"]);
+  assert.equal(await read("X", 14), null);
+
+  const regions = [{ rna: "X", start: 3, end: 12 }, { rna: "Y", start: 1, end: 3 }];
+  const fold = (regions, cofold) => Hyb2Comrades.prepareReferenceAssembly(records, fasta, { regions, cofold });
+  const assembly = fold(regions, true);
+  assert.equal(assembly.sequence, "CGUCAUGCAAUUG");
+  assert.deepEqual([assembly.evidenceArms[0].sequenceOne, assembly.evidenceArms[0].sequenceTwo], ["CGU", "UUG"]);
+  assert.throws(() => fold(regions, false), /mapped FASTA sequence for X contains unsupported symbols: 🧬/u);
+  assert.throws(() => fold([{ ...regions[0], start: 1 }, regions[1]], true), /Selected region X:1-12 contains unsupported symbols: 🧬/u);
+  assert.throws(() => fold([{ ...regions[0], end: 14 }, regions[1]], true), /exceeds the mapped FASTA length of 13/);
+
+  // In-place reference edits and a changed folding alphabet invalidate the
+  // prepared view without changing what the non-folding preview accepts.
+  const previous = rules.reference(sequences[0]);
+  assert.equal(rules.reference(sequences[0]), previous);
+  sequences[0].sequence = "T ß\u0085🧬🧬N";
+  const changed = rules.reference(sequences[0]);
+  assert.notEqual(changed, previous);
+  assert.deepEqual([changed.length, changed.rawWindow(1, 5)], [5, "Tß🧬🧬N"]);
+  assert.deepEqual(plain((await read("X")).invalidCharacters), ["ß", "🧬", "N"]);
+  const ordinary = rules.reference(sequences[1]);
+  assert.deepEqual([ordinary.length, (await read("Y")).sequence, ordinary.window(1, 4)], [4, "TTGC", "UUGC"]);
+  const alphabet = rules.alphabet;
+  try {
+    rules.alphabet = "ACG";
+    assert.equal(changed.window(1, 1, true), "U", "a held raw view keeps its original alphabet even on its first fold");
+    const restricted = rules.reference(sequences[1]);
+    assert.notEqual(restricted, ordinary);
+    assert.equal(restricted.rawWindow(1, 4), "TTGC");
+    assert.throws(() => restricted.window(3, 4), /unsupported symbols: U/);
+    assert.equal(restricted.window(3, 4, true), "GC");
+  } finally { rules.alphabet = alphabet; }
+}
+
 async function main() {
   const parsed = await parseExample();
   const context = loadAnalysisContext();
@@ -59,6 +118,7 @@ async function main() {
   const api = context.window.Hyb2Provider;
   const pageDataApi = context.window.Hyb2PageData;
   assert.ok(data && api && pageDataApi, "analysis-data.js, data-provider.js and page-data.js must load in one context");
+  await verifyReferenceCoordinates(context);
 
   const records = parsed.records.map(function (record, index) { record.index = index; return record; });
   const summary = parsed.summary;

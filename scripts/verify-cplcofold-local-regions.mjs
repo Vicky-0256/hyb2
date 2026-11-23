@@ -51,8 +51,8 @@ async function dispatch(payload, target = null) {
     const expected = payload.type === "cplfold-bonus-matrix" ? "bonus-matrix-complete" : "complete";
     const done = messages.find(message => message.type === expected);
     assert.ok(done, "the actual Pyodide worker must finish " + payload.type);
-    assert.equal(done.result.engine, "CPLcofold");
-    assert.equal(done.result.bridgeVersion, "7");
+    assert.equal(done.result.engine, payload.cutpoint ? "CPLcofold" : "CPLfold");
+    assert.equal(done.result.bridgeVersion, "8");
     completedRuns += 1;
     return done.result;
   } finally {
@@ -79,12 +79,9 @@ const context = vm.createContext({
   console,
   Worker: BrowserWorkerTransport,
   document: { querySelector: () => null, documentElement: { dataset: {} } },
-  window: { Hyb2Data: { normaliseFoldSequence(value) {
-    const sequence = String(value || "").replace(/\s+/g, "").toUpperCase().replace(/T/g, "U");
-    return { sequence, invalid: [...new Set(sequence.match(/[^ACGU]/g) || [])] };
-  } } }
+  window: {}
 });
-for (const filename of ["comrades-analysis.js", "analysis-pages.js", "structure-controller.js"]) {
+for (const filename of ["support-kernels.js", "analysis-data.js", "comrades-analysis.js", "analysis-pages.js", "structure-controller.js"]) {
   vm.runInContext(fs.readFileSync(path.join(repository, "web", filename), "utf8"), context, { filename });
 }
 const { Hyb2Pages: pages, Hyb2Structure: controller, Hyb2Comrades: comrades } = context.window;
@@ -201,12 +198,101 @@ function expectedUpperBonus(arms) {
   }
   const expected = new Map();
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-    if (support[i][j] >= 1e-6) expected.set(`${i + 1}:${j + 1}`, Math.fround(Math.log1p(support[i][j])));
+    if (support[i][j] >= 2 ** -23) expected.set(`${i + 1}:${j + 1}`, Math.log1p(support[i][j]));
   }
   return expected;
 }
 
+function policyFixture(source, length, overrides = {}) {
+  const mapping = {A: "A", B: "B"};
+  const fasta = {mapping, sequences: [{id: "A", sequence: "g\u0085".repeat(length)}, {id: "B", sequence: "c".repeat(length)}]};
+  const records = [{id: "read", index: 0, sequence: " g".repeat(length)}];
+  return {
+    summary: {rnaNames: ["A", "B"]}, records, reference: {mapping},
+    view: {structureRecords: records, structureEvidence: {fasta, rnas: ["A", "B"], guided: false, records: []}},
+    structure: {engine: "cplfold", source, cplfoldMode: "single", cplfoldEvidence: "none", workflow: "custom",
+      pastedSequence: ">A\r1 " + "g".repeat(length), cplfoldSequenceTwo: " c".repeat(length), selectedRecordIndex: 0,
+      rna: "A", start: "", end: "", secondRna: "B", secondStart: "1", secondEnd: String(length),
+      cplfoldBeam: "20", cplfoldMaxPhase1: "1", cplfoldEnergyDelta: "0", cplfoldEnergyModel: "DP09",
+      cplfoldAlpha: "0", cplfoldBeta: "0", cplfoldAllowPseudoknot: false, status: "idle", result: null, ...overrides}
+  };
+}
+
+async function checkPolicy(name, state, sequence, issue) {
+  const info = pages.getStructureSequence(state);
+  if (issue) {
+    const before = workers.length, completed = completedRuns;
+    assert.match(info.error, issue, name);
+    assert.equal(controller.predict(state, api), false, name);
+    assert.deepEqual([workers.length, completedRuns, active], [before, completed, false], "no request for " + name);
+    console.log(JSON.stringify({case: name, accepted: false, error: info.error}));
+    return;
+  }
+  assert.equal(info.error, "", name);
+  assert.equal(info.sequence, sequence, name);
+  assert.equal(controller.predict(state, api), true, name + ": " + api.toasts.at(-1));
+  await state.structureWorker.pending;
+  assert.equal(state.structure.status, "complete", state.structure.message);
+  const result = state.structure.result;
+  assert.equal(result.sequence, sequence);
+  assert.equal(result.dotBracket.length, sequence.length);
+  assert.equal(result.cutpoint ?? null, info.cutpoint ?? null);
+  console.log(JSON.stringify({case: name, accepted: true, sequence: result.sequence, cutpoint: result.cutpoint ?? null,
+    dotBracket: result.dotBracketWithBreak || result.dotBracket, energy: result.energy}));
+}
+
 try {
+  for (const length of [4, 5, 7]) {
+    await checkPolicy(`paste ${length} nt`, policyFixture("paste", length), "G".repeat(length), length < 5 ? /at least 5 nt/ : null);
+  }
+  for (const source of ["record", "reference"]) for (const length of [0, 1]) {
+    await checkPolicy(`${source} ${length} nt`, policyFixture(source, length), "G".repeat(length), length ? null : /at least 1 nt/);
+  }
+  const wholeReference = policyFixture("reference", 4);
+  await checkPolicy("whole reference 4 nt with blank bounds", wholeReference, "GGGG");
+  Object.assign(wholeReference.structure, {start: "1", end: "4"});
+  await checkPolicy("explicit 1-4 window on the same 4 nt reference", wholeReference, null, /at least 10 nt/);
+  for (const source of ["paste", "reference"]) for (const length of [1, 4]) {
+    await checkPolicy(`${source} ${length}+${length} nt`, policyFixture(source, length, {cplfoldMode: "cofold", start: "1", end: String(length)}),
+      "G".repeat(length) + "C".repeat(length));
+  }
+  await checkPolicy("empty second pasted strand", policyFixture("paste", 4, {cplfoldMode: "cofold", cplfoldSequenceTwo: "\u0085"}), null, /at least 1 nt/);
+  for (const length of [9, 10]) {
+    await checkPolicy(`single window ${length} nt`, policyFixture("reference", 12, {start: "2", end: String(length + 1)}),
+      "G".repeat(length), length < 10 ? /at least 10 nt/ : null);
+  }
+  await checkPolicy("reversed single window", policyFixture("reference", 12, {start: "11", end: "2"}), null, /start must not be after the end/);
+  for (const bounds of [{start: "4", end: "1"}, {start: "1", end: "4", secondStart: "4", secondEnd: "1"}]) {
+    await checkPolicy("reversed two-region window " + JSON.stringify(bounds), policyFixture("reference", 4, {cplfoldMode: "cofold", ...bounds}),
+      null, /start must not be after the end/);
+  }
+  const rules = context.Hyb2FoldText;
+  const original = {minPastedNt: rules.minPastedNt, minSequenceNt: rules.minSequenceNt, minWindowNt: rules.minWindowNt};
+  try {
+    Object.assign(rules, {minPastedNt: 6, minSequenceNt: 3, minWindowNt: 11});
+    await checkPolicy("changed paste minimum rejects 5", policyFixture("paste", 5), null, /at least 6 nt/);
+    await checkPolicy("changed paste minimum accepts 6", policyFixture("paste", 6), "G".repeat(6));
+    for (const source of ["record", "reference"]) {
+      await checkPolicy(`changed sequence minimum rejects ${source} 1`, policyFixture(source, 1), null, /at least 3 nt/);
+      await checkPolicy(`changed sequence minimum accepts ${source} 3`, policyFixture(source, 3), "GGG");
+    }
+    for (const source of ["paste", "reference"]) {
+      await checkPolicy(`changed fragment minimum rejects ${source} 2+2`, policyFixture(source, 2, {cplfoldMode: "cofold", start: "1", end: "2"}), null, /at least 3 nt/);
+      await checkPolicy(`changed fragment minimum accepts ${source} 3+3`, policyFixture(source, 3, {cplfoldMode: "cofold", start: "1", end: "3"}), "GGGCCC");
+    }
+    await checkPolicy("changed window minimum rejects 10", policyFixture("reference", 12, {start: "1", end: "10"}), null, /at least 11 nt/);
+    await checkPolicy("changed window minimum accepts 11", policyFixture("reference", 12, {start: "1", end: "11"}), "G".repeat(11));
+    Object.assign(rules, original, {minSequenceNt: 11});
+    await checkPolicy("sequence minimum does not replace paste minimum", policyFixture("paste", 5), "G".repeat(5));
+    await checkPolicy("sequence minimum does not replace window minimum", policyFixture("reference", 12, {start: "1", end: "10"}), "G".repeat(10));
+    for (const source of ["record", "reference"]) {
+      await checkPolicy(`raised sequence minimum rejects ${source} 10`, policyFixture(source, 10), null, /at least 11 nt/);
+      await checkPolicy(`raised sequence minimum accepts ${source} 11`, policyFixture(source, 11), "G".repeat(11));
+    }
+    const prepared = await dispatch({type: "cplfold", sequence: "G", evidenceMode: "none", allowPseudoknot: false});
+    assert.equal(prepared.sequence, "G", "prepared engine input does not acquire a task/form cutoff");
+  } finally { Object.assign(rules, original); }
+
   // Both selected windows are valid even though their reference flanks and
   // the 5,000-nt gap contain unknown symbols. Those symbols keep their indices.
   const sameNoPk = await runController(fixture(true, false));
@@ -267,7 +353,7 @@ try {
   const expected = expectedUpperBonus(workers.at(-1).message.evidenceArms);
   assert.equal(different.evidence.bonusEntries.length, expected.size);
   for (const entry of different.evidence.bonusEntries) {
-    assert.ok(Math.abs(entry.value - expected.get(`${entry.one}:${entry.two}`)) < 1e-7,
+    assert.ok(Math.abs(entry.value - expected.get(`${entry.one}:${entry.two}`)) < 1e-12,
               "prepared reads must match an independent strand-bounded Gaussian calculation");
   }
   // An inter-strand-only export must have no within-strand Gaussian leakage.
@@ -278,7 +364,77 @@ try {
   assert.equal(matrix.sequence, "GGGGCCCC");
   assert.equal(matrix.cutpoint, 4);
 
-  console.log(`PASS: ${completedRuns} real Pyodide requests; distant same-RNA and different-RNA windows, compact source coordinates, read remapping, alpha/beta, ${pk.length} PK candidates, and legacy validation.`);
+  // A worker caller may supply C instead of estimating arm pairs. Neither an
+  // empty table nor a bad table means "re-estimate". Q affects B but never C.
+  for (const supportKernel of ["comrades", "duplex"]) for (const type of ["cplfold", "cplfold-bonus-matrix"]) {
+    const inputs = {type, sequence: "GGGGCCCC", cutpoint: 4, supportKernel, allowPseudoknot: false, evidenceMode: "hyb-blocks",
+      evidenceArms: [{oneStart: 1, oneEnd: 4, twoStart: 5, twoEnd: 8}], saturatingQ: 15};
+    for (const [evidencePairs, q, raw, bonus, score] of [
+      [[], 15, 0, 0, 0], [[[1, 8, 3], [8, 1, 2]], 15, 5, 0.9, 10],
+      [[[1, 8, 1_500_000]], 1_500_000, 1_500_000, 1.8, 2_000_000]
+    ]) {
+      const res = await dispatch({...inputs, evidencePairs, saturatingQ: q});
+      assert.equal(res.evidence.pairCounter, "host-supplied evidencePairs");
+      assert.equal(res.evidence.saturatingQ, q);
+      assert.ok(!messages.some(m => ["viennarna", "rna-cofold", "rna-duplex"].includes(m.phase)));
+      const cells = res.evidence.bonusEntries;
+      assert.equal(cells.length, evidencePairs.length ? 1 : 0);
+      if (cells.length) {
+        assert.deepEqual([cells[0].one, cells[0].two], [1, 8]);
+        assert.ok(Math.abs(cells[0].value - bonus) < 1e-6, "B must use the uncapped count");
+      }
+      if (type === "cplfold") {
+        assert.equal(res.comradesScore, score);
+        for (const member of [res, ...res.candidates]) {
+          const counts = member.pairs.map(p => p.left === 1 && p.right === 8 ? raw : 0);
+          assert.deepEqual(member.comradesPairCounts, counts);
+          assert.equal(member.comradesScore, counts.includes(raw) ? score : 0);
+        }
+      }
+    }
+    for (const [overrides, reason] of [[{evidencePairs: {}}, /evidencePairs must be an array/], [{evidencePairs: null}, /evidencePairs must be an array/],
+      [{evidencePairs: [[1, 1, 1]]}, /pairs a position with itself/], [{evidencePairs: [], saturatingQ: -1}, /saturatingQ/]]) {
+      messages = [];
+      await self.onmessage({data: {...inputs, ...overrides}});
+      assert.equal(messages.at(-1).type, "error");
+      assert.match(messages.at(-1).message, reason);
+      assert.ok(!messages.some(m => ["viennarna", "rna-cofold", "rna-duplex"].includes(m.phase)));
+    }
+  }
+
+  // Arm 1 has a four-pair hairpin and a GGG tail. RNAcofold keeps the
+  // hairpin, but only the tail's three cross-arm pairs contribute to C.
+  const arm = {oneStart: 1, oneEnd: 15, twoStart: 19, twoEnd: 21};
+  const reverse = {oneStart: 19, oneEnd: 21, twoStart: 1, twoEnd: 15};
+  for (const cutpoint of [undefined, 18]) {
+    const inputs = {sequence: "GGGGAAAACCCCGGGAAACCC", cutpoint, evidenceMode: "hyb-blocks", supportKernel: "comrades",
+      evidenceArms: [arm, arm, reverse], allowPseudoknot: false};
+    const exported = await dispatch({...inputs, type: "cplfold-bonus-matrix"});
+    const keys = ["13:21", "14:20", "15:19"];
+    assert.deepEqual(exported.evidence.bonusEntries.map(e => `${e.one}:${e.two}`), keys);
+    assert.ok(exported.evidence.bonusEntries.every(e => Math.abs(e.value - 1.8) < 1e-6)); // B=3.6*3/(3+3), not C=3.
+    assert.ok(messages.some(m => m.phase === "rna-cofold" && m.stage.includes("RNAcofold")));
+    const folded = await dispatch({...inputs, type: "cplfold"});
+    assert.equal(folded.evidence.supportKernel, "comrades");
+    assert.match(folded.evidence.pairCounter, /RNAcofold/);
+    assert.deepEqual(folded.evidence.bonusEntries, exported.evidence.bonusEntries);
+    assert.ok(folded.comradesScore > 0);
+    for (const member of [folded, ...folded.candidates]) {
+      const expected = member.pairs.map(p => keys.includes(`${p.left}:${p.right}`) ? 3 : 0);
+      assert.deepEqual(member.comradesPairCounts, expected);
+      assert.equal(member.comradesScore, 2 * expected.reduce((sum, c) => sum + c, 0));
+    }
+    const progress = messages.filter(m => m.type === "progress").map(m => m.phase);
+    assert.ok(progress.indexOf("rna-cofold") >= 0 && progress.indexOf("rna-cofold") < progress.indexOf("cplfold"));
+    assert.ok(!progress.includes("rna-duplex"));
+    // Removing the tail leaves no cross-arm pair under RNAcofold; RNAduplex
+    // cannot form the hairpin and predicts three pairs on the same arms.
+    for (const [supportKernel, expected] of [["comrades", 0], ["duplex", 3]]) {
+      const withoutTail = await dispatch({...inputs, supportKernel, evidenceArms: [{...arm, oneEnd: 12}], type: "cplfold-bonus-matrix"});
+      assert.equal(withoutTail.evidence.bonusEntries.length, expected);
+    }
+  }
+  console.log(`PASS: ${completedRuns} real Pyodide requests; source/layout length policy, local windows, remapping, alpha/beta, ${pk.length} PK candidates, legacy validation, and both arm models.`);
 } finally {
   globalThis.fetch = nativeFetch;
 }

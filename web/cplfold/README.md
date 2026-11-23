@@ -30,8 +30,16 @@ The browser runtime is intentionally conservative:
   checked against its SHA-256 manifest in the worker before import. Increment
   `BRIDGE_VERSION` in the bridge, worker and build manifest whenever that
   packaged interface changes. GitHub Actions publishes the same-origin assets.
-- Put shared runtime resources inside a Python package under `third_party/cplfold/`
-  or `web/cplfold/` and track them in Git. Both builds include package files,
+- The bridge imports the public `cplfold` API (`cplfold.fold`, `cplfold.bonus`,
+  `cplfold.sequence`) and the Hyb2 settings `hyb2analysis.engine_parameters`
+  and `hyb2analysis.support_kernels`. The browser archive has one import root
+  holding `cplfold/` (from `third_party/cplfold/cplfold/`, with its
+  `_internal/energy_params/` data), `cplfold_web.py`, and `hyb2analysis/` with
+  only `__init__.py`, `engine_parameters.py`, `iris_parameters.py` and
+  `support_kernels.py` from `pipeline/hyb2analysis/`
+  (`scripts/bundle_sources.py`).
+- Put shared runtime resources inside the `cplfold` package or under
+  `web/cplfold/` and track them in Git. Both builds include package files,
   including nested `data/` directories. Top-level example datasets are excluded.
 
 CPLfold's own code is GPL-2.0-or-later (`third_party/cplfold/LICENSE`); the

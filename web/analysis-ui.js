@@ -2158,6 +2158,13 @@
     }
   }
 
+  function syncCplfoldModel(structure) {
+    const catalog = globalThis.Hyb2EngineParameters[structure.cplfoldMode === "cofold" ? "cplcofold" : "cplfold"];
+    if (!catalog.models.some(option => option.value === structure.cplfoldEnergyModel)) {
+      structure.cplfoldEnergyModel = catalog.defaultModel;
+    }
+  }
+
   function applyLegacyWorkflowSettings(state, key, value) {
     const structure = state.structure;
     if (key === "engine" && value === "cplfold" && structure.source === "reference") {
@@ -2178,9 +2185,9 @@
         }
       }
     }
-    if (["cplfoldMode", "engine"].indexOf(key) !== -1 && structure.engine === "cplfold" && structure.cplfoldMode === "cofold") {
-      if (["DP03", "DP09"].indexOf(structure.cplfoldEnergyModel) === -1) structure.cplfoldEnergyModel = "DP09";
-      if (structure.source === "record") structure.source = "paste";
+    if (["cplfoldMode", "engine"].indexOf(key) !== -1 && structure.engine === "cplfold") {
+      syncCplfoldModel(structure);
+      if (structure.cplfoldMode === "cofold" && structure.source === "record") structure.source = "paste";
     }
     if (key !== "workflow") {
       if (["engine", "source", "constraintMode", "evidenceLayout", "homodimerOnly", "secondRna", "cplfoldMode"].indexOf(key) !== -1) {
@@ -2207,9 +2214,7 @@
     const cplfold = structure.engine === "cplfold";
     if (cplfold) {
       structure.cplfoldMode = value === "short-intramolecular" ? "single" : "cofold";
-      if (structure.cplfoldMode === "cofold" && ["DP03", "DP09"].indexOf(structure.cplfoldEnergyModel) === -1) {
-        structure.cplfoldEnergyModel = "DP09";
-      }
+      syncCplfoldModel(structure);
     } else {
       structure.engine = "viennarna";
     }
@@ -2256,6 +2261,14 @@
       return element.value === "true";
     }
     return element.value;
+  }
+
+  function setManualFastaMatch(fasta, rna, id) {
+    // Even selecting today's automatic target is an explicit physical choice
+    // if a subsequent Add FASTA changes the effective IDs.
+    if (!fasta.manualMapping) fasta.manualMapping = Object.create(null);
+    fasta.manualMapping[rna] = id;
+    fasta.mapping[rna] = id; // empty is an explicit non-match
   }
 
   function invalidateFastaConsumers(state) {
@@ -2459,11 +2472,7 @@
 
     if (feature === "fasta-mapping") {
       const rna = element.dataset.rna;
-      if (element.value) {
-        state.fasta.mapping[rna] = element.value;
-      } else {
-        delete state.fasta.mapping[rna];
-      }
+      setManualFastaMatch(state.fasta, rna, element.value);
       invalidateFastaConsumers(state);
       if (typeof api.dataChanged === "function") api.dataChanged();
       api.render();
@@ -2678,6 +2687,7 @@
       state.structure.selectedRecordIndex = Number(element.dataset.recordIndex);
       if (state.structure.engine === "cplfold") {
         state.structure.cplfoldMode = "single";
+        syncCplfoldModel(state.structure);
         state.structure.evidenceLayout = "single";
         state.structure.workflow = "custom";
         state.structure.homodimerOnly = false;
@@ -3173,11 +3183,7 @@
         api.showToast("Enter an exact reference ID from the loaded FASTA file.");
         return true;
       }
-      if (reference) {
-        state.fasta.mapping[rna] = reference;
-      } else {
-        delete state.fasta.mapping[rna];
-      }
+      setManualFastaMatch(state.fasta, rna, reference);
       state.fasta.mappingEditorRna = rna;
       state.fasta.mappingEditorReference = reference;
       invalidateFastaConsumers(state);
@@ -3272,9 +3278,7 @@
           state.structure.secondStart = partner ? partner.start : "";
           state.structure.secondEnd = partner ? partner.end : "";
           state.structure.homodimerOnly = false;
-          if (partner && ["DP03", "DP09"].indexOf(state.structure.cplfoldEnergyModel) === -1) {
-            state.structure.cplfoldEnergyModel = "DP09";
-          }
+          syncCplfoldModel(state.structure);
         }
         api.navigate("structure");
       }

@@ -94,7 +94,7 @@ function createContext(options) {
     vm.runInContext(kitSource, context, { filename: "ui-kit.js" });
   }
   [
-    "desktop-adapter.js", "analysis-data.js", "example.js", "data-provider.js", "page-data.js", "comrades-analysis.js",
+    "support-kernels.js", "desktop-adapter.js", "analysis-data.js", "example.js", "data-provider.js", "page-data.js", "comrades-analysis.js",
     "analysis-pages.js", "analysis-ui.js", "overview-page.js", "report-page.js", "app.js"
   ].forEach(function (file) {
     vm.runInContext(fs.readFileSync(web(file), "utf8"), context, { filename: file });
@@ -212,13 +212,17 @@ has(openedHost.innerHTML, /class="landing/);
 assert.equal(opened.location.hash, "");
 
 // ---- downloads public (K9 downloadsAvailable): the full download design
+const currentRelease = [{ tag: "v9.1.0", files: [
+  "HYB2-Desktop-macOS-arm64.dmg", "HYB2-Desktop-Windows-x64-Setup.exe",
+  "HYB2-Desktop-Linux-x64.deb", "HYB2-Desktop-Linux-x64.tar.gz", "SHA256SUMS.txt"
+] }];
 [
   ["Macintosh; Intel Mac OS X 10_15_7", "mac-arm64", "Download for macOS · Apple silicon"],
   ["Windows NT 10.0; Win64; x64", "win-x64", "Download for Windows · 64-bit"],
   ["X11; Linux x86_64", "linux-deb", "Download for Linux · .deb"],
   ["X11; FreeBSD amd64", null, null]
 ].forEach(function (entry) {
-  const page = mountSite(createContext({ userAgent: entry[0] })).innerHTML;
+  const page = mountSite(createContext({ userAgent: entry[0], releases: currentRelease })).innerHTML;
   const primary = /<a class="button desktop-download-primary" href="([^"]+)" data-platform="([^"]+)">([^<]+)<\/a>/.exec(page);
   if (entry[1]) {
     assert.ok(primary, entry[0] + ": one primary download");
@@ -230,14 +234,15 @@ assert.equal(opened.location.hash, "");
     has(page, /<div class="desktop-download-groups">/, "an unknown system sees the three systems side by side");
   }
   ["HYB2-Desktop-macOS-arm64.dmg", "HYB2-Desktop-Windows-x64-Setup.exe", "HYB2-Desktop-Linux-x64.deb", "HYB2-Desktop-Linux-x64.tar.gz"].forEach(function (file) {
-    assert.ok(page.indexOf('href="https://github.com/Vicky-0256/hyb2/releases/latest/download/' + file + '"') > -1, entry[0] + ": " + file);
+    assert.ok(page.indexOf('href="https://github.com/Vicky-0256/hyb2/releases/download/v9.1.0/' + file + '"') > -1, entry[0] + ": " + file);
   });
-  has(page, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest\/download\/SHA256SUMS\.txt">Checksums \(SHA256SUMS\.txt\)<\/a>/);
-  has(page, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest">Release notes<\/a>/);
+  has(page, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/download\/v9\.1\.0\/SHA256SUMS\.txt">Checksums \(SHA256SUMS\.txt\)<\/a>/);
+  has(page, /href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/tag\/v9\.1\.0">Release notes<\/a>/);
   has(page, /<summary>First launch \(unsigned app\)<\/summary>/);
   has(page, /Intel Macs and ARM Linux\/Windows have no installer yet/);
   hasNot(page, /For this computer|This computer/, "the verb is always Download");
-  hasNot(page, /desktop-download-version|desktop-versions/, "no version list without web/releases.js");
+  has(page, /class="desktop-download-version">Latest version <strong>v9\.1\.0<\/strong>/,
+    "the tagged release is named above its primary download");
 });
 
 // Render the same release records the build writes to web/releases.js.
@@ -290,7 +295,9 @@ function rawActions(options) {
 }
 hasNot(rawActions({ releases }), /Download for/, "raw-reads handoff on a Mac with only Windows published");
 has(rawActions({ releases, userAgent: "Windows NT 10.0" }), /href="[^"]*\/download\/v9\.1\.0\/HYB2-Desktop-Windows-x64-Setup\.exe">Download for Windows/);
-has(rawActions({}), /\/releases\/latest\/download\/HYB2-Desktop-macOS-arm64\.dmg/);
+hasNot(rawActions({}), /\/releases\/download\/|\/releases\/latest\/download\/|Download for/,
+  "an untagged local build without a catalog offers no installer");
+has(rawActions({ releases: currentRelease }), /\/releases\/download\/v9\.1\.0\/HYB2-Desktop-macOS-arm64\.dmg/);
 hasNot(rawActions({ releases, downloadsHidden: true }), /\/releases\/|Download for/);
 
 // Exercise the catalog shipped in this build as well as partial-release fixtures.

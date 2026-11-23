@@ -115,21 +115,30 @@ if (fs.existsSync(detector)) {
   const expected = Math.floor(Math.sqrt((8 * Math.pow(1024, 3) * Number(fraction[1]) - Number(base[1]) * 1024 * 1024) / Number(perNt2[1])) / 100) * 100;
   assert.equal(desk.limits.cplfoldExampleNt, expected, "Desktop CPLfold figure follows detector.py cplfold_limits");
 }
+assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7"), null,
+  "do not offer a live latest installer without a release catalog");
+context.window.HYB2_BUILD = { commit: "synthetic", releaseTag: "v0.2.0" };
+context.window.HYB2_RELEASE_PRIMARY = { tag: "v0.2.0", files: [
+  "HYB2-Desktop-macOS-arm64.dmg", "HYB2-Desktop-Linux-x64.deb", "SHA256SUMS.txt"
+] };
+context.window.HYB2_RELEASES = [];
 assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7").id, "mac-arm64");
-assert.equal(desk.detectPlatform("Windows NT 10.0; Win64; x64").id, "win-x64");
+assert.equal(desk.detectPlatform("Windows NT 10.0; Win64; x64"), null,
+  "the tag-pinned catalog does not offer an absent Windows installer");
 assert.equal(desk.detectPlatform("X11; Linux x86_64").id, "linux-deb");
 assert.equal(desk.detectPlatform("Linux; Android 14; Pixel 8"), null, "Android is not desktop Linux");
 assert.equal(desk.detectPlatform("iPhone; CPU iPhone OS 17_0"), null);
 assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7", 5), null, "iPadOS Safari reports a Mac with touch points");
 assert.equal(desk.detectPlatform("Macintosh; Intel Mac OS X 10_15_7", 0).id, "mac-arm64");
-// downloads are public: the latest release's files, and each release's
+// Downloads on a tagged site are pinned to that tag, never a moving latest URL.
 assert.equal(desk.downloadsAvailable, true);
-assert.equal(desk.downloadUrl(desk.platforms[0]), "https://github.com/Vicky-0256/hyb2/releases/latest/download/HYB2-Desktop-macOS-arm64.dmg");
-assert.equal(desk.checksumsUrl(), "https://github.com/Vicky-0256/hyb2/releases/latest/download/SHA256SUMS.txt");
-assert.match(desk.cta("raw-reads"), /^<a class="desktop-cta" href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/latest" data-action="open-desktop".*<strong>Get HYB2 Desktop<\/strong><\/a>$/);
+assert.equal(desk.downloadUrl(desk.platforms[0]), "https://github.com/Vicky-0256/hyb2/releases/download/v0.2.0/HYB2-Desktop-macOS-arm64.dmg");
+assert.equal(desk.checksumsUrl(), "https://github.com/Vicky-0256/hyb2/releases/download/v0.2.0/SHA256SUMS.txt");
+assert.match(desk.cta("raw-reads"), /^<a class="desktop-cta" href="https:\/\/github\.com\/Vicky-0256\/hyb2\/releases\/tag\/v0\.2\.0" data-action="open-desktop".*<strong>Get HYB2 Desktop<\/strong><\/a>$/);
 assert.equal(desk.releaseDownloadUrl("v0.1.4", desk.platforms[1]), "https://github.com/Vicky-0256/hyb2/releases/download/v0.1.4/HYB2-Desktop-Windows-x64-Setup.exe");
-assert.equal(desk.releases().length, 0, "no web/releases.js loaded: no versions");
+assert.equal(desk.releases()[0].tag, "v0.2.0", "the primary installer record comes from the build tag");
 context.window.HYB2_RELEASES = [{ tag: "v0.2.0", published: "2026-11-01", files: ["HYB2-Desktop-macOS-arm64.dmg"] }, { tag: "broken" }, null];
+context.window.HYB2_RELEASE_PRIMARY = { tag: "v0.2.0", files: ["HYB2-Desktop-macOS-arm64.dmg"] };
 assert.equal(desk.releases().map(function (release) { return release.tag; }).join(","), "v0.2.0", "malformed entries are left out");
 assert.equal(desk.downloadUrl(desk.platforms[0]), "https://github.com/Vicky-0256/hyb2/releases/download/v0.2.0/HYB2-Desktop-macOS-arm64.dmg");
 assert.equal(desk.downloadUrl(desk.platforms[1]), "");
@@ -137,9 +146,14 @@ assert.equal(desk.checksumsUrl(), "");
 assert.equal(desk.detectPlatform("Windows NT 10.0"), null);
 assert.equal(desk.releaseNotesUrl(), "https://github.com/Vicky-0256/hyb2/releases/tag/v0.2.0");
 context.window.HYB2_RELEASES = [];
+context.window.HYB2_RELEASE_PRIMARY = null;
 assert.equal(desk.downloadUrl(desk.platforms[0]), "");
-assert.equal(desk.releaseNotesUrl(), "");
+assert.equal(desk.releaseNotesUrl(), "https://github.com/Vicky-0256/hyb2/releases/tag/v0.2.0");
+context.window.HYB2_BUILD = { commit: "local", releaseTag: "" };
+assert.equal(desk.releases().length, 0, "an untagged local build does not invent a primary installer");
 delete context.window.HYB2_RELEASES;
+delete context.window.HYB2_RELEASE_PRIMARY;
+delete context.window.HYB2_BUILD;
 // the generated list, as committed, names only installers the release workflow builds
 const releasesSource = fs.readFileSync(web("releases.js"), "utf8");
 const releasesContext = { window: {} };

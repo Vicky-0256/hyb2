@@ -21,12 +21,18 @@ verifies this directory. Public artifact upload and deployment stay disabled
 unless the repository Actions variable `CPLFOLD_DISTRIBUTION_APPROVED` is set
 to `true`. Set it only after the CPLfold combined-distribution boundary below
 has qualified licence review or the required permission. Pushes to `CPLcofold`
-run the browser and desktop release checks. Pages publishes from `main`
-after the browser checks and the Windows, Linux and macOS desktop
-package checks pass for the same commit. Desktop installers are published
-by pushing a version tag that matches `desktop/app/mygo.json`. Choose
-**GitHub Actions** as the publishing source in **Settings → Pages** before the
-first deployment.
+and relevant pushes to `integration/unified-release` or `main` build and check
+both browser and desktop without publishing.
+After a desktop release, Pages inherits the same tag event and SHA instead of
+checking out the current tip of `main`. Select **GitHub Actions** in **Settings
+→ Pages**; if the `github-pages` environment limits deployments by ref, its
+rules must allow the intended release tags. Manual Pages runs only verify.
+
+The same approval is required for desktop distribution. A `v<version>` tag
+matching `desktop/app/mygo.json` still runs the checks without approval, but
+does not upload installers, create a GitHub Release or refresh the website's
+release list. With approval, the release also requires the tagged commit to
+be on `main` and the browser and desktop checks to pass.
 
 ## Analysis scope
 
@@ -121,7 +127,7 @@ desktop build but are deprecated.
 
 The page has no analytics, API call, runtime CDN request, or server-side upload path. HYB data and folding inputs are processed in Web Workers and held in tab memory only. ViennaRNA, Pyodide, NumPy, and the CPLfold source archive are served from the same GitHub Pages artifact.
 
-The landing flow is intentionally two-stage: after the HYB file is parsed, the page stays on a local file-review screen. Users can add or replace the optional reference FASTA there, then click **Enter analysis** to open the workspace. Interaction tables and contact maps do not require FASTA; reference-based RNA structure and full-reference Viewpoint do. Datasets on different genomes need each genome's sequence: choose several FASTA files at once, or use **Add FASTA** (Data panel or file-review screen) to join another file to the loaded reference instead of replacing it; matches already made, including manual ones, are kept.
+The landing flow is intentionally two-stage: after the HYB file is parsed, the page stays on a local file-review screen. Users can add or replace the optional reference FASTA there, then click **Enter analysis** to open the workspace. Interaction tables and contact maps do not require FASTA; reference-based RNA structure and full-reference Viewpoint do. Datasets on different genomes need each genome's sequence: choose several FASTA files at once, or use **Add FASTA** (Data panel or file-review screen) to join another file to the loaded reference instead of replacing it. Automatic matches use HYB2's effective IDs for the combined reference. Adding the first pipe-delimited header can therefore change an automatic match. Manual choices keep pointing to the original FASTA record, and RNAs explicitly marked as not matched stay unmatched.
 
 ## Shared UI conventions
 
@@ -239,7 +245,7 @@ FASTA parsing removes layout whitespace only. Unsupported symbols are preserved 
 - The Compare page also holds an **Arc map**: one or two structures (.dbn, windows placed by `name:start-end` headers, or .ct), the merged differential interactions of a comparison (HYB2 Desktop `interactions.tsv` or hyb2_compare `*_enrichment.txt`; padj cutoff, higher in condition one above, two below) and a gene track (GenBank, GFF3/GTF, BED or TSV), drawn as a PARIS-style SVG. Structure B, the cells of either condition and a GenBank annotation may sit on another reference (another strain): they are moved onto A's coordinates by a banded global alignment of the sequences (`arc-map.js`, the same algorithm as HYB2 Desktop's `seqmap`), and shared pairs are counted on A's coordinates. On the ZIKV ZAFR and ZILM genome folds it maps ZILM i to ZAFR i-1 after the indel at 72 and draws the 378 / 1,243 interactions with padj < 0.01 of the AFR vs ILM virion test; NC_035889's mature peptides land on ZAFR one nucleotide earlier.
 - Below the arc map, two cards use the same files. **Region structures (D, E)** (`region-panels.js`) picks, for each direction, the most significant interaction (padj cutoff, sorted by padj) that the enriched lineage's own structure forms (a pair within ±reach nt of both arms, B's pairs moved onto A by alignment), cuts windows (extent of those pairs ± flank) from both structures and draws them joined by a 3-nt linker (ViennaRNA's simple polygon layout), with inter-window pairs in the lineage colour and bases paired outside hollow; a dropdown overrides the interaction. It reproduces `select_regions_cplfold.py` / `window_from_structure.py` exactly on the ZIKV folds. **Folding energy (F, G)** (`folding-energy.js`, `folding-energy.worker.js`) folds 2 × L-nt fragments of every significant interaction with RNAcofold (ViennaRNA WebAssembly, 37 °C) in both lineages and draws violins with a paired t-test (Student t via the regularised incomplete beta); on AFR vs ILM all 1,616 × 2 energies equal the RNAcofold CLI's and the p-values equal R's. FASTA references can be loaded when a structure file has no sequence. Checks: `scripts/verify-region-panels.cjs`, `scripts/verify-folding-energy.cjs` (`HYB2_PANELS_REAL=<dir>` for the real data).
 - Standard ViennaRNA MFE and RNAcofold are built as one static WebAssembly asset during deployment. HYB-guided structure mode runs one RNAcofold observation per eligible HYB row, aggregates base-pair frequencies, merges touching pairs into ranked stems, fits compatible hard constraints iteratively, optionally evaluates up to 1,000 seeded random orders, scores every result by COMRADES support, and colours the selected structure by evidence. UNAFold remains an optional external CLI compatibility path.
-- Pure-Python CPLfold is available as a separate browser engine. Sequence-only mode predicts nested and pseudoknotted candidates. HYB-guided mode converts the two prepared intervals from every eligible HYB row into CPLfold's thresholded `log1p` bonus matrix, by default with the IRIS-style Gaussian symmetric outer product; the Read support setting can instead count every pair between the two arms (optionally divided by the square root of the arm lengths) or only the pairs RNAcofold forms between them, as COMRADES does (docs/cplfold-python.md). Overlap score and collapsed source-read count are never reused as weights. The result includes a bonus-matrix view, switchable ranked candidates, pseudoknot-aware arc layers, CT/DBN/SVG/PNG output, base-pair TSV, bonus TSV, candidate TSV, and a provenance report.
+- Pure-Python CPLfold is available as a separate browser engine. Sequence-only mode predicts nested and pseudoknotted candidates. In HYB-guided mode, **Read support** defaults to the IRIS-style Gaussian symmetric outer product. The two block options count every pair between the arms, with or without arm-length normalization. These three kernels use `log1p`. The two Vienna options count cross-arm pairs and apply a saturating transform: `comrades` allows internal arm folds to compete (RNAcofold); `duplex` does not (RNAduplex). See the [kernel definitions](../docs/cplfold-python.md). Each eligible HYB row contributes once; overlap score and collapsed source-read count are not weights. The result includes a bonus-matrix view, switchable ranked candidates, pseudoknot-aware arc layers, CT/DBN/SVG/PNG output, base-pair TSV, bonus TSV, candidate TSV, and a provenance report.
 
 ## Local structure prediction
 
@@ -378,14 +384,13 @@ available at `vendor/iris/LICENSE`.
   glyphs for cis Watson–Crick pairs: G·U a filled dot, other non-canonical
   pairs an open circle; RNAViz; none), straight or arc pairs, font, letter
   size, numbering interval/visibility/colour with outward ticks, backbone
-  colour/width, background and title colour/size. Base colours start
-  from COMRADES support for every engine: RNAcofold folds each eligible HYB
-  record's two arms, the intermolecular pairs are mapped to the prepared
-  sequence and counted once per record, and each base takes the count of the
-  pair it forms in the shown structure (0 when unpaired or unsupported).
-  COMRADES(ViennaRNA) scores its own result; IRIS and CPLfold results carry the
-  same RNAcofold evidence (37 °C, minimum hairpin 3) and are scored against
-  the selected candidate. A structure that shares no exact pair with the
+  colour/width, background and title colour/size. When COMRADES support is
+  available, each base takes the raw HYB count of its pair in the displayed
+  candidate (zero when unpaired or unsupported). For `comrades` and `duplex`
+  this is the raw count used to build the fold's bonus matrix, before saturation;
+  there is no second arm fold. Standalone COMRADES(ViennaRNA) and the separate
+  post-fold scoring of IRIS and other guided single-strand CPLfold runs use
+  RNAcofold evidence. A structure that shares no exact pair with the
   evidence stays uncoloured, and the editor says so. Colours use Lau's
   `plot_VARNA` RGB stops/interpolation over 0 to the structure's maximum
   (zero is white), with an optional website palette; they are

@@ -218,7 +218,8 @@
     }
     clearCommittedInputRender();
     state.pointerActionPending = false;
-    terminateWorker();
+    terminateParserWorker();
+    if (window.Hyb2Structure) window.Hyb2Structure.terminate(state);
     cancelComparisonLoads();
     stopAnalysisWorkers();
     hostEvents.forEach(function (entry) { app.removeEventListener(entry[0], entry[1]); });
@@ -2553,7 +2554,16 @@
 
     if (action === "report-export-copy") {
       if (reportExportCache) {
-        copyText(window.Hyb2Results.reportMarkdown(reportExportCache.record), "AI summary (report.md) copied to the clipboard.");
+        const slot = openClipboardSlot();
+        prepareReportExport(reportExportCache.audience).then(function (cache) {
+          const text = window.Hyb2Results.reportMarkdown(cache.record);
+          const confirmation = "AI summary (report.md) copied to the clipboard.";
+          if (slot) slot.fill(text, confirmation);
+          else copyText(text, confirmation);
+        }).catch(function (error) {
+          if (slot && !slot.settled) slot.cancel();
+          showToast(error && error.message ? error.message : "The summary could not be prepared.");
+        });
       }
       return;
     }
@@ -3595,16 +3605,9 @@
       return;
     }
 
-    const previousMapping = state.fasta.mapping || {};
-    const sequenceIds = new Set((state.fasta.sequences || []).map(function (entry) { return entry.id; }));
-    const mapping = window.Hyb2Data.buildFastaMapping(summary.rnaNames || [], state.fasta.sequences || []);
-    (summary.rnaNames || []).forEach(function (rna) {
-      if (previousMapping[rna] && sequenceIds.has(previousMapping[rna])) {
-        mapping[rna] = previousMapping[rna];
-      }
-    });
-    state.fasta.mapping = mapping;
     const rnas = summary.rnaNames || [];
+    const mapping = window.Hyb2Data.buildFastaMapping(rnas, state.fasta.sequences, state.fasta.manualMapping);
+    state.fasta.mapping = mapping;
     if (rnas.indexOf(state.fasta.mappingEditorRna) === -1) {
       state.fasta.mappingEditorRna = rnas.find(function (rna) { return !mapping[rna]; }) || rnas[0] || "";
     }
@@ -3807,8 +3810,8 @@
     return new File(pieces, names.join(" + "), { type: "text/plain" });
   }
 
-  // The file loadFasta reads: the chosen files, after the loaded reference's
-  // sequences when appending (its matches and manual edits are kept).
+  // Reparse the complete reference on append: even a pipe in a late header
+  // can change all automatic matches. Only explicit choices carry over.
   function fastaUpload(files, append) {
     if (!append || !state.fasta) {
       return combineFastaFiles(files, files.map(function (file) { return file.name; }));
@@ -3819,11 +3822,8 @@
       showToast((files.length === 1 ? files[0].name + " is" : "These files are") + " already in the reference.");
       return null;
     }
-    const loaded = new Blob([(state.fasta.sequences || []).map(function (entry) {
-      return ">" + entry.header + "\n" + entry.sequence;
-    }).join("\n") + "\n"], { type: "text/plain" });
-    const combined = combineFastaFiles([loaded].concat(added), [state.fasta.fileName || "reference.fasta"].concat(added.map(function (file) { return file.name; })));
-    combined.previousMapping = Object.assign({}, state.fasta.mapping || {});
+    const combined = combineFastaFiles([state.fasta.sourceFile].concat(added), [state.fasta.fileName].concat(added.map(function (file) { return file.name; })));
+    combined.manualMapping = state.fasta.manualMapping;
     return combined;
   }
 
@@ -3845,14 +3845,12 @@
     if (!fasta || !fasta.mapping) {
       return false;
     }
-    const missing = (rnaNames || []).filter(function (rna) { return !fasta.mapping[rna]; });
-    const found = window.Hyb2Data.buildFastaMapping(missing, fasta.sequences || []);
+    const missing = (rnaNames || []).filter(function (rna) { return !Object.hasOwn(fasta.mapping, rna); });
+    const found = window.Hyb2Data.buildFastaMapping(missing, fasta.sequences, fasta.manualMapping);
     let added = false;
     Object.keys(found).forEach(function (rna) {
-      if (found[rna]) {
-        fasta.mapping[rna] = found[rna];
-        added = true;
-      }
+      fasta.mapping[rna] = found[rna];
+      added = true;
     });
     return added;
   }
@@ -3930,20 +3928,16 @@
         return entry.invalidCharacters;
       })));
 
-      const mapping = window.Hyb2Data.buildFastaMapping(primarySummary.rnaNames || [], sequences);
-      // Appended files keep the matches (and manual edits) already made.
-      Object.keys(file.previousMapping || {}).forEach(function (rna) {
-        const reference = file.previousMapping[rna];
-        if (reference && sequences.some(function (entry) { return entry.id === reference; })) {
-          mapping[rna] = reference;
-        }
-      });
+      const manualMapping = file.manualMapping || Object.create(null);
+      const mapping = window.Hyb2Data.buildFastaMapping(primarySummary.rnaNames || [], sequences, manualMapping);
       const mappingEditorRna = (primarySummary.rnaNames || []).find(function (rna) { return !mapping[rna]; }) || (primarySummary.rnaNames || [])[0] || "";
       loadedFasta = {
         fileName: file.name || "reference.fasta",
         fileSize: file.size,
+        sourceFile: file,
         sequences: sequences,
         mapping: mapping,
+        manualMapping: manualMapping,
         mappingEditorRna: mappingEditorRna,
         mappingEditorReference: mapping[mappingEditorRna] || "",
         unsupportedSequenceEntries: unsupportedEntries.length,
@@ -4429,12 +4423,14 @@
   }
 
   function terminateWorker() {
+    terminateParserWorker();
+    if (window.Hyb2Structure) window.Hyb2Structure.cancel(state);
+  }
+
+  function terminateParserWorker() {
     if (state.worker) {
       state.worker.terminate();
       state.worker = null;
-    }
-    if (window.Hyb2Structure) {
-      window.Hyb2Structure.terminate(state);
     }
   }
 
@@ -4515,6 +4511,21 @@
     });
   }
 
+  // An open panel remembers file choices, not the result selected when it
+  // opened. Rebuild for every export, including a candidate changed in place.
+  function prepareReportExport(audience) {
+    const previous = reportExportCache && reportExportCache.audience === audience ? reportExportCache : null;
+    return prepareReportRecord().then(function (record) {
+      const cache = { audience: audience, record: record, exclude: previous ? previous.exclude : {} };
+      if (previous && reportExportCache === previous && state.reportExport) {
+        reportExportCache = cache;
+        state.reportExport.list = listReportFiles(cache);
+        if (state.activePage === "report") render(REPORT_NOW);
+      }
+      return cache;
+    });
+  }
+
   // the package as it will be downloaded: without the files left out, with
   // a manifest that lists them
   function reportPackage(cache) {
@@ -4573,10 +4584,13 @@
     if (!reportExportCache) {
       return;
     }
-    const cache = reportExportCache;
-    reportPackage(cache).then(function (files) {
-      downloadBlob("hyb2-result-" + cache.audience + (cache.record.scope.kind === "selected_results" ? "-selected" : "") + ".zip", window.Hyb2Results.zip(files, "hyb2-result"));
-      showToast("Result package built and downloaded locally.");
+    prepareReportExport(reportExportCache.audience).then(function (cache) {
+      return reportPackage(cache).then(function (files) {
+        downloadBlob("hyb2-result-" + cache.audience + (cache.record.scope.kind === "selected_results" ? "-selected" : "") + ".zip", window.Hyb2Results.zip(files, "hyb2-result"));
+        showToast("Result package built and downloaded locally.");
+      });
+    }).catch(function (error) {
+      showToast(error && error.message ? error.message : "The package could not be prepared.");
     });
   }
 
@@ -4590,13 +4604,7 @@
       downloadText(path.split("/").pop(), file.text, file.mediaType);
       showToast(path + " downloaded locally.");
     };
-    if (reportExportCache && reportExportCache.audience === audience) {
-      reportPackage(reportExportCache).then(save);
-      return;
-    }
-    prepareReportRecord().then(function (record) {
-      return reportPackage({ audience: audience, record: record, exclude: {} });
-    }).then(save).catch(function (error) {
+    prepareReportExport(audience).then(reportPackage).then(save).catch(function (error) {
       showToast(error && error.message ? error.message : "The file could not be prepared.");
     });
   }

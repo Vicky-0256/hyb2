@@ -7,6 +7,7 @@ const vm = require("node:vm");
 const zlib = require("node:zlib");
 
 const repository = path.resolve(__dirname, "..");
+const engineCatalogSource = fs.readFileSync(path.join(repository, "web", "support-kernels.js"), "utf8");
 const appSource = fs.readFileSync(path.join(repository, "web", "app.js"), "utf8");
 const analysisPagesSource = fs.readFileSync(path.join(repository, "web", "analysis-pages.js"), "utf8");
 const overviewPageSource = fs.readFileSync(path.join(repository, "web", "overview-page.js"), "utf8");
@@ -44,6 +45,7 @@ const context = vm.createContext({
   window: {}
 });
 
+vm.runInContext(engineCatalogSource, context);
 vm.runInContext(
   fs.readFileSync(path.join(repository, "web", "analysis-ui.js"), "utf8"),
   context,
@@ -612,6 +614,7 @@ assert.equal(regionState.region.results, null, "exploring a region should invali
 // without a Partner RNA (coordinates are per RNA).
 {
   const dataSandbox = vm.createContext({ window: {} });
+  vm.runInContext(engineCatalogSource, dataSandbox);
   vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), dataSandbox, { filename: "analysis-data.js" });
   const previousData = context.window.Hyb2Data;
   const previousPageData = context.window.Hyb2PageData;
@@ -683,6 +686,7 @@ context.window.Hyb2UI.handleAction(
 );
 assert.equal(fastaState.fasta.mapping.RNA_A, "reference_A",
   "the bounded FASTA editor must apply an exact mapping");
+assert.equal(fastaState.fasta.manualMapping.RNA_A, "reference_A");
 assert.equal(fastaState.viewpoint.rangeMode, "reference",
   "applying a valid mapping should retain full-reference Viewpoint mode");
 context.window.Hyb2UI.handleAction(
@@ -690,8 +694,9 @@ context.window.Hyb2UI.handleAction(
   { dataset: { featureAction: "remove-current-fasta-mapping" } },
   navigationApi
 );
-assert.equal(fastaState.fasta.mapping.RNA_A, undefined,
-  "the bounded FASTA editor must remove the currently edited mapping");
+assert.equal(context.window.Hyb2Data.findFastaEntry(fastaState.fasta, "RNA_A"), null,
+  "marking an RNA as not matched must stop reference selection");
+assert.equal(fastaState.fasta.manualMapping.RNA_A, "");
 context.window.Hyb2UI.handleAction(
   fastaState,
   { dataset: { featureAction: "edit-fasta-mapping", rna: "RNA_B" } },
@@ -839,12 +844,12 @@ assert.match(analysisPagesSource, /Secondary structure only/);
 assert.match(analysisPagesSource, /Download local inputs/);
 assert.match(analysisPagesSource, /cplfold-bonus-matrix\.tsv/);
 assert.match(fs.readFileSync(path.join(repository, "bin", "cplfold"), "utf8"), /--sequence-file/);
-assert.match(fs.readFileSync(path.join(repository, "third_party", "cplfold", "CPLfold.py"), "utf8"), /--bonus-matrix-file/);
+assert.match(fs.readFileSync(path.join(repository, "third_party", "cplfold", "cplfold", "cli.py"), "utf8"), /--bonus-matrix-file/);
 assert.match(fs.readFileSync(path.join(repository, "web", "cplfold.worker.mjs"), "utf8"), /cplfold-capacity/);
 assert.match(fs.readFileSync(path.join(repository, "web", "cplfold.worker.mjs"), "utf8"), /cplfold-bonus-matrix/);
 assert.match(fs.readFileSync(path.join(repository, "web", "cplfold.worker.mjs"), "utf8"), /allowPseudoknot/);
 assert.match(fs.readFileSync(path.join(repository, "web", "cplfold", "cplfold_web.py"), "utf8"), /allow_pseudoknot/);
-assert.match(fs.readFileSync(path.join(repository, "third_party", "cplfold", "CPLfold.py"), "utf8"), /--no-pseudoknot/);
+assert.match(fs.readFileSync(path.join(repository, "third_party", "cplfold", "cplfold", "cli.py"), "utf8"), /--no-pseudoknot/);
 assert.doesNotMatch(analysisPagesSource, /rnas\.map[\s\S]{0,300}fasta\.sequences\.map/,
   "FASTA mapping controls must not build an RNA-by-reference Cartesian option set");
 assert.match(appSource, /function handleHashChange\(\)\s*{\s*const previousPage = state\.activePage;[\s\S]{0,400}?syncRoute\(\);\s*render\(\);[\s\S]*?previousPage !== state\.activePage[\s\S]*?window\.scrollTo\(0, 0\)/,
@@ -879,7 +884,7 @@ assert.match(
 );
 assert.match(fastaLoaderSource, /const text = await file\.text\(\);\s*if \(!fastaLoadSessionIsCurrent\(\)\)/,
   "FASTA text reads must re-check their captured analysis session");
-assert.match(fastaLoaderSource, /const mapping = window\.Hyb2Data\.buildFastaMapping\(primarySummary\.rnaNames \|\| \[\], sequences\)/,
+assert.match(fastaLoaderSource, /const mapping = window\.Hyb2Data\.buildFastaMapping\(primarySummary\.rnaNames \|\| \[\], sequences, manualMapping\)/,
   "FASTA mapping must use the captured summary rather than a replacement analysis");
 assert.match(fastaLoaderSource, /const hash = await digestFile\(file\);\s*if \(state\.fasta !== loadedFasta\)/,
   "FASTA digest completion must use file identity so a retained reference can finish hashing across a primary-HYB replacement");
@@ -956,35 +961,115 @@ const pagesDesktop = workflowSection(workflowSource, "desktop:");
 const desktopWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/desktop-release.yml"), "utf8");
 const releaseWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/release-gate.yml"), "utf8");
 const publishWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/publish-desktop.yml"), "utf8");
-const refreshPages = workflowSection(publishWorkflow, "refresh-pages:");
-assert.match(pagesBuild, /^\s*run: node scripts\/write-releases\.mjs\s*$/m,
-  "Pages must build the published desktop version list");
-assert.match(refreshPages, /^\s*needs:\s*publish\s*$/m, "refresh the website after the desktop release exists");
-assert.match(refreshPages, /gh workflow run deploy-pages\.yml --ref main\b/, "refresh the website from main");
-[
-  actionStep(pagesBuild, "actions/configure-pages"),
-  actionStep(pagesBuild, "actions/upload-pages-artifact"),
-  pagesDeploy
-].forEach(function (section) {
-  const condition = section.match(/^\s*if:\s*\$\{\{([^\n]+?)\}\}\s*$/m);
-  assert.ok(condition, "Pages publication must have an explicit condition");
-  assert.doesNotMatch(condition[1], /\|\|/, "a publication condition must require both checks");
-  const clauses = condition[1].split("&&").map(clause => clause.trim().replace(/\s*==\s*/g, " == "));
-  assert.ok(clauses.includes("github.ref == 'refs/heads/main'"), "Pages publication must require main");
-  assert.ok(clauses.includes("vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true'"),
-    "Pages publication must require CPLfold redistribution approval");
-  if (section === pagesDeploy) assert.doesNotMatch(condition[1], /\b(always|failure|cancelled)\s*\(/,
-    "Pages deployment requires successful dependencies");
-});
+const desktopPackage = workflowSection(desktopWorkflow, "package:");
+const releaseRead = workflowSection(pagesBuild, "- name: Read published desktop releases");
+assert.match(releaseRead, /id: releases[\s\S]*node scripts\/write-releases\.mjs[\s\S]*sha256=\$\(sha256sum web\/releases\.js/,
+  "Pages must build and fingerprint the published desktop version list");
+assert.match(pagesBuild, /test "\$\(git rev-parse HEAD\)" = "\$GITHUB_SHA"/,
+  "the Pages source must be the invoking commit");
+assert.match(pagesBuild, /releaseTag: process\.env\.RELEASE_TAG/,
+  "tag builds must stamp the installer version shown by the site");
+assert.match(pagesBuild, /bash scripts\/verify-browser-release\.sh/,
+  "the complete browser gate runs before Pages artifacts are uploaded");
+{
+  const publish = workflowSection(publishWorkflow, "publish:");
+  const tagPackage = workflowSection(publishWorkflow, "package:");
+  const tagBrowser = workflowSection(publishWorkflow, "browser:");
+  const tagDeploy = workflowSection(publishWorkflow, "deploy:");
+  assert.match(tagPackage, /^      release_installers: true$/m, "tags must still check the versioned installers");
+  assert.match(tagBrowser, /^    uses: \.\/\.github\/workflows\/deploy-pages\.yml$/m);
+  assert.match(tagBrowser, /^      release_tag: \$\{\{ github\.ref_name \}\}$/m,
+    "the browser release build is pinned to this tag");
+  for (const job of [tagBrowser, tagPackage, desktopPackage]) {
+    assert.doesNotMatch(job, /^    if:/m, "build checks must run without redistribution approval");
+  }
+  assert.match(publish, /^    needs: \[browser, package\]$/m);
+  assert.match(publish, /\bgh release create\b/);
+  assert.match(publish, /node scripts\/write-releases\.mjs --check-installers release/,
+    "only the exact expected set of installers may be published");
+  assert.match(publish, /sha256sum -- \* > SHA256SUMS\.txt/,
+    "the release checksum file covers the verified installers");
+  assert.match(tagDeploy, /^    needs: \[browser, publish\]$/m,
+    "Pages deploy occurs only after both checks and release publication succeed");
+  assert.match(tagDeploy, /group: github-pages[\s\S]*cancel-in-progress: false/,
+    "tag deployments share one non-cancelling Pages lock");
+  assert.match(tagDeploy, /node scripts\/write-releases\.mjs --check-deployment/,
+    "a superseded tag cannot overwrite the published site");
+  assert.match(tagDeploy, /artifact_name: \$\{\{ needs\.browser\.outputs\.pages_artifact_name \}\}/,
+    "deploy the exact Pages artifact that passed pre-release checks");
+  assert.match(tagDeploy, /vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true'/,
+    "Pages deployment requires distribution approval");
+
+  // A release must verify the actual collected installer, not a loose build archive.
+  const installerCheck = desktopPackage.indexOf("desktop/scripts/verify-installer.py");
+  const artifactUpload = desktopPackage.indexOf("uses: actions/upload-artifact@4");
+  assert.ok(installerCheck > 0 && (artifactUpload < 0 || installerCheck < artifactUpload),
+    "each final installer is verified before an artifact can be uploaded");
+  assert.match(desktopPackage, /copy_one "\$out\/\$name\.tar\.gz"/,
+    "Linux tarball is collected as an exact release asset");
+  assert.match(desktopPackage, /copy_one "\$out\/\$name\.deb"/,
+    "Linux deb is collected as an exact release asset");
+
+  const uploads = workflowSection(desktopPackage, "steps:").split(/^      - /m)
+    .filter(step => /^\s*uses: actions\/upload-artifact@/m.test(step));
+  assert.equal(uploads.length, 2, "check each downloadable desktop artifact");
+  const installers = uploads.find(step => /^\s*name: release-\$\{\{ matrix.target \}\}$/m.test(step));
+  const debugBuild = uploads.find(step => /^\s*name: hyb2-desktop-\$\{\{ matrix.target \}\}$/m.test(step));
+  assert.ok(installers && debugBuild, "expected tag installer and manual debug handoffs");
+
+  // These guards are conjunctions. Evaluate their clauses locally, without running workflow code.
+  function allows(condition, facts) {
+    if (!condition) return true;
+    const expression = condition[1].trim().replace(/^\$\{\{\s*(.*?)\s*\}\}$/, "$1");
+    return expression.split(/\s*&&\s*/).every(clause => facts[clause] === true);
+  }
+  const publishIf = publish.match(/^    if: (.+)$/m);
+  const installerIf = installers.match(/^        if: (.+)$/m);
+  const debugIf = debugBuild.match(/^        if: (.+)$/m);
+  for (const approval of ["", "false", "true"]) {
+    const approved = approval === "true";
+    const repositoryVars = { "vars.CPLFOLD_DISTRIBUTION_APPROVED == 'true'": approved };
+    assert.equal(allows(publishIf, repositoryVars), approved, "tag publication, approval=" + (approval || "unset"));
+    for (const [event, release, debug] of [["push", true, false], ["workflow_dispatch", false, true],
+      ["workflow_dispatch", false, false], ["pull_request", false, false]]) {
+      const facts = { ...repositoryVars, "inputs.release_installers": release,
+        "github.event_name == 'workflow_dispatch'": event === "workflow_dispatch", "inputs.upload_debug_build": debug };
+      const scenario = ` (approval=${approval || "unset"}, ${event}, debug=${debug})`;
+      assert.equal(allows(installerIf, facts), approved && release, "installer upload" + scenario);
+      assert.equal(allows(debugIf, facts), approved && debug, "debug upload" + scenario);
+    }
+  }
+}
+const configurePages = actionStep(pagesBuild, "actions/configure-pages");
+const uploadPages = actionStep(pagesBuild, "actions/upload-pages-artifact");
+for (const section of [configurePages, uploadPages]) {
+  assert.match(section, /inputs\.release_tag == github\.ref_name/,
+    "tag artifacts require the invoking tag");
+  assert.match(section, /github\.ref == 'refs\/heads\/main'/,
+    "normal main-branch code updates still prepare a Pages deployment");
+  assert.match(section, /vars\.CPLFOLD_DISTRIBUTION_APPROVED == 'true'/,
+    "Pages publication requires distribution approval");
+}
 assert.match(pagesDesktop, /^\s*uses:\s*\.\/\.github\/workflows\/desktop-release\.yml\s*$/m,
-  "Pages must call the desktop package workflow from the event commit");
-const deployNeeds = pagesDeploy.match(/^[ \t]*needs:[ \t]*(?:\[([^\]]+)\])?[ \t]*$/m);
-assert.ok(deployNeeds, "Pages deployment must declare its required jobs");
-const requiredJobs = deployNeeds[1] ? deployNeeds[1].split(",").map(name => name.trim())
-  : Array.from(workflowSection(pagesDeploy, "needs:").matchAll(/^\s*-\s*(\S+)/gm), match => match[1]);
-for (const job of ["build", "desktop"]) assert.ok(requiredJobs.includes(job), "Pages deployment must wait for " + job);
-for (const job of [pagesBuild, workflowSection(desktopWorkflow, "package:")]) {
+  "the main Pages build also verifies matching desktop packages");
+assert.match(pagesDeploy, /^    needs: \[build, desktop\]$/m,
+  "main Pages deploy waits for the complete browser and desktop gates");
+assert.match(pagesDeploy, /git rev-parse FETCH_HEAD[\s\S]*GITHUB_SHA/,
+  "a delayed main build cannot replace a newer commit's site");
+assert.match(pagesDeploy, /node scripts\/write-releases\.mjs --check-main-deployment/,
+  "main deployment checks the release catalog while holding the Pages lock");
+assert.match(pagesDeploy, /RELEASE_CATALOG_SHA256: \$\{\{ needs\.build\.outputs\.release_catalog_sha256 \}\}/,
+  "main deployment compares the catalog built into the verified artifact");
+assert.match(pagesDeploy, /if: steps\.release-catalog\.outputs\.current == 'true'/,
+  "a delayed main build cannot replace a newer tag catalog from the same commit");
+assert.match(pagesDeploy, /artifact_name: \$\{\{ needs\.build\.outputs\.pages_artifact_name \}\}/,
+  "main deploy promotes the exact site artifact that was verified");
+assert.match(pagesDeploy, /group: github-pages[\s\S]*cancel-in-progress: false/,
+  "main and tag Pages deploys share one non-cancelling lock");
+for (const job of [pagesBuild, desktopPackage]) {
   const checkout = actionStep(job, "actions/checkout");
+  assert.match(job, /test "\$\(git rev-parse HEAD\)" = "\$GITHUB_SHA"/,
+    "browser and desktop packages must build from the invoking commit");
   const ref = checkout.match(/^\s*ref:\s*(.+)$/m);
   if (ref) assert.match(ref[1], /^\$\{\{\s*github\.sha\s*\}\}\s*$/, "both builds must use the event commit");
   const checkoutRepo = checkout.match(/^\s*repository:\s*(.+)$/m);
@@ -1055,22 +1140,28 @@ for (const input of [browserGatePath, "scripts/write-releases.mjs", ".gitattribu
   assert.ok(pagesTracks(input), "changes to " + input + " must trigger Pages");
 }
 for (const job of [pagesBuild, workflowSection(releaseWorkflow, "browser:")]) {
-  assert.match(job, /^\s*bash scripts\/verify-browser-release\.sh\s*$/m, "both workflows must run the shared browser checks");
-}
-const directChecks = ["verify-report-render.cjs", "verify-deseq.cjs", "verify-arc-map.cjs",
-  "verify-region-panels.cjs", "verify-folding-energy.cjs"];
-const sharedChecks = ["verify-vienna-wasm.cjs", "verify-cplfold-pyodide.mjs", "verify-cplfold-worker.mjs",
-  "verify-structure-worker.cjs", "verify-structure-render.cjs", "verify-cplfold-worker-lifecycle.cjs",
-  "verify-protocol-contract.cjs", "verify-ui-contract.cjs", "verify-analysis-data.cjs"];
-for (const [source, checks] of [[pagesBuild, directChecks], [browserGate, sharedChecks]]) {
-  const commands = source.split(/\r?\n/).map(line => line.trim().split(/\s+/).slice(0, 2).join(" "));
-  for (const check of checks) {
-    assert.ok(pagesTracks("scripts/" + check), "the deployment workflow must track " + check);
-    assert.ok(commands.includes("node scripts/" + check), "the deployment workflow must run " + check);
+  if (job === pagesBuild) {
+    assert.match(job, /^\s*bash scripts\/verify-browser-release\.sh\s*$/m,
+      "the shared Pages build must run the browser checks");
+  } else {
+    assert.match(job, /^\s*uses: \.\/\.github\/workflows\/deploy-pages\.yml\s*$/m,
+      "release gate reuses the same browser-check workflow");
+    assert.match(job, /^      browser_only: true$/m);
   }
 }
-assert.ok(workflowSource.indexOf("bash scripts/build-vienna-wasm.sh") < workflowSource.indexOf("node scripts/verify-folding-energy.cjs"),
-  "verify-folding-energy must run after the ViennaRNA build so it folds instead of skipping");
+const sharedChecks = ["verify-report-render.cjs", "verify-deseq.cjs", "verify-arc-map.cjs",
+  "verify-region-panels.cjs", "verify-folding-energy.cjs", "verify-vienna-wasm.cjs",
+  "verify-cplfold-pyodide.mjs", "verify-cplfold-worker.mjs", "verify-structure-worker.cjs",
+  "verify-structure-render.cjs", "verify-cplfold-worker-lifecycle.cjs", "verify-protocol-contract.cjs",
+  "verify-ui-contract.cjs", "verify-analysis-data.cjs"];
+assert.match(browserGate, /for check in scripts\/verify-\*\.cjs scripts\/verify-\*\.mjs/,
+  "the shared browser gate runs every registered verification script");
+for (const check of sharedChecks) {
+  assert.ok(pagesTracks("scripts/" + check), "the deployment workflow must track " + check);
+  assert.ok(fs.existsSync(path.join(repository, "scripts", check)), "the shared browser gate must include " + check);
+}
+assert.ok(workflowSource.indexOf("bash scripts/build-vienna-wasm.sh") < workflowSource.indexOf("bash scripts/verify-browser-release.sh"),
+  "browser checks run after the ViennaRNA build so energy integration executes");
 
 // Loading or closing a file resets the arc map, region panels and folding
 // energy states and stops the DESeq2 and RNAcofold workers.
@@ -1248,14 +1339,12 @@ console.log('skip-link-routing: ok');
     console: console,
     document: { querySelector: function () { return null; }, documentElement: { dataset: {} } },
     getComputedStyle: function () { return { getPropertyValue: function () { return "#123456"; } }; },
-    window: { Hyb2Data: {
-      normaliseFoldSequence: function (value) { return { sequence: String(value || "").toUpperCase().replace(/T/g, "U"), invalid: [] }; },
-      defaultRegionState: function (summary) { return { rna: summary.rnaNames[0], start: 1, end: 201 }; }
-    } }
+    window: {}
   });
-  ["comrades-analysis.js", "analysis-pages.js"].forEach(function (file) {
+  ["support-kernels.js", "analysis-data.js", "comrades-analysis.js", "analysis-pages.js"].forEach(function (file) {
     vm.runInContext(fs.readFileSync(path.join(repository, "web", file), "utf8"), sandbox, { filename: file });
   });
+  sandbox.window.Hyb2Data.defaultRegionState = summary => ({ rna: summary.rnaNames[0], start: 1, end: 201 });
   const pages = sandbox.window.Hyb2Pages;
   const structurePage = function (structure) {
     return {
@@ -1306,11 +1395,6 @@ console.log('skip-link-routing: ok');
     const page = structurePage(structure);
     page.view.structureEvidence.records = page.view.structureEvidence.records.filter(function (record) { return record.id === "far"; });
     return page;
-  };
-  // analysis-data.js extractReference, as far as a sequence-only draw needs it
-  sandbox.window.Hyb2Data.extractReference = function (fasta, rna, start, end) {
-    const entry = fasta.sequences.find(function (item) { return item.id === fasta.mapping[rna]; });
-    return entry ? { id: entry.id, start: Number(start), end: Number(end), sequence: entry.sequence.slice(Number(start) - 1, Number(end)) } : null;
   };
   // what page-data.js loads for the mode now set
   const reload = function (page) { page.view.structureEvidence.guided = page.structure.cplfoldEvidence === "hyb-blocks"; };
@@ -1385,6 +1469,7 @@ console.log('structure-default-region-cap: ok');
 // HYB partner window; regions the user set are left alone
 {
   const sandbox = vm.createContext({ Intl, Number, String, Boolean, Object, Array, Math, RegExp, Set, Map, Uint8Array, Float64Array, window: {} });
+  vm.runInContext(engineCatalogSource, sandbox);
   vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), sandbox, { filename: "analysis-data.js" });
   vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-ui.js"), "utf8"), sandbox, { filename: "analysis-ui.js" });
   sandbox.window.Hyb2Structure = {

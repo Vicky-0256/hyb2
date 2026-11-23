@@ -9,13 +9,6 @@
   const CPLFOLD_CAPACITY_TARGET_MS = 45000;
   const CPLFOLD_CAPACITY_SAFETY_FACTOR = 0.65;
   const CPLFOLD_CAPACITY_TIMEOUT_MS = 60000;
-  // How the HYB chimeras become the bonus matrix (web/cplfold/cplfold_web.py SUPPORT_KERNELS).
-  const CPLFOLD_SUPPORT_KERNELS = ["gaussian", "block", "block-normalized", "rnacofold", "duplex"];
-  // Kernels whose pairs the ViennaRNA worker computes first: CPLfold receives
-  // them as evidencePairs. rnacofold's cofolds also give the COMRADES support
-  // shown with the result. duplex is computed inside CPLfold with ViennaRNA's
-  // Python module (vendor/pyodide-cplfold, as on the desktop).
-  const CPLFOLD_PAIR_KERNELS = ["rnacofold"];
 
   // Preserve the mapped input intervals for display alongside this result.
   // These are raw record arms, not inferred base pairs or bonus-matrix cells.
@@ -73,27 +66,9 @@
     return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
   }
 
-  function cplfoldProfileKey(structure) {
-    return [
-      structure && structure.cplfoldMode === "cofold" ? "cofold" : "single",
-      profileValue(structure.cplfoldEvidence, "hyb-blocks"),
-      profileValue(structure.cplfoldBeam, "20"),
-      profileValue(structure.cplfoldMaxPhase1, "3"),
-      profileValue(structure.cplfoldEnergyDelta, "5"),
-      profileValue(structure.cplfoldEnergyModel, "DP09").toUpperCase(),
-      profileValue(structure.cplfoldAlpha, "0.5"),
-      profileValue(structure.cplfoldBeta, "0"),
-      profileValue(structure.cplfoldAllowPseudoknot, true) === "false" ? "nested" : "pseudoknot"
-    ].join("|");
-  }
-
-  function profileValue(value, fallback) {
-    return value === undefined || value === null || value === "" ? fallback : String(value);
-  }
-
   function cplfoldCapacityMatches(structure) {
     const capacity = ensureCplfoldCapacity(structure);
-    return capacity.status === "ready" && capacity.profileKey === cplfoldProfileKey(structure);
+    return capacity.status === "ready" && capacity.profileKey === globalThis.Hyb2CplfoldSettings.profileKey(structure);
   }
 
   function cplfoldMaximumLength(structure) {
@@ -151,26 +126,32 @@
   }
 
   function readCplfoldParameters(structure) {
-    const parameters = {
-      beamSize: parseWholeNumber(structure.cplfoldBeam, 1, 200, "CPLfold beam size"),
-      maxPhase1: parseWholeNumber(structure.cplfoldMaxPhase1, 1, 20, "Phase-1 candidate count"),
-      energyDelta: parseBoundedNumber(structure.cplfoldEnergyDelta, 0, 50, "Energy delta"),
-      alpha: parseBoundedNumber(structure.cplfoldAlpha, 0, 1, "Evidence alpha"),
-      beta: parseBoundedNumber(structure.cplfoldBeta, 0, 1, "Pseudoknot beta"),
-      allowPseudoknot: structure.cplfoldAllowPseudoknot !== false,
-      energyModel: String(structure.cplfoldEnergyModel || "DP09").toUpperCase(),
-      supportKernel: String(structure.cplfoldKernel || "gaussian")
+    const cofold = structure.cplfoldMode === "cofold";
+    const { ranges, defaults } = globalThis.Hyb2EngineParameters[cofold ? "cplcofold" : "cplfold"];
+    const { cplfoldBeam = defaults.beamSize, cplfoldMaxPhase1 = defaults.maxPhase1,
+      cplfoldEnergyDelta = defaults.energyDelta, cplfoldAlpha = defaults.alpha, cplfoldBeta = defaults.beta } = structure;
+    return {
+      beamSize: parseWholeNumber(cplfoldBeam, ...ranges.beamSize, "CPLfold beam size"),
+      maxPhase1: parseWholeNumber(cplfoldMaxPhase1, ...ranges.maxPhase1, "Phase-1 candidate count"),
+      energyDelta: parseBoundedNumber(cplfoldEnergyDelta, ...ranges.energyDelta, "Energy delta"),
+      alpha: parseBoundedNumber(cplfoldAlpha, ...ranges.alpha, "Evidence alpha"),
+      beta: parseBoundedNumber(cplfoldBeta, ...ranges.beta, "Pseudoknot beta"),
+      allowPseudoknot: globalThis.Hyb2CplfoldSettings.readTopology(cofold, structure.cplfoldAllowPseudoknot),
+      energyModel: globalThis.Hyb2CplfoldSettings.readEnergyModel(cofold, structure.cplfoldEnergyModel),
+      ...(structure.cplfoldEvidence === "none" ? {} : { supportKernel: globalThis.Hyb2CplfoldSettings.readKernel(structure.cplfoldKernel) })
     };
-    if (["DP03", "DP09", "CC06", "CC09", "RE"].indexOf(parameters.energyModel) === -1) {
-      throw new Error("Choose a supported CPLfold energy model.");
+  }
+
+  function pairScoreIssue(result, kernel) {
+    function scored(candidate) {
+      const counts = candidate && candidate.comradesPairCounts;
+      return Array.isArray(counts) && Array.isArray(candidate.pairs) && counts.length === candidate.pairs.length &&
+        counts.every(function (count) { return Number.isSafeInteger(count) && count >= 0; }) &&
+        candidate.comradesScore === counts.reduce(function (sum, count) { return sum + window.Hyb2Comrades.pairScoreContribution(count); }, 0);
     }
-    if (CPLFOLD_SUPPORT_KERNELS.indexOf(parameters.supportKernel) === -1) {
-      throw new Error("Choose a supported CPLfold read-support kernel.");
-    }
-    if (structure.cplfoldMode === "cofold" && ["DP03", "DP09"].indexOf(parameters.energyModel) === -1) {
-      throw new Error("CPLcofold supports DP03 and DP09 only.");
-    }
-    return parameters;
+    return scored(result) && result.evidence && result.evidence.supportKernel === kernel &&
+      Array.isArray(result.candidates) && result.candidates.length && result.candidates.every(scored) ? "" :
+      "The CPLfold runtime did not return consistent raw COMRADES counts and scores for every candidate of the requested '" + kernel + "' kernel. Update the runtime and run again.";
   }
 
   function predict(state, api) {
@@ -210,15 +191,16 @@
       }
     } else if (!iris) {
       try {
-        minimumLoop = parseMinimumLoop(structure.minimumLoop);
-        temperature = parseTemperature(structure.temperature);
+        const { defaults, ranges } = globalThis.Hyb2EngineParameters[hybGuided ? "comrades" : "vienna"];
+        const { minimumLoop: loop = defaults.minLoopSize, temperature: temp = defaults.temperature } = structure;
+        minimumLoop = parseWholeNumber(loop, ...ranges.minLoopSize, "Minimum hairpin loop");
+        temperature = parseBoundedNumber(temp, ...ranges.temperature, "Folding temperature", " °C");
       } catch (error) {
         return rejectInput(structure, api, error, "The ViennaRNA folding parameters are invalid.");
       }
     }
     let constraints = [];
-    let randomFoldCount = 0;
-    let constraintLimit = 75;
+    let randomFoldCount, constraintLimit;
 
     if (!cplfold && !iris && structure.constraintMode === "manual-hard-base-pairs") {
       try {
@@ -238,8 +220,10 @@
         if (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length) {
           throw new Error("No eligible forward-strand HYB records are fully contained in the selected region layout.");
         }
-        constraintLimit = parseWholeNumber(structure.constraintLimit, 1, 75, "Evidence stem constraints");
-        randomFoldCount = parseWholeNumber(structure.randomFoldCount, 0, 1000, "Randomised folds");
+        const { defaults, ranges } = globalThis.Hyb2EngineParameters.comrades;
+        const { constraintLimit: limit = defaults.constraintLimit, randomFoldCount: count = defaults.randomFoldCount } = structure;
+        constraintLimit = parseWholeNumber(limit, ...ranges.constraintLimit, "Evidence stem constraints");
+        randomFoldCount = parseWholeNumber(count, ...ranges.randomFoldCount, "Randomised folds");
         if (randomFoldCount > 100 && !structure.allowLargeEnsemble) {
           throw new Error("Confirm the large-ensemble warning before running more than 100 randomised folds.");
         }
@@ -251,6 +235,8 @@
       }
     }
 
+    const pairGuided = cplfoldGuided && globalThis.Hyb2SupportKernels.options.some(option => option.value === cplfoldParameters.supportKernel && option.pairModel);
+    const needsPostScoring = cplfoldGuided && !pairGuided && !sequenceInfo.cutpoint;
     cancel(state);
 
     const runId = (structure.runId || 0) + 1;
@@ -304,6 +290,8 @@
         if (sequenceInfo.cutpoint && (nativeResult.engine !== "CPLcofold" || nativeResult.cutpoint !== sequenceInfo.cutpoint || nativeResult.sequence !== sequenceInfo.sequence)) {
           throw new Error("The native runtime did not preserve the two RNA strands. Update the runtime or use browser CPLcofold.");
         }
+        const scoreIssue = pairGuided && pairScoreIssue(nativeResult, cplfoldParameters.supportKernel);
+        if (scoreIssue) throw new Error(scoreIssue);
         const publish = function (evidence) {
           if (!state.structure || state.structure.runId !== runId) return;
           if (evidence) nativeResult.comradesEvidence = evidence;
@@ -337,9 +325,12 @@
             } : null
           });
           api.render();
+          if (typeof window.CustomEvent === "function") {
+            window.dispatchEvent(new window.CustomEvent("hyb2:analysis-result", { detail: structure.result }));
+          }
           api.showToast(structure.message);
         };
-        if (cplfoldGuided && !sequenceInfo.cutpoint) {
+        if (needsPostScoring) {
           scoreComradesSupport(state, structure, runId, sequenceInfo, api, publish);
         } else {
           publish(null);
@@ -358,12 +349,10 @@
     }
 
     let worker = null;
-    // rnacofold kernel: the COMRADES support evidence of the pre-step's cofolds
-    let rnacofoldSupport = null;
     try {
       worker = cplfold
         ? acquireCplfoldWorker(state)
-        : new Worker((window.HYB2_ASSET_BASE || "./") + "structure.worker.js");
+        : new Worker(workerUrl("structure.worker.js"));
       state.structureWorker = worker;
 
       worker.onmessage = function (event) {
@@ -387,18 +376,38 @@
             rejectInput(structure, api, new Error("The worker did not preserve the two RNA strands. Reload the current CPLcofold runtime."));
             return;
           }
-          if (cplfold && cplfoldGuided && !sequenceInfo.cutpoint && message.result && !message.comradesScored && rnacofoldSupport) {
-            message.result.comradesEvidence = rnacofoldSupport;
-            message.comradesScored = true;
-          }
-          if (cplfold && cplfoldGuided && !sequenceInfo.cutpoint && message.result && !message.comradesScored) {
-            scoreComradesSupport(state, structure, runId, sequenceInfo, api, function (evidence) {
-              if (evidence) message.result.comradesEvidence = evidence;
-              message.comradesScored = true;
-              worker.onmessage({ data: message });
-            });
+          const scoreIssue = pairGuided && pairScoreIssue(message.result, cplfoldParameters.supportKernel);
+          if (scoreIssue) {
+            discardWorker(state, worker);
+            structure.runningSequenceInfo = null;
+            structure.operation = null;
+            rejectInput(structure, api, new Error(scoreIssue));
             return;
           }
+          if (needsPostScoring && message.result) {
+            scoreComradesSupport(state, structure, runId, sequenceInfo, api, publish);
+          } else {
+            publish(null);
+          }
+          return;
+        }
+
+        if (message.type === "error") {
+          discardWorker(state, worker);
+          structure.runningSequenceInfo = null;
+          structure.operation = null;
+          structure.status = "error";
+          structure.progress = 0;
+          structure.message = message.message || (cplfold
+            ? "Browser CPLfold could not finish the structure prediction."
+            : "ViennaRNA WebAssembly could not finish the structure prediction.");
+          api.render();
+        }
+
+        // The prediction worker may already belong to another run when scoring finishes.
+        function publish(evidence) {
+          if (state.structure !== structure || structure.runId !== runId) return;
+          if (evidence) message.result.comradesEvidence = evidence;
           structure.runningSequenceInfo = null;
           structure.operation = null;
           const constraintCount = Math.max(0, Number(message.result && message.result.constraintCount) || 0);
@@ -440,19 +449,6 @@
             window.dispatchEvent(new window.CustomEvent("hyb2:analysis-result", { detail: structure.result }));
           }
           api.showToast(structure.message);
-          return;
-        }
-
-        if (message.type === "error") {
-          discardWorker(state, worker);
-          structure.runningSequenceInfo = null;
-          structure.operation = null;
-          structure.status = "error";
-          structure.progress = 0;
-          structure.message = message.message || (cplfold
-            ? "Browser CPLfold could not finish the structure prediction."
-            : "ViennaRNA WebAssembly could not finish the structure prediction.");
-          api.render();
         }
       };
 
@@ -506,16 +502,7 @@
         temperature: temperature,
         constraints: constraints
       };
-      if (cplfold && cplfoldGuided && CPLFOLD_PAIR_KERNELS.indexOf(cplfoldParameters.supportKernel) !== -1) {
-        collectKernelPairs(cplfoldParameters.supportKernel, state, structure, runId, sequenceInfo, api, function (pairs, support) {
-          state.structureWorker = worker;
-          rnacofoldSupport = support;
-          request.evidencePairs = pairs;
-          worker.postMessage(request);
-        });
-      } else {
-        worker.postMessage(request);
-      }
+      worker.postMessage(request);
       return true;
     } catch (error) {
       if (worker) {
@@ -556,7 +543,7 @@
     cancel(state);
     const capacity = ensureCplfoldCapacity(structure);
     const runId = (structure.runId || 0) + 1;
-    const profileKey = cplfoldProfileKey(structure);
+    const profileKey = globalThis.Hyb2CplfoldSettings.profileKey(structure);
     structure.runId = runId;
     structure.status = "running";
     structure.operation = "capacity";
@@ -654,6 +641,7 @@
         probeLength: CPLFOLD_CAPACITY_PROBE_LENGTH,
         cofold: structure.cplfoldMode === "cofold",
         evidenceMode: structure.cplfoldEvidence === "hyb-blocks" ? "hyb-blocks" : "none",
+        supportKernel: parameters.supportKernel,
         beamSize: parameters.beamSize,
         maxPhase1: parameters.maxPhase1,
         energyDelta: parameters.energyDelta,
@@ -690,6 +678,12 @@
       api.showToast("No eligible HYB rows are available for a CPLfold bonus matrix.");
       return false;
     }
+    let kernel;
+    try {
+      kernel = globalThis.Hyb2CplfoldSettings.readKernel(structure.cplfoldKernel);
+    } catch (error) {
+      return rejectInput(structure, api, error);
+    }
 
     const previousStatus = structure.result ? "complete" : "idle";
     const previousMessage = structure.message;
@@ -716,11 +710,10 @@
       return false;
     }
 
+    const current = () => state.structureWorker === worker && state.structure === structure && structure.runId === runId;
     worker.onmessage = function (event) {
       const message = event.data || {};
-      if (!state.structure || state.structure.runId !== runId) {
-        return;
-      }
+      if (!current()) return;
       if (message.type === "progress") {
         structure.progress = Math.max(0, Math.min(99, Number(message.percent) || 0));
         structure.message = message.stage || "Preparing the CPLfold bonus matrix…";
@@ -753,9 +746,7 @@
     };
 
     worker.onerror = function () {
-      if (!state.structure || state.structure.runId !== runId) {
-        return;
-      }
+      if (!current()) return;
       discardWorker(state, worker);
       structure.status = "error";
       structure.operation = null;
@@ -767,24 +758,14 @@
     };
 
     try {
-      const kernel = CPLFOLD_SUPPORT_KERNELS.indexOf(structure.cplfoldKernel) === -1 ? "gaussian" : structure.cplfoldKernel;
-      const request = {
+      worker.postMessage({
         type: "cplfold-bonus-matrix",
         sequence: prepared.sequence,
         ...(prepared.cutpoint ? { cutpoint: prepared.cutpoint } : {}),
         evidenceMode: "hyb-blocks",
         evidenceArms: prepared.assembly.evidenceArms,
         supportKernel: kernel
-      };
-      if (CPLFOLD_PAIR_KERNELS.indexOf(kernel) !== -1) {
-        collectKernelPairs(kernel, state, structure, runId, prepared, api, function (pairs) {
-          state.structureWorker = worker;
-          request.evidencePairs = pairs;
-          worker.postMessage(request);
-        });
-      } else {
-        worker.postMessage(request);
-      }
+      });
     } catch (error) {
       discardWorker(state, worker);
       structure.status = "error";
@@ -837,36 +818,6 @@
     capacity.timeoutId = null;
   }
 
-  function parseMinimumLoop(value) {
-    if (value === undefined) {
-      return 3;
-    }
-    if ((typeof value !== "string" && typeof value !== "number") ||
-        (typeof value === "string" && value.trim() === "")) {
-      throw new Error("Minimum hairpin loop must be a whole number from 0 to 12.");
-    }
-    const parsed = Number(value);
-    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 12) {
-      throw new Error("Minimum hairpin loop must be a whole number from 0 to 12.");
-    }
-    return parsed;
-  }
-
-  function parseTemperature(value) {
-    if (value === undefined) {
-      return 37;
-    }
-    if ((typeof value !== "string" && typeof value !== "number") ||
-        (typeof value === "string" && value.trim() === "")) {
-      throw new Error("Folding temperature must be a number from 0 to 100 °C.");
-    }
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
-      throw new Error("Folding temperature must be a number from 0 to 100 °C.");
-    }
-    return parsed;
-  }
-
   function parseWholeNumber(value, minimum, maximum, label) {
     if ((typeof value !== "string" && typeof value !== "number") ||
         (typeof value === "string" && value.trim() === "")) {
@@ -879,14 +830,14 @@
     return parsed;
   }
 
-  function parseBoundedNumber(value, minimum, maximum, label) {
+  function parseBoundedNumber(value, minimum, maximum, label, unit = "") {
     if ((typeof value !== "string" && typeof value !== "number") ||
         (typeof value === "string" && value.trim() === "")) {
-      throw new Error(label + " must be a number from " + minimum + " to " + maximum + ".");
+      throw new Error(label + " must be a number from " + minimum + " to " + maximum + unit + ".");
     }
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
-      throw new Error(label + " must be a number from " + minimum + " to " + maximum + ".");
+      throw new Error(label + " must be a number from " + minimum + " to " + maximum + unit + ".");
     }
     return parsed;
   }
@@ -900,10 +851,10 @@
     return false;
   }
 
-  function parseManualConstraints(value, sequence, minimumLoop) {
+  function parseManualConstraints(value, sequence, minimumLoop = globalThis.Hyb2EngineParameters.vienna.defaults.minLoopSize) {
     const text = String(value || "");
     const rna = String(sequence || "");
-    const loop = parseMinimumLoop(minimumLoop);
+    const loop = parseWholeNumber(minimumLoop, ...globalThis.Hyb2EngineParameters.vienna.ranges.minLoopSize, "Minimum hairpin loop");
 
     if (text.length > 100000) {
       throw new Error("The manual constraint input is too large.");
@@ -1022,24 +973,22 @@
     }
   }
 
-  // CPLfold results are coloured by COMRADES support: RNAcofold evidence from
-  // the same HYB records, scored per base against the selected candidate.
+  // Single-strand interval kernels retain independent RNAcofold scoring.
+  // Both pair kernels come with the same raw counts used to build their B_ij.
   // A failure leaves the result uncoloured rather than losing the prediction.
   function scoreComradesSupport(state, structure, runId, sequenceInfo, api, done) {
     let worker;
     try {
-      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "structure.worker.js");
+      worker = new Worker(workerUrl("structure.worker.js"));
     } catch (error) {
       done(null);
       return;
     }
     state.structureWorker = worker;
+    const current = () => state.structureWorker === worker && state.structure === structure && structure.runId === runId;
     worker.onmessage = function (event) {
+      if (!current()) return;
       const message = event.data || {};
-      if (!state.structure || state.structure.runId !== runId) {
-        finishWorker(state, worker);
-        return;
-      }
       if (message.type === "progress") {
         structure.progress = Math.max(structure.progress || 0, Math.min(99, Number(message.percent) || 0));
         structure.message = "Scoring COMRADES HYB support · " + (message.stage || "RNAcofold evidence");
@@ -1050,72 +999,25 @@
       done(message.type === "complete" ? message.evidence : null);
     };
     worker.onerror = function () {
+      if (!current()) return;
       finishWorker(state, worker);
       done(null);
     };
     worker.postMessage({ type: "comrades-evidence", evidenceArms: sequenceInfo.assembly.evidenceArms, sequence: sequenceInfo.sequence });
   }
 
-  // The rnacofold support kernel needs the RNAcofold pairs (COMRADES'
-  // evidence) of every eligible chimera. The ViennaRNA worker computes them
-  // first and CPLfold receives them as evidencePairs; done(pairs, support)
-  // runs only when they arrive for this run. support is the COMRADES support
-  // evidence of the same cofolds, which scoreComradesSupport would otherwise
-  // compute again after the fold.
-  function collectKernelPairs(kernel, state, structure, runId, sequenceInfo, api, done) {
-    const program = "RNAcofold";
-    const fail = function (message) {
-      if (!state.structure || state.structure.runId !== runId) return;
-      structure.runningSequenceInfo = null;
-      structure.operation = null;
-      structure.status = "error";
-      structure.progress = 0;
-      structure.message = message || program + " could not compute the read support of the HYB chimeras.";
-      api.render();
-    };
-    let worker;
-    try {
-      worker = new Worker((window.HYB2_ASSET_BASE || "./") + "structure.worker.js");
-    } catch (error) {
-      fail("This browser cannot start the ViennaRNA worker that the " + kernel + " read support needs.");
-      return;
-    }
-    state.structureWorker = worker;
-    worker.onmessage = function (event) {
-      const message = event.data || {};
-      if (!state.structure || state.structure.runId !== runId) {
-        finishWorker(state, worker);
-        return;
-      }
-      if (message.type === "progress") {
-        structure.progress = Math.max(2, Math.min(40, Math.round((Number(message.percent) || 0) * 0.4)));
-        structure.message = program + " read support · " + (message.stage || program + " evidence");
-        api.render();
-        return;
-      }
-      finishWorker(state, worker);
-      if (message.type === "complete" && message.evidence && Array.isArray(message.evidence.pairs)) {
-        done(message.evidence.pairs, message.evidence.support || null);
-      } else {
-        fail(message.message);
-      }
-    };
-    worker.onerror = function () {
-      finishWorker(state, worker);
-      fail("The ViennaRNA worker stopped while computing the " + kernel + " read support.");
-    };
-    worker.postMessage({ type: "rnacofold-pairs", evidenceArms: sequenceInfo.assembly.evidenceArms, sequence: sequenceInfo.sequence });
-  }
-
-  // One long-lived CPLfold module worker per page keeps Pyodide, NumPy and
+  // One CPLfold module worker per mount keeps Pyodide, NumPy and
   // the CPLfold source loaded across predictions, capacity probes and
-  // bonus-matrix exports. Only cancel and errors terminate it; the next
-  // request then starts a fresh worker.
+  // bonus-matrix exports. Unmount releases it even when idle.
   let cplfoldWorker = null;
+
+  function workerUrl(file) {
+    return (window.HYB2_ASSET_BASE || "./") + file + "?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local");
+  }
 
   function acquireCplfoldWorker(state) {
     if (!cplfoldWorker) {
-      cplfoldWorker = new Worker((window.HYB2_ASSET_BASE || "./") + "cplfold.worker.mjs?build=" + encodeURIComponent(window.HYB2_BUILD && window.HYB2_BUILD.commit || "local"), { type: "module" });
+      cplfoldWorker = new Worker(workerUrl("cplfold.worker.mjs"), { type: "module" });
     }
     state.structureWorker = cplfoldWorker;
     return cplfoldWorker;
@@ -1139,6 +1041,11 @@
     if (state.structureWorker === worker) {
       state.structureWorker = null;
     }
+  }
+
+  function terminate(state) {
+    cancel(state);
+    if (cplfoldWorker) discardWorker(state, cplfoldWorker);
   }
 
   // Desktop native CPLfold runs outside this page, so cancelling must ask the
@@ -1173,6 +1080,6 @@
     downloadCplfoldBonusMatrix: downloadCplfoldBonusMatrix,
     reset: reset,
     cancel: cancel,
-    terminate: cancel
+    terminate: terminate
   };
 }());

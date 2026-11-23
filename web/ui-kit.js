@@ -391,24 +391,24 @@
       const file = typeof platform === "string" ? platform : platform && platform.file;
       if (!desktop.downloadsAvailable || !file) return "";
       const release = desktop.releases()[0];
-      if (release) {
-        return release.files.includes(file) ? desktop.releaseDownloadUrl(release.tag, file) : "";
-      }
-      // A missing catalog uses GitHub's live latest release; an empty catalog
-      // means we know there are no published files.
-      return Array.isArray(root.HYB2_RELEASES) ? "" : desktop.releasesUrl + "/latest/download/" + file;
+      return release && release.files.includes(file) ? desktop.releaseDownloadUrl(release.tag, file) : "";
     },
     checksumsUrl: function () {
       return desktop.downloadUrl(desktop.checksumsFile);
     },
-    // The published releases, newest first, as web/releases.js lists them
-    // when the site is deployed (scripts/write-releases.mjs): [{ tag,
-    // published: "YYYY-MM-DD", files: [names] }]. Empty when it is missing.
+    // In a tagged site the primary record must agree with build-info. A
+    // missing/stale catalog must never borrow an installer from history.
     releases: function () {
       const list = root.HYB2_RELEASES;
-      return Array.isArray(list) ? list.filter(function (release) {
+      const history = Array.isArray(list) ? list.filter(function (release) {
         return release && typeof release.tag === "string" && Array.isArray(release.files);
       }) : [];
+      const primary = root.HYB2_RELEASE_PRIMARY;
+      const tag = root.HYB2_BUILD && root.HYB2_BUILD.releaseTag;
+      if (!tag && !primary) return history; // local checkout or historical snapshot
+      const valid = primary && primary.tag === tag && Array.isArray(primary.files);
+      if (!tag) return [];
+      return [valid ? primary : { tag: tag, files: [] }].concat(history.filter(release => release.tag !== tag));
     },
     // A file of one release (tag), as downloadUrl gives the latest's.
     releaseDownloadUrl: function (tag, platform) {
@@ -419,8 +419,7 @@
     releaseNotesUrl: function (release) {
       if (!desktop.downloadsAvailable) return "";
       const selected = release || desktop.releases()[0];
-      if (selected) return desktop.releasesUrl + "/tag/" + encodeURIComponent(selected.tag);
-      return Array.isArray(root.HYB2_RELEASES) ? "" : desktop.releasesUrl + "/latest";
+      return selected ? desktop.releasesUrl + "/tag/" + encodeURIComponent(selected.tag) : "";
     },
     // <a class="desktop-cta" data-action="open-desktop">: the app opens the
     // Desktop drawer on click (and calls preventDefault). Without that handler

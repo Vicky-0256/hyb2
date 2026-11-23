@@ -2,14 +2,42 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const root=path.resolve(__dirname,'..');
 const context=vm.createContext({window:{},self:{},console,TextEncoder,Uint8Array,Uint32Array,Int32Array,Float64Array,Blob,setTimeout,clearTimeout});
-for(const file of ['analysis-data.js','deseq.js','batch-tools.js','region-panels.js','structure-editor.js','results.js'])vm.runInContext(fs.readFileSync(path.join(root,'web',file),'utf8'),context,{filename:file});
+for(const file of ['support-kernels.js','analysis-data.js','deseq.js','batch-tools.js','region-panels.js','structure-editor.js','results.js'])vm.runInContext(fs.readFileSync(path.join(root,'web',file),'utf8'),context,{filename:file});
 const B=context.window.Hyb2Batch,E=context.window.Hyb2StructureEditor;
+// Run the production parser message handler and decoding streams. Only the
+// folding worker is a stub in these Node tests; real WASM is checked in Chrome.
+const parserSource=fs.readFileSync(path.join(root,'web/parser.worker.js'),'utf8');
+class ParserWorker {
+ constructor(){
+  this.dead=false;
+  this.context=vm.createContext({TextDecoder,TransformStream,DecompressionStream,self:{postMessage:message=>{if(!this.dead)this.onmessage({data:message});}}});
+  vm.runInContext(parserSource,this.context,{filename:'parser.worker.js'});
+ }
+ postMessage(message){this.context.self.onmessage({data:message});}
+ terminate(){this.dead=true;}
+}
 const record={id:'r',lineNumber:3,raw:['r','ACGUGC','old','one',1,3,2,4,0,'two',4,6,1,3,0,0,'Type_1','extra'].join('\t')};
 const fasta={mapping:{one:'one',two:'two'},sequences:[{id:'one',sequence:'AACGTAC'},{id:'two',sequence:'GCTAAA'}]};
 assert.deepEqual(Array.from(B.prepareEnergy(record,fasta)),['ACG','GCU']);
+assert.deepEqual(Array.from(B.prepareEnergy(record,{...fasta,sequences:[{id:'one',sequence:'🧬atgca'},fasta.sequences[1]]})),['AUG','GCU']);
 assert.throws(()=>B.prepareEnergy(record,{mapping:{},sequences:[]}),/No mapped/);
 assert.throws(()=>B.prepareEnergy({...record,raw:record.raw.replace('\t2\t4\t','\t4\t2\t')},fasta),/antisense/);
 assert.throws(()=>B.prepareEnergy(record,{...fasta,sequences:[{id:'one',sequence:'ANCGTAC'},{id:'two',sequence:'GCTAAA'}]}),/ambiguous/);
+// The same windows as the desktop batch task: either arm can select the T.
+{
+  const toy = {sequences:[{id:'toy',sequence:'NacgggTcccgc?'}]};
+  const prepare = (endOne,startTwo) => B.prepareEnergy({raw:[
+    'r','ACGU','-10.5','toy',1,20,2,endOne,0,'toy',21,40,startTwo,12,0
+  ].join('\t')},toy);
+  const rules = context.Hyb2FoldText, original = rules.alphabet;
+  assert.deepEqual(Array.from(prepare(7,8)),['ACGGGU','CCCGC']);
+  try {
+    rules.alphabet = 'ACG';
+    assert.throws(()=>prepare(7,8),/Unsupported or ambiguous reference bases/);
+    assert.throws(()=>prepare(6,7),/Unsupported or ambiguous reference bases/);
+    assert.deepEqual(Array.from(prepare(6,8)),['ACGGG','CCCGC']);
+  } finally { rules.alphabet = original; }
+}
 const source='# comment\r\n\r\n'+record.raw+'\r\ninvalid\n';
 const updated=B.rewriteEnergy(source,new Map([[3,{raw:record.raw,energy:-2.5}]]));
 assert.equal(updated,source.replace('\told\t','\t-2.50\t'));
@@ -64,14 +92,14 @@ console.log('Batch energy, Top 10 map counts/ranking/exports, drawing validation
 const lifecycleTest=(async()=>{
  let workers=0, renders=0, downloaded=null;
  class TestWorker {
-  constructor(){workers++;this.dead=false;}
+  constructor(url){if(/parser\.worker\.js/.test(url))return new ParserWorker();workers++;this.dead=false;}
   terminate(){this.dead=true;}
   postMessage(message){setTimeout(()=>{if(!this.dead)this.onmessage({data:{type:'result',version:'test',energies:new Float64Array(message.pairs.length).fill(-1.25)}});},1);}
  }
  context.Worker=TestWorker;
  const list=Array.from({length:130},(_,i)=>({...record,id:'r'+i,lineNumber:i+2,raw:record.raw.replace(/^r\t/,'r'+i+'\t')}));
  const source='# retained\n'+list.map(r=>r.raw).join('\n')+'\n';
- const state={summary:{},fasta,file:{name:'test.hyb',text:async()=>source}};
+ const state={summary:{},fasta,file:new File([source],'test.hyb')};
  const api={queryHybrids:async()=>({rows:list}),render(){renders++;B.renderEnergy(state);},download(name,text){downloaded={name,text};},showToast(){}};
  B.handleAction(state,{dataset:{featureAction:'batch-energy-run'}},api);
  const wait=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(r=>setTimeout(r,10));}throw new Error('Async batch test timeout');};
@@ -140,7 +168,7 @@ console.log('Configurable quantiles, Lau evidence colours, region/probe validati
 lifecycleTest.then(async()=>{
  const posted=[];let created=0;
  class PoolWorker {
-  constructor(url,options){created++;this.url=url;this.options=options;this.dead=false;}
+  constructor(url,options){if(/parser\.worker\.js/.test(url))return new ParserWorker();created++;this.url=url;this.options=options;this.dead=false;}
   terminate(){this.dead=true;}
   postMessage(message){posted.push({url:this.url,module:!!(this.options&&this.options.type==='module'),message});setTimeout(()=>{if(!this.dead)this.onmessage({data:{type:'result',version:'test',energies:(e=>{if(message.type==='duplex-batch')e[0]=NaN;return e;})(new Float64Array(message.pairs.length).fill(message.type==='cplfold-energy-batch'?-7.5:message.type==='duplex-batch'?-4.5:-2.25))}});},1);}
  }
@@ -148,7 +176,7 @@ lifecycleTest.then(async()=>{
  const list=Array.from({length:300},(_,i)=>({...record,id:'p'+i,lineNumber:i+1,raw:record.raw.replace(/^r\t/,'p'+i+'\t')}));
  const source=list.map(r=>r.raw).join('\n')+'\n';
  const primarySummary={validRecords:300};
- const state={summary:primarySummary,primarySummary,fasta,file:{name:'pool.hyb',text:async()=>source},filters:{search:'p1'}};
+ const state={summary:primarySummary,primarySummary,fasta,file:new File([source],'pool.hyb'),filters:{search:'p1'}};
  const queries=[];
  const api={queryHybrids:async query=>{queries.push(query);return {rows:query.filters?list.filter(r=>r.id.startsWith('p1')):list};},render(){B.renderEnergy(state);},download(){},downloadBlob(){},showToast(){}};
  const wait=async predicate=>{for(let i=0;i<300;i++){if(predicate())return;await new Promise(r=>setTimeout(r,10));}throw new Error('pool test timeout');};
@@ -186,3 +214,115 @@ lifecycleTest.then(async()=>{
  assert.equal((state.hybEnergy.result.hyb.match(/\t-7.50\t/g)||[]).length,filtered);
  console.log('Energy engines (RNAduplex default, RNAcofold pool, CPLcofold), filtered records and scope independence passed.');
 }).catch(error=>{console.error(error);process.exit(1);});
+
+// Public batch actions with the actual parser and BrowserProvider. Each case
+// owns its context so a failed/cancelled run cannot leak workers or state.
+(async()=>{
+ const zlib=require('node:zlib');
+ const red=record.raw.replace(/^r\t/,'red\t'), blue=record.raw.replace(/^r\t/,'blue\t');
+ const source=red+'\r\n# retained 🧬\n\ninvalid\trow\r\n'+blue;
+ const expected=source.replace('\told\t','\t-2.50\t');
+ const bytes=Buffer.from(source), split=bytes.indexOf(Buffer.from('🧬'))+1;
+ const gzip=zlib.gzipSync(bytes);
+ const joined=Buffer.concat([zlib.gzipSync(bytes.subarray(0,split)),zlib.gzipSync(bytes.subarray(split)),Buffer.alloc(512)]);
+ const bgzf=part=>{
+  const compressed=zlib.gzipSync(part), header=Buffer.from([31,139,8,4,0,0,0,0,0,255,6,0,66,67,2,0,0,0]);
+  header.writeUInt16LE(header.length+compressed.length-10-1,16);
+  return Buffer.concat([header,compressed.subarray(10)]);
+ };
+ const wait=async predicate=>{for(let i=0;i<300;i++){if(predicate())return;await new Promise(r=>setTimeout(r,5));}throw new Error('input contract test timeout');};
+ const check=async(name,run)=>{try{await run();console.log('batch-input: '+name+' ok');}catch(error){console.error('batch-input: '+name+' FAILED\n'+error.stack);process.exitCode=1;}};
+ async function setup(file,options={}) {
+  const parser=new ParserWorker();
+  const parsed=await new Promise((resolve,reject)=>{
+   parser.onmessage=({data})=>{if(data.type==='complete')resolve(data);else if(data.type==='error')reject(new Error(data.message));};
+   parser.postMessage({file:options.importFile||file});
+  });
+  parser.terminate();
+  const workers=[], downloads=[], queries=[];
+  let state;
+  class Worker {
+   constructor(url){
+    this.url=url;this.dead=false;workers.push(this);
+    if(/parser\.worker\.js/.test(url))this.parser=new ParserWorker();
+   }
+   terminate(){this.dead=true;if(this.parser)this.parser.terminate();}
+   postMessage(message){
+    const reply=()=>{if(this.dead)return;if(this.parser){this.parser.onmessage=event=>this.onmessage(event);this.parser.postMessage(message);}else this.onmessage({data:options.workerError?{type:'error',message:options.workerError}:{type:'result',version:'test',energies:message.pairs.map(()=>-2.5)}});};
+    if(options.onPost)options.onPost({state,worker:this,message,reply});
+    else setTimeout(reply,0);
+   }
+  }
+  const ctx=vm.createContext({window:{},self:{},console,TextEncoder,Blob,Response,DecompressionStream,Worker,setTimeout,clearTimeout});
+  for(const file of ['support-kernels.js','analysis-data.js','data-provider.js','batch-tools.js','results.js'])vm.runInContext(fs.readFileSync(path.join(root,'web',file),'utf8'),ctx,{filename:file});
+  const apiBatch=ctx.window.Hyb2Batch,provider=new ctx.window.Hyb2Provider.BrowserProvider();
+  provider.addDataset({id:'primary',primary:true,summary:parsed.summary,records:parsed.records});
+  state={summary:parsed.summary,primarySummary:parsed.summary,datasets:[{id:'primary',primary:true}],fasta,file,
+   filters:Object.assign(ctx.window.Hyb2Data.defaultInteractionFilters(),{search:'red'}),hybEnergySettings:{engine:'rnaduplex',records:options.records||'filtered'}};
+  const initialFilters=JSON.parse(JSON.stringify(state.filters));
+  const api={render(){},showToast(){},download(name,text){downloads.push({name,text});},downloadBlob(name,blob){downloads.push({name,blob});},
+   async queryHybrids(query){queries.push(query);if(options.onQuery)await options.onQuery(state,query);return provider.queryHybrids({datasetIds:query.datasetIds},query);}};
+  const action=name=>apiBatch.handleAction(state,{dataset:{featureAction:'batch-energy-'+name}},api);
+  return {state,workers,downloads,queries,initialFilters,action,finish:()=>wait(()=>!state.hybEnergy.running)};
+ }
+ async function assertExport(job,hyb=expected,updated=1) {
+  job.action('run');await job.finish();
+  const result=job.state.hybEnergy.result;
+  assert.ok(result,job.state.hybEnergy.message);
+  assert.equal(result.hyb,hyb,'only selected column 3 changes; source text is otherwise exact');
+  assert.equal(result.metadata.updated,updated);assert.equal(result.metadata.unchanged,2-updated);
+  assert.equal(result.audit.trimEnd().split('\n').length,3);
+  assert.match(result.audit,/1\tred\tupdated\told\t-2\.50/);
+  if(updated===1)assert.match(result.audit,/5\tblue\tunchanged\told\told\tnot selected/);
+  job.action('hyb');job.action('zip');
+  assert.equal(job.downloads[0].text,hyb);
+  const zip=Buffer.from(await job.downloads[1].blob.arrayBuffer());
+  // Stored ZIP entries, as emitted by the actual Hyb2Results exporter.
+  const entries=new Map();let at=0;
+  while(zip.readUInt32LE(at)===0x04034b50){
+   assert.equal(zip.readUInt16LE(at+8),0);
+   const size=zip.readUInt32LE(at+18),nameLength=zip.readUInt16LE(at+26),extraLength=zip.readUInt16LE(at+28);
+   const name=zip.subarray(at+30,at+30+nameLength).toString(),start=at+30+nameLength+extraLength;
+   entries.set(name.split('/').pop(),zip.subarray(start,start+size).toString());at=start+size;
+  }
+  assert.equal(entries.get('energies.hyb'),hyb);assert.equal(entries.get('audit.tsv'),result.audit);
+  const metadata=JSON.parse(entries.get('parameters.json'));
+  assert.deepEqual(metadata.filters,updated===2?null:job.initialFilters,'ZIP provenance is the launch-time filter snapshot');
+  assert.ok(job.workers.every(worker=>worker.dead),'all workers terminate after export');
+ }
+ for(const [name,body] of [['plain.hyb',bytes],['honest.hyb.gz',gzip],['gzip.hyb',gzip],['plain.hyb.gz',bytes],['concatenated.hyb.gz',joined],['bgzf.hyb.gz',Buffer.concat([bgzf(bytes.subarray(0,split)),bgzf(bytes.subarray(split))])]]) {
+  await check(name,async()=>assertExport(await setup(new File([body],name))));
+ }
+ await check('BOM retained',async()=>assertExport(await setup(new File(['\ufeff',bytes],'bom.hyb')),'\ufeff'+expected));
+ await check('all-record control',async()=>assertExport(await setup(new File([bytes],'all.hyb'),{records:'all'}),source.replaceAll('\told\t','\t-2.50\t'),2));
+ for(const stage of ['query','fold'])await check('filters changed during '+stage,async()=>{
+  const options=stage==='query'?{onQuery(state,query){if(!query.filters)state.filters.search='blue';}}:
+   {onPost({state,worker,reply}){if(!worker.parser){state.filters.search='blue';state.filters={...state.filters,search:'green'};}setTimeout(reply,0);}};
+  await assertExport(await setup(new File([bytes],'filters.hyb'),options));
+ });
+ for(const [name,body] of [['missing-row.hyb',''],['blank-row.hyb','\n'+blue],['partial-rows.hyb',red+'\r\n'],['changed-row.hyb',source.replace('red\t','changed\t')],['truncated.hyb.gz',joined.subarray(0,joined.length-530)],['junk.hyb.gz',Buffer.concat([gzip,Buffer.from('not gzip')])]]) {
+  await check(name,async()=>{
+   const job=await setup(new File([body],name),{importFile:new File([bytes],'imported.hyb'),records:'all'});
+   job.action('run');await job.finish();
+   assert.equal(job.state.hybEnergy.result,null,'a missing or damaged source must not publish an update');
+   assert.match(job.state.hybEnergy.message,/failed/i);job.action('hyb');job.action('zip');assert.equal(job.downloads.length,0);
+   assert.ok(job.workers.every(worker=>worker.dead));
+  });
+ }
+ await check('failed worker',async()=>{
+  const options={workerError:'toy engine failure'}, job=await setup(new File([bytes],'failed.hyb'),options);
+  job.action('run');await job.finish();assert.equal(job.state.hybEnergy.result,null);assert.match(job.state.hybEnergy.message,/toy engine failure/);
+  assert.ok(job.workers.every(worker=>worker.dead));
+  options.workerError=null;await assertExport(job);
+ });
+ for(const stage of ['read','fold'])await check('cancel during '+stage,async()=>{
+  let resume;
+  const job=await setup(new File([joined],'cancel.hyb.gz'),{onPost({worker,reply}){if(!resume&&(stage==='read')===!!worker.parser)resume=reply;else setTimeout(reply,0);}});
+  job.action('run');await wait(()=>!!resume||!job.state.hybEnergy.running);
+  assert.ok(resume,'requested stage was reached');job.action('cancel');resume();await new Promise(r=>setTimeout(r,10));
+  assert.equal(job.state.hybEnergy.result,null);assert.equal(job.state.hybEnergy.running,false);assert.match(job.state.hybEnergy.message,/Cancelled/);
+  job.action('hyb');job.action('zip');assert.equal(job.downloads.length,0);assert.ok(job.workers.every(worker=>worker.dead));
+  await assertExport(job);
+ });
+ await check('valid run after failures/cancellation',async()=>assertExport(await setup(new File([bytes],'recovery.hyb'))));
+})().catch(error=>{console.error(error);process.exitCode=1;});

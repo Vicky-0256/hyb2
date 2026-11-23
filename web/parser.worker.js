@@ -15,6 +15,16 @@ self.onmessage = async function (event) {
   }
 
   try {
+    // Batch exports need the original text, including unparsed lines. Use
+    // exactly the import decoder (magic bytes, gzip members and BGZF), in a
+    // disposable worker so cancelling a batch also stops source decoding.
+    if (event.data.type === "read-text") {
+      const chunks = [];
+      await readFileInChunks(file, function (text) { chunks.push(text); });
+      self.postMessage({ type: "text", text: chunks.join("") });
+      return;
+    }
+
     const summary = createSummary(file);
     let pending = "";
     let lineNumber = 0;
@@ -385,7 +395,8 @@ async function isZeroPadding(file, start) {
 }
 
 async function readFileInChunks(file, onChunk) {
-  const decoder = new TextDecoder();
+  // Preserve the BOM in source exports; consumeLine removes it for parsing.
+  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
   const gzip = await isGzip(file);
 
   if (gzip && (typeof file.stream !== "function" || typeof DecompressionStream !== "function")) {

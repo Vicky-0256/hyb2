@@ -7,6 +7,7 @@ const vm = require("node:vm");
 
 const repository = path.resolve(__dirname, "..");
 const workerInstances = [];
+let workerRequests = 0;
 
 function FakeWorker(url, options) {
   this.url = url;
@@ -17,6 +18,7 @@ function FakeWorker(url, options) {
 }
 
 FakeWorker.prototype.postMessage = function (message) {
+  workerRequests += 1;
   this.message = message;
 };
 
@@ -36,15 +38,11 @@ const context = vm.createContext({
   Set,
   Map,
   Worker: FakeWorker,
-  window: {
-    Hyb2Data: {
-      normaliseFoldSequence: function (sequence) {
-        return { sequence: String(sequence || "").toUpperCase(), invalid: [] };
-      }
-    }
-  }
+  window: {}
 });
 
+vm.runInContext(fs.readFileSync(path.join(repository, "web", "support-kernels.js"), "utf8"), context);
+vm.runInContext(fs.readFileSync(path.join(repository, "web", "analysis-data.js"), "utf8"), context);
 vm.runInContext(
   fs.readFileSync(path.join(repository, "web", "comrades-analysis.js"), "utf8"),
   context,
@@ -283,6 +281,33 @@ assert.match(guidedSetupHtml, /Run HYB-guided ensemble/);
 assert.match(guidedSetupHtml, /1,000 · original cluster scale/);
 assert.match(guidedSetupHtml, /Randomisation seed/);
 
+// Check the preview itself, not other controls that list every available method.
+function assemblyPreview(overrides) {
+  const target = providerView({ ...guidedState, structure: { ...guidedState.structure, ...overrides } });
+  return context.window.Hyb2Pages.renderStructure(target).match(/<section class="assembly-preview">.*?<\/section>/)[0];
+}
+const irisPreview = assemblyPreview({ engine: "iris" });
+assert.match(irisPreview, /1 eligible HYB row\. IRIS.*Gaussian.*ensemble/);
+assert.doesNotMatch(irisPreview, /CPLfold|RNAcofold/);
+assert.match(assemblyPreview({ engine: "iris", end: "10" }), /No eligible HYB rows/);
+for (const evidenceLayout of ["single", "paired"]) {
+  assert.match(assemblyPreview({ evidenceLayout }), /COMRADES will use RNAcofold.*stem constraints/);
+}
+for (const cplfoldMode of ["single", "cofold"]) {
+  for (const [cplfoldKernel, expected] of Object.entries({
+    gaussian: /Gaussian around arm centres/, block: /Full arm blocks\./,
+    "block-normalized": /Full arm blocks ÷ √/, duplex: /RNAduplex inter-arm pairs/,
+    comrades: /COMRADES \(RNAcofold inter-arm pairs\)/, rnacofold: /Choose a supported kernel/
+  })) {
+    const preview = assemblyPreview({ engine: "cplfold", cplfoldMode, cplfoldKernel, cplfoldEvidence: "hyb-blocks" });
+    assert.match(preview, expected);
+    assert.doesNotMatch(preview, /stem constraints|observation|ensemble/);
+  }
+}
+const noEvidence = assemblyPreview({ engine: "cplfold", cplfoldMode: "cofold", cplfoldEvidence: "none" });
+assert.match(noEvidence, /No HYB evidence in this input/);
+assert.doesNotMatch(noEvidence, /RNAcofold|eligible HYB|bonus matrix/);
+
 const guidedWorkersBefore = workerInstances.length;
 assert.equal(context.window.Hyb2Structure.predict(guidedState, {
   render: function () {},
@@ -294,6 +319,24 @@ assert.equal(workerInstances.at(-1).message.evidenceArms.length, 1);
 assert.equal(workerInstances.at(-1).message.randomFoldCount, 10);
 assert.equal(workerInstances.at(-1).message.seed, "guided-contract");
 context.window.Hyb2Structure.cancel(guidedState);
+
+// Old forms can omit settings. Both the control and submitted request must
+// follow a changed catalog, including a default absent from the old presets.
+{
+  const engines = context.Hyb2EngineParameters, old = engines.comrades;
+  engines.comrades = { ...old, defaults: { temperature: 25.5, minLoopSize: 4, constraintLimit: 17, randomFoldCount: 2 },
+    ranges: { ...old.ranges, constraintLimit: [1, 50] } };
+  const form = { ...guidedState, structure: { ...guidedState.structure } };
+  for (const key of ["minimumLoop", "temperature", "constraintLimit", "randomFoldCount"]) delete form.structure[key];
+  const html = context.window.Hyb2Pages.renderStructure(form);
+  assert.match(html, /value="17"[^>]*data-key="constraintLimit"/);
+  assert.match(html, /<option value="2" selected/);
+  assert.equal(context.window.Hyb2Structure.predict(form, { render() {}, showToast() {} }), true);
+  const msg = workerInstances.at(-1).message;
+  assert.deepEqual([msg.temperature, msg.minimumLoop, msg.constraintLimit, msg.randomFoldCount], [25.5, 4, 17, 2]);
+  context.window.Hyb2Structure.cancel(form);
+  engines.comrades = old;
+}
 
 // Folding program: ViennaRNA runs in the browser; mfold 3.6 is offered for
 // HYB2 Desktop and the command line, and refuses to start here.
@@ -365,7 +408,7 @@ assert.match(guidedResultHtml, /HYB-evidence-selected structure/);
 assert.match(guidedResultHtml, /COMRADES score/);
 assert.match(guidedResultHtml, /RNAcofold evidence/);
 assert.match(guidedResultHtml, /Accepted stem constraints/);
-assert.match(guidedResultHtml, /Download evidence/);
+assert.match(guidedResultHtml, /Download constraint shortlist/);
 assert.match(guidedResultHtml, /Download ensemble/);
 assert.match(guidedResultHtml, /evidence 2/);
 const guidedReport = context.window.Hyb2StructureUI.structureReport(guidedState, guidedState.structure.result);
@@ -412,7 +455,7 @@ Object.assign(cplfoldState.structure, {
 providerView(cplfoldState);
 const cplfoldSetup = context.window.Hyb2Pages.renderStructure(cplfoldState);
 assert.match(cplfoldSetup, /CPLfold \+ Pyodide · Browser/);
-assert.match(cplfoldSetup, /HYB block bonus matrix/);
+assert.match(cplfoldSetup, /HYB-guided bonus matrix/);
 assert.match(cplfoldSetup, /Allow pseudoknots/);
 assert.match(cplfoldSetup, /Secondary structure only/);
 assert.match(cplfoldSetup, /value="true"[^>]*data-key="cplfoldAllowPseudoknot"[^>]* checked/);
@@ -421,7 +464,7 @@ assert.match(cplfoldSetup, /Predict CPLfold candidates/);
 assert.match(cplfoldSetup, /Baseline 75 nt/);
 assert.match(cplfoldSetup, /data-feature-action="probe-cplfold-capacity"/);
 assert.match(cplfoldSetup, /data-feature-action="download-local-cplfold-input"[^>]*>Download local inputs/);
-assert.match(cplfoldSetup, /title="Download prepared FASTA and HYB bonus matrix for local bin\/cplfold"/);
+assert.match(cplfoldSetup, /title="Download prepared FASTA for local folding; guided inputs also include the HYB bonus matrix"/);
 assert.match(cplfoldSetup, /Run longer sequences locally/);
 assert.match(cplfoldSetup, /href="\.\/local-cplfold\.html"[^>]*target="_blank"/);
 assert.doesNotMatch(cplfoldSetup, /python3\.11 -m venv \.venv-cplfold/);
@@ -515,7 +558,7 @@ cplfoldWorker.onmessage({ data: { type: "complete", result: {
 } } });
 // The CPLfold result waits for COMRADES support scored from RNAcofold evidence.
 const comradesWorker = workerInstances.at(-1);
-assert.equal(comradesWorker.url, "./structure.worker.js");
+assert.equal(comradesWorker.url, "./structure.worker.js?build=local");
 assert.equal(comradesWorker.message.type, "comrades-evidence");
 assert.equal(comradesWorker.message.evidenceArms.length, 1);
 assert.equal(comradesWorker.message.sequence.length, 28);
@@ -537,19 +580,24 @@ assert.match(cplfoldResultHtml, /pseudoknot-1/);
 const cplfoldApi = { renders: 0, toasts: [], render: function () { this.renders += 1; }, showToast: function (message) { this.toasts.push(message); } };
 const localInputEvents = { downloads: [], toasts: [] };
 const localInputApi = {
+  render: function () {},
   download: function (name, contents, mediaType) {
     localInputEvents.downloads.push({ name: name, contents: contents, mediaType: mediaType });
   },
   showToast: function (message) { localInputEvents.toasts.push(message); }
 };
 assert.equal(context.window.Hyb2StructureUI.handleAction("download-local-cplfold-input", cplfoldState, localInputApi), true);
+assert.equal(localInputEvents.downloads.length, 0, "a previous fold is not the current input matrix");
+cplfoldWorker.onmessage({ data: { type: "bonus-matrix-complete", result: {
+  sequence: cplfoldPrepared.sequence, evidence: { source: "hyb-block-intervals", bonusEntries: [{ one: 6, two: 17, value: 0.6 }] }
+} } });
 assert.deepEqual(localInputEvents.downloads, [{
   name: "cplfold-input.fasta",
   contents: ">HYB2_Web_prepared_sequence\nGGCGCGGCACCGUCCGCGGAACAAACGG\n",
   mediaType: "text/plain"
 }, {
   name: "cplfold-bonus-matrix.tsv",
-  contents: "# HYB2 CPLfold bonus matrix\n# sequence_length=28\n# coordinate_system=prepared-sequence-1-based-inclusive\n# transform=IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p\nprepared_position_1\tprepared_position_2\tlog1p_gaussian_hyb_bonus\n3\t20\t0.80000000\n4\t19\t0.40000000\n",
+  contents: "# HYB2 CPLfold bonus matrix\n# sequence_length=28\n# coordinate_system=prepared-sequence-1-based-inclusive\n# transform=IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p\nprepared_position_1\tprepared_position_2\tlog1p_gaussian_hyb_bonus\n6\t17\t0.60000000\n",
   mediaType: "text/tab-separated-values"
 }]);
 assert.match(localInputEvents.toasts[0], /bin\/cplfold --sequence-file cplfold-input\.fasta --bonus-matrix-file cplfold-bonus-matrix\.tsv/);
@@ -806,7 +854,7 @@ const controllerWorkerBaseline = workerInstances.length;
 const constrainedState = structureState("manual-hard-base-pairs", "4-8");
 assert.equal(context.window.Hyb2Structure.predict(constrainedState, controllerApi), true);
 assert.equal(workerInstances.length, controllerWorkerBaseline + 1);
-assert.equal(workerInstances.at(-1).url, "./structure.worker.js");
+assert.equal(workerInstances.at(-1).url, "./structure.worker.js?build=local");
 assert.deepEqual(JSON.parse(JSON.stringify(workerInstances.at(-1).message.constraints)), [{ left: 4, right: 8 }]);
 
 const plainState = structureState("none", "not parsed in plain mode");
@@ -814,29 +862,124 @@ assert.equal(context.window.Hyb2Structure.predict(plainState, controllerApi), tr
 assert.equal(workerInstances.length, controllerWorkerBaseline + 2);
 assert.deepEqual(JSON.parse(JSON.stringify(workerInstances.at(-1).message.constraints)), []);
 
-context.window.Hyb2Data.extractReference = function () {
-  return { id: "ref_A", start: 1, end: 10, sequence: "GCGCUUCGCC" };
-};
 const referenceState = structureState("none", "");
-referenceState.fasta = { mapping: { RNA_A: "ref_A" } };
+referenceState.fasta = { mapping: { RNA_A: "ref_A" },
+  sequences: context.window.Hyb2Data.parseFasta(">ref_A\nA\u0085cgtacgtacgt\n") };
 referenceState.structure.source = "reference";
 referenceState.structure.rna = "RNA_A";
 referenceState.structure.start = "";
-referenceState.structure.end = "999";
+referenceState.structure.end = "";
 providerView(referenceState);
 const effectiveReference = context.window.Hyb2Pages.getStructureSequence(referenceState);
 assert.equal(effectiveReference.sourceStart, 1);
-assert.equal(effectiveReference.sourceEnd, 10);
+assert.equal(effectiveReference.sourceEnd, 12, "blank bounds span bases, not FASTA layout characters");
+const beforeShort = workerInstances.length;
+for (const [start, end] of [["2", "10"], ["", "9"], ["4", ""]]) {
+  Object.assign(referenceState.structure, { start, end });
+  assert.equal(context.window.Hyb2Structure.predict(referenceState, controllerApi), false, `${start}..${end} selects nine bases`);
+  assert.match(controllerApi.toasts.at(-1), /at least 10 nt/);
+}
+assert.equal(workerInstances.length, beforeShort);
+referenceState.structure.start = "2";
+referenceState.structure.end = "11";
 assert.equal(context.window.Hyb2Structure.predict(referenceState, controllerApi), true);
 const referenceWorker = workerInstances.at(-1);
+assert.equal(referenceWorker.message.sequence, "CGUACGUACG", "slice the normalized reference at 1-based inclusive coordinates");
 referenceWorker.onmessage({ data: { type: "complete", result: {
-  algorithm: "ViennaRNA MFE", sequence: "GCGCUUCGCC", dotBracket: "..........", pairs: []
+  algorithm: "ViennaRNA MFE", sequence: "CGUACGUACG", dotBracket: "..........", pairs: []
 } } });
+assert.equal(referenceState.structure.result.label, "RNA_A:2-11");
 assert.equal(referenceState.structure.result.sourceRna, "RNA_A");
-assert.equal(referenceState.structure.result.sourceStart, 1,
-  "reference provenance must use the effective extracted start rather than Number(blank)");
-assert.equal(referenceState.structure.result.sourceEnd, 10,
-  "reference provenance must use the clamped extracted end rather than the raw control value");
+assert.equal(referenceState.structure.result.sourceStart, 2);
+assert.equal(referenceState.structure.result.sourceEnd, 11);
+const windowRules = context.Hyb2FoldText;
+const previousMinimum = windowRules.minWindowNt;
+try {
+  windowRules.minWindowNt = 13;
+  assert.equal(context.window.Hyb2Structure.predict(referenceState, controllerApi), false);
+  assert.match(controllerApi.toasts.at(-1), /at least 13 nt/);
+  const whole = { ...referenceState, structure: { ...referenceState.structure, start: "", end: "" } };
+  assert.equal(context.window.Hyb2Pages.getStructureSequence(whole).sequence, "ACGUACGUACGU", "blank bounds request the whole RNA, not a window");
+} finally {
+  windowRules.minWindowNt = previousMinimum;
+}
+
+// Task input policy is source-specific, after normalization. The prepared
+// engine accepts shorter input; the form must not invent a fourth cutoff.
+function lengthState(source, length, engine = "cplfold", bounds = {}) {
+  const target = structureState("none", "");
+  Object.assign(target.structure, {engine, source, cplfoldMode: "single", cplfoldEvidence: "none",
+    pastedSequence: ">mine\r1 " + "g".repeat(length) + "\u0085", rna: "A", start: "", end: "", ...bounds});
+  if (source === "record") {
+    target.structure.selectedRecordIndex = 0;
+    target.records = [{id: "short", index: 0, sequence: " g".repeat(length) + "\u0085"}];
+  }
+  if (source === "reference") {
+    target.fasta = {mapping: {A: "A"}, sequences: [{id: "A", sequence: "g\u0085".repeat(length)}]};
+  }
+  return providerView(target);
+}
+function checkInputLength(target, accepted, expectedLength, minimum) {
+  const info = context.window.Hyb2Pages.getStructureSequence(target);
+  const before = workerRequests, instances = workerInstances.length;
+  if (accepted) {
+    assert.equal(info.error, "", JSON.stringify(target.structure));
+    assert.equal(info.sequence, "G".repeat(expectedLength));
+  } else {
+    assert.match(info.error, new RegExp("at least " + minimum + " nt"));
+  }
+  assert.equal(context.window.Hyb2Structure.predict(target, controllerApi), accepted, info.error);
+  assert.equal(workerRequests, before + Number(accepted));
+  if (accepted) {
+    assert.equal(target.structureWorker.message.sequence, info.sequence);
+    context.window.Hyb2Structure.cancel(target);
+  } else assert.equal(workerInstances.length, instances);
+}
+for (const engine of ["cplfold", "viennarna"]) {
+  for (const length of [4, 5, 7]) checkInputLength(lengthState("paste", length, engine), length >= 5, length, 5);
+  for (const source of ["record", "reference"]) {
+    for (const length of [0, 1]) checkInputLength(lengthState(source, length, engine), length >= 1, length, 1);
+  }
+  const whole = lengthState("reference", 4, engine);
+  checkInputLength(whole, true, 4);
+  // Covering the entire record does not make typed coordinates a whole-record request.
+  for (const [start, end] of [["1", "4"], ["1", ""], ["", "4"]]) {
+    Object.assign(whole.structure, {start, end});
+    checkInputLength(whole, false, 4, 10);
+  }
+}
+const originalMinima = {minPastedNt: windowRules.minPastedNt, minSequenceNt: windowRules.minSequenceNt};
+try {
+  windowRules.minPastedNt = 6;
+  checkInputLength(lengthState("paste", 5), false, 5, 6);
+  checkInputLength(lengthState("paste", 6), true, 6);
+  checkInputLength(lengthState("record", 1), true, 1);
+  windowRules.minPastedNt = originalMinima.minPastedNt;
+  windowRules.minSequenceNt = 11;
+  checkInputLength(lengthState("paste", 5), true, 5);
+  checkInputLength(lengthState("reference", 12, "cplfold", {start: "2", end: "11"}), true, 10);
+  for (const source of ["record", "reference"]) {
+    checkInputLength(lengthState(source, 10), false, 10, 11);
+    checkInputLength(lengthState(source, 11), true, 11);
+  }
+} finally {
+  Object.assign(windowRules, originalMinima);
+}
+
+referenceState.fasta.sequences = [{ id: "ref_A", sequence: "AAAAAAAAAAAA" }, { id: "ref_A", sequence: "CCCCCCCCCCCC" }];
+providerView(referenceState);
+const beforeDuplicate = workerInstances.length;
+assert.equal(context.window.Hyb2Structure.predict(referenceState, controllerApi), false);
+assert.match(controllerApi.toasts.at(-1), /duplicate.*ref_A/i);
+assert.equal(workerInstances.length, beforeDuplicate);
+for (const raw of ["ACGUACGUACGUN", "ACGUANGUACGU"]) {
+  referenceState.fasta.sequences = context.window.Hyb2Data.parseFasta(">ref_A\n" + raw);
+  providerView(referenceState);
+  const previousCount = workerInstances.length;
+  assert.equal(context.window.Hyb2Structure.predict(referenceState, controllerApi), false);
+  assert.match(controllerApi.toasts.at(-1), /unsupported.*N/i);
+  assert.equal(workerInstances.length, previousCount, "a single-strand fold validates the whole selected record");
+}
 
 const invalidState = structureState("manual-hard-base-pairs", "4,8");
 const workersBeforeInvalidSyntax = workerInstances.length;

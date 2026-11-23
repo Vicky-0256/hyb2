@@ -333,6 +333,10 @@
   }
 
   function defaultStructureState() {
+    const defaults = globalThis.Hyb2EngineParameters.cplfold.defaults;
+    const iris = globalThis.Hyb2EngineParameters.iris.defaults;
+    const vienna = globalThis.Hyb2EngineParameters.vienna.defaults;
+    const comrades = globalThis.Hyb2EngineParameters.comrades.defaults;
     return {
       engine: "cplfold",
       workflow: "custom",
@@ -342,8 +346,8 @@
       end: "",
       pastedSequence: "",
       selectedRecordIndex: null,
-      minimumLoop: "3",
-      temperature: "37",
+      minimumLoop: String(vienna.minLoopSize),
+      temperature: String(vienna.temperature),
       constraintMode: "none",
       constraintText: "",
       evidenceLayout: "single",
@@ -351,11 +355,11 @@
       secondStart: "",
       secondEnd: "",
       homodimerOnly: false,
-      constraintLimit: "75",
+      constraintLimit: String(comrades.constraintLimit),
       // the program that fits the COMRADES stems: "viennarna" (in this
       // browser) or "mfold" (mfold 3.6, HYB2 Desktop or the command line)
       foldProgram: "viennarna",
-      randomFoldCount: "0",
+      randomFoldCount: String(comrades.randomFoldCount),
       randomSeed: "HYB2-Web",
       allowLargeEnsemble: false,
       allowLarge: false,
@@ -363,22 +367,21 @@
       cplfoldSequenceTwo: "",
       cplfoldEvidence: "hyb-blocks",
       // How the HYB chimeras become CPLfold's bonus matrix B_ij
-      // (web/cplfold/cplfold_web.py SUPPORT_KERNELS)
-      cplfoldKernel: "gaussian",
+      cplfoldKernel: globalThis.Hyb2SupportKernels.defaultKernel,
       // HYB evidence of RNA Structure: "all" loaded datasets on the folded
       // RNAs (replicates merged), or the "primary" dataset only
       evidenceDatasets: "all",
-      cplfoldBeam: "20",
-      cplfoldMaxPhase1: "3",
-      cplfoldEnergyDelta: "5",
-      cplfoldEnergyModel: "DP09",
-      irisK: "2",
-      irisC: "20",
-      irisFraction: "0.75",
-      irisKRange: "4 5 6 7",
-      cplfoldAlpha: "0.5",
-      cplfoldBeta: "0",
-      cplfoldAllowPseudoknot: false,
+      cplfoldBeam: String(defaults.beamSize),
+      cplfoldMaxPhase1: String(defaults.maxPhase1),
+      cplfoldEnergyDelta: String(defaults.energyDelta),
+      cplfoldEnergyModel: globalThis.Hyb2EngineParameters.cplfold.defaultModel,
+      irisK: String(iris.K),
+      irisC: String(iris.C),
+      irisFraction: String(iris.fraction),
+      irisKRange: iris.kRange,
+      cplfoldAlpha: String(defaults.alpha),
+      cplfoldBeta: String(defaults.beta),
+      cplfoldAllowPseudoknot: defaults.allowPseudoknot,
       cplfoldCapacity: {
         status: "unknown",
         baselineLength: 75,
@@ -1542,7 +1545,7 @@
     const reference = findFastaEntry(state.fasta, viewpoint.rna);
     return viewpointResultsFromRecords(viewpoint, state.records || [], {
       extent: getRnaExtent(state.records || [], viewpoint.rna, state.summary),
-      referenceLength: reference ? reference.sequence.length : null
+      referenceLength: reference ? globalThis.Hyb2FoldText.reference(reference).length : null
     });
   }
 
@@ -2484,7 +2487,7 @@
     const plan = comparisonRnaPlan(comparison);
     const lengthOf = function (rna) {
       const entry = fasta ? findFastaEntry(fasta, rna) : null;
-      if (entry && entry.sequence) return entry.sequence.length;
+      if (entry && entry.sequence) return globalThis.Hyb2FoldText.reference(entry).length;
       const extent = extents && extents[rna];
       return extent && Number.isFinite(extent.max) ? extent.max : null;
     };
@@ -2624,9 +2627,13 @@
   function parseFasta(text) {
     const sequences = [];
     let current = null;
+    const rules = globalThis.Hyb2FoldText;
+    const space = "[" + rules.space + "]";
+    const edges = new RegExp("^" + space + "+|" + space + "+$", "gu");
+    const layout = new RegExp(space + "+", "gu");
 
-    String(text || "").replace(/\r/g, "").split("\n").forEach(function (line) {
-      const trimmed = line.trim();
+    String(text || "").split(/\r\n|[\r\n]/).forEach(function (line) {
+      const trimmed = line.replace(edges, "");
       if (!trimmed) {
         return;
       }
@@ -2635,19 +2642,19 @@
         if (current) {
           sequences.push(current);
         }
-        const header = trimmed.slice(1).trim();
+        const header = trimmed.slice(1).replace(edges, "");
         current = {
           header: header,
-          id: header.split(/\s+/)[0] || "",
+          id: rules.fastaWord(header),
           sequence: ""
         };
         return;
       }
 
       if (current) {
-        // Only whitespace is layout. Preserve every other symbol so a gap,
-        // digit, or unsupported base can never silently shift coordinates.
-        current.sequence += trimmed.replace(/\s+/g, "").toUpperCase();
+        // Non-folding consumers retain DNA T and all unsupported symbols.
+        // Uppercase ASCII only: Unicode case expansion can shift coordinates.
+        current.sequence += trimmed.replace(layout, "").replace(/[a-z]+/g, bases => bases.toUpperCase());
       }
     });
 
@@ -2655,46 +2662,32 @@
       sequences.push(current);
     }
 
-    return sequences.filter(function (item) { return item.id && item.sequence; }).map(function (item) {
-      item.invalidCharacters = Array.from(new Set(item.sequence.match(/[^ACGTU]/g) || []));
-      return item;
+    // Keep the original header and manual ID. The format belongs to the
+    // whole file, even if its only pipe is on a record filtered out below.
+    const formatted = rules.formattedFasta(sequences);
+    for (const item of sequences) Object.defineProperties(item, {
+      id: { writable: false, configurable: false }, header: { writable: false, configurable: false },
+      hyb2Formatted: { value: formatted, enumerable: true }
     });
+    Object.freeze(sequences);
+    rules.indexFasta(sequences); // reject duplicates even if one record is empty
+    const records = sequences.some(item => !item.id || !item.sequence) ? Object.freeze(sequences.filter(item => item.id && item.sequence)) : sequences;
+    for (const item of records) {
+      item.invalidCharacters = Array.from(new Set(item.sequence.match(/[^ACGTU]/gu) || []));
+    }
+    return records;
   }
 
-  function buildFastaMapping(rnaNames, sequences) {
+  function buildFastaMapping(rnaNames, sequences, manualMapping) {
     const mapping = Object.create(null);
-    const byHeader = Object.create(null);
-    const byId = Object.create(null);
-    const byLooseHeader = Object.create(null);
-    const byLooseId = Object.create(null);
-
-    function looseName(value) {
-      return String(value || "").replace(/\|/g, "_");
-    }
-
-    (sequences || []).forEach(function (entry) {
-      if (entry.header && byHeader[entry.header] === undefined) {
-        byHeader[entry.header] = entry.id;
-      }
-      if (entry.id && byId[entry.id] === undefined) {
-        byId[entry.id] = entry.id;
-      }
-      if (entry.header && looseName(entry.header) && byLooseHeader[looseName(entry.header)] === undefined) {
-        byLooseHeader[looseName(entry.header)] = entry.id;
-      }
-      if (entry.id && looseName(entry.id) && byLooseId[looseName(entry.id)] === undefined) {
-        byLooseId[looseName(entry.id)] = entry.id;
-      }
-    });
-
+    const { byId, byEffectiveId } = globalThis.Hyb2FoldText.indexFasta(sequences || []);
     (rnaNames || []).forEach(function (rna) {
-      if (byHeader[rna] !== undefined || byId[rna] !== undefined) {
-        mapping[rna] = byHeader[rna] !== undefined ? byHeader[rna] : byId[rna];
-        return;
-      }
-      const alias = looseName(rna);
-      if (byLooseHeader[alias] !== undefined || byLooseId[alias] !== undefined) {
-        mapping[rna] = byLooseHeader[alias] !== undefined ? byLooseHeader[alias] : byLooseId[alias];
+      if (manualMapping && Object.hasOwn(manualMapping, rna)) {
+        const id = manualMapping[rna];
+        mapping[rna] = byId.has(id) ? id : "";
+      } else {
+        const entry = byEffectiveId.get(rna);
+        if (entry) mapping[rna] = entry.id;
       }
     });
 
@@ -2702,27 +2695,19 @@
   }
 
   function findFastaEntry(fasta, rna) {
-    if (!fasta || !fasta.mapping || !fasta.sequences) {
-      return null;
-    }
-    const id = fasta.mapping[rna];
-    return fasta.sequences.find(function (entry) { return entry.id === id; }) || null;
+    return globalThis.Hyb2FoldText.findFastaEntry(fasta, rna);
   }
 
   function extractReference(fasta, rna, start, end) {
     const entry = findFastaEntry(fasta, rna);
-    if (!entry) {
+    if (!entry || coordinateRangeIssue(start, end)) {
       return null;
     }
-    const rawStart = String(start == null ? "" : start).trim();
-    const rawEnd = String(end == null ? "" : end).trim();
     const parsedStart = coordinateOrNull(start);
     const parsedEnd = coordinateOrNull(end);
-    if ((rawStart && parsedStart === null) || (rawEnd && parsedEnd === null)) {
-      return null;
-    }
+    const reference = globalThis.Hyb2FoldText.reference(entry);
     const left = parsedStart === null ? 1 : parsedStart;
-    const right = Math.min(entry.sequence.length, parsedEnd === null ? entry.sequence.length : parsedEnd);
+    const right = Math.min(reference.length, parsedEnd === null ? reference.length : parsedEnd);
     if (left > right) {
       return null;
     }
@@ -2731,7 +2716,7 @@
       header: entry.header,
       start: left,
       end: right,
-      sequence: entry.sequence.slice(left - 1, right)
+      sequence: reference.rawWindow(left, right)
     };
   }
 
@@ -2740,18 +2725,8 @@
   // so GenBank/EMBL-style text ("1 gggaaa ... 61 uuu...") keeps only its
   // bases. records = number of FASTA headers; removedNumbers = whether any
   // digit was removed (callers say so).
-  function normaliseFoldSequence(input) {
-    const lines = String(input || "").replace(/\r/g, "").split("\n");
-    const isHeader = function (line) { return line.trim().charAt(0) === ">"; };
-    const raw = lines.filter(function (line) { return !isHeader(line); }).join("");
-    const sequence = raw.replace(/[\s\d]+/g, "").toUpperCase().replace(/T/g, "U");
-    const invalid = sequence.match(/[^ACGU]/g);
-    return {
-      sequence: sequence,
-      invalid: invalid ? Array.from(new Set(invalid)) : [],
-      records: lines.filter(isHeader).length,
-      removedNumbers: /\d/.test(raw)
-    };
+  function normaliseFoldSequence(input, pasted = true) {
+    return globalThis.Hyb2FoldText.read(input, pasted);
   }
 
   // With several datasets in the analysis scope, label -> file name of each
@@ -3015,8 +2990,7 @@
   }
 
   function coordinateOrNull(value) {
-    const parsed = numberOrNull(value);
-    return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null;
+    return globalThis.Hyb2FoldText.coordinateOrNull(value);
   }
 
   // Last valid coordinate of an RNA for a typed range: its mapped reference
@@ -3043,8 +3017,10 @@
     const allowed = limit ? "whole numbers from 1 to " + text(limit) : "whole numbers, 1 or more";
     const start = coordinateOrNull(startValue);
     const end = coordinateOrNull(endValue);
-    if ((String(startValue == null ? "" : startValue).trim() && start === null) ||
-        (String(endValue == null ? "" : endValue).trim() && end === null)) {
+    // Null/omitted bounds retain this shared API's open-ended range semantics;
+    // arrays and other nonnumeric types are not blank form fields.
+    const supplied = value => value != null && (typeof value !== "string" || value.trim() !== "");
+    if ((supplied(startValue) && start === null) || (supplied(endValue) && end === null)) {
       return startName + " and " + endName + " must be " + allowed + ".";
     }
     if (options.paired && (start === null) !== (end === null)) {

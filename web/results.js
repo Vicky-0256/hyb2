@@ -815,7 +815,7 @@
     }
 
     // S12 structure
-    const structure = s.structure || {};
+    const structure = structureSetup(s.structure || {});
     const sres = structure.result;
     // hybEvidence: whether chimeric reads shaped the fold. constraintMode is
     // ViennaRNA's setting only: a CPLfold run guided by HYB blocks has "none".
@@ -829,7 +829,7 @@
       rna: sourceName ? null : structure.rna || null, start: sourceName ? null : number(structure.start), end: sourceName ? null : number(structure.end),
       ...(sregions ? { rna: sregions[0].rna, start: sregions[0].start, end: sregions[0].end, secondRna: sregions[1].rna, secondStart: sregions[1].start, secondEnd: sregions[1].end } : {}),
       constraintMode: structure.constraintMode || "none", hybEvidence: sres && sres.sequence ? structureEvidenceLabel(sres) : null,
-      pseudoknots: structure.engine === "cplfold" ? structure.cplfoldAllowPseudoknot !== false : null };
+      pseudoknots: structure.engine === "cplfold" ? structure.cplfoldAllowPseudoknot : null };
     if (sres && sres.sequence) {
       values.structure_length = sres.sequence.length;
       values.structure_energy = number(sres.energy);
@@ -848,6 +848,9 @@
         step: steps.structure.id, source: label, method: sres.engine || structure.engine || null, energy: number(sres.energy), energyUnit: sres.energyUnit || "kcal/mol",
         topology: sres.topology || null, crossingPairs: number(sres.crossingPairs || 0), sequence: sres.sequence, length: sres.sequence.length,
         dotBracket: sres.dotBracket || null, pairs: pairList(sres.pairs),
+        ...(sres.comradesScore != null ? { comradesScore: sres.comradesScore } : {}),
+        ...(sres.evidence?.scoringVersion ? { scoringVersion: sres.evidence.scoringVersion } : {}),
+        ...(Array.isArray(sres.comradesPairCounts) ? { supportKernel: sres.evidence.supportKernel, comradesPairCounts: sres.comradesPairCounts } : {}),
         coordinates: sres.cutpoint ? "1-based compact A+B positions, excluding '&'; use sourceSegments for reference mapping"
           : "1-based positions on the folded sequence" + (offset ? "; add " + offset + " for the position on " + (structure.rna || "the RNA") : (sregions ? "; use sourceSegments for reference mapping" : "")),
         positionOffset: offset,
@@ -860,6 +863,7 @@
         selectedCandidate: Array.isArray(sres.candidates) && sres.candidates.length ? (number(sres.selectedCandidate) || 0) + 1 : null,
         candidates: Array.isArray(sres.candidates) ? sres.candidates.map(function (c, index) {
           return { rank: index + 1, type: c.type || null, topology: c.topology || null, energy: number(c.energy), pairs: pairList(c.pairs).length, crossingPairs: number(c.crossingPairs || 0), dotBracket: c.dotBracket || null,
+            ...(Array.isArray(c.comradesPairCounts) ? { supportKernel: sres.evidence.supportKernel, comradesScore: c.comradesScore, comradesPairCounts: c.comradesPairCounts, pairPositions: pairList(c.pairs) } : {}),
             ...(sres.cutpoint ? { dotBracketWithBreak: c.dotBracketWithBreak, effectiveEnergy: number(c.effectiveEnergy), energyMetadata: c.energyMetadata } : {}) };
         }) : [],
         prediction: "computational prediction; not an experimental structure"
@@ -1026,11 +1030,25 @@
     return segments.map(function (s) { return { rna: s.rna, start: number(s.referenceStart), end: number(s.referenceEnd) }; });
   }
 
+  // A restored result may have nothing in common with the current form.
+  // Use the run's own source and parameters, including missing coordinates.
+  function structureSetup(form) {
+    const r = form.result;
+    if (!r) return form.engine === "cplfold" ? { ...form, cplfoldAllowPseudoknot: globalThis.Hyb2CplfoldSettings.formTopology(form) } : form;
+    const first = r.sourceSegments?.[0];
+    return { ...form, engine: ["CPLfold", "CPLcofold"].includes(r.engine) ? "cplfold" : r.engine === "IRIS" ? "iris" : "viennarna",
+      // Results predating this field used the old two-phase default, not today's form default.
+      cplfoldMode: r.cutpoint ? "cofold" : "single", cplfoldAllowPseudoknot: r.allowPseudoknot ?? r.parameters?.allowPseudoknot ?? true,
+      source: r.source || (first || r.sourceRna ? "reference" : "unknown"), rna: first?.rna || r.sourceRna || null,
+      start: first?.referenceStart ?? r.sourceStart, end: first?.referenceEnd ?? r.sourceEnd,
+      constraintMode: r.constraintMode || "none" };
+  }
+
   function structureEvidenceLabel(result) {
     if (!structureGuidedByReads(result)) return "None (sequence only)";
     if (result.engine === "IRIS") return "IRIS weighted ensemble";
     if (result.constraintMode === "hyb-guided") return "COMRADES constraints (ViennaRNA)";
-    return "HYB block bonus matrix";
+    return "HYB block bonus matrix" + (result.evidence?.supportKernel ? " (" + result.evidence.supportKernel + ")" : "");
   }
 
   function structureJson(path, title, body) {
@@ -1528,6 +1546,7 @@
     files: files,
     reportMarkdown: reportMarkdown,
     structureGuidedByReads: structureGuidedByReads,
+    structureSetup: structureSetup,
     structureEvidenceLabel: structureEvidenceLabel,
     structureRegions: structureRegions,
     formatValue: formatValue,

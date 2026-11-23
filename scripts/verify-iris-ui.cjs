@@ -3,25 +3,46 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const root=path.resolve(__dirname,'..'),workers=[];
 class Worker {constructor(url){this.url=url;workers.push(this);} postMessage(m){this.message=m;} terminate(){this.terminated=true;} }
 const ctx=vm.createContext({window:{},Worker,console});
-for(const name of ['comrades-analysis.js','analysis-pages.js','structure-controller.js','structure-ui.js']) vm.runInContext(fs.readFileSync(path.join(root,'web',name),'utf8'),ctx);
+for(const name of ['support-kernels.js','analysis-data.js','iris-core.js','comrades-analysis.js','analysis-pages.js','structure-controller.js','structure-ui.js']) vm.runInContext(fs.readFileSync(path.join(root,'web',name),'utf8'),ctx);
 const sequence='GGCGCGGCACCGUCCGCGGAACAAACGG';
 const records=[{id:'s1',index:0,rnaOne:'synthetic',rnaTwo:'synthetic',rnaOneStart:103,rnaOneEnd:108,rnaTwoStart:113,rnaTwoEnd:118},
 {id:'s2',index:1,rnaOne:'synthetic',rnaTwo:'synthetic',rnaOneStart:110,rnaOneEnd:114,rnaTwoStart:123,rnaTwoEnd:127}];
 const state={summary:{rnaNames:['synthetic'],fileName:'synthetic.hyb'},activePage:'structure',
  reference:{mapping:{synthetic:'synthetic'},mapped:{synthetic:{referenceId:'synthetic',length:128}}},
  view:{structureRecords:records,structureEvidence:{guided:true,rnas:['synthetic'],records,fasta:{mapping:{synthetic:'synthetic'},sequences:[{id:'synthetic',sequence:'A'.repeat(100)+sequence}]}}},
- structure:{engine:'iris',source:'reference',rna:'synthetic',start:'101',end:'128',workflow:'custom',constraintMode:'none',evidenceLayout:'single',minimumLoop:'3',temperature:'37',irisK:'2',irisC:'20',irisFraction:'0.75',irisKRange:'4 5 6 7',status:'idle',viewMode:'folded'}};
+ structure:{...ctx.window.Hyb2Data.defaultStructureState(),engine:'iris',rna:'synthetic',start:'101',end:'128'}};
 const page=ctx.window.Hyb2Pages.renderStructure(state);
 assert.match(page, /value="iris" selected/);
 assert.match(page,/Predict IRIS ensemble/);
 assert.match(page,/limit 300 nt/);
 assert.doesNotMatch(page,/data-key="cplfoldAlpha"|data-key="cplfoldBeta"|data-key="constraintMode"/);
+for (const irisFraction of ['', 0]) {
+ const html=ctx.window.Hyb2Pages.renderStructure({...state,structure:{...state.structure,irisFraction}});
+ const input=html.match(/<input\b[^>]*data-key="irisFraction"[^>]*>/)[0];
+ assert.equal(input.match(/\bvalue="([^"]*)"/)[1],String(irisFraction));
+}
 const prepared=ctx.window.Hyb2Pages.getStructureSequence(state);
 assert.equal(prepared.sequence,sequence);
 assert.equal(prepared.assembly.evidenceArms[0].oneStart,3);
 assert.equal(prepared.assembly.evidenceArms[0].twoStart,13);
 fs.writeFileSync('/tmp/hyb2-iris-ui-state.json',JSON.stringify(state));
 const api={render(){},showToast(){}};
+{
+ const defaults=ctx.Hyb2EngineParameters.iris.defaults, original={...defaults};
+ Object.assign(defaults,{K:1,C:9,fraction:0.5,kRange:'3 5'});
+ const region={engine:'iris',rna:'synthetic',start:'101',end:'128'};
+ const changed={...state,structure:{...ctx.window.Hyb2Data.defaultStructureState(),...region}};
+ const html=ctx.window.Hyb2Pages.renderStructure(changed);
+ for(const [field,value] of Object.entries({irisK:'1',irisC:'9',irisFraction:'0.5',irisKRange:'3 5'})) {
+  const input=html.match(new RegExp(`<input\\b[^>]*data-key="${field}"[^>]*>`))[0];
+  assert.ok(input.includes(`value="${value}"`) && input.includes(`placeholder="${value}"`),input);
+ }
+ ctx.window.Hyb2Structure.predict(changed,api);
+ assert.deepEqual({...workers.at(-1).message.parameters},{K:'1',C:'9',fraction:'0.5',kRange:'3 5'});
+ assert.deepEqual(JSON.parse(JSON.stringify(ctx.Hyb2Iris.parameters({}))),{K:1,C:9,fraction:0.5,kRange:[3,5]});
+ assert.equal(ctx.Hyb2Iris.parameters({fraction:0}).fraction,0);
+ Object.assign(defaults,original);
+}
 ctx.window.Hyb2Structure.predict(state,api);
 const worker=workers.at(-1);
 assert.ok(worker.url.includes('structure.worker.js'));
@@ -73,7 +94,7 @@ assert.equal(exported.name,'iris-ensemble.tsv');
 assert.match(exported.text,/2\tyes\t0.3/);
 // Exercise the production provider prefetch, not only a preassembled UI fixture.
 (async function(){
- for(const name of ['analysis-data.js','data-provider.js','page-data.js']) vm.runInContext(fs.readFileSync(path.join(root,'web',name),'utf8'),ctx);
+ for(const name of ['data-provider.js','page-data.js']) vm.runInContext(fs.readFileSync(path.join(root,'web',name),'utf8'),ctx);
  const provider=new ctx.window.Hyb2Provider.BrowserProvider({data:ctx.window.Hyb2Data});
  provider.addDataset({id:'synthetic',primary:true,summary:{...state.summary,validRecords:2},records});
  provider.setReference(state.view.structureEvidence.fasta);

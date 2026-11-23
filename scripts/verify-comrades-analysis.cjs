@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const coordinateCases = require("../desktop/runtime/tests/coordinate_cases.json");
 
 const comrades = require(path.resolve(__dirname, "..", "web", "comrades-analysis.js"));
 
@@ -51,6 +52,103 @@ assert.equal(paired.eligibleRecordCount, 1);
 assert.equal(paired.evidenceArms[0].reversedFromHyb, true);
 assert.equal(paired.evidenceArms[0].oneStart, 3);
 assert.equal(paired.evidenceArms[0].twoStart, 114);
+
+// Raw coordinates must be checked before Number can coerce a type or round
+// decimal text to an integer. Test the public preparation boundary, each side.
+{
+  const invalid = coordinateCases.invalid.concat(coordinateCases.nonFinite.map(Number));
+  for (const cofold of [false, true]) {
+    for (const count of [1, 2]) {
+      const original = [{rna: "RNA_A", start: 1, end: 20}, {rna: "RNA_B", start: 3, end: 14}].slice(0, count);
+      for (let index = 0; index < count; index++) {
+        for (const endpoint of ["start", "end"]) {
+          for (const value of invalid) {
+            const regions = original.map(region => ({...region}));
+            regions[index][endpoint] = value;
+            assert.throws(() => comrades.prepareReferenceAssembly([], fasta, {regions, cofold}), /1-based start\/end/,
+              `cofold=${cofold}, region=${index + 1}/${count}, ${endpoint}=${JSON.stringify(value)} (${typeof value})`);
+          }
+        }
+      }
+    }
+    for (const {input: [start, end], expected} of coordinateCases.validWindows) {
+      const prepared = comrades.prepareReferenceAssembly([], fasta, {regions: [{rna: "RNA_A", start, end}], cofold});
+      assert.equal(prepared.sequence, fasta.sequences[0].sequence.slice(expected[0] - 1, expected[1]));
+      assert.deepEqual([prepared.segments[0].referenceStart, prepared.segments[0].referenceEnd], expected);
+    }
+    const regions = [{rna: "RNA_A", start: " 2 ", end: "11"}, {rna: "RNA_B", start: 3, end: 14}];
+    const prepared = comrades.prepareReferenceAssembly([], fasta, {regions, cofold});
+    const spacer = cofold ? "" : "A".repeat(50) + "U".repeat(50);
+    assert.equal(prepared.sequence, "ACCGGUUAAC" + spacer + "GGAAAACCCCUU");
+    assert.deepEqual(prepared.segments.map(segment => [segment.referenceStart, segment.referenceEnd, segment.length]), [[2, 11, 10], [3, 14, 12]]);
+    assert.deepEqual(prepared.segments.map(segment => [segment.preparedStart, segment.preparedEnd]), [[1, 10], [11 + spacer.length, 22 + spacer.length]]);
+    for (const {input: [start, end]} of coordinateCases.safeMaximumWindows) {
+      assert.throws(() => comrades.prepareReferenceAssembly([], fasta, {regions: [{rna: "RNA_A", start, end}], cofold}), /exceeds the mapped FASTA length/);
+    }
+  }
+}
+
+// Preparation callers must obey the same source/layout policy as the form,
+// without counting the artificial COMRADES spacer toward either fragment.
+{
+  const rules = globalThis.Hyb2FoldText;
+  const original = {minWindowNt: rules.minWindowNt, minSequenceNt: rules.minSequenceNt};
+  const ref = {sequences: [{id: "A", sequence: "g\u0085ggg"}, {id: "B", sequence: "cccc"}]};
+  for (const cofold of [false, true]) {
+    // Even a full-span explicit single window keeps the window minimum.
+    assert.throws(() => comrades.prepareReferenceAssembly([], ref, {regions: [{rna: "A", start: 1, end: 4}], cofold}), /at least 10 nt/);
+    for (const length of [1, 4]) {
+      const regions = [{rna: "A", start: 1, end: length}, {rna: "B", start: 1, end: length}];
+      const prepared = comrades.prepareReferenceAssembly([], ref, {regions, cofold});
+      assert.deepEqual(prepared.segments.map(s => s.length), [length, length]);
+      assert.equal(prepared.sequence, "G".repeat(length) + (cofold ? "" : "A".repeat(50) + "U".repeat(50)) + "C".repeat(length));
+      for (const index of [0, 1]) {
+        const backwards = regions.map(r => ({...r}));
+        backwards[index] = {...backwards[index], start: 4, end: 1};
+        assert.throws(() => comrades.prepareReferenceAssembly([], ref, {regions: backwards, cofold}), /1-based start\/end/);
+      }
+    }
+  }
+  try {
+    rules.minSequenceNt = 3;
+    rules.minWindowNt = 11;
+    for (const cofold of [false, true]) {
+      for (const [one, two] of [[2, 3], [3, 2]]) {
+        const regions = [{rna: "A", start: 1, end: one}, {rna: "B", start: 1, end: two}];
+        assert.throws(() => comrades.prepareReferenceAssembly([], ref, {regions, cofold}), /at least 3 nt/);
+      }
+      const regions = [{rna: "A", start: 1, end: 3}, {rna: "B", start: 1, end: 3}];
+      assert.deepEqual(comrades.prepareReferenceAssembly([], ref, {regions, cofold}).segments.map(s => s.length), [3, 3]);
+    }
+    const single = {sequences: [{id: "A", sequence: "G".repeat(12)}]};
+    assert.throws(() => comrades.prepareReferenceAssembly([], single, {regions: [{rna: "A", start: 1, end: 10}]}), /at least 11 nt/);
+    assert.equal(comrades.prepareReferenceAssembly([], single, {regions: [{rna: "A", start: 1, end: 11}]}).sequence, "G".repeat(11));
+  } finally { Object.assign(rules, original); }
+  assert.throws(() => comrades.prepareReferenceAssembly([], fasta, {regions: [{rna: "RNA_A", start: 1, end: 9}]}), /at least 10 nt/);
+  assert.equal(comrades.prepareReferenceAssembly([], fasta, {regions: [{rna: "RNA_A", start: 1, end: 10}]}).sequence, "AACCGGUUAA");
+}
+
+// Only the COMRADES spacer contributes U; the same two strands are valid without it.
+{
+  const rules = globalThis.Hyb2FoldText, original = rules.alphabet;
+  const ref = {sequences: [{id: "X", sequence: "GGGGCCCC"}]};
+  const regions = [{rna: "X", start: 1, end: 4}, {rna: "X", start: 5, end: 8}];
+  try {
+    rules.alphabet = "ACG";
+    assert.throws(() => comrades.prepareReferenceAssembly([], ref, {regions}), /spacer contains unsupported symbols: U/);
+    assert.equal(comrades.prepareReferenceAssembly([], ref, {regions, cofold: true}).sequence, "GGGGCCCC");
+  } finally { rules.alphabet = original; }
+}
+
+// Cofold ignores invalid flanks, but each unsupported symbol still occupies
+// one reference position, including symbols encoded by two UTF-16 code units.
+{
+  const ref = {sequences: [{id: "X", sequence: "🧬A\u0085cgtNccgg"}]};
+  const regions = [{rna: "X", start: 2, end: 5}, {rna: "X", start: 7, end: 10}];
+  assert.equal(comrades.prepareReferenceAssembly([], ref, {regions, cofold: true}).sequence, "ACGUCCGG");
+  assert.throws(() => comrades.prepareReferenceAssembly([], ref, {regions}), /unsupported symbols/);
+  assert.throws(() => comrades.prepareReferenceAssembly([], ref, {regions: [{...regions[0], end: 6}, regions[1]], cofold: true}), /unsupported symbols: N/);
+}
 
 const cofoldMapped = comrades.mapCofoldPairs({
   sequenceOne: "GGGG", sequenceTwo: "CCCC", oneStart: 5, twoStart: 20, recordId: "x"
@@ -103,6 +201,19 @@ assert.equal(scored.matchedPairSupport, 3);
 assert.equal(scored.comradesScore, 6, "the original VARNA-score sum assigns each supported pair score to both nucleotides");
 assert.equal(scored.nucleotideSupport[4], 2);
 assert.equal(scored.nucleotideSupport[22], 2);
+
+// Cap each endpoint after combining observations in both orientations. The
+// matched-pair total, pair annotations and values used for colour stay raw.
+const boundaryPairs = [{left: 1, right: 8}, {left: 2, right: 7}, {left: 3, right: 6}];
+const capped = comrades.scoreStructurePairs(boundaryPairs, [
+  {one: 1, two: 8, count: 999_999}, {one: 2, two: 7, count: 1_000_000},
+  {one: 3, two: 6, count: 800_000}, {one: 6, two: 3, count: 700_000}
+], 8);
+assert.equal(capped.comradesScore, 5_999_998);
+assert.equal(capped.matchedPairSupport, 3_499_999);
+assert.deepEqual(capped.pairs.map(pair => pair.evidenceSupport), [999_999, 1_000_000, 1_500_000]);
+assert.deepEqual(capped.nucleotideSupport, [999_999, 1_000_000, 1_500_000, 0, 0, 1_500_000, 1_000_000, 999_999]);
+assert.equal(capped.maximumNucleotideSupport, 1_500_000);
 
 const many = Array.from({ length: 1005 }, function (_, index) {
   return { one: index + 1, two: 3000 - index, count: 1005 - index };

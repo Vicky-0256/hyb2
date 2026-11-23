@@ -40,6 +40,19 @@ globalThis.fetch = async function (input, options) {
 const workerModule = await import(pathToFileURL(workerPath).href + "?worker-contract=1");
 assert.equal(typeof self.onmessage, "function");
 
+// An older page can still send the retired kernel (with or without its own
+// pairs). Reject before loading Pyodide, not after computing a different B_ij.
+for (const type of ["cplfold", "cplfold-bonus-matrix", "cplfold-capacity"]) {
+  for (const sequence of ["GGGAAACCC", "GGG&CCC"]) {
+    await self.onmessage({ data: { type, sequence, supportKernel: "rnacofold", evidenceMode: "hyb-blocks",
+      evidenceArms: [{ oneStart: 1, oneEnd: 3, twoStart: sequence.includes("&") ? 4 : 7, twoEnd: sequence.includes("&") ? 6 : 9 }],
+      ...(sequence.includes("&") ? { evidencePairs: [[1, 6, 1]] } : {}) } });
+    assert.deepEqual(messages.map(message => message.type), ["error"], type + " must reject the removed kernel without running");
+    assert.match(messages[0].message, /support.*kernel/i);
+    messages.length = 0;
+  }
+}
+
 // The Pyodide options: over http(s) a deployed build cache-busts the lock and
 // keeps the wheels resolving against the runtime directory; a local build and
 // file: (these Node tests) keep Pyodide's default lock location.
@@ -136,9 +149,10 @@ assert.equal(failure, undefined, failure && failure.message);
 assert.ok(messages.some(function (message) { return message.type === "progress" && message.phase === "source"; }));
 const completion = messages.find(function (message) { return message.type === "complete"; });
 assert.ok(completion, "the actual worker message path must return a completed fold");
-assert.equal(completion.result.bridgeVersion, "7");
+assert.equal(completion.result.bridgeVersion, "8");
 assert.equal(completion.result.engineVersion, "24bab52");
 assert.equal(completion.result.allowPseudoknot, true);
+assert.equal(completion.result.evidence.supportKernel, "gaussian");
 assert.equal(completion.result.dotBracket, "..(((((..[[[[)))))......]]]]");
 assert.equal(completion.result.maxSequenceLength, 75);
 assert.match(completion.result.runtimeManifest.archiveSha256, /^[a-f0-9]{64}$/);
@@ -244,7 +258,7 @@ const matrixFailure = messages.find(function (message) { return message.type ===
 assert.equal(matrixFailure, undefined, matrixFailure && matrixFailure.message);
 const matrixCompletion = messages.find(function (message) { return message.type === "bonus-matrix-complete"; });
 assert.ok(matrixCompletion, "the worker must export the HYB bonus matrix independently of a fold");
-assert.equal(matrixCompletion.result.bridgeVersion, "7");
+assert.equal(matrixCompletion.result.bridgeVersion, "8");
 assert.equal(matrixCompletion.result.evidence.inputRecords, 1);
 assert.ok(matrixCompletion.result.evidence.bonusEntries.length > 0);
 
@@ -327,6 +341,24 @@ for (const input of [
 }
 assert.deepEqual(cofoldResults[0], cofoldResults[1]);
 assert.deepEqual(cofoldResults[0], cofoldResults[2]);
+
+const originalAlphabet = globalThis.Hyb2FoldText.alphabet;
+try {
+  globalThis.Hyb2FoldText.alphabet = "ACG";
+  for (const input of [{ sequence: "GGGU&CCCC" }, { sequence: "GGGG", sequenceTwo: "CCCt" }]) {
+    messages.length = 0;
+    await self.onmessage({ data: { ...cofoldParameters, ...input } });
+    assert.deepEqual(messages.map(message => message.type), ["error"], "reject excluded bases before folding");
+    assert.match(messages[0].message, /U/);
+  }
+  messages.length = 0;
+  await self.onmessage({ data: { ...cofoldParameters, sequence: "ggg & ccccc" } });
+  const result = messages.find(message => message.type === "complete").result;
+  assert.equal(result.sequence, "GGGCCCCC");
+  assert.equal(result.cutpoint, 3);
+} finally {
+  globalThis.Hyb2FoldText.alphabet = originalAlphabet;
+}
 
 for (const [input, errorPattern] of [
   [{ sequence: "GGGG&CCCC", maxSequenceLength: 7 }, /limited to 7 nt/],
@@ -414,6 +446,7 @@ assert.ok(messages.find(message => message.type === "error"), "invalid bases fai
     fs.cpSync(runtimeSource, runtimeCopy, { recursive: true });
     const workerCopy = path.join(scratch, "web", "cplfold.worker.mjs");
     fs.copyFileSync(workerPath, workerCopy);
+    fs.copyFileSync(path.join(repository, "web", "support-kernels.js"), path.join(scratch, "web", "support-kernels.js"));
     const lock = JSON.parse(fs.readFileSync(path.join(runtimeCopy, "pyodide-lock.json"), "utf8"));
     const wheel = path.join(runtimeCopy, lock.packages.viennarna.file_name);
     const goodWheel = fs.readFileSync(wheel);

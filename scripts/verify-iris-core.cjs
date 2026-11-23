@@ -1,6 +1,23 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs');
 const iris=require('../web/iris-core.js');
+const ranges=globalThis.Hyb2EngineParameters.iris.ranges;
+assert.equal(iris.parameters({C:ranges.C[1]}).C,ranges.C[1]);
+assert.throws(()=>iris.parameters({C:ranges.C[1]+1}),/candidate count C/);
+assert.throws(()=>iris.parameters({K:2,C:1}),/candidate count C/);
+assert.equal(iris.parameters({fraction:ranges.fraction[0]}).fraction,ranges.fraction[0]);
+for(const blank of ['', ' \t']) assert.throws(()=>iris.parameters({fraction:blank}),/quantile/);
+assert.equal(iris.parameters({fraction:'0'}).fraction,0);
+assert.throws(()=>iris.parameters({fraction:ranges.fraction[1]}),/quantile/);
+const stems=require('../desktop/app/views/testdata/iris_k_range.json');
+for(const p of [{},{kRange:null},{kRange:''}]) assert.deepEqual(iris.parameters(p).kRange,[4,5,6,7]);
+for(const [kRange,want] of Object.entries(stems.validText)) assert.deepEqual(iris.parameters({kRange}).kRange,want,kRange);
+for(const kRange of [stems.validArray,new Uint8Array(stems.validArray)]) {
+ assert.deepEqual(iris.parameters({kRange}).kRange,stems.normalizedArray);
+}
+for(const kRange of [...stems.invalidText,...stems.invalidValues,new Float64Array([4.5])]) {
+ assert.throws(()=>iris.parameters({kRange}),/IRIS stem length/,JSON.stringify(kRange));
+}
 const arms=[{oneStart:1,oneEnd:4,twoStart:9,twoEnd:12}];
 const m=iris.supportMatrix(12,arms);
 for(let i=0;i<12;i++)for(let j=0;j<12;j++)assert.equal(m[i*12+j],m[j*12+i]);

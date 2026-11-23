@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -19,6 +20,7 @@ const runtimeDirectory = path.join(repository, "web", "vendor", "pyodide-cplfold
   "Pyodide-LICENSE.txt",
   "CPLfold-LICENSE.txt",
   "CPLfold-THIRD_PARTY_NOTICES.md",
+  "CPLfold-GPL-3.0-or-later.txt",
   "CPLfold-GPL-2.0-or-later.txt",
   "CPLfold-LinearFold-LICENSE.txt"
 ].forEach(function (name) {
@@ -39,7 +41,7 @@ assert.equal(manifest.pyodide, "0.29.4");
 assert.equal(manifest.python, "3.13.2");
 assert.equal(manifest.numpy, "2.2.5");
 assert.equal(manifest.cplfoldRevision, "24bab52");
-assert.equal(manifest.bridgeVersion, "7");
+assert.equal(manifest.bridgeVersion, "8");
 assert.match(manifest.cplfoldArchiveFile, /^cplfold-python-[a-f0-9]{64}\.zip$/);
 const archivePath = path.join(runtimeDirectory, manifest.cplfoldArchiveFile);
 assert.ok(fs.statSync(archivePath).size > 0);
@@ -84,12 +86,29 @@ assert.equal(matrixContract.rows, 1);
 assert.ok(Math.abs(matrixContract.maximum - Math.log(2)) < 1e-6,
   "discrete Gaussian vectors must be peak-normalised before the original log1p transform");
 
+// The shipped Python (not just the checkout) and the IRIS browser engine
+// must see the same weak cells, duplicate blocks and asymmetric arm lengths.
+const iris = createRequire(import.meta.url)("../web/iris-core.js");
+const repeated = { oneStart: 1, oneEnd: 9, twoStart: 23, twoEnd: 31 };
+const arms = [repeated, repeated, { oneStart: 7, oneEnd: 12, twoStart: 27, twoEnd: 34 }];
+const irisMatrix = iris.supportMatrix(40, arms);
+const gaussian = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify({
+  sequence: "A".repeat(40), evidenceMode: "hyb-blocks", supportKernel: "gaussian", evidenceArms: arms
+}))));
+const entries = new Map(gaussian.evidence.bonusEntries.map(({ one, two, value }) => [(one - 1) * 40 + two - 1, value]));
+assert.ok(irisMatrix[20] > 2 ** -23 && irisMatrix[20] < 1e-6, "fixture includes a previously lost tail cell");
+for (let i = 0; i < 40; i++) for (let j = i + 1; j < 40; j++) {
+  const k = i * 40 + j;
+  assert.equal(entries.has(k), irisMatrix[k] > 0, `Gaussian support mask at (${i + 1},${j + 1})`);
+  if (entries.has(k)) assert.ok(Math.abs(entries.get(k) - irisMatrix[k]) < 1e-12, `Gaussian value at (${i + 1},${j + 1})`);
+}
+
 const exportContract = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify({
   sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
   evidenceMode: "hyb-blocks",
   evidenceArms: [{ oneStart: 3, oneEnd: 8, twoStart: 20, twoEnd: 25 }]
 }))));
-assert.equal(exportContract.bridgeVersion, "7");
+assert.equal(exportContract.bridgeVersion, "8");
 assert.equal(exportContract.evidence.inputRecords, 1);
 assert.ok(exportContract.evidence.bonusEntries.length > 0);
 assert.ok(exportContract.evidence.bonusEntries.every(function (entry) { return entry.one < entry.two; }));
@@ -120,7 +139,7 @@ const result = JSON.parse(String(bridge.fold_json(JSON.stringify({
 
 assert.equal(result.engine, "CPLfold");
 assert.equal(result.engineVersion, "24bab52");
-assert.equal(result.bridgeVersion, "7");
+assert.equal(result.bridgeVersion, "8");
 assert.equal(result.allowPseudoknot, true);
 assert.equal(result.dotBracket, "..(((((..[[[[)))))......]]]]");
 assert.equal(result.topology, "pseudoknotted");
@@ -138,10 +157,8 @@ assert.equal(result.constraintSource, "none");
 assert.equal(result.evidenceMode, "hyb-blocks");
 assert.equal(result.evidenceSource, "hyb-block-bonus-matrix");
 
-// Precomputed pairs passed as evidencePairs (the page still sends RNAcofold
-// pairs this way from structure.worker.js; RNAduplex pairs are computed here
-// in Pyodide with the viennarna package, tested below): the counts saturate
-// as 3.6 C / (C + q), q the mean of the top third of counts.
+// Precomputed RNAduplex counts let us check the saturating transform before
+// loading ViennaRNA. The browser normally computes the pairs in Pyodide below.
 const duplexExport = JSON.parse(String(bridge.bonus_matrix_json(JSON.stringify({
   sequence: "GGCGCGGCACCGUCCGCGGAACAAACGG",
   evidenceMode: "hyb-blocks",

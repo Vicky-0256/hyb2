@@ -221,17 +221,17 @@ assert.equal(invalidSummary.errorSampleTruncated, true);
 
 // gzip input: recognised by its magic bytes and decompressed in the worker;
 // progress counts compressed bytes
-async function parseFile(file, globals) {
+async function parseFile(file, globals, type) {
   const workerContext = vm.createContext(Object.assign({ TextDecoder, self: { postMessage: function () {} } }, globals || {}));
   vm.runInContext(parserSource, workerContext, { filename: "parser.worker.js" });
   const progress = [];
   return new Promise(function (resolve, reject) {
     workerContext.self.postMessage = function (message) {
       if (message.type === "progress") progress.push(message);
-      if (message.type === "complete") resolve({ message: message, progress: progress });
+      if (message.type === "complete" || message.type === "text") resolve({ message: message, progress: progress });
       if (message.type === "error") reject(new Error(message.message));
     };
-    workerContext.self.onmessage({ data: { file: file } });
+    workerContext.self.onmessage({ data: { file: file, type: type } });
   });
 }
 
@@ -374,6 +374,32 @@ async function parseFile(file, globals) {
   await assert.rejects(parseFile(new File([joined.subarray(0, joined.length - 40)], "cut.hyb.gz"), streams));
   // without DecompressionStream a gzip file gets a clear error
   await assert.rejects(parseFile(new File([gzip], "fixture.hyb.gz")), /cannot decompress gzip files/);
+
+  // Batch exports use the same decoder through the worker's read-text
+  // message, retaining the exact source rather than reconstructing records.
+  const exportSource = "\ufeff" + line({ id: "red" }) + "\r\n# retained 🧬\n\ninvalid\trow\r\n" + line({ id: "blue" });
+  const exportBytes = Buffer.from(exportSource);
+  const split = exportBytes.indexOf(Buffer.from("🧬")) + 1;
+  const exportGzip = zlib.gzipSync(exportBytes);
+  const exportMembers = Buffer.concat([zlib.gzipSync(exportBytes.subarray(0, split)), zlib.gzipSync(exportBytes.subarray(split)), Buffer.alloc(512)]);
+  for (const [name, body] of [["source.hyb", exportBytes], ["source.hyb.gz", exportGzip], ["gzip.hyb", exportGzip], ["decoded.hyb.gz", exportBytes], ["members.hyb.gz", exportMembers]]) {
+    const file = new File([body], name);
+    const imported = await parseFile(file, streams);
+    assert.equal(imported.message.summary.validRecords, 2);
+    assert.equal(imported.message.records[0].id, "red", "the initial BOM is not part of the record ID");
+    assert.equal(imported.message.records[1].lineNumber, 5);
+    const output = await parseFile(file, streams, "read-text");
+    assert.equal(output.message.type, "text");
+    assert.equal(output.message.text, exportSource, name + " preserves BOM, UTF-8 across members, CRLF/LF, comments and invalid rows");
+  }
+  if (zlib.crc32) assert.equal((await parseFile(new File([bgzf(exportSource)], "blocks.hyb.gz"), streams, "read-text")).message.text, exportSource);
+  for (const globals of [withholding, concatenating]) {
+    assert.equal((await parseFile(new File([exportMembers], "members.hyb.gz"), globals, "read-text")).message.text, exportSource);
+  }
+  await assert.rejects(parseFile(new File([exportGzip.subarray(0, exportGzip.length - 3)], "cut.hyb.gz"), streams, "read-text"));
+  await assert.rejects(parseFile(new File([exportGzip, "junk"], "junk.hyb.gz"), streams, "read-text"));
+  await assert.rejects(parseFile(new File([exportGzip], "unsupported.hyb.gz"), {}, "read-text"), /cannot decompress gzip files/);
+  await assert.rejects(parseFile(null, streams, "read-text"), /No file/);
   process.stdout.write("parser-contract: ok\n");
 })().catch(function (error) {
   process.stderr.write((error && error.stack) || String(error));

@@ -31,13 +31,17 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from hyb2analysis.fold_text import checked_fold_text
+from hyb2analysis.engine_parameters import engine_parameters
+
 ENV = "HYB2_MFOLD"
 INSTALL = "conda create -n mfold -c conda-forge -c bioconda mfold"
 # where mfold is usually installed (conda environments, Homebrew, /usr/local)
 PREFIXES = ("~/miniforge3", "~/mambaforge", "~/miniconda3", "~/anaconda3", "~/opt/miniconda3", "~/opt/anaconda3",
             "/opt/conda", "/opt/homebrew", "/opt/homebrew/Caskroom/miniforge/base", "/usr/local")
-MIN_LOOP = 3
-TEMPERATURE = 37.0
+_RANGES = engine_parameters("desktop")["mfold"]["ranges"]
+MIN_LOOP = _RANGES["minLoopSize"][0]
+TEMPERATURE = _RANGES["temperature"][0]
 # mfold is slower than ViennaRNA and refolds once per accepted stem
 MAX_MFOLD_NT = 3000
 TIMEOUT_S = 3600
@@ -172,15 +176,14 @@ def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, 
     Infeasible constraints raise ValueError so COMRADES can try another stem.
     Tool failures and malformed structures raise MfoldError.
     """
-    sequence = sequence.upper().replace("T", "U")
+    sequence = checked_fold_text(sequence)
     if not sequence:
         raise ValueError("there is no sequence to fold")
-    if set(sequence) - set("ACGU"):
-        raise ValueError("mfold folds A, C, G and U only; the sequence holds other letters")
     if params.get("min_loop", MIN_LOOP) != MIN_LOOP:
         raise ValueError(f"mfold's minimum hairpin loop is fixed at {MIN_LOOP}; set Minimum hairpin loop to {MIN_LOOP}.")
     if float(params.get("temperature", TEMPERATURE)) != TEMPERATURE:
-        raise ValueError("mfold folds at 37 °C only (its version 3.0 energies); set Temperature to 37 or fold with ViennaRNA.")
+        raise ValueError(f"mfold folds at {TEMPERATURE:g} °C only (its version 3.0 energies); "
+                         f"set Temperature to {TEMPERATURE:g} or fold with ViennaRNA.")
     executable = str(Path(executable or find()).resolve())
     tables = data_dir(executable)
     started = time.monotonic()

@@ -31,17 +31,14 @@ REFERENCE_NAMES = {"ZAFR": "ZIKV_African_KX377335-1_virusRNA", "ZBRA": "ZIKV_Bra
                    "Zika": "ZIKV-PE243-2015_virusRNA"}
 
 
-_OWNER_LOCKS = []  # held for the test process's life, as a live task's owner does
-
-
-def hold_owner_lock(run_dir: Path) -> None:
-    """Take ``run_dir/owner.lock`` as the desktop scheduler does for a live task."""
+def hold_owner_lock(run_dir: Path, add_cleanup) -> None:
+    """Hold ``run_dir/owner.lock`` until the owning test or class cleans up."""
     if os.name == "nt":
         raise unittest.SkipTest("the owner lock is an unshared Windows handle the tests cannot take")
     import fcntl
     handle = open(Path(run_dir) / "owner.lock", "a+b")
+    add_cleanup(handle.close)
     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    _OWNER_LOCKS.append(handle)
 
 
 def _write_gz(path: Path, text: str) -> None:
@@ -74,14 +71,12 @@ def _make_zikv_layout(directory: Path) -> Path:
 class ProjectTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         self.project = self.dir / "p.hyb2proj"
         new_project(self.project, "Samples")
         self.data = self.dir / "data"
         self.data.mkdir()
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def call(self, operation, **request):
         request.setdefault("path", str(self.project))
@@ -211,11 +206,14 @@ class FileRecordTests(ProjectTestCase):
 
     def test_reference_sequences_and_dedup(self):
         fasta = self.data / "multi.fa.gz"
-        _write_gz(fasta, ">one desc\nACGU\nAC\n>two\nACGUACGUAC\n")
+        _write_gz(fasta, "\ufeff>one desc\rac\u0085gt\rac\r>two\rACGUACGUß\x1c\r")
         first = self.call("add_reference", source=str(fasta), label="Multi")
         self.assertTrue(first["ok"], first)
         self.assertFalse(first["existing"])
         self.assertEqual(first["reference"]["sequences"], [{"name": "one", "length": 6}, {"name": "two", "length": 10}])
+        self.assertEqual(first["reference"]["unsupported_symbols"], {"entries": 1, "characters": ["\x1c", "ß"]})
+        read = self.call("read_reference_sequence", reference_id=first["reference"]["id"], name="one")
+        self.assertEqual((read["sequence"], read["length"]), ("acgtac", 6))
         self.assertEqual(first["reference"]["mode"], "linked")
         self.assertEqual(first["reference"]["path"], str(fasta.resolve()))
         second = self.call("add_reference", source=str(fasta))
@@ -337,7 +335,7 @@ class RemoveWhileRunningTests(ProjectTestCase):
         run.mkdir(parents=True)
         (run / "status.json").write_text(json.dumps({"status": status}), encoding="utf-8")
         if live and status in samples.ACTIVE_TASK_STATUSES:
-            hold_owner_lock(run)
+            hold_owner_lock(run, self.addCleanup)
         if sample_id:
             (run / "task-start.json").write_text(json.dumps({"kind": "sample_pipeline", "sample_id": sample_id}), encoding="utf-8")
 

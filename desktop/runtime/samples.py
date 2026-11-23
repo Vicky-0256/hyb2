@@ -17,7 +17,6 @@ import csv
 import gzip
 import hashlib
 import io
-import itertools
 import json
 import os
 import re
@@ -25,7 +24,9 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+
+from pipeline.hyb2analysis.reference import FASTA_NAMES, MAX_HEADER, fasta_chunks, fasta_records, unique_fasta_id
 
 from .project import (_ID, _mutate_manifest, _now, READ_FORMATS, STAGE_NAMES, copy_into_project, is_absolute_path,
                       load_manifest, safe_relative_path, validate_project_directory)
@@ -106,8 +107,6 @@ def read_stem(path: Path) -> str:
 # Decompressed bytes read from one .gz input: far above any reference, but
 # a small gzip bomb stops here instead of decompressing for hours.
 MAX_DECOMPRESSED = 16 * 1024 ** 3
-# A FASTA header line; sequence lines may be any length (they are streamed).
-MAX_HEADER = MiB
 
 
 class _Capped(io.RawIOBase):
@@ -165,29 +164,7 @@ def _open_text(path: Path, limit: Optional[int] = None):
     return open(path, "r", encoding="utf-8", errors="replace")
 
 
-def _fasta_lines(handle, name: str) -> Iterator[Tuple[bool, str]]:
-    """``(is_header, text)`` per line, read in bounded pieces: a sequence line
-    comes as several pieces, so a file with one endless line never sits in
-    memory whole. A header longer than MAX_HEADER is refused."""
-    at_start = True
-    for piece in iter(lambda: handle.readline(MAX_HEADER), ""):
-        ends = piece.endswith("\n")
-        if at_start and piece.startswith(">"):
-            if not ends and len(piece) >= MAX_HEADER:
-                raise ValueError("reference header line is longer than %d bytes: %s" % (MAX_HEADER, name))
-            yield True, piece[1:].strip()
-        else:
-            yield False, piece.strip()
-        at_start = ends
-
-
-def _hyb2_reference_name(header: str) -> str:
-    # Same renaming as hyb2pipe.inputs.format_reference (fasta_hyb2_formatting).
-    line = header.replace("_", "-").replace("protein-coding", "mRNA").replace("|", "_")
-    return line.replace("__", "_unknown_")
-
-
-_FASTA_BASES = frozenset("ACGTU \t\r\n\v\f")
+_FASTA_BASES = frozenset("ACGTUacgtu")
 
 
 def read_fasta_sequences(path: Path, symbols: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -206,28 +183,26 @@ def read_fasta_sequences(path: Path, symbols: Optional[Dict[str, Any]] = None) -
     lengths: List[int] = []
     unsupported: List[set] = []
     with _open_text(path) as handle:
-        for is_header, text in _fasta_lines(handle, Path(path).name):
+        for is_header, text in fasta_chunks(handle, Path(path).name):
             if is_header:
                 headers.append(text); lengths.append(0); unsupported.append(set())
             elif headers:
                 lengths[-1] += len(text)
                 if symbols is not None and text:
-                    unsupported[-1].update(set(text.upper()) - _FASTA_BASES)
+                    unsupported[-1].update(c.upper() if c.isascii() else c for c in set(text) - _FASTA_BASES)
             elif text:
                 raise ValueError("reference is not a FASTA file: %s" % Path(path).name)
     if not headers:
         raise ValueError("reference FASTA contains no sequences: %s" % Path(path).name)
-    formatted = any("|" in header for header in headers)
+    formatted = any(FASTA_NAMES["trigger"] in header for header in headers)
     sequences = []
+    seen: set = set()
     found: set = set()
     entries = 0
     for header, length, bad in zip(headers, lengths, unsupported):
-        if formatted:
-            name = _hyb2_reference_name(header).split()[0] if header else ""
-            if "unknown" in name or "pseudogene" in name:
-                continue
-        else:
-            name = header.split()[0] if header else ""
+        name = unique_fasta_id(header, formatted, seen)
+        if formatted and ("unknown" in name or "pseudogene" in name):
+            continue
         sequences.append({"name": name, "length": length})
         if bad:
             entries += 1
@@ -1312,37 +1287,14 @@ def read_reference_sequence(root: Path, reference_id: str, name: str) -> Dict[st
     if status == "missing":
         raise ValueError("reference file is missing: %s" % detail)
     path = resolve_record_path(root, reference)
-    # A manual name match (name_matching.py) says which sequence an RNA uses.
-    from .name_matching import manual_matches
-    matches = manual_matches(reference)
-    requested = name
-    if name in matches:
-        if not matches[name]:
-            raise ValueError("%s is marked as not matched in reference %s" % (name, reference_id))
-        name = matches[name]
-    # Streamed twice (names depend on whether any header is hyb2-formatted)
-    # so only the wanted sequence is held, never the whole (maybe gzip) file.
-    with _open_text(path) as handle:
-        formatted = any(is_header and "|" in text for is_header, text in _fasta_lines(handle, path.name))
-    current, chunks, header, size = None, [], "", 0
-    with _open_text(path) as handle:
-        for is_header, text in itertools.chain(_fasta_lines(handle, path.name), [(True, "")]):
-            if is_header:
-                if current == name:
-                    result = {"reference_id": reference_id, "name": requested, "header": header,
-                              "length": size, "sequence": "".join(chunks)}
-                    if name != requested:
-                        result["sequence_name"] = name
-                    return result
-                header = text
-                current = (_hyb2_reference_name(header).split() or [""])[0] if formatted else (header.split() or [""])[0]
-                chunks, size = [], 0
-            elif current == name:
-                size += len(text)
-                if size > MAX_REFERENCE_SEQUENCE:
-                    raise ValueError("reference sequence %s is too large to read whole" % name)
-                chunks.append(text)
-    raise ValueError("sequence %s is not in reference %s" % (name, reference_id))
+    from .name_matching import fasta_id_for_rna, manual_matches
+    target = fasta_id_for_rna(name, manual_matches(reference))
+    records = list(fasta_records(path, {target}, open_text=_open_text, max_length=MAX_REFERENCE_SEQUENCE))
+    if not records:
+        raise ValueError("sequence %s is not in reference %s" % (target, reference_id))
+    _, header, sequence = records[0]
+    return {"reference_id": reference_id, "name": name, "header": header, "length": len(sequence), "sequence": sequence,
+            **({"sequence_name": target} if target != name else {})}
 
 
 def hash_inputs(root: Path, *, ids: Optional[List[str]] = None, force: bool = False,

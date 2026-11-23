@@ -46,3 +46,29 @@ The schemas intentionally leave `payload` and task `parameters` extensible.
 Each result kind should document its payload fields before adding a required
 field. This allows the desktop application to expose additional batch,
 mapping, and project-management features without changing the web contract.
+
+## Native completion and recovery
+
+Native task `status` describes execution. `succeeded` alone does not mean
+that the result has been registered in `project.json` or displayed. Task
+snapshots also expose optional `registration_status` (`pending`, `failed`,
+`registered`, or null for unknown/older records) and `registration_error`
+(string or null). A view must find the corresponding manifest result entry
+before claiming that the result is displayed.
+
+The Go service writes `runs/<id>/registration.json` before submitting a
+child. This separate receipt contains `status` and `error`; the scheduler
+continues to own execution in `status.json`. A finish callback marks the
+receipt `registered` only after `register_task_run` commits its idempotent
+manifest upsert. A failed callback records `failed` and its error. Reopening
+a project retries terminal tasks with pending, failed, or absent receipts,
+using the existing outputs without rerunning computation. The returned
+project manifest includes recovered entries. A per-run `registration.lock`
+serializes callback/recovery attempts across application instances.
+
+Submitting a resumed task takes an OS lock at
+`runs/<resumed_from>/resume.lock` in the canonical project. It remains held
+through queued, running, and cancelling states until the child is reaped or
+shutdown completes. Ordinary submissions do not take this lock. Lock files
+are retained rather than unlinked; closing the handle or process termination
+releases ownership, so a later retry can reuse the same file.

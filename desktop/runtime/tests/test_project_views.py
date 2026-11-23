@@ -23,12 +23,12 @@ def call(**request):
     return response
 
 
-def write_status(project: Path, task_id: str, status: str, kind: str = "structure") -> Path:
+def write_status(project: Path, task_id: str, status: str, kind: str = "structure", *, add_cleanup) -> Path:
     run_dir = project / "runs" / task_id
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "status.json").write_text(json.dumps({"task_id": task_id, "kind": kind, "status": status}))
     if status in ("queued", "running"):
-        hold_owner_lock(run_dir)  # a live task's owner holds its lock
+        hold_owner_lock(run_dir, add_cleanup)  # a live task's owner holds its lock
     return run_dir
 
 
@@ -38,6 +38,7 @@ class StructureRegistryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.tmp.cleanup)
         cls.project = Path(cls.tmp.name) / "p.hyb2proj"
         new_project(cls.project, "Structures")
         data = cls.project / "data"
@@ -50,7 +51,7 @@ class StructureRegistryTests(unittest.TestCase):
                                 mode="copied", condition="A")
         cls.windows = [{"start": 1, "end": 120}, {"start": 101, "end": 240}]
         for task_id, mode in (("win1", "windows"), ("gen1", "genome")):
-            run_dir = write_status(cls.project, task_id, "running")
+            run_dir = write_status(cls.project, task_id, "running", add_cleanup=cls.addClassCleanup)
             request = {"operation": "structure_run", "project_path": str(cls.project), "sample_ids": [cls.sample["id"]],
                        "task_id": task_id, "run_dir": str(run_dir), "mode": mode, "workers": 1,
                        "parameters": {"beam": 20}}
@@ -58,11 +59,7 @@ class StructureRegistryTests(unittest.TestCase):
                 request["windows"] = cls.windows
             result = handle(request, repo_root=ROOT)
             assert result["ok"], result
-            write_status(cls.project, task_id, "succeeded")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.tmp.cleanup()
+            write_status(cls.project, task_id, "succeeded", add_cleanup=cls.addClassCleanup)
 
     def register(self, task_id):
         return call(operation="register_task_run", path=str(self.project), task_id=task_id)
@@ -119,11 +116,11 @@ class StructureRegistryTests(unittest.TestCase):
         project = Path(self.tmp.name) / "q.hyb2proj"
         new_project(project, "Other")
         # a failed structure task
-        run_dir = write_status(project, "bad1", "failed")
+        run_dir = write_status(project, "bad1", "failed", add_cleanup=self.addCleanup)
         (run_dir / "result.json").write_text(json.dumps({"ok": False, "status": "failed", "error": "x"}))
         call(operation="register_task_run", path=str(project), task_id="bad1")
         # a successful one whose result points outside structures/<task_id>/
-        run_dir = write_status(project, "evil", "succeeded")
+        run_dir = write_status(project, "evil", "succeeded", add_cleanup=self.addCleanup)
         (project / "structures" / "evil").mkdir(parents=True)
         outside = project / "inputs" / "x.dbn"
         outside.write_text(">a\nAC\n..\n")
@@ -169,6 +166,7 @@ class ReferenceSequenceTests(unittest.TestCase):
 class StaleStageTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.project = Path(self.tmp.name) / "p.hyb2proj"
         new_project(self.project, "Stages")
         data = Path(self.tmp.name) / "data"
@@ -179,23 +177,20 @@ class StaleStageTests(unittest.TestCase):
         self.ids = [add_sample(self.project, data / "r.fastq", name="s%d" % k, reference_id=reference["id"],
                                condition="AB"[k % 2])["id"] for k in range(5)]
 
-    def tearDown(self):
-        self.tmp.cleanup()
-
     def stages(self):
         return {s["id"]: s["stages"] for s in json.loads((self.project / "project.json").read_text())["samples"]}
 
     def test_open_project_marks_dead_tasks_interrupted(self):
         a, b, c, d, e = self.ids
         set_sample_stage(self.project, a, "map", "running", task_id="t-live", extra_stages={"hyb": "pending"})
-        write_status(self.project, "t-live", "running", "sample_pipeline")
+        write_status(self.project, "t-live", "running", "sample_pipeline", add_cleanup=self.addCleanup)
         set_sample_stage(self.project, b, "map", "running", task_id="t-dead")
-        write_status(self.project, "t-dead", "interrupted", "sample_pipeline")
+        write_status(self.project, "t-dead", "interrupted", "sample_pipeline", add_cleanup=self.addCleanup)
         set_sample_stage(self.project, c, "hyb", "queued", task_id="t-gone")  # no run directory at all
         set_sample_stage(self.project, d, "index", "running", task_id="t-failed")
-        write_status(self.project, "t-failed", "failed", "analysis_index")
+        write_status(self.project, "t-failed", "failed", "analysis_index", add_cleanup=self.addCleanup)
         set_sample_stage(self.project, e, "index", "running", task_id="t-cancel")
-        write_status(self.project, "t-cancel", "cancelled", "analysis_index")
+        write_status(self.project, "t-cancel", "cancelled", "analysis_index", add_cleanup=self.addCleanup)
         opened = call(operation="open_project", path=str(self.project))
         self.assertTrue(opened["ok"])
         self.assertEqual({(n["sample_id"], n["stage"], n["status"]) for n in opened["normalized"]},
@@ -223,12 +218,12 @@ class StaleStageTests(unittest.TestCase):
         set_sample_stage(self.project, a, "index", "succeeded", task_id="t1", outputs={"index": "samples/%s/x.hyb2idx" % a},
                          extra_stages={"map": "succeeded", "hyb": "succeeded"})
         set_sample_stage(self.project, b, "map", "running", task_id="t-dead")
-        write_status(self.project, "t-dead", "interrupted", "sample_pipeline")
+        write_status(self.project, "t-dead", "interrupted", "sample_pipeline", add_cleanup=self.addCleanup)
         set_sample_stage(self.project, c, "map", "failed", task_id="t2")
         set_sample_stage(self.project, d, "index", "succeeded", task_id="t3", outputs={"index": "samples/%s/gone.hyb2idx" % d},
                          extra_stages={"map": "skipped", "hyb": "skipped"})
         set_sample_stage(self.project, e, "hyb", "running", task_id="t-live")
-        write_status(self.project, "t-live", "running", "sample_pipeline")
+        write_status(self.project, "t-live", "running", "sample_pipeline", add_cleanup=self.addCleanup)
         listed = call(operation="list_samples", path=str(self.project))
         self.assertTrue(listed["ok"])
         rows = {s["id"]: s for s in listed["samples"]}

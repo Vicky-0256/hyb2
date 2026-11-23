@@ -37,11 +37,14 @@ class SamplePipelineTest(unittest.TestCase):
         self.project = self.dir / "p.hyb2proj"
         new_project(self.project, "Pipeline samples")
         self.saved_path = list(sys.path)
+        # hyb2analysis also holds the Hyb2 settings that loaded modules share
+        # (engine_parameters): restore them, rather than leave a fresh copy to later tests.
+        self.saved_modules = {name: module for name, module in sys.modules.items()
+                              if name == "hyb2analysis" or name.startswith("hyb2analysis.")}
 
     def tearDown(self):
         sys.path[:] = self.saved_path
-        for name in [n for n in sys.modules if n == "hyb2analysis" or n.startswith("hyb2analysis.")]:
-            del sys.modules[name]
+        self._restore_modules(self.saved_modules)
         self.tmp.cleanup()
 
     def call(self, operation, **request):

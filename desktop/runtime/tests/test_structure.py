@@ -50,7 +50,7 @@ class SparseBonusTests(unittest.TestCase):
         except ImportError as error:  # pragma: no cover
             raise unittest.SkipTest("cplfold_web dependencies unavailable: %s" % error)
 
-    def test_sparse_matches_dense_within_1e_4(self):
+    def test_sparse_matches_dense(self):
         import numpy as np
         from collections import Counter
         for length, count in ((300, 150), (1200, 400)):
@@ -63,11 +63,12 @@ class SparseBonusTests(unittest.TestCase):
             dense, dense_summary = self.web.build_hyb_bonus_matrix(length, arms)
             for use_numba in (True, False):
                 fast, summary = self.web.build_hyb_bonus_matrix_fast(length, Counter(arms), use_numba=use_numba)
-                self.assertLessEqual(float(np.abs(dense - fast).max()), 1e-4)
+                np.testing.assert_array_equal(fast > 0, dense > 0)
+                np.testing.assert_allclose(fast, dense, rtol=0, atol=1e-12)
                 self.assertEqual(summary["inputRecords"], len(arms))
                 self.assertEqual(summary["uniqueBlocks"], dense_summary["uniqueBlocks"])
                 self.assertAlmostEqual(summary["gaussianStandardDeviation"], dense_summary["gaussianStandardDeviation"], places=9)
-                self.assertEqual(fast.dtype, np.float32)
+                self.assertEqual(fast.dtype, np.float64)
 
     def test_listing_matches_dense_entries(self):
         arms = [(3, 8, 20, 25), (3, 8, 20, 25), (1, 4, 40, 44)]
@@ -325,6 +326,59 @@ class ViennaRunTests(unittest.TestCase):
                 if self.sequence[i - 1] + self.sequence[j - 1] in {"GC", "CG"}:
                     return i, j
         raise AssertionError("no G-C pair")
+
+    def test_catalog_defaults_reach_vienna_and_comrades_runs(self):
+        from desktop.runtime import comrades, vienna
+        from hyb2analysis.engine_parameters import COMRADES_COUNTS, VIENNA_SETTINGS, engine_parameters
+
+        with mock.patch.dict(VIENNA_SETTINGS, temperature=(0, 100, 29.5), minLoopSize=(0, 12, 5)), \
+                mock.patch.dict(COMRADES_COUNTS, constraintLimit=(1, 50, 2), randomFoldCount=(0, 1000, 1)):
+            desktop = engine_parameters("desktop")
+            for engines in (desktop, engine_parameters("web")):
+                thermo = {"temperature": 29.5, "minLoopSize": 5}
+                self.assertEqual(engines["vienna"]["defaults"], thermo)
+                self.assertEqual(engines["comrades"]["defaults"], dict(thermo, constraintLimit=2, randomFoldCount=1))
+        with mock.patch.dict(vienna._SETTINGS, desktop["vienna"]), mock.patch.dict(comrades._SETTINGS, desktop["comrades"]):
+            for engine in ("viennarna", "comrades"):
+                result = self._run(engine=engine, task_id=engine)  # omit all settings
+                self.assertTrue(result["ok"], result)
+                meta = json.loads((self.project / "structures" / engine / "meta.json").read_text())
+                self.assertEqual((meta["parameters"]["temperature"], meta["parameters"]["min_loop"]), (29.5, 5))
+                if engine == "comrades":
+                    record = meta["records"][0]["comrades"]
+                    self.assertEqual(record["evidence"]["requestedStemConstraints"], 2)
+                    self.assertEqual(len(record["randomisation"]["structures"]), 2)  # ranked + one random fold
+            fixed = comrades.parameters({"fold_program": "mfold"})
+            self.assertEqual((fixed["temperature"], fixed["min_loop"]), (37, 3))
+
+    def test_non_wire_or_out_of_range_defaults_are_not_exported(self):
+        from hyb2analysis.engine_parameters import COMRADES_COUNTS, VIENNA_SETTINGS, engine_parameters
+
+        for settings, key in ((VIENNA_SETTINGS, "temperature"), (VIENNA_SETTINGS, "minLoopSize"),
+                              (COMRADES_COUNTS, "constraintLimit"), (COMRADES_COUNTS, "randomFoldCount")):
+            lo, hi, _ = settings[key]
+            invalid = [None, True, "1", float("nan"), float("inf"), lo - 1, hi + 1]
+            if key != "temperature":
+                invalid.extend([1.0, 1.5])  # integer fields must also be readable by native integer consumers
+            for value in invalid:
+                with mock.patch.dict(settings, {key: (lo, hi, value)}):
+                    for host in ("web", "desktop"):
+                        with self.subTest(host=host, key=key, value=value), self.assertRaisesRegex(ValueError, key):
+                            engine_parameters(host)
+
+    def test_omitted_and_explicit_values_obey_the_current_range(self):
+        from desktop.runtime import comrades, vienna
+
+        for module, wire, native, bounds in ((vienna, "temperature", "temperature", (0, 30)),
+                                             (vienna, "minLoopSize", "min_loop", (0, 2)),
+                                             (comrades, "constraintLimit", "constraint_limit", (1, 50)),
+                                             (comrades, "randomFoldCount", "random_folds", (1, 1000))):
+            # Simulate a stale in-memory catalog after export, leaving the old default unchanged.
+            with mock.patch.dict(module._SETTINGS["ranges"], {wire: bounds}):
+                for raw in ({}, {native: module._SETTINGS["defaults"][wire]}):
+                    with self.subTest(key=wire, raw=raw), self.assertRaisesRegex(ValueError, f"{bounds[0]} to {bounds[1]}"):
+                        module.parameters(raw)
+                self.assertEqual(module.parameters({native: bounds[0]})[native], bounds[0])
 
     def test_mfe_matches_rnafold(self):
         import RNA
@@ -597,7 +651,8 @@ class CofoldRunTests(unittest.TestCase):
         dbn = (out / "structure.dbn").read_text().splitlines()
         self.assertEqual(dbn[1], self.one[:60] + "&" + self.one[169:230])
         self.assertEqual(dbn[2].index("&"), 60)
-        self.assertIn("CPLcofold pseudoknot-free, alpha 0.5", dbn[0])
+        self.assertEqual(meta["parameters"]["alpha"], 0.0)  # omitted, as in the web bridge
+        self.assertIn("CPLcofold pseudoknot-free, alpha 0.0,", dbn[0])
         # the web's energyMetadata (energy model and kind) of the selected candidate
         self.assertIsInstance(meta["energy_metadata"], dict)
         # registered with its regions, and read back on the RNA's positions
@@ -645,6 +700,36 @@ class CofoldRunTests(unittest.TestCase):
         # as the web's: no eligible record mapped, rather than not attached
         arms = json.loads((self.project / "structures" / "co3" / "arms.json").read_text())
         self.assertEqual(arms["records"], [{"rows": 0, "unique": 0, "shown": []}])
+
+    def test_omitted_numeric_task_parameters_match_web_after_range_change(self):
+        from desktop.runtime import structure
+        web = _module()
+        from hyb2analysis.engine_parameters import CPL_SEARCH, engine_parameters
+        with mock.patch.dict(CPL_SEARCH, beamSize=(1, 10, 7)):
+            with mock.patch.object(structure, "_ENGINES", engine_parameters("desktop")):
+                result = self._run([(GENE, 1, 10), (GENE, 21, 30)], task_id="defaults", parameters={"evidence": "none"})
+                self.assertTrue(result["ok"], result)
+                native = json.loads((self.project / "structures/defaults/meta.json").read_text())["parameters"]
+                browser = web.fold({"sequence": self.one[:10], "sequenceTwo": self.one[20:30]})
+                self.assertEqual(browser["maxSequenceLength"], 75)
+                for n, w, expected in (("beam", "beamSize", 7), ("max_phase1", "maxPhase1", 3),
+                                       ("energy_delta", "energyDelta", 5), ("alpha", "alpha", 0), ("beta", "beta", 0)):
+                    self.assertEqual((native[n], browser["parameters"][w]), (expected, expected), n)
+        with mock.patch.dict(CPL_SEARCH, beamSize=(1, 10, 11)):
+            for platform in ("desktop", "web"):
+                with self.assertRaisesRegex(ValueError, "beamSize: invalid default"):
+                    engine_parameters(platform)
+
+    def test_reference_regions_follow_fold_alphabet(self):
+        from hyb2analysis.fold_text import FOLD_TEXT
+        (self.project / "data" / "ref.fa").write_text(f">{GENE}\n{'G' * 10}T{'C' * 12}\n")
+        with mock.patch.dict(FOLD_TEXT, alphabet="ACG"):
+            with self.assertRaisesRegex(ValueError, "region 2 .*unsupported symbols: U"):
+                self._run([(GENE, 1, 10), (GENE, 11, 23)], task_id="excluded", parameters={"evidence": "none"})
+            result = self._run([(GENE, 1, 10), (GENE, 12, 23)], task_id="allowed", parameters={"evidence": "none"})
+            self.assertTrue(result["ok"], result)
+            dbn = (self.project / "structures" / "allowed" / "structure.dbn").read_text().splitlines()
+            self.assertEqual(dbn[1], "G" * 10 + "&" + "C" * 12)
 
     def test_rejects(self):
         for regions, extra in (([(GENE, 1, 60)], {}), ([(GENE, 1, 60), (GENE, 200, 300)], {}),
@@ -708,12 +793,7 @@ class CandidateTests(unittest.TestCase):
         text = (out / "bonus_matrix.tsv").read_text()
         self.assertTrue(text.startswith("# HYB2 CPLfold bonus matrix\n"))
         self.assertIn(f"# sequence_length={self.length}\n", text)
-        sys_path = list(__import__("sys").path)
-        try:
-            __import__("sys").path.insert(0, str(ROOT / "third_party" / "cplfold"))
-            from CPLfold import load_bonus_matrix_file
-        finally:
-            __import__("sys").path[:] = sys_path
+        from cplfold.bonus import load_bonus_matrix_file
         loaded = load_bonus_matrix_file(str(out / "bonus_matrix.tsv"), self.length)
         module = _module()
         arms = module.collect_hyb_arms([str(self.project / "data" / "a.hyb"), str(self.external)], GENE, self.length)
@@ -799,6 +879,8 @@ class PairedComradesTests(CofoldRunTests):
     def test_long_range_and_intermolecular(self):
         from desktop.runtime.project import _structure_entry
         from desktop.runtime.structure import read_structure
+        with (self.project / "data" / "ref.fa").open("a") as reference:
+            reference.write(">not_selected\nN\n")
         result = self._paired([(GENE, 1, 60), (GENE, 170, 230)], task_id="pc1")
         self.assertTrue(result["ok"], result)
         out = self.project / "structures" / "pc1"
@@ -836,10 +918,18 @@ class PairedComradesTests(CofoldRunTests):
         self.assertIn("one arm in each", failed["error"])
         with self.assertRaises(ValueError):
             self._run([(GENE, 1, 60), (GENE, 170, 230)], engine="viennarna", mode="paired", task_id="bad")
+        with (self.project / "data" / "ref.fa").open("a") as reference:
+            reference.write("N\n")  # on OTHER_RNA, outside its selected window
+        with self.assertRaisesRegex(ValueError, "OTHER_RNA.*unsupported symbols: N"):
+            self._paired([(GENE, 1, 60), ("OTHER_RNA", 50, 110)], task_id="flank")
         with self.assertRaisesRegex(ValueError, "exceeds the COMRADES"):
             long = "".join(random.Random(1).choice("ACGU") for _ in range(3000))
             (self.project / "data" / "ref.fa").write_text(f">{GENE} test\n{long}\n")
             self._paired([(GENE, 1, 1500), (GENE, 1501, 3000)], task_id="long")
+        from hyb2analysis.fold_text import FOLD_TEXT
+        (self.project / "data" / "ref.fa").write_text(f">{GENE}\n{'G' * 10}{'C' * 10}\n")
+        with mock.patch.dict(FOLD_TEXT, alphabet="ACG"), self.assertRaisesRegex(ValueError, "spacer contains unsupported symbols: U"):
+            self._paired([(GENE, 1, 10), (GENE, 11, 20)], task_id="spacer")
 
 
 class TwoStrandReviewTests(CofoldRunTests):
@@ -878,7 +968,6 @@ class TwoStrandReviewTests(CofoldRunTests):
         self.assertLessEqual(float(np.abs(rows - blocks).max()), 1e-6)
         for key in ("inputRecords", "uniqueBlocks", "meanArmLength"):
             self.assertAlmostEqual(summary_rows[key], summary_blocks[key])
-        module.set_host_hard_max_sequence_length(5000)
         seq = _sequence(120, seed=2)
         common = {"sequence": seq[:60], "sequenceTwo": seq[60:], "evidenceMode": "hyb-blocks", "alpha": 0.5,
                   "allowPseudoknot": False, "maxSequenceLength": 120}

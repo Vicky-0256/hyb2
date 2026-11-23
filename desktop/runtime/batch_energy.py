@@ -39,6 +39,7 @@ as the web's ZIP), plus ``progress.json`` and ``result.json``.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -51,10 +52,13 @@ from multiprocessing import get_context
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from pipeline.hyb2analysis.reference import read_fasta
+from hyb2analysis.fold_text import checked_fold_text
+
 from . import trust as _trust
+from .name_matching import fasta_id_for_rna
 from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
-from .samples import _hyb2_reference_name
-from .structure import ProgressWriter, _evidence_inputs, _now, _resolve_run_dir, load_cplfold_web, read_fasta
+from .structure import ProgressWriter, _evidence_inputs, _now, _resolve_run_dir, load_cplfold_web
 
 # The web batch's engines: label, combined arm limit, pairs per job.
 ENGINES: Dict[str, Dict[str, Any]] = {
@@ -64,15 +68,13 @@ ENGINES: Dict[str, Dict[str, Any]] = {
     "cplcofold-pk": {"name": "CPLcofold, pseudoknots allowed (DP09 ranking score)", "max_length": 500, "chunk": 4,
                      "pseudoknots": True},
 }
-# cplfold_web.fold's defaults for a two-strand request, which the web's
-# cplfold-energy-batch uses.
+# Fixed preset shown on the desktop Binding energies page and saved in parameters.json.
 CPLCOFOLD_SETTINGS = {"beamSize": 20, "energyDelta": 5, "maxPhase1": 3, "energyModel": "DP09", "alpha": 0.0, "beta": 0.0}
 BATCH_LIMIT = 2000
 AUDIT_HEADER = "line\tid\tstatus\told_energy\tnew_energy\tnote"
 INVALID_ENERGY_NOTE = "invalid energy returned"
 NO_HYBRID_NOTE = "RNAduplex found no pair between the arms"
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-_BASES = re.compile(r"^[ACGU]+$")
 
 
 def _safe_task_id(value: Any) -> str:
@@ -134,16 +136,15 @@ def reference_sequences(path: Path) -> Dict[str, str]:
     return {name: sequence for name, sequence in read_fasta(path)}
 
 
-def arms(cols: List[str], sequences: Dict[str, str], max_length: int, engine_label: str) -> Tuple[str, str]:
+def arms(cols: List[str], sequences: Dict[str, str], max_length: int, engine_label: str,
+         matches: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
     """The two arm sequences of a .hyb row (web: Hyb2Batch.prepareEnergy); ValueError says why not."""
     if len(cols) < 15:
         raise ValueError("Incomplete HYB row")
     out = []
     for name_col, start_col, end_col in ((3, 6, 7), (9, 12, 13)):
         name = cols[name_col].strip()
-        sequence = sequences.get(name)
-        if sequence is None:
-            sequence = sequences.get(_hyb2_reference_name(name)) if "|" in name else None
+        sequence = sequences.get(fasta_id_for_rna(name, matches) if matches else name)
         if sequence is None:
             raise ValueError("No mapped FASTA for " + name)
         try:
@@ -154,10 +155,10 @@ def arms(cols: List[str], sequences: Dict[str, str], max_length: int, engine_lab
             raise ValueError("Invalid or antisense reference interval")
         if end > len(sequence):
             raise ValueError("Interval exceeds FASTA length")
-        arm = sequence[start - 1:end].upper().replace("T", "U")
-        if not _BASES.match(arm):
-            raise ValueError("Unsupported or ambiguous reference bases")
-        out.append(arm)
+        try:
+            out.append(checked_fold_text(sequence[start - 1:end]))
+        except ValueError as error:
+            raise ValueError("Unsupported or ambiguous reference bases") from error
     total = len(out[0]) + len(out[1])
     if total > BATCH_LIMIT:
         raise ValueError(f"Combined arms exceed the {BATCH_LIMIT:,} nt batch limit")
@@ -189,7 +190,7 @@ def fold_pairs(root: str, engine: str, pairs: List[Tuple[str, str]]) -> List[flo
     for a, b in pairs:
         result = module.fold({"sequence": a, "sequenceTwo": b, "evidenceMode": "none", "evidenceArms": [],
                               "allowPseudoknot": spec["pseudoknots"], "maxSequenceLength": spec["max_length"],
-                              **CPLCOFOLD_SETTINGS})
+                              **CPLCOFOLD_SETTINGS}, host="desktop", hard_max_length=spec["max_length"])
         energy = result.get("energy")
         if isinstance(energy, bool) or not isinstance(energy, (int, float)) or not math.isfinite(energy):
             raise ValueError("CPLcofold returned no energy")
@@ -342,9 +343,11 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
     label = "CPLcofold" if params["engine"].startswith("cplcofold") else "batch"
     notes: List[Tuple[int, str, str, Optional[int], str]] = []  # line, id, old, item, note
     pairs: List[Tuple[str, str]] = []
+    source_digest = hashlib.sha256()
     with _open_hyb(hyb_path) as handle:
         record = 0
         for line_no, line in enumerate(hybfile.lines(handle), 1):
+            source_digest.update(line)
             if not _is_record(hybfile, index, line):
                 continue
             record += 1
@@ -354,7 +357,7 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
                 notes.append((line_no, rid, old, None, "not selected by the Interactions filters"))
                 continue
             try:
-                pairs.append(arms(cols, sequences, engine["max_length"], label))
+                pairs.append(arms(cols, sequences, engine["max_length"], label, inputs["matches"]))
                 notes.append((line_no, rid, old, len(pairs) - 1, ""))
             except ValueError as error:
                 notes.append((line_no, rid, old, None, str(error)))
@@ -436,16 +439,25 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
         audit.append("\t".join(_tsv(v) for v in (line_no, rid, "updated", old, "%.2f" % energy, "")))
     out_hyb = run_dir / "energies.hyb"
     temporary = out_hyb.with_name("." + out_hyb.name + ".tmp")
-    with _open_hyb(hyb_path) as source, open(temporary, "wb") as target:
-        for line_no, line in enumerate(hybfile.lines(source), 1):
-            update = updates.get(line_no)
-            if update is not None:
-                parts = line.split(b"\t", 3)
-                if len(parts) < 4 or parts[2].decode("utf-8", "replace") != update[0]:
-                    raise ValueError(f"Source row changed at line {line_no}")
-                line = rewrite_energy(line, update[1])
-            target.write(line)
-    os.replace(temporary, out_hyb)
+    try:
+        written_digest = hashlib.sha256()
+        with _open_hyb(hyb_path) as source, open(temporary, "wb") as target:
+            for line_no, line in enumerate(hybfile.lines(source), 1):
+                written_digest.update(line)
+                update = updates.get(line_no)
+                if update is not None:
+                    parts = line.split(b"\t", 3)
+                    if len(parts) < 4 or parts[2].decode("utf-8", "replace") != update[0]:
+                        raise ValueError(f"Source row changed at line {line_no}")
+                    line = rewrite_energy(line, update[1])
+                target.write(line)
+        # Linked inputs can change while folding. Include every source byte,
+        # including skipped rows and EOF, before publishing any result files.
+        if written_digest.digest() != source_digest.digest():
+            raise ValueError("Source HYB changed during energy calculation; calculate again.")
+        os.replace(temporary, out_hyb)
+    finally:
+        temporary.unlink(missing_ok=True)
     audit_text = "\n".join(audit) + "\n"
     (run_dir / "audit.tsv").write_text(audit_text, encoding="utf-8")
     metadata = {

@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from hyb2analysis.engine_parameters import task_allow_pseudoknot
 from .detector import cplfold_max_nt, detect_runtime
 from .project import _atomic_write_json, is_absolute_path, load_manifest, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
 from . import samples as _samples
@@ -79,11 +80,10 @@ def _load_cplfold_module(root: Path) -> Any:
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
-    # cplfold_web imports the vendored CPLfold module by its historical
-    # top-level name; make both source layouts visible to that import.
-    for extra in (str(root / "third_party" / "cplfold"), str(source.parent)):
-        if extra not in sys.path:
-            sys.path.insert(0, extra)
+    # cplfold and hyb2analysis are on the path (desktop/runtime/__init__);
+    # the bridge's own helpers sit next to it.
+    if str(source.parent) not in sys.path:
+        sys.path.insert(0, str(source.parent))
     spec.loader.exec_module(module)
     _CPLFOLD_MODULES[key] = module
     return module
@@ -347,7 +347,9 @@ def _sample_ops_inner(operation: str, request: dict[str, Any], repo_root: Path |
         return {"ok": True, "path": str(path), **result}
     if operation == "list_samples":
         path = _valid_project(request)
-        return {"ok": True, "path": str(path), **_samples.list_samples(path),
+        listed = _samples.list_samples(path)
+        _include_matched_rnas(listed)
+        return {"ok": True, "path": str(path), **listed,
                 "untrusted_links": _trust.untrusted(path, load_manifest(path))}
     if operation == "list_structures":
         from .structure import list_structures
@@ -459,6 +461,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
     if not isinstance(request, dict):
         raise ValueError("bridge request must be a JSON object")
     operation = request.get("operation")
+    if operation in ("structure_run", "cplfold_predict", "cplfold_run") and ("support_kernel" in request or "supportKernel" in request):
+        raise ValueError("a read-support kernel is a fold parameter, not a top-level bridge field")
     if operation in _ANALYSIS_OPS:
         return _analysis_op(operation, request, repo_root)
     if operation == "detect":
@@ -475,6 +479,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
             # by a task that is no longer live are shown (and saved) as
             # interrupted.
             manifest, changes = _samples.normalize_stale_stages(path)
+            _include_matched_rnas(manifest)
             result["manifest"] = manifest
             result["normalized"] = changes
         return result
@@ -487,45 +492,37 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         # runtime and return the same result contract as cplfold.worker.mjs.
         sequence = request.get("sequence")
         if not isinstance(sequence, str) or not sequence.strip():
-            raise ValueError("sequence must contain RNA bases A/C/G/U/T/N")
-        sequence = "".join(sequence.upper().split()).replace("T", "U")
-        if not sequence or any(c not in "ACGUN" for c in sequence):
-            raise ValueError("sequence must contain RNA bases A/C/G/U/T/N")
-        max_nt = cplfold_max_nt()
-        if len(sequence) > max_nt:
-            raise ValueError(f"sequence exceeds CPLfold safety limit ({max_nt} nt)")
+            raise ValueError("sequence must contain RNA bases")
+        params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
+        allow = task_allow_pseudoknot(params, "allow_pseudoknot")
+        max_nt = cplfold_max_nt(allow)
         root = Path(repo_root or Path.cwd()).resolve()
         if not (root / "web" / "cplfold" / "cplfold_web.py").is_file():
             return {"ok": False, "status": "unavailable", "error": "native CPLfold source is not bundled"}
         module = _load_cplfold_module(root)
         if module is None:
             return {"ok": False, "status": "unavailable", "error": "native CPLfold module cannot be loaded"}
-        # The shared module keeps the browser's 500 nt ceiling unless a native
-        # host raises it; the desktop limit is HYB2_CPLFOLD_MAX_NT.
-        if hasattr(module, "set_host_hard_max_sequence_length"):
-            module.set_host_hard_max_sequence_length(max_nt)
-        params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
-        allow = params.get("allowPseudoknot", True)
-        if not isinstance(allow, bool):
-            raise ValueError("allowPseudoknot must be a boolean")
+        if "supportKernel" in params and "support_kernel" in params and params["supportKernel"] != params["support_kernel"]:
+            raise ValueError("conflicting supportKernel and support_kernel parameters")
         payload = {
             "sequence": sequence,
             "evidenceMode": request.get("evidenceMode", "none"),
             "evidenceArms": request.get("evidenceArms", []),
-            "beamSize": params.get("beamSize", params.get("beam", 20)),
-            "maxPhase1": params.get("maxPhase1", params.get("max_phase1", 3)),
-            "energyDelta": params.get("energyDelta", params.get("delta", 5)),
-            "energyModel": params.get("energyModel", params.get("model", "DP09")),
-            "alpha": params.get("alpha", 0.5),
-            "beta": params.get("beta", 0),
             "allowPseudoknot": allow,
             "maxSequenceLength": max_nt,
-            # rnacofold: the bundled ViennaRNA cofolds the arms when the page sends no pairs
-            "supportKernel": params.get("supportKernel", "gaussian"),
         }
-        if request.get("evidencePairs") is not None:
-            payload["evidencePairs"] = request.get("evidencePairs")
-        result = module.fold(payload)
+        # Forward only supplied options; fold resolves defaults after it knows the strand layout.
+        for key, alias in (("beamSize", "beam"), ("maxPhase1", "max_phase1"), ("energyDelta", "delta"),
+                           ("energyModel", "model"), ("supportKernel", "support_kernel")):
+            if key in params or alias in params:
+                payload[key] = params.get(key, params.get(alias))
+        for key in ("alpha", "beta"):
+            if key in params:
+                payload[key] = params[key]
+        for key in ("sequenceTwo", "cutpoint", "cofold", "evidenceArmCounts", "evidencePairs", "saturatingQ"):
+            if key in request:
+                payload[key] = request[key]
+        result = module.fold(payload, host="desktop", hard_max_length=max_nt)
         cap_bonus_entries(result)
         result["runtime"] = "HYB2 Desktop bundled Python/NumPy/Numba"
         result["native"] = True
@@ -595,11 +592,9 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         _atomic_write_json(run_dir / "result.json", result)
         return result
     if operation == "warmup":
-        # Fold the CPLfold reference hairpin once so Numba compiles (and
-        # caches) every kernel before the user's first prediction.
+        # Warm the Numba kernels on the reference hairpin using the normal task defaults.
         started = time.monotonic()
-        result = handle({"operation": "cplfold_predict", "sequence": "GGCGCGGCACCGUCCGCGGAACAAACGG",
-                         "parameters": {"beam": 20}}, repo_root=repo_root)
+        result = handle({"operation": "cplfold_predict", "sequence": "GGCGCGGCACCGUCCGCGGAACAAACGG"}, repo_root=repo_root)
         if result.get("status") == "unavailable":
             return result
         return {"ok": True, "status": "warm", "seconds": round(time.monotonic() - started, 2)}
@@ -634,8 +629,11 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         sequence = "".join(sequence.upper().split()).replace("T", "U")
         if not sequence or any(c not in "ACGUN" for c in sequence):
             raise ValueError("sequence must contain RNA bases A/C/G/U/T/N")
-        no_pk = isinstance(request.get("parameters"), dict) and request["parameters"].get("no_pseudoknot") is True
-        max_nt = cplfold_max_nt(not no_pk)
+        params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
+        if "support_kernel" in params or "supportKernel" in params:
+            raise ValueError("cplfold_run accepts a precomputed bonus_matrix, not a read-support kernel; use structure_run to build it")
+        allow = task_allow_pseudoknot(params, "allow_pseudoknot", "no_pseudoknot")
+        max_nt = cplfold_max_nt(allow)
         if len(sequence) > max_nt:
             raise ValueError(f"sequence exceeds CPLfold safety limit ({max_nt} nt)")
         path = Path(raw_path).expanduser().resolve()
@@ -659,7 +657,6 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         # ``/usr/bin/env python3`` would otherwise escape a bundled runtime and
         # silently run the host Python.
         argv = [sys.executable, str(executable), "--sequence-file", str(sequence_file)]
-        params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
         allowed = {"alpha": "--alpha", "beta": "--beta", "beam": "--beam", "delta": "--delta", "max_phase1": "--max-phase1", "max_phase2": "--max-phase2", "model": "--model"}
         bounds = {"alpha": (-100.0, 100.0), "beta": (-100.0, 100.0), "beam": (1, 5000), "delta": (0.0, 100.0), "max_phase1": (1, 1000), "max_phase2": (1, 1000)}
         for key, flag in allowed.items():
@@ -673,7 +670,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
                     if numeric < lo or numeric > hi or (key not in {"alpha", "beta", "delta"} and numeric != int(numeric)):
                         raise ValueError("CPLfold parameter out of bounds: " + key)
                 argv.extend([flag, str(value)])
-        if params.get("no_pseudoknot") is True: argv.append("--no-pseudoknot")
+        if not allow:
+            argv.append("--no-pseudoknot")
         bonus = request.get("bonus_matrix")
         if bonus is not None:
             if isinstance(bonus, list):
@@ -766,6 +764,15 @@ def _sample_index_paths(project: Path, manifest: dict[str, Any], sample_ids: Any
         paths.append(target)
         ids.append(sample_id)
     return ids, paths
+
+
+def _include_matched_rnas(view: dict[str, Any]) -> None:
+    """Supply the picker with HYB names and lengths; keep the raw FASTA inventory intact."""
+    from .name_matching import reference_lengths
+    for reference in view.get("references") or []:
+        if reference.get("matches"):
+            reference["rna_sequences"] = [{"name": rna, "length": n}
+                                          for rna, n in reference_lengths(reference).items()]
 
 
 def _reference_lengths(manifest: dict[str, Any], sample_ids: list[str]) -> dict[str, int]:

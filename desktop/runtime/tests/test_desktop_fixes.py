@@ -1,4 +1,3 @@
-import importlib.util
 import io
 import json
 import os
@@ -16,15 +15,6 @@ from desktop.runtime.detector import detect_runtime
 from desktop.runtime.project import new_project, register_task_run, save_analysis_run, update_ui_state, validate_project_directory
 
 ROOT = Path(__file__).resolve().parents[3]
-
-
-def _load_cplfold_web():
-    spec = importlib.util.spec_from_file_location("hyb2_test_cplfold_web", ROOT / "web" / "cplfold" / "cplfold_web.py")
-    module = importlib.util.module_from_spec(spec)
-    for extra in (str(ROOT / "third_party" / "cplfold"), str(ROOT / "web" / "cplfold")):
-        if extra not in sys.path: sys.path.insert(0, extra)
-    spec.loader.exec_module(module)
-    return module
 
 
 class ServeModeTests(unittest.TestCase):
@@ -79,7 +69,7 @@ class ComradesSeedTests(unittest.TestCase):
     def test_an_endless_gzip_hyb_line_fails_instead_of_loading_whole(self):
         import gzip
         from desktop.runtime import comrades
-        from hyb2analysis import hybfile
+        from pipeline.hyb2analysis import hybfile
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.hyb.gz"
             with gzip.open(path, "wb") as out:
@@ -225,34 +215,74 @@ class RegisterTaskRunTests(unittest.TestCase):
 
 
 class CplfoldLimitTests(unittest.TestCase):
+    def _fold_module(self):
+        try:
+            return bridge._load_cplfold_module(ROOT)
+        except ImportError as error:
+            self.skipTest("cplfold_web dependencies unavailable: %s" % error)
+
     def test_detector_reports_native_max_length(self):
         with mock.patch.dict(os.environ, {"HYB2_CPLFOLD_MAX_NT": "1234"}):
             capability = detect_runtime(ROOT).capability("structure.cplfold_native").to_dict()
         self.assertEqual(capability["details"]["max_sequence_length"], 1234)
 
-    def test_predict_passes_native_limit(self):
-        seen = {}
-        class Fake:
-            def set_host_hard_max_sequence_length(self, value): seen["hard"] = value
-            def fold(self, payload): seen["payload"] = payload; return {"structure": "."}
-        with mock.patch.dict(bridge._CPLFOLD_MODULES, {str(ROOT / "web" / "cplfold" / "cplfold_web.py"): Fake()}), mock.patch.dict(os.environ, {"HYB2_CPLFOLD_MAX_NT": "1000"}):
-            result = handle({"operation": "cplfold_predict", "sequence": "A" * 700}, repo_root=ROOT)
+    def test_native_predictions_do_not_change_browser_limits(self):
+        module = self._fold_module()
+        with mock.patch.dict(os.environ, {"HYB2_CPLFOLD_MAX_NT": "1000"}):
+            result = handle({"operation": "cplfold_predict", "sequence": "A" * 900}, repo_root=ROOT)
         self.assertTrue(result["ok"])
-        self.assertEqual(seen["hard"], 1000)
-        self.assertEqual(seen["payload"]["maxSequenceLength"], 1000)
-
-    def test_shared_module_keeps_browser_default_and_honours_host_limit(self):
-        try:
-            module = _load_cplfold_web()
-        except ImportError as error:
-            self.skipTest("cplfold_web dependencies unavailable: %s" % error)
+        self.assertEqual((result["maxSequenceLength"], result["dotBracket"]), (1000, "." * 900))
         with self.assertRaisesRegex(ValueError, "500"):
-            module._sequence("A" * 600, 600)
-        with self.assertRaises(ValueError):
-            module._request_maximum(600)
-        module.set_host_hard_max_sequence_length(1000)
-        self.assertEqual(module._request_maximum(1000), 1000)
-        self.assertEqual(len(module._sequence("A" * 900, 1000)), 900)
+            module.fold_json(json.dumps({"sequence": "A" * 501, "maxSequenceLength": 501, "hard_max_length": 1000}))
+        with mock.patch.dict(os.environ, {"HYB2_CPLFOLD_MAX_NT": "44"}), self.assertRaisesRegex(ValueError, "44 nt"):
+            handle({"operation": "cplfold_predict", "sequence": "A" * 45}, repo_root=ROOT)
+        ordinary = json.loads(module.fold_json(json.dumps({"sequence": "A" * 75})))
+        self.assertEqual((ordinary["maxSequenceLength"], ordinary["dotBracket"]), (75, "." * 75))
+
+    def test_interleaved_beam_limits_by_host_and_strand_layout(self):
+        module = self._fold_module()  # the same cached module as cplfold_predict
+        # The native host can have exactly the browser's length ceiling. It still
+        # selects its own beam policy; neither the last call nor the JSON selects it.
+        with mock.patch.dict(os.environ, {"HYB2_CPLFOLD_MAX_NT": "500"}):
+            for sequence in ("GGGAAACCC", "GGG&CCC"):
+                native = {"operation": "cplfold_predict", "sequence": sequence, "host": "web"}
+                browser = {"sequence": sequence, "host": "desktop"}
+                for beam in (200, 201, 1000, 1001):
+                    with self.subTest(host="desktop", sequence=sequence, beam=beam):
+                        request = dict(native, parameters={"beam": beam, "host": "web"})
+                        if beam <= (200 if "&" in sequence else 1000):
+                            self.assertEqual(handle(request, repo_root=ROOT)["parameters"]["beamSize"], beam)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "Beam size"):
+                                handle(request, repo_root=ROOT)
+                    with self.subTest(host="web", sequence=sequence, beam=beam):
+                        request_json = json.dumps(dict(browser, beamSize=beam))
+                        if beam == 200:
+                            self.assertEqual(json.loads(module.fold_json(request_json))["parameters"]["beamSize"], 200)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "Beam size"):
+                                module.fold_json(request_json)
+
+    def test_catalog_defaults_and_explicit_overrides_reach_predict(self):
+        module = self._fold_module()
+        from hyb2analysis.engine_parameters import CPL_SEARCH
+
+        changed = dict(beamSize=27, maxPhase1=4, energyDelta=6.5, alpha=0.25, beta=0.75)
+        with mock.patch.dict(CPL_SEARCH, {key: (*CPL_SEARCH[key][:2], value) for key, value in changed.items()}):
+            for sequence, alpha in (("GGGAAACCC", 0.25), ("GGG&CCC", 0.0)):
+                request = {"operation": "cplfold_predict", "sequence": sequence}
+                expected = dict(changed, alpha=alpha)
+                with self.subTest(sequence=sequence, supplied=False):
+                    browser = json.loads(module.fold_json(json.dumps({"sequence": sequence})))["parameters"]
+                    native = handle(request, repo_root=ROOT)["parameters"]
+                    self.assertEqual({k: browser[k] for k in changed}, expected)
+                    self.assertEqual({k: native[k] for k in changed}, expected)
+                for settings in (dict(beam=17, max_phase1=2, delta=0, model="DP03"),
+                                 dict(beamSize=17, maxPhase1=2, energyDelta=0, energyModel="DP03")):
+                    with self.subTest(sequence=sequence, supplied=settings):
+                        actual = handle(dict(request, parameters=dict(settings, alpha=0, beta=0)), repo_root=ROOT)["parameters"]
+                        explicit = dict(beamSize=17, maxPhase1=2, energyDelta=0, energyModel="DP03", alpha=0, beta=0)
+                        self.assertEqual({k: actual[k] for k in explicit}, explicit)
 
 
 class PeakMemoryTests(unittest.TestCase):

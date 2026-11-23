@@ -47,13 +47,21 @@ from collections import Counter
 from contextlib import contextmanager
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
+from itertools import chain
 from multiprocessing import get_context
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from pipeline.hyb2analysis import hybfile
+from pipeline.hyb2analysis.reference import fasta_record_chunks, fasta_records, parse_coordinate, read_fasta, reference_sequence, validate_input_length, validate_window
+from hyb2analysis.fold_text import FOLD_TEXT, checked_fold_text, fold_text, unsupported_bases
+from hyb2analysis.engine_parameters import engine_parameters, task_allow_pseudoknot
+from hyb2analysis.support_kernels import DEFAULT_SUPPORT_KERNEL, PAIR_MODELS as PAIR_ESTIMATORS, SUPPORT_KERNELS
+
 from .detector import CPLFOLD_MEMORY_FRACTION, cplfold_limits, cplfold_memory_estimate, memory_snapshot
+from .name_matching import fasta_id_for_rna, manual_matches
 from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
-from .samples import _hyb2_reference_name
+from .samples import _open_text as _open_reference
 from . import trust as _trust
 from . import comrades as _comrades
 from . import vienna as _vienna
@@ -61,39 +69,16 @@ from . import vienna as _vienna
 _TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 MAX_WINDOWS = 512
 MAX_HYB_FILES = 64
-MIN_WINDOW_NT = 10
-# The web RNA Structure page's CPLfold defaults (web/analysis-data.js
-# defaultStructureState), so a fold of the same inputs gives the same result.
-DEFAULTS = {
-    "alpha": 0.5,
-    "beam": 20,
-    "max_phase1": 3,
-    "energy_delta": 5.0,
-    "beta": 0.0,
-    "energy_model": "DP09",
-    "support_kernel": "gaussian",
-}
-# The shared module's support kernels (web/cplfold/cplfold_web.py SUPPORT_KERNELS).
-SUPPORT_KERNELS = ("gaussian", "block", "block-normalized", "rnacofold", "duplex")
+_ENGINES = engine_parameters("desktop")
 # Tasks saved before RNAduplex counted the read support: the old name of the
 # duplex kernel, and the executable path they could carry (now ignored).
 LEGACY_SUPPORT_KERNELS = {"hybridmin": "duplex"}  # legacy-name: kernel of tasks saved before RNAduplex
 LEGACY_PARAMETERS = ("hybrid_min", "hybridMin")  # legacy-name: hybrid-min path of tasks saved before RNAduplex
-_BOUNDS = {
-    "alpha": (0.0, 1.0, float),
-    "beam": (1, 1000, int),
-    "max_phase1": (1, 20, int),
-    "energy_delta": (0.0, 50.0, float),
-    "beta": (0.0, 1.0, float),
-}
+_NUMERIC_PARAMETERS = {"alpha": ("alpha", float), "beam": ("beamSize", int),
+                       "max_phase1": ("maxPhase1", int), "energy_delta": ("energyDelta", float),
+                       "beta": ("beta", float)}
 _ALIASES = {"beamSize": "beam", "maxPhase1": "max_phase1", "energyDelta": "energy_delta", "delta": "energy_delta",
-            "energyModel": "energy_model", "model": "energy_model", "allowPseudoknot": "allow_pseudoknot",
-            "supportKernel": "support_kernel"}
-ENERGY_MODELS = {"DP03", "DP09", "CC06", "CC09", "RE"}
-# CPLcofold has no nicked CC/RE pseudoknot models, and the shared module's
-# beam bound (web/cplfold/cplfold_web.py fold).
-COFOLD_MODELS = {"DP03", "DP09"}
-COFOLD_MAX_BEAM = 200
+            "energyModel": "energy_model", "model": "energy_model", "supportKernel": "support_kernel"}
 BRACKET_CLOSE = {")": "(", "]": "[", "}": "{", ">": "<"}
 # CPLfold candidates kept per record for the desktop's candidate table (the
 # web lists them all: at most 20 phase-1 candidates, one phase 2 each).
@@ -101,7 +86,7 @@ CANDIDATE_LIMIT = 40
 # The bonus matrix is written for a local CPLfold run (bin/cplfold
 # --bonus-matrix-file) up to this many upper-triangle cells (~50 MB).
 BONUS_EXPORT_MAX_CELLS = 2_000_000
-BONUS_TRANSFORM = "IRIS-style Gaussian arm blocks; symmetric outer product; threshold 1e-6; log1p"
+BONUS_TRANSFORM = "IRIS Gaussian arm blocks; symmetric float64 accumulation; threshold 2^-23; log1p"
 
 # cplfold_web modules loaded in this process, keyed by source path.
 _MODULES: Dict[str, Any] = {}
@@ -150,14 +135,18 @@ def _peak_rss_bytes() -> int:
 
 
 def load_cplfold_web(root: Path) -> Any:
-    """Import ``web/cplfold/cplfold_web.py`` with the vendored CPLfold on the path."""
+    """Import ``web/cplfold/cplfold_web.py`` of ``root``.
+
+    The ``cplfold`` and ``hyb2analysis`` import roots of this runtime are
+    already on the path (``desktop/runtime/__init__``); those of ``root`` are
+    added only for a resource root other than this checkout."""
     source = Path(root) / "web" / "cplfold" / "cplfold_web.py"
     key = str(source)
     if key in _MODULES:
         return _MODULES[key]
     if not source.is_file():
         raise FileNotFoundError("native CPLfold source is not bundled")
-    for extra in (str(Path(root) / "third_party" / "cplfold"), str(source.parent)):
+    for extra in (str(Path(root) / "third_party" / "cplfold"), str(Path(root) / "pipeline"), str(source.parent)):
         if extra not in sys.path:
             sys.path.insert(0, extra)
     spec = importlib.util.spec_from_file_location("hyb2_structure_cplfold", source)
@@ -264,82 +253,38 @@ def _input_file(project: Path, value: Any, label: str) -> Path:
     return target
 
 
-def read_fasta(path: Path) -> List[Tuple[str, str]]:
-    """``(name, sequence)`` records.  Names follow ``samples.read_fasta_sequences``:
-    hyb2 ``|``-headers are renamed the way the pipeline does, so they match
-    .hyb gene IDs; otherwise the first header word."""
-    headers: List[str] = []
-    chunks: List[List[str]] = []
-    opener = __import__("gzip").open if str(path).endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            line = line.strip()
-            if line.startswith(">"):
-                headers.append(line[1:].strip())
-                chunks.append([])
-            elif line and chunks:
-                chunks[-1].append(line)
-    formatted = any("|" in header for header in headers)
-    records = []
-    for header, parts in zip(headers, chunks):
-        name = _hyb2_reference_name(header) if formatted else header
-        records.append(((name.split() or [""])[0], "".join(parts)))
-    return records
-
-
-def _reference_sequence(path: Path, gene_id: Optional[str]) -> Tuple[str, str]:
-    records = read_fasta(path)
-    if not records:
-        raise ValueError("reference FASTA has no sequences")
-    chosen = None
-    if gene_id is not None:
-        chosen = next((record for record in records if record[0] == gene_id), None)
-        if chosen is None:
-            # Even with one sequence: folding it under gene_id's name would
-            # mislabel the result (e.g. evidence of another reference).
-            raise ValueError(f"gene_id {gene_id} is not a sequence of the reference FASTA")
-    if chosen is None:
-        if len(records) > 1:
-            raise ValueError("the reference FASTA has several sequences; give gene_id")
-        chosen = records[0]
-    name, sequence = chosen
-    sequence = sequence.upper().replace("T", "U")
-    bad = sorted(set(sequence) - set("ACGU"))
-    if bad:
-        raise ValueError("CPLfold accepts only A, C, G and U; the reference contains " + ", ".join(bad))
-    return gene_id or name, sequence
-
-
 def _parameters(raw: Any, mode: str) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
-    values: Dict[str, Any] = dict(DEFAULTS)
-    values["allow_pseudoknot"] = False  # the web's default topology: secondary structure only
-    values["evidence"] = "hyb"
-    for key, value in raw.items():
-        key = _ALIASES.get(key, key)
-        if key in _BOUNDS:
-            lo, hi, kind = _BOUNDS[key]
+    if "supportKernel" in raw and "support_kernel" in raw and raw["supportKernel"] != raw["support_kernel"]:
+        raise ValueError("conflicting supportKernel and support_kernel parameters")
+    engine = _ENGINES["cplcofold" if mode == "cofold" else "cplfold"]
+    values = {"energy_model": engine["defaultModel"], "support_kernel": DEFAULT_SUPPORT_KERNEL, "evidence": "hyb",
+              "allow_pseudoknot": task_allow_pseudoknot(raw, "allow_pseudoknot", default=engine["defaults"]["allowPseudoknot"])}
+    resolved = {key: engine["defaults"][param] for key, (param, _) in _NUMERIC_PARAMETERS.items()}
+    resolved.update((_ALIASES.get(key, key), value) for key, value in raw.items() if key not in ("allowPseudoknot", "allow_pseudoknot"))
+    for key, value in resolved.items():
+        if key in _NUMERIC_PARAMETERS:
+            param, kind = _NUMERIC_PARAMETERS[key]
+            lo, hi = engine["ranges"][param]
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
                     or not lo <= value <= hi or (kind is int and value != int(value)):
                 raise ValueError(f"structure parameter out of bounds: {key}")
             values[key] = kind(value)
-        elif key == "allow_pseudoknot":
-            if not isinstance(value, bool):
-                raise ValueError("allow_pseudoknot must be a boolean")
-            values[key] = value
         elif key == "evidence":
             if value not in ("hyb", "none"):
                 raise ValueError("evidence must be 'hyb' (the chimeras) or 'none' (the sequence alone)")
             values[key] = value
         elif key == "energy_model":
             model = str(value).upper()
-            if model not in ENERGY_MODELS:
-                raise ValueError("energy_model must be one of DP03, DP09, CC06, CC09 or RE")
+            models = [option["value"] for option in engine["models"]]
+            if model not in models:
+                raise ValueError("energy_model must be one of " + ", ".join(models))
             values[key] = model
         elif key == "support_kernel":
-            value = LEGACY_SUPPORT_KERNELS.get(value, value)
+            if isinstance(value, str):
+                value = LEGACY_SUPPORT_KERNELS.get(value, value)
             if value not in SUPPORT_KERNELS:
-                raise ValueError("support_kernel must be one of " + ", ".join(SUPPORT_KERNELS))
+                raise ValueError("support_kernel must be one of " + ", ".join(SUPPORT_KERNELS) + f"; got {value!r}")
             values[key] = value
         elif key in LEGACY_PARAMETERS:
             continue
@@ -348,7 +293,8 @@ def _parameters(raw: Any, mode: str) -> Dict[str, Any]:
     return values
 
 
-def _windows(raw: Any, length: int) -> List[Tuple[int, int]]:
+def _windows(raw: Any, length: int, *, source: Optional[Dict[str, Any]] = None) -> List[Tuple[int, int]]:
+    # Source is produced by _sequence_source, never read from private request fields.
     if not isinstance(raw, list) or not raw:
         raise ValueError("windows mode needs a non-empty windows list")
     if len(raw) > MAX_WINDOWS:
@@ -356,13 +302,10 @@ def _windows(raw: Any, length: int) -> List[Tuple[int, int]]:
     windows = []
     for index, window in enumerate(raw):
         try:
-            start, end = int(window["start"]), int(window["end"])
+            start, end = parse_coordinate(window["start"]), parse_coordinate(window["end"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"window {index + 1} needs integer start and end") from error
-        if not 1 <= start <= end <= length:
-            raise ValueError(f"window {index + 1} ({start}-{end}) is outside 1-{length}")
-        if end - start + 1 < MIN_WINDOW_NT:
-            raise ValueError(f"window {index + 1} is shorter than {MIN_WINDOW_NT} nt")
+        validate_window(start, end, length, index + 1, source=source["kind"] if source else "reference")
         if (start, end) in windows:
             # one result per window: a repeat would fold twice and overwrite its files
             raise ValueError(f"window {index + 1} ({start}-{end}) repeats window {windows.index((start, end)) + 1}; "
@@ -381,13 +324,14 @@ def _evidence_inputs(project: Path, request: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("gene_id must be a non-empty string")
     samples_used: List[Dict[str, Any]] = []
     paths: List[Path] = []
+    manifest = load_manifest(project)
+    references = {item["id"]: item for item in manifest.get("references") or []}
+    reference_ids = set()
+    entry = None
     if sample_ids:
         if not isinstance(sample_ids, list) or not all(isinstance(item, str) for item in sample_ids):
             raise ValueError("sample_ids must be a list of sample ids")
-        manifest = json.loads((project / "project.json").read_text(encoding="utf-8"))
         samples = {sample.get("id"): sample for sample in manifest.get("samples") or [] if isinstance(sample, dict)}
-        references = {item.get("id"): item for item in manifest.get("references") or [] if isinstance(item, dict)}
-        reference_ids = set()
         genes = set()
         for sample_id in sample_ids:
             sample = samples.get(sample_id)
@@ -427,34 +371,78 @@ def _evidence_inputs(project: Path, request: Dict[str, Any]) -> Dict[str, Any]:
     if reference is None:
         raise ValueError("structure_run needs a reference FASTA (reference) when no samples are given")
     reference_path = _input_file(project, reference, "reference")
-    return {"hyb_paths": paths, "reference": reference_path, "gene_id": gene_id, "samples": samples_used}
+    if entry is None:
+        # An explicit file uses its own registered matches, never those of a
+        # different reference that happens to be assigned to the samples.
+        same_file = [r for r in references.values() if project / r["path"] == reference_path]
+        choices = [r for r in same_file if r["id"] in reference_ids] or same_file
+        if len(choices) > 1:
+            raise ValueError("the FASTA is registered as several references; select samples of one reference")
+        entry = choices[0] if choices else None
+    return {"hyb_paths": paths, "reference": reference_path, "gene_id": gene_id, "samples": samples_used,
+            "matches": manual_matches(entry)}
 
 
 # ---------------------------------------------------------------------------
 # pasted and HYB record sequences (request "source": "paste" | "record")
 # ---------------------------------------------------------------------------
 
-def _clean_sequence(raw: Any) -> str:
-    """A pasted sequence read as the web does (normaliseFoldSequence): FASTA
-    header lines and whitespace dropped, upper case, T read as U."""
-    if not isinstance(raw, str):
-        raise ValueError("sequence must be text")
-    lines = [line for line in raw.replace("\r", "").split("\n") if not line.strip().startswith(">")]
-    return "".join("".join(lines).split()).upper().replace("T", "U")
+def _rna_names_for_records(names: Sequence[str], inputs: Dict[str, Any]) -> Dict[str, str]:
+    """Invert the matches only where a physical FASTA record identifies a single evidence name."""
+    matches = inputs["matches"]
+    candidates = {name: {rna for rna, target in matches.items() if target == name} for name in names}
+    for name, rnas in candidates.items():
+        if name not in matches:
+            rnas.add(name)
+    # A -> B and automatic B -> B are both possible. Don't choose the first
+    # alias: check which candidate RNAs actually occur in the selected HYBs.
+    ambiguous = [rnas for rnas in candidates.values() if len(rnas) > 1]
+    if ambiguous:
+        wanted = {rna.encode() for rnas in ambiguous for rna in rnas}
+        observed = set()
+        for path in inputs["hyb_paths"]:
+            for line in hybfile.file_lines(path):
+                try:
+                    row = hybfile.parse(line)
+                except ValueError:
+                    continue
+                if row is not None:
+                    observed.update(wanted.intersection((row.gene1, row.gene2)))
+        for rnas in ambiguous:
+            rnas.intersection_update(name.decode() for name in observed)
+    return {name: next(iter(rnas)) for name, rnas in candidates.items() if len(rnas) == 1}
 
 
-def _locate(strand: str, records: Dict[str, str]) -> Optional[Tuple[str, int, int]]:
-    """``(gene, start, end)`` where strand occurs in the reference, when it
-    occurs exactly once; None when absent or repeated."""
-    hits: List[Tuple[str, int, int]] = []
-    for name, sequence in records.items():
-        at = sequence.find(strand)
-        while at != -1 and len(hits) < 2:
-            hits.append((name, at + 1, at + len(strand)))
-            at = sequence.find(strand, at + 1)
-        if len(hits) > 1:
-            return None
-    return hits[0] if hits else None
+def _locate_strands(strands: List[str], inputs: Dict[str, Any]) -> List[Tuple[str, str, int, int]]:
+    """(HYB RNA, FASTA ID, start, end) for each strand, or [] if not uniquely assignable."""
+    hits: List[List[Tuple[str, int, int]]] = [[] for _ in strands]
+    overlap = max(map(len, strands)) - 1
+    for name, _, chunks in fasta_record_chunks(inputs["reference"], open_text=_open_reference):
+        # Search blocks, not whole chromosomes. Carry enough overlap to see
+        # hits spanning blocks, and count only hits ending in the new block.
+        tail, parts, size, offset = "", [], 0, 0
+        for chunk in chain(chunks, (None,)):
+            if chunk is not None:
+                parts.append(chunk)
+                size += len(chunk)
+                if size < max(64 * 1024, overlap):
+                    continue
+            block = tail + fold_text("".join(parts))
+            base = offset - len(tail)
+            for strand, found in zip(strands, hits):
+                start = max(0, len(tail) - len(strand) + 1)
+                while len(found) < 2 and (at := block.find(strand, start)) != -1:
+                    found.append((name, base + at + 1, base + at + len(strand)))
+                    start = at + 1
+            offset = base + len(block)
+            tail, parts, size = block[-overlap:] if overlap else "", [], 0
+    locations = [found[0] for found in hits if len(found) == 1]
+    if len(locations) != len(strands):
+        return []
+    rnas = _rna_names_for_records([name for name, _, _ in locations], inputs)
+    if any(name not in rnas for name, _, _ in locations):
+        return []
+    return [(rnas[name], name, start, end) for name, start, end in locations]
 
 
 def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
@@ -462,9 +450,9 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
     """A pasted or HYB record sequence (``sequence``, and for CPLcofold
     ``sequence_two`` or one "A&B" sequence).  As the web, chimeras guide only
     the fold of a reference region: when evidence is asked for and every
-    strand occurs exactly once in the samples' reference, it is folded as
-    that region (one window, or CPLcofold's two regions); otherwise from the
-    sequence alone (COMRADES, which needs chimeras, cannot run).  Returns
+    strand identifies one position and one HYB RNA, it is folded as that
+    region (one window, or CPLcofold's two regions); otherwise from the
+    sequence alone (COMRADES, which needs chimeras, cannot run). Returns
     the request to run and the source to record (None: a reference region)."""
     request = {key: value for key, value in request.items() if not key.startswith("_")}
     source = request.get("source", "reference")
@@ -478,8 +466,8 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
         raise ValueError("IRIS uses one reference region with HYB evidence: choose Reference region")
     if mode not in ("genome", "cofold") or request.get("windows") or request.get("regions"):
         raise ValueError("a pasted or HYB record sequence is folded whole, or as two strands with CPLcofold")
-    first = _clean_sequence(request.get("sequence"))
-    second = _clean_sequence(request["sequence_two"]) if request.get("sequence_two") is not None else ""
+    first = fold_text(request.get("sequence"), pasted=source == "paste")
+    second = fold_text(request["sequence_two"], pasted=source == "paste") if request.get("sequence_two") is not None else ""
     if mode == "cofold":
         if source == "record":
             raise ValueError("a HYB record sequence is one chimeric read, not two strands")
@@ -496,37 +484,33 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
     what = "pasted sequence" if source == "paste" else "HYB record sequence"
     for index, strand in enumerate(strands):
         name = what if len(strands) == 1 else ("RNA A", "RNA B")[index]
-        bad = sorted(set(strand) - set("ACGU"))
+        bad = sorted(set(strand) - set(FOLD_TEXT["alphabet"]))
         if bad:
             raise ValueError(f"the {name} may contain only A, C, G and U (T is read as U); found " + ", ".join(bad))
-        if len(strand) < MIN_WINDOW_NT:
-            raise ValueError(f"the {name} is shorter than {MIN_WINDOW_NT} nt")
+        validate_input_length(len(strand), f"the {name}", source=source, paired=len(strands) == 2)
     label = "_".join(str(request.get("gene_id") or "pasted").split())
     names = [label] if len(strands) == 1 else [label + "_A", label + "_B"]
     params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
     guided = engine == "comrades" or (engine in ("cplfold", "cplcofold") and params.get("evidence", "hyb") != "none")
-    found: List[Optional[Tuple[str, int, int]]] = []
-    if guided:
-        inputs = _evidence_inputs(project, request)
-        records = {name: sequence.upper().replace("T", "U") for name, sequence in read_fasta(inputs["reference"])}
-        found = [_locate(strand, records) for strand in strands]
+    found = _locate_strands(strands, _evidence_inputs(project, request)) if guided else []
     out = {key: value for key, value in request.items() if key not in ("source", "sequence", "sequence_two")}
     recorded: Dict[str, Any] = {"kind": source, "label": label, "lengths": [len(strand) for strand in strands]}
-    if found and all(found):
-        recorded["mapped_to"] = [f"{gene}:{start}-{end}" for gene, start, end in found]  # type: ignore[misc]
-        regions = [{"gene_id": gene, "start": start, "end": end} for gene, start, end in found]  # type: ignore[misc]
+    if found:
+        recorded["mapped_to"] = [f"{gene}:{start}-{end}" for gene, _, start, end in found]
+        regions = [{"gene_id": gene, "start": start, "end": end} for gene, _, start, end in found]
+        out["_located_ids"] = {gene: fasta_id for gene, fasta_id, _, _ in found}
         if mode == "cofold":
             out["regions"] = regions
         else:
             out.update(gene_id=regions[0]["gene_id"], mode="windows", windows=[{"start": regions[0]["start"], "end": regions[0]["end"]}])
         return out, recorded
     if engine == "comrades":
-        raise ValueError(f"COMRADES needs the chimeras of a reference region, and the {what} does not occur "
-                         "exactly once in the samples' reference: fold it with ViennaRNA MFE or sequence-only CPLfold, "
+        raise ValueError(f"COMRADES needs the chimeras of a reference region, and the {what} does not identify "
+                         "a unique reference region and HYB RNA: fold it with ViennaRNA MFE or sequence-only CPLfold, "
                          "or choose Reference region")
     if guided:
         out["parameters"] = {**params, "evidence": "none"}
-        recorded["evidence"] = "none: the sequence does not occur exactly once in the samples' reference"
+        recorded["evidence"] = "none: the sequence does not identify a unique reference region and HYB RNA"
     # folded from the sequence alone, under its label (two strands: two regions)
     out["gene_id"], out["_strands"] = names[0], dict(zip(names, strands))
     if mode == "cofold":
@@ -535,12 +519,21 @@ def _sequence_source(request: Dict[str, Any], project: Path, engine: str,
 
 
 def _fold_sequence(request: Dict[str, Any], inputs: Dict[str, Any]) -> Tuple[str, str]:
-    """``(gene_id, sequence)`` to fold: a pasted or HYB record sequence, else
-    gene_id's reference sequence."""
+    """Return the HYB name for evidence/results and the bases from its FASTA match (or pasted record)."""
     strands = request.get("_strands")
     if strands:
         return request["gene_id"], strands[request["gene_id"]]
-    return _reference_sequence(inputs["reference"], inputs["gene_id"])
+    gene = inputs["gene_id"]
+    matches = request.get("_located_ids", inputs["matches"])
+    target = fasta_id_for_rna(gene, matches) if gene is not None else None
+    name, sequence = reference_sequence(inputs["reference"], target, open_text=_open_reference)
+    if gene is None:
+        gene = _rna_names_for_records([name], inputs).get(name)
+        if gene is None:
+            raise ValueError(f"reference sequence {name!r} does not identify one matched HYB RNA; give gene_id")
+    if request.get("mode", "genome") == "genome":
+        validate_input_length(len(sequence), "Reference sequence")
+    return gene, sequence
 
 
 def _record_source(result: Dict[str, Any], source: Dict[str, Any]) -> None:
@@ -628,7 +621,7 @@ def _atomic_writer(path: Path) -> Iterator[Any]:
 def _bonus_header(length: int, label: str, cutpoint: Optional[int] = None,
                   transform: str = BONUS_TRANSFORM, kernel: str = "gaussian") -> str:
     """The web's bonus-matrix TSV header (web/structure-ui.js cplfoldEvidenceTsv),
-    which CPLfold.py load_bonus_matrix_file reads; the region line is a comment.
+    which cplfold.bonus.load_bonus_matrix_file reads; the region line is a comment.
     The value column keeps its name for every support kernel."""
     lines = ["# HYB2 CPLfold bonus matrix", f"# region={label}", f"# sequence_length={length}",
              "# coordinate_system=prepared-sequence-1-based-inclusive", f"# transform={transform}"]
@@ -674,18 +667,21 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
              duplex_workers: Optional[int] = None) -> Dict[str, Any]:
     """Build the bonus from compressed arms and fold; returns a JSON-able record.
     With ``bonus_path`` the bonus matrix is also written there (when it is
-    small enough, see BONUS_EXPORT_MAX_CELLS).  ``cofold_progress(done, total)``
-    follows the RNAcofold step of the rnacofold kernel and the RNAduplex step
-    of the duplex kernel, which runs ``duplex_workers`` processes (None: the
-    CPU count)."""
+    small enough, see BONUS_EXPORT_MAX_CELLS). ``cofold_progress(done, total)``
+    follows arm-pair read support, which uses at most ``duplex_workers`` processes
+    (None: the CPU count)."""
     started = time.monotonic()
-    kernel = params.get("support_kernel", "gaussian")
+    kernel = params.get("support_kernel", DEFAULT_SUPPORT_KERNEL)
+    counts = None
     if kernel == "gaussian":
         bonus, evidence = module.build_hyb_bonus_matrix_fast(len(sequence), arms)
+    elif kernel in PAIR_ESTIMATORS and params.get("evidence") != "none":
+        counts, counter_info = (module.arm_pair_counts(sequence, arms, kernel=kernel, progress=cofold_progress, workers=duplex_workers)
+                                if arms else (Counter(), {}))
+        bonus, evidence = module.build_support_bonus_matrix(len(sequence), arms, kernel, pairs=counts)
+        evidence.update(counter_info)
     else:
-        extra = {"duplex_workers": duplex_workers} if kernel == "duplex" else {}
-        bonus, evidence = module.build_support_bonus_matrix(len(sequence), arms, kernel, sequence=sequence,
-                                                            progress=cofold_progress, **extra)
+        bonus, evidence = module.build_support_bonus_matrix(len(sequence), arms, kernel, sequence=sequence)
     evidence["supportKernel"] = kernel
     bonus_seconds = time.monotonic() - started
     bonus_file = None
@@ -693,12 +689,10 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
         write_bonus_matrix(Path(bonus_path), bonus, label, evidence.get("transform") or BONUS_TRANSFORM, kernel)
         bonus_file = Path(bonus_path).name
     started = time.monotonic()
-    results = module.two_phase_pseudoknot_fold(
-        seq=sequence, beam_size=params["beam"], energy_delta=params["energy_delta"],
-        max_phase1=params["max_phase1"], max_phase2=1, energy_model=params["energy_model"],
-        output_file=None, verbose=False, lv=True, bonus_matrix=bonus,
-        alpha=params["alpha"] if bonus is not None else 0.0, beta=params["beta"],
-        allow_pseudoknot=params["allow_pseudoknot"])
+    results = module.fold_prepared(
+        sequence, None, bonus, pseudoknots=params["allow_pseudoknot"], energy_model=params["energy_model"],
+        alpha=params["alpha"] if bonus is not None else 0.0, beta=params["beta"], beam_size=params["beam"],
+        energy_delta=params["energy_delta"], max_phase1=params["max_phase1"])
     fold_seconds = time.monotonic() - started
     if not results:
         raise ValueError("CPLfold did not produce a structure")
@@ -707,8 +701,13 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
     for rank, raw in enumerate(results[:CANDIDATE_LIMIT]):
         folded = [(i, j, bracket, float(bonus[i - 1, j - 1]) if bonus is not None else None)
                   for i, j, bracket in _pairs(raw["structure"])]
-        candidates.append((raw, folded))
-    best, pairs = candidates[0]
+        candidate = _candidate(rank, raw, raw["structure"], folded)
+        if counts is not None:
+            candidate.update(module.score_evidence_pairs(counts, ((i, j) for i, j, _, _ in folded)), support_kernel=kernel)
+        candidates.append(candidate)
+        if rank == 0:
+            pairs = folded
+    best = results[0]
     support = _nucleotide_support(bonus)
     del bonus
     return {
@@ -717,17 +716,13 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
         "type": best.get("type"),
         "pairs": pairs,
         "evidence": evidence,
-        "candidates": [_candidate(rank, raw, raw["structure"], folded) for rank, (raw, folded) in enumerate(candidates)],
+        "candidates": candidates,
         "candidates_found": len(results),
         "nucleotide_support": support,
         "bonus_matrix": bonus_file,
         "seconds": {"bonus": round(bonus_seconds, 2), "fold": round(fold_seconds, 2)},
         "peak_rss_bytes": _peak_rss_bytes(),
     }
-
-
-# the read-support step that runs before the fold, named in its progress
-_PAIR_STEP = {"rnacofold": "RNAcofold read support", "duplex": "RNAduplex read support"}
 
 
 def _worker_init(root: str) -> None:
@@ -808,8 +803,10 @@ def _describe(params: Dict[str, Any]) -> str:
     name = "CPLcofold" if params.get("engine") == "CPLcofold" else "CPLfold"
     if params.get("evidence") == "none":
         return f"{name} {mode}, sequence only, beam {params['beam']}"
-    kernel = params.get("support_kernel", "gaussian")
+    kernel = params.get("support_kernel", DEFAULT_SUPPORT_KERNEL)
     support = "" if kernel == "gaussian" else f", {kernel} support"
+    if kernel in PAIR_ESTIMATORS:
+        support += f" ({PAIR_ESTIMATORS[kernel]}, saturating)"
     return f"{name} {mode}, alpha {params['alpha']}, beam {params['beam']}{support}"
 
 
@@ -896,6 +893,11 @@ def _write_candidates(out_dir: Path, records: List[Dict[str, Any]], paths: Dict[
 def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
     evidence = record["evidence"]
     pairs = record["pairs"]
+    summary = {key: evidence.get(key) for key in (
+        "source", "builder", "supportKernel", "inputRecords", "uniqueBlocks", "meanArmLength", "gaussianStandardDeviation",
+        "nonzeroBonusCells", "nonzeroUpperTriangleCells", "maximumBonus", "truncationTail", "transform", "evidenceWeight")}
+    summary.update({key: evidence[key] for key in ("pairCounter", "hybridisedBlocks", "duplexesWithPairs", "duplexWorkers",
+                                                  "supportedPairs", "saturatingQ", "saturatingScale") if key in evidence})
     return {
         "start": record["start"], "end": record["end"], "length": len(record["sequence"]),
         "energy": record["energy"], "structure_type": record["type"],
@@ -903,9 +905,7 @@ def _summary(record: Dict[str, Any]) -> Dict[str, Any]:
         "pairs_with_bonus": sum(1 for pair in pairs if (pair[3] or 0) > 0),
         "pseudoknot_pairs": sum(1 for pair in pairs if pair[2] != "()"),
         "long_range_pairs_gt_1000": sum(1 for pair in pairs if pair[1] - pair[0] > 1000),
-        "evidence": {key: evidence.get(key) for key in (
-            "source", "builder", "supportKernel", "inputRecords", "uniqueBlocks", "meanArmLength", "gaussianStandardDeviation",
-            "nonzeroBonusCells", "nonzeroUpperTriangleCells", "maximumBonus", "truncationTail", "transform", "evidenceWeight")},
+        "evidence": summary,
         "seconds": record["seconds"],
         "peak_rss_bytes": record.get("peak_rss_bytes"),
         **({"candidates": len(record["candidates"]), "bonus_matrix": record.get("bonus_matrix")}
@@ -972,7 +972,7 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     params = _parameters(request.get("parameters"), mode)
     inputs = _evidence_inputs(project, request)
     gene_id, sequence = _fold_sequence(request, inputs)
-    windows = _windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
+    windows = _windows(request.get("windows"), len(sequence), source=state["source"]) if mode == "windows" else [(1, len(sequence))]
 
     limits = _memory_limits(request)
     key = "pseudoknot_max_nt" if params["allow_pseudoknot"] else "pseudoknot_free_max_nt"
@@ -1047,15 +1047,18 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     bonus_paths = [str(out_dir / ("bonus_matrix.tsv" if len(windows) == 1 else f"bonus_matrix_{start}-{end}.tsv"))
                    for start, end in windows]
     labels = [f"{gene_id}:{start}-{end}" for start, end in windows]
+    estimator = PAIR_ESTIMATORS.get(params["support_kernel"]) if params["evidence"] == "hyb" else None
+    step = f" · {estimator} read support" if estimator else ""
     if workers <= 1:
         for index, ((start, end), arms) in enumerate(zip(windows, counters)):
-            progress("fold", f"window {index + 1}/{len(windows)} ({start}-{end})" if mode == "windows" else "folding",
-                     index, len(windows), units="windows", force=True)
-            def cofold_progress(done: int, total: int, index: int = index) -> None:
-                progress("fold", f"{_PAIR_STEP.get(params.get('support_kernel'), 'read support')} "
-                         f"{done:,}/{total:,} arm blocks", index, len(windows), units="windows")
+            detail = f"window {index + 1}/{len(windows)} ({start}-{end})" if mode == "windows" else "folding"
+            progress("fold", detail + step, index, len(windows), units="windows", force=True)
+
+            def pair_progress(done: int, total: int, index: int = index) -> None:
+                progress("fold", f"{estimator} read support {done:,}/{total:,} arm blocks",
+                         index, len(windows), units="windows")
             finish(index, fold_one(module, sequence[start - 1:end], arms, params, bonus_paths[index], labels[index],
-                                   cofold_progress, duplex_workers=cpu))
+                                   pair_progress, duplex_workers=cpu))
     else:
         done = 0
 
@@ -1063,10 +1066,10 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
             nonlocal done
             finish(*result)
             done += 1
-            progress("fold", f"{done}/{len(windows)} windows on {workers} workers", done, len(windows),
+            progress("fold", f"{done}/{len(windows)} windows on {workers} workers{step}", done, len(windows),
                      units="windows", force=True)
 
-        progress("fold", f"0/{len(windows)} windows on {workers} workers", 0, len(windows), units="windows", force=True)
+        progress("fold", f"0/{len(windows)} windows on {workers} workers{step}", 0, len(windows), units="windows", force=True)
         run_in_pool(workers, _fold_window,
                     [(str(root), index, sequence[start - 1:end], list(arms.keys()), list(arms.values()), params,
                       bonus_paths[index], labels[index])
@@ -1174,8 +1177,7 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
     params = (_comrades if comrades else _vienna).parameters(request.get("parameters"))
     inputs = _evidence_inputs(project, request)
     gene_id, sequence = _fold_sequence(request, inputs)
-    sequence = sequence.upper().replace("T", "U")
-    windows = _windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
+    windows = _windows(request.get("windows"), len(sequence), source=state["source"]) if mode == "windows" else [(1, len(sequence))]
     longest = max(end - start + 1 for start, end in windows)
     limit = _comrades.MAX_COMRADES_NT if comrades else _vienna.MAX_VIENNA_NT
     if longest > limit:
@@ -1282,27 +1284,38 @@ def _vienna_run(request: Dict[str, Any], project: Path, task_id: str, mode: str,
 # CPLcofold: two regions as two strands (engine "cplcofold", mode "cofold")
 # ---------------------------------------------------------------------------
 
-def _cofold_regions(raw: Any, records: Dict[str, str]) -> List[Dict[str, Any]]:
-    """The two regions, checked against the reference sequences."""
+def _two_regions(request: Dict[str, Any], inputs: Dict[str, Any], *, cofold: bool) -> List[Dict[str, Any]]:
+    """Only CPLcofold treats the excised windows as independent strands and ignores their flanks."""
+    raw = request.get("regions")
     if not isinstance(raw, list) or len(raw) != 2:
         raise ValueError("cofold mode needs exactly two regions")
-    regions = []
+    selected = []
+    strands = request.get("_strands")  # sequence-only pasted strands are their own records
+    matches = request.get("_located_ids", inputs["matches"])
     for index, region in enumerate(raw, 1):
         try:
-            gene, start, end = region["gene_id"], int(region["start"]), int(region["end"])
+            gene, start, end = region["gene_id"], parse_coordinate(region["start"]), parse_coordinate(region["end"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"region {index} needs gene_id, start and end") from error
-        if not isinstance(gene, str) or gene not in records:
-            raise ValueError(f"region {index}: {gene} is not a sequence of the reference FASTA")
-        sequence = records[gene]
+        if not isinstance(gene, str):
+            raise ValueError(f"region {index} needs an RNA name")
+        selected.append((gene, gene if strands is not None else fasta_id_for_rna(gene, matches), start, end))
+    targets = {target for _, target, _, _ in selected}
+    records = strands if strands is not None else {
+        name: fold_text(sequence) for name, _, sequence in fasta_records(inputs["reference"], targets, open_text=_open_reference)}
+    regions = []
+    for index, (gene, target, start, end) in enumerate(selected, 1):
+        if target not in records:
+            raise ValueError(f"region {index}: {target} is not a sequence of the reference FASTA")
+        sequence = records[target]
         if not 1 <= start <= end <= len(sequence):
             raise ValueError(f"region {index} ({start}-{end}) is outside 1-{len(sequence)} of {gene}")
-        if end - start + 1 < MIN_WINDOW_NT:
-            raise ValueError(f"region {index} is shorter than {MIN_WINDOW_NT} nt")
+        validate_input_length(end - start + 1, f"region {index}", paired=True)
         part = sequence[start - 1:end]
-        bad = sorted(set(part) - set("ACGU"))
+        bad = unsupported_bases(part if cofold else sequence)
         if bad:
-            raise ValueError(f"region {index} ({gene}:{start}-{end}) contains unsupported symbols: " + ", ".join(bad))
+            label = f"region {index} ({gene}:{start}-{end})" if cofold else f"Reference sequence {gene}"
+            raise ValueError(f"{label} contains unsupported symbols: " + ", ".join(sorted(bad)))
         regions.append({"gene_id": gene, "start": start, "end": end, "sequence": part})
     regions[0]["prepared_start"], regions[0]["prepared_end"] = 1, len(regions[0]["sequence"])
     regions[1]["prepared_start"] = len(regions[0]["sequence"]) + 1
@@ -1466,20 +1479,14 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     """Two regions folded as two strands with CPLcofold (the web's
     two-region CPLfold layout), with or without the chimeras."""
     params = _parameters(request.get("parameters"), "cofold")
-    if params["energy_model"] not in COFOLD_MODELS:
-        raise ValueError("CPLcofold supports the DP03 and DP09 energy models only")
-    if params["beam"] > COFOLD_MAX_BEAM:
-        raise ValueError(f"CPLcofold beam size is at most {COFOLD_MAX_BEAM}")
     inputs = _evidence_inputs(project, request)
-    # pasted strands are their own records
-    records = request.get("_strands") or {name: sequence.upper().replace("T", "U")
-                                          for name, sequence in read_fasta(inputs["reference"])}
-    regions = _cofold_regions(request.get("regions"), records)
+    regions = _two_regions(request, inputs, cofold=True)
     sequence = regions[0]["sequence"] + regions[1]["sequence"]
     limits = _memory_limits(request)
     key = "pseudoknot_max_nt" if params["allow_pseudoknot"] else "pseudoknot_free_max_nt"
-    if len(sequence) > int(limits[key]):
-        raise ValueError(f"{len(sequence)} nt exceeds the CPLfold limit of {limits[key]} nt for this memory budget "
+    hard_max_length = int(limits[key])
+    if len(sequence) > hard_max_length:
+        raise ValueError(f"{len(sequence)} nt exceeds the CPLfold limit of {hard_max_length} nt for this memory budget "
                          f"({'pseudoknot' if params['allow_pseudoknot'] else 'pseudoknot-free'}); choose shorter regions.")
 
     run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
@@ -1513,9 +1520,12 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     evidence_seconds = time.monotonic() - t0
 
     # 2. fold with the shared module (the web's CPLcofold request)
-    progress("fold", "folding", 0, 1, units="windows", force=True)
-    if hasattr(module, "set_host_hard_max_sequence_length"):
-        module.set_host_hard_max_sequence_length(max(len(sequence), 1))
+    estimator = PAIR_ESTIMATORS.get(params["support_kernel"]) if arms else None
+    progress("fold", f"folding · {estimator} read support" if estimator else "folding", 0, 1, units="windows", force=True)
+
+    def pair_progress(done: int, total: int) -> None:
+        progress("fold", f"{estimator} read support {done:,}/{total:,} arm blocks", 0, 1, units="windows")
+
     t0 = time.monotonic()
     folded = module.fold({
         "sequence": regions[0]["sequence"], "sequenceTwo": regions[1]["sequence"],
@@ -1524,9 +1534,10 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
         "beamSize": params["beam"], "maxPhase1": params["max_phase1"], "energyDelta": params["energy_delta"],
         "energyModel": params["energy_model"], "alpha": params["alpha"] if arms else 0.0, "beta": params["beta"],
         "allowPseudoknot": params["allow_pseudoknot"], "maxSequenceLength": len(sequence),
-        "supportKernel": params.get("support_kernel", "gaussian"),
-        # RNAduplex runs in parallel: no more processes than the task's CPU claim
-        "duplexWorkers": _task_cpus()})
+        "supportKernel": params.get("support_kernel", DEFAULT_SUPPORT_KERNEL),
+        # Arm-pair estimation may run in parallel: respect the task's CPU claim.
+        "duplexWorkers": _task_cpus()}, progress=pair_progress if estimator else None,
+        host="desktop", hard_max_length=hard_max_length)
     fold_seconds = time.monotonic() - t0
     pairs = [(pair["left"], pair["right"], pair["bracket"], float(pair["bonusSupport"]) if arms else None)
              for pair in folded["pairs"]]
@@ -1540,14 +1551,18 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
                "score": candidate.get("score")}
         candidate_pairs = [(pair["left"], pair["right"], pair["bracket"], float(pair["bonusSupport"]) if arms else None)
                            for pair in candidate.get("pairs") or []]
-        candidates.append(_candidate(rank, raw, candidate["dotBracket"], candidate_pairs))
+        stored_candidate = _candidate(rank, raw, candidate["dotBracket"], candidate_pairs)
+        if params["support_kernel"] in PAIR_ESTIMATORS and arms:
+            stored_candidate.update(comradesScore=candidate["comradesScore"], comradesPairCounts=candidate["comradesPairCounts"],
+                                    support_kernel=params["support_kernel"])
+        candidates.append(stored_candidate)
     bonus_file = None
     entries = raw_evidence.get("bonusEntries") or []
     if arms and entries and len(entries) <= BONUS_EXPORT_MAX_CELLS:
         # the web's two-strand export: 17 significant digits, with the cutpoint
         header = _bonus_header(len(sequence), _cofold_label(regions), regions[0]["prepared_end"],
                                transform=raw_evidence.get("transform") or BONUS_TRANSFORM,
-                               kernel=params.get("support_kernel", "gaussian"))
+                               kernel=params.get("support_kernel", DEFAULT_SUPPORT_KERNEL))
         _atomic_write_text(out_dir / "bonus_matrix.tsv", header + "".join(
             f"{int(entry['one'])}\t{int(entry['two'])}\t{float(entry['value']):.17g}\n" for entry in entries))
         bonus_file = "bonus_matrix.tsv"
@@ -1588,15 +1603,14 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     keeps the two regions (pairs with a spacer base are left out and
     counted), so it is stored and drawn as two strands."""
     params = _comrades.parameters(request.get("parameters"))
-    _comrades._folder(params)  # a missing mfold fails before the evidence is read
     inputs = _evidence_inputs(project, request)
-    records = {name: sequence.upper().replace("T", "U") for name, sequence in read_fasta(inputs["reference"])}
-    regions = _cofold_regions(request.get("regions"), records)
+    regions = _two_regions(request, inputs, cofold=False)
     one, two = regions[0]["sequence"], regions[1]["sequence"]
-    prepared = one + _comrades.LINKER + two
+    prepared = one + checked_fold_text(_comrades.LINKER, "COMRADES spacer") + two
     if len(prepared) > _comrades.MAX_COMRADES_NT:
         raise ValueError(f"{len(prepared)} nt (both regions and the 100-nt spacer) exceeds the COMRADES "
                          f"limit of {_comrades.MAX_COMRADES_NT} nt; choose shorter regions")
+    _comrades._folder(params)  # a missing mfold fails before the evidence is read
 
     run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
     state.update(run_dir=run_dir, task_id=task_id)

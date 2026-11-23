@@ -3,6 +3,16 @@
 The module intentionally uses only Python's standard library so it can run in
 an installer bootstrap, a development checkout, or a diagnostic command.
 """
+import sys as _sys
+from pathlib import Path as _Path
+
+# Import roots of the folding package (``cplfold``) and the Hyb2 settings
+# (``hyb2analysis``), set once for every runtime module so each is loaded
+# under a single name per process.
+for _root in (_Path(__file__).resolve().parents[2] / name for name in ("pipeline", "third_party/cplfold")):
+    if str(_root) not in _sys.path:
+        _sys.path.insert(0, str(_root))
+del _root
 
 __all__ = [
     "CapabilityMatrix",

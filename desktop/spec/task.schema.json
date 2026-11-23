@@ -13,6 +13,11 @@
       "enum": ["mapping", "sam_to_hyb", "hyb_filter", "contact_map", "viewpoint", "compare", "structure", "cplfold", "varna", "report", "custom"]
     },
     "status": { "enum": ["queued", "running", "succeeded", "failed", "cancelled", "paused"] },
+    "registration_status": {
+      "description": "Native project registration, separate from computation status. Missing/null means unknown. Registered acknowledges the project.json transaction, not that a particular result entry exists.",
+      "enum": ["pending", "failed", "registered", null]
+    },
+    "registration_error": { "type": ["string", "null"] },
     "inputs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "parameters": { "type": "object", "additionalProperties": true },
     "execution": { "enum": ["browser", "native", "wsl", "hybrid"] },

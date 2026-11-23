@@ -22,16 +22,17 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from hyb2analysis.fold_text import checked_fold_text, unsupported_bases
+from hyb2analysis.engine_parameters import engine_parameters
 from . import mfold, vienna
 
+_SETTINGS = engine_parameters("desktop")["comrades"]
 ORIGINAL_EVIDENCE_LIMIT = 1001
+SCORE_ENDPOINT_CAP = 1_000_000  # Lau bp_score.sh: make_VARNA_scores_2.sh -m
 MAX_EVIDENCE_RECORDS = 50_000
-MAX_RANDOM_FOLDS = 1000
 # The web folds at most 3,000 nt; each accepted stem refolds the region.
 MAX_COMRADES_NT = 3000
 CANONICAL = vienna.CANONICAL
-DEFAULTS = {"temperature": 37.0, "min_loop": 3, "constraint_limit": 75, "random_folds": 0, "seed": "HYB2-Web",
-            "homodimer_only": False, "fold_program": "viennarna"}
 # the program the stem constraints are fitted with, and the engine name it gives
 FOLD_PROGRAMS = {"viennarna": "COMRADES(ViennaRNA)", "mfold": "COMRADES(mfold)"}
 
@@ -54,15 +55,20 @@ def parameters(raw: Any) -> Dict[str, Any]:
     unknown = set(raw) - known
     if unknown:
         raise ValueError("unknown COMRADES parameter: " + ", ".join(sorted(unknown)))
-    base = vienna.parameters({k: raw[k] for k in ("temperature", "min_loop") if k in raw})
-    out = dict(DEFAULTS, temperature=base["temperature"], min_loop=base["min_loop"])
-    for key, lo, hi, label in (("constraint_limit", 1, 75, "Evidence stem constraints"),
-                               ("random_folds", 0, MAX_RANDOM_FOLDS, "Randomised folds")):
-        if key in raw:
-            value = raw[key]
-            if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
-                raise ValueError(f"{label} must be a whole number from {lo} to {hi}.")
-            out[key] = value
+    thermo = {k: raw[k] for k in ("temperature", "min_loop") if k in raw}
+    if raw.get("fold_program") == "mfold":  # Fixed by its energy tables, not configurable ViennaRNA defaults.
+        thermo.setdefault("temperature", mfold.TEMPERATURE)
+        thermo.setdefault("min_loop", mfold.MIN_LOOP)
+    base = vienna.parameters(thermo, settings=_SETTINGS)
+    out = dict(temperature=base["temperature"], min_loop=base["min_loop"], seed="HYB2-Web",
+               homodimer_only=False, fold_program="viennarna")
+    for key, catalog_key, label in (("constraint_limit", "constraintLimit", "Evidence stem constraints"),
+                                    ("random_folds", "randomFoldCount", "Randomised folds")):
+        value = raw.get(key, _SETTINGS["defaults"][catalog_key])
+        lo, hi = _SETTINGS["ranges"][catalog_key]
+        if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+            raise ValueError(f"{label} must be a whole number from {lo} to {hi}.")
+        out[key] = value
     if "seed" in raw:
         if not isinstance(raw["seed"], str) or not raw["seed"].strip(_JS_SPACE):
             raise ValueError("Enter a reproducibility seed for randomised constraint ordering.")
@@ -79,7 +85,8 @@ def parameters(raw: Any) -> Dict[str, Any]:
         if out["min_loop"] != mfold.MIN_LOOP:
             raise ValueError(f"mfold's minimum hairpin loop is fixed at {mfold.MIN_LOOP}; set Minimum hairpin loop to {mfold.MIN_LOOP}.")
         if out["temperature"] != mfold.TEMPERATURE:
-            raise ValueError("mfold folds at 37 °C only (its version 3.0 energies); set Temperature to 37 or fold with ViennaRNA.")
+            raise ValueError(f"mfold folds at {mfold.TEMPERATURE:g} °C only (its version 3.0 energies); "
+                             f"set Temperature to {mfold.TEMPERATURE:g} or fold with ViennaRNA.")
     return out
 
 
@@ -95,12 +102,6 @@ def _hybfile():
         sys.path.insert(0, str(root))
         from hyb2analysis import hybfile
     return hybfile
-
-
-def _lines(path: Path) -> Iterable[bytes]:
-    opener = gzip.open if path.name.endswith(".gz") else open
-    with opener(path, "rb") as handle:
-        yield from _hybfile().lines(handle)
 
 
 def _new_skipped() -> Dict[str, int]:
@@ -176,7 +177,7 @@ def window_arms(hyb_paths: Sequence[Path], gene: str, sequence: str, windows: Se
             region = regions[index]
             one = region[record.start1 - start:record.end1 - start + 1]
             two = region[record.start2 - start:record.end2 - start + 1]
-            if set(one + two) - set("ACGU"):
+            if unsupported_bases(one + two):
                 skipped[index]["invalidSequence"] += 1
                 continue
             arms = found[index]
@@ -231,7 +232,7 @@ def paired_arms(hyb_paths: Sequence[Path], regions: Sequence[Dict[str, Any]], pr
             skipped["outsideSelectedRegions"] += 1
             continue
         (start_one, seq_one), (start_two, seq_two) = arm(one[1], one[2], 0), arm(two[1], two[2], 1)
-        if set(seq_one + seq_two) - set("ACGU"):
+        if unsupported_bases(seq_one + seq_two):
             skipped["invalidSequence"] += 1
             continue
         arms.append({"one": seq_one, "two": seq_two, "oneStart": start_one, "twoStart": start_two,
@@ -419,20 +420,16 @@ def seeded_shuffle(items: Sequence[Any], seed: str) -> List[Any]:
     return shuffled
 
 
-def score_structure_pairs(pairs, evidence, length: int) -> Dict[str, Any]:
-    support: Dict[Tuple[int, int], int] = {}
-    for e in evidence:
-        key = (min(e["one"], e["two"]), max(e["one"], e["two"]))
-        support[key] = support.get(key, 0) + e["count"]
-    matched, matched_support, per_pair = 0, 0, []
+def score_structure_pairs(pairs, support: Dict[Tuple[int, int], int]) -> Dict[str, Any]:
+    matched, matched_support, score, per_pair = 0, 0, 0, []
     for left, right in pairs:
         s = support.get((min(left, right), max(left, right)), 0)
         per_pair.append(s)
         if s > 0:
             matched += 1
             matched_support += s
-    return {"pair_support": per_pair, "matched_pairs": matched, "matched_support": matched_support,
-            "score": matched_support * 2}
+            score += 2 * min(s, SCORE_ENDPOINT_CAP)
+    return {"pair_support": per_pair, "matched_pairs": matched, "matched_support": matched_support, "score": score}
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +476,7 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
     ("RNAcofold evidence", one per arm) then the constrained ViennaRNA fits
     ("constrained folds": the rank-order fit and each randomised one)."""
     started = time.monotonic()
-    sequence = sequence.upper().replace("T", "U")
+    sequence = checked_fold_text(sequence)
     if not arms:
         raise ValueError("No HYB records have both arms inside the selected region.")
     mapped: List[Tuple[int, int, Optional[str]]] = []
@@ -502,12 +499,18 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
     if not selected or not constraints:
         raise ValueError("RNAcofold did not produce a non-overlapping base-pair stem that can constrain the selected region.")
 
+    # The 1,001-pair shortlist chooses constraints only. Score each fitted
+    # pair against every mapped observation, counting either arm orientation.
+    counts: Dict[Tuple[int, int], int] = {}
+    for e in all_evidence:
+        key = (min(e["one"], e["two"]), max(e["one"], e["two"]))
+        counts[key] = counts.get(key, 0) + e["count"]
     candidates = []
 
     def annotate(fitted, run: int, randomised: bool):
         result, accepted, rejected = fitted
         pairs = [(i, j) for i, j, _, _ in result["pairs"]]
-        score = score_structure_pairs(pairs, selected, len(sequence))
+        score = score_structure_pairs(pairs, counts)
         candidates.append({"result": result, "accepted": accepted, "rejected": rejected, "run": run,
                            "randomised": randomised, "score": score})
 
@@ -531,6 +534,9 @@ def fold(sequence: str, arms: Sequence[Dict[str, Any]], params: Dict[str, Any],
     result["evidence"] = {
         "source": "hyb-rna-cofold-evidence", "inputRecords": len(arms), "cofoldsWithIntermolecularPairs": with_pairs,
         "mappedPairObservations": len(mapped), "uniqueBasePairs": len(all_evidence),
+        "scoredBasePairs": len(counts),
+        "scoringVersion": "all-pairs-capped-v1",
+        "scoredEvidencePairs": [{"one": i, "two": j, "count": n} for (i, j), n in counts.items()],
         "selectedBasePairs": len(selected), "rankedStems": len(stems), "requestedStemConstraints": len(constraints),
         # the web's evidence table and download (at most ORIGINAL_EVIDENCE_LIMIT pairs, region positions)
         "selectedEvidencePairs": [{"one": e["one"], "two": e["two"], "count": e["count"],

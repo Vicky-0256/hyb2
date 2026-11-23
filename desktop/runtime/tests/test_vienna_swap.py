@@ -7,9 +7,10 @@ hybrid-min does two jobs in HYB2, and both move to ViennaRNA's RNAduplex
 * the C_ij counts of the saturating support kernel (``hybridmin`` in
   web/cplfold/cplfold_web.py), B_ij = s C_ij / (C_ij + q).
 
-``Invariants`` hold before and after the replacement: the other kernels, the
+``Invariants`` hold before and after the replacement: the block kernels, the
 saturating transform, the fold it drives, and the path that receives counts
-from the host.
+from the host. Gaussian's subsequently adopted IRIS precision and cutoff
+are checked against an independent reference in test_support_kernels.py.
 
 ``Targets`` check the RNAduplex support kernel, default energy engines and
 the energy column in .hyb output.
@@ -62,10 +63,8 @@ SEQUENCE = "GGGAAACCCAGCUUCGGCUGGGAAACCCAAAGGCUAGCUAGCCUUUUAGCGCGAAAGCGCU"
 ARMS = [(1, 9, 25, 33), (1, 9, 25, 33), (10, 20, 15, 24), (34, 44, 50, 60)]
 # kernels the replacement does not touch: (sha256 prefix of the bonus entries, entries)
 DIGESTS = {
-    "gaussian": ("bfc3aaa9e94f4d97", 566),
     "block": ("1b676f7cb53f64d2", 291),
     "block-normalized": ("0a39abf61a835f0b", 291),
-    "rnacofold": ("c4927bced780923f", 13),
 }
 # counts the host passes (evidencePairs): q = mean of the round(62 / 3) = 21 best = 2.8
 HOST_PAIRS = [[3, 30, 2], [5, 28, 4], [6, 27, 4], [7, 26, 3], [11, 57, 1]]
@@ -174,8 +173,6 @@ class Invariants(_Web):
 
     def test_untouched_kernels_are_unchanged(self):
         for kernel, expected in DIGESTS.items():
-            if kernel == "rnacofold":
-                _rna()
             with self.subTest(kernel=kernel):
                 evidence = self.web.bonus_matrix(_payload(supportKernel=kernel))["evidence"]
                 self.assertEqual(_digest(evidence["bonusEntries"]), expected)
@@ -390,14 +387,17 @@ class ZikvRegression(_Web):
             raise unittest.SkipTest(f"cached ZIKV arms not found: {ZIKV_JOBS}")
         cls.data = {}
         for iso in ("ZILM", "ZAFR"):
-            sequence = "".join(line.strip() for line in open(ZIKV_FASTA / f"{iso}.fasta")
-                               if not line.startswith(">")).upper().replace("T", "U")
-            blocks = Counter({tuple(row[:4]): row[4] for row in json.load(open(ZIKV_JOBS / "arms" / f"{iso}.json"))})
-            pairs = json.load(open(ZIKV_JOBS / "pairs" / f"{iso}_hybridmin.json"))["pairs"]
+            with open(ZIKV_FASTA / f"{iso}.fasta") as handle:
+                sequence = "".join(line.strip() for line in handle
+                                   if not line.startswith(">")).upper().replace("T", "U")
+            with open(ZIKV_JOBS / "arms" / f"{iso}.json") as handle:
+                blocks = Counter({tuple(row[:4]): row[4] for row in json.load(handle)})
+            with open(ZIKV_JOBS / "pairs" / f"{iso}_hybridmin.json") as handle:
+                pairs = json.load(handle)["pairs"]
             cls.data[iso] = (sequence, blocks, Counter({(i, j): n for i, j, n in pairs}))
 
     def _counts(self, sequence, blocks):
-        return self.web._pair_counts_for(NEW_KERNEL, sequence, blocks)[0]
+        return self.web.duplex_pair_counts(sequence, blocks)[0]
 
     def test_windows_and_validated_pairs(self):
         for iso, (sequence, blocks, hybrid_min) in self.data.items():

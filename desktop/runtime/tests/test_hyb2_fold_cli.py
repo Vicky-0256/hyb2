@@ -29,8 +29,9 @@ class Hyb2FoldCliTests(unittest.TestCase):
         (self.root / "sample.hyb").write_text(
             "r1\tGGGGCCCC\t-1.0\talpha\t1\t4\t1\t4\t0\talpha\t5\t8\t9\t12\t0\t10\n"
             "r2\tGGGGCCCC\t-1.0\talpha\t1\t4\t1\t4\t0\tbeta\t5\t8\t9\t12\t0\t10\n")
-        for renderer in ("contact_density_map_indiv.R", "cdm_indiv_zoom.R", "cdm_2genes.R"):
-            self.tool(renderer, "exit 0")
+        self.tool("contact_density_map_indiv.R", 'test -s "$1"\nprintf pdf > "$3.pdf"')
+        self.tool("cdm_indiv_zoom.R", 'test -s "$1"\nprintf pdf > "${9}_${2}-${3}_${4}-${5}.pdf"')
+        self.tool("cdm_2genes.R", 'test -s "$1"\nprintf pdf > "$5.pdf"')
         self.tool("viewpoint_graph.R", 'test -s "$1"\nprintf pdf > "${1%.gplot}_viewpoint.pdf"')
         self.tool("VARNAcmd.sh", "exit 0")
         self.tool("java", '''

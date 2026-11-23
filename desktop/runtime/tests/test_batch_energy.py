@@ -97,6 +97,107 @@ class BatchEnergyTests(unittest.TestCase):
         self.assertEqual(json.loads((run / "result.json").read_text())["outputs"]["hyb"], str((run / "energies.hyb").resolve()))
         self.assertTrue((run / "progress.json").is_file())
 
+    def test_changed_source_does_not_publish_energies(self):
+        import gzip
+        from unittest.mock import patch
+
+        from desktop.runtime import batch_energy
+        from desktop.runtime.project import load_manifest
+        from desktop.runtime.samples import add_sample
+
+        original = list(self.lines)
+        original[1] = original[1].replace("\t-10.5\t", "\t.\t", 1)
+        data = "".join(original).encode()
+        # Both computed rows have the same old energy. Checking only column 3
+        # misses this exchange and assigns each row the other row's energy.
+        swapped = list(original)
+        swapped[1], swapped[5] = swapped[5], swapped[1]
+        variants = {
+            "unchanged": data,
+            "reordered": "".join(swapped).encode(),
+            "truncated": "".join(original[:-1]).encode(),
+            "unmapped-row": data.replace(b"MISSING_RNA", b"OTHER_RNA"),
+            "comment": data.replace(b"a comment", b"a changed comment"),
+        }
+        fold = batch_energy.fold_pairs
+        plain_sample = self.sample
+        reference = load_manifest(self.project)["references"][0]["id"]
+        for compressed in (False, True):
+            source = self.hyb.with_suffix(".hyb.gz") if compressed else self.hyb
+            source.write_bytes(gzip.compress(data) if compressed else data)
+            self.sample = add_sample(self.project, source, name="gzip", reference_id=reference, gene_id=GENE_A,
+                                     mode="linked")["id"] if compressed else plain_sample
+            for name, changed in variants.items():
+                with self.subTest(compressed=compressed, change=name):
+                    source.write_bytes(gzip.compress(data) if compressed else data)
+                    energies = []
+
+                    def change_after_fold(root, engine, pairs):
+                        values = fold(root, engine, pairs)
+                        energies.extend(values)
+                        source.write_bytes(gzip.compress(changed) if compressed else changed)
+                        return values
+
+                    with patch.object(batch_energy, "fold_pairs", change_after_fold):
+                        result, run = self._run(f"changed-{compressed}-{name}", parameters={"engine": "rnacofold"})
+                    self.assertEqual(len(energies), 2)
+                    self.assertNotEqual(energies[0], energies[1])
+                    self.assertEqual(gzip.decompress(source.read_bytes()) if compressed else source.read_bytes(), changed)
+                    if name == "unchanged":
+                        self.assertTrue(result["ok"], result)
+                        self.assertEqual([row[4] for row in self._audit(run) if row[2] == "updated"],
+                                         [f"{value:.2f}" for value in energies])
+                        continue
+                    self.assertFalse(result["ok"], result)
+                    self.assertIn("changed", result["error"].lower())
+                    for output in ("energies.hyb", ".energies.hyb.tmp", "audit.tsv", "parameters.json",
+                                   "hyb2-energies-rnacofold.zip"):
+                        self.assertFalse((run / output).exists(), output)
+                    self.assertFalse(json.loads((run / "result.json").read_text())["ok"])
+
+    def test_batch_uses_the_selected_reference_match_for_each_arm(self):
+        from desktop.runtime.energy import cofold
+        from desktop.runtime.project import load_manifest
+
+        ref = load_manifest(self.project)["references"][0]["id"]
+        for rna, target in [(GENE_A, GENE_B), (GENE_B, "")]:
+            handle({"operation": "set_reference_match", "project_path": str(self.project),
+                    "reference_id": ref, "rna": rna, "sequence": target}, repo_root=ROOT)
+        result, run = self._run("mapped", parameters={"engine": "rnacofold"})
+        self.assertEqual(result["summary"]["updated"], 1)
+        audit = self._audit(run)
+        self.assertEqual(audit[0][4], "%.2f" % cofold(self.seq_b[9:30].replace("T", "U"), self.seq_b[199:222].replace("T", "U")))
+        self.assertIn("not matched", audit[3][5])
+
+    def test_only_selected_arms_follow_the_shared_alphabet(self):
+        from unittest.mock import patch
+
+        from desktop.runtime.energy import cofold
+        from desktop.runtime.samples import add_sample
+        from hyb2analysis.fold_text import FOLD_TEXT
+
+        ref = self.hyb.with_name("toy.fa")
+        ref.write_text(">toy\nNacgggTcccgc?\n")
+        rows = [
+            _row("1_1", "toy", 2, 7, "toy", 8, 12),  # T in arm 1
+            _row("2_1", "toy", 2, 6, "toy", 7, 12),  # T in arm 2
+            _row("3_1", "toy", 2, 6, "toy", 8, 12),  # T, N and ? outside the windows
+        ]
+        hyb = ref.with_suffix(".hyb")
+        hyb.write_bytes("".join(rows).encode())
+        sample = add_sample(self.project, hyb, reference=ref, gene_id="toy")["id"]
+        with patch.dict(FOLD_TEXT, alphabet="ACG"):
+            result, run = self._run("batch-windows", sample_id=sample, parameters={"engine": "rnacofold"})
+
+        self.assertTrue(result["ok"], result)
+        energy = "%.2f" % cofold("ACGGG", "CCCGC")
+        note = "Unsupported or ambiguous reference bases"
+        self.assertEqual(self._audit(run), [["1", "1_1", "unchanged", "-10.5", "-10.5", note],
+                                            ["2", "2_1", "unchanged", "-10.5", "-10.5", note],
+                                            ["3", "3_1", "updated", "-10.5", energy, ""]])
+        expected = rows[0] + rows[1] + rows[2].replace("\t-10.5\t", f"\t{energy}\t", 1)
+        self.assertEqual((run / "energies.hyb").read_bytes(), expected.encode())
+
     def test_parallel_workers_match(self):
         one, run_one = self._run("batch-energy-1", parameters={"engine": "rnacofold"})
         two, run_two = self._run("batch-energy-2", parameters={"engine": "rnacofold"}, workers=2)
@@ -128,21 +229,30 @@ class BatchEnergyTests(unittest.TestCase):
         self.assertIn("rebuild the index", stale["error"])
 
     def test_cplcofold_matches_the_shared_module(self):
+        from unittest.mock import patch
         from desktop.runtime.structure import load_cplfold_web
 
         # 44 nt, then 550 nt: over CPLcofold's 500 nt limit (RNAcofold's is 2,000)
         self.hyb.write_bytes((self.lines[0] + self.lines[1] + _row("5_1", GENE_A, 1, 300, GENE_B, 1, 250)).encode())
-        result, run = self._run("batch-energy-1", parameters={"engine": "cplcofold"})
+        module = load_cplfold_web(ROOT)
+        with patch.object(module, "fold", wraps=module.fold) as fold:
+            result, run = self._run("batch-energy-1", parameters={"engine": "cplcofold"})
         self.assertTrue(result["ok"], result)
+        fold.assert_called_once()
+        self.assertEqual(fold.call_args.kwargs, {"host": "desktop", "hard_max_length": 500})
+        # The advertised batch preset is independent of the regular cofold defaults.
+        preset = dict(beamSize=20, energyDelta=5, maxPhase1=3, energyModel="DP09", alpha=0, beta=0)
+        payload, = fold.call_args.args
+        self.assertEqual({key: payload[key] for key in preset}, preset)
         audit = self._audit(run)
         self.assertEqual([r[2] for r in audit], ["updated", "unchanged"])
         self.assertEqual(audit[1][5], "Combined arms exceed the 500 nt CPLcofold limit")
-        module = load_cplfold_web(ROOT)
         want = module.fold({"sequence": self.seq_a[9:30], "sequenceTwo": self.seq_a[199:222], "evidenceMode": "none",
-                            "evidenceArms": [], "energyModel": "DP09", "allowPseudoknot": False, "maxSequenceLength": 500})
+                            "evidenceArms": [], "allowPseudoknot": False, "maxSequenceLength": 500, **preset})
         self.assertEqual(audit[0][4], "%.2f" % round(want["energy"], 2))
         meta = json.loads((run / "parameters.json").read_text())
         self.assertEqual((meta["energyModel"], meta["pseudoknots"], meta["maximumCombinedArmLength"]), ("CPLfold DP09", False, 500))
+        self.assertEqual(meta["cplcofold"], dict(preset, evidence="none"))
 
     def test_rnaduplex_engine(self):
         """RNAduplex, as the pipeline's dG column (bundled ViennaRNA); arms that

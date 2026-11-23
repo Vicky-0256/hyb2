@@ -1,0 +1,23 @@
+{
+  "valid": [
+    [{}, {"K": 2, "C": 20, "fraction": 0.75}],
+    [{"K": null, "C": null, "fraction": null}, {"K": 2, "C": 20, "fraction": 0.75}],
+    [{"K": "\t+.2e+1 \r\n", "C": "12.e0\f", "fraction": "\u000b75E-2"}, {"K": 2, "C": 12, "fraction": 0.75}],
+    [{"K": 2.0, "C": 12, "fraction": 0}, {"K": 2, "C": 12, "fraction": 0}],
+    [{"K": "01.", "C": "+020", "fraction": "-.0"}, {"K": 1, "C": 20, "fraction": -0.0}]
+  ],
+  "invalid": {
+    "K": {
+      "message": "IRIS ensemble size K must be an integer from 1 to 3.",
+      "values": ["0x2", [2], {}, true, "", "2e", "1 2", "0b10", "2\u00a0", "２", 1.5]
+    },
+    "C": {
+      "message": "IRIS candidate count C must be an integer from 2 to 50.",
+      "values": ["1_2", [12], "0o14", " \t\r\n", "12.5", 1]
+    },
+    "fraction": {
+      "message": "IRIS support quantile must be at least 0 and below 1.",
+      "values": ["0.7_5", "0x0", [0], {}, false, "", " \t", ".75\ufeff", ".75\u2028", "1e400", "NaN", "-Infinity", "-.1", 1]
+    }
+  }
+}

@@ -57,6 +57,78 @@ class PoolFailureTests(unittest.TestCase):
 
 
 class PairBonusTests(unittest.TestCase):
+    def test_native_operations_never_ignore_an_explicit_removed_kernel(self):
+        from desktop.runtime.project import new_project
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "toy.hyb2proj"
+            new_project(project, "Synthetic")
+            for op in ("structure_run", "cplfold_predict", "cplfold_run"):
+                base_request = {"project_path": str(project), "operation": op, "sequence": "GGGAAACCC" * 3}
+                if op == "structure_run":
+                    base_request["source"] = "paste"
+                for key in ("support_kernel", "supportKernel"):
+                    for field in ({key: "rnacofold"}, {"parameters": {key: "rnacofold", "evidence": "none"}}):
+                        with self.subTest(op=op, field=field), self.assertRaisesRegex(ValueError, "kernel"):
+                            handle({**base_request, **field}, repo_root=ROOT)
+            self.assertFalse(any((project / "runs").iterdir()))
+
+    def test_arm_counts_score_candidates_and_build_the_exported_bonus(self):
+        from desktop.runtime import structure
+        from desktop.runtime.project import new_project
+
+        sequence = "AAGGGGAAAACCCCAAAAGGGGAA"
+        # Native cofold sets the cached module's host sequence ceiling. Keep
+        # the six native requests together, but do not change later web tests.
+        with mock.patch.dict(structure._MODULES, clear=True), tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "toy.hyb2proj"
+            new_project(project, "Synthetic hairpin")
+            (project / "toy.fa").write_text(">toy\n" + sequence + "\n")
+            # The longer arm can form its own hairpin. Three reads with the
+            # short G arm therefore contribute only in the RNAduplex mode.
+            blocks = [(3, 14, 19, 20)] * 3 + [(11, 14, 19, 22)] * 2
+            (project / "toy.hyb").write_text("".join(
+                f"r{k}\t{sequence[a-1:b]}{sequence[c-1:d]}\t.\ttoy\t1\t{b-a+1}\t{a}\t{b}\t.\ttoy\t{b-a+2}\t{b-a+d-c+2}\t{c}\t{d}\t.\n"
+                for k, (a, b, c, d) in enumerate(blocks)))
+            for kernel, estimator in (("duplex", "RNAduplex"), ("comrades", "RNAcofold")):
+                counts = {(11, 22): 2, (12, 21): 2, (13, 20): 2, (14, 19): 2}
+                if kernel == "duplex":
+                    counts.update({(11, 20): 3, (12, 19): 3})
+                for mode, shift, extra in (
+                    ("genome", 0, {}), ("windows", 2, {"windows": [{"start": 3, "end": 22}]}),
+                    ("cofold", 2, {"engine": "cplcofold", "regions": [{"gene_id": "toy", "start": 3, "end": 14},
+                                                                    {"gene_id": "toy", "start": 15, "end": 24}]})
+                ):
+                    with self.subTest(kernel=kernel, mode=mode):
+                        task = f"{kernel}-{mode}"
+                        spy = _Spy()
+                        with spy.patch:
+                            result = handle({"operation": "structure_run", "project_path": str(project), "task_id": task, "mode": mode,
+                                             "reference": "toy.fa", "hyb_paths": ["toy.hyb"], "gene_id": "toy", "workers": 1,
+                                             "parameters": {"support_kernel": kernel, "allow_pseudoknot": False}, **extra}, repo_root=ROOT)
+                        self.assertTrue(result["ok"], result)
+                        self.assertTrue(any(estimator + " read support" in s[1] for s in spy.seen), spy.seen)
+                        _register(project, task, result)
+                        loaded = structure.read_structure(project, task)
+                        evidence = loaded["meta"]["records"][0]["evidence"]
+                        self.assertIn(estimator, evidence["pairCounter"])
+                        record = loaded["records"][0]
+                        rows = Path(record["bonus_matrix_path"]).read_text().splitlines()
+                        self.assertIn(f"# support_kernel={kernel}", rows)
+                        matrix = {(int(i) + shift, int(j) + shift): float(b) for i, j, b in
+                                  (line.split("\t") for line in rows if line[:1].isdigit())}
+                        self.assertEqual(matrix.keys(), counts.keys())
+                        for pair, count in counts.items():
+                            self.assertAlmostEqual(matrix[pair], 3.6 * count / (count + evidence["saturatingQ"]), places=6)
+                        self.assertTrue(record["candidates"])
+                        for cand in record["candidates"]:
+                            local = structure._pairs(cand["structure"])
+                            expected = [counts.get((i + shift, j + shift), 0) for i, j, _ in local]
+                            self.assertEqual(cand["support_kernel"], kernel)
+                            self.assertEqual((cand["comradesScore"], cand["comradesPairCounts"]), (2 * sum(expected), expected))
+                            for (i, j, _), b in zip(local, cand["bonus"] or []):
+                                self.assertAlmostEqual(b, matrix.get((i + shift, j + shift), 0), places=6)
+
     def test_nested_windows_keep_their_own_bonus(self):
         from desktop.runtime.structure import _bonus_of, _pair_bonus
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,6 +207,56 @@ class _Spy:
 
 
 class ComradesEvidenceTests(ComradesFixture):
+    def test_only_scalar_score_caps_the_matched_endpoint_counts(self):
+        from desktop.runtime.comrades import score_structure_pairs
+
+        counts = {(1, 12): 1_100_000, (2, 11): 1_000_000, (3, 10): 7}
+        scored = score_structure_pairs([(12, 1), (2, 11), (3, 10), (4, 9)], counts)
+        self.assertEqual(scored, {"pair_support": [1_100_000, 1_000_000, 7, 0], "matched_pairs": 3,
+                                  "matched_support": 2_100_007, "score": 4_000_014})
+
+    def test_score_uses_observations_outside_the_constraint_shortlist(self):
+        from desktop.runtime import comrades
+
+        sequence = "G" * 8 + "C" * 1016
+
+        def observation(i, j):
+            return {"one": sequence[i-1:i+3], "two": sequence[j-1:j+3], "oneStart": i, "twoStart": j}
+
+        # 1,001 higher-count pairs share an endpoint; only (1, 20) is fitted.
+        arms = [observation(1, j) for j in range(20, 1021) for _ in range(3)]
+        arms += [observation(2, 19), observation(19, 2)]  # two raw observations outside the shortlist
+
+        def candidate(pairs, energy):
+            dot = ["."] * len(sequence)
+            for i, j in pairs:
+                dot[i-1], dot[j-1] = "(", ")"
+            return {"structure": "".join(dot), "pairs": [(i, j, "()", None) for i, j in pairs], "energy": energy}
+
+        # Both candidates obey the fitted constraint. Without the tail counts,
+        # the lower-energy ranked candidate would win. (3, 18) has no observations.
+        folder = mock.Mock(side_effect=[candidate([(1, 20), (3, 18)], -2),
+                                        candidate([(1, 20), (2, 19), (3, 18)], -1)])
+        with mock.patch.object(comrades, "cofold", return_value=[(1, 5)]), mock.patch.object(comrades, "_folder", return_value=folder):
+            record = comrades.fold(sequence, arms, comrades.parameters({"constraint_limit": 1, "random_folds": 1}))
+        self.assertEqual([call.args[2] for call in folder.call_args_list], [[(1, 20)], [(1, 20)]])
+        ev, ensemble = record["evidence"], record["randomisation"]
+        shortlisted = [(e["one"], e["two"]) for e in ev["selectedEvidencePairs"]]
+        self.assertEqual(shortlisted, [(1, j) for j in range(20, 1021)])
+        self.assertEqual(ev["scoredBasePairs"], 1002)
+        self.assertEqual(ev["scoringVersion"], "all-pairs-capped-v1")
+        scored = ev["scoredEvidencePairs"]
+        self.assertEqual(len(scored), 1002)
+        counts = {(p["one"], p["two"]): p["count"] for p in scored}
+        self.assertEqual(counts, {**dict.fromkeys(shortlisted, 3), (2, 19): 2})
+        for entry in ensemble["structures"]:
+            raw = [counts.get(pair, 0) for pair in comrades._dot_pairs(entry["dotBracket"])]
+            self.assertEqual(entry["matchedEvidencePairs"], sum(n > 0 for n in raw))
+            self.assertEqual(entry["comradesScore"], sum(2 * min(n, 1_000_000) for n in raw))
+        self.assertEqual([(c["run"], c["comradesScore"]) for c in ensemble["structures"]], [(1, 10), (0, 6)])
+        self.assertEqual((ensemble["selectedRun"], ev["matchedEvidencePairs"], ev["comradesScore"]), (1, 2, 10))
+        self.assertEqual(record["pairs"], [(1, 20, "()", 3), (2, 19, "()", 2), (3, 18, "()", 0)])
+
     def test_windows_read_the_hyb_once_with_progress(self):
         from desktop.runtime import comrades
         windows = [(1, 130), (100, 260), (1, 260)]

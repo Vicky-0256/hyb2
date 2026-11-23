@@ -9,6 +9,10 @@ import math
 import time
 from typing import Any, Dict, List, Sequence, Tuple
 
+from hyb2analysis.fold_text import checked_fold_text
+from hyb2analysis.engine_parameters import engine_parameters
+
+_SETTINGS = engine_parameters("desktop")["vienna"]
 # A whole 10.8 kb genome folds in about 5 minutes and 0.7 GB (MFE is cubic
 # in time, quadratic in memory); past this the fold is impractical.
 MAX_VIENNA_NT = 30_000
@@ -16,19 +20,22 @@ _REFERENCE_NT, _REFERENCE_SECONDS, _REFERENCE_MB = 10_807, 285.0, 670.0
 CANONICAL = {"AU", "UA", "CG", "GC", "GU", "UG"}
 
 
-def parameters(raw: Any) -> Dict[str, Any]:
-    """``{temperature, min_loop, hard_pairs}``, with the web's bounds."""
+def parameters(raw: Any, *, settings=_SETTINGS) -> Dict[str, Any]:
+    """``{temperature, min_loop, hard_pairs}``, using the selected engine's catalog."""
     raw = raw if isinstance(raw, dict) else {}
     unknown = set(raw) - {"temperature", "min_loop", "minimumLoop", "hard_pairs", "hardPairs"}
     if unknown:
         raise ValueError("unknown ViennaRNA parameter: " + ", ".join(sorted(unknown)))
-    temperature = raw.get("temperature", 37)
-    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(temperature) \
-            or not 0 <= temperature <= 100:
-        raise ValueError("Folding temperature must be a number from 0 to 100 °C.")
-    loop = raw.get("min_loop", raw.get("minimumLoop", 3))
-    if isinstance(loop, bool) or not isinstance(loop, int) or not 0 <= loop <= 12:
-        raise ValueError("Minimum hairpin loop must be a whole number from 0 to 12.")
+    ranges, defaults = settings["ranges"], settings["defaults"]
+    temperature = raw.get("temperature", defaults["temperature"])
+    lo, hi = ranges["temperature"]
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not lo <= temperature <= hi \
+            or not math.isfinite(temperature):
+        raise ValueError(f"Folding temperature must be a number from {lo} to {hi} °C.")
+    loop = raw.get("min_loop", raw.get("minimumLoop", defaults["minLoopSize"]))
+    lo, hi = ranges["minLoopSize"]
+    if isinstance(loop, bool) or not isinstance(loop, int) or not lo <= loop <= hi:
+        raise ValueError(f"Minimum hairpin loop must be a whole number from {lo} to {hi}.")
     pairs = raw.get("hard_pairs", raw.get("hardPairs", []))
     if not isinstance(pairs, list):
         raise ValueError("hard_pairs must be a list of [i, j] positions")
@@ -87,13 +94,11 @@ def _pairs(structure: str) -> List[Tuple[int, int]]:
 
 def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, int]] = ()) -> Dict[str, Any]:
     """One MFE fold; a record in the shape of structure.fold_one's."""
-    import RNA  # the bundled ViennaRNA
-
-    sequence = sequence.upper().replace("T", "U")
+    sequence = checked_fold_text(sequence)
     if not sequence:
         raise ValueError("there is no sequence to fold")
-    if set(sequence) - set("ACGU"):
-        raise ValueError("ViennaRNA folds A, C, G and U only; the sequence holds other letters")
+    import RNA  # the bundled ViennaRNA
+
     started = time.monotonic()
     md = RNA.md()
     md.temperature = params["temperature"]

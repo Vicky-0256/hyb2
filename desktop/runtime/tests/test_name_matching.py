@@ -2,6 +2,9 @@
 sequence names, manual matches kept on the reference and applied where the
 runtime looks an RNA up (desktop/runtime/name_matching.py)."""
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -93,6 +96,25 @@ class NameMatchingTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 self.call(operation="set_reference_match", reference_id=ref_id, **bad)
 
+    def test_explicitly_unmatched_without_an_automatic_match_is_persisted(self):
+        ref_id = self.reference["id"]
+        self.call(operation="set_reference_match", reference_id=ref_id, rna="geneC", sequence="")
+        self.assertEqual(load_manifest(self.project)["references"][0]["matches"], {"geneC": ""})
+        with self.assertRaisesRegex(ValueError, "geneC is marked as not matched"):
+            self.call(operation="read_reference_sequence", reference_id=ref_id, name="geneC")
+
+    def test_legacy_duplicate_ids_and_missing_match_targets_do_not_supply_lengths(self):
+        from desktop.runtime.name_matching import reference_lengths, resolve
+
+        ref = {"sequences": [{"name": "A", "length": 16}], "matches": {"A": "missing"}}
+        self.assertIsNone(resolve(ref, "A"))
+        self.assertNotIn("A", reference_lengths(ref))
+        ref["sequences"].extend([{"name": "A", "length": 21}, {"name": "C", "length": 37}])
+        ref["matches"] = {"B": "A"}
+        self.assertIsNone(resolve(ref, "A"))
+        self.assertIsNone(resolve(ref, "B"))
+        self.assertEqual(reference_lengths(ref), {"C": 37})
+
     def test_several_samples_name_list_in_web_order(self):
         from desktop.runtime.name_matching import reference_matching
         manifest = load_manifest(self.project)
@@ -122,6 +144,107 @@ class NameMatchingTest(unittest.TestCase):
         (self.project / "project.json").write_text(json.dumps(manifest))
         ref, = self.matching()["references"]
         self.assertEqual((ref["unsupported_entries"], ref["unsupported_characters"]), (1, ["-", "N", "R", "Y"]))
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js is required for the cross-host fixture")
+class CrossHostFastaTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.project = Path(tmp.name) / "names.hyb2proj"
+        new_project(self.project, "Names")
+
+    def reference(self, records, pipe_indent=""):
+        with tempfile.NamedTemporaryFile(dir=self.project / "inputs", suffix=".fa", mode="w",
+                                         encoding="utf-8", delete=False) as f:
+            f.writelines(f"{pipe_indent if '|' in header else ''}>{header}\n{seq}\n" for header, seq in records)
+        return Path(f.name)
+
+    def web(self, path, records, names, manual=None):
+        fixture = Path(__file__).with_name("web_fasta_reference.js")
+        payload = dict(text=path.read_text(encoding="utf-8"), records=records, names=list(names), manual=manual)
+        return json.loads(subprocess.check_output(["node", str(fixture)], text=True, input=json.dumps(payload)))
+
+    def compare(self, records, expected, native_manual=None, web_manual=None, *, path=None):
+        from desktop.runtime.batch_energy import arms, reference_sequences
+        from pipeline.hyb2pipe import inputs
+
+        path = path or self.reference(records)
+        ref = samples.add_reference(self.project, path)["reference"]
+        if inputs.needs_formatting(path):
+            lines = inputs.format_reference(inputs.iter_lines(path))
+            self.assertEqual([s["name"] for s in ref["sequences"]], [s[1:].split()[0] for s in lines if s.startswith(">")])
+        for rna, target in (native_manual or {}).items():
+            handle(dict(operation="set_reference_match", project_path=str(self.project), reference_id=ref["id"],
+                        rna=rna, sequence=target), repo_root=ROOT)
+        sequences = reference_sequences(path)
+        native = {}
+        for rna, record in expected.items():
+            read = dict(operation="read_reference_sequence", project_path=str(self.project), reference_id=ref["id"], name=rna)
+            end = str(len(record[1]) if record else 1)
+            cols = ["row", "ACGU", ".", rna, "1", end, "1", end, ".", rna, "1", end, "1", end, "."]
+            if record is None:
+                with self.assertRaisesRegex(ValueError, "marked as not matched|not in reference"):
+                    handle(read, repo_root=ROOT)
+                with self.assertRaisesRegex(ValueError, "marked as not matched|No mapped FASTA"):
+                    arms(cols, sequences, 500, "test", native_manual)
+                native[rna] = None
+            else:
+                preview = handle(read, repo_root=ROOT)
+                strand, _ = arms(cols, sequences, 500, "test", native_manual)
+                native[rna] = [preview["header"], preview["sequence"], strand]
+                self.assertEqual(native[rna], [record[0], record[1], record[1]])
+        for browser in self.web(path, records, expected, web_manual):
+            self.assertEqual(browser, native)
+
+    def test_reported_collision_and_one_hop_manual_choices_in_both_orders(self):
+        a, c = ("A|B", "A" * 12), ("A_B", "C" * 12)
+        for records in ([a, c], [c, a]):
+            with self.subTest(records=records):
+                self.compare(records, {"A_B": a, "A-B": c, "A|B": None})
+                # Desktop manual targets are effective IDs; Web targets the original record ID.
+                self.compare(records, {"A_B": c, "A-B": None, "other": a, "A|B": None},
+                             {"A_B": "A-B", "A-B": "", "other": "A_B", "A|B": ""},
+                             {"A_B": "A_B", "A-B": "", "other": "A|B", "A|B": ""})
+
+    def test_no_pipe_and_pipeline_substitutions(self):
+        a, c = ("A-B description", "A" * 12), ("A_B plain", "C" * 12)
+        self.compare([c, a], {"A_B": c, "A-B": a})
+        piped = ("Gene_x|protein_coding original description", "G" * 12)
+        self.compare([c, piped], {"A_B": None, "A-B": c, "Gene-x_mRNA": piped})
+
+    def test_standalone_cli_writes_the_records_used_for_preview_and_folding(self):
+        piped, plain = ("A|B", "GGGG"), ("A_B", "CCCC")
+        tmp = self.project.parent
+        sam = tmp / "empty.sam"  # take the SAM path: no mapper or folding installation needed
+        sam.write_text("@HD\tVN:1.6\tSO:unsorted\n")
+        env = dict(os.environ, PYTHONPATH=str(ROOT / "pipeline"))
+        for records in ([piped, plain], [plain, piped]):
+            for indent in ("", "\ufeff", "\t"):
+                with self.subTest(records=records, indent=indent):
+                    path = self.reference(records, pipe_indent=indent)
+                    out = tmp / path.stem  # fresh output per case; no checkpoint reuse
+                    cmd = [sys.executable, "-BS", "-m", "hyb2pipe", "-i", str(sam), "-d", str(path), "-o", str(out)]
+                    result = subprocess.run(cmd, cwd=tmp, env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    lines = [">A_B", "GGGG", ">A-B", "CCCC"] if records[0] == piped else [">A-B", "CCCC", ">A_B", "GGGG"]
+                    self.assertEqual(out.with_suffix(".reference.hyb.fasta").read_bytes(), os.linesep.join(lines).encode())
+                    self.compare(records, {"A_B": piped, "A-B": plain}, path=path)
+
+    def test_duplicate_effective_ids_fail_on_import_in_either_order(self):
+        from pipeline.hyb2pipe import inputs
+
+        a, c = ("A-B", "A" * 12), ("A_B", "C" * 12)
+        for records in ([a, c], [c, a]):
+            records = records + [("last description|trigger", "G" * 12)]
+            path = self.reference(records)
+            with self.assertRaisesRegex(ValueError, "duplicate FASTA ID.*A-B"):
+                samples.add_reference(self.project, path)
+            with self.assertRaisesRegex(ValueError, "duplicate FASTA ID.*A-B"):
+                inputs.needs_formatting(path)
+            for browser in self.web(path, records, ["last"]):
+                self.assertRegex(browser["error"], "Duplicate FASTA ID.*A-B")
+        self.assertFalse(load_manifest(self.project)["references"])
 
 
 if __name__ == "__main__":

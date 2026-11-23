@@ -1,6 +1,7 @@
-"""IRIS (engine "iris", desktop/runtime/iris.py): the web's IRIS adaptation
-(web/iris-core.js), checked against the web's own code where node exists."""
+"""The shared IRIS predictor, its source CLI and the desktop project adapter."""
+import gzip
 import json
+import os
 import random
 import shutil
 import subprocess
@@ -8,10 +9,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from desktop.runtime import iris
+# desktop.runtime first: it puts the cplfold and hyb2analysis import roots on the path
 from desktop.runtime.bridge import _dumps_line, handle
 from desktop.runtime.project import new_project
+from pipeline.hyb2analysis import iris
+from hyb2analysis.engine_parameters import engine_parameters
+from hyb2analysis.iris_parameters import IRIS_DEFAULTS, IRIS_K_RANGE_GRAMMAR, checked_iris_defaults
 
 ROOT = Path(__file__).resolve().parents[3]
 NODE = shutil.which("node")
@@ -46,7 +51,13 @@ class ParameterTests(unittest.TestCase):
     def test_defaults_and_messages(self):
         self.assertEqual(iris.parameters(None), {"K": 2, "C": 20, "fraction": 0.75, "kRange": [4, 5, 6, 7]})
         self.assertEqual(iris.parameters({"K": "3", "C": 3, "fraction": 0, "kRange": "7, 5,5  4"})["kRange"], [4, 5, 7])
-        self.assertEqual(iris.parameters({"kRange": ""})["kRange"], [4, 5, 6, 7])  # String(p.kRange || "4 5 6 7")
+        for value in (None, ""):
+            self.assertEqual(iris.parameters({"kRange": value})["kRange"], [4, 5, 6, 7])
+        for zero in (0, "0"):
+            self.assertEqual(iris.parameters({"fraction": zero})["fraction"], 0)
+        for blank in ("", " \t"):
+            with self.assertRaisesRegex(ValueError, "support quantile"):
+                iris.parameters({"fraction": blank})
         for raw, message in (({"K": 4}, "IRIS ensemble size K must be an integer from 1 to 3."),
                              ({"K": 1.5}, "IRIS ensemble size K must be an integer from 1 to 3."),
                              ({"K": 3, "C": 2}, "IRIS candidate count C must be an integer from 3 to 50."),
@@ -63,13 +74,115 @@ class ParameterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown IRIS parameter: beam"):
             iris.parameters({"beam": 20})
 
+    def test_k_range_contract(self):
+        cases = json.loads((ROOT / "desktop/app/views/testdata/iris_k_range.json").read_text(encoding="utf-8"))
+        for text, want in cases["validText"].items():
+            with self.subTest(text=text):
+                self.assertEqual(iris.parameters({"kRange": text})["kRange"], want)
+                self.assertEqual(checked_iris_defaults(dict(IRIS_DEFAULTS, kRange=text))["kRange"], text)
+        self.assertEqual(iris.parameters({"kRange": cases["validArray"]})["kRange"], cases["normalizedArray"])
+        for value in cases["invalidText"] + cases["invalidValues"]:
+            with self.subTest(task=value), self.assertRaisesRegex(ValueError, "IRIS stem length"):
+                iris.parameters({"kRange": value})
+        for value in ["", cases["validArray"], *cases["invalidText"]]:
+            with self.subTest(published=value), self.assertRaises(ValueError):
+                checked_iris_defaults(dict(IRIS_DEFAULTS, kRange=value))
+
+    def test_scalar_padding_follows_the_catalog(self):
+        # Remove only the outer padding in the source: neither host may trim independently.
+        with patch.dict(IRIS_K_RANGE_GRAMMAR, scalar=f"^{IRIS_K_RANGE_GRAMMAR['number']}$"):
+            self.assertEqual(iris.parameters({"K": "2"})["K"], 2)
+            with self.assertRaisesRegex(ValueError, "IRIS ensemble size K"):
+                iris.parameters({"K": " 2 "})
+            if NODE:
+                script = """globalThis.Hyb2EngineParameters = {iris: JSON.parse(process.argv[1])};
+const p = require(process.argv[2]).parameters, assert = require('node:assert/strict');
+assert.equal(p({K: '2'}).K, 2);
+assert.throws(() => p({K: ' 2 '}), /IRIS ensemble size K/);"""
+                subprocess.run([NODE, "-e", script, json.dumps(engine_parameters("web")["iris"]),
+                                str(ROOT / "web/iris-core.js")], check=True)
+
+    def test_core_defaults_reach_both_catalogs_and_omitted_parameters(self):
+        changed = {"K": 1, "C": 9, "fraction": 0.5, "kRange": "3 5"}
+        with patch.dict(IRIS_DEFAULTS, changed):
+            for host in ("web", "desktop"):
+                self.assertEqual(engine_parameters(host)["iris"]["defaults"], changed)
+            self.assertEqual(iris.parameters({}), dict(changed, kRange=[3, 5]))
+
+    def test_both_catalogs_reject_invalid_core_defaults(self):
+        invalid = [dict(IRIS_DEFAULTS, **edit) for edit in (
+            {"stemLength": 4}, {"K": True}, {"K": "2"}, {"K": 1.5}, {"K": 0}, {"K": 4},
+            {"C": False}, {"C": "20"}, {"C": 3.5}, {"C": 51}, {"K": 3, "C": 2},
+            {"fraction": False}, {"fraction": "0"}, {"fraction": -0.1}, {"fraction": 1}, {"fraction": float("nan")},
+            {"kRange": [2, 12]}, {"kRange": None}, {"kRange": " "}, {"kRange": "2,"}, {"kRange": "2 3.5"},
+            {"kRange": "1 2"}, {"kRange": "13"}, {"kRange": "1_2"},
+        )]
+        invalid.extend({k: v for k, v in IRIS_DEFAULTS.items() if k != missing} for missing in IRIS_DEFAULTS)
+        for defaults in invalid:
+            with patch.dict(IRIS_DEFAULTS, defaults, clear=True):
+                for host in ("web", "desktop"):
+                    with self.subTest(host=host, defaults=defaults), self.assertRaises(ValueError):
+                        engine_parameters(host)
+
+    def test_export_validates_defaults_before_writing_either_asset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Run the actual CLI, without site-packages or the folding runtime.
+            inputs = ["scripts/export-support-kernels.py", "scripts/fold-text.js", "scripts/cplfold-settings.js"]
+            inputs += [f"pipeline/hyb2analysis/{name}.py" for name in
+                       ("__init__", "reference", "support_kernels", "engine_parameters", "fold_text", "iris_parameters")]
+            inputs += [f"third_party/cplfold/cplfold/{name}.py" for name in
+                       ("__init__", "models", "sequence", "_internal/__init__", "_internal/model_tables", "_internal/cli_input")]
+            for name in inputs:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / name, target)
+            desktop = root / "desktop/app/views/support-kernels.json"
+            web = root / "web/support-kernels.js"
+            for asset in (desktop, web):
+                asset.parent.mkdir(parents=True)
+                asset.write_bytes(b"previous catalog")
+
+            config = root / "pipeline/hyb2analysis/iris_parameters.py"
+            source = config.read_text(encoding="utf-8")
+
+            def export(edit):
+                config.write_text(source + f"\nIRIS_DEFAULTS.update({edit!r})\n", encoding="utf-8")
+                return subprocess.run([sys.executable, "-IBS", "scripts/export-support-kernels.py"],
+                                      cwd=root, capture_output=True, text=True)
+
+            for edit in ({"K": 3, "C": 2}, {"fraction": 1}, {"kRange": "13"}, {"kRange": ""}, {"kRange": "4,,6"}):
+                with self.subTest(edit=edit):
+                    result = export(edit)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("iris", result.stderr.lower())
+                    self.assertEqual([desktop.read_bytes(), web.read_bytes()], [b"previous catalog"] * 2)
+
+            changed = {"K": 3, "C": 3, "fraction": 0, "kRange": "12, 2 12"}
+            result = export(changed)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            desktop_engines = json.loads(desktop.read_text(encoding="utf-8"))["engines"]
+            web_json = web.read_text(encoding="utf-8").split("globalThis.Hyb2EngineParameters = ", 1)[1]
+            web_engines, _ = json.JSONDecoder().raw_decode(web_json)
+            for engines in (desktop_engines, web_engines):
+                self.assertEqual(engines["iris"]["defaults"], changed)
+                self.assertEqual(engines["iris"]["parameterKeys"], ["K", "C", "fraction", "kRange"])
+            expected = dict(changed, kRange=[2, 12])
+            with patch.dict(IRIS_DEFAULTS, desktop_engines["iris"]["defaults"]):
+                self.assertEqual(iris.parameters({}), expected)
+            if NODE:
+                script = "require(process.argv[1]); console.log(JSON.stringify(require(process.argv[2]).parameters({})));"
+                browser = subprocess.run([NODE, "-e", script, str(web), str(ROOT / "web/iris-core.js")],
+                                         check=True, capture_output=True, text=True)
+                self.assertEqual(json.loads(browser.stdout), expected)
+
     def test_evidence_errors(self):
         sequence, arms = fixture()
         with self.assertRaisesRegex(ValueError, "IRIS requires HYB evidence within the selected reference region."):
             iris.support_matrix(len(sequence), [])
         with self.assertRaisesRegex(ValueError, "IRIS evidence coordinates are outside the prepared sequence."):
             iris.support_matrix(len(sequence), [{"oneStart": 1, "oneEnd": 10, "twoStart": 130, "twoEnd": 141}])
-        with self.assertRaisesRegex(ValueError, "IRIS requires 1–1,000 canonical RNA nucleotides."):
+        with self.assertRaisesRegex(ValueError, "unsupported symbols: N"):
             iris.run("ACGN", arms, {})
         with self.assertRaisesRegex(ValueError, "IRIS requires 1–1,000 canonical RNA nucleotides."):
             iris.run("A" * 1001, arms, {})
@@ -287,8 +400,71 @@ class IrisRunTests(unittest.TestCase):
         progress = json.loads((Path(result["run_dir"]) / "progress.json").read_text())
         self.assertEqual(progress["stage"], "done")
 
+    def test_standalone_source_cli_matches_desktop_window(self):
+        public = Path(self.tmp.name) / 'standalone'
+        for name in (ROOT / 'scripts/iris-cli-files.txt').read_text().splitlines():
+            source = (ROOT / name).resolve().relative_to(ROOT)
+            self.assertNotIn(source.parts[0], {'desktop', 'web', '.git'})
+            target = public / source
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / source, target)
+        data = self.project / 'data'
+        rows = (data / 'a.hyb').read_bytes().splitlines(keepends=True)
+        split = len(rows) // 2
+        (public / 'one.hyb').write_bytes(b''.join(rows[:split]))
+        (public / 'two.hyb.gz').write_bytes(gzip.compress(b''.join(rows[split:])))
+        ref = public / 'ref.fa.gz'
+        ref.write_bytes(gzip.compress((data / 'ref.fa').read_bytes()))
+        second = public / 'two.hyb.gz'
+        if os.name != 'nt':  # Windows can restrict symlink creation.
+            (public / 'two.hyb').symlink_to(second.name)
+            (public / 'ref.fa').symlink_to(ref.name)
+            second, ref = public / 'two.hyb', public / 'ref.fa'
+        args = [sys.executable, '-IB', 'bin/iris', '--reference', ref.name, '--hyb', 'one.hyb', '--hyb', second.name,
+                '--gene', GENE, '--start', '31', '--end', '170']
+        for flags, message in ((['--stem-lengths', '4', '1_2'], 'IRIS stem length'),
+                               (['--ensemble-size', '0_2'], 'IRIS ensemble size K'),
+                               (['--candidate-count', '1_2'], 'IRIS candidate count C'),
+                               (['--fraction', '0.7_5'], 'IRIS support quantile')):
+            with self.subTest(flags=flags):
+                bad = subprocess.run([*args, *flags], cwd=public, capture_output=True, text=True)
+                self.assertNotEqual(bad.returncode, 0)
+                self.assertIn(message, bad.stderr)
+        result = subprocess.run([*args, '--ensemble-size', '+2.0', '--candidate-count', '7e0', '--fraction', '.75',
+                                 '--stem-lengths', '7, 5,5', '4'], cwd=public, capture_output=True, text=True, check=True)
+        cli = json.loads(result.stdout)
+        self.assertEqual(cli['parameters'], {'K': 2, 'C': 7, 'fraction': 0.75, 'kRange': [4, 5, 7]})
+        native = self._run(task_id='cli-control', parameters={'C': 7, 'kRange': [4, 5, 7]})
+        self.assertTrue(native['ok'], native)
+        desktop = json.loads(Path(native['outputs']['meta']).read_text())['records'][0]['iris']
+        self.assertEqual(cli['region'], dict(gene=GENE, start=31, end=170, sequence=self.region))
+        self.assertEqual(cli['evidence']['inputRecords'], len(self.arms))
+        self.assertEqual(cli['ensemble'], desktop['ensemble'])
+        self.assertEqual(len(cli['candidates']), 2)
+        for candidate, member in zip(cli['candidates'], desktop['members'], strict=True):
+            for field in ('dotBracket', 'pairs', 'constraints', 'energy', 'weight'):
+                self.assertEqual(candidate[field], member[field])
+
+    def test_scalar_task_parameters(self):
+        cases = json.loads(Path(__file__).with_name("iris_scalars.json").read_text(encoding="utf-8"))
+        for i, (params, want) in enumerate(cases["valid"]):
+            with self.subTest(params=params):
+                result = self._run(task_id=f"scalar-{i}", parameters=params)
+                self.assertTrue(result["ok"], result)
+                meta = json.loads(Path(result["outputs"]["meta"]).read_text())
+                actual = meta["records"][0]["iris"]["parameters"]
+                self.assertEqual(actual, dict(want, kRange=[4, 5, 6, 7]))
+                self.assertEqual((type(actual["K"]), type(actual["C"]), type(actual["fraction"])), (int, int, float))
+        for field, case in cases["invalid"].items():
+            for i, value in enumerate([*case["values"], float("nan"), float("inf"), -float("inf")]):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(ValueError) as caught:
+                        self._run(task_id=f"bad-{field}-{i}", parameters={field: value})
+                    self.assertEqual(str(caught.exception), case["message"])
+
     def test_refusals(self):
         for extra, message in (({"parameters": {"K": 4}}, "IRIS ensemble size K"),
+                               ({"parameters": {"K": 2, "stemLength": 4, "beam": 20}}, "^unknown IRIS parameter: beam, stemLength$"),
                                ({"windows": [{"start": 1, "end": 40}, {"start": 50, "end": 100}]}, "one window"),
                                ({"source": "paste", "sequence": "ACGU" * 10, "mode": "genome", "windows": None},
                                 "Reference region")):

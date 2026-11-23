@@ -5,14 +5,13 @@ buildFastaMapping) for a project.
 Each analysed sample's RNA names (from its analysis index) are matched to the
 sequences of the sample's reference by exact name: the names
 ``samples.read_fasta_sequences`` reports, already rewritten as the hyb2
-pipeline rewrites ``|``-separated FASTA headers, so the web's loose ``|`` ->
-``_`` alias is built in.  A manual match is kept on the reference record as
+pipeline rewrites the whole FASTA if any header contains a pipe. Raw headers
+are not automatic aliases. A manual match is kept on the reference record as
 ``matches: {rna: sequence name}``; an empty name marks the RNA as not matched
 (the web's "Mark as not matched").  Unlike the web, which keeps its mapping
 for the browser tab only, the project keeps manual matches, and the runtime
-applies them where it looks an RNA up in its reference:
-``samples.read_reference_sequence`` (Structure, Region, exports) and the
-reference lengths of analysis queries (``reference_lengths``).
+applies them to Structure runs, sequence previews (``samples.read_reference_sequence``)
+and analysis lengths (``reference_lengths``). Evidence remains keyed by HYB RNA.
 """
 from __future__ import annotations
 
@@ -35,12 +34,28 @@ def manual_matches(reference: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return {rna: name for rna, name in matches.items() if isinstance(rna, str) and isinstance(name, str)}
 
 
+def fasta_id_for_rna(rna: str, matches: Dict[str, str]) -> str:
+    """The physical ID to look up in the file. A match is one hop, not an alias chain."""
+    if rna in matches and not matches[rna]:
+        raise ValueError(f"{rna} is marked as not matched in the reference")
+    return matches.get(rna, rna)
+
+
 def _sequence_names(reference: Dict[str, Any]) -> Dict[str, int]:
+    """Unique cached IDs. Legacy duplicate IDs have no usable length; the
+    project remains listable so the reference can be replaced. Import and
+    sequence readers report duplicates against the FASTA itself."""
     names: Dict[str, int] = {}
+    ambiguous = set()
     for sequence in reference.get("sequences") or []:
         if isinstance(sequence, dict) and isinstance(sequence.get("name"), str) \
                 and type(sequence.get("length")) is int and sequence["length"] >= 0:
-            names.setdefault(sequence["name"], sequence["length"])
+            name = sequence["name"]
+            if name in names:
+                ambiguous.add(name)
+            names[name] = sequence["length"]
+    for name in ambiguous:
+        del names[name]
     return names
 
 
@@ -48,9 +63,8 @@ def resolve(reference: Dict[str, Any], rna: str, *, _names: Optional[Dict[str, i
             _manual: Optional[Dict[str, str]] = None) -> Optional[str]:
     """The sequence name ``rna`` uses in ``reference``; ``None`` when not matched."""
     matches = manual_matches(reference) if _manual is None else _manual
-    if rna in matches:
-        return matches[rna] or None
-    return rna if rna in (_sequence_names(reference) if _names is None else _names) else None
+    name = matches.get(rna, rna)
+    return name if name and name in (_sequence_names(reference) if _names is None else _names) else None
 
 
 def reference_lengths(reference: Dict[str, Any]) -> Dict[str, int]:
@@ -65,7 +79,7 @@ def reference_lengths(reference: Dict[str, Any]) -> Dict[str, int]:
     for rna, name in manual_matches(reference).items():
         if name and name in sequences:
             lengths[rna] = sequences[name]
-        elif not name:
+        else:
             lengths.pop(rna, None)
     return lengths
 
@@ -176,7 +190,7 @@ def set_reference_match(root: Path, reference_id: str, rna: Any, sequence: Any) 
             raise ValueError("Enter an exact reference ID from the loaded FASTA file.")
         matches = manual_matches(reference)
         automatic = rna if rna in names else None
-        if sequence is None or (sequence or None) == automatic:
+        if sequence is None or sequence == automatic:
             matches.pop(rna, None)
         else:
             matches[rna] = sequence

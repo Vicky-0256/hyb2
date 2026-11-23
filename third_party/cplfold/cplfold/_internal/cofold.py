@@ -6,36 +6,11 @@ its ranking energy must not be presented as a validated binding free energy.
 """
 
 import math
-from numbers import Integral
-
-import numpy as np
 
 from ..models import DEFAULT_MODELS
-from ..sequence import add_strand_break, normalise_sequence
+from ..sequence import add_strand_break
 from .cofold_options import mode_options
-
-
-class CofoldInputError(ValueError):
-    """Expected input/range errors that CLI callers can report without traceback."""
-
-
-def _positive_integer(value, name, allow_zero=False):
-    minimum = 0 if allow_zero else 1
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
-        raise CofoldInputError(f"{name} must be an integer >= {minimum}")
-    return int(value)
-
-
-def _nonnegative(value, name):
-    if isinstance(value, (bool, np.bool_)):
-        raise CofoldInputError(f"{name} must be finite and nonnegative")
-    try:
-        value = float(value)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise CofoldInputError(f"{name} must be finite and nonnegative") from error
-    if not math.isfinite(value) or value < 0:
-        raise CofoldInputError(f"{name} must be finite and nonnegative")
-    return value
+from .validation import CofoldInputError, _validate_search_bonus, normalise, validate_fold_inputs
 
 
 def _finite(value, name):
@@ -49,26 +24,6 @@ def _finite(value, name):
     return value
 
 
-def _bonus_matrix(value, length):
-    if value is None:
-        return None
-    if np.iscomplexobj(value):
-        raise CofoldInputError("Bonus matrix must contain real finite values")
-    try:
-        matrix = np.asarray(value, dtype=np.float64)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise CofoldInputError("Bonus matrix must contain real finite values") from error
-    if matrix.ndim == 1 and matrix.size == length * length:
-        matrix = matrix.reshape(length, length)
-    if matrix.shape != (length, length):
-        raise CofoldInputError("Bonus matrix must be N by N, where N excludes the '&' separator")
-    if not np.isfinite(matrix).all():
-        raise CofoldInputError("Bonus matrix must contain only finite values")
-    if not np.allclose(matrix, matrix.T, rtol=0, atol=1e-7):
-        raise CofoldInputError("Bonus matrix must be symmetric")
-    return np.ascontiguousarray(matrix)
-
-
 def cofold(sequence_a, sequence_b, *, mode=None, **kwargs):
     """Fold two RNA molecules, retaining alpha reads guidance and beta ranking.
 
@@ -80,25 +35,11 @@ def cofold(sequence_a, sequence_b, *, mode=None, **kwargs):
     ``mode='pseudoknot'`` explicitly enables Phase 2. Omitting mode preserves
     the existing API defaults. A contradictory allow_pseudoknot is rejected.
     """
-    first, first_cut = normalise_sequence(sequence_a)
-    second, second_cut = normalise_sequence(sequence_b)
+    first, first_cut = normalise(sequence_a)
+    second, second_cut = normalise(sequence_b)
     if first_cut is not None or second_cut is not None or "cutpoint" in kwargs:
         raise CofoldInputError("cofold(a, b) takes two individual strands without a cutpoint")
     return two_phase_cofold(first + second, cutpoint=len(first), **mode_options(mode, kwargs))
-
-
-def _validate_search_bonus(matrix, alpha, impossible):
-    """Check the parser's existing numeric range before starting its search."""
-    if matrix is None or alpha == 0.0 or not np.any(matrix):
-        return
-    try:
-        with np.errstate(over="raise", invalid="raise"):
-            scaled = matrix * alpha
-            scaled *= 100.0
-    except FloatingPointError as error:
-        raise CofoldInputError("Scaled bonus exceeds the finite numeric range") from error
-    if np.max(np.abs(scaled)) >= impossible / (4.0 * max(1, len(matrix) // 2)):
-        raise CofoldInputError("Scaled bonus total exceeds the parser numeric range")
 
 
 def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
@@ -112,23 +53,15 @@ def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
     E_effective = E_merged + beta * E_phase1. It does not alter physical energy.
     ``max_phase2`` is effective here, unlike the legacy single-strand path.
     """
-    seq, cutpoint = normalise_sequence(seq, cutpoint)
-    if cutpoint is None:
-        raise CofoldInputError("Cofold requires two strands: provide '&' or cutpoint")
-    if not lv:
-        raise CofoldInputError("Cofold currently supports Vienna/Turner mode only (lv=True)")
-    if not isinstance(allow_pseudoknot, bool):
-        raise CofoldInputError("allow_pseudoknot must be a boolean")
-    energy_model = str(energy_model).upper()
-    if energy_model not in {"DP03", "DP09"}:
-        raise CofoldInputError("Cofold supports DP03 or DP09; CC/RE nicked pseudoloop models are not implemented")
-    beam_size = _positive_integer(beam_size, "beam_size", allow_zero=True)
-    max_phase1 = _positive_integer(max_phase1, "max_phase1")
-    max_phase2 = _positive_integer(max_phase2, "max_phase2")
-    energy_delta = _nonnegative(energy_delta, "energy_delta")
-    alpha = _nonnegative(alpha, "alpha")
-    beta = _nonnegative(beta, "beta")
-    bonus_matrix = _bonus_matrix(bonus_matrix, len(seq))
+    inputs = validate_fold_inputs(
+        seq, cutpoint, two_strands=True, lv=lv, beam_size=beam_size, energy_delta=energy_delta,
+        max_phase1=max_phase1, max_phase2=max_phase2, energy_model=energy_model,
+        bonus_matrix=bonus_matrix, alpha=alpha, beta=beta, allow_pseudoknot=allow_pseudoknot,
+    )
+    seq, cutpoint, energy_model = inputs["seq"], inputs["cutpoint"], inputs["energy_model"]
+    beam_size, max_phase1, max_phase2 = inputs["beam_size"], inputs["max_phase1"], inputs["max_phase2"]
+    energy_delta, alpha, beta = inputs["energy_delta"], inputs["alpha"], inputs["beta"]
+    bonus_matrix = inputs["bonus_matrix"]
 
     # Lazy imports keep the established single-strand startup/JIT path intact.
     from .cofold_parser import BeamCKYCofoldParser, _INF

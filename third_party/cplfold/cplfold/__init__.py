@@ -63,8 +63,9 @@ def fold(sequence, *, partner=None, pseudoknots=True, energy_model=None,
     Returns a list of :class:`Prediction`, best (lowest effective energy) first.
     ``energy_model=None`` selects the default model of the route
     (:data:`cplfold.models.DEFAULT_MODELS`). ``bonus`` is an optional N x N reads
-    matrix over the sequence without separators, scaled by ``alpha``. Invalid input
-    raises ``ValueError``. Never prints and never writes files.
+    matrix over the sequence without separators, scaled by ``alpha``. Both routes
+    normalise and validate input the same way; invalid input raises
+    ``CofoldInputError``, a ``ValueError``. Never prints and never writes files.
     """
     options = dict(beam_size=beam_size, energy_delta=energy_delta, max_phase1=max_phase1,
                    max_phase2=max_phase2, bonus_matrix=bonus, alpha=alpha, beta=beta,

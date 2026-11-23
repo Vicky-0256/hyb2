@@ -37,7 +37,8 @@ from typing import List, Dict, Tuple, Optional
 import numpy as np
 
 # Import CPLfold parser
-from .parser import BeamCKYParserHyper
+from .parser import BeamCKYParserHyper, VALUE_MIN_FLOAT
+from .validation import CofoldInputError, _validate_search_bonus, validate_fold_inputs
 
 from ..models import COFOLD_MODELS, DEFAULT_MODELS
 from .hotknots_energy import HotKnotsEnergy
@@ -461,9 +462,20 @@ def two_phase_pseudoknot_fold(seq: str,
             output_file=output_file, verbose=verbose, lv=lv, bonus_matrix=bonus_matrix,
             alpha=alpha, beta=beta, allow_pseudoknot=allow_pseudoknot,
         )
-
-    # Preprocess sequence
-    seq = seq.upper().replace('T', 'U')
+    # The same normalisation and checks as the cofold route (CofoldInputError, a ValueError).
+    inputs = validate_fold_inputs(
+        seq, None, two_strands=False, lv=lv, beam_size=beam_size, energy_delta=energy_delta,
+        max_phase1=max_phase1, max_phase2=max_phase2, energy_model=energy_model,
+        bonus_matrix=bonus_matrix, alpha=alpha, beta=beta, allow_pseudoknot=allow_pseudoknot,
+    )
+    seq, energy_model = inputs["seq"], inputs["energy_model"]
+    beam_size, max_phase1, max_phase2 = inputs["beam_size"], inputs["max_phase1"], inputs["max_phase2"]
+    energy_delta, alpha, beta = inputs["energy_delta"], inputs["alpha"], inputs["beta"]
+    bonus_matrix = inputs["bonus_matrix"]
+    # This parser narrows the bonus to float32 and keeps scores above VALUE_MIN_FLOAT.
+    if bonus_matrix is not None and np.max(np.abs(bonus_matrix)) > np.finfo(np.float32).max:
+        raise CofoldInputError("Bonus matrix exceeds the supported float32 range")
+    _validate_search_bonus(bonus_matrix, alpha, -VALUE_MIN_FLOAT)
 
     if verbose:
         print("Running CPLfold RNA structure prediction...")

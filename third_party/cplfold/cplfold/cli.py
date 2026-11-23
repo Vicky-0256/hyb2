@@ -14,7 +14,7 @@ from .models import COFOLD_MODELS, DEFAULT_MODELS
 from .sequence import normalise_sequence
 from ._internal.hotknots_energy import HotKnotsEnergy
 from ._internal.single import two_phase_pseudoknot_fold
-from ._internal.cofold import CofoldInputError
+from ._internal.validation import CofoldInputError
 
 
 def main(argv=None, *, cofold_entry=False):
@@ -137,7 +137,7 @@ Energy models:
         for name, value in (('alpha', alpha), ('beta', args.beta), ('delta', options['energy_delta'])):
             if not math.isfinite(value):
                 raise ValueError(f'--{name} must be finite')
-            if value < 0 and (cutpoint is not None or name == 'delta'):
+            if value < 0:
                 raise ValueError(f'--{name} must be nonnegative')
         if cutpoint is not None and args.model not in COFOLD_MODELS:
             raise ValueError('Cofold supports ' + ' or '.join(sorted(COFOLD_MODELS)))
@@ -148,7 +148,6 @@ Energy models:
     if args.bonus_matrix_file:
         bonus_matrix = load_bonus_matrix_file(args.bonus_matrix_file, len(sequence))
 
-    expected_input_errors = (CofoldInputError,) if cutpoint is not None else ()
     try:
         results = two_phase_pseudoknot_fold(
             seq=sequence, beam_size=args.beam, energy_model=args.model,
@@ -156,7 +155,7 @@ Energy models:
             verbose=not args.quiet, bonus_matrix=bonus_matrix,
             alpha=alpha, beta=args.beta, cutpoint=cutpoint, **options,
         )
-    except expected_input_errors as error:
+    except CofoldInputError as error:
         parser.error(str(error))
 
     # A completed fold is successful even when no pseudoknot candidate wins.

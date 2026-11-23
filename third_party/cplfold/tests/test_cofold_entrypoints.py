@@ -62,8 +62,9 @@ class CofoldEntryContractTests(unittest.TestCase):
                 self.assertEqual(values["beta"], 0.0)
                 self.assertTrue(values["allow_pseudoknot"])
                 self.assertEqual((values["max_phase1"], values["max_phase2"], values["energy_delta"]), (10, 5, 5.0))
-        negative = self.dispatch(["-s", "GAAAC", "--alpha", "-0.5", "--beta", "-0.3"])
-        self.assertEqual((negative["alpha"], negative["beta"]), (-0.5, -0.3))
+        # Single-strand input follows the cofold policy: negative alpha/beta are rejected.
+        self.reject(["-s", "GAAAC", "--alpha", "-0.5"], "--alpha must be nonnegative", dedicated=False)
+        self.reject(["-s", "GAAAC", "--beta", "-0.3"], "--beta must be nonnegative", dedicated=False)
 
     def test_distinct_model_defaults(self):
         if str(ROOT / "pipeline") not in sys.path:
@@ -160,10 +161,138 @@ class CofoldEntryContractTests(unittest.TestCase):
             with self.subTest(error=type(error).__name__), mock.patch.object(self.cli, "two_phase_pseudoknot_fold", side_effect=error):
                 with self.assertRaises(type(error)):
                     self.cli.main(["-s", "GG&CC"], cofold_entry=True)
-        with mock.patch.object(self.cli, "two_phase_pseudoknot_fold", side_effect=self.cofold.CofoldInputError("Scaled bonus exceeds range")), \
-             contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
-            self.cli.main(["-s", "GG&CC"], cofold_entry=True)
-        self.assertEqual(error.exception.code, 2)
+        for arguments, dedicated in ((["-s", "GG&CC"], True), (["-s", "GAAAC"], False)):
+            with self.subTest(arguments=arguments), \
+                 mock.patch.object(self.cli, "two_phase_pseudoknot_fold", side_effect=self.cofold.CofoldInputError("Scaled bonus exceeds range")), \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                self.cli.main(arguments, cofold_entry=dedicated)
+            self.assertEqual(error.exception.code, 2)
+
+    def test_single_strand_cli_reports_invalid_bonus_matrix_as_usage_error(self):
+        path = self.directory / "bonus.tsv"
+        path.write_text("1\t5\t2\n")
+        stderr = io.StringIO()
+        with mock.patch.object(self.api, "validate_fold_inputs", side_effect=self.cofold.CofoldInputError("Bonus matrix must be symmetric")), \
+             contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            self.cli.main(["-s", "GAAAC", "--bonus-matrix-file", str(path), "-q"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("Bonus matrix must be symmetric", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+
+class SharedInputValidationTests(unittest.TestCase):
+    """fold() applies one validator to both routes: same error type and message."""
+
+    SINGLE = "GGGAAACCC"
+    PAIR = ("GGGA", "AACCC")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.api, cls.cofold = load_modules()
+        cls.cplfold = importlib.import_module("cplfold")
+        cls.parser_module = importlib.import_module("cplfold._internal.parser")
+        cls.cofold_parser = importlib.import_module("cplfold._internal.cofold_parser")
+
+    def routes(self, **kwargs):
+        """Yield (route name, callable) for the single, '&' and partner routes."""
+        first, second = self.PAIR
+        yield "single", lambda: self.cplfold.fold(self.SINGLE, **kwargs)
+        yield "ampersand", lambda: self.cplfold.fold(first + "&" + second, **kwargs)
+        yield "partner", lambda: self.cplfold.fold(first, partner=second, **kwargs)
+
+    def assert_rejected_before_search(self, text, **kwargs):
+        messages = {}
+        with mock.patch.object(self.parser_module.BeamCKYParserHyper, "parse_subopt") as single, \
+             mock.patch.object(self.cofold_parser.BeamCKYCofoldParser, "parse_subopt") as pair:
+            for route, call in self.routes(**kwargs):
+                with self.subTest(route=route, **{key: repr(value)[:40] for key, value in kwargs.items()}):
+                    with self.assertRaises(self.cplfold.CofoldInputError) as raised:
+                        call()
+                    self.assertIsInstance(raised.exception, ValueError)
+                    self.assertIn(text, str(raised.exception))
+                    messages[route] = str(raised.exception)
+            single.assert_not_called()
+            pair.assert_not_called()
+        return messages
+
+    def test_public_error_is_the_shared_value_error(self):
+        validation = importlib.import_module("cplfold._internal.validation")
+        self.assertIs(self.cplfold.CofoldInputError, self.cofold.CofoldInputError)
+        self.assertIs(self.cplfold.CofoldInputError, validation.CofoldInputError)
+        self.assertTrue(issubclass(self.cplfold.CofoldInputError, ValueError))
+
+    def test_wrong_sized_bonus_matrix_is_rejected(self):
+        import numpy as np
+        for size in (3, 5, 10):
+            for alpha in (0.0, 1.0):
+                self.assert_rejected_before_search("Bonus matrix must be N by N", bonus=np.ones((size, size)), alpha=alpha)
+        self.assert_rejected_before_search("Bonus matrix must be N by N", bonus=np.ones(9 * 9 + 1), alpha=1.0)
+
+    def test_nonfinite_or_asymmetric_bonus_matrix_is_rejected(self):
+        import numpy as np
+        for value in (float("nan"), float("inf"), -float("inf")):
+            matrix = np.zeros((9, 9))
+            matrix[0, 8] = matrix[8, 0] = value
+            self.assert_rejected_before_search("finite values", bonus=matrix, alpha=1.0)
+        matrix = np.zeros((9, 9))
+        matrix[0, 8] = 1.0
+        self.assert_rejected_before_search("symmetric", bonus=matrix, alpha=1.0)
+
+    def test_sequence_type_and_emptiness_are_rejected(self):
+        fold = self.cplfold.fold
+        for text, calls in (
+            ("must be a string", (lambda: fold(123), lambda: fold(None), lambda: fold("GGGA", partner=123))),
+            ("must not be empty", (lambda: fold(""), lambda: fold("  \n"), lambda: fold("GGGA", partner=""))),
+            ("two nonempty RNA strands", (lambda: fold("GGGA&"),)),
+            ("only A, C, G and U", (lambda: fold("GGGXAACCC"), lambda: fold("GGXA&CC"))),
+        ):
+            for index, call in enumerate(calls):
+                with self.subTest(text=text, index=index), \
+                     self.assertRaisesRegex(self.cplfold.CofoldInputError, text):
+                    call()
+
+    def test_numeric_options_follow_the_cofold_policy(self):
+        for name, value, text in (
+            ("beam_size", -1, "beam_size must be an integer >= 0"),
+            ("beam_size", 2.5, "beam_size must be an integer >= 0"),
+            ("max_phase1", 0, "max_phase1 must be an integer >= 1"),
+            ("max_phase2", 0, "max_phase2 must be an integer >= 1"),
+            ("alpha", -1.0, "alpha must be finite and nonnegative"),
+            ("alpha", float("nan"), "alpha must be finite and nonnegative"),
+            ("beta", -1.0, "beta must be finite and nonnegative"),
+            ("energy_delta", -1.0, "energy_delta must be finite and nonnegative"),
+            ("energy_delta", float("inf"), "energy_delta must be finite and nonnegative"),
+            ("pseudoknots", "yes", "allow_pseudoknot must be a boolean"),
+        ):
+            messages = self.assert_rejected_before_search(text, **{name: value})
+            self.assertEqual(len(set(messages.values())), 1, messages)
+
+    def test_invalid_energy_model_is_rejected_even_without_pseudoknots(self):
+        for pseudoknots in (True, False):
+            messages = self.assert_rejected_before_search("supports", energy_model="XX", pseudoknots=pseudoknots)
+            self.assertEqual(messages["single"], "CPLfold supports CC06, CC09, DP03, DP09 or RE")
+            self.assertEqual(messages["partner"], "Cofold supports DP03 or DP09")
+
+    def test_single_strand_large_scaled_bonus_is_rejected(self):
+        import numpy as np
+        with mock.patch.object(self.parser_module.BeamCKYParserHyper, "parse_subopt") as search:
+            for bonus, alpha in ((1e17, 1.0), (1e39, 1e-40)):
+                with self.subTest(bonus=bonus), self.assertRaises(self.cplfold.CofoldInputError):
+                    self.cplfold.fold(self.SINGLE, bonus=np.full((9, 9), bonus), alpha=alpha)
+            search.assert_not_called()
+
+    def test_both_routes_normalise_case_whitespace_and_model_name(self):
+        with mock.patch.object(self.parser_module.BeamCKYParserHyper, "parse_subopt", return_value=[("(((...)))", 1.0)]) as search:
+            spaced = self.cplfold.fold(" ggg aaa\tccc\n", energy_model="dp09", pseudoknots=False)
+            plain = self.cplfold.fold("GGGAAACCC", energy_model="DP09", pseudoknots=False)
+        self.assertEqual([p.as_dict() for p in spaced], [p.as_dict() for p in plain])
+        self.assertEqual(search.call_args.args[0], "GGGAAACCC")
+        self.assertEqual(self.cplfold.fold("tttaaa", pseudoknots=False, beam_size=0, max_phase1=1)[0].structure, "......")
+        pair = self.cplfold.fold("ggg a & u ccc", energy_model="dp09", pseudoknots=False)
+        self.assertEqual(pair[0].structure, "((((&))))")
+        matrix = [[0.0] * 9 for _ in range(9)]
+        self.assertEqual(self.cplfold.fold(self.SINGLE, bonus=matrix, alpha=1)[0].as_dict(),
+                         self.cplfold.fold(self.SINGLE)[0].as_dict())
 
 
 class CofoldEntryProcessTests(unittest.TestCase):

@@ -1,4 +1,9 @@
-# Vendored snapshot
+# Origin
+
+Since 2026-11-23 CPLfold is developed as part of Hyb2, in this directory.
+It is no longer synced from the repository below by `git subtree pull`; make
+changes here. The import record below and the list of Hyb2-local changes
+remain for provenance.
 
 - Repository: `https://github.com/Vicky-0256/CPLfold.git`
 - Upstream branch: `feature/pseudoknot-free-mode`
@@ -12,7 +17,21 @@ other ignored local artifacts.
 
 ## Hyb2-local changes after import
 
-- The `CPLcofold` branch adds `CPLcofold.py`, a strand-aware Numba parser,
+- On 2026-11-23 the sources became the Python package `cplfold` (one import
+  name, relative imports, public API in `cplfold/__init__.py`, CLI in
+  `cplfold/cli.py`, project file `pyproject.toml`). Files were moved, not
+  edited: `CPLfold.py` is `cplfold/_internal/single.py` (its `main` is in
+  `cplfold/cli.py` and `load_bonus_matrix_file` in `cplfold/bonus.py`), `CPLcofold.py` is
+  `cplfold/_internal/cofold.py`, `CPLfold_parser.py` is
+  `cplfold/_internal/parser.py`, `CPLcofold_parser.py` is
+  `cplfold/_internal/cofold_parser.py`, `Utils/cofold_bonus.py` is
+  `cplfold/bonus.py`, `Utils/strand_layout.py` is `cplfold/sequence.py`, and
+  the other `Utils/` modules and `Utils/energy_params` are under
+  `cplfold/_internal/`. The model tables of `Utils/engine_parameters.py` are
+  `cplfold/models.py`; its Hyb2 task settings, `iris_parameters.py` and
+  `support_kernels.py` moved to Hyb2's `pipeline/hyb2analysis/`. Results are
+  unchanged. Entries below use the current paths.
+- The `CPLcofold` branch adds `cplfold/_internal/cofold.py`, a strand-aware Numba parser,
   lazy k-best candidate enumeration, a strand-bounded reads bonus builder,
   and cofold energies. Alpha guides both phases; beta retains the existing
   pseudoknot reranking formula. The cofold pseudoknot Turner/DP extension
@@ -24,13 +43,13 @@ other ignored local artifacts.
   selected two-record FASTA (`bin/cplfold --cofold --sequence-file ...`).
   Nucleotide and bonus coordinates omit `&`. The original single-strand
   parser and HotKnots evaluator are retained.
-- `CPLfold.py` treats a completed Phase-1-only prediction as CLI success.
-- `CPLfold.py` supports explicit pseudoknot-free prediction through
+- `cplfold/_internal/single.py` treats a completed Phase-1-only prediction as CLI success.
+- `cplfold/_internal/single.py` supports explicit pseudoknot-free prediction through
   `--no-pseudoknot` and `allow_pseudoknot=False`.
 - `tests/test_cli_exit_status.py` locks that exit-status behavior.
-- `CPLfold.py` accepts Hyb2's sparse bonus-matrix TSV export through
+- `cplfold/_internal/single.py` accepts Hyb2's sparse bonus-matrix TSV export through
   `--bonus-matrix-file` and applies it with `--alpha`.
-- `CPLfold_parser.py` beam pruning (`beam_prune_deterministic`) follows
+- `cplfold/_internal/parser.py` beam pruning (`beam_prune_deterministic`) follows
   LinearFold's `beam_prune`: with beam k, the threshold is the (k+1)-th best
   score (LinearFold calls `quickselect(scores, 0, size - 1, size - beam)`,
   whose last argument is a 1-based ascending rank) and only the candidates
@@ -64,15 +83,16 @@ other ignored local artifacts.
   under forced-pair constraints (`(`/`)` passed to `parse(seq, cons=...)`);
   Hyb2 itself passes only `.`/`?` masks, for which results are unchanged.
   These changes are not upstream yet.
-- `CPLfold_parser.py` compiles the outside pass with Numba. The new
+- `cplfold/_internal/parser.py` compiles the outside pass with Numba. The new
   `_outside_kernel` and its `_outside_*` scoring helpers are verbatim copies
   of `BeamCKYParserHyper._outside` and its methods, with `self` dropped and
   the list tables swapped for the existing int32 arrays; fastmath is off.
   Output is byte-identical to the original (kept as `_outside_python`;
   `CPLFOLD_PYTHON_OUTSIDE=1` selects it). 600 nt drops from 270 s to about
   1 s. This change is not upstream yet.
-- `LICENSE` is the author's GPL-2.0-or-later grant for CPLfold's own code
-  (2026-10-17), not in upstream commit `24bab52`. `LICENSES/`,
+- `LICENSE` is the author's GPL-3.0-or-later grant for CPLfold's own code
+  (2026-11-23), not in upstream commit `24bab52`. Copies already
+  distributed under the earlier GPL-2.0-or-later grant (2026-10-17) keep it. `LICENSES/`,
   `THIRD_PARTY_NOTICES.md`, and this file record provenance and the
   distribution constraints of the LinearFold- and HotKnots-derived parts.
 

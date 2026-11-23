@@ -1,19 +1,23 @@
 CPLfold
 Copyright (C) Ke Wang
 
-The CPLfold-authored code in this directory (CPLfold.py and CPLfold's own
-orchestration code, tests, examples and documentation) is free software: you
-can redistribute it and/or modify it under the terms of the GNU General Public
-License as published by the Free Software Foundation, either version 2 of the
-License, or (at your option) any later version.
+CPLfold is part of Hyb2. The CPLfold-authored code in this directory
+(cplfold/_internal/single.py and cplfold/_internal/cofold.py, formerly
+CPLfold.py and CPLcofold.py, and CPLfold's own orchestration code, tests, examples
+and documentation) is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
 
 It is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
 A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
-The full text of the GNU General Public License, version 2, is in
-LICENSES/GPL-2.0-or-later.txt.
+The full text of the GNU General Public License, version 3, is in
+LICENSES/GPL-3.0-or-later.txt.
 
 This grant covers only the CPLfold-authored code. The LinearFold-derived
 parser and the HotKnots-derived energy evaluator and parameters keep their
-own terms; see THIRD_PARTY_NOTICES.md.
+own terms; see THIRD_PARTY_NOTICES.md. The HotKnots-derived files are
+GPL-2.0-or-later (LICENSES/GPL-2.0-or-later.txt), which permits their
+distribution together with this code under GPL version 3.

@@ -557,6 +557,12 @@ func lockResume(project, from string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot claim resumed task: %w", err)
 	}
+	// The original's child may outlive an app that recorded it finished
+	// (shutdown gave up waiting): it still holds the owner lock.
+	if runDirLocked(runDir) {
+		_ = lock.Close()
+		return nil, fmt.Errorf("task %s is still running in another process", from)
+	}
 	// Also honor a live resume from an older application without resume.lock.
 	if err := resumingElsewhere(project, from); err != nil {
 		_ = lock.Close()
@@ -827,7 +833,9 @@ func (s *Scheduler) schedule() {
 
 // spawnChild starts cmd in its own process group with the granted claim in
 // HYB2_TASK_CPUS / HYB2_TASK_MEM_MB and stdout/stderr in the run directory.
-func spawnChild(cmd *exec.Cmd, runDir string, claim Budget) error {
+// The child inherits locks, so they stay held while it lives even if the
+// app dies first (see inheritLocks).
+func spawnChild(cmd *exec.Cmd, runDir string, claim Budget, locks ...*os.File) error {
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
@@ -848,6 +856,11 @@ func spawnChild(cmd *exec.Cmd, runDir string, claim Budget) error {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	newProcessGroup(cmd)
+	release, err := inheritLocks(cmd, locks...)
+	if err != nil {
+		return fmt.Errorf("cannot pass the task lock to the engine: %w", err)
+	}
+	defer release()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("engine unavailable: %w", err)
 	}
@@ -860,7 +873,7 @@ func (s *Scheduler) launch(id string, e *taskState, cmd *exec.Cmd) bool {
 	now := time.Now()
 	stamp := iso(now)
 	e.launchedAt = &stamp
-	if err := spawnChild(cmd, e.runDir, e.claim); err != nil {
+	if err := spawnChild(cmd, e.runDir, e.claim, e.lock, e.resumeLock); err != nil {
 		e.fail(id, err.Error(), now)
 		return false
 	}

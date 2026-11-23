@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 )
@@ -32,6 +33,19 @@ func tryFileLock(path string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// inheritLocks hands the task child its own copy of each lock (fd 3 on). A
+// flock belongs to the open file description, so it stays held until the
+// app and the child have both closed theirs: a child that outlives the app
+// keeps its run owned. The child need not know about the fds.
+func inheritLocks(cmd *exec.Cmd, locks ...*os.File) (release func(), err error) {
+	for _, lock := range locks {
+		if lock != nil {
+			cmd.ExtraFiles = append(cmd.ExtraFiles, lock)
+		}
+	}
+	return func() {}, nil
 }
 
 // runDirLocked reports whether a live owner (in any process) holds the run

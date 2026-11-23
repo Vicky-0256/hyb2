@@ -529,15 +529,83 @@ func TestAnotherInstanceDoesNotInterruptALiveTask(t *testing.T) {
 		t.Fatalf("second resume of %s: %v", failed.ID, err)
 	}
 
-	// The owner exits without saving a final status (a crash): the lock is
-	// gone with it, so the record is stale.
+	// The owner dies without saving a final status (a crash): its copy of the
+	// lock is gone and nothing records the child's exit, but the orphaned
+	// child still holds the lock, so the run stays live and unresumable.
 	first.mu.Lock()
-	first.tasks[id].unlock()
+	e := first.tasks[id]
+	child, exited := e.cmd, e.exited
+	e.cmd = nil // the monitor only reaps it now, as after ShutdownAll
+	e.unlock()
 	first.mu.Unlock()
+	if !runDirLocked(resumed.RunDir) {
+		t.Fatal("lock released while the orphaned child still runs")
+	}
+	if snap, err := second.Status(id, project); err != nil || snap["status"] != "running" {
+		t.Fatalf("orphaned child's task: %v %v", snap, err)
+	}
+	if _, err := second.ResumeRequest(id, project); err == nil {
+		t.Fatal("resumed a task whose orphaned child still runs")
+	}
+	if _, err := second.Prepare(request, project, &failed.ID); err == nil || !strings.Contains(err.Error(), "another window") {
+		t.Fatalf("second resume of %s beside an orphaned child: %v", failed.ID, err)
+	}
+	// The child exits: the last copy of the lock closes with it.
+	if err := killTree(child.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	<-exited
+	if runDirLocked(resumed.RunDir) {
+		t.Fatal("lock still held after the child exited")
+	}
 	if snap, err := second.Status(id, project); err != nil || snap["status"] != "interrupted" {
 		t.Fatalf("after owner exit %v %v", snap, err)
 	}
 	if _, err := second.ResumeRequest(id, project); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ShutdownAll may give up on a child and record it interrupted while it
+// still runs: the child keeps the owner lock, so no instance resumes it.
+func TestResumeRefusedWhileShutdownOrphanRuns(t *testing.T) {
+	first := testScheduler(t, 1, 1000)
+	project := tempProject(t)
+	original, err := first.Prepare(TaskStartRequest{ProjectPath: project, Kind: "sample_pipeline", SampleID: ptr("sampleA")}, project, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Submit(shell(original.RunDir, `exec sleep 30`), original, nil); err != nil {
+		t.Fatal(err)
+	}
+	first.mu.Lock()
+	e := first.tasks[original.ID]
+	child, exited := e.cmd, e.exited
+	e.cmd = nil // as ShutdownAll after its 5 s wait expired
+	e.status, e.err = "interrupted", ptr("the application exited while this task was running")
+	e.finished = time.Now()
+	e.finishedAt = ptr(iso(e.finished))
+	err = e.persist(original.ID)
+	first.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = killTree(child.Process.Pid); <-exited })
+
+	second := testScheduler(t, 1, 1000)
+	p := prepareResume(t, second, project, original.ID)
+	if _, err := second.Submit(shell(p.RunDir, "exit 0"), p, nil); err == nil || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("resumed beside the orphaned child: %v", err)
+	}
+	if err := killTree(child.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	<-exited
+	p = prepareResume(t, second, project, original.ID)
+	if _, err := second.Submit(shell(p.RunDir, "exit 0"), p, nil); err != nil {
+		t.Fatal(err)
+	}
+	if snap := waitFor(t, second, p.ID, project, finished); snap["status"] != "succeeded" {
+		t.Fatal(snap)
 	}
 }

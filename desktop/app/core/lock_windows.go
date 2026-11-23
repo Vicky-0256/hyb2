@@ -5,6 +5,7 @@ package core
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 )
@@ -37,6 +38,40 @@ func tryFileLock(path string) (*os.File, error) {
 		return nil, fmt.Errorf("lock %s is not a regular file", path)
 	}
 	return f, nil
+}
+
+// inheritLocks hands the task child an inherited handle to each lock's file
+// object. The no-sharing open lasts until every handle to that object is
+// closed, so a child that outlives the app keeps its run owned. Only the
+// duplicates are inheritable, and only for this spawn (Go passes an explicit
+// handle list); call release after Start. The child need not know about them.
+func inheritLocks(cmd *exec.Cmd, locks ...*os.File) (release func(), err error) {
+	self, err := syscall.GetCurrentProcess()
+	if err != nil {
+		return nil, err
+	}
+	var handles []syscall.Handle
+	release = func() {
+		for _, h := range handles {
+			_ = syscall.CloseHandle(h)
+		}
+	}
+	for _, lock := range locks {
+		if lock == nil {
+			continue
+		}
+		var h syscall.Handle
+		if err := syscall.DuplicateHandle(self, syscall.Handle(lock.Fd()), self, &h, 0, true, syscall.DUPLICATE_SAME_ACCESS); err != nil {
+			release()
+			return nil, err
+		}
+		handles = append(handles, h)
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.AdditionalInheritedHandles = append(cmd.SysProcAttr.AdditionalInheritedHandles, handles...)
+	return release, nil
 }
 
 // runDirLocked reports whether a live owner (in any process) holds the run

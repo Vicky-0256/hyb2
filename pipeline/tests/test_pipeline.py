@@ -63,8 +63,26 @@ class StageTest(unittest.TestCase):
         line = "r1\t0\tg\t100\t40\t10S20M300N30M5S\t*\t0\t0\tSEQ\tQUAL\tAS:i:50\tNM:i:0"
         out = list(sam.sam_filt([line]))
         self.assertEqual(len(out), 2)
-        self.assertEqual(out[0].split("\t")[5], "010S20M300S30S5S")
-        self.assertEqual(out[1].split("\t")[1:4], ["256", "g", "430"])
+        self.assertEqual(out[0].split("\t")[5], "10S20M35S")
+        self.assertEqual(out[1].split("\t")[1:6], ["256", "g", "420", "40", "30S30M5S"])
+
+    def test_sam_filt_splice_arms_with_indels_match_legacy_script(self):
+        # 3S10M2I8M1D5M | 200N | 25M4S on a 57-nt read: 24 reference and 28 read bases before the N
+        lines = ["@SQ\tSN:g\tLN:5000"]
+        for flag in ("0", "16"):
+            lines.append("r%s\t%s\tg\t1000\t40\t3S10M2I8M1D5M200N25M4S\t*\t0\t0\t%s\t*\tAS:i:40\tNM:i:3"
+                         % (flag, flag, "C" * 57))
+        out = list(sam.sam_filt(lines))
+        rows = [line.split("\t") for line in out[1:]]
+        self.assertEqual([row[3:6] for row in rows[:2]],
+                         [["1000", "40", "3S10M2I8M1D5M29S"], ["1224", "40", "28S25M4S"]])
+        blast_rows = [sam.blast_row(row, 5000).split("\t")[6:10] for row in rows]
+        self.assertEqual(blast_rows, [["4", "28", "1000", "1023"], ["29", "53", "1224", "1248"],
+                                      ["30", "54", "1023", "1000"], ["5", "29", "1248", "1224"]])
+        if sys.platform != "win32":
+            legacy = subprocess.run([str(ROOT / "bin/sam_filt")], input="\n".join(lines) + "\n",
+                                    capture_output=True, text=True, check=True).stdout
+            self.assertEqual(legacy.splitlines(), out)
 
     def test_sam_filt_drops_double_splice_and_normalises_ids(self):
         self.assertEqual(list(sam.sam_filt(["r\t0\tg\t1\t1\t5M1N5M1N5M\t*"])), [])
@@ -575,6 +593,46 @@ class CliTest(unittest.TestCase):
             reads.write_text("\n".join(out) + "\n")
             result = run(reads, ROOT / "data/Zika_18S_formatted.fasta", Path(tmp) / "fq", Options(threads=2))
             self.assertGreater(result.counts["hybrids"], 0)
+            # the same output with another reference maps against that reference, not the old index
+            renamed = Path(tmp) / "renamed.fasta"
+            names = {"Zika_virusRNA": "geneC_mRNA", "18S_rRNA": "geneD_rRNA", "PAX6_mRNA": "geneE_mRNA"}
+            text = (ROOT / "data/Zika_18S_formatted.fasta").read_text()
+            for old, new in names.items():
+                text = text.replace(">" + old, ">" + new)
+            renamed.write_text(text)
+            again = run(reads, renamed, Path(tmp) / "fq", Options(threads=2))
+            self.assertGreater(again.counts["hybrids"], 0)
+            hyb = again.hyb.read_text()
+            self.assertIn("geneD_rRNA", hyb)
+            self.assertEqual([old for old in names if old in hyb], [])
+
+    def test_bowtie2_index_is_tied_to_the_reference_and_never_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+
+            def build(args, **kwargs):
+                calls.append(args)
+                Path(args[2] + ".1.bt2").write_text(Path(args[1]).read_text())
+                if len(calls) == 3:
+                    raise subprocess.CalledProcessError(1, args)
+
+            ref, prefix = Path(tmp) / "ref.fa", Path(tmp) / "out.index"
+            with mock.patch.object(inputs, "_tool", return_value="bowtie2-build"), \
+                    mock.patch.object(inputs.subprocess, "run", side_effect=build):
+                ref.write_text(">a\nACGU\n")
+                inputs.bowtie2_index(ref, prefix)
+                inputs.bowtie2_index(ref, prefix)
+                self.assertEqual(len(calls), 1)  # same reference: reused
+                ref.write_text(">c\nGGCC\n")
+                inputs.bowtie2_index(ref, prefix)
+                self.assertEqual(len(calls), 2)  # other reference: rebuilt
+                self.assertEqual(Path(str(prefix) + ".1.bt2").read_text(), ">c\nGGCC\n")
+                ref.write_text(">d\nUUUU\n")
+                with self.assertRaises(subprocess.CalledProcessError):
+                    inputs.bowtie2_index(ref, prefix)  # interrupted build
+                inputs.bowtie2_index(ref, prefix)
+                self.assertEqual(len(calls), 4)  # the interrupted build is not reused
+                self.assertEqual(Path(str(prefix) + ".1.bt2").read_text(), ">d\nUUUU\n")
 
 
 if __name__ == "__main__":

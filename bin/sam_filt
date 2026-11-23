@@ -9,10 +9,15 @@ awk '{n=split($6,a,"N"); if (n<3) print $0}' |
 #splitting lines with CIGAR strings containing splicing into fragments to be assembled into 2 lines, compatible with the hyb pipeline
 #2nd field, SAM flag, of split lines adjusted for primary/secondary alignment
 #12th to last fields, additional info, TAGs: NM and AS required for sam2hyb
-	awk -v 'cap=[A-Z]' 'OFS="\t" {if ($6~/N/) n=split($6,a,"N"); m=split(a[n-1],b,cap); o=split(a[n],c,"M");
+	awk -v 'cap=[A-Z]' 'OFS="\t" {if ($1!~/^@/ && $6~/N/) {cig=$6; pre=""; post=""; lh=""; th=""; rpre=0; rpost=0; fpre=0; nlen=0; seen=0;
+		while (match(cig, /^[0-9]+[A-Z=]/)) {tok=substr(cig,1,RLENGTH); len=substr(tok,1,RLENGTH-1)+0; op=substr(tok,RLENGTH,1); cig=substr(cig,RLENGTH+1);
+			if (op=="N") {seen=1; nlen=len} else if (op=="H") {if (seen) th=th tok; else lh=lh tok}
+			else if (!seen) {pre=pre tok; if (op~/[MIS=X]/) rpre+=len; if (op~/[MD=X]/) fpre+=len}
+			else {post=post tok; if (op~/[MIS=X]/) rpost+=len}}
+		c1=lh pre (rpost ? rpost "S" : "") th; c2=lh (rpre ? rpre "S" : "") post th; p2=$4+fpre+nlen}
 	if ($1~/^@/ || $6!~/N/) print $0; 
-	if ($1!~/^@/ && $2<=16 && $2!=4 && $0~/NM:i:/ && $0~/AS:i:/ && $6~/N/) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"0b[m-2]"S"b[m-1]"M"b[m]"S"c[o-1]"S"c[o]"\t"$7"\t"$8"\t"$9"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17"\t"$18"\t"$19"\t"$20"\n"$1"\t"$2+256"\t"$3"\t"$4+b[m]+b[m-1]+b[m-2]"\t"$5"\t"0b[m-2]"S"b[m-1]"S"c[o-1]"M"c[o]"\t"$7"\t"$8"\t"$9"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17"\t"$18"\t"$19"\t"$20; 
-	if ($1!~/^@/ && $2>=256 && $2<=272 && $0~/NM:i:/ && $0~/AS:i:/ && $6~/N/) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"0b[m-2]"S"b[m-1]"M"b[m]"S"c[o-1]"S"c[o]"\t"$7"\t"$8"\t"$9"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17"\t"$18"\t"$19"\t"$20"\n"$1"\t"$2-256"\t"$3"\t"$4+b[m]+b[m-1]+b[m-2]"\t"$5"\t"0b[m-2]"S"b[m-1]"S"c[o-1]"M"c[o]"\t"$7"\t"$8"\t"$9"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17"\t"$18"\t"$19"\t"$20}' | 
+	if ($1!~/^@/ && $2<=16 && $2!=4 && $0~/NM:i:/ && $0~/AS:i:/ && $6~/N/) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"c1"\t"$7"\t"$8"\t"$9"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17"\t"$18"\t"$19"\t"$20"\n"$1"\t"$2+256"\t"$3"\t"p2"\t"$5"\t"c2"\t"$7"\t"$8"\t"$9"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17"\t"$18"\t"$19"\t"$20;
+	if ($1!~/^@/ && $2>=256 && $2<=272 && $0~/NM:i:/ && $0~/AS:i:/ && $6~/N/) print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"c1"\t"$7"\t"$8"\t"$9"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17"\t"$18"\t"$19"\t"$20"\n"$1"\t"$2-256"\t"$3"\t"p2"\t"$5"\t"c2"\t"$7"\t"$8"\t"$9"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17"\t"$18"\t"$19"\t"$20}' |
 #modify READ ID for compatibility
 	awk '{if ($1!~/^@/) n=split($1,a,":"); 
 	if ($1~/^@/ || $1!~/:/) print $1"\t"$0; 

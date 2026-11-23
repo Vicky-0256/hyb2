@@ -11,8 +11,6 @@ from . import awk
 def sam_filt(lines: Iterable[str]) -> Iterator[str]:
     """Port of ``bin/sam_filt``: drop multi-splice reads, split single-splice
     reads into two alignments, and normalise read IDs."""
-    a: List[str] = []
-    n = 0
     id_parts: List[str] = []
     id_n = 0
     for raw in lines:
@@ -24,17 +22,6 @@ def sam_filt(lines: Iterable[str]) -> Iterator[str]:
         # awk 2: splice splitting
         out: List[str] = []
         cigar = awk.field(f, 6)
-        if "N" in cigar:
-            a = awk.split(cigar, "N")
-            n = len(a)
-        b = awk.split(a[n - 2] if n >= 2 else "", "[A-Z]")
-        m = len(b)
-        c = awk.split(a[n - 1] if n >= 1 else "", "M")
-        o = len(c)
-
-        def at(arr: List[str], i: int) -> str:
-            return arr[i - 1] if 1 <= i <= len(arr) else ""
-
         first = f[0] if f else ""
         if first.startswith("@") or "N" not in cigar:
             out.append(line)
@@ -42,9 +29,8 @@ def sam_filt(lines: Iterable[str]) -> Iterator[str]:
             flag = awk.field(f, 2)
             head = [awk.field(f, i) for i in range(1, 6)]
             tail = [awk.field(f, i) for i in range(7, 21)]
-            cig1 = "0" + at(b, m - 2) + "S" + at(b, m - 1) + "M" + at(b, m) + "S" + at(c, o - 1) + "S" + at(c, o)
-            cig2 = "0" + at(b, m - 2) + "S" + at(b, m - 1) + "S" + at(c, o - 1) + "M" + at(c, o)
-            pos2 = awk.num_str(awk.to_num(awk.field(f, 4)) + awk.to_num(at(b, m)) + awk.to_num(at(b, m - 1)) + awk.to_num(at(b, m - 2)))
+            cig1, cig2, ref_before, intron = _split_splice(cigar)
+            pos2 = awk.num_str(awk.to_num(awk.field(f, 4)) + ref_before + intron)
             flag_value = awk.to_num(flag)
             second_flag = None
             if awk.compare_const(flag, 16) <= 0 and awk.compare_const(flag, 4) != 0:
@@ -73,6 +59,47 @@ def sam_filt(lines: Iterable[str]) -> Iterator[str]:
                 if len(cols) > 1:
                     value = "\t".join([cols[0]] + cols[2:25])
                 yield _fix_read_id(value)
+
+
+_SPLICE_OP = re.compile(r"[0-9]+[A-Z=]")
+
+
+def _split_splice(cigar: str):
+    """The two arms of a CIGAR with one ``N``: ``(cigar1, cigar2, reference
+    bases before the N, N length)``.  Each arm soft-clips the other arm's read
+    bases, so both span the whole read and their clips give each arm's read
+    offset; hard clips stay outermost.  Same as ``bin/sam_filt``."""
+    pre = post = lead_h = trail_h = ""
+    read_pre = read_post = ref_pre = intron = 0
+    seen = False
+    rest = cigar
+    while True:
+        match = _SPLICE_OP.match(rest)
+        if not match:
+            break
+        token = match.group()
+        count, op = int(token[:-1]), token[-1]
+        rest = rest[len(token):]
+        if op == "N":
+            seen, intron = True, count
+        elif op == "H":
+            if seen:
+                trail_h += token
+            else:
+                lead_h += token
+        elif not seen:
+            pre += token
+            if op in "MIS=X":
+                read_pre += count
+            if op in "MD=X":
+                ref_pre += count
+        else:
+            post += token
+            if op in "MIS=X":
+                read_post += count
+    cig1 = lead_h + pre + ("%dS" % read_post if read_post else "") + trail_h
+    cig2 = lead_h + ("%dS" % read_pre if read_pre else "") + post + trail_h
+    return cig1, cig2, ref_pre, intron
 
 
 _ID_SEP = re.compile(r"^([^\s]*)[/.]([^\s]*)")

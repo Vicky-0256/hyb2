@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import heapq
 import io
 import os
@@ -154,14 +155,45 @@ def _tool(*names: str) -> Optional[str]:
     return None
 
 
+def _index_files(prefix: Path) -> List[Path]:
+    """The Bowtie2 index files ``<prefix>.*.bt2`` / ``.bt2l``."""
+    if not prefix.parent.is_dir():
+        return []
+    start = prefix.name + "."
+    return [path for path in prefix.parent.iterdir()
+            if path.name.startswith(start) and path.name.endswith((".bt2", ".bt2l"))
+            and path.name[len(start):].split(".")[0] in ("1", "2", "3", "4", "rev")]
+
+
 def bowtie2_index(fasta: Path, prefix: Path, log: Optional[TextIO] = None) -> Path:
-    if Path(str(prefix) + ".1.bt2").exists() or Path(str(prefix) + ".1.bt2l").exists():
+    """Build (or reuse) the index at ``prefix``.  ``<prefix>.sha1`` records the
+    SHA-1 of the FASTA it was built from and is written only after a complete
+    build, so an index of another reference or an interrupted build is rebuilt."""
+    digest = hashlib.sha1()
+    with open(fasta, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    stamp = Path(str(prefix) + ".sha1")
+    try:
+        built_from = stamp.read_text(encoding="utf-8").strip()
+    except OSError:
+        built_from = None
+    if built_from == digest.hexdigest() and _index_files(prefix):
         return prefix
     # bowtie2-build is a Python wrapper; the -s binary works without it (Windows).
     exe = _tool("bowtie2-build-s", "bowtie2-build")
     if not exe:
         raise MappingUnavailable("bowtie2-build was not found; install Bowtie2 or provide a SAM file")
-    subprocess.run([exe, str(fasta), str(prefix)], check=True, stdout=log or subprocess.DEVNULL, stderr=log or subprocess.DEVNULL)
+    stamp.unlink(missing_ok=True)
+    part = Path(str(prefix) + ".part")
+    for path in _index_files(part):
+        path.unlink()
+    subprocess.run([exe, str(fasta), str(part)], check=True, stdout=log or subprocess.DEVNULL, stderr=log or subprocess.DEVNULL)
+    for path in _index_files(prefix):
+        path.unlink()
+    for path in _index_files(part):
+        os.replace(path, path.with_name(prefix.name + path.name[len(part.name):]))
+    stamp.write_text(digest.hexdigest() + "\n", encoding="utf-8")
     return prefix
 
 

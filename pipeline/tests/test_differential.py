@@ -42,6 +42,7 @@ import math
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -206,7 +207,9 @@ class DeseqMatchesR(unittest.TestCase):
 
     def test_local_fit_with_four_points(self):
         ids, counts, one, expected = _load("local_four_points")
-        res = deseq.deseq_two_conditions(counts, one)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            res = deseq.deseq_two_conditions(counts, one)
         self.assertEqual(res["fitType"], "local")
         r = np.array([expected[i] for i in ids])  # baseMean lfc padj dispFit dispersion
         np.testing.assert_allclose(res["dispFit"], r[:, 3], rtol=1e-9)
@@ -217,8 +220,10 @@ class DeseqMatchesR(unittest.TestCase):
         with open(GOLDEN / "local_vertex_space.counts.tsv") as handle:
             handle.readline()
             counts = np.array([[int(v) for v in line.split("\t")[1:]] for line in handle])
-        with self.assertRaisesRegex(ValueError, "out of vertex space"):
-            deseq.deseq_two_conditions(counts, [True, True, True, False, False, False])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            with self.assertRaisesRegex(ValueError, "out of vertex space"):
+                deseq.deseq_two_conditions(counts, [True, True, True, False, False, False])
 
 
 class Helpers(unittest.TestCase):

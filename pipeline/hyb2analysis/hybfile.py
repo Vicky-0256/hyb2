@@ -17,7 +17,9 @@ positive integer in column 16 gives the count.
 from __future__ import annotations
 
 import functools
+import gzip
 import re
+from pathlib import Path
 from typing import BinaryIO, Iterator, NamedTuple, Optional
 
 _DIGITS = re.compile(rb"^\d+$")
@@ -36,6 +38,12 @@ def lines(handle: BinaryIO, limit: int = MAX_LINE) -> Iterator[bytes]:
         if len(line) > limit:
             raise ValueError("line %d is longer than %d bytes: not a .hyb file" % (number, limit))
         yield line
+
+
+def file_lines(path: Path) -> Iterator[bytes]:
+    opener = gzip.open if path.name.endswith(".gz") else open
+    with opener(path, "rb") as handle:
+        yield from lines(handle)
 
 
 class Record(NamedTuple):
@@ -154,6 +162,8 @@ def _type_name(value: bytes) -> bytes:
 def parse(line: bytes) -> Optional[Record]:
     """Parse one line; ``None`` for blank/comment lines, ``ValueError`` if invalid."""
     line = line.rstrip(b"\r\n")
+    if line.startswith(b"\xef\xbb\xbf"):
+        line = line[3:]  # TextDecoder in the web reader strips a leading UTF-8 BOM
     if not line.strip() or line.lstrip().startswith(b"#"):
         return None
     cols = line.split(b"\t")

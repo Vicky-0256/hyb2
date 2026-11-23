@@ -79,7 +79,9 @@ def _number(value: bytes):
 
 def _fast_parse(cols: List[bytes]):
     """The common 18-column sam2hyb layout; ``None`` sends the line to hybfile.parse."""
-    if len(cols) != 18 or cols[15] or not (cols[6].isdigit() and cols[7].isdigit() and cols[12].isdigit() and cols[13].isdigit()):
+    if len(cols) != 18 or cols[15] or cols[0].lstrip().startswith((b"#", b"\xef\xbb\xbf")):
+        return None
+    if not (cols[6].isdigit() and cols[7].isdigit() and cols[12].isdigit() and cols[13].isdigit()):
         return None
     g1, g2 = cols[3], cols[9]
     if not g1 or not g2 or g1 != g1.strip() or g2 != g2.strip():

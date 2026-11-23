@@ -550,7 +550,10 @@ def lowess(x: Sequence[float], y: Sequence[float], f: float = 2 / 3, nsteps: int
             break
         c9, c1 = 0.999 * cmad, 0.001 * cmad
         r = np.abs(res)
-        rw[:] = np.where(r <= c1, 1.0, np.where(r <= c9, (1.0 - (r / cmad) ** 2) ** 2, 0.0))
+        rw[:] = 0.0
+        rw[r <= c1] = 1.0
+        middle = (r > c1) & (r <= c9)
+        rw[middle] = (1.0 - (r[middle] / cmad) ** 2) ** 2
         it += 1
     return ys
 
@@ -913,6 +916,8 @@ def _parametric_fit(means: np.ndarray, disps: np.ndarray):
             sw = w.sum(); swx = (w * xv).sum(); swxx = (w * xv * xv).sum()
             swy = (w * yv).sum(); swxy = (w * xv * yv).sum()
             det = sw * swxx - swx * swx
+            if not np.isfinite(det) or det == 0.0:
+                raise ValueError("parametric dispersion fit failed")
             new = np.array([(swxx * swy - swx * swxy) / det, (sw * swxy - swx * swy) / det])
             dev = deviance(new)
             halvings = 0

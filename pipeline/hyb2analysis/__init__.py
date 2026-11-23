@@ -9,11 +9,18 @@
 
 Requires numpy; the import of ``hyb2pipe.awk`` expects ``pipeline/`` on sys.path.
 """
-from . import coverage, index, query
-from .coverage import write_contact, write_for_table
-from .index import build
-from .query import compare_bins, contact_bins, hybrids, summary, top_interactions
+from importlib import import_module
 
-__all__ = ["coverage", "index", "query", "write_contact", "write_for_table", "build",
-           "summary", "contact_bins", "compare_bins", "hybrids", "top_interactions"]
+_FUNCTIONS = {"write_contact": "coverage", "write_for_table": "coverage", "build": "index",
+              **dict.fromkeys(("summary", "contact_bins", "compare_bins", "hybrids", "top_interactions"), "query")}
+__all__ = ["coverage", "index", "query", *_FUNCTIONS]
 __version__ = "0.1.0"
+
+
+def __getattr__(name):
+    # Preserve the analysis API without making the IRIS-only CLI ship the
+    # unrelated contact-map and SQLite backends just to import its HYB reader.
+    if name not in __all__:
+        raise AttributeError(name)
+    module = import_module("." + _FUNCTIONS.get(name, name), __name__)
+    return getattr(module, name) if name in _FUNCTIONS else module

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "third_party/cplfold"))
@@ -105,10 +106,10 @@ def main(cofold_entry: bool = False) -> None:
         "import sys; sys.path[0] = sys.argv.pop(1); from cplfold.cli import main; "
         f"sys.exit(main(cofold_entry={bool(cofold_entry)}))"
     )
-    os.execv(
-        sys.executable,
-        [sys.executable, "-c", bootstrap, str(import_root), *forwarded_arguments],
-    )
+    arguments = [sys.executable, "-c", bootstrap, str(import_root), *forwarded_arguments]
+    if os.name == "nt":  # Windows exec joins the arguments without quoting them
+        arguments = [subprocess.list2cmdline([argument]) for argument in arguments]
+    os.execv(sys.executable, arguments)
 
 
 if __name__ == "__main__":

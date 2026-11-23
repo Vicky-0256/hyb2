@@ -93,7 +93,8 @@ assert.equal(example.primary.condition, "A");
 
 const appSource = fs.readFileSync(web("app.js"), "utf8");
 const indexSource = fs.readFileSync(web("index.html"), "utf8");
-assert.ok(indexSource.indexOf('src="./example.js"') > 0 && indexSource.indexOf('src="./example.js"') < indexSource.indexOf('src="./app.js"'),
+// the Pages build appends ?build=<sha> to each script URL
+assert.ok(indexSource.indexOf('src="./example.js') > 0 && indexSource.indexOf('src="./example.js') < indexSource.indexOf('src="./app.js'),
   "index.html loads example.js before app.js");
 assert.match(appSource, /window\.Hyb2Example/);
 assert.match(appSource, /1-in-10 subset/, "the landing page says the example is a subset");

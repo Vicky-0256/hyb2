@@ -10,9 +10,13 @@ permissions:
 
 jobs:
   browser:
+    # GitHub checks these against every job the called workflow declares, even
+    # skipped ones; each called job still gets only its own permissions.
     permissions:
       contents: read
       pages: write
+      id-token: write
+      actions: write
     uses: ./.github/workflows/deploy-pages.yml
     with:
       release_tag: ${{ github.ref_name }}

@@ -19,6 +19,7 @@ A ***streamlined*** program for analyzing RNA proximity ligation experiments fro
 - [Getting Started](#getting-started)
 - [Running the Program](#running-the-program)
 - [How To Read Outputs](#how-to-read-outputs)
+- [License](#license)
 
 ## Introduction
 RNA adopts ensemble of structures essential for life such as splicing, gene expression, and virus replication.
@@ -75,13 +76,18 @@ bin/hyb2_install_macOS-arm
 
 ### CPLfold on the command line, web and desktop
 
-The repository vendors the CPLfold Python source in `third_party/cplfold`
-and provides `bin/cplfold` as a local CLI. Its core predictor requires
+CPLfold is part of Hyb2. Its Python package `cplfold` is in `third_party/cplfold`
+(`import cplfold; cplfold.fold(sequence)`, or `pip install third_party/cplfold`),
+and `bin/cplfold` provides it as a local CLI. Its core predictor requires
 NumPy and Numba but does not require a native HotKnots executable. See
 [`docs/cplfold-python.md`](docs/cplfold-python.md) for installation, verification,
 runtime limits, browser boundaries, and third-party licensing notes.
 
-The website and desktop package this source from the same checkout.
+Change shared CPLfold/CPLcofold algorithms in `third_party/cplfold/` and their
+shared Python adapter in `web/cplfold/`. Do not copy edits into generated web
+assets or the staged desktop runtime. On a push changing either path on
+`CPLcofold`, `integration/unified-release` or `main`, CI builds the website and
+desktop packages from the same commit and checks their source against Git.
 On the website the predictor runs in a same-origin Pyodide worker, accepts
 an optional HYB-derived block bonus matrix, and visualises/ranks nested and
 pseudoknotted candidates. The browser path uses a measured session-specific
@@ -90,10 +96,17 @@ without Numba; use the structure page's local-input download and run
 `bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv`
 for longer guided sequences. The download includes the prepared sequence and,
 when HYB-guided CPLfold is selected, the same sparse bonus matrix used in the
-browser. Resolve the licensing boundary in
-`third_party/cplfold/THIRD_PARTY_NOTICES.md` before public release.
-The Pages workflow enforces that decision through the repository Actions
-variable `CPLFOLD_DISTRIBUTION_APPROVED=true`; leave it unset until approval.
+browser. For CPLfold's licence terms, see [License](#license).
+
+### IRIS from the source checkout
+
+With Python 3.11, NumPy and the ViennaRNA Python bindings installed (`python -m pip install numpy ViennaRNA==2.7.2` in an active virtual environment), run:
+
+```sh
+bin/iris --reference ref.fa --gene toyRNA --start 31 --end 170 --hyb reads.hyb -o ensemble.json
+```
+
+The source CLI and Desktop use the same Python IRIS predictor. The CLI runs without the `web/` or `desktop/` trees. See the [IRIS CLI guide](docs/iris-cli.md) for input, output and the exact files to include in a standalone source archive.
 
 ## Getting Started
 To run hyb2 using SAM input file, type in the command line:
@@ -349,3 +362,23 @@ However, differential coverage maps are plotted in two colours, with red being i
 Also, instead of the contrast reflecting chimeric counts, here, it represents significance (p-value) for significanyly differential interactions.
 
 Similarity heatmaps plot the conserved interactions between datasets.
+
+## License
+Hyb2 is free to use for academic and commercial work. No fees are charged for any of its parts.
+
+Hyb2's own code (`bin/`, `pipeline/`, `web/`, `desktop/`, and CPLfold and CPLcofold in `third_party/cplfold/`) is licensed under the GNU General Public License, version 3 or (at your option) any later version (GPL-3.0-or-later). The full text is in [`LICENSE`](LICENSE).
+
+Hyb2 bundles these third-party components. Each keeps its own licence:
+
+| Component | Location | Licence |
+|---|---|---|
+| Parsers derived from LinearFold and LinearCoFold | `third_party/cplfold/cplfold/_internal/parser.py`, `cofold_parser.py` | LinearFold and LinearCoFold terms: free use and modification, no redistribution fees beyond media costs, author credit required ([LinearFold](third_party/cplfold/LICENSES/LinearFold-LICENSE.txt), [LinearCoFold](third_party/cplfold/LICENSES/LinearCoFold-LICENSE.txt)) |
+| Energy evaluator and parameters derived from HotKnots 2.0 | `third_party/cplfold/cplfold/_internal/hotknots_energy.py`, `energy_params/` | GPL-2.0-or-later |
+| Turner 2004 parameters from ViennaRNA | `third_party/cplfold/cplfold/_internal/energy_parameter.py`, `utility_v.py`, `turner_energy.py` | ViennaRNA terms ([`COPYING`](third_party/cplfold/LICENSES/ViennaRNA-COPYING.txt)) |
+| IRIS, adapted from [JY-Zhou/IRIS](https://github.com/JY-Zhou/IRIS) | `third_party/iris/` | GPL-3.0 ([`LICENSE`](third_party/iris/LICENSE)) |
+| VARNA | `VARNA/` | GPL-3.0 ([`LICENSE`](VARNA/LICENSE)) |
+| fornac and D3 (website structure view) | `web/vendor/` | Apache-2.0 and BSD-3-Clause |
+
+ViennaRNA, Bowtie2, NumPy and the other runtime dependencies are installed separately under their own licences.
+
+The CPLfold combination is still being confirmed with the LinearFold authors. CPLfold's GPL part and the LinearFold-derived parser have different terms, and the combination does not yet have one confirmed licence. [`THIRD_PARTY_NOTICES.md`](third_party/cplfold/THIRD_PARTY_NOTICES.md) records the full terms and the original authors. If you publish results from CPLfold, please also cite LinearFold, LinearCoFold, ViennaRNA and HotKnots. If you publish IRIS results, please cite IRIS.

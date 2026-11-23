@@ -39,7 +39,8 @@ an adaptation under GPL-3.0-or-later; it is not the upstream Python executable.
 - C is 1–50 (default 20), K is 1–3 (default 2), with C >= K.
   Upstream only invokes the LASSO prefilter above 50 candidates, so that
   branch is outside this browser implementation's supported scope.
-- Support quantile defaults to 0.75; stem lengths default to 4, 5, 6, 7.
+- Support quantile defaults to 0.75. [Stem lengths (`kRange`)](iris-cli.md#stem-lengths)
+  use the same decimal list grammar as the CLI and desktop form; the default is `4 5 6 7`.
 - Up to 1,000 constrained folds and 20,000 ensembles. There is no separate
   stem-count cap: single stems and compatible stem pairs count toward the
   fold limit, checked during enumeration before any folding starts.

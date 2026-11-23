@@ -112,9 +112,9 @@ class CofoldPropertyTests(unittest.TestCase):
             sys.path.insert(0, directory)
         # Import real Numba in an independent process, respecting DISABLE_JIT.
         importlib.import_module("numba")
-        cls.api = importlib.import_module("CPLfold")
-        cls.parser_module = importlib.import_module("CPLcofold_parser")
-        cls.energy = importlib.import_module("Utils.cofold_energy").CofoldEnergy()
+        cls.api = importlib.import_module("cplfold._internal.single")
+        cls.parser_module = importlib.import_module("cplfold._internal.cofold_parser")
+        cls.energy = importlib.import_module("cplfold._internal.cofold_energy").CofoldEnergy()
 
     def fold(self, first, second, **kwargs):
         options = dict(verbose=False, beam_size=0, energy_delta=6.0,

@@ -271,8 +271,8 @@ def main():
     validate_fixtures(fixtures)
     before = manifest(reference)
     sys.path.insert(0, str(ROOT / "third_party" / "cplfold"))
-    from CPLfold import cofold
-    from Utils.cofold_energy import CofoldEnergy
+    from cplfold._internal.single import cofold
+    from cplfold._internal.cofold_energy import CofoldEnergy
     import numba
     import numpy
     evaluator = CofoldEnergy()
@@ -318,7 +318,7 @@ def main():
                 numba_disabled=bool(numba.config.DISABLE_JIT), fixture_sha256=hashlib.sha256(fixture_bytes).hexdigest(), fixtures=fixtures,
                 parameters=dict(alpha=0.0,beta=0.0,allow_pseudoknot=False,energy_delta=0.0,max_phase1=1),
                 cplfold_source_sha256={name:sha(ROOT/"third_party"/"cplfold"/name) for name in
-                                      ["CPLfold.py","CPLcofold.py","CPLcofold_parser.py","Utils/cofold_energy.py"]},
+                                      ["cplfold/_internal/single.py","cplfold/_internal/cofold.py","cplfold/_internal/cofold_parser.py","cplfold/_internal/cofold_energy.py"]},
                 results=rows)
     biological = [r for r in rows if r["biological_provenance_verified"]]
     report = ["# CPLcofold / LinearCoFold comparison", "", f"Run: {data['run_utc']}", "",

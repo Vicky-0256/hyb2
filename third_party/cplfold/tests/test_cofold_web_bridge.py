@@ -20,15 +20,16 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 CORE = ROOT / "third_party" / "cplfold"
 BRIDGE = ROOT / "web" / "cplfold" / "cplfold_web.py"
-sys.path.insert(0, str(CORE))
+SETTINGS = ROOT / "pipeline"  # import root of hyb2analysis
+sys.path[:0] = [str(CORE), str(SETTINGS)]
 spec = importlib.util.spec_from_file_location("_cofold_web_bridge_tests", BRIDGE)
 bridge = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = bridge
 spec.loader.exec_module(bridge)
 
-from CPLcofold import two_phase_cofold
-from CPLfold import get_pairs_from_structure
-from Utils.cofold_bonus import build_cofold_bonus_matrix
+from cplfold._internal.cofold import two_phase_cofold
+from cplfold._internal.single import get_pairs_from_structure
+from cplfold.bonus import build_cofold_bonus_matrix
 
 
 def arm(a, b, c, d):
@@ -56,7 +57,7 @@ class CofoldWebBridgeTests(unittest.TestCase):
         expected = dict(
             algorithm="CPLfold pseudoknot-free secondary-structure prediction",
             model="LinearFold Vienna-mode scoring with Turner 2004 energy ranking",
-            engine="CPLfold", engineVersion="24bab52", bridgeVersion="7", allowPseudoknot=False,
+            engine="CPLfold", engineVersion="24bab52", bridgeVersion="8", allowPseudoknot=False,
             runtime="Pyodide 0.29.4; Python 3.13.2; NumPy 2.2.5; Numba identity fallback",
             maxSequenceLength=75, sequence=sequence, dotBracket=structure, pairs=pairs,
             unpaired=3, energy=energy, effectiveEnergy=energy, phase1Energy=energy, score=-1.2,
@@ -246,7 +247,7 @@ class CofoldWebBridgeTests(unittest.TestCase):
     def test_real_backend_works_with_browser_numba_identity_fallback(self):
         code = """
 import json, sys
-sys.path[:0] = [sys.argv[1], sys.argv[2]]
+sys.path[:0] = sys.argv[1:4]
 import cplfold_web
 assert not cplfold_web._NUMBA_AVAILABLE
 result = cplfold_web.fold({'sequence': 'GGG&CCC', 'maxPhase1': 1, 'energyDelta': 0,
@@ -256,9 +257,9 @@ assert result['engine'] == 'CPLcofold'
 print(json.dumps({'structure': result['dotBracketWithBreak'], 'version': result['bridgeVersion']}))
 """
         environment = dict(os.environ, CPLFOLD_FORCE_PURE_PYTHON="1", PYTHONDONTWRITEBYTECODE="1")
-        completed = subprocess.run([sys.executable, "-c", code, str(CORE), str(BRIDGE.parent)],
+        completed = subprocess.run([sys.executable, "-c", code, str(CORE), str(SETTINGS), str(BRIDGE.parent)],
                                    env=environment, capture_output=True, text=True, check=True, timeout=30)
-        self.assertEqual(json.loads(completed.stdout), {"structure": "(((&)))", "version": "7"})
+        self.assertEqual(json.loads(completed.stdout), {"structure": "(((&)))", "version": "8"})
 
 
 if __name__ == "__main__":

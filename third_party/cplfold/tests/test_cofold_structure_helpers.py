@@ -17,7 +17,7 @@ def _load_modules():
 
         shim.njit = njit
         sys.modules["numba"] = shim
-    return importlib.import_module("CPLfold"), importlib.import_module("CPLcofold_parser")
+    return importlib.import_module("cplfold._internal.single"), importlib.import_module("cplfold._internal.cofold_parser")
 
 
 def _marked(structure, cutpoint=5):

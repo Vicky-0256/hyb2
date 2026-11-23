@@ -1,9 +1,9 @@
-"""Utils/pure_kernels.py must stay bit-identical to the Numba kernels' Python.
+"""cplfold/_internal/pure_kernels.py must stay bit-identical to the Numba kernels' Python.
 
-Without Numba (the browser's Pyodide runtime) CPLfold_parser swaps
+Without Numba (the browser's Pyodide runtime) cplfold/_internal/parser.py swaps
 ``parse_loop_vienna`` and ``_outside_kernel`` for the list-based versions in
-Utils/pure_kernels.py.  They are a transcription of the decorated kernels, so
-a change to either kernel in CPLfold_parser.py has to be made there too.
+cplfold/_internal/pure_kernels.py.  They are a transcription of the decorated kernels, so
+a change to either kernel in parser.py has to be made there too.
 
 The test runs the same work with the original kernels (CPLFOLD_PURE_KERNELS=0)
 and with the pure ones, each in a fresh interpreter with an identity ``numba``
@@ -52,15 +52,15 @@ RUNNER = textwrap.dedent(r'''
         if numba.config.DISABLE_JIT:
             raise AssertionError("Native parity requires an enabled Numba JIT")
     sys.path.insert(0, sys.argv[1])
-    import CPLfold_parser
-    from CPLfold_parser import BeamCKYParserHyper
-    from CPLfold import two_phase_pseudoknot_fold
+    from cplfold._internal import parser as parser_module
+    from cplfold._internal.parser import BeamCKYParserHyper
+    from cplfold._internal.single import two_phase_pseudoknot_fold
 
     native_kernels = {}
     pure = MODE == "stub" and os.environ.get("CPLFOLD_PURE_KERNELS") == "1"
-    expected_module = "Utils.pure_kernels" if pure else "CPLfold_parser"
+    expected_module = "cplfold._internal.pure_kernels" if pure else "cplfold._internal.parser"
     for name in ("parse_loop_vienna", "_outside_kernel"):
-        kernel = getattr(CPLfold_parser, name)
+        kernel = getattr(parser_module, name)
         if kernel.__module__ != expected_module:
             raise AssertionError(f"{name} resolved to {kernel.__module__}, expected {expected_module}")
         if MODE == "numba":

@@ -59,9 +59,9 @@ def _load_modules():
         shim.njit = njit
         sys.modules["numba"] = shim
     return (
-        importlib.import_module("CPLfold"),
-        importlib.import_module("CPLcofold_parser"),
-        importlib.import_module("Utils.cofold_energy"),
+        importlib.import_module("cplfold._internal.single"),
+        importlib.import_module("cplfold._internal.cofold_parser"),
+        importlib.import_module("cplfold._internal.cofold_energy"),
     )
 
 
@@ -263,7 +263,7 @@ class CofoldIntegrationTests(unittest.TestCase):
         marked = self.fold("GGG&CCC")
         compact = self.fold("GGGCCC", cutpoint=3)
         self.assertEqual(marked, compact)
-        wrapper = importlib.import_module("CPLcofold")
+        wrapper = importlib.import_module("cplfold._internal.cofold")
         self.assertEqual(marked, wrapper.cofold("ggg", "ccc", verbose=False, beam_size=30, max_phase1=4, max_phase2=2, allow_pseudoknot=False))
         self.assertEqual(marked[0]["structure"], "(((&)))")
         self.assertAlmostEqual(marked[0]["energy"], -2.5, places=6)
@@ -357,7 +357,7 @@ class CofoldBonusTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         _load_modules()
-        cls.module = importlib.import_module("Utils.cofold_bonus")
+        cls.module = importlib.import_module("cplfold.bonus")
 
     def test_interstrand_reads_have_no_intramolecular_gaussian_leakage(self):
         matrix = self.module.build_cofold_bonus_matrix(8, 4, [(2, 4, 5, 7)])

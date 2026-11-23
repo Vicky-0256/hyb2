@@ -36,15 +36,13 @@ from typing import List, Dict, Tuple, Optional
 
 import numpy as np
 
-# Add current directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 # Import CPLfold parser
-from CPLfold_parser import BeamCKYParserHyper
+from .parser import BeamCKYParserHyper
 
-from Utils.hotknots_energy import HotKnotsEnergy
-from Utils.turner_energy import turner_energy
-from Utils.strand_layout import normalise_sequence
+from ..models import COFOLD_MODELS, DEFAULT_MODELS
+from .hotknots_energy import HotKnotsEnergy
+from .turner_energy import turner_energy
+from ..sequence import normalise_sequence
 
 
 def _structure_layout(structure: str) -> Tuple[str, Optional[int], List[Tuple[int, int]]]:
@@ -412,7 +410,7 @@ def two_phase_pseudoknot_fold(seq: str,
                                energy_delta: float = 5.0,
                                max_phase1: int = 10,
                                max_phase2: int = 5,
-                               energy_model: str = "DP09",
+                               energy_model: Optional[str] = None,
                                output_file: Optional[str] = None,
                                verbose: bool = True,
                                lv: bool = True,
@@ -452,8 +450,11 @@ def two_phase_pseudoknot_fold(seq: str,
     Returns:
         List of structure dictionaries sorted by effective energy
     """
-    if cutpoint is not None or (isinstance(seq, str) and '&' in seq):
-        from CPLcofold import two_phase_cofold
+    cofold = cutpoint is not None or (isinstance(seq, str) and '&' in seq)
+    if energy_model is None:
+        energy_model = DEFAULT_MODELS["cplcofold" if cofold else "cplfold"]
+    if cofold:
+        from .cofold import two_phase_cofold
         return two_phase_cofold(
             seq, cutpoint=cutpoint, beam_size=beam_size, energy_delta=energy_delta,
             max_phase1=max_phase1, max_phase2=max_phase2, energy_model=energy_model,
@@ -620,258 +621,12 @@ def two_phase_pseudoknot_fold(seq: str,
     # Output results
     if verbose:
         print("\n")
-    output_results(all_structures, seq, output_file, verbose)
+    output_results(all_structures, seq, output_file, verbose, allow_pseudoknot=allow_pseudoknot)
 
     return all_structures
 
 
 def cofold(sequence_a: str, sequence_b: str, **kwargs) -> List[Dict]:
     """Predict two strands with CPLfold's alpha-guided two-phase/beta workflow."""
-    from CPLcofold import cofold as predict_cofold
+    from .cofold import cofold as predict_cofold
     return predict_cofold(sequence_a, sequence_b, **kwargs)
-
-
-def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
-    """Load Hyb2's sparse, upper-triangle bonus-matrix TSV export.
-
-    The web export stores 1-based prepared-sequence coordinates and only one
-    value for each upper-triangle cell.  CPLfold consumes a dense symmetric
-    NumPy matrix, so reconstruct that representation here before folding.
-    Comment lines beginning with ``#`` carry optional metadata such as the
-    declared sequence length.
-    """
-
-    matrix_path = Path(path).expanduser()
-    try:
-        contents = matrix_path.read_text(encoding="utf-8")
-    except FileNotFoundError as error:
-        raise SystemExit(f"CPLfold bonus matrix file was not found: {matrix_path}") from error
-    except UnicodeError as error:
-        raise SystemExit(f"CPLfold bonus matrix file is not valid UTF-8: {matrix_path}") from error
-    except OSError as error:
-        raise SystemExit(f"Could not read CPLfold bonus matrix file {matrix_path}: {error}") from error
-
-    matrix = np.zeros((sequence_length, sequence_length), dtype=np.float32)
-    declared_length = None
-    seen_pairs = set()
-    data_rows = 0
-
-    for line_number, raw_line in enumerate(contents.splitlines(), 1):
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("#"):
-            metadata = stripped[1:].strip()
-            if metadata.startswith("sequence_length="):
-                raw_length = metadata.split("=", 1)[1].strip()
-                try:
-                    declared_length = int(raw_length)
-                except ValueError as error:
-                    raise SystemExit(
-                        f"CPLfold bonus matrix line {line_number} has an invalid sequence_length"
-                    ) from error
-            continue
-
-        fields = raw_line.rstrip("\r\n").split("\t")
-        if len(fields) == 1:
-            fields = stripped.split()
-        if fields[0].strip().lower() == "prepared_position_1":
-            if len(fields) < 3:
-                raise SystemExit(
-                    f"CPLfold bonus matrix header on line {line_number} must contain three columns"
-                )
-            continue
-        if len(fields) != 3:
-            raise SystemExit(
-                f"CPLfold bonus matrix line {line_number} must contain three tab-separated columns"
-            )
-
-        try:
-            one = int(fields[0])
-            two = int(fields[1])
-            value = float(fields[2])
-        except ValueError as error:
-            raise SystemExit(
-                f"CPLfold bonus matrix line {line_number} contains an invalid coordinate or score"
-            ) from error
-
-        if not 1 <= one <= sequence_length or not 1 <= two <= sequence_length:
-            raise SystemExit(
-                f"CPLfold bonus matrix line {line_number} must use coordinates from 1 to {sequence_length}"
-            )
-        if not math.isfinite(value):
-            raise SystemExit(f"CPLfold bonus matrix line {line_number} contains a non-finite score")
-        if abs(value) > np.finfo(np.float32).max:
-            raise SystemExit(f"CPLfold bonus matrix line {line_number} exceeds the supported float32 range")
-
-        left, right = sorted((one, two))
-        pair = (left, right)
-        if pair in seen_pairs:
-            raise SystemExit(
-                f"CPLfold bonus matrix line {line_number} repeats coordinate pair {left}-{right}"
-            )
-        seen_pairs.add(pair)
-        matrix[left - 1, right - 1] = np.float32(value)
-        matrix[right - 1, left - 1] = np.float32(value)
-        data_rows += 1
-
-    if declared_length is not None and declared_length != sequence_length:
-        raise SystemExit(
-            "CPLfold bonus matrix sequence_length="
-            f"{declared_length} does not match the sequence length {sequence_length}"
-        )
-    if data_rows == 0 and declared_length is None:
-        raise SystemExit(
-            "CPLfold bonus matrix contains no data rows and does not declare sequence_length"
-        )
-    return matrix
-
-def main(argv=None, *, cofold_entry=False):
-    """Shared CLI; the dedicated entry requires two strands and cofold defaults."""
-    from Utils.cli_input import read_sequence_file
-    from Utils.cofold_options import mode_options
-
-    parser = argparse.ArgumentParser(
-        prog="cplcofold" if cofold_entry else None,
-        description=("Two-strand CPLcofold prediction (default mode: pseudoknot)."
-                     if cofold_entry else "CPLfold single-strand and two-strand prediction (default mode: pseudoknot)."),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  bin/cplcofold --sequence 'GGG&CCC' --mode standard
-  bin/cplcofold --sequence GGG --sequence-two CCC --mode pseudoknot
-  bin/cplcofold --sequence-file two-strands.fasta --mode standard
-  bin/cplcofold --sequence 'GG&CC' --bonus-matrix-file bonus.tsv --alpha 1
-  bin/cplfold --sequence-file single-strand.fasta --alpha 0.5
-
-Modes and defaults:
-  pseudoknot (default): Phase 1 plus constrained Phase 2; max-phase1=10,
-    max-phase2=5, delta=5. Cofold pseudoknot scores are experimental.
-  standard: no Phase 2; max-phase1=1 and delta=0 unless explicitly overridden.
-  --no-pseudoknot is a compatibility flag: it disables Phase 2 without changing
-    candidate/window defaults. It conflicts with --mode pseudoknot.
-  Alpha defaults to 0 for every two-strand route and 0.5 for legacy single-strand
-    input. With a reads matrix, choose --alpha explicitly to guide the search.
-  Beta adjusts pseudoknot ranking: effective_energy = energy + beta * phase1_energy.
-    It does not alter physical energy and has no ranking effect without Phase 2.
-
-Energy models:
-  Cofold accepts DP03 or DP09 (default); ordinary cofold uses Turner 37 C.
-  Single-strand input also supports CC06, CC09 and RE. The packaged Python
-    HotKnots-derived evaluator does not invoke a HotKnots executable.
-  --model ranks pseudoknot runs. Pseudoknot-free single-strand runs rank every
-    candidate with Turner 2004 (ViennaRNA rules), the model of the search itself.
-        """
-    )
-
-    inputs = parser.add_mutually_exclusive_group(required=True)
-    inputs.add_argument('-s', '--sequence',
-                        help="RNA sequence (ACGU or ACGT), or two strands separated by '&'")
-    inputs.add_argument('--sequence-file', type=Path,
-                        help='Plain RNA/FASTA input; two records require cplcofold or --cofold')
-    parser.add_argument('--sequence-two', default=None,
-                        help='Second RNA strand; the first is supplied with --sequence')
-    parser.add_argument('--cutpoint', type=int, default=None,
-                        help='Length of strand A when --sequence contains A+B without a separator')
-    parser.add_argument('--cofold', action='store_true',
-                        help='Require two-strand input and allow two-record FASTA (implicit in cplcofold)')
-    parser.add_argument('--mode', choices=['standard', 'pseudoknot'], default=None,
-                        help='standard: ordinary cofold/MFE defaults; pseudoknot: two phases (default)')
-    parser.add_argument('--bonus-matrix-file', type=str, default=None,
-                        help='Sparse upper-triangle bonus matrix TSV file '
-                             '(1-based prepared-sequence coordinates)')
-    parser.add_argument('--alpha', type=float, default=None,
-                        help='Reads scaling factor (default: 0 for cofold; 0.5 for single-strand input)')
-    parser.add_argument('-b', '--beam', type=int, default=100,
-                        help='Beam size for LinearFold (default: 100)')
-    parser.add_argument('-d', '--delta', type=float, default=None,
-                        help='Suboptimal energy window (default: 5; --mode standard: 0)')
-    parser.add_argument('-n1', '--max-phase1', type=int, default=None,
-                        help='Maximum Phase 1 structures (default: 10; --mode standard: 1)')
-    parser.add_argument('-n2', '--max-phase2', type=int, default=5,
-                        help='Cofold Phase 2 candidates per Phase 1 (default: 5); legacy single-strand uses one Phase 2 fold')
-    parser.add_argument('-o', '--output', type=str, default=None,
-                        help='Output file path')
-    parser.add_argument('-m', '--model', type=str, default='DP09',
-                        choices=['DP03', 'DP09'] if cofold_entry else ['DP03', 'DP09', 'CC06', 'CC09', 'RE'],
-                        help='Pseudoknot energy model for ranking when Phase 2 is on (default: DP09); '
-                             'pseudoknot-free runs rank with Turner 2004')
-    parser.add_argument('--beta', type=float, default=0.0,
-                        help='Pseudoknot energy bonus factor (default: 0.0). '
-                             'For pseudoknots, effective_energy = pk_energy + beta * phase1_energy. '
-                             'This changes ranking, not physical energy.')
-    parser.add_argument('--no-pseudoknot', action='store_true',
-                        help='Only generate pseudoknot-free secondary structures; '
-                             'skip Phase 2 (default: pseudoknots enabled)')
-    parser.add_argument('-q', '--quiet', action='store_true',
-                        help='Suppress verbose output')
-
-    args = parser.parse_args(argv)
-
-    sequence = (read_sequence_file(args.sequence_file, cofold=cofold_entry or args.cofold)
-                if args.sequence_file is not None else args.sequence)
-    if args.sequence_two is not None:
-        if '&' in sequence or '&' in args.sequence_two:
-            parser.error('--sequence-two requires two individual sequences without separators')
-        sequence = sequence + '&' + args.sequence_two
-    try:
-        sequence, cutpoint = normalise_sequence(sequence, args.cutpoint)
-    except ValueError as error:
-        parser.error(str(error))
-    if (cofold_entry or args.cofold) and cutpoint is None:
-        label = 'cplcofold' if cofold_entry else '--cofold'
-        parser.error(label + ' requires two strands, separated by &, --sequence-two, or --cutpoint')
-
-    # Validate known user options before invoking the folding implementation.
-    try:
-        explicit = {}
-        if args.no_pseudoknot:
-            explicit['allow_pseudoknot'] = False
-        if args.max_phase1 is not None:
-            explicit['max_phase1'] = args.max_phase1
-        if args.delta is not None:
-            explicit['energy_delta'] = args.delta
-        options = mode_options(args.mode, explicit)
-        options.setdefault('allow_pseudoknot', True)
-        options.setdefault('max_phase1', 10)
-        options.setdefault('energy_delta', 5.0)
-        alpha = args.alpha if args.alpha is not None else (0.0 if cutpoint is not None else 0.5)
-        for name, value in (('beam', args.beam), ('max-phase1', options['max_phase1']), ('max-phase2', args.max_phase2)):
-            minimum = 0 if name == 'beam' else 1
-            if value < minimum:
-                raise ValueError(f'--{name} must be an integer >= {minimum}')
-        for name, value in (('alpha', alpha), ('beta', args.beta), ('delta', options['energy_delta'])):
-            if not math.isfinite(value):
-                raise ValueError(f'--{name} must be finite')
-            if value < 0 and (cutpoint is not None or name == 'delta'):
-                raise ValueError(f'--{name} must be nonnegative')
-        if cutpoint is not None and args.model not in ('DP03', 'DP09'):
-            raise ValueError('Cofold supports DP03 or DP09; CC06, CC09 and RE are single-strand models')
-    except ValueError as error:
-        parser.error(str(error))
-
-    bonus_matrix = None
-    if args.bonus_matrix_file:
-        bonus_matrix = load_bonus_matrix_file(args.bonus_matrix_file, len(sequence))
-
-    expected_input_errors = ()
-    if cutpoint is not None:
-        from CPLcofold import CofoldInputError
-        expected_input_errors = (CofoldInputError,)
-    try:
-        results = two_phase_pseudoknot_fold(
-            seq=sequence, beam_size=args.beam, energy_model=args.model,
-            max_phase2=args.max_phase2, output_file=args.output,
-            verbose=not args.quiet, bonus_matrix=bonus_matrix,
-            alpha=alpha, beta=args.beta, cutpoint=cutpoint, **options,
-        )
-    except expected_input_errors as error:
-        parser.error(str(error))
-
-    # A completed fold is successful even when no pseudoknot candidate wins.
-    # Keep a non-zero status only for the unexpected empty-result case.
-    return 0 if results else 1
-
-
-if __name__ == '__main__':
-    sys.exit(main())

@@ -64,9 +64,9 @@ def worker():
     config = json.load(sys.stdin)
     start = time.perf_counter_ns()
     sys.path.insert(0, str(ROOT / "third_party/cplfold"))
-    from CPLfold import cofold
-    from Utils.cofold_energy import CofoldEnergy
-    import CPLcofold_parser
+    from cplfold._internal.single import cofold
+    from cplfold._internal.cofold_energy import CofoldEnergy
+    import cplfold._internal.cofold_parser as CPLcofold_parser
     import numba
     import numpy
     import_seconds = (time.perf_counter_ns() - start) / 1e9

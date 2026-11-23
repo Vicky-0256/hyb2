@@ -7,9 +7,9 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from CPLfold import two_phase_pseudoknot_fold  # noqa: E402
-from Utils.hotknots_energy import HotKnotsEnergy  # noqa: E402
-from Utils.turner_energy import turner_energy  # noqa: E402
+from cplfold._internal.single import two_phase_pseudoknot_fold  # noqa: E402
+from cplfold._internal.hotknots_energy import HotKnotsEnergy  # noqa: E402
+from cplfold._internal.turner_energy import turner_energy  # noqa: E402
 
 # ViennaRNA 2.7.2 eval_structure (Turner 2004, dangles=2), rounded to 0.01 kcal/mol.
 VIENNA = [

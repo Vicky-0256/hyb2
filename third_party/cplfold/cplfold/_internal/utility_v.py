@@ -52,12 +52,12 @@ def NUC_TO_PAIR(x, y):
 
 import math
 
-from Utils.shared import * # lhuang
+from .shared import * # lhuang
 
-from Utils.energy_parameter import * # energy_parameter stuff  
-from Utils.intl11 import *
-from Utils.intl21 import *
-from Utils.intl22 import *
+from .energy_parameter import * # energy_parameter stuff
+from .intl11 import *
+from .intl21 import *
+from .intl22 import *
 
 MAXLOOP = 30
 

@@ -30,7 +30,7 @@ import numpy as np
 
 
 def _load_parser_with_numba_stub():
-    """Import CPLfold_parser without paying the JIT startup cost."""
+    """Import cplfold._internal.parser without paying the JIT startup cost."""
 
     if "numba" not in sys.modules:
         numba = types.ModuleType("numba")
@@ -42,7 +42,7 @@ def _load_parser_with_numba_stub():
 
         numba.njit = njit
         sys.modules["numba"] = numba
-    return importlib.import_module("CPLfold_parser")
+    return importlib.import_module("cplfold._internal.parser")
 
 
 def _linearfold_survivors(scores, beam):

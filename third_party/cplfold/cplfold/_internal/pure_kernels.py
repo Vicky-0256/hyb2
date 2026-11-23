@@ -1,6 +1,6 @@
 """Pure-Python versions of the Vienna-mode inside and outside kernels.
 
-CPLfold_parser.parse_loop_vienna and CPLfold_parser._outside_kernel are written for
+parser.parse_loop_vienna and parser._outside_kernel are written for
 Numba.  Without Numba (the browser runs CPLfold in Pyodide) they execute as ordinary
 Python on NumPy arrays, where every element read returns a NumPy scalar and every
 arithmetic step on it goes through NumPy's scalar machinery, and every score helper
@@ -22,7 +22,7 @@ Only the Vienna (lv) mode is covered; CONTRAfold mode keeps the original code.
 
 import numpy as np
 
-from Utils.shared import NOTON  # noqa: F401  (documented dependency: 5 nucleotide codes)
+from .shared import NOTON  # noqa: F401  (documented dependency: 5 nucleotide codes)
 
 SINGLE_MAX_LEN = 30
 VALUE_MIN = -1e18
@@ -634,7 +634,7 @@ def outside_kernel_vienna_py(n, nucs, next_pair, lv,
     nu = nucs.tolist()
     NP = next_pair.tolist()
 
-    import CPLfold_parser as cp
+    from . import parser as cp
     stack = cp._v_stack.tolist()
     T = (stack, cp._v_bulge.tolist(), cp._v_internal.tolist(), cp._v_int11.tolist(),
          cp._v_int21.tolist(), cp._v_int22.tolist(), cp._v_mismatchI.tolist(),

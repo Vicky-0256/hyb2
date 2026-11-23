@@ -2,12 +2,12 @@
 utility.py
 provides feature functions.
 Note: scalar parameters (multi_*, external_*) are fetched dynamically from
-Utils.feature_weight at call time so that training scripts can update them
+feature_weight at call time so that training scripts can update them
 without re-importing this module.
 """
 
 import numpy as np
-from Utils.feature_weight import *
+from .feature_weight import *
 
 # Constants and parameters
 NOTON = 5
@@ -162,21 +162,21 @@ def score_single_without_junctionB(i, j, p, q, nucp_1, nucp, nucq, nucq1):
 
 def score_multi(i, j, nuci, nuci1, nucj_1, nucj, len):
     # fetch dynamic scalars at call-time so updates are visible
-    from Utils import feature_weight as _fw
+    from . import feature_weight as _fw
     return score_junction_A(i, j, nuci, nuci1, nucj_1, nucj, len) + \
            _fw.multi_paired + _fw.multi_base
 
 def score_multi_unpaired(i, j):
-    from Utils import feature_weight as _fw
+    from . import feature_weight as _fw
     return (j - i + 1) * _fw.multi_unpaired
 
 def score_M1(i, j, k, nuci_1, nuci, nuck, nuck1, len):
-    from Utils import feature_weight as _fw
+    from . import feature_weight as _fw
     return score_junction_A(k, i, nuck, nuck1, nuci_1, nuci, len) + \
            score_multi_unpaired(k + 1, j) + base_pair_score(nuci, nuck) + _fw.multi_paired
 
 def score_external_paired(i, j, nuci_1, nuci, nucj, nucj1, len):
-    from Utils import feature_weight as _fw
+    from . import feature_weight as _fw
     return score_junction_A(j, i, nucj, nucj1, nuci_1, nuci, len) + \
            _fw.external_paired + base_pair_score(nuci, nucj) # + greg_pair_score(i,j)*alpha
 
@@ -189,5 +189,5 @@ def score_external_paired(i, j, nuci_1, nuci, nucj, nucj1, len):
     # ）
 
 def score_external_unpaired(i, j):
-    from Utils import feature_weight as _fw
+    from . import feature_weight as _fw
     return (j - i + 1) * _fw.external_unpaired

@@ -14,7 +14,7 @@ HotKnots 的 hotspot 生成、启发式搜索、候选结构扩展或绘图代�
 需要的能量计算部分：
 
 ```text
-CPLfold.py
+cplfold/_internal/single.py
   -> compute_energy(sequence, structure, model)
      -> dot-bracket 配对表和 loop/band 分解
      -> SimFold FM363 普通二级结构能量
@@ -32,7 +32,7 @@ CPLfold.py
 | 八个参数文件 | 来自 HotKnots 2.0 `bin/params`；仅规范化了部分换行和尾随空格，数值不变 |
 | 候选结构生成 | 仍由 CPLfold 的两阶段 LinearFold 流程完成，不使用 HotKnots 的 hotspot/启发式搜索 |
 
-当前 `Utils/hotknots_energy.py` 从 `Utils/energy_params` 读取上述参数子集并在
+当前 `cplfold/_internal/hotknots_energy.py` 从 `cplfold/_internal/energy_params` 读取上述参数子集并在
 Python 中完成计算。CPLfold 的默认路径不导入 HotKnots 包、不读取其源码目录，
 也不启动原生可执行文件。迁移前捆绑的 `computeEnergy` 是 AArch64 ELF；
 Python 版也消除了运行机器与二进制架构必须一致的
@@ -58,7 +58,7 @@ Python 版也消除了运行机器与二进制架构必须一致的
 
 ## 3. 公共的 FM363 能量
 
-`Utils/energy_params` 中的八个表来自 HotKnots 2.0 发布包的 `bin/params`，
+`cplfold/_internal/energy_params` 中的八个表来自 HotKnots 2.0 发布包的 `bin/params`，
 本工作没有重新拟合其数值。DP、CC 使用各自参数文件的前 363 项；RE 使用
 `turner_parameters_fm363_constrdangles.txt`。这些参数重建了 SimFold 的：
 
@@ -299,14 +299,14 @@ README 示例序列还通过了真实 Numba JIT 的两阶段端到端运行，�
 三个 pseudoknot 候选。日常验证命令为：
 
 ```bash
-python3 -m pytest -q
-python3 CPLfold.py -s GGCGCGGCACCGUCCGCGGAACAAACGG -b 20 -n1 3 -n2 2
+python3 -m unittest discover -s tests
+python3 -m cplfold.cli -s GGCGCGGCACCGUCCGCGGAACAAACGG -b 20 -n1 3 -n2 2
 ```
 
 ## 10. 使用方式
 
 ```python
-from Utils.hotknots_energy import HotKnotsEnergy
+from cplfold._internal.hotknots_energy import HotKnotsEnergy
 
 energy = HotKnotsEnergy().compute_energy(
     "GGCGCGGCACCGUCCGCGGAACAAACGG",
@@ -323,7 +323,7 @@ print(energy["breakdown"])
 也可直接运行：
 
 ```bash
-python -m Utils.hotknots_energy \
+python -m cplfold._internal.hotknots_energy \
   -s GGCGCGGCACCGUCCGCGGAACAAACGG \
   --structure '..(((((..[[[[)))))......]]]]' \
   -m DP09

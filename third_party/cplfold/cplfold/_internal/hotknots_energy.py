@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from ..models import DEFAULT_MODELS
+from .model_tables import MODEL_TABLES
 
 A, C, G, U = range(4)
 NUC_TO_INT = {"A": A, "C": C, "G": G, "U": U}
@@ -1082,13 +1084,7 @@ def _dp_parameters(values: Sequence[float]) -> Dict[str, float]:
 class HotKnotsEnergy:
     """Runtime-standalone Python port of ``HotKnots.compute_energy`` behavior."""
 
-    MODELS = {
-        "DP03": ("parameters_DP03.txt", "DP"),
-        "DP09": ("parameters_DP09.txt", "DP"),
-        "CC06": ("parameters_CC06.txt", "CC"),
-        "CC09": ("parameters_CC09.txt", "CC"),
-        "RE": (None, "RE"),
-    }
+    MODELS = MODEL_TABLES
 
     def __init__(self, parameter_dir: Optional[str] = None):
         """Load the packaged energy tables.
@@ -1945,7 +1941,7 @@ class HotKnotsEnergy:
                     )
         return value
 
-    def compute_energy(self, sequence: str, structure: str, model: str = "DP09") -> Dict[str, object]:
+    def compute_energy(self, sequence: str, structure: str, model: str = DEFAULT_MODELS["cplfold"]) -> Dict[str, object]:
         sequence = sequence.upper().replace("T", "U")
         if model not in self.MODELS:
             raise ValueError(f"Unknown model {model!r}; choose from {', '.join(self.MODELS)}")
@@ -2051,7 +2047,7 @@ class HotKnotsEnergy:
         }
 
 
-def compute_energy(sequence: str, structure: str, model: str = "DP09") -> float:
+def compute_energy(sequence: str, structure: str, model: str = DEFAULT_MODELS["cplfold"]) -> float:
     """Convenience API returning only the free energy in kcal/mol."""
 
     return float(HotKnotsEnergy().compute_energy(sequence, structure, model)["energy"])
@@ -2063,7 +2059,7 @@ def main() -> None:
     )
     parser.add_argument("-s", "--sequence", required=True)
     parser.add_argument("--structure", required=True)
-    parser.add_argument("-m", "--model", default="DP09", choices=tuple(HotKnotsEnergy.MODELS))
+    parser.add_argument("-m", "--model", default=DEFAULT_MODELS["cplfold"], choices=tuple(HotKnotsEnergy.MODELS))
     args = parser.parse_args()
     result = HotKnotsEnergy().compute_energy(args.sequence, args.structure, args.model)
     print(f"{result['model']}\t{result['energy']:.6f}\t{result['energy_no_dangling']:.6f}")

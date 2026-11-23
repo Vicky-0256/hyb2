@@ -11,9 +11,9 @@ from typing import List, Tuple
 from collections import defaultdict
 
 # from LinearFold import State, BeamCKYParser
-from Utils.utility_v import *
-from Utils.utility import *
-import Utils.shared
+from .utility_v import *
+from .utility import *
+from . import shared
 
 def eval(seq: str, ref: str, is_verbose: bool, dangle_model: int = 2, lv: bool = True) -> int:
     seq_length = len(seq)
@@ -26,9 +26,9 @@ def eval(seq: str, ref: str, is_verbose: bool, dangle_model: int = 2, lv: bool =
 
     # Use appropriate encoding based on lv parameter
     if lv:
-        eval_nucs = [Utils.shared.get_acgu_num_v(seq[i]) for i in range(seq_length)]
+        eval_nucs = [shared.get_acgu_num_v(seq[i]) for i in range(seq_length)]
     else:
-        eval_nucs = [Utils.shared.get_acgu_num_c(seq[i]) for i in range(seq_length)]
+        eval_nucs = [shared.get_acgu_num_c(seq[i]) for i in range(seq_length)]
 
     total_energy = 0
     external_energy = 0

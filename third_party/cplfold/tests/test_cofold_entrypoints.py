@@ -24,13 +24,14 @@ def load_modules():
             return args[0] if len(args) == 1 and callable(args[0]) and not kwargs else lambda function: function
         shim.njit = njit
         sys.modules["numba"] = shim
-    return importlib.import_module("CPLfold"), importlib.import_module("CPLcofold")
+    return importlib.import_module("cplfold._internal.single"), importlib.import_module("cplfold._internal.cofold")
 
 
 class CofoldEntryContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.api, cls.cofold = load_modules()
+        cls.cli = importlib.import_module("cplfold.cli")
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="cofold-entry-contract-")
@@ -38,15 +39,15 @@ class CofoldEntryContractTests(unittest.TestCase):
         self.directory = Path(temporary.name)
 
     def dispatch(self, arguments, dedicated=False):
-        with mock.patch.object(self.api, "two_phase_pseudoknot_fold", return_value=[{"type": "phase1"}]) as fold:
-            self.assertEqual(self.api.main(arguments, cofold_entry=dedicated), 0)
+        with mock.patch.object(self.cli, "two_phase_pseudoknot_fold", return_value=[{"type": "phase1"}]) as fold:
+            self.assertEqual(self.cli.main(arguments, cofold_entry=dedicated), 0)
         return fold.call_args.kwargs
 
     def reject(self, arguments, text, dedicated=True):
         stderr = io.StringIO()
-        with mock.patch.object(self.api, "two_phase_pseudoknot_fold") as fold, \
+        with mock.patch.object(self.cli, "two_phase_pseudoknot_fold") as fold, \
              contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
-            self.api.main(arguments, cofold_entry=dedicated)
+            self.cli.main(arguments, cofold_entry=dedicated)
         fold.assert_not_called()
         self.assertIn(text, stderr.getvalue() + str(raised.exception))
         self.assertNotIn("Traceback", stderr.getvalue())
@@ -63,6 +64,21 @@ class CofoldEntryContractTests(unittest.TestCase):
                 self.assertEqual((values["max_phase1"], values["max_phase2"], values["energy_delta"]), (10, 5, 5.0))
         negative = self.dispatch(["-s", "GAAAC", "--alpha", "-0.5", "--beta", "-0.3"])
         self.assertEqual((negative["alpha"], negative["beta"]), (-0.5, -0.3))
+
+    def test_distinct_model_defaults(self):
+        if str(ROOT / "pipeline") not in sys.path:
+            sys.path.insert(0, str(ROOT / "pipeline"))
+        from hyb2analysis.engine_parameters import DEFAULT_MODELS, engine_parameters
+        with mock.patch.dict(DEFAULT_MODELS, cplfold="CC09", cplcofold="DP03"):
+            for host in ("desktop", "web"):
+                engines = engine_parameters(host)
+                self.assertEqual(engines["cplfold"]["defaultModel"], "CC09")
+                self.assertEqual(engines["cplcofold"]["defaultModel"], "DP03")
+            self.assertEqual(self.dispatch(["-s", "GAAAC"])["energy_model"], "CC09")
+            self.assertEqual(self.dispatch(["-s", "GG&CC"])["energy_model"], "DP03")
+            self.assertEqual(self.dispatch(["-s", "GG&CC", "--model", "DP09"], True)["energy_model"], "DP09")
+        with mock.patch.dict(DEFAULT_MODELS, cplcofold="CC09"), self.assertRaisesRegex(ValueError, "cplcofold.*CC09"):
+            engine_parameters("web")
 
     def test_modes_have_explicit_overrides_and_legacy_flag_keeps_candidate_defaults(self):
         standard = self.dispatch(["-s", "GG&CC", "--mode", "standard"], True)
@@ -120,6 +136,13 @@ class CofoldEntryContractTests(unittest.TestCase):
         self.reject(["--sequence-file", str(two), "--sequence-two", "A"], "individual sequences without separators")
         self.reject(["--sequence-file", str(two), "-s", "GG&CC"], "not allowed with argument")
 
+    def test_bonus_file_preserves_exported_scores_in_both_triangles(self):
+        path = self.directory / "bonus.tsv"
+        path.write_text("1\t4\t4.87533164\n2\t3\t1.0000000000000002\n")
+        scores = self.cli.load_bonus_matrix_file(str(path), 4).tolist()
+        for i, j, expected in ((0, 3, 4.87533164), (1, 2, 1.0000000000000002)):
+            self.assertEqual((scores[i][j], scores[j][i]), (expected, expected))
+
     def test_bonus_file_errors_are_clean_and_float32_overflow_is_rejected(self):
         self.reject(["-s", "GG&CC", "--bonus-matrix-file", str(self.directory / "missing")], "was not found")
         for index, (body, error) in enumerate((
@@ -134,12 +157,12 @@ class CofoldEntryContractTests(unittest.TestCase):
 
     def test_only_expected_input_errors_are_simplified(self):
         for error in (RuntimeError("internal defect"), ValueError("internal value defect")):
-            with self.subTest(error=type(error).__name__), mock.patch.object(self.api, "two_phase_pseudoknot_fold", side_effect=error):
+            with self.subTest(error=type(error).__name__), mock.patch.object(self.cli, "two_phase_pseudoknot_fold", side_effect=error):
                 with self.assertRaises(type(error)):
-                    self.api.main(["-s", "GG&CC"], cofold_entry=True)
-        with mock.patch.object(self.api, "two_phase_pseudoknot_fold", side_effect=self.cofold.CofoldInputError("Scaled bonus exceeds range")), \
+                    self.cli.main(["-s", "GG&CC"], cofold_entry=True)
+        with mock.patch.object(self.cli, "two_phase_pseudoknot_fold", side_effect=self.cofold.CofoldInputError("Scaled bonus exceeds range")), \
              contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
-            self.api.main(["-s", "GG&CC"], cofold_entry=True)
+            self.cli.main(["-s", "GG&CC"], cofold_entry=True)
         self.assertEqual(error.exception.code, 2)
 
 
@@ -154,8 +177,9 @@ class CofoldEntryProcessTests(unittest.TestCase):
         self.environment.update(NUMBA_DISABLE_JIT="1", PYTHONDONTWRITEBYTECODE="1",
                                 NUMBA_CACHE_DIR=str(self.directory / "cache"), HYB2_CPLFOLD_MAX_NT="1000")
 
-    def run_cli(self, args, entry="bin/cplcofold", success=True):
-        result = subprocess.run([sys.executable, str(ROOT / entry), *args], cwd=ROOT,
+    def run_cli(self, args, entry="bin/cplcofold", success=True, module=None):
+        command = ["-m", module] if module else [str(ROOT / entry)]
+        result = subprocess.run([sys.executable, *command, *args], cwd=ROOT / "third_party" / "cplfold" if module else ROOT,
                                 env=self.environment, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
         self.assertNotIn("Traceback", result.stdout + result.stderr)
@@ -182,7 +206,7 @@ class CofoldEntryProcessTests(unittest.TestCase):
                   ["--sequence-file", str(joined), "--cutpoint", "3"]]
         reports = [self.report(self.run_cli([*route, "--mode", "standard"]).stdout) for route in routes]
         reports.append(self.report(self.run_cli(["--sequence-file", str(two), "--mode", "standard"],
-                                               entry="third_party/cplfold/CPLcofold.py").stdout))
+                                               module="cplfold._internal.cofold").stdout))
         self.assertTrue(all(report == reports[0] for report in reports))
         self.assertIn("S-1: (((&)))", reports[0])
         self.assertIn("Secondary Structures: 1", reports[0])
@@ -214,8 +238,9 @@ class CofoldEntryProcessTests(unittest.TestCase):
         explicit = self.report(self.run_cli([*args, "--alpha", "0.5"], entry="bin/cplfold").stdout)
         zero = self.report(self.run_cli([*args, "--alpha", "0"], entry="bin/cplfold").stdout)
         self.assertEqual(default, explicit)
-        self.assertIn("P1-1: (...)", default)
-        self.assertIn("P1-1: .....", zero)
+        self.assertIn("Pseudoknot Structures: disabled", default)
+        self.assertIn("S-1: (...)", default)
+        self.assertIn("S-1: .....", zero)
 
     def test_quiet_output_and_known_error_subprocesses(self):
         output = self.directory / "result.txt"

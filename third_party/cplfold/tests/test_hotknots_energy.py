@@ -8,7 +8,7 @@ ROOT = str(Path(__file__).resolve().parents[1])
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from Utils.hotknots_energy import HotKnotsEnergy  # noqa: E402
+from cplfold._internal.hotknots_energy import HotKnotsEnergy  # noqa: E402
 
 
 REFERENCE_SEQUENCE = "GGCGCGGCACCGUCCGCGGAACAAACGG"

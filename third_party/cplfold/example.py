@@ -10,14 +10,15 @@ Example usage demonstrating:
 Author: Ke Wang
 """
 
-import sys
-import os
 import numpy as np
 
-# Add current directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cplfold
 
-from CPLfold import two_phase_pseudoknot_fold
+
+def show(results, count=3):
+    """Print the best candidates (cplfold.fold itself never prints)."""
+    for rank, prediction in enumerate(results[:count], 1):
+        print(f"S-{rank}: {prediction.structure}  {prediction.energy:.2f} kcal/mol  ({prediction.kind})")
 
 
 def example_basic():
@@ -29,13 +30,13 @@ def example_basic():
     # A known pseudoknot sequence
     seq = "GGCGCGGCACCGUCCGCGGAACAAACGG"
 
-    results = two_phase_pseudoknot_fold(
+    results = cplfold.fold(
         seq,
         beam_size=100,
         energy_delta=5.0,
         max_phase1=5,
-        verbose=True
     )
+    show(results)
 
     return results
 
@@ -48,14 +49,14 @@ def example_with_beta():
 
     seq = "GGCGCGGCACCGUCCGCGGAACAAACGG"
 
-    results = two_phase_pseudoknot_fold(
+    results = cplfold.fold(
         seq,
         beam_size=100,
         energy_delta=5.0,
         max_phase1=5,
         beta=0.3,  # Favor pseudoknots in ranking
-        verbose=True
     )
+    show(results)
 
     return results
 
@@ -79,16 +80,16 @@ def example_with_bonus_matrix():
         bonus_matrix[i, j] = 1.0
         bonus_matrix[j, i] = 1.0
 
-    results = two_phase_pseudoknot_fold(
+    results = cplfold.fold(
         seq,
         beam_size=100,
         energy_delta=5.0,
         max_phase1=5,
-        bonus_matrix=bonus_matrix,
+        bonus=bonus_matrix,
         alpha=0.5,
         beta=0.3,
-        verbose=True
     )
+    show(results)
 
     return results
 

@@ -175,10 +175,10 @@ def worker() -> None:
     sys.path.insert(0, str(VENDOR))
     import numba
     import numpy as np
-    import CPLcofold_parser as parser_module
-    import Utils.cofold_bonus as bonus_module
-    from CPLfold import two_phase_pseudoknot_fold
-    from Utils.cofold_energy import CofoldEnergy
+    import cplfold._internal.cofold_parser as parser_module
+    import cplfold.bonus as bonus_module
+    from cplfold._internal.single import two_phase_pseudoknot_fold
+    from cplfold._internal.cofold_energy import CofoldEnergy
 
     payload = _checked_payload(parser_module, bonus_module, CofoldEnergy(), two_phase_pseudoknot_fold, np)
     compiled = {

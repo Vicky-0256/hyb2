@@ -58,10 +58,10 @@ def main():
         if comparator.sha(ROOT / name) != digest:
             raise ValueError("CPLfold source differs from the validated benchmark")
     sys.path.insert(0, str(ROOT / "third_party/cplfold"))
-    import CPLfold as api
-    import CPLcofold_parser as parser_module
-    import Utils.cofold_energy as energy_module
-    from Utils.cofold_energy import CofoldEnergy
+    import cplfold._internal.single as api
+    import cplfold._internal.cofold_parser as parser_module
+    import cplfold._internal.cofold_energy as energy_module
+    from cplfold._internal.cofold_energy import CofoldEnergy
     import numba
     import numpy as np
     if numba.config.DISABLE_JIT:

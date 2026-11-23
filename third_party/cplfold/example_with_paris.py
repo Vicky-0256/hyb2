@@ -15,14 +15,10 @@ Reference:
 Author: Ke Wang
 """
 
-import sys
 import os
 import numpy as np
 
-# Add current directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from CPLfold import two_phase_pseudoknot_fold
+import cplfold
 
 
 def load_sequence_from_dbn(dbn_file):
@@ -144,21 +140,20 @@ def main():
     print("Test 1: Without PARIS data (alpha = 0)")
     print("-" * 70)
 
-    results_no_bonus = two_phase_pseudoknot_fold(
+    results_no_bonus = cplfold.fold(
         sequence,
         beam_size=100,
         energy_delta=5.0,
         max_phase1=5,
         alpha=0.0,
-        beta=0.0,
-        verbose=False
+        beta=0.0
     )
 
     if results_no_bonus:
         best = results_no_bonus[0]
-        f1 = calculate_f1(best['structure'], ref_structure)
-        print(f"Best structure: {best['structure']}")
-        print(f"Energy: {best['energy']:.2f} kcal/mol")
+        f1 = calculate_f1(best.structure, ref_structure)
+        print(f"Best structure: {best.structure}")
+        print(f"Energy: {best.energy:.2f} kcal/mol")
         print(f"F1 score: {f1:.3f}")
 
     # =========================================================================
@@ -168,22 +163,21 @@ def main():
     print("Test 2: With PARIS data (alpha = 0.5)")
     print("-" * 70)
 
-    results_with_bonus = two_phase_pseudoknot_fold(
+    results_with_bonus = cplfold.fold(
         sequence,
         beam_size=100,
         energy_delta=5.0,
         max_phase1=5,
-        bonus_matrix=bonus_matrix,
+        bonus=bonus_matrix,
         alpha=0.5,
-        beta=0.0,
-        verbose=False
+        beta=0.0
     )
 
     if results_with_bonus:
         best = results_with_bonus[0]
-        f1 = calculate_f1(best['structure'], ref_structure)
-        print(f"Best structure: {best['structure']}")
-        print(f"Energy: {best['energy']:.2f} kcal/mol")
+        f1 = calculate_f1(best.structure, ref_structure)
+        print(f"Best structure: {best.structure}")
+        print(f"Energy: {best.energy:.2f} kcal/mol")
         print(f"F1 score: {f1:.3f}")
 
     # =========================================================================
@@ -193,27 +187,26 @@ def main():
     print("Test 3: With PARIS data + pseudoknot preference (alpha=0.5, beta=0.3)")
     print("-" * 70)
 
-    results_with_beta = two_phase_pseudoknot_fold(
+    results_with_beta = cplfold.fold(
         sequence,
         beam_size=100,
         energy_delta=5.0,
         max_phase1=5,
-        bonus_matrix=bonus_matrix,
+        bonus=bonus_matrix,
         alpha=0.5,
-        beta=0.3,
-        verbose=False
+        beta=0.3
     )
 
     if results_with_beta:
         best = results_with_beta[0]
-        f1 = calculate_f1(best['structure'], ref_structure)
-        print(f"Best structure: {best['structure']}")
-        print(f"Energy: {best['energy']:.2f} kcal/mol")
-        print(f"Type: {best['type']}")
+        f1 = calculate_f1(best.structure, ref_structure)
+        print(f"Best structure: {best.structure}")
+        print(f"Energy: {best.energy:.2f} kcal/mol")
+        print(f"Type: {best.kind}")
         print(f"F1 score: {f1:.3f}")
 
         # Show pseudoknot structures if any
-        pk_structs = [r for r in results_with_beta if r['type'] == 'pseudoknot']
+        pk_structs = [r for r in results_with_beta if r.kind == 'pseudoknot']
         if pk_structs:
             print(f"\nFound {len(pk_structs)} pseudoknot structure(s)")
 
@@ -225,14 +218,14 @@ def main():
     print("=" * 70)
     print(f"Reference:          {ref_structure}")
     if results_no_bonus:
-        f1_no = calculate_f1(results_no_bonus[0]['structure'], ref_structure)
-        print(f"alpha=0:            {results_no_bonus[0]['structure']} (F1={f1_no:.3f})")
+        f1_no = calculate_f1(results_no_bonus[0].structure, ref_structure)
+        print(f"alpha=0:            {results_no_bonus[0].structure} (F1={f1_no:.3f})")
     if results_with_bonus:
-        f1_with = calculate_f1(results_with_bonus[0]['structure'], ref_structure)
-        print(f"alpha=0.5:          {results_with_bonus[0]['structure']} (F1={f1_with:.3f})")
+        f1_with = calculate_f1(results_with_bonus[0].structure, ref_structure)
+        print(f"alpha=0.5:          {results_with_bonus[0].structure} (F1={f1_with:.3f})")
     if results_with_beta:
-        f1_beta = calculate_f1(results_with_beta[0]['structure'], ref_structure)
-        print(f"alpha=0.5,beta=0.3: {results_with_beta[0]['structure']} (F1={f1_beta:.3f})")
+        f1_beta = calculate_f1(results_with_beta[0].structure, ref_structure)
+        print(f"alpha=0.5,beta=0.3: {results_with_beta[0].structure} (F1={f1_beta:.3f})")
 
 
 if __name__ == "__main__":

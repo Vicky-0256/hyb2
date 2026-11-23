@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cplfold"
+version = "1.0.0"
+description = "Reads-guided two-phase RNA secondary structure prediction with pseudoknots, for one or two strands"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "GPL-3.0-or-later; see THIRD_PARTY_NOTICES.md for the LinearFold- and HotKnots-derived parts" }
+authors = [{ name = "Ke Wang" }]
+dependencies = ["numpy", "numba"]
+
+[project.optional-dependencies]
+vienna = ["ViennaRNA"]
+
+[project.scripts]
+cplfold = "cplfold.cli:main"
+
+[tool.setuptools]
+packages = ["cplfold", "cplfold._internal"]
+
+[tool.setuptools.package-data]
+"cplfold._internal" = ["energy_params/*"]

@@ -2,7 +2,7 @@
 
 The loop terms are LinearFold-V's Turner tables with ViennaRNA's double-dangle
 convention, the tables CPLfold's beam search uses; they are evaluated by the
-same nick-aware decomposition as :mod:`Utils.cofold_energy`, with no nick.
+same nick-aware decomposition as :mod:`cplfold._internal.cofold_energy`, with no nick.
 The result equals ViennaRNA's ``eval_structure`` (Turner 2004, dangles=2).
 
 CPLfold ranks pseudoknot-free candidates with this function, so that one run
@@ -11,8 +11,8 @@ scores all of its candidates with one validated model.
 
 import numpy as np
 
-from Utils.cofold_energy import _nested_terms, _special_hairpins
-from Utils.hotknots_energy import HotKnotsEnergy, NUC_TO_INT, _crosses, parse_dot_bracket
+from .cofold_energy import _nested_terms, _special_hairpins
+from .hotknots_energy import HotKnotsEnergy, NUC_TO_INT, _crosses, parse_dot_bracket
 
 
 def turner_energy(sequence: str, structure: str) -> float:

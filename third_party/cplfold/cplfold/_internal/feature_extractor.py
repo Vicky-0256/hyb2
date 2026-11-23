@@ -2,9 +2,9 @@
 feature_extractor.py
 Extract CONTRAfold-style feature counts from a sequence and dot-bracket structure.
 
-This mirrors the decomposition used by Utils.utility scoring functions and
-Utils.LinearFoldEval.eval (lv=False), but records feature counts instead of
-energies. Counts align with arrays in Utils.feature_weight so updates can be
+This mirrors the decomposition used by cplfold._internal.utility scoring functions and
+cplfold._internal.LinearFoldEval.eval (lv=False), but records feature counts instead of
+energies. Counts align with arrays in cplfold._internal.feature_weight so updates can be
 applied via structured perceptron or similar.
 """
 
@@ -12,9 +12,9 @@ from typing import Dict, Any, Tuple, List
 
 import numpy as np
 
-import Utils.shared as shared
-from Utils import feature_weight as fw
-from Utils.utility import (
+from . import shared
+from . import feature_weight as fw
+from .utility import (
     NOTON,
     EXPLICIT_MAX_LEN,
     SINGLE_MAX_LEN,

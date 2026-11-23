@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def main():
-    required = ("RNAfold", "RNAcofold", "b2ct", "mfold", "mfold_datdir", "node")
+    required = ("RNAfold", "RNAcofold", "b2ct", "mfold", "mfold_datdir", "bowtie2", "bowtie2-build", "node")
     missing = [name for name in required if shutil.which(name) is None]
     if missing:
         print("Missing CLI release dependencies: " + ", ".join(missing), file=sys.stderr)

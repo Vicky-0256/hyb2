@@ -25,7 +25,7 @@ import time
 import numpy as np
 from numba import njit
 
-from CPLfold_parser import (
+from .parser import (
     get_pair_type, v_score_hairpin, v_score_single, v_score_external,
     _v_hairpin, _v_mismatchH, _v_terminalAU, _v_tetra, _v_hexa, _v_tri,
     _v_stack, _v_bulge, _v_internal, _v_int11, _v_int21, _v_int22,
@@ -33,7 +33,7 @@ from CPLfold_parser import (
     _v_mismatchM, _v_mismatchExt, _v_dangle5, _v_dangle3,
     _v_ml_intern, _v_ml_closing,
 )
-from Utils.energy_parameter import Tetraloops, Hexaloops, Triloops
+from .energy_parameter import Tetraloops, Hexaloops, Triloops
 
 
 _INF = 1.0e30

@@ -327,9 +327,14 @@ def worker(repository, config_path):
     sys.path.insert(0, str(repository / "third_party/cplfold"))
     import numpy as np
     import numba
-    import CPLfold
-    import CPLfold_parser
-    import Utils.hotknots_energy as energy_module
+    if (repository / "third_party/cplfold/cplfold/_internal").is_dir():
+        from cplfold._internal import single as CPLfold
+        from cplfold._internal import parser as CPLfold_parser
+        from cplfold._internal import hotknots_energy as energy_module
+    else:  # a baseline revision from before the cplfold package layout
+        import CPLfold
+        import CPLfold_parser
+        import Utils.hotknots_energy as energy_module
 
     if numba.config.DISABLE_JIT:
         raise RuntimeError("Actual Numba JIT is required")

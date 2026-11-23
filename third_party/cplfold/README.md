@@ -10,23 +10,34 @@ runtime; this runtime independence does not change the code and data provenance.
 ## Directory Structure
 
 ```
-CPLfold/
-├── CPLfold.py                       # Main algorithm
-├── CPLfold_parser.py                # LinearFold parser with bonus matrix support
+third_party/cplfold/                 # project root and import root
+├── pyproject.toml                   # package "cplfold" (pip install third_party/cplfold)
+├── cplfold/
+│   ├── __init__.py                  # public API: fold(), Prediction, CofoldInputError
+│   ├── bonus.py                     # reads-to-bonus matrices (strand-bounded Gaussians)
+│   ├── sequence.py                  # sequence normalisation and strand layout
+│   ├── models.py                    # energy models (MODELS, COFOLD_MODELS, DEFAULT_MODELS)
+│   ├── cli.py                       # the cplfold command
+│   └── _internal/                   # private implementation
+│       ├── single.py                # two-phase algorithm (single strand; dispatches '&' to cofold)
+│       ├── cofold.py                # two-strand CPLcofold
+│       ├── parser.py                # LinearFold parser with bonus matrix support
+│       ├── cofold_parser.py         # strand-aware Numba parser
+│       ├── hotknots_energy.py       # Python port of HotKnots energy calculation
+│       ├── energy_params/           # Parameter tables from HotKnots 2.0
+│       └── ...
 ├── extract_paris_scores.py          # PARIS BAM file processing (IRIS method)
-├── example_with_paris.py            # Example using PARIS data
+├── example.py, example_with_paris.py
 ├── data/                            # Example data files
 │   ├── bpRNA_RFAM_5220.dbn          # Example RNA sequence/structure
 │   ├── bpRNA_RFAM_5220_paris_scores.txt  # PARIS support scores
 │   └── bpRNA_RFAM_5220_paris_scores.npy  # PARIS matrix (numpy)
-└── Utils/                           # Energy parameters and utilities
-    ├── hotknots_energy.py           # Python port of HotKnots energy calculation
-    ├── energy_params/               # Parameter tables from HotKnots 2.0
-    ├── energy_parameter.py
-    ├── feature_weight.py
-    ├── intl11.py, intl21.py, intl22.py
-    └── ...
+└── tests/
 ```
+
+Install with `pip install third_party/cplfold` (add `[vienna]` for ViennaRNA), or
+put `third_party/cplfold` on `sys.path`. Only `cplfold`, `cplfold.bonus`,
+`cplfold.sequence`, `cplfold.models` and `cplfold.cli` are public.
 
 ## Algorithm
 
@@ -58,59 +69,73 @@ Since RNA energies are negative, higher beta favors pseudoknots in ranking.
 
 ## Usage
 
-This branch also provides **two-strand CPLcofold** in Python with Numba
-acceleration, preserving alpha-guided reads and beta pseudoknot ranking:
+### Python API
 
 ```python
-from CPLfold import cofold
-results = cofold("GGGG", "CCCC", alpha=0.5, beta=0.3, verbose=False)
+import cplfold
+
+# Basic usage: a list of Prediction objects, best first
+results = cplfold.fold(sequence, beam_size=100)
+best = results[0]
+print(best.structure, best.energy, best.kind)   # kind: 'phase1' or 'pseudoknot'
+
+# With PARIS bonus matrix
+import numpy as np
+bonus = np.load("bonus.npy")
+results = cplfold.fold(sequence, bonus=bonus, alpha=0.5, beta=0.3)
+
+# Pseudoknot-free prediction
+results = cplfold.fold(sequence, pseudoknots=False)
 ```
 
-Supply a symmetric `bonus_matrix` to apply reads guidance; alpha alone adds
-no evidence. CLI input accepts `-s 'GGGG&CCCC'`. Nested cofold uses Turner
-energies; cofold pseudoknots use an explicitly **experimental Turner/DP
-ranking heuristic**, reported in each candidate's `energy_metadata`.
+`fold(sequence, *, partner=None, pseudoknots=True, energy_model=None, bonus=None,
+alpha=0.0, beta=0.0, beam_size=100, energy_delta=5.0, max_phase1=10, max_phase2=5)`
+never prints and never writes files. Each `Prediction` has `structure`, `energy`,
+`effective_energy`, `kind`, `score`, `phase1_structure`, `phase1_energy` and
+`phase2_structure`; `details` is a read-only mapping of every field, and
+`as_dict()` returns the original candidate dict.
+
+Two-strand **CPLcofold** (Python with Numba acceleration) preserves alpha-guided
+reads and beta pseudoknot ranking:
+
+```python
+results = cplfold.fold("GGGG", partner="CCCC", alpha=0.5, beta=0.3)
+results = cplfold.fold("GGGG&CCCC")          # the same two strands
+```
+
+Supply a symmetric `bonus` matrix to apply reads guidance; alpha alone adds
+no evidence. Nested cofold uses Turner energies; cofold pseudoknots use an
+explicitly **experimental Turner/DP ranking heuristic**, reported in each
+candidate's `details["energy_metadata"]`. Invalid two-strand input raises
+`cplfold.CofoldInputError` (a `ValueError`).
 See [the cofold API, reads coordinates, and model limitations](../../docs/cplfold-python.md#two-strand-cplcofold-python-and-numba).
 
 ### Command Line
 
 ```bash
-# Basic usage
-python CPLfold.py -s GGCGCGGCACCGUCCGCGGAACAAACGG
+# Basic usage (from third_party/cplfold, or anywhere after pip install)
+python -m cplfold.cli -s GGCGCGGCACCGUCCGCGGAACAAACGG
 
 # With parameters
-python CPLfold.py -s SEQUENCE -b 200 -d 10.0 --beta 0.3
+python -m cplfold.cli -s SEQUENCE -b 200 -d 10.0 --beta 0.3
 
 # With output file
-python CPLfold.py -s SEQUENCE -o results.txt
+python -m cplfold.cli -s SEQUENCE -o results.txt
+
+# Two strands
+python -m cplfold.cli -s 'GGGG&CCCC' --mode standard
 ```
 
-### Python API
-
-```python
-from CPLfold import two_phase_pseudoknot_fold
-
-# Basic usage
-results = two_phase_pseudoknot_fold(sequence, beam_size=100)
-
-# With PARIS bonus matrix
-import numpy as np
-bonus_matrix = np.load("bonus.npy")
-results = two_phase_pseudoknot_fold(
-    sequence,
-    bonus_matrix=bonus_matrix,
-    alpha=0.5,
-    beta=0.3
-)
-```
+A pip install provides the same command as `cplfold`. In Hyb2, `bin/cplfold`
+and `bin/cplcofold` add an input-length limit and a private Numba cache.
 
 ### Energy-only API
 
 CPLfold's energy calculator is based on the **HotKnots 2.0 source code and
-parameter distribution**. `Utils/hotknots_energy.py` ports and refactors the
+parameter distribution**. `cplfold/_internal/hotknots_energy.py` ports and refactors the
 energy-relevant `Stack`/`Loop`/`LoopList`/`Bands` structure decomposition,
 SimFold secondary-structure terms, and DP/CC/RE pseudoknot scoring behavior into
-Python. The eight files in `Utils/energy_params` come from the parameter tables
+Python. The eight files in `cplfold/_internal/energy_params` come from the parameter tables
 distributed with HotKnots 2.0; only formatting such as line endings or trailing
 whitespace was normalized where needed, not the numerical values.
 
@@ -130,7 +155,7 @@ derived from HotKnots' energy-calculation code and data.
 The Python API evaluates the complete closed-region/Loop/Bands tree directly:
 
 ```python
-from Utils.hotknots_energy import HotKnotsEnergy
+from cplfold._internal.hotknots_energy import HotKnotsEnergy  # private module
 
 result = HotKnotsEnergy().compute_energy(
     "GGCGCGGCACCGUCCGCGGAACAAACGG",
@@ -223,7 +248,7 @@ Available energy models:
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.8+
 - NumPy
 - Numba
 - SciPy

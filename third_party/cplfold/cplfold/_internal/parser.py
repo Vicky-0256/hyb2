@@ -1,5 +1,5 @@
 """
-CPLfold_parser.py - LinearFold Parser for CPLfold
+parser.py - LinearFold Parser for CPLfold
 
 Ultra-optimized LinearFold implementation with COMRADES/PARIS bonus matrix support.
 
@@ -36,8 +36,8 @@ try:
 except ImportError:
     HAS_VIENNARNA = False
 
-import Utils.shared
-from Utils.feature_weight import (
+from . import shared
+from .feature_weight import (
     base_pair, helix_stacking, helix_closing, terminal_mismatch,
     dangle_left, dangle_right, hairpin_length, bulge_length,
     internal_length, internal_symmetric_length, internal_asymmetry,
@@ -46,7 +46,7 @@ from Utils.feature_weight import (
 )
 
 # Vienna energy parameters
-from Utils.energy_parameter import (
+from .energy_parameter import (
     stack37, hairpin37, bulge37, internal_loop37,
     mismatchI37, mismatchH37, mismatchM37, mismatchExt37,
     mismatch1nI37, mismatch23I37,
@@ -55,10 +55,10 @@ from Utils.energy_parameter import (
     Tetraloop37, Hexaloop37, Triloop37,
     Tetraloops, Hexaloops, Triloops, SPECIAL_HP
 )
-from Utils.intl11 import int11_37
-from Utils.intl21 import int21_37
-from Utils.intl22 import int22_37
-from Utils.utility_v import v_init_tetra_hex_tri, NUM_TO_PAIR, NUM_TO_NUC
+from .intl11 import int11_37
+from .intl21 import int21_37
+from .intl22 import int22_37
+from .utility_v import v_init_tetra_hex_tri, NUM_TO_PAIR, NUM_TO_NUC
 
 # ============================================================================
 # PARIS Bonus Preprocessing Functions
@@ -2036,11 +2036,11 @@ def _outside_kernel(n, nucs, next_pair, lv,
 
 # Without Numba (the browser runs CPLfold in Pyodide, where `numba` is an identity
 # decorator shim) the two Vienna kernels above would run as Python on NumPy scalars.
-# Utils.pure_kernels computes the same recursions on Python lists, bit-identically;
+# pure_kernels computes the same recursions on Python lists, bit-identically;
 # the Numba build keeps the kernels above unchanged.
 import numba as _numba_module
 if not hasattr(_numba_module, "__version__") and os.environ.get("CPLFOLD_PURE_KERNELS", "1") != "0":
-    from Utils import pure_kernels as _pure_kernels
+    from . import pure_kernels as _pure_kernels
     parse_loop_vienna = _pure_kernels.wrap_parse_loop_vienna(parse_loop_vienna)
     _outside_kernel = _pure_kernels.wrap_outside_kernel(_outside_kernel)
 
@@ -2054,7 +2054,7 @@ class BeamCKYParserHyper:
         self.is_verbose = is_verbose
         self.lv = lv
         self.use_constraints = use_constraints
-        self._allowed_pairs = np.array(Utils.shared.allowed_pairs, dtype=np.int8)
+        self._allowed_pairs = np.array(shared.allowed_pairs, dtype=np.int8)
 
         # PARIS bonus attributes
         self._alpha = 0.0
@@ -2115,10 +2115,9 @@ class BeamCKYParserHyper:
             return
 
         # 转换为扁平数组
-        if bonus_matrix.ndim == 2:
-            flat_matrix = bonus_matrix.flatten().astype(np.float32)
-        else:
-            flat_matrix = bonus_matrix.astype(np.float32)
+        # IRIS scores arrive in float64. Narrow at the parser boundary,
+        # without first allocating another full-size float64 matrix.
+        flat_matrix = np.array(bonus_matrix, dtype=np.float32, order='C', copy=True).reshape(-1)
 
         self._raw_bonus_matrix = flat_matrix.copy()
         n = seq_length
@@ -2161,7 +2160,7 @@ class BeamCKYParserHyper:
         # Convert sequence
         nucs = np.zeros(n, dtype=np.int32)
         for i, c in enumerate(seq):
-            nucs[i] = Utils.shared.get_acgu_num_c(c)
+            nucs[i] = shared.get_acgu_num_c(c)
 
         # Process constraints
         use_constraints = self.use_constraints and cons is not None
@@ -2441,7 +2440,7 @@ class BeamCKYParserHyper:
         # Convert sequence
         nucs = np.zeros(n, dtype=np.int32)
         for i, c in enumerate(seq):
-            nucs[i] = Utils.shared.get_acgu_num_c(c)
+            nucs[i] = shared.get_acgu_num_c(c)
 
         # Build next_pair
         next_pair = np.full((NOTON, n), -1, dtype=np.int32)
@@ -4419,7 +4418,7 @@ class BeamCKYParserHyper:
         n = len(seq)
         nucs = np.zeros(n, dtype=np.int32)
         for i, c in enumerate(seq):
-            nucs[i] = Utils.shared.get_acgu_num_c(c)
+            nucs[i] = shared.get_acgu_num_c(c)
 
         # Build pair table
         pairs = [-1] * n

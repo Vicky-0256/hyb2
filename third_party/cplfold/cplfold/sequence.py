@@ -1,4 +1,4 @@
-"""Two-strand coordinates: the nick is an edge, never a nucleotide.
+"""RNA sequence text and two-strand coordinates accepted by :func:`cplfold.fold`.
 
 ``cutpoint`` is the length of strand A / zero-based index of the first B base.
 All arrays and pair coordinates omit the display separator ``&``.
@@ -7,11 +7,32 @@ All arrays and pair coordinates omit the display separator ``&``.
 from numbers import Integral
 from typing import Optional, Tuple
 
+from ._internal.cli_input import read_sequence_file
+
+__all__ = ["ALPHABET", "ALIASES", "WHITESPACE", "clean", "normalise_sequence",
+           "add_strand_break", "strip_structure_break", "read_sequence_file"]
+
+ALPHABET = "ACGU"
+ALIASES = {"T": "U"}
+# Unicode White_Space plus the byte-order mark; removed anywhere in a sequence.
+WHITESPACE = (" \t\n\r\v\f\u0085\u00a0\u1680" + "".join(chr(n) for n in range(0x2000, 0x200b))
+              + "\u2028\u2029\u202f\u205f\u3000\ufeff")
+
+_TRANSLATION = {ord(c): ALIASES.get(c.upper(), c.upper()) for c in "abcdefghijklmnopqrstuvwxyz" + "".join(ALIASES)}
+_TRANSLATION.update(dict.fromkeys(map(ord, WHITESPACE)))
+
+
+def clean(text: str) -> str:
+    """Upper-case ``text``, apply ``ALIASES`` (T to U) and drop ``WHITESPACE``; no validation."""
+    if not isinstance(text, str):
+        raise ValueError("sequence must be text")
+    return text.translate(_TRANSLATION)
+
 
 def normalise_sequence(sequence: str, cutpoint: Optional[int] = None) -> Tuple[str, Optional[int]]:
     if not isinstance(sequence, str):
         raise ValueError("RNA sequence must be a string")
-    sequence = "".join(sequence.split()).upper().replace("T", "U")
+    sequence = clean(sequence)
     if sequence.count("&") > 1:
         raise ValueError("Cofold accepts exactly two strands separated by one '&'")
     if cutpoint is not None and (isinstance(cutpoint, bool) or not isinstance(cutpoint, Integral)):
@@ -24,7 +45,7 @@ def normalise_sequence(sequence: str, cutpoint: Optional[int] = None) -> Tuple[s
         sequence = sequence.replace("&", "")
     if not sequence:
         raise ValueError("RNA sequence must not be empty")
-    invalid = sorted(set(sequence) - set("ACGU"))
+    invalid = sorted(set(sequence) - set(ALPHABET))
     if invalid:
         raise ValueError("RNA sequence accepts only A, C, G and U (T is converted to U)")
     if cutpoint is not None:

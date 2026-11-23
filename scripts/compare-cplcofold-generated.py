@@ -146,9 +146,9 @@ def parse_reference(case, beam, completed, helper):
 def worker(config_path, output_path):
     helper = comparison_module()
     sys.path.insert(0, str(ROOT / "third_party/cplfold"))
-    from CPLfold import cofold
-    import CPLcofold_parser
-    from Utils.cofold_energy import CofoldEnergy
+    from cplfold._internal.single import cofold
+    import cplfold._internal.cofold_parser as CPLcofold_parser
+    from cplfold._internal.cofold_energy import CofoldEnergy
     import numba
     import numpy as np
     if numba.config.DISABLE_JIT:
@@ -311,7 +311,7 @@ def main():
         for name in ("_inside", "_face_energies", "_traceback_best"):
             if not payload["nopython_signatures"].get(name):
                 failures.append("Missing real nopython signature: " + name)
-        if payload["numba_disabled"] or Path(payload["parser_module"]).resolve() != (ROOT / "third_party/cplfold/CPLcofold_parser.py").resolve():
+        if payload["numba_disabled"] or Path(payload["parser_module"]).resolve() != (ROOT / "third_party/cplfold/cplfold/_internal/cofold_parser.py").resolve():
             failures.append("Unexpected Python parser or disabled JIT")
         if source_manifest() != before or helper.manifest(reference) != reference_before:
             failures.append("Python/helper/reference source changed during the run")

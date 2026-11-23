@@ -26,9 +26,9 @@ def _load_modules():
         shim.njit = njit
         sys.modules["numba"] = shim
     return (
-        importlib.import_module("CPLcofold"),
-        importlib.import_module("CPLcofold_parser"),
-        importlib.import_module("Utils.cofold_energy"),
+        importlib.import_module("cplfold._internal.cofold"),
+        importlib.import_module("cplfold._internal.cofold_parser"),
+        importlib.import_module("cplfold._internal.cofold_energy"),
     )
 
 

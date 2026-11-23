@@ -29,11 +29,12 @@ from __future__ import annotations
 import numpy as np
 from numba import njit
 
-import CPLfold_parser as _turner
-from Utils.hotknots_energy import (
+from . import parser as _turner
+from ..models import COFOLD_MODELS, DEFAULT_MODELS
+from .hotknots_energy import (
     HotKnotsEnergy, NUC_TO_INT, _crosses, parse_dot_bracket,
 )
-from Utils.strand_layout import normalise_sequence, strip_structure_break
+from ..sequence import normalise_sequence, strip_structure_break
 
 DUPLEX_INIT_KCAL = 4.10
 _SPECIAL_LOOPS = {
@@ -243,7 +244,7 @@ class CofoldEnergy:
     def _add(breakdown, name, value):
         breakdown[name] = breakdown.get(name, 0.0) + float(value)
 
-    def compute_energy(self, sequence, structure, cutpoint, model="DP09"):
+    def compute_energy(self, sequence, structure, cutpoint, model=DEFAULT_MODELS["cplcofold"]):
         sequence, cutpoint = normalise_sequence(sequence, cutpoint)
         if cutpoint is None:
             raise ValueError("CofoldEnergy requires a cutpoint separating two nonempty strands")
@@ -277,8 +278,8 @@ class CofoldEnergy:
             names = ("hairpin", "stack_and_internal", "multiloop", "nicked_exterior", "exterior")
             breakdown = {name: float(value) / 100.0 for name, value in zip(names, terms)}
         else:
-            if model not in ("DP03", "DP09"):
-                raise ValueError("Cofold pseudoknots support DP03 or DP09 experimental "
+            if model not in COFOLD_MODELS:
+                raise ValueError(f"Cofold pseudoknots support {' or '.join(sorted(COFOLD_MODELS))} experimental "
                                  f"hybrid scoring, not {model}; no model substitution is performed")
             breakdown, pk_metadata = self._pseudoknot(nucs, pairs, cutpoint, special, model)
             metadata.update(pk_metadata)
@@ -427,6 +428,6 @@ class CofoldEnergy:
         return breakdown, metadata
 
 
-def compute_energy(sequence, structure, cutpoint, model="DP09"):
+def compute_energy(sequence, structure, cutpoint, model=DEFAULT_MODELS["cplcofold"]):
     """Return kcal/mol; use the class API for the energy-model metadata."""
     return float(CofoldEnergy().compute_energy(sequence, structure, cutpoint, model)["energy"])

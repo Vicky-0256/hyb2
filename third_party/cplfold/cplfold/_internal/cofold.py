@@ -10,8 +10,9 @@ from numbers import Integral
 
 import numpy as np
 
-from Utils.strand_layout import add_strand_break, normalise_sequence
-from Utils.cofold_options import mode_options
+from ..models import DEFAULT_MODELS
+from ..sequence import add_strand_break, normalise_sequence
+from .cofold_options import mode_options
 
 
 class CofoldInputError(ValueError):
@@ -101,7 +102,7 @@ def _validate_search_bonus(matrix, alpha, impossible):
 
 
 def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
-                     max_phase1=10, max_phase2=5, energy_model="DP09",
+                     max_phase1=10, max_phase2=5, energy_model=DEFAULT_MODELS["cplcofold"],
                      output_file=None, verbose=True, lv=True, bonus_matrix=None,
                      alpha=0.0, beta=0.0, allow_pseudoknot=True):
     """Two-phase cofold search; every generated candidate is scored as a whole.
@@ -130,9 +131,9 @@ def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
     bonus_matrix = _bonus_matrix(bonus_matrix, len(seq))
 
     # Lazy imports keep the established single-strand startup/JIT path intact.
-    from CPLcofold_parser import BeamCKYCofoldParser, _INF
-    from Utils.cofold_energy import CofoldEnergy
-    from CPLfold import (get_pairs_from_structure, is_pseudoknot,
+    from .cofold_parser import BeamCKYCofoldParser, _INF
+    from .cofold_energy import CofoldEnergy
+    from .single import (get_pairs_from_structure, is_pseudoknot,
                          merge_structures, output_results, structure_to_constraint)
 
     _validate_search_bonus(bonus_matrix, alpha, _INF)
@@ -232,5 +233,5 @@ def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
 
 
 if __name__ == "__main__":
-    from CPLfold import main
+    from ..cli import main
     raise SystemExit(main(cofold_entry=True))

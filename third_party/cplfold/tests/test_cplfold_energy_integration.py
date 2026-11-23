@@ -20,7 +20,7 @@ def _load_cplfold_with_numba_stub():
 
         numba.njit = njit
         sys.modules["numba"] = numba
-    return importlib.import_module("CPLfold")
+    return importlib.import_module("cplfold._internal.single")
 
 
 class _BrokenEvaluator:

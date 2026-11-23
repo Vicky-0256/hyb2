@@ -24,11 +24,11 @@ def load_energy():
 
         shim.njit = njit
         sys.modules["numba"] = shim
-    return importlib.import_module("Utils.cofold_energy")
+    return importlib.import_module("cplfold._internal.cofold_energy")
 
 
 def swap_strands(sequence, structure, cutpoint):
-    from Utils.hotknots_energy import parse_dot_bracket
+    from cplfold._internal.hotknots_energy import parse_dot_bracket
     pairs, _ = parse_dot_bracket(structure)
     closes = {"(": ")", "[": "]", "{": "}", "<": ">", "A": "a"}
     n = len(sequence)
@@ -82,7 +82,7 @@ class CofoldEnergyGraphRegressionTests(unittest.TestCase):
                                      swapped["metadata"]["bands_per_pseudoknot"])
 
     def test_complex_pks_are_invariant_at_every_nick(self):
-        from Utils.hotknots_energy import parse_dot_bracket
+        from cplfold._internal.hotknots_energy import parse_dot_bracket
         structures = (
             "..(((((..[[[[)))))......]]]]",
             "(((......[[[...)))...{{{...]]]......}}}",
@@ -161,7 +161,7 @@ class CofoldEnergyGraphRegressionTests(unittest.TestCase):
             self.assertEqual(disconnected["breakdown"]["duplex_init"], 0.0)
 
     def test_original_single_strand_hotknots_is_unchanged(self):
-        from Utils.hotknots_energy import HotKnotsEnergy
+        from cplfold._internal.hotknots_energy import HotKnotsEnergy
         original = HotKnotsEnergy().compute_energy(PK_SEQUENCE, PK_STRUCTURE, "DP09")
         self.assertAlmostEqual(original["energy"], -8.0204, places=4)
 

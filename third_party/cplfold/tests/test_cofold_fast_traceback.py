@@ -30,7 +30,7 @@ def _load_modules():
 
         shim.njit = njit
         sys.modules["numba"] = shim
-    return importlib.import_module("CPLcofold_parser"), importlib.import_module("CPLcofold")
+    return importlib.import_module("cplfold._internal.cofold_parser"), importlib.import_module("cplfold._internal.cofold")
 
 
 def _matrix(n, rng, signed=False):

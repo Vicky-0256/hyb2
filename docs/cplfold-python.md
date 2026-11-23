@@ -1,10 +1,9 @@
 # CPLfold Python integration
 
-HYB2 includes a source snapshot of CPLfold at
-`third_party/cplfold`. The snapshot was imported from
-`https://github.com/Vicky-0256/CPLfold.git`, branch
+CPLfold is part of HYB2 and lives in `third_party/cplfold`. It was originally
+imported from `https://github.com/Vicky-0256/CPLfold.git`, branch
 `feature/pseudoknot-free-mode`, commit
-`24bab521e0bcf2cff71f4567363aac1d5f5c97d5`.
+`24bab521e0bcf2cff71f4567363aac1d5f5c97d5`, and is now developed here.
 
 ## Runtime boundary
 
@@ -23,23 +22,78 @@ The browser measures a conservative session recommendation above a 75-nt
 baseline, with a 500-nt hard browser ceiling. No server-side execution layer
 is required.
 
-For HYB-guided browser runs, each eligible row contributes its two prepared
+By default in HYB-guided browser runs, each eligible row contributes its two prepared
 reference intervals once to the original CPLfold/IRIS-style Gaussian,
 symmetric outer-product and `log1p` bonus transform. The browser does not use
 HYB overlap score or collapsed source-read count as matrix weights.
 
+`pipeline/hyb2analysis/support_kernels.py` owns the selectable kernel IDs,
+labels, pair estimators and default for both UIs. The browser build and desktop
+release workflow export the catalog automatically. For a source checkout, run
+`python3 -B scripts/export-support-kernels.py` after changing it and include
+both generated files in the change (`--check` detects stale copies). This lets
+the static page and native MyGo form show the choices before Python starts.
+
+`pipeline/hyb2analysis/engine_parameters.py` is the source for the
+Structure form ranges of
+CPLfold, CPLcofold, ViennaRNA, COMRADES and IRIS; it takes the selectable
+CPLfold/CPLcofold energy models from `cplfold.models`
+(`third_party/cplfold/cplfold/models.py`). The same export command
+updates both clients. Desktop single-strand tasks allow beam sizes up to
+1000; browser tasks and all CPLcofold tasks stop at 200. The desktop mfold
+backend has fixed temperature and minimum loop settings. These task limits
+do not replace the standalone CLI's search options or platform memory limits.
+For IRIS, edit `IRIS_DEFAULTS` in `pipeline/hyb2analysis/iris_parameters.py`
+and run the same export. Both forms and the browser worker read the exported
+defaults; the desktop runtime and `bin/iris` read the Python definition directly.
+For CPLfold and CPLcofold, each numeric task parameter declares its default
+beside its range. Omitting beam size, phase-1 count, energy delta or beta
+selects 20, 3, 5 or 0, respectively. Omitted alpha is 0.5 for single-strand
+tasks and 0 for two-strand tasks. Both guided forms explicitly start at
+alpha 0.5; an explicit zero is never replaced by the default.
+On both hosts, omitting `allowPseudoknot` runs only Phase 1. Only JSON `true`
+enables Phase 2; `false` disables it. Strings, numbers and `null` are
+rejected. Native tasks also accept `allow_pseudoknot`; the legacy native CLI
+task accepts the inverse `no_pseudoknot`. The standalone CLI and Python API
+keep their original two-phase default.
+Rebuild the browser Python archive and desktop application/runtime together
+with their generated assets; already installed clients do not update live.
+
+`cplfold.sequence` (`third_party/cplfold/cplfold/sequence.py`) defines the engine's
+alphabet, base aliases and ignored whitespace. Hyb2's paste rules for both
+clients are in `pipeline/hyb2analysis/fold_text.py`, built on them. Each paste
+box accepts one FASTA record or plain text: skip the header, whitespace and
+ASCII position numbers, uppercase bases and convert T to U. For two strands,
+use separate boxes or `A&B` in the first box. The break is the length of A
+after cleanup, not a nucleotide. Reference, HYB record and prepared worker
+inputs do not discard digits or FASTA headers as paste formatting. Engine
+and platform length limits apply after normalization.
+
+`pipeline/hyb2analysis/reference.py` owns the Structure input minimums,
+exported as `foldText.minWindowNt`, `minPastedNt` and `minSequenceNt`.
+An explicitly selected single reference window needs 10 nt; a pasted single
+strand needs 5 nt. A whole reference, a HYB record and each strand or fragment
+of CPLcofold or paired COMRADES need at least one nucleotide. The 5-nt paste
+cutoff is a single-strand input policy, not a requirement for an intermolecular
+pair. A pasted or record sequence located in the reference keeps its source's
+minimum; locating it does not turn it into a user-selected reference window.
+Coordinates are 1-based and inclusive. Both clients reject a start after its
+end instead of swapping the bounds, including in two-region layouts.
+
 The request field `supportKernel` (the "Read support (B_ij)" setting on the web
 and desktop pages; `support_kernel` for desktop structure tasks) chooses how a
-row becomes support. Every kernel sums one contribution per row. The first four
-zero cells below 1e-6 and apply `log1p`; `duplex` saturates its counts:
+row becomes support. Every kernel sums one contribution per row. Gaussian uses
+the IRIS rule: accumulate in double precision, discard cells below `2^-23`
+after summing all rows, then apply `log1p`. The two block kernels retain their
+`1e-6` cutoff before `log1p`; the two Vienna pair kernels saturate their counts:
 
 | `supportKernel` | Each row adds |
 |---|---|
 | `gaussian` (default) | a Gaussian around each arm centre (sigma = mean arm length / 6, peak 1), symmetric outer product: the IRIS support |
 | `block` | 1 to every pair between its two arms |
 | `block-normalized` | 1 / sqrt(arm one length x arm two length) to every pair between its two arms |
-| `rnacofold` | 1 to each intermolecular pair that RNAcofold (37 °C, minimum loop 3) forms between its two arm sequences: the COMRADES evidence |
 | `duplex` | 1 to the count C_ij of each pair that ViennaRNA's RNAduplex (37 °C, intermolecular pairs only) forms between its two arms; then B_ij = s C_ij / (C_ij + q), s = 3.6 kcal/mol, q = the mean C of the round(n/3) best-supported pairs |
+| `comrades` | Jointly fold the two arms with ViennaRNA RNAcofold (37 °C, minimum hairpin loop 3). Arm-internal pairs compete in the fold but add no evidence. Add 1 for each cross-arm pair and use the same saturating transform as `duplex`. |
 
 `duplex` is the support of the HYB2 manuscript for every analysis except the
 IRIS benchmark. Arms that cannot pair (RNAduplex's `.&.`) add nothing. Native
@@ -50,8 +104,24 @@ one per CPU; one process on Windows). The browser runs the same code: the CPLfol
 worker loads ViennaRNA's own Python module, built for Pyodide by
 `scripts/build-vienna-pyodide.sh` (about 1.9 MB, loaded on first use), and
 gives the same pairs as the desktop. A host may instead pass the counts as
-`evidencePairs`.
-Tasks saved with the old kernel name `hybridmin` run as `duplex`.
+`evidencePairs` (`[[one, two, rows], ...]`, 1-based).
+Desktop tasks saved with the old kernel name `hybridmin` run as `duplex`.
+The removed `rnacofold` kernel applied `log1p` to RNAcofold counts. Old tasks
+are not silently converted to `comrades`: choose the new transform before rerunning.
+
+In a HYB-guided `comrades` or `duplex` fold, one table of raw counts serves two purposes.
+CPLfold uses the transformed matrix B during candidate search. Effective energy
+determines the final ranking, with additional tie-breakers for two strands. Each
+candidate also receives a COMRADES score from the **original counts**, not B:
+sum `min(C_ij, 1,000,000)` over its pairs and double the sum (both endpoints).
+The ceiling comes from Lau's `bp_score.sh` invocation of `make_VARNA_scores_2.sh`.
+It does not clip B or `comradesPairCounts`, the raw counts aligned with each candidate's pairs.
+This score does not rerank CPLfold candidates. Standalone COMRADES(ViennaRNA)
+at its default settings uses the same RNAcofold arm model as `comrades`, but
+fits ranked stems as hard constraints instead of using B. Only constraint
+selection is limited to the strongest 1,001 oriented pairs; scoring uses the
+full table in either orientation. Neither Vienna model promises the same
+per-pair counts as the original UNAFold `hybrid-min`.
 
 `log1p` compresses each cell but does not put the kernels on one scale. On the
 ZILM virion reads of genome positions 1-1200, the summed upper-triangle support
@@ -61,10 +131,7 @@ kernel. Choose alpha for each kernel separately (for example by held-out
 icSHAPE log-likelihood, or by the chimeric consistency score) before comparing
 kernels.
 
-`rnacofold` needs ViennaRNA's Python module. Native hosts cofold the arms
-themselves; the browser computes the pairs in its ViennaRNA worker and passes
-them as `evidencePairs` (`[[one, two, rows], ...]`, 1-based). For two strands
-every arm lies on one strand, so the block kernels stay on their strands as the
+For two strands every arm lies on one strand, so the block kernels stay on their strands as the
 Gaussian does. A bonus-matrix export records a non-default kernel in a
 `# support_kernel=` comment and in its `# transform=` line.
 
@@ -151,7 +218,7 @@ bin/cplcofold --mode pseudoknot --sequence-file two-strands.fasta \
 ```
 
 `bin/cplcofold` requires two strands and calls the same Python backend as
-`CPLfold.cofold(a, b)`. Its default is explicitly `pseudoknot` mode, matching
+`cplfold.fold(a, partner=b)`. Its default is explicitly `pseudoknot` mode, matching
 the existing API: alpha=0, beta=0, beam=100, delta=5, max_phase1=10 and
 max_phase2=5. Reads affect the search only when a matrix and a nonzero alpha
 are supplied. `--mode standard` selects the single-candidate, pseudoknot-free
@@ -178,30 +245,34 @@ match the general k-best path, including fractional reads weights and ties;
 the inside chart, constraints, association cost, and alpha/beta scoring rules
 are unchanged. Requests for multiple candidates retain lazy k-best enumeration.
 
-For the Python API, put `third_party/cplfold` on the Python import path:
+For the Python API, put `third_party/cplfold` on the Python import path (or
+`pip install third_party/cplfold`) and import the package `cplfold`:
 
 ```python
-from CPLfold import cofold
-from Utils.cofold_bonus import build_cofold_bonus_matrix
+import cplfold
+from cplfold.bonus import build_cofold_bonus_matrix
 
 a, b = "GGGG", "CCCC"
 # Prepared A+B coordinates, 1-based inclusive: two arm intervals per read.
 arms = [(1, 3, 6, 8), (2, 4, 5, 7)]
 bonus = build_cofold_bonus_matrix(len(a) + len(b), len(a), arms)
-results = cofold(a, b, mode="pseudoknot", bonus_matrix=bonus, alpha=0.5, beta=0.3,
-                 beam_size=100, max_phase1=10, max_phase2=5, verbose=False)
+results = cplfold.fold(a, partner=b, bonus=bonus, alpha=0.5, beta=0.3,
+                       beam_size=100, max_phase1=10, max_phase2=5)
 best = results[0]
-print(best["structure"], best["energy"], best["effective_energy"])
-print(best["energy_metadata"])
+print(best.structure, best.energy, best.effective_energy)
+print(best.details["energy_metadata"])
 
-# Ordinary single-candidate cofold with matching CLI defaults.
-ordinary = cofold(a, b, mode="standard", verbose=False)
+# Ordinary single-candidate cofold, as `--mode standard` on the CLI.
+ordinary = cplfold.fold(a, partner=b, pseudoknots=False, max_phase1=1, energy_delta=0.0)
 ```
 
-The existing API also accepts `two_phase_pseudoknot_fold(a + "&" + b, ...)`
-or `two_phase_pseudoknot_fold(a + b, cutpoint=len(a), ...)`.
+`cplfold.fold(a + "&" + b, ...)` folds the same two strands. `fold` returns
+`cplfold.Prediction` objects; `as_dict()` gives the original candidate dict.
+It never prints or writes files; invalid two-strand input raises
+`cplfold.CofoldInputError`, a `ValueError`.
 
-The public structure helpers accept compact or `&`-marked structures.
+The structure helpers in `cplfold._internal.single` (private) accept compact
+or `&`-marked structures.
 `get_pairs_from_structure` returns zero-based nucleotide pairs, excluding
 `&`; `structure_to_constraint` returns a compact mask and masks all paired
 positions in `()`, `[]`, and `{}`. `merge_structures` preserves a boundary
@@ -432,13 +503,12 @@ check, not a reason to discard the cases or redefine them as passes. See the
 [single-chain comparison](../artifacts/cplfold-single-expanded/report.md),
 and [combined validation record](../artifacts/cplcofold-expanded-validation/report.md).
 
-## Updating the snapshot
+## Development
 
-The code was imported as a squashed Git subtree. `UPSTREAM.md` records the
-small Hyb2-local changes made after import. After reviewing a new upstream
-commit and its license state, update it with `git subtree pull` rather than by
-copying the source directory. This avoids importing the upstream `.git`,
-`__pycache__`, and machine-specific Numba cache files.
+CPLfold is part of Hyb2 and is developed in `third_party/cplfold/`. It is no
+longer synced from the former CPLfold repository with `git subtree pull`.
+`UPSTREAM.md` records the original import and the changes made since. Do not
+commit `__pycache__` or machine-specific Numba cache files.
 
 ## Distribution status
 
@@ -448,3 +518,10 @@ different upstream license terms. This integration records both sets of terms
 but does not claim that their combination has received a single redistribution
 license. Obtain maintainer permission or qualified license review before public
 redistribution or merging this branch into a published release.
+
+Pages deployment, tagged desktop releases and uploads of bundled desktop
+artifacts all require the repository Actions variable
+`CPLFOLD_DISTRIBUTION_APPROVED=true`. Leave it unset until approval; browser
+and desktop build checks still run without it. A desktop release calls the Pages
+build at its own tag commit. Pushes to `main` check changes without replacing
+the published website independently of the installers.

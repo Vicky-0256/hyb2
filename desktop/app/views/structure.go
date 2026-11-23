@@ -102,7 +102,8 @@ type structureRecord struct {
 	Arms *stArms `json:"arms"`
 	// mapped, when set, are the pairs moved onto another reference
 	// (stMapRecords); they replace DBN and Pairs.
-	mapped []stPair
+	mapped       []stPair
+	mappedCounts map[[2]int]*int
 }
 
 // stWeights maps the records' pairs to their chimera bonus.
@@ -114,6 +115,40 @@ func stWeights(records []structureRecord) map[[2]int]float64 {
 			if i < len(r.Bonus) && r.Bonus[i] != nil {
 				out[stPairKey(pr[0], pr[1])] = *r.Bonus[i]
 			}
+		}
+	}
+	return out
+}
+
+func (r structureRecord) rawPairCounts() map[[2]int]*int {
+	if r.mapped != nil {
+		return r.mappedCounts
+	}
+	c := r.scoredCandidate()
+	if c == nil {
+		return nil
+	}
+	counts := make(map[[2]int]*int, len(r.Pairs))
+	for i, pair := range r.Pairs {
+		counts[stPairKey(pair[0], pair[1])] = &c.ComradesPairCounts[i]
+	}
+	return counts
+}
+
+// The bonus remains a folding quantity. If the candidate has measured
+// counts, drive colour (including comparison-mode opacity) from those.
+func stShadeWeights(records []structureRecord) []float64 {
+	var out []float64
+	for _, r := range records {
+		counts := r.rawPairCounts()
+		bonuses := stWeights([]structureRecord{r})
+		for _, pair := range stRecordPairs(r) {
+			key := [2]int{pair.I, pair.J}
+			v := bonuses[key]
+			if count := counts[key]; count != nil {
+				v = float64(*count)
+			}
+			out = append(out, v)
 		}
 	}
 	return out
@@ -495,7 +530,7 @@ func stCompare(recordsA, recordsB []structureRecord, compare bool) ([]stPair, []
 
 var stWindowLine = regexp.MustCompile(`^(\d+)\s*[-–:.\s]+\s*(\d+)$`)
 
-// stParseWindows reads "start-end" per line (or separated by , ;).
+// stParseWindows reads 1-based inclusive reference windows, one per line (or separated by , ;).
 func stParseWindows(text string, length int) ([]core.Window, []string) {
 	var windows []core.Window
 	var errs []string
@@ -506,24 +541,25 @@ func stParseWindows(text string, length int) ([]core.Window, []string) {
 		}
 		m := stWindowLine.FindStringSubmatch(line)
 		if m == nil {
-			errs = append(errs, "Not a window: "+line)
+			errs = append(errs, "Not a window: "+line+" (use start-end).")
 			continue
 		}
 		start, _ := strconv.Atoi(m[1])
 		end, _ := strconv.Atoi(m[2])
 		if start > end {
-			start, end = end, start
+			errs = append(errs, line+": start must not exceed end.")
+			continue
 		}
 		if start < 1 || (length > 0 && end > length) {
 			limit := "?"
 			if length > 0 {
 				limit = strconv.Itoa(length)
 			}
-			errs = append(errs, line+" is outside 1-"+limit)
+			errs = append(errs, line+" is outside 1-"+limit+".")
 			continue
 		}
-		if end-start+1 < 20 {
-			errs = append(errs, line+" is shorter than 20 nt")
+		if minNT := stKernels.FoldText.MinWindowNT; end-start+1 < minNT {
+			errs = append(errs, fmt.Sprintf("%s is shorter than %d nt.", line, minNT))
 			continue
 		}
 		windows = append(windows, core.Window{Start: uint64(start), End: uint64(end)})
@@ -547,16 +583,19 @@ type structurePage struct {
 
 	// form
 	gene, evidence string
+	// Explicit RNA picker choices include a reference, even when two
+	// references expose the same alias and length. Empty means infer from
+	// the selected samples (or a globally unique RNA), not the first match.
+	referenceID, referenceID2 string
 	// pinned are the samples a prefill named ("sampleIds", Explore after
 	// Compare): the evidence instead of evidence's, until the evidence or
 	// the top bar's Samples are chosen again (structure_evidence.go).
 	pinned []string
-	// topGene and topKey are the top bar's RNA and Samples last followed
-	// (followTopBar).
-	topGene, topKey string
-	mode            string // "genome" | "windows"
-	windows         string
-	pseudoknot      bool
+	// The top bar's reference, RNA and Samples last followed (followTopBar).
+	topReference, topGene, topKey string
+	mode                          string // "genome" | "windows"
+	windows                       string
+	pseudoknot                    bool
 	// topology is the "Structure topology" radio's value and lastPK the
 	// pseudoknot setting it last showed (structure_fold.go whatToFold)
 	topology string
@@ -671,8 +710,9 @@ func newStructurePage(a *App) *structurePage {
 
 func (p *structurePage) reset() {
 	p.gene, p.evidence, p.mode, p.windows = "", "", "genome", ""
+	p.referenceID, p.referenceID2, p.topReference = "", "", ""
 	p.topGene, p.topKey, p.pinned = "", "", nil
-	p.pseudoknot, p.seqOnly = false, false
+	p.pseudoknot, p.seqOnly = cplSettings(p.engine == engineCPLcofold).Defaults.AllowPseudoknot, false
 	p.src = stSource{}
 	p.gene2, p.region1, p.region2 = "", "", ""
 	p.resetFoldSettings()
@@ -724,11 +764,19 @@ func (p *structurePage) followTopBar(fill bool) {
 	if a.Project == nil {
 		return
 	}
-	if gene := a.Selected.Gene; gene != p.topGene || (fill && (p.gene == "" || a.Project.GeneLength(p.gene) == 0)) {
-		p.topGene, p.gene = gene, gene
-	}
 	if key := a.Selected.Key; key != p.topKey || (fill && len(p.evidenceIDs()) == 0) {
 		p.topKey, p.evidence, p.pinned = key, key, nil
+	}
+	gene, ref := a.Selected.Gene, a.Selected.ReferenceID
+	changed := gene != p.topGene || ref != p.topReference
+	if changed || (fill && p.referenceID == "" && p.geneReference() == nil) {
+		p.referenceID = ""
+		// Initially prefer the selected samples over the header's default
+		// reference. A later explicit header RNA/reference change is qualified.
+		if changed && p.topReference != "" {
+			p.referenceID = ref
+		}
+		p.topReference, p.topGene, p.gene = ref, gene, gene
 	}
 }
 
@@ -752,14 +800,16 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 		}
 		err := model.Decode(raw, &prefill)
 		if err == nil {
-			p.src.kind = stSourceReference        // a prefill names reference regions
-			defer p.pinSamples(prefill.SampleIDs) // after the selection key
+			p.src.kind = stSourceReference         // a prefill names reference regions
+			p.referenceID, p.referenceID2 = "", "" // resolve against the prefill's samples
+			defer p.pinSamples(prefill.SampleIDs)  // after the selection key
 		}
 		switch {
 		case err != nil:
 		case prefill.Record != nil:
 			if p.engine == engineCPLcofold {
 				p.engine = engineCPLfold // a record is one strand
+				p.ensureEngineModel()
 			}
 			if prefill.SelectionKey != "" {
 				p.evidence = prefill.SelectionKey
@@ -772,9 +822,7 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 			r1, r2 := prefill.Regions[0], prefill.Regions[1]
 			p.engine, p.gene, p.gene2 = engineCPLcofold, r1.GeneID, r2.GeneID
 			p.region1, p.region2 = fmt.Sprintf("%d-%d", r1.Start, r1.End), fmt.Sprintf("%d-%d", r2.Start, r2.End)
-			if p.model != "DP03" && p.model != "DP09" {
-				p.model = stDefaultModel
-			}
+			p.ensureEngineModel()
 			if prefill.SelectionKey != "" {
 				p.evidence = prefill.SelectionKey
 			}
@@ -783,6 +831,7 @@ func (p *structurePage) applyOptions(opts map[string]any) {
 		default:
 			if p.engine == engineCPLcofold {
 				p.engine = engineCPLfold // a window is one strand
+				p.ensureEngineModel()
 			}
 			if prefill.Gene != "" {
 				p.gene = prefill.Gene
@@ -1048,7 +1097,7 @@ func (p *structurePage) viewer(c *ui.Context) {
 			_, otherView := stViewModes[p.view]
 			if a != nil && (b != nil || (p.layers.mono && !otherView)) &&
 				ui.Checkbox(c.Key("st-shade"), &p.shade, "Shade by chimera support").
-					Tooltip("Arc opacity follows the pair's HYB bonus: faint arcs have little chimera evidence").Changed() {
+					Tooltip("Arc opacity follows the pair's raw count when recorded, otherwise its HYB bonus").Changed() {
 				p.arcs.Shade = p.shade
 			}
 			if p.viewB != "" && ui.Button(c, "Clear B").Clicked() {
@@ -1344,15 +1393,7 @@ func (p *structurePage) syncArcs(a, b *structureResult) {
 		return out
 	}
 	p.arcs.Set(toArcs(pairsA), toArcs(pairsB), length)
-	weights := func(pairs []stPair, records []structureRecord) []float64 {
-		known := stWeights(records)
-		out := make([]float64, len(pairs))
-		for i, pr := range pairs {
-			out[i] = known[[2]int{pr.I, pr.J}]
-		}
-		return out
-	}
-	p.arcs.WeightA, p.arcs.WeightB = weights(pairsA, recordsA), weights(pairsB, recordsB)
+	p.arcs.WeightA, p.arcs.WeightB = stShadeWeights(recordsA), stShadeWeights(recordsB)
 	p.arcs.Shade = p.shade
 	p.arcs.Overlay, p.overlayLabels, p.arcs.Features = nil, [2]string{}, nil
 	if local {
@@ -1573,7 +1614,7 @@ func (p *structurePage) metaLine(a *structureResult) string {
 			parts = append(parts, pk+", sequence only")
 		} else {
 			text := fmt.Sprintf("%s, alpha %v", pk, m.Parameters["alpha"])
-			if k, _ := m.Parameters["support_kernel"].(string); k != "" && k != stDefaultKernel {
+			if k, _ := m.Parameters["support_kernel"].(string); k != "" && k != stKernels.DefaultKernel {
 				text += ", " + stKernelLabel(k) + " read support"
 			}
 			parts = append(parts, text)

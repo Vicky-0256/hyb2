@@ -108,13 +108,12 @@ func (p *structurePage) defaultView(a *structureResult) {
 // from the first position they cover.
 func stViewData(a *structureResult, choice string) (pairs []widgets.LayeredPair, weights []float64, start, length int, seq string) {
 	records := stPickRecords(a.Records, choice)
-	w := stWeights(records)
+	weights = stShadeWeights(records)
 	if stLocalView(records) {
 		// CPLcofold: drawn on A+B indices, strand A then strand B
 		r := records[0]
 		for _, pr := range stParseDBN(r.DBN, 1) {
 			pairs = append(pairs, widgets.LayeredPair{I: pr.I, J: pr.J, Layer: pr.Layer})
-			weights = append(weights, w[stPairKey(r.positionOf(pr.I), r.positionOf(pr.J))])
 		}
 		return pairs, weights, 1, len(r.Sequence), r.Sequence
 	}
@@ -127,7 +126,6 @@ func stViewData(a *structureResult, choice string) (pairs []widgets.LayeredPair,
 		end = max(end, e)
 		for _, pr := range stRecordPairs(r) {
 			pairs = append(pairs, widgets.LayeredPair{I: pr.I, J: pr.J, Layer: pr.Layer})
-			weights = append(weights, w[[2]int{pr.I, pr.J}])
 		}
 	}
 	if len(records) == 1 {
@@ -187,13 +185,21 @@ func stEvidenceColor(support, top float64, t *ui.Theme) ui.Color {
 	return t.Accent
 }
 
-// stTopBonus is the strongest evidence of the pairs.
-func stTopBonus(pairs []stPairInfo) float64 {
+func stTopColourSupport(pairs []stPairInfo) float64 {
 	top := 0.0
 	for _, pr := range pairs {
-		top = math.Max(top, pr.Bonus)
+		top = math.Max(top, pr.colourSupport())
 	}
 	return top
+}
+
+func stScoredEstimator(records []structureRecord) string {
+	for _, r := range records {
+		if c := r.scoredCandidate(); c != nil {
+			return c.estimator()
+		}
+	}
+	return ""
 }
 
 // stViewStyles are the web's structurePairStyle for A's pairs in the
@@ -203,7 +209,7 @@ func stTopBonus(pairs []stPairInfo) float64 {
 // ViennaRNA by pair type. Colours as the arc view's (stArcStyles).
 func stViewStyles(a *structureResult, records []structureRecord, pairs []stPairInfo, t *ui.Theme) []widgets.PairStyle {
 	out := make([]widgets.PairStyle, len(pairs))
-	top := stTopBonus(pairs)
+	top := stTopColourSupport(pairs)
 	cpl, comrades := stIsCPL(a), stComradesResult(a)
 	// as the arcs': per record, opacity relative to its matrix maximum
 	evidence, scale := stCPLEvidence(a, records), stBonusScale(a, records)
@@ -214,7 +220,7 @@ func stViewStyles(a *structureResult, records []structureRecord, pairs []stPairI
 			s.Width = 2.1
 		}
 		switch {
-		case cpl:
+		case cpl && pr.Count == nil:
 			s.Color = t.Accent
 			if pr.Layer == 1 {
 				s.Color = stViolet
@@ -227,9 +233,11 @@ func stViewStyles(a *structureResult, records []structureRecord, pairs []stPairI
 			if pr.record < len(evidence) && evidence[pr.record] {
 				s.Alpha = stBonusAlpha(pr.Bonus, scale[pr.record])
 			}
-		case comrades:
-			s.Color = stEvidenceColor(pr.Bonus, top, t)
-			if pr.Bonus > 0 {
+		case comrades || pr.Count != nil:
+			support := pr.colourSupport()
+			s.Color = stEvidenceColor(support, top, t)
+			s.Dash = pr.Layer > 0
+			if support > 0 {
 				s.Width = 2.5
 			} else {
 				s.Alpha = 0.34
@@ -257,6 +265,9 @@ func stViewStyles(a *structureResult, records []structureRecord, pairs []stPairI
 
 // stLegendItems are the web's legend for A's pair styles.
 func stLegendItems(a *structureResult, t *ui.Theme) []widgets.LegendItem {
+	if estimator := stScoredEstimator(a.Records); estimator != "" {
+		return []widgets.LegendItem{{Color: t.Warning, Label: "high " + estimator + " count"}, {Color: t.Accent, Label: "low " + estimator + " count"}, {Color: t.TextMuted, Label: "no matching read pair"}}
+	}
 	switch {
 	case stIsCPL(a):
 		items := []widgets.LegendItem{{Color: t.Accent, Label: "phase 1"}}
@@ -276,16 +287,16 @@ func stLegendItems(a *structureResult, t *ui.Theme) []widgets.LegendItem {
 // evidence by the base's strongest log1p bonus (its bonus matrix row
 // maximum); nil for the others (plain markers).
 func stViewMarks(a *structureResult, records []structureRecord, pairs []stPairInfo, start, length int, t *ui.Theme) []ui.Color {
-	comrades := stComradesResult(a)
-	if !comrades && !(stIsCPL(a) && stHybEvidence(a)) {
+	rawCounts := stComradesResult(a) || stScoredEstimator(records) != ""
+	if !rawCounts && !(stIsCPL(a) && stHybEvidence(a)) {
 		return nil
 	}
 	support := make([]float64, length)
-	if comrades {
+	if rawCounts {
 		for _, pr := range pairs {
 			for _, pos := range []int{pr.I, pr.J} {
 				if k := stViewPosition(records, pos) - start; k >= 0 && k < length {
-					support[k] = math.Max(support[k], pr.Bonus)
+					support[k] = math.Max(support[k], pr.colourSupport())
 				}
 			}
 		}
@@ -324,6 +335,8 @@ func stPairTitle(a *structureResult, pr stPairInfo) string {
 	}
 	text := fmt.Sprintf("%s%d %c paired with %d %c (%c–%c)", prefix, pr.I, pr.BaseI, pr.J, pr.BaseJ, pr.BaseI, pr.BaseJ)
 	switch {
+	case pr.Count != nil:
+		text += fmt.Sprintf("; %s count %d; HYB bonus %s", pr.Estimator, *pr.Count, jsFixed(pr.Bonus, 4))
 	case stComradesResult(a):
 		text += "; RNAcofold evidence " + jsNumber(pr.Bonus)
 	case stIsCPL(a) && stHybEvidence(a):
@@ -454,6 +467,9 @@ func stViewCopy(a *structureResult, view string) string {
 		return "The symmetric contact matrix places each base pair at its two sequence coordinates; mirrored points preserve the full interaction map."
 	}
 	on, _ := a.Meta.Parameters["allow_pseudoknot"].(bool)
+	if estimator := stScoredEstimator(a.Records); estimator != "" {
+		return "Arc colours show raw " + estimator + " counts for pairs in the displayed candidate. The saturating HYB bonus is used for folding, not for the COMRADES score."
+	}
 	switch {
 	case stIsCPL(a) && on:
 		return "Arc layers distinguish nested phase-1 pairs from crossing pseudoknot pairs; opacity reflects HYB bonus support when enabled."

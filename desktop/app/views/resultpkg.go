@@ -680,14 +680,18 @@ func rpStructureFiles(base string, s reportStructure, step string, selected bool
 		title = "RNA structure prediction (" + nameOr(res.Meta.Engine, "CPLfold") + ", structure " + s.ID + ")"
 	}
 	dbn := stDBNText(s.Gene, res.Records)
-	var pairs [][2]int
-	crossing := 0
+	pairs := [][2]int{}
+	crossing := stShownCrossingPairs(res.Records)
 	var sequence, dot strings.Builder
 	for _, rec := range res.Records {
+		// The runtime's Pairs follows local left-end order, exactly like its
+		// raw counts. Parsing a DBN instead emits nested pairs inside out.
+		if rec.scoredCandidate() != nil {
+			pairs = append(pairs, rec.Pairs...)
+		}
 		for _, p := range stRecordPairs(rec) {
-			pairs = append(pairs, [2]int{p.I, p.J})
-			if p.Layer > 0 {
-				crossing++
+			if rec.scoredCandidate() == nil {
+				pairs = append(pairs, [2]int{p.I, p.J})
 			}
 		}
 		if len(res.Records) == 1 {
@@ -706,21 +710,28 @@ func rpStructureFiles(base string, s reportStructure, step string, selected bool
 		"coordinates":    "1-based positions on " + s.Gene + " (pairs); sequence and dotBracket start at positionOffset + 1",
 		"positionOffset": offset, "selectedCandidate": nil, "candidates": []any{},
 		"prediction": "computational prediction; not an experimental structure"}
-	if len(res.Records) == 1 && len(res.Records[0].Candidates) > 0 {
-		// the web's candidates: rank and selectedCandidate from 1
-		r := res.Records[0]
+	addCandidates := func(row map[string]any, r structureRecord) {
+		if len(r.Candidates) == 0 {
+			return
+		}
+		// Keep the web's numeric candidate.pairs and 1-based rank. Scored
+		// candidates carry their own local pairPositions alongside the counts.
 		candidates := make([]map[string]any, len(r.Candidates))
 		for k, c := range r.Candidates {
 			candidates[k] = map[string]any{"rank": k + 1, "type": rpNull(c.Type), "topology": rpNull(c.Topology), "energy": c.Energy,
-				"effectiveEnergy": c.EffectiveEnergy, "pairs": c.Pairs, "crossingPairs": c.PseudoknotPairs, "dotBracket": c.Structure}
+				"effectiveEnergy": c.EffectiveEnergy, "pairs": c.Pairs, "crossingPairs": stCrossingPairs(c.Structure), "dotBracket": c.Structure}
+			c.addRawScore(candidates[k])
 		}
-		body["selectedCandidate"], body["candidates"] = r.SelectedCandidate+1, candidates
+		row["selectedCandidate"], row["candidates"] = r.SelectedCandidate+1, candidates
+		r.scoredCandidate().addRawScore(row)
 	}
 	if len(res.Records) == 1 {
+		addCandidates(body, res.Records[0])
+		res.addComradesExport(body, 0)
 		body["sequence"], body["dotBracket"] = sequence.String(), dot.String()
 		if r := res.Records[0]; r.Cutpoint > 0 {
 			// CPLcofold: two strands; pairs are on the RNA when both regions are on one
-			body["cutpoint"], body["regions"], body["positionOffset"] = r.Cutpoint, r.Segments, nil
+			body["cutpoint"], body["regions"], body["positionOffset"] = r.Cutpoint, r.Segments, 0
 			body["coordinates"] = "sequence and dotBracket are strand A then strand B (cutpoint nucleotides of A); pairs as drawn: RNA positions for two regions of one RNA, A+B indices for two RNAs"
 		}
 	} else {
@@ -728,7 +739,12 @@ func rpStructureFiles(base string, s reportStructure, step string, selected bool
 		windows := make([]map[string]any, len(res.Records))
 		for i, rec := range res.Records {
 			start, end := rec.span()
-			windows[i] = map[string]any{"start": start, "end": end, "dotBracket": rec.DBN, "energy": rec.Energy}
+			windows[i] = map[string]any{"start": start, "end": end, "sequence": rec.Sequence, "dotBracket": rec.DBN, "energy": rec.Energy}
+			if rec.Cutpoint > 0 {
+				windows[i]["cutpoint"], windows[i]["regions"] = rec.Cutpoint, rec.Segments
+			}
+			addCandidates(windows[i], rec)
+			res.addComradesExport(windows[i], i)
 		}
 		body["windows"] = windows
 	}

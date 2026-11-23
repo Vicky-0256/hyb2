@@ -169,7 +169,7 @@ func TestStructureFoldStates(t *testing.T) {
 	p.gene = africaGene
 	p.budgetMB = 8192
 	tt.Frame()
-	expect(tt, "Cannot run yet:", "• This fold needs about 16.3 GB of memory but tasks may use 8.0 GB. "+
+	expect(tt, "Cannot run yet:", "• This fold needs about 16.7 GB of memory but tasks may use 8.0 GB. "+
 		"Fold shorter windows, fewer windows at once (Advanced), or raise Memory in Preferences.")
 	p.budgetMB = 24576
 
@@ -206,7 +206,7 @@ func TestStructureFoldStates(t *testing.T) {
 			[]string{"CPLfold stopped with an error.", "Next: run it again; if it fails again, send the technical details below to the HYB2 team."}},
 		{model.Task{Status: "cancelled"}, []string{"Fold cancelled", "Nothing was saved, including windows that had already been folded. Change the form if needed, then run it again."}},
 		{model.Task{Status: "interrupted"}, []string{"Fold stopped", "Run it again", "HYB2 Desktop closed while it ran. Nothing was saved; it starts from the beginning."}},
-		{model.Task{Status: "succeeded"}, []string{"Fold finished", "It is shown in the viewer and listed under Results."}},
+		{model.Task{Status: "succeeded"}, []string{"Fold finished", "Computation finished, but result registration is pending or unavailable. Refresh Results to check again."}},
 	}
 	a, _, tt = stStatesFixture(t, 3)
 	if err := tt.Click("Run fold"); err != nil {
@@ -226,4 +226,48 @@ func TestStructureFoldStates(t *testing.T) {
 	if len(a.TaskList()) != before {
 		t.Fatal("a second fold started while one runs")
 	}
+}
+
+func TestStructureSucceededRegistrationStatus(t *testing.T) {
+	a, _, tt, p := stSetupPage(t, 1500)
+	saved := p.structures[0]
+	p.lastTask = "finished-computation"
+	p.structures = nil
+	for _, registration := range []string{"", "pending", "failed", "registered"} {
+		task := model.Task{TaskID: p.lastTask, Kind: "structure", Status: "succeeded", RegistrationStatus: registration}
+		if registration == "failed" {
+			task.RegistrationError = "project manifest is locked"
+		}
+		a.Tasks[p.lastTask] = task
+		tt.Frame()
+		if registration == "pending" {
+			snapshot(t, tt, "structure-registration-pending")
+		} else if registration == "registered" {
+			snapshot(t, tt, "structure-registration-flag-without-entry")
+		}
+		mustHave(t, tt, "Fold finished")
+		if tt.HasText("It is shown in the viewer and listed under Results.") || tt.HasText("The fold failed") || task.ErrorText() != "" {
+			t.Errorf("registration %q must not invent a result or a fold failure: %q", registration, tt.Texts())
+		}
+		if !tt.HasText("Computation finished, but result registration is pending or unavailable. Refresh Results to check again.") || p.entryForTask(p.lastTask) != nil || p.viewA != "" {
+			t.Errorf("registration %q without a visible result needs an honest status: entry=%v, view=%q, texts=%q", registration, p.entryForTask(p.lastTask), p.viewA, tt.Texts())
+		}
+		t.Logf("no result: task=%s, registration=%q, registration_error=%q, entry=%v, view=%q", task.Status, registration, task.RegistrationError, p.entryForTask(p.lastTask), p.viewA)
+	}
+
+	// Even a registered task waits for its actual result entry to arrive.
+	saved.TaskID = p.lastTask
+	p.structures = []structureEntry{saved}
+	p.show(saved.ID)
+	csSettle(a, tt)
+	// The Arc view is rendered locally; this fixture has no external layout
+	// service. Show the registered result rather than a missing-layout error.
+	p.view = "Arc"
+	tt.Frame()
+	snapshot(t, tt, "structure-registration-complete")
+	mustHave(t, tt, "Fold finished", "It is shown in the viewer and listed under Results.")
+	if tt.HasText("result registration is pending or unavailable") || p.entryForTask(p.lastTask) == nil || p.viewA != saved.ID {
+		t.Fatalf("registered result not reflected in status: entry=%v, view=%q, texts=%q", p.entryForTask(p.lastTask), p.viewA, tt.Texts())
+	}
+	t.Logf("registered: task=%s, registration=%s, entry=%s, view=%s", a.Tasks[p.lastTask].Status, a.Tasks[p.lastTask].RegistrationStatus, p.entryForTask(p.lastTask).ID, p.viewA)
 }

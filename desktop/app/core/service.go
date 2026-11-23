@@ -207,7 +207,16 @@ func (s *Service) ValidateProject(path string, checkFiles bool) (Obj, error) {
 
 // OpenProject is project_open (without the asset scope, see above).
 func (s *Service) OpenProject(path string) (Obj, error) {
-	return s.call(Control, Obj{"operation": "open_project", "path": path, "check_files": false})
+	request := Obj{"operation": "open_project", "path": path, "check_files": false}
+	opened, err := s.call(Control, request)
+	if err != nil {
+		return nil, err
+	}
+	if project, ok := opened["path"].(string); ok && s.recoverRegistrations(project) {
+		// Return the repaired manifest, not the one read before recovery.
+		return s.call(Control, request)
+	}
+	return opened, nil
 }
 
 // ImportInput is project_import_input_dialog after the dialog: it links or
@@ -398,10 +407,15 @@ func (s *Service) startTask(request TaskStartRequest, resumedFrom *string) (Obj,
 	if err != nil {
 		return nil, err
 	}
+	// Persist the registration intent before the child can run. A crash
+	// between its final status and onFinish must still be recoverable.
+	if err := writeAtomic(prepared.RunDir, registrationFile, taskRegistration{Status: "pending"}); err != nil {
+		_ = os.RemoveAll(prepared.RunDir)
+		return nil, fmt.Errorf("cannot save task registration: %w", err)
+	}
 	kind := request.Kind
 	onFinish := func(project, id string) {
-		register := Obj{"operation": "register_task_run", "path": project, "task_id": id}
-		if _, err := rt.Call(Control, register); err != nil {
+		if _, err := s.registerTask(rt, project, id); err != nil {
 			s.logf("HYB2: register_task_run failed for %s: %v", id, err)
 		}
 		if kind == "sample_pipeline" || kind == "structure" {

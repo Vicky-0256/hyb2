@@ -23,14 +23,24 @@ type Sequence struct {
 }
 
 type Reference struct {
-	ID        string     `json:"id"`
-	Label     string     `json:"label"`
-	Path      string     `json:"path"`
-	Mode      string     `json:"mode"`
-	SizeBytes int64      `json:"size_bytes"`
-	QuickHash string     `json:"quick_hash"`
-	SHA256    string     `json:"sha256"`
-	Sequences []Sequence `json:"sequences"`
+	ID           string     `json:"id"`
+	Label        string     `json:"label"`
+	Path         string     `json:"path"`
+	Mode         string     `json:"mode"`
+	SizeBytes    int64      `json:"size_bytes"`
+	QuickHash    string     `json:"quick_hash"`
+	SHA256       string     `json:"sha256"`
+	Sequences    []Sequence `json:"sequences"`
+	RNASequences []Sequence `json:"rna_sequences,omitempty"`
+}
+
+// RNAs lists selectable HYB names with their mapped FASTA lengths. An explicit
+// empty projection means the bridge marked every RNA as unmatched.
+func (r *Reference) RNAs() []Sequence {
+	if r.RNASequences != nil {
+		return r.RNASequences
+	}
+	return r.Sequences
 }
 
 type Reads struct {
@@ -146,16 +156,28 @@ func (p *Project) Reference(id string) *Reference {
 	return nil
 }
 
-// GeneLength is the length of a reference sequence by name (0 if unknown).
-func (p *Project) GeneLength(name string) int {
-	for _, r := range p.References {
-		for _, s := range r.Sequences {
+// GeneReference resolves a selectable RNA, not necessarily a FASTA header.
+// A supplied reference ID scopes the lookup. Without one, legacy callers
+// keep the first matching reference. Callers requiring unambiguous identity
+// must resolve the reference before using this lookup.
+func (p *Project) GeneReference(name string, referenceID ...string) (*Reference, int) {
+	for i := range p.References {
+		r := &p.References[i]
+		if len(referenceID) > 0 && r.ID != referenceID[0] {
+			continue
+		}
+		for _, s := range r.RNAs() {
 			if s.Name == name {
-				return s.Length
+				return r, s.Length
 			}
 		}
 	}
-	return 0
+	return nil, 0
+}
+
+func (p *Project) GeneLength(name string) int {
+	_, length := p.GeneReference(name)
+	return length
 }
 
 // DeriveConditions groups samples by condition when the bridge sends none.
@@ -221,6 +243,10 @@ type Task struct {
 	OverEstimate bool   `json:"over_estimate"`
 	ResumedFrom  string `json:"resumed_from"`
 	Output       any    `json:"output"`
+	// Registration is separate from the computation's status and Error.
+	// Empty values mean unknown, including snapshots from older schedulers.
+	RegistrationStatus string `json:"registration_status"`
+	RegistrationError  string `json:"registration_error"`
 }
 
 // activeStatuses: a "cancelling" task is still active until its child is reaped.

@@ -24,15 +24,9 @@ import (
 // mfoldInstall is the install command the app suggests (mfold.INSTALL).
 const mfoldInstall = "conda create -n mfold -c conda-forge -c bioconda mfold"
 
-// mfold's fixed settings in HYB2 (mfold.py): its version 3.0 energies are
-// used at 37 °C only, and its minimum hairpin loop is 3.
-const (
-	mfoldTemperature = 37
-	mfoldMinLoop     = 3
-	// measured mfold 3.6 MFE folds (random RNA, Rosetta on Apple silicon):
-	// 7.0 s at 1,000 nt, 47 s at 3,000 nt
-	mfoldRefNT, mfoldRefSeconds, mfoldTimeExponent = 1000, 7.0, 1.74
-)
+// Measured mfold 3.6 MFE folds (random RNA, Rosetta on Apple silicon):
+// 7.0 s at 1,000 nt, 47 s at 3,000 nt.
+const mfoldRefNT, mfoldRefSeconds, mfoldTimeExponent = 1000, 7.0, 1.74
 
 // setMfold takes the mfold preference from a preferences answer.
 func (a *App) setMfold(got core.Obj) {

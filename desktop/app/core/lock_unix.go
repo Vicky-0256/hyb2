@@ -4,17 +4,28 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
 )
 
+const errLockBusy = syscall.EWOULDBLOCK
+
 // lockRunDir takes the exclusive owner lock of a task's run directory. The
 // kernel drops a flock when its holder exits, however it exits.
 func lockRunDir(runDir string) (*os.File, error) {
-	f, err := os.OpenFile(filepath.Join(runDir, ownerLockFile), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o644)
+	return tryFileLock(filepath.Join(runDir, ownerLockFile))
+}
+
+func tryFileLock(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o644)
 	if err != nil {
 		return nil, err
+	}
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("lock %s is not a regular file", path)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()

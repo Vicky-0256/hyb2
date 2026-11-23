@@ -229,6 +229,14 @@ func TestStructureRequestsAreValidated(t *testing.T) {
 		payload["regions"] != nil {
 		t.Fatalf("pasted strands payload %v %v", payload, err)
 	}
+	singleBases := strands
+	singleBases.Sequence, singleBases.SequenceTwo = ptr("G"), ptr("C")
+	if payload, err = TaskPayload(singleBases, "/p", "a", run, claim); err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, payload, `{"operation":"structure_run","project_path":"/p","sample_ids":["ZAFR_REP1","ZAFR_REP2"],
+		"gene_id":"ZIKV_African","engine":"cplcofold","mode":"cofold","windows":[],"parameters":{},
+		"source":"paste","sequence":"G","sequence_two":"C","workers":4,"task_id":"a","run_dir":"/p/runs/a"}`)
 	for i, edit := range []func(*TaskStartRequest){
 		func(r *TaskStartRequest) { r.Source = ptr("clipboard") },
 		func(r *TaskStartRequest) { r.Source = nil },
@@ -265,7 +273,7 @@ func TestStructureRequestsAreValidated(t *testing.T) {
 		func(r *TaskStartRequest) { r.Mode = nil },
 		func(r *TaskStartRequest) { r.Mode = ptr("both") },
 		func(r *TaskStartRequest) { r.Windows = nil },
-		func(r *TaskStartRequest) { r.Windows = []Window{{Start: 5, End: 5}} },
+		func(r *TaskStartRequest) { r.Windows = []Window{{Start: 5, End: 4}} },
 		func(r *TaskStartRequest) { r.Mode = ptr("genome") },
 		func(r *TaskStartRequest) { r.Workers = ptr(uint32(0)) },
 		func(r *TaskStartRequest) { r.Parameters = []any{1} },
@@ -277,12 +285,110 @@ func TestStructureRequestsAreValidated(t *testing.T) {
 			t.Fatalf("bad request %d accepted", i)
 		}
 	}
+	// 5-5 is a valid closed interval. The runtime, not Core's payload
+	// protocol, enforces the minimum length for explicit reference windows.
+	singleBaseWindow := good
+	singleBaseWindow.Windows = []Window{{Start: 5, End: 5}}
+	if payload, err = TaskPayload(singleBaseWindow, "/p", "a", run, big()); err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, payload, `{"operation":"structure_run","project_path":"/p","sample_ids":["ZAFR_REP1","ZAFR_REP2"],
+		"gene_id":"ZIKV_African","mode":"windows","windows":[{"start":5,"end":5}],
+		"parameters":{"pseudoknots":true},"workers":2,"task_id":"a","run_dir":"/p/runs/a"}`)
 	// Unknown window fields are rejected at deserialization.
 	if _, err := DecodeTaskStartRequest([]byte(`{"project_path":"/p","kind":"structure","windows":[{"start":1,"end":2,"x":3}]}`)); err == nil {
 		t.Fatal("unknown window field accepted")
 	}
 	if r, err := DecodeTaskStartRequest([]byte(`{"project_path":"/p","kind":"structure","windows":[{"start":1,"end":2}]}`)); err != nil || r.Windows[0] != (Window{1, 2}) {
 		t.Fatalf("%v %v", r, err)
+	}
+}
+
+func TestStructureRegionCoordinatesArePositiveClosedIntervals(t *testing.T) {
+	cases := []struct {
+		name        string
+		regions     []Region
+		wantRegions string
+		wantError   string
+	}{
+		{"one-plus-four", []Region{{"A", 1, 1}, {"B", 5, 8}},
+			`[{"gene_id":"A","start":1,"end":1},{"gene_id":"B","start":5,"end":8}]`, ""},
+		{"four-plus-one", []Region{{"A", 1, 4}, {"B", 5, 5}},
+			`[{"gene_id":"A","start":1,"end":4},{"gene_id":"B","start":5,"end":5}]`, ""},
+		{"one-plus-one", []Region{{"A", 1, 1}, {"B", 5, 5}},
+			`[{"gene_id":"A","start":1,"end":1},{"gene_id":"B","start":5,"end":5}]`, ""},
+		{"four-plus-four", []Region{{"A", 1, 4}, {"B", 5, 8}},
+			`[{"gene_id":"A","start":1,"end":4},{"gene_id":"B","start":5,"end":8}]`, ""},
+		{"first-zero-start", []Region{{"A", 0, 4}, {"B", 5, 8}}, "",
+			"structure region A:0-4 must have 1 <= start <= end"},
+		{"second-zero-start", []Region{{"A", 1, 4}, {"B", 0, 8}}, "",
+			"structure region B:0-8 must have 1 <= start <= end"},
+		{"first-zero-end", []Region{{"A", 1, 0}, {"B", 5, 8}}, "",
+			"structure region A:1-0 must have 1 <= start <= end"},
+		{"second-zero-end", []Region{{"A", 1, 4}, {"B", 5, 0}}, "",
+			"structure region B:5-0 must have 1 <= start <= end"},
+		{"first-reversed", []Region{{"A", 4, 1}, {"B", 5, 8}}, "",
+			"structure region A:4-1 must have 1 <= start <= end"},
+		{"second-reversed", []Region{{"A", 1, 4}, {"B", 8, 5}}, "",
+			"structure region B:8-5 must have 1 <= start <= end"},
+	}
+	for _, protocol := range []struct{ engine, mode string }{{"cplcofold", "cofold"}, {"comrades", "paired"}} {
+		for _, tc := range cases {
+			t.Run(protocol.engine+"/"+tc.name, func(t *testing.T) {
+				request := TaskStartRequest{ProjectPath: "/p", Kind: "structure", SampleIDs: []string{"sample"},
+					GeneID: ptr("A"), Engine: ptr(protocol.engine), Mode: ptr(protocol.mode), Regions: tc.regions}
+				payload, err := TaskPayload(request, "/p", "a", "/p/runs/a", big())
+				if tc.wantError != "" {
+					if err == nil || err.Error() != tc.wantError || payload != nil {
+						t.Fatalf("payload %v, error %v; want nil payload and %q", payload, err, tc.wantError)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertJSON(t, payload, `{"operation":"structure_run","project_path":"/p","sample_ids":["sample"],
+					"gene_id":"A","engine":"`+protocol.engine+`","mode":"`+protocol.mode+`","windows":[],
+					"regions":`+tc.wantRegions+`,"parameters":{},"workers":4,"task_id":"a","run_dir":"/p/runs/a"}`)
+			})
+		}
+	}
+}
+
+func TestStructureWindowCoordinatesArePositiveClosedIntervals(t *testing.T) {
+	cases := []struct {
+		name       string
+		window     Window
+		wantWindow string
+		wantError  string
+	}{
+		{"single-base", Window{1, 1}, `{"start":1,"end":1}`, ""},
+		{"multi-base", Window{1, 4}, `{"start":1,"end":4}`, ""},
+		{"zero-start", Window{0, 4}, "", "structure window 0-4 must have 1 <= start <= end"},
+		{"both-zero", Window{0, 0}, "", "structure window 0-0 must have 1 <= start <= end"},
+		{"zero-end", Window{1, 0}, "", "structure window 1-0 must have 1 <= start <= end"},
+		{"reversed", Window{5, 4}, "", "structure window 5-4 must have 1 <= start <= end"},
+	}
+	for _, engine := range []string{"cplfold", "viennarna", "comrades", "iris"} {
+		for _, tc := range cases {
+			t.Run(engine+"/"+tc.name, func(t *testing.T) {
+				request := TaskStartRequest{ProjectPath: "/p", Kind: "structure", SampleIDs: []string{"sample"},
+					GeneID: ptr("A"), Engine: ptr(engine), Mode: ptr("windows"), Windows: []Window{tc.window}}
+				payload, err := TaskPayload(request, "/p", "a", "/p/runs/a", big())
+				if tc.wantError != "" {
+					if err == nil || err.Error() != tc.wantError || payload != nil {
+						t.Fatalf("payload %v, error %v; want nil payload and %q", payload, err, tc.wantError)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertJSON(t, payload, `{"operation":"structure_run","project_path":"/p","sample_ids":["sample"],
+					"gene_id":"A","engine":"`+engine+`","mode":"windows","windows":[`+tc.wantWindow+`],
+					"parameters":{},"workers":4,"task_id":"a","run_dir":"/p/runs/a"}`)
+			})
+		}
 	}
 }
 

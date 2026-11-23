@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 type entry struct {
@@ -101,15 +100,13 @@ func TestUnpackRuntimeKeepsHiddenFilesAndLinksAndReuses(t *testing.T) {
 			t.Fatal("interpreter lost its executable bit")
 		}
 	}
-	// A second call reuses the unpacked tree and finishes cleaning up: an
-	// older version (left by a quit mid-removal) and an abandoned unpack
-	// go, a recent unpack (maybe another instance's) stays.
-	os.MkdirAll(filepath.Join(cache, "runtime-0000000000000000"), 0o755)
-	abandoned, recent := filepath.Join(cache, ".runtime-unpack-1"), filepath.Join(cache, ".runtime-unpack-2")
-	os.MkdirAll(abandoned, 0o755)
-	os.MkdirAll(recent, 0o755)
-	long := time.Now().Add(-2 * staleUnpack)
-	os.Chtimes(abandoned, long, long)
+	// Legacy launchers may still be using either of these directories.
+	legacy, staging := filepath.Join(cache, "runtime-0000000000000000"), filepath.Join(cache, ".runtime-unpack-1")
+	for _, dir := range []string{legacy, staging} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	marker := filepath.Join(b.Root, "desktop/runtime/bridge.py")
 	os.WriteFile(marker, []byte("# kept"), 0o644)
 	if _, err := UnpackRuntime(archive, digest, cache); err != nil {
@@ -118,17 +115,13 @@ func TestUnpackRuntimeKeepsHiddenFilesAndLinksAndReuses(t *testing.T) {
 	if body, _ := os.ReadFile(marker); string(body) != "# kept" {
 		t.Fatal("a ready runtime was unpacked again")
 	}
-	if isDir(filepath.Join(cache, "runtime-0000000000000000")) || isDir(abandoned) || !isDir(recent) {
-		t.Fatal("leftovers not cleaned on a reuse launch")
-	}
 	makeArchive(t, resources, append(runtimeEntries(), entry{name: "extra.txt", body: "v2"}))
 	archive, digest2, _, _ := PackedRuntime(resources)
 	if _, err := UnpackRuntime(archive, digest2, cache); err != nil {
 		t.Fatal(err)
 	}
-	left, _ := filepath.Glob(filepath.Join(cache, "runtime-*"))
-	if len(left) != 1 || left[0] != UnpackedRuntimeDir(cache, digest2) {
-		t.Fatalf("old runtimes not removed: %v", left)
+	if !RuntimeReady(cache, digest) || !RuntimeReady(cache, digest2) || !isDir(legacy) || !isDir(staging) {
+		t.Fatal("an update removed another version's files")
 	}
 }
 
@@ -143,8 +136,14 @@ func TestUnpackRuntimeRejectsCorruptAndUnsafeArchives(t *testing.T) {
 		if _, err := UnpackRuntime(archive, digest, cache); err == nil || !strings.Contains(err.Error(), "unsafe") {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if left, _ := filepath.Glob(filepath.Join(cache, "*")); len(left) != 0 {
-			t.Fatalf("%s left %v", name, left)
+		// The lock inode is deliberately persistent; no staging or published
+		// files should survive a rejected archive.
+		pool := filepath.Dir(UnpackedRuntimeDir(cache, digest))
+		if left, err := os.ReadDir(cache); err != nil || len(left) != 1 || left[0].Name() != filepath.Base(pool) {
+			t.Fatalf("%s left %v: %v", name, left, err)
+		}
+		if left, err := os.ReadDir(pool); err != nil || len(left) != 1 || left[0].Name() != "publish.lock" {
+			t.Fatalf("%s left %v: %v", name, left, err)
 		}
 	}
 	resources, cache := t.TempDir(), t.TempDir()
@@ -162,6 +161,14 @@ func TestUnpackRuntimeRejectsCorruptAndUnsafeArchives(t *testing.T) {
 	os.WriteFile(filepath.Join(empty, RuntimeArchive), []byte("x"), 0o644)
 	if _, _, _, err := PackedRuntime(empty); err == nil {
 		t.Fatal("an archive without its digest file was accepted")
+	}
+	for _, invalid := range []string{"", " \t\r\n", strings.Repeat("z", 64) + "  native.tar.gz\n"} {
+		if err := os.WriteFile(filepath.Join(empty, RuntimeArchiveSHA256), []byte(invalid), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, ok, err := PackedRuntime(empty); ok || err == nil {
+			t.Fatalf("invalid checksum file %q: ok=%v, err=%v", invalid, ok, err)
+		}
 	}
 }
 

@@ -34,6 +34,9 @@ func resolveRuntime(resources, cache string) (*core.Bridge, error) {
 		return nil, err
 	}
 	if ok {
+		if cache == "" {
+			return nil, fmt.Errorf("cannot unpack the bundled runtime: the app cache directory is unavailable")
+		}
 		return core.UnpackRuntime(archive, digest, filepath.Join(cache, "runtime"))
 	}
 	return core.ResolveBridge(resources, mygo.IsDev() || !mygo.App.IsPackaged(), repoRoot())
@@ -48,7 +51,11 @@ func detectSummary(response core.Obj) string {
 
 func main() {
 	resources, _ := mygo.App.Path(mygo.PathResources)
-	cache, _ := mygo.App.Path(mygo.PathCache)
+	cache, cacheErr := mygo.App.Path(mygo.PathCache)
+	if cacheErr != nil {
+		log.Printf("app cache directory unavailable: %v", cacheErr)
+		cache = ""
+	}
 	userData, _ := mygo.App.Path(mygo.PathUserData)
 	logs, _ := mygo.App.Path(mygo.PathLogs)
 	// The evidence worker (EVIDENCE.md) starts on the first external
@@ -72,7 +79,7 @@ func main() {
 			Content:   ui.View(app.View),
 		})
 		app.SetPoster(win)
-		if _, digest, ok, _ := core.PackedRuntime(resources); ok && !core.RuntimeReady(filepath.Join(cache, "runtime"), digest) {
+		if _, digest, ok, _ := core.PackedRuntime(resources); ok && cache != "" && !core.RuntimeReady(filepath.Join(cache, "runtime"), digest) {
 			app.SetRuntimePreparing()
 		}
 		// Resolve (and on first launch unpack) the runtime, detect it, then

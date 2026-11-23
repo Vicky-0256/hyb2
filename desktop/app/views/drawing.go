@@ -315,23 +315,23 @@ func drTextOn(fill string) string {
 	return "#222222"
 }
 
-// drawSupport is COMRADES support per base: the RNAcofold supporting
-// observations of the pair the base forms (0 when unpaired or
-// unsupported); nil when the prediction carries no such evidence.
-func drEvidenceFor(support []float64) *drawEvidence {
-	if support == nil {
+// evidence colours each base by the raw count of the pair it forms.
+func (src *drawingSource) evidence() *drawEvidence {
+	if src.Support == nil {
 		return nil
 	}
 	top := 0.0
-	values := make([]*float64, len(support))
-	for i, v := range support {
+	values := make([]*float64, len(src.Support))
+	for i, v := range src.Support {
 		values[i] = drFptr(v)
 		top = math.Max(top, v)
 	}
-	if top == 0 {
+	if top == 0 && src.Estimator == "" { // standalone COMRADES retains its default-colour treatment
 		return nil
 	}
-	return &drawEvidence{Values: values, Maximum: top, Kind: "RNAcofold supporting observations", Palette: "lau", Source: "COMRADES support"}
+	// A measured all-zero CPLfold candidate still exports its observations.
+	// VARNA needs a non-degenerate scale; [0,1] maps every zero to white.
+	return &drawEvidence{Values: values, Maximum: max(1, top), Kind: src.estimator() + " supporting observations", Palette: "lau", Source: "COMRADES support"}
 }
 
 func drApplyEvidence(d *drawing, evidence *drawEvidence, palette string) error {
@@ -1106,10 +1106,14 @@ type drawingSource struct {
 	Pairs         []drawPair // left < right, sorted
 	Cutpoint      int
 	Label         string
-	// Support is COMRADES support per base (nil: no RNAcofold evidence);
-	// EvidencePairs how many RNAcofold evidence pairs it was scored from.
+	// Support is the raw count at each paired endpoint; nil if unmeasured.
 	Support       []float64
 	EvidencePairs int
+	Estimator     string
+}
+
+func (src *drawingSource) estimator() string {
+	return nameOr(src.Estimator, "RNAcofold")
 }
 
 func initialDrawing(src *drawingSource) *drawing {
@@ -1127,7 +1131,7 @@ func initialDrawing(src *drawingSource) *drawing {
 	if src.Cutpoint > 0 && src.Cutpoint < n {
 		d.Cutpoint = src.Cutpoint
 	}
-	if e := drEvidenceFor(src.Support); e != nil {
+	if e := src.evidence(); e != nil {
 		_ = drApplyEvidence(d, e, "lau")
 	}
 	return d

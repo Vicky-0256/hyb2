@@ -425,6 +425,7 @@ func reportReadStructure(b core.Backend, pr *model.Project, e reportStructureEnt
 		return s
 	}
 	s.Result = &result
+	s.Pseudoknots = stShownCrossingPairs(result.Records)
 	s.Digests = map[string]string{"all": researchDigest(result.Records)}
 	for _, r := range result.Records {
 		s.Digests[fmt.Sprintf("%d-%d", r.WindowStart, r.WindowEnd)] = researchDigest([]structureRecord{r})

@@ -34,6 +34,39 @@ type stCandidate struct {
 	PseudoknotPairs int        `json:"pseudoknot_pairs"`
 	PairsWithBonus  int        `json:"pairs_with_bonus"`
 	Bonus           []*float64 `json:"bonus"`
+	// Only candidates scored from a raw arm-pair counter have these fields.
+	SupportKernel      string `json:"support_kernel,omitempty"`
+	ComradesScore      *int   `json:"comradesScore,omitempty"`
+	ComradesPairCounts []int  `json:"comradesPairCounts,omitzero"`
+}
+
+// The count list follows Pairs in local left-end order, even if strand B
+// precedes A on the reference. Never infer old scores from transformed bonuses.
+func (r structureRecord) scoredCandidate() *stCandidate {
+	if k := r.SelectedCandidate; k >= 0 && k < len(r.Candidates) {
+		c := &r.Candidates[k]
+		if c.ComradesScore != nil && c.Structure == r.DBN && len(c.ComradesPairCounts) == len(r.Pairs) {
+			return c
+		}
+	}
+	return nil
+}
+
+func (c *stCandidate) estimator() string {
+	return nameOr(stKernels.option(c.SupportKernel).PairModel, "arm-pair")
+}
+
+func (c *stCandidate) addRawScore(row map[string]any) {
+	if c != nil && c.ComradesScore != nil {
+		row["supportKernel"], row["comradesScore"], row["comradesPairCounts"] = c.SupportKernel, *c.ComradesScore, c.ComradesPairCounts
+		pairs := c.localPairs()
+		positions := make([][2]int, len(pairs))
+		for i, pair := range pairs {
+			positions[i] = [2]int{pair.I, pair.J}
+		}
+		row["pairPositions"] = positions
+		row["pairCountCoordinates"] = "comradesPairCounts aligns with pairPositions: 1-based positions in this window's sequence (compact A+B for two strands)"
+	}
 }
 
 // stComrades is a COMRADES(ViennaRNA) window's evidence and structure
@@ -43,6 +76,9 @@ type stComrades struct {
 		InputRecords             int       `json:"inputRecords"`
 		UniqueBasePairs          int       `json:"uniqueBasePairs"`
 		SelectedBasePairs        int       `json:"selectedBasePairs"`
+		ScoredBasePairs          *int      `json:"scoredBasePairs"`
+		ScoringVersion           string    `json:"scoringVersion,omitempty"`
+		ScoredPairs              []stCount `json:"scoredEvidencePairs,omitempty"`
 		RankedStems              int       `json:"rankedStems"`
 		RequestedStemConstraints int       `json:"requestedStemConstraints"`
 		Accepted                 []stStem  `json:"acceptedStemConstraints"`
@@ -78,7 +114,7 @@ type stCount struct {
 	Two   int `json:"two"`
 	Count int `json:"count"`
 	// RecordIDs are up to 20 of the HYB records behind the count.
-	RecordIDs []string `json:"recordIds"`
+	RecordIDs []string `json:"recordIds,omitempty"`
 }
 
 type stEnsembleEntry struct {
@@ -100,13 +136,7 @@ func (r *structureRecord) selectCandidate(k int) bool {
 		return false
 	}
 	c := r.Candidates[k]
-	pairs := stParseDBN(c.Structure, 1)
-	sort.Slice(pairs, func(a, b int) bool {
-		if pairs[a].I != pairs[b].I {
-			return pairs[a].I < pairs[b].I
-		}
-		return pairs[a].J < pairs[b].J
-	})
+	pairs := c.localPairs()
 	r.Pairs = make([][2]int, len(pairs))
 	for i, pr := range pairs {
 		r.Pairs[i] = stPairKey(r.positionOf(pr.I), r.positionOf(pr.J)) // strand B may be drawn first
@@ -117,6 +147,13 @@ func (r *structureRecord) selectCandidate(k int) bool {
 	}
 	r.DBN, r.Energy, r.SelectedCandidate = c.Structure, c.Energy, k
 	return true
+}
+
+// Raw counts and bonuses use local left-end order, not bracket-closing order.
+func (c stCandidate) localPairs() []stPair {
+	pairs := stParseDBN(c.Structure, 1)
+	sort.Slice(pairs, func(a, b int) bool { return pairs[a].I < pairs[b].I })
+	return pairs
 }
 
 // shownRecord is the index in A's records of the one window shown, -1
@@ -168,28 +205,23 @@ var stCandidatesHeader = []string{"rank", "selected", "type", "topology", "energ
 // stCrossingPairs is the web's crossingPairs: how many pairs of a
 // dot-bracket cross at least one other pair.
 func stCrossingPairs(dbn string) int {
-	pairs := stParseDBN(dbn, 1)
-	crossing := map[stPair]bool{}
-	for a, x := range pairs {
-		for _, y := range pairs[a+1:] {
-			if (x.I < y.I && y.I < x.J && x.J < y.J) || (y.I < x.I && x.I < y.J && y.J < x.J) {
-				crossing[x], crossing[y] = true, true
-			}
-		}
-	}
-	return len(crossing)
+	return stShownCrossingPairs([]structureRecord{{DBN: dbn}})
 }
 
 func stCandidatesRows(gene string, records []structureRecord) [][]string {
-	cofold := false
+	cofold, scored := false, false
 	for _, r := range records {
 		cofold = cofold || r.Cutpoint > 0
+		scored = scored || r.scoredCandidate() != nil
 	}
 	header := append([]string{}, stCandidatesHeader...)
 	if cofold {
 		header = append(header, "cutpoint")
 	}
 	header = append(header, "region")
+	if scored {
+		header = append(header, "support_kernel", "comrades_score")
+	}
 	rows := [][]string{header}
 	for _, r := range records {
 		for k, c := range r.Candidates {
@@ -206,7 +238,15 @@ func stCandidatesRows(gene string, records []structureRecord) [][]string {
 			if cofold {
 				row = append(row, strconv.Itoa(r.Cutpoint))
 			}
-			rows = append(rows, append(row, stRecordLabel(gene, r)))
+			row = append(row, stRecordLabel(gene, r))
+			if scored {
+				value := ""
+				if c.ComradesScore != nil {
+					value = strconv.Itoa(*c.ComradesScore)
+				}
+				row = append(row, c.SupportKernel, value)
+			}
+			rows = append(rows, row)
 		}
 	}
 	return rows
@@ -230,7 +270,10 @@ func stCandidatesJSON(id, engine, gene string, records []structureRecord) ([]byt
 		Note      string   `json:"note"`
 		Windows   []window `json:"windows"`
 	}{Structure: id, Engine: engine, RNA: gene,
-		Note: "candidates best first (rank 0 is the structure as folded); energies in kcal/mol, effective_energy is the beta-adjusted rank; structure positions are 1-based within the region; bonus is each pair's log1p HYB bonus, pairs ordered by their left end"}
+		Note: "candidates best first (rank 0 is the structure as folded); energies in kcal/mol, effective_energy is the beta-adjusted rank; structure positions are 1-based within the region; bonus is each pair's folding bonus, pairs ordered by their left end"}
+	if stScoredEstimator(records) != "" {
+		body.Note += "; comradesPairCounts are raw observations in that order; comradesScore sums both matched endpoints, each capped at 1,000,000"
+	}
 	for _, r := range records {
 		if len(r.Candidates) == 0 {
 			continue
@@ -294,6 +337,9 @@ func (p *structurePage) candidatesPanel(c *ui.Context, a *structureResult) {
 		cols := []ui.TableColumn{{Title: "Rank", Width: 52, Align: ui.End}, {Title: "Topology", Width: 110},
 			{Title: "Energy", Width: 76, Align: ui.End}, {Title: "Effective", Width: 76, Align: ui.End},
 			{Title: "Pairs", Width: 60, Align: ui.End}, {Title: "Status"}}
+		if r.scoredCandidate() != nil {
+			cols = append(cols, ui.TableColumn{Title: "COMRADES score", Width: 156, Align: ui.End})
+		}
 		p.candRow = r.SelectedCandidate
 		p.candTable.Selected = &p.candRow
 		key := fmt.Sprintf("st-cands-%s-%d", p.viewA, index)
@@ -316,6 +362,10 @@ func (p *structurePage) candidatesPanel(c *ui.Context, a *structureResult) {
 					state = "Shown"
 				}
 				ui.Text(c, state).SingleLine()
+			case 6:
+				if cand.ComradesScore != nil {
+					ui.Text(c, FormatNumber(int64(*cand.ComradesScore)))
+				}
 			}
 		}).Height(float32(min(len(r.Candidates), 8))*28 + 34).Label("CPLfold candidate structures")
 		if table.Changed() && p.candRow != r.SelectedCandidate && r.selectCandidate(p.candRow) {
@@ -358,6 +408,36 @@ func stEvidenceRows(cm *stComrades) [][]string {
 		rows = append(rows, []string{strconv.Itoa(e.One), strconv.Itoa(e.Two), strconv.Itoa(e.Count), strings.Join(e.RecordIDs, ",")})
 	}
 	return rows
+}
+
+// stScoredEvidenceRows is the web's rna-cofold-scored-evidence.tsv.
+func stScoredEvidenceRows(cm *stComrades) [][]string {
+	rows := [][]string{{"# scoring_version=" + nameOr(cm.Evidence.ScoringVersion, "unrecorded")}, {"prepared_left", "prepared_right", "raw_pair_count"}}
+	for _, e := range cm.Evidence.ScoredPairs {
+		rows = append(rows, []string{strconv.Itoa(e.One), strconv.Itoa(e.Two), strconv.Itoa(e.Count)})
+	}
+	return rows
+}
+
+// addComradesExport keeps the ensemble and its scorer input together per window.
+// Older runs may have only the oriented constraint shortlist or a pool size.
+func (a *structureResult) addComradesExport(row map[string]any, index int) {
+	if index >= len(a.Meta.Records) || a.Meta.Records[index].Comrades == nil {
+		return
+	}
+	cm := a.Meta.Records[index].Comrades
+	if cm.Evidence.ScoredPairs == nil {
+		return // do not reconstruct scorer inputs from a legacy shortlist
+	}
+	row["comradesScore"], row["randomisation"] = cm.Evidence.Score, cm.Randomisation
+	row["scoredEvidencePairs"] = cm.Evidence.ScoredPairs
+	row["evidenceCoordinates"] = "1-based positions in this window's prepared sequence and ensemble dotBracket"
+	if cm.Evidence.Pairs != nil {
+		row["selectedEvidencePairs"] = cm.Evidence.Pairs
+	}
+	if cm.Evidence.ScoringVersion != "" {
+		row["scoringVersion"] = cm.Evidence.ScoringVersion
+	}
 }
 
 // stConstraintRows is the web's hyb-guided-folding-constraints.tsv.
@@ -417,10 +497,14 @@ func (p *structurePage) comradesPanel(c *ui.Context, a *structureResult) {
 				label, tip, file string
 				rows             func(*stComrades) [][]string
 			}{
-				{"Evidence TSV…", "RNAcofold evidence pairs (region positions) and their HYB-row observations", "evidence", stEvidenceRows},
+				{"Shortlist TSV…", "RNAcofold evidence pairs shortlisted for stem constraints, with their HYB-row observations", "evidence", stEvidenceRows},
+				{"Scored evidence TSV…", "All orientation-combined raw counts used to score every ensemble structure", "scored_evidence", stScoredEvidenceRows},
 				{"Constraints TSV…", "The F stem constraints, accepted and rejected", "constraints", stConstraintRows},
 				{"Ensemble TSV…", "Every fold of the ensemble with its COMRADES score", "ensemble", stEnsembleRows},
 			} {
+				if d.file == "scored_evidence" && ev.ScoredPairs == nil {
+					continue
+				}
 				if ui.Button(c.Key(d.label), d.label).Tooltip(d.tip).Clicked() {
 					rows := d.rows(cm)
 					saveExport(p.a, "Save the COMRADES "+d.label[:len(d.label)-len(" TSV…")], stExportFiles[d.file],
@@ -430,6 +514,11 @@ func (p *structurePage) comradesPanel(c *ui.Context, a *structureResult) {
 		})
 		ui.Text(c, fmt.Sprintf("COMRADES score %s · %s supported structure pair%s · selected fold: %s",
 			jsNumber(ev.Score), FormatNumber(int64(ev.MatchedPairs)), plural(ev.MatchedPairs), stRunLabel(rnd.SelectedRun))).FontSize(13)
+		if ev.ScoringVersion == "all-pairs-capped-v1" && ev.ScoredPairs != nil {
+			ui.Text(c, "Scores use all eligible observations across "+stCountLabel(len(ev.ScoredPairs), "distinct pair")+", up to 1,000,000 per matched endpoint. Colours show uncapped counts; only shortlisted pairs select constraints.").FontSize(12).TextColor(t.TextMuted)
+		} else if ev.ScoredPairs == nil {
+			ui.Text(c, "The complete scored evidence set was not recorded in this result.").FontSize(12).TextColor(t.TextMuted)
+		}
 		stComradesStages(c, cm)
 		stComradesBars(c, cm)
 		if len(rnd.Structures) > 12 {
@@ -445,7 +534,7 @@ func (p *structurePage) comradesPanel(c *ui.Context, a *structureResult) {
 				return []string{strconv.Itoa(s.Rank), fmt.Sprintf("F %d %d %d", s.Left, s.Right, s.Length), strconv.Itoa(s.Length), jsNumber(s.Support)}
 			})
 		})
-		ui.Collapsible(c, fmt.Sprintf("Top RNAcofold evidence pairs (%d)", ev.SelectedBasePairs), &p.evidenceOpen, func() {
+		ui.Collapsible(c, fmt.Sprintf("RNAcofold constraint shortlist (%d)", ev.SelectedBasePairs), &p.evidenceOpen, func() {
 			if len(ev.Pairs) == 0 {
 				ui.Text(c, "No evidence pair list in this result (folded by an older version); the count is above.").TextColor(t.TextMuted)
 				return
@@ -515,8 +604,11 @@ func stNucleotideText(records []structureRecord, pos int, engine string) string 
 		}
 		text := "Nucleotide " + FormatNumber(int64(pos)) + " " + base(pos)
 		supportLabel := "chimera support"
+		candidate := r.scoredCandidate()
 		if stIsComrades(engine) {
 			supportLabel = "RNAcofold evidence"
+		} else if candidate != nil {
+			supportLabel = "HYB bonus"
 		}
 		for _, pr := range stRecordPairs(r) {
 			if pr.I != pos && pr.J != pos {
@@ -529,15 +621,23 @@ func stNucleotideText(records []structureRecord, pos int, engine string) string 
 			}
 			text += ")"
 			for i, rp := range r.Pairs {
-				if stPairKey(rp[0], rp[1]) == [2]int{pr.I, pr.J} && i < len(r.Bonus) && r.Bonus[i] != nil {
-					text += " · " + supportLabel + " " + stSupportText(*r.Bonus[i])
-					break
+				if stPairKey(rp[0], rp[1]) != [2]int{pr.I, pr.J} {
+					continue
 				}
+				if candidate != nil {
+					text += " · " + candidate.estimator() + " count " + strconv.Itoa(candidate.ComradesPairCounts[i])
+				}
+				if i < len(r.Bonus) && r.Bonus[i] != nil {
+					text += " · " + supportLabel + " " + stSupportText(*r.Bonus[i])
+				}
+				break
 			}
 			return text
 		}
 		text += " · unpaired"
-		if k <= len(r.NucleotideSupport) {
+		if candidate != nil {
+			text += " · " + candidate.estimator() + " count 0"
+		} else if k <= len(r.NucleotideSupport) {
 			text += " · strongest chimera support " + stSupportText(r.NucleotideSupport[k-1])
 		}
 		return text

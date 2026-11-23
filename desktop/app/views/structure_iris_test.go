@@ -2,6 +2,7 @@ package views
 
 import (
 	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -9,18 +10,32 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func TestStructureIrisHelpers(t *testing.T) {
-	if got, msg := stIrisParseStems(" 7, 5 5  4 "); msg != "" || !slices.Equal(got, []int{7, 5, 4}) {
-		t.Fatalf("stems %v %q", got, msg)
+func TestStructureIrisKRange(t *testing.T) {
+	raw, err := os.ReadFile("testdata/iris_k_range.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, msg := stIrisParseStems(""); msg != "" || len(got) != 4 {
-		t.Fatalf("default stems %v %q", got, msg)
+	var cases struct {
+		ValidText   map[string][]int
+		InvalidText []string
 	}
-	for _, bad := range []string{"4 13", "4 x", "1", "4.5"} {
-		if _, msg := stIrisParseStems(bad); msg != "IRIS stem length must be an integer from 2 to 12." {
-			t.Fatalf("%q: %q", bad, msg)
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	cases.ValidText[""] = []int{4, 5, 6, 7} // task default, not a valid catalog string
+	for text, want := range cases.ValidText {
+		if got, msg := stIrisParseStems(text); msg != "" || !slices.Equal(got, want) {
+			t.Errorf("%q: got %v %q, want %v", text, got, msg, want)
 		}
 	}
+	for _, bad := range cases.InvalidText {
+		if _, msg := stIrisParseStems(bad); msg != "IRIS stem length must be an integer from 2 to 12." {
+			t.Errorf("%q: %q", bad, msg)
+		}
+	}
+}
+
+func TestStructureIrisHelpers(t *testing.T) {
 	what, next, ok := stIrisExplain("No complete HYB arm pair is inside G:1-200. Both arms of each row must fit inside the same region (IRIS limit: 1,000 nt).")
 	if !ok || !strings.HasPrefix(what, "No complete HYB arm pair") || !strings.Contains(next, "nearby HYB-supported region") {
 		t.Fatalf("explain %q %q %v", what, next, ok)
@@ -100,8 +115,33 @@ func TestStructureIrisForm(t *testing.T) {
 		!slices.Contains(pl.problems, "IRIS stem length must be an integer from 2 to 12.") {
 		t.Fatalf("options %q", pl.problems)
 	}
-	p.iris.defaults()
+	// Reset must use the installed catalog, not a second set of constants in the form.
+	previous := engineSettings(engineIRIS)
+	t.Cleanup(func() { stKernels.Engines[engineIRIS] = previous })
+	updated := previous
+	updated.Defaults.K, updated.Defaults.C, updated.Defaults.Fraction, updated.Defaults.KRange = 1, 9, 0.5, "3 5"
+	stKernels.Engines[engineIRIS] = updated
+	p.advancedOpen = true
 	csSettle(a, tt)
+	if err := tt.Click("Reset to defaults"); err != nil {
+		t.Fatal(err)
+	}
+	csSettle(a, tt)
+	if !tt.HasText("K 1 · C 9 · support quantile 0.5 · stem lengths 3 5 · 37 °C · defaults") {
+		t.Fatal("reset did not display the catalog defaults")
+	}
+	p.iris.stems = ""
+	got := p.plan().req.Parameters.(map[string]any)["kRange"]
+	if lengths, ok := got.([]int); !ok || !slices.Equal(lengths, []int{3, 5}) {
+		t.Errorf("empty form field should submit catalog defaults [3 5], got %#v", got)
+	}
+	p.iris.stems = "4,"
+	p.runFold()
+	csSettle(a, tt)
+	if started := f.startedKinds(); len(started) != 0 {
+		t.Fatalf("malformed stem list started a task: %+v", started)
+	}
+	p.iris.stems = "7, 5,5  4"
 	if pl := p.plan(); len(pl.problems) != 0 {
 		t.Fatalf("problems before running %q", pl.problems)
 	}
@@ -109,10 +149,13 @@ func TestStructureIrisForm(t *testing.T) {
 	p.runFold()
 	csSettle(a, tt)
 	started := f.startedKinds()
-	req := started[len(started)-1]
+	if len(started) != 1 {
+		t.Fatalf("expected one IRIS request, got %+v", started)
+	}
+	req := started[0]
 	params, _ := json.Marshal(req.Parameters)
 	if req.Engine == nil || *req.Engine != "iris" || *req.Mode != "windows" || len(req.Windows) != 1 || req.Windows[0].Start != 3001 ||
-		string(params) != `{"C":20,"K":2,"fraction":0.75,"kRange":"4 5 6 7"}` {
+		string(params) != `{"C":9,"K":1,"fraction":0.5,"kRange":[4,5,7]}` {
 		t.Fatalf("request %+v %s", req, params)
 	}
 	if title := a.TaskLabel(a.Tasks[p.lastTask]); !strings.HasPrefix(title, "Structure (IRIS)") {

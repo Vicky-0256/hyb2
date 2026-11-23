@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,6 +24,8 @@ const (
 	RuntimeArchive       = "native.tar.gz"
 	RuntimeArchiveSHA256 = "native.tar.gz.sha256"
 	runtimeComplete      = ".complete"
+	runtimeStage         = ".unpacking"
+	runtimePublishWait   = 30 * time.Second
 )
 
 // PackedRuntime reports the archive under resources and its expected
@@ -36,52 +39,68 @@ func PackedRuntime(resources string) (archive, digest string, ok bool, err error
 	if err != nil {
 		return "", "", false, fmt.Errorf("the bundled runtime has no %s: %w", RuntimeArchiveSHA256, err)
 	}
-	digest = strings.ToLower(strings.TrimSpace(strings.Fields(string(raw) + " ")[0]))
-	if len(digest) != 64 {
+	if fields := strings.Fields(string(raw)); len(fields) > 0 {
+		digest = strings.ToLower(fields[0])
+	}
+	if _, err := hex.DecodeString(digest); err != nil || len(digest) != sha256.Size*2 {
 		return "", "", false, fmt.Errorf("%s is not a SHA-256", RuntimeArchiveSHA256)
 	}
 	return archive, digest, true, nil
 }
 
-// UnpackedRuntimeDir is where the archive with this digest is unpacked
-// (the runtime itself is its native/ subdirectory, as in resources).
+// UnpackedRuntimeDir returns the usable generation, or the next generation's
+// path if this digest is not yet ready. The runtime is its native/ subdirectory.
 func UnpackedRuntimeDir(cache, digest string) string {
-	return filepath.Join(cache, "runtime-"+digest[:16])
+	dir, _, _ := runtimeGeneration(cache, digest)
+	return dir
 }
 
-// RuntimeReady reports whether the archive with this digest is unpacked.
+// RuntimeReady checks the completion marker and the files needed to start Python.
 func RuntimeReady(cache, digest string) bool {
-	return isFile(filepath.Join(UnpackedRuntimeDir(cache, digest), runtimeComplete))
+	_, b, _ := runtimeGeneration(cache, digest)
+	return b != nil
 }
 
-// UnpackRuntime makes sure the archive is unpacked under cache and returns
-// the bridge in it. A finished unpack is reused; a new one is verified
-// against digest, written to a temporary directory and renamed into place,
-// and older runtime-* directories are removed.
-func UnpackRuntime(archive, digest, cache string) (*Bridge, error) {
-	dir := UnpackedRuntimeDir(cache, digest)
-	if !RuntimeReady(cache, digest) {
-		if err := os.MkdirAll(cache, 0o755); err != nil {
-			return nil, err
+// Pick a fresh slot for repairs: even a generation with a damaged marker
+// may have live users. Older launchers remove runtime-* on startup, so keep
+// all new generations outside that namespace and leave the old ones alone.
+func runtimeGeneration(cache, digest string) (string, *Bridge, error) {
+	if !filepath.IsAbs(cache) {
+		return "", nil, errors.New("the bundled runtime needs an absolute cache directory")
+	}
+	if _, err := hex.DecodeString(digest); len(digest) != sha256.Size*2 || err != nil {
+		return "", nil, errors.New("invalid runtime SHA-256")
+	}
+	pool := filepath.Join(cache, "packed-"+digest[:16])
+	entries, err := os.ReadDir(pool)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", nil, err
+	}
+	next := 0
+	for _, e := range entries {
+		n, err := strconv.Atoi(e.Name())
+		if err != nil || n < 0 {
+			continue // the lock and unpublished staging tree are not generations
 		}
-		tmp, err := os.MkdirTemp(cache, ".runtime-unpack-")
-		if err != nil {
-			return nil, err
+		next = max(next, n+1)
+		if !e.IsDir() {
+			continue
 		}
-		defer os.RemoveAll(tmp)
-		if err := extractVerified(archive, digest, filepath.Join(tmp, "native")); err != nil {
-			return nil, err
+		dir := filepath.Join(pool, e.Name())
+		marker := filepath.Join(dir, runtimeComplete)
+		if info, err := os.Stat(marker); err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(digest)+1) {
+			continue
 		}
-		if err := os.WriteFile(filepath.Join(tmp, runtimeComplete), []byte(digest+"\n"), 0o644); err != nil {
-			return nil, err
-		}
-		_ = os.RemoveAll(dir) // an incomplete earlier attempt
-		if err := os.Rename(tmp, dir); err != nil {
-			return nil, err
+		if data, err := os.ReadFile(marker); err == nil && string(data) == digest+"\n" {
+			if b, err := requiredBridge(dir); err == nil {
+				return dir, b, nil
+			}
 		}
 	}
-	// On every launch, so a removal cut short by quitting is finished later.
-	removeOldRuntimes(cache, filepath.Base(dir))
+	return filepath.Join(pool, strconv.Itoa(next)), nil, nil
+}
+
+func requiredBridge(dir string) (*Bridge, error) {
 	b, err := BundledBridge(dir)
 	if err == nil && b == nil {
 		err = errors.New("the bundled runtime archive has no desktop/runtime/bridge.py")
@@ -89,28 +108,68 @@ func UnpackRuntime(archive, digest, cache string) (*Bridge, error) {
 	return b, err
 }
 
-// staleUnpack is how old an unfinished unpack must be before it is
-// removed (a younger one may belong to another instance still unpacking).
-const staleUnpack = time.Hour
-
-// removeOldRuntimes deletes other runtime versions and unpacks abandoned
-// by a quit or crash.
-func removeOldRuntimes(cache, keep string) {
-	entries, _ := os.ReadDir(cache)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		old := strings.HasPrefix(e.Name(), "runtime-") && e.Name() != keep
-		if strings.HasPrefix(e.Name(), ".runtime-unpack-") {
-			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > staleUnpack {
-				old = true
+// UnpackRuntime reuses an immutable, published generation. On a cold launch
+// only the owner of the per-digest OS lock extracts; a waiting launcher checks
+// again after taking the lock. Process exit releases the lock, not its inode.
+func UnpackRuntime(archive, digest, cache string) (*Bridge, error) {
+	dir, b, err := runtimeGeneration(cache, digest)
+	if err != nil || b != nil {
+		return b, err
+	}
+	pool := filepath.Dir(dir)
+	if err := os.MkdirAll(pool, 0o700); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(runtimePublishWait)
+	for {
+		lock, err := tryFileLock(filepath.Join(pool, "publish.lock"))
+		if errors.Is(err, errLockBusy) {
+			if remaining := time.Until(deadline); remaining > 0 {
+				time.Sleep(min(50*time.Millisecond, remaining))
+				continue
 			}
+			// A publisher may have paused after the rename but before unlock.
+			if _, b, err := runtimeGeneration(cache, digest); err != nil || b != nil {
+				return b, err
+			}
+			return nil, fmt.Errorf("timed out after %s waiting for another HYB2 Desktop instance to prepare the runtime; let it finish, or close it if it is unresponsive, then retry", runtimePublishWait)
 		}
-		if old {
-			_ = os.RemoveAll(filepath.Join(cache, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		defer lock.Close()
+		break
+	}
+	dir, b, err = runtimeGeneration(cache, digest)
+	if err != nil || b != nil {
+		return b, err
+	}
+	// Only the lock holder can reclaim interrupted work. Cleanup is optional:
+	// a read-only or open leftover must not prevent a fresh private unpack.
+	stages, _ := os.ReadDir(pool)
+	for _, stage := range stages {
+		if stage.IsDir() && (stage.Name() == runtimeStage || strings.HasPrefix(stage.Name(), runtimeStage+"-")) {
+			_ = os.RemoveAll(filepath.Join(pool, stage.Name()))
 		}
 	}
+	tmp, err := os.MkdirTemp(pool, runtimeStage+"-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	if err := extractVerified(archive, digest, filepath.Join(tmp, "native")); err != nil {
+		return nil, err
+	}
+	if _, err := requiredBridge(tmp); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(tmp, runtimeComplete), []byte(digest+"\n"), 0o644); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		return nil, err
+	}
+	return requiredBridge(dir)
 }
 
 // extractVerified unpacks a .tar.gz into dest while hashing it, and fails

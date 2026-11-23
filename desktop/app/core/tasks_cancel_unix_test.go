@@ -3,11 +3,62 @@
 package core
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestCancellingTaskKeepsBudgetUntilWaitReturns(t *testing.T) {
+	s := testScheduler(t, 2, 1000)
+	project := tempProject(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, testPython(t), "-c", "import time; time.sleep(60)")
+	// Hold exec.Cmd.Wait open across the real scheduler cancel, independent
+	// of how quickly the OS delivers the kill signal.
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	cmd.Cancel = func() error { close(entered); <-release; return nil }
+	submit := func(command *exec.Cmd) string {
+		t.Helper()
+		id := NewTaskID()
+		root, dir, err := s.prepareRunDir(project, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Submit(command, &Prepared{ID: id, Project: root, RunDir: dir, Kind: "sample_pipeline", Claim: Budget{2, 600}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	first := submit(cmd)
+	cancel()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Python task did not reach the Wait barrier")
+	}
+	second := submit(exec.Command(testPython(t), "-c", "pass"))
+	if snap, err := s.Cancel(first, project); err != nil || snap["status"] != "cancelling" {
+		t.Fatalf("cancel: %v, %v", snap, err)
+	}
+	for _, budget := range []Budget{{4, 1000}, {2, 2000}} { // only memory, then only CPUs prevent admission
+		s.SetBudget(budget)
+		if snap, err := s.Status(second, project); err != nil || snap["status"] != "queued" {
+			t.Fatalf("budget %+v before Wait returned: %v, %v", budget, snap, err)
+		}
+	}
+	unblock()
+	if snap := waitFor(t, s, second, project, finished); snap["status"] != "succeeded" {
+		t.Fatalf("queued task after Wait returned: %v", snap)
+	}
+}
 
 // TestCancelOutcomeNeverChanges: Cancel answers "cancelling" (active, not
 // finished) while the child may still finish; the first finished snapshot

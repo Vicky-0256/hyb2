@@ -68,8 +68,9 @@ const (
 
 const unsupportedKind = "engine unavailable or not enabled: unsupported task kind"
 
-// OnFinish is called with (project, task id) after a task reaches a
-// terminal state.
+// OnFinish is called with (project, task id) after execution reaches a
+// terminal state. Service tracks project registration separately: a
+// succeeded computation does not yet imply its result is in project.json.
 type OnFinish func(project, id string)
 
 // pending is a task waiting for budget: its command is started at launch.
@@ -98,6 +99,7 @@ type taskState struct {
 	seq         uint64
 	resumedFrom *string
 	lock        *os.File // run directory owner lock; held until finished
+	resumeLock  *os.File // original task's resume claim; same lifetime as lock
 }
 
 // Scheduler owns the task table and the resource budget. The Tauri shell
@@ -108,7 +110,19 @@ type Scheduler struct {
 	tasks        map[string]*taskState
 	budget       *Budget
 	seq          uint64
-	shuttingDown atomic.Bool
+	shuttingDown bool // guarded by mu, together with admission
+	finishes     sync.WaitGroup
+}
+
+// A task leaving the table's pending/running states hands its callback to
+// a caller outside mu. Track that handoff before unlocking, so shutdown
+// can drain even callbacks whose terminal status is already visible.
+func (s *Scheduler) trackFinishLocked(f OnFinish) OnFinish {
+	s.finishes.Add(1)
+	return func(project, id string) {
+		defer s.finishes.Done()
+		f(project, id)
+	}
 }
 
 // NewScheduler returns an empty scheduler using the system default budget.
@@ -215,7 +229,7 @@ func withProgress(value Obj) Obj {
 		}
 	}
 	value["progress"] = progress
-	return value
+	return withRegistration(value)
 }
 
 // writeAtomic writes pretty JSON to dir/name through a temporary file.
@@ -249,6 +263,10 @@ func (e *taskState) unlock() {
 	if e.lock != nil {
 		_ = e.lock.Close()
 		e.lock = nil
+	}
+	if e.resumeLock != nil {
+		_ = e.resumeLock.Close()
+		e.resumeLock = nil
 	}
 }
 
@@ -457,8 +475,15 @@ func (s *Scheduler) Prepare(request TaskStartRequest, project string, resumedFro
 		return nil, err
 	}
 	if resumedFrom != nil {
+		if err := ValidateID(*resumedFrom); err != nil {
+			return nil, err
+		}
+		root, err := canonicalPath(project)
+		if err != nil {
+			return nil, err
+		}
 		s.mu.Lock()
-		err := s.resumingLocked(*resumedFrom)
+		err = s.resumingLocked(root, *resumedFrom)
 		s.mu.Unlock()
 		if err == nil {
 			err = resumingElsewhere(project, *resumedFrom)
@@ -501,13 +526,43 @@ func (s *Scheduler) Prepare(request TaskStartRequest, project string, resumedFro
 
 // resumingLocked refuses a second resume of from while an earlier resumed
 // copy is still queued or running (both would write the same outputs).
-func (s *Scheduler) resumingLocked(from string) error {
+func (s *Scheduler) resumingLocked(project, from string) error {
 	for other, e := range s.tasks {
-		if e.resumedFrom != nil && *e.resumedFrom == from && slices.Contains(activeStates, e.status) {
+		if e.project == project && e.resumedFrom != nil && *e.resumedFrom == from && slices.Contains(activeStates, e.status) {
 			return fmt.Errorf("task %s is already being resumed as %s", from, other)
 		}
 	}
 	return nil
+}
+
+// lockResume atomically owns (canonical project, original task id). Unlike
+// the advisory Prepare scan, this claim covers the entire queued/running
+// lifetime. Never unlink the file: a contender may already have it open.
+// The kernel releases the lock even if the owning process crashes.
+func lockResume(project, from string) (*os.File, error) {
+	if err := ValidateID(from); err != nil {
+		return nil, err
+	}
+	runDir, err := projectRunDir(from, project)
+	if err != nil {
+		return nil, err
+	}
+	if info, err := os.Lstat(runDir); err != nil || !info.IsDir() {
+		return nil, errors.New("original task run directory does not exist")
+	}
+	lock, err := tryFileLock(filepath.Join(runDir, "resume.lock"))
+	if errors.Is(err, errLockBusy) {
+		return nil, fmt.Errorf("task %s is already being resumed in another window", from)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot claim resumed task: %w", err)
+	}
+	// Also honor a live resume from an older application without resume.lock.
+	if err := resumingElsewhere(project, from); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return lock, nil
 }
 
 // resumingElsewhere refuses a resume of from while another instance's
@@ -547,11 +602,8 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 	if err := ValidateID(task.ID); err != nil {
 		return nil, err
 	}
-	if filepath.Dir(filepath.Dir(task.RunDir)) != task.Project {
+	if task.RunDir != filepath.Join(task.Project, "runs", task.ID) {
 		return nil, errors.New("task run directory escapes project")
-	}
-	if s.shuttingDown.Load() {
-		return nil, errors.New("the application is shutting down")
 	}
 	if onFinish == nil {
 		onFinish = func(string, string) {}
@@ -562,8 +614,13 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 		s.mu.Unlock()
 		return nil, errors.New("task id is already in use")
 	}
+	if s.shuttingDown {
+		s.mu.Unlock()
+		// Prepare reserved this directory; the task was never admitted.
+		return nil, errors.Join(errors.New("the application is shutting down"), os.RemoveAll(task.RunDir))
+	}
 	if task.ResumedFrom != nil {
-		if err := s.resumingLocked(*task.ResumedFrom); err != nil {
+		if err := s.resumingLocked(task.Project, *task.ResumedFrom); err != nil {
 			s.mu.Unlock()
 			// A concurrent resume won; this copy never ran.
 			_ = os.RemoveAll(task.RunDir)
@@ -580,6 +637,7 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 		}
 		if oldest == "" {
 			s.mu.Unlock()
+			_ = os.RemoveAll(task.RunDir)
 			return nil, errors.New("task limit reached; wait for an active task to finish")
 		}
 		delete(s.tasks, oldest)
@@ -595,10 +653,20 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 		seq:         s.seq,
 		resumedFrom: task.ResumedFrom,
 	}
+	if task.ResumedFrom != nil {
+		lock, err := lockResume(task.Project, *task.ResumedFrom)
+		if err != nil {
+			s.mu.Unlock()
+			_ = os.RemoveAll(task.RunDir)
+			return nil, err
+		}
+		entry.resumeLock = lock
+	}
 	// Taken before the first status write, so no other instance ever sees
 	// this task active without a live owner.
 	lock, err := lockRunDir(task.RunDir)
 	if err != nil {
+		entry.unlock()
 		s.mu.Unlock()
 		_ = os.RemoveAll(task.RunDir) // never registered: leave no orphan run
 		return nil, fmt.Errorf("cannot lock task directory: %w", err)
@@ -698,25 +766,32 @@ type started struct {
 
 // schedule launches every queued task that fits the budget.
 func (s *Scheduler) schedule() {
-	for !s.shuttingDown.Load() {
+	for {
 		var monitors []started
 		var failed []started
 		s.mu.Lock()
+		if s.shuttingDown {
+			s.mu.Unlock()
+			return
+		}
 		budget := s.budgetLocked()
 		var used Budget
 		var queued []queuedTask
 		var running []string
+		var cancelling bool
 		for id, e := range s.tasks {
-			if e.status == "running" && e.cmd != nil {
+			// The child owns its claim until monitor returns from Wait and clears cmd.
+			if e.cmd != nil {
 				used.CPU += e.claim.CPU
 				used.MemMB += e.claim.MemMB
 				running = append(running, e.kind)
+				cancelling = cancelling || e.status == "cancelling"
 			} else if e.status == "queued" && e.pending != nil {
 				queued = append(queued, queuedTask{e.seq, id, e.claim, e.kind})
 			}
 		}
 		launch := admit(queued, used, budget)
-		if len(launch) == 0 {
+		if len(launch) == 0 && !cancelling {
 			if early := earlyStart(queued, running, used, budget); early != nil {
 				launch = append(launch, *early)
 			}
@@ -733,7 +808,7 @@ func (s *Scheduler) schedule() {
 				e.onFinish = p.onFinish
 				monitors = append(monitors, started{a.id, e.project, e.runDir, e.cmd, e.exited, p.onFinish})
 			} else {
-				failed = append(failed, started{id: a.id, project: e.project, onFinish: p.onFinish})
+				failed = append(failed, started{id: a.id, project: e.project, onFinish: s.trackFinishLocked(p.onFinish)})
 			}
 		}
 		s.mu.Unlock()
@@ -884,6 +959,7 @@ func (s *Scheduler) monitor(m started) {
 		message := err.Error()
 		e.err = &message
 	}
+	m.onFinish = s.trackFinishLocked(m.onFinish)
 	s.mu.Unlock()
 	s.schedule()
 	m.onFinish(m.project, m.id)
@@ -1072,7 +1148,7 @@ func (s *Scheduler) Cancel(id, project string) (Obj, error) {
 			s.mu.Unlock()
 			return nil, err
 		}
-		finishQueued = p.onFinish
+		finishQueued = s.trackFinishLocked(p.onFinish)
 	} else if e.cmd != nil {
 		select {
 		case <-e.exited:
@@ -1097,9 +1173,10 @@ func (s *Scheduler) Cancel(id, project string) (Obj, error) {
 	s.mu.Unlock()
 	if finishQueued != nil {
 		finishQueued(project, id)
+		// Removing a queued head can unblock later tasks. For a running
+		// child the monitor schedules again after releasing its claim.
+		s.schedule()
 	}
-	// A cancelled task no longer counts against the budget or blocks the queue.
-	s.schedule()
 	return withProgress(snap), nil
 }
 
@@ -1109,7 +1186,6 @@ func (s *Scheduler) Cancel(id, project string) (Obj, error) {
 // are refused. Their onFinish runs before it returns, so they can still be
 // registered while the runtime is up.
 func (s *Scheduler) ShutdownAll() {
-	s.shuttingDown.Store(true)
 	type finish struct {
 		project, id string
 		onFinish    OnFinish
@@ -1136,17 +1212,18 @@ func (s *Scheduler) ShutdownAll() {
 		_ = e.persist(id)
 	}
 	s.mu.Lock()
+	s.shuttingDown = true
 	for id, e := range s.tasks {
 		switch {
 		case e.pending != nil:
 			if onFinish := e.pending.onFinish; onFinish != nil {
-				finishes = append(finishes, finish{e.project, id, onFinish})
+				finishes = append(finishes, finish{e.project, id, s.trackFinishLocked(onFinish)})
 			}
 			e.pending = nil
 			end(id, e, "the application exited before this queued task started")
 		case e.cmd != nil:
 			if e.onFinish != nil {
-				finishes = append(finishes, finish{e.project, id, e.onFinish})
+				finishes = append(finishes, finish{e.project, id, s.trackFinishLocked(e.onFinish)})
 			}
 			_ = killTree(e.cmd.Process.Pid)
 			// Taken from the monitor, which now only reaps the child.
@@ -1179,6 +1256,7 @@ func (s *Scheduler) ShutdownAll() {
 	for _, f := range finishes {
 		f.onFinish(f.project, f.id)
 	}
+	s.finishes.Wait()
 }
 
 // ResumeRequest is the stored start request of a task in project that may
@@ -1326,20 +1404,21 @@ func structurePayload(request TaskStartRequest, project, id, runDir string, clai
 	case engine == "iris" && request.Source != nil && *request.Source != "reference":
 		return nil, errors.New("structure engine iris needs source reference (a region with its chimeras)")
 	}
+	// Coordinates are 1-based inclusive. The runtime enforces source lengths.
 	for _, r := range request.Regions {
 		if err := validateGeneID(r.GeneID); err != nil {
 			return nil, err
 		}
-		if r.Start < 1 || r.Start >= r.End {
-			return nil, fmt.Errorf("structure region %s:%d-%d must have 1 <= start < end", r.GeneID, r.Start, r.End)
+		if r.Start < 1 || r.Start > r.End {
+			return nil, fmt.Errorf("structure region %s:%d-%d must have 1 <= start <= end", r.GeneID, r.Start, r.End)
 		}
 	}
 	if len(windows) > maxWindows {
 		return nil, fmt.Errorf("structure accepts at most %d windows", maxWindows)
 	}
 	for _, w := range windows {
-		if w.Start >= w.End {
-			return nil, fmt.Errorf("structure window %d-%d must have start < end", w.Start, w.End)
+		if w.Start < 1 || w.Start > w.End {
+			return nil, fmt.Errorf("structure window %d-%d must have 1 <= start <= end", w.Start, w.End)
 		}
 	}
 	if request.Workers != nil && *request.Workers == 0 {

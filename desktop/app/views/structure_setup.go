@@ -28,12 +28,17 @@ type stSetup struct {
 	snap     stWorkflowSnap
 	// the "Preview sequence" fold and the reference sequences it read
 	previewOpen bool
-	seqs        map[string]string
+	seqs        map[string]stFoldReference
 	seqErr      map[string]string
 	reading     map[string]bool
 	// localFASTA is the name the form's local FASTA was last saved under,
 	// for the local command shown ("" until saved).
 	localFASTA string
+}
+
+type stFoldReference struct {
+	referenceBases
+	invalid string
 }
 
 // ---- Folding workflow
@@ -63,12 +68,13 @@ func stWorkflowLabels(cpl bool) []string {
 // stWorkflowSnap is what a preset sets.
 type stWorkflowSnap struct {
 	engine, source, gene, gene2, region1, region2 string
+	reference, reference2                         string
 	paired, homodimer                             bool
 }
 
 func (p *structurePage) workflowSnap() stWorkflowSnap {
 	return stWorkflowSnap{engine: p.engine, source: p.src.kind, gene: p.gene, gene2: p.gene2, region1: p.region1,
-		region2: p.region2, paired: p.mode == "paired", homodimer: p.homodimerOnly}
+		region2: p.region2, reference: p.referenceID, reference2: p.referenceID2, paired: p.mode == "paired", homodimer: p.homodimerOnly}
 }
 
 // stCPL: CPLfold or CPLcofold, the web's "CPLfold" engine.
@@ -94,7 +100,6 @@ func (p *structurePage) applyWorkflow(value string) {
 			p.region1 = lines[0]
 		}
 	}
-	region, _ := stParseRegion(p.region1, p.a.Project.GeneLength(p.gene), "Region 1")
 	one := value == stWorkflowShort
 	p.setSource(stSourceReference)
 	if stCPL(p.engine) {
@@ -102,9 +107,6 @@ func (p *structurePage) applyWorkflow(value string) {
 			p.engine = engineCPLfold
 		} else {
 			p.engine = engineCPLcofold
-			if p.model != "DP03" && p.model != "DP09" {
-				p.model = stDefaultModel
-			}
 		}
 	} else {
 		p.engine = engineComrades
@@ -113,17 +115,18 @@ func (p *structurePage) applyWorkflow(value string) {
 			p.mode = "paired"
 		}
 	}
-	if one && region.End > 0 {
-		p.mode, p.windows = "windows", fmt.Sprintf("%d-%d", region.Start, region.End)
+	if one && stWindowLine.MatchString(strings.TrimSpace(p.region1)) {
+		// Carry the coordinates as entered; the single-strand window check owns their order and length.
+		p.mode, p.windows = "windows", p.region1
 	} else if one && p.mode == "paired" {
 		p.mode = "genome"
 	}
 	switch value {
 	case stWorkflowLong, stWorkflowHomodimer:
-		p.gene2 = p.gene
+		p.gene2, p.referenceID2 = p.gene, p.referenceID
 	case stWorkflowInter:
 		if p.gene2 == p.gene || p.gene2 == "" {
-			p.gene2 = p.otherRNA()
+			p.gene2, p.referenceID2 = p.otherRNA(), ""
 		}
 	}
 	if value == stWorkflowHomodimer {
@@ -135,12 +138,12 @@ func (p *structurePage) applyWorkflow(value string) {
 // otherRNA is the first RNA other than the one folded, of its reference
 // when it has one (both regions must be on one reference), else of any.
 func (p *structurePage) otherRNA() string {
-	ref, other := stReferenceID(p.a.Project, p.gene), ""
+	ref, other := p.geneReference(), ""
 	for _, r := range p.a.Project.References {
-		for _, s := range r.Sequences {
+		for _, s := range r.RNAs() {
 			switch {
 			case s.Name == p.gene:
-			case r.ID == ref:
+			case ref != nil && r.ID == ref.ID:
 				return s.Name
 			case other == "":
 				other = s.Name
@@ -168,9 +171,9 @@ func (p *structurePage) syncWorkflow() {
 	case now.engine != was.engine || now.source != was.source || now.paired != was.paired || now.homodimer != was.homodimer:
 		custom()
 		return
-	case now.gene != was.gene && (wf == stWorkflowLong || wf == stWorkflowHomodimer):
-		p.gene2 = p.gene
-	case now.gene2 != was.gene2:
+	case (now.gene != was.gene || now.reference != was.reference) && (wf == stWorkflowLong || wf == stWorkflowHomodimer):
+		p.gene2, p.referenceID2 = p.gene, p.referenceID
+	case now.gene2 != was.gene2 || now.reference2 != was.reference2:
 		custom()
 		return
 	}
@@ -299,34 +302,42 @@ func (p *structurePage) prepared(pl foldPlan, read bool) (parts []stPrepared, la
 		label = fmt.Sprintf("%s:%s + %s:%s", regions[0].GeneID, stRange(int(regions[0].Start), int(regions[0].End)),
 			regions[1].GeneID, stRange(int(regions[1].Start), int(regions[1].End)))
 	case len(pl.windows) == 1:
-		label = fmt.Sprintf("%s:%s", p.gene, stRange(int(pl.windows[0].Start), int(pl.windows[0].End)))
+		label = fmt.Sprintf("%s:%s", pl.gene, stRange(int(pl.windows[0].Start), int(pl.windows[0].End)))
 	case len(pl.windows) > 1:
-		label = fmt.Sprintf("%s · %d windows", p.gene, len(pl.windows))
+		label = fmt.Sprintf("%s · %d windows", pl.gene, len(pl.windows))
 	default:
-		label = fmt.Sprintf("%s:%s", p.gene, stRange(1, pl.length))
+		label = fmt.Sprintf("%s:%s", pl.gene, stRange(1, pl.length))
 	}
 	if !read {
 		return nil, label, false, ""
 	}
-	cut := func(gene string, from, to int) (string, bool) {
-		seq, ok, e := p.referenceSequence(gene)
+	cut := func(ref, gene string, from, to int) (string, bool) {
+		seq, ok, e := p.referenceSequence(ref, gene)
 		switch {
 		case e != "":
 			err = e
 		case !ok:
 			loading = true
-		case from < 1 || to > len(seq) || from > to:
-			err = fmt.Sprintf("%s:%d-%d is outside its %s nt.", gene, from, to, FormatNumber(int64(len(seq))))
+		case from < 1 || to > seq.length() || from > to:
+			err = fmt.Sprintf("%s:%d-%d is outside its %s nt.", gene, from, to, FormatNumber(int64(seq.length())))
 		default:
-			return seq[from-1 : to], true
+			window := seq.window(from, to)
+			bad := seq.invalid
+			if bad != "" && p.engine == engineCPLcofold {
+				bad = strings.Join(stInvalidBases(window), ", ")
+			}
+			if bad == "" {
+				return window, true
+			}
+			err = fmt.Sprintf("%s: unsupported reference symbols: %s.", gene, bad)
 		}
 		return "", false
 	}
 	switch {
 	case two:
 		r1, r2 := regions[0], regions[1]
-		s1, ok1 := cut(r1.GeneID, int(r1.Start), int(r1.End))
-		s2, ok2 := cut(r2.GeneID, int(r2.Start), int(r2.End))
+		s1, ok1 := cut(pl.referenceID, r1.GeneID, int(r1.Start), int(r1.End))
+		s2, ok2 := cut(pl.referenceID2, r2.GeneID, int(r2.Start), int(r2.End))
 		if !ok1 || !ok2 {
 			return nil, label, loading, err
 		}
@@ -341,57 +352,62 @@ func (p *structurePage) prepared(pl foldPlan, read bool) (parts []stPrepared, la
 		return []stPrepared{part}, label, false, ""
 	case len(pl.windows) > 0:
 		for _, w := range pl.windows {
-			seq, ok := cut(p.gene, int(w.Start), int(w.End))
+			seq, ok := cut(pl.referenceID, pl.gene, int(w.Start), int(w.End))
 			if !ok {
 				return nil, label, loading, err
 			}
-			parts = append(parts, stPrepared{title: fmt.Sprintf("%s:%s", p.gene, stRange(int(w.Start), int(w.End))), seq: seq,
-				segments: []stSegment{{p.gene, int(w.Start), int(w.End), 1, len(seq)}}})
+			parts = append(parts, stPrepared{title: fmt.Sprintf("%s:%s", pl.gene, stRange(int(w.Start), int(w.End))), seq: seq,
+				segments: []stSegment{{pl.gene, int(w.Start), int(w.End), 1, len(seq)}}})
 		}
 		return parts, label, false, ""
 	default:
-		seq, ok := cut(p.gene, 1, pl.length)
+		seq, ok := cut(pl.referenceID, pl.gene, 1, pl.length)
 		if !ok {
 			return nil, label, loading, err
 		}
-		return []stPrepared{{seq: seq, segments: []stSegment{{p.gene, 1, pl.length, 1, pl.length}}}}, label, false, ""
+		return []stPrepared{{seq: seq, segments: []stSegment{{pl.gene, 1, pl.length, 1, pl.length}}}}, label, false, ""
 	}
 }
 
 // referenceSequence is an RNA's reference sequence as folded (upper case,
 // T read as U), read once off the UI thread.
-func (p *structurePage) referenceSequence(gene string) (string, bool, string) {
+func (p *structurePage) referenceSequence(ref, gene string) (stFoldReference, bool, string) {
+	if ref == "" {
+		return stFoldReference{}, false, "Choose an RNA and its reference to preview the sequence."
+	}
 	s := &p.setup
-	if seq, ok := s.seqs[gene]; ok {
+	a, pr := p.a, p.a.Project
+	key := ref + "\x00" + regionRefStamp(a, ref) + "\x00" + gene
+	if seq, ok := s.seqs[key]; ok {
 		return seq, true, ""
 	}
-	if e := s.seqErr[gene]; e != "" {
-		return "", false, e
+	if e := s.seqErr[key]; e != "" {
+		return stFoldReference{}, false, e
 	}
 	if s.reading == nil {
-		s.seqs, s.seqErr, s.reading = map[string]string{}, map[string]string{}, map[string]bool{}
+		s.seqs, s.seqErr, s.reading = map[string]stFoldReference{}, map[string]string{}, map[string]bool{}
 	}
-	if !s.reading[gene] {
-		s.reading[gene] = true
-		a, pr := p.a, p.a.Project
+	if !s.reading[key] {
+		s.reading[key] = true
 		path := pr.Path
 		a.Go(func() func() {
-			seq, err := fetchSequence(a.B, pr, path, gene)
-			seq = strings.ReplaceAll(strings.ToUpper(seq), "T", "U")
+			seq, err := readGeneSequence(a.B, ref, path, gene)
+			seq, _ = stCleanSequence(seq, false)
+			result := stFoldReference{indexReference(seq), strings.Join(stInvalidBases(seq), ", ")}
 			return func() {
 				if a.Project == nil || a.Project.Path != path || s.reading == nil {
 					return
 				}
-				delete(s.reading, gene)
+				delete(s.reading, key)
 				if err != nil {
-					s.seqErr[gene] = err.Error()
+					s.seqErr[key] = err.Error()
 					return
 				}
-				s.seqs[gene] = seq
+				s.seqs[key] = result
 			}
 		})
 	}
-	return "", false, ""
+	return stFoldReference{}, false, ""
 }
 
 // stSequenceLines is the web's aligned sequence: perLine nt a line (the
@@ -595,9 +611,10 @@ func stResultRun(a *structureResult) stLocalRun {
 	}
 	pk, _ := a.Meta.Parameters["allow_pseudoknot"].(bool)
 	model, _ := a.Meta.Parameters["energy_model"].(string)
-	return stLocalRun{cofold: stEngine(a) == "CPLcofold", guided: stGuided(a), pseudoknot: pk,
+	cofold := stEngine(a) == "CPLcofold"
+	return stLocalRun{cofold: cofold, guided: stGuided(a), pseudoknot: pk,
 		beam: int(num("beam", stDefaultBeam)), phase1: int(num("max_phase1", stDefaultPhase1)), delta: num("energy_delta", stDefaultDelta),
-		beta: num("beta", stDefaultBeta), alpha: num("alpha", stDefaultAlpha), model: nameOr(model, stDefaultModel)}
+		beta: num("beta", stDefaultBeta), alpha: num("alpha", stDefaultAlpha), model: nameOr(model, cplSettings(cofold).DefaultModel)}
 }
 
 // stShellWord quotes a file name for the shell when it needs it.
@@ -625,7 +642,7 @@ func stLocalCommand(r stLocalRun, fasta, matrix string) string {
 		cmd = append(cmd, "--bonus-matrix-file", stShellWord(nameOr(matrix, stLocalMatrix)))
 	}
 	cmd = append(cmd, "--beam", strconv.Itoa(r.beam), "--delta", num(r.delta), "--max-phase1", strconv.Itoa(r.phase1),
-		"--max-phase2", "1", "--model", strings.ToUpper(nameOr(r.model, stDefaultModel)), "--beta", num(r.beta))
+		"--max-phase2", "1", "--model", strings.ToUpper(nameOr(r.model, cplSettings(r.cofold).DefaultModel)), "--beta", num(r.beta))
 	if r.guided {
 		cmd = append(cmd, "--alpha", num(r.alpha))
 	}

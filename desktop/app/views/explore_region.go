@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 
@@ -261,6 +262,36 @@ func (p *explorePage) regionSequenceRange(d *regionData) (int, int) {
 	return start, end
 }
 
+// Reference coordinates count Unicode code points, even for unsupported bases.
+// Ordinary FASTA stays a byte string; only non-ASCII records need a rune index.
+type referenceBases struct {
+	text  string
+	runes []rune
+}
+
+func indexReference(text string) referenceBases {
+	b := referenceBases{text: text}
+	if utf8.RuneCountInString(text) != len(text) {
+		b.runes = []rune(text)
+	}
+	return b
+}
+
+func (b referenceBases) length() int {
+	if b.runes != nil {
+		return len(b.runes)
+	}
+	return len(b.text)
+}
+
+// window uses 1-based inclusive bounds already checked against length.
+func (b referenceBases) window(start, end int) string {
+	if b.runes != nil {
+		return string(b.runes[start-1 : end])
+	}
+	return b.text[start-1 : end]
+}
+
 // regionRefStamp is the version of reference ref: its file (replaced or
 // relinked through update_reference) and the name matching's invalidation
 // count (set_reference_match), so a change reads the sequence again.
@@ -296,11 +327,16 @@ func (p *explorePage) loadRegionSequence(d *regionData) {
 			problem = err.Error()
 		} else {
 			whole, _ := raw["sequence"].(string)
-			whole = strings.ToUpper(strings.Join(strings.Fields(whole), ""))
-			if start <= end && end <= len(whole) {
-				seq = whole[start-1 : end]
+			bases := indexReference(whole) // the bridge already removed FASTA layout
+			if start <= end && end <= bases.length() {
+				seq = strings.Map(func(r rune) rune {
+					if r >= 'a' && r <= 'z' {
+						return r - 'a' + 'A'
+					}
+					return r
+				}, bases.window(start, end))
 			} else {
-				problem = fmt.Sprintf("the reference sequence of %s (%d nt) does not cover the region", gene, len(whole))
+				problem = fmt.Sprintf("the reference sequence of %s (%d nt) does not cover the region", gene, bases.length())
 			}
 		}
 		return func() { s.seq, s.seqErr, s.seqKey = seq, problem, key }, nil
@@ -488,17 +524,18 @@ func (p *explorePage) regionReference(c *ui.Context, d *regionData) {
 // lines of 50, groups of 10, each line led by its first coordinate
 // ({position, groups}); more is the note when the region is longer.
 func groupedSequence(seq string, start int) (lines [][2]string, more string) {
-	shown := seq[:min(len(seq), regionSequencePreview)]
-	for offset := 0; offset < len(shown); offset += 50 {
+	bases := indexReference(seq)
+	shown := min(bases.length(), regionSequencePreview)
+	for offset := 0; offset < shown; offset += 50 {
 		var groups []string
-		for group := offset; group < min(len(shown), offset+50); group += 10 {
-			groups = append(groups, shown[group:min(group+10, offset+50, len(shown))])
+		for group := offset; group < min(shown, offset+50); group += 10 {
+			groups = append(groups, bases.window(group+1, min(group+10, shown)))
 		}
 		lines = append(lines, [2]string{FormatNumber(int64(start + offset)), strings.Join(groups, " ")})
 	}
-	if len(seq) > len(shown) {
+	if bases.length() > shown {
 		more = fmt.Sprintf("Showing the first %s of %s nt. Copy sequence and Download FASTA use the whole region.",
-			FormatNumber(int64(len(shown))), FormatNumber(int64(len(seq))))
+			FormatNumber(int64(shown)), FormatNumber(int64(bases.length())))
 	}
 	return lines, more
 }

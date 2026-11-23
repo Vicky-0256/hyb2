@@ -58,3 +58,45 @@ time.sleep(60)`
 	}
 	waitRun(t, project, newID, "succeeded")
 }
+
+func TestCancelThenShutdownRegistersRun(t *testing.T) {
+	s := newTestService(t)
+	project := createProject(t, s)
+	s.taskCommand = func(_ *Runtime, _ *Prepared) *exec.Cmd {
+		return exec.Command(testPython(t), "-c", "import time; time.sleep(60)")
+	}
+	snap, err := s.StartTask(TaskStartRequest{ProjectPath: project, Kind: "validate_project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := snap["task_id"].(string)
+	// Delay the real bridge's register_task_run, not the Go process monitor.
+	lock, err := tryFileLock(filepath.Join(project, "project.json.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { lock.Close() })
+	if _, err := s.CancelTask(project, id); err != nil {
+		t.Fatal(err)
+	}
+	if task := waitTask(t, s, project, id, 5*time.Second); task["status"] != "cancelled" {
+		t.Fatalf("task: %v", task)
+	}
+	done := make(chan struct{})
+	go func() { s.Shutdown(); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("shutdown returned before project.json could be updated")
+	case <-time.After(200 * time.Millisecond):
+	}
+	lock.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not finish after releasing the manifest")
+	}
+	runs := readJSON(t, filepath.Join(project, "project.json"))["runs"].([]any)
+	if len(runs) != 1 || runs[0].(map[string]any)["id"] != id || runs[0].(map[string]any)["status"] != "cancelled" {
+		t.Fatalf("persisted runs at shutdown: %v", runs)
+	}
+}

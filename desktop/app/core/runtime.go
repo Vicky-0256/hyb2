@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -47,6 +48,13 @@ func BundledBridge(resources string) (*Bridge, error) {
 	python := pythonIn(root)
 	if !isFile(python) {
 		return nil, fmt.Errorf("Bundled Python is missing at %s. Rebuild or reinstall the desktop runtime.", python)
+	}
+	if runtime.GOOS != "windows" {
+		// This path includes a directory: LookPath checks execute access for
+		// the current user without searching PATH or starting the interpreter.
+		if _, err := exec.LookPath(python); err != nil {
+			return nil, fmt.Errorf("bundled Python is not executable: %w", err)
+		}
 	}
 	return &Bridge{Root: root, Python: python}, nil
 }

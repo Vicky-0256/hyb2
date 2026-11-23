@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
@@ -25,42 +24,39 @@ import (
 	"hyb2desktop/model"
 )
 
-// The web RNA Structure page's CPLfold defaults (web/analysis-data.js).
-const (
-	stDefaultAlpha  = 0.5
-	stDefaultBeam   = 20
-	stDefaultPhase1 = 3
-	stDefaultDelta  = 5
-	stDefaultBeta   = 0
-	stDefaultModel  = "DP09"
-	stDefaultKernel = "gaussian"
+// Both forms start with explicit guided CPLfold settings, including the evidence weight.
+var (
+	stDefaultAlpha  = cplSettings(false).Defaults.Alpha
+	stDefaultBeam   = cplSettings(false).Defaults.BeamSize
+	stDefaultPhase1 = cplSettings(false).Defaults.MaxPhase1
+	stDefaultDelta  = cplSettings(false).Defaults.EnergyDelta
+	stDefaultBeta   = cplSettings(false).Defaults.Beta
 )
 
-// stModels are CPLfold's energy models, labelled as on the web page.
-var (
-	stModels      = []string{"DP09", "DP03", "CC06", "CC09", "RE"}
-	stModelLabels = []string{"DP09", "DP03", "CC06", "CC09", "RE (Rivas–Eddy)"}
-	// stKernels are the read-support kernels of the shared CPLfold module
-	// (web/cplfold/cplfold_web.py SUPPORT_KERNELS), labelled as on the web page.
-	stKernels      = []string{"gaussian", "block", "block-normalized", "rnacofold", "duplex"}
-	stKernelLabels = []string{"Gaussian around arm centres · IRIS (default)", "Full arm blocks",
-		"Full arm blocks ÷ √(arm lengths)", "RNAcofold pairs of each read · COMRADES",
-		"RNAduplex pairs, saturating · COMRADES"}
-)
+func cplSettings(cofold bool) foldEngine {
+	if cofold {
+		return engineSettings(engineCPLcofold)
+	}
+	return engineSettings(engineCPLfold)
+}
 
 // stKernelLabel is a kernel's short name in summaries.
 func stKernelLabel(kernel string) string {
 	switch kernel {
+	case "gaussian":
+		return "Gaussian"
 	case "block":
 		return "full arm block"
 	case "block-normalized":
 		return "normalised full arm block"
-	case "rnacofold":
+	case "rnacofold": // saved results only
 		return "RNAcofold pair"
 	case "duplex":
 		return "RNAduplex pair (saturating)"
+	case "comrades":
+		return "COMRADES RNAcofold pair (saturating)"
 	}
-	return "Gaussian"
+	return nameOr(stKernels.option(kernel).displayLabel(), kernel)
 }
 
 // toolPrefixes are where external tools (mfold) are usually installed,
@@ -116,33 +112,44 @@ const toolCacheMax = 16
 
 // supportKernel is the form's kernel, the default when unset.
 func (p *structurePage) supportKernel() string {
-	return nameOr(p.kernel, stDefaultKernel)
+	return nameOr(p.kernel, stKernels.DefaultKernel)
+}
+
+func (p *structurePage) kernelParameter(pl *foldPlan) string {
+	kernel := p.supportKernel()
+	if stKernels.option(kernel).Value == "" {
+		pl.problems = append(pl.problems, fmt.Sprintf("Read support %q is unavailable. Choose another kernel under Advanced settings.", kernel))
+	}
+	return kernel
 }
 
 func (p *structurePage) resetFoldSettings() {
 	p.alpha, p.beam, p.phase1, p.delta, p.beta, p.model, p.kernel =
-		stDefaultAlpha, stDefaultBeam, stDefaultPhase1, stDefaultDelta, stDefaultBeta, stDefaultModel, stDefaultKernel
+		stDefaultAlpha, stDefaultBeam, stDefaultPhase1, stDefaultDelta, stDefaultBeta, cplSettings(p.engine == engineCPLcofold).DefaultModel, stKernels.DefaultKernel
 	if p.engine == "" {
-		p.engine, p.temperature, p.minLoop = engineCPLfold, stDefaultTemp, stDefaultLoop
-		p.stems, p.randomFolds, p.seed = stDefaultStems, 0, stDefaultSeed
+		p.engine = engineCPLfold
+		p.resetViennaSettings()
 	}
 }
 
 func (p *structurePage) foldSettingsChanged() bool {
-	return p.alpha != stDefaultAlpha || int(p.beam) != stDefaultBeam || int(p.phase1) != stDefaultPhase1 ||
-		p.delta != stDefaultDelta || p.beta != stDefaultBeta || p.model != stDefaultModel ||
-		p.supportKernel() != stDefaultKernel
+	return p.alpha != stDefaultAlpha || p.beam != stDefaultBeam || p.phase1 != stDefaultPhase1 ||
+		p.delta != stDefaultDelta || p.beta != stDefaultBeta || p.model != cplSettings(p.engine == engineCPLcofold).DefaultModel ||
+		p.supportKernel() != stKernels.DefaultKernel
 }
 
 // foldPlan is the fold the form describes, checked.
 type foldPlan struct {
-	gene     string
-	length   int
-	evidence string // its label
-	ids      []string
-	windows  []core.Window
-	lengths  []int
-	pk       bool
+	gene   string
+	length int
+	// Resolved identities used by validation and preview. The task contract
+	// obtains this same reference from the checked SampleIDs, not gene_id.
+	referenceID, referenceID2 string
+	evidence                  string // its label
+	ids                       []string
+	windows                   []core.Window
+	lengths                   []int
+	pk                        bool
 	// problems are why it cannot run yet, each with what to do.
 	problems []string
 	// limits are what the result will and will not show.
@@ -162,11 +169,17 @@ func (p *structurePage) plan() foldPlan {
 	if p.src.kind != stSourceReference {
 		return p.sequencePlan()
 	}
-	pl := foldPlan{gene: p.gene, length: a.Project.GeneLength(p.gene), ids: p.evidenceIDs(),
+	ref, length := p.rnaReference(false)
+	pl := foldPlan{gene: p.gene, length: length, ids: p.evidenceIDs(),
 		evidence: p.evidenceLabel(), what: "whole RNA"}
+	if ref != nil {
+		pl.referenceID = ref.ID
+	}
 	switch {
-	case pl.gene == "" || pl.length == 0:
+	case pl.gene == "":
 		pl.problems = append(pl.problems, "Choose the RNA to fold.")
+	case pl.referenceID == "" || pl.length == 0:
+		pl.problems = append(pl.problems, "Choose the RNA and its reference to fold.")
 	case len(a.SelectionOptions()) == 0:
 		pl.problems = append(pl.problems, "No sample has been analysed yet: run the pipeline on the Data page first, then come back.")
 	case len(pl.ids) == 0:
@@ -182,11 +195,9 @@ func (p *structurePage) plan() foldPlan {
 		p.checkBudget(&pl)
 		return pl
 	}
-	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
-		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": false,
-		"support_kernel": p.supportKernel()}
-	if p.seqOnly && p.engine == engineCPLfold {
-		params["evidence"] = "none"
+	params := map[string]any{}
+	if p.engine == engineCPLfold {
+		params = p.cplParameters(&pl, false)
 	}
 	mode := p.mode
 	pl.req = core.TaskStartRequest{Kind: "structure", SampleIDs: pl.ids, GeneID: &pl.gene, Mode: &mode, Parameters: params}
@@ -194,9 +205,7 @@ func (p *structurePage) plan() foldPlan {
 	pl.req.Workers = &workers
 	if p.mode == "windows" {
 		windows, errs := stParseWindows(p.windows, pl.length)
-		for _, e := range errs {
-			pl.problems = append(pl.problems, e+" (windows are start-end, at least 20 nt).")
-		}
+		pl.problems = append(pl.problems, errs...)
 		// one result per window: the runtime refuses a repeated window
 		seen := map[core.Window]int{}
 		for _, w := range windows {
@@ -219,6 +228,9 @@ func (p *structurePage) plan() foldPlan {
 			pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
 		}
 	} else if pl.length > 0 {
+		if minNT := stKernels.FoldText.MinSequenceNT; p.mode != "paired" && pl.length < minNT {
+			pl.problems = append(pl.problems, fmt.Sprintf("The reference sequence: at least %d nt.", minNT))
+		}
 		// the web's "Structure topology" applies to the whole RNA too; its
 		// memory then follows the pseudoknot model (CPLfoldMemoryMB)
 		pl.lengths, pl.pk = []int{pl.length}, p.pseudoknot
@@ -251,13 +263,7 @@ func (p *structurePage) checkBudget(pl *foldPlan) {
 	}
 }
 
-// stCofoldMinNT is the shortest CPLcofold region (desktop/runtime/structure.py MIN_WINDOW_NT).
-const stCofoldMinNT = 10
-
-// stCofoldMaxBeam is CPLcofold's largest beam (the shared module's bound).
-const stCofoldMaxBeam = 200
-
-// stParseRegion reads one "start-end" region of an RNA of length nt.
+// stParseRegion reads one excised fragment, not a single-reference folding window.
 func stParseRegion(text string, length int, label string) (core.Region, string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -270,53 +276,46 @@ func stParseRegion(text string, length int, label string) (core.Region, string) 
 	start, _ := strconv.Atoi(m[1])
 	end, _ := strconv.Atoi(m[2])
 	if start > end {
-		start, end = end, start
+		return core.Region{}, label + ": " + text + ": start must not exceed end."
 	}
 	switch {
 	case start < 1 || (length > 0 && end > length):
 		return core.Region{}, fmt.Sprintf("%s: %d-%d is outside 1-%s.", label, start, end, FormatNumber(int64(length)))
-	case end-start+1 < stCofoldMinNT:
-		return core.Region{}, fmt.Sprintf("%s: at least %d nt.", label, stCofoldMinNT)
+	case end-start+1 < stKernels.FoldText.MinSequenceNT:
+		return core.Region{}, fmt.Sprintf("%s: at least %d nt.", label, stKernels.FoldText.MinSequenceNT)
 	}
 	return core.Region{Start: uint64(start), End: uint64(end)}, ""
-}
-
-// stReferenceID is the project reference holding gene, "" if unknown.
-func stReferenceID(pr *model.Project, gene string) string {
-	for _, r := range pr.References {
-		for _, s := range r.Sequences {
-			if s.Name == gene {
-				return r.ID
-			}
-		}
-	}
-	return ""
 }
 
 // twoRegions reads the form's two regions (region 2 on gene2, else on the
 // RNA of region 1); ok when both are valid. Their problems go to the plan.
 func (p *structurePage) twoRegions(pl *foldPlan) (r1, r2 core.Region, ok bool) {
-	a := p.a
 	gene2 := nameOr(p.gene2, p.gene)
+	ref2, length2 := p.rnaReference(true)
+	if ref2 != nil {
+		pl.referenceID2 = ref2.ID
+	}
 	r1, err1 := stParseRegion(p.region1, pl.length, "Region 1")
-	r2, err2 := stParseRegion(p.region2, a.Project.GeneLength(gene2), "Region 2")
+	r2, err2 := stParseRegion(p.region2, length2, "Region 2")
 	for _, e := range []string{err1, err2} {
 		if e != "" && pl.length > 0 {
 			pl.problems = append(pl.problems, e)
 		}
 	}
-	if id1, id2 := stReferenceID(a.Project, p.gene), stReferenceID(a.Project, gene2); id1 != "" && id2 != "" && id1 != id2 {
+	if pl.referenceID != "" && (pl.referenceID2 == "" || length2 <= 0) {
+		pl.problems = append(pl.problems, "Choose a mapped RNA and its reference for Region 2.")
+	} else if pl.referenceID != "" && pl.referenceID != pl.referenceID2 {
 		pl.problems = append(pl.problems, "Both regions must be on RNAs of one reference, the reference of the samples.")
 	}
 	r1.GeneID, r2.GeneID = p.gene, gene2
-	return r1, r2, err1 == "" && err2 == ""
+	return r1, r2, err1 == "" && err2 == "" && pl.length > 0 && length2 > 0 && pl.referenceID != "" && pl.referenceID == pl.referenceID2
 }
 
 // cofoldPlan: two regions folded as two strands with CPLcofold, the web's
 // two-region CPLfold layout (one RNA or two RNAs of one reference).
 func (p *structurePage) cofoldPlan(pl *foldPlan) {
 	r1, r2, ok := p.twoRegions(pl)
-	params := p.cofoldParameters(pl)
+	params := p.cplParameters(pl, p.pseudoknot)
 	mode, engine, one := "cofold", engineCPLcofold, uint32(1)
 	pl.req = core.TaskStartRequest{Kind: "structure", SampleIDs: pl.ids, GeneID: &pl.gene, Mode: &mode, Engine: &engine,
 		Regions: []core.Region{r1, r2}, Parameters: params, Workers: &one}
@@ -337,18 +336,30 @@ func (p *structurePage) cofoldPlan(pl *foldPlan) {
 	}
 }
 
-// cofoldParameters are CPLcofold's settings, checked against the energy
-// models and beam it supports.
-func (p *structurePage) cofoldParameters(pl *foldPlan) map[string]any {
-	if p.model != "DP03" && p.model != "DP09" {
-		pl.problems = append(pl.problems, "CPLcofold uses the DP03 or DP09 energy model: choose one under Advanced settings.")
+func (p *structurePage) cplParameters(pl *foldPlan, pk bool) map[string]any {
+	e := engineSettings(p.engine)
+	if !e.hasModel(p.model) {
+		var names []string
+		for _, m := range e.Models {
+			names = append(names, m.Value)
+		}
+		slices.Sort(names)
+		name := "CPLfold"
+		if p.engine == engineCPLcofold {
+			name = "CPLcofold"
+		}
+		pl.problems = append(pl.problems, name+" uses the "+strings.Join(names, " or ")+" energy model: choose one under Advanced settings.")
 	}
-	if int(p.beam) > stCofoldMaxBeam {
-		pl.problems = append(pl.problems, fmt.Sprintf("CPLcofold's beam size is at most %d: lower it under Advanced settings.", stCofoldMaxBeam))
-	}
+	e.Ranges["beamSize"].check(pl, "Beam size", p.beam, true)
+	e.Ranges["maxPhase1"].check(pl, "Phase-1 candidates", p.phase1, true)
+	e.Ranges["energyDelta"].check(pl, "Energy window", p.delta, false)
+	e.Ranges["alpha"].check(pl, "Evidence weight", p.alpha, false)
+	e.Ranges["beta"].check(pl, "Pseudoknot beta", p.beta, false)
 	params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
-		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": p.pseudoknot,
-		"support_kernel": p.supportKernel()}
+		"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": pk}
+	if !p.seqOnly {
+		params["support_kernel"] = p.kernelParameter(pl)
+	}
 	if p.seqOnly {
 		params["evidence"] = "none"
 	}
@@ -391,41 +402,53 @@ type stSource struct {
 	loading    bool
 }
 
-// stCleanSequence reads a pasted sequence as the web does
-// (normaliseFoldSequence): FASTA header lines and whitespace dropped, upper
-// case, T read as U. bad lists any other characters, once each.
-func stCleanSequence(text string) (seq string, bad []string) {
+// Strip formatting before interpreting strand breaks: a FASTA title may contain '&'.
+func stCleanSequence(text string, pasted bool) (string, int) {
+	rules := stKernels.FoldText
 	var b strings.Builder
-	for _, line := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), ">") {
+	headers := 0
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r", "\n"), "\n") {
+		if pasted && strings.HasPrefix(strings.TrimLeft(line, rules.Space), rules.Header) {
+			headers++
 			continue
 		}
 		for _, r := range line {
-			if unicode.IsSpace(r) {
+			if strings.ContainsRune(rules.Space, r) || (pasted && strings.ContainsRune(rules.Numbers, r)) {
 				continue
 			}
-			if r = unicode.ToUpper(r); r == 'T' {
-				r = 'U'
+			if r >= 'a' && r <= 'z' {
+				r -= 'a' - 'A'
 			}
-			b.WriteRune(r)
-			if !strings.ContainsRune("ACGU", r) && !slices.Contains(bad, string(r)) {
-				bad = append(bad, string(r))
+			if alias, ok := rules.Aliases[string(r)]; ok {
+				b.WriteString(alias)
+			} else {
+				b.WriteRune(r)
 			}
 		}
 	}
-	return b.String(), bad
+	return b.String(), headers
 }
 
-// stStrand is one pasted strand, checked; "" with its problem in pl when
-// it cannot be folded. name says which strand ("RNA A").
-func stStrand(text, name string, pl *foldPlan) string {
-	seq, bad := stCleanSequence(text)
+func stInvalidBases(seq string) []string {
+	var bad []string
+	for _, r := range seq {
+		if !strings.ContainsRune(stKernels.FoldText.Alphabet, r) && !slices.Contains(bad, string(r)) {
+			bad = append(bad, string(r))
+		}
+	}
+	return bad
+}
+
+// stStrand checks a normalized sequence against its source/layout's minimum.
+// name identifies the input in a problem; it does not select the length rule.
+func stStrand(seq, name string, minNT int, pl *foldPlan) string {
+	bad := stInvalidBases(seq)
 	switch {
 	case len(bad) > 0:
 		pl.problems = append(pl.problems, fmt.Sprintf("%s: only A, C, G and U are accepted (T is read as U); remove %s.",
 			name, strings.Join(bad, ", ")))
-	case len(seq) < stCofoldMinNT:
-		pl.problems = append(pl.problems, fmt.Sprintf("%s: at least %d nt.", name, stCofoldMinNT))
+	case len(seq) < minNT:
+		pl.problems = append(pl.problems, fmt.Sprintf("%s: at least %d nt.", name, minNT))
 	default:
 		return seq
 	}
@@ -532,26 +555,36 @@ func (p *structurePage) sequencePlan() foldPlan {
 			pl.problems = append(pl.problems, "This record's sequence cannot be read: its .hyb file changed after the index was built. "+
 				"Rebuild the index on the Data page, or paste the sequence.")
 		default:
-			if s := stStrand(r.Sequence, "The record's sequence", &pl); s != "" {
+			seq, _ := stCleanSequence(r.Sequence, false)
+			if s := stStrand(seq, "The record's sequence", stKernels.FoldText.MinSequenceNT, &pl); s != "" {
 				strands = []string{s}
 			}
 			pl.gene, pl.source = "record_"+stRecordName(*r), "HYB record "+stRecordName(*r)
 		}
 	case cofold:
-		one, two := p.src.pasted, p.src.pastedTwo
+		one, h1 := stCleanSequence(p.src.pasted, true)
+		two, h2 := stCleanSequence(p.src.pastedTwo, true)
+		minNT := stKernels.FoldText.MinSequenceNT
+		if h1 > 1 || h2 > 1 {
+			pl.problems = append(pl.problems, "Paste only one FASTA record per sequence box.")
+			break
+		}
 		if strings.Contains(one, "&") && strings.TrimSpace(two) == "" {
 			one, two, _ = strings.Cut(one, "&") // A&B in the RNA A box
 		}
 		if strings.TrimSpace(one) == "" || strings.TrimSpace(two) == "" {
 			pl.problems = append(pl.problems, "Paste RNA A and RNA B, or A&B in the RNA A box.")
-		} else if s1, s2 := stStrand(one, "RNA A", &pl), stStrand(two, "RNA B", &pl); s1 != "" && s2 != "" {
+		} else if s1, s2 := stStrand(one, "RNA A", minNT, &pl), stStrand(two, "RNA B", minNT, &pl); s1 != "" && s2 != "" {
 			strands = []string{s1, s2}
 		}
 		pl.gene, pl.source = "pasted", "pasted RNA A + RNA B"
 	default:
-		if strings.TrimSpace(p.src.pasted) == "" {
+		seq, headers := stCleanSequence(p.src.pasted, true)
+		if headers > 1 {
+			pl.problems = append(pl.problems, "Paste only one FASTA record per sequence box.")
+		} else if seq == "" {
 			pl.problems = append(pl.problems, "Paste the RNA sequence to fold (A, C, G, U; T is read as U).")
-		} else if s := stStrand(p.src.pasted, "The pasted sequence", &pl); s != "" {
+		} else if s := stStrand(seq, "The pasted sequence", stKernels.FoldText.MinPastedNT, &pl); s != "" {
 			strands = []string{s}
 		}
 		pl.gene, pl.source = "pasted_sequence", "pasted sequence"
@@ -581,7 +614,7 @@ func (p *structurePage) sequencePlan() foldPlan {
 	case engineCPLcofold:
 		mode = "cofold"
 		engine := engineCPLcofold
-		pl.req.Engine, pl.req.Parameters = &engine, p.cofoldParameters(&pl)
+		pl.req.Engine, pl.req.Parameters = &engine, p.cplParameters(&pl, p.pseudoknot)
 		pl.what, pl.pk = "2 pasted strands", p.pseudoknot
 		if len(strands) == 2 {
 			pl.memMB = core.StructureClaimMB(pl.length, p.pseudoknot, 1)
@@ -598,18 +631,15 @@ func (p *structurePage) sequencePlan() foldPlan {
 			pl.limits = append(pl.limits, "Pseudoknots are off: crossing pairs are not predicted.")
 		}
 	case engineCPLfold:
-		params := map[string]any{"alpha": p.alpha, "beam": int(p.beam), "max_phase1": int(p.phase1),
-			"energy_delta": p.delta, "beta": p.beta, "energy_model": p.model, "allow_pseudoknot": false,
-			"support_kernel": p.supportKernel()}
-		if p.seqOnly {
-			params["evidence"] = "none"
-		}
-		pl.req.Parameters = params
+		pl.pk = p.pseudoknot
+		pl.req.Parameters = p.cplParameters(&pl, pl.pk)
 		if len(strands) > 0 {
-			pl.memMB = StructureMemClaim(pl.req, pl.length, false)
+			pl.memMB = StructureMemClaim(pl.req, pl.length, pl.pk)
 			pl.req.MemMB = &pl.memMB
 		}
-		pl.limits = []string{"Folded whole: no pseudoknots."}
+		if !pl.pk {
+			pl.limits = append(pl.limits, "Folded whole: no pseudoknots.")
+		}
 		if p.seqOnly {
 			pl.limits = append(pl.limits, "Sequence only: the chimeric reads are not used.")
 		} else {
@@ -809,18 +839,33 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 	a := p.a
 	t := c.Theme()
 	var geneLabels []string
-	names := map[string]string{}
-	current := ""
+	type rnaChoice struct{ name, reference string }
+	names := map[string]rnaChoice{}
+	counts := map[string]int{}
 	for _, r := range a.Project.References {
-		for _, s := range r.Sequences {
+		for _, s := range r.RNAs() {
+			counts[s.Name]++
+		}
+	}
+	firstRef, _ := p.rnaReference(false)
+	secondRef, _ := p.rnaReference(true)
+	current, second := "", ""
+	for _, r := range a.Project.References {
+		for _, s := range r.RNAs() {
 			label := s.Name + " · " + FormatNumber(int64(s.Length)) + " nt"
-			if _, seen := names[label]; seen {
-				continue
+			if counts[s.Name] > 1 {
+				label += " · " + stReferenceName(&r)
+				if r.Label != "" && r.Label != r.ID {
+					label += " (" + r.ID + ")"
+				}
 			}
 			geneLabels = append(geneLabels, label)
-			names[label] = s.Name
-			if s.Name == p.gene {
+			names[label] = rnaChoice{s.Name, r.ID}
+			if s.Name == p.gene && firstRef != nil && r.ID == firstRef.ID {
 				current = label
+			}
+			if s.Name == nameOr(p.gene2, p.gene) && secondRef != nil && r.ID == secondRef.ID {
+				second = label
 			}
 		}
 	}
@@ -835,10 +880,10 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 	if reference {
 		Field(c, first, func() {
 			ui.Select(c.Key("st-gene"), &current, geneLabels).FillWidth().Label("RNA to fold").Tooltip(current).
-				OnChange(func() { p.gene = names[current] })
+				OnChange(func() { p.gene, p.referenceID = names[current].name, names[current].reference })
 			if pl.length > 0 {
 				// The full name, which the select may cut.
-				ui.Text(c, p.gene+" · "+FormatNumber(int64(pl.length))+" nt").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, current).FontSize(12).TextColor(t.TextMuted)
 			}
 			if twoRegions {
 				ui.TextInput(c.Key("st-region1"), &p.region1).Placeholder("start-end, e.g. 1-45").Label("Region 1")
@@ -891,19 +936,13 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 	})
 	if !reference {
 		// a pasted or record sequence is folded whole
-		p.engineField(c)
+		p.engineFields(c)
 		return
 	}
 	region2 := func(label string) {
-		second := ""
-		for l, name := range names {
-			if name == nameOr(p.gene2, p.gene) {
-				second = l
-			}
-		}
 		Field(c, label, func() {
 			ui.Select(c.Key("st-gene2"), &second, geneLabels).FillWidth().Label("Region 2 RNA").Tooltip(second).
-				OnChange(func() { p.gene2 = names[second] })
+				OnChange(func() { p.gene2, p.referenceID2 = names[second].name, names[second].reference })
 			ui.TextInput(c.Key("st-region2"), &p.region2).Placeholder("start-end, e.g. 1086-1134").Label("Region 2")
 			note := "The same RNA as region 1: a long-range interaction. Another RNA: an intermolecular one."
 			if !cofold {
@@ -926,7 +965,7 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 			region2("Region 2 (strand B)")
 		}
 	}
-	p.engineField(c)
+	p.engineFields(c)
 }
 
 // whatToFold: the whole RNA or windows (CPLfold, ViennaRNA, COMRADES), or
@@ -943,7 +982,8 @@ func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 		}).Label("What to fold")
 	})
 	if p.mode == "windows" {
-		Field(c, "Windows: start-end, one per line (1-based, inclusive)", func() {
+		label := fmt.Sprintf("Windows: start-end, one per line (1-based, inclusive; at least %d nt)", stKernels.FoldText.MinWindowNT)
+		Field(c, label, func() {
 			ui.TextArea(c.Key("st-windows"), &p.windows).Lines(3, 8).Font("monospace").
 				Placeholder("e.g.\n1-400\n2300-2700").Label("Windows")
 			if len(pl.lengths) > 0 {
@@ -951,8 +991,12 @@ func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 			}
 		})
 	}
+}
+
+// engineFields: the engine choice and, for single-strand CPLfold, the same
+// topology choice for every sequence source.
+func (p *structurePage) engineFields(c *ui.Context) {
 	if p.engine == engineCPLfold && p.mode != "paired" {
-		// the web's "Structure topology", for the whole RNA and windows alike
 		Field(c, "Structure topology", func() {
 			// p.topology follows p.pseudoknot when something else set it
 			if p.topology == "" || p.pseudoknot != p.lastPK {
@@ -964,13 +1008,9 @@ func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 			}).Label("Structure topology")
 			p.pseudoknot = p.topology == "pseudoknot"
 			p.lastPK = p.pseudoknot
-			ui.Text(c, "CPLfold can search crossing pairs. ViennaRNA remains pseudoknot-free.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "CPLfold can search crossing pairs. ViennaRNA remains pseudoknot-free.").FontSize(12).TextColor(c.Theme().TextMuted)
 		})
 	}
-}
-
-// engineField: the engines of the web RNA Structure page.
-func (p *structurePage) engineField(c *ui.Context) {
 	Field(c, "4  Engine", func() {
 		ui.RadioGroup(c.Key("st-engine"), func() {
 			ui.Radio(c, &p.engine, engineCPLfold, "CPLfold, guided by the chimeric reads").OnChange(p.engineChanged)
@@ -986,6 +1026,9 @@ func (p *structurePage) engineField(c *ui.Context) {
 // joined by the spacer are a COMRADES layout only. As the web, CPLcofold
 // takes pasted strands instead of a HYB record.
 func (p *structurePage) engineChanged() {
+	if stCPL(p.engine) {
+		p.ensureEngineModel()
+	}
 	if p.mode == "paired" && p.engine != engineComrades {
 		p.mode = "genome"
 	}
@@ -997,6 +1040,13 @@ func (p *structurePage) engineChanged() {
 	}
 }
 
+func (p *structurePage) ensureEngineModel() {
+	e := engineSettings(p.engine)
+	if !e.hasModel(p.model) {
+		p.model = e.DefaultModel
+	}
+}
+
 // advanced: the CPLfold settings and parallel windows, folded away. Their
 // values stay visible in the summary line, flagged when changed.
 func (p *structurePage) advanced(c *ui.Context) {
@@ -1004,7 +1054,7 @@ func (p *structurePage) advanced(c *ui.Context) {
 	changed := p.foldSettingsChanged()
 	summary := fmt.Sprintf("Evidence weight %.2f · beam %d · phase 1 %d · energy window %g · %s · beta %.2f",
 		p.alpha, int(p.beam), int(p.phase1), p.delta, p.model, p.beta)
-	if k := p.supportKernel(); k != stDefaultKernel {
+	if k := p.supportKernel(); k != stKernels.DefaultKernel {
 		summary += " · " + stKernelLabel(k) + " read support"
 	}
 	if p.mode == "windows" {
@@ -1017,79 +1067,57 @@ func (p *structurePage) advanced(c *ui.Context) {
 	}
 	ui.Collapsible(c.Key("st-advanced"), "Advanced settings", &p.advancedOpen, func() {
 		ui.Column(c).Gap(10).Padding(6, 0, 0, 0).Children(func() {
-			row := func(key, label string, value *float64, lo, hi, step float64, help string) {
-				ui.Column(c).Gap(2).Children(func() {
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, label).FontSize(12).Bold().Width(150)
-						ui.NumberInput(c.Key(key), value, lo, hi, step).Grow(1).Label(label)
-					})
-					ui.Text(c, help).FontSize(12).TextColor(t.TextMuted)
-				})
-			}
-			row("st-alpha", "Evidence weight (alpha)", &p.alpha, 0, 1, 0.05,
-				"How strongly chimeric reads pull bases together, 0 to 1. 0 ignores them (energy only). Default 0.5.")
-			row("st-beam", "Beam size", &p.beam, 1, 1000, 10,
-				"How many partial structures CPLfold keeps per position. Larger is slower. Default 20, as on the web.")
-			row("st-phase1", "Phase-1 candidates", &p.phase1, 1, 20, 1,
-				"Candidate structures carried from the first phase into the second. Default 3.")
-			row("st-delta", "Energy window", &p.delta, 0, 50, 0.5,
-				"kcal/mol above the best structure within which candidates are kept. Default 5.")
-			row("st-beta", "Pseudoknot beta", &p.beta, 0, 1, 0.05,
-				"Weight of the pseudoknot energy term, 0 to 1. Default 0.")
+			e := engineSettings(p.engine)
+			r := e.Ranges
+			foldNumberRow(c, "st-alpha", "Evidence weight (alpha)", &p.alpha, r["alpha"], 0.05,
+				fmt.Sprintf("How strongly chimeric reads pull bases together, %s. 0 ignores them (energy only). Default %g.", r["alpha"], stDefaultAlpha))
+			foldNumberRow(c, "st-beam", "Beam size", &p.beam, r["beamSize"], 10,
+				fmt.Sprintf("How many partial structures CPLfold keeps per position. Larger is slower. Default %g, as on the web.", stDefaultBeam))
+			foldNumberRow(c, "st-phase1", "Phase-1 candidates", &p.phase1, r["maxPhase1"], 1,
+				fmt.Sprintf("Candidate structures carried from the first phase into the second. Default %g.", stDefaultPhase1))
+			foldNumberRow(c, "st-delta", "Energy window", &p.delta, r["energyDelta"], 0.5,
+				fmt.Sprintf("kcal/mol above the best structure within which candidates are kept. Default %g.", stDefaultDelta))
+			foldNumberRow(c, "st-beta", "Pseudoknot beta", &p.beta, r["beta"], 0.05,
+				fmt.Sprintf("Weight of the pseudoknot energy term, %s. Default %g.", r["beta"], stDefaultBeta))
 			ui.Column(c).Gap(2).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "Energy model").FontSize(12).Bold().Width(150)
-					models, labels := stModels, stModelLabels
-					if p.engine == engineCPLcofold {
-						models, labels = stModels[:2], stModelLabels[:2] // DP09, DP03
-					}
-					i := 0
-					for k, m := range models {
-						if m == p.model {
-							i = k
+					labels := make([]string, len(e.Models))
+					label := "Choose energy model"
+					for i, m := range e.Models {
+						labels[i] = m.Label
+						if m.Value == p.model {
+							label = m.Label
 						}
 					}
-					label := labels[i]
 					if ui.Select(c.Key("st-model"), &label, labels).Grow(1).Label("Energy model").Changed() {
-						for k, l := range labels {
-							if l == label {
-								p.model = models[k]
-							}
+						if i := slices.Index(labels, label); i >= 0 {
+							p.model = e.Models[i].Value
 						}
 					}
 				})
-				ui.Text(c, "Energy model that ranks candidates when pseudoknots are on. Default DP09. Pseudoknot-free folds rank with Turner 2004.").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "Energy model that ranks candidates when pseudoknots are on. Default "+e.DefaultModel+". Pseudoknot-free folds rank with Turner 2004.").FontSize(12).TextColor(t.TextMuted)
 			})
 			// sequence-only folds use no reads, so the kernel does not apply
 			if !(p.seqOnly && p.engine == engineCPLfold) {
 				ui.Column(c).Gap(2).Children(func() {
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Text(c, "Read support (B_ij)").FontSize(12).Bold().Width(150)
-						i := 0
-						for k, kernel := range stKernels {
-							if kernel == p.supportKernel() {
-								i = k
-							}
-						}
-						label := stKernelLabels[i]
-						if ui.Select(c.Key("st-kernel"), &label, stKernelLabels).Grow(1).Label("Read support").Changed() {
-							for k, l := range stKernelLabels {
-								if l == label {
-									p.kernel = stKernels[k]
-								}
+						option := stKernels.option(p.supportKernel())
+						label := nameOr(option.displayLabel(), "Choose read support")
+						if ui.Select(c.Key("st-kernel"), &label, stKernels.labels).Grow(1).Label("Read support").Changed() {
+							if i := slices.Index(stKernels.labels, label); i >= 0 {
+								p.kernel = stKernels.Options[i].Value
 							}
 						}
 					})
-					ui.Text(c, "How each chimera becomes the bonus on base pairs: a Gaussian around its two arm centres (IRIS), "+
-						"every pair between its two arms, the same divided by √(arm lengths), or only the pairs RNAcofold forms "+
-						"between its arms (COMRADES); each is then taken as log(1 + x). RNAduplex counts the reads whose two arms "+
-						"hybridise into each pair (COMRADES' evidence) and saturates the count C as 3.6 C / (C + q) kcal/mol. "+
-						"The kernels give different amounts of support on the same reads, so choose the evidence weight for each "+
-						"kernel separately. Default Gaussian.").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "Gaussian and both block kernels use log(1 + summed support). RNAduplex allows only between-arm pairs. "+
+						"COMRADES (RNAcofold) also allows each arm to fold internally but counts only between-arm pairs. Both use the "+
+						"raw counts for candidate scores and colours, and 3.6 C / (C + q) kcal/mol for the folding bonus. Default "+stKernelLabel(stKernels.DefaultKernel)+".").FontSize(12).TextColor(t.TextMuted)
 				})
 			}
 			if p.mode == "windows" {
-				row("st-workers", "Windows at once", &p.workers, 1, 256, 1,
+				foldNumberRow(c, "st-workers", "Windows at once", &p.workers, foldRange{1, 256}, 1,
 					"Windows folded in parallel; each needs its own memory. Default: your CPU budget.")
 			}
 			if ui.Button(c, "Reset to defaults").Disabled(!changed).Clicked() {
@@ -1343,8 +1371,9 @@ func (p *structurePage) status(c *ui.Context) {
 	case "succeeded":
 		box(t.Success, func() {
 			ui.Text(c, "Fold finished").Bold().TextColor(t.Success)
-			done := "It is shown in the viewer and listed under Results."
+			done := "Computation finished, but result registration is pending or unavailable. Refresh Results to check again."
 			if e := p.entryForTask(task.TaskID); e != nil {
+				done = "It is shown in the viewer and listed under Results."
 				if s := stSummaryText(e); s != "" {
 					done = s + ". " + done
 				}

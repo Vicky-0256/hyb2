@@ -146,11 +146,15 @@ func newDrawingEditor(a *App, src *drawingSource) *drawingEditor {
 			some = some || v > 0
 		}
 		if !some {
-			against := "the RNAcofold evidence"
+			against := "the " + src.estimator() + " evidence"
 			if src.EvidencePairs > 0 {
-				against = fmt.Sprintf("any of the %d RNAcofold evidence pairs", src.EvidencePairs)
+				against = fmt.Sprintf("any of the %d %s evidence pairs", src.EvidencePairs, src.estimator())
 			}
-			e.message = fmt.Sprintf("COMRADES support: none of the %d pairs in this structure matches %s, so every base scores 0 and keeps the default colour.", len(src.Pairs), against)
+			if src.Estimator != "" {
+				e.message = "No predicted pair matched the " + src.Estimator + " evidence. Every base has a raw count of 0 (white)."
+			} else {
+				e.message = fmt.Sprintf("COMRADES support: none of the %d pairs in this structure matches %s, so every base scores 0 and keeps the default colour.", len(src.Pairs), against)
+			}
 		}
 	}
 	return e
@@ -493,7 +497,7 @@ func (e *drawingEditor) do(action string) error {
 			return nil
 		}, "", "")
 	case "evidence":
-		e.commit(func(next *drawing) error { return drApplyEvidence(next, drEvidenceFor(e.src.Support), e.palette) }, "Evidence colours restored.", "")
+		e.commit(func(next *drawing) error { return drApplyEvidence(next, e.src.evidence(), e.palette) }, "Evidence colours restored.", "")
 	case "colormap":
 		e.commit(func(next *drawing) error {
 			return drColorMap(next, e.mapValues, drColorMapOptions{Minimum: e.mapMin, Maximum: e.mapMax, Palette: e.palette, Caption: e.mapCaption})

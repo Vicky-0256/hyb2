@@ -79,6 +79,9 @@ func stReportPairs(a *structureResult, records []structureRecord) []map[string]a
 		}
 		pair := map[string]any{"left": i, "right": j, "leftBase": string(pr.BaseI), "rightBase": string(pr.BaseJ),
 			"type": string(pr.BaseI) + "–" + string(pr.BaseJ), "layer": layer, "evidenceSupport": pr.Bonus, "hardConstraint": pr.Hard}
+		if pr.Count != nil {
+			pair["rawPairCount"], pair["bonusSupport"] = *pr.Count, pr.Bonus
+		}
 		if r.Cutpoint > 0 {
 			strand := func(k int) (string, int) {
 				if k <= r.Cutpoint {
@@ -125,6 +128,9 @@ func (p *structurePage) stReportWeb(a *structureResult, payload map[string]any) 
 		if cpl {
 			prediction["selectedCandidateIndex"], prediction["selectedCandidateRank"] = r.SelectedCandidate, r.SelectedCandidate+1
 			prediction["crossingPairs"] = stCrossingPairs(r.DBN)
+			if c := r.scoredCandidate(); c != nil {
+				prediction["supportKernel"], prediction["comradesScore"] = c.SupportKernel, *c.ComradesScore
+			}
 		}
 	}
 	payload["prediction"] = prediction
@@ -132,10 +138,12 @@ func (p *structurePage) stReportWeb(a *structureResult, payload map[string]any) 
 		var candidates []map[string]any
 		for _, r := range records {
 			for k, c := range r.Candidates {
-				candidates = append(candidates, map[string]any{"window": stRecordLabel(stGene(a), r), "rank": k + 1,
+				row := map[string]any{"window": stRecordLabel(stGene(a), r), "rank": k + 1,
 					"selected": k == r.SelectedCandidate, "type": c.Type, "topology": c.Topology, "energy": c.Energy,
 					"effectiveEnergy": c.EffectiveEnergy, "phase1Energy": c.Phase1Energy, "score": c.Score,
-					"dotBracket": stWithBreak(c.Structure, r.Cutpoint), "basePairs": c.Pairs, "crossingPairs": stCrossingPairs(c.Structure)})
+					"dotBracket": stWithBreak(c.Structure, r.Cutpoint), "basePairs": c.Pairs, "crossingPairs": stCrossingPairs(c.Structure)}
+				c.addRawScore(row)
+				candidates = append(candidates, row)
 			}
 		}
 		payload["cplfoldCandidates"], payload["cplfoldParameters"] = candidates, a.Meta.Parameters

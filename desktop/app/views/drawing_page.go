@@ -29,17 +29,23 @@ func stDrawingSource(a *structureResult, r structureRecord) (*drawingSource, err
 		src.Pairs = append(src.Pairs, drawPair{Left: min(pr.I, pr.J), Right: max(pr.I, pr.J)})
 	}
 	src.Pairs = drSortedPairs(src.Pairs)
-	if stIsComrades(stEngine(a)) {
+	if c := r.scoredCandidate(); c != nil {
+		src.Estimator = c.estimator()
+	}
+	if src.Estimator != "" || stIsComrades(stEngine(a)) {
 		src.Support = make([]float64, n)
 		for _, pr := range stShownPairs([]structureRecord{r}, nil) {
 			i, j := r.localOf(pr.I), r.localOf(pr.J)
-			if i >= 1 && j >= 1 && pr.Bonus > 0 {
-				src.Support[i-1], src.Support[j-1] = pr.Bonus, pr.Bonus
+			if i >= 1 && j >= 1 {
+				src.Support[i-1], src.Support[j-1] = pr.colourSupport(), pr.colourSupport()
 			}
 		}
-		for k := range a.Records {
-			if a.Records[k].WindowStart == r.WindowStart && a.Records[k].WindowEnd == r.WindowEnd && k < len(a.Meta.Records) && a.Meta.Records[k].Comrades != nil {
-				src.EvidencePairs = len(a.Meta.Records[k].Comrades.Evidence.Pairs)
+		if k := stMetaIndex(a, r); k >= 0 {
+			if cm := a.Meta.Records[k].Comrades; cm != nil {
+				src.EvidencePairs = cm.Evidence.SelectedBasePairs // historic shortlisted scores
+				if cm.Evidence.ScoredBasePairs != nil {
+					src.EvidencePairs = *cm.Evidence.ScoredBasePairs
+				}
 			}
 		}
 	}

@@ -102,6 +102,17 @@ func TestRegionReferenceErrorRetryAndVersion(t *testing.T) {
 	if !tt.HasText("CCCCCCCCCC CCCCCCCCCC CCCCCCCCCC CCCCCCCCCC CCCCCCCCCC") {
 		t.Fatalf("new matching not read again: %q", tt.Texts())
 	}
+	// A non-BMP symbol is one reference position, not four UTF-8 bytes.
+	qcFor(a).match.invalidate()
+	f.fakeBackend.ops["read_reference_sequence"] = map[string]any{"sequence": "🧬acgtcatgcaag"}
+	f.setAnswer(func(operation string, payload core.Obj) (any, bool) {
+		return core.Obj{"start": payload["start"], "end": payload["end"]}, operation == "analysis_region"
+	})
+	p.exploreRegion(3, 12)
+	settle(a, tt)
+	if !tt.HasText("CGTCATGCAA") {
+		t.Fatalf("wrong raw reference window: %q", p.rg.seq)
+	}
 	// a new region: the old bases go at once, so Copy cannot copy them
 	d := *p.rg.data
 	d.f.start, d.f.end = 100, 200

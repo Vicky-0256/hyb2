@@ -182,6 +182,9 @@ func TestShutdownMarksQueuedAndRunningInterrupted(t *testing.T) {
 	if _, err := startManaged(s, shell(runDir, "exit 0"), root, id, "validate_project", runDir, nil); err == nil {
 		t.Fatal("submitted after shutdown")
 	}
+	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+		t.Fatalf("rejected submission left its reserved directory: %v", err)
+	}
 }
 
 func TestLiveProgressIsReported(t *testing.T) {

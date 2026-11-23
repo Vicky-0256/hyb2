@@ -495,6 +495,95 @@ func TestReportResultPackages(t *testing.T) {
 	}
 }
 
+func TestReportCrossingPairs(t *testing.T) {
+	// Two crossing pairs, nested pairs in two bracket layers, and three
+	// mutually crossing pairs. Bracket layers are not crossing-pair counts.
+	dbns := []string{"(.[..).]....", "(.[..].)....", "(.[.{..).].}"}
+	// Overlapping windows are independent predictions, not one pair set.
+	starts := []int{101, 103, 201}
+	crossings := []int{2, 0, 3}
+	totals := []int{2, 2, 5}
+	for n := 1; n <= len(dbns); n++ {
+		t.Run(fmt.Sprintf("%d-windows", n), func(t *testing.T) {
+			records := make([]structureRecord, n)
+			for i := range records {
+				records[i] = structureRecord{WindowStart: starts[i], WindowEnd: starts[i] + 11,
+					Sequence: "GAGAGAAACACC", DBN: dbns[i],
+					Candidates: []stCandidate{{Structure: dbns[i], PseudoknotPairs: i + 1}}}
+			}
+			encoded, err := json.Marshal(structureResult{Records: records})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw core.Obj
+			if err := json.Unmarshal(encoded, &raw); err != nil {
+				t.Fatal(err)
+			}
+			backend := newFake(t)
+			backend.ops["read_structure"] = raw
+			entry := reportStructureEntry{structureEntry: structureEntry{ID: "toy", GeneID: "toy"}}
+			entry.Summary.Length, entry.Summary.PseudoknotPairs = 12*n, n
+			s := reportReadStructure(backend, &model.Project{}, entry, func(id string) string { return id })
+			if s.Err != "" || s.Pseudoknots != totals[n-1] {
+				t.Errorf("report: crossing pairs %d, error %q; want %d", s.Pseudoknots, s.Err, totals[n-1])
+			}
+			data := &reportData{Name: "Synthetic crossings", Structures: []reportStructure{s}}
+			packed, err := buildResultRecord(data, time.Now()).zip("analysis", time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "analysis.zip")
+			if err := os.WriteFile(path, packed, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			files := unzipExport(t, path)
+			type candidate struct {
+				Crossing int `json:"crossingPairs"`
+			}
+			var prediction struct {
+				Crossing   int                                `json:"crossingPairs"`
+				Candidates []candidate                        `json:"candidates"`
+				Windows    []struct{ Candidates []candidate } `json:"windows"`
+			}
+			if err := json.Unmarshal([]byte(files["results/structure_prediction.json"]), &prediction); err != nil {
+				t.Fatal(err)
+			}
+			if prediction.Crossing != totals[n-1] {
+				t.Errorf("prediction: %d crossing pairs, want %d", prediction.Crossing, totals[n-1])
+			}
+			candidates := prediction.Candidates
+			for _, window := range prediction.Windows {
+				candidates = append(candidates, window.Candidates...)
+			}
+			if len(candidates) != n {
+				t.Fatalf("got %d candidates, want %d", len(candidates), n)
+			}
+			for i, c := range candidates {
+				if c.Crossing != crossings[i] {
+					t.Errorf("candidate %d: %d crossing pairs, want %d", i, c.Crossing, crossings[i])
+				}
+			}
+			var summary struct{ Results []rpResult }
+			if err := json.Unmarshal([]byte(files["summary.json"]), &summary); err != nil {
+				t.Fatal(err)
+			}
+			var summaryCount any
+			for _, result := range summary.Results {
+				if result.ID == "R40" {
+					summaryCount = result.Value
+				}
+			}
+			if summaryCount != float64(totals[n-1]) {
+				t.Errorf("summary R40: %v, want %d", summaryCount, totals[n-1])
+			}
+			row := strings.Split(strings.Split(files["tables/structures.tsv"], "\n")[1], "\t")
+			if row[8] != fmt.Sprint(totals[n-1]) {
+				t.Errorf("structures.tsv: %s crossing pairs, want %d", row[8], totals[n-1])
+			}
+		})
+	}
+}
+
 func keys(m map[string]string) []string {
 	var out []string
 	for k := range m {

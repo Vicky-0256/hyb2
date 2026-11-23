@@ -47,13 +47,22 @@ var stViolet = ui.RGB(106, 79, 242)
 
 // stPairInfo is one shown pair of A with what styles and describes it.
 type stPairInfo struct {
-	I, J   int
-	Layer  int
-	BaseI  byte
-	BaseJ  byte
-	Bonus  float64 // HYB bonus (CPLfold) or RNAcofold count (COMRADES)
-	Hard   bool
-	record int
+	I, J      int
+	Layer     int
+	BaseI     byte
+	BaseJ     byte
+	Bonus     float64 // HYB bonus (CPLfold) or RNAcofold count (COMRADES)
+	Count     *int    // raw arm-pair count, not the saturating CPLfold bonus
+	Estimator string
+	Hard      bool
+	record    int
+}
+
+func (pr stPairInfo) colourSupport() float64 {
+	if pr.Count != nil {
+		return float64(*pr.Count)
+	}
+	return pr.Bonus
 }
 
 // stShownPairs are A's pairs in the records shown, with their bases.
@@ -61,6 +70,11 @@ func stShownPairs(records []structureRecord, hard map[[2]int]bool) []stPairInfo 
 	var out []stPairInfo
 	for ri, r := range records {
 		weights := stWeights([]structureRecord{r})
+		counts := r.rawPairCounts()
+		estimator := ""
+		if c := r.scoredCandidate(); c != nil {
+			estimator = c.estimator()
+		}
 		base := func(pos int) byte {
 			if k := r.localOf(pos); k >= 1 && k <= len(r.Sequence) {
 				return r.Sequence[k-1]
@@ -68,8 +82,9 @@ func stShownPairs(records []structureRecord, hard map[[2]int]bool) []stPairInfo 
 			return '?'
 		}
 		for _, pr := range stRecordPairs(r) {
+			key := [2]int{pr.I, pr.J}
 			out = append(out, stPairInfo{I: pr.I, J: pr.J, Layer: pr.Layer, BaseI: base(pr.I), BaseJ: base(pr.J),
-				Bonus: weights[[2]int{pr.I, pr.J}], Hard: hard[[2]int{pr.I, pr.J}], record: ri})
+				Bonus: weights[key], Count: counts[key], Estimator: estimator, Hard: hard[key], record: ri})
 		}
 	}
 	return out
@@ -151,10 +166,7 @@ func stBonusAlpha(bonus, scale float64) float64 {
 func stArcStyles(a *structureResult, records []structureRecord, pairs []stPairInfo, t *ui.Theme) []widgets.ArcStyle {
 	out := make([]widgets.ArcStyle, len(pairs))
 	engine := stEngine(a)
-	top := 0.0
-	for _, pr := range pairs {
-		top = math.Max(top, pr.Bonus)
-	}
+	top := stTopColourSupport(pairs)
 	evidence, scale := stCPLEvidence(a, records), stBonusScale(a, records)
 	typeWidth := func(pr stPairInfo) float32 {
 		if stPairType(pr.BaseI, pr.BaseJ) == "G–C" {
@@ -164,13 +176,10 @@ func stArcStyles(a *structureResult, records []structureRecord, pairs []stPairIn
 	}
 	for i, pr := range pairs {
 		switch {
-		case stIsComrades(engine):
+		case stIsComrades(engine) || pr.Count != nil:
 			color, width, alpha := t.TextMuted, typeWidth(pr), float32(0.34)
-			if pr.Bonus > 0 {
-				color, width, alpha = t.Accent, 1.6, 0.9
-				if top > 0 && pr.Bonus/top >= 0.55 {
-					color = t.Warning
-				}
+			if support := pr.colourSupport(); support > 0 {
+				color, width, alpha = stEvidenceColor(support, top, t), 1.6, 0.9
 			}
 			if pr.Hard {
 				width = 2.2
@@ -209,22 +218,8 @@ func stArcStyles(a *structureResult, records []structureRecord, pairs []stPairIn
 
 // stArcLegend is the web's legend for A's pair styles.
 func stArcLegend(c *ui.Context, a *structureResult) {
-	t := c.Theme()
-	switch {
-	case stIsComrades(stEngine(a)):
-		stLegend(c, t.Warning, "high evidence")
-		stLegend(c, t.Accent, "low evidence")
-		stLegend(c, t.TextMuted, "MFE only")
-	case stIsCPL(a):
-		stLegend(c, t.Accent, "phase 1")
-		if on, _ := a.Meta.Parameters["allow_pseudoknot"].(bool); on {
-			stLegend(c, stViolet, "pseudoknot")
-			stLegend(c, t.Warning, "deeper layer")
-		}
-	default:
-		stLegend(c, t.Accent, "G–C")
-		stLegend(c, stViolet, "A–U")
-		stLegend(c, t.TextMuted, "G–U")
+	for _, item := range stLegendItems(a, c.Theme()) {
+		stLegend(c, item.Color, item.Label)
 	}
 }
 
@@ -398,7 +393,8 @@ func (p *structurePage) resultMetrics(c *ui.Context, a *structureResult, records
 			label = "Energy"
 			model = "Turner 2004"
 			if on, _ := a.Meta.Parameters["allow_pseudoknot"].(bool); on {
-				model = fmt.Sprint(nameOr(fmt.Sprint(a.Meta.Parameters["energy_model"]), "DP09"))
+				saved, _ := a.Meta.Parameters["energy_model"].(string)
+				model = nameOr(saved, cplSettings(engine == "CPLcofold").DefaultModel)
 			}
 			if m, _ := a.Meta.EnergyMetadata["energy_model"].(string); m != "" {
 				model = m // the web names the model the energy came from first
@@ -429,6 +425,9 @@ func (p *structurePage) resultMetrics(c *ui.Context, a *structureResult, records
 				}
 			}
 			metric("Candidate", "#"+strconv.Itoa(r.SelectedCandidate+1), phase)
+			if cand := r.scoredCandidate(); cand != nil {
+				metric("COMRADES score", FormatNumber(int64(*cand.ComradesScore)), cand.estimator()+" · up to 1M per paired endpoint")
+			}
 		case stIsComrades(engine):
 			n := 0
 			for _, pr := range pairs {
@@ -438,10 +437,18 @@ func (p *structurePage) resultMetrics(c *ui.Context, a *structureResult, records
 			}
 			metric("Constraint mode", "HYB-guided", fmt.Sprintf("%s enforced pair%s", FormatNumber(int64(n)), plural(n)))
 			score, supported := 0.0, 0
-			for _, pr := range pairs {
-				if pr.Bonus > 0 {
-					score += 2 * pr.Bonus
-					supported++
+			for _, r := range records {
+				if k := stMetaIndex(a, r); k >= 0 && a.Meta.Records[k].Comrades != nil {
+					ev := &a.Meta.Records[k].Comrades.Evidence
+					score += ev.Score // preserve the recorded scoring rule, including historical folds
+					supported += ev.MatchedPairs
+					continue
+				}
+				for _, b := range r.Bonus { // old exports without a score summary
+					if b != nil && *b > 0 {
+						score += 2 * *b
+						supported++
+					}
 				}
 			}
 			metric("COMRADES score", strconv.FormatFloat(score, 'f', -1, 64), FormatNumber(int64(supported))+" supported structure pairs")
@@ -634,7 +641,9 @@ func (p *structurePage) pairList(c *ui.Context, a *structureResult, pairs []stPa
 				case pr.Hard:
 					label = "Hard pair"
 				}
-				if pr.Bonus > 0 {
+				if pr.Count != nil {
+					label += " · " + pr.Estimator + " count " + strconv.Itoa(*pr.Count) + " · HYB bonus " + jsFixed(pr.Bonus, 4)
+				} else if pr.Bonus > 0 {
 					label += " · evidence " + strconv.FormatFloat(pr.Bonus, 'f', 3, 64)
 				}
 				text := fmt.Sprintf("%s %c | %s | %s %c | %s", FormatNumber(int64(pr.I)), pr.BaseI, stPairType(pr.BaseI, pr.BaseJ),
@@ -696,9 +705,17 @@ func (p *structurePage) howComputed(c *ui.Context, a *structureResult, records [
 			}
 		})
 		if guided := slices.Contains(stCPLEvidence(a, records), true); guided && len(records) == 1 {
-			p.bonusHeatmap(c, records[0])
+			p.bonusHeatmap(c, records[0], stBonusLabel(a))
 		}
 	})
+}
+
+func stBonusLabel(a *structureResult) string {
+	kernel, _ := a.Meta.Parameters["support_kernel"].(string)
+	if stKernels.option(kernel).PairModel != "" {
+		return "saturating bonus"
+	}
+	return "log1p bonus"
 }
 
 // stShownCrossingPairs is the web's crossingPairs (cplfold_web.py
@@ -779,7 +796,7 @@ func stStagesOf(a *structureResult, records []structureRecord) [][3]string {
 	}
 	return [][3]string{
 		{"1 · HYB blocks", stCountLabel(rows, "row"), blocks},
-		{"2 · Bonus matrix", matrix, "maximum log1p bonus " + jsFixed(maxBonus, 3)},
+		{"2 · Bonus matrix", matrix, "maximum " + stBonusLabel(a) + " " + jsFixed(maxBonus, 3)},
 		{search, stCountLabel(stCandidatesFound(a, records), "candidate"), searchNote},
 		{"4 · Selected topology", topology, topologyNote},
 	}
@@ -790,8 +807,8 @@ const stHeatBins = 120
 
 // bonusHeatmap is the web's "HYB-derived CPLfold bonus matrix": the upper
 // triangle of the window's bonus matrix, binned to stHeatBins² cells (the
-// strongest bonus of each), colour intensity by log1p bonus.
-func (p *structurePage) bonusHeatmap(c *ui.Context, r structureRecord) {
+// strongest bonus of each), colour intensity by the folding bonus.
+func (p *structurePage) bonusHeatmap(c *ui.Context, r structureRecord, label string) {
 	t := c.Theme()
 	if r.BonusMatrixPath == "" {
 		ui.Text(c, "The bonus matrix was not written for this result (more than 2,000,000 cells), so its heatmap is not drawn.").FontSize(12).TextColor(t.TextMuted)
@@ -809,7 +826,7 @@ func (p *structurePage) bonusHeatmap(c *ui.Context, r structureRecord) {
 	color := ui.RGB(156, 5, 248)
 	ui.Column(c).Gap(4).Children(func() {
 		ui.Text(c, "HYB-derived CPLfold bonus matrix").Bold().FontSize(13)
-		ui.Text(c, "Upper triangle · folded-window coordinates · colour intensity is log1p Gaussian block support.").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, "Upper triangle · folded-window coordinates · colour intensity shows the "+label+" used for folding.").FontSize(11).TextColor(t.TextMuted)
 		const side = 240
 		ui.Box(c).Size(side, side).Role(ui.RoleImage).Label("HYB bonus matrix heatmap").Draw(func(pt *ui.Painter, rect ui.Rect) {
 			pt.Fill(rect, t.Background, 0)
@@ -827,7 +844,7 @@ func (p *structurePage) bonusHeatmap(c *ui.Context, r structureRecord) {
 			pt.Stroke(rect, t.Border, 0, 1)
 		})
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "log1p bonus · low").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, label+" · low").FontSize(11).TextColor(t.TextMuted)
 			ui.Box(c).Size(120, 8).Draw(func(pt *ui.Painter, rect ui.Rect) {
 				for i := range 24 {
 					w := rect.W / 24

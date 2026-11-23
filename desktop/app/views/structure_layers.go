@@ -78,19 +78,18 @@ func stReferenceOf(pr *model.Project, gene string) string {
 	if pr == nil {
 		return ""
 	}
-	for _, r := range pr.References {
-		for _, s := range r.Sequences {
-			if s.Name == gene {
-				return r.ID
-			}
-		}
+	if r, _ := pr.GeneReference(gene); r != nil {
+		return r.ID
 	}
 	return ""
 }
 
 // fetchSequence reads a reference sequence (blocking; call from a.Go).
 func fetchSequence(b core.Backend, pr *model.Project, path, gene string) (string, error) {
-	ref := stReferenceOf(pr, gene)
+	return readGeneSequence(b, stReferenceOf(pr, gene), path, gene)
+}
+
+func readGeneSequence(b core.Backend, ref, path, gene string) (string, error) {
 	if ref == "" {
 		return "", fmt.Errorf("no reference holds %s", gene)
 	}
@@ -159,8 +158,12 @@ func stMapNote(from, to string, m *seqmap.Map) string {
 func stMapRecords(records []structureRecord, m *seqmap.Map) (out []structureRecord, dropped int) {
 	for _, r := range records {
 		bonus := stWeights([]structureRecord{r})
+		counts := r.rawPairCounts()
 		mapped := r
 		mapped.DBN, mapped.Pairs, mapped.Bonus, mapped.mapped = "", nil, nil, []stPair{}
+		if counts != nil {
+			mapped.mappedCounts = make(map[[2]int]*int, len(counts))
+		}
 		// on A's coordinates the pairs are plain positions: no strands
 		mapped.Positions, mapped.Cutpoint, mapped.Segments = nil, 0, nil
 		for _, pr := range stRecordPairs(r) {
@@ -174,6 +177,9 @@ func stMapRecords(records []structureRecord, m *seqmap.Map) (out []structureReco
 			}
 			mapped.mapped = append(mapped.mapped, stPair{I: i, J: j, Layer: pr.Layer})
 			mapped.Pairs = append(mapped.Pairs, [2]int{i, j})
+			if n := counts[[2]int{pr.I, pr.J}]; n != nil {
+				mapped.mappedCounts[[2]int{i, j}] = n
+			}
 			if w, ok := bonus[[2]int{pr.I, pr.J}]; ok {
 				mapped.Bonus = append(mapped.Bonus, &w)
 			} else {

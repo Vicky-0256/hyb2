@@ -76,10 +76,12 @@ func TestStructureCandidateSelection(t *testing.T) {
 	files := rpStructureFiles("s1", reportStructure{ID: "s1", Gene: "G", Length: 12, Result: &structureResult{Records: []structureRecord{r}}}, "S05", true)
 	var pkg struct {
 		Selected   int              `json:"selectedCandidate"`
+		Crossing   int              `json:"crossingPairs"`
 		Candidates []map[string]any `json:"candidates"`
 	}
 	if err := json.Unmarshal([]byte(files[1].Text), &pkg); err != nil || pkg.Selected != 2 || len(pkg.Candidates) != 2 ||
-		pkg.Candidates[1]["rank"] != 2.0 || pkg.Candidates[1]["dotBracket"] != "((.[[.)).]]." || pkg.Candidates[1]["crossingPairs"] != 2.0 {
+		pkg.Crossing != 4 || pkg.Candidates[0]["crossingPairs"] != 0.0 || pkg.Candidates[1]["rank"] != 2.0 ||
+		pkg.Candidates[1]["dotBracket"] != "((.[[.)).]]." || pkg.Candidates[1]["crossingPairs"] != 4.0 {
 		t.Fatalf("package %s", files[1].Text)
 	}
 	// back to the best
@@ -130,6 +132,88 @@ func TestStructureComradesRows(t *testing.T) {
 		Bonus: []*float64{stFloat(5), stFloat(0)}}
 	if got := stNucleotideText([]structureRecord{r}, 6, "COMRADES(ViennaRNA)"); got != "Nucleotide 6 C · paired with 1 G (G–C) · RNAcofold evidence 5" {
 		t.Fatalf("inspector %q", got)
+	}
+	var a structureResult
+	if err := json.Unmarshal([]byte(`{"meta":{"engine":"COMRADES(ViennaRNA)","records":[{"comrades":{"evidence":{"selectedBasePairs":1001,"scoredBasePairs":1037}}}]}}`), &a); err != nil {
+		t.Fatal(err)
+	}
+	a.Records = []structureRecord{r}
+	src, err := stDrawingSource(&a, r)
+	if err != nil || src.EvidencePairs != 1037 || !slices.Equal(src.Support, []float64{5, 0, 0, 0, 0, 5}) {
+		t.Fatalf("scoring pool or per-base counts: %+v, %v", src, err)
+	}
+	a.Meta.Records[0].Comrades.Evidence.ScoredBasePairs = nil
+	if old, _ := stDrawingSource(&a, r); old.EvidencePairs != 1001 {
+		t.Fatalf("historical scoring pool: %d", old.EvidencePairs)
+	}
+	// The score card uses the stored (capped) scalar, not twice the raw
+	// observations that the same result displays at its paired bases.
+	a.Meta.Records[0].Comrades.Evidence.Score = 2_000_000
+	a.Meta.Records[0].Comrades.Evidence.MatchedPairs = 1
+	a.Records[0].Bonus[0] = stFloat(1_100_000)
+	tt := ui.NewTester(func(c *ui.Context) {
+		(&structurePage{}).resultMetrics(c, &a, a.Records, stShownPairs(a.Records, nil), len(r.Sequence))
+	}, 1000, 200)
+	tt.Frame()
+	if !tt.HasText("2000000") || tt.HasText("2200000") {
+		t.Fatalf("standalone score card: %v", tt.Texts())
+	}
+}
+
+// Export raw counts even above the cap; never send one window's pool to another.
+func TestComradesScoringExports(t *testing.T) {
+	const legacy = `{"comrades":{"evidence":{"selectedEvidencePairs":[{"one":6,"two":1,"count":3}],"scoredBasePairs":2}}}`
+	const current = `{"comrades":{"evidence":{"scoringVersion":"all-pairs-capped-v1","comradesScore":2000006,
+		"selectedEvidencePairs":[{"one":6,"two":1,"count":3}],"scoredEvidencePairs":[{"one":1,"two":6,"count":3},{"one":2,"two":5,"count":1100000}]},
+		"randomisation":{"selectedRun":1,"structures":[{"run":1,"dotBracket":"((..))","comradesScore":2000006},{"run":0,"dotBracket":"(....)","comradesScore":6}]}}}`
+	var a structureResult
+	if err := json.Unmarshal([]byte(`{"meta":{"records":[`+current+`,`+legacy+`]}}`), &a); err != nil {
+		t.Fatal(err)
+	}
+	cm := a.Meta.Records[0].Comrades
+	if got := string(webTSV(stScoredEvidenceRows(cm))); got != "# scoring_version=all-pairs-capped-v1\nprepared_left\tprepared_right\traw_pair_count\n1\t6\t3\n2\t5\t1100000\n" {
+		t.Fatalf("full score TSV: %q", got)
+	}
+	if got := stEvidenceRows(cm); len(got) != 2 || !slices.Equal(got[1], []string{"6", "1", "3", ""}) {
+		t.Fatalf("shortlist changed: %q", got)
+	}
+	r := structureRecord{WindowStart: 101, WindowEnd: 106, Sequence: "GGAACC", DBN: "((..))"}
+	for _, n := range []int{1, 2} {
+		a.Records = append(a.Records, r)
+		file := rpStructureFiles("results/structure_prediction", reportStructure{Result: &a}, "S12", true)[1]
+		var row map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(file.Text), &row); err != nil {
+			t.Fatal(err)
+		}
+		if n == 2 {
+			var windows []map[string]json.RawMessage
+			if err := json.Unmarshal(row["windows"], &windows); err != nil || len(windows) != 2 {
+				t.Fatalf("windows: %v, %v", windows, err)
+			}
+			if windows[1]["scoringVersion"] != nil || windows[1]["scoredEvidencePairs"] != nil || row["scoredEvidencePairs"] != nil {
+				t.Fatal("export inferred a legacy or cross-window evidence pool")
+			}
+			row = windows[0]
+		}
+		var pairs []stCount
+		var rnd struct{ Structures []stEnsembleEntry }
+		if string(row["scoringVersion"]) != `"all-pairs-capped-v1"` || json.Unmarshal(row["scoredEvidencePairs"], &pairs) != nil ||
+			json.Unmarshal(row["randomisation"], &rnd) != nil || len(rnd.Structures) != 2 || len(pairs) != 2 || pairs[1].Count != 1_100_000 {
+			t.Fatalf("missing or truncated package evidence: %s", file.Text)
+		}
+		for _, member := range rnd.Structures {
+			score := 0
+			for _, p := range stParseDBN(member.DotBracket, 1) {
+				for _, e := range pairs {
+					if e.One == p.I && e.Two == p.J {
+						score += 2 * min(e.Count, 1_000_000)
+					}
+				}
+			}
+			if float64(score) != member.Score {
+				t.Fatalf("run %d: recomputed %d, stored %v", member.Run, score, member.Score)
+			}
+		}
 	}
 }
 
@@ -209,7 +293,7 @@ func TestStructureResultDetailsViewer(t *testing.T) {
 	a.Navigate("structure", map[string]any{"structureId": structB})
 	csSettle(a, tt)
 	for _, text := range []string{"COMRADES result", "COMRADES score 18 · 4 supported structure pairs · selected fold: ranked",
-		"Evidence TSV…", "Constraints TSV…", "Ensemble TSV…", "Accepted stem constraints (1)",
+		"Shortlist TSV…", "RNAcofold constraint shortlist (1)", "Constraints TSV…", "Ensemble TSV…", "Accepted stem constraints (1)",
 		"1 · RNAcofold evidence", "40 unique pairs", "60 eligible HYB rows; one observation per row", "2 · Ranked stems", "5 stems",
 		"Top 3 sent to compatibility fitting", "3 · Accepted constraints", "1 stem", "4 enforced base pairs", "4 · Structure ensemble",
 		"1 structure", "ranked fold + 0 seeded random orders", "#1 · ranked",
@@ -232,5 +316,8 @@ func TestStructureResultDetailsViewer(t *testing.T) {
 	}
 	if tt.HasText("CPLfold candidates") {
 		t.Fatal("candidates shown for COMRADES")
+	}
+	if tt.HasText("Scored evidence TSV…") || !tt.HasText("The complete scored evidence set was not recorded in this result.") {
+		t.Fatal("legacy COMRADES result claims to have a complete scoring pool")
 	}
 }

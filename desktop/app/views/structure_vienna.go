@@ -24,14 +24,10 @@ const (
 	engineVienna    = "viennarna"
 	engineComrades  = "comrades"
 	// the COMRADES folding programs (comrades.py FOLD_PROGRAMS)
-	foldViennaRNA = "viennarna"
-	foldMfold     = "mfold"
-	// the web's COMRADES(ViennaRNA) defaults and limits
-	stDefaultStems, stDefaultSeed = 75, "HYB2-Web"
-	stComradesMaxNT               = 3000
-	// the web's ViennaRNA defaults
-	stDefaultTemp = 37
-	stDefaultLoop = 3
+	foldViennaRNA   = "viennarna"
+	foldMfold       = "mfold"
+	stDefaultSeed   = "HYB2-Web"
+	stComradesMaxNT = 3000
 	// a measured ViennaRNA MFE of 10,807 nt, for the check before running:
 	// memory is quadratic in the length, time grows as length^2.5 at these
 	// lengths (measured 0.81 s at 1,000 nt, 10.9 s at 3,000 nt; cubic from
@@ -77,7 +73,12 @@ func (p *structurePage) viennaPlan(pl *foldPlan) {
 		p.irisPlan(pl) // structure_iris.go
 		return
 	}
+	r := engineSettings(p.engine).Ranges
+	r["temperature"].check(pl, "Temperature", p.temperature, false)
+	r["minLoopSize"].check(pl, "Minimum hairpin loop", p.minLoop, true)
 	if p.engine == engineComrades {
+		r["constraintLimit"].check(pl, "Ranked stem constraints", p.stems, true)
+		r["randomFoldCount"].check(pl, "Randomised folds", p.randomFolds, true)
 		p.comradesPlan(pl)
 		return
 	}
@@ -151,11 +152,12 @@ func (p *structurePage) comradesMfoldProblems(pl *foldPlan) {
 	if _, problem := p.a.appMfold(); problem != "" {
 		pl.problems = append(pl.problems, problem)
 	}
-	if p.temperature != mfoldTemperature {
-		pl.problems = append(pl.problems, "mfold folds at 37 °C only (its version 3.0 energies): set Temperature to 37, or fold with ViennaRNA.")
+	r := engineSettings(foldMfold).Ranges
+	if temp := r["temperature"][0]; p.temperature != temp {
+		pl.problems = append(pl.problems, fmt.Sprintf("mfold folds at %[1]g °C only (its version 3.0 energies): set Temperature to %[1]g, or fold with ViennaRNA.", temp))
 	}
-	if int(p.minLoop) != mfoldMinLoop {
-		pl.problems = append(pl.problems, "mfold's minimum hairpin loop is fixed at 3: set Minimum hairpin loop to 3, or fold with ViennaRNA.")
+	if loop := r["minLoopSize"][0]; p.minLoop != loop {
+		pl.problems = append(pl.problems, fmt.Sprintf("mfold's minimum hairpin loop is fixed at %[1]g: set Minimum hairpin loop to %[1]g, or fold with ViennaRNA.", loop))
 	}
 }
 
@@ -204,7 +206,6 @@ func (p *structurePage) pairedPlan(pl *foldPlan) {
 	pl.limits = []string{"The regions are joined by the web's 100-nt A/U spacer and folded together; the result keeps the two regions.",
 		"Only chimeras with one arm in each region are evidence; each is cofolded (RNAcofold).",
 		"No pseudoknots: " + p.comradesProgramName() + " returns a nested structure."}
-	p.comradesMfoldProblems(pl)
 	if !ok {
 		return
 	}
@@ -259,10 +260,23 @@ func viennaSeconds(lengths []int) float64 {
 	return total
 }
 
-func (p *structurePage) viennaSettingsChanged() bool {
-	changed := p.temperature != stDefaultTemp || int(p.minLoop) != stDefaultLoop
+// resetViennaSettings also initializes the shared fields before either Vienna engine is selected.
+func (p *structurePage) resetViennaSettings() {
+	cm := engineSettings(engineComrades).Defaults
+	thermo := engineSettings(engineVienna).Defaults
 	if p.engine == engineComrades {
-		changed = changed || int(p.stems) != stDefaultStems || p.randomFolds != 0 || p.seed != stDefaultSeed || p.homodimerOnly ||
+		thermo = cm
+	}
+	p.temperature, p.minLoop = thermo.Temperature, thermo.MinLoopSize
+	p.stems, p.randomFolds = cm.ConstraintLimit, cm.RandomFoldCount
+	p.seed, p.homodimerOnly, p.allowLargeEnsemble, p.foldProgram = stDefaultSeed, false, false, foldViennaRNA
+}
+
+func (p *structurePage) viennaSettingsChanged() bool {
+	d := engineSettings(p.engine).Defaults
+	changed := p.temperature != d.Temperature || p.minLoop != d.MinLoopSize
+	if p.engine == engineComrades {
+		changed = changed || p.stems != d.ConstraintLimit || p.randomFolds != d.RandomFoldCount || p.seed != stDefaultSeed || p.homodimerOnly ||
 			p.comradesProgram() != foldViennaRNA
 	}
 	return changed
@@ -283,24 +297,27 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 			if comrades {
 				p.foldProgramField(c)
 			}
-			row := func(key, label string, value *float64, lo, hi, step float64, help string) {
-				ui.Column(c).Gap(2).Children(func() {
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, label).FontSize(12).Bold().Width(150)
-						ui.NumberInput(c.Key(key), value, lo, hi, step).Grow(1).Label(label)
-					})
-					ui.Text(c, help).FontSize(12).TextColor(t.TextMuted)
-				})
+			settings := engineSettings(p.engine)
+			r, d := settings.Ranges, settings.Defaults
+			temp, loop := r["temperature"], r["minLoopSize"]
+			tempHelp := fmt.Sprintf("Folding temperature, %s °C. Default %g.", temp, d.Temperature)
+			loopHelp := fmt.Sprintf("Fewest unpaired bases closing a hairpin, %s. Default %g.", loop, d.MinLoopSize)
+			if comrades && p.comradesProgram() == foldMfold {
+				fixed := engineSettings(foldMfold).Ranges
+				temp, loop = fixed["temperature"], fixed["minLoopSize"]
+				tempHelp = fmt.Sprintf("mfold folds at %g °C only.", temp[0])
+				loopHelp = fmt.Sprintf("mfold's minimum hairpin loop is fixed at %g.", loop[0])
 			}
-			row("st-temp", "Temperature (°C)", &p.temperature, 0, 100, 0.1, "Folding temperature, 0 to 100 °C. Default 37.")
-			row("st-loop", "Minimum hairpin loop", &p.minLoop, 0, 12, 1, "Fewest unpaired bases closing a hairpin, 0 to 12. Default 3.")
+			foldNumberRow(c, "st-temp", "Temperature (°C)", &p.temperature, temp, 0.1, tempHelp)
+			foldNumberRow(c, "st-loop", "Minimum hairpin loop", &p.minLoop, loop, 1, loopHelp)
 			if comrades {
-				row("st-stems", "Ranked stem constraints", &p.stems, 1, 75, 1, "Strongest RNAcofold stems tried as hard pairs, 1 to 75. Original default: 75.")
-				row("st-random", "Randomised folds", &p.randomFolds, 0, 1000, 1,
-					"Extra fits with the stems in seeded random orders, 0 to 1000; each takes about as long as the ranked fit. Default 0.")
+				foldNumberRow(c, "st-stems", "Ranked stem constraints", &p.stems, r["constraintLimit"], 1,
+					fmt.Sprintf("Strongest RNAcofold stems tried as hard pairs, %s. Default %g.", r["constraintLimit"], d.ConstraintLimit))
+				foldNumberRow(c, "st-random", "Randomised folds", &p.randomFolds, r["randomFoldCount"], 1,
+					fmt.Sprintf("Extra fits with the stems in seeded random orders, %s; each takes about as long as the ranked fit. Default %g.", r["randomFoldCount"], d.RandomFoldCount))
 				if p.randomFolds > stLargeEnsemble {
 					ui.Checkbox(c.Key("st-large"), &p.allowLargeEnsemble,
-						"I understand that up to 1,000 serial folds may take a long time; Cancel stops them.")
+						"I understand that up to "+FormatNumber(int64(r["randomFoldCount"][1]))+" serial folds may take a long time; Cancel stops them.")
 				}
 				Field(c, "Seed", func() {
 					ui.TextInput(c.Key("st-seed"), &p.seed).Label("Seed").Width(200)
@@ -309,9 +326,7 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 				ui.Checkbox(c.Key("st-homodimer"), &p.homodimerOnly, "Homodimer proxies only (both arms on one RNA, overlap ≥ 5)")
 			}
 			if ui.Button(c, "Reset to defaults").Disabled(!changed).Clicked() {
-				p.temperature, p.minLoop = stDefaultTemp, stDefaultLoop
-				p.stems, p.randomFolds, p.seed, p.homodimerOnly, p.allowLargeEnsemble = stDefaultStems, 0, stDefaultSeed, false, false
-				p.foldProgram = foldViennaRNA
+				p.resetViennaSettings()
 			}
 		})
 	})
@@ -353,10 +368,12 @@ func (p *structurePage) foldProgramField(c *ui.Context) {
 	t := c.Theme()
 	Field(c, "Folding program", func() {
 		p.foldProgram = p.comradesProgram()
+		r := engineSettings(foldMfold).Ranges
+		temp, loop := r["temperature"][0], r["minLoopSize"][0]
 		changed := func() {
 			if p.foldProgram == foldMfold {
 				// mfold's fixed settings
-				p.temperature, p.minLoop = mfoldTemperature, mfoldMinLoop
+				p.temperature, p.minLoop = temp, loop
 			}
 		}
 		ui.Radio(c, &p.foldProgram, foldViennaRNA, "ViennaRNA (bundled)").OnChange(changed)
@@ -367,7 +384,7 @@ func (p *structurePage) foldProgramField(c *ui.Context) {
 		}
 		path, problem := p.a.appMfold()
 		if path != "" {
-			ui.Text(c, "Using "+path+". mfold applies each stem as forced base pairs; it folds at 37 °C with minimum loop 3, "+
+			ui.Text(c, fmt.Sprintf("Using %s. mfold applies each stem as forced base pairs; it folds at %g °C with minimum loop %g, ", path, temp, loop)+
 				"and is slower than ViennaRNA (about 7 s per fold at 1,000 nt).").FontSize(12).TextColor(t.TextMuted)
 			return
 		}

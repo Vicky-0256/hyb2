@@ -14,22 +14,76 @@ import (
 // followed selection that mixes references) only the samples mapped to
 // that RNA's reference are used. A prefill's "sampleIds" are used exactly.
 
-// geneReference is the reference holding the RNA to fold, nil if none
-// does.
-func (p *structurePage) geneReference() *model.Reference {
-	a := p.a
-	if a.Project == nil || p.gene == "" {
-		return nil
+// selectedReferenceID is the common reference of the unfiltered evidence.
+// Do not use evidenceIDs here: filtering already depends on the chosen RNA.
+func (p *structurePage) selectedReferenceID() string {
+	ids := p.pinned
+	if ids == nil {
+		ids = p.a.SelectionIDs(p.evidence)
 	}
-	var want *model.Reference
-	for i, r := range a.Project.References {
-		for _, s := range r.Sequences {
-			if s.Name == p.gene {
-				want = &a.Project.References[i]
+	ref := ""
+	for _, id := range ids {
+		s := p.a.Project.Sample(id)
+		if s == nil || s.ReferenceID == "" || (ref != "" && ref != s.ReferenceID) {
+			return ""
+		}
+		ref = s.ReferenceID
+	}
+	return ref
+}
+
+// rnaReference resolves a form arm without discarding its reference. An
+// explicit picker choice is authoritative. Otherwise the selected samples
+// disambiguate the name, or a globally unique RNA can supply the reference.
+// An implicit arm B follows arm A's reference when that RNA is present.
+func (p *structurePage) rnaReference(second bool) (*model.Reference, int) {
+	pr := p.a.Project
+	if pr == nil {
+		return nil, 0
+	}
+	gene, ref := p.gene, p.referenceID
+	if second && p.gene2 != "" {
+		gene, ref = p.gene2, p.referenceID2
+		if ref == "" {
+			if first, _ := p.rnaReference(false); first != nil {
+				if r, n := pr.GeneReference(gene, first.ID); r != nil {
+					return r, n
+				}
 			}
 		}
 	}
-	return want
+	if ref != "" {
+		return pr.GeneReference(gene, ref)
+	}
+	if ref = p.selectedReferenceID(); ref != "" {
+		if r, n := pr.GeneReference(gene, ref); r != nil {
+			return r, n
+		}
+	}
+	// The public bare-name lookup keeps first-match behavior for older
+	// readers. Only this form's fallback requires uniqueness across references.
+	var found *model.Reference
+	length := 0
+	for i := range pr.References {
+		r := &pr.References[i]
+		for _, s := range r.RNAs() {
+			if s.Name == gene {
+				if found != nil {
+					return nil, 0
+				}
+				found, length = r, s.Length
+				break
+			}
+		}
+	}
+	return found, length
+}
+
+// geneReference is the resolved reference of arm A, nil if missing or
+// ambiguous. In particular it never uses project reference order.
+func (p *structurePage) geneReference() *model.Reference {
+	ref, _ := p.rnaReference(false)
+	return ref
 }
 
 func stReferenceName(r *model.Reference) string {
@@ -104,10 +158,14 @@ func (p *structurePage) evidenceMismatch() string {
 		return ""
 	}
 	for _, id := range p.evidenceIDs() {
+		s := a.Project.Sample(id)
+		if s == nil || s.ReferenceID == "" {
+			return "The selected samples need a mapped reference before folding a reference region."
+		}
 		if p.stFitsReference(id, want) {
 			continue
 		}
-		other := a.Project.Sample(id).ReferenceID
+		other := s.ReferenceID
 		if r := a.Project.Reference(other); r != nil {
 			other = stReferenceName(r)
 		}

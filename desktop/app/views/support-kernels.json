@@ -1,0 +1,237 @@
+{
+  "defaultKernel": "gaussian",
+  "options": [
+    {
+      "pairModel": "",
+      "value": "gaussian",
+      "label": "Gaussian around arm centres (default)",
+      "desktopLabel": "Gaussian around arm centres · IRIS (default)"
+    },
+    {
+      "pairModel": "",
+      "value": "block",
+      "label": "Full arm blocks"
+    },
+    {
+      "pairModel": "",
+      "value": "block-normalized",
+      "label": "Full arm blocks ÷ √(arm 1 length × arm 2 length)",
+      "desktopLabel": "Full arm blocks ÷ √(arm lengths)"
+    },
+    {
+      "pairModel": "RNAduplex",
+      "value": "duplex",
+      "label": "RNAduplex inter-arm pairs · saturating bonus",
+      "desktopLabel": "RNAduplex pairs, saturating"
+    },
+    {
+      "pairModel": "RNAcofold",
+      "value": "comrades",
+      "label": "COMRADES (RNAcofold inter-arm pairs) · saturating bonus",
+      "desktopLabel": "COMRADES (RNAcofold), saturating"
+    }
+  ],
+  "engines": {
+    "cplfold": {
+      "defaultModel": "DP09",
+      "models": [
+        {
+          "value": "DP09",
+          "label": "DP09"
+        },
+        {
+          "value": "DP03",
+          "label": "DP03"
+        },
+        {
+          "value": "CC06",
+          "label": "CC06"
+        },
+        {
+          "value": "CC09",
+          "label": "CC09"
+        },
+        {
+          "value": "RE",
+          "label": "RE (Rivas–Eddy)"
+        }
+      ],
+      "ranges": {
+        "beamSize": [
+          1,
+          1000
+        ],
+        "maxPhase1": [
+          1,
+          20
+        ],
+        "energyDelta": [
+          0,
+          50
+        ],
+        "alpha": [
+          0,
+          1
+        ],
+        "beta": [
+          0,
+          1
+        ]
+      },
+      "defaults": {
+        "allowPseudoknot": false,
+        "beamSize": 20,
+        "maxPhase1": 3,
+        "energyDelta": 5.0,
+        "alpha": 0.5,
+        "beta": 0.0
+      }
+    },
+    "cplcofold": {
+      "defaultModel": "DP09",
+      "models": [
+        {
+          "value": "DP09",
+          "label": "DP09"
+        },
+        {
+          "value": "DP03",
+          "label": "DP03"
+        }
+      ],
+      "ranges": {
+        "beamSize": [
+          1,
+          200
+        ],
+        "maxPhase1": [
+          1,
+          20
+        ],
+        "energyDelta": [
+          0,
+          50
+        ],
+        "alpha": [
+          0,
+          1
+        ],
+        "beta": [
+          0,
+          1
+        ]
+      },
+      "defaults": {
+        "allowPseudoknot": false,
+        "beamSize": 20,
+        "maxPhase1": 3,
+        "energyDelta": 5.0,
+        "alpha": 0.0,
+        "beta": 0.0
+      }
+    },
+    "vienna": {
+      "ranges": {
+        "temperature": [
+          0,
+          100
+        ],
+        "minLoopSize": [
+          0,
+          12
+        ]
+      },
+      "defaults": {
+        "temperature": 37,
+        "minLoopSize": 3
+      }
+    },
+    "comrades": {
+      "ranges": {
+        "temperature": [
+          0,
+          100
+        ],
+        "minLoopSize": [
+          0,
+          12
+        ],
+        "constraintLimit": [
+          1,
+          75
+        ],
+        "randomFoldCount": [
+          0,
+          1000
+        ]
+      },
+      "defaults": {
+        "temperature": 37,
+        "minLoopSize": 3,
+        "constraintLimit": 75,
+        "randomFoldCount": 0
+      }
+    },
+    "iris": {
+      "ranges": {
+        "K": [
+          1,
+          3
+        ],
+        "C": [
+          1,
+          50
+        ],
+        "fraction": [
+          0,
+          1
+        ],
+        "stemLength": [
+          2,
+          12
+        ]
+      },
+      "defaults": {
+        "K": 2,
+        "C": 20,
+        "fraction": 0.75,
+        "kRange": "4 5 6 7"
+      },
+      "parameterKeys": [
+        "K",
+        "C",
+        "fraction",
+        "kRange"
+      ],
+      "kRangeGrammar": {
+        "number": "[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+        "scalar": "^[\\x09-\\x0d ]*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?[\\x09-\\x0d ]*$",
+        "list": "^[\\x09-\\x0d ]*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:(?:[\\x09-\\x0d ]*,[\\x09-\\x0d ]*|[\\x09-\\x0d ]+)[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?)*[\\x09-\\x0d ]*$"
+      }
+    },
+    "mfold": {
+      "ranges": {
+        "temperature": [
+          37,
+          37
+        ],
+        "minLoopSize": [
+          3,
+          3
+        ]
+      }
+    }
+  },
+  "foldText": {
+    "alphabet": "ACGU",
+    "aliases": {
+      "T": "U"
+    },
+    "numbers": "0123456789",
+    "header": ">",
+    "space": " \t\n\r\u000b\f                 　﻿",
+    "minWindowNt": 10,
+    "minPastedNt": 5,
+    "minSequenceNt": 1
+  }
+}

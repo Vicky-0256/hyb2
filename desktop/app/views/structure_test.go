@@ -83,7 +83,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	}
 	// The form estimates the whole-RNA fold (built-in rate, no history).
 	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 1 min 50 s (rough; the first fold after installing also prepares the folding engine, about 2–4 min more)",
-		"about 16.3 GB of the 24.0 GB tasks may use"} {
+		"about 16.7 GB of the 24.0 GB tasks may use"} {
 		if !tt.HasText(text) {
 			t.Fatalf("no fold check %q: %q", text, tt.Texts())
 		}
@@ -225,12 +225,11 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 
 	// Validation of the window list.
 	for text, want := range map[string]string{
-		"abc":     "• Not a window: abc (windows are start-end, at least 20 nt).",
-		"1-10":    "• 1-10 is shorter than 20 nt (windows are start-end, at least 20 nt).",
-		"1-20000": "• 1-20000 is outside 1-10807 (windows are start-end, at least 20 nt).",
+		"abc":     "• Not a window: abc (use start-end).",
+		"1-20000": "• 1-20000 is outside 1-10807.",
 		"  \n  ":  "• Add at least one window, one per line as start-end within 1-10,807.",
 		// the runtime refuses a repeated window (one result per window)
-		"1-500\n600-700\n500-1": "• Window 1-500 is listed more than once; give each window once.",
+		"1-500\n600-700\n1-500": "• Window 1-500 is listed more than once; give each window once.",
 	} {
 		p.windows = text
 		tt.Frame()
@@ -244,7 +243,8 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 		t.Fatalf("window summary %q", tt.Texts())
 	}
 	// Keyboard: focus the window list, then Cmd+Enter runs the fold.
-	r, ok := tt.Find("Windows: start-end, one per line (1-based, inclusive)")
+	const windowField = "Windows: start-end, one per line (1-based, inclusive; at least 10 nt)"
+	r, ok := tt.Find(windowField)
 	if !ok {
 		t.Fatal("no window field")
 	}
@@ -253,7 +253,7 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 		// scroll over the form, above the pinned check
 		tt.Scroll(r.X+20, min(r.Y, check.Y-40), 0, r.Y+r.H+40-check.Y+60)
 		tt.Frame()
-		if r, ok = tt.Find("Windows: start-end, one per line (1-based, inclusive)"); !ok || r.Y+r.H+40 > check.Y {
+		if r, ok = tt.Find(windowField); !ok || r.Y+r.H+40 > check.Y {
 			t.Fatalf("window list still hidden: %+v below %+v", r, check)
 		}
 	}
@@ -280,6 +280,327 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("• Choose the samples whose chimeric reads guide the fold.") {
 		t.Fatalf("no evidence: %q", tt.Texts())
+	}
+}
+
+func TestStructureReferenceWindowForm(t *testing.T) {
+	for _, tc := range []struct {
+		minimum        int
+		input, problem string
+	}{
+		{10, "1-9", "1-9 is shorter than 10 nt."},
+		{10, "1-10", ""},
+		{10, "30–1", "30–1: start must not exceed end."},
+		{12, "1-10", "1-10 is shorter than 12 nt."},
+		{12, "1-12", ""},
+	} {
+		t.Run(fmt.Sprintf("min%d/%s", tc.minimum, tc.input), func(t *testing.T) {
+			if tc.minimum != 10 {
+				previous := stKernels
+				t.Cleanup(func() { stKernels = previous })
+				var catalog map[string]any
+				if err := json.Unmarshal(supportKernelsJSON, &catalog); err != nil {
+					t.Fatal(err)
+				}
+				catalog["foldText"].(map[string]any)["minWindowNt"] = tc.minimum
+				changed, err := json.Marshal(catalog)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stKernels = parseSupportKernels(changed)
+			}
+			a, f, tt, _ := stSetupPage(t, 1800)
+			mustClick(t, tt, "Regions (windows)")
+			mustClick(t, tt, "Windows")
+			tt.Type(tc.input)
+			tt.Frame()
+			if !tt.HasText(fmt.Sprintf("1-based, inclusive; at least %d nt", tc.minimum)) {
+				t.Errorf("window field does not show the %d nt minimum", tc.minimum)
+			}
+			if tc.problem != "" && !tt.HasText("• "+tc.problem) {
+				t.Errorf("precheck does not show %q", tc.problem)
+			}
+			mustClick(t, tt, "Run fold")
+			csSettle(a, tt)
+			started := f.startedKinds()
+			if tc.problem != "" {
+				if len(started) != 0 {
+					t.Fatalf("invalid input submitted: %+v", started[0].Windows)
+				}
+			} else if len(started) != 1 || started[0].Mode == nil || *started[0].Mode != "windows" ||
+				!slices.Equal(started[0].Windows, []core.Window{{Start: 1, End: uint64(tc.minimum)}}) {
+				t.Fatalf("expected the inclusive window %s, got requests %+v", tc.input, started)
+			}
+		})
+	}
+}
+
+func TestStructureOneRegionPresetKeepsWindowOrder(t *testing.T) {
+	a, f, tt, p := stSetupPage(t, 1800)
+	mustClick(t, tt, "Regions (windows)")
+	mustClick(t, tt, "Windows")
+	tt.Type("30-1")
+	mustClick(t, tt, "Custom engine and reference layout")
+	mustClick(t, tt, "One local region · CPLfold")
+	tt.Frame()
+	if p.windows != "30-1" || !tt.HasText("• 30-1: start must not exceed end.") {
+		t.Fatalf("one-region preset changed the input or cleared its precheck: %q, %v", p.windows, p.plan().problems)
+	}
+	mustClick(t, tt, "Run fold")
+	csSettle(a, tt)
+	if len(f.startedKinds()) != 0 {
+		t.Fatal("one-region preset submitted reversed coordinates")
+	}
+}
+
+func TestStructureTwoRegionInputForm(t *testing.T) {
+	for _, minimum := range []int{1, 3} {
+		for _, engine := range []string{engineCPLcofold, engineComrades} {
+			for _, tc := range []struct {
+				name, first, second, problem string
+				positions                    [4]uint64
+			}{
+				{"reverse-A", "30-1", "41-70", "Region 1: 30-1: start must not exceed end.", [4]uint64{}},
+				{"reverse-B", "1-30", "70-41", "Region 2: 70-41: start must not exceed end.", [4]uint64{}},
+				{"reverse-both", "30-1", "70-41", "Region 2: 70-41: start must not exceed end.", [4]uint64{}},
+				{"empty-A", "", "41-70", "Region 1: enter it as start-end", [4]uint64{}},
+				{"empty-B", "1-30", "", "Region 2: enter it as start-end", [4]uint64{}},
+				{"zero-start", "0-30", "41-70", "Region 1: 0-30 is outside", [4]uint64{}},
+				{"ordered-fragments", "51-80", "1-30", "", [4]uint64{51, 80, 1, 30}},
+				{"four-plus-four", "3-6", "8-11", "", [4]uint64{3, 6, 8, 11}},
+				{"singleton-A", "7-7", "41-70", "", [4]uint64{7, 7, 41, 70}},
+				{"singleton-B", "1-30", "19-19", "", [4]uint64{1, 30, 19, 19}},
+				{"singletons", "7-7", "19-19", "", [4]uint64{7, 7, 19, 19}},
+				{"three-plus-three", "3-5", "8-10", "", [4]uint64{3, 5, 8, 10}},
+			} {
+				t.Run(fmt.Sprintf("min%d/%s/%s", minimum, engine, tc.name), func(t *testing.T) {
+					if minimum != 1 {
+						stInjectFoldTextMinimums(t, 12, 8, minimum)
+					}
+					a, f, tt, p := stSetupPage(t, 2200)
+					if engine == engineCPLcofold {
+						mustClick(t, tt, "CPLcofold, two regions as two strands (one RNA or two RNAs)")
+					} else {
+						mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
+						mustClick(t, tt, "Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)")
+					}
+					mustClick(t, tt, "Region 1")
+					tt.Type(tc.first)
+					mustClick(t, tt, "Region 2")
+					tt.Type(tc.second)
+					tt.Frame()
+					problem := tc.problem
+					if problem == "" {
+						for i := 0; i < 2; i++ {
+							if tc.positions[2*i+1]-tc.positions[2*i]+1 < uint64(minimum) {
+								problem = fmt.Sprintf("Region %d: at least %d nt.", i+1, minimum)
+								break
+							}
+						}
+					}
+					if problem != "" && !tt.HasText(problem) {
+						t.Errorf("missing precheck %q; got %v", problem, p.plan().problems)
+					}
+					mustClick(t, tt, "Run fold")
+					csSettle(a, tt)
+					started := f.startedKinds()
+					t.Logf("engine=%s; input=%q/%q; StartTask calls=%d; problems=%q", engine, p.region1, p.region2, len(started), p.plan().problems)
+					if p.region1 != tc.first || p.region2 != tc.second {
+						t.Fatal("validation rewrote an input field")
+					}
+					if problem != "" {
+						if len(started) != 0 {
+							t.Fatalf("invalid regions submitted: %+v", started[0].Regions)
+						}
+						return
+					}
+					want := []core.Region{{GeneID: africaGene, Start: tc.positions[0], End: tc.positions[1]},
+						{GeneID: africaGene, Start: tc.positions[2], End: tc.positions[3]}}
+					mode := map[string]string{engineCPLcofold: "cofold", engineComrades: "paired"}[engine]
+					if len(started) != 1 || started[0].Engine == nil || *started[0].Engine != engine ||
+						started[0].Mode == nil || *started[0].Mode != mode || !slices.Equal(started[0].Regions, want) {
+						t.Fatalf("expected unaltered regions %+v; tasks=%+v", want, started)
+					}
+					t.Logf("submitted regions=%+v, mode=%s", started[0].Regions, *started[0].Mode)
+				})
+			}
+		}
+	}
+}
+
+func TestStructureTwoRegionPresetKeepsOrder(t *testing.T) {
+	for _, engine := range []string{engineCPLcofold, engineComrades} {
+		for _, preset := range []string{stWorkflowLong, stWorkflowInter, stWorkflowHomodimer, stWorkflowShort} {
+			t.Run(engine+"/"+preset, func(t *testing.T) {
+				a, f, tt, p := stSetupPage(t, 2200)
+				if preset == stWorkflowInter {
+					ref := p.geneReference()
+					ref.RNASequences = append(slices.Clone(ref.RNAs()), model.Sequence{Name: "partner", Length: 100})
+					tt.Frame()
+				}
+				cpl := engine == engineCPLcofold
+				if !cpl {
+					mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
+				}
+				mustClick(t, tt, "Regions (windows)")
+				mustClick(t, tt, "Windows")
+				tt.Type("30-1")
+				mustClick(t, tt, "Custom engine and reference layout")
+				longLabel := stWorkflowLabels(cpl)[slices.Index(stWorkflows, stWorkflowLong)]
+				mustClick(t, tt, longLabel)
+				mustClick(t, tt, "Region 2")
+				tt.Type("41-70")
+				if preset != stWorkflowLong {
+					mustClick(t, tt, longLabel)
+					mustClick(t, tt, stWorkflowLabels(cpl)[slices.Index(stWorkflows, preset)])
+				}
+				tt.Frame()
+				if p.region1 != "30-1" || !tt.HasText("30-1: start must not exceed end.") ||
+					(preset == stWorkflowHomodimer && p.region2 != "30-1") || (preset == stWorkflowShort && p.windows != "30-1") {
+					t.Errorf("preset changed or accepted reversed coordinates: first=%q second=%q windows=%q problems=%v", p.region1, p.region2, p.windows, p.plan().problems)
+				}
+				mustClick(t, tt, "Run fold")
+				csSettle(a, tt)
+				if started := f.startedKinds(); len(started) != 0 {
+					t.Fatalf("preset submitted invalid coordinates: regions=%+v windows=%+v", started[0].Regions, started[0].Windows)
+				}
+				t.Logf("preset=%s; region1=%q region2=%q windows=%q; StartTask calls=0", preset, p.region1, p.region2, p.windows)
+
+				// Correcting the field must unblock this same form and preserve the coordinates.
+				field := "Region 1"
+				if preset == stWorkflowShort {
+					field = "Windows"
+				}
+				mustClick(t, tt, field)
+				tt.TypeKey(ui.Cmd, ui.KeyA, "")
+				tt.Type("5-34")
+				if preset == stWorkflowHomodimer && !cpl {
+					// COMRADES copies on preset selection; only CPLcofold mirrors later edits.
+					mustClick(t, tt, "Region 2")
+					tt.TypeKey(ui.Cmd, ui.KeyA, "")
+					tt.Type("5-34")
+				}
+				mustClick(t, tt, "Run fold")
+				csSettle(a, tt)
+				started := f.startedKinds()
+				if len(started) != 1 {
+					t.Fatalf("corrected preset did not submit: %v", p.plan().problems)
+				}
+				if preset == stWorkflowShort {
+					if !slices.Equal(started[0].Windows, []core.Window{{Start: 5, End: 34}}) || len(started[0].Regions) != 0 {
+						t.Fatalf("single-region preset changed the corrected window: %+v", started[0])
+					}
+				} else {
+					second := core.Region{GeneID: africaGene, Start: 41, End: 70}
+					if preset == stWorkflowInter {
+						second.GeneID = "partner"
+					} else if preset == stWorkflowHomodimer {
+						second.Start, second.End = 5, 34
+					}
+					if !slices.Equal(started[0].Regions, []core.Region{{GeneID: africaGene, Start: 5, End: 34}, second}) {
+						t.Fatalf("two-region preset changed the corrected regions: %+v", started[0].Regions)
+					}
+				}
+				t.Logf("corrected preset=%s; submitted regions=%+v, windows=%+v", preset, started[0].Regions, started[0].Windows)
+			})
+		}
+	}
+}
+
+func TestStructureWholeReferenceMinimumForm(t *testing.T) {
+	for _, minimum := range []int{1, 3} {
+		for _, engine := range []string{engineCPLfold, engineVienna, engineComrades} {
+			for _, length := range []int{0, 1, 2, 3} {
+				t.Run(fmt.Sprintf("min%d/%s/%dnt", minimum, engine, length), func(t *testing.T) {
+					if minimum != 1 {
+						stInjectFoldTextMinimums(t, 12, 8, minimum)
+					}
+					a, f := openCS(t)
+					a.Project.References = []model.Reference{{ID: "ref", Sequences: []model.Sequence{{Name: "short", Length: length}}}}
+					a.Project.Samples = []model.Sample{{ID: "reads", ReferenceID: "ref", Ready: true}}
+					a.Project.Conditions = nil
+					a.Selected = Selection{ReferenceID: "ref", Gene: "short", Key: "s:reads"}
+					f.ops["list_samples"] = core.Obj{"samples": a.Project.Samples, "references": a.Project.References}
+					f.ops["list_structures"] = core.Obj{"structures": []any{}}
+					tt := ui.NewTester(a.View, 1100, 2200)
+					a.Navigate("structure", nil)
+					csSettle(a, tt)
+					p := a.PageFor("structure").(*structurePage)
+					if engine == engineVienna {
+						mustClick(t, tt, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
+					} else if engine == engineComrades {
+						mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
+					}
+					mustClick(t, tt, "Run fold")
+					csSettle(a, tt)
+					started := f.startedKinds()
+					t.Logf("whole reference=%d nt, minimum=%d, engine=%s; StartTask calls=%d; problems=%q", length, minimum, engine, len(started), p.plan().problems)
+					if length < minimum {
+						if len(started) != 0 {
+							t.Fatal("short whole reference submitted a task")
+						}
+						if length > 0 && !tt.HasText(fmt.Sprintf("at least %d nt", minimum)) {
+							t.Fatal("whole reference did not show the catalog minimum")
+						}
+					} else if len(started) != 1 || started[0].GeneID == nil || *started[0].GeneID != "short" ||
+						started[0].Mode == nil || *started[0].Mode != "genome" || len(started[0].Windows) != 0 {
+						t.Fatalf("whole reference must use minSequenceNt, not window/paste minimums: %+v", started)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestStructureTwoRegionReferenceLengths(t *testing.T) {
+	for _, engine := range []string{engineCPLcofold, engineComrades} {
+		for _, lengths := range [][2]int{{0, 30}, {30, 0}, {1, 1}} {
+			t.Run(fmt.Sprintf("%s/%d+%d", engine, lengths[0], lengths[1]), func(t *testing.T) {
+				a, f, tt, p := stSetupPage(t, 2200)
+				ref := p.geneReference()
+				ref.RNASequences = slices.Clone(ref.RNAs())
+				for i := range ref.RNASequences {
+					if ref.RNASequences[i].Name == p.gene {
+						ref.RNASequences[i].Length = lengths[0]
+					}
+				}
+				ref.RNASequences = append(ref.RNASequences, model.Sequence{Name: "short-partner", Length: lengths[1]})
+				tt.Frame()
+				if engine == engineCPLcofold {
+					mustClick(t, tt, "CPLcofold, two regions as two strands (one RNA or two RNAs)")
+				} else {
+					mustClick(t, tt, "COMRADES(ViennaRNA or mfold), guided by RNAcofold of the chimeras")
+					mustClick(t, tt, "Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)")
+				}
+				mustClick(t, tt, "Region 1")
+				tt.Type(fmt.Sprintf("1-%d", max(lengths[0], 30)))
+				mustClick(t, tt, "Region 2 RNA")
+				mustClick(t, tt, fmt.Sprintf("short-partner · %d nt", lengths[1]))
+				mustClick(t, tt, "Region 2")
+				tt.Type(fmt.Sprintf("1-%d", max(lengths[1], 30)))
+				if lengths == [2]int{1, 1} {
+					// Replace both inputs through the controls, not by calling a parser.
+					for _, field := range []string{"Region 1", "Region 2"} {
+						mustClick(t, tt, field)
+						tt.TypeKey(ui.Cmd, ui.KeyA, "")
+						tt.Type("1-1")
+					}
+				}
+				mustClick(t, tt, "Run fold")
+				csSettle(a, tt)
+				started := f.startedKinds()
+				t.Logf("reference lengths=%v engine=%s; StartTask calls=%d; problems=%q", lengths, engine, len(started), p.plan().problems)
+				if lengths[0] == 0 || lengths[1] == 0 {
+					if len(started) != 0 {
+						t.Fatalf("empty reference submitted regions %+v", started[0].Regions)
+					}
+				} else if len(started) != 1 || !slices.Equal(started[0].Regions, []core.Region{
+					{GeneID: africaGene, Start: 1, End: 1}, {GeneID: "short-partner", Start: 1, End: 1},
+				}) {
+					t.Fatalf("single-base references must submit their exact fragments: %+v", started)
+				}
+			})
+		}
 	}
 }
 
@@ -312,8 +633,9 @@ func TestStructurePairFromCompare(t *testing.T) {
 }
 
 func TestParseWindowsAndCoverage(t *testing.T) {
-	windows, errs := stParseWindows("1-400, 2700:2300; 50 90", 10807)
-	if len(errs) != 0 || len(windows) != 3 || windows[1] != (core.Window{Start: 2300, End: 2700}) || windows[2] != (core.Window{Start: 50, End: 90}) {
+	windows, errs := stParseWindows("1-10, 2300:2700; 50 90\n1-9; 30–1; 0-10", 2700)
+	if !slices.Equal(windows, []core.Window{{Start: 1, End: 10}, {Start: 2300, End: 2700}, {Start: 50, End: 90}}) ||
+		!slices.Equal(errs, []string{"1-9 is shorter than 10 nt.", "30–1: start must not exceed end.", "0-10 is outside 1-2700."}) {
 		t.Fatalf("windows %+v errs %v", windows, errs)
 	}
 	// A window fold against a whole-RNA fold: pairs count inside the window only.
@@ -376,7 +698,7 @@ func TestStructureShadeByChimeraSupport(t *testing.T) {
 
 func TestStructureMemoryClaim(t *testing.T) {
 	genome := core.TaskStartRequest{Kind: "structure"}
-	if got := StructureMemClaim(genome, 10807, false); got != 16677 {
+	if got := StructureMemClaim(genome, 10807, false); got != core.CPLfoldMemoryMB(10807, false) {
 		t.Fatalf("genome claim %d MiB", got)
 	}
 	workers := uint32(2)
@@ -460,7 +782,7 @@ func TestStructureComradesForm(t *testing.T) {
 	}
 	p.advancedOpen = true
 	tt.Frame()
-	for _, text := range []string{"Ranked stem constraints", "Original default: 75.", "Randomised folds", "Seed", "Evidence", "SUB · 2 datasets merged",
+	for _, text := range []string{"Ranked stem constraints", "Strongest RNAcofold stems tried as hard pairs, 1 to 75. Default 75.", "Randomised folds", "Seed", "Evidence", "SUB · 2 datasets merged",
 		"75 stems · 0 randomised folds · seed HYB2-Web", "• COMRADES(ViennaRNA) folds at most 3,000 nt at a time, as the web: fold windows of that size."} {
 		if !strings.Contains(strings.Join(tt.Texts(), "\n"), text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())
@@ -556,11 +878,15 @@ func TestStructureCofoldForm(t *testing.T) {
 	}
 	p.model, p.beam = "DP09", 20
 	for text, want := range map[string]string{"": "Region 2: enter it as start-end, for example 1-45.",
-		"1086-1090": "Region 2: at least 10 nt.", "1-20000": "Region 2: 1-20000 is outside 1-10,807."} {
+		"1090-1086": "Region 2: 1090-1086: start must not exceed end.", "1-20000": "Region 2: 1-20000 is outside 1-10,807."} {
 		p.region2 = text
 		if pl := p.plan(); !slices.Contains(pl.problems, want) {
 			t.Fatalf("%q: %q", text, pl.problems)
 		}
+	}
+	p.region2 = "1086-1090"
+	if pl := p.plan(); len(pl.problems) != 0 || pl.req.Regions[1] != (core.Region{GeneID: africaGene, Start: 1086, End: 1090}) {
+		t.Fatalf("a five-base independent fragment is valid: %+v %q", pl.req.Regions, pl.problems)
 	}
 	// COMRADES(ViennaRNA) of the same two regions joined by the web's spacer
 	p.region2, p.seqOnly, p.engine, p.mode = "1086-1134", false, engineComrades, "paired"

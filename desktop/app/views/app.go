@@ -508,7 +508,7 @@ func (a *App) Genes() []model.Sequence {
 		return nil
 	}
 	if r := a.Project.Reference(a.Selected.ReferenceID); r != nil {
-		return r.Sequences
+		return r.RNAs()
 	}
 	return nil
 }

@@ -1478,6 +1478,9 @@ func stPairsTable(records []structureRecord, engine string, hard map[[2]int]bool
 			break
 		}
 	}
+	if stScoredEstimator(records) != "" {
+		header = append(slices.Clone(header), "support_kernel", "raw_pair_count")
+	}
 	return append([][]string{header}, stPairsRows(records, engine, hard, hybEvidence)...)
 }
 
@@ -1515,7 +1518,7 @@ func stStrandCells(r structureRecord, i, j int) []string {
 // empty for CPLfold; pair_layer is "nested" and engine "ViennaRNA" for the
 // ViennaRNA engines.
 func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool, hybEvidence bool) [][]string {
-	weights := stWeights(records)
+	scored := stScoredEstimator(records) != ""
 	cplfold := engine == "CPLfold" || engine == "CPLcofold"
 	kind := "none"
 	switch {
@@ -1531,6 +1534,11 @@ func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool,
 	}
 	var rows []row
 	for _, r := range records {
+		rowKind, bonuses := kind, stWeights([]structureRecord{r})
+		cand, counts := r.scoredCandidate(), r.rawPairCounts()
+		if cand != nil {
+			rowKind = "saturating_hyb_bonus"
+		}
 		base := func(pos int) string {
 			if k := r.localOf(pos); k >= 1 {
 				return string(r.Sequence[k-1])
@@ -1540,7 +1548,7 @@ func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool,
 		energy := stEnergyText(r.Energy, "")
 		for _, pr := range stRecordPairs(r) {
 			support := "0"
-			if w, ok := weights[[2]int{pr.I, pr.J}]; ok && kind != "none" && !math.IsNaN(w) {
+			if w, ok := bonuses[[2]int{pr.I, pr.J}]; ok && rowKind != "none" && !math.IsNaN(w) {
 				support = jsNumber(w)
 			}
 			cofold, mfe, layer := support, energy, "nested"
@@ -1562,9 +1570,16 @@ func stPairsRows(records []structureRecord, engine string, hard map[[2]int]bool,
 				}
 			}
 			cells := []string{strconv.Itoa(i), left, strconv.Itoa(j), right, left + "–" + right, fixed,
-				cofold, mfe, kind, support, layer, energy, engine}
+				cofold, mfe, rowKind, support, layer, energy, engine}
 			if r.Cutpoint > 0 {
 				cells = append(cells, stStrandCells(r, i, j)...)
+			}
+			if scored {
+				kernel, count := "", ""
+				if n := counts[[2]int{pr.I, pr.J}]; cand != nil && n != nil {
+					kernel, count = cand.SupportKernel, strconv.Itoa(*n)
+				}
+				cells = append(cells, kernel, count)
 			}
 			rows = append(rows, row{i, cells})
 		}
@@ -1584,7 +1599,8 @@ var stExportFiles = map[string]string{
 	"dbn": "rna-secondary-structure.dbn", "ct": "rna-secondary-structure.ct", "bpseq": "rna-secondary-structure.bpseq",
 	"varna": "rna-secondary-structure-varna.sh", "pairs": "rna-secondary-structure-pairs.tsv",
 	"report": "rna-secondary-structure-report.json", "evidence": "rna-cofold-evidence.tsv",
-	"constraints": "hyb-guided-folding-constraints.tsv", "ensemble": "hyb-guided-structure-ensemble.tsv",
+	"scored_evidence": "rna-cofold-scored-evidence.tsv",
+	"constraints":     "hyb-guided-folding-constraints.tsv", "ensemble": "hyb-guided-structure-ensemble.tsv",
 	"bonus": "cplfold-bonus-matrix.tsv", "candidates": "cplfold-candidates.tsv", "candidates_json": "cplfold-candidates.json",
 	"iris": "iris-ensemble.tsv",
 }
@@ -1690,7 +1706,7 @@ func (p *structurePage) exportPairsTSV(a *structureResult) {
 // what was folded, how, and each window's structure.
 func (p *structurePage) exportReport(a *structureResult) {
 	var windows []map[string]any
-	for _, r := range a.Records {
+	for i, r := range a.Records {
 		start, end := r.span()
 		pairs, knotted := 0, 0
 		for _, pr := range stRecordPairs(r) {
@@ -1705,6 +1721,7 @@ func (p *structurePage) exportReport(a *structureResult) {
 			// CPLcofold: strand A is the first cutpoint nucleotides
 			window["cutpoint"], window["regions"] = r.Cutpoint, r.Segments
 		}
+		a.addComradesExport(window, i)
 		windows = append(windows, window)
 	}
 	payload := map[string]any{

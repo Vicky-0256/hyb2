@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,16 +26,13 @@ const (
 	// The desktop limits (desktop/runtime/iris.py). The web's 300 nt and
 	// 2,000 rows are browser limits; the cost here is the ViennaRNA folds,
 	// at most stIrisMaxFoldsFor of them.
-	stIrisMaxNT    = 1000
-	stIrisMaxRows  = 50_000
-	stIrisMaxFolds = 1000 // the web's bound, the least the desktop allows
-	stIrisFoldsCap = 6000
-	stIrisBudgetS  = 900.0
-	stIrisMaxC     = 50
-	stIrisMaxSets  = 20_000
-	// the web's defaults
-	stIrisDefaultK, stIrisDefaultC, stIrisDefaultFraction, stIrisDefaultStems = 2, 20, 0.75, "4 5 6 7"
-	stIrisSourceURL                                                           = "https://github.com/JY-Zhou/IRIS"
+	stIrisMaxNT     = 1000
+	stIrisMaxRows   = 50_000
+	stIrisMaxFolds  = 1000 // the web's bound, the least the desktop allows
+	stIrisFoldsCap  = 6000
+	stIrisBudgetS   = 900.0
+	stIrisMaxSets   = 20_000
+	stIrisSourceURL = "https://github.com/JY-Zhou/IRIS"
 	// the licence of the IRIS snapshot the adaptation follows (third_party/iris)
 	stIrisLicenceURL = "https://github.com/JY-Zhou/IRIS/blob/4057c5ac0e038144e414c27f01cfd7b5a5be926f/LICENSE"
 )
@@ -53,12 +51,19 @@ type stIrisState struct {
 }
 
 func (s *stIrisState) defaults() {
-	s.init, s.k, s.c, s.fraction, s.stems = true, stIrisDefaultK, stIrisDefaultC, stIrisDefaultFraction, stIrisDefaultStems
+	d := engineSettings(engineIRIS).Defaults
+	s.init, s.k, s.c, s.fraction, s.stems = true, d.K, d.C, d.Fraction, d.KRange
+}
+
+func (s *stIrisState) stemLabel() string {
+	return nameOr(s.stems, engineSettings(engineIRIS).Defaults.KRange)
 }
 
 func (s *stIrisState) changed() bool {
-	return s.k != stIrisDefaultK || s.c != stIrisDefaultC || s.fraction != stIrisDefaultFraction ||
-		strings.Join(strings.Fields(s.stems), " ") != stIrisDefaultStems
+	d := engineSettings(engineIRIS).Defaults
+	stems, msg := stIrisParseStems(s.stems)
+	defaultStems, _ := stIrisParseStems(d.KRange)
+	return s.k != d.K || s.c != d.C || s.fraction != d.Fraction || msg != "" || !slices.Equal(stems, defaultStems)
 }
 
 // stIrisDiag is the runtime's diagnosis of a region (iris.diagnose): the web's
@@ -138,29 +143,25 @@ func stIrisHardPairs(a *structureResult) map[[2]int]bool {
 	return out
 }
 
-// stIrisParseStems reads "4 5 6 7" as the web (trim, split on spaces and
-// commas, each an integer from 2 to 12); the problem when one is not.
+// stIrisParseStems reads space- or comma-separated stem lengths, using the catalog default for an empty field.
 func stIrisParseStems(text string) ([]int, string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		text = stIrisDefaultStems // String(p.kRange || "4 5 6 7")
+	settings := engineSettings(engineIRIS)
+	text = nameOr(text, settings.Defaults.KRange)
+	r := settings.Ranges["stemLength"]
+	invalid := fmt.Sprintf("IRIS stem length must be an integer from %s.", r)
+	if !settings.KRangeGrammar.List.MatchString(text) {
+		return nil, invalid
 	}
-	seen := map[int]bool{}
 	var out []int
-	for _, token := range strings.FieldsFunc(text, func(r rune) bool { return r == ' ' || r == ',' }) {
+	for _, token := range settings.KRangeGrammar.Number.FindAllString(text, -1) {
 		n, err := strconv.ParseFloat(token, 64)
-		if err != nil || n != math.Trunc(n) || n < 2 || n > 12 {
-			return nil, "IRIS stem length must be an integer from 2 to 12."
+		if err != nil || n != math.Trunc(n) || n < r[0] || n > r[1] {
+			return nil, invalid
 		}
-		if !seen[int(n)] {
-			seen[int(n)] = true
-			out = append(out, int(n))
-		}
+		out = append(out, int(n))
 	}
-	if len(out) == 0 {
-		return nil, "IRIS stem length must be an integer from 2 to 12."
-	}
-	return out, ""
+	slices.Sort(out)
+	return slices.Compact(out), ""
 }
 
 // irisPlan: one reference region with its chimeras, the web's IRIS checks
@@ -171,19 +172,22 @@ func (p *structurePage) irisPlan(pl *foldPlan) {
 		s.defaults()
 	}
 	k, c := int(s.k), int(s.c)
-	switch {
-	case s.k != math.Trunc(s.k) || k < 1 || k > 3:
-		pl.problems = append(pl.problems, "IRIS ensemble size K must be an integer from 1 to 3.")
-	case s.c != math.Trunc(s.c) || c < k || c > stIrisMaxC:
-		pl.problems = append(pl.problems, fmt.Sprintf("IRIS candidate count C must be an integer from %d to %d.", k, stIrisMaxC))
+	ranges := engineSettings(engineIRIS).Ranges
+	kr, cr, q := ranges["K"], ranges["C"], ranges["fraction"]
+	cr[0] = max(cr[0], s.k)
+	if s.k != math.Trunc(s.k) || s.k < kr[0] || s.k > kr[1] {
+		pl.problems = append(pl.problems, fmt.Sprintf("IRIS ensemble size K must be an integer from %s.", kr))
+	} else {
+		cr.check(pl, "IRIS candidate count C", s.c, true)
 	}
-	if s.fraction < 0 || s.fraction >= 1 || math.IsNaN(s.fraction) {
-		pl.problems = append(pl.problems, "IRIS support quantile must be at least 0 and below 1.")
+	if !(q[0] <= s.fraction && s.fraction < q[1]) {
+		pl.problems = append(pl.problems, fmt.Sprintf("IRIS support quantile must be at least %g and below %g.", q[0], q[1]))
 	}
-	if _, msg := stIrisParseStems(s.stems); msg != "" {
+	stems, msg := stIrisParseStems(s.stems)
+	if msg != "" {
 		pl.problems = append(pl.problems, msg)
 	}
-	pl.req.Parameters = map[string]any{"K": k, "C": c, "fraction": s.fraction, "kRange": strings.TrimSpace(s.stems)}
+	pl.req.Parameters = map[string]any{"K": k, "C": c, "fraction": s.fraction, "kRange": stems}
 	pl.limits = []string{
 		fmt.Sprintf("IRIS desktop adaptation · up to %s nt and %s evidence rows · 37 °C · nested structures.",
 			FormatNumber(stIrisMaxNT), FormatNumber(stIrisMaxRows)),
@@ -303,7 +307,7 @@ func (p *structurePage) useIrisRegion() {
 func (p *structurePage) irisCheckLines(line func(label, value string), pl foldPlan) {
 	s := &p.iris
 	line("Engine", fmt.Sprintf("IRIS ensemble: K %d of up to C %d candidates, support quantile %g, stem lengths %s; ViennaRNA, 37 °C, minimum loop 3",
-		int(s.k), int(s.c), s.fraction, strings.Join(strings.Fields(nameOr(strings.TrimSpace(s.stems), stIrisDefaultStems)), " ")))
+		int(s.k), int(s.c), s.fraction, s.stemLabel()))
 	folds := stIrisMaxFoldsFor(pl.lengths)
 	line("Time", "up to about "+FormatDuration(stIrisFoldSeconds(pl.lengths)*float64(folds))+
 		" (one ViennaRNA fold per stem and stem pair, at most "+FormatNumber(int64(folds))+"; usually far fewer)")
@@ -347,24 +351,19 @@ func (p *structurePage) irisAdvanced(c *ui.Context) {
 	changed := s.changed()
 	ui.Collapsible(c.Key("st-iris"), "IRIS settings", &p.advancedOpen, func() {
 		ui.Column(c).Gap(10).Padding(6, 0, 0, 0).Children(func() {
-			row := func(key, label string, value *float64, lo, hi, step float64, help string) {
-				ui.Column(c).Gap(2).Children(func() {
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, label).FontSize(12).Bold().Width(150)
-						ui.NumberInput(c.Key(key), value, lo, hi, step).Grow(1).Label(label)
-					})
-					ui.Text(c, help).FontSize(12).TextColor(t.TextMuted)
-				})
-			}
-			row("st-iris-k", "Ensemble size K", &s.k, 1, 3, 1, "Representative structures in the ensemble, 1 to 3. Default 2.")
-			row("st-iris-c", "Candidate count C", &s.c, 1, stIrisMaxC, 1, "Clustered candidates the ensemble is chosen from, K to 50. Default 20.")
-			row("st-iris-q", "Support quantile", &s.fraction, 0, 0.99, 0.05,
-				"A stem is kept when its mean support exceeds this quantile of the positive support. Default 0.75.")
+			settings := engineSettings(engineIRIS)
+			r, d := settings.Ranges, settings.Defaults
+			kr, cr, q := r["K"], r["C"], r["fraction"]
+			foldNumberRow(c, "st-iris-k", "Ensemble size K", &s.k, kr, 1, fmt.Sprintf("Representative structures in the ensemble, %s. Default %g.", kr, d.K))
+			foldNumberRow(c, "st-iris-c", "Candidate count C", &s.c, cr, 1, fmt.Sprintf("Clustered candidates the ensemble is chosen from, K to %g. Default %g.", cr[1], d.C))
+			q[1] -= 0.01 // the control uses hundredths; the plan accepts any value below the exclusive maximum
+			foldNumberRow(c, "st-iris-q", "Support quantile", &s.fraction, q, 0.05,
+				fmt.Sprintf("A stem is kept when its mean support exceeds this quantile of the positive support. Default %g.", d.Fraction))
 			Field(c, "Stem lengths", func() {
-				ui.TextInput(c.Key("st-iris-stems"), &s.stems).Placeholder(stIrisDefaultStems).Label("Stem lengths").Width(200)
-				ui.Text(c, "Stem lengths to enumerate, 2 to 12, separated by spaces or commas. Default 4 5 6 7.").FontSize(12).TextColor(t.TextMuted)
+				ui.TextInput(c.Key("st-iris-stems"), &s.stems).Placeholder(d.KRange).Label("Stem lengths").Width(200)
+				ui.Text(c, fmt.Sprintf("Stem lengths to enumerate, %s, separated by spaces or commas. Default %s.", r["stemLength"], d.KRange)).FontSize(12).TextColor(t.TextMuted)
 			})
-			ui.Text(c, "K selects 1–3 representative structures. C retains up to 50 candidates; higher values increase work. "+
+			ui.Text(c, fmt.Sprintf("K selects %g–%g representative structures. C retains up to %g candidates; higher values increase work. ", kr[0], kr[1], cr[1])+
 				"All compatible single- and double-stem constraints are considered within the desktop limits.").FontSize(12).TextColor(t.TextMuted)
 			if ui.Button(c, "Reset to defaults").Disabled(!changed).Clicked() {
 				s.defaults()
@@ -372,7 +371,7 @@ func (p *structurePage) irisAdvanced(c *ui.Context) {
 		})
 	})
 	summary := fmt.Sprintf("K %d · C %d · support quantile %g · stem lengths %s · 37 °C",
-		int(s.k), int(s.c), s.fraction, strings.Join(strings.Fields(s.stems), " "))
+		int(s.k), int(s.c), s.fraction, s.stemLabel())
 	color := t.TextMuted
 	if changed {
 		summary += " · changed from the defaults"

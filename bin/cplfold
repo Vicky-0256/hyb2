@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "third_party/cplfold"))
-from Utils.cli_input import read_sequence_file as _read_sequence_file
+from cplfold.sequence import read_sequence_file as _read_sequence_file
 
 
 DEFAULT_MAX_SEQUENCE_LENGTH = 1000
@@ -82,7 +82,8 @@ def _default_numba_cache_directory() -> Path:
 
 def main(cofold_entry: bool = False) -> None:
     repository = Path(__file__).resolve().parents[1]
-    entrypoint = repository / "third_party" / "cplfold" / ("CPLcofold.py" if cofold_entry else "CPLfold.py")
+    import_root = repository / "third_party" / "cplfold"
+    entrypoint = import_root / "cplfold" / "cli.py"
     if not entrypoint.is_file():
         raise SystemExit(f"Vendored CPLfold entry point is missing: {entrypoint}")
 
@@ -98,9 +99,15 @@ def main(cofold_entry: bool = False) -> None:
     if "NUMBA_CACHE_DIR" not in os.environ:
         os.environ["NUMBA_CACHE_DIR"] = str(_default_numba_cache_directory())
 
+    # Equivalent to ``python -m cplfold.cli``, but with the package's import root
+    # instead of the working directory as sys.path[0], as a script path would give.
+    bootstrap = (
+        "import sys; sys.path[0] = sys.argv.pop(1); from cplfold.cli import main; "
+        f"sys.exit(main(cofold_entry={bool(cofold_entry)}))"
+    )
     os.execv(
         sys.executable,
-        [sys.executable, str(entrypoint), *forwarded_arguments],
+        [sys.executable, "-c", bootstrap, str(import_root), *forwarded_arguments],
     )
 
 

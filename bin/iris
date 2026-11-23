@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Predict the IRIS ensemble for a single reference region from HYB evidence."""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--reference', required=True, type=Path, help='reference FASTA')
+    parser.add_argument('--hyb', required=True, type=Path, action='append', help='HYB evidence file (repeat for multiple samples)')
+    parser.add_argument('--gene', help='reference record ID (required for multi-record FASTA)')
+    parser.add_argument('--start', type=int, help='first reference position, 1-based inclusive (default: 1)')
+    parser.add_argument('--end', type=int, help='last reference position, inclusive (default: end of record)')
+    parser.add_argument('--ensemble-size', dest='K', help='number of ensemble members (K)')
+    parser.add_argument('--candidate-count', dest='C', help='maximum number of clustered candidates (C)')
+    parser.add_argument('--fraction', help='support quantile')
+    parser.add_argument('--stem-lengths', nargs='+', help='space- or comma-separated decimal stem lengths')
+    parser.add_argument('-o', '--output', type=Path, help='write JSON to a new file (default: stdout)')
+    args = parser.parse_args()
+
+    root = Path(__file__).resolve().parents[1]
+    # the repository, the Hyb2 settings (hyb2analysis) and the cplfold package
+    sys.path[:0] = [str(root), str(root / 'pipeline'), str(root / 'third_party' / 'cplfold')]
+    from pipeline.hyb2analysis import iris
+    from pipeline.hyb2analysis.reference import reference_sequence, validate_window
+
+    try:
+        gene, sequence = reference_sequence(args.reference.resolve(strict=True), args.gene)
+        start = 1 if args.start is None else args.start
+        end = len(sequence) if args.end is None else args.end
+        if args.start is not None or args.end is not None:
+            validate_window(start, end, len(sequence))
+        if end - start + 1 > iris.MAX_IRIS_NT:
+            raise ValueError(f'IRIS region exceeds {iris.MAX_IRIS_NT} nt')
+        if not sequence:
+            raise ValueError('empty reference sequence')
+        params = iris.parameters(dict(K=args.K, C=args.C, fraction=args.fraction, kRange=' '.join(args.stem_lengths or [])))
+        arms, diagnosis = iris.region_arms([path.resolve(strict=True) for path in args.hyb], gene, sequence, start, end)
+        if not arms:
+            raise ValueError(diagnosis['message'] or 'No eligible HYB evidence inside this region.')
+        region = sequence[start - 1:end]
+        result = iris.run(region, arms, params)
+        del result['support']  # internal dense NumPy matrix, not an ensemble member
+        import RNA
+        result.update(region=dict(gene=gene, start=start, end=end, sequence=region),
+                      coordinates='1-based inclusive reference region; member pairs and constraints are 1-based within the region',
+                      viennaVersion=RNA.__version__, diagnosis=diagnosis)
+        payload = json.dumps(result, allow_nan=False) + '\n'
+        if args.output is None:
+            sys.stdout.write(payload)
+        else:
+            handle = args.output.open('x', encoding='utf-8')
+            try:
+                with handle:
+                    handle.write(payload)
+            except BaseException:
+                args.output.unlink(missing_ok=True)
+                raise
+    except ModuleNotFoundError as exc:
+        parser.exit(1, f'iris: {exc}. Install NumPy and ViennaRNA in the active Python environment.\n')
+    except (OSError, EOFError, ValueError) as exc:
+        parser.exit(1, f'iris: {exc}\n')
+
+
+if __name__ == '__main__':
+    main()

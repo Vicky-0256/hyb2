@@ -1,16 +1,31 @@
 #!/bin/bash
+set -eo pipefail
+usage() { echo "usage: ${0##*/} reference.fa|reference.fasta" >&2; exit 2; }
+[[ $# == 1 && -f "$1" && -r "$1" ]] || usage
+source_path=$1
+[[ "$source_path" == /* ]] || source_path=$PWD/$source_path
+case "$source_path" in *.[fF][aA]|*.[fF][aA][sS][tT][aA]) prefix=${source_path%.*} ;; *) usage ;; esac
+[[ -n "${prefix##*/}" ]] || usage
 
-if [ $# -ne 1 ]; then
-echo "usage: $0 input.fasta"
-exit 1
-fi
+bin_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+source "$bin_dir/cli_stage.sh"
+hyb2_fix_path
+work=$(mktemp -d "${source_path%/*}/.hyb2-db.XXXXXXXX")
+trap hyb2_cleanup_stage EXIT
+trap 'exit 1' HUP INT TERM
+cd -- "$work"
+LC_ALL=C awk -f "$bin_dir/mapping_fasta.awk" < "$source_path" > reference.fasta
+fasta2tab.awk reference.fasta > reference.tab
+bowtie2-build reference.fasta index
 
-if [ ! -e $1 ]; then
-echo "usage: $0 input.fasta"
-echo "error: $1 file not found"
-exit 1
-fi
-
-bowtie2-build $1 ${1/.fasta/}
-fasta2tab.awk $1 > ${1/fasta/tab}
-
+extension=bt2; other=bt2l
+if [[ -f index.1.bt2l ]]; then extension=bt2l; other=bt2; fi
+outputs=(reference.tab "$prefix.tab")
+for part in 1 2 3 4 rev.1 rev.2; do
+    [[ -s "index.$part.$extension" ]] || { echo "Missing index shard: $part.$extension" >&2; exit 1; }
+    if [[ -e "$prefix.$part.$other" || -L "$prefix.$part.$other" ]]; then
+        echo "Conflicting index family: $prefix.$part.$other" >&2; exit 1
+    fi
+    outputs+=("index.$part.$extension" "$prefix.$part.$extension")
+done
+python3 "$bin_dir/sam2hyb_publish.py" --work="$work" --protect="$source_path" -- "${outputs[@]}"

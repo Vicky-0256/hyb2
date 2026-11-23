@@ -1,22 +1,26 @@
 #!/bin/bash
 set -e
 # Format a reference beside its source. The caller can request the actual
-# output path with -P and reserve another input with each -p path.
-usage() { echo "usage: fasta_hyb2_formatting -i reference.fasta [-P] [-p protected-input ...]" >&2; exit 2; }
+# output path with -P and reserve another input with each -p path. hyb2 uses
+# -S to stage the contents until the whole conversion is ready to publish.
+usage() { echo "usage: fasta_hyb2_formatting -i reference.fasta [-P] [-p protected-input ...] [-S staging-directory]" >&2; exit 2; }
 input=
 print_path=
+stage_dir=
 protected=()
-while getopts "i:p:P" option; do
+while getopts "i:p:PS:" option; do
     case "$option" in
         i) input=$OPTARG ;;
         p) protected+=("$OPTARG") ;;
         P) print_path=1 ;;
+        S) stage_dir=$OPTARG ;;
         *) usage ;;
     esac
 done
 shift $((OPTIND - 1))
 [[ $# == 0 && -n "$input" ]] || usage
 [[ -f "$input" && -r "$input" ]] || { echo "Cannot read FASTA: $input" >&2; exit 1; }
+[[ -z "$stage_dir" || -d "$stage_dir" ]] || usage
 
 case "$input" in
     *.[fF][aA]|*.[fF][aA][sS][tT][aA]) output=${input%.*}.hyb.fasta ;;
@@ -26,13 +30,20 @@ protected+=("$input")
 while :; do
     conflict=
     for path in "${protected[@]}"; do
-        if [[ "$output" -ef "$path" ]]; then conflict=1; break; fi
+        if [[ "$output" -ef "$path" || "$output" == "$path" ]]; then conflict=1; break; fi
     done
+    # References in the same directory share a private staging directory.
+    # Ask the filesystem about names already taken, including case aliases.
+    destination=$output
+    if [[ -n "$stage_dir" ]]; then
+        destination=$stage_dir/${output##*/}
+        if [[ -e "$destination" || -L "$destination" ]]; then conflict=1; fi
+    fi
     [[ -n "$conflict" ]] || break
     output=${output%.fasta}.formatted.fasta
 done
-[[ ! -d "$output" ]] || { echo "FASTA output is a directory: $output" >&2; exit 1; }
-staged=$(mktemp "${output}.tmp.XXXXXX")
+[[ ( ! -e "$output" && ! -L "$output" ) || -f "$output" ]] || { echo "Not a regular FASTA output: $output" >&2; exit 1; }
+staged=$(mktemp "${destination}.tmp.XXXXXX")
 trap 'rm -f -- "$staged"' EXIT
 trap 'exit 1' HUP INT TERM
 
@@ -40,22 +51,30 @@ trap 'exit 1' HUP INT TERM
 # this in one pass also works with POSIX awk and wrapped or CRLF input.
 LC_ALL=C awk '{
     sub(/\r$/, "")
+    if (/^[#;]/) next
     gsub(/_/, "-")
     gsub(/protein-coding/, "mRNA")
     gsub(/[|]/, "_")
     gsub(/__/, "_unknown_")
     if (/^>/) {
+        if (keep && !sequence) exit 1
         if (keep) printf "\n"
         seen = 1
         keep = $0 !~ /unknown|pseudogene/
-        if (keep) print
+        sequence = 0
+        if (keep) {
+            if ($0 ~ /^>[[:space:]]*$/) exit 1
+            retained++
+            print
+        }
     } else if (keep) {
+        if ($0 ~ /[^[:space:]]/) sequence = 1
         printf "%s", $0
     } else if (!seen && $0 !~ /^[[:space:]]*$/) {
         exit 1
     }
 }
-END { if (!seen) exit 1 }' < "$input" > "$staged" || { echo "Could not format FASTA: $input" >&2; exit 1; }
+END { if (!retained || (keep && !sequence)) exit 1 }' < "$input" > "$staged" || { echo "Could not format FASTA: $input" >&2; exit 1; }
 chmod =rw "$staged"
-mv -f -- "$staged" "$output"
+mv -f -- "$staged" "$destination"
 if [[ -n "$print_path" ]]; then printf '%s\n' "$output"; fi

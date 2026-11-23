@@ -28,7 +28,7 @@ print_help() {
     echo "conda activate <hyb2/hyb2_macOS/hyb2_macOS-arm>"
     echo "hyb2 -i <Input.Fastq/SAM> -d <Fasta_File> -o <Output_ID> -a <GENE_ID_1> -x <START_COORD_1> -y <START_COORD_2> -l <Length_of_Fragments>"
     echo "Options:"
-    echo "  -i   Input Fastq/SAM file"
+    echo "  -i   Input .fastq/.fq (optionally .gz), .fasta/.fa, .sam, or completed .hyb file"
     echo "  -d, -1   First reference FASTA used for mapping and folding"
     echo "  -2   Optional second reference FASTA (defaults to the first)"
     echo "  -o   Output ID"
@@ -87,6 +87,7 @@ print_help() {
 }
 
 # parsing command line options
+IN_FILE= DB_1= DB_2= OUT=
 while getopts "i:d:1:2:o:v:m:h:a:b:q:x:y:l:j:r:e:" OPTION
 do
      case $OPTION in
@@ -145,122 +146,162 @@ fi
 #Step1 --------------------------------------------------------------------------------------------------------------------------------------------------
 #Process SAM files to Hyb format
 
-# Keep all original paths reserved when deriving either formatted reference.
 original_ref_1=$DB_1
 original_ref_2=$DB_2
 for input in "$IN_FILE" "$original_ref_1" "$original_ref_2"; do
     [[ -z "$input" || ( -f "$input" && -r "$input" ) ]] || { echo "Cannot read input: $input" >&2; exit 1; }
 done
+mapper=
+case "$IN_FILE" in
+    *.fastq.gz|*.fq.gz) mapper=bowtie2_fastq.gz2sam ;;
+    *.fastq|*.fq) mapper=bowtie2_fastq2sam ;;
+    *.fasta|*.fa) mapper=bowtie2_fasta2sam ;;
+    *.sam|*.hyb) ;;
+    *) echo "Unsupported hyb2 input format: $IN_FILE" >&2; exit 2 ;;
+esac
+if [[ "$IN_FILE" == *.hyb ]]; then
+    OUT=${IN_FILE%.hyb}  # downstream tools use the explicit HYB, even if -o was given
+    echo "Hyb Format As Input Detected"
+elif [[ -z "${OUT##*/}" || "${OUT##*/}" == . || "${OUT##*/}" == .. ]]; then
+    echo "hyb2 requires an output prefix with a filename (-o)." >&2; exit 2
+elif [[ "$OUT.hyb" -ef "$IN_FILE" || "$OUT.hyb" -ef "$original_ref_1" || "$OUT.hyb" -ef "$original_ref_2" ]]; then
+    echo "HYB output conflicts with an input: $OUT.hyb" >&2; exit 1
+fi
+
+bin_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+work=
+temporary=()
+outputs=()
+protected=(--protect="$IN_FILE" --protect="$original_ref_1" --protect="$original_ref_2")
+cleanup() {
+    local directory
+    if [[ -n "$work" && -e "$work/.publishing" ]]; then
+        printf 'hyb2: interrupted publication; recover staged files and originals in %s\n' "${temporary[@]}" >&2
+    else
+        for directory in "${temporary[@]}"; do rm -rf -- "$directory"; done
+    fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+if [[ -f "$OUT.hyb" ]]; then
+    convert=0
+    protected+=(--protect="$OUT.hyb")
+    echo "Hyb File Exist. Next Step."
+else
+    convert=1
+    if [[ -n "$mapper" && -z "$DB_1" ]]; then echo "Mapping requires a reference (-d)." >&2; exit 2; fi
+    work=$(mktemp -d "$(dirname -- "$OUT")/.hyb2.XXXXXXXX")
+    temporary+=("$work")
+fi
+
+# Stage each reference on its own filesystem. Mapping/energy read the new
+# contents privately; folding and plotting later receive the published names.
+ref_stage=
 prepare_reference() {
-    local source=$1 status
+    local source=$1 parent status
     shift
+    ref_target=$source
+    ref_input=$source
+    [[ -n "$source" ]] || return 0
     if grep -q '|' < "$source"; then
-        fasta_hyb2_formatting -P -i "$source" -p "$IN_FILE" -p "$original_ref_1" -p "$original_ref_2" "$@"
+        parent=$(dirname -- "$source")
+        if [[ -z "$ref_stage" || ! "$parent" -ef "$ref_stage/.." ]]; then
+            ref_stage=$(mktemp -d "$parent/.hyb2-ref.XXXXXXXX")
+            temporary+=("$ref_stage")
+            [[ -n "$work" ]] || work=$ref_stage
+        fi
+        ref_target=$(fasta_hyb2_formatting -i "$source" -S "$ref_stage" -P \
+            -p "$IN_FILE" -p "$original_ref_1" -p "$original_ref_2" -p "$OUT.hyb" "$@")
+        ref_input=$ref_stage/${ref_target##*/}
+        outputs+=("$ref_input" "$ref_target")
     else
         status=$?
         [[ $status == 1 ]] || return "$status"
-        printf '%s\n' "$source"
     fi
 }
-if [[ -n "$original_ref_1" ]]; then DB_1=$(prepare_reference "$original_ref_1"); fi
+prepare_reference "$original_ref_1"
+DB_1=$ref_target
+conversion_ref=$ref_input
 if [[ -z "$original_ref_2" || "$original_ref_2" -ef "$original_ref_1" ]]; then
     DB_2=$DB_1
 else
-    DB_2=$(prepare_reference "$original_ref_2" -p "$DB_1")
+    prepare_reference "$original_ref_2" -p "$DB_1"
+    DB_2=$ref_target
 fi
 
-#If input is in fastq/gz or fasta format, convert to SAM using bowtie2
-if [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  == *fastq.gz ]]
-then
-	if bowtie2_fastq.gz2sam -i "$IN_FILE" -d "$DB_1" -o "$OUT"
-        then
-                echo "SAM file generated"
-        else
-                echo "Error! Aborting! Check input arguments." 1>&2
-                exit 1
+if (( convert )); then
+    stage=$work/converted
+    if [[ -n "$mapper" ]]; then
+        status=0
+        "$mapper" -i "$IN_FILE" -d "$conversion_ref" -o "$stage" || status=$?
+        # Diagnostics describe the attempted run, including mapper failures.
+        # Never let the log replace an explicit input or another result.
+        if [[ -f "$stage.blast.err" ]]; then
+            python3 "$bin_dir/sam2hyb_publish.py" --work="$work" "${protected[@]}" --protect="$OUT.sam" \
+                --protect="${OUT}_homodimers.hyb" --protect="${OUT}_hybrids.hyb_stats.txt" \
+                --protect="$DB_1" --protect="$DB_2" -- "$stage.blast.err" "$OUT.blast.err"
         fi
-elif [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  == *fastq ]]
-then
-	if bowtie2_fastq2sam -i "$IN_FILE" -d "$DB_1" -o "$OUT"
-	then
-		echo "SAM file generated"
-	else
-		echo "Error! Aborting! Check input arguments." 1>&2
-		exit 1
-	fi
-elif [ ! -f "$OUT.hyb" ] && [[ "$IN_FILE"  == *fasta ]]
-then
-	if bowtie2_fasta2sam -i "$IN_FILE" -d "$DB_1" -o "$OUT"
-	then
-		echo "SAM file generated"
-	else
-		echo "Error! Aborting! Check input arguments." 1>&2
-		exit 1
-	fi
-fi
-
-if [[ "$IN_FILE" == *.hyb ]]; then
-    OUT=${IN_FILE%.hyb}
-    echo "Hyb Format As Input Detected"
-fi
-SAM=$OUT.sam
-convert_sam() {
-    sam2hyb -i "$1" -d "$DB_1" -o "$OUT" -v "$hval" -g "$gmax" -h "$hmax" -e "$ENERGY" -r "$ENERGY_FOLD" || {
-        echo "SAM conversion failed." >&2
-        return 1
+        (( status == 0 )) || { echo "Mapping failed." >&2; exit "$status"; }
+        [[ -f "$stage.sam" && -s "$stage.sam" ]] || { echo "Mapping did not produce a nonempty SAM file." >&2; exit 1; }
+        echo "SAM file generated"
+    else
+        sam_filt "$IN_FILE" > "$stage.sam"
+    fi
+    # For a SAM input it is legitimate for the traditional filtered .sam
+    # output to name the input (or an alias). Keep that original in place.
+    if [[ -n "$mapper" || ( ! "$OUT.sam" -ef "$IN_FILE" && ! "$OUT.sam" -ef "$original_ref_1" && ! "$OUT.sam" -ef "$original_ref_2" ) ]]; then
+        outputs+=("$stage.sam" "$OUT.sam")
+    fi
+    sam2hyb -i "$stage.sam" -d "$conversion_ref" -o "$stage" -v "$hval" -g "$gmax" -h "$hmax" -e "$ENERGY" -r "$ENERGY_FOLD" || {
+        echo "SAM conversion failed." >&2; exit 1
     }
-    [[ -f "$OUT.hyb" ]] || { echo "SAM conversion did not produce $OUT.hyb." >&2; return 1; }
-    echo "Hyb File Generated."
-}
-if [[ -f "$OUT.hyb" ]]; then
-    echo "Hyb File Exist. Next Step."
-elif [[ "$IN_FILE" == *.sam ]]; then
-    (
-        work=$(mktemp -d "${SAM}.filter.XXXXXX")
-        trap 'rm -rf -- "$work"' EXIT
-        trap 'exit 1' HUP INT TERM
-        filtered=$work/filtered.sam
-        sam_filt "$IN_FILE" > "$filtered"
-        [[ ! -d "$SAM" ]] || { echo "SAM output is a directory: $SAM" >&2; exit 1; }
-        convert_sam "$filtered"
-        # Publish the traditional filtered .sam only after successful conversion
-        # and only if that path is separate from every input.
-        if [[ ! "$SAM" -ef "$IN_FILE" && ! "$SAM" -ef "$original_ref_1" && ! "$SAM" -ef "$original_ref_2" ]]; then
-            mv -f -- "$filtered" "$SAM"
-        fi
-    )
-else
-    convert_sam "$SAM"
+    # The publisher requires every staged file and installs the completion marker last.
+    for suffix in _homodimers.hyb _hybrids.hyb_stats.txt .hyb; do
+        outputs+=("$stage$suffix" "$OUT$suffix")
+    done
 fi
+if (( ${#outputs[@]} )); then
+    python3 "$bin_dir/sam2hyb_publish.py" --work="$work" "${protected[@]}" -- "${outputs[@]}"
+fi
+if (( convert )); then echo "Hyb File Generated."; fi
+cleanup
+trap - EXIT HUP INT TERM
 
 #Step2 --------------------------------------------------------------------------------------------------------------------------------------------------
 #Plot contact density map of selected genes
-if [ ! -z $GENE_1 ]
+# Plot helpers do not otherwise know about the original reads or about a
+# reference whose formatted copy was used for this run.
+plot_protect=()
+for path in "$IN_FILE" "$original_ref_1" "$original_ref_2" "$DB_1" "$DB_2" "$OUT.sam" "$OUT.blast.err" "${OUT}_homodimers.hyb" "${OUT}_hybrids.hyb_stats.txt"; do
+    if [[ -n "$path" ]]; then plot_protect+=(-p "$path"); fi
+done
+coverage() { hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" "$@" "${plot_protect[@]}"; }
+if [[ -n "$GENE_1" ]]
 then
-	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1"
+	coverage -a "$GENE_1"
 fi
 
-if [ ! -z $GENE_2 ]
+if [[ -n "$GENE_2" ]]
 then
-	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1" -b "$GENE_2"
+	coverage -a "$GENE_1" -b "$GENE_2"
 else
 	echo "To plot contact density map of second gene, add to command: -b <GENE_ID_2>." 1>&2
 fi
 
-if [ -z $GENE_2 ] && [ -z $Y_COORD ] && [ ! -z $LEN ]
+if [[ -z "$GENE_2" && -z "$Y_COORD" && -n "$LEN" ]]
 then
 	X_END=$(($X_COORD+$LEN-1))
-	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1" -w "$X_COORD" -x "$X_END" -y "$X_COORD" -z "$X_END"
-elif [ -z $GENE_2 ] && [ ! -z $Y_COORD ] && [ ! -z $LEN ]
-then
-	X_END=$(($X_COORD+$LEN-1))
-	Y_END=$(($Y_COORD+$LEN-1))
-	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1" -w "$X_COORD" -x "$X_END" -y "$Y_COORD" -z "$Y_END"
-elif [ ! -z $GENE_2 ] && [ ! -z $Y_COORD ] && [ ! -z $LEN ]
+	coverage -a "$GENE_1" -w "$X_COORD" -x "$X_END" -y "$X_COORD" -z "$X_END"
+elif [[ -z "$GENE_2" && -n "$Y_COORD" && -n "$LEN" ]]
 then
 	X_END=$(($X_COORD+$LEN-1))
 	Y_END=$(($Y_COORD+$LEN-1))
-	hyb2_coverage -i "$OUT.hyb" -q "$LIMIT" -a "$GENE_1" -b "$GENE_2" -w "$X_COORD" -x "$X_END" -y "$Y_COORD" -z "$Y_END"
+	coverage -a "$GENE_1" -w "$X_COORD" -x "$X_END" -y "$Y_COORD" -z "$Y_END"
+elif [[ -n "$GENE_2" && -n "$Y_COORD" && -n "$LEN" ]]
+then
+	X_END=$(($X_COORD+$LEN-1))
+	Y_END=$(($Y_COORD+$LEN-1))
+	coverage -a "$GENE_1" -b "$GENE_2" -w "$X_COORD" -x "$X_END" -y "$Y_COORD" -z "$Y_END"
 else
 	echo "To plot zoomed-in contact density map, add to command: -x <X_Coord> -y <Y_Coord> -l <Length>." 1>&2
 fi
@@ -269,7 +310,7 @@ fi
 if [[ -n "$GENE_1" && -n "$DB_1" ]]; then
 	viewpoint_args=(-i "$OUT.hyb" -a "$GENE_1" -1 "$DB_1")
 	if [[ -n "$GENE_2" ]]; then viewpoint_args+=(-b "$GENE_2" -2 "$DB_2"); fi
-	plot_viewpoint "${viewpoint_args[@]}"
+	plot_viewpoint "${viewpoint_args[@]}" "${plot_protect[@]}"
 fi
 #Step3 --------------------------------------------------------------------------------------------------------------------------------------------------
 #Generate RNA Secondary Structure of selected strands

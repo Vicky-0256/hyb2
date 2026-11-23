@@ -7,6 +7,7 @@ hval=0.1
 gmax=4
 hmax=10
 ENERGY=1
+SAM= DB= OUT=
 while getopts "i:d:o:v:g:h:r:e:" option; do
     case "$option" in
         i) SAM=$OPTARG ;;
@@ -21,7 +22,7 @@ while getopts "i:d:o:v:g:h:r:e:" option; do
     esac
 done
 shift $((OPTIND - 1))
-if [[ $# != 0 || ! -f "${SAM:-}" || -z "${OUT:-}" || ! "$ENERGY" =~ ^[01]$ ]]; then
+if [[ $# != 0 || ! -f "${SAM:-}" || -z "${OUT##*/}" || "${OUT##*/}" == . || "${OUT##*/}" == .. || ! "$ENERGY" =~ ^[01]$ ]]; then
     echo "Usage: sam2hyb -i reads.sam -o output-prefix [-d reference.fasta] [-e 0|1]" >&2
     exit 2
 fi
@@ -36,22 +37,17 @@ case "$SAM" in /*) ;; *) SAM="$PWD/$SAM" ;; esac
 case "${DB:-}" in /*|"") ;; *) DB="$PWD/$DB" ;; esac
 case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
 bin_dir=$(cd -- "$(dirname -- "$0")" && pwd)
-export PATH="$PATH:$bin_dir"
+source "$bin_dir/cli_stage.sh"
+hyb2_fix_path
 work=$(mktemp -d "$(dirname -- "$OUT")/.sam2hyb.XXXXXXXX")
-cleanup() {
-    if [[ -e "$work/.publishing" ]]; then
-        echo "sam2hyb: interrupted publication; recover staged files and originals in $work" >&2
-    else
-        rm -rf -- "$work"
-    fi
-}
-trap cleanup EXIT
+trap hyb2_cleanup_stage EXIT
+trap 'exit 1' HUP INT TERM
 cd -- "$work"
 ln -s -- "$SAM" input.sam
 
 echo "Processing SAM file..."
 sam2blast_3 input.sam > read.blast
-collapse_blast_2.sh read.blast > read.collapse.blast
+env SHELLOPTS=pipefail collapse_blast_2.sh read.blast > read.collapse.blast
 mtophits_blast read.collapse.blast > read_mtophits.blast
 create_reference_file.pl read_mtophits.blast > read_mtophits.ref
 remove_duplicate_hits_blast.pl read_mtophits.ref read_mtophits.blast | rm_blast_dup > read_singleE.blast
@@ -76,9 +72,10 @@ if [[ "$ENERGY" == 1 ]]; then
     add_dG_hyb_2.pl "$hybrids" cofold.vienna pairs.fa > read_dg.hyb
     hybrids=read_dg.hyb
 fi
-collapse_hyb_2.sh "$hybrids" | filter_homopolymers.awk | hyb_mapped_position_overlaps_3.awk | hyb_chim_types.awk > result.hyb
+env SHELLOPTS=pipefail collapse_hyb_2.sh "$hybrids" | filter_homopolymers.awk | hyb_mapped_position_overlaps_3.awk | hyb_chim_types.awk > result.hyb
 awk '$16>=5' result.hyb > homodimers.hyb
 hybrid_stats_2 result.hyb > stats.txt
 
-python "$bin_dir/sam2hyb_publish.py" "$OUT" "$SAM" "${DB:-}"
+python3 "$bin_dir/sam2hyb_publish.py" --work="$work" --protect="$SAM" --protect="${DB:-}" -- \
+    homodimers.hyb "${OUT}_homodimers.hyb" stats.txt "${OUT}_hybrids.hyb_stats.txt" result.hyb "$OUT.hyb"
 echo "Converted to hyb format."

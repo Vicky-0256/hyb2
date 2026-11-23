@@ -30,5 +30,5 @@ $0==""{
 }
 
 END{
-	printf "\n"
+	if (!first_line) printf "\n"
 }

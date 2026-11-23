@@ -16,6 +16,11 @@ from typing import Callable, Dict, Iterable, Iterator, List, Optional, TextIO, T
 
 from . import awk
 
+if __package__ == "hyb2pipe":  # standalone: PYTHONPATH=pipeline python -m hyb2pipe
+    from hyb2analysis.reference import FASTA_NAMES, hyb2_reference_name, unindent_fasta_header, unique_fasta_id
+else:
+    from ..hyb2analysis.reference import FASTA_NAMES, hyb2_reference_name, unindent_fasta_header, unique_fasta_id
+
 BOWTIE2_ARGS = ["-D", "20", "-R", "3", "-N", "0", "-L", "16", "-k", "20", "--local", "-i", "S,1,0.50",
                 "--score-min", "L,18,0", "--ma", "1", "--np", "0", "--mp", "2,2", "--rdg", "5,1", "--rfg", "5,1", "--reorder"]
 
@@ -31,8 +36,20 @@ def open_text(path: Path) -> TextIO:
 
 
 def needs_formatting(fasta: Path) -> bool:
+    """Check unique mapping IDs under the format selected by *all* headers."""
+    ids = []
+    formatted = False
     with open_text(fasta) as handle:
-        return any("|" in line for line in handle)
+        for raw in handle:
+            line = unindent_fasta_header(raw)
+            if line.startswith(">"):
+                formatted = formatted or FASTA_NAMES["trigger"] in line
+                words = line[1:].split(None, 1)
+                ids.append(words[0] if words else "")
+    seen = set()
+    for name in ids:
+        unique_fasta_id(name, formatted, seen)
+    return formatted
 
 
 def format_reference(lines: Iterable[str]) -> List[str]:
@@ -40,10 +57,7 @@ def format_reference(lines: Iterable[str]) -> List[str]:
     sequence lines, and drop ``unknown``/``pseudogene`` records (GNU sed
     ``/re/,+1 d``).  Returns lines without newlines; the original wrote no
     final newline."""
-    renamed = []
-    for raw in lines:
-        line = raw.rstrip("\n").replace("_", "-").replace("protein-coding", "mRNA").replace("|", "_")
-        renamed.append(line.replace("__", "_unknown_"))
+    renamed = (hyb2_reference_name(unindent_fasta_header(raw.rstrip("\n"))) for raw in lines)
     # awk: first line + "\n", headers as "\n" + header + "\n", sequence lines unterminated
     text = "".join((line + "\n") if number == 0 else ("\n" + line + "\n") if line.startswith(">") else line
                    for number, line in enumerate(renamed))

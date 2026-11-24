@@ -165,7 +165,7 @@ class SupportKernelTests(unittest.TestCase):
     def test_gaussian_sums_weak_tails_before_threshold(self):
         import numpy as np
         from hyb2analysis.iris import support_matrix
-        from cplfold.bonus import build_cofold_bonus_matrix
+        from cplfold.bonus import bonus_from_arms
 
         # Ten distinct blocks share centres (12, 48) and sigma=1. At (6, 48)
         # each adds exp(-18), below the cutoff; their sum is just above it.
@@ -181,7 +181,7 @@ class SupportKernelTests(unittest.TestCase):
             # change a surviving cell. Also check the dedicated boundary tests.
             fast, _ = self.web.build_hyb_bonus_matrix_fast(n, Counter(blocks), cutpoint=cutpoint)
             dense = (self.web.build_hyb_bonus_matrix(n, blocks)[0] if cutpoint is None else
-                     build_cofold_bonus_matrix(n, cutpoint, blocks))
+                     bonus_from_arms(n, blocks, cutpoint=cutpoint))
             for matrix in (dense, fast):
                 np.testing.assert_array_equal(matrix > 0, iris > 0)
                 np.testing.assert_allclose(matrix, iris, atol=1e-14, rtol=0)

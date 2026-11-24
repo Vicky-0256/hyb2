@@ -252,67 +252,75 @@ class CofoldEnergyTests(unittest.TestCase):
 class CofoldIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cplfold, _, cls.energy_module = _load_modules()
+        _load_modules()
+        cls.cplfold = importlib.import_module("cplfold")
 
     def fold(self, sequence, **kwargs):
-        options = dict(verbose=False, beam_size=30, max_phase1=4, max_phase2=2, allow_pseudoknot=False)
+        """cplfold.fold() as plain dicts; two strands keep max_phase2=2 unless given."""
+        options = dict(beam_size=30, max_phase1=4, pseudoknots=False)
+        if "&" in sequence:
+            options["max_phase2"] = 2
         options.update(kwargs)
-        return self.cplfold.two_phase_pseudoknot_fold(sequence, **options)
+        return [prediction.as_dict() for prediction in self.cplfold.fold(sequence, **options)]
 
-    def test_ampersand_and_explicit_cutpoint_return_identical_results(self):
+    def test_ampersand_and_partner_return_identical_results(self):
         marked = self.fold("GGG&CCC")
-        compact = self.fold("GGGCCC", cutpoint=3)
-        self.assertEqual(marked, compact)
-        wrapper = importlib.import_module("cplfold._internal.cofold")
-        self.assertEqual(marked, wrapper.cofold("ggg", "ccc", verbose=False, beam_size=30, max_phase1=4, max_phase2=2, allow_pseudoknot=False))
+        partner = [prediction.as_dict() for prediction in self.cplfold.fold(
+            "ggg", partner="ccc", beam_size=30, max_phase1=4, max_phase2=2, pseudoknots=False)]
+        self.assertEqual(marked, partner)
         self.assertEqual(marked[0]["structure"], "(((&)))")
         self.assertAlmostEqual(marked[0]["energy"], -2.5, places=6)
         self.assertEqual(marked[0]["cutpoint"], 3)
-        self.assertEqual(marked[0]["strand_lengths"], [3, 3])
-        self.assertEqual(marked[0]["intermolecular_pairs"], 3)
-        self.assertEqual(marked[0]["energy_metadata"]["energy_kind"], "thermodynamic")
+        self.assertEqual(marked[0]["pairs"], [(0, 5), (1, 4), (2, 3)])
+        self.assertEqual(marked[0]["details"]["strand_lengths"], [3, 3])
+        self.assertEqual(marked[0]["details"]["intermolecular_pairs"], 3)
+        self.assertEqual(marked[0]["details"]["energy_metadata"]["energy_kind"], "thermodynamic")
 
     def test_long_first_strand_order_and_coordinate_metadata_are_preserved(self):
         result = self.fold("GGGAAACCCGGG&CCC")[0]
         self.assertEqual(result["structure"].index("&"), 12)
         self.assertEqual(result["cutpoint"], 12)
-        self.assertEqual(result["strand_lengths"], [12, 3])
-        self.assertEqual(result["intermolecular_pairs"], sum(i < 12 <= j for i, j in _pairs(result["structure"])))
+        self.assertEqual(result["details"]["strand_lengths"], [12, 3])
+        self.assertEqual(result["pairs"], _pairs(result["structure"]))
+        self.assertEqual(result["details"]["intermolecular_pairs"], sum(i < 12 <= j for i, j in _pairs(result["structure"])))
         self.assertTrue(any(j < 12 for i, j in _pairs(result["structure"])))
-        self.assertGreater(result["intermolecular_pairs"], 0)
+        self.assertGreater(result["details"]["intermolecular_pairs"], 0)
 
     def test_no_binding_result_retains_separate_intramolecular_fold(self):
         result = self.fold("AAAA&GGGAAACCC")[0]
         self.assertEqual(result["structure"], "....&(((...)))")
-        self.assertEqual(result["intermolecular_pairs"], 0)
+        self.assertEqual(result["details"]["intermolecular_pairs"], 0)
         self.assertAlmostEqual(result["energy"], -1.2, places=6)
 
     def test_physical_energy_is_independent_of_read_bonus_alpha(self):
         matrix = np.zeros((6, 6))
         for left, right in ((0, 5), (1, 4), (2, 3)):
             matrix[left, right] = matrix[right, left] = 2.0
-        plain = self.fold("GGG&CCC", bonus_matrix=matrix, alpha=0.0)[0]
-        guided = self.fold("GGG&CCC", bonus_matrix=matrix, alpha=0.5)[0]
+        plain = self.fold("GGG&CCC", bonus=matrix, alpha=0.0)[0]
+        guided = self.fold("GGG&CCC", bonus=matrix, alpha=0.5)[0]
         self.assertEqual(plain["structure"], guided["structure"])
         self.assertAlmostEqual(plain["energy"], -2.5, places=6)
         self.assertAlmostEqual(guided["energy"], plain["energy"], places=8)
         self.assertAlmostEqual(guided["score"] - plain["score"], -3.0, places=6)
 
     def test_generated_interstrand_pseudoknot_scores_one_association(self):
-        results = self.fold("GGGG&CCCC", allow_pseudoknot=True, max_phase1=12, max_phase2=3, energy_delta=12.0)
+        results = self.fold("GGGG&CCCC", pseudoknots=True, max_phase1=12, max_phase2=3, energy_delta=12.0)
         candidate = next(item for item in results if item["structure"] == "(([[&))]]")
-        self.assertEqual(candidate["type"], "pseudoknot")
-        self.assertEqual(candidate["intermolecular_pairs"], 4)
-        self.assertEqual(candidate["phase2_association_cost"], 0.0)
-        self.assertAlmostEqual(candidate["energy_breakdown"]["duplex_init"], 4.1, places=6)
+        self.assertEqual(candidate["kind"], "pseudoknot")
+        self.assertEqual(candidate["energy_model"], "DP09")
+        self.assertEqual(candidate["details"]["intermolecular_pairs"], 4)
+        self.assertEqual(candidate["details"]["phase2_association_cost"], 0.0)
+        self.assertAlmostEqual(candidate["details"]["energy_breakdown"]["duplex_init"], 4.1, places=6)
         self.assertAlmostEqual(candidate["energy"], 1.766, places=6)
-        self.assertEqual(candidate["energy_metadata"]["energy_kind"], "heuristic")
+        self.assertEqual(candidate["details"]["energy_metadata"]["energy_kind"], "heuristic")
+        nested = next(item for item in results if item["kind"] == "phase1")
+        self.assertEqual(nested["energy_model"], "Turner 2004")
 
     def test_beta_reranks_real_pseudoknot_candidates_without_changing_physical_energy(self):
         sequence = SINGLE_SEQUENCE + "&A"
-        plain = self.fold(sequence, allow_pseudoknot=True, max_phase1=6, energy_delta=8.0, beta=0.0)
-        biased = self.fold(sequence, allow_pseudoknot=True, max_phase1=6, energy_delta=8.0, beta=0.75)
-        self.assertTrue(any(item["type"] == "pseudoknot" for item in plain))
+        plain = self.fold(sequence, pseudoknots=True, max_phase1=6, energy_delta=8.0, beta=0.0)
+        biased = self.fold(sequence, pseudoknots=True, max_phase1=6, energy_delta=8.0, beta=0.75)
+        self.assertTrue(any(item["kind"] == "pseudoknot" for item in plain))
         by_structure = {item["structure"]: item for item in plain}
         self.assertEqual(set(by_structure), {item["structure"] for item in biased})
         self.assertNotEqual([item["structure"] for item in plain], [item["structure"] for item in biased])
@@ -320,22 +328,21 @@ class CofoldIntegrationTests(unittest.TestCase):
             original = by_structure[item["structure"]]
             self.assertAlmostEqual(item["energy"], original["energy"], places=8)
             expected = item["energy"]
-            if item["type"] == "pseudoknot":
+            if item["kind"] == "pseudoknot":
                 expected += 0.75 * item["phase1_energy"]
-                self.assertIn("&", item["phase1_struct"])
-                self.assertIn("&", item["phase2_struct"])
+                self.assertIn("&", item["phase1_structure"])
+                self.assertIn("&", item["phase2_structure"])
             self.assertAlmostEqual(item["effective_energy"], expected, places=8)
         self.assertEqual([item["effective_energy"] for item in biased], sorted(item["effective_energy"] for item in biased))
 
     def test_invalid_boundaries_and_bases_are_rejected(self):
-        cases = (
-            ("&GC", None), ("GC&", None), ("G&C&G", None),
-            ("GC", 0), ("GC", 2), ("GC", -1), ("GC", 1.5),
-            ("GC", True), ("G&C", 2), ("GX&C", None),
-        )
-        for sequence, cutpoint in cases:
-            with self.subTest(sequence=sequence, cutpoint=cutpoint), self.assertRaises(ValueError):
-                self.fold(sequence, cutpoint=cutpoint)
+        for sequence in ("&GC", "GC&", "G&C&G", "GX&C"):
+            with self.subTest(sequence=sequence), self.assertRaises(self.cplfold.InputError):
+                self.fold(sequence)
+        normalise = importlib.import_module("cplfold.sequence").normalise_sequence
+        for sequence, cutpoint in (("GC", 0), ("GC", 2), ("GC", -1), ("GC", 1.5), ("GC", True), ("G&C", 2)):
+            with self.subTest(sequence=sequence, cutpoint=cutpoint), self.assertRaises(self.cplfold.InputError):
+                normalise(sequence, cutpoint)
 
     def test_bonus_matrix_uses_compact_coordinates_and_rejects_bad_values(self):
         malformed = [np.zeros((7, 7)), np.zeros((5, 5)), np.full((6, 6), np.nan), np.full((6, 6), np.inf)]
@@ -343,14 +350,17 @@ class CofoldIntegrationTests(unittest.TestCase):
         asymmetric[0, 5] = 1.0
         malformed.append(asymmetric)
         for matrix in malformed:
-            with self.subTest(shape=matrix.shape), self.assertRaises(ValueError):
-                self.fold("GGG&CCC", bonus_matrix=matrix, alpha=0.5)
+            with self.subTest(shape=matrix.shape), self.assertRaises(self.cplfold.InputError):
+                self.fold("GGG&CCC", bonus=matrix, alpha=0.5)
 
     def test_single_chain_reference_remains_unchanged(self):
-        results = self.fold(SINGLE_SEQUENCE, allow_pseudoknot=True, beam_size=20, max_phase1=3)
+        results = self.fold(SINGLE_SEQUENCE, pseudoknots=True, beam_size=20, max_phase1=3)
         self.assertEqual(results[0]["structure"], SINGLE_STRUCTURE)
         self.assertAlmostEqual(results[0]["energy"], -8.0204, places=4)
         self.assertNotIn("&", results[0]["structure"])
+        self.assertIsNone(results[0]["cutpoint"])
+        self.assertEqual(results[0]["energy_model"], "DP09")
+        self.assertEqual(results[0]["details"], {})
 
 
 class CofoldBonusTests(unittest.TestCase):
@@ -358,9 +368,10 @@ class CofoldBonusTests(unittest.TestCase):
     def setUpClass(cls):
         _load_modules()
         cls.module = importlib.import_module("cplfold.bonus")
+        cls.InputError = importlib.import_module("cplfold").InputError
 
     def test_interstrand_reads_have_no_intramolecular_gaussian_leakage(self):
-        matrix = self.module.build_cofold_bonus_matrix(8, 4, [(2, 4, 5, 7)])
+        matrix = self.module.bonus_from_arms(8, [(2, 4, 5, 7)], cutpoint=4)
         np.testing.assert_array_equal(matrix[:4, :4], np.zeros((4, 4)))
         np.testing.assert_array_equal(matrix[4:, 4:], np.zeros((4, 4)))
         np.testing.assert_array_equal(matrix, matrix.T)
@@ -369,7 +380,7 @@ class CofoldBonusTests(unittest.TestCase):
     def test_intramolecular_reads_have_no_cross_nick_gaussian_leakage(self):
         for arms, start, end in ([(1, 2, 3, 4)], 0, 4), ([(5, 6, 7, 8)], 4, 8):
             with self.subTest(arms=arms):
-                matrix = self.module.build_cofold_bonus_matrix(8, 4, arms)
+                matrix = self.module.bonus_from_arms(8, arms, cutpoint=4)
                 np.testing.assert_array_equal(matrix[:4, 4:], np.zeros((4, 4)))
                 np.testing.assert_array_equal(matrix[4:, :4], np.zeros((4, 4)))
                 self.assertGreater(np.max(matrix[start:end, start:end]), 0.0)
@@ -379,8 +390,8 @@ class CofoldBonusTests(unittest.TestCase):
 
     def test_duplicate_reads_add_support_before_the_log_transform(self):
         arms = [(2, 3, 6, 7)]
-        once = self.module.build_cofold_bonus_matrix(8, 4, arms)
-        twice = self.module.build_cofold_bonus_matrix(8, 4, arms * 2)
+        once = self.module.bonus_from_arms(8, arms, cutpoint=4)
+        twice = self.module.bonus_from_arms(8, arms * 2, cutpoint=4)
         # This distinguishes summing support then log1p from summing log bonuses.
         np.testing.assert_allclose(twice, np.log1p(2 * np.expm1(once)), atol=2e-7)
         self.assertAlmostEqual(float(once.max()), math.log(2.0), places=6)
@@ -389,13 +400,45 @@ class CofoldBonusTests(unittest.TestCase):
     def test_individual_read_arms_must_not_span_the_nick(self):
         malformed = [(3, 5, 6, 8), (1, 2, 4, 6), (0, 2, 6, 7), (1, 2, 6, 9), (1.0, 2, 6, 7)]
         for arm in malformed:
-            with self.subTest(arm=arm), self.assertRaises(ValueError):
-                self.module.build_cofold_bonus_matrix(8, 4, [arm])
+            with self.subTest(arm=arm), self.assertRaises(self.InputError):
+                self.module.bonus_from_arms(8, [arm], cutpoint=4)
 
     def test_empty_reads_give_a_zero_bonus_in_compact_coordinates(self):
-        matrix = self.module.build_cofold_bonus_matrix(8, 4, [])
+        matrix = self.module.bonus_from_arms(8, [], cutpoint=4)
         self.assertEqual(matrix.shape, (8, 8))
         self.assertFalse(np.any(matrix))
+
+    def test_one_strand_arms_spread_over_the_whole_sequence(self):
+        matrix = self.module.bonus_from_arms(8, [(1, 2, 7, 8), (1, 2, 7, 8)])
+        expected = self.module.gaussian_bonus_matrix(8, {(1, 2, 7, 8): 2})
+        np.testing.assert_array_equal(matrix, expected)
+        np.testing.assert_array_equal(matrix, matrix.T)
+        self.assertGreater(matrix[0, 7], 0.0)
+        # Without a strand break, the Gaussian tails cross position 4.
+        self.assertGreater(np.max(matrix[:4, 4:7]), 0.0)
+        np.testing.assert_array_equal(
+            self.module.bonus_from_arms(8, {(1, 2, 7, 8): 2}, sigma=0.5),
+            self.module.gaussian_bonus_matrix(8, {(1, 2, 7, 8): 2}, sigma=0.5))
+        self.assertAlmostEqual(self.module.gaussian_sigma({(1, 2, 7, 8): 2}), 2 / 6)
+
+    def test_bonus_functions_raise_input_error_for_invalid_arguments(self):
+        cases = (
+            lambda: self.module.bonus_from_arms(0, []),
+            lambda: self.module.bonus_from_arms(8, [(1, 2, 7, 9)]),
+            lambda: self.module.bonus_from_arms(8, [(1, 2, 7)]),
+            lambda: self.module.bonus_from_arms(8, 5),
+            lambda: self.module.bonus_from_arms(8, {(1, 2, 7, 8): 0}),
+            lambda: self.module.bonus_from_arms(8, [(1, 2, 7, 8)], cutpoint=8),
+            lambda: self.module.bonus_from_arms(8, [(1, 2, 7, 8)], sigma=0.0),
+            lambda: self.module.gaussian_bonus_matrix(8, [(1, 2, 7, 8)]),
+            lambda: self.module.gaussian_sigma({}),
+            lambda: self.module.gaussian_sigma({(1, 2, 7, "8"): 1}),
+            lambda: self.module.load_bonus_matrix_file(None, 8),
+            lambda: self.module.load_bonus_matrix_file("bonus.tsv", 0),
+        )
+        for index, call in enumerate(cases):
+            with self.subTest(case=index), self.assertRaises(self.InputError):
+                call()
 
 
 if __name__ == "__main__":

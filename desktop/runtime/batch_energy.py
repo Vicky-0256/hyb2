@@ -16,7 +16,7 @@ and 10, 13, 14; 1-based, inclusive, T read as U) and cofolded with
   arms form no pair keeps its energy (noted in the audit);
 * ``rnacofold``: ViennaRNA RNAcofold MFE, default model (37 C), the legacy
   hyb2 pipeline's method, in which each arm may also pair with itself;
-* ``cplcofold``: CPLcofold (``two_phase_cofold`` through
+* ``cplcofold``: CPLcofold (``cplfold.fold`` through
   web/cplfold/cplfold_web.py) with the web batch's settings: DP09, no HYB
   evidence, beam 20, energy delta 5, three phase-1 candidates, pseudoknots
   off;

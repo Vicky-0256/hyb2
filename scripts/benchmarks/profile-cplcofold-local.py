@@ -58,7 +58,7 @@ def main():
         if comparator.sha(ROOT / name) != digest:
             raise ValueError("CPLfold source differs from the validated benchmark")
     sys.path.insert(0, str(ROOT / "third_party/cplfold"))
-    import cplfold._internal.single as api
+    import cplfold
     import cplfold._internal.cofold_parser as parser_module
     import cplfold._internal.cofold_energy as energy_module
     from cplfold._internal.cofold_energy import CofoldEnergy
@@ -70,7 +70,7 @@ def main():
 
     def predict(row):
         a, b = row["compared_sequence"].split("&")
-        return api.cofold(a, b, beam_size=row["beam"], verbose=False, **benchmark.PARAMETERS)[0]
+        return cplfold.fold(a, partner=b, beam_size=row["beam"], **benchmark.PARAMETERS)[0].as_dict()
 
     def check(result, row):
         benchmark.check_signature(result, row)

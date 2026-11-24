@@ -1,30 +1,49 @@
 """Command-line interface for CPLfold (``cplfold``) and CPLcofold (``cplcofold``).
 
 Run as ``python -m cplfold.cli`` or through the ``cplfold`` and ``cplcofold``
-console scripts (:func:`main` and :func:`cofold_main`).
+console scripts (:func:`main` and :func:`cofold_main`). Invalid input, also in
+a sequence or bonus file, exits with status 2; a file that cannot be read
+exits with status 1.
 """
 
 import sys
 import argparse
-import math
 from pathlib import Path
 
 
 from .bonus import load_bonus_matrix_file
-from .models import COFOLD_MODELS, DEFAULT_MODELS
-from .sequence import normalise_sequence
-from ._internal.hotknots_energy import HotKnotsEnergy
-from ._internal.single import two_phase_pseudoknot_fold
-from ._internal.validation import CofoldInputError
+from .models import COFOLD_MODELS, MODELS, default_model
+from .sequence import add_strand_break, normalise_sequence, read_sequence_file
+from ._internal.defaults import FOLD_DEFAULTS, TWO_STRAND_MAX_PHASE2
+from ._internal.errors import InputError
+from ._internal.router import run
 
 
-def main(argv=None, *, cofold_entry=False):
-    """Shared CLI; the dedicated entry requires two strands and cofold defaults."""
-    from ._internal.cli_input import read_sequence_file
+def main(argv=None):
+    """The ``cplfold`` command: one strand, or two with '&', --sequence-two or --cutpoint."""
+    return _main(argv, cofold_entry=False)
+
+
+def cofold_main(argv=None):
+    """The ``cplcofold`` command: two strands only, and two-record FASTA files."""
+    return _main(argv, cofold_entry=True)
+
+
+def _file_error(error):
+    """The message alone: status 2 for invalid file contents, 1 when the file cannot be read."""
+    if isinstance(error, InputError):
+        print(error, file=sys.stderr)
+        raise SystemExit(2) from error
+    raise SystemExit(str(error)) from error
+
+
+def _main(argv, *, cofold_entry):
     from ._internal.cofold_options import mode_options
 
+    defaults = FOLD_DEFAULTS
     parser = argparse.ArgumentParser(
         prog="cplcofold" if cofold_entry else "cplfold",
+        allow_abbrev=False,
         description=("Two-strand CPLcofold prediction (default mode: pseudoknot)."
                      if cofold_entry else "CPLfold single-strand and two-strand prediction (default mode: pseudoknot)."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -37,19 +56,21 @@ Examples:
   bin/cplfold --sequence-file single-strand.fasta --alpha 0.5
 
 Modes and defaults:
-  pseudoknot (default): Phase 1 plus constrained Phase 2; max-phase1=10,
-    max-phase2=5, delta=5. Cofold pseudoknot scores are experimental.
+  pseudoknot (default): Phase 1 plus constrained Phase 2; max-phase1={defaults['max_phase1']},
+    max-phase2={TWO_STRAND_MAX_PHASE2} (two strands), delta={defaults['energy_delta']:g}. Cofold pseudoknot scores are experimental.
   standard: no Phase 2; max-phase1=1 and delta=0 unless explicitly overridden.
   --no-pseudoknot is a compatibility flag: it disables Phase 2 without changing
     candidate/window defaults. It conflicts with --mode pseudoknot.
-  Alpha defaults to 0 for every two-strand route and 0.5 for legacy single-strand
-    input. With a reads matrix, choose --alpha explicitly to guide the search.
+  --max-phase2 is for two strands; one strand runs one Phase 2 fold per Phase 1
+    structure.
+  Alpha defaults to {defaults['alpha']:g} on every route. With a reads matrix, choose --alpha
+    explicitly to guide the search.
   Beta adjusts pseudoknot ranking: effective_energy = energy + beta * phase1_energy.
     It does not alter physical energy and has no ranking effect without Phase 2.
 
 Energy models:
-  Cofold accepts {' or '.join(COFOLD_MODELS)} (default: {DEFAULT_MODELS['cplcofold']}); ordinary cofold uses Turner 37 C.
-  Single-strand-only models: {', '.join(m for m in HotKnotsEnergy.MODELS if m not in COFOLD_MODELS)}. The packaged Python
+  Cofold accepts {' or '.join(COFOLD_MODELS)} (default: {default_model(True)}); ordinary cofold uses Turner 37 C.
+  Single-strand-only models: {', '.join(m for m in MODELS if m not in COFOLD_MODELS)}. The packaged Python
     HotKnots-derived evaluator does not invoke a HotKnots executable.
   --model ranks pseudoknot runs. Pseudoknot-free single-strand runs rank every
     candidate with Turner 2004 (ViennaRNA rules), the model of the search itself.
@@ -72,25 +93,26 @@ Energy models:
     parser.add_argument('--bonus-matrix-file', type=str, default=None,
                         help='Sparse upper-triangle bonus matrix TSV file '
                              '(1-based prepared-sequence coordinates)')
-    parser.add_argument('--alpha', type=float, default=None,
-                        help='Reads scaling factor (default: 0 for cofold; 0.5 for single-strand input)')
-    parser.add_argument('-b', '--beam', type=int, default=100,
-                        help='Beam size for LinearFold (default: 100)')
+    parser.add_argument('--alpha', type=float, default=defaults['alpha'],
+                        help=f"Reads scaling factor (default: {defaults['alpha']:g})")
+    parser.add_argument('-b', '--beam', type=int, default=defaults['beam_size'],
+                        help=f"Beam size for LinearFold (default: {defaults['beam_size']})")
     parser.add_argument('-d', '--delta', type=float, default=None,
-                        help='Suboptimal energy window (default: 5; --mode standard: 0)')
+                        help=f"Suboptimal energy window (default: {defaults['energy_delta']:g}; --mode standard: 0)")
     parser.add_argument('-n1', '--max-phase1', type=int, default=None,
-                        help='Maximum Phase 1 structures (default: 10; --mode standard: 1)')
-    parser.add_argument('-n2', '--max-phase2', type=int, default=5,
-                        help='Cofold Phase 2 candidates per Phase 1 (default: 5); legacy single-strand uses one Phase 2 fold')
+                        help=f"Maximum Phase 1 structures (default: {defaults['max_phase1']}; --mode standard: 1)")
+    parser.add_argument('-n2', '--max-phase2', type=int, default=defaults['max_phase2'],
+                        help=f'Two-strand Phase 2 candidates per Phase 1 (default: {TWO_STRAND_MAX_PHASE2}); '
+                             'not accepted for one strand, which runs one Phase 2 fold')
     parser.add_argument('-o', '--output', type=str, default=None,
                         help='Output file path')
-    parser.add_argument('-m', '--model', type=str,
-                        choices=COFOLD_MODELS if cofold_entry else tuple(HotKnotsEnergy.MODELS),
+    parser.add_argument('-m', '--model', type=str, default=defaults['energy_model'],
+                        choices=COFOLD_MODELS if cofold_entry else MODELS,
                         help='Pseudoknot energy model for ranking when Phase 2 is on '
-                             f"(single-strand default: {DEFAULT_MODELS['cplfold']}; cofold default: {DEFAULT_MODELS['cplcofold']}); "
+                             f"(single-strand default: {default_model(False)}; cofold default: {default_model(True)}); "
                              'pseudoknot-free runs rank with Turner 2004')
-    parser.add_argument('--beta', type=float, default=0.0,
-                        help='Pseudoknot energy bonus factor (default: 0.0). '
+    parser.add_argument('--beta', type=float, default=defaults['beta'],
+                        help=f"Pseudoknot energy bonus factor (default: {defaults['beta']}). "
                              'For pseudoknots, effective_energy = pk_energy + beta * phase1_energy. '
                              'This changes ranking, not physical energy.')
     parser.add_argument('--no-pseudoknot', action='store_true',
@@ -106,75 +128,54 @@ Energy models:
     else:
         try:
             sequence = read_sequence_file(args.sequence_file, cofold=cofold_entry or args.cofold)
-        except (CofoldInputError, OSError) as error:
-            raise SystemExit(str(error)) from error  # the message alone, exit status 1
+        except (InputError, OSError) as error:
+            _file_error(error)
     if args.sequence_two is not None:
         if '&' in sequence or '&' in args.sequence_two:
             parser.error('--sequence-two requires two individual sequences without separators')
         sequence = sequence + '&' + args.sequence_two
     try:
         sequence, cutpoint = normalise_sequence(sequence, args.cutpoint)
-    except ValueError as error:
+    except InputError as error:
         parser.error(str(error))
     if (cofold_entry or args.cofold) and cutpoint is None:
         label = 'cplcofold' if cofold_entry else '--cofold'
         parser.error(label + ' requires two strands, separated by &, --sequence-two, or --cutpoint')
-    if args.model is None:
-        args.model = DEFAULT_MODELS['cplfold' if cutpoint is None else 'cplcofold']
 
-    # Validate known user options before invoking the folding implementation.
+    explicit = {}
+    if args.no_pseudoknot:
+        explicit['allow_pseudoknot'] = False
+    if args.max_phase1 is not None:
+        explicit['max_phase1'] = args.max_phase1
+    if args.delta is not None:
+        explicit['energy_delta'] = args.delta
     try:
-        explicit = {}
-        if args.no_pseudoknot:
-            explicit['allow_pseudoknot'] = False
-        if args.max_phase1 is not None:
-            explicit['max_phase1'] = args.max_phase1
-        if args.delta is not None:
-            explicit['energy_delta'] = args.delta
         options = mode_options(args.mode, explicit)
-        options.setdefault('allow_pseudoknot', True)
-        options.setdefault('max_phase1', 10)
-        options.setdefault('energy_delta', 5.0)
-        alpha = args.alpha if args.alpha is not None else (0.0 if cutpoint is not None else 0.5)
-        for name, value in (('beam', args.beam), ('max-phase1', options['max_phase1']), ('max-phase2', args.max_phase2)):
-            minimum = 0 if name == 'beam' else 1
-            if value < minimum:
-                raise ValueError(f'--{name} must be an integer >= {minimum}')
-        for name, value in (('alpha', alpha), ('beta', args.beta), ('delta', options['energy_delta'])):
-            if not math.isfinite(value):
-                raise ValueError(f'--{name} must be finite')
-            if value < 0:
-                raise ValueError(f'--{name} must be nonnegative')
-        if cutpoint is not None and args.model not in COFOLD_MODELS:
-            raise ValueError('Cofold supports ' + ' or '.join(sorted(COFOLD_MODELS)))
     except ValueError as error:
         parser.error(str(error))
 
-    bonus_matrix = None
+    bonus = None
     if args.bonus_matrix_file:
         try:
-            bonus_matrix = load_bonus_matrix_file(args.bonus_matrix_file, len(sequence))
-        except (CofoldInputError, OSError) as error:
-            raise SystemExit(str(error)) from error
+            bonus = load_bonus_matrix_file(args.bonus_matrix_file, len(sequence))
+        except (InputError, OSError) as error:
+            _file_error(error)
 
+    # The shared validator checks every option, on both routes.
     try:
-        results = two_phase_pseudoknot_fold(
-            seq=sequence, beam_size=args.beam, energy_model=args.model,
-            max_phase2=args.max_phase2, output_file=args.output,
-            verbose=not args.quiet, bonus_matrix=bonus_matrix,
-            alpha=alpha, beta=args.beta, cutpoint=cutpoint, **options,
+        results = run(
+            add_strand_break(sequence, cutpoint), output_file=args.output, verbose=not args.quiet,
+            pseudoknots=options.get('allow_pseudoknot', defaults['pseudoknots']),
+            energy_model=args.model, bonus=bonus, alpha=args.alpha, beta=args.beta, beam_size=args.beam,
+            energy_delta=options.get('energy_delta', defaults['energy_delta']),
+            max_phase1=options.get('max_phase1', defaults['max_phase1']), max_phase2=args.max_phase2,
         )
-    except CofoldInputError as error:
+    except InputError as error:
         parser.error(str(error))
 
     # A completed fold is successful even when no pseudoknot candidate wins.
     # Keep a non-zero status only for the unexpected empty-result case.
     return 0 if results else 1
-
-
-def cofold_main(argv=None):
-    """The ``cplcofold`` command: :func:`main` with ``cofold_entry=True``."""
-    return main(argv, cofold_entry=True)
 
 
 if __name__ == '__main__':

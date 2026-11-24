@@ -27,23 +27,23 @@ Dependencies:
 Author: Ke Wang
 """
 
-import sys
-import os
-import argparse
 import math
-from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
 import numpy as np
 
 # Import CPLfold parser
 from .parser import BeamCKYParserHyper, VALUE_MIN_FLOAT
-from .validation import CofoldInputError, _validate_search_bonus, validate_fold_inputs
+from .errors import InputError
+from .validation import BonusLimits, FoldInputs
 
-from ..models import COFOLD_MODELS, DEFAULT_MODELS
 from .hotknots_energy import HotKnotsEnergy
 from .turner_energy import turner_energy
-from ..sequence import normalise_sequence
+
+# This parser narrows the bonus to float32 and keeps scores above VALUE_MIN_FLOAT.
+BONUS_LIMITS = BonusLimits(element=float(np.finfo(np.float32).max), search=-float(VALUE_MIN_FLOAT))
+# The name of the model that scores pseudoknot-free runs (Prediction.energy_model).
+TURNER_MODEL = "Turner 2004"
 
 
 def _structure_layout(structure: str) -> Tuple[str, Optional[int], List[Tuple[int, int]]]:
@@ -106,6 +106,31 @@ def get_pairs_from_structure(structure: str) -> List[Tuple[int, int]]:
         raise ValueError. Valid single-strand pair ordering is unchanged.
     """
     return _structure_layout(structure)[2]
+
+
+def read_support(bonus, pairs) -> float:
+    """Sum of the bonus over compact pairs; 0.0 without a bonus matrix."""
+    if bonus is None:
+        return 0.0
+    try:
+        support = math.fsum(float(bonus[i, j]) for i, j in pairs)
+    except OverflowError as error:
+        raise InputError("Read support exceeds the finite numeric range") from error
+    if not math.isfinite(support):
+        raise InputError("Read support exceeds the finite numeric range")
+    return support
+
+
+def candidate(structure, energy, effective_energy, kind, score, phase1_structure, phase1_energy,
+              phase2_structure, cutpoint, pairs, energy_model, support, details=None) -> Dict:
+    """One result of an engine, keyed by the public :class:`cplfold.Prediction` names."""
+    return {
+        'structure': structure, 'energy': energy, 'effective_energy': effective_energy,
+        'kind': kind, 'score': score, 'phase1_structure': phase1_structure,
+        'phase1_energy': phase1_energy, 'phase2_structure': phase2_structure,
+        'cutpoint': cutpoint, 'pairs': tuple(pairs), 'energy_model': energy_model,
+        'read_support': support, 'details': {} if details is None else details,
+    }
 
 
 def has_new_pairs(structure: str) -> bool:
@@ -296,14 +321,14 @@ def output_results(all_structures: List[Dict], seq: str,
     if '&' in seq:
         lines.append("Strand lengths: " + " + ".join(str(len(part)) for part in seq.split('&')) + " nt")
         lines.append("Cofold secondary structures: Turner 37 C; alpha guides search, beta adjusts pseudoknot ranking.")
-        if any(s.get('energy_metadata', {}).get('energy_kind') == 'heuristic' for s in all_structures):
+        if any(s['details'].get('energy_metadata', {}).get('energy_kind') == 'heuristic' for s in all_structures):
             lines.append("Pseudoknot ranking uses experimental Turner/DP cofold scores; these are not validated binding free energies.")
     lines.append("=" * 60)
     lines.append("")
 
     # Group by type
-    phase1_structs = [s for s in all_structures if s['type'] == 'phase1']
-    pk_structs = [s for s in all_structures if s['type'] == 'pseudoknot']
+    phase1_structs = [s for s in all_structures if s['kind'] == 'phase1']
+    pk_structs = [s for s in all_structures if s['kind'] == 'pseudoknot']
 
     secondary_label = "Phase 1 Structures" if allow_pseudoknot else "Secondary Structures"
     secondary_id = "P1" if allow_pseudoknot else "S"
@@ -331,10 +356,10 @@ def output_results(all_structures: List[Dict], seq: str,
             energy_str = f"{s['energy']:.2f}" if s['energy'] is not None else "N/A"
             lines.append(f"PK-{i}: {s['structure']}")
             lines.append(f"       Energy: {energy_str} kcal/mol")
-            if s.get('phase1_struct'):
-                lines.append(f"       Phase 1: {s['phase1_struct']}")
-            if s.get('phase2_struct'):
-                lines.append(f"       Phase 2: {s['phase2_struct']}")
+            if s.get('phase1_structure'):
+                lines.append(f"       Phase 1: {s['phase1_structure']}")
+            if s.get('phase2_structure'):
+                lines.append(f"       Phase 2: {s['phase2_structure']}")
         lines.append("")
 
     # Best structures summary
@@ -354,7 +379,7 @@ def output_results(all_structures: List[Dict], seq: str,
         if best.get('effective_energy') is not None and best['effective_energy'] != best['energy']:
             eff_str = f"{best['effective_energy']:.2f}"
             lines.append(f"  Effective Energy: {eff_str} kcal/mol")
-        lines.append(f"  Type: {best['type']}")
+        lines.append(f"  Type: {best['kind']}")
 
         # Best pseudoknot structure (if different from best overall)
         if pk_structs:
@@ -373,12 +398,12 @@ def output_results(all_structures: List[Dict], seq: str,
                 lines.append(f"  Effective Energy: {pk_eff_str} kcal/mol")
 
             # Compare with best overall
-            if best['type'] == 'pseudoknot':
+            if best['kind'] == 'pseudoknot':
                 lines.append("  ** This IS the best overall structure **")
             else:
                 if best['energy'] is not None and best_pk['energy'] is not None:
                     diff = best_pk['energy'] - best['energy']
-                    heuristic = any(s.get('energy_metadata', {}).get('energy_kind') == 'heuristic'
+                    heuristic = any(s['details'].get('energy_metadata', {}).get('energy_kind') == 'heuristic'
                                     for s in (best, best_pk))
                     label = "Model score difference" if heuristic else "Energy difference"
                     lines.append(f"  {label} from best: {diff:+.2f} kcal/mol")
@@ -406,84 +431,34 @@ def output_results(all_structures: List[Dict], seq: str,
             print(f"\nResults saved to: {output_file}")
 
 
-def two_phase_pseudoknot_fold(seq: str,
-                               beam_size: int = 100,
-                               energy_delta: float = 5.0,
-                               max_phase1: int = 10,
-                               max_phase2: int = 5,
-                               energy_model: Optional[str] = None,
-                               output_file: Optional[str] = None,
-                               verbose: bool = True,
-                               lv: bool = True,
-                               bonus_matrix = None,
-                               alpha: float = 0.0,
-                               beta: float = 0.0,
-                               allow_pseudoknot: bool = True,
-                               cutpoint: Optional[int] = None) -> List[Dict]:
+def run(inputs: FoldInputs, *, output_file: Optional[str] = None, verbose: bool = False,
+        lv: bool = True) -> List[Dict]:
     """
-    Main function: Two-phase pseudoknot prediction algorithm.
+    The one-strand engine: two-phase pseudoknot prediction of validated inputs.
 
-    Args:
-        seq: RNA sequence
-        beam_size: LinearFold beam size
-        energy_delta: Energy range for suboptimal structures
-        max_phase1: Maximum Phase 1 structures to process
-        max_phase2: Maximum Phase 2 structures per Phase 1 for two strands; validated
-                    but unused for one strand, which runs exactly one Phase 2 fold
-        energy_model: Pseudoknot energy model (DP03, DP09, CC06, CC09, RE); used only when
-                      allow_pseudoknot is True. Pseudoknot-free runs rank with Turner 2004.
-        output_file: Optional output file path
-        verbose: Whether to print progress
-        lv: Whether to use Vienna mode (True) or CONTRAfold mode (False)
-        bonus_matrix: Optional PARIS/COMRADES bonus matrix (numpy array)
-        alpha: Scaling factor for bonus matrix (0.0-1.0)
-        beta: Pseudoknot energy bonus factor (0.0-1.0). For pseudoknot structures,
-              the sorting energy = pseudoknot_energy + beta * phase1_energy.
-              Since RNA energies are negative, this makes pseudoknots more
-              favorable in ranking, improving recall of pseudoknot structures.
-        allow_pseudoknot: Whether to run Phase 2 and return pseudoknot candidates.
-                         Defaults to True. When False, only Phase 1 secondary
-                         structures are generated and returned.
-        cutpoint: Optional length of strand A for two-strand cofolding. The
-                  sequence may alternatively contain one '&'. Bonus matrices
-                  exclude the separator. Cofold preserves alpha and beta;
-                  cofold pseudoknot energies are explicitly experimental.
+    Phase 1 takes up to ``max_phase1`` suboptimal structures within
+    ``energy_delta``; with ``pseudoknots`` each gets exactly one constrained
+    Phase 2 fold, and a crossing merge becomes a pseudoknot candidate. One model
+    ranks every candidate of a run, without the bonus: ``energy_model`` (the
+    HotKnots-derived DP/CC/RE evaluator) with pseudoknots, Turner 2004 without.
+    For pseudoknots, effective_energy = energy + beta * phase1_energy.
+    ``alpha`` scales the bonus in the search objective. ``lv=False`` (CONTRAfold
+    search mode) is for upstream comparisons only.
 
-    Returns:
-        List of structure dictionaries sorted by effective energy
+    Returns result dicts keyed by the :class:`cplfold.Prediction` names, sorted by
+    effective energy (stable). A structure seen before is skipped.
     """
-    cofold = cutpoint is not None or (isinstance(seq, str) and '&' in seq)
-    if energy_model is None:
-        energy_model = DEFAULT_MODELS["cplcofold" if cofold else "cplfold"]
-    if cofold:
-        from .cofold import two_phase_cofold
-        return two_phase_cofold(
-            seq, cutpoint=cutpoint, beam_size=beam_size, energy_delta=energy_delta,
-            max_phase1=max_phase1, max_phase2=max_phase2, energy_model=energy_model,
-            output_file=output_file, verbose=verbose, lv=lv, bonus_matrix=bonus_matrix,
-            alpha=alpha, beta=beta, allow_pseudoknot=allow_pseudoknot,
-        )
-    # The same normalisation and checks as the cofold route (CofoldInputError, a ValueError).
-    inputs = validate_fold_inputs(
-        seq, None, two_strands=False, lv=lv, beam_size=beam_size, energy_delta=energy_delta,
-        max_phase1=max_phase1, max_phase2=max_phase2, energy_model=energy_model,
-        bonus_matrix=bonus_matrix, alpha=alpha, beta=beta, allow_pseudoknot=allow_pseudoknot,
-    )
-    seq, energy_model = inputs["seq"], inputs["energy_model"]
-    beam_size, max_phase1, max_phase2 = inputs["beam_size"], inputs["max_phase1"], inputs["max_phase2"]
-    energy_delta, alpha, beta = inputs["energy_delta"], inputs["alpha"], inputs["beta"]
-    bonus_matrix = inputs["bonus_matrix"]
-    # This parser narrows the bonus to float32 and keeps scores above VALUE_MIN_FLOAT.
-    if bonus_matrix is not None and np.max(np.abs(bonus_matrix)) > np.finfo(np.float32).max:
-        raise CofoldInputError("Bonus matrix exceeds the supported float32 range")
-    _validate_search_bonus(bonus_matrix, alpha, -VALUE_MIN_FLOAT)
+    seq, energy_model, allow_pseudoknot = inputs.sequence, inputs.energy_model, inputs.pseudoknots
+    beam_size, max_phase1, energy_delta = inputs.beam_size, inputs.max_phase1, inputs.energy_delta
+    alpha, beta, bonus_matrix = inputs.alpha, inputs.beta, inputs.bonus
+    ranking_model = energy_model if allow_pseudoknot else TURNER_MODEL
 
     if verbose:
         print("Running CPLfold RNA structure prediction...")
         print(f"Sequence length: {len(seq)}")
         print(f"Beam size: {beam_size}")
         print(f"Energy delta: {energy_delta}")
-        print(f"Ranking energy model: {energy_model if allow_pseudoknot else 'Turner 2004'}")
+        print(f"Ranking energy model: {ranking_model}")
         print(f"LinearFold mode: {'Vienna' if lv else 'CONTRAfold'}")
         print(f"Structure mode: {'Pseudoknot-enabled' if allow_pseudoknot else 'Pseudoknot-free'}")
         if bonus_matrix is not None:
@@ -537,16 +512,10 @@ def two_phase_pseudoknot_fold(seq: str,
         energy1 = (compute_energy_hotknots(seq, struct1, hk, energy_model) if allow_pseudoknot
                    else turner_energy(seq, struct1))
 
-        all_structures.append({
-            'structure': struct1,
-            'energy': energy1,
-            'effective_energy': energy1,  # For phase1, effective = actual energy
-            'type': 'phase1',
-            'phase1_struct': struct1,
-            'phase1_energy': energy1,
-            'phase2_struct': None,
-            'score': score1
-        })
+        nested_pairs = sorted(get_pairs_from_structure(struct1))
+        # For phase1, effective = actual energy
+        all_structures.append(candidate(struct1, energy1, energy1, 'phase1', score1, struct1, energy1, None,
+                                        None, nested_pairs, ranking_model, read_support(bonus_matrix, nested_pairs)))
 
         if verbose:
             print(f"  Energy: {energy1:.2f} kcal/mol")
@@ -595,16 +564,10 @@ def two_phase_pseudoknot_fold(seq: str,
                     # Since energies are negative, this makes pseudoknots more favorable
                     effective_energy = energy_merged + beta * energy1
 
-                    all_structures.append({
-                        'structure': merged,
-                        'energy': energy_merged,
-                        'effective_energy': effective_energy,
-                        'type': 'pseudoknot',
-                        'phase1_struct': struct1,
-                        'phase1_energy': energy1,
-                        'phase2_struct': struct2,
-                        'score': score1 + score2
-                    })
+                    merged_pairs = sorted(get_pairs_from_structure(merged))
+                    all_structures.append(candidate(
+                        merged, energy_merged, effective_energy, 'pseudoknot', score1 + score2, struct1, energy1,
+                        struct2, None, merged_pairs, ranking_model, read_support(bonus_matrix, merged_pairs)))
 
                     if verbose:
                         energy_str = f"{energy_merged:.2f}" if energy_merged is not None else "N/A"
@@ -638,8 +601,3 @@ def two_phase_pseudoknot_fold(seq: str,
 
     return all_structures
 
-
-def cofold(sequence_a: str, sequence_b: str, **kwargs) -> List[Dict]:
-    """Predict two strands with CPLfold's alpha-guided two-phase/beta workflow."""
-    from .cofold import cofold as predict_cofold
-    return predict_cofold(sequence_a, sequence_b, **kwargs)

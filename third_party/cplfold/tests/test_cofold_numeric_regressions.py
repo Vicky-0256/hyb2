@@ -26,7 +26,7 @@ def _load_modules():
         shim.njit = njit
         sys.modules["numba"] = shim
     return (
-        importlib.import_module("cplfold._internal.cofold"),
+        importlib.import_module("cplfold"),
         importlib.import_module("cplfold._internal.cofold_parser"),
         importlib.import_module("cplfold._internal.cofold_energy"),
     )
@@ -42,19 +42,26 @@ def _duplex_matrix(value, pairs=((0, 5), (1, 4), (2, 3))):
 class CofoldNumericTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cofold_module, cls.parser_module, cls.energy_module = _load_modules()
+        cls.cplfold, cls.parser_module, cls.energy_module = _load_modules()
+        cls.validation = importlib.import_module("cplfold._internal.validation")
 
-    def fold(self, **kwargs):
-        options = dict(verbose=False, allow_pseudoknot=False, max_phase1=1)
+    def fold(self, first="GGG", second="CCC", **kwargs):
+        """cplfold.fold() of two strands as flat dicts (public fields and details)."""
+        options = dict(pseudoknots=False, max_phase1=1)
         options.update(kwargs)
-        return self.cofold_module.cofold("GGG", "CCC", **options)
+        rows = []
+        for prediction in self.cplfold.fold(first, partner=second, **options):
+            row = prediction.as_dict()
+            row.update(row.pop("details"))
+            rows.append(row)
+        return rows
 
     def test_huge_alpha_has_no_effect_without_nonzero_evidence(self):
         baseline = self.fold()[0]
         for matrix in (None, np.zeros((6, 6))):
             with self.subTest(matrix=matrix is not None), warnings.catch_warnings():
                 warnings.simplefilter("error", RuntimeWarning)
-                result = self.fold(alpha=1e308, bonus_matrix=matrix)[0]
+                result = self.fold(alpha=1e308, bonus=matrix)[0]
                 for key in ("structure", "score", "energy", "effective_energy"):
                     self.assertEqual(result[key], baseline[key])
                 self.assertEqual(result["read_support"], 0.0)
@@ -64,7 +71,7 @@ class CofoldNumericTests(unittest.TestCase):
     def test_scale_tiny_evidence_before_converting_to_centikcal(self):
         with warnings.catch_warnings():
             warnings.simplefilter("error", RuntimeWarning)
-            result = self.fold(alpha=1e308, bonus_matrix=_duplex_matrix(1e-308))[0]
+            result = self.fold(alpha=1e308, bonus=_duplex_matrix(1e-308))[0]
         self.assertEqual(result["structure"], "(((&)))")
         self.assertAlmostEqual(result["score"], -5.5, places=6)
         self.assertAlmostEqual(result["energy"], -2.5, places=6)
@@ -73,7 +80,7 @@ class CofoldNumericTests(unittest.TestCase):
 
     def test_alpha_zero_ignores_large_evidence_in_search(self):
         matrix = _duplex_matrix(1e308, pairs=((0, 5),))
-        result = self.fold(alpha=0.0, bonus_matrix=matrix)[0]
+        result = self.fold(alpha=0.0, bonus=matrix)[0]
         self.assertEqual(result["structure"], "(((&)))")
         self.assertAlmostEqual(result["score"], -2.5, places=6)
         self.assertEqual(result["read_support"], 1e308)
@@ -93,15 +100,13 @@ class CofoldNumericTests(unittest.TestCase):
                     inside.assert_not_called()
 
     def test_read_support_sum_overflow_is_rejected_even_at_alpha_zero(self):
-        with self.assertRaisesRegex(ValueError, "Read support"):
-            self.fold(alpha=0.0, bonus_matrix=_duplex_matrix(1e308))
+        with self.assertRaisesRegex(self.cplfold.InputError, "Read support"):
+            self.fold(alpha=0.0, bonus=_duplex_matrix(1e308))
 
     def test_beta_overflow_is_rejected_for_a_real_pseudoknot(self):
-        with self.assertRaisesRegex(ValueError, "Effective energy"):
-            self.cofold_module.cofold(
-                "GGCGCGGCACCGUCCGCGGAACAAACGG", "A", verbose=False,
-                beam_size=20, max_phase1=2, max_phase2=1, beta=1e308,
-            )
+        with self.assertRaisesRegex(self.cplfold.InputError, "Effective energy"):
+            self.fold("GGCGCGGCACCGUCCGCGGAACAAACGG", "A", pseudoknots=True,
+                      beam_size=20, max_phase1=2, max_phase2=1, beta=1e308)
 
     def test_large_beta_does_not_change_secondary_only_results(self):
         baseline = self.fold()[0]
@@ -123,8 +128,9 @@ class CofoldNumericTests(unittest.TestCase):
     def test_result_boundary_rejects_read_bonus_overflow(self):
         # Bypass both early scaling guards to independently verify the public
         # result boundary also protects callers from a non-finite bonus.
-        with mock.patch.object(self.cofold_module, "_validate_search_bonus"), mock.patch.object(self.parser_module.BeamCKYCofoldParser, "parse_subopt", return_value=[("((()))", -2.5)]), self.assertRaisesRegex(ValueError, "Read bonus"):
-            self.fold(alpha=2.0, bonus_matrix=_duplex_matrix(3e307))
+        unchecked = lambda value, length, limits, alpha: np.ascontiguousarray(value, dtype=np.float64)  # noqa: E731
+        with mock.patch.object(self.validation, "_bonus_matrix", side_effect=unchecked), mock.patch.object(self.parser_module.BeamCKYCofoldParser, "parse_subopt", return_value=[("((()))", -2.5)]), self.assertRaisesRegex(ValueError, "Read bonus"):
+            self.fold(alpha=2.0, bonus=_duplex_matrix(3e307))
 
     def test_invalid_multipliers_have_consistent_value_errors(self):
         for value in (-1, float("nan"), float("inf"), float("-inf"), True, np.bool_(True), None, 10 ** 1000):
@@ -141,7 +147,7 @@ class CofoldNumericTests(unittest.TestCase):
     def test_alpha_zero_still_validates_the_input_matrix(self):
         for matrix in (np.zeros((7, 7)), np.full((6, 6), np.nan), np.full((6, 6), np.inf), np.ones((6, 6), dtype=complex)):
             with self.subTest(shape=matrix.shape, dtype=matrix.dtype), self.assertRaises(ValueError):
-                self.fold(alpha=0.0, bonus_matrix=matrix)
+                self.fold(alpha=0.0, bonus=matrix)
 
     def test_signed_finite_pair_penalties_remain_supported(self):
         parser = self.parser_module.BeamCKYCofoldParser(cutpoint=3)
@@ -174,7 +180,7 @@ class CofoldFastaPreambleTests(unittest.TestCase):
 
     def test_sequence_preamble_before_a_fasta_header_is_rejected(self):
         for contents in ("AAA\n>A\nGGG\n>B\nCCC\n", "AAA\n>A\nGGG\n"):
-            # A library error (cplfold.CofoldInputError, a ValueError), not SystemExit.
+            # A library error (cplfold.InputError, a ValueError), not SystemExit.
             with self.subTest(contents=contents), self.assertRaisesRegex(ValueError, "first record header"):
                 self.read(contents)
 

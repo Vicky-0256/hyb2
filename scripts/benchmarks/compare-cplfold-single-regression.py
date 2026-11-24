@@ -26,6 +26,7 @@ import sys
 import tarfile
 import tempfile
 import traceback
+import types
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -327,7 +328,26 @@ def worker(repository, config_path):
     sys.path.insert(0, str(repository / "third_party/cplfold"))
     import numpy as np
     import numba
-    if (repository / "third_party/cplfold/cplfold/_internal").is_dir():
+    if (repository / "third_party/cplfold/cplfold/_internal/router.py").is_file():
+        # The 1.0 layout: one validator, an engine that takes validated inputs,
+        # and results keyed by Prediction names. Map them to the legacy keys.
+        from cplfold._internal import single as engine
+        from cplfold._internal import parser as CPLfold_parser
+        from cplfold._internal import hotknots_energy as energy_module
+        from cplfold._internal.validation import validate_fold_inputs
+
+        def two_phase_pseudoknot_fold(seq, *, verbose, bonus_matrix, lv, allow_pseudoknot, max_phase2, **options):
+            inputs = validate_fold_inputs(seq, bonus_limits=engine.BONUS_LIMITS, pseudoknots=allow_pseudoknot,
+                                          bonus=bonus_matrix, max_phase2=None, **options)
+            return [dict(structure=item["structure"], energy=item["energy"],
+                         effective_energy=item["effective_energy"], type=item["kind"],
+                         phase1_struct=item["phase1_structure"], phase1_energy=item["phase1_energy"],
+                         phase2_struct=item["phase2_structure"], score=item["score"])
+                    for item in engine.run(inputs, verbose=verbose, lv=lv)]
+
+        CPLfold = types.SimpleNamespace(two_phase_pseudoknot_fold=two_phase_pseudoknot_fold, __name__=engine.__name__,
+                                        __file__=engine.__file__)
+    elif (repository / "third_party/cplfold/cplfold/_internal").is_dir():
         from cplfold._internal import single as CPLfold
         from cplfold._internal import parser as CPLfold_parser
         from cplfold._internal import hotknots_energy as energy_module

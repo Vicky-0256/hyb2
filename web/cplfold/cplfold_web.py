@@ -63,8 +63,10 @@ _install_numba_fallback()
 
 import numpy as np  # noqa: E402
 import cplfold  # noqa: E402
-from cplfold.bonus import cofold_counts, gaussian_bonus_matrix, gaussian_bonus_stripes, gaussian_sigma, mean_arm_length  # noqa: E402
-from cplfold.sequence import add_strand_break, normalise_sequence, strip_structure_break  # noqa: E402
+# Hyb2 pins this cplfold version and also uses its private bonus helpers.
+from cplfold.bonus import (  # noqa: E402
+    _arm_counts, _gaussian_bonus_matrix, _gaussian_bonus_stripes, _mean_arm_length, gaussian_sigma)
+from cplfold.sequence import add_strand_break, normalise_sequence  # noqa: E402
 from hyb2analysis.fold_text import FOLD_TEXT, fold_text  # noqa: E402
 from hyb2analysis.engine_parameters import engine_parameters, task_allow_pseudoknot  # noqa: E402
 from hyb2analysis.support_kernels import (  # noqa: E402
@@ -199,11 +201,11 @@ def build_hyb_bonus_matrix_export(
     sequence_length: int, arms: Any, cutpoint: int | None = None
 ) -> dict[str, Any]:
     """Emit nonzero upper-triangle cells, without materializing the fold matrix."""
-    counts = _checked_blocks(sequence_length, arms) if cutpoint is None else cofold_counts(sequence_length, cutpoint, arms)
+    counts = _checked_blocks(sequence_length, arms) if cutpoint is None else _arm_counts(sequence_length, arms, cutpoint)
     summary = _gaussian_summary(sequence_length, cutpoint, counts)
     entries = summary["bonusEntries"] = []
     if counts:
-        for start, stripe in gaussian_bonus_stripes(sequence_length, cutpoint, counts, summary["gaussianStandardDeviation"]):
+        for start, stripe in _gaussian_bonus_stripes(sequence_length, cutpoint, counts, summary["gaussianStandardDeviation"]):
             for i, values in enumerate(stripe, start):
                 summary["nonzeroBonusCells"] += int(values[i] != 0)
                 summary["maximumBonus"] = max(summary["maximumBonus"], float(values[i:].max()))
@@ -264,12 +266,12 @@ def build_hyb_bonus_matrix_fast(
     use_numba: bool | None = None,
 ) -> tuple[np.ndarray | None, dict[str, Any]]:
     """Build the parser's matrix from rows or block counts, without a per-cell listing."""
-    counts = _checked_blocks(sequence_length, arms) if cutpoint is None else cofold_counts(sequence_length, cutpoint, arms)
+    counts = _checked_blocks(sequence_length, arms) if cutpoint is None else _arm_counts(sequence_length, arms, cutpoint)
     summary = _gaussian_summary(sequence_length, cutpoint, counts)
     if not counts:
         return None, summary
     jit = _NUMBA_AVAILABLE and use_numba is not False
-    bonus = gaussian_bonus_matrix(sequence_length, cutpoint, counts, summary["gaussianStandardDeviation"], jit)
+    bonus = _gaussian_bonus_matrix(sequence_length, cutpoint, counts, summary["gaussianStandardDeviation"], jit)
     nonzero, upper, maximum = _dense_counts(bonus)
     summary.update(builder="row-stripes-" + ("numba" if jit else "numpy"), nonzeroBonusCells=nonzero,
                    nonzeroUpperTriangleCells=upper, maximumBonus=maximum)
@@ -379,7 +381,7 @@ def _summary(sequence_length: int, kernel: str, compressed: Counter, bonus_cells
         "coordinateSystem": "prepared-sequence, 1-based inclusive input",
         "inputRecords": int(records),
         "uniqueBlocks": len(compressed),
-        "meanArmLength": mean_arm_length(compressed),
+        "meanArmLength": _mean_arm_length(compressed),
         "nonzeroBonusCells": int(bonus_cells),
         "nonzeroUpperTriangleCells": int(upper_cells),
         "maximumBonus": float(maximum),
@@ -1007,32 +1009,28 @@ def _crossing_pair_count(pairs: list[dict[str, Any]]) -> int:
 
 def _candidate(
     sequence: str,
-    raw: dict[str, Any],
+    prediction: cplfold.Prediction,
     index: int,
     bonus_matrix: np.ndarray | None,
-    cutpoint: int | None = None,
 ) -> dict[str, Any]:
-    structure = str(raw.get("structure") or "")
-    phase1 = raw.get("phase1_struct")
-    phase2 = raw.get("phase2_struct")
-    if cutpoint is not None:
-        structure = strip_structure_break(structure, cutpoint, len(sequence))
-        phase1 = strip_structure_break(phase1, cutpoint, len(sequence)) if phase1 is not None else None
-        phase2 = strip_structure_break(phase2, cutpoint, len(sequence)) if phase2 is not None else None
+    cutpoint = prediction.cutpoint
+    # Compact structures, without the '&' the package shows between strands.
+    structure, phase1, phase2 = (None if text is None else text.replace("&", "") for text in (
+        prediction.structure, prediction.phase1_structure, prediction.phase2_structure))
     if len(structure) != len(sequence):
         raise ValueError("CPLfold returned a structure with the wrong length.")
     pairs = _pairs(sequence, structure, bonus_matrix)
     crossing_pairs = _crossing_pair_count(pairs)
-    structure_type = str(raw.get("type") or "phase1")
+    structure_type = prediction.kind
     candidate = {
         "index": index,
         "dotBracket": structure,
         "type": structure_type,
         "topology": "pseudoknotted" if crossing_pairs or structure_type == "pseudoknot" else "nested",
-        "energy": raw.get("energy"),
-        "effectiveEnergy": raw.get("effective_energy"),
-        "phase1Energy": raw.get("phase1_energy"),
-        "score": raw.get("score"),
+        "energy": prediction.energy,
+        "effectiveEnergy": prediction.effective_energy,
+        "phase1Energy": prediction.phase1_energy,
+        "score": prediction.score,
         "phase1Structure": phase1,
         "phase2Structure": phase2,
         "pairs": pairs,
@@ -1046,20 +1044,21 @@ def _candidate(
                 pair[side + "Strand"] = "A" if position <= cutpoint else "B"
                 pair[side + "StrandPosition"] = position if position <= cutpoint else position - cutpoint
             pair["intermolecular"] = pair["left"] <= cutpoint < pair["right"]
+        details = prediction.details
         candidate.update({
-            "dotBracketWithBreak": add_strand_break(structure, cutpoint),
-            "phase1StructureWithBreak": add_strand_break(phase1, cutpoint) if phase1 is not None else None,
-            "phase2StructureWithBreak": add_strand_break(phase2, cutpoint) if phase2 is not None else None,
+            "dotBracketWithBreak": prediction.structure,
+            "phase1StructureWithBreak": prediction.phase1_structure,
+            "phase2StructureWithBreak": prediction.phase2_structure,
             "cutpoint": cutpoint,
             "strandLengths": [cutpoint, len(sequence) - cutpoint],
             "intermolecularPairs": sum(pair["intermolecular"] for pair in pairs),
-            "energyMetadata": dict(raw.get("energy_metadata", {})),
-            "energyBreakdown": dict(raw.get("energy_breakdown", {})),
-            "readSupport": raw.get("read_support", 0.0),
-            "readBonus": raw.get("read_bonus", 0.0),
+            "energyMetadata": dict(details.get("energy_metadata", {})),
+            "energyBreakdown": dict(details.get("energy_breakdown", {})),
+            "readSupport": prediction.read_support,
+            "readBonus": details.get("read_bonus", 0.0),
         })
-        if "phase2_association_cost" in raw:
-            candidate["phase2AssociationCost"] = raw["phase2_association_cost"]
+        if "phase2_association_cost" in details:
+            candidate["phase2AssociationCost"] = details["phase2_association_cost"]
     return candidate
 
 
@@ -1083,18 +1082,19 @@ def _request_evidence(payload: dict[str, Any], length: int, cutpoint: int | None
 
 def fold_prepared(sequence: str, cutpoint: int | None, bonus: np.ndarray | None, *, pseudoknots: bool,
                   energy_model: str, alpha: float, beta: float, beam_size: int, energy_delta: float,
-                  max_phase1: int) -> list[dict[str, Any]]:
+                  max_phase1: int) -> list[cplfold.Prediction]:
     """Fold a prepared Hyb2 task; the web and desktop hosts both call this.
 
     ``sequence`` is compact (no '&'); ``cutpoint`` separates two strands and
-    ``bonus`` uses the same compact coordinates. Hyb2 tasks keep one Phase-2
-    structure per Phase-1 candidate. Returns candidate dicts, best first.
+    ``bonus`` uses the same compact coordinates. Hyb2 two-strand tasks keep one
+    Phase-2 structure per Phase-1 candidate (one strand always runs one).
+    Returns the predictions, best first.
     """
-    predictions = cplfold.fold(
-        sequence if cutpoint is None else add_strand_break(sequence, cutpoint),
+    options = {} if cutpoint is None else {"partner": sequence[cutpoint:], "max_phase2": 1}
+    return cplfold.fold(
+        sequence if cutpoint is None else sequence[:cutpoint],
         pseudoknots=pseudoknots, energy_model=energy_model, bonus=bonus, alpha=alpha, beta=beta,
-        beam_size=beam_size, energy_delta=energy_delta, max_phase1=max_phase1, max_phase2=1)
-    return [prediction.as_dict() for prediction in predictions]
+        beam_size=beam_size, energy_delta=energy_delta, max_phase1=max_phase1, **options)
 
 
 def fold(payload: dict[str, Any], progress: Any = None, *, host: str = "web",
@@ -1145,12 +1145,12 @@ def fold(payload: dict[str, Any], progress: Any = None, *, host: str = "web",
         bonus_matrix, evidence = build_hyb_bonus_matrix(len(sequence), arms)
     evidence["supportKernel"] = kernel
 
-    raw_candidates = fold_prepared(
+    predictions = fold_prepared(
         sequence, cutpoint, bonus_matrix, pseudoknots=allow_pseudoknot, energy_model=energy_model,
         alpha=alpha, beta=beta, beam_size=beam_size, energy_delta=energy_delta, max_phase1=max_phase1)
     candidates = [
-        _candidate(sequence, raw, index, bonus_matrix, cutpoint)
-        for index, raw in enumerate(raw_candidates)
+        _candidate(sequence, prediction, index, bonus_matrix)
+        for index, prediction in enumerate(predictions)
     ]
     if not candidates:
         raise ValueError("CPLfold did not produce a structure for this sequence and parameter set.")

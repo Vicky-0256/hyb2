@@ -30,11 +30,11 @@ import numpy as np
 from numba import njit
 
 from . import parser as _turner
-from ..models import COFOLD_MODELS, DEFAULT_MODELS
+from ..models import COFOLD_MODELS, default_model
 from .hotknots_energy import (
     HotKnotsEnergy, NUC_TO_INT, _crosses, parse_dot_bracket,
 )
-from ..sequence import normalise_sequence, strip_structure_break
+from ..sequence import _strip_structure_break, normalise_sequence
 
 DUPLEX_INIT_KCAL = 4.10
 _SPECIAL_LOOPS = {
@@ -244,11 +244,11 @@ class CofoldEnergy:
     def _add(breakdown, name, value):
         breakdown[name] = breakdown.get(name, 0.0) + float(value)
 
-    def compute_energy(self, sequence, structure, cutpoint, model=DEFAULT_MODELS["cplcofold"]):
+    def compute_energy(self, sequence, structure, cutpoint, model=default_model(True)):
         sequence, cutpoint = normalise_sequence(sequence, cutpoint)
         if cutpoint is None:
             raise ValueError("CofoldEnergy requires a cutpoint separating two nonempty strands")
-        structure = strip_structure_break(structure, cutpoint, len(sequence))
+        structure = _strip_structure_break(structure, cutpoint, len(sequence))
         if model not in HotKnotsEnergy.MODELS:
             raise ValueError(f"Unknown energy model {model!r}")
         parsed, pair_table = parse_dot_bracket(structure)
@@ -428,6 +428,6 @@ class CofoldEnergy:
         return breakdown, metadata
 
 
-def compute_energy(sequence, structure, cutpoint, model=DEFAULT_MODELS["cplcofold"]):
+def compute_energy(sequence, structure, cutpoint, model=default_model(True)):
     """Return kcal/mol; use the class API for the energy-model metadata."""
     return float(CofoldEnergy().compute_energy(sequence, structure, cutpoint, model)["energy"])

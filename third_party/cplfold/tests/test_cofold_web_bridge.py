@@ -27,9 +27,9 @@ bridge = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = bridge
 spec.loader.exec_module(bridge)
 
-from cplfold._internal.cofold import two_phase_cofold
+import cplfold
 from cplfold._internal.single import get_pairs_from_structure
-from cplfold.bonus import build_cofold_bonus_matrix
+from cplfold.bonus import bonus_from_arms
 
 
 def arm(a, b, c, d):
@@ -116,16 +116,16 @@ class CofoldWebBridgeTests(unittest.TestCase):
             with self.subTest(model=model):
                 result = bridge.fold(request(sequence="GGGG&CCCC", maxPhase1=12,
                                              energyDelta=12, allowPseudoknot=True, energyModel=model))
-                raw = two_phase_cofold("GGGGCCCC", cutpoint=4, beam_size=5, max_phase1=12,
-                                       max_phase2=1, energy_delta=12, alpha=0, beta=0,
-                                       energy_model=model, allow_pseudoknot=True, verbose=False)
+                raw = cplfold.fold("GGGG", partner="CCCC", beam_size=5, max_phase1=12,
+                                   max_phase2=1, energy_delta=12, alpha=0, beta=0,
+                                   energy_model=model, pseudoknots=True)
                 self.assertEqual(len(result["candidates"]), len(raw))
                 for candidate, original in zip(result["candidates"], raw):
-                    self.assertEqual(candidate["dotBracketWithBreak"], original["structure"])
-                    self.assertEqual(candidate["energy"], original["energy"])
-                    self.assertEqual(candidate["effectiveEnergy"], original["effective_energy"])
-                    self.assertEqual(candidate["energyMetadata"], original["energy_metadata"])
-                    self.assertEqual(candidate["energyBreakdown"], original["energy_breakdown"])
+                    self.assertEqual(candidate["dotBracketWithBreak"], original.structure)
+                    self.assertEqual(candidate["energy"], original.energy)
+                    self.assertEqual(candidate["effectiveEnergy"], original.effective_energy)
+                    self.assertEqual(candidate["energyMetadata"], dict(original.details["energy_metadata"]))
+                    self.assertEqual(candidate["energyBreakdown"], dict(original.details["energy_breakdown"]))
                     if candidate["type"] == "pseudoknot":
                         self.assertEqual(candidate["energyMetadata"]["energy_kind"], "heuristic")
                 self.assertEqual(result["energyMetadata"], result["candidates"][0]["energyMetadata"])
@@ -159,7 +159,7 @@ class CofoldWebBridgeTests(unittest.TestCase):
         for arms in ([(1, 3, 4, 4)], [(5, 6, 7, 8)], [(3, 4, 5, 6)]):
             with self.subTest(arms=arms):
                 actual, summary = bridge.build_cofold_hyb_bonus_matrix(8, 4, arms)
-                np.testing.assert_array_equal(actual, build_cofold_bonus_matrix(8, 4, arms))
+                np.testing.assert_array_equal(actual, bonus_from_arms(8, arms, cutpoint=4))
                 if arms[0][0] <= 4 < arms[0][2]:
                     self.assertFalse(np.any(actual[:4, :4]))
                     self.assertFalse(np.any(actual[4:, 4:]))
@@ -174,7 +174,7 @@ class CofoldWebBridgeTests(unittest.TestCase):
                  (12, 5, [(1, 3, 2, 5), (6, 10, 8, 12), (3, 5, 6, 7)] * 2)]
         for n, cp, arms in cases:
             with self.subTest(n=n, cp=cp, arms=arms):
-                dense = build_cofold_bonus_matrix(n, cp, arms)
+                dense = bonus_from_arms(n, arms, cutpoint=cp)
                 payload = dict(sequence="A"*n, cutpoint=cp, evidenceMode="hyb-blocks",
                                evidenceArms=[arm(*positions) for positions in arms])
                 exported = bridge.bonus_matrix(payload)

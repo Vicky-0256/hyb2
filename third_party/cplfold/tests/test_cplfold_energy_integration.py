@@ -42,6 +42,7 @@ class CPLfoldEnergyIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.cplfold = _load_cplfold_with_numba_stub()
+        cls.fold = staticmethod(importlib.import_module("cplfold").fold)
 
     def test_unexpected_evaluator_error_is_not_hidden(self):
         with self.assertRaisesRegex(RuntimeError, "unexpected evaluator defect"):
@@ -68,14 +69,12 @@ class CPLfoldEnergyIntegrationTests(unittest.TestCase):
         ), mock.patch.object(
             self.cplfold, "phase2_fold", return_value=(phase2, -1.0)
         ):
-            results = self.cplfold.two_phase_pseudoknot_fold(
-                "G" * len(merged), verbose=False
-            )
+            results = [p.as_dict() for p in self.fold("G" * len(merged))]
 
         self.assertEqual(
-            {item["type"] for item in results}, {"phase1", "pseudoknot"}
+            {item["kind"] for item in results}, {"phase1", "pseudoknot"}
         )
-        pseudoknot = next(item for item in results if item["type"] == "pseudoknot")
+        pseudoknot = next(item for item in results if item["kind"] == "pseudoknot")
         self.assertEqual(pseudoknot["structure"], merged)
         self.assertEqual(pseudoknot["energy"], -2.0)
         self.assertTrue(all(item["energy"] is not None for item in results))
@@ -88,12 +87,7 @@ class CPLfoldEnergyIntegrationTests(unittest.TestCase):
         ), mock.patch.object(self.cplfold, "phase2_fold") as phase2, mock.patch.object(
             self.cplfold, "turner_energy", return_value=-1.5
         ) as turner:
-            results = self.cplfold.two_phase_pseudoknot_fold(
-                "G" * 5,
-                verbose=False,
-                allow_pseudoknot=False,
-                beta=0.5,
-            )
+            results = [p.as_dict() for p in self.fold("G" * 5, pseudoknots=False, beta=0.5)]
 
         phase2.assert_not_called()
         parser_cls.assert_called_once_with(
@@ -102,7 +96,7 @@ class CPLfoldEnergyIntegrationTests(unittest.TestCase):
             use_constraints=False,
             is_verbose=False,
         )
-        self.assertEqual([item["type"] for item in results], ["phase1"])
+        self.assertEqual([item["kind"] for item in results], ["phase1"])
         self.assertEqual(results[0]["structure"], "(...)")
         # Pseudoknot-free candidates are ranked with Turner 2004, not the pseudoknot model.
         turner.assert_called_once_with("GGGGG", "(...)")

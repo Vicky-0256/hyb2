@@ -99,6 +99,16 @@ def _target_matrix(length, weighted_pairs):
     return result
 
 
+def _flat(predictions, options):
+    """Predictions as flat dicts: public fields, route details and the alpha/beta used."""
+    rows = []
+    for prediction in predictions:
+        row = prediction.as_dict()
+        row.update(row.pop("details"), alpha=float(options.get("alpha", 0.0)), beta=float(options.get("beta", 0.0)))
+        rows.append(row)
+    return rows
+
+
 def _without(results, *fields):
     return [{key: value for key, value in row.items() if key not in fields}
             for row in results]
@@ -112,15 +122,14 @@ class CofoldPropertyTests(unittest.TestCase):
             sys.path.insert(0, directory)
         # Import real Numba in an independent process, respecting DISABLE_JIT.
         importlib.import_module("numba")
-        cls.api = importlib.import_module("cplfold._internal.single")
+        cls.cplfold = importlib.import_module("cplfold")
         cls.parser_module = importlib.import_module("cplfold._internal.cofold_parser")
         cls.energy = importlib.import_module("cplfold._internal.cofold_energy").CofoldEnergy()
 
     def fold(self, first, second, **kwargs):
-        options = dict(verbose=False, beam_size=0, energy_delta=6.0,
-                       max_phase1=3, max_phase2=2, allow_pseudoknot=False)
+        options = dict(beam_size=0, energy_delta=6.0, max_phase1=3, max_phase2=2, pseudoknots=False)
         options.update(kwargs)
-        return self.api.cofold(first, second, **options)
+        return _flat(self.cplfold.fold(first, partner=second, **options), options)
 
     def parser(self, cutpoint, alpha=0.0, matrix=None, beam=0):
         parser = self.parser_module.BeamCKYCofoldParser(
@@ -137,12 +146,13 @@ class CofoldPropertyTests(unittest.TestCase):
         keys, order = [], []
         for item in results:
             structure = item["structure"]
-            for field in ("structure", "phase1_struct", "phase2_struct"):
+            for field in ("structure", "phase1_structure", "phase2_structure"):
                 if item[field] is not None:
                     self.assertEqual(item[field].count("&"), 1)
                     self.assertEqual(item[field].index("&"), cutpoint)
                     self.assertEqual(len(item[field]) - 1, len(sequence))
             self.assertEqual(item["cutpoint"], cutpoint)
+            self.assertEqual(item["pairs"], list(_pairs(structure)))
             self.assertEqual(item["strand_lengths"], [cutpoint, len(second)])
             pairs = _pairs(structure)
             endpoints = [position for pair in pairs for position in pair]
@@ -159,18 +169,18 @@ class CofoldPropertyTests(unittest.TestCase):
             model = item["energy_metadata"]["requested_model"]
             physical = self.energy.compute_energy(sequence, structure, cutpoint, model)["energy"]
             self.assertAlmostEqual(item["energy"], physical, places=8)
-            first_energy = self.energy.compute_energy(sequence, item["phase1_struct"], cutpoint)["energy"]
+            first_energy = self.energy.compute_energy(sequence, item["phase1_structure"], cutpoint)["energy"]
             self.assertAlmostEqual(item["phase1_energy"], first_energy, places=8)
             for field in ("energy", "effective_energy", "phase1_energy", "score", "read_support", "read_bonus"):
                 self.assertTrue(math.isfinite(item[field]), field)
             support = math.fsum(float(matrix[i, j]) for i, j in pairs) if matrix is not None else 0.0
             self.assertAlmostEqual(item["read_support"], support, places=8)
             self.assertAlmostEqual(item["read_bonus"], item["alpha"] * support, places=8)
-            first_pairs = _pairs(item["phase1_struct"])
+            first_pairs = _pairs(item["phase1_structure"])
             expected_score = first_energy - item["alpha"] * support
             expected_effective = item["energy"]
-            if item["type"] == "pseudoknot":
-                second_pairs = _pairs(item["phase2_struct"])
+            if item["kind"] == "pseudoknot":
+                second_pairs = _pairs(item["phase2_structure"])
                 self.assertEqual(set(pairs), set(first_pairs) | set(second_pairs))
                 self.assertTrue(any(i < k < j < l or k < i < l < j
                                     for i, j in first_pairs for k, l in second_pairs))
@@ -179,13 +189,13 @@ class CofoldPropertyTests(unittest.TestCase):
                 first_bound = any(i < cutpoint <= j for i, j in first_pairs)
                 second_bound = any(i < cutpoint <= j for i, j in second_pairs)
                 self.assertEqual(item["phase2_association_cost"], 0.0 if first_bound else 4.1)
-                second_energy = self.energy.compute_energy(sequence, item["phase2_struct"], cutpoint)["energy"]
+                second_energy = self.energy.compute_energy(sequence, item["phase2_structure"], cutpoint)["energy"]
                 expected_score += second_energy - (4.1 if first_bound and second_bound else 0.0)
                 expected_effective += item["beta"] * first_energy
                 self.assertEqual(item["energy_metadata"]["energy_kind"], "heuristic")
             else:
                 self.assertEqual(pairs, first_pairs)
-                self.assertIsNone(item["phase2_struct"])
+                self.assertIsNone(item["phase2_structure"])
                 self.assertEqual(item["energy_metadata"]["energy_kind"], "thermodynamic")
             self.assertAlmostEqual(item["score"], expected_score, places=8)
             self.assertAlmostEqual(item["effective_energy"], expected_effective, places=8)
@@ -194,19 +204,16 @@ class CofoldPropertyTests(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)))
         self.assertEqual(order, sorted(order))
 
-    def test_three_public_input_forms_are_equivalent(self):
+    def test_both_public_input_forms_are_equivalent(self):
         for index, (first, second) in enumerate(CASES):
             with self.subTest(case=index, lengths=(len(first), len(second))):
                 matrix = _matrix(first + second, len(first), SEED + index)
-                options = dict(verbose=False, beam_size=3 if index % 2 else 0,
+                options = dict(beam_size=3 if index % 2 else 0,
                                energy_delta=6.0, max_phase1=3, max_phase2=2,
-                               allow_pseudoknot=index >= 6, alpha=0.375,
-                               bonus_matrix=matrix)
-                separate = self.api.cofold(first, second, **options)
-                marked = self.api.two_phase_pseudoknot_fold(first + "&" + second, **options)
-                compact = self.api.two_phase_pseudoknot_fold(first + second, cutpoint=len(first), **options)
+                               pseudoknots=index >= 6, alpha=0.375, bonus=matrix)
+                separate = _flat(self.cplfold.fold(first, partner=second, **options), options)
+                marked = _flat(self.cplfold.fold(first + "&" + second, **options), options)
                 self.assertEqual(separate, marked)
-                self.assertEqual(separate, compact)
                 self.assert_results(first, second, separate, matrix)
 
     def test_alpha_zero_ignores_seeded_evidence_in_search(self):
@@ -214,9 +221,9 @@ class CofoldPropertyTests(unittest.TestCase):
         for index, (first, second) in enumerate(CASES[2:]):
             with self.subTest(case=index):
                 matrix = _matrix(first + second, len(first), SEED + 20 + index)
-                options = dict(allow_pseudoknot=index >= 4)
+                options = dict(pseudoknots=index >= 4)
                 plain = self.fold(first, second, **options)
-                guided = self.fold(first, second, alpha=0.0, bonus_matrix=matrix, **options)
+                guided = self.fold(first, second, alpha=0.0, bonus=matrix, **options)
                 self.assertEqual(_without(plain, "read_support"), _without(guided, "read_support"))
                 self.assert_results(first, second, guided, matrix)
                 observed_support |= any(item["read_support"] != 0 for item in guided)
@@ -225,7 +232,7 @@ class CofoldPropertyTests(unittest.TestCase):
     def test_nonzero_alpha_without_evidence_preserves_candidates(self):
         for index, (first, second) in enumerate(CASES[2:]):
             with self.subTest(case=index):
-                options = dict(allow_pseudoknot=index >= 4)
+                options = dict(pseudoknots=index >= 4)
                 plain = self.fold(first, second, **options)
                 changed = self.fold(first, second, alpha=(0.25, 2.5, 17.0)[index % 3], **options)
                 self.assertEqual(_without(plain, "alpha"), _without(changed, "alpha"))
@@ -236,14 +243,14 @@ class CofoldPropertyTests(unittest.TestCase):
             with self.subTest(first=first, second=second):
                 matrix = np.zeros((len(first + second),) * 2)
                 plain = self.fold(first, second, alpha=1.25)
-                zero = self.fold(first, second, alpha=1.25, bonus_matrix=matrix)
+                zero = self.fold(first, second, alpha=1.25, bonus=matrix)
                 self.assertEqual(plain, zero)
 
     def test_beta_has_no_effect_when_pseudoknots_are_disabled(self):
         for index, (first, second) in enumerate(CASES[2:]):
             with self.subTest(case=index):
                 matrix = _matrix(first + second, len(first), SEED + 40 + index)
-                options = dict(alpha=0.5, bonus_matrix=matrix)
+                options = dict(alpha=0.5, bonus=matrix)
                 plain = self.fold(first, second, beta=0.0, **options)
                 biased = self.fold(first, second, beta=(0.2, 4.0, 1000.0)[index % 3], **options)
                 self.assertEqual(_without(plain, "beta"), _without(biased, "beta"))
@@ -258,10 +265,10 @@ class CofoldPropertyTests(unittest.TestCase):
             matrix = _target_matrix(len(first + second),
                 [(i, len(first) + width - 1 - i, 12.0) for i in range(width)] +
                 [(width + i, len(first + second) - 1 - i, 7.0) for i in range(width)])
-            options = dict(alpha=1.0, bonus_matrix=matrix, allow_pseudoknot=True,
+            options = dict(alpha=1.0, bonus=matrix, pseudoknots=True,
                            energy_delta=0.0, max_phase1=1, max_phase2=1)
             plain = self.fold(first, second, beta=0.0, **options)
-            self.assertTrue(any(item["type"] == "pseudoknot" for item in plain))
+            self.assertTrue(any(item["kind"] == "pseudoknot" for item in plain))
             original = {_pairs(item["structure"]): item for item in plain}
             for beta in (0.75, 32.0):
                 with self.subTest(first=first, second=second, beta=beta):
@@ -279,7 +286,7 @@ class CofoldPropertyTests(unittest.TestCase):
             second = first.translate(COMPLEMENT)
             with self.subTest(first=first, second=second):
                 matrix = _target_matrix(4, [(0, 2, 12.0)])
-                options = dict(bonus_matrix=matrix, max_phase1=1, energy_delta=0.0)
+                options = dict(bonus=matrix, max_phase1=1, energy_delta=0.0)
                 plain = self.fold(first, second, alpha=0.0, **options)
                 guided = self.fold(first, second, alpha=1.0, **options)
                 self.assertEqual(_pairs(plain[0]["structure"]), ())
@@ -294,15 +301,15 @@ class CofoldPropertyTests(unittest.TestCase):
             with self.subTest(first=first, second=second):
                 strong = _target_matrix(4, [(0, 2, 12.0)])
                 both = _target_matrix(4, [(0, 2, 12.0), (1, 3, 7.0)])
-                options = dict(alpha=1.0, allow_pseudoknot=True, energy_delta=0.0,
+                options = dict(alpha=1.0, pseudoknots=True, energy_delta=0.0,
                                max_phase1=1, max_phase2=1)
-                first_only = self.fold(first, second, bonus_matrix=strong, **options)
-                guided = self.fold(first, second, bonus_matrix=both, **options)
-                self.assertFalse(any(item["type"] == "pseudoknot" for item in first_only))
-                pks = [item for item in guided if item["type"] == "pseudoknot"]
+                first_only = self.fold(first, second, bonus=strong, **options)
+                guided = self.fold(first, second, bonus=both, **options)
+                self.assertFalse(any(item["kind"] == "pseudoknot" for item in first_only))
+                pks = [item for item in guided if item["kind"] == "pseudoknot"]
                 self.assertEqual(len(pks), 1)
-                self.assertEqual(pks[0]["phase1_struct"], first_only[0]["structure"])
-                self.assertEqual(_pairs(pks[0]["phase2_struct"]), ((1, 3),))
+                self.assertEqual(pks[0]["phase1_structure"], first_only[0]["structure"])
+                self.assertEqual(_pairs(pks[0]["phase2_structure"]), ((1, 3),))
                 self.assertEqual(_pairs(pks[0]["structure"]), ((0, 2), (1, 3)))
                 self.assert_results(first, second, guided, both)
                 observed_pks += len(pks)
@@ -373,7 +380,7 @@ class CofoldPropertyTests(unittest.TestCase):
             with self.subTest(case=index, cutpoint=len(first)):
                 matrix = _matrix(first + second, len(first), SEED + 100 + index)
                 results = self.fold(first, second, alpha=0.75, beta=0.25,
-                                    bonus_matrix=matrix, allow_pseudoknot=True)
+                                    bonus=matrix, pseudoknots=True)
                 self.assert_results(first, second, results, matrix)
 
     def test_swapping_strands_preserves_the_same_reindexed_graph_energy(self):
@@ -420,9 +427,9 @@ class CofoldPropertyTests(unittest.TestCase):
         for index, (first, second) in enumerate(CASES[4:]):
             with self.subTest(case=index):
                 matrix = _matrix(first + second, len(first), SEED + 140 + index)
-                options = dict(allow_pseudoknot=index >= 2)
-                original = self.fold(first, second, alpha=0.5, bonus_matrix=matrix, **options)
-                rescaled = self.fold(first, second, alpha=0.25, bonus_matrix=matrix * 2.0, **options)
+                options = dict(pseudoknots=index >= 2)
+                original = self.fold(first, second, alpha=0.5, bonus=matrix, **options)
+                rescaled = self.fold(first, second, alpha=0.25, bonus=matrix * 2.0, **options)
                 self.assertEqual(_without(original, "alpha", "read_support"),
                                  _without(rescaled, "alpha", "read_support"))
                 self.assert_results(first, second, rescaled, matrix * 2.0)

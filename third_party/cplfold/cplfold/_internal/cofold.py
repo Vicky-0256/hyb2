@@ -7,10 +7,12 @@ its ranking energy must not be presented as a validated binding free energy.
 
 import math
 
-from ..models import DEFAULT_MODELS
 from ..sequence import add_strand_break
-from .cofold_options import mode_options
-from .validation import CofoldInputError, _validate_search_bonus, normalise, validate_fold_inputs
+from .cofold_parser import BeamCKYCofoldParser, _INF
+from .errors import InputError
+from .validation import BonusLimits, FoldInputs
+
+BONUS_LIMITS = BonusLimits(element=None, search=_INF)
 
 
 def _finite(value, name):
@@ -18,61 +20,31 @@ def _finite(value, name):
     try:
         value = float(value)
     except (TypeError, ValueError, OverflowError) as error:
-        raise CofoldInputError(f"{name} exceeds the finite numeric range") from error
+        raise InputError(f"{name} exceeds the finite numeric range") from error
     if not math.isfinite(value):
-        raise CofoldInputError(f"{name} exceeds the finite numeric range")
+        raise InputError(f"{name} exceeds the finite numeric range")
     return value
 
 
-def cofold(sequence_a, sequence_b, *, mode=None, **kwargs):
-    """Fold two RNA molecules, retaining alpha reads guidance and beta ranking.
+def run(inputs: FoldInputs, *, output_file=None, verbose=False):
+    """The two-strand engine: two-phase cofold search of validated inputs.
 
-    Strands are given in their own 5'-to-3' orientations. Returned structures
-    contain ``&``; bonus coordinates refer to A+B with no separator. Inputs
-    remain in the caller's order, including two identical homodimer strands.
-    ``mode='standard'`` disables pseudoknots and defaults to one candidate with
-    zero energy window; explicit max_phase1/energy_delta override those defaults.
-    ``mode='pseudoknot'`` explicitly enables Phase 2. Omitting mode preserves
-    the existing API defaults. A contradictory allow_pseudoknot is rejected.
-    """
-    first, first_cut = normalise(sequence_a)
-    second, second_cut = normalise(sequence_b)
-    if first_cut is not None or second_cut is not None or "cutpoint" in kwargs:
-        raise CofoldInputError("cofold(a, b) takes two individual strands without a cutpoint")
-    return two_phase_cofold(first + second, cutpoint=len(first), **mode_options(mode, kwargs))
-
-
-def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
-                     max_phase1=10, max_phase2=5, energy_model=None,
-                     output_file=None, verbose=True, lv=True, bonus_matrix=None,
-                     alpha=0.0, beta=0.0, allow_pseudoknot=True):
-    """Two-phase cofold search; every generated candidate is scored as a whole.
-
-    Alpha changes both phases' search objectives, E - alpha * pair support.
-    Beta retains the original CPLfold ranking rule for crossing candidates:
+    Every generated candidate is scored as a whole. Alpha changes both phases'
+    search objectives, E - alpha * pair support. Beta retains the original
+    CPLfold ranking rule for crossing candidates:
     E_effective = E_merged + beta * E_phase1. It does not alter physical energy.
-    ``max_phase2`` is effective here, unlike the legacy single-strand path.
-    ``energy_model=None`` reads ``DEFAULT_MODELS["cplcofold"]`` at call time.
+    Each Phase 1 structure gets up to ``max_phase2`` constrained candidates.
+    Candidates with the same pair set keep the best (effective energy, score);
+    results are sorted by (effective energy, score, structure).
     """
-    if energy_model is None:
-        energy_model = DEFAULT_MODELS["cplcofold"]
-    inputs = validate_fold_inputs(
-        seq, cutpoint, two_strands=True, lv=lv, beam_size=beam_size, energy_delta=energy_delta,
-        max_phase1=max_phase1, max_phase2=max_phase2, energy_model=energy_model,
-        bonus_matrix=bonus_matrix, alpha=alpha, beta=beta, allow_pseudoknot=allow_pseudoknot,
-    )
-    seq, cutpoint, energy_model = inputs["seq"], inputs["cutpoint"], inputs["energy_model"]
-    beam_size, max_phase1, max_phase2 = inputs["beam_size"], inputs["max_phase1"], inputs["max_phase2"]
-    energy_delta, alpha, beta = inputs["energy_delta"], inputs["alpha"], inputs["beta"]
-    bonus_matrix = inputs["bonus_matrix"]
+    seq, cutpoint, energy_model = inputs.sequence, inputs.cutpoint, inputs.energy_model
+    beam_size, max_phase1, max_phase2 = inputs.beam_size, inputs.max_phase1, inputs.max_phase2
+    energy_delta, alpha, beta = inputs.energy_delta, inputs.alpha, inputs.beta
+    bonus_matrix, allow_pseudoknot = inputs.bonus, inputs.pseudoknots
 
-    # Lazy imports keep the established single-strand startup/JIT path intact.
-    from .cofold_parser import BeamCKYCofoldParser, _INF
     from .cofold_energy import CofoldEnergy
-    from .single import (get_pairs_from_structure, is_pseudoknot,
-                         merge_structures, output_results, structure_to_constraint)
-
-    _validate_search_bonus(bonus_matrix, alpha, _INF)
+    from .single import (TURNER_MODEL, candidate, get_pairs_from_structure, is_pseudoknot,
+                         merge_structures, output_results, read_support, structure_to_constraint)
 
     def make_parser(association_cost=4.1):
         parser = BeamCKYCofoldParser(
@@ -99,36 +71,25 @@ def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
         phase1_energy = _finite(phase1_energy, "Phase 1 energy")
         search_score = _finite(search_score, "Search score")
         effective = _finite(energy + beta * phase1_energy, "Effective energy") if crossing else energy
-        try:
-            support = math.fsum(float(bonus_matrix[i, j]) for i, j in pairs) if bonus_matrix is not None else 0.0
-        except OverflowError as error:
-            raise ValueError("Read support exceeds the finite numeric range") from error
-        support = _finite(support, "Read support")
-        read_bonus = 0.0 if alpha == 0.0 else _finite(alpha * support, "Read bonus")
-        candidate = {
-            "structure": add_strand_break(structure, cutpoint),
-            "energy": energy,
-            "effective_energy": effective,
-            "type": "pseudoknot" if crossing else "phase1",
-            "phase1_struct": add_strand_break(phase1_structure, cutpoint),
-            "phase1_energy": phase1_energy,
-            "phase2_struct": add_strand_break(phase2_structure, cutpoint) if crossing else None,
-            "score": search_score,
-            "cutpoint": cutpoint,
+        support = read_support(bonus_matrix, pairs)
+        details = {
             "strand_lengths": [cutpoint, len(seq) - cutpoint],
             "intermolecular_pairs": sum(i < cutpoint <= j for i, j in pairs),
-            "read_support": support,
-            "read_bonus": read_bonus,
-            "alpha": alpha,
-            "beta": beta,
+            "read_bonus": 0.0 if alpha == 0.0 else _finite(alpha * support, "Read bonus"),
             "energy_metadata": dict(scored.get("metadata", {})),
             "energy_breakdown": dict(scored.get("breakdown", {})),
         }
         if crossing:
-            candidate["phase2_association_cost"] = association_cost
+            details["phase2_association_cost"] = association_cost
+        result = candidate(
+            add_strand_break(structure, cutpoint), energy, effective, "pseudoknot" if crossing else "phase1",
+            search_score, add_strand_break(phase1_structure, cutpoint), phase1_energy,
+            add_strand_break(phase2_structure, cutpoint) if crossing else None, cutpoint, pairs,
+            # Nested cofold energies are Turner terms whatever the model; crossing ones use its DP terms.
+            energy_model if crossing else TURNER_MODEL, support, details)
         previous = candidates.get(key)
         if previous is None or (effective, search_score) < (previous["effective_energy"], previous["score"]):
-            candidates[key] = candidate
+            candidates[key] = result
 
     if verbose:
         print(f"Running CPLcofold: {cutpoint} + {len(seq) - cutpoint} nt; beam={beam_size}; alpha={alpha}; beta={beta}")
@@ -169,5 +130,5 @@ def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
 
 
 if __name__ == "__main__":
-    from ..cli import main
-    raise SystemExit(main(cofold_entry=True))
+    from ..cli import cofold_main
+    raise SystemExit(cofold_main())

@@ -7,7 +7,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from cplfold._internal.single import two_phase_pseudoknot_fold  # noqa: E402
+import cplfold  # noqa: E402
 from cplfold._internal.hotknots_energy import HotKnotsEnergy  # noqa: E402
 from cplfold._internal.turner_energy import turner_energy  # noqa: E402
 
@@ -43,20 +43,20 @@ class TurnerEnergyTests(unittest.TestCase):
 
     def test_pseudoknot_free_run_ranks_with_turner(self):
         sequence = VIENNA[4][0]
-        results = two_phase_pseudoknot_fold(sequence, beam_size=20, max_phase1=5, energy_delta=5.0,
-                                            verbose=False, allow_pseudoknot=False)
-        energies = [r['energy'] for r in results]
+        results = cplfold.fold(sequence, beam_size=20, max_phase1=5, energy_delta=5.0, pseudoknots=False)
+        energies = [r.energy for r in results]
         for r in results:
-            self.assertAlmostEqual(r['energy'], turner_energy(sequence, r['structure']), places=6)
+            self.assertAlmostEqual(r.energy, turner_energy(sequence, r.structure), places=6)
+            self.assertEqual(r.energy_model, "Turner 2004")
         self.assertEqual(energies, sorted(energies))
 
     def test_pseudoknot_run_ranks_with_the_requested_model(self):
         sequence = VIENNA[4][0]
-        results = two_phase_pseudoknot_fold(sequence, beam_size=20, max_phase1=3, verbose=False,
-                                            allow_pseudoknot=True, energy_model="DP09")
+        results = cplfold.fold(sequence, beam_size=20, max_phase1=3, pseudoknots=True, energy_model="DP09")
         hk = HotKnotsEnergy()
         for r in results:
-            self.assertAlmostEqual(r['energy'], hk.compute_energy(sequence, r['structure'], 'DP09')['energy'], places=6)
+            self.assertAlmostEqual(r.energy, hk.compute_energy(sequence, r.structure, 'DP09')['energy'], places=6)
+            self.assertEqual(r.energy_model, "DP09")
 
 
 if __name__ == '__main__':

@@ -132,7 +132,8 @@ assert.throws(() => p({K: ' 2 '}), /IRIS ensemble size K/);"""
             inputs += [f"pipeline/hyb2analysis/{name}.py" for name in
                        ("__init__", "reference", "support_kernels", "engine_parameters", "fold_text", "iris_parameters")]
             inputs += [f"third_party/cplfold/cplfold/{name}.py" for name in
-                       ("__init__", "models", "sequence", "_internal/__init__", "_internal/model_tables", "_internal/cli_input")]
+                       ("__init__", "models", "sequence", "_internal/__init__", "_internal/model_tables", "_internal/cli_input",
+                        "_internal/errors", "_internal/defaults")]
             for name in inputs:
                 target = root / name
                 target.parent.mkdir(parents=True, exist_ok=True)

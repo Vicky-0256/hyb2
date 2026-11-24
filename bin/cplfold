@@ -10,30 +10,40 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "third_party/cplfold"))
-from cplfold.sequence import read_sequence_file as _read_sequence_file
+from cplfold import InputError as _InputError
+from cplfold.sequence import clean as _clean, read_sequence_file as _read_sequence_file
 
 
 DEFAULT_MAX_SEQUENCE_LENGTH = 1000
+# Hyb2's one-strand reads scaling when --alpha is omitted; the package default is 0.
+SINGLE_STRAND_ALPHA = "0.5"
 
 
 def _sequence_arguments(arguments: list[str], cofold: bool = False) -> tuple[str | None, list[str]]:
-    parser = argparse.ArgumentParser(add_help=False)
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("-s", "--sequence")
     parser.add_argument("--sequence-file", type=Path)
     parser.add_argument("--sequence-two")
+    parser.add_argument("--cutpoint")
+    parser.add_argument("--alpha")
+    parser.add_argument("-n2", "--max-phase2")
     parser.add_argument("--cofold", action="store_true")
     parsed, _ = parser.parse_known_args(arguments)
     if parsed.sequence is not None and parsed.sequence_file is not None:
         raise SystemExit("Use either --sequence or --sequence-file, not both")
+    arguments = list(arguments)
     if parsed.sequence_file is None:
         sequence = parsed.sequence
         if sequence is not None and parsed.sequence_two is not None:
             sequence += "&" + parsed.sequence_two
-        return sequence, list(arguments)
+        return sequence, _single_strand_defaults(arguments, parsed, sequence, cofold)
 
     try:
         sequence = _read_sequence_file(parsed.sequence_file, cofold=cofold or parsed.cofold)
-    except (ValueError, OSError) as error:  # cplfold.CofoldInputError is a ValueError
+    except _InputError as error:  # invalid contents: the message alone, status 2
+        print(error, file=sys.stderr)
+        raise SystemExit(2) from error
+    except OSError as error:
         raise SystemExit(str(error)) from error
     forwarded = []
     skip_next = False
@@ -49,7 +59,40 @@ def _sequence_arguments(arguments: list[str], cofold: bool = False) -> tuple[str
         forwarded.append(argument)
     forwarded.extend(["--sequence", sequence])
     guard_sequence = sequence + "&" + parsed.sequence_two if parsed.sequence_two is not None else sequence
-    return guard_sequence, forwarded
+    return guard_sequence, _single_strand_defaults(forwarded, parsed, guard_sequence, cofold)
+
+
+def _positive_integer(text: str | None) -> bool:
+    try:
+        return text is not None and int(text) >= 1
+    except ValueError:
+        return False
+
+
+def _single_strand_defaults(arguments: list[str], parsed: argparse.Namespace, sequence: str | None,
+                            cofold: bool) -> list[str]:
+    """Keep Hyb2's one-strand commands as they were before cplfold 1.0.
+
+    The package defaults alpha to 0; Hyb2 keeps 0.5 for one strand by passing it.
+    The package rejects --max-phase2 for one strand, where it never had an
+    effect; a valid value is dropped, an invalid one is still forwarded and rejected.
+    """
+    two_strands = cofold or parsed.cofold or parsed.cutpoint is not None or (sequence is not None and "&" in sequence)
+    if two_strands:
+        return arguments
+    if _positive_integer(parsed.max_phase2):
+        kept, skip_next = [], False
+        for argument in arguments:
+            if skip_next:
+                skip_next = False
+            elif argument in ("-n2", "--max-phase2"):
+                skip_next = True
+            elif not argument.startswith(("-n2=", "--max-phase2=")):
+                kept.append(argument)
+        arguments = kept
+    if parsed.alpha is None:
+        arguments = [*arguments, "--alpha", SINGLE_STRAND_ALPHA]
+    return arguments
 
 
 def _maximum_sequence_length() -> int:
@@ -93,7 +136,7 @@ def main(cofold_entry: bool = False) -> None:
 
     sequence, forwarded_arguments = _sequence_arguments(sys.argv[1:], cofold=cofold_entry)
     maximum = _maximum_sequence_length()
-    length = len("".join(sequence.split()).replace("&", "")) if sequence is not None else 0
+    length = len(_clean(sequence).replace("&", "")) if sequence is not None else 0
     if length > maximum:
         raise SystemExit(
             f"CPLfold input is {length} nt; the Hyb2 safety limit is "
@@ -106,8 +149,8 @@ def main(cofold_entry: bool = False) -> None:
     # Equivalent to ``python -m cplfold.cli``, but with the package's import root
     # instead of the working directory as sys.path[0], as a script path would give.
     bootstrap = (
-        "import sys; sys.path[0] = sys.argv.pop(1); from cplfold.cli import main; "
-        f"sys.exit(main(cofold_entry={bool(cofold_entry)}))"
+        "import sys; sys.path[0] = sys.argv.pop(1); from cplfold.cli import "
+        + ("cofold_main as main" if cofold_entry else "main") + "; sys.exit(main())"
     )
     arguments = [sys.executable, "-c", bootstrap, str(import_root), *forwarded_arguments]
     if os.name == "nt":  # Windows exec joins the arguments without quoting them

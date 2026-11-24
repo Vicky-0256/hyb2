@@ -28,10 +28,10 @@ class CofoldStructureHelperTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.api, cls.parser_module = _load_modules()
+        cls.cplfold = importlib.import_module("cplfold")
 
     def test_public_nested_result_roundtrips_to_compact_parser_constraints(self):
-        result = self.api.cofold("GGG", "CCC", allow_pseudoknot=False,
-                                 max_phase1=1, verbose=False)[0]
+        result = self.cplfold.fold("GGG", partner="CCC", pseudoknots=False, max_phase1=1)[0].as_dict()
         self.assertEqual(result["structure"], "(((&)))")
         self.assertEqual(self.api.get_pairs_from_structure(result["structure"]),
                          [(2, 3), (1, 4), (0, 5)])
@@ -41,9 +41,9 @@ class CofoldStructureHelperTests(unittest.TestCase):
         self.assertEqual(parser.parse("GGGCCC", cons=constraint)[:2], ("......", 0.0))
 
     def test_public_pseudoknot_result_masks_every_bracket_family(self):
-        results = self.api.cofold("GGGG", "CCCC", max_phase1=12, max_phase2=3,
-                                  energy_delta=12, verbose=False)
-        result = next(item for item in results if item["type"] == "pseudoknot")
+        results = [p.as_dict() for p in self.cplfold.fold("GGGG", partner="CCCC", max_phase1=12,
+                                                          max_phase2=3, energy_delta=12)]
+        result = next(item for item in results if item["kind"] == "pseudoknot")
         paired = {base for pair in self.api.get_pairs_from_structure(result["structure"])
                   for base in pair}
         constraint = self.api.structure_to_constraint(result["structure"])
@@ -53,8 +53,8 @@ class CofoldStructureHelperTests(unittest.TestCase):
         folded = parser.parse("GGGGCCCC", cons=constraint)[0]
         self.assertTrue(all(folded[i] == '.' for i in paired))
         self.assertEqual(set(self.api.get_pairs_from_structure(result["structure"])),
-                         set(self.api.get_pairs_from_structure(result["phase1_struct"])) |
-                         set(self.api.get_pairs_from_structure(result["phase2_struct"])))
+                         set(self.api.get_pairs_from_structure(result["phase1_structure"])) |
+                         set(self.api.get_pairs_from_structure(result["phase2_structure"])))
 
     def test_compact_and_marked_merges_preserve_the_same_pair_graph(self):
         first, second = "((....))..", "..((....))"

@@ -191,10 +191,49 @@ Run the full vendored regression suite and a real-Numba smoke test with:
 python scripts/verify/verify-cplfold-python.py
 ```
 
-For one strand, `--max-phase2` (and `max_phase2` of `cplfold.fold`) is
-validated but has no effect: the single-strand route runs exactly one
-constrained Phase 2 fold per Phase 1 structure, as upstream commit `24bab52`
-does. Only the two-strand route uses it as a search limit (below).
+One strand runs exactly one constrained Phase 2 fold per Phase 1 structure,
+as upstream commit `24bab52` does, so `cplfold.fold` accepts only
+`max_phase2=None` there and the package command rejects `--max-phase2` with
+status 2. `bin/cplfold` drops a valid one-strand `--max-phase2`, which never
+changed a result, so existing Hyb2 command lines keep working. Only the
+two-strand route uses it as a search limit (below); Hyb2's `fold_prepared`
+passes `max_phase2=1` there.
+
+## Frozen Python API (cplfold 1.0)
+
+`third_party/cplfold/README.md` lists every public name and the `Prediction`
+fields. In short:
+
+```python
+cplfold.fold(sequence, *, partner=None, pseudoknots=True, energy_model=None, bonus=None,
+             alpha=0.0, beta=0.0, beam_size=100, energy_delta=5.0, max_phase1=10,
+             max_phase2=None)            # -> list[cplfold.Prediction], best first
+cplfold.Prediction                       # structure, energy, effective_energy, kind, score,
+                                         # phase1_structure, phase1_energy, phase2_structure,
+                                         # cutpoint, pairs, energy_model, read_support, details
+cplfold.InputError                       # a ValueError
+cplfold.sequence: normalise_sequence, add_strand_break, read_sequence_file, clean,
+                  ALPHABET, ALIASES, WHITESPACE
+cplfold.bonus:    load_bonus_matrix_file, gaussian_bonus_matrix, bonus_from_arms, gaussian_sigma
+cplfold.models:   MODELS, COFOLD_MODELS, default_model(two_strands)
+cplfold.cli:      main(argv=None), cofold_main(argv=None)
+```
+
+`energy_model` is the pseudoknot ranking model; it is validated also with
+`pseudoknots=False`, when one strand ranks with Turner 2004 and
+`Prediction.energy_model` says so. Errors: `cplfold.InputError` for invalid
+arguments, sequences, file contents and input magnitudes that overflow the
+numeric range; `OSError` when a file cannot be read. The commands exit with
+status 2 and 1 for these, printing the message alone.
+
+Changes before 1.0 that Hyb2 callers were updated for: `CofoldInputError` →
+`InputError`; one `Prediction` schema with the public names (two-strand extras
+in `details`); `DEFAULT_MODELS` → `default_model()`; `cofold_counts` and
+`build_cofold_bonus_matrix` → `bonus_from_arms`; `gaussian_bonus_matrix(length,
+counts, *, cutpoint=None, sigma=None)`; `gaussian_bonus_stripes`,
+`mean_arm_length`, `strip_structure_break` and `cli.main(cofold_entry=)` are
+private; the package command's one-strand alpha default is 0 (Hyb2's wrapper
+passes 0.5). Hyb2 imports the private bonus helpers it needs, as it pins the package.
 
 ## Two-strand CPLcofold (Python and Numba)
 
@@ -224,9 +263,10 @@ the existing API: alpha=0, beta=0, beam=100, delta=5, max_phase1=10 and
 max_phase2=5. Reads affect the search only when a matrix and a nonzero alpha
 are supplied. `--mode standard` selects the single-candidate, pseudoknot-free
 configuration used for the warmed cofold performance comparisons. Multiple
-candidates and pseudoknot search take additional work. The original
-`bin/cplfold` retains alpha=0.5 for single-strand compatibility; all two-strand
-CLI routes now default to alpha=0, matching the Python API.
+candidates and pseudoknot search take additional work. The package commands
+(`python -m cplfold.cli`, `cplfold`, `cplcofold`) default to alpha=0 on every
+route, matching `cplfold.fold()`. Hyb2's `bin/cplfold` wrapper keeps alpha=0.5
+for one strand by passing `--alpha 0.5` when `--alpha` is omitted.
 Both command help pages describe their defaults and supported input forms.
 
 Alternatively, `--sequence GGGGCCCC --cutpoint 4` supplies the concatenated
@@ -237,7 +277,10 @@ also exclude `&`: strand A is `1..cutpoint`, strand B starts at
 `bin/cplfold` wrapper; the dedicated `bin/cplcofold` already enables it.
 Ordinary single-record input retains the existing behavior. `--no-pseudoknot` is optional, and beta
 is only applied to pseudoknot candidates. `--max-phase2` is effective for the
-new cofold path and controls distinct constrained candidates per Phase 1.
+two-strand path and controls distinct constrained candidates per Phase 1; for
+one strand it is rejected (exit status 2), because one strand runs exactly one
+Phase 2 fold per Phase 1 structure. Every invalid input, also in a sequence or
+bonus file, exits with status 2; a file that cannot be read exits with status 1.
 
 `parse()` and `parse_subopt(max_structures=1)` use the compiled single-best
 traceback. It walks the retained chart without constructing Python candidate
@@ -251,12 +294,12 @@ For the Python API, put `third_party/cplfold` on the Python import path (or
 
 ```python
 import cplfold
-from cplfold.bonus import build_cofold_bonus_matrix
+from cplfold.bonus import bonus_from_arms
 
 a, b = "GGGG", "CCCC"
 # Prepared A+B coordinates, 1-based inclusive: two arm intervals per read.
 arms = [(1, 3, 6, 8), (2, 4, 5, 7)]
-bonus = build_cofold_bonus_matrix(len(a) + len(b), len(a), arms)
+bonus = bonus_from_arms(len(a) + len(b), arms, cutpoint=len(a))
 results = cplfold.fold(a, partner=b, bonus=bonus, alpha=0.5, beta=0.3,
                        beam_size=100, max_phase1=10, max_phase2=5)
 best = results[0]
@@ -268,26 +311,25 @@ ordinary = cplfold.fold(a, partner=b, pseudoknots=False, max_phase1=1, energy_de
 ```
 
 `cplfold.fold(a + "&" + b, ...)` folds the same two strands. `fold` returns
-`cplfold.Prediction` objects; `details` is a read-only view whose nested
-dicts are read-only mappings and lists are tuples, and `as_dict()` gives a
-plain copy of the original candidate dict (same keys and order).
-It never prints or writes files; invalid input raises
-`cplfold.CofoldInputError`, a `ValueError`.
+`cplfold.Prediction` objects with the same fields on both routes:
+`structure`, `energy`, `effective_energy`, `kind`, `score`, `phase1_structure`,
+`phase1_energy`, `phase2_structure`, `cutpoint` (None for one strand), `pairs`
+(0-based compact pairs), `energy_model` (`"Turner 2004"` for nested cofold
+candidates and pseudoknot-free single-strand runs, otherwise the ranking
+model), `read_support` (0.0 without a bonus) and `details` (read-only; for two
+strands `strand_lengths`, `intermolecular_pairs`, `read_bonus`,
+`energy_metadata`, `energy_breakdown` and, for pseudoknots,
+`phase2_association_cost`). `as_dict()` returns a plain deep copy keyed by
+those names. `fold` never prints or writes files; invalid input raises
+`cplfold.InputError`, a `ValueError`.
 `cplfold.bonus.load_bonus_matrix_file` and `cplfold.sequence.read_sequence_file`
 raise `OSError` (`FileNotFoundError` for a missing file) or
-`cplfold.CofoldInputError` for malformed contents; they never exit the
-process. The commands report the same messages with exit status 1.
-`cplfold.models.DEFAULT_MODELS` and `cplfold.sequence.ALIASES` are read-only
-mappings; both routes read the default model when they are called.
+`cplfold.InputError` for malformed contents; they never exit the process.
+`cplfold.models.default_model(two_strands)` gives the model of
+`energy_model=None`; `cplfold.sequence.ALIASES` is a read-only mapping.
 
 The structure helpers in `cplfold._internal.single` (private) accept compact
-or `&`-marked structures.
-`get_pairs_from_structure` returns zero-based nucleotide pairs, excluding
-`&`; `structure_to_constraint` returns a compact mask and masks all paired
-positions in `()`, `[]`, and `{}`. `merge_structures` preserves a boundary
-provided by either input and rejects inconsistent boundaries or pair conflicts.
-Malformed structures raise `ValueError` in the extraction/mask helpers;
-an invalid merge returns `None`.
+or `&`-marked structures. Prefer `Prediction.pairs` and `Prediction.cutpoint`.
 
 The reads builder supports intra- and intermolecular arms. It clips each
 Gaussian to its own strand, sums one contribution per read before `log1p`,
@@ -295,7 +337,7 @@ and compiles its accumulation kernel with Numba. Each arm must lie on one
 strand; a read can connect two strands. The resulting matrix is symmetric.
 An externally supplied matrix must also be symmetric, finite, and N-by-N.
 Scaling and result metadata are checked for overflow before a candidate can
-enter ranking. Inputs outside the parser's numeric range raise `ValueError`;
+enter ranking. Inputs outside the parser's numeric range raise `cplfold.InputError`;
 they do not produce NaN or infinite scores. With absent or zero evidence,
 alpha has no effect, including very large finite alpha values.
 

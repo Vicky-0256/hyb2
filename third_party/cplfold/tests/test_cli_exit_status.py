@@ -14,15 +14,15 @@ from cplfold import cli as CPLfold  # noqa: E402
 
 class CPLfoldCliExitStatusTests(unittest.TestCase):
     def test_phase1_only_result_is_successful(self):
-        result = {"type": "phase1"}
+        result = {"kind": "phase1"}
         with mock.patch.object(
-            CPLfold, "two_phase_pseudoknot_fold", return_value=[result]
+            CPLfold, "run", return_value=[result]
         ), mock.patch.object(sys, "argv", ["cplfold", "-s", "GAAAC", "-q"]):
             self.assertEqual(CPLfold.main(), 0)
 
     def test_empty_result_remains_unsuccessful(self):
         with mock.patch.object(
-            CPLfold, "two_phase_pseudoknot_fold", return_value=[]
+            CPLfold, "run", return_value=[]
         ), mock.patch.object(sys, "argv", ["cplfold", "-s", "GAAAC", "-q"]):
             self.assertEqual(CPLfold.main(), 1)
 

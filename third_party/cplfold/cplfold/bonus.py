@@ -4,15 +4,16 @@ import math
 from collections import Counter
 from functools import lru_cache
 from math import ceil, floor
-from numbers import Integral
+from collections.abc import Mapping
+from numbers import Integral, Real
+from os import PathLike
 from pathlib import Path
 
 import numpy as np
 
-from ._internal.cli_input import CofoldInputError
+from ._internal.errors import InputError
 
-__all__ = ["mean_arm_length", "gaussian_sigma", "gaussian_bonus_stripes", "gaussian_bonus_matrix",
-           "cofold_counts", "build_cofold_bonus_matrix", "load_bonus_matrix_file"]
+__all__ = ["gaussian_sigma", "gaussian_bonus_matrix", "bonus_from_arms", "load_bonus_matrix_file"]
 
 _IRIS_THRESHOLD = 2.0 ** -23  # IRIS's EPS: smaller support is zero
 
@@ -33,22 +34,62 @@ else:
     _accumulate_support = njit(cache=False)(_accumulate_support)
 
 
-def mean_arm_length(counts):
+def _is_integer(value):
+    return not isinstance(value, bool) and isinstance(value, Integral)
+
+
+def _arm_counts(length, arms, cutpoint=None):
+    """Validated read blocks: ``{(a, b, c, d): rows}`` from 1-based inclusive arms.
+
+    ``arms`` is an iterable of ``(a, b, c, d)`` (one row each) or a mapping from
+    a block to its positive integer row count. With ``cutpoint``, no arm may
+    cross the strand break. ``length=None`` checks only the lower bounds.
+    """
+    if length is not None and (not _is_integer(length) or length < 1):
+        raise InputError("length must be a positive integer")
+    if cutpoint is not None and (not _is_integer(cutpoint) or not 0 < cutpoint < length):
+        raise InputError("cutpoint must separate two nonempty strands in sequence_length")
+    counts = Counter()
+    try:
+        items = arms.items() if isinstance(arms, Mapping) else ((arm, 1) for arm in arms)
+        for arm, weight in items:
+            if len(arm) != 4 or any(not _is_integer(x) for x in arm):
+                raise InputError("Read arms must contain four integer coordinates")
+            if not _is_integer(weight) or weight < 1:
+                raise InputError("Read block weights must be positive integer counts")
+            a, b, c, d = (int(x) for x in arm)
+            if not (1 <= a <= b and 1 <= c <= d) or (length is not None and max(b, d) > length):
+                raise InputError("Read arm lies outside the concatenated sequence")
+            if cutpoint is not None and (a <= cutpoint < b or c <= cutpoint < d):
+                raise InputError("An individual read arm cannot cross the strand break")
+            counts[(a, b, c, d)] += int(weight)
+    except TypeError as error:
+        raise InputError("Read arms must contain four integer coordinates") from error
+    return counts
+
+
+def _mean_arm_length(counts):
     total = sum(w * (b - a + d - c + 2) for (a, b, c, d), w in counts.items())
     return total / (2 * sum(counts.values()))
 
 
 def gaussian_sigma(counts):
-    """Standard deviation of each arm's Gaussian profile: the mean arm length / 6."""
-    return mean_arm_length(counts) / 6
+    """Standard deviation of each arm's Gaussian profile: the mean arm length / 6.
+
+    ``counts`` maps 1-based inclusive blocks ``(a, b, c, d)`` to positive integer
+    row counts; an empty or invalid mapping raises :class:`cplfold.InputError`.
+    """
+    if not isinstance(counts, Mapping) or not counts:
+        raise InputError("Gaussian sigma needs at least one read block")
+    return _mean_arm_length(_arm_counts(None, counts)) / 6
 
 
-def gaussian_bonus_stripes(length, cutpoint, counts, sigma=None, use_numba=True):
+def _gaussian_bonus_stripes(length, cutpoint, counts, sigma=None, use_numba=True):
     """Yield float64 stripes; only their upper triangles (diagonal included)
     are meaningful. An export consumes these without a full-size matrix.
-    ``sigma=None`` uses :func:`gaussian_sigma` of ``counts``."""
+    ``counts`` must already be valid; ``sigma=None`` uses the mean arm length / 6."""
     if sigma is None:
-        sigma = gaussian_sigma(counts)
+        sigma = _mean_arm_length(counts) / 6
     height = 32
     stripes = {}
     jit = use_numba and hasattr(_accumulate_support, "nopython_signatures")
@@ -89,43 +130,51 @@ def gaussian_bonus_stripes(length, cutpoint, counts, sigma=None, use_numba=True)
         yield row, np.log1p(support, out=support)
 
 
-def gaussian_bonus_matrix(length, cutpoint, counts, sigma=None, use_numba=True):
-    """Symmetric float64 matrix of the stripes; ``sigma=None`` uses :func:`gaussian_sigma`."""
+def _gaussian_bonus_matrix(length, cutpoint, counts, sigma=None, use_numba=True):
+    """Symmetric float64 matrix of the stripes of already valid ``counts``."""
     result = np.zeros((length, length), dtype=np.float64)
-    for start, stripe in gaussian_bonus_stripes(length, cutpoint, counts, sigma, use_numba):
+    for start, stripe in _gaussian_bonus_stripes(length, cutpoint, counts, sigma, use_numba):
         for i, values in enumerate(stripe, start):
             result[i, i:] = result[i:, i] = values[i:]
     return result
 
 
-def cofold_counts(sequence_length, cutpoint, arms):
-    """Validate compact A+B coordinates before spreading a row or counted block."""
-    if (isinstance(sequence_length, bool) or not isinstance(sequence_length, Integral)
-            or isinstance(cutpoint, bool) or not isinstance(cutpoint, Integral)
-            or not 0 < cutpoint < sequence_length):
-        raise ValueError("cutpoint must separate two nonempty strands in sequence_length")
-    counts = Counter()
-    for arm, weight in (arms.items() if isinstance(arms, dict) else ((arm, 1) for arm in arms)):
-        if len(arm) != 4 or any(isinstance(x, bool) or not isinstance(x, Integral) for x in arm):
-            raise ValueError("Read arms must contain four integer coordinates")
-        if isinstance(weight, bool) or not isinstance(weight, Integral) or weight < 1:
-            raise ValueError("Read block weights must be positive integer counts")
-        a, b, c, d = (int(x) for x in arm)
-        if not (1 <= a <= b <= sequence_length and 1 <= c <= d <= sequence_length):
-            raise ValueError("Read arm lies outside the concatenated sequence")
-        if a <= cutpoint < b or c <= cutpoint < d:
-            raise ValueError("An individual read arm cannot cross the strand break")
-        counts[(a, b, c, d)] += int(weight)
-    return counts
+def _checked_sigma(sigma):
+    if sigma is None:
+        return None
+    if isinstance(sigma, bool) or not isinstance(sigma, Real) or not math.isfinite(sigma) or sigma <= 0:
+        raise InputError("sigma must be a finite positive number")
+    return float(sigma)
 
 
-def build_cofold_bonus_matrix(sequence_length, cutpoint, arms):
-    """Return a symmetric float64 matrix; each 1-based inclusive interval
-    lies on one strand and the '&' separator has no coordinate."""
-    counts = cofold_counts(sequence_length, cutpoint, arms)
+def gaussian_bonus_matrix(length, counts, *, cutpoint=None, sigma=None):
+    """IRIS's Gaussian read support as a symmetric float64 ``length`` x ``length`` matrix.
+
+    ``counts`` maps 1-based inclusive read blocks ``(a, b, c, d)`` (arm one
+    ``a..b``, arm two ``c..d``) to positive integer row counts. Each arm spreads
+    as a Gaussian around its centre, within its strand when ``cutpoint`` is
+    given; support below 2^-23 is zero and the result is log1p. ``sigma=None``
+    uses :func:`gaussian_sigma`. Empty ``counts`` give a zero matrix. Invalid
+    arguments raise :class:`cplfold.InputError`.
+    """
+    if not isinstance(counts, Mapping):
+        raise InputError("counts must map read blocks to row counts")
+    return bonus_from_arms(length, counts, cutpoint=cutpoint, sigma=sigma)
+
+
+def bonus_from_arms(length, arms, *, cutpoint=None, sigma=None):
+    """The :func:`gaussian_bonus_matrix` of read rows, for one strand or two.
+
+    ``arms`` lists ``(a, b, c, d)`` rows (1-based inclusive coordinates on the
+    sequence without ``&``), or maps each such block to its row count. With
+    ``cutpoint`` (two strands) no arm may cross the strand break. No rows give
+    a zero matrix. Invalid arguments raise :class:`cplfold.InputError`.
+    """
+    sigma = _checked_sigma(sigma)
+    counts = _arm_counts(length, arms, cutpoint)
     if not counts:
-        return np.zeros((sequence_length, sequence_length), dtype=np.float64)
-    return gaussian_bonus_matrix(sequence_length, cutpoint, counts)
+        return np.zeros((length, length), dtype=np.float64)
+    return _gaussian_bonus_matrix(length, cutpoint, counts, sigma)
 
 
 def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
@@ -139,8 +188,13 @@ def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
 
     A missing or unreadable file raises ``OSError`` (``FileNotFoundError`` when
     it does not exist); a malformed file raises
-    :class:`cplfold.CofoldInputError`, a ``ValueError``.
+    :class:`cplfold.InputError`, a ``ValueError``, as do a ``path`` that is not
+    a path and a ``sequence_length`` that is not a positive integer.
     """
+    if not isinstance(path, (str, PathLike)):
+        raise InputError("CPLfold bonus matrix path must be a string or path")
+    if not _is_integer(sequence_length) or sequence_length < 1:
+        raise InputError("sequence_length must be a positive integer")
 
     matrix_path = Path(path).expanduser()
     try:
@@ -148,7 +202,7 @@ def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
     except FileNotFoundError as error:
         raise FileNotFoundError(f"CPLfold bonus matrix file was not found: {matrix_path}") from error
     except UnicodeError as error:
-        raise CofoldInputError(f"CPLfold bonus matrix file is not valid UTF-8: {matrix_path}") from error
+        raise InputError(f"CPLfold bonus matrix file is not valid UTF-8: {matrix_path}") from error
     except OSError as error:
         raise OSError(f"Could not read CPLfold bonus matrix file {matrix_path}: {error}") from error
 
@@ -168,7 +222,7 @@ def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
                 try:
                     declared_length = int(raw_length)
                 except ValueError as error:
-                    raise CofoldInputError(
+                    raise InputError(
                         f"CPLfold bonus matrix line {line_number} has an invalid sequence_length"
                     ) from error
             continue
@@ -178,12 +232,12 @@ def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
             fields = stripped.split()
         if fields[0].strip().lower() == "prepared_position_1":
             if len(fields) < 3:
-                raise CofoldInputError(
+                raise InputError(
                     f"CPLfold bonus matrix header on line {line_number} must contain three columns"
                 )
             continue
         if len(fields) != 3:
-            raise CofoldInputError(
+            raise InputError(
                 f"CPLfold bonus matrix line {line_number} must contain three tab-separated columns"
             )
 
@@ -192,23 +246,23 @@ def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
             two = int(fields[1])
             value = float(fields[2])
         except ValueError as error:
-            raise CofoldInputError(
+            raise InputError(
                 f"CPLfold bonus matrix line {line_number} contains an invalid coordinate or score"
             ) from error
 
         if not 1 <= one <= sequence_length or not 1 <= two <= sequence_length:
-            raise CofoldInputError(
+            raise InputError(
                 f"CPLfold bonus matrix line {line_number} must use coordinates from 1 to {sequence_length}"
             )
         if not math.isfinite(value):
-            raise CofoldInputError(f"CPLfold bonus matrix line {line_number} contains a non-finite score")
+            raise InputError(f"CPLfold bonus matrix line {line_number} contains a non-finite score")
         if abs(value) > np.finfo(np.float32).max:
-            raise CofoldInputError(f"CPLfold bonus matrix line {line_number} exceeds the supported float32 range")
+            raise InputError(f"CPLfold bonus matrix line {line_number} exceeds the supported float32 range")
 
         left, right = sorted((one, two))
         pair = (left, right)
         if pair in seen_pairs:
-            raise CofoldInputError(
+            raise InputError(
                 f"CPLfold bonus matrix line {line_number} repeats coordinate pair {left}-{right}"
             )
         seen_pairs.add(pair)
@@ -216,12 +270,12 @@ def load_bonus_matrix_file(path: str, sequence_length: int) -> np.ndarray:
         data_rows += 1
 
     if declared_length is not None and declared_length != sequence_length:
-        raise CofoldInputError(
+        raise InputError(
             "CPLfold bonus matrix sequence_length="
             f"{declared_length} does not match the sequence length {sequence_length}"
         )
     if data_rows == 0 and declared_length is None:
-        raise CofoldInputError(
+        raise InputError(
             "CPLfold bonus matrix contains no data rows and does not declare sequence_length"
         )
     return matrix

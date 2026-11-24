@@ -271,7 +271,7 @@ def main():
     validate_fixtures(fixtures)
     before = manifest(reference)
     sys.path.insert(0, str(ROOT / "third_party" / "cplfold"))
-    from cplfold._internal.single import cofold
+    import cplfold
     from cplfold._internal.cofold_energy import CofoldEnergy
     import numba
     import numpy
@@ -295,8 +295,8 @@ def main():
                 match = next(re.fullmatch(r"([.()]+&[.()]+)\s+\((-?\d+\.\d+)\)", line)
                              for line in lines if re.fullmatch(r"[.()]+&[.()]+\s+\(-?\d+\.\d+\)", line))
                 ref_structure, ref_energy = match.group(1), float(match.group(2))
-                result = cofold(a, b, beam_size=beam, alpha=0.0, beta=0.0, allow_pseudoknot=False,
-                                energy_delta=0.0, max_phase1=1, verbose=False)[0]
+                result = cplfold.fold(a, partner=b, beam_size=beam, alpha=0.0, beta=0.0, pseudoknots=False,
+                                      energy_delta=0.0, max_phase1=1)[0].as_dict()
                 validate_structure(actual, ref_structure)
                 validate_structure(actual, result["structure"])
                 rescore = evaluator.compute_energy(actual, ref_structure, len(a))["energy"]

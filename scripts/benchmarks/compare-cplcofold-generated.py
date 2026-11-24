@@ -24,8 +24,8 @@ import traceback
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).resolve()
 HELPER = ROOT / "scripts/benchmarks/compare-cplcofold-linearcofold.py"
-PARAMETERS = dict(alpha=0.0, beta=0.0, allow_pseudoknot=False,
-                  energy_delta=0.0, max_phase1=1, verbose=False)
+PARAMETERS = dict(alpha=0.0, beta=0.0, pseudoknots=False,
+                  energy_delta=0.0, max_phase1=1)
 BEAMS = (0, 1, 20, 100)
 ATOL = 1e-7
 
@@ -146,7 +146,7 @@ def parse_reference(case, beam, completed, helper):
 def worker(config_path, output_path):
     helper = comparison_module()
     sys.path.insert(0, str(ROOT / "third_party/cplfold"))
-    from cplfold._internal.single import cofold
+    import cplfold
     import cplfold._internal.cofold_parser as CPLcofold_parser
     from cplfold._internal.cofold_energy import CofoldEnergy
     import numba
@@ -160,7 +160,7 @@ def worker(config_path, output_path):
         if "error" not in row:
             try:
                 a, b = row["compared_sequence"].split("&")
-                candidates = cofold(a, b, beam_size=row["beam"], **PARAMETERS)
+                candidates = [p.as_dict() for p in cplfold.fold(a, partner=b, beam_size=row["beam"], **PARAMETERS)]
                 if len(candidates) != 1:
                     raise ValueError("Expected exactly one public API prediction")
                 prediction = candidates[0]

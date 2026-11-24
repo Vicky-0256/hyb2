@@ -30,7 +30,7 @@ def _load_modules():
 
         shim.njit = njit
         sys.modules["numba"] = shim
-    return importlib.import_module("cplfold._internal.cofold_parser"), importlib.import_module("cplfold._internal.cofold")
+    return importlib.import_module("cplfold._internal.cofold_parser"), importlib.import_module("cplfold")
 
 
 def _matrix(n, rng, signed=False):
@@ -260,9 +260,9 @@ class CofoldFastTracebackTests(unittest.TestCase):
             return self.module._KBest(forest).get((self.module._C, 0, forest.n), 0)
 
         with mock.patch.object(self.module._Forest, "best", fast_best):
-            actual = self.cofold.cofold(first, second, verbose=False, **options)
+            actual = [p.as_dict() for p in self.cofold.fold(first, partner=second, **options)]
         with mock.patch.object(self.module._Forest, "best", legacy_best):
-            expected = self.cofold.cofold(first, second, verbose=False, **options)
+            expected = [p.as_dict() for p in self.cofold.fold(first, partner=second, **options)]
         self.assertTrue(fast_calls, "Public scenario did not exercise the optimized route")
         self.assertEqual(fast_calls, legacy_calls)
         self.assert_nested_equal(actual, expected)
@@ -277,8 +277,8 @@ class CofoldFastTracebackTests(unittest.TestCase):
         for alpha in (0.0, 0.375):
             with self.subTest(alpha=alpha):
                 results = self.assert_public_parity(
-                    "GG", "CC", beam_size=3, max_phase1=1, allow_pseudoknot=False,
-                    alpha=alpha, bonus_matrix=matrix,
+                    "GG", "CC", beam_size=3, max_phase1=1, pseudoknots=False,
+                    alpha=alpha, bonus=matrix,
                 )
                 structures.append(results[0]["structure"])
         self.assertEqual(structures, ["..&..", "((&))"])
@@ -291,9 +291,9 @@ class CofoldFastTracebackTests(unittest.TestCase):
                 with self.subTest(alpha=alpha, beta=beta):
                     results = self.assert_public_parity(
                         sequence, "A", beam_size=30, max_phase1=1, max_phase2=1,
-                        energy_delta=12.0, alpha=alpha, beta=beta, bonus_matrix=matrix,
+                        energy_delta=12.0, alpha=alpha, beta=beta, bonus=matrix,
                     )
-                    pseudoknots = [item for item in results if item["type"] == "pseudoknot"]
+                    pseudoknots = [item for item in results if item["kind"] == "pseudoknot"]
                     self.assertTrue(pseudoknots)
                     for item in pseudoknots:
                         self.assertAlmostEqual(
@@ -306,11 +306,11 @@ class CofoldFastTracebackTests(unittest.TestCase):
             with self.subTest(alpha=alpha):
                 results = self.assert_public_parity(
                     "GGGG", "CCCC", beam_size=30, max_phase1=12, max_phase2=1,
-                    energy_delta=12.0, alpha=alpha, beta=0.75, bonus_matrix=matrix,
+                    energy_delta=12.0, alpha=alpha, beta=0.75, bonus=matrix,
                 )
-                pseudoknots = [item for item in results if item["type"] == "pseudoknot"]
+                pseudoknots = [item for item in results if item["kind"] == "pseudoknot"]
                 self.assertTrue(pseudoknots)
-                self.assertTrue(any(item["phase2_association_cost"] == 0.0 for item in pseudoknots))
+                self.assertTrue(any(item["details"]["phase2_association_cost"] == 0.0 for item in pseudoknots))
 
 
 if __name__ == "__main__":

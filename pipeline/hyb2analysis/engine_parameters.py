@@ -8,13 +8,15 @@ has to be at least K. Search/resource budgets and CLI limits are separate.
 
 import math
 
-from cplfold.models import COFOLD_MODELS, DEFAULT_MODELS, MODELS
+from cplfold.models import COFOLD_MODELS, MODELS, default_model
 
 from .iris_parameters import IRIS_DEFAULTS, IRIS_K_RANGE_GRAMMAR, IRIS_RANGES, checked_iris_defaults
 
 # HYB2 task defaults (not standalone CLI search budgets): minimum, maximum, default.
 CPL_SEARCH = dict(beamSize=(1, 200, 20), maxPhase1=(1, 20, 3), energyDelta=(0, 50, 5.0),
                   alpha=(0, 1, 0.5), beta=(0, 1, 0.0))
+# The strand count of each Hyb2 fold engine, for cplfold.models.default_model.
+_TWO_STRANDS = {"cplfold": False, "cplcofold": True}
 DEFAULT_ALLOW_PSEUDOKNOT = False  # HYB2 tasks opt in to Phase 2; standalone CLI defaults are separate.
 VIENNA_SETTINGS = dict(temperature=(0, 100, 37), minLoopSize=(0, 12, 3))
 COMRADES_COUNTS = dict(constraintLimit=(1, 75, 75), randomFoldCount=(0, 1000, 0))
@@ -44,7 +46,7 @@ def engine_parameters(platform):
         raise ValueError("allowPseudoknot: default must be a boolean")
 
     def model_settings(engine, models, settings):
-        default = DEFAULT_MODELS[engine]
+        default = default_model(two_strands=_TWO_STRANDS[engine])
         if default not in models:
             raise ValueError(f"{engine}: default model {default!r} must be one of {', '.join(models)}")
         labels = {"RE": "RE (Rivas–Eddy)" if platform == "desktop" else "Rivas–Eddy"}

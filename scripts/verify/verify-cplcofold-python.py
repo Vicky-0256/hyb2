@@ -68,8 +68,12 @@ def _strict_json_loads(text):
     return json.loads(text, parse_constant=reject_constant, parse_float=finite_float)
 
 
-def _checked_payload(parser_module, bonus_module, evaluator, two_phase_pseudoknot_fold, np):
-    """Check runtime outputs; explicit dependencies keep fault tests isolated."""
+def _checked_payload(parser_module, bonus_module, evaluator, fold, np):
+    """Check runtime outputs; explicit dependencies keep fault tests isolated.
+
+    ``fold`` is :func:`cplfold.fold` returning flat dicts: the public fields with
+    the route's ``details`` merged in.
+    """
 
     vectors = []
     for sequence, cutpoint, structure, energy in REFERENCE_CASES:
@@ -97,12 +101,12 @@ def _checked_payload(parser_module, bonus_module, evaluator, two_phase_pseudokno
         raise AssertionError(f"Unpaired constraints failed: {forced[:2]}")
     _assert_close(forced[1], 0.0, "Unpaired constrained energy")
 
-    results = two_phase_pseudoknot_fold("GGG&CCC", verbose=False, beam_size=20, max_phase1=3, allow_pseudoknot=False)
+    results = fold("GGG&CCC", beam_size=20, max_phase1=3, pseudoknots=False)
     if results[0]["structure"] != "(((&)))":
         raise AssertionError("Public cofold result disagrees with the parser")
     _assert_close(results[0]["energy"], -2.5, "Public cofold energy")
 
-    crossing = two_phase_pseudoknot_fold("GGGG&CCCC", verbose=False, beam_size=30, max_phase1=12, max_phase2=3, energy_delta=12.0, beta=0.5)
+    crossing = fold("GGGG&CCCC", beam_size=30, max_phase1=12, max_phase2=3, energy_delta=12.0, beta=0.5)
     pseudoknot = next(item for item in crossing if item["structure"] == "(([[&))]]")
     _assert_close(pseudoknot["energy"], 1.766, "Generated pseudoknot energy")
     _assert_close(pseudoknot["energy_breakdown"]["duplex_init"], 4.1, "Pseudoknot association energy")
@@ -128,25 +132,20 @@ def _checked_payload(parser_module, bonus_module, evaluator, two_phase_pseudokno
             - _finite_number(evaluator.compute_energy(sequence_a + sequence_b, nested_a + structure_b, len(sequence_a))["energy"], "Combined nested energy")
         )
         _assert_close(gap, reference_gap, "Independent-monomer ranking gap", 1e-8)
-    no_evidence = two_phase_pseudoknot_fold(
-        "GGG&CCC", alpha=1e308, allow_pseudoknot=False, verbose=False,
-        beam_size=20, max_phase1=1,
-    )
+    no_evidence = fold("GGG&CCC", alpha=1e308, pseudoknots=False, beam_size=20, max_phase1=1)
     if no_evidence[0]["structure"] != "(((&)))":
         raise AssertionError("Alpha changed a prediction without evidence")
     for key, expected in (("energy", -2.5), ("score", -2.5), ("effective_energy", -2.5),
                           ("read_support", 0.0), ("read_bonus", 0.0)):
         _assert_close(no_evidence[0][key], expected, f"Evidence-free {key}", 1e-8)
     try:
-        two_phase_pseudoknot_fold(
-            "GGGG&CCCC", beta=1e308, energy_delta=10, verbose=False,
-        )
+        fold("GGGG&CCCC", beta=1e308, energy_delta=10)
     except ValueError:
         pass
     else:
         raise AssertionError("Overflowing beta ranking was not rejected")
 
-    reads = bonus_module.build_cofold_bonus_matrix(8, 4, [(2, 3, 6, 7)] * 2)
+    reads = bonus_module.bonus_from_arms(8, [(2, 3, 6, 7)] * 2, cutpoint=4)
     if not np.isfinite(reads).all():
         raise AssertionError("Read-bonus matrix must contain only finite numbers")
     if np.any(reads[:4, :4]) or np.any(reads[4:, 4:]):
@@ -177,10 +176,18 @@ def worker() -> None:
     import numpy as np
     import cplfold._internal.cofold_parser as parser_module
     import cplfold.bonus as bonus_module
-    from cplfold._internal.single import two_phase_pseudoknot_fold
+    import cplfold
     from cplfold._internal.cofold_energy import CofoldEnergy
 
-    payload = _checked_payload(parser_module, bonus_module, CofoldEnergy(), two_phase_pseudoknot_fold, np)
+    def fold(sequence, **options):
+        rows = []
+        for prediction in cplfold.fold(sequence, **options):
+            row = prediction.as_dict()
+            row.update(row.pop("details"))
+            rows.append(row)
+        return rows
+
+    payload = _checked_payload(parser_module, bonus_module, CofoldEnergy(), fold, np)
     compiled = {
         name: len(value.nopython_signatures)
         for name, value in vars(parser_module).items()

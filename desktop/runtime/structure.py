@@ -465,7 +465,7 @@ def _candidate(rank: int, raw: Dict[str, Any], structure: str,
     energy, beta-adjusted effective energy, phase-1 energy, LinearFold
     score), with each pair's HYB bonus aligned with the dot-bracket's pairs."""
     knotted = sum(1 for pair in pairs if pair[2] != "()")
-    kind = str(raw.get("type") or "phase1")
+    kind = str(raw.get("kind") or "phase1")
     with_bonus = any(pair[3] is not None for pair in pairs)
     return {
         "rank": rank, "type": kind, "topology": "pseudoknotted" if knotted or kind == "pseudoknot" else "nested",
@@ -577,10 +577,10 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
         raise ValueError("CPLfold did not produce a structure")
     # bonus None: folded from the sequence alone, the pairs carry no HYB evidence
     candidates = []
-    for rank, raw in enumerate(results[:CANDIDATE_LIMIT]):
+    for rank, prediction in enumerate(results[:CANDIDATE_LIMIT]):
         folded = [(i, j, bracket, float(bonus[i - 1, j - 1]) if bonus is not None else None)
-                  for i, j, bracket in _pairs(raw["structure"])]
-        candidate = _candidate(rank, raw, raw["structure"], folded)
+                  for i, j, bracket in _pairs(prediction.structure)]
+        candidate = _candidate(rank, prediction.as_dict(), prediction.structure, folded)
         if counts is not None:
             candidate.update(module.score_evidence_pairs(counts, ((i, j) for i, j, _, _ in folded)), support_kernel=kernel)
         candidates.append(candidate)
@@ -590,9 +590,9 @@ def fold_one(module: Any, sequence: str, arms: Any, params: Dict[str, Any],
     support = _nucleotide_support(bonus)
     del bonus
     return {
-        "structure": best["structure"],
-        "energy": best.get("energy"),
-        "type": best.get("type"),
+        "structure": best.structure,
+        "energy": best.energy,
+        "type": best.kind,
         "pairs": pairs,
         "evidence": evidence,
         "candidates": candidates,
@@ -1425,7 +1425,7 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     # the web's candidates, on A+B indices as the dot-bracket
     candidates = []
     for rank, candidate in enumerate((folded.get("candidates") or [])[:CANDIDATE_LIMIT]):
-        raw = {"type": candidate.get("type"), "energy": candidate.get("energy"),
+        raw = {"kind": candidate.get("type"), "energy": candidate.get("energy"),
                "effective_energy": candidate.get("effectiveEnergy"), "phase1_energy": candidate.get("phase1Energy"),
                "score": candidate.get("score")}
         candidate_pairs = [(pair["left"], pair["right"], pair["bracket"], float(pair["bonusSupport"]) if arms else None)

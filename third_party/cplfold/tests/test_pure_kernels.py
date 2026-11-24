@@ -54,7 +54,7 @@ RUNNER = textwrap.dedent(r'''
     sys.path.insert(0, sys.argv[1])
     from cplfold._internal import parser as parser_module
     from cplfold._internal.parser import BeamCKYParserHyper
-    from cplfold._internal.single import two_phase_pseudoknot_fold
+    import cplfold
 
     native_kernels = {}
     pure = MODE == "stub" and os.environ.get("CPLFOLD_PURE_KERNELS") == "1"
@@ -203,10 +203,9 @@ RUNNER = textwrap.dedent(r'''
                 bonus[i, j] = bonus[j, i] = nrng.random() * 3
         if MODE != "stub" and length == 120:   # after the draws: same sequences
             continue
-        fold = two_phase_pseudoknot_fold(seq, beam_size=20, energy_delta=delta, max_phase1=max_phase1,
-                                         max_phase2=3, energy_model="DP09", verbose=False,
-                                         bonus_matrix=bonus, alpha=alpha, beta=beta,
-                                         allow_pseudoknot=pseudoknot)
+        fold = [prediction.as_dict() for prediction in cplfold.fold(
+            seq, beam_size=20, energy_delta=delta, max_phase1=max_phase1, energy_model="DP09",
+            bonus=bonus, alpha=alpha, beta=beta, pseudoknots=pseudoknot)]
         if MODE == "stub":
             folds.append(floats(fold))
         folds_coarse.append([length, coarse(fold)])

@@ -13,14 +13,16 @@ runtime; this runtime independence does not change the code and data provenance.
 third_party/cplfold/                 # project root and import root
 ├── pyproject.toml                   # package "cplfold" (pip install third_party/cplfold)
 ├── cplfold/
-│   ├── __init__.py                  # public API: fold(), Prediction, CofoldInputError
+│   ├── __init__.py                  # public API: fold(), Prediction, InputError
 │   ├── bonus.py                     # reads-to-bonus matrices (strand-bounded Gaussians)
 │   ├── sequence.py                  # sequence normalisation and strand layout
-│   ├── models.py                    # energy models (MODELS, COFOLD_MODELS, DEFAULT_MODELS)
-│   ├── cli.py                       # the cplfold command
+│   ├── models.py                    # energy models (MODELS, COFOLD_MODELS, default_model)
+│   ├── cli.py                       # the cplfold and cplcofold commands
 │   └── _internal/                   # private implementation
-│       ├── single.py                # two-phase algorithm (single strand; dispatches '&' to cofold)
-│       ├── cofold.py                # two-strand CPLcofold
+│       ├── router.py                # the one router: partner, default model, validation, engine
+│       ├── validation.py            # the one validator (FoldInputs)
+│       ├── single.py                # one-strand engine
+│       ├── cofold.py                # two-strand engine (CPLcofold)
 │       ├── parser.py                # LinearFold parser with bonus matrix support
 │       ├── cofold_parser.py         # strand-aware Numba parser
 │       ├── hotknots_energy.py       # Python port of HotKnots energy calculation
@@ -88,19 +90,82 @@ results = cplfold.fold(sequence, bonus=bonus, alpha=0.5, beta=0.3)
 results = cplfold.fold(sequence, pseudoknots=False)
 ```
 
-`fold(sequence, *, partner=None, pseudoknots=True, energy_model=None, bonus=None,
-alpha=0.0, beta=0.0, beam_size=100, energy_delta=5.0, max_phase1=10, max_phase2=5)`
-never prints and never writes files. Each `Prediction` has `structure`, `energy`,
-`effective_energy`, `kind`, `score`, `phase1_structure`, `phase1_energy` and
-`phase2_structure`; `details` is a read-only mapping of every field (nested
-dicts are read-only mappings and lists are tuples), and `as_dict()` returns a
-plain copy of the original candidate dict. `max_phase2` limits the Phase 2
-candidates per Phase 1 structure only for two strands; one strand runs
-exactly one Phase 2 fold per Phase 1 structure. `cplfold.models.DEFAULT_MODELS`
-and `cplfold.sequence.ALIASES` are read-only mappings.
-`cplfold.bonus.load_bonus_matrix_file` and `cplfold.sequence.read_sequence_file`
-raise `OSError` (`FileNotFoundError` for a missing file) or
-`cplfold.CofoldInputError` for malformed contents; only the commands exit.
+### Public API (1.0)
+
+Only `cplfold`, `cplfold.bonus`, `cplfold.sequence`, `cplfold.models` and
+`cplfold.cli` are public; their names below are frozen for 1.x.
+
+| Module | Names |
+|---|---|
+| `cplfold` | `fold`, `Prediction`, `InputError`, `__version__` |
+| `cplfold.sequence` | `normalise_sequence(sequence, cutpoint=None)`, `add_strand_break(text, cutpoint)`, `read_sequence_file(path, cofold=False)`, `clean(text)`, `ALPHABET`, `ALIASES`, `WHITESPACE` |
+| `cplfold.bonus` | `load_bonus_matrix_file(path, sequence_length)`, `gaussian_bonus_matrix(length, counts, *, cutpoint=None, sigma=None)`, `bonus_from_arms(length, arms, *, cutpoint=None, sigma=None)`, `gaussian_sigma(counts)` |
+| `cplfold.models` | `MODELS`, `COFOLD_MODELS`, `default_model(two_strands)` |
+| `cplfold.cli` | `main(argv=None)`, `cofold_main(argv=None)` |
+
+```
+fold(sequence, *, partner=None, pseudoknots=True, energy_model=None, bonus=None,
+     alpha=0.0, beta=0.0, beam_size=100, energy_delta=5.0, max_phase1=10, max_phase2=None)
+```
+
+`fold` never prints and never writes files. `partner="B"` is the same as
+`"A&B"`. It returns `Prediction` objects, best first; both routes have the same
+fields:
+
+| Field | Meaning |
+|---|---|
+| `structure` | dot-bracket, `&` between strands |
+| `energy` | physical energy (kcal/mol) in `energy_model`, without the bonus |
+| `effective_energy` | ranking energy: `energy + beta * phase1_energy` for pseudoknots |
+| `kind` | `"phase1"` or `"pseudoknot"` |
+| `score` | search score |
+| `phase1_structure`, `phase1_energy`, `phase2_structure` | the phases (`phase2_structure` is None for Phase 1 candidates) |
+| `cutpoint` | length of the first strand; None for one strand |
+| `pairs` | sorted tuple of 0-based `(i, j)` on the sequence without `&` |
+| `energy_model` | the model of `energy`: the ranking model (e.g. `"DP09"`), or `"Turner 2004"` for pseudoknot-free one-strand runs and for nested two-strand candidates |
+| `read_support` | the bonus summed over `pairs`; `0.0` without a bonus |
+| `details` | read-only route extras: empty for one strand; for two `strand_lengths`, `intermolecular_pairs`, `read_bonus`, `energy_metadata`, `energy_breakdown` and, for pseudoknots, `phase2_association_cost` |
+
+`as_dict()` returns a plain deep copy keyed by these names.
+
+* **`energy_model`** is the pseudoknot ranking model. `None` selects
+  `cplfold.models.default_model(two_strands)` (DP09 on both routes). It is
+  validated also with `pseudoknots=False`, when one strand ranks every
+  candidate with Turner 2004.
+* **`max_phase2`** limits the constrained Phase 2 candidates per Phase 1
+  structure for two strands (`None`: 5). One strand runs exactly one Phase 2
+  fold per Phase 1 structure, so it accepts only `None`.
+* **Order and duplicates** differ by route, as before 1.0: one strand sorts
+  stably by `effective_energy` and skips a structure string seen before; two
+  strands keep the best `(effective_energy, score)` per pair set and sort by
+  `(effective_energy, score, structure)`.
+
+### Errors
+
+* `cplfold.InputError` (a `ValueError`) for every invalid argument, sequence or
+  file contents, and for numeric overflow caused by input magnitudes (scaled
+  bonus, read support, beta ranking). Raised by `fold` and by every function of
+  `cplfold.sequence` and `cplfold.bonus`.
+* `OSError` (`FileNotFoundError` for a missing file) when a file cannot be read.
+* The commands exit with status 2 for an `InputError` (also in a sequence or
+  bonus file) and 1 for an `OSError`, printing the message alone.
+
+### Changes before 1.0
+
+* `CofoldInputError` is now `InputError`, imported eagerly from `cplfold`.
+* `Prediction` has one schema on both routes (`kind`, `phase1_structure`,
+  `cutpoint`, `pairs`, `energy_model`, `read_support`, …); two-strand extras
+  moved to `details`; `as_dict()` uses the public names. The two-strand
+  `alpha`/`beta` echoes were removed.
+* `fold(max_phase2=None)`; an explicit value for one strand raises `InputError`.
+* `cplfold.models.DEFAULT_MODELS` is replaced by `default_model(two_strands)`.
+* `cofold_counts` and `build_cofold_bonus_matrix` are replaced by
+  `bonus_from_arms`, which also takes one strand. `gaussian_bonus_matrix`
+  takes `(length, counts, *, cutpoint=None, sigma=None)`.
+  `gaussian_bonus_stripes`, `mean_arm_length` and `strip_structure_break` are private.
+* `cli.main(argv=None)` and `cli.cofold_main(argv=None)`; `cofold_entry` is private.
+  The command's alpha defaults to 0 on both routes (it was 0.5 for one strand),
+  options are no longer abbreviated, and invalid file contents exit with status 2.
 
 Two-strand **CPLcofold** (Python with Numba acceleration) preserves alpha-guided
 reads and beta pseudoknot ranking:
@@ -114,7 +179,7 @@ Supply a symmetric `bonus` matrix to apply reads guidance; alpha alone adds
 no evidence. Nested cofold uses Turner energies; cofold pseudoknots use an
 explicitly **experimental Turner/DP ranking heuristic**, reported in each
 candidate's `details["energy_metadata"]`. Invalid two-strand input raises
-`cplfold.CofoldInputError` (a `ValueError`).
+`cplfold.InputError` (a `ValueError`).
 See [the cofold API, reads coordinates, and model limitations](https://github.com/Vicky-0256/hyb2/blob/main/docs/cplfold-python.md#two-strand-cplcofold-python-and-numba).
 
 ### Command Line
@@ -135,7 +200,8 @@ python -m cplfold.cli -s 'GGGG&CCCC' --mode standard
 
 A pip install provides the same command as `cplfold`, and `cplcofold`, which
 requires two strands and accepts two-record FASTA. In Hyb2, `bin/cplfold`
-and `bin/cplcofold` add an input-length limit and a private Numba cache.
+and `bin/cplcofold` add an input-length limit and a private Numba cache, and
+keep Hyb2's one-strand alpha of 0.5 when `--alpha` is omitted.
 
 ### Energy-only API
 

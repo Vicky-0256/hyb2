@@ -21,7 +21,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).resolve()
 OUTPUT = ROOT / "artifacts" / "cplcofold-local-benchmark"
-PARAMETERS = dict(alpha=0.0, beta=0.0, allow_pseudoknot=False, energy_delta=0.0, max_phase1=1)
+PARAMETERS = dict(alpha=0.0, beta=0.0, pseudoknots=False, energy_delta=0.0, max_phase1=1)
 
 
 def comparison_module():
@@ -64,7 +64,7 @@ def worker():
     config = json.load(sys.stdin)
     start = time.perf_counter_ns()
     sys.path.insert(0, str(ROOT / "third_party/cplfold"))
-    from cplfold._internal.single import cofold
+    import cplfold
     from cplfold._internal.cofold_energy import CofoldEnergy
     import cplfold._internal.cofold_parser as CPLcofold_parser
     import numba
@@ -76,7 +76,7 @@ def worker():
 
     def predict(row):
         a, b = row["compared_sequence"].split("&")
-        return cofold(a, b, beam_size=row["beam"], verbose=False, **PARAMETERS)[0]
+        return cplfold.fold(a, partner=b, beam_size=row["beam"], **PARAMETERS)[0].as_dict()
 
     # First folding call in this interpreter; the parent controls cache state.
     first = config["rows"][0]

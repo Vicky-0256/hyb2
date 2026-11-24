@@ -94,7 +94,7 @@ def support_matrix(n: int, arms: Sequence[Dict[str, int]]):
         if not (1 <= a <= b <= n and 1 <= c <= d <= n):
             raise ValueError("IRIS evidence coordinates are outside the prepared sequence.")
         counts[(a, b, c, d)] += 1
-    return gaussian_bonus_matrix(n, None, counts)
+    return gaussian_bonus_matrix(n, counts)
 
 
 def _quantile(values, q: float) -> float:

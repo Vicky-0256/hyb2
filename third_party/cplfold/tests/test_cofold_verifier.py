@@ -64,7 +64,7 @@ class FixtureRuntime:
                 return structure, energy, 0, 0.0
 
         self.parser_module = types.SimpleNamespace(BeamCKYCofoldParser=Parser)
-        self.bonus_module = types.SimpleNamespace(build_cofold_bonus_matrix=self.bonus)
+        self.bonus_module = types.SimpleNamespace(bonus_from_arms=self.bonus)
 
     def compute_energy(self, sequence, structure, cutpoint):
         if sequence in self.references:
@@ -95,7 +95,7 @@ class FixtureRuntime:
             self.fold_fault(sequence, kwargs, result)
         return [result]
 
-    def bonus(self, length, cutpoint, arms):
+    def bonus(self, length, arms, *, cutpoint=None):
         result = np.zeros((8, 8))
         result[0, 4] = result[4, 0] = math.log(3.0)
         if self.bonus_fault:

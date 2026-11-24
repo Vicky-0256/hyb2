@@ -464,10 +464,17 @@
     return support;
   }
 
-  // Lau's bp_score.sh passes -m 1000000 to make_VARNA_scores_2.sh.
-  // The scalar counts both endpoints; drawing colours retain the full count.
+  // Lau's bp_score.sh passes -m 1000000 to make_VARNA_scores_2.sh. The rule is
+  // shared with the Python runtime through the generated catalog
+  // (support_kernels.COMRADES_SCORE). The scalar counts both endpoints;
+  // drawing colours retain the full count.
   function pairScoreContribution(count) {
-    return 2 * Math.min(count, 1_000_000);
+    const rule = globalThis.Hyb2SupportKernels.comradesScore;
+    return rule.endpointsPerPair * Math.min(count, rule.endpointCap);
+  }
+
+  function scoreCapLabel() {
+    return globalThis.Hyb2SupportKernels.comradesScore.endpointCap.toLocaleString("en-US");
   }
 
   function scoreStructurePairs(pairs, evidence, sequenceLength) {
@@ -534,6 +541,7 @@
     seededShuffle: seededShuffle,
     indexPairSupport: indexPairSupport,
     pairScoreContribution: pairScoreContribution,
+    scoreCapLabel: scoreCapLabel,
     pairCountSource: pairCountSource,
     rawNucleotideSupport: rawNucleotideSupport,
     scoreStructurePairs: scoreStructurePairs

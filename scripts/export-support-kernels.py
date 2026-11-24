@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "third_party" / "cplfold"))
 sys.path.insert(0, str(ROOT / "pipeline"))
 from hyb2analysis.reference import FASTA_NAMES, MIN_PASTED_NT, MIN_SEQUENCE_NT, MIN_WINDOW_NT
-from hyb2analysis.support_kernels import DEFAULT_SUPPORT_KERNEL, KERNEL_OPTIONS
+from hyb2analysis.support_kernels import COMRADES_SCORE, DEFAULT_SUPPORT_KERNEL, KERNEL_OPTIONS
 from hyb2analysis.engine_parameters import engine_parameters
 from hyb2analysis.fold_text import FOLD_TEXT
 
@@ -21,7 +21,12 @@ def main():
     def dump(obj):
         return json.dumps(obj, indent=2, ensure_ascii=False)
 
-    catalog = {"defaultKernel": DEFAULT_SUPPORT_KERNEL, "options": options}
+    for option in options:
+        if option["bonus"] not in ("log1p_hyb_bonus", "saturating_hyb_bonus") or not option["transform"] or not option["resultLabel"]:
+            raise ValueError(f"support kernel {option['value']!r} needs a bonus kind, transform and result label")
+    if any(type(value) is not int or value < 1 for value in COMRADES_SCORE.values()):
+        raise ValueError("COMRADES score cap and endpoint count must be positive integers")
+    catalog = {"defaultKernel": DEFAULT_SUPPORT_KERNEL, "options": options, "comradesScore": COMRADES_SCORE}
     minimums = {"minWindowNt": MIN_WINDOW_NT, "minPastedNt": MIN_PASTED_NT, "minSequenceNt": MIN_SEQUENCE_NT}
     for name, minimum in minimums.items():
         if type(minimum) is not int or minimum < 1:

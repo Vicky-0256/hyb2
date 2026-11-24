@@ -67,7 +67,8 @@ from cplfold.bonus import cofold_counts, gaussian_bonus_matrix, gaussian_bonus_s
 from cplfold.sequence import add_strand_break, normalise_sequence, strip_structure_break  # noqa: E402
 from hyb2analysis.fold_text import FOLD_TEXT, fold_text  # noqa: E402
 from hyb2analysis.engine_parameters import engine_parameters, task_allow_pseudoknot  # noqa: E402
-from hyb2analysis.support_kernels import DEFAULT_SUPPORT_KERNEL, PAIR_MODELS, SUPPORT_KERNELS  # noqa: E402
+from hyb2analysis.support_kernels import (  # noqa: E402
+    DEFAULT_SUPPORT_KERNEL, PAIR_MODELS, SUPPORT_KERNELS, SUPPORT_TRANSFORMS, comrades_pair_score)
 
 
 def _number(value: Any, minimum: float, maximum: float, label: str) -> float:
@@ -144,12 +145,9 @@ def _normalise_arms(
             raise ValueError(f"HYB evidence row {index + 1} is invalid.")
         try:
             values = [arm[key] for key in ("oneStart", "oneEnd", "twoStart", "twoEnd")]
-            if cutpoint is None:
-                one_start, one_end, two_start, two_end = map(int, values)
-            else:
-                one_start, one_end, two_start, two_end = (
-                    _integer(value, 1, sequence_length, "HYB arm coordinate") for value in values
-                )
+            one_start, one_end, two_start, two_end = (
+                _integer(value, 1, sequence_length, "HYB arm coordinate") for value in values
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"HYB evidence row {index + 1} has invalid prepared coordinates.") from error
         if not (
@@ -330,14 +328,6 @@ def bonus_matrix_listing(bonus: np.ndarray | None) -> dict[str, Any]:
 # Vienna backend); q the mean count of the round(n x SATURATING_TOP) best pairs.
 SATURATING_SCALE = 3.6
 SATURATING_TOP = 1.0 / 3.0
-SUPPORT_TRANSFORMS = {
-    "gaussian": "IRIS Gaussian arm blocks; symmetric float64 accumulation; threshold 2^-23; log1p",
-    "block": "Full arm blocks, w per cell of arm one x arm two; symmetric; threshold 1e-6; log1p",
-    "block-normalized": "Full arm blocks, w / sqrt(len one x len two) per cell; symmetric; threshold 1e-6; log1p",
-    **{kernel: f"{model} cross-arm pairs, C = observed pair counts; symmetric; "
-               "s C / (C + q), s = 3.6 kcal/mol, q = mean C of the n/3 best-supported pairs"
-       for kernel, model in PAIR_MODELS.items()},
-}
 MAX_EVIDENCE_PAIRS = 5_000_000
 _EVIDENCE_WEIGHT = "one per eligible HYB row; overlap_score and collapsed raw-read count are not weights"
 
@@ -737,9 +727,9 @@ def _normalise_evidence_pairs(raw: Any, sequence_length: int) -> Counter:
 
 
 def score_evidence_pairs(counts: Counter, pairs: Any) -> dict[str, Any]:
-    """Sum both endpoints as in Lau's bp_score.sh (make_VARNA_scores_2.sh -m 1000000)."""
+    """Sum both endpoints as in Lau's bp_score.sh (support_kernels.COMRADES_SCORE)."""
     matched = [counts.get((min(i, j), max(i, j)), 0) for i, j in pairs]
-    return {"comradesPairCounts": matched, "comradesScore": 2 * sum(min(c, 1_000_000) for c in matched)}
+    return {"comradesPairCounts": matched, "comradesScore": sum(comrades_pair_score(c) for c in matched)}
 
 
 def _pair_summary(kernel: str, sequence_length: int, compressed: Counter, pair_counts: Counter, bonus_cells: int,

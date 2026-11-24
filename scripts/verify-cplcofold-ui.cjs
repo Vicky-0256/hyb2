@@ -622,8 +622,21 @@ assert.equal(context.window.Hyb2Comrades.pairCountSource({evidence: {supportKern
 const newEvidence = {source: "hyb-block-intervals", supportKernel: extra.value};
 assert.equal(pages.cplfoldBonusKind(newEvidence), "hyb_bonus", "a pair model alone does not identify the transform");
 assert.equal(pages.cplfoldBonusKind({...newEvidence, saturatingQ: 2}), "saturating_hyb_bonus");
+// A catalog option's transform and result label are used without a JS list.
+const transformed = {value: "test-saturating", label: "Catalog saturating", resultLabel: "catalog pairs", bonus: "saturating_hyb_bonus"};
+context.Hyb2SupportKernels = {defaultKernel: catalog.defaultKernel, options: [...catalog.options, transformed]};
+assert.equal(pages.cplfoldBonusKind({source: "hyb-block-intervals", supportKernel: transformed.value}), "saturating_hyb_bonus");
+assert.match(pages.renderStructureResult({...historicalResult, evidence: {...historicalResult.evidence, supportKernel: transformed.value}}, null, "folded", true), / · catalog pairs<\/small>/);
 controller.cancel(extension);
 context.Hyb2SupportKernels = catalog;
+for (const option of catalog.options) {
+  assert.ok(option.resultLabel && option.transform, option.value + " needs a catalog result label and transform");
+  assert.equal(pages.cplfoldBonusKind({source: "hyb-block-intervals", supportKernel: option.value}), option.bonus);
+}
+// Historical results: a missing kernel was Gaussian; rnacofold is retired.
+assert.equal(pages.cplfoldBonusKind({source: "hyb-block-intervals"}), "log1p_hyb_bonus");
+assert.equal(pages.cplfoldBonusKind({source: "hyb-block-intervals", supportKernel: "rnacofold"}), "log1p_hyb_bonus");
+assert.equal(pages.cplfoldBonusKind({source: "hyb-block-intervals", supportKernel: "retired"}), "hyb_bonus");
 
 const sameRna = localState();
 const localInfo = pages.getStructureSequence(sameRna);

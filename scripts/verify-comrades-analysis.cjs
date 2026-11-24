@@ -215,6 +215,16 @@ assert.deepEqual(capped.pairs.map(pair => pair.evidenceSupport), [999_999, 1_000
 assert.deepEqual(capped.nucleotideSupport, [999_999, 1_000_000, 1_500_000, 0, 0, 1_500_000, 1_000_000, 999_999]);
 assert.equal(capped.maximumNucleotideSupport, 1_500_000);
 
+// The cap and endpoint count come from the generated catalog
+// (support_kernels.COMRADES_SCORE), which the Python runtime also reads.
+const scoreRule = globalThis.Hyb2SupportKernels.comradesScore;
+assert.deepEqual({...scoreRule}, {endpointCap: 1_000_000, endpointsPerPair: 2});
+assert.equal(comrades.scoreCapLabel(), "1,000,000");
+globalThis.Hyb2SupportKernels.comradesScore = {endpointCap: 10, endpointsPerPair: 3};
+assert.equal(comrades.scoreStructurePairs(boundaryPairs.slice(0, 1), [{one: 1, two: 8, count: 12}], 8).comradesScore, 30);
+assert.equal(comrades.scoreCapLabel(), "10");
+globalThis.Hyb2SupportKernels.comradesScore = scoreRule;
+
 const many = Array.from({ length: 1005 }, function (_, index) {
   return { one: index + 1, two: 3000 - index, count: 1005 - index };
 });

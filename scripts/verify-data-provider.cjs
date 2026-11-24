@@ -271,6 +271,8 @@ async function main() {
   assert.equal(state.comparison.result.ready, false, "one dataset cannot form a comparison");
   assert.equal(state.view.report.filteredTotal, records.length);
   assert.ok(state.view.structureEvidence && state.view.structureEvidence.fasta.sequences.length === 1);
+  // An RNA named "__proto__" must stay a key of the name map.
+  assert.equal(Object.getPrototypeOf(state.view.structureEvidence.fasta.mapping), null);
   state.contact.binSize = 25;
   state.contact.matrix = null;
   await controller.ensure("contact-map");

@@ -2,7 +2,10 @@
 
 This directory is a static application intended for GitHub Pages. The deployed
 artifact self-hosts its pinned WebAssembly/Python runtimes and makes no runtime
-CDN or backend requests.
+CDN or backend requests. The one exception is the opt-in Related research
+lookup on the RNA Structure page (`evidence.js`): when the user turns it on and
+confirms an identifier, that identifier (and the chosen species) is sent to
+www.ebi.ac.uk (EBI Search and Europe PMC).
 
 ## Local preview
 
@@ -125,7 +128,7 @@ desktop build but are deprecated.
 
 ## Privacy model
 
-The page has no analytics, API call, runtime CDN request, or server-side upload path. HYB data and folding inputs are processed in Web Workers and held in tab memory only. ViennaRNA, Pyodide, NumPy, and the CPLfold source archive are served from the same GitHub Pages artifact.
+The page has no analytics, runtime CDN request, or server-side upload path. It makes no API call except the opt-in Related research lookup on the RNA Structure page: off by default, and once the user turns it on and confirms an RNA identifier, only that public identifier (and the selected species) is sent by GET to EBI Search and Europe PMC on www.ebi.ac.uk. HYB files, sequences, structures and file names are never sent. The page's Content-Security-Policy allows network requests only to its own origin and https://www.ebi.ac.uk. HYB data and folding inputs are processed in Web Workers and held in tab memory only. ViennaRNA, Pyodide, NumPy, and the CPLfold source archive are served from the same GitHub Pages artifact.
 
 The landing flow is intentionally two-stage: after the HYB file is parsed, the page stays on a local file-review screen. Users can add or replace the optional reference FASTA there, then click **Enter analysis** to open the workspace. Interaction tables and contact maps do not require FASTA; reference-based RNA structure and full-reference Viewpoint do. Datasets on different genomes need each genome's sequence: choose several FASTA files at once, or use **Add FASTA** (Data panel or file-review screen) to join another file to the loaded reference instead of replacing it. Automatic matches use HYB2's effective IDs for the combined reference. Adding the first pipe-delimited header can therefore change an automatic match. Manual choices keep pointing to the original FASTA record, and RNAs explicitly marked as not matched stay unmatched.
 

@@ -874,7 +874,7 @@
             }));
             const arms = guided ? provider.getArms(evidenceIds.length ? { datasetIds: evidenceIds } : sel, {}) : Promise.resolve(null);
             return Promise.all([sequences, arms]).then(function (results) {
-              const fasta = { sequences: [], mapping: {} };
+              const fasta = { sequences: [], mapping: Object.create(null) }; // RNA names such as "__proto__"
               results[0].forEach(function (sequence, index) {
                 if (!sequence) {
                   return;

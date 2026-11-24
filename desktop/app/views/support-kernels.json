@@ -5,32 +5,51 @@
       "pairModel": "",
       "value": "gaussian",
       "label": "Gaussian around arm centres (default)",
-      "desktopLabel": "Gaussian around arm centres · IRIS (default)"
+      "desktopLabel": "Gaussian around arm centres · IRIS (default)",
+      "resultLabel": "Gaussian arm support",
+      "bonus": "log1p_hyb_bonus",
+      "transform": "IRIS Gaussian arm blocks; symmetric float64 accumulation; threshold 2^-23; log1p"
     },
     {
       "pairModel": "",
       "value": "block",
-      "label": "Full arm blocks"
+      "label": "Full arm blocks",
+      "resultLabel": "full arm blocks",
+      "bonus": "log1p_hyb_bonus",
+      "transform": "Full arm blocks, w per cell of arm one x arm two; symmetric; threshold 1e-6; log1p"
     },
     {
       "pairModel": "",
       "value": "block-normalized",
       "label": "Full arm blocks ÷ √(arm 1 length × arm 2 length)",
-      "desktopLabel": "Full arm blocks ÷ √(arm lengths)"
+      "desktopLabel": "Full arm blocks ÷ √(arm lengths)",
+      "resultLabel": "full arm blocks ÷ √(arm lengths)",
+      "bonus": "log1p_hyb_bonus",
+      "transform": "Full arm blocks, w / sqrt(len one x len two) per cell; symmetric; threshold 1e-6; log1p"
     },
     {
       "pairModel": "RNAduplex",
       "value": "duplex",
       "label": "RNAduplex inter-arm pairs · saturating bonus",
-      "desktopLabel": "RNAduplex pairs, saturating"
+      "desktopLabel": "RNAduplex pairs, saturating",
+      "resultLabel": "RNAduplex pairs (saturating)",
+      "bonus": "saturating_hyb_bonus",
+      "transform": "RNAduplex cross-arm pairs, C = observed pair counts; symmetric; s C / (C + q), s = 3.6 kcal/mol, q = mean C of the n/3 best-supported pairs"
     },
     {
       "pairModel": "RNAcofold",
       "value": "comrades",
       "label": "COMRADES (RNAcofold inter-arm pairs) · saturating bonus",
-      "desktopLabel": "COMRADES (RNAcofold), saturating"
+      "desktopLabel": "COMRADES (RNAcofold), saturating",
+      "resultLabel": "COMRADES (RNAcofold, saturating)",
+      "bonus": "saturating_hyb_bonus",
+      "transform": "RNAcofold cross-arm pairs, C = observed pair counts; symmetric; s C / (C + q), s = 3.6 kcal/mol, q = mean C of the n/3 best-supported pairs"
     }
   ],
+  "comradesScore": {
+    "endpointCap": 1000000,
+    "endpointsPerPair": 2
+  },
   "engines": {
     "cplfold": {
       "defaultModel": "DP09",

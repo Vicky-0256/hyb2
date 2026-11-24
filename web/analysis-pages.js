@@ -1651,20 +1651,23 @@
     ].join("");
   }
 
-  // Result labels include historical matrices; they are not the list of selectable kernels.
+  // Selectable kernels take their result label and transform from the catalog;
+  // results can also name a retired kernel, so that one is listed here.
+  const LEGACY_KERNELS = Object.freeze({ rnacofold: { resultLabel: "RNAcofold pairs", bonus: "log1p_hyb_bonus" } });
+
+  function cplfoldResultKernel(kernel) {
+    return cplfoldKernelOption(kernel) || (Object.hasOwn(LEGACY_KERNELS, kernel) ? LEGACY_KERNELS[kernel] : null);
+  }
+
   function cplfoldKernelLabel(kernel) {
-    if (!kernel || kernel === "gaussian") return "Gaussian arm support";
-    const labels = { "block": "full arm blocks", "block-normalized": "full arm blocks ÷ √(arm lengths)",
-      "rnacofold": "RNAcofold pairs", "duplex": "RNAduplex pairs (saturating)", "comrades": "COMRADES (RNAcofold, saturating)" };
-    return Object.hasOwn(labels, kernel) ? labels[kernel] : cplfoldKernelOption(kernel)?.label || kernel;
+    const option = cplfoldResultKernel(kernel || "gaussian"); // historical results omitted the Gaussian kernel
+    return option ? option.resultLabel || option.label : kernel;
   }
 
   function cplfoldBonusKind(evidence) {
     if (evidence?.source !== "hyb-block-intervals") return "none";
-    const kernel = evidence.supportKernel || "gaussian"; // historical results omitted the Gaussian kernel
-    if (Number.isFinite(evidence.saturatingQ) || ["duplex", "comrades"].includes(kernel)) return "saturating_hyb_bonus";
-    if (["block", "block-normalized", "gaussian", "rnacofold"].includes(kernel)) return "log1p_hyb_bonus";
-    return "hyb_bonus";
+    if (Number.isFinite(evidence.saturatingQ)) return "saturating_hyb_bonus";
+    return cplfoldResultKernel(evidence.supportKernel || "gaussian")?.bonus || "hyb_bonus";
   }
 
   function cplfoldBonusLabel(evidence, pairDetail) {
@@ -1689,7 +1692,7 @@
       case "duplex":
       case "comrades":
         return (kernel === "comrades" ? "RNAcofold allows pairing within and between the two arms of a read at 37 °C. Only pairs between the arms count." : "RNAduplex pairs the two arms of each read at 37 °C without allowing pairs within either arm.") +
-          " The raw count C for each pair gives the saturating bonus B = 3.6 C / (C + q), where q is the count at half the maximum bonus. Each endpoint of a predicted pair adds min(C, 1,000,000) to the COMRADES score. The cap does not affect the bonus or drawing colours.";
+          " The raw count C for each pair gives the saturating bonus B = 3.6 C / (C + q), where q is the count at half the maximum bonus. Each endpoint of a predicted pair adds min(C, " + window.Hyb2Comrades.scoreCapLabel() + ") to the COMRADES score. The cap does not affect the bonus or drawing colours.";
       case "gaussian":
         return "Each read adds a Gaussian around its two arm centres (σ = mean arm length / 6), as IRIS does; helices through the centres get the most support.";
       default:
@@ -1948,7 +1951,7 @@
       cplfold
         ? '<div class="structure-metric"><span>Candidate</span><strong>#' + format((Number(result.selectedCandidate) || 0) + 1) + '</strong><small>' + escape(result.structureType === "pseudoknot" && allowPseudoknot ? "phase 1 + crossing phase 2" : (allowPseudoknot ? "phase 1 nested" : "phase 1 secondary")) + '</small></div>'
         : '<div class="structure-metric"><span>Constraint mode</span><strong>' + (result.engine === "IRIS" ? "IRIS ensemble" : guided ? "HYB-guided" : (manualConstrained ? "Manual hard" : "None")) + "</strong><small>" + format(constraintCount) + " enforced pair" + (constraintCount === 1 ? "" : "s") + "</small></div>",
-      guided || rawCounts ? '<div class="structure-metric"><span>COMRADES score</span><strong>' + format(result.comradesScore) + '</strong><small>' + (rawCounts ? window.Hyb2Comrades.pairCountSource(result) + " counts" : format(result.matchedEvidencePairs || 0) + " supported structure pairs") + (rawCounts || result.evidence?.scoringVersion === "all-pairs-capped-v1" ? " · up to 1,000,000 per paired endpoint" : " · scoring version not recorded") + "</small></div>" : "",
+      guided || rawCounts ? '<div class="structure-metric"><span>COMRADES score</span><strong>' + format(result.comradesScore) + '</strong><small>' + (rawCounts ? window.Hyb2Comrades.pairCountSource(result) + " counts" : format(result.matchedEvidencePairs || 0) + " supported structure pairs") + (rawCounts || result.evidence?.scoringVersion === "all-pairs-capped-v1" ? " · up to " + window.Hyb2Comrades.scoreCapLabel() + " per paired endpoint" : " · scoring version not recorded") + "</small></div>" : "",
       cplfold && Number(result.effectiveEnergy) !== Number(result.energy) ? '<div class="structure-metric"><span>Effective energy</span><strong>' + formatEnergy(result.effectiveEnergy) + '</strong><small>kcal/mol · beta-adjusted rank</small></div>' : "",
       '<div class="structure-metric"><span>Elapsed</span><strong>' + format(result.elapsedMs) + " ms</strong><small>" + (cplfold ? (Number(result.runtimeLoadMs) > 0 ? "runtime load " + format(result.runtimeLoadMs) + " ms · " : "") + (Number.isFinite(Number(result.foldElapsedMs)) && result.foldElapsedMs !== null ? "fold " + format(result.foldElapsedMs) + " ms" : "local fold") : "local worker") + "</small></div>",
       "</section>",
@@ -2327,7 +2330,7 @@
       if (evidence.error) {
         return { sequence: "", label: "", error: evidence.error };
       }
-      const referenceFasta = evidence.fasta || { sequences: [], mapping: {} };
+      const referenceFasta = evidence.fasta || { sequences: [], mapping: Object.create(null) };
       // Typed coordinates are checked first, with the Region and Viewpoint
       // pages' wording; plain folding may leave Start or End blank.
       const twoRegions = !cplfoldGuided && guidedEvidence && structure.evidenceLayout === "paired";

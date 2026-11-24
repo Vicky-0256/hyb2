@@ -540,6 +540,8 @@ func (p *structurePage) sequencePlan() foldPlan {
 		pl.problems = append(pl.problems, "No sample has been analysed yet: run the pipeline on the Data page first, then come back.")
 	case len(pl.ids) == 0:
 		pl.problems = append(pl.problems, "Choose the samples: their reference is searched for the sequence.")
+	case a.Project.Reference(p.selectedReferenceID()) == nil:
+		pl.problems = append(pl.problems, "The selected samples must share one reference. Choose samples mapped to the same reference.")
 	}
 	cofold, record := p.engine == engineCPLcofold, p.src.kind == stSourceRecord
 	var strands []string
@@ -1479,7 +1481,7 @@ func stExplain(err string) (what, next string) {
 		return "A file the fold reads (a sample's .hyb or the reference) is missing or moved.",
 			"use Check inputs on the Data page and relink the file, then run the fold again."
 	}
-	return "CPLfold stopped with an error.", "run it again; if it fails again, send the technical details below to the HYB2 team."
+	return "The fold stopped with an error.", "run it again; if it fails again, send the technical details below to the HYB2 team."
 }
 
 // ---- results

@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -237,6 +238,116 @@ func TestStructureSequenceSourceTopology(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Pasted inputs keep every selected sample, but the runtime still needs one
+// shared reference. Both submission routes must reject an invalid selection.
+func TestStructureSequenceReferenceAdmission(t *testing.T) {
+	const diagnosis = "The selected samples must share one reference. Choose samples mapped to the same reference."
+	all := []string{"AFR_REP1", "AFR_REP2", "ZBRA_REP1", "ZBRA_REP2"}
+	afr := []string{"AFR_REP1", "AFR_REP2"}
+	for _, tc := range []struct {
+		name     string
+		shortcut bool
+	}{
+		{"mixed/button", false},
+		{"mixed/shortcut", true},
+		{"pinned-mixed", false},
+		{"missing-reference", false},
+		{"unknown-reference", true},
+		{"pinned-same-reference", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, f := openCS(t)
+			// Keep the four indexed HYB examples, without the extra FASTQ subset.
+			for _, id := range []string{"SUB_REP1", "SUB_REP2"} {
+				s := a.Project.Sample(id)
+				s.Ready, s.Outputs.Index = false, ""
+			}
+			a.Selected.Key = AllSelection
+			tt := ui.NewTester(a.View, 1100, 2200)
+			a.Navigate("structure", nil)
+			csSettle(a, tt)
+			p := a.PageFor("structure").(*structurePage)
+			if pl := p.plan(); len(pl.problems) != 0 || !slices.Equal(pl.req.SampleIDs, afr) {
+				t.Fatalf("reference-region filtering changed: ids=%v problems=%q", pl.req.SampleIDs, pl.problems)
+			}
+			mustClick(t, tt, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
+			mustClick(t, tt, "Reference region")
+			mustClick(t, tt, "Paste sequence")
+			mustClick(t, tt, "Paste RNA sequence")
+			sequence := "GGGAAAACCC"
+			tt.Type(sequence)
+			ids := all
+			switch tc.name {
+			case "pinned-mixed":
+				p.evidence = "c:AFR"
+				ids = []string{"ZBRA_REP2", "AFR_REP1"}
+				p.pinSamples(ids)
+			case "missing-reference":
+				p.evidence, ids = "c:AFR", afr
+				a.Project.Sample("AFR_REP2").ReferenceID = ""
+			case "unknown-reference":
+				p.evidence, ids = "c:AFR", afr
+				for _, id := range ids {
+					a.Project.Sample(id).ReferenceID = "UNKNOWN"
+				}
+			case "pinned-same-reference":
+				ids = []string{"AFR_REP2", "AFR_REP1"}
+				p.pinSamples(ids)
+			}
+			tt.Frame()
+			if pl := p.plan(); !slices.Equal(pl.ids, ids) || !slices.Equal(pl.req.SampleIDs, ids) {
+				t.Fatalf("pasted input silently changed its samples: ids=%v request=%v want=%v", pl.ids, pl.req.SampleIDs, ids)
+			}
+			submit := func() {
+				t.Helper()
+				if tc.shortcut {
+					mustClick(t, tt, "Paste RNA sequence")
+					tt.Key(ui.Cmd, ui.KeyEnter)
+				} else {
+					mustClick(t, tt, "Run fold")
+				}
+				csSettle(a, tt)
+			}
+			if tc.name != "pinned-same-reference" {
+				pl := p.plan()
+				if !slices.Equal(pl.problems, []string{diagnosis}) || !slices.Contains(tt.Texts(), "• "+diagnosis) {
+					t.Errorf("expected the exact reference diagnosis in the form; problems=%q", pl.problems)
+				}
+				submit()
+				started := f.startedKinds()
+				t.Logf("rejected ids=%v shortcut=%t problems=%q StartTask calls=%d", ids, tc.shortcut, pl.problems, len(started))
+				if len(started) != 0 {
+					t.Fatalf("invalid sample references submitted %d task(s)", len(started))
+				}
+				if !strings.HasPrefix(tc.name, "mixed/") {
+					return
+				}
+				// Changing only evidence recovers; no sequence edit or sample filtering.
+				mustClick(t, tt, "Evidence")
+				mustClick(t, tt, "AFR · 2 datasets merged")
+				csSettle(a, tt)
+				ids = afr
+			}
+			if pl := p.plan(); len(pl.problems) != 0 || tt.HasText(diagnosis) {
+				t.Fatalf("same-reference selection did not recover: %q", pl.problems)
+			}
+			submit()
+			mode, source, gene, engine := "genome", stSourcePaste, "pasted_sequence", engineVienna
+			workers, mem := uint32(1), uint64(60)
+			want := core.TaskStartRequest{ProjectPath: a.Project.Path, Kind: "structure", SampleIDs: ids,
+				GeneID: &gene, Mode: &mode, Source: &source, Engine: &engine, Sequence: &sequence, Workers: &workers, MemMB: &mem,
+				Parameters: map[string]any{"temperature": float64(37), "min_loop": 3, "hard_pairs": [][2]int{}}}
+			started := f.startedKinds()
+			if len(started) != 1 || !reflect.DeepEqual(started[0], want) {
+				t.Fatalf("same-reference request changed: got %+v, want %+v", started, want)
+			}
+			t.Logf("admitted exact request: sample_ids=%v sequence=%q engine=%s source=%s mode=%s parameters=%v workers=%d mem_mb=%d",
+				started[0].SampleIDs, *started[0].Sequence, *started[0].Engine, *started[0].Source, *started[0].Mode,
+				started[0].Parameters, *started[0].Workers, *started[0].MemMB)
+		})
 	}
 }
 

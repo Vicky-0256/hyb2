@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -203,7 +204,7 @@ func TestStructureFoldStates(t *testing.T) {
 		{model.Task{Status: "failed", FinishedAt: at(0), Error: "ValueError: no intramolecular X chimeras fall inside the requested region"},
 			[]string{"No chimeric read of these samples has both arms inside the folded region, so there is no evidence to guide the fold."}},
 		{model.Task{Status: "failed", FinishedAt: at(0), Error: "Segmentation fault"},
-			[]string{"CPLfold stopped with an error.", "Next: run it again; if it fails again, send the technical details below to the HYB2 team."}},
+			[]string{"The fold stopped with an error.", "Next: run it again; if it fails again, send the technical details below to the HYB2 team."}},
 		{model.Task{Status: "cancelled"}, []string{"Fold cancelled", "Nothing was saved, including windows that had already been folded. Change the form if needed, then run it again."}},
 		{model.Task{Status: "interrupted"}, []string{"Fold stopped", "Run it again", "HYB2 Desktop closed while it ran. Nothing was saved; it starts from the beginning."}},
 		{model.Task{Status: "succeeded"}, []string{"Fold finished", "Computation finished, but result registration is pending or unavailable. Refresh Results to check again."}},
@@ -225,6 +226,54 @@ func TestStructureFoldStates(t *testing.T) {
 	csSettle(a, tt)
 	if len(a.TaskList()) != before {
 		t.Fatal("a second fold started while one runs")
+	}
+}
+
+func TestStructureFailedTaskEngineNeutral(t *testing.T) {
+	a, f, tt, p := stSetupPage(t, 1800)
+	mustClick(t, tt, "ViennaRNA MFE, the sequence alone (optional hard pairs)")
+	mustClick(t, tt, "Run fold")
+	csSettle(a, tt)
+	started := f.startedKinds()
+	if len(started) != 1 || started[0].Engine == nil || *started[0].Engine != engineVienna || p.lastTask != "structure-1" {
+		t.Fatalf("expected one ViennaRNA task: requests=%+v, lastTask=%q", started, p.lastTask)
+	}
+	const taskLabel = "Structure (ViennaRNA) · whole RNA"
+	const referenceError = "the selected samples must share one reference"
+	// Replay the recorded runtime error in the component fixture; no engine runs here.
+	stTaskState(a, tt, model.Task{Status: "failed", Error: referenceError})
+	mustClick(t, tt, "Technical details")
+
+	for _, tc := range []struct{ engine, choice string }{
+		{engineVienna, "ViennaRNA MFE, the sequence alone (optional hard pairs)"},
+		{engineCPLfold, "CPLfold, guided by the chimeric reads"},
+	} {
+		t.Run(tc.engine, func(t *testing.T) {
+			mustClick(t, tt, tc.choice)
+			csSettle(a, tt)
+			task := a.Tasks["structure-1"]
+			if p.engine != tc.engine || p.lastTask != task.TaskID || a.TaskLabel(task) != taskLabel ||
+				task.Status != "failed" || task.ErrorText() != referenceError || len(f.startedKinds()) != 1 {
+				t.Fatalf("form change must preserve the failed ViennaRNA task: engine=%q, lastTask=%q, label=%q, task=%+v",
+					p.engine, p.lastTask, a.TaskLabel(task), task)
+			}
+			snapshot(t, tt, "states-vienna-reference-failed-form-"+tc.engine)
+			for _, want := range []string{
+				"The fold failed",
+				"The fold stopped with an error.",
+				"Next: run it again; if it fails again, send the technical details below to the HYB2 team.",
+				referenceError + " (log: runs/structure-1/stderr.log)",
+			} {
+				if !slices.Contains(tt.Texts(), want) {
+					t.Errorf("missing exact rendered text %q: %q", want, tt.Texts())
+				}
+			}
+			if tt.HasText("CPLfold stopped with an error.") {
+				t.Error("the historical ViennaRNA failure is incorrectly attributed to CPLfold")
+			}
+			t.Logf("form engine=%s; task=%s; historical label=%q; raw error=%q; legacy fallback shown=%t",
+				p.engine, task.TaskID, a.TaskLabel(task), task.ErrorText(), tt.HasText("CPLfold stopped with an error."))
+		})
 	}
 }
 

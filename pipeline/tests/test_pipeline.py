@@ -3,6 +3,7 @@
 The golden files were produced by the legacy ``sam_filt`` + ``sam2hyb -e 0``
 on ``data/testData.sam`` (macOS one-true-awk 20200816, LANG=C.UTF-8).
 """
+import gzip
 import io
 import json
 import os
@@ -24,11 +25,15 @@ from hyb2pipe import Options, awk, blast, collapse, energy, extsort, finalize, h
 class GoldenTest(unittest.TestCase):
     def test_testdata_sam_matches_legacy_byte_for_byte(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = run(ROOT / "data/testData.sam", ROOT / "data/Zika_18S_formatted.fasta", Path(tmp) / "out/testData")
-            for produced, golden in ((result.hyb, "testData.hyb"), (result.homodimers, "testData_homodimers.hyb"),
-                                     (result.stats, "testData_hybrids.hyb_stats.txt")):
-                self.assertEqual(produced.read_bytes(), (HERE / "golden" / golden).read_bytes(), golden)
-            self.assertEqual(result.counts["hybrids"], 10411)
+            packed = Path(tmp) / "testData.sam.gz"
+            packed.write_bytes(gzip.compress((ROOT / "data/testData.sam").read_bytes()))
+            for source in (ROOT / "data/testData.sam", packed):
+                with self.subTest(source=source.name):
+                    result = run(source, ROOT / "data/Zika_18S_formatted.fasta", Path(tmp) / ("out-" + source.name) / "testData")
+                    for produced, golden in ((result.hyb, "testData.hyb"), (result.homodimers, "testData_homodimers.hyb"),
+                                             (result.stats, "testData_hybrids.hyb_stats.txt")):
+                        self.assertEqual(produced.read_bytes(), (HERE / "golden" / golden).read_bytes(), golden)
+                    self.assertEqual(result.counts["hybrids"], 10411)
 
 
 class AwkTest(unittest.TestCase):

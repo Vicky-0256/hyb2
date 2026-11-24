@@ -626,9 +626,9 @@ def _source(input_path: Path) -> str:
         return "fastq"
     if name.endswith(_FASTA):
         return "fasta"
-    if name.endswith(".sam"):
+    if name.endswith((".sam", ".sam.gz")):
         return "sam"
-    raise ValueError("input must be FASTQ(.gz), FASTA or SAM: %s" % input_path)
+    raise ValueError("input must be FASTQ(.gz), FASTA(.gz) or SAM(.gz): %s" % input_path)
 
 
 def energy_stage_pending(input_path: Path, reference: Path, out_prefix: Path, options: Options = Options()) -> bool:

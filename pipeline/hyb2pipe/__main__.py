@@ -18,7 +18,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="hyb2pipe", add_help=False,
                                      description="FASTQ/FASTA/SAM to .hyb (pure-Python port of hyb2 step 1)")
     parser.add_argument("--help", action="help")
-    parser.add_argument("-i", dest="input", required=True, type=Path, help="input FASTQ(.gz), FASTA or SAM")
+    parser.add_argument("-i", dest="input", required=True, type=Path, help="input FASTQ(.gz), FASTA(.gz) or SAM(.gz)")
     parser.add_argument("-d", dest="reference", required=True, type=Path, help="FASTA used for mapping")
     parser.add_argument("-o", dest="out", required=True, type=Path, help="output prefix")
     parser.add_argument("-v", dest="blast_threshold", type=float, default=0.1, help="BLAST threshold (0.1)")

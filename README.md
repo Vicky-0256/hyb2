@@ -81,7 +81,7 @@ printf '%s\n' "$PWD/third_party/varna/build/jar/VARNAcmd.jar" > bin/VARNA.dir
 
 ## Entry Points
 
-The Hyb2 command-line pipeline is `hyb2pipe` in `pipeline/`. It turns FASTQ(.gz), FASTA or SAM input into `.hyb` files in pure Python (3.9+), with no Perl, awk or sed, so it also runs on Windows. The desktop app runs the same code for every sample. Run it from the repository root:
+The Hyb2 command-line pipeline is `hyb2pipe` in `pipeline/`. It turns FASTQ, FASTA or SAM input (each optionally gzipped) into `.hyb` files in pure Python (3.9+), with no Perl, awk or sed, so it also runs on Windows. The desktop app runs the same code for every sample. Run it from the repository root:
 
 ```bash
 PYTHONPATH=pipeline python3 -m hyb2pipe -i data/testData.sam -d data/Zika_18S.fasta -o out/test -e 1
@@ -204,7 +204,7 @@ A run has 3 parts. `hyb2pipe` converts the input to Hyb format; `hyb2 -i <output
 ```bash
 PYTHONPATH=Hyb2/pipeline python3 -m hyb2pipe -i <input> -d <reference.fasta> -o <output_prefix> [options]
 ```
--i input_file (fastq, fastq.gz, fasta or sam)
+-i input_file (fastq, fastq.gz, fasta, fasta.gz, sam or sam.gz)
 
 -d reference_sequences.fasta used for mapping
 

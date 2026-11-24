@@ -587,6 +587,49 @@ class CliTest(unittest.TestCase):
             bad.write_text("")
             self.assertEqual(main(["-i", str(bad), "-d", str(ROOT / "data/Zika_18S_formatted.fasta"), "-o", str(Path(tmp) / "o")]), 2)
 
+    def _main(self, *args):
+        from hyb2pipe.__main__ import main
+        err = io.StringIO()
+        with mock.patch.object(sys, "stderr", err), mock.patch.object(sys, "stdout", io.StringIO()):
+            status = main([str(a) for a in args])
+        return status, err.getvalue()
+
+    def test_truncated_gzip_is_an_input_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            packed = Path(tmp) / "reads.sam.gz"
+            packed.write_bytes(gzip.compress((ROOT / "data/testData.sam").read_bytes())[:5000])
+            status, err = self._main("-i", packed, "-d", ROOT / "data/Zika_18S_formatted.fasta", "-o", Path(tmp) / "o")
+            self.assertEqual(status, 2)
+            self.assertIn("error: Compressed file ended", err)
+
+    def test_warns_when_no_hybrids_are_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            junk = Path(tmp) / "junk.sam"
+            junk.write_text("not a sam\n")
+            status, err = self._main("-i", junk, "-d", ROOT / "data/Zika_18S_formatted.fasta", "-o", Path(tmp) / "o")
+            self.assertEqual(status, 0)
+            self.assertIn("warning: no hybrids found in", err)
+
+    @unittest.skipUnless(energy._vienna_version(), "ViennaRNA not installed")
+    def test_warns_when_reference_lacks_a_gene_for_dg(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reads = Path(tmp) / "reads.sam"
+            reads.write_text("".join((ROOT / "data/testData.sam").read_text().splitlines(keepends=True)[:4000]))
+            full = ROOT / "data/Zika_18S_formatted.fasta"
+            status, err = self._main("-i", reads, "-d", full, "-o", Path(tmp) / "a", "-e", 1)
+            self.assertEqual((status, "warning" in err), (0, False))
+            text = full.read_text()
+            start = text.index(">18S_rRNA")
+            no18s = Path(tmp) / "no18s.fasta"
+            no18s.write_text(text[:start] + text[text.index(">", start + 1):])
+            status, err = self._main("-i", reads, "-d", no18s, "-o", Path(tmp) / "b", "-e", 1)
+            self.assertEqual(status, 0)
+            rows = [line.split("\t") for line in (Path(tmp) / "b.hyb").read_text().splitlines()]
+            missing = sum(1 for cols in rows if cols[2] == ".")
+            self.assertGreater(missing, 0)
+            self.assertIn("warning: %d of %d hybrids have no dG" % (missing, len(rows)), err)
+            self.assertIn("18S_rRNA", err)
+
     @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build"), "Bowtie2 not installed")
     def test_fastq_path_maps_with_bowtie2(self):
         with tempfile.TemporaryDirectory() as tmp:

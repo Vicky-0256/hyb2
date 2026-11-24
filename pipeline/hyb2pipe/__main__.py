@@ -57,16 +57,45 @@ def main(argv=None) -> int:
     try:
         result = run(args.input, args.reference, args.out, options, progress, log=sys.stderr,
                      progress_bytes=progress_bytes)
-    except (EnergyUnavailable, MappingUnavailable, ValueError, OSError) as error:
+    # EOFError: a truncated .gz input
+    except (EnergyUnavailable, MappingUnavailable, ValueError, OSError, EOFError) as error:
         if args.json_progress:
             print(json.dumps({"type": "error", "error": str(error)}), flush=True)
         else:
             print("error: %s" % error, file=sys.stderr)
         return 2
+    for warning in _warnings(result, options.energy, args.input):
+        print("warning: %s" % warning, file=sys.stderr, flush=True)
     summary = {"type": "result", "hyb": str(result.hyb), "homodimers": str(result.homodimers),
                "stats": str(result.stats), "sam": str(result.sam) if result.sam else None, "counts": result.counts}
     print(json.dumps(summary) if args.json_progress else result.hyb)
     return 0
+
+
+def _warnings(result, energy: bool, source: Path):
+    """Results that are valid but likely not what was meant; the exit status stays 0."""
+    if not result.counts.get("hybrids"):
+        yield ("no hybrids found in %s. Check that it holds single-end chimeric reads (FASTQ or FASTA), "
+               "or their alignments to the -d reference (SAM)." % source)
+        return
+    if not energy:
+        return
+    missing = rows = 0
+    genes = set()
+    with open(result.hyb, encoding="utf-8") as hyb:
+        for line in hyb:
+            cols = line.rstrip("\n").split("\t")
+            if line.startswith("#") or len(cols) < 10:
+                continue
+            rows += 1
+            if cols[2] == ".":
+                missing += 1
+                genes.update((cols[3], cols[9]))
+    if missing:
+        shown = sorted(genes)
+        yield ("%d of %d hybrids have no dG ('.'). Their arms are on %s%s; check that the -d reference "
+               "contains every gene the reads were mapped to." % (
+                   missing, rows, ", ".join(shown[:5]), " and %d more" % (len(shown) - 5) if len(shown) > 5 else ""))
 
 
 if __name__ == "__main__":

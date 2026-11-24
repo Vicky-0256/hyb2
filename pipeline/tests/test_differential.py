@@ -36,6 +36,11 @@ counts are random rows of the reproduce_zikv comparisons:
   dispersions by up to 80%.  ``map_small_dispersion`` (2 vs 3, local trend):
   genes whose MAP dispersion is ~1e-4, where the order of the lgamma terms in
   the log posterior decides the line search.
+- ``seven_vs_seven`` (7 vs 7) and ``seven_vs_three`` (7 vs 3): synthetic tables
+  (scratch generator, kept as counts) with injected outliers, where ``DESeq()``
+  replaces outliers in the 7-sample cells and refits (``minReplicatesForReplace
+  = 7``); R 4.4.3 + DESeq2 1.46.0, columns baseMean lfc lfcSE pvalue padj
+  dispGeneEst dispFit dispersion.
 """
 import json
 import math
@@ -171,6 +176,31 @@ class DeseqMatchesR(unittest.TestCase):
                 # (IRLS stops at a deviance tolerance: lfc within ~1e-5 where a cell is 0)
                 np.testing.assert_allclose(res["log2FoldChange"], r[:, 1], rtol=1e-4)
                 np.testing.assert_allclose(res["padj"], r[:, 2], rtol=1e-4)
+
+    def test_outliers_are_replaced_and_refitted_with_seven_replicates(self):
+        # DESeq(minReplicatesForReplace = 7): Cook's outliers in a cell of 7 or more
+        # are replaced by trimmed means and the rows refitted instead of losing their
+        # p-values. Synthetic tables with 6 injected outliers and one row that is all
+        # zero after replacement; R 4.4.3 + DESeq2 1.46.0 (columns baseMean lfc lfcSE
+        # pvalue padj dispGeneEst dispFit dispersion).
+        replaced = [f"r{i}" for i in (3, 10, 25, 40, 77, 120, 200)]
+        for case, filtered in (("seven_vs_seven", []), ("seven_vs_three", ["r77"])):
+            with self.subTest(case=case):
+                ids, counts, one, expected = _load(case)
+                keep = counts.sum(axis=1) > 2
+                ids = [i for i, k in zip(ids, keep) if k]
+                res = deseq.deseq_two_conditions(counts[keep], one)
+                r = np.array([expected[i] for i in ids])
+                for k, column in enumerate(("baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj",
+                                            "dispGeneEst", "dispFit", "dispersion")):
+                    np.testing.assert_allclose(res[column], r[:, k], rtol=1e-6, err_msg=column)
+                rows = [ids.index(i) for i in replaced]
+                # every replaced row keeps a p-value unless an outlier lies in the 3-sample cell
+                self.assertEqual([ids[k] for k in rows if np.isnan(res["pvalue"][k])], filtered)
+                zero = ids.index("r200")  # its one nonzero count was replaced by 0
+                self.assertEqual((res["baseMean"][zero], res["log2FoldChange"][zero], res["pvalue"][zero]),
+                                 (0.0, 0.0, 1.0))
+                self.assertEqual(bool(np.isnan(res["maxCooks"]).all()), case == "seven_vs_seven")
 
     def test_prior_variance_simulation_is_rs(self):
         dens = deseq._simulated_log_disp(2)

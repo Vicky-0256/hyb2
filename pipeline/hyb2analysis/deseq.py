@@ -16,6 +16,10 @@ DESeq2 1.46 (R/core.R and src/DESeq2.cpp):
 - MAP dispersion with outliers kept at the gene-wise value;
 - IRLS for the coefficients with the ridge 1e-6 and ``minmu`` 0.5, Wald test;
 - Cook's distance filtering for cells with three or more replicates;
+- with seven or more replicates in a cell (``minReplicatesForReplace = 7``),
+  ``replaceOutliers`` and the refit of ``refitWithoutOutliers``: outlier
+  counts in those samples become trimmed means, the rows are refitted, and
+  Cook's filtering then considers only the samples that could not be replaced;
 - independent filtering on the mean of normalized counts (``lowess`` port)
   and Benjamini-Hochberg.
 
@@ -48,6 +52,7 @@ BETA_TOL = 1e-8
 LAMBDA = 1e-6
 LARGE = 30.0
 EPSILON = 1e-4
+MIN_REPLICATES_FOR_REPLACE = 7  # DESeq() default minReplicatesForReplace
 
 
 # --- special functions --------------------------------------------------------
@@ -1207,33 +1212,69 @@ def deseq_two_conditions(counts: np.ndarray, condition_one: Sequence[bool], *, a
             # estimateSizeFactorsForMatrix: "every gene contains at least one zero"
             raise ValueError("every cell has a zero count in at least one sample, so size factors (log geometric "
                              "means) cannot be computed; check that every sample has hybrids for this RNA pair")
-    nf = np.broadcast_to(sf, y.shape)
-    norm = y / sf
-    base_mean = norm.mean(axis=1)
-    base_var = norm.var(axis=1, ddof=1)
+    max_disp = max(10.0, m)
+    xim = float(np.mean(1.0 / sf))
+
+    def gene_wise(y):
+        """estimateDispersionsGeneEst: normalized counts, base means, mu and gene-wise dispersions."""
+        nrow = len(y)
+        norm = y / sf
+        base_mean = norm.mean(axis=1)
+        base_var = norm.var(axis=1, ddof=1)
+        group_means = np.column_stack([norm[:, group == g].mean(axis=1) for g in range(2)])
+        lin = group_means[:, group]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            moments = (base_var - xim * base_mean) / base_mean ** 2
+            mu1 = np.maximum(1.0, lin)
+            rough = np.maximum(np.sum(((norm - mu1) ** 2 - mu1) / mu1 ** 2, axis=1) / (m - p), 0.0)
+        alpha_init = np.clip(np.minimum(rough, moments), MIN_DISP, max_disp)
+        mu = np.maximum(lin * sf, MIN_MU)
+        zeros = np.zeros(nrow)
+        la, iters, init_lp, last_lp = _fit_disp(y, mu, group, 2, np.log(alpha_init), zeros, 1.0, False,
+                                                math.log(MIN_DISP / 10))
+        disp_gene = np.minimum(np.exp(la), max_disp)
+        no_increase = last_lp < init_lp + np.abs(init_lp) / 1e6
+        disp_gene[no_increase] = alpha_init[no_increase]
+        conv = (iters < MAXIT) & (iters != 1)
+        refit = ~conv & (disp_gene > MIN_DISP * 10)
+        if refit.any():
+            disp_gene[refit] = _grid_refit(y[refit], mu[refit], group, 2, zeros[refit], 1.0, False, m)
+        return norm, base_mean, mu, np.clip(disp_gene, MIN_DISP, max_disp)
+
+    def map_dispersion(y, mu, disp_gene, disp_fit):
+        """estimateDispersionsMAP with the prior variance of the whole table."""
+        disp_init = np.where(disp_gene > 0.1 * disp_fit, disp_gene, disp_fit)
+        la, iters, _, _ = _fit_disp(y, mu, group, 2, np.log(disp_init), np.log(disp_fit), prior_var, True,
+                                    math.log(MIN_DISP / 10))
+        disp_map = np.exp(la)
+        refit = iters >= MAXIT
+        if refit.any():
+            disp_map[refit] = _grid_refit(y[refit], mu[refit], group, 2, np.log(disp_fit[refit]), prior_var, True, m)
+        disp_map = np.clip(disp_map, MIN_DISP, max_disp)
+        outlier = np.log(disp_gene) > np.log(disp_fit) + 2.0 * math.sqrt(var_log_disp)
+        return np.where(outlier, disp_gene, disp_map)
+
+    def wald(y, norm, disp):
+        """nbinomWaldTest: log2 coefficients, the contrast's lfc, SE, statistic and p-value."""
+        nf = np.broadcast_to(sf, y.shape)
+        q, r = np.linalg.qr(x)
+        beta0 = np.linalg.solve(r, q.T @ np.log(norm + 0.1).T).T
+        lam = np.full(p, LAMBDA / math.log(2) ** 2)
+        beta, var, hat, biters = _fit_beta(y, np.ascontiguousarray(nf), x, disp, np.ascontiguousarray(beta0), lam)
+        beta2 = beta / math.log(2)  # log2 scale, as DESeq2 reports
+        se2 = np.sqrt(np.maximum(var, 0.0)) / math.log(2)
+        conv = biters < MAXIT
+        stable = np.all(np.isfinite(beta), axis=1)
+        for i in np.where(~conv | ~stable | ~np.all(var > 0, axis=1))[0]:
+            start = beta2[i] if stable[i] and np.all(np.abs(beta2[i]) < LARGE) else beta0[i]
+            beta2[i], se2[i], conv[i] = _optim_row(y[i], sf, x, disp[i], start)
+        lfc = -beta2[:, 1]
+        se = se2[:, 1]
+        stat = lfc / se
+        return beta2, hat, lfc, se, stat, 2.0 * _norm_sf(np.abs(stat)), conv
 
     # gene-wise dispersion
-    group_means = np.column_stack([norm[:, group == g].mean(axis=1) for g in range(2)])
-    lin = group_means[:, group]
-    xim = float(np.mean(1.0 / sf))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        moments = (base_var - xim * base_mean) / base_mean ** 2
-        mu1 = np.maximum(1.0, lin)
-        rough = np.maximum(np.sum(((norm - mu1) ** 2 - mu1) / mu1 ** 2, axis=1) / (m - p), 0.0)
-    max_disp = max(10.0, m)
-    alpha_init = np.clip(np.minimum(rough, moments), MIN_DISP, max_disp)
-    mu = np.maximum(lin * sf, MIN_MU)
-    zeros = np.zeros(nrow)
-    la, iters, init_lp, last_lp = _fit_disp(y, mu, group, 2, np.log(alpha_init), zeros, 1.0, False,
-                                            math.log(MIN_DISP / 10))
-    disp_gene = np.minimum(np.exp(la), max_disp)
-    no_increase = last_lp < init_lp + np.abs(init_lp) / 1e6
-    disp_gene[no_increase] = alpha_init[no_increase]
-    conv = (iters < MAXIT) & (iters != 1)
-    refit = ~conv & (disp_gene > MIN_DISP * 10)
-    if refit.any():
-        disp_gene[refit] = _grid_refit(y[refit], mu[refit], group, 2, zeros[refit], 1.0, False, m)
-    disp_gene = np.clip(disp_gene, MIN_DISP, max_disp)
+    norm, base_mean, mu, disp_gene = gene_wise(y)
 
     # trend
     use_fit = disp_gene > 100 * MIN_DISP
@@ -1241,16 +1282,24 @@ def deseq_two_conditions(counts: np.ndarray, condition_one: Sequence[bool], *, a
         # estimateDispersionsFit stops here
         raise ValueError("all gene-wise dispersion estimates are within 2 orders of magnitude from the minimum "
                          "value, and so the standard curve fitting techniques will not work")
+    fit_means, fit_disps = base_mean[use_fit], disp_gene[use_fit]
     try:
-        coefs = _parametric_fit(base_mean[use_fit], disp_gene[use_fit])
+        coefs = _parametric_fit(fit_means, fit_disps)
         disp_fit = coefs[0] + coefs[1] / base_mean
         fit_type = "parametric"
     except (ValueError, FloatingPointError, ZeroDivisionError):
         # DESeq2: "the dispersion trend was not well captured by the function
         # y = a/x + b, and a local regression fit was automatically substituted"
         coefs = np.array([np.nan, np.nan])
-        disp_fit = _local_fit(base_mean[use_fit], disp_gene[use_fit], base_mean)
+        disp_fit = _local_fit(fit_means, fit_disps, base_mean)
         fit_type = "local"
+
+    def trend(means):
+        """dispersionFunction(dds): the fitted trend at other base means."""
+        if fit_type == "parametric":
+            return coefs[0] + coefs[1] / means
+        return _local_fit(fit_means, fit_disps, means)
+
     resid = np.log(disp_gene) - np.log(disp_fit)
     above = disp_gene >= MIN_DISP * 100
     var_log_disp = _mad(resid[above]) ** 2
@@ -1261,39 +1310,19 @@ def deseq_two_conditions(counts: np.ndarray, condition_one: Sequence[bool], *, a
         prior_var = max(var_log_disp - trigamma(df / 2.0), 0.25)
 
     # MAP
-    disp_init = np.where(disp_gene > 0.1 * disp_fit, disp_gene, disp_fit)
-    la, iters, _, _ = _fit_disp(y, mu, group, 2, np.log(disp_init), np.log(disp_fit), prior_var, True,
-                                math.log(MIN_DISP / 10))
-    disp_map = np.exp(la)
-    refit = iters >= MAXIT
-    if refit.any():
-        disp_map[refit] = _grid_refit(y[refit], mu[refit], group, 2, np.log(disp_fit[refit]), prior_var, True, m)
-    disp_map = np.clip(disp_map, MIN_DISP, max_disp)
-    outlier = np.log(disp_gene) > np.log(disp_fit) + 2.0 * math.sqrt(var_log_disp)
-    disp = np.where(outlier, disp_gene, disp_map)
+    disp = map_dispersion(y, mu, disp_gene, disp_fit)
 
     # Wald test
-    q, r = np.linalg.qr(x)
-    beta0 = np.linalg.solve(r, q.T @ np.log(norm + 0.1).T).T
-    lam = np.full(p, LAMBDA / math.log(2) ** 2)
-    beta, var, hat, biters = _fit_beta(y, np.ascontiguousarray(nf), x, disp, np.ascontiguousarray(beta0), lam)
-    beta2 = beta / math.log(2)  # log2 scale, as DESeq2 reports
-    se2 = np.sqrt(np.maximum(var, 0.0)) / math.log(2)
-    conv = biters < MAXIT
-    stable = np.all(np.isfinite(beta), axis=1)
-    for i in np.where(~conv | ~stable | ~np.all(var > 0, axis=1))[0]:
-        start = beta2[i] if stable[i] and np.all(np.abs(beta2[i]) < LARGE) else beta0[i]
-        beta2[i], se2[i], conv[i] = _optim_row(y[i], sf, x, disp[i], start)
-    lfc = -beta2[:, 1]
-    se = se2[:, 1]
-    stat = lfc / se
-    pvalue = 2.0 * _norm_sf(np.abs(stat))
+    beta2, hat, lfc, se, stat, pvalue, conv = wald(y, norm, disp)
 
     # Cook's distance (cells with 3 or more replicates)
     max_cooks = np.full(nrow, np.nan)
     sizes = np.bincount(group, minlength=2)
     big_cells = [g for g in range(2) if sizes[g] >= 3]
-    if cooks_cutoff and big_cells:
+    # DESeq(minReplicatesForReplace = 7) replaces outliers in cells of 7 or more
+    replace_cells = [g for g in range(2) if sizes[g] >= MIN_REPLICATES_FOR_REPLACE]
+    cutoff = _qf99(p, m - p)
+    if big_cells and (cooks_cutoff or replace_cells):
         mu_fit = sf * np.exp2(x @ beta2.T).T
         v = np.zeros(nrow)
         for g in big_cells:
@@ -1309,13 +1338,53 @@ def deseq_two_conditions(counts: np.ndarray, condition_one: Sequence[bool], *, a
         cooks = pear / p * hat / (1.0 - hat) ** 2
         in_big = np.isin(group, big_cells)
         max_cooks = cooks[:, in_big].max(axis=1)
-        cutoff = _qf99(p, m - p)
-        flagged = np.where(max_cooks > cutoff)[0]
+
+    replaced = np.zeros(nrow, dtype=bool)
+    if replace_cells:
+        # refitWithoutOutliers / replaceOutliers: in samples of the large cells,
+        # a count whose Cook's distance exceeds the cutoff becomes the row's 20%
+        # trimmed mean of normalized counts times the size factor (as.integer
+        # truncates); rows with any such distance are refitted on those counts.
+        # The original counts and Cook's distances stay for results().
+        with np.errstate(invalid="ignore"):
+            over = cooks > cutoff
+        replaced = over.any(axis=1)
+        if replaced.any():
+            replaceable = np.isin(group, replace_cells)
+            replacement = np.trunc(_trimmed_mean(norm, 0.2)[:, None] * sf)
+            refit_counts = np.where(over & replaceable, replacement, y)
+            base_mean = base_mean.copy()
+            base_mean[replaced] = (refit_counts[replaced] / sf).mean(axis=1)
+            refit = replaced & (refit_counts.sum(axis=1) > 0)
+            if refit.any():
+                yr = np.ascontiguousarray(refit_counts[refit])
+                norm_r, base_mean[refit], mu_r, disp_gene[refit] = gene_wise(yr)
+                disp_fit[refit] = trend(base_mean[refit])
+                disp[refit] = map_dispersion(yr, mu_r, disp_gene[refit], disp_fit[refit])
+                _, _, lfc[refit], se[refit], stat[refit], pvalue[refit], conv[refit] = wald(yr, norm_r, disp[refit])
+                # Cook's distances still flag outliers in samples that were not replaceable
+                if replaceable.all():
+                    max_cooks = np.full(nrow, np.nan)
+                else:
+                    kept = np.where(replaceable[None, :], 0.0, cooks)
+                    max_cooks = kept[:, in_big].max(axis=1)
+
+    if cooks_cutoff and big_cells:
+        with np.errstate(invalid="ignore"):
+            flagged = np.where(max_cooks > cutoff)[0]
         keep = np.zeros(len(flagged), dtype=bool)
         for k, ii in enumerate(flagged):
             out_count = y[ii, int(np.argmax(cooks[ii]))]
             keep[k] = int(np.sum(y[ii] > out_count)) >= 3
         pvalue[flagged[~keep]] = np.nan
+
+    if replaced.any():
+        # results(): a row whose replaced counts are all zero has no change
+        now_zero = replaced & (base_mean == 0)
+        lfc[now_zero] = 0.0
+        se[now_zero] = 0.0
+        stat[now_zero] = 0.0
+        pvalue[now_zero] = 1.0
 
     padj, threshold = _independent_filtering(base_mean, pvalue, alpha)
     return {

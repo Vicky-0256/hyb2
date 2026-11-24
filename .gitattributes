@@ -22,3 +22,6 @@
 pipeline/tests/golden/** -text
 data/*.sam -text
 data/*.fasta -text
+
+# VARNA is bundled third-party source; keep it out of GitHub's language stats.
+/VARNA/** linguist-vendored

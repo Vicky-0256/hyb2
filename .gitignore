@@ -6,6 +6,9 @@ __pycache__/
 *.nbc
 *.nbi
 
+# VARNA compile output; only the jars in VARNA/build/jar/ are used at runtime.
+VARNA/build/classes/
+
 # Platform-specific native runtimes are release inputs, not source files.
 # They are staged by the release workflow from verified archives. Keeping them
 # out of Git avoids accidentally committing hundreds of megabytes of binaries.

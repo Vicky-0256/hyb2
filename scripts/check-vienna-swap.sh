@@ -18,19 +18,19 @@ if [[ "$python_path" != /* ]]; then
   python_path=$PWD/$python_path
 fi
 
-export PYTHONDONTWRITEBYTECODE=1
+cache_runner=$PWD/scripts/with-validation-cache.sh
 status=0
 
 echo "== Desktop runtime"
-"$python_path" -m unittest discover -s desktop/runtime/tests -p 'test_*.py' || status=$?
+"$cache_runner" "$python_path" -B -m unittest discover -s desktop/runtime/tests -p 'test_*.py' || status=$?
 
 echo "== Pipeline"
-"$python_path" -m unittest discover -s pipeline/tests -p 'test_*.py' || status=$?
+"$cache_runner" "$python_path" -B -m unittest discover -s pipeline/tests -p 'test_*.py' || status=$?
 
 echo "== CPLfold"
-(cd third_party/cplfold && "$python_path" -m unittest discover -s tests -p 'test_*.py') || status=$?
+(cd third_party/cplfold && "$cache_runner" "$python_path" -B -m unittest discover -s tests -p 'test_*.py') || status=$?
 
 echo "== Go"
-(cd desktop/app && HYB2_PYTHON="$python_path" go test ./...) || status=$?
+(cd desktop/app && HYB2_PYTHON="$python_path" "$cache_runner" go test ./...) || status=$?
 
 exit "$status"

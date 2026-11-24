@@ -151,13 +151,29 @@ task drawer and Preferences.
 
 ```bash
 cd desktop/app
-CGO_ENABLED=0 go test ./... && go vet ./... && go tool mygo vet . && gofmt -l .
-HYB2_SNAPSHOT_DIR=/tmp/snap CGO_ENABLED=0 go test ./views/   # PNG snapshots of the pages
-HYB2_E2E_SHEET=<samples.tsv> CGO_ENABLED=0 go test -tags e2e -run TestEndToEnd -timeout 60m -v .
+CGO_ENABLED=0 ../../scripts/with-validation-cache.sh bash -c \
+  'go test ./... && go vet ./... && go tool mygo vet . && gofmt -l .'
+HYB2_SNAPSHOT_DIR=/tmp/snap CGO_ENABLED=0 ../../scripts/with-validation-cache.sh go test ./views/   # PNG snapshots of the pages
+HYB2_E2E_SHEET=<samples.tsv> CGO_ENABLED=0 ../../scripts/with-validation-cache.sh go test -tags e2e -run TestEndToEnd -timeout 60m -v .
 
 cd ../..
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s desktop/runtime/tests -p 'test_*.py'
+scripts/with-validation-cache.sh python3 -B -m unittest discover -s desktop/runtime/tests -p 'test_*.py'
+
+# All three Python suites and Go, with slow tests enabled:
+HYB2_SLOW=1 CGO_ENABLED=0 scripts/check-vienna-swap.sh
 ```
+
+`with-validation-cache.sh` gives each invocation a fresh temporary directory
+for Python bytecode, Numba, XDG cache and Go build cache, then removes only
+that directory on exit. Its settings are inherited by child processes;
+existing cache directories are neither reused nor cleaned. The full-suite
+script uses a separate invocation for each suite. JIT, warning and slow-test
+settings are left unchanged.
+
+This is environment isolation, not a filesystem sandbox. Run foreground
+commands that wait for their children. Python subprocesses using `-I` or
+`-E` ignore these Python environment settings and need their own `-B`;
+commands that clear or override the environment can bypass the isolation.
 
 The view tests run headless (`ui.NewTester`) against a fake backend with
 fixtures captured from a real project; `integration_test.go` and the e2e test

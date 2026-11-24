@@ -33,10 +33,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import hybfile
-from hyb2analysis.fold_text import checked_fold_text, unsupported_bases
-# By its absolute name: one catalog, also when this module is imported as
-# pipeline.hyb2analysis.iris (import roots pipeline/ and third_party/cplfold).
-from hyb2analysis.iris_parameters import IRIS_DEFAULTS as DEFAULTS, parameters
+from .fold_text import checked_fold_text, unsupported_bases
+from .iris_parameters import IRIS_DEFAULTS as DEFAULTS, parameters
 
 ENGINE_VERSION = "1.0-desktop.1"
 # Desktop limits. The web's 300 nt / 2,000 rows are browser limits. Here the

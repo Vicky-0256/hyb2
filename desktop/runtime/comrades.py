@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import gzip
 import math
-import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -95,12 +94,7 @@ def parameters(raw: Any) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _hybfile():
-    try:
-        from hyb2analysis import hybfile  # the pipeline package, staged with the runtime
-    except ImportError:
-        root = Path(__file__).resolve().parents[2] / "pipeline"
-        sys.path.insert(0, str(root))
-        from hyb2analysis import hybfile
+    from hyb2analysis import hybfile  # the pipeline package, staged with the runtime
     return hybfile
 
 

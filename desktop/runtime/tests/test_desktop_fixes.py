@@ -69,7 +69,7 @@ class ComradesSeedTests(unittest.TestCase):
     def test_an_endless_gzip_hyb_line_fails_instead_of_loading_whole(self):
         import gzip
         from desktop.runtime import comrades
-        from pipeline.hyb2analysis import hybfile
+        from hyb2analysis import hybfile
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.hyb.gz"
             with gzip.open(path, "wb") as out:

@@ -21,10 +21,10 @@ def main():
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
-    # the repository, the Hyb2 settings (hyb2analysis) and the cplfold package
-    sys.path[:0] = [str(root), str(root / 'pipeline'), str(root / 'third_party' / 'cplfold')]
-    from pipeline.hyb2analysis import iris
-    from pipeline.hyb2analysis.reference import reference_sequence, validate_window
+    # the analysis package (hyb2analysis) and the cplfold package
+    sys.path[:0] = [str(root / 'pipeline'), str(root / 'third_party' / 'cplfold')]
+    from hyb2analysis import iris
+    from hyb2analysis.reference import reference_sequence, validate_window
 
     try:
         gene, sequence = reference_sequence(args.reference.resolve(strict=True), args.gene)

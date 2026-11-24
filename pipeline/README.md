@@ -11,6 +11,10 @@ PYTHONPATH=pipeline python3 -m hyb2pipe -i aligned.sam -d reference.fasta -o out
 
 Install the Python dependencies with `python -m pip install -r pipeline/requirements.txt`;
 FASTQ and FASTA input also need Bowtie2 (see [External tools](#external-tools)).
+Or install `hyb2pipe` and `hyb2analysis` as a package, with the `hyb2pipe`
+command and no `PYTHONPATH`:
+`python -m pip install ./third_party/cplfold ./pipeline` (cplfold is used by
+hyb2analysis's IRIS and engine settings and is not on PyPI).
 
 The `-i -d -o -v -m -h -e` flags match `hyb2` (`-v` and `-m` accept
 scientific notation such as `1e-5` in both). One difference is on purpose:

@@ -159,7 +159,7 @@ def smoke(root, executable, portable):
 from pathlib import Path
 sys.path.insert(0, str(Path.cwd()))
 from desktop.runtime.structure import load_cplfold_web
-from pipeline.hyb2analysis.iris import support_matrix
+from hyb2analysis.iris import support_matrix
 blocks = [(1, 9, 23, 31)] * 2 + [(7, 12, 27, 34)]
 fields = ("oneStart", "oneEnd", "twoStart", "twoEnd")
 iris = support_matrix(40, [dict(zip(fields, b)) for b in blocks])

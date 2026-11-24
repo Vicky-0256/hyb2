@@ -52,7 +52,7 @@ from multiprocessing import get_context
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from pipeline.hyb2analysis.reference import read_fasta
+from hyb2analysis.reference import read_fasta
 from hyb2analysis.fold_text import checked_fold_text
 
 from . import trust as _trust

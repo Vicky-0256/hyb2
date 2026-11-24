@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyb2-core"
+version = "0.1.0"
+description = "HYB2 pipeline (hyb2pipe: FASTQ/FASTA/SAM to .hyb) and analysis backend (hyb2analysis)"
+readme = "README.md"
+requires-python = ">=3.9"
+# The same minimums as requirements.txt. hyb2analysis's IRIS and
+# engine-parameter modules also import cplfold, which is not on PyPI: install
+# it from this repository alongside, as in
+#   python -m pip install ./third_party/cplfold ./pipeline
+# Bowtie2 (FASTQ and FASTA input) is not a Python package; see requirements.txt.
+dependencies = ["ViennaRNA>=2.7", "numpy>=1.24"]
+
+[project.scripts]
+hyb2pipe = "hyb2pipe.__main__:main"
+
+[tool.setuptools]
+packages = ["hyb2pipe", "hyb2analysis"]

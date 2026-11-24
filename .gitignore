@@ -5,6 +5,9 @@ __pycache__/
 *.py[cod]
 *.nbc
 *.nbi
+# setuptools output of pip install ./pipeline
+pipeline/build/
+pipeline/*.egg-info/
 
 # VARNA compile output; only the jars in third_party/varna/build/jar/ are used at runtime.
 third_party/varna/build/classes/

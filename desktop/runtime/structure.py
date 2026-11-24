@@ -52,8 +52,8 @@ from multiprocessing import get_context
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from pipeline.hyb2analysis import hybfile
-from pipeline.hyb2analysis.reference import fasta_record_chunks, fasta_records, parse_coordinate, read_fasta, reference_sequence, validate_input_length, validate_window
+from hyb2analysis import hybfile
+from hyb2analysis.reference import fasta_record_chunks, fasta_records, parse_coordinate, read_fasta, reference_sequence, validate_input_length, validate_window
 from hyb2analysis.fold_text import FOLD_TEXT, checked_fold_text, fold_text, unsupported_bases
 from hyb2analysis.engine_parameters import engine_parameters, task_allow_pseudoknot
 from hyb2analysis.support_kernels import DEFAULT_SUPPORT_KERNEL, PAIR_MODELS as PAIR_ESTIMATORS, SUPPORT_KERNELS

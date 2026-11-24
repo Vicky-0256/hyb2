@@ -164,7 +164,7 @@ class SupportKernelTests(unittest.TestCase):
 
     def test_gaussian_sums_weak_tails_before_threshold(self):
         import numpy as np
-        from pipeline.hyb2analysis.iris import support_matrix
+        from hyb2analysis.iris import support_matrix
         from cplfold.bonus import build_cofold_bonus_matrix
 
         # Ten distinct blocks share centres (12, 48) and sigma=1. At (6, 48)

@@ -167,7 +167,7 @@ class CrossHostFastaTest(unittest.TestCase):
 
     def compare(self, records, expected, native_manual=None, web_manual=None, *, path=None):
         from desktop.runtime.batch_energy import arms, reference_sequences
-        from pipeline.hyb2pipe import inputs
+        from hyb2pipe import inputs
 
         path = path or self.reference(records)
         ref = samples.add_reference(self.project, path)["reference"]
@@ -232,7 +232,7 @@ class CrossHostFastaTest(unittest.TestCase):
                     self.compare(records, {"A_B": piped, "A-B": plain}, path=path)
 
     def test_duplicate_effective_ids_fail_on_import_in_either_order(self):
-        from pipeline.hyb2pipe import inputs
+        from hyb2pipe import inputs
 
         a, c = ("A-B", "A" * 12), ("A_B", "C" * 12)
         for records in ([a, c], [c, a]):

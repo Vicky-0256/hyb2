@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-from pipeline.hyb2analysis.reference import FASTA_NAMES, MAX_HEADER, fasta_chunks, fasta_records, unique_fasta_id
+from hyb2analysis.reference import FASTA_NAMES, MAX_HEADER, fasta_chunks, fasta_records, unique_fasta_id
 
 from .project import (_ID, _mutate_manifest, _now, READ_FORMATS, STAGE_NAMES, copy_into_project, is_absolute_path,
                       load_manifest, safe_relative_path, validate_project_directory)

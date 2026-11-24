@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from pipeline.hyb2analysis.iris import MAX_IRIS_NT, MIN_LOOP, TEMPERATURE, diagnose, parameters, region_arms, run
+from hyb2analysis.iris import MAX_IRIS_NT, MIN_LOOP, TEMPERATURE, diagnose, parameters, region_arms, run
 
 
 def diagnose_indexes(index_paths: Sequence[Path], gene: str, start: int, end: int,

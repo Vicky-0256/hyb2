@@ -352,7 +352,7 @@ class SequenceSourceTests(unittest.TestCase):
 
     def test_length_definitions_drive_native_tasks(self):
         from unittest.mock import patch
-        from pipeline.hyb2analysis import reference
+        from hyb2analysis import reference
 
         (self.project / "data" / "ref.fa").write_text(">tiny\nGGGGGGGGGGGG\n>other\nCCCCCCCCCCCC\n")
         sequence_only = {"parameters": {"evidence": "none"}}

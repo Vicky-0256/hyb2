@@ -14,7 +14,7 @@ from unittest.mock import patch
 # desktop.runtime first: it puts the cplfold and hyb2analysis import roots on the path
 from desktop.runtime.bridge import _dumps_line, handle
 from desktop.runtime.project import new_project
-from pipeline.hyb2analysis import iris
+from hyb2analysis import iris
 from hyb2analysis.engine_parameters import engine_parameters
 from hyb2analysis.iris_parameters import IRIS_DEFAULTS, IRIS_K_RANGE_GRAMMAR, checked_iris_defaults
 

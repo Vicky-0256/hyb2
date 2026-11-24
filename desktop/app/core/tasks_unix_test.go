@@ -4,6 +4,7 @@ package core
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -607,5 +608,123 @@ func TestResumeRefusedWhileShutdownOrphanRuns(t *testing.T) {
 	}
 	if snap := waitFor(t, second, p.ID, project, finished); snap["status"] != "succeeded" {
 		t.Fatal(snap)
+	}
+}
+
+// An owner may save its final status and unlock between another instance's
+// read of the running record and its owner check: that final status stands.
+func TestReadDiskKeepsAStatusFinishedDuringTheCheck(t *testing.T) {
+	runDir := t.TempDir()
+	lock, err := lockRunDir(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := writeStatus(runDir, Obj{"status": "running", "kind": "validate_project"}); err != nil {
+		t.Fatal(err)
+	}
+	afterActiveRead = func(string) {
+		afterActiveRead = nil
+		// The owner's persist: final status first, then the unlock.
+		if err := writeStatus(runDir, Obj{"status": "succeeded", "kind": "validate_project", "exit_code": 0}); err != nil {
+			t.Error(err)
+		}
+		lock.Close()
+	}
+	t.Cleanup(func() { afterActiveRead = nil })
+	snap, err := readDisk("task-raced", runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := readJSON(t, filepath.Join(runDir, "status.json"))
+	t.Logf("returned %v, on disk %v", snap["status"], disk["status"])
+	if snap["status"] != "succeeded" || disk["status"] != "succeeded" || disk["error"] != nil {
+		t.Fatalf("finished task overwritten: returned %v, disk %v", snap, disk)
+	}
+}
+
+// A final status that cannot be saved keeps the owner lock (no other
+// instance may call the stale running record an orphan) until a later
+// write succeeds.
+func TestUnsavedFinalStatusKeepsTheOwnerLock(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory write permissions")
+	}
+	s := testScheduler(t, 0, 0)
+	project := tempProject(t)
+	id := NewTaskID()
+	root, runDir, err := s.prepareRunDir(project, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(runDir, 0o755) })
+	// The child leaves its run directory read-only: status.json cannot be
+	// replaced when it exits.
+	if _, err := startManaged(s, shell(runDir, `chmod 555 "$PWD"`), root, id, "validate_project", runDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if snap := waitFor(t, s, id, "", finished); snap["status"] != "succeeded" {
+		t.Fatalf("task %v", snap)
+	}
+	disk := readJSON(t, filepath.Join(runDir, "status.json"))
+	if disk["status"] != "running" || !runDirLocked(runDir) {
+		t.Fatalf("unsaved final status released the lock: disk %v, locked %v", disk["status"], runDirLocked(runDir))
+	}
+	other := testScheduler(t, 0, 0)
+	if snap, err := other.Status(id, project); err != nil || snap["status"] != "running" {
+		t.Fatalf("another instance sees %v %v", snap, err)
+	}
+	if err := os.Chmod(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.SetBudget(s.Budget()) // any later scheduling pass retries the write
+	if disk := readJSON(t, filepath.Join(runDir, "status.json")); disk["status"] != "succeeded" || runDirLocked(runDir) {
+		t.Fatalf("retry: disk %v, locked %v", disk["status"], runDirLocked(runDir))
+	}
+	if snap, err := other.Status(id, project); err != nil || snap["status"] != "succeeded" {
+		t.Fatalf("another instance sees %v %v after the retry", snap, err)
+	}
+}
+
+// ShutdownAll retries an unsaved final status and logs a write that still
+// fails instead of dropping it.
+func TestShutdownRetriesAndLogsUnsavedStatus(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory write permissions")
+	}
+	s := NewScheduler()
+	var mu sync.Mutex
+	var logs []string
+	s.logf = func(format string, args ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+	project := tempProject(t)
+	id := NewTaskID()
+	root, runDir, err := s.prepareRunDir(project, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(runDir, 0o755) })
+	if _, err := startManaged(s, shell(runDir, `chmod 555 "$PWD"`), root, id, "validate_project", runDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, s, id, "", finished)
+	s.ShutdownAll()
+	mu.Lock()
+	got := strings.Join(logs, "\n")
+	mu.Unlock()
+	if !strings.Contains(got, id) || !runDirLocked(runDir) {
+		t.Fatalf("logs %q, locked %v", got, runDirLocked(runDir))
+	}
+	if err := os.Chmod(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	err = s.retryUnsavedLocked()
+	s.mu.Unlock()
+	if disk := readJSON(t, filepath.Join(runDir, "status.json")); err != nil || disk["status"] != "succeeded" || runDirLocked(runDir) {
+		t.Fatalf("retry %v: disk %v, locked %v", err, disk["status"], runDirLocked(runDir))
 	}
 }

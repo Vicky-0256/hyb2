@@ -1287,14 +1287,15 @@ func (p *explorePage) exportRegionInteractionsTSV(d *regionData) {
 // <gene>_<start>-<end>.fasta holding regionFASTA.
 func (p *explorePage) exportRegionFASTA(d *regionData) {
 	a := p.a
-	pr, gene, start, end := a.Project, d.gene, d.f.start, d.f.end
+	gene, start, end := d.gene, d.f.start, d.f.end
+	// Resolved on the UI thread: render runs in the background.
+	path, ref := a.Project.Path, stReferenceOf(a.Project, gene)
 	name := exportName(".fasta", fmt.Sprintf("%s_%d-%d", gene, start, end))
 	saveExport(a, "Export the region sequence", name, func() ([]byte, error) {
-		ref := stReferenceOf(pr, gene)
 		if ref == "" {
 			return nil, fmt.Errorf("no reference holds %s", gene)
 		}
-		raw, err := a.B.ProjectOp(pr.Path, "read_reference_sequence", core.Obj{"reference_id": ref, "name": gene})
+		raw, err := a.B.ProjectOp(path, "read_reference_sequence", core.Obj{"reference_id": ref, "name": gene})
 		if err != nil {
 			return nil, err
 		}

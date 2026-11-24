@@ -148,8 +148,9 @@ func TestShutdownDoesNotWaitForARunningRequest(t *testing.T) {
 	}
 }
 
-// TestServiceShutdownRegistersInterruptedTasks: at exit, running and queued
-// tasks reach project.json runs[] as interrupted (real bridge).
+// TestServiceShutdownRegistersInterruptedTasks: running and queued tasks
+// at exit reach project.json runs[] as interrupted when the project is next
+// opened (real bridge); shutdown itself does not wait for the bridge.
 func TestServiceShutdownRegistersInterruptedTasks(t *testing.T) {
 	s := newTestService(t)
 	project := createProject(t, s)
@@ -166,6 +167,9 @@ func TestServiceShutdownRegistersInterruptedTasks(t *testing.T) {
 		ids = append(ids, snap["task_id"].(string))
 	}
 	s.Shutdown()
+	if _, err := newTestService(t).OpenProject(project); err != nil {
+		t.Fatal(err)
+	}
 	runs, _ := readJSON(t, filepath.Join(project, "project.json"))["runs"].([]any)
 	for _, id := range ids {
 		found := false

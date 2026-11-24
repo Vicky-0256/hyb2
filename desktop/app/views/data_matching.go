@@ -15,7 +15,6 @@ package views
 
 import (
 	"encoding/json"
-	"os"
 	"slices"
 	"strings"
 
@@ -552,7 +551,7 @@ func (p *dataPage) exportMatches(r refMatchRef) {
 		}
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err == nil {
-			err = os.WriteFile(path, data, 0o644)
+			err = writeFileAtomic(path, data)
 		}
 		return func() {
 			if err != nil {

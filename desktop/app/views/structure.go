@@ -21,7 +21,6 @@ package views
 import (
 	"fmt"
 	"math"
-	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1650,7 +1649,7 @@ func (p *structurePage) saveDBN(a *structureResult) {
 		if path == "" {
 			return nil
 		}
-		err := os.WriteFile(path, []byte(text), 0o644)
+		err := writeFileAtomic(path, []byte(text))
 		return func() {
 			if err != nil {
 				app.Toast("Could not save: %v", err)

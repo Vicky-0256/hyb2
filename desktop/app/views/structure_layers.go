@@ -84,7 +84,10 @@ func stReferenceOf(pr *model.Project, gene string) string {
 	return ""
 }
 
-// fetchSequence reads a reference sequence (blocking; call from a.Go).
+// fetchSequence reads gene's reference sequence (blocking). It reads
+// pr.References, which RefreshProject replaces on the UI thread: background
+// work resolves the reference first (stReferenceOf) and calls
+// readGeneSequence.
 func fetchSequence(b core.Backend, pr *model.Project, path, gene string) (string, error) {
 	return readGeneSequence(b, stReferenceOf(pr, gene), path, gene)
 }
@@ -120,14 +123,16 @@ func (p *structurePage) geneMap(from, to string) (*seqmap.Map, bool) {
 		return nil, false
 	}
 	l.mapPending[key] = true
-	a, pr := p.a, p.a.Project
-	path := pr.Path
+	a := p.a
+	// Resolved here: RefreshProject replaces the project's references on
+	// the UI thread while the work runs.
+	path, refFrom, refTo := a.Project.Path, stReferenceOf(a.Project, from), stReferenceOf(a.Project, to)
 	a.Go(func() func() {
 		var m *seqmap.Map
-		seqFrom, err := fetchSequence(a.B, pr, path, from)
+		seqFrom, err := readGeneSequence(a.B, refFrom, path, from)
 		var seqTo string
 		if err == nil {
-			seqTo, err = fetchSequence(a.B, pr, path, to)
+			seqTo, err = readGeneSequence(a.B, refTo, path, to)
 		}
 		if err == nil {
 			m, err = seqmap.Align(seqFrom, seqTo)
@@ -207,8 +212,8 @@ func (p *structurePage) annotation(gene string) *stAnnotation {
 		return nil
 	}
 	l.annotPending[gene] = true
-	a, pr := p.a, p.a.Project
-	path := pr.Path
+	a := p.a
+	path := a.Project.Path
 	a.Go(func() func() {
 		an := &stAnnotation{}
 		raw, err := a.B.ProjectOp(path, "read_annotation", core.Obj{"reference_id": ref, "gene": gene})
@@ -234,7 +239,7 @@ func (p *structurePage) annotation(gene string) *stAnnotation {
 			var m *seqmap.Map
 			if res.Sequence != nil && *res.Sequence != "" {
 				var refSeq string
-				refSeq, err = fetchSequence(a.B, pr, path, gene)
+				refSeq, err = readGeneSequence(a.B, ref, path, gene)
 				if err == nil {
 					m, err = seqmap.Align(*res.Sequence, refSeq)
 				}

@@ -82,6 +82,9 @@ func TestCancelThenShutdownRegistersRun(t *testing.T) {
 	if task := waitTask(t, s, project, id, 5*time.Second); task["status"] != "cancelled" {
 		t.Fatalf("task: %v", task)
 	}
+	// Shutdown waits for a registration already under way (a newer one is
+	// left to the next open).
+	waitRegistering(t, filepath.Join(project, "runs", id))
 	done := make(chan struct{})
 	go func() { s.Shutdown(); close(done) }()
 	select {

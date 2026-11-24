@@ -706,7 +706,7 @@ func (e *drawingEditor) export(format string) {
 		if path == "" {
 			return nil
 		}
-		err := os.WriteFile(path, data, 0o644)
+		err := writeFileAtomic(path, data)
 		return func() {
 			if err != nil {
 				a.Toast("Could not export: %v", err)

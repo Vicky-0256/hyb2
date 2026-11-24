@@ -122,6 +122,7 @@ func NewService(rt *Runtime, opts ServiceOptions) *Service {
 		logf = log.Printf
 	}
 	tasks := NewScheduler()
+	tasks.logf = logf
 	// A missing or invalid preferences file means the default budget.
 	tasks.SetBudget(LoadBudget(opts.PreferencesPath))
 	s := &Service{
@@ -415,7 +416,12 @@ func (s *Service) startTask(request TaskStartRequest, resumedFrom *string) (Obj,
 	}
 	kind := request.Kind
 	onFinish := func(project, id string) {
-		if _, err := s.registerTask(rt, project, id); err != nil {
+		// Quitting must not wait for the control lane: the pending receipt
+		// stays, and the next open's recoverRegistrations registers it. A
+		// registration already under way is still awaited by ShutdownAll.
+		if s.tasks.ShuttingDown() {
+			s.logf("HYB2: task %s will be registered when its project is next opened", id)
+		} else if _, err := s.registerTask(rt, project, id); err != nil {
 			s.logf("HYB2: register_task_run failed for %s: %v", id, err)
 		}
 		if kind == "sample_pipeline" || kind == "structure" {

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,6 +113,8 @@ type Scheduler struct {
 	seq          uint64
 	shuttingDown bool // guarded by mu, together with admission
 	finishes     sync.WaitGroup
+	// logf receives status writes nobody waits for (set before use).
+	logf func(format string, args ...any)
 }
 
 // A task leaving the table's pending/running states hands its callback to
@@ -127,7 +130,14 @@ func (s *Scheduler) trackFinishLocked(f OnFinish) OnFinish {
 
 // NewScheduler returns an empty scheduler using the system default budget.
 func NewScheduler() *Scheduler {
-	return &Scheduler{tasks: map[string]*taskState{}}
+	return &Scheduler{tasks: map[string]*taskState{}, logf: log.Printf}
+}
+
+// ShuttingDown reports whether ShutdownAll has started.
+func (s *Scheduler) ShuttingDown() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shuttingDown
 }
 
 // Budget is the scheduler budget (preferences, else the system default).
@@ -249,14 +259,35 @@ func writeStatus(runDir string, value any) error { return writeAtomic(runDir, "s
 // project can tell a live task from one an exited session left behind.
 const ownerLockFile = "owner.lock"
 
-// persist saves the record; a finished task releases its owner lock after
-// its final status is on disk.
+// persist saves the record; a finished task releases its owner lock once
+// its final status is on disk. Until then the lock stays held (another
+// instance must not take the stale active record for an orphan) and
+// retryUnsavedLocked writes it again.
 func (e *taskState) persist(id string) error {
 	err := writeStatus(e.runDir, e.record(id))
-	if e.finishedAt != nil {
+	if err == nil && e.finishedAt != nil {
 		e.unlock()
 	}
 	return err
+}
+
+// unsaved: finished, but its final status is not yet on disk.
+func (e *taskState) unsaved() bool {
+	return e.finishedAt != nil && (e.lock != nil || e.resumeLock != nil)
+}
+
+// retryUnsavedLocked writes the final status of finished tasks whose last
+// write failed (mu held); it returns the errors of those still unsaved.
+func (s *Scheduler) retryUnsavedLocked() error {
+	var errs []error
+	for id, e := range s.tasks {
+		if e.unsaved() {
+			if err := e.persist(id); err != nil {
+				errs = append(errs, fmt.Errorf("task %s: %w", id, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (e *taskState) unlock() {
@@ -637,7 +668,7 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 		oldest := ""
 		var at time.Time
 		for other, e := range s.tasks {
-			if !e.finished.IsZero() && (oldest == "" || e.finished.Before(at)) {
+			if !e.finished.IsZero() && !e.unsaved() && (oldest == "" || e.finished.Before(at)) {
 				oldest, at = other, e.finished
 			}
 		}
@@ -780,6 +811,7 @@ func (s *Scheduler) schedule() {
 			s.mu.Unlock()
 			return
 		}
+		_ = s.retryUnsavedLocked() // retried on every later scheduling pass
 		budget := s.budgetLocked()
 		var used Budget
 		var queued []queuedTask
@@ -874,7 +906,7 @@ func (s *Scheduler) launch(id string, e *taskState, cmd *exec.Cmd) bool {
 	stamp := iso(now)
 	e.launchedAt = &stamp
 	if err := spawnChild(cmd, e.runDir, e.claim, e.lock, e.resumeLock); err != nil {
-		e.fail(id, err.Error(), now)
+		s.fail(id, e, err.Error(), now)
 		return false
 	}
 	e.status = "running"
@@ -884,19 +916,21 @@ func (s *Scheduler) launch(id string, e *taskState, cmd *exec.Cmd) bool {
 		_ = killTree(cmd.Process.Pid)
 		_ = cmd.Wait()
 		e.cmd = nil
-		e.fail(id, "cannot save task status: "+err.Error(), now)
+		s.fail(id, e, "cannot save task status: "+err.Error(), now)
 		return false
 	}
 	return true
 }
 
-func (e *taskState) fail(id, message string, now time.Time) {
+func (s *Scheduler) fail(id string, e *taskState, message string, now time.Time) {
 	stamp := iso(now)
 	e.status = "failed"
 	e.err = &message
 	e.finished = now
 	e.finishedAt = &stamp
-	_ = e.persist(id)
+	if err := e.persist(id); err != nil {
+		s.logf("HYB2: cannot save the status of task %s: %v", id, err)
+	}
 }
 
 // monitor waits for a running child, records its outcome and calls onFinish.
@@ -1007,6 +1041,51 @@ func readDisk(id, runDir string) (Obj, error) {
 	if info, err := os.Lstat(runDir); err != nil || !info.IsDir() {
 		return nil, errors.New("task not found")
 	}
+	object, err := readStatusFile(id, runDir)
+	if err != nil || !statusActive(object) {
+		return object, err
+	}
+	if afterActiveRead != nil {
+		afterActiveRead(runDir)
+	}
+	// Holding the owner lock while deciding: an owner may write its final
+	// status and unlock between the read above and this point, and that
+	// record must not be overwritten.
+	lock, err := tryFileLock(filepath.Join(runDir, ownerLockFile))
+	if errors.Is(err, errLockBusy) {
+		return object, nil // a live owner
+	}
+	if err == nil {
+		defer lock.Close()
+		if object, err = readStatusFile(id, runDir); err != nil || !statusActive(object) {
+			return object, err
+		}
+	}
+	// Otherwise the lock file cannot be a lock (not a regular file, or not
+	// creatable), so no owner can hold it either.
+	if object["status"] == "cancelling" {
+		object["status"] = "cancelled" // its owner exited while it was being cancelled
+	} else {
+		object["status"] = "interrupted"
+	}
+	if object["error"] == nil {
+		object["error"] = "the application stopped before this task finished"
+	}
+	if object["output"] == nil {
+		object["output"] = outputField(readResult(runDir))
+	}
+	if err := writeStatus(runDir, object); err != nil {
+		return nil, err
+	}
+	return object, nil
+}
+
+// afterActiveRead, when set (tests), runs between readDisk's first read
+// of an active record and its owner check.
+var afterActiveRead func(runDir string)
+
+// readStatusFile is runDir/status.json as a snapshot (missing fields nil).
+func readStatusFile(id, runDir string) (Obj, error) {
 	data, err := readProjectFile(filepath.Join(runDir, "status.json"))
 	if err != nil {
 		return nil, errors.New("task not found")
@@ -1028,24 +1107,14 @@ func readDisk(id, runDir string) (Obj, error) {
 			object[key] = nil
 		}
 	}
+	return object, nil
+}
+
+// statusActive: the record has no status or a queued/running/cancelling one.
+func statusActive(object Obj) bool {
 	status, present := object["status"]
 	state, _ := status.(string)
-	if (!present || slices.Contains(activeStates, state)) && !runDirLocked(runDir) {
-		object["status"] = "interrupted"
-		if state == "cancelling" {
-			object["status"] = "cancelled" // its owner exited while it was being cancelled
-		}
-		if object["error"] == nil {
-			object["error"] = "the application stopped before this task finished"
-		}
-		if object["output"] == nil {
-			object["output"] = outputField(readResult(runDir))
-		}
-		if err := writeStatus(runDir, object); err != nil {
-			return nil, err
-		}
-	}
-	return object, nil
+	return !present || slices.Contains(activeStates, state)
 }
 
 // statusRaw is the snapshot without progress; finished tasks of earlier
@@ -1222,10 +1291,17 @@ func (s *Scheduler) ShutdownAll() {
 		}
 		e.finished = now
 		e.finishedAt = &stamp
-		_ = e.persist(id)
+		// On failure the owner lock stays held until the process exits;
+		// the next reader then marks the record interrupted.
+		if err := e.persist(id); err != nil {
+			s.logf("HYB2: cannot save the status of task %s: %v", id, err)
+		}
 	}
 	s.mu.Lock()
 	s.shuttingDown = true
+	if err := s.retryUnsavedLocked(); err != nil {
+		s.logf("HYB2: cannot save task status: %v", err)
+	}
 	for id, e := range s.tasks {
 		switch {
 		case e.pending != nil:

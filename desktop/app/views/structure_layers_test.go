@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"hyb2desktop/core"
+	"hyb2desktop/model"
 )
 
 const braGene = "ZIKV_Brazilian_MF073357-1_virusRNA"
@@ -172,5 +173,37 @@ func TestStructureLayers(t *testing.T) {
 		if !strings.Contains(svg, text) {
 			t.Fatalf("svg lacks %q", text)
 		}
+	}
+}
+
+// The background alignment and gene-track reads resolve their reference on
+// the UI thread: RefreshProject (applySamples) may replace the project's
+// references while they run. Meaningful under -race.
+func TestStructureLayersReadReferencesOnUIThread(t *testing.T) {
+	a, cf := openCS(t)
+	afr, bra := stLayerSequences()
+	a.B = &layersFake{csFake: cf, seqs: map[string]string{africaGene: afr, braGene: bra}}
+	cf.ops["read_annotation"] = core.Obj{"annotation": map[string]any{"file_name": "bra.gb", "format": "genbank"},
+		"features": []any{}, "seqid": "BRA.1", "sequence": bra}
+	listed := core.Obj{"references": append([]model.Reference(nil), a.Project.References...)}
+	p := newStructurePage(a)
+	if _, ok := p.geneMap(braGene, africaGene); ok {
+		t.Fatal("alignment did not start in the background")
+	}
+	if an := p.annotation(africaGene); an != nil {
+		t.Fatal("gene track did not load in the background")
+	}
+	applySamples(a.Project, listed) // as RefreshProject does, meanwhile
+	for range 50 {
+		waitFlush(a)
+		if !p.layers.mapPending[braGene+">"+africaGene] && !p.layers.annotPending[africaGene] {
+			break
+		}
+	}
+	if m, ok := p.geneMap(braGene, africaGene); !ok || m == nil || p.layers.mapErr[braGene+">"+africaGene] != "" {
+		t.Fatalf("alignment: %v %v %q", m, ok, p.layers.mapErr)
+	}
+	if an := p.annotation(africaGene); an == nil || an.err != "" {
+		t.Fatalf("gene track: %+v", an)
 	}
 }

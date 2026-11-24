@@ -4,6 +4,7 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,7 +48,7 @@ os.chmod(project, 0o555)
 	if snap = waitTask(t, s, project, id, 10*time.Second); snap["status"] != "succeeded" {
 		t.Fatalf("synthetic child: %v", snap)
 	}
-	// Also proves normal shutdown drains the failing registration callback.
+	waitRegistration(t, s, project, id, "failed")
 	s.Shutdown()
 	snap, err = s.TaskStatus(project, id)
 	if err != nil {
@@ -150,7 +151,18 @@ func TestServiceRegistrationTracksTerminalPaths(t *testing.T) {
 			if snap := waitTask(t, s, project, id, 10*time.Second); snap["status"] != want {
 				t.Fatalf("task outcome: %v, want %s", snap, want)
 			}
-			s.Shutdown() // drains any finish callback still running
+			if strings.HasSuffix(outcome, "-shutdown") {
+				// Shutdown leaves the receipt pending; the next open registers it.
+				if snap, err := s.TaskStatus(project, id); err != nil || snap["registration_status"] != "pending" {
+					t.Fatalf("registration at shutdown: %v, %v", snap, err)
+				}
+				if _, err := newTestService(t).OpenProject(project); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				waitRegistration(t, s, project, id, "registered")
+				s.Shutdown()
+			}
 			snap, err = s.TaskStatus(project, id)
 			if err != nil || snap["registration_status"] != "registered" || snap["registration_error"] != nil {
 				t.Fatalf("registration: %v, %v", snap, err)
@@ -185,11 +197,12 @@ func TestServiceSucceededRegistrationStaysPendingUntilCommit(t *testing.T) {
 	if runs := readJSON(t, filepath.Join(project, "project.json"))["runs"].([]any); len(runs) != 0 {
 		t.Fatalf("fault did not block manifest commit: %v", runs)
 	}
+	waitRegistering(t, filepath.Join(project, "runs", id))
 	done := make(chan struct{})
 	go func() { s.Shutdown(); close(done) }()
 	select {
 	case <-done:
-		t.Fatal("shutdown did not wait for the successful task's registration")
+		t.Fatal("shutdown did not wait for the registration under way")
 	case <-time.After(200 * time.Millisecond):
 	}
 	lock.Close()
@@ -256,5 +269,95 @@ func TestServiceRegistrationRecoveryIsIdempotentAcrossInstances(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// waitRegistration polls until the task's registration_status is want.
+func waitRegistration(t *testing.T, s *Service, project, id, want string) {
+	t.Helper()
+	var snap Obj
+	for range 200 {
+		var err error
+		if snap, err = s.TaskStatus(project, id); err != nil {
+			t.Fatal(err)
+		}
+		if snap["registration_status"] == want {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("registration of %s: %v, want %s", id, snap["registration_status"], want)
+}
+
+// waitRegistering polls until a registerTask call holds runDir's
+// registration lock (its register_task_run is under way).
+func waitRegistering(t *testing.T, runDir string) {
+	t.Helper()
+	for range 200 {
+		lock, err := tryFileLock(filepath.Join(runDir, "registration.lock"))
+		if errors.Is(err, errLockBusy) {
+			return
+		}
+		if err == nil {
+			lock.Close()
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("registration did not start")
+}
+
+// Quitting does not wait for register_task_run (a slow control lane would
+// freeze the UI): interrupted tasks keep their pending receipt, and the next
+// open registers them, so nothing is lost.
+func TestShutdownLeavesRegistrationToTheNextOpen(t *testing.T) {
+	s := newTestService(t)
+	project := createProject(t, s)
+	s.tasks.SetBudget(Budget{1, 1000})
+	s.taskCommand = func(_ *Runtime, task *Prepared) *exec.Cmd {
+		return shell(task.RunDir, "exec sleep 60")
+	}
+	var ids []string
+	for range 2 { // one running, one queued
+		snap, err := s.StartTask(TaskStartRequest{ProjectPath: project, Kind: "validate_project", CPU: ptr(uint32(1))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, snap["task_id"].(string))
+	}
+	// A busy manifest: register_task_run would block until it is free.
+	lock, err := tryFileLock(filepath.Join(project, "project.json.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { lock.Close() })
+	done := make(chan struct{})
+	start := time.Now()
+	go func() { s.Shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		lock.Close()
+		<-done
+		t.Fatalf("shutdown waited %v for register_task_run", time.Since(start).Round(time.Millisecond))
+	}
+	t.Logf("shutdown took %v", time.Since(start).Round(time.Millisecond))
+	lock.Close()
+	for _, id := range ids {
+		if status := readJSON(t, filepath.Join(project, "runs", id, "status.json"))["status"]; status != "interrupted" {
+			t.Fatalf("%s status %v", id, status)
+		}
+		if receipt := readJSON(t, filepath.Join(project, "runs", id, registrationFile)); receipt["status"] != "pending" {
+			t.Fatalf("%s receipt %v", id, receipt)
+		}
+	}
+	reopened := newTestService(t)
+	if _, err := reopened.OpenProject(project); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		waitRun(t, project, id, "interrupted")
+		if snap, err := reopened.TaskStatus(project, id); err != nil || snap["registration_status"] != "registered" {
+			t.Fatalf("recovered %s: %v, %v", id, snap, err)
+		}
 	}
 }

@@ -113,29 +113,70 @@ def _env(executable: str) -> Dict[str, str]:
 
 
 def _run(args: List[str], *, cwd: Path, env: Dict[str, str]) -> subprocess.CompletedProcess:
-    """``subprocess.run`` of mfold, but a timeout ends its whole process group:
-    mfold is a shell script whose folding programs are its children."""
-    group: Dict[str, Any] = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
-                             else {"start_new_session": True})
+    """``subprocess.run`` of mfold, but a timeout ends mfold and every program
+    it started: mfold is a shell script whose folding programs are its
+    children.  On POSIX mfold stays in this process's group, so the app's
+    cancel (SIGKILL to the sidecar's group) also ends them; Windows' cancel
+    (``taskkill /T``) follows parent processes instead."""
+    group: Dict[str, Any] = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
     with subprocess.Popen(args, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           text=True, errors="replace", env=env, **group) as process:
         try:
             stdout, stderr = process.communicate(timeout=TIMEOUT_S)
         except BaseException:  # the timeout, or the task being interrupted
-            _kill_group(process)
+            _kill_tree(process)
             raise
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
 
-def _kill_group(process: subprocess.Popen) -> None:
+def _descendants(pid: int) -> List[int]:
+    """The processes below ``pid``, from ``ps`` (macOS and Linux)."""
+    try:
+        listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], stdin=subprocess.DEVNULL, capture_output=True,
+                                 text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children: Dict[int, List[int]] = {}
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdecimal() and fields[1].isdecimal():
+            children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    found, pending = [], [pid]
+    while pending:
+        for child in children.get(pending.pop(), ()):
+            if child not in found:
+                found.append(child)
+                pending.append(child)
+    return found
+
+
+def _kill_tree(process: subprocess.Popen) -> None:
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
+        # stop the tree until no new process appears, so none forks past the
+        # kill, then kill it; mfold itself last, which keeps the tree linked
+        stopped = {process.pid}
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except OSError:  # the group has already ended
+            os.kill(process.pid, signal.SIGSTOP)
+        except OSError:  # mfold has already ended
             pass
+        while True:
+            new = [pid for pid in _descendants(process.pid) if pid not in stopped]
+            if not new:
+                break
+            for pid in new:
+                stopped.add(pid)
+                try:
+                    os.kill(pid, signal.SIGSTOP)
+                except OSError:
+                    pass
+        for pid in stopped - {process.pid}:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
     process.kill()
 
 

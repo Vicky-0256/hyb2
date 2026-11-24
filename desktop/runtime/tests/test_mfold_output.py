@@ -115,6 +115,38 @@ class MfoldOutputTests(unittest.TestCase):
             time.sleep(0.1)
         self.assertFalse(child_alive(pid), "mfold's child outlived the timeout")
 
+    @unittest.skipIf(os.name == "nt", "POSIX process groups")
+    def test_cancel_ends_the_programs_mfold_started(self):
+        # the app cancels a task by SIGKILLing the sidecar's process group
+        pid_file = self.root / "child.pid"
+        script = self.root / "mfold"
+        script.write_text(f"#!/bin/sh\nsleep 300 &\necho $! > '{pid_file}.tmp'\nmv '{pid_file}.tmp' '{pid_file}'\nwait\n")
+        script.chmod(0o755)
+        sidecar = ("import sys\nfrom pathlib import Path\nfrom unittest import mock\nfrom desktop.runtime import mfold\n"
+                   "with mock.patch.object(mfold, 'data_dir', return_value=Path(sys.argv[1])):\n"
+                   "    mfold.fold('GGGAAACCC', {}, executable=sys.argv[2])\n")
+        helper = subprocess.Popen([sys.executable, "-B", "-c", sidecar, str(self.tables), str(script)], cwd=ROOT,
+                                  start_new_session=True, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(helper.wait)
+        self.addCleanup(lambda: helper.poll() is None and os.killpg(helper.pid, 9))
+        deadline = time.monotonic() + 30
+        while not pid_file.exists() and helper.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertTrue(pid_file.exists(), "the fake mfold did not start its child")
+        pid = int(pid_file.read_text())
+
+        def child_alive():
+            ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+            return ps.stdout.strip()[:1] not in ("", "Z")
+
+        self.addCleanup(lambda: child_alive() and os.kill(pid, 9))
+        os.killpg(helper.pid, 9)
+        deadline = time.monotonic() + 10
+        while child_alive() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(child_alive(), "mfold's child outlived the cancel")
+
     def test_fit_propagates_tool_errors_and_can_reject_an_infeasible_stem(self):
         stem = {"id": "F1", "rank": 1, "pairs": [(1, 8)]}
         params = {"fold_program": "mfold", "min_loop": 3}

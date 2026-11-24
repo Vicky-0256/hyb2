@@ -13,7 +13,7 @@ packages and the project format.
 | `resources/native/` | The staged runtime (CPython 3.11 + numpy/numba/ViennaRNA, Bowtie2, the Python sources), made by `scripts/stage-native.py`; not in git |
 | `scripts/` | Runtime acquisition, staging and release verification |
 | `spec/` | Project, task, capability and result schemas (`PROTOCOL.md`) |
-| `task-runner/` | The structured child-process contract used by the bridge |
+| `task-runner/` | The structured child-process contract, staged with the runtime |
 
 See `../MYGO_DESKTOP_PLAN.md` for the migration from the former Tauri shell and
 `../RAWDATA_APP_PLAN.md` for the product plan.

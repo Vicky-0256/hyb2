@@ -32,7 +32,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .project import _atomic_write_json, validate_project_directory
 from .regions import Aligner, comparison_dir, comparison_entry, comparison_interactions, group_gene, map_note
-from .structure import ProgressWriter, _now, _resolve_run_dir, _safe_task_id
+from .structure import ProgressWriter, _now
+from .task_paths import resolve_run_dir, safe_task_id
 
 SIDES = ("enriched_in_one", "enriched_in_two")
 DEFAULTS = {"length": 40, "padj": 0.01}
@@ -217,14 +218,14 @@ def _energy_run(request: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any
     errors = validate_project_directory(project)
     if errors:
         raise ValueError("invalid project: " + "; ".join(errors))
-    task_id = _safe_task_id(request.get("task_id") or ("energy-" + os.urandom(8).hex()))
+    task_id = safe_task_id(request.get("task_id"), "energy-")
     comparison_id = request.get("comparison_id")
     if not isinstance(comparison_id, str) or not comparison_id:
         raise ValueError("comparison_id is required")
     params = _parameters(request.get("parameters"))
     entry = comparison_entry(project, comparison_id)
     out_dir = comparison_dir(project, entry)
-    run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
+    run_dir = resolve_run_dir(project, task_id, request.get("run_dir"))
     state.update(run_dir=run_dir, task_id=task_id)
     progress = ProgressWriter(run_dir)
 

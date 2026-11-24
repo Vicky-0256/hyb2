@@ -217,7 +217,8 @@ class RegisterTaskRunTests(unittest.TestCase):
 class CplfoldLimitTests(unittest.TestCase):
     def _fold_module(self):
         try:
-            return bridge._load_cplfold_module(ROOT)
+            from desktop.runtime.structure import load_cplfold_web
+            return load_cplfold_web(ROOT)
         except ImportError as error:
             self.skipTest("cplfold_web dependencies unavailable: %s" % error)
 

@@ -49,7 +49,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
-from .structure import ProgressWriter, _env_int, _input_file, _now, _real_child_dir, _resolve_run_dir, _safe_task_id
+from .structure import ProgressWriter, _env_int, _now
+from .task_paths import input_file, real_child_dir, resolve_run_dir, safe_task_id
 
 MAX_SAMPLES = 64
 PATH_KEYS = ("results", "significant", "interactions", "similarity", "summary")
@@ -152,15 +153,15 @@ def _contact_inputs(project: Path, out_dir: Path, sample_ids: List[str], gene_ov
         records: Optional[int] = None
         if outputs.get("contact") and gene == sample.get("gene_id") and partner == gene:
             try:
-                contact = _input_file(project, outputs["contact"], f"sample {sample_id} contact map")
+                contact = input_file(project, outputs["contact"], f"sample {sample_id} contact map")
             except ValueError:
                 contact = None
         made = False
         if contact is None:
             if not hyb:
                 raise ValueError(f"sample {sample_id} has no .hyb output yet; run it first")
-            hyb_path = _input_file(project, hyb, f"sample {sample_id} .hyb")
-            contacts_dir = _real_child_dir(out_dir, "contacts", exist_ok=True)
+            hyb_path = input_file(project, hyb, f"sample {sample_id} .hyb")
+            contacts_dir = real_child_dir(out_dir, "contacts", exist_ok=True)
             if partner == gene:
                 contact = contacts_dir / f"{sample_id}.{_safe_name(gene)}.contact.txt"
                 progress("contacts", f"contact map of {sample_id} ({gene})", None, None, units="none", force=True)
@@ -411,7 +412,7 @@ def _compare_run(request: Dict[str, Any], repo_root: Optional[Path], state: Dict
     errors = validate_project_directory(project)
     if errors:
         raise ValueError("invalid project: " + "; ".join(errors))
-    task_id = _safe_task_id(request.get("task_id") or ("compare-" + os.urandom(8).hex()))
+    task_id = safe_task_id(request.get("task_id"), "compare-")
     one = _sample_list(request.get("samples_one"), "samples_one")
     two = _sample_list(request.get("samples_two"), "samples_two")
     if set(one) & set(two):
@@ -422,9 +423,9 @@ def _compare_run(request: Dict[str, Any], repo_root: Optional[Path], state: Dict
         raise ValueError(f"at most {MAX_SAMPLES} samples per comparison")
     params = _parameters(request.get("parameters"))
 
-    run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
+    run_dir = resolve_run_dir(project, task_id, request.get("run_dir"))
     state.update(run_dir=run_dir, task_id=task_id)
-    out_dir = _real_child_dir(project / "comparisons", task_id, exist_ok=True)
+    out_dir = real_child_dir(project / "comparisons", task_id, exist_ok=True)
     progress = ProgressWriter(run_dir)
     _pipeline_path(repo_root)
     cpus = _env_int("HYB2_TASK_CPUS")

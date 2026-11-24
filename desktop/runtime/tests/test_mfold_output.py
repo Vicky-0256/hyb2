@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -64,7 +65,7 @@ class MfoldOutputTests(unittest.TestCase):
             (cwd / "s.ct").write_text(data)
             return subprocess.CompletedProcess(args, status, diagnostic, "")
 
-        with mock.patch.object(mfold, "data_dir", return_value=self.tables), mock.patch.object(mfold.subprocess, "run", run):
+        with mock.patch.object(mfold, "data_dir", return_value=self.tables), mock.patch.object(mfold, "_run", run):
             return mfold.fold(SEQUENCE, {}, executable=executable)
 
     def test_relative_executable(self):
@@ -87,6 +88,32 @@ class MfoldOutputTests(unittest.TestCase):
                     self.native(data, code)
                 if code:
                     self.assertIn("exit status 9", str(error.exception))
+
+    @unittest.skipIf(os.name == "nt", "POSIX process groups")
+    def test_timeout_ends_the_programs_mfold_started(self):
+        # mfold is a shell script: its folding programs are its children
+        pid_file = self.root / "child.pid"
+        script = self.root / "mfold"
+        script.write_text(f"#!/bin/sh\nsleep 300 &\necho $! > '{pid_file}'\nwait\n")
+        script.chmod(0o755)
+
+        def child_alive(pid):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            # an exited child of this process (never here) would be a zombie
+            return subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()[:1] not in ("", "Z")
+
+        with mock.patch.object(mfold, "data_dir", return_value=self.tables), mock.patch.object(mfold, "TIMEOUT_S", 2):
+            with self.assertRaisesRegex(mfold.MfoldError, "did not finish"):
+                mfold.fold(SEQUENCE, {}, executable=str(script))
+        pid = int(pid_file.read_text())
+        self.addCleanup(lambda: child_alive(pid) and os.kill(pid, 9))
+        deadline = time.monotonic() + 10
+        while child_alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(child_alive(pid), "mfold's child outlived the timeout")
 
     def test_fit_propagates_tool_errors_and_can_reject_an_infeasible_stem(self):
         stem = {"id": "F1", "rank": 1, "pairs": [(1, 8)]}

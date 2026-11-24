@@ -25,6 +25,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -109,6 +110,33 @@ def _env(executable: str) -> Dict[str, str]:
     env = dict(os.environ)
     env["PATH"] = str(Path(executable).resolve().parent) + os.pathsep + env.get("PATH", "")
     return env
+
+
+def _run(args: List[str], *, cwd: Path, env: Dict[str, str]) -> subprocess.CompletedProcess:
+    """``subprocess.run`` of mfold, but a timeout ends its whole process group:
+    mfold is a shell script whose folding programs are its children."""
+    group: Dict[str, Any] = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                             else {"start_new_session": True})
+    with subprocess.Popen(args, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, errors="replace", env=env, **group) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=TIMEOUT_S)
+        except BaseException:  # the timeout, or the task being interrupted
+            _kill_group(process)
+            raise
+    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
+def _kill_group(process: subprocess.Popen) -> None:
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:  # the group has already ended
+            pass
+    process.kill()
 
 
 def version(executable: Optional[str] = None) -> Optional[str]:
@@ -201,8 +229,7 @@ def fold(sequence: str, params: Dict[str, Any], hard_pairs: Sequence[Tuple[int, 
             (directory / "s.aux").write_text("".join(f"F {i} {j} 1\n" for i, j in hard_pairs))
             args.append("AUX=s.aux")
         try:
-            done = subprocess.run(args, cwd=directory, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                  errors="replace", timeout=TIMEOUT_S, env=_env(executable))
+            done = _run(args, cwd=directory, env=_env(executable))
         except OSError as error:
             raise MfoldUnavailable(f"mfold could not be started ({executable}): {error}") from error
         except subprocess.TimeoutExpired as error:

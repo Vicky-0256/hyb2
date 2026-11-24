@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from desktop.runtime.bridge import _load_cplfold_module, handle
+from desktop.runtime.bridge import handle
+from desktop.runtime.structure import load_cplfold_web
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -15,7 +16,7 @@ class WarmupTest(unittest.TestCase):
 
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "numpy not installed")
     def test_folds_the_reference_hairpin(self):
-        _load_cplfold_module(ROOT)
+        load_cplfold_web(ROOT)
         from hyb2analysis.engine_parameters import CPL_SEARCH
 
         # A valid catalog change may rule out yesterday's default beam.

@@ -82,10 +82,11 @@ def structure_run(request: Dict[str, Any], project: Path, task_id: str, mode: st
     from collections import Counter
 
     from . import structure as st
+    from . import task_paths
     from . import vienna as _vienna
 
     params = parameters(request.get("parameters"))
-    inputs = st._evidence_inputs(project, request)
+    inputs = task_paths.evidence_inputs(project, request)
     gene_id, sequence = st._fold_sequence(request, inputs)
     windows = st._windows(request.get("windows"), len(sequence)) if mode == "windows" else [(1, len(sequence))]
     if len(windows) != 1:
@@ -96,7 +97,7 @@ def structure_run(request: Dict[str, Any], project: Path, task_id: str, mode: st
                          f"({gene_id}:{start}-{end} is {end - start + 1:,} nt)")
     region = sequence[start - 1:end]
 
-    run_dir = st._resolve_run_dir(project, task_id, request.get("run_dir"))
+    run_dir = task_paths.resolve_run_dir(project, task_id, request.get("run_dir"))
     state.update(run_dir=run_dir, task_id=task_id)
     progress = st.ProgressWriter(run_dir)
     progress("iris", "Reading the chimeric reads", 2, 100, units="percent", force=True)
@@ -121,7 +122,7 @@ def structure_run(request: Dict[str, Any], project: Path, task_id: str, mode: st
     record["arms"] = st._arms_sample(blocks)
 
     progress("write", "writing results", None, None, units="none", force=True)
-    out_dir = st._real_child_dir(project / "structures", task_id, exist_ok=True)
+    out_dir = task_paths.real_child_dir(project / "structures", task_id, exist_ok=True)
     stored = {"engine": "IRIS", "temperature": TEMPERATURE, "min_loop": MIN_LOOP, **params,
               "kRange": " ".join(str(k) for k in params["kRange"]), "hard_pairs": [
                   [start + i - 1, start + j - 1] for i, j in record["hard_pairs"]]}

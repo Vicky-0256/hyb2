@@ -1,5 +1,24 @@
 # Standalone release runtime: CPython 3.11.x; install only target-platform wheels.
-numpy==1.24.4
-numba==0.58.1
-llvmlite==0.41.1
-ViennaRNA==2.7.2
+# Exact pins and SHA-256 for every wheel used on macOS arm64 (macosx_11_0),
+# Windows amd64 and Linux x86_64 (numpy/numba/llvmlite manylinux2014,
+# ViennaRNA manylinux_2_28). These four are the whole resolved set (numba needs
+# only numpy and llvmlite on 3.11; ViennaRNA declares no dependencies).
+# Install with: python -m pip install --require-hashes --only-binary=:all: -r desktop/runtime/requirements-native.txt
+# Keep the versions equal to PINS in desktop/scripts/stage-native.py and
+# verify-native-release.py; regenerate all hashes when any pin changes.
+numpy==1.24.4 \
+    --hash=sha256:e2926dac25b313635e4d6cf4dc4e51c8c0ebfed60b801c799ffc4c32bf3d1254 \
+    --hash=sha256:b7b1fc9864d7d39e28f41d089bfd6353cb5f27ecd9905348c24187a768c79694 \
+    --hash=sha256:7215847ce88a85ce39baf9e89070cb860c98fdddacbaa6c0da3ffb31b3350bd5
+numba==0.58.1 \
+    --hash=sha256:a1eaa744f518bbd60e1f7ccddfb8002b3d06bd865b94a5d7eac25028efe0e0ff \
+    --hash=sha256:811305d5dc40ae43c3ace5b192c670c358a89a4d2ae4f86d1665003798ea7a1a \
+    --hash=sha256:55a01e1881120e86d54efdff1be08381886fe9f04fc3006af309c602a72bc44d
+llvmlite==0.41.1 \
+    --hash=sha256:855f280e781d49e0640aef4c4af586831ade8f1a6c4df483fb901cbe1a48d127 \
+    --hash=sha256:9564c19b31a0434f01d2025b06b44c7ed422f51e719ab5d24ff03b7560066c9a \
+    --hash=sha256:2181bb63ef3c607e6403813421b46982c3ac6bfc1f11fa16a13eaafb46f578e6
+ViennaRNA==2.7.2 \
+    --hash=sha256:f7859efd3724fd5a9189dfaf4ee0b2946fc9120363f63ba1dff079dedb5e9ff4 \
+    --hash=sha256:b66567c43c1f3b6795a1c7ab46b7315f56bfed4097827d0df80e03ff5b8f0e29 \
+    --hash=sha256:c85a09270bda4ddb4aa07d2d373e135c4efac94253b121601bb733cfda22dc79

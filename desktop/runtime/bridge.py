@@ -17,86 +17,18 @@ import sys
 import tempfile
 import time
 import traceback
-import uuid
 import subprocess
 import os
 from pathlib import Path
 from typing import Any
 
-from hyb2analysis.engine_parameters import task_allow_pseudoknot
+from hyb2analysis.engine_parameters import engine_parameters, task_allow_pseudoknot
 from .detector import cplfold_max_nt, detect_runtime
 from .project import _atomic_write_json, is_absolute_path, load_manifest, new_project, safe_relative_path, validate_project_directory, import_input, read_input, register_task_run, save_analysis_run, update_ui_state
 from . import samples as _samples
 from . import trust as _trust
 from .sample_run import ProgressFile, pipeline_energy_check, run_sample_index, run_sample_pipeline
-import importlib.util
-
-_RUNNER_PATH = Path(__file__).resolve().parents[1] / "task-runner" / "runner.py"
-_RUNNER_SPEC = importlib.util.spec_from_file_location("hyb2_task_runner", _RUNNER_PATH)
-_RUNNER_MODULE = importlib.util.module_from_spec(_RUNNER_SPEC)
-assert _RUNNER_SPEC.loader is not None
-sys.modules["hyb2_task_runner"] = _RUNNER_MODULE
-_RUNNER_SPEC.loader.exec_module(_RUNNER_MODULE)
-TaskRunner = _RUNNER_MODULE.TaskRunner
-TaskSpec = _RUNNER_MODULE.TaskSpec
-
-# Loaded cplfold_web modules keyed by source path.  Kept for the lifetime of a
-# ``--serve`` sidecar so Numba JIT compilation is paid once per process.
-_CPLFOLD_MODULES: dict[str, Any] = {}
-
-_TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-
-
-def _safe_task_id(value: Any, prefix: str) -> str:
-    task_id = str(value or (prefix + uuid.uuid4().hex))
-    if not task_id or len(task_id) > 64 or not task_id[0].isalpha() or any(c not in _TASK_ID_CHARS for c in task_id):
-        raise ValueError("task_id must be a safe identifier")
-    return task_id
-
-
-def _secure_run_dir(project: Path, task_id: str) -> Path:
-    """Create a run directory without following a project-controlled symlink."""
-    runs = project / "runs"
-    if runs.exists() and (runs.is_symlink() or not runs.is_dir()):
-        raise ValueError("project runs directory escapes project (must be a real directory)")
-    runs.mkdir(mode=0o700, exist_ok=True)
-    if runs.is_symlink() or runs.resolve() != runs:
-        raise ValueError("project runs directory escapes project")
-    target = runs / task_id
-    if target.exists() or target.is_symlink():
-        raise FileExistsError("task_id already exists")
-    target.mkdir(mode=0o700)
-    return target
-
-
-def _load_cplfold_module(root: Path) -> Any:
-    source = root / "web" / "cplfold" / "cplfold_web.py"
-    key = str(source)
-    if key in _CPLFOLD_MODULES:
-        return _CPLFOLD_MODULES[key]
-    if not source.is_file():
-        return None
-    spec = importlib.util.spec_from_file_location("hyb2_native_cplfold", source)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    # cplfold and hyb2analysis are on the path (desktop/runtime/__init__);
-    # the bridge's own helpers sit next to it.
-    if str(source.parent) not in sys.path:
-        sys.path.insert(0, str(source.parent))
-    spec.loader.exec_module(module)
-    _CPLFOLD_MODULES[key] = module
-    return module
-
-
-def _project_file(project: Path, relative: Any, label: str) -> Path:
-    """A project-relative input that must stay inside the project."""
-    if not safe_relative_path(relative):
-        raise ValueError(f"{label} must be a project-relative path")
-    target = (project / relative).resolve()
-    if project not in target.parents or not target.is_file():
-        raise ValueError(f"{label} does not exist in the project: {relative}")
-    return target
+from .task_paths import project_file, safe_task_id, task_run_dir
 
 
 MAX_BONUS_ENTRIES = 200_000
@@ -136,16 +68,10 @@ def _pipeline_run(request: dict[str, Any], repo_root: Path | None) -> dict[str, 
     path = Path(raw_path).expanduser().resolve()
     errors = validate_project_directory(path)
     if errors: raise ValueError("invalid project: " + "; ".join(errors))
-    task_id = _safe_task_id(request.get("task_id"), "pipeline-")
-    requested_run_dir = request.get("run_dir")
-    if requested_run_dir is not None:
-        run_dir = Path(str(requested_run_dir)).expanduser().resolve()
-        if not run_dir.is_dir() or run_dir.parent != (path / "runs").resolve():
-            raise ValueError("run_dir must be an existing direct child of project runs")
-    else:
-        run_dir = _secure_run_dir(path, task_id)
-    reads = _project_file(path, request.get("input"), "pipeline input")
-    reference = _project_file(path, request.get("reference"), "pipeline reference")
+    task_id = safe_task_id(request.get("task_id"), "pipeline-")
+    run_dir = task_run_dir(path, task_id, request.get("run_dir"))
+    reads = project_file(path, request.get("input"), "pipeline input")
+    reference = project_file(path, request.get("reference"), "pipeline reference")
     params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
     bounds = {"blast_threshold": (0.0, 10.0, float), "max_overlap": (0, 1000, int), "max_hits": (1, 10000, int), "threads": (1, 256, int)}
     values: dict[str, Any] = {}
@@ -205,14 +131,8 @@ def _valid_project(request: dict[str, Any]) -> Path:
 
 def _task_run_dir(project: Path, request: dict[str, Any], prefix: str) -> tuple[str, Path]:
     """``(task_id, run_dir)``: an existing shell-created run dir or a fresh secure one."""
-    task_id = _safe_task_id(request.get("task_id"), prefix)
-    requested = request.get("run_dir")
-    if requested is not None:
-        run_dir = Path(str(requested)).expanduser().resolve()
-        if not run_dir.is_dir() or run_dir.parent != (project / "runs").resolve():
-            raise ValueError("run_dir must be an existing direct child of project runs")
-        return task_id, run_dir
-    return task_id, _secure_run_dir(project, task_id)
+    task_id = safe_task_id(request.get("task_id"), prefix)
+    return task_id, task_run_dir(project, task_id, request.get("run_dir"))
 
 
 def _optional_str(request: dict[str, Any], key: str) -> str | None:
@@ -499,9 +419,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         root = Path(repo_root or Path.cwd()).resolve()
         if not (root / "web" / "cplfold" / "cplfold_web.py").is_file():
             return {"ok": False, "status": "unavailable", "error": "native CPLfold source is not bundled"}
-        module = _load_cplfold_module(root)
-        if module is None:
-            return {"ok": False, "status": "unavailable", "error": "native CPLfold module cannot be loaded"}
+        from .structure import load_cplfold_web
+        module = load_cplfold_web(root)
         if "supportKernel" in params and "support_kernel" in params and params["supportKernel"] != params["support_kernel"]:
             raise ValueError("conflicting supportKernel and support_kernel parameters")
         payload = {
@@ -559,38 +478,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         task_id = request.get("task_id")
         if not isinstance(task_id, str) or not task_id:
             raise ValueError("task_id must be a safe identifier")
-        _safe_task_id(task_id, "task-")
+        safe_task_id(task_id, "task-")
         return {"ok": True, "path": str(path), "run": register_task_run(path, task_id)}
-    if operation == "run_task":
-        raw_path = request.get("path")
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            raise ValueError("project path must be a non-empty string")
-        path = Path(raw_path).expanduser().resolve()
-        kind = str(request.get("kind", "validate_project"))
-        if kind != "validate_project":
-            raise ValueError("unsupported safe task kind: %s" % kind)
-        task_id = _safe_task_id(request.get("task_id"), "task-")
-        if not path.is_dir() or not (path / "project.json").is_file():
-            raise ValueError("project directory with project.json does not exist: %s" % path)
-        errors = validate_project_directory(path)
-        if errors:
-            raise ValueError("invalid project: " + "; ".join(errors))
-        run_dir = _secure_run_dir(path, task_id)
-        request_file = run_dir / "task-request.json"
-        request_file.write_text(json.dumps({"operation": "validate_project", "path": str(path), "check_files": True}), encoding="utf-8")
-        events: list[dict[str, object]] = [{"type": "queued", "taskId": task_id, "status": "queued"}]
-        def collect(event: dict[str, object]) -> None:
-            events.append(event)
-        runtime_root = repo_root or Path(__file__).resolve().parents[2]
-        spec = TaskSpec.from_values([sys.executable, "-m", "desktop.runtime.bridge", "--repo-root", str(runtime_root), "--request", str(request_file)], cwd=runtime_root, task_id=task_id)
-        code = TaskRunner(collect).run(spec)
-        (run_dir / "events.jsonl").write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8")
-        result = {"ok": True, "task_id": task_id, "status": "succeeded" if code == 0 else "failed", "exit_code": code, "events": events, "run_dir": str(run_dir)}
-        if code:
-            result["error"] = "Project validation failed; see the task events for details."
-        # status.json is owned by the shell's task scheduler; children report via result.json.
-        _atomic_write_json(run_dir / "result.json", result)
-        return result
     if operation == "warmup":
         # Warm the Numba kernels on the reference hairpin using the normal task defaults.
         started = time.monotonic()
@@ -639,15 +528,8 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         path = Path(raw_path).expanduser().resolve()
         errors = validate_project_directory(path)
         if errors: raise ValueError("invalid project: " + "; ".join(errors))
-        task_id = _safe_task_id(request.get("task_id"), "cplfold-")
-        requested_run_dir = request.get("run_dir")
-        if requested_run_dir is not None:
-            run_dir = Path(str(requested_run_dir)).expanduser().resolve()
-            runs_root = (path / "runs").resolve()
-            if not run_dir.is_dir() or os.path.commonpath([str(run_dir), str(runs_root)]) != str(runs_root) or run_dir.parent != runs_root:
-                raise ValueError("run_dir must be an existing direct child of project runs")
-        else:
-            run_dir = _secure_run_dir(path, task_id)
+        task_id = safe_task_id(request.get("task_id"), "cplfold-")
+        run_dir = task_run_dir(path, task_id, request.get("run_dir"))
         root = Path(repo_root or Path.cwd()).resolve(); executable = root / "bin" / "cplfold"
         if not executable.is_file():
             return {"ok": False, "status": "unavailable", "error": "native CPLfold runtime is not bundled", "task_id": task_id}
@@ -658,7 +540,12 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         # silently run the host Python.
         argv = [sys.executable, str(executable), "--sequence-file", str(sequence_file)]
         allowed = {"alpha": "--alpha", "beta": "--beta", "beam": "--beam", "delta": "--delta", "max_phase1": "--max-phase1", "max_phase2": "--max-phase2", "model": "--model"}
-        bounds = {"alpha": (-100.0, 100.0), "beta": (-100.0, 100.0), "beam": (1, 5000), "delta": (0.0, 100.0), "max_phase1": (1, 1000), "max_phase2": (1, 1000)}
+        # The shared desktop task ranges (as structure_run and cplfold_predict);
+        # Phase-2 candidates per Phase 1 have no shared range.
+        ranges = engine_parameters("desktop")["cplfold"]["ranges"]
+        bounds = {key: ranges[name] for key, name in (("alpha", "alpha"), ("beta", "beta"), ("beam", "beamSize"),
+                                                      ("delta", "energyDelta"), ("max_phase1", "maxPhase1"))}
+        bounds["max_phase2"] = (1, 1000)
         for key, flag in allowed.items():
             if key in params:
                 value = params[key]
@@ -667,7 +554,7 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
                     try: numeric = float(value)
                     except (TypeError, ValueError): raise ValueError("invalid CPLfold parameter: " + key)
                     lo, hi = bounds[key]
-                    if numeric < lo or numeric > hi or (key not in {"alpha", "beta", "delta"} and numeric != int(numeric)):
+                    if not math.isfinite(numeric) or numeric < lo or numeric > hi or (key not in {"alpha", "beta", "delta"} and numeric != int(numeric)):
                         raise ValueError("CPLfold parameter out of bounds: " + key)
                 argv.extend([flag, str(value)])
         if not allow:
@@ -691,9 +578,11 @@ def handle(request: dict[str, Any], *, repo_root: Path | None = None) -> dict[st
         # Keep JIT artifacts inside the project run.  This is writable in
         # packaged apps and prevents a hostile/shared global cache from being
         # reused across projects.
+        # NUMBA_CACHE_DIR, not XDG_CACHE_HOME: Numba (and bin/cplfold) prefer
+        # it, and the shell sets it for every compute sidecar.
         cache_root = run_dir / "numba-cache"
         cache_root.mkdir(mode=0o700, exist_ok=True)
-        env["XDG_CACHE_HOME"] = str(cache_root)
+        env["NUMBA_CACHE_DIR"] = str(cache_root)
         try:
             completed = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=900, check=False, env=env)
         except subprocess.TimeoutExpired as error:
@@ -802,7 +691,8 @@ def _analysis_index_paths(request: dict[str, Any]) -> tuple[list[str], list[Path
     """``(sample_ids, index paths, reference lengths)`` for an analysis request.
 
     ``sample_ids`` resolve through the project; ``index_paths`` may list index
-    files directly (no reference lengths are known for those).
+    files directly (no reference lengths are known for those), each opened
+    only when inside the project or linked on this computer (trust.py).
     """
     sample_ids = request.get("sample_ids")
     explicit = request.get("index_paths")
@@ -816,7 +706,11 @@ def _analysis_index_paths(request: dict[str, Any]) -> tuple[list[str], list[Path
     if explicit is not None:
         if not isinstance(explicit, list) or not all(isinstance(p, str) and p for p in explicit):
             raise ValueError("index_paths must be a list of paths")
-        paths.extend(Path(p).expanduser().resolve() for p in explicit)
+        if sample_ids is None:
+            project = _analysis_project(request)[0]
+        for value in explicit:
+            _trust.require(project, value, "analysis index")
+            paths.append(Path(value).expanduser().resolve())
     if not paths:
         raise ValueError("sample_ids or index_paths is required")
     return ids, _existing(paths), lengths

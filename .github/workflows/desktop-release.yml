@@ -108,7 +108,8 @@ jobs:
       - name: Install the pinned wheels into it
         run: |
           if [ -x "$RUNNER_TEMP/cpython/python.exe" ]; then PY="$RUNNER_TEMP/cpython/python.exe"; else PY="$RUNNER_TEMP/cpython/bin/python3"; fi
-          "$PY" -m pip install --only-binary=:all: -r desktop/runtime/requirements-native.txt
+          # Native stack (numpy, numba, llvmlite, ViennaRNA): exact pins, SHA-256 for every wheel.
+          "$PY" -m pip install --only-binary=:all: --require-hashes -r desktop/runtime/requirements-native.txt
           # Evidence worker (RNAcentral MCP client): exact pins, SHA-256 for every wheel.
           "$PY" -m pip install --only-binary=:all: --require-hashes -r desktop/runtime/requirements-evidence.txt
       - name: Acquire pinned Bowtie2

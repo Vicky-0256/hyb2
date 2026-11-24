@@ -25,7 +25,7 @@ Install only the pinned wheels with the acquired interpreter, then stage and
 verify on the same runner:
 
 ```bash
-/tmp/cpython-runtime/bin/python3 -m pip install --no-index --only-binary=:all: \
+/tmp/cpython-runtime/bin/python3 -m pip install --no-index --only-binary=:all: --require-hashes \
   --find-links "$WHEELHOUSE" -r desktop/runtime/requirements-native.txt
 /tmp/cpython-runtime/bin/python3 -m pip install --only-binary=:all: --require-hashes \
   -r desktop/runtime/requirements-evidence.txt
@@ -105,7 +105,9 @@ still works).
 
 ## ViennaRNA
 
-`requirements-native.txt` pins `ViennaRNA==2.7.2` next to NumPy and Numba.
+`requirements-native.txt` pins `ViennaRNA==2.7.2` next to NumPy, Numba and
+llvmlite, each with the SHA-256 of its CPython 3.11 wheel for macOS arm64,
+Windows amd64 and Linux x86_64 (installed with `--require-hashes`).
 It is used for folding energy (`pipeline -e 1`), and binary wheels exist for
 every target. `stage-native.py` checks the import with a dimer-fold smoke
 test, and `verify-native-release.py` fails if ViennaRNA is missing.

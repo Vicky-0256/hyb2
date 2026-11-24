@@ -58,7 +58,8 @@ from hyb2analysis.fold_text import checked_fold_text
 from . import trust as _trust
 from .name_matching import fasta_id_for_rna
 from .project import _atomic_write_json, load_manifest, safe_relative_path, validate_project_directory
-from .structure import ProgressWriter, _evidence_inputs, _now, _resolve_run_dir, load_cplfold_web
+from .structure import ProgressWriter, _now, load_cplfold_web, stop_pool
+from .task_paths import evidence_inputs, resolve_run_dir, safe_task_id
 
 # The web batch's engines: label, combined arm limit, pairs per job.
 ENGINES: Dict[str, Dict[str, Any]] = {
@@ -74,16 +75,6 @@ BATCH_LIMIT = 2000
 AUDIT_HEADER = "line\tid\tstatus\told_energy\tnew_energy\tnote"
 INVALID_ENERGY_NOTE = "invalid energy returned"
 NO_HYBRID_NOTE = "RNAduplex found no pair between the arms"
-_TASK_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-
-
-def _safe_task_id(value: Any) -> str:
-    task_id = str(value or ("batch-energy-" + os.urandom(8).hex()))
-    if not task_id or len(task_id) > 64 or not task_id[0].isalpha() or any(c not in _TASK_ID_CHARS for c in task_id):
-        raise ValueError("task_id must be a safe identifier")
-    return task_id
-
-
 def _parameters(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     unknown = sorted(set(raw) - {"engine", "records", "filters"})
@@ -202,18 +193,6 @@ def _fold_chunk(root: str, engine: str, start: int, pairs: List[Tuple[str, str]]
     return start, fold_pairs(root, engine, pairs)
 
 
-def _abandon_pool(pool: ProcessPoolExecutor) -> None:
-    """Shut pool down after a failure: cancel the queued chunks, stop the
-    workers still folding and do not wait for them."""
-    processes = list((getattr(pool, "_processes", None) or {}).values())
-    pool.shutdown(wait=False, cancel_futures=True)
-    for process in processes:
-        try:
-            process.terminate()
-        except (OSError, AttributeError, ValueError):
-            pass
-
-
 def _worker_init(root: str, engine: str) -> None:
     os.environ["NUMBA_NUM_THREADS"] = "1"
     if engine == "rnacofold":
@@ -316,17 +295,17 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
     errors = validate_project_directory(project)
     if errors:
         raise ValueError("invalid project: " + "; ".join(errors))
-    task_id = _safe_task_id(request.get("task_id"))
+    task_id = safe_task_id(request.get("task_id"), "batch-energy-")
     sample_id = request.get("sample_id")
     if not isinstance(sample_id, str) or not sample_id:
         raise ValueError("sample_id is required")
     params = _parameters(request.get("parameters"))
     engine = ENGINES[params["engine"]]
     duplex = params["engine"] == "rnaduplex"
-    inputs = _evidence_inputs(project, {"sample_ids": [sample_id]})
+    inputs = evidence_inputs(project, {"sample_ids": [sample_id]})
     hyb_path, reference = inputs["hyb_paths"][0], inputs["reference"]
     sample = next(s for s in load_manifest(project).get("samples") or [] if isinstance(s, dict) and s.get("id") == sample_id)
-    run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
+    run_dir = resolve_run_dir(project, task_id, request.get("run_dir"))
     state.update(run_dir=run_dir, task_id=task_id)
     progress = ProgressWriter(run_dir)
 
@@ -411,7 +390,7 @@ def _batch_energy_run(request: Dict[str, Any], repo_root: Optional[Path], state:
         except BaseException:
             # one failing chunk fails the run now: the chunks not started
             # are dropped and the run does not wait for the running ones
-            _abandon_pool(pool)
+            stop_pool(pool)
             raise
         pool.shutdown(wait=True)
     fold_seconds = time.monotonic() - fold_started

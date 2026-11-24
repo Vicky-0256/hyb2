@@ -91,6 +91,21 @@ class AnalysisBridgeTest(unittest.TestCase):
         self.assertEqual(len(result["rows"]), 3)
         self.assertTrue(result["rows"][0]["name"])
 
+    def test_explicit_index_paths_need_a_trusted_link(self):
+        from unittest import mock
+
+        from desktop.runtime import trust
+
+        inside = self.project / "samples/S1/testData.hyb2idx"
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {trust.ENV: str(Path(tmp) / "links.json")}):
+            with self.assertRaises(trust.UntrustedLink):
+                self.call(operation="analysis_summary", index_paths=[str(self.outside)])
+            with self.assertRaises(trust.UntrustedLink):  # a sample's own index does not open another file
+                self.call(operation="analysis_summary", sample_ids=["S1"], index_paths=[str(self.outside)])
+            self.assertTrue(self.call(operation="analysis_summary", index_paths=[str(inside)])["ok"])
+            trust.trust([self.outside])
+            self.assertTrue(self.call(operation="analysis_summary", index_paths=[str(self.outside)])["ok"])
+
     def test_hybrids_evalue_filter_raw_lines_and_partners(self):
         # the web's maximum e-value: no arm e-value (.hyb columns 9 and 15) above it
         lines = HYB.read_text().splitlines()

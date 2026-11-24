@@ -360,7 +360,7 @@ cmp "$input" "$CAPTURE/expected.sam"
                 original = {path: path.read_bytes() for path in protected}
                 expected_files = set(ref.parent.iterdir()) | {prefix.with_suffix(".blast.err")}
                 if not fail:
-                    expected_files.update(Path(str(prefix) + s) for s in (".hyb", "_homodimers.hyb", "_hybrids.hyb_stats.txt"))
+                    expected_files.update(Path(str(prefix) + s) for s in (".hyb", ".hyb.inputs", "_homodimers.hyb", "_hybrids.hyb_stats.txt"))
                 self.env["FAIL_MAP"] = str(int(fail))
                 result = self.run_command("hyb2", "-i", source.relative_to(self.root), "-d", ref.relative_to(self.root),
                                           "-o", prefix.relative_to(self.root))

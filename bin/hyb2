@@ -126,6 +126,15 @@ done
 if [[ -n "$X_COORD" ]]; then X_COORD=$((10#$X_COORD)); fi
 if [[ -n "$Y_COORD" ]]; then Y_COORD=$((10#$Y_COORD)); fi
 if [[ -n "$LEN" ]]; then LEN=$((10#$LEN)); fi
+# Thresholds as hyb2pipe reads them (scientific notation such as 1e-5 is fine).
+number='^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$'
+for option in "v=$hval" "m=$gmax"; do
+	if [[ ! "${option#*=}" =~ $number ]]; then
+		echo "hyb2: -${option%%=*} must be a number (for example 0.1 or 1e-5): ${option#*=}" >&2
+		exit 2
+	fi
+done
+if [[ ! "$hmax" =~ ^[0-9]+$ ]]; then echo "hyb2: -h must be a whole number: $hmax" >&2; exit 2; fi
 
 #UNAFold (-r 0) and mfold (-r 2) folding need a program that applies forced
 #pairs: stop now rather than after mapping (unafold_check, mfold_check)
@@ -183,11 +192,30 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
-if [[ -f "$OUT.hyb" ]]; then
+# <out>.hyb.inputs records what step 1 read (path, size and mtime of the input
+# and references) and its options; it is published with the .hyb. A .hyb whose
+# record differs is recomputed. A .hyb without a record (an explicit -i .hyb,
+# or one from hyb2pipe or an older hyb2) is kept as it is.
+record=
+if [[ "$IN_FILE" != *.hyb ]]; then
+    energy_options="-e $ENERGY"
+    if [[ "$ENERGY" == 1 ]]; then energy_options+=" -r $ENERGY_FOLD"; fi
+    record=$(python3 -c 'import os, sys
+for label, path in zip(("input", "reference_1", "reference_2"), sys.argv[1:]):
+    info = os.stat(path) if path else None
+    print(label, os.path.realpath(path) if path else "-", info.st_size if info else "-",
+          info.st_mtime_ns if info else "-", sep="\t")' "$IN_FILE" "$original_ref_1" "$original_ref_2")
+    record=$(printf 'hyb2 step 1\n%s\noptions\t-v %s -m %s -h %s %s' "$record" "$hval" "$gmax" "$hmax" "$energy_options")
+fi
+if [[ -f "$OUT.hyb" && ( -z "$record" || ! -f "$OUT.hyb.inputs" || "$(cat -- "$OUT.hyb.inputs")" == "$record" ) ]]; then
     convert=0
     protected+=(--protect="$OUT.hyb")
     echo "Hyb File Exist. Next Step."
+    if [[ -n "$record" && ! -f "$OUT.hyb.inputs" ]]; then
+        echo "hyb2: keeping $OUT.hyb, which has no record of its inputs ($OUT.hyb.inputs); delete it to recompute." >&2
+    fi
 else
+    if [[ -f "$OUT.hyb" ]]; then echo "$OUT.hyb was made from other inputs or options; recomputing."; fi
     convert=1
     if [[ -n "$mapper" && -z "$DB_1" ]]; then echo "Mapping requires a reference (-d)." >&2; exit 2; fi
     work=$(mktemp -d "$(dirname -- "$OUT")/.hyb2.XXXXXXXX")
@@ -203,7 +231,8 @@ prepare_reference() {
     ref_target=$source
     ref_input=$source
     [[ -n "$source" ]] || return 0
-    if grep -q '|' < "$source"; then
+    # hyb2pipe's rule: rewrite the IDs when any header contains '|'
+    if PYTHONPATH="$bin_dir/../pipeline${PYTHONPATH:+:$PYTHONPATH}" python3 -B -m hyb2pipe.reference_cli check "$source"; then
         parent=$(dirname -- "$source")
         if [[ -z "$ref_stage" || ! "$parent" -ef "$ref_stage/.." ]]; then
             ref_stage=$(mktemp -d "$parent/.hyb2-ref.XXXXXXXX")
@@ -255,8 +284,9 @@ if (( convert )); then
     sam2hyb -i "$stage.sam" -d "$conversion_ref" -o "$stage" -v "$hval" -g "$gmax" -h "$hmax" -e "$ENERGY" -r "$ENERGY_FOLD" || {
         echo "SAM conversion failed." >&2; exit 1
     }
+    printf '%s\n' "$record" > "$stage.hyb.inputs"
     # The publisher requires every staged file and installs the completion marker last.
-    for suffix in _homodimers.hyb _hybrids.hyb_stats.txt .hyb; do
+    for suffix in _homodimers.hyb _hybrids.hyb_stats.txt .hyb.inputs .hyb; do
         outputs+=("$stage$suffix" "$OUT$suffix")
     done
 fi

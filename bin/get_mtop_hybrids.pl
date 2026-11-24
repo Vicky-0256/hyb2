@@ -30,7 +30,20 @@ $OUTPUT_FORMAT = "HYB";
 $FS = "\t";
 $, = "\t";
 
-eval '$'.$1.$2 while ($ARGV[0] =~ /^([A-Za-z_0-9]+=)([A-Za-z\d.]+)/) && shift; # process any FOO=bar switches
+# process any FOO=bar switches; numbers may use scientific notation (1e-5)
+my %switches = (MODE => \$MODE, MAX_OVERLAP => \$MAX_OVERLAP, BLAST_THRESHOLD => \$BLAST_THRESHOLD,
+	MAX_HITS_PER_SEQUENCE => \$MAX_HITS_PER_SEQUENCE, OUTPUT_FORMAT => \$OUTPUT_FORMAT);
+while (@ARGV && $ARGV[0] =~ /^([A-Za-z_0-9]+)=(.*)$/s) {
+	my ($switch, $value) = ($1, $2);
+	die "get_mtop_hybrids.pl: unknown switch $switch\n" unless exists $switches{$switch};
+	if ($switch eq "OUTPUT_FORMAT") {
+		die "get_mtop_hybrids.pl: OUTPUT_FORMAT must be HYB or BLAST: $value\n" unless $value =~ /^(?:HYB|BLAST)$/;
+	} elsif ($value !~ /^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/) {
+		die "get_mtop_hybrids.pl: $switch must be a number: $value\n";
+	}
+	${$switches{$switch}} = $value;
+	shift;
+}
 
 print "#$0\n";
 foreach $argnum (0 .. $#ARGV) { print "#$ARGV[$argnum]\n"; }

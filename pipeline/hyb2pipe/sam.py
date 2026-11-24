@@ -2,21 +2,31 @@
 from __future__ import annotations
 
 import re
+import sys
 from math import log
-from typing import Iterable, Iterator, List, Optional
+from typing import Iterable, Iterator, List, Optional, TextIO
 
 from . import awk
 
 
-def sam_filt(lines: Iterable[str]) -> Iterator[str]:
-    """Port of ``bin/sam_filt``: drop multi-splice reads, split single-splice
-    reads into two alignments, and normalise read IDs."""
+KEPT_FLAGS = ("0", "16", "256", "272")  # single-end primary/secondary, forward/reverse
+
+
+def sam_filt(lines: Iterable[str], stderr: Optional[TextIO] = None) -> Iterator[str]:
+    """Port of ``bin/sam_filt``: keep headers and records with a flag in
+    ``KEPT_FLAGS`` (the count of others goes to ``stderr``, default ``sys.stderr``),
+    drop multi-splice reads, split single-splice reads into two alignments,
+    and normalise read IDs."""
     id_parts: List[str] = []
     id_n = 0
+    skipped = 0
     for raw in lines:
         line = raw.rstrip("\n")
         f = awk.fields(line)
-        # awk 1: keep CIGARs with at most one N
+        # awk 1: keep headers and KEPT_FLAGS, and CIGARs with at most one N
+        if not (f and f[0].startswith("@")) and awk.field(f, 2) not in KEPT_FLAGS:
+            skipped += 1 if f else 0
+            continue
         if len(awk.split(awk.field(f, 6), "N")) >= 3:
             continue
         # awk 2: splice splitting
@@ -59,6 +69,9 @@ def sam_filt(lines: Iterable[str]) -> Iterator[str]:
                 if len(cols) > 1:
                     value = "\t".join([cols[0]] + cols[2:25])
                 yield _fix_read_id(value)
+    if skipped:
+        (stderr or sys.stderr).write("sam_filt: skipped %d SAM records whose flag is not 0, 16, 256 or 272 "
+                                     "(unmapped, paired, supplementary or other)\n" % skipped)
 
 
 _SPLICE_OP = re.compile(r"[0-9]+[A-Z=]")

@@ -47,34 +47,11 @@ staged=$(mktemp "${destination}.tmp.XXXXXX")
 trap 'rm -f -- "$staged"' EXIT
 trap 'exit 1' HUP INT TERM
 
-# Flatten kept records and apply the original identifier substitutions. Doing
-# this in one pass also works with POSIX awk and wrapped or CRLF input.
-LC_ALL=C awk '{
-    sub(/\r$/, "")
-    if (/^[#;]/) next
-    gsub(/_/, "-")
-    gsub(/protein-coding/, "mRNA")
-    gsub(/[|]/, "_")
-    gsub(/__/, "_unknown_")
-    if (/^>/) {
-        if (keep && !sequence) exit 1
-        if (keep) printf "\n"
-        seen = 1
-        keep = $0 !~ /unknown|pseudogene/
-        sequence = 0
-        if (keep) {
-            if ($0 ~ /^>[[:space:]]*$/) exit 1
-            retained++
-            print
-        }
-    } else if (keep) {
-        if ($0 ~ /[^[:space:]]/) sequence = 1
-        printf "%s", $0
-    } else if (!seen && $0 !~ /^[[:space:]]*$/) {
-        exit 1
-    }
-}
-END { if (!retained || (keep && !sequence)) exit 1 }' < "$input" > "$staged" || { echo "Could not format FASTA: $input" >&2; exit 1; }
+# Flatten kept records and rewrite the IDs with hyb2pipe's rules
+# (pipeline/hyb2pipe/reference_cli.py), so both pipelines name genes alike.
+bin_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+PYTHONPATH="$bin_dir/../pipeline${PYTHONPATH:+:$PYTHONPATH}" python3 -B -m hyb2pipe.reference_cli format "$input" > "$staged" ||
+    { echo "Could not format FASTA: $input" >&2; exit 1; }
 chmod =rw "$staged"
 mv -f -- "$staged" "$destination"
 if [[ -n "$print_path" ]]; then printf '%s\n' "$output"; fi

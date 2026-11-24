@@ -84,6 +84,34 @@ def format_reference(lines: Iterable[str]) -> List[str]:
     return out
 
 
+_SEQUENCE = re.compile(r"[A-Za-z*.\-\s]+")
+
+
+def check_formatted(lines: List[str]) -> None:
+    """Refuse output that is not one header and one sequence per record, with unique IDs."""
+    start = 0
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    lines = lines[start:]
+    if not lines:
+        raise ValueError("no sequences are left after formatting")
+    seen = set()
+    for number in range(0, len(lines), 2):
+        header = lines[number]
+        sequence = lines[number + 1] if number + 1 < len(lines) else ""
+        words = header[1:].split(None, 1) if header.startswith(">") else []
+        if not words:
+            raise ValueError("expected a FASTA header with an ID: %r" % header[:80])
+        if not sequence.strip() or sequence.startswith(">"):
+            raise ValueError("record %s has no sequence" % words[0])
+        if not _SEQUENCE.fullmatch(sequence):
+            raise ValueError("record %s has a line that is not sequence (FASTA comment lines starting with ; or # "
+                             "are not supported): %r" % (words[0], sequence[:80]))
+        if words[0] in seen:
+            raise ValueError("duplicate FASTA ID %r; give each reference record a unique ID" % words[0])
+        seen.add(words[0])
+
+
 def fastq_to_rows(lines: Iterable[str]) -> List[List[str]]:
     """``solexa2fasta.awk | fasta2tab.awk``: [name, sequence] per read."""
     it = iter(lines)

@@ -221,7 +221,7 @@ PYTHONPATH=Hyb2/pipeline python3 -m hyb2pipe -i <input> -d <reference.fasta> -o 
 
 --memory-mb, --tmp-dir, --no-resume: memory budget, work directory and resuming; see [`pipeline/README.md`](pipeline/README.md)
 
-The legacy `hyb2` takes the same `-i -d -o -v -m -h -e` options and runs this step itself when `-i` is not a `.hyb` file.
+The legacy `hyb2` takes the same `-i -d -o -v -m -h -e` options and runs this step itself when `-i` is not a `.hyb` file. Its `-e` also defaults to 0; with `-e 1` it computes dG with ViennaRNA RNAcofold. `-v` and `-m` accept scientific notation such as `1e-5`. It writes `<output_prefix>.hyb.inputs` beside the `.hyb`, recording the input, references and options used. A rerun with the same files and options skips this step, and a rerun with a changed input, reference or option recomputes it. A `.hyb` without that record (one given as `-i`, or one made by `hyb2pipe`) is used as it is. Both `hyb2pipe` and `hyb2` skip SAM records whose flag is not 0, 16, 256 or 272 (unmapped, paired or supplementary alignments) and print how many they skipped. `hyb2` maps FASTQ and FASTA input with Bowtie2 on all online CPUs; set `HYB2_THREADS` to use fewer, e.g. `HYB2_THREADS=8 hyb2 -i reads.fastq ...`.
 
 ### Plotting Contact Density Map
 These options and the folding options below go to `hyb2 -i <output_prefix>.hyb -d <reference.fasta>`.

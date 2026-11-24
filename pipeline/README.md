@@ -12,7 +12,11 @@ PYTHONPATH=pipeline python3 -m hyb2pipe -i aligned.sam -d reference.fasta -o out
 Install the Python dependencies with `python -m pip install -r pipeline/requirements.txt`;
 FASTQ and FASTA input also need Bowtie2 (see [External tools](#external-tools)).
 
-The `-i -d -o -v -m -h -e` flags match `hyb2`. The command writes
+The `-i -d -o -v -m -h -e` flags match `hyb2` (`-v` and `-m` accept
+scientific notation such as `1e-5` in both). One difference is on purpose:
+with `-e 1`, `hyb2pipe` computes dG with RNAduplex and `hyb2` with RNAcofold;
+`--energy-engine rnacofold` gives `hyb2`'s values (see Compatibility). The
+desktop app and the web pages use RNAduplex too. The command writes
 `<out>.hyb`, `<out>_homodimers.hyb` and `<out>_hybrids.hyb_stats.txt`, plus
 `<out>.sam` or `<out>.sam.gz` with `--keep-sam plain|gz` (default: no SAM).
 In the desktop app the same code runs as the `pipeline` task kind.
@@ -75,10 +79,15 @@ and the collapse scripts dropping each group's first line.
 `python-migration` branch's `fixtures/legacy_run/direct_viewpoint`): equal at
 all 10,807 nucleotides.
 
-It deliberately differs from the legacy scripts in four places:
+Both `hyb2pipe` and `bin/sam_filt` keep only SAM headers and records with
+flag 0, 16, 256 or 272 (single-end primary and secondary alignments). They
+skip unmapped, paired and supplementary records and print how many on stderr;
+before, `sam2blast_3` stopped at the first paired or supplementary record.
+Both rename reference IDs by the same rules (`hyb2pipe/reference_cli.py`,
+used by `bin/hyb2` and `bin/fasta_hyb2_formatting`).
 
-- `-h` (maximum hits) is honoured. The legacy `hyb2` wrapper never passed it
-  on to `sam2hyb`.
+It deliberately differs from the legacy scripts in these places:
+
 - With `-e 1`, dG comes from ViennaRNA's RNAduplex (37 °C, pairs between
   the two arms only, the hybridisation step of the original Hyb pipeline)
   for each line's own two arms, so it does not depend on the read-name
@@ -95,7 +104,8 @@ It deliberately differs from the legacy scripts in four places:
   wrote a TAB inside the value whenever |dG| < 10, which shifted every later
   column.
 - Bowtie2 runs with `--reorder`. Legacy multi-threaded runs wrote alignments
-  in a different order on each run.
+  in a different order on each run (the `bin/bowtie2_*2sam` wrappers now use
+  `--reorder` too).
 - When reference genes tie in the ranking, the first-seen gene wins. Perl's
   hash order made this random.
 

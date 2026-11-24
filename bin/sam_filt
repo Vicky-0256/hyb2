@@ -2,8 +2,11 @@
 set -eo pipefail
 if (( $# > 1 )); then echo "usage: sam_filt [input.sam]" >&2; exit 2; fi
 if (( $# )); then exec < "$1"; fi
+#keep headers and single-end primary/secondary alignments (flags 0, 16, 256, 272): unmapped records
+#carry no hit, and sam2blast_3 stops at paired or supplementary flags. pipeline/hyb2pipe/sam.py does the same.
 #6th field, CIGAR string indicating mapping matches, if splicing (N) occur 0 to 1 time, pass to next
-awk '{n=split($6,a,"N"); if (n<3) print $0}' |
+awk '$1!~/^@/ && $2!~/^(0|16|256|272)$/ {if (NF) skipped++; next} {n=split($6,a,"N"); if (n<3) print $0}
+	END {if (skipped) printf "sam_filt: skipped %d SAM records whose flag is not 0, 16, 256 or 272 (unmapped, paired, supplementary or other)\n", skipped > "/dev/stderr"}' |
 #2nd filter and transformation
 #if no splicing, pass
 #splitting lines with CIGAR strings containing splicing into fragments to be assembled into 2 lines, compatible with the hyb pipeline

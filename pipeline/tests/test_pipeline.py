@@ -3,7 +3,9 @@
 The golden files were produced by the legacy ``sam_filt`` + ``sam2hyb -e 0``
 on ``data/testData.sam`` (macOS one-true-awk 20200816, LANG=C.UTF-8).
 """
+import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -633,6 +635,133 @@ class CliTest(unittest.TestCase):
                 inputs.bowtie2_index(ref, prefix)
                 self.assertEqual(len(calls), 4)  # the interrupted build is not reused
                 self.assertEqual(Path(str(prefix) + ".1.bt2").read_text(), ">d\nUUUU\n")
+
+
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash") and shutil.which("perl"), "the legacy CLI needs bash and Perl")
+class LegacyCliTest(unittest.TestCase):
+    """``bin/`` step 1 and ``hyb2pipe`` agree on options, SAM flags and reference IDs."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+        tools = self.base / "tools"
+        tools.mkdir()
+        for name in ("python", "python3"):  # the legacy scripts run python and python3 from PATH
+            (tools / name).symlink_to(sys.executable)
+        self.env = dict(os.environ, PATH=os.pathsep.join((str(tools), str(ROOT / "bin"), os.environ["PATH"])),
+                        PYTHONDONTWRITEBYTECODE="1")
+
+    def cli(self, *args):
+        return subprocess.run([str(a) for a in args], cwd=self.base, env=self.env, capture_output=True, text=True,
+                              timeout=300)
+
+    def test_scientific_blast_threshold_matches_hyb2pipe(self):
+        done = self.cli(ROOT / "bin/hyb2", "-i", ROOT / "data/testData.sam", "-o", self.base / "legacy", "-v", "1e-5")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        python = run(ROOT / "data/testData.sam", ROOT / "data/Zika_18S_formatted.fasta", self.base / "py/out",
+                     Options(blast_threshold=1e-5))
+        self.assertEqual(python.counts["hybrids"], 10013)  # 10411 with the default 0.1
+        for produced, suffix in ((python.hyb, ".hyb"), (python.homodimers, "_homodimers.hyb"),
+                                 (python.stats, "_hybrids.hyb_stats.txt")):
+            self.assertEqual((self.base / ("legacy" + suffix)).read_bytes(), produced.read_bytes(), suffix)
+        for value in ("1e-", "0.1x", ""):
+            with self.subTest(value=value):
+                bad = self.cli(ROOT / "bin/hyb2", "-i", ROOT / "data/testData.sam", "-o", self.base / "bad", "-v", value)
+                self.assertEqual(bad.returncode, 2)
+                self.assertIn("-v must be a number", bad.stderr)
+        perl = self.cli(ROOT / "bin/get_mtop_hybrids.pl", "BLAST_THRESHOLD=1e", "/dev/null")
+        self.assertNotEqual(perl.returncode, 0)
+        self.assertIn("BLAST_THRESHOLD must be a number", perl.stderr)
+
+    def test_existing_hyb_is_recomputed_when_inputs_or_options_change(self):
+        sam = self.base / "reads.sam"
+        read = "ACGT" * 10
+        sam.write_text("@SQ\tSN:toy\tLN:160\n" +
+                       f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n"
+                       f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n")
+        hyb = self.base / "out.hyb"
+
+        def convert(*options):
+            done = self.cli(ROOT / "bin/hyb2", "-i", sam, "-o", self.base / "out", *options)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return done.stdout
+
+        self.assertIn("Hyb File Generated.", convert())
+        self.assertEqual(len(hyb.read_text().splitlines()), 1)
+        self.assertIn("Hyb File Exist.", convert())
+        self.assertIn("recomputing", convert("-h", "0"))  # a read with 2 hits > 0 allowed
+        self.assertEqual(hyb.read_text(), "")
+        self.assertIn("Hyb File Exist.", convert("-h", "0"))
+        sam.write_text(sam.read_text() + "\n")
+        os.utime(sam, (1, 1))
+        self.assertIn("recomputing", convert())
+        self.assertEqual(len(hyb.read_text().splitlines()), 1)
+        Path(str(hyb) + ".inputs").unlink()  # e.g. written by hyb2pipe: kept
+        hyb.write_text("kept\n")
+        self.assertIn("Hyb File Exist.", convert("-h", "3"))
+        self.assertEqual(hyb.read_text(), "kept\n")
+        done = self.cli(ROOT / "bin/hyb2", "-i", hyb)
+        self.assertIn("Hyb File Exist.", done.stdout)
+
+    def test_supplementary_and_paired_records_are_skipped_alike(self):
+        read = "ACGT" * 10
+        rows = ["@SQ\tSN:toy\tLN:160",
+                f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
+                f"read_1\t2048\ttoy\t41\t60\t20M20H\t*\t0\t0\t{read[:20]}\t*\tAS:i:40\tNM:i:0",
+                f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
+                f"M1:7:FC:3:1101:1:2\t2064\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
+                f"pair\t99\ttoy\t1\t60\t20M\t=\t81\t100\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
+                f"none\t4\t*\t0\t0\t*\t*\t0\t0\t{read}\t*"]
+        stderr = io.StringIO()
+        kept = list(sam.sam_filt(rows, stderr))
+        self.assertEqual([row.split("\t")[1] for row in kept], ["SN:toy", "0", "256"])
+        self.assertIn("skipped 4 SAM records", stderr.getvalue())
+        path = self.base / "mixed.sam"
+        path.write_text("\n".join(rows) + "\n")
+        legacy = self.cli(ROOT / "bin/sam_filt", path)
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertEqual(legacy.stdout.splitlines(), kept)
+        self.assertIn("skipped 4 SAM records", legacy.stderr)
+        done = self.cli(ROOT / "bin/hyb2", "-i", path, "-o", self.base / "legacy")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        with mock.patch("sys.stderr", io.StringIO()):
+            python = run(path, ROOT / "data/Zika_18S_formatted.fasta", self.base / "py/out")
+        self.assertEqual(python.counts["hybrids"], 1)
+        self.assertEqual((self.base / "legacy.hyb").read_bytes(), python.hyb.read_bytes())
+
+    def test_reference_formatting_uses_the_hyb2pipe_rules(self):
+        for name, text in (("wrapped", ">alpha|protein_coding\r\nGGGG\r\nAAAA\r\n>skip||kind\r\nCCCC\r\n>b|t\r\nUU\r\n"),
+                           ("ensembl", ">ENSG1_ENST1|Zika_virus|protein_coding\nAC\n")):
+            with self.subTest(name=name):
+                source = self.base / (name + ".fa")
+                source.write_bytes(text.encode())
+                done = self.cli(ROOT / "bin/fasta_hyb2_formatting", "-i", source, "-P")
+                self.assertEqual(done.returncode, 0, done.stderr)
+                expected = "\n".join(inputs.format_reference(inputs.iter_lines(source)))
+                self.assertEqual(Path(done.stdout.strip()).read_text(), expected)
+        for name, text in (("comment", ">a|x\nAC\n#note\nGU\n"), ("duplicate", ">a|x\nAC\n>a|x\nGU\n")):
+            with self.subTest(name=name):
+                source = self.base / (name + ".fa")
+                source.write_text(text)
+                done = self.cli(ROOT / "bin/fasta_hyb2_formatting", "-i", source)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("comment" if name == "comment" else "duplicate FASTA ID", done.stderr)
+                with self.assertRaises(ValueError):
+                    run(ROOT / "data/testData.sam", source, self.base / name)
+        duplicate = self.base / "duplicate.fa"
+        duplicate.write_text(">a|x\nAC\n>a|x\nGU\n")
+        with self.assertRaises(ValueError):
+            inputs.needs_formatting(duplicate)
+        # a '|' outside the headers does not rename the reference, in either pipeline
+        plain = self.base / "plain.fa"
+        plain.write_text(">a\nAC\n;c|d\n>b\nGU\n")
+        self.assertFalse(inputs.needs_formatting(plain))
+        hyb = self.base / "sample.hyb"
+        hyb.write_text("")
+        done = self.cli(ROOT / "bin/hyb2", "-i", hyb, "-d", plain)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse((self.base / "plain.hyb.fasta").exists())
 
 
 if __name__ == "__main__":

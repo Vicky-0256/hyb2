@@ -25,6 +25,12 @@ for target in "$out.sam" "$out.blast.err"; do
     fi
 done
 
+# HYB2_THREADS, else all online CPUs (nproc: Linux and Git-Bash; getconf/sysctl: macOS).
+threads=${HYB2_THREADS:-$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)}
+if [[ ! "$threads" =~ ^[0-9]+$ ]] || (( 10#$threads == 0 )); then
+    echo "HYB2_THREADS must be a positive whole number: $threads" >&2; exit 2
+fi
+
 # Nothing beside the reads or reference is scratch. Stage the SAM on its final
 # filesystem so publishing it takes one rename, even when replacing an old SAM.
 bin_dir=$(cd -- "$(dirname -- "$0")" && pwd)
@@ -52,8 +58,9 @@ echo "Bowtie2 Mapping..."
 status=0
 # Do not let a missing private index fall back to a global index of that name.
 unset BOWTIE2_INDEXES
+# --reorder keeps the SAM in read order, so reruns give the same output.
 bowtie2 -D 20 -R 3 -N 0 -L 16 -k 20 --local -i S,1,0.50 --score-min L,18,0 --ma 1 --np 0 --mp 2,2 \
-    --rdg 5,1 --rfg 5,1 -p 64 -x index -f reads.fasta > mapped.sam 2> mapping.err || status=$?
+    --rdg 5,1 --rfg 5,1 --reorder -p "$((10#$threads))" -x index -f reads.fasta > mapped.sam 2> mapping.err || status=$?
 publish=(python3 "$bin_dir/sam2hyb_publish.py" --work="$work" --protect="$input" --protect="$reference")
 if (( status != 0 )) || [[ ! -s mapped.sam ]]; then
     "${publish[@]}" --protect="$out.sam" -- mapping.err "$out.blast.err"

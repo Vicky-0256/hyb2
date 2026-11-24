@@ -66,7 +66,7 @@ def default_threads() -> int:
 class Options:
     blast_threshold: float = 0.1  # -v
     max_overlap: float = 4  # -m / -g
-    max_hits: int = 10  # -h (the legacy hyb2 wrapper never forwarded it)
+    max_hits: int = 10  # -h
     energy: bool = False  # -e
     threads: Optional[int] = None  # Bowtie2 threads and worker processes (default: default_threads())
     keep_sam: str = "none"  # "none" | "gz" | "plain": also write <out>.sam(.gz)
@@ -413,6 +413,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
         progress("reference", "formatting reference FASTA")
         formatted = Path(str(out_prefix) + ".reference.hyb.fasta")
         lines = inputs.format_reference(inputs.iter_lines(reference))
+        inputs.check_formatted(lines)
         formatted.write_text("\n".join(lines), encoding="utf-8")
         reference = formatted
     if options.energy and options.energy_engine not in energy.ENGINES:
@@ -501,7 +502,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
                     progress("blast", "scoring alignments")
                     reader = inputs.ProgressReader(input_path)
                     stream = reader
-                    lines = sam.sam_filt(reader) if source == "sam" else reader
+                    lines = sam.sam_filt(reader, log) if source == "sam" else reader
                     throttle = inputs.Throttle(progress_bytes, "blast")
 
                     def report(key: str) -> None:

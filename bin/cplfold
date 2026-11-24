@@ -31,7 +31,10 @@ def _sequence_arguments(arguments: list[str], cofold: bool = False) -> tuple[str
             sequence += "&" + parsed.sequence_two
         return sequence, list(arguments)
 
-    sequence = _read_sequence_file(parsed.sequence_file, cofold=cofold or parsed.cofold)
+    try:
+        sequence = _read_sequence_file(parsed.sequence_file, cofold=cofold or parsed.cofold)
+    except (ValueError, OSError) as error:  # cplfold.CofoldInputError is a ValueError
+        raise SystemExit(str(error)) from error
     forwarded = []
     skip_next = False
     for argument in arguments:

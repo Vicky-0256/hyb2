@@ -13,10 +13,7 @@ import numpy as np
 
 from ..models import COFOLD_MODELS, MODELS
 from ..sequence import normalise_sequence
-
-
-class CofoldInputError(ValueError):
-    """Expected input/range errors that CLI callers can report without traceback."""
+from .cli_input import CofoldInputError  # defined without NumPy; re-exported here
 
 
 def normalise(sequence, cutpoint=None):

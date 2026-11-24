@@ -5,15 +5,16 @@ All arrays and pair coordinates omit the display separator ``&``.
 """
 
 from numbers import Integral
+from types import MappingProxyType
 from typing import Optional, Tuple
 
-from ._internal.cli_input import read_sequence_file
+from ._internal.cli_input import read_sequence_file  # raises OSError or cplfold.CofoldInputError
 
 __all__ = ["ALPHABET", "ALIASES", "WHITESPACE", "clean", "normalise_sequence",
            "add_strand_break", "strip_structure_break", "read_sequence_file"]
 
 ALPHABET = "ACGU"
-ALIASES = {"T": "U"}
+ALIASES = MappingProxyType({"T": "U"})  # read-only: clean() is built from it at import
 # Unicode White_Space plus the byte-order mark; removed anywhere in a sequence.
 WHITESPACE = (" \t\n\r\v\f\u0085\u00a0\u1680" + "".join(chr(n) for n in range(0x2000, 0x200b))
               + "\u2028\u2029\u202f\u205f\u3000\ufeff")

@@ -92,8 +92,15 @@ results = cplfold.fold(sequence, pseudoknots=False)
 alpha=0.0, beta=0.0, beam_size=100, energy_delta=5.0, max_phase1=10, max_phase2=5)`
 never prints and never writes files. Each `Prediction` has `structure`, `energy`,
 `effective_energy`, `kind`, `score`, `phase1_structure`, `phase1_energy` and
-`phase2_structure`; `details` is a read-only mapping of every field, and
-`as_dict()` returns the original candidate dict.
+`phase2_structure`; `details` is a read-only mapping of every field (nested
+dicts are read-only mappings and lists are tuples), and `as_dict()` returns a
+plain copy of the original candidate dict. `max_phase2` limits the Phase 2
+candidates per Phase 1 structure only for two strands; one strand runs
+exactly one Phase 2 fold per Phase 1 structure. `cplfold.models.DEFAULT_MODELS`
+and `cplfold.sequence.ALIASES` are read-only mappings.
+`cplfold.bonus.load_bonus_matrix_file` and `cplfold.sequence.read_sequence_file`
+raise `OSError` (`FileNotFoundError` for a missing file) or
+`cplfold.CofoldInputError` for malformed contents; only the commands exit.
 
 Two-strand **CPLcofold** (Python with Numba acceleration) preserves alpha-guided
 reads and beta pseudoknot ranking:
@@ -108,7 +115,7 @@ no evidence. Nested cofold uses Turner energies; cofold pseudoknots use an
 explicitly **experimental Turner/DP ranking heuristic**, reported in each
 candidate's `details["energy_metadata"]`. Invalid two-strand input raises
 `cplfold.CofoldInputError` (a `ValueError`).
-See [the cofold API, reads coordinates, and model limitations](../../docs/cplfold-python.md#two-strand-cplcofold-python-and-numba).
+See [the cofold API, reads coordinates, and model limitations](https://github.com/Vicky-0256/hyb2/blob/main/docs/cplfold-python.md#two-strand-cplcofold-python-and-numba).
 
 ### Command Line
 
@@ -126,7 +133,8 @@ python -m cplfold.cli -s SEQUENCE -o results.txt
 python -m cplfold.cli -s 'GGGG&CCCC' --mode standard
 ```
 
-A pip install provides the same command as `cplfold`. In Hyb2, `bin/cplfold`
+A pip install provides the same command as `cplfold`, and `cplcofold`, which
+requires two strands and accepts two-record FASTA. In Hyb2, `bin/cplfold`
 and `bin/cplcofold` add an input-length limit and a private Numba cache.
 
 ### Energy-only API

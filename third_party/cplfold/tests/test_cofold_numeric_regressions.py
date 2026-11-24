@@ -174,7 +174,8 @@ class CofoldFastaPreambleTests(unittest.TestCase):
 
     def test_sequence_preamble_before_a_fasta_header_is_rejected(self):
         for contents in ("AAA\n>A\nGGG\n>B\nCCC\n", "AAA\n>A\nGGG\n"):
-            with self.subTest(contents=contents), self.assertRaisesRegex(SystemExit, "first record header"):
+            # A library error (cplfold.CofoldInputError, a ValueError), not SystemExit.
+            with self.subTest(contents=contents), self.assertRaisesRegex(ValueError, "first record header"):
                 self.read(contents)
 
     def test_plain_sequences_and_valid_fasta_remain_supported(self):

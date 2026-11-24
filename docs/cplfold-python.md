@@ -191,9 +191,10 @@ Run the full vendored regression suite and a real-Numba smoke test with:
 python scripts/verify-cplfold-python.py
 ```
 
-The current `--max-phase2` option is retained for upstream CLI compatibility,
-but upstream commit `24bab52` does not use it to enumerate multiple Phase 2
-structures. Do not interpret that option as an effective search limit yet.
+For one strand, `--max-phase2` (and `max_phase2` of `cplfold.fold`) is
+validated but has no effect: the single-strand route runs exactly one
+constrained Phase 2 fold per Phase 1 structure, as upstream commit `24bab52`
+does. Only the two-strand route uses it as a search limit (below).
 
 ## Two-strand CPLcofold (Python and Numba)
 
@@ -267,9 +268,17 @@ ordinary = cplfold.fold(a, partner=b, pseudoknots=False, max_phase1=1, energy_de
 ```
 
 `cplfold.fold(a + "&" + b, ...)` folds the same two strands. `fold` returns
-`cplfold.Prediction` objects; `as_dict()` gives the original candidate dict.
-It never prints or writes files; invalid two-strand input raises
+`cplfold.Prediction` objects; `details` is a read-only view whose nested
+dicts are read-only mappings and lists are tuples, and `as_dict()` gives a
+plain copy of the original candidate dict (same keys and order).
+It never prints or writes files; invalid input raises
 `cplfold.CofoldInputError`, a `ValueError`.
+`cplfold.bonus.load_bonus_matrix_file` and `cplfold.sequence.read_sequence_file`
+raise `OSError` (`FileNotFoundError` for a missing file) or
+`cplfold.CofoldInputError` for malformed contents; they never exit the
+process. The commands report the same messages with exit status 1.
+`cplfold.models.DEFAULT_MODELS` and `cplfold.sequence.ALIASES` are read-only
+mappings; both routes read the default model when they are called.
 
 The structure helpers in `cplfold._internal.single` (private) accept compact
 or `&`-marked structures.

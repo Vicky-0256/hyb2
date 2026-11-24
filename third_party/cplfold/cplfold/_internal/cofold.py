@@ -43,7 +43,7 @@ def cofold(sequence_a, sequence_b, *, mode=None, **kwargs):
 
 
 def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
-                     max_phase1=10, max_phase2=5, energy_model=DEFAULT_MODELS["cplcofold"],
+                     max_phase1=10, max_phase2=5, energy_model=None,
                      output_file=None, verbose=True, lv=True, bonus_matrix=None,
                      alpha=0.0, beta=0.0, allow_pseudoknot=True):
     """Two-phase cofold search; every generated candidate is scored as a whole.
@@ -52,7 +52,10 @@ def two_phase_cofold(seq, cutpoint=None, beam_size=100, energy_delta=5.0,
     Beta retains the original CPLfold ranking rule for crossing candidates:
     E_effective = E_merged + beta * E_phase1. It does not alter physical energy.
     ``max_phase2`` is effective here, unlike the legacy single-strand path.
+    ``energy_model=None`` reads ``DEFAULT_MODELS["cplcofold"]`` at call time.
     """
+    if energy_model is None:
+        energy_model = DEFAULT_MODELS["cplcofold"]
     inputs = validate_fold_inputs(
         seq, cutpoint, two_strands=True, lv=lv, beam_size=beam_size, energy_delta=energy_delta,
         max_phase1=max_phase1, max_phase2=max_phase2, energy_model=energy_model,

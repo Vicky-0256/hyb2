@@ -17,13 +17,24 @@ __version__ = "1.0.0"
 __all__ = ["fold", "Prediction", "CofoldInputError", "__version__"]
 
 
+def _frozen(value):
+    """Read-only copy of a candidate value: mappings become proxies, lists tuples."""
+    if isinstance(value, dict):
+        return _MappingProxyType({key: _frozen(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen(item) for item in value)
+    return value
+
+
 class Prediction:
     """Immutable view of one candidate structure returned by :func:`fold`."""
 
-    __slots__ = ("_data",)
+    __slots__ = ("_data", "_details")
 
     def __init__(self, data):
-        object.__setattr__(self, "_data", dict(data))
+        data = _deepcopy(dict(data))  # independent of the caller's dict and its nested values
+        object.__setattr__(self, "_data", data)
+        object.__setattr__(self, "_details", _frozen(data))
 
     def __setattr__(self, name, value):
         raise AttributeError("Prediction is immutable")
@@ -47,8 +58,12 @@ class Prediction:
 
     @property
     def details(self):
-        """Read-only mapping of every original key (two-strand candidates have more)."""
-        return _MappingProxyType(self._data)
+        """Read-only mapping of every original key (two-strand candidates have more).
+
+        Nested values are read-only too: dicts are mappings, lists are tuples.
+        Use :meth:`as_dict` for a plain, mutable copy.
+        """
+        return self._details
 
     def as_dict(self):
         """A fresh copy of the original candidate dict: same keys, same order."""
@@ -66,6 +81,11 @@ def fold(sequence, *, partner=None, pseudoknots=True, energy_model=None,
     matrix over the sequence without separators, scaled by ``alpha``. Both routes
     normalise and validate input the same way; invalid input raises
     ``CofoldInputError``, a ``ValueError``. Never prints and never writes files.
+
+    ``max_phase2`` (validated as an integer >= 1 on both routes) limits the
+    constrained Phase 2 candidates per Phase 1 structure only when ``partner``
+    or ``&`` gives two strands. One strand runs exactly one Phase 2 fold per
+    Phase 1 structure, whatever ``max_phase2`` is.
     """
     options = dict(beam_size=beam_size, energy_delta=energy_delta, max_phase1=max_phase1,
                    max_phase2=max_phase2, bonus_matrix=bonus, alpha=alpha, beta=beta,
@@ -85,6 +105,6 @@ def fold(sequence, *, partner=None, pseudoknots=True, energy_model=None,
 def __getattr__(name):
     # Keep ``import cplfold.models`` free of NumPy/Numba: load the folding code on use.
     if name == "CofoldInputError":
-        from ._internal.cofold import CofoldInputError
+        from ._internal.cli_input import CofoldInputError
         return CofoldInputError
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

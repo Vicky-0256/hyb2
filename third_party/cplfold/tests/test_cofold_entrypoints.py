@@ -69,8 +69,10 @@ class CofoldEntryContractTests(unittest.TestCase):
     def test_distinct_model_defaults(self):
         if str(ROOT / "pipeline") not in sys.path:
             sys.path.insert(0, str(ROOT / "pipeline"))
-        from hyb2analysis.engine_parameters import DEFAULT_MODELS, engine_parameters
-        with mock.patch.dict(DEFAULT_MODELS, cplfold="CC09", cplcofold="DP03"):
+        from hyb2analysis.engine_parameters import engine_parameters
+        models = importlib.import_module("cplfold.models")
+        # DEFAULT_MODELS is a read-only view; patch its private source.
+        with mock.patch.dict(models._DEFAULT_MODELS, cplfold="CC09", cplcofold="DP03"):
             for host in ("desktop", "web"):
                 engines = engine_parameters(host)
                 self.assertEqual(engines["cplfold"]["defaultModel"], "CC09")
@@ -78,8 +80,32 @@ class CofoldEntryContractTests(unittest.TestCase):
             self.assertEqual(self.dispatch(["-s", "GAAAC"])["energy_model"], "CC09")
             self.assertEqual(self.dispatch(["-s", "GG&CC"])["energy_model"], "DP03")
             self.assertEqual(self.dispatch(["-s", "GG&CC", "--model", "DP09"], True)["energy_model"], "DP09")
-        with mock.patch.dict(DEFAULT_MODELS, cplcofold="CC09"), self.assertRaisesRegex(ValueError, "cplcofold.*CC09"):
+        with mock.patch.dict(models._DEFAULT_MODELS, cplcofold="CC09"), self.assertRaisesRegex(ValueError, "cplcofold.*CC09"):
             engine_parameters("web")
+
+    def test_public_mappings_are_read_only_and_defaults_are_read_at_call_time(self):
+        models = importlib.import_module("cplfold.models")
+        sequence = importlib.import_module("cplfold.sequence")
+        for mapping, key in ((models.DEFAULT_MODELS, "cplfold"), (sequence.ALIASES, "T")):
+            with self.subTest(key=key):
+                self.assertNotIsInstance(mapping, dict)  # (a dict would be changed below)
+                with self.assertRaises(TypeError):
+                    mapping[key] = "X"
+                with self.assertRaises(TypeError):
+                    del mapping[key]
+        self.assertEqual(dict(models.DEFAULT_MODELS), {"cplfold": "DP09", "cplcofold": "DP09"})
+        self.assertEqual(dict(sequence.ALIASES), {"T": "U"})
+        # Both routes, and the cofold function's own default, see a patched source.
+        with mock.patch.dict(models._DEFAULT_MODELS, cplfold="CC09", cplcofold="DP03"), \
+             mock.patch.object(self.api, "validate_fold_inputs", side_effect=self.cofold.CofoldInputError("stop")) as single, \
+             mock.patch.object(self.cofold, "validate_fold_inputs", side_effect=self.cofold.CofoldInputError("stop")) as pair:
+            for call in (lambda: self.api.two_phase_pseudoknot_fold("GGGAAACCC"),
+                         lambda: self.cofold.two_phase_cofold("GGGG&CCCC"),
+                         lambda: self.cofold.cofold("GGGG", "CCCC")):
+                with self.assertRaises(self.cofold.CofoldInputError):
+                    call()
+        self.assertEqual(single.call_args.kwargs["energy_model"], "CC09")
+        self.assertEqual([call.kwargs["energy_model"] for call in pair.call_args_list], ["DP03", "DP03"])
 
     def test_modes_have_explicit_overrides_and_legacy_flag_keeps_candidate_defaults(self):
         standard = self.dispatch(["-s", "GG&CC", "--mode", "standard"], True)
@@ -155,6 +181,51 @@ class CofoldEntryContractTests(unittest.TestCase):
             path.write_text(body)
             with self.subTest(body=body):
                 self.reject(["-s", "GG&CC", "--bonus-matrix-file", str(path)], error)
+
+    def test_file_readers_raise_library_errors_not_system_exit(self):
+        bonus = importlib.import_module("cplfold.bonus")
+        sequence = importlib.import_module("cplfold.sequence")
+        error_type = importlib.import_module("cplfold").CofoldInputError
+        missing = self.directory / "missing"
+        latin = self.directory / "latin.fa"
+        latin.write_bytes(b">x\nGG\xff\n")
+        bad = self.directory / "bad.tsv"
+        bad.write_text("1\t4\tNaN\n")
+        three = self.directory / "three.fa"
+        three.write_text(">a\nGG\n>b\nCC\n>c\nAA\n")
+        cases = (
+            (lambda: bonus.load_bonus_matrix_file(str(missing), 4), FileNotFoundError,
+             f"CPLfold bonus matrix file was not found: {missing}"),
+            (lambda: bonus.load_bonus_matrix_file(str(self.directory), 4), OSError,
+             f"Could not read CPLfold bonus matrix file {self.directory}: "),
+            (lambda: bonus.load_bonus_matrix_file(str(bad), 4), error_type,
+             "CPLfold bonus matrix line 1 contains a non-finite score"),
+            (lambda: sequence.read_sequence_file(missing), FileNotFoundError,
+             f"CPLfold sequence file was not found: {missing}"),
+            (lambda: sequence.read_sequence_file(latin), error_type,
+             f"CPLfold sequence file is not valid UTF-8: {latin}"),
+            (lambda: sequence.read_sequence_file(three, cofold=True), error_type,
+             "Cofold sequence files must contain exactly two FASTA records"),
+        )
+        for call, expected, message in cases:
+            with self.subTest(message=message):
+                try:
+                    call()
+                except Exception as error:  # SystemExit would escape this handler
+                    self.assertIsInstance(error, expected)
+                    self.assertTrue(str(error).startswith(message), str(error))
+                else:
+                    self.fail("no error")
+        # The command still reports the message alone and exits with status 1.
+        for arguments, message in (
+            (["-s", "GG&CC", "--bonus-matrix-file", str(missing)], f"CPLfold bonus matrix file was not found: {missing}"),
+            (["--sequence-file", str(three)], "Cofold sequence files must contain exactly two FASTA records"),
+        ):
+            with self.subTest(arguments=arguments), \
+                 mock.patch.object(self.cli, "two_phase_pseudoknot_fold") as fold, self.assertRaises(SystemExit) as raised:
+                self.cli.main(arguments, cofold_entry=True)
+            fold.assert_not_called()
+            self.assertEqual(raised.exception.code, message)
 
     def test_only_expected_input_errors_are_simplified(self):
         for error in (RuntimeError("internal defect"), ValueError("internal value defect")):
@@ -280,6 +351,40 @@ class SharedInputValidationTests(unittest.TestCase):
                 with self.subTest(bonus=bonus), self.assertRaises(self.cplfold.CofoldInputError):
                     self.cplfold.fold(self.SINGLE, bonus=np.full((9, 9), bonus), alpha=alpha)
             search.assert_not_called()
+
+    def test_prediction_details_are_read_only_at_every_level(self):
+        for route, call in self.routes(max_phase1=2, max_phase2=1, beam_size=20):
+            with self.subTest(route=route):
+                prediction = call()[0]
+                original = prediction.as_dict()
+                details = prediction.details
+                self.assertEqual(list(details), list(original))
+                for key, value in details.items():
+                    with self.assertRaises(TypeError):
+                        details[key] = value
+                    if isinstance(original[key], dict):
+                        with self.assertRaises(TypeError):
+                            value["injected"] = 1
+                    if isinstance(original[key], list):
+                        self.assertIsInstance(value, tuple)
+                self.assertEqual(prediction.as_dict(), original)
+                self.assertEqual(type(prediction.as_dict()), dict)
+                copy = prediction.as_dict()
+                for value in copy.values():
+                    if isinstance(value, dict):
+                        value["injected"] = 1
+                self.assertEqual(prediction.as_dict(), original)
+        prediction = self.cplfold.fold(*self.PAIR[:1], partner=self.PAIR[1])[0]
+        metadata = prediction.details["energy_metadata"]
+        with self.assertRaises(TypeError):
+            metadata["energy_kind"] = "changed"
+        self.assertIsInstance(prediction.as_dict()["energy_metadata"], dict)
+        self.assertIsInstance(prediction.as_dict()["strand_lengths"], list)
+        source = {"structure": "()", "nested": {"values": [1, 2]}}
+        held = self.cplfold.Prediction(source)
+        source["nested"]["values"].append(3)
+        self.assertEqual(held.as_dict(), {"structure": "()", "nested": {"values": [1, 2]}})
+        self.assertEqual(held.details["nested"]["values"], (1, 2))
 
     def test_both_routes_normalise_case_whitespace_and_model_name(self):
         with mock.patch.object(self.parser_module.BeamCKYParserHyper, "parse_subopt", return_value=[("(((...)))", 1.0)]) as search:

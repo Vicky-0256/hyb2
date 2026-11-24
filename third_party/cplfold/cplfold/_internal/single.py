@@ -428,7 +428,8 @@ def two_phase_pseudoknot_fold(seq: str,
         beam_size: LinearFold beam size
         energy_delta: Energy range for suboptimal structures
         max_phase1: Maximum Phase 1 structures to process
-        max_phase2: Maximum Phase 2 structures per Phase 1
+        max_phase2: Maximum Phase 2 structures per Phase 1 for two strands; validated
+                    but unused for one strand, which runs exactly one Phase 2 fold
         energy_model: Pseudoknot energy model (DP03, DP09, CC06, CC09, RE); used only when
                       allow_pseudoknot is True. Pseudoknot-free runs rank with Turner 2004.
         output_file: Optional output file path

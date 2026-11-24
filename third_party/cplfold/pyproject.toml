@@ -10,13 +10,15 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "GPL-3.0-or-later; see THIRD_PARTY_NOTICES.md for the LinearFold- and HotKnots-derived parts" }
 authors = [{ name = "Ke Wang" }]
-dependencies = ["numpy", "numba"]
+# Minimums: the tested pins (NumPy 1.24.4, Numba 0.58.1; the browser build uses NumPy 2.2).
+dependencies = ["numpy>=1.24", "numba>=0.58"]
 
 [project.optional-dependencies]
 vienna = ["ViennaRNA"]
 
 [project.scripts]
 cplfold = "cplfold.cli:main"
+cplcofold = "cplfold.cli:cofold_main"
 
 [tool.setuptools]
 packages = ["cplfold", "cplfold._internal"]

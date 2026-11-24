@@ -1,6 +1,7 @@
 """Command-line interface for CPLfold (``cplfold``) and CPLcofold (``cplcofold``).
 
-Run as ``python -m cplfold.cli`` or through the ``cplfold`` console script.
+Run as ``python -m cplfold.cli`` or through the ``cplfold`` and ``cplcofold``
+console scripts (:func:`main` and :func:`cofold_main`).
 """
 
 import sys
@@ -100,8 +101,13 @@ Energy models:
 
     args = parser.parse_args(argv)
 
-    sequence = (read_sequence_file(args.sequence_file, cofold=cofold_entry or args.cofold)
-                if args.sequence_file is not None else args.sequence)
+    if args.sequence_file is None:
+        sequence = args.sequence
+    else:
+        try:
+            sequence = read_sequence_file(args.sequence_file, cofold=cofold_entry or args.cofold)
+        except (CofoldInputError, OSError) as error:
+            raise SystemExit(str(error)) from error  # the message alone, exit status 1
     if args.sequence_two is not None:
         if '&' in sequence or '&' in args.sequence_two:
             parser.error('--sequence-two requires two individual sequences without separators')
@@ -146,7 +152,10 @@ Energy models:
 
     bonus_matrix = None
     if args.bonus_matrix_file:
-        bonus_matrix = load_bonus_matrix_file(args.bonus_matrix_file, len(sequence))
+        try:
+            bonus_matrix = load_bonus_matrix_file(args.bonus_matrix_file, len(sequence))
+        except (CofoldInputError, OSError) as error:
+            raise SystemExit(str(error)) from error
 
     try:
         results = two_phase_pseudoknot_fold(
@@ -161,6 +170,11 @@ Energy models:
     # A completed fold is successful even when no pseudoknot candidate wins.
     # Keep a non-zero status only for the unexpected empty-result case.
     return 0 if results else 1
+
+
+def cofold_main(argv=None):
+    """The ``cplcofold`` command: :func:`main` with ``cofold_entry=True``."""
+    return main(argv, cofold_entry=True)
 
 
 if __name__ == '__main__':

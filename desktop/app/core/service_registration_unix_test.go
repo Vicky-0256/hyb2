@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -359,5 +360,59 @@ func TestShutdownLeavesRegistrationToTheNextOpen(t *testing.T) {
 		if snap, err := reopened.TaskStatus(project, id); err != nil || snap["registration_status"] != "registered" {
 			t.Fatalf("recovered %s: %v, %v", id, snap, err)
 		}
+	}
+}
+
+// register_task_run reads status.json: while the final status is unsaved
+// (here only that write fails; the receipt is writable) the receipt stays
+// pending, and the retry that saves the status registers the real outcome
+// once, in this session.
+func TestRegistrationWaitsForTheSavedFinalStatus(t *testing.T) {
+	s := newTestService(t)
+	project := createProject(t, s)
+	var failing atomic.Bool
+	failing.Store(true)
+	s.tasks.writeStatus = func(runDir string, value any) error {
+		record, _ := value.(Obj)
+		if finishedAt, _ := record["finished_at"].(*string); failing.Load() && finishedAt != nil {
+			return errors.New("injected status write failure")
+		}
+		return writeStatus(runDir, value)
+	}
+	snap, err := s.StartTask(TaskStartRequest{ProjectPath: project, Kind: "validate_project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := snap["task_id"].(string)
+	runDir := filepath.Join(project, "runs", id)
+	if snap = waitTask(t, s, project, id, 10*time.Second); snap["status"] != "succeeded" || snap["error"] != nil {
+		t.Fatalf("task: %v", snap)
+	}
+	// Reopening runs recoverRegistrations on the in-memory (finished)
+	// snapshot; then long enough for a registration started by the finish
+	// to commit.
+	if _, err := s.OpenProject(project); err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		if receipt := readJSON(t, filepath.Join(runDir, registrationFile)); receipt["status"] != "pending" {
+			t.Fatalf("registered while status.json is %v: %v",
+				readJSON(t, filepath.Join(runDir, "status.json"))["status"], receipt)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if disk := readJSON(t, filepath.Join(runDir, "status.json")); disk["status"] != "running" {
+		t.Fatalf("fault did not keep the final status unsaved: %v", disk)
+	}
+	failing.Store(false)
+	s.tasks.SetBudget(s.tasks.Budget()) // the scheduling pass retries the write
+	waitRegistration(t, s, project, id, "registered")
+	entry := waitRun(t, project, id, "succeeded")
+	if entry["error"] != nil {
+		t.Fatalf("registered with an error: %v", entry)
+	}
+	runs := readJSON(t, filepath.Join(project, "project.json"))["runs"].([]any)
+	if len(runs) != 1 {
+		t.Fatalf("registered %d runs: %v", len(runs), runs)
 	}
 }

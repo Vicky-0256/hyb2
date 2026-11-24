@@ -86,6 +86,13 @@ func (s *Service) registerTask(rt *Runtime, project, id string) (bool, error) {
 	if !slices.Contains([]string{"succeeded", "failed", "cancelled", "interrupted"}, state) {
 		return false, nil
 	}
+	// register_task_run reads status.json, not this snapshot: while the
+	// final status is unsaved the receipt stays pending (the scheduler
+	// defers onFinish until its retry saves the status; else the next
+	// open's recovery registers it).
+	if disk, err := readStatusFile(id, runDir); err != nil || statusActive(disk) {
+		return false, nil
+	}
 	registration, err := readRegistration(runDir)
 	if err == nil && registration.Status == "registered" {
 		return false, nil

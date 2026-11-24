@@ -101,6 +101,11 @@ type taskState struct {
 	resumedFrom *string
 	lock        *os.File // run directory owner lock; held until finished
 	resumeLock  *os.File // original task's resume claim; same lifetime as lock
+	// afterSave is the onFinish of a task whose final status could not be
+	// saved: register_task_run reads status.json, so it is called once a
+	// retry saves it (or at shutdown).
+	afterSave   OnFinish
+	retryLogged bool // a failed retry of the unsaved final status was logged
 }
 
 // Scheduler owns the task table and the resource budget. The Tauri shell
@@ -115,6 +120,9 @@ type Scheduler struct {
 	finishes     sync.WaitGroup
 	// logf receives status writes nobody waits for (set before use).
 	logf func(format string, args ...any)
+	// writeStatus replaces the status.json write when set (tests inject
+	// faults; set before use).
+	writeStatus func(runDir string, value any) error
 }
 
 // A task leaving the table's pending/running states hands its callback to
@@ -263,8 +271,12 @@ const ownerLockFile = "owner.lock"
 // its final status is on disk. Until then the lock stays held (another
 // instance must not take the stale active record for an orphan) and
 // retryUnsavedLocked writes it again.
-func (e *taskState) persist(id string) error {
-	err := writeStatus(e.runDir, e.record(id))
+func (s *Scheduler) persist(e *taskState, id string) error {
+	write := writeStatus
+	if s.writeStatus != nil {
+		write = s.writeStatus
+	}
+	err := write(e.runDir, e.record(id))
 	if err == nil && e.finishedAt != nil {
 		e.unlock()
 	}
@@ -276,18 +288,34 @@ func (e *taskState) unsaved() bool {
 	return e.finishedAt != nil && (e.lock != nil || e.resumeLock != nil)
 }
 
+// savedFinish is a deferred onFinish whose final status is now on disk.
+type savedFinish struct {
+	project, id string
+	onFinish    OnFinish
+}
+
 // retryUnsavedLocked writes the final status of finished tasks whose last
-// write failed (mu held); it returns the errors of those still unsaved.
-func (s *Scheduler) retryUnsavedLocked() error {
+// write failed (mu held). It returns the tracked onFinish callbacks of
+// those now saved, for the caller to run without mu, and the errors of
+// those still unsaved (each task's first failed retry is also logged).
+func (s *Scheduler) retryUnsavedLocked() ([]savedFinish, error) {
+	var saved []savedFinish
 	var errs []error
 	for id, e := range s.tasks {
 		if e.unsaved() {
-			if err := e.persist(id); err != nil {
+			if err := s.persist(e, id); err != nil {
 				errs = append(errs, fmt.Errorf("task %s: %w", id, err))
+				if !e.retryLogged { // not on every scheduling pass
+					e.retryLogged = true
+					s.logf("HYB2: still cannot save the status of task %s: %v", id, err)
+				}
+			} else if e.afterSave != nil {
+				saved = append(saved, savedFinish{e.project, id, s.trackFinishLocked(e.afterSave)})
+				e.afterSave = nil
 			}
 		}
 	}
-	return errors.Join(errs...)
+	return saved, errors.Join(errs...)
 }
 
 func (e *taskState) unlock() {
@@ -710,7 +738,7 @@ func (s *Scheduler) Submit(cmd *exec.Cmd, task *Prepared, onFinish OnFinish) (Ob
 	}
 	entry.lock = lock
 	s.seq++
-	if err := entry.persist(id); err != nil {
+	if err := s.persist(entry, id); err != nil {
 		entry.unlock()
 		s.mu.Unlock()
 		_ = os.RemoveAll(task.RunDir)
@@ -806,12 +834,15 @@ func (s *Scheduler) schedule() {
 	for {
 		var monitors []started
 		var failed []started
+		var released bool // a failed launch whose status is unsaved
 		s.mu.Lock()
 		if s.shuttingDown {
 			s.mu.Unlock()
 			return
 		}
-		_ = s.retryUnsavedLocked() // retried on every later scheduling pass
+		// Retried on every later scheduling pass (failures are logged once
+		// per task by retryUnsavedLocked).
+		saved, _ := s.retryUnsavedLocked()
 		budget := s.budgetLocked()
 		var used Budget
 		var queued []queuedTask
@@ -845,11 +876,17 @@ func (s *Scheduler) schedule() {
 			if s.launch(a.id, e, p.cmd) {
 				e.onFinish = p.onFinish
 				monitors = append(monitors, started{a.id, e.project, e.runDir, e.cmd, e.exited, p.onFinish})
+			} else if e.unsaved() {
+				e.afterSave = p.onFinish // called once a retry saves the failure
+				released = true
 			} else {
 				failed = append(failed, started{id: a.id, project: e.project, onFinish: s.trackFinishLocked(p.onFinish)})
 			}
 		}
 		s.mu.Unlock()
+		for _, f := range saved {
+			f.onFinish(f.project, f.id)
+		}
 		for _, m := range monitors {
 			go s.monitor(m)
 		}
@@ -857,7 +894,7 @@ func (s *Scheduler) schedule() {
 			f.onFinish(f.project, f.id)
 		}
 		// A failed launch released its share; later tasks may fit now.
-		if len(failed) == 0 {
+		if len(failed) == 0 && !released {
 			return
 		}
 	}
@@ -912,7 +949,7 @@ func (s *Scheduler) launch(id string, e *taskState, cmd *exec.Cmd) bool {
 	e.status = "running"
 	e.cmd = cmd
 	e.exited = make(chan struct{})
-	if err := e.persist(id); err != nil {
+	if err := s.persist(e, id); err != nil {
 		_ = killTree(cmd.Process.Pid)
 		_ = cmd.Wait()
 		e.cmd = nil
@@ -928,7 +965,7 @@ func (s *Scheduler) fail(id string, e *taskState, message string, now time.Time)
 	e.err = &message
 	e.finished = now
 	e.finishedAt = &stamp
-	if err := e.persist(id); err != nil {
+	if err := s.persist(e, id); err != nil {
 		s.logf("HYB2: cannot save the status of task %s: %v", id, err)
 	}
 }
@@ -1002,14 +1039,21 @@ func (s *Scheduler) monitor(m started) {
 	stamp := iso(now)
 	e.finished = now
 	e.finishedAt = &stamp
-	if err := e.persist(m.id); err != nil {
-		message := err.Error()
-		e.err = &message
+	// A write error is not the task's error (it would be saved with the
+	// final status by the retry): it is logged, and onFinish waits for the
+	// retry that saves the status.
+	if err := s.persist(e, m.id); err != nil {
+		s.logf("HYB2: cannot save the status of task %s: %v", m.id, err)
+		e.afterSave = m.onFinish
+		m.onFinish = nil
+	} else {
+		m.onFinish = s.trackFinishLocked(m.onFinish)
 	}
-	m.onFinish = s.trackFinishLocked(m.onFinish)
 	s.mu.Unlock()
 	s.schedule()
-	m.onFinish(m.project, m.id)
+	if m.onFinish != nil {
+		m.onFinish(m.project, m.id)
+	}
 }
 
 func resultError(result any) string {
@@ -1226,7 +1270,8 @@ func (s *Scheduler) Cancel(id, project string) (Obj, error) {
 		e.err = &message
 		e.finished = now
 		e.finishedAt = &stamp
-		if err := e.persist(id); err != nil {
+		if err := s.persist(e, id); err != nil {
+			e.afterSave = p.onFinish // called once a retry saves it
 			s.mu.Unlock()
 			return nil, err
 		}
@@ -1244,7 +1289,7 @@ func (s *Scheduler) Cancel(id, project string) (Obj, error) {
 			// between cancelled and succeeded.
 			e.status = "cancelling"
 			e.err = &message
-			if err := e.persist(id); err != nil {
+			if err := s.persist(e, id); err != nil {
 				s.mu.Unlock()
 				return nil, err
 			}
@@ -1293,14 +1338,18 @@ func (s *Scheduler) ShutdownAll() {
 		e.finishedAt = &stamp
 		// On failure the owner lock stays held until the process exits;
 		// the next reader then marks the record interrupted.
-		if err := e.persist(id); err != nil {
+		if err := s.persist(e, id); err != nil {
 			s.logf("HYB2: cannot save the status of task %s: %v", id, err)
 		}
 	}
 	s.mu.Lock()
 	s.shuttingDown = true
-	if err := s.retryUnsavedLocked(); err != nil {
+	saved, err := s.retryUnsavedLocked()
+	if err != nil {
 		s.logf("HYB2: cannot save task status: %v", err)
+	}
+	for _, f := range saved {
+		finishes = append(finishes, finish(f))
 	}
 	for id, e := range s.tasks {
 		switch {
@@ -1318,6 +1367,11 @@ func (s *Scheduler) ShutdownAll() {
 			// Taken from the monitor, which now only reaps the child.
 			e.cmd = nil
 			running = append(running, &taken{id: id, e: e, exited: e.exited})
+		case e.afterSave != nil:
+			// Still unsaved: the next open registers what the next reader
+			// finds on disk once this process (the lock owner) exits.
+			finishes = append(finishes, finish{e.project, id, s.trackFinishLocked(e.afterSave)})
+			e.afterSave = nil
 		}
 	}
 	s.mu.Unlock()

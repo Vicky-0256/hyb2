@@ -6,7 +6,7 @@ Hyb2's own code is GPL-3.0-or-later ([`LICENSE`](LICENSE)). This file lists the 
 
 | Component | Location | Licence |
 |---|---|---|
-| VARNA (source and the two jars) | `VARNA/` | GPL-3.0 ([`VARNA/LICENSE`](VARNA/LICENSE)) |
+| VARNA 3.9, unmodified (source and the two jars; [upstream](third_party/varna/UPSTREAM.md)) | `third_party/varna/` | GPL-3.0 ([`LICENSE`](third_party/varna/LICENSE)) |
 | IRIS, adapted from [JY-Zhou/IRIS](https://github.com/JY-Zhou/IRIS) | `third_party/iris/`, `web/iris-core.js` | GPL-3.0 ([`third_party/iris/LICENSE`](third_party/iris/LICENSE)) |
 | Parsers derived from LinearFold and LinearCoFold | `third_party/cplfold/cplfold/_internal/parser.py`, `cofold_parser.py` | LinearFold and LinearCoFold terms: free use and modification, no redistribution fees beyond media costs, author credit required ([LinearFold](third_party/cplfold/LICENSES/LinearFold-LICENSE.txt), [LinearCoFold](third_party/cplfold/LICENSES/LinearCoFold-LICENSE.txt)) |
 | Energy evaluator and parameters derived from HotKnots 2.0 | `third_party/cplfold/cplfold/_internal/hotknots_energy.py`, `energy_params/` | GPL-2.0-or-later ([text](third_party/cplfold/LICENSES/GPL-2.0-or-later.txt)) |

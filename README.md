@@ -74,6 +74,11 @@ cd hyb2/
 bin/hyb2_install_macOS-arm
 ```
 
+VARNA is in `third_party/varna/` (it was `VARNA/` before November 2026). If you installed an earlier version, point `bin/VARNA.dir` at the new jar after updating:
+```bash
+printf '%s\n' "$PWD/third_party/varna/build/jar/VARNAcmd.jar" > bin/VARNA.dir
+```
+
 ## Entry Points
 
 The Hyb2 command-line pipeline is `hyb2pipe` in `pipeline/`. It turns FASTQ(.gz), FASTA or SAM input into `.hyb` files in pure Python (3.9+), with no Perl, awk or sed, so it also runs on Windows. The desktop app runs the same code for every sample. Run it from the repository root:

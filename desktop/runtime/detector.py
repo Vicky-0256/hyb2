@@ -314,8 +314,8 @@ class RuntimeDetector:
             ("hyb2.fold", "bin/hyb2_fold", "script"),
             ("hyb2.sam_to_hyb", "bin/sam2hyb", "script"),
             ("cplfold.native", "bin/cplfold", "script"),
-            ("varna.jar", "VARNA/build/jar/VARNA.jar", "jar"),
-            ("varna.command.jar", "VARNA/build/jar/VARNAcmd.jar", "jar"),
+            ("varna.jar", "third_party/varna/build/jar/VARNA.jar", "jar"),
+            ("varna.command.jar", "third_party/varna/build/jar/VARNAcmd.jar", "jar"),
         )
         for probe_id, relative, kind in candidates:
             path = self.repo_root / relative

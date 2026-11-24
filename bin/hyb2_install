@@ -6,7 +6,7 @@ cd -- "$(dirname -- "$0")/.."
 # Step 1: Copy the conda environment file and record the VARNAcmd.jar path
 # (bin/VARNAcmd.sh prints bin/VARNA.dir)
 cp bin/environment.yml ./environment.yml
-printf '%s\n' "$PWD/VARNA/build/jar/VARNAcmd.jar" > bin/VARNA.dir
+printf '%s\n' "$PWD/third_party/varna/build/jar/VARNAcmd.jar" > bin/VARNA.dir
 
 # Step 2: Add hyb2 to PATH in the shell's configuration file (once)
 add_line() {

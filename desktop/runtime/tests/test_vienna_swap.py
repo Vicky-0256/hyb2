@@ -219,7 +219,7 @@ SCAN = re.compile(r"hybrid[-_ ]?min|HYBRID_MIN", re.IGNORECASE)
 # before the replacement (an old project's hybrid-min path, a result's old kernel
 # name), each marked with this comment.
 LEGACY_MARK = "legacy-name:"
-SCAN_SKIP_PREFIXES = ("VARNA/", "desktop/runtime/tests/vienna_swap/", "third_party/cplfold/LICENSES/")
+SCAN_SKIP_PREFIXES = ("third_party/varna/", "desktop/runtime/tests/vienna_swap/", "third_party/cplfold/LICENSES/")
 SCAN_SKIP_FILES = {"desktop/runtime/tests/test_vienna_swap.py", "scripts/check-vienna-swap.sh"}
 SCAN_SKIP_SUFFIXES = (".md", ".txt", ".pdf", ".png", ".svg", ".class", ".jar")
 

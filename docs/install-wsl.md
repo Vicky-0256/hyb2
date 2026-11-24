@@ -9,8 +9,8 @@ On Windows, Hyb2 runs in the Windows Subsystem for Linux (WSL). The prerequisite
 After running `bin/hyb2_install`, do these steps by hand:
 
 1. Make sure Java is installed in `C:\Program Files\Java`.
-2. Copy the `VARNA/` folder somewhere on Windows, such as `C:\VARNA`.
-3. Change the contents of `bin/VARNA.dir` from the default (for example `/home/user/hyb2/VARNA/build/jar/VARNAcmd.jar`) to `C:\VARNA\build\jar\VARNAcmd.jar`.
+2. Copy the `third_party/varna/` folder somewhere on Windows, such as `C:\VARNA`.
+3. Change the contents of `bin/VARNA.dir` from the default (for example `/home/user/hyb2/third_party/varna/build/jar/VARNAcmd.jar`) to `C:\VARNA\build\jar\VARNAcmd.jar`.
 
 The commands are then the same as on Linux.
 

@@ -49,7 +49,7 @@ The gene ranking used to break ties between a read's hybrids needs the whole
 BLAST table; it is only built when the reference has more than one sequence
 (with a single sequence the ranking cannot change the result).
 
-`bench/bench.py` measures wall time, peak RSS and temp disk of one run;
+`scripts/benchmarks/bench.py` measures wall time, peak RSS and temp disk of one run;
 `tests/test_zafr_regression.py` checks a 2M-read ZAFR_REP1 subset against
 a golden made before the streaming rewrite (needs `zika_files/`).
 

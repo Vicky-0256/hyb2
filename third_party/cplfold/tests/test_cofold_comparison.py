@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[3]
 def load_comparator():
     name = "cplcofold_comparison_regression_target"
     if name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / "compare-cplcofold-linearcofold.py")
+        spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / "benchmarks" / "compare-cplcofold-linearcofold.py")
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
         spec.loader.exec_module(module)

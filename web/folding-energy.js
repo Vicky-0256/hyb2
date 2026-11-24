@@ -352,7 +352,7 @@
   // decimals; NaN when the arms form no pair (RNAduplex's ".&.")
   function duplex(module, one, two, temperature) {
     if (typeof module._hyb2_vienna_duplex !== "function") {
-      throw new Error("This ViennaRNA WebAssembly build has no RNAduplex (hyb2_vienna_duplex): rebuild it with scripts/build-vienna-wasm.sh.");
+      throw new Error("This ViennaRNA WebAssembly build has no RNAduplex (hyb2_vienna_duplex): rebuild it with scripts/build/build-vienna-wasm.sh.");
     }
     let p1 = 0;
     let p2 = 0;

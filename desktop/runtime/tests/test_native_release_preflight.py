@@ -52,7 +52,7 @@ class PackagedSourceTests(unittest.TestCase):
         self.native = self.root / 'native'
         self.stage = load_stage()
         self.verify = load_script(CHECK)
-        self.web = load_script(ROOT.parent / 'scripts' / 'bundle_sources.py')
+        self.web = load_script(ROOT.parent / 'scripts' / 'build' / 'bundle_sources.py')
         for directory in self.stage.SOURCE_DIRS:
             (self.repo / directory).mkdir(parents=True)
         for name in (*self.stage.SOURCE_FILES, *self.web.NOTICE_PATHS):
@@ -447,8 +447,8 @@ class PackagedSourceTests(unittest.TestCase):
             self.browser_tool(self.root / 'browser', self.root / 'assets', sha=head, error=f'not Git mode 160000: {name}')
 
     def browser_tool(self, *args, sha=None, error=None):
-        script = self.repo / 'scripts' / 'bundle_sources.py'
-        script.parent.mkdir(exist_ok=True)
+        script = self.repo / 'scripts' / 'build' / 'bundle_sources.py'
+        script.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.web.__file__, script)
         env = os.environ.copy()
         env.pop('GITHUB_SHA', None)

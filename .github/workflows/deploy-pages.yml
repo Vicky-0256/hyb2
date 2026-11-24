@@ -68,7 +68,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          node scripts/write-releases.mjs
+          node scripts/build/write-releases.mjs
           echo "sha256=$(sha256sum web/releases.js | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
       - name: Build pinned ViennaRNA WebAssembly engine
@@ -80,7 +80,7 @@ jobs:
           "$hyb2_emsdk_directory/emsdk" install "$EMSDK_VERSION"
           "$hyb2_emsdk_directory/emsdk" activate "$EMSDK_VERSION"
           source "$hyb2_emsdk_directory/emsdk_env.sh"
-          bash scripts/build-vienna-wasm.sh
+          bash scripts/build/build-vienna-wasm.sh
 
       - name: Set up Python 3.13 for the Pyodide build
         id: setup-python
@@ -95,14 +95,14 @@ jobs:
             .build-tools/pyodide-xbuildenv
           # the exact Python (the venv links to it) and the pins only, so an
           # edit elsewhere in the build script keeps the cache
-          key: pyodide-toolchain-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('scripts/pyodide-toolchain.env', 'scripts/pyodide-build-requirements.txt') }}
+          key: pyodide-toolchain-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('scripts/build/pyodide-toolchain.env', 'scripts/build/pyodide-build-requirements.txt') }}
       - name: Build the ViennaRNA Pyodide wheel
         run: |
-          HYB2_PYTHON313="$(command -v python3.13 || command -v python3)" bash scripts/build-vienna-pyodide.sh
+          HYB2_PYTHON313="$(command -v python3.13 || command -v python3)" bash scripts/build/build-vienna-pyodide.sh
 
       - name: Build pinned browser CPLfold runtime
         run: |
-          bash scripts/build-cplfold-web.sh
+          bash scripts/build/build-cplfold-web.sh
           test -s web/vendor/pyodide-cplfold/pyodide.mjs
           test -s web/vendor/pyodide-cplfold/pyodide.asm.wasm
           test -s web/vendor/pyodide-cplfold/numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl
@@ -114,7 +114,7 @@ jobs:
       # The browser checks read the source URLs, so they run before versioning.
       - name: Verify browser engines and contracts
         run: |
-          bash scripts/verify-browser-release.sh
+          bash scripts/verify/verify-browser-release.sh
 
       - name: Version static assets for browser cache refresh
         run: |
@@ -179,7 +179,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_CATALOG_SHA256: ${{ needs.build.outputs.release_catalog_sha256 }}
-        run: node scripts/write-releases.mjs --check-main-deployment
+        run: node scripts/build/write-releases.mjs --check-main-deployment
       - name: Deploy the fully verified main build
         id: deployment
         if: steps.release-catalog.outputs.current == 'true'

@@ -47,7 +47,7 @@ FORCED_REFERENCE_CASES = (
 
 def _load_modules():
     # Existing tests use the same shim.  Real Numba compilation is tested in a
-    # fresh interpreter by scripts/verify-cplcofold-python.py.
+    # fresh interpreter by scripts/verify/verify-cplcofold-python.py.
     if "numba" not in sys.modules:
         shim = types.ModuleType("numba")
 

@@ -8,7 +8,7 @@ on:
       - "data/**"
       - "desktop/runtime/**"
       - "desktop/scripts/acquire-bowtie2.py"
-      - "scripts/bundle_sources.py"
+      - "scripts/build/bundle_sources.py"
       - "third_party/cplfold/**"
       - ".github/workflows/pipeline-crossplatform.yml"
   workflow_dispatch:

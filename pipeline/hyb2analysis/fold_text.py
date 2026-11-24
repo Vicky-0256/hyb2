@@ -4,7 +4,7 @@ The engine's own rules (alphabet, aliases, whitespace) come from
 :mod:`cplfold.sequence`. Hyb2 adds paste boxes that also accept one FASTA
 header and position numbers, never coordinate-bearing records or prepared
 worker requests. ``FOLD_TEXT`` is exported to the browser and desktop UIs
-(``scripts/export-support-kernels.py``) so they read text the same way.
+(``scripts/build/export-support-kernels.py``) so they read text the same way.
 """
 
 from cplfold.sequence import ALIASES, ALPHABET, WHITESPACE, clean

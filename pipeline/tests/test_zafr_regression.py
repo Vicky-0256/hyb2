@@ -16,7 +16,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-sys.path.insert(0, str(HERE.parent / "bench"))
+sys.path.insert(0, str(HERE.parents[1] / "scripts" / "benchmarks"))
 
 from hyb2pipe import Options, inputs, run  # noqa: E402
 from make_subset import find_zika_files, write_subset  # noqa: E402

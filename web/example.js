@@ -12,7 +12,7 @@
  * bin position, as bin/hyb2_compare does.  The structures are CPLfold
  * pseudoknot-free genome folds; NC_035889 gives the gene track.
  *
- * app.js reads this manifest; scripts/verify-example.cjs checks that every
+ * app.js reads this manifest; scripts/verify/verify-example.cjs checks that every
  * file exists and runs the example end to end.
  */
 (function (root) {

@@ -30,10 +30,10 @@ After conversion to double precision, `K` must be an integer from 1 to 3 and `C`
 
 ## Source distribution
 
-The file list in [`scripts/iris-cli-files.txt`](../scripts/iris-cli-files.txt) defines the **IRIS CLI only**. It includes the shared Python computation, input readers, parameter definitions and licence notices, but no Web or Desktop application sources, datasets, binaries or Git history. Use the list from the repository root to create and inspect a local archive:
+The file list in [`scripts/build/iris-cli-files.txt`](../scripts/build/iris-cli-files.txt) defines the **IRIS CLI only**. It includes the shared Python computation, input readers, parameter definitions and licence notices, but no Web or Desktop application sources, datasets, binaries or Git history. Use the list from the repository root to create and inspect a local archive:
 
 ```sh
-COPYFILE_DISABLE=1 tar -czf hyb2-iris-cli.tar.gz -T scripts/iris-cli-files.txt
+COPYFILE_DISABLE=1 tar -czf hyb2-iris-cli.tar.gz -T scripts/build/iris-cli-files.txt
 tar -tzf hyb2-iris-cli.tar.gz
 ```
 

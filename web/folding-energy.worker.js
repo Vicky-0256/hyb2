@@ -25,7 +25,7 @@ function getEngine() {
       try {
         importScripts(ENGINE_GLUE_URL);
       } catch (error) {
-        throw new Error("ViennaRNA WebAssembly assets are missing at " + ENGINE_GLUE_URL + ". Build them with scripts/build-vienna-wasm.sh.");
+        throw new Error("ViennaRNA WebAssembly assets are missing at " + ENGINE_GLUE_URL + ". Build them with scripts/build/build-vienna-wasm.sh.");
       }
       if (typeof self.createHyb2Vienna !== "function") {
         throw new Error("The ViennaRNA WebAssembly loader did not expose the expected folding module.");

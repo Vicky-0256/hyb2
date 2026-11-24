@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / 'scripts'))
+sys.path.insert(0, str(ROOT / 'scripts' / 'build'))
 from bundle_sources import CPLFOLD_SOURCE_DIRS, REQUIRED_FOLD_SOURCES, package_build_commit, selected_files
 
 # Repository sources copied into every runtime (verify-native-release checks they are current).

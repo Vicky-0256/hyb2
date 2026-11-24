@@ -2,7 +2,7 @@
 
 This directory records the feasibility evidence collected on 2026-09-04. It intentionally does not contain a deployable WebR or DESeq2 runtime yet.
 
-A manual browser smoke used the official WebR v0.6.0 release tarball (its URL and SHA-256 are locked in `runtime-smoke-result.json`). It started base R 4.6.0 from an ordinary local static HTTP origin with the `PostMessage` channel, evaluated a numerical expression, and confirmed that the stable package repository did not advertise DESeq2. The exact harness is in `scripts/webr-smoke/`.
+A manual browser smoke used the official WebR v0.6.0 release tarball (its URL and SHA-256 are locked in `runtime-smoke-result.json`). It started base R 4.6.0 from an ordinary local static HTTP origin with the `PostMessage` channel, evaluated a numerical expression, and confirmed that the stable package repository did not advertise DESeq2. The exact harness is in `scripts/verify/webr-smoke/`.
 
 This is feasibility evidence, not a production release check: the WebR runtime is not vendored into `web/`, and the deployment workflow does not rerun that browser smoke. A separate dependency-resolution probe used the R-universe **development** snapshot for DESeq2 1.53.2. It resolved 42 of 43 runtime packages and missed `locfit`. Its package versions and source-index hashes are captured in `dependency-probe-1.53.2.json`. That probe must not be represented as validation of the pinned release target, DESeq2 1.52.0 / Bioconductor 3.23.
 
@@ -16,7 +16,7 @@ The production gate is therefore:
 
 Until then, the Compare page remains descriptive. For the existing local HYB2 R entry point it exports `hyb2-web.table.txt` and the required two-column, headerless `hyb2-web_names.table`; run `DESeq_run.R hyb2-web.table.txt hyb2-web_names.table 2`. Extended headered metadata is a separate audit/custom-adapter export. No backend is required for the eventual browser runtime.
 
-To reproduce the recorded base-runtime smoke, download the locked release asset, verify its SHA-256, extract it as `scripts/webr-smoke/webr-0.6.0/`, serve `scripts/webr-smoke/` over ordinary HTTP, and open `index.html` in a browser. The result is exposed as `window.__spikeResult`. Because this reproduction fetches a 40 MB external test asset and needs a real browser, it is deliberately separate from the offline website and current deployment gate.
+To reproduce the recorded base-runtime smoke, download the locked release asset, verify its SHA-256, extract it as `scripts/verify/webr-smoke/webr-0.6.0/`, serve `scripts/verify/webr-smoke/` over ordinary HTTP, and open `index.html` in a browser. The result is exposed as `window.__spikeResult`. Because this reproduction fetches a 40 MB external test asset and needs a real browser, it is deliberately separate from the offline website and current deployment gate.
 
 Primary references:
 

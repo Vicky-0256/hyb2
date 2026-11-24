@@ -20,7 +20,7 @@ the ZIKV genome folds (kernel_experiments/jobs/zikv_new_b, skipped when
 absent).  The window part runs by default; ``HYB2_SLOW=1`` adds the
 genome-wide comparison (about 25 minutes).
 
-Run everything with ``scripts/check-vienna-swap.sh``.
+Run everything with ``scripts/verify/check-vienna-swap.sh``.
 """
 import hashlib
 import json
@@ -220,7 +220,7 @@ SCAN = re.compile(r"hybrid[-_ ]?min|HYBRID_MIN", re.IGNORECASE)
 # name), each marked with this comment.
 LEGACY_MARK = "legacy-name:"
 SCAN_SKIP_PREFIXES = ("third_party/varna/", "desktop/runtime/tests/vienna_swap/", "third_party/cplfold/LICENSES/")
-SCAN_SKIP_FILES = {"desktop/runtime/tests/test_vienna_swap.py", "scripts/check-vienna-swap.sh"}
+SCAN_SKIP_FILES = {"desktop/runtime/tests/test_vienna_swap.py", "scripts/verify/check-vienna-swap.sh"}
 SCAN_SKIP_SUFFIXES = (".md", ".txt", ".pdf", ".png", ".svg", ".class", ".jar")
 
 

@@ -128,7 +128,7 @@ assert.throws(() => p({K: ' 2 '}), /IRIS ensemble size K/);"""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             # Run the actual CLI, without site-packages or the folding runtime.
-            inputs = ["scripts/export-support-kernels.py", "scripts/fold-text.js", "scripts/cplfold-settings.js"]
+            inputs = ["scripts/build/export-support-kernels.py", "scripts/build/fold-text.js", "scripts/build/cplfold-settings.js"]
             inputs += [f"pipeline/hyb2analysis/{name}.py" for name in
                        ("__init__", "reference", "support_kernels", "engine_parameters", "fold_text", "iris_parameters")]
             inputs += [f"third_party/cplfold/cplfold/{name}.py" for name in
@@ -148,7 +148,7 @@ assert.throws(() => p({K: ' 2 '}), /IRIS ensemble size K/);"""
 
             def export(edit):
                 config.write_text(source + f"\nIRIS_DEFAULTS.update({edit!r})\n", encoding="utf-8")
-                return subprocess.run([sys.executable, "-IBS", "scripts/export-support-kernels.py"],
+                return subprocess.run([sys.executable, "-IBS", "scripts/build/export-support-kernels.py"],
                                       cwd=root, capture_output=True, text=True)
 
             for edit in ({"K": 3, "C": 2}, {"fraction": 1}, {"kRange": "13"}, {"kRange": ""}, {"kRange": "4,,6"}):
@@ -402,7 +402,7 @@ class IrisRunTests(unittest.TestCase):
 
     def test_standalone_source_cli_matches_desktop_window(self):
         public = Path(self.tmp.name) / 'standalone'
-        for name in (ROOT / 'scripts/iris-cli-files.txt').read_text().splitlines():
+        for name in (ROOT / 'scripts/build/iris-cli-files.txt').read_text().splitlines():
             source = (ROOT / name).resolve().relative_to(ROOT)
             self.assertNotIn(source.parts[0], {'desktop', 'web', '.git'})
             target = public / source

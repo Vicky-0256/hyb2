@@ -602,7 +602,7 @@
   // multiply-adds, and its arguments (y + 1/alpha <= 10, so alpha > 0.1) are
   // where the likelihood has no large cancellation, so the C library's lgamma
   // (above; within an ulp of R's) is used there.  lgammaRSmall is R's branch,
-  // kept for the checks in scripts/verify-deseq.cjs.
+  // kept for the checks in scripts/verify/verify-deseq.cjs.
   function lgammaRSmall(x) {
     let n = Math.trunc(x);
     const y = x - n;

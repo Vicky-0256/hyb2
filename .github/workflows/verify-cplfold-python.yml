@@ -14,10 +14,10 @@ on:
       - "pipeline/hyb2analysis/engine_parameters.py"
       - "pipeline/hyb2analysis/iris_parameters.py"
       - "pipeline/hyb2analysis/support_kernels.py"
-      - "scripts/bundle_sources.py"
+      - "scripts/build/bundle_sources.py"
       - "bin/cplfold"
       - "requirements/cplfold-core.txt"
-      - "scripts/verify-cplfold-python.py"
+      - "scripts/verify/verify-cplfold-python.py"
       - ".gitignore"
       - ".github/workflows/verify-cplfold-python.yml"
   pull_request:
@@ -28,10 +28,10 @@ on:
       - "pipeline/hyb2analysis/engine_parameters.py"
       - "pipeline/hyb2analysis/iris_parameters.py"
       - "pipeline/hyb2analysis/support_kernels.py"
-      - "scripts/bundle_sources.py"
+      - "scripts/build/bundle_sources.py"
       - "bin/cplfold"
       - "requirements/cplfold-core.txt"
-      - "scripts/verify-cplfold-python.py"
+      - "scripts/verify/verify-cplfold-python.py"
       - ".gitignore"
       - ".github/workflows/verify-cplfold-python.yml"
   workflow_dispatch:
@@ -63,7 +63,7 @@ jobs:
             echo "Generated or native artifacts are present in the CPLfold snapshot" >&2
             exit 1
           fi
-          python scripts/verify-cplfold-python.py
+          python scripts/verify/verify-cplfold-python.py
 
       - name: Check that a core-only change reaches both runtime packages
         run: python -B -m unittest desktop.runtime.tests.test_native_release_preflight.PackagedSourceTests.test_core_update_reaches_both_packages

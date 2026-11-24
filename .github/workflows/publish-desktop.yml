@@ -54,7 +54,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          node scripts/write-releases.mjs --check-installers release
+          node scripts/build/write-releases.mjs --check-installers release
           cd release
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
@@ -94,7 +94,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: node scripts/write-releases.mjs --check-deployment
+        run: node scripts/build/write-releases.mjs --check-deployment
       - name: Promote the exact site verified before publication
         id: deployment
         if: steps.version.outputs.current == 'true'

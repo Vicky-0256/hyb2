@@ -40,7 +40,7 @@ class SupportKernelCatalogTests(unittest.TestCase):
         self.assertIn('"comradesScore": {\n    "endpointCap": 1000000,\n    "endpointsPerPair": 2\n  }', web)
 
     def test_comrades_score_caps_each_endpoint(self):
-        # The same counts as scripts/verify-comrades-analysis.cjs: the JS and Python scores agree.
+        # The same counts as scripts/verify/verify-comrades-analysis.cjs: the JS and Python scores agree.
         counts = Counter({(1, 8): 999_999, (2, 7): 1_000_000, (3, 6): 1_500_000})
         scored = bridge.score_evidence_pairs(counts, [(8, 1), (2, 7), (3, 6), (4, 5)])
         self.assertEqual(scored, {"comradesPairCounts": [999_999, 1_000_000, 1_500_000, 0], "comradesScore": 5_999_998})

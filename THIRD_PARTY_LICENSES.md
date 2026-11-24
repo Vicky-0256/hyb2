@@ -18,7 +18,7 @@ Hyb2's own code is GPL-3.0-or-later ([`LICENSE`](LICENSE)). This file lists the 
 
 ## Built by CI and published with the website
 
-These files are not in Git. `scripts/build-vienna-wasm.sh` and `scripts/build-cplfold-web.sh` build them into `web/vendor/`, and the Pages workflow publishes them with the website. Each build places the licence texts next to the files.
+These files are not in Git. `scripts/build/build-vienna-wasm.sh` and `scripts/build/build-cplfold-web.sh` build them into `web/vendor/`, and the Pages workflow publishes them with the website. Each build places the licence texts next to the files.
 
 | Component | Version | Location on the website | Licence |
 |---|---|---|---|

@@ -56,7 +56,7 @@ python3 desktop/scripts/pack-runtime.py --platform darwin-arm64 --runtime <same 
 Use the target platform's runtime and platform name when packing. After
 changing shared Python code, rebuild the browser bundle as well as this
 archive; a MyGo rebuild alone will still embed the old archive. Run
-`node scripts/verify-cplfold-pyodide.mjs` against the rebuilt browser bundle
+`node scripts/verify/verify-cplfold-pyodide.mjs` against the rebuilt browser bundle
 and `python3 desktop/scripts/verify-installer.py <installer>` on the target OS.
 
 In development builds `HYB2_REPOSITORY_ROOT` / `HYB2_PYTHON` select another
@@ -151,16 +151,16 @@ task drawer and Preferences.
 
 ```bash
 cd desktop/app
-CGO_ENABLED=0 ../../scripts/with-validation-cache.sh bash -c \
+CGO_ENABLED=0 ../../scripts/verify/with-validation-cache.sh bash -c \
   'go test ./... && go vet ./... && go tool mygo vet . && gofmt -l .'
-HYB2_SNAPSHOT_DIR=/tmp/snap CGO_ENABLED=0 ../../scripts/with-validation-cache.sh go test ./views/   # PNG snapshots of the pages
-HYB2_E2E_SHEET=<samples.tsv> CGO_ENABLED=0 ../../scripts/with-validation-cache.sh go test -tags e2e -run TestEndToEnd -timeout 60m -v .
+HYB2_SNAPSHOT_DIR=/tmp/snap CGO_ENABLED=0 ../../scripts/verify/with-validation-cache.sh go test ./views/   # PNG snapshots of the pages
+HYB2_E2E_SHEET=<samples.tsv> CGO_ENABLED=0 ../../scripts/verify/with-validation-cache.sh go test -tags e2e -run TestEndToEnd -timeout 60m -v .
 
 cd ../..
-scripts/with-validation-cache.sh python3 -B -m unittest discover -s desktop/runtime/tests -p 'test_*.py'
+scripts/verify/with-validation-cache.sh python3 -B -m unittest discover -s desktop/runtime/tests -p 'test_*.py'
 
 # All three Python suites and Go, with slow tests enabled:
-HYB2_SLOW=1 CGO_ENABLED=0 scripts/check-vienna-swap.sh
+HYB2_SLOW=1 CGO_ENABLED=0 scripts/verify/check-vienna-swap.sh
 ```
 
 `with-validation-cache.sh` gives each invocation a fresh temporary directory

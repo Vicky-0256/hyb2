@@ -6,7 +6,7 @@ calls only this boundary; it does not run a shell or send a sequence to a
 service. RNAcofold results supply the per-HYB-row evidence used by the local
 COMRADES constraint workflow.
 
-The deploy workflow invokes `scripts/build-vienna-wasm.sh`. It downloads the
+The deploy workflow invokes `scripts/build/build-vienna-wasm.sh`. It downloads the
 official ViennaRNA 2.7.2 source release, verifies its SHA-256, builds RNAlib
 with the pinned Emscripten toolchain, and places these generated deploy assets
 alongside this file:

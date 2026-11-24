@@ -18,7 +18,7 @@ browser fold.
 The browser runtime is intentionally conservative:
 
 - Pyodide 0.29.4, Python 3.13.2 and NumPy 2.2.5 are pinned by
-  `scripts/build-cplfold-web.sh`.
+  `scripts/build/build-cplfold-web.sh`.
 - Pyodide does not provide Numba. The bridge replaces `numba.njit` with an
   identity decorator, so the same Python algorithm runs without JIT.
 - The UI keeps a 75-nt baseline, measures a representative local run for
@@ -37,7 +37,7 @@ The browser runtime is intentionally conservative:
   `_internal/energy_params/` data), `cplfold_web.py`, and `hyb2analysis/` with
   only `__init__.py`, `engine_parameters.py`, `iris_parameters.py` and
   `support_kernels.py` from `pipeline/hyb2analysis/`
-  (`scripts/bundle_sources.py`).
+  (`scripts/build/bundle_sources.py`).
 - Put shared runtime resources inside the `cplfold` package or under
   `web/cplfold/` and track them in Git. Both builds include package files,
   including nested `data/` directories. Top-level example datasets are excluded.

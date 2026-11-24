@@ -6,7 +6,7 @@ on:
       - ".gitattributes"
       - "desktop/scripts/acquire-native-runtime.py"
       - "desktop/scripts/stage-native.py"
-      - "scripts/bundle_sources.py"
+      - "scripts/build/bundle_sources.py"
       - "desktop/scripts/verify-native-release.py"
       - "desktop/runtime/tests/test_native_release_preflight.py"
       - "desktop/runtime/requirements-native.txt"
@@ -45,7 +45,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          python -m py_compile scripts/bundle_sources.py desktop/scripts/acquire-native-runtime.py desktop/scripts/stage-native.py desktop/scripts/verify-native-release.py
+          python -m py_compile scripts/build/bundle_sources.py desktop/scripts/acquire-native-runtime.py desktop/scripts/stage-native.py desktop/scripts/verify-native-release.py
           python desktop/scripts/acquire-native-runtime.py --help > /dev/null
           python - <<'PYTHON'
           import os, platform

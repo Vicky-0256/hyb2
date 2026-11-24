@@ -11,7 +11,7 @@ from unittest import mock
 import numpy as np
 
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "verify-cplcofold-python.py"
+SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "verify" / "verify-cplcofold-python.py"
 
 
 def load_verifier():

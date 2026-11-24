@@ -30,7 +30,7 @@ HYB overlap score or collapsed source-read count as matrix weights.
 `pipeline/hyb2analysis/support_kernels.py` owns the selectable kernel IDs,
 labels, pair estimators and default for both UIs. The browser build and desktop
 release workflow export the catalog automatically. For a source checkout, run
-`python3 -B scripts/export-support-kernels.py` after changing it and include
+`python3 -B scripts/build/export-support-kernels.py` after changing it and include
 both generated files in the change (`--check` detects stale copies). This lets
 the static page and native MyGo form show the choices before Python starts.
 
@@ -102,7 +102,7 @@ desktop runtime); from 4,000 unique arm blocks on, the blocks go in chunks of
 1,000 to `duplexWorkers` forked processes (default: `HYB2_DUPLEX_WORKERS`, else
 one per CPU; one process on Windows). The browser runs the same code: the CPLfold
 worker loads ViennaRNA's own Python module, built for Pyodide by
-`scripts/build-vienna-pyodide.sh` (about 1.9 MB, loaded on first use), and
+`scripts/build/build-vienna-pyodide.sh` (about 1.9 MB, loaded on first use), and
 gives the same pairs as the desktop. A host may instead pass the counts as
 `evidencePairs` (`[[one, two, rows], ...]`, 1-based).
 Desktop tasks saved with the old kernel name `hybridmin` run as `duplex`.
@@ -188,7 +188,7 @@ HYB2_CPLFOLD_MAX_NT=1500 bin/cplfold --sequence-file cplfold-input.fasta
 Run the full vendored regression suite and a real-Numba smoke test with:
 
 ```bash
-python scripts/verify-cplfold-python.py
+python scripts/verify/verify-cplfold-python.py
 ```
 
 For one strand, `--max-phase2` (and `max_phase2` of `cplfold.fold`) is
@@ -387,16 +387,16 @@ After building the browser runtime, verify the actual worker, parameter
 effects, and input/render/export paths with:
 
 ```bash
-bash scripts/build-cplfold-web.sh
-node scripts/verify-cplfold-worker.mjs
-node scripts/verify-cplfold-parameters.mjs
-node scripts/verify-cplcofold-ui.cjs
-node scripts/verify-cplcofold-local-regions.mjs
+bash scripts/build/build-cplfold-web.sh
+node scripts/verify/verify-cplfold-worker.mjs
+node scripts/verify/verify-cplfold-parameters.mjs
+node scripts/verify/verify-cplcofold-ui.cjs
+node scripts/verify/verify-cplcofold-local-regions.mjs
 ```
 
 ```bash
-python scripts/verify-cplfold-python.py
-python scripts/verify-cplcofold-python.py
+python scripts/verify/verify-cplfold-python.py
+python scripts/verify/verify-cplcofold-python.py
 ```
 
 The second script verifies actual nopython compilation, Python/JIT parity,
@@ -408,7 +408,7 @@ the JSON exchange between Python and JIT runs also rejects nonfinite values.
 To compare the public cofold API against a local C++ LinearCoFold checkout:
 
 ```bash
-.venv-cplfold/bin/python scripts/compare-cplcofold-linearcofold.py \
+.venv-cplfold/bin/python scripts/benchmarks/compare-cplcofold-linearcofold.py \
   --reference ../VincentZhangHe-cofold-copartition-13c0beee5b11
 ```
 
@@ -432,7 +432,7 @@ identical predictions for every input.
 For the recorded local U4(1–35)/U6(50–90) example:
 
 ```bash
-.venv-cplfold/bin/python scripts/compare-cplcofold-linearcofold.py \
+.venv-cplfold/bin/python scripts/benchmarks/compare-cplcofold-linearcofold.py \
   --fixtures artifacts/cplcofold-local-regions/fixtures.json \
   --output artifacts/cplcofold-local-regions
 ```
@@ -455,7 +455,7 @@ summary entry, so differences between beams remain visible.
 To reproduce the local-window timing comparison, run:
 
 ```bash
-.venv-cplfold/bin/python scripts/benchmark-cplcofold-local.py
+.venv-cplfold/bin/python scripts/benchmarks/benchmark-cplcofold-local.py
 ```
 
 This measures two U4/U6 window sizes with alpha=0 and pseudoknots disabled.
@@ -470,7 +470,7 @@ scopes, raw-sample locations, and reproduction options.
 For the optimized single-candidate path, excluding cold compilation:
 
 ```bash
-.venv-cplfold/bin/python scripts/benchmark-cplcofold-local.py --skip-cold \
+.venv-cplfold/bin/python scripts/benchmarks/benchmark-cplcofold-local.py --skip-cold \
   --fixtures artifacts/cplcofold-local-benchmark/fixtures.json \
   --output artifacts/cplcofold-local-optimized
 ```
@@ -487,11 +487,11 @@ fixtures, including short and asymmetric strands, GC-controlled sequences,
 repeated motifs, several beams, reads guidance and pseudoknot ranking:
 
 ```bash
-.venv-cplfold/bin/python scripts/verify-cplfold-python.py
+.venv-cplfold/bin/python scripts/verify/verify-cplfold-python.py
 env -u NUMBA_DISABLE_JIT .venv-cplfold/bin/python third_party/cplfold/tests/test_cofold_properties.py -v
-.venv-cplfold/bin/python scripts/compare-cplfold-single-regression.py \
+.venv-cplfold/bin/python scripts/benchmarks/compare-cplfold-single-regression.py \
   --baseline aabae11 --output artifacts/cplfold-single-expanded
-.venv-cplfold/bin/python scripts/compare-cplcofold-generated.py \
+.venv-cplfold/bin/python scripts/benchmarks/compare-cplcofold-generated.py \
   --output artifacts/cplcofold-generated/full
 ```
 

@@ -90,7 +90,7 @@ async function initialiseEngine() {
   try {
     importScripts(ENGINE_GLUE_URL);
   } catch (error) {
-    throw new Error("ViennaRNA WebAssembly assets are missing at " + ENGINE_GLUE_URL + ". Build the static site with scripts/build-vienna-wasm.sh or deploy through the Pages workflow.");
+    throw new Error("ViennaRNA WebAssembly assets are missing at " + ENGINE_GLUE_URL + ". Build the static site with scripts/build/build-vienna-wasm.sh or deploy through the Pages workflow.");
   }
 
   const factory = self.createHyb2Vienna;

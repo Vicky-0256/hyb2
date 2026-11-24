@@ -342,7 +342,7 @@ function getRuntime() {
 // jsDelivr CDN: without it a missing wheel would be downloaded from the
 // internet instead of failing.  (Node's loader strips "file://" without
 // percent-decoding, so a path is used, not a file: URL.)
-// Pure (no worker globals) so scripts/verify-cplfold-worker.mjs can check it.
+// Pure (no worker globals) so scripts/verify/verify-cplfold-worker.mjs can check it.
 // indexURL is a file path under file: (Pyodide reads it with fs there).
 export function pyodideOptionsFor(runtimeDirectoryUrl, build) {
   const directory = new URL(runtimeDirectoryUrl);
@@ -401,7 +401,7 @@ export function packageFailureMessage(name, errors) {
   const label = name === "viennarna" ? "The local ViennaRNA Python module (viennarna)" : "The pinned Pyodide package " + name;
   const head = label + " could not be loaded: " + detail + (detail.endsWith("...") ? " " : ". ");
   const build = "if you built the site locally, run "
-    + (name === "viennarna" ? "scripts/build-vienna-pyodide.sh, then " : "") + "scripts/build-cplfold-web.sh; on the deployed site, reload the page.";
+    + (name === "viennarna" ? "scripts/build/build-vienna-pyodide.sh, then " : "") + "scripts/build/build-cplfold-web.sh; on the deployed site, reload the page.";
   if (/No known package with name/i.test(detail)) {
     return head + "This site's pyodide-lock.json does not list it: " + build;
   }
@@ -444,7 +444,7 @@ async function initialiseRuntime() {
   try {
     ({ loadPyodide } = await import(PYODIDE_MODULE_URL.href));
   } catch (error) {
-    throw new Error("The local Pyodide runtime is unavailable. Build the static site with scripts/build-cplfold-web.sh.");
+    throw new Error("The local Pyodide runtime is unavailable. Build the static site with scripts/build/build-cplfold-web.sh.");
   }
 
   let pyodide;
@@ -463,7 +463,7 @@ async function initialiseRuntime() {
   } catch (error) {
     throw new Error(error && error.message
       ? error.message
-      : "The local CPLfold Python archive is unavailable. Build the static site with scripts/build-cplfold-web.sh.");
+      : "The local CPLfold Python archive is unavailable. Build the static site with scripts/build/build-cplfold-web.sh.");
   }
 
   try {
@@ -538,7 +538,7 @@ async function ensureVienna(runtime, operation) {
       } catch (error) {
         const lines = String(error && error.message || error).split(/\r?\n/).filter(function (line) { return line.trim(); });
         throw new Error("The local ViennaRNA Python module (viennarna) loaded but import RNA failed: "
-          + (lines.length ? lines[lines.length - 1].trim() : "unknown error") + ". Rebuild it with scripts/build-vienna-pyodide.sh, then scripts/build-cplfold-web.sh.");
+          + (lines.length ? lines[lines.length - 1].trim() : "unknown error") + ". Rebuild it with scripts/build/build-vienna-pyodide.sh, then scripts/build/build-cplfold-web.sh.");
       }
     });
     // Reset on failure so the next request retries the load.
@@ -552,7 +552,7 @@ async function loadVerifiedSourceBundle() {
   manifestUrl.searchParams.set("build", WORKER_BUILD);
   const manifestResponse = await fetch(manifestUrl.href, { cache: "no-store" });
   if (!manifestResponse.ok) {
-    throw new Error("The local CPLfold build manifest is unavailable. Build the static site with scripts/build-cplfold-web.sh.");
+    throw new Error("The local CPLfold build manifest is unavailable. Build the static site with scripts/build/build-cplfold-web.sh.");
   }
   const manifest = await manifestResponse.json();
   const hash = String(manifest.cplfoldArchiveSha256 || "").toLowerCase();

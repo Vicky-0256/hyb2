@@ -60,15 +60,15 @@ an adaptation under GPL-3.0-or-later; it is not the upstream Python executable.
 
 ## Verification
 
-`node scripts/verify-iris-worker.cjs` exercises the actual production worker
+`node scripts/verify/verify-iris-worker.cjs` exercises the actual production worker
 and generated ViennaRNA WebAssembly, using a short synthetic fixture.
 
-`node scripts/verify-iris-ui.cjs` checks reference-coordinate preparation,
+`node scripts/verify/verify-iris-ui.cjs` checks reference-coordinate preparation,
 Worker request parameters, member selection and complete JSON export.
-`node scripts/verify-iris-core.cjs` checks symmetric Gaussian support,
+`node scripts/verify/verify-iris-core.cjs` checks symmetric Gaussian support,
 nonnegative least squares (including singular cases), compatible stems,
 clustering and degenerate inputs.
-`python scripts/verify-iris-reference.py` runs the original Python classes
+`python scripts/verify/verify-iris-reference.py` runs the original Python classes
 against the synthetic Worker output in `/tmp/hyb2-iris-test-result.json`
 (requires NumPy, SciPy, scikit-learn and ViennaRNA). The tested fixture agrees
 on ensemble members, weights (<1e-7), mean energy (<1e-5 kcal/mol), and mean

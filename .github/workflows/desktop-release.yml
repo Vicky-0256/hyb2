@@ -13,8 +13,8 @@ on:
       - "bin/**"
       - "data/**"
       - "requirements/**"
-      - "scripts/verify-folding-cli.py"
-      - "scripts/bundle_sources.py"
+      - "scripts/verify/verify-folding-cli.py"
+      - "scripts/build/bundle_sources.py"
       - ".github/workflows/publish-desktop.yml"
       - ".github/workflows/desktop-release.yml"
   workflow_dispatch:
@@ -89,7 +89,7 @@ jobs:
         run: |
           "$CONDA/bin/conda" create --yes --prefix "$RUNNER_TEMP/folding-cli" \
             --override-channels --strict-channel-priority -c conda-forge -c bioconda viennarna=2.6.4 mfold=3.6 bowtie2=2.5.5
-          PATH="$RUNNER_TEMP/folding-cli/bin:$PATH" python3 -B scripts/verify-folding-cli.py
+          PATH="$RUNNER_TEMP/folding-cli/bin:$PATH" python3 -B scripts/verify/verify-folding-cli.py
       - name: The tag is the app version
         if: inputs.release_installers
         run: |
@@ -102,7 +102,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Generate support-kernel choices for the native UI
-        run: python -B scripts/export-support-kernels.py
+        run: python -B scripts/build/export-support-kernels.py
       - name: Acquire the verified CPython
         run: python desktop/scripts/acquire-native-runtime.py --platform ${{ matrix.target }} --url "$CPYTHON_URL" --sha256 ${{ matrix.sha256 }} --output "$RUNNER_TEMP/cpython"
       - name: Install the pinned wheels into it

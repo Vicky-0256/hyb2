@@ -704,31 +704,126 @@ class LegacyCliTest(unittest.TestCase):
         done = self.cli(ROOT / "bin/hyb2", "-i", hyb)
         self.assertIn("Hyb File Exist.", done.stdout)
 
-    def test_supplementary_and_paired_records_are_skipped_alike(self):
+    def test_record_vouches_only_for_the_hyb_it_published(self):
+        read = "ACGT" * 10
+        sam = self.base / "reads.sam"
+        sam.write_text("@SQ\tSN:toy\tLN:160\n" +
+                       f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n"
+                       f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n")
+        other = self.base / "other.sam"
+        other.write_text(sam.read_text().replace("\t81\t", "\t121\t"))
+        hyb, record = self.base / "out.hyb", self.base / "out.hyb.inputs"
+
+        def convert():
+            done = self.cli(ROOT / "bin/hyb2", "-i", sam, "-o", self.base / "out")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return done
+
+        self.assertIn("Hyb File Generated.", convert().stdout)
+        self.assertTrue(record.read_text().startswith("hyb2 step 1 record format 2\n"))
+        made = hyb.read_bytes()
+        self.assertIn("Hyb File Exist.", convert().stdout)
+        # a .hyb replaced behind the record's back is not vouched for
+        hyb.write_text("rewritten\n")
+        self.assertIn("recomputing", convert().stdout)
+        self.assertEqual(hyb.read_bytes(), made)
+        homodimers = self.base / "out_homodimers.hyb"
+        homodimers.write_text("rewritten\n")
+        self.assertIn("recomputing", convert().stdout)
+        # hyb2pipe publishing <out>.hyb from other inputs drops hyb2's record
+        with mock.patch("sys.stderr", io.StringIO()):
+            python = run(other, ROOT / "data/Zika_18S_formatted.fasta", self.base / "out")
+        self.assertFalse(record.exists())
+        rewritten = python.hyb.read_bytes()
+        self.assertNotEqual(rewritten, made)
+        done = convert()
+        self.assertIn("Hyb File Exist.", done.stdout)
+        self.assertIn("has no record of its inputs", done.stderr)
+        self.assertEqual(hyb.read_bytes(), rewritten)
+
+    def test_fold_option_and_second_reference_do_not_affect_step_1(self):
+        cofold = self.base / "tools" / "RNAcofold"
+        cofold.write_text("#!/usr/bin/env python3\nimport sys\nlines = sys.stdin.read().splitlines()\n"
+                          "for header, sequence in zip(lines[::2], lines[1::2]):\n"
+                          "    print(header); print(sequence); "
+                          "print(''.join('&' if c == '&' else '.' for c in sequence), '( 0.00)')\n")
+        cofold.chmod(0o755)
+        read = "ACGT" * 10
+        sam, reference, second = self.base / "reads.sam", self.base / "ref.fa", self.base / "second.fa"
+        sam.write_text("@SQ\tSN:toy\tLN:160\n" +
+                       f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n"
+                       f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n")
+        reference.write_text(">toy\n" + "ACGT" * 40 + "\n")
+        second.write_text(">other\n" + "GGCC" * 10 + "\n")
+
+        def convert(*options):
+            done = self.cli(ROOT / "bin/hyb2", "-i", sam, "-d", reference, "-o", self.base / "out", "-e", "1", *options)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return done.stdout
+
+        self.assertIn("Hyb File Generated.", convert("-r", "1"))
+        self.assertIn("Hyb File Exist.", convert("-r", "0"))
+        self.assertIn("Hyb File Exist.", convert("-r", "1", "-2", second))
+        self.assertIn("recomputing", convert("-r", "1", "-e", "0"))
+
+    def test_skipped_flags_are_counted_separately(self):
         read = "ACGT" * 10
         rows = ["@SQ\tSN:toy\tLN:160",
                 f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
                 f"read_1\t2048\ttoy\t41\t60\t20M20H\t*\t0\t0\t{read[:20]}\t*\tAS:i:40\tNM:i:0",
                 f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
                 f"M1:7:FC:3:1101:1:2\t2064\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
-                f"pair\t99\ttoy\t1\t60\t20M\t=\t81\t100\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
+                f"dup\t1024\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
+                f"qc\t528\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
                 f"none\t4\t*\t0\t0\t*\t*\t0\t0\t{read}\t*"]
         stderr = io.StringIO()
         kept = list(sam.sam_filt(rows, stderr))
         self.assertEqual([row.split("\t")[1] for row in kept], ["SN:toy", "0", "256"])
-        self.assertIn("skipped 4 SAM records", stderr.getvalue())
+        messages = stderr.getvalue().splitlines()
+        self.assertEqual(len(messages), 3)
+        self.assertIn("skipped 1 unmapped SAM records (flag 0x4)", messages[0])
+        self.assertIn("warning: skipped 2 supplementary alignments (flag 0x800)", messages[1])
+        self.assertIn("chimeric arms reported as supplementary alignments are not used", messages[1])
+        self.assertIn("warning: skipped 2 SAM records whose flag is not 0, 16, 256 or 272", messages[2])
         path = self.base / "mixed.sam"
         path.write_text("\n".join(rows) + "\n")
         legacy = self.cli(ROOT / "bin/sam_filt", path)
         self.assertEqual(legacy.returncode, 0, legacy.stderr)
         self.assertEqual(legacy.stdout.splitlines(), kept)
-        self.assertIn("skipped 4 SAM records", legacy.stderr)
+        self.assertEqual(legacy.stderr, stderr.getvalue())
         done = self.cli(ROOT / "bin/hyb2", "-i", path, "-o", self.base / "legacy")
         self.assertEqual(done.returncode, 0, done.stderr)
         with mock.patch("sys.stderr", io.StringIO()):
             python = run(path, ROOT / "data/Zika_18S_formatted.fasta", self.base / "py/out")
         self.assertEqual(python.counts["hybrids"], 1)
         self.assertEqual((self.base / "legacy.hyb").read_bytes(), python.hyb.read_bytes())
+
+    def test_paired_records_are_an_error_in_both_pipelines(self):
+        read = "ACGT" * 10
+        rows = ["@SQ\tSN:toy\tLN:160",
+                f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
+                f"pair\t99\ttoy\t1\t60\t20M\t=\t81\t100\t{read[:20]}\t*\tAS:i:20\tNM:i:0"]
+        message = ("sam_filt: SAM line 3 (read pair) has flag 99, which marks a paired-end read (0x1); "
+                   "Hyb2 expects single-end reads, so map the reads as single-end")
+        with self.assertRaises(ValueError) as caught:
+            list(sam.sam_filt(rows, io.StringIO()))
+        self.assertEqual(str(caught.exception), message)
+        path = self.base / "paired.sam"
+        path.write_text("\n".join(rows) + "\n")
+        legacy = self.cli(ROOT / "bin/sam_filt", path)
+        self.assertNotEqual(legacy.returncode, 0)
+        self.assertEqual(legacy.stderr, message + "\n")
+        done = self.cli(ROOT / "bin/hyb2", "-i", path, "-o", self.base / "legacy")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn(message, done.stderr)
+        self.assertFalse((self.base / "legacy.hyb").exists())
+        env = dict(self.env, PYTHONPATH=str(ROOT / "pipeline"))
+        python = subprocess.run([sys.executable, "-m", "hyb2pipe", "-i", str(path), "-d",
+                                 str(ROOT / "data/Zika_18S_formatted.fasta"), "-o", str(self.base / "py/out")],
+                                cwd=self.base, env=env, capture_output=True, text=True, timeout=300)
+        self.assertNotEqual(python.returncode, 0)
+        self.assertIn(message, python.stderr)
+        self.assertFalse((self.base / "py/out.hyb").exists())
 
     def test_reference_formatting_uses_the_hyb2pipe_rules(self):
         for name, text in (("wrapped", ">alpha|protein_coding\r\nGGGG\r\nAAAA\r\n>skip||kind\r\nCCCC\r\n>b|t\r\nUU\r\n"),

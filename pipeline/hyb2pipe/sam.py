@@ -10,22 +10,39 @@ from . import awk
 
 
 KEPT_FLAGS = ("0", "16", "256", "272")  # single-end primary/secondary, forward/reverse
+_DECIMAL = re.compile(r"[0-9]+")
 
 
 def sam_filt(lines: Iterable[str], stderr: Optional[TextIO] = None) -> Iterator[str]:
     """Port of ``bin/sam_filt``: keep headers and records with a flag in
-    ``KEPT_FLAGS`` (the count of others goes to ``stderr``, default ``sys.stderr``),
-    drop multi-splice reads, split single-splice reads into two alignments,
-    and normalise read IDs."""
+    ``KEPT_FLAGS``, drop multi-splice reads, split single-splice reads into
+    two alignments, and normalise read IDs.  A paired record (flag bit 0x1)
+    raises ValueError.  Unmapped (0x4), supplementary (0x800) and other
+    records are skipped; their counts go to ``stderr`` (default
+    ``sys.stderr``) with the same messages as ``bin/sam_filt``."""
     id_parts: List[str] = []
     id_n = 0
-    skipped = 0
-    for raw in lines:
+    unmapped = supplementary = other = 0
+    for number, raw in enumerate(lines, 1):
         line = raw.rstrip("\n")
         f = awk.fields(line)
         # awk 1: keep headers and KEPT_FLAGS, and CIGARs with at most one N
         if not (f and f[0].startswith("@")) and awk.field(f, 2) not in KEPT_FLAGS:
-            skipped += 1 if f else 0
+            if not f:
+                continue
+            text = awk.field(f, 2)
+            flag = int(text) if _DECIMAL.fullmatch(text) else None
+            if flag is None:
+                other += 1
+            elif flag & 0x1:
+                raise ValueError("sam_filt: SAM line %d (read %s) has flag %s, which marks a paired-end read (0x1); "
+                                 "Hyb2 expects single-end reads, so map the reads as single-end" % (number, f[0], text))
+            elif flag & 0x4:
+                unmapped += 1
+            elif flag & 0x800:
+                supplementary += 1
+            else:
+                other += 1
             continue
         if len(awk.split(awk.field(f, 6), "N")) >= 3:
             continue
@@ -69,9 +86,16 @@ def sam_filt(lines: Iterable[str], stderr: Optional[TextIO] = None) -> Iterator[
                 if len(cols) > 1:
                     value = "\t".join([cols[0]] + cols[2:25])
                 yield _fix_read_id(value)
-    if skipped:
-        (stderr or sys.stderr).write("sam_filt: skipped %d SAM records whose flag is not 0, 16, 256 or 272 "
-                                     "(unmapped, paired, supplementary or other)\n" % skipped)
+    out_err = stderr or sys.stderr
+    if unmapped:
+        out_err.write("sam_filt: skipped %d unmapped SAM records (flag 0x4)\n" % unmapped)
+    if supplementary:
+        out_err.write("sam_filt: warning: skipped %d supplementary alignments (flag 0x800); chimeric arms reported "
+                      "as supplementary alignments are not used, so make the mapper report them as secondary "
+                      "alignments (flag 0x100), for example bwa mem -M\n" % supplementary)
+    if other:
+        out_err.write("sam_filt: warning: skipped %d SAM records whose flag is not 0, 16, 256 or 272 "
+                      "(for example QC-fail 0x200 or duplicate 0x400)\n" % other)
 
 
 _SPLICE_OP = re.compile(r"[0-9]+[A-Z=]")

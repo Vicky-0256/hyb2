@@ -80,9 +80,21 @@ and the collapse scripts dropping each group's first line.
 all 10,807 nucleotides.
 
 Both `hyb2pipe` and `bin/sam_filt` keep only SAM headers and records with
-flag 0, 16, 256 or 272 (single-end primary and secondary alignments). They
-skip unmapped, paired and supplementary records and print how many on stderr;
-before, `sam2blast_3` stopped at the first paired or supplementary record.
+flag 0, 16, 256 or 272 (single-end primary and secondary alignments), and
+treat the rest the same way, with the same stderr messages:
+
+- a record with the paired bit (0x1) is an error (Hyb2 expects single-end
+  reads): `sam_filt` exits non-zero and `hyb2pipe` raises `ValueError`;
+- unmapped records (0x4) are skipped and counted;
+- supplementary alignments (0x800) are skipped and counted with a warning,
+  because chimeric arms reported that way are not used; the mapper should
+  report them as secondary alignments (for example `bwa mem -M`);
+- any other flag (for example QC-fail 0x200, duplicate 0x400, or a flag that
+  is not a decimal number) is skipped and counted with a warning.
+
+Before, `sam2blast_3` stopped at the first paired or supplementary record.
+When `hyb2pipe` writes `<out>.hyb` it deletes `<out>.hyb.inputs`, the record
+with which `bin/hyb2` decides whether its step 1 output is still current.
 Both rename reference IDs by the same rules (`hyb2pipe/reference_cli.py`,
 used by `bin/hyb2` and `bin/fasta_hyb2_formatting`).
 

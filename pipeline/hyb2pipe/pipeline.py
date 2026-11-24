@@ -399,6 +399,8 @@ def _annotate(collapsed: Path, out_prefix: Path) -> Dict[str, Path]:
 
         stats = finalize.hybrid_stats(final_lines())
     _write_lines(parts["stats"], stats)
+    # bin/hyb2's record of the inputs of a .hyb it made no longer describes this one
+    Path(str(out_prefix) + ".hyb.inputs").unlink(missing_ok=True)
     for key, path in paths.items():
         os.replace(parts[key], path)
     paths["count"] = total[0]  # type: ignore[assignment]

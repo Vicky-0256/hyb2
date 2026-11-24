@@ -193,21 +193,29 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 # <out>.hyb.inputs records what step 1 read (path, size and mtime of the input
-# and references) and its options; it is published with the .hyb. A .hyb whose
-# record differs is recomputed. A .hyb without a record (an explicit -i .hyb,
-# or one from hyb2pipe or an older hyb2) is kept as it is.
+# and of reference 1, the only reference step 1 uses), its options, and the
+# size and mtime of the .hyb and _homodimers.hyb it published with them. A .hyb
+# whose record differs (other inputs or options, or a .hyb rewritten since) is
+# recomputed. Bump the format line when these rules change. A .hyb without a
+# record (an explicit -i .hyb, or one from hyb2pipe, which removes the record,
+# or from an older hyb2) is kept as it is.
 record=
 if [[ "$IN_FILE" != *.hyb ]]; then
-    energy_options="-e $ENERGY"
-    if [[ "$ENERGY" == 1 ]]; then energy_options+=" -r $ENERGY_FOLD"; fi
     record=$(python3 -c 'import os, sys
-for label, path in zip(("input", "reference_1", "reference_2"), sys.argv[1:]):
+for label, path in zip(("input", "reference_1"), sys.argv[1:]):
     info = os.stat(path) if path else None
     print(label, os.path.realpath(path) if path else "-", info.st_size if info else "-",
-          info.st_mtime_ns if info else "-", sep="\t")' "$IN_FILE" "$original_ref_1" "$original_ref_2")
-    record=$(printf 'hyb2 step 1\n%s\noptions\t-v %s -m %s -h %s %s' "$record" "$hval" "$gmax" "$hmax" "$energy_options")
+          info.st_mtime_ns if info else "-", sep="\t")' "$IN_FILE" "$original_ref_1")
+    record=$(printf 'hyb2 step 1 record format 2\n%s\noptions\t-v %s -m %s -h %s -e %s' "$record" "$hval" "$gmax" "$hmax" "$ENERGY")
 fi
-if [[ -f "$OUT.hyb" && ( -z "$record" || ! -f "$OUT.hyb.inputs" || "$(cat -- "$OUT.hyb.inputs")" == "$record" ) ]]; then
+published_outputs() {  # the files <prefix>.hyb.inputs vouches for
+    python3 -c 'import os, sys
+for label, path in zip(("hyb", "homodimers"), sys.argv[1:]):
+    info = os.stat(path) if os.path.isfile(path) else None
+    print(label, info.st_size if info else "-", info.st_mtime_ns if info else "-", sep="\t")' "$1.hyb" "${1}_homodimers.hyb"
+}
+if [[ -f "$OUT.hyb" && ( -z "$record" || ! -f "$OUT.hyb.inputs" ||
+      "$(cat -- "$OUT.hyb.inputs")" == "$record"$'\n'"$(published_outputs "$OUT")" ) ]]; then
     convert=0
     protected+=(--protect="$OUT.hyb")
     echo "Hyb File Exist. Next Step."
@@ -215,7 +223,7 @@ if [[ -f "$OUT.hyb" && ( -z "$record" || ! -f "$OUT.hyb.inputs" || "$(cat -- "$O
         echo "hyb2: keeping $OUT.hyb, which has no record of its inputs ($OUT.hyb.inputs); delete it to recompute." >&2
     fi
 else
-    if [[ -f "$OUT.hyb" ]]; then echo "$OUT.hyb was made from other inputs or options; recomputing."; fi
+    if [[ -f "$OUT.hyb" ]]; then echo "$OUT.hyb was made from other inputs or options, or changed since; recomputing."; fi
     convert=1
     if [[ -n "$mapper" && -z "$DB_1" ]]; then echo "Mapping requires a reference (-d)." >&2; exit 2; fi
     work=$(mktemp -d "$(dirname -- "$OUT")/.hyb2.XXXXXXXX")
@@ -284,7 +292,8 @@ if (( convert )); then
     sam2hyb -i "$stage.sam" -d "$conversion_ref" -o "$stage" -v "$hval" -g "$gmax" -h "$hmax" -e "$ENERGY" -r "$ENERGY_FOLD" || {
         echo "SAM conversion failed." >&2; exit 1
     }
-    printf '%s\n' "$record" > "$stage.hyb.inputs"
+    # Publishing renames the staged files, which keeps their size and mtime.
+    { printf '%s\n' "$record"; published_outputs "$stage"; } > "$stage.hyb.inputs"
     # The publisher requires every staged file and installs the completion marker last.
     for suffix in _homodimers.hyb _hybrids.hyb_stats.txt .hyb.inputs .hyb; do
         outputs+=("$stage$suffix" "$OUT$suffix")

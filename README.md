@@ -53,8 +53,7 @@ Download the appropriate version based on your OS, locate the file, then install
 > https://www.oracle.com/java/technologies/downloads
 
 #
-Hyb2 can be used on **Windows** with Windows Subsystem for Linux (**WSL**) Installed, Guide Found Here:
-> https://github.com/Vicky-0256/hyb2/blob/main/README_WSL.txt
+Hyb2 can be used on **Windows** with Windows Subsystem for Linux (**WSL**) installed; see the [WSL installation guide](docs/install-wsl.md).
 
 ## Installation
 Hyb2 can be downloaded and installed with:
@@ -423,17 +422,6 @@ Hyb2 is free to use for academic and commercial work. No fees are charged for an
 
 Hyb2's own code (`bin/`, `pipeline/`, `web/`, `desktop/`, and CPLfold and CPLcofold in `third_party/cplfold/`) is licensed under the GNU General Public License, version 3 or (at your option) any later version (GPL-3.0-or-later). The full text is in [`LICENSE`](LICENSE).
 
-Hyb2 bundles these third-party components. Each keeps its own licence:
-
-| Component | Location | Licence |
-|---|---|---|
-| Parsers derived from LinearFold and LinearCoFold | `third_party/cplfold/cplfold/_internal/parser.py`, `cofold_parser.py` | LinearFold and LinearCoFold terms: free use and modification, no redistribution fees beyond media costs, author credit required ([LinearFold](third_party/cplfold/LICENSES/LinearFold-LICENSE.txt), [LinearCoFold](third_party/cplfold/LICENSES/LinearCoFold-LICENSE.txt)) |
-| Energy evaluator and parameters derived from HotKnots 2.0 | `third_party/cplfold/cplfold/_internal/hotknots_energy.py`, `energy_params/` | GPL-2.0-or-later |
-| Turner 2004 parameters from ViennaRNA | `third_party/cplfold/cplfold/_internal/energy_parameter.py`, `utility_v.py`, `turner_energy.py` | ViennaRNA terms ([`COPYING`](third_party/cplfold/LICENSES/ViennaRNA-COPYING.txt)) |
-| IRIS, adapted from [JY-Zhou/IRIS](https://github.com/JY-Zhou/IRIS) | `third_party/iris/` | GPL-3.0 ([`LICENSE`](third_party/iris/LICENSE)) |
-| VARNA | `VARNA/` | GPL-3.0 ([`LICENSE`](VARNA/LICENSE)) |
-| fornac and D3 (website structure view) | `web/vendor/` | Apache-2.0 and BSD-3-Clause |
-
-ViennaRNA, Bowtie2, NumPy and the other runtime dependencies are installed separately under their own licences.
+Hyb2 contains and distributes third-party components, each under its own licence: VARNA, IRIS, the LinearFold, LinearCoFold, HotKnots and ViennaRNA parts of CPLfold, D3 and fornac in this repository, and ViennaRNA, Pyodide, NumPy, Numba and Bowtie2 in the website and desktop builds. [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) lists each one, where it is distributed, and its licence.
 
 The CPLfold combination is still being confirmed with the LinearFold authors. CPLfold's GPL part and the LinearFold-derived parser have different terms, and the combination does not yet have one confirmed licence. [`THIRD_PARTY_NOTICES.md`](third_party/cplfold/THIRD_PARTY_NOTICES.md) records the full terms and the original authors. If you publish results from CPLfold, please also cite LinearFold, LinearCoFold, ViennaRNA and HotKnots. If you publish IRIS results, please cite IRIS.

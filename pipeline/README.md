@@ -9,6 +9,9 @@ PYTHONPATH=pipeline python3 -m hyb2pipe -i reads.fastq.gz -d reference.fasta -o 
 PYTHONPATH=pipeline python3 -m hyb2pipe -i aligned.sam -d reference.fasta -o out/sample -e 1
 ```
 
+Install the Python dependencies with `python -m pip install -r pipeline/requirements.txt`;
+FASTQ and FASTA input also need Bowtie2 (see [External tools](#external-tools)).
+
 The `-i -d -o -v -m -h -e` flags match `hyb2`. The command writes
 `<out>.hyb`, `<out>_homodimers.hyb` and `<out>_hybrids.hyb_stats.txt`, plus
 `<out>.sam` or `<out>.sam.gz` with `--keep-sam plain|gz` (default: no SAM).

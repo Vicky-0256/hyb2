@@ -8,6 +8,8 @@ __pycache__/
 # setuptools output of pip install ./pipeline
 pipeline/build/
 pipeline/*.egg-info/
+# make quickstart output
+/out/
 
 # VARNA compile output; only the jars in third_party/varna/build/jar/ are used at runtime.
 third_party/varna/build/classes/

@@ -14,6 +14,7 @@ A ***streamlined*** program for analyzing RNA proximity ligation experiments fro
 
 ## Table of Contents
 - [Introduction](#introduction)
+- [Quickstart (5 minutes)](#quickstart-5-minutes)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Entry Points](#entry-points)
@@ -38,7 +39,24 @@ The Hyb2 pipeline is **streamlined** to receive input of fastq/SAM files and gen
 
 Creates a **GUI to easily select and visualize RNA-RNA interactions** from contact density maps, with styling options using VARNA. GUI allows selection of specific interactions directly from the contact density maps, and **generating the corresponding colour-coded RNA secondary structure** in a VARNA GUI pop-up.
 
+## Quickstart (5 minutes)
+This turns the bundled Zika and 18S rRNA test data into `.hyb` files with `hyb2pipe`. It needs only Python 3.9 or newer and Git, with no conda, Perl or R:
+
+```bash
+git clone https://github.com/Vicky-0256/hyb2.git
+cd hyb2
+python3 -m venv .venv && . .venv/bin/activate
+python -m pip install -r pipeline/requirements.txt
+make quickstart
+```
+
+`make quickstart` runs `PYTHONPATH=pipeline python3 -m hyb2pipe -i data/testData.sam -d data/Zika_18S.fasta -o out/quickstart -e 1`. It writes 10,411 hybrids, with their folding energies (dG), to `out/quickstart.hyb`, plus `out/quickstart_homodimers.hyb` and `out/quickstart_hybrids.hyb_stats.txt`. Run `make help` to see the test and build targets.
+
+From there, open the `.hyb` files in the web or desktop app, or plot and fold them with `bin/`; see [Entry Points](#entry-points).
+
 ## Prerequisites
+These prerequisites are for the original `bin/` tools (plots, VARNA drawings and the R Shiny GUI). `hyb2pipe` needs only Python; see the [Quickstart](#quickstart-5-minutes).
+
 Linux/ Mac Operating System with Miniconda Installed
 
 1. **Miniconda**, if not installed, read based on your operating system (OS):
@@ -80,6 +98,15 @@ printf '%s\n' "$PWD/third_party/varna/build/jar/VARNAcmd.jar" > bin/VARNA.dir
 ```
 
 ## Entry Points
+
+Hyb2 has four entry points. Pick one by where you want to work:
+
+| Entry point | Use it for | Input | Install | Location |
+|---|---|---|---|---|
+| `hyb2pipe` (command line) | Reads to `.hyb` on any OS, scripted or on a cluster. This is the CLI described in the paper. | FASTQ, FASTA or SAM, optionally gzipped | Python 3.9+, `pip install -r pipeline/requirements.txt`; Bowtie2 for FASTQ/FASTA | `pipeline/` |
+| Original `bin/` tools | Contact density maps, viewpoint graphs, VARNA drawings, the R Shiny GUI and DESeq2 comparisons | `.hyb` (or SAM/FASTQ through the legacy `hyb2`) | conda, Perl, R and Java ([Installation](#installation)) | `bin/` |
+| Web app | Exploring `.hyb` files, CPLfold/IRIS structures and comparisons in the browser; files stay on your computer | `.hyb` | None once the site is published on GitHub Pages. To serve a local copy, build its runtimes with `make build-web` and serve `web/` ([web/README.md](web/README.md)) | `web/` |
+| Desktop app | One local project from raw reads to structures, offline, running `hyb2pipe` for each sample | FASTQ, FASTA, SAM or `.hyb` | Go 1.27+ to build it from source ([desktop/README.md](desktop/README.md)) | `desktop/` |
 
 The Hyb2 command-line pipeline is `hyb2pipe` in `pipeline/`. It turns FASTQ, FASTA or SAM input (each optionally gzipped) into `.hyb` files in pure Python (3.9+), with no Perl, awk or sed, so it also runs on Windows. The desktop app runs the same code for every sample. Run it from the repository root:
 

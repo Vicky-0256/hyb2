@@ -13,6 +13,8 @@
  *   - MAP dispersion, outliers kept at the gene-wise value;
  *   - IRLS (ridge 1e-6, minmu 0.5) and the Wald test;
  *   - Cook's distance filtering for cells with three or more replicates;
+ *     in cells of seven or more (minReplicatesForReplace) outlier counts are
+ *     replaced by the trimmed mean and the rows refitted;
  *   - independent filtering on the mean of normalised counts (lowess) at
  *     alpha 0.01 and Benjamini-Hochberg.
  *
@@ -45,6 +47,7 @@
   const BETA_TOL = 1e-8;
   const LAMBDA = 1e-6;
   const LARGE = 30.0;
+  const MIN_REPLICATES_FOR_REPLACE = 7; // DESeq() default minReplicatesForReplace
   const EPSILON = 1e-4;
   const LN2 = Math.log(2);
   const EPS = 2.220446049250313e-16;
@@ -2281,86 +2284,181 @@
           "cannot be computed; check that every sample has hybrids for this RNA pair");
       }
     }
-    const norm = new Float64Array(n * m);
-    const baseMean = new Float64Array(n);
-    const baseVar = new Float64Array(n);
-    for (let i = 0; i < n; i += 1) {
-      let s = 0;
-      for (let j = 0; j < m; j += 1) {
-        const v = y[i * m + j] / sf[j];
-        norm[i * m + j] = v;
-        s += v;
-      }
-      const mean = s / m;
-      baseMean[i] = mean;
-      let ss = 0;
-      for (let j = 0; j < m; j += 1) {
-        const dlt = norm[i * m + j] - mean;
-        ss += dlt * dlt;
-      }
-      baseVar[i] = ss / (m - 1);
-    }
-
-    // gene-wise dispersion
+    const maxDisp = Math.max(10.0, m);
     let xim = 0;
     {
       const inv = new Float64Array(m);
       for (let j = 0; j < m; j += 1) { inv[j] = 1.0 / sf[j]; }
       xim = npMean(inv);
     }
-    const maxDisp = Math.max(10.0, m);
-    let mu = new Float64Array(n * m);
-    const alphaInit = new Float64Array(n);
     const sizes = [0, 0];
     for (let j = 0; j < m; j += 1) { sizes[group[j]] += 1; }
-    for (let i = 0; i < n; i += 1) {
-      const o = i * m;
-      const gm = [0, 0];
-      for (let j = 0; j < m; j += 1) {
-        gm[group[j]] += norm[o + j];
+
+    // estimateDispersionsGeneEst on nr rows of counts yr: normalized counts,
+    // base means, mu and gene-wise dispersions (also run on the rows that
+    // are refitted after outlier replacement)
+    function* geneWise(yr, nr, stage, label) {
+      const norm = new Float64Array(nr * m);
+      const baseMean = new Float64Array(nr);
+      const baseVar = new Float64Array(nr);
+      for (let i = 0; i < nr; i += 1) {
+        let s = 0;
+        for (let j = 0; j < m; j += 1) {
+          const v = yr[i * m + j] / sf[j];
+          norm[i * m + j] = v;
+          s += v;
+        }
+        const mean = s / m;
+        baseMean[i] = mean;
+        let ss = 0;
+        for (let j = 0; j < m; j += 1) {
+          const dlt = norm[i * m + j] - mean;
+          ss += dlt * dlt;
+        }
+        baseVar[i] = ss / (m - 1);
       }
-      gm[0] /= sizes[0];
-      gm[1] /= sizes[1];
-      const moments = (baseVar[i] - xim * baseMean[i]) / Math.pow(baseMean[i], 2);
-      let rs = 0;
-      for (let j = 0; j < m; j += 1) {
-        const lin = gm[group[j]];
-        const mu1 = Math.max(1.0, lin);
-        rs += (Math.pow(norm[o + j] - mu1, 2) - mu1) / Math.pow(mu1, 2);
-        mu[o + j] = Math.max(lin * sf[j], MIN_MU);
+      const mu = new Float64Array(nr * m);
+      const alphaInit = new Float64Array(nr);
+      for (let i = 0; i < nr; i += 1) {
+        const o = i * m;
+        const gm = [0, 0];
+        for (let j = 0; j < m; j += 1) {
+          gm[group[j]] += norm[o + j];
+        }
+        gm[0] /= sizes[0];
+        gm[1] /= sizes[1];
+        const moments = (baseVar[i] - xim * baseMean[i]) / Math.pow(baseMean[i], 2);
+        let rs = 0;
+        for (let j = 0; j < m; j += 1) {
+          const lin = gm[group[j]];
+          const mu1 = Math.max(1.0, lin);
+          rs += (Math.pow(norm[o + j] - mu1, 2) - mu1) / Math.pow(mu1, 2);
+          mu[o + j] = Math.max(lin * sf[j], MIN_MU);
+        }
+        const rough = Math.max(rs / (m - p), 0.0);
+        const lowest = Math.min(rough, moments);
+        alphaInit[i] = Number.isNaN(lowest) ? NaN : Math.min(Math.max(lowest, MIN_DISP), maxDisp);
       }
-      const rough = Math.max(rs / (m - p), 0.0);
-      const lowest = Math.min(rough, moments);
-      alphaInit[i] = Number.isNaN(lowest) ? NaN : Math.min(Math.max(lowest, MIN_DISP), maxDisp);
+      const logInit = new Float64Array(nr);
+      for (let i = 0; i < nr; i += 1) { logInit[i] = Math.log(alphaInit[i]); }
+      progress(stage, label, 0);
+      const gene = yield { kind: "fitDisp", stage: stage, label: label, rows: nr,
+        args: { y: yr, mu: mu, m: m, group: group, logAlpha0: logInit, priorMean: null, priorVar: 1.0, usePrior: false, minLogAlpha: Math.log(MIN_DISP / 10) } };
+      const dispGene = new Float64Array(nr);
+      const refitRows = [];
+      for (let i = 0; i < nr; i += 1) {
+        let dg = Math.min(Math.exp(gene.logAlpha[i]), maxDisp);
+        if (gene.lastLp[i] < gene.initialLp[i] + Math.abs(gene.initialLp[i]) / 1e6) {
+          dg = alphaInit[i];
+        }
+        dispGene[i] = dg;
+        const conv = gene.iters[i] < MAXIT && gene.iters[i] !== 1;
+        if (!conv && dg > MIN_DISP * 10) {
+          refitRows.push(i);
+        }
+      }
+      if (refitRows.length) {
+        const refit = gridRefit(yr, mu, m, group, refitRows, null, 1.0, false, m);
+        refitRows.forEach(function (i, k) { dispGene[i] = refit[k]; });
+      }
+      for (let i = 0; i < nr; i += 1) {
+        dispGene[i] = Math.min(Math.max(dispGene[i], MIN_DISP), maxDisp);
+      }
+      return { norm: norm, baseMean: baseMean, mu: mu, dispGene: dispGene };
     }
+
+    // estimateDispersionsMAP with the prior variance of the whole table
+    function* mapDispersion(yr, nr, mu, dispGene, dispFit, stage, label) {
+      const logDispInit = new Float64Array(nr);
+      const logDispFit = new Float64Array(nr);
+      for (let i = 0; i < nr; i += 1) {
+        logDispInit[i] = Math.log(dispGene[i] > 0.1 * dispFit[i] ? dispGene[i] : dispFit[i]);
+        logDispFit[i] = Math.log(dispFit[i]);
+      }
+      progress(stage, label, 0);
+      const map = yield { kind: "fitDisp", stage: stage, label: label, rows: nr,
+        args: { y: yr, mu: mu, m: m, group: group, logAlpha0: logDispInit, priorMean: logDispFit, priorVar: priorVar, usePrior: true, minLogAlpha: Math.log(MIN_DISP / 10) } };
+      const dispMap = new Float64Array(nr);
+      const mapRefit = [];
+      for (let i = 0; i < nr; i += 1) {
+        dispMap[i] = Math.exp(map.logAlpha[i]);
+        if (map.iters[i] >= MAXIT) {
+          mapRefit.push(i);
+        }
+      }
+      if (mapRefit.length) {
+        const refit = gridRefit(yr, mu, m, group, mapRefit, Float64Array.from(mapRefit, function (i) { return logDispFit[i]; }), priorVar, true, m);
+        mapRefit.forEach(function (i, k) { dispMap[i] = refit[k]; });
+      }
+      const disp = new Float64Array(nr);
+      const outlierLimit = 2.0 * Math.sqrt(varLogDisp);
+      for (let i = 0; i < nr; i += 1) {
+        const dm = Math.min(Math.max(dispMap[i], MIN_DISP), maxDisp);
+        const outlier = Math.log(dispGene[i]) > Math.log(dispFit[i]) + outlierLimit;
+        disp[i] = outlier ? dispGene[i] : dm;
+      }
+      return disp;
+    }
+
+    // nbinomWaldTest: log2 coefficients, the contrast's lfc, SE, statistic and p-value
+    function* wald(yr, nr, norm, disp, wantHat, stage, label) {
+      progress(stage, label, 0);
+      // beta0: least squares of log(norm + 0.1) on [1, two]
+      const beta0 = new Float64Array(nr * 2);
+      for (let i = 0; i < nr; i += 1) {
+        let s0 = 0;
+        let s1 = 0;
+        for (let j = 0; j < m; j += 1) {
+          const v = Math.log(norm[i * m + j] + 0.1);
+          if (group[j] === 0) { s0 += v; } else { s1 += v; }
+        }
+        const g0 = s0 / sizes[0];
+        beta0[2 * i] = g0;
+        beta0[2 * i + 1] = s1 / sizes[1] - g0;
+      }
+      const lam = LAMBDA / (LN2 * LN2);
+      const fit = yield { kind: "fitBeta", stage: stage, label: label, rows: nr,
+        args: { y: yr, m: m, sf: sf, two: two, disp: disp, beta0: beta0, lam: lam, wantHat: wantHat } };
+      const out = { lfc: new Float64Array(nr), se: new Float64Array(nr), stat: new Float64Array(nr), pvalue: new Float64Array(nr),
+        betaConv: new Uint8Array(nr), beta2: new Float64Array(nr * 2), hat: fit.hat, optimRows: 0 };
+      for (let i = 0; i < nr; i += 1) {
+        const b0 = fit.beta[2 * i] / LN2;
+        const b1 = fit.beta[2 * i + 1] / LN2;
+        const v0 = fit.variance[2 * i];
+        const v1 = fit.variance[2 * i + 1];
+        let se1 = Math.sqrt(Math.max(v1, 0.0)) / LN2;
+        let conv = fit.iters[i] < MAXIT;
+        const stable = Number.isFinite(fit.beta[2 * i]) && Number.isFinite(fit.beta[2 * i + 1]);
+        let lb0 = b0;
+        let lb1 = b1;
+        if (!conv || !stable || !(v0 > 0 && v1 > 0)) {
+          out.optimRows += 1;
+          const start = stable && Math.abs(b0) < LARGE && Math.abs(b1) < LARGE ? [b0, b1] : [beta0[2 * i], beta0[2 * i + 1]];
+          const rowCounts = Array.from(yr.subarray(i * m, i * m + m));
+          const res = optimRow(rowCounts, sf, two, disp[i], start);
+          lb0 = res.beta[0];
+          lb1 = res.beta[1];
+          se1 = res.se[1];
+          conv = res.converged;
+        }
+        out.beta2[2 * i] = lb0;
+        out.beta2[2 * i + 1] = lb1;
+        out.betaConv[i] = conv ? 1 : 0;
+        out.lfc[i] = -lb1;
+        out.se[i] = se1;
+        out.stat[i] = out.lfc[i] / out.se[i];
+        out.pvalue[i] = 2.0 * (erfc(Math.abs(out.stat[i]) / Math.SQRT2) * 0.5);
+      }
+      return out;
+    }
+
+    // gene-wise dispersion
     timings.sizeFactors = now() - t0;
     t0 = now();
-    const logInit = new Float64Array(n);
-    for (let i = 0; i < n; i += 1) { logInit[i] = Math.log(alphaInit[i]); }
-    progress("genewise", "gene-wise dispersion", 0);
-    let gene = yield { kind: "fitDisp", stage: "genewise", label: "gene-wise dispersion", rows: n,
-      args: { y: y, mu: mu, m: m, group: group, logAlpha0: logInit, priorMean: null, priorVar: 1.0, usePrior: false, minLogAlpha: Math.log(MIN_DISP / 10) } };
-    const dispGene = new Float64Array(n);
-    const refitRows = [];
-    for (let i = 0; i < n; i += 1) {
-      let dg = Math.min(Math.exp(gene.logAlpha[i]), maxDisp);
-      if (gene.lastLp[i] < gene.initialLp[i] + Math.abs(gene.initialLp[i]) / 1e6) {
-        dg = alphaInit[i];
-      }
-      dispGene[i] = dg;
-      const conv = gene.iters[i] < MAXIT && gene.iters[i] !== 1;
-      if (!conv && dg > MIN_DISP * 10) {
-        refitRows.push(i);
-      }
-    }
-    if (refitRows.length) {
-      const refit = gridRefit(y, mu, m, group, refitRows, null, 1.0, false, m);
-      refitRows.forEach(function (i, k) { dispGene[i] = refit[k]; });
-    }
-    gene = null;
-    for (let i = 0; i < n; i += 1) {
-      dispGene[i] = Math.min(Math.max(dispGene[i], MIN_DISP), maxDisp);
-    }
+    const gene = yield* geneWise(y, n, "genewise", "gene-wise dispersion");
+    const norm = gene.norm;
+    const baseMean = gene.baseMean;
+    const dispGene = gene.dispGene;
     timings.genewise = now() - t0;
     t0 = now();
 
@@ -2381,16 +2479,25 @@
     const fitDisps = Float64Array.from(useFit, function (i) { return dispGene[i]; });
     let coefs = [NaN, NaN];
     let fitType = "parametric";
-    const dispFit = new Float64Array(n);
+    // dispersionFunction(dds): the fitted trend at the given base means
+    const trendAt = function (means) {
+      if (fitType === "local") {
+        return localFit(fitMeans, fitDisps, means);
+      }
+      const out = new Float64Array(means.length);
+      for (let i = 0; i < means.length; i += 1) {
+        out[i] = coefs[0] + coefs[1] / means[i];
+      }
+      return out;
+    };
+    let dispFit;
     try {
       coefs = parametricFit(fitMeans, fitDisps);
-      for (let i = 0; i < n; i += 1) {
-        dispFit[i] = coefs[0] + coefs[1] / baseMean[i];
-      }
+      dispFit = trendAt(baseMean);
     } catch (error) {
       coefs = [NaN, NaN];
       fitType = "local";
-      dispFit.set(localFit(fitMeans, fitDisps, baseMean));
+      dispFit = trendAt(baseMean);
     }
     const residAbove = [];
     for (let i = 0; i < n; i += 1) {
@@ -2411,100 +2518,45 @@
     t0 = now();
 
     // MAP
-    const logDispInit = new Float64Array(n);
-    const logDispFit = new Float64Array(n);
-    for (let i = 0; i < n; i += 1) {
-      logDispInit[i] = Math.log(dispGene[i] > 0.1 * dispFit[i] ? dispGene[i] : dispFit[i]);
-      logDispFit[i] = Math.log(dispFit[i]);
-    }
-    progress("map", "MAP dispersion", 0);
-    let map = yield { kind: "fitDisp", stage: "map", label: "MAP dispersion", rows: n,
-      args: { y: y, mu: mu, m: m, group: group, logAlpha0: logDispInit, priorMean: logDispFit, priorVar: priorVar, usePrior: true, minLogAlpha: Math.log(MIN_DISP / 10) } };
-    const dispMap = new Float64Array(n);
-    const mapRefit = [];
-    for (let i = 0; i < n; i += 1) {
-      dispMap[i] = Math.exp(map.logAlpha[i]);
-      if (map.iters[i] >= MAXIT) {
-        mapRefit.push(i);
-      }
-    }
-    if (mapRefit.length) {
-      const refit = gridRefit(y, mu, m, group, mapRefit, Float64Array.from(mapRefit, function (i) { return logDispFit[i]; }), priorVar, true, m);
-      mapRefit.forEach(function (i, k) { dispMap[i] = refit[k]; });
-    }
-    map = null;
-    mu = null;
-    const disp = new Float64Array(n);
-    const outlierLimit = 2.0 * Math.sqrt(varLogDisp);
-    for (let i = 0; i < n; i += 1) {
-      const dm = Math.min(Math.max(dispMap[i], MIN_DISP), maxDisp);
-      const outlier = Math.log(dispGene[i]) > Math.log(dispFit[i]) + outlierLimit;
-      disp[i] = outlier ? dispGene[i] : dm;
-    }
+    const disp = yield* mapDispersion(y, n, gene.mu, dispGene, dispFit, "map", "MAP dispersion");
+    gene.mu = null;
     timings.map = now() - t0;
     t0 = now();
 
     // Wald test
-    progress("wald", "Wald test", 0);
-    // beta0: least squares of log(norm + 0.1) on [1, two]
-    const beta0 = new Float64Array(n * 2);
-    for (let i = 0; i < n; i += 1) {
-      let s0 = 0;
-      let s1 = 0;
-      for (let j = 0; j < m; j += 1) {
-        const v = Math.log(norm[i * m + j] + 0.1);
-        if (group[j] === 0) { s0 += v; } else { s1 += v; }
-      }
-      const g0 = s0 / sizes[0];
-      beta0[2 * i] = g0;
-      beta0[2 * i + 1] = s1 / sizes[1] - g0;
-    }
-    const lam = LAMBDA / (LN2 * LN2);
     const bigCells = [0, 1].filter(function (g) { return sizes[g] >= 3; });
-    const fit = yield { kind: "fitBeta", stage: "wald", label: "Wald test", rows: n,
-      args: { y: y, m: m, sf: sf, two: two, disp: disp, beta0: beta0, lam: lam, wantHat: cooksCutoff && bigCells.length > 0 } };
-    const lfc = new Float64Array(n);
-    const se = new Float64Array(n);
-    const stat = new Float64Array(n);
-    const pvalue = new Float64Array(n);
-    const betaConv = new Uint8Array(n);
-    let optimRows = 0;
-    const beta2 = new Float64Array(n * 2);
-    for (let i = 0; i < n; i += 1) {
-      const b0 = fit.beta[2 * i] / LN2;
-      const b1 = fit.beta[2 * i + 1] / LN2;
-      const v0 = fit.variance[2 * i];
-      const v1 = fit.variance[2 * i + 1];
-      let se1 = Math.sqrt(Math.max(v1, 0.0)) / LN2;
-      let conv = fit.iters[i] < MAXIT;
-      const stable = Number.isFinite(fit.beta[2 * i]) && Number.isFinite(fit.beta[2 * i + 1]);
-      let lb0 = b0;
-      let lb1 = b1;
-      if (!conv || !stable || !(v0 > 0 && v1 > 0)) {
-        optimRows += 1;
-        const start = stable && Math.abs(b0) < LARGE && Math.abs(b1) < LARGE ? [b0, b1] : [beta0[2 * i], beta0[2 * i + 1]];
-        const rowCounts = Array.from(y.subarray(i * m, i * m + m));
-        const res = optimRow(rowCounts, sf, two, disp[i], start);
-        lb0 = res.beta[0];
-        lb1 = res.beta[1];
-        se1 = res.se[1];
-        conv = res.converged;
-      }
-      beta2[2 * i] = lb0;
-      beta2[2 * i + 1] = lb1;
-      betaConv[i] = conv ? 1 : 0;
-      lfc[i] = -lb1;
-      se[i] = se1;
-      stat[i] = lfc[i] / se[i];
-      pvalue[i] = 2.0 * (erfc(Math.abs(stat[i]) / Math.SQRT2) * 0.5);
-    }
+    // DESeq(minReplicatesForReplace = 7) replaces outliers in cells of 7 or more
+    const replaceCells = [0, 1].filter(function (g) { return sizes[g] >= MIN_REPLICATES_FOR_REPLACE; });
+    const useCooks = bigCells.length > 0 && (cooksCutoff || replaceCells.length > 0);
+    const fit = yield* wald(y, n, norm, disp, useCooks, "wald", "Wald test");
+    const lfc = fit.lfc;
+    const se = fit.se;
+    const stat = fit.stat;
+    const pvalue = fit.pvalue;
+    const betaConv = fit.betaConv;
+    const beta2 = fit.beta2;
+    let optimRows = fit.optimRows;
 
     // Cook's distance (cells with three or more replicates)
     const maxCooks = new Float64Array(n).fill(NaN);
     let cooksFiltered = 0;
-    if (cooksCutoff && bigCells.length) {
-      const cutoff = qf99(p, m - p);
+    const cutoff = qf99(p, m - p);
+    // only rows over the cutoff are kept: whether the count R would call the
+    // outlier has fewer than 3 counts above it, and the replaced counts
+    const fewAbove = new Uint8Array(n);
+    const replaceable = new Uint8Array(m);
+    let allReplaceable = true;
+    for (let j = 0; j < m; j += 1) {
+      replaceable[j] = replaceCells.indexOf(group[j]) >= 0 ? 1 : 0;
+      allReplaceable = allReplaceable && replaceable[j] === 1;
+    }
+    const keptMaxCooks = replaceCells.length ? new Float64Array(n) : null;
+    const replacedRows = [];
+    const replacedCounts = [];
+    let anyRefit = false;
+    if (useCooks) {
       const cooks = new Float64Array(m);
+      const normRow = new Float64Array(m);
       for (let i = 0; i < n; i += 1) {
         const o = i * m;
         let v = 0;
@@ -2542,13 +2594,119 @@
           for (let j = 0; j < m; j += 1) {
             if (y[o + j] > outCount) { above += 1; }
           }
-          if (above < 3) {
-            pvalue[i] = NaN;
-            cooksFiltered += 1;
+          fewAbove[i] = above < 3 ? 1 : 0;
+        }
+        if (keptMaxCooks) {
+          // replaceOutliers: in samples of the large cells, a count whose Cook's
+          // distance exceeds the cutoff becomes the row's 20% trimmed mean of
+          // normalized counts times the size factor (as.integer truncates).
+          // The original counts and Cook's distances stay for results(); the
+          // maximum then leaves the replaced samples out.
+          let kept = 0;
+          let overAny = false;
+          let overReplaceable = false;
+          let rowSum = 0;
+          for (let j = 0; j < m; j += 1) {
+            rowSum += y[o + j];
+            if (cooks[j] > cutoff) {
+              overAny = true;
+              overReplaceable = overReplaceable || replaceable[j] === 1;
+            }
+            if (!replaceable[j] && bigCells.indexOf(group[j]) >= 0 && cooks[j] > kept) {
+              kept = cooks[j];
+            }
+          }
+          keptMaxCooks[i] = kept;
+          if (overReplaceable) {
+            for (let j = 0; j < m; j += 1) { normRow[j] = norm[o + j]; }
+            const trimmed = trimmedMeanRow(normRow, 0.2);
+            let newSum = 0;
+            replacedRows.push(i);
+            for (let j = 0; j < m; j += 1) {
+              const c = replaceable[j] && cooks[j] > cutoff ? Math.trunc(trimmed * sf[j]) : y[o + j];
+              replacedCounts.push(c);
+              newSum += c;
+            }
+            anyRefit = anyRefit || newSum > 0;
+          } else if (overAny && rowSum > 0) {
+            // R refits this row too, on unchanged counts (the same numbers)
+            anyRefit = true;
           }
         }
       }
     }
+
+    // refitWithoutOutliers: the rows with replaced counts get gene-wise
+    // dispersions, the trend at their new base mean, MAP dispersions with the
+    // table's prior variance and the Wald test again
+    if (replacedRows.length) {
+      const refitRows = [];
+      for (let k = 0; k < replacedRows.length; k += 1) {
+        let s = 0;
+        let total = 0;
+        for (let j = 0; j < m; j += 1) {
+          const c = replacedCounts[k * m + j];
+          s += c / sf[j];
+          total += c;
+        }
+        baseMean[replacedRows[k]] = s / m;
+        if (total > 0) {
+          refitRows.push(k);
+        }
+      }
+      const nr = refitRows.length;
+      if (nr) {
+        const yr = new Float64Array(nr * m);
+        refitRows.forEach(function (k, r) {
+          for (let j = 0; j < m; j += 1) { yr[r * m + j] = replacedCounts[k * m + j]; }
+        });
+        const rows = Int32Array.from(refitRows, function (k) { return replacedRows[k]; });
+        const geneR = yield* geneWise(yr, nr, "refit", "refit without outliers: gene-wise dispersion");
+        const dispFitR = trendAt(geneR.baseMean);
+        const dispR = yield* mapDispersion(yr, nr, geneR.mu, geneR.dispGene, dispFitR, "refit", "refit without outliers: MAP dispersion");
+        geneR.mu = null;
+        const fitR = yield* wald(yr, nr, geneR.norm, dispR, false, "refit", "refit without outliers: Wald test");
+        optimRows += fitR.optimRows;
+        for (let r = 0; r < nr; r += 1) {
+          const i = rows[r];
+          baseMean[i] = geneR.baseMean[r];
+          dispGene[i] = geneR.dispGene[r];
+          dispFit[i] = dispFitR[r];
+          disp[i] = dispR[r];
+          lfc[i] = fitR.lfc[r];
+          se[i] = fitR.se[r];
+          stat[i] = fitR.stat[r];
+          pvalue[i] = fitR.pvalue[r];
+          betaConv[i] = fitR.betaConv[r];
+        }
+      }
+    }
+    if (anyRefit) {
+      // Cook's distances still flag outliers in samples that were not replaceable
+      if (allReplaceable) {
+        maxCooks.fill(NaN);
+      } else {
+        maxCooks.set(keptMaxCooks);
+      }
+    }
+
+    if (cooksCutoff && bigCells.length) {
+      for (let i = 0; i < n; i += 1) {
+        if (maxCooks[i] > cutoff && fewAbove[i]) {
+          pvalue[i] = NaN;
+          cooksFiltered += 1;
+        }
+      }
+    }
+    // results(): a row whose replaced counts are all zero has no change
+    replacedRows.forEach(function (i) {
+      if (baseMean[i] === 0) {
+        lfc[i] = 0.0;
+        se[i] = 0.0;
+        stat[i] = 0.0;
+        pvalue[i] = 1.0;
+      }
+    });
     timings.wald = now() - t0;
     t0 = now();
 

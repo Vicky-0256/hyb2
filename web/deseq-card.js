@@ -288,7 +288,7 @@
       out.push(renderResult(comparison, deseq, result, stale, labelA, labelB));
     }
     const methodOpen = window.Hyb2OpenSections && window.Hyb2OpenSections["deseq-method"] ? " open" : "";
-    out.push('<details class="comparison-note-details deseq-method" data-open-key="deseq-method"' + methodOpen + '><summary>Method and how it was checked against R</summary><p class="card-note">A JavaScript port of HYB2 Desktop\'s numpy port of the DESeq2 1.46 Wald test (median-of-ratios size factors, Cox-Reid gene-wise dispersions, parametric trend with local fallback, MAP shrinkage, Wald test, Cook\'s filtering with three or more replicates, independent filtering at alpha 0.01, Benjamini-Hochberg), then hyb2_compare\'s greedy merge by padj. It is not R: ' + esc(VALIDATION) + "</p></details>");
+    out.push('<details class="comparison-note-details deseq-method" data-open-key="deseq-method"' + methodOpen + '><summary>Method and how it was checked against R</summary><p class="card-note">A JavaScript port of HYB2 Desktop\'s numpy port of the DESeq2 1.46 Wald test (median-of-ratios size factors, Cox-Reid gene-wise dispersions, parametric trend with local fallback, MAP shrinkage, Wald test, Cook\'s filtering with three or more replicates, outlier replacement and refit with seven or more, independent filtering at alpha 0.01, Benjamini-Hochberg), then hyb2_compare\'s greedy merge by padj. It is not R: ' + esc(VALIDATION) + "</p></details>");
     out.push("</section>");
     return out.join("");
   }

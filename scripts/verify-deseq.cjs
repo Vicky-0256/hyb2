@@ -4,7 +4,9 @@
 //
 // Always: special functions, BH, lowess, contact binning, the interaction
 // split, and three synthetic tables (3 vs 3 with Cook's outliers, 2 vs 2,
-// 2 vs 1) against values produced by pipeline/hyb2analysis/deseq.py.
+// 2 vs 1) against values produced by pipeline/hyb2analysis/deseq.py, and the
+// R DESeq2 1.46 golden tables in pipeline/tests/golden/deseq (locfit trends,
+// MAP dispersions, outlier replacement and refit with 7 replicates).
 //
 // With HYB2_DESEQ_REAL=<dir> holding the four ZIKV virion contact maps
 // (ZAFR_REP1/2 vs ZILM_REP2/3 *.contact.txt) it runs the whole comparison and
@@ -364,6 +366,51 @@ Object.keys(SYNTH).forEach(function (name) {
     };
     const x = hex(pair[0]);
     assert.equal(x <= 10 ? D.lgammaRSmall(x) : D.lgammaR(x), hex(pair[1]), "R lgamma(" + x + ")");
+  });
+}
+
+// ---- outlier replacement and refit (golden seven_vs_seven, 7 vs 7, and
+// seven_vs_three, 7 vs 3: injected outliers; DESeq(minReplicatesForReplace = 7)
+// replaces Cook's outliers in the 7-sample cells by the 20% trimmed mean and
+// refits those rows; R 4.4.3 + DESeq2 1.46.0, R DESeq() defaults, rowSums > 2;
+// columns baseMean lfc lfcSE pvalue padj dispGeneEst dispFit dispersion)
+{
+  const golden = path.join(repository, "pipeline", "tests", "golden", "deseq");
+  const lines = function (file) { return fs.readFileSync(path.join(golden, file), "utf8").trim().split("\n").map(function (l) { return l.split("\t"); }); };
+  const replaced = ["r3", "r10", "r25", "r40", "r77", "r120", "r200"];
+  [["seven_vs_seven", []], ["seven_vs_three", ["r77"]]].forEach(function (testCase) {
+    const name = testCase[0];
+    const counts = lines(name + ".counts.tsv");
+    const columns = counts.shift().slice(1);
+    const conditions = {};
+    lines(name + ".conditions.tsv").forEach(function (row) { conditions[row[0]] = row[1]; });
+    const kept = counts.filter(function (row) { return row.slice(1).reduce(function (a, v) { return a + Number(v); }, 0) > 2; });
+    const m = columns.length;
+    const t = new Float64Array(kept.length * m);
+    kept.forEach(function (row, i) { for (let j = 0; j < m; j += 1) { t[i * m + j] = Number(row[j + 1]); } });
+    const r = D.deseqTwoConditions(t, kept.length, m, columns.map(function (c) { return conditions[c] === "condition_one"; }));
+    const expected = lines(name + ".R.tsv").slice(1);
+    const fields = ["baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj", "dispGeneEst", "dispFit", "dispersion"];
+    const worst = {};
+    expected.forEach(function (row, i) {
+      assert.equal(row[0], kept[i][0]);
+      fields.forEach(function (field, k) {
+        const want = row[k + 1] === "NA" ? NaN : Number(row[k + 1]);
+        close(r[field][i], want, 1e-6, name + " " + row[0] + " " + field);
+        if (!Number.isNaN(want)) {
+          worst[field] = Math.max(worst[field] || 0, Math.abs(r[field][i] - want) / Math.max(Math.abs(want), 1e-300));
+        }
+      });
+    });
+    if (process.env.HYB2_DESEQ_VERBOSE) {
+      console.log(name + " vs R, max rel diff: " + fields.map(function (f) { return f + " " + worst[f].toExponential(2); }).join(", "));
+    }
+    const ids = kept.map(function (row) { return row[0]; });
+    same(replaced.filter(function (id) { return Number.isNaN(r.pvalue[ids.indexOf(id)]); }), testCase[1],
+      name + ": replaced rows keep a p-value unless an outlier lies in the 3-sample cell");
+    const zero = ids.indexOf("r200"); // its one nonzero count was replaced by 0
+    same([r.baseMean[zero], r.log2FoldChange[zero], r.lfcSE[zero], r.stat[zero], r.pvalue[zero]], [0, 0, 0, 0, 1], name + " r200");
+    assert.equal(Array.from(r.maxCooks).every(Number.isNaN), name === "seven_vs_seven", name + " maxCooks without the replaced samples");
   });
 }
 

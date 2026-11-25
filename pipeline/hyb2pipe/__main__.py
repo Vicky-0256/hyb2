@@ -59,12 +59,14 @@ def main(argv=None) -> int:
                      progress_bytes=progress_bytes)
     # EOFError: a truncated .gz input
     except (EnergyUnavailable, MappingUnavailable, ValueError, OSError, EOFError) as error:
+        if isinstance(error, EOFError):
+            error = "%s: %s" % (args.input, error)
         if args.json_progress:
             print(json.dumps({"type": "error", "error": str(error)}), flush=True)
         else:
             print("error: %s" % error, file=sys.stderr)
         return 2
-    for warning in _warnings(result, options.energy, args.input):
+    for warning in _warnings(result, options.energy, args.input, args.reference):
         print("warning: %s" % warning, file=sys.stderr, flush=True)
     summary = {"type": "result", "hyb": str(result.hyb), "homodimers": str(result.homodimers),
                "stats": str(result.stats), "sam": str(result.sam) if result.sam else None, "counts": result.counts}
@@ -72,7 +74,7 @@ def main(argv=None) -> int:
     return 0
 
 
-def _warnings(result, energy: bool, source: Path):
+def _warnings(result, energy: bool, source: Path, reference: Path):
     """Results that are valid but likely not what was meant; the exit status stays 0."""
     if not result.counts.get("hybrids"):
         yield ("no hybrids found in %s. Check that it holds single-end chimeric reads (FASTQ or FASTA), "
@@ -80,8 +82,12 @@ def _warnings(result, energy: bool, source: Path):
         return
     if not energy:
         return
+    from .energy import reference_table
+    from .inputs import format_reference, iter_lines
+
+    known = set(reference_table(format_reference(iter_lines(reference))))
     missing = rows = 0
-    genes = set()
+    absent = set()
     with open(result.hyb, encoding="utf-8") as hyb:
         for line in hyb:
             cols = line.rstrip("\n").split("\t")
@@ -90,12 +96,17 @@ def _warnings(result, energy: bool, source: Path):
             rows += 1
             if cols[2] == ".":
                 missing += 1
-                genes.update((cols[3], cols[9]))
-    if missing:
-        shown = sorted(genes)
-        yield ("%d of %d hybrids have no dG ('.'). Their arms are on %s%s; check that the -d reference "
-               "contains every gene the reads were mapped to." % (
-                   missing, rows, ", ".join(shown[:5]), " and %d more" % (len(shown) - 5) if len(shown) > 5 else ""))
+                absent.update(gene for gene in (cols[3], cols[9]) if gene not in known)
+    if not missing:
+        return
+    message = "%d of %d hybrids have no dG ('.')." % (missing, rows)
+    if absent:
+        shown = sorted(absent)
+        message += " These genes are not in the -d reference: %s%s." % (
+            ", ".join(shown[:5]), " and %d more" % (len(shown) - 5) if len(shown) > 5 else "")
+    message += (" A hybrid also has no dG when its arms form no duplex or when an arm maps antisense"
+                " (or, with --energy-engine rnacofold, when the read ID does not key the legacy energy table).")
+    yield message
 
 
 if __name__ == "__main__":

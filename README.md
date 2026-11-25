@@ -40,7 +40,7 @@ The Hyb2 pipeline is **streamlined** to receive input of fastq/SAM files and gen
 Creates a **GUI to easily select and visualize RNA-RNA interactions** from contact density maps, with styling options using VARNA. GUI allows selection of specific interactions directly from the contact density maps, and **generating the corresponding colour-coded RNA secondary structure** in a VARNA GUI pop-up.
 
 ## Quickstart (5 minutes)
-This turns the bundled Zika and 18S rRNA test data into `.hyb` files with `hyb2pipe`. It needs only Python 3.9 or newer and Git, with no conda, Perl or R:
+This turns the bundled Zika and 18S rRNA test data into `.hyb` files with `hyb2pipe`. It needs Python 3.9 or newer, Git and `make`, with no conda, Perl or R:
 
 ```bash
 git clone https://github.com/Vicky-0256/hyb2.git
@@ -50,7 +50,7 @@ python -m pip install -r pipeline/requirements.txt
 make quickstart
 ```
 
-`make quickstart` runs `PYTHONPATH=pipeline python3 -m hyb2pipe -i data/testData.sam -d data/Zika_18S.fasta -o out/quickstart -e 1`. It writes 10,411 hybrids, with their folding energies (dG), to `out/quickstart.hyb`, plus `out/quickstart_homodimers.hyb` and `out/quickstart_hybrids.hyb_stats.txt`. Run `make help` to see the test and build targets.
+`make quickstart` runs `PYTHONPATH=pipeline python3 -m hyb2pipe -i data/testData.sam -d data/Zika_18S.fasta -o out/quickstart -e 1`. It writes 10,411 hybrids, with their folding energies (dG), to `out/quickstart.hyb`, plus `out/quickstart_homodimers.hyb` and `out/quickstart_hybrids.hyb_stats.txt`. Without `make` (for example in a Windows command prompt, where the venv is activated with `.venv\Scripts\activate`), run that `hyb2pipe` command directly, with `set PYTHONPATH=pipeline` in place of the `PYTHONPATH=pipeline` prefix. Run `make help` to see the test and build targets.
 
 From there, open the `.hyb` files in the web or desktop app, or plot and fold them with `bin/`; see [Entry Points](#entry-points).
 

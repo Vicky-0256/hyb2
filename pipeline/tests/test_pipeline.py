@@ -600,7 +600,7 @@ class CliTest(unittest.TestCase):
             packed.write_bytes(gzip.compress((ROOT / "data/testData.sam").read_bytes())[:5000])
             status, err = self._main("-i", packed, "-d", ROOT / "data/Zika_18S_formatted.fasta", "-o", Path(tmp) / "o")
             self.assertEqual(status, 2)
-            self.assertIn("error: Compressed file ended", err)
+            self.assertIn("error: %s: Compressed file ended" % packed, err)
 
     def test_warns_when_no_hybrids_are_found(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -629,6 +629,19 @@ class CliTest(unittest.TestCase):
             self.assertGreater(missing, 0)
             self.assertIn("warning: %d of %d hybrids have no dG" % (missing, len(rows)), err)
             self.assertIn("18S_rRNA", err)
+
+    def test_dg_warning_names_only_genes_missing_from_the_reference(self):
+        from hyb2pipe.__main__ import _warnings
+        with tempfile.TemporaryDirectory() as tmp:
+            hyb = Path(tmp) / "x.hyb"
+            row = ["r1_1", "AAAA", ".", "Zika_virusRNA", "1", "4", "1", "4", "1e-5", "18S_rRNA", "5", "8", "1", "4", "1e-5"]
+            hyb.write_text("\t".join(row) + "\n" + "\t".join(["r2_1", "AAAA", "-5.00"] + row[3:]) + "\n")
+            result = mock.Mock(hyb=hyb, counts={"hybrids": 2})
+            # both genes are in the reference: a '.' there means no duplex, not a missing gene
+            [message] = _warnings(result, True, Path("in.sam"), ROOT / "data/Zika_18S.fasta")
+            self.assertIn("1 of 2 hybrids have no dG", message)
+            self.assertNotIn("not in the -d reference", message)
+            self.assertIn("form no duplex", message)
 
     @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build"), "Bowtie2 not installed")
     def test_fastq_path_maps_with_bowtie2(self):

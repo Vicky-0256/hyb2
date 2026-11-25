@@ -482,10 +482,12 @@ class Bowtie2Stream:
             raise MappingUnavailable("bowtie2 was not found; install Bowtie2 or provide a SAM file")
         args = [exe] + BOWTIE2_ARGS + ["-p", str(threads or os.cpu_count() or 1), "-x", str(index), "-f", str(reads_fasta)]
         self.args = args
+        self.log = log
         self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=log or subprocess.DEVNULL)
         self._text = io.TextIOWrapper(self.proc.stdout, encoding="utf-8", errors="replace", newline="")
 
     def __iter__(self) -> Iterator[str]:
+        renamed = False
         for line in self._text:
             if not line.endswith("\n"):
                 # Bowtie2 ends every SAM line with a newline; a cut-off last
@@ -494,7 +496,23 @@ class Bowtie2Stream:
                 code = self.proc.wait()
                 if code:
                     raise subprocess.CalledProcessError(code, self.args)
-            yield line.rstrip("\r\n")
+            line = line.rstrip("\r\n")
+            if line.startswith("@"):
+                # FASTA reads named ">@HWUSI-..." (solexa2fasta.awk's output)
+                # keep the @ in QNAME, and every SAM reader takes such a line
+                # for a header. A header's second field is TAG:VALUE, an
+                # alignment's is its numeric flag.
+                name, _, rest = line.partition("\t")
+                if rest.split("\t", 1)[0].isdigit():
+                    if not name.lstrip("@"):
+                        raise ValueError("a read is named only %r; give each read a name" % name)
+                    line = name.lstrip("@") + "\t" + rest
+                    if not renamed and self.log is not None:
+                        self.log.write("warning: read names start with '@' (as in >@HWUSI-...); "
+                                       "the leading '@' is removed, as SAM read names cannot start with it\n")
+                        self.log.flush()
+                    renamed = True
+            yield line
         code = self.proc.wait()
         if code:
             raise subprocess.CalledProcessError(code, self.args)

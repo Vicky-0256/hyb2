@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -55,6 +56,9 @@ def main(argv=None) -> int:
     if args.memory_mb:
         options.memory_mb = args.memory_mb
     try:
+        for flag, value in (("-v", args.blast_threshold), ("-m", args.max_overlap)):
+            if not math.isfinite(value):
+                raise ValueError("%s must be a finite number" % flag)
         result = run(args.input, args.reference, args.out, options, progress, log=sys.stderr,
                      progress_bytes=progress_bytes)
     # EOFError: a truncated .gz input

@@ -58,6 +58,8 @@ for path in "${results[@]}" "${scratch[@]}"; do
 		[[ ! "$source" -ef "$path" && ! -d "$path" ]] || { echo "Fold output conflicts with input: $path" >&2; exit 1; }
 	done
 done
+# Reject unreadable inputs before clearing a previous run's results.
+for path in "$input" "$ref" "$ref2"; do [[ -f "$path" && -r "$path" ]] || { echo "Cannot read input: $path" >&2; exit 1; }; done
 work=$(mktemp -d "${TMPDIR:-/tmp}/hyb2-fold.XXXXXX")
 cleanup() {
 	local rc=$?
@@ -68,7 +70,6 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 rm -f -- "${results[@]}" "${scratch[@]}"
-for path in "$input" "$ref" "$ref2"; do [[ -f "$path" && -r "$path" ]] || { echo "Cannot read input: $path" >&2; exit 1; }; done
 case "$fold" in 0) unafold_check;; 2) mfold_check;; esac
 second=
 linker=

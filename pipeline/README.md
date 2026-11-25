@@ -96,6 +96,12 @@ treat the rest the same way, with the same stderr messages:
 - any other flag (for example QC-fail 0x200, duplicate 0x400, or a flag that
   is not a decimal number) is skipped and counted with a warning.
 
+FASTA reads named with a leading `@` (`>@HWUSI-...`, as `solexa2fasta.awk`
+writes them) are mapped without it, with one warning, by both `hyb2pipe` and
+`bin/hyb2`: Bowtie2 copies the name into the SAM, where a line starting with
+`@` is a header, so every alignment was skipped and the run ended with an
+empty `.hyb`.
+
 Before, `sam2blast_3` stopped at the first paired or supplementary record.
 When `hyb2pipe` writes `<out>.hyb` it deletes `<out>.hyb.inputs`, the record
 with which `bin/hyb2` decides whether its step 1 output is still current.

@@ -96,6 +96,22 @@ NR == 2 {n = length($0); print n, "ENERGY = 0.0", name
         self.assertEqual(local.read_bytes(), self.first.read_bytes())
         self.assertEqual(self.ct_sequence("alpha_1-12.fasta.ct"), "GGGGAAAACCCC")
 
+    def test_missing_inputs_preserve_previous_fold_results(self):
+        self.enable_scoring()
+        for option, missing in (("-i", "missing.hyb"), ("-d", "missing.fa"), ("-2", "missing.fa")):
+            with self.subTest(option=option):
+                done = self.fold("hyb2_fold", "-d", self.first, "-2", self.second)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(self.ct_sequence("alpha_1-12.fasta.ct"), "GGGGAAAACCCC")
+                before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+
+                failed = self.fold("hyb2_fold", "-d", self.first, "-2", self.second, option, missing)
+                self.assertEqual(failed.returncode, 1, failed.stderr)
+                self.assertIn("Cannot read input: " + missing, failed.stderr)
+                self.assertNotIn("Welcome to comradesFold2", failed.stdout)
+                after = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+                self.assertEqual(after, before)
+
     def test_backend_failure_aborts_public_analysis(self):
         self.tool("RNAfold", "exit 9")
         done = self.fold("hyb2", "-d", self.first)

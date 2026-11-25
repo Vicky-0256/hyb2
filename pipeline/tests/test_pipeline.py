@@ -594,6 +594,44 @@ class CliTest(unittest.TestCase):
             status = main([str(a) for a in args])
         return status, err.getvalue()
 
+    def test_nonfinite_thresholds_fail_before_changing_outputs(self):
+        from hyb2pipe.__main__ import main
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reference, reads, output = base / "ref.fa", base / "reads.sam", base / "out"
+            reference.write_text(">toy\n" + "ACGT" * 40 + "\n")
+            sequence = "ACGT" * 10
+            reads.write_text("@SQ\tSN:toy\tLN:160\n"
+                             f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{sequence}\t*\tAS:i:40\tNM:i:0\n"
+                             f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{sequence}\t*\tAS:i:40\tNM:i:0\n")
+            args = ["-i", str(reads), "-d", str(reference), "-o", str(output), "-p", "1"]
+            status, err = self._main(*args, "-v", "1e-1", "-m", "4e0")
+            self.assertEqual(status, 0, err)
+            self.assertEqual(len(output.with_suffix(".hyb").read_text().splitlines()), 1)
+            before = {path: path.read_bytes() for path in base.rglob("*") if path.is_file()}
+
+            for option in ("-v", "-m"):
+                for value in ("nan", "inf", "-inf", "1e309"):
+                    for json_progress in (False, True):
+                        with self.subTest(option=option, value=value, json_progress=json_progress):
+                            stdout, stderr = io.StringIO(), io.StringIO()
+                            flags = ["--json-progress"] if json_progress else []
+                            with mock.patch.object(sys, "stdout", stdout), mock.patch.object(sys, "stderr", stderr):
+                                status = main([*args, option + "=" + value, *flags])
+                            self.assertEqual(status, 2)
+                            if json_progress:
+                                message = json.loads(stdout.getvalue())
+                                self.assertEqual(message["type"], "error")
+                                detail = message["error"]
+                                self.assertEqual(stderr.getvalue(), "")
+                            else:
+                                self.assertEqual(stdout.getvalue(), "")
+                                detail = stderr.getvalue()
+                            self.assertIn(option, detail)
+                            self.assertIn("finite number", detail)
+                            after = {path: path.read_bytes() for path in base.rglob("*") if path.is_file()}
+                            self.assertEqual(after, before)
+
     def test_truncated_gzip_is_an_input_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             packed = Path(tmp) / "reads.sam.gz"
@@ -885,6 +923,34 @@ class LegacyCliTest(unittest.TestCase):
         self.assertNotEqual(python.returncode, 0)
         self.assertIn(message, python.stderr)
         self.assertFalse((self.base / "py/out.hyb").exists())
+
+    @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build"), "Bowtie2 not installed")
+    def test_fasta_reads_named_with_at_map_as_without_it(self):
+        # solexa2fasta.awk writes reads as >@name; Bowtie2 keeps the @ in the
+        # SAM read name, where it made every alignment look like a header line.
+        rows = [line.split("\t") for line in inputs.iter_lines(ROOT / "data/testData.sam") if not line.startswith("@")]
+        seen = []
+        for row in rows:
+            if row[1] == "0" and row[0] not in seen and len(seen) < 3000:
+                seen.append(row[0])
+                seen.append(row[9])
+        reference = ROOT / "data/Zika_18S_formatted.fasta"
+        outputs, warnings = {}, {}
+        for prefix in ("", "@"):
+            reads = self.base / ("reads%s.fasta" % ("_at" if prefix else ""))
+            reads.write_text("".join(">%s%s\n%s\n" % (prefix, name, seq) for name, seq in zip(seen[::2], seen[1::2])))
+            log_path = self.base / ("map%s.log" % prefix)
+            with open(log_path, "w") as log:
+                python = run(reads, reference, self.base / ("py" + prefix) / "out", Options(threads=2), log=log)
+            legacy = self.cli(ROOT / "bin/hyb2", "-i", reads, "-d", reference, "-o", self.base / ("legacy" + prefix))
+            self.assertEqual(legacy.returncode, 0, legacy.stderr)
+            outputs[prefix] = (python.hyb.read_bytes(), (self.base / ("legacy" + prefix + ".hyb")).read_bytes())
+            warned = "the leading '@' is removed"
+            warnings[prefix] = (warned in log_path.read_text(), warned in legacy.stderr)
+        self.assertGreater(outputs[""][0].count(b"\n"), 100)
+        self.assertGreater(outputs[""][1].count(b"\n"), 100)
+        self.assertEqual(outputs["@"], outputs[""])
+        self.assertEqual(warnings, {"": (False, False), "@": (True, True)})
 
     def test_reference_formatting_uses_the_hyb2pipe_rules(self):
         for name, text in (("wrapped", ">alpha|protein_coding\r\nGGGG\r\nAAAA\r\n>skip||kind\r\nCCCC\r\n>b|t\r\nUU\r\n"),

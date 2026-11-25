@@ -43,7 +43,7 @@ cd -- "$work"
 
 collapse_fastq() { solexa2fasta.awk | fasta2tab.awk | make_comp_fasta.pl; }
 case "$kind" in
-    fasta) LC_ALL=C awk -f "$bin_dir/mapping_fasta.awk" < "$input" > reads.fasta ;;
+    fasta) LC_ALL=C awk -v reads=1 -f "$bin_dir/mapping_fasta.awk" < "$input" > reads.fasta ;;
     fastq) collapse_fastq < "$input" > reads.fasta ;;
     fastq.gz) gunzip -c < "$input" | collapse_fastq > reads.fasta ;;
 esac

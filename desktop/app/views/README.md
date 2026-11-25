@@ -2,9 +2,8 @@
 
 The desktop interface is built with MyGo's `ui` package (v0.4.8, see
 `go list -m -f '{{.Dir}}' github.com/egoist/mygo` → `docs/ui/`, `ui/doc.go`).
-Read `../.agents/skills/mygo-maintenance/SKILL.md` first: it lists the
-lifetime rules (never store `ui.Element` in state, keys before
-construction, slow work off the main thread).
+Follow MyGo's lifetime rules: never store `ui.Element` in state, set keys
+before construction, and keep slow work off the main thread.
 
 ## Structure
 

@@ -7,3 +7,7 @@ dist/
 resources/native/
 resources/native-*/
 resources/native-stage-*/
+
+# Local agent skills and UI review screenshots; kept on disk, not published.
+app/.agents/
+review/

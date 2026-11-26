@@ -90,6 +90,12 @@ other ignored local artifacts.
   Output is byte-identical to the original (kept as `_outside_python`;
   `CPLFOLD_PYTHON_OUTSIDE=1` selects it). 600 nt drops from 270 s to about
   1 s. This change is not upstream yet.
+- `cplfold/_internal/single.py` `phase1_fold` takes one Phase-1 candidate
+  from `parse` rather than `parse_subopt(max_structures=1)`, whose first
+  result is the same MFE structure and score after an outside pass it does
+  not use (the CPLcofold parser already did this). Results are identical;
+  yeast U2 (1,175 nt, beam 200) drops from 2.4 s to 0.5 s, and a pure-Python
+  200-nt fold from 56 s to 31 s. This change is not upstream yet.
 - `LICENSE` is the author's GPL-3.0-or-later grant for CPLfold's own code
   (2026-11-23), not in upstream commit `24bab52`. Copies already
   distributed under the earlier GPL-2.0-or-later grant (2026-10-17) keep it. `LICENSES/`,

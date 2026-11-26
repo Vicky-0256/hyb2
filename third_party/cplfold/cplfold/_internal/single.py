@@ -257,6 +257,9 @@ def phase1_fold(seq: str, parser: BeamCKYParserHyper,
     Returns:
         List of (structure, score) tuples
     """
+    if max_structures == 1:
+        # The MFE alone: parse_subopt's first result, without its outside pass.
+        return [parser.parse(seq)[:2]]
     results = parser.parse_subopt(seq, energy_delta=energy_delta, max_structures=max_structures)
     return results[:max_structures]
 

@@ -46,6 +46,7 @@
       return;
     }
     settleExportPanel(state);
+    announceExport(state);
     measureContents();
     const target = document.querySelector("[data-report-structure-diagram]");
     if (!target || !window.Hyb2StructureUI || typeof window.Hyb2StructureUI.buildStructureDiagram !== "function") {
@@ -121,6 +122,31 @@
     document.addEventListener("click", function (event) {
       exportClosing = !!(event.target && event.target.closest && event.target.closest('[data-action="report-export-close"]'));
     }, true);
+  }
+
+  // One live region, outside the re-rendered page, says how the export is
+  // going (the panel itself is redrawn on every render, so a live region in
+  // it would not be announced reliably). Errors are role="alert" in the panel.
+  function announceExport(state) {
+    const exp = state && state.reportExport || null;
+    if (typeof document.querySelector !== "function" || typeof document.createElement !== "function") return;
+    let live = document.querySelector("[data-report-export-live]");
+    if (!live && document.body && typeof document.body.appendChild === "function") {
+      live = document.createElement("div");
+      if (!live || typeof live.setAttribute !== "function") return;
+      live.className = "visually-hidden";
+      live.setAttribute("role", "status");
+      live.setAttribute("aria-live", "polite");
+      live.setAttribute("data-report-export-live", "");
+      document.body.appendChild(live);
+    }
+    if (!live || typeof live.setAttribute !== "function") return;
+    const name = exp && EXPORT_TEXT[exp.audience] ? EXPORT_TEXT[exp.audience][0] : "";
+    const text = !exp || exp.audience === "people" ? ""
+      : exp.status === "preparing" ? "Preparing the " + name + " export…"
+      : exp.status === "ready" ? name + " export ready: " + formatNumber((exp.list || []).length) + " files."
+      : "";
+    if (live.textContent !== text) live.textContent = text;
   }
 
   // render() runs while the page it replaces is still in the document
@@ -229,11 +255,11 @@
       '<header class="report-hero">',
       '  <div class="report-hero-top">',
       '    <div class="report-identity">',
-      '      <span class="report-logo-wrap report-logo-light"><img src="' + (window.HYB2_ASSET_BASE || "./") + 'assets/hyb2-logo.png" alt="HYB2"></span>',
-      '      <span class="report-logo-wrap report-logo-dark"><img src="' + (window.HYB2_ASSET_BASE || "./") + 'assets/hyb2-logo-dark.png" alt="HYB2"></span>',
+      '      <span class="report-logo-wrap report-logo-light"><img src="' + (window.HYB2_ASSET_BASE || "./") + 'assets/hyb2-logo.png" alt="HYB2" width="147" height="67"></span>',
+      '      <span class="report-logo-wrap report-logo-dark"><img src="' + (window.HYB2_ASSET_BASE || "./") + 'assets/hyb2-logo-dark.png" alt="HYB2" width="147" height="67"></span>',
       '      <span><span class="report-product">HYB2 Web Lite</span><span class="report-document-label">Consolidated analysis report</span></span>',
       "    </div>",
-      '    <div class="report-actions" aria-label="Report actions">',
+      '    <div class="report-actions" role="group" aria-label="Report actions">',
       '      <button class="button" type="button" data-action="print-report">Print / Save PDF</button>',
       '      <details class="export-menu report-export-menu">',
       '        <summary class="button button-secondary">Export</summary>',
@@ -245,7 +271,7 @@
       "      </details>",
       // inside the workspace the sidebar already returns; embedded and
       // standalone views keep their own way back
-      context.state.shell === true ? "" : '      <button class="quiet-button" type="button" data-action="navigate" data-page="overview">Back to workspace</button>',
+      context.state.shell === true ? "" : '      <a class="quiet-button" href="#overview" data-action="navigate" data-page="overview">Back to workspace</a>',
       "    </div>",
       "  </div>",
       '  <div class="report-hero-copy">',
@@ -430,8 +456,8 @@
     const partners = context.partnerCounts || [];
     const rows = boundedItems(records, MAX_TABLE_ROWS, sortRecords).map(function (record) {
       return [
-        '<code>' + escape(truncateText(record.id || "", 34)) + '</code>',
-        escape((record.rnaOne || "") + " <-> " + (record.rnaTwo || "")),
+        truncatedCode(record.id || "", 34),
+        escape((record.rnaOne || "") + " ↔ " + (record.rnaTwo || "")),
         '<code>' + escape(range(record.rnaOneStart, record.rnaOneEnd)) + '</code>',
         '<code>' + escape(range(record.rnaTwoStart, record.rnaTwoEnd)) + '</code>',
         escape(window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(record.chimeraType) : record.chimeraType || "Unknown"),
@@ -599,7 +625,7 @@
       return [escape(item.name), formatNumber(item.records), formatNumber(item.support)];
     }) : [];
     const recordRows = results && Array.isArray(results.records) ? boundedItems(results.records, MAX_TABLE_ROWS, sortRecords).map(function (record) {
-      return [escape(truncateText(record.id || "", 34)), escape(record.rnaOne || ""), escape(range(record.rnaOneStart, record.rnaOneEnd)), escape(record.rnaTwo || ""), escape(range(record.rnaTwoStart, record.rnaTwoEnd)), formatNumber(record.supportCount)];
+      return [truncatedCode(record.id || "", 34), escape(record.rnaOne || ""), escape(range(record.rnaOneStart, record.rnaOneEnd)), escape(record.rnaTwo || ""), escape(range(record.rnaTwoStart, record.rnaTwoEnd)), formatNumber(record.supportCount)];
     }) : [];
     return section(
       "region",
@@ -748,8 +774,8 @@
         "</div>",
         ready ? '<div class="report-structure-result"><div class="report-subsection-heading"><h3>Printable secondary-structure view</h3><span class="report-note-inline">Arc layout used for the report snapshot</span></div><div class="report-structure-diagram" data-report-structure-diagram></div><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> The report uses a stable Arc layout so it prints consistently. Use the RNA Structure page SVG/PNG controls to export folded, radial, circular, or matrix views.</p>' + dataNote(context, "results/structure_prediction.json") + dataNote(context, "results/structure_prediction.dbn") + '</div>' : "",
         ready ? '<div class="report-grid report-analysis-grid">' : "",
-        ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.displaySequence || result.sequence || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12 R37"><span class="report-cite">S12, R37</span> The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
-        ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracketWithBreak || result.dotBracket || "", 1400)) + '</code></pre><p class="report-note" data-cites="S12"><span class="report-cite">S12</span> Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
+        ready ? '<div class="report-subsection"><h3>Sequence</h3><pre class="report-sequence"><code>' + escape(truncateText(result.displaySequence || result.sequence || "", 1400)) + '</code></pre>' + fullValue(result.displaySequence || result.sequence || "", 1400, "sequence") + '<p class="report-note" data-cites="S12 R37"><span class="report-cite">S12, R37</span> The complete prepared sequence remains available through the Structure page FASTA export.</p></div>' : "",
+        ready ? '<div class="report-subsection"><h3>Dot-bracket</h3><pre class="report-sequence"><code>' + escape(truncateText(result.dotBracketWithBreak || result.dotBracket || "", 1400)) + '</code></pre>' + fullValue(result.dotBracketWithBreak || result.dotBracket || "", 1400, "dot-bracket") + '<p class="report-note" data-cites="S12"><span class="report-cite">S12</span> Selected candidate: ' + escape(prediction.structureType || result.structureType || "MFE") + '; view the complete notation through the DBN export.</p></div>' : "",
         ready && result.cutpoint ? '<p class="report-note">Two RNA strands; &amp; marks the break after nucleotide ' + formatNumber(result.cutpoint) + '. Pair coordinates exclude this separator. ' + (result.energyMetadata && result.energyMetadata.energy_kind === "heuristic" ? 'Pseudoknot energies use an experimental ranking heuristic; they are not validated binding free energies.' : '') + '</p>' : "",
         ready ? "</div>" : "",
         cplfold && candidateRows.length ? '<div class="report-subsection report-subsection--table"><div class="report-subsection-heading"><h3>CPLfold candidates</h3><span class="report-note-inline">Showing ' + formatNumber(Math.min(result.candidates.length, MAX_TABLE_ROWS)) + ' of ' + formatNumber(result.candidates.length) + '</span></div>' + table([num("Rank"), "Type", "Topology", num("Energy", "kcal/mol"), num("Pairs"), num("Crossing"), ...(scoredCandidates ? [num("COMRADES score")] : []), "Dot-bracket"], candidateRows) + '</div>' : "",
@@ -934,8 +960,8 @@
     ok: ["is-ready", "Completed"],
     no_result: ["is-pending", "No result"],
     not_run: ["is-pending", "Not run"],
-    running: ["is-pending", "Running"],
-    pending: ["is-pending", "Preparing"],
+    running: ["is-pending", "Running…"],
+    pending: ["is-pending", "Preparing…"],
     failed: ["is-warning", "Failed"],
     stale: ["is-warning", "Inputs changed"]
   };
@@ -1051,7 +1077,7 @@
       '<span class="report-status is-ready">' + formatNumber(done) + " of " + formatNumber(record.steps.length) + " steps completed</span>",
       [
         '<label class="report-purpose"><span>Purpose of this analysis (optional, written by you; saved in the exports as the researcher\'s text)</span>' +
-          '<textarea id="report-purpose" rows="2" maxlength="1000" placeholder="e.g. Which ZIKV genome contacts differ between the African and Asian lineages?">' + escape(purpose) + "</textarea></label>",
+          '<textarea id="report-purpose" name="report-purpose" rows="2" maxlength="1000" autocomplete="off" placeholder="e.g. Which ZIKV genome contacts differ between the African and Asian lineages…">' + escape(purpose) + "</textarea></label>",
         purpose.trim() ? '<p class="report-purpose-print"><strong>Purpose:</strong> ' + escape(purpose.trim()) + "</p>" : "",
         '<p class="report-note">Each step has a fixed id (S01 to S13) shared with the Markdown and JSON exports. A step that did not run shows “Not run”; its results show —, never 0. Untick a step to make a selected-results report: the page and every export then leave it out and say so.</p>',
         selected ? '<p class="notice notice-warning report-selected-note">Selected results report: ' + escape(record.scope.omittedSteps.join(", ")) + ' left out. <button class="quiet-button" type="button" data-action="report-select-all">Include every step</button></p>' : "",
@@ -1160,18 +1186,18 @@
     const waiting = context.record ? context.record.steps.filter(function (step) { return step.status === "pending" || step.status === "running"; }) : [];
     if (waiting.length) {
       out.push('<p class="notice notice-warning" data-export-waiting>Still being prepared: ' + escape(waiting.map(function (step) { return step.id + " " + step.title; }).join("; ")) +
-        ". These steps are exported as " + escape(waiting.map(function (step) { return statusLabel(step.status).toLowerCase(); }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" or ")) + ", without results; open the export again when they finish to include their results.</p>");
+        ". These steps are exported as " + escape(waiting.map(function (step) { return statusLabel(step.status).replace("…", "").toLowerCase(); }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" or ")) + ", without results; open the export again when they finish to include their results.</p>");
     }
     if (exp.audience === "people") {
       out.push('<div class="report-export-actions"><button class="button" type="button" data-action="print-report">Print / Save PDF</button><button class="button button-secondary" type="button" data-action="report-export-html">Download offline HTML</button></div>');
     } else if (exp.status === "preparing") {
-      out.push('<p class="report-note" aria-live="polite">Preparing the files in this tab…</p>');
+      out.push('<p class="report-note">Preparing the files in this tab…</p>');
     } else if (exp.status === "error") {
-      out.push('<p class="notice notice-error">' + escape(exp.error || "The export could not be prepared.") + "</p>");
+      out.push('<p class="notice notice-error" role="alert">' + escape(exp.error || "The export could not be prepared.") + " Close this panel and choose the export again; if it fails again, reload the page and retry.</p>");
     } else if (exp.status === "ready") {
       out.push('<div class="report-export-actions"><button class="button" type="button" data-action="report-export-zip">Download all (about ' + escape(formatBytes(packageSize(context, exp.list), 3)) + ", ZIP)</button>" +
         (exp.audience === "ai" ? '<button class="button button-secondary" type="button" data-action="report-export-copy">Copy AI summary (report.md)</button>' : "") + "</div>");
-      out.push(table(["Include", "File", "Contents and fields", num("Size"), ""], exp.list.map(function (f) {
+      out.push(table(["Include", "File", "Contents and fields", num("Size"), { label: "Download", hidden: true }], exp.list.map(function (f) {
         const box = '<label class="report-tick"><input type="checkbox" data-action="report-export-toggle" data-path="' + escape(f.path) + '"' + (f.excluded ? "" : " checked") + (f.required ? " disabled" : "") +
           ' aria-label="Include ' + escape(f.path) + '"></label>';
         const fields = f.fields && f.fields.length ? '<details class="report-fields"><summary>' + formatNumber(f.fields.length) + (f.fields.length === 1 ? " field" : " fields") + "</summary><code>" +
@@ -1250,7 +1276,7 @@
     // the long-name columns share 60% of the width (names get the most room)
     const longColumns = columns.filter(function (column) { return column.truncate; }).length;
     return '<div class="report-table-scroll"><table class="report-table"><thead><tr>' + columns.map(function (column) {
-      return '<th scope="col"' + (column.num ? ' class="num"' : "") + (column.truncate ? ' style="width:' + Math.round(60 / longColumns) + '%"' : "") + '>' + escape(column.label) + (column.unit ? ' <span class="unit">' + escape(column.unit) + "</span>" : "") + '</th>';
+      return '<th scope="col"' + (column.num ? ' class="num"' : "") + (column.truncate ? ' style="width:' + Math.round(60 / longColumns) + '%"' : "") + '>' + (column.hidden ? '<span class="visually-hidden">' + escape(column.label) + "</span>" : escape(column.label)) + (column.unit ? ' <span class="unit">' + escape(column.unit) + "</span>" : "") + '</th>';
     }).join("") + '</tr></thead><tbody>' + rows.map(function (row) {
       return '<tr>' + row.map(function (cell, index) {
         const column = columns[index] || {};
@@ -1852,18 +1878,18 @@
 
   // page display only, in the viewer's local time: "16 Oct 2026, 23:54 (UTC+1)".
   // The result record and every export keep generatedAt / completedAt as ISO.
-  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const TIMESTAMP_FORMAT = new Intl.DateTimeFormat("en-US", {
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "shortOffset"
+  });
   function formatTimestamp(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
       return "Local time";
     }
-    const pad = function (n) { return String(n).padStart(2, "0"); };
-    const offset = -date.getTimezoneOffset();
-    const hours = Math.floor(Math.abs(offset) / 60);
-    const minutes = Math.abs(offset) % 60;
-    const zone = "UTC" + (offset === 0 ? "" : (offset > 0 ? "+" : "\u2212") + hours + (minutes ? ":" + pad(minutes) : ""));
-    return date.getDate() + " " + MONTHS[date.getMonth()] + " " + date.getFullYear() + ", " + pad(date.getHours()) + ":" + pad(date.getMinutes()) + " (" + zone + ")";
+    const parts = {};
+    TIMESTAMP_FORMAT.formatToParts(date).forEach(function (part) { parts[part.type] = part.value; });
+    const zone = String(parts.timeZoneName || "GMT").replace(/^GMT([+-]0)?$/, "GMT").replace(/^GMT/, "UTC").replace("-", "\u2212");
+    return parts.day + " " + parts.month + " " + parts.year + ", " + parts.hour + ":" + parts.minute + " (" + zone + ")";
   }
 
   // a <time> element: readable text, the ISO value in datetime and title
@@ -1892,7 +1918,20 @@
     if (text.length <= maximum) return text;
     const head = Math.ceil(maximum * 0.62);
     const tail = Math.max(1, maximum - head - 18);
-    return text.slice(0, head) + " ... [truncated] ... " + text.slice(-tail);
+    return text.slice(0, head) + " … " + text.slice(-tail);
+  }
+
+  // a shortened id in <code>, its full value in the title
+  function truncatedCode(value, maximum) {
+    const text = String(value == null ? "" : value);
+    return "<code" + (text.length > maximum ? ' title="' + escape(text) + '"' : "") + ">" + escape(truncateText(text, maximum)) + "</code>";
+  }
+
+  // the whole of a shortened sequence, folded away under the short one
+  function fullValue(value, maximum, label) {
+    const text = String(value == null ? "" : value);
+    if (text.length <= maximum) return "";
+    return '<details class="report-full-value"><summary>Show the full ' + escape(label) + " (" + formatNumber(text.length) + " characters)</summary><pre class=\"report-sequence\"><code>" + escape(text) + "</code></pre></details>";
   }
 
   function safeCall(callback, fallback) {

@@ -23,6 +23,9 @@
   const REPORT_CELLS = 20000;
   const VALIDATION = "On the ZIKV virion comparison (ZAFR_REP1/2 vs ZILM_REP2/3, 1,038,539 tested 10-nt cells) it matches R DESeq2 1.46: the same 83,023 significant cells (20,660 up / 62,363 down) and 668 / 1,725 merged interactions at padj < 0.05 (one interaction is an exactly tied neighbour of R's pick, because ties are merged in table order); against HYB2 Desktop's numpy port, log2 fold changes agree to 2e-9 and padj to 3e-7 (relative) over every tested cell. On smaller inputs the gap can be wider (1-in-10 subsamples of the same files: padj within 0.3%, one cell on either side of 0.05), because the browser's Math.log is not always correctly rounded and the desktop's is.";
 
+  // the next step after a failed run
+  const RETRY = "Check the datasets and the three fields above, then press Run differential test again; if it fails again, export the HYB2 count table from the page's Export menu and run DESeq2 in R or HYB2 Desktop";
+
   let worker = null;
   let runToken = 0;
 
@@ -175,13 +178,13 @@
     const padjCutoff = fieldNumber(deseq.padjCutoff);
     const errors = [];
     if (!Number.isInteger(minCount) || minCount < 0) {
-      errors.push("Min count must be a non-negative integer.");
+      errors.push("Min count must be a non-negative integer: enter a whole number ≥ 0 in \u201cTest cells with total count above\u201d, such as 2.");
     }
     if (!Number.isInteger(radius) || radius < 0) {
-      errors.push("Merge range must be a non-negative integer (nt).");
+      errors.push("Merge range must be a non-negative integer (nt): enter a whole number ≥ 0 in \u201cMerge range (nt)\u201d, such as 100.");
     }
     if (!(padjCutoff > 0 && padjCutoff <= 1)) {
-      errors.push("The padj cutoff must be between 0 and 1.");
+      errors.push("The padj cutoff must be between 0 and 1: enter a number above 0 and at most 1 in \u201cSignificant if padj below\u201d, such as 0.05.");
     }
     return { minCount: minCount, radius: radius, padjCutoff: padjCutoff, alpha: 0.01, binSize: BIN, errors: errors };
   }
@@ -201,8 +204,12 @@
     });
   }
 
+  const integerFormat = new Intl.NumberFormat("en-US");
+  const percentFormat = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
+  const fixedFormats = {};
+
   function num(value) {
-    return Number(value || 0).toLocaleString("en-US");
+    return integerFormat.format(Number(value || 0));
   }
 
   function padjText(value) {
@@ -213,11 +220,16 @@
   }
 
   function fixed(value, digits) {
-    return Number.isFinite(value) ? value.toFixed(digits) : "NA";
+    if (!Number.isFinite(value)) {
+      return "NA";
+    }
+    fixedFormats[digits] = fixedFormats[digits] || new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    return fixedFormats[digits].format(value);
   }
 
+  // "1.2 s" with a non-breaking space before the unit
   function seconds(ms) {
-    return (Number(ms || 0) / 1000).toFixed(1) + " s";
+    return fixed(Number(ms || 0) / 1000, 1) + "\u00a0s";
   }
 
   // ---- card
@@ -232,9 +244,14 @@
     const result = deseq.result;
     const running = deseq.status === "running";
     const stale = result && result.inputKey !== inputKey(comparison);
-    const field = function (label, key, value, hint) {
-      return '<label class="control-field"><span>' + esc(label) + '</span><input type="number" value="' + esc(value) + '" data-feature="deseq-control" data-key="' + key + '"' +
-        (key === "padjCutoff" ? ' min="0" max="1" step="0.01"' : ' min="0" step="1"') + (hint ? ' title="' + esc(hint) + '"' : "") + "></label>";
+    // the help of each field is shown under the grid (one line per field) and
+    // read with it through aria-describedby
+    const field = function (label, key, value) {
+      return '<label class="control-field"><span>' + esc(label) + '</span><input type="number" name="deseq-' + key + '" autocomplete="off" value="' + esc(value) + '" data-feature="deseq-control" data-key="' + key + '"' +
+        (key === "padjCutoff" ? ' inputmode="decimal" min="0" max="1" step="0.01"' : ' inputmode="numeric" min="0" step="1"') + ' aria-describedby="deseq-help-' + key + '"></label>';
+    };
+    const help = function (key, label, text) {
+      return '<span id="deseq-help-' + key + '"><strong>' + esc(label) + ":</strong> " + esc(text) + "</span>";
     };
     const out = [
       '<section class="data-card deseq-card" id="deseq-card">',
@@ -242,10 +259,15 @@
         esc(labelA) + ' and ' + esc(labelB) + '? Each 10-nt × 10-nt contact cell is tested with the replicates as the noise estimate; significant neighbouring cells are merged into interactions, as hyb2_compare does. Runs in this tab; nothing is uploaded.</span></div><span class="card-kicker">' +
         num(check.nA) + ' + ' + num(check.nB) + ' replicates</span></div>',
       '<div class="comparison-control-grid">',
-      field("Test cells with total count above", "minCount", deseq.minCount, "Cells whose counts summed over all datasets are at most this are not tested (hyb2_compare -m)"),
-      field("Merge range (nt)", "radius", deseq.radius, "Significant cells within this many nt (in x and y) of a stronger one of the same direction are merged (hyb2_compare -r)"),
-      field("Significant if padj below", "padjCutoff", deseq.padjCutoff, "Cells with padj below this are significant (independent filtering uses alpha 0.01, as DESeq_run.R)"),
+      field("Test cells with total count above", "minCount", deseq.minCount),
+      field("Merge range (nt)", "radius", deseq.radius),
+      field("Significant if padj below", "padjCutoff", deseq.padjCutoff),
       '</div>',
+      '<p class="card-note deseq-field-help">' + [
+        help("minCount", "Total count", "cells whose counts summed over all datasets are at most this are not tested (hyb2_compare -m)."),
+        help("radius", "Merge range", "significant cells within this many nt (in x and y) of a stronger one of the same direction are merged (hyb2_compare -r)."),
+        help("padjCutoff", "padj", "cells with padj below this are significant; independent filtering uses alpha 0.01, as DESeq_run.R.")
+      ].join(" ") + "</p>",
       '<div class="deseq-include"><span class="card-note">Datasets in the test:</span>' + (comparison.datasets || []).map(function (dataset) {
         // a dataset with no condition is left out by assignedDatasets
         const assigned = dataset.condition === "A" || dataset.condition === "B";
@@ -299,6 +321,28 @@
     });
   }
 
+  // The map's text equivalent (canvas aria-describedby): the shown range and
+  // what it holds. Updated in place when the view is zoomed or panned.
+  function mapSummary(comparison, deseq, result, labelA, labelB) {
+    const show = deseq.show || "both";
+    const full = mapLength(result);
+    const view = mapViews.get(result) || { x: 0, y: 0, span: full };
+    const inView = function (x, y) { return x >= view.x && x < view.x + view.span && y >= view.y && y < view.y + view.span; };
+    let up = 0;
+    let down = 0;
+    eachCell(result, show, function (x, y, colour) {
+      if (inView(x, y)) {
+        if (colour === RED) { up += 1; } else { down += 1; }
+      }
+    });
+    const merged = shownRows(result, show).filter(function (row) { return inView(row.x, row.y); }).length;
+    const range = function (start) { return num(start) + "–" + num(start + view.span) + "\u00a0nt"; };
+    return (view.span < full ? "Zoomed to " : "Showing ") + (comparison.rnaX || "RNA X") + " " + range(view.x) + " (arm 1) × " +
+      (comparison.rnaY || comparison.rnaX || "RNA Y") + " " + range(view.y) + " (arm 2)" + (view.span < full ? " of " + num(full) + "\u00a0nt" : "") + ": " +
+      num(up + down) + " significant cells (" + num(up) + " higher in " + labelA + ", " + num(down) + " higher in " + labelB + "), " +
+      num(merged) + " merged interactions.";
+  }
+
   function renderResult(comparison, deseq, result, stale, labelA, labelB) {
     const s = result.summary;
     const show = deseq.show || "both";
@@ -316,7 +360,7 @@
       ["Significant (padj < " + s.parameters.padjCutoff + ")", num(s.significant) + " cells"],
       ["Higher in " + labelA, num(s.significantUp) + " cells · " + num(s.interactionsUp) + " interactions"],
       ["Higher in " + labelB, num(s.significantDown) + " cells · " + num(s.interactionsDown) + " interactions"],
-      ["Size factors", s.sizeFactors.map(function (value) { return value.toFixed(4); }).join(" · ")],
+      ["Size factors", s.sizeFactors.map(function (value) { return fixed(value, 4); }).join(" · ")],
       ["Run time", seconds(s.timings.workerMs || s.timings.totalMs)]
     ].map(function (entry) { return "<div><dt>" + esc(entry[0]) + "</dt><dd>" + esc(entry[1]) + "</dd></div>"; }).join("") + "</dl>");
     out.push('<div class="card-title-row deseq-panel-title"><div><h3>A · Differential coverage map</h3><span class="card-note">Significant 10-nt cells (padj &lt; ' + esc(s.parameters.padjCutoff) +
@@ -327,8 +371,9 @@
       }).join("") + "</select></label></div>");
     out.push('<div class="inline-actions">' + [["in", "Zoom in"], ["out", "Zoom out"], ["reset", "Reset zoom"]].map(function (item) {
       return '<button class="quiet-button" type="button" data-feature-action="deseq-zoom" data-zoom="' + item[0] + '">' + item[1] + '</button>';
-    }).join("") + '<span class="card-note">Scroll to zoom · drag to pan · double-click to reset</span></div>');
-    out.push('<div class="canvas-wrap deseq-canvas-wrap"><canvas id="deseq-panel-canvas" class="deseq-canvas" width="640" height="640" aria-label="Differential coverage map"></canvas></div>');
+    }).join("") + '<span class="card-note" id="deseq-map-keys">Ctrl/⌘&nbsp;+&nbsp;wheel to zoom · drag to pan · double-click to reset. With the map focused: arrow keys pan, +&nbsp;/&nbsp;− zoom, 0 resets, Enter picks the interaction nearest the centre</span></div>');
+    out.push('<div class="canvas-wrap deseq-canvas-wrap"><canvas id="deseq-panel-canvas" class="deseq-canvas" width="640" height="640" tabindex="0" role="img" aria-label="Differential coverage map" aria-describedby="deseq-map-summary deseq-map-keys"></canvas></div>');
+    out.push('<p class="card-note deseq-map-summary" id="deseq-map-summary" aria-live="polite">' + esc(mapSummary(comparison, deseq, result, labelA, labelB)) + "</p>");
     // K2: the card's downloads sit in one Export menu; "Use in arc map" is an action
     out.push('<div class="inline-actions"><button class="button" type="button" data-feature-action="deseq-use-arcmap">Use in arc map</button>' +
       '<details class="export-menu card-export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
@@ -342,18 +387,23 @@
     if (deseq.arcMapFed && !stale) {
       out.push('<p class="card-note">The arc map below now draws these HYB-derived merged interactions; the region structures (D, E) and folding energies (F, G) follow from it. Those panels use their own padj cutoff (0.01 by default), so they can show fewer interactions than this table.</p>');
     }
+    const listed = Math.min(rows.length, Math.max(TABLE_ROWS, Number(deseq.tableRows) || TABLE_ROWS));
     out.push('<div class="card-title-row"><h3>Merged interactions</h3><span class="card-note">' + num(rows.length) + " shown by padj" +
-      (rows.length > TABLE_ROWS ? " (first " + TABLE_ROWS + " listed; the TSV has all)" : "") + "</span></div>");
+      (rows.length > listed ? " (first " + num(listed) + " listed; the TSV has all)" : "") + "</span></div>");
     if (!rows.length) {
       out.push('<p class="card-note">No significant interaction in this direction.</p>');
     } else {
       out.push('<div class="data-table-wrap deseq-table"><table class="data-table"><thead class="nowrap"><tr><th>Higher in</th><th class="num">Arm 1 <span class="unit">x, nt</span></th><th class="num">Arm 2 <span class="unit">y, nt</span></th><th class="num">log2 ' + esc(labelA) + '/' + esc(labelB) + '</th><th class="num">padj</th><th class="num">Mean count <span class="unit">normalised</span></th></tr></thead><tbody>' +
-        rows.slice(0, TABLE_ROWS).map(function (row) {
+        rows.slice(0, listed).map(function (row) {
           const key = row.direction + ":" + row.x + ":" + row.y;
           return '<tr class="' + (selected === key ? "is-selected" : "") + '" data-feature-action="deseq-select" data-key="' + esc(key) + '" tabindex="0"><td>' +
             esc(row.direction === "up" ? labelA : labelB) + '</td><td class="num">' + num(row.x) + "–" + num(row.x + BIN - 1) + '</td><td class="num">' + num(row.y) + "–" + num(row.y + BIN - 1) +
             '</td><td class="num">' + fixed(row.log2FoldChange, 2) + '</td><td class="num">' + padjText(row.padj) + '</td><td class="num">' + fixed(row.baseMean, 1) + "</td></tr>";
         }).join("") + "</tbody></table></div>");
+      if (rows.length > listed) {
+        out.push('<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="deseq-table-more">Show ' +
+          num(Math.min(TABLE_ROWS, rows.length - listed)) + " more</button><span class=\"card-note\">" + num(rows.length - listed) + " not listed yet</span></div>");
+      }
     }
     return out.join("");
   }
@@ -585,8 +635,41 @@
       const box = canvas.getBoundingClientRect(), g = geometry(width, height, mapLength(deseq.result), mapViews.get(deseq.result));
       return { x: event.clientX - box.left, y: event.clientY - box.top, g: g };
     };
-    const redraw = function () { drawPanel(context, width, height, comparison, deseq.result, deseq.show || "both", selectedInteraction(deseq), screenColours()); };
+    const redraw = function () {
+      drawPanel(context, width, height, comparison, deseq.result, deseq.show || "both", selectedInteraction(deseq), screenColours());
+      const summary = document.getElementById("deseq-map-summary");
+      if (summary) {
+        summary.textContent = mapSummary(comparison, deseq, deseq.result, comparison.conditionALabel || "Condition A", comparison.conditionBLabel || "Condition B");
+      }
+    };
+    // pick the merged interaction nearest a map position (nt), within the
+    // merge range the shown result was computed with, not the live input
+    const pick = function (x, y, g) {
+      const rows = shownRows(deseq.result, deseq.show || "both");
+      let best = null;
+      let bestDistance = Infinity;
+      rows.forEach(function (row) {
+        const d = Math.max(Math.abs(row.x + BIN / 2 - x), Math.abs(row.y + BIN / 2 - y));
+        if (d < bestDistance) {
+          bestDistance = d;
+          best = row;
+        }
+      });
+      const parameters = deseq.result.summary && deseq.result.summary.parameters || {};
+      const range = Number(parameters.range);
+      if (best && bestDistance <= Math.max(Number.isFinite(range) ? range : Number(deseq.radius) || 0, 10, 4 * g.length / g.size)) {
+        deseq.selected = best.direction + ":" + best.x + ":" + best.y;
+        if (api) {
+          api.render();
+        }
+        return true;
+      }
+      return false;
+    };
+    // A plain wheel scrolls the page; Ctrl/⌘ + wheel (or a wheel over the
+    // focused map) zooms, as on the other maps.
     canvas.onwheel = function (event) {
+      if (!event.ctrlKey && !event.metaKey && document.activeElement !== canvas) { return; }
       const p = point(event), fx = (p.x - p.g.left) / p.g.size, fy = 1 - (p.y - p.g.top) / p.g.size;
       if (fx < 0 || fx > 1 || fy < 0 || fy > 1) { return; }
       event.preventDefault();
@@ -621,25 +704,33 @@
       const x = g.xStart + (event.clientX - box.left - g.left) / g.size * g.length;
       const y = g.yStart + (1 - (event.clientY - box.top - g.top) / g.size) * g.length;
       if (!g.contains(x, y)) { return; }
-      const rows = shownRows(deseq.result, deseq.show || "both");
-      let best = null;
-      let bestDistance = Infinity;
-      rows.forEach(function (row) {
-        const d = Math.max(Math.abs(row.x + BIN / 2 - x), Math.abs(row.y + BIN / 2 - y));
-        if (d < bestDistance) {
-          bestDistance = d;
-          best = row;
+      pick(x, y, g);
+    };
+    // keyboard: arrows pan a tenth of the view, + / − zoom about the centre,
+    // 0 resets, Enter / Space picks the interaction nearest the centre
+    canvas.onkeydown = function (event) {
+      if (event.altKey || event.ctrlKey || event.metaKey) { return; }
+      const pan = { ArrowLeft: [-0.1, 0], ArrowRight: [0.1, 0], ArrowUp: [0, 0.1], ArrowDown: [0, -0.1] }[event.key];
+      if (pan) {
+        changeMapView(deseq.result, 1, .5, .5, pan[0], pan[1]);
+      } else if (event.key === "+" || event.key === "=") {
+        changeMapView(deseq.result, .5, .5, .5, 0, 0);
+      } else if (event.key === "-" || event.key === "_") {
+        changeMapView(deseq.result, 2, .5, .5, 0, 0);
+      } else if (event.key === "0") {
+        mapViews.delete(deseq.result);
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        const g = geometry(width, height, mapLength(deseq.result), mapViews.get(deseq.result));
+        if (!pick(g.xStart + g.length / 2, g.yStart + g.length / 2, g) && api && api.showToast) {
+          api.showToast("No merged interaction near the centre of the map. Pan with the arrow keys or zoom out with −, then press Enter again.");
         }
-      });
-      // the merge range the shown result was computed with, not the live input
-      const parameters = deseq.result.summary && deseq.result.summary.parameters || {};
-      const range = Number(parameters.range);
-      if (best && bestDistance <= Math.max(Number.isFinite(range) ? range : Number(deseq.radius) || 0, 10, 4 * g.length / g.size)) {
-        deseq.selected = best.direction + ":" + best.x + ":" + best.y;
-        if (api) {
-          api.render();
-        }
+        return;
+      } else {
+        return;
       }
+      event.preventDefault();
+      redraw();
     };
   }
 
@@ -762,7 +853,7 @@
       return;
     }
     if (typeof api.getArms !== "function") {
-      deseq.error = "This view cannot read the datasets' interaction arms.";
+      deseq.error = "This view cannot read the datasets' interaction arms. Reload the page, load the datasets again on the Data page and run the test again.";
       api.render();
       return;
     }
@@ -816,6 +907,7 @@
         deseq.result = result;
         deseq.status = "done";
         deseq.selected = null;
+        deseq.tableRows = TABLE_ROWS;
         deseq.progress = "";
         // Show completed HYB comparison results without requiring structures.
         // Preserve a manually imported interaction table.
@@ -832,7 +924,7 @@
         }
         stopWorker();
         deseq.status = "error";
-        deseq.error = "Differential test failed: " + message;
+        deseq.error = "Differential test failed: " + String(message).replace(/\.$/, "") + ". " + RETRY;
         api.render();
       };
       const transfer = samples.map(function (sample) { return sample.arms.buffer; });
@@ -854,7 +946,7 @@
       worker.onmessage = function (event) {
         const message = event.data || {};
         if (message.type === "progress") {
-          setProgress(deseq, message.detail + (message.fraction != null && message.fraction > 0 ? " · " + Math.round(100 * message.fraction) + "%" : "") +
+          setProgress(deseq, message.detail + (message.fraction != null && message.fraction > 0 ? " · " + percentFormat.format(Math.round(100 * message.fraction) / 100) : "") +
             " · " + seconds(Date.now() - started));
         } else if (message.type === "done") {
           finish(message.result);
@@ -866,11 +958,11 @@
         fail(event && event.message ? event.message : "the worker stopped");
       };
       worker.postMessage({ samples: samples, conditionOne: conditionOne, options: options }, transfer);
-      setProgress(deseq, "Binning " + records.reduce(function (a, b) { return a + b; }, 0).toLocaleString("en-US") + " records…");
+      setProgress(deseq, "Binning " + num(records.reduce(function (a, b) { return a + b; }, 0)) + " records…");
     }).catch(function (error) {
       if (token === runToken) {
         deseq.status = "error";
-        deseq.error = "Differential test failed: " + (error && error.message ? error.message : String(error));
+        deseq.error = "Differential test failed: " + (error && error.message ? error.message : String(error)) + ". " + RETRY;
         api.render();
       }
     });
@@ -936,6 +1028,9 @@
       api.render();
     } else if (!result) {
       api.showToast("Run the differential test first.");
+    } else if (action === "deseq-table-more") {
+      deseq.tableRows = Math.max(TABLE_ROWS, Number(deseq.tableRows) || TABLE_ROWS) + TABLE_ROWS;
+      api.render();
     } else if (action === "deseq-select") {
       deseq.selected = deseq.selected === element.dataset.key ? null : element.dataset.key;
       api.render();
@@ -969,7 +1064,7 @@
       }
       useInArcMap(state, result);
       api.render();
-      api.showToast("The arc map now draws the " + result.interactions.length.toLocaleString("en-US") + " merged interactions (its own padj filter, " +
+      api.showToast("The arc map now draws the " + num(result.interactions.length) + " merged interactions (its own padj filter, " +
         state.arcMap.padj + ", applies).");
       const card = document.querySelector(".arcmap-card");
       if (card && typeof card.scrollIntoView === "function") {
@@ -1049,11 +1144,11 @@
       '<div class="report-grid report-analysis-grid">',
       '<div class="report-subsection"><h3>Differential test (DESeq2 Wald test)</h3>' + h.definitionList([
         ["Datasets", result.datasets.map(function (d) { return (d.label || d.fileName) + " (" + (d.condition === "A" ? labelA : labelB) + ")"; }).join(", ")],
-        ["Min count · merge range · padj", s.parameters.minCount + " · " + s.parameters.range + " nt · " + s.parameters.padjCutoff],
+        ["Min count · merge range · padj", s.parameters.minCount + " · " + s.parameters.range + "\u00a0nt · " + s.parameters.padjCutoff],
         ["Cells tested", h.formatNumber(s.cellsTested) + " of " + h.formatNumber(s.cellsTotal)],
         ["Significant cells", h.formatNumber(s.significant) + " (" + h.formatNumber(s.significantUp) + " higher in " + labelA + ", " + h.formatNumber(s.significantDown) + " higher in " + labelB + ")"],
         ["Merged interactions", h.formatNumber(s.interactionsUp) + " higher in " + labelA + ", " + h.formatNumber(s.interactionsDown) + " higher in " + labelB],
-        ["Size factors", s.sizeFactors.map(function (v) { return v.toFixed(4); }).join(", ")],
+        ["Size factors", s.sizeFactors.map(function (v) { return fixed(v, 4); }).join(", ")],
         ["Current inputs", result.inputKey === inputKey(comparison) ? "Yes" : "No (inputs changed after the run)"]
       ]) + "</div>",
       '<div class="report-subsection"><h3>Strongest merged interactions</h3>' + h.table(["Higher in", { label: "x", num: true }, { label: "y", num: true }, { label: "log2 A/B", num: true }, { label: "padj", num: true }], top.map(function (row) {

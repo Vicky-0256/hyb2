@@ -134,7 +134,7 @@
         '<div class="cmdk-panel" role="dialog" aria-modal="true" aria-label="Command palette">',
         '  <div class="cmdk-search">',
         '    <svg class="cmdk-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
-        '    <input type="text" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Jump to a page, run an action, switch datasets or find records…">',
+        '    <input type="text" role="combobox" aria-label="Search pages, actions and records" aria-expanded="false" aria-controls="cmdk-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Jump to a page, run an action, switch datasets or find records…">',
         '    <kbd>esc</kbd>',
         "  </div>",
         '  <div class="cmdk-body"><span class="cmdk-glider" aria-hidden="true"></span><ul id="cmdk-list" class="cmdk-list" role="listbox" aria-label="Commands"></ul></div>',
@@ -370,8 +370,10 @@
         list.innerHTML = '<li class="cmdk-empty" role="presentation">No matching page or action</li>';
         glider.style.opacity = "0";
         input.removeAttribute("aria-activedescendant");
+        input.setAttribute("aria-expanded", "false");
         return;
       }
+      input.setAttribute("aria-expanded", "true");
       let html = "";
       let lastGroup = null;
       scored.forEach(function (entry, index) {
@@ -480,6 +482,7 @@
         return;
       }
       openState = false;
+      input.setAttribute("aria-expanded", "false");
       layer.classList.remove("is-open");
       document.body.classList.remove("cmdk-locked");
       const finish = function () {
@@ -973,7 +976,11 @@
     if (workspace && !rail.isConnected) {
       document.body.appendChild(rail);
     }
-    updateRail();
+    // read the page height in the next frame, with the scroll updates, not
+    // in the middle of the render's DOM writes; nothing to do without a rail
+    if (workspace && !railRaf) {
+      railRaf = requestAnimationFrame(updateRail);
+    }
 
     const actions = app.querySelector(".workspace-header .toolbar-actions, .landing-header .header-actions");
     if (actions && !actions.querySelector(".cmdk-trigger")) {
@@ -1032,13 +1039,27 @@
     }
   }, true);
 
+  // Layout is read only when the current page changed (or after a resize):
+  // a re-render of the same page just puts the saved scroll position back.
+  let sidebarPage = null;
+  window.addEventListener("resize", function () { sidebarPage = null; }, { passive: true });
+
   function keepSidebarScroll() {
     const sidebar = app.querySelector(".sidebar");
-    if (!sidebar || sidebar.scrollHeight <= sidebar.clientHeight) {
+    if (!sidebar) {
+      sidebarPage = null;
       return;
     }
-    sidebar.scrollTop = sidebarScrollTop;
     const active = sidebar.querySelector(".nav-button.is-active");
+    const page = active ? active.getAttribute("data-page") : null;
+    const pageChanged = page !== sidebarPage;
+    sidebarPage = page;
+    if (sidebarScrollTop) {
+      sidebar.scrollTop = sidebarScrollTop;
+    }
+    if (!pageChanged || sidebar.scrollHeight <= sidebar.clientHeight) {
+      return;
+    }
     if (active) {
       const box = sidebar.getBoundingClientRect();
       const rect = active.getBoundingClientRect();

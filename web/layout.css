@@ -50,12 +50,37 @@ html:has(:focus-visible) {
 /* Control grids                                                       */
 /* ------------------------------------------------------------------ */
 
+/* (.comparison-control-grid's tracks are set once, in fix-compare.css) */
+
+/* One field grid for the form controls in Interactions (filters, advanced
+   filters, HYB binding energies), Contact Map (Data, Display), Viewpoint and
+   Region Explorer cards: equal tracks of at least --field-min, one gap. It
+   outranks analysis.css's fixed column counts by load order, at every
+   breakpoint. */
+.control-grid-wide,
+.advanced-grid,
+.data-card:has([data-feature="batch-energy-setting"]) .control-grid,
 .contact-control-grid,
+.contact-display-grid,
 .viewpoint-control-grid,
-.comparison-control-grid,
-.region-control-grid,
-.control-grid-wide {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr));
+.region-control-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr));
+  gap: var(--space-4);
+}
+
+/* phones keep two fields per row (a 390px screen leaves ~326px) */
+@media (max-width: 767px) {
+  .control-grid-wide,
+  .advanced-grid,
+  .data-card:has([data-feature="batch-energy-setting"]) .control-grid,
+  .contact-control-grid,
+  .contact-display-grid,
+  .viewpoint-control-grid,
+  .region-control-grid {
+    --field-min: 136px;
+    gap: var(--space-3);
+  }
 }
 
 .control-field select,
@@ -83,7 +108,7 @@ html:has(:focus-visible) {
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   gap: var(--workbench-gap);
   align-items: start;
-  margin: 12px 0;
+  margin: var(--space-3) 0;
 }
 
 .contact-workbench-main {
@@ -102,7 +127,7 @@ html:has(:focus-visible) {
   position: sticky;
   top: calc(var(--header-h) + 16px);
   display: grid;
-  gap: 12px;
+  gap: var(--space-4);
   min-width: 0;
 }
 
@@ -113,33 +138,30 @@ html:has(:focus-visible) {
 
 /* Contact Map: data choices above, display choices beside the map */
 .control-section-title {
-  margin: 0 0 12px;
-  font-size: 15px;
-  font-weight: 650;
+  margin: 0 0 var(--space-4);
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .contact-display-bar {
-  margin: 12px 0 4px;
-  padding: 12px;
+  margin: var(--space-1) 0;
+  padding: var(--space-4);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .contact-display-title {
   display: block;
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.contact-display-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr));
-  gap: 12px;
+  margin-bottom: var(--space-3);
+  color: var(--ink);
+  font-size: var(--text-base);
+  font-weight: 700;
 }
 
 .contact-display-bar .card-note {
-  margin: 8px 0 0;
+  margin: var(--space-3) 0 0;
 }
 
 .contact-workbench-side .heatmap-footer {
@@ -150,7 +172,7 @@ html:has(:focus-visible) {
 
 .contact-workbench-side .heatmap-axis {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .contact-workbench-side .heatmap-axis span {
@@ -158,7 +180,7 @@ html:has(:focus-visible) {
 }
 
 .contact-data-card {
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
 }
 
 .contact-workbench .contact-stage {
@@ -178,15 +200,15 @@ html:has(:focus-visible) {
   left: 50%;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface);
   box-shadow: var(--shadow-tight);
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 680;
+  font-size: var(--text-base);
+  font-weight: 700;
   transform: translate(-50%, -50%);
 }
 
@@ -236,7 +258,8 @@ html:has(:focus-visible) {
 }
 
 .virtual-table-frame > .virtual-table {
-  min-width: 980px;
+  /* = the .virtual-row min-width (analysis.css) */
+  min-width: 1062px;
   height: clamp(360px, calc(100vh - var(--header-h) - 132px), 880px);
   overflow-x: hidden;
   overflow-y: auto;
@@ -250,8 +273,8 @@ html:has(:focus-visible) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
-  padding-top: 12px;
+  gap: var(--space-2) var(--space-4);
+  padding-top: var(--space-3);
 }
 
 .table-more .table-note {
@@ -267,9 +290,9 @@ html:has(:focus-visible) {
   z-index: 2;
   bottom: 0;
   display: grid;
-  gap: 10px;
+  gap: var(--space-2);
   margin: 0 calc(var(--pad-x) * -1) calc(var(--pad-b) * -1);
-  padding: 14px var(--pad-x) var(--pad-b);
+  padding: var(--space-4) var(--pad-x) var(--pad-b);
   border-top: 1px solid var(--line);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
@@ -286,7 +309,7 @@ html:has(:focus-visible) {
    screen, so the run bar (Predict, Cancel, why it waits) sticks above it. */
 @media (max-width: 767px) {
   .structure-run-bar {
-    bottom: 56px;
+    bottom: calc(56px + env(safe-area-inset-bottom));
   }
 }
 
@@ -334,7 +357,7 @@ html:has(:focus-visible) {
 
 .contact-workbench-side .heatmap-topline {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .contact-workbench-side .heatmap-topline .heatmap-tooltip {
@@ -361,7 +384,7 @@ html:has(:focus-visible) {
   }
 
   .workspace-header .toolbar-actions .text-button {
-    padding: 0 8px;
+    padding: 0 var(--space-2);
     white-space: nowrap;
   }
 
@@ -399,7 +422,7 @@ html:has(:focus-visible) {
   }
 
   .workspace-header .header-file {
-    margin-right: 10px;
+    margin-right: var(--space-2);
   }
 
   .workspace-header .header-scope {
@@ -453,7 +476,7 @@ html:has(:focus-visible) {
 .toolbar-divider {
   width: 1px;
   height: 22px;
-  margin: 0 4px;
+  margin: 0 var(--space-1);
   background: var(--line);
 }
 
@@ -489,24 +512,24 @@ html:has(:focus-visible) {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding: 24px 24px 18px;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-6) var(--space-4);
   border-bottom: 1px solid var(--line);
 }
 
 .drawer-head h2 {
-  font-size: 22px;
+  font-size: var(--text-lg);
 }
 
 .dialog .drawer-lede {
-  margin: 6px 0 0;
-  font-size: 14px;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-base);
   line-height: 1.5;
 }
 
 .drawer-close {
   flex: 0 0 auto;
-  font-size: 22px;
+  font-size: var(--text-lg);
   line-height: 1;
 }
 
@@ -514,11 +537,11 @@ html:has(:focus-visible) {
   flex: 1 1 auto;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 6px 24px 28px;
+  padding: var(--space-2) var(--space-6) 28px;
 }
 
 .drawer-section {
-  padding: 18px 0;
+  padding: var(--space-4) 0;
   border-bottom: 1px solid var(--line);
 }
 
@@ -528,15 +551,15 @@ html:has(:focus-visible) {
 
 .drawer-section h3,
 .drawer-fold-title {
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-2);
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 720;
+  font-size: var(--text-md);
+  font-weight: 700;
 }
 
 .dialog .drawer-section p {
-  margin: 8px 0 0;
-  font-size: 13.5px;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-base);
   line-height: 1.55;
 }
 
@@ -547,11 +570,11 @@ html:has(:focus-visible) {
 .drawer-list,
 .drawer-steps {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2);
   margin: 0;
-  padding-left: 20px;
+  padding-left: var(--space-5);
   color: var(--muted-strong);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.5;
 }
 
@@ -561,7 +584,7 @@ html:has(:focus-visible) {
 
 .drawer-steps li::marker {
   color: var(--primary-ink);
-  font-weight: 720;
+  font-weight: 700;
 }
 
 .drawer-fold > summary {
@@ -569,7 +592,7 @@ html:has(:focus-visible) {
   gap: 2px;
   cursor: pointer;
   list-style: none;
-  padding-right: 26px;
+  padding-right: var(--space-6);
   position: relative;
 }
 
@@ -599,18 +622,27 @@ html:has(:focus-visible) {
   margin: 0;
 }
 
+/* hover: the title and the chevron say the row opens */
+.drawer-fold > summary:hover .drawer-fold-title {
+  color: var(--primary-ink);
+}
+
+.drawer-fold > summary:hover::after {
+  border-color: var(--primary-ink);
+}
+
 .drawer-fold-summary {
   color: var(--muted-strong);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .drawer-fold.needs-attention .drawer-fold-summary {
   color: var(--warning);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .drawer-fold[open] > summary {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 .drawer-danger h3 {
@@ -618,14 +650,14 @@ html:has(:focus-visible) {
 }
 
 .drawer-danger .inline-actions {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 
 .drawer-links {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 4px;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .drawer-links .quiet-button {
@@ -634,15 +666,15 @@ html:has(:focus-visible) {
 
 .drawer-keys {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2);
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--text-base);
 }
 
 .drawer-keys div {
   display: grid;
   grid-template-columns: minmax(120px, auto) 1fr;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: baseline;
 }
 
@@ -660,12 +692,12 @@ html:has(:focus-visible) {
   display: inline-block;
   min-width: 1.6em;
   margin-right: 3px;
-  padding: 1px 6px;
+  padding: 1px var(--space-2);
   border: 1px solid var(--line-strong);
   border-radius: 5px;
   background: var(--surface-subtle);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: center;
 }
 
@@ -680,13 +712,13 @@ html:has(:focus-visible) {
 .segmented-option {
   min-width: 108px;
   min-height: 36px;
-  padding: 0 14px;
+  padding: 0 var(--space-4);
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted-strong);
-  font-size: 14px;
-  font-weight: 650;
+  font-size: var(--text-base);
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -713,8 +745,8 @@ html:has(:focus-visible) {
 
   .drawer-head,
   .drawer-body {
-    padding-right: 16px;
-    padding-left: 16px;
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
   }
 
   .toolbar-divider {
@@ -733,7 +765,7 @@ html:has(:focus-visible) {
   .landing-header .header-actions [data-action="open-help"] {
     display: inline-flex;
     align-items: center;
-    padding: 0 8px;
+    padding: 0 var(--space-2);
   }
 }
 
@@ -749,7 +781,7 @@ html:has(:focus-visible) {
   }
 
   .landing-header .header-actions {
-    gap: 4px;
+    gap: var(--space-1);
   }
 }
 

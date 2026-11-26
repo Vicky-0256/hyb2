@@ -261,9 +261,9 @@
         mapAB = arc.align(seq.a, seq.b);
         mapBA = arc.align(seq.b, seq.a);
       } catch (error) {
-        return { ready: false, reason: "B could not be aligned to A: " + error.message };
+        return { ready: false, reason: "B could not be aligned to A: " + error.message + ". Check that A and B are the same gene or genome, or load FASTA references of matching length below." };
       }
-      notes.push("Fragments are centred on condition one's reference (A) and moved onto B by alignment (" + (100 * mapAB.identity).toFixed(1) + "% identity).");
+      notes.push("Fragments are centred on condition one's reference (A) and moved onto B by alignment (" + fixed(100 * mapAB.identity, 1) + "% identity).");
     }
     const jobs = [];
     let skipped = 0;
@@ -404,8 +404,13 @@
     return p.toExponential(1);
   }
 
+  // the card's table: en-US digits (as the rest of the app), NA when not finite
+  const numberFormat = new Intl.NumberFormat("en-US");
+  const fixedFormats = {};
   function fixed(value, digits) {
-    return Number.isFinite(value) ? value.toFixed(digits) : "NA";
+    if (!Number.isFinite(value)) { return "NA"; }
+    fixedFormats[digits] = fixedFormats[digits] || new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    return fixedFormats[digits].format(value);
   }
 
   // a TSV cell: non-finite numbers as NA (as R writes them)
@@ -452,6 +457,15 @@
     return out;
   }
 
+  // the violins in words (the SVG's <desc>, and the text under the figure)
+  function energySummary(stats, labels) {
+    return "Violin plots of RNAcofold free energy (kcal/mol) per lineage. " + stats.map(function (st) {
+      const name = st.side === "enriched_in_one" ? labels.one : labels.two;
+      return name + "-enriched interactions (n = " + numberFormat.format(st.n) + "): mean " + fixed(st.meanOne, 2) + " with " + labels.one + "'s sequence, " +
+        fixed(st.meanTwo, 2) + " with " + labels.two + "'s; paired t-test p = " + (Number.isFinite(st.p) ? st.p.toPrecision(3) : "NA") + ".";
+    }).join(" ");
+  }
+
   function svg(results, labels, colours) {
     const c = Object.assign({ ink: "#222222", muted: "#6b7280", grid: "#e5e7eb", one: "#E64B35", two: "#4DBBD5", background: "#ffffff" }, colours || {});
     const stats = summarise(results.rows).filter(function (s) { return s.n > 0; });
@@ -460,7 +474,7 @@
     const width = stats.length * panelW + 20;
     const height = panelH + 20;
     const parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + " " + height + '" width="' + width + '" height="' + height +
-      '" font-family="Inter, Arial, sans-serif" font-size="11" role="img" aria-label="Folding energy">', "<title>Folding energy</title>",
+      '" font-family="Inter, Arial, sans-serif" font-size="11" role="img" aria-label="Folding energy">', "<title>Folding energy</title><desc>" + escapeXml(energySummary(stats, labels)) + "</desc>",
       '<rect width="100%" height="100%" fill="' + c.background + '"/>'];
     stats.forEach(function (s, index) {
       const ox = 10 + index * panelW;
@@ -528,6 +542,10 @@
 
   // ---- card
 
+  function progressText(fe) {
+    return "Folding " + numberFormat.format(fe.done || 0) + " of " + numberFormat.format(fe.total || 0) + "…";
+  }
+
   function labelsOf(arcMap) {
     return { one: (arcMap && arcMap.labelOne) || "condition one", two: (arcMap && arcMap.labelTwo) || "condition two" };
   }
@@ -536,20 +554,21 @@
     const e = fe || defaultState();
     const esc = escape || escapeXml;
     const labels = labelsOf(arcMap);
-    const control = function (label, key, value, placeholder) {
-      return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" value="' + esc(value) +
-        '" placeholder="' + esc(placeholder || "") + '" data-feature="energy-control" data-key="' + key + '"' + (e.running ? " disabled" : "") + "></label>";
+    const control = function (label, key, value, placeholder, inputmode) {
+      return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" name="energy-' + key + '" autocomplete="off" inputmode="' + inputmode +
+        '" spellcheck="false" value="' + esc(value) + '" placeholder="' + esc(placeholder || "") + '" data-feature="energy-control" data-key="' + key + '"' + (e.running ? " disabled" : "") + "></label>";
     };
     const out = ['<section class="data-card folding-energy-card" id="folding-energy-card">',
       '<div class="card-title-row"><div><h2>F, G · Folding energy</h2><span class="card-note">RNAcofold of the two arms of every significant interaction, once with each lineage\'s sequence (A = condition one, B = condition two, at aligned positions), as violin plots with a paired t-test. ViennaRNA runs in this browser (WebAssembly).</span></div></div>',
-      '<div class="comparison-control-grid">', control("padj <", "padj", e.padj, "0.01"), control("Fragment length per arm (nt)", "length", e.length, "40"),
-      '<label class="control-field"><span>Temperature</span><input type="text" value="37 °C, default parameters" disabled></label></div>'];
+      '<div class="comparison-control-grid">', control("padj <", "padj", e.padj, "e.g. 0.01…", "decimal"), control("Fragment length per arm (nt)", "length", e.length, "e.g. 40…", "numeric"),
+      // fixed, so said as text rather than shown in a disabled field
+      '<div class="control-field"><span>Temperature</span><span class="card-note">' + TEMPERATURE + '&nbsp;°C, default parameters</span></div></div>'];
     const s = arcMap || {};
     const panels = root.Hyb2RegionPanels;
     if (panels && (!(s.a && s.a.sequence) || !(s.b && s.b.sequence))) {
       const fasta = function (key, label) {
         const loaded = rp && rp[key];
-        const summary = loaded ? loaded.sequence.length.toLocaleString("en-US") + " nt" : "";
+        const summary = loaded ? numberFormat.format(loaded.sequence.length) + "\u00a0nt" : "";
         // a button-styled label over the hidden input, as in the Arc map card
         return '<div class="arcmap-file control-field' + (loaded ? " is-loaded" : "") + '"><span>' + esc(label) + '</span><div class="file-pick">' +
           '<label class="button button-secondary file-pick-button"><input class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.txt" data-feature="regions-fasta" data-key="' + key +
@@ -557,7 +576,8 @@
           (loaded
             ? '<span class="file-pick-name" title="' + esc(loaded.name + " · " + summary) + '"><b>' + esc(loaded.name) + "</b> · " + esc(summary) + "</span>"
             : '<span class="file-pick-name is-empty">No file</span>') +
-          "</div>" + (rp && rp.errors && rp.errors[key] ? '<p class="notice notice-error">' + esc(rp.errors[key]) + "</p>" : "") + "</div>";
+          "</div>" + (rp && rp.errors && rp.errors[key] ? '<p class="notice notice-error">Could not read this file: ' + esc(rp.errors[key]) +
+            '. Choose a FASTA file: a line starting with ">" and a name, then the sequence (A, C, G, U or T) on the lines after it.</p>' : "") + "</div>";
       };
       out.push('<div class="arcmap-files">', fasta("fastaA", "Reference of condition one / A (FASTA)"), fasta("fastaB", "Reference of condition two / B (FASTA)"), "</div>");
     }
@@ -567,19 +587,21 @@
       return out.join("");
     }
     plan.notes.forEach(function (note) { out.push('<p class="card-note">' + esc(note) + "</p>"); });
-    out.push('<p class="card-note">' + plan.considered.toLocaleString("en-US") + " interactions with padj &lt; " + plan.cutoff + "; " + plan.jobs.length.toLocaleString("en-US") +
-      " to fold (" + (2 * plan.jobs.length).toLocaleString("en-US") + " RNAcofold runs)" + (plan.skipped ? "; " + plan.skipped + " skipped (fragment off an end)" : "") +
-      (plan.unplaced ? "; " + plan.unplaced + " skipped (could not be placed on A by alignment)" : "") +
-      (plan.invalid ? "; " + plan.invalid + " skipped (non-ACGU bases)" : "") + ".</p>");
+    out.push('<p class="card-note">' + numberFormat.format(plan.considered) + " interactions with padj &lt; " + plan.cutoff + "; " + numberFormat.format(plan.jobs.length) +
+      " to fold (" + numberFormat.format(2 * plan.jobs.length) + " RNAcofold runs)" + (plan.skipped ? "; " + numberFormat.format(plan.skipped) + " skipped (fragment off an end)" : "") +
+      (plan.unplaced ? "; " + numberFormat.format(plan.unplaced) + " skipped (could not be placed on A by alignment)" : "") +
+      (plan.invalid ? "; " + numberFormat.format(plan.invalid) + " skipped (non-ACGU bases)" : "") + ".</p>");
+    // Run and Cancel share data-focus-key, so focus moves between them; the
+    // progress line is always there (aria-live) and updated in place
     if (e.running) {
       const pct = e.total ? Math.round(100 * e.done / e.total) : 0;
-      out.push('<div class="progress-bar" role="progressbar" aria-label="RNAcofold progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><span style="width:' + pct + '%"></span></div>');
-      out.push('<p class="card-note" data-energy-progress>Folding ' + e.done.toLocaleString("en-US") + " / " + e.total.toLocaleString("en-US") + "…</p>");
-      out.push('<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="energy-cancel">Cancel</button></div>');
+      out.push('<div class="progress-bar" role="progressbar" aria-label="RNAcofold progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" data-energy-bar><span style="width:' + pct + '%"></span></div>');
+      out.push('<div class="inline-actions"><button class="quiet-button" type="button" data-feature-action="energy-cancel" data-focus-key="energy-run">Cancel</button>');
     } else {
-      out.push('<div class="inline-actions"><button class="button" type="button" data-feature-action="energy-run"' + (plan.jobs.length ? "" : " disabled") + ">" +
-        (e.results ? "Fold again" : "Fold with RNAcofold") + "</button></div>");
+      out.push('<div class="inline-actions"><button class="button" type="button" data-feature-action="energy-run" data-focus-key="energy-run"' + (plan.jobs.length ? "" : " disabled") + ">" +
+        (e.results ? "Fold again" : "Fold with RNAcofold") + "</button>");
     }
+    out.push('<span class="control-hint" data-energy-progress aria-live="polite">' + (e.running ? esc(progressText(e)) : "") + "</span></div>");
     if (e.error) {
       out.push('<p class="notice notice-error">' + esc(e.error) + "</p>");
     }
@@ -589,11 +611,11 @@
         out.push('<p class="card-note">Inputs or settings changed since these energies were folded; fold again to update.</p>');
       }
       const stats = summarise(r.rows);
-      out.push('<div class="data-table-wrap"><table class="data-table energy-table"><thead><tr><th>Enriched in</th><th>n</th><th>Mean dG ' + esc(labels.one) + '</th><th>Mean dG ' + esc(labels.two) +
-        "</th><th>Mean difference</th><th>t</th><th>Paired t-test p</th></tr></thead><tbody>");
+      out.push('<div class="data-table-wrap"><table class="data-table energy-table"><thead><tr><th>Enriched in</th><th class="num">n</th><th class="num">Mean dG ' + esc(labels.one) + '</th><th class="num">Mean dG ' + esc(labels.two) +
+        '</th><th class="num">Mean difference</th><th class="num">t</th><th class="num">Paired t-test p</th></tr></thead><tbody>');
       stats.forEach(function (st) {
-        out.push('<tr data-side="' + st.side + '"><td>' + esc(st.side === "enriched_in_one" ? labels.one : labels.two) + "</td><td data-n>" + st.n + "</td><td>" + fixed(st.meanOne, 2) + "</td><td>" + fixed(st.meanTwo, 2) +
-          "</td><td>" + fixed(st.meanDiff, 2) + "</td><td>" + fixed(st.t, 3) + '</td><td data-p="' + cell(st.p) + '">' + (Number.isFinite(st.p) ? st.p.toPrecision(3) : "NA") + "</td></tr>");
+        out.push('<tr data-side="' + st.side + '"><td>' + esc(st.side === "enriched_in_one" ? labels.one : labels.two) + '</td><td class="num" data-n>' + numberFormat.format(st.n) + '</td><td class="num">' + fixed(st.meanOne, 2) + '</td><td class="num">' + fixed(st.meanTwo, 2) +
+          '</td><td class="num">' + fixed(st.meanDiff, 2) + '</td><td class="num">' + fixed(st.t, 3) + '</td><td class="num" data-p="' + cell(st.p) + '">' + (Number.isFinite(st.p) ? st.p.toPrecision(3) : "NA") + "</td></tr>");
       });
       out.push("</tbody></table></div>");
       stats.forEach(function (st) {
@@ -601,8 +623,9 @@
           out.push('<p class="card-note">' + esc("Paired t-test for " + (st.side === "enriched_in_one" ? labels.one : labels.two) + "-enriched interactions: NA, the differences are constant.") + "</p>");
         }
       });
-      out.push('<div class="energy-figure" data-energy-figure>' + svg(r, labels) + "</div>");
-      out.push('<p class="card-note">' + esc("ViennaRNA " + (r.version || "?") + " RNAcofold (WebAssembly), " + TEMPERATURE + " °C, default parameters; " + r.rows.length + " interactions × 2 lineages, 2 × " + r.length + " nt.") + "</p>");
+      out.push('<div class="energy-figure" data-energy-figure>' + svg(r, labels).replace('role="img"', 'role="img" aria-describedby="energy-summary"') + "</div>");
+      out.push('<p class="card-note" id="energy-summary">' + esc(energySummary(stats.filter(function (st) { return st.n > 0; }), labels)) + "</p>");
+      out.push('<p class="card-note">' + esc("ViennaRNA " + (r.version || "?") + " RNAcofold (WebAssembly), " + TEMPERATURE + "\u00a0°C, default parameters; " + numberFormat.format(r.rows.length) + " interactions × 2 lineages, 2 × " + r.length + "\u00a0nt.") + "</p>");
       // K2: the card's downloads sit in one Export menu
       out.push('<div class="inline-actions"><details class="export-menu card-export-menu"><summary class="button button-secondary">Export</summary><div class="export-menu-list" role="menu">' +
         '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="energy-download-svg">Download violin SVG</button>' +
@@ -653,19 +676,23 @@
       worker = new Worker((root.HYB2_ASSET_BASE || "./") + "folding-energy.worker.js?build=" + encodeURIComponent(root.HYB2_BUILD && root.HYB2_BUILD.commit || "local"));
     } catch (error) {
       fe.running = false;
-      fe.error = "Could not start the folding worker: " + (error.message || error);
+      fe.error = "Could not start the folding worker: " + (error.message || error) + ". Reload the page and press Fold with RNAcofold again; this browser must allow Web Workers.";
       api.render();
       return;
     }
-    let lastRender = 0;
     worker.onmessage = function (event) {
       const m = event.data || {};
       if (m.type === "progress") {
         fe.done = m.done;
-        const now = Date.now();
-        if (now - lastRender > 400) {
-          lastRender = now;
-          api.render();
+        // in place: the live region keeps its node, focus stays on Cancel
+        const doc = typeof document !== "undefined" ? document : null;
+        const text = doc && doc.querySelector("[data-energy-progress]");
+        const bar = doc && doc.querySelector("[data-energy-bar]");
+        if (text) { text.textContent = progressText(fe); }
+        if (bar) {
+          const pct = fe.total ? Math.round(100 * fe.done / fe.total) : 0;
+          bar.setAttribute("aria-valuenow", String(pct));
+          if (bar.firstElementChild) { bar.firstElementChild.style.width = pct + "%"; }
         }
       } else if (m.type === "result") {
         stop(fe);
@@ -673,13 +700,13 @@
         api.render();
       } else if (m.type === "error") {
         stop(fe);
-        fe.error = m.message || "Folding failed.";
+        fe.error = String(m.message || "Folding failed").replace(/\.$/, "") + ". Check the padj cutoff and fragment length, then press Fold with RNAcofold again; reload the page if it fails again.";
         api.render();
       }
     };
     worker.onerror = function (event) {
       stop(fe);
-      fe.error = "The folding worker failed: " + (event.message || "unknown error");
+      fe.error = "The folding worker failed: " + (event.message || "unknown error") + ". Reload the page and press Fold with RNAcofold again.";
       api.render();
     };
     worker.postMessage({ type: "cofold-batch", pairs: pairs, temperature: TEMPERATURE, minimumLoop: MINIMUM_LOOP });

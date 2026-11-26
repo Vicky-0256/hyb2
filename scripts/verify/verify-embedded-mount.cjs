@@ -185,11 +185,11 @@ async function main() {
 
   const headings = {
     interactions: /<h1>Interactions<\/h1>/,
-    "contact-map": /<h1>Contact Map<\/h1>/,
+    "contact-map": /<h1>Contact map<\/h1>/,
     viewpoint: /<h1>Viewpoint<\/h1>/,
-    region: /<h1>Region Explorer<\/h1>/,
+    region: /<h1>Region explorer<\/h1>/,
     compare: /<h1>Compare<\/h1>/,
-    structure: /<h1>RNA Structure<\/h1>/,
+    structure: /<h1>RNA structure<\/h1>/,
     report: /data-report-page/
   };
   for (const pageId of Object.keys(headings)) {

@@ -39,7 +39,7 @@
         var comma = text.indexOf(",");
         resolve(comma >= 0 ? text.slice(comma + 1) : text);
       };
-      reader.onerror = function () { reject(reader.error || new Error("Could not read the file contents.")); };
+      reader.onerror = function () { reject(reader.error || new Error("Could not read the file contents. Check that the file still exists and can be opened, then choose it again.")); };
       reader.readAsDataURL(blob instanceof Blob ? blob : new Blob([blob == null ? "" : String(blob)]));
     });
   }
@@ -81,11 +81,11 @@
       return null;
     },
     startTask: async function () {
-      throw new Error("Use the desktop Task Center to start native tasks.");
+      throw new Error("Native tasks start from the desktop Task Center: open it from the HYB2 Desktop window and start the task there.");
     },
     predictCplfold: async function (request) {
       if (!desktopEnabled) {
-        return { ok: false, status: "unavailable", error: "The native task bridge is not available in this build." };
+        return { ok: false, status: "unavailable", error: "The native task bridge is not available in this build. Run the prediction in the browser instead, or update HYB2 Desktop and try again." };
       }
       return invoke("cplfold_predict", { request: request || {} });
     },

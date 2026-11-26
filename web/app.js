@@ -26,6 +26,8 @@
   const DESKTOP_HASH = "#hyb2-desktop";
   // the route before the last hash change, put back after #hyb2-desktop
   let lastRouteHash = "";
+  // a workspace address met before any data was loaded (see syncRoute)
+  let pendingRouteHash = "";
   // where focus goes when the Desktop drawer closes: the link that opened it
   let desktopReturnSelector = null;
   let renderedDialog = null;
@@ -226,6 +228,7 @@
     app.removeEventListener("toggle", handleSectionToggle, true);
     window.removeEventListener("hashchange", handleHashChange);
     window.removeEventListener("hyb2:motion-change", handleMotionChange);
+    window.removeEventListener("beforeunload", handleBeforeUnload);
     if (pageData) {
       pageData.destroy();
     }
@@ -331,6 +334,9 @@
     if (shell) {
       window.addEventListener("hashchange", handleHashChange);
       window.addEventListener("hyb2:motion-change", handleMotionChange);
+      // the website keeps files and results only in tab memory; the
+      // embedded mount (shell:false) leaves leaving the page to its host
+      window.addEventListener("beforeunload", handleBeforeUnload);
       syncRoute();
     }
     if (settings.selection) {
@@ -409,6 +415,16 @@
       }
     };
   }
+
+  // Hyb2Confirm asks before a destructive action: it shows a dialog with
+  // title, body (plain text), confirmLabel and optional cancelLabel, and calls onConfirm when the
+  // user confirms. Cancel, Escape or a click outside close it and do nothing.
+  let pendingConfirm = null;
+  window.Hyb2Confirm = function (options) {
+    pendingConfirm = options;
+    state.dialog = "confirm";
+    render();
+  };
 
   // Desktop uses the same analysis engine in the same document. This small
   // bridge lets the project controller hand imported project inputs directly
@@ -558,8 +574,13 @@
     if (!state.summary || !state.analysisEntered) {
       state.activePage = "landing";
       // a reload loses the tab's data: a page address left in the URL would
-      // name a page that is not shown
+      // name a page that is not shown. A workspace address (a reload, a
+      // shared link) is kept for when the data is loaded again: Enter
+      // analysis opens it, with its settings checked against that data.
       if (state.shell && route && route !== "landing") {
+        if (route.indexOf("workspace/") === 0) {
+          pendingRouteHash = "#/" + hash;
+        }
         restoreRouteHash("");
         lastRouteHash = "";
       }
@@ -580,12 +601,10 @@
         restoreRouteHash("#/workspace/overview");
         lastRouteHash = "#/workspace/overview";
       }
-      // A link carrying ?rna= / ?partner= sets those filters; the plain
-      // page link (sidebar, palette) keeps the ones already chosen.
-      if (state.activePage === "interactions" && state.filters && (query.has("rna") || query.has("partner"))) {
-        state.filters.rna = query.get("rna") || "";
-        state.filters.partner = query.get("partner") || "";
-      }
+      // A link carrying page settings (?rna=, ?partner=, ?type=, ...; Back
+      // and Forward, a shared link) sets them; the plain page link
+      // (sidebar, palette) keeps the ones already chosen.
+      applyRouteQuery(state.activePage, query);
       return;
     }
 
@@ -611,6 +630,23 @@
     } catch (error) {
       // a sandboxed page may refuse to rewrite its URL
     }
+  }
+
+  // Files and results live only in this tab: closing or reloading it with
+  // a HYB file, a FASTA or a parse in progress asks first. The empty
+  // landing page leaves without a prompt.
+  function hasUnsavedSession() {
+    return !!(state.shell && (state.summary || state.fasta || state.loading || state.fastaLoadSession));
+  }
+
+  function handleBeforeUnload(event) {
+    if (!hasUnsavedSession()) {
+      return undefined;
+    }
+    event.preventDefault();
+    // older browsers show the prompt only when returnValue is set
+    event.returnValue = "";
+    return "";
   }
 
   function handleMotionChange() {
@@ -911,6 +947,7 @@
       return;
     }
     const token = ++dataWaitToken;
+    updateRouteQuery();
     let pendingData = requestPageData();
     // RNA Structure's untouched default setup is settled once its data is
     // current (analysis-pages.js syncDefaultStructureEvidence). A changed
@@ -951,6 +988,7 @@
       return;
     }
     renderedPage = workspaceOpen ? state.activePage : null;
+    announceStatus();
     if (workspaceOpen) {
       revealActiveMobileNav(navScrollLeft, previousPage !== renderedPage);
     }
@@ -1287,7 +1325,7 @@
       : (window.HYB2_ASSET_BASE || "./") + "assets/hyb2-logo.png";
     return [
       '<a class="brand" href="#/" aria-label="HYB2 Web Lite home">',
-      '  <span class="brand-mark"><img src="' + logoAsset + '" alt="HYB2"></span>',
+      '  <span class="brand-mark"><img src="' + logoAsset + '" alt="HYB2" width="147" height="67"></span>',
       "  <span>",
       '    <span class="brand-name">Web</span>',
       '    <span class="brand-subtitle">Lite</span>',
@@ -1364,7 +1402,7 @@
       "    </div>",
       "  </section>",
       '  <p class="privacy-note">Files are read and processed locally in this browser. This page has no upload endpoint.</p>',
-      '  <p class="card-footnote">Recommended working size: up to 50 MB. Larger files are streamed to a dedicated worker to keep the interface responsive.</p>',
+      '  <p class="card-footnote">Recommended working size: up to 50&nbsp;MB. Larger files are streamed to a dedicated worker to keep the interface responsive.</p>',
       "</div></div>"
     ].join("");
   }
@@ -1382,7 +1420,7 @@
       '    <details class="example-more" data-open-key="landing-example"' + (window.Hyb2OpenSections && window.Hyb2OpenSections["landing-example"] ? " open" : "") + '>',
       '      <summary>What the example contains</summary>',
       '      <span class="example-badge">1-in-10 subset · 4 replicates</span>',
-      '      <p class="example-copy">ZIKV virion RNA of the African lineage (ZAFR, replicates 1 and 2) and the Asian lineage (ZASI = ZILM, French Polynesian isolate, replicates 2 and 3): every 10th record of each replicate .hyb (133,457 records, 6.9 MB compressed), each on its own genome. The primary file is ZAFR replicate 1; the Compare page gets all four replicates (10-nt bins, similarity minimum 10) and an arc map preloaded with CPLfold pseudoknot-free genome folds of both lineages and the NC_035889 gene track. Running the differential test there fills every panel of the summary figure. Because the data are a subset, the panels reproduce the method, not the published numbers.</p>',
+      '      <p class="example-copy">ZIKV virion RNA of the African lineage (ZAFR, replicates 1 and 2) and the Asian lineage (ZASI = ZILM, French Polynesian isolate, replicates 2 and 3): every 10th record of each replicate .hyb (133,457 records, 6.9&nbsp;MB compressed), each on its own genome. The primary file is ZAFR replicate 1; the Compare page gets all four replicates (10&#8209;nt bins, similarity minimum 10) and an arc map preloaded with CPLfold pseudoknot-free genome folds of both lineages and the NC_035889 gene track. Running the differential test there fills every panel of the summary figure. Because the data are a subset, the panels reproduce the method, not the published numbers.</p>',
       '      <div class="example-files" aria-label="Included example files">',
       example.downloads.map(function (item) {
         return '        <div class="example-file"><span class="example-file-kind">' + escapeHtml(item.kind) + '</span><code title="' + escapeAttribute(item.note) + '">' + escapeHtml(item.file) +
@@ -1403,7 +1441,7 @@
     const text = setup.error
       ? "Example comparison setup stopped: " + setup.error
       : (setup.ready
-        ? "Compare page ready: " + example.labels.A + " (ZAFR_REP1, ZAFR_REP2) vs " + example.labels.B + " (ZILM_REP2, ZILM_REP3), 10-nt bins, similarity minimum 10; the arc map has both CPLfold structures and the gene track. On the Compare page, run the differential test to find which contacts differ and to fill the figure panels that depend on it."
+        ? "Compare page ready: " + example.labels.A + " (ZAFR_REP1, ZAFR_REP2) vs " + example.labels.B + " (ZILM_REP2, ZILM_REP3), 10\u2011nt bins, similarity minimum 10; the arc map has both CPLfold structures and the gene track. On the Compare page, run the differential test to find which contacts differ and to fill the figure panels that depend on it."
         : setup.stage + (setup.total ? " (" + formatNumber(setup.done) + " of " + formatNumber(setup.total) + ")" : "") + "…");
     return '  <p class="prepared-file-note example-setup' + (setup.error ? " is-error" : "") + '" aria-live="polite"><strong>Example.</strong> ' + escapeHtml(text) + "</p>" +
       (setup.error
@@ -1429,15 +1467,15 @@
         return '<span class="prepared-file-status is-error">Stopped</span>';
       }
       if (index !== undefined && !parsing) {
-        return '<span class="prepared-file-status is-loading">' + (index < setup.done ? "Downloaded" : "Downloading") + "</span>";
+        return '<span class="prepared-file-status is-loading">' + (index < setup.done ? "Downloaded" : "Downloading…") + "</span>";
       }
       if (index !== undefined) {
-        return '<span class="prepared-file-status is-loading">Parsing</span>';
+        return '<span class="prepared-file-status is-loading">Parsing…</span>';
       }
       // the arc map files are loaded before the replicates are parsed
       return parsing
         ? '<span class="prepared-file-status is-ready">Ready</span>'
-        : '<span class="prepared-file-status is-loading">Downloading</span>';
+        : '<span class="prepared-file-status is-loading">Downloading…</span>';
     };
     const row = function (kind, file, detail, statusMarkup) {
       return [
@@ -1467,7 +1505,7 @@
       ? '<span class="prepared-file-status is-ready">Ready</span>'
       : (setup.error
         ? '<span class="prepared-file-status is-error">Stopped</span>'
-        : '<span class="prepared-file-status is-loading">' + (parsing ? "Parsing" : "Downloading") + "</span>");
+        : '<span class="prepared-file-status is-loading">' + (parsing ? "Parsing…" : "Downloading…") + "</span>");
     const openKey = "prepared-example-files";
     return [
       '  <details class="prepared-file-list prepared-file-list-example" data-open-key="' + openKey + '"' + (window.Hyb2OpenSections && window.Hyb2OpenSections[openKey] ? " open" : "") + ' aria-label="Example files for the Compare page">',
@@ -1492,7 +1530,7 @@
       : 0;
     const sequenceCount = fasta && Array.isArray(fasta.sequences) ? fasta.sequences.length : 0;
     const fastaStatus = fastaLoad
-      ? (fasta ? "Updating" : "Reading")
+      ? (fasta ? "Updating…" : "Reading…")
       : (fasta ? "Ready" : "Optional");
     const fastaDetail = fastaLoad
       ? "The reference file will remain available while you enter the workspace."
@@ -1535,6 +1573,37 @@
     ].join("");
   }
 
+  // The parse stage and a range notice (Interactions, Viewpoint, Region
+  // explorer coordinates) are announced from one region outside #app
+  // (index.html #hyb2-live-status): the page is redrawn on every change, and
+  // a live region or alert drawn with it would be a new node each time,
+  // announced again on every keystroke. Only a changed text is announced,
+  // not every record count.
+  function announceStatus() {
+    if (typeof document === "undefined" || typeof document.getElementById !== "function") {
+      return;
+    }
+    const rangeIssue = app && typeof app.querySelector === "function" ? app.querySelector("[data-range-issue]") : null;
+    const text = state.loading && state.loading.stage
+      ? state.loading.stage + "…"
+      : (rangeIssue ? String(rangeIssue.textContent || "") : "");
+    let region = document.getElementById("hyb2-live-status");
+    if (!region) {
+      if (!text || typeof document.createElement !== "function" || !document.body) {
+        return;
+      }
+      region = document.createElement("div");
+      region.id = "hyb2-live-status";
+      region.className = "visually-hidden";
+      region.setAttribute("role", "status");
+      region.setAttribute("aria-live", "polite");
+      document.body.appendChild(region);
+    }
+    if (region.textContent !== text) {
+      region.textContent = text;
+    }
+  }
+
   function renderLoadingPanel() {
     const load = state.loading;
     const percent = Math.max(0, Math.min(100, load.percent || 0));
@@ -1550,7 +1619,7 @@
     return [
       '<div class="file-card"><div class="file-card-inner load-state">',
       '  <p class="load-file-name" title="' + escapeAttribute(load.fileName) + '">' + escapeHtml(load.fileName) + "</p>",
-      '  <p class="load-status">' + escapeHtml(load.stage) + " · " + formatNumber(load.parsedRecords || 0) + " valid records found</p>",
+      '  <p class="load-status">' + escapeHtml(load.stage) + "… · " + formatNumber(load.parsedRecords || 0) + " valid records found</p>",
       '  <div class="progress-bar" role="progressbar" aria-label="Local HYB parsing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>',
       '  <ol class="parse-steps">',
       stages.map(function (stage, index) {
@@ -2105,6 +2174,18 @@
       return renderPrimaryFileDialog(state.dialog === "replace-primary");
     }
 
+    if (state.dialog === "confirm" && pendingConfirm) {
+      return [
+        '<div class="pop-layer">',
+        '  <section class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-body" data-dialog>',
+        '    <h2 id="confirm-dialog-title">' + escapeHtml(pendingConfirm.title) + "</h2>",
+        '    <p id="confirm-dialog-body">' + escapeHtml(pendingConfirm.body || "") + "</p>",
+        '    <div class="dialog-actions"><button class="button button-secondary" type="button" data-action="close-dialog">' + escapeHtml(pendingConfirm.cancelLabel || "Cancel") + '</button><button class="button button-danger" type="button" data-action="confirm-generic">' + escapeHtml(pendingConfirm.confirmLabel || "Confirm") + "</button></div>",
+        "  </section>",
+        "</div>"
+      ].join("");
+    }
+
     if (state.dialog === "clear") {
       return [
         '<div class="pop-layer">',
@@ -2423,10 +2504,20 @@
       return;
     }
 
+    if (action === "confirm-generic") {
+      const confirmed = pendingConfirm;
+      pendingConfirm = null;
+      state.dialog = null;
+      render();
+      if (confirmed && typeof confirmed.onConfirm === "function") confirmed.onConfirm();
+      return;
+    }
+
     if (action === "close-dialog") {
       if (state.dialog === "raw-reads") {
         state.rawReads = null;
       }
+      pendingConfirm = null;
       state.dialog = null;
       render();
       return;
@@ -2441,6 +2532,14 @@
 
 
     if (action === "navigate") {
+      // a page link (<a href="#/...">): Cmd/Ctrl/Shift+click opens it in
+      // another tab or window as the browser does; a plain click routes here
+      if (actionNode.tagName === "A") {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || (event.button !== undefined && event.button !== 0)) {
+          return;
+        }
+        if (typeof event.preventDefault === "function") event.preventDefault();
+      }
       if (typeof actionNode.closest === "function" && actionNode.closest("[data-dialog]")) {
         state.dialog = null;
       }
@@ -3640,6 +3739,13 @@
       return;
     }
     state.analysisEntered = true;
+    // the workspace address the tab was opened or reloaded on
+    const pending = pendingRouteHash;
+    pendingRouteHash = "";
+    if (pending && state.shell) {
+      setRouteHash(pending);
+      return;
+    }
     navigate("overview");
   }
 
@@ -4210,20 +4316,163 @@
     state.comparisonParsers.clear();
   }
 
-  function updateInteractionHash() {
-    if (!state.shell || !state.summary || state.activePage !== "interactions") {
+  // ---- Page settings in the address (#/workspace/<page>?key=value)
+  // Interactions filters, Contact Map settings and the RNA Structure view
+  // are written to the hash query (replaceState, no history entry) on every
+  // draw, so Back/Forward, a reload and a shared link reopen them. Only
+  // values that differ from the defaults are written. A query is read
+  // defensively: unknown keys are ignored, and a value the loaded data does
+  // not offer (an RNA not in the file, a bin size not listed) keeps its
+  // default.
+  const NUMERIC_QUERY_VALUE = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+  const INTERACTION_QUERY_KEYS = {
+    rna: "rna", partner: "partner", type: "type", chimeraType: "chimera", countMode: "count", search: "q",
+    armOneStart: "a1start", armOneEnd: "a1end", armTwoStart: "a2start", armTwoEnd: "a2end",
+    maxEvalue: "maxE", minDg: "minDg", maxDg: "maxDg", minSupport: "minSupport"
+  };
+  const CONTACT_QUERY_KEYS = {
+    datasetId: "dataset", rnaX: "x", rnaY: "y", binSize: "bin", measure: "measure", orientation: "orientation",
+    chimeraType: "chimera", homodimer: "homodimer", palette: "palette", scale: "scale", colourCap: "cap", customCap: "customCap"
+  };
+  const NUMERIC_FILTER_KEYS = ["armOneStart", "armOneEnd", "armTwoStart", "armTwoEnd", "maxEvalue", "minDg", "maxDg", "minSupport"];
+
+  function queryHasAny(query, names) {
+    return Object.keys(names).some(function (key) { return query.has(names[key]); });
+  }
+
+  function chimeraTypeAllowed(value) {
+    return value === "all" || ((state.summary && state.summary.chimeraTypes) || []).some(function (item) { return item && item.name === value; });
+  }
+
+  function rnaAllowed(value) {
+    return ((state.summary && state.summary.rnaNames) || []).indexOf(value) !== -1;
+  }
+
+  function interactionFilterAllowed(key, value) {
+    if (key === "rna" || key === "partner") return value === "" || rnaAllowed(value);
+    if (key === "type") return ["all", "intra", "inter", "homodimer"].indexOf(value) !== -1;
+    if (key === "chimeraType") return chimeraTypeAllowed(value);
+    if (key === "countMode") return value === "support" || value === "records";
+    if (key === "search") return value.length <= 200;
+    return NUMERIC_FILTER_KEYS.indexOf(key) === -1 || value === "" || NUMERIC_QUERY_VALUE.test(value);
+  }
+
+  function contactSettingAllowed(key, value) {
+    if (key === "datasetId") return value === "" || (state.datasets || []).some(function (dataset) { return dataset.id === value; });
+    if (key === "rnaX" || key === "rnaY") return rnaAllowed(value);
+    if (key === "binSize") return ["5", "10", "25", "50", "100"].indexOf(value) !== -1;
+    if (key === "measure") return value === "records" || value === "support";
+    if (key === "orientation") return value === "normalised" || value === "original";
+    if (key === "chimeraType") return chimeraTypeAllowed(value);
+    if (key === "homodimer") return ["all", "only", "exclude"].indexOf(value) !== -1;
+    if (key === "palette") {
+      const palettes = (window.Hyb2UI && window.Hyb2UI.contactPalettes) || [{ value: "colour" }, { value: "monochrome" }];
+      return palettes.some(function (palette) { return palette.value === value; });
+    }
+    if (key === "scale") return value === "linear" || value === "log";
+    if (key === "colourCap") return ["90", "95", "99", "max", "custom"].indexOf(value) !== -1;
+    if (key === "customCap") return value === "" || NUMERIC_QUERY_VALUE.test(value);
+    return false;
+  }
+
+  function applyRouteQuery(page, query) {
+    try {
+      if (page === "interactions" && state.filters && queryHasAny(query, INTERACTION_QUERY_KEYS)) {
+        const filters = window.Hyb2Data.defaultInteractionFilters();
+        Object.keys(INTERACTION_QUERY_KEYS).forEach(function (key) {
+          const value = query.get(INTERACTION_QUERY_KEYS[key]);
+          if (value !== null && interactionFilterAllowed(key, value)) filters[key] = value;
+        });
+        // the address holds every non-default filter: the others return
+        // to their defaults (an older ?rna= link also cleared the partner)
+        Object.assign(state.filters, filters);
+        state.selectedRecordIndex = null;
+        state.interactionScrollTop = 0;
+        return;
+      }
+      if (page === "contact-map" && state.contact && queryHasAny(query, CONTACT_QUERY_KEYS)) {
+        const contact = state.contact;
+        const defaults = window.Hyb2Data.defaultContactState(state.summary);
+        let dataChanged = false;
+        Object.keys(CONTACT_QUERY_KEYS).forEach(function (key) {
+          const raw = query.get(CONTACT_QUERY_KEYS[key]);
+          const value = raw !== null && contactSettingAllowed(key, raw) ? raw : String(defaults[key] == null ? "" : defaults[key]);
+          const next = key === "binSize" ? Number(value) : value;
+          if (String(contact[key] == null ? "" : contact[key]) === String(next)) return;
+          contact[key] = next;
+          if (["palette", "scale", "colourCap", "customCap"].indexOf(key) === -1) dataChanged = true;
+        });
+        // a cap that only follows the scale (log1p: maximum) is not a choice
+        if (query.has("cap") && contact.colourCap !== (contact.scale === "log" ? "max" : "95")) contact.colourCapChosen = true;
+        if (dataChanged) {
+          contact.selection = null;
+          contact.overviewSelection = null;
+          contact.zoomSelection = null;
+          contact.overviewView = null;
+          contact.zoomView = null;
+          contact.detailView = null;
+          contact.matrix = null;
+          contact.matrixStale = false;
+        }
+        return;
+      }
+      if (page === "structure" && state.structure && query.has("view")) {
+        const view = query.get("view");
+        if (["folded", "arc", "radial", "circular", "matrix"].indexOf(view) !== -1) state.structure.viewMode = view;
+      }
+    } catch (error) {
+      // a malformed address keeps the page's current settings
+    }
+  }
+
+  function routeQueryFor(page) {
+    const parameters = new URLSearchParams();
+    if (page === "interactions" && state.filters) {
+      const defaults = window.Hyb2Data.defaultInteractionFilters();
+      Object.keys(INTERACTION_QUERY_KEYS).forEach(function (key) {
+        const value = state.filters[key] == null ? "" : String(state.filters[key]);
+        if (value !== String(defaults[key])) parameters.set(INTERACTION_QUERY_KEYS[key], value);
+      });
+    } else if (page === "contact-map" && state.contact) {
+      const defaults = window.Hyb2Data.defaultContactState(state.summary);
+      Object.keys(CONTACT_QUERY_KEYS).forEach(function (key) {
+        const value = state.contact[key] == null ? "" : String(state.contact[key]);
+        if (value !== String(defaults[key] == null ? "" : defaults[key])) parameters.set(CONTACT_QUERY_KEYS[key], value);
+      });
+    } else if (page === "structure" && state.structure) {
+      if (state.structure.viewMode && state.structure.viewMode !== "folded") parameters.set("view", state.structure.viewMode);
+    }
+    return parameters.toString();
+  }
+
+  // Writes the current page's settings to the address. Only while the
+  // address already names this page: a navigation whose hashchange has not
+  // arrived yet keeps its new address.
+  function updateRouteQuery() {
+    if (!state.shell || !state.summary || !state.analysisEntered ||
+        ["interactions", "contact-map", "structure"].indexOf(state.activePage) === -1) {
       return;
     }
-    const filters = state.filters || {};
-    const parameters = new URLSearchParams();
-    if (filters.rna) {
-      parameters.set("rna", filters.rna);
+    try {
+      const current = String(window.location.hash || "");
+      const base = "#/workspace/" + state.activePage;
+      if (current.split("?")[0] !== base) {
+        return;
+      }
+      const suffix = routeQueryFor(state.activePage);
+      const next = base + (suffix ? "?" + suffix : "");
+      if (next !== current) {
+        window.history.replaceState(null, "", next);
+        lastRouteHash = next;
+      }
+    } catch (error) {
+      // a sandboxed page may refuse to rewrite its URL
     }
-    if (filters.partner) {
-      parameters.set("partner", filters.partner);
-    }
-    const suffix = parameters.toString();
-    history.replaceState(null, "", "#/workspace/interactions" + (suffix ? "?" + suffix : ""));
+  }
+
+  // kept for analysis-ui.js, which calls it after an Interactions filter
+  function updateInteractionHash() {
+    updateRouteQuery();
   }
 
   const ACTIONS_WITHOUT_DATA = ["choose-comparison-files"];
@@ -4765,13 +5014,13 @@
 
   function formatBytes(bytes) {
     if (!bytes) {
-      return "0 B";
+      return "0\u00a0B";
     }
 
     const units = ["B", "KB", "MB", "GB"];
     const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
     const value = bytes / Math.pow(1024, index);
-    return new Intl.NumberFormat("en-US", { maximumFractionDigits: index ? 1 : 0 }).format(value) + " " + units[index];
+    return new Intl.NumberFormat("en-US", { maximumFractionDigits: index ? 1 : 0 }).format(value) + "\u00a0" + units[index];
   }
 
   function escapeHtml(value) {

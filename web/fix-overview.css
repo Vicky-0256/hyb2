@@ -1,13 +1,18 @@
 /* Owned by Agent D (Overview, Interactions, shared controls). WEB_UI_FIX_PLAN.md: new rules for this agent go here, not at the end of other agents' files. */
 
-/* ---- D1 Overview grid: Top interacting RNAs and Top RNA pairs stacked on
-   the left, Chimera types spanning both rows on the right, so the grid has
-   no holes whichever column is taller. Overrides workspace.css .overview-grid
-   and layout.css:39 (align-items: start). */
+/* ---- D1 Overview grid: Top interacting RNAs and Top RNA pairs side by
+   side (the pairs table gets the wider column), Chimera patterns across the
+   full width below with its four patterns in two columns. Both rows hold
+   cards of about the same height, so no card is stretched far past its
+   content and the grid has no holes. Overrides workspace.css .overview-grid
+   and layout.css (align-items: start). Below 1360px the pairs column is too
+   narrow for its table, so the cards stack. */
 
 .overview-grid {
-  grid-template-rows: auto 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  grid-template-rows: none;
   align-items: stretch;
+  gap: var(--space-4);
 }
 
 .overview-grid > .overview-top-rnas {
@@ -16,25 +21,26 @@
 }
 
 .overview-grid > .overview-top-pairs {
-  grid-column: 1;
-  grid-row: 2;
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .overview-grid > .overview-types {
   display: flex;
   flex-direction: column;
-  grid-column: 2;
-  grid-row: 1 / span 2;
+  grid-column: 1 / -1;
+  grid-row: 2;
 }
 
 .overview-types > .type-split {
-  margin-bottom: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: var(--space-5) var(--space-6);
+  margin: 0 0 var(--space-4);
 }
 
-@media (max-width: 1199px) {
+@media (max-width: 1359px) {
   .overview-grid {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
   }
 
   .overview-grid > .overview-top-rnas,
@@ -45,12 +51,7 @@
   }
 }
 
-/* Chimera types: count and share on the label row, so the card is about as
-   tall as the two stacked cards beside it. */
-.overview-types > .type-split {
-  gap: 16px;
-}
-
+/* Chimera types: count and share beside the name. */
 .overview-types .type-item {
   align-items: baseline;
 }
@@ -68,7 +69,7 @@
 .overview-types .type-item {
   grid-template-columns: minmax(0, 1fr) 150px;
   align-items: center;
-  row-gap: 4px;
+  row-gap: var(--space-1);
 }
 
 .overview-types .type-item > strong {
@@ -91,7 +92,7 @@
 
 .overview-types .type-item > .type-meter {
   grid-row: 3;
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 
 @media (max-width: 420px) {
@@ -103,7 +104,7 @@
 /* Top RNA pairs in the narrower column: fixed number columns, the two RNA
    columns share the rest (K3: names truncate with a title). */
 .overview-pairs-table {
-  min-width: 560px;
+  min-width: 540px;
   table-layout: fixed;
 }
 
@@ -111,19 +112,13 @@
 .overview-pairs-table th:nth-child(4) { width: 112px; }
 .overview-pairs-table th:nth-child(5) { width: 136px; }
 
-/* ---- D2 one 12px rhythm between every Overview block: the reference
-   banner, the metric row, the legacy-column notice, the grid and Data
-   quality. */
-.overview-callout {
-  margin-bottom: 12px;
-}
-
-.metric-grid + .notice {
-  margin: 0 0 12px;
-}
-
-.overview-grid + .data-card {
-  margin-top: 0;
+/* ---- D2 the space between Overview blocks (reference banner, metric
+   row, notices, grid, Data quality) is ui-kit.css K10's var(--space-4);
+   the metric cards and the grid use the same gap. */
+@media (min-width: 768px) {
+  .content-wrap > .metric-grid {
+    gap: var(--space-4);
+  }
 }
 
 /* ---- D3 RNA names in the bar lists (Overview Top interacting RNAs and the
@@ -150,7 +145,7 @@
 .overview-callout--compact {
   align-items: center;
   min-height: 0;
-  padding: 4px 4px 4px 14px;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-4);
   border-color: var(--line);
   background: var(--surface-subtle);
 }
@@ -159,28 +154,28 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 10px;
+  gap: 2px var(--space-2);
   min-width: 0;
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .overview-callout--compact .overview-callout-line strong {
   color: var(--muted-strong);
-  font-weight: 680;
+  font-weight: 700;
 }
 
 .overview-callout--compact .quiet-button {
   flex: none;
   min-height: 34px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 @media (max-width: 900px) {
   .overview-callout--compact {
     display: flex;
-    padding: 8px 6px 8px 12px;
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   }
 
   .overview-callout--compact .quiet-button {
@@ -193,7 +188,7 @@
 .overview-types-link {
   align-self: flex-start;
   margin-top: auto;
-  margin-left: -13px;
+  margin-left: calc((var(--space-3) + 1px) * -1);
 }
 
 /* ---- D6 page-heading export menu (K2) on Overview and Interactions. When
@@ -215,16 +210,9 @@
   }
 }
 
-/* ---- K3 refinements (D11). ui-kit.css gives .num / .cell-truncate their
-   table-cell rules; these extend them to grid "tables" built from
-   role="row" containers (the Interactions virtual table). A non-cell
-   .cell-truncate must not take the table-cell max-width: 0 trick. */
-[role="row"] > .num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
+/* ---- K3 refinements (D11). ui-kit.css gives .num (grid rows included) and
+   .cell-truncate their rules. A non-cell .cell-truncate must not take the
+   table-cell max-width: 0 trick. */
 .cell-truncate:not(td):not(th) {
   display: block;
   min-width: 0;
@@ -236,18 +224,7 @@
    Row heights are exact, not minimums: the virtual window positions rows
    at index * 46px (38px compact) in renderInteractionTable and
    updateVirtualRows, so a row that grew by even 1px would drift over
-   22,416 rows. Overrides analysis.css / layout.css (B / A). */
-.virtual-table-head,
-.virtual-row {
-  grid-template-columns: 120px minmax(150px, 1fr) 100px minmax(150px, 1fr) 100px minmax(92px, .5fr) 64px 104px;
-  column-gap: 16px;
-  min-width: 1040px;
-}
-
-.virtual-table-frame > .virtual-table {
-  min-width: 1040px;
-}
-
+   22,416 rows. The column template itself is in analysis.css. */
 .virtual-table-head > span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -265,12 +242,14 @@
 }
 
 /* ---- D9 RNA partner analysis before an RNA is chosen: a hint line under
-   the filter bar instead of a card. */
+   the filter bar instead of a card. It sits var(--space-4) from the cards
+   above and below (ui-kit.css K10) and starts on their content edge. */
 .partner-hint {
-  margin: -4px 0 12px;
-  padding: 0 4px;
+  margin: 0;
+  padding: 0 calc(var(--card-pad) + 1px);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-base);
+  line-height: 1.45;
 }
 
 /* ---- D10 / K8 form controls: renderSelectControl(..., { wide: true }) and
@@ -281,8 +260,26 @@
   grid-column: span 2;
 }
 
+/* renderTextControl(..., { full: true }): a field on a row of its own, such
+   as the Interactions search bar */
+.control-field--full {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 480px) {
   .control-field--wide {
+    grid-column: 1 / -1;
+  }
+}
+
+/* HYB binding energies (batch-tools.js): Engine and Records hold long
+   option labels, so they are two-track fields of the shared grid. */
+.data-card:has([data-feature="batch-energy-setting"]) .control-grid > .control-field {
+  grid-column: span 2;
+}
+
+@media (max-width: 480px) {
+  .data-card:has([data-feature="batch-energy-setting"]) .control-grid > .control-field {
     grid-column: 1 / -1;
   }
 }
@@ -291,8 +288,8 @@
 .quality-stat--absent strong {
   color: var(--muted);
   font-family: inherit;
-  font-size: 17px;
-  font-weight: 650;
+  font-size: var(--text-md);
+  font-weight: 600;
   line-height: 23px;
 }
 
@@ -300,7 +297,7 @@
    field table; reference pages have no grid gap between cards. */
 
 .format-raw-reads {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 /* ---- D14 Interactions header and rows share one column template. Rows

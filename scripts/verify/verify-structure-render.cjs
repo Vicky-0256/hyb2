@@ -571,7 +571,7 @@ const cplfoldResultHtml = context.window.Hyb2Pages.renderStructure(cplfoldState)
 assert.match(cplfoldResultHtml, /Pseudoknot candidate/);
 assert.match(cplfoldResultHtml, /HYB-derived CPLfold bonus matrix/);
 assert.match(cplfoldResultHtml, /data-feature-action="select-cplfold-candidate"/);
-assert.match(cplfoldResultHtml, /Click any row to update the RNA visualization/);
+assert.match(cplfoldResultHtml, /Select any row to update the RNA visualization/);
 assert.match(cplfoldResultHtml, /class="cplfold-candidate-row is-selected"[^>]*aria-pressed="true"/);
 assert.match(cplfoldResultHtml, /View structure/);
 assert.match(cplfoldResultHtml, /Download bonus matrix/);

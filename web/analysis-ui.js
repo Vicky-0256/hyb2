@@ -117,6 +117,49 @@
     }
   }
 
+  // One polite live region outside #app, so it survives every render: the
+  // maps announce the cell or bin chosen from the keyboard there.
+  function mapAnnouncer() {
+    if (typeof document === "undefined" || !document.body || !document.createElement) {
+      return null;
+    }
+    let node = document.getElementById("hyb2-map-announce");
+    if (!node) {
+      node = document.createElement("p");
+      if (!node || typeof node.setAttribute !== "function") {
+        return null;
+      }
+      node.id = "hyb2-map-announce";
+      node.className = "visually-hidden";
+      node.setAttribute("aria-live", "polite");
+      document.body.appendChild(node);
+    }
+    return node;
+  }
+
+  function announceMap(text) {
+    const node = mapAnnouncer();
+    if (node && text) {
+      node.textContent = text;
+    }
+  }
+
+  // Wheel zoom must not trap page scrolling: maps zoom on Ctrl/⌘ + wheel
+  // (and trackpad pinch), or on a plain wheel once the map has focus.
+  function wheelZooms(event, canvas) {
+    return !!(event.ctrlKey || event.metaKey || document.activeElement === canvas);
+  }
+
+  // Ask before a destructive step (window.Hyb2Confirm, app.js); without the
+  // dialog (tests, embedded hosts) the step runs at once.
+  function confirmThen(options, run) {
+    if (typeof window !== "undefined" && typeof window.Hyb2Confirm === "function") {
+      window.Hyb2Confirm(Object.assign({}, options, { onConfirm: run }));
+    } else {
+      run();
+    }
+  }
+
   function bindVirtualTable(state, api) {
     const table = document.querySelector("[data-virtual-table]");
     if (!table) {
@@ -351,11 +394,14 @@
       });
 
       canvas.addEventListener("wheel", function (event) {
-        event.preventDefault();
+        if (!wheelZooms(event, canvas)) {
+          return;
+        }
         const point = contactStagePointFromEvent(state, canvas, stage, event);
         if (!point) {
           return;
         }
+        event.preventDefault();
         zoomContactStageView(state, stage, point, event.deltaY > 0 ? 1.35 : 0.74);
         scheduleContactStageDraw(state, canvas, stage);
       }, { passive: false });
@@ -380,16 +426,63 @@
         renderAndFocus(api, "#contact-" + stage + "-canvas");
       });
 
+      // Arrows select a cell, Shift + arrows pan, Enter or + zooms in one
+      // step at the selected cell, − zooms out, Escape resets the zoom.
       canvas.addEventListener("keydown", function (event) {
-        const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
-        if (keys.indexOf(event.key) === -1) {
+        const arrows = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+        const view = getContactStageView(state, stage);
+        const centre = { x: view.xStart + Math.round((view.xEnd - view.xStart) / 2 / state.contact.matrix.binSize) * state.contact.matrix.binSize,
+          y: view.yStart + Math.round((view.yEnd - view.yStart) / 2 / state.contact.matrix.binSize) * state.contact.matrix.binSize };
+        if (arrows.indexOf(event.key) !== -1 && event.shiftKey) {
+          panContactStageViewBy(state, stage, event.key);
+        } else if (arrows.indexOf(event.key) !== -1) {
+          moveContactStageSelection(state, stage, event.key);
+        } else if (event.key === "Enter" || event.key === "+" || event.key === "=") {
+          const selected = getContactStageSelection(state, stage);
+          const point = selected && contactPointInView(selected, view) ? selected : centre;
+          selectContactStagePoint(state, stage, point);
+          zoomContactStageView(state, stage, point, 0.5);
+        } else if (event.key === "-" || event.key === "_") {
+          zoomContactStageView(state, stage, centre, 2);
+        } else if (event.key === "Escape" && state.contact[stageViewKey(stage)]) {
+          setContactStageView(state, stage, null);
+        } else {
           return;
         }
         event.preventDefault();
-        moveContactStageSelection(state, stage, event.key);
+        event.stopPropagation();
         renderAndFocus(api, "#contact-" + stage + "-canvas");
+        const selection = getContactStageSelection(state, stage);
+        if (arrows.indexOf(event.key) !== -1 && !event.shiftKey && selection) {
+          updateContactStageTooltip(state, stage, selection);
+          announceMap(contactStageReadout(state, selection));
+        } else {
+          const shown = getContactStageView(state, stage);
+          announceMap("Showing " + state.contact.rnaX + ":" + range(shown.xStart, shown.xEnd + state.contact.matrix.binSize - 1) + " × " + state.contact.rnaY + ":" + range(shown.yStart, shown.yEnd + state.contact.matrix.binSize - 1));
+        }
       });
     });
+    mapAnnouncer();
+  }
+
+  function contactPointInView(point, view) {
+    return point.x >= view.xStart && point.x <= view.xEnd && point.y >= view.yStart && point.y <= view.yEnd;
+  }
+
+  // Shift + arrow: move the view a tenth of its span (at least one bin).
+  function panContactStageViewBy(state, stage, key) {
+    const matrix = state.contact.matrix;
+    const base = contactBaseView(matrix);
+    const view = getContactStageView(state, stage);
+    const xSpan = view.xEnd - view.xStart;
+    const ySpan = view.yEnd - view.yStart;
+    const xStep = Math.max(1, Math.round(xSpan / matrix.binSize / 10)) * matrix.binSize;
+    const yStep = Math.max(1, Math.round(ySpan / matrix.binSize / 10)) * matrix.binSize;
+    const dx = key === "ArrowLeft" ? -xStep : key === "ArrowRight" ? xStep : 0;
+    const dy = key === "ArrowDown" ? -yStep : key === "ArrowUp" ? yStep : 0;
+    const xStart = clampBin(view.xStart + dx, base.xStart, base.xEnd - xSpan, matrix.binSize);
+    const yStart = clampBin(view.yStart + dy, base.yStart, base.yEnd - ySpan, matrix.binSize);
+    setContactStageView(state, stage, { xStart: xStart, xEnd: xStart + xSpan, yStart: yStart, yEnd: yStart + ySpan });
   }
 
   function scheduleContactStageDraw(state, canvas, stage) {
@@ -906,10 +999,14 @@
     if (!tooltip) {
       return;
     }
+    tooltip.textContent = contactStageReadout(state, point);
+  }
+
+  function contactStageReadout(state, point) {
     const matrix = state.contact.matrix;
     const cell = contactCellAt(matrix, point.x, point.y);
     const prefix = state.contact.rnaX + ":" + range(point.x, point.x + matrix.binSize - 1) + " × " + state.contact.rnaY + ":" + range(point.y, point.y + matrix.binSize - 1);
-    tooltip.textContent = cell
+    return cell
       ? prefix + " · " + format(cell.records) + " records · " + format(cell.support) + " cluster support"
       : prefix + " · no records";
   }
@@ -1250,7 +1347,9 @@
         : Math.min(bins.length - 1, currentIndex + 1);
       state.viewpoint.selection = { start: bins[nextIndex].start };
       renderAndFocus(api, "#viewpoint-canvas");
+      announceMap(bins[nextIndex].start + "–" + bins[nextIndex].end + " · mean coverage " + format(bins[nextIndex].value));
     });
+    mapAnnouncer();
   }
 
   // exportSize: the light PNG export, as for drawContactStageCanvas
@@ -1382,6 +1481,7 @@
         return { x: x, y: y, fx: (x - geometry.left) / geometry.plotWidth, fy: (y - geometry.top) / geometry.plotHeight, geometry: geometry };
       };
       canvas.addEventListener("wheel", function (event) {
+        if (!wheelZooms(event, canvas)) { return; }
         const p = position(event);
         if (p.fx < 0 || p.fx > 1 || p.fy < 0 || p.fy > 1) { return; }
         event.preventDefault();
@@ -1432,16 +1532,75 @@
         state.comparison.activeMap = kind;
         renderAndFocus(api, "#comparison-" + kind + "-canvas");
       });
+      // Arrows select a bin, Shift + arrows pan, Enter or + zooms in one
+      // step, − zooms out, Escape resets the zoom.
       canvas.addEventListener("keydown", function (event) {
-        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].indexOf(event.key) === -1) {
+        const arrow = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].indexOf(event.key) !== -1;
+        if (arrow && !event.shiftKey) {
+          event.preventDefault();
+          if (moveComparisonSelection(state, kind, event.key)) {
+            renderAndFocus(api, "#comparison-" + kind + "-canvas");
+            announceMap(comparisonReadout(state, kind));
+          }
+          return;
+        }
+        if (arrow) {
+          const step = 0.1;
+          changeComparisonView(result, kind, 1, 0.5, 0.5,
+            event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0,
+            // y grows upwards: Up shows higher positions
+            event.key === "ArrowUp" ? step : event.key === "ArrowDown" ? -step : 0);
+        } else if (event.key === "Enter" || event.key === "+" || event.key === "=") {
+          const focus = comparisonSelectionFraction(state, kind);
+          changeComparisonView(result, kind, 0.5, focus.fx, focus.fy, 0, 0);
+        } else if (event.key === "-" || event.key === "_") {
+          changeComparisonView(result, kind, 2, 0.5, 0.5, 0, 0);
+        } else if (event.key === "Escape" && comparisonView(result, kind)) {
+          setComparisonView(result, kind, null);
+        } else {
           return;
         }
         event.preventDefault();
-        if (moveComparisonSelection(state, kind, event.key)) {
-          renderAndFocus(api, "#comparison-" + kind + "-canvas");
+        event.stopPropagation();
+        drawComparisonCanvas(state, canvas, kind);
+        const shown = state.comparison.geometry && state.comparison.geometry[kind];
+        if (shown) {
+          announceMap("Showing " + state.comparison.rnaX + ":" + range(shown.xStart, shown.xEnd + result.binSize - 1) + " × " + state.comparison.rnaY + ":" + range(shown.yStart, shown.yEnd + result.binSize - 1));
         }
       });
     });
+    mapAnnouncer();
+  }
+
+  // where the selected bin sits in the drawn view (0–1 from the left and
+  // the top), or the centre when nothing in view is selected
+  function comparisonSelectionFraction(state, kind) {
+    const geometry = state.comparison.geometry && state.comparison.geometry[kind];
+    const selected = state.comparison.selection;
+    const result = state.comparison.result;
+    if (!geometry || !selected || selected.x < geometry.xStart || selected.x > geometry.xEnd || selected.y < geometry.yStart || selected.y > geometry.yEnd) {
+      return { fx: 0.5, fy: 0.5 };
+    }
+    return {
+      fx: ((selected.x - geometry.xStart) / result.binSize + 0.5) / geometry.xCount,
+      fy: (rowOffset(geometry, selected.y, result.binSize) + geometry.cellHeight / 2) / geometry.plotHeight
+    };
+  }
+
+  function comparisonReadout(state, kind) {
+    const result = state.comparison.result;
+    const selected = state.comparison.selection;
+    if (!result || !selected) {
+      return "";
+    }
+    const cell = window.Hyb2Data.comparisonCellAt(result, selected.x, selected.y);
+    const where = state.comparison.rnaX + ":" + range(selected.x, selected.x + result.binSize - 1) + " × " + state.comparison.rnaY + ":" + range(selected.y, selected.y + result.binSize - 1);
+    if (!cell) {
+      return where + " · no data";
+    }
+    return where + " · " + (kind === "conserved"
+      ? "similarity " + format(cell.similarity) + " · raw " + format(cell.rawA) + " / " + format(cell.rawB)
+      : "log2 effect " + format(cell.effect) + " · " + format(cell.presentDatasets) + " datasets");
   }
 
   // Compare sub-navigation: the section that has reached the top (below
@@ -2831,7 +2990,7 @@
         api.download("contact-matrix.csv", window.Hyb2Data.contactMatrixToCsv(state.contact.matrix), "text/csv");
         api.showToast("Contact matrix CSV downloaded locally.");
       } catch (error) {
-        api.showToast(error && error.message ? error.message : "The contact matrix could not be written.");
+        api.showToast(error && error.message ? error.message + " Generate the contact map again, then export the matrix." : "The contact matrix could not be written. Generate the contact map again, then export the matrix.");
       }
       return true;
     }
@@ -2986,28 +3145,41 @@
 
     if (action === "remove-comparison-dataset") {
       const datasetId = element.dataset.datasetId;
-      if (datasetId !== "primary") {
-        // Keep it out of this comparison even if the provider still lists it;
-        // the website shell also unregisters the parsed file.
-        state.comparison.excludedDatasetIds = Object.assign({}, state.comparison.excludedDatasetIds || {});
-        state.comparison.excludedDatasetIds[datasetId] = true;
-        if (typeof api.removeDataset === "function") {
-          api.removeDataset(datasetId);
+      const removed = (state.comparison.datasets || []).find(function (dataset) { return dataset.id === datasetId; });
+      const name = removed ? removed.label || removed.fileName || "this dataset" : "this dataset";
+      const removeDataset = function () {
+        if (datasetId !== "primary") {
+          // Keep it out of this comparison even if the provider still lists it;
+          // the website shell also unregisters the parsed file.
+          state.comparison.excludedDatasetIds = Object.assign({}, state.comparison.excludedDatasetIds || {});
+          state.comparison.excludedDatasetIds[datasetId] = true;
+          if (typeof api.removeDataset === "function") {
+            api.removeDataset(datasetId);
+          }
         }
+        state.comparison.datasets = (state.comparison.datasets || []).filter(function (dataset) { return dataset.id !== datasetId || dataset.id === "primary"; });
+        const remainingRnas = Array.from(new Set(state.comparison.datasets.flatMap(function (dataset) {
+          return dataset.summary && dataset.summary.rnaNames ? dataset.summary.rnaNames : [];
+        }))).sort(function (left, right) { return left.localeCompare(right); });
+        if (remainingRnas.indexOf(state.comparison.rnaX) === -1) {
+          state.comparison.rnaX = remainingRnas[0] || "";
+        }
+        if (remainingRnas.indexOf(state.comparison.rnaY) === -1) {
+          state.comparison.rnaY = remainingRnas[0] || "";
+        }
+        state.comparison.result = null;
+        state.comparison.selection = null;
+        api.render();
+      };
+      if (datasetId === "primary") {
+        removeDataset();
+      } else {
+        confirmThen({
+          title: "Remove " + name + "?",
+          body: "It is taken out of this comparison and its parsed file is unloaded from this browser session. The current comparison result and selection are cleared; run the comparison again afterwards. Add the file again to bring it back.",
+          confirmLabel: "Remove dataset"
+        }, removeDataset);
       }
-      state.comparison.datasets = (state.comparison.datasets || []).filter(function (dataset) { return dataset.id !== datasetId || dataset.id === "primary"; });
-      const remainingRnas = Array.from(new Set(state.comparison.datasets.flatMap(function (dataset) {
-        return dataset.summary && dataset.summary.rnaNames ? dataset.summary.rnaNames : [];
-      }))).sort(function (left, right) { return left.localeCompare(right); });
-      if (remainingRnas.indexOf(state.comparison.rnaX) === -1) {
-        state.comparison.rnaX = remainingRnas[0] || "";
-      }
-      if (remainingRnas.indexOf(state.comparison.rnaY) === -1) {
-        state.comparison.rnaY = remainingRnas[0] || "";
-      }
-      state.comparison.result = null;
-      state.comparison.selection = null;
-      api.render();
       return true;
     }
 
@@ -3074,7 +3246,7 @@
           );
           api.showToast("HYB2-compatible raw count table downloaded locally.");
         } catch (error) {
-          api.showToast(error && error.message ? error.message : "The raw count table could not be exported.");
+          api.showToast(error && error.message ? error.message + " Run the comparison again, then export the table." : "The raw count table could not be exported. Run the comparison again, then export the table.");
         }
       } else if (action === "comparison-export-hyb2-names") {
         api.download(
@@ -3214,7 +3386,12 @@
     }
 
     if (action === "remove-fasta") {
-      api.removeFasta();
+      confirmThen({
+        title: "Remove the reference FASTA?",
+        body: "This removes the FASTA and its RNA name mapping from this session. Viewpoint results are cleared, and a structure folded from the reference sequence is reset together with its constraints. " +
+          "Region sequences, binding energies and reference folds need a FASTA again. The HYB data stays loaded.",
+        confirmLabel: "Remove FASTA"
+      }, function () { api.removeFasta(); });
       return true;
     }
 
@@ -3242,7 +3419,7 @@
       // Prefetched DataProvider.getSequence slice for the current region.
       const reference = window.Hyb2Pages.regionReference(state);
       if (!reference) {
-        api.showToast("Reference sequence is unavailable for this region.");
+        api.showToast("Reference sequence is unavailable for this region. Load a reference FASTA and map this RNA to it on the Data page, then try again.");
         return true;
       }
       if (action === "copy-region-sequence") {
@@ -3517,7 +3694,7 @@
   // How the binned exports give coordinates (written into their parameters JSON)
   const BIN_COORDINATES_NOTE = "In {table}, x_start/y_start (and the matrix headers) are HYB2 bin keys: floor(position / bin size) × bin size, " +
     "as in HYB2 contact.txt, so the first bin's key is 0. A bin holds the 1-based, inclusive positions max(1, start) to end; " +
-    "x_end/y_end are start + bin size − 1, clamped to the RNA length for the last bin. Viewpoint and Region profile bins are 1-based (1-10, 11-20, ...).";
+    "x_end/y_end are start + bin size − 1, clamped to the RNA length for the last bin. Viewpoint and Region profile bins are 1-based (1-10, 11-20, …).";
 
   function contactParameters(state) {
     const rawCustomCap = String(state.contact.customCap == null ? "" : state.contact.customCap).trim();
@@ -3804,13 +3981,13 @@
 
   function fetchAllRows(api, query, onRows) {
     if (typeof api.queryHybrids !== "function") {
-      api.showToast("Interaction rows are unavailable in this view.");
+      api.showToast("Interaction rows are unavailable in this view. Open the Interactions page and export from there.");
       return;
     }
     Promise.resolve(api.queryHybrids(Object.assign({}, query, { offset: 0, limit: null }))).then(function (result) {
       onRows(result && result.rows || []);
     }).catch(function (error) {
-      api.showToast(error && error.message ? error.message : "The rows could not be loaded.");
+      api.showToast(error && error.message ? error.message + " Try the export again; if it keeps failing, reload the HYB file." : "The rows could not be loaded. Try the export again; if it keeps failing, reload the HYB file.");
     });
   }
 

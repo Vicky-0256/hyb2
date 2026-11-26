@@ -5,7 +5,7 @@
 
 .chart-legend {
   display: inline-grid;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
   color: var(--ink);
   font-size: var(--text-label);
@@ -13,14 +13,14 @@
 
 .chart-legend-title {
   color: var(--muted-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .chart-legend--horizontal .chart-legend-scale {
   position: relative;
   width: 220px;
   max-width: 100%;
-  padding-bottom: 16px;
+  padding-bottom: var(--space-4);
 }
 
 .chart-legend--horizontal .chart-legend-bar {
@@ -73,7 +73,7 @@
 .chart-legend-ends {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
   color: var(--muted);
 }
 
@@ -98,7 +98,7 @@
   display: inline-block;
   width: 6px;
   height: 6px;
-  margin-left: 8px;
+  margin-left: var(--space-2);
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   transform: translateY(-2px) rotate(45deg);
@@ -116,7 +116,7 @@
   display: grid;
   min-width: 220px;
   max-width: min(320px, calc(100vw - 32px));
-  padding: 6px;
+  padding: var(--space-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface);
@@ -133,13 +133,13 @@
 .export-menu-item {
   display: block;
   width: 100%;
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-2);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-base);
   text-align: left;
   cursor: pointer;
 }
@@ -169,13 +169,19 @@
 
 /* ---- K3 table conventions (D documents them; pages apply the classes) */
 
+/* .num anywhere (a stat, a cell, a grid row) gets aligned figures */
+.num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* numeric columns sit right; the element selectors keep table cells above
+   per-table text-align rules */
 table .num,
 td.num,
 th.num,
 [role="row"] > .num {
   text-align: right;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 /* a row header names its row (a file, a dataset): shown as written, never in
@@ -183,6 +189,12 @@ th.num,
 tbody th[scope="row"] {
   letter-spacing: 0;
   text-transform: none;
+}
+
+/* the last row has no rule under it in any cell: workspace.css drops it
+   from the td cells only, which left a line under the row header alone */
+.data-table tbody tr:last-child > th {
+  border-bottom: 0;
 }
 
 /* in a table cell the max-width: 0 trick lets the column's width decide;
@@ -205,7 +217,7 @@ th.cell-truncate {
 }
 
 th .unit {
-  margin-left: 4px;
+  margin-left: var(--space-1);
   color: var(--muted);
   font-size: max(.9em, var(--text-caps));
   font-weight: 500;
@@ -226,7 +238,7 @@ thead.nowrap th {
 
 .desktop-cta strong {
   color: var(--primary-ink);
-  font-weight: 650;
+  font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 2px;
   white-space: nowrap;
@@ -241,4 +253,117 @@ thead.nowrap th {
   outline: 2px solid var(--primary-ink);
   outline-offset: 2px;
   border-radius: 3px;
+}
+
+/* ---- K10 one rhythm for the analysis pages (Overview, Interactions,
+   Contact Map, Viewpoint, Region Explorer): every block under the page
+   heading is var(--space-4) below the one before it, whatever margins the
+   block brings from older sheets. Each page is recognised by a block only it
+   renders. */
+:is(.content-wrap:has(> .overview-grid),
+  .content-wrap:has(.interaction-table-card),
+  .content-wrap:has([data-feature-action="generate-contact"]),
+  .content-wrap:has(.viewpoint-control-grid),
+  .content-wrap:has(.region-control-grid)) > :not(.page-heading) {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+:is(.content-wrap:has(> .overview-grid),
+  .content-wrap:has(.interaction-table-card),
+  .content-wrap:has([data-feature-action="generate-contact"]),
+  .content-wrap:has(.viewpoint-control-grid),
+  .content-wrap:has(.region-control-grid)) > :not(.page-heading) + * {
+  margin-top: var(--space-4);
+}
+
+/* phones: one smaller card pad on these pages (responsive.css's 17px
+   .data-card rule loads after analysis.css's 16px one) */
+@media (max-width: 767px) {
+  :is(.content-wrap:has(> .overview-grid),
+    .content-wrap:has(.interaction-table-card),
+    .content-wrap:has([data-feature-action="generate-contact"]),
+    .content-wrap:has(.viewpoint-control-grid),
+    .content-wrap:has(.region-control-grid)) :is(.data-card, .placeholder-card) {
+    padding: var(--space-4);
+  }
+
+  :is(.content-wrap:has(.interaction-table-card),
+    .content-wrap:has([data-feature-action="generate-contact"]),
+    .content-wrap:has(.viewpoint-control-grid),
+    .content-wrap:has(.region-control-grid)) .analysis-controls {
+    padding-left: calc(var(--space-4) - 2px);
+  }
+
+  .content-wrap:has(.interaction-table-card) .interaction-table-card {
+    padding: var(--space-4) 0 0;
+  }
+}
+
+/* one card title size on these pages: card headers, the Contact Map "Data"
+   heading, the map card and the side panels */
+/* (workspace.css gives .card-title-row h2 the same) */
+.control-section-title,
+.contact-stage-heading h2,
+.contact-workbench-side .selection-card h2,
+.viewpoint-layout .selection-card h2 {
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* ---- K11 secondary actions on the analysis pages read as buttons: an
+   outlined button (as .button-secondary), not bare text. Beside a primary
+   .button they take its height; inside a card they are compact. */
+.quiet-button:is(
+  [data-feature-action="reset-contact"],
+  [data-feature-action="reset-contact-zoom"],
+  [data-feature-action="toggle-contact-data"],
+  [data-feature-action="contact-export-selected"],
+  [data-feature-action="reset-viewpoint-selection"],
+  [data-feature-action="toggle-viewpoint-data"],
+  [data-feature-action="region-toggle-records"]) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-base);
+  font-weight: 700;
+  text-align: center;
+}
+
+.quiet-button:is(
+  [data-feature-action="reset-contact"],
+  [data-feature-action="reset-contact-zoom"],
+  [data-feature-action="toggle-contact-data"],
+  [data-feature-action="contact-export-selected"],
+  [data-feature-action="reset-viewpoint-selection"],
+  [data-feature-action="toggle-viewpoint-data"],
+  [data-feature-action="region-toggle-records"]):hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--ink);
+}
+
+.control-actions > .quiet-button:is([data-feature-action="reset-contact"], [data-feature-action="reset-viewpoint-selection"]) {
+  min-height: 44px;
+  padding: 0 var(--space-4);
+}
+
+/* in the selection side panel it spans the card like the primary action */
+.selection-card > .quiet-button[data-feature-action="contact-export-selected"] {
+  display: flex;
+  width: 100%;
+}
+
+/* Navigation links styled as quiet buttons (Cmd/Ctrl-click opens a tab). */
+a.quiet-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }

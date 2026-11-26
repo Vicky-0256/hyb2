@@ -2,7 +2,7 @@
 <html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="Run HYB2 CPLfold inputs locally with FASTA and optional HYB-derived bonus matrix files." />
     <meta name="theme-color" content="#f3f7f8" />
     <link rel="icon" href="./assets/hyb2-logo.png" type="image/png" />
@@ -16,7 +16,7 @@
     <div class="landing local-run-shell">
       <header class="landing-header local-run-header">
         <a class="brand" href="./" aria-label="HYB2 Web Lite home">
-          <span class="brand-mark"><img src="./assets/hyb2-logo-dark.png" alt="HYB2"></span>
+          <span class="brand-mark"><img src="./assets/hyb2-logo-dark.png" alt="HYB2" width="147" height="67"></span>
           <span>
             <span class="brand-name">Web</span>
             <span class="brand-subtitle">Lite</span>
@@ -48,7 +48,7 @@
             <span class="drawer-kicker">2. Place files in the repository root</span>
             <h2>Use the same folder as <code>bin/</code></h2>
             <p>The commands below assume the downloaded files are next to the HYB2 <code>bin/</code> and <code>requirements/</code> directories.</p>
-            <pre class="cplfold-command"><code>hyb2/
+            <pre class="cplfold-command" tabindex="0"><code>hyb2/
   bin/cplfold
   requirements/cplfold-core.txt
   cplfold-input.fasta
@@ -58,7 +58,7 @@
           <article class="local-run-card local-run-card-wide">
             <span class="drawer-kicker">3. Install once</span>
             <h2>Create a local Python environment</h2>
-            <pre class="cplfold-command"><code>python3.11 -m venv .venv-cplfold
+            <pre class="cplfold-command" tabindex="0"><code>python3.11 -m venv .venv-cplfold
 . .venv-cplfold/bin/activate
 python -m pip install -r requirements/cplfold-core.txt</code></pre>
           </article>
@@ -66,7 +66,7 @@ python -m pip install -r requirements/cplfold-core.txt</code></pre>
           <article class="local-run-card local-run-card-wide">
             <span class="drawer-kicker">4. Run CPLfold</span>
             <h2>HYB-guided run with bonus matrix</h2>
-            <pre class="cplfold-command"><code>bin/cplfold \
+            <pre class="cplfold-command" tabindex="0"><code>bin/cplfold \
   --sequence-file cplfold-input.fasta \
   --bonus-matrix-file cplfold-bonus-matrix.tsv \
   --beam 20 \
@@ -82,10 +82,10 @@ python -m pip install -r requirements/cplfold-core.txt</code></pre>
           </article>
 
           <article class="local-run-card local-run-card-wide">
-            <span class="drawer-kicker">Longer than 1,000 nt</span>
+            <span class="drawer-kicker">Longer than 1,000&nbsp;nt</span>
             <h2>Raise the local guard deliberately</h2>
-            <p>The local wrapper keeps a conservative 1,000 nt default guard. On a stronger machine, raise it after checking available memory.</p>
-            <pre class="cplfold-command"><code>HYB2_CPLFOLD_MAX_NT=2000 bin/cplfold \
+            <p>The local wrapper keeps a conservative 1,000&nbsp;nt default guard. On a stronger machine, raise it after checking available memory.</p>
+            <pre class="cplfold-command" tabindex="0"><code>HYB2_CPLFOLD_MAX_NT=2000 bin/cplfold \
   --sequence-file cplfold-input.fasta \
   --bonus-matrix-file cplfold-bonus-matrix.tsv \
   --beam 20 \

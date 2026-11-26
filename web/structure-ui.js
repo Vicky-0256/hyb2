@@ -8,6 +8,10 @@
   const revealedResults = typeof WeakSet === "function" ? new WeakSet() : null;
   let diagramObserver = null;
   let fornaContainer = null;
+  // When the current fold started (UI only): Cancel asks first once a fold
+  // has run this long.
+  const LONG_RUN_MS = 10000;
+  let runStartedAt = null;
 
   function afterRender(state, api) {
     if (diagramObserver) {
@@ -15,6 +19,7 @@
       diagramObserver = null;
     }
     fornaContainer = null;
+    showLocalCommand(state);
     const result = state.structure && state.structure.result;
     const target = document.querySelector("[data-structure-diagram]");
     if (!result || !target) {
@@ -39,6 +44,36 @@
       revealedResults.add(result);
       revealNewResult(result);
     }
+  }
+
+  // The shell command for the downloaded local CPLfold inputs, shown under
+  // the page heading with a Copy button until dismissed.
+  function showLocalCommand(state) {
+    const command = state.structure && state.structure.engine === "cplfold" ? state.structure.localCommand : "";
+    const heading = document.querySelector(".structure-page-heading");
+    if (!command || !heading || !heading.parentNode || typeof heading.insertAdjacentElement !== "function") {
+      return;
+    }
+    const box = document.createElement("section");
+    box.className = "structure-local-command";
+    box.setAttribute("aria-labelledby", "structure-local-command-title");
+    const title = document.createElement("p");
+    title.id = "structure-local-command-title";
+    title.className = "structure-local-command-title";
+    title.textContent = "Run the downloaded inputs locally";
+    const code = document.createElement("pre");
+    code.className = "structure-local-command-code";
+    code.tabIndex = 0;
+    code.setAttribute("aria-label", "Local CPLfold command");
+    const text = document.createElement("code");
+    text.textContent = command;
+    code.appendChild(text);
+    const actions = document.createElement("div");
+    actions.className = "inline-actions";
+    actions.innerHTML = '<button class="button button-secondary button-compact" type="button" data-feature-action="copy-local-cplfold-command">Copy command</button>' +
+      '<button class="quiet-button" type="button" data-feature-action="dismiss-local-cplfold-command">Dismiss</button>';
+    box.append(title, code, actions);
+    heading.insertAdjacentElement("afterend", box);
   }
 
   // On a phone the arc view keeps its drawn width and scrolls sideways in
@@ -183,6 +218,7 @@
       container.setSize();
       fornaContainer = container;
       bindFornaControls(target, mount, container);
+      bindTouchActivation(mount);
 
     } catch (error) {
       target.replaceChildren();
@@ -191,6 +227,44 @@
       failed.textContent = "fornac could not lay out this structure. Select Arc or Matrix to inspect all base pairs.";
       target.appendChild(failed);
     }
+  }
+
+  // On a touch screen a swipe over the folded view scrolls the page: fornac
+  // only gets touches once the canvas has been tapped (or focused, or the
+  // view expanded), and a tap outside gives them back to the page. CSS
+  // switches touch-action with the same is-active class.
+  function bindTouchActivation(mount) {
+    const active = function () {
+      return mount.classList.contains("is-active") || !!(mount.closest && mount.closest(".is-expanded, :fullscreen"));
+    };
+    let tap = null;
+    const hold = function (event) {
+      if (active()) return;
+      // keep the touch from fornac's zoom handler so the browser scrolls
+      event.stopPropagation();
+      if (event.type === "touchstart") {
+        tap = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null;
+      } else if (event.type === "touchmove" && tap && event.touches.length === 1) {
+        if (Math.hypot(event.touches[0].clientX - tap.x, event.touches[0].clientY - tap.y) > 10) tap = null;
+      } else if (event.type === "touchend" && tap) {
+        tap = null;
+        mount.classList.add("is-active");
+      }
+    };
+    ["touchstart", "touchmove", "touchend"].forEach(function (type) {
+      mount.addEventListener(type, hold, { capture: true, passive: true });
+    });
+    mount.addEventListener("focus", function () { mount.classList.add("is-active"); });
+    mount.addEventListener("pointerdown", function (event) {
+      if (event.pointerType !== "touch") mount.classList.add("is-active");
+    });
+    document.addEventListener("pointerdown", function outside(event) {
+      if (!mount.isConnected) {
+        document.removeEventListener("pointerdown", outside, true);
+        return;
+      }
+      if (!mount.contains(event.target)) mount.classList.remove("is-active");
+    }, true);
   }
 
   // View-only controls use fornac's existing zoom state, so wheel, drag and
@@ -224,7 +298,7 @@
     button("Zoom out", function () { zoom(0.8); });
     button("Fit to view", function () { container.centerView(0); });
     const expanded = function () { return target.classList.contains("is-expanded"); };
-    const normalHint = "forna · Scroll or pinch to zoom. Drag the canvas to pan. Keyboard: + / − to zoom, arrows to pan, 0 to fit.";
+    const normalHint = "forna · Scroll or pinch to zoom. Drag the canvas to pan; on a touch screen, tap it first. Keyboard: + / − to zoom, arrows to pan, 0 to fit.";
     const syncViewSize = function () {
       full.textContent = expanded() ? "Exit expanded view" : document.fullscreenElement === target ? "Exit full screen" : "Full screen";
       hint.textContent = expanded() ? "Expanded within this page. Press Escape or Exit expanded view to return. Scroll to zoom; drag to pan." : normalHint;
@@ -263,6 +337,7 @@
     const hint = document.createElement("p");
     hint.className = "card-note forna-view-hint";
     hint.textContent = normalHint;
+    mount.setAttribute("role", "group");
     mount.setAttribute("aria-label", "Interactive folded RNA structure. Scroll to zoom; drag to pan.");
     mount.addEventListener("keydown", function (event) {
       if (event.ctrlKey || event.metaKey || event.altKey) { return; }
@@ -287,7 +362,7 @@
       // Recompute from the current data rather than trusting stale button coordinates.
       const info = window.Hyb2Pages.getStructureSequence(state);
       const region = info.irisDiagnostics && info.irisDiagnostics.suggestion;
-      if (!region) { api.showToast("No complete HYB arm pair fits the 300 nt IRIS browser limit for this RNA."); return true; }
+      if (!region) { api.showToast("No complete HYB arm pair fits the 300 nt IRIS browser limit for this RNA. Enter a shorter region by hand, or choose CPLfold for a longer one."); return true; }
       if (window.Hyb2Structure) window.Hyb2Structure.reset(state, { clearConstraints: true });
       delete state.structure.defaultRegionEnd;
       Object.assign(state.structure, { start: String(region.start), end: String(region.end),
@@ -315,16 +390,17 @@
     }
     if (action === "predict-structure") {
       if (!window.Hyb2Structure) {
-        api.showToast("The local structure predictor is unavailable in this browser.");
+        api.showToast("The local structure predictor is unavailable in this browser. Reload the page; if it stays unavailable, open HYB2 in a current Chrome, Edge, Firefox or Safari.");
         return true;
       }
       window.Hyb2Structure.predict(state, api);
+      runStartedAt = { structure: state.structure, time: Date.now() };
       return true;
     }
 
     if (action === "probe-cplfold-capacity") {
       if (!window.Hyb2Structure || typeof window.Hyb2Structure.probeCplfoldCapacity !== "function") {
-        api.showToast("The local CPLfold capacity test is unavailable in this browser.");
+        api.showToast("The local CPLfold capacity test is unavailable in this browser. Reload the page, or select a region of 75 nt or less, which needs no test.");
         return true;
       }
       window.Hyb2Structure.probeCplfoldCapacity(state, api);
@@ -332,15 +408,42 @@
     }
 
     if (action === "cancel-structure") {
-      const capacityProbe = state.structure && state.structure.operation === "capacity";
-      const bonusMatrixExport = state.structure && state.structure.operation === "bonus-matrix";
-      if (window.Hyb2Structure) {
-        window.Hyb2Structure.cancel(state);
+      const structure = state.structure;
+      const capacityProbe = structure && structure.operation === "capacity";
+      const bonusMatrixExport = structure && structure.operation === "bonus-matrix";
+      const operation = structure && structure.operation;
+      const runId = structure && structure.runId;
+      const cancelNow = function (confirmed) {
+        // the run may have finished or been replaced while the dialog was open
+        if (confirmed && (state.structure !== structure || structure.status !== "running" || structure.operation !== operation || structure.runId !== runId)) {
+          api.render();
+          return;
+        }
+        if (window.Hyb2Structure) {
+          window.Hyb2Structure.cancel(state);
+        }
+        api.render();
+        api.showToast(capacityProbe
+          ? "Browser CPLfold capacity test cancelled."
+          : (bonusMatrixExport ? "CPLfold local input export cancelled." : "Local structure prediction cancelled."));
+      };
+      // A capacity test or a fold that has run for a while loses that work
+      // when cancelled: ask first. Short runs and exports cancel at once.
+      const elapsed = structure && runStartedAt && runStartedAt.structure === structure ? Date.now() - runStartedAt.time : 0;
+      const longRun = structure && structure.status === "running" && (capacityProbe || (!bonusMatrixExport && elapsed >= LONG_RUN_MS));
+      if (longRun && typeof window.Hyb2Confirm === "function") {
+        window.Hyb2Confirm({
+          title: capacityProbe ? "Cancel the capacity test?" : "Cancel this prediction?",
+          body: capacityProbe
+            ? "The test stops and its measurement so far is discarded. You can run it again later; it takes up to a minute."
+            : "The fold stops and the work done so far is discarded. Predicting again starts from the beginning.",
+          confirmLabel: capacityProbe ? "Cancel test" : "Cancel prediction",
+          cancelLabel: "Keep running",
+          onConfirm: function () { cancelNow(true); }
+        });
+        return true;
       }
-      api.render();
-      api.showToast(capacityProbe
-        ? "Browser CPLfold capacity test cancelled."
-        : (bonusMatrixExport ? "CPLfold local input export cancelled." : "Local structure prediction cancelled."));
+      cancelNow(false);
       return true;
     }
 
@@ -358,6 +461,16 @@
         return true;
       }
       state.structure.viewMode = resultViewMode(state.structure.result, viewMode);
+      api.render();
+      return true;
+    }
+
+    if (action === "copy-local-cplfold-command") {
+      if (state.structure && state.structure.localCommand) api.copyText(state.structure.localCommand, "CPLfold command copied to the clipboard.");
+      return true;
+    }
+    if (action === "dismiss-local-cplfold-command") {
+      if (state.structure) delete state.structure.localCommand;
       api.render();
       return true;
     }
@@ -545,7 +658,10 @@
       const matrix = guided ? cplfoldEvidenceTsv(matrixResult) : null;
       api.download("cplfold-input.fasta", fasta, "text/plain");
       if (guided) api.download("cplfold-bonus-matrix.tsv", matrix, "text/tab-separated-values");
-      api.showToast((guided ? "CPLfold local inputs downloaded. Run: " : "CPLfold FASTA downloaded. Run: ") + command);
+      // the command stays on the page (below the heading) to read and copy
+      if (state.structure) state.structure.localCommand = command;
+      api.render();
+      api.showToast((guided ? "CPLfold local inputs downloaded. Run: " : "CPLfold FASTA downloaded. Run: ") + command + " (shown with a Copy button below the page heading)");
     }
 
     if (!guided) {
@@ -554,7 +670,7 @@
       // Only the result's separate matrix export uses historical evidence. Wait for both current inputs.
       window.Hyb2Structure.downloadCplfoldBonusMatrix(state, api, prepared, downloadInputs);
     } else {
-      api.showToast("The local CPLfold bonus-matrix exporter is unavailable in this browser.");
+      api.showToast("The local CPLfold bonus-matrix exporter is unavailable in this browser. Reload the page, or set Experimental evidence to Sequence only to download the FASTA alone.");
     }
     return true;
   }
@@ -798,9 +914,10 @@
       viewBox: "0 0 " + width + " " + height,
       width: "100%",
       height: String(height),
-      role: "img",
+      role: "group",
       "aria-label": "Predicted base pairs above and mapped raw HYB interactions below, " + length + " nucleotides"
     });
+    svg.appendChild(element("desc", {}, diagramDescription(result, length)));
 
     svg.appendChild(element("title", {}, cplfold
       ? (cplfoldAllowsPseudoknot ? "Selected CPLfold RNA structure with pseudoknot layers" : "Selected CPLfold pseudoknot-free RNA structure")
@@ -883,7 +1000,7 @@
     const length = Math.max(1, sequence.length);
     const colors = colorTokens();
     const pairs = result.pairs || [];
-    const svg = structureSvg(width, height, "Radial diagram for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold radial structure" : "Predicted radial RNA secondary structure", colors);
+    const svg = structureSvg(width, height, "Radial diagram for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold radial structure" : "Predicted radial RNA secondary structure", colors, result);
     const hardPairs = structureHardPairs(result);
 
     [0.25, 0.5, 0.75].forEach(function (ratio) {
@@ -947,7 +1064,7 @@
     const length = Math.max(1, sequence.length);
     const colors = colorTokens();
     const pairs = result.pairs || [];
-    const svg = structureSvg(width, height, "Circular diagram for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold circular structure" : "Predicted circular RNA secondary structure", colors);
+    const svg = structureSvg(width, height, "Circular diagram for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold circular structure" : "Predicted circular RNA secondary structure", colors, result);
     const hardPairs = structureHardPairs(result);
 
     svg.appendChild(element("circle", {
@@ -1005,7 +1122,7 @@
     const length = Math.max(1, sequence.length);
     const colors = colorTokens();
     const pairs = result.pairs || [];
-    const svg = structureSvg(width, height, "Base-pair matrix for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold base-pair matrix" : "Predicted RNA base-pair matrix", colors);
+    const svg = structureSvg(width, height, "Base-pair matrix for " + length + " nucleotide RNA secondary structure", isCplfoldResult(result) ? "Selected CPLfold base-pair matrix" : "Predicted RNA base-pair matrix", colors, result);
     const hardPairs = structureHardPairs(result);
 
     svg.appendChild(element("rect", {
@@ -1071,16 +1188,19 @@
     return svg;
   }
 
-  function structureSvg(width, height, label, title, colors) {
+  function structureSvg(width, height, label, title, colors, result) {
     const svg = element("svg", {
       xmlns: SVG_NS,
       viewBox: "0 0 " + width + " " + height,
       width: "100%",
       height: String(height),
-      role: "img",
+      role: "group",
       "aria-label": label
     });
     svg.appendChild(element("title", {}, title));
+    if (result) {
+      svg.appendChild(element("desc", {}, diagramDescription(result, Math.max(1, (result.sequence || "").length))));
+    }
     svg.appendChild(element("rect", { x: 0, y: 0, width: width, height: height, rx: 8, fill: colors.surface }));
     return svg;
   }
@@ -1230,8 +1350,9 @@
       stroke: selected ? colors.accent : colors.muted,
       "stroke-width": selected ? 2.3 : 1.1,
       "data-structure-position": position,
-      tabindex: 0,
+      tabindex: position === rovingPosition(selectedNucleotide, sequence.length) ? 0 : -1,
       role: "button",
+      "aria-current": selected ? "true" : "false",
       "aria-label": "Inspect nucleotide " + position + ", " + sequence.charAt(position - 1)
     });
     marker.appendChild(element("title", {}, nucleotideTitle(result, position)));
@@ -1258,7 +1379,7 @@
       "aria-valuemax": length,
       "aria-valuenow": selected
     });
-    track.appendChild(element("title", {}, "Click the sequence track or use Left, Right, Home and End to inspect a nucleotide"));
+    track.appendChild(element("title", {}, "Click the sequence track or use the arrow keys, Page Up, Page Down, Home and End to inspect a nucleotide"));
     svg.appendChild(track);
     const thumbX = linearScale(selected, length, x, width);
     svg.appendChild(element("circle", { cx: thumbX, cy: y, r: 6, fill: colors.accent, stroke: colors.surface, "stroke-width": 2, "pointer-events": "none" }));
@@ -1426,6 +1547,22 @@
     return { width: Math.ceil(width), height: Math.ceil(height) };
   }
 
+  // The nucleotide markers are one Tab stop (the inspected nucleotide, else
+  // the first); arrow keys move between them (bindNucleotideMarkers).
+  function rovingPosition(selectedNucleotide, length) {
+    const selected = Number(selectedNucleotide);
+    return Number.isInteger(selected) && selected >= 1 && selected <= length ? selected : 1;
+  }
+
+  // The text description of a drawn view, read with its label.
+  function diagramDescription(result, length) {
+    const pairs = (result.pairs || []).length;
+    const keys = length > 700
+      ? "Tab to the sequence track, then use the arrow keys, Page Up, Page Down, Home and End to inspect a nucleotide."
+      : "Tab to the nucleotide markers, then use the arrow keys, Page Up, Page Down, Home and End to move between nucleotides.";
+    return length + " nucleotides, " + pairs + " base pair" + (pairs === 1 ? "" : "s") + ". " + keys;
+  }
+
   function markerTicks(svg, result, length, left, right, baseline, colors, selectedNucleotide) {
     const sequence = result.sequence || "";
     const count = length <= 36 ? length : 5;
@@ -1448,8 +1585,9 @@
           stroke: selected ? colors.accent : colors.muted,
           "stroke-width": selected ? 2.3 : 1.1,
           "data-structure-position": position,
-          tabindex: 0,
+          tabindex: position === rovingPosition(selectedNucleotide, length) ? 0 : -1,
           role: "button",
+          "aria-current": selected ? "true" : "false",
           "aria-label": "Inspect nucleotide " + position + ", " + sequence.charAt(position - 1)
         });
         marker.appendChild(element("title", {}, nucleotideTitle(result, position)));
@@ -1473,7 +1611,7 @@
         "aria-valuemax": length,
         "aria-valuenow": selected
       });
-      track.appendChild(element("title", {}, "Click the baseline or use Left, Right, Home and End to inspect a nucleotide"));
+      track.appendChild(element("title", {}, "Click the baseline or use the arrow keys, Page Up, Page Down, Home and End to inspect a nucleotide"));
       svg.appendChild(track);
     }
   }
@@ -1482,9 +1620,9 @@
     if (!api) {
       return;
     }
+    const markerCount = target.querySelectorAll("[data-structure-position]").length;
     Array.from(target.querySelectorAll("[data-structure-position]")).forEach(function (marker) {
-      function selectMarker() {
-        const position = Number(marker.getAttribute("data-structure-position"));
+      function selectMarker(position) {
         state.structure.selectedNucleotide = position;
         api.render();
         const replacement = document.querySelector('[data-structure-position="' + position + '"]');
@@ -1492,11 +1630,19 @@
           replacement.focus();
         }
       }
-      marker.addEventListener("click", selectMarker);
+      const own = Number(marker.getAttribute("data-structure-position"));
+      marker.addEventListener("click", function () { selectMarker(own); });
+      // One Tab stop for all markers: arrows, Page Up/Down (10) and
+      // Home/End move the inspected nucleotide and the focus with it.
       marker.addEventListener("keydown", function (event) {
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        const next = nextPosition(event.key, own, markerCount);
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          selectMarker();
+          selectMarker(own);
+        } else if (next !== null) {
+          event.preventDefault();
+          selectMarker(next);
         }
       });
     });
@@ -1522,17 +1668,21 @@
         const current = Number.isInteger(Number(state.structure.selectedNucleotide))
           ? Number(state.structure.selectedNucleotide)
           : 1;
-        let next = current;
-        if (event.key === "ArrowLeft" || event.key === "ArrowDown") next -= 1;
-        if (event.key === "ArrowRight" || event.key === "ArrowUp") next += 1;
-        if (event.key === "Home") next = 1;
-        if (event.key === "End") next = length;
-        if (next !== current || event.key === "Home" || event.key === "End") {
+        const next = event.altKey || event.ctrlKey || event.metaKey ? null : nextPosition(event.key, current, length);
+        if (next !== null) {
           event.preventDefault();
           selectPosition(next, true);
         }
       });
     }
+  }
+
+  // The position a navigation key moves to, or null for other keys.
+  function nextPosition(key, current, length) {
+    const step = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1, PageDown: -10, PageUp: 10 }[key];
+    if (key === "Home") return 1;
+    if (key === "End") return length;
+    return step ? Math.max(1, Math.min(length, current + step)) : null;
   }
 
   function nucleotideTitle(result, position) {

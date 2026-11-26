@@ -177,7 +177,7 @@ assert.equal(desk.releaseDownloadUrl("v0.1.4", desk.platforms[0]), "");
   assert.match(cta, /<strong>About HYB2 Desktop<\/strong><\/a>$/, name);
   assert.doesNotMatch(cta, /github\.com/, name);
 });
-assert.match(desk.cta("long-fold"), /Longer than 500 nt\? HYB2 Desktop runs CPLfold natively with no capacity test; its limit grows with memory: about 6,400 nt with 8 GB of memory\./);
+assert.match(desk.cta("long-fold"), /Longer than 500\snt\? HYB2 Desktop runs CPLfold natively with no capacity test; its limit grows with memory: about 6,400\snt with 8\sGB of memory\./);
 assert.equal(desk.cta("no-such-context"), "");
 context.window.Hyb2Desktop = { enabled: true };
 assert.equal(desk.isInsideDesktop(), true);

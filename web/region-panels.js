@@ -686,28 +686,32 @@
 
   // ---- card
 
+  const numberFormat = new Intl.NumberFormat("en-US");
+  const fixed2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
   function renderCard(arcMap, rp, escape) {
     const r = syncPicks(arcMap, rp || defaultState());
     const esc = escape || escapeXml;
     const s = arcMap || (arcApi() ? arcApi().defaultState() : {});
-    const control = function (label, key, value, placeholder) {
-      return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" value="' + esc(value) +
-        '" placeholder="' + esc(placeholder || "") + '" data-feature="regions-control" data-key="' + key + '"></label>';
+    const control = function (label, key, value, placeholder, inputmode) {
+      return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" name="regions-' + key + '" autocomplete="off" inputmode="' + inputmode +
+        '" spellcheck="false" value="' + esc(value) + '" placeholder="' + esc(placeholder || "") + '" data-feature="regions-control" data-key="' + key + '"></label>';
     };
     // a button-styled label over the hidden input, as in the Arc map card
     const fasta = function (key, label, loaded) {
-      const summary = loaded ? loaded.sequence.length.toLocaleString("en-US") + " nt" : "";
+      const summary = loaded ? numberFormat.format(loaded.sequence.length) + "\u00a0nt" : "";
       return '<div class="arcmap-file control-field' + (loaded ? " is-loaded" : "") + '"><span>' + esc(label) + '</span><div class="file-pick">' +
         '<label class="button button-secondary file-pick-button"><input class="visually-hidden" type="file" accept=".fa,.fasta,.fna,.txt" data-feature="regions-fasta" data-key="' + key +
         '" aria-label="' + esc((loaded ? "Replace " : "Choose ") + label) + '">' + (loaded ? "Replace" : "Choose file") + "</label>" +
         (loaded
           ? '<span class="file-pick-name" title="' + esc(loaded.name + " · " + summary) + '"><b>' + esc(loaded.name) + "</b> · " + esc(summary) + '</span><button class="quiet-button" type="button" data-feature-action="regions-fasta-clear" data-key="' + key + '">Remove</button>'
           : '<span class="file-pick-name is-empty">No file</span>') +
-        "</div>" + (r.errors && r.errors[key] ? '<p class="notice notice-error">' + esc(r.errors[key]) + "</p>" : "") + "</div>";
+        "</div>" + (r.errors && r.errors[key] ? '<p class="notice notice-error">Could not read this file: ' + esc(r.errors[key]) +
+          '. Choose a FASTA file: a line starting with ">" and a name, then the sequence (A, C, G, U or T) on the lines after it.</p>' : "") + "</div>";
     };
     const out = ['<section class="data-card region-panels-card" id="region-panels-card">',
       '<div class="card-title-row"><div><h2>D, E · Region structures</h2><span class="card-note">For each direction, the most significant interaction that the enriched lineage\'s own structure forms (a predicted pair within reach of both arms), cut from both structures loaded in the Arc map card. Structure A is condition one\'s lineage, B is condition two\'s.</span></div></div>',
-      '<div class="comparison-control-grid">', control("padj <", "padj", r.padj, "0.01"), control("Reach (nt)", "reach", r.reach, "50"), control("Flank (nt)", "flank", r.flank, "15"), "</div>"];
+      '<div class="comparison-control-grid">', control("padj <", "padj", r.padj, "e.g. 0.01…", "decimal"), control("Reach (nt)", "reach", r.reach, "e.g. 50…", "numeric"), control("Flank (nt)", "flank", r.flank, "e.g. 15…", "numeric"), "</div>"];
     const needsFasta = s.a && s.b && (!s.a.sequence || !s.b.sequence);
     if (needsFasta || r.fastaA || r.fastaB) {
       out.push('<div class="arcmap-files">', fasta("fastaA", "Reference of A (FASTA)", r.fastaA), fasta("fastaB", "Reference of B (FASTA)", r.fastaB), "</div>");
@@ -743,16 +747,17 @@
       }
       const ch = region.chosen;
       out.push('<dl class="selection-stats"><div><dt>Rank</dt><dd>#' + ch.rank + "</dd></div><div><dt>Arms (A)</dt><dd>" + ch.a + "↔" + ch.b +
-        "</dd></div><div><dt>log2FC</dt><dd>" + Number(ch.log2FoldChange).toFixed(2) + "</dd></div><div><dt>padj</dt><dd>" + Number(ch.padj).toExponential(2) +
+        "</dd></div><div><dt>log2FC</dt><dd>" + fixed2.format(Number(ch.log2FoldChange)) + "</dd></div><div><dt>padj</dt><dd>" + Number(ch.padj).toExponential(2) +
         "</dd></div><div><dt>Windows (A)</dt><dd>" + windowsText(region.windows) + "</dd></div></dl>");
       if (region.note) {
         out.push('<p class="card-note">' + esc(region.note) + "</p>");
       }
-      out.push('<div class="data-table-wrap"><table class="data-table region-table"><thead><tr><th>Structure</th><th>Windows</th><th>Pairs in X</th><th>Pairs in Y</th><th>Inter-window</th><th>Paired outside</th><th>Outside partners</th></tr></thead><tbody>');
+      out.push('<div class="data-table-wrap"><table class="data-table region-table"><thead><tr><th>Structure</th><th>Windows</th><th class="num">Pairs in X</th><th class="num">Pairs in Y</th><th class="num">Inter-window</th><th class="num">Paired outside</th><th>Outside partners</th></tr></thead><tbody>');
       region.panels.forEach(function (panel) {
         const sm = panel.summary;
         out.push("<tr data-structure=\"" + panel.structure + "\"><td>" + esc(panel.lineage) + " (" + panel.structure.toUpperCase() + ")</td><td>" + windowsText(sm) +
-          "</td><td>" + sm.pairsX + "</td><td>" + sm.pairsY + '</td><td data-inter>' + sm.between + "</td><td>" + sm.outsideCount + "</td><td>" + esc(sm.outsidePartners) + "</td></tr>");
+          '</td><td class="num">' + numberFormat.format(sm.pairsX) + '</td><td class="num">' + numberFormat.format(sm.pairsY) + '</td><td class="num" data-inter>' + numberFormat.format(sm.between) +
+          '</td><td class="num">' + numberFormat.format(sm.outsideCount) + "</td><td>" + esc(sm.outsidePartners) + "</td></tr>");
       });
       out.push("</tbody></table></div></div>");
     });

@@ -443,18 +443,24 @@ globalThis.Hyb2CplfoldSettings = (function () {
   }
 
   // cplfold.cli accepts an unpruned beam (0) and has no browser search-budget caps.
+  // the Advanced settings label of each flag, named in its error
+  const LOCAL_LABELS = { "--beam": "Beam size", "--delta": "Energy window", "--max-phase1": "Phase-1 candidates", "--alpha": "Evidence alpha", "--beta": "Pseudoknot beta" };
+  function localLabel(flag) {
+    return (LOCAL_LABELS[flag] || flag) + " (" + flag + ")";
+  }
+
   function localInteger(flag, value, minimum) {
     const integer = Number.isInteger(value) || (typeof value === "string" && /^[+-]?\d+$/.test(value.trim()))
       ? BigInt(value) : null;
-    if (integer === null || integer < minimum) throw new Error(flag + " must be an integer >= " + minimum + ".");
+    if (integer === null || integer < minimum) throw new Error(localLabel(flag) + " must be a whole number (integer) ≥ " + minimum + ": choose " + minimum + " or more in Advanced settings.");
     return flag + " " + integer;
   }
 
   function localFloat(flag, value, nonnegative) {
     const number = typeof value === "string" && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())
       ? Number(value) : value;
-    if (!Number.isFinite(number)) throw new Error(flag + " must be finite.");
-    if (nonnegative && number < 0) throw new Error(flag + " must be nonnegative.");
+    if (!Number.isFinite(number)) throw new Error(localLabel(flag) + " must be a finite number: enter one in Advanced settings, such as the default.");
+    if (nonnegative && number < 0) throw new Error(localLabel(flag) + " must be ≥ 0 (nonnegative): enter 0 or a larger number in Advanced settings.");
     const token = String(number);
     // argparse can mistake a separate negative exponent-form value for another flag.
     return flag + (token.startsWith("-") && token.includes("e") ? "=" : " ") + token;

@@ -6,7 +6,7 @@
          (evidence.js) on www.ebi.ac.uk. Pages builds and workers are same-origin;
          PNG export draws a blob: SVG; templates set style attributes. -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://www.ebi.ac.uk; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="HYB2 Web Lite analyses HYB RNA interaction files entirely in your browser." />
     <meta name="theme-color" content="#f3f7f8" />
     <link rel="icon" href="./assets/hyb2-logo.png" type="image/png" />
@@ -32,6 +32,7 @@
   <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <div id="app" class="app-shell"></div>
+    <div id="hyb2-live-status" class="visually-hidden" role="status" aria-live="polite"></div>
     <noscript>
       <main class="noscript">
         <h1>HYB2 Web Lite needs JavaScript</h1>

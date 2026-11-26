@@ -2,22 +2,25 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .card-note {
   display: block;
-  margin-top: 4px;
+  margin-top: var(--space-1);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   /* P1: notes repeat user labels ("Cells higher in <label>"); a label with
      no spaces wraps instead of widening the page */
   overflow-wrap: anywhere;
 }
 
 .analysis-controls {
-  margin-bottom: 16px;
-  padding: 20px 22px;
+  margin-bottom: var(--space-4);
+  /* the 3px accent border takes 2px of the left padding, so the fields line
+     up with the content of the 1px-bordered cards below */
+  padding: var(--card-pad);
+  padding-left: calc(var(--card-pad) - 2px);
   border-left: 3px solid var(--primary);
 }
 
@@ -27,7 +30,7 @@
 .viewpoint-control-grid,
 .comparison-control-grid {
   display: grid;
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 .control-grid-wide {
@@ -52,19 +55,19 @@
 
 .advanced-grid {
   grid-template-columns: repeat(4, minmax(120px, 1fr));
-  margin-top: 15px;
+  margin-top: var(--space-4);
 }
 
 .control-field {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
 .control-field > span {
   color: var(--muted);
   font-size: var(--text-label);
-  font-weight: 710;
+  font-weight: 700;
   letter-spacing: .01em;
 }
 
@@ -73,19 +76,19 @@
 .control-field textarea {
   width: 100%;
   min-height: 40px;
-  padding: 0 10px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   outline: none;
   background: var(--surface);
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-base);
   transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease), background 150ms var(--ease);
 }
 
 .control-field textarea {
   min-height: 132px;
-  padding: 10px;
+  padding: var(--space-2);
   resize: vertical;
 }
 
@@ -103,8 +106,15 @@
 .control-field input:focus,
 .control-field select:focus,
 .control-field textarea:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
+  border-color: var(--primary-ink);
+}
+
+/* the fields drop the global outline for a ring that hugs the border; text
+   fields match :focus-visible on every focus, selects only from the keyboard */
+.control-field input:focus-visible,
+.control-field select:focus-visible,
+.control-field textarea:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-ink) 45%, transparent);
 }
 
 .control-field small {
@@ -114,16 +124,16 @@
 }
 
 .advanced-filters {
-  margin-top: 17px;
+  margin-top: var(--space-4);
   border-top: 1px solid var(--line);
 }
 
 .advanced-filters summary {
-  padding-top: 15px;
+  padding-top: var(--space-4);
   color: var(--muted-strong);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 680;
+  font-size: var(--text-base);
+  font-weight: 700;
 }
 
 .advanced-filters summary::marker {
@@ -134,17 +144,17 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-top: 18px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .control-hint {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .partner-card {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .bar-row-button {
@@ -167,31 +177,36 @@
 .empty-inline {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .interaction-table-card {
   position: relative;
-  padding: 18px 0 0;
+  padding: var(--card-pad) 0 0;
   overflow: visible;
 }
 
 .interaction-table-card > .card-title-row {
-  padding: 0 22px;
+  padding: 0 var(--card-pad);
 }
 
 /* the empty-state line shown instead of the table when nothing matches */
 .interaction-table-card > .interaction-empty {
-  padding: 14px 22px 22px;
+  padding: var(--space-3) var(--card-pad) var(--card-pad);
 }
 
+/* Interactions virtual table: the one column template the head and the
+   rows share (D7, D14). Sequence ID narrow, the RNA columns get the space;
+   Chimera is as wide as the longest half of any label (16 characters), so
+   its two-line clamp (fix-explore.css) fits the exact 46px row. The frame's
+   matching min-width is in layout.css; exact row heights in fix-overview.css. */
 .virtual-table-head,
 .virtual-row {
   display: grid;
-  grid-template-columns: minmax(148px, 1.35fr) minmax(82px, .72fr) minmax(90px, .78fr) minmax(82px, .72fr) minmax(90px, .78fr) minmax(110px, .9fr) 72px 62px;
-  gap: 8px;
-  min-width: 980px;
-  padding: 0 22px;
+  grid-template-columns: 120px minmax(150px, 1fr) 100px minmax(150px, 1fr) 100px minmax(118px, .5fr) 64px 104px;
+  column-gap: var(--space-4);
+  min-width: 1062px;
+  padding: 0 var(--card-pad);
 }
 
 .virtual-table-head {
@@ -203,7 +218,7 @@
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 720;
+  font-weight: 700;
   letter-spacing: .055em;
   text-transform: uppercase;
 }
@@ -233,7 +248,7 @@
   background: var(--surface);
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
   transition: background 130ms var(--ease), color 130ms var(--ease);
 }
@@ -261,7 +276,7 @@
   width: min(395px, calc(100vw - 44px));
   flex-direction: column;
   overflow: auto;
-  padding: 22px;
+  padding: var(--space-6);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -272,18 +287,18 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 15px;
-  padding-bottom: 17px;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
   border-bottom: 1px solid var(--line);
 }
 
 .drawer-heading h2 {
   max-width: 270px;
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   overflow: hidden;
   color: var(--ink);
-  font-size: 18px;
-  font-weight: 740;
+  font-size: var(--text-lg);
+  font-weight: 700;
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -294,21 +309,21 @@
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: .075em;
   text-transform: uppercase;
 }
 
 .drawer-section {
-  padding: 17px 0;
+  padding: var(--space-4) 0;
   border-bottom: 1px solid var(--line);
 }
 
 .drawer-section h3 {
-  margin: 0 0 11px;
+  margin: 0 0 var(--space-3);
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 720;
+  font-size: var(--text-base);
+  font-weight: 700;
 }
 
 .sequence-preview,
@@ -328,7 +343,7 @@
 .selection-stats,
 .region-totals {
   display: grid;
-  gap: 9px;
+  gap: var(--space-2);
   margin: 0;
 }
 
@@ -339,7 +354,7 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .detail-list dt,
@@ -357,8 +372,8 @@
   margin: 0;
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--text-sm);
+  font-weight: 600;
   text-align: right;
 }
 
@@ -384,7 +399,7 @@
 
 .detail-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  padding: 17px 0;
+  padding: var(--space-4) 0;
   border-bottom: 1px solid var(--line);
 }
 
@@ -393,27 +408,27 @@
 }
 
 .detail-grid dd {
-  margin-top: 4px;
+  margin-top: var(--space-1);
   text-align: left;
 }
 
 .drawer-actions {
   display: grid;
-  gap: 8px;
-  margin-top: 17px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 
 .drawer-actions .button {
   width: 100%;
   min-height: 38px;
   justify-content: flex-start;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .heatmap-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(264px, 330px);
-  gap: 16px;
+  gap: var(--space-4);
   align-items: start;
 }
 
@@ -428,12 +443,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .heatmap-topline {
   min-height: 27px;
-  margin-bottom: 11px;
+  margin-bottom: var(--space-3);
 }
 
 .heatmap-tooltip {
@@ -468,30 +483,26 @@
 .contact-navigator {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .contact-stage {
   display: grid;
   min-width: 0;
-  gap: 9px;
-  padding: 16px;
+  gap: var(--space-3);
+  padding: var(--card-pad);
 }
 
 .contact-stage-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .contact-stage-heading h2 {
-  margin: 3px 0 0;
-  color: var(--ink);
-  font-size: 14px;
-  font-weight: 730;
-  letter-spacing: 0;
+  margin: var(--space-1) 0 0;
 }
 
 .contact-stage-heading .card-kicker {
@@ -506,7 +517,7 @@
   min-height: 36px;
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 
@@ -529,7 +540,7 @@
   display: grid;
   min-height: 250px;
   place-content: center;
-  padding: 20px;
+  padding: var(--space-5);
   border: 1px dashed var(--line-strong);
   border-radius: var(--radius-md);
   background: var(--surface-subtle);
@@ -547,14 +558,14 @@
 }
 
 .contact-stage-placeholder p {
-  margin: 8px 0 0;
-  font-size: 12px;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
 .heatmap-axis,
 .profile-axis {
-  padding: 8px 1px 0;
+  padding: var(--space-2) 1px 0;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
@@ -565,14 +576,8 @@
 .heatmap-footer {
   flex-wrap: wrap;
   justify-content: flex-start;
-  gap: 8px;
-  margin-top: 17px;
-}
-
-.heatmap-footer .quiet-button {
-  min-height: 34px;
-  padding: 0 9px;
-  font-size: 12px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 
 .selection-card {
@@ -582,24 +587,24 @@
 
 /* sans like every other card title (B8; the Compare selection card too) */
 .selection-card h2 {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 15px;
-  font-weight: 720;
+  font-size: var(--text-md);
+  font-weight: 700;
   letter-spacing: 0;
   overflow-wrap: anywhere;
 }
 
 .selection-card p {
-  margin: 13px 0 19px;
+  margin: var(--space-3) 0 var(--space-5);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .selection-stats {
-  margin: 20px 0;
-  padding: 14px 0;
+  margin: var(--space-5) 0;
+  padding: var(--space-4) 0;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
@@ -607,13 +612,13 @@
 .selection-card .quiet-button {
   display: block;
   width: 100%;
-  margin-top: 8px;
+  margin-top: var(--space-2);
   text-align: left;
 }
 
 .contact-data-table {
   max-height: 335px;
-  margin-top: 18px;
+  margin-top: var(--space-4);
   overflow: auto;
   border-top: 1px solid var(--line);
 }
@@ -621,14 +626,14 @@
 .method-note {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 13px;
-  margin-top: 16px;
-  padding: 13px 15px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid color-mix(in srgb, var(--primary) 21%, var(--line));
   border-radius: var(--radius-md);
   background: var(--primary-soft);
   color: var(--muted-strong);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.55;
 }
 
@@ -645,7 +650,7 @@
 .region-results {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .region-summary {
@@ -654,8 +659,8 @@
 
 .region-totals {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 17px 0;
-  padding: 14px 0;
+  margin: var(--space-4) 0;
+  padding: var(--space-4) 0;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
@@ -665,9 +670,9 @@
 }
 
 .region-totals dd {
-  margin-top: 5px;
+  margin-top: var(--space-1);
   color: var(--ink);
-  font-size: 19px;
+  font-size: var(--text-lg);
   text-align: left;
 }
 
@@ -686,7 +691,7 @@
 .viewpoint-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(264px, 330px);
-  gap: 16px;
+  gap: var(--space-4);
   align-items: start;
 }
 
@@ -710,8 +715,8 @@
 .comparison-note {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 10px;
-  margin: 0 0 16px;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
 }
 
 .comparison-note strong {
@@ -724,7 +729,7 @@
 /* The technical reason, folded under the plain statement. */
 .comparison-note-details {
   grid-column: 2;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .comparison-note-details summary {
@@ -734,13 +739,13 @@
 
 .comparison-note-details span {
   display: block;
-  margin-top: 6px;
+  margin-top: var(--space-2);
 }
 
 .comparison-datasets {
   display: grid;
-  gap: 14px;
-  margin-bottom: 16px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .comparison-dataset-table {
@@ -752,23 +757,27 @@
   width: 100%;
   min-width: 116px;
   min-height: 32px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   outline: none;
   background: var(--surface);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .comparison-dataset-table input:focus,
 .comparison-dataset-table select:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
+  border-color: var(--primary-ink);
+}
+
+.comparison-dataset-table input:focus-visible,
+.comparison-dataset-table select:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-ink) 45%, transparent);
 }
 
 .comparison-summary {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .comparison-summary .selection-stats {
@@ -790,16 +799,16 @@
 }
 
 .comparison-summary .selection-stats dd {
-  margin-top: 5px;
+  margin-top: var(--space-1);
   color: var(--ink);
-  font-size: 19px;
+  font-size: var(--text-lg);
   text-align: left;
 }
 
 .comparison-map-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .comparison-map-card {
@@ -821,7 +830,7 @@
 
 .comparison-selection {
   position: static;
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .region-partners {
@@ -831,21 +840,21 @@
 .reference-panel {
   grid-column: 1 / -1;
   display: grid;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .reference-panel h2 {
-  margin: 5px 0 8px;
+  margin: var(--space-1) 0 var(--space-2);
   color: var(--ink);
-  font-size: 15px;
+  font-size: var(--text-md);
   font-weight: 700;
 }
 
 .reference-panel p {
   max-width: 610px;
-  margin: 7px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* the three actions in one row, all the same height */
@@ -855,16 +864,16 @@
 }
 
 .table-note {
-  margin: 13px 0 0;
+  margin: var(--space-3) 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .method-badge {
   display: inline-flex;
   align-items: center;
   min-height: 26px;
-  padding: 4px 7px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
   border-radius: 999px;
   background: var(--accent-soft);
@@ -877,15 +886,15 @@
 
 .sequence-textarea {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.55;
 }
 
 .fold-status {
-  padding: 13px 14px;
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .fold-status-unavailable {
@@ -895,11 +904,11 @@
 
 .fold-status strong {
   color: var(--warning);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .fold-status p {
-  margin: 5px 0 0;
+  margin: var(--space-1) 0 0;
   color: var(--muted-strong);
   line-height: 1.5;
 }
@@ -908,12 +917,12 @@
   max-height: 380px;
   flex: 1;
   overflow: auto;
-  padding: 17px;
+  padding: var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface-subtle);
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .structure-placeholder {
@@ -929,31 +938,31 @@
 
 .structure-placeholder p {
   max-width: 390px;
-  margin: 10px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .sequence-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 9px;
-  margin-top: 16px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 
 .method-limit {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   margin-top: auto;
-  padding: 16px 0 0;
+  padding: var(--space-4) 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
 .method-limit strong {
   color: var(--muted-strong);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .files-dialog {
@@ -964,22 +973,22 @@
 
 .files-section {
   display: grid;
-  gap: 5px;
-  padding: 17px 0;
+  gap: var(--space-1);
+  padding: var(--space-4) 0;
   border-bottom: 1px solid var(--line);
 }
 
 .files-section strong {
   overflow: hidden;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-base);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .files-section > span:not(.drawer-kicker) {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .hash-value {
@@ -987,23 +996,23 @@
 }
 
 .files-section .inline-actions {
-  margin-top: 5px;
+  margin-top: var(--space-1);
 }
 
 .files-section .quiet-button {
   min-height: 32px;
-  padding: 0 8px;
-  font-size: 12px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
 }
 
 .fasta-mapping {
-  padding: 17px 0;
+  padding: var(--space-4) 0;
   border-bottom: 1px solid var(--line);
 }
 
 .mapping-rows {
   max-height: 256px;
-  margin-top: 10px;
+  margin-top: var(--space-2);
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -1012,10 +1021,10 @@
 .mapping-row {
   display: grid;
   grid-template-columns: minmax(110px, .6fr) minmax(150px, 1fr);
-  gap: 12px;
+  gap: var(--space-3);
   align-items: center;
   min-height: 42px;
-  padding: 6px 10px;
+  padding: var(--space-2) var(--space-2);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1035,28 +1044,28 @@
 .mapping-row select {
   width: 100%;
   min-height: 30px;
-  padding: 0 7px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .tweaks-trigger {
   position: fixed;
   z-index: 18;
-  right: 20px;
-  bottom: 20px;
+  right: calc(var(--space-5) + env(safe-area-inset-right));
+  bottom: calc(var(--space-5) + env(safe-area-inset-bottom));
   min-height: 36px;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   border: 1px solid var(--line-strong);
   border-radius: 999px;
   background: var(--surface);
   box-shadow: var(--shadow-tight);
   color: var(--muted-strong);
-  font-size: 12px;
-  font-weight: 720;
+  font-size: var(--text-sm);
+  font-weight: 700;
   transition: border-color 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease);
 }
 
@@ -1069,12 +1078,12 @@
 .tweaks-panel {
   position: fixed;
   z-index: 19;
-  right: 20px;
-  bottom: 20px;
+  right: calc(var(--space-5) + env(safe-area-inset-right));
+  bottom: calc(var(--space-5) + env(safe-area-inset-bottom));
   display: grid;
   width: 240px;
-  gap: 14px;
-  padding: 16px;
+  gap: var(--space-4);
+  padding: var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -1086,13 +1095,13 @@
 }
 
 .tweaks-panel .card-title-row h2 {
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .tweaks-panel .icon-button {
   width: 30px;
   min-height: 30px;
-  font-size: 17px;
+  font-size: var(--text-md);
 }
 
 .tweaks-choice {
@@ -1106,13 +1115,13 @@
 [data-density="compact"] .metric-card,
 [data-density="compact"] .data-card,
 [data-density="compact"] .analysis-controls {
-  padding-top: 14px;
-  padding-bottom: 14px;
+  padding-top: var(--space-4);
+  padding-bottom: var(--space-4);
 }
 
 [data-density="compact"] .virtual-row {
   min-height: 38px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 [data-density="compact"] .virtual-table-head {
@@ -1169,9 +1178,15 @@
 }
 
 @media (max-width: 767px) {
+  /* phones: every card, the map card included, has the same smaller pad */
   .analysis-controls,
-  .data-card {
-    padding: 16px;
+  .data-card,
+  .contact-stage {
+    padding: var(--space-4);
+  }
+
+  .analysis-controls {
+    padding-left: calc(var(--space-4) - 2px);
   }
 
   .control-grid-wide,
@@ -1188,14 +1203,18 @@
     padding-left: 0;
   }
 
+  .interaction-table-card {
+    padding-top: var(--space-4);
+  }
+
   .interaction-table-card > .card-title-row {
-    padding: 0 16px;
+    padding: 0 var(--space-4);
   }
 
   .virtual-table-head,
   .virtual-row {
-    padding-right: 16px;
-    padding-left: 16px;
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
   }
 
   .record-drawer {
@@ -1251,7 +1270,7 @@
   }
 
   .page-heading .inline-actions {
-    margin-top: 15px;
+    margin-top: var(--space-4);
   }
 
   .detail-grid {
@@ -1275,17 +1294,17 @@
   }
 
   .method-badge {
-    margin-top: 8px;
+    margin-top: var(--space-2);
   }
 
   .tweaks-trigger {
-    right: 14px;
-    bottom: 68px;
+    right: calc(14px + env(safe-area-inset-right));
+    bottom: calc(68px + env(safe-area-inset-bottom));
   }
 
   .tweaks-panel {
-    right: 12px;
-    bottom: 65px;
+    right: calc(12px + env(safe-area-inset-right));
+    bottom: calc(65px + env(safe-area-inset-bottom));
   }
 }
 
@@ -1293,7 +1312,7 @@
 .contact-navigator { grid-template-columns: minmax(0, 1fr); }
 .contact-stage-canvas { height: min(70vh, 720px); min-height: 380px; }
 .contact-stage-note { min-height: 0; }
-.contact-stage-heading-actions { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.contact-stage-heading-actions { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 /* The range label is two RNA names long. It wraps inside its row: as one
    nowrap line it set the card's minimum width, which pushed "Reset zoom" and
    the canvas past the screen edge once a cell was chosen. */
@@ -1337,23 +1356,23 @@
 
 /* CPLfold numeric settings, folded; their values stay in the summary. */
 .structure-advanced {
-  margin: 12px 0;
+  margin: var(--space-3) 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-md, 8px);
-  padding: 10px 12px;
+  padding: var(--space-2) var(--space-3);
 }
 
 .structure-advanced summary {
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--text-base);
+  font-weight: 600;
 }
 
 .structure-advanced-values {
   display: block;
   margin-top: 2px;
   font-weight: 400;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--muted-strong);
   overflow-wrap: anywhere;
 }
@@ -1361,7 +1380,7 @@
 /* Why Predict is disabled, next to it. */
 .structure-run-reason {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--warning);
 }
 
@@ -1373,8 +1392,8 @@
 /* The plain statement first; the engine details folded under it. */
 .method-limit-details {
   grid-column: 1 / -1;
-  margin-top: 6px;
-  font-size: 12px;
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
 }
 
 .method-limit-details summary {
@@ -1382,22 +1401,30 @@
   font-weight: 600;
 }
 
+/* folded sections: hover says the summary opens them */
+.advanced-filters summary:hover,
+.comparison-note-details summary:hover,
+.structure-advanced summary:hover,
+.method-limit-details summary:hover {
+  color: var(--primary-ink);
+}
+
 .method-limit-details span {
   display: block;
-  margin-top: 6px;
+  margin-top: var(--space-2);
 }
 
 /* Arc map (arc-map.js) */
-.arcmap-files { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
-.arcmap-file { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.arcmap-files { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3); margin: var(--space-3) 0; }
+.arcmap-file { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .arcmap-file input[type="file"] { max-width: 100%; }
-.arcmap-figure { overflow-x: auto; margin: 12px 0; }
+.arcmap-figure { overflow-x: auto; margin: var(--space-3) 0; }
 .arcmap-figure svg { width: 100%; height: auto; display: block; border-radius: 8px; }
 .arcmap-file .quiet-button { align-self: flex-start; padding-left: 0; }
 
 /* Region structures (region-panels.js) and folding energy (folding-energy.js) */
-.region-panels-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; margin: 12px 0; }
-.region-panel { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.region-panels-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--space-4); margin: var(--space-3) 0; }
+.region-panel { min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .region-panel h3 { margin: 0; font-size: 1rem; }
 .region-panel select { max-width: 100%; }
 /* P1: the panel title and the picker's label repeat the condition names */
@@ -1405,7 +1432,7 @@
 .region-panel .control-field > span { overflow-wrap: anywhere; }
 .region-panel .control-field { min-width: 0; }
 .region-panel select { min-width: 0; width: 100%; }
-.region-figure, .energy-figure { overflow-x: auto; margin: 12px 0; }
+.region-figure, .energy-figure { overflow-x: auto; margin: var(--space-3) 0; }
 .region-figure svg, .energy-figure svg { width: 100%; height: auto; display: block; border-radius: 8px; }
 
 /* Arc map and region structures in a narrow card: the figure shrank with the
@@ -1421,9 +1448,9 @@
   display: none;
   width: max-content;
   max-width: 100cqw;
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-2);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   content: "Scroll sideways to see the whole figure.";
 }
 /* 880px: the arc map's smallest labels (10 units of 1000) are 8.8px.
@@ -1436,20 +1463,20 @@
 }
 
 /* Differential test (deseq-card.js) */
-.deseq-card { margin-top: 16px; }
-.deseq-rna-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 12px; margin: 8px 0; }
+.deseq-card { margin-top: var(--space-4); }
+.deseq-rna-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-2) var(--space-3); margin: var(--space-2) 0; }
 .deseq-rna-map > p { grid-column: 1 / -1; margin: 0; }
-.deseq-stats { margin: 12px 0; }
-.deseq-panel-title { align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.deseq-stats { margin: var(--space-3) 0; }
+.deseq-panel-title { align-items: flex-end; gap: var(--space-3); flex-wrap: wrap; }
 .deseq-show { min-width: 180px; }
-.deseq-canvas-wrap { max-width: 720px; aspect-ratio: 1 / 1.03; margin: 8px 0 12px; }
+.deseq-canvas-wrap { max-width: 720px; aspect-ratio: 1 / 1.03; margin: var(--space-2) 0 var(--space-3); }
 .deseq-canvas { display: block; width: 100%; height: 100%; border-radius: 8px; cursor: crosshair; touch-action: pan-y; }
 .deseq-table { max-height: 420px; overflow: auto; }
 .deseq-table tr[data-feature-action] { cursor: pointer; }
 .deseq-table tr.is-selected td { background: var(--surface-selected, color-mix(in srgb, var(--primary) 12%, transparent)); }
-.deseq-include { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin: 10px 0; }
-.deseq-include-item { display: inline-flex; gap: 6px; align-items: center; }
-.deseq-include-item { font-size: 13px; }
+.deseq-include { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); align-items: center; margin: var(--space-2) 0; }
+.deseq-include-item { display: inline-flex; gap: var(--space-2); align-items: center; }
+.deseq-include-item { font-size: var(--text-base); }
 /* P1: a long dataset or condition label with no spaces wraps inside the
    card instead of widening the page */
 .deseq-include-item { flex-wrap: wrap; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
@@ -1457,7 +1484,7 @@
 
 /* Compare: progress while comparison.worker.js builds the maps */
 .comparison-progress {
-  margin: 12px 0 0;
+  margin: var(--space-3) 0 0;
 }
 
 .comparison-progress[hidden] {
@@ -1465,7 +1492,7 @@
 }
 
 .comparison-progress .card-note {
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-2);
 }
 
 .comparison-progress .progress-bar {
@@ -1475,12 +1502,12 @@
 
 .comparison-table-controls {
   align-items: end;
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
 }
 
 .deseq-method {
   grid-column: auto;
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 
 
@@ -1498,4 +1525,25 @@
   font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Contact Map and Viewpoint side panels and map captions read in the sans
+   face; monospace stays for numbers (selection stats, axis ticks) and
+   sequences. */
+.contact-workbench .heatmap-tooltip,
+.contact-workbench-side .card-kicker,
+.contact-workbench-side .heatmap-axis,
+.viewpoint-layout .heatmap-tooltip {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.contact-workbench-side .heatmap-topline {
+  margin-bottom: var(--space-3);
+}
+
+.contact-workbench-side .heatmap-axis {
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted-strong);
 }

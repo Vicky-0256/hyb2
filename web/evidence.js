@@ -459,7 +459,7 @@
     if (state.evidence !== evidence) return { dropped: true };
     evidence.cards = cards.concat(evidence.cards).slice(0, 24);
     if (failure) {
-      evidence.message = "The public lookup could not finish: " + clip(failure && failure.message || String(failure), 160);
+      evidence.message = "The public lookup could not finish: " + clip(failure && failure.message || String(failure), 160).replace(/\.$/, "") + ". Select Look up to try again.";
     }
     api.render();
     return failure ? { cards: cards, error: evidence.message } : { cards: cards };
@@ -505,7 +505,7 @@
     if (action === "evidence-lookup") {
       lookup(state, api).catch(function (error) {
         evidence.running = false;
-        evidence.message = "The public lookup could not finish: " + clip(error && error.message || String(error), 160);
+        evidence.message = "The public lookup could not finish: " + clip(error && error.message || String(error), 160).replace(/\.$/, "") + ". Select Look up to try again.";
         api.render();
       });
       return true;
@@ -513,8 +513,21 @@
     if (action === "evidence-cancel") { cancel(); return true; }
     if (action === "evidence-remove") {
       const id = element.getAttribute("data-evidence-id");
-      evidence.cards = evidence.cards.filter(function (card) { return card.evidence_id !== id; });
-      api.render();
+      const card = evidence.cards.find(function (item) { return item.evidence_id === id; });
+      const remove = function () {
+        evidence.cards = evidence.cards.filter(function (item) { return item.evidence_id !== id; });
+        api.render();
+      };
+      if (typeof window.Hyb2Confirm === "function" && card) {
+        window.Hyb2Confirm({
+          title: "Remove this lookup?",
+          body: removeLabel(card) + ". Its review state and note are removed too" + (card.include_in_report ? ", and it is taken out of the report" : "") + ". Look up again to get it back.",
+          confirmLabel: "Remove lookup",
+          onConfirm: remove
+        });
+      } else {
+        remove();
+      }
       return true;
     }
     return true;
@@ -607,8 +620,8 @@
     return [
       '<section class="evidence-panel data-card" aria-labelledby="evidence-title">', head,
       '<div class="evidence-query">',
-      '<label class="control-field"><span>Public identifier</span><input type="text" spellcheck="false" autocomplete="off" maxlength="100" value="' + escape(evidence.identifier) + '" data-feature="evidence-control" data-key="identifier" aria-describedby="evidence-sends"></label>',
-      '<label class="control-field"><span>Species</span><select data-feature="evidence-control" data-key="taxon">' +
+      '<label class="control-field"><span>Public identifier</span><input type="text" name="evidence-identifier" spellcheck="false" autocomplete="off" maxlength="100" value="' + escape(evidence.identifier) + '" data-feature="evidence-control" data-key="identifier" aria-describedby="evidence-sends"></label>',
+      '<label class="control-field"><span>Species</span><select name="evidence-taxon" data-feature="evidence-control" data-key="taxon">' +
         SPECIES.concat(evidence.taxon && !SPECIES.some(function (item) { return item.value === evidence.taxon; }) ? [{ value: evidence.taxon, label: "Taxon " + evidence.taxon }] : [])
           .map(function (item) { return '<option value="' + escape(item.value) + '"' + (item.value === String(evidence.taxon || "") ? " selected" : "") + ">" + escape(item.label) + "</option>"; }).join("") +
         "</select></label>",
@@ -617,16 +630,19 @@
         return '<button class="quiet-button evidence-chip' + (value === evidence.identifier ? " is-selected" : "") + '" type="button" data-feature-action="evidence-pick" data-value="' + escape(value) + '">' + escape(value) + "</button>";
       }).join("") + "</div>" : '<p class="evidence-note">No identifier could be read from the current RNA. Type a public identifier such as an Ensembl transcript ID or a miRBase name.</p>',
       implied ? '<p class="evidence-note">The ' + escape(implied.basis) + " implies " + escape(speciesLabel(implied.taxon)) + ".</p>" : "",
-      '<label class="evidence-confirm"><input type="checkbox" data-feature="evidence-control" data-key="confirmed"' + (evidence.confirmed ? " checked" : "") + "><span>This identifier and species match the RNA I am studying.</span></label>",
+      '<label class="evidence-confirm"><input type="checkbox" name="evidence-confirmed" data-feature="evidence-control" data-key="confirmed"' + (evidence.confirmed ? " checked" : "") + "><span>This identifier and species match the RNA I am studying.</span></label>",
       '<p class="evidence-sends" id="evidence-sends">Sends <code>' + escape(String(evidence.identifier || "").trim() || "—") + "</code>" +
         (evidence.taxon ? " and taxon <code>" + escape(evidence.taxon) + "</code>" : "") + " to EBI Search, and the identifier alone to Europe PMC. Nothing else leaves this browser.</p>",
       '<div class="evidence-actions">',
       evidence.running
-        ? '<button class="button button-secondary" type="button" data-feature-action="evidence-cancel">Cancel lookup</button><span class="evidence-running" role="status">Looking up…</span>'
+        ? '<button class="button button-secondary" type="button" data-feature-action="evidence-cancel">Cancel lookup</button><span class="evidence-running" aria-hidden="true">Looking up…</span>'
         : '<button class="button" type="button" data-feature-action="evidence-lookup"' + (refusal ? " disabled" : "") + ">Look up</button>",
       '<button class="quiet-button" type="button" data-feature-action="evidence-disable">Turn off</button>',
       "</div>",
-      evidence.message ? '<div class="notice notice-warning" role="status">' + escape(evidence.message) + "</div>" : "",
+      // one live region, always in the panel, so screen readers hear the
+      // lookup start and its outcome
+      '<div role="status" aria-live="polite" data-evidence-status>' + (evidence.running ? '<span class="visually-hidden">Looking up…</span>' : "") +
+        (evidence.message ? '<div class="notice notice-warning">' + escape(evidence.message) + "</div>" : "") + "</div>",
       current.length ? '<div class="evidence-cards">' + current.map(function (card) { return renderCard(card, true); }).join("") + "</div>" : "",
       earlier.length ? '<details class="evidence-earlier"><summary>Earlier lookups for another result (' + earlier.length + ")</summary><p class=\"evidence-note\">These were looked up for a different RNA, range or structure. They are kept for reference and cannot be added to this result's report.</p>" +
         earlier.map(function (card) { return renderCard(card, false); }).join("") + "</details>" : "",
@@ -660,7 +676,18 @@
         ? "No RNAcentral entry matched this identifier and species. This does not mean the RNA is unstudied."
         : "No Europe PMC record mentions this exact identifier. Papers may use another name.";
     }
-    return (STATUS_TEXT[card.status] || card.status) + (card.status_detail ? ": " + card.status_detail : "") + ". Nothing was recorded from this service.";
+    return (STATUS_TEXT[card.status] || card.status) + (card.status_detail ? ": " + card.status_detail : "") + ". Nothing was recorded from this service. Select Look up to try again" + (card.status === "cancelled" ? "." : "; if it keeps failing, check the network connection or try later.");
+  }
+
+  // en-US in UTC, as the stored ISO time; e.g. "Nov 26, 2026, 3:04 PM UTC"
+  const RETRIEVED_FORMAT = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
+  function retrievedTime(iso) {
+    const date = new Date(iso);
+    return isNaN(date.getTime()) ? String(iso) : RETRIEVED_FORMAT.format(date) + " UTC";
+  }
+
+  function removeLabel(card) {
+    return "Remove the " + (card.source_provider || "public") + " lookup for " + (card.query_identifier || "this identifier");
   }
 
   function renderCard(card, current) {
@@ -672,21 +699,21 @@
       '<article class="evidence-card is-' + escape(card.status) + '">',
       '<header><span class="evidence-provider">' + escape(card.source_provider) + '</span><span class="evidence-status">' + escape(STATUS_TEXT[card.status] || card.status) + "</span></header>",
       '<p class="evidence-query-line"><code>' + escape(card.query_identifier) + "</code>" + (card.taxon ? " · " + escape(speciesLabel(card.taxon)) : "") +
-        (card.retrieved_at ? ' · <time datetime="' + escape(card.retrieved_at) + '">' + escape(card.retrieved_at.replace("T", " ").slice(0, 16)) + " UTC</time>" : "") + "</p>",
+        (card.retrieved_at ? ' · <time datetime="' + escape(card.retrieved_at) + '">' + escape(retrievedTime(card.retrieved_at)) + "</time>" : "") + "</p>",
       '<p class="evidence-status-line">' + escape(statusLine(card)) + "</p>",
       card.entries.length ? renderEntries(card) : "",
       '<p class="evidence-label">' + escape(label) + " " + link(card.source_url, "Open the full search") + "</p>",
       current ? [
         '<div class="evidence-review">',
-        '<label class="control-field"><span>Review</span><select data-feature="evidence-card" data-key="review" data-evidence-id="' + escape(card.evidence_id) + '">' +
+        '<label class="control-field"><span>Review</span><select name="evidence-review" data-feature="evidence-card" data-key="review" data-evidence-id="' + escape(card.evidence_id) + '">' +
           [["unreviewed", "Not reviewed"], ["reviewed", "Reviewed"], ["rejected", "Rejected"]].map(function (option) {
             return '<option value="' + option[0] + '"' + (card.review.state === option[0] ? " selected" : "") + ">" + option[1] + "</option>";
           }).join("") + "</select></label>",
-        '<label class="control-field evidence-note-field"><span>Researcher note</span><input type="text" maxlength="600" value="' + escape(card.review.note) + '" data-feature="evidence-card" data-key="note" data-evidence-id="' + escape(card.evidence_id) + '"></label>',
-        '<label class="evidence-include"><input type="checkbox" data-feature="evidence-card" data-key="include" data-evidence-id="' + escape(card.evidence_id) + '"' + (card.include_in_report ? " checked" : "") + (attachable ? "" : " disabled") + "><span>Add to report</span></label>",
+        '<label class="control-field evidence-note-field"><span>Researcher note</span><input type="text" name="evidence-note" autocomplete="off" maxlength="600" value="' + escape(card.review.note) + '" data-feature="evidence-card" data-key="note" data-evidence-id="' + escape(card.evidence_id) + '"></label>',
+        '<label class="evidence-include"><input type="checkbox" name="evidence-include" data-feature="evidence-card" data-key="include" data-evidence-id="' + escape(card.evidence_id) + '"' + (card.include_in_report ? " checked" : "") + (attachable ? "" : " disabled") + "><span>Add to report</span></label>",
         "</div>"
       ].join("") : "",
-      '<button class="quiet-button evidence-remove" type="button" data-feature-action="evidence-remove" data-evidence-id="' + escape(card.evidence_id) + '">Remove</button>',
+      '<button class="quiet-button evidence-remove" type="button" data-feature-action="evidence-remove" data-evidence-id="' + escape(card.evidence_id) + '" aria-label="' + escape(removeLabel(card)) + '">Remove</button>',
       "</article>"
     ].join("");
   }

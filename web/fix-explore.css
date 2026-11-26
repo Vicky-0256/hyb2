@@ -6,7 +6,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .page-heading--menu > .inline-actions {
@@ -24,46 +24,28 @@
   justify-content: flex-start;
 }
 
-/* B10: Coordinate range, Start and End share one row of the Viewpoint
-   controls; dense flow fills the cells the three-column group leaves */
-.viewpoint-control-grid {
-  grid-auto-flow: row dense;
-}
-
+/* B10: Coordinate range, Start and End are three ordinary cells of the
+   shared field grid (layout.css), so they line up with every other field;
+   the group keeps its role="group" for assistive tech. At 1440 they share
+   the first row after Anchor RNA and Partner. */
 .viewpoint-range-group {
-  display: grid;
-  grid-column: span 3;
-  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  min-width: 0;
+  display: contents;
 }
 
-@media (max-width: 767px) {
-  .viewpoint-range-group {
-    grid-column: 1 / -1;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .viewpoint-range-group > .control-field:first-child {
-    grid-column: 1 / -1;
-  }
+/* B11: Region controls use the shared field grid. Anchor RNA and Partner
+   take two tracks (RNA names), like .control-field--wide; the optional
+   partner fields start their own row. On phones a two-track field takes
+   the whole row instead (1 / -1 never adds an implicit column). */
+.region-control-grid > .control-field:first-child {
+  grid-column: span 2;
 }
 
-/* B11: Region controls. layout.css auto-fills the grid; here the anchor,
-   its Start / End and the overlap rule make the first row and the partner
-   fields the second */
-.analysis-controls .region-control-grid {
-  grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 1fr));
+.region-control-grid > .control-field:nth-child(5) {
+  grid-column: 1 / span 2;
 }
 
-@media (max-width: 767px) {
-  .analysis-controls .region-control-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .analysis-controls .region-control-grid > .control-field:first-child,
-  .analysis-controls .region-control-grid > .control-field:nth-child(4),
-  .analysis-controls .region-control-grid > .control-field:nth-child(5) {
+@media (max-width: 480px) {
+  .region-control-grid > .control-field:is(:first-child, :nth-child(5)) {
     grid-column: 1 / -1;
   }
 }
@@ -72,7 +54,7 @@
 .region-summary-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
-  gap: 24px;
+  gap: var(--space-6);
   align-items: start;
 }
 
@@ -82,25 +64,25 @@
 
 .region-partners {
   min-width: 0;
-  padding-left: 24px;
+  padding-left: var(--space-6);
   border-left: 1px solid var(--line);
 }
 
 .region-partners .card-title-row {
-  margin-bottom: 14px;
+  margin-bottom: var(--space-4);
 }
 
 .region-partners h3 {
   margin: 0;
   color: var(--ink);
-  font-size: 14px;
-  font-weight: 720;
+  font-size: var(--text-base);
+  font-weight: 700;
 }
 
 /* a partner's full name on its own line, the bar and value under it */
 .region-partners .bar-row {
   grid-template-columns: minmax(0, 1fr) auto;
-  row-gap: 5px;
+  row-gap: var(--space-1);
 }
 
 .region-partners .bar-name {
@@ -113,7 +95,7 @@
   }
 
   .region-partners {
-    padding: 16px 0 0;
+    padding: var(--space-4) 0 0;
     border-top: 1px solid var(--line);
     border-left: 0;
   }
@@ -122,7 +104,7 @@
 /* B11: the reference in 10 nt groups, one coordinate per 50 nt line */
 .reference-sequence--grouped {
   overflow-x: auto;
-  font-size: 12px;
+  font-size: var(--text-sm);
   white-space: pre;
   overflow-wrap: normal;
 }
@@ -147,7 +129,7 @@
 }
 
 .reference-panel .table-note {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 /* B12: Region records follow K3. Column widths: each narrow column fits
@@ -177,7 +159,7 @@
 }
 
 .region-records-table td.chimera-cell {
-  padding-right: 6px;
+  padding-right: var(--space-2);
   line-height: 1.3;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -185,19 +167,9 @@
 
 /* Interactions shows it the same way. Its rows are exactly 46px (38px
    compact; fix-overview.css D7, the virtual window depends on it), which
-   holds two lines, so the column is as wide as the longest half of any
-   label (16 characters) and the two-line clamp only ever meets a label the
-   file brought itself. The table's least width grows by the same 22px. */
-.virtual-table-head,
-.virtual-row {
-  grid-template-columns: 120px minmax(150px, 1fr) 100px minmax(150px, 1fr) 100px minmax(118px, .5fr) 64px 104px;
-  min-width: 1062px;
-}
-
-.virtual-table-frame > .virtual-table {
-  min-width: 1062px;
-}
-
+   holds two lines; the Chimera column (analysis.css) is as wide as the
+   longest half of any label, so the two-line clamp only ever meets a label
+   the file brought itself. */
 .virtual-row .chimera-cell {
   display: -webkit-box;
   -webkit-box-orient: vertical;

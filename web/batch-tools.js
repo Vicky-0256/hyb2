@@ -222,9 +222,18 @@
     const cores=Number(root.navigator && root.navigator.hardwareConcurrency)||2;
     return Math.max(1,Math.min(engine.maxWorkers,cores-1,chunks));
   }
+  // en-US throughout, as the rest of the app; a no-break space before units
+  const numberFormat=new Intl.NumberFormat('en-US'), hourFormat=new Intl.NumberFormat('en-US',{minimumFractionDigits:1,maximumFractionDigits:1});
+  const count=value=>numberFormat.format(value);
   function duration(ms) {
     const seconds=Math.max(1,Math.round(ms/1000));
-    return seconds<90?seconds+' s':seconds<5400?Math.round(seconds/60)+' min':(seconds/3600).toFixed(1)+' h';
+    return seconds<90?count(seconds)+'\u00a0s':seconds<5400?count(Math.round(seconds/60))+'\u00a0min':hourFormat.format(seconds/3600)+'\u00a0h';
+  }
+  // Ask before a destructive step (window.Hyb2Confirm, app.js); without the
+  // dialog (tests, embedded hosts) the step runs at once.
+  function confirmThen(options,run) {
+    if(typeof root.Hyb2Confirm==='function')root.Hyb2Confirm(Object.assign({},options,{onConfirm:run}));
+    else run();
   }
   function renderEnergy(state) {
     const s=energyState(state), settings=energySettings(state), engine=energyEngine(state);
@@ -236,18 +245,18 @@
     const filtered=settings.records==='filtered', primary=(state.datasets||[]).find(d=>d.primary);
     const countKey=JSON.stringify(primary?[primary.id]:(state.selection&&state.selection.datasetIds)||[])+'|'+JSON.stringify(Object.assign({},state.filters||(root.Hyb2Data&&root.Hyb2Data.defaultInteractionFilters())));
     const counted=state.view&&state.view.energySelection;
-    const count=filtered?(counted&&counted.key===countKey?counted.total:undefined):records;
-    const workers=energyWorkerCount(engine,Math.max(1,Math.ceil((count||0)/engine.chunk)));
+    const total=filtered?(counted&&counted.key===countKey?counted.total:undefined):records;
+    const workers=energyWorkerCount(engine,Math.max(1,Math.ceil((total||0)/engine.chunk)));
     const time=ms=>ms<5000?'a few seconds':'about '+duration(ms);
-    const estimate=filtered&&count===undefined?' Counting the records of the primary file that match the Interactions filters…'
-      :filtered&&count===0?' No record of the primary file matches the Interactions filters, so nothing would be recalculated.'
-      :count?' '+(filtered?(count===1?'The 1 record':'The '+count.toLocaleString('en-US')+' records')+' of the primary file matching the Interactions filters':'All '+count.toLocaleString('en-US')+' records')+': '+time(count*engine.msPerRecord/workers)+' with '+workers+(workers===1?' worker':' parallel workers')+' here.':'';
+    const estimate=filtered&&total===undefined?' Counting the records of the primary file that match the Interactions filters…'
+      :filtered&&total===0?' No record of the primary file matches the Interactions filters, so nothing would be recalculated.'
+      :total?' '+(filtered?(total===1?'The 1 record':'The '+count(total)+' records')+' of the primary file matching the Interactions filters':'All '+count(total)+' records')+': '+time(total*engine.msPerRecord/workers)+' with '+count(workers)+(workers===1?' worker':' parallel workers')+' here.':'';
     const select=(key,label,value,options)=>'<label class="control-field"><span>'+label+'</span><select data-feature="batch-energy-setting" data-key="'+key+'"'+(s.running?' disabled':'')+'>'+options.map(o=>'<option value="'+o[0]+'"'+(o[0]===value?' selected':'')+'>'+esc(o[1])+'</option>').join('')+'</select></label>';
     return '<section class="data-card"><div class="card-title-row"><div><h2>HYB binding energies</h2><p class="card-note">Recalculate column 3 (ΔG of the two arms, kcal/mol, 37 °C) for records of the primary file'+file+', from the mapped FASTA arms. Download a new HYB; the loaded dataset stays unchanged.</p></div></div>'+
       '<div class="control-grid">'+select('engine','Engine',settings.engine,Object.keys(ENERGY_ENGINES).map(key=>[key,ENERGY_ENGINES[key].label]))+
       select('records','Records',settings.records,[['all','All records of the primary file'],['filtered','Records matching the Interactions filters']])+'</div>'+
       '<p class="card-note">'+esc((settings.engine==='rnaduplex'?'The HYB2 pipeline\'s method for the dG column: only pairs between the two arms (ViennaRNA RNAduplex, 37 °C); combined arms up to 2,000 nt. Arms that form no pair keep their energy.':settings.engine==='rnacofold'?'ViennaRNA\'s MFE cofold, in which each arm may also pair with itself; the HYB2 pipeline uses RNAduplex.':settings.engine==='cplcofold'?'Same Turner energy model as RNAcofold, beam search; runs as pure Python in this browser, so it is slow.':'Adds CPLfold\'s pseudoknot phase: its DP09 pseudoknot term is an experimental ranking score, not a validated free energy.')+estimate+(settings.engine!=='rnacofold'?' For many records, filter first or use HYB2 Desktop / the cplcofold command.':''))+'</p>'+
-      '<div class="inline-actions"><button class="button" data-feature-action="batch-energy-run"'+(s.running||!state.fasta?' disabled':'')+'>Calculate binding energies</button>'+(s.running?'<button class="quiet-button" data-feature-action="batch-energy-cancel">Cancel</button>':'')+(s.result?'<button class="button button-secondary" data-feature-action="batch-energy-hyb">Download updated HYB</button><button class="quiet-button" data-feature-action="batch-energy-zip">Download HYB + audit ZIP</button>':'')+'</div><p class="card-note" role="status" data-batch-energy-status>'+esc(s.message||(!state.fasta?'Load and map a reference FASTA first.':'Unmapped, antisense, ambiguous, over-limit or unselected rows retain their original energy and are listed in the audit.'))+'</p></section>';
+      '<div class="inline-actions"><button class="button" type="button" data-feature-action="batch-energy-run"'+(s.running||!state.fasta?' disabled':'')+'>Calculate binding energies</button>'+(s.running?'<button class="quiet-button" type="button" data-feature-action="batch-energy-cancel">Cancel</button>':'')+(s.result?'<button class="button button-secondary" type="button" data-feature-action="batch-energy-hyb">Download updated HYB</button><button class="quiet-button" type="button" data-feature-action="batch-energy-zip">Download HYB + audit ZIP</button>':'')+'</div><p class="card-note" role="status" data-batch-energy-status>'+esc(s.message||(!state.fasta?'Load and map a reference FASTA first.':'Unmapped, antisense, ambiguous, over-limit or unselected rows retain their original energy and are listed in the audit.'))+'</p></section>';
   }
   // Fold the prepared pairs on a pool of workers, chunk by chunk; energies
   // come back in input order whatever worker finishes first.
@@ -309,7 +318,7 @@
         if(!selected.has(record.lineNumber+'\u0000'+record.id)){notes[i]={line,record,old,note:'not selected by the Interactions filters'};return;}
         try {
           const arms=prepareEnergy(record,fasta);
-          if(arms[0].length+arms[1].length>engine.maxLength)throw new Error('Combined arms exceed the '+engine.maxLength.toLocaleString('en-US')+' nt '+(engine.module?'CPLcofold':'batch')+' limit');
+          if(arms[0].length+arms[1].length>engine.maxLength)throw new Error('Combined arms exceed the '+count(engine.maxLength)+'\u00a0nt '+(engine.module?'CPLcofold':'batch')+' limit');
           notes[i]={line,record,old,item:prepared.length};prepared.push({arms});
         } catch(error){notes[i]={line,record,old,note:error.message};}
       });
@@ -317,8 +326,8 @@
       // progress rewrites only the status line: a full page render per update
       // would hold the main thread and leave finished workers waiting
       const report=workers=>{const left=prepared.length-done, rate=done/(Date.now()-started);
-        quietProgress(status,done.toLocaleString('en-US')+' / '+prepared.length.toLocaleString('en-US')+' energies calculated with '+engine.name+' on '+workers+(workers===1?' worker':' workers')+(done&&left?'; about '+duration(left/rate)+' left.':'.'),api);};
-      progress(status,'Starting '+engine.name+' for '+prepared.length.toLocaleString('en-US')+' records…',api);
+        quietProgress(status,count(done)+' / '+count(prepared.length)+' energies calculated with '+engine.name+' on '+count(workers)+(workers===1?' worker':' workers')+(done&&left?'; about '+duration(left/rate)+' left…':'…'),api);};
+      progress(status,'Starting '+engine.name+' for '+count(prepared.length)+' records…',api);
       const folded=prepared.length?await foldPool(job,engine,prepared,(count,workers)=>{done+=count;if(Date.now()-lastRender>400||done===prepared.length){lastRender=Date.now();if(unchanged())job.stale=true;report(workers);}}):{energies:[],version:'',workers:0};
       if(job.cancelled)return;
       if(job.stale||unchanged())throw new Error('Dataset or reference mapping changed; calculate again.');
@@ -333,8 +342,8 @@
       });
       const hyb=rewriteEnergy(source,updates);
       status.result={hyb,engine:settings.engine,audit:audit.join('\n')+'\n',metadata:{engine:engine.name,engineVersion:folded.version,temperature:37,minimumLoop:settings.engine==='rnacofold'?3:null,energyModel:settings.engine==='rnacofold'?'Turner 2004 (ViennaRNA default)':settings.engine==='rnaduplex'?'Turner 2004 (ViennaRNA default), intermolecular pairs only, as the HYB2 pipeline':'CPLfold DP09',pseudoknots:settings.engine==='cplcofold-pk',records:settings.records==='filtered'?'interaction-filters':'all',filters,updated,unchanged:skipped,validRecords:records.length,workers:folded.workers,elapsedSeconds:Math.round((Date.now()-started)/100)/10,sourceFile:file&&file.name,reference:fasta.fileName,mapping:fasta.mapping,maximumCombinedArmLength:engine.maxLength,completedAt:new Date().toISOString()}};
-      status.message=updated.toLocaleString('en-US')+' energies updated with '+engine.name+' in '+duration(Date.now()-started)+'; '+skipped.toLocaleString('en-US')+' valid rows unchanged. Comments and unparsed source lines are preserved. Download the audit for details.';
-    }catch(error){if(!job.cancelled)status.message='Energy calculation failed: '+error.message;}
+      status.message=count(updated)+' energies updated with '+engine.name+' in '+duration(Date.now()-started)+'; '+count(skipped)+' valid rows unchanged. Comments and unparsed source lines are preserved. Download the audit for details.';
+    }catch(error){if(!job.cancelled)status.message='Energy calculation failed: '+error.message+' Check the FASTA mapping, then select Calculate binding energies again; for many records, filter first or use HYB2 Desktop.';}
     finally{if(jobs.get('energy')===job){jobs.delete('energy');status.running=false;api.render();}}
   }
 
@@ -348,17 +357,17 @@
       const regions=topRegions(result.interactions);if(!regions.length)throw new Error('No significant merged interactions to export.');
       const samples=[];
       for(const dataset of result.datasets){const arms=await api.getArms({datasetIds:[dataset.id]},{});if(job.cancelled)return;samples.push(Object.assign({},dataset,{label:dataset.label||dataset.fileName||dataset.id,arms:root.Hyb2DeseqCard.collectArms(arms,dataset)}));}
-      const reply=await callWorker(job,'batch-maps.worker.js',{samples,regions,probability},p=>progress(status,'Building maps: '+p.done+' / '+p.total+' replicates',api));
+      const reply=await callWorker(job,'batch-maps.worker.js',{samples,regions,probability},p=>progress(status,'Building maps: '+count(p.done)+' / '+count(p.total)+' replicates…',api));
       if(job.cancelled)return;
       if(contrastQuantile(comparison.topMapQuantile == null ? .95 : comparison.topMapQuantile)!==probability || state.comparison!==comparison || comparison.deseq.result!==result || result.inputKey!==root.Hyb2DeseqCard.inputKey(comparison))throw new Error('Comparison changed during export. Run the export again.');
       api.downloadBlob('hyb2-top10-local-maps.zip',root.Hyb2Results.zip(mapFiles(reply.result,result),'hyb2-top10-local-maps'));
-      status.message=reply.result.panels.length+' local maps exported (contrast quantile '+reply.result.probability+', count cap '+reply.result.cap+'), with each replicate, raw-count TSVs and printable preview.html.';
-    }catch(error){if(!job.cancelled)status.message='Map export failed: '+error.message;}
+      status.message=count(reply.result.panels.length)+' local maps exported (contrast quantile '+reply.result.probability+', count cap '+reply.result.cap+'), with each replicate, raw-count TSVs and printable preview.html.';
+    }catch(error){if(!job.cancelled)status.message='Map export failed: '+error.message+' Select Export Top 10 local maps again; if it fails again, run the differential test again first.';}
     finally{if(jobs.get('maps')===job){jobs.delete('maps');status.running=false;api.render();}}
   }
   function renderMaps(comparison,stale) {
     const s=comparison.topMaps||{};
-    return '<label class="control-field"><span>Local map contrast quantile (Lau -q)</span><input type="number" min="0" max="1" step="0.01" data-feature="batch-map-quantile" data-key="quantile" value="'+esc(comparison.topMapQuantile == null ? '0.95' : comparison.topMapQuantile)+'"'+(s.running?' disabled':'')+'><small>0–1; default 0.95. Lower values increase contrast. One shared cap across all replicates.</small></label><div class="inline-actions"><button class="button button-secondary" data-feature-action="batch-maps-run"'+(stale||s.running?' disabled':'')+'>Export Top 10 local maps per direction · ZIP</button>'+(s.running?'<button class="quiet-button" data-feature-action="batch-maps-cancel">Cancel export</button>':'')+'</div><p class="card-note" role="status">'+esc(s.message||'Each map shows all included replicates separately, ±150 nt around the interaction, in white and black with the selected common count cap. ZIP contains SVGs, count tables and a printable preview.')+'</p>';
+    return '<label class="control-field"><span>Local map contrast quantile (Lau -q)</span><input type="number" min="0" max="1" step="0.01" data-feature="batch-map-quantile" data-key="quantile" value="'+esc(comparison.topMapQuantile == null ? '0.95' : comparison.topMapQuantile)+'"'+(s.running?' disabled':'')+'><small>0–1; default 0.95. Lower values increase contrast. One shared cap across all replicates.</small></label><div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="batch-maps-run"'+(stale||s.running?' disabled':'')+'>Export Top 10 local maps per direction · ZIP</button>'+(s.running?'<button class="quiet-button" type="button" data-feature-action="batch-maps-cancel">Cancel export</button>':'')+'</div><p class="card-note" role="status">'+esc(s.message||'Each map shows all included replicates separately, ±150 nt around the interaction, in white and black with the selected common count cap. ZIP contains SVGs, count tables and a printable preview.')+'</p>';
   }
   function handleInput(state, element) {
     if (element.dataset.feature === 'batch-energy-setting') {
@@ -379,7 +388,12 @@
     if(!action||!action.startsWith('batch-'))return false;
     if(action==='batch-energy-run')runEnergy(state,api);
     else if(action==='batch-maps-run')runMaps(state,api);
-    else if(action.endsWith('-cancel')){stop(action.includes('energy')?'energy':'maps');api.render();}
+    else if(action.endsWith('-cancel')){
+      const energy=action.includes('energy');
+      confirmThen(energy?{title:'Cancel the energy calculation?',body:'The energies calculated so far are discarded and no updated HYB is made. The loaded dataset stays unchanged.',confirmLabel:'Cancel calculation',cancelLabel:'Keep running'}
+        :{title:'Cancel the map export?',body:'The maps built so far are discarded and no ZIP is downloaded.',confirmLabel:'Cancel export',cancelLabel:'Keep running'},
+        ()=>{stop(energy?'energy':'maps');api.render();});
+    }
     else if(action==='batch-energy-hyb'||action==='batch-energy-zip'){
       const result=energyState(state).result;if(!result){api.showToast('Calculate energies first.');return true;}
       const base='hyb2-energies-'+(result.engine||'rnacofold');

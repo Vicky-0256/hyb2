@@ -45,6 +45,22 @@
   /* G1: smallest text sizes. Labels, kickers, notes and small data text use
      --text-label; uppercase letter-spaced labels (and key caps) may use --text-caps. */
   --text-label: 12px;
+  /* Spacing and type scale: use these, not raw px, for gap, padding and font-size. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --text-sm: 12px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  /* headings and big numbers; hero display sizes (38px and up) stay raw */
+  --text-xl: 24px;
+  --text-2xl: 30px;
+  --card-pad: var(--space-5);
+  --field-min: 160px;
   --text-caps: 11px;
   --ease: cubic-bezier(.2, .8, .2, 1);
 }
@@ -85,6 +101,15 @@ html {
   min-width: 320px;
   background: var(--canvas);
   scroll-behavior: smooth;
+  /* no double-tap zoom delay on any control */
+  touch-action: manipulation;
+}
+
+/* desktop: no rubber-band bounce past the page edges; touch keeps it */
+@media (pointer: fine) {
+  html {
+    overscroll-behavior: none;
+  }
 }
 
 body {
@@ -94,14 +119,24 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 16px;
+  font-size: var(--text-md);
   line-height: 1.45;
   text-wrap: pretty;
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
+}
+
+/* an intentional, theme-coloured tap flash instead of the grey default */
+button,
+a,
+summary,
+label {
+  -webkit-tap-highlight-color: color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 button {
@@ -124,19 +159,21 @@ a {
 .skip-link {
   position: fixed;
   z-index: 30;
-  top: -80px;
-  left: 20px;
-  padding: 10px 14px;
+  top: var(--space-4);
+  left: var(--space-5);
+  padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
   background: var(--ink);
   color: var(--surface);
   font-weight: 700;
   text-decoration: none;
-  transition: top 140ms var(--ease);
+  /* hidden above the viewport; slides in on a compositor-only transform */
+  transform: translateY(calc(-100% - var(--space-4) - 8px));
+  transition: transform 140ms var(--ease);
 }
 
 .skip-link:focus {
-  top: 16px;
+  transform: none;
 }
 
 .visually-hidden {
@@ -174,7 +211,7 @@ a {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--space-2);
   min-width: 0;
   color: var(--ink);
   text-decoration: none;
@@ -201,8 +238,8 @@ a {
 .brand-name {
   display: block;
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 760;
+  font-size: var(--text-md);
+  font-weight: 700;
   letter-spacing: 0;
   line-height: 1.05;
 }
@@ -222,7 +259,7 @@ a {
 .toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .text-button,
@@ -233,13 +270,13 @@ a {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted-strong);
-  font-size: 14px;
-  font-weight: 680;
+  font-size: var(--text-base);
+  font-weight: 700;
   transition: border-color 160ms var(--ease), background 160ms var(--ease), color 160ms var(--ease), transform 160ms var(--ease);
 }
 
 .text-button {
-  padding: 0 12px;
+  padding: 0 var(--space-3);
 }
 
 .text-button:hover,
@@ -258,7 +295,7 @@ a {
 }
 
 .quiet-button {
-  padding: 0 12px;
+  padding: 0 var(--space-3);
 }
 
 .icon-button {
@@ -266,22 +303,22 @@ a {
   width: 40px;
   padding: 0;
   place-items: center;
-  font-size: 17px;
+  font-size: var(--text-md);
 }
 
 .local-chip,
 .status-chip {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-2);
   min-height: 32px;
-  padding: 5px 10px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid color-mix(in srgb, var(--success) 27%, var(--line));
   border-radius: 999px;
   background: var(--success-soft);
   color: var(--success);
-  font-size: 12px;
-  font-weight: 730;
+  font-size: var(--text-sm);
+  font-weight: 700;
   letter-spacing: .01em;
   white-space: nowrap;
 }
@@ -316,23 +353,23 @@ a {
   display: inline-flex;
   align-items: center;
   min-height: 28px;
-  padding: 5px 9px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted-strong);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: .045em;
   text-transform: uppercase;
 }
 
 .landing-copy h1 {
   max-width: 700px;
-  margin: 18px 0 20px;
+  margin: var(--space-4) 0 var(--space-5);
   color: var(--ink);
   font-size: 64px;
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: 0;
   line-height: 1.02;
 }
@@ -345,14 +382,14 @@ a {
   max-width: 590px;
   margin: 0;
   color: var(--muted-strong);
-  font-size: 20px;
+  font-size: var(--text-lg);
   letter-spacing: 0;
   line-height: 1.55;
 }
 
 .promise-list {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2);
   margin: 38px 0 0;
   padding: 0;
   list-style: none;
@@ -360,10 +397,10 @@ a {
 
 .promise-list li {
   position: relative;
-  padding-left: 24px;
+  padding-left: var(--space-6);
   color: var(--muted-strong);
-  font-size: 14px;
-  font-weight: 570;
+  font-size: var(--text-base);
+  font-weight: 600;
 }
 
 .promise-list li::before {
@@ -382,17 +419,17 @@ a {
    question. The columns share the grid's rows (subgrid), so a row that wraps
    in one column keeps its neighbour level. */
 .landing-ways-title {
-  margin: 0 0 14px;
+  margin: 0 0 var(--space-4);
   color: var(--ink);
-  font-size: 22px;
-  font-weight: 720;
+  font-size: var(--text-lg);
+  font-weight: 700;
   letter-spacing: 0;
 }
 
 .ways-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 20px;
+  column-gap: var(--space-5);
 }
 
 .ways-col {
@@ -401,7 +438,7 @@ a {
   grid-template-rows: subgrid;
   row-gap: 0;
   min-width: 0;
-  padding: 18px 22px 22px;
+  padding: var(--space-4) var(--space-6) var(--space-6);
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--surface);
@@ -415,59 +452,59 @@ a {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px 10px;
-  padding-bottom: 12px;
+  gap: var(--space-1) var(--space-2);
+  padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--line-strong);
 }
 
 .ways-head h3 {
   margin: 0;
   color: var(--ink);
-  font-size: 18px;
-  font-weight: 720;
+  font-size: var(--text-lg);
+  font-weight: 700;
 }
 
 .ways-where {
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .ways-row {
   display: grid;
   grid-template-columns: 104px minmax(0, 1fr);
   align-items: baseline;
-  gap: 12px;
+  gap: var(--space-3);
   margin: 0;
-  padding: 10px 0;
+  padding: var(--space-2) 0;
   border-bottom: 1px solid var(--line);
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.45;
 }
 
 .ways-label {
   color: var(--muted-strong);
   font-size: var(--text-label);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .ways-actions {
   display: grid;
   align-content: start;
   justify-items: start;
-  gap: 14px;
-  padding-top: 18px;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
 }
 
 .ways-browser-check {
   width: 100%;
   color: var(--muted-strong);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .ways-browser-check summary {
   cursor: pointer;
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .ways-browser-check summary:focus-visible {
@@ -477,21 +514,21 @@ a {
 }
 
 .ways-check-chip {
-  margin-left: 6px;
+  margin-left: var(--space-2);
   color: var(--success);
   font-size: var(--text-label);
   font-weight: 700;
 }
 
 .ways-browser-check .web-capability-list {
-  margin-top: 10px;
+  margin-top: var(--space-2);
 }
 
 .desktop-downloads {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   width: 100%;
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.5;
 }
 
@@ -506,7 +543,7 @@ a {
 .desktop-downloads-status strong {
   display: block;
   color: var(--ink);
-  font-weight: 680;
+  font-weight: 700;
 }
 
 .desktop-downloads-planned,
@@ -523,18 +560,18 @@ a {
 .desktop-download-groups {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .desktop-download-groups .desktop-download-group {
   display: grid;
   align-content: start;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .desktop-download-group > span {
   color: var(--ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .desktop-download-others .desktop-download-group {
@@ -544,7 +581,7 @@ a {
 .desktop-download-link,
 .desktop-download-meta a {
   color: var(--primary-ink);
-  font-weight: 620;
+  font-weight: 600;
   text-underline-offset: 2px;
 }
 
@@ -569,7 +606,7 @@ a {
 .desktop-versions summary {
   cursor: pointer;
   color: var(--muted-strong);
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .desktop-download-version {
@@ -579,13 +616,13 @@ a {
 .desktop-download-version strong {
   color: var(--ink);
   font-family: var(--font-mono);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .desktop-version-list {
   display: grid;
-  gap: 10px;
-  margin: 10px 0 0;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -594,13 +631,13 @@ a {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr);
   align-items: baseline;
-  gap: 4px 10px;
+  gap: var(--space-1) var(--space-2);
 }
 
 .desktop-version-name {
   color: var(--ink);
   font-family: var(--font-mono);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .desktop-version-date {
@@ -622,7 +659,7 @@ a {
 }
 
 .desktop-first-launch p {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted-strong);
 }
 
@@ -639,8 +676,8 @@ a {
 /* A16: the raw-reads sentence under the drop zone hint */
 .dropzone-desktop {
   max-width: 34em;
-  margin: 10px auto 0;
-  font-size: 13px;
+  margin: var(--space-2) auto 0;
+  font-size: var(--text-base);
   line-height: 1.5;
   white-space: normal;
 }
@@ -649,15 +686,15 @@ a {
 .raw-reads-panel {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: var(--space-3);
   white-space: normal;
 }
 
 .raw-reads-panel h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 24px;
-  font-weight: 720;
+  font-size: var(--text-xl);
+  font-weight: 700;
 }
 
 .raw-reads-panel h2:focus {
@@ -674,7 +711,7 @@ a {
 .raw-reads-body p {
   margin: 0;
   color: var(--muted-strong);
-  font-size: 15px;
+  font-size: var(--text-md);
   line-height: 1.55;
 }
 
@@ -684,14 +721,14 @@ a {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-base);
   text-overflow: ellipsis;
   vertical-align: bottom;
   white-space: nowrap;
 }
 
 .raw-reads-fasta {
-  padding: 10px 12px;
+  padding: var(--space-2) var(--space-3);
   border-radius: 10px;
   background: var(--warning-soft);
 }
@@ -704,15 +741,15 @@ a {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-top: 6px;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .raw-reads-body {
   display: grid;
   align-content: start;
-  gap: 12px;
-  padding-top: 18px;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
 }
 
 .raw-reads-panel .raw-reads-actions,
@@ -723,27 +760,27 @@ a {
 /* Desktop drawer (data-action="open-desktop") and its line in Help */
 .drawer-desktop-line {
   margin: 0;
-  padding: 10px 12px;
+  padding: var(--space-2) var(--space-3);
   border-radius: 10px;
   background: var(--accent-soft);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.5;
 }
 
 .desktop-capabilities li + li {
-  margin-top: 6px;
+  margin-top: var(--space-2);
 }
 
 .desktop-compare {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.4;
 }
 
 .desktop-compare th,
 .desktop-compare td {
-  padding: 7px 8px 7px 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) 0;
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
@@ -756,7 +793,7 @@ a {
 
 .desktop-compare tbody th {
   color: var(--muted-strong);
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -772,11 +809,11 @@ a {
   }
 
   .ways-desktop {
-    margin-top: 16px;
+    margin-top: var(--space-4);
   }
 
   .ways-col {
-    padding: 16px;
+    padding: var(--space-4);
   }
 
   .ways-row {
@@ -838,7 +875,7 @@ a {
 
 .file-card-inner {
   min-height: 454px;
-  padding: clamp(24px, 4vw, 38px);
+  padding: clamp(var(--space-6), 4vw, 38px);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -849,38 +886,38 @@ a {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
+  gap: var(--space-4);
   margin-bottom: 27px;
 }
 
 .file-card-header h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 22px;
-  font-weight: 740;
+  font-size: var(--text-lg);
+  font-weight: 700;
   letter-spacing: 0;
   line-height: 1.1;
 }
 
 .file-card-header p {
-  margin: 6px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .file-card-kicker {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
   color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
 
 .prepared-file-card .file-card-header {
-  margin-bottom: 24px;
+  margin-bottom: var(--space-6);
 }
 
 .prepared-file-card .file-card-header p {
@@ -899,9 +936,9 @@ a {
   display: grid;
   grid-template-columns: 56px minmax(0, 1fr) auto 68px;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-4);
   min-width: 0;
-  padding: 15px 0;
+  padding: var(--space-4) 0;
 }
 
 .prepared-file-row + .prepared-file-row {
@@ -934,7 +971,7 @@ a {
    side by side: the card has room for only one button beside the name. */
 .prepared-file-row:has(> [data-action="add-fasta"]) {
   grid-template-columns: 56px auto minmax(0, 1fr) 68px;
-  row-gap: 10px;
+  row-gap: var(--space-2);
 }
 
 .prepared-file-row:has(> [data-action="add-fasta"]) > .prepared-file-details {
@@ -977,7 +1014,7 @@ a {
 
 .prepared-file-details {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -985,7 +1022,7 @@ a {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1002,7 +1039,7 @@ a {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  font-weight: 750;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -1023,22 +1060,22 @@ a {
 }
 
 .prepared-file-list-example {
-  margin-top: 14px;
+  margin-top: var(--space-4);
 }
 
 .prepared-file-group {
   margin: 0;
-  padding: 10px 0 2px;
+  padding: var(--space-2) 0 2px;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: .04em;
   text-transform: uppercase;
 }
 
 .prepared-file-row-example {
-  padding: 9px 0;
+  padding: var(--space-2) 0;
 }
 
 /* The example's Compare files, folded to one summary line. */
@@ -1058,7 +1095,7 @@ a {
 
 .prepared-file-summary strong::after {
   display: inline-block;
-  margin-left: 6px;
+  margin-left: var(--space-2);
   color: var(--primary-ink);
   content: "▸";
   transition: transform var(--dur-feedback) var(--ease-out);
@@ -1080,14 +1117,14 @@ a {
 
 .prepared-file-row .button-compact {
   min-height: 32px;
-  padding: 0 10px;
-  font-size: 12px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
 }
 
 .prepared-file-note {
-  margin: 17px 0 0;
+  margin: var(--space-4) 0 0;
   color: var(--muted-strong);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -1099,9 +1136,9 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  margin: 0 0 18px;
-  padding: 14px 16px;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-4);
+  padding: var(--space-4) var(--space-4);
   border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
   border-radius: var(--radius-lg);
   background: var(--primary-soft);
@@ -1120,7 +1157,7 @@ a {
 
 .prepared-next-step strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .prepared-next-step span:last-child {
@@ -1135,12 +1172,12 @@ a {
 }
 
 .prepared-file-actions {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 
 .example-strip {
-  margin: 14px 0 22px;
-  padding: 0 0 14px;
+  margin: var(--space-4) 0 var(--space-6);
+  padding: 0 0 var(--space-4);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1148,13 +1185,13 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .example-line-copy {
   margin: 0;
   color: var(--muted-strong);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.4;
 }
 
@@ -1167,7 +1204,7 @@ a {
 }
 
 .example-more {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 .example-more > summary {
@@ -1175,12 +1212,12 @@ a {
   align-items: center;
   min-height: 32px;
   color: var(--primary-ink);
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 
 .example-more[open] > summary {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 .example-more .example-badge {
@@ -1191,16 +1228,16 @@ a {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .example-kicker {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
@@ -1208,8 +1245,8 @@ a {
 .example-strip h3 {
   margin: 0;
   color: var(--ink);
-  font-size: 17px;
-  font-weight: 740;
+  font-size: var(--text-md);
+  font-weight: 700;
   letter-spacing: 0;
   line-height: 1.2;
 }
@@ -1217,7 +1254,7 @@ a {
 .example-badge {
   flex: 0 0 auto;
   min-height: 26px;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--line));
   border-radius: 999px;
   background: var(--primary-soft);
@@ -1230,25 +1267,25 @@ a {
 
 .example-copy {
   max-width: 440px;
-  margin: 9px 0 14px;
+  margin: var(--space-2) 0 var(--space-4);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.45;
 }
 
 .example-files {
   display: grid;
-  gap: 7px;
-  margin-bottom: 16px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
 
 .example-file {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--space-2);
   min-width: 0;
   color: var(--muted-strong);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .example-file-kind {
@@ -1256,7 +1293,7 @@ a {
   color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: .05em;
 }
 
@@ -1274,7 +1311,7 @@ a {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .example-file-link {
@@ -1307,7 +1344,7 @@ a {
 
 .example-note {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .example-setup.is-error {
@@ -1325,9 +1362,9 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  margin: 0 0 20px;
-  padding: 17px 0 18px;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-5);
+  padding: var(--space-4) 0 var(--space-4);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1345,11 +1382,11 @@ a {
 
 .reference-upload-kicker {
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: var(--space-1);
   color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
@@ -1357,16 +1394,16 @@ a {
 .reference-upload h3 {
   margin: 0;
   color: var(--ink);
-  font-size: 16px;
-  font-weight: 720;
+  font-size: var(--text-md);
+  font-weight: 700;
   letter-spacing: 0;
   line-height: 1.2;
 }
 
 .reference-upload p {
-  margin: 5px 0 0;
+  margin: var(--space-1) 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.4;
 }
 
@@ -1375,7 +1412,7 @@ a {
   align-items: center;
   justify-content: flex-end;
   flex: 0 0 auto;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -1394,7 +1431,7 @@ a {
 .prepared-file-details strong.is-empty {
   color: var(--muted);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 
@@ -1402,8 +1439,8 @@ a {
    sized for a file row. */
 .button-compact {
   min-height: 36px;
-  padding: 0 12px;
-  font-size: 13px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-base);
   white-space: nowrap;
 }
 
@@ -1423,26 +1460,23 @@ a {
 .dropzone:hover,
 .dropzone:focus-visible,
 .dropzone.is-dragging {
-  border-color: var(--primary);
   background-color: var(--primary-soft);
 }
 
-.dropzone.is-dragging {
-  transform: scale(1.01);
-}
+/* the hover/drag border (marching ants) and the drag scale live in motion.css */
 
 .dropzone-content {
   max-width: 310px;
-  padding: 30px 20px;
+  padding: 30px var(--space-5);
 }
 
 .dropzone-kicker {
   display: inline-block;
-  margin-bottom: 13px;
+  margin-bottom: var(--space-3);
   color: var(--primary-ink);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 750;
+  font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
@@ -1450,16 +1484,16 @@ a {
 .dropzone-title {
   margin: 0;
   color: var(--ink);
-  font-size: 21px;
-  font-weight: 730;
+  font-size: var(--text-lg);
+  font-weight: 700;
   letter-spacing: 0;
   line-height: 1.18;
 }
 
 .dropzone-copy {
-  margin: 8px 0 20px;
+  margin: var(--space-2) 0 var(--space-5);
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .button {
@@ -1467,13 +1501,13 @@ a {
   align-items: center;
   justify-content: center;
   min-height: 44px;
-  padding: 0 16px;
+  padding: 0 var(--space-4);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: var(--primary);
   color: var(--primary-foreground);
-  font-size: 14px;
-  font-weight: 730;
+  font-size: var(--text-base);
+  font-weight: 700;
   letter-spacing: 0;
   text-decoration: none;
   transition: background 160ms var(--ease), box-shadow 160ms var(--ease), transform 160ms var(--ease);
@@ -1507,18 +1541,18 @@ a {
 
 .dropzone-hint {
   display: block;
-  margin-top: 15px;
+  margin-top: var(--space-4);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .privacy-note {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin: 20px 0 0;
+  gap: var(--space-2);
+  margin: var(--space-5) 0 0;
   color: var(--muted-strong);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.5;
 }
 
@@ -1535,9 +1569,9 @@ a {
 }
 
 .card-footnote {
-  margin: 22px 0 0;
+  margin: var(--space-6) 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .load-state {
@@ -1548,25 +1582,25 @@ a {
 
 .load-file-name {
   max-width: 100%;
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-2);
   overflow: hidden;
   color: var(--ink);
-  font-size: 21px;
-  font-weight: 740;
+  font-size: var(--text-lg);
+  font-weight: 700;
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .load-status {
-  margin: 0 0 26px;
+  margin: 0 0 var(--space-6);
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .progress-bar {
   height: 7px;
-  margin: 0 0 21px;
+  margin: 0 0 var(--space-5);
   overflow: hidden;
   border-radius: 99px;
   background: var(--line);
@@ -1578,12 +1612,12 @@ a {
   height: 100%;
   border-radius: inherit;
   background: var(--primary);
-  transition: width 180ms linear;
+  /* width is set inline by JS; its transition lives in motion.css */
 }
 
 .parse-steps {
   display: grid;
-  gap: 11px;
+  gap: var(--space-3);
   padding: 0;
   margin: 0;
   list-style: none;
@@ -1592,10 +1626,10 @@ a {
 .parse-step {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   color: var(--muted);
-  font-size: 14px;
-  font-weight: 550;
+  font-size: var(--text-base);
+  font-weight: 600;
 }
 
 .parse-step::before {
@@ -1609,7 +1643,7 @@ a {
 
 .parse-step.is-current {
   color: var(--primary-ink);
-  font-weight: 720;
+  font-weight: 700;
 }
 
 .parse-step.is-current::before {
@@ -1628,24 +1662,24 @@ a {
 }
 
 .parse-error {
-  padding: 17px;
+  padding: var(--space-4);
   border: 1px solid color-mix(in srgb, var(--error) 33%, var(--line));
   border-radius: var(--radius-md);
   background: var(--error-soft);
   color: var(--error);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 /* Parse error: the first rejected line and what a HYB line needs. */
 .parse-error-detail {
   display: block;
-  margin-top: 6px;
+  margin-top: var(--space-2);
   font-family: var(--font-mono);
   font-size: 0.85em;
 }
 
 .parse-error-hint {
-  margin: 12px 0 0;
+  margin: var(--space-3) 0 0;
   font-size: 0.875rem;
   color: var(--muted-strong);
 }
@@ -1657,7 +1691,7 @@ a {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 9px;
+  gap: var(--space-2);
 }
 
 .load-error-actions > .quiet-button:first-child {
@@ -1665,7 +1699,7 @@ a {
 }
 
 .example-setup-actions {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 @media (max-width: 767px) {
@@ -1680,17 +1714,17 @@ a {
   }
 }
 
-.chimera-diagram { width: 100%; max-width: 310px; height: auto; display: block; margin: 6px 0; }
+.chimera-diagram { width: 100%; max-width: 310px; height: auto; display: block; margin: var(--space-2) 0; }
 .chimera-diagram text { fill: var(--muted-strong); font: 10px var(--font-sans); }
-.chimera-guide { margin: 16px 0; }
+.chimera-guide { margin: var(--space-4) 0; }
 .chimera-guide summary { cursor: pointer; color: var(--primary-ink); }
-.chimera-guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 12px; }
-.chimera-guide-grid > div { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.chimera-guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-4); margin-top: var(--space-3); }
+.chimera-guide-grid > div { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); }
 /* the type's HYB2 code over its name */
 .type-item .chimera-code { font-family: inherit; }
 .chimera-guide-grid .chimera-code,
-.type-item .chimera-code { display: block; margin-bottom: 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
-.chimera-guide p { color: var(--muted); font-size: 12px; }
+.type-item .chimera-code { display: block; margin-bottom: 2px; color: var(--muted); font-size: var(--text-sm); font-weight: 600; letter-spacing: 0.02em; }
+.chimera-guide p { color: var(--muted); font-size: var(--text-sm); }
 .comparison-canvas { touch-action: pan-y; cursor: grab; }
 .comparison-canvas:active { cursor: grabbing; }
 
@@ -1727,7 +1761,11 @@ a {
 .header-scope select {
   max-width: 260px;
   min-height: 28px;
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
-  font-size: 0.8rem;
+  /* explicit colours: the native control stays light in dark mode otherwise */
+  background-color: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-sm);
 }

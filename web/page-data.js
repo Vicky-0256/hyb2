@@ -737,7 +737,7 @@
       const prepared = data().prepareComparison(comparison, function () { return true; });
       const datasets = prepared.allDatasets;
       const sources = [];
-      setComparisonProgress(comparison, "Reading datasets", 0);
+      setComparisonProgress(comparison, "Reading datasets…", 0);
       return datasets.reduce(function (chain, dataset, index) {
         return chain.then(checkCurrent).then(function () {
           const selection = { datasetIds: [dataset.id] };
@@ -751,7 +751,7 @@
             });
           }).then(function (source) {
             sources.push(source);
-            setComparisonProgress(comparison, "Reading datasets", .1 * sources.length / datasets.length);
+            setComparisonProgress(comparison, "Reading datasets…", .1 * sources.length / datasets.length);
           });
         });
       }, Promise.resolve()).then(checkCurrent).then(function () {
@@ -823,7 +823,7 @@
           if (done) {
             return builder.result;
           }
-          setComparisonProgress(comparison, "Preparing " + builder.total.toLocaleString("en-US") + " cells", .8 + .2 * builder.done / builder.total);
+          setComparisonProgress(comparison, "Preparing " + new Intl.NumberFormat("en-US").format(builder.total) + " cells…", .8 + .2 * builder.done / builder.total);
           return yieldToTask().then(step);
         };
         return step();

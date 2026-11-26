@@ -414,7 +414,7 @@ assert.equal(api.downloads.length, pendingDownloads);
 
 const paste = state({cplfoldEnergyDelta: "-1", cplfoldKernel: "rnacofold"});
 assertRejectsLocalOptions(paste, /--delta.*nonnegative/);
-assert.match(pages.renderStructure(paste), /--delta must be nonnegative/);
+assert.match(pages.renderStructure(paste), /Energy window \(--delta\) must be ≥ 0/);
 assert.doesNotMatch(pages.renderStructure(paste), /bin\/cplcofold --sequence-file/);
 change(paste, "cplfoldEnergyDelta", "0");
 assert.match(pages.renderStructure(paste), /bin\/cplcofold .*--delta 0/);

@@ -111,7 +111,7 @@
 /* ------------------------------------------------------------------ */
 
 .eyebrow {
-  gap: 8px;
+  gap: var(--space-2);
   background: color-mix(in srgb, var(--surface) 70%, transparent);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
@@ -168,7 +168,7 @@
 .promise-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
   margin-top: 30px;
 }
 
@@ -176,11 +176,11 @@
   display: inline-flex;
   align-items: center;
   min-height: 32px;
-  padding: 5px 12px 5px 30px;
+  padding: var(--space-1) var(--space-3) var(--space-1) 30px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface) 78%, transparent);
-  font-size: 13px;
+  font-size: var(--text-base);
   white-space: nowrap;
   transition: border-color var(--dur-feedback) var(--ease-out), transform var(--dur-quick) var(--ease-out), background var(--dur-feedback) var(--ease-out);
 }
@@ -194,7 +194,7 @@
 .promise-list li::before {
   top: 50%;
   left: 13px;
-  margin-top: -5px;
+  margin-top: calc(var(--space-1) * -1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -204,7 +204,7 @@
 .hero-stage {
   position: relative;
   margin: 30px 0 28px;
-  padding: 14px 16px 12px;
+  padding: var(--space-4) var(--space-4) var(--space-3);
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--stage-surface);
@@ -217,12 +217,12 @@
 .hero-stage-caption {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   margin: 0;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-caps);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: .06em;
   text-transform: uppercase;
 }
@@ -230,8 +230,8 @@
 .hero-stage-live {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 7px;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
@@ -248,7 +248,7 @@
 .hero-stage-canvas {
   position: relative;
   height: 236px;
-  margin: 6px -16px 0;
+  margin: var(--space-2) calc(var(--space-4) * -1) 0;
   cursor: crosshair;
   touch-action: pan-y;
 }
@@ -262,8 +262,8 @@
 .hero-stage-hud {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  padding-top: 8px;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
   border-top: 1px dashed var(--line);
   color: var(--muted);
   font-family: var(--font-mono);
@@ -275,7 +275,7 @@
   display: inline-block;
   min-width: 4ch;
   color: var(--accent);
-  font-weight: 750;
+  font-weight: 700;
 }
 
 .hero-stage-hud [data-hero-probe] {
@@ -696,12 +696,13 @@
 }
 
 .nav-button::before {
-  transition: height var(--dur-quick) var(--ease-pop), background var(--dur-feedback) var(--ease-out);
+  transition: transform var(--dur-quick) var(--ease-pop), background var(--dur-feedback) var(--ease-out);
 }
 
+/* the 18px bar shrinks to 10px on a compositor-only transform */
 .nav-button:hover:not(.is-active)::before {
-  height: 10px;
   background: var(--muted);
+  transform: scaleY(calc(10 / 18));
 }
 
 /* Cards: quiet lift on hover, only where they are tappable summaries. */

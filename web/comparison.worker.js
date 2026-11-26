@@ -31,10 +31,10 @@ self.onmessage = function (event) {
     }
     const packed = data.computeComparison(message.input, function (index) {
       const source = sources[index] || {};
-      self.postMessage({ type: "progress", stage: "Binning " + (source.label || "dataset " + (index + 1)), done: index, total: sources.length });
+      self.postMessage({ type: "progress", stage: "Binning " + (source.label || "dataset " + (index + 1)) + "…", done: index, total: sources.length });
       const bins = source.bins || data.buildContactBins(self.Hyb2Provider.unpackContactRecords(source.records), message.input.datasets[index].query);
       if (index === sources.length - 1) {
-        self.postMessage({ type: "progress", stage: "Combining " + sources.length + " maps", done: sources.length, total: sources.length });
+        self.postMessage({ type: "progress", stage: "Combining " + sources.length + " maps…", done: sources.length, total: sources.length });
       }
       return bins;
     }, { effectOrder: true });

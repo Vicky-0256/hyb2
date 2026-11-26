@@ -306,7 +306,7 @@
     return n;
   }
   // One scene feeds both the SVG and the EPS writers.
-  function scene(d,selection,b){
+  function scene(d,selection,b,focus){
     const items=[{t:'rect',x:b[0],y:b[1],w:b[2],h:b[3],fill:d.background,attrs:{'data-editor-background':'true'}},
       {t:'text',x:b[0]+20,y:b[1]+28,size:d.titleSize||18,fill:d.titleColor||'#222222',text:d.title}];
     const line=(p,q,stroke,width,opacity)=>({t:'line',x1:p.x,y1:p.y,x2:q.x,y2:q.y,stroke,width,opacity});
@@ -335,7 +335,9 @@
     const letter=d.baseFontSize||12,showNumbers=d.numbering!==false;
     d.points.forEach((p,i)=>{
       const s={...DEFAULT_BASE,...(d.styles[i+1]||{})},selected=selection&&i+1>=selection[0]&&i+1<=selection[1];
-      items.push({t:'g',attrs:{'data-editor-base':i+1,tabindex:0,role:'button','aria-label':'Move nucleotide '+(i+1)+' '+d.sequence[i]},items:[
+      // On the page the bases are one Tab stop (the focused base); arrows move between them.
+      const attrs=selection?{'data-editor-base':i+1,tabindex:i+1===(focus||selection[0])?0:-1,role:'button','aria-label':'Nucleotide '+(i+1)+' '+d.sequence[i]+(selected?', selected':'')}:{'data-editor-base':i+1};
+      items.push({t:'g',attrs,items:[
         {t:'circle',cx:p.x,cy:p.y,r:s.radius,fill:s.fill,stroke:selected?'#E64B35':s.outline||'#3C5488',strokeWidth:selected?3:1},
         {t:'text',x:p.x,y:p.y+letter/3,size:letter,anchor:'middle',fill:s.text,text:d.sequence[i]}]});
       if(showNumbers&&(i===0||i===d.points.length-1||(i+1)%d.numberInterval===0)){
@@ -353,7 +355,7 @@
           group.push({t:'path',points:[tip,{x:tip.x-ux*10*k-uy*4*k,y:tip.y-uy*10*k+ux*4*k},{x:tip.x-ux*10*k+uy*4*k,y:tip.y-uy*10*k-ux*4*k}],closed:true,fill:a.color});}
       }
       group.push({t:'text',x:q.x,y:q.y-(a.free?0:8),size:a.size||14,fill:a.color,text:a.text});
-      items.push({t:'g',attrs:{'data-editor-annotation':i,role:'button',tabindex:0,'aria-label':'Annotation '+(i+1)+' '+a.text},items:group});
+      items.push({t:'g',attrs:{'data-editor-annotation':i},items:group});
     });
     return items;
   }
@@ -371,9 +373,10 @@
     }
     return '';
   }
-  function svg(d,selection,box){
+  function svg(d,selection,box,focus){
     const b=box||bounds(d);
-    return '<svg xmlns="'+NS+'" viewBox="'+b.map(num).join(' ')+'" width="1000" height="700" role="img" aria-label="Editable RNA drawing"><g font-family="'+(d.font||'sans-serif')+'">'+scene(d,selection,b).map(svgItem).join('')+'</g></svg>';
+    // On the page the drawing holds focusable bases, so it is a group, not an image.
+    return '<svg xmlns="'+NS+'" viewBox="'+b.map(num).join(' ')+'" width="1000" height="700" role="'+(selection?'group':'img')+'" aria-label="Editable RNA drawing, '+d.sequence.length+' nucleotides, '+d.pairs.length+' pairs"><g font-family="'+(d.font||'sans-serif')+'">'+scene(d,selection,b,focus).map(svgItem).join('')+'</g></svg>';
   }
   // Encapsulated PostScript for journals and vector editors; opacity is
   // flattened onto the background colour.
@@ -442,10 +445,18 @@
     return [result.sequence,result.dotBracket,result.engine||'',result.selectedCandidate==null?'':result.selectedCandidate,
       result.runId==null?'':result.runId,result.completedAt||'',result.label||'',evidence?evidence.values.join(','):''].join('\n');
   }
+  // Edits are kept per prediction: switching to another candidate or run and
+  // back restores them (the ten most recently edited drawings are kept).
   function session(state){
-    const result=state.structure.result,key=sessionKey(result);
-    if(!state.structure.drawing||state.structure.drawing.key!==key)state.structure.drawing={key,data:initial(result),undo:[],redo:[],selection:[1,1],view:null};
-    return state.structure.drawing;
+    const st=state.structure,result=st.result,key=sessionKey(result),current=st.drawing;
+    if(!current||current.key!==key){
+      const kept=(st.keptDrawings||[]).filter(x=>x.key!==key&&(!current||x.key!==current.key));
+      if(current&&current.undo.length)kept.push(current);
+      const restored=(st.keptDrawings||[]).find(x=>x.key===key);
+      st.keptDrawings=kept.slice(-10);
+      st.drawing=restored?Object.assign(restored,{restored:true}):{key,data:initial(result),undo:[],redo:[],selection:[1,1],view:null};
+    }
+    return st.drawing;
   }
   function checkpoint(s){s.undo.push(clone(s.data));if(s.undo.length>50)s.undo.shift();s.redo=[];}
   function undo(s){if(s.undo.length){s.redo.push(clone(s.data));s.data=s.undo.pop();s.view=null;}}
@@ -454,7 +465,8 @@
     const s=session(state),result=state.structure.result,d0=s.data,n=result.sequence.length;
     // The editor takes the full result width; leaving it re-renders the page without this class.
     const grid=target.closest&&target.closest('.structure-result-grid');if(grid)grid.classList.add('is-editing');
-    const field=(label,name,input)=>'<label class="control-field">'+label+input.replace('<input','<input data-edit="'+name+'"').replace('<select','<select data-edit="'+name+'"').replace('<textarea','<textarea data-edit="'+name+'"')+'</label>';
+    const named=name=>' data-edit="'+name+'" name="editor-'+name+'" autocomplete="off"';
+    const field=(label,name,input)=>'<label class="control-field">'+label+input.replace('<input','<input'+named(name)).replace('<select','<select'+named(name)).replace('<textarea','<textarea'+named(name)+' spellcheck="false"')+'</label>';
     const select=(options,value)=>'<select>'+options.map(([v,l])=>'<option value="'+v+'"'+(v===value?' selected':'')+'>'+l+'</option>').join('')+'</select>';
     const tool=(action,label,title)=>'<button type="button" class="quiet-button" data-edit-action="'+action+'"'+(title?' title="'+title+'" aria-label="'+title+'"':'')+'>'+label+'</button>';
     const buttons=list=>'<div class="inline-actions">'+list.map(([action,label,title])=>tool(action,label,title)).join('')+'</div>';
@@ -464,11 +476,11 @@
     target.innerHTML='<div class="editor-root"><div class="editor-toolbar" role="toolbar" aria-label="Drawing editor tools">'+
         '<div class="editor-tool-group">'+tool('undo','↶ Undo','Undo (Ctrl/⌘ Z)')+tool('redo','↷ Redo','Redo (Ctrl/⌘ Shift Z)')+'</div>'+
         '<div class="editor-tool-group">'+tool('zoomOut','−','Zoom out')+tool('zoomIn','+','Zoom in')+tool('fit','Fit','Fit the drawing to the view')+'</div>'+
-        '<div class="editor-tool-group"><label class="editor-inline-field">Layout '+select(layoutOptions,(d0.layout&&d0.layout.kind)||'radiate').replace('<select','<select data-edit="layout"')+'</label>'+tool('layout','Re-layout','Recompute all positions with this layout')+'</div>'+
-        '<div class="editor-tool-group"><label class="editor-inline-field">Export '+select([['svg','SVG image'],['eps','EPS (PostScript)'],['json','Drawing JSON (re-loadable)'],['ct','Edited CT'],['bpseq','Edited BPSEQ'],['dbn','Edited DBN'],['varna','VARNA command']],'svg').replace('<select','<select data-edit="exportFormat"')+'</label>'+tool('export','Download')+tool('load','Load JSON','Load a saved drawing JSON')+'</div>'+
+        '<div class="editor-tool-group"><label class="editor-inline-field">Layout '+select(layoutOptions,(d0.layout&&d0.layout.kind)||'radiate').replace('<select','<select'+named('layout'))+'</label>'+tool('layout','Re-layout','Recompute all positions with this layout')+'</div>'+
+        '<div class="editor-tool-group"><label class="editor-inline-field">Export '+select([['svg','SVG image'],['eps','EPS (PostScript)'],['json','Drawing JSON (re-loadable)'],['ct','Edited CT'],['bpseq','Edited BPSEQ'],['dbn','Edited DBN'],['varna','VARNA command']],'svg').replace('<select','<select'+named('exportFormat'))+'</label>'+tool('export','Download')+tool('load','Load JSON','Load a saved drawing JSON')+'</div>'+
       '</div>'+
       '<div class="editor-status"><span class="editor-selection" data-editor-selection></span><span class="card-note" data-editor-message role="status"></span></div>'+
-      '<div class="editor-shell"><div class="editor-canvas" data-editor-canvas></div><div class="editor-panel">'+
+      '<div class="editor-shell"><div class="editor-canvas" data-editor-canvas tabindex="0" role="group" aria-label="Drawing canvas. Arrow keys pan, + and − zoom, 0 fits. Tab again to reach the bases." aria-describedby="editor-help"></div><div class="editor-panel">'+
       section('Selection','<div class="control-grid">'+field('From','from','<input type="number" min="1" max="'+n+'" value="'+s.selection[0]+'">')+field('To','to','<input type="number" min="1" max="'+n+'" value="'+s.selection[1]+'">')+'</div>'+
         buttons([['domain','Domain','Select the helix and everything it closes'],['parent','Enclosing domain','Expand to the next enclosing domain'],['all','All','Select every base']])+
         buttons([['rotL','⟲ 15°','Rotate the selection 15° anticlockwise'],['rotR','⟳ 15°','Rotate the selection 15° clockwise'],['rot90','⟳ 90°','Rotate the selection 90° clockwise'],['mirror','Mirror','Mirror the selection']])+
@@ -486,27 +498,28 @@
         '<div class="control-grid">'+field('Base spacing','spacing','<input type="number" min="0.5" max="3" step="0.1" value="'+((d0.layout&&d0.layout.spacing)||1)+'">')+
         field('Exterior loop','flat','<select><option value="true">Flat</option><option value="false"'+(d0.layout&&d0.layout.flat===false?' selected':'')+'>Circle</option></select>')+'</div>'+
         '<p class="card-note">Style changes apply at once. Spacing and exterior loop re-run the layout.</p>')+
-      section('Annotations',field('Text','annotation','<input maxlength="500" placeholder="Label text">')+'<div class="control-grid">'+
+      section('Annotations',field('Text','annotation','<input maxlength="500" placeholder="e.g. 5′ splice site…">')+'<div class="control-grid">'+
         field('Type','annotationKind',select([['text','Text'],['region','Region highlight'],['probe','Chemical probe']],'text'))+
         field('Anchor','anchorType',select([['base','Selected bases'],['helix','Helix of “From”'],['loop','Loop of “From”'],['free','Free position']],'base'))+
         field('Colour','annotationColor','<input type="color" value="#3C5488">')+field('Text size','annotationSize','<input type="number" min="6" max="48" value="14">')+
         field('Probe marker','marker',select([['arrow','Arrow'],['dot','Dot'],['triangle','Triangle']],'arrow'))+field('Probe direction','direction',select([['in','Toward base'],['out','Away from base']],'in'))+
         field('Probe intensity','intensity','<input type="number" min="0.25" max="4" step="0.25" value="1">')+field('Highlight opacity','opacity','<input type="number" min="0.05" max="1" step="0.05" value="0.25">')+
-        field('Highlight width','regionWidth','<input type="number" min="2" max="80" value="32">')+'</div>'+field('Saved annotations','annotationList','<select><option value="">Select annotation</option></select>')+
+        field('Highlight width','regionWidth','<input type="number" min="2" max="80" value="32">')+
+        field('Offset x','annotationDx','<input type="number" step="1" value="25" title="Moves the saved annotation selected below">')+field('Offset y','annotationDy','<input type="number" step="1" value="-35" title="Moves the saved annotation selected below">')+'</div>'+field('Saved annotations','annotationList','<select><option value="">Select annotation</option></select>')+
         buttons([['annotation','Add'],['updateAnnotation','Update'],['removeAnnotation','Remove'],['clearAnnotations','Clear all']])+
         buttons([['ends','5′ / 3′ labels'],['helices','Helix labels'],['hairpins','Hairpin labels']]))+
       section('Colour map','<div class="control-grid">'+field('Palette','palette',select([['lau','Lau / VARNA'],['brand','Website palette'],['heat','Heat'],['bluered','Blue–white–red'],['grey','Greyscale'],['viridis','Viridis']],(d0.evidence&&d0.evidence.palette)||'lau'))+
-        field('Caption','mapCaption','<input maxlength="100" placeholder="User values">')+field('Minimum','mapMin','<input type="number" step="any" placeholder="auto">')+field('Maximum','mapMax','<input type="number" step="any" placeholder="auto">')+'</div>'+
-        field('Values','mapValues','<textarea rows="3" placeholder="'+n+' values (one per base), or “position value” lines, e.g. SHAPE reactivities"></textarea>')+
+        field('Caption','mapCaption','<input maxlength="100" placeholder="e.g. SHAPE reactivity…">')+field('Minimum','mapMin','<input type="number" step="any" placeholder="Auto, e.g. 0…">')+field('Maximum','mapMax','<input type="number" step="any" placeholder="Auto, e.g. 2…">')+'</div>'+
+        field('Values','mapValues','<textarea rows="3" placeholder="'+n+' values, one per base, or “position value” lines, e.g. 12 0.85…"></textarea>')+
         buttons([['colormap','Apply values'],['evidence','Evidence colours'],['clearColors','Clear colours']]))+
       '</div></div>'+
-      '<p class="card-note editor-help">Click a base to select it · Shift-click or Shift-drag a box to extend the selection · double-click selects the base’s domain · drag a selected base to move the selection · drag the background to pan · Ctrl/⌘ + scroll or pinch to zoom · arrow keys nudge a focused base (Shift: 10 units). Layout, styles and annotations are saved separately from the prediction; edited pairs do not recalculate its energy.</p>'+
+      '<p class="card-note editor-help" id="editor-help">Click a base to select it · Shift-click or Shift-drag a box to extend the selection · double-click selects the base’s domain · drag a selected base to move the selection · drag the background to pan · Ctrl/⌘ + scroll or pinch to zoom · on a touch screen, tap the canvas first to drag in it. Keyboard: Tab to the bases, arrows move between them, Enter or Space selects, Shift + arrows extend the selection, Alt/Option + arrows move the selection (with Shift: 10 units); on the focused canvas, arrows pan. Offset x / y move the saved annotation selected under Annotations. Layout, styles and annotations are saved separately from the prediction; edited pairs do not recalculate its energy.</p>'+
       '<input type="file" accept=".json,application/json" data-edit="file" hidden></div>';
     const host=target.querySelector('[data-editor-canvas]'),input=name=>target.querySelector('[data-edit="'+name+'"]');
     const message=text=>{target.querySelector('[data-editor-message]').textContent=text;};
-    const number=(name,min,max,label)=>{const v=Number(input(name).value);if(!Number.isFinite(v)||v<min||v>max)throw new Error(label+' must be '+min+'–'+max+'.');return v;};
+    const number=(name,min,max,label)=>{const v=Number(input(name).value);if(!Number.isFinite(v)||v<min||v>max)throw new Error(label+' must be '+min+'–'+max+'. Enter a value in that range.');return v;};
     const draw=()=>{
-      host.innerHTML=svg(s.data,s.selection,s.view||bounds(s.data));
+      host.innerHTML=svg(s.data,s.selection,s.view||bounds(s.data),s.focus);
       target.querySelector('[data-edit-action="undo"]').disabled=!s.undo.length;target.querySelector('[data-edit-action="redo"]').disabled=!s.redo.length;
       const [a,b]=s.selection;target.querySelector('[data-editor-selection]').textContent=a===b?'Selected: base '+a+' ('+s.data.sequence[a-1]+')':'Selected: '+a+'–'+b+' ('+(b-a+1)+' nt)';
       const list=input('annotationList'),selected=list.value;
@@ -520,7 +533,7 @@
       input('fill').value=st.fill;input('text').value=st.text;input('outline').value=st.outline||'#3C5488';input('radius').value=st.radius;
       if(pair){input('pairColor').value=pair.color;input('pairWidth').value=pair.width;}
     };
-    const selected=()=>{const a=Number(input('from').value),b=Number(input('to').value);if(!Number.isInteger(a)||!Number.isInteger(b)||a<1||b<a||b>n)throw new Error('Select a valid nucleotide interval.');s.selection=[a,b];return s.selection;};
+    const selected=()=>{const a=Number(input('from').value),b=Number(input('to').value);if(!Number.isInteger(a)||!Number.isInteger(b)||a<1||b<a||b>n)throw new Error('Select a valid nucleotide interval: set From and To between 1 and '+n+', with From no larger than To.');s.selection=[a,b];return s.selection;};
     const status=()=>s.data.topologyEdited?'Manually edited pairs: prediction energy does not describe this drawing.':'Prediction and energy are unchanged.';
     // Every edit goes through one validated, undoable commit.
     const commit=(change,note)=>{
@@ -531,7 +544,7 @@
       }catch(error){message(error.message);}
     };
     const selectAnnotation=index=>{const a=s.data.annotations[index];if(!a)return;input('annotation').value=a.text;input('annotationKind').value=a.kind||'text';input('marker').value=a.marker||'arrow';input('annotationColor').value=a.color;
-      input('anchorType').value=a.free?'free':a.anchorType||'base';input('annotationSize').value=a.size||14;input('direction').value=a.direction||'in';input('intensity').value=a.intensity||1;input('opacity').value=a.opacity==null?.25:a.opacity;input('regionWidth').value=a.width||32;
+      input('anchorType').value=a.free?'free':a.anchorType||'base';input('annotationSize').value=a.size||14;input('direction').value=a.direction||'in';input('intensity').value=a.intensity||1;input('opacity').value=a.opacity==null?.25:a.opacity;input('regionWidth').value=a.width||32;input('annotationDx').value=Math.round(a.dx);input('annotationDy').value=Math.round(a.dy);
       s.selection=[a.base,a.end||a.base];sync();input('annotationList').value=String(index);};
     const select2=(range,note)=>{s.selection=range;sync();draw();message(note||'');};
     const move=(dx,dy)=>{for(let i=s.selection[0]-1;i<s.selection[1];i++){s.data.points[i].x+=dx;s.data.points[i].y+=dy;}};
@@ -547,9 +560,13 @@
       if(name==='annotationList'){if(event.target.value!==''){selectAnnotation(Number(event.target.value));draw();}return;}
       if(name==='from'||name==='to'){try{selected();sync();draw();}catch(error){message(error.message);}return;}
       if(name==='layout'||name==='spacing'||name==='flat'){relayout('Layout applied.');return;}
+      if(name==='annotationDx'||name==='annotationDy')return commit(next=>{
+        const index=Number(input('annotationList').value);if(input('annotationList').value===''||!next.annotations[index])throw new Error('Choose one under Saved annotations first, then set its offset.');
+        next.annotations[index].dx=number('annotationDx',-100000,100000,'Offset x');next.annotations[index].dy=number('annotationDy',-100000,100000,'Offset y');
+      },'Annotation moved.');
       if(SELECTION_STYLE[name])return commit(next=>{
         const [a,b]=selected(),key=SELECTION_STYLE[name],value=name==='radius'?number('radius',3,24,'Base radius'):name==='pairWidth'?number('pairWidth',.5,10,'Pair width'):event.target.value;
-        if(name==='pairColor'||name==='pairWidth'){const touched=next.pairs.filter(p=>(p.left>=a&&p.left<=b)||(p.right>=a&&p.right<=b));if(!touched.length)throw new Error('No pair touches the selection.');touched.forEach(p=>{p[key]=value;});return;}
+        if(name==='pairColor'||name==='pairWidth'){const touched=next.pairs.filter(p=>(p.left>=a&&p.left<=b)||(p.right>=a&&p.right<=b));if(!touched.length)throw new Error('No pair touches the selection. Select paired bases, or add a pair first.');touched.forEach(p=>{p[key]=value;});return;}
         if(name==='fill'&&next.evidence)next.evidence.overrides=true;
         for(let i=a;i<=b;i++)next.styles[i]={...DEFAULT_BASE,...(next.styles[i]||{}),[key]:value};
       },'Applied to '+s.selection[0]+'–'+s.selection[1]+'.');
@@ -605,19 +622,19 @@
           else if(b>a)note.bases=Array.from({length:b-a+1},(_,i)=>a+i);
           if(kind==='probe'){note.marker=input('marker').value;note.direction=input('direction').value;note.intensity=number('intensity',.25,4,'Probe intensity');}
           if(action==='annotation')next.annotations.push(note);
-          else {const index=Number(input('annotationList').value);if(input('annotationList').value===''||!next.annotations[index])throw new Error('Select a saved annotation first.');if(!note.free){note.dx=next.annotations[index].dx;note.dy=next.annotations[index].dy;}next.annotations[index]=note;}
+          else {const index=Number(input('annotationList').value);if(input('annotationList').value===''||!next.annotations[index])throw new Error('Choose one under Saved annotations first.');if(!note.free){note.dx=next.annotations[index].dx;note.dy=next.annotations[index].dy;}next.annotations[index]=note;}
         },action==='annotation'?'Annotation added.':'Annotation updated.');
-        if(action==='removeAnnotation')return commit(next=>{if(input('annotationList').value==='')throw new Error('Select a saved annotation first.');next.annotations.splice(Number(input('annotationList').value),1);},'Annotation removed.');
+        if(action==='removeAnnotation')return commit(next=>{if(input('annotationList').value==='')throw new Error('Choose one under Saved annotations first.');next.annotations.splice(Number(input('annotationList').value),1);},'Annotation removed.');
         if(action==='clearAnnotations')return commit(next=>{next.annotations=[];},'Annotations cleared.');
         if(action==='pair')return commit(next=>{
           if(a===b)throw new Error('Select two or more bases: the first and last are paired.');
           if(next.pairs.some(p=>[p.left,p.right].some(v=>v===a||v===b)))throw new Error('Base '+a+' or '+b+' is already paired. Remove its pair first.');
           next.pairs.push({left:a,right:b,color:input('pairColor').value,width:number('pairWidth',.5,10,'Pair width')});
         },'Pair '+a+'–'+b+' added.');
-        if(action==='unpair')return commit(next=>{const before=next.pairs.length;next.pairs=next.pairs.filter(p=>!((p.left>=a&&p.left<=b)||(p.right>=a&&p.right<=b)));if(next.pairs.length===before)throw new Error('No pair touches the selection.');},'Pairs removed.');
+        if(action==='unpair')return commit(next=>{const before=next.pairs.length;next.pairs=next.pairs.filter(p=>!((p.left>=a&&p.left<=b)||(p.right>=a&&p.right<=b)));if(next.pairs.length===before)throw new Error('No pair touches the selection. Select bases that are paired.');},'Pairs removed.');
       }catch(error){message(error.message);}
     });
-    input('file').addEventListener('change',async()=>{try{const file=input('file').files[0];if(!file)return;if(file.size>5000000)throw new Error('Drawing JSON exceeds 5 MB.');const data=validate(JSON.parse(await file.text()),result.sequence,result.dotBracket);data.topologyEdited=pairSignature(data.pairs)!==pairSignature(result.pairs||[]);checkpoint(s);s.data=data;s.view=null;sync();draw();message('Drawing loaded.');}catch(error){message(error.message);}finally{input('file').value='';}});
+    input('file').addEventListener('change',async()=>{try{const file=input('file').files[0];if(!file)return;if(file.size>5000000)throw new Error('Drawing JSON exceeds 5 MB.');let parsed;try{parsed=JSON.parse(await file.text());}catch(error){throw new Error('This file is not JSON.');}const data=validate(parsed,result.sequence,result.dotBracket);data.topologyEdited=pairSignature(data.pairs)!==pairSignature(result.pairs||[]);checkpoint(s);s.data=data;s.view=null;sync();draw();message('Drawing loaded.');}catch(error){message(error.message+' Choose a drawing JSON saved from this prediction with Export → Drawing JSON.');}finally{input('file').value='';}});
     // Undo/redo shortcuts, except while typing in a text field.
     target.addEventListener('keydown',event=>{
       if(!(event.metaKey||event.ctrlKey)||/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName))return;
@@ -628,9 +645,10 @@
     let drag=null,lastPress=null;
     host.addEventListener('pointerdown',event=>{
       if(event.button!==0)return;
+      activate();
       const base=event.target.closest('[data-editor-base]'),annotation=event.target.closest('[data-editor-annotation]'),box=s.view||bounds(s.data);s.view=box.slice();
       if(annotation)selectAnnotation(Number(annotation.dataset.editorAnnotation));
-      if(base){const i=Number(base.dataset.editorBase);if(event.shiftKey)s.selection=[Math.min(s.selection[0],i),Math.max(s.selection[1],i)];else if(i<s.selection[0]||i>s.selection[1])s.selection=[i,i];sync();}
+      if(base){const i=Number(base.dataset.editorBase);s.focus=i;if(event.shiftKey)s.selection=[Math.min(s.selection[0],i),Math.max(s.selection[1],i)];else if(i<s.selection[0]||i>s.selection[1])s.selection=[i,i];sync();}
       event.preventDefault();
       // Double-click (two presses on one base within 400 ms) selects its domain.
       if(base&&!event.shiftKey){const i=Number(base.dataset.editorBase),now=Date.now();if(lastPress&&lastPress.i===i&&now-lastPress.t<400){const found=domainOf(s.data,i);lastPress=null;if(found){select2(found,'Selected the domain '+found[0]+'–'+found[1]+'.');return;}}lastPress={i,t:now};}
@@ -662,11 +680,55 @@
     host.addEventListener('pointerup',end);host.addEventListener('pointercancel',end);
     // Plain scrolling keeps scrolling the page; Ctrl/⌘ + scroll and trackpad pinches zoom.
     host.addEventListener('wheel',event=>{if(!event.ctrlKey&&!event.metaKey)return;event.preventDefault();const box=s.view||bounds(s.data),p=point(event,box),factor=event.deltaY>0?1.1:1/1.1;if(box[2]*factor<50||box[2]*factor>1e7)return;s.view=[p.x+(box[0]-p.x)*factor,p.y+(box[1]-p.y)*factor,box[2]*factor,box[3]*factor];draw();},{passive:false});
-    host.addEventListener('keydown',event=>{const base=event.target.closest('[data-editor-base]');if(!base||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();const i=Number(base.dataset.editorBase);if(i<s.selection[0]||i>s.selection[1])s.selection=[i,i];checkpoint(s);const step=event.shiftKey?10:1;move(event.key==='ArrowLeft'?-step:event.key==='ArrowRight'?step:0,event.key==='ArrowUp'?-step:event.key==='ArrowDown'?step:0);sync();draw();host.querySelector('[data-editor-base="'+i+'"]').focus();});
+    // Keyboard. On a base (one Tab stop): arrows, Home and End move between
+    // bases; Enter or Space selects; Shift + arrows extend the selection;
+    // Alt/Option + arrows move the selection (Shift: 10 units). On the
+    // focused canvas: arrows pan, + and − zoom, 0 fits.
+    const ARROWS={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};
+    const focusBase=j=>{s.focus=j;draw();const el=host.querySelector('[data-editor-base="'+j+'"]');if(el)el.focus();};
+    host.addEventListener('keydown',event=>{
+      if(event.ctrlKey||event.metaKey)return;
+      const base=event.target.closest('[data-editor-base]');
+      if(!base){
+        if(event.target!==host)return;
+        const box=s.view||bounds(s.data);
+        if(ARROWS[event.key]){const [dx,dy]=ARROWS[event.key];s.view=[box[0]+dx*box[2]*.1,box[1]+dy*box[3]*.1,box[2],box[3]];draw();}
+        else if(event.key==='+'||event.key==='=')zoom(1/1.25);
+        else if(event.key==='-'||event.key==='_')zoom(1.25);
+        else if(event.key==='0'){s.view=null;draw();}
+        else return;
+        event.preventDefault();return;
+      }
+      const i=Number(base.dataset.editorBase);
+      if(event.key==='Enter'||event.key===' '){event.preventDefault();s.selection=[i,i];sync();focusBase(i);message('Selected base '+i+' ('+s.data.sequence[i-1]+').');return;}
+      if(event.altKey&&ARROWS[event.key]){
+        event.preventDefault();if(i<s.selection[0]||i>s.selection[1])s.selection=[i,i];checkpoint(s);
+        const step=event.shiftKey?10:1,[dx,dy]=ARROWS[event.key];move(dx*step,dy*step);sync();focusBase(i);message('Moved. '+status());return;
+      }
+      const delta={ArrowLeft:-1,ArrowUp:-1,ArrowRight:1,ArrowDown:1}[event.key];
+      const j=delta?Math.max(1,Math.min(n,i+delta)):event.key==='Home'?1:event.key==='End'?n:null;
+      if(j==null||event.altKey)return;
+      event.preventDefault();
+      if(event.shiftKey){
+        // the end of the selection away from the focused base stays put
+        const fixed=i<s.selection[0]||i>s.selection[1]?i:(i===s.selection[0]?s.selection[1]:s.selection[0]);
+        s.selection=[Math.min(fixed,j),Math.max(fixed,j)];sync();
+      }
+      focusBase(j);
+    });
+    // On a touch screen a swipe scrolls the page until the canvas is tapped
+    // (is-active: touch-action none, structure.css); a tap elsewhere ends it.
+    const activate=()=>host.classList.add('is-active');
+    host.addEventListener('focus',activate);
+    document.addEventListener('pointerdown',function outside(event){
+      if(!host.isConnected){document.removeEventListener('pointerdown',outside,true);return;}
+      if(!host.contains(event.target))host.classList.remove('is-active');
+    },true);
     // Say why a structure with HYB evidence stays uncoloured.
     const support=comradesSupport(result),evidencePairs=result.comradesEvidence?result.comradesEvidence.pairs.length:0;
     const source=Array.isArray(result.comradesPairCounts)?'the '+root.Hyb2Comrades.pairCountSource(result)+' evidence':(evidencePairs?'any of the '+evidencePairs+' RNAcofold evidence pairs':'the RNAcofold evidence');
-    sync();draw();message(support&&!support.some(v=>v>0)?'COMRADES support: none of the '+(result.pairs||[]).length+' pairs in this structure matches '+source+'. Every base has a raw count of 0 (white on the evidence scale).':status());
+    const restored=s.restored;delete s.restored;
+    sync();draw();message(restored?'Your earlier edits to this prediction are restored. '+status():support&&!support.some(v=>v>0)?'COMRADES support: none of the '+(result.pairs||[]).length+' pairs in this structure matches '+source+'. Every base has a raw count of 0 (white on the evidence scale).':status());
   }
   root.Hyb2StructureEditor={supportColor,mapColor,evidenceFor,applyEvidence,parseValues,colorMap,clearColors,autoAnnotations,anchor,layout,pairsFrom,dotBracket,domainOf,parentOf,helixOf,loopOf,initial,validate,svg,eps,ct,bpseq,editedDbn,varnaCommand,undo,redo,sessionKey,session,mount};
 })(typeof window!=='undefined'?window:self);

@@ -278,6 +278,31 @@
     });
   }
 
+  function menuItems(menu) {
+    return Array.from(menu.querySelectorAll('[role="menuitem"]')).filter(function (item) {
+      return !item.disabled && item.getAttribute("aria-disabled") !== "true";
+    });
+  }
+
+  // After an item is chosen the page usually re-renders, which replaces the
+  // menu: focus goes back to the summary of the menu at the same place.
+  function refocusMenuSummary(menu) {
+    const all = Array.from(document.querySelectorAll("details.export-menu"));
+    const index = all.indexOf(menu);
+    setTimeout(function () {
+      const active = document.activeElement;
+      // something else took focus on purpose (a dialog, a field): leave it
+      if (active && active !== document.body && !(menu.isConnected && menu.contains(active))) {
+        return;
+      }
+      const target = menu.isConnected ? menu : document.querySelectorAll("details.export-menu")[index];
+      const summary = target && target.querySelector("summary");
+      if (summary && summary.focus) {
+        summary.focus();
+      }
+    }, 0);
+  }
+
   if (typeof document !== "undefined" && document.addEventListener) {
     document.addEventListener("click", function (event) {
       const target = event.target && event.target.closest ? event.target : null;
@@ -290,6 +315,7 @@
       // a chosen item closes its menu after the page's own handler has run
       if (target.closest(".export-menu-item")) {
         setTimeout(function () { menu.removeAttribute("open"); }, 0);
+        refocusMenuSummary(menu);
       }
     }, true);
     // an opened list that would leave the viewport on the left opens to the
@@ -304,6 +330,37 @@
       if (list && list.getBoundingClientRect().left < 8) {
         menu.classList.add("export-menu--start");
       }
+      // a menu: arrow keys move between the items (roving focus), Tab leaves
+      const items = menuItems(menu);
+      items.forEach(function (item) { item.setAttribute("tabindex", "-1"); });
+      if (items[0]) {
+        items[0].focus();
+      }
+    }, true);
+    document.addEventListener("keydown", function (event) {
+      const keys = ["ArrowDown", "ArrowUp", "Home", "End", "Tab"];
+      if (keys.indexOf(event.key) === -1 || !event.target || !event.target.closest) {
+        return;
+      }
+      const menu = event.target.closest("details.export-menu[open]");
+      if (!menu) {
+        return;
+      }
+      if (event.key === "Tab") {
+        menu.removeAttribute("open");
+        return;
+      }
+      const items = menuItems(menu);
+      if (!items.length) {
+        return;
+      }
+      event.preventDefault();
+      const current = items.indexOf(event.target);
+      let next = 0;
+      if (event.key === "End") next = items.length - 1;
+      else if (event.key === "ArrowDown") next = current < 0 ? 0 : (current + 1) % items.length;
+      else if (event.key === "ArrowUp") next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length;
+      items[next].focus();
     }, true);
     document.addEventListener("keydown", function (event) {
       if (event.key !== "Escape") {
@@ -336,10 +393,10 @@
       DESKTOP_FOLD_MODEL.baseBytes) / DESKTOP_FOLD_MODEL.bytesPerNt2Free) / 100) * 100
   };
   // "about 6,400 nt with 8 GB of memory"
-  DESKTOP_LIMITS.cplfoldText = "about " + formatTick(DESKTOP_LIMITS.cplfoldExampleNt) + " nt with " + DESKTOP_LIMITS.cplfoldExampleGb + " GB of memory";
+  DESKTOP_LIMITS.cplfoldText = "about " + formatTick(DESKTOP_LIMITS.cplfoldExampleNt) + "\u00a0nt with " + DESKTOP_LIMITS.cplfoldExampleGb + "\u00a0GB of memory";
   const DESKTOP_CTA = {
     "raw-reads": "Starting from raw reads (FASTQ, FASTA or SAM)? HYB2 Desktop maps them and writes the .hyb file.",
-    "long-fold": "Longer than " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt? HYB2 Desktop runs CPLfold natively with no capacity test; " +
+    "long-fold": "Longer than " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + "\u00a0nt? HYB2 Desktop runs CPLfold natively with no capacity test; " +
       "its limit grows with memory: " + DESKTOP_LIMITS.cplfoldText + ".",
     overview: "The full pipeline on your computer, from raw reads to structures."
   };
@@ -365,7 +422,7 @@
     capabilities: [
       { title: "Raw reads → .hyb", text: "FASTQ, FASTA or SAM, mapped with Bowtie2, hybrids called and checked" },
       { title: "Same analysis pages", text: "The same analysis pages as Web, saved as projects on disk" },
-      { title: "Native CPLfold", text: "Set by memory, " + DESKTOP_LIMITS.cplfoldText + " (browser: " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + " nt), no capacity test" },
+      { title: "Native CPLfold", text: "Set by memory, " + DESKTOP_LIMITS.cplfoldText + " (browser: " + formatTick(DESKTOP_LIMITS.webCplfoldNt) + "\u00a0nt), no capacity test" },
       { title: "Comparisons", text: "DESeq2 comparisons and QC" },
       { title: "Offline", text: "Works offline; data stays on your computer" }
     ],

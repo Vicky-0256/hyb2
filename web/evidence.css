@@ -2,7 +2,7 @@
    report section. Colours and motion come from the shared tokens. */
 
 .evidence-panel {
-  margin-top: 20px;
+  margin-top: var(--space-5);
 }
 
 .evidence-kicker {
@@ -12,9 +12,9 @@
 
 .evidence-lede {
   max-width: 72ch;
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-2);
   color: var(--muted-strong);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.55;
 }
 
@@ -22,9 +22,9 @@
 .evidence-sends,
 .evidence-note {
   max-width: 78ch;
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -34,18 +34,18 @@
 
 .evidence-sends code,
 .evidence-query-line code {
-  padding: 1px 5px;
+  padding: 1px var(--space-1);
   border-radius: var(--radius-sm);
   background: var(--surface-subtle);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .evidence-query {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr);
-  gap: 12px;
+  gap: var(--space-3);
   max-width: 760px;
 }
 
@@ -57,19 +57,19 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin: 10px 0 8px;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-2);
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 
 .evidence-chip {
   min-height: 30px;
-  padding: 0 10px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--line);
   border-radius: 999px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   transition: border-color var(--dur-feedback) var(--ease-out), background var(--dur-feedback) var(--ease-out);
 }
 
@@ -83,10 +83,10 @@
 .evidence-include {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  margin: 6px 0 10px;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-2);
   color: var(--ink);
-  font-size: 13.5px;
+  font-size: var(--text-base);
   cursor: pointer;
 }
 
@@ -100,26 +100,26 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }
 
 .evidence-running {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .evidence-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
-  gap: 14px;
+  gap: var(--space-4);
   align-items: start;
 }
 
 .evidence-card {
   position: relative;
   min-width: 0;
-  padding: 14px 16px 12px;
+  padding: var(--space-4) var(--space-4) var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -129,24 +129,24 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 4px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 
 .evidence-provider {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 700;
 }
 
 .evidence-status {
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   border-radius: 999px;
   background: var(--surface-subtle);
   color: var(--muted-strong);
-  font-size: 11.5px;
-  font-weight: 650;
+  font-size: var(--text-sm);
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -165,22 +165,22 @@
 
 .evidence-query-line,
 .evidence-status-line {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   color: var(--muted-strong);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
 
 .evidence-entries {
   display: grid;
-  gap: 8px;
-  margin: 0 0 10px;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
   padding: 0;
   list-style: none;
 }
 
 .evidence-entries li {
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -194,7 +194,7 @@
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .evidence-litsumm {
@@ -202,11 +202,11 @@
 }
 
 .evidence-label {
-  margin: 0 0 10px;
-  padding-top: 8px;
+  margin: 0 0 var(--space-2);
+  padding-top: var(--space-2);
   border-top: 1px dashed var(--line);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -217,7 +217,7 @@
 .evidence-review {
   display: grid;
   grid-template-columns: minmax(130px, 0.8fr) minmax(0, 2fr);
-  gap: 10px;
+  gap: var(--space-2);
   align-items: end;
 }
 
@@ -231,30 +231,34 @@
   right: 10px;
   bottom: 8px;
   min-height: 28px;
-  padding: 0 8px;
-  font-size: 12px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
 }
 
 .evidence-earlier {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .evidence-earlier summary {
   color: var(--muted-strong);
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--text-base);
+  font-weight: 600;
   cursor: pointer;
 }
 
+.evidence-earlier summary:hover {
+  color: var(--primary-ink);
+}
+
 .evidence-earlier .evidence-card {
-  margin-top: 10px;
+  margin-top: var(--space-2);
   opacity: .82;
 }
 
 .report-evidence-card ul {
-  margin: 6px 0 8px;
-  padding-left: 18px;
-  font-size: 12.5px;
+  margin: var(--space-2) 0 var(--space-2);
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
 }
 
 @media (max-width: 767px) {
@@ -265,6 +269,6 @@
 
   .evidence-remove {
     position: static;
-    margin-top: 8px;
+    margin-top: var(--space-2);
   }
 }

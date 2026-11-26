@@ -137,29 +137,28 @@
     return [
       '        <article class="metric-card">',
       '          <span class="metric-label">' + escape(label) + "</span>",
-      '          <strong class="metric-value">' + escape(value) + "</strong>",
+      '          <strong class="metric-value num">' + escape(value) + "</strong>",
       '          <span class="metric-description">' + escape(description) + "</span>",
       "        </article>"
     ].join("");
   }
 
-  function renderTopRnas(items) {
-    const maximum = items.length ? items[0].support : 1;
+  function renderTopRnas(rnaCounts) {
+    const items = rnaCounts || [];
+    const maximum = items.length ? items[0].support || 1 : 1;
     return [
       '        <section class="data-card overview-top-rnas">',
       '          <div class="card-title-row"><h2>Top interacting RNAs</h2><span class="card-kicker">Cluster support, per arm</span></div>',
       '          <p class="card-note">Each record counts once per arm on the RNA, so a record with both arms on one RNA counts twice.</p>',
-      '          <div class="bar-list">',
-      items.slice(0, 5).map(function (item) {
+      items.length ? '          <div class="bar-list">' + items.slice(0, 5).map(function (item) {
         return [
           '            <div class="bar-row">',
           '              <span class="bar-name" title="' + attribute(item.name) + '">' + escape(item.name) + "</span>",
           '              <span class="bar-track"><span class="bar-fill" style="width:' + Math.max(3, (item.support / maximum) * 100) + '%"></span></span>',
-          '              <span class="bar-value">' + format(item.support) + "</span>",
+          '              <span class="bar-value num">' + format(item.support) + "</span>",
           "            </div>"
         ].join("");
-      }).join(""),
-      "          </div>",
+      }).join("") + "          </div>" : '          <p class="empty-inline">No RNA has interaction support in this file.</p>',
       "        </section>"
     ].join("");
   }
@@ -170,11 +169,11 @@
     return [
       '        <section class="data-card overview-types">',
       '          <div class="card-title-row"><h2>Chimera patterns</h2><span class="card-kicker">HYB arm relationships</span></div>',
-      '          <div class="type-split">',
-      types.slice(0, 4).map(function (item) { return renderType(item.name, item.records / total, item.records); }).join(""),
-      "          </div>",
+      types.length
+        ? '          <div class="type-split">' + types.slice(0, 4).map(function (item) { return renderType(item.name, item.records / total, item.records); }).join("") + "          </div>"
+        : '          <p class="empty-inline">No chimera patterns were found in the valid records.</p>',
       window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.guide() : "",
-      '          <button class="quiet-button overview-types-link" type="button" data-action="navigate" data-page="interactions">View interactions</button>',
+      '          <a class="quiet-button overview-types-link" href="#/workspace/interactions" data-action="navigate" data-page="interactions">View interactions</a>',
       "        </section>"
     ].join("");
   }
@@ -188,19 +187,28 @@
         ? '<span class="chimera-code">' + escape(window.Hyb2ChimeraTypes.code(label)) + "</span>" : "") +
         escape(window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(label) : label) + "</strong>",
       window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.diagram(label) : "",
-      '              <span class="type-value">' + format(count) + " records · " + shareFormatter.format(fraction) + "</span>",
+      '              <span class="type-value num">' + format(count) + " records · " + shareFormatter.format(fraction) + "</span>",
       '              <div class="type-meter"><span style="width:' + (fraction * 100) + '%"></span></div>',
       "            </div>"
     ].join("");
   }
 
-  function renderTopPairs(items) {
+  function renderTopPairs(pairCounts) {
+    const items = pairCounts || [];
+    if (!items.length) {
+      return [
+        '      <section class="data-card overview-top-pairs">',
+        '        <div class="card-title-row"><h2>Top RNA pairs</h2><span class="card-kicker">Normalised pairs</span></div>',
+        '        <p class="empty-inline">No RNA pairs were found in the valid records.</p>',
+        "      </section>"
+      ].join("");
+    }
     return [
       '      <section class="data-card overview-top-pairs">',
       '        <div class="card-title-row"><h2>Top RNA pairs</h2><span class="card-kicker">Normalised pairs</span></div>',
       '        <div class="data-table-wrap">',
       '          <table class="data-table overview-pairs-table">',
-      '            <thead class="nowrap"><tr><th>RNA 1</th><th>RNA 2</th><th class="num">HYB records</th><th class="num">Source reads</th><th class="num">Cluster support</th></tr></thead>',
+      '            <thead class="nowrap"><tr><th scope="col">RNA 1</th><th scope="col">RNA 2</th><th scope="col" class="num">HYB records</th><th scope="col" class="num">Source reads</th><th scope="col" class="num">Cluster support</th></tr></thead>',
       "            <tbody>",
       items.slice(0, 6).map(function (item) {
         return '<tr><td class="cell-truncate" title="' + attribute(item.rnaOne) + '">' + escape(item.rnaOne) + '</td><td class="cell-truncate" title="' + attribute(item.rnaTwo) + '">' + escape(item.rnaTwo) + '</td><td class="num">' + format(item.records) + '</td><td class="num">' + (item.rawReadCountRecords ? format(item.rawReads) : "—") + '</td><td class="num">' + format(item.support) + "</td></tr>";
@@ -213,7 +221,7 @@
   }
 
   function renderQualityStat(value, label, modifier) {
-    return '<div class="quality-stat' + (modifier ? " " + modifier : "") + '"><strong>' + escape(value) + "</strong><span>" + escape(label) + "</span></div>";
+    return '<div class="quality-stat' + (modifier ? " " + modifier : "") + '"><strong class="num">' + escape(value) + "</strong><span>" + escape(label) + "</span></div>";
   }
 
   function renderValidation(state) {
@@ -254,7 +262,7 @@
       renderValidationPerDataset(state),
       notices.join(""),
       '        <div class="validation-actions">',
-      '          <button class="button" type="button" data-action="navigate" data-page="overview">Continue with ' + format(summary.validRecords) + " valid records</button>",
+      '          <a class="button" href="#/workspace/overview" data-action="navigate" data-page="overview">Continue with ' + format(summary.validRecords) + " valid records</a>",
       summary.invalidRecords ? '<button class="button button-secondary" type="button" data-action="download-validation">' + (summary.errorSampleTruncated ? "Download error sample" : "Download validation report") + '</button>' : "",
       "        </div>",
       "      </section>"
@@ -281,7 +289,7 @@
   }
 
   function renderValidationItem(value, label) {
-    return '<div class="validation-item"><strong>' + format(value) + "</strong><span>" + escape(label) + "</span></div>";
+    return '<div class="validation-item"><strong class="num">' + format(value) + "</strong><span>" + escape(label) + "</span></div>";
   }
 
   function renderMethods() {
@@ -333,7 +341,7 @@
       rawReads ? '      <section class="data-card format-raw-reads"><div class="card-title-row"><h2>From raw reads to .hyb</h2></div><p class="notice">' + rawReads + "</p></section>" : "",
       '      <section class="data-card">',
       '        <div class="card-title-row"><h2>Expected tab-delimited fields</h2><span class="card-kicker">1-indexed</span></div>',
-      '        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Column</th><th>Field</th></tr></thead><tbody>',
+      '        <div class="data-table-wrap"><table class="data-table"><thead><tr><th scope="col">Column</th><th scope="col">Field</th></tr></thead><tbody>',
       rows.map(function (row) { return "<tr><td>" + row[0] + "</td><td>" + row[1] + "</td></tr>"; }).join(""),
       "        </tbody></table></div>",
       "      </section>"

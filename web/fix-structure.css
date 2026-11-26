@@ -7,7 +7,7 @@
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .structure-page-heading > div:first-child {
@@ -22,7 +22,7 @@
 /* Group headings inside the Export menu (Structure / CPLfold / Report). */
 .structure-export-menu .export-menu-heading {
   display: block;
-  padding: 8px 12px 2px;
+  padding: var(--space-2) var(--space-3) 2px;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-caps, 11px);
@@ -32,7 +32,7 @@
 }
 
 .structure-export-menu .export-menu-heading:first-child {
-  padding-top: 4px;
+  padding-top: var(--space-1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -40,32 +40,32 @@
 /* ------------------------------------------------------------------ */
 
 .structure-capacity-strip {
-  margin: 0 0 16px;
-  padding: 10px 16px;
+  margin: 0 0 var(--space-4);
+  padding: 10px var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .structure-capacity-strip .capacity-line {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 12px;
+  gap: 6px var(--space-3);
   margin: 0;
 }
 
 .structure-capacity-strip .capacity-line strong {
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .structure-capacity-strip .capacity-hint {
   flex: 1 1 260px;
   min-width: 0;
   color: var(--muted-strong);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .structure-capacity-strip .capacity-progress {
@@ -76,7 +76,7 @@
 .structure-capacity-strip.is-expanded {
   display: grid;
   gap: 2px;
-  padding: 8px;
+  padding: var(--space-2);
 }
 
 .structure-capacity-strip .capacity-row .button {
@@ -86,15 +86,15 @@
 .structure-capacity-strip .capacity-title {
   margin: 0 0 6px;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .structure-capacity-strip .capacity-row {
   display: grid;
   grid-template-columns: 110px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 4px 14px;
-  padding: 3px 8px;
+  gap: var(--space-1) 14px;
+  padding: 3px var(--space-2);
   border-radius: var(--radius-md);
 }
 
@@ -125,7 +125,7 @@
 
 .structure-capacity-strip .capacity-value small {
   color: var(--muted-strong);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .structure-capacity-strip .capacity-row-cplfold.is-stale strong,
@@ -139,7 +139,7 @@
 
 @media (max-width: 719px) {
   .structure-capacity-strip {
-    padding: 10px 12px;
+    padding: 10px var(--space-3);
   }
 
   .structure-capacity-strip .capacity-line .button,
@@ -149,7 +149,7 @@
 
   .structure-capacity-strip .capacity-row {
     grid-template-columns: auto minmax(0, 1fr);
-    gap: 4px 10px;
+    gap: var(--space-1) 10px;
   }
 
   .structure-capacity-strip .capacity-row .button {
@@ -168,7 +168,7 @@
 .structure-setup-panel {
   --pad-x: 20px;
   --pad-b: 20px;
-  margin: 0 0 16px;
+  margin: 0 0 var(--space-4);
   padding: 0;
 }
 
@@ -176,9 +176,9 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 12px;
+  gap: var(--space-1) var(--space-3);
   min-height: 52px;
-  padding: 12px var(--pad-x);
+  padding: var(--space-3) var(--pad-x);
   cursor: pointer;
   list-style: none;
 }
@@ -205,7 +205,7 @@
 
 .structure-setup-title {
   color: var(--ink);
-  font-size: 15px;
+  font-size: var(--text-md);
   font-weight: 700;
 }
 
@@ -215,7 +215,7 @@
   overflow: hidden;
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -227,8 +227,8 @@
 
 .structure-setup-edit {
   color: var(--primary-ink);
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--text-base);
+  font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -245,19 +245,40 @@
 
 .structure-reset-note {
   margin: 0;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   background: var(--warning-soft);
   color: var(--warning);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
+/* Two columns: Sequence with Options beneath it, Method beside both. Three
+   equal columns ended ~450 / 690 / 290px tall, with holes under the outer
+   two, and cut the Advanced-settings selects to "ViennaRNA · in …". */
 .structure-setup-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto 1fr;
+  gap: 0 var(--space-6);
   align-items: start;
+}
+
+.structure-setup-col:nth-child(1) {
+  grid-area: 1 / 1;
+}
+
+.structure-setup-col:nth-child(2) {
+  grid-area: 1 / 2 / 3 / 3;
+}
+
+.structure-setup-col:nth-child(3) {
+  grid-area: 2 / 1;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  padding-left: 0;
+  border-top: 1px solid var(--line);
+  border-left: 0;
 }
 
 .structure-setup-col {
@@ -268,12 +289,12 @@
      the block scrolls sideways inside the column */
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
-.structure-setup-col + .structure-setup-col {
-  padding-left: 24px;
+.structure-setup-col:nth-child(2) {
+  padding-left: var(--space-6);
   border-left: 1px solid var(--line);
 }
 
@@ -282,7 +303,19 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 6px 10px;
+  gap: var(--space-1) var(--space-3);
+}
+
+/* every column heading as tall as the one holding the METHOD badge, so the
+   first controls of the columns start on one line */
+.structure-col-heading,
+.structure-setup-col > .structure-col-title {
+  min-height: calc(var(--space-6) + var(--space-1));
+}
+
+.structure-setup-col > .structure-col-title {
+  display: flex;
+  align-items: center;
 }
 
 .structure-col-title {
@@ -300,28 +333,19 @@
   white-space: normal;
 }
 
-@media (max-width: 1199px) {
-  .structure-setup-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px 24px;
-  }
-
-  .structure-setup-col:nth-child(3) {
-    grid-column: 1 / -1;
-    padding-top: 16px;
-    padding-left: 0;
-    border-top: 1px solid var(--line);
-    border-left: 0;
-  }
-}
-
 @media (max-width: 899px) {
   .structure-setup-grid {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+
+  .structure-setup-col:nth-child(n) {
+    grid-area: auto;
   }
 
   .structure-setup-col + .structure-setup-col {
-    padding-top: 16px;
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
     padding-left: 0;
     border-top: 1px solid var(--line);
     border-left: 0;
@@ -347,9 +371,19 @@
 .structure-about > summary,
 .structure-computed > summary {
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--text-base);
+  font-weight: 600;
   cursor: pointer;
+}
+
+@media (hover: hover) {
+  .structure-preview > summary:hover,
+  .structure-about > summary:hover,
+  .structure-computed > summary:hover {
+    color: var(--primary-ink);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
 }
 
 .structure-preview > summary:focus-visible,
@@ -372,20 +406,20 @@
 
 .structure-preview .structure-sequence {
   max-height: 260px;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
 }
 
 .structure-preview .sequence-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
   margin-top: 10px;
 }
 
 .structure-about {
   display: grid;
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .structure-about[open] {
@@ -393,7 +427,7 @@
 }
 
 .structure-about .structure-about-scope p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   color: var(--muted-strong);
   line-height: 1.55;
 }
@@ -425,7 +459,7 @@
 }
 
 .guided-fold-controls .cplfold-topology-control {
-  padding-top: 12px;
+  padding-top: var(--space-3);
   border-top: 1px solid var(--line);
 }
 
@@ -442,27 +476,27 @@
 .cplfold-topology-options {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: stretch;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .cplfold-topology-option {
   height: 100%;
   min-height: 0;
-  padding: 10px 12px;
-  gap: 8px;
+  padding: 10px var(--space-3);
+  gap: var(--space-2);
 }
 
 .cplfold-topology-option span {
-  gap: 4px;
+  gap: var(--space-1);
   align-content: start;
 }
 
 .cplfold-topology-option strong {
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .cplfold-topology-option small {
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 
@@ -493,11 +527,11 @@
 .structure-length-bar {
   display: grid;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface-subtle);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .structure-length-figures {
@@ -509,7 +543,7 @@
 
 .structure-length-figures strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-base);
   font-variant-numeric: tabular-nums;
 }
 
@@ -567,7 +601,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
+  gap: var(--space-2) 14px;
   margin: 0 calc(var(--pad-x) * -1) calc(var(--pad-b) * -1);
   padding: 14px var(--pad-x);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
@@ -595,7 +629,7 @@
   flex: 1 1 260px;
   margin: 0;
   color: var(--muted-strong);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -621,7 +655,7 @@
   }
 
   .structure-setup-panel .structure-run-bar {
-    gap: 6px 8px;
+    gap: 6px var(--space-2);
     padding-top: 10px;
     padding-bottom: 10px;
   }
@@ -663,7 +697,7 @@
 }
 
 .structure-error {
-  margin: 0 0 16px;
+  margin: 0 0 var(--space-4);
 }
 
 /* ------------------------------------------------------------------ */
@@ -672,8 +706,8 @@
 
 .structure-result-panel {
   display: grid;
-  gap: 16px;
-  margin: 0 0 16px;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-4);
   scroll-margin-top: calc(var(--header-h, 60px) + 12px);
 }
 
@@ -698,7 +732,7 @@
 .structure-result-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
-  gap: 16px;
+  gap: var(--space-4);
   align-items: start;
 }
 
@@ -742,7 +776,7 @@
 .structure-diagram[data-view-mode="folded"] {
   height: min(70vh, 720px);
   min-height: 360px;
-  padding: 4px 8px 8px;
+  padding: var(--space-1) var(--space-2) var(--space-2);
 }
 
 .structure-diagram[data-view-mode="folded"] .forna-structure-mount,
@@ -771,7 +805,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: flex-start;
-  gap: 4px 12px;
+  gap: var(--space-1) var(--space-3);
 }
 
 .structure-result-title h2 {
@@ -781,8 +815,8 @@
 .structure-diagram-heading {
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
-  padding: 14px 16px 10px;
+  gap: var(--space-2) 14px;
+  padding: 14px var(--space-4) 10px;
 }
 
 .structure-diagram-title {
@@ -802,7 +836,7 @@
 .structure-diagram-copy .method-badge {
   max-width: 100%;
   min-height: 0;
-  margin-right: 4px;
+  margin-right: var(--space-1);
   padding: 1px 6px;
   justify-content: flex-start;
   border-radius: 10px;
@@ -821,7 +855,7 @@
   flex: 1 1 100%;
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -836,8 +870,8 @@
   .structure-result-panel {
     margin-right: -4px;
     margin-left: -4px;
-    padding-right: 8px;
-    padding-left: 8px;
+    padding-right: var(--space-2);
+    padding-left: var(--space-2);
   }
 
   .structure-result-main .structure-diagram-panel {
@@ -861,7 +895,7 @@
   /* the hint under the canvas, now in view, lines up with the heading text
      (this box has no side padding on a phone) */
   .structure-diagram[data-view-mode="folded"] > .forna-view-hint {
-    margin: 8px 12px 10px;
+    margin: var(--space-2) var(--space-3) 10px;
   }
 
   /* Arc view: squeezed into a phone's width the 920 px drawing came out at
@@ -881,11 +915,11 @@
 
   .structure-diagram-panel .structure-scroll-hint {
     display: block;
-    margin: 6px 12px 0;
+    margin: 6px var(--space-3) 0;
   }
 
   .structure-diagram-heading {
-    padding: 12px 12px 0;
+    padding: var(--space-3) var(--space-3) 0;
   }
 
   .structure-diagram-heading .structure-view-toolbar {
@@ -897,7 +931,7 @@
    (analysis-pages.js syncDefaultStructureEvidence): why, and the way back. */
 .structure-evidence-fallback {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   justify-items: start;
   line-height: 1.5;
 }
@@ -910,7 +944,7 @@
 /* E9: five-column candidate table that fits the side column. */
 .cplfold-candidates {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .cplfold-candidates .candidate-table-intro {
@@ -933,8 +967,8 @@
 
 .cplfold-candidate-table th,
 .cplfold-candidate-table td {
-  padding-right: 8px;
-  padding-left: 8px;
+  padding-right: var(--space-2);
+  padding-left: var(--space-2);
   white-space: nowrap;
 }
 
@@ -1008,7 +1042,7 @@
 
 .cplfold-candidate-row.is-selected td {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .cplfold-candidate-row.is-selected td:first-child {
@@ -1027,7 +1061,7 @@
 }
 
 .structure-computed[open] > summary {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 .structure-computed .comrades-stage-grid {
@@ -1035,7 +1069,7 @@
 }
 
 .structure-computed > .card-note {
-  margin: 12px 0 0;
+  margin: var(--space-3) 0 0;
 }
 
 /* E12: label above the bonus matrix, matrix ≥ 220 px, legend under it. */
@@ -1043,11 +1077,11 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   justify-items: start;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .cplfold-bonus-visual .cplfold-bonus-label p {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
 }
 
 .cplfold-bonus-visual svg {
@@ -1059,7 +1093,7 @@
 /* E10: sequence with its dot-bracket underneath, 10 nt groups. */
 .structure-alignment {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -1068,7 +1102,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .sequence-blocks {
@@ -1078,7 +1112,7 @@
   overflow-wrap: normal;
   white-space: pre;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.7;
   font-variant-numeric: tabular-nums;
 }
@@ -1104,7 +1138,7 @@
 .structure-alignment .sequence-aligned,
 .sequence-aligned {
   max-height: none;
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface-subtle);
@@ -1138,7 +1172,7 @@
 
   .structure-diagram:is([data-view-mode="radial"], [data-view-mode="circular"]) > svg .structure-ring-label,
   .structure-diagram:is([data-view-mode="radial"], [data-view-mode="circular"]) > svg .structure-legend-label {
-    font-size: 20px;
+    font-size: var(--text-lg);
   }
 }
 

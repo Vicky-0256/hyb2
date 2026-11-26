@@ -51,6 +51,7 @@
   let sceneStartedAt = 0;
   let sceneSettled = false;
   let lastGliderTop = null;
+  let lastGliderPage = null;
   let gliderFrom = null;
   // Pages often render twice: once immediately, then again a few ms later
   // when async provider data arrives. A same-scene render inside this window
@@ -234,8 +235,9 @@
     if (motionReduced()) {
       return;
     }
-    const nodes = app.querySelectorAll(".metric-value, .quality-stat strong");
-    Array.prototype.forEach.call(nodes, function (node, index) {
+    const nodes = Array.prototype.slice.call(app.querySelectorAll(".metric-value, .quality-stat strong"));
+    const counters = [];
+    nodes.forEach(function (node) {
       const text = node.textContent;
       const match = /^(\D*)([\d,]+(?:\.\d+)?)(.*)$/.exec(text.trim());
       if (!match) {
@@ -245,21 +247,23 @@
       if (!isFinite(target) || target === 0) {
         return;
       }
+      counters.push({ node: node, text: text, match: match, target: target });
+    });
+    // All layout reads first, then all writes: one layout, not one per number.
+    const widths = counters.map(function (item) { return item.node.getBoundingClientRect().width; });
+    counters.forEach(function (item, index) {
+      const node = item.node, text = item.text, match = item.match, target = item.target;
       const decimals = (match[2].split(".")[1] || "").length;
       const grouped = match[2].indexOf(",") !== -1 || target >= 1000;
+      // en-US, as the numbers the app renders
+      const formatter = new Intl.NumberFormat("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals, useGrouping: grouped });
       const format = function (value) {
-        const fixed = value.toFixed(decimals);
-        if (!grouped) {
-          return fixed;
-        }
-        const parts = fixed.split(".");
-        parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-        return parts.join(".");
+        return formatter.format(value);
       };
       const duration = 1100 + Math.min(index, 4) * 90;
       const delay = 160 + index * 70;
       // Keep the final width from the start so the layout never jitters.
-      node.style.minWidth = node.getBoundingClientRect().width + "px";
+      node.style.minWidth = widths[index] + "px";
       node.style.display = node.style.display || "inline-block";
       node.textContent = match[1] + format(0) + match[3];
       const start = performance.now() + delay;
@@ -284,23 +288,36 @@
   // Sidebar glider
   // ------------------------------------------------------------------
 
+  if (typeof window !== "undefined" && window.addEventListener) {
+    window.addEventListener("resize", function () { lastGliderPage = null; });
+  }
+
   function placeGlider(fromTop, elapsed) {
     const sidebar = app.querySelector(".sidebar");
     const active = sidebar && sidebar.querySelector(".nav-button.is-active");
     if (!sidebar || !active) {
       lastGliderTop = null;
+      lastGliderPage = null;
+      return;
+    }
+    const page = active.getAttribute("data-page");
+    if (page === lastGliderPage && sidebar.querySelector(":scope > .nav-glider")) {
       return;
     }
     const glider = document.createElement("span");
     glider.className = "nav-glider";
     glider.setAttribute("aria-hidden", "true");
+    // Measure every time: the sidebar above the active button (the data
+    // card) can change height between renders of the same page.
     const sidebarRect = sidebar.getBoundingClientRect();
     const rect = active.getBoundingClientRect();
     const top = rect.top - sidebarRect.top + sidebar.scrollTop;
+    const height = rect.height;
     glider.style.top = top + "px";
-    glider.style.height = rect.height + "px";
+    glider.style.height = height + "px";
     sidebar.insertBefore(glider, sidebar.firstChild);
     sidebar.classList.add("has-glider");
+    lastGliderPage = page;
     if (fromTop !== null && fromTop !== top && !motionReduced() && glider.animate) {
       const distance = fromTop - top;
       const gliderMs = parseFloat(cssVar("--dur-move", "400")) || 400;
@@ -325,7 +342,15 @@
     const glyphs = "ACGU";
     const started = performance.now() + 140;
     const duration = 900;
-    node.setAttribute("aria-label", finalText);
+    // Screen readers get the final text once; the noise is hidden from them.
+    const spoken = document.createElement("span");
+    spoken.className = "visually-hidden";
+    spoken.textContent = finalText;
+    const shown = document.createElement("span");
+    shown.setAttribute("aria-hidden", "true");
+    node.textContent = "";
+    node.appendChild(spoken);
+    node.appendChild(shown);
     function frame(now) {
       if (!node.isConnected) {
         return;
@@ -343,7 +368,7 @@
           out += " ";
         }
       }
-      node.textContent = out;
+      shown.textContent = out;
       if (t < 1.2) {
         requestAnimationFrame(frame);
       } else {
@@ -568,6 +593,11 @@
     stemOrder.forEach(function (stem, rank) {
       stemStart[stem] = FOLD_START + rank * STEM_GAP;
     });
+    // When the intro has finished drawing (last stem pair and its read
+    // highlight): after that the loop runs only while the pointer is over it.
+    const SETTLED_MS = stems.reduce(function (latest, arc) {
+      return Math.max(latest, stemStart[arc.stem] + (arc.i - arc.start) * 50 + STEM_DRAW);
+    }, READS_IN[1] + 500) + STEM_LIGHT;
 
     let host = null;
     let canvas = null;
@@ -615,12 +645,14 @@
         pointer = { x: event.clientX - rect.left, y: event.clientY - rect.top };
         if (motionReduced()) {
           draw(performance.now());
+        } else {
+          schedule();
         }
       });
       canvas.addEventListener("pointerleave", function () {
         pointer = null;
         setProbe("Hover the sequence");
-        if (motionReduced()) {
+        if (motionReduced() || !rafId) {
           draw(performance.now());
         }
       });
@@ -712,7 +744,10 @@
     function tick(now) {
       rafId = 0;
       draw(now);
-      schedule();
+      // stop once the intro has settled; pointermove starts it again
+      if (pointer || now - born < SETTLED_MS) {
+        schedule();
+      }
     }
 
     function setProbe(text) {

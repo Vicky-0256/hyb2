@@ -9,6 +9,11 @@
   const CPLFOLD_CAPACITY_TARGET_MS = 45000;
   const CPLFOLD_CAPACITY_SAFETY_FACTOR = 0.65;
   const CPLFOLD_CAPACITY_TIMEOUT_MS = 60000;
+  // lengths in messages read as on the page ("1,200 nt")
+  const formatNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+  function nt(value) {
+    return formatNumber.format(Number(value) || 0) + " nt";
+  }
 
   // Preserve the mapped input intervals for display alongside this result.
   // These are raw record arms, not inferred base pairs or bonus-matrix cells.
@@ -100,12 +105,12 @@
     if (nativeCplfoldActive(structure)) {
       const nativeMax = nativeCplfoldMaxLength();
       return length > nativeMax
-        ? "Desktop CPLfold is limited to " + nativeMax + " nt by the bundled runtime. Select a shorter region."
+        ? "Desktop CPLfold is limited to " + nt(nativeMax) + " by the bundled runtime. Select a shorter region."
         : "";
     }
     const capacity = ensureCplfoldCapacity(structure || {});
     if (length > CPLFOLD_HARD_MAX_SEQUENCE_LENGTH) {
-      return "Browser CPLfold has a hard safety ceiling of " + CPLFOLD_HARD_MAX_SEQUENCE_LENGTH + " nt in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";
+      return "Browser CPLfold has a hard safety ceiling of " + nt(CPLFOLD_HARD_MAX_SEQUENCE_LENGTH) + " in this pure-Python Pyodide build. Select a shorter region or use bin/cplfold locally.";
     }
     if (length <= capacity.baselineLength) {
       return "";
@@ -114,13 +119,13 @@
       return "The browser CPLfold capacity test is still running. Wait for it to finish or cancel it before predicting.";
     }
     if (capacity.status !== "ready") {
-      return "This " + length + " nt CPLfold request is above the " + capacity.baselineLength + " nt browser baseline. Run the local browser capacity test first.";
+      return "This " + nt(length) + " CPLfold request is above the " + nt(capacity.baselineLength) + " browser baseline. Run the local browser capacity test first.";
     }
     if (!cplfoldCapacityMatches(structure)) {
-      return "CPLfold settings changed after the last browser capacity test. Run the capacity test again before using a sequence longer than " + capacity.baselineLength + " nt.";
+      return "CPLfold settings changed after the last browser capacity test. Run the capacity test again before using a sequence longer than " + nt(capacity.baselineLength) + ".";
     }
     if (length > capacity.recommendedLength) {
-      return "This browser capacity test recommends up to " + capacity.recommendedLength + " nt for the current CPLfold settings. Select a shorter region, reduce the search settings, or retest this browser.";
+      return "This browser capacity test recommends up to " + nt(capacity.recommendedLength) + " for the current CPLfold settings. Select a shorter region, reduce the search settings, or retest this browser.";
     }
     return "";
   }
@@ -342,7 +347,7 @@
         structure.operation = null;
         structure.status = "error";
         structure.progress = 0;
-        structure.message = error && error.message ? error.message : "Native CPLfold could not finish.";
+        structure.message = (error && error.message ? error.message : "Native CPLfold could not finish.") + " Predict again; if it fails again, select a shorter region or restart the desktop app.";
         api.render();
       });
       return true;
@@ -400,7 +405,7 @@
           structure.progress = 0;
           structure.message = message.message || (cplfold
             ? "Browser CPLfold could not finish the structure prediction."
-            : "ViennaRNA WebAssembly could not finish the structure prediction.");
+            : "ViennaRNA WebAssembly could not finish the structure prediction.") + " Check the region and settings, then predict again.";
           api.render();
         }
 
@@ -462,8 +467,8 @@
         structure.status = "error";
         structure.progress = 0;
         structure.message = cplfold
-          ? "The browser CPLfold worker stopped unexpectedly. Confirm that the generated Pyodide assets are available."
-          : "The ViennaRNA structure worker stopped unexpectedly.";
+          ? "The browser CPLfold worker stopped unexpectedly. Confirm that the generated Pyodide assets are available, then reload the page and predict again."
+          : "The ViennaRNA structure worker stopped unexpectedly. Reload the page and predict again; if it stops again, select a shorter region.";
         api.render();
       };
 
@@ -514,7 +519,7 @@
       structure.runningSequenceInfo = null;
       structure.message = error && error.message ? error.message : (cplfold
         ? "This browser cannot start the CPLfold module worker."
-        : "This browser cannot start the ViennaRNA structure worker.");
+        : "This browser cannot start the ViennaRNA structure worker.") + " Reload the page, or open HYB2 in a current Chrome, Edge, Firefox or Safari.";
       api.render();
       return false;
     }
@@ -603,7 +608,7 @@
         capacity.hardware = message.hardware || null;
         capacity.runtimeManifest = message.runtimeManifest || null;
         capacity.parameters = message.parameters || null;
-        capacity.message = "Estimated up to " + recommendedLength + " nt for the current browser and CPLfold settings.";
+        capacity.message = "Estimated up to " + nt(recommendedLength) + " for the current browser and CPLfold settings.";
         structure.status = "idle";
         structure.operation = null;
         structure.progress = 0;
@@ -922,10 +927,10 @@
       return cplfoldLengthIssue(length, structure || {});
     }
     if (length > MAX_SEQUENCE_LENGTH) {
-      return "ViennaRNA WebAssembly is limited to " + MAX_SEQUENCE_LENGTH + " nt in HYB2 Web Lite. Reduce this region before folding.";
+      return "ViennaRNA WebAssembly is limited to " + nt(MAX_SEQUENCE_LENGTH) + " in HYB2 Web Lite. Reduce this region before folding.";
     }
     if (length > ADVANCED_SEQUENCE_LENGTH && !allowLarge) {
-      return "This " + length + " nt sequence can use substantial browser memory. Enable the advanced large-region option before continuing.";
+      return "This " + nt(length) + " sequence can use substantial browser memory. Enable the advanced large-region option before continuing.";
     }
     return "";
   }
@@ -968,7 +973,7 @@
       if (wasCapacityProbe && capacity) {
         capacity.status = "cancelled";
         capacity.recommendedLength = capacity.baselineLength || CPLFOLD_BASELINE_SEQUENCE_LENGTH;
-        capacity.message = "Browser capacity test cancelled. The " + (capacity.baselineLength || CPLFOLD_BASELINE_SEQUENCE_LENGTH) + " nt baseline remains available.";
+        capacity.message = "Browser capacity test cancelled. The " + nt(capacity.baselineLength || CPLFOLD_BASELINE_SEQUENCE_LENGTH) + " baseline remains available.";
       }
     }
   }

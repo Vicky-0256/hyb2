@@ -122,8 +122,8 @@
     }
     const w = BAND + Math.abs(n - m);
     if ((n + 1) * (2 * w + 2) > MAX_TRACE) {
-      throw new Error("the sequences differ in length by " + Math.abs(n - m).toLocaleString("en-US") +
-        " nt (" + n.toLocaleString("en-US") + " vs " + m.toLocaleString("en-US") +
+      throw new Error("the sequences differ in length by " + formatNumber(Math.abs(n - m)) +
+        " nt (" + formatNumber(n) + " vs " + formatNumber(m) +
         " nt); the banded alignment would need more than " + (MAX_TRACE_BYTES / 1048576) +
         " MB, so it is not run");
     }
@@ -645,8 +645,16 @@
       oneOn: "a", twoOn: "a", start: "", end: "", labelOne: "", labelTwo: "" };
   }
 
+  const numberFormat = new Intl.NumberFormat("en-US");
+  const identityFormat = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
   function formatNumber(value) {
-    return Number(value).toLocaleString("en-US");
+    return numberFormat.format(Number(value));
+  }
+
+  // alignment identity (0-1) as "98.7%"
+  function formatIdentity(value) {
+    return identityFormat.format(100 * value) + "%";
   }
 
   // build(arcMap) -> { ready, reason, length, pairsA, pairsB, overlay, features, stats, notes }
@@ -676,8 +684,8 @@
         try {
           maps[key] = align(sequence, a.sequence);
           if (!maps[key].same && maps[key].identity < LOW_IDENTITY) {
-            notes.push("Warning: " + label + " aligns to A with only " + (100 * maps[key].identity).toFixed(1) +
-              "% identity; positions moved onto A may be wrong. Check that it is the same gene or genome.");
+            notes.push("Warning: " + label + " aligns to A with only " + formatIdentity(maps[key].identity) +
+              " identity; positions moved onto A may be wrong. Check that it is the same gene or genome.");
           }
         } catch (error) {
           notes.push(label + " could not be aligned to A: " + error.message + "; drawn on its own coordinates.");
@@ -707,7 +715,7 @@
         pairsB.push(i < j ? [i, j] : [j, i]);
       });
       if (bMap && !bMap.same) {
-        notes.push("B is shown on A's coordinates by alignment: " + (100 * bMap.identity).toFixed(1) + "% identity, " +
+        notes.push("B is shown on A's coordinates by alignment: " + formatIdentity(bMap.identity) + " identity, " +
           formatNumber(bMap.mismatches) + " mismatches, " + formatNumber(bMap.gaps) + " gap columns" +
           (dropped ? "; " + formatNumber(dropped) + " pairs with an unaligned end left out." : "."));
       }
@@ -775,7 +783,7 @@
       if (track.sequence && a && a.sequence && track.sequence !== a.sequence) {
         map = mapOnto("The gene annotation (" + (track.seqid || s.annotation.name) + ")", track.sequence);
         if (map && !map.same) {
-          notes.push("Gene track moved from " + (track.seqid || s.annotation.name) + " onto A by alignment (" + (100 * map.identity).toFixed(1) + "% identity).");
+          notes.push("Gene track moved from " + (track.seqid || s.annotation.name) + " onto A by alignment (" + formatIdentity(map.identity) + " identity).");
         }
       }
       if (track.multiple) {
@@ -849,7 +857,7 @@
     const parts = [];
     parts.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + " " + height + '" width="' + width + '" height="' + height +
       '" font-family="Inter, Arial, sans-serif" font-size="11" role="img" aria-label="Arc map">');
-    parts.push("<title>Arc map</title>");
+    parts.push("<title>Arc map</title><desc>" + escapeXml(arcSummary(s, model, start, end)) + "</desc>");
     parts.push('<rect width="100%" height="100%" fill="' + c.background + '"/>');
     parts.push('<text x="' + left + '" y="20" font-size="13" font-weight="600" fill="' + c.ink + '">' +
       escapeXml((s.interactions ? s.interactions.name : "HYB interaction arc map") + " · " + formatNumber(start) + "–" + formatNumber(end)) + "</text>");
@@ -943,6 +951,44 @@
     return parts.join("");
   }
 
+  // the figure in words: its range and what it draws (the SVG's <desc>, and
+  // the card's text under the figure)
+  function arcSummary(s, model, start, end) {
+    const shown = model.overlay.filter(function (o) { return o.j >= start && o.i <= end; });
+    const up = shown.filter(function (o) { return o.up; }).length;
+    return "Arc map of " + formatNumber(start) + "–" + formatNumber(end) + " nt: " + formatNumber(shown.length) + " HYB differential arcs, " +
+      formatNumber(up) + " higher in " + (s.labelOne || "condition one") + " (above, red) and " + formatNumber(shown.length - up) + " higher in " +
+      (s.labelTwo || "condition two") + " (below, cyan)" +
+      (s.showStructures ? "; predicted structure pairs: " + formatNumber(model.pairsA.length) + " in A" + (s.b ? ", " + formatNumber(model.pairsB.length) + " in B" : "") : "") +
+      (model.features.length ? "; gene track with " + formatNumber(model.features.length) + " features" : "") + ".";
+  }
+
+  // the arcs as a table, so they can be read without hovering each one
+  const ARC_TABLE_ROWS = 200;
+  function arcTable(s, model, esc, start, end) {
+    const rows = model.overlay.filter(function (o) { return o.j >= start && o.i <= end; })
+      .slice().sort(function (left, right) { return left.padj - right.padj || left.i - right.i; });
+    if (!rows.length) {
+      return "";
+    }
+    const open = typeof window !== "undefined" && window.Hyb2OpenSections && window.Hyb2OpenSections["arcmap-table"] ? " open" : "";
+    return '<details class="comparison-note-details arcmap-table" data-open-key="arcmap-table"' + open + "><summary>Interactions drawn (" + formatNumber(rows.length) + ")</summary>" +
+      (rows.length > ARC_TABLE_ROWS ? '<p class="card-note">The ' + formatNumber(ARC_TABLE_ROWS) + " with the smallest padj are listed; the differential test's Interactions TSV has all.</p>" : "") +
+      '<div class="data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th>Higher in</th><th class="num">Arc start <span class="unit">nt</span></th><th class="num">Arc end <span class="unit">nt</span></th><th class="num">padj</th></tr></thead><tbody>' +
+      rows.slice(0, ARC_TABLE_ROWS).map(function (o) {
+        return "<tr><td>" + esc(o.up ? s.labelOne || "condition one" : s.labelTwo || "condition two") + '</td><td class="num">' + formatNumber(o.i) + '</td><td class="num">' + formatNumber(o.j) +
+          '</td><td class="num">' + esc(Number.isFinite(o.padj) ? (o.padj < 1e-3 ? o.padj.toExponential(2) : o.padj.toPrecision(3)) : "NA") + "</td></tr>";
+      }).join("") + "</tbody></table></div></details>";
+  }
+
+  // what a file slot expects, said after a file that could not be read
+  const FILE_FORMATS = {
+    a: "Choose a dot-bracket file (.dbn: a >name line, the sequence, then the structure in ( and .) or a .ct connect table.",
+    b: "Choose a dot-bracket file (.dbn: a >name line, the sequence, then the structure in ( and .) or a .ct connect table.",
+    interactions: "Choose a tab-separated table whose header row names x, y, padj and direction or log2FoldChange, such as the Interactions TSV exported from panel A.",
+    annotation: "Choose a GenBank (.gb), GFF3 / GTF, BED or tab-separated file (name, start, end) with at least one feature."
+  };
+
   // ---- card (HTML string; actions handled in analysis-ui.js)
 
   // The Compare page renders every card on each change; the model and its
@@ -1012,10 +1058,13 @@
         (name
           ? '<span class="file-pick-name" title="' + esc(name + " · " + summary) + '"><b>' + esc(name) + "</b> · " + esc(summary) + '</span><button class="quiet-button" type="button" data-feature-action="arcmap-clear" data-key="' + key + '">Remove</button>'
           : '<span class="file-pick-name is-empty">No file</span>') +
-        "</div>" + (s.errors[key] ? '<p class="notice notice-error">' + esc(s.errors[key]) + "</p>" : "") + "</div>";
+        "</div>" + (s.errors[key] ? '<p class="notice notice-error">Could not read this file: ' + esc(s.errors[key]) + ". " + esc(FILE_FORMATS[key] || "") + "</p>" : "") + "</div>";
     };
-    const control = function (label, key, value, placeholder) {
-      return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" value="' + esc(value) +
+    // numeric fields stay type="text" (an empty From / To means the whole
+    // structure) with a numeric keyboard on phones
+    const control = function (label, key, value, placeholder, inputmode) {
+      return '<label class="control-field"><span>' + esc(label) + '</span><input type="text" name="arcmap-' + key + '" autocomplete="off"' +
+        (inputmode ? ' inputmode="' + inputmode + '" spellcheck="false"' : "") + ' value="' + esc(value) +
         '" placeholder="' + esc(placeholder || "") + '" data-feature="arcmap-control" data-key="' + key + '"></label>';
     };
     const select = function (label, key, value, options) {
@@ -1033,23 +1082,28 @@
       fileRow("annotation", "Gene annotation (GenBank, GFF, BED, TSV)", ".gb,.gbk,.genbank,.gff,.gff3,.gtf,.bed,.tsv,.txt", s.annotation && s.annotation.name, s.annotation ? formatNumber(s.annotation.features.length) + " features" : ""),
       "</div>",
       '<div class="comparison-control-grid arcmap-control-grid">',
-      control("padj <", "padj", s.padj, "0.01"),
-      control("Condition one", "labelOne", s.labelOne, "label, e.g. ZAFR"),
-      control("Condition two", "labelTwo", s.labelTwo, "label, e.g. ZASI"),
+      control("padj <", "padj", s.padj, "e.g. 0.01…", "decimal"),
+      control("Condition one", "labelOne", s.labelOne, "Label, e.g. ZAFR…"),
+      control("Condition two", "labelTwo", s.labelTwo, "Label, e.g. ZASI…"),
       select("Condition one cells are on", "oneOn", s.oneOn, [["a", "A's reference"], ["b", "B's reference"]]),
       select("Condition two cells are on", "twoOn", s.twoOn, [["a", "A's reference"], ["b", "B's reference"]]),
       select("Structure overlay", "showStructures", s.showStructures ? "yes" : "no", [["no", "Off · HYB interactions only"], ["yes", "Show predicted structures"]]),
       select("Structure colours", "mono", s.mono ? "mono" : "colour", [["mono", "Default colours"], ["colour", "A red, B blue"]]),
       // empty means the whole structure: the placeholder says so in words,
       // so that an empty field does not read as a disabled one
-      control("From (nt)", "start", s.start, "Start (1)"),
-      control("To (nt)", "end", s.end, model.ready ? "End (" + formatNumber(model.length) + ")" : "End of structure"),
+      control("From (nt)", "start", s.start, "Start, e.g. 1…", "numeric"),
+      control("To (nt)", "end", s.end, model.ready ? "End, e.g. " + formatNumber(model.length) + "…" : "End of structure…", "numeric"),
       "</div>"
     ];
     if (!model.ready) {
       out.push('<p class="card-note">' + esc(model.reason) + "</p>");
     } else {
-      out.push('<div class="arcmap-figure" data-arcmap-figure>' + cached.svg + "</div>");
+      const start = Math.max(1, Number(s.start) || 1);
+      const end = Math.min(model.length, Number(s.end) || model.length);
+      // on screen the SVG is also described by the text under it
+      out.push('<div class="arcmap-figure" data-arcmap-figure>' + cached.svg.replace('role="img"', 'role="img" aria-describedby="arcmap-summary"') + "</div>");
+      out.push('<p class="card-note" id="arcmap-summary">' + esc(arcSummary(s, model, start, end)) + "</p>");
+      out.push(arcTable(s, model, esc, start, end));
       out.push('<dl class="selection-stats stats-compact"><div><dt>Higher in ' + esc(s.labelOne || "condition one") + '</dt><dd>' +
         formatNumber(model.overlay.filter(function (o) { return o.up; }).length) + '</dd></div><div><dt>Higher in ' +
         esc(s.labelTwo || "condition two") + '</dt><dd>' + formatNumber(model.overlay.filter(function (o) { return !o.up; }).length) +

@@ -11,7 +11,7 @@
 
   .sidebar {
     width: 68px;
-    padding: 16px 8px;
+    padding: var(--space-4) var(--space-2);
   }
 
   .sidebar-file,
@@ -26,7 +26,7 @@
   .sidebar-file {
     display: grid;
     min-height: 41px;
-    margin: 0 1px 21px;
+    margin: 0 1px var(--space-5);
     padding: 0;
     place-items: center;
   }
@@ -72,7 +72,7 @@
   }
 
   .local-status {
-    padding: 9px;
+    padding: var(--space-2);
     text-align: center;
   }
 
@@ -87,7 +87,7 @@
 
   .clear-session::before {
     content: "×";
-    font-size: 21px;
+    font-size: var(--text-lg);
   }
 
   .overview-grid {
@@ -122,7 +122,7 @@
   }
 
   .landing-main {
-    row-gap: 16px;
+    row-gap: var(--space-4);
   }
 
   .landing-copy > * {
@@ -147,7 +147,7 @@
 
   .landing-panel {
     order: 1;
-    margin: 12px 0;
+    margin: var(--space-3) 0;
   }
 
   .landing-copy > .promise-list,
@@ -176,7 +176,7 @@
 
   .local-chip {
     min-height: 29px;
-    padding: 4px 8px;
+    padding: var(--space-1) var(--space-2);
     font-size: var(--text-label);
   }
 
@@ -190,20 +190,20 @@
   }
 
   .landing-lede {
-    font-size: 17px;
+    font-size: var(--text-md);
   }
 
   .page-heading h1 {
-    font-size: 30px;
+    font-size: var(--text-2xl);
   }
 
   .file-card-inner {
     min-height: auto;
-    padding: 20px;
+    padding: var(--space-5);
   }
 
   .file-card-header {
-    margin-bottom: 20px;
+    margin-bottom: var(--space-5);
   }
 
   .prepared-file-row {
@@ -244,11 +244,11 @@
   }
 
   .dropzone-content {
-    padding: 18px 16px;
+    padding: var(--space-4) var(--space-4);
   }
 
   .dropzone-kicker {
-    margin-bottom: 6px;
+    margin-bottom: var(--space-2);
   }
 
   .workspace {
@@ -257,7 +257,7 @@
 
   .workspace-header {
     min-height: 58px;
-    padding: 0 15px;
+    padding: 0 var(--space-4);
   }
 
   .workspace-header .brand-subtitle,
@@ -271,16 +271,16 @@
   }
 
   .workspace-main {
-    padding: 84px 16px 93px;
+    padding: 84px var(--space-4) 93px;
   }
 
   .page-heading {
     display: block;
-    margin-bottom: 22px;
+    margin-bottom: var(--space-6);
   }
 
   .page-heading .button {
-    margin-top: 16px;
+    margin-top: var(--space-4);
   }
 
   .overview-callout {
@@ -288,27 +288,27 @@
   }
 
   .overview-callout .quiet-button {
-    margin-top: 12px;
+    margin-top: var(--space-3);
   }
 
   .metric-grid {
-    gap: 10px;
+    gap: var(--space-2);
   }
 
   .metric-card {
     min-height: 128px;
-    padding: 15px;
+    padding: var(--space-4);
   }
 
   .metric-value {
-    margin-top: 16px;
-    font-size: 25px;
+    margin-top: var(--space-4);
+    font-size: var(--text-xl);
   }
 
   .data-card,
   .placeholder-card,
   .validation-card {
-    padding: 17px;
+    padding: var(--space-4);
   }
 
   .quality-grid {
@@ -329,9 +329,10 @@
     bottom: 0;
     left: 0;
     display: flex;
-    gap: 4px;
+    gap: var(--space-1);
     overflow-x: auto;
-    padding: 8px 12px;
+    /* viewport-fit=cover: clear the home indicator and landscape notches */
+    padding: var(--space-2) max(var(--space-3), env(safe-area-inset-right)) calc(var(--space-2) + env(safe-area-inset-bottom)) max(var(--space-3), env(safe-area-inset-left));
     border-top: 1px solid var(--line);
     /* opaque (--surface is set per theme): a 94% see-through bar let the
        page's text show through the tab labels */
@@ -356,7 +357,7 @@
     z-index: 13;
     bottom: 0;
     width: 28px;
-    height: 53px;
+    height: calc(53px + env(safe-area-inset-bottom));
     opacity: 0;
     content: "";
     pointer-events: none;
@@ -381,7 +382,7 @@
   .mobile-nav .nav-button {
     width: auto;
     min-width: max-content;
-    padding: 0 10px;
+    padding: 0 var(--space-2);
     font-size: var(--text-label);
   }
 
@@ -405,7 +406,7 @@
   .reference-upload-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
-    margin-top: 12px;
+    margin-top: var(--space-3);
   }
 
   .reference-file-name {
@@ -418,21 +419,21 @@
   /* The four Overview metrics stay a compact 2 x 2 block on phones. */
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+    gap: var(--space-2);
   }
 
   .metric-card {
     min-height: auto;
-    padding: 12px;
+    padding: var(--space-3);
   }
 
   .metric-value {
-    margin-top: 8px;
-    font-size: 22px;
+    margin-top: var(--space-2);
+    font-size: var(--text-lg);
   }
 
   .metric-description {
-    margin-top: 6px;
+    margin-top: var(--space-2);
     line-height: 1.3;
   }
 
@@ -455,7 +456,7 @@
 
   .example-badge {
     display: inline-flex;
-    margin-top: 10px;
+    margin-top: var(--space-2);
   }
 
   .example-actions {
@@ -479,7 +480,7 @@
   /* Status stays in its own column (from the 767px layout) so every
      Ready lines up; the FASTA button keeps the second row. */
   .prepared-file-row {
-    gap: 10px;
+    gap: var(--space-2);
   }
 }
 

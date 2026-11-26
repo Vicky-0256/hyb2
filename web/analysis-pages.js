@@ -2,6 +2,19 @@
   "use strict";
 
   const formatNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+  // the collapsed base-pair list draws at most this many rows (a long
+  // fold has thousands; the dot-bracket and exports hold all of them)
+  const BASE_PAIR_LIST_LIMIT = 500;
+  // long tables (100+ rows): the browser skips their layout while off screen
+  const LONG_TABLE_STYLE = ' style="content-visibility:auto;contain-intrinsic-size:auto 480px"';
+  // fixed-precision figures (energies, weights, seconds) in the same locale
+  const fixedFormatters = {};
+  function formatFixed(value, digits) {
+    if (!fixedFormatters[digits]) {
+      fixedFormatters[digits] = new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    }
+    return fixedFormatters[digits].format(value);
+  }
 
   function chimeraLabel(value) {
     return window.Hyb2ChimeraTypes ? window.Hyb2ChimeraTypes.label(value) : value;
@@ -40,12 +53,12 @@
         { value: "inter", label: "Inter-RNA" },
         { value: "homodimer", label: "Homodimer proxy (overlap ≥ 5)" }
       ], "interaction-filter"),
-      renderSelectControl("Chimera pattern", "chimeraType", filters.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "interaction-filter"),
       renderSelectControl("Count mode", "countMode", filters.countMode, [
         { value: "support", label: "Cluster support" },
         { value: "records", label: "Records" }
       ], "interaction-filter"),
-      renderTextControl("Search", "search", filters.search, "Search ID or RNA", "interaction-filter", "text", { title: "Matches an RNA name, sequence ID or hybrid sequence" }),
+      renderSelectControl("Chimera pattern", "chimeraType", filters.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "interaction-filter", { wide: true }),
+      renderTextControl("Search", "search", filters.search, "Search ID or RNA…", "interaction-filter", "search", { title: "Matches an RNA name, sequence ID or hybrid sequence", full: true }),
       "</div>",
       '<details class="advanced-filters" data-open-key="interactions-advanced"' + openAttr("interactions-advanced") + '><summary>Advanced filters</summary>',
       '<div class="control-grid advanced-grid">',
@@ -58,7 +71,7 @@
       renderTextControl("Maximum dG", "maxDg", filters.maxDg, "Any", "interaction-filter", "number"),
       renderTextControl("Minimum support", "minSupport", filters.minSupport, "1", "interaction-filter", "number"),
       "</div></details>",
-      armIssue ? '<p class="notice notice-warning" role="alert" data-range-issue="interactions">' + escape(armIssue) + " No record can match until this is corrected.</p>" : "",
+      armIssue ? '<p class="notice notice-warning" data-range-issue="interactions">' + escape(armIssue) + " No record can match until this is corrected.</p>" : "",
       "</section>",
       window.Hyb2Batch ? window.Hyb2Batch.renderEnergy(state) : "",
       filters.rna ? renderPartnerPanel(partners, filters, !interactions) : renderChooseRnaPanel(),
@@ -357,7 +370,7 @@
 
     return [
       '<div class="page-heading page-heading--menu">',
-      "<div><h1>Contact Map</h1><p>Fixed-width binning mirrors the current HYB2 coverage accumulation rule.</p></div>",
+      "<div><h1>Contact map</h1><p>Fixed-width binning mirrors the current HYB2 coverage accumulation rule.</p></div>",
       '<div class="inline-actions">' + renderExportMenu([
         '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-download-svg">Map · SVG (vector)</button>',
         '<button class="export-menu-item" type="button" role="menuitem" data-feature-action="contact-download-pdf">Map · PDF</button>',
@@ -393,7 +406,7 @@
         { value: "normalised", label: "Normalised pairs" },
         { value: "original", label: "Original arms (no swap)" }
       ], "contact-control"),
-      renderSelectControl("Chimera pattern", "chimeraType", contact.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "contact-control"),
+      renderSelectControl("Chimera pattern", "chimeraType", contact.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "contact-control", { wide: true }),
       renderSelectControl("Homodimer subset", "homodimer", contact.homodimer || "all", [
         { value: "all", label: "All records" },
         { value: "only", label: "Overlap score ≥ 5" },
@@ -489,7 +502,7 @@
 
   function renderContactDataTable(matrix) {
     return [
-      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">X position <span class="unit">(nt)</span></th><th class="num">Y position <span class="unit">(nt)</span></th><th class="num">Records</th><th class="num">Cluster support</th></tr></thead><tbody>',
+      '<div class="contact-data-table data-table-wrap"' + LONG_TABLE_STYLE + '><table class="data-table"><thead class="nowrap"><tr><th class="num">X position <span class="unit">(nt)</span></th><th class="num">Y position <span class="unit">(nt)</span></th><th class="num">Records</th><th class="num">Cluster support</th></tr></thead><tbody>',
       matrix.cells.slice().sort(function (left, right) { return right.value - left.value; }).slice(0, 100).map(function (cell) {
         return '<tr><td class="num">' + range(cell.x, cell.x + matrix.binSize - 1) + '</td><td class="num">' + range(cell.y, cell.y + matrix.binSize - 1) + '</td><td class="num">' + format(cell.records) + '</td><td class="num">' + format(cell.support) + "</td></tr>";
       }).join(""),
@@ -501,7 +514,7 @@
     return [
       '<section class="contact-workbench is-building" aria-busy="true">',
       '<div class="contact-navigator contact-workbench-main"><article class="contact-stage data-card contact-stage-overview">',
-      '<div class="contact-stage-heading"><div><span class="drawer-kicker">Contact map</span><h2>Building map</h2></div></div>',
+      '<div class="contact-stage-heading"><div><span class="drawer-kicker">Contact map</span><h2>Building map…</h2></div></div>',
       '<p class="contact-stage-note">Binning interaction arms locally in this tab.</p>',
       '<div class="canvas-wrap contact-stage-canvas-wrap contact-building-surface"><div class="contact-updating" role="status"><span></span>Building map…</div></div>',
       "</article></div>",
@@ -594,14 +607,14 @@
         { value: "records", label: "Record count" },
         { value: "support", label: "Cluster support" }
       ], "viewpoint-control"),
-      renderSelectControl("Chimera pattern", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "viewpoint-control"),
+      renderSelectControl("Chimera pattern", "chimeraType", viewpoint.chimeraType, [{ value: "all", label: "All chimera patterns" }].concat(chimeraTypes.map(function (item) { return { value: item.name, label: chimeraLabel(item.name) }; })), "viewpoint-control", { wide: true }),
       renderSelectControl("Homodimer subset", "homodimer", viewpoint.homodimer || "all", [
         { value: "all", label: "All records" },
         { value: "only", label: "Overlap score ≥ 5" },
         { value: "exclude", label: "Exclude homodimer proxy" }
       ], "viewpoint-control"),
       '</div>',
-      rangeIssue ? '<p class="notice notice-warning" role="alert" data-range-issue="viewpoint">' + escape(rangeIssue) + "</p>" : "",
+      rangeIssue ? '<p class="notice notice-warning" data-range-issue="viewpoint">' + escape(rangeIssue) + "</p>" : "",
       '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-viewpoint">Generate</button><button class="quiet-button" type="button" data-feature-action="reset-viewpoint-selection">Reset selection</button><span class="control-hint">' + (viewpoint.rangeMode === "reference" ? "The full mapped reference uses coordinates 1 through its FASTA length; Start and End are ignored." : "At 1 nt resolution, each plotted value is the number of overlapping interaction arms, matching the legacy viewpoint interpretation.") + '</span></div>',
       '</section>',
       results.ready ? [
@@ -636,7 +649,7 @@
 
   function renderViewpointDataTable(results) {
     return [
-      '<div class="contact-data-table data-table-wrap"><table class="data-table"><thead class="nowrap"><tr><th class="num">Start <span class="unit">(nt)</span></th><th class="num">End <span class="unit">(nt)</span></th><th class="num">Mean interaction coverage</th></tr></thead><tbody>',
+      '<div class="contact-data-table data-table-wrap"' + LONG_TABLE_STYLE + '><table class="data-table"><thead class="nowrap"><tr><th class="num">Start <span class="unit">(nt)</span></th><th class="num">End <span class="unit">(nt)</span></th><th class="num">Mean interaction coverage</th></tr></thead><tbody>',
       results.bins.slice().sort(function (left, right) { return right.value - left.value; }).slice(0, 150).map(function (bin) {
         return '<tr><td class="num">' + format(bin.start) + '</td><td class="num">' + format(bin.end) + '</td><td class="num">' + format(bin.value) + '</td></tr>';
       }).join(""),
@@ -769,7 +782,7 @@
       // is a badge in the same column as Remove
       '<div class="data-table-wrap comparison-dataset-table"><table class="data-table"><thead class="nowrap"><tr><th class="compare-dataset-name">Dataset</th><th>Label</th><th>Condition</th><th class="num">Valid records</th><th class="num">Support</th><th class="compare-dataset-action" aria-label="Role"></th></tr></thead><tbody>',
       datasets.map(function (dataset) {
-        return '<tr><td class="cell-truncate" title="' + attribute(dataset.fileName) + '">' + escape(dataset.fileName) + '</td><td><input type="text" value="' + attribute(dataset.label || "") + '" data-feature="comparison-dataset" data-key="label" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset label"></td><td><select data-feature="comparison-dataset" data-key="condition" data-dataset-id="' + attribute(dataset.id) + '" aria-label="Dataset condition"><option value="A"' + (dataset.condition === "A" ? " selected" : "") + '>Condition A</option><option value="B"' + (dataset.condition === "B" ? " selected" : "") + '>Condition B</option></select></td><td class="num">' + format(dataset.summary.validRecords) + '</td><td class="num">' + format(dataset.summary.supportInteractions) + '</td><td class="compare-dataset-action">' + (dataset.id === "primary" ? '<span class="compare-badge" title="The file loaded on the Data page; it cannot be removed here">Primary</span>' : '<button class="quiet-button" type="button" data-feature-action="remove-comparison-dataset" data-dataset-id="' + attribute(dataset.id) + '">Remove</button>') + '</td></tr>';
+        return '<tr><td class="cell-truncate" title="' + attribute(dataset.fileName) + '">' + escape(dataset.fileName) + '</td><td><input type="text" name="dataset-label" autocomplete="off" spellcheck="false" value="' + attribute(dataset.label || "") + '" data-feature="comparison-dataset" data-key="label" data-dataset-id="' + attribute(dataset.id) + '" aria-label="' + attribute("Label for " + (dataset.fileName || dataset.id)) + '"></td><td><select data-feature="comparison-dataset" data-key="condition" data-dataset-id="' + attribute(dataset.id) + '" name="dataset-condition" aria-label="' + attribute("Condition for " + (dataset.fileName || dataset.id)) + '"><option value="A"' + (dataset.condition === "A" ? " selected" : "") + '>Condition A</option><option value="B"' + (dataset.condition === "B" ? " selected" : "") + '>Condition B</option></select></td><td class="num">' + format(dataset.summary.validRecords) + '</td><td class="num">' + format(dataset.summary.supportInteractions) + '</td><td class="compare-dataset-action">' + (dataset.id === "primary" ? '<span class="compare-badge" title="The file loaded on the Data page; it cannot be removed here">Primary</span>' : '<button class="quiet-button" type="button" data-feature-action="remove-comparison-dataset" data-dataset-id="' + attribute(dataset.id) + '" aria-label="' + attribute("Remove " + (dataset.fileName || dataset.id)) + '">Remove</button>') + '</td></tr>';
       }).join(""),
       '</tbody></table></div>',
       // empty or repeated labels: the differential test card blocks its run
@@ -804,7 +817,7 @@
       '<div class="card-title-row"><div><h2>' + escape(title) + '</h2><span class="card-note">' + escape(note) + '</span></div><span class="card-kicker">' + format(kind === "effect" ? result.cells.length : result.conservedCells.length) + ' bins</span></div>',
       '<div class="inline-actions">' + [["in", "Zoom in"], ["out", "Zoom out"], ["reset", "Reset zoom"]].map(function (item) {
         return '<button class="quiet-button" type="button" data-feature-action="comparison-zoom" data-kind="' + kind + '" data-zoom="' + item[0] + '">' + item[1] + '</button>';
-      }).join("") + '<span class="card-note">Scroll to zoom · drag to pan · double-click to reset</span></div>',
+      }).join("") + '<span class="card-note">Ctrl/⌘ + scroll to zoom · drag or Shift + arrows to pan · Escape or double-click to reset</span></div>',
       '<div class="canvas-wrap comparison-canvas-wrap"><canvas id="comparison-' + kind + '-canvas" class="comparison-canvas" width="720" height="520" data-comparison-map="' + kind + '" tabindex="0" aria-label="' + escape(title) + ' map"></canvas></div>',
       '</section>'
     ].join("");
@@ -977,7 +990,7 @@
     const partnerRangeReason = "Choose a Partner RNA first: Partner start and Partner end are coordinates on that RNA.";
 
     return [
-      '<div class="page-heading"><div><h1>Region Explorer</h1><p>Find interactions that overlap a chosen RNA region.</p></div></div>',
+      '<div class="page-heading"><div><h1>Region explorer</h1><p>Find interactions that overlap a chosen RNA region.</p></div></div>',
       '<section class="analysis-controls data-card">',
       '<div class="region-control-grid">',
       // B11: anchor, its coordinates and the overlap rule on the first row,
@@ -994,7 +1007,7 @@
       renderTextControl("Partner start", "partnerStart", region.partner ? region.partnerStart : "", region.partner ? "Optional" : "Needs a Partner RNA", "region-control", "number", region.partner ? { min: 1, step: 1 } : { min: 1, step: 1, disabled: true, title: partnerRangeReason }),
       renderTextControl("Partner end", "partnerEnd", region.partner ? region.partnerEnd : "", region.partner ? "Optional" : "Needs a Partner RNA", "region-control", "number", region.partner ? { min: 1, step: 1 } : { min: 1, step: 1, disabled: true, title: partnerRangeReason }),
       "</div>",
-      rangeNotice ? '<p class="notice notice-warning" role="alert" data-range-issue="region">' + escape(rangeNotice) + "</p>" : "",
+      rangeNotice ? '<p class="notice notice-warning" data-range-issue="region">' + escape(rangeNotice) + "</p>" : "",
       '<div class="control-actions"><button class="button" type="button" data-feature-action="explore-region">Explore</button>' + renderFoldRequestButton(state, "region") + '<span class="control-hint">Coordinates remain inclusive, matching the HYB record display.</span></div>',
       "</section>",
       region.rna && region.start !== "" && region.end !== "" && !rangeIssue ? [
@@ -1091,7 +1104,7 @@
   }
 
   function renderEmptyRegion(rangeIssue) {
-    return '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Region Explorer</span><h2>' + (rangeIssue ? "Correct the coordinates above to explore a region." : "Choose an RNA region to start.") + '</h2><p>All calculations use only the records opened in this browser session.</p></div></section>';
+    return '<section class="placeholder-card"><div class="placeholder-inner"><span class="placeholder-label">Region explorer</span><h2>' + (rangeIssue ? "Correct the coordinates above to explore a region." : "Choose an RNA region to start.") + '</h2><p>All calculations use only the records opened in this browser session.</p></div></section>';
   }
 
   // RNA Structure, top to bottom: what this browser can fold (①), the setup
@@ -1236,12 +1249,12 @@
       ].join("") : "",
       structure.source === "record" ? renderSelectControl("HYB record", "selectedRecordIndex", String(structure.selectedRecordIndex === null ? "" : structure.selectedRecordIndex), [{ value: "", label: "Choose a loaded record" }].concat(selectableRecords.map(function (record) { return { value: String(record.index), label: record.id + " · " + record.rnaOne + "–" + record.rnaTwo }; })), "structure-control") : "",
       structure.source === "record" ? '<div class="notice notice-warning"><strong>Hybrid-read sequence</strong> This is the chimeric sequence stored in the selected HYB record. It is not necessarily a complete reference RNA or genomic region.</div>' : "",
-      structure.source === "paste" ? '<label class="control-field"><span>' + (cofold ? "RNA A sequence" : "Paste RNA sequence") + '</span><textarea class="sequence-textarea" rows="6" data-feature="structure-control" data-key="pastedSequence" placeholder="ACGU…">' + escape(structure.pastedSequence || "") + "</textarea></label>" : "",
+      structure.source === "paste" ? '<label class="control-field"><span>' + (cofold ? "RNA A sequence" : "Paste RNA sequence") + '</span><textarea class="sequence-textarea" rows="6" name="pastedSequence" spellcheck="false" autocomplete="off" autocapitalize="off" data-feature="structure-control" data-key="pastedSequence" placeholder="ACGU…">' + escape(structure.pastedSequence || "") + "</textarea></label>" : "",
       cofold && structure.source === "reference" ? [
         renderSelectControl("Region 2 RNA (strand B)", "secondRna", structure.secondRna, rnas.map(function (rna) { return { value: rna, label: rna }; }), "structure-control"),
         '<div class="control-grid">' + renderTextControl("Region 2 start", "secondStart", structure.secondStart, "Start", "structure-control", "number", { min: 1, step: 1 }) + renderTextControl("Region 2 end", "secondEnd", structure.secondEnd, "End", "structure-control", "number", { min: 1, step: 1 }) + '</div>'
       ].join("") : "",
-      cofold && structure.source === "paste" ? '<label class="control-field"><span>RNA B sequence</span><textarea class="sequence-textarea" rows="4" data-feature="structure-control" data-key="cplfoldSequenceTwo" placeholder="ACGU…">' + escape(structure.cplfoldSequenceTwo || "") + '</textarea><small>The first box is RNA A. Alternatively paste A&amp;B there and leave RNA B empty.</small></label>' : "",
+      cofold && structure.source === "paste" ? '<label class="control-field"><span>RNA B sequence</span><textarea class="sequence-textarea" rows="4" name="cplfoldSequenceTwo" spellcheck="false" autocomplete="off" autocapitalize="off" data-feature="structure-control" data-key="cplfoldSequenceTwo" placeholder="ACGU…">' + escape(structure.cplfoldSequenceTwo || "") + '</textarea><small>The first box is RNA A. Alternatively paste A&amp;B there and leave RNA B empty.</small></label>' : "",
       guidedConstraintMode ? renderGuidedStructureSetup(structure, rnas, sequenceInfo, "sequence") : "",
       sequenceInfo.error ? '<div class="notice notice-warning">' + escape(sequenceInfo.error) + "</div>" : "",
       renderStructureLengthBar(length, iris ? "iris" : cplfold ? "cplfold" : "viennarna", structure, lengthNotice),
@@ -1261,12 +1274,12 @@
       !cplfold && !iris ? '<div class="control-grid structure-thermo-grid"><label class="control-field"><span>Temperature</span><input type="number" ' + rangeAttributes(thermo.ranges.temperature) + ' step="0.1" value="' + attribute(temperature) + '" data-feature="structure-control" data-key="temperature" aria-label="Folding temperature in degrees Celsius"><small>°C</small></label><label class="control-field"><span>Minimum hairpin loop</span><input type="number" ' + rangeAttributes(thermo.ranges.minLoopSize) + ' value="' + attribute(minimumLoop) + '" data-feature="structure-control" data-key="minimumLoop" aria-label="Minimum unpaired bases in a hairpin loop"><small>unpaired bases</small></label></div>' : "",
       cplfold ? renderCplfoldSetup(structure, sequenceInfo, "options") : "",
       guidedConstraintMode ? renderGuidedStructureSetup(structure, rnas, sequenceInfo, "options") : "",
-      manualConstraintMode ? '<div class="structure-constraint-editor"><label class="control-field" for="structure-constraint-text"><span>Manual hard base pairs</span><textarea id="structure-constraint-text" class="sequence-textarea" rows="5" maxlength="20000" spellcheck="false" autocapitalize="off" autocomplete="off" data-feature="structure-control" data-key="constraintText" aria-describedby="structure-constraint-help" placeholder="4-18\n7-15">' + escape(structure.constraintText || "") + '</textarea><small id="structure-constraint-help">One 1-based i-j pair per line, relative to the prepared sequence shown here. Pairs must be canonical, non-crossing, use each nucleotide once, and satisfy the minimum loop size.</small></label></div>' : "",
-      !cplfold && !iris && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>I understand that this large fold may consume substantial browser memory.</span></label>' : ""
+      manualConstraintMode ? '<div class="structure-constraint-editor"><label class="control-field" for="structure-constraint-text"><span>Manual hard base pairs</span><textarea id="structure-constraint-text" class="sequence-textarea" name="constraintText" rows="5" maxlength="20000" spellcheck="false" autocapitalize="off" autocomplete="off" data-feature="structure-control" data-key="constraintText" aria-describedby="structure-constraint-help" placeholder="4-18\n7-15…">' + escape(structure.constraintText || "") + '</textarea><small id="structure-constraint-help">One 1-based i-j pair per line, relative to the prepared sequence shown here. Pairs must be canonical, non-crossing, use each nucleotide once, and satisfy the minimum loop size.</small></label></div>' : "",
+      !cplfold && !iris && length > 2000 && length <= 3000 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLarge"' + (structure.allowLarge ? " checked" : "") + '><span>Fold anyway: a fold this large may use substantial browser memory.</span></label>' : ""
     ].join("");
 
     return [
-      '<div class="page-heading structure-page-heading"><div><h1>RNA Structure</h1><p>Fold a region with ViennaRNA, CPLfold or IRIS, optionally guided by HYB evidence, in this browser.</p></div>' + (result ? renderStructureExportMenu(result) : "") + "</div>",
+      '<div class="page-heading structure-page-heading"><div><h1>RNA structure</h1><p>Fold a region with ViennaRNA, CPLfold or IRIS, optionally guided by HYB evidence, in this browser.</p></div>' + (result ? renderStructureExportMenu(result) : "") + "</div>",
       iris ? '<p class="card-note">IRIS browser adaptation · up to 300 nt and 2,000 evidence rows · 37 °C · nested structures</p>' : renderStructureCapacityStrip(structure),
       '<details class="structure-setup-panel data-card" data-open-key="structure-setup"' + (setupOpen ? " open" : "") + (result ? ' data-has-result="true"' : "") + ">",
       '<summary class="structure-setup-summary"><span class="structure-setup-title">Setup</span><span class="structure-setup-line">' + escape(structureSetupSummary(structure, sequenceInfo, length, guidedConstraintMode, manualConstraintMode)) + '</span>' + (result ? '<span class="structure-setup-edit" aria-hidden="true">Edit setup</span>' : "") + "</summary>",
@@ -1456,7 +1469,7 @@
   function formatShortDate(value) {
     const date = new Date(value);
     return Number.isFinite(date.getTime())
-      ? date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+      ? date.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" })
       : "earlier";
   }
 
@@ -1593,9 +1606,9 @@
 
   function renderIrisEnsemble(result) {
     return '<div class="structure-constraint-summary"><strong>IRIS weighted ensemble</strong><span>Select a member to update every structure view. Weights describe the fitted mixture, not confidence.</span></div>' +
-      '<div class="iris-ensemble-scroll"><table class="iris-ensemble-table"><thead><tr><th>Member</th><th>Weight</th><th>Energy (kcal/mol)</th><th>View</th></tr></thead><tbody>' +
-      (result.candidates || []).map(function(c,i) {return '<tr><td>'+(i+1)+'</td><td>'+Number(c.weight*100).toFixed(1)+'%</td><td>'+Number(c.energy).toFixed(2)+'</td><td><button class="button button-secondary" data-feature-action="select-iris-candidate" data-candidate-index="'+i+'" aria-pressed="'+(i===result.selectedCandidate)+'">'+(i===result.selectedCandidate?'Selected':'View member '+(i+1))+'</button></td></tr>';}).join('') +
-      '</tbody></table></div><p class="card-note">Ensemble mean energy: '+Number(result.ensemble.meanEnergy).toFixed(2)+' kcal/mol · '+format(result.ensemble.candidateCount)+' candidates · '+countLabel(result.ensemble.testedEnsembles,"ensemble")+' tested</p>';
+      '<div class="iris-ensemble-scroll"><table class="iris-ensemble-table"><thead><tr><th scope="col" class="num">Member</th><th scope="col" class="num">Weight</th><th scope="col" class="num">Energy (kcal/mol)</th><th scope="col">View</th></tr></thead><tbody>' +
+      (result.candidates || []).map(function(c,i) {return '<tr><td class="num">'+(i+1)+'</td><td class="num">'+formatFixed(Number(c.weight*100),1)+'%</td><td class="num">'+formatFixed(Number(c.energy),2)+'</td><td><button class="button button-secondary" data-feature-action="select-iris-candidate" data-candidate-index="'+i+'" aria-pressed="'+(i===result.selectedCandidate)+'">'+(i===result.selectedCandidate?'Selected':'View member '+(i+1))+'</button></td></tr>';}).join('') +
+      '</tbody></table></div><p class="card-note">Ensemble mean energy: '+formatFixed(Number(result.ensemble.meanEnergy),2)+' kcal/mol · '+format(result.ensemble.candidateCount)+' candidates · '+countLabel(result.ensemble.testedEnsembles,"ensemble")+' tested</p>';
   }
 
   function cplfoldKernelOption(kernel) {
@@ -1802,8 +1815,8 @@
       renderSelectControl("Randomised folds", "randomFoldCount", String(randomFoldCount),
         Object.entries({ [defaults.randomFoldCount]: "default", 0: "ranked fold only", 10: "quick ensemble", 100: "extended ensemble", 1000: "original cluster scale" })
           .map(([value, label]) => ({ value, label: format(Number(value)) + " · " + label })).filter(inRange(ranges.randomFoldCount)), "structure-control") + "</div>",
-      randomFoldCount > 0 ? '<label class="control-field"><span>Randomisation seed</span><input type="text" maxlength="128" value="' + attribute(structure.randomSeed || "HYB2-Web") + '" data-feature="structure-control" data-key="randomSeed"><small>Seeded Fisher–Yates ordering makes the browser ensemble reproducible.</small></label>' : "",
-      randomFoldCount > 100 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLargeEnsemble"' + (structure.allowLargeEnsemble ? " checked" : "") + '><span>I understand that 1,000 serial browser folds may take a long time; Cancel terminates the worker immediately.</span></label>' : "",
+      randomFoldCount > 0 ? '<label class="control-field"><span>Randomisation seed</span><input type="text" name="randomSeed" maxlength="128" spellcheck="false" autocomplete="off" autocapitalize="off" value="' + attribute(structure.randomSeed || "HYB2-Web") + '" data-feature="structure-control" data-key="randomSeed"><small>Seeded Fisher–Yates ordering makes the browser ensemble reproducible.</small></label>' : "",
+      randomFoldCount > 100 ? '<label class="structure-large-consent"><input type="checkbox" data-feature="structure-control" data-key="allowLargeEnsemble"' + (structure.allowLargeEnsemble ? " checked" : "") + '><span>Run anyway: 1,000 serial browser folds may take a long time; Cancel stops the worker at once.</span></label>' : "",
       "</section>"
     ].join("");
   }
@@ -1815,7 +1828,7 @@
     const bonusMatrixExport = structure.operation === "bonus-matrix";
     return [
       '<div class="structure-progress" role="status" aria-live="polite">',
-      '<div><strong>' + (capacity ? "Measuring browser capacity" : (bonusMatrixExport ? "Preparing local inputs" : "Predicting locally")) + '</strong><span>' + escape(structure.message || (capacity ? "Preparing the local CPLfold capacity test…" : (bonusMatrixExport ? "Preparing the CPLfold bonus matrix…" : (cplfold ? "Preparing CPLfold calculation…" : "Preparing ViennaRNA MFE calculation…")))) + "</span></div>",
+      '<div><strong>' + (capacity ? "Measuring browser capacity…" : (bonusMatrixExport ? "Preparing local inputs…" : "Predicting locally…")) + '</strong><span>' + escape(structure.message || (capacity ? "Preparing the local CPLfold capacity test…" : (bonusMatrixExport ? "Preparing the CPLfold bonus matrix…" : (cplfold ? "Preparing CPLfold calculation…" : "Preparing ViennaRNA MFE calculation…")))) + "</span></div>",
       '<div class="progress-bar" role="progressbar" aria-label="' + (capacity ? "CPLfold browser capacity test" : (bonusMatrixExport ? "CPLfold local input export" : (cplfold ? "CPLfold" : "ViennaRNA") + ' structure prediction')) + ' progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + progress + '"><span style="width:' + progress + '%"></span></div>',
       "</div>"
     ].join("");
@@ -1962,13 +1975,13 @@
       "</div>",
       "</div>",
       '<section class="structure-alignment" aria-label="Sequence and dot-bracket"><div class="structure-alignment-heading"><span class="drawer-kicker">Sequence / dot-bracket</span><button class="button button-secondary button-compact" type="button" data-feature-action="copy-structure-dot-bracket">Copy dot-bracket</button></div>' + renderAlignedSequence(result.sequence, result.dotBracket, selectedNucleotide, "structure-output-code", result.cutpoint) + "</section>",
-      '<details class="base-pair-details"><summary>Base-pair list (' + format(pairs.length) + ")</summary>" + (pairs.length ? '<ol class="base-pair-list">' + pairs.map(function (pair, index) {
+      '<details class="base-pair-details"><summary>Base-pair list (' + format(pairs.length) + ")</summary>" + (pairs.length ? '<ol class="base-pair-list">' + pairs.slice(0, BASE_PAIR_LIST_LIMIT).map(function (pair, index) {
         const isHardConstraint = requestedPairs.has(pair.left + ":" + pair.right);
         const evidenceLabel = rawCounts ? " · raw count " + format(rawCounts[index]) + " · bonus " + formatEvidence(pair.bonusSupport) :
           (guided || cplfold) && Number(pair.evidenceSupport) > 0 ? " · evidence " + formatEvidence(pair.evidenceSupport) : "";
         const pairLabel = cplfold ? escape(pair.layer || "primary") : (isHardConstraint ? "Hard pair" : "MFE pair");
         return '<li' + (isHardConstraint ? ' class="hard-constraint-pair"' : "") + "><span>" + format(pair.left) + " " + escape(pair.leftBase) + "</span><span>" + escape(pair.type) + "</span><span>" + format(pair.right) + " " + escape(pair.rightBase) + "</span><span>" + pairLabel + evidenceLabel + "</span></li>";
-      }).join("") + "</ol>" : '<p class="empty-inline">The selected predictor did not place any base pairs.</p>') + "</details>",
+      }).join("") + "</ol>" + (pairs.length > BASE_PAIR_LIST_LIMIT ? '<p class="table-note">Showing the first ' + format(BASE_PAIR_LIST_LIMIT) + " of " + format(pairs.length) + " base pairs. Copy the dot-bracket or use Export for all of them.</p>" : "") : '<p class="empty-inline">The selected predictor did not place any base pairs.</p>') + "</details>",
       "</section>"
     ].join("");
   }
@@ -2063,7 +2076,7 @@
     return '<section class="structure-diagram-panel"><div class="structure-diagram-heading"><div class="structure-diagram-title"><h3>' + (editing ? "Drawing editor" : titles[activeView]) + '</h3></div><div class="structure-view-toolbar"><span class="structure-view-label">View</span><div class="structure-view-options" role="group" aria-label="RNA structure visualization view">' + options.map(function (option) {
       const active = option[0] === activeView && !editing;
       return '<button class="structure-view-option' + (active ? " is-active" : '') + '" type="button" data-feature-action="set-structure-view" data-view-mode="' + option[0] + '" aria-pressed="' + (active ? "true" : "false") + '">' + option[1] + "</button>";
-    }).join("") + (window.Hyb2StructureEditor ? '<button class="structure-view-option' + (editing ? " is-active" : "") + '" type="button" data-feature-action="toggle-structure-editor" aria-pressed="' + (editing ? "true" : "false") + '">' + (editing ? "Close editor" : "Edit drawing") + '</button>' : '') + '</div></div><p class="structure-diagram-copy"><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span> ' + (editing ? "Edit a copy of this prediction: layout, colours, labels and pairs. The prediction and its exports stay unchanged." : structureViewCopy(activeView, cplfold, allowPseudoknot, guided, manualConstrained) + " " + inspectorInstruction) + '</p></div><div class="structure-diagram" data-structure-diagram data-view-mode="' + activeView + '" aria-label="' + labels[activeView] + '"></div></section>';
+    }).join("") + (window.Hyb2StructureEditor ? '<button class="structure-view-option' + (editing ? " is-active" : "") + '" type="button" data-feature-action="toggle-structure-editor" aria-pressed="' + (editing ? "true" : "false") + '">' + (editing ? "Close editor" : "Edit drawing") + '</button>' : '') + '</div></div><p class="structure-diagram-copy"><span class="method-badge">' + escape(result.algorithm || (cplfold ? "CPLfold" : "ViennaRNA MFE")) + '</span> ' + (editing ? "Edit a copy of this prediction: layout, colours, labels and pairs. The prediction and its exports stay unchanged." : structureViewCopy(activeView, cplfold, allowPseudoknot, guided, manualConstrained) + " " + inspectorInstruction) + '</p></div><div class="structure-diagram" role="group" data-structure-diagram data-view-mode="' + activeView + '" aria-label="' + labels[activeView] + '"></div></section>';
   }
 
   // E9: five columns that fit the side column; the dot-bracket is the row's
@@ -2072,7 +2085,7 @@
     const candidates = result.candidates || [];
     return [
       '<section class="cplfold-candidates" aria-label="CPLfold candidate structures">',
-      '<div class="candidate-table-intro"><strong>Select a candidate structure</strong><span>Click any row to update the RNA visualization and all result details below.</span></div>',
+      '<div class="candidate-table-intro"><strong>Select a candidate structure</strong><span>Select any row to update the RNA visualization and all result details below.</span></div>',
       '<div class="data-table-wrap"><table class="data-table compact-table cplfold-candidate-table"><thead><tr><th class="num">Rank</th><th>Topology</th><th class="num">Energy</th><th class="num">Pairs</th><th>Status</th></tr></thead><tbody>',
       candidates.map(function (candidate, index) {
         const selected = index === Number(result.selectedCandidate || 0);
@@ -2545,10 +2558,10 @@
     return [
       '<div class="fasta-mapping">',
       '<p class="card-note">RNA names match the IDs used by the HYB2 pipeline. If any FASTA header contains a pipe (|), HYB2 rewrites IDs across the whole reference. To override a match, pick the RNA and apply the original FASTA ID you want.</p>',
-      '<div class="control-grid"><label class="control-field"><span>HYB RNA</span><input type="search" list="fasta-rna-suggestions" value="' + attribute(editorRna) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorRna"><datalist id="fasta-rna-suggestions">' + rnas.slice(0, 500).map(function (rna) { return '<option value="' + attribute(rna) + '"></option>'; }).join("") + '</datalist></label>',
-      '<label class="control-field"><span>FASTA reference ID</span><input type="search" list="fasta-reference-suggestions" value="' + attribute(editorReference) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorReference"><datalist id="fasta-reference-suggestions">' + fasta.sequences.slice(0, 500).map(function (entry) { return '<option value="' + attribute(entry.id) + '">' + escape(entry.header || entry.id) + '</option>'; }).join("") + '</datalist></label></div>',
+      '<div class="control-grid"><label class="control-field"><span>HYB RNA</span><input type="search" name="mappingEditorRna" autocomplete="off" spellcheck="false" list="fasta-rna-suggestions" value="' + attribute(editorRna) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorRna"><datalist id="fasta-rna-suggestions">' + rnas.slice(0, 500).map(function (rna) { return '<option value="' + attribute(rna) + '"></option>'; }).join("") + '</datalist></label>',
+      '<label class="control-field"><span>FASTA reference ID</span><input type="search" name="mappingEditorReference" autocomplete="off" spellcheck="false" list="fasta-reference-suggestions" value="' + attribute(editorReference) + '" data-feature="fasta-mapping-editor" data-key="mappingEditorReference"><datalist id="fasta-reference-suggestions">' + fasta.sequences.slice(0, 500).map(function (entry) { return '<option value="' + attribute(entry.id) + '">' + escape(entry.header || entry.id) + '</option>'; }).join("") + '</datalist></label></div>',
       '<div class="inline-actions"><button class="button button-secondary" type="button" data-feature-action="apply-fasta-mapping">Apply mapping</button><button class="quiet-button" type="button" data-feature-action="remove-current-fasta-mapping">Mark as not matched</button><button class="quiet-button" type="button" data-feature-action="export-fasta-mapping">Export matches</button></div>',
-      '<div class="mapping-rows">' + preview.map(function (rna) {
+      '<div class="mapping-rows"' + LONG_TABLE_STYLE + '>' + preview.map(function (rna) {
         const mapped = fasta.mapping[rna] || "Not matched";
         return '<div class="mapping-row"><span title="' + attribute(rna) + '">' + escape(rna) + '</span><span title="' + attribute(mapped) + '">' + escape(mapped) + '</span><button class="quiet-button" type="button" data-feature-action="edit-fasta-mapping" data-rna="' + attribute(rna) + '">Edit</button></div>';
       }).join("") + "</div>",
@@ -2606,9 +2619,12 @@
       (settings.step === undefined ? "" : ' step="' + attribute(settings.step) + '"') +
       (settings.title === undefined ? "" : ' title="' + attribute(settings.title) + '"') +
       (settings.disabled ? " disabled" : "");
+    // number fields: the numeric keypad on touch devices (whole numbers
+    // when the step is 1, otherwise decimals and a minus sign)
+    const inputMode = type === "number" ? ' inputmode="' + (Number(settings.step) === 1 && Number(settings.min) >= 0 ? "numeric" : "decimal") + '"' : "";
     return [
-      '<label class="control-field' + (settings.wide ? " control-field--wide" : "") + '"><span>' + escape(label) + "</span>",
-      '<input type="' + (type || "text") + '" value="' + attribute(value) + '" placeholder="' + attribute(placeholder) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '"' + numericAttributes + '>',
+      '<label class="control-field' + (settings.wide ? " control-field--wide" : "") + (settings.full ? " control-field--full" : "") + '"><span>' + escape(label) + "</span>",
+      '<input type="' + (type || "text") + '" name="' + attribute(feature + "-" + key) + '" autocomplete="off"' + (type === "number" ? "" : ' spellcheck="false"') + inputMode + ' value="' + attribute(value) + '" placeholder="' + attribute(placeholder) + '" data-feature="' + attribute(feature) + '" data-key="' + attribute(key) + '"' + numericAttributes + '>',
       "</label>"
     ].join("");
   }
@@ -2929,7 +2945,7 @@
     if (milliseconds < 1000) {
       return Math.round(milliseconds) + " ms";
     }
-    return (milliseconds / 1000).toFixed(1) + " s";
+    return formatFixed(milliseconds / 1000, 1) + "\u00a0s";
   }
 
   function structureLengthNotice(length, allowLarge, engine, structure, cutpoint) {
@@ -3015,11 +3031,11 @@
   }
 
   function formatEnergy(value) {
-    return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : "—";
+    return Number.isFinite(Number(value)) ? formatFixed(Number(value), 2) : "—";
   }
 
   function formatEvidence(value) {
-    return Number.isFinite(Number(value)) ? Number(value).toFixed(3) : "—";
+    return Number.isFinite(Number(value)) ? formatFixed(Number(value), 3) : "—";
   }
 
   function formatBytes(bytes) {

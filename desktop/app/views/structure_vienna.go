@@ -168,7 +168,7 @@ func (p *structurePage) comradesPlan(pl *foldPlan) {
 	pl.req.Parameters = map[string]any{"temperature": p.temperature, "min_loop": int(p.minLoop),
 		"constraint_limit": int(p.stems), "random_folds": int(p.randomFolds), "seed": seed, "homodimer_only": p.homodimerOnly,
 		"fold_program": p.comradesProgram()}
-	pl.limits = []string{"Each chimera inside a window is cofolded (RNAcofold); its intermolecular pairs are the evidence, merged into stems.",
+	pl.limits = []string{"Each chimera inside a window is cofolded (RNAcofold); its intermolecular pairs are the evidence, merged into stems; weak stem ends are trimmed.",
 		"Stems are added as hard pairs one by one, ranked by support, then in seeded random orders, each fitted with " + p.comradesProgramName() +
 			"; the structure matching most evidence wins.",
 		"No pseudoknots: " + p.comradesProgramName() + " returns a nested structure."}

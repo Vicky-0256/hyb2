@@ -181,6 +181,44 @@ const constraints = comrades.stemsToConstraints(stems, 75);
 assert.deepEqual(constraints[0].pairs, [{ left: 5, right: 23 }, { left: 6, right: 22 }]);
 assert.equal(constraints[0].support, 3);
 
+// Chimeras occur in both arm orders: a base pair is counted once, with `one`
+// the lower position. (1, 9) and (9, 1) halved the pair's support and gave the
+// same constraint twice.
+const bothOrders = comrades.aggregateEvidence([
+  { one: 1, two: 9, recordId: "a" }, { one: 9, two: 1, recordId: "b" },
+  { one: 2, two: 8, recordId: "a" }, { one: 8, two: 2, recordId: "b" }, { one: 8, two: 2, recordId: "c" },
+  { one: 5, two: 5, recordId: "d" }
+]);
+assert.deepEqual(bothOrders.map(function (entry) { return [entry.one, entry.two, entry.count, entry.recordIds]; }), [
+  [2, 8, 3, ["a", "b", "c"]], [1, 9, 2, ["a", "b"]]
+]);
+assert.deepEqual(
+  comrades.stemsToConstraints(comrades.mergeTouchingStems(bothOrders), 75)
+    .map(function (item) { return [item.left, item.right, item.length, item.support]; }),
+  [[1, 9, 2, 5]]
+);
+
+// Weak pairs are trimmed from the ends of a stem (hyb2 gk-dev's
+// test_bp2hyb_trims_weak_helix_ends, and the same cases as the Python runtime
+// and bin/bp2hyb.sh): 10-50..14-46 is well supported, 9-51 and 15-45 extend it
+// with 2 and 1 observations.
+const weakEnds = [
+  [9, 51, 2], [10, 50, 100], [11, 49, 100], [12, 48, 90], [13, 47, 80], [14, 46, 100], [15, 45, 1],
+  [30, 70, 7], [31, 69, 1]
+].map(function (item) { return { one: item[0], two: item[1], count: item[2] }; });
+function stemRows(trimFraction) {
+  return comrades.mergeTouchingStems(weakEnds, trimFraction).map(function (stem) {
+    return [stem.rank, stem.oneStart, stem.oneEnd, stem.twoStart, stem.twoEnd, stem.length, stem.support,
+      stem.evidencePairs.map(function (pair) { return pair.count; })];
+  });
+}
+// 1 of 7 is above 5%, so the second stem keeps both pairs
+assert.deepEqual(stemRows(), [[1, 10, 14, 46, 50, 5, 470, [100, 100, 90, 80, 100]], [2, 30, 31, 69, 70, 2, 8, [7, 1]]]);
+assert.deepEqual(stemRows(0), [[1, 9, 15, 45, 51, 7, 473, [2, 100, 100, 90, 80, 100, 1]], [2, 30, 31, 69, 70, 2, 8, [7, 1]]]);
+assert.deepEqual(stemRows(0.2)[1], [2, 30, 30, 70, 70, 1, 7, [7]]);
+assert.deepEqual(comrades.stemsToConstraints(comrades.mergeTouchingStems(weakEnds), 75)[0].pairs,
+  [{ left: 10, right: 50 }, { left: 11, right: 49 }, { left: 12, right: 48 }, { left: 13, right: 47 }, { left: 14, right: 46 }]);
+
 const compatible = comrades.validateConstraintSet(constraints.slice(0, 1), "AAAAGGAAAAAAAAACCAAAACCC", 3);
 assert.equal(compatible.valid, true);
 const crossing = comrades.validateConstraintSet([

@@ -15,6 +15,9 @@
   const ORIGINAL_LINKER_LENGTH = 100;
   const ORIGINAL_EVIDENCE_LIMIT = 1001;
   const ORIGINAL_CONSTRAINT_LIMIT = 75;
+  // A stem loses the pairs at its ends that have less than this share of its
+  // best pair's observations (hyb2 gk-dev's bp2hyb trim_fraction; 0 keeps them).
+  const STEM_TRIM_FRACTION = 0.05;
   const CANONICAL_PAIRS = new Set(["AU", "UA", "CG", "GC", "GU", "UG"]);
 
   // Diagnose selection failures without clipping arms or fabricating evidence.
@@ -264,14 +267,19 @@
     return mapped;
   }
 
+  // Observations per base pair, with `one` the lower position: chimeras are
+  // sequenced in both arm orders, and keeping (i, j) apart from (j, i) would
+  // split one pair's count.
   function aggregateEvidence(mappedPairs) {
     const counts = new Map();
     (mappedPairs || []).forEach(function (pair) {
-      const one = Number(pair.one);
-      const two = Number(pair.two);
-      if (!Number.isSafeInteger(one) || !Number.isSafeInteger(two) || one < 1 || two < 1 || one === two) {
+      const first = Number(pair.one);
+      const second = Number(pair.two);
+      if (!Number.isSafeInteger(first) || !Number.isSafeInteger(second) || first < 1 || second < 1 || first === second) {
         return;
       }
+      const one = Math.min(first, second);
+      const two = Math.max(first, second);
       const key = one + "\t" + two;
       const current = counts.get(key) || { one: one, two: two, count: 0, recordIds: [] };
       current.count += 1;
@@ -302,7 +310,33 @@
     }).sort(evidenceOrder).slice(0, maximum);
   }
 
-  function mergeTouchingStems(evidence) {
+  // Drop the pairs at either end of a stem whose count is below `fraction` of
+  // its best pair's; pairs inside the stem are kept.
+  function trimStemEnds(stem, fraction) {
+    const pairs = stem.evidencePairs; // one ascending, two descending
+    const cutoff = fraction * Math.max.apply(null, pairs.map(function (pair) { return pair.count; }));
+    let low = 0;
+    let high = pairs.length - 1;
+    while (low < high && pairs[low].count < cutoff) low += 1;
+    while (high > low && pairs[high].count < cutoff) high -= 1;
+    const kept = pairs.slice(low, high + 1);
+    if (kept.length < pairs.length) {
+      stem.oneStart = kept[0].one;
+      stem.oneEnd = kept[kept.length - 1].one;
+      stem.twoStart = kept[kept.length - 1].two;
+      stem.twoEnd = kept[0].two;
+      stem.length = kept.length;
+      stem.support = kept.reduce(function (sum, pair) { return sum + pair.count; }, 0);
+      stem.evidencePairs = kept;
+    }
+  }
+
+  // Pairs that touch on a diagonal, merged into stems, strongest first.
+  // Merging joins neighbouring pairs whatever their counts, so one weak pair
+  // could lengthen a strong stem and, as a forced constraint, block the stem
+  // next to it; trimFraction removes such pairs from the stems' ends.
+  function mergeTouchingStems(evidence, trimFraction) {
+    const fraction = trimFraction === undefined ? STEM_TRIM_FRACTION : Number(trimFraction);
     const stems = [];
     (evidence || []).slice().sort(function (left, right) {
       return left.one - right.one || left.two - right.two;
@@ -331,6 +365,9 @@
         stems.push(current);
       }
     });
+    if (fraction > 0) {
+      stems.forEach(function (stem) { trimStemEnds(stem, fraction); });
+    }
 
     return stems.sort(function (left, right) {
       return right.support - left.support || right.length - left.length ||

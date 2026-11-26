@@ -281,6 +281,44 @@ NR == 2 {n = length($0); print n, "ENERGY = 0.0", name
         self.assertFalse(saved.exists())
         self.assertFalse((self.root / "alpha_1-12.fasta.ct").exists())
 
+    def test_a_base_pair_is_counted_once_whichever_arm_was_sequenced_first(self):
+        # Chimeras occur in both arm orders. "1 12" and "12 1" halved the pair's
+        # count and gave the same constraint twice.
+        self.enable_scoring()
+        self.tool("RNAcofold", """awk 'NR%2 {print; next}
+            {print; dot=$0; gsub(/[^&]/,".",dot)
+             if ($0=="GGGG&CCCC" || $0=="CCCC&GGGG") dot="((((&))))"; print dot " (-3.00)"}'""")
+        source = self.root / "both.hyb"
+        source.write_text(
+            "r1\tGGGGCCCC\t-1.0\talpha\t1\t4\t1\t4\t0\talpha\t5\t8\t9\t12\t0\t10\n"
+            "r2\tCCCCGGGG\t-1.0\talpha\t1\t4\t9\t12\t0\talpha\t5\t8\t1\t4\t0\t10\n"
+            "r3\tCCCCGGGG\t-1.0\talpha\t1\t4\t9\t12\t0\talpha\t5\t8\t1\t4\t0\t10\n")
+        done = self.invoke("comradesMakeConstraints_2", "-i", source, "-f", self.first, "-b", "1", "-e", "12")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual((self.root / "both.basepair_scores.txt").read_text(), "1\t12\t3\n2\t11\t3\n3\t10\t3\n4\t9\t3\n")
+        self.assertEqual((self.root / "both.1-12_folding_constraints.txt").read_text(), "F\t1\t12\t4\n")
+
+    def test_weak_pairs_are_trimmed_from_the_ends_of_a_helix(self):
+        # hyb2 gk-dev's test_bp2hyb_trims_weak_helix_ends: 10-50..14-46 is well
+        # supported, 9-51 and 15-45 extend it with 2 and 1 observations.
+        pairs = [(9, 51, 2), (10, 50, 100), (11, 49, 100), (12, 48, 90), (13, 47, 80), (14, 46, 100), (15, 45, 1),
+                 (30, 70, 7), (31, 69, 1)]
+        text = "".join("%d\t%d\t%d\n" % pair for pair in pairs)
+
+        def helices(*arguments):
+            done = subprocess.run(["bash", str(BIN / "bp2hyb.sh"), *arguments], input=text, cwd=self.root, env=self.env,
+                                  capture_output=True, text=True, timeout=30)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return [tuple(row.split("\t")[i] for i in (2, 6, 7, 12, 13)) for row in done.stdout.splitlines()]
+
+        # 1 of 7 is above 5%, so the second helix keeps both pairs
+        self.assertEqual(helices(), [("470", "10", "14", "46", "50"), ("8", "30", "31", "69", "70")])
+        self.assertEqual([row[1:] for row in helices("0")], [("9", "15", "45", "51"), ("30", "31", "69", "70")])
+        self.assertEqual(helices("0.2"), [("470", "10", "14", "46", "50"), ("7", "30", "30", "70", "70")])
+        done = subprocess.run(["bash", str(BIN / "bp2hyb.sh"), "many"], input=text, cwd=self.root, env=self.env,
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(done.returncode, 2)
+
     def test_standalone_scorer_rejects_truncated_windows_in_any_reference_record(self):
         self.enable_scoring()
         source = self.root / "sample.hyb"

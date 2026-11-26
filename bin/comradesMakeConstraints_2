@@ -61,7 +61,11 @@ awk -F '\t' -v b="$start" -v e="$end" 'e>length($2) {
 		ct2bps_2.awk -v arms=paired.fa cofold.ct | histogram.pl | LC_ALL=C sort -k3,3nr -k1,1n -k2,2n > scores
 		awk -v b="$start" -v e="$end" 'printed<=1000 && $1>=b && $1<=e && $2>=b && $2<=e {print; printed++}' scores |
 			bp2hyb.sh | hyb2constraints.pl |
-			awk -v b="$start" -v n="$limit" 'BEGIN{OFS="\t"} NR<=n {print $1,$2-b+1,$3-b+1,$4}' > constraints
+			awk -v b="$start" -v n="$limit" 'BEGIN{OFS="\t"} {
+				line=$1 OFS $2-b+1 OFS $3-b+1 OFS $4
+				# a constraint is written once; n counts the written ones
+				if (written<n && !(line in seen)) {seen[line]; written++; print line}
+			}' > constraints
 	fi
 )
 mv -- "$work/fragment" "$fragment"

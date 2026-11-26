@@ -119,8 +119,8 @@ It does not clip B or `comradesPairCounts`, the raw counts aligned with each can
 This score does not rerank CPLfold candidates. Standalone COMRADES(ViennaRNA)
 at its default settings uses the same RNAcofold arm model as `comrades`, but
 fits ranked stems as hard constraints instead of using B. Only constraint
-selection is limited to the strongest 1,001 oriented pairs; scoring uses the
-full table in either orientation. Neither Vienna model promises the same
+selection is limited to the strongest 1,001 pairs; a pair is counted once,
+whichever arm of the chimera was sequenced first, in selection and in scoring. Neither Vienna model promises the same
 per-pair counts as the original UNAFold `hybrid-min`.
 
 `log1p` compresses each cell but does not put the kernels on one scale. On the

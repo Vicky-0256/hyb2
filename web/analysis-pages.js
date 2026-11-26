@@ -1535,7 +1535,7 @@
       : cplfold
       ? '<div class="fold-status fold-status-cplfold"><strong>Pure-Python CPLfold mode</strong><p>' + (allowPseudoknot ? "LinearFold generates phase-1 candidates; a second constrained phase searches for crossing base pairs, and CPLfold/HotKnots energy models rank nested and pseudoknotted structures." : "LinearFold generates phase-1 secondary-structure candidates and skips the constrained Phase 2 pseudoknot search; Turner 2004 energies rank the candidates.") + " The computation runs in a dedicated Pyodide worker.</p></div>"
       : guidedConstraintMode
-      ? '<div class="fold-status fold-status-evidence"><strong>COMRADES(ViennaRNA)</strong><p>Each eligible HYB row is folded with RNAcofold. Base-pair frequencies are merged into ranked stems, fitted greedily as hard constraints, then optionally re-fitted in seeded random orders.</p></div>'
+      ? '<div class="fold-status fold-status-evidence"><strong>COMRADES(ViennaRNA)</strong><p>Each eligible HYB row is folded with RNAcofold. Base-pair frequencies are merged into ranked stems with weak ends trimmed, fitted greedily as hard constraints, then optionally re-fitted in seeded random orders.</p></div>'
       : manualConstraintMode
       ? '<div class="fold-status fold-status-constraints"><strong>Manual hard-pair mode</strong><p>ViennaRNA will enforce the pairs you enter before calculating the MFE. HYB2 Web Lite does not infer these pairs from HYB or RNAcofold evidence.</p></div>'
       : '<div class="fold-status fold-status-mfe"><strong>Plain minimum-free-energy mode</strong><p>Runs the deployed ViennaRNA WebAssembly engine in a dedicated worker without base-pair constraints.</p></div>';

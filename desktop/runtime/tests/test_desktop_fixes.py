@@ -87,6 +87,36 @@ class ComradesSeedTests(unittest.TestCase):
         self.assertEqual(comrades._record_id(b"read7\tACGU", 3), "read7")
         self.assertEqual(comrades._record_id(b"\tACGU", 3), "line_3")
 
+    def test_a_base_pair_is_counted_once_whichever_arm_was_sequenced_first(self):
+        # Chimeras occur in both arm orders; (1, 9) and (9, 1) halved the pair's
+        # support and gave the same constraint twice.
+        from desktop.runtime import comrades
+        mapped = [(1, 9, "a"), (9, 1, "b"), (2, 8, "a"), (8, 2, "b"), (8, 2, "c"), (5, 5, "d")]
+        entries = comrades.aggregate_evidence(mapped)
+        self.assertEqual([(e["one"], e["two"], e["count"], e["recordIds"]) for e in entries],
+                         [(2, 8, 3, ["a", "b", "c"]), (1, 9, 2, ["a", "b"])])
+        constraints = comrades.stems_to_constraints(comrades.merge_touching_stems(entries), 75)
+        self.assertEqual([(c["left"], c["right"], c["length"], c["support"]) for c in constraints], [(1, 9, 2, 5)])
+
+    def test_weak_pairs_are_trimmed_from_the_ends_of_a_stem(self):
+        # hyb2 gk-dev's test_bp2hyb_trims_weak_helix_ends: 10-50..14-46 is well
+        # supported, 9-51 and 15-45 extend it with 2 and 1 observations.
+        from desktop.runtime import comrades
+        counts = [(9, 51, 2), (10, 50, 100), (11, 49, 100), (12, 48, 90), (13, 47, 80), (14, 46, 100), (15, 45, 1),
+                  (30, 70, 7), (31, 69, 1)]
+        evidence = [{"one": one, "two": two, "count": count} for one, two, count in counts]
+
+        def stems(*arguments):
+            return [(s["rank"], s["oneStart"], s["oneEnd"], s["twoStart"], s["twoEnd"], s["length"], s["support"],
+                     [p["count"] for p in s["evidencePairs"]]) for s in comrades.merge_touching_stems(evidence, *arguments)]
+
+        # 1 of 7 is above 5%, so the second stem keeps both pairs
+        self.assertEqual(stems(), [(1, 10, 14, 46, 50, 5, 470, [100, 100, 90, 80, 100]), (2, 30, 31, 69, 70, 2, 8, [7, 1])])
+        self.assertEqual(stems(0), [(1, 9, 15, 45, 51, 7, 473, [2, 100, 100, 90, 80, 100, 1]), (2, 30, 31, 69, 70, 2, 8, [7, 1])])
+        self.assertEqual(stems(0.2)[1], (2, 30, 30, 70, 70, 1, 7, [7]))
+        trimmed = comrades.stems_to_constraints(comrades.merge_touching_stems(evidence), 75)[0]
+        self.assertEqual(trimmed["pairs"], [(10, 50), (11, 49), (12, 48), (13, 47), (14, 46)])
+
     def test_seed_is_trimmed_and_cut_as_the_web(self):
         from desktop.runtime import comrades
         # String(seed).trim().slice(0, 128): UTF-16 units, JavaScript whitespace

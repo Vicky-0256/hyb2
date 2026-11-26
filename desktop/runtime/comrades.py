@@ -3,8 +3,9 @@ mode (web/comrades-analysis.js and the comrades-fold path of
 web/structure.worker.js), for one region of one RNA.
 
 Each eligible chimera (both arms inside the region) is cofolded with
-RNAcofold; the intermolecular pairs it forms are counted as evidence, the
-strongest 1,001 are merged into stems, the stems become hard-pair
+RNAcofold; the intermolecular pairs it forms are counted as evidence (a pair
+once, whichever arm was sequenced first), the strongest 1,001 are merged into
+stems, weak pairs are trimmed from the stems' ends, the stems become hard-pair
 constraints, and ViennaRNA MFE folds are fitted with the constraints added
 one by one (in rank order, then in seeded random orders). The structure
 whose pairs carry the most evidence wins.
@@ -27,6 +28,9 @@ from . import mfold, vienna
 
 _SETTINGS = engine_parameters("desktop")["comrades"]
 ORIGINAL_EVIDENCE_LIMIT = 1001
+# A stem loses the pairs at its ends that have less than this share of its
+# best pair's observations (hyb2 gk-dev's bp2hyb trim_fraction; 0 keeps them).
+STEM_TRIM_FRACTION = 0.05
 SCORE_ENDPOINT_CAP = 1_000_000  # Lau bp_score.sh: make_VARNA_scores_2.sh -m
 MAX_EVIDENCE_RECORDS = 50_000
 # The web folds at most 3,000 nt; each accepted stem refolds the region.
@@ -272,14 +276,16 @@ def map_cofold_pairs(job: Dict[str, Any], pairs: Sequence[Tuple[int, int]]) -> L
 
 
 def aggregate_evidence(mapped: Iterable[Tuple[Any, ...]]) -> List[Dict[str, Any]]:
-    """Observations per (one, two), strongest first; an observation may carry
+    """Observations per base pair, strongest first, with ``one`` the lower
+    position: chimeras are sequenced in both arm orders, and keeping (i, j)
+    apart from (j, i) would split one pair's count. An observation may carry
     its HYB record id as a third item, and each pair keeps the first 20
     (``recordIds``, the web's aggregateEvidence)."""
     counts: Dict[Tuple[int, int], int] = {}
     ids: Dict[Tuple[int, int], List[str]] = {}
     for item in mapped:
-        one, two = item[0], item[1]
-        if one >= 1 and two >= 1 and one != two:
+        one, two = sorted(item[:2])
+        if one >= 1 and one != two:
             counts[(one, two)] = counts.get((one, two), 0) + 1
             kept = ids.setdefault((one, two), [])
             if len(item) > 2 and item[2] is not None and len(kept) < 20:
@@ -293,7 +299,27 @@ def select_fragment_evidence(evidence, begin: int, end: int, limit: int = ORIGIN
     return sorted(kept, key=lambda e: (-e["count"], e["one"], e["two"]))[:limit]
 
 
-def merge_touching_stems(evidence) -> List[Dict[str, Any]]:
+def _trim_stem_ends(stem: Dict[str, Any], fraction: float) -> None:
+    """Drop the pairs at either end of a stem whose count is below ``fraction``
+    of its best pair's; pairs inside the stem are kept."""
+    pairs = stem["evidencePairs"]  # one ascending, two descending
+    cutoff = fraction * max(pair["count"] for pair in pairs)
+    low, high = 0, len(pairs) - 1
+    while low < high and pairs[low]["count"] < cutoff:
+        low += 1
+    while high > low and pairs[high]["count"] < cutoff:
+        high -= 1
+    kept = pairs[low:high + 1]
+    if len(kept) < len(pairs):
+        stem.update(oneStart=kept[0]["one"], oneEnd=kept[-1]["one"], twoStart=kept[-1]["two"], twoEnd=kept[0]["two"],
+                    length=len(kept), support=sum(pair["count"] for pair in kept), evidencePairs=kept)
+
+
+def merge_touching_stems(evidence, trim_fraction: float = STEM_TRIM_FRACTION) -> List[Dict[str, Any]]:
+    """Pairs that touch on a diagonal, merged into stems, strongest first.
+    Merging joins neighbouring pairs whatever their counts, so one weak pair
+    could lengthen a strong stem and, as a forced constraint, block the stem
+    next to it; ``trim_fraction`` removes such pairs from the stems' ends."""
     stems: List[Dict[str, Any]] = []
     for entry in sorted(evidence, key=lambda e: (e["one"], e["two"])):
         one, two, count = entry["one"], entry["two"], entry["count"]
@@ -309,6 +335,9 @@ def merge_touching_stems(evidence) -> List[Dict[str, Any]]:
         else:
             stems.append({"oneStart": one, "oneEnd": one, "twoStart": two, "twoEnd": two, "length": 1, "support": count,
                           "evidencePairs": [{"one": one, "two": two, "count": count}]})
+    if trim_fraction > 0:
+        for stem in stems:
+            _trim_stem_ends(stem, trim_fraction)
     stems.sort(key=lambda s: (-s["support"], -s["length"], s["oneStart"], s["twoStart"]))
     return [dict(stem, rank=index + 1) for index, stem in enumerate(stems)]
 

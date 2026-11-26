@@ -53,6 +53,23 @@ trap 'exit 1' HUP INT TERM
 cd -- "$work"
 ln -s -- "$SAM" input.sam
 
+# Gene ranking and the statistics take the number of identical reads from the
+# read name (<rank>_<count>). All names come from one source, so the first one
+# tells. A read named @... would be skipped as a header line by every step below.
+# hyb2pipe (sam.check_header, sam.check_read_name) gives the same messages.
+LC_ALL=C awk -F'\t' -v hint='Give Hyb2 the reads instead (FASTA or FASTQ): it collapses identical reads and names them <rank>_<count> before mapping.' '
+function fail(message) { print "sam2hyb: " message " " hint > "/dev/stderr"; exit 1 }
+{ gsub(/^[ \t\r]+|[ \t\r]+$/, "") }
+/^@/ {
+    if (!/^@SQ/ && !/^@[A-Za-z][A-Za-z0-9](\t|$)/) fail("read name \"" $1 "\" starts with @, so its SAM lines read as header lines.")
+    next
+}
+!named && NF {
+    named = 1
+    split($0, word, /[ \t]+/)
+    if (word[1] !~ /_0*[1-9][0-9]*$/) fail("read name \"" word[1] "\" does not end in _<count> (as in 1_523), from which Hyb2 takes the number of identical reads.")
+}' input.sam
+
 echo "Processing SAM file..."
 sam2blast_3 input.sam > read.blast
 env SHELLOPTS=pipefail collapse_blast_2.sh read.blast > read.collapse.blast

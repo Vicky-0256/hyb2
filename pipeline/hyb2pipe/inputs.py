@@ -1,5 +1,6 @@
-"""Input preparation: ``fasta_hyb2_formatting``, ``solexa2fasta.awk`` +
-``fasta2tab.awk`` + ``make_comp_fasta.pl``, and the Bowtie2 mapping step."""
+"""Input preparation: ``fasta_hyb2_formatting``, collapsing FASTQ and FASTA
+reads (``solexa2fasta.awk`` or ``mapping_fasta.awk``, then ``fasta2tab.awk`` +
+``make_comp_fasta.pl``), and the Bowtie2 mapping step."""
 from __future__ import annotations
 
 import gzip
@@ -317,6 +318,61 @@ def iter_fastq_rows(lines: Iterable[str], names=True) -> Iterator[Tuple[Optional
             yield name, seq
 
 
+_NUCLEOTIDES = re.compile(r"[ACGTURYSWKMBDHVN]+", re.IGNORECASE)
+# read names as collapsing writes them: <rank>_<count>, or <rank>-<barcodes>_<count>
+_COLLAPSED_ID = re.compile(r"[0-9]+(-[0-9]+)?_[0-9]+")
+
+
+def fasta_is_collapsed(path: Path) -> bool:
+    """Whether every read of a FASTA file is already named ``<rank>_<count>``
+    (written by ``collapse_fastq``, ``make_comp_fasta.pl`` or Hyb).  Such reads
+    are mapped as they are, which keeps their counts."""
+    found = False
+    for line in iter_lines(path):
+        if line.startswith(">"):
+            words = line[1:].split()
+            if not words or not _COLLAPSED_ID.fullmatch(words[0]):
+                return False
+            found = True
+    return found
+
+
+def iter_fasta_rows(lines: Iterable[str], names=True) -> Iterator[Tuple[str, str]]:
+    """``mapping_fasta.awk -v reads=1 | fasta2tab.awk``: (header, sequence) per
+    FASTA record, with the same checks and messages.  ``names`` is accepted
+    for ``collapse_fastq`` and ignored."""
+    def invalid(reason: str) -> ValueError:
+        return ValueError("Invalid FASTA at line %d: %s" % (number, reason))
+
+    name: Optional[str] = None
+    parts: List[str] = []
+    number = 0
+    for number, raw in enumerate(lines, 1):
+        line = raw.rstrip("\r\n")
+        if line[:1] in ("#", ";") or not line.strip():
+            continue
+        if line.startswith(">"):
+            if name is not None:
+                if not parts:
+                    raise invalid("record has no sequence")
+                yield name, "".join(parts)
+            name = line[1:].lstrip()
+            if not name:
+                raise invalid("missing record identifier")
+            if "\t" in name:
+                raise invalid("read name contains a tab")
+            parts = []
+        elif name is None:
+            raise invalid("expected a record header")
+        elif not _NUCLEOTIDES.fullmatch(line):
+            raise invalid("expected unspaced nucleotide sequence")
+        else:
+            parts.append(line)
+    if name is None or not parts:
+        raise invalid("expected a nonempty record")
+    yield name, "".join(parts)
+
+
 _BARCODED = re.compile(r"^[^\t]*_[A-Z]*\t")
 _MAX_COUNT = 10 ** 15
 _ENTRY_BYTES = 250  # rough CPython cost of one dict entry with its key, beyond the sequence
@@ -360,18 +416,20 @@ def _bucket_run(bucket: str, barcodes: bool, out: str) -> Tuple[str, int]:
 
 
 def collapse_fastq(source: Path, out_fasta: Path, tmp_dir: Path, memory_mb: float = 1024, workers: int = 1,
-                   progress_bytes: Optional[Callable[[str, int, int], None]] = None) -> Dict[str, int]:
+                   progress_bytes: Optional[Callable[[str, int, int], None]] = None,
+                   read_rows: Callable[..., Iterator[Tuple[Optional[str], str]]] = iter_fastq_rows) -> Dict[str, int]:
     """``collapse_reads(fastq_to_rows(...))`` written to ``out_fasta`` with
     bounded memory.  Counts are kept in a dict; when it outgrows half of
     ``memory_mb`` it is spilled into hash buckets on disk, each bucket is
     summed and rank-sorted on its own (in ``workers`` processes) and the
-    sorted buckets are merged.  Output is identical to ``collapse_reads``."""
+    sorted buckets are merged.  Output is identical to ``collapse_reads``.
+    ``read_rows`` turns the file's lines into (name, sequence) rows."""
     reader = ProgressReader(source)
     report = Throttle(progress_bytes, "reads")
     budget = max(memory_mb, 1e-6) * 2 ** 20 / 2
     first = None
     want_names = [True]
-    rows = iter_fastq_rows(reader, names=want_names)
+    rows = read_rows(reader, names=want_names)
     for first in rows:
         break
     barcodes = first is not None and _BARCODED.match(first[0] + "\t" + first[1]) is not None
@@ -473,6 +531,12 @@ def collapse_fastq(source: Path, out_fasta: Path, tmp_dir: Path, memory_mb: floa
     return {"reads": reads, "unique_reads": unique}
 
 
+def collapse_fasta(source: Path, out_fasta: Path, tmp_dir: Path, **options) -> Dict[str, int]:
+    """``collapse_fastq`` for FASTA reads, as ``bin/bowtie2_fasta2sam`` does:
+    ``mapping_fasta.awk -v reads=1 | fasta2tab.awk | make_comp_fasta.pl``."""
+    return collapse_fastq(source, out_fasta, tmp_dir, read_rows=iter_fasta_rows, **options)
+
+
 class Bowtie2Stream:
     """Bowtie2 with its SAM output read line by line from a pipe."""
 
@@ -482,12 +546,10 @@ class Bowtie2Stream:
             raise MappingUnavailable("bowtie2 was not found; install Bowtie2 or provide a SAM file")
         args = [exe] + BOWTIE2_ARGS + ["-p", str(threads or os.cpu_count() or 1), "-x", str(index), "-f", str(reads_fasta)]
         self.args = args
-        self.log = log
         self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=log or subprocess.DEVNULL)
         self._text = io.TextIOWrapper(self.proc.stdout, encoding="utf-8", errors="replace", newline="")
 
     def __iter__(self) -> Iterator[str]:
-        renamed = False
         for line in self._text:
             if not line.endswith("\n"):
                 # Bowtie2 ends every SAM line with a newline; a cut-off last
@@ -496,23 +558,7 @@ class Bowtie2Stream:
                 code = self.proc.wait()
                 if code:
                     raise subprocess.CalledProcessError(code, self.args)
-            line = line.rstrip("\r\n")
-            if line.startswith("@"):
-                # FASTA reads named ">@HWUSI-..." (solexa2fasta.awk's output)
-                # keep the @ in QNAME, and every SAM reader takes such a line
-                # for a header. A header's second field is TAG:VALUE, an
-                # alignment's is its numeric flag.
-                name, _, rest = line.partition("\t")
-                if rest.split("\t", 1)[0].isdigit():
-                    if not name.lstrip("@"):
-                        raise ValueError("a read is named only %r; give each read a name" % name)
-                    line = name.lstrip("@") + "\t" + rest
-                    if not renamed and self.log is not None:
-                        self.log.write("warning: read names start with '@' (as in >@HWUSI-...); "
-                                       "the leading '@' is removed, as SAM read names cannot start with it\n")
-                        self.log.flush()
-                    renamed = True
-            yield line
+            yield line.rstrip("\r\n")
         code = self.proc.wait()
         if code:
             raise subprocess.CalledProcessError(code, self.args)

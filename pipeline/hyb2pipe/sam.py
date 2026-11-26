@@ -11,6 +11,29 @@ from . import awk
 
 KEPT_FLAGS = ("0", "16", "256", "272")  # single-end primary/secondary, forward/reverse
 _DECIMAL = re.compile(r"[0-9]+")
+# header lines are @ + a two-character record type (@HD, @SQ, @PG, @CO ...) + TAB
+_HEADER = re.compile(r"@[A-Za-z][A-Za-z0-9](\t|$)")
+_COUNTED = re.compile(r".*_0*[1-9][0-9]*")
+_USE_READS = ("Give Hyb2 the reads instead (FASTA or FASTQ): it collapses identical reads and names them "
+              "<rank>_<count> before mapping.")
+
+
+def check_header(line: str) -> None:
+    """Refuse a line that starts with ``@`` but is no header line: it is an
+    alignment of a read named ``@...``, which every later step would skip as
+    a header.  Same message as ``bin/sam2hyb``."""
+    if not _HEADER.match(line):
+        raise ValueError('read name "%s" starts with @, so its SAM lines read as header lines. %s'
+                         % (line.split("\t", 1)[0], _USE_READS))
+
+
+def check_read_name(name: str) -> None:
+    """Refuse a read name without the ``_<count>`` suffix from which gene
+    ranking and the statistics take the number of identical reads.  Same
+    message as ``bin/sam2hyb``."""
+    if not _COUNTED.fullmatch(name):
+        raise ValueError('read name "%s" does not end in _<count> (as in 1_523), from which Hyb2 takes the number '
+                         "of identical reads. %s" % (name, _USE_READS))
 
 
 def sam_filt(lines: Iterable[str], stderr: Optional[TextIO] = None) -> Iterator[str]:

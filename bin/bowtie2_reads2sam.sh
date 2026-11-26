@@ -42,8 +42,23 @@ trap 'exit 1' HUP INT TERM
 cd -- "$work"
 
 collapse_fastq() { solexa2fasta.awk | fasta2tab.awk | make_comp_fasta.pl; }
+# Identical reads become one read named <rank>_<count>; the later steps take the
+# read count from that name. FASTA reads that all have such a name already
+# (<rank>_<count> or <rank>-<barcodes>_<count>) are mapped as they are.
+fasta_is_collapsed() {
+    LC_ALL=C awk '/^>/ {
+        name = substr($0, 2); sub(/^[[:space:]]+/, "", name); sub(/[[:space:]].*$/, "", name)
+        found = name ~ /^[0-9]+(-[0-9]+)?_[0-9]+$/
+        if (!found) exit
+    } END { exit !found }' "$1"
+}
 case "$kind" in
-    fasta) LC_ALL=C awk -v reads=1 -f "$bin_dir/mapping_fasta.awk" < "$input" > reads.fasta ;;
+    fasta)
+        if fasta_is_collapsed "$input"; then
+            LC_ALL=C awk -f "$bin_dir/mapping_fasta.awk" < "$input" > reads.fasta
+        else
+            LC_ALL=C awk -v reads=1 -f "$bin_dir/mapping_fasta.awk" < "$input" | fasta2tab.awk | make_comp_fasta.pl > reads.fasta
+        fi ;;
     fastq) collapse_fastq < "$input" > reads.fasta ;;
     fastq.gz) gunzip -c < "$input" | collapse_fastq > reads.fasta ;;
 esac

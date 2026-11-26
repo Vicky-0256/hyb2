@@ -206,7 +206,7 @@ for label, path in zip(("input", "reference_1"), sys.argv[1:]):
     info = os.stat(path) if path else None
     print(label, os.path.realpath(path) if path else "-", info.st_size if info else "-",
           info.st_mtime_ns if info else "-", sep="\t")' "$IN_FILE" "$original_ref_1")
-    record=$(printf 'hyb2 step 1 record format 2\n%s\noptions\t-v %s -m %s -h %s -e %s' "$record" "$hval" "$gmax" "$hmax" "$ENERGY")
+    record=$(printf 'hyb2 step 1 record format 3\n%s\noptions\t-v %s -m %s -h %s -e %s' "$record" "$hval" "$gmax" "$hmax" "$ENERGY")
 fi
 published_outputs() {  # the files <prefix>.hyb.inputs vouches for
     python3 -c 'import os, sys

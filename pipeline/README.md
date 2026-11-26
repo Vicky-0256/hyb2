@@ -28,7 +28,7 @@ In the desktop app the same code runs as the `pipeline` task kind.
 ## Memory, temp files and resuming
 
 Every stage reads one file and writes another, so memory does not grow with
-the input: FASTQ reads are counted in a table that spills to hash buckets,
+the input: FASTQ and FASTA reads are counted in a table that spills to hash buckets,
 Bowtie2's output is piped straight into hybrid calling one read at a time,
 and the collapse steps are external sorts (sorted chunks merged with
 `heapq.merge`, same keys and tie-breaks as `sort -kN`).
@@ -96,11 +96,22 @@ treat the rest the same way, with the same stderr messages:
 - any other flag (for example QC-fail 0x200, duplicate 0x400, or a flag that
   is not a decimal number) is skipped and counted with a warning.
 
-FASTA reads named with a leading `@` (`>@HWUSI-...`, as `solexa2fasta.awk`
-writes them) are mapped without it, with one warning, by both `hyb2pipe` and
-`bin/hyb2`: Bowtie2 copies the name into the SAM, where a line starting with
-`@` is a header, so every alignment was skipped and the run ended with an
-empty `.hyb`.
+Hyb2 takes the number of identical reads from the read name, `<rank>_<count>`
+(for example `1_523`). Both `hyb2pipe` and `bin/hyb2` therefore collapse FASTA
+reads before mapping, as they do FASTQ reads: identical reads become one read
+named `<rank>_<count>`. FASTA reads that all have such a name already
+(`<rank>_<count>` or `<rank>-<barcodes>_<count>`, as Hyb and Hyb2 write them)
+are mapped as they are, which keeps their counts. This follows Hyb and the
+`gk-dev` branch of hyb2. Before, raw FASTA reads kept their names: every count
+was read as zero (`bin/hyb2` stopped with a division by zero), and reads named
+with a leading `@` (`>@HWUSI-...`, as `solexa2fasta.awk` writes them) became
+SAM lines that read as header lines, which ended in an empty `.hyb`.
+
+A SAM input is not renamed, so its read names must carry the count. Both
+programs stop with the same message when the first read name does not end in
+`_<count>`, or when a read name starts with `@`; map the reads with Hyb2
+instead. Names with colons (`a:b:c`) are still renamed to `...-a-b-c_1` by
+`sam_filt`.
 
 Before, `sam2blast_3` stopped at the first paired or supplementary record.
 When `hyb2pipe` writes `<out>.hyb` it deletes `<out>.hyb.inputs`, the record

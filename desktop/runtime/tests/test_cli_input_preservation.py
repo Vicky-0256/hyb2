@@ -87,8 +87,7 @@ class CliInputPreservationTests(unittest.TestCase):
                 sam = (self.root / "out.sam").read_text().splitlines()
                 self.assertIn(f"@SQ\tSN:today\tLN:{len(SEQ)}", sam)
                 records = [line.split("\t")[:4] for line in sam if not line.startswith("@")]
-                names = ["first", "second"] if kind == "fasta" else ["1_2"]
-                self.assertCountEqual(records, [[name, "0", "today", "1"] for name in names])
+                self.assertEqual(records, [["1_2", "0", "today", "1"]])  # two identical reads, collapsed
                 self.assertEqual({p: p.read_bytes() for p in protected}, protected)
 
     @unittest.skipUnless(REAL_BOWTIE, "requires bowtie2 and bowtie2-build")

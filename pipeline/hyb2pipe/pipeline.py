@@ -3,7 +3,8 @@
 Every stage reads a file and writes a file, so memory does not grow with
 the input (see ``Options.memory_mb``):
 
-``collapse``  FASTQ -> collapsed FASTA (hash buckets + external merge)
+``collapse``  FASTQ or uncollapsed FASTA -> collapsed FASTA (hash buckets +
+              external merge)
 ``map``       Bowtie2 stdout (or the SAM input) is read once, line by line:
               ``sam2blast`` rows feed the streaming ``get_mtop_hybrids``
               caller, whose hybrids get the read's SAM sequence at once;
@@ -38,7 +39,7 @@ ProgressBytes = Callable[[str, int, int], None]
 
 CHECKPOINT_VERSION = 1
 # bump when a change alters what a stage writes, so old checkpoints are not reused
-STAGE_FORMAT = "2026-10-14"
+STAGE_FORMAT = "2026-11-25"
 _FASTQ = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 _FASTA = (".fasta", ".fa", ".fasta.gz", ".fa.gz")
 
@@ -295,6 +296,7 @@ def _scan(lines: Iterable[str], work: Path, options: Options, *, unique_reads: b
     genes: set = set()
     decided = blast_table is not None
     number = 0
+    named = False
 
     def emit(name: Optional[str], lines_out: List[str], seq: str) -> None:
         nonlocal count_called
@@ -319,6 +321,10 @@ def _scan(lines: Iterable[str], work: Path, options: Options, *, unique_reads: b
                     run_key = key
                 run_seq = seq10
             if not li.startswith("@"):
+                if arr and not named:
+                    # all read names come from one source, so the first one tells
+                    sam.check_read_name(key)
+                    named = True
                 row = sam.blast_row(arr, dblen)
                 if row is not None:
                     alignments += 1
@@ -340,6 +346,8 @@ def _scan(lines: Iterable[str], work: Path, options: Options, *, unique_reads: b
             elif li.startswith("@SQ"):
                 dblen += int(li.split("LN:")[1])
                 headers_sq += 1
+            else:
+                sam.check_header(li)
             if key == caller.name:
                 cur_seq = seq10
             if not number & 0xFFFF:
@@ -452,17 +460,21 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
                       sam=Path(sam_info) if sam_info else None, reference=reference, counts=counts,
                       energy=_recorded_energy(ck, options))
 
-    # ---- collapse (FASTQ only)
+    # ---- collapse: identical reads become one read named <rank>_<count>, the
+    # name the later stages take the read count from.  FASTA reads that
+    # already have such names are mapped as they are, which keeps their counts.
     reads = input_path
-    if source == "fastq":
+    collapsed = source == "fastq" or (source == "fasta" and not inputs.fasta_is_collapsed(input_path))
+    if collapsed:
         record = ck.done("collapse")
         reads = work / "comp.fasta"
         if record:
             counts.update(record.get("counts", {}))
         else:
             progress("reads", "collapsing identical reads")
-            counts.update(inputs.collapse_fastq(input_path, reads, work, memory_mb=memory, workers=threads,
-                                                progress_bytes=progress_bytes))
+            collapse_reads = inputs.collapse_fastq if source == "fastq" else inputs.collapse_fasta
+            counts.update(collapse_reads(input_path, reads, work, memory_mb=memory, workers=threads,
+                                         progress_bytes=progress_bytes))
             ck.finish("collapse", [reads], counts=dict(counts))
 
     # ---- map: Bowtie2 or SAM input -> called hybrids (+ BLAST table)
@@ -495,7 +507,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
 
                     def report(key: str) -> None:
                         # collapsed reads are named <rank>_<count> and Bowtie2 --reorder keeps their order
-                        if unique and source == "fastq":
+                        if unique and collapsed:
                             try:
                                 throttle(total * int(key.split("_", 1)[0]) // unique, total)
                             except ValueError:
@@ -509,7 +521,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
 
                     def report(key: str) -> None:
                         throttle(reader.position(), reader.total)
-                scanned = _scan(lines, work, options, unique_reads=(source == "fastq"), blast_table=blast_table,
+                scanned = _scan(lines, work, options, unique_reads=collapsed, blast_table=blast_table,
                                 sam_copy=sam_copy, report=report)
             except _NeedBlastTable:
                 blast_table = True
@@ -531,7 +543,7 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
         ck.finish("map", outputs, counts={"alignments": scanned["alignments"]}, blast_table=scanned["blast_table"],
                   sam=str(sam_kept) if sam_kept else None)
         record = ck.done("map")
-    if source == "fastq":
+    if collapsed:
         ck.release(work / "comp.fasta")
     if source == "sam_raw":
         sam_kept = input_path

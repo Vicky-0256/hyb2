@@ -819,7 +819,7 @@ class LegacyCliTest(unittest.TestCase):
             return done
 
         self.assertIn("Hyb File Generated.", convert().stdout)
-        self.assertTrue(record.read_text().startswith("hyb2 step 1 record format 2\n"))
+        self.assertTrue(record.read_text().startswith("hyb2 step 1 record format 3\n"))
         made = hyb.read_bytes()
         self.assertIn("Hyb File Exist.", convert().stdout)
         # a .hyb replaced behind the record's back is not vouched for
@@ -925,32 +925,67 @@ class LegacyCliTest(unittest.TestCase):
         self.assertFalse((self.base / "py/out.hyb").exists())
 
     @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build"), "Bowtie2 not installed")
-    def test_fasta_reads_named_with_at_map_as_without_it(self):
-        # solexa2fasta.awk writes reads as >@name; Bowtie2 keeps the @ in the
-        # SAM read name, where it made every alignment look like a header line.
+    def test_fasta_reads_are_collapsed_and_counted_unless_already_collapsed(self):
+        # Raw FASTA reads have no <rank>_<count> name: their counts were zero
+        # (bin/hyb2 divided by zero), and a read named >@... (as
+        # solexa2fasta.awk writes it) became a SAM line that reads as a header.
         rows = [line.split("\t") for line in inputs.iter_lines(ROOT / "data/testData.sam") if not line.startswith("@")]
-        seen = []
+        names, copies = [], {}
         for row in rows:
-            if row[1] == "0" and row[0] not in seen and len(seen) < 3000:
-                seen.append(row[0])
-                seen.append(row[9])
+            if row[1] == "0" and row[0] not in names and len(names) < 1500:
+                names.append(row[0])
+                copies[row[9]] = 1 + len(copies) % 3
         reference = ROOT / "data/Zika_18S_formatted.fasta"
-        outputs, warnings = {}, {}
-        for prefix in ("", "@"):
-            reads = self.base / ("reads%s.fasta" % ("_at" if prefix else ""))
-            reads.write_text("".join(">%s%s\n%s\n" % (prefix, name, seq) for name, seq in zip(seen[::2], seen[1::2])))
-            log_path = self.base / ("map%s.log" % prefix)
-            with open(log_path, "w") as log:
-                python = run(reads, reference, self.base / ("py" + prefix) / "out", Options(threads=2), log=log)
-            legacy = self.cli(ROOT / "bin/hyb2", "-i", reads, "-d", reference, "-o", self.base / ("legacy" + prefix))
+        raw = [(seq, copy) for copy in range(3) for seq, count in copies.items() if copy < count]
+        texts = {"plain": "".join(">r%d.%d\n%s\n" % (i, copy, seq) for i, (seq, copy) in enumerate(raw)),
+                 "at": "".join(">@r%d.%d extra\n%s\n" % (i, copy, seq) for i, (seq, copy) in enumerate(raw)),
+                 "collapsed": "".join(">%s\n%s\n" % item for item in zip(names, copies))}
+        outputs = {}
+        for label, text in texts.items():
+            reads = self.base / (label + ".fasta")
+            reads.write_text(text)
+            python = run(reads, reference, self.base / ("py_" + label) / "out", Options(threads=2))
+            legacy = self.cli(ROOT / "bin/hyb2", "-i", reads, "-d", reference, "-o", self.base / ("legacy_" + label))
             self.assertEqual(legacy.returncode, 0, legacy.stderr)
-            outputs[prefix] = (python.hyb.read_bytes(), (self.base / ("legacy" + prefix + ".hyb")).read_bytes())
-            warned = "the leading '@' is removed"
-            warnings[prefix] = (warned in log_path.read_text(), warned in legacy.stderr)
-        self.assertGreater(outputs[""][0].count(b"\n"), 100)
-        self.assertGreater(outputs[""][1].count(b"\n"), 100)
-        self.assertEqual(outputs["@"], outputs[""])
-        self.assertEqual(warnings, {"": (False, False), "@": (True, True)})
+            outputs[label] = python.hyb.read_bytes()
+            self.assertEqual((self.base / ("legacy_" + label + ".hyb")).read_bytes(), outputs[label])
+        self.assertEqual(outputs["at"], outputs["plain"])
+        counted = 0
+        for row in outputs["plain"].decode().splitlines():
+            name, seq = row.split("\t")[:2]
+            self.assertRegex(name, r"^[0-9]+_[0-9]+$")
+            if seq in copies:
+                self.assertEqual(int(name.split("_")[1]), copies[seq], row)
+                counted += 1
+        self.assertGreater(counted, 100)
+        kept = {row.split("\t")[0] for row in outputs["collapsed"].decode().splitlines()}
+        self.assertGreater(len(kept), 100)
+        self.assertLessEqual(kept, set(names))
+
+    def test_sam_read_names_without_a_count_or_starting_with_at_are_an_error(self):
+        read = "ACGT" * 10
+        hint = ("Give Hyb2 the reads instead (FASTA or FASTQ): it collapses identical reads and names them "
+                "<rank>_<count> before mapping.")
+        cases = {"read": 'read name "read" does not end in _<count> (as in 1_523), from which Hyb2 takes the number '
+                         "of identical reads. " + hint,
+                 "@read_2": 'read name "@read_2" starts with @, so its SAM lines read as header lines. ' + hint}
+        env = dict(self.env, PYTHONPATH=str(ROOT / "pipeline"))
+        for number, (name, message) in enumerate(cases.items()):
+            with self.subTest(name=name):
+                path = self.base / ("names%d.sam" % number)
+                path.write_text("@HD\tVN:1.0\n@SQ\tSN:toy\tLN:160\n@PG\tID:bowtie2\n@CO\tany text\n"
+                                "%s\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t%s\t*\tAS:i:40\tNM:i:0\n" % (name, read))
+                legacy = self.cli(ROOT / "bin/hyb2", "-i", path, "-o", self.base / ("legacy%d" % number))
+                self.assertNotEqual(legacy.returncode, 0)
+                self.assertIn("sam2hyb: " + message + "\n", legacy.stderr)
+                self.assertFalse((self.base / ("legacy%d.hyb" % number)).exists())
+                python = subprocess.run([sys.executable, "-m", "hyb2pipe", "-i", str(path), "-d",
+                                         str(ROOT / "data/Zika_18S_formatted.fasta"), "-o",
+                                         str(self.base / ("py%d/out" % number))],
+                                        cwd=self.base, env=env, capture_output=True, text=True, timeout=300)
+                self.assertNotEqual(python.returncode, 0)
+                self.assertIn(message, python.stderr)
+                self.assertFalse((self.base / ("py%d/out.hyb" % number)).exists())
 
     def test_reference_formatting_uses_the_hyb2pipe_rules(self):
         for name, text in (("wrapped", ">alpha|protein_coding\r\nGGGG\r\nAAAA\r\n>skip||kind\r\nCCCC\r\n>b|t\r\nUU\r\n"),

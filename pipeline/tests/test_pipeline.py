@@ -193,6 +193,33 @@ class DuplexEnergyTest(unittest.TestCase):
         self.assertEqual(outs[0], outs[1])
         self.assertTrue(all(value != "." for value in outs[0]), outs[0][:5])
 
+    def test_each_distinct_arm_pair_is_folded_once(self):
+        reference = list(inputs.iter_lines(ROOT / "data/Zika_18S_formatted.fasta"))
+        lines = [line for line in self._hyb() if line and not line.startswith("#")][:40]
+        # every hybrid three times under other names, spread over chunks
+        body = ["r%d_%d\t%s" % (k, i, line.split("\t", 1)[1]) for k in range(3) for i, line in enumerate(lines)]
+        calls = []
+
+        def fold(pairs):  # order-sensitive, so a value given to the wrong pair shows
+            calls.extend(pairs)
+            return [-(len(a) * 7 + len(b) + sum(map(ord, a[:3]))) / 8.0 for a, b in pairs]
+
+        table = energy.reference_table(reference)
+        pairs = [(p[1], p[2]) for p in (energy.bit_pair(line, table) for line in body) if p]
+        self.assertEqual(len(pairs), len(body))
+        expected = ["%.2f" % value for value in fold(pairs)]
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.tsv"
+            src.write_text("".join(line + "\n" for line in body))
+            for limit in (energy._FOLD_CACHE_LIMIT, 30):  # 30: the cache is cleared mid-file
+                calls.clear()
+                dst = Path(tmp) / ("out%d.tsv" % limit)
+                with mock.patch.object(energy, "_FOLD_CACHE_LIMIT", limit):
+                    energy.add_line_energies_file(src, dst, reference, fold, chunk=17)
+                self.assertEqual([line.split("\t")[2] for line in dst.read_text().splitlines()], expected)
+                if limit > len(body):
+                    self.assertEqual(sorted(calls), sorted(set(pairs)))
+
     def test_missing_vienna_stops_before_mapping(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"RNA": None}), \

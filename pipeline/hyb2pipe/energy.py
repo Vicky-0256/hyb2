@@ -97,6 +97,28 @@ def _with_dg(cols: List[str], value: str) -> str:
     return "\t".join(cols)
 
 
+# Folded pairs kept between chunks of one file; cleared when full, so memory stays bounded.
+_FOLD_CACHE_LIMIT = 200_000
+
+
+def _fold_unique(folder: Folder, pairs: Sequence[Tuple[str, str]], cache: Dict[Tuple[str, str], Optional[float]]
+                 ) -> List[Optional[float]]:
+    """``folder(pairs)``, folding each distinct arm pair once.  Reads that
+    collapse to one hybrid repeat the same pair, and every pair folds
+    independently, so the values are those of folding every pair."""
+    new: Dict[Tuple[str, str], Optional[float]] = {}
+    for pair in pairs:
+        if pair not in cache and pair not in new:
+            new[pair] = None
+    todo = list(new)
+    new.update(zip(todo, folder(todo)))
+    out = [cache[pair] if pair in cache else new[pair] for pair in pairs]
+    if len(cache) + len(new) > _FOLD_CACHE_LIMIT:
+        cache.clear()
+    cache.update(new)
+    return out
+
+
 def add_energies_file(src: Path, dst: Path, fasta_lines: Iterable[str], tmp_dir: Path, folder: Optional[Folder] = None,
                       workers: Optional[int] = None, chunk: int = 50000) -> None:
     """``add_energies`` over a file, folding ``chunk`` hybrids at a time.
@@ -126,11 +148,12 @@ def add_energies_file(src: Path, dst: Path, fasta_lines: Iterable[str], tmp_dir:
         if own is not None and own != lookup and seen.add(own):
             shared.add(own)
     shared_dg: Dict[str, str] = {}
+    folded: Dict[Tuple[str, str], Optional[float]] = {}
     staged = Path(str(dst) + ".stage") if shared else dst
     with open(staged, "w", encoding="utf-8", newline="\n") as out:
         def flush(lines: List[str]) -> None:
             pairs = [bit_pair(line, table) for line in lines]
-            energies = iter(folder([(p[1], p[2]) for p in pairs if p is not None]))
+            energies = iter(_fold_unique(folder, [(p[1], p[2]) for p in pairs if p is not None], folded))
             for line, pair in zip(lines, pairs):
                 value = next(energies) if pair is not None else None
                 own = "" if value is None else "%.2f" % value
@@ -347,10 +370,11 @@ def add_line_energies_file(src: Path, dst: Path, fasta_lines: Iterable[str], fol
     from .collapse import iter_file
 
     table = reference_table(fasta_lines)
+    folded: Dict[Tuple[str, str], Optional[float]] = {}
     with open(dst, "w", encoding="utf-8", newline="\n") as out:
         def flush(lines: List[str]) -> None:
             pairs = [None if _passthrough(line.split("\t")) else bit_pair(line, table) for line in lines]
-            energies = iter(folder([(p[1], p[2]) for p in pairs if p is not None]))
+            energies = iter(_fold_unique(folder, [(p[1], p[2]) for p in pairs if p is not None], folded))
             for line, pair in zip(lines, pairs):
                 cols = line.split("\t")
                 if _passthrough(cols):
@@ -372,7 +396,7 @@ def add_energies(hyb_lines: Sequence[str], fasta_lines: Iterable[str], folder: O
                  workers: Optional[int] = None) -> List[str]:
     folder = folder or default_folder(workers)
     pairs = bit_pairs(hyb_lines, reference_table(fasta_lines))
-    energies = folder([(a, b) for _, a, b in pairs])
+    energies = _fold_unique(folder, [(a, b) for _, a, b in pairs], {})
     dg: Dict[str, str] = {}
     for (key, _, _), value in zip(pairs, energies):
         if value is not None:

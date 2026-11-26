@@ -52,24 +52,52 @@ html:has(:focus-visible) {
 
 /* (.comparison-control-grid's tracks are set once, in fix-compare.css) */
 
-/* One field grid for the form controls in Interactions (filters, advanced
-   filters, HYB binding energies), Contact Map (Data, Display), Viewpoint and
-   Region Explorer cards: equal tracks of at least --field-min, one gap. It
-   outranks analysis.css's fixed column counts by load order, at every
-   breakpoint. */
+/* One field layout for the form controls in Interactions (filters, advanced
+   filters, HYB binding energies), Contact Map (Data, Display), Viewpoint,
+   Region Explorer and Compare cards. Fields wrap in rows: each starts at
+   its own content width (a select's natural width is its longest option),
+   never below --field-min, and the fields of a row grow to fill it. So no
+   option is cut off, rows have no holes, and Tab order is the page order.
+   It outranks analysis.css's fixed column counts by load order. */
 .control-grid-wide,
 .advanced-grid,
 .data-card:has([data-feature="batch-energy-setting"]) .control-grid,
 .contact-control-grid,
 .contact-display-grid,
 .viewpoint-control-grid,
-.region-control-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr));
+.region-control-grid,
+.comparison-control-grid,
+.deseq-rna-map,
+.structure-setup-col .control-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: var(--space-4);
 }
 
-/* phones keep two fields per row (a 390px screen leaves ~326px) */
+:is(.control-grid-wide, .advanced-grid, .control-grid, .contact-control-grid, .contact-display-grid,
+    .viewpoint-control-grid, .region-control-grid, .comparison-control-grid, .deseq-rna-map) > :is(.control-field, .viewpoint-range-group),
+.viewpoint-range-group > .control-field {
+  flex: 1 1 auto;
+  min-width: min(100%, var(--field-min));
+  /* a field alone on the last row does not stretch across the card */
+  max-width: min(100%, 26rem);
+}
+
+/* text and number fields have no content width to keep: they start at
+   --field-min, so short ones (Start, End, thresholds) share a row */
+:is(.control-grid-wide, .advanced-grid, .control-grid, .contact-control-grid, .contact-display-grid,
+    .viewpoint-control-grid, .region-control-grid, .comparison-control-grid, .deseq-rna-map) > .control-field:has(> input, > textarea) {
+  flex-basis: var(--field-min);
+}
+
+/* a field or note on a row of its own */
+:is(.control-grid-wide, .advanced-grid, .control-grid, .contact-control-grid, .contact-display-grid,
+    .viewpoint-control-grid, .region-control-grid, .comparison-control-grid, .deseq-rna-map) > :is(.control-field--full, p, small, .grid-note) {
+  flex-basis: 100%;
+  max-width: 100%;
+}
+
 @media (max-width: 767px) {
   .control-grid-wide,
   .advanced-grid,
@@ -77,7 +105,10 @@ html:has(:focus-visible) {
   .contact-control-grid,
   .contact-display-grid,
   .viewpoint-control-grid,
-  .region-control-grid {
+  .region-control-grid,
+  .comparison-control-grid,
+  .deseq-rna-map,
+  .structure-setup-col .control-grid {
     --field-min: 136px;
     gap: var(--space-3);
   }

@@ -766,6 +766,11 @@
   font-size: var(--text-sm);
 }
 
+/* the condition select keeps its whole label ("Condition A") */
+.comparison-dataset-table select {
+  min-width: max-content;
+}
+
 .comparison-dataset-table input:focus,
 .comparison-dataset-table select:focus {
   border-color: var(--primary-ink);

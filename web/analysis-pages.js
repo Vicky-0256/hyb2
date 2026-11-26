@@ -1625,7 +1625,12 @@
     const assembly = sequenceInfo.assembly;
     if (part === "method") {
       const kernel = profileValue(structure.cplfoldKernel, globalThis.Hyb2SupportKernels.defaultKernel);
-      const kernelOptions = globalThis.Hyb2SupportKernels.options.slice();
+      // the select shows the shorter of each kernel's two labels so it fits
+      // its column; the full label stays in the description below it
+      const kernelOptions = globalThis.Hyb2SupportKernels.options.map(function (option) {
+        const short = option.desktopLabel && option.desktopLabel.length < option.label.length ? option.desktopLabel : option.label;
+        return Object.assign({}, option, { label: short });
+      });
       const validKernel = kernelOptions.some(function (option) { return option.value === kernel; });
       if (!validKernel) kernelOptions.unshift({ value: "", label: "Choose a supported kernel", disabled: true });
       return [

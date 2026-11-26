@@ -262,30 +262,30 @@ func (p *structurePage) irisRecovery(c *ui.Context, pl foldPlan) {
 		return
 	}
 	if s.diagErr != "" {
-		ui.Text(c, "Could not check the chimeras in this region: "+s.diagErr+". The run reads them itself.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Could not check the chimeras in this region: "+s.diagErr+". The run reads them itself.").FontSize(FontSmall).TextColor(t.TextMuted)
 		return
 	}
 	d := s.diag
 	if d == nil || d.Counts.Contained > 0 {
 		return
 	}
-	ui.Column(c.Key("st-iris-recovery")).Gap(6).Padding(10).Radius(8).Background(t.Warning.Alpha(0.10)).Children(func() {
+	ui.Column(c.Key("st-iris-recovery")).Gap(Space2).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Warning.Alpha(0.10)).Children(func() {
 		if d.Message != "" {
-			ui.Text(c, d.Message).FontSize(12)
+			ui.Text(c, d.Message).FontSize(FontSmall)
 		}
 		ui.Text(c, fmt.Sprintf("HYB evidence: %s loaded; %s with both arms on this RNA; %s with forward coordinates; %s fully inside this region.",
 			FormatNumber(int64(d.Counts.Total)), FormatNumber(int64(d.Counts.SameRNA)), FormatNumber(int64(d.Counts.Forward)),
-			FormatNumber(int64(d.Counts.Contained)))).FontSize(12).TextColor(t.TextMuted)
+			FormatNumber(int64(d.Counts.Contained)))).FontSize(FontSmall).TextColor(t.TextMuted)
 		if g := d.Suggestion; g != nil {
 			label := fmt.Sprintf("Use nearby HYB-supported region %s:%d-%d", g.RNA, g.Start, g.End)
 			if ui.Button(c, label).Tooltip(label).Disabled(p.running()).Clicked() {
 				p.useIrisRegion()
 			}
 			ui.Text(c, "Changes the interval only. Review it, then run IRIS. Having HYB evidence does not guarantee enough "+
-				"candidate structures for an ensemble.").FontSize(12).TextColor(t.TextMuted)
+				"candidate structures for an ensemble.").FontSize(FontSmall).TextColor(t.TextMuted)
 		} else {
 			ui.Text(c, fmt.Sprintf("Choose another RNA or other samples with a complete arm pair within %s nt. "+
-				"Two separated regions are not supported by IRIS.", FormatNumber(stIrisMaxNT))).FontSize(12).TextColor(t.TextMuted)
+				"Two separated regions are not supported by IRIS.", FormatNumber(stIrisMaxNT))).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 	})
 }
@@ -336,10 +336,10 @@ func (p *structurePage) irisAdvanced(c *ui.Context) {
 	if !s.init {
 		s.defaults()
 	}
-	ui.Column(c).Gap(4).Padding(10).Radius(8).Background(t.Surface).Children(func() {
+	ui.Column(c).Gap(Space1).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Surface).Children(func() {
 		ui.Text(c, "IRIS redistributes HYB evidence, generates constrained structures, then selects a weighted ensemble. "+
-			"Uses one reference region; nothing leaves this computer.").FontSize(12)
-		ui.Row(c).Gap(12).Children(func() {
+			"Uses one reference region; nothing leaves this computer.").FontSize(FontSmall)
+		ui.Row(c).Gap(Space3).Children(func() {
 			if ui.Link(c, "IRIS source", "").Tooltip(stIrisSourceURL).Clicked() {
 				c.OpenURL(stIrisSourceURL)
 			}
@@ -350,7 +350,7 @@ func (p *structurePage) irisAdvanced(c *ui.Context) {
 	})
 	changed := s.changed()
 	ui.Collapsible(c.Key("st-iris"), "IRIS settings", &p.advancedOpen, func() {
-		ui.Column(c).Gap(10).Padding(6, 0, 0, 0).Children(func() {
+		ui.Column(c).Gap(Space3).Padding(6, 0, 0, 0).Children(func() {
 			settings := engineSettings(engineIRIS)
 			r, d := settings.Ranges, settings.Defaults
 			kr, cr, q := r["K"], r["C"], r["fraction"]
@@ -361,10 +361,10 @@ func (p *structurePage) irisAdvanced(c *ui.Context) {
 				fmt.Sprintf("A stem is kept when its mean support exceeds this quantile of the positive support. Default %g.", d.Fraction))
 			Field(c, "Stem lengths", func() {
 				ui.TextInput(c.Key("st-iris-stems"), &s.stems).Placeholder(d.KRange).Label("Stem lengths").Width(200)
-				ui.Text(c, fmt.Sprintf("Stem lengths to enumerate, %s, separated by spaces or commas. Default %s.", r["stemLength"], d.KRange)).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, fmt.Sprintf("Stem lengths to enumerate, %s, separated by spaces or commas. Default %s.", r["stemLength"], d.KRange)).FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 			ui.Text(c, fmt.Sprintf("K selects %g–%g representative structures. C retains up to %g candidates; higher values increase work. ", kr[0], kr[1], cr[1])+
-				"All compatible single- and double-stem constraints are considered within the desktop limits.").FontSize(12).TextColor(t.TextMuted)
+				"All compatible single- and double-stem constraints are considered within the desktop limits.").FontSize(FontSmall).TextColor(t.TextMuted)
 			if ui.Button(c, "Reset to defaults").Disabled(!changed).Clicked() {
 				s.defaults()
 			}
@@ -379,7 +379,7 @@ func (p *structurePage) irisAdvanced(c *ui.Context) {
 	} else {
 		summary += " · defaults"
 	}
-	ui.Text(c, summary).FontSize(12).TextColor(color)
+	ui.Text(c, summary).FontSize(FontSmall).TextColor(color)
 }
 
 // stIrisExplain explains a failed IRIS run: the runtime's message is the
@@ -434,8 +434,8 @@ func (p *structurePage) irisPanel(c *ui.Context, a *structureResult) {
 		return
 	}
 	r := &a.Records[index]
-	ui.Column(c).Gap(8).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Column(c).Gap(Space2).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, "IRIS weighted ensemble").Bold().Grow(1)
 			if ui.Button(c, "Weighted ensemble TSV…").Tooltip("Download weighted ensemble: each member's weight, coefficient, energy and dot-bracket").Clicked() {
 				rows := stIrisRows(ir, r.SelectedCandidate)
@@ -443,7 +443,7 @@ func (p *structurePage) irisPanel(c *ui.Context, a *structureResult) {
 					func() ([]byte, error) { return webTSV(rows), nil })
 			}
 		})
-		ui.Text(c, "Select a member to update every structure view. Weights describe the fitted mixture, not confidence.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Select a member to update every structure view. Weights describe the fitted mixture, not confidence.").FontSize(FontSmall).TextColor(t.TextMuted)
 		cols := []ui.TableColumn{{Title: "Member", Width: 84, Align: ui.End}, {Title: "Weight", Width: 80, Align: ui.End},
 			{Title: "Energy (kcal/mol)", Width: 160, Align: ui.End}, {Title: "View"}}
 		p.candRow = r.SelectedCandidate
@@ -476,25 +476,19 @@ func (p *structurePage) irisPanel(c *ui.Context, a *structureResult) {
 		}
 		e := ir.Ensemble
 		ui.Text(c, fmt.Sprintf("Ensemble mean energy: %s kcal/mol · %s candidates · %s tested", jsFixed(e.MeanEnergy, 2),
-			FormatNumber(int64(e.CandidateCount)), stCountLabel(e.TestedEnsembles, "ensemble"))).FontSize(12).TextColor(t.TextMuted)
+			FormatNumber(int64(e.CandidateCount)), stCountLabel(e.TestedEnsembles, "ensemble"))).FontSize(FontSmall).TextColor(t.TextMuted)
 		ui.Collapsible(c.Key("st-iris-steps"), "How this was computed", &p.iris.stepsOpen, func() {
-			stage := func(title, value, note string) {
-				ui.Column(c).Gap(2).Padding(10, 12).Radius(8).Background(t.Surface).Grow(1).Basis(180).MinWidth(170).Children(func() {
-					ui.Text(c, title).FontSize(11).Bold().TextColor(t.TextMuted)
-					ui.Text(c, value).FontSize(15).Bold()
-					ui.Text(c, note).FontSize(11).TextColor(t.TextMuted)
-				})
-			}
-			ui.Row(c).Gap(10).Wrap().Children(func() {
-				stage("1 · HYB support", FormatNumber(int64(ir.Evidence.InputRecords))+" rows", "Gaussian arm blocks, log1p support")
-				stage("2 · Supported stems", FormatNumber(int64(ir.Evidence.StemCount))+" stems",
-					fmt.Sprintf("lengths %v above the %v quantile", ir.Parameters["kRange"], ir.Parameters["fraction"]))
-				stage("3 · Constrained folds", FormatNumber(int64(e.GeneratedCount))+" structures",
-					"clustered to "+FormatNumber(int64(e.CandidateCount))+" candidates")
-				stage("4 · Ensemble", stCountLabel(e.TestedEnsembles, "ensemble")+" tested",
-					fmt.Sprintf("K %v · lambda %s", ir.Parameters["K"], jsFixed(e.Lambda, 3)))
-			})
-			ui.Text(c, nameOr(ir.Model, "IRIS")+". "+strings.Join(ir.Warnings, " ")).FontSize(12).TextColor(t.TextMuted)
+			var tiles [][3]string
+			stage := func(title, value, note string) { tiles = append(tiles, [3]string{title, value, note}) }
+			stage("1 · HYB support", FormatNumber(int64(ir.Evidence.InputRecords))+" rows", "Gaussian arm blocks, log1p support")
+			stage("2 · Supported stems", FormatNumber(int64(ir.Evidence.StemCount))+" stems",
+				fmt.Sprintf("lengths %v above the %v quantile", ir.Parameters["kRange"], ir.Parameters["fraction"]))
+			stage("3 · Constrained folds", FormatNumber(int64(e.GeneratedCount))+" structures",
+				"clustered to "+FormatNumber(int64(e.CandidateCount))+" candidates")
+			stage("4 · Ensemble", stCountLabel(e.TestedEnsembles, "ensemble")+" tested",
+				fmt.Sprintf("K %v · lambda %s", ir.Parameters["K"], jsFixed(e.Lambda, 3)))
+			p.statTiles(c, tiles)
+			ui.Text(c, nameOr(ir.Model, "IRIS")+". "+strings.Join(ir.Warnings, " ")).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 	})
 }

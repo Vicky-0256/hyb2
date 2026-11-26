@@ -166,26 +166,28 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 	}
 	d := s.data
 	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(14).Children(func() {
-			ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
-				picker(c, "vp-partner", "Partner", &s.partner, withAll(allPartners, p.genes()), 190)
+		width := p.pageWidth()
+		ui.Column(c).Gap(Space4).Children(func() {
+			filterGrid(c, width, 8, 2, func() {
+				picker(c, "vp-partner", "Partner", &s.partner, withAll(allPartners, p.genes()), 0)
 				modes := rangeModes[:1]
 				if p.geneLength(p.gene) > 0 {
 					modes = rangeModes
 				}
-				picker(c, "vp-range", "Coordinate range", &s.rangeMode, modes, 190)
+				picker(c, "vp-range", "Coordinate range", &s.rangeMode, modes, 0)
 				coordInput(c, "vp-start", "Start", &s.start, "Observed start").OnSubmit(submit)
 				coordInput(c, "vp-end", "End", &s.end, "Observed end").OnSubmit(submit)
 				options := resolutionOptions(s.resolution, d)
 				shown := options[max(0, slices.Index(resolutions, s.resolution))]
-				picker(c, "vp-resolution", "Resolution", &shown, options, 230).OnChange(func() {
+				picker(c, "vp-resolution", "Resolution", &shown, options, 0).OnChange(func() {
 					if i := slices.Index(options, shown); i >= 0 {
 						s.resolution = resolutions[i]
 					}
 				})
-				picker(c, "vp-measure", "Measure", &s.measure, cmMeasures, 150)
-				p.patternPicker(c, "vp-type", &s.typ, 230, nil)
-				picker(c, "vp-homodimer", "Homodimer subset", &s.homodimer, homodimerOptions, 200)
+				picker(c, "vp-measure", "Measure", &s.measure, cmMeasures, 0)
+				p.patternPicker(c, "vp-type", &s.typ, 0, nil)
+				picker(c, "vp-homodimer", "Homodimer subset", &s.homodimer, homodimerOptions, 0)
+			}, func() {
 				if ui.PrimaryButton(c, "Apply").Clicked() {
 					submit()
 				}
@@ -197,7 +199,7 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 			if s.fullReference() {
 				hint = "The full mapped reference uses coordinates 1 through its FASTA length; Start and End are ignored."
 			}
-			ui.Text(c, hint).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, hint).FontSize(FontSmall).TextColor(t.TextMuted)
 			if s.inputErr != "" {
 				errorLine(c, s.inputErr)
 			}
@@ -210,13 +212,13 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 					FormatNumber(int64(d.requested)), FormatNumber(int64(d.bin))))
 			}
 			Card(c, "", func() {
-				ui.Row(c).Gap(24).Wrap().Children(func() {
+				ui.Row(c).Gap(Space6).Wrap().Children(func() {
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
-						ui.Text(c, d.gene+" interaction coverage").FontSize(16).Bold()
+						ui.Text(c, d.gene+" interaction coverage").FontSize(FontTitle).Bold()
 						ui.Text(c, fmt.Sprintf("%s matching records · %s mapped arms · %s nt", FormatNumber(d.records), FormatNumber(d.arms), span(d.start, d.end))).
-							FontSize(12).TextColor(t.TextMuted)
+							FontSize(FontSmall).TextColor(t.TextMuted)
 					})
-					ui.Text(c, measureKicker(d.measure)).FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, measureKicker(d.measure)).FontSize(FontSmall).TextColor(t.TextMuted)
 					exportMenu(c,
 						exportItem{"Plot · SVG…", false, p.exportViewpointSVG},
 						exportItem{"Plot · PNG…", false, p.exportViewpointPNG},
@@ -231,8 +233,8 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 					start, end, v := s.profile.Bin(i)
 					readout = fmt.Sprintf("%s · mean %s", span(start, end), webFormatValue(v))
 				}
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, readout).FontSize(12).TextColor(t.TextMuted).Grow(1)
+				ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, readout).FontSize(FontSmall).TextColor(t.TextMuted).Grow(1)
 					label := "Open data table"
 					if s.showTable {
 						label = "Hide data table"
@@ -245,13 +247,13 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 					viewpointTable(c, s.profile)
 				}
 			})
-			ui.Row(c).Gap(16).AlignItems(ui.Start).Wrap().Children(func() {
+			ui.Grid(c).Columns(cardColumns(width)).Gap(Space4).Children(func() {
 				Card(c, "Selected interval", func() {
 					i := s.profile.Picked
 					if i < 0 || i >= s.profile.Len() {
 						ui.Text(c, "Select a viewpoint bar").Bold()
-						ui.Text(c, "Click a plotted interval to send its coordinates to Region Explorer.").FontSize(12).TextColor(t.TextMuted)
-						ui.Row(c).Gap(24).Children(func() {
+						ui.Text(c, "Click a plotted interval to send its coordinates to Region Explorer.").FontSize(FontSmall).TextColor(t.TextMuted)
+						ui.Row(c).Gap(Space6).Children(func() {
 							stat(c, "Maximum coverage", webFormatValue(d.max))
 							stat(c, "Resolution", FormatNumber(int64(d.bin))+" nt")
 						})
@@ -259,19 +261,28 @@ func (p *explorePage) viewpointView(c *ui.Context) {
 					}
 					start, end, v := s.profile.Bin(i)
 					ui.Text(c, shortGene(d.gene)+":"+span(start, end)).Bold()
-					ui.Row(c).Gap(24).Children(func() {
+					ui.Row(c).Gap(Space6).Children(func() {
 						stat(c, "Mean coverage", webFormatValue(v))
 						stat(c, "Mapped arms", FormatNumber(d.arms))
 					})
 					if ui.PrimaryButton(c, "Explore region").Clicked() {
 						p.exploreRegion(start, end)
 					}
-				}).Width(280)
-				partnerCard(c, "Partners in range", d.partners, d.measure, 8).Grow(1).Basis(320)
+				})
+				partnerCard(c, "Partners in range", d.partners, d.measure, 8)
 			})
 			methodNote(c, "Each matching arm contributes across all of its inclusive RNA coordinates. One-nucleotide bins reproduce the original HYB2 viewpoint count; larger bins display mean coverage per nucleotide. A mapped FASTA can extend the graph across the complete reference, including zero-coverage positions.")
 		})
 	})
+}
+
+// cardColumns is how many cards of a row fit side by side in width: two
+// equal columns, or one in a narrow window.
+func cardColumns(width float32) int {
+	if width < 2*320+Space4 {
+		return 1
+	}
+	return 2
 }
 
 // measureKicker names a measure as the web's card kicker.
@@ -300,17 +311,17 @@ func viewpointTable(c *ui.Context, pr *widgets.Profile) {
 	columns := []string{"Start (nt)", "End (nt)", "Mean interaction coverage"}
 	widths := []float32{120, 120, 200}
 	ui.Column(c).Gap(0).Children(func() {
-		ui.Row(c).Gap(0).Padding(6, 8).Children(func() {
+		ui.Row(c).Gap(0).Padding(Space2).Children(func() {
 			for i, name := range columns {
-				ui.Text(c, name).FontSize(12).Bold().TextColor(t.TextMuted).Width(widths[i]).TextAlign(ui.End)
+				ui.Text(c, name).FontSize(FontSmall).Bold().TextColor(t.TextMuted).Width(widths[i]).TextAlign(ui.End)
 			}
 		})
 		for _, i := range order {
 			start, end, v := pr.Bin(i)
 			row := []string{FormatNumber(int64(start)), FormatNumber(int64(end)), webFormatValue(v)}
-			ui.Row(c.Key(fmt.Sprint(i))).Gap(0).Padding(4, 8).Border(0, t.Border).Children(func() {
+			ui.Row(c.Key(fmt.Sprint(i))).Gap(0).Padding(Space1, Space2).Border(0, t.Border).Children(func() {
 				for k, v := range row {
-					ui.Text(c, v).FontSize(12).Width(widths[k]).TextAlign(ui.End)
+					ui.Text(c, v).FontSize(FontSmall).Width(widths[k]).TextAlign(ui.End)
 				}
 			})
 		}
@@ -320,9 +331,9 @@ func viewpointTable(c *ui.Context, pr *widgets.Profile) {
 // methodNote is the web's Method note under a view.
 func methodNote(c *ui.Context, text string) {
 	t := c.Theme()
-	ui.Row(c).Gap(8).Padding(10, 12).Radius(8).Background(t.Surface).Children(func() {
-		ui.Text(c, "Method").Bold().FontSize(12)
-		ui.Text(c, text).FontSize(12).TextColor(t.TextMuted).Grow(1)
+	ui.Row(c).Gap(Space2).Padding(Space3).Radius(RadiusSmall).Background(t.Surface).Children(func() {
+		ui.Text(c, "Method").Bold().FontSize(FontSmall)
+		ui.Text(c, text).FontSize(FontSmall).TextColor(t.TextMuted).Grow(1)
 	})
 }
 
@@ -344,7 +355,7 @@ func (p *explorePage) exploreRegion(start, end int) {
 func partnerCard(c *ui.Context, title string, partners []partnerTotal, measure string, top int) ui.Element {
 	t := c.Theme()
 	return Card(c, title, func() {
-		ui.Text(c, measureKicker(measure)).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, measureKicker(measure)).FontSize(FontSmall).TextColor(t.TextMuted)
 		if len(partners) == 0 {
 			ui.Text(c, "No matching interactions.").TextColor(t.TextMuted)
 			return
@@ -364,10 +375,10 @@ func partnerCard(c *ui.Context, title string, partners []partnerTotal, measure s
 		}
 		for i, pt := range partners {
 			if i == top {
-				ui.Text(c, fmt.Sprintf("and %d more", len(partners)-top)).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, fmt.Sprintf("and %d more", len(partners)-top)).FontSize(FontSmall).TextColor(t.TextMuted)
 				break
 			}
-			ui.Row(c.Key(pt.Name)).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c.Key(pt.Name)).Gap(Space2).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, shortGene(pt.Name)).Width(170).SingleLine().Tooltip(pt.Name)
 				fraction := float32(1)
 				if most > 0 {
@@ -376,7 +387,7 @@ func partnerCard(c *ui.Context, title string, partners []partnerTotal, measure s
 				ui.Box(c).Grow(1).Height(8).Radius(4).Background(t.Border).Children(func() {
 					ui.Box(c).WidthPercent(fraction * 100).FillHeight().Radius(4).Background(t.Accent)
 				})
-				ui.Text(c, FormatNumber(value(pt))).FontSize(12).TextColor(t.TextMuted).Width(90).TextAlign(ui.End)
+				ui.Text(c, FormatNumber(value(pt))).FontSize(FontSmall).TextColor(t.TextMuted).Width(90).TextAlign(ui.End)
 			})
 		}
 	})

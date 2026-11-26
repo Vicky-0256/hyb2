@@ -168,10 +168,10 @@ func ovQuery(a *App, path string, ids []string, limit int) (*ovData, error) {
 // qcCardTitle is a card's title with the web's kicker at its right.
 func qcCardTitle(c *ui.Context, title, kicker string) {
 	t := c.Theme()
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Text(c, title).FontSize(16).Bold().Grow(1).Shrink(1).MinWidth(0)
+	ui.Row(c).Gap(Space3).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Text(c, title).FontSize(FontTitle).Bold().Grow(1).Shrink(1).MinWidth(0)
 		if kicker != "" {
-			ui.Text(c, kicker).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, kicker).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 	})
 }
@@ -190,14 +190,14 @@ func (p *qcPage) overview(c *ui.Context) {
 	o := &p.ov
 	current := o.key == p.overviewKey()
 	ready := current && o.data != nil
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Row(c).Gap(Space3).AlignItems(ui.Center).Wrap().Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
-			ui.Text(c, "Overview").FontSize(16).Bold()
+			ui.Text(c, "Overview").FontSize(FontTitle).Bold()
 			var records *int64
 			if ready {
 				records = &o.data.Records
 			}
-			ui.Text(c, ovHeading(a, a.SelectionIDs(a.Selected.Key), records)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, ovHeading(a, a.SelectionIDs(a.Selected.Key), records)).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 		if ui.Button(c, "Summary JSON…").Tooltip("Save the counts below as the web's overview summary").Disabled(!ready).Clicked() && ready {
 			p.exportOverviewJSON()
@@ -212,7 +212,7 @@ func (p *qcPage) overview(c *ui.Context) {
 	p.referenceStatus(c)
 	switch {
 	case o.err != "" && current:
-		ui.Row(c).Gap(10).Children(func() {
+		ui.Row(c).Gap(Space3).Children(func() {
 			ui.Text(c, "Could not load the overview: "+ShortError(o.err)).TextColor(t.Danger).Grow(1).Shrink(1).MinWidth(0)
 			if ui.Button(c, "Retry").Clicked() {
 				o.key, o.err = "", ""
@@ -220,14 +220,14 @@ func (p *qcPage) overview(c *ui.Context) {
 		})
 		return
 	case !current || o.data == nil:
-		ui.Row(c).Gap(8).Children(func() {
+		ui.Row(c).Gap(Space2).Children(func() {
 			ui.Spinner(c)
 			ui.Text(c, "Loading the overview…").TextColor(t.TextMuted)
 		})
 		return
 	}
 	d := o.data
-	ui.Row(c).Gap(12).Wrap().Children(func() {
+	ui.Grid(c).Columns(pageColumns(a, 4, 180)).Gap(Space3).Children(func() {
 		reads, readsNote := ovSourceReads(d)
 		ovMetric(c, "HYB records", FormatNumber(d.Records), "One valid tab-delimited record per row")
 		ovMetric(c, "Source reads", reads, readsNote)
@@ -237,16 +237,32 @@ func (p *qcPage) overview(c *ui.Context) {
 	if n := ovInt(d.LegacyColumn16); n > 0 {
 		ui.Text(c, "Legacy column 16 detected. "+FormatNumber(n)+" 16-column rows contain a positive integer in column 16 without a chimera-type column. "+
 			"They are treated as legacy cluster support, following the bundled HYB2 merge format. If these rows are instead truncated standard "+
-			"17-column records, add column 17 before analysis.").FontSize(12).Padding(8, 10).Radius(6).Background(t.Warning.Alpha(0.12))
+			"17-column records, add column 17 before analysis.").FontSize(FontSmall).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Warning.Alpha(0.12))
 	}
-	ui.Row(c).Gap(12).Wrap().AlignItems(ui.Stretch).Children(func() {
-		qcCard(c, "Top interacting RNAs", "Cluster support, per arm", func() { ovTopRNAs(c, d) }).Grow(1).MinWidth(300).Basis(0)
-		qcCard(c, "Chimera patterns", "HYB arm relationships", func() { p.ovTypes(c, d) }).Grow(1).MinWidth(300).Basis(0)
+	// cards side by side share their row's height; the pairs table takes
+	// two thirds of its row, for its five columns
+	ui.Grid(c).Columns(pageColumns(a, 2, 300)).Gap(Space3).Children(func() {
+		qcCard(c, "Top interacting RNAs", "Cluster support, per arm", func() { ovTopRNAs(c, d) }).MinWidth(0)
+		qcCard(c, "Chimera patterns", "HYB arm relationships", func() { p.ovTypes(c, d) }).MinWidth(0)
 	})
-	ui.Row(c).Gap(12).Wrap().AlignItems(ui.Stretch).Children(func() {
-		qcCard(c, "Top RNA pairs", "Normalised pairs", func() { ovTopPairs(c, d) }).Grow(2).MinWidth(420).Basis(0)
-		qcCard(c, "Data quality", "Local validation", func() { ovQuality(c, d, len(o.ids)) }).Grow(1).MinWidth(260).Basis(0)
+	pairs := ui.Grid(c).Columns(1).Gap(Space3)
+	if pageColumns(a, 2, 340) == 2 {
+		pairs.ColumnTracks(ui.Fr(2), ui.Fr(1))
+	}
+	pairs.Children(func() {
+		qcCard(c, "Top RNA pairs", "Normalised pairs", func() { ovTopPairs(c, d) }).MinWidth(0)
+		qcCard(c, "Data quality", "Local validation", func() { ovQuality(c, d, len(o.ids)) }).MinWidth(0)
 	})
+}
+
+// pageColumns is how many equal columns of cards, at most n, fit the page
+// with each at least minWidth wide.
+func pageColumns(a *App, n int, minWidth float32) int {
+	w := a.content.W - 2*Space6
+	if w <= 0 {
+		return n
+	}
+	return max(1, min(n, int((w+Space3)/(minWidth+Space3))))
 }
 
 // ovFilesName names samples as the web's headings do: its file for one
@@ -298,7 +314,7 @@ func (p *qcPage) referenceStatus(c *ui.Context) {
 	if m == nil && err == "" {
 		return // loading
 	}
-	ui.Row(c).Gap(12).AlignItems(ui.Center).Wrap().Padding(10, 14).Radius(8).Border(1, t.Border).Background(t.Surface).Children(func() {
+	ui.Row(c).Gap(Space3).AlignItems(ui.Center).Wrap().Padding(10, 14).Radius(RadiusSmall).Border(1, t.Border).Background(t.Surface).Children(func() {
 		if m == nil {
 			ui.Text(c, "Name matching unavailable: "+ShortError(err)).TextColor(t.Danger).Grow(1).Shrink(1).MinWidth(0)
 			if ui.Button(c, "Retry").Label("Retry name matching").Clicked() {
@@ -361,8 +377,8 @@ func ovReadyHeading(a *App, ids []string) string {
 
 func ovMetric(c *ui.Context, label, value, note string) {
 	t := c.Theme()
-	ui.Column(c).Gap(4).Padding(12, 14).Radius(8).Border(1, t.Border).Background(t.Surface).Grow(1).MinWidth(180).Basis(0).Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
+	ui.Column(c).Gap(Space1).Padding(Space3, Space4).Radius(RadiusSmall).Border(1, t.Border).Background(t.Surface).MinWidth(0).Children(func() {
+		ui.Text(c, label).FontSize(FontSmall).TextColor(t.TextMuted)
 		ui.Text(c, value).FontSize(22).Bold().SingleLine()
 		ui.Text(c, note).FontSize(11).TextColor(t.TextMuted)
 	})
@@ -370,7 +386,7 @@ func ovMetric(c *ui.Context, label, value, note string) {
 
 func ovTopRNAs(c *ui.Context, d *ovData) {
 	t := c.Theme()
-	ui.Text(c, "Each record counts once per arm on the RNA, so a record with both arms on one RNA counts twice.").FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, "Each record counts once per arm on the RNA, so a record with both arms on one RNA counts twice.").FontSize(FontSmall).TextColor(t.TextMuted)
 	rows := d.RNAs
 	if len(rows) > 5 {
 		rows = rows[:5]
@@ -380,7 +396,7 @@ func ovTopRNAs(c *ui.Context, d *ovData) {
 		maximum = rows[0].Support
 	}
 	for _, r := range rows {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 			// a third of the card, so a wide window shows long names whole
 			ui.Text(c, r.Name).SingleLine().Tooltip(r.Name).WidthPercent(34).MinWidth(120).MaxWidth(380).Shrink(1)
 			ui.Row(c).Grow(1).Height(8).Radius(4).Background(t.Border).Children(func() {
@@ -404,7 +420,7 @@ func (p *qcPage) ovTypes(c *ui.Context, d *ovData) {
 	total := max(d.Records, 1)
 	// as the web's Overview: each type's code and name, its two arms on the
 	// reference, its records and share
-	ui.Row(c).Gap(12).Wrap().Children(func() {
+	ui.Row(c).Gap(Space3).Wrap().Children(func() {
 		for _, ty := range types {
 			share := float64(ty.Records) / float64(total)
 			ui.Column(c.Key(ty.Name)).Gap(3).Grow(1).Basis(220).MinWidth(200).Children(func() {
@@ -433,12 +449,12 @@ func ovTopPairs(c *ui.Context, d *ovData) {
 	if len(rows) > 6 {
 		rows = rows[:6]
 	}
-	ui.Row(c).Gap(8).Children(func() {
+	ui.Row(c).Gap(Space2).Children(func() {
 		for _, h := range []string{"RNA 1", "RNA 2"} {
-			ui.Text(c, h).FontSize(12).Bold().TextColor(t.TextMuted).Grow(1).Basis(0).MinWidth(0)
+			ui.Text(c, h).FontSize(FontSmall).Bold().TextColor(t.TextMuted).Grow(1).Basis(0).MinWidth(0)
 		}
 		for _, h := range []string{"HYB records", "Source reads", "Cluster support"} {
-			ui.Text(c, h).FontSize(12).Bold().TextColor(t.TextMuted).Width(96).TextAlign(ui.End)
+			ui.Text(c, h).FontSize(FontSmall).Bold().TextColor(t.TextMuted).Width(96).TextAlign(ui.End)
 		}
 	})
 	for _, r := range rows {
@@ -446,7 +462,7 @@ func ovTopPairs(c *ui.Context, d *ovData) {
 		if r.ReadRecords > 0 {
 			reads = FormatNumber(r.Reads)
 		}
-		ui.Row(c).Gap(8).Children(func() {
+		ui.Row(c).Gap(Space2).Children(func() {
 			ui.Text(c, r.Gene1).SingleLine().Tooltip(r.Gene1).Grow(1).Basis(0).MinWidth(0)
 			ui.Text(c, r.Gene2).SingleLine().Tooltip(r.Gene2).Grow(1).Basis(0).MinWidth(0)
 			for _, v := range []string{FormatNumber(r.Records), reads, FormatNumber(r.Support)} {
@@ -466,8 +482,8 @@ func ovQuality(c *ui.Context, d *ovData, files int) {
 	}
 	item := func(value, label string) {
 		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, value).FontSize(18).Bold()
-			ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, value).FontSize(FontTitle).Bold()
+			ui.Text(c, label).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 	}
 	item(valid, "valid data rows")
@@ -511,55 +527,55 @@ func ovImportItems(d *ovData) []ovImportItem {
 func (p *qcPage) ovImportCheck(c *ui.Context, d *ovData) {
 	t := c.Theme()
 	ui.Text(c, "The parser expects at least 15 tab-separated fields, RNA names in both arms, and positive one-based RNA start/end coordinates. "+
-		"Standard HYB2 17-column annotations are retained explicitly.").FontSize(12).TextColor(t.TextMuted)
-	ui.Row(c).Gap(24).Wrap().Children(func() {
+		"Standard HYB2 17-column annotations are retained explicitly.").FontSize(FontSmall).TextColor(t.TextMuted)
+	ui.Row(c).Gap(Space6).Wrap().Children(func() {
 		for _, item := range ovImportItems(d) {
 			ui.Column(c).Gap(2).Children(func() {
-				ui.Text(c, FormatNumber(item.value)).FontSize(18).Bold()
-				ui.Text(c, item.label).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, FormatNumber(item.value)).FontSize(FontTitle).Bold()
+				ui.Text(c, item.label).FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 		}
 	})
 	p.ovFiles(c, d)
 	if d.Invalid == 0 {
-		ui.Text(c, "No invalid data rows were found during local validation.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "No invalid data rows were found during local validation.").FontSize(FontSmall).TextColor(t.TextMuted)
 	} else {
-		ui.Text(c, FormatNumber(d.Invalid)+" invalid rows were skipped. The files remain usable with their valid records.").FontSize(12).TextColor(t.Warning)
+		ui.Text(c, FormatNumber(d.Invalid)+" invalid rows were skipped. The files remain usable with their valid records.").FontSize(FontSmall).TextColor(t.Warning)
 	}
 	if n := ovInt(d.LegacyColumn16); n > 0 {
 		ui.Text(c, FormatNumber(n)+" rows use a positive-integer legacy column 16. They are interpreted as legacy cluster counts; "+
-			"the input has no column 17 type for those rows.").FontSize(12).TextColor(t.Warning)
+			"the input has no column 17 type for those rows.").FontSize(FontSmall).TextColor(t.Warning)
 	}
 	if d.Invalid == 0 {
 		return
 	}
 	if d.OmittedErrors > 0 {
 		ui.Text(c, fmt.Sprintf("The downloadable error sample contains the first %s invalid rows; %s additional invalid-row details were omitted to keep the analysis index small. "+
-			"The total invalid count above remains complete.", FormatNumber(int64(len(d.Errors))), FormatNumber(d.OmittedErrors))).FontSize(12).TextColor(t.Warning)
+			"The total invalid count above remains complete.", FormatNumber(int64(len(d.Errors))), FormatNumber(d.OmittedErrors))).FontSize(FontSmall).TextColor(t.Warning)
 	}
 	rows := d.Errors
 	if len(rows) > ovShownErrors {
 		rows = rows[:ovShownErrors]
 	}
 	if len(rows) > 0 {
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Text(c, "Sample").FontSize(12).Bold().TextColor(t.TextMuted).Width(120)
-			ui.Text(c, "Line").FontSize(12).Bold().TextColor(t.TextMuted).Width(70).TextAlign(ui.End)
-			ui.Text(c, "Reason").FontSize(12).Bold().TextColor(t.TextMuted).Width(280)
-			ui.Text(c, "Content").FontSize(12).Bold().TextColor(t.TextMuted).Grow(1).Basis(0).MinWidth(0)
+		ui.Row(c).Gap(Space2).Children(func() {
+			ui.Text(c, "Sample").FontSize(FontSmall).Bold().TextColor(t.TextMuted).Width(120)
+			ui.Text(c, "Line").FontSize(FontSmall).Bold().TextColor(t.TextMuted).Width(70).TextAlign(ui.End)
+			ui.Text(c, "Reason").FontSize(FontSmall).Bold().TextColor(t.TextMuted).Width(280)
+			ui.Text(c, "Content").FontSize(FontSmall).Bold().TextColor(t.TextMuted).Grow(1).Basis(0).MinWidth(0)
 		})
 	}
 	for _, e := range rows {
 		sample := p.ovSampleName(e.SampleID)
-		ui.Row(c).Gap(8).Children(func() {
+		ui.Row(c).Gap(Space2).Children(func() {
 			ui.Text(c, sample).SingleLine().Tooltip(sample).Width(120)
 			ui.Text(c, FormatNumber(e.Line)).Width(70).TextAlign(ui.End).SingleLine()
 			ui.Text(c, e.Error).SingleLine().Tooltip(e.Error).Width(280)
-			ui.Text(c, e.Content).FontSize(12).TextColor(t.TextMuted).SingleLine().Tooltip(e.Content).Grow(1).Basis(0).MinWidth(0)
+			ui.Text(c, e.Content).FontSize(FontSmall).TextColor(t.TextMuted).SingleLine().Tooltip(e.Content).Grow(1).Basis(0).MinWidth(0)
 		})
 	}
 	if len(d.Errors) > len(rows) {
-		ui.Text(c, FormatNumber(int64(len(d.Errors)-len(rows)))+" more in the CSV.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, FormatNumber(int64(len(d.Errors)-len(rows)))+" more in the CSV.").FontSize(FontSmall).TextColor(t.TextMuted)
 	}
 	ui.Row(c).Children(func() {
 		label, tip := "Download validation report…", "Every invalid row with its line number and reason"
@@ -580,12 +596,12 @@ func (p *qcPage) ovFiles(c *ui.Context, d *ovData) {
 	if len(ids) < 2 || len(d.Indexes) != len(ids) {
 		return
 	}
-	ui.Column(c).Gap(4).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Text(c, "File").FontSize(12).Bold().TextColor(t.TextMuted).Grow(1).Basis(0).MinWidth(0)
-			ui.Text(c, "Dataset").FontSize(12).Bold().TextColor(t.TextMuted).Width(140)
+	ui.Column(c).Gap(Space1).Children(func() {
+		ui.Row(c).Gap(Space2).Children(func() {
+			ui.Text(c, "File").FontSize(FontSmall).Bold().TextColor(t.TextMuted).Grow(1).Basis(0).MinWidth(0)
+			ui.Text(c, "Dataset").FontSize(FontSmall).Bold().TextColor(t.TextMuted).Width(140)
 			for _, h := range []string{"Valid records", "Invalid rows", "Homodimer-proxy"} {
-				ui.Text(c, h).FontSize(12).Bold().TextColor(t.TextMuted).Width(110).TextAlign(ui.End)
+				ui.Text(c, h).FontSize(FontSmall).Bold().TextColor(t.TextMuted).Width(110).TextAlign(ui.End)
 			}
 		})
 		for i, part := range d.Indexes {
@@ -593,7 +609,7 @@ func (p *qcPage) ovFiles(c *ui.Context, d *ovData) {
 			if s := p.a.Project.Sample(ids[i]); s != nil {
 				file = dataBasename(s.Reads.Path)
 			}
-			ui.Row(c.Key("ov-file-" + ids[i])).Gap(8).Children(func() {
+			ui.Row(c.Key("ov-file-" + ids[i])).Gap(Space2).Children(func() {
 				ui.Text(c, file).SingleLine().Tooltip(file).Grow(1).Basis(0).MinWidth(0)
 				ui.Text(c, dataset).SingleLine().Tooltip(dataset).Width(140)
 				for _, v := range []int64{part.Records, part.Invalid, part.HomodimerRecords} {

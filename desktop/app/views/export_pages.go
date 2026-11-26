@@ -954,7 +954,7 @@ func renderPNG(width, height int, view func(c *ui.Context)) ([]byte, error) {
 	img := ui.Render(func(c *ui.Context) {
 		c.SetTheme(ui.LightTheme())
 		t := c.Theme()
-		ui.Column(c).FillWidth().FillHeight().Padding(8).Gap(6).Background(t.Surface).Children(func() { view(c) })
+		ui.Column(c).FillWidth().FillHeight().Padding(Space2).Gap(6).Background(t.Surface).Children(func() { view(c) })
 	}, width, height, 2)
 	var b bytes.Buffer
 	if err := png.Encode(&b, img); err != nil {

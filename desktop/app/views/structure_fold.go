@@ -723,7 +723,7 @@ func (p *structurePage) sourceField(c *ui.Context, pl foldPlan) {
 			}
 		}
 		if p.src.kind != stSourceReference && len(pl.lengths) > 0 {
-			ui.Text(c, pl.span()).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, pl.span()).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 	})
 }
@@ -766,8 +766,7 @@ func (p *structurePage) recordChoice(c *ui.Context) {
 			p.src.record = &r
 		}
 	}
-	ui.Text(c, "Hybrid-read sequence: the chimeric sequence stored in the record, not necessarily a complete reference RNA or region.").
-		FontSize(12).Padding(8).Radius(6).Background(t.Warning.Alpha(0.10))
+	Notice(c, "Hybrid-read sequence: the chimeric sequence stored in the record, not necessarily a complete reference RNA or region.", t.Warning)
 }
 
 // span of the folded region: "10,807 nt" or "3,000 + 400 nt".
@@ -798,7 +797,7 @@ func (p *structurePage) form(c *ui.Context) {
 		ui.Text(c, intro).
 			FontSize(12).TextColor(t.TextMuted)
 		if p.prefillNote != "" {
-			ui.Text(c, p.prefillNote).FontSize(12).Padding(8).Radius(6).Background(t.Accent.Alpha(0.10))
+			Notice(c, p.prefillNote, t.Accent)
 		}
 		p.workflowField(c)
 		p.inputs(c, pl)
@@ -827,9 +826,10 @@ func (p *structurePage) runPanel(c *ui.Context) {
 	// At most about half the page, so the form and results keep room; a
 	// longer check (a failure explained) scrolls inside.
 	_, height := p.a.ContentSize()
-	ui.Scroll(c.Key("st-run")).MaxHeight(clampF(height*0.55, 260, 560)).Margin(0, 14, 0, 0).Radius(10).
+	ui.Scroll(c.Key("st-run")).MaxHeight(clampF(height*0.55, 260, 560)).Margin(0, stScrollGutter, 0, 0).Radius(RadiusLarge).
 		Background(t.Background).Border(1, t.Border).Children(func() {
-		ui.Column(c).Gap(8).Padding(12).Children(func() {
+		// the padding, gap and title of Card
+		ui.Column(c).Gap(Space3).Padding(Space4).Children(func() {
 			p.check(c, pl)
 			p.status(c)
 		})
@@ -885,7 +885,7 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 				OnChange(func() { p.gene, p.referenceID = names[current].name, names[current].reference })
 			if pl.length > 0 {
 				// The full name, which the select may cut.
-				ui.Text(c, current).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, current).FontSize(FontSmall).TextColor(t.TextMuted)
 			}
 			if twoRegions {
 				ui.TextInput(c.Key("st-region1"), &p.region1).Placeholder("start-end, e.g. 1-45").Label("Region 1")
@@ -922,14 +922,14 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 			OnChange(func() { p.evidence, p.pinned = keys[currentEv], nil })
 		switch {
 		case p.pinned != nil:
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, "Samples sent with the fold request: "+p.sampleNames(pl.ids)).FontSize(12).TextColor(t.TextMuted).Grow(1)
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Text(c, "Samples sent with the fold request: "+p.sampleNames(pl.ids)).FontSize(FontSmall).TextColor(t.TextMuted).Grow(1)
 				if ui.Button(c, "Use the selection").Tooltip("Take the evidence chosen above instead").Clicked() {
 					p.pinned = nil
 				}
 			})
 		case len(pl.ids) > 0:
-			ui.Text(c, "Samples: "+p.sampleNames(pl.ids)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Samples: "+p.sampleNames(pl.ids)).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		if p.engine == engineCPLfold || cofold {
 			ui.Checkbox(c.Key("st-seqonly"), &p.seqOnly, "Sequence only: fold without the chimeric reads").
@@ -953,7 +953,7 @@ func (p *structurePage) inputs(c *ui.Context, pl foldPlan) {
 			if len(pl.lengths) == 2 {
 				note = pl.span() + " · " + note
 			}
-			ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 			if cofold {
 				ui.Checkbox(c.Key("st-pk"), &p.pseudoknot, "Allow pseudoknots")
 			}
@@ -989,7 +989,7 @@ func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 			ui.TextArea(c.Key("st-windows"), &p.windows).Lines(3, 8).Font("monospace").
 				Placeholder("e.g.\n1-400\n2300-2700").Label("Windows")
 			if len(pl.lengths) > 0 {
-				ui.Text(c, pl.what+": "+pl.span()).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, pl.what+": "+pl.span()).FontSize(FontSmall).TextColor(t.TextMuted)
 			}
 		})
 	}
@@ -1010,7 +1010,7 @@ func (p *structurePage) engineFields(c *ui.Context) {
 			}).Label("Structure topology")
 			p.pseudoknot = p.topology == "pseudoknot"
 			p.lastPK = p.pseudoknot
-			ui.Text(c, "CPLfold can search crossing pairs. ViennaRNA remains pseudoknot-free.").FontSize(12).TextColor(c.Theme().TextMuted)
+			ui.Text(c, "CPLfold can search crossing pairs. ViennaRNA remains pseudoknot-free.").FontSize(FontSmall).TextColor(c.Theme().TextMuted)
 		})
 	}
 	Field(c, "4  Engine", func() {
@@ -1068,7 +1068,7 @@ func (p *structurePage) advanced(c *ui.Context) {
 		summary += " · defaults"
 	}
 	ui.Collapsible(c.Key("st-advanced"), "Advanced settings", &p.advancedOpen, func() {
-		ui.Column(c).Gap(10).Padding(6, 0, 0, 0).Children(func() {
+		ui.Column(c).Gap(Space3).Padding(6, 0, 0, 0).Children(func() {
 			e := engineSettings(p.engine)
 			r := e.Ranges
 			foldNumberRow(c, "st-alpha", "Evidence weight (alpha)", &p.alpha, r["alpha"], 0.05,
@@ -1082,8 +1082,8 @@ func (p *structurePage) advanced(c *ui.Context) {
 			foldNumberRow(c, "st-beta", "Pseudoknot beta", &p.beta, r["beta"], 0.05,
 				fmt.Sprintf("Weight of the pseudoknot energy term, %s. Default %g.", r["beta"], stDefaultBeta))
 			ui.Column(c).Gap(2).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "Energy model").FontSize(12).Bold().Width(150)
+				ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Energy model").FontSize(FontSmall).Bold().Width(150)
 					labels := make([]string, len(e.Models))
 					label := "Choose energy model"
 					for i, m := range e.Models {
@@ -1098,13 +1098,13 @@ func (p *structurePage) advanced(c *ui.Context) {
 						}
 					}
 				})
-				ui.Text(c, "Energy model that ranks candidates when pseudoknots are on. Default "+e.DefaultModel+". Pseudoknot-free folds rank with Turner 2004.").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "Energy model that ranks candidates when pseudoknots are on. Default "+e.DefaultModel+". Pseudoknot-free folds rank with Turner 2004.").FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 			// sequence-only folds use no reads, so the kernel does not apply
 			if !(p.seqOnly && p.engine == engineCPLfold) {
 				ui.Column(c).Gap(2).Children(func() {
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "Read support (B_ij)").FontSize(12).Bold().Width(150)
+					ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "Read support (B_ij)").FontSize(FontSmall).Bold().Width(150)
 						option := stKernels.option(p.supportKernel())
 						label := nameOr(option.displayLabel(), "Choose read support")
 						if ui.Select(c.Key("st-kernel"), &label, stKernels.labels).Grow(1).Label("Read support").Changed() {
@@ -1115,7 +1115,7 @@ func (p *structurePage) advanced(c *ui.Context) {
 					})
 					ui.Text(c, "Gaussian and both block kernels use log(1 + summed support). RNAduplex allows only between-arm pairs. "+
 						"COMRADES (RNAcofold) also allows each arm to fold internally but counts only between-arm pairs. Both use the "+
-						"raw counts for candidate scores and colours, and 3.6 C / (C + q) kcal/mol for the folding bonus. Default "+stKernelLabel(stKernels.DefaultKernel)+".").FontSize(12).TextColor(t.TextMuted)
+						"raw counts for candidate scores and colours, and 3.6 C / (C + q) kcal/mol for the folding bonus. Default "+stKernelLabel(stKernels.DefaultKernel)+".").FontSize(FontSmall).TextColor(t.TextMuted)
 				})
 			}
 			if p.mode == "windows" {
@@ -1132,7 +1132,7 @@ func (p *structurePage) advanced(c *ui.Context) {
 	if changed {
 		color = t.Warning
 	}
-	ui.Text(c, summary).FontSize(12).TextColor(color)
+	ui.Text(c, summary).FontSize(FontSmall).TextColor(color)
 }
 
 // check: the fold to run, its cost and limits, and Run fold — disabled,
@@ -1140,12 +1140,12 @@ func (p *structurePage) advanced(c *ui.Context) {
 func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 	t := c.Theme()
 	p.estimate(pl)
-	ui.Column(c.Key("st-check")).Gap(6).Children(func() {
-		ui.Text(c, "Check before running").Bold()
+	ui.Column(c.Key("st-check")).Gap(Space2).Children(func() {
+		ui.Text(c, "Check before running").FontSize(FontTitle).Bold()
 		line := func(label, value string) {
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Width(70)
-				ui.Text(c, value).FontSize(12).Grow(1).Shrink(1).MinWidth(0)
+			ui.Row(c).Gap(Space2).Children(func() {
+				ui.Text(c, label).FontSize(FontSmall).TextColor(t.TextMuted).Width(70)
+				ui.Text(c, value).FontSize(FontSmall).Grow(1).Shrink(1).MinWidth(0)
 			})
 		}
 		if pl.length > 0 && len(pl.lengths) > 0 {
@@ -1198,17 +1198,17 @@ func (p *structurePage) check(c *ui.Context, pl foldPlan) {
 			line("Memory", mem)
 		}
 		for _, l := range pl.limits {
-			ui.Text(c, "• "+l).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "• "+l).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		if len(pl.problems) > 0 {
-			ui.Text(c, "Cannot run yet:").FontSize(12).Bold().TextColor(t.Danger)
+			ui.Text(c, "Cannot run yet:").FontSize(FontSmall).Bold().TextColor(t.Danger)
 			for _, msg := range pl.problems {
-				ui.Text(c, "• "+msg).FontSize(12).TextColor(t.Danger)
+				ui.Text(c, "• "+msg).FontSize(FontSmall).TextColor(t.Danger)
 			}
 		}
 		p.irisRecovery(c, pl)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Shortcut: "+cmdName()+"+Enter").FontSize(12).TextColor(t.TextMuted).Grow(1)
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Shortcut: "+cmdName()+"+Enter").FontSize(FontSmall).TextColor(t.TextMuted).Grow(1)
 			busy := p.running()
 			label := "Run fold"
 			if p.engine == engineIRIS {
@@ -1328,7 +1328,7 @@ func (p *structurePage) status(c *ui.Context) {
 	a := p.a
 	t := c.Theme()
 	box := func(color ui.Color, body func()) {
-		ui.Column(c.Key("st-status")).Gap(6).Padding(10).Radius(8).Border(1, color).Children(body)
+		ui.Column(c.Key("st-status")).Gap(Space2).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, color).Children(body)
 	}
 	switch {
 	case p.starting:
@@ -1337,7 +1337,7 @@ func (p *structurePage) status(c *ui.Context) {
 	case p.startErr != "":
 		box(t.Danger, func() {
 			ui.Text(c, "The fold did not start").Bold().TextColor(t.Danger)
-			ui.Text(c, p.startErr).FontSize(12)
+			ui.Text(c, p.startErr).FontSize(FontSmall)
 		})
 		return
 	case p.lastTask == "":
@@ -1350,7 +1350,7 @@ func (p *structurePage) status(c *ui.Context) {
 	switch task.Status {
 	case "queued":
 		box(t.Accent, func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Waiting to start").Bold().Grow(1)
 				if ui.Button(c, "Cancel").Clicked() {
 					a.CancelTask(task.TaskID)
@@ -1361,14 +1361,14 @@ func (p *structurePage) status(c *ui.Context) {
 		})
 	case "running":
 		box(t.Accent, func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, stStageText(task)).Bold().Grow(1).Shrink(1).MinWidth(0)
 				if ui.Button(c, "Cancel").Tooltip("Stop the fold; nothing is saved").Clicked() {
 					a.CancelTask(task.TaskID)
 				}
 			})
 			ui.Progress(c, task.Progress.Fraction()).Label("Fold progress")
-			ui.Text(c, stTimeLine(task)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, stTimeLine(task)).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 	case "succeeded":
 		box(t.Success, func() {
@@ -1380,16 +1380,16 @@ func (p *structurePage) status(c *ui.Context) {
 					done = s + ". " + done
 				}
 			}
-			ui.Text(c, done).FontSize(12)
+			ui.Text(c, done).FontSize(FontSmall)
 		})
 	case "failed":
 		what, next := stExplain(task.ErrorText())
 		box(t.Danger, func() {
 			ui.Text(c, "The fold failed").Bold().TextColor(t.Danger)
-			ui.Text(c, what).FontSize(12)
-			ui.Text(c, "Next: "+next).FontSize(12)
+			ui.Text(c, what).FontSize(FontSmall)
+			ui.Text(c, "Next: "+next).FontSize(FontSmall)
 			ui.Collapsible(c.Key("st-error"), "Technical details", &p.errorOpen, func() {
-				ui.Text(c, truncate(task.ErrorText(), 600)+" (log: runs/"+task.TaskID+"/stderr.log)").FontSize(12).
+				ui.Text(c, truncate(task.ErrorText(), 600)+" (log: runs/"+task.TaskID+"/stderr.log)").FontSize(FontSmall).
 					TextColor(t.TextMuted).Selectable()
 			})
 		})
@@ -1405,7 +1405,7 @@ func (p *structurePage) status(c *ui.Context) {
 		})
 	case "interrupted":
 		box(t.Warning, func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Fold stopped").Bold().Grow(1)
 				if ui.Button(c, "Run it again").Clicked() {
 					a.ResumeTaskThen(task.TaskID, a.TaskLabel(task), func(nt model.Task, err error) {
@@ -1588,7 +1588,7 @@ func (p *structurePage) list(c *ui.Context) {
 			if n := len(p.structures); n > 0 {
 				title = fmt.Sprintf("Results (%d)", n)
 			}
-			ui.Text(c, title).FontSize(16).Bold().Grow(1)
+			ui.Text(c, title).FontSize(FontTitle).Bold().Grow(1)
 			if ui.Button(c, "Refresh").Tooltip("Read the project's structures again").Clicked() {
 				p.loadList()
 			}
@@ -1606,23 +1606,23 @@ func (p *structurePage) list(c *ui.Context) {
 				ui.Spinner(c).Label("Loading results…")
 			case others == 0 && p.listErr == "":
 				ui.Text(c, "No structures yet. Choose an RNA and its evidence above and press Run fold; "+
-					"results appear here and in the Report.").FontSize(12).TextColor(t.TextMuted)
+					"results appear here and in the Report.").FontSize(FontSmall).TextColor(t.TextMuted)
 			}
 			return
 		}
 		for i := range p.structures {
 			e := &p.structures[i]
 			isA, isB := p.viewA == e.ID, p.viewB == e.ID
-			item := ui.Column(c.Key("st-"+e.ID)).Gap(3).Padding(8, 10).Radius(8).Border(1, t.Border)
+			item := ui.Column(c.Key("st-"+e.ID)).Gap(3).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Border)
 			if isA || isB {
 				item.Background(t.Accent.Alpha(0.10)).BorderColor(t.Accent)
 			}
 			item.Children(func() {
 				// The whole RNA name, on up to two lines.
 				ui.Text(c, e.GeneID).Bold().MaxLines(2).Tooltip(e.GeneID)
-				ui.Text(c, stWhat(e)).FontSize(12)
+				ui.Text(c, stWhat(e)).FontSize(FontSmall)
 				if s := stSummaryText(e); s != "" {
-					ui.Text(c, s).FontSize(12)
+					ui.Text(c, s).FontSize(FontSmall)
 				}
 				meta := "Evidence: " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
 				switch {
@@ -1641,13 +1641,13 @@ func (p *structurePage) list(c *ui.Context) {
 				case e.Parameters["engine"] == "CPLcofold":
 					meta = "CPLcofold · evidence: " + nameOr(p.evidenceNames(e), "—") + " · " + FormatTime(e.CreatedAt)
 				}
-				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, meta).FontSize(FontSmall).TextColor(t.TextMuted)
 				if e.Available != nil && !*e.Available {
 					ui.Text(c, "Its files are missing from the project folder; it cannot be shown. Run the fold again to recreate it.").
 						FontSize(12).TextColor(t.Danger)
 					return
 				}
-				ui.Row(c).Gap(6).Children(func() {
+				ui.Row(c).Gap(Space2).Children(func() {
 					if isA {
 						ui.Badge(c, "A · shown").Background(cmpRed.Alpha(0.15)).TextColor(cmpRed)
 					} else if ui.Button(c, "Show").Clicked() {
@@ -1686,25 +1686,25 @@ func (p *structurePage) otherTasks(c *ui.Context) int {
 		switch {
 		case task.Active():
 			shown++
-			ui.Column(c.Key("task-"+task.TaskID)).Gap(4).Padding(8, 10).Radius(8).Border(1, t.Accent.Alpha(0.5)).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Column(c.Key("task-"+task.TaskID)).Gap(Space1).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Accent.Alpha(0.5)).Children(func() {
+				ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, a.TaskLabel(task)).Bold().Grow(1).Shrink(1).MinWidth(0)
 					if ui.Button(c, "Cancel").Clicked() {
 						a.CancelTask(task.TaskID)
 					}
 				})
 				if task.Status == "queued" {
-					ui.Text(c, "Waiting to start").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "Waiting to start").FontSize(FontSmall).TextColor(t.TextMuted)
 				} else {
-					ui.Text(c, stStageText(task)).FontSize(12)
+					ui.Text(c, stStageText(task)).FontSize(FontSmall)
 					ui.Progress(c, task.Progress.Fraction()).Label("Fold progress")
 				}
 			})
 		case failed < 3 && (task.Status == "interrupted" || (task.Status == "failed" && task.FinishedAt >= a.SessionStart)):
 			failed++
 			shown++
-			ui.Column(c.Key("task-"+task.TaskID)).Gap(4).Padding(8, 10).Radius(8).Border(1, t.Border).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Column(c.Key("task-"+task.TaskID)).Gap(Space1).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
+				ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, a.TaskLabel(task)).Bold().Grow(1).Shrink(1).MinWidth(0)
 					StatusChip(c, task.Status)
 					if ui.Button(c, "Run it again").Clicked() {
@@ -1712,10 +1712,10 @@ func (p *structurePage) otherTasks(c *ui.Context) int {
 					}
 				})
 				if task.Status == "interrupted" {
-					ui.Text(c, "Stopped when HYB2 Desktop closed; nothing was saved.").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "Stopped when HYB2 Desktop closed; nothing was saved.").FontSize(FontSmall).TextColor(t.TextMuted)
 				} else {
 					what, next := stExplain(task.ErrorText())
-					ui.Text(c, what+" Next: "+next).FontSize(12).TextColor(t.Danger)
+					ui.Text(c, what+" Next: "+next).FontSize(FontSmall).TextColor(t.Danger)
 				}
 			})
 		}

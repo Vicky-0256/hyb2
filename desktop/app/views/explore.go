@@ -413,10 +413,10 @@ func (p *explorePage) View(c *ui.Context) {
 	a := p.a
 	t := c.Theme()
 	p.track()
-	ui.Column(c).Fill().Padding(20, 24).Gap(14).Children(func() {
-		ui.Row(c).Gap(16).AlignItems(ui.Center).Wrap().Children(func() {
+	PageRoot(c).Children(func() {
+		ui.Row(c).Gap(Space4).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Column(c).Grow(1).Basis(320).Gap(2).Children(func() {
-				ui.Text(c, "Explore").FontSize(24).Bold()
+				ui.Text(c, "Explore").FontSize(FontPage).Bold()
 				what, change := "Selection: "+a.SelectionLabel(a.Selected.Key), " · change it in the top bar."
 				if p.pinned != nil {
 					what, change = "Samples from "+nameOr(p.pinnedFrom, "Compare")+": "+p.samplesLabel(), ""
@@ -425,7 +425,7 @@ func (p *explorePage) View(c *ui.Context) {
 				if p.summary.records > 0 {
 					note = fmt.Sprintf("%s · %s hybrids, %s reads%s", what, FormatNumber(p.summary.records), FormatNumber(p.summary.reads), change)
 				}
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, note).TextColor(t.TextMuted).SingleLine().Shrink(1).MinWidth(0)
 					if p.pinned != nil && ui.Button(c, "Use the selection").
 						Tooltip("Show "+a.SelectionLabel(a.Selected.Key)+", the top bar's selection, instead").Clicked() {
@@ -484,7 +484,7 @@ func (p *explorePage) emptyState(c *ui.Context) {
 // loadingLine shows a spinner while l is busy, or its error.
 func loadingLine(c *ui.Context, l *loader, what string) {
 	if l.busy() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 			ui.Spinner(c).Label("Loading")
 			ui.Text(c, "Loading "+what+"…").TextColor(c.Theme().TextMuted)
 		})
@@ -499,36 +499,68 @@ func errorLine(c *ui.Context, text string) {
 
 // notice is a muted one-line remark, e.g. a truncation or adjusted bin.
 func notice(c *ui.Context, text string) {
-	t := c.Theme()
-	ui.Row(c).Padding(6, 10).Radius(6).Background(t.Warning.Alpha(0.12)).Children(func() {
-		ui.Text(c, text).FontSize(12)
-	})
+	Notice(c, text, c.Theme().Warning)
 }
 
 // stat is a label over a number.
 func stat(c *ui.Context, label, value string) {
 	ui.Column(c).Gap(2).Children(func() {
-		ui.Text(c, label).FontSize(11).TextColor(c.Theme().TextMuted)
-		ui.Text(c, value).FontSize(16).Bold()
+		ui.Text(c, label).FontSize(FontSmall).TextColor(c.Theme().TextMuted)
+		ui.Text(c, value).FontSize(FontTitle).Bold()
 	})
 }
 
-// picker is a labelled select over options.
+// picker is a labelled select over options, width wide, or filling its
+// cell (of a filterGrid) for a width of 0.
 func picker(c *ui.Context, key, label string, value *string, options []string, width float32) ui.Element {
 	var el ui.Element
 	Field(c, label, func() {
-		el = ui.Select(c.Key(key), value, options).Label(label).Width(width)
+		el = ui.Select(c.Key(key), value, options).Label(label)
+		if width > 0 {
+			el.Width(width)
+		} else {
+			el.FillWidth()
+		}
 	})
 	return el
 }
 
-// coordInput is a labelled text field for a coordinate (empty = unset).
+// coordInput is a labelled text field for a coordinate (empty = unset),
+// filling its cell of a filterGrid.
 func coordInput(c *ui.Context, key, label string, value *string, placeholder string) ui.Element {
 	var el ui.Element
 	Field(c, label, func() {
-		el = ui.TextInput(c.Key(key), value).Placeholder(placeholder).Label(label).Width(96)
+		el = ui.TextInput(c.Key(key), value).Placeholder(placeholder).Label(label).FillWidth()
 	})
 	return el
+}
+
+// fieldColumns is how many columns of controls a FieldGrid width wide has.
+func fieldColumns(width float32) int {
+	return max(1, min(int(width/(FieldMinWidth+Space3)), 6))
+}
+
+// pageWidth is the width of the page's content, inside its padding.
+func (p *explorePage) pageWidth() float32 {
+	w, _ := p.a.ContentSize()
+	return w - 2*Space6
+}
+
+// filterGrid is a filter bar: the fields (n of them, each filling its cell)
+// in the equal columns of a FieldGrid width wide, then the action buttons,
+// right-aligned on the rest of the last row when need cells are free there,
+// else on a row of their own, so every row lines up and ends at the same
+// edge.
+func filterGrid(c *ui.Context, width float32, n, need int, fields, actions func()) ui.Element {
+	cols := fieldColumns(width)
+	span := cols - n%cols
+	if span < need {
+		span = cols
+	}
+	return ui.Grid(c).Columns(cols).Gap(Space3).Children(func() {
+		fields()
+		ui.Row(c).ColumnSpan(span).Gap(Space2).Wrap().AlignContent(ui.End).AlignItems(ui.End).Justify(ui.End).Children(actions)
+	})
 }
 
 // parseCoord reads a coordinate field: (0, true) when empty.

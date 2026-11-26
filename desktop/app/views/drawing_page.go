@@ -72,7 +72,7 @@ func (p *structurePage) drawingButton(c *ui.Context, a *structureResult) {
 // drawingView is the editor in the viewer, for the one window of A shown.
 func (p *structurePage) drawingView(c *ui.Context, a *structureResult) {
 	t := c.Theme()
-	ui.Text(c, "Drawing editor").FontSize(14).Bold()
+	ui.Text(c, "Drawing editor").FontSize(FontBody).Bold()
 	records := stPickRecords(a.Records, p.record)
 	if len(records) != 1 {
 		ui.Text(c, "The drawing editor draws one window: choose it above.").TextColor(t.TextMuted)

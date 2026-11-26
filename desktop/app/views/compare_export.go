@@ -690,10 +690,10 @@ func jsPrecision(v float64, digits int) string {
 func (p *comparePage) exportsCard(c *ui.Context, e *comparisonEntry, stale bool) {
 	t := c.Theme()
 	Card(c, "", func() {
-		ui.Text(c, "Exports").FontSize(16).Bold()
+		ui.Text(c, "Exports").FontSize(FontTitle).Bold()
 		ui.Text(c, "Files for R or the HYB2 command-line tool: the raw DESeq2 count table (every 10-nt cell, one column per sample), HYB2's headerless names.table and the extended sample metadata (header and file names, for audit or your own R workflow), as the web app writes them.").
-			FontSize(12).TextColor(t.TextMuted)
-		ui.Row(c).Gap(8).Wrap().Children(func() {
+			FontSize(FontSmall).TextColor(t.TextMuted)
+		ui.Row(c).Gap(Space2).Wrap().Children(func() {
 			if ui.Button(c, "Count table…").Tooltip("HYB2-compatible raw count table (feature_id x_y, one column per sample)").Clicked() {
 				p.exportCopy("counts", "Export the count table", cmpExportNames["counts"])
 			}
@@ -707,10 +707,11 @@ func (p *comparePage) exportsCard(c *ui.Context, e *comparisonEntry, stale bool)
 				p.exportParamsJSON()
 			}
 		})
-		ui.Row(c).Gap(12).AlignItems(ui.End).Wrap().Children(func() {
+		filterGrid(c, p.cardWidth(), 1, 2, func() {
 			Field(c, "Local map contrast quantile (Lau -q)", func() {
-				ui.NumberInput(c.Key("cmp-topq"), &p.topQuantile, 0, 1, 0.01).Width(110).Label("Local map contrast quantile")
+				ui.NumberInput(c.Key("cmp-topq"), &p.topQuantile, 0, 1, 0.01).FillWidth().Label("Local map contrast quantile")
 			})
+		}, func() {
 			tip := "SVG maps, raw-count TSVs and a printable preview.html"
 			if stale {
 				tip = cmpStaleNotice
@@ -720,6 +721,6 @@ func (p *comparePage) exportsCard(c *ui.Context, e *comparisonEntry, stale bool)
 			}
 		})
 		ui.Text(c, "Each map shows every replicate separately, ±150 nt around one of the ten smallest-padj merged interactions of each direction, white to black up to one count cap shared by all replicates (the quantile of every replicate's cell counts; lower values increase contrast).").
-			FontSize(12).TextColor(t.TextMuted)
+			FontSize(FontSmall).TextColor(t.TextMuted)
 	})
 }

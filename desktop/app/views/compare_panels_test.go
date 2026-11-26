@@ -60,7 +60,7 @@ func openPanels(t *testing.T) (*App, *pnFake) {
 
 func TestComparePanelsRegionsAndEnergy(t *testing.T) {
 	a, f := openPanels(t)
-	tt := ui.NewTester(a.View, 1100, 3600)
+	tt := ui.NewTester(a.View, 1100, 4200)
 	a.Navigate("compare", nil)
 	csSettle(a, tt)
 	p := a.PageFor("compare").(*comparePage)

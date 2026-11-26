@@ -422,14 +422,14 @@ func (p *structurePage) otherView(c *ui.Context, a *structureResult) bool {
 	}
 	t := c.Theme()
 	p.syncArcs(a, nil) // the records shown, for the inspector
-	ui.Text(c, stViewTitles[mode]).FontSize(14).Bold()
+	ui.Text(c, stViewTitles[mode]).FontSize(FontBody).Bold()
 	v, ok := p.stStructView(c, a, mode, t, true)
 	if !ok {
 		return true
 	}
 	records := stPickRecords(a.Records, p.record)
 	infos := stShownPairs(records, stHardPairs(a))
-	ui.Row(c).Gap(14).Wrap().AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(Space3).Wrap().AlignItems(ui.Center).Children(func() {
 		for _, item := range v.Legend {
 			stLegend(c, item.Color, item.Label)
 		}
@@ -440,7 +440,7 @@ func (p *structurePage) otherView(c *ui.Context, a *structureResult) bool {
 	}
 	if mode == widgets.ModeFolded && p.sv.expanded {
 		// drawn once, in the expanded view
-		ui.Text(c, "Shown in the expanded view: press Escape or Exit expanded view to return.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Shown in the expanded view: press Escape or Exit expanded view to return.").FontSize(FontSmall).TextColor(t.TextMuted)
 	} else {
 		ev := v.Show(c.Key("st-view-"+p.view), 640, stColors(t), p.view+" view of the base pairs")
 		p.viewEvent(c, a, v, ev, records, infos)
@@ -517,7 +517,7 @@ func (p *structurePage) viewEvent(c *ui.Context, a *structureResult, v *widgets.
 // to view, and Full screen (the expanded view) or its exit.
 func (p *structurePage) foldControls(c *ui.Context, expanded bool) {
 	z := &p.sv.zoom
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Role(ui.RoleGroup).Label("Folded structure view controls").Children(func() {
+	ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Role(ui.RoleGroup).Label("Folded structure view controls").Children(func() {
 		if ui.Button(c, "Zoom in").Clicked() {
 			z.By(widgets.ZoomIn, -1, -1)
 		}
@@ -547,7 +547,7 @@ func (p *structurePage) expandedFold(c *ui.Context, a *structureResult) {
 		t := c.Theme()
 		w, h := c.Size()
 		side := max(320, min(w-80, h-200))
-		ui.Text(c, stViewTitles[widgets.ModeFolded]).FontSize(14).Bold()
+		ui.Text(c, stViewTitles[widgets.ModeFolded]).FontSize(FontBody).Bold()
 		p.foldControls(c, true)
 		v, ok := p.stStructView(c, a, widgets.ModeFolded, t, true)
 		if !ok {

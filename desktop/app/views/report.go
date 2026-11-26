@@ -481,11 +481,8 @@ func (p *reportPage) View(c *ui.Context) {
 	t := c.Theme()
 	d := p.data
 	ui.Scroll(c.Key("report-scroll")).Fill().Children(func() {
-		ui.Column(c).Padding(24).Gap(16).Children(func() {
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Basis(320).Children(func() {
-					PageHeader(c, "Report", "The project at a glance: data, counts, differential tests and structures.")
-				})
+		ui.Column(c).FillWidth().MinWidth(0).Padding(Space6).Gap(Space4).Children(func() {
+			PageHeaderActions(c, "Report", "The project at a glance: data, counts, differential tests and structures.", func() {
 				if p.loading {
 					ui.Spinner(c).Label("Loading")
 				}
@@ -527,19 +524,19 @@ func (p *reportPage) View(c *ui.Context) {
 			Card(c, "Project", func() {
 				reportFacts(c, d.projectFacts())
 				if d.Purpose != "" {
-					ui.Text(c, "Purpose: "+d.Purpose).Padding(8, 10).Radius(6).Background(t.Surface)
+					ui.Text(c, "Purpose: "+d.Purpose).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Surface)
 				}
 			})
 			Card(c, "Steps, scope and purpose", func() { p.choicesView(c) })
 			Card(c, "Before you report these results", func() {
 				for _, check := range d.reviewChecks() {
-					ui.Text(c, "• "+check).FontSize(12)
+					ui.Text(c, "• "+check).FontSize(FontSmall)
 				}
 			})
 			Card(c, "References", left("references", func() { reportTable(c, "references", d.referenceTable(), "No reference in this project.") }))
 			Card(c, "Samples", func() {
 				reportTable(c, "samples", d.sampleTable(), "No sample in this project.")
-				ui.Text(c, "Hybrids and reads from each analysed sample's index; intra / inter are shares of hybrids.").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "Hybrids and reads from each analysed sample's index; intra / inter are shares of hybrids.").FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 			Card(c, "Conditions", func() {
 				reportTable(c, "conditions", d.conditionTable(), "No condition: samples have no condition set.")
@@ -549,9 +546,9 @@ func (p *reportPage) View(c *ui.Context) {
 				if len(d.Settings) > 0 {
 					reportTable(c, "settings", d.settingsTable(), "")
 				}
-				ui.Text(c, reportFingerprintNote).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, reportFingerprintNote).FontSize(FontSmall).TextColor(t.TextMuted)
 				if note := d.energyNote(); note != "" {
-					ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 				}
 			})
 			Card(c, "Differential tests", left("tests", func() { p.testsView(c, d) }))
@@ -559,7 +556,7 @@ func (p *reportPage) View(c *ui.Context) {
 				reportTable(c, "structures", d.structureTable(), "No structure has been folded.")
 				for _, s := range d.Structures {
 					if s.Err != "" {
-						ui.Text(c, s.Gene+" ("+s.ID+"): "+s.Err).FontSize(12).TextColor(t.Danger)
+						ui.Text(c, s.Gene+" ("+s.ID+"): "+s.Err).FontSize(FontSmall).TextColor(t.Danger)
 					}
 				}
 			}))
@@ -579,10 +576,10 @@ func (p *reportPage) testsView(c *ui.Context, d *reportData) {
 	reportTable(c, "tests", d.testTable(), "")
 	for i := range d.Tests {
 		x := &d.Tests[i]
-		ui.Column(c.Key("test-"+x.ID)).Gap(8).Padding(12, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+		ui.Column(c.Key("test-"+x.ID)).Gap(Space2).Padding(Space3, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
-				ui.Text(c, x.LabelA+" vs "+x.LabelB).FontSize(16).Bold()
-				ui.Text(c, strings.Join(x.Genes, ", ")+" · "+x.Params+" · log2 fold change = A / B · "+FormatTime(x.Created)).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, x.LabelA+" vs "+x.LabelB).FontSize(FontTitle).Bold()
+				ui.Text(c, strings.Join(x.Genes, ", ")+" · "+x.Params+" · log2 fold change = A / B · "+FormatTime(x.Created)).FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 			ui.Text(c, "Differential test (DESeq2 Wald test)").Bold()
 			reportFacts(c, x.Facts())
@@ -598,7 +595,7 @@ func (p *reportPage) testsView(c *ui.Context, d *reportData) {
 			reportTable(c, "top-"+x.ID, x.topTable(), "")
 		})
 	}
-	ui.Text(c, reportMethodNote).FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, reportMethodNote).FontSize(FontSmall).TextColor(t.TextMuted)
 }
 
 func reportEvidenceView(c *ui.Context, d *reportData) {
@@ -609,24 +606,24 @@ func reportEvidenceView(c *ui.Context, d *reportData) {
 	}
 	for i := range d.Evidence {
 		e := &d.Evidence[i]
-		ui.Column(c.Key(fmt.Sprint("evidence-", i))).Gap(8).Padding(12, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-			ui.Text(c, e.Title).FontSize(16).Bold()
-			ui.Text(c, e.Boundary).Bold().Padding(4, 8).Radius(6).Background(t.Warning.Alpha(0.14))
+		ui.Column(c.Key(fmt.Sprint("evidence-", i))).Gap(Space2).Padding(Space3, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+			ui.Text(c, e.Title).FontSize(FontTitle).Bold()
+			ui.Text(c, e.Boundary).Bold().Padding(Space1, Space2).Radius(RadiusSmall).Background(t.Warning.Alpha(0.14))
 			reportFacts(c, e.Facts())
 			if e.Text != "" {
-				ui.Text(c, e.Text).Padding(8, 10).Radius(6).Background(t.Surface)
+				ui.Text(c, e.Text).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Surface)
 			}
 		})
 	}
-	ui.Text(c, reportEvidenceNote).FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, reportEvidenceNote).FontSize(FontSmall).TextColor(t.TextMuted)
 }
 
 // reportFacts shows label / value lines.
 func reportFacts(c *ui.Context, facts [][2]string) {
 	t := c.Theme()
-	ui.Column(c).Gap(4).Children(func() {
+	ui.Column(c).Gap(Space1).Children(func() {
 		for _, f := range facts {
-			ui.Row(c.Key(f[0])).Gap(12).AlignItems(ui.Start).Children(func() {
+			ui.Row(c.Key(f[0])).Gap(Space3).AlignItems(ui.Start).Children(func() {
 				ui.Text(c, f[0]).TextColor(t.TextMuted).Width(150)
 				ui.Text(c, f[1]).Grow(1).Shrink(1).MinWidth(0)
 			})
@@ -671,7 +668,7 @@ func reportTable(c *ui.Context, key string, table reportTableData, empty string)
 				}
 				switch {
 				case header:
-					el.FontSize(12).Bold().TextColor(t.TextMuted)
+					el.FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 				case i > 0:
 					el.FontSize(11).TextColor(t.TextMuted)
 				}
@@ -680,13 +677,13 @@ func reportTable(c *ui.Context, key string, table reportTableData, empty string)
 	}
 	rows := func(minWidth float32) {
 		ui.Column(c).MinWidth(minWidth).Grow(1).Children(func() {
-			ui.Row(c).Gap(12).Padding(6, 8).Background(t.Surface).Radius(6).Children(func() {
+			ui.Row(c).Gap(Space3).Padding(6, 8).Background(t.Surface).Radius(RadiusSmall).Children(func() {
 				for _, col := range table.Cols {
 					cell(col, col.Title, true)
 				}
 			})
 			for i, row := range table.Rows {
-				ui.Row(c.Key(fmt.Sprint(i))).Gap(12).Padding(6, 8).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+				ui.Row(c.Key(fmt.Sprint(i))).Gap(Space3).Padding(6, 8).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 					for j, col := range table.Cols {
 						text := ""
 						if j < len(row) {

@@ -215,11 +215,8 @@ func (p *qcPage) View(c *ui.Context) {
 func (p *qcPage) page(c *ui.Context, ready []string) {
 	a := p.a
 	t := c.Theme()
-	ui.Column(c).FillWidth().MinWidth(0).Padding(24).Gap(16).Children(func() {
-		ui.Row(c).Gap(12).Wrap().Children(func() {
-			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Basis(320).Children(func() {
-				PageHeader(c, "Quality control", "Analysed samples: library size and chimera composition.")
-			})
+	ui.Column(c).FillWidth().MinWidth(0).Padding(Space6).Gap(Space4).Children(func() {
+		PageHeaderActions(c, "Quality control", "Analysed samples: library size and chimera composition.", func() {
 			if len(ready) > 0 {
 				if ui.Button(c, "Refresh").Disabled(p.loading).Clicked() {
 					p.refresh()
@@ -239,7 +236,7 @@ func (p *qcPage) page(c *ui.Context, ready []string) {
 			return
 		}
 		if p.err != "" {
-			ui.Row(c).Gap(10).Children(func() {
+			ui.Row(c).Gap(Space3).Children(func() {
 				ui.Text(c, "Could not load the counts: "+ShortError(p.err)).TextColor(t.Danger).Grow(1).Shrink(1).MinWidth(0)
 				if ui.Button(c, "Retry").Clicked() {
 					p.refresh()
@@ -247,7 +244,7 @@ func (p *qcPage) page(c *ui.Context, ready []string) {
 			})
 		}
 		if p.loading && len(p.stats) == 0 {
-			ui.Row(c).Gap(8).Children(func() {
+			ui.Row(c).Gap(Space2).Children(func() {
 				ui.Spinner(c)
 				ui.Text(c, "Loading counts…").TextColor(t.TextMuted)
 			})
@@ -268,9 +265,9 @@ func (p *qcPage) page(c *ui.Context, ready []string) {
 			}
 			qcCardTitle(c, "Per-dataset summary", FormatNumber(int64(analysed))+" of "+FormatNumber(int64(len(ready)))+" datasets analysed")
 			ui.Text(c, "This page, Explore and Structure's evidence merge the datasets marked Yes; choose others in the top bar (Compare and the Report choose their own). "+
-				"Condition rows add up their datasets (RNAs and pairs are not additive).").FontSize(12).TextColor(t.TextMuted)
+				"Condition rows add up their datasets (RNAs and pairs are not additive).").FontSize(FontSmall).TextColor(t.TextMuted)
 			p.summaryTable(c, ready)
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(Space3).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Hybrids / reads divides HYB records by source reads; the percentages are of HYB records.").
 					FontSize(12).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0)
 				if ui.Button(c, "Export TSV…").Tooltip("Save the table, every chimera type as a column").Disabled(len(p.stats) == 0).Clicked() && len(p.stats) > 0 {

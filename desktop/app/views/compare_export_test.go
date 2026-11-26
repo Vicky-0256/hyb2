@@ -250,7 +250,7 @@ func TestCompareInterRNAResult(t *testing.T) {
 		entry["parameters"].(map[string]any)["gene2"] = "TEST_partner"
 	}
 	f.ops["list_comparisons"] = list
-	tt := ui.NewTester(a.View, 1100, 1400)
+	tt := ui.NewTester(a.View, 1100, 1900)
 	a.Navigate("compare", nil)
 	csSettle(a, tt)
 	p := a.PageFor("compare").(*comparePage)

@@ -222,9 +222,9 @@ func (p *dataPage) folderDialog(c *ui.Context) {
 		return
 	}
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(980).Gap(10).Children(func() {
-			ui.Text(c, "Import a data folder").FontSize(18).Bold()
-			ui.Text(c, d.folder).FontSize(12).TextColor(t.TextMuted).SingleLine()
+		ui.Column(c).Width(980).Gap(Space3).Children(func() {
+			ui.Text(c, "Import a data folder").FontSize(FontTitle).Bold()
+			ui.Text(c, d.folder).FontSize(FontSmall).TextColor(t.TextMuted).SingleLine()
 			if d.scanning {
 				ui.Spinner(c).Label("Looking at the files…")
 				return
@@ -241,12 +241,12 @@ func (p *dataPage) folderDialog(c *ui.Context) {
 			}
 			ui.Text(c, "Proposed from the file names: "+d.summary()+" Nothing is imported until you click Import.")
 			ui.Text(c, "Samples with the same condition are treated as replicates of each other (merged in QC and Explore, compared in Compare). "+
-				"Edit any cell; rows with a note need a look.").FontSize(12).TextColor(t.TextMuted)
+				"Edit any cell; rows with a note need a look.").FontSize(FontSmall).TextColor(t.TextMuted)
 			if len(d.skipped) > 0 {
-				ui.Text(c, "Not imported: "+strings.Join(d.skipped, "; ")+".").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "Not imported: "+strings.Join(d.skipped, "; ")+".").FontSize(FontSmall).TextColor(t.TextMuted)
 			}
 			p.folderTable(c)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Storage").TextColor(t.TextMuted)
 				ui.Select(c.Key("folder-mode"), &d.mode, dataStorageModes).Label("Storage").Width(260)
 			})
@@ -262,7 +262,7 @@ func (p *dataPage) folderDialog(c *ui.Context) {
 			if problem != "" {
 				ui.Text(c, problem).TextColor(t.Danger)
 			}
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			ui.Row(c).Gap(Space2).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Cancel").Disabled(d.busy).Clicked() {
 					d.open = false
 				}
@@ -306,7 +306,7 @@ func (p *dataPage) folderTable(c *ui.Context) {
 			ui.NumberInput(key("rep"), &r.replicate, 0, 999, 1).Tooltip("Replicate number (0: none)")
 		case 4:
 			ui.Column(c).Gap(0).MinWidth(0).Children(func() {
-				ui.Text(c, folderLabel(d.folder, r.path)).FontSize(12).SingleLine().Tooltip(r.path)
+				ui.Text(c, folderLabel(d.folder, r.path)).FontSize(FontSmall).SingleLine().Tooltip(r.path)
 				ui.Text(c, dataFormatBytes(r.size)).FontSize(11).TextColor(t.TextMuted)
 			})
 		case 5:
@@ -316,7 +316,7 @@ func (p *dataPage) folderTable(c *ui.Context) {
 				ui.Text(c, "⚠ "+strings.Join(r.notes, "; ")).FontSize(11).TextColor(t.Warning).Tooltip(strings.Join(r.notes, "\n"))
 			}
 		}
-	}).Height(height).Border(1, t.Border).Radius(6)
+	}).Height(height).Border(1, t.Border).Radius(RadiusSmall)
 }
 
 // folderRows are the included rows as import_sample_rows wants them.

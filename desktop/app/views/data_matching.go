@@ -232,7 +232,7 @@ func dataUnsupportedText(r refMatchRef) string {
 func (p *dataPage) matchingSection(c *ui.Context) {
 	t := c.Theme()
 	m, err, loading := p.matching()
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Row(c).Gap(Space3).AlignItems(ui.Center).Wrap().Children(func() {
 		switch {
 		case m != nil && len(m.References) > 0:
 			attention := m.RNANames > m.Matched
@@ -250,7 +250,7 @@ func (p *dataPage) matchingSection(c *ui.Context) {
 			ui.Spinner(c)
 			ui.Text(c, "Matching RNA names to the references…").TextColor(t.TextMuted).Grow(1)
 		case err != "":
-			ui.Text(c, "Name matching unavailable: "+ShortError(err)).FontSize(12).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0)
+			ui.Text(c, "Name matching unavailable: "+ShortError(err)).FontSize(FontSmall).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0)
 		default:
 			ui.Spacer(c)
 		}
@@ -259,7 +259,7 @@ func (p *dataPage) matchingSection(c *ui.Context) {
 	if m != nil {
 		for _, r := range m.References {
 			if text := dataUnsupportedText(r); text != "" {
-				ui.Text(c.Key("unsupported-"+r.ReferenceID), dataRefLabel(p.a, r.ReferenceID)+": "+text).FontSize(12).TextColor(t.Warning)
+				ui.Text(c.Key("unsupported-"+r.ReferenceID), dataRefLabel(p.a, r.ReferenceID)+": "+text).FontSize(FontSmall).TextColor(t.Warning)
 			}
 		}
 	}
@@ -361,14 +361,14 @@ func (p *dataPage) matchingDialog(c *ui.Context) {
 		return
 	}
 	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(640).Gap(12).Children(func() {
-			ui.Text(c, "Name matching").FontSize(18).Bold()
-			ui.Text(c, dataMatchScope(d)).FontSize(12).TextColor(t.TextMuted)
+		ui.Column(c).Width(640).Gap(Space3).Children(func() {
+			ui.Text(c, "Name matching").FontSize(FontTitle).Bold()
+			ui.Text(c, dataMatchScope(d)).FontSize(FontSmall).TextColor(t.TextMuted)
 			p.placeEditor()
 			m, err, loading := p.dialogMatching()
 			switch {
 			case m == nil && loading:
-				ui.Row(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(Space2).Children(func() {
 					ui.Spinner(c)
 					ui.Text(c, "Matching RNA names to the references…").TextColor(t.TextMuted)
 				})
@@ -399,25 +399,25 @@ func (p *dataPage) matchingDialog(c *ui.Context) {
 				})
 			}
 			if text := dataUnsupportedText(r); text != "" {
-				ui.Text(c, text).FontSize(12).TextColor(t.Warning)
+				ui.Text(c, text).FontSize(FontSmall).TextColor(t.Warning)
 			}
 			ui.Text(c, "Each RNA name in the HYB file is paired with the reference sequence of the same name. To fix one, pick the RNA, "+
-				"type the reference ID it should use, and apply.").FontSize(12).TextColor(t.TextMuted)
+				"type the reference ID it should use, and apply.").FontSize(FontSmall).TextColor(t.TextMuted)
 			var rnas []string
 			for _, row := range r.RNAs {
 				rnas = append(rnas, row.Name)
 			}
-			ui.Row(c).Gap(12).Children(func() {
-				ui.Column(c).Gap(4).Grow(1).Basis(0).MinWidth(0).Children(func() {
-					ui.Text(c, "HYB RNA").FontSize(12).TextColor(t.TextMuted)
+			ui.Row(c).Gap(Space3).Children(func() {
+				ui.Column(c).Gap(Space1).Grow(1).Basis(0).MinWidth(0).Children(func() {
+					ui.Text(c, "HYB RNA").FontSize(FontSmall).TextColor(t.TextMuted)
 					ui.Autocomplete(c.Key("match-rna"), &d.rna, dataSuggestions(rnas)).Label("HYB RNA")
 				})
-				ui.Column(c).Gap(4).Grow(1).Basis(0).MinWidth(0).Children(func() {
-					ui.Text(c, "FASTA reference ID").FontSize(12).TextColor(t.TextMuted)
+				ui.Column(c).Gap(Space1).Grow(1).Basis(0).MinWidth(0).Children(func() {
+					ui.Text(c, "FASTA reference ID").FontSize(FontSmall).TextColor(t.TextMuted)
 					ui.Autocomplete(c.Key("match-sequence"), &d.sequence, dataSuggestions(r.Names)).Label("FASTA reference ID")
 				})
 			})
-			ui.Row(c).Gap(8).Children(func() {
+			ui.Row(c).Gap(Space2).Children(func() {
 				if ui.Button(c, "Apply mapping").Disabled(d.busy).Clicked() {
 					p.applyMatch(r, rnas, false)
 				}
@@ -429,7 +429,7 @@ func (p *dataPage) matchingDialog(c *ui.Context) {
 				}
 			})
 			if d.status != "" {
-				ui.Text(c, d.status).FontSize(12).TextColor(t.Danger)
+				ui.Text(c, d.status).FontSize(FontSmall).TextColor(t.Danger)
 			}
 			preview := r.RNAs
 			if len(preview) > dataMappingPreview {
@@ -446,7 +446,7 @@ func (p *dataPage) matchingDialog(c *ui.Context) {
 							mapped += " (manual)"
 						}
 						name := row.Name
-						ui.Row(c.Key("map-" + name)).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Row(c.Key("map-" + name)).Gap(Space2).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, name).SingleLine().Tooltip(name).Grow(1).Basis(0).MinWidth(0)
 							ui.Text(c, mapped).SingleLine().Tooltip(mapped).TextColor(color).Grow(1).Basis(0).MinWidth(0)
 							if ui.Button(c, "Edit").Label("Edit " + name).Clicked() {
@@ -459,7 +459,7 @@ func (p *dataPage) matchingDialog(c *ui.Context) {
 			})
 			if len(r.RNAs) > len(preview) {
 				ui.Text(c, "Showing the first "+FormatNumber(int64(len(preview)))+" of "+FormatNumber(int64(len(r.RNAs)))+
-					" RNA mappings. Enter any exact RNA name above to edit it.").FontSize(12).TextColor(t.TextMuted)
+					" RNA mappings. Enter any exact RNA name above to edit it.").FontSize(FontSmall).TextColor(t.TextMuted)
 			}
 			ui.Row(c).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Close").Clicked() {
@@ -594,13 +594,13 @@ func (p *dataPage) reproDialog(c *ui.Context) {
 		return
 	}
 	ui.Modal(c, &p.reproOpen, func() {
-		ui.Column(c).Width(640).Gap(10).Children(func() {
-			ui.Text(c, "Reproducibility").FontSize(18).Bold()
+		ui.Column(c).Width(640).Gap(Space3).Children(func() {
+			ui.Text(c, "Reproducibility").FontSize(FontTitle).Bold()
 			ui.Text(c, "Versions and file fingerprints for your methods section").TextColor(t.TextMuted)
 			line := func(label, value string) {
-				ui.Row(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(Space2).Children(func() {
 					ui.Text(c, label).Width(200).SingleLine().Tooltip(label)
-					ui.Text(c, value).Font("monospace").FontSize(12).Grow(1).Shrink(1).MinWidth(0).Selectable()
+					ui.Text(c, value).Font("monospace").FontSize(FontSmall).Grow(1).Shrink(1).MinWidth(0).Selectable()
 				})
 			}
 			line("App version", nameOr(reportAppVersion(), "development build"))

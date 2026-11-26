@@ -305,8 +305,8 @@ func (p *structurePage) candidatesPanel(c *ui.Context, a *structureResult) {
 		return
 	}
 	gene := stGene(a)
-	ui.Column(c).Gap(8).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Column(c).Gap(Space2).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, "CPLfold candidates").Bold().Grow(1)
 			if ui.Button(c, "Candidates TSV…").Tooltip("Every candidate: energy, effective (beta-adjusted) energy, pairs and dot-bracket").Clicked() {
 				rows := stCandidatesRows(gene, records)
@@ -333,7 +333,7 @@ func (p *structurePage) candidatesPanel(c *ui.Context, a *structureResult) {
 		if len(r.Candidates) == 0 {
 			return
 		}
-		ui.Text(c, "Choose a row to show that candidate in the diagram, the statistics and the exports.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Choose a row to show that candidate in the diagram, the statistics and the exports.").FontSize(FontSmall).TextColor(t.TextMuted)
 		cols := []ui.TableColumn{{Title: "Rank", Width: 52, Align: ui.End}, {Title: "Topology", Width: 110},
 			{Title: "Energy", Width: 76, Align: ui.End}, {Title: "Effective", Width: 76, Align: ui.End},
 			{Title: "Pairs", Width: 60, Align: ui.End}, {Title: "Status"}}
@@ -482,7 +482,7 @@ func (p *structurePage) comradesPanel(c *ui.Context, a *structureResult) {
 	}
 	index := p.shownRecord(a)
 	if index < 0 {
-		ui.Text(c, "COMRADES: choose a window above to see its score, ensemble and stem constraints.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "COMRADES: choose a window above to see its score, ensemble and stem constraints.").FontSize(FontSmall).TextColor(t.TextMuted)
 		return
 	}
 	if index >= len(a.Meta.Records) || a.Meta.Records[index].Comrades == nil {
@@ -490,8 +490,8 @@ func (p *structurePage) comradesPanel(c *ui.Context, a *structureResult) {
 	}
 	cm := a.Meta.Records[index].Comrades
 	ev, rnd := &cm.Evidence, &cm.Randomisation
-	ui.Column(c).Gap(8).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Column(c).Gap(Space2).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, "COMRADES result").Bold().Grow(1)
 			for _, d := range []struct {
 				label, tip, file string
@@ -513,13 +513,13 @@ func (p *structurePage) comradesPanel(c *ui.Context, a *structureResult) {
 			}
 		})
 		ui.Text(c, fmt.Sprintf("COMRADES score %s · %s supported structure pair%s · selected fold: %s",
-			jsNumber(ev.Score), FormatNumber(int64(ev.MatchedPairs)), plural(ev.MatchedPairs), stRunLabel(rnd.SelectedRun))).FontSize(13)
+			jsNumber(ev.Score), FormatNumber(int64(ev.MatchedPairs)), plural(ev.MatchedPairs), stRunLabel(rnd.SelectedRun))).FontSize(FontBody)
 		if ev.ScoringVersion == "all-pairs-capped-v1" && ev.ScoredPairs != nil {
-			ui.Text(c, "Scores use all eligible observations across "+stCountLabel(len(ev.ScoredPairs), "distinct pair")+", up to 1,000,000 per matched endpoint. Colours show uncapped counts; only shortlisted pairs select constraints.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Scores use all eligible observations across "+stCountLabel(len(ev.ScoredPairs), "distinct pair")+", up to 1,000,000 per matched endpoint. Colours show uncapped counts; only shortlisted pairs select constraints.").FontSize(FontSmall).TextColor(t.TextMuted)
 		} else if ev.ScoredPairs == nil {
-			ui.Text(c, "The complete scored evidence set was not recorded in this result.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "The complete scored evidence set was not recorded in this result.").FontSize(FontSmall).TextColor(t.TextMuted)
 		}
-		stComradesStages(c, cm)
+		p.statTiles(c, stComradesStages(cm))
 		stComradesBars(c, cm)
 		if len(rnd.Structures) > 12 {
 			ui.Text(c, fmt.Sprintf("The top 12 of %d folds; Ensemble TSV has them all.", len(rnd.Structures))).FontSize(11).TextColor(t.TextMuted)
@@ -558,13 +558,13 @@ func stRunLabel(run int) string {
 func stSmallTable(c *ui.Context, title string, header []string, n int, row func(i int) []string) {
 	t := c.Theme()
 	if title != "" {
-		ui.Text(c, title).FontSize(12).Bold().TextColor(t.TextMuted)
+		ui.Text(c, title).FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 	}
-	ui.Column(c).Gap(0).Radius(8).Border(1, t.Border).Children(func() {
+	ui.Column(c).Gap(0).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
 		line := func(cells []string, bold bool) {
 			ui.Row(c).Padding(4, 10).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 				for k, cell := range cells {
-					text := ui.Text(c, cell).FontSize(12).SingleLine()
+					text := ui.Text(c, cell).FontSize(FontSmall).SingleLine()
 					if k == 0 {
 						text.Grow(1)
 					} else {

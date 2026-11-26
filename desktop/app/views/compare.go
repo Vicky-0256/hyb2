@@ -867,7 +867,7 @@ func (p *comparePage) runQuick() {
 
 func (p *comparePage) View(c *ui.Context) {
 	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).Padding(24).Gap(16).Children(func() {
+		ui.Column(c).Padding(Space6).Gap(Space4).Children(func() {
 			PageHeader(c, "Compare", "Differential contacts between two conditions: DESeq2 on the 10-nt contact maps of the replicates (as hyb2_compare), merged into interactions.")
 			p.controls(c)
 			p.list(c)
@@ -890,15 +890,15 @@ func (p *comparePage) controls(c *ui.Context) {
 			ui.Text(c, "Comparisons need two analysed conditions or samples. Set conditions on the Data page and run the samples.").TextColor(t.TextMuted)
 			return
 		}
-		ui.Row(c).Gap(12).AlignItems(ui.End).Wrap().Children(func() {
+		// A and B share the room equally; the run buttons keep their width.
+		ui.Grid(c).ColumnTracks(ui.Fr(1), ui.FitContent(), ui.Fr(1), ui.FitContent()).Gap(Space3).AlignItems(ui.End).Children(func() {
 			p.groupPicker(c.Key("cmp-a"), "A (condition one)", &p.keyA, cmpRed, options)
-			ui.Text(c, "vs").TextColor(t.TextMuted).Margin(0, 0, 8, 0)
+			ui.Text(c, "vs").TextColor(t.TextMuted).Margin(0, 0, Space2, 0)
 			p.groupPicker(c.Key("cmp-b"), "B (condition two)", &p.keyB, cmpBlue, options)
-			ui.Spacer(c)
-			ui.Column(c).Gap(4).Children(func() {
+			ui.Column(c).Gap(Space1).Margin(0, 0, 0, Space3).Children(func() {
 				ui.Text(c, fmt.Sprintf("%d + %d replicates", len(a.SelectionIDs(p.keyA)), len(a.SelectionIDs(p.keyB)))).
-					FontSize(12).Bold().TextColor(t.TextMuted)
-				ui.Row(c).Gap(8).Children(func() {
+					FontSize(FontSmall).Bold().TextColor(t.TextMuted)
+				ui.Row(c).Gap(Space2).Children(func() {
 					if ui.PrimaryButton(c, "Run differential test").Clicked() {
 						p.runTest()
 					}
@@ -916,62 +916,58 @@ func (p *comparePage) controls(c *ui.Context) {
 			ui.Text(c, p.runMsg).TextColor(t.Danger)
 		}
 		if notice := p.referenceNotice(); notice != "" {
-			ui.Text(c, notice).FontSize(12).TextColor(t.Warning)
+			ui.Text(c, notice).FontSize(FontSmall).TextColor(t.Warning)
 		}
 		ui.Collapsible(c.Key("cmp-settings"), "Settings", &p.settings, func() {
-			ui.Column(c).Gap(8).Padding(8, 0, 0, 0).Children(func() {
-				ui.Row(c).Gap(16).Wrap().Children(func() {
+			ui.Column(c).Gap(Space3).Padding(Space2, 0, 0, 0).Children(func() {
+				FieldGrid(c, p.cardWidth(), func() {
 					Field(c, "Keep cells with total count >", func() {
-						ui.NumberInput(c.Key("cmp-min"), &p.minCount, 0, 1e6, 1).Width(110).Label("Minimum count")
+						ui.NumberInput(c.Key("cmp-min"), &p.minCount, 0, 1e6, 1).FillWidth().Label("Minimum count")
 					})
 					Field(c, "Merge range (nt)", func() {
-						ui.NumberInput(c.Key("cmp-range"), &p.mergeRange, 0, 100000, 10).Width(110).Label("Merge range")
+						ui.NumberInput(c.Key("cmp-range"), &p.mergeRange, 0, 100000, 10).FillWidth().Label("Merge range")
 					})
 					Field(c, "padj cutoff", func() {
-						ui.NumberInput(c.Key("cmp-padj"), &p.padj, 0.0001, 1, 0.01).Width(110).Label("padj cutoff")
+						ui.NumberInput(c.Key("cmp-padj"), &p.padj, 0.0001, 1, 0.01).FillWidth().Label("padj cutoff")
 					})
 					Field(c, "Similarity: keep cells with count ≥", func() {
-						ui.NumberInput(c.Key("cmp-simmin"), &p.simMin, 1, 1e6, 1).Width(110).Label("Similarity minimum count")
+						ui.NumberInput(c.Key("cmp-simmin"), &p.simMin, 1, 1e6, 1).FillWidth().Label("Similarity minimum count")
 					})
 					Field(c, "Quick view bin", func() {
-						ui.Select(c.Key("cmp-bin"), &p.quick.bin, quickBins).Width(110).Label("Quick view bin")
+						ui.Select(c.Key("cmp-bin"), &p.quick.bin, quickBins).FillWidth().Label("Quick view bin")
 					})
-				})
-				ui.Row(c).Gap(16).Wrap().Children(func() {
 					Field(c, "Condition A label", func() {
-						ui.TextInput(c.Key("cmp-label-a"), &p.labelA).Placeholder(a.SelectionLabel(p.keyA)).Width(200).Label("Condition A label")
+						ui.TextInput(c.Key("cmp-label-a"), &p.labelA).Placeholder(a.SelectionLabel(p.keyA)).FillWidth().Label("Condition A label")
 					})
 					Field(c, "Condition B label", func() {
-						ui.TextInput(c.Key("cmp-label-b"), &p.labelB).Placeholder(a.SelectionLabel(p.keyB)).Width(200).Label("Condition B label")
+						ui.TextInput(c.Key("cmp-label-b"), &p.labelB).Placeholder(a.SelectionLabel(p.keyB)).FillWidth().Label("Condition B label")
 					})
 					genes := p.geneOptions()
 					rnaX, rnaY := nameOr(p.geneX, cmpEachGene), nameOr(p.geneY, cmpSameAsX)
 					Field(c, "RNA X", func() {
-						ui.Select(c.Key("cmp-rna-x"), &rnaX, append([]string{cmpEachGene}, genes...)).Width(220).Label("RNA X").OnChange(func() {
+						ui.Select(c.Key("cmp-rna-x"), &rnaX, append([]string{cmpEachGene}, genes...)).FillWidth().Label("RNA X").OnChange(func() {
 							p.geneX = map[bool]string{true: "", false: rnaX}[rnaX == cmpEachGene]
 						})
 					})
 					Field(c, "RNA Y", func() {
-						ui.Select(c.Key("cmp-rna-y"), &rnaY, append([]string{cmpSameAsX}, genes...)).Width(220).Label("RNA Y").OnChange(func() {
+						ui.Select(c.Key("cmp-rna-y"), &rnaY, append([]string{cmpSameAsX}, genes...)).FillWidth().Label("RNA Y").OnChange(func() {
 							p.geneY = map[bool]string{true: "", false: rnaY}[rnaY == cmpSameAsX]
 						})
 					})
-				})
-				ui.Row(c).Gap(16).Wrap().Children(func() {
 					Field(c, "Quick view measure", func() {
-						ui.Select(c.Key("cmp-measure"), &p.measure, cmpMeasures).Width(160).Label("Quick view measure")
+						ui.Select(c.Key("cmp-measure"), &p.measure, cmpMeasures).FillWidth().Label("Quick view measure")
 					})
 					Field(c, "Quick view normalisation", func() {
-						ui.Select(c.Key("cmp-normalise"), &p.normalise, cmpNormalisations).Width(210).Label("Quick view normalisation")
+						ui.Select(c.Key("cmp-normalise"), &p.normalise, cmpNormalisations).FillWidth().Label("Quick view normalisation")
 					})
 					Field(c, "Similarity panel", func() {
-						ui.Select(c.Key("cmp-sim-panel"), &p.simPanel, cmpSimPanels).Width(280).Label("Similarity panel")
+						ui.Select(c.Key("cmp-sim-panel"), &p.simPanel, cmpSimPanels).FillWidth().Label("Similarity panel")
 					})
-				})
+				}).AlignItems(ui.End)
 				ui.Text(c, "Labels and RNAs apply to the next test and quick view. With RNA Y set to another RNA the test compares the inter-RNA map: x on RNA X, y on RNA Y, hybrids written Y × X counted with their arms swapped (as the web app). Measure and normalisation change the quick view only: the test always uses raw record counts. The similarity panel is display only: on white, as similarity_heatmap.R, cells at the smallest count barely show; the grey panel shows them.").
-					FontSize(12).TextColor(t.TextMuted)
+					FontSize(FontSmall).TextColor(t.TextMuted)
 				ui.Text(c, "Only the differential test says whether a contact differs: it uses the replicates as the noise estimate and gives a padj per 10-nt cell, so it needs at least two biological replicates per condition. The quick view and the similarity heatmap only describe counts. The test follows hyb2_compare: DESeq2 Wald test (condition one vs two, alpha 0.01, independent filtering); cells with padj below the cutoff are significant, and significant cells within the merge range of a stronger one are merged into it. The similarity heatmap follows plot_similarity_map: each condition's replicates are summed into one map (as if their .hyb files were concatenated), cells below the similarity minimum are dropped from each map, and a cell in both maps shows the smaller count (1 keeps every cell, as hyb2 does).").
-					FontSize(12).TextColor(t.TextMuted)
+					FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 		})
 	})
@@ -988,9 +984,9 @@ func (p *comparePage) groupPicker(c *ui.Context, label string, key *string, colo
 			current = o.Label
 		}
 	}
-	ui.Column(c).Gap(4).Children(func() {
-		ui.Text(c, label).FontSize(12).Bold().TextColor(color)
-		ui.Select(c.Key("select"), &current, labels).Width(240).Label(label).OnChange(func() {
+	ui.Column(c).Gap(Space1).Children(func() {
+		ui.Text(c, label).FontSize(FontSmall).Bold().TextColor(color)
+		ui.Select(c.Key("select"), &current, labels).FillWidth().Label(label).OnChange(func() {
 			*key = keys[current]
 			p.runMsg = ""
 		})
@@ -1003,8 +999,8 @@ func (p *comparePage) list(c *ui.Context) {
 	a := p.a
 	t := c.Theme()
 	Card(c, "", func() {
-		ui.Row(c).Children(func() {
-			ui.Text(c, "Differential tests").FontSize(16).Bold().Grow(1)
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Differential tests").FontSize(FontTitle).Bold().Grow(1)
 			if ui.Button(c, "Refresh").Clicked() {
 				p.clearResults()
 				p.loadList()
@@ -1013,7 +1009,7 @@ func (p *comparePage) list(c *ui.Context) {
 		running := cmpTaskRows(c, a, "compare")
 		if p.listErr != "" {
 			// Not "no tests yet": the list is unknown.
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Could not list comparisons: "+ShortError(p.listErr)).TextColor(t.Danger).Grow(1).Shrink(1).MinWidth(0)
 				if ui.Button(c, "Retry").Clicked() {
 					p.loadList()
@@ -1034,7 +1030,7 @@ func (p *comparePage) list(c *ui.Context) {
 		for i := range p.comparisons {
 			e := &p.comparisons[i]
 			selected := p.mode == cmpModeTest && p.selectedID == e.ID
-			item := ui.Column(c.Key("cmp-"+e.ID)).Gap(2).Padding(8, 10).Radius(8).Border(1, t.Border)
+			item := ui.Column(c.Key("cmp-"+e.ID)).Gap(2).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Border)
 			if selected {
 				item.Background(t.Accent.Alpha(0.10)).BorderColor(t.Accent)
 			}
@@ -1050,7 +1046,7 @@ func (p *comparePage) list(c *ui.Context) {
 				if e.Available != nil && !*e.Available {
 					meta += " · files missing"
 				}
-				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, meta).FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 		}
 	})
@@ -1068,8 +1064,8 @@ func cmpTaskRows(c *ui.Context, a *App, kind string) int {
 		case task.Kind != kind:
 		case task.Active():
 			running++
-			ui.Column(c.Key("task-"+task.TaskID)).Gap(4).Padding(8, 10).Radius(8).Border(1, t.Accent.Alpha(0.5)).Children(func() {
-				ui.Row(c).Gap(8).Children(func() {
+			ui.Column(c.Key("task-"+task.TaskID)).Gap(Space1).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Accent.Alpha(0.5)).Children(func() {
+				ui.Row(c).Gap(Space2).Children(func() {
 					ui.Text(c, a.TaskLabel(task)).Bold().Grow(1)
 					StatusChip(c, task.Status)
 					if ui.Button(c, "Cancel").Clicked() {
@@ -1080,8 +1076,8 @@ func cmpTaskRows(c *ui.Context, a *App, kind string) int {
 			})
 		case failed < 3 && (task.Status == "interrupted" || (task.Status == "failed" && task.FinishedAt >= a.SessionStart)):
 			failed++
-			ui.Column(c.Key("task-"+task.TaskID)).Gap(4).Padding(8, 10).Radius(8).Border(1, t.Border).Children(func() {
-				ui.Row(c).Gap(8).Children(func() {
+			ui.Column(c.Key("task-"+task.TaskID)).Gap(Space1).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
+				ui.Row(c).Gap(Space2).Children(func() {
 					ui.Text(c, a.TaskLabel(task)).Bold().Grow(1)
 					StatusChip(c, task.Status)
 					if ui.Button(c, "Resume").Clicked() {
@@ -1089,7 +1085,7 @@ func cmpTaskRows(c *ui.Context, a *App, kind string) int {
 					}
 				})
 				if e := task.ErrorText(); e != "" {
-					ui.Text(c, truncate(e, 300)).FontSize(12).TextColor(t.Danger)
+					ui.Text(c, truncate(e, 300)).FontSize(FontSmall).TextColor(t.Danger)
 				}
 			})
 		}
@@ -1135,7 +1131,7 @@ func (p *comparePage) results(c *ui.Context) {
 	stale := !p.inputsCurrent(e)
 	Card(c, "", func() {
 		if stale {
-			ui.Text(c, cmpStaleNotice).FontSize(12).TextColor(t.Warning)
+			ui.Text(c, cmpStaleNotice).FontSize(FontSmall).TextColor(t.Warning)
 		}
 		s := result.Summary
 		cutoff := 0.05
@@ -1143,16 +1139,16 @@ func (p *comparePage) results(c *ui.Context) {
 			cutoff = *e.Parameters.PadjCutoff
 		}
 		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, ctx.LabelA+" vs "+ctx.LabelB).FontSize(18).Bold()
+			ui.Text(c, ctx.LabelA+" vs "+ctx.LabelB).FontSize(FontTitle + 2).Bold()
 			genes := strings.Join(e.Genes, ", ")
 			if ctx.Partner != "" {
 				genes += " × " + ctx.Partner
 			}
 			ui.Text(c, fmt.Sprintf("%s · DESeq2 on %s cells (10 nt) · padj < %g · log2FC = A / B",
-				genes, FormatNumber(s.CellsTested), cutoff)).FontSize(12).TextColor(t.TextMuted)
+				genes, FormatNumber(s.CellsTested), cutoff)).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 		// the web card's statistics (deseq-card.js renderResult)
-		ui.Row(c).Gap(10).Wrap().Children(func() {
+		TileGrid(c, 3, func() {
 			cmpFact(c, "Cells tested", cmpCellsTested(s, e.Parameters.MinCount), t.Text)
 			cmpFact(c, "Significant (padj < "+jsNumber(cutoff)+")", FormatNumber(s.Significant)+" cells", t.Text)
 			cmpFact(c, "Higher in "+ctx.LabelA, FormatNumber(s.SignificantUp)+" cells · "+FormatNumber(s.InteractionsUp)+" interactions", cmpRed)
@@ -1164,20 +1160,20 @@ func (p *comparePage) results(c *ui.Context) {
 			}
 		})
 		ui.Text(c, "padj is corrected over every tested cell. Before reporting an interaction, check that each replicate supports it (open the region in Explore for each sample): a small padj with a low mean count can still come from one replicate.").
-			FontSize(12).TextColor(t.TextMuted)
+			FontSize(FontSmall).TextColor(t.TextMuted)
 		if result.Truncated {
 			ui.Text(c, fmt.Sprintf("The map shows the %s strongest of %s significant cells.",
-				FormatNumber(int64(len(result.Cells.X))), FormatNumber(result.CellsTotal))).FontSize(12).TextColor(t.TextMuted)
+				FormatNumber(int64(len(result.Cells.X))), FormatNumber(result.CellsTotal))).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
-		ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Gap(6).Children(func() {
+		p.mapGrid(c, 720).Children(func() {
+			ui.Column(c).Gap(Space2).MinWidth(0).Children(func() {
 				if row := p.pickedInteraction(shown); row != nil {
 					p.heat.Highlight = widgets.Cell{X: float64(row.X - ctx.Pad), Y: float64(row.Y - ctx.Pad),
 						W: float64(2*ctx.Pad + ctx.Bin), H: float64(2*ctx.Pad + ctx.Bin)}
 				} else {
 					p.heat.Highlight = widgets.Cell{}
 				}
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 					if ui.Button(c, "Zoom in").Clicked() {
 						cmpZoom(p.heat, 0.5)
 					}
@@ -1187,7 +1183,7 @@ func (p *comparePage) results(c *ui.Context) {
 					if ui.Button(c, "Reset zoom").Clicked() {
 						p.heat.ResetZoom()
 					}
-					ui.Text(c, "Scroll to zoom · drag to pan · double-click to reset").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "Scroll to zoom · drag to pan · double-click to reset").FontSize(FontSmall).TextColor(t.TextMuted)
 				})
 				ev := p.heat.Show(c.Key("cmp-heat"), p.mapSide(), "Differential coverage map: red higher in A, blue higher in B; opacity by −log10 padj")
 				if ev.Point {
@@ -1196,12 +1192,12 @@ func (p *comparePage) results(c *ui.Context) {
 					p.heat.Picked = -1
 				}
 				cmpPadjLegend(c, ctx.LabelA, ctx.LabelB)
-				ui.Row(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(Space2).Wrap().Children(func() {
 					if ui.PrimaryButton(c, "Use in arc map").Tooltip("Draw these merged interactions as the Structure page's differential arcs").Clicked() {
 						p.useInArcMap(e)
 					}
 				})
-				ui.Row(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(Space2).Wrap().Children(func() {
 					if ui.Button(c, "Download map SVG…").Tooltip("Save the differential coverage map as shown").Clicked() {
 						p.exportMapSVG()
 					}
@@ -1209,7 +1205,7 @@ func (p *comparePage) results(c *ui.Context) {
 						p.exportMapPNG()
 					}
 				})
-				ui.Row(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(Space2).Wrap().Children(func() {
 					if ui.Button(c, "Export interactions TSV…").Tooltip("Save all merged interactions as a tab-separated file").Clicked() {
 						p.exportInteractionsTSV()
 					}
@@ -1218,12 +1214,12 @@ func (p *comparePage) results(c *ui.Context) {
 					}
 				})
 				if p.arcMapFed == e.ID && !stale {
-					ui.Text(c, cmpArcMapNote).FontSize(12).TextColor(t.TextMuted).Width(p.mapSide() + 44)
+					ui.Text(c, cmpArcMapNote).FontSize(FontSmall).TextColor(t.TextMuted)
 				}
 			})
-			ui.Column(c).Gap(8).Grow(1).MinWidth(320).Children(func() {
-				ui.Row(c).Gap(8).Wrap().Children(func() {
-					ui.Text(c, "Merged interactions ("+FormatNumber(int64(len(shown)))+")").Bold().Grow(1)
+			ui.Column(c).Gap(Space2).MinWidth(0).Children(func() {
+				ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "Merged interactions ("+FormatNumber(int64(len(shown)))+")").Bold().Grow(1).SingleLine()
 					previous := p.direction
 					ui.Segmented(c.Key("cmp-direction"), &p.direction, "All", "Higher in A", "Higher in B").Label("Direction")
 					if p.direction != previous {
@@ -1243,7 +1239,7 @@ func (p *comparePage) results(c *ui.Context) {
 					}
 				}
 				if len(files) > 0 {
-					ui.Text(c, "Files: "+strings.Join(files, ", ")).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, "Files: "+strings.Join(files, ", ")).FontSize(FontSmall).TextColor(t.TextMuted)
 				}
 			})
 		})
@@ -1258,7 +1254,7 @@ func (p *comparePage) results(c *ui.Context) {
 func (p *comparePage) similarityCard(c *ui.Context, e *comparisonEntry, result *comparisonResult, ctx cmpContext) {
 	t := c.Theme()
 	Card(c, "", func() {
-		ui.Text(c, "Similarity heatmap").FontSize(16).Bold()
+		ui.Text(c, "Similarity heatmap").FontSize(FontTitle).Bold()
 		if result.Similarity == nil {
 			ui.Text(c, "This test was run before the similarity heatmap existed; run it again to get one.").TextColor(t.TextMuted)
 			return
@@ -1278,14 +1274,14 @@ func (p *comparePage) similarityCard(c *ui.Context, e *comparisonEntry, result *
 			note += fmt.Sprintf(" (count ≥ %g in each)", minimum)
 		}
 		note += fmt.Sprintf("; green = the smaller of the two summed counts, capped at the 95%% quantile (%g). As hyb2's plot_similarity_map.", result.Summary.SimilarityCap)
-		ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
-		ui.Row(c).Gap(10).Wrap().Children(func() {
+		ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
+		TileGrid(c, 3, func() {
 			cmpStat(c, "Similar cells", FormatNumber(result.Summary.SimilarityCells), cmpGreen)
 			cmpStat(c, "Colour cap", fmt.Sprintf("%g", result.Summary.SimilarityCap), t.Text)
 		})
 		if n := int64(len(result.Similarity.X)); n < result.Summary.SimilarityCells {
 			ui.Text(c, fmt.Sprintf("The map shows the %s strongest of %s cells.", FormatNumber(n),
-				FormatNumber(result.Summary.SimilarityCells))).FontSize(12).TextColor(t.TextMuted)
+				FormatNumber(result.Summary.SimilarityCells))).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		// similarity_heatmap.R draws on white; keep the theme surface in dark
 		// mode. The grey panel (ggplot's theme_grey, as the web's) shows the
@@ -1299,7 +1295,7 @@ func (p *comparePage) similarityCard(c *ui.Context, e *comparisonEntry, result *
 			p.simHeat.Background = ui.Color{}
 		}
 		p.simHeat.Show(c.Key("cmp-sim-heat"), p.mapSide(), "Similarity heatmap: cells in both groups, green by the smaller count")
-		ui.Row(c).Gap(8).Children(func() {
+		ui.Row(c).Gap(Space2).Children(func() {
 			if ui.Button(c, "Export SVG…").Tooltip("Save the similarity heatmap as shown").Clicked() {
 				p.exportSimilaritySVG()
 			}
@@ -1340,20 +1336,13 @@ func cmpTitleButton(c *ui.Context, title string) ui.Element {
 }
 
 func cmpStat(c *ui.Context, label, value string, color ui.Color) ui.Element {
-	t := c.Theme()
-	return ui.Column(c).Gap(2).Padding(8, 12).Radius(8).Background(t.Surface).MinWidth(120).Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
-		ui.Text(c, value).FontSize(18).Bold().TextColor(color)
-	})
+	return StatTile(c, label, value, color)
 }
 
-// cmpFact is one of the test's statistics: a label over its value.
+// cmpFact is one of the test's statistics: a label over its value, in a
+// TileGrid cell; a long value wraps in its tile.
 func cmpFact(c *ui.Context, label, value string, color ui.Color) ui.Element {
-	t := c.Theme()
-	return ui.Column(c).Gap(2).Padding(8, 12).Radius(8).Background(t.Surface).MinWidth(120).Shrink(1).Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
-		ui.Text(c, value).FontSize(14).Bold().TextColor(color)
-	})
+	return StatTile(c, label, value, color)
 }
 
 // cmpZoom zooms a map around its centre (the web's Zoom in / Zoom out).
@@ -1482,9 +1471,10 @@ func (p *comparePage) interactionTable(c *ui.Context, shown []cmpInteraction, ct
 		return
 	}
 	// the web card's columns (deseq-card.js renderResult)
-	cols := []ui.TableColumn{{Title: "Higher in", Width: 110}, {Title: "Arm 1 (x, nt)", Width: 112}, {Title: "Arm 2 (y, nt)", Width: 112},
-		{Title: "log2 " + ctx.LabelA + "/" + ctx.LabelB, Width: 110, Align: ui.End}, {Title: "padj", Width: 72, Align: ui.End},
-		{Title: "Mean count (normalised)", Align: ui.End}}
+	// the labelled columns share the room left, so condition labels fit
+	cols := []ui.TableColumn{{Title: "Higher in", MinWidth: 110}, {Title: "Arm 1 (x, nt)", Width: 112}, {Title: "Arm 2 (y, nt)", Width: 112},
+		{Title: "log2 " + ctx.LabelA + "/" + ctx.LabelB, MinWidth: 110, Align: ui.End}, {Title: "padj", Width: 80, Align: ui.End},
+		{Title: "Mean count (normalised)", Width: 190, Align: ui.End}}
 	p.table.Selected = &p.row
 	p.table.Key = func(i int) any { return fmt.Sprintf("%d_%d_%s", shown[i].X, shown[i].Y, shown[i].Direction) }
 	ui.Table(c.Key("cmp-table-"+p.shownKey), &p.table, cols, len(shown), func(i, col int) {
@@ -1524,7 +1514,7 @@ func cmpFloat(v *float64, format string) string {
 // actionRow: Locate, Region and Fold A & B for the chosen row.
 func (p *comparePage) actionRow(c *ui.Context, target *cmpTarget, ctx cmpContext) {
 	t := c.Theme()
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 		none := target == nil
 		if ui.Button(c, "Locate").Disabled(none).Tooltip("Show this cell on the contact map of the group where it is stronger").Clicked() && !none {
 			p.locate(*target, ctx, "contact-map")
@@ -1542,9 +1532,9 @@ func (p *comparePage) actionRow(c *ui.Context, target *cmpTarget, ctx cmpContext
 			p.planFold(*target, ctx)
 		}
 		if none {
-			ui.Text(c, "Choose a row or a cell on the map.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Choose a row or a cell on the map.").FontSize(FontSmall).TextColor(t.TextMuted)
 		} else {
-			ui.Text(c, fmt.Sprintf("%d–%d × %d–%d", target.X, target.X+ctx.Bin-1, target.Y, target.Y+ctx.Bin-1)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, fmt.Sprintf("%d–%d × %d–%d", target.X, target.X+ctx.Bin-1, target.Y, target.Y+ctx.Bin-1)).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 	})
 }
@@ -1556,11 +1546,11 @@ func (p *comparePage) foldDialog(c *ui.Context) {
 	t := c.Theme()
 	plan := p.fold
 	ui.Modal(c.Key("cmp-fold"), &p.foldOpen, func() {
-		ui.Column(c).Gap(12).Width(420).Children(func() {
-			ui.Text(c, fmt.Sprintf("Fold %s:%d–%d", plan.ctx.GeneA, plan.start, plan.end)).FontSize(16).Bold()
+		ui.Column(c).Gap(Space3).Width(420).Children(func() {
+			ui.Text(c, fmt.Sprintf("Fold %s:%d–%d", plan.ctx.GeneA, plan.start, plan.end)).FontSize(FontTitle).Bold()
 			ui.Text(c, fmt.Sprintf("Two window folds (pseudoknots allowed) of %d nt: one with %s evidence, one with %s evidence. They appear on the Structure page.",
 				plan.end-plan.start+1, plan.ctx.LabelA, plan.ctx.LabelB)).TextColor(t.TextMuted)
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			ui.Row(c).Gap(Space2).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Cancel").Clicked() {
 					p.foldOpen = false
 				}
@@ -1668,9 +1658,9 @@ func (p *comparePage) quickView(c *ui.Context) {
 		d := q.data
 		ctx := p.quickContext()
 		rows := p.quickRows()
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Column(c).Gap(2).Grow(1).Children(func() {
-				ui.Text(c, "Quick view · "+ctx.LabelA+" vs "+ctx.LabelB).FontSize(18).Bold()
+		ui.Row(c).Gap(Space2).AlignItems(ui.Start).Children(func() {
+			ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				ui.Text(c, "Quick view · "+ctx.LabelA+" vs "+ctx.LabelB).FontSize(FontTitle + 2).Bold()
 				genes := q.gene
 				if ctx.Partner != "" {
 					genes += " × " + ctx.Partner
@@ -1680,7 +1670,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 					meta += " · libraries " + FormatNumber(int64(*d.LibraryA)) + " / " + FormatNumber(int64(*d.LibraryB))
 				}
 				ui.Text(c, meta+" · "+quickValueNote(d)+" · no statistics; use the differential test for padj").
-					FontSize(12).TextColor(t.TextMuted)
+					FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 			if ui.Button(c, "Export TSV…").Tooltip("Save every bin as a tab-separated file").Disabled(len(rows) == 0).Clicked() && len(rows) > 0 {
 				p.exportQuickTSV()
@@ -1720,8 +1710,8 @@ func (p *comparePage) quickView(c *ui.Context) {
 		} else {
 			q.heat.Highlight = widgets.Cell{}
 		}
-		ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Gap(6).Children(func() {
+		p.mapGrid(c, 480).Children(func() {
+			ui.Column(c).Gap(Space2).MinWidth(0).Children(func() {
 				ev := q.heat.Show(c.Key("quick-heat"), p.mapSide(), "Normalised contact difference, violet: higher in A, teal: higher in B")
 				if ev.Clicked >= 0 {
 					cell := q.heat.Cells()[ev.Clicked]
@@ -1734,7 +1724,7 @@ func (p *comparePage) quickView(c *ui.Context) {
 				}
 				effectLegend(c, ctx.LabelA, ctx.LabelB, q.cap)
 			})
-			ui.Column(c).Gap(8).Grow(1).MinWidth(320).Children(func() {
+			ui.Column(c).Gap(Space2).MinWidth(0).Children(func() {
 				ui.Text(c, "Bins ("+FormatNumber(int64(len(rows)))+")").Bold()
 				if len(rows) == 0 {
 					ui.Text(c, "No bin has hybrids in either group.").TextColor(t.TextMuted)
@@ -1812,7 +1802,7 @@ func cmpQuickCells(rows []cmpQuickRow, bin int, dark bool, limit float64) []widg
 // effectLegend is the quick view's scale: teal (B) through the surface to violet (A).
 func effectLegend(c *ui.Context, labelA, labelB string, limit float64) {
 	t := c.Theme()
-	ui.Column(c).Gap(4).Width(260).Children(func() {
+	ui.Column(c).Gap(Space1).Width(280).Children(func() {
 		ui.Box(c).FillWidth().Height(10).Radius(3).Draw(func(pt *ui.Painter, r ui.Rect) {
 			steps := 48
 			for i := range steps {
@@ -1821,9 +1811,9 @@ func effectLegend(c *ui.Context, labelA, labelB string, limit float64) {
 				pt.Fill(ui.Rect{X: r.X + float32(i)*w, Y: r.Y, W: w + 0.5, H: r.H}, effectColor(v, t.Dark), 0)
 			}
 		})
-		ui.Row(c).Children(func() {
-			ui.Text(c, fmt.Sprintf("≤ −%s · higher in %s", trimFloat(limit), labelB)).FontSize(11).TextColor(t.TextMuted).Grow(1)
-			ui.Text(c, fmt.Sprintf("higher in %s · ≥ %s", labelA, trimFloat(limit))).FontSize(11).TextColor(t.TextMuted)
+		ui.Grid(c).Columns(2).Gap(Space2).Children(func() {
+			ui.Text(c, fmt.Sprintf("≤ −%s · higher in %s", trimFloat(limit), labelB)).FontSize(FontSmall - 1).TextColor(t.TextMuted)
+			ui.Text(c, fmt.Sprintf("higher in %s · ≥ %s", labelA, trimFloat(limit))).FontSize(FontSmall - 1).TextColor(t.TextMuted).TextAlign(ui.End)
 		})
 	})
 }
@@ -1840,6 +1830,24 @@ func cmpMax(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// mapGrid lays a map and its table out: the map at its side and the table
+// in the rest of the card where that leaves the table tableWidth, else the
+// table under the map, as wide as the card.
+func (p *comparePage) mapGrid(c *ui.Context, tableWidth float32) ui.Element {
+	g := ui.Grid(c).Gap(Space4).AlignItems(ui.Start)
+	if mapW := p.mapSide() + 44; p.cardWidth() >= mapW+Space4+tableWidth {
+		return g.ColumnTracks(ui.Fixed(mapW), ui.Fr(1))
+	}
+	return g.Columns(1)
+}
+
+// cardWidth is the width inside a card of the page: the page's content
+// less its padding and the card's padding and border.
+func (p *comparePage) cardWidth() float32 {
+	w, _ := p.a.ContentSize()
+	return w - 2*Space6 - 2*Space4 - 2
 }
 
 // mapSide is the side of the Compare maps: about half the page width and

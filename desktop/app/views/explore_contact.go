@@ -589,17 +589,31 @@ func (d *contactData) legend(choice, scale string, dark bool, style string, plot
 // cellRange is the inclusive gene range of a bin starting at x.
 func cellRange(x, bin int) (int, int) { return max(1, x), x + bin - 1 }
 
+// contactPanelWidth is the side column's least width beside the map card.
+const contactPanelWidth float32 = 300
+
+// contactCardInset is what the map card adds around the map: its padding
+// and border.
+const contactCardInset = 2*Space4 + 2
+
+// contactBeside: the side column fits beside the smallest map.
+func (p *explorePage) contactBeside() bool {
+	return p.pageWidth() >= 420+contactCardInset+Space4+contactPanelWidth
+}
+
 // contactSide is the map's side: square, as wide as the page allows next
-// to the side panel and no taller than the window under the controls (the
+// to the side column and no taller than the window under the controls (the
 // web's min(100%, max(420px, 100vh - header - 190px))).
 func (p *explorePage) contactSide() float32 {
 	w, h := p.a.ContentSize()
 	if w <= 0 || h <= 0 {
 		return 560
 	}
-	// the side panel (300), the card's padding (32), the gap (16) and the
-	// page's padding
-	return clampF(min(w-420, h-190), 420, 1400)
+	room := p.pageWidth() - contactCardInset
+	if p.contactBeside() {
+		room -= Space4 + contactPanelWidth
+	}
+	return clampF(min(room, h-190), 420, 1400)
 }
 
 func (p *explorePage) contactView(c *ui.Context) {
@@ -611,8 +625,8 @@ func (p *explorePage) contactView(c *ui.Context) {
 	}
 	p.loadContact()
 	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(14).Children(func() {
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Gap(Space4).Children(func() {
+			ui.Row(c).Gap(Space3).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Fixed-width binning mirrors the current HYB2 coverage accumulation rule.").TextColor(t.TextMuted).Grow(1)
 				p.contactExportMenu(c)
 			})
@@ -630,9 +644,18 @@ func (p *explorePage) contactView(c *ui.Context) {
 				ui.Text(c, "No records between these RNAs with these settings.").TextColor(t.TextMuted)
 				return
 			}
-			ui.Row(c).Gap(16).AlignItems(ui.Start).Wrap().Children(func() {
+			// the map card hugs the map; the side column takes the rest of
+			// the row (at least contactPanelWidth), so the row ends where
+			// the Data card above does
+			grid := ui.Grid(c).Gap(Space4).AlignItems(ui.Start)
+			if p.contactBeside() {
+				grid.ColumnTracks(ui.Fixed(p.contactSide()+contactCardInset), ui.Fr(1))
+			} else {
+				grid.Columns(1)
+			}
+			grid.Children(func() {
 				p.contactStage(c, d)
-				ui.Column(c).Gap(12).Width(300).Children(func() {
+				ui.Column(c).Gap(Space3).Children(func() {
 					p.contactSelection(c, d)
 					p.contactInfoCard(c, d)
 				})
@@ -640,11 +663,7 @@ func (p *explorePage) contactView(c *ui.Context) {
 			if s.showTable {
 				Card(c, "", func() { contactTable(c, d) })
 			}
-			ui.Row(c).Gap(8).Padding(10, 12).Radius(8).Background(t.Surface).Children(func() {
-				ui.Text(c, "Method").Bold().FontSize(12)
-				ui.Text(c, "Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.").
-					FontSize(12).TextColor(t.TextMuted).Grow(1)
-			})
+			methodNote(c, "Each RNA arm covers every fixed-width bin between its start and end coordinates. The chosen measure is added to each bin pair: one per row for record count, or legacy cluster support when count metadata exists. Standard HYB2 overlap scores are preserved as annotations; overlap ≥ 5 is available separately as the original homodimer proxy.")
 		})
 	})
 }
@@ -655,7 +674,7 @@ func (p *explorePage) contactControls(c *ui.Context) {
 	t := c.Theme()
 	genes := p.genes()
 	Card(c, "Data", func() {
-		ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+		FieldGrid(c, p.pageWidth()-contactCardInset, func() {
 			if datasets := p.contactDatasets(); len(datasets) > 1 {
 				labels, byLabel := p.sampleLabels(datasets)
 				chosen := ""
@@ -674,12 +693,12 @@ func (p *explorePage) contactControls(c *ui.Context) {
 						}
 					}
 				}
-				picker(c, "cm-dataset", "Dataset", &chosen, labels, 200).OnChange(func() { s.dataset = byLabel[chosen] })
+				picker(c, "cm-dataset", "Dataset", &chosen, labels, 0).OnChange(func() { s.dataset = byLabel[chosen] })
 			}
 			if len(genes) > 0 {
 				gene := p.gene
-				picker(c, "cm-gene1", "RNA X", &gene, genes, 200).OnChange(func() { p.selectGene(gene) })
-				picker(c, "cm-gene2", "RNA Y", &s.gene2, genes, 200)
+				picker(c, "cm-gene1", "RNA X", &gene, genes, 0).OnChange(func() { p.selectGene(gene) })
+				picker(c, "cm-gene2", "RNA Y", &s.gene2, genes, 0)
 			}
 			bins := binOptions
 			if d := s.data; d != nil && d.adjusted && !s.load.busy() {
@@ -695,29 +714,29 @@ func (p *explorePage) contactControls(c *ui.Context) {
 			if i := slicesIndex(binOptions, s.bin); i >= 0 {
 				bin = bins[i]
 			}
-			picker(c, "cm-bin", "Bin size", &bin, bins, 150).OnChange(func() {
+			picker(c, "cm-bin", "Bin size", &bin, bins, 0).OnChange(func() {
 				if i := slicesIndex(bins, bin); i >= 0 {
 					s.bin = binOptions[i]
 				}
 			})
-			picker(c, "cm-measure", "Measure", &s.measure, cmMeasures, 150)
-			picker(c, "cm-orientation", "Orientation", &s.orientation, orientations, 190)
+			picker(c, "cm-measure", "Measure", &s.measure, cmMeasures, 0)
+			picker(c, "cm-orientation", "Orientation", &s.orientation, orientations, 0)
 			patterns := make([]string, len(p.summary.types))
 			for i, code := range p.summary.types {
 				patterns[i] = patternName(code)
 			}
-			picker(c, "cm-type", "Chimera pattern", &s.typ, withAll(allPattern, patterns), 230)
-			picker(c, "cm-homodimer", "Homodimer subset", &s.homodimer, cmHomodimerOptions, 200)
+			picker(c, "cm-type", "Chimera pattern", &s.typ, withAll(allPattern, patterns), 0)
+			picker(c, "cm-homodimer", "Homodimer subset", &s.homodimer, cmHomodimerOptions, 0)
 		})
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(Space3).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "Reset map").Clicked() {
 				s.resetMap()
 			}
 			ui.Text(c, "Drag across the map to zoom to a region, or click a cell to zoom one step. Double-click the map, or Reset zoom above it, to return to the full extent.").
-				FontSize(12).TextColor(t.TextMuted).Grow(1)
+				FontSize(FontSmall).TextColor(t.TextMuted).Grow(1)
 		})
 		if note := p.contactScopeNote(); note != "" {
-			ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 	})
 }
@@ -746,29 +765,27 @@ func (p *explorePage) contactStage(c *ui.Context, d *contactData) {
 	t := c.Theme()
 	side := p.contactSide()
 	Card(c, "", func() {
-		ui.Row(c).Gap(12).AlignItems(ui.Start).Width(side).Children(func() {
-			ui.Column(c).Gap(2).Grow(1).Children(func() {
-				ui.Text(c, "CONTACT MAP").FontSize(11).Bold().TextColor(t.TextMuted)
+		ui.Row(c).Gap(Space3).AlignItems(ui.Start).Width(side).Children(func() {
+			ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				ui.Text(c, "CONTACT MAP").FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 				heading := "Full extent"
 				if s.cmap.Zoomed() {
 					heading = "Zoomed extent"
 				}
-				ui.Text(c, heading).FontSize(18).Bold()
-			})
-			ui.Column(c).Gap(4).AlignItems(ui.End).Children(func() {
+				ui.Text(c, heading).FontSize(FontTitle).Bold()
 				rangeText := "Waiting for selection"
 				if sel := s.cmap.Selection; sel != nil {
 					rangeText = d.cellName(sel[0], sel[1])
 				}
-				ui.Text(c, rangeText).FontSize(12).TextColor(t.TextMuted)
-				// the buttons beside the map leave the keyboard focus on it
-				if ui.Button(c, "Reset zoom").KeepFocus().Clicked() {
-					s.cmap.Reset()
-				}
+				ui.Text(c, rangeText).FontSize(FontSmall).TextColor(t.TextMuted)
 			})
+			// the buttons beside the map leave the keyboard focus on it
+			if ui.Button(c, "Reset zoom").KeepFocus().Clicked() {
+				s.cmap.Reset()
+			}
 		})
 		p.contactDisplay(c)
-		ui.Text(c, "Drag to select a region. Click a cell to zoom and inspect it.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Drag to select a region. Click a cell to zoom and inspect it.").FontSize(FontSmall).TextColor(t.TextMuted)
 		ev := s.cmap.Show(c, side, side, "Contact map of "+d.gene+" × "+d.gene2+". Drag to select a region. Click a cell to zoom and inspect it.")
 		s.hover = ""
 		if ev.Hover {
@@ -778,14 +795,14 @@ func (p *explorePage) contactStage(c *ui.Context, d *contactData) {
 		if s.hover != "" {
 			hint = s.hover
 		}
-		ui.Text(c, hint).FontSize(12).TextColor(t.TextMuted).SingleLine().MaxWidth(side)
+		ui.Text(c, hint).FontSize(FontSmall).TextColor(t.TextMuted).SingleLine().MaxWidth(side)
 		if s.load.busy() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 				ui.Spinner(c).Label("Updating map")
-				ui.Text(c, "Updating map…").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "Updating map…").FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 		}
-	}).Width(side + 32)
+	})
 }
 
 // contactDisplay is the Display bar: how the map is drawn. Changes apply at
@@ -794,21 +811,26 @@ func (p *explorePage) contactStage(c *ui.Context, d *contactData) {
 func (p *explorePage) contactDisplay(c *ui.Context) {
 	s := &p.cm
 	t := c.Theme()
-	ui.Column(c).Gap(6).Padding(10).Radius(8).Background(t.Surface).Children(func() {
-		ui.Text(c, "Display").FontSize(12).Bold()
-		ui.Row(c).Gap(10).Wrap().AlignItems(ui.End).Children(func() {
+	ui.Column(c).Gap(Space2).Padding(Space3).Radius(RadiusSmall).Background(t.Surface).Children(func() {
+		ui.Text(c, "Display").FontSize(FontSmall).Bold()
+		// as a FieldGrid, with no more columns than controls
+		n := 3
+		if s.colorCap == capCustom {
+			n = 4
+		}
+		ui.Grid(c).Columns(min(fieldColumns(p.contactSide()-2*Space3), n)).Gap(Space3).Children(func() {
 			// a choice here gives the keyboard focus back to the map, so the
 			// arrow keys move the selection again
-			picker(c, "cm-palette", "Colour style", &s.palette, contactPalettes(), 220).OnChange(func() {
+			picker(c, "cm-palette", "Colour style", &s.palette, contactPalettes(), 0).OnChange(func() {
 				p.recolor()
 				s.cmap.RequestFocus()
 			})
-			picker(c, "cm-scale", "Scale", &s.scale, scaleOptions, 100).OnChange(func() {
+			picker(c, "cm-scale", "Scale", &s.scale, scaleOptions, 0).OnChange(func() {
 				s.scaleChanged()
 				p.recolor()
 				s.cmap.RequestFocus()
 			})
-			picker(c, "cm-cap", "Colour cap", &s.colorCap, capOptions, 150).OnChange(func() {
+			picker(c, "cm-cap", "Colour cap", &s.colorCap, capOptions, 0).OnChange(func() {
 				s.capChosen = true
 				p.recolor()
 				if s.colorCap != capCustom { // the custom value is typed next
@@ -817,11 +839,11 @@ func (p *explorePage) contactDisplay(c *ui.Context) {
 			})
 			if s.colorCap == capCustom {
 				Field(c, "Custom cap", func() {
-					ui.TextInput(c.Key("cm-custom-cap"), &s.customCap).Label("Custom cap").Placeholder("Value").Width(100).OnChange(p.recolor)
+					ui.TextInput(c.Key("cm-custom-cap"), &s.customCap).Label("Custom cap").Placeholder("Value").FillWidth().OnChange(p.recolor)
 				})
 			}
 		})
-		ui.Text(c, "Applies at once and keeps the zoom; exports use these settings.").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, "Applies at once and keeps the zoom; exports use these settings.").FontSize(FontSmall).TextColor(t.TextMuted)
 	})
 }
 
@@ -866,32 +888,32 @@ func (p *explorePage) contactSelection(c *ui.Context, d *contactData) {
 	s := &p.cm
 	t := c.Theme()
 	Card(c, "", func() {
-		ui.Text(c, "SELECTED REGION").FontSize(11).Bold().TextColor(t.TextMuted)
+		ui.Text(c, "SELECTED REGION").FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 		sel := s.cmap.Selection
 		if sel == nil {
-			ui.Text(c, "Select a heatmap cell").FontSize(16).Bold()
+			ui.Text(c, "Select a heatmap cell").FontSize(FontTitle).Bold()
 			ui.Text(c, "Hover to inspect a bin. Click a cell to load its local record summary and continue into the Region Explorer.").
-				FontSize(12).TextColor(t.TextMuted)
-			ui.Row(c).Gap(16).Wrap().Children(func() {
+				FontSize(FontSmall).TextColor(t.TextMuted)
+			ui.Row(c).Gap(Space4).Wrap().Children(func() {
 				stat(c, "Records in map", FormatNumber(int64(d.recordsTotal)))
 				stat(c, "Cluster support", FormatNumber(int64(d.supportTotal)))
 			})
 			return
 		}
-		ui.Text(c, d.gene+":"+span(sel[0], sel[0]+d.bin-1)).FontSize(15).Bold()
-		ui.Text(c, d.gene2+":"+span(sel[1], sel[1]+d.bin-1)).FontSize(15).Bold()
+		ui.Text(c, d.gene+":"+span(sel[0], sel[0]+d.bin-1)).FontSize(FontTitle).Bold()
+		ui.Text(c, d.gene2+":"+span(sel[1], sel[1]+d.bin-1)).FontSize(FontTitle).Bold()
 		records, support, reads := 0, 0, 0
 		if i, ok := d.at[*sel]; ok {
 			records, support, reads = d.records[i], d.support[i], d.count[i]
 		}
-		ui.Row(c).Gap(16).Wrap().Children(func() {
+		ui.Row(c).Gap(Space4).Wrap().Children(func() {
 			stat(c, "Records", FormatNumber(int64(records)))
 			stat(c, "Cluster support", FormatNumber(int64(support)))
 			if d.measure == cmReads {
 				stat(c, "Reads", FormatNumber(int64(reads)))
 			}
 		})
-		ui.Row(c).Gap(8).Wrap().Children(func() {
+		ui.Row(c).Gap(Space2).Wrap().Children(func() {
 			if ui.PrimaryButton(c, "Explore region").Clicked() {
 				p.exploreCellRegion(d, *sel)
 			}
@@ -902,7 +924,7 @@ func (p *explorePage) contactSelection(c *ui.Context, d *contactData) {
 				p.exportContactCellRecords()
 			}
 		})
-		ui.Row(c).Gap(8).Wrap().Children(func() {
+		ui.Row(c).Gap(Space2).Wrap().Children(func() {
 			if ui.Button(c, "Show hybrids").Tooltip("Interactions filtered to this cell").Clicked() {
 				x0, x1 := cellRange(sel[0], d.bin)
 				y0, y1 := cellRange(sel[1], d.bin)
@@ -924,11 +946,11 @@ func (p *explorePage) contactInfoCard(c *ui.Context, d *contactData) {
 		if s.scale == scaleLog {
 			how = "log1p display"
 		}
-		ui.Text(c, strings.ToUpper(s.style().kicker+" · "+how)).FontSize(11).Bold().TextColor(t.TextMuted)
-		ui.Text(c, "Image exports use the currently visible extent.").FontSize(12).TextColor(t.TextMuted)
-		ui.Row(c).Gap(10).Wrap().Children(func() {
-			ui.Text(c, d.gene+" · X axis").FontSize(12)
-			ui.Text(c, d.gene2+" · Y axis").FontSize(12)
+		ui.Text(c, strings.ToUpper(s.style().kicker+" · "+how)).FontSize(FontSmall).Bold().TextColor(t.TextMuted)
+		ui.Text(c, "Image exports use the currently visible extent.").FontSize(FontSmall).TextColor(t.TextMuted)
+		ui.Row(c).Gap(Space3).Wrap().Children(func() {
+			ui.Text(c, d.gene+" · X axis").FontSize(FontSmall)
+			ui.Text(c, d.gene2+" · Y axis").FontSize(FontSmall)
 		})
 		label := "Open data table"
 		if s.showTable {
@@ -954,17 +976,17 @@ func contactTable(c *ui.Context, d *contactData) {
 	columns := []string{"X position (nt)", "Y position (nt)", "Records", "Cluster support"}
 	widths := []float32{160, 160, 100, 120}
 	ui.Column(c).Gap(0).Children(func() {
-		ui.Row(c).Gap(0).Padding(6, 8).Children(func() {
+		ui.Row(c).Gap(0).Padding(Space2).Children(func() {
 			for i, name := range columns {
-				ui.Text(c, name).FontSize(12).Bold().TextColor(t.TextMuted).Width(widths[i]).TextAlign(ui.End)
+				ui.Text(c, name).FontSize(FontSmall).Bold().TextColor(t.TextMuted).Width(widths[i]).TextAlign(ui.End)
 			}
 		})
 		for _, i := range order {
 			row := []string{span(d.x[i], d.x[i]+d.bin-1), span(d.y[i], d.y[i]+d.bin-1),
 				FormatNumber(int64(d.records[i])), FormatNumber(int64(d.support[i]))}
-			ui.Row(c.Key(fmt.Sprint(i))).Gap(0).Padding(4, 8).Border(0, t.Border).Children(func() {
+			ui.Row(c.Key(fmt.Sprint(i))).Gap(0).Padding(Space1, Space2).Border(0, t.Border).Children(func() {
 				for k, v := range row {
-					ui.Text(c, v).FontSize(12).Width(widths[k]).TextAlign(ui.End)
+					ui.Text(c, v).FontSize(FontSmall).Width(widths[k]).TextAlign(ui.End)
 				}
 			})
 		}

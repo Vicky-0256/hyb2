@@ -419,7 +419,7 @@ func (p *researchPanel) View(c *ui.Context, target *researchTarget) {
 			ui.Text(c, "Look up what RNAcentral already holds about a public RNA identifier: an AI-generated literature summary "+
 				"with its sources, as background for your own reading.").TextColor(t.TextMuted)
 			ui.Text(c, "External lookups are off. When you turn them on, only the identifier and species you enter are sent to "+
-				"RNAcentral; no sequence, structure or project data leaves this computer.").FontSize(12).TextColor(t.TextMuted)
+				"RNAcentral; no sequence, structure or project data leaves this computer.").FontSize(FontSmall).TextColor(t.TextMuted)
 			ui.Row(c).Children(func() {
 				if ui.Link(c, "Turn on in Preferences…", "").Clicked() {
 					a.openPrefs()
@@ -442,7 +442,7 @@ func (p *researchPanel) View(c *ui.Context, target *researchTarget) {
 func (p *researchPanel) queryView(c *ui.Context) {
 	t := c.Theme()
 	running := p.running != ""
-	ui.Row(c).Gap(12).Wrap().Children(func() {
+	ui.Row(c).Gap(Space3).Wrap().Children(func() {
 		ui.Column(c).Grow(2).Basis(220).Children(func() {
 			Field(c, "Public identifier", func() {
 				ui.TextInput(c.Key("rs-id"), &p.identifier).Placeholder("e.g. hsa-mir-21 or URS000075D341_9606").Label("Public identifier").Disabled(running)
@@ -455,9 +455,9 @@ func (p *researchPanel) queryView(c *ui.Context) {
 		})
 	})
 	ui.Checkbox(c.Key("rs-confirm"), &p.confirmed, "I confirm this identifier and species refer to the RNA I am studying").Disabled(running)
-	ui.Text(c, "Sends only: identifier, taxon. Nothing else leaves this computer.").FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, "Sends only: identifier, taxon. Nothing else leaves this computer.").FontSize(FontSmall).TextColor(t.TextMuted)
 	id, taxon := strings.TrimSpace(p.identifier), strings.TrimSpace(p.taxon)
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 		if ui.PrimaryButton(c, "View existing summary").Disabled(running || id == "").
 			Tooltip("RNAcentral's existing literature summary for the identifier").Clicked() {
 			p.lookup("describe", false)
@@ -468,7 +468,7 @@ func (p *researchPanel) queryView(c *ui.Context) {
 		}
 		if running {
 			ui.Spinner(c).Label("Looking up RNAcentral")
-			ui.Text(c, "Asking RNAcentral…").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Asking RNAcentral…").FontSize(FontSmall).TextColor(t.TextMuted)
 			if ui.Button(c, "Cancel").Clicked() {
 				p.cancel()
 			}
@@ -483,26 +483,26 @@ func (p *researchPanel) cardView(c *ui.Context, card *model.EvidenceCard, target
 	if !ok {
 		tone = t.TextMuted
 	}
-	ui.Column(c.Key("rs-card")).Gap(8).Padding(12).Radius(8).Border(1, t.Border).Children(func() {
-		ui.Text(c, researchHeading(card)).Bold().Padding(4, 8).Radius(6).Background(tone.Alpha(0.14))
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Column(c.Key("rs-card")).Gap(Space2).Padding(Space3).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
+		ui.Text(c, researchHeading(card)).Bold().Padding(Space1, Space2).Radius(RadiusSmall).Background(tone.Alpha(0.14))
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Badge(c, researchCardLabel(card))
-			ui.Text(c, researchQuery(card)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, researchQuery(card)).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 		if text := researchStatusText(card); text != "" {
 			ui.Text(c, text)
 		}
 		if researchShowDetail(card) {
-			ui.Text(c, "Detail: "+*card.StatusDetail).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Detail: "+*card.StatusDetail).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		if text := card.Text(); text != "" {
-			ui.Text(c, text).Padding(8, 10).Radius(6).Background(t.Surface)
+			ui.Text(c, text).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Surface)
 		}
 		if len(card.SourceIdentifiers) > 0 {
-			ui.Text(c, "Cited in the text (citations not verified): "+strings.Join(card.SourceIdentifiers, ", ")).FontSize(12)
+			ui.Text(c, "Cited in the text (citations not verified): "+strings.Join(card.SourceIdentifiers, ", ")).FontSize(FontSmall)
 		}
 		ui.Text(c, researchRetrieved(card)+" · "+researchVersions(card)).FontSize(11).TextColor(t.TextMuted)
-		ui.Row(c).Gap(8).Wrap().Children(func() {
+		ui.Row(c).Gap(Space2).Wrap().Children(func() {
 			if u := researchSourceURL(card); u != "" && ui.Button(c, "Open source").Tooltip(u).Clicked() {
 				c.OpenURL(u)
 			}
@@ -518,7 +518,7 @@ func (p *researchPanel) cardView(c *ui.Context, card *model.EvidenceCard, target
 			}
 		})
 		if card.Saveable() && target == nil {
-			ui.Text(c, "Show a result above to save this card with it.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Show a result above to save this card with it.").FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 	})
 }
@@ -540,7 +540,7 @@ func (p *researchPanel) savedView(c *ui.Context, target *researchTarget) {
 	if len(current) == 0 && len(other) == 0 {
 		return
 	}
-	ui.Column(c).Gap(8).Padding(10, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+	ui.Column(c).Gap(Space2).Padding(10, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		if target != nil {
 			ui.Text(c, fmt.Sprintf("Saved for this result (%d)", len(current))).Bold()
 		}
@@ -548,10 +548,10 @@ func (p *researchPanel) savedView(c *ui.Context, target *researchTarget) {
 			p.savedCard(c, card)
 		}
 		if len(other) > 0 {
-			ui.Text(c, fmt.Sprintf("Saved for other results (%d) — not applied here", len(other))).FontSize(12).Bold().TextColor(t.TextMuted)
+			ui.Text(c, fmt.Sprintf("Saved for other results (%d) — not applied here", len(other))).FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 			for _, card := range other {
 				ui.Text(c.Key("rs-other-"+card.EvidenceID), card.QueryIdentifier+" · "+researchCardLabel(card)+
-					" · for another result ("+researchBindingText(card.Binding)+")").FontSize(12).TextColor(t.TextMuted)
+					" · for another result ("+researchBindingText(card.Binding)+")").FontSize(FontSmall).TextColor(t.TextMuted)
 			}
 		}
 	})
@@ -560,17 +560,17 @@ func (p *researchPanel) savedView(c *ui.Context, target *researchTarget) {
 func (p *researchPanel) savedCard(c *ui.Context, card *model.EvidenceCard) {
 	t := c.Theme()
 	id := card.EvidenceID
-	ui.Column(c.Key("rs-saved-"+id)).Gap(6).Padding(8, 10).Radius(8).Border(1, t.Border).Children(func() {
+	ui.Column(c.Key("rs-saved-"+id)).Gap(6).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
 		ui.Text(c, researchQuery(card)+" · "+researchCardLabel(card)).Bold()
-		ui.Text(c, researchHeading(card)).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, researchHeading(card)).FontSize(FontSmall).TextColor(t.TextMuted)
 		if text := card.Text(); text != "" {
-			ui.Text(c, truncate(text, 400)).FontSize(12)
+			ui.Text(c, truncate(text, 400)).FontSize(FontSmall)
 		}
 		ui.Text(c, researchRetrieved(card)+" · "+researchReview(card.Review)+" · citations not verified").FontSize(11).TextColor(t.TextMuted)
 		if !card.LocalOrigin {
 			ui.Text(c, researchOriginNotice+".").FontSize(11).TextColor(t.Warning)
 		}
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 			if card.Binding != nil && ui.Checkbox(c.Key("rs-report-"+id), &card.Binding.IncludeInReport, "Include in report").Changed() {
 				p.update(id, model.EvidenceUpdate{IncludeInReport: card.Binding.IncludeInReport})
 			}
@@ -592,7 +592,7 @@ func (p *researchPanel) savedCard(c *ui.Context, card *model.EvidenceCard) {
 				p.remove(id)
 			}
 		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 			ui.TextInput(c.Key("rs-note-"+id), p.noteDraft(card)).Placeholder("Your note (shown in the report)").Label("Researcher note").Grow(1)
 			if ui.Button(c, "Save note").Clicked() {
 				p.update(id, model.EvidenceUpdate{IncludeInReport: card.InReport(),

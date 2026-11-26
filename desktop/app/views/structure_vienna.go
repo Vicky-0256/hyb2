@@ -293,7 +293,7 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 		title = "COMRADES settings"
 	}
 	ui.Collapsible(c.Key("st-vienna"), title, &p.advancedOpen, func() {
-		ui.Column(c).Gap(10).Padding(6, 0, 0, 0).Children(func() {
+		ui.Column(c).Gap(Space3).Padding(6, 0, 0, 0).Children(func() {
 			if comrades {
 				p.foldProgramField(c)
 			}
@@ -321,7 +321,7 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 				}
 				Field(c, "Seed", func() {
 					ui.TextInput(c.Key("st-seed"), &p.seed).Label("Seed").Width(200)
-					ui.Text(c, "The same seed gives the same random orders. Default HYB2-Web.").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "The same seed gives the same random orders. Default HYB2-Web.").FontSize(FontSmall).TextColor(t.TextMuted)
 				})
 				ui.Checkbox(c.Key("st-homodimer"), &p.homodimerOnly, "Homodimer proxies only (both arms on one RNA, overlap ≥ 5)")
 			}
@@ -343,12 +343,12 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 		} else {
 			summary += " · defaults"
 		}
-		ui.Text(c, summary).FontSize(12).TextColor(color)
+		ui.Text(c, summary).FontSize(FontSmall).TextColor(color)
 		return
 	}
 	Field(c, "Hard base pairs (optional): i-j, one per line, RNA positions", func() {
 		ui.TextArea(c.Key("st-hard"), &p.hardPairs).Lines(2, 6).Font("monospace").Placeholder("e.g.\n120-188").Label("Hard base pairs")
-		ui.Text(c, "Each pair is enforced: A-U, G-C or G-U, not crossing, at least the minimum loop apart.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Each pair is enforced: A-U, G-C or G-U, not crossing, at least the minimum loop apart.").FontSize(FontSmall).TextColor(t.TextMuted)
 	})
 	summary := fmt.Sprintf("%g °C · minimum loop %d", p.temperature, int(p.minLoop))
 	color := t.TextMuted
@@ -358,7 +358,7 @@ func (p *structurePage) viennaAdvanced(c *ui.Context) {
 	} else {
 		summary += " · defaults"
 	}
-	ui.Text(c, summary).FontSize(12).TextColor(color)
+	ui.Text(c, summary).FontSize(FontSmall).TextColor(color)
 }
 
 // foldProgramField: the program the COMRADES stems are fitted with,
@@ -379,16 +379,16 @@ func (p *structurePage) foldProgramField(c *ui.Context) {
 		ui.Radio(c, &p.foldProgram, foldViennaRNA, "ViennaRNA (bundled)").OnChange(changed)
 		ui.Radio(c, &p.foldProgram, foldMfold, "mfold 3.6 (installed separately)").OnChange(changed)
 		if p.comradesProgram() != foldMfold {
-			ui.Text(c, "Fits the stems with ViennaRNA's constrained MFE, as the web.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Fits the stems with ViennaRNA's constrained MFE, as the web.").FontSize(FontSmall).TextColor(t.TextMuted)
 			return
 		}
 		path, problem := p.a.appMfold()
 		if path != "" {
 			ui.Text(c, fmt.Sprintf("Using %s. mfold applies each stem as forced base pairs; it folds at %g °C with minimum loop %g, ", path, temp, loop)+
-				"and is slower than ViennaRNA (about 7 s per fold at 1,000 nt).").FontSize(12).TextColor(t.TextMuted)
+				"and is slower than ViennaRNA (about 7 s per fold at 1,000 nt).").FontSize(FontSmall).TextColor(t.TextMuted)
 			return
 		}
-		ui.Text(c, problem).FontSize(12).TextColor(t.Danger)
+		ui.Text(c, problem).FontSize(FontSmall).TextColor(t.Danger)
 	})
 }
 

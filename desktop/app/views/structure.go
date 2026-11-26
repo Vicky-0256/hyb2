@@ -1018,17 +1018,17 @@ func (p *structurePage) View(c *ui.Context) {
 	if p.a.Project != nil && p.a.Project.Path == p.project {
 		p.followTopBar(false) // the top bar changed while this page is shown
 	}
-	ui.Column(c).Fill().Padding(24).Gap(16).Children(func() {
+	PageRoot(c).Children(func() {
 		PageHeader(c, "Structure", "Predict RNA secondary structure with CPLfold, CPLcofold or ViennaRNA, using your samples' chimeric reads as evidence, and compare structures.")
-		// The form takes about a third of a wide window. A narrow window
+		// The form takes two fifths of a wide window. A narrow window
 		// puts it above the viewer in one scroll; a short one scrolls the
 		// check and Run fold with the form, which pinned below it would
 		// leave the form a few lines.
 		w, h := p.a.ContentSize()
-		side := clampF(w*0.3, 354, 460)
+		side := stSideWidth(w)
 		pinned := h >= 700
 		if w < 860 {
-			ui.Scroll(c.Key("st-stack")).Grow(1).Gap(16).Children(func() {
+			ui.Scroll(c.Key("st-stack")).Grow(1).Gap(Space4).Children(func() {
 				p.form(c)
 				p.list(c)
 				p.runPanel(c)
@@ -1037,9 +1037,9 @@ func (p *structurePage) View(c *ui.Context) {
 			})
 			return
 		}
-		ui.Row(c).Grow(1).Gap(16).AlignItems(ui.Stretch).Children(func() {
-			ui.Column(c).Width(side).Gap(12).Children(func() {
-				ui.Scroll(c.Key("st-side")).Grow(1).Padding(0, 14, 0, 0).Gap(16).Children(func() {
+		ui.Row(c).Grow(1).Gap(Space4).AlignItems(ui.Stretch).Children(func() {
+			ui.Column(c).Width(side).Gap(Space3).Children(func() {
+				ui.Scroll(c.Key("st-side")).Grow(1).Padding(0, stScrollGutter, 0, 0).Gap(Space4).Children(func() {
 					p.form(c)
 					p.list(c)
 					if !pinned {
@@ -1050,12 +1050,45 @@ func (p *structurePage) View(c *ui.Context) {
 					p.runPanel(c)
 				}
 			})
-			ui.Scroll(c.Key("st-main")).Grow(1).Gap(16).Children(func() {
+			ui.Scroll(c.Key("st-main")).Grow(1).Gap(Space4).Children(func() {
 				p.viewer(c)
 				p.research.View(c, p.researchTarget())
 			})
 		})
 	})
+}
+
+// stScrollGutter keeps the side column's cards clear of its scroll bar.
+const stScrollGutter float32 = 14
+
+// stSideWidth is the width of the form column beside the viewer: two
+// fifths of the content, so the form's labels and choices do not wrap
+// line by line, and the rest for the viewer, which needs about 450 to
+// keep the 50-nt sequence rows and the candidate table on one line.
+func stSideWidth(w float32) float32 { return clampF(w*0.4, 360, 500) }
+
+// tileColumns is how many columns of n stat tiles fit the viewer card: all
+// in one row when they fit, otherwise two (or one) so the rows line up.
+func (p *structurePage) tileColumns(n int) int {
+	w := float32(916) // ContentSize's default, for a page drawn alone
+	if p.a != nil {
+		w, _ = p.a.ContentSize()
+	}
+	inner := w - 2*Space6 // the page padding
+	if w >= 860 {
+		inner -= stSideWidth(w) + Space4
+	}
+	inner -= 2*Space4 + stScrollGutter // the card padding and a scroll bar
+	fit := max(int((inner+Space2)/(140+Space2)), 1)
+	switch {
+	case n <= fit:
+		return max(n, 1)
+	case fit >= 4 && n > 4:
+		return 4
+	case fit >= 2:
+		return 2
+	}
+	return 1
 }
 
 func (p *structurePage) viewer(c *ui.Context) {
@@ -1075,8 +1108,8 @@ func (p *structurePage) viewer(c *ui.Context) {
 				windowChoices = append(windowChoices, fmt.Sprintf("Window %d-%d", r.WindowStart, r.WindowEnd))
 			}
 		}
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-			ui.Text(c, "Viewer").FontSize(16).Bold().Grow(1)
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Text(c, "Viewer").FontSize(FontTitle).Bold().Grow(1)
 			if len(windowChoices) > 0 {
 				current := "All windows"
 				if p.record != "all" {
@@ -1102,7 +1135,10 @@ func (p *structurePage) viewer(c *ui.Context) {
 			if p.viewB != "" && ui.Button(c, "Clear B").Clicked() {
 				p.viewB = ""
 			}
-			if a != nil {
+		})
+		// The files the view saves, in a row of their own below the title.
+		if a != nil {
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 				if ui.Button(c, "Save .dbn").Clicked() {
 					p.saveDBN(a)
 				}
@@ -1141,14 +1177,14 @@ func (p *structurePage) viewer(c *ui.Context) {
 				if ui.Button(c, "Report JSON…").Tooltip("What was folded, with which parameters, and each window's structure").Clicked() {
 					p.exportReport(a)
 				}
-			}
-		})
+			})
+		}
 		if len(p.pendingPair) == 2 {
 			labels := "A and B"
 			if len(p.pairLabels) == 2 {
 				labels = p.pairLabels[0] + " (A) and " + p.pairLabels[1] + " (B)"
 			}
-			ui.Text(c, "Folding "+labels+"; they show here as the folds finish.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Folding "+labels+"; they show here as the folds finish.").FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		if p.viewA == "" {
 			msg := "Run a fold to see its arc diagram here."
@@ -1170,20 +1206,20 @@ func (p *structurePage) viewer(c *ui.Context) {
 		}
 		if b == nil {
 			p.defaultView(a)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "View").FontSize(12).Bold().TextColor(t.TextMuted)
+			ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "View").FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 				ui.Select(c.Key("st-view"), &p.view, stViewChoices(a)).Width(140).Label("View").OnChange(func() { p.editing = false })
 				p.drawingButton(c, a)
 			})
 			if p.editing && !stTwoStrand(a) {
 				p.drawingView(c, a)
-				ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, p.metaLine(a)).FontSize(FontSmall).TextColor(t.TextMuted)
 				p.candidatesPanel(c, a)
 				p.comradesPanel(c, a)
 				return
 			}
 			if p.otherView(c, a) {
-				ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, p.metaLine(a)).FontSize(FontSmall).TextColor(t.TextMuted)
 				p.evidenceProvenance(c, a)
 				p.candidatesPanel(c, a)
 				p.resultDetails(c, a)
@@ -1217,14 +1253,14 @@ func (p *structurePage) viewer(c *ui.Context) {
 				labelB = "B · " + p.evidenceNames(metaB)
 			}
 		}
-		ui.Row(c).Gap(14).Wrap().Children(func() {
+		ui.Row(c).Gap(Space3).Wrap().Children(func() {
 			if b == nil && p.arcs.Mono.A == 0 {
-				ui.Text(c, "Predicted structure · above").FontSize(12).Bold().TextColor(t.TextMuted)
+				ui.Text(c, "Predicted structure · above").FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 				stArcLegend(c, a)
 				if len(p.arcs.Overlay) > 0 && rawLabel != "" {
 					stLegend(c, t.Accent, rawLabel)
 				} else if rawLabel != "" {
-					ui.Text(c, rawLabel).FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, rawLabel).FontSize(FontSmall).TextColor(t.TextMuted)
 				}
 				return
 			}
@@ -1251,7 +1287,7 @@ func (p *structurePage) viewer(c *ui.Context) {
 			ui.Text(c, rawNote).FontSize(11).TextColor(t.TextMuted)
 		}
 		if b == nil {
-			ui.Text(c, stViewCopy(a, "arc")).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, stViewCopy(a, "arc")).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		height := float32(340)
 		if b != nil || len(p.arcs.Overlay) > 0 {
@@ -1270,17 +1306,17 @@ func (p *structurePage) viewer(c *ui.Context) {
 		ui.Text(c, info).FontSize(11).TextColor(t.TextMuted)
 		if sel := p.arcs.Selected; sel > 0 && b != nil {
 			if text := stNucleotideText(p.shownA, sel, nameOr(a.Meta.Engine, "CPLfold")); text != "" {
-				ui.Text(c, "A · "+text).FontSize(12).Bold()
+				ui.Text(c, "A · "+text).FontSize(FontSmall).Bold()
 			}
 		}
 		for _, note := range p.layers.notes {
-			ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		if p.stats.DifferentCover {
-			ui.Text(c, "Pair statistics count pairs inside the regions both structures cover.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Pair statistics count pairs inside the regions both structures cover.").FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		if b == nil {
-			ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, p.metaLine(a)).FontSize(FontSmall).TextColor(t.TextMuted)
 			p.evidenceProvenance(c, a)
 			p.candidatesPanel(c, a)
 			p.resultDetails(c, a)
@@ -1288,10 +1324,10 @@ func (p *structurePage) viewer(c *ui.Context) {
 			return
 		}
 		p.statsTable(c, b != nil)
-		ui.Text(c, p.metaLine(a)).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, p.metaLine(a)).FontSize(FontSmall).TextColor(t.TextMuted)
 		p.candidatesPanel(c, a)
 		p.comradesPanel(c, a)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Dot-bracket (A)").Bold().Grow(1)
 			if ui.Button(c, "Copy").Clicked() {
 				c.WriteClipboard(p.dbnText)
@@ -1303,9 +1339,9 @@ func (p *structurePage) viewer(c *ui.Context) {
 }
 
 func stLegend(c *ui.Context, color ui.Color, label string) {
-	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Size(14, 3).Background(color)
-		ui.Text(c, label).FontSize(12).TextColor(c.Theme().TextMuted)
+		ui.Text(c, label).FontSize(FontSmall).TextColor(c.Theme().TextMuted)
 	})
 }
 
@@ -1566,7 +1602,7 @@ func (p *structurePage) statsTable(c *ui.Context, compare bool) {
 			row{"Only in this structure", FormatNumber(int64(s.OnlyA)), FormatNumber(int64(s.OnlyB))},
 			row{"Pair agreement (Jaccard)", s.Jaccard, ""})
 	}
-	ui.Column(c).Gap(0).Radius(8).Border(1, t.Border).Children(func() {
+	ui.Column(c).Gap(0).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
 		line := func(label, a, b string, header bool) {
 			r := ui.Row(c).Padding(5, 10).BorderWidth(0, 0, 1, 0).BorderColor(t.Border)
 			r.Children(func() {

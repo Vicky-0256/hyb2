@@ -526,7 +526,7 @@ func (p *structurePage) layerControls(c *ui.Context, gene string) {
 			current = options[k]
 		}
 	}
-	ui.Row(c).Gap(10).AlignItems(ui.End).Wrap().Children(func() {
+	ui.Row(c).Gap(Space3).AlignItems(ui.End).Wrap().Children(func() {
 		Field(c, "Differential arcs", func() {
 			ui.Select(c.Key("st-overlay"), &current, options).Width(300).Label("Differential arcs").OnChange(func() {
 				for k, o := range options {
@@ -555,7 +555,7 @@ func (p *structurePage) layerControls(c *ui.Context, gene string) {
 		if an != nil && an.file != "" {
 			label = "Genes: " + an.file
 		}
-		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 8, 0)
+		ui.Text(c, label).FontSize(FontSmall).TextColor(t.TextMuted).Margin(0, 0, 8, 0)
 		if ui.Button(c, "Gene annotation…").Tooltip("Attach a GenBank, GFF/GTF, BED or TSV file to this reference").Clicked() {
 			p.loadAnnotation(gene, false)
 		}
@@ -564,7 +564,7 @@ func (p *structurePage) layerControls(c *ui.Context, gene string) {
 		}
 	})
 	if l.overlayID != "" {
-		ui.Text(c, stArcMapNote).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, stArcMapNote).FontSize(FontSmall).TextColor(t.TextMuted)
 	}
 }
 

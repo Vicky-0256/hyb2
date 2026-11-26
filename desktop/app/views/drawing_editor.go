@@ -1103,7 +1103,7 @@ func drawField(c *ui.Context, label string, control func()) {
 }
 
 func (e *drawingEditor) buttons(c *ui.Context, actions [][3]string) {
-	ui.Row(c).Gap(6).Wrap().Children(func() {
+	ui.Row(c).Gap(Space2).Wrap().Children(func() {
 		for _, b := range actions {
 			btn := ui.Button(c.Key("dr-"+b[0]), b[1])
 			if b[2] != "" {
@@ -1142,10 +1142,10 @@ func (e *drawingEditor) choiceField(c *ui.Context, key, label string, value *str
 func (e *drawingEditor) View(c *ui.Context) {
 	t := c.Theme()
 	n := e.n()
-	root := ui.Column(c.Key("drawing-editor")).Gap(10).Children(func() {
-		ui.Text(c, drawCopy).FontSize(12).TextColor(t.TextMuted)
-		ui.Row(c).Gap(8).Wrap().AlignItems(ui.End).Children(func() {
-			ui.Row(c).Gap(4).Children(func() {
+	root := ui.Column(c.Key("drawing-editor")).Gap(Space3).Children(func() {
+		ui.Text(c, drawCopy).FontSize(FontSmall).TextColor(t.TextMuted)
+		ui.Row(c).Gap(Space2).Wrap().AlignItems(ui.End).Children(func() {
+			ui.Row(c).Gap(Space1).Children(func() {
 				if ui.Button(c.Key("dr-undo"), "↶ Undo").Tooltip("Undo (Ctrl/⌘ Z)").Disabled(len(e.undo) == 0).Clicked() {
 					e.act("undo")
 				}
@@ -1153,15 +1153,15 @@ func (e *drawingEditor) View(c *ui.Context) {
 					e.act("redo")
 				}
 			})
-			ui.Row(c).Gap(4).Children(func() {
+			ui.Row(c).Gap(Space1).Children(func() {
 				for _, z := range [][3]string{{"zoomOut", "−", "Zoom out"}, {"zoomIn", "+", "Zoom in"}, {"fit", "Fit", "Fit the drawing to the view"}} {
 					if ui.Button(c.Key("dr-"+z[0]), z[1]).Tooltip(z[2]).Label(z[2]).Clicked() {
 						e.act(z[0])
 					}
 				}
 			})
-			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Layout").FontSize(12).TextColor(t.TextMuted)
+			ui.Row(c).Gap(Space1).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Layout").FontSize(FontSmall).TextColor(t.TextMuted)
 				if drawChoice(c, "dr-layout", "Layout", &e.layoutKind, drawLayoutChoices, 200) {
 					e.relayout("Layout applied.")
 				}
@@ -1169,8 +1169,8 @@ func (e *drawingEditor) View(c *ui.Context) {
 					e.act("layout")
 				}
 			})
-			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Export").FontSize(12).TextColor(t.TextMuted)
+			ui.Row(c).Gap(Space1).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Export").FontSize(FontSmall).TextColor(t.TextMuted)
 				drawChoice(c, "dr-export", "Export format", &e.exportFormat, drawExportChoices, 200)
 				if ui.Button(c.Key("dr-save"), "Save…").Tooltip("Save the edited drawing in this format").Clicked() {
 					e.export(e.exportFormat)
@@ -1180,18 +1180,18 @@ func (e *drawingEditor) View(c *ui.Context) {
 				}
 			})
 		})
-		ui.Row(c).Gap(12).Wrap().Children(func() {
+		ui.Row(c).Gap(Space3).Wrap().Children(func() {
 			a, b := e.selection[0], e.selection[1]
 			sel := fmt.Sprintf("Selected: %d–%d (%d nt)", a, b, b-a+1)
 			if a == b {
 				sel = fmt.Sprintf("Selected: base %d (%c)", a, e.data.Sequence[a-1])
 			}
-			ui.Text(c, sel).FontSize(12).Bold()
+			ui.Text(c, sel).FontSize(FontSmall).Bold()
 			if e.message != "" {
-				ui.Text(c, e.message).FontSize(12).TextColor(t.TextMuted).Grow(1)
+				ui.Text(c, e.message).FontSize(FontSmall).TextColor(t.TextMuted).Grow(1)
 			}
 		})
-		ui.Box(c.Key("drawing-canvas")).FillWidth().Height(560).Focusable().Border(1, t.Border).Radius(6).
+		ui.Box(c.Key("drawing-canvas")).FillWidth().Height(560).Focusable().Border(1, t.Border).Radius(RadiusSmall).
 			Role(ui.RoleImage).Label("Editable RNA drawing").HandleInput(e.input).Draw(e.paint)
 		ui.Text(c, drawHelp).FontSize(11).TextColor(t.TextMuted)
 		e.panels(c, n)
@@ -1214,10 +1214,10 @@ func (e *drawingEditor) View(c *ui.Context) {
 
 func (e *drawingEditor) panels(c *ui.Context, n int) {
 	t := c.Theme()
-	grid := func(fn func()) { ui.Row(c).Gap(10).Wrap().AlignItems(ui.End).Children(fn) }
+	grid := func(fn func()) { ui.Row(c).Gap(Space3).Wrap().AlignItems(ui.End).Children(fn) }
 	note := func(s string) { ui.Text(c, s).FontSize(11).TextColor(t.TextMuted) }
 	ui.Collapsible(c.Key("dr-sec-selection"), "Selection", &e.open.selection, func() {
-		ui.Column(c).Gap(8).Children(func() {
+		ui.Column(c).Gap(Space2).Children(func() {
 			grid(func() {
 				for _, f := range []struct {
 					key, label string
@@ -1240,7 +1240,7 @@ func (e *drawingEditor) panels(c *ui.Context, n int) {
 		})
 	})
 	ui.Collapsible(c.Key("dr-sec-colours"), "Selection colours", &e.open.colours, func() {
-		ui.Column(c).Gap(8).Children(func() {
+		ui.Column(c).Gap(Space2).Children(func() {
 			grid(func() {
 				for _, f := range []struct {
 					key, label, name string
@@ -1265,7 +1265,7 @@ func (e *drawingEditor) panels(c *ui.Context, n int) {
 		})
 	})
 	ui.Collapsible(c.Key("dr-sec-style"), "Drawing style", &e.open.style, func() {
-		ui.Column(c).Gap(8).Children(func() {
+		ui.Column(c).Gap(Space2).Children(func() {
 			global := func(name string, changed bool) {
 				if changed {
 					e.globalStyle(name)
@@ -1303,7 +1303,7 @@ func (e *drawingEditor) panels(c *ui.Context, n int) {
 		})
 	})
 	ui.Collapsible(c.Key("dr-sec-notes"), "Annotations", &e.open.notes, func() {
-		ui.Column(c).Gap(8).Children(func() {
+		ui.Column(c).Gap(Space2).Children(func() {
 			drawField(c, "Text", func() {
 				ui.TextInput(c.Key("dr-note-text"), &e.noteText).Placeholder("Label text").Label("Annotation text").Width(420)
 			})
@@ -1343,7 +1343,7 @@ func (e *drawingEditor) panels(c *ui.Context, n int) {
 		})
 	})
 	ui.Collapsible(c.Key("dr-sec-map"), "Colour map", &e.open.colourMap, func() {
-		ui.Column(c).Gap(8).Children(func() {
+		ui.Column(c).Gap(Space2).Children(func() {
 			grid(func() {
 				if e.choiceField(c, "dr-palette", "Palette", &e.palette, drawPaletteChoices) && e.data.Evidence != nil {
 					e.commit(func(next *drawing) error { return drApplyEvidence(next, next.Evidence, e.palette) }, "Palette changed.", "")

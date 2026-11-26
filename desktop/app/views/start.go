@@ -129,11 +129,11 @@ func openError(err error) string {
 // startStep is one numbered step of the "how it works" strip.
 func startStep(c *ui.Context, n, title, body string) {
 	t := c.Theme()
-	ui.Row(c).Gap(10).AlignItems(ui.Start).Grow(1).Basis(200).Children(func() {
+	ui.Row(c).Gap(Space3).AlignItems(ui.Start).Grow(1).Basis(200).Children(func() {
 		ui.Text(c, n).FontSize(13).Bold().TextColor(t.Accent).Width(18)
 		ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 			ui.Text(c, title).Bold()
-			ui.Text(c, body).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, body).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 	})
 }
@@ -145,9 +145,9 @@ func (a *App) startView(c *ui.Context) {
 		s.newParent = defaultProjectParent()
 	}
 	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).Padding(32).Gap(16).MaxWidth(980).Children(func() {
+		ui.Column(c).Padding(32).Gap(Space4).MaxWidth(980).Children(func() {
 			ui.Column(c).Gap(6).Children(func() {
-				ui.Row(c).Gap(12).AlignItems(ui.End).Children(func() {
+				ui.Row(c).Gap(Space3).AlignItems(ui.End).Children(func() {
 					Logo(c, 44)
 					ui.Text(c, "Desktop").FontSize(22).TextColor(t.TextMuted).Padding(0, 0, 4, 0)
 					ui.Spacer(c)
@@ -159,7 +159,7 @@ func (a *App) startView(c *ui.Context) {
 				ui.Text(c, "Runtime unavailable: "+s.runtimeErr).TextColor(t.Danger)
 			}
 			if s.preparing {
-				ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(10, 14).Radius(8).Background(t.Accent.Alpha(0.08)).Children(func() {
+				ui.Row(c).Gap(Space3).AlignItems(ui.Center).Padding(10, 14).Radius(RadiusSmall).Background(t.Accent.Alpha(0.08)).Children(func() {
 					ui.Spinner(c)
 					ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 						ui.Text(c, "Preparing the analysis runtime (first launch only, usually under a minute)…").Bold()
@@ -169,16 +169,16 @@ func (a *App) startView(c *ui.Context) {
 				})
 			}
 			card(c, "How it works", func() {
-				ui.Row(c).Gap(16).AlignItems(ui.Start).Wrap().Children(func() {
+				ui.Row(c).Gap(Space4).AlignItems(ui.Start).Wrap().Children(func() {
 					startStep(c, "1", "Create a project", "A folder on your disk that keeps the sample list, pipeline outputs and results.")
 					startStep(c, "2", "Add data", "On the Data page: the reference (FASTA) and your raw reads (FASTQ, many GB is fine). Files are linked where they are, not copied.")
 					startStep(c, "3", "Run the pipeline", "Mapping and hybrid calling make the .hyb files, using the CPUs set in Preferences.")
 					startStep(c, "4", "Analyse", "QC, Explore, Compare (DESeq2) and Structure (CPLfold), then export a Report.")
 				})
 			})
-			ui.Row(c).Gap(16).AlignItems(ui.Stretch).Wrap().Children(func() {
+			ui.Row(c).Gap(Space4).AlignItems(ui.Stretch).Wrap().Children(func() {
 				card(c, "Start a new project", func() {
-					ui.Text(c, "Use this the first time you analyse a data set.").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "Use this the first time you analyse a data set.").FontSize(FontSmall).TextColor(t.TextMuted)
 					Field(c, "Project name", func() {
 						name := ui.TextInput(c.Key("new-name"), &s.newName).Placeholder("e.g. ZIKV virion RNA").Label("Project name")
 						if s.focusName { // the palette's New project
@@ -187,8 +187,8 @@ func (a *App) startView(c *ui.Context) {
 						}
 					})
 					Field(c, "Save in", func() {
-						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, nameOr(s.newParent, "Choose a folder")).FontSize(12).SingleLine().Grow(1).Shrink(1).MinWidth(0)
+						ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, nameOr(s.newParent, "Choose a folder")).FontSize(FontSmall).SingleLine().Grow(1).Shrink(1).MinWidth(0)
 							if ui.Button(c, "Change…").Tooltip("Choose the folder the project folder is created in").Clicked() {
 								a.Go(func() func() {
 									path := PickFolder("Where should the project folder be created?")
@@ -202,8 +202,8 @@ func (a *App) startView(c *ui.Context) {
 						})
 					})
 					Field(c, "Raw data folder (optional)", func() {
-						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, nameOr(s.dataFolder, "Not chosen — you can add data later")).FontSize(12).SingleLine().Grow(1).Shrink(1).MinWidth(0)
+						ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, nameOr(s.dataFolder, "Not chosen — you can add data later")).FontSize(FontSmall).SingleLine().Grow(1).Shrink(1).MinWidth(0)
 							if s.dataFolder != "" && ui.Button(c, "Clear").Clicked() {
 								s.dataFolder = ""
 							}
@@ -223,23 +223,23 @@ func (a *App) startView(c *ui.Context) {
 						})
 					})
 					if s.dataFolder != "" {
-						ui.Text(c, "After the project is created, its files are matched to samples and references for you to review.").FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, "After the project is created, its files are matched to samples and references for you to review.").FontSize(FontSmall).TextColor(t.TextMuted)
 					}
 					name := strings.TrimSpace(s.newName)
 					if name != "" && s.newParent != "" {
-						ui.Text(c, "Creates the folder "+filepath.Join(s.newParent, ProjectFolderName(name))).FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, "Creates the folder "+filepath.Join(s.newParent, ProjectFolderName(name))).FontSize(FontSmall).TextColor(t.TextMuted)
 					}
-					ui.Row(c).Gap(8).Justify(ui.End).AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Gap(Space2).Justify(ui.End).AlignItems(ui.Center).Children(func() {
 						ready := name != "" && s.newParent != "" && !s.creating && !s.preparing
 						// Say what the disabled button waits for.
 						switch {
 						case s.creating:
 						case s.preparing:
-							ui.Text(c, "Waiting for the runtime to be ready.").FontSize(12).TextColor(t.TextMuted)
+							ui.Text(c, "Waiting for the runtime to be ready.").FontSize(FontSmall).TextColor(t.TextMuted)
 						case name == "":
-							ui.Text(c, "Enter a project name to create it.").FontSize(12).TextColor(t.TextMuted)
+							ui.Text(c, "Enter a project name to create it.").FontSize(FontSmall).TextColor(t.TextMuted)
 						case s.newParent == "":
-							ui.Text(c, "Choose where to save it.").FontSize(12).TextColor(t.TextMuted)
+							ui.Text(c, "Choose where to save it.").FontSize(FontSmall).TextColor(t.TextMuted)
 						}
 						if ui.PrimaryButton(c, "Create project").Disabled(!ready).Clicked() {
 							a.create(newProjectPath(s.newParent, name), name)
@@ -248,14 +248,14 @@ func (a *App) startView(c *ui.Context) {
 				}).Grow(1).Basis(360)
 				card(c, "Open an existing project", func() {
 					ui.Text(c, "Continue a project made earlier with HYB2 Desktop. Choose its folder — the one whose name ends in "+
-						ProjectSuffix+" and that contains project.json.").FontSize(12).TextColor(t.TextMuted)
-					ui.Row(c).Gap(8).Children(func() {
+						ProjectSuffix+" and that contains project.json.").FontSize(FontSmall).TextColor(t.TextMuted)
+					ui.Row(c).Gap(Space2).Children(func() {
 						if ui.PrimaryButton(c, "Choose project folder…").Disabled(s.preparing).Clicked() {
 							a.chooseProject()
 						}
 					})
 					ui.Collapsible(c.Key("open-paste"), "Or paste a folder path", &s.pasteOpen, func() {
-						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 							ui.TextInput(c.Key("open-path"), &s.openPath).Placeholder("/path/to/study" + ProjectSuffix).Label("Project folder").Grow(1)
 							if ui.Button(c, "Open").Disabled(s.preparing || strings.TrimSpace(s.openPath) == "").Clicked() {
 								a.Open(s.openPath)
@@ -269,16 +269,16 @@ func (a *App) startView(c *ui.Context) {
 			}
 			card(c, "Recent projects", func() {
 				if len(a.recent) == 0 {
-					ui.Text(c, "None yet. Projects you create or open are listed here for one-click reopening.").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "None yet. Projects you create or open are listed here for one-click reopening.").FontSize(FontSmall).TextColor(t.TextMuted)
 				}
 				for _, r := range a.recent {
 					r := r
-					ui.Row(c.Key(r.Path)).Gap(8).Children(func() {
+					ui.Row(c.Key(r.Path)).Gap(Space2).Children(func() {
 						ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 							if ui.Link(c, nameOr(r.Name, filepath.Base(r.Path)), "").Disabled(s.preparing).Clicked() {
 								a.Open(r.Path)
 							}
-							ui.Text(c, r.Path).FontSize(12).TextColor(t.TextMuted).SingleLine()
+							ui.Text(c, r.Path).FontSize(FontSmall).TextColor(t.TextMuted).SingleLine()
 						})
 						if ui.Button(c, "Forget").Tooltip("Remove from this list (the folder is not deleted)").Clicked() {
 							a.forget(r.Path)
@@ -288,7 +288,7 @@ func (a *App) startView(c *ui.Context) {
 			})
 			a.exampleStrip(c)
 			if s.runtime != "" {
-				ui.Text(c, s.runtime).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, s.runtime).FontSize(FontSmall).TextColor(t.TextMuted)
 			}
 		})
 	})
@@ -353,7 +353,7 @@ func (a *App) exampleStrip(c *ui.Context) {
 	t := c.Theme()
 	s := &a.start
 	card(c, "", func() {
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Row(c).Gap(Space3).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, "No data yet? Try the ZIKV virion example, ZAFR vs ZASI.").Grow(1).Shrink(1).MinWidth(0)
 			if ui.Button(c, "Try example").Tooltip("Create a project with the example data in the folder under Save in").
 				Disabled(s.creating || s.preparing || s.newParent == "").Clicked() {
@@ -361,8 +361,8 @@ func (a *App) exampleStrip(c *ui.Context) {
 			}
 		})
 		ui.Collapsible(c.Key("start-example"), "What the example contains", &s.exampleOpen, func() {
-			ui.Text(c, "1-in-10 subset · 4 replicates").FontSize(12).Bold().TextColor(t.Accent)
-			ui.Text(c, exampleSummary).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "1-in-10 subset · 4 replicates").FontSize(FontSmall).Bold().TextColor(t.Accent)
+			ui.Text(c, exampleSummary).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 	})
 }
@@ -400,9 +400,9 @@ func (a *App) createExample(path string) {
 // card is a titled panel.
 func card(c *ui.Context, title string, body func()) ui.Element {
 	t := c.Theme()
-	return ui.Column(c).Padding(16).Gap(10).Radius(10).Background(t.Background).Border(1, t.Border).Children(func() {
+	return ui.Column(c).Padding(Space4).Gap(Space3).Radius(RadiusLarge).Background(t.Background).Border(1, t.Border).Children(func() {
 		if title != "" {
-			ui.Text(c, title).FontSize(16).Bold()
+			ui.Text(c, title).FontSize(FontTitle).Bold()
 		}
 		body()
 	})
@@ -500,8 +500,8 @@ func (a *App) prefsDialog(c *ui.Context) {
 	t := c.Theme()
 	p := &a.prefs
 	ui.Modal(c, &a.prefsOpen, func() {
-		ui.Column(c).Width(420).Gap(12).Children(func() {
-			ui.Text(c, "Preferences").FontSize(18).Bold()
+		ui.Column(c).Width(420).Gap(Space3).Children(func() {
+			ui.Text(c, "Preferences").FontSize(FontTitle).Bold()
 			switch {
 			case p.loading:
 				ui.Text(c, "Loading…").TextColor(t.TextMuted)
@@ -511,26 +511,26 @@ func (a *App) prefsDialog(c *ui.Context) {
 				return
 			}
 			ui.Text(c, "Resource budget for tasks").Bold()
-			ui.Text(c, "This computer: "+describeComputer(p)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "This computer: "+describeComputer(p)).FontSize(FontSmall).TextColor(t.TextMuted)
 			speed := "Time estimates use a typical rate until a sample has finished on this computer."
 			if p.measured > 0 {
 				speed = fmt.Sprintf("Time estimates use the speed measured on this computer (%s).", dataPlural(int(p.measured), "finished sample", "finished samples"))
 			}
 			ui.Text(c, "By default tasks may use every CPU and 75% of the memory; tasks that do not fit wait in the queue. "+
-				"One sample maps at a time with all CPUs while the next prepares its reads. "+speed).FontSize(12).TextColor(t.TextMuted)
+				"One sample maps at a time with all CPUs while the next prepares its reads. "+speed).FontSize(FontSmall).TextColor(t.TextMuted)
 			maxCPU := p.sysCPU
 			if maxCPU < 1 {
 				maxCPU = 1
 			}
-			ui.Row(c).Gap(8).Children(func() {
+			ui.Row(c).Gap(Space2).Children(func() {
 				ui.Text(c, "CPUs").Width(120)
 				ui.NumberInput(c.Key("cpu"), &p.cpu, 1, maxCPU, 1).Width(120)
 			})
-			ui.Row(c).Gap(8).Children(func() {
+			ui.Row(c).Gap(Space2).Children(func() {
 				ui.Text(c, "Memory (MB)").Width(120)
 				ui.NumberInput(c.Key("mem"), &p.memMB, 512, maxFloat(p.sysMem, 512), 256).Width(160)
 			})
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			ui.Row(c).Gap(Space2).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Use defaults").Disabled(!p.custom).Clicked() {
 					a.savePrefs(core.Obj{"budget": nil})
 				}
@@ -563,7 +563,7 @@ const (
 func (a *App) lookupPrefs(c *ui.Context) {
 	t := c.Theme()
 	p := &a.prefs
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(Space3).AlignItems(ui.Center).Children(func() {
 		on := p.lookup
 		ui.Switch(c.Key("pref-lookup"), &on).Label("Allow external public-data lookups (RNAcentral)").OnClick(func() {
 			switch {
@@ -577,13 +577,13 @@ func (a *App) lookupPrefs(c *ui.Context) {
 		})
 		ui.Text(c, "Allow external public-data lookups (RNAcentral)").Bold().Grow(1).Shrink(1).MinWidth(0)
 	})
-	ui.Text(c, lookupOffText).FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, lookupOffText).FontSize(FontSmall).TextColor(t.TextMuted)
 	if p.lookupNotice {
-		ui.Column(c.Key("pref-lookup-notice")).Gap(8).Padding(10).Radius(8).Background(t.Warning.Alpha(0.12)).Children(func() {
+		ui.Column(c.Key("pref-lookup-notice")).Gap(Space2).Padding(10).Radius(RadiusSmall).Background(t.Warning.Alpha(0.12)).Children(func() {
 			ui.Text(c, "Before you turn this on").Bold()
-			ui.Text(c, lookupNoticeText).FontSize(12)
-			ui.Text(c, lookupCaveatText).FontSize(12)
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			ui.Text(c, lookupNoticeText).FontSize(FontSmall)
+			ui.Text(c, lookupCaveatText).FontSize(FontSmall)
+			ui.Row(c).Gap(Space2).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Not now").Clicked() {
 					p.lookupNotice = false
 				}
@@ -595,7 +595,7 @@ func (a *App) lookupPrefs(c *ui.Context) {
 			})
 		})
 	}
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 		if ui.Button(c, "Test connection").Disabled(!p.lookup || p.testing || p.saving > 0).Tooltip("Start the RNAcentral helper on this computer and list its tools (RNAcentral itself is not contacted)").Clicked() {
 			a.testLookup()
 		}
@@ -620,7 +620,7 @@ func (a *App) lookupPrefs(c *ui.Context) {
 		if p.testErr {
 			color = t.Danger
 		}
-		ui.Text(c, p.testMsg).FontSize(12).TextColor(color)
+		ui.Text(c, p.testMsg).FontSize(FontSmall).TextColor(color)
 	}
 }
 

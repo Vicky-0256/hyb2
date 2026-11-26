@@ -75,10 +75,10 @@ func (a *App) toastsView(c *ui.Context) {
 	}
 	still := a.reduceMotion(c)
 	ui.ToastViewportBase(c, func(viewport ui.Element, toasts []ui.Toast) {
-		viewport.Padding(0, 24, 24, 0).AlignItems(ui.End).Gap(8)
+		viewport.Padding(0, 24, 24, 0).AlignItems(ui.End).Gap(Space2)
 		for _, ts := range toasts {
 			p := ui.ToastBase(c, ts)
-			box := p.Root.Row().AlignItems(ui.Center).Gap(16).Padding(10, 16).Radius(8).MaxWidth(width).
+			box := p.Root.Row().AlignItems(ui.Center).Gap(Space4).Padding(10, 16).Radius(RadiusSmall).MaxWidth(width).
 				Background(fill).TextColor(text).Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.25))
 			// it fades out at the end, unless motion is reduced
 			const fade = 200 * time.Millisecond
@@ -95,7 +95,7 @@ func (a *App) toastsView(c *ui.Context) {
 			box.Children(func() {
 				ui.Text(c, ts.Title).Shrink(1)
 				if ts.Action != "" {
-					p.ActionButton().Padding(4, 10).Radius(6).TextColor(t.Accent.Mix(text, 0.35)).Children(func() {
+					p.ActionButton().Padding(4, 10).Radius(RadiusSmall).TextColor(t.Accent.Mix(text, 0.35)).Children(func() {
 						ui.Text(c, ts.Action).Bold()
 					})
 				}
@@ -109,7 +109,7 @@ func (a *App) navigation(c *ui.Context) {
 	t := c.Theme()
 	page := a.Page
 	ui.Column(c).Width(184).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Column(c).Gap(8).Padding(14, 14, 10, 14).Children(func() {
+		ui.Column(c).Gap(Space2).Padding(14, 14, 10, 14).Children(func() {
 			Logo(c, 26)
 			ui.Text(c, a.Project.Name).Bold().MaxLines(2).Tooltip(a.Project.Path)
 		})
@@ -133,11 +133,13 @@ func (a *App) navigation(c *ui.Context) {
 func (a *App) topBar(c *ui.Context) {
 	t := c.Theme()
 	// it wraps in a narrow window rather than hiding its last buttons
-	ui.Row(c).Gap(8).Wrap().Padding(8, 12).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+	ui.Row(c).Gap(Space2).Wrap().Padding(Space2, Space3).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 		a.referencePicker(c)
 		a.genePicker(c)
 		a.selectionPicker(c)
-		ui.Spacer(c)
+		// the drop-downs take most of the free room; the rest pushes the
+		// buttons right
+		ui.Spacer(c).Grow(0.25)
 		// a narrow window drops it, as the web's header; known widths only,
 		// so that the bar does not wrap for a frame and move the page
 		if a.content.W > 0 && a.content.W+184 >= localChipWidth {
@@ -163,10 +165,11 @@ func (a *App) topBar(c *ui.Context) {
 	})
 }
 
-// barWidths are the top bar's drop-downs' widths (reference, RNA,
+// barWidths are the top bar's drop-downs' starting widths (reference, RNA,
 // samples) for the window's width, and whether their labels show: a narrow
 // window drops the labels so the bar keeps to one line; a wide one shows
-// more of the long RNA names.
+// more of the long RNA names. Each drop-down then grows into the bar's free
+// room, up to barPicker's cap.
 func (a *App) barWidths() (reference, rna, samples float32, labels bool) {
 	w := a.content.W + 184 // the window: the page and the navigation
 	switch {
@@ -176,6 +179,13 @@ func (a *App) barWidths() (reference, rna, samples float32, labels bool) {
 		return 140, 300, 260, true
 	}
 	return 110, 180, 210, true
+}
+
+// barPicker lets a top-bar drop-down start at width, grow into the bar's
+// free room up to maxWidth and give some back in a tight bar (the RNA one
+// grows twice as fast: its names are the longest).
+func barPicker(e ui.Element, width, maxWidth float32) ui.Element {
+	return e.Basis(width).Grow(1).Shrink(1).MinWidth(width * 0.75).MaxWidth(max(width, maxWidth))
 }
 
 func (a *App) referencePicker(c *ui.Context) {
@@ -200,7 +210,7 @@ func (a *App) referencePicker(c *ui.Context) {
 	if showLabel {
 		barLabel(c, "Reference")
 	}
-	ui.Select(c.Key("reference"), &current, labels).Label("Reference").Width(width).Tooltip("Reference: " + current).OnChange(func() {
+	barPicker(ui.Select(c.Key("reference"), &current, labels).Label("Reference"), width, 220).Tooltip("Reference: " + current).OnChange(func() {
 		a.Selected.ReferenceID = ids[current]
 		a.normalizeSelection()
 		a.saveUIState()
@@ -223,7 +233,7 @@ func (a *App) genePicker(c *ui.Context) {
 	if showLabel {
 		barLabel(c, "RNA")
 	}
-	ui.Select(c.Key("gene"), &gene, names).Label("RNA").Width(width).Tooltip(gene).OnChange(func() {
+	barPicker(ui.Select(c.Key("gene"), &gene, names).Label("RNA"), width, 420).Grow(2).Tooltip(gene).OnChange(func() {
 		a.Selected.Gene = gene
 		a.saveUIState()
 	})
@@ -249,7 +259,7 @@ func (a *App) selectionPicker(c *ui.Context) {
 	if showLabel {
 		barLabel(c, "Samples")
 	}
-	ui.Select(c.Key("selection"), &current, labels).Label("Samples").Width(width).Tooltip("The samples, all merged, a condition with its replicates merged or one sample, that QC, Explore and Structure show").OnChange(func() {
+	barPicker(ui.Select(c.Key("selection"), &current, labels).Label("Samples"), width, 360).Tooltip("The samples, all merged, a condition with its replicates merged or one sample, that QC, Explore and Structure show").OnChange(func() {
 		a.selectKey(keys[current])
 	})
 }
@@ -265,11 +275,11 @@ func (a *App) tasksDrawer(c *ui.Context) {
 		back := ui.Row(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Justify(ui.End).
 			Background(ui.RGBA(0, 0, 0, 0.25)).Modal()
 		back.Children(func() {
-			panel := ui.Column(c).Width(380).FillHeight().Padding(16).Gap(10).Background(t.Background).
+			panel := ui.Column(c).Width(380).FillHeight().Padding(Space4).Gap(Space3).Background(t.Background).
 				Role(ui.RoleDialog).Label("Tasks")
 			panel.Children(func() {
 				ui.Row(c).Children(func() {
-					ui.Text(c, "Tasks").FontSize(18).Bold().Grow(1)
+					ui.Text(c, "Tasks").FontSize(FontTitle).Bold().Grow(1)
 					if ui.Button(c, "Close").Clicked() {
 						a.drawerOpen = false
 					}
@@ -278,7 +288,7 @@ func (a *App) tasksDrawer(c *ui.Context) {
 				if len(tasks) == 0 {
 					ui.Text(c, "No tasks in this project yet.").TextColor(t.TextMuted)
 				}
-				ui.Scroll(c).Grow(1).Gap(8).Children(func() {
+				ui.Scroll(c).Grow(1).Gap(Space2).Children(func() {
 					for _, task := range tasks {
 						a.taskItem(c.Key(task.TaskID), task)
 					}
@@ -293,8 +303,8 @@ func (a *App) tasksDrawer(c *ui.Context) {
 
 func (a *App) taskItem(c *ui.Context, task model.Task) {
 	t := c.Theme()
-	ui.Column(c).Gap(4).Padding(8).Radius(8).Border(1, t.Border).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
+	ui.Column(c).Gap(Space1).Padding(Space2).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
+		ui.Row(c).Gap(Space2).Children(func() {
 			ui.Text(c, a.TaskLabel(task)).Bold().Grow(1).SingleLine()
 			StatusChip(c, task.Status)
 		})
@@ -305,9 +315,9 @@ func (a *App) taskItem(c *ui.Context, task model.Task) {
 		if task.FinishedAt != "" {
 			meta = append(meta, "finished "+FormatTime(task.FinishedAt))
 		}
-		ui.Text(c, strings.Join(meta, " · ")).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, strings.Join(meta, " · ")).FontSize(FontSmall).TextColor(t.TextMuted)
 		if e := task.ErrorText(); e != "" {
-			ui.Text(c, truncate(e, 400)).FontSize(12).TextColor(t.Danger)
+			ui.Text(c, truncate(e, 400)).FontSize(FontSmall).TextColor(t.Danger)
 		}
 		ui.Row(c).Gap(6).Children(func() {
 			if task.Active() && task.Status != "cancelling" {
@@ -361,7 +371,7 @@ func taskView(task model.Task) (label, page string, options map[string]any) {
 
 // barLabel names the top bar control after it.
 func barLabel(c *ui.Context, text string) {
-	ui.Text(c, text).FontSize(12).TextColor(c.Theme().TextMuted)
+	ui.Text(c, text).FontSize(FontSmall).TextColor(c.Theme().TextMuted)
 }
 
 // StatusChip shows a task or stage status.
@@ -408,7 +418,7 @@ func ProgressBar(c *ui.Context, task model.Task) {
 				detail += " · " + task.Progress.Stage
 			}
 		}
-		ui.Text(c, detail).Tooltip(detail).FontSize(12).TextColor(t.TextMuted).SingleLine()
+		ui.Text(c, detail).Tooltip(detail).FontSize(FontSmall).TextColor(t.TextMuted).SingleLine()
 	} else if task.Progress != nil {
 		detail := task.Progress.Stage
 		if task.Progress.Detail != "" {
@@ -420,9 +430,9 @@ func ProgressBar(c *ui.Context, task model.Task) {
 		if task.SecondsLeft != nil {
 			detail += " · about " + FormatDuration(*task.SecondsLeft) + " left"
 		}
-		ui.Text(c, detail).FontSize(12).TextColor(t.TextMuted).SingleLine()
+		ui.Text(c, detail).FontSize(FontSmall).TextColor(t.TextMuted).SingleLine()
 	} else if task.Status == "queued" {
-		ui.Text(c, "Waiting for CPU or memory budget").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Waiting for CPU or memory budget").FontSize(FontSmall).TextColor(t.TextMuted)
 	}
 }
 
@@ -484,19 +494,31 @@ func truncate(s string, n int) string {
 // Field shows a visible label above a control (labels set with
 // Element.Label are for assistive technology only).
 func Field(c *ui.Context, label string, control func()) {
-	ui.Column(c).Gap(4).Children(func() {
-		ui.Text(c, label).FontSize(12).Bold().TextColor(c.Theme().TextMuted)
+	ui.Column(c).Gap(Space1).Children(func() {
+		ui.Text(c, label).FontSize(FontSmall).Bold().TextColor(c.Theme().TextMuted)
 		control()
 	})
 }
 
 // PageHeader is the title and subtitle every page starts with.
 func PageHeader(c *ui.Context, title, subtitle string) {
-	ui.Column(c).Gap(4).Children(func() {
-		ui.Text(c, title).FontSize(24).Bold()
+	ui.Column(c).Gap(Space1).Children(func() {
+		ui.Text(c, title).FontSize(FontPage).Bold()
 		if subtitle != "" {
 			ui.Text(c, subtitle).TextColor(c.Theme().TextMuted)
 		}
+	})
+}
+
+// PageHeaderActions is PageHeader with the page's buttons in one row at
+// its right, the primary one last; the row moves under the title, whole,
+// in a narrow window.
+func PageHeaderActions(c *ui.Context, title, subtitle string, actions func()) {
+	ui.Row(c).Gap(Space4).Wrap().AlignItems(ui.Start).Children(func() {
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Basis(240).Children(func() {
+			PageHeader(c, title, subtitle)
+		})
+		ui.Row(c).Gap(Space2).Wrap().AlignItems(ui.Center).Children(actions)
 	})
 }
 
@@ -510,8 +532,8 @@ type placeholder struct {
 func (p *placeholder) Show() {}
 
 func (p *placeholder) View(c *ui.Context) {
-	ui.Column(c).Fill().Padding(24).Gap(8).Children(func() {
-		ui.Text(c, p.info.Title).FontSize(24).Bold()
+	PageRoot(c).Children(func() {
+		ui.Text(c, p.info.Title).FontSize(FontPage).Bold()
 		ui.Text(c, "This page is being rebuilt in the native interface.").TextColor(c.Theme().TextMuted)
 	})
 }

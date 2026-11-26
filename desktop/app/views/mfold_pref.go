@@ -123,8 +123,8 @@ func (a *App) mfoldPrefs(c *ui.Context) {
 	ui.Text(c, "mfold (COMRADES folding program)").Bold()
 	ui.Text(c, "Structure › COMRADES can fit the chimera stems with mfold 3.6 instead of ViennaRNA. mfold applies them as forced "+
 		"base pairs (the hybrid-ss-min of OligoArrayAux ignores them). It is free for academic use but not bundled with HYB2. "+
-		"Leave the path empty to search PATH and the usual conda and Homebrew locations.").FontSize(12).TextColor(t.TextMuted)
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		"Leave the path empty to search PATH and the usual conda and Homebrew locations.").FontSize(FontSmall).TextColor(t.TextMuted)
+	ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Path").Width(120)
 		ui.TextInput(c.Key("pref-mfold"), &p.mfold).Placeholder("search automatically").Label("mfold path").Grow(1)
 	})
@@ -133,8 +133,8 @@ func (a *App) mfoldPrefs(c *ui.Context) {
 	if bad {
 		color = t.Danger
 	}
-	ui.Text(c, status).FontSize(12).TextColor(color)
-	ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+	ui.Text(c, status).FontSize(FontSmall).TextColor(color)
+	ui.Row(c).Gap(Space2).Justify(ui.End).Children(func() {
 		if ui.Button(c.Key("pref-mfold-search"), "Search automatically").Disabled(stored == "" && strings.TrimSpace(p.mfold) == "").Clicked() {
 			p.mfold = ""
 			a.savePrefs(core.Obj{"mfold": nil})

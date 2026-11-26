@@ -106,7 +106,7 @@ func (p *reportPage) choicesView(c *ui.Context) {
 			Placeholder("e.g. Which ZIKV genome contacts differ between the African and Asian lineages?").Height(64)
 	})
 	if n := len([]rune(s.purpose)); n > rpPurposeMax {
-		ui.Text(c, fmt.Sprintf("%d characters: the exports keep the first %d.", n, rpPurposeMax)).FontSize(12).TextColor(t.Warning)
+		ui.Text(c, fmt.Sprintf("%d characters: the exports keep the first %d.", n, rpPurposeMax)).FontSize(FontSmall).TextColor(t.Warning)
 	}
 	ui.Text(c, "Each step has a fixed id (S01 to S13) shared with the result packages. A step that did not run shows “not_run”; its results show —, never 0. "+
 		"Untick a step to make a selected-results report: the page, the HTML and PDF report and both packages then leave it out and say so.").
@@ -119,8 +119,8 @@ func (p *reportPage) choicesView(c *ui.Context) {
 				ids = append(ids, row.ID)
 			}
 		}
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(6, 10).Radius(6).Background(t.Warning.Alpha(0.12)).Children(func() {
-			ui.Text(c, "Selected results report: "+strings.Join(ids, ", ")+" left out.").FontSize(12).Grow(1)
+		ui.Row(c).Gap(Space3).AlignItems(ui.Center).Padding(6, 10).Radius(RadiusSmall).Background(t.Warning.Alpha(0.12)).Children(func() {
+			ui.Text(c, "Selected results report: "+strings.Join(ids, ", ")+" left out.").FontSize(FontSmall).Grow(1)
 			if ui.Button(c, "Include every step").Clicked() {
 				for _, kept := range s.keep {
 					*kept = true
@@ -130,14 +130,14 @@ func (p *reportPage) choicesView(c *ui.Context) {
 	}
 	ui.Column(c).Gap(2).Children(func() {
 		for _, row := range p.steps {
-			ui.Row(c.Key("step-"+row.Key)).Gap(10).AlignItems(ui.Center).Padding(3, 0).Children(func() {
+			ui.Row(c.Key("step-"+row.Key)).Gap(Space3).AlignItems(ui.Center).Padding(3, 0).Children(func() {
 				ui.Checkbox(c.Key("keep"), s.keepBox(row.Key), row.ID+" "+row.Title).Disabled(row.Key == "parse").
 					Label("Include " + row.ID + " " + row.Title + " in the report")
 				if !*s.keepBox(row.Key) {
-					ui.Text(c, "left out").FontSize(12).Italic().TextColor(t.Warning)
+					ui.Text(c, "left out").FontSize(FontSmall).Italic().TextColor(t.Warning)
 				}
-				ui.Text(c, row.Status).FontSize(12).TextColor(t.TextMuted)
-				ui.Text(c, row.Detail).FontSize(12).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0).SingleLine()
+				ui.Text(c, row.Status).FontSize(FontSmall).TextColor(t.TextMuted)
+				ui.Text(c, row.Detail).FontSize(FontSmall).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0).SingleLine()
 			})
 		}
 	})
@@ -164,7 +164,7 @@ func (p *reportPage) packageView(c *ui.Context, d *reportData) {
 			return func() { s.files, s.filesKey, s.filesBusy = files, key, false }
 		})
 	}
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Row(c).Gap(Space3).AlignItems(ui.Center).Wrap().Children(func() {
 		ui.Segmented(c.Key("pkg-audience"), &s.audience, "For AI", "For further analysis").Label("Package")
 		ui.Spacer(c)
 		if s.audience == 0 && ui.Button(c, "Copy AI summary (report.md)").Tooltip("The template report.md, with your purpose and step selection").Clicked() {
@@ -189,9 +189,9 @@ func (p *reportPage) packageView(c *ui.Context, d *reportData) {
 	ui.Text(c, map[string]string{
 		"ai":       "A layered context package for an AI assistant: README, a template report.md (no language model), summary.json with every result id, status and unit, data dictionary, provenance, evidence and bounded tables.",
 		"analysis": "Tables with a data dictionary for scripts and other tools: full tables, structures as dot-bracket and JSON, and the figure SVGs.",
-	}[audience]).FontSize(12).TextColor(t.TextMuted)
+	}[audience]).FontSize(FontSmall).TextColor(t.TextMuted)
 	if s.filesKey != key {
-		ui.Text(c, "Listing the files…").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Listing the files…").FontSize(FontSmall).TextColor(t.TextMuted)
 	}
 	left := 0
 	ui.Column(c).Gap(2).Children(func() {
@@ -200,12 +200,12 @@ func (p *reportPage) packageView(c *ui.Context, d *reportData) {
 			if !*box && !rpRequiredFiles[f.Path] {
 				left++
 			}
-			ui.Row(c.Key(audience+"/"+f.Path)).Gap(10).AlignItems(ui.Center).Padding(2, 0).Children(func() {
+			ui.Row(c.Key(audience+"/"+f.Path)).Gap(Space3).AlignItems(ui.Center).Padding(2, 0).Children(func() {
 				ui.Checkbox(c.Key("include"), box, f.Path).Disabled(rpRequiredFiles[f.Path]).Label("Include " + f.Path)
 				if f.Bytes > 0 {
-					ui.Text(c, dataFormatBytes(int64(f.Bytes))).FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, dataFormatBytes(int64(f.Bytes))).FontSize(FontSmall).TextColor(t.TextMuted)
 				}
-				ui.Text(c, f.Description).FontSize(12).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0).SingleLine()
+				ui.Text(c, f.Description).FontSize(FontSmall).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0).SingleLine()
 			})
 		}
 	})

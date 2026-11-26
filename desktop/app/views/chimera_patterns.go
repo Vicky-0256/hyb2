@@ -124,16 +124,16 @@ func chimeraDiagram(c *ui.Context, code string, width float32) {
 func chimeraGuide(c *ui.Context, open *bool) {
 	t := c.Theme()
 	ui.Collapsible(c.Key("chimera-guide"), "How to read these patterns", open, func() {
-		ui.Column(c).Gap(10).Children(func() {
+		ui.Column(c).Gap(Space3).Children(func() {
 			ui.Text(c, "5′ and 3′ identify the two arms in the read. Their positions are shown on the reference, not as a predicted fold. Shared boundaries follow the source coordinate comparisons exactly.").
 				FontSize(12).TextColor(t.TextMuted)
-			ui.Row(c).Gap(12).Wrap().Children(func() {
+			ui.Row(c).Gap(Space3).Wrap().Children(func() {
 				for _, p := range chimeraPatterns {
-					ui.Column(c.Key(p.code)).Gap(4).Padding(12).Radius(6).Border(1, t.Border).Grow(1).Basis(230).MinWidth(220).Children(func() {
+					ui.Column(c.Key(p.code)).Gap(Space1).Padding(Space3).Radius(RadiusSmall).Border(1, t.Border).Grow(1).Basis(230).MinWidth(220).Children(func() {
 						ui.Text(c, patternCodeLabel(p.code)).FontSize(11).Bold().TextColor(t.TextMuted)
 						ui.Text(c, p.name).Bold()
 						chimeraDiagram(c, p.code, 230)
-						ui.Text(c, p.meaning).FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, p.meaning).FontSize(FontSmall).TextColor(t.TextMuted)
 					})
 				}
 			})

@@ -101,7 +101,7 @@ func TestCompareResultsAndActions(t *testing.T) {
 	a, f := openCS(t)
 	explore := &csRecordPage{a: a}
 	a.RegisterPage("explore", explore)
-	tt := ui.NewTester(a.View, 1100, 1400)
+	tt := ui.NewTester(a.View, 1100, 1900)
 	a.Navigate("compare", nil)
 	csSettle(a, tt)
 	p := a.PageFor("compare").(*comparePage)

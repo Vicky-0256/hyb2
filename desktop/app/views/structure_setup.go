@@ -236,12 +236,11 @@ func (p *structurePage) workflowField(c *ui.Context) {
 				"alpha, beta and pseudoknot settings. Same-RNA regions are folded as two excised fragments, with a strand break " +
 				"and no intervening reference sequence or artificial spacer."
 		}
-		ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 		if cpl && wf == stWorkflowHomodimer {
 			// the web filters CPLcofold's rows to homodimers; the desktop
 			// CPLcofold reads no overlap score
-			ui.Text(c, "Desktop CPLcofold has no homodimer filter: every eligible HYB row contributes, not only those with overlap score ≥ 5.").
-				FontSize(12).Padding(8).Radius(6).Background(t.Warning.Alpha(0.10))
+			Notice(c, "Desktop CPLcofold has no homodimer filter: every eligible HYB row contributes, not only those with overlap score ≥ 5.", t.Warning)
 		}
 	})
 }
@@ -470,9 +469,9 @@ func (p *structurePage) previewPanel(c *ui.Context, pl foldPlan) {
 		title += " · " + stShort(label, 48)
 	}
 	ui.Collapsible(c.Key("st-preview"), title, &s.previewOpen, func() {
-		ui.Column(c).Gap(8).Padding(6, 0, 0, 0).Children(func() {
+		ui.Column(c).Gap(Space2).Padding(6, 0, 0, 0).Children(func() {
 			if len(pl.lengths) == 0 {
-				ui.Text(c, "Waiting for a sequence").FontSize(12).Bold()
+				ui.Text(c, "Waiting for a sequence").FontSize(FontSmall).Bold()
 				ui.Text(c, "Reference regions require a mapped FASTA. A HYB sequence can be selected from a record, or you can paste A, C, G and U directly.").
 					FontSize(12).TextColor(t.TextMuted)
 				return
@@ -480,7 +479,7 @@ func (p *structurePage) previewPanel(c *ui.Context, pl foldPlan) {
 			parts, _, loading, err := p.prepared(pl, true)
 			switch {
 			case err != "":
-				ui.Text(c, "Could not read the reference sequence: "+err).FontSize(12).TextColor(t.Danger)
+				ui.Text(c, "Could not read the reference sequence: "+err).FontSize(FontSmall).TextColor(t.Danger)
 				return
 			case loading || len(parts) == 0:
 				ui.Spinner(c).Label("Loading the reference sequence…")
@@ -489,7 +488,7 @@ func (p *structurePage) previewPanel(c *ui.Context, pl foldPlan) {
 			for i, part := range parts {
 				p.previewPart(c.Key(fmt.Sprint("st-prep-", i)), part, len(parts) > 1)
 			}
-			ui.Row(c).Gap(8).Wrap().Children(func() {
+			ui.Row(c).Gap(Space2).Wrap().Children(func() {
 				if ui.Button(c, "Copy sequence").Clicked() {
 					texts := make([]string, len(parts))
 					for i, part := range parts {
@@ -517,7 +516,7 @@ func (p *structurePage) previewPanel(c *ui.Context, pl foldPlan) {
 			})
 			if stCPL(p.engine) && len(parts) == 1 {
 				run := p.localRun(pl)
-				ui.Text(c, "Local command").FontSize(12).Bold().TextColor(t.TextMuted)
+				ui.Text(c, "Local command").FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 				ui.Text(c, stLocalCommand(run, nameOr(p.setup.localFASTA, stLocalFASTA), stLocalMatrix)).Font("monospace").FontSize(11).Selectable()
 				if run.guided {
 					ui.Text(c, "The bonus matrix is built when the fold runs: after Run fold, “Local inputs…” under CPLfold candidates saves it with the FASTA.").
@@ -551,25 +550,25 @@ func (p *structurePage) previewPerLine(length int) int {
 // previewPart is one prepared sequence: its layout and aligned sequence.
 func (p *structurePage) previewPart(c *ui.Context, part stPrepared, titled bool) {
 	t := c.Theme()
-	ui.Column(c).Gap(4).Children(func() {
+	ui.Column(c).Gap(Space1).Children(func() {
 		if titled {
-			ui.Text(c, part.title).FontSize(12).Bold()
+			ui.Text(c, part.title).FontSize(FontSmall).Bold()
 		}
 		if len(part.segments) > 0 {
 			ui.Text(c, "Prepared reference layout").FontSize(11).Bold().TextColor(t.TextMuted)
 			// one segment a line in the narrow form, the spacer between
 			for i, sg := range part.segments {
 				if i > 0 && part.linker {
-					ui.Text(c, "100 nt A/U spacer").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "100 nt A/U spacer").FontSize(FontSmall).TextColor(t.TextMuted)
 				}
-				ui.Text(c, sg.rna+" "+stRange(sg.from, sg.to)+" → prepared "+stRange(sg.prepFrom, sg.prepTo)).FontSize(12)
+				ui.Text(c, sg.rna+" "+stRange(sg.from, sg.to)+" → prepared "+stRange(sg.prepFrom, sg.prepTo)).FontSize(FontSmall)
 			}
 		}
 		if n := part.cutpoint; n > 0 {
 			ui.Text(c, fmt.Sprintf("RNA A: 1–%s · RNA B: %s–%s · chain break after A (coordinates exclude &).",
-				FormatNumber(int64(n)), FormatNumber(int64(n+1)), FormatNumber(int64(len(part.seq))))).FontSize(12).TextColor(t.TextMuted)
+				FormatNumber(int64(n)), FormatNumber(int64(n+1)), FormatNumber(int64(len(part.seq))))).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
-		ui.Column(c).Padding(8, 10).Radius(6).Background(t.Surface).Children(func() {
+		ui.Column(c).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Surface).Children(func() {
 			ui.Scroll(c.Key("seq")).MaxHeight(220).Children(func() {
 				for i, line := range stSequenceLines(part.seq, part.cutpoint, p.previewPerLine(len(part.seq))) {
 					ui.Text(c.Key(fmt.Sprint(i)), line).Font("monospace").FontSize(11).SingleLine()
@@ -815,7 +814,7 @@ func (p *structurePage) evidenceProvenance(c *ui.Context, a *structureResult) {
 	if len(used) == 0 {
 		return
 	}
-	ui.Text(c, "HYB evidence from "+p.evidenceNames(e)+".").FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, "HYB evidence from "+p.evidenceNames(e)+".").FontSize(FontSmall).TextColor(t.TextMuted)
 	// as the web's, against the evidence the form would fold with now:
 	// none for a form set to fold without chimeras
 	current := p.evidenceIDs()
@@ -828,8 +827,8 @@ func (p *structurePage) evidenceProvenance(c *ui.Context, a *structureResult) {
 	if len(now) == 0 || slices.Equal(used, now) {
 		return
 	}
-	ui.Text(c, "The HYB evidence has changed since this fold: it would now come from "+p.sampleNames(current)+
-		". Run again to update the structure.").FontSize(12).Padding(8).Radius(6).Background(t.Warning.Alpha(0.12))
+	Notice(c, "The HYB evidence has changed since this fold: it would now come from "+p.sampleNames(current)+
+		". Run again to update the structure.", t.Warning)
 }
 
 // stUsesHYB: the result was folded with the samples' chimeras (CPLfold

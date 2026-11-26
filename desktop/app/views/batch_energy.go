@@ -190,13 +190,13 @@ func (p *explorePage) batchEnergyView(c *ui.Context) {
 	p.loadBatchInputs(sample)
 	hasReference := sample != "" && p.batchHasReference(sample)
 	ui.Scroll(c.Key("be-scroll")).Grow(1).Children(func() {
-		ui.Column(c).Gap(12).Children(func() {
+		ui.Column(c).Gap(Space3).Children(func() {
 			Card(c, "HYB binding energies", func() {
 				ui.Text(c, "Recalculate column 3 (ΔG of the two arms, kcal/mol, 37 °C) of one sample's .hyb from its reference's arm sequences. "+
 					"The task writes an updated HYB, an audit and its parameters to its run folder; the sample's file and index stay unchanged.").
 					FontSize(12).TextColor(t.TextMuted)
 				running := cmpTaskRows(c, p.a, "batch_energy")
-				ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+				ui.Row(c).Gap(Space3).Wrap().AlignItems(ui.End).Children(func() {
 					picker(c, "be-sample", "Sample", &s.sample, labels, 180)
 					names := make([]string, len(batchEngines))
 					for i, e := range batchEngines {
@@ -216,12 +216,12 @@ func (p *explorePage) batchEnergyView(c *ui.Context) {
 				if filtered {
 					note += " Records: " + nameOr(describeFilters(p.ix.applied), "the Interactions filters (none set: every record)") + "."
 				}
-				ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 				status := "Unmapped, antisense, ambiguous, over-limit or unselected rows retain their original energy and are listed in the audit."
 				if !hasReference {
 					status = batchNoReference
 				}
-				ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, status).FontSize(FontSmall).TextColor(t.TextMuted)
 				if s.err != "" {
 					errorLine(c, s.err)
 				}
@@ -287,10 +287,10 @@ func (p *explorePage) batchEnergyResultCard(c *ui.Context) {
 		return
 	}
 	Card(c, "", func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
-				ui.Text(c, p.a.TaskLabel(task)).FontSize(16).Bold()
-				ui.Text(c, "Finished "+FormatTime(task.FinishedAt)+" · "+task.TaskID).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, p.a.TaskLabel(task)).FontSize(FontTitle).Bold()
+				ui.Text(c, "Finished "+FormatTime(task.FinishedAt)+" · "+task.TaskID).FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 			base := batchEnergyBase(res)
 			if path := res.Outputs["hyb"]; path != "" && ui.Button(c, "Save updated HYB…").Clicked() {
@@ -301,7 +301,7 @@ func (p *explorePage) batchEnergyResultCard(c *ui.Context) {
 			}
 		})
 		if res.Message != "" {
-			ui.Text(c, res.Message).FontSize(12)
+			ui.Text(c, res.Message).FontSize(FontSmall)
 		}
 		if dir := filepath.Dir(output); dir != "" {
 			ui.Text(c, "Files: "+strings.Join([]string{"energies.hyb", "audit.tsv", "parameters.json", batchEnergyBase(res) + ".zip"}, ", ")+" in "+dir).

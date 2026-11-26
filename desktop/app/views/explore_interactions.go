@@ -479,28 +479,30 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 		s.inputErr = ""
 		s.applied = f
 	}
-	ui.Column(c).Grow(1).Gap(12).Children(func() {
-		ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+	width := p.pageWidth()
+	ui.Column(c).Grow(1).Gap(Space3).Children(func() {
+		filterGrid(c, width, 9, 1, func() {
 			one, two := "RNA", "Partner"
 			if s.applied.oriented() {
 				one, two = "Arm 1 RNA", "Arm 2 RNA"
 			}
-			picker(c, "ix-gene1", one, &s.gene1, genes, 150).OnChange(s.applyPickers)
-			picker(c, "ix-gene2", two, &s.gene2, genes, 150).OnChange(s.applyPickers)
-			picker(c, "ix-scope", "Interaction type", &s.scope, scopeLabels, 220).OnChange(s.applyPickers)
-			p.patternPicker(c, "ix-type", &s.typ, 230, s.applyPickers)
-			picker(c, "ix-order", "Sort by", &s.order, orderLabels, 150)
-			picker(c, "ix-count-mode", "Count mode", &s.countMode, countModes, 140)
+			picker(c, "ix-gene1", one, &s.gene1, genes, 0).OnChange(s.applyPickers)
+			picker(c, "ix-gene2", two, &s.gene2, genes, 0).OnChange(s.applyPickers)
+			picker(c, "ix-scope", "Interaction type", &s.scope, scopeLabels, 0).OnChange(s.applyPickers)
+			p.patternPicker(c, "ix-type", &s.typ, 0, s.applyPickers)
+			picker(c, "ix-order", "Sort by", &s.order, orderLabels, 0)
+			picker(c, "ix-count-mode", "Count mode", &s.countMode, countModes, 0)
 			Field(c, "Search", func() {
-				ui.TextInput(c.Key("ix-search"), &s.search).Label("Search").Placeholder("Search ID or RNA").Width(170).
+				ui.TextInput(c.Key("ix-search"), &s.search).Label("Search").Placeholder("Search ID or RNA").FillWidth().
 					Tooltip("Matches an RNA name, sequence ID or hybrid sequence").OnSubmit(submit)
 			})
 			Field(c, "Minimum reads", func() {
-				ui.TextInput(c.Key("ix-min"), &s.minReads).Label("Minimum reads").Placeholder("1").Width(70).OnSubmit(submit)
+				ui.TextInput(c.Key("ix-min"), &s.minReads).Label("Minimum reads").Placeholder("1").FillWidth().OnSubmit(submit)
 			})
 			Field(c, "Minimum support", func() {
-				ui.TextInput(c.Key("ix-min-support"), &s.minSupport).Label("Minimum support").Placeholder("1").Width(70).OnSubmit(submit)
+				ui.TextInput(c.Key("ix-min-support"), &s.minSupport).Label("Minimum support").Placeholder("1").FillWidth().OnSubmit(submit)
 			})
+		}, func() {
 			if ui.PrimaryButton(c, "Apply").Clicked() {
 				submit()
 			}
@@ -522,28 +524,30 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 			label += fmt.Sprintf(" (%d set)", set)
 		}
 		ui.Collapsible(c.Key("ix-arms"), label, &s.moreOpen, func() {
-			ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Padding(6, 0, 0, 0).Children(func() {
-				coordInput(c, "ix-x0", "Arm 1 start", &s.x0, "Any").OnSubmit(submit)
-				coordInput(c, "ix-x1", "Arm 1 end", &s.x1, "Any").OnSubmit(submit)
-				coordInput(c, "ix-y0", "Arm 2 start", &s.y0, "Any").OnSubmit(submit)
-				coordInput(c, "ix-y1", "Arm 2 end", &s.y1, "Any").OnSubmit(submit)
-				Field(c, "Maximum e-value", func() {
-					ui.TextInput(c.Key("ix-evalue"), &s.maxEvalue).Label("Maximum e-value").Placeholder("Any").Width(110).OnSubmit(submit)
-				})
-				Field(c, "Minimum dG", func() {
-					ui.TextInput(c.Key("ix-dg0"), &s.minDG).Label("Minimum dG").Placeholder("Any").Width(100).OnSubmit(submit)
-				})
-				Field(c, "Maximum dG", func() {
-					ui.TextInput(c.Key("ix-dg1"), &s.maxDG).Label("Maximum dG").Placeholder("Any").Width(100).OnSubmit(submit)
+			ui.Column(c).Gap(Space2).Padding(Space2, 0, 0, 0).Children(func() {
+				FieldGrid(c, width, func() {
+					coordInput(c, "ix-x0", "Arm 1 start", &s.x0, "Any").OnSubmit(submit)
+					coordInput(c, "ix-x1", "Arm 1 end", &s.x1, "Any").OnSubmit(submit)
+					coordInput(c, "ix-y0", "Arm 2 start", &s.y0, "Any").OnSubmit(submit)
+					coordInput(c, "ix-y1", "Arm 2 end", &s.y1, "Any").OnSubmit(submit)
+					Field(c, "Maximum e-value", func() {
+						ui.TextInput(c.Key("ix-evalue"), &s.maxEvalue).Label("Maximum e-value").Placeholder("Any").FillWidth().OnSubmit(submit)
+					})
+					Field(c, "Minimum dG", func() {
+						ui.TextInput(c.Key("ix-dg0"), &s.minDG).Label("Minimum dG").Placeholder("Any").FillWidth().OnSubmit(submit)
+					})
+					Field(c, "Maximum dG", func() {
+						ui.TextInput(c.Key("ix-dg1"), &s.maxDG).Label("Maximum dG").Placeholder("Any").FillWidth().OnSubmit(submit)
+					})
 				})
 				ui.Text(c, "A ΔG bound leaves out hybrids without ΔG; a missing e-value passes. Positions are 1-based; Enter or Apply filters.").
-					FontSize(12).TextColor(t.TextMuted)
+					FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 		})
 		if s.inputErr != "" {
 			errorLine(c, s.inputErr)
 		}
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(Space3).AlignItems(ui.Center).Children(func() {
 			summary := "No hybrids loaded yet."
 			if s.key != "" {
 				summary = fmt.Sprintf("Showing %s of %s hybrids", FormatNumber(int64(len(s.rows))), FormatNumber(int64(s.total)))
@@ -576,7 +580,7 @@ func (p *explorePage) interactionsView(c *ui.Context) {
 		if s.applied.withPartners() && s.key != "" {
 			p.ixPartners(c)
 		} else if s.applied.gene1 == "" {
-			ui.Text(c, "Choose an RNA in the filter bar to see its interaction partners.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Choose an RNA in the filter bar to see its interaction partners.").FontSize(FontSmall).TextColor(t.TextMuted)
 		}
 		p.hybridTable(c)
 		p.hybridDetail(c)
@@ -683,7 +687,7 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 		cols, index = append(cols, col), append(index, i)
 	}
 	if oneGene {
-		ui.Text(c, "Both arms of every hybrid shown are on "+rows[0].Gene1+".").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Both arms of every hybrid shown are on "+rows[0].Gene1+".").FontSize(FontSmall).TextColor(t.TextMuted)
 	}
 	ids := p.ids
 	compact := p.a.compact()
@@ -732,14 +736,14 @@ func (p *explorePage) hybridTable(c *ui.Context) {
 			el.Tooltip(tip)
 		}
 		if compact {
-			el.Padding(0, 6).FontSize(12)
+			el.Padding(0, 6).FontSize(FontSmall)
 		}
 		if muted {
 			el.TextColor(t.TextMuted)
 		}
 	}).Grow(1).MinHeight(240).Label("Hybrids").Children(func() {
 		if len(rows) == 0 && s.key != "" && !s.load.busy() {
-			ui.Text(c, "No hybrids match these filters.").TextColor(t.TextMuted).Padding(12)
+			ui.Text(c, "No hybrids match these filters.").TextColor(t.TextMuted).Padding(Space3)
 		}
 	})
 }
@@ -755,10 +759,10 @@ func (p *explorePage) hybridDetail(c *ui.Context) {
 	r := s.rows[s.chosen]
 	p.loadRecordLine(r)
 	Card(c, "", func() {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(Space3).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
-				ui.Text(c, "Interaction record").FontSize(11).TextColor(t.TextMuted)
-				ui.Text(c, recordID(r)).FontSize(16).Bold().SingleLine()
+				ui.Text(c, "Interaction record").FontSize(FontSmall).TextColor(t.TextMuted)
+				ui.Text(c, recordID(r)).FontSize(FontTitle).Bold().SingleLine()
 			})
 			if r.Sequence != "" && ui.Button(c, "Copy sequence").Clicked() {
 				c.WriteClipboard(r.Sequence)
@@ -768,17 +772,17 @@ func (p *explorePage) hybridDetail(c *ui.Context) {
 				s.chosen = -1
 			}
 		})
-		ui.Text(c, "Sequence").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, "Sequence").FontSize(FontSmall).TextColor(t.TextMuted)
 		if r.Sequence == "" {
-			ui.Text(c, "The sequence is unavailable: the sample's .hyb file has changed since its index was built.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "The sequence is unavailable: the sample's .hyb file has changed since its index was built.").FontSize(FontSmall).TextColor(t.TextMuted)
 		} else {
-			ui.Text(c, truncate(r.Sequence, 180)).FontSize(12).Selectable().TextColor(t.TextMuted)
+			ui.Text(c, truncate(r.Sequence, 180)).FontSize(FontSmall).Selectable().TextColor(t.TextMuted)
 		}
-		ui.Row(c).Gap(24).Wrap().AlignItems(ui.Start).Children(func() {
+		ui.Row(c).Gap(Space6).Wrap().AlignItems(ui.Start).Children(func() {
 			armDetails(c, "Arm 1", r.Gene1, r.Start1, r.End1, r.ReadStart1, r.ReadEnd1, r.EValue1)
 			armDetails(c, "Arm 2", r.Gene2, r.Start2, r.End2, r.ReadStart2, r.ReadEnd2, r.EValue2)
 		})
-		ui.Row(c).Gap(24).Wrap().Children(func() {
+		ui.Row(c).Gap(Space6).Wrap().Children(func() {
 			stat(c, "ΔG (kcal/mol)", webFormat(r.DG))
 			stat(c, "Cluster support", FormatNumber(int64(r.Support)))
 			stat(c, "Source reads", sourceReads(r))
@@ -801,7 +805,7 @@ func (p *explorePage) hybridDetail(c *ui.Context) {
 			}
 			stat(c, "Source line", line)
 		})
-		ui.Row(c).Gap(8).Wrap().Children(func() {
+		ui.Row(c).Gap(Space2).Wrap().Children(func() {
 			if ui.Button(c, "Open in contact map").Tooltip("The map of arm 1's RNA against arm 2's, at this hybrid's cell").Clicked() {
 				p.recordContact(r)
 			}
@@ -825,14 +829,14 @@ func (p *explorePage) hybridDetail(c *ui.Context) {
 // armDetails is one arm's section of the record drawer.
 func armDetails(c *ui.Context, label, rna string, start, end int, readStart, readEnd, evalue *float64) {
 	t := c.Theme()
-	ui.Column(c).Gap(4).Basis(260).Grow(1).Children(func() {
+	ui.Column(c).Gap(Space1).Basis(260).Grow(1).Children(func() {
 		ui.Text(c, label).Bold()
 		rows := [][2]string{{"RNA", rna}, {"RNA coordinates", span(start, end)},
 			{"Read coordinates", nullableSpan(readStart, readEnd)}, {"E-value", webFormat(evalue)}}
 		for _, row := range rows {
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Text(c, row[0]).FontSize(12).TextColor(t.TextMuted).Width(120)
-				ui.Text(c, row[1]).FontSize(12).Grow(1).Shrink(1).MinWidth(0).SingleLine().Tooltip(row[1])
+			ui.Row(c).Gap(Space2).Children(func() {
+				ui.Text(c, row[0]).FontSize(FontSmall).TextColor(t.TextMuted).Width(120)
+				ui.Text(c, row[1]).FontSize(FontSmall).Grow(1).Shrink(1).MinWidth(0).SingleLine().Tooltip(row[1])
 			})
 		}
 	})
@@ -961,7 +965,7 @@ func (p *explorePage) ixPartners(c *ui.Context) {
 		return partners[i].Name < partners[j].Name
 	})
 	Card(c, shortGene(s.applied.gene1)+" interaction partners", func() {
-		ui.Text(c, s.countMode+" · click a partner to refine the table.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, s.countMode+" · click a partner to refine the table.").FontSize(FontSmall).TextColor(t.TextMuted)
 		if len(partners) == 0 {
 			ui.Text(c, "No records match the current filters.").TextColor(t.TextMuted)
 			return
@@ -969,17 +973,17 @@ func (p *explorePage) ixPartners(c *ui.Context) {
 		top := max(value(partners[0]), 1)
 		for i, pt := range partners {
 			if i == 10 {
-				ui.Text(c, fmt.Sprintf("and %d more", len(partners)-10)).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, fmt.Sprintf("and %d more", len(partners)-10)).FontSize(FontSmall).TextColor(t.TextMuted)
 				break
 			}
-			row := ui.ButtonBase(c.Key("ix-partner-"+pt.Name)).Label("Partner "+pt.Name).Gap(8).AlignItems(ui.Center).Padding(2, 4).Radius(4).
+			row := ui.ButtonBase(c.Key("ix-partner-"+pt.Name)).Label("Partner "+pt.Name).Gap(Space2).AlignItems(ui.Center).Padding(2, Space1).Radius(4).
 				Children(func() {
 					ui.Text(c, shortGene(pt.Name)).Width(190).SingleLine().Tooltip(pt.Name)
 					fraction := max(float32(value(pt))/float32(top), 0.03)
 					ui.Box(c).Grow(1).Height(8).Radius(4).Background(t.Border).Children(func() {
 						ui.Box(c).WidthPercent(fraction * 100).FillHeight().Radius(4).Background(t.Accent)
 					})
-					ui.Text(c, FormatNumber(value(pt))).FontSize(12).TextColor(t.TextMuted).Width(90).TextAlign(ui.End)
+					ui.Text(c, FormatNumber(value(pt))).FontSize(FontSmall).TextColor(t.TextMuted).Width(90).TextAlign(ui.End)
 				})
 			if row.Clicked() {
 				s.gene2 = pt.Name

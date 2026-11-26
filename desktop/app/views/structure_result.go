@@ -290,23 +290,21 @@ func (p *structurePage) resultDetails(c *ui.Context, a *structureResult) {
 	for _, r := range records {
 		length += len(r.Sequence)
 	}
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Text(c, "Structure result").FontSize(15).Bold()
-		ui.Text(c, stResultLabel(a, records)+" · "+FormatNumber(int64(length))+" nt").FontSize(12).TextColor(t.TextMuted)
+	ui.Row(c).Gap(Space3).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Text(c, "Structure result").FontSize(FontTitle).Bold()
+		ui.Text(c, stResultLabel(a, records)+" · "+FormatNumber(int64(length))+" nt").FontSize(FontSmall).TextColor(t.TextMuted)
 	})
 	if note := stChainBreakNote(a, records); note != "" {
-		ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 	}
 	if warning := stEnergyWarning(a); warning != "" {
-		ui.Row(c).Padding(8, 12).Radius(8).Background(t.Warning.Alpha(0.12)).Border(1, t.Warning.Alpha(0.5)).Children(func() {
-			ui.Text(c, warning).FontSize(12).Grow(1)
-		})
+		Notice(c, warning, t.Warning)
 	}
 	p.resultMetrics(c, a, records, pairs, length)
 	if note, text := stModeNote(a, records); note != "" {
-		ui.Column(c).Gap(2).Padding(10, 12).Radius(8).Background(t.Surface).Children(func() {
-			ui.Text(c, note).Bold().FontSize(13)
-			ui.Text(c, text).FontSize(12).TextColor(t.TextMuted)
+		ui.Column(c).Gap(2).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Surface).Children(func() {
+			ui.Text(c, note).Bold().FontSize(FontBody)
+			ui.Text(c, text).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 	}
 	p.nucleotideInspector(c, a, records)
@@ -353,7 +351,6 @@ func stEnergyWarning(a *structureResult) string {
 
 // resultMetrics are the web's metric cards.
 func (p *structurePage) resultMetrics(c *ui.Context, a *structureResult, records []structureRecord, pairs []stPairInfo, length int) {
-	t := c.Theme()
 	energy, effective, haveEnergy := 0.0, 0.0, false
 	for _, r := range records {
 		if r.Energy != nil {
@@ -374,100 +371,116 @@ func (p *structurePage) resultMetrics(c *ui.Context, a *structureResult, records
 			knotted++
 		}
 	}
-	metric := func(label, value, note string) {
-		ui.Column(c).Gap(2).Padding(10, 12).Radius(8).Border(1, t.Border).Grow(1).Basis(150).MinWidth(140).Children(func() {
-			ui.Text(c, label).FontSize(11).Bold().TextColor(t.TextMuted)
-			ui.Text(c, value).FontSize(18).Bold()
-			if note != "" {
-				ui.Text(c, note).FontSize(11).TextColor(t.TextMuted)
-			}
-		})
-	}
+	var tiles [][3]string
+	metric := func(label, value, note string) { tiles = append(tiles, [3]string{label, value, note}) }
 	engine := stEngine(a)
-	ui.Row(c).Gap(10).Wrap().Children(func() {
-		label, model := "MFE", ""
-		if engine == "IRIS" {
-			label = "Energy" // of the member shown
+	label, model := "MFE", ""
+	if engine == "IRIS" {
+		label = "Energy" // of the member shown
+	}
+	if stIsCPL(a) {
+		label = "Energy"
+		model = "Turner 2004"
+		if on, _ := a.Meta.Parameters["allow_pseudoknot"].(bool); on {
+			saved, _ := a.Meta.Parameters["energy_model"].(string)
+			model = nameOr(saved, cplSettings(engine == "CPLcofold").DefaultModel)
 		}
-		if stIsCPL(a) {
-			label = "Energy"
-			model = "Turner 2004"
-			if on, _ := a.Meta.Parameters["allow_pseudoknot"].(bool); on {
-				saved, _ := a.Meta.Parameters["energy_model"].(string)
-				model = nameOr(saved, cplSettings(engine == "CPLcofold").DefaultModel)
-			}
-			if m, _ := a.Meta.EnergyMetadata["energy_model"].(string); m != "" {
-				model = m // the web names the model the energy came from first
-			}
+		if m, _ := a.Meta.EnergyMetadata["energy_model"].(string); m != "" {
+			model = m // the web names the model the energy came from first
 		}
-		value := "—"
-		if haveEnergy {
-			value = strconv.FormatFloat(energy, 'f', 2, 64)
+	}
+	value := "—"
+	if haveEnergy {
+		value = strconv.FormatFloat(energy, 'f', 2, 64)
+	}
+	metric(label, value, strings.TrimSuffix("kcal/mol · "+model, " · "))
+	topology := "non-crossing pairs"
+	if stIsCPL(a) {
+		topology = "nested topology"
+		if knotted > 0 {
+			topology = "pseudoknotted topology"
 		}
-		metric(label, value, strings.TrimSuffix("kcal/mol · "+model, " · "))
-		topology := "non-crossing pairs"
-		if stIsCPL(a) {
-			topology = "nested topology"
+	}
+	metric("Base pairs", FormatNumber(int64(len(pairs))), topology)
+	metric("Unpaired bases", FormatNumber(int64(length-len(paired))), "of "+FormatNumber(int64(length))+" nt")
+	switch {
+	case stIsCPL(a) && len(records) == 1 && len(records[0].Candidates) > 0:
+		r := records[0]
+		phase := "phase 1 secondary"
+		if on, _ := a.Meta.Parameters["allow_pseudoknot"].(bool); on {
+			phase = "phase 1 nested"
 			if knotted > 0 {
-				topology = "pseudoknotted topology"
+				phase = "phase 1 + crossing phase 2"
 			}
 		}
-		metric("Base pairs", FormatNumber(int64(len(pairs))), topology)
-		metric("Unpaired bases", FormatNumber(int64(length-len(paired))), "of "+FormatNumber(int64(length))+" nt")
-		switch {
-		case stIsCPL(a) && len(records) == 1 && len(records[0].Candidates) > 0:
-			r := records[0]
-			phase := "phase 1 secondary"
-			if on, _ := a.Meta.Parameters["allow_pseudoknot"].(bool); on {
-				phase = "phase 1 nested"
-				if knotted > 0 {
-					phase = "phase 1 + crossing phase 2"
-				}
-			}
-			metric("Candidate", "#"+strconv.Itoa(r.SelectedCandidate+1), phase)
-			if cand := r.scoredCandidate(); cand != nil {
-				metric("COMRADES score", FormatNumber(int64(*cand.ComradesScore)), cand.estimator()+" · up to 1M per paired endpoint")
-			}
-		case stIsComrades(engine):
-			n := 0
-			for _, pr := range pairs {
-				if pr.Hard {
-					n++
-				}
-			}
-			metric("Constraint mode", "HYB-guided", fmt.Sprintf("%s enforced pair%s", FormatNumber(int64(n)), plural(n)))
-			score, supported := 0.0, 0
-			for _, r := range records {
-				if k := stMetaIndex(a, r); k >= 0 && a.Meta.Records[k].Comrades != nil {
-					ev := &a.Meta.Records[k].Comrades.Evidence
-					score += ev.Score // preserve the recorded scoring rule, including historical folds
-					supported += ev.MatchedPairs
-					continue
-				}
-				for _, b := range r.Bonus { // old exports without a score summary
-					if b != nil && *b > 0 {
-						score += 2 * *b
-						supported++
-					}
-				}
-			}
-			metric("COMRADES score", strconv.FormatFloat(score, 'f', -1, 64), FormatNumber(int64(supported))+" supported structure pairs")
-		case engine == "IRIS":
-			n := len(stHardPairs(a))
-			metric("Constraint mode", "IRIS ensemble", fmt.Sprintf("%s enforced pair%s", FormatNumber(int64(n)), plural(n)))
-		case !stIsCPL(a):
-			mode, n := "None", len(stHardPairs(a))
-			if n > 0 {
-				mode = "Manual hard"
-			}
-			metric("Constraint mode", mode, fmt.Sprintf("%s enforced pair%s", FormatNumber(int64(n)), plural(n)))
+		metric("Candidate", "#"+strconv.Itoa(r.SelectedCandidate+1), phase)
+		if cand := r.scoredCandidate(); cand != nil {
+			metric("COMRADES score", FormatNumber(int64(*cand.ComradesScore)), cand.estimator()+" · up to 1M per paired endpoint")
 		}
-		if stIsCPL(a) && haveEnergy && math.Abs(effective-energy) > 1e-9 {
-			metric("Effective energy", strconv.FormatFloat(effective, 'f', 2, 64), "kcal/mol · beta-adjusted rank")
+	case stIsComrades(engine):
+		n := 0
+		for _, pr := range pairs {
+			if pr.Hard {
+				n++
+			}
 		}
-		if s := a.Meta.Timings.TotalS; s > 0 {
-			metric("Elapsed", FormatDuration(s), "on this computer")
+		metric("Constraint mode", "HYB-guided", fmt.Sprintf("%s enforced pair%s", FormatNumber(int64(n)), plural(n)))
+		score, supported := 0.0, 0
+		for _, r := range records {
+			if k := stMetaIndex(a, r); k >= 0 && a.Meta.Records[k].Comrades != nil {
+				ev := &a.Meta.Records[k].Comrades.Evidence
+				score += ev.Score // preserve the recorded scoring rule, including historical folds
+				supported += ev.MatchedPairs
+				continue
+			}
+			for _, b := range r.Bonus { // old exports without a score summary
+				if b != nil && *b > 0 {
+					score += 2 * *b
+					supported++
+				}
+			}
 		}
+		metric("COMRADES score", strconv.FormatFloat(score, 'f', -1, 64), FormatNumber(int64(supported))+" supported structure pairs")
+	case engine == "IRIS":
+		n := len(stHardPairs(a))
+		metric("Constraint mode", "IRIS ensemble", fmt.Sprintf("%s enforced pair%s", FormatNumber(int64(n)), plural(n)))
+	case !stIsCPL(a):
+		mode, n := "None", len(stHardPairs(a))
+		if n > 0 {
+			mode = "Manual hard"
+		}
+		metric("Constraint mode", mode, fmt.Sprintf("%s enforced pair%s", FormatNumber(int64(n)), plural(n)))
+	}
+	if stIsCPL(a) && haveEnergy && math.Abs(effective-energy) > 1e-9 {
+		metric("Effective energy", strconv.FormatFloat(effective, 'f', 2, 64), "kcal/mol · beta-adjusted rank")
+	}
+	if s := a.Meta.Timings.TotalS; s > 0 {
+		metric("Elapsed", FormatDuration(s), "on this computer")
+	}
+	p.statTiles(c, tiles)
+}
+
+// statTiles lays tiles (label, value, note) out in a TileGrid that fits
+// the viewer.
+func (p *structurePage) statTiles(c *ui.Context, tiles [][3]string) {
+	TileGrid(c, p.tileColumns(len(tiles)), func() {
+		for _, tile := range tiles {
+			stStatTile(c, tile[0], tile[1], tile[2])
+		}
+	})
+}
+
+// stStatTile is a StatTile with a note under its value.
+func stStatTile(c *ui.Context, label, value, note string) {
+	t := c.Theme()
+	if note == "" {
+		StatTile(c, label, value, t.Text)
+		return
+	}
+	ui.Column(c).Gap(2).Padding(Space2, Space3).Radius(RadiusSmall).Background(t.Surface).MinWidth(0).Children(func() {
+		ui.Text(c, label).FontSize(FontSmall).TextColor(t.TextMuted).SingleLine()
+		ui.Text(c, value).FontSize(FontTitle).Bold().TextColor(t.Text)
+		ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 	})
 }
 
@@ -529,23 +542,23 @@ func (p *structurePage) nucleotideInspector(c *ui.Context, a *structureResult, r
 	} else if stEngine(a) == "IRIS" {
 		what = "IRIS ensemble member"
 	}
-	ui.Column(c).Gap(4).Padding(10, 12).Radius(8).Border(1, t.Border).Children(func() {
+	ui.Column(c).Gap(Space1).Padding(Space2, Space3).Radius(RadiusSmall).Border(1, t.Border).Children(func() {
 		ui.Text(c, "NUCLEOTIDE INSPECTOR").FontSize(11).Bold().TextColor(t.TextMuted)
 		if sel <= 0 {
-			ui.Text(c, "Click the diagram, or focus it and use the arrow keys, to inspect a base and its "+what+" pairing partner.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Click the diagram, or focus it and use the arrow keys, to inspect a base and its "+what+" pairing partner.").FontSize(FontSmall).TextColor(t.TextMuted)
 			return
 		}
 		text := stNucleotideText(records, sel, stEngine(a))
 		if text == "" {
-			ui.Text(c, "Position "+FormatNumber(int64(sel))+" is outside the folded region.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Position "+FormatNumber(int64(sel))+" is outside the folded region.").FontSize(FontSmall).TextColor(t.TextMuted)
 			return
 		}
-		ui.Text(c, "Nucleotide "+FormatNumber(int64(sel))).FontSize(16).Bold()
+		ui.Text(c, "Nucleotide "+FormatNumber(int64(sel))).FontSize(FontTitle).Bold()
 		detail := strings.TrimPrefix(text, "Nucleotide "+FormatNumber(int64(sel))+" ")
 		if strings.Contains(detail, "unpaired") {
 			detail += " · unpaired in this " + what
 		}
-		ui.Text(c, detail).FontSize(12)
+		ui.Text(c, detail).FontSize(FontSmall)
 	})
 }
 
@@ -555,8 +568,8 @@ func (p *structurePage) nucleotideInspector(c *ui.Context, a *structureResult, r
 func (p *structurePage) sequenceAlignment(c *ui.Context, records []structureRecord) {
 	t := c.Theme()
 	sel := p.arcs.Selected
-	ui.Column(c).Gap(6).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Column(c).Gap(Space2).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Sequence / dot-bracket").Bold().Grow(1)
 			if ui.Button(c, "Copy dot-bracket").Clicked() {
 				var parts []string
@@ -567,7 +580,7 @@ func (p *structurePage) sequenceAlignment(c *ui.Context, records []structureReco
 				p.a.Toast("Dot-bracket notation copied to the clipboard.")
 			}
 		})
-		ui.Column(c).Gap(0).Padding(8, 10).Radius(6).Background(t.Surface).MaxHeight(360).Children(func() {
+		ui.Column(c).Gap(0).Padding(Space2, 10).Radius(RadiusSmall).Background(t.Surface).MaxHeight(360).Children(func() {
 			ui.Scroll(c.Key("st-seq")).MaxHeight(340).Children(func() {
 				for ri, r := range records {
 					if len(records) > 1 {
@@ -683,7 +696,7 @@ func (p *structurePage) howComputed(c *ui.Context, a *structureResult, records [
 	t := c.Theme()
 	if scope := stComputedScope(a); scope != "" {
 		ui.Collapsible(c.Key("st-computed"), "How this was computed", &p.computedOpen, func() {
-			ui.Text(c, scope).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, scope).FontSize(FontSmall).TextColor(t.TextMuted)
 		})
 		return
 	}
@@ -691,19 +704,7 @@ func (p *structurePage) howComputed(c *ui.Context, a *structureResult, records [
 		return
 	}
 	ui.Collapsible(c.Key("st-computed"), "How this was computed", &p.computedOpen, func() {
-		s := stStagesOf(a, records)
-		stage := func(title, value, note string) {
-			ui.Column(c).Gap(2).Padding(10, 12).Radius(8).Background(t.Surface).Grow(1).Basis(180).MinWidth(170).Children(func() {
-				ui.Text(c, title).FontSize(11).Bold().TextColor(t.TextMuted)
-				ui.Text(c, value).FontSize(15).Bold()
-				ui.Text(c, note).FontSize(11).TextColor(t.TextMuted)
-			})
-		}
-		ui.Row(c).Gap(10).Wrap().Children(func() {
-			for _, card := range s {
-				stage(card[0], card[1], card[2])
-			}
-		})
+		p.statTiles(c, stStagesOf(a, records))
 		if guided := slices.Contains(stCPLEvidence(a, records), true); guided && len(records) == 1 {
 			p.bonusHeatmap(c, records[0], stBonusLabel(a))
 		}
@@ -811,7 +812,7 @@ const stHeatBins = 120
 func (p *structurePage) bonusHeatmap(c *ui.Context, r structureRecord, label string) {
 	t := c.Theme()
 	if r.BonusMatrixPath == "" {
-		ui.Text(c, "The bonus matrix was not written for this result (more than 2,000,000 cells), so its heatmap is not drawn.").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "The bonus matrix was not written for this result (more than 2,000,000 cells), so its heatmap is not drawn.").FontSize(FontSmall).TextColor(t.TextMuted)
 		return
 	}
 	heat := p.loadHeat(r.BonusMatrixPath, len(r.Sequence))
@@ -820,12 +821,12 @@ func (p *structurePage) bonusHeatmap(c *ui.Context, r structureRecord, label str
 		return
 	}
 	if heat.err != "" {
-		ui.Text(c, "Could not read the bonus matrix: "+heat.err).FontSize(12).TextColor(t.Danger)
+		ui.Text(c, "Could not read the bonus matrix: "+heat.err).FontSize(FontSmall).TextColor(t.Danger)
 		return
 	}
 	color := ui.RGB(156, 5, 248)
-	ui.Column(c).Gap(4).Children(func() {
-		ui.Text(c, "HYB-derived CPLfold bonus matrix").Bold().FontSize(13)
+	ui.Column(c).Gap(Space1).Children(func() {
+		ui.Text(c, "HYB-derived CPLfold bonus matrix").Bold().FontSize(FontBody)
 		ui.Text(c, "Upper triangle · folded-window coordinates · colour intensity shows the "+label+" used for folding.").FontSize(11).TextColor(t.TextMuted)
 		const side = 240
 		ui.Box(c).Size(side, side).Role(ui.RoleImage).Label("HYB bonus matrix heatmap").Draw(func(pt *ui.Painter, rect ui.Rect) {
@@ -843,7 +844,7 @@ func (p *structurePage) bonusHeatmap(c *ui.Context, r structureRecord, label str
 			}
 			pt.Stroke(rect, t.Border, 0, 1)
 		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, label+" · low").FontSize(11).TextColor(t.TextMuted)
 			ui.Box(c).Size(120, 8).Draw(func(pt *ui.Painter, rect ui.Rect) {
 				for i := range 24 {

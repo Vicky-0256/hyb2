@@ -19,28 +19,20 @@ func stCountLabel(n int, noun string) string {
 	return FormatNumber(int64(n)) + " " + noun + plural(n)
 }
 
-// stComradesStages are the web's stage cards.
-func stComradesStages(c *ui.Context, cm *stComrades) {
-	t := c.Theme()
+// stComradesStages are the web's stage cards: title, value and note.
+func stComradesStages(cm *stComrades) [][3]string {
 	ev, rnd := &cm.Evidence, &cm.Randomisation
 	enforced := 0
 	for _, s := range ev.Accepted {
 		enforced += s.Length
 	}
 	folds := max(len(rnd.Structures)-1, 0)
-	stage := func(title, value, note string) {
-		ui.Column(c).Gap(2).Padding(10, 12).Radius(8).Background(t.Surface).Grow(1).Basis(180).MinWidth(170).Children(func() {
-			ui.Text(c, title).FontSize(11).Bold().TextColor(t.TextMuted)
-			ui.Text(c, value).FontSize(15).Bold()
-			ui.Text(c, note).FontSize(11).TextColor(t.TextMuted)
-		})
+	return [][3]string{
+		{"1 · RNAcofold evidence", stCountLabel(ev.UniqueBasePairs, "unique pair"), stCountLabel(ev.InputRecords, "eligible HYB row") + "; one observation per row"},
+		{"2 · Ranked stems", stCountLabel(ev.RankedStems, "stem"), "Top " + FormatNumber(int64(ev.RequestedStemConstraints)) + " sent to compatibility fitting"},
+		{"3 · Accepted constraints", stCountLabel(len(ev.Accepted), "stem"), stCountLabel(enforced, "enforced base pair")},
+		{"4 · Structure ensemble", stCountLabel(folds+1, "structure"), "ranked fold + " + stCountLabel(folds, "seeded random order")},
 	}
-	ui.Row(c).Gap(10).Wrap().Children(func() {
-		stage("1 · RNAcofold evidence", stCountLabel(ev.UniqueBasePairs, "unique pair"), stCountLabel(ev.InputRecords, "eligible HYB row")+"; one observation per row")
-		stage("2 · Ranked stems", stCountLabel(ev.RankedStems, "stem"), "Top "+FormatNumber(int64(ev.RequestedStemConstraints))+" sent to compatibility fitting")
-		stage("3 · Accepted constraints", stCountLabel(len(ev.Accepted), "stem"), stCountLabel(enforced, "enforced base pair"))
-		stage("4 · Structure ensemble", stCountLabel(folds+1, "structure"), "ranked fold + "+stCountLabel(folds, "seeded random order"))
-	})
 }
 
 // stEnsembleBarLabel is a bar's label: "#k · ranked" or "#k · random r".
@@ -79,15 +71,15 @@ func stComradesBars(c *ui.Context, cm *stComrades) {
 		return cmp.Compare(x.Run, y.Run)
 	})
 	top := math.Max(1, structures[0].Score)
-	ui.Column(c).Gap(4).Role(ui.RoleGroup).Label("Top COMRADES structure scores").Children(func() {
+	ui.Column(c).Gap(Space1).Role(ui.RoleGroup).Label("Top COMRADES structure scores").Children(func() {
 		for k, e := range structures[:min(12, len(structures))] {
 			selected := e.Run == rnd.SelectedRun
-			row := ui.Row(c.Key(fmt.Sprint("bar", k))).Gap(10).AlignItems(ui.Center).Padding(2, 6).Radius(6)
+			row := ui.Row(c.Key(fmt.Sprint("bar", k))).Gap(Space3).AlignItems(ui.Center).Padding(2, 6).Radius(RadiusSmall)
 			if selected {
 				row.Background(t.Accent.Alpha(0.12))
 			}
 			row.Children(func() {
-				label := ui.Text(c, stEnsembleBarLabel(k+1, e)).FontSize(12).Width(130).SingleLine()
+				label := ui.Text(c, stEnsembleBarLabel(k+1, e)).FontSize(FontSmall).Width(130).SingleLine()
 				fraction := float32(math.Max(2, e.Score/top*100) / 100)
 				ui.Box(c).Height(8).Grow(1).Radius(4).Background(t.Border).Draw(func(p *ui.Painter, r ui.Rect) {
 					fill := t.Accent.Alpha(0.6)
@@ -96,7 +88,7 @@ func stComradesBars(c *ui.Context, cm *stComrades) {
 					}
 					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * min(1, fraction), H: r.H}, fill, 4)
 				})
-				value := ui.Text(c, jsNumber(e.Score)).FontSize(12).Bold().Width(70).TextAlign(ui.End)
+				value := ui.Text(c, jsNumber(e.Score)).FontSize(FontSmall).Bold().Width(70).TextAlign(ui.End)
 				if selected {
 					label.Bold()
 					value.TextColor(t.Accent)

@@ -114,7 +114,7 @@ func (a *App) themePref(c *ui.Context) {
 			current = themeLabels[i]
 		}
 	}
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Appearance").Width(120)
 		ui.Select(c.Key("pref-theme"), &current, themeLabels).Label("Appearance").Width(180).OnChange(func() {
 			for i, label := range themeLabels {
@@ -197,13 +197,13 @@ func (a *App) motionPref(c *ui.Context) {
 	if a.reduceMotion(c) {
 		selected = 1
 	}
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(Space2).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Motion").Width(120)
 		if ui.Segmented(c.Key("pref-motion"), &selected, motionLabels...).Label("Motion").Changed() {
 			a.chooseMotion([]string{motionFull, motionReduced}[selected])
 		}
 	})
-	ui.Text(c, "Reduced keeps every change instant; it follows your system setting until you choose here.").FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, "Reduced keeps every change instant; it follows your system setting until you choose here.").FontSize(FontSmall).TextColor(t.TextMuted)
 }
 
 // ---- command palette
@@ -400,7 +400,7 @@ func (a *App) paletteDialog(c *ui.Context) {
 		}
 	}
 	ui.Modal(c, &s.open, func() {
-		ui.Column(c).Width(480).Gap(8).Children(func() {
+		ui.Column(c).Width(480).Gap(Space2).Children(func() {
 			input := ui.TextInput(c.Key("palette-query"), &s.query).Label("Search pages and actions").Placeholder("Search pages and actions").
 				FillWidth().AutoFocus().OnSubmit(func() {
 				if s.active < len(matches) {
@@ -432,7 +432,7 @@ func (a *App) paletteDialog(c *ui.Context) {
 						func() { run(cmd) }, func() { s.active = i })
 				}
 				if len(matches) == 0 {
-					ui.Text(c, "No matching page or action").TextColor(t.TextMuted).Padding(8)
+					ui.Text(c, "No matching page or action").TextColor(t.TextMuted).Padding(Space2)
 				}
 			})
 			ui.Text(c, "↑ ↓ move · ↵ run · g then a letter jumps · [ ] previous / next page").FontSize(11).TextColor(t.TextMuted)
@@ -443,7 +443,7 @@ func (a *App) paletteDialog(c *ui.Context) {
 // paletteItem is one entry; the highlighted one has the accent's tint.
 func (a *App) paletteItem(c *ui.Context, cmd command, active, showGroup, reveal bool, run, hover func()) {
 	t := c.Theme()
-	item := ui.ButtonBase(c).FillWidth().Justify(ui.Start).Gap(8).Padding(6, 8).Radius(6).Label(cmd.title).Selected(active)
+	item := ui.ButtonBase(c).FillWidth().Justify(ui.Start).Gap(Space2).Padding(6, 8).Radius(RadiusSmall).Label(cmd.title).Selected(active)
 	if active {
 		item.Background(t.Accent.Alpha(0.14))
 		if reveal {
@@ -612,7 +612,7 @@ func (a *App) chordHint(c *ui.Context) {
 	}
 	ui.Overlay(c, func() {
 		ui.Row(c).Absolute().Left(200).Right(24).Bottom(24).Children(func() {
-			ui.Text(c, "g then: "+strings.Join(parts, " · ")).FontSize(12).Padding(8, 12).Radius(8).
+			ui.Text(c, "g then: "+strings.Join(parts, " · ")).FontSize(FontSmall).Padding(Space2, Space3).Radius(RadiusSmall).
 				Background(t.Background).Border(1, t.Border).Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.18))
 		})
 	})
@@ -678,22 +678,22 @@ func (a *App) helpDialog(c *ui.Context) {
 		}
 	}
 	ui.Modal(c, &a.helpOpen, func() {
-		ui.Column(c).Width(460).Gap(12).Children(func() {
-			ui.Text(c, "Help").FontSize(18).Bold()
+		ui.Column(c).Width(460).Gap(Space3).Children(func() {
+			ui.Text(c, "Help").FontSize(FontTitle).Bold()
 			ui.Text(c, "On this page: "+title).Bold()
 			for i, line := range pageHelp[page] {
 				ui.Text(c, string(rune('1'+i))+". "+line)
 			}
 			ui.Text(c, "Keyboard").Bold()
 			for _, k := range helpKeys(a.Project != nil) {
-				ui.Row(c).Gap(10).Children(func() {
-					ui.Text(c, k[0]).FontSize(12).Bold().Width(120)
-					ui.Text(c, k[1]).FontSize(12).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0)
+				ui.Row(c).Gap(Space3).Children(func() {
+					ui.Text(c, k[0]).FontSize(FontSmall).Bold().Width(120)
+					ui.Text(c, k[1]).FontSize(FontSmall).TextColor(t.TextMuted).Grow(1).Shrink(1).MinWidth(0)
 				})
 			}
 			if a.Project != nil {
 				ui.Text(c, "Reference").Bold()
-				ui.Row(c).Gap(8).Wrap().Children(func() {
+				ui.Row(c).Gap(Space2).Wrap().Children(func() {
 					for _, p := range helpLinks {
 						id := p.ID
 						if ui.Button(c, p.Title).Clicked() {
@@ -765,7 +765,7 @@ func (a *App) localChip(c *ui.Context) {
 		Padding(4, 10).Radius(999).Border(1, t.Success.Alpha(0.3)).Background(t.Success.Alpha(0.1))
 	chip.Children(func() {
 		ui.Row(c).Width(7).Height(7).Radius(4).Background(t.Success)
-		ui.Text(c, "Local only").FontSize(12).Bold().TextColor(t.Success)
+		ui.Text(c, "Local only").FontSize(FontSmall).Bold().TextColor(t.Success)
 	})
 	if chip.Clicked() {
 		a.openPrivacy()
@@ -780,10 +780,10 @@ func (a *App) privacyDialog(c *ui.Context) {
 	}
 	t := c.Theme()
 	ui.Modal(c, &a.privacyOpen, func() {
-		ui.Column(c).Width(560).Gap(12).Children(func() {
-			ui.Text(c, "Privacy").FontSize(18).Bold()
+		ui.Column(c).Width(560).Gap(Space3).Children(func() {
+			ui.Text(c, "Privacy").FontSize(FontTitle).Bold()
 			ui.Text(c, privacyLede).TextColor(t.TextMuted)
-			ui.Scroll(c).MaxHeight(440).Gap(12).Children(func() {
+			ui.Scroll(c).MaxHeight(440).Gap(Space3).Children(func() {
 				for _, s := range privacyText {
 					ui.Text(c, s.title).Bold()
 					ui.Text(c, s.body)
@@ -809,7 +809,7 @@ func (p *textPage) Show() {}
 func (p *textPage) View(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(820).Padding(24).Gap(16).Children(func() {
+		ui.Column(c).FillWidth().MinWidth(0).Padding(Space6).Gap(Space4).Children(func() {
 			PageHeader(c, p.title, p.lede)
 			for _, s := range p.sections {
 				Card(c, s.title, func() {
@@ -845,14 +845,14 @@ func (fileFormatPage) Show() {}
 func (fileFormatPage) View(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(820).Padding(24).Gap(16).Children(func() {
+		ui.Column(c).FillWidth().MinWidth(0).Padding(Space6).Gap(Space4).Children(func() {
 			PageHeader(c, "File format", "The tab-separated .hyb layouts HYB2 reads, as the web app does.")
 			Card(c, "From raw reads to .hyb", func() {
 				ui.Text(c, "Samples added as reads are mapped and called into .hyb files with 18 columns; .hyb files from the hyb pipeline (17 columns) or older ones (15 or 16) are read as they are.")
 			})
 			Card(c, "Columns (1-indexed)", func() {
 				for _, row := range fileFormatRows {
-					ui.Row(c).Gap(12).Children(func() {
+					ui.Row(c).Gap(Space3).Children(func() {
 						ui.Text(c, row[0]).Bold().Width(56)
 						ui.Text(c, row[1]).Grow(1).Shrink(1).MinWidth(0)
 					})

@@ -363,15 +363,20 @@ func (p *explorePage) regionView(c *ui.Context) {
 		s.inputErr, s.applied = "", f
 	}
 	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(14).Children(func() {
-			ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+		need := 1 // Explore, and Fold this region once there is a region
+		if s.data != nil {
+			need = 2
+		}
+		ui.Column(c).Gap(Space4).Children(func() {
+			filterGrid(c, p.pageWidth(), 7, need, func() {
 				coordInput(c, "rg-start", "Start", &s.start, "Start").OnSubmit(submit)
 				coordInput(c, "rg-end", "End", &s.end, "End").OnSubmit(submit)
-				picker(c, "rg-overlap", "Overlap rule", &s.overlap, overlapRules, 150)
-				picker(c, "rg-partner", "Partner", &s.partner, withAll(allPartners, p.genes()), 190)
+				picker(c, "rg-overlap", "Overlap rule", &s.overlap, overlapRules, 0)
+				picker(c, "rg-partner", "Partner", &s.partner, withAll(allPartners, p.genes()), 0)
 				coordInput(c, "rg-pstart", "Partner start", &s.partnerStart, "Optional").OnSubmit(submit)
 				coordInput(c, "rg-pend", "Partner end", &s.partnerEnd, "Optional").OnSubmit(submit)
-				p.patternPicker(c, "rg-type", &s.typ, 230, nil)
+				p.patternPicker(c, "rg-type", &s.typ, 0, nil)
+			}, func() {
 				if ui.PrimaryButton(c, "Explore").Clicked() {
 					submit()
 				}
@@ -379,7 +384,7 @@ func (p *explorePage) regionView(c *ui.Context) {
 					p.foldRegion(d)
 				}
 			})
-			ui.Text(c, "Coordinates remain inclusive, matching the HYB record display.").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "Coordinates remain inclusive, matching the HYB record display.").FontSize(FontSmall).TextColor(t.TextMuted)
 			if s.inputErr != "" {
 				errorLine(c, s.inputErr)
 			}
@@ -391,15 +396,15 @@ func (p *explorePage) regionView(c *ui.Context) {
 			p.loadRegionRecords(d)
 			p.loadRegionSequence(d)
 			Card(c, "", func() {
-				ui.Row(c).Gap(24).Wrap().AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Gap(Space6).Wrap().AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
-						ui.Text(c, d.gene+":"+span(d.f.start, d.f.end)).FontSize(16).Bold()
+						ui.Text(c, d.gene+":"+span(d.f.start, d.f.end)).FontSize(FontTitle).Bold()
 						note := fmt.Sprintf("%s matching records · profile bins %s nt", FormatNumber(d.records), FormatNumber(int64(d.bin)))
 						if d.f.partner != "" && d.f.partnerStart > 0 {
 							note += " · " + d.f.partner + ":" + span(d.f.partnerStart, d.f.pEnd)
 						}
-						ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
-						ui.Text(c, regionSubtitle(d.f)).FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
+						ui.Text(c, regionSubtitle(d.f)).FontSize(FontSmall).TextColor(t.TextMuted)
 					})
 					stat(c, "Cluster support", FormatNumber(d.support))
 					stat(c, "Partner RNAs", FormatNumber(int64(len(d.partners))))
@@ -407,20 +412,17 @@ func (p *explorePage) regionView(c *ui.Context) {
 				if d.adjusted {
 					notice(c, fmt.Sprintf("The profile resolution was increased to %s nt per bin to keep this plot responsive.", FormatNumber(int64(d.bin))))
 				}
-				ui.Row(c).Gap(16).Wrap().AlignItems(ui.Start).Children(func() {
-					ui.Column(c).Grow(2).Basis(420).Gap(6).Children(func() {
-						ev := s.profile.Show(c, 160, "Cluster support along "+d.gene, profileColor(t))
-						s.hover = ev.Hover
-						readout := fmt.Sprintf("Cluster support of the matching hybrids per %d nt bin of the anchor arm.", d.bin)
-						if i := s.hover; i >= 0 && i < s.profile.Len() {
-							start, end, v := s.profile.Bin(i)
-							readout = fmt.Sprintf("%s · %s support", span(start, end), webFormatValue(v))
-						}
-						ui.Text(c, readout).FontSize(12).TextColor(t.TextMuted)
-					})
-					partnerCard(c, "Top partners", d.partners, measureSupport, 8).Grow(1).Basis(300)
+				ui.Column(c).Gap(Space2).Children(func() {
+					ev := s.profile.Show(c, 160, "Cluster support along "+d.gene, profileColor(t))
+					s.hover = ev.Hover
+					readout := fmt.Sprintf("Cluster support of the matching hybrids per %d nt bin of the anchor arm.", d.bin)
+					if i := s.hover; i >= 0 && i < s.profile.Len() {
+						start, end, v := s.profile.Bin(i)
+						readout = fmt.Sprintf("%s · %s support", span(start, end), webFormatValue(v))
+					}
+					ui.Text(c, readout).FontSize(FontSmall).TextColor(t.TextMuted)
 				})
-				ui.Row(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(Space2).Children(func() {
 					if ui.PrimaryButton(c, "Show hybrids").Tooltip("The region's records in Interactions").Clicked() {
 						p.showRegionHybrids(d)
 					}
@@ -435,6 +437,7 @@ func (p *explorePage) regionView(c *ui.Context) {
 						exportItem{"Parameters · JSON…", false, func() { p.exportRegionParams(d) }})
 				})
 			})
+			partnerCard(c, "Top partners", d.partners, measureSupport, 8)
 			p.regionReference(c, d)
 			p.regionRecords(c, d)
 		})
@@ -472,7 +475,7 @@ func (p *explorePage) regionReference(c *ui.Context, d *regionData) {
 			return
 		}
 		if s.seq == "" && s.seqErr != "" && s.seqErr != "no reference" {
-			ui.Text(c, "Reference sequence unavailable").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, "Reference sequence unavailable").FontSize(FontSmall).TextColor(t.TextMuted)
 			ui.Text(c, "Could not read the reference sequence: "+ShortError(s.seqErr)).TextColor(t.Danger)
 			if ui.Button(c, "Retry").Tooltip("Read the reference sequence again").Clicked() {
 				p.retryRegionSequence()
@@ -480,28 +483,28 @@ func (p *explorePage) regionReference(c *ui.Context, d *regionData) {
 			return
 		}
 		if s.seq == "" {
-			ui.Text(c, "Reference sequence unavailable").FontSize(11).TextColor(t.TextMuted)
-			ui.Text(c, "Add a reference FASTA to extract this region.").FontSize(16).Bold()
+			ui.Text(c, "Reference sequence unavailable").FontSize(FontSmall).TextColor(t.TextMuted)
+			ui.Text(c, "Add a reference FASTA to extract this region.").FontSize(FontTitle).Bold()
 			ui.Text(c, "Observed HYB coordinates remain available without a FASTA, but they do not provide the full reference sequence.").
-				FontSize(12).TextColor(t.TextMuted)
+				FontSize(FontSmall).TextColor(t.TextMuted)
 			return
 		}
 		start, end := p.regionSequenceRange(d)
-		ui.Text(c, "Reference sequence").FontSize(11).TextColor(t.TextMuted)
-		ui.Text(c, d.gene+":"+span(start, end)).FontSize(16).Bold()
+		ui.Text(c, "Reference sequence").FontSize(FontSmall).TextColor(t.TextMuted)
+		ui.Text(c, d.gene+":"+span(start, end)).FontSize(FontTitle).Bold()
 		lines, more := groupedSequence(s.seq, start)
 		ui.Column(c).Gap(2).Children(func() {
 			for _, line := range lines {
-				ui.Row(c).Gap(10).Children(func() {
-					ui.Text(c, line[0]).FontSize(12).Font("monospace").TextColor(t.TextMuted).Width(64).TextAlign(ui.End)
-					ui.Text(c, line[1]).FontSize(12).Font("monospace").Selectable()
+				ui.Row(c).Gap(Space3).Children(func() {
+					ui.Text(c, line[0]).FontSize(FontSmall).Font("monospace").TextColor(t.TextMuted).Width(64).TextAlign(ui.End)
+					ui.Text(c, line[1]).FontSize(FontSmall).Font("monospace").Selectable()
 				})
 			}
 		})
 		if more != "" {
-			ui.Text(c, more).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, more).FontSize(FontSmall).TextColor(t.TextMuted)
 		}
-		ui.Row(c).Gap(8).Wrap().Children(func() {
+		ui.Row(c).Gap(Space2).Wrap().Children(func() {
 			if ui.Button(c, "Copy sequence").Clicked() {
 				c.WriteClipboard(s.seq)
 				p.a.Toast("Sequence copied")
@@ -586,11 +589,11 @@ func (p *explorePage) regionRecords(c *ui.Context, d *regionData) {
 			}
 		}).Height(min(float32(len(rows)+1)*30+12, 420)).Label("Matching records").Children(func() {
 			if len(rows) == 0 && !s.recLoad.busy() {
-				ui.Text(c, "No matching records.").TextColor(t.TextMuted).Padding(12)
+				ui.Text(c, "No matching records.").TextColor(t.TextMuted).Padding(Space3)
 			}
 		})
 		if s.recTotal > regionRecordsShort {
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(Space3).AlignItems(ui.Center).Children(func() {
 				label := fmt.Sprintf("Show %s records", FormatNumber(int64(min(s.recTotal, regionRecordsLong))))
 				if s.showAll {
 					label = "Show fewer records"
@@ -604,7 +607,7 @@ func (p *explorePage) regionRecords(c *ui.Context, d *regionData) {
 					note = fmt.Sprintf("Showing the first %s of %s matching records. Export includes all local matches.",
 						FormatNumber(regionRecordsLong), FormatNumber(int64(s.recTotal)))
 				}
-				ui.Text(c, note).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, note).FontSize(FontSmall).TextColor(t.TextMuted)
 			})
 		}
 	})

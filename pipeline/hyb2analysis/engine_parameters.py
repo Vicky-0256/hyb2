@@ -13,7 +13,11 @@ from cplfold.models import COFOLD_MODELS, MODELS, default_model
 from .iris_parameters import IRIS_DEFAULTS, IRIS_K_RANGE_GRAMMAR, IRIS_RANGES, checked_iris_defaults
 
 # HYB2 task defaults (not standalone CLI search budgets): minimum, maximum, default.
-CPL_SEARCH = dict(beamSize=(1, 200, 20), maxPhase1=(1, 20, 3), energyDelta=(0, 50, 5.0),
+# Beam 200 and one Phase-1 candidate (the MFE alone, without the suboptimal
+# outside pass) recover all 53 pairs of the 2011 yeast U2 structure (beam 20:
+# 35). Without pseudoknots, further candidates are ranked by Turner energy
+# without the read bonus, so they can only trade read support for energy.
+CPL_SEARCH = dict(beamSize=(1, 200, 200), maxPhase1=(1, 20, 1), energyDelta=(0, 50, 5.0),
                   alpha=(0, 1, 0.5), beta=(0, 1, 0.0))
 # The strand count of each Hyb2 fold engine, for cplfold.models.default_model.
 _TWO_STRANDS = {"cplfold": False, "cplcofold": True}

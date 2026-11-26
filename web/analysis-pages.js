@@ -1659,7 +1659,7 @@
       '<p class="card-note">Defaults suit most RNAs. Evidence alpha sets how strongly HYB evidence pulls bases together (0 = energy only); beam and phase-1 candidates trade speed for a broader search; the energy window keeps candidates within that many kcal/mol of the best.</p>',
       '<div class="control-grid">',
       renderSelectControl("Beam size", "cplfoldBeam", String(structure.cplfoldBeam ?? defaults.beamSize),
-        numericPresets(defaults.beamSize, ranges.beamSize, { 10: "faster", 50: "slower" }), "structure-control"),
+        numericPresets(defaults.beamSize, ranges.beamSize, { 20: "fastest", 100: "faster" }), "structure-control"),
       renderSelectControl("Phase-1 candidates", "cplfoldMaxPhase1", String(structure.cplfoldMaxPhase1 ?? defaults.maxPhase1),
         numericPresets(defaults.maxPhase1, ranges.maxPhase1, { 1: "quickest", 5: "broader search" }), "structure-control"),
       "</div>",
@@ -1723,7 +1723,7 @@
     return format(capacity.baselineLength) + " nt before the capacity test, up to " + format(capacity.hardCeiling) + " nt after it";
   }
 
-  // "beam 20 · 3 candidates · ±5 kcal/mol · DP09 · alpha 0.5 · beta 0 · defaults"
+  // "beam 200 · 1 candidate · ±5 kcal/mol · DP09 · alpha 0.5 · beta 0 · defaults"
   function cplfoldAdvancedSummary(structure) {
     const { defaults: d, defaultModel } = cplfoldCatalog(structure);
     const values = {
@@ -1733,7 +1733,7 @@
     };
     const defaults = Number(values.beam) === d.beamSize && Number(values.phase1) === d.maxPhase1 && Number(values.delta) === d.energyDelta &&
       values.model === defaultModel && Number(values.alpha) === globalThis.Hyb2EngineParameters.cplfold.defaults.alpha && Number(values.beta) === d.beta;
-    return "beam " + values.beam + " · " + values.phase1 + " candidates · ±" + values.delta + " kcal/mol · " + values.model +
+    return "beam " + values.beam + " · " + values.phase1 + (Number(values.phase1) === 1 ? " candidate" : " candidates") + " · ±" + values.delta + " kcal/mol · " + values.model +
       " · alpha " + values.alpha + " · beta " + values.beta + (defaults ? " · defaults" : " · changed");
   }
 

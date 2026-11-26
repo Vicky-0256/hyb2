@@ -104,8 +104,8 @@ assert.equal(defaultStructure.constraintMode, "none", "Structure folding should 
 assert.equal(defaultStructure.constraintText, "", "Manual structure constraints should default to empty input");
 assert.equal(defaultStructure.viewMode, "folded", "The molecule-like folded view should be the default structure visualization");
 assert.equal(defaultStructure.cplfoldEvidence, "hyb-blocks", "CPLfold should default to the post-HYB evidence path when selected");
-assert.equal(defaultStructure.cplfoldBeam, "20");
-assert.equal(defaultStructure.cplfoldMaxPhase1, "3");
+assert.equal(defaultStructure.cplfoldBeam, "200");
+assert.equal(defaultStructure.cplfoldMaxPhase1, "1");
 assert.equal(defaultStructure.cplfoldEnergyModel, "DP09");
 assert.equal(defaultStructure.cplfoldAllowPseudoknot, false,
   "CPLfold should default to pseudoknot-free output");

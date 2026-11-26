@@ -48,7 +48,7 @@ and run the same export. Both forms and the browser worker read the exported
 defaults; the desktop runtime and `bin/iris` read the Python definition directly.
 For CPLfold and CPLcofold, each numeric task parameter declares its default
 beside its range. Omitting beam size, phase-1 count, energy delta or beta
-selects 20, 3, 5 or 0, respectively. Omitted alpha is 0.5 for single-strand
+selects 200, 1, 5 or 0, respectively. Omitted alpha is 0.5 for single-strand
 tasks and 0 for two-strand tasks. Both guided forms explicitly start at
 alpha 0.5; an explicit zero is never replaced by the default.
 On both hosts, omitting `allowPseudoknot` runs only Phase 1. Only JSON `true`
@@ -156,7 +156,7 @@ reconstructs the symmetric dense NumPy matrix before folding:
 ```bash
 bin/cplfold --sequence-file cplfold-input.fasta \
   --bonus-matrix-file cplfold-bonus-matrix.tsv \
-  --beam 20 --delta 5 --max-phase1 3 --max-phase2 1 \
+  --beam 200 --delta 5 --max-phase1 1 --max-phase2 1 \
   --model DP09 --alpha 0.5 --beta 0
 ```
 

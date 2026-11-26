@@ -82,7 +82,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 		t.Fatalf("arcs %d pairs, %v-%v of %d", len(p.arcs.A), p.arcs.Start, p.arcs.End, p.arcs.Length)
 	}
 	// The form estimates the whole-RNA fold (built-in rate, no history).
-	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 1 min 50 s (rough; the first fold after installing also prepares the folding engine, about 2–4 min more)",
+	for _, text := range []string{"the whole RNA, 10,807 nt, without pseudoknots", "about 54 s (rough; the first fold after installing also prepares the folding engine, about 2–4 min more)",
 		"about 16.7 GB of the 24.0 GB tasks may use"} {
 		if !tt.HasText(text) {
 			t.Fatalf("no fold check %q: %q", text, tt.Texts())
@@ -96,7 +96,7 @@ func TestStructureViewerAndCompare(t *testing.T) {
 	tt.Frame()
 	found := false
 	for _, text := range tt.Texts() {
-		found = found || text == "about 12 s (rough; the first fold after installing also prepares the folding engine, about 2–4 min more)"
+		found = found || text == "about 8 s (rough; the first fold after installing also prepares the folding engine, about 2–4 min more)"
 	}
 	if !found {
 		t.Fatalf("no windows estimate: %q", tt.Texts())
@@ -176,7 +176,7 @@ func TestStructureFormPrefillAndRun(t *testing.T) {
 	}
 	params := started[0].Parameters.(map[string]any)
 	// the web RNA Structure page's CPLfold defaults
-	if params["allow_pseudoknot"] != false || params["alpha"] != 0.5 || params["beam"] != 20 || params["max_phase1"] != 3 ||
+	if params["allow_pseudoknot"] != false || params["alpha"] != 0.5 || params["beam"] != 200 || params["max_phase1"] != 1 ||
 		params["energy_delta"] != 5.0 || params["beta"] != 0.0 || params["energy_model"] != "DP09" {
 		t.Fatalf("params %+v", params)
 	}

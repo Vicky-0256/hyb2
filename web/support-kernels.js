@@ -101,8 +101,8 @@ globalThis.Hyb2EngineParameters = {
     },
     "defaults": {
       "allowPseudoknot": false,
-      "beamSize": 20,
-      "maxPhase1": 3,
+      "beamSize": 200,
+      "maxPhase1": 1,
       "energyDelta": 5.0,
       "alpha": 0.5,
       "beta": 0.0
@@ -144,8 +144,8 @@ globalThis.Hyb2EngineParameters = {
     },
     "defaults": {
       "allowPseudoknot": false,
-      "beamSize": 20,
-      "maxPhase1": 3,
+      "beamSize": 200,
+      "maxPhase1": 1,
       "energyDelta": 5.0,
       "alpha": 0.0,
       "beta": 0.0

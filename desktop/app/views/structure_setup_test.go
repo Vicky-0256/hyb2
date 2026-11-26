@@ -460,7 +460,7 @@ func TestStructurePreviewSequence(t *testing.T) {
 	for _, text := range []string{"Prepared reference layout", africaGene + " 1–60 → prepared 1–60",
 		" 1  ACGUACGUAC GUACGUACGU ACGUACGUAC", "31  GUACGUACGU ACGUACGUAC GUACGUACGU", "Copy sequence", "Download FASTA",
 		"Download local inputs", "Local command",
-		"bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --beam 20 --delta 5 --max-phase1 3 --max-phase2 1 --model DP09 --beta 0 --alpha 0.5 --no-pseudoknot"} {
+		"bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --beam 200 --delta 5 --max-phase1 1 --max-phase2 1 --model DP09 --beta 0 --alpha 0.5 --no-pseudoknot"} {
 		if !tt.HasText(text) {
 			t.Fatalf("lacks %q: %q", text, tt.Texts())
 		}
@@ -492,7 +492,7 @@ func TestStructurePreviewSequence(t *testing.T) {
 		t.Fatalf("local FASTA %q", got)
 	}
 	if toast := lastToast(a); !strings.Contains(toast, "The HYB bonus matrix is built when the fold runs") ||
-		!strings.HasSuffix(toast, "bin/cplfold --sequence-file cplfold-input.fasta --beam 20 --delta 5 --max-phase1 3 --max-phase2 1 --model DP09 --beta 0 --no-pseudoknot") {
+		!strings.HasSuffix(toast, "bin/cplfold --sequence-file cplfold-input.fasta --beam 200 --delta 5 --max-phase1 1 --max-phase2 1 --model DP09 --beta 0 --no-pseudoknot") {
 		t.Fatalf("toast %q", toast)
 	}
 	// two windows: one record each; bin/cplfold takes one
@@ -508,7 +508,7 @@ func TestStructurePreviewSequence(t *testing.T) {
 	csSettle(a, tt)
 	for _, text := range []string{"RNA A: 1–45 · RNA B: 46–94 · chain break after A (coordinates exclude &).",
 		africaGene + " 1–45 → prepared 1–45", africaGene + " 1,086–1,134 → prepared 46–94", "31  GUACGUACGU ACGUA&CGUAC GUACGUACGU",
-		"bin/cplcofold --sequence-file cplfold-input.fasta --mode pseudoknot --bonus-matrix-file cplfold-bonus-matrix.tsv --beam 20 --delta 5 --max-phase1 3 --max-phase2 1 --model DP09 --beta 0 --alpha 0.5"} {
+		"bin/cplcofold --sequence-file cplfold-input.fasta --mode pseudoknot --bonus-matrix-file cplfold-bonus-matrix.tsv --beam 200 --delta 5 --max-phase1 1 --max-phase2 1 --model DP09 --beta 0 --alpha 0.5"} {
 		if !tt.HasText(text) {
 			t.Fatalf("cofold lacks %q: %q", text, tt.Texts())
 		}

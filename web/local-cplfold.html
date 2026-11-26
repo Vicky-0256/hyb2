@@ -69,9 +69,9 @@ python -m pip install -r requirements/cplfold-core.txt</code></pre>
             <pre class="cplfold-command" tabindex="0"><code>bin/cplfold \
   --sequence-file cplfold-input.fasta \
   --bonus-matrix-file cplfold-bonus-matrix.tsv \
-  --beam 20 \
+  --beam 200 \
   --delta 5 \
-  --max-phase1 3 \
+  --max-phase1 1 \
   --max-phase2 1 \
   --model DP09 \
   --beta 0 \
@@ -88,9 +88,9 @@ python -m pip install -r requirements/cplfold-core.txt</code></pre>
             <pre class="cplfold-command" tabindex="0"><code>HYB2_CPLFOLD_MAX_NT=2000 bin/cplfold \
   --sequence-file cplfold-input.fasta \
   --bonus-matrix-file cplfold-bonus-matrix.tsv \
-  --beam 20 \
+  --beam 200 \
   --delta 5 \
-  --max-phase1 3 \
+  --max-phase1 1 \
   --max-phase2 1 \
   --model DP09 \
   --beta 0 \

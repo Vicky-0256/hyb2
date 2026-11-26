@@ -194,7 +194,8 @@ class StructureRunTests(unittest.TestCase):
         self.assertEqual(set(progress) >= {"stage", "detail", "bytes_done", "bytes_total", "updated_at"}, True)
         self.assertEqual(result["structure"]["path"], "structures/genome1")
         # What was folded and how long it took feed the desktop's estimates.
-        self.assertEqual(progress["work"], {"lengths": [self.length], "beam": 50, "workers": 1, "pseudoknot": False, "guided": True})
+        self.assertEqual(progress["work"], {"lengths": [self.length], "beam": 50, "max_phase1": 1, "workers": 1,
+                                            "pseudoknot": False, "guided": True})
         performance = result["performance"]
         self.assertEqual((performance["lengths"], performance["beam"], performance["workers"]), ([self.length], 50, 1))
         self.assertGreater(performance["seconds"], 0)
@@ -221,7 +222,8 @@ class StructureRunTests(unittest.TestCase):
         with mock.patch.object(structure, "load_cplfold_web", lambda root: Spy(real(root))):
             result = handle(self._request(task_id="evwork", parameters={"beam": 50}), repo_root=ROOT)
         self.assertTrue(result["ok"], result)
-        self.assertEqual(seen, [{"lengths": [self.length], "beam": 50, "workers": 1, "pseudoknot": False, "guided": True}])
+        self.assertEqual(seen, [{"lengths": [self.length], "beam": 50, "max_phase1": 1, "workers": 1,
+                                 "pseudoknot": False, "guided": True}])
 
     def test_windows_parallel_matches_serial(self):
         windows = [{"start": 1, "end": 160}, {"start": 120, "end": 300}, {"start": 200, "end": 320}]
@@ -712,7 +714,7 @@ class CofoldRunTests(unittest.TestCase):
                 native = json.loads((self.project / "structures/defaults/meta.json").read_text())["parameters"]
                 browser = web.fold({"sequence": self.one[:10], "sequenceTwo": self.one[20:30]})
                 self.assertEqual(browser["maxSequenceLength"], 75)
-                for n, w, expected in (("beam", "beamSize", 7), ("max_phase1", "maxPhase1", 3),
+                for n, w, expected in (("beam", "beamSize", 7), ("max_phase1", "maxPhase1", 1),
                                        ("energy_delta", "energyDelta", 5), ("alpha", "alpha", 0), ("beta", "beta", 0)):
                     self.assertEqual((native[n], browser["parameters"][w]), (expected, expected), n)
         with mock.patch.dict(CPL_SEARCH, beamSize=(1, 10, 11)):

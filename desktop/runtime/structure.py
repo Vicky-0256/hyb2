@@ -5,7 +5,7 @@ Two modes share one request shape::
     {"operation": "structure_run", "project_path": ..., "task_id": ..., "run_dir": ...,
      "sample_ids": [...] | "hyb_paths": [...], "reference": <fasta path>, "gene_id": ...,
      "mode": "genome" | "windows", "windows": [{"start": 1, "end": 1500}, ...],
-     "parameters": {"alpha": 0.5, "beam": 20, "allow_pseudoknot": ..., ...},
+     "parameters": {"alpha": 0.5, "beam": 200, "allow_pseudoknot": ..., ...},
      "workers": <int>, "memory_budget_mb": <int>}
 
 * ``genome`` folds the whole reference sequence once (pseudoknot-free by
@@ -888,7 +888,8 @@ def _structure_run(request: Dict[str, Any], repo_root: Optional[Path], state: Di
     workers = min(cpu, memory_workers, len(windows))
     if requested_workers is not None:
         workers = min(workers, requested_workers)
-    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"), "workers": workers,
+    progress.work = {"lengths": [end - start + 1 for start, end in windows], "beam": params.get("beam"),
+                     "max_phase1": params.get("max_phase1"), "workers": workers,
                      "pseudoknot": params["allow_pseudoknot"], "guided": params["evidence"] == "hyb"}
 
     # 1. stream the evidence
@@ -1379,7 +1380,7 @@ def _cofold_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
         result = {"ok": False, "status": "unavailable", "task_id": task_id, "run_dir": str(run_dir), "error": str(error)}
         _atomic_write_json(run_dir / "result.json", result)
         return result
-    progress.work = {"lengths": [len(sequence)], "beam": params["beam"], "workers": 1,
+    progress.work = {"lengths": [len(sequence)], "beam": params["beam"], "max_phase1": params["max_phase1"], "workers": 1,
                      "pseudoknot": params["allow_pseudoknot"], "guided": params["evidence"] == "hyb"}
 
     # 1. the evidence, as blocks with row counts (memory grows with the

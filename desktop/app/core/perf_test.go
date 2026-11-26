@@ -198,6 +198,12 @@ func TestEstimateFoldNearMeasured(t *testing.T) {
 		{FoldJob{Lengths: []int{2000}, Beam: 100, Workers: 1}, 9.2},
 		// a 601-nt window of Livefire1 (pseudoknots or not): under a second of folding
 		{FoldJob{Lengths: []int{601}, Beam: 20, Workers: 1, Pseudoknot: true, Guided: true}, 4},
+		// one phase-1 candidate, the MFE alone: ZIKV prefixes, sequence only
+		{FoldJob{Lengths: []int{10807}, Beam: 200, Candidates: 1, Workers: 1}, 13.6},
+		{FoldJob{Lengths: []int{10807}, Beam: 20, Candidates: 1, Workers: 1}, 8.1},
+		{FoldJob{Lengths: []int{4000}, Beam: 200, Candidates: 1, Workers: 1}, 6.1},
+		{FoldJob{Lengths: []int{4000}, Beam: 200, Candidates: 1, Workers: 1, Pseudoknot: true}, 6.3},
+		{FoldJob{Lengths: []int{1000}, Beam: 200, Candidates: 1, Workers: 1}, 3.4},
 	} {
 		got := EstimateFold(nil, c.job).Seconds
 		if got < c.seconds/1.35 || got > c.seconds*1.35 {

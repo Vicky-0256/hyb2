@@ -209,6 +209,7 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 			Seconds    float64 `json:"seconds"`
 			Lengths    []int   `json:"lengths"`
 			Beam       int     `json:"beam"`
+			MaxPhase1  int     `json:"max_phase1"`
 			Workers    int     `json:"workers"`
 			Pseudoknot bool    `json:"pseudoknot"`
 			Guided     *bool   `json:"guided"`
@@ -249,7 +250,7 @@ func perfFromResult(kind, runDir string) (PerfRecord, bool) {
 			record.Seconds -= p.StageSeconds["energy"]
 		}
 	case "structure":
-		job := FoldJob{Lengths: p.Lengths, Beam: p.Beam, Workers: p.Workers, Pseudoknot: p.Pseudoknot, Guided: p.Guided == nil || *p.Guided}
+		job := FoldJob{Lengths: p.Lengths, Beam: p.Beam, Candidates: p.MaxPhase1, Workers: p.Workers, Pseudoknot: p.Pseudoknot, Guided: p.Guided == nil || *p.Guided}
 		record.Units, record.Parallel = FoldUnits(job), foldParallel(len(p.Lengths), p.Workers)
 		record.Work, record.WorkModel = foldWork(job), foldWorkModel
 		if record.Units <= 0 {
@@ -270,6 +271,13 @@ const (
 	// nt 112 s). A long fold grows faster than its beam search alone.
 	foldExponent     = 1.85
 	foldBeamExponent = 0.3
+	// One phase-1 candidate folds the MFE alone, without the suboptimal
+	// outside pass: mfeUnits x length^1.52 x beam^0.55 (the same computer:
+	// beam 20, 4000 nt 0.76 s, 10,807 nt 5.1 s; beam 200, 1000 nt 0.38 s,
+	// 4000 nt 3.1 s, 10,807 nt 10.6 s).
+	mfeUnits        = 0.178
+	mfeExponent     = 1.52
+	mfeBeamExponent = 0.55
 	// priorFoldSeconds is the time of one unit (1000 nt, beam 100).
 	priorFoldSeconds = 1.37
 	// foldPseudoknot is the pseudoknot search (phase 2) on top of phase 1:
@@ -288,21 +296,23 @@ const (
 )
 
 // FoldJob is a structure fold to estimate: the lengths of its windows (one
-// for the whole RNA, or two strands folded as one), the beam, how many
-// windows run at once, whether pseudoknots are searched and whether a HYB
-// bonus matrix is built (not a sequence-only fold).
+// for the whole RNA, or two strands folded as one), the beam, the phase-1
+// candidates (0 when a runtime does not say: older ones always ran the
+// suboptimal pass), how many windows run at once, whether pseudoknots are
+// searched and whether a HYB bonus matrix is built (not a sequence-only fold).
 type FoldJob struct {
 	Lengths    []int
 	Beam       int
+	Candidates int
 	Workers    int
 	Pseudoknot bool
 	Guided     bool
 }
 
 // FoldUnits is the work of folding the windows, in units of
-// priorFoldSeconds: per window (length/1000)^1.85 x (beam/100)^0.3, times
-// foldPseudoknot when pseudoknots are searched, plus the bonus matrix when
-// guided.
+// priorFoldSeconds: per window (length/1000)^1.85 x (beam/100)^0.3, or the
+// MFE alone's mfeUnits term for one candidate, times foldPseudoknot when
+// pseudoknots are searched, plus the bonus matrix when guided.
 func FoldUnits(job FoldJob) float64 {
 	var units float64
 	for _, n := range job.Lengths {
@@ -314,10 +324,13 @@ func FoldUnits(job FoldJob) float64 {
 func foldUnit(n int, job FoldJob) float64 {
 	beam := job.Beam
 	if beam <= 0 {
-		beam = 20 // the runtime's default (structure.DEFAULTS, as the web page)
+		beam = 20 // none reported (ViennaRNA, COMRADES): the default before beam 200
 	}
 	kb := float64(n) / 1000
 	units := math.Pow(kb, foldExponent) * math.Pow(float64(beam)/100, foldBeamExponent)
+	if job.Candidates == 1 {
+		units = mfeUnits * math.Pow(kb, mfeExponent) * math.Pow(float64(beam)/100, mfeBeamExponent)
+	}
 	if job.Pseudoknot {
 		units *= foldPseudoknot
 	}
@@ -364,8 +377,8 @@ func foldWork(job FoldJob) float64 {
 	return math.Max(FoldUnits(job)/float64(foldParallel(len(job.Lengths), job.Workers)), foldUnit(largest, job))
 }
 
-// foldJob is the fold a progress names (work: {lengths, beam, workers,
-// pseudoknot, guided}); a runtime that does not say is taken as
+// foldJob is the fold a progress names (work: {lengths, beam, max_phase1,
+// workers, pseudoknot, guided}); a runtime that does not say is taken as
 // pseudoknot-free and guided, its defaults.
 func foldJob(work map[string]any) FoldJob {
 	job := FoldJob{Guided: true}
@@ -376,8 +389,9 @@ func foldJob(work map[string]any) FoldJob {
 		}
 	}
 	beam, _ := work["beam"].(float64)
+	candidates, _ := work["max_phase1"].(float64)
 	workers, _ := work["workers"].(float64)
-	job.Beam, job.Workers = int(beam), int(workers)
+	job.Beam, job.Candidates, job.Workers = int(beam), int(candidates), int(workers)
 	job.Pseudoknot, _ = work["pseudoknot"].(bool)
 	if guided, ok := work["guided"].(bool); ok {
 		job.Guided = guided

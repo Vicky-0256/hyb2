@@ -1248,7 +1248,7 @@ func (p *structurePage) estimate(pl foldPlan) {
 		lengths, workers = []int{pl.lengths[0] + pl.lengths[1]}, 1
 	}
 	// the bonus matrix is part of a guided fold's time
-	job := core.FoldJob{Lengths: lengths, Beam: int(p.beam), Workers: workers, Pseudoknot: pl.pk, Guided: !p.seqOnly}
+	job := core.FoldJob{Lengths: lengths, Beam: int(p.beam), Candidates: int(p.phase1), Workers: workers, Pseudoknot: pl.pk, Guided: !p.seqOnly}
 	key := fmt.Sprint(job)
 	if key == p.estKey {
 		return

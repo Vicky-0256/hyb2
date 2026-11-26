@@ -39,7 +39,7 @@ ProgressBytes = Callable[[str, int, int], None]
 
 CHECKPOINT_VERSION = 1
 # bump when a change alters what a stage writes, so old checkpoints are not reused
-STAGE_FORMAT = "2026-11-25"
+STAGE_FORMAT = "2026-11-26"
 _FASTQ = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 _FASTA = (".fasta", ".fa", ".fasta.gz", ".fa.gz")
 
@@ -75,6 +75,14 @@ class Options:
     memory_mb: int = field(default_factory=default_memory_mb)  # budget for in-memory sort chunks and count tables
     resume: bool = True  # continue from <out>.checkpoint.json when it matches
     energy_engine: str = "rnaduplex"  # "rnaduplex" (ViennaRNA, intermolecular as Hyb) or "rnacofold" (legacy hyb2)
+    # mapping (gk-dev defaults, inputs.MAPPING_DEFAULTS): cutadapt 3' adapter
+    # trimming before collapsing (None skips it; collapsed FASTA is never
+    # trimmed), then Bowtie2 -L seed_length --score-min score_min + bowtie2_args
+    adapter: Optional[str] = inputs.MAPPING_DEFAULTS["adapter"]
+    min_length: int = inputs.MAPPING_DEFAULTS["min_length"]
+    seed_length: int = inputs.MAPPING_DEFAULTS["seed_length"]
+    score_min: str = inputs.MAPPING_DEFAULTS["score_min"]
+    bowtie2_args: Optional[str] = None
 
 
 @dataclass
@@ -166,6 +174,8 @@ def _identity(source: str, input_path: Path, reference: Path, work: Path, option
         "input": _fingerprint(input_path), "reference": _fingerprint(reference),
         "options": {"blast_threshold": options.blast_threshold, "max_overlap": options.max_overlap,
                     "max_hits": options.max_hits, "keep_sam": options.keep_sam,
+                    "adapter": options.adapter, "min_length": options.min_length, "seed_length": options.seed_length,
+                    "score_min": options.score_min, "bowtie2_args": options.bowtie2_args,
                     "source": source, "work": str(work.resolve()), "format": STAGE_FORMAT},
     }
 
@@ -471,10 +481,17 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
         if record:
             counts.update(record.get("counts", {}))
         else:
+            raw = input_path
+            if options.adapter:  # cutadapt removes the 3' adapter first
+                progress("reads", "trimming adapters with cutadapt")
+                raw = inputs.trim_adapters(input_path, work / ("trimmed." + source), Path(str(out_prefix) + ".cutadapt.log"),
+                                           options.adapter, options.min_length, threads)
             progress("reads", "collapsing identical reads")
             collapse_reads = inputs.collapse_fastq if source == "fastq" else inputs.collapse_fasta
-            counts.update(collapse_reads(input_path, reads, work, memory_mb=memory, workers=threads,
+            counts.update(collapse_reads(raw, reads, work, memory_mb=memory, workers=threads,
                                          progress_bytes=progress_bytes))
+            if raw != input_path:
+                raw.unlink()
             ck.finish("collapse", [reads], counts=dict(counts))
 
     # ---- map: Bowtie2 or SAM input -> called hybrids (+ BLAST table)
@@ -499,7 +516,8 @@ def _process(source: str, input_path: Path, reference: Path, out_prefix: Path, o
             try:
                 if source in ("fastq", "fasta"):
                     progress("map", "mapping reads with Bowtie2")
-                    stream = inputs.Bowtie2Stream(reads, index, threads=threads, log=log)
+                    stream = inputs.Bowtie2Stream(reads, index, threads=threads, log=log, options=inputs.bowtie2_options(
+                        options.seed_length, options.score_min, options.bowtie2_args))
                     lines: Iterable[str] = stream
                     total = reads.stat().st_size
                     unique = counts.get("unique_reads", 0)

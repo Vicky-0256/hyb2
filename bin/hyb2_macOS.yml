@@ -28,6 +28,7 @@ dependencies:
   - blas=1.0
   - bottleneck=1.3.7
   - bowtie2=2.5.3
+  - cutadapt  # 3' adapter trimming before mapping
   - bwidget=1.9.16
   - bzip2=1.0.8
   - c-ares=1.19.1

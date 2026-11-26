@@ -80,7 +80,9 @@ class ZafrRegressionTest(unittest.TestCase):
             self.assertEqual(_digest(path), expected[key], "%s %s" % (run_name, key))
 
     def test_fastq_and_sam_paths(self):
-        result = run(self.reads, self.reference, self.tmp / "fq/zafr_2m", _options(keep_sam="plain"))
+        # the golden is legacy hyb2's output: no adapter trimming, Bowtie2 -L 16 --score-min L,18,0
+        legacy = dict(adapter=None, seed_length=16, score_min="L,18,0")
+        result = run(self.reads, self.reference, self.tmp / "fq/zafr_2m", _options(keep_sam="plain", **legacy))
         self._check(result, "fastq_e0")
         sam = result.sam
         self.assertTrue(sam and Path(sam).is_file())

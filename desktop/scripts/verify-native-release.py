@@ -114,6 +114,8 @@ def main() -> int:
         return fail(f"native runtime smoke failed: {error}")
     if not details.get("viennarna"):
         return fail("ViennaRNA 2.7.2 is not installed in the bundled Python (needed for pipeline -e 1)")
+    if not (details.get("cutadapt") or {}).get("version") == "5.2":
+        return fail("cutadapt 5.2 is not installed in the bundled Python (needed for adapter trimming before mapping)")
     evidence = details.get("evidence")
     if not evidence:
         return fail("RNAcentral evidence packages (mcp, rnacentral-mcp-server) are not installed in the bundled Python:\n"

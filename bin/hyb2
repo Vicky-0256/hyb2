@@ -44,6 +44,13 @@ print_help() {
     echo "  -j   Directory of VARNAcmd.jar (default set when installing hyb2)"
     echo "  -e   Calculate Folding Energy: 1 to calculate, 0 to skip and save on runtime (default=0)"
     echo "  -r   Folding Algorithm: 1 for ViennaRNA, 0 for UNAFold (if installed separately), 2 for mfold 3.6 (conda install -c bioconda mfold) (default=1)"
+    echo "Mapping settings (environment variables, for FASTQ/FASTA input):"
+    echo "  HYB2_ADAPTER        3' adapter trimmed with cutadapt before mapping; none to skip (default TGGAATTCTCGGGTGCCAAGG)"
+    echo "  HYB2_MIN_LENGTH     minimum read length after trimming (default 18)"
+    echo "  HYB2_SEED_LENGTH    bowtie2 -L (default 10; legacy 16)"
+    echo "  HYB2_SCORE_MIN      bowtie2 --score-min (default L,15,0; legacy L,18,0)"
+    echo "  HYB2_BOWTIE2_ARGS   extra bowtie2 arguments"
+    echo "  HYB2_THREADS        bowtie2 and cutadapt threads (default all CPUs)"
     echo " "
     echo "To only plot contact density map after generating hyb output:"
     echo "hyb2 -i <Output.hyb> -a <GENE_ID_1>"
@@ -206,7 +213,12 @@ for label, path in zip(("input", "reference_1"), sys.argv[1:]):
     info = os.stat(path) if path else None
     print(label, os.path.realpath(path) if path else "-", info.st_size if info else "-",
           info.st_mtime_ns if info else "-", sep="\t")' "$IN_FILE" "$original_ref_1")
-    record=$(printf 'hyb2 step 1 record format 3\n%s\noptions\t-v %s -m %s -h %s -e %s' "$record" "$hval" "$gmax" "$hmax" "$ENERGY")
+    record=$(printf 'hyb2 step 1 record format 4\n%s\noptions\t-v %s -m %s -h %s -e %s' "$record" "$hval" "$gmax" "$hmax" "$ENERGY")
+    if [[ -n "$mapper" ]]; then  # bowtie2_reads2sam.sh's settings (defaults there)
+        record+=$(printf '\nmapping\tadapter=%s min_length=%s seed_length=%s score_min=%s bowtie2_args=%s' \
+            "${HYB2_ADAPTER-default}" "${HYB2_MIN_LENGTH:-default}" "${HYB2_SEED_LENGTH:-default}" \
+            "${HYB2_SCORE_MIN:-default}" "${HYB2_BOWTIE2_ARGS:-}")
+    fi
 fi
 published_outputs() {  # the files <prefix>.hyb.inputs vouches for
     python3 -c 'import os, sys
@@ -281,6 +293,7 @@ if (( convert )); then
         (( status == 0 )) || { echo "Mapping failed." >&2; exit "$status"; }
         [[ -f "$stage.sam" && -s "$stage.sam" ]] || { echo "Mapping did not produce a nonempty SAM file." >&2; exit 1; }
         echo "SAM file generated"
+        if [[ -f "$stage.cutadapt.log" ]]; then outputs+=("$stage.cutadapt.log" "$OUT.cutadapt.log"); fi
     else
         sam_filt "$IN_FILE" > "$stage.sam"
     fi

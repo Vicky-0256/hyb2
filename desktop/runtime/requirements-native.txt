@@ -1,8 +1,10 @@
 # Standalone release runtime: CPython 3.11.x; install only target-platform wheels.
 # Exact pins and SHA-256 for every wheel used on macOS arm64 (macosx_11_0),
 # Windows amd64 and Linux x86_64 (numpy/numba/llvmlite manylinux2014,
-# ViennaRNA manylinux_2_28). These four are the whole resolved set (numba needs
-# only numpy and llvmlite on 3.11; ViennaRNA declares no dependencies).
+# ViennaRNA manylinux_2_28). numba needs only numpy and llvmlite on 3.11;
+# ViennaRNA declares no dependencies. cutadapt (3' adapter trimming before
+# mapping) needs dnaio and xopen; xopen needs backports.zstd on Python < 3.14
+# and, on x86_64/AMD64 only, isal and zlib-ng (manylinux_2_28 wheels).
 # Install with: python -m pip install --require-hashes --only-binary=:all: -r desktop/runtime/requirements-native.txt
 # Keep the versions equal to PINS in desktop/scripts/stage-native.py and
 # verify-native-release.py; regenerate all hashes when any pin changes.
@@ -22,3 +24,23 @@ ViennaRNA==2.7.2 \
     --hash=sha256:f7859efd3724fd5a9189dfaf4ee0b2946fc9120363f63ba1dff079dedb5e9ff4 \
     --hash=sha256:b66567c43c1f3b6795a1c7ab46b7315f56bfed4097827d0df80e03ff5b8f0e29 \
     --hash=sha256:c85a09270bda4ddb4aa07d2d373e135c4efac94253b121601bb733cfda22dc79
+cutadapt==5.2 \
+    --hash=sha256:dbaf12df903971ff780518d8ba0a2c70e63c8448ae406568574037b957fd4814 \
+    --hash=sha256:909a65c93c8314e75ce5780ab714f9c7dcb1f5a0eb848f8304421adc1111bb6f \
+    --hash=sha256:1a578c64cf9b0837c887ceebb889658ca23b4c059c5f92c2dd6decb337b3e717
+dnaio==1.2.5 \
+    --hash=sha256:ec8fb0ee159c59d936e2b76197a460f6cee794075b47c661434ebefd95dd6d1d \
+    --hash=sha256:0b34df8363d41af88317bdccdefb96995848430d25535b045cb2a881e48c7ad2 \
+    --hash=sha256:401a99e063a2860d6528f9d70cf904f59c2bdb8280da39ee3d6419a05bf2e556
+xopen==2.1.0 \
+    --hash=sha256:0d01d2183e7496594cbed022b1d89a0a7f4e03900da1b8d59047322a5140a66d
+backports.zstd==1.8.1 \
+    --hash=sha256:967b838897a6ce54666ed2521f58118fe00b1e68489c5b25273e6b8c3af5a98a \
+    --hash=sha256:9051ff7f83c471e7bae74ffe668bbe78bb056e397c6f4d0bed1a9b42b9866a94 \
+    --hash=sha256:66718c5071eae655c012c82d5a27568224643d8464df7733ac80dbed98291bd6
+isal==1.9.1 ; platform_machine == "x86_64" or platform_machine == "AMD64" \
+    --hash=sha256:a5b2f93fc39b8be92c6547965143094ee4d6a5543ef2d762a0edb6f06201feb5 \
+    --hash=sha256:85456c25150cb3608901641d355ee1f7b34f16c24db268e5b54a529b7a8e3c2d
+zlib-ng==1.1.0 ; platform_machine == "x86_64" or platform_machine == "AMD64" \
+    --hash=sha256:4165d05376742bbbeb448b7a2c44ad492c44d19011fb4bf1261af01357d107df \
+    --hash=sha256:c983f22258292cdc09e7f1d70a623e8a655f146e47d107deaa0c07f15834c472

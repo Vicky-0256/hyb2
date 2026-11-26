@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from .energy import EnergyUnavailable
-from .inputs import MappingUnavailable
+from .inputs import MAPPING_DEFAULTS, MappingUnavailable
 from .pipeline import Options, run
 
 
@@ -29,6 +29,15 @@ def main(argv=None) -> int:
     parser.add_argument("--energy-engine", choices=("rnaduplex", "rnacofold"), default="rnaduplex",
                         help="dG with -e 1: rnaduplex (ViennaRNA, intermolecular pairs as Hyb; default) "
                              "or rnacofold (legacy hyb2)")
+    parser.add_argument("--adapter", default=MAPPING_DEFAULTS["adapter"],
+                        help="3' adapter trimmed with cutadapt before mapping; 'none' to skip (default %(default)s)")
+    parser.add_argument("--min-length", type=int, default=MAPPING_DEFAULTS["min_length"],
+                        help="minimum read length after trimming (default %(default)s)")
+    parser.add_argument("--seed-length", type=int, default=MAPPING_DEFAULTS["seed_length"],
+                        help="bowtie2 seed length -L (default %(default)s; legacy 16)")
+    parser.add_argument("--score-min", default=MAPPING_DEFAULTS["score_min"],
+                        help="bowtie2 --score-min (default %(default)s; legacy L,18,0)")
+    parser.add_argument("--bowtie2-args", default=None, metavar="'ARGS'", help="extra bowtie2 arguments, quoted")
     parser.add_argument("-p", dest="threads", type=int, default=None, help="Bowtie2 threads")
     parser.add_argument("--keep-sam", choices=("none", "gz", "plain"), default="none",
                         help="also write <out>.sam (plain) or <out>.sam.gz (gz); default none")
@@ -52,6 +61,9 @@ def main(argv=None) -> int:
     options = Options(blast_threshold=args.blast_threshold, max_overlap=args.max_overlap,
                       max_hits=args.max_hits, energy=bool(args.energy), threads=args.threads,
                       energy_engine=args.energy_engine,
+                      adapter=None if args.adapter.lower() in ("none", "") else args.adapter,
+                      min_length=args.min_length, seed_length=args.seed_length, score_min=args.score_min,
+                      bowtie2_args=args.bowtie2_args,
                       keep_sam=args.keep_sam, tmp_dir=args.tmp_dir, resume=not args.no_resume)
     if args.memory_mb:
         options.memory_mb = args.memory_mb

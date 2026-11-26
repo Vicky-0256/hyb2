@@ -9,6 +9,7 @@ dependencies:
   - archspec=0.2.3
   - boltons=23.0.0
   - bowtie2=2.5.4
+  - cutadapt  # 3' adapter trimming before mapping
   - brotli-python=1.0.9
   - bwidget=1.9.14
   - bzip2=1.0.8

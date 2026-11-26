@@ -149,6 +149,15 @@ It deliberately differs from the legacy scripts in these places:
   PATH. It prefers `bowtie2-align-s` / `bowtie2-build-s`, because the
   `bowtie2` wrapper needs Perl. The desktop runtime ships these binaries;
   see `desktop/scripts/acquire-bowtie2.py`.
+- **cutadapt:** needed for FASTQ and FASTA input unless `--adapter none`
+  (already-collapsed FASTA is never trimmed). The pipeline runs the cutadapt
+  package of its own Python (`python -m cutadapt`, as the desktop runtime
+  bundles it), else `cutadapt` on the PATH. It trims the 3' adapter
+  (`--adapter`, default TGGAATTCTCGGGTGCCAAGG) and drops reads shorter than
+  `--min-length` (18), then Bowtie2 maps with `--seed-length` 10 and
+  `--score-min` L,15,0 (legacy hyb2: 16 and L,18,0; `--bowtie2-args` adds
+  more). These are gk-dev's mapping defaults from the U2 benchmark on the
+  Brr2 CLASH data. The report goes to `<out>.cutadapt.log`.
 - **ViennaRNA:** needed for `-e 1` (and so for every desktop sample run).
   The pipeline uses the Python `RNA` module, or `RNAduplex` (`RNAcofold`
   with `--energy-engine rnacofold`) on the PATH if the module is missing. A

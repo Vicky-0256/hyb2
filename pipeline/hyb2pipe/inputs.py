@@ -6,10 +6,13 @@ from __future__ import annotations
 import gzip
 import hashlib
 import heapq
+import importlib.util
 import io
 import os
 import re
+import shlex
 import shutil
+import sys
 import subprocess
 import time
 import zlib
@@ -23,8 +26,24 @@ if __package__ == "hyb2pipe":  # standalone: PYTHONPATH=pipeline python -m hyb2p
 else:
     from ..hyb2analysis.reference import FASTA_NAMES, hyb2_reference_name, unindent_fasta_header, unique_fasta_id
 
-BOWTIE2_ARGS = ["-D", "20", "-R", "3", "-N", "0", "-L", "16", "-k", "20", "--local", "-i", "S,1,0.50",
-                "--score-min", "L,18,0", "--ma", "1", "--np", "0", "--mp", "2,2", "--rdg", "5,1", "--rfg", "5,1", "--reorder"]
+# gk-dev's mapping defaults (Kudla, U2 benchmark on the Brr2 CLASH data): with
+# adapter trimming and these Bowtie2 settings 97% of the 2011 paper's U2
+# chimeras are recovered vs 58% with the legacy -L 16 / --score-min L,18,0,
+# mostly short (<= 20 nt) arms. Provisional, to be benchmarked on other data.
+MAPPING_DEFAULTS = {
+    "adapter": "TGGAATTCTCGGGTGCCAAGG",  # Illumina small-RNA 3' adapter (CLASH / CRAC); None skips trimming
+    "min_length": 18,  # reads shorter than this after trimming are dropped
+    "seed_length": 10,  # bowtie2 -L (legacy 16)
+    "score_min": "L,15,0",  # bowtie2 --score-min (legacy L,18,0)
+}
+
+
+def bowtie2_options(seed_length: int = MAPPING_DEFAULTS["seed_length"], score_min: str = MAPPING_DEFAULTS["score_min"],
+                    extra: Optional[str] = None) -> List[str]:
+    """The Bowtie2 arguments of a run; *extra* (a shell-quoted string) is appended."""
+    return (["-D", "20", "-R", "3", "-N", "0", "-L", str(seed_length), "-k", "20", "--local", "-i", "S,1,0.50",
+             "--score-min", score_min, "--ma", "1", "--np", "0", "--mp", "2,2", "--rdg", "5,1", "--rfg", "5,1"]
+            + shlex.split(extra or "") + ["--reorder"])
 
 
 class MappingUnavailable(RuntimeError):
@@ -226,14 +245,36 @@ def bowtie2_index(fasta: Path, prefix: Path, log: Optional[TextIO] = None) -> Pa
     return prefix
 
 
-def bowtie2_map(reads_fasta: Path, index: Path, sam: Path, *, threads: Optional[int] = None, log: Optional[TextIO] = None) -> None:
-    # The bowtie2 wrapper is Perl; call the aligner binary directly when present.
-    exe = _tool("bowtie2-align-s", "bowtie2")
-    if not exe:
-        raise MappingUnavailable("bowtie2 was not found; install Bowtie2 or provide a SAM file")
-    args = [exe] + BOWTIE2_ARGS + ["-p", str(threads or os.cpu_count() or 1), "-x", str(index), "-f", str(reads_fasta)]
-    with open(sam, "w", encoding="utf-8", newline="\n") as out:
-        subprocess.run(args, check=True, stdout=out, stderr=log or subprocess.DEVNULL)
+def trim_adapters(reads: Path, out: Path, report: Path, adapter: str, min_length: int, threads: int) -> Path:
+    """3' adapter trimming with cutadapt; *out* gets the format of *reads*
+    (uncompressed) and *report* cutadapt's report."""
+    # The desktop runtime bundles cutadapt as a package of its own Python.
+    if importlib.util.find_spec("cutadapt"):
+        command = [sys.executable, "-m", "cutadapt"]
+    elif _tool("cutadapt"):
+        command = [_tool("cutadapt")]
+    else:
+        raise MappingUnavailable("cutadapt not found: install it (conda install -c bioconda cutadapt) "
+                                 "or switch adapter trimming off (--adapter none)")
+    with open(report, "w", encoding="utf-8") as handle:
+        code = subprocess.run(command + ["-a", adapter, "-m", str(min_length), "-j", str(threads), "-o", str(out),
+                                         str(reads)], stdout=handle, stderr=subprocess.STDOUT).returncode
+    text = report.read_text(encoding="utf-8", errors="replace")
+    if code:
+        lines = text.strip().splitlines()
+        raise ValueError("cutadapt failed on %s: %s" % (reads, lines[-1] if lines else "exit status %d" % code))
+    processed, written = (_report_count(text, label) for label in ("Total reads processed:", "Reads written (passing filters):"))
+    if processed and not written:
+        raise ValueError("no reads are left after adapter trimming: all %d reads of %s are shorter than %d nt "
+                         "without the adapter (cutadapt report: %s); lower the minimum length or switch "
+                         "trimming off (--adapter none)" % (processed, reads, min_length, report))
+    return out
+
+
+def _report_count(text: str, label: str) -> int:
+    """A read count from cutadapt's report, such as ``Reads written (passing filters): 1,234 (93.1%)``."""
+    match = re.search(re.escape(label) + r"\s*([0-9,]+)", text)
+    return int(match.group(1).replace(",", "")) if match else 0
 
 
 def iter_lines(path: Path) -> Iterator[str]:
@@ -540,11 +581,13 @@ def collapse_fasta(source: Path, out_fasta: Path, tmp_dir: Path, **options) -> D
 class Bowtie2Stream:
     """Bowtie2 with its SAM output read line by line from a pipe."""
 
-    def __init__(self, reads_fasta: Path, index: Path, *, threads: Optional[int] = None, log: Optional[TextIO] = None) -> None:
+    def __init__(self, reads_fasta: Path, index: Path, *, threads: Optional[int] = None, log: Optional[TextIO] = None,
+                 options: Optional[List[str]] = None) -> None:
+        # The bowtie2 wrapper is Perl; call the aligner binary directly when present.
         exe = _tool("bowtie2-align-s", "bowtie2")
         if not exe:
             raise MappingUnavailable("bowtie2 was not found; install Bowtie2 or provide a SAM file")
-        args = [exe] + BOWTIE2_ARGS + ["-p", str(threads or os.cpu_count() or 1), "-x", str(index), "-f", str(reads_fasta)]
+        args = [exe] + (bowtie2_options() if options is None else options) + ["-p", str(threads or os.cpu_count() or 1), "-x", str(index), "-f", str(reads_fasta)]
         self.args = args
         self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=log or subprocess.DEVNULL)
         self._text = io.TextIOWrapper(self.proc.stdout, encoding="utf-8", errors="replace", newline="")

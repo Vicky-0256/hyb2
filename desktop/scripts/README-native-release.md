@@ -112,6 +112,16 @@ It is used for folding energy (`pipeline -e 1`), and binary wheels exist for
 every target. `stage-native.py` checks the import with a dimer-fold smoke
 test, and `verify-native-release.py` fails if ViennaRNA is missing.
 
+## cutadapt
+
+The pipeline trims the 3' adapter with cutadapt before collapsing reads
+(`hyb2pipe --adapter`, gk-dev's mapping defaults). `requirements-native.txt`
+pins `cutadapt==5.2` with `dnaio`, `xopen` and `backports.zstd`, plus `isal`
+and `zlib-ng` on x86_64/AMD64 (xopen's markers), each with the SHA-256 of its
+CPython 3.11 wheel for the three targets. The pipeline runs it as
+`python -m cutadapt`. `stage-native.py` trims a test read, and
+`verify-native-release.py` fails if cutadapt 5.2 is missing.
+
 ## Evidence worker (RNAcentral MCP)
 
 `requirements-evidence.txt` locks the evidence worker's stack

@@ -26,7 +26,7 @@ class CliInputPreservationTests(unittest.TestCase):
         self.tools = self.root / "tools"
         self.tools.mkdir()
         self.env = dict(os.environ, PATH=os.pathsep.join((str(self.tools), str(BIN), os.environ["PATH"])),
-                        CAPTURE=str(self.root))
+                        CAPTURE=str(self.root), HYB2_ADAPTER="none")  # these tests cover file handling, not trimming
         for name in ("GENE_1", "GENE_2", "DB_1", "DB_2", "X_COORD", "Y_COORD", "LEN", "OUT"):
             self.env.pop(name, None)
         self.tool("contact_density_map_indiv.R", 'test -f "$1"; printf "%s\\n" "$1" >> "$CAPTURE/rendered"; printf pdf > "$3.pdf"')

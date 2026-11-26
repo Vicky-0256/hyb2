@@ -171,6 +171,7 @@ if not (2**-23 < iris[0, 20] < 1e-6 and abs(iris - bonus).max() < 1e-12):
         details['gaussian_parity'] = 'passed'
         details['bowtie2'] = bowtie2_smoke(root, cache)
         details['viennarna'] = viennarna_smoke(root, executable, env)
+        details['cutadapt'] = cutadapt_smoke(root, executable, env, cache)
         details['evidence'] = evidence_smoke(root, executable, env, portable)
     return details
 
@@ -190,6 +191,21 @@ def viennarna_smoke(root, executable, env):
     if details['version'] != '2.7.2' or details['mfe'] >= 0:
         raise ValueError('ViennaRNA smoke failed: %s' % details)
     return details
+
+
+def cutadapt_smoke(root, executable, env, scratch):
+    """hyb2pipe trims the 3' adapter with ``python -m cutadapt`` before mapping."""
+    reads, trimmed = Path(scratch) / 'smoke.fasta', Path(scratch) / 'smoke.trimmed.fasta'
+    reads.write_text('>r\nACGTACGTACGTACGTACGTAATGGAATTCTCGGGTGCCAAGG\n', encoding='utf-8')
+    try:
+        version = run([str(executable), '-I', '-B', '-m', 'cutadapt', '--version'], root, env).strip()
+        run([str(executable), '-I', '-B', '-m', 'cutadapt', '-a', 'TGGAATTCTCGGGTGCCAAGG', '-m', '18',
+             '-o', str(trimmed), str(reads)], root, env)
+    except subprocess.CalledProcessError:
+        return None
+    if trimmed.read_text(encoding='utf-8').split() != ['>r', 'ACGTACGTACGTACGTACGTAA']:
+        raise ValueError('cutadapt smoke did not trim the adapter: %r' % trimmed.read_text(encoding='utf-8'))
+    return {'version': version}
 
 
 EVIDENCE_REQUIREMENTS = ROOT / 'desktop/runtime/requirements-evidence.txt'

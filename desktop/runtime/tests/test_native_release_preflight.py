@@ -283,7 +283,7 @@ class PackagedSourceTests(unittest.TestCase):
             module = self.verify
             args = ['--resource-root', str(self.native)]
         pins = self.stage.evidence_pins()
-        details = {'base_prefix': 'python', 'bowtie2': True, 'viennarna': True, 'evidence': {
+        details = {'base_prefix': 'python', 'bowtie2': True, 'viennarna': True, 'cutadapt': {'version': '5.2'}, 'evidence': {
             'mcp': pins['mcp'], 'rnacentral-mcp-server': pins['rnacentral-mcp-server'],
             'packages': len(pins), 'worker_status': 'passed'}}
         with ExitStack() as stack:

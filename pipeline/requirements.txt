@@ -7,10 +7,13 @@
 #   - Bowtie2 for FASTQ and FASTA input. It is not a Python package: install it
 #     with conda (bioconda bowtie2) or put bowtie2-align-s and bowtie2-build-s
 #     on the PATH.
+#   - cutadapt for FASTQ and FASTA input (3' adapter trimming before mapping;
+#     --adapter none skips it).
 # hyb2analysis (coverage, viewpoint, differential, IRIS) also needs NumPy; its
 # IRIS and engine-parameter modules import cplfold from third_party/cplfold.
 #
-# The desktop runtime pins and tests numpy 1.24.4 and ViennaRNA 2.7.2
-# (desktop/runtime/requirements-native.txt).
+# The desktop runtime pins and tests numpy 1.24.4, ViennaRNA 2.7.2 and
+# cutadapt 5.2 (desktop/runtime/requirements-native.txt).
 ViennaRNA>=2.7
+cutadapt>=4.0
 numpy>=1.24

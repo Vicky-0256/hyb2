@@ -846,7 +846,7 @@ class LegacyCliTest(unittest.TestCase):
             return done
 
         self.assertIn("Hyb File Generated.", convert().stdout)
-        self.assertTrue(record.read_text().startswith("hyb2 step 1 record format 3\n"))
+        self.assertTrue(record.read_text().startswith("hyb2 step 1 record format 4\n"))
         made = hyb.read_bytes()
         self.assertIn("Hyb File Exist.", convert().stdout)
         # a .hyb replaced behind the record's back is not vouched for
@@ -988,6 +988,32 @@ class LegacyCliTest(unittest.TestCase):
         kept = {row.split("\t")[0] for row in outputs["collapsed"].decode().splitlines()}
         self.assertGreater(len(kept), 100)
         self.assertLessEqual(kept, set(names))
+
+    @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build")
+                         and shutil.which("cutadapt"), "needs Bowtie2 and cutadapt")
+    def test_reads_are_adapter_trimmed_before_collapsing(self):
+        # Reads ending in the 3' adapter give the same .hyb as the same reads
+        # trimmed by hand and mapped without trimming; reads under 18 nt
+        # without the adapter are dropped.  Both CLIs agree.
+        adapter = inputs.MAPPING_DEFAULTS["adapter"]
+        rows = [line.split("\t") for line in inputs.iter_lines(ROOT / "data/testData.sam") if not line.startswith("@")]
+        reads = list(dict.fromkeys(row[9] for row in rows if row[1] == "0"))[:1500]
+        raw = "".join(">r%d\n%s%s\n" % (i, seq, adapter) for i, seq in enumerate(reads))
+        raw += ">short\nACGTACGTACGT%s\n" % adapter
+        trimmed = "".join(">r%d\n%s\n" % (i, seq) for i, seq in enumerate(reads) if len(seq) >= 18)
+        reference = ROOT / "data/Zika_18S_formatted.fasta"
+        (self.base / "raw.fasta").write_text(raw)
+        (self.base / "trimmed.fasta").write_text(trimmed)
+        expected = run(self.base / "trimmed.fasta", reference, self.base / "by_hand/out", Options(threads=2, adapter=None))
+        result = run(self.base / "raw.fasta", reference, self.base / "py/out", Options(threads=2))
+        self.assertGreater(expected.counts["hybrids"], 0)
+        self.assertEqual(result.hyb.read_bytes(), expected.hyb.read_bytes())
+        self.assertEqual(result.counts["reads"], len(reads))  # the short read is gone
+        self.assertIn("Reads written (passing filters):", (self.base / "py/out.cutadapt.log").read_text())
+        legacy = self.cli(ROOT / "bin/hyb2", "-i", self.base / "raw.fasta", "-d", reference, "-o", self.base / "legacy")
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertEqual((self.base / "legacy.hyb").read_bytes(), expected.hyb.read_bytes())
+        self.assertTrue((self.base / "legacy.cutadapt.log").is_file())
 
     def test_sam_read_names_without_a_count_or_starting_with_at_are_an_error(self):
         read = "ACGT" * 10

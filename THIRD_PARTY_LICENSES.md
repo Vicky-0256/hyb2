@@ -40,12 +40,15 @@ The desktop release stages these from verified archives (`desktop/scripts/`); th
 | llvmlite | 0.41.1 | BSD-2-Clause (bundled LLVM: Apache-2.0 with LLVM exception) |
 | ViennaRNA | 2.7.2 | ViennaRNA terms |
 | Bowtie2 (`bowtie2-align-s`, `bowtie2-build-s`) | 2.5.5 | GPL-3.0 |
+| cutadapt, dnaio, xopen | 5.2, 1.2.5, 2.1.0 | MIT |
+| backports.zstd | 1.8.1 | PSF-2.0 (bundled Zstandard: BSD-3-Clause) |
+| isal, zlib-ng (Windows and Linux x86_64 only) | 1.9.1, 1.1.0 | PSF-2.0 (bundled ISA-L: BSD-3-Clause; zlib-ng: zlib licence) |
 
 Versions are pinned in [`desktop/runtime/requirements-native.txt`](desktop/runtime/requirements-native.txt).
 
 ## Installed separately
 
-The conda environments in `bin/` (`hyb2*.yml`, `renv.lock`) install Bowtie2, ViennaRNA, R, DESeq2 and the other command-line dependencies from their own channels under their own licences. Hyb2 does not redistribute them.
+The conda environments in `bin/` (`hyb2*.yml`, `renv.lock`) install Bowtie2, cutadapt, ViennaRNA, R, DESeq2 and the other command-line dependencies from their own channels under their own licences. Hyb2 does not redistribute them.
 
 ## Open question
 

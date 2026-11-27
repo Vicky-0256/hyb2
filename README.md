@@ -4,7 +4,7 @@ Hyb2 analyses RNA proximity ligation experiments, such as CLASH, PARIS, SPLASH a
 
 1. lists the chimeric RNA–RNA interactions, with their coordinates, sequences and folding energies, in a `.hyb` file;
 2. plots them as contact density maps and viewpoint graphs, and compares experiments;
-3. folds the RNA structures that the chimeras support: short- and long-range interactions within one RNA, interactions between RNAs, and homodimers.
+3. folds the RNA structures that the chimeras support with its own algorithms, CPLfold and CPLcofold: CPLfold folds one region of an RNA, with its short- and long-range pairs, and CPLcofold two regions of one RNA, two RNAs or a homodimer. For comparison, it also includes two other algorithms that fold structures from chimeras, COMRADES and IRIS ([Structure algorithms](#structure-algorithms)).
 
 <p align="center">
   <img src="docs/images/hyb2-overview.png" alt="HYB2 overview: chimeric reads become rows of a .hyb file, which give interaction maps, comparisons between conditions and CPLfold structures">
@@ -16,7 +16,7 @@ Hyb2 analyses RNA proximity ligation experiments, such as CLASH, PARIS, SPLASH a
 - [Input files](#input-files)
 - [`hyb2pipe` options](#hyb2pipe-options)
 - [Maps and comparisons on the command line](#maps-and-comparisons-on-the-command-line)
-- [CPLfold and IRIS](#cplfold-and-iris)
+- [Structure algorithms](#structure-algorithms)
 - [How to read the outputs](#how-to-read-the-outputs)
 - [License](#license)
 
@@ -24,7 +24,7 @@ Hyb2 analyses RNA proximity ligation experiments, such as CLASH, PARIS, SPLASH a
 
 | Entry point | Use it for | Input | Install |
 |---|---|---|---|
-| [Web app](https://vicky-0256.github.io/hyb2/) | Exploring `.hyb` files, comparisons and CPLfold/IRIS structures in the browser; files stay on your computer | `.hyb` | None. To serve your own copy, build it with `make build-web` and serve `web/` ([web/README.md](web/README.md)) |
+| [Web app](https://vicky-0256.github.io/hyb2/) | Exploring `.hyb` files, comparisons and structures (CPLfold and CPLcofold; COMRADES and IRIS for comparison) in the browser; files stay on your computer | `.hyb` | None. To serve your own copy, build it with `make build-web` and serve `web/` ([web/README.md](web/README.md)) |
 | Desktop app | One project from raw reads to structures, offline | FASTQ, FASTA, SAM or `.hyb` | Installers for macOS (Apple silicon), Windows and Linux on the [Releases](https://github.com/Vicky-0256/hyb2/releases) page. To build it, see [desktop/README.md](desktop/README.md) |
 | `hyb2pipe` (command line) | Reads to `.hyb` on any OS, in scripts or on a cluster. This is the CLI described in the paper | FASTQ, FASTA or SAM, optionally gzipped | Python 3.9+ ([Quickstart](#quickstart)); Bowtie2 for FASTQ/FASTA |
 | `hyb2analysis` (command line) | Contact density maps, viewpoint graphs and comparisons of conditions, as tables and SVG files | `.hyb` | Python 3.9+ and NumPy ([below](#maps-and-comparisons-on-the-command-line)) |
@@ -36,8 +36,8 @@ The desktop app runs `hyb2pipe` for each sample. On the command line, `hyb2pipe`
 | FASTQ/FASTA/SAM to `.hyb` | `python3 -m hyb2pipe` | `pipeline/hyb2pipe/` | Python 3.9+; cutadapt and Bowtie2 for FASTQ/FASTA; ViennaRNA for dG |
 | Contact density maps, viewpoint graphs | `python3 -m hyb2analysis coverage`, `viewpoint` | `pipeline/hyb2analysis/` | Python 3.9+, NumPy |
 | Differential coverage and similarity | `python3 -m hyb2analysis compare` | `pipeline/hyb2analysis/` | Python 3.9+, NumPy |
-| CPLfold and CPLcofold | `bin/cplfold`, `bin/cplcofold` | `third_party/cplfold/` | Python 3.8+, NumPy, Numba |
-| IRIS | `bin/iris` | `pipeline/hyb2analysis/iris.py` | Python 3.11, NumPy, ViennaRNA 2.7.2 |
+| Structures with CPLfold and CPLcofold | `bin/cplfold`, `bin/cplcofold` | `third_party/cplfold/` | Python 3.8+, NumPy, Numba |
+| Structures with IRIS, for comparison | `bin/iris` | `pipeline/hyb2analysis/iris.py` | Python 3.11, NumPy, ViennaRNA 2.7.2 |
 
 Until November 2026, `bin/` also held the original shell, Perl, awk and R tools (`hyb2`, `hyb2_coverage`, `hyb2_fold`, `hyb2_app`, `hyb2_compare` and their helpers). The commands above and the two apps replace them; their last version is in [`5398ef3`](https://github.com/Vicky-0256/hyb2/tree/5398ef3/bin).
 
@@ -127,14 +127,32 @@ PYTHONPATH=pipeline python3 -m hyb2analysis compare --one A1.hyb A2.hyb --two B1
 
 With `-i`, it reads the files and their conditions from a table instead, as in [`data/hyb2_compare_input.table`](data/hyb2_compare_input.table). `--help` after a command lists its options, and [`pipeline/README.md`](pipeline/README.md) describes every output.
 
-## CPLfold and IRIS
-**CPLfold and CPLcofold** are part of Hyb2: the Python package `cplfold` in `third_party/cplfold` (`import cplfold; cplfold.fold(sequence)`, or `pip install third_party/cplfold`) and the local CLIs `bin/cplfold` and `bin/cplcofold`. The core predictor needs NumPy and Numba, not a native HotKnots executable. In the web app CPLfold runs in your browser without Numba, which limits the sequence length: at most 500 nt, and often less after a speed test in your browser. For a longer sequence, click **Download local inputs** on the structure page, which saves the prepared sequence and, for HYB-guided runs, the bonus matrix that the browser uses. Then run the command shown there, for example:
+## Structure algorithms
+Hyb2's own structure algorithms are CPLfold and CPLcofold. COMRADES and IRIS, two other algorithms that fold structures from chimeras, are included so that you can compare their structures with Hyb2's, and ViennaRNA's MFE fold of the sequence alone is the control. The table shows what each one folds, and the longest sequence that it folds in each interface:
+
+| Algorithm | Role | Folds | Web app | Desktop app | Command line |
+|---|---|---|---|---|---|
+| **CPLfold** | Hyb2's own | One region | 500 nt | Limited by memory (Preferences) | `bin/cplfold`, 1,000 nt |
+| **CPLcofold** | Hyb2's own | Two regions as two strands: of one RNA, of two RNAs, or two copies of one region (homodimer) | 500 nt in all | Limited by memory (Preferences) | `bin/cplcofold`, 1,000 nt in all |
+| COMRADES | Other, for comparison | One region, or two joined by a 100-nt spacer | 2,000 nt; 3,000 if you confirm | 3,000 nt | — |
+| IRIS | Other, for comparison | One region | 300 nt | 1,000 nt | `bin/iris`, 1,000 nt |
+| ViennaRNA MFE | Control | The sequence alone, without the chimeras | 2,000 nt; 3,000 if you confirm | 30,000 nt | — |
+
+### CPLfold and CPLcofold
+CPLfold folds one region with a beam search derived from LinearFold, in which the base pairs that the chimeras support get a bonus, and a second phase can add pseudoknots. CPLcofold folds two strands the same way. Both are the Python package `cplfold` in `third_party/cplfold` (`import cplfold; cplfold.fold(sequence)`, or `pip install third_party/cplfold`) and the local CLIs `bin/cplfold` and `bin/cplcofold`. The core predictor needs NumPy and Numba, not a native HotKnots executable. In the web app, choose the **CPLfold** engine, which folds two regions with CPLcofold; in the desktop app, choose **CPLfold** or **CPLcofold**.
+
+The web app runs CPLfold in your browser without Numba, which limits the sequence length: at most 500 nt, and often less after a speed test in your browser. For a longer sequence, click **Download local inputs** on the structure page, which saves the prepared sequence and, for HYB-guided runs, the bonus matrix that the browser uses. Then run the command shown there, for example:
 ```bash
 bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv
 ```
 The command shown keeps your settings. `bin/cplfold` refuses sequences over 1,000 nt by default, so for a longer one the command also sets `HYB2_CPLFOLD_MAX_NT` to its length. The [Local CPLfold](https://vicky-0256.github.io/hyb2/local-cplfold.html) page walks through these steps; see [`docs/cplfold-python.md`](docs/cplfold-python.md) for installation, verification and runtime limits, and the [License](#license) for CPLfold's licence terms.
 
-**IRIS.** With Python 3.11, NumPy and the ViennaRNA Python bindings installed (`python -m pip install numpy ViennaRNA==2.7.2` in an active virtual environment), run:
+**Binding energies.** The dG column that `hyb2pipe -e 1` writes comes from ViennaRNA's RNAduplex, or from RNAcofold with `--energy-engine rnacofold` (the original `hyb2` values). The apps can recalculate it for each `.hyb` row with CPLcofold, with or without pseudoknots (an experimental score) and for arms of up to 500 nt in all, or with RNAduplex or RNAcofold: **HYB binding energies** in the web app, **Explore › Binding energies** in the desktop app.
+
+### COMRADES and IRIS
+**COMRADES.** Here COMRADES is a folding method, not the experiment of the same name. RNAcofold folds the two arms of each chimera together, and the pairs it forms between the arms are the evidence. The 1,001 strongest pairs are merged into stems, and up to 75 stems are added one by one as hard constraints to ViennaRNA MFE folds, in rank order and, if you ask for them, in up to 1,000 seeded random orders; the structure whose pairs have the most evidence wins. This is the method of the original `hyb2_fold`, which ran `comradesMakeConstraints_2` and `comradesFold2` and joined two regions with the same 100-nt spacer ([`5398ef3`](https://github.com/Vicky-0256/hyb2/tree/5398ef3/bin)). COMRADES has no command line now. In the web app, choose the **ViennaRNA** engine and the **COMRADES(ViennaRNA)** folding mode; in the desktop app, choose the **COMRADES** engine, which can also fit the constraints with an mfold 3.6 that you install.
+
+**IRIS** builds a weighted ensemble of one to three structures for one region. It keeps the stems that the chimeras support, folds each stem and each compatible pair of stems as ViennaRNA hard constraints, and picks and weights the structures that best combine low energy and support. `pipeline/hyb2analysis/iris.py` adapts it from [JY-Zhou/IRIS](https://github.com/JY-Zhou/IRIS), whose source is in `third_party/iris/`. With Python 3.11, NumPy and the ViennaRNA Python bindings installed (`python -m pip install numpy ViennaRNA==2.7.2` in an active virtual environment), run:
 ```sh
 bin/iris --reference ref.fa --gene toyRNA --start 31 --end 170 --hyb reads.hyb -o ensemble.json
 ```

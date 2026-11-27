@@ -212,7 +212,24 @@ lifecycleTest.then(async()=>{
  assert.ok(created>=1&&created<=3);assert.ok(queries.some(q=>q.filters&&q.filters.search==='p1'));
  assert.match(state.hybEnergy.result.audit,/not selected by the Interactions filters/);
  assert.equal((state.hybEnergy.result.hyb.match(/\t-7.50\t/g)||[]).length,filtered);
- console.log('Energy engines (RNAduplex default, RNAcofold pool, CPLcofold), filtered records and scope independence passed.');
+ // CPLcofold's run-time estimate sums each record's time at its combined arm
+ // length (page-data.js armLengths) over the records within 500 nt, on the
+ // workers their chunks need (4 cores - 1 here), plus 3 s to load Pyodide.
+ const est={summary:{validRecords:46},fasta,filters:{search:'p1'},hybEnergySettings:{engine:'cplcofold',records:'all'}};
+ assert.doesNotMatch(B.renderEnergy(est),/All 46 records/,'no CPLcofold estimate before the arm lengths are counted');
+ est.view={energySelection:{key:'[]|all',total:46,armLengths:[[100,30],[150,10],[500,1],[501,5]]}};
+ // 3 s + (30 x 1,110 ms + 10 x 3,127 ms (150 nt: 1,110 x 1.5^log2(6,520 / 1,110)) + 54,900 ms) / 3 workers
+ // (41 records in 11 chunks) = 42.8 s; the 5 records over 500 nt are not folded
+ assert.ok(B.renderEnergy(est).includes('All 46 records: about 43\u00a0s with 3 parallel workers here.'),B.renderEnergy(est));
+ est.hybEnergySettings={engine:'cplcofold-pk',records:'filtered'};
+ est.view.energySelection={key:'[]|{"search":"p1"}',total:20};
+ assert.doesNotMatch(B.renderEnergy(est),/The 20 records/,'a count without arm lengths gives no CPLcofold estimate');
+ est.view.energySelection.armLengths=[[300,8],[600,12]];
+ // 3 s + 8 x 21,118 ms (300 nt: 8,030 x 1.5^(ln(71,400 / 8,030) / ln 2.5)) / 2 workers (8 records in 2 chunks) = 87.5 s
+ assert.ok(B.renderEnergy(est).includes('The 20 records of the primary file matching the Interactions filters: about 87\u00a0s with 2 parallel workers here.'),B.renderEnergy(est));
+ est.hybEnergySettings={engine:'rnacofold',records:'all'};
+ assert.ok(B.renderEnergy(est).includes('All 46 records: a few seconds with 1 worker here.'),'RNAcofold needs no arm lengths');
+ console.log('Energy engines (RNAduplex default, RNAcofold pool, CPLcofold), filtered records, scope independence and run-time estimates passed.');
 }).catch(error=>{console.error(error);process.exit(1);});
 
 // Public batch actions with the actual parser and BrowserProvider. Each case

@@ -171,6 +171,15 @@ class IndexQueryTest(unittest.TestCase):
         doubled = query.summary([self.index, self.index])["merged"]
         self.assertEqual(doubled["records"], 2 * 10411)
         self.assertEqual(doubled["genes"][0]["records"], 2 * merged["genes"][0]["records"])
+        # records by the length of both arms' reference intervals, as the batch energies cut them
+        self.assertNotIn("arm_lengths", merged)
+        counts = {}
+        for r in self.records:
+            length = (r.end1 - r.start1 + 1) + (r.end2 - r.start2 + 1)
+            counts[length] = counts.get(length, 0) + 1
+        with_lengths = query.summary([self.index, self.index], pairs=False, arm_lengths=True)
+        self.assertEqual(with_lengths["indexes"][0]["arm_lengths"], [[n, counts[n]] for n in sorted(counts)])
+        self.assertEqual(with_lengths["merged"]["arm_lengths"], [[n, 2 * counts[n]] for n in sorted(counts)])
 
     def test_contact_bins_at_10_equal_contact_txt(self):
         result = query.contact_bins([self.index], "18S_rRNA", 10)

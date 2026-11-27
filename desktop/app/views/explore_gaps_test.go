@@ -113,9 +113,15 @@ func TestBindingEnergiesWithoutAnRNA(t *testing.T) {
 	}
 }
 
-// The web's run-time estimate, CPLcofold hint and missing-reference state.
+// The run-time estimate, CPLcofold hint and missing-reference state.
 func TestBindingEnergiesEstimateAndReference(t *testing.T) {
-	a, _, p, tt := openExplore(t)
+	a, f, p, tt := openExplore(t)
+	// The fixture's 1,724 records: 1,700 with 100 nt of arms, 24 over CPLcofold's 500 nt.
+	summary := fixture(t, "explore_summary.json")
+	summary["merged"].(map[string]any)["arm_lengths"] = []any{[]any{100.0, 1700.0}, []any{600.0, 24.0}}
+	f.mu.Lock()
+	f.queries["analysis_summary"] = summary
+	f.mu.Unlock()
 	a.Navigate("explore", map[string]any{"tab": "energies"})
 	settle(a, tt)
 	p.be.engine = batchEngines[1][1] // RNAcofold
@@ -127,17 +133,22 @@ func TestBindingEnergiesEstimateAndReference(t *testing.T) {
 	}
 	p.be.engine = batchEngines[2][1]
 	tt.Frame()
-	if !tt.HasText(batchEngines[2][2] + " All 1,724 records: about 7 min with 10 parallel workers here. For many records, filter first or use the cplcofold command.") {
+	// 2.5 s to start + 1,700 records at 10.6 ms (100 nt) on 10 workers = 4.3 s
+	if !tt.HasText(batchEngines[2][2] + " All 1,724 records: about 4 s with 10 parallel workers here. For many records, filter first or use the cplcofold command.") {
 		t.Fatalf("no CPLcofold hint: %q", tt.Texts())
 	}
 	for _, c := range []struct {
-		engine  string
-		records int64
-		cpus    int
-		want    string
-	}{{"rnacofold", 10, 8, " All 10 records: about 1 s with 1 worker here."}, {"cplcofold-pk", 100_000, 4, " All 100,000 records: about 19.4 h with 4 parallel workers here."},
-		{"rnacofold", 0, 4, ""}} {
-		if got := batchEstimate(c.engine, c.records, c.cpus); got != c.want {
+		engine string
+		counts batchCounts
+		cpus   int
+		want   string
+	}{{"rnacofold", batchCounts{records: 10}, 8, " All 10 records: about 1 s with 1 worker here."},
+		// 150 nt, between the 100 and 200 nt costs: 16.8 ms × 1.5^log2(58 / 16.8) = 34.7 ms a record;
+		// 2.5 s + 120,000 × 34.7 ms / 4 = 1,043 s
+		{"cplcofold-pk", batchCounts{records: 120_000, lengths: [][2]int64{{150, 120_000}}}, 4, " All 120,000 records: about 17 min with 4 parallel workers here."},
+		{"cplcofold", batchCounts{records: 1_724}, 4, ""}, // arm lengths not counted yet
+		{"rnacofold", batchCounts{}, 4, ""}} {
+		if got := batchEstimate(c.engine, c.counts, c.cpus); got != c.want {
 			t.Fatalf("%v: %q", c, got)
 		}
 	}

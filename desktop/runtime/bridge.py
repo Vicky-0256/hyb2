@@ -770,7 +770,7 @@ def _analysis_op(operation: str, request: dict[str, Any], repo_root: Path | None
         with_pairs = request.get("pairs", True)
         if not isinstance(with_pairs, bool):
             raise ValueError("pairs must be a boolean")
-        result = query.summary(paths, lengths=lengths, pairs=with_pairs)
+        result = query.summary(paths, lengths=lengths, pairs=with_pairs, arm_lengths=opt_bool("arm_lengths"))
     elif operation == "analysis_overview":
         result = query.overview(paths, limit=opt_int("limit", None))
         # The Import check names the sample each invalid line came from.

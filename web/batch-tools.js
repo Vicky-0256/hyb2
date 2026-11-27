@@ -203,14 +203,20 @@
   // cofold, in which each arm may also pair with itself.
   // CPLcofold runs as pure Python here (about 100x slower per record), so it
   // gets fewer, memory-heavier workers and is best run on filtered records.
+  // Its time per record grows with the combined length of the two arms:
+  // msByLength is the ms per record at COST_LENGTHS, the median of three ZIKV
+  // arm pairs each folded alone by this worker in Node on 4 workers (Apple
+  // M1 Pro), interpolated on log-log scales; a run adds START_MS to load
+  // Pyodide in the workers.
+  const COST_LENGTHS = [40, 100, 200, 500], START_MS = 3000;
   const ENERGY_ENGINES = {
     rnaduplex: {label:'RNAduplex (ViennaRNA), as the HYB2 pipeline',name:'ViennaRNA RNAduplex',worker:'folding-energy.worker.js',module:false,chunk:500,maxWorkers:8,maxLength:2000,msPerRecord:3,
       message:pairs=>({type:'duplex-batch',pairs,temperature:37})},
     rnacofold: {label:'RNAcofold (ViennaRNA)',name:'ViennaRNA RNAcofold',worker:'folding-energy.worker.js',module:false,chunk:64,maxWorkers:8,maxLength:2000,msPerRecord:15,
       message:pairs=>({type:'cofold-batch',pairs,temperature:37,minimumLoop:3})},
-    cplcofold: {label:'CPLcofold, nested (Turner energies)',name:'CPLcofold, pseudoknots off',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:2300,
+    cplcofold: {label:'CPLcofold, nested (Turner energies)',name:'CPLcofold, pseudoknots off',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msByLength:[54,1110,6520,54900],
       message:pairs=>({type:'cplfold-energy-batch',pairs,allowPseudoknot:false,energyModel:'DP09'})},
-    'cplcofold-pk': {label:'CPLcofold with pseudoknots (experimental score)',name:'CPLcofold, pseudoknots allowed (DP09 ranking score)',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:2800,
+    'cplcofold-pk': {label:'CPLcofold with pseudoknots (experimental score)',name:'CPLcofold, pseudoknots allowed (DP09 ranking score)',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msByLength:[106,1450,8030,71400],
       message:pairs=>({type:'cplfold-energy-batch',pairs,allowPseudoknot:true,energyModel:'DP09'})}
   };
   function energySettings(state) {
@@ -218,6 +224,14 @@
     return state.hybEnergySettings;
   }
   function energyEngine(state) { return ENERGY_ENGINES[energySettings(state).engine] || ENERGY_ENGINES.rnaduplex; }
+  // CPLcofold's time for a record whose arms are length nt together: the
+  // power law through the two nearest of COST_LENGTHS (the first or last two
+  // beyond them).
+  function recordMs(engine,length) {
+    let k=1;while(k<COST_LENGTHS.length-1&&length>COST_LENGTHS[k])k++;
+    const at=engine.msByLength,slope=Math.log(at[k]/at[k-1])/Math.log(COST_LENGTHS[k]/COST_LENGTHS[k-1]);
+    return at[k-1]*Math.pow(length/COST_LENGTHS[k-1],slope);
+  }
   function energyWorkerCount(engine, chunks) {
     const cores=Number(root.navigator && root.navigator.hardwareConcurrency)||2;
     return Math.max(1,Math.min(engine.maxWorkers,cores-1,chunks));
@@ -242,15 +256,22 @@
     // The estimate follows the Records choice: the filtered count is the
     // primary file's matches (page-data.js, the query the run makes) and the
     // workers are counted as the run counts them, from the number of chunks.
+    // CPLcofold's time comes from the arm lengths of these records
+    // (page-data.js counts them; armLengths [length, records]) and covers
+    // those it folds, within its length limit; it shows once they are counted.
     const filtered=settings.records==='filtered', primary=(state.datasets||[]).find(d=>d.primary);
-    const countKey=JSON.stringify(primary?[primary.id]:(state.selection&&state.selection.datasetIds)||[])+'|'+JSON.stringify(Object.assign({},state.filters||(root.Hyb2Data&&root.Hyb2Data.defaultInteractionFilters())));
-    const counted=state.view&&state.view.energySelection;
-    const total=filtered?(counted&&counted.key===countKey?counted.total:undefined):records;
-    const workers=energyWorkerCount(engine,Math.max(1,Math.ceil((total||0)/engine.chunk)));
+    const countKey=JSON.stringify(primary?[primary.id]:(state.selection&&state.selection.datasetIds)||[])+'|'+(filtered?JSON.stringify(Object.assign({},state.filters||(root.Hyb2Data&&root.Hyb2Data.defaultInteractionFilters()))):'all');
+    const counted=state.view&&state.view.energySelection, known=counted&&counted.key===countKey?counted:null;
+    const total=filtered?(known?known.total:undefined):records;
+    const lengths=engine.msByLength&&known&&known.armLengths;
+    const folded=lengths?lengths.reduce((sum,[length,n])=>length<=engine.maxLength?sum+n:sum,0):total;
+    const workers=energyWorkerCount(engine,Math.max(1,Math.ceil((folded||0)/engine.chunk)));
+    const runMs=!engine.msByLength?total*engine.msPerRecord/workers
+      :lengths?START_MS+lengths.reduce((sum,[length,n])=>length<=engine.maxLength?sum+n*recordMs(engine,length):sum,0)/workers:null;
     const time=ms=>ms<5000?'a few seconds':'about '+duration(ms);
     const estimate=filtered&&total===undefined?' Counting the records of the primary file that match the Interactions filters…'
       :filtered&&total===0?' No record of the primary file matches the Interactions filters, so nothing would be recalculated.'
-      :total?' '+(filtered?(total===1?'The 1 record':'The '+count(total)+' records')+' of the primary file matching the Interactions filters':'All '+count(total)+' records')+': '+time(total*engine.msPerRecord/workers)+' with '+count(workers)+(workers===1?' worker':' parallel workers')+' here.':'';
+      :total&&runMs!==null?' '+(filtered?(total===1?'The 1 record':'The '+count(total)+' records')+' of the primary file matching the Interactions filters':'All '+count(total)+' records')+': '+time(runMs)+' with '+count(workers)+(workers===1?' worker':' parallel workers')+' here.':'';
     const select=(key,label,value,options)=>'<label class="control-field"><span>'+label+'</span><select data-feature="batch-energy-setting" data-key="'+key+'"'+(s.running?' disabled':'')+'>'+options.map(o=>'<option value="'+o[0]+'"'+(o[0]===value?' selected':'')+'>'+esc(o[1])+'</option>').join('')+'</select></label>';
     return '<section class="data-card"><div class="card-title-row"><div><h2>HYB binding energies</h2><p class="card-note">Recalculate column 3 (ΔG of the two arms, kcal/mol, 37 °C) for records of the primary file'+file+', from the mapped FASTA arms. Download a new HYB; the loaded dataset stays unchanged.</p></div></div>'+
       '<div class="control-grid">'+select('engine','Engine',settings.engine,Object.keys(ENERGY_ENGINES).map(key=>[key,ENERGY_ENGINES[key].label]))+

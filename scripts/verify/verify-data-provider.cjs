@@ -273,6 +273,24 @@ async function main() {
   assert.ok(state.view.structureEvidence && state.view.structureEvidence.fasta.sequences.length === 1);
   // An RNA named "__proto__" must stay a key of the name map.
   assert.equal(Object.getPrototypeOf(state.view.structureEvidence.fasta.mapping), null);
+  // The binding-energy card's CPLcofold estimate: the interactions task counts
+  // the primary file's records by combined arm length, under the key the
+  // card reads (batch-tools.js).
+  vm.runInContext(fs.readFileSync(web("batch-tools.js"), "utf8"), context, { filename: "batch-tools.js" });
+  state.hybEnergySettings = { engine: "cplcofold", records: "all" };
+  assert.doesNotMatch(context.window.Hyb2Batch.renderEnergy(state), /records: about/, "no estimate before the arm lengths are counted");
+  let energyPending = controller.ensure("interactions");
+  while (energyPending) { await energyPending; energyPending = controller.ensure("interactions"); }
+  const armLengths = new Map();
+  records.forEach(function (record) {
+    const cols = record.raw.split("\t");
+    const length = (cols[7] - cols[6] + 1) + (cols[13] - cols[12] + 1);
+    armLengths.set(length, (armLengths.get(length) || 0) + 1);
+  });
+  assert.deepEqual(new Map(plain(state.view.energySelection.armLengths)), armLengths);
+  assert.match(context.window.Hyb2Batch.renderEnergy(state),
+    new RegExp("All " + summary.validRecords.toLocaleString("en-US") + " records: about [0-9.,]+\u00a0(s|min|h) with 1 worker here\\."));
+  delete state.hybEnergySettings;
   state.contact.binSize = 25;
   state.contact.matrix = null;
   await controller.ensure("contact-map");

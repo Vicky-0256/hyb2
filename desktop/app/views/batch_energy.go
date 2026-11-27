@@ -30,9 +30,52 @@ var batchEngines = [][3]string{
 	{"cplcofold-pk", "CPLcofold with pseudoknots (experimental score)", "Adds CPLfold's pseudoknot phase: its DP09 pseudoknot term is an experimental ranking score, not a validated free energy; combined arms up to 500 nt."},
 }
 
-// batchEngineCost is the web's per-engine time per record (ms) and records
-// per job (ENERGY_ENGINES msPerRecord, chunk), for the run-time estimate.
-var batchEngineCost = map[string][2]int{"rnaduplex": {3, 2000}, "rnacofold": {15, 64}, "cplcofold": {2300, 4}, "cplcofold-pk": {2800, 4}}
+// batchCost is an engine's records per job and time per record, for the
+// run-time estimate. RNAduplex and RNAcofold take the web's flat time per
+// record (ENERGY_ENGINES msPerRecord). CPLcofold's time grows with the
+// combined length of the two arms, and only records within maxLength are
+// folded: byLength is the ms per record at batchCostLengths, the median of
+// six ZIKV arm pairs each folded alone by this runtime on 4 workers of one
+// Numba thread (Apple M1 Pro; beam 200, three phase-1 candidates),
+// interpolated on log-log scales; a run adds batchStartMs to start the
+// workers and read and write the files.
+type batchCost struct {
+	chunk     int64
+	ms        float64
+	byLength  []float64
+	maxLength int64
+}
+
+var batchCostLengths = []float64{40, 100, 200, 500}
+
+const batchStartMs = 2500
+
+var batchEngineCost = map[string]batchCost{
+	"rnaduplex":    {chunk: 2000, ms: 3},
+	"rnacofold":    {chunk: 64, ms: 15},
+	"cplcofold":    {chunk: 4, byLength: []float64{2.1, 10.6, 39, 211}, maxLength: 500},
+	"cplcofold-pk": {chunk: 4, byLength: []float64{5, 16.8, 58, 246}, maxLength: 500},
+}
+
+// batchRecordMs is CPLcofold's time for a record whose arms are length nt
+// together: the power law through the two nearest of batchCostLengths (the
+// first or last two beyond them).
+func batchRecordMs(byLength []float64, length float64) float64 {
+	k := 1
+	for k < len(batchCostLengths)-1 && length > batchCostLengths[k] {
+		k++
+	}
+	slope := math.Log(byLength[k]/byLength[k-1]) / math.Log(batchCostLengths[k]/batchCostLengths[k-1])
+	return byLength[k-1] * math.Pow(length/batchCostLengths[k-1], slope)
+}
+
+// batchCounts are a sample's records and how many there are of each
+// combined arm length ([length, records], analysis_summary arm_lengths; nil
+// while unknown).
+type batchCounts struct {
+	records int64
+	lengths [][2]int64
+}
 
 // batchNoReference is the web's note when there is no mapped FASTA.
 const batchNoReference = "Load and map a reference FASTA first."
@@ -43,14 +86,14 @@ type batchEnergyState struct {
 	sample, engine, records string
 	err                     string
 	// cpus are the CPUs tasks may use (Preferences), the task's workers;
-	// counts the records of each sample (analysis_summary), by
-	// batchCountKey: the project, the sample and its index, so a rebuilt
-	// index or another project counts again; countsFor is the project the
-	// counts are of (another one clears them).
+	// counts the records of each sample and their arm lengths
+	// (analysis_summary), by batchCountKey: the project, the sample and its
+	// index, so a rebuilt index or another project counts again; countsFor
+	// is the project the counts are of (another one clears them).
 	cpus      int
 	cpusAsked bool
 	countLoad loader
-	counts    map[string]int64
+	counts    map[string]batchCounts
 	countsFor string
 	// result is the newest finished task's result.json (keyed by task id).
 	resultFor string
@@ -120,17 +163,25 @@ func (p *explorePage) loadBatchInputs(sample string) {
 		return
 	}
 	p.ensure(&s.countLoad, key, func() (func(), error) {
-		got, err := p.query(path, "analysis_summary", []string{sample}, core.Obj{"pairs": false})
+		got, err := p.query(path, "analysis_summary", []string{sample}, core.Obj{"pairs": false, "arm_lengths": true})
 		if err != nil {
 			return nil, err
 		}
 		merged, _ := got["merged"].(map[string]any)
-		records := int64(num(merged["records"]))
+		counts := batchCounts{records: int64(num(merged["records"]))}
+		if items, ok := merged["arm_lengths"].([]any); ok {
+			counts.lengths = make([][2]int64, 0, len(items))
+			for _, item := range items {
+				if pair, ok := item.([]any); ok && len(pair) == 2 {
+					counts.lengths = append(counts.lengths, [2]int64{int64(num(pair[0])), int64(num(pair[1]))})
+				}
+			}
+		}
 		return func() {
 			if s.counts == nil {
-				s.counts = map[string]int64{}
+				s.counts = map[string]batchCounts{}
 			}
-			s.counts[key] = records
+			s.counts[key] = counts
 		}, nil
 	})
 }
@@ -145,16 +196,31 @@ func (p *explorePage) batchCountKey(sample string) string {
 	return p.a.Project.Path + "\x00" + sample + "\x00" + index
 }
 
-// batchEstimate is the web's run-time estimate of all the sample's
-// records, " All N records: about … with W parallel workers here." ("" while
-// unknown).
-func batchEstimate(engine string, records int64, cpus int) string {
+// batchEstimate is the run-time estimate of all the sample's records, as the
+// web's, " All N records: about … with W parallel workers here." ("" while
+// unknown). The workers are counted as the task counts them, from the jobs of
+// the records it folds.
+func batchEstimate(engine string, counts batchCounts, cpus int) string {
 	cost, ok := batchEngineCost[engine]
-	if !ok || records <= 0 || cpus <= 0 {
+	if !ok || counts.records <= 0 || cpus <= 0 || (cost.byLength != nil && counts.lengths == nil) {
 		return ""
 	}
-	workers := int64(max(1, min(int64(cpus), (records+int64(cost[1])-1)/int64(cost[1]))))
-	text := fmt.Sprintf(" All %s records: about %s with %d", FormatNumber(records), batchDuration(float64(records*int64(cost[0]))/float64(workers)), workers)
+	folded, ms := counts.records, float64(counts.records)*cost.ms
+	if cost.byLength != nil {
+		folded, ms = 0, 0
+		for _, n := range counts.lengths {
+			if n[0] <= cost.maxLength {
+				folded += n[1]
+				ms += float64(n[1]) * batchRecordMs(cost.byLength, float64(n[0]))
+			}
+		}
+	}
+	workers := max(1, min(int64(cpus), (folded+cost.chunk-1)/cost.chunk))
+	ms /= float64(workers)
+	if cost.byLength != nil {
+		ms += batchStartMs
+	}
+	text := fmt.Sprintf(" All %s records: about %s with %d", FormatNumber(counts.records), batchDuration(ms), workers)
 	if workers == 1 {
 		return text + " worker here."
 	}

@@ -435,17 +435,33 @@
       // The binding-energy panel estimates its run for the records it would
       // fold. With "Records matching the Interactions filters" these are the
       // primary file's matches (the run's own query), not the scope's.
-      if (state.hybEnergySettings && state.hybEnergySettings.records === "filtered") {
+      // CPLcofold's time grows with the length of the arms, so for it the
+      // task also counts these records by combined arm length
+      // (armLengths: [[length, records], ...]).
+      const energy = state.hybEnergySettings;
+      const armLengths = !!energy && /^cplcofold/.test(energy.engine);
+      if (energy && (energy.records === "filtered" || armLengths)) {
         const primary = (state.datasets || []).find(function (dataset) { return dataset.primary; });
         const ids = primary ? [primary.id] : sel.datasetIds;
-        const countKey = stableKey(ids) + "|" + stableKey(filters);
+        const filtered = energy.records === "filtered";
+        const countKey = stableKey(ids) + "|" + (filtered ? stableKey(filters) : "all");
         tasks.push({
           name: "energySelection",
-          key: epoch + "|" + countKey,
+          key: epoch + "|" + countKey + (armLengths ? "|arm lengths" : ""),
           present: function () { return !!view().energySelection; },
           fetch: function () {
-            return provider.queryHybrids({ datasetIds: ids }, { filters: filters, offset: 0, limit: 1 }).then(function (result) {
-              return { key: countKey, total: result.total };
+            const query = filtered ? { filters: filters, offset: 0, limit: armLengths ? null : 1 } : { offset: 0, limit: null };
+            return provider.queryHybrids({ datasetIds: ids }, query).then(function (result) {
+              const value = { key: countKey, total: result.total };
+              if (armLengths) {
+                const counts = new Map();
+                (result.rows || []).forEach(function (record) {
+                  const length = record.rnaOneEnd - record.rnaOneStart + 1 + record.rnaTwoEnd - record.rnaTwoStart + 1;
+                  counts.set(length, (counts.get(length) || 0) + 1);
+                });
+                value.armLengths = Array.from(counts);
+              }
+              return value;
             });
           },
           apply: function (value) { view().energySelection = value; },

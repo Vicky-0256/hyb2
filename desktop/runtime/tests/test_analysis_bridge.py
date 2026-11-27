@@ -71,6 +71,13 @@ class AnalysisBridgeTest(unittest.TestCase):
         self.assertEqual(lean, full)
         with self.assertRaises(ValueError):
             self.call(operation="analysis_summary", sample_ids=["S1"], pairs="no")
+        # the Binding energies page's run-time estimate: records by combined arm length
+        lengths = self.call(operation="analysis_summary", sample_ids=["S1", "S2"], pairs=False, arm_lengths=True)["result"]
+        self.assertEqual(sum(n for _, n in lengths["merged"]["arm_lengths"]), 2 * 10411)
+        self.assertEqual(lengths["merged"]["arm_lengths"], [[length, 2 * n] for length, n in lengths["indexes"][0]["arm_lengths"]])
+        self.assertNotIn("arm_lengths", lean["merged"])
+        with self.assertRaises(ValueError):
+            self.call(operation="analysis_summary", sample_ids=["S1"], arm_lengths="yes")
 
     def test_contact_bins_and_top(self):
         single = self.call(operation="analysis_contact_bins", sample_ids=["S1"], gene="18S_rRNA", bin_size=10)["result"]

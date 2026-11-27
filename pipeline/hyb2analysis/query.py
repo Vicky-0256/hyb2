@@ -145,7 +145,7 @@ def close_all() -> None:
 # summary
 
 
-def _single_summary(index: _Index, with_pairs: bool = True) -> Dict[str, Any]:
+def _single_summary(index: _Index, with_pairs: bool = True, with_arm_lengths: bool = False) -> Dict[str, Any]:
     con = index.con
     extents = index.extents()
     genes = [{"name": n, "length": m, "max_end": m, "min_start": extents.get(n, (None, m))[0], "records": r, "reads": rd}
@@ -167,6 +167,9 @@ def _single_summary(index: _Index, with_pairs: bool = True) -> Dict[str, Any]:
     }
     if with_pairs:
         out["pairs"] = pairs
+    if with_arm_lengths:
+        out["arm_lengths"] = [[length, records] for length, records in con.execute(
+            "SELECT e1 - s1 + e2 - s2 + 2 AS length, count(*) FROM hybrids GROUP BY length ORDER BY length")]
     return out
 
 
@@ -210,7 +213,8 @@ def _apply_lengths(genes: List[Dict[str, Any]], lengths: Dict[str, int]) -> Dict
     return extents
 
 
-def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = None, *, pairs: bool = True) -> Dict[str, Any]:
+def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = None, *, pairs: bool = True,
+            arm_lengths: bool = False) -> Dict[str, Any]:
     """Per-index summaries plus a merged total (``merged``).
 
     ``genes[]`` rows are ``{name, length, length_source, max_end, min_start,
@@ -220,17 +224,29 @@ def summary(indexes: Sequence[PathLike], lengths: Optional[Dict[str, int]] = Non
     ``extents: {gene: {min, max}}``, the observed arm coordinate range.
     ``pairs=False`` leaves out ``pairs[]`` (every gene pair: the bulk of a
     large sample's summary) for callers that only need the counts.
+    ``arm_lengths=True`` adds ``arm_lengths: [[length, records], ...]``, the
+    records by the combined length of their two arms (nt, both reference
+    intervals inclusive), shortest first: the desktop's batch-energy run-time
+    estimate.
     """
     if not isinstance(pairs, bool):
         raise ValueError("pairs must be a boolean")
+    if not isinstance(arm_lengths, bool):
+        raise ValueError("arm_lengths must be a boolean")
     lengths = _check_lengths(lengths)
-    parts = [_single_summary(index, pairs) for index in _indexes(indexes)]
+    parts = [_single_summary(index, pairs, arm_lengths) for index in _indexes(indexes)]
     merged = {name: sum(part[name] for part in parts)
               for name in ("records", "reads", "records_with_reads", "with_dg", "intra_records", "inter_records", "invalid", "skipped")}
     merged["genes"] = _merge_named((p["genes"] for p in parts), ("name",), ("records", "reads"), ("length", "max_end"), ("min_start",))
     merged["types"] = _merge_named((p["types"] for p in parts), ("name",), ("records", "reads"))
     if pairs:
         merged["pairs"] = _merge_named((p["pairs"] for p in parts), ("gene1", "gene2"), ("records", "reads"))
+    if arm_lengths:
+        counts: Dict[int, int] = {}
+        for part in parts:
+            for length, records in part["arm_lengths"]:
+                counts[length] = counts.get(length, 0) + records
+        merged["arm_lengths"] = [[length, counts[length]] for length in sorted(counts)]
     for part in parts:
         part["extents"] = _apply_lengths(part["genes"], lengths)
     merged["extents"] = _apply_lengths(merged["genes"], lengths)

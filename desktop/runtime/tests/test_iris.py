@@ -128,7 +128,8 @@ assert.throws(() => p({K: ' 2 '}), /IRIS ensemble size K/);"""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             # Run the actual CLI, without site-packages or the folding runtime.
-            inputs = ["scripts/build/export-support-kernels.py", "scripts/build/fold-text.js", "scripts/build/cplfold-settings.js"]
+            inputs = ["scripts/build/export-support-kernels.py", "scripts/build/fold-text.js", "scripts/build/cplfold-settings.js",
+                      "bin/cplfold"]
             inputs += [f"pipeline/hyb2analysis/{name}.py" for name in
                        ("__init__", "reference", "support_kernels", "engine_parameters", "fold_text", "iris_parameters")]
             inputs += [f"third_party/cplfold/cplfold/{name}.py" for name in

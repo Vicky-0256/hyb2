@@ -566,6 +566,12 @@ longer synced from the former CPLfold repository with `git subtree pull`.
 `UPSTREAM.md` records the original import and the changes made since. Do not
 commit `__pycache__` or machine-specific Numba cache files.
 
+Change shared CPLfold/CPLcofold algorithms in `third_party/cplfold/` and their
+shared Python adapter in `web/cplfold/`. Do not copy edits into generated web
+assets or the staged desktop runtime. On a push changing either path on
+`CPLcofold`, `integration/unified-release` or `main`, CI builds the website and
+desktop packages from the same commit and checks their source against Git.
+
 ## Distribution status
 
 Read `third_party/cplfold/THIRD_PARTY_NOTICES.md` before publishing this branch.

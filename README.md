@@ -1,46 +1,48 @@
 # Hyb2
-***Easily Generate RNA structures of short- and long-range intra/intermolecular interactions, and homodimers with an Interactive Graphical User Interface.***
 
-A ***streamlined*** program for analyzing RNA proximity ligation experiments from mapped files in the fastq/SAM format to:
-1. Generate a list of chimeric interactions with their coordinates, sequence, and folding energy,
-2. Plot contact density map of selected genes and viewpoint graphs,
-3. Generate intra-/intermolecular RNA structure of any selected regions.
+Hyb2 analyses RNA proximity ligation experiments, such as CLASH, PARIS, SPLASH and COMRADES, which ligate two base-paired RNA segments into one chimeric read. Minimum free energy folding often misses the long-range base pairs that these reads reveal, and the data have lacked integrated analysis tools. From reads or a mapped SAM file, Hyb2:
 
-**Additionally, creates an interactive GUI, and plots differences and similarities between experiments.**
+1. lists the chimeric RNA–RNA interactions, with their coordinates, sequences and folding energies, in a `.hyb` file;
+2. plots them as contact density maps and viewpoint graphs, and compares experiments;
+3. folds the RNA structures that the chimeras support: short- and long-range interactions within one RNA, interactions between RNAs, and homodimers.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/fde2431b-f942-4a3e-90c5-f5e11f222d85" height="500" width="700">
+  <img src="docs/images/hyb2-overview.png" alt="HYB2 overview: chimeric reads become rows of a .hyb file, which give interaction maps, comparisons between conditions and CPLfold structures">
 </p>
 
-## Table of Contents
-- [Introduction](#introduction)
-- [Quickstart (5 minutes)](#quickstart-5-minutes)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Entry Points](#entry-points)
-- [Getting Started](#getting-started)
-- [Running the Program](#running-the-program)
-- [How To Read Outputs](#how-to-read-outputs)
+## Contents
+- [Choose an entry point](#choose-an-entry-point)
+- [Quickstart](#quickstart)
+- [Input files](#input-files)
+- [`hyb2pipe` options](#hyb2pipe-options)
+- [The original `bin/` tools](#the-original-bin-tools)
+- [CPLfold and IRIS](#cplfold-and-iris)
+- [How to read the outputs](#how-to-read-the-outputs)
 - [License](#license)
 
-## Introduction
-RNA adopts ensemble of structures essential for life such as splicing, gene expression, and virus replication.
-It adopts complex secondary structures supported by short-, long-range base-pairing interactions and tertiary structures supported by long-range interactions, pseudoknots, base triples, and RBPs.
-RNA proximity ligation techniques such as CLASH, PARIS, and COMRADES directly detect RNA-RNA interactions and produces a list of chimeric interactions.
-However, it is difficult to identify long-range base-pairings as it is often misidentified by minimum folding energy algorithms, and the interpretation of proximity ligation data is challenging as there is a lack of integrated analytical tools.
+## Choose an entry point
 
-Hyb2 is a bioinformatics pipeline for the analysis of RNA proximity ligation experiments in high resolution.
+| Entry point | Use it for | Input | Install |
+|---|---|---|---|
+| [Web app](https://vicky-0256.github.io/hyb2/) | Exploring `.hyb` files, comparisons and CPLfold/IRIS structures in the browser; files stay on your computer | `.hyb` | None. To serve your own copy, build it with `make build-web` and serve `web/` ([web/README.md](web/README.md)) |
+| Desktop app | One project from raw reads to structures, offline | FASTQ, FASTA, SAM or `.hyb` | Installers for macOS (Apple silicon), Windows and Linux on the [Releases](https://github.com/Vicky-0256/hyb2/releases) page. To build it, see [desktop/README.md](desktop/README.md) |
+| `hyb2pipe` (command line) | Reads to `.hyb` on any OS, in scripts or on a cluster. This is the CLI described in the paper | FASTQ, FASTA or SAM, optionally gzipped | Python 3.9+ ([Quickstart](#quickstart)); Bowtie2 for FASTQ/FASTA |
+| Original `bin/` tools | Contact density maps, viewpoint graphs, VARNA drawings, the R Shiny GUI and DESeq2 comparisons | `.hyb` (or reads, through the legacy `hyb2`) | conda, Perl, R and Java ([below](#the-original-bin-tools)) |
 
-It **generates RNA structures with experimental support** for short- and long-range intramolecular interactions, intermolecular interactions, and RNA homodimers.
+The desktop app runs `hyb2pipe` for each sample. On the command line, `hyb2pipe` makes the `.hyb` and the other commands read it:
 
-It **supports commonly used data formats (SAM)** and integrates with a variety of mapping and analysis tools.
+| Step | Command | Location |
+|---|---|---|
+| FASTQ/FASTA/SAM to `.hyb` | `python3 -m hyb2pipe` (legacy: `hyb2 -i reads.sam ...`) | `pipeline/hyb2pipe/` (legacy: `bin/`) |
+| Contact density maps, viewpoint graphs | `hyb2 -i test.hyb -a GENE` | `bin/` (R) |
+| Structure folding and VARNA drawings | `hyb2_fold`, `hyb2 ... -x -y -l` | `bin/` |
+| Interactive GUI | `hyb2_app` | `bin/` (R Shiny) |
+| Differential coverage and similarity | `hyb2_compare` | `bin/` (R, DESeq2) |
+| CPLfold and CPLcofold | `bin/cplfold`, `bin/cplcofold` | `third_party/cplfold/` |
+| IRIS | `bin/iris` | `pipeline/hyb2analysis/iris.py` |
 
-The Hyb2 pipeline is **streamlined** to receive input of fastq/SAM files and generates a hyb file with information on RNA-RNA interactions, and various visualizations of data: contact density map, viewpoint graph, and RNA structure as **outputs in a single command on the Linux command line**.
-
-Creates a **GUI to easily select and visualize RNA-RNA interactions** from contact density maps, with styling options using VARNA. GUI allows selection of specific interactions directly from the contact density maps, and **generating the corresponding colour-coded RNA secondary structure** in a VARNA GUI pop-up.
-
-## Quickstart (5 minutes)
-This turns the bundled Zika and 18S rRNA test data into `.hyb` files with `hyb2pipe`. It needs Python 3.9 or newer, Git and `make`, with no conda, Perl or R:
+## Quickstart
+This turns the bundled Zika and 18S rRNA test data into `.hyb` files with `hyb2pipe`. It needs Python 3.9 or newer, Git and `make`, but no conda, Perl or R:
 
 ```bash
 git clone https://github.com/Vicky-0256/hyb2.git
@@ -50,46 +52,68 @@ python -m pip install -r pipeline/requirements.txt
 make quickstart
 ```
 
-`make quickstart` runs `PYTHONPATH=pipeline python3 -m hyb2pipe -i data/testData.sam -d data/Zika_18S.fasta -o out/quickstart -e 1`. It writes 10,411 hybrids, with their folding energies (dG), to `out/quickstart.hyb`, plus `out/quickstart_homodimers.hyb` and `out/quickstart_hybrids.hyb_stats.txt`. Without `make` (for example in a Windows command prompt, where the venv is activated with `.venv\Scripts\activate`), run that `hyb2pipe` command directly, with `set PYTHONPATH=pipeline` in place of the `PYTHONPATH=pipeline` prefix. Run `make help` to see the test and build targets.
+`make quickstart` runs `PYTHONPATH=pipeline python3 -m hyb2pipe -i data/testData.sam -d data/Zika_18S.fasta -o out/quickstart -e 1`. It writes 10,411 hybrids, with their folding energies (dG), to `out/quickstart.hyb`, plus `out/quickstart_homodimers.hyb` and `out/quickstart_hybrids.hyb_stats.txt`. Without `make` (for example in a Windows command prompt, where the venv is activated with `.venv\Scripts\activate`), run that command directly, with `set PYTHONPATH=pipeline` in place of the `PYTHONPATH=pipeline` prefix. `make help` lists the test and build targets.
 
-From there, open the `.hyb` files in the web or desktop app, or plot and fold them with `bin/`; see [Entry Points](#entry-points).
+Then open the `.hyb` files in the web or desktop app, or plot and fold them with the [`bin/` tools](#the-original-bin-tools).
 
-## Prerequisites
-These prerequisites are for the original `bin/` tools (plots, VARNA drawings and the R Shiny GUI). `hyb2pipe` needs only Python; see the [Quickstart](#quickstart-5-minutes).
+## Input files
+**Reads: FASTQ or FASTA, optionally gzipped.** Hyb2 trims the 3′ adapter with cutadapt, collapses identical reads into one read named `<rank>_<count>` (later steps take the read count from that name) and maps them with Bowtie2 `-L 10 --score-min L,15,0`, the mapping defaults of the Kudla lab's U2 benchmark (Brr2 CLASH data). FASTA reads that all have such names already are mapped as they are, without trimming. Bowtie2 is not a Python package: install it with conda (bioconda `bowtie2`) or put `bowtie2-align-s` and `bowtie2-build-s` on the `PATH`.
 
-Linux/ Mac Operating System with Miniconda Installed
+**SAM from another aligner, optionally gzipped.** Read names must end in `_<count>` and must not start with `@`, and reads must be single-end:
+- Records with flag 0, 16, 256 or 272 (primary and secondary alignments) are used.
+- A paired-end record (flag bit 0x1) stops the run with an error.
+- Unmapped records (0x4) are skipped and counted.
+- Supplementary alignments (0x800) are skipped with a warning, so have the mapper report chimeric arms as secondary alignments (for example `bwa mem -M`).
+- Records with any other flag, such as QC-fail (0x200) or duplicate (0x400), are skipped with a warning and counted separately.
 
-1. **Miniconda**, if not installed, read based on your operating system (OS):
+**Reference FASTA (`-d`).** Headers without `|` are used as they are. If any header contains `|`, Hyb2 rewrites every header (`_` becomes `-`, `protein_coding` becomes `mRNA`, and `|` becomes `_`) and drops the records whose header has an empty field (`||`), `unknown` or `pseudogene`. So `>Zika|virusRNA` in `data/Zika_18S.fasta` becomes `Zika_virusRNA`, the gene ID used with `-a` below. An informative ID joins the gene ID, transcript ID, gene name and gene type, for example `>ENSG00000007372.25_ENST00000638963.1_PAX6_mRNA` (see [`data/Zika_18S_formatted.fasta`](data/Zika_18S_formatted.fasta)).
 
-> https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html
->
-> https://docs.conda.io/projects/conda/en/latest/user-guide/install/macos.html
+## `hyb2pipe` options
+```bash
+PYTHONPATH=pipeline python3 -m hyb2pipe \
+    -i <input> -d <reference.fasta> -o <output_prefix> [options]
+```
 
-2. **Java** or **Java Development Kit (JDK)**:
+| Option | Meaning | Default |
+|---|---|---|
+| `-i` | FASTQ, FASTA or SAM, each optionally gzipped | required |
+| `-d` | Reference FASTA used for mapping | required |
+| `-o` | Output prefix | required |
+| `-v` | BLAST threshold | 0.1 |
+| `-m` | Maximum overlap | 4 |
+| `-h` | Maximum hits per sequence | 10 |
+| `-e` | `1` adds the dG column; needs the ViennaRNA Python package, which `pipeline/requirements.txt` installs, or `RNAduplex` on the `PATH` | 0 (off) |
+| `--energy-engine` | dG engine with `-e 1`; `rnacofold` gives the legacy `hyb2` values | `rnaduplex` |
+| `-p` | Bowtie2 threads and worker processes | all CPUs |
+| `--adapter` | 3′ adapter trimmed with cutadapt; `none` skips trimming | `TGGAATTCTCGGGTGCCAAGG` |
+| `--min-length` | Minimum read length after trimming | 18 |
+| `--seed-length`, `--score-min` | Bowtie2 `-L` and `--score-min` (legacy `hyb2`: 16 and `L,18,0`) | 10 and `L,15,0` |
+| `--bowtie2-args` | Further Bowtie2 arguments, quoted | none |
+| `--keep-sam` | Also write `<output_prefix>.sam` (`plain`) or `.sam.gz` (`gz`) | `none` |
+| `--memory-mb`, `--tmp-dir`, `--no-resume` | Memory budget, work directory and resuming | 1024 and `<output_prefix>.work` |
 
-Download the appropriate version based on your OS, locate the file, then install by double-clicking:
-> https://www.oracle.com/java/technologies/downloads
+It writes `<output_prefix>.hyb`, `<output_prefix>_homodimers.hyb` and `<output_prefix>_hybrids.hyb_stats.txt`. [`pipeline/README.md`](pipeline/README.md) documents every option, memory use and resuming.
 
-#
-Hyb2 can be used on **Windows** with Windows Subsystem for Linux (**WSL**) installed; see the [WSL installation guide](docs/install-wsl.md).
+## The original `bin/` tools
+The shell, Perl, awk and R scripts in `bin/` plot and fold `.hyb` files; `hyb2pipe` replaces their first step (`sam_filt`, `sam2hyb` and the `bowtie2_*` wrappers). They run on Linux and macOS, and on Windows with WSL ([guide](docs/install-wsl.md)).
 
-## Installation
-Hyb2 can be downloaded and installed with:
+### Install
+Install Miniconda ([Linux](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html), [macOS](https://docs.conda.io/projects/conda/en/latest/user-guide/install/macos.html)) and [Java](https://www.oracle.com/java/technologies/downloads), then:
 
 ```bash
 git clone https://github.com/Vicky-0256/hyb2.git
+cd hyb2
+bin/hyb2_install              # Linux
+bin/hyb2_install_macOS        # macOS (Intel)
+bin/hyb2_install_macOS-arm    # macOS (Apple silicon)
+```
 
-# Install Hyb2 on Linux:
-cd hyb2/
-bin/hyb2_install
+The script creates the conda environments and adds `bin/` to your `PATH`. Open a new terminal, and activate the environment in each new terminal:
 
-# On MacOS, install using:
-cd hyb2/
-bin/hyb2_install_macOS
-
-# On MacOS-ARM, use:
-cd hyb2/
-bin/hyb2_install_macOS-arm
+```bash
+conda activate hyb2              # Linux
+conda activate hyb2_macOS        # macOS (Intel)
+conda activate hyb2_macOS-arm    # macOS (Apple silicon)
 ```
 
 VARNA is in `third_party/varna/` (it was `VARNA/` before November 2026). If you installed an earlier version, point `bin/VARNA.dir` at the new jar after updating:
@@ -97,365 +121,163 @@ VARNA is in `third_party/varna/` (it was `VARNA/` before November 2026). If you 
 printf '%s\n' "$PWD/third_party/varna/build/jar/VARNAcmd.jar" > bin/VARNA.dir
 ```
 
-## Entry Points
-
-Hyb2 has four entry points. Pick one by where you want to work:
-
-| Entry point | Use it for | Input | Install | Location |
-|---|---|---|---|---|
-| `hyb2pipe` (command line) | Reads to `.hyb` on any OS, scripted or on a cluster. This is the CLI described in the paper. | FASTQ, FASTA or SAM, optionally gzipped | Python 3.9+, `pip install -r pipeline/requirements.txt`; Bowtie2 for FASTQ/FASTA | `pipeline/` |
-| Original `bin/` tools | Contact density maps, viewpoint graphs, VARNA drawings, the R Shiny GUI and DESeq2 comparisons | `.hyb` (or SAM/FASTQ through the legacy `hyb2`) | conda, Perl, R and Java ([Installation](#installation)) | `bin/` |
-| Web app | Exploring `.hyb` files, CPLfold/IRIS structures and comparisons in the browser; files stay on your computer | `.hyb` | None once the site is published on GitHub Pages. To serve a local copy, build its runtimes with `make build-web` and serve `web/` ([web/README.md](web/README.md)) | `web/` |
-| Desktop app | One local project from raw reads to structures, offline, running `hyb2pipe` for each sample | FASTQ, FASTA, SAM or `.hyb` | Go 1.27+ to build it from source ([desktop/README.md](desktop/README.md)) | `desktop/` |
-
-The Hyb2 command-line pipeline is `hyb2pipe` in `pipeline/`. It turns FASTQ, FASTA or SAM input (each optionally gzipped) into `.hyb` files in pure Python (3.9+), with no Perl, awk or sed, so it also runs on Windows. The desktop app runs the same code for every sample. Run it from the repository root:
+### Plot and fold the test data
+Run these from the folder that contains your `hyb2` clone. First make `test.hyb`, once:
 
 ```bash
-PYTHONPATH=pipeline python3 -m hyb2pipe -i data/testData.sam -d data/Zika_18S.fasta -o out/test -e 1
+PYTHONPATH=hyb2/pipeline python3 -m hyb2pipe \
+    -i hyb2/data/testData.sam -d hyb2/data/Zika_18S.fasta -o test -e 1
 ```
 
-It writes `out/test.hyb`, `out/test_homodimers.hyb` and `out/test_hybrids.hyb_stats.txt`. `-e 1` adds the dG column and needs the ViennaRNA Python package or `RNAduplex` on the PATH; FASTQ and FASTA input also need Bowtie2. See [`pipeline/README.md`](pipeline/README.md) for every option, memory use and resuming.
+Each `hyb2` command below plots the contact density maps and the viewpoint graph of a region, and folds its structure:
 
-`bin/` holds the original shell, Perl, awk and R scripts. `hyb2pipe` replaces their first step (`sam_filt`, `sam2hyb` and the `bowtie2_*` wrappers). The plotting and folding commands below still come from `bin/` and read the `.hyb` files that `hyb2pipe` writes.
+```bash
+# Short-range, within one RNA: ZIKV 1001-1500
+hyb2 -i test.hyb -d hyb2/data/Zika_18S.fasta -a Zika_virusRNA -x 1001 -l 500
+# Long-range, within one RNA: ZIKV 1001-1500 with 5001-5500
+hyb2 -i test.hyb -d hyb2/data/Zika_18S.fasta -a Zika_virusRNA -x 1001 -y 5001 -l 500
+# Between two RNAs: ZIKV 7501-8000 with 18S rRNA 501-1000
+hyb2 -i test.hyb -d hyb2/data/Zika_18S.fasta -a Zika_virusRNA -b 18S_rRNA -x 7501 -y 501 -l 500
+# Homodimer: ZIKV 3501-3700 with 3501-3700 of a second ZIKV strand
+hyb2 -i test.hyb -d hyb2/data/Zika_18S.fasta -a Zika_virusRNA -b Zika_virusRNA \
+    -x 3501 -y 3501 -l 200
+```
 
-| Step | Command | Location |
+The first run also writes `hyb2/data/Zika_18S.hyb.fasta`, the reference with the rewritten IDs used in the `.hyb` ([Input files](#input-files)), which `hyb2_app` and `hyb2_compare` read below.
+
+### `hyb2` options
+| Option | Meaning | Default |
 |---|---|---|
-| FASTQ/FASTA/SAM to `.hyb` | `python3 -m hyb2pipe` (legacy: `hyb2 -i reads.sam ...`) | `pipeline/hyb2pipe/` (legacy: `bin/`) |
-| Contact density maps, viewpoint graphs | `hyb2 -i test.hyb -a GENE` | `bin/` (R) |
-| Structure folding and VARNA drawings | `hyb2_fold`, `hyb2 ... -x -y -l` | `bin/` |
-| Interactive GUI | `hyb2_app` | `bin/` (R Shiny) |
-| Differential coverage and similarity | `hyb2_compare` | `bin/` (R, DESeq2) |
-| CPLfold and CPLcofold | `bin/cplfold` | `third_party/cplfold/` |
-| IRIS | `bin/iris` | `pipeline/hyb2analysis/iris.py` |
+| `-i` | The `.hyb` file, or reads ([below](#making-the-hyb-with-the-legacy-hyb2)) | |
+| `-d` | Reference FASTA | |
+| `-2` | Reference FASTA of the `-b` gene, if it is in another file | the `-d` file |
+| `-a` | Gene ID of interest | |
+| `-b` | Second gene ID, for interactions between two RNAs or homodimers | |
+| `-x` | Start of the first region, in the `-a` gene | |
+| `-y` | Start of the second region, in the `-b` gene if given | |
+| `-l` | Length of each region | |
+| `-q` | Upper limit of the colour scale of the contact density maps, as a quantile of the chimera counts | 0.95 |
+| `-j` | Path to `VARNAcmd.jar` | set by the install |
+| `-r` | Folding program: `1` ViennaRNA, `0` UNAFold (not distributed with Hyb2), `2` mfold 3.6 | 1 |
 
-`hyb2pipe` and `bin/hyb2` give byte-identical `.hyb` files for `data/testData.sam` without energies (`pipeline/tests/test_pipeline.py`). They differ on purpose in two places:
+### Folding constraints and programs
+The folding constraints are the helices that the chimeras support: each chimera's two arms are folded with RNAcofold, and the base pairs between the arms are counted. A pair is counted once, whichever arm was sequenced first; touching pairs are merged into helices; pairs with less than 5% of a helix's best pair's count are trimmed from the helix's ends; and each constraint is written once. This follows the `gk-dev` branch of hyb2; before, a pair seen in both arm orders had its count split in two and could give the same constraint twice.
 
-- **dG column (`-e 1`):** `hyb2pipe` folds the two arms with ViennaRNA RNAduplex, which forms intermolecular pairs only, as the original Hyb pipeline did. `bin/hyb2` uses RNAcofold, where each arm may also pair with itself. `--energy-engine rnacofold` gives the legacy values.
-- **Order and ties:** `hyb2pipe` runs Bowtie2 with `--reorder` and resolves tied gene rankings by first-seen gene, so repeated runs give the same output.
+- **mfold (`-r 2`)** folds with mfold 3.6 (`conda install -c bioconda mfold`), which applies the constraints as forced base pairs; `bin/mfold_check` tests this before folding. mfold has no duplex folding, so in this mode the chimeras' base-pair scores use ViennaRNA's RNAcofold, as in `-r 1`; so does the `.hyb` dG column when the legacy `hyb2` builds the `.hyb` itself. A `.hyb` from `hyb2pipe` already holds its dG (`--energy-engine`), which `-r` does not change. `bin/mfold_fold` runs each fold in a temporary folder with links to mfold's energy tables (the bioconda build finds them only in the current folder); `MFOLD` names another mfold script.
+- **UNAFold (`-r 0`)** needs the full UNAFold `hybrid-ss-min`, which applies the constraints as forced base pairs. The `hybrid-ss-min` of OligoArrayAux (the conda `oligoarrayaux` package, installed for `hybrid-min`) silently ignores forced pairs, so `-r 0` stops with an error when it is the one found (`bin/unafold_check` tests this before folding). Put the full UNAFold's `hybrid-ss-min` first on `PATH`, set `HYBRID_SS_MIN` to it, or use ViennaRNA (`-r 1`).
 
-Older `bin/hyb2` versions also wrote a TAB inside dG whenever |dG| < 10, which shifted every later column, and ignored `-h`. Both are fixed in `bin/` and were never present in `hyb2pipe`.
+### Other commands
+Contact density maps only, without a viewpoint graph or structure, of a whole RNA or zoomed in:
+```bash
+hyb2 -i test.hyb -a 18S_rRNA                          # or: hyb2_coverage -i test.hyb -a 18S_rRNA
+hyb2 -i test.hyb -a 18S_rRNA -x 201 -y 201 -l 1200
+hyb2_coverage -i test.hyb -a 18S_rRNA -w 201 -x 1400 -y 201 -z 1400   # -w -x -y -z: x1 x2 y1 y2
+```
 
-### CPLfold on the command line, web and desktop
+A structure straight from a `.hyb`:
+```bash
+hyb2_fold -i test.hyb -d hyb2/data/Zika_18S.fasta -a Zika_virusRNA -x 1 -y 1001 -l 200
+```
 
-CPLfold is part of Hyb2. Its Python package `cplfold` is in `third_party/cplfold`
-(`import cplfold; cplfold.fold(sequence)`, or `pip install third_party/cplfold`),
-and `bin/cplfold` provides it as a local CLI. Its core predictor requires
-NumPy and Numba but does not require a native HotKnots executable. See
-[`docs/cplfold-python.md`](docs/cplfold-python.md) for installation, verification,
-runtime limits, browser boundaries, and third-party licensing notes.
+**Randomized parallel folding.** `comradesFold2` folds the RNA 1,000 times and `comradesScore` scores each structure. It needs a computer cluster that runs `qsub`. For the interactions between ZIKV and 18S rRNA above:
+```bash
+qsub comradesFold2 \
+    -c test_Zika_virusRNA-7501-8000_18S_rRNA-501-1000.1-1100_folding_constraints.txt \
+    -i Zika_virusRNA-7501-8000_18S_rRNA-501-1000_1-1100.fasta -s 1
 
-Change shared CPLfold/CPLcofold algorithms in `third_party/cplfold/` and their
-shared Python adapter in `web/cplfold/`. Do not copy edits into generated web
-assets or the staged desktop runtime. On a push changing either path on
-`CPLcofold`, `integration/unified-release` or `main`, CI builds the website and
-desktop packages from the same commit and checks their source against Git.
-On the website the predictor runs in a same-origin Pyodide worker, accepts
-an optional HYB-derived block bonus matrix, and visualises/ranks nested and
-pseudoknotted candidates. The browser path uses a measured session-specific
-recommendation above a 75 nt baseline, with a 500 nt hard safety ceiling
-without Numba; use the structure page's local-input download and run
-`bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv`
-for longer guided sequences. The download includes the prepared sequence and,
-when HYB-guided CPLfold is selected, the same sparse bonus matrix used in the
-browser. For CPLfold's licence terms, see [License](#license).
+comradesScore -i test_Zika_virusRNA-7501-8000_18S_rRNA-501-1000.basepair_scores.txt \
+    -f Zika_virusRNA-7501-8000_18S_rRNA-501-1000_1-1100.fasta
+```
 
-### IRIS from the source checkout
+**Interactive GUI** ([what it shows](#hyb2-gui)):
+```bash
+hyb2_app -i test.hyb -a Zika_virusRNA -d hyb2/data/Zika_18S.hyb.fasta
+```
 
-With Python 3.11, NumPy and the ViennaRNA Python bindings installed (`python -m pip install numpy ViennaRNA==2.7.2` in an active virtual environment), run:
+**Comparing experiments.** `hyb2_compare` finds the interactions that differ between two conditions with DESeq2 and plots a differential coverage map, and plots the interactions that they share as a similarity heatmap. Each condition needs at least two replicates. List each replicate's `.hyb`, its `.contact.txt` (written with the contact density maps) and its condition in a tab-separated table made by hand, as in [`data/hyb2_compare_input.table`](data/hyb2_compare_input.table). `hyb2_compare` does not run on macOS on Apple silicon (ARM), where several DESeq2 packages are not supported.
+```bash
+hyb2_compare -i input.table -a Zika_virusRNA -d hyb2/data/Zika_18S.hyb.fasta
+```
 
+### Making the `.hyb` with the legacy `hyb2`
+When `-i` is reads or SAM, `hyb2` makes the `.hyb` itself, with the same `-i -d -o -v -m -h -e` options as `hyb2pipe` (`-v` and `-m` also accept scientific notation such as `1e-5`). One command then runs the whole analysis:
+```bash
+hyb2 -i hyb2/data/testData.sam -d hyb2/data/Zika_18S.fasta -o test -a Zika_virusRNA -x 1001 -l 500
+```
+
+`hyb2pipe` and `hyb2` give byte-identical `.hyb` files for `data/testData.sam` without energies (`pipeline/tests/test_pipeline.py`). They differ on purpose in two places:
+- **dG column (`-e 1`):** `hyb2pipe` folds the two arms with ViennaRNA RNAduplex, which forms intermolecular pairs only, as the original Hyb pipeline did. `hyb2` uses RNAcofold, where each arm may also pair with itself. `--energy-engine rnacofold` gives the legacy values.
+- **Ties in the gene ranking:** `hyb2pipe` keeps the first-seen gene, so repeated runs give the same output; in `hyb2` (Perl) their order is undefined.
+
+More about `hyb2`:
+- It writes `<output_prefix>.hyb.inputs` beside the `.hyb`, recording the input, the `-d` reference, the `-v`, `-m`, `-h` and `-e` options, and the size and modification time of the `.hyb` and `_homodimers.hyb` it wrote. A rerun with the same files and options skips this step. A changed input, reference or option recomputes it, and so does a changed `.hyb` or `_homodimers.hyb`; `-r` and `-2` do not. A `.hyb` without that record (one given as `-i`, or one made by `hyb2pipe`, which deletes an old record when it writes `<output_prefix>.hyb`) is used as it is.
+- Bowtie2 and cutadapt run on all online CPUs; set `HYB2_THREADS` to use fewer, e.g. `HYB2_THREADS=8 hyb2 -i reads.fastq ...`.
+- Trimming and mapping take their settings from `HYB2_ADAPTER` (`none` skips trimming), `HYB2_MIN_LENGTH`, `HYB2_SEED_LENGTH`, `HYB2_SCORE_MIN` and `HYB2_BOWTIE2_ARGS`. cutadapt's report goes to `<output_prefix>.cutadapt.log`.
+- Older versions wrote a TAB inside dG whenever |dG| < 10, which shifted every later column, and ignored `-h`. Both are fixed, and neither was ever in `hyb2pipe`.
+
+## CPLfold and IRIS
+**CPLfold and CPLcofold** are part of Hyb2: the Python package `cplfold` in `third_party/cplfold` (`import cplfold; cplfold.fold(sequence)`, or `pip install third_party/cplfold`) and the local CLIs `bin/cplfold` and `bin/cplcofold`. The core predictor needs NumPy and Numba, not a native HotKnots executable. In the web app CPLfold runs in your browser without Numba, which limits the sequence length: at most 500 nt, and often less after a speed test in your browser. For a longer sequence, click **Download local inputs** on the structure page, which saves the prepared sequence and, for HYB-guided runs, the bonus matrix that the browser uses. Then run the command shown there, for example:
+```bash
+bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv
+```
+The command shown keeps your settings. `bin/cplfold` refuses sequences over 1,000 nt by default, so for a longer one the command also sets `HYB2_CPLFOLD_MAX_NT` to its length. The [Local CPLfold](https://vicky-0256.github.io/hyb2/local-cplfold.html) page walks through these steps; see [`docs/cplfold-python.md`](docs/cplfold-python.md) for installation, verification and runtime limits, and the [License](#license) for CPLfold's licence terms.
+
+**IRIS.** With Python 3.11, NumPy and the ViennaRNA Python bindings installed (`python -m pip install numpy ViennaRNA==2.7.2` in an active virtual environment), run:
 ```sh
 bin/iris --reference ref.fa --gene toyRNA --start 31 --end 170 --hyb reads.hyb -o ensemble.json
 ```
-
-The source CLI and Desktop use the same Python IRIS predictor. The CLI runs without the `web/` or `desktop/` trees. See the [IRIS CLI guide](docs/iris-cli.md) for input, output and the exact files to include in a standalone source archive.
-
-## Getting Started
-Activate the environment created during installation:
-```bash
-# Linux:
-conda activate hyb2
-
-# MacOS:
-conda activate hyb2_macOS
-
-# MacOS-ARM:
-conda activate hyb2_macOS-arm
-```
-Then make the `.hyb` files with `hyb2pipe`, and plot and fold them with `hyb2`:
-```bash
-# Hyb2 is the directory Hyb2 was installed in.
-# Step 1: SAM (or FASTQ/FASTA) to test.hyb, with folding energies
-PYTHONPATH=Hyb2/pipeline python3 -m hyb2pipe -i Hyb2/data/testData.sam -d Hyb2/data/Zika_18S.fasta -o test -e 1
-
-# Steps 2 and 3: contact density maps, viewpoint graph and the structure of nucleotides 1001-1500
-hyb2 -i test.hyb -d Hyb2/data/Zika_18S.fasta -a Zika_virusRNA -x 1001 -l 500
-```
-To run the program, the first thing to have is the sequence alignment map (SAM) file or a fastq file. Here, we've provided only the SAM file.
-
-If the fastq files from RNA proximity ligation experiments are not mapped to reference sequences, `hyb2pipe` maps them with bowtie2 when given the FASTQ file as `-i`.
-
-The second file needed will contain the reference fasta sequences.
-
-**VARNA** is used to visualize the RNA structures.
-
-The legacy one-command run, `hyb2 -i Hyb2/data/testData.sam -d Hyb2/data/Zika_18S.fasta -o test -a Zika_virusRNA -x 1001 -l 500`, still works; see [Entry Points](#entry-points) for how its `.hyb` differs.
-
-### Reference Fasta Files
-The following ID format is provided to be more informative:
-
-> \>Gene stable ID version, Transcript stable ID version, Gene name, Gene type
->
-> \>ENSG00000007372.25_ENST00000638963.1_PAX6_mRNA
-
-Or see:
-> https://github.com/Vicky-0256/hyb2/blob/main/data/Zika_18S_formatted.fasta
-
-## Running the Program
-Hyb2 environment needs to be activated for essential softwares.
-
-```bash
-# Linux:
-conda activate hyb2
-
-# MacOS:
-conda activate hyb2_macOS
-
-# MacOS-ARM:
-conda activate hyb2_macOS-arm
-```
-**Hyb2**
-
-A run has 3 parts. `hyb2pipe` converts the input to Hyb format; `hyb2 -i <output>.hyb` plots the contact density maps and folds the RNA structures.
-
-### Converting Input to Hyb Format
-```bash
-PYTHONPATH=Hyb2/pipeline python3 -m hyb2pipe -i <input> -d <reference.fasta> -o <output_prefix> [options]
-```
--i input_file (fastq, fastq.gz, fasta, fasta.gz, sam or sam.gz)
-
--d reference_sequences.fasta used for mapping
-
--o output_prefix
-
--v blast_threshold (default value: 0.1)
-
--m max_overlap (default value: 4)
-
--h max_hits_per_sequence (default value: 10)
-
--e folding_energy_prediction (default=0 (off), 1 to add the dG column)
-
---energy-engine dG engine with `-e 1` (default: rnaduplex; rnacofold gives the legacy hyb2 values)
-
--p Bowtie2 threads and worker processes (default: all CPUs)
-
---adapter 3' adapter trimmed with cutadapt before collapsing FASTQ/FASTA reads; `none` to skip (default: TGGAATTCTCGGGTGCCAAGG). Already-collapsed FASTA is not trimmed
-
---min-length minimum read length after trimming (default: 18)
-
---seed-length, --score-min Bowtie2 `-L` and `--score-min` (default: 10 and L,15,0; legacy hyb2 used 16 and L,18,0). --bowtie2-args appends further Bowtie2 arguments
-
---keep-sam also write `<output_prefix>.sam` (plain) or `.sam.gz` (gz) (default: none)
-
---memory-mb, --tmp-dir, --no-resume: memory budget, work directory and resuming; see [`pipeline/README.md`](pipeline/README.md)
-
-The legacy `hyb2` takes the same `-i -d -o -v -m -h -e` options and runs this step itself when `-i` is not a `.hyb` file. Its `-e` also defaults to 0; with `-e 1` it computes dG with ViennaRNA RNAcofold. `-v` and `-m` accept scientific notation such as `1e-5`. It writes `<output_prefix>.hyb.inputs` beside the `.hyb`, recording the input, the `-d` reference and the `-v -m -h -e` options used, and the size and modification time of the `.hyb` and `_homodimers.hyb` it wrote. A rerun with the same files and options skips this step. A rerun with a changed input, `-d` reference or one of those options recomputes it, and so does a rerun after the `.hyb` or `_homodimers.hyb` was changed. `-r` and `-2` are not used by this step and do not cause a recompute. A `.hyb` without that record (one given as `-i`, or one made by `hyb2pipe`, which deletes an old record when it writes `<output_prefix>.hyb`) is used as it is. Both `hyb2pipe` and `hyb2` collapse identical FASTQ and FASTA reads into one read named `<rank>_<count>` before mapping, because the later steps take the read count from that name; FASTA reads that all have such a name already are mapped as they are. A SAM input must have read names that end in `_<count>` and do not start with `@`, or the run stops with an error. Both `hyb2pipe` and `hyb2` keep only SAM records with flag 0, 16, 256 or 272 (single-end primary and secondary alignments). A paired-end record (flag bit 0x1) stops the run with an error, because Hyb2 expects single-end reads. Unmapped records (0x4) are skipped and counted. Supplementary alignments (0x800) are skipped with a warning: chimeric arms reported as supplementary alignments are not used, so have the mapper report them as secondary alignments (for example `bwa mem -M`). Any other flag, such as QC-fail (0x200) or duplicate (0x400), is skipped with a warning and its own count. `hyb2` maps FASTQ and FASTA input with Bowtie2 on all online CPUs; set `HYB2_THREADS` to use fewer, e.g. `HYB2_THREADS=8 hyb2 -i reads.fastq ...`. Both trim the 3' adapter with cutadapt before collapsing and map with Bowtie2 `-L 10 --score-min L,15,0`, the mapping defaults of the Kudla lab's U2 benchmark (Brr2 CLASH data); `hyb2` takes these settings from `HYB2_ADAPTER` (`none` to skip trimming), `HYB2_MIN_LENGTH`, `HYB2_SEED_LENGTH`, `HYB2_SCORE_MIN` and `HYB2_BOWTIE2_ARGS`, and writes cutadapt's report to `<output_prefix>.cutadapt.log`.
-
-### Plotting Contact Density Map
-These options and the folding options below go to `hyb2 -i <output_prefix>.hyb -d <reference.fasta>`.
-
--a gene_ID_of_interest
-
--b 2nd_gene_ID_of_interest
-
--q upperlimit_for_heatmap_chimeric_count (default value: 0.95 (%) )
-
-### RNA Structure Folding
--x start_coord_of_Arm1 (cannot be longer than nucleotide length of specified gene)
-
--y start_coord_of_Arm2 (cannot be longer than nucleotide length of specified gene)
-
--l lengths_of_fragments
-
--j location of VARNAcmd.jar
-
--r select preferred RNA folding algorithm (default=1 (ViennaRNA), 0 for UNAFold (software not allowed to be distributed here), 2 for mfold 3.6)
-
-The folding constraints are the helices that the chimeras support: each chimera's two arms are folded with RNAcofold, and the base pairs between the arms are counted. A pair is counted once, whichever arm was sequenced first, touching pairs are merged into helices, pairs with less than 5% of a helix's best pair's count are trimmed from the helix's ends, and each constraint is written once. This follows the `gk-dev` branch of hyb2; before, a pair seen in both arm orders had its count split in two and could give the same constraint twice.
-
-mfold mode (`-r 2`) folds the structures with mfold 3.6 (`conda install -c bioconda mfold`), which applies the chimera constraints as forced base pairs; `bin/mfold_check` tests this before folding. mfold has no duplex folding, so in this mode the chimeras' basepair scores use ViennaRNA's RNAcofold, as in `-r 1`; so does the `.hyb` dG column when the legacy `hyb2` builds the `.hyb` itself. A `.hyb` from `hyb2pipe` already holds its dG (`--energy-engine`), which `-r` does not change. `bin/mfold_fold` runs each fold in a temporary folder with links to mfold's energy tables (the bioconda build finds them only in the current folder); `MFOLD` names another mfold script.
-
-UNAFold mode needs the full UNAFold `hybrid-ss-min`, which applies the chimera constraints as forced base pairs. The `hybrid-ss-min` of OligoArrayAux (the conda `oligoarrayaux` package, installed for `hybrid-min`) silently ignores forced pairs, so `-r 0` stops with an error when it is the one found (`bin/unafold_check` tests this before folding). Put the full UNAFold's `hybrid-ss-min` first on `PATH`, or set `HYBRID_SS_MIN` to it, or use ViennaRNA (`-r 1`).
-
-##
-The examples below use the `test.hyb` made once from the test data:
-```bash
-PYTHONPATH=Hyb2/pipeline python3 -m hyb2pipe -i Hyb2/data/testData.sam -d Hyb2/data/Zika_18S.fasta -o test -e 1
-```
-### Analysis of short-range intramolecular interactions:
-RNA Structure Folding from 1001-1500nt positions of Zika virus (ZIKV).
-```bash
-hyb2 -i test.hyb -d Hyb2/data/Zika_18S.fasta -a Zika_virusRNA -x 1001 -l 500
-```
-### Analysis of long-range intramolecular interactions:
-RNA Structure Folding of 1001-1500nt positions with 5001-5500nt positions of ZIKV.
-```bash
-hyb2 -i test.hyb -d Hyb2/data/Zika_18S.fasta -a Zika_virusRNA -x 1001 -y 5001 -l 500
-```
-### Analysis of intermolecular interactions:
-RNA Structure Folding of 7501-8000nt positions of ZIKV with 501-550nt positions of 18S rRNA.
-```bash
-hyb2 -i test.hyb -d Hyb2/data/Zika_18S.fasta -a Zika_virusRNA -b 18S_rRNA -x 7501 -y 501 -l 500
-```
-### Analysis of homodimer interactions:
-RNA Structure Folding of 3501-3700nt positions of ZIKV with 3501-3700nt positions of a second strand of ZIKV.
-```bash
-hyb2 -i test.hyb -d Hyb2/data/Zika_18S.fasta -a Zika_virusRNA -b Zika_virusRNA -x 3501 -y 3501 -l 200
-```
-
-##
-### Contact Density Maps and RNA Folding
-To plot only the contact density maps of a `.hyb` file, without a viewpoint graph or structure:
-```bash
-hyb2 -i test.hyb -a 18S_rRNA
-
-# Or
-hyb2_coverage -i test.hyb -a 18S_rRNA
-```
-To also zoom-in on certain regions on the Contact Density Map:
-```bash
-hyb2 -i test.hyb -a 18S_rRNA -x 201 -y 201 -l 1200
-
-# Or -w -x -y -z corresponds to x1 x2 y1 and y2
-hyb2_coverage -i test.hyb -a 18S_rRNA -w 201 -x 1400 -y 201 -z 1400
-```
-To plot RNA structures directly using hyb file as input:
-```bash
-hyb2_fold -i test.hyb -d Hyb2/data/Zika_18S.fasta -a Zika_virusRNA -x 1 -y 1001 -l 200
-```
-
-##
-### Randomized Parallel RNA Structure Folding
-To perform randomized parellel RNA structure folding, which folds the RNA 1,000 times, and subsequently scoring each structure, a computer cluster that runs **qsub** is required.
-
-Taking the analysis of intermolecular interactions as an example:
-```bash
-qsub comradesFold2 -c test_Zika_virusRNA-7501-8000_18S_rRNA-501-1000.1-1100_folding_constraints.txt -i Zika_virusRNA-7501-8000_18S_rRNA-501-1000_1-1100.fasta -s 1
-
-comradesScore -i test_Zika_virusRNA-7501-8000_18S_rRNA-501-1000.basepair_scores.txt -f Zika_virusRNA-7501-8000_18S_rRNA-501-1000_1-1100.fasta
-```
-##
-### Graphical User Interface
-To create an interactive GUI pop-up window:
-```bash
-hyb2_app -i test.hyb -a Zika_virusRNA -d Hyb2/data/Zika_18S.hyb.fasta
-```
-##
-### Differential Coverage Map and Similarity Heatmap
-To compare between 2 different proximity ligation experiments, the program incorporates DESeq2 to identify the differential chimeras, and produces a differential coverage map.
-
-To find the conservations between 2 experiments, we look for overlapping interactions.
-
-A minimum of 2 replicates needed for each experiment to be used as input.
-
-The input files for **hyb2_compare** comes from outputs of the main hyb2 pipeline, a **tab-delimited table needs to be made manually** in the format shown here:
-> https://github.com/Vicky-0256/hyb2/blob/main/data/hyb2_compare_input.table
-
-**MacOS-ARM cannot use hyb2_compare. Several packages in DESeq2 not supported in ARM architecture.**
-
-For example, to identify the differences and similarities between control and experimental conditions:
-```bash
-hyb2_compare -i input.table -a Zika_virusRNA -d Hyb2/data/Zika_18S.hyb.fasta
-```
-
-## How To Read Outputs
-### Hyb files
-The first output is a **hyb** file, that contains sequence identifiers, read sequences, 1-based mapping coordinates, and annotation information for each chimera.
-
-There's 17 columns per read:
-
-Column 1: Unique Sequence Identifier
-
-Column 2: Read Sequence
-
-Column 3: Predicted binding energy in kcal/mol.
-
-Columns 4–9: Mapping information for first fragment of read: name of matched transcript, coordinates in read, coordinates in transcript, mapping score.
-
-Columns 10–15: Mapping information for second fragment of read.
-
-Column 16: Overlap Score
-
-Column 17: **Type of Chimera** (See chim_types for a visualization of the types of chimera)
-> https://github.com/Vicky-0256/hyb2/blob/main/bin/chim_types
-##
-### Contact Density Maps
-<p align="middle">
-  <img src="https://user-images.githubusercontent.com/110675091/185672361-a9c49db9-9c93-4dff-aa3e-0545a70d36e8.png" height="330" width="330" />
-  <img src="https://user-images.githubusercontent.com/110675091/185672386-7175cf64-733e-485e-9639-365df5ce8240.png" height="330" width="330" />
-  <img src="https://user-images.githubusercontent.com/110675091/185671422-c84c289c-4b14-4505-847e-1bb869d99e89.png" height="330" width="330" />
-</p>
-
-The axis are the genome lengths with each spot representing chimeras.
-
-Chimeras ligated in 5'-3' and 3'-5' orientations are plotted above and below the diagonal respectively.
-
-Spots close to the diagonal are short-ranged interactions that can be easily folded into structures, while spots further away are long-ranged interactions.
-
-The contrast of the spots corresponds to the chimeric counts, with darker spots representing a higher count.
-
-Although the contrast is capped at an upper quantile limit (default 95%).
-
-If 2 genes were input in the command line, the  nuclotide positions of the first gene will be plotted as the x-axis, and the other on y-axis.
-##
-### Viewpoint Graphs
+The source CLI and the desktop app use the same Python IRIS predictor, and the CLI runs without the `web/` or `desktop/` trees. See the [IRIS CLI guide](docs/iris-cli.md) for input, output and the files to include in a standalone source archive.
+
+## How to read the outputs
+### `.hyb` files
+A `.hyb` file has one chimera per row, in 18 tab-separated columns with 1-based coordinates:
+
+| Column | Content |
+|---|---|
+| 1 | Read ID, ending in `_<count>`: the number of identical reads that it stands for |
+| 2 | Read sequence |
+| 3 | Binding energy (dG, kcal/mol) with `-e 1`; otherwise `.` |
+| 4–9 | First arm: transcript ID, start and end in the read, start and end in the transcript, e-value |
+| 10–15 | Second arm: the same |
+| 16 | Empty (the annotation column of the original Hyb format) |
+| 17 | Overlap of the two arms in the transcript in nt, negative for a gap; `.` when the arms are on different RNAs |
+| 18 | Chimera type: `Type_1` to `Type_13` within one RNA (see [`bin/chim_types`](bin/chim_types)), or `Intermolecular` |
+
+Tools that split on any whitespace, such as awk, skip the empty column 16 and see 17 columns. `<output_prefix>_homodimers.hyb` holds the rows whose arms overlap by at least 5 nt (column 17): the homodimer candidates.
+
+### Contact density maps
 <p align="center">
-  <img src="https://user-images.githubusercontent.com/110675091/184885181-90b10327-67e6-44ed-87f6-81b896b8defc.png" height="200" width="350">
+  <img src="docs/images/interaction-map.png" alt="Contact density map of the ZIKV example data with the viewpoint graph of a selected region below it" width="420"><br>
+  <sub>ZIKV example data (Fig. 1B of the paper). The profile under the map is the viewpoint graph of the gold region.</sub>
 </p>
 
-The x-axis represents the nucleotide positions and y-axis represents the frequency of chimeric interactions.
+Each spot counts the chimeras that join two positions, with the positions along the RNA on both axes; when two genes are given, the first is on the x-axis and the second on the y-axis. Chimeras ligated in 5′–3′ and 3′–5′ orientations are plotted above and below the diagonal. Spots near the diagonal are short-range interactions, which fold easily into structures; spots far from it are long-range interactions. Darker spots have more chimeras, and the colour scale is capped at an upper quantile (`-q`, default 95%).
 
-The graph shows the abundance of interactions and its positions along the RNA.
+### Viewpoint graphs
+The viewpoint graph is the profile under the contact density map above. For a selected region, it counts the chimeras that join the region to each position of the RNA (x-axis: nucleotide position; y-axis: chimera count), so it shows how often and where along the RNA the region interacts.
 
-
-### RNA Structures
+### RNA structures
 <p align="center">
   <img src="https://user-images.githubusercontent.com/110675091/184883583-d92dcdff-803a-4720-bbeb-d6085be9d30f.png" height="150" width="900">
 </p>
 
-To understand the secondary structures, read:
-> https://varna.lri.fr/
+The structures are drawn with [VARNA](https://varna.lri.fr/) and coloured by the log2 of their supporting reads: red the most supported, blue the least, and no colour for none.
 
-The structures are colour coded based on log2 of supporting reads, with red being the most supported, blue the least, and blank for none.
-
-(VARNA instructions)
-##
 ### Hyb2 GUI
 <p align="middle">
   <img src="https://github.com/Vicky-0256/hyb2/assets/110675091/b9105f5d-8d47-4ca3-9adb-e51e62012fd9" height="350" width="500" />
   <img src="https://github.com/Vicky-0256/hyb2/assets/110675091/c0dc4f6d-db8a-492b-85fb-272656882b66" height="300" width="450" />
 </p>
 
-The GUI shows 3 contact density maps. Highlighting the first contact density map (left) will zoom into the region (plotted in the middle). Highlighting an interaction on the second plot will generate a zoomed-in version of the interaction in the third contact density map (right).
+The GUI (`hyb2_app`) shows three contact density maps. Selecting a region in the first (left) zooms into it in the second (middle), and selecting an interaction there zooms into it in the third (right). The tables list each interaction's coordinates and chimera counts: "uncapped" is the actual count, and "count" is capped at the 95th percentile. Choose the type of interaction, the X (and Y) start and the length to fold; selecting an interaction fills in X and Y, which you can also type. **Fold RNA** opens the colour-coded structure in a VARNA window.
 
-The tables show the coordinates of each interaction, with chimeric counts shown. Uncapped counts refer to the actual chimeric counts, and count refer to counts capped at 95% percentile.
-
-There's options to select what types of RNA-RNA interaction to generate, the start X (and Y) coordinates, and length of RNA to fold. X (and Y) coordinates are automatically inputted based on the highlighted interaction, but can also be entered manually.
-
-Clicking the "Fold RNA" button creates a VARNA GUI pop-up with the colour-coded RNA structure generated.
-##
-### Differential Coverage Maps & Similarity Heatmap
+### Differential coverage maps and similarity heatmaps
 <p align="center">
-  <img src="https://github.com/Vicky-0256/hyb2/assets/110675091/a7b32e9d-4a4e-46c5-a141-d4df142bc9a1" height="300" width="600">
+  <img src="docs/images/compare-zafr-zilm.png" alt="Differential coverage map and similarity heatmap of ZIKV virion libraries of the ZAFR and ZILM isolates" width="800"><br>
+  <sub>Virion libraries of two ZIKV isolates, ZAFR and ZILM, two replicates each (Fig. 5A–B of the paper). The gold circle marks the most significant bin pair, enlarged at the lower left.</sub>
 </p>
 
-Read similarly to **Contact Density Maps**.
-
-However, differential coverage maps are plotted in two colours, with red being interactions enriched in one condition and blue for the other.
-
-Also, instead of the contrast reflecting chimeric counts, here, it represents significance (p-value) for significanyly differential interactions.
-
-Similarity heatmaps plot the conserved interactions between datasets.
+Read them like contact density maps. A differential coverage map has two colours, red for interactions enriched in one condition and cyan for the other, and the colour shows the significance (adjusted p-value) instead of the count. A similarity heatmap shows the interactions shared by the two conditions.
 
 ## License
 Hyb2 is free to use for academic and commercial work. No fees are charged for any of its parts.

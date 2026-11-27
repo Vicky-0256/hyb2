@@ -914,10 +914,26 @@ class _SecondaryStructureEvaluator:
         return value
 
     def _score_node(self, node: _LoopNode, exterior: bool = False) -> float:
-        if node.placeholder:
-            return 0.0
+        # Each base pair is a node, so a long helix nests deeper than Python's
+        # recursion limit: score children first from an explicit stack.  A
+        # placeholder scores 0 and hides its subtree, as before.
+        values: Dict[int, float] = {}
+        stack = [(node, False)]
+        while stack:
+            current, children_scored = stack.pop()
+            if current.placeholder:
+                values[id(current)] = 0.0
+            elif children_scored:
+                subtotal = sum(values.pop(id(child)) for child in current.children)
+                values[id(current)] = self._score_loop(current, subtotal, exterior and current is node)
+            else:
+                stack.append((current, True))
+                stack.extend((child, False) for child in reversed(current.children))
+        return values[id(node)]
+
+    def _score_loop(self, node: _LoopNode, subtotal: float, exterior: bool) -> float:
+        """The loop ``node`` closes, plus ``subtotal``, its children's energy."""
         i, j = node.pair
-        subtotal = sum(self._score_node(child) for child in node.children)
         if not node.children:
             return subtotal + self.parameters.hairpin_energy(
                 self.sequence,
@@ -1324,24 +1340,30 @@ class HotKnotsEnergy:
     def _add_term(target: Dict[str, float], name: str, value: float) -> None:
         target[name] = target.get(name, 0.0) + value
 
+    # The closed-region tree has a region per nested base pair, so a long
+    # helix is deeper than Python's recursion limit: these walks use explicit
+    # stacks (children pushed in reverse, so they still come out in order).
+    # _score_dp_node and _score_cc_node recurse only through pseudoknots.
     @staticmethod
     def _is_pk_free(node: _ClosedRegion) -> bool:
-        return node.kind != "pseudo" and all(
-            HotKnotsEnergy._is_pk_free(child) for child in node.children
-        )
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if current.kind == "pseudo":
+                return False
+            stack.extend(current.children)
+        return True
 
     @staticmethod
     def _top_pseudoknots(node: _ClosedRegion) -> Tuple[_ClosedRegion, ...]:
         result: List[_ClosedRegion] = []
-
-        def visit(current: _ClosedRegion) -> None:
-            for child in current.children:
-                if child.kind == "pseudo":
-                    result.append(child)
-                else:
-                    visit(child)
-
-        visit(node)
+        stack = list(reversed(node.children))
+        while stack:
+            current = stack.pop()
+            if current.kind == "pseudo":
+                result.append(current)
+            else:
+                stack.extend(reversed(current.children))
         return tuple(result)
 
     @staticmethod
@@ -1366,9 +1388,11 @@ class HotKnotsEnergy:
 
     @staticmethod
     def _descendants(node: _ClosedRegion) -> Iterable[_ClosedRegion]:
-        yield node
-        for child in node.children:
-            yield from HotKnotsEnergy._descendants(child)
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            yield current
+            stack.extend(reversed(current.children))
 
     @staticmethod
     def _ancestors(node: _ClosedRegion) -> Iterable[_ClosedRegion]:
@@ -1746,16 +1770,39 @@ class HotKnotsEnergy:
         restrictions: set,
         breakdown: Dict[str, float],
     ) -> float:
-        fm = self.baseline
+        # Every region, children first, from an explicit stack in the order
+        # of a recursive walk, so terms and restrictions accrue as before.
         encoded = tuple(NUC_TO_INT[base] for base in sequence)
+        values: Dict[int, float] = {}
+        stack = [(node, False)]
+        while stack:
+            current, children_scored = stack.pop()
+            if children_scored:
+                subtotal = sum(values.pop(id(child)) for child in current.children)
+                values[id(current)] = self._score_re_region(
+                    sequence, pair_table, encoded, current, subtotal, restrictions, breakdown
+                )
+            else:
+                stack.append((current, True))
+                stack.extend((child, False) for child in reversed(current.children))
+        return values[id(node)]
+
+    def _score_re_region(
+        self,
+        sequence: str,
+        pair_table: Sequence[int],
+        encoded: Sequence[int],
+        node: _ClosedRegion,
+        subtotal: float,
+        restrictions: set,
+        breakdown: Dict[str, float],
+    ) -> float:
+        """One region's Rivas-Eddy loop plus ``subtotal``, its children's energy."""
+        fm = self.baseline
         secondary_term = (
             "secondary_structure_outside_pseudoknot"
             if node.parent is not None and node.parent.kind == "external"
             else "secondary_structure"
-        )
-        subtotal = sum(
-            self._score_re_node(sequence, pair_table, child, restrictions, breakdown)
-            for child in node.children
         )
         if node.kind == "hairpin":
             local = fm.hairpin_energy(sequence, encoded, node.begin, node.end, include_ggg=True)

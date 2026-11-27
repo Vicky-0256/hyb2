@@ -369,6 +369,33 @@ class HotKnotsEnergyTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assert_energy(sequence, structure, model, energy)
 
+    def test_structures_nested_deeper_than_the_recursion_limit(self):
+        # The loop and closed-region trees have a node per nested pair, and
+        # these helices nest deeper than the recursion limit.  Each unit of
+        # seven stacked G-C pairs and a 1x1 interior loop adds the same
+        # energy at any depth, around a pseudoknot (the DP, CC and RE region
+        # walks) or a hairpin (the secondary-structure evaluator).
+        units = sys.getrecursionlimit() // 7 + 10
+
+        def helix(count, core_sequence, core_structure):
+            return ("GGGGGGGA" * count + core_sequence + "ACCCCCCC" * count,
+                    "(((((((." * count + core_structure + ".)))))))" * count)
+
+        cores = (
+            (REFERENCE_SEQUENCE, "..(((((..[[[[)))))......]]]]", ("DP09", "CC09", "RE")),
+            ("GAAAAC", "(....)", ("DP09",)),
+        )
+        for core_sequence, core_structure, models in cores:
+            for model in models:
+                with self.subTest(core=core_structure, model=model):
+                    one, two = (
+                        self.evaluator.compute_energy(*helix(count, core_sequence, core_structure), model)["energy"]
+                        for count in (1, 2)
+                    )
+                    deep = self.evaluator.compute_energy(*helix(units, core_sequence, core_structure), model)
+                    self.assertAlmostEqual(deep["energy"], one + (units - 1) * (two - one), places=6)
+                    self.assertAlmostEqual(sum(deep["breakdown"].values()), deep["energy"], places=6)
+
     def test_invalid_inputs_are_rejected(self):
         with self.assertRaises(ValueError):
             self.evaluator.compute_energy("AAAAA", "(...)", "DP09")

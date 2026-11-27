@@ -96,6 +96,16 @@ other ignored local artifacts.
   not use (the CPLcofold parser already did this). Results are identical;
   yeast U2 (1,175 nt, beam 200) drops from 2.4 s to 0.5 s, and a pure-Python
   200-nt fold from 56 s to 31 s. This change is not upstream yet.
+- `cplfold/_internal/hotknots_energy.py` walks its loop and closed-region
+  trees with explicit stacks instead of recursion (`_score_node`,
+  `_is_pk_free`, `_top_pseudoknots`, `_descendants`, `_score_re_node`). The
+  trees have a node per nested base pair, so the recursive walks exceeded
+  Python's recursion limit: full-length yeast U2 (1,175 nt) with pseudoknots
+  (beam 100, ten Phase-1 candidates) stopped with `RecursionError` while
+  scoring its sixth candidate. The walks visit nodes in the recursive order:
+  2,420 evaluations (484 structures under every energy model: U2 candidates
+  and random structures with up to three crossing helices) gave
+  bit-identical energies and breakdowns. This change is not upstream yet.
 - `LICENSE` is the author's GPL-3.0-or-later grant for CPLfold's own code
   (2026-11-23), not in upstream commit `24bab52`. Copies already
   distributed under the earlier GPL-2.0-or-later grant (2026-10-17) keep it. `LICENSES/`,

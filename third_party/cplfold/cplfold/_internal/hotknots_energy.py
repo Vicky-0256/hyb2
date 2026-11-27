@@ -400,6 +400,21 @@ def _crosses(first: Pair, second: Pair) -> bool:
     return i < k < j < l or k < i < l < j
 
 
+def _add_left_to_right(values: Iterable[float]) -> float:
+    """``sum(values)`` as Python added floats before 3.12: left to right.
+
+    Since 3.12, ``sum()`` compensates its rounding error, so a total of three or
+    more energies can end in another bit on another Python version: the desktop
+    runs Python 3.11, the web's Pyodide 3.13. That bit broke ties between
+    candidates the other way, so the web and the desktop could return different
+    best structures, and it rounded a total on a half cent to the other cent.
+    """
+    total = 0
+    for value in values:
+        total = total + value
+    return total
+
+
 def _read_numbers(path: Path) -> List[float]:
     values: List[float] = []
     for raw in path.read_text().splitlines():
@@ -924,7 +939,7 @@ class _SecondaryStructureEvaluator:
             if current.placeholder:
                 values[id(current)] = 0.0
             elif children_scored:
-                subtotal = sum(values.pop(id(child)) for child in current.children)
+                subtotal = _add_left_to_right(values.pop(id(child)) for child in current.children)
                 values[id(current)] = self._score_loop(current, subtotal, exterior and current is node)
             else:
                 stack.append((current, True))
@@ -973,7 +988,7 @@ class _SecondaryStructureEvaluator:
         placeholder_pairs: Iterable[Pair] = (),
     ) -> float:
         forest = self._make_forest(pairs, placeholder_pairs)
-        value = sum(self._score_node(node, exterior=True) for node in forest)
+        value = _add_left_to_right(self._score_node(node, exterior=True) for node in forest)
         if not forest:
             return value
 
@@ -1578,7 +1593,7 @@ class HotKnotsEnergy:
             + dp["Pps"] * unband_children
             + dp["Pup"] * node.number_unpaired_in_pseudo
         )
-        terminal_au = sum(
+        terminal_au = _add_left_to_right(
             fm.au_penalty(encoded[band.pairs[0][0]], encoded[band.pairs[0][1]])
             for band in node.bands
         )
@@ -1588,7 +1603,7 @@ class HotKnotsEnergy:
         # penalty.  In the loop tree this is exactly the inner pair of each
         # spanning multiloop.  It is separate from both the multiloop's own AU
         # terms and the outermost-pair penalty for each band above.
-        terminal_au += sum(
+        terminal_au += _add_left_to_right(
             fm.au_penalty(encoded[loop.inner[0]], encoded[loop.inner[1]])
             for loop in node.span_loops
             if loop.is_multi
@@ -1619,7 +1634,7 @@ class HotKnotsEnergy:
             return value
         if node.kind != "pseudo":
             pseudoknots = self._top_pseudoknots(node)
-            value = sum(
+            value = _add_left_to_right(
                 self._score_dp_node(
                     sequence, pair_table, pk, fm, dp, restrictions, breakdown
                 )
@@ -1631,7 +1646,7 @@ class HotKnotsEnergy:
             self._add_term(breakdown, "secondary_structure_scaffold", scaffold)
             return value + scaffold
 
-        value = sum(
+        value = _add_left_to_right(
             self._score_dp_node(
                 sequence, pair_table, child, fm, dp, restrictions, breakdown
             )
@@ -1680,7 +1695,7 @@ class HotKnotsEnergy:
             return value
         if node.kind != "pseudo":
             pseudoknots = self._top_pseudoknots(node)
-            value = sum(
+            value = _add_left_to_right(
                 self._score_cc_node(
                     sequence, pair_table, pk, cc, restrictions, breakdown, metadata
                 )
@@ -1692,7 +1707,7 @@ class HotKnotsEnergy:
             self._add_term(breakdown, "secondary_structure_scaffold", scaffold)
             return value + scaffold
 
-        value = sum(
+        value = _add_left_to_right(
             self._score_cc_node(
                 sequence, pair_table, child, cc, restrictions, breakdown, metadata
             )
@@ -1778,7 +1793,7 @@ class HotKnotsEnergy:
         while stack:
             current, children_scored = stack.pop()
             if children_scored:
-                subtotal = sum(values.pop(id(child)) for child in current.children)
+                subtotal = _add_left_to_right(values.pop(id(child)) for child in current.children)
                 values[id(current)] = self._score_re_region(
                     sequence, pair_table, encoded, current, subtotal, restrictions, breakdown
                 )
@@ -2034,7 +2049,7 @@ class HotKnotsEnergy:
             breakdown: Dict[str, float] = {}
             restrictions: set = set()
             if family == "DP":
-                no_dangling = sum(
+                no_dangling = _add_left_to_right(
                     self._score_dp_node(
                         sequence,
                         pair_table,
@@ -2047,7 +2062,7 @@ class HotKnotsEnergy:
                     for node in tree.root.children
                 )
             elif family == "CC":
-                no_dangling = sum(
+                no_dangling = _add_left_to_right(
                     self._score_cc_node(
                         sequence,
                         pair_table,
@@ -2060,7 +2075,7 @@ class HotKnotsEnergy:
                     for node in tree.root.children
                 )
             else:
-                no_dangling = sum(
+                no_dangling = _add_left_to_right(
                     self._score_re_node(
                         sequence, pair_table, node, restrictions, breakdown
                     )

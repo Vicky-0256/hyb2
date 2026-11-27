@@ -116,6 +116,18 @@ other ignored local artifacts.
   -35.45 and -35.46. Every Python version now gives what 3.11 gave, so
   energies under Python 3.11 are unchanged. This change is not upstream
   yet.
+- `cplfold/_internal/hotknots_energy.py` adds the energies of a loop's
+  children, of the exterior loop's helices and of a region's components
+  left to right instead of with `sum()`, for the same reason. With
+  pseudoknots on, this energy ranks every one-strand candidate, and a last
+  bit broke ties between candidates the other way: in 660 folds of U2, 18S
+  rRNA, PAX6 and ZIKV windows, the web and the desktop ordered 6 candidate
+  lists differently and returned different best structures for one, ZIKV
+  2201-2500, both at -66.13 kcal/mol. In 10,918 folds of 100- to 150-nt
+  windows, Python 3.14 and 3.11 also rounded 7 pseudoknot energies on a
+  half cent 0.01 apart. Every Python version now gives what 3.11 gave, so
+  energies under Python 3.11 are unchanged. This change is not upstream
+  yet.
 - `LICENSE` is the author's GPL-3.0-or-later grant for CPLfold's own code
   (2026-11-23), not in upstream commit `24bab52`. Copies already
   distributed under the earlier GPL-2.0-or-later grant (2026-10-17) keep it. `LICENSES/`,

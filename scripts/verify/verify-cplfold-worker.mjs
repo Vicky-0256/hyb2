@@ -310,6 +310,25 @@ assert.ok(pseudoknotFreeCompletion.result.candidates.every(function (candidate) 
   return candidate.type !== "pseudoknot" && candidate.crossingPairs === 0;
 }));
 
+// Two nested candidates of this ZIKV window tie at -14.30 kcal/mol. With
+// pseudoknots on, CPLfold ranks one-strand candidates by their HotKnots
+// energy, which adds its loops' energies left to right on every Python
+// version, so the tie breaks as on the desktop (Python 3.11). Python 3.12's
+// compensated sum() gave Pyodide a last bit that ranked the other first.
+messages.length = 0;
+await self.onmessage({
+  data: {
+    type: "cplfold",
+    sequence: "GUGCUGGUAGUCAUGAUCUUGGGAGGAUUUUCAAUGAGUGACCUGGCCAAGCUUGUGAUCCUGAUGGGUGCUACUUUCGCAGAAAUGAACACUGGAGGAG",
+    maxSequenceLength: 100, evidenceMode: "none", beamSize: 100, maxPhase1: 10, energyDelta: 5,
+    energyModel: "DP09", alpha: 0, beta: 0, allowPseudoknot: true
+  }
+});
+assert.equal(messages.find(message => message.type === "error"), undefined);
+assert.equal(messages.find(message => message.type === "complete").result.dotBracket,
+  "...(((((.(((((((.(((((.(((...(((...)))...)))..))))).)))))))((....)).(((.......))).........))))).....",
+  "tied candidates rank as on the desktop");
+
 // Exercise all supported nick encodings through the actual worker + Pyodide.
 const cofoldParameters = {
   type: "cplfold", evidenceMode: "none", beamSize: 20, maxPhase1: 1,

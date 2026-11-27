@@ -108,9 +108,10 @@ task drawer and Preferences.
    settings) and writes `energies.hyb`, `audit.tsv`, `parameters.json`
    and a ZIP of the three to its run folder (`runtime/batch_energy.py`).
 4. **Compare**: the DESeq2 differential test (numpy port, validated against
-   R), hyb2's similarity heatmap of the two groups (bin/plot_similarity_map
-   on each group's merged map; identical to the CLI on the ZIKV ZAFR vs ZILM
-   virion data) and the CPM quick view; Locate, Region and Fold A & B.
+   R), hyb2's similarity heatmap of the two groups (as the original HYB2's
+   plot_similarity_map on each group's merged map, which it matched on the
+   ZIKV ZAFR vs ZILM virion data) and the CPM quick view; Locate, Region and
+   Fold A & B.
    Two panels per test, for a lineage comparison figure:
    - *Enriched regions*: for each direction, the most significant merged
      interaction (padj < 0.01) that the enriched lineage's own whole-RNA

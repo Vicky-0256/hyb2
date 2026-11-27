@@ -7,4 +7,4 @@
 
 Hyb2 does not modify VARNA. The source here matches upstream except that six files in `src/fr/orsay/lri/varna/models/export/` (`Backbone*Command.java`, `Base*Command.java`, `BasePair*Command.java`) are re-encoded from ISO-8859-1 to UTF-8; their text is the same.
 
-`build/jar/VARNA.jar` and `build/jar/VARNAcmd.jar` are built from this source with `ant jar` (Apache Ant 1.9.4, OpenJDK 1.8.0_412). Hyb2 uses only `VARNAcmd.jar`, through `bin/VARNA.dir`, which `bin/hyb2_install*` writes. The desktop app looks for both jars.
+`build/jar/VARNA.jar` and `build/jar/VARNAcmd.jar` are built from this source with `ant jar` (Apache Ant 1.9.4, OpenJDK 1.8.0_412). The original `bin/` scripts drew structures with `VARNAcmd.jar`. Since they were removed in November 2026, nothing in Hyb2 runs the jars; the desktop runtime only reports whether both are present.

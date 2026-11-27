@@ -1,8 +1,9 @@
 # hyb2pipe — HYB2 step 1 in pure Python
 
-`hyb2pipe` replaces the Perl/awk/bash chain behind `bin/hyb2` step 1
-(`sam_filt`, `sam2hyb` and the `bowtie2_*2sam` wrappers), so the pipeline runs
-anywhere CPython 3.9+ runs, including Windows, with no Perl, awk, sed or sort.
+`hyb2pipe` is HYB2's step 1: it trims the adapter and collapses identical
+reads, maps them with Bowtie2, filters the alignments and calls the hybrids,
+with their dG on request. It runs anywhere CPython 3.9+ runs, including
+Windows, with no Perl, awk, sed or sort.
 
 ```bash
 PYTHONPATH=pipeline python3 -m hyb2pipe -i reads.fastq.gz -d reference.fasta -o out/sample
@@ -12,18 +13,19 @@ PYTHONPATH=pipeline python3 -m hyb2pipe -i aligned.sam -d reference.fasta -o out
 Install the Python dependencies with `python -m pip install -r pipeline/requirements.txt`;
 FASTQ and FASTA input also need Bowtie2 (see [External tools](#external-tools)).
 Or install `hyb2pipe` and `hyb2analysis` as a package, with the `hyb2pipe`
-command and no `PYTHONPATH`:
+and `hyb2analysis` commands and no `PYTHONPATH`:
 `python -m pip install ./third_party/cplfold ./pipeline` (cplfold is used by
 hyb2analysis's IRIS and engine settings and is not on PyPI).
 
-The `-i -d -o -v -m -h -e` flags match `hyb2` (`-v` and `-m` accept
-scientific notation such as `1e-5` in both). One difference is on purpose:
-with `-e 1`, `hyb2pipe` computes dG with RNAduplex and `hyb2` with RNAcofold;
-`--energy-engine rnacofold` gives `hyb2`'s values (see Compatibility). The
-desktop app and the web pages use RNAduplex too. The command writes
-`<out>.hyb`, `<out>_homodimers.hyb` and `<out>_hybrids.hyb_stats.txt`, plus
-`<out>.sam` or `<out>.sam.gz` with `--keep-sam plain|gz` (default: no SAM).
-In the desktop app the same code runs as the `pipeline` task kind.
+`-v` and `-m` accept scientific notation such as `1e-5`. With `-e 1`, dG
+comes from RNAduplex, as in the desktop app and the web pages;
+`--energy-engine rnacofold` gives the RNAcofold values of the original hyb2
+(see [Differences from the original scripts](#differences-from-the-original-scripts)).
+The command writes `<out>.hyb`, `<out>_homodimers.hyb` and
+`<out>_hybrids.hyb_stats.txt`, plus `<out>.sam` or `<out>.sam.gz` with
+`--keep-sam plain|gz` (default: no SAM). Invalid input or options stop it
+with exit status 2 and a one-line message. In the desktop app the same code
+runs as the `pipeline` task kind.
 
 ## Memory, temp files and resuming
 
@@ -70,26 +72,27 @@ run at once. The whole-sample `.hyb` has the same 224,154 lines as the
 legacy `reproduce_zikv/results_combined/ZAFR_REP1.hyb`; only their order
 differs (the legacy run had no `--reorder`).
 
-## Compatibility
+## Golden files
 
 `tests/test_pipeline.py` checks that `data/testData.sam` gives byte-identical
-output to the legacy scripts, which were run with macOS one-true-awk 20200816
-and `LANG=C.UTF-8`. The port reproduces the legacy quirks that decide which
-duplicate line is kept: awk hash iteration order, `sort` last-resort ordering,
-and the collapse scripts dropping each group's first line.
-`tests/test_analysis.py` also checks `query.viewpoint` (gene and partner
-`Zika_virusRNA`) against the legacy `plot_viewpoint` output for the same
-`testData.hyb` (`golden/testData_Zika_virusRNA.gplot`, from the
+output to golden files made with the original HYB2 scripts (`sam_filt` and
+`sam2hyb -e 0`, macOS one-true-awk 20200816, `LANG=C.UTF-8`). hyb2pipe keeps
+the quirks that decide which duplicate line is kept: awk hash iteration
+order, `sort` last-resort ordering, and the collapse steps dropping each
+group's first line. `tests/test_analysis.py` checks `query.viewpoint` (gene
+and partner `Zika_virusRNA`) against `golden/testData_Zika_virusRNA.gplot`,
+the original `plot_viewpoint` profile of the same `testData.hyb` (from the
 `python-migration` branch's `fixtures/legacy_run/direct_viewpoint`): equal at
 all 10,807 nucleotides.
 
-Both `hyb2pipe` and `bin/sam_filt` keep only SAM headers and records with
-flag 0, 16, 256 or 272 (single-end primary and secondary alignments), and
-treat the rest the same way, with the same stderr messages:
+## SAM records, read names and reference IDs
 
-- a record with the paired bit (0x1) is an error (Hyb2 expects single-end
-  reads): `sam_filt` exits non-zero and `hyb2pipe` raises `ValueError`;
-- unmapped records (0x4) are skipped and counted;
+`hyb2pipe` keeps only SAM headers and records with flag 0, 16, 256 or 272
+(single-end primary and secondary alignments):
+
+- a record with the paired bit (0x1) is an error: Hyb2 expects single-end
+  reads;
+- unmapped records (0x4) are skipped and counted on stderr;
 - supplementary alignments (0x800) are skipped and counted with a warning,
   because chimeric arms reported that way are not used; the mapper should
   report them as secondary alignments (for example `bwa mem -M`);
@@ -97,29 +100,27 @@ treat the rest the same way, with the same stderr messages:
   is not a decimal number) is skipped and counted with a warning.
 
 Hyb2 takes the number of identical reads from the read name, `<rank>_<count>`
-(for example `1_523`). Both `hyb2pipe` and `bin/hyb2` therefore collapse FASTA
-reads before mapping, as they do FASTQ reads: identical reads become one read
-named `<rank>_<count>`. FASTA reads that all have such a name already
-(`<rank>_<count>` or `<rank>-<barcodes>_<count>`, as Hyb and Hyb2 write them)
-are mapped as they are, which keeps their counts. This follows Hyb and the
-`gk-dev` branch of hyb2. Before, raw FASTA reads kept their names: every count
-was read as zero (`bin/hyb2` stopped with a division by zero), and reads named
-with a leading `@` (`>@HWUSI-...`, as `solexa2fasta.awk` writes them) became
-SAM lines that read as header lines, which ended in an empty `.hyb`.
+(for example `1_523`), so `hyb2pipe` collapses FASTA reads before mapping, as
+it does FASTQ reads: identical reads become one read named `<rank>_<count>`.
+FASTA reads that all have such a name already (`<rank>_<count>` or
+`<rank>-<barcodes>_<count>`, as Hyb and Hyb2 write them) are mapped as they
+are, which keeps their counts (as Hyb and the `gk-dev` branch of hyb2 do).
 
-A SAM input is not renamed, so its read names must carry the count. Both
-programs stop with the same message when the first read name does not end in
-`_<count>`, or when a read name starts with `@`; map the reads with Hyb2
-instead. Names with colons (`a:b:c`) are still renamed to `...-a-b-c_1` by
-`sam_filt`.
+A SAM input is not renamed, so its read names must carry the count:
+`hyb2pipe` stops when the first read name does not end in `_<count>`, or when
+a read name starts with `@` (its lines would read as SAM header lines); give
+it the reads instead. A read name with colons (`a:b:c:d:e`) becomes its last
+three fields joined by `-`, with `_1` (`c-d-e_1`).
 
-Before, `sam2blast_3` stopped at the first paired or supplementary record.
-When `hyb2pipe` writes `<out>.hyb` it deletes `<out>.hyb.inputs`, the record
-with which `bin/hyb2` decides whether its step 1 output is still current.
-Both rename reference IDs by the same rules (`hyb2pipe/reference_cli.py`,
-used by `bin/hyb2` and `bin/fasta_hyb2_formatting`).
+When a header of the reference FASTA contains `|`, `hyb2pipe` maps to a copy,
+`<out>.reference.hyb.fasta`, whose headers are rewritten in this order: `_`
+to `-`, `protein-coding` to `mRNA`, `|` to `_`, `__` to `_unknown_`
+(`>Zika|virusRNA` becomes `>Zika_virusRNA`); records whose header then
+contains `unknown` or `pseudogene` are left out. The `.hyb` uses these IDs.
 
-It deliberately differs from the legacy scripts in these places:
+## Differences from the original scripts
+
+`hyb2pipe` deliberately differs from the original HYB2 scripts in these places:
 
 - With `-e 1`, dG comes from ViennaRNA's RNAduplex (37 °C, pairs between
   the two arms only, the hybridisation step of the original Hyb pipeline)
@@ -136,9 +137,8 @@ It deliberately differs from the legacy scripts in these places:
 - With `-e 1`, dG is written as a plain `%.2f` number. The legacy `sed`
   wrote a TAB inside the value whenever |dG| < 10, which shifted every later
   column.
-- Bowtie2 runs with `--reorder`. Legacy multi-threaded runs wrote alignments
-  in a different order on each run (the `bin/bowtie2_*2sam` wrappers now use
-  `--reorder` too).
+- Bowtie2 runs with `--reorder`, so a multi-threaded run writes the same
+  alignments in the same order every time. The original runs did not.
 - When reference genes tie in the ranking, the first-seen gene wins. Perl's
   hash order made this random.
 
@@ -173,9 +173,9 @@ It deliberately differs from the legacy scripts in these places:
   the 10k hybrids in `testData.sam` on 10 workers. Cite Lorenz et al. (2011),
   ViennaRNA Package 2.0, Algorithms Mol Biol 6:26.
 
-Steps 2 and 3 of `hyb2` (contact maps, viewpoint, folding) are already
-provided by the web and desktop analysis pages. `hyb2_compare` (R/DESeq2) has
-not been ported.
+HYB2's later steps (contact maps, viewpoints, the differential comparison)
+are in `hyb2analysis`, below, and in the web and desktop analysis pages, which
+also fold.
 
 ## Analysis backend (`hyb2analysis`)
 
@@ -196,8 +196,8 @@ not been ported.
   contact.txt cells, the DESeq2 Wald test (condition one vs two, rows with
   total count > `min_count`, alpha 0.01), `padj < 0.05` cells, and the greedy
   ±`range` merge into interactions (results.tsv, significant.tsv,
-  interactions.tsv, summary.json). The legacy split's dummy (0, 0) cell is not
-  reproduced.
+  interactions.tsv, similarity.tsv, summary.json). The legacy split's dummy
+  (0, 0) cell is not reproduced.
 - `deseq.deseq_two_conditions(counts, condition_one)` is a numpy port of
   DESeq2 1.46 for a two-level design (size factors, Cox-Reid gene-wise
   dispersions with the C++ line search, parametric trend with the locfit
@@ -211,3 +211,50 @@ not been ported.
   by the exact distribution, which is the limit R approaches as the number of
   draws grows (`compare_BRA_human_vs_insect_min30`: 0.801 vs R's 0.825;
   54,088 of R's 54,120 significant cells shared).
+
+### Command line: `python3 -m hyb2analysis compare|coverage|viewpoint`
+
+Each command writes a table and an SVG (no R, no plotting library) and prints
+the table's path; invalid input or options exit with status 2 and a one-line
+message. `coverage` and `viewpoint` read (`-i`) a `.hyb`, gzip-compressed or
+not, or an index from `index.build`; for valid records both give the same
+cells and profiles.
+
+- `coverage -i IN -a GENE [-b GENE2] [-o DIR or FILE.contact.txt]`: the
+  contact map of GENE (x = arm 1, y = arm 2) or of GENE x GENE2 (GENE on x,
+  whichever arm it is), as `x<TAB>y<TAB>count` cells of `--bin-size` nt
+  (default 10), weighted by `--measure records|support|reads`, with
+  `--homodimer all|only|exclude`; and `contact_map.svg`. With the defaults, a
+  `.hyb` gives `coverage.write_contact`'s contact.txt.
+- `viewpoint -i IN -a GENE [-b PARTNER] [-d REFERENCE.fasta] [--start N]
+  [--end N] [-o DIR or FILE.gplot]`: the coverage of each nucleotide of GENE
+  by the arms on it (mean per nucleotide with `--bin-size`), from `--start`
+  (default 1) to `--end`, else GENE's length in `-d`, else its last arm end,
+  as `position<TAB>value` lines after a `#<name>_<gene>_<end>` line; and
+  `viewpoint.svg`.
+- `compare --one A.hyb B.hyb --two C.hyb D.hyb -a GENE [-b GENE2] -o DIR`
+  (or `-i TABLE`): the desktop's comparison, with its defaults (`-m 2`,
+  `-r 100`, `--padj 0.05`, `--similarity-min 1`, DESeq2 alpha 0.01). Each
+  sample's map is made as the desktop makes it: `coverage.write_contact` for
+  GENE, or with `-b` the GENE x GENE2 cells. It writes `differential.compare`'s
+  results.tsv, significant.tsv, interactions.tsv, similarity.tsv and
+  summary.json, the maps it made under `contacts/`, `differential_map.svg`
+  and `similarity_heatmap.svg`. A TABLE row is `<hyb> <contact.txt or ->
+  <condition_one|condition_two> [<gene>]` (TAB- or space-separated, as in
+  `data/hyb2_compare_input.table`), or `<hyb or contact.txt> <condition>`.
+  Relative paths are also looked up next to the table. The fourth column is
+  the gene of the row's map (`-a` overrides it). A contact.txt is used when it
+  exists and is the map asked for, or when the row has no `.hyb`; otherwise
+  the map is made from the `.hyb`.
+
+On the bundled test data:
+
+```bash
+PYTHONPATH=pipeline python3 -m hyb2pipe -i data/testData.sam -d data/Zika_18S.fasta -o out/testData
+PYTHONPATH=pipeline python3 -m hyb2analysis coverage -i out/testData.hyb -a Zika_virusRNA -o out/coverage
+PYTHONPATH=pipeline python3 -m hyb2analysis viewpoint -i out/testData.hyb -a Zika_virusRNA -d data/Zika_18S.fasta -o out/viewpoint
+```
+
+`out/coverage/testData.Zika_virusRNA.contact.txt` and
+`out/viewpoint/testData_Zika_virusRNA.gplot` (10,807 positions) have their
+SVGs next to them.

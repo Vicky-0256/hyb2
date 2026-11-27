@@ -129,7 +129,9 @@ function parseHyb(file) {
 
 // Loaded with runInThisContext (see verify-deseq.cjs: a separate vm context
 // is ~10x slower on a genome).
-const win = { navigator: { deviceMemory: 8, hardwareConcurrency: 4 } };
+// A browser window's timers: page-data.js retires a superseded comparison
+// worker with one.
+const win = { navigator: { deviceMemory: 8, hardwareConcurrency: 4 }, setTimeout: setTimeout, clearTimeout: clearTimeout };
 const documentStub = { querySelector: function () { return null; }, getElementById: function () { return null; } };
 ["analysis-data.js", "data-provider.js", "page-data.js", "deseq.js", "arc-map.js", "deseq-card.js", "region-panels.js", "folding-energy.js", "results.js"].forEach(function (file) {
   const source = fs.readFileSync(web(file), "utf8");
@@ -150,7 +152,8 @@ function readReference(name) {
 // ---- comparison.worker.js through page-data.js, against the in-thread result
 // A Worker stand-in: runs comparison.worker.js in this process, messages
 // cross by structuredClone with the transfer lists (buffers are detached, as
-// in a browser).
+// in a browser). The worker runs in one go here, so a worker counts as done
+// once its result reaches the page.
 function makeWorkerClass(log, delay) {
   return function FakeWorker(url) {
     assert.match(url, /^\.\/comparison\.worker\.js\?build=local$/, "the worker URL carries the build cache-buster");
@@ -163,11 +166,14 @@ function makeWorkerClass(log, delay) {
     scope.postMessage = function (message, transfer) {
       const copy = structuredClone(message, { transfer: transfer || [] });
       if (message.type === "done") {
-        entry.done = true;
         assert.ok(transfer && transfer.length >= 11, "the worker transfers its typed arrays");
       }
       if (message.type === "progress") entry.progress += 1;
-      setImmediate(function () { if (!terminated && outer.onmessage) outer.onmessage({ data: copy }); });
+      setImmediate(function () {
+        if (terminated || !outer.onmessage) return;
+        if (copy.type === "done") entry.done = true;
+        outer.onmessage({ data: copy });
+      });
     };
     scope.importScripts = function () {
       Array.from(arguments).forEach(function (file) {
@@ -635,7 +641,17 @@ async function main() {
   log("result record: R23 " + value("R23") + ", R31 " + value("R31") + ", R32 " + value("R32") + "; " + aiFiles.length + " AI files, " + analysisFiles.length + " analysis files");
 }
 
+// A promise that never settles empties the event loop and would end the
+// script with status 0 before the remaining checks run.
+let finished = false;
+process.on("beforeExit", function () {
+  if (!finished) {
+    process.stderr.write("verify-example: stopped before the checks finished (a promise never settled)\n");
+    process.exitCode = 1;
+  }
+});
 main().then(function () {
+  finished = true;
   process.stdout.write("verify-example: ok\n");
 }).catch(function (error) {
   process.stderr.write((error && error.stack) || String(error));

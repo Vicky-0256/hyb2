@@ -208,9 +208,9 @@
       message:pairs=>({type:'duplex-batch',pairs,temperature:37})},
     rnacofold: {label:'RNAcofold (ViennaRNA)',name:'ViennaRNA RNAcofold',worker:'folding-energy.worker.js',module:false,chunk:64,maxWorkers:8,maxLength:2000,msPerRecord:15,
       message:pairs=>({type:'cofold-batch',pairs,temperature:37,minimumLoop:3})},
-    cplcofold: {label:'CPLcofold, nested (Turner energies)',name:'CPLcofold, pseudoknots off',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:1700,
+    cplcofold: {label:'CPLcofold, nested (Turner energies)',name:'CPLcofold, pseudoknots off',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:2300,
       message:pairs=>({type:'cplfold-energy-batch',pairs,allowPseudoknot:false,energyModel:'DP09'})},
-    'cplcofold-pk': {label:'CPLcofold with pseudoknots (experimental score)',name:'CPLcofold, pseudoknots allowed (DP09 ranking score)',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:2300,
+    'cplcofold-pk': {label:'CPLcofold with pseudoknots (experimental score)',name:'CPLcofold, pseudoknots allowed (DP09 ranking score)',worker:'cplfold.worker.mjs',module:true,chunk:4,maxWorkers:4,maxLength:500,msPerRecord:2800,
       message:pairs=>({type:'cplfold-energy-batch',pairs,allowPseudoknot:true,energyModel:'DP09'})}
   };
   function energySettings(state) {

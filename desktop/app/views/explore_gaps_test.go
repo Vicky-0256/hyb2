@@ -127,7 +127,7 @@ func TestBindingEnergiesEstimateAndReference(t *testing.T) {
 	}
 	p.be.engine = batchEngines[2][1]
 	tt.Frame()
-	if !tt.HasText(batchEngines[2][2] + " All 1,724 records: about 5 min with 10 parallel workers here. For many records, filter first or use the cplcofold command.") {
+	if !tt.HasText(batchEngines[2][2] + " All 1,724 records: about 7 min with 10 parallel workers here. For many records, filter first or use the cplcofold command.") {
 		t.Fatalf("no CPLcofold hint: %q", tt.Texts())
 	}
 	for _, c := range []struct {
@@ -135,7 +135,7 @@ func TestBindingEnergiesEstimateAndReference(t *testing.T) {
 		records int64
 		cpus    int
 		want    string
-	}{{"rnacofold", 10, 8, " All 10 records: about 1 s with 1 worker here."}, {"cplcofold-pk", 100_000, 4, " All 100,000 records: about 16.0 h with 4 parallel workers here."},
+	}{{"rnacofold", 10, 8, " All 10 records: about 1 s with 1 worker here."}, {"cplcofold-pk", 100_000, 4, " All 100,000 records: about 19.4 h with 4 parallel workers here."},
 		{"rnacofold", 0, 4, ""}} {
 		if got := batchEstimate(c.engine, c.records, c.cpus); got != c.want {
 			t.Fatalf("%v: %q", c, got)

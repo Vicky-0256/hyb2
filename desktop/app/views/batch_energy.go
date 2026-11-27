@@ -26,13 +26,13 @@ import (
 var batchEngines = [][3]string{
 	{"rnaduplex", "RNAduplex (ViennaRNA), as the HYB2 pipeline", "The HYB2 pipeline's method for the dG column: only pairs between the two arms (bundled, 37 °C); combined arms up to 2,000 nt. Arms that form no pair keep their energy."},
 	{"rnacofold", "RNAcofold (ViennaRNA)", "ViennaRNA's MFE cofold (bundled), in which each arm may also pair with itself; combined arms up to 2,000 nt."},
-	{"cplcofold", "CPLcofold, nested (Turner energies)", "Same Turner energy model as RNAcofold, beam search (DP09, beam 20, energy delta 5, 3 phase-1 candidates); combined arms up to 500 nt."},
+	{"cplcofold", "CPLcofold, nested (Turner energies)", "Same Turner energy model as RNAcofold, beam search (DP09, beam 200, energy delta 5, 3 phase-1 candidates); combined arms up to 500 nt."},
 	{"cplcofold-pk", "CPLcofold with pseudoknots (experimental score)", "Adds CPLfold's pseudoknot phase: its DP09 pseudoknot term is an experimental ranking score, not a validated free energy; combined arms up to 500 nt."},
 }
 
 // batchEngineCost is the web's per-engine time per record (ms) and records
 // per job (ENERGY_ENGINES msPerRecord, chunk), for the run-time estimate.
-var batchEngineCost = map[string][2]int{"rnaduplex": {3, 2000}, "rnacofold": {15, 64}, "cplcofold": {1700, 4}, "cplcofold-pk": {2300, 4}}
+var batchEngineCost = map[string][2]int{"rnaduplex": {3, 2000}, "rnacofold": {15, 64}, "cplcofold": {2300, 4}, "cplcofold-pk": {2800, 4}}
 
 // batchNoReference is the web's note when there is no mapped FASTA.
 const batchNoReference = "Load and map a reference FASTA first."

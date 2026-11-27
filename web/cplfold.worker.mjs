@@ -135,7 +135,7 @@ self.onmessage = async function (event) {
 // candidate's energy (kcal/mol) per pair, as the batch energy tool expects.
 // The batch has its own search preset, the desktop's (CPLCOFOLD_SETTINGS in
 // desktop/runtime/batch_energy.py), not the RNA Structure task defaults.
-const ENERGY_BATCH_PRESET = { beamSize: 20, maxPhase1: 3, energyDelta: 5, alpha: 0, beta: 0 };
+const ENERGY_BATCH_PRESET = { beamSize: 200, maxPhase1: 3, energyDelta: 5, alpha: 0, beta: 0 };
 async function runEnergyBatch(message) {
   try {
     const allowPseudoknot = globalThis.Hyb2CplfoldSettings.readTopology(true, message.allowPseudoknot);

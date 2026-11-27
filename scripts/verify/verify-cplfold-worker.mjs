@@ -406,8 +406,8 @@ assert.equal(cofoldCapacity.parameters.cofold, true);
 
 // HYB binding energies: the batch message folds each arm pair as two strands;
 // on this ZIKV pair nested CPLcofold matches RNAcofold 2.6.4 (-37.00).
-// The third pair folds with the batch preset (beam 20, 3 candidates), as on the
-// desktop; the RNA Structure defaults (beam 200, one candidate) give -15.1.
+// The third pair needs the batch's beam 200 to reach RNAcofold's -15.1 (beam
+// 20 gives -12.2).
 messages.length = 0;
 await self.onmessage({ data: {
   type: "cplfold-energy-batch", allowPseudoknot: false, energyModel: "DP09",
@@ -423,8 +423,18 @@ assert.ok(energyBatch, "the energy batch replies with a result");
 assert.equal(energyBatch.energies.length, 3);
 assert.equal(energyBatch.energies[0], -37);
 assert.ok(energyBatch.energies[1] < 0, "complementary strands bind");
-assert.equal(energyBatch.energies[2], -12.2, "the batch keeps its own preset, not the structure defaults");
+assert.equal(energyBatch.energies[2], -15.1, "the batch searches with beam 200");
 assert.match(energyBatch.version, /^CPLfold /);
+// With pseudoknots the batch's three candidates matter, as on the desktop: on
+// this pair one candidate (the RNA Structure defaults) gives -4.1.
+messages.length = 0;
+await self.onmessage({ data: {
+  type: "cplfold-energy-batch", allowPseudoknot: true, energyModel: "DP09",
+  pairs: [["CAUGGAUGGCCCCAG", "AAUGUGGUAGGACU"]]
+} });
+assert.equal(messages.find(message => message.type === "error"), undefined);
+assert.deepEqual(Array.from(messages.find(message => message.type === "result").energies), [-5.92],
+  "the batch keeps its own preset, not the structure defaults");
 messages.length = 0;
 await self.onmessage({ data: { type: "cplfold-energy-batch", pairs: [["ACGN", "GCU"]] } });
 assert.ok(messages.find(message => message.type === "error"), "invalid bases fail the batch");

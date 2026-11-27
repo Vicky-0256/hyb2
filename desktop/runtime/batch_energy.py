@@ -18,7 +18,7 @@ and 10, 13, 14; 1-based, inclusive, T read as U) and cofolded with
   hyb2 pipeline's method, in which each arm may also pair with itself;
 * ``cplcofold``: CPLcofold (``cplfold.fold`` through
   web/cplfold/cplfold_web.py) with the web batch's settings: DP09, no HYB
-  evidence, beam 20, energy delta 5, three phase-1 candidates, pseudoknots
+  evidence, beam 200, energy delta 5, three phase-1 candidates, pseudoknots
   off;
 * ``cplcofold-pk``: the same with the pseudoknot phase, whose DP09 term is
   an experimental ranking score, not a validated free energy.
@@ -70,7 +70,9 @@ ENGINES: Dict[str, Dict[str, Any]] = {
                      "pseudoknots": True},
 }
 # Fixed preset shown on the desktop Binding energies page and saved in parameters.json.
-CPLCOFOLD_SETTINGS = {"beamSize": 20, "energyDelta": 5, "maxPhase1": 3, "energyModel": "DP09", "alpha": 0.0, "beta": 0.0}
+# Beam 200 reaches RNAcofold's MFE on nested arm pairs; with pseudoknots, three
+# phase-1 candidates can find lower energies than the RNA Structure task's one.
+CPLCOFOLD_SETTINGS = {"beamSize": 200, "energyDelta": 5, "maxPhase1": 3, "energyModel": "DP09", "alpha": 0.0, "beta": 0.0}
 BATCH_LIMIT = 2000
 AUDIT_HEADER = "line\tid\tstatus\told_energy\tnew_energy\tnote"
 INVALID_ENERGY_NOTE = "invalid energy returned"

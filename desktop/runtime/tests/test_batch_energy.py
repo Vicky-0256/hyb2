@@ -241,7 +241,7 @@ class BatchEnergyTests(unittest.TestCase):
         fold.assert_called_once()
         self.assertEqual(fold.call_args.kwargs, {"host": "desktop", "hard_max_length": 500})
         # The advertised batch preset is independent of the regular cofold defaults.
-        preset = dict(beamSize=20, energyDelta=5, maxPhase1=3, energyModel="DP09", alpha=0, beta=0)
+        preset = dict(beamSize=200, energyDelta=5, maxPhase1=3, energyModel="DP09", alpha=0, beta=0)
         payload, = fold.call_args.args
         self.assertEqual({key: payload[key] for key in preset}, preset)
         audit = self._audit(run)

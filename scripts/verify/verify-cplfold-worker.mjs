@@ -438,6 +438,12 @@ assert.deepEqual(Array.from(messages.find(message => message.type === "result").
 messages.length = 0;
 await self.onmessage({ data: { type: "cplfold-energy-batch", pairs: [["ACGN", "GCU"]] } });
 assert.ok(messages.find(message => message.type === "error"), "invalid bases fail the batch");
+// Batch energies round as the desktop's Python round(energy, 2): from the
+// double itself, so a score just past a half cent stays past it (rounding
+// energy * 100 gives -40.4 and -46.99 for the first two), and a double
+// exactly halfway goes to the even digit.
+assert.deepEqual([-40.405, -46.995000000000005, -40.125, 0.625, 0.375, 2.675, -37].map(workerModule.roundEnergy),
+  [-40.41, -47, -40.12, 0.62, 0.38, 2.67, -37]);
 
 // A failed ViennaRNA load: Pyodide resolves loadPackage without the package,
 // so the worker must say which package failed and why, and a retry after the

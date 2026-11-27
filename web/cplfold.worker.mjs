@@ -136,6 +136,21 @@ self.onmessage = async function (event) {
 // The batch has its own search preset, the desktop's (CPLCOFOLD_SETTINGS in
 // desktop/runtime/batch_energy.py), not the RNA Structure task defaults.
 const ENERGY_BATCH_PRESET = { beamSize: 200, maxPhase1: 3, energyDelta: 5, alpha: 0, beta: 0 };
+
+// The desktop's rounding of a batch energy, Python's round(energy, 2): the
+// two-decimal value nearest the double itself. Rounding energy * 100 instead
+// can land exactly on a half: -40.405000000000001 * 100 is -4040.5, which
+// Math.round sends toward +Infinity (-40.40, where the desktop has -40.41).
+// A double exactly halfway, an odd multiple of 1/8, goes to the even digit.
+export function roundEnergy(energy) {
+  const cents = energy * 100;
+  if (Number.isInteger(energy * 8) && !Number.isInteger(cents)) {
+    const down = Math.floor(cents);
+    return (down % 2 === 0 ? down : down + 1) / 100;
+  }
+  return Number(energy.toFixed(2));
+}
+
 async function runEnergyBatch(message) {
   try {
     const allowPseudoknot = globalThis.Hyb2CplfoldSettings.readTopology(true, message.allowPseudoknot);
@@ -162,7 +177,7 @@ async function runEnergyBatch(message) {
       if (!Number.isFinite(energy)) {
         throw new Error("CPLcofold returned no energy for pair " + (index + 1) + ".");
       }
-      energies[index] = Math.round(energy * 100) / 100;
+      energies[index] = roundEnergy(energy);
     }
     self.postMessage({ type: "result", energies: energies, version: "CPLfold " + EXPECTED_CPLFOLD_REVISION }, [energies.buffer]);
   } catch (error) {

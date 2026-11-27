@@ -584,6 +584,14 @@ redistribution or merging this branch into a published release.
 Pages deployment, tagged desktop releases and uploads of bundled desktop
 artifacts all require the repository Actions variable
 `CPLFOLD_DISTRIBUTION_APPROVED=true`. Leave it unset until approval; browser
-and desktop build checks still run without it. A desktop release calls the Pages
-build at its own tag commit. Pushes to `main` check changes without replacing
-the published website independently of the installers.
+and desktop build checks still run without it. Once it is set, these replace
+the published website:
+
+- A push to `main` that touches the paths listed in
+  `.github/workflows/deploy-pages.yml` (among them `web/`, `desktop/`,
+  `pipeline/`, `third_party/` and `bin/`), or a manual run of that workflow on
+  `main`, deploys the site built from that commit once its browser and desktop
+  builds pass. It does not deploy if `main` has moved on, or if a desktop
+  release published since the build changed the installer list.
+- A desktop release (a `v*` tag) builds the site at its tag commit and deploys
+  it, unless a newer version is already published.

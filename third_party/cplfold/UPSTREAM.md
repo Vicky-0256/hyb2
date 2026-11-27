@@ -106,6 +106,16 @@ other ignored local artifacts.
   2,420 evaluations (484 structures under every energy model: U2 candidates
   and random structures with up to three crossing helices) gave
   bit-identical energies and breakdowns. This change is not upstream yet.
+- `cplfold/_internal/cofold_energy.py` adds a CPLcofold structure's energy
+  terms left to right instead of with `sum()`. Since Python 3.12, `sum()`
+  of floats compensates its rounding error, so the same terms gave totals
+  that differ in the last bit between Python versions. When DP09's band
+  scaling puts a total exactly on a half cent, its two-decimal energy then
+  differs by 0.01: with pseudoknots, 5 of 120 ZIKV arm pairs did between the
+  web (Pyodide, Python 3.13) and the desktop (Python 3.11), for example
+  -35.45 and -35.46. Every Python version now gives what 3.11 gave, so
+  energies under Python 3.11 are unchanged. This change is not upstream
+  yet.
 - `LICENSE` is the author's GPL-3.0-or-later grant for CPLfold's own code
   (2026-11-23), not in upstream commit `24bab52`. Copies already
   distributed under the earlier GPL-2.0-or-later grant (2026-10-17) keep it. `LICENSES/`,

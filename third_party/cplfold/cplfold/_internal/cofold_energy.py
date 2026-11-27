@@ -284,8 +284,15 @@ class CofoldEnergy:
             breakdown, pk_metadata = self._pseudoknot(nucs, pairs, cutpoint, special, model)
             metadata.update(pk_metadata)
         breakdown["duplex_init"] = DUPLEX_INIT_KCAL if interstrand else 0.0
-        energy = float(sum(breakdown.values()))
-        return {"energy": energy, "model": model, "breakdown": breakdown, "metadata": metadata}
+        # Left to right, as sum() added floats before Python 3.12. Its
+        # compensated sum since then can put a total that lies on a half cent
+        # (DP09 scales band stacks by 0.89) on the other side of it, so the
+        # web (Pyodide, 3.13) and the desktop (3.11) rounded one structure's
+        # energy 0.01 apart.
+        energy = 0.0
+        for value in breakdown.values():
+            energy += value
+        return {"energy": float(energy), "model": model, "breakdown": breakdown, "metadata": metadata}
 
     def _pseudoknot(self, nucs, pair_table, cutpoint, special, model):
         """Score actual backbone faces; never reorder or artificially join strands."""

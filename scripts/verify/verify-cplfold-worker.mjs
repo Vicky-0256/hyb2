@@ -435,6 +435,18 @@ await self.onmessage({ data: {
 assert.equal(messages.find(message => message.type === "error"), undefined);
 assert.deepEqual(Array.from(messages.find(message => message.type === "result").energies), [-5.92],
   "the batch keeps its own preset, not the structure defaults");
+// This ZIKV arm pair's pseudoknotted terms add up to exactly -35.455, a half
+// cent. CPLfold adds them left to right on every Python version, which gives
+// a double just past the half: -35.46, the desktop's value. Python 3.12's
+// compensated sum() gave Pyodide a double just short of it, and -35.45.
+messages.length = 0;
+await self.onmessage({ data: {
+  type: "cplfold-energy-batch", allowPseudoknot: true, energyModel: "DP09",
+  pairs: [["UUAUGACUGCCACACCACCAGGAACCCGUGAUGCGUUUCCUGACU", "CUGAAGAAGAAGCAGUUAACUGUCUUGGAUCUGCAUCCAGGAGCCGGAAA"]]
+} });
+assert.equal(messages.find(message => message.type === "error"), undefined);
+assert.deepEqual(Array.from(messages.find(message => message.type === "result").energies), [-35.46],
+  "a half-cent total rounds as on the desktop");
 messages.length = 0;
 await self.onmessage({ data: { type: "cplfold-energy-batch", pairs: [["ACGN", "GCU"]] } });
 assert.ok(messages.find(message => message.type === "error"), "invalid bases fail the batch");

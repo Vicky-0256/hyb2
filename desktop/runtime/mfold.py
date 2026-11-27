@@ -5,8 +5,7 @@ ViennaRNA's constrained fold is the default; mfold is the alternative the
 original Hyb/COMRADES scripts offered through UNAFold's hybrid-ss-min.  The
 hybrid-ss-min of OligoArrayAux silently ignores forced pairs, while mfold
 3.6 (bioconda ``mfold``; free, not bundled) applies them, so it is the
-UNAFold-family program HYB2 can run (bin/mfold_fold is the command-line
-counterpart).
+UNAFold-family program HYB2 can run.
 
 mfold is found as ``HYB2_MFOLD`` (the app's Preferences), else ``mfold`` on
 PATH, else the usual conda and Homebrew locations.  Each fold runs in its

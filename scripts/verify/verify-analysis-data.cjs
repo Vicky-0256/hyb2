@@ -3,9 +3,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const os = require("node:os");
 const vm = require("node:vm");
-const childProcess = require("node:child_process");
 const coordinateCases = require("../../desktop/runtime/tests/coordinate_cases.json");
 
 const repository = path.resolve(__dirname, "..", "..");
@@ -231,34 +229,21 @@ assert.equal(invalidBinSizeMatrix.ready, true);
 assert.equal(invalidBinSizeMatrix.binSize, 10,
   "A non-positive bin size must fall back safely instead of creating a non-terminating loop");
 
-// Cross-check the browser implementation against the bundled AWK reference,
-// configured for the same entire-arm, 10-nt bin mode.
-const awkPath = path.join(repository, "bin", "plot_hybrids_3.awk");
-const awkFixture = [
-  "span_7", "ACGUACGU", ".", "rDNA", "1", "4", "8", "12", "1e-4",
-  "rDNA", "5", "8", "19", "21", "2e-4"
-].join("\t") + "\n";
-const awkFixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "hyb2-awk-parity-"));
-const awkFixturePath = path.join(awkFixtureDirectory, "fixture.hyb");
-fs.writeFileSync(awkFixturePath, awkFixture, "utf8");
-const awkRun = childProcess.spawnSync("awk", [
-  "-f", awkPath, "BIN_SIZE=10", "USE_ENTIRE_HYBRIDS=1", awkFixturePath
-], { encoding: "utf8" });
-fs.unlinkSync(awkFixturePath);
-fs.rmdirSync(awkFixtureDirectory);
-assert.equal(awkRun.status, 0, awkRun.stderr || "bundled plot_hybrids_3.awk parity run failed");
-const awkCells = Object.create(null);
-awkRun.stdout.split(/\r?\n/).filter(function (row) { return row && row.charAt(0) !== "#"; }).forEach(function (row) {
-  const fields = row.split("\t");
-  awkCells[fields[0] + ":" + fields[1]] = Number(fields[2]);
-});
+// Cross-check the browser implementation against HYB2's plot_hybrids_3.awk in
+// the same entire-arm, 10-nt bin mode. The expected cells are that script's
+// output for the .hyb row (tab-separated)
+//   span_7 ACGUACGU . rDNA 1 4 8 12 1e-4 rDNA 5 8 19 21 2e-4
+// with "awk -f plot_hybrids_3.awk BIN_SIZE=10 USE_ENTIRE_HYBRIDS=1"
+// (one-true-awk 20200816), recorded when the script, unchanged from
+// https://github.com/Jylau14/hyb2, left this repository's bin/.
+const awkCells = { "0:10": 1, "0:20": 1, "10:10": 1, "10:20": 1 };
 const browserParityMatrix = data.buildContactMatrix([
   record({ rnaOne: "rDNA", rnaOneStart: 8, rnaOneEnd: 12, rnaTwo: "rDNA", rnaTwoStart: 19, rnaTwoEnd: 21 })
 ], contact({ rnaX: "rDNA", rnaY: "rDNA", binSize: 10 }));
 const browserCells = Object.create(null);
 browserParityMatrix.cells.forEach(function (cell) { browserCells[cell.x + ":" + cell.y] = cell.records; });
-assert.deepEqual(Object.assign({}, browserCells), Object.assign({}, awkCells),
-  "browser contact accumulation must match bundled plot_hybrids_3.awk entire-arm bins");
+assert.deepEqual(Object.assign({}, browserCells), awkCells,
+  "browser contact accumulation must match plot_hybrids_3.awk entire-arm bins");
 
 // A syntactically valid row with enormous arm extents must be rejected before
 // entering the nested bin loops. The returned reason is suitable for the UI.

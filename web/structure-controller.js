@@ -220,7 +220,7 @@
     if (!cplfold && hybGuided) {
       try {
         if (structure.foldProgram === "mfold") {
-          throw new Error("mfold 3.6 cannot run in a browser: run COMRADES(mfold) in HYB2 Desktop or with hyb2 … -r 2, or choose ViennaRNA as the folding program.");
+          throw new Error("mfold 3.6 cannot run in a browser: run COMRADES(mfold) in HYB2 Desktop, or choose ViennaRNA as the folding program.");
         }
         if (!sequenceInfo.assembly || !sequenceInfo.assembly.evidenceArms.length) {
           throw new Error("No eligible forward-strand HYB records are fully contained in the selected region layout.");

@@ -1136,7 +1136,7 @@ function pagesTracks(file) {
 }
 const browserGatePath = "scripts/verify/verify-browser-release.sh";
 const browserGate = fs.readFileSync(path.join(repository, browserGatePath), "utf8");
-for (const input of [browserGatePath, "scripts/build/write-releases.mjs", ".gitattributes", "bin/plot_hybrids_3.awk"]) {
+for (const input of [browserGatePath, "scripts/build/write-releases.mjs", ".gitattributes"]) {
   assert.ok(pagesTracks(input), "changes to " + input + " must trigger Pages");
 }
 for (const job of [pagesBuild, workflowSection(releaseWorkflow, "browser:")]) {

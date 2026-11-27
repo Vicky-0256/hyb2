@@ -1,5 +1,0 @@
-#!/bin/bash
-# Legacy name for the public coverage command.
-sibling=$(dirname "$0")/hyb2_coverage
-if [[ -x "$sibling" ]]; then exec "$sibling" "$@"; fi
-exec hyb2_coverage "$@"

@@ -2,11 +2,11 @@
 # Reference numbers for the included web example (web/example.js) from the
 # original HYB2 pipeline, for scripts/verify/verify-example.cjs:
 #
-#   bash scripts/build/make-example-reference.sh <out-dir>
+#   HYB2_BIN=<bin-dir> bash scripts/build/make-example-reference.sh <out-dir>
 #   HYB2_EXAMPLE_REFERENCE=<out-dir> node scripts/verify/verify-example.cjs
 #
 # 1. one 10-nt contact map per replicate with hyb2_coverage's command
-#    (plot_hybrids_3.awk), then bin/hyb2_compare (DESeq_run.R, -m 2 -r 100,
+#    (plot_hybrids_3.awk), then hyb2_compare (DESeq_run.R, -m 2 -r 100,
 #    as reproduce_zikv/run_compare.sh ran compare_virion_AFR_vs_ILM);
 # 2. the similarity heatmap as reproduce_zikv/analysis/run_similarity_hyb2.sh:
 #    replicates concatenated per lineage, binned, bins >= 10 kept,
@@ -18,19 +18,22 @@
 # Needs R with DESeq2 (HYB2_R_ENV, default ../.envs/hyb2_r), the hyb2 conda
 # env for RNAcofold / ggplot (HYB2_ENV), and the reproduce_zikv folder
 # (REPRODUCE_ZIKV, default ../reproduce_zikv) for the two analysis scripts and
-# the CPLfold pairs tables.  HYB2_BIN (default bin/ of this checkout) holds
-# hyb2_compare and friends; with BSD paste (macOS) hyb2_compare needs
-# "paste -sd '\t' -" for its table header, so point HYB2_BIN at a checkout
-# with that fix there.
+# the CPLfold pairs tables.  HYB2_BIN (required) is a bin/ folder holding the
+# original HYB2 scripts, hyb2_compare and friends, which this repository no
+# longer ships: https://github.com/Jylau14/hyb2, or this repository's own copy
+# from before they were removed (git archive 5398ef3 bin | tar -x -C DIR
+# gives DIR/bin).
+# With BSD paste (macOS) hyb2_compare needs "paste -sd '\t' -" for its table
+# header; that copy has the fix, the upstream one does not.
 set -euo pipefail
 
+HYB2_BIN="${HYB2_BIN:?set HYB2_BIN to a bin/ folder with the original HYB2 scripts (see the header)}"
 REPO="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 OUT="$(mkdir -p -- "$1" && CDPATH= cd -- "$1" && pwd -P)"
 R_ENV="${HYB2_R_ENV:-$REPO/../.envs/hyb2_r}"
 HYB2_ENV="${HYB2_ENV:-/opt/homebrew/Caskroom/miniforge/base/envs/hyb2_macOS-arm}"
 ZIKV="$(CDPATH= cd -- "${REPRODUCE_ZIKV:-$REPO/../reproduce_zikv}" && pwd -P)"
 EXAMPLE="$REPO/web/assets/examples/zikv-virion"
-HYB2_BIN="${HYB2_BIN:-$REPO/bin}"
 export PATH="$R_ENV/bin:$HYB2_BIN:$HYB2_ENV/bin:/usr/bin:/bin"
 
 AFR=ZIKV_African_KX377335-1_virusRNA

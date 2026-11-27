@@ -81,7 +81,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(data["platform"]["os"], {"windows", "macos", "linux", "unknown"})
         self.assertTrue(matrix.supports("web.analysis"))
         self.assertFalse(matrix.supports("does.not.exist"))
-        self.assertIn("hyb2.cli", {probe["id"] for probe in data["probes"]})
+        self.assertIn("cplfold.native", {probe["id"] for probe in data["probes"]})
         self.assertIn("language.numpy", {probe["id"] for probe in data["probes"]})
         self.assertIn("language.numba", {probe["id"] for probe in data["probes"]})
 

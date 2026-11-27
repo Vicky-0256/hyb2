@@ -357,7 +357,7 @@
       homodimerOnly: false,
       constraintLimit: String(comrades.constraintLimit),
       // the program that fits the COMRADES stems: "viennarna" (in this
-      // browser) or "mfold" (mfold 3.6, HYB2 Desktop or the command line)
+      // browser) or "mfold" (mfold 3.6, HYB2 Desktop)
       foldProgram: "viennarna",
       randomFoldCount: String(comrades.randomFoldCount),
       randomSeed: "HYB2-Web",

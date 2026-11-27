@@ -17,6 +17,7 @@ dependencies = ["ViennaRNA>=2.7", "numpy>=1.24", "cutadapt>=4.0"]
 
 [project.scripts]
 hyb2pipe = "hyb2pipe.__main__:main"
+hyb2analysis = "hyb2analysis.__main__:main"
 
 [tool.setuptools]
 packages = ["hyb2pipe", "hyb2analysis"]

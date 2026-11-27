@@ -37,5 +37,5 @@
   },
   "decision": "blocked",
   "reason": "Do not enable in-browser DESeq2 until the pinned DESeq2 1.52.0 closure is built as WebAssembly, loaded from static assets, and passes native-R numerical parity. The separate 1.53.2 development probe was blocked by locfit and is not evidence for the pinned target.",
-  "fallback": "Export the raw integer feature-by-sample table plus the two-column headerless HYB2 names table for bin/DESeq_run.R; export extended sample metadata separately for a future WebR or modern native-R adapter."
+  "fallback": "Export the raw integer feature-by-sample table plus the two-column headerless HYB2 names table that the original HYB2 DESeq_run.R reads; export extended sample metadata separately for a future WebR or modern native-R adapter."
 }

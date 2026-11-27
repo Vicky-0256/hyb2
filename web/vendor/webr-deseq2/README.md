@@ -14,7 +14,7 @@ The production gate is therefore:
 4. Run the same fixture through native R and WebR and compare log2 fold change, p-value, adjusted p-value, missing-value behaviour, and row order.
 5. Add a deployment-CI browser smoke for the vendored runtime and change `decision` in `feasibility.json` to `ready` only after every release check passes.
 
-Until then, the Compare page remains descriptive. For the existing local HYB2 R entry point it exports `hyb2-web.table.txt` and the required two-column, headerless `hyb2-web_names.table`; run `DESeq_run.R hyb2-web.table.txt hyb2-web_names.table 2`. Extended headered metadata is a separate audit/custom-adapter export. No backend is required for the eventual browser runtime.
+Until then, the Compare page remains descriptive. It exports `hyb2-web.table.txt` and the two-column, headerless `hyb2-web_names.table`, the inputs of the original HYB2 R script `DESeq_run.R` (in <https://github.com/Jylau14/hyb2>; this repository no longer ships it). Extended headered metadata is a separate audit/custom-adapter export. No backend is required for the eventual browser runtime.
 
 To reproduce the recorded base-runtime smoke, download the locked release asset, verify its SHA-256, extract it as `scripts/verify/webr-smoke/webr-0.6.0/`, serve `scripts/verify/webr-smoke/` over ordinary HTTP, and open `index.html` in a browser. The result is exposed as `window.__spikeResult`. Because this reproduction fetches a 40 MB external test asset and needs a real browser, it is deliberately separate from the offline website and current deployment gate.
 

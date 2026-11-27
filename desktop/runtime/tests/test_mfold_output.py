@@ -1,6 +1,5 @@
-"""mfold must return a complete CT for the requested sequence before either caller publishes it."""
+"""mfold must return a complete CT for the requested sequence before the desktop runtime publishes it."""
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -161,36 +160,3 @@ class MfoldOutputTests(unittest.TestCase):
                 fit(data, code)
         record, accepted, rejected = fit("", 1, "Save file is empty. No foldings.\nJob Aborted")
         self.assertEqual((record["energy"], accepted, rejected[0]["reason"]), (-3.9, [], "mfold-incompatible"))
-
-    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "the legacy shell command requires POSIX bash")
-    def test_shell(self):
-        binary = self.root / "fake mfold"
-        binary.write_text('#!/bin/sh\ncp "$TEST_CT" s.ct || exit 10\nexit "$TEST_STATUS"\n')
-        binary.chmod(0o755)
-        datdir = self.root / "mfold_datdir"
-        datdir.write_text('#!/bin/sh\nprintf "%s\\n" "$TEST_TABLES"\n')
-        datdir.chmod(0o755)
-        (self.tables / "stack.dat").touch()
-        fasta, out = self.root / "input.fa", self.root / "output.ct"
-        fasta.write_bytes(b">first description\r\nGGG AAA\r\nCCC\r\n>second\r\nCCCC\r\n")
-        source = self.root / "from-mfold.ct"
-
-        def run(data, status):
-            source.write_text(data)
-            env = dict(os.environ, MFOLD="./" + binary.name, TEST_TABLES=str(self.tables), TEST_CT=str(source), TEST_STATUS=str(status))
-            return subprocess.run(["bash", str(ROOT / "bin/mfold_fold"), str(fasta), "-", str(out)],
-                                  cwd=self.root, env=env, capture_output=True, text=True, umask=0o027)
-
-        result = run(ct() + ct((0,) * len(SEQUENCE), "9 dG = 0 s"), 0)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(out.read_text().splitlines(), ["9\tdG = -3.90\tfirst", *ct().splitlines()[1:]])
-        self.assertEqual(out.stat().st_mode & 0o777, 0o640)
-        for label, code, data in failures():
-            with self.subTest(label=label):
-                out.write_text(ct())
-                result = run(data, code)
-                self.assertNotEqual(result.returncode, 0)
-                if code:
-                    self.assertIn("exit status 9", result.stderr)
-                self.assertFalse(out.exists())
-                self.assertEqual(list(self.root.glob("output.ct.tmp.*")), [])

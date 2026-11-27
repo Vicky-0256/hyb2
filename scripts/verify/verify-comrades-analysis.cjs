@@ -199,8 +199,8 @@ assert.deepEqual(
 );
 
 // Weak pairs are trimmed from the ends of a stem (hyb2 gk-dev's
-// test_bp2hyb_trims_weak_helix_ends, and the same cases as the Python runtime
-// and bin/bp2hyb.sh): 10-50..14-46 is well supported, 9-51 and 15-45 extend it
+// test_bp2hyb_trims_weak_helix_ends, and the same cases as the Python
+// runtime): 10-50..14-46 is well supported, 9-51 and 15-45 extend it
 // with 2 and 1 observations.
 const weakEnds = [
   [9, 51, 2], [10, 50, 100], [11, 49, 100], [12, 48, 90], [13, 47, 80], [14, 46, 100], [15, 45, 1],

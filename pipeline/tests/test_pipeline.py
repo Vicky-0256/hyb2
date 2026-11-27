@@ -4,6 +4,7 @@ The golden files were produced by the legacy ``sam_filt`` + ``sam2hyb -e 0``
 on ``data/testData.sam`` (macOS one-true-awk 20200816, LANG=C.UTF-8).
 """
 import gzip
+import importlib.util
 import io
 import json
 import os
@@ -80,21 +81,47 @@ class StageTest(unittest.TestCase):
             lines.append("r%s\t%s\tg\t1000\t40\t3S10M2I8M1D5M200N25M4S\t*\t0\t0\t%s\t*\tAS:i:40\tNM:i:3"
                          % (flag, flag, "C" * 57))
         out = list(sam.sam_filt(lines))
+        # what bin/sam_filt (one-true-awk 20200816) printed for these lines: each arm
+        # keeps the other fields and gets the empty fields 14-20 the script printed
+        tail = "\t*\t0\t0\t%s\t*\tAS:i:40\tNM:i:3" % ("C" * 57) + "\t" * 7
+        self.assertEqual(out, ["@SQ\tSN:g\tLN:5000",
+                               "r0\t0\tg\t1000\t40\t3S10M2I8M1D5M29S" + tail, "r0\t256\tg\t1224\t40\t28S25M4S" + tail,
+                               "r16\t16\tg\t1000\t40\t3S10M2I8M1D5M29S" + tail, "r16\t272\tg\t1224\t40\t28S25M4S" + tail])
         rows = [line.split("\t") for line in out[1:]]
-        self.assertEqual([row[3:6] for row in rows[:2]],
-                         [["1000", "40", "3S10M2I8M1D5M29S"], ["1224", "40", "28S25M4S"]])
         blast_rows = [sam.blast_row(row, 5000).split("\t")[6:10] for row in rows]
         self.assertEqual(blast_rows, [["4", "28", "1000", "1023"], ["29", "53", "1224", "1248"],
                                       ["30", "54", "1023", "1000"], ["5", "29", "1248", "1224"]])
-        if sys.platform != "win32":
-            legacy = subprocess.run([str(ROOT / "bin/sam_filt")], input="\n".join(lines) + "\n",
-                                    capture_output=True, text=True, check=True).stdout
-            self.assertEqual(legacy.splitlines(), out)
 
     def test_sam_filt_drops_double_splice_and_normalises_ids(self):
         self.assertEqual(list(sam.sam_filt(["r\t0\tg\t1\t1\t5M1N5M1N5M\t*"])), [])
         out = list(sam.sam_filt(["M1:7:FC:3:1101:1:2\t0\tg\t1\t40\t5M\t*"]))
         self.assertTrue(out[0].startswith("1101-1-2_1\t0\tg\t1"))
+
+    def test_sam_filt_counts_skipped_records_by_kind(self):
+        read = "ACGT" * 10
+        rows = ["@SQ\tSN:toy\tLN:160",
+                f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
+                f"read_1\t2048\ttoy\t41\t60\t20M20H\t*\t0\t0\t{read[:20]}\t*\tAS:i:40\tNM:i:0",
+                f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
+                f"M1:7:FC:3:1101:1:2\t2064\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
+                f"dup\t1024\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
+                f"qc\t528\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
+                f"none\t4\t*\t0\t0\t*\t*\t0\t0\t{read}\t*"]
+        stderr = io.StringIO()
+        kept = list(sam.sam_filt(rows, stderr))
+        self.assertEqual([row.split("\t")[1] for row in kept], ["SN:toy", "0", "256"])
+        messages = stderr.getvalue().splitlines()
+        self.assertEqual(len(messages), 3)
+        self.assertIn("skipped 1 unmapped SAM records (flag 0x4)", messages[0])
+        self.assertIn("warning: skipped 2 supplementary alignments (flag 0x800)", messages[1])
+        self.assertIn("chimeric arms reported as supplementary alignments are not used", messages[1])
+        self.assertIn("warning: skipped 2 SAM records whose flag is not 0, 16, 256 or 272", messages[2])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mixed.sam"
+            path.write_text("\n".join(rows) + "\n")
+            with mock.patch("sys.stderr", io.StringIO()):
+                result = run(path, ROOT / "data/Zika_18S_formatted.fasta", Path(tmp) / "out")
+            self.assertEqual(result.counts["hybrids"], 1)
 
     def test_chimera_types_drop_unmatched_intramolecular(self):
         base = ["id", "SEQ", ".", "G", "1", "10", "50", "60", "1e-5", "G", "11", "20", "50", "60", "1e-5", "", "0"]
@@ -109,6 +136,34 @@ class StageTest(unittest.TestCase):
         fasta = [">ENSG_1|GENE|protein_coding", "ACGU", "ACGU", ">X||y", "GG", ">Z|pseudogene", "AA", ">W|lncRNA", "CC"]
         self.assertEqual(inputs.format_reference(fasta),
                          [">ENSG-1_GENE_mRNA", "ACGUACGU", ">W_lncRNA", "CC"])
+
+    def test_reference_files_follow_the_formatting_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            # CRLF lines, a wrapped sequence and an empty biotype field (|| becomes _unknown_: dropped)
+            for name, text, expected in (
+                    ("wrapped", ">alpha|protein_coding\r\nGGGG\r\nAAAA\r\n>skip||kind\r\nCCCC\r\n>b|t\r\nUU\r\n",
+                     [">alpha_mRNA", "GGGGAAAA", ">b_t", "UU"]),
+                    ("ensembl", ">ENSG1_ENST1|Zika_virus|protein_coding\nAC\n", [">ENSG1-ENST1_Zika-virus_mRNA", "AC"])):
+                with self.subTest(name=name):
+                    source = base / (name + ".fa")
+                    source.write_bytes(text.encode())
+                    self.assertTrue(inputs.needs_formatting(source))
+                    self.assertEqual(inputs.format_reference(inputs.iter_lines(source)), expected)
+            for name, text, error in (("comment", ">a|x\nAC\n#note\nGU\n", "comment"),
+                                      ("duplicate", ">a|x\nAC\n>a|x\nGU\n", "duplicate FASTA ID")):
+                with self.subTest(name=name):
+                    source = base / (name + ".fa")
+                    source.write_text(text)
+                    with self.assertRaises(ValueError) as caught:
+                        run(ROOT / "data/testData.sam", source, base / name)
+                    self.assertIn(error, str(caught.exception))
+            with self.assertRaises(ValueError):
+                inputs.needs_formatting(base / "duplicate.fa")
+            # a '|' outside the headers does not rename the reference
+            plain = base / "plain.fa"
+            plain.write_text(">a\nAC\n;c|d\n>b\nGU\n")
+            self.assertFalse(inputs.needs_formatting(plain))
 
     def test_fastq_collapse(self):
         fastq = ["@r1 x", "ACGT", "+", "IIII", "@r2", "ACGT", "+", "IIII", "@r3", "GGGG", "+", "IIII"]
@@ -768,6 +823,113 @@ class CliTest(unittest.TestCase):
                         self.assertIn(option, detail)
                         self.assertIn("from 4 to 31" if option == "--seed-length" else "positive integer", detail)
 
+    def test_scientific_blast_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            status, err = self._main("-i", ROOT / "data/testData.sam", "-d", ROOT / "data/Zika_18S_formatted.fasta",
+                                     "-o", out, "-v", "1e-5")
+            self.assertEqual(status, 0, err)
+            self.assertEqual(len(Path(str(out) + ".hyb").read_text().splitlines()), 10013)  # 10411 with the default 0.1
+
+    def test_paired_sam_records_are_an_error(self):
+        read = "ACGT" * 10
+        rows = ["@SQ\tSN:toy\tLN:160",
+                f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
+                f"pair\t99\ttoy\t1\t60\t20M\t=\t81\t100\t{read[:20]}\t*\tAS:i:20\tNM:i:0"]
+        message = ("sam_filt: SAM line 3 (read pair) has flag 99, which marks a paired-end read (0x1); "
+                   "Hyb2 expects single-end reads, so map the reads as single-end")
+        with self.assertRaises(ValueError) as caught:
+            list(sam.sam_filt(rows, io.StringIO()))
+        self.assertEqual(str(caught.exception), message)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "paired.sam"
+            path.write_text("\n".join(rows) + "\n")
+            status, err = self._main("-i", path, "-d", ROOT / "data/Zika_18S_formatted.fasta", "-o", Path(tmp) / "py/out")
+            self.assertEqual(status, 2)
+            self.assertIn(message, err)
+            self.assertFalse((Path(tmp) / "py/out.hyb").exists())
+
+    def test_sam_read_names_without_a_count_or_starting_with_at_are_an_error(self):
+        read = "ACGT" * 10
+        hint = ("Give Hyb2 the reads instead (FASTA or FASTQ): it collapses identical reads and names them "
+                "<rank>_<count> before mapping.")
+        cases = {"read": 'read name "read" does not end in _<count> (as in 1_523), from which Hyb2 takes the number '
+                         "of identical reads. " + hint,
+                 "@read_2": 'read name "@read_2" starts with @, so its SAM lines read as header lines. ' + hint}
+        with tempfile.TemporaryDirectory() as tmp:
+            for number, (name, message) in enumerate(cases.items()):
+                with self.subTest(name=name):
+                    path = Path(tmp) / ("names%d.sam" % number)
+                    path.write_text("@HD\tVN:1.0\n@SQ\tSN:toy\tLN:160\n@PG\tID:bowtie2\n@CO\tany text\n"
+                                    "%s\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t%s\t*\tAS:i:40\tNM:i:0\n" % (name, read))
+                    out = Path(tmp) / ("py%d" % number) / "out"
+                    status, err = self._main("-i", path, "-d", ROOT / "data/Zika_18S_formatted.fasta", "-o", out)
+                    self.assertEqual(status, 2)
+                    self.assertIn(message, err)
+                    self.assertFalse(Path(str(out) + ".hyb").exists())
+
+    @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build"), "Bowtie2 not installed")
+    def test_fasta_reads_are_collapsed_and_counted_unless_already_collapsed(self):
+        # Raw FASTA reads have no <rank>_<count> name, so they are collapsed and
+        # renamed as FASTQ reads are; a read named >@... (as solexa2fasta.awk
+        # wrote them) gives the same .hyb, and reads already named so are mapped
+        # as they are.  Trimming is off, so cutadapt is not needed.
+        rows = [line.split("\t") for line in inputs.iter_lines(ROOT / "data/testData.sam") if not line.startswith("@")]
+        names, copies = [], {}
+        for row in rows:
+            if row[1] == "0" and row[0] not in names and len(names) < 1500:
+                names.append(row[0])
+                copies[row[9]] = 1 + len(copies) % 3
+        raw = [(seq, copy) for copy in range(3) for seq, count in copies.items() if copy < count]
+        texts = {"plain": "".join(">r%d.%d\n%s\n" % (i, copy, seq) for i, (seq, copy) in enumerate(raw)),
+                 "at": "".join(">@r%d.%d extra\n%s\n" % (i, copy, seq) for i, (seq, copy) in enumerate(raw)),
+                 "collapsed": "".join(">%s\n%s\n" % item for item in zip(names, copies))}
+        outputs = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, text in texts.items():
+                reads = Path(tmp) / (label + ".fasta")
+                reads.write_text(text)
+                result = run(reads, ROOT / "data/Zika_18S_formatted.fasta", Path(tmp) / label / "out",
+                             Options(threads=2, adapter=None))
+                outputs[label] = result.hyb.read_bytes()
+        self.assertEqual(outputs["at"], outputs["plain"])
+        counted = 0
+        for row in outputs["plain"].decode().splitlines():
+            name, seq = row.split("\t")[:2]
+            self.assertRegex(name, r"^[0-9]+_[0-9]+$")
+            if seq in copies:
+                self.assertEqual(int(name.split("_")[1]), copies[seq], row)
+                counted += 1
+        self.assertGreater(counted, 100)
+        kept = {row.split("\t")[0] for row in outputs["collapsed"].decode().splitlines()}
+        self.assertGreater(len(kept), 100)
+        self.assertLessEqual(kept, set(names))
+
+    # trim_adapters runs the cutadapt package of this Python, else cutadapt on the PATH
+    @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build")
+                         and (importlib.util.find_spec("cutadapt") or inputs._tool("cutadapt")), "needs Bowtie2 and cutadapt")
+    def test_reads_are_adapter_trimmed_before_collapsing(self):
+        # Reads ending in the 3' adapter give the same .hyb as the same reads
+        # trimmed by hand and mapped without trimming; reads under 18 nt
+        # without the adapter are dropped.
+        adapter = inputs.MAPPING_DEFAULTS["adapter"]
+        rows = [line.split("\t") for line in inputs.iter_lines(ROOT / "data/testData.sam") if not line.startswith("@")]
+        reads = list(dict.fromkeys(row[9] for row in rows if row[1] == "0"))[:1500]
+        raw = "".join(">r%d\n%s%s\n" % (i, seq, adapter) for i, seq in enumerate(reads))
+        raw += ">short\nACGTACGTACGT%s\n" % adapter
+        trimmed = "".join(">r%d\n%s\n" % (i, seq) for i, seq in enumerate(reads) if len(seq) >= 18)
+        reference = ROOT / "data/Zika_18S_formatted.fasta"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "raw.fasta").write_text(raw)
+            (base / "trimmed.fasta").write_text(trimmed)
+            expected = run(base / "trimmed.fasta", reference, base / "by_hand/out", Options(threads=2, adapter=None))
+            result = run(base / "raw.fasta", reference, base / "py/out", Options(threads=2))
+            self.assertGreater(expected.counts["hybrids"], 0)
+            self.assertEqual(result.hyb.read_bytes(), expected.hyb.read_bytes())
+            self.assertEqual(result.counts["reads"], len(reads))  # the short read is gone
+            self.assertIn("Reads written (passing filters):", (base / "py/out.cutadapt.log").read_text())
+
     @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build"), "Bowtie2 not installed")
     def test_fastq_path_maps_with_bowtie2(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -821,317 +983,6 @@ class CliTest(unittest.TestCase):
                 inputs.bowtie2_index(ref, prefix)
                 self.assertEqual(len(calls), 4)  # the interrupted build is not reused
                 self.assertEqual(Path(str(prefix) + ".1.bt2").read_text(), ">d\nUUUU\n")
-
-
-@unittest.skipUnless(os.name == "posix" and shutil.which("bash") and shutil.which("perl"), "the legacy CLI needs bash and Perl")
-class LegacyCliTest(unittest.TestCase):
-    """``bin/`` step 1 and ``hyb2pipe`` agree on options, SAM flags and reference IDs."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.base = Path(tmp.name)
-        tools = self.base / "tools"
-        tools.mkdir()
-        for name in ("python", "python3"):  # the legacy scripts run python and python3 from PATH
-            (tools / name).symlink_to(sys.executable)
-        self.env = dict(os.environ, PATH=os.pathsep.join((str(tools), str(ROOT / "bin"), os.environ["PATH"])),
-                        PYTHONDONTWRITEBYTECODE="1")
-
-    def cli(self, *args):
-        return subprocess.run([str(a) for a in args], cwd=self.base, env=self.env, capture_output=True, text=True,
-                              timeout=300)
-
-    def test_scientific_blast_threshold_matches_hyb2pipe(self):
-        done = self.cli(ROOT / "bin/hyb2", "-i", ROOT / "data/testData.sam", "-o", self.base / "legacy", "-v", "1e-5")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        python = run(ROOT / "data/testData.sam", ROOT / "data/Zika_18S_formatted.fasta", self.base / "py/out",
-                     Options(blast_threshold=1e-5))
-        self.assertEqual(python.counts["hybrids"], 10013)  # 10411 with the default 0.1
-        for produced, suffix in ((python.hyb, ".hyb"), (python.homodimers, "_homodimers.hyb"),
-                                 (python.stats, "_hybrids.hyb_stats.txt")):
-            self.assertEqual((self.base / ("legacy" + suffix)).read_bytes(), produced.read_bytes(), suffix)
-        for value in ("1e-", "0.1x", ""):
-            with self.subTest(value=value):
-                bad = self.cli(ROOT / "bin/hyb2", "-i", ROOT / "data/testData.sam", "-o", self.base / "bad", "-v", value)
-                self.assertEqual(bad.returncode, 2)
-                self.assertIn("-v must be a number", bad.stderr)
-        perl = self.cli(ROOT / "bin/get_mtop_hybrids.pl", "BLAST_THRESHOLD=1e", "/dev/null")
-        self.assertNotEqual(perl.returncode, 0)
-        self.assertIn("BLAST_THRESHOLD must be a number", perl.stderr)
-
-    def test_existing_hyb_is_recomputed_when_inputs_or_options_change(self):
-        sam = self.base / "reads.sam"
-        read = "ACGT" * 10
-        sam.write_text("@SQ\tSN:toy\tLN:160\n" +
-                       f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n"
-                       f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n")
-        hyb = self.base / "out.hyb"
-
-        def convert(*options):
-            done = self.cli(ROOT / "bin/hyb2", "-i", sam, "-o", self.base / "out", *options)
-            self.assertEqual(done.returncode, 0, done.stderr)
-            return done.stdout
-
-        self.assertIn("Hyb File Generated.", convert())
-        self.assertEqual(len(hyb.read_text().splitlines()), 1)
-        self.assertIn("Hyb File Exist.", convert())
-        self.assertIn("recomputing", convert("-h", "0"))  # a read with 2 hits > 0 allowed
-        self.assertEqual(hyb.read_text(), "")
-        self.assertIn("Hyb File Exist.", convert("-h", "0"))
-        sam.write_text(sam.read_text() + "\n")
-        os.utime(sam, (1, 1))
-        self.assertIn("recomputing", convert())
-        self.assertEqual(len(hyb.read_text().splitlines()), 1)
-        Path(str(hyb) + ".inputs").unlink()  # e.g. written by hyb2pipe: kept
-        hyb.write_text("kept\n")
-        self.assertIn("Hyb File Exist.", convert("-h", "3"))
-        self.assertEqual(hyb.read_text(), "kept\n")
-        done = self.cli(ROOT / "bin/hyb2", "-i", hyb)
-        self.assertIn("Hyb File Exist.", done.stdout)
-
-    def test_record_vouches_only_for_the_hyb_it_published(self):
-        read = "ACGT" * 10
-        sam = self.base / "reads.sam"
-        sam.write_text("@SQ\tSN:toy\tLN:160\n" +
-                       f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n"
-                       f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n")
-        other = self.base / "other.sam"
-        other.write_text(sam.read_text().replace("\t81\t", "\t121\t"))
-        hyb, record = self.base / "out.hyb", self.base / "out.hyb.inputs"
-
-        def convert():
-            done = self.cli(ROOT / "bin/hyb2", "-i", sam, "-o", self.base / "out")
-            self.assertEqual(done.returncode, 0, done.stderr)
-            return done
-
-        self.assertIn("Hyb File Generated.", convert().stdout)
-        self.assertTrue(record.read_text().startswith("hyb2 step 1 record format 4\n"))
-        made = hyb.read_bytes()
-        self.assertIn("Hyb File Exist.", convert().stdout)
-        # a .hyb replaced behind the record's back is not vouched for
-        hyb.write_text("rewritten\n")
-        self.assertIn("recomputing", convert().stdout)
-        self.assertEqual(hyb.read_bytes(), made)
-        homodimers = self.base / "out_homodimers.hyb"
-        homodimers.write_text("rewritten\n")
-        self.assertIn("recomputing", convert().stdout)
-        # hyb2pipe publishing <out>.hyb from other inputs drops hyb2's record
-        with mock.patch("sys.stderr", io.StringIO()):
-            python = run(other, ROOT / "data/Zika_18S_formatted.fasta", self.base / "out")
-        self.assertFalse(record.exists())
-        rewritten = python.hyb.read_bytes()
-        self.assertNotEqual(rewritten, made)
-        done = convert()
-        self.assertIn("Hyb File Exist.", done.stdout)
-        self.assertIn("has no record of its inputs", done.stderr)
-        self.assertEqual(hyb.read_bytes(), rewritten)
-
-    def test_fold_option_and_second_reference_do_not_affect_step_1(self):
-        cofold = self.base / "tools" / "RNAcofold"
-        cofold.write_text("#!/usr/bin/env python3\nimport sys\nlines = sys.stdin.read().splitlines()\n"
-                          "for header, sequence in zip(lines[::2], lines[1::2]):\n"
-                          "    print(header); print(sequence); "
-                          "print(''.join('&' if c == '&' else '.' for c in sequence), '( 0.00)')\n")
-        cofold.chmod(0o755)
-        read = "ACGT" * 10
-        sam, reference, second = self.base / "reads.sam", self.base / "ref.fa", self.base / "second.fa"
-        sam.write_text("@SQ\tSN:toy\tLN:160\n" +
-                       f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n"
-                       f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0\n")
-        reference.write_text(">toy\n" + "ACGT" * 40 + "\n")
-        second.write_text(">other\n" + "GGCC" * 10 + "\n")
-
-        def convert(*options):
-            done = self.cli(ROOT / "bin/hyb2", "-i", sam, "-d", reference, "-o", self.base / "out", "-e", "1", *options)
-            self.assertEqual(done.returncode, 0, done.stderr)
-            return done.stdout
-
-        self.assertIn("Hyb File Generated.", convert("-r", "1"))
-        self.assertIn("Hyb File Exist.", convert("-r", "0"))
-        self.assertIn("Hyb File Exist.", convert("-r", "1", "-2", second))
-        self.assertIn("recomputing", convert("-r", "1", "-e", "0"))
-
-    def test_skipped_flags_are_counted_separately(self):
-        read = "ACGT" * 10
-        rows = ["@SQ\tSN:toy\tLN:160",
-                f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
-                f"read_1\t2048\ttoy\t41\t60\t20M20H\t*\t0\t0\t{read[:20]}\t*\tAS:i:40\tNM:i:0",
-                f"read_1\t256\ttoy\t81\t60\t20S20M\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
-                f"M1:7:FC:3:1101:1:2\t2064\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
-                f"dup\t1024\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
-                f"qc\t528\ttoy\t1\t60\t20M\t*\t0\t0\t{read[:20]}\t*\tAS:i:20\tNM:i:0",
-                f"none\t4\t*\t0\t0\t*\t*\t0\t0\t{read}\t*"]
-        stderr = io.StringIO()
-        kept = list(sam.sam_filt(rows, stderr))
-        self.assertEqual([row.split("\t")[1] for row in kept], ["SN:toy", "0", "256"])
-        messages = stderr.getvalue().splitlines()
-        self.assertEqual(len(messages), 3)
-        self.assertIn("skipped 1 unmapped SAM records (flag 0x4)", messages[0])
-        self.assertIn("warning: skipped 2 supplementary alignments (flag 0x800)", messages[1])
-        self.assertIn("chimeric arms reported as supplementary alignments are not used", messages[1])
-        self.assertIn("warning: skipped 2 SAM records whose flag is not 0, 16, 256 or 272", messages[2])
-        path = self.base / "mixed.sam"
-        path.write_text("\n".join(rows) + "\n")
-        legacy = self.cli(ROOT / "bin/sam_filt", path)
-        self.assertEqual(legacy.returncode, 0, legacy.stderr)
-        self.assertEqual(legacy.stdout.splitlines(), kept)
-        self.assertEqual(legacy.stderr, stderr.getvalue())
-        done = self.cli(ROOT / "bin/hyb2", "-i", path, "-o", self.base / "legacy")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        with mock.patch("sys.stderr", io.StringIO()):
-            python = run(path, ROOT / "data/Zika_18S_formatted.fasta", self.base / "py/out")
-        self.assertEqual(python.counts["hybrids"], 1)
-        self.assertEqual((self.base / "legacy.hyb").read_bytes(), python.hyb.read_bytes())
-
-    def test_paired_records_are_an_error_in_both_pipelines(self):
-        read = "ACGT" * 10
-        rows = ["@SQ\tSN:toy\tLN:160",
-                f"read_1\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t{read}\t*\tAS:i:40\tNM:i:0",
-                f"pair\t99\ttoy\t1\t60\t20M\t=\t81\t100\t{read[:20]}\t*\tAS:i:20\tNM:i:0"]
-        message = ("sam_filt: SAM line 3 (read pair) has flag 99, which marks a paired-end read (0x1); "
-                   "Hyb2 expects single-end reads, so map the reads as single-end")
-        with self.assertRaises(ValueError) as caught:
-            list(sam.sam_filt(rows, io.StringIO()))
-        self.assertEqual(str(caught.exception), message)
-        path = self.base / "paired.sam"
-        path.write_text("\n".join(rows) + "\n")
-        legacy = self.cli(ROOT / "bin/sam_filt", path)
-        self.assertNotEqual(legacy.returncode, 0)
-        self.assertEqual(legacy.stderr, message + "\n")
-        done = self.cli(ROOT / "bin/hyb2", "-i", path, "-o", self.base / "legacy")
-        self.assertNotEqual(done.returncode, 0)
-        self.assertIn(message, done.stderr)
-        self.assertFalse((self.base / "legacy.hyb").exists())
-        env = dict(self.env, PYTHONPATH=str(ROOT / "pipeline"))
-        python = subprocess.run([sys.executable, "-m", "hyb2pipe", "-i", str(path), "-d",
-                                 str(ROOT / "data/Zika_18S_formatted.fasta"), "-o", str(self.base / "py/out")],
-                                cwd=self.base, env=env, capture_output=True, text=True, timeout=300)
-        self.assertNotEqual(python.returncode, 0)
-        self.assertIn(message, python.stderr)
-        self.assertFalse((self.base / "py/out.hyb").exists())
-
-    @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build"), "Bowtie2 not installed")
-    def test_fasta_reads_are_collapsed_and_counted_unless_already_collapsed(self):
-        # Raw FASTA reads have no <rank>_<count> name: their counts were zero
-        # (bin/hyb2 divided by zero), and a read named >@... (as
-        # solexa2fasta.awk writes it) became a SAM line that reads as a header.
-        rows = [line.split("\t") for line in inputs.iter_lines(ROOT / "data/testData.sam") if not line.startswith("@")]
-        names, copies = [], {}
-        for row in rows:
-            if row[1] == "0" and row[0] not in names and len(names) < 1500:
-                names.append(row[0])
-                copies[row[9]] = 1 + len(copies) % 3
-        reference = ROOT / "data/Zika_18S_formatted.fasta"
-        raw = [(seq, copy) for copy in range(3) for seq, count in copies.items() if copy < count]
-        texts = {"plain": "".join(">r%d.%d\n%s\n" % (i, copy, seq) for i, (seq, copy) in enumerate(raw)),
-                 "at": "".join(">@r%d.%d extra\n%s\n" % (i, copy, seq) for i, (seq, copy) in enumerate(raw)),
-                 "collapsed": "".join(">%s\n%s\n" % item for item in zip(names, copies))}
-        outputs = {}
-        for label, text in texts.items():
-            reads = self.base / (label + ".fasta")
-            reads.write_text(text)
-            python = run(reads, reference, self.base / ("py_" + label) / "out", Options(threads=2))
-            legacy = self.cli(ROOT / "bin/hyb2", "-i", reads, "-d", reference, "-o", self.base / ("legacy_" + label))
-            self.assertEqual(legacy.returncode, 0, legacy.stderr)
-            outputs[label] = python.hyb.read_bytes()
-            self.assertEqual((self.base / ("legacy_" + label + ".hyb")).read_bytes(), outputs[label])
-        self.assertEqual(outputs["at"], outputs["plain"])
-        counted = 0
-        for row in outputs["plain"].decode().splitlines():
-            name, seq = row.split("\t")[:2]
-            self.assertRegex(name, r"^[0-9]+_[0-9]+$")
-            if seq in copies:
-                self.assertEqual(int(name.split("_")[1]), copies[seq], row)
-                counted += 1
-        self.assertGreater(counted, 100)
-        kept = {row.split("\t")[0] for row in outputs["collapsed"].decode().splitlines()}
-        self.assertGreater(len(kept), 100)
-        self.assertLessEqual(kept, set(names))
-
-    @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build")
-                         and shutil.which("cutadapt"), "needs Bowtie2 and cutadapt")
-    def test_reads_are_adapter_trimmed_before_collapsing(self):
-        # Reads ending in the 3' adapter give the same .hyb as the same reads
-        # trimmed by hand and mapped without trimming; reads under 18 nt
-        # without the adapter are dropped.  Both CLIs agree.
-        adapter = inputs.MAPPING_DEFAULTS["adapter"]
-        rows = [line.split("\t") for line in inputs.iter_lines(ROOT / "data/testData.sam") if not line.startswith("@")]
-        reads = list(dict.fromkeys(row[9] for row in rows if row[1] == "0"))[:1500]
-        raw = "".join(">r%d\n%s%s\n" % (i, seq, adapter) for i, seq in enumerate(reads))
-        raw += ">short\nACGTACGTACGT%s\n" % adapter
-        trimmed = "".join(">r%d\n%s\n" % (i, seq) for i, seq in enumerate(reads) if len(seq) >= 18)
-        reference = ROOT / "data/Zika_18S_formatted.fasta"
-        (self.base / "raw.fasta").write_text(raw)
-        (self.base / "trimmed.fasta").write_text(trimmed)
-        expected = run(self.base / "trimmed.fasta", reference, self.base / "by_hand/out", Options(threads=2, adapter=None))
-        result = run(self.base / "raw.fasta", reference, self.base / "py/out", Options(threads=2))
-        self.assertGreater(expected.counts["hybrids"], 0)
-        self.assertEqual(result.hyb.read_bytes(), expected.hyb.read_bytes())
-        self.assertEqual(result.counts["reads"], len(reads))  # the short read is gone
-        self.assertIn("Reads written (passing filters):", (self.base / "py/out.cutadapt.log").read_text())
-        legacy = self.cli(ROOT / "bin/hyb2", "-i", self.base / "raw.fasta", "-d", reference, "-o", self.base / "legacy")
-        self.assertEqual(legacy.returncode, 0, legacy.stderr)
-        self.assertEqual((self.base / "legacy.hyb").read_bytes(), expected.hyb.read_bytes())
-        self.assertTrue((self.base / "legacy.cutadapt.log").is_file())
-
-    def test_sam_read_names_without_a_count_or_starting_with_at_are_an_error(self):
-        read = "ACGT" * 10
-        hint = ("Give Hyb2 the reads instead (FASTA or FASTQ): it collapses identical reads and names them "
-                "<rank>_<count> before mapping.")
-        cases = {"read": 'read name "read" does not end in _<count> (as in 1_523), from which Hyb2 takes the number '
-                         "of identical reads. " + hint,
-                 "@read_2": 'read name "@read_2" starts with @, so its SAM lines read as header lines. ' + hint}
-        env = dict(self.env, PYTHONPATH=str(ROOT / "pipeline"))
-        for number, (name, message) in enumerate(cases.items()):
-            with self.subTest(name=name):
-                path = self.base / ("names%d.sam" % number)
-                path.write_text("@HD\tVN:1.0\n@SQ\tSN:toy\tLN:160\n@PG\tID:bowtie2\n@CO\tany text\n"
-                                "%s\t0\ttoy\t1\t60\t20M20S\t*\t0\t0\t%s\t*\tAS:i:40\tNM:i:0\n" % (name, read))
-                legacy = self.cli(ROOT / "bin/hyb2", "-i", path, "-o", self.base / ("legacy%d" % number))
-                self.assertNotEqual(legacy.returncode, 0)
-                self.assertIn("sam2hyb: " + message + "\n", legacy.stderr)
-                self.assertFalse((self.base / ("legacy%d.hyb" % number)).exists())
-                python = subprocess.run([sys.executable, "-m", "hyb2pipe", "-i", str(path), "-d",
-                                         str(ROOT / "data/Zika_18S_formatted.fasta"), "-o",
-                                         str(self.base / ("py%d/out" % number))],
-                                        cwd=self.base, env=env, capture_output=True, text=True, timeout=300)
-                self.assertNotEqual(python.returncode, 0)
-                self.assertIn(message, python.stderr)
-                self.assertFalse((self.base / ("py%d/out.hyb" % number)).exists())
-
-    def test_reference_formatting_uses_the_hyb2pipe_rules(self):
-        for name, text in (("wrapped", ">alpha|protein_coding\r\nGGGG\r\nAAAA\r\n>skip||kind\r\nCCCC\r\n>b|t\r\nUU\r\n"),
-                           ("ensembl", ">ENSG1_ENST1|Zika_virus|protein_coding\nAC\n")):
-            with self.subTest(name=name):
-                source = self.base / (name + ".fa")
-                source.write_bytes(text.encode())
-                done = self.cli(ROOT / "bin/fasta_hyb2_formatting", "-i", source, "-P")
-                self.assertEqual(done.returncode, 0, done.stderr)
-                expected = "\n".join(inputs.format_reference(inputs.iter_lines(source)))
-                self.assertEqual(Path(done.stdout.strip()).read_text(), expected)
-        for name, text in (("comment", ">a|x\nAC\n#note\nGU\n"), ("duplicate", ">a|x\nAC\n>a|x\nGU\n")):
-            with self.subTest(name=name):
-                source = self.base / (name + ".fa")
-                source.write_text(text)
-                done = self.cli(ROOT / "bin/fasta_hyb2_formatting", "-i", source)
-                self.assertNotEqual(done.returncode, 0)
-                self.assertIn("comment" if name == "comment" else "duplicate FASTA ID", done.stderr)
-                with self.assertRaises(ValueError):
-                    run(ROOT / "data/testData.sam", source, self.base / name)
-        duplicate = self.base / "duplicate.fa"
-        duplicate.write_text(">a|x\nAC\n>a|x\nGU\n")
-        with self.assertRaises(ValueError):
-            inputs.needs_formatting(duplicate)
-        # a '|' outside the headers does not rename the reference, in either pipeline
-        plain = self.base / "plain.fa"
-        plain.write_text(">a\nAC\n;c|d\n>b\nGU\n")
-        self.assertFalse(inputs.needs_formatting(plain))
-        hyb = self.base / "sample.hyb"
-        hyb.write_text("")
-        done = self.cli(ROOT / "bin/hyb2", "-i", hyb, "-d", plain)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertFalse((self.base / "plain.hyb.fasta").exists())
 
 
 if __name__ == "__main__":

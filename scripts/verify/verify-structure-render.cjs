@@ -339,14 +339,18 @@ context.window.Hyb2Structure.cancel(guidedState);
 }
 
 // Folding program: ViennaRNA runs in the browser; mfold 3.6 is offered for
-// HYB2 Desktop and the command line, and refuses to start here.
+// HYB2 Desktop, and refuses to start here. No command line runs COMRADES since
+// the legacy bin/ scripts were removed.
 assert.match(guidedSetupHtml, /Folding program/);
-assert.match(guidedSetupHtml, /mfold 3\.6 · HYB2 Desktop or command line/);
+assert.match(guidedSetupHtml, /mfold 3\.6 · HYB2 Desktop</);
 assert.doesNotMatch(guidedSetupHtml, /mfold 3\.6 cannot run in a browser/);
 guidedState.structure.foldProgram = "mfold";
 const mfoldSetupHtml = context.window.Hyb2Pages.renderStructure(guidedState);
 assert.match(mfoldSetupHtml, /mfold 3\.6 cannot run in a browser/);
-assert.match(mfoldSetupHtml, /hyb2 … -r 2/);
+const mfoldNote = /<p class="card-note structure-mfold-note">[\s\S]*?<\/p>/.exec(mfoldSetupHtml);
+assert.ok(mfoldNote, "the mfold note is shown");
+assert.match(mfoldNote[0], /Run COMRADES\(mfold\) in HYB2 Desktop/);
+assert.doesNotMatch(mfoldNote[0], /command line|hyb2 …/);
 assert.match(mfoldSetupHtml, /<option value="mfold" selected/);
 const mfoldWorkersBefore = workerInstances.length;
 const mfoldToasts = [];

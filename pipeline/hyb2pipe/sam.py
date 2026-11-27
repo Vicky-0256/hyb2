@@ -21,7 +21,7 @@ _USE_READS = ("Give Hyb2 the reads instead (FASTA or FASTQ): it collapses identi
 def check_header(line: str) -> None:
     """Refuse a line that starts with ``@`` but is no header line: it is an
     alignment of a read named ``@...``, which every later step would skip as
-    a header.  Same message as ``bin/sam2hyb``."""
+    a header.  The original ``sam2hyb`` gave the same message."""
     if not _HEADER.match(line):
         raise ValueError('read name "%s" starts with @, so its SAM lines read as header lines. %s'
                          % (line.split("\t", 1)[0], _USE_READS))
@@ -29,20 +29,20 @@ def check_header(line: str) -> None:
 
 def check_read_name(name: str) -> None:
     """Refuse a read name without the ``_<count>`` suffix from which gene
-    ranking and the statistics take the number of identical reads.  Same
-    message as ``bin/sam2hyb``."""
+    ranking and the statistics take the number of identical reads.  The
+    original ``sam2hyb`` gave the same message."""
     if not _COUNTED.fullmatch(name):
         raise ValueError('read name "%s" does not end in _<count> (as in 1_523), from which Hyb2 takes the number '
                          "of identical reads. %s" % (name, _USE_READS))
 
 
 def sam_filt(lines: Iterable[str], stderr: Optional[TextIO] = None) -> Iterator[str]:
-    """Port of ``bin/sam_filt``: keep headers and records with a flag in
+    """Port of the original ``sam_filt``: keep headers and records with a flag in
     ``KEPT_FLAGS``, drop multi-splice reads, split single-splice reads into
     two alignments, and normalise read IDs.  A paired record (flag bit 0x1)
     raises ValueError.  Unmapped (0x4), supplementary (0x800) and other
     records are skipped; their counts go to ``stderr`` (default
-    ``sys.stderr``) with the same messages as ``bin/sam_filt``."""
+    ``sys.stderr``) with the same messages as the original ``sam_filt``."""
     id_parts: List[str] = []
     id_n = 0
     unmapped = supplementary = other = 0

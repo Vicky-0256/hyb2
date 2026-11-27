@@ -13,7 +13,6 @@ on:
       - "bin/**"
       - "data/**"
       - "requirements/**"
-      - "scripts/verify/verify-folding-cli.py"
       - "scripts/build/bundle_sources.py"
       - ".github/workflows/publish-desktop.yml"
       - ".github/workflows/desktop-release.yml"
@@ -84,12 +83,6 @@ jobs:
       - uses: actions/checkout@v6
       - name: Verify build uses the invoking commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Check public folding commands
-        if: runner.os == 'Linux'
-        run: |
-          "$CONDA/bin/conda" create --yes --prefix "$RUNNER_TEMP/folding-cli" \
-            --override-channels --strict-channel-priority -c conda-forge -c bioconda viennarna=2.6.4 mfold=3.6 bowtie2=2.5.5
-          PATH="$RUNNER_TEMP/folding-cli/bin:$PATH" python3 -B scripts/verify/verify-folding-cli.py
       - name: The tag is the app version
         if: inputs.release_installers
         run: |

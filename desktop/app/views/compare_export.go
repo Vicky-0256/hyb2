@@ -4,7 +4,7 @@ package views
 //
 //   - map PNG and significant cells TSV (web deseq-card.js: deseq-download-png,
 //     deseq-export-significant);
-//   - the files for R or the HYB2 command-line tool (web analysis-ui.js:
+//   - the files for R (web analysis-ui.js:
 //     comparison-export-deseq-counts / -hyb2-names / -deseq-metadata) and the
 //     parameters JSON (comparison-export-params). The runtime writes the
 //     first three next to the results, byte-identical to the web's for the
@@ -685,13 +685,13 @@ func jsPrecision(v float64, digits int) string {
 
 // ---- view
 
-// exportsCard: the files for R or HYB2, the parameters and the local maps.
+// exportsCard: the files for R, the parameters and the local maps.
 // A stale test (cmpStaleNotice) has no local maps ZIP, as the web's.
 func (p *comparePage) exportsCard(c *ui.Context, e *comparisonEntry, stale bool) {
 	t := c.Theme()
 	Card(c, "", func() {
 		ui.Text(c, "Exports").FontSize(FontTitle).Bold()
-		ui.Text(c, "Files for R or the HYB2 command-line tool: the raw DESeq2 count table (every 10-nt cell, one column per sample), HYB2's headerless names.table and the extended sample metadata (header and file names, for audit or your own R workflow), as the web app writes them.").
+		ui.Text(c, "Files for R: the raw DESeq2 count table (every 10-nt cell, one column per sample), HYB2's headerless names.table and the extended sample metadata (header and file names, for audit or your own R workflow), as the web app writes them.").
 			FontSize(FontSmall).TextColor(t.TextMuted)
 		ui.Row(c).Gap(Space2).Wrap().Children(func() {
 			if ui.Button(c, "Count table…").Tooltip("HYB2-compatible raw count table (feature_id x_y, one column per sample)").Clicked() {

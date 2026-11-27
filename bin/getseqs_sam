@@ -1,4 +1,0 @@
-#!/bin/bash
-set -eo pipefail
-
-awk 'NR==FNR{a[$1]++;next}{if($1 in a){print $1"\t"$10}}' "$1" "$2" | uniq

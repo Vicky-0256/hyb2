@@ -310,9 +310,6 @@ class RuntimeDetector:
     def _repo_probes(self) -> List[ProbeResult]:
         results: List[ProbeResult] = []
         candidates = (
-            ("hyb2.cli", "bin/hyb2", "script"),
-            ("hyb2.fold", "bin/hyb2_fold", "script"),
-            ("hyb2.sam_to_hyb", "bin/sam2hyb", "script"),
             ("cplfold.native", "bin/cplfold", "script"),
             ("varna.jar", "third_party/varna/build/jar/VARNA.jar", "jar"),
             ("varna.command.jar", "third_party/varna/build/jar/VARNAcmd.jar", "jar"),
@@ -455,8 +452,6 @@ class RuntimeDetector:
         return [
             CapabilityResult("web.analysis", "available", "browser", "HYB parsing, filtering, maps, regions, comparison and reports are provided by web/.", requires=[]),
             CapabilityResult("web.structure", p.get("web.vienna_assets").status if p.get("web.vienna_assets") else "unavailable", "browser", "Browser structure engine requires generated assets and a browser execution check.", requires=["web.vienna_assets"]),
-            CapabilityResult("pipeline.hyb2", status(["hyb2.cli", "language.perl"]), "hybrid", "HYB2 command-line analysis from the repository.", executable=executable(["hyb2.cli"]), requires=["hyb2.cli", "language.perl"], remediation="Install Perl or select a configured WSL/Conda runtime."),
-            CapabilityResult("pipeline.sam_to_hyb", status(["hyb2.sam_to_hyb", "language.perl"]), "hybrid", "SAM to HYB conversion and filtering.", executable=executable(["hyb2.sam_to_hyb"]), requires=["hyb2.sam_to_hyb", "language.perl"], remediation="Install Perl or select a configured WSL/Conda runtime."),
             CapabilityResult("pipeline.python", "available" if (self.repo_root / "pipeline/hyb2pipe/__init__.py").is_file() else "unavailable", "native", "Pure-Python SAM/FASTQ to HYB pipeline (no Perl, awk or shell required).", executable=str(self.repo_root / "pipeline/hyb2pipe"), requires=[], remediation="Rebuild the desktop runtime with the pipeline package staged.", details={"inputs": ["sam", "fastq", "fastq.gz", "fasta"], "mapping_requires": "pipeline.mapping"}),
             CapabilityResult("pipeline.energy", "available" if p.get("language.viennarna") and p["language.viennarna"].status == "available" else "unavailable", "native", "Hybrid folding energy (hyb2pipe -e 1) through the ViennaRNA Python package.", version=p.get("language.viennarna").version if p.get("language.viennarna") else None, requires=["language.viennarna"], remediation="Bundle the ViennaRNA 2.7.2 wheel in the desktop runtime."),
             CapabilityResult("pipeline.mapping", status(["tool.bowtie2", "tool.bowtie2-build"]), "hybrid", "FASTQ mapping with Bowtie2.", executable=executable(["tool.bowtie2"]), requires=["tool.bowtie2", "tool.bowtie2-build"], remediation="Install Bowtie2 or enable WSL with a HYB2 environment."),

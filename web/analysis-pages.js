@@ -681,7 +681,7 @@
       // neutral information: the first sentence, the rest on request (on a
       // phone the whole note folds to its title line)
       '<section class="comparison-note compare-note notice"><details class="compare-note-more" data-open-key="compare-note"' + openAttr("compare-note") + '><summary><strong>What this page can and cannot tell you</strong><span class="compare-note-lead">Only the <b>differential test</b> (panel A) says whether a contact differs between ' + escape(comparison.conditionALabel) + ' and ' + escape(comparison.conditionBLabel) + '.</span><span class="compare-note-toggle" aria-hidden="true"></span></summary>' +
-        '<div class="compare-note-body"><span>It uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell. Use at least two biological replicates per condition; with one condition unreplicated it still runs, with a warning, and the result is exploratory. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R or the HYB2 command-line tool, use the files under Export at the top of the page.</span></details></div></details></section>',
+        '<div class="compare-note-body"><span>It uses the replicates to estimate noise and reports an adjusted p-value (padj) for every 10-nt cell. Use at least two biological replicates per condition; with one condition unreplicated it still runs, with a warning, and the result is exploratory. The effect map and similarity heatmap only describe the counts; they are not tests. Positions are nucleotides on each dataset\'s own RNA, so different strains are compared by position, not by alignment.</span><details class="comparison-note-details" data-open-key="compare-tech"' + openAttr("compare-tech") + '><summary>How the test was checked</summary><span>The test is a JavaScript port of HYB2 Desktop\'s port of DESeq2 1.46, not R itself. On the ZIKV virion comparison it finds the same significant cells and merged-interaction counts as R, with log2 fold changes and padj within 1e-6 (relative) of HYB2 Desktop. For R, use the files under Export at the top of the page.</span></details></div></details></section>',
       renderCompareNav(),
       '<section class="data-card comparison-datasets" id="compare-sec-datasets">',
       canAddDatasets
@@ -723,7 +723,7 @@
       ], "comparison-display"),
       '</div>',
       // the exports are in the page heading's Export menu (K2)
-      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><span class="card-note">Map images, tables and the files for R or the HYB2 command-line tool are under Export at the top of the page.</span></div>',
+      '<div class="control-actions"><button class="button" type="button" data-feature-action="generate-comparison">Update comparison</button><span class="card-note">Map images, tables and the files for R are under Export at the top of the page.</span></div>',
       // a rerun keeps the previous maps on screen: the progress shows here
       comparison.result ? renderComparisonProgress(comparison.progress) : "",
       '</section>',
@@ -753,8 +753,8 @@
       item + 'data-feature-action="comparison-download-png">Effect map · PNG</button>' +
       item + 'data-feature-action="comparison-export-tsv">Comparison bins · TSV</button>' +
       item + 'data-feature-action="comparison-export-params">Parameters · JSON</button>' +
-      item + 'data-feature-action="comparison-export-deseq-counts">HYB2 count table · TSV<small>For R or the HYB2 command-line tool</small></button>' +
-      item + 'data-feature-action="comparison-export-hyb2-names">HYB2 names.table<small>Use the headerless HYB2 names.table with the HYB2 command-line tool</small></button>' +
+      item + 'data-feature-action="comparison-export-deseq-counts">HYB2 count table · TSV<small>For R</small></button>' +
+      item + 'data-feature-action="comparison-export-hyb2-names">HYB2 names.table<small>The headerless HYB2 names.table (sample, condition), as HYB2\'s DESeq_run.R reads it</small></button>' +
       item + 'data-feature-action="comparison-export-deseq-metadata">Extended metadata · TSV<small>Extended metadata has a header and provenance columns, for audit or your own R workflow</small></button>' +
       '</div></details>';
   }
@@ -1556,7 +1556,7 @@
     const scope = cplfold
       ? '<p>The browser runs pure-Python CPLfold without Numba JIT: ' + escape(cplfoldLimitSentence(cplfoldCapacity(structure))) + '. The capacity test estimates a session-specific recommendation; a 500 nt hard safety ceiling remains. In HYB-guided mode, the selected read-support kernel sets the folding bonus. For longer or Numba-accelerated runs, Download local inputs exports the prepared FASTA and, for guided runs, the sparse <code>cplfold-bonus-matrix.tsv</code>. ' + localRun + ' Sequence-only mode requires only the FASTA. CPLfold\'s own code is GPL-3.0-or-later; its LinearFold-derived parser keeps LinearFold\'s terms (see the repository\'s third-party notices).</p><p class="cplfold-runtime-note">CPLfold uses its bundled 37 °C Vienna-mode and pseudoknot energy tables; the ViennaRNA temperature control does not apply. First use loads about 15 MB of same-origin Pyodide and NumPy assets. Results and candidates remain in this tab.</p>' + renderCplfoldLocalCta(guided)
       : guidedConstraintMode
-      ? "<p>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. UNAFold remains an optional external CLI compatibility path, and pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</p>"
+      ? "<p>This reproduces the ViennaRNA path after a HYB file: RNAcofold evidence, ranked F-stem constraints, iterative compatibility fitting, seeded randomised folds, COMRADES scoring, and evidence colouring. Pseudoknotted hard constraints are outside ViennaRNA dot-bracket output.</p>"
       : "<p>Choose COMRADES(ViennaRNA) to derive constraints automatically from loaded HYB records and a mapped reference FASTA. Plain and manual modes remain available for independent sequence folding.</p>";
     return [
       '<details class="structure-about" data-open-key="structure-about"' + openAttr("structure-about") + ">",
@@ -1814,9 +1814,9 @@
       '<section class="guided-fold-controls" aria-label="HYB-guided folding options">',
       '<div class="control-grid">' + renderSelectControl("Folding program", "foldProgram", structure.foldProgram === "mfold" ? "mfold" : "viennarna", [
         { value: "viennarna", label: "ViennaRNA · in this browser" },
-        { value: "mfold", label: "mfold 3.6 · HYB2 Desktop or command line" }
+        { value: "mfold", label: "mfold 3.6 · HYB2 Desktop" }
       ], "structure-control") + "</div>",
-      structure.foldProgram === "mfold" ? '<p class="card-note structure-mfold-note">mfold 3.6 cannot run in a browser. It applies the ranked stems as forced base pairs (the hybrid-ss-min of OligoArrayAux ignores them) at 37 °C with minimum loop 3. Run COMRADES(mfold) in HYB2 Desktop (Structure › COMRADES settings › Folding program › mfold 3.6), or on the command line with <code>hyb2 … -r 2</code>. Install mfold with <code>conda create -n mfold -c conda-forge -c bioconda mfold</code>. Choose ViennaRNA to fold here.</p>' : "",
+      structure.foldProgram === "mfold" ? '<p class="card-note structure-mfold-note">mfold 3.6 cannot run in a browser. It applies the ranked stems as forced base pairs (the hybrid-ss-min of OligoArrayAux ignores them) at 37 °C with minimum loop 3. Run COMRADES(mfold) in HYB2 Desktop (Structure › COMRADES settings › Folding program › mfold 3.6). Install mfold with <code>conda create -n mfold -c conda-forge -c bioconda mfold</code>. Choose ViennaRNA to fold here.</p>' : "",
       '<div class="control-grid"><label class="control-field"><span>Ranked stem constraints</span><input type="number" ' + rangeAttributes(ranges.constraintLimit) + ' step="1" value="' + attribute(constraintLimit) + '" data-feature="structure-control" data-key="constraintLimit"><small>Default: ' + format(defaults.constraintLimit) + '</small></label>',
       renderSelectControl("Randomised folds", "randomFoldCount", String(randomFoldCount),
         Object.entries({ [defaults.randomFoldCount]: "default", 0: "ranked fold only", 10: "quick ensemble", 100: "extended ensemble", 1000: "original cluster scale" })

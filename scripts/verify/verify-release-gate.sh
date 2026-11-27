@@ -19,19 +19,16 @@ if ! command -v emcc >/dev/null 2>&1; then
   exit 2
 fi
 
-echo '[1/5] Check the public folding commands'
-python3 -B scripts/verify/verify-folding-cli.py
-
-echo '[2/5] Build ViennaRNA WebAssembly'
+echo '[1/4] Build ViennaRNA WebAssembly'
 bash scripts/build/build-vienna-wasm.sh
 
-echo '[3/5] Build browser CPLfold/Pyodide runtime with the ViennaRNA Python module'
+echo '[2/4] Build browser CPLfold/Pyodide runtime with the ViennaRNA Python module'
 bash scripts/build/build-vienna-pyodide.sh
 bash scripts/build/build-cplfold-web.sh
 
-echo '[4/5] Verify browser engines, application contracts and release assets'
+echo '[3/4] Verify browser engines, application contracts and release assets'
 bash scripts/verify/verify-browser-release.sh
 
-echo '[5/5] Verify native desktop runtime'
+echo '[4/4] Verify native desktop runtime'
 python3 desktop/scripts/verify-native-release.py
 echo 'HYB2 release gate: PASS'

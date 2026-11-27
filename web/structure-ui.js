@@ -644,7 +644,7 @@
     const guided = state.structure.cplfoldEvidence === "hyb-blocks";
     let command;
     try {
-      command = localCplfoldCommand(state.structure, guided);
+      command = localCplfoldCommand(state.structure, guided, prepared.sequence.length);
     } catch (error) {
       api.showToast(error.message);
       return true;
@@ -675,8 +675,8 @@
     return true;
   }
 
-  function localCplfoldCommand(structure, guided) {
-    return globalThis.Hyb2CplfoldSettings.localCommand(structure, guided);
+  function localCplfoldCommand(structure, guided, length) {
+    return globalThis.Hyb2CplfoldSettings.localCommand(structure, guided, length);
   }
 
   function selectCplfoldCandidate(result, index) {

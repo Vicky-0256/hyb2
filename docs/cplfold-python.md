@@ -185,6 +185,11 @@ deliberate override only after sizing the machine:
 HYB2_CPLFOLD_MAX_NT=1500 bin/cplfold --sequence-file cplfold-input.fasta
 ```
 
+The web and desktop receive this limit as `foldText.localMaxNt`. For a longer
+sequence, the command they show with its local inputs sets
+`HYB2_CPLFOLD_MAX_NT` to that sequence's length, both strands together, so it
+runs as shown while a longer FASTA is still refused.
+
 Run the full vendored regression suite and a real-Numba smoke test with:
 
 ```bash

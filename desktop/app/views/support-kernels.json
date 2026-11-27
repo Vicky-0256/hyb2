@@ -251,6 +251,7 @@
     "space": " \t\n\r\u000b\f                 　﻿",
     "minWindowNt": 10,
     "minPastedNt": 5,
-    "minSequenceNt": 1
+    "minSequenceNt": 1,
+    "localMaxNt": 1000
   }
 }

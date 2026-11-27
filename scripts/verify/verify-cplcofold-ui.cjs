@@ -420,6 +420,14 @@ change(paste, "cplfoldEnergyDelta", "0");
 assert.match(pages.renderStructure(paste), /bin\/cplcofold .*--delta 0/);
 ui.handleAction("download-local-cplfold-input", paste, api);
 assert.match(api.toasts.at(-1), /bin\/cplcofold .*--delta 0/); // no kernel needed in sequence-only mode
+// bin/cplfold refuses more than 1,000 nt unless HYB2_CPLFOLD_MAX_NT raises its guard: the
+// About and downloaded commands raise it to the FASTA's length, both strands.
+for (const [a, b, prefix] of [[600, 400, ""], [600, 401, "HYB2_CPLFOLD_MAX_NT=1001 "]]) {
+  const long = state({pastedSequence: "G".repeat(a), cplfoldSequenceTwo: "C".repeat(b)});
+  assert.ok(pages.renderStructure(long).includes("Run <code>" + prefix + "bin/cplcofold --sequence-file "), `${a} + ${b} nt About`);
+  ui.handleAction("download-local-cplfold-input", long, api);
+  assert.ok(api.toasts.at(-1).startsWith("CPLfold FASTA downloaded. Run: " + prefix + "bin/cplcofold --sequence-file "), api.toasts.at(-1));
+}
 
 // The legacy single-strand CLI accepts signed, finite alpha/beta; cofold does not.
 const signed = {...ref.structure, cplfoldMode: "single", cplfoldAlpha: "-0.5", cplfoldBeta: "-2e-8"};

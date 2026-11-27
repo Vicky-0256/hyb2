@@ -510,12 +510,12 @@ func (p *structurePage) previewPanel(c *ui.Context, pl foldPlan) {
 						tip = "bin/cplfold folds one sequence: fold one window (or the whole RNA) to download its local inputs"
 					}
 					if ui.Button(c, "Download local inputs").Disabled(!one).Tooltip(tip).Clicked() {
-						p.saveLocalInputs(stFASTA(parts), "", p.localRun(pl), true)
+						p.saveLocalInputs(stFASTA(parts), "", p.localRun(pl, parts[0]), true)
 					}
 				}
 			})
 			if stCPL(p.engine) && len(parts) == 1 {
-				run := p.localRun(pl)
+				run := p.localRun(pl, parts[0])
 				ui.Text(c, "Local command").FontSize(FontSmall).Bold().TextColor(t.TextMuted)
 				ui.Text(c, stLocalCommand(run, nameOr(p.setup.localFASTA, stLocalFASTA), stLocalMatrix)).Font("monospace").FontSize(11).Selectable()
 				if run.guided {
@@ -592,16 +592,19 @@ type stLocalRun struct {
 	beam, phase1               int
 	delta, beta, alpha         float64
 	model                      string
+	// length is the FASTA's nucleotides, both strands: above bin/cplfold's
+	// guard the command raises it to that length.
+	length int
 }
 
-// localRun is the form's fold.
-func (p *structurePage) localRun(pl foldPlan) stLocalRun {
+// localRun is the form's fold of part, its one prepared sequence.
+func (p *structurePage) localRun(pl foldPlan, part stPrepared) stLocalRun {
 	return stLocalRun{cofold: p.engine == engineCPLcofold, guided: !p.seqOnly, pseudoknot: pl.pk, beam: int(p.beam),
-		phase1: int(p.phase1), delta: p.delta, beta: p.beta, alpha: p.alpha, model: p.model}
+		phase1: int(p.phase1), delta: p.delta, beta: p.beta, alpha: p.alpha, model: p.model, length: len(part.seq)}
 }
 
-// stResultRun is a CPLfold result's fold, from its parameters.
-func stResultRun(a *structureResult) stLocalRun {
+// stResultRun is a CPLfold result's fold of part, from its parameters.
+func stResultRun(a *structureResult, part stPrepared) stLocalRun {
 	num := func(key string, fallback float64) float64 {
 		if v, ok := a.Meta.Parameters[key].(float64); ok {
 			return v
@@ -613,7 +616,8 @@ func stResultRun(a *structureResult) stLocalRun {
 	cofold := stEngine(a) == "CPLcofold"
 	return stLocalRun{cofold: cofold, guided: stGuided(a), pseudoknot: pk,
 		beam: int(num("beam", stDefaultBeam)), phase1: int(num("max_phase1", stDefaultPhase1)), delta: num("energy_delta", stDefaultDelta),
-		beta: num("beta", stDefaultBeta), alpha: num("alpha", stDefaultAlpha), model: nameOr(model, cplSettings(cofold).DefaultModel)}
+		beta: num("beta", stDefaultBeta), alpha: num("alpha", stDefaultAlpha), model: nameOr(model, cplSettings(cofold).DefaultModel),
+		length: len(part.seq)}
 }
 
 // stShellWord quotes a file name for the shell when it needs it.
@@ -647,6 +651,9 @@ func stLocalCommand(r stLocalRun, fasta, matrix string) string {
 	}
 	if !r.pseudoknot {
 		cmd = append(cmd, "--no-pseudoknot")
+	}
+	if r.length > stKernels.FoldText.LocalMaxNT {
+		cmd = append([]string{"HYB2_CPLFOLD_MAX_NT=" + strconv.Itoa(r.length)}, cmd...)
 	}
 	return strings.Join(cmd, " ")
 }
@@ -792,7 +799,7 @@ func (p *structurePage) localInputsButton(c *ui.Context, a *structureResult) {
 	if ui.Button(c, "Local inputs…").Disabled(index < 0).Tooltip(tip).Clicked() {
 		r := a.Records[index]
 		part := stPrepared{seq: r.Sequence, cutpoint: r.Cutpoint}
-		p.saveLocalInputs(stFASTA([]stPrepared{part}), r.BonusMatrixPath, stResultRun(a), false)
+		p.saveLocalInputs(stFASTA([]stPrepared{part}), r.BonusMatrixPath, stResultRun(a, part), false)
 	}
 }
 

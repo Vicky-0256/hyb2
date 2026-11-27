@@ -32,6 +32,8 @@ type supportKernelCatalog struct {
 		MinWindowNT                      int `json:"minWindowNt"`
 		MinPastedNT                      int `json:"minPastedNt"`
 		MinSequenceNT                    int `json:"minSequenceNt"`
+		// LocalMaxNT is bin/cplfold's length guard (HYB2_CPLFOLD_MAX_NT raises it).
+		LocalMaxNT int `json:"localMaxNt"`
 	} `json:"foldText"`
 	labels []string
 }

@@ -76,7 +76,9 @@ globalThis.Hyb2CplfoldSettings = (function () {
     return flag + (token.startsWith("-") && token.includes("e") ? "=" : " ") + token;
   }
 
-  function localCommand(form = {}, guided) {
+  // length: the exported FASTA's nucleotides, both strands; above bin/cplfold's
+  // guard the command raises it to that length.
+  function localCommand(form = {}, guided, length) {
     const cofold = form.cplfoldMode === "cofold", { defaults } = engine(cofold);
     const { cplfoldBeam: beam = defaults.beamSize, cplfoldEnergyDelta: delta = defaults.energyDelta,
       cplfoldMaxPhase1: phase1 = defaults.maxPhase1, cplfoldAlpha: alpha = defaults.alpha, cplfoldBeta: beta = defaults.beta } = form;
@@ -91,6 +93,7 @@ globalThis.Hyb2CplfoldSettings = (function () {
       "--max-phase2", "1", "--model", readEnergyModel(cofold, form.cplfoldEnergyModel), localFloat("--beta", beta, cofold));
     if (guided) command.push(localFloat("--alpha", alpha, cofold));
     if (!pk) command.push("--no-pseudoknot");
+    if (length > globalThis.Hyb2FoldText.localMaxNt) command.unshift("HYB2_CPLFOLD_MAX_NT=" + length);
     return command.join(" ");
   }
 

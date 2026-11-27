@@ -518,6 +518,13 @@ func TestStructurePreviewSequence(t *testing.T) {
 	if want := ">HYB2_Web_RNA_A\n" + rna[:45] + "\n>HYB2_Web_RNA_B\n" + rna[1085:1134] + "\n"; stFASTA(parts) != want {
 		t.Fatalf("cofold FASTA %q", stFASTA(parts))
 	}
+	// both strands, 600 + 401 nt, raise bin/cplfold's 1,000 nt guard
+	p.region1, p.region2 = "1-600", "1001-1401"
+	csSettle(a, tt)
+	if !tt.HasText("HYB2_CPLFOLD_MAX_NT=1001 bin/cplcofold --sequence-file cplfold-input.fasta --mode pseudoknot ") {
+		t.Fatalf("1001 nt cofold: %q", tt.Texts())
+	}
+	p.region1, p.region2 = "1-45", "1086-1134"
 	// COMRADES of two regions: joined by the 100-nt A/U spacer
 	p.engine, p.mode = engineComrades, "paired"
 	csSettle(a, tt)
@@ -552,6 +559,15 @@ func TestStructureLocalCommand(t *testing.T) {
 	run = stLocalRun{cofold: true, beam: 20, phase1: 3, delta: 5, model: "DP03"}
 	if got := stLocalCommand(run, stLocalFASTA, stLocalMatrix); got != "bin/cplcofold --sequence-file cplfold-input.fasta --mode standard --beam 20 --delta 5 --max-phase1 3 --max-phase2 1 --model DP03 --beta 0 --no-pseudoknot" {
 		t.Fatalf("cofold %q", got)
+	}
+	// bin/cplfold refuses more than 1,000 nt unless HYB2_CPLFOLD_MAX_NT raises its guard
+	run.length = 1000
+	if got := stLocalCommand(run, stLocalFASTA, stLocalMatrix); !strings.HasPrefix(got, "bin/cplcofold ") {
+		t.Fatalf("1000 nt %q", got)
+	}
+	run.length = 1001
+	if got := stLocalCommand(run, stLocalFASTA, stLocalMatrix); got != "HYB2_CPLFOLD_MAX_NT=1001 bin/cplcofold --sequence-file cplfold-input.fasta --mode standard --beam 20 --delta 5 --max-phase1 3 --max-phase2 1 --model DP03 --beta 0 --no-pseudoknot" {
+		t.Fatalf("1001 nt %q", got)
 	}
 	if got := stSequenceLines("ACGUACGUACG", 4, 50); !slices.Equal(got, []string{" 1  ACGU&ACGUAC G"}) {
 		t.Fatalf("lines %q", got)
@@ -597,8 +613,9 @@ func TestStructureResultLocalInputs(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(dir, stLocalMatrix)); err != nil || string(got) != "# HYB2 CPLfold bonus matrix\n1\t20\t0.5\n" {
 		t.Fatalf("matrix %q %v", got, err)
 	}
-	// the result's settings: beam 100, one phase-1 candidate, pseudoknots allowed
-	want := "bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --beam 100 --delta 5 --max-phase1 1 --max-phase2 1 --model DP09 --beta 0 --alpha 0.5"
+	// the result's settings: beam 100, one phase-1 candidate, pseudoknots allowed;
+	// the 3,060 nt window raises bin/cplfold's 1,000 nt guard
+	want := "Run: HYB2_CPLFOLD_MAX_NT=3060 bin/cplfold --sequence-file cplfold-input.fasta --bonus-matrix-file cplfold-bonus-matrix.tsv --beam 100 --delta 5 --max-phase1 1 --max-phase2 1 --model DP09 --beta 0 --alpha 0.5"
 	if toast := lastToast(a); !strings.Contains(toast, "CPLfold local inputs saved in "+dir) || !strings.HasSuffix(toast, want) {
 		t.Fatalf("toast %q", toast)
 	}

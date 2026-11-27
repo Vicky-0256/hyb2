@@ -1266,7 +1266,7 @@
       renderSelectControl("Prediction engine", "engine", structure.engine || "viennarna", engineOptions, "structure-control"),
       !cplfold && !iris ? renderSelectControl("Folding mode", "constraintMode", structure.constraintMode || "none", constraintModeOptions, "structure-control") : "",
       cplfold ? renderCplfoldSetup(structure, sequenceInfo, "method") : "",
-      iris ? '<p class="card-note">IRIS redistributes HYB evidence, generates constrained structures, then selects a weighted ensemble. Uses one reference region; no files leave this browser. <a href="https://github.com/JY-Zhou/IRIS" target="_blank" rel="noopener noreferrer">IRIS source</a> · <a href="./vendor/iris/LICENSE" target="_blank" rel="noopener noreferrer">Licence</a></p>' : renderStructureAbout(structure, cplfold, guidedConstraintMode, manualConstraintMode)
+      iris ? '<p class="card-note">IRIS redistributes HYB evidence, generates constrained structures, then selects a weighted ensemble. Uses one reference region; no files leave this browser. <a href="https://github.com/JY-Zhou/IRIS" target="_blank" rel="noopener noreferrer">IRIS source</a> · <a href="./vendor/iris/LICENSE" target="_blank" rel="noopener noreferrer">Licence</a></p>' : renderStructureAbout(structure, cplfold, guidedConstraintMode, manualConstraintMode, length)
     ].join("");
 
     const optionsColumn = [
@@ -1529,8 +1529,9 @@
     ].join("");
   }
 
-  // "About this method ▸": the long explanations, one fold per method.
-  function renderStructureAbout(structure, cplfold, guidedConstraintMode, manualConstraintMode) {
+  // "About this method ▸": the long explanations, one fold per method;
+  // length is the prepared sequence's, for the local command.
+  function renderStructureAbout(structure, cplfold, guidedConstraintMode, manualConstraintMode, length) {
     const allowPseudoknot = cplfold && globalThis.Hyb2CplfoldSettings.formTopology(structure);
     const guided = structure.cplfoldEvidence === "hyb-blocks";
     const cofold = cplfold && structure.cplfoldMode === "cofold";
@@ -1538,7 +1539,7 @@
     let localRun = "";
     if (cplfold) {
       try {
-        localRun = 'Run <code>' + escape(cplfoldLocalCommand(structure, guided)) + '</code> locally.';
+        localRun = 'Run <code>' + escape(cplfoldLocalCommand(structure, guided, length)) + '</code> locally.';
       } catch (error) {
         localRun = escape(error.message);
       }
@@ -1757,8 +1758,8 @@
     }).join("") + '</div><p id="cplfold-topology-help" class="cplfold-topology-help">CPLfold is the browser engine that can search crossing pairs. ViennaRNA remains pseudoknot-free.</p></fieldset>';
   }
 
-  function cplfoldLocalCommand(structure, guided) {
-    return globalThis.Hyb2CplfoldSettings.localCommand(structure, guided);
+  function cplfoldLocalCommand(structure, guided, length) {
+    return globalThis.Hyb2CplfoldSettings.localCommand(structure, guided, length);
   }
 
   function formatCplfoldCommand(command) {

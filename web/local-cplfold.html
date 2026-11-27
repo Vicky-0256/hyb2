@@ -84,7 +84,7 @@ python -m pip install -r requirements/cplfold-core.txt</code></pre>
           <article class="local-run-card local-run-card-wide">
             <span class="drawer-kicker">Longer than 1,000&nbsp;nt</span>
             <h2>Raise the local guard deliberately</h2>
-            <p>The local wrapper keeps a conservative 1,000&nbsp;nt default guard. On a stronger machine, raise it after checking available memory.</p>
+            <p>The local wrapper keeps a conservative 1,000&nbsp;nt default guard. The command shown with Download local inputs raises it to the exported sequence's length. For other inputs, raise it on a stronger machine after checking available memory.</p>
             <pre class="cplfold-command" tabindex="0"><code>HYB2_CPLFOLD_MAX_NT=2000 bin/cplfold \
   --sequence-file cplfold-input.fasta \
   --bonus-matrix-file cplfold-bonus-matrix.tsv \

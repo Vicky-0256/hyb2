@@ -406,20 +406,24 @@ assert.equal(cofoldCapacity.parameters.cofold, true);
 
 // HYB binding energies: the batch message folds each arm pair as two strands;
 // on this ZIKV pair nested CPLcofold matches RNAcofold 2.6.4 (-37.00).
+// The third pair folds with the batch preset (beam 20, 3 candidates), as on the
+// desktop; the RNA Structure defaults (beam 200, one candidate) give -15.1.
 messages.length = 0;
 await self.onmessage({ data: {
   type: "cplfold-energy-batch", allowPseudoknot: false, energyModel: "DP09",
   pairs: [
     ["AGAGACUUCGUGGAGGGCAUGUCAGGUGGGACCUGGGUUGAUGUUGUCUUGGAACAUGGAGG", "ACCCUGCAGGGACCUCAGGAUCUCCGAUCCUAGACAAAUGUGGAAGAGUGAUAGGACUCU"],
-    ["GGGGAAAC", "GUUUCCCC"]
+    ["GGGGAAAC", "GUUUCCCC"],
+    ["GUAACCCUUGGGGCCAGUGCAUGGCUCAUG", "UCAUAUUCCUUGUGCACUGCGGCAUU"]
   ]
 } });
 assert.equal(messages.find(message => message.type === "error"), undefined);
 const energyBatch = messages.find(message => message.type === "result");
 assert.ok(energyBatch, "the energy batch replies with a result");
-assert.equal(energyBatch.energies.length, 2);
+assert.equal(energyBatch.energies.length, 3);
 assert.equal(energyBatch.energies[0], -37);
 assert.ok(energyBatch.energies[1] < 0, "complementary strands bind");
+assert.equal(energyBatch.energies[2], -12.2, "the batch keeps its own preset, not the structure defaults");
 assert.match(energyBatch.version, /^CPLfold /);
 messages.length = 0;
 await self.onmessage({ data: { type: "cplfold-energy-batch", pairs: [["ACGN", "GCU"]] } });

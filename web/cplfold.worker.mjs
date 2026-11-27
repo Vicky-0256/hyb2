@@ -133,6 +133,9 @@ self.onmessage = async function (event) {
 // HYB binding energies with CPLcofold: pairs [[armOne, armTwo], ...], each
 // folded sequence-only as two strands; replies with the selected
 // candidate's energy (kcal/mol) per pair, as the batch energy tool expects.
+// The batch has its own search preset, the desktop's (CPLCOFOLD_SETTINGS in
+// desktop/runtime/batch_energy.py), not the RNA Structure task defaults.
+const ENERGY_BATCH_PRESET = { beamSize: 20, maxPhase1: 3, energyDelta: 5, alpha: 0, beta: 0 };
 async function runEnergyBatch(message) {
   try {
     const allowPseudoknot = globalThis.Hyb2CplfoldSettings.readTopology(true, message.allowPseudoknot);
@@ -143,6 +146,7 @@ async function runEnergyBatch(message) {
       const input = normaliseInput({ sequence: pairs[index][0], sequenceTwo: pairs[index][1] });
       validateSequenceLength(input.sequence, HARD_MAX_SEQUENCE_LENGTH);
       const result = JSON.parse(String(runtime.bridge.fold_json(JSON.stringify({
+        ...ENERGY_BATCH_PRESET,
         sequence: input.sequence,
         cutpoint: input.cutpoint,
         evidenceMode: "none",

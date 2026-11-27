@@ -73,7 +73,7 @@ try {
     assert.equal(done.result.allowPseudoknot, false);
     assert.ok(done.result.candidates.every(c => c.type === "phase1" && c.crossingPairs === 0));
     assert.match(messages.find(m => m.phase === "cplfold").stage, /without pseudoknot search/);
-    assert.deepEqual([p.beamSize, p.maxPhase1, p.energyDelta, p.alpha, p.beta], [20, 3, 5, alpha, 0]);
+    assert.deepEqual([p.beamSize, p.maxPhase1, p.energyDelta, p.alpha, p.beta], [200, 1, 5, alpha, 0]);
   }
   const a0 = await run({alpha:0});
   const a1 = await run({alpha:0.5});

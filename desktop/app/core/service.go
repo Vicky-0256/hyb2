@@ -104,6 +104,7 @@ type Service struct {
 	rtMu      sync.RWMutex
 	rt        *Runtime
 	rtPending bool // the bundled runtime is still being unpacked
+	closed    bool // Shutdown has started: runtime() fails, SetRuntime stops its runtime
 	tasks     *Scheduler
 	prefsPath string
 	logf      func(format string, args ...any)
@@ -160,6 +161,9 @@ func (s *Service) Scheduler() *Scheduler { return s.tasks }
 func (s *Service) runtime() (*Runtime, error) {
 	s.rtMu.RLock()
 	defer s.rtMu.RUnlock()
+	if s.closed {
+		return nil, errShuttingDown
+	}
 	if s.rt == nil {
 		if s.rtPending {
 			return nil, errors.New("The bundled runtime is still being prepared; try again in a moment.")
@@ -172,15 +176,28 @@ func (s *Service) runtime() (*Runtime, error) {
 // SetPending marks the runtime as being prepared (first-launch unpacking).
 func (s *Service) SetPending(pending bool) {
 	s.rtMu.Lock()
-	s.rtPending = pending
+	if !s.closed {
+		s.rtPending = pending
+	}
 	s.rtMu.Unlock()
 }
 
-// SetRuntime attaches a runtime resolved after the service was made.
-func (s *Service) SetRuntime(rt *Runtime) {
+// SetRuntime attaches a runtime resolved after the service was made. If
+// Shutdown has already started, it shuts down rt without attaching it and
+// returns false.
+func (s *Service) SetRuntime(rt *Runtime) bool {
 	s.rtMu.Lock()
+	if s.closed {
+		s.rtPending = false
+		s.rtMu.Unlock()
+		if rt != nil {
+			rt.Shutdown()
+		}
+		return false
+	}
 	s.rt, s.rtPending = rt, false
 	s.rtMu.Unlock()
+	return true
 }
 
 func (s *Service) call(lane Lane, request Obj) (Obj, error) {
@@ -574,13 +591,20 @@ func (s *Service) WarmUp() {
 }
 
 // Shutdown marks running and queued tasks interrupted (killing their
-// process trees), then stops the sidecars; later calls fail.
+// process trees), then stops the sidecars. Calls that need the runtime,
+// and SetRuntime, fail from the moment it starts. It holds rtMu only to
+// change the fields, never while it waits for the tasks or the sidecars.
 func (s *Service) Shutdown() {
+	s.rtMu.Lock()
+	s.closed = true
+	s.rtPending = false
+	s.rtMu.Unlock()
 	s.evidence.Shutdown()
 	s.tasks.ShutdownAll()
-	s.rtMu.RLock()
+	s.rtMu.Lock()
 	rt := s.rt
-	s.rtMu.RUnlock()
+	s.rt = nil
+	s.rtMu.Unlock()
 	if rt != nil {
 		rt.Shutdown()
 	}

@@ -199,7 +199,8 @@ func (p *explorePage) batchCountKey(sample string) string {
 // batchEstimate is the run-time estimate of all the sample's records, as the
 // web's, " All N records: about … with W parallel workers here." ("" while
 // unknown). The workers are counted as the task counts them, from the jobs of
-// the records it folds.
+// the records it folds. When CPLcofold would fold none (every record over its
+// length limit), it says so instead of giving a time.
 func batchEstimate(engine string, counts batchCounts, cpus int) string {
 	cost, ok := batchEngineCost[engine]
 	if !ok || counts.records <= 0 || cpus <= 0 || (cost.byLength != nil && counts.lengths == nil) {
@@ -213,6 +214,9 @@ func batchEstimate(engine string, counts batchCounts, cpus int) string {
 				folded += n[1]
 				ms += float64(n[1]) * batchRecordMs(cost.byLength, float64(n[0]))
 			}
+		}
+		if folded == 0 {
+			return fmt.Sprintf(" All %s records: no records are within the %s nt limit, so nothing would be recalculated.", FormatNumber(counts.records), FormatNumber(cost.maxLength))
 		}
 	}
 	workers := max(1, min(int64(cpus), (folded+cost.chunk-1)/cost.chunk))

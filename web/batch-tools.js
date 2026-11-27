@@ -266,12 +266,14 @@
     const lengths=engine.msByLength&&known&&known.armLengths;
     const folded=lengths?lengths.reduce((sum,[length,n])=>length<=engine.maxLength?sum+n:sum,0):total;
     const workers=energyWorkerCount(engine,Math.max(1,Math.ceil((folded||0)/engine.chunk)));
+    const subject=filtered?(total===1?'The 1 record':'The '+count(total)+' records')+' of the primary file matching the Interactions filters':'All '+count(total)+' records';
     const runMs=!engine.msByLength?total*engine.msPerRecord/workers
-      :lengths?START_MS+lengths.reduce((sum,[length,n])=>length<=engine.maxLength?sum+n*recordMs(engine,length):sum,0)/workers:null;
+      :lengths&&folded>0?START_MS+lengths.reduce((sum,[length,n])=>length<=engine.maxLength?sum+n*recordMs(engine,length):sum,0)/workers:null;
     const time=ms=>ms<5000?'a few seconds':'about '+duration(ms);
     const estimate=filtered&&total===undefined?' Counting the records of the primary file that match the Interactions filters…'
       :filtered&&total===0?' No record of the primary file matches the Interactions filters, so nothing would be recalculated.'
-      :total&&runMs!==null?' '+(filtered?(total===1?'The 1 record':'The '+count(total)+' records')+' of the primary file matching the Interactions filters':'All '+count(total)+' records')+': '+time(runMs)+' with '+count(workers)+(workers===1?' worker':' parallel workers')+' here.':'';
+      :total&&lengths&&folded===0?' '+subject+': no records are within the '+count(engine.maxLength)+'\u00a0nt limit, so nothing would be recalculated.'
+      :total&&runMs!==null?' '+subject+': '+time(runMs)+' with '+count(workers)+(workers===1?' worker':' parallel workers')+' here.':'';
     const select=(key,label,value,options)=>'<label class="control-field"><span>'+label+'</span><select data-feature="batch-energy-setting" data-key="'+key+'"'+(s.running?' disabled':'')+'>'+options.map(o=>'<option value="'+o[0]+'"'+(o[0]===value?' selected':'')+'>'+esc(o[1])+'</option>').join('')+'</select></label>';
     return '<section class="data-card"><div class="card-title-row"><div><h2>HYB binding energies</h2><p class="card-note">Recalculate column 3 (ΔG of the two arms, kcal/mol, 37 °C) for records of the primary file'+file+', from the mapped FASTA arms. Download a new HYB; the loaded dataset stays unchanged.</p></div></div>'+
       '<div class="control-grid">'+select('engine','Engine',settings.engine,Object.keys(ENERGY_ENGINES).map(key=>[key,ENERGY_ENGINES[key].label]))+

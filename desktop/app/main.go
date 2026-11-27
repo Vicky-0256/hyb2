@@ -84,6 +84,12 @@ func main() {
 		}
 		// Resolve (and on first launch unpack) the runtime, detect it, then
 		// compile the CPLfold kernels so the first fold does not wait.
+		// Nothing here starts a process before SetRuntime. When the window
+		// was closed first (service.Shutdown), SetRuntime stops rt instead of
+		// attaching it, and later service calls fail. win.Update after the
+		// window has closed is harmless: MyGo still runs fn on the main
+		// thread but skips the redraw, or drops fn once the event loop has
+		// stopped.
 		go func() {
 			bridge, err := resolveRuntime(resources, cache)
 			var rt *core.Runtime
@@ -98,7 +104,9 @@ func main() {
 				win.Update(func() { app.SetRuntimeStatus("", err.Error()) })
 				return
 			}
-			service.SetRuntime(rt)
+			if !service.SetRuntime(rt) {
+				return
+			}
 			detected, err := service.Detect()
 			win.Update(func() {
 				if err != nil {

@@ -693,7 +693,7 @@ class CliTest(unittest.TestCase):
             missing = sum(1 for cols in rows if cols[2] == ".")
             self.assertGreater(missing, 0)
             self.assertIn("warning: %d of %d hybrids have no dG" % (missing, len(rows)), err)
-            self.assertIn("18S_rRNA", err)
+            self.assertIn("These genes are not in the -d reference: 18S_rRNA.", err)
 
     def test_dg_warning_names_only_genes_missing_from_the_reference(self):
         from hyb2pipe.__main__ import _warnings
@@ -701,12 +701,72 @@ class CliTest(unittest.TestCase):
             hyb = Path(tmp) / "x.hyb"
             row = ["r1_1", "AAAA", ".", "Zika_virusRNA", "1", "4", "1", "4", "1e-5", "18S_rRNA", "5", "8", "1", "4", "1e-5"]
             hyb.write_text("\t".join(row) + "\n" + "\t".join(["r2_1", "AAAA", "-5.00"] + row[3:]) + "\n")
-            result = mock.Mock(hyb=hyb, counts={"hybrids": 2})
-            # both genes are in the reference: a '.' there means no duplex, not a missing gene
-            [message] = _warnings(result, True, Path("in.sam"), ROOT / "data/Zika_18S.fasta")
+            # both genes are in the reference the run used, whose IDs needed no
+            # rewriting: a '.' there means no duplex, not a missing gene
+            result = mock.Mock(hyb=hyb, counts={"hybrids": 2}, reference=ROOT / "data/Zika_18S_formatted.fasta")
+            [message] = _warnings(result, True, Path("in.sam"))
             self.assertIn("1 of 2 hybrids have no dG", message)
             self.assertNotIn("not in the -d reference", message)
             self.assertIn("form no duplex", message)
+            result.reference = Path(tmp) / "zika.fa"
+            result.reference.write_text(">Zika_virusRNA\nACGU\n")
+            [message] = _warnings(result, True, Path("in.sam"))
+            self.assertIn("These genes are not in the -d reference: 18S_rRNA.", message)
+
+    def test_dg_warning_reads_the_reference_only_when_a_dg_is_missing(self):
+        from hyb2pipe.__main__ import _warnings
+        with tempfile.TemporaryDirectory() as tmp:
+            hyb = Path(tmp) / "ok.hyb"
+            hyb.write_text("# header\n"
+                           "r1_1\tAAAA\t-4.50\tGeneA\t1\t4\t1\t4\t1e-5\tGeneB\t5\t8\t1\t4\t1e-5\n"
+                           "r2_1\tCCCC\t-6.10\tGeneA\t1\t4\t2\t5\t1e-5\tGeneA\t5\t8\t6\t9\t1e-5\n")
+            result = mock.Mock(hyb=hyb, counts={"hybrids": 2}, reference=Path(tmp) / "does_not_exist.fasta")
+            with mock.patch("hyb2pipe.inputs.iter_lines") as iter_lines, \
+                    mock.patch("hyb2pipe.energy.reference_table") as reference_table:
+                self.assertEqual(list(_warnings(result, True, Path("in.sam"))), [])
+            iter_lines.assert_not_called()
+            reference_table.assert_not_called()
+
+    def test_integer_options_outside_their_range_exit_with_status_2(self):
+        from hyb2pipe.__main__ import main
+        base = ["-i", "reads.sam", "-d", "ref.fa", "-o", "out"]
+        result = mock.Mock(hyb=Path("out.hyb"), homodimers=Path("out_homodimers.hyb"), stats=Path("out_stats.txt"),
+                           sam=None, counts={"hybrids": 0})
+
+        def accepted(*args):
+            with mock.patch("hyb2pipe.__main__.run", return_value=result) as pipeline, \
+                    mock.patch.object(sys, "stdout", io.StringIO()), mock.patch.object(sys, "stderr", io.StringIO()):
+                self.assertEqual(main([*base, *args]), 0)
+            return pipeline.call_args[0][3]
+
+        defaults = accepted()
+        self.assertEqual((defaults.threads, defaults.min_length, defaults.seed_length), (None, 18, 10))
+        # both sides of every bound: --seed-length is Bowtie2's -L, which takes 4 to 31
+        for option, field, rejected, allowed in (("--memory-mb", "memory_mb", ("-1", "0"), ("1",)),
+                                                 ("-p", "threads", ("-1", "0"), ("1",)),
+                                                 ("--min-length", "min_length", ("-1", "0"), ("1",)),
+                                                 ("--seed-length", "seed_length", ("0", "3", "32"), ("4", "31"))):
+            for value in allowed:
+                with self.subTest(option=option, value=value):
+                    self.assertEqual(getattr(accepted(option, value), field), int(value))
+            for value in rejected:
+                for json_progress in (False, True):
+                    with self.subTest(option=option, value=value, json_progress=json_progress):
+                        stdout, stderr = io.StringIO(), io.StringIO()
+                        flags = ["--json-progress"] if json_progress else []
+                        with mock.patch("hyb2pipe.__main__.run") as pipeline, mock.patch.object(sys, "stdout", stdout), \
+                                mock.patch.object(sys, "stderr", stderr):
+                            status = main([*base, option, value, *flags])
+                        pipeline.assert_not_called()
+                        self.assertEqual(status, 2)
+                        if json_progress:
+                            self.assertEqual(stderr.getvalue(), "")
+                            detail = json.loads(stdout.getvalue())["error"]
+                        else:
+                            self.assertEqual(stdout.getvalue(), "")
+                            detail = stderr.getvalue()
+                        self.assertIn(option, detail)
+                        self.assertIn("from 4 to 31" if option == "--seed-length" else "positive integer", detail)
 
     @unittest.skipUnless(inputs._tool("bowtie2-align-s", "bowtie2") and inputs._tool("bowtie2-build-s", "bowtie2-build"), "Bowtie2 not installed")
     def test_fastq_path_maps_with_bowtie2(self):

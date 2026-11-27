@@ -383,18 +383,28 @@ class ZikvRegression(_Web):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        if not ZIKV_JOBS.is_dir():
-            raise unittest.SkipTest(f"cached ZIKV arms not found: {ZIKV_JOBS}")
-        cls.data = {}
-        for iso in ("ZILM", "ZAFR"):
-            with open(ZIKV_FASTA / f"{iso}.fasta") as handle:
-                sequence = "".join(line.strip() for line in handle
-                                   if not line.startswith(">")).upper().replace("T", "U")
-            with open(ZIKV_JOBS / "arms" / f"{iso}.json") as handle:
-                blocks = Counter({tuple(row[:4]): row[4] for row in json.load(handle)})
-            with open(ZIKV_JOBS / "pairs" / f"{iso}_hybridmin.json") as handle:
-                pairs = json.load(handle)["pairs"]
-            cls.data[iso] = (sequence, blocks, Counter({(i, j): n for i, j, n in pairs}))
+        try:
+            if not ZIKV_JOBS.is_dir() or not os.access(ZIKV_JOBS, os.R_OK):
+                raise unittest.SkipTest(f"cached ZIKV arms not found or unreadable: {ZIKV_JOBS}")
+            cls.data = {}
+            for iso in ("ZILM", "ZAFR"):
+                fasta = ZIKV_FASTA / f"{iso}.fasta"
+                arms = ZIKV_JOBS / "arms" / f"{iso}.json"
+                pairs_file = ZIKV_JOBS / "pairs" / f"{iso}_hybridmin.json"
+                # unreadable skips; missing (with the cache present) still fails
+                for path in (fasta, arms, pairs_file):
+                    if path.is_file() and not os.access(path, os.R_OK):
+                        raise unittest.SkipTest(f"external ZIKV data not readable: {path}")
+                with open(fasta) as handle:
+                    sequence = "".join(line.strip() for line in handle
+                                       if not line.startswith(">")).upper().replace("T", "U")
+                with open(arms) as handle:
+                    blocks = Counter({tuple(row[:4]): row[4] for row in json.load(handle)})
+                with open(pairs_file) as handle:
+                    pairs = json.load(handle)["pairs"]
+                cls.data[iso] = (sequence, blocks, Counter({(i, j): n for i, j, n in pairs}))
+        except PermissionError as exc:
+            raise unittest.SkipTest(f"external ZIKV data not readable: {exc}")
 
     def _counts(self, sequence, blocks):
         return self.web.duplex_pair_counts(sequence, blocks)[0]

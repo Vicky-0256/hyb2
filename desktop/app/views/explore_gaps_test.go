@@ -146,6 +146,8 @@ func TestBindingEnergiesEstimateAndReference(t *testing.T) {
 		// 150 nt, between the 100 and 200 nt costs: 16.8 ms × 1.5^log2(58 / 16.8) = 34.7 ms a record;
 		// 2.5 s + 120,000 × 34.7 ms / 4 = 1,043 s
 		{"cplcofold-pk", batchCounts{records: 120_000, lengths: [][2]int64{{150, 120_000}}}, 4, " All 120,000 records: about 17 min with 4 parallel workers here."},
+		{"cplcofold", batchCounts{records: 24, lengths: [][2]int64{{501, 20}, {600, 4}}}, 4, " All 24 records: no records are within the 500 nt limit, so nothing would be recalculated."},
+		{"cplcofold-pk", batchCounts{records: 5, lengths: [][2]int64{{600, 5}}}, 1, " All 5 records: no records are within the 500 nt limit, so nothing would be recalculated."},
 		{"cplcofold", batchCounts{records: 1_724}, 4, ""}, // arm lengths not counted yet
 		{"rnacofold", batchCounts{}, 4, ""}} {
 		if got := batchEstimate(c.engine, c.counts, c.cpus); got != c.want {

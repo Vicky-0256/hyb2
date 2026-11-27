@@ -14,9 +14,16 @@ from desktop.runtime.bridge import handle
 from desktop.runtime.project import import_input, load_manifest, new_project, validate_manifest, validate_project_directory
 
 
+def _is_readable_file(path: Path) -> bool:
+    try:
+        return path.is_file() and os.access(path, os.R_OK)
+    except OSError:
+        return False
+
+
 ROOT = Path(__file__).resolve().parents[3]
 # The real map lives beside the checkout (outside git); fall back to an embedded copy.
-ZIKV_MAP = next((p / "ZIKV_dataset_map.tsv" for p in ROOT.parents if (p / "ZIKV_dataset_map.tsv").is_file()), ROOT / "missing.tsv")
+ZIKV_MAP = next((p / "ZIKV_dataset_map.tsv" for p in ROOT.parents if _is_readable_file(p / "ZIKV_dataset_map.tsv")), ROOT / "missing.tsv")
 ZIKV_MAP_TEXT = (
     "dataset\tcondition\tstrain\tcell_type\tmethod\treference\treplicates\tfiles\n"
     "ZAFR_virion\tvirion\tAFR\tvirion\tSPLASH\tzika_files/ZAFR.fasta\t2\tzika_files/ZAFR_REP1.fastq.gz;zika_files/ZAFR_REP2.fastq.gz\n"
@@ -50,8 +57,11 @@ def _write_gz(path: Path, text: str) -> None:
 def _make_zikv_layout(directory: Path) -> Path:
     """A copy of ZIKV_dataset_map.tsv next to tiny fake zika_files/."""
     sheet = directory / "ZIKV_dataset_map.tsv"
-    if ZIKV_MAP.is_file():
-        shutil.copyfile(ZIKV_MAP, sheet)
+    if _is_readable_file(ZIKV_MAP):
+        try:
+            shutil.copyfile(ZIKV_MAP, sheet)
+        except PermissionError:
+            sheet.write_text(ZIKV_MAP_TEXT, encoding="utf-8")
     else:
         sheet.write_text(ZIKV_MAP_TEXT, encoding="utf-8")
     files = directory / "zika_files"

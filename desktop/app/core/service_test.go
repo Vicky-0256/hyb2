@@ -382,3 +382,92 @@ func TestMfoldPreference(t *testing.T) {
 		t.Fatal("cleared preference still in the task env")
 	}
 }
+
+// main.go resolves the runtime on a goroutine (first launch: unpacking it)
+// and attaches it with SetRuntime; the window may close first. A runtime
+// that arrives after Shutdown started is stopped, not attached, so no
+// sidecar starts for it.
+func TestSetRuntimeAfterShutdownDoesNotAttachOrStartSidecars(t *testing.T) {
+	root := t.TempDir()
+	bridgeDir := filepath.Join(root, "desktop", "runtime")
+	if err := os.MkdirAll(bridgeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bridgeDir, "bridge.py"), []byte("# stub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := NewRuntime(Bridge{Root: root, Python: "python3"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewService(nil, ServiceOptions{})
+	s.SetPending(true)
+	s.Shutdown()
+	s.SetPending(true)
+	if s.SetRuntime(rt) {
+		t.Fatal("SetRuntime attached runtime after Shutdown")
+	}
+	if s.rt != nil || s.rtPending {
+		t.Fatalf("service retained runtime or pending state: rt=%v pending=%v", s.rt, s.rtPending)
+	}
+	if !rt.control.closed.Load() || !rt.compute.closed.Load() {
+		t.Fatal("incoming runtime sidecars were not shut down")
+	}
+	if _, err := rt.Call(Control, Obj{"operation": "detect"}); err == nil {
+		t.Fatal("closed incoming runtime accepted a call")
+	}
+	if _, err := s.Detect(); err == nil || !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("Detect after Shutdown: %v", err)
+	}
+	s.WarmUp()
+	if s.SetRuntime(nil) {
+		t.Fatal("SetRuntime(nil) returned true after Shutdown")
+	}
+
+	// Before Shutdown, SetRuntime attaches the runtime and Shutdown closes it.
+	rt2, err := NewRuntime(Bridge{Root: root, Python: "python3"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2 := NewService(nil, ServiceOptions{})
+	if !s2.SetRuntime(rt2) {
+		t.Fatal("SetRuntime before Shutdown returned false")
+	}
+	s2.Shutdown()
+	if !rt2.control.closed.Load() || !rt2.compute.closed.Load() {
+		t.Fatal("attached runtime sidecars were not shut down on Shutdown")
+	}
+
+	// While Shutdown still stops the evidence worker and the tasks (which
+	// can take seconds), SetRuntime is refused too: main.go then neither
+	// detects nor warms up a runtime that Shutdown is about to stop.
+	rt3, err := NewRuntime(Bridge{Root: root, Python: "python3"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3 := NewService(nil, ServiceOptions{})
+	s3.SetPending(true)
+	s3.evidence.mu.Lock() // holds Shutdown in evidence.Shutdown
+	stopped := make(chan struct{})
+	go func() { s3.Shutdown(); close(stopped) }()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		s3.rtMu.RLock()
+		closed := s3.closed
+		s3.rtMu.RUnlock()
+		if closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			s3.evidence.mu.Unlock()
+			t.Fatal("Shutdown reached the evidence worker without marking the service closed")
+		}
+	}
+	attached := s3.SetRuntime(rt3)
+	s3.evidence.mu.Unlock()
+	<-stopped
+	if attached || s3.rt != nil || !rt3.control.closed.Load() || !rt3.compute.closed.Load() {
+		t.Fatalf("SetRuntime during Shutdown: attached %v, kept %v, sidecars closed %v %v",
+			attached, s3.rt != nil, rt3.control.closed.Load(), rt3.compute.closed.Load())
+	}
+}

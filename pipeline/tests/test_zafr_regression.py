@@ -22,15 +22,26 @@ from hyb2pipe import Options, inputs, run  # noqa: E402
 from make_subset import find_zika_files, write_subset  # noqa: E402
 
 GOLDEN = json.loads((HERE / "golden/zafr_rep1_2m.json").read_text())
-ZIKA = find_zika_files()
+try:
+    ZIKA = find_zika_files()
+except OSError:
+    ZIKA = None
+
+
+def _is_readable_file(path):
+    try:
+        return path.is_file() and os.access(path, os.R_OK)
+    except OSError:
+        return False
 
 
 def _source():
-    if ZIKA is None:
+    if ZIKA is None or not _is_readable_file(ZIKA / GOLDEN["reference"]):
         return None
     for name in (GOLDEN["source"], GOLDEN["source_gz"]):
-        if (ZIKA / name).is_file():
-            return ZIKA / name
+        candidate = ZIKA / name
+        if _is_readable_file(candidate):
+            return candidate
     return None
 
 
@@ -65,7 +76,11 @@ class ZafrRegressionTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp(prefix="hyb2-zafr2m-"))
         cls.reads = cls.tmp / "zafr_2m.fastq"
-        digest = write_subset(_source(), GOLDEN["lines"] // 4, cls.reads)
+        try:
+            digest = write_subset(_source(), GOLDEN["lines"] // 4, cls.reads)
+        except PermissionError as exc:
+            shutil.rmtree(cls.tmp, ignore_errors=True)
+            raise unittest.SkipTest("cannot read zika_files source: %s" % exc)
         if digest != GOLDEN["subset_sha256"]:
             raise AssertionError("subset digest %s differs from the golden's %s" % (digest, GOLDEN["subset_sha256"]))
         cls.reference = ZIKA / GOLDEN["reference"]

@@ -229,6 +229,15 @@ lifecycleTest.then(async()=>{
  assert.ok(B.renderEnergy(est).includes('The 20 records of the primary file matching the Interactions filters: about 87\u00a0s with 2 parallel workers here.'),B.renderEnergy(est));
  est.hybEnergySettings={engine:'rnacofold',records:'all'};
  assert.ok(B.renderEnergy(est).includes('All 46 records: a few seconds with 1 worker here.'),'RNAcofold needs no arm lengths');
+ const overLimit={summary:{validRecords:12},fasta,filters:{search:'p1'},hybEnergySettings:{engine:'cplcofold',records:'all'},view:{energySelection:{key:'[]|all',total:12,armLengths:[[501,10],[700,2]]}}};
+ const overAll=B.renderEnergy(overLimit);
+ assert.ok(overAll.includes('All 12 records: no records are within the 500\u00a0nt limit, so nothing would be recalculated.'),overAll);
+ assert.doesNotMatch(overAll,/worker|a few seconds|about /);
+ overLimit.hybEnergySettings={engine:'cplcofold-pk',records:'filtered'};
+ overLimit.view.energySelection={key:'[]|{"search":"p1"}',total:5,armLengths:[[600,5]]};
+ const overFiltered=B.renderEnergy(overLimit);
+ assert.ok(overFiltered.includes('The 5 records of the primary file matching the Interactions filters: no records are within the 500\u00a0nt limit, so nothing would be recalculated.'),overFiltered);
+ assert.doesNotMatch(overFiltered,/worker|a few seconds|about /);
  console.log('Energy engines (RNAduplex default, RNAcofold pool, CPLcofold), filtered records, scope independence and run-time estimates passed.');
 }).catch(error=>{console.error(error);process.exit(1);});
 

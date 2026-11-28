@@ -2,9 +2,9 @@ package views
 
 // ⑤ Structure, the ViennaRNA engines of the web RNA Structure page: the
 // ViennaRNA MFE mode (temperature, minimum hairpin loop, manual hard base
-// pairs; engine "viennarna", desktop/runtime/vienna.py) and COMRADES
+// pairs; engine "viennarna", pipeline/hyb2analysis/vienna.py) and COMRADES
 // (ViennaRNA), guided by RNAcofold of the chimeras (engine "comrades",
-// desktop/runtime/comrades.py), each run as a structure task.
+// pipeline/hyb2analysis/comrades.py), each run as a structure task.
 
 import (
 	"fmt"

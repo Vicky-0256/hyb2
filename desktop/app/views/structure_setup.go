@@ -265,7 +265,7 @@ type stPrepared struct {
 	linker   bool
 }
 
-// stSpacer is the web's spacer between two COMRADES regions (desktop/runtime/comrades.py LINKER).
+// stSpacer is the web's spacer between two COMRADES regions (pipeline/hyb2analysis/comrades.py LINKER).
 var stSpacer = strings.Repeat("A", stSpacerNT/2) + strings.Repeat("U", stSpacerNT/2)
 
 // stRange is "a–b" with thousands separators.

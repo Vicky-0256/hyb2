@@ -183,7 +183,7 @@
       record.rnaTwoStart <= record.rnaTwoEnd;
   }
 
-  function orientRecord(record, segments, includeIntramolecular) {
+  function orientRecord(record, segments, cofold) {
     const one = arm(record.rnaOne, record.rnaOneStart, record.rnaOneEnd);
     const two = arm(record.rnaTwo, record.rnaTwoStart, record.rnaTwoEnd);
 
@@ -198,9 +198,14 @@
       return { first: one, second: two, firstSegment: segments[0], secondSegment: segments[1], reversed: false };
     }
     if (armInSegment(two, segments[0]) && armInSegment(one, segments[1])) {
-      return { first: two, second: one, firstSegment: segments[0], secondSegment: segments[1], reversed: true };
+      // CPLcofold's arms go region 1 first. COMRADES keeps the record's arm
+      // order, as hyb2_fold cofolded them: RNAcofold's MFE of one&two can
+      // differ from that of two&one.
+      return cofold
+        ? { first: two, second: one, firstSegment: segments[0], secondSegment: segments[1], reversed: true }
+        : { first: one, second: two, firstSegment: segments[1], secondSegment: segments[0], reversed: false };
     }
-    if (includeIntramolecular) {
+    if (cofold) {
       const segment = segments.find(function (entry) {
         return armInSegment(one, entry) && armInSegment(two, entry);
       });

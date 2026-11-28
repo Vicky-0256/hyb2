@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Fold one reference region, or two regions joined by the 100-nt A/U spacer, with COMRADES from HYB evidence."""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def main():
+    root = Path(__file__).resolve().parents[1]
+    # the analysis package (hyb2analysis) and the cplfold package
+    sys.path[:0] = [str(root / 'pipeline'), str(root / 'third_party' / 'cplfold')]
+    from hyb2analysis import comrades, mfold
+    from hyb2analysis.engine_parameters import engine_parameters
+    from hyb2analysis.reference import reference_sequence, validate_window
+
+    catalog = engine_parameters('desktop')['comrades']
+
+    def bounds(key):
+        (lo, hi), default = catalog['ranges'][key], catalog['defaults'][key]
+        return f'{lo} to {hi} (default: {default})'
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--reference', required=True, type=Path, help='reference FASTA')
+    parser.add_argument('--hyb', required=True, type=Path, action='append', help='HYB evidence file (repeat for multiple samples)')
+    parser.add_argument('--gene', help='reference record ID (required for multi-record FASTA)')
+    parser.add_argument('--start', type=int, help='first reference position, 1-based inclusive (default: 1)')
+    parser.add_argument('--end', type=int, help='last reference position, inclusive (default: end of record)')
+    second = parser.add_argument_group('second region', 'Any of these folds two regions joined by the 100-nt A/U spacer, '
+                                       'with the chimeras that have one arm in each region as the evidence.')
+    second.add_argument('--gene-two', help='reference record ID of region 2 (default: the record of region 1)')
+    second.add_argument('--start-two', type=int, help='first position of region 2 (default: 1)')
+    second.add_argument('--end-two', type=int, help='last position of region 2 (default: end of record)')
+    folding = parser.add_argument_group('folding')
+    folding.add_argument('--fold-program', choices=sorted(comrades.FOLD_PROGRAMS),
+                         help='program that fits the stem constraints (default: viennarna); mfold 3.6 is installed separately')
+    folding.add_argument('--constraint-limit', type=int, help='most evidence stems added as constraints, ' + bounds('constraintLimit'))
+    folding.add_argument('--random-folds', type=int, help='extra fits with the stems in seeded random orders, ' + bounds('randomFoldCount'))
+    folding.add_argument('--seed', help='seed of the random orders (default: HYB2-Web)')
+    folding.add_argument('--temperature', type=float, help='folding temperature in °C, ' + bounds('temperature'))
+    folding.add_argument('--min-loop', type=int, help='minimum hairpin loop, ' + bounds('minLoopSize'))
+    folding.add_argument('--homodimer-only', action='store_true',
+                         help='use only the chimeras whose arms are on one RNA and overlap by at least 5 nt')
+    parser.add_argument('-o', '--output', type=Path, help='write JSON to a new file (default: stdout)')
+    args = parser.parse_args()
+
+    paired = any(value is not None for value in (args.gene_two, args.start_two, args.end_two))
+    options = dict(fold_program=args.fold_program, constraint_limit=args.constraint_limit, random_folds=args.random_folds,
+                   seed=args.seed, temperature=args.temperature, min_loop=args.min_loop,
+                   homodimer_only=args.homodimer_only or None)
+
+    def region(path, gene, start, end, number):
+        gene, sequence = reference_sequence(path, gene)
+        if not sequence:
+            raise ValueError(f'empty reference sequence {gene}')
+        first = 1 if start is None else start
+        last = len(sequence) if end is None else end
+        if paired:
+            if not 1 <= first <= last <= len(sequence):
+                raise ValueError(f'region {number} ({first}-{last}) is outside 1-{len(sequence)} of {gene}')
+        elif start is not None or end is not None:
+            validate_window(first, last, len(sequence))
+        return dict(gene_id=gene, start=first, end=last, sequence=sequence[first - 1:last]), sequence
+
+    def pair_list(pairs):  # [i, j, the RNAcofold observations of the pair]
+        return [[i, j, int(count)] for i, j, _, count in pairs]
+
+    try:
+        params = comrades.parameters({key: value for key, value in options.items() if value is not None})
+        reference = args.reference.resolve(strict=True)
+        hyb_paths = [path.resolve(strict=True) for path in args.hyb]
+        one, whole = region(reference, args.gene, args.start, args.end, 1)
+        regions = [one]
+        if paired:
+            regions.append(region(reference, args.gene_two or one['gene_id'], args.start_two, args.end_two, 2)[0])
+            folded, layout = comrades.paired_sequence(regions)  # checks the length limit
+        else:
+            folded = one['sequence']
+            if len(folded) > comrades.MAX_COMRADES_NT:
+                raise ValueError(f'{len(folded)} nt exceeds the COMRADES limit of {comrades.MAX_COMRADES_NT} nt; choose a shorter region')
+        comrades._folder(params)  # a missing mfold fails before the evidence is read
+        if paired:
+            arms, skipped = comrades.paired_arms(hyb_paths, layout, folded, params['homodimer_only'])
+            if not arms:
+                raise ValueError('no chimeras have one arm in each region')
+        else:
+            arms, skipped = comrades.evidence_arms(hyb_paths, one['gene_id'], whole, one['start'], one['end'],
+                                                   params['homodimer_only'])
+            if not arms:
+                raise ValueError(f"no {one['gene_id']} chimeras have both arms inside {one['start']}-{one['end']}")
+        record = comrades.fold(folded, arms, params)
+        stored = {key: params[key] for key in ('fold_program', 'temperature', 'min_loop', 'constraint_limit',
+                                               'random_folds', 'seed', 'homodimer_only')}
+        stored['seed'] = comrades.seed_label(stored['seed'])
+        result = dict(engine=comrades.engine_name(params), engineVersion=comrades.fold_program_version(params),
+                      parameters=stored,
+                      regions=[dict(gene=r['gene_id'], start=r['start'], end=r['end'], sequence=r['sequence']) for r in regions],
+                      coordinates='regions: 1-based inclusive reference positions; all other positions are 1-based in sequence ('
+                                  + ('region 1 + the 100-nt A/U spacer + region 2; withoutSpacer: in region 1 + region 2, '
+                                     'not counting the & between them)' if paired else 'the region)'),
+                      sequence=folded, structure=record['structure'], energy=record['energy'],
+                      pairs=pair_list(record['pairs']), constraints=record['hard_pairs'],
+                      evidence=record['evidence'], randomisation=record['randomisation'], skipped=skipped)
+        if paired:
+            length_one, length_two = (len(r['sequence']) for r in regions)
+            joined = comrades.without_spacer(record, length_one, length_two)
+            # two strands, as RNAcofold and the desktop app's structure.dbn write them
+            result.update(spacer=dict(start=length_one + 1, end=length_one + len(comrades.LINKER)),
+                          withoutSpacer=dict(sequence=regions[0]['sequence'] + '&' + regions[1]['sequence'],
+                                             structure=joined['structure'][:length_one] + '&' + joined['structure'][length_one:],
+                                             pairs=pair_list(joined['pairs']),
+                                             constraints=joined['hard_pairs'],
+                                             spacerPairsLeftOut=joined['spacer_pairs_left_out']))
+        payload = json.dumps(result, allow_nan=False) + '\n'
+        if args.output is None:
+            sys.stdout.write(payload)
+        else:
+            handle = args.output.open('x', encoding='utf-8')
+            try:
+                with handle:
+                    handle.write(payload)
+            except BaseException:
+                args.output.unlink(missing_ok=True)
+                raise
+    except ModuleNotFoundError as exc:
+        parser.exit(1, f'comrades: {exc}. Install ViennaRNA in the active Python environment.\n')
+    except (OSError, EOFError, ValueError, mfold.MfoldError) as exc:
+        parser.exit(1, f'comrades: {exc}\n')
+
+
+if __name__ == '__main__':
+    main()

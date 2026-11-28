@@ -48,7 +48,7 @@ Versions are pinned in [`desktop/runtime/requirements-native.txt`](desktop/runti
 
 ## Installed separately
 
-The command-line tools install their dependencies from PyPI under their own licences: `pip install ./pipeline` installs ViennaRNA, NumPy and cutadapt for `hyb2pipe` and `hyb2analysis` ([`pipeline/pyproject.toml`](pipeline/pyproject.toml)); `bin/cplfold` and `bin/cplcofold` need NumPy, Numba and llvmlite ([`requirements/cplfold-core.txt`](requirements/cplfold-core.txt)), and `bin/iris` NumPy and ViennaRNA. `hyb2pipe` maps reads with a Bowtie2 that you install, and the desktop app's COMRADES(mfold) runs an mfold 3.6 that you install (bioconda `mfold`). Hyb2 does not redistribute them.
+The command-line tools install their dependencies from PyPI under their own licences: `pip install ./pipeline` installs ViennaRNA, NumPy and cutadapt for `hyb2pipe` and `hyb2analysis` ([`pipeline/pyproject.toml`](pipeline/pyproject.toml)); `bin/cplfold` and `bin/cplcofold` need NumPy, Numba and llvmlite ([`requirements/cplfold-core.txt`](requirements/cplfold-core.txt)), `bin/iris` NumPy and ViennaRNA, and `bin/comrades` ViennaRNA. `hyb2pipe` maps reads with a Bowtie2 that you install, and COMRADES(mfold), in the desktop app and `bin/comrades`, runs an mfold 3.6 that you install (bioconda `mfold`). Hyb2 does not redistribute them.
 
 ## Open question
 

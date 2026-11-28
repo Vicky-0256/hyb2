@@ -37,6 +37,7 @@ The desktop app runs `hyb2pipe` for each sample. On the command line, `hyb2pipe`
 | Contact density maps, viewpoint graphs | `python3 -m hyb2analysis coverage`, `viewpoint` | `pipeline/hyb2analysis/` | Python 3.9+, NumPy |
 | Differential coverage and similarity | `python3 -m hyb2analysis compare` | `pipeline/hyb2analysis/` | Python 3.9+, NumPy |
 | Structures with CPLfold and CPLcofold | `bin/cplfold`, `bin/cplcofold` | `third_party/cplfold/` | Python 3.8+, NumPy, Numba |
+| Structures with COMRADES, for comparison | `bin/comrades` | `pipeline/hyb2analysis/comrades.py` | Python 3.11, ViennaRNA 2.7.2 |
 | Structures with IRIS, for comparison | `bin/iris` | `pipeline/hyb2analysis/iris.py` | Python 3.11, NumPy, ViennaRNA 2.7.2 |
 
 Until November 2026, `bin/` also held the original shell, Perl, awk and R tools (`hyb2`, `hyb2_coverage`, `hyb2_fold`, `hyb2_app`, `hyb2_compare` and their helpers). The commands above and the two apps replace them; their last version is in [`5398ef3`](https://github.com/Vicky-0256/hyb2/tree/5398ef3/bin).
@@ -134,7 +135,7 @@ Hyb2's own structure algorithms are CPLfold and CPLcofold. COMRADES and IRIS, tw
 |---|---|---|---|---|---|
 | **CPLfold** | Hyb2's own | One region | 500 nt | Limited by memory (Preferences) | `bin/cplfold`, 1,000 nt |
 | **CPLcofold** | Hyb2's own | Two regions as two strands: of one RNA, of two RNAs, or two copies of one region (homodimer) | 500 nt in all | Limited by memory (Preferences) | `bin/cplcofold`, 1,000 nt in all |
-| COMRADES | Other, for comparison | One region, or two joined by a 100-nt spacer | 2,000 nt; 3,000 if you confirm | 3,000 nt | — |
+| COMRADES | Other, for comparison | One region, or two joined by a 100-nt spacer | 2,000 nt; 3,000 if you confirm | 3,000 nt | `bin/comrades`, 3,000 nt |
 | IRIS | Other, for comparison | One region | 300 nt | 1,000 nt | `bin/iris`, 1,000 nt |
 | ViennaRNA MFE | Control | The sequence alone, without the chimeras | 2,000 nt; 3,000 if you confirm | 30,000 nt | — |
 
@@ -150,7 +151,11 @@ The command shown keeps your settings. `bin/cplfold` refuses sequences over 1,00
 **Binding energies.** The dG column that `hyb2pipe -e 1` writes comes from ViennaRNA's RNAduplex, or from RNAcofold with `--energy-engine rnacofold` (the original `hyb2` values). The apps can recalculate it for each `.hyb` row with CPLcofold, with or without pseudoknots (an experimental score) and for arms of up to 500 nt in all, or with RNAduplex or RNAcofold: **HYB binding energies** in the web app, **Explore › Binding energies** in the desktop app.
 
 ### COMRADES and IRIS
-**COMRADES.** Here COMRADES is a folding method, not the experiment of the same name. RNAcofold folds the two arms of each chimera together, and the pairs it forms between the arms are the evidence. The 1,001 strongest pairs are merged into stems, and up to 75 stems are added one by one as hard constraints to ViennaRNA MFE folds, in rank order and, if you ask for them, in up to 1,000 seeded random orders; the structure whose pairs have the most evidence wins. This is the method of the original `hyb2_fold`, which ran `comradesMakeConstraints_2` and `comradesFold2` and joined two regions with the same 100-nt spacer ([`5398ef3`](https://github.com/Vicky-0256/hyb2/tree/5398ef3/bin)). COMRADES has no command line now. In the web app, choose the **ViennaRNA** engine and the **COMRADES(ViennaRNA)** folding mode; in the desktop app, choose the **COMRADES** engine, which can also fit the constraints with an mfold 3.6 that you install.
+**COMRADES.** Here COMRADES is a folding method, not the experiment of the same name. RNAcofold folds the two arms of each chimera together, and the pairs it forms between the arms are the evidence. The 1,001 strongest pairs are merged into stems, and up to 75 stems are added one by one as hard constraints to ViennaRNA MFE folds, in rank order and, if you ask for them, in up to 1,000 seeded random orders; the structure whose pairs have the most evidence wins. This is the method of the original `hyb2_fold`, which ran `comradesMakeConstraints_2` and `comradesFold2` and joined two regions with the same 100-nt spacer ([`5398ef3`](https://github.com/Vicky-0256/hyb2/tree/5398ef3/bin)). In the web app, choose the **ViennaRNA** engine and the **COMRADES(ViennaRNA)** folding mode; in the desktop app, choose the **COMRADES** engine, which can also fit the constraints with an mfold 3.6 that you install. `bin/comrades` runs the desktop app's COMRADES on the command line. With Python 3.11 and the ViennaRNA Python bindings installed (`python -m pip install ViennaRNA==2.7.2` in an active virtual environment), run:
+```sh
+bin/comrades --reference data/U2.fasta --hyb data/U2-U2.hyb.gz -o u2.json
+```
+This folds the yeast U2 snRNA with its 2,413 U2-U2 chimeras and gives the structure of the original `hyb2_fold` (dG −433.6 kcal/mol), as the two apps do. `--start-two` and `--end-two` add a second region. See the [COMRADES CLI guide](docs/comrades-cli.md) for input, output, the files of a standalone source archive, and how its results compare with `hyb2_fold`'s.
 
 **IRIS** builds a weighted ensemble of one to three structures for one region. It keeps the stems that the chimeras support, folds each stem and each compatible pair of stems as ViennaRNA hard constraints, and picks and weights the structures that best combine low energy and support. `pipeline/hyb2analysis/iris.py` adapts it from [JY-Zhou/IRIS](https://github.com/JY-Zhou/IRIS), whose source is in `third_party/iris/`. With Python 3.11, NumPy and the ViennaRNA Python bindings installed (`python -m pip install numpy ViennaRNA==2.7.2` in an active virtual environment), run:
 ```sh

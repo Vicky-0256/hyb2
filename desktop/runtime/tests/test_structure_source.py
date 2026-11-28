@@ -448,7 +448,8 @@ class SequenceSourceTests(unittest.TestCase):
 
     def test_fold_engines_check_the_narrowed_alphabet_before_computing(self):
         from unittest.mock import patch
-        from desktop.runtime import comrades, iris, mfold, vienna
+        from desktop.runtime import iris
+        from hyb2analysis import comrades, mfold, vienna
         from hyb2analysis.fold_text import FOLD_TEXT
 
         with patch.dict(FOLD_TEXT, alphabet="ACG"):

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from desktop.runtime import comrades, mfold
+from hyb2analysis import comrades, mfold
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -121,7 +121,8 @@ class MfoldOutputTests(unittest.TestCase):
         script = self.root / "mfold"
         script.write_text(f"#!/bin/sh\nsleep 300 &\necho $! > '{pid_file}.tmp'\nmv '{pid_file}.tmp' '{pid_file}'\nwait\n")
         script.chmod(0o755)
-        sidecar = ("import sys\nfrom pathlib import Path\nfrom unittest import mock\nfrom desktop.runtime import mfold\n"
+        sidecar = ("import sys\nfrom pathlib import Path\nfrom unittest import mock\n"
+                   "sys.path[:0] = ['pipeline', 'third_party/cplfold']\nfrom hyb2analysis import mfold\n"
                    "with mock.patch.object(mfold, 'data_dir', return_value=Path(sys.argv[1])):\n"
                    "    mfold.fold('GGGAAACCC', {}, executable=sys.argv[2])\n")
         helper = subprocess.Popen([sys.executable, "-B", "-c", sidecar, str(self.tables), str(script)], cwd=ROOT,

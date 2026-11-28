@@ -401,7 +401,7 @@ const (
 	stSourcePaste     = "paste"
 	// stRecordChoices is how many HYB records the source offers, as the web.
 	stRecordChoices = 500
-	// stViennaMaxNT is ViennaRNA MFE's longest sequence (desktop/runtime/vienna.py MAX_VIENNA_NT).
+	// stViennaMaxNT is ViennaRNA MFE's longest sequence (pipeline/hyb2analysis/vienna.py MAX_VIENNA_NT).
 	stViennaMaxNT = 30_000
 )
 

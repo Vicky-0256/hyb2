@@ -196,7 +196,7 @@ func LoadExternalLookup(path string) bool {
 	return on
 }
 
-// MfoldEnv names the mfold 3.6 script for Python (desktop/runtime/mfold.py
+// MfoldEnv names the mfold 3.6 script for Python (pipeline/hyb2analysis/mfold.py
 // find, COMRADES(mfold)). The app sets it on task processes from the mfold
 // preference: a desktop app started from the Finder never sees a shell's
 // environment.

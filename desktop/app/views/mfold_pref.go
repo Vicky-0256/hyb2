@@ -1,7 +1,7 @@
 package views
 
 // mfold 3.6 for COMRADES(mfold) (⑤ Structure › COMRADES › Folding program,
-// desktop/runtime/mfold.py): found as the mfold preference (given to task
+// pipeline/hyb2analysis/mfold.py): found as the mfold preference (given to task
 // processes as HYB2_MFOLD by core.Service), else HYB2_MFOLD, else PATH, else
 // the usual conda and Homebrew locations, as mfold.find. It is free for
 // academic use but not bundled; bioconda builds it for Linux and Intel

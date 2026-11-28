@@ -196,7 +196,7 @@ assert.throws(() => p({K: ' 2 '}), /IRIS ensemble size K/);"""
 
     def test_folder_reuse_matches_fresh_folds(self):
         # one fold compound with its hard constraints reset each time
-        from desktop.runtime import vienna
+        from hyb2analysis import vienna
         sequence, arms = fixture()
         stems = iris.collect_stems(sequence, iris.support_matrix(len(sequence), arms), iris.parameters({}))
         folder = iris.Folder(sequence)

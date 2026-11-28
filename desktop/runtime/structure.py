@@ -54,7 +54,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 
 from hyb2analysis import hybfile
 from hyb2analysis.reference import fasta_record_chunks, fasta_records, parse_coordinate, read_fasta, reference_sequence, validate_input_length, validate_window
-from hyb2analysis.fold_text import FOLD_TEXT, checked_fold_text, fold_text, unsupported_bases
+from hyb2analysis.fold_text import FOLD_TEXT, fold_text, unsupported_bases
 from hyb2analysis.engine_parameters import engine_parameters, task_allow_pseudoknot
 from hyb2analysis.support_kernels import DEFAULT_SUPPORT_KERNEL, PAIR_MODELS as PAIR_ESTIMATORS, SUPPORT_KERNELS
 
@@ -64,8 +64,8 @@ from .project import _atomic_write_json, load_manifest, safe_relative_path, vali
 from .task_paths import (evidence_inputs as _evidence_inputs, input_file as _input_file,
                          real_child_dir as _real_child_dir, resolve_run_dir as _resolve_run_dir, safe_task_id)
 from .samples import _open_text as _open_reference
-from . import comrades as _comrades
-from . import vienna as _vienna
+from hyb2analysis import comrades as _comrades
+from hyb2analysis import vienna as _vienna
 
 MAX_WINDOWS = 512
 _ENGINES = engine_parameters("desktop")
@@ -1486,10 +1486,7 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     inputs = _evidence_inputs(project, request)
     regions = _two_regions(request, inputs, cofold=False)
     one, two = regions[0]["sequence"], regions[1]["sequence"]
-    prepared = one + checked_fold_text(_comrades.LINKER, "COMRADES spacer") + two
-    if len(prepared) > _comrades.MAX_COMRADES_NT:
-        raise ValueError(f"{len(prepared)} nt (both regions and the 100-nt spacer) exceeds the COMRADES "
-                         f"limit of {_comrades.MAX_COMRADES_NT} nt; choose shorter regions")
+    prepared, layout = _comrades.paired_sequence(regions)
     _comrades._folder(params)  # a missing mfold fails before the evidence is read
 
     run_dir = _resolve_run_dir(project, task_id, request.get("run_dir"))
@@ -1498,7 +1495,6 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     progress = ProgressWriter(run_dir)
     progress.work = {"lengths": [len(prepared)], "engine": "comrades", "workers": 1}
     t0 = time.monotonic()
-    layout = [dict(regions[0], prepared_start=1), dict(regions[1], prepared_start=len(one) + len(_comrades.LINKER) + 1)]
     arms, skipped = _comrades_evidence(progress, inputs["hyb_paths"], lambda report: _comrades.paired_arms(
         inputs["hyb_paths"], layout, prepared, params["homodimer_only"], report))
     if not arms:
@@ -1510,22 +1506,17 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
     fold_seconds = time.monotonic() - t0
 
     # keep the two regions: A+B positions, without the spacer
-    low, high = len(one) + 1, len(one) + len(_comrades.LINKER)
-
-    def local(k: int) -> Optional[int]:
-        return k if k < low else (k - len(_comrades.LINKER) if k > high else None)
-
-    pairs = [(local(i), local(j), bracket, bonus) for i, j, bracket, bonus in folded["pairs"]
-             if local(i) is not None and local(j) is not None]
-    dot = ["."] * (len(one) + len(two))
-    for i, j, _, _ in pairs:
-        dot[i - 1], dot[j - 1] = "(", ")"
+    joined = _comrades.without_spacer(folded, len(one), len(two))
     positions = cofold_positions(regions)
     # on the RNA, i < j also when region 2 lies before region 1
-    hard = [sorted((positions[local(i) - 1], positions[local(j) - 1])) for i, j in folded["hard_pairs"]
-            if local(i) is not None and local(j) is not None]
-    record = dict(folded, structure="".join(dot), pairs=pairs, sequence=one + two, start=1, end=len(one) + len(two),
-                  arms=_arms_sample(_blocks(arms, local)))  # A+B positions, without the spacer
+    hard = [sorted((positions[i - 1], positions[j - 1])) for i, j in joined["hard_pairs"]]
+    # A+B positions, without the spacer; as CPLcofold's, a row gives its region 1
+    # arm first (RNAcofold folded the arms in the .hyb's order)
+    blocks: Counter = Counter()
+    for (a0, a1, b0, b1), rows in _blocks(arms, _comrades.spacer_position(len(one))).items():
+        blocks[(a0, a1, b0, b1) if a0 < b0 else (b0, b1, a0, a1)] += rows
+    record = dict(folded, structure=joined["structure"], pairs=joined["pairs"], sequence=one + two, start=1,
+                  end=len(one) + len(two), arms=_arms_sample(blocks))
     stored = {"engine": _comrades.engine_name(params), **{k: params[k] for k in ("temperature", "min_loop", "constraint_limit",
                                                                        "random_folds", "seed", "homodimer_only", "fold_program")},
               "layout": "two regions joined by the 100-nt A/U spacer", "hard_pairs": hard}
@@ -1536,7 +1527,7 @@ def _paired_run(request: Dict[str, Any], project: Path, task_id: str, state: Dic
         task_id=task_id, mode="paired", engine=_comrades.engine_name(params), engine_version=_comrades.fold_program_version(params),
         run_dir=run_dir, out_dir=out_dir, progress=progress, regions=regions, record=record, stored=stored,
         inputs=inputs, hyb_used=True, rows=rows_text,
-        extra_record={"spacer_pairs_left_out": len(folded["pairs"]) - len(pairs),
+        extra_record={"spacer_pairs_left_out": joined["spacer_pairs_left_out"],
                       "energy_of": "region 1 + 100-nt A/U spacer + region 2, as folded"},
         extra_meta={"evidence_skipped": skipped},
         timings={"evidence_s": round(evidence_seconds, 2), "fold_s": round(fold_seconds, 2),

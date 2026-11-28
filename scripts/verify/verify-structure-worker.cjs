@@ -326,6 +326,7 @@ async function main() {
       inputRecords: 2, cofoldsWithIntermolecularPairs: 2, temperature: 37, minimumLoop: 3
     });
     await verifyUntruncatedScores(worker);
+    await verifyU2MatchesOriginal(worker);
     process.stdout.write("structure-worker-integration: ok\n");
   } finally {
     await worker.terminate();
@@ -371,17 +372,73 @@ async function verifyUntruncatedScores(worker) {
   assert.deepEqual(new Map(post.evidence.pairs.map(p => [`${p.one}:${p.two}`, p.count])), counts);
 }
 
+// The web's COMRADES, from the page's .hyb parser and region assembly to the
+// worker, on the yeast U2 snRNA and its 2,413 U2-U2 chimeras in data/: the
+// structure, dG, accepted stems and RNAcofold pair counts of the original
+// hyb2_fold, for the whole RNA and for 126-175 with 1126-1175 joined by the
+// spacer, as desktop/runtime/tests/test_comrades.py checks for the CLI and
+// the desktop app (it says where u2_hyb2_fold/ comes from).
+async function verifyU2MatchesOriginal(worker) {
+  const vm = require("node:vm");
+  const zlib = require("node:zlib");
+  const root = path.resolve(__dirname, "..", "..");
+  const lines = file => fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
+  const original = name => lines(path.join(root, "desktop", "runtime", "tests", "u2_hyb2_fold", name));
+
+  const parser = vm.createContext({ Number, String, Boolean, Object, Array, Math, RegExp, Intl, TextDecoder,
+    self: { postMessage: function () {} } });
+  vm.runInContext(fs.readFileSync(path.join(root, "web", "parser.worker.js"), "utf8"), parser, { filename: "parser.worker.js" });
+  const hyb = zlib.gunzipSync(fs.readFileSync(path.join(root, "data", "U2-U2.hyb.gz"))).toString("utf8");
+  const records = hyb.split("\n").filter(Boolean).map(function (line, index) {
+    const parsed = parser.parseRecord(line, index + 1);
+    assert.ok(parsed.ok, line);
+    return Object.assign(parsed.record, { index });
+  });
+  const [header, ...sequence] = lines(path.join(root, "data", "U2.fasta"));
+  const gene = header.slice(1).trim();
+  const fasta = { sequences: [{ id: gene, header: gene, sequence: sequence.join("") }] };
+  const comrades = require(path.join(root, "web", "comrades-analysis.js"));
+
+  // Two regions need each chimera's arms cofolded in the .hyb's order, as
+  // hyb2_fold's; region 1's arm first gives 139-1169 (11 bp), not 138-1170.
+  for (const [run, regions, arms] of [["hyb2_fold", [[1, 1175]], 2413],
+    ["hyb2_fold_126-175_1126-1175", [[126, 175], [1126, 1175]], 517]]) {
+    const [, structure, energy] = /^(\S+)\s+\(\s*(\S+)\)$/.exec(original(run + ".vienna")[2]);
+    const stems = original(run + ".accepted").map(line => line.split(/\s+/).slice(1).map(Number));
+    const counts = new Map();
+    for (const line of original(run + ".basepair_scores.txt")) {
+      const [i, j, n] = line.split(/\s+/).map(Number), key = Math.min(i, j) + ":" + Math.max(i, j);
+      counts.set(key, (counts.get(key) || 0) + n);
+    }
+    const assembly = comrades.prepareReferenceAssembly(records, fasta, {
+      regions: regions.map(([start, end]) => ({ rna: gene, start, end })) });
+    assert.equal(assembly.evidenceArms.length, arms, run);
+
+    // The whole RNA takes about 9 s on an Apple M-series Mac; a shared CI runner can be several times slower.
+    const reply = await waitForTerminal(worker, [], { type: "comrades-fold", sequence: assembly.sequence,
+      evidenceArms: assembly.evidenceArms }, 180000);
+    assert.equal(reply.type, "complete", reply.message);
+    const result = reply.result;
+    assert.equal(result.dotBracket, structure, run); // two regions: with the spacer, as the original's
+    assert.equal(result.energy.toFixed(2), Number(energy).toFixed(2), run);
+    assert.deepEqual(result.acceptedStemConstraints.map(stem => [stem.left, stem.right, stem.length]), stems, run);
+    assert.deepEqual(new Map(result.evidence.scoredEvidencePairs.map(
+      pair => [Math.min(pair.one, pair.two) + ":" + Math.max(pair.one, pair.two), pair.count])), counts, run);
+  }
+  process.stdout.write("structure-worker-u2-original-hyb2-fold: ok\n");
+}
+
 function hasPair(result, left, right) {
   return result.pairs.some(function (pair) {
     return pair.left === left && pair.right === right;
   });
 }
 
-function waitForTerminal(worker, messages, request) {
+function waitForTerminal(worker, messages, request, timeoutMs = 30000) {
   return new Promise(function (resolve, reject) {
     const timeout = setTimeout(function () {
       reject(new Error("Timed out waiting for the ViennaRNA structure worker result."));
-    }, 30000);
+    }, timeoutMs);
 
     function cleanup() {
       clearTimeout(timeout);

@@ -208,7 +208,7 @@ class _Spy:
 
 class ComradesEvidenceTests(ComradesFixture):
     def test_only_scalar_score_caps_the_matched_endpoint_counts(self):
-        from desktop.runtime.comrades import score_structure_pairs
+        from hyb2analysis.comrades import score_structure_pairs
 
         counts = {(1, 12): 1_100_000, (2, 11): 1_000_000, (3, 10): 7}
         scored = score_structure_pairs([(12, 1), (2, 11), (3, 10), (4, 9)], counts)
@@ -216,7 +216,7 @@ class ComradesEvidenceTests(ComradesFixture):
                                   "matched_support": 2_100_007, "score": 4_000_014})
 
     def test_score_uses_observations_outside_the_constraint_shortlist(self):
-        from desktop.runtime import comrades
+        from hyb2analysis import comrades
 
         sequence = "G" * 8 + "C" * 1016
 
@@ -258,7 +258,7 @@ class ComradesEvidenceTests(ComradesFixture):
         self.assertEqual(record["pairs"], [(1, 20, "()", 3), (2, 19, "()", 2), (3, 18, "()", 0)])
 
     def test_windows_read_the_hyb_once_with_progress(self):
-        from desktop.runtime import comrades
+        from hyb2analysis import comrades
         windows = [(1, 130), (100, 260), (1, 260)]
         spy = _Spy()
         with spy.patch, mock.patch.object(comrades, "_records", wraps=comrades._records) as records:

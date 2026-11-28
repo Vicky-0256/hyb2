@@ -49,9 +49,10 @@ assert.equal(paired.sequence.length, 120);
 assert.equal(paired.linker.length, 100);
 assert.equal(paired.linker.sequence, "A".repeat(50) + "U".repeat(50));
 assert.equal(paired.eligibleRecordCount, 1);
-assert.equal(paired.evidenceArms[0].reversedFromHyb, true);
-assert.equal(paired.evidenceArms[0].oneStart, 3);
-assert.equal(paired.evidenceArms[0].twoStart, 114);
+// the record's arm order, as hyb2_fold's: RNA_B 4-7 first, in region 2
+assert.equal(paired.evidenceArms[0].reversedFromHyb, false);
+assert.deepEqual([paired.evidenceArms[0].sequenceOne, paired.evidenceArms[0].oneStart], ["GAAA", 114]);
+assert.deepEqual([paired.evidenceArms[0].sequenceTwo, paired.evidenceArms[0].twoStart], ["CCGG", 3]);
 
 // Raw coordinates must be checked before Number can coerce a type or round
 // decimal text to an integer. Test the public preparation boundary, each side.

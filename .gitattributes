@@ -1,4 +1,5 @@
 # Runtime packages copy working-tree files. Keep text sources LF on every checkout.
+/bin/comrades text eol=lf
 /bin/cplfold text eol=lf
 /bin/iris text eol=lf
 /desktop/runtime/** text=auto eol=lf

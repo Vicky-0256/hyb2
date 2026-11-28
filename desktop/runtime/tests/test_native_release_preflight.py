@@ -110,7 +110,7 @@ class PackagedSourceTests(unittest.TestCase):
 
     def test_packagers_refuse_untracked_fold_dependencies(self):
         shared = 'pipeline/hyb2analysis/iris_parameters.py'
-        dependencies = (shared, 'pipeline/hyb2analysis/iris.py', 'pipeline/hyb2analysis/reference.py')
+        dependencies = (shared, *(f'pipeline/hyb2analysis/{name}.py' for name in ('comrades', 'iris', 'mfold', 'reference', 'vienna')))
         self.track_sources()
         for name in dependencies:
             with self.subTest(source=name):
@@ -120,7 +120,7 @@ class PackagedSourceTests(unittest.TestCase):
                 if name == shared:
                     with self.assertRaisesRegex(ValueError, f'missing from the Git index: {name}'):
                         self.web.stage_web_sources(self.repo, self.root / 'browser', self.root / 'assets')
-                else:  # The browser uses its JS IRIS engine, not the desktop pipeline.
+                else:  # The browser has its own JS IRIS and COMRADES, not these desktop modules.
                     self.web.stage_web_sources(self.repo, self.root / 'browser', self.root / 'assets')
             subprocess.run(['git', 'add', '--', name], cwd=self.repo, check=True)
 

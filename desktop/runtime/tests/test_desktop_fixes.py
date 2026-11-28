@@ -68,7 +68,7 @@ class ServeEncodingTests(unittest.TestCase):
 class ComradesSeedTests(unittest.TestCase):
     def test_an_endless_gzip_hyb_line_fails_instead_of_loading_whole(self):
         import gzip
-        from desktop.runtime import comrades
+        from hyb2analysis import comrades
         from hyb2analysis import hybfile
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.hyb.gz"
@@ -78,7 +78,7 @@ class ComradesSeedTests(unittest.TestCase):
                 comrades.evidence_arms([path], "G", "ACGU", 1, 4)
 
     def test_evidence_keeps_twenty_record_ids_a_pair(self):
-        from desktop.runtime import comrades
+        from hyb2analysis import comrades
         mapped = [(1, 9, f"r{k}") for k in range(25)] + [(2, 8, None), (2, 8, "x")]
         entries = comrades.aggregate_evidence(mapped)
         self.assertEqual([(e["one"], e["two"], e["count"]) for e in entries], [(1, 9, 25), (2, 8, 2)])
@@ -90,7 +90,7 @@ class ComradesSeedTests(unittest.TestCase):
     def test_a_base_pair_is_counted_once_whichever_arm_was_sequenced_first(self):
         # Chimeras occur in both arm orders; (1, 9) and (9, 1) halved the pair's
         # support and gave the same constraint twice.
-        from desktop.runtime import comrades
+        from hyb2analysis import comrades
         mapped = [(1, 9, "a"), (9, 1, "b"), (2, 8, "a"), (8, 2, "b"), (8, 2, "c"), (5, 5, "d")]
         entries = comrades.aggregate_evidence(mapped)
         self.assertEqual([(e["one"], e["two"], e["count"], e["recordIds"]) for e in entries],
@@ -101,7 +101,7 @@ class ComradesSeedTests(unittest.TestCase):
     def test_weak_pairs_are_trimmed_from_the_ends_of_a_stem(self):
         # hyb2 gk-dev's test_bp2hyb_trims_weak_helix_ends: 10-50..14-46 is well
         # supported, 9-51 and 15-45 extend it with 2 and 1 observations.
-        from desktop.runtime import comrades
+        from hyb2analysis import comrades
         counts = [(9, 51, 2), (10, 50, 100), (11, 49, 100), (12, 48, 90), (13, 47, 80), (14, 46, 100), (15, 45, 1),
                   (30, 70, 7), (31, 69, 1)]
         evidence = [{"one": one, "two": two, "count": count} for one, two, count in counts]
@@ -118,7 +118,7 @@ class ComradesSeedTests(unittest.TestCase):
         self.assertEqual(trimmed["pairs"], [(10, 50), (11, 49), (12, 48), (13, 47), (14, 46)])
 
     def test_seed_is_trimmed_and_cut_as_the_web(self):
-        from desktop.runtime import comrades
+        from hyb2analysis import comrades
         # String(seed).trim().slice(0, 128): UTF-16 units, JavaScript whitespace
         self.assertEqual(comrades.js_seed("\ufeff run1 \t"), "run1")
         self.assertEqual(comrades.js_seed("abc\x1c"), "abc\x1c")
@@ -126,7 +126,8 @@ class ComradesSeedTests(unittest.TestCase):
         self.assertEqual(comrades.hash_seed(comrades.js_seed("\U0001F600" * 100)), 817844933)  # node
 
     def test_seed_cut_through_an_emoji(self):
-        from desktop.runtime import comrades, structure
+        from desktop.runtime import structure
+        from hyb2analysis import comrades
         seed = comrades.js_seed("a" * 127 + "\U0001F600")
         self.assertEqual(comrades.hash_seed(seed), 1758622465)  # node: the half emoji is hashed
         label = comrades.seed_label(seed)
@@ -136,7 +137,7 @@ class ComradesSeedTests(unittest.TestCase):
                 {"engine": "COMRADES(ViennaRNA)", "temperature": 37.0, "min_loop": 3, "random_folds": 1, "seed": label}))
 
     def test_empty_sequence(self):
-        from desktop.runtime import vienna
+        from hyb2analysis import vienna
         with self.assertRaisesRegex(ValueError, "no sequence"):
             vienna.fold("", {"temperature": 37, "min_loop": 3})
 

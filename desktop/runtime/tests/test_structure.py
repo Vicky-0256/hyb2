@@ -330,7 +330,7 @@ class ViennaRunTests(unittest.TestCase):
         raise AssertionError("no G-C pair")
 
     def test_catalog_defaults_reach_vienna_and_comrades_runs(self):
-        from desktop.runtime import comrades, vienna
+        from hyb2analysis import comrades, vienna
         from hyb2analysis.engine_parameters import COMRADES_COUNTS, VIENNA_SETTINGS, engine_parameters
 
         with mock.patch.dict(VIENNA_SETTINGS, temperature=(0, 100, 29.5), minLoopSize=(0, 12, 5)), \
@@ -369,7 +369,7 @@ class ViennaRunTests(unittest.TestCase):
                             engine_parameters(host)
 
     def test_omitted_and_explicit_values_obey_the_current_range(self):
-        from desktop.runtime import comrades, vienna
+        from hyb2analysis import comrades, vienna
 
         for module, wire, native, bounds in ((vienna, "temperature", "temperature", (0, 30)),
                                              (vienna, "minLoopSize", "min_loop", (0, 2)),
@@ -434,7 +434,7 @@ class ViennaRunTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=extra):
                 self._run(task_id="bad", **extra)
         # crossing hard pairs
-        from desktop.runtime.vienna import check_hard_pairs
+        from hyb2analysis.vienna import check_hard_pairs
         seq = "GGGGAAAACCCCAAAAGGGGAAAACCCC"
         with self.assertRaises(ValueError):
             check_hard_pairs([(1, 12), (5, 17)], seq.replace("A", "C", 0), 3)
@@ -524,7 +524,7 @@ class ComradesMfoldTests(ComradesRunTests):
         script = directory / "bin" / "mfold"
         script.write_text(f"""#!{sys.executable}
 import sys, os
-sys.path.insert(0, {str(ROOT)!r})
+sys.path[:0] = [{str(ROOT / "pipeline")!r}, {str(ROOT / "third_party" / "cplfold")!r}]
 if sys.argv[1:] == ["-V"]:
     print("mfold version 3.6"); sys.exit(0)
 assert os.path.exists("stack.dat"), "tables not linked"
@@ -532,7 +532,7 @@ seq = "".join(l.strip() for l in open("s.seq") if not l.startswith(">"))
 pairs = []
 if {honours!r} and os.path.exists("s.aux"):
     pairs = [tuple(int(x) for x in l.split()[1:3]) for l in open("s.aux")]
-from desktop.runtime import vienna
+from hyb2analysis import vienna
 r = vienna.fold(seq, {{"temperature": 37.0, "min_loop": 3}}, pairs)
 with open("s.ct", "w") as out:
     out.write(f"{{len(seq)}}\\t dG = {{r['energy']:.2f}}   [initially {{r['energy']:.2f}}] s\\n")
@@ -600,7 +600,7 @@ with open("s.ct", "w") as out:
                          Path("/opt/homebrew/Caskroom/miniforge/base/envs/hyb2-mfold/bin/mfold").exists(),
                          "needs mfold 3.6 (conda install -c bioconda mfold)")
     def test_real_mfold(self):
-        from desktop.runtime import mfold
+        from hyb2analysis import mfold
 
         record = mfold.fold("GGGGAAAACCCCAUUUUUUUUUUUAAAAAAAAAA", {"temperature": 37.0, "min_loop": 3},
                             [(14, 34), (15, 33), (16, 32)])

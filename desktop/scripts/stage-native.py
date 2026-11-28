@@ -21,7 +21,8 @@ from bundle_sources import CPLFOLD_SOURCE_DIRS, REQUIRED_FOLD_SOURCES, package_b
 # web/assets/examples is the example data set (desktop/runtime/example.py).
 SOURCE_DIRS = ['desktop/runtime', 'desktop/task-runner', 'desktop/spec', *CPLFOLD_SOURCE_DIRS, 'pipeline',
                'web/assets/examples', 'third_party/iris']
-SOURCE_FILES = ['bin/cplfold', *REQUIRED_FOLD_SOURCES, 'pipeline/hyb2analysis/iris.py', 'pipeline/hyb2analysis/reference.py']
+SOURCE_FILES = ['bin/cplfold', *REQUIRED_FOLD_SOURCES,
+                *(f'pipeline/hyb2analysis/{name}.py' for name in ('comrades', 'iris', 'mfold', 'reference', 'vienna'))]
 BOWTIE_BINARIES = [name + ('.exe' if os.name == 'nt' else '') for name in ('bowtie2-align-s', 'bowtie2-build-s')]
 BOWTIE_FILES = {'third_party/bowtie2/LICENSE', 'third_party/bowtie2/VERSION', *('bin/' + n for n in BOWTIE_BINARIES)}
 PINS = {"numpy": "1.24.4", "numba": "0.58.1", "llvmlite": "0.41.1"}

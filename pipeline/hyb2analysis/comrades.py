@@ -1,6 +1,7 @@
-"""COMRADES(ViennaRNA): the web RNA Structure page's HYB-guided ViennaRNA
-mode (web/comrades-analysis.js and the comrades-fold path of
-web/structure.worker.js), for one region of one RNA.
+"""COMRADES(ViennaRNA) of one region, or of two regions joined by the
+100-nt spacer: the web's COMRADES (web/comrades-analysis.js and the
+comrades-fold path of web/structure.worker.js), shared by the desktop's
+structure task (desktop/runtime/structure.py) and ``bin/comrades``.
 
 Each eligible chimera (both arms inside the region) is cofolded with
 RNAcofold; the intermolecular pairs it forms are counted as evidence (a pair
@@ -98,7 +99,7 @@ def parameters(raw: Any) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _hybfile():
-    from hyb2analysis import hybfile  # the pipeline package, staged with the runtime
+    from . import hybfile
     return hybfile
 
 
@@ -203,10 +204,12 @@ def paired_arms(hyb_paths: Sequence[Path], regions: Sequence[Dict[str, Any]], pr
                 homodimer_only: bool = False, progress: Optional[Callable[[int], None]] = None
                 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """The web's two-region layout (prepareReferenceAssembly with two regions,
-    not cofold): every record with one arm in each region, oriented region 1
-    first, in positions of ``prepared`` (region 1 + :data:`LINKER` + region 2).
-    ``regions`` carry gene_id, start, end and prepared_start; ``progress``
-    as :func:`_records`."""
+    not cofold): every record with one arm in each region, in positions of
+    ``prepared`` (region 1 + :data:`LINKER` + region 2). Its arms keep the
+    record's order, as hyb2_fold projected them for
+    comradesMakeConstraints_2: RNAcofold's MFE of one&two can differ from
+    that of two&one. ``regions`` carry gene_id, start, end and
+    prepared_start; ``progress`` as :func:`_records`."""
     names = [r["gene_id"].encode() for r in regions]
     arms: List[Dict[str, Any]] = []
     skipped = _new_skipped()
@@ -223,13 +226,13 @@ def paired_arms(hyb_paths: Sequence[Path], regions: Sequence[Dict[str, Any]], pr
     for line, number, record in _records(hyb_paths, homodimer_only, [skipped], progress):
         one, two = (record.gene1, record.start1, record.end1), (record.gene2, record.start2, record.end2)
         if inside(*one, 0) and inside(*two, 1):
-            pass
+            in_one, in_two = 0, 1
         elif inside(*two, 0) and inside(*one, 1):
-            one, two = two, one
+            in_one, in_two = 1, 0
         else:
             skipped["outsideSelectedRegions"] += 1
             continue
-        (start_one, seq_one), (start_two, seq_two) = arm(one[1], one[2], 0), arm(two[1], two[2], 1)
+        (start_one, seq_one), (start_two, seq_two) = arm(one[1], one[2], in_one), arm(two[1], two[2], in_two)
         if unsupported_bases(seq_one + seq_two):
             skipped["invalidSequence"] += 1
             continue
@@ -239,6 +242,39 @@ def paired_arms(hyb_paths: Sequence[Path], regions: Sequence[Dict[str, Any]], pr
             raise ValueError(f"These regions contain more than {MAX_EVIDENCE_RECORDS} eligible HYB rows. "
                              "Select smaller regions before running RNAcofold evidence generation.")
     return arms, skipped
+
+
+def paired_sequence(regions: Sequence[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
+    """The web's two-region assembly: region 1 + :data:`LINKER` + region 2,
+    and the regions with their ``prepared_start`` for :func:`paired_arms`."""
+    one, two = regions[0]["sequence"], regions[1]["sequence"]
+    prepared = one + checked_fold_text(LINKER, "COMRADES spacer") + two
+    if len(prepared) > MAX_COMRADES_NT:
+        raise ValueError(f"{len(prepared)} nt (both regions and the 100-nt spacer) exceeds the COMRADES "
+                         f"limit of {MAX_COMRADES_NT} nt; choose shorter regions")
+    return prepared, [dict(regions[0], prepared_start=1), dict(regions[1], prepared_start=len(one) + len(LINKER) + 1)]
+
+
+def spacer_position(length_one: int) -> Callable[[int], Optional[int]]:
+    """A position of region 1 + spacer + region 2 as one of region 1 + region 2
+    (``length_one`` nt of region 1), None on the spacer."""
+    low, high = length_one + 1, length_one + len(LINKER)
+    return lambda k: k if k < low else (k - len(LINKER) if k > high else None)
+
+
+def without_spacer(folded: Dict[str, Any], length_one: int, length_two: int) -> Dict[str, Any]:
+    """:func:`fold` of a :func:`paired_sequence` on the two regions alone
+    (region 1 + region 2 positions): its pairs, dot-bracket and fitted
+    constraints, without the pairs that use a spacer base, which are counted."""
+    local = spacer_position(length_one)
+    pairs = [(local(i), local(j), bracket, bonus) for i, j, bracket, bonus in folded["pairs"]
+             if local(i) is not None and local(j) is not None]
+    dot = ["."] * (length_one + length_two)
+    for i, j, _, _ in pairs:
+        dot[i - 1], dot[j - 1] = "(", ")"
+    hard = [[local(i), local(j)] for i, j in folded["hard_pairs"] if local(i) is not None and local(j) is not None]
+    return {"structure": "".join(dot), "pairs": pairs, "hard_pairs": hard,
+            "spacer_pairs_left_out": len(folded["pairs"]) - len(pairs)}
 
 
 # ---------------------------------------------------------------------------

@@ -83,7 +83,7 @@ def structure_run(request: Dict[str, Any], project: Path, task_id: str, mode: st
 
     from . import structure as st
     from . import task_paths
-    from . import vienna as _vienna
+    from hyb2analysis import vienna as _vienna
 
     params = parameters(request.get("parameters"))
     inputs = task_paths.evidence_inputs(project, request)

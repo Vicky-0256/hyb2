@@ -661,8 +661,11 @@ type structurePage struct {
 	reading     map[string]bool
 	readErr     map[string]string
 	pendingPair []string
-	// pendingShow is a fold started here, shown once it is listed.
+	// pendingShow is a fold started here, shown once it is listed;
+	// focusResult is that fold once shown, until the viewer has given its
+	// heading the keyboard focus and announced it.
 	pendingShow string
+	focusResult string
 	pairLabels  []string
 	arcs        widgets.Arcs
 	arcsKey     string
@@ -723,7 +726,7 @@ func (p *structurePage) reset() {
 	p.cache = map[string]*structureResult{}
 	p.reading = map[string]bool{}
 	p.readErr = map[string]string{}
-	p.pendingPair, p.pairLabels, p.pendingShow = nil, nil, ""
+	p.pendingPair, p.pairLabels, p.pendingShow, p.focusResult = nil, nil, "", ""
 	p.arcsKey, p.dbnText, p.target, p.shownA, p.shownB = "", "", nil, nil, ""
 	p.heatCache, p.heatReading = nil, nil
 	p.layers = newSTLayers()
@@ -934,7 +937,7 @@ func (p *structurePage) loadList() {
 func (p *structurePage) resolvePair() {
 	if p.pendingShow != "" && p.entry(p.pendingShow) != nil {
 		p.show(p.pendingShow)
-		p.pendingShow = ""
+		p.focusResult, p.pendingShow = p.pendingShow, ""
 	}
 	if len(p.pendingPair) != 2 {
 		return
@@ -960,6 +963,9 @@ func (p *structurePage) entry(id string) *structureEntry {
 }
 
 func (p *structurePage) show(id string) {
+	if p.focusResult != id {
+		p.focusResult = "" // another result shown by hand keeps the focus where it is
+	}
 	p.viewA = id
 	if p.viewB == id {
 		p.viewB = ""
@@ -1109,7 +1115,22 @@ func (p *structurePage) viewer(c *ui.Context) {
 			}
 		}
 		ui.Row(c).Gap(Space2).AlignItems(ui.Center).Wrap().Children(func() {
-			ui.Text(c, "Viewer").FontSize(FontTitle).Bold().Grow(1)
+			heading := ui.Text(c.Key("st-viewer-title"), "Viewer").FontSize(FontTitle).Bold().Grow(1)
+			if e := p.entry(p.viewA); a != nil && e != nil {
+				what := stWhat(e)
+				if e.GeneID != "" {
+					what = e.GeneID + " · " + what
+				}
+				heading.Focusable().Label("Viewer: " + what)
+				// A fold started here has arrived: as on the web's Structure
+				// page, the keyboard focus moves to its heading and screen
+				// readers hear its numbers once.
+				if p.focusResult == p.viewA {
+					p.focusResult = ""
+					heading.Focus().ScrollIntoView()
+					c.Announce("Structure ready · " + nameOr(stSummaryText(e), what))
+				}
+			}
 			if len(windowChoices) > 0 {
 				current := "All windows"
 				if p.record != "all" {
@@ -1700,18 +1721,26 @@ func (p *structurePage) saveDBN(a *structureResult) {
 // budget: the CPLfold estimate for its longest window (the whole RNA in
 // genome mode) times the windows folded at once.
 func StructureMemClaim(req core.TaskStartRequest, geneLength int, allowPseudoknot bool) uint64 {
-	longest, parallel := geneLength, 1
+	longest := geneLength
 	if len(req.Windows) > 0 {
 		longest = 0
 		for _, w := range req.Windows {
 			longest = max(longest, int(w.End-w.Start+1))
 		}
-		parallel = len(req.Windows)
-		if req.Workers != nil {
-			parallel = min(parallel, int(*req.Workers))
-		}
 	}
-	return core.StructureClaimMB(longest, allowPseudoknot, parallel)
+	return core.StructureClaimMB(longest, allowPseudoknot, structureParallel(req))
+}
+
+// structureParallel is how many folds of req run at once: its windows, up
+// to its workers, or the whole RNA.
+func structureParallel(req core.TaskStartRequest) int {
+	if len(req.Windows) == 0 {
+		return 1
+	}
+	if req.Workers != nil {
+		return min(len(req.Windows), int(*req.Workers))
+	}
+	return len(req.Windows)
 }
 
 // StructureStartError explains a fold the memory budget cannot hold.

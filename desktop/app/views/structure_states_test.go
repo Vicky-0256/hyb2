@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,12 +167,36 @@ func TestStructureFoldStates(t *testing.T) {
 	expect(tt, "Evidence weight 0.50 · beam 100 · phase 1 1 · energy window 5 · DP09 · beta 0.00 · changed from the defaults")
 	p.beam = stDefaultBeam
 
-	// Memory over the budget blocks the run and says what to do.
+	// Memory over the budget blocks the run and says what to do; the
+	// longest fold the budget holds is said up front (detector.py
+	// _max_length_for, see core's TestCPLfoldMemoryMatchesDetector).
 	p.gene = africaGene
 	p.budgetMB = 8192
 	tt.Frame()
-	expect(tt, "Cannot run yet:", "• This fold needs about 16.7 GB of memory but tasks may use 8.0 GB. "+
-		"Fold shorter windows, fewer windows at once (Advanced), or raise Memory in Preferences.")
+	expect(tt, "Fits in memory: up to 7,428 nt per fold",
+		"Cannot run yet:", "• This fold needs about 16.7 GB of memory but tasks may use 8.0 GB. "+
+			"Fold shorter windows, fewer windows at once (Advanced), or raise Memory in Preferences.")
+	// It is where the budget check draws the line, for windows folded at
+	// once with pseudoknots too.
+	fits := func(windows string) bool {
+		p.windows = windows
+		return !slices.ContainsFunc(p.plan().problems, func(s string) bool { return strings.HasPrefix(s, "This fold needs about") })
+	}
+	p.mode = "windows"
+	if !fits("1-7428") || fits("1-7429") {
+		t.Fatal("8 GB does not hold 7,428 nt exactly")
+	}
+	p.budgetMB, p.pseudoknot, p.workers = 24576, true, 2
+	if !fits("1-7885\n8001-8400") || fits("1-7886\n8001-8400") {
+		t.Fatal("24 GB does not hold two 7,885 nt windows with pseudoknots exactly")
+	}
+	tt.Frame()
+	expect(tt, "Fits in memory: up to 7,885 nt per window with pseudoknots, 2 windows at once")
+	p.budgetMB = 0
+	tt.Frame()
+	if tt.HasText("Fits in memory") {
+		t.Fatal("a limit while the budget is unknown")
+	}
 	p.budgetMB = 24576
 
 	// Empty and loading.
@@ -226,6 +251,52 @@ func TestStructureFoldStates(t *testing.T) {
 	csSettle(a, tt)
 	if len(a.TaskList()) != before {
 		t.Fatal("a second fold started while one runs")
+	}
+}
+
+// TestStructureNewResultFocus: as on the web's Structure page, a fold
+// started here takes the keyboard focus to the viewer's heading when it
+// arrives and is announced once; a result shown by hand does neither.
+func TestStructureNewResultFocus(t *testing.T) {
+	a, _, tt := stStatesFixture(t, 3)
+	p := a.PageFor("structure").(*structurePage)
+	// structure-001 is the fixture's whole-RNA result of stLongGene
+	heading := "Viewer: " + stLongGene + " · whole RNA · 2,534 nt"
+	readyCount := func() int {
+		n := 0
+		for _, text := range tt.Announcements() {
+			if text == "Structure ready · 712 base pairs · -811.4 kcal/mol" {
+				n++
+			}
+		}
+		return n
+	}
+	p.show("structure-001")
+	csSettle(a, tt)
+	if tt.Focused(heading) || readyCount() != 0 {
+		t.Fatal("a result shown by hand takes the focus or is announced")
+	}
+	p.show("structure-000")
+	csSettle(a, tt)
+	p.pendingShow = "structure-001"
+	p.resolvePair()
+	csSettle(a, tt)
+	if !tt.Focused(heading) {
+		t.Fatalf("the new result's heading %q has no focus", heading)
+	}
+	tt.Frame()
+	if n := readyCount(); n != 1 {
+		t.Fatalf("announced %d times", n)
+	}
+	// Another result shown before it arrived: neither then nor later.
+	p.pendingShow = "structure-001"
+	p.resolvePair()
+	p.show("structure-000")
+	csSettle(a, tt)
+	p.show("structure-001")
+	csSettle(a, tt)
+	if readyCount() != 0 {
+		t.Fatal("a fold replaced by another result is announced")
 	}
 }
 

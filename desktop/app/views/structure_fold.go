@@ -156,7 +156,10 @@ type foldPlan struct {
 	limits []string
 	req    core.TaskStartRequest
 	memMB  uint64
-	what   string // "whole RNA" | "2 windows"
+	// maxNT is the longest CPLfold fold the memory tasks may use holds
+	// (checkBudget refuses a longer one); 0 while that is unknown.
+	maxNT int
+	what  string // "whole RNA" | "2 windows"
 	// source names a pasted or HYB record sequence for the task title,
 	// "pasted sequence, 90 nt"; "" for a reference region.
 	source string
@@ -246,12 +249,35 @@ func (p *structurePage) plan() foldPlan {
 	}
 	if p.engine != engineCPLfold {
 		p.viennaPlan(&pl)
-	} else if len(pl.lengths) > 0 {
-		pl.memMB = StructureMemClaim(pl.req, pl.length, pl.pk)
-		pl.req.MemMB = &pl.memMB
+	} else {
+		if len(pl.lengths) > 0 {
+			pl.memMB = StructureMemClaim(pl.req, pl.length, pl.pk)
+			pl.req.MemMB = &pl.memMB
+		}
+		pl.maxNT = core.StructureMaxNT(p.budgetMB, p.pseudoknot, structureParallel(pl.req))
 	}
 	p.checkBudget(&pl)
 	return pl
+}
+
+// limitText: the longest fold the memory tasks may use holds, said before
+// a longer one is refused; "" while it is unknown.
+func (p *structurePage) limitText(pl foldPlan) string {
+	if pl.maxNT == 0 {
+		return ""
+	}
+	unit := "fold"
+	if p.mode == "windows" {
+		unit = "window"
+	}
+	text := "Fits in memory: up to " + FormatNumber(int64(pl.maxNT)) + " nt per " + unit
+	if p.pseudoknot {
+		text += " with pseudoknots"
+	}
+	if n := structureParallel(pl.req); n > 1 {
+		text += fmt.Sprintf(", %d windows at once", n)
+	}
+	return text
 }
 
 // checkBudget: the fold must fit the memory tasks may use.
@@ -982,6 +1008,9 @@ func (p *structurePage) whatToFold(c *ui.Context, pl foldPlan) {
 				ui.Radio(c, &p.mode, "paired", "Two regions joined by a 100-nt spacer (long-range, intermolecular or homodimer)")
 			}
 		}).Label("What to fold")
+		if text := p.limitText(pl); text != "" {
+			ui.Text(c, text).FontSize(FontSmall).TextColor(t.TextMuted)
+		}
 	})
 	if p.mode == "windows" {
 		label := fmt.Sprintf("Windows: start-end, one per line (1-based, inclusive; at least %d nt)", stKernels.FoldText.MinWindowNT)

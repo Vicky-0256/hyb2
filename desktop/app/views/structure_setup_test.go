@@ -446,7 +446,7 @@ func TestStructureMappedReferencePreview(t *testing.T) {
 // "Preview sequence": the prepared layout, the sequence, its FASTA and the
 // local CPLfold inputs, as the web.
 func TestStructurePreviewSequence(t *testing.T) {
-	a, f, tt, p := stSetupPage(t, 1600)
+	a, f, tt, p := stSetupPage(t, 1800)
 	seq := strings.Repeat("ACGT", 10807/4) + "ACG"
 	f.ops["read_reference_sequence"] = map[string]any{"ok": true, "sequence": strings.ToLower(seq)}
 	rna := strings.ReplaceAll(seq, "T", "U")
